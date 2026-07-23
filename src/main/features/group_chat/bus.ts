@@ -2461,41 +2461,61 @@ async function runActorTurn(
           return { text: result };
         };
 
-        const hermesOut = await _runHermesCommanderTurn({
+        const hermesBridgeOrchestration = {
+          dispatchTo: ({ to, message }) => runHermesBridgeDispatch('dispatch_to', { to, message }),
+          handOffTo: ({ to, message }) => runHermesBridgeDispatch('hand_off_to', { to, message }),
+          runWorker: ({ task, to }) => runHermesBridgeDispatch('run_worker', { to, task }),
+        } satisfies import('../local_agents/bridge').BridgeOrchestrationTools;
+        const onHermesProcess = (data: Record<string, unknown>) => {
+          activityEvents += 1;
+          void touchActivity(uid, cid);
+          if (data.type === 'progress' && typeof data.text === 'string' && data.text) {
+            const event = processEventForPersistence(data.event);
+            appendProcessItem(processItems, {
+              type: 'progress',
+              text: data.text,
+              ...(event ? { event } : {}),
+            });
+          } else if (data.type === 'event') {
+            const event = processEventForPersistence(data.event);
+            if (event) appendProcessItem(processItems, { type: 'event', event });
+          }
+          emit(state, {
+            type: 'process', cid, actor: actor.id,
+            turn_id: item.turnId,
+            data: data as unknown as Record<string, unknown>,
+          });
+        };
+        let hermesOut = await _runHermesCommanderTurn({
           uid, cid, actor, item, systemPrompt, messageText, workingDir: wsRoot,
           ...(turnProjectId ? { projectId: turnProjectId } : {}),
           model: commanderHermesBackend.localCli?.useCliDefaultModel === false
             ? commanderHermesBackend.localCli?.model
             : undefined,
-          bridgeOrchestration: {
-            dispatchTo: ({ to, message }) => runHermesBridgeDispatch('dispatch_to', { to, message }),
-            handOffTo: ({ to, message }) => runHermesBridgeDispatch('hand_off_to', { to, message }),
-            runWorker: ({ task, to }) => runHermesBridgeDispatch('run_worker', { to, task }),
-          },
+          bridgeOrchestration: hermesBridgeOrchestration,
           signal: w.abortController.signal,
-          onProcess: data => {
-            activityEvents += 1;
-            void touchActivity(uid, cid);
-            if (data.type === 'progress' && typeof data.text === 'string' && data.text) {
-              const event = processEventForPersistence(data.event);
-              appendProcessItem(processItems, {
-                type: 'progress',
-                text: data.text,
-                ...(event ? { event } : {}),
-              });
-            } else if (data.type === 'event') {
-              const event = processEventForPersistence(data.event);
-              if (event) appendProcessItem(processItems, { type: 'event', event });
-            }
-            emit(state, {
-              type: 'process', cid, actor: actor.id,
-              turn_id: item.turnId,
-              data: data as unknown as Record<string, unknown>,
-            });
-          },
+          onProcess: onHermesProcess,
         });
-        const { parseHermesCommanderDecision, hasHermesCommanderDispatchClaim } = await import('../commander_backends/hermes');
-        const decision = parseHermesCommanderDecision(hermesOut.text);
+        const {
+          buildHermesCommanderRepairMessage,
+          parseHermesCommanderDecision,
+          hasHermesCommanderDispatchClaim,
+        } = await import('../commander_backends/hermes');
+        let decision = parseHermesCommanderDecision(hermesOut.text);
+        if (!decision && !hermesOut.error && !hermesOut.aborted && hasHermesCommanderDispatchClaim(hermesOut.text)) {
+          const repairMessage = buildHermesCommanderRepairMessage(messageText, hermesOut.text);
+          hermesOut = await _runHermesCommanderTurn({
+            uid, cid, actor, item, systemPrompt, messageText: repairMessage, workingDir: wsRoot,
+            ...(turnProjectId ? { projectId: turnProjectId } : {}),
+            model: commanderHermesBackend.localCli?.useCliDefaultModel === false
+              ? commanderHermesBackend.localCli?.model
+              : undefined,
+            bridgeOrchestration: hermesBridgeOrchestration,
+            signal: w.abortController.signal,
+            onProcess: onHermesProcess,
+          });
+          decision = parseHermesCommanderDecision(hermesOut.text);
+        }
         if (decision) {
           if (decision.kind === 'reply' || decision.kind === 'ask_user') {
             finalText = decision.message || '';

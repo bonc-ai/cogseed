@@ -166,11 +166,14 @@ vi.mock('../../../../src/main/model/client', () => ({
 const cliRunMock = vi.hoisted(() => ({
   calls: [] as any[],
   nextResult: null as any,
+  nextResults: [] as any[],
 }));
 vi.mock('../../../../src/main/features/local_agents/runner', () => ({
   run: vi.fn(async (opts: any) => {
     cliRunMock.calls.push(opts);
-    const result = cliRunMock.nextResult || { runId: 'mock-run', status: 'completed', output: 'ok' };
+    const result = cliRunMock.nextResults.length
+      ? cliRunMock.nextResults.shift()
+      : (cliRunMock.nextResult || { runId: 'mock-run', status: 'completed', output: 'ok' });
     opts.onEvent({
       type: 'done',
       status: result.status,
@@ -199,6 +202,7 @@ beforeEach(async () => {
   vi.resetModules();
   cliRunMock.calls.length = 0;
   cliRunMock.nextResult = null;
+  cliRunMock.nextResults.length = 0;
   streamProbe.messages.length = 0;
   streamProbe.readOnlyRoots.length = 0;
   streamProbe.dispatchResults.length = 0;
@@ -449,6 +453,67 @@ describe('group_chat bus › enqueue routing + persistence', () => {
         }),
       }),
     ]));
+  });
+
+  it('retries a Hermes commander text-only dispatch claim with a strict repair prompt', async () => {
+    const config = await import('../../../../src/main/features/config');
+    config.setCommanderBackendSettings({
+      backend: 'hermes-cli',
+      authEntryId: null,
+      localCli: { type: 'hermes', useCliDefaultModel: true, model: '' },
+    });
+    cliRunMock.nextResults.push(
+      { runId: 'hermes-first', status: 'completed', output: 'DeepResearcher 已启动，后台运行中。' },
+      { runId: 'hermes-repair', status: 'completed', output: '{"kind":"reply","message":"repair ok"}' },
+    );
+
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    const cid = 'cid-hermes-repair-retry';
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'user',
+      text: '请调度 DeepResearcher 生成报告',
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    expect(cliRunMock.calls).toHaveLength(2);
+    expect(cliRunMock.calls[1].prompt).toContain('EXACTLY ONE strict JSON object');
+    expect(cliRunMock.calls[1].prompt).toContain('DeepResearcher 已启动，后台运行中');
+    expect(cliRunMock.calls[1].prompt).toContain('请调度 DeepResearcher 生成报告');
+
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+    const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+    const reply = lines.find((line) => line.from === 'commander');
+    expect(reply?.text).toBe('repair ok');
+  });
+
+  it('keeps blocking Hermes text-only dispatch claims after the repair retry', async () => {
+    const config = await import('../../../../src/main/features/config');
+    config.setCommanderBackendSettings({
+      backend: 'hermes-cli',
+      authEntryId: null,
+      localCli: { type: 'hermes', useCliDefaultModel: true, model: '' },
+    });
+    cliRunMock.nextResults.push(
+      { runId: 'hermes-first', status: 'completed', output: 'DeepResearcher 已启动，后台运行中。' },
+      { runId: 'hermes-repair', status: 'completed', output: 'DeepResearcher 已真正启动，后台运行中。' },
+    );
+
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    const cid = 'cid-hermes-repair-still-blocked';
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'user',
+      text: '请调度 DeepResearcher 生成报告',
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    expect(cliRunMock.calls).toHaveLength(2);
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+    const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+    const reply = lines.find((line) => line.from === 'commander');
+    expect(reply?.text).toContain('Dispatch was not executed');
+    expect(reply?.text).toContain('dispatch_to / hand_off_to / run_worker');
   });
 
   it('persists context compaction metadata in process history', async () => {

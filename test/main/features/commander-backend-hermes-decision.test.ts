@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hasHermesCommanderDispatchClaim, parseHermesCommanderDecision } from '../../../src/main/features/commander_backends/hermes';
+import { buildHermesCommanderRepairMessage, hasHermesCommanderDispatchClaim, parseHermesCommanderDecision } from '../../../src/main/features/commander_backends/hermes';
 
 describe('Hermes commander decision parser', () => {
   it('accepts strict fenced JSON decisions', () => {
@@ -28,6 +28,14 @@ describe('Hermes commander decision parser', () => {
   it('rejects unknown fields and unknown kinds', () => {
     expect(parseHermesCommanderDecision('{"kind":"dispatch_to","targetAgentId":"a","task":"x","extra":true}')).toBeNull();
     expect(parseHermesCommanderDecision('{"kind":"shell","task":"rm -rf"}')).toBeNull();
+  });
+
+  it('builds a repair prompt after text-only dispatch claims', () => {
+    const prompt = buildHermesCommanderRepairMessage('请调度 DeepResearcher', 'DeepResearcher 已启动，后台运行中');
+    expect(prompt).toContain('EXACTLY ONE strict JSON object');
+    expect(prompt).toContain('{"kind":"run_worker"');
+    expect(prompt).toContain('请调度 DeepResearcher');
+    expect(prompt).toContain('DeepResearcher 已启动，后台运行中');
   });
 
   it('detects text-only dispatch claims that must not be treated as execution', () => {

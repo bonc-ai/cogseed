@@ -77,6 +77,25 @@ export function parseHermesCommanderDecision(text: string): CommanderDecision | 
   return out;
 }
 
+export function buildHermesCommanderRepairMessage(originalMessage: string, previousOutput: string): string {
+  return [
+    'Your previous answer was rejected because it claimed an Agent dispatch had started, but it did not call a platform orchestration tool and did not return executable JSON.',
+    'You must now output EXACTLY ONE strict JSON object and nothing else: no markdown, no explanation, no "started/running" prose.',
+    'If you intended to run a worker or named Agent, use one of:',
+    '{"kind":"run_worker","targetAgentId":"Agent name or id","task":"task text","reason":"short reason"}',
+    '{"kind":"dispatch_to","targetAgentId":"Agent name or id","task":"task text","reason":"short reason"}',
+    '{"kind":"hand_off_to","targetAgentId":"Agent name or id","task":"task text","reason":"short reason"}',
+    'If no Agent should run, use {"kind":"reply","message":"..."}.',
+    '',
+    '<original-user-message>',
+    originalMessage,
+    '</original-user-message>',
+    '',
+    '<rejected-previous-output>',
+    previousOutput,
+    '</rejected-previous-output>',
+  ].join('\n');
+}
 
 const DISPATCH_CLAIM_PATTERNS = [
   /delegation_id\s*[:：]\s*deleg_[A-Za-z0-9_-]+/i,
