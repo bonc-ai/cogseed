@@ -258,6 +258,52 @@ server.tool(
   },
 );
 
+
+server.tool(
+  'orkas_dispatch_to',
+  'Dispatch one named Agent through Mate Agent and return its full result to you. This is a real platform dispatch; use it instead of claiming a delegation_id in text. Input `to` is the Agent name or id; `message` is the task.',
+  {
+    to: z.string().describe('Target Agent name or id'),
+    message: z.string().describe('Task text to send to the Agent'),
+  },
+  async ({ to, message }) => {
+    try {
+      const result = await rpc('orchestration.dispatch_to', { to, message }, /* slow */ true);
+      return textResult(result.text);
+    } catch (err) { return errorResult(err); }
+  },
+);
+
+server.tool(
+  'orkas_hand_off_to',
+  'Hand the conversation to one named Agent through Mate Agent. This is a real platform hand-off; the Agent answer is delivered as its own bubble. Use as the last action, and do not summarize the result afterward.',
+  {
+    to: z.string().describe('Target Agent name or id'),
+    message: z.string().describe('Task text to send to the Agent'),
+  },
+  async ({ to, message }) => {
+    try {
+      const result = await rpc('orchestration.hand_off_to', { to, message }, /* slow */ true);
+      return textResult(result.text);
+    } catch (err) { return errorResult(err); }
+  },
+);
+
+server.tool(
+  'orkas_run_worker',
+  'Run a private worker or optional named Agent through Mate Agent and return the full result. This is a real platform worker run; use it for bounded sub-tasks you will synthesize.',
+  {
+    task: z.string().describe('Sub-task text'),
+    to: z.string().optional().describe('Optional named Agent name or id; omit for an anonymous worker'),
+  },
+  async ({ task, to }) => {
+    try {
+      const result = await rpc('orchestration.run_worker', { task, to: to || '' }, /* slow */ true);
+      return textResult(result.text);
+    } catch (err) { return errorResult(err); }
+  },
+);
+
 server.tool(
   'orkas_kb_list',
   'List Library files and indexing status before deciding what to search or read. Returns relative paths, scope, kind, status, chunk count, and size.',

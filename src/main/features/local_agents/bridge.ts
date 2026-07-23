@@ -60,6 +60,12 @@ function bridgeLogContext(opts: Pick<StartBridgeOpts, 'uid' | 'cid' | 'agentId' 
   };
 }
 
+export interface BridgeOrchestrationTools {
+  dispatchTo(params: { to: string; message: string }): Promise<{ text: string }>;
+  handOffTo(params: { to: string; message: string }): Promise<{ text: string }>;
+  runWorker(params: { task: string; to?: string }): Promise<{ text: string }>;
+}
+
 export interface BridgeHandle {
   socketPath: string;
   token: string;
@@ -85,6 +91,8 @@ export interface StartBridgeOpts {
    *  ORKAS_PYTHON / ORKAS_UV) — reused so the bridge server resolves the
    *  SDK and run-skill.cjs exactly like command execution does. */
   sandboxEnv: Record<string, string>;
+  /** Optional host orchestration surface for Commander-capable CLI backends. */
+  orchestration?: BridgeOrchestrationTools;
 }
 
 function _socketPath(runId: string): string {
@@ -199,6 +207,31 @@ function _buildMethods(opts: StartBridgeOpts): Record<string, BridgeMethod> {
         ? `${text.slice(0, CONNECTOR_RESULT_CAP)}\n… [truncated by orkas-bridge at ${CONNECTOR_RESULT_CAP} chars]`
         : text;
       return { text: capped };
+    },
+
+
+    'orchestration.dispatch_to': async (params) => {
+      if (!opts.orchestration) throw new Error('orchestration bridge unavailable');
+      const to = String(params.to || params.targetAgentId || '').trim();
+      const message = String(params.message || params.task || '').trim();
+      if (!to || !message) throw new Error('to and message required');
+      return opts.orchestration.dispatchTo({ to, message });
+    },
+
+    'orchestration.hand_off_to': async (params) => {
+      if (!opts.orchestration) throw new Error('orchestration bridge unavailable');
+      const to = String(params.to || params.targetAgentId || '').trim();
+      const message = String(params.message || params.task || '').trim();
+      if (!to || !message) throw new Error('to and message required');
+      return opts.orchestration.handOffTo({ to, message });
+    },
+
+    'orchestration.run_worker': async (params) => {
+      if (!opts.orchestration) throw new Error('orchestration bridge unavailable');
+      const task = String(params.task || params.message || '').trim();
+      const to = String(params.to || params.targetAgentId || '').trim();
+      if (!task) throw new Error('task required');
+      return opts.orchestration.runWorker({ task, ...(to ? { to } : {}) });
     },
 
     'kb.search': async (params) => runKbTool('kb_search', params),

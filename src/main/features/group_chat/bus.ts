@@ -2414,12 +2414,64 @@ async function runActorTurn(
     const wsRoot = userWorkspace.getWorkspacePath(uid, turnProjectId);
     if (commanderHermesBackend) {
       try {
+        const runHermesBridgeDispatch = async (
+          sourceTool: 'dispatch_to' | 'hand_off_to' | 'run_worker',
+          input: { to?: string; message?: string; task?: string },
+        ): Promise<{ text: string }> => {
+          const toRaw = String(input.to || '').trim();
+          const task = String(input.message || input.task || '').trim();
+          if (!task) throw new Error('task required');
+          const blocked = await blockedByCollaborationGateToolResult(uid, cid);
+          if (blocked) throw new Error(String(blocked.content || 'workflow is blocked'));
+          if (sourceTool === 'run_worker' && !toRaw) {
+            const workerActor: Actor = { kind: 'worker', id: genId12(), name: 'Worker', joined_at: nowIso() };
+            const result = await runNestedDispatch(state, w.abortController?.signal, workerActor, task, item.attachments, 'process');
+            void recordNestedDispatchStep(uid, cid, {
+              objective: _unwrapLlmTurnPayload(item.llmPayload) || item.llmPayload,
+              actor_id: workerActor.id,
+              actor_name: workerActor.name,
+              source_tool: 'run_worker',
+              task,
+              result,
+            }).catch((err) => log.warn(`collaboration hermes anonymous run_worker record failed cid=${cid}: ${(err as Error).message}`));
+            return { text: result };
+          }
+          const resolvedId = await resolveDispatchTarget(cid, toRaw);
+          if (!resolvedId || resolvedId === COMMANDER_ID || resolvedId === USER_ID) {
+            throw new Error(t('errors.unknown_actor', { name: toRaw }));
+          }
+          const targetAgent = await agentsFeat.getAgent(resolvedId);
+          const targetActor: Actor = { kind: 'agent', id: resolvedId, name: targetAgent?.name || resolvedId, joined_at: nowIso() };
+          const pendingWake = await gateNestedAgentWake(state, targetActor, sourceTool, task);
+          if (pendingWake) return { text: t('p3394.wake.pending_short', { name: targetActor.name || targetActor.id }) };
+          const outputDelivery = sourceTool === 'hand_off_to' ? 'final' : 'process';
+          const result = await runNestedDispatch(state, w.abortController?.signal, targetActor, task, item.attachments, outputDelivery);
+          void recordNestedDispatchStep(uid, cid, {
+            objective: _unwrapLlmTurnPayload(item.llmPayload) || item.llmPayload,
+            actor_id: resolvedId,
+            actor_name: targetActor.name,
+            source_tool: sourceTool,
+            task,
+            result,
+          }).catch((err) => log.warn(`collaboration hermes ${sourceTool} record failed cid=${cid}: ${(err as Error).message}`));
+          if (sourceTool === 'hand_off_to') {
+            terminalHandoffCompleted = true;
+            return { text: `Handed off to ${targetActor.name || targetActor.id}; the Agent answer has been delivered in its own message.` };
+          }
+          return { text: result };
+        };
+
         const hermesOut = await _runHermesCommanderTurn({
           uid, cid, actor, item, systemPrompt, messageText, workingDir: wsRoot,
           ...(turnProjectId ? { projectId: turnProjectId } : {}),
           model: commanderHermesBackend.localCli?.useCliDefaultModel === false
             ? commanderHermesBackend.localCli?.model
             : undefined,
+          bridgeOrchestration: {
+            dispatchTo: ({ to, message }) => runHermesBridgeDispatch('dispatch_to', { to, message }),
+            handOffTo: ({ to, message }) => runHermesBridgeDispatch('hand_off_to', { to, message }),
+            runWorker: ({ task, to }) => runHermesBridgeDispatch('run_worker', { to, task }),
+          },
           signal: w.abortController.signal,
           onProcess: data => {
             activityEvents += 1;
@@ -5081,6 +5133,7 @@ async function _runHermesCommanderTurn(opts: {
   workingDir: string;
   projectId?: string;
   model?: string;
+  bridgeOrchestration?: import('../local_agents/bridge').BridgeOrchestrationTools;
   signal: AbortSignal;
   onProcess: (data: Record<string, unknown>) => void;
 }): Promise<{
@@ -5121,6 +5174,7 @@ async function _runHermesCommanderTurn(opts: {
     ...(opts.model ? { model: opts.model } : {}),
     prompt,
     cwd: opts.workingDir,
+    ...(opts.bridgeOrchestration ? { bridgeOrchestration: opts.bridgeOrchestration } : {}),
     signal: opts.signal,
     onEvent: e => {
       switch (e.type) {

@@ -98,7 +98,7 @@ export function makeAcpBackend(def: AcpBackendDef): LocalBackend {
       // an explicit setter.
       const sessionNewParams: Record<string, unknown> = {
         cwd: opts.cwd,
-        mcpServers: [],
+        mcpServers: opts.bridge ? [{ name: 'orkas', ...opts.bridge.server }] : [],
       };
       if (opts.model) sessionNewParams.model = opts.model;
 
@@ -132,7 +132,7 @@ export function makeAcpBackend(def: AcpBackendDef): LocalBackend {
                 jsonrpc: '2.0', id: PROMPT_REQ_ID, method: 'session/prompt',
                 params: {
                   sessionId: id,
-                  prompt: [{ type: 'text', text: opts.prompt }],
+                  prompt: [{ type: 'text', text: [opts.bridge?.appendSystemPrompt, opts.prompt].filter(Boolean).join('\n\n') }],
                 },
               });
             },

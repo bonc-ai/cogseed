@@ -101,7 +101,10 @@ afterEach(async () => {
   fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
-async function startTestBridge(opts: { projectId?: string } = {}) {
+async function startTestBridge(opts: {
+  projectId?: string;
+  orchestration?: import('../../../../src/main/features/local_agents/bridge').BridgeOrchestrationTools;
+} = {}) {
   const { startBridge } = await import('../../../../src/main/features/local_agents/bridge');
   return startBridge({
     uid: TEST_UID,
@@ -109,6 +112,7 @@ async function startTestBridge(opts: { projectId?: string } = {}) {
     agentId: 'a1',
     agentName: 'Agent One',
     ...(opts.projectId ? { projectId: opts.projectId } : {}),
+    ...(opts.orchestration ? { orchestration: opts.orchestration } : {}),
     runId: `t${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`,
     configDir: path.join(tmpDir, 'rundir'),
     sandboxEnv: {
@@ -223,6 +227,44 @@ describe('local_agents/bridge › auth + skills', () => {
       await bridge.close();
     }
     expect(fs.existsSync(envFilePath)).toBe(false);
+  });
+
+  it('proxies orchestration methods to the host tools', async () => {
+    const calls: any[] = [];
+    const bridge = await startTestBridge({
+      orchestration: {
+        dispatchTo: async (params) => { calls.push(['dispatchTo', params]); return { text: 'dispatch result' }; },
+        handOffTo: async (params) => { calls.push(['handOffTo', params]); return { text: 'handoff result' }; },
+        runWorker: async (params) => { calls.push(['runWorker', params]); return { text: 'worker result' }; },
+      },
+    });
+    try {
+      const dispatch = await rpcOnce(bridge.socketPath, {
+        id: 41, token: bridge.token, method: 'orchestration.dispatch_to', params: { to: 'Reviewer', message: 'check it' },
+      });
+      expect((dispatch.reply as any).ok).toBe(true);
+      expect((dispatch.reply as any).result).toEqual({ text: 'dispatch result' });
+
+      const worker = await rpcOnce(bridge.socketPath, {
+        id: 42, token: bridge.token, method: 'orchestration.run_worker', params: { task: 'summarize', targetAgentId: 'Analyst' },
+      });
+      expect((worker.reply as any).ok).toBe(true);
+      expect((worker.reply as any).result).toEqual({ text: 'worker result' });
+
+      const handoff = await rpcOnce(bridge.socketPath, {
+        id: 43, token: bridge.token, method: 'orchestration.hand_off_to', params: { targetAgentId: 'Writer', task: 'draft answer' },
+      });
+      expect((handoff.reply as any).ok).toBe(true);
+      expect((handoff.reply as any).result).toEqual({ text: 'handoff result' });
+
+      expect(calls).toEqual([
+        ['dispatchTo', { to: 'Reviewer', message: 'check it' }],
+        ['runWorker', { task: 'summarize', to: 'Analyst' }],
+        ['handOffTo', { to: 'Writer', message: 'draft answer' }],
+      ]);
+    } finally {
+      await bridge.close();
+    }
   });
 
   it('unknown methods return a structured error', async () => {

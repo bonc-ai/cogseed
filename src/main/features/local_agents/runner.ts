@@ -143,7 +143,7 @@ const BACKENDS: Partial<Record<LocalCliType, LocalBackend>> = {
  *  `--mcp-config`; codex: `-c mcp_servers.…`). Others run without the
  *  bridge until an injection mechanism exists for them. */
 function _bridgeSupported(cli: LocalCliType): boolean {
-  return cli === 'claude' || cli === 'codex';
+  return cli === 'claude' || cli === 'codex' || cli === 'hermes';
 }
 
 /** Appended to the CLI agent's system prompt when the bridge is live.
@@ -554,6 +554,8 @@ export interface RunCliAgentOpts {
   prompt: string;
   cwd: string;
   signal: AbortSignal;
+  /** Optional host orchestration tools exposed through orkas-bridge. */
+  bridgeOrchestration?: import('./bridge').BridgeOrchestrationTools;
   /** Forwarded each backend event verbatim, after persistence. */
   onEvent: (e: LocalEvent) => void;
 }
@@ -720,6 +722,7 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
         runId: handle.runId,
         configDir: handle.dir,
         sandboxEnv: buildSkillSandboxEnv(opts.uid, opts.agentId),
+        ...(opts.bridgeOrchestration ? { orchestration: opts.bridgeOrchestration } : {}),
       });
       log.info('local agent bridge ready', runLogContext);
     } catch (err) {
