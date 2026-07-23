@@ -1,0 +1,126 @@
+# Step 9: 文档导出与图片插入
+
+> **状态管理(强制执行)**：
+> 1. 启动前：`python scripts/core/status_manager.py thesis-workspace/ --ensure`
+> 2. 启动时：`python scripts/core/status_manager.py thesis-workspace/ --check-step 9`
+> 3. 前置条件通过后：`--update-step 9 --action start`
+> 4. 完成后：`--update-step 9 --action complete`
+>
+> **统一入口(推荐)**：`python scripts/core/lifecycle.py --workspace thesis-workspace/ --step 9 --event start|complete`
+
+> **自动将图片插入到 Word 文档，并添加规范图注**
+
+---
+
+## 执行流程
+
+```mermaid
+flowchart TD
+    A[读取终稿 Markdown] --> B[解析文档结构]
+    B --> C[识别图片引用]
+    C --> D[创建 Word 文档]
+    D --> E[写入标题/正文]
+    E --> F{遇到图片引用?}
+    F -->|是| G[插入图片居中显示]
+    G --> H[添加图注五号宋体]
+    H --> F
+    F -->|否| I[继续下一个元素]
+    I --> J[处理表格/代码块]
+    J --> K[保存文档]
+    K --> L[输出导出报告]
+    L --> M[✅ 完成]
+```
+
+---
+
+## 图片插入特性
+
+| 特性 | 说明 | 格式标准 |
+|------|------|----------|
+| 自动居中 | 图片居中显示 | `doc.add_picture()` + 段落居中 |
+| 尺寸控制 | 默认按 `.thesis-config.yaml` 的 `export.image_width` 插入（默认 12cm），并受 `export.max_image_width`（默认 14cm）与 `export.max_image_height`（默认 18cm）限制 | 适合 A4 纸张 |
+| 图注格式 | 五号宋体、居中 | 符合学术论文规范 |
+| 路径解析 | 支持相对路径，自动 resolve 为绝对路径 | 处理 Windows 反斜杠 |
+| 格式检查 | 仅支持 png/jpg/jpeg/gif/bmp/tiff/emf/wmf | 非法格式自动跳过 |
+| 失败处理 | 图片不存在/格式不支持时插入红色占位文字 | 不中断导出流程 |
+
+---
+
+## 图片导出前校验(硬约束)
+
+- 正文不得残留 [image_N]
+- Markdown 图片引用对应的图片文件必须存在且非空
+- 任一校验失败时必须阻断导出，先回到 Step 8 修复
+
+---
+
+## 执行命令
+
+```bash
+# 导出 Word 文档(自动插入图片)
+PYTHONPATH=scripts python -m document_exporter --input workspace/final/论文终稿.md --output workspace/final/ --format docx
+
+# 导出 PDF 文档
+PYTHONPATH=scripts python -m document_exporter --input workspace/final/论文终稿.md --output workspace/final/ --format pdf
+
+# 同时导出两种格式
+PYTHONPATH=scripts python -m document_exporter --input workspace/final/论文终稿.md --output workspace/final/ --format both
+```
+
+---
+
+## 导出成功示例
+
+```
+[信息] 正在读取: workspace/final/论文终稿.md
+[成功] Word 文档已保存: workspace/final/论文终稿.docx
+[信息] 成功插入 12 张图片
+==================================================
+[文档导出报告]
+输入文件: workspace/final/论文终稿.md
+输出目录: workspace/final/
+导出时间: 20260411_194041
+--------------------------------------------------
+DOCX: [成功]
+  路径: workspace/final/论文终稿.docx
+  图片: 12 张已插入
+==================================================
+```
+
+---
+
+## 文档格式规范
+
+- 页边距：上下 2.54cm，左右 3.17cm
+- 正文字体：宋体 12pt
+- 标题字体：黑体，按 Heading 级别递减
+- 行距：1.5 倍行距
+- 首行缩进：0.74cm(两个字符)
+
+### Markdown 标题 → Word Heading 映射(硬约束)
+
+> **核心要求**：生成的 Markdown 标题必须映射为 Word Heading 1~4 样式，确保 Word 可自动生成目录和导航窗格。
+
+| Markdown 语法 | Word Heading 样式 | 字体大小 | 对齐方式 | 用途 |
+|--------------|-------------------|---------|---------|------|
+| `# 标题` | Heading 1 | 黑体 16pt | 居中 | 章级(摘要、第N章、结论) |
+| `## 标题` | Heading 2 | 黑体 14pt | 左对齐 | 节级(1.1、4.2) |
+| `### 标题` | Heading 3 | 黑体 12pt | 左对齐 | 小节级(1.2.1、4.4.1) |
+| `#### 标题` | Heading 4 | 黑体 10.5pt | 左对齐 | 段级(5.2.1) |
+
+### 最终目标
+
+导出的 docx 文档必须满足：
+- Word「引用 → 目录」可自动生成目录
+- Word「导航窗格」可显示章节树
+- 标题可折叠
+- 标题具备大纲级别
+- Heading 1~4 自动识别
+
+---
+
+## 输出文件
+
+- `workspace/final/论文终稿.docx` - Word 文档(含图片)
+- `workspace/final/论文终稿.pdf` - PDF 文档
+- `workspace/final/导出报告.md` - 导出报告
