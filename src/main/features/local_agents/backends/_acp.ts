@@ -38,6 +38,25 @@ export interface AcpBackendDef {
   extraEnv?: Record<string, string>;
 }
 
+
+type BackendBridgeConfig = NonNullable<BackendRunOptions['bridge']>;
+
+/**
+ * ACP's MCP server schema differs from Claude/Codex MCP config files:
+ * stdio env must be an array of `{name,value}` entries rather than a
+ * string map. Hermes validates `session/new` strictly and otherwise
+ * rejects the request as `Invalid params` before any prompt runs.
+ */
+export function buildAcpMcpServersForSession(bridge?: BackendBridgeConfig): Array<Record<string, unknown>> {
+  if (!bridge) return [];
+  return [{
+    name: 'orkas',
+    command: bridge.server.command,
+    args: bridge.server.args,
+    env: Object.entries(bridge.server.env || {}).map(([name, value]) => ({ name, value: String(value) })),
+  }];
+}
+
 export function makeAcpBackend(def: AcpBackendDef): LocalBackend {
   const log = createLogger(def.logName);
   return {
@@ -98,7 +117,7 @@ export function makeAcpBackend(def: AcpBackendDef): LocalBackend {
       // an explicit setter.
       const sessionNewParams: Record<string, unknown> = {
         cwd: opts.cwd,
-        mcpServers: opts.bridge ? [{ name: 'orkas', ...opts.bridge.server }] : [],
+        mcpServers: buildAcpMcpServersForSession(opts.bridge),
       };
       if (opts.model) sessionNewParams.model = opts.model;
 

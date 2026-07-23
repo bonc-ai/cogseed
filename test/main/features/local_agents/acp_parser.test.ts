@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { handleAcpMessage } from '../../../../src/main/features/local_agents/backends/_acp';
+import { buildAcpMcpServersForSession, handleAcpMessage } from '../../../../src/main/features/local_agents/backends/_acp';
 
 function makeHandlers() {
   return {
@@ -12,6 +12,34 @@ function makeHandlers() {
     onUnknown: vi.fn(),
   };
 }
+
+
+describe('local_agents/backends/_acp › session params', () => {
+  it('converts bridge MCP env object into ACP env variable array', () => {
+    const servers = buildAcpMcpServersForSession({
+      mcpConfigPath: '/tmp/orkas-mcp-config.json',
+      server: {
+        command: '/usr/bin/node',
+        args: ['/app/bin/orkas-bridge.cjs'],
+        env: {
+          ORKAS_BRIDGE_ENV_FILE: '/tmp/bridge-env.json',
+          ELECTRON_RUN_AS_NODE: '1',
+        },
+      },
+      appendSystemPrompt: 'bridge rules',
+    });
+
+    expect(servers).toEqual([{
+      name: 'orkas',
+      command: '/usr/bin/node',
+      args: ['/app/bin/orkas-bridge.cjs'],
+      env: [
+        { name: 'ORKAS_BRIDGE_ENV_FILE', value: '/tmp/bridge-env.json' },
+        { name: 'ELECTRON_RUN_AS_NODE', value: '1' },
+      ],
+    }]);
+  });
+});
 
 describe('local_agents/backends/_acp › handleAcpMessage', () => {
   it('routes session/new response to onSessionNew', () => {
