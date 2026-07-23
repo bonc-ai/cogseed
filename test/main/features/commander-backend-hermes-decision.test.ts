@@ -11,6 +11,20 @@ describe('Hermes commander decision parser', () => {
     });
   });
 
+  it('accepts a trailing JSON orchestration decision after Hermes narration', () => {
+    const text = [
+      '好，这次我真正执行调度。',
+      '',
+      '{"kind":"run_worker","targetAgentId":"DeepResearcher","task":"研究题目","reason":"先完成文献调研"}',
+    ].join('\n');
+    expect(parseHermesCommanderDecision(text)).toEqual({
+      kind: 'run_worker',
+      targetAgentId: 'DeepResearcher',
+      task: '研究题目',
+      reason: '先完成文献调研',
+    });
+  });
+
   it('rejects unknown fields and unknown kinds', () => {
     expect(parseHermesCommanderDecision('{"kind":"dispatch_to","targetAgentId":"a","task":"x","extra":true}')).toBeNull();
     expect(parseHermesCommanderDecision('{"kind":"shell","task":"rm -rf"}')).toBeNull();

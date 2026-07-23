@@ -12,7 +12,45 @@ const ALLOWED_KINDS = new Set(['reply', 'dispatch_to', 'hand_off_to', 'run_worke
 function extractJsonCandidate(text: string): string {
   const trimmed = String(text || '').trim();
   const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
-  return (fenced ? fenced[1] : trimmed).trim();
+  if (fenced) return fenced[1].trim();
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) return trimmed;
+
+  // Hermes often narrates first and then emits the strict orchestration JSON
+  // as the final block. Accept only a balanced JSON object that reaches the
+  // end of the output, so examples or prose in the middle are not executed.
+  let depth = 0;
+  let start = -1;
+  let lastCompleteStart = -1;
+  let lastCompleteEnd = -1;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (inString) {
+      if (escaped) { escaped = false; continue; }
+      if (ch === '\\') { escaped = true; continue; }
+      if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === '{') {
+      if (depth === 0) start = i;
+      depth += 1;
+      continue;
+    }
+    if (ch === '}') {
+      if (depth === 0) return trimmed;
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        lastCompleteStart = start;
+        lastCompleteEnd = i;
+      }
+    }
+  }
+  if (lastCompleteStart >= 0 && lastCompleteEnd === trimmed.length - 1) {
+    return trimmed.slice(lastCompleteStart, lastCompleteEnd + 1).trim();
+  }
+  return trimmed;
 }
 
 export function parseHermesCommanderDecision(text: string): CommanderDecision | null {

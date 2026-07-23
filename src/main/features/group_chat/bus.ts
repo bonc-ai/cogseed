@@ -2501,47 +2501,18 @@ async function runActorTurn(
             finalText = decision.message || '';
             streamingText = finalText;
           } else if (decision.kind === 'run_worker') {
-            const target = decision.targetAgentId || '';
-            if (target) {
-              const resolvedId = await resolveDispatchTarget(cid, target);
-              if (!resolvedId || resolvedId === COMMANDER_ID || resolvedId === USER_ID) {
-                finalText = t('errors.unknown_actor', { name: target });
-              } else {
-                const namedAgent = await agentsFeat.getAgent(resolvedId);
-                const namedActor: Actor = { kind: 'agent', id: resolvedId, name: namedAgent?.name || resolvedId, joined_at: nowIso() };
-                const pendingWake = await gateNestedAgentWake(state, namedActor, 'run_worker', decision.task || '');
-                finalText = pendingWake
-                  ? t('p3394.wake.pending_short', { name: namedActor.name || namedActor.id })
-                  : await runNestedDispatch(state, w.abortController?.signal, namedActor, decision.task || '', item.attachments, 'process');
-              }
-            } else {
-              const workerActor: Actor = { kind: 'worker', id: genId12(), name: 'Worker', joined_at: nowIso() };
-              finalText = await runNestedDispatch(state, w.abortController?.signal, workerActor, decision.task || '', item.attachments, 'process');
-            }
+            const result = await runHermesBridgeDispatch('run_worker', {
+              ...(decision.targetAgentId ? { to: decision.targetAgentId } : {}),
+              task: decision.task || '',
+            });
+            finalText = result.text;
             streamingText = finalText;
           } else {
-            const target = decision.targetAgentId || '';
-            const resolvedId = await resolveDispatchTarget(cid, target);
-            if (!resolvedId || resolvedId === COMMANDER_ID || resolvedId === USER_ID) {
-              finalText = t('errors.unknown_actor', { name: target });
-            } else {
-              const dispatchAgent = await agentsFeat.getAgent(resolvedId);
-              const dispatchActor: Actor = { kind: 'agent', id: resolvedId, name: dispatchAgent?.name || resolvedId, joined_at: nowIso() };
-              const source = decision.kind === 'hand_off_to' ? 'hand_off_to' : 'dispatch_to';
-              const pendingWake = await gateNestedAgentWake(state, dispatchActor, source, decision.task || '');
-              if (pendingWake) {
-                finalText = t('p3394.wake.pending_short', { name: dispatchActor.name || dispatchActor.id });
-              } else {
-                const mode = decision.kind === 'hand_off_to' ? 'final' : 'process';
-                const result = await runNestedDispatch(state, w.abortController?.signal, dispatchActor, decision.task || '', item.attachments, mode);
-                if (decision.kind === 'hand_off_to') {
-                  terminalHandoffCompleted = true;
-                  finalText = '';
-                } else {
-                  finalText = result;
-                }
-              }
-            }
+            const result = await runHermesBridgeDispatch(decision.kind === 'hand_off_to' ? 'hand_off_to' : 'dispatch_to', {
+              to: decision.targetAgentId || '',
+              message: decision.task || '',
+            });
+            finalText = decision.kind === 'hand_off_to' ? '' : result.text;
             streamingText = finalText;
           }
         } else if (hasHermesCommanderDispatchClaim(hermesOut.text)) {
