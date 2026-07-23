@@ -1924,5 +1924,10 @@
   "companion.repro.advanced": "Advanced details",
   "companion.repro.guide.history": "Interaction record",
   "companion.repro.guide.user": "User",
-  "companion.repro.guide.assistant": "Companion"
+  "companion.repro.guide.assistant": "Companion",
+  "settings.picker.manual_model_in_form": "Enter model in the API key form",
+  "settings.modal.base_url": "Base URL",
+  "settings.modal.model_id": "Model ID",
+  "settings.modal.base_url_required": "Please enter a Base URL",
+  "settings.modal.model_required": "Please enter a model ID"
 }

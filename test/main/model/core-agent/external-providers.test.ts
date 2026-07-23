@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   buildDoubaoModel,
   buildMoonshotModel,
+  buildOpenAICompatibleModel,
   createMoonshotProvider,
+  createOpenAICompatibleProvider,
 } from '../../../../src/main/model/core-agent/external-providers';
 
 describe('external-providers › buildMoonshotModel', () => {
@@ -71,5 +73,29 @@ describe('external-providers › createMoonshotProvider', () => {
     expect(typeof p.complete).toBe('function');
     expect(typeof p.stream).toBe('function');
     expect(typeof p.validateAuth).toBe('function');
+  });
+});
+
+
+describe('external-providers › OpenAI-compatible custom endpoint', () => {
+  it('builds a custom OpenAI-compatible model with the user base URL', () => {
+    expect(buildOpenAICompatibleModel('custom-chat', 'https://llm.example.test/v1')).toMatchObject({
+      id: 'custom-chat',
+      name: 'custom-chat',
+      provider: 'openai-compatible',
+      api: 'openai-completions',
+      baseUrl: 'https://llm.example.test/v1',
+      contextWindow: 131072,
+      maxTokens: 8192,
+    });
+  });
+
+  it('validates custom provider credentials before constructing the pi provider', async () => {
+    await expect(createOpenAICompatibleProvider({ apiKey: '', baseUrl: 'https://llm.example.test/v1', modelId: 'm' }))
+      .rejects.toThrow(/apiKey required/);
+    await expect(createOpenAICompatibleProvider({ apiKey: 'sk-xxx', baseUrl: '', modelId: 'm' }))
+      .rejects.toThrow(/baseUrl required/);
+    await expect(createOpenAICompatibleProvider({ apiKey: 'sk-xxx', baseUrl: 'https://llm.example.test/v1', modelId: '' }))
+      .rejects.toThrow(/modelId required/);
   });
 });

@@ -1811,5 +1811,10 @@
   "p3394.kstar.status.failed": "検証失敗",
   "p3394.experience.title": "再利用可能な経験として保存しますか？",
   "p3394.experience.approve": "保存",
-  "p3394.experience.reject": "破棄"
+  "p3394.experience.reject": "破棄",
+  "settings.picker.manual_model_in_form": "API キーフォームでモデルを入力",
+  "settings.modal.base_url": "Base URL",
+  "settings.modal.model_id": "モデル ID",
+  "settings.modal.base_url_required": "Base URL を入力してください",
+  "settings.modal.model_required": "モデル ID を入力してください"
 }

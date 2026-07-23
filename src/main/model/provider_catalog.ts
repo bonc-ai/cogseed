@@ -63,6 +63,8 @@ export interface CatalogEntry {
    *  suffix on the picker label. Purely cosmetic — does not change selection
    *  defaults or routing. */
   recommended?: boolean;
+  /** Model id is user-entered instead of selected from CURATED_MODELS. */
+  manualModel?: boolean;
 }
 
 // ── Ordered catalog (dropdown order = array order) ──────────────────────
@@ -108,6 +110,9 @@ export const CATALOG: readonly CatalogEntry[] = [
     subscriptionNote: '' },
 
   { id: 'openrouter',         label: 'OpenRouter',    docsUrl: 'https://openrouter.ai/keys' },
+
+  // cc-switch style: user supplies any OpenAI-compatible base URL + model id.
+  { id: 'openai-compatible', label: 'OpenAI Compatible', manualModel: true },
 ];
 
 // ── Curated model lists ─────────────────────────────────────────────────
@@ -390,6 +395,10 @@ export function providerSubscriptionNote(id: string): string | undefined {
   return CATALOG.find((p) => p.id === id)?.subscriptionNote;
 }
 
+export function providerManualModel(id: string): boolean {
+  return CATALOG.find((p) => p.id === id)?.manualModel === true;
+}
+
 export function providerRecommended(id: string): boolean {
   return CATALOG.find((p) => p.id === id)?.recommended === true;
 }
@@ -400,7 +409,7 @@ export function providerRecommended(id: string): boolean {
  * provider registry. `listProviders()` treats these as API-key-capable
  * even though `listPiProviders()` doesn't list them.
  */
-export const EXTERNAL_API_PROVIDERS: readonly string[] = ['moonshot', 'deepseek', 'doubao'];
+export const EXTERNAL_API_PROVIDERS: readonly string[] = ['moonshot', 'deepseek', 'doubao', 'openai-compatible'];
 
 // ── Image-generation capability map ─────────────────────────────────────
 //

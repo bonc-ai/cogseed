@@ -676,6 +676,11 @@ async function _settingsRenderPicker() {
 async function _settingsPopulatePickerModel(providerId, selected) {
   const sel = _settingsState.pickerModelSel;
   if (!sel) return;
+  const provider = _settingsState.providers.find((p) => p.id === providerId);
+  if (provider && provider.manualModel) {
+    sel.setOptions([], { value: '', placeholder: t('settings.picker.manual_model_in_form') });
+    return;
+  }
   const models = await _settingsGetModels(providerId);
   sel.setOptions(
     models.map((m) => ({ value: m.id, label: m.name || m.id })),
@@ -685,12 +690,13 @@ async function _settingsPopulatePickerModel(providerId, selected) {
 
 async function _settingsClickAddEntry() {
   const providerId = _settingsState.pickerProviderSel?.getValue() || '';
-  const modelId    = _settingsState.pickerModelSel?.getValue() || '';
+  let modelId    = _settingsState.pickerModelSel?.getValue() || '';
   if (!providerId) { _settingsSetStatus('settings-picker-status', 'error', t('settings.picker.error_provider_needed')); return; }
-  if (!modelId)    { _settingsSetStatus('settings-picker-status', 'error', t('settings.picker.error_model_needed')); return; }
 
   const provider = _settingsState.providers.find((p) => p.id === providerId);
   if (!provider) { _settingsSetStatus('settings-picker-status', 'error', t('settings.picker.error_provider_missing')); return; }
+  if (provider.manualModel) modelId = '';
+  if (!provider.manualModel && !modelId) { _settingsSetStatus('settings-picker-status', 'error', t('settings.picker.error_model_needed')); return; }
 
   _settingsSetStatus('settings-picker-status', '', '');
   _settingsChooseAccountMethod(provider, modelId);
@@ -766,12 +772,23 @@ function _settingsShowApiKeyForm(provider, modelId) {
   const subNoteHtml = provider.subscriptionNote
     ? `<div class="form-hint form-hint-warn">${escapeHtml(t(provider.subscriptionNote))}</div>`
     : '';
+  const manualModelHtml = provider.manualModel ? `
+    <div class="form-row">
+      <label>${escapeHtml(t('settings.modal.base_url'))}</label>
+      <input type="text" class="api-base-url-input form-input" placeholder="https://api.example.com/v1" autocomplete="off" spellcheck="false" />
+    </div>
+    <div class="form-row">
+      <label>${escapeHtml(t('settings.modal.model_id'))}</label>
+      <input type="text" class="api-model-input form-input" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false" />
+    </div>
+  ` : '';
   body.innerHTML = `
     ${subNoteHtml}
     <div class="form-row">
       <label>${escapeHtml(t('settings.modal.label'))}</label>
       <input type="text" class="api-label-input form-input" placeholder="${escapeHtml(t('settings.modal.label_placeholder'))}" autocomplete="off" spellcheck="false" />
     </div>
+    ${manualModelHtml}
     <div class="form-row">
       <label>API Key</label>
       <input type="text" class="api-key-input form-input" placeholder="sk-…" autocomplete="off" spellcheck="false" />
@@ -783,6 +800,8 @@ function _settingsShowApiKeyForm(provider, modelId) {
 
   const labelInput = body.querySelector('.api-label-input');
   const keyInput   = body.querySelector('.api-key-input');
+  const baseUrlInput = body.querySelector('.api-base-url-input');
+  const modelInput = body.querySelector('.api-model-input');
   const msg        = body.querySelector('.form-msg');
 
   const cancelBtn = document.createElement('button');
@@ -796,14 +815,19 @@ function _settingsShowApiKeyForm(provider, modelId) {
   const save = async () => {
     const label  = (labelInput.value || '').trim();
     const apiKey = (keyInput.value || '').trim();
+    const customBaseUrl = baseUrlInput ? (baseUrlInput.value || '').trim() : '';
+    const customModelId = modelInput ? (modelInput.value || '').trim() : modelId;
+    if (provider.manualModel && !customBaseUrl) { msg.textContent = t('settings.modal.base_url_required'); msg.className = 'form-msg error'; return; }
+    if (provider.manualModel && !customModelId) { msg.textContent = t('settings.modal.model_required'); msg.className = 'form-msg error'; return; }
     if (!apiKey) { msg.textContent = t('settings.paste_key_first'); msg.className = 'form-msg error'; return; }
     saveBtn.disabled = true;
     msg.textContent = t('settings.save_loading'); msg.className = 'form-msg';
-    _settingsLog.info('add api key', { provider: provider.id, model: modelId, has_label: !!label });
+    _settingsLog.info('add api key', { provider: provider.id, model: customModelId, has_label: !!label, has_base_url: !!customBaseUrl });
     const addRes = await window.orkas.invoke('auth.addApiKey', {
       provider: provider.id,
       apiKey,
       label: label || undefined,
+      ...(customBaseUrl ? { baseUrl: customBaseUrl } : {}),
     });
     if (!addRes || !addRes.ok) {
       saveBtn.disabled = false;
@@ -814,7 +838,7 @@ function _settingsShowApiKeyForm(provider, modelId) {
     }
     const entryRes = await window.orkas.invoke('auth.addEntry', {
       provider: provider.id,
-      model: modelId,
+      model: customModelId,
       profileId: addRes.profileId,
     });
     saveBtn.disabled = false;
@@ -830,6 +854,14 @@ function _settingsShowApiKeyForm(provider, modelId) {
   // IME guard (CLAUDE.md §8): Enter on these inputs advances focus / saves;
   // skip while a Chinese / Japanese / Korean candidate is being composed.
   labelInput.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Enter') { (baseUrlInput || modelInput || keyInput).focus(); e.preventDefault(); }
+  });
+  if (baseUrlInput) baseUrlInput.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Enter') { (modelInput || keyInput).focus(); e.preventDefault(); }
+  });
+  if (modelInput) modelInput.addEventListener('keydown', (e) => {
     if (e.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter') { keyInput.focus(); e.preventDefault(); }
   });

@@ -366,3 +366,45 @@ export async function createDoubaoProvider(config: CreateDoubaoProviderConfig): 
     customModel: model,
   });
 }
+
+// ── User OpenAI-compatible endpoint (cc-switch style) ──────────────────
+
+export function buildOpenAICompatibleModel(modelId: string, baseUrl: string): Model<'openai-completions'> {
+  const id = String(modelId || '').trim();
+  const url = String(baseUrl || '').trim().replace(/\/+$/, '');
+  return {
+    id,
+    name: id,
+    api: 'openai-completions',
+    provider: 'openai-compatible' as any,
+    baseUrl: url,
+    reasoning: false,
+    // Generic OpenAI-compatible routers frequently do not implement the
+    // newer OpenAI-only developer role / store semantics. Keep payloads
+    // conservative so OneAPI/NewAPI/self-hosted gateways accept them.
+    compat: { supportsDeveloperRole: false, supportsStore: false },
+    input: ['text', 'image'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 131072,
+    maxTokens: 8192,
+  };
+}
+
+export interface CreateOpenAICompatibleProviderConfig {
+  apiKey: string;
+  baseUrl: string;
+  modelId: string;
+}
+
+export async function createOpenAICompatibleProvider(config: CreateOpenAICompatibleProviderConfig): Promise<LLMProvider> {
+  if (!config.apiKey) throw new Error('openai-compatible: apiKey required');
+  if (!config.baseUrl) throw new Error('openai-compatible: baseUrl required');
+  if (!config.modelId) throw new Error('openai-compatible: modelId required');
+  const mod = await ca();
+  const model = buildOpenAICompatibleModel(config.modelId, config.baseUrl);
+  return mod.createPiProvider({
+    provider: 'openai-compatible',
+    apiKey: config.apiKey,
+    customModel: model,
+  });
+}

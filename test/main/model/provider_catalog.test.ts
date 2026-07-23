@@ -41,6 +41,7 @@ describe('provider_catalog › CATALOG', () => {
       'minimax-cn',
       'doubao',
       'openrouter',
+      'openai-compatible',
     ]);
   });
 
@@ -88,6 +89,10 @@ describe('provider_catalog › CURATED_MODELS', () => {
         // openai-codex has a curated whitelist (ChatGPT subscription accepts
         // only 2 models — probed empirically).
         expect(CURATED_MODELS[p.id]?.length).toBeGreaterThan(0);
+        continue;
+      }
+      if (p.manualModel) {
+        expect(CURATED_MODELS[p.id]).toBeUndefined();
         continue;
       }
       expect(CURATED_MODELS[p.id]).toBeTruthy();
@@ -391,13 +396,15 @@ describe('provider_catalog › EXTERNAL_API_PROVIDERS', () => {
     // No model found for provider"。
     // 当前外部适配层支持：moonshot（OpenAI 兼容 endpoint）+ deepseek（pi-ai
     // 0.68.1 不带）+ doubao（火山方舟）。
-    expect([...EXTERNAL_API_PROVIDERS]).toEqual(['moonshot', 'deepseek', 'doubao']);
+    expect([...EXTERNAL_API_PROVIDERS]).toEqual(['moonshot', 'deepseek', 'doubao', 'openai-compatible']);
   });
 
   it('每个外部 provider 都在 CATALOG + CURATED_MODELS 有对应条目', () => {
     for (const id of EXTERNAL_API_PROVIDERS) {
       expect(CATALOG.find((p) => p.id === id)).toBeTruthy();
-      expect(CURATED_MODELS[id]?.length).toBeGreaterThan(0);
+      const row = CATALOG.find((p) => p.id === id)!;
+      if (row.manualModel) expect(CURATED_MODELS[id]).toBeUndefined();
+      else expect(CURATED_MODELS[id]?.length).toBeGreaterThan(0);
     }
   });
 });

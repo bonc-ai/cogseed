@@ -1811,5 +1811,10 @@
   "p3394.kstar.status.failed": "Falha na verificação",
   "p3394.experience.title": "Promover como experiência reutilizável?",
   "p3394.experience.approve": "Promover",
-  "p3394.experience.reject": "Descartar"
+  "p3394.experience.reject": "Descartar",
+  "settings.picker.manual_model_in_form": "Insira o modelo no formulário de chave de API",
+  "settings.modal.base_url": "Base URL",
+  "settings.modal.model_id": "ID do modelo",
+  "settings.modal.base_url_required": "Informe uma Base URL",
+  "settings.modal.model_required": "Informe um ID de modelo"
 }

@@ -1924,5 +1924,10 @@
   "companion.repro.advanced": "高级详情",
   "companion.repro.guide.history": "交互记录",
   "companion.repro.guide.user": "用户",
-  "companion.repro.guide.assistant": "Companion"
+  "companion.repro.guide.assistant": "Companion",
+  "settings.picker.manual_model_in_form": "在 API Key 表单中填写模型",
+  "settings.modal.base_url": "Base URL",
+  "settings.modal.model_id": "模型 ID",
+  "settings.modal.base_url_required": "请填写 Base URL",
+  "settings.modal.model_required": "请填写模型 ID"
 }

@@ -148,6 +148,30 @@ describe('auth › multi-profile store (addApiKey / removeCredential / renamePro
     for (const p of providers) expect(seen.has(p)).toBe(true);
   });
 
+  it('addApiKey stores a normalized base URL for OpenAI-compatible profiles', async () => {
+    const a = await import('../../../src/main/features/auth');
+    const { profileId } = await a.addApiKey('openai-compatible', 'sk-custom-xxxxxxxx', 'work', {
+      baseUrl: 'https://llm.example.test/v1/',
+    });
+    expect(profileId).toBe('openai-compatible:work');
+
+    const { providers } = await a.listProviders();
+    const custom = providers.find((p) => p.id === 'openai-compatible')!;
+    expect(custom.supportsApiKey).toBe(true);
+    expect(custom.supportsOAuth).toBe(false);
+    expect(custom.manualModel).toBe(true);
+    expect(custom.profiles[0]).toMatchObject({
+      profileId,
+      label: 'work',
+      baseUrl: 'https://llm.example.test/v1',
+      masked: 'sk-c…xxxx',
+    });
+
+    await expect(a.addApiKey('openai-compatible', 'sk-custom-xxxxxxxx', 'bad', {
+      baseUrl: 'file:///tmp/not-http',
+    })).rejects.toThrow(/base URL/);
+  });
+
   it('addApiKey with explicit label sanitises invalid characters', async () => {
     const a = await import('../../../src/main/features/auth');
     const { profileId } = await a.addApiKey('openai', 'key-xxxxxxxxxxxx', 'work @home/1');
@@ -304,6 +328,12 @@ describe('auth › listProviders grouping', () => {
     expect(codex!.supportsApiKey).toBe(false);
     expect(codex!.supportsOAuth).toBe(true);
     expect(codex!.oauthProvider).toBe('openai-codex');
+
+    const custom = providers.find((p) => p.id === 'openai-compatible');
+    expect(custom).toBeTruthy();
+    expect(custom!.supportsApiKey).toBe(true);
+    expect(custom!.supportsOAuth).toBe(false);
+    expect(custom!.manualModel).toBe(true);
   });
 });
 

@@ -78,6 +78,7 @@ import {
   providerLabel,
   providerDocsUrl,
   providerSubscriptionNote,
+  providerManualModel,
   providerRecommended,
   sortProviderIds,
 } from '../model/provider_catalog';
@@ -172,6 +173,8 @@ interface ApiKeyProfile {
   provider: string;
   label: string;
   key: string;
+  /** Optional custom endpoint for openai-compatible profiles. */
+  baseUrl?: string;
   email?: string;
   createdAt: number;
   lastUsed: number;
@@ -708,6 +711,7 @@ export interface ProfileView {
   label: string;
   type: 'api_key' | 'oauth';
   masked?: string;
+  baseUrl?: string;
   email?: string;
   expired?: boolean;
   createdAt: number;
@@ -732,6 +736,8 @@ export interface ProviderEntry {
   /** Cosmetic hint — renderer appends a "(Recommended)" suffix on the
    *  picker label. Source of truth is `CatalogEntry.recommended`. */
   recommended?: boolean;
+  /** True when the UI must ask for a model id text field instead of a fixed dropdown. */
+  manualModel?: boolean;
   profiles: ProfileView[];
 }
 
@@ -745,7 +751,12 @@ function profileToView(id: string, p: StoredProfile): ProfileView {
     createdAt: p.createdAt,
     lastUsed: p.lastUsed,
   };
-  if (p.type === 'api_key') return { ...base, type: 'api_key', masked: maskKey(p.key) };
+  if (p.type === 'api_key') return {
+    ...base,
+    type: 'api_key',
+    masked: maskKey(p.key),
+    ...(p.baseUrl ? { baseUrl: p.baseUrl } : {}),
+  };
   return { ...base, type: 'oauth', expired: Date.now() >= p.expires };
 }
 
@@ -844,6 +855,7 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
       docsUrl: providerDocsUrl(id),
       subscriptionNote: providerSubscriptionNote(id),
       recommended: providerRecommended(id),
+      manualModel: providerManualModel(id),
       profiles: (byProvider.get(id) || []).sort((a, b) => a.label.localeCompare(b.label)),
     };
   });
@@ -878,18 +890,40 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
   }
 }
 
+function isOpenAICompatibleProvider(providerId: string): boolean {
+  return String(providerId || '').trim() === 'openai-compatible';
+}
+
+function normalizeCustomBaseUrl(providerId: string, raw: unknown): string | undefined {
+  const value = String(raw || '').trim();
+  if (!isOpenAICompatibleProvider(providerId)) return undefined;
+  if (!value) throw new Error('base URL required for OpenAI-compatible provider');
+  let url: URL;
+  try { url = new URL(value); }
+  catch { throw new Error('base URL must be a valid http(s) URL'); }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('base URL must be a valid http(s) URL');
+  }
+  if (url.username || url.password) {
+    throw new Error('base URL must not contain credentials');
+  }
+  return value.replace(/\/+$/, '');
+}
+
 // ── Credential writes ────────────────────────────────────────────────────
 
 export async function addApiKey(
   providerId: string,
   apiKey: string,
   label?: string,
+  opts?: { baseUrl?: string },
 ): Promise<{ profileId: string }> {
   const id = String(providerId || '').trim();
   const key = String(apiKey || '').trim();
   if (!id) throw new Error('provider required');
   if (!key) throw new Error('api key required');
   assertModelProviderAllowed(id);
+  const baseUrl = normalizeCustomBaseUrl(id, opts?.baseUrl);
 
   const store = loadProfiles();
   const chosenLabel = label ? sanitizeLabel(label) : autoLabel(store, id);
@@ -901,6 +935,7 @@ export async function addApiKey(
     provider: id,
     label: chosenLabel,
     key,
+    ...(baseUrl ? { baseUrl } : {}),
     email: (existing as ApiKeyProfile | undefined)?.email,
     createdAt: existing?.createdAt ?? now,
     lastUsed: 0,
@@ -1386,6 +1421,7 @@ export interface ChatEntryChoice {
   provider: string;
   model: string;
   apiKey: string;
+  baseUrl?: string;
 }
 
 /**
@@ -1540,6 +1576,9 @@ export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
       provider: entry.provider,
       model: entry.model,
       apiKey,
+      ...(store.profiles[entry.profileId]?.type === 'api_key' && (store.profiles[entry.profileId] as ApiKeyProfile).baseUrl
+        ? { baseUrl: (store.profiles[entry.profileId] as ApiKeyProfile).baseUrl }
+        : {}),
     });
   }
   return choices;
@@ -1565,7 +1604,7 @@ export async function pickChatEntry(): Promise<ChatEntryChoice | null> {
 
 /** Retained for one legacy caller (testConnection with a specific provider). */
 export async function pickRotationKey(providerId: string): Promise<{
-  profileId: string; provider: string; label: string; apiKey: string;
+  profileId: string; provider: string; label: string; apiKey: string; baseUrl?: string;
 } | null> {
   const id = String(providerId || '').trim();
   if (!id) return null;
@@ -1580,14 +1619,21 @@ export async function pickRotationKey(providerId: string): Promise<{
       continue;
     }
     let apiKey: string | undefined;
-    if (prof.type === 'api_key') apiKey = prof.key;
+    let baseUrl: string | undefined;
+    if (prof.type === 'api_key') { apiKey = prof.key; baseUrl = prof.baseUrl; }
     else if (Date.now() < prof.expires) apiKey = prof.access;
     else apiKey = await refreshOAuthProfile(pid).catch(() => undefined);
     if (!apiKey) continue;
     const fresh = loadProfiles();
     const target = fresh.profiles[pid];
     if (target) { target.lastUsed = Date.now(); saveProfiles(fresh); }
-    return { profileId: pid, provider: id, label: prof.label, apiKey };
+    return {
+      profileId: pid,
+      provider: id,
+      label: prof.label,
+      apiKey,
+      ...(prof.type === 'api_key' && prof.baseUrl ? { baseUrl: prof.baseUrl } : {}),
+    };
   }
   return null;
 }
@@ -1652,17 +1698,18 @@ export async function testConnection(
 
   let chosenProfileId: string | undefined = profileId;
   let apiKey: string | undefined;
+  let baseUrl: string | undefined;
 
   if (chosenProfileId) {
     const store = loadProfiles();
     const prof = store.profiles[chosenProfileId];
     if (!prof || prof.provider !== pid) return { ok: false, error: 'profile not found' };
-    if (prof.type === 'api_key') apiKey = prof.key;
+    if (prof.type === 'api_key') { apiKey = prof.key; baseUrl = prof.baseUrl; }
     else if (Date.now() < prof.expires) apiKey = prof.access;
     else apiKey = await refreshOAuthProfile(chosenProfileId).catch(() => undefined);
   } else {
     const choice = await pickRotationKey(pid);
-    if (choice) { apiKey = choice.apiKey; chosenProfileId = choice.profileId; }
+    if (choice) { apiKey = choice.apiKey; baseUrl = choice.baseUrl; chosenProfileId = choice.profileId; }
   }
 
   if (!apiKey) return { ok: false, error: 'no credential stored for this provider', profileId: chosenProfileId };
@@ -1688,6 +1735,9 @@ export async function testConnection(
         // Default probe = Seed 2.0 Lite (cheaper than Pro).
         probeModel = probeModel || 'doubao-seed-2-0-lite-260215';
         provider = await ext.createDoubaoProvider({ apiKey, modelId: probeModel });
+      } else if (pid === 'openai-compatible') {
+        probeModel = probeModel || 'gpt-4o-mini';
+        provider = await ext.createOpenAICompatibleProvider({ apiKey, baseUrl: baseUrl || '', modelId: probeModel });
       } else {
         throw new Error(`external provider "${pid}" has no test-connection factory yet`);
       }
@@ -1773,5 +1823,5 @@ export async function testConnection(
 }
 
 // ── Legacy aliases ───────────────────────────────────────────────────────
-export const saveApiKey = (providerId: string, apiKey: string, label?: string) =>
-  addApiKey(providerId, apiKey, label);
+export const saveApiKey = (providerId: string, apiKey: string, label?: string, opts?: { baseUrl?: string }) =>
+  addApiKey(providerId, apiKey, label, opts);

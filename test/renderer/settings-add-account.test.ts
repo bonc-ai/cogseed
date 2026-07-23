@@ -15,10 +15,39 @@ class FakeElement {
   dataset: Record<string, string> = {};
   classList = new FakeClassList();
   className = '';
-  innerHTML = '';
+  private _innerHTML = '';
+  value = '';
   textContent = '';
   onclick: null | ((event?: unknown) => unknown) = null;
+  readonly appended: FakeElement[] = [];
+  private readonly byClass = new Map<string, FakeElement>();
   private readonly listeners = new Map<string, Array<(event?: unknown) => unknown>>();
+
+  get innerHTML() { return this._innerHTML; }
+
+  set innerHTML(value: string) {
+    this._innerHTML = value || '';
+    this.byClass.clear();
+    const classRe = /class="([^"]+)"/g;
+    let match: RegExpExecArray | null;
+    while ((match = classRe.exec(this._innerHTML))) {
+      for (const cls of match[1].split(/\s+/).filter(Boolean)) {
+        if (!this.byClass.has(cls)) this.byClass.set(cls, new FakeElement());
+      }
+    }
+  }
+
+  querySelector(selector: string) {
+    if (selector.startsWith('.')) return this.byClass.get(selector.slice(1)) || null;
+    return null;
+  }
+
+  appendChild(child: FakeElement) {
+    this.appended.push(child);
+    return child;
+  }
+
+  focus() { /* noop */ }
 
   addEventListener(type: string, handler: (event?: unknown) => unknown) {
     const handlers = this.listeners.get(type) || [];
@@ -43,6 +72,10 @@ function loadSettingsClickHarness() {
     'settings-picker-model',
     'settings-add-entry-btn',
     'settings-picker-status',
+    'add-account-modal',
+    'add-account-title',
+    'add-account-body',
+    'add-account-actions',
     'oauth-flow-modal',
     'oauth-flow-title',
     'oauth-flow-body',
@@ -50,13 +83,15 @@ function loadSettingsClickHarness() {
   ]) {
     elements.set(id, new FakeElement());
   }
-  const invoke = vi.fn(async (channel: string) => {
+  const invoke = vi.fn(async (channel: string, payload?: any) => {
     if (channel === 'auth.listModels') {
       return { ok: true, models: [{ id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol' }] };
     }
     if (channel === 'auth.startOAuth') {
       return { ok: false, error: 'stop after proving the dialog opened' };
     }
+    if (channel === 'auth.addApiKey') return { ok: true, profileId: `${payload.provider}:work` };
+    if (channel === 'auth.addEntry') return { ok: true, entryId: 'entry-custom' };
     return { ok: true };
   });
 
@@ -93,6 +128,7 @@ function loadSettingsClickHarness() {
     _aiSelectMount: aiSelectMount,
     document: {
       getElementById: (id: string) => elements.get(id) || null,
+      createElement: () => new FakeElement(),
       querySelectorAll: () => [],
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
@@ -146,4 +182,43 @@ describe('settings model authorization add account', () => {
     expect(elements.get('oauth-flow-modal')!.classList.contains('open')).toBe(true);
     expect(invoke).toHaveBeenCalledWith('auth.startOAuth', { provider: 'openai-codex' });
   });
+
+
+  it('saves OpenAI-compatible entries with Base URL and manual model', async () => {
+    const { context, elements, invoke } = loadSettingsClickHarness();
+    await vm.runInContext(`
+      _settingsState.providers = [{
+        id: 'openai-compatible',
+        label: 'OpenAI Compatible',
+        supportsApiKey: true,
+        supportsOAuth: false,
+        manualModel: true
+      }];
+      _settingsState.modelsCache = {};
+    `, context);
+
+    await vm.runInContext('_settingsRenderPicker()', context);
+    await vm.runInContext("_settingsState.pickerProviderSel.emitChange('openai-compatible')", context);
+    await elements.get('settings-add-entry-btn')!.click();
+
+    const body = elements.get('add-account-body')!;
+    body.querySelector('.api-label-input')!.value = 'work';
+    body.querySelector('.api-base-url-input')!.value = 'https://llm.example.test/v1';
+    body.querySelector('.api-model-input')!.value = 'custom-chat';
+    body.querySelector('.api-key-input')!.value = 'sk-custom-xxxxxxxx';
+    await elements.get('add-account-actions')!.appended[1].click();
+
+    expect(invoke).toHaveBeenCalledWith('auth.addApiKey', {
+      provider: 'openai-compatible',
+      apiKey: 'sk-custom-xxxxxxxx',
+      label: 'work',
+      baseUrl: 'https://llm.example.test/v1',
+    });
+    expect(invoke).toHaveBeenCalledWith('auth.addEntry', {
+      provider: 'openai-compatible',
+      model: 'custom-chat',
+      profileId: 'openai-compatible:work',
+    });
+  });
+
 });

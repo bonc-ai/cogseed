@@ -80,6 +80,7 @@ import {
   createMoonshotProvider,
   createDeepSeekProvider,
   createDoubaoProvider,
+  createOpenAICompatibleProvider,
 } from './external-providers';
 import { createRotatingProvider, type RotatingCandidate } from './rotating-provider';
 import { clearCooldown } from './profile-cooldown';
@@ -107,6 +108,8 @@ function buildExternalProviderModel(providerId: string, modelId: string): { cont
       return buildDeepSeekModel(modelId);
     case 'doubao':
       return buildDoubaoModel(modelId);
+    case 'openai-compatible':
+      return { contextWindow: 131072, maxTokens: 8192 };
     default:
       return null;
   }
@@ -1119,7 +1122,7 @@ export function openSkillSourcesExposureFromSessionId(sessionId: string): boolea
  * Extend the switch when a new id is added to `EXTERNAL_API_PROVIDERS`.
  * Async because the underlying factories await core-agent dynamic import.
  */
-async function buildExternalProvider(providerId: string, apiKey: string, modelId: string): Promise<LLMProvider> {
+async function buildExternalProvider(providerId: string, apiKey: string, modelId: string, baseUrl?: string): Promise<LLMProvider> {
   switch (providerId) {
     case 'moonshot':
       return await createMoonshotProvider({ apiKey, modelId });
@@ -1127,6 +1130,8 @@ async function buildExternalProvider(providerId: string, apiKey: string, modelId
       return await createDeepSeekProvider({ apiKey, modelId });
     case 'doubao':
       return await createDoubaoProvider({ apiKey, modelId });
+    case 'openai-compatible':
+      return await createOpenAICompatibleProvider({ apiKey, baseUrl: baseUrl || '', modelId });
     default:
       throw new Error(`no external provider factory for "${providerId}"`);
   }
@@ -1170,7 +1175,7 @@ async function buildRotatingProvider(
       modelId: candModelId,
       build: async () => {
         if (isExternal) {
-          return buildExternalProvider(candProviderId, choice.apiKey, candModelId);
+          return buildExternalProvider(candProviderId, choice.apiKey, candModelId, choice.baseUrl);
         }
         const resolvedModel = resolveConfiguredPiModel(mod, candProviderId, candModelId);
         if (resolvedModel?.isConfiguredFallback) {
