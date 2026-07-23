@@ -1,0 +1,234 @@
+{
+  "name": "orkas",
+  "version": "2026.7.21",
+  "private": true,
+  "description": "Mate Agent desktop — collaborative agent workspace",
+  "main": "bootstrap.cjs",
+  "type": "commonjs",
+  "packageManager": "npm@11.11.0",
+  "imports": {
+    "#core-agent": "./src/core-agent/src/index.ts"
+  },
+  "scripts": {
+    "prestart": "node scripts/ensure-dev-dependencies.cjs",
+    "start": "electron .",
+    "prestart:electron": "node scripts/ensure-dev-dependencies.cjs",
+    "start:electron": "electron .",
+    "stop": "pkill -9 -f \"$PWD/node_modules/electron/dist\" || true",
+    "smoke": "tsx src/main/smoke.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:js && npm run test:resources",
+    "test:js": "node scripts/run-tests.mjs run",
+    "test:resources": "node scripts/run-python-tests.mjs resources/builtin resources/test -q",
+    "test:coverage": "node scripts/run-tests.mjs run --coverage",
+    "test:watch": "node scripts/run-tests.mjs",
+    "test:local-agents:live": "tsx scripts/test-local-agents-live.ts",
+    "test:local-agents:prepare": "tsx scripts/test-local-agents-live.ts --install-only",
+    "test:platform-native": "node scripts/run-platform-native-tests.mjs",
+    "test:windows-native": "node scripts/run-windows-native-tests.mjs",
+    "runtime:ensure": "node bin/ensure-runtime.cjs --root resources/runtime",
+    "officecli:fetch": "node scripts/fetch-officecli.cjs",
+    "ffmpeg:fetch": "node scripts/fetch-ffmpeg.cjs",
+    "vc:fetch": "node scripts/fetch-win-vc-runtime.cjs --platform win32 --arch x64",
+    "whisper:fetch": "node scripts/fetch-whisper.cjs",
+    "runtime:prepare:dev": "node scripts/ensure-dev-dependencies.cjs",
+    "builtin:manifest": "node scripts/update-builtin-manifest.cjs",
+    "builtin:manifest:check": "node scripts/update-builtin-manifest.cjs --check",
+    "rebuild:sqlite:electron": "node scripts/ensure-sqlite-electron-abi.mjs",
+    "postinstall": "node scripts/ensure-sqlite-electron-abi.mjs && node scripts/fetch-embedding-model.mjs",
+    "prepare": "node scripts/install-git-hooks.mjs",
+    "prepack": "node scripts/ensure-dev-dependencies.cjs"
+  },
+  "devDependencies": {
+    "@ffprobe-installer/ffprobe": "^2.1.2",
+    "@types/adm-zip": "^0.5.7",
+    "@types/node": "^25.6.0",
+    "@vitest/coverage-v8": "^4.1.5",
+    "7zip-bin": "^5.2.0",
+    "electron": "^41.7.1",
+    "ffmpeg-static": "^5.3.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "^0.79.9",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "adm-zip": "^0.6.0",
+    "async-mutex": "^0.5.0",
+    "better-sqlite3": "^12.10.0",
+    "electron-log": "^5.4.3",
+    "fastembed": "^2.1.0",
+    "jimp": "^1.6.1",
+    "mammoth": "^1.12.0",
+    "pdfjs-dist": "^5.6.205",
+    "socks-proxy-agent": "^8.0.5",
+    "sqlite-vec": "^0.1.9",
+    "tsx": "^4.21.0",
+    "undici": "^7.28.0",
+    "zod": "^3.24.0"
+  },
+  "overrides": {
+    "tar": "7.5.20"
+  },
+  "build": {
+    "appId": "com.mateagent.desktop",
+    "productName": "Mate Agent",
+    "protocols": [
+      {
+        "name": "Mate Agent Connector Callback",
+        "schemes": [
+          "mateagent",
+          "orkas"
+        ],
+        "role": "Viewer"
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "bootstrap.cjs",
+      "bin/**/*",
+      "!bin/builtin-resource-gate.cjs",
+      "!bin/ensure-runtime.cjs",
+      "!bin/native-package-gate.cjs",
+      "!bin/packaged-entrypoint-gate.cjs",
+      "!bin/packaged-resource-gate.cjs",
+      "!bin/runtime-gate.cjs",
+      "src/main/**/*.{js,ts,mjs,md,json}",
+      "src/main/native/build/*.node",
+      "src/renderer/**/*",
+      "src/resources/brand.json",
+      "src/resources/icons/**/*",
+      "tsconfig.json",
+      "node_modules/tsx/**/*",
+      "node_modules/get-tsconfig/**/*",
+      "node_modules/resolve-pkg-maps/**/*",
+      "node_modules/esbuild/**/*",
+      "node_modules/@esbuild/**/*",
+      "src/core-agent/package.json",
+      "src/core-agent/src/**/*.ts",
+      "!**/*.{py,pyc}",
+      "!**/__pycache__",
+      "!**/.DS_Store",
+      "!src/core-agent/test/**",
+      "!src/main/features/*_dev.ts",
+      "!src/main/ipc/dev_handlers.ts"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "bin/**/*",
+      "src/main/native/build/*.node",
+      "node_modules/tsx/**/*",
+      "node_modules/get-tsconfig/**/*",
+      "node_modules/resolve-pkg-maps/**/*",
+      "node_modules/esbuild/**/*",
+      "node_modules/@esbuild/**/*",
+      "node_modules/better-sqlite3/**/*",
+      "node_modules/bindings/**/*",
+      "node_modules/file-uri-to-path/**/*",
+      "node_modules/sqlite-vec*/**/*",
+      "node_modules/fastembed/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/embedding-model",
+        "to": "embedding-model",
+        "filter": [
+          "**/*",
+          "!*.tar.gz"
+        ]
+      },
+      {
+        "from": "resources/runtime",
+        "to": "runtime",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/builtin",
+        "to": "builtin",
+        "filter": [
+          "**/*",
+          "!**/.DS_Store",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      },
+      {
+        "from": "resources/officecli",
+        "to": "officecli",
+        "filter": [
+          "**/*",
+          "!*.part"
+        ]
+      },
+      {
+        "from": "resources/mac-locales",
+        "to": ".",
+        "filter": [
+          "en.lproj/InfoPlist.strings",
+          "ja.lproj/InfoPlist.strings",
+          "zh-Hans.lproj/InfoPlist.strings"
+        ]
+      }
+    ],
+    "beforePack": "scripts/ensure-runtime-before-pack.cjs",
+    "afterPack": "scripts/codesign-adhoc.cjs",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "entitlements": "product/signing/entitlements.mac.plist",
+      "entitlementsInherit": "product/signing/entitlements.mac.inherit.plist",
+      "notarize": false,
+      "forceCodeSigning": true,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "icon": "src/resources/icons/icon.icns",
+      "extendInfo": {}
+    },
+    "dmg": {
+      "writeUpdateInfo": false
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "src/resources/icons/icon.ico",
+      "extraFiles": [
+        {
+          "from": "resources/runtime/vc/win32-x64",
+          "to": ".",
+          "filter": [
+            "*.dll"
+          ]
+        }
+      ],
+      "signtoolOptions": {
+        "signingHashAlgorithms": [
+          "sha256"
+        ],
+        "rfc3161TimeStampServer": "http://ts.ssl.com"
+      }
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Utility"
+    },
+    "artifactName": "Mate-Agent-${version}-${os}-${arch}.${ext}"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,208 @@
+import { describe, it, expect } from 'vitest';
+
+import {
+  _buildOutputFormatHintForTest,
+  _buildPlanInteractionHintForTest,
+  _redactDispatchToolResult,
+  _resolveAgentInputsForRuntimeForTest,
+} from '../../../../src/main/features/group_chat/bus';
+import { prompts } from '../../../../src/main/prompts/loader';
+
+describe('dispatch tool-result redaction in the process rail', () => {
+  // Assert the worker OUTPUT is gone (robust to the i18n'd replacement wording),
+  // not an exact replacement string.
+  it('scrubs a dispatch tool result (run_worker / dispatch_to) on end', () => {
+    for (const name of ['run_worker', 'dispatch_to']) {
+      const inner = { stream: 'tool', data: { name, phase: 'end', result_preview: '<worker-result>secret worker output</worker-result>' } };
+      _redactDispatchToolResult(inner);
+      expect(inner.data.result_preview, `${name} output must be removed`).not.toContain('secret worker output');
+      expect(inner.data.result_preview).not.toContain('<worker-result>');
+      expect(inner.data.result_preview, `${name} keeps a short note`).toBeTruthy();
+    }
+  });
+
+  it('also handles the `result` phase + toolName/status field aliases', () => {
+    const inner = { stream: 'tool', data: { toolName: 'dispatch_to', status: 'result', result_preview: 'raw worker text' } };
+    _redactDispatchToolResult(inner as unknown);
+    expect((inner.data as { result_preview: string }).result_preview).not.toContain('raw worker text');
+  });
+
+  it('leaves NON-dispatch tools untouched (read_file end keeps its preview)', () => {
+    const inner = { stream: 'tool', data: { name: 'read_file', phase: 'end', result_preview: 'file contents preview' } };
+    _redactDispatchToolResult(inner);
+    expect(inner.data.result_preview).toBe('file contents preview');
+  });
+
+  it('leaves the dispatch tool START event untouched (only end carries the result)', () => {
+    const inner = { stream: 'tool', data: { name: 'run_worker', phase: 'start', arguments: { task: 'do a thing' } } };
+    _redactDispatchToolResult(inner);
+    expect((inner.data as { result_preview?: string }).result_preview).toBeUndefined();
+    expect(inner.data.arguments).toEqual({ task: 'do a thing' });
+  });
+
+  it('ignores non-tool streams and malformed events', () => {
+    const a = { stream: 'lifecycle', data: { phase: 'end', result_preview: 'x' } };
+    _redactDispatchToolResult(a);
+    expect(a.data.result_preview).toBe('x');
+    expect(() => _redactDispatchToolResult(undefined)).not.toThrow();
+    expect(() => _redactDispatchToolResult({})).not.toThrow();
+  });
+});
+
+describe('group_chat output_format prompt hints', () => {
+  it('turns auto, missing, and unknown values into the automatic chooser', () => {
+    for (const value of ['auto', undefined, 'future-mode']) {
+      const hint = _buildOutputFormatHintForTest(value);
+
+      expect(hint).toContain('### Presentation preference');
+      expect(hint).not.toContain('### Output format');
+      expect(hint).toContain('automatic output layout');
+      expect(hint).toContain('Use plain text or Markdown');
+      expect(hint).toContain('Use `:::dashboard`');
+      expect(hint).toContain('valid fenced `:::dashboard` JSON block');
+      expect(hint).toContain('Use `create_artifact` only');
+      expect(hint).toContain('operate the result');
+      expect(hint).toContain('Respect explicit user constraints');
+    }
+  });
+
+  it('turns text and its legacy alias into a hard standard-reply instruction', () => {
+    for (const value of ['text', 'markdown_only']) {
+      const hint = _buildOutputFormatHintForTest(value);
+
+      expect(hint).toContain('### Presentation preference');
+      expect(hint).not.toContain('### Output format');
+      expect(hint).toContain('standard reply output');
+      expect(hint).toContain('plain text or Markdown');
+      expect(hint).toContain('NOT emit `:::dashboard`');
+      expect(hint).toContain('or call `create_artifact`');
+    }
+  });
+
+  it('turns dashboard into dashboard-preferred and artifact-blocked instructions', () => {
+    const hint = _buildOutputFormatHintForTest('dashboard');
+
+    expect(hint).toContain('### Presentation preference');
+    expect(hint).not.toContain('### Output format');
+    expect(hint).toContain('dashboard output');
+    expect(hint).toContain('read-only structured snapshots');
+    expect(hint).toContain('Follow the `Output formats` schema exactly');
+    expect(hint).toContain('NOT call `create_artifact`');
+  });
+
+  it('allows artifacts for both the current value and legacy alias', () => {
+    for (const value of ['artifact', 'allow_artifacts']) {
+      const hint = _buildOutputFormatHintForTest(value);
+
+      expect(hint).toContain('### Presentation preference');
+      expect(hint).not.toContain('### Output format');
+      expect(hint).toContain('allow interactive apps');
+      expect(hint).toContain('static/read-only structured snapshots');
+      expect(hint).toContain('create_artifact');
+      expect(hint).not.toContain('do NOT call `create_artifact`');
+    }
+  });
+
+});
+
+describe('VideoStudio runtime language input', () => {
+  const inputs = [{
+    id: 'language',
+    type: 'select',
+    default: 'en',
+    default_by_ui_language: {
+      zh: 'zh-CN',
+      en: 'en',
+      ja: 'ja',
+      pt: 'pt-BR',
+    },
+    options: [
+      { value: 'en', label: 'English' },
+      { value: 'zh-CN', label: '简体中文' },
+      { value: 'ja', label: '日本語' },
+      { value: 'pt-BR', label: 'Português (Brasil)' },
+    ],
+  }];
+
+  it.each([
+    ['zh-CN', 'zh-CN'],
+    ['en-US', 'en'],
+    ['ja-JP', 'ja'],
+    ['pt-BR', 'pt-BR'],
+    ['unsupported', 'en'],
+    [undefined, 'en'],
+  ])('maps user UI language %s to video default %s', (uiLanguage, expected) => {
+    const [language] = _resolveAgentInputsForRuntimeForTest(inputs, uiLanguage);
+    expect(language.default).toBe(expected);
+    expect(language.options.map((option: { value: string }) => option.value)).toEqual(
+      expect.arrayContaining(['en', 'zh-CN', 'ja', 'pt-BR']),
+    );
+  });
+
+  it('does not rewrite inputs without a UI-language mapping or mutate the persisted schema', () => {
+    const plainInputs = [{ id: 'tone', type: 'select', default: 'formal' }];
+    const resolved = _resolveAgentInputsForRuntimeForTest(plainInputs, 'zh');
+    expect(resolved[0]).toBe(plainInputs[0]);
+    expect(inputs[0].default).toBe('en');
+  });
+});
+
+describe('group_chat CLI output_format prompt hints', () => {
+  it('renders no presentation hints or dashboard schema', () => {
+    const rendered = prompts.load('chat_cli_agent', {
+      agent_name: 'CliAgent',
+      agent_description: 'Runs local CLI tasks.',
+      output_protocol_block: '',
+      language_block: '## User language\n\nUser UI language: **English**.',
+      attachments_block: '',
+      conversation_block: '',
+      task_body: 'Summarize status.',
+      runtime_datetime_block: '## Current date\n\nTimezone: Asia/Shanghai\nCurrent date: 2026-06-05',
+    });
+
+    expect(rendered).not.toContain('Use plain text or Markdown');
+    expect(rendered).not.toContain('automatic output layout');
+    expect(rendered).not.toContain('### Dashboard format');
+    expect(rendered).not.toContain(':::dashboard');
+    expect(rendered).not.toContain('create_artifact');
+    expect(rendered).not.toMatch(/\$output_[A-Za-z0-9_]+/);
+  });
+
+  it('includes the language directive in CLI prompts', () => {
+    const rendered = prompts.load('chat_cli_agent', {
+      agent_name: 'CliAgent',
+      agent_description: 'Runs local CLI tasks.',
+      output_protocol_block: '',
+      language_block: '## User language\n\nUser UI language: **Simplified Chinese**. Write all human-readable prose in Simplified Chinese.',
+      attachments_block: '',
+      conversation_block: '',
+      task_body: 'Summarize status.',
+      runtime_datetime_block: '## Current date\n\nTimezone: Asia/Shanghai\nCurrent date: 2026-06-05',
+    });
+
+    expect(rendered).toContain('## User language');
+    expect(rendered).toContain('Write all human-readable prose in Simplified Chinese');
+    expect(rendered.indexOf('## Runtime injection')).toBeLessThan(rendered.indexOf('## User language'));
+    expect(rendered).toContain('## Current date');
+  });
+});
+
+describe('group_chat plan interaction prompt hints', () => {
+  it('keeps non-interactive agents free of plan interaction instructions', () => {
+    expect(_buildPlanInteractionHintForTest(false)).toBe('');
+  });
+
+  it('tells interactive agents when to open plan interaction', () => {
+    const hint = _buildPlanInteractionHintForTest(true);
+
+    expect(hint).toContain('### Plan interaction');
+    expect(hint).toMatch(/Run your own Information sufficiency check/i);
+    expect(hint).toMatch(/output only/i);
+    expect(hint).toMatch(/one `<agent-input-form>`/i);
+    expect(hint).toMatch(/Required open shape/i);
+    expect(hint).toContain('<plan-interaction status="open" />');
+    expect(hint).toMatch(/at most 2-3 focused fields/i);
+    expect(hint).toMatch(/recommendation, diagnosis, plan, report/i);
+    expect(hint).toMatch(/form fields are the questions/i);
+  });
+});

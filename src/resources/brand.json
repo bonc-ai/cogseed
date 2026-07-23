@@ -1,0 +1,8 @@
+{
+  "appName": "Mate Agent",
+  "zhName": "Mate 智伴",
+  "appId": "com.mateagent.desktop",
+  "protocolScheme": "mateagent",
+  "legacyConnectorScheme": "orkas",
+  "taglineZh": "你的协作型智能体工作台"
+}

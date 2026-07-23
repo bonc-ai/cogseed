@@ -1,93 +1,166 @@
-# Mate agent
+# Orkas
 
+**An open-source, local-first AI workforce for complex work.**
 
+Orkas is an open-source, local-first AI workforce. A super-powered **Commander** coordinates specialist agents to complete complex work together. It runs as a desktop app on macOS, Windows, and Linux; your conversations, files, agent configs, and model keys stay local, and model calls go straight to your provider.
 
-## Getting started
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
+[![Stars](https://img.shields.io/github/stars/Orkas-AI/Orkas?style=social)](https://github.com/Orkas-AI/Orkas/stargazers)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue)](https://orkas.ai?source=github)
+[![Download](https://img.shields.io/badge/download-orkas.ai-black)](https://orkas.ai?source=github)
+[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/K8Eyvu7rD)
+[![X: @leochenpm](https://img.shields.io/badge/X-%40leochenpm-black?logo=x)](https://x.com/leochenpm)
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+[English](./README.md) · [简体中文](./README.zh-CN.md)
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+![Orkas demo](./resources/app-ui/demo.gif)
 
-## Add your files
+> One super-powered Commander turns your goal into an executable path, does the general work itself, and coordinates specialist agents when the job needs a team. No flowcharts, no orchestration code. Your conversations, files, and API keys never leave your machine.
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
+---
 
+## What is Orkas?
+
+- **Open-source, local-first AI workforce** — a desktop GUI where you direct a coordinated workforce of specialist AI agents through one chat. Not a single chatbot, not a code framework, not a hosted SaaS.
+- **A super-powered Commander** — the Commander understands context, breaks down goals, chooses the right agents, skills, connectors, and tools, and directly handles general analysis, writing, research, file work, and automation when no specialist is a better fit.
+- **Specialist agents that work together** — agents can run in parallel or in sequence, each with focused skills, memory, and task context, so complex work can move across coding, research, data, video, and slides.
+- **Open-source ecosystem, locally orchestrated** — plug in external CLI coding agents (Claude Code, Codex, OpenCode, Cline) and onboard open-source projects like HyperFrames as local tools, all coordinated by the same Commander.
+- **Local-first by design** — conversations, files, API keys, knowledge bases, and custom agents all stay on your disk. Model calls go straight from your machine to the provider — never through Orkas servers.
+- **Bring your own LLM keys** — plug in Claude, OpenAI, Gemini, DeepSeek, Kimi, GLM, Qwen, MiniMax, or Doubao. Mix providers across agents. No vendor lock-in.
+- **Self-evolving workforce** — each agent has its own private skills and memory, and improves through reflection after each task.
+
+> ⭐ If Orkas is useful to you, a star helps more people find the project.
+
+---
+
+## What can you build with it?
+
+- **Automate recurring reports & market research** — a specialist agent gathers, summarizes, and ships a weekly report.
+- **Turn a product spec into dev tasks** — the Commander breaks a PRD into tasks and dispatches them across agents.
+- **Chat with your documents & run local data analysis** — drop files in, keep the data on your machine.
+- **Go beyond code — video, slides, and more** — the Commander drives open-source tools like HyperFrames and hands off to CLI coding agents (Claude Code, Codex, OpenCode, Cline) and other local agents, so one chat produces code, research, video, and slide decks.
+
+**Explore use cases →** [research workflows](https://orkas.ai/use/researchers?source=github) · [data analysis](https://orkas.ai/use/data-analysis?source=github) · [chat with documents](https://orkas.ai/use/chat-with-documents?source=github) · [for developers](https://orkas.ai/use/developers?source=github) · [automate your workspace](https://orkas.ai/use/automate-workspace?source=github)
+
+---
+
+## Download
+
+- **Get the app** → [orkas.ai](https://orkas.ai?source=github) (macOS · Windows installers)
+- **Run from source** → see [Quick start](#quick-start) below (currently required on Linux)
+
+---
+
+## How Orkas compares
+
+| Tool | What it is | How Orkas differs |
+| --- | --- | --- |
+| **LangChain** | A developer framework/library for building LLM apps and agents — code-first, embedded in your own Python/JS app. | Orkas is a local-first AI workforce you direct through chat, not by writing orchestration code. Data and keys stay local by default. |
+| **CrewAI** | A Python framework for orchestrating role-playing autonomous agents — you define crews and agents in code. | Orkas brings multi-agent orchestration into a desktop app, with **local-first storage** and per-agent self-evolution built in. |
+| **Cloud agent platforms** (SaaS orchestrators) | Server-hosted; conversations, files, and API keys live on the vendor's infrastructure. | Orkas is **local-first**: everything stays on your machine, and model API calls go straight to the provider — never archived by Orkas. |
+| **OpenClaw** | A single always-on personal assistant reaching you across messaging channels. | Orkas gives you a local-first AI workforce: the Commander coordinates specialist agents from one desktop chat, and OpenClaw plugs in as an Orkas CLI backend. |
+| **Hermes-Agent** | Nous Research's self-improving personal agent (TUI + multi-channel gateway). | Orkas is a desktop GUI for a local-first AI workforce, with per-agent private skills and meta-cognition — and Hermes-Agent plugs in as an Orkas CLI backend. |
+
+**Orkas is for you if** you want a local-first AI workforce (not one assistant), a desktop GUI with file drop-in and visual agent management, and your data, keys, and agents on your own disk rather than a vendor cloud.
+
+**Not for you if** you just want a single all-purpose chatbot, a fully hosted/cloud team where your data lives on a vendor's servers, or a pure code library to embed in your own app.
+
+**Full side-by-side comparisons →** [vs Claude Code](https://orkas.ai/compare/orkas-vs-claude-code?source=github) · [vs Cline](https://orkas.ai/compare/orkas-vs-cline?source=github) · [vs LangChain](https://orkas.ai/compare/orkas-vs-langchain?source=github) · [vs ChatGPT](https://orkas.ai/compare/orkas-vs-chatgpt?source=github) · [vs OpenClaw](https://orkas.ai/compare/orkas-vs-openclaw?source=github)
+
+---
+
+## FAQ
+
+**What is Orkas?**
+Orkas is an open-source, local-first AI workforce. A super-powered Commander coordinates specialist agents to complete complex work together — not a single chatbot, not a code framework, not a hosted SaaS.
+
+**Is Orkas a local LLM?**
+No. Orkas runs on your machine but calls the models you choose through your own API keys (or a local model endpoint). It orchestrates agents and tools — it is not itself a model.
+
+**Where are my API keys and data stored?**
+On your disk. Conversations, files, knowledge bases, agents, and keys stay local; model calls go straight from your machine to the provider and are never proxied or archived by Orkas.
+
+**Does Orkas work offline?**
+The app is fully offline-capable — only the model calls need network. Point agents at a local model endpoint and you can run without the cloud.
+
+**Can Orkas drive Claude Code and other CLI coding agents?**
+Yes. Beyond its own Commander and specialist agents, Orkas can drive external CLI coding agents — Claude Code, Codex, OpenCode, Cline — as local subprocesses, and onboard open-source projects like HyperFrames, all directed from the same chat.
+
+**How is Orkas different from Claude Desktop / CrewAI / LangChain?**
+Claude Desktop is a single assistant; CrewAI and LangChain are code-first frameworks. Orkas is a local-first AI workforce: the Commander coordinates specialist agents, keeps data and keys local, and gives each agent its own private skills and memory. See the [full comparisons](https://orkas.ai/compare/orkas-vs-langchain?source=github).
+
+**Is Orkas free and open source?**
+Yes — MIT licensed. Bring your own model keys; you only ever pay your model providers.
+
+---
+
+## Quick start
+
+Packaged installers are currently available for macOS and Windows. Linux users should follow the source instructions below.
+
+- **macOS Apple Silicon** -> [Orkas-mac-arm64.dmg](https://orkas.ai/download/?source=github&os=mac&arch=arm64&download=1)
+- **macOS Intel** -> [Orkas-mac-x64.dmg](https://orkas.ai/download/?source=github&os=mac&arch=x64&download=1)
+- **Windows x64** -> [Orkas-Setup.exe](https://orkas.ai/download/?source=github&os=win&download=1)
+
+To run from source:
+
+**Requirements**: Node 20+ · Python 3 · macOS / Windows 10+ / recent Linux
+
+```bash
+git clone https://github.com/Orkas-AI/Orkas.git
+cd Orkas
+./run.sh           # macOS / Linux
+run.cmd            # Windows
 ```
-cd existing_repo
-git remote add origin http://10.1.12.6:54170/lhcx/project-group/opensource/team-02/mate-agent.git
-git branch -M main
-git push -uf origin main
-```
 
-## Integrate with your tools
+`run.sh` / `run.cmd` auto-installs dependencies and downloads the embedding model (~95 MB). First launch creates a workspace under `~/.orkas/` (macOS / Linux) or `<smallest non-system drive>:\.orkas\` (Windows). Then open **Settings → AI Providers** to add an API key or OAuth.
 
-- [ ] [Set up project integrations](http://10.1.12.6:54170/lhcx/project-group/opensource/team-02/mate-agent/-/settings/integrations)
+---
 
-## Collaborate with your team
+## Screenshots
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
+![Orkas home screen](./resources/app-ui/home-en.jpg)
 
-## Test and Deploy
+---
 
-Use the built-in continuous integration in GitLab.
+## How it works (core design)
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+> Full design and hard constraints → [`CLAUDE.md`](./CLAUDE.md)
 
-***
+### Group chat: visibility slicing + a single scheduling primitive
 
-# Editing this README
+In one chat there's the Commander, N specialist agents, and you — but **each agent does not see the same conversation**.
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+- **Visibility slicing** — the main conversation is one full jsonl; each agent only gets a slice (`from==me ∨ to∋me ∨ mentions∋me`). A worker never reads the full main conversation — saves tokens and prevents private context from leaking across agents.
+- **One scheduling primitive** — every dispatch (the Commander's `dispatch_to`, the user's `@`, plan steps) funnels into the same `enqueue` primitive. No parallel routing paths.
+- **Shared plan** — when agents collaborate, the Commander writes progress into one `plan.md`, visible to every member.
 
-## Suggestions for a good README
+### Agent dispatch: structured channels, not `@` in prose
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+- **Structured dispatch** — Commander-to-agent dispatches go through the `dispatch_to({to, message})` tool call; `@` in prose is not treated as a dispatch signal (the user's `@` is still recognized — UX unchanged).
+- **Deferred wake-up** — a `dispatch_to` only stages; the recipient wakes only after the Commander's turn finishes, preventing premature execution.
+- **Turn-based safety stop** — the runaway guard counts turns (`MAX_WORKER_TURNS=100`), not wall-clock time, so a slow-but-progressing LLM isn't killed.
 
-## Name
-Choose a self-explaining name for your project.
+### Self-evolution: `meta/` + self-managed skills
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+Each agent maintains, in its own directory:
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+- **`meta/COMPETENCE.md`** — what it's good / not good at.
+- **`meta/LEARNING_STRATEGIES.md`** — methods that have worked for it.
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+After each task the agent reflects and updates these; on the next task `meta/` is fed back into the system prompt, so experience shapes the next run. Via the `skill_manage` tool an agent can also crystallize "how I solved X" into a **private** skill, reused directly next time.
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+---
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+## Acknowledgments
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+Some core modules draw on these open-source projects — special thanks to:
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+- [OpenClaw](https://github.com/openclaw/openclaw)
+- [Hermes-Agent](https://github.com/NousResearch/hermes-agent)
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+---
 
 ## License
-For open source projects, say how it is licensed.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+[MIT](./LICENSE)

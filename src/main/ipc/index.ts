@@ -1,0 +1,3351 @@
+/**
+ * IPC wiring — replaces `bridge/routes.py` for the Electron era.
+ *
+ * Two channel families:
+ *   - `orkas.invoke` (request/response): renderer → main with a logical
+ *     channel name + payload; main returns `{ ok, ...result }` or
+ *     `{ ok: false, error }`.
+ *   - `orkas.streamStart` (server-push events): renderer registers a
+ *     unique `requestId`, main pushes each event via `webContents.send`
+ *     on channel `stream:<requestId>`, terminated by `{ type: 'done' }`.
+ *     `orkas.streamCancel` aborts an in-flight stream.
+ *
+ * Handler tables below are the full router — add a new logical channel by
+ * dropping it into `invokeHandlers` or `streamHandlers`.
+ */
+
+import { app, ipcMain, dialog, BrowserWindow, type WebContents } from 'electron';
+
+import * as users from '../features/users';
+import * as chats from '../features/chats';
+import * as projects from '../features/projects';
+import * as projectFiles from '../features/project_files';
+import * as projectTasks from '../features/project_tasks';
+import * as projectLibraryIndexer from '../features/project_library_indexer';
+import * as groupChat from '../features/group_chat';
+import * as p3394 from '../features/p3394';
+import type { GroupEvent } from '../features/group_chat/bus';
+import * as agents from '../features/agents';
+import * as autoTasks from '../features/auto_tasks';
+import { isAgentEnabled } from '../features/component_enabled';
+import * as skills from '../features/skills';
+import * as marketplace from '../features/marketplace';
+import * as marketplaceBiz from '../features/marketplace_biz';
+import * as marketplaceCache from '../features/marketplace_cache';
+import * as marketplaceReconcile from '../features/marketplace_reconcile';
+import * as cacheClearable from '../features/cache_clearable';
+import * as contexts from '../features/contexts';
+import * as libraryTransfer from '../features/library_transfer';
+import * as kbVector from '../features/kb_vector';
+import * as kbIndexer from '../features/kb_indexer';
+import * as chatAttachments from '../features/chat_attachments';
+import * as chatArtifacts from '../features/chat_artifacts';
+import * as conversationFiles from '../features/conversation_files';
+import * as savedApps from '../features/saved_apps';
+import * as recycleBin from '../features/recycle_bin';
+import * as search from '../features/search';
+import * as auth from '../features/auth';
+import * as imageAuth from '../features/image_auth';
+import * as searchAuth from '../features/search_auth';
+import * as videoAuth from '../features/video_auth';
+import * as ttsAuth from '../features/tts_auth';
+import * as permissions from '../features/permissions';
+import * as appConfig from '../features/config';
+import * as avatars from '../features/avatars';
+import * as commanderProfile from '../features/commander_profile';
+import * as commanderRuntimeStats from '../features/commander_runtime_stats';
+import * as commanderBackend from '../features/commander_backend';
+import { getRendererTables, isLang, t } from '../i18n';
+import { isPathAllowed } from '../util/path-sandbox';
+import * as userWorkspace from '../features/user_workspace';
+import { invokeHandlers as localAgentsHandlers } from './local_agents';
+import { invokeHandlers as qualityHandlers } from './quality';
+import { invokeHandlers as connectorsHandlers } from './connectors';
+import { invokeHandlers as memoryHandlers } from './memory';
+import { safeId } from '../storage';
+import { createLogger, logFromRenderer } from '../logger';
+import {
+  markConfirmationVisible as markDeleteConfirmationVisible,
+  resolveConfirmation as resolveDeleteConfirmation,
+} from '../model/core-agent/delete-file-confirm';
+import * as path from 'node:path';
+import * as fs from 'node:fs';
+import { shell } from 'electron';
+import { DEFAULT_USER_WORKSPACE, WS_ROOT, projectFilesDir } from '../paths';
+import {
+  chatAttachmentDirForConversation,
+  chatAttachmentRelPath,
+  findAutoTaskLocation,
+  globalAutoTaskLocation,
+} from '../util/project-layout';
+import { readState as readGroupChatState } from '../features/group_chat/state';
+import { logErrorRef } from '../util/log-redact';
+import { chatMediaLocalPathFromUrl } from '../util/chat-media-url';
+import { macosTccSensitivePath } from '../util/macos-tcc';
+import { normalizeAppError } from '../util/app-error';
+import {
+  isTrustedIpcSender,
+  parseInvokeEnvelope,
+  parseStreamEnvelope,
+  parseStreamRequestId,
+} from './security';
+
+const log = createLogger('ipc');
+
+function markPreferencesDirty(): void {}
+
+function conversationProjectHint(args: Record<string, any>): string | null | undefined {
+  if (!Object.prototype.hasOwnProperty.call(args, 'project_id')) return undefined;
+  const raw = args.project_id;
+  if (raw === '') return null;
+  if (!safeId(raw)) throw new Error('invalid project id');
+  return raw;
+}
+
+interface IpcContext {
+  userId: string;
+  user: { user_id: string; created_at: string };
+  sender: WebContents;
+}
+
+type InvokeHandler = (payload: any, ctx: IpcContext) => Promise<any>;
+type StreamHandler = (
+  payload: any,
+  ctx: IpcContext,
+  signal: AbortSignal,
+) => AsyncGenerator<any, void, unknown>;
+
+function _activeUserIdForPicker(): string {
+  try { return users.getActiveUserId(); } catch { return ''; }
+}
+
+function _usableDialogDefaultPath(candidate: string | undefined): string | undefined {
+  if (!candidate || !path.isAbsolute(candidate)) return undefined;
+  const abs = path.resolve(candidate);
+  if (macosTccSensitivePath(abs, { recursive: true })) return undefined;
+  try { return fs.statSync(abs).isDirectory() ? abs : undefined; }
+  catch { return undefined; }
+}
+
+function _safeDialogDefaultPath(preferred?: string): string | undefined {
+  const uid = _activeUserIdForPicker();
+  const candidates: Array<string | undefined> = [preferred];
+  if (uid) {
+    try { candidates.push(userWorkspace.getWorkspacePath(uid)); } catch { /* ignore */ }
+  }
+  candidates.push(DEFAULT_USER_WORKSPACE, WS_ROOT);
+  for (const candidate of candidates) {
+    const usable = _usableDialogDefaultPath(candidate);
+    if (usable) return usable;
+  }
+  return undefined;
+}
+
+const CHAT_PICK_EXTENSIONS = [...chatAttachments.ALLOWED_EXTENSIONS]
+  .map((ext) => ext.replace(/^\./, ''))
+  .sort();
+const CONTEXT_PICK_EXTENSIONS = [
+  'md', 'markdown', 'txt', 'csv', 'tsv', 'json', 'yaml', 'yml', 'log',
+  'html', 'htm', 'xml', 'toml', 'ini', 'conf',
+  'py', 'pyi', 'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs',
+  'sh', 'bash', 'zsh', 'ps1', 'cmd', 'bat', 'rb', 'go', 'rs', 'java', 'kt',
+  'c', 'cpp', 'cc', 'h', 'hpp', 'css', 'scss', 'less',
+  'sql', 'graphql', 'gql',
+  'pdf', 'docx', 'docm', 'xlsx', 'xlsm', 'pptx', 'pptm',
+  'png', 'jpg', 'jpeg', 'webp', 'gif',
+];
+const PROJECT_PICK_EXTENSIONS = [
+  ...CONTEXT_PICK_EXTENSIONS,
+  'mp4', 'webm', 'mov', 'm4v', 'ogv',
+];
+
+async function _pickLocalFiles(
+  title: string,
+  extensions: string[],
+  multiSelections = true,
+  seedWorkspaceOnFirstOpen = false,
+): Promise<string[]> {
+  const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  const ext = Array.from(new Set(extensions.map((x) => String(x || '').replace(/^\./, '').toLowerCase()).filter(Boolean)));
+  const opts: Electron.OpenDialogOptions = {
+    title,
+    properties: multiSelections ? ['openFile', 'multiSelections'] : ['openFile'],
+    filters: ext.length ? [{ name: 'Supported files', extensions: ext }] : undefined,
+  };
+  let preferred: string | undefined;
+  if (seedWorkspaceOnFirstOpen) {
+    const uid = _activeUserIdForPicker();
+    preferred = uid ? userWorkspace.consumePickerFirstOpenDefault(uid) : undefined;
+  }
+  opts.defaultPath = _safeDialogDefaultPath(preferred);
+  const res = parent
+    ? await dialog.showOpenDialog(parent, opts)
+    : await dialog.showOpenDialog(opts);
+  if (res.canceled || !res.filePaths?.length) return [];
+  return res.filePaths;
+}
+
+function _targetInDir(targetDir: unknown, baseName: string): string {
+  const dir = typeof targetDir === 'string' ? targetDir.trim().replace(/^\/+|\/+$/g, '') : '';
+  return dir ? `${dir}/${baseName}` : baseName;
+}
+
+interface LocalFileImportEntry {
+  path: string;
+  name: string;
+  size?: number;
+}
+
+async function _importLocalFileEntries(payload: any, ctx: IpcContext): Promise<{ files: any[] }> {
+  const scope = payload?.scope;
+  const entries = Array.isArray(payload?.entries)
+    ? payload.entries.slice(0, 200).filter((entry: unknown): entry is LocalFileImportEntry => {
+      if (!entry || typeof entry !== 'object') return false;
+      const item = entry as Partial<LocalFileImportEntry>;
+      return typeof item.path === 'string'
+        && path.isAbsolute(item.path)
+        && typeof item.name === 'string'
+        && !!item.name.trim();
+    })
+    : [];
+  if (!entries.length) return { files: [] };
+
+  const results = [];
+  if (scope === 'contexts') {
+    for (const entry of entries) {
+      const name = path.basename(entry.name);
+      const target = _targetInDir(payload?.targetDir, name);
+      const ext = path.extname(name).toLowerCase();
+      if (contexts.hasHiddenContextPathSegment(target)) {
+        results.push({ ok: false, name, target, bytes: entry.size || 0, ext, reason: 'hidden' });
+        continue;
+      }
+      if (!contexts.isSupportedContextFileName(target)) {
+        results.push({ ok: false, name, target, bytes: entry.size || 0, ext, reason: 'ext' });
+        continue;
+      }
+      const result = await contexts.importContextFileFromPath(target, entry.path);
+      results.push({ name, target, bytes: entry.size || 0, ext, ...result });
+    }
+    return { files: results };
+  }
+
+  if (scope === 'project') {
+    const projectId = payload?.projectId;
+    if (!safeId(projectId) || !await projects.projectExists(ctx.userId, projectId)) {
+      throw new Error('invalid projectId');
+    }
+    for (const entry of entries) {
+      const name = path.basename(entry.name);
+      const targetName = _targetInDir(payload?.targetDir, name);
+      const result = await projectFiles.importProjectFileFromPath(
+        ctx.userId,
+        projectId,
+        targetName,
+        entry.path,
+      );
+      results.push({ name, targetName, ...result });
+    }
+    return { files: results };
+  }
+  throw new Error('invalid import scope');
+}
+
+// Resolve the workspace scope hint a renderer payload carries. cid is
+// authoritative (conv.project_id is the truth, so a cid uniquely picks a
+// project); projectId is the fallback for commander-tab clicks where no cid
+// exists yet. Returns `undefined` for default scope.
+async function _resolveWorkspaceScope(
+  userId: string,
+  payload: any,
+): Promise<string | undefined> {
+  if (payload && typeof payload.cid === 'string' && payload.cid && safeId(payload.cid)) {
+    return await userWorkspace.resolveProjectIdForCid(userId, payload.cid);
+  }
+  if (payload && typeof payload.projectId === 'string' && payload.projectId && safeId(payload.projectId)) {
+    return payload.projectId;
+  }
+  return undefined;
+}
+
+// Resolve the cid-scoped attachment dir from a renderer payload, when present.
+// The file-tools' allowed-paths scope is "active workspace ∪ this cid's
+// attachment dir" (CLAUDE.md §5); reveal + preview must honour the same
+// union so a user can preview an attachment they uploaded, not just files
+// the LLM wrote into the workspace.
+function _attachmentScopeForPayload(userId: string, payload: any): string | null {
+  if (!payload || typeof payload.cid !== 'string' || !payload.cid) return null;
+  if (!safeId(payload.cid)) return null;
+  return path.resolve(chatAttachmentDirForConversation(userId, payload.cid));
+}
+
+// Project-file scope for sandbox checks. Takes the already-resolved projectId
+// (computed by `_resolveWorkspaceScope`, which is cid-authoritative) rather
+// than reading payload.projectId directly — this enforces that a caller
+// passing `{cid, projectId}` where conv-cid.project_id !== projectId cannot
+// reach a foreign project's files (the cid wins, the claimed projectId
+// silently drops). When no cid is in payload, `_resolveWorkspaceScope`
+// already falls back to payload.projectId, so the commander-tab path
+// (project chip click before any conversation exists) continues to work.
+function _projectFileScopeForUser(userId: string, projectId: string | undefined): string | null {
+  if (!projectId || !safeId(projectId)) return null;
+  return path.resolve(projectFilesDir(userId, projectId));
+}
+
+function _escapePreviewHtml(s: string): string {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+type OfficePreviewKind = 'word' | 'spreadsheet' | 'presentation';
+
+function _officePreviewKindForExt(ext: string): OfficePreviewKind | null {
+  if (ext === '.docx' || ext === '.docm') return 'word';
+  if (ext === '.xlsx' || ext === '.xlsm') return 'spreadsheet';
+  if (ext === '.pptx' || ext === '.pptm') return 'presentation';
+  return null;
+}
+
+function _wrapOfficePreviewHtml(kind: OfficePreviewKind, title: string, body: string): string {
+  const safeTitle = _escapePreviewHtml(title || 'Office preview');
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${safeTitle}</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #eef2f7;
+      color: #0f172a;
+      font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .office-preview {
+      width: 100%;
+      min-height: 100vh;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    .office-word {
+      max-width: 820px;
+      background: #fff;
+      min-height: calc(100vh - 48px);
+      margin: 20px auto 32px;
+      padding: 56px 64px;
+      border: 1px solid #e5e7eb;
+      box-shadow: 0 1px 8px rgba(15, 23, 42, 0.06);
+    }
+    .office-spreadsheet {
+      max-width: none;
+      padding: 18px;
+    }
+    .office-word h1, .office-word h2, .office-word h3 {
+      line-height: 1.3;
+      color: #111827;
+    }
+    .office-word h1 {
+      margin: 0 0 22px;
+      font-size: 28px;
+      font-weight: 700;
+    }
+    .office-word h2 {
+      margin: 26px 0 12px;
+      font-size: 21px;
+      font-weight: 650;
+    }
+    .office-word h3 {
+      margin: 22px 0 10px;
+      font-size: 17px;
+      font-weight: 650;
+    }
+    .office-word p,
+    .office-word li {
+      margin: 0 0 13px;
+      font-size: 15px;
+      line-height: 1.72;
+      color: #111827;
+    }
+    .office-word ul,
+    .office-word ol {
+      margin: 0 0 16px 24px;
+      padding: 0;
+    }
+    .office-word table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 16px 0;
+    }
+    .office-word th, .office-word td,
+    .office-table-wrap th, .office-table-wrap td {
+      border: 1px solid #cbd5e1;
+      padding: 7px 9px;
+      vertical-align: top;
+    }
+    .office-sheet {
+      margin: 0 0 22px;
+      padding: 18px;
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+    }
+    .office-sheet h2 {
+      margin: 0 0 12px;
+      font-size: 15px;
+    }
+    .office-table-wrap {
+      overflow: auto;
+      max-height: 70vh;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+    }
+    .office-table-wrap table {
+      border-collapse: collapse;
+      min-width: 100%;
+      background: #fff;
+      font-size: 13px;
+    }
+    .office-table-wrap td {
+      min-width: 96px;
+      white-space: pre-wrap;
+    }
+    .office-empty-cell, .office-muted { color: #64748b; }
+    .office-presentation {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 24px;
+      padding: 24px;
+    }
+    .office-slide {
+      width: min(1120px, calc(100vw - 64px));
+      aspect-ratio: 16 / 9;
+      margin: 0 auto;
+      padding: clamp(32px, 5vw, 64px);
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
+      display: flex;
+      align-items: center;
+    }
+    .office-slide-body p {
+      margin: 0 0 18px;
+      font-size: clamp(18px, 2vw, 30px);
+      line-height: 1.35;
+    }
+    .office-slide-body p:first-child {
+      font-size: clamp(26px, 3vw, 44px);
+      font-weight: 600;
+      line-height: 1.2;
+    }
+    @media (max-width: 720px) {
+      .office-preview { padding: 12px; }
+      .office-word {
+        margin: 0 auto;
+        min-height: calc(100vh - 24px);
+        padding: 32px 24px;
+      }
+      .office-word h1 { font-size: 24px; }
+      .office-word p,
+      .office-word li { font-size: 14px; }
+      .office-presentation { padding: 12px; gap: 14px; }
+      .office-slide {
+        width: calc(100vw - 24px);
+        padding: 24px;
+      }
+      .office-slide-body p { font-size: 16px; }
+      .office-slide-body p:first-child { font-size: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="office-preview office-${kind}">
+    ${body}
+  </main>
+</body>
+</html>`;
+}
+
+/** Build the allowed-roots list for the file-class IPC sandbox: workspace ∪
+ *  current cid's attachment dir ∪ payload's project-file dir. The actual
+ *  containment check happens via `util/path-sandbox.isPathAllowed`, which
+ *  realpath-resolves both candidate and roots so a symlink planted inside
+ *  any allowed root cannot exfiltrate to a path outside.
+ *
+ *  Centralised for `conversations.attachments.import` / `workspace.revealPath`
+ *  / `produced.readText` / `produced.writeText` so the scope union stays in
+ *  sync. Previously each handler did its own `path.resolve(target).startsWith(
+ *  scope + path.sep)` triplet — lexical only, which let a symlink target
+ *  outside the scope quietly slip through under a `<uid>` workspace path
+ *  that itself contained one (the realistic attack: LLM-assisted skill
+ *  drops a symlink into an attachment dir; user later writes to the
+ *  apparent path through `produced.writeText` and the bytes land at
+ *  attacker-chosen target). */
+async function _ipcFileSandboxAllowedRoots(userId: string, payload: any): Promise<string[]> {
+  const projectId = await _resolveWorkspaceScope(userId, payload);
+  const roots: string[] = [userWorkspace.getWorkspacePath(userId, projectId)];
+  const att = _attachmentScopeForPayload(userId, payload);
+  if (att) roots.push(att);
+  const pf = _projectFileScopeForUser(userId, projectId);
+  if (pf) roots.push(pf);
+  return roots;
+}
+
+/** Test-only export — see `test/main/ipc/{produced-readText,workspace-reveal}.test.ts`. */
+export const _ipcFileSandboxAllowedRootsForTest = _ipcFileSandboxAllowedRoots;
+
+async function _isConversationRecordedFile(userId: string, cid: string, absPath: string): Promise<boolean> {
+  if (!safeId(cid)) return false;
+  const target = path.resolve(absPath);
+  const matches = (value: unknown): boolean =>
+    typeof value === 'string' && !!value && path.resolve(value) === target;
+
+  try {
+    const messages = await chats.getMessages(userId, cid, 2000);
+    for (const msg of messages as any[]) {
+      const produced = Array.isArray(msg?.produced) ? msg.produced : [];
+      if (produced.some(matches)) return true;
+    }
+  } catch { /* best-effort allow-list */ }
+
+  return false;
+}
+
+async function _isAllowedFileActionPath(userId: string, payload: any, absPath: string): Promise<boolean> {
+  if (isPathAllowed(absPath, await _ipcFileSandboxAllowedRoots(userId, payload))) return true;
+  const cid = payload?.cid;
+  return typeof cid === 'string' && !!cid && await _isConversationRecordedFile(userId, cid, absPath);
+}
+
+// Scan an HTML file with constant memory and return only the authored
+// composition root tag. The file may be any size; only this small tag crosses
+// IPC, while the complete HTML continues to stream through chat-media://.
+async function _readHtmlCompositionRootTag(absPath: string): Promise<string> {
+  const stream = fs.createReadStream(absPath, { encoding: 'utf8', highWaterMark: 64 * 1024 });
+  const rootPattern = /<[^>]*\bdata-composition-id\s*=\s*["'][^"']+["'][^>]*>/i;
+  const MAX_TAG_CARRY_CHARS = 64 * 1024;
+  let carry = '';
+  try {
+    for await (const chunk of stream) {
+      const combined = carry + String(chunk);
+      const match = combined.match(rootPattern);
+      if (match) return match[0];
+      const lastOpen = combined.lastIndexOf('<');
+      carry = lastOpen >= 0 ? combined.slice(lastOpen) : '';
+      // A normal HTML opening tag is tiny. Drop pathological unterminated
+      // markup instead of letting a malformed file grow the scan buffer.
+      if (carry.length > MAX_TAG_CARRY_CHARS) carry = '';
+    }
+    return '';
+  } finally {
+    // `destroy()` schedules the underlying file-handle close. Await the close
+    // edge before returning so callers can immediately move/delete the file
+    // or its workspace on Windows.
+    if (!stream.closed) {
+      await new Promise<void>((resolve) => {
+        stream.once('close', resolve);
+        stream.destroy();
+      });
+    }
+  }
+}
+
+function _contextTreeHasPath(nodes: contexts.ContextNode[], relPath: string): boolean {
+  for (const node of nodes || []) {
+    if (node.path === relPath) return true;
+    if (node.type === 'dir' && node.children?.length && _contextTreeHasPath(node.children, relPath)) return true;
+  }
+  return false;
+}
+
+function _uniqueContextImportPath(rawName: string): string {
+  const name = path.basename(String(rawName || '').trim() || 'artifact');
+  const ext = path.extname(name);
+  const stem = ext ? name.slice(0, -ext.length) : name;
+  const tree = contexts.listContextsTree();
+  if (!_contextTreeHasPath(tree, name)) return name;
+  for (let i = 2; i < 1000; i += 1) {
+    const candidate = `${stem}-${i}${ext}`;
+    if (!_contextTreeHasPath(tree, candidate)) return candidate;
+  }
+  return `${stem}-${Date.now()}${ext}`;
+}
+
+function _libraryImportTargetName(payload: any, sourcePath: string): string {
+  const raw = typeof payload?.targetPath === 'string' && payload.targetPath.trim()
+    ? payload.targetPath.trim()
+    : (typeof payload?.name === 'string' && payload.name.trim() ? payload.name.trim() : path.basename(sourcePath));
+  return raw || path.basename(sourcePath) || 'artifact';
+}
+
+function _libraryTextTargetName(payload: any): string {
+  const raw = typeof payload?.targetPath === 'string' && payload.targetPath.trim()
+    ? payload.targetPath.trim()
+    : (typeof payload?.path === 'string' && payload.path.trim() ? payload.path.trim() : '');
+  return raw || 'archive.md';
+}
+
+async function _resolveLibraryTargetProjectId(userId: string, payload: any): Promise<string | undefined> {
+  const requestedScope = payload?.targetScope && typeof payload.targetScope === 'object'
+    ? payload.targetScope
+    : null;
+  const cidProjectId = await _resolveWorkspaceScope(userId, payload);
+  let projectId: string | undefined = cidProjectId;
+  if (requestedScope?.type === 'global') projectId = undefined;
+  if (requestedScope?.type === 'project' && typeof requestedScope.projectId === 'string' && safeId(requestedScope.projectId)) {
+    projectId = requestedScope.projectId;
+  }
+  return projectId;
+}
+
+async function _importProducedToLibrary(payload: any, ctx: IpcContext): Promise<any> {
+  const target = payload?.path;
+  if (typeof target !== 'string' || !target) throw new Error('missing path');
+  const norm = path.resolve(target);
+  if (!await _isAllowedFileActionPath(ctx.userId, payload, norm)) {
+    throw new Error('path is outside the user workspace');
+  }
+  let st: fs.Stats;
+  try { st = fs.statSync(norm); }
+  catch { return { ok: false, error: 'not_found' }; }
+  if (!st.isFile()) return { ok: false, error: 'not_supported' };
+
+  const projectId = await _resolveLibraryTargetProjectId(ctx.userId, payload);
+  const buf = fs.readFileSync(norm);
+  const targetName = _libraryImportTargetName(payload, norm);
+  if (projectId) {
+    const result = await projectFiles.uploadProjectFile(ctx.userId, projectId, targetName, buf);
+    if (!result.ok) return result;
+    return { ok: true, scope: 'project', projectId, info: result.info };
+  }
+
+  const relPath = typeof payload?.targetPath === 'string' && payload.targetPath.trim()
+    ? payload.targetPath.trim()
+    : _uniqueContextImportPath(targetName);
+  const result = contexts.uploadContextFile(relPath, buf);
+  if (!result.ok) return result;
+  return { ok: true, scope: 'global', path: result.path, bytes: result.bytes };
+}
+
+async function _writeTextToLibrary(payload: any, ctx: IpcContext): Promise<any> {
+  const content = typeof payload?.content === 'string' ? payload.content : '';
+  const targetName = _libraryTextTargetName(payload);
+  const projectId = await _resolveLibraryTargetProjectId(ctx.userId, payload);
+  if (projectId) {
+    const result = await projectFiles.uploadProjectFile(ctx.userId, projectId, targetName, Buffer.from(content, 'utf8'));
+    if (!result.ok) return result;
+    return { ok: true, scope: 'project', projectId, info: result.info };
+  }
+
+  const result = contexts.writeContextFile(targetName, content);
+  if (!result.ok) return result;
+  return { ok: true, scope: 'global', path: result.path };
+}
+
+export const _libraryWriteTextForTest = _writeTextToLibrary;
+export const _libraryImportProducedForTest = _importProducedToLibrary;
+
+function _recycleDataChangeForPaths(paths: string[]): { domains: string[]; cids: string[]; recycle: true } {
+  const domains = new Set<string>();
+  const cids = new Set<string>();
+  for (const raw of paths || []) {
+    const rel = String(raw || '').replace(/\\/g, '/');
+    if (!rel.startsWith('cloud/')) continue;
+    const first = rel.slice('cloud/'.length).split('/', 1)[0];
+    if (first === 'chats' || first === 'chat_attachments' || first === 'chat_artifacts' || first === 'sessions') {
+      domains.add('chats');
+    } else if (first === 'contexts') domains.add('contexts');
+    else if (first === 'projects') {
+      const parts = rel.split('/');
+      const projectChild = parts[3] || '';
+      if (projectChild === 'chats' || projectChild === 'chat_attachments' || projectChild === 'chat_artifacts' || projectChild === 'sessions') {
+        domains.add('chats');
+      } else if (projectChild === 'auto_tasks') {
+        domains.add('auto_tasks');
+      } else {
+        domains.add('projects');
+      }
+    }
+    else if (first === 'auto_tasks') domains.add('auto_tasks');
+    else if (first === 'saved_apps') domains.add('saved_apps');
+    else if (first === 'agents') domains.add('agents');
+    else if (first === 'skills') domains.add('skills');
+    else if (first === 'marketplace') domains.add('marketplace');
+    else if (first === 'config') domains.add('component_enabled');
+
+    const chatFile = /^cloud\/chats\/([^/]+)\.jsonl$/.exec(rel);
+    const chatDir = /^cloud\/chats\/([^/]+)\//.exec(rel);
+    const chatPool = /^cloud\/chat_(?:attachments|artifacts)\/([^/]+)\//.exec(rel);
+    const projectChatFile = /^cloud\/projects\/[^/]+\/chats\/([^/]+)\.jsonl$/.exec(rel);
+    const projectChatDir = /^cloud\/projects\/[^/]+\/chats\/([^/]+)\//.exec(rel);
+    const projectChatPool = /^cloud\/projects\/[^/]+\/chat_(?:attachments|artifacts)\/([^/]+)\//.exec(rel);
+    const cid = chatFile?.[1] || chatDir?.[1] || chatPool?.[1]
+      || projectChatFile?.[1] || projectChatDir?.[1] || projectChatPool?.[1] || '';
+    if (cid && safeId(cid) && cid !== 'agent' && cid !== 'skill') cids.add(cid);
+  }
+  return { domains: Array.from(domains), cids: Array.from(cids), recycle: true };
+}
+
+function _codedError(code: string): Error & { code: string } {
+  const err = new Error(code) as Error & { code: string };
+  err.code = code;
+  return err;
+}
+
+async function _afterRecycleRestore(ctx: IpcContext, paths: string[]): Promise<void> {
+  const change = _recycleDataChangeForPaths(paths);
+  for (const raw of paths || []) {
+    const rel = String(raw || '').replace(/\\/g, '/');
+    if (rel.startsWith('cloud/contexts/')) {
+      const ctxRel = rel.slice('cloud/contexts/'.length);
+      if (ctxRel) {
+        search.upsertContext(ctx.userId, ctxRel);
+        kbIndexer.enqueue(ctx.userId, ctxRel, 'upsert');
+      }
+    }
+    const projectFile = /^cloud\/projects\/([^/]+)\/(?:contexts|files)\/(.+)$/.exec(rel);
+    if (projectFile && safeId(projectFile[1]) && projectFile[2]) {
+      projectLibraryIndexer.enqueue(ctx.userId, projectFile[1], projectFile[2], 'upsert');
+    }
+  }
+  if (change.domains.includes('agents')) {
+    try { agents.invalidateAgentListCache(); } catch { /* best-effort cache bust */ }
+  }
+  if (change.domains.includes('skills')) {
+    try { skills.clearSkillListCache(); } catch { /* best-effort cache bust */ }
+  }
+  if (change.domains.includes('auto_tasks')) {
+    autoTasks.rescheduleAllForActiveUser().catch((err) => {
+      log.warn('auto task reschedule after recycle restore failed', { error: logErrorRef(err) });
+    });
+  }
+  void change;
+}
+
+// ── Invoke handlers ──────────────────────────────────────────────────────
+// Contract: `(payload, { userId, sender }) => result` where result is
+// merged into a `{ ok: true, ...result }` response. Throw to signal error.
+
+const invokeHandlers: Record<string, InvokeHandler> = {
+  'user.init': async () => {
+    const user = await users.getOrCreateSelfUser();
+    return user;
+  },
+
+  'conversations.list': async ({ mode, active_cid, expanded_projects, project_id, task_id, bucket, offset }, ctx) => {
+    if (mode === 'startup') {
+      const expandedProjectIds = String(expanded_projects || '')
+        .split(',')
+        .filter((id) => safeId(id));
+      const result = await chats.listStartupConversations(ctx.userId, {
+        activeConversationId: safeId(active_cid) ? active_cid : undefined,
+        expandedProjectIds,
+      });
+      return result;
+    }
+    if (mode === 'project') {
+      if (!safeId(project_id)) throw new Error('invalid project id');
+      return chats.listProjectConversationPage(ctx.userId, project_id, offset);
+    }
+    if (mode === 'auto_task') {
+      if (!safeId(task_id)) throw new Error('invalid auto task id');
+      return chats.listAutoTaskConversationPage(ctx.userId, task_id, offset);
+    }
+    if (mode === 'old_unprojected') {
+      if (bucket !== 'last30' && bucket !== 'older') throw new Error('invalid conversation bucket');
+      return chats.listOldUnprojectedConversationPage(ctx.userId, bucket, offset);
+    }
+    return { conversations: await chats.listConversations(ctx.userId) };
+  },
+
+  'conversations.autoTaskCounts': async ({ task_ids } = {}, ctx) => {
+    const ids = Array.isArray(task_ids) ? task_ids : [];
+    return { counts: await chats.countAutoTaskConversations(ctx.userId, ids) };
+  },
+
+  'conversations.get': async (args, ctx) => {
+    const { cid } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const conv = await chats.getConversation(ctx.userId, cid, conversationProjectHint(args));
+    if (!conv) throw new Error('conversation not found');
+    return { conversation: conv };
+  },
+
+  'conversations.history': async (args, ctx) => {
+    const { cid, limit = 10, before, around_index } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const projectIdHint = conversationProjectHint(args);
+    const conv = await chats.getConversation(ctx.userId, cid, projectIdHint);
+    if (!conv) throw new Error('conversation not found');
+    const resolvedProjectId = conv.project_id ?? null;
+    // Stamp the conv-bound agent's current enabled state so the renderer can
+    // grey out the input + show a banner without making a second IPC round trip.
+    // True for unbound (no agent_id) — input always allowed there.
+    const agent_enabled = conv.agent_id ? isAgentEnabled(ctx.userId, conv.agent_id) : true;
+    const runtime = await groupChat.runtimeStatus(ctx.userId, cid, resolvedProjectId);
+    const requestedLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 10)));
+    const requestedBefore = Number(before);
+    const requestedAroundIndex = Number(around_index);
+    const hasAroundIndex = Number.isSafeInteger(requestedAroundIndex) && requestedAroundIndex >= 0;
+    const page = hasAroundIndex
+      ? await chats.getMessagesPageAtIndex(
+        ctx.userId, cid, requestedAroundIndex, requestedLimit, resolvedProjectId)
+      : await chats.getMessagesPage(
+        ctx.userId,
+        cid,
+        requestedLimit,
+        Number.isSafeInteger(requestedBefore) && requestedBefore >= 0 ? requestedBefore : undefined,
+        resolvedProjectId,
+      );
+    return {
+      conversation: { ...conv, ...runtime, agent_enabled },
+      history: page.history,
+      next_cursor: page.nextCursor,
+      ...(hasAroundIndex && 'pageStart' in page && 'historyIndexes' in page ? {
+        page_start: page.pageStart,
+        history_indexes: page.historyIndexes,
+      } : {}),
+    };
+  },
+
+  'conversations.files.list': async ({ cid }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const projectId = await userWorkspace.resolveProjectIdForCid(ctx.userId, cid);
+    const workspaceRoot = userWorkspace.getWorkspacePath(ctx.userId, projectId);
+    const state = await readGroupChatState(ctx.userId, cid);
+    const root = state.workspace_dir
+      ? path.join(workspaceRoot, state.workspace_dir)
+      : workspaceRoot;
+    return conversationFiles.listWorkspaceFiles(root);
+  },
+
+  'conversations.create': async ({ title = '', projectId = '' } = {}, ctx) => {
+    // Validate the projectId belongs to this user before persisting it on
+    // the conv record. Unknown / invalid projectIds are dropped silently
+    // (the conv lands without project membership) — the renderer should
+    // not be able to put a conv into a project the backend doesn't know
+    // about, but a stale / since-deleted pid coming from the commander chip
+    // shouldn't fail the create either.
+    let validProjectId = '';
+    if (projectId && typeof projectId === 'string' && safeId(projectId)) {
+      if (await projects.projectExists(ctx.userId, projectId)) validProjectId = projectId;
+    }
+    const conv = await chats.createConversation(ctx.userId, {
+      kind: 'normal',
+      title,
+      ...(validProjectId ? { projectId: validProjectId } : {}),
+    });
+    return { conversation: conv };
+  },
+
+  'conversations.delete': async (args, ctx) => {
+    const { cid } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    await recycleBin.createAppRecycleBatchForConversation(ctx.userId, cid);
+    const ok = await chats.deleteConversation(ctx.userId, cid, conversationProjectHint(args));
+    return { deleted: ok };
+  },
+
+  'conversations.pin': async (args, ctx) => {
+    const { cid, pinned } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const conv = await chats.setConversationPinned(
+      ctx.userId, cid, !!pinned, conversationProjectHint(args));
+    if (!conv) throw new Error('conversation not found');
+    return { conversation: conv };
+  },
+
+  'conversations.rename': async (args, ctx) => {
+    const { cid, title } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const conv = await chats.renameConversation(
+      ctx.userId, cid, title, conversationProjectHint(args));
+    if (!conv) throw new Error('conversation not found');
+    return { conversation: conv };
+  },
+
+  'conversations.deleteAll': async (_args, ctx) => {
+    const convs = await chats.listConversations(ctx.userId);
+    await recycleBin.createAppRecycleBatchForConversations(
+      ctx.userId,
+      convs.map((c) => c.conversation_id),
+    );
+    const deleted = await chats.deleteAllConversations(ctx.userId);
+    return { deleted };
+  },
+
+  // ── Projects (logical groups of conversations + scoped workspace) ──
+  'projects.list': async (_payload, ctx) => {
+    return { projects: await projects.listProjects(ctx.userId) };
+  },
+
+  'projects.create': async ({ name }, ctx) => {
+    const result = await projects.createProject(ctx.userId, name);
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { project: result.project };
+  },
+
+  'projects.rename': async ({ projectId, name }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    const result = await projects.renameProject(ctx.userId, projectId, name);
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { project: result.project };
+  },
+
+  'projects.delete': async ({ projectId }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    const batch = await recycleBin.createAppRecycleBatchForProject(ctx.userId, projectId);
+    if (!batch?.items?.length) throw _codedError('recycle_archive_failed');
+    const result = await projects.deleteProject(ctx.userId, projectId);
+    if (!result.ok) {
+      await recycleBin.deleteRecycleBatch(ctx.userId, batch.id).catch(() => {});
+      throw new Error((result as { error: string }).error);
+    }
+    return { deleted_convs: result.deleted_convs, deleted_auto_tasks: result.deleted_auto_tasks };
+  },
+
+  'projects.get': async ({ projectId }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    const project = await projects.getProject(ctx.userId, projectId);
+    if (!project) throw new Error('not_found');
+    return { project };
+  },
+
+  // User-authored per-project instructions (ORKAS.md). User-owned: edited only
+  // here via the project settings UI; agents read it from the system prompt.
+  'projects.instructions.get': async ({ projectId }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    const result = await projects.readProjectInstructions(ctx.userId, projectId);
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { content: result.content, limit: result.limit };
+  },
+
+  'projects.instructions.set': async ({ projectId, content }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof content !== 'string') throw new Error('invalid content');
+    const result = await projects.writeProjectInstructions(ctx.userId, projectId, content);
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { ok: true };
+  },
+
+  // ── Project tasks (structured work backlog — user + agent shared) ─────────
+  'projects.tasks.list': async ({ projectId } = {}, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    const tasks = await projectTasks.listTasks(ctx.userId, projectId);
+    return { tasks, progress: projectTasks.computeProgress(tasks) };
+  },
+
+  'projects.tasks.create': async ({ projectId, title, detail, status, owner_agent, owner_agent_id, depends_on } = {}, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof title !== 'string') throw new Error('invalid title');
+    const r = await projectTasks.createTask(ctx.userId, projectId, {
+      title, detail, status, owner_agent, owner_agent_id, depends_on, created_by: 'user',
+    });
+    if (!r.ok) throw new Error((r as { error: string }).error);
+    return { task: r.task };
+  },
+
+  'projects.tasks.update': async ({ projectId, taskId, title, detail, status, owner_agent, owner_agent_id, result_ref } = {}, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
+    const r = await projectTasks.updateTask(ctx.userId, projectId, taskId, { title, detail, status, owner_agent, owner_agent_id, result_ref });
+    if (!r.ok) throw new Error((r as { error: string }).error);
+    return { task: r.task };
+  },
+
+  'projects.tasks.complete': async ({ projectId, taskId, resultRef } = {}, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
+    const r = await projectTasks.completeTask(ctx.userId, projectId, taskId, resultRef);
+    if (!r.ok) throw new Error((r as { error: string }).error);
+    return { task: r.task };
+  },
+
+  'projects.tasks.delete': async ({ projectId, taskId } = {}, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
+    const r = await projectTasks.deleteTask(ctx.userId, projectId, taskId);
+    if (!r.ok) throw new Error((r as { error: string }).error);
+    return { ok: true };
+  },
+
+  'projects.files.list': async ({ projectId }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
+    return { files: await projectFiles.listProjectFiles(ctx.userId, projectId) };
+  },
+
+  'projects.files.tree': async ({ projectId }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
+    return { tree: await projectFiles.listProjectFileTree(ctx.userId, projectId) };
+  },
+
+  'projects.files.mkdir': async ({ projectId, path: relPath }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof relPath !== 'string' || !relPath) throw new Error('invalid path');
+    return projectFiles.createProjectDir(ctx.userId, projectId, relPath);
+  },
+
+  'projects.files.upload': async ({ projectId, name, data }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof data !== 'string') throw new Error('missing data');
+    if (data.length > 12 * 1024 * 1024) {
+      return { ok: false, error: 'large uploads require path-based import', code: 'E_IMPORT_PATH_REQUIRED' };
+    }
+    const buf = Buffer.from(data, 'base64');
+    return projectFiles.uploadProjectFile(ctx.userId, projectId, name || '', buf);
+  },
+
+  'projects.files.pickAndUpload': async ({ projectId, targetDir } = {}, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
+    const picked = await _pickLocalFiles('Choose files', PROJECT_PICK_EXTENSIONS, true);
+    const results = [];
+    for (const filePath of picked) {
+      const name = path.basename(filePath);
+      try {
+        const targetName = _targetInDir(targetDir, name);
+        const res = await projectFiles.importProjectFileFromPath(ctx.userId, projectId, targetName, filePath);
+        results.push({ name, targetName, ...res });
+      } catch (err) {
+        results.push({ ok: false, name, error: (err as Error)?.message || String(err) });
+      }
+    }
+    return { ok: true, files: results };
+  },
+
+  'projects.files.createText': async ({ projectId, name }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof name !== 'string' || !name) throw new Error('invalid name');
+    return projectFiles.createProjectTextFile(ctx.userId, projectId, name);
+  },
+
+  'projects.files.readText': async ({ projectId, name }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof name !== 'string' || !name) throw new Error('invalid name');
+    return projectFiles.readProjectTextFile(ctx.userId, projectId, name);
+  },
+
+  'projects.files.updateText': async ({ projectId, name, content }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof name !== 'string' || !name) throw new Error('invalid name');
+    if (typeof content !== 'string') throw new Error('missing content');
+    return projectFiles.updateProjectTextFile(ctx.userId, projectId, name, content);
+  },
+
+  'projects.files.rename': async ({ projectId, oldName, name }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof oldName !== 'string' || !oldName) throw new Error('invalid oldName');
+    if (typeof name !== 'string' || !name) throw new Error('invalid name');
+    return projectFiles.renameProjectFile(ctx.userId, projectId, oldName, name);
+  },
+
+  'projects.files.delete': async ({ projectId, name }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof name !== 'string' || !name) throw new Error('invalid name');
+    await recycleBin.createAppRecycleBatchForCloudEntry(
+      ctx.userId,
+      `cloud/projects/${projectId}/contexts/${name}`,
+      'project_file',
+    );
+    return projectFiles.deleteProjectEntry(ctx.userId, projectId, name);
+  },
+
+  'library.transfer': async (payload, ctx) => {
+    return libraryTransfer.transferLibraryEntries(ctx.userId, payload);
+  },
+
+  'projects.files.absPath': async ({ projectId, name }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof name !== 'string' || !name) throw new Error('invalid name');
+    const r = await projectFiles.resolveProjectFileAbsPath(ctx.userId, projectId, name);
+    if (!r.ok) return { ok: false, error: (r as { error?: string }).error || 'failed' };
+    return { ok: true, path: r.absPath, kind: r.kind };
+  },
+
+  'projects.files.image': async ({ projectId, name }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof name !== 'string' || !name) throw new Error('invalid name');
+    return projectFiles.readProjectImage(ctx.userId, projectId, name);
+  },
+
+  'projects.files.docxHtml': async ({ projectId, name }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof name !== 'string' || !name) throw new Error('invalid name');
+    return projectFiles.readProjectDocxHtml(ctx.userId, projectId, name);
+  },
+
+  'projects.files.status': async ({ projectId, skipReconcile }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
+    const reconcile = skipReconcile ? null : await projectLibraryIndexer.reconcile(ctx.userId, projectId);
+    const summary = projectLibraryIndexer.statusSummary(ctx.userId, projectId);
+    const files = projectLibraryIndexer.listFiles(ctx.userId, projectId).map((r) => ({
+      name: r.rel_path,
+      path: r.rel_path,
+      kind: r.kind,
+      status: r.status,
+      chunks: r.chunks,
+      bytes: r.bytes,
+      mtime: r.mtime,
+      error: r.error || undefined,
+    }));
+    return { summary, files, reconcile };
+  },
+
+  'projects.files.reconcile': async ({ projectId }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
+    const result = await projectLibraryIndexer.reconcile(ctx.userId, projectId);
+    return { result };
+  },
+
+  'projects.files.reprocess': async ({ projectId, name }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof name !== 'string' || !name) throw new Error('invalid name');
+    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
+    projectLibraryIndexer.enqueue(ctx.userId, projectId, name, 'upsert', { force: true });
+    return { ok: true, name };
+  },
+
+  // ── Project bindings (the strict scope of agents/skills visible inside
+  // a project conversation; see CLAUDE.md §6 outer-intersection rule) ──
+  // `bindings.list` returns the bound ids JOINED with name/description so
+  // the renderer can paint the detail page in one round-trip. Unknown ids
+  // (referent deleted) are pruned here so stale bindings never become user
+  // cleanup work.
+  'projects.bindings.list': async ({ projectId }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
+    const [agentList, skillList] = await Promise.all([
+      agents.listAgentSummaries(),
+      skills.listSkills(),
+    ]);
+    const agentById = new Map(agentList.map((a: any) => [a.agent_id, a]));
+    const skillById = new Map(skillList.map((s: any) => [s.id, s]));
+    const pruned = await projects.pruneBindings(ctx.userId, projectId, {
+      agents: new Set(agentList.map((a: any) => a.agent_id)),
+      skills: new Set(skillList.map((s: any) => s.id)),
+    });
+    if (!pruned.ok) throw new Error((pruned as { error: string }).error);
+    const bindings = pruned.bindings;
+    return {
+      bindings,
+      agentDetails: bindings.agents
+        .map((id) => agentById.get(id))
+        .filter(Boolean),
+      skillDetails: bindings.skills
+        .map((id) => skillById.get(id))
+        .filter(Boolean),
+    };
+  },
+
+  'projects.bindings.add': async ({ projectId, kind, id }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof id !== 'string' || !id) throw new Error('invalid id');
+    let result;
+    if (kind === 'agent') {
+      if (!agents.isValidAgentId(id)) throw new Error('invalid id');
+      const agent = await agents.getAgent(id);
+      if (!agent || agent.enabled === false) throw new Error('agent_disabled');
+      result = await projects.addAgentBinding(ctx.userId, projectId, id);
+    } else if (kind === 'skill') {
+      result = await projects.addSkillBinding(ctx.userId, projectId, id);
+    } else {
+      throw new Error('invalid kind');
+    }
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { bindings: result.bindings };
+  },
+
+  'projects.bindings.remove': async ({ projectId, kind, id }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof id !== 'string' || !id) throw new Error('invalid id');
+    let result;
+    if (kind === 'agent') {
+      result = await projects.removeAgentBinding(ctx.userId, projectId, id);
+    } else if (kind === 'skill') {
+      result = await projects.removeSkillBinding(ctx.userId, projectId, id);
+    } else {
+      throw new Error('invalid kind');
+    }
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { bindings: result.bindings };
+  },
+
+  // Candidates = enabled [builtin + custom] minus already-bound. Powers the
+  // "Add" picker on the project detail page so disabled agents never appear
+  // as addable project members.
+  'projects.bindings.candidates': async ({ projectId }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
+    const bindings = await projects.getBindings(ctx.userId, projectId);
+    const boundAgents = new Set(bindings.agents);
+    const boundSkills = new Set(bindings.skills);
+    const [agentList, skillList] = await Promise.all([
+      agents.listAgentSearchListings(),
+      skills.listSkills(),
+    ]);
+    return {
+      agents: agentList.filter((a: any) => a.enabled !== false && !boundAgents.has(a.agent_id)),
+      skills: skillList.filter((s: any) => !boundSkills.has(s.id)),
+    };
+  },
+
+  // ── Auto tasks (per-task dir at cloud/auto_tasks/<id>/; see features/auto_tasks.ts) ──
+  'autoTasks.list': async ({ projectId } = {}, ctx) => {
+    const opts: { projectId?: string | null } = {};
+    if (projectId === null) opts.projectId = null;
+    else if (typeof projectId === 'string' && projectId) opts.projectId = projectId;
+    const tasks = await autoTasks.listTasks(ctx.userId, opts);
+    return { tasks };
+  },
+
+  'autoTasks.create': async ({ id, content, message_parts, schedule, title, enabled, recipient, skill, connector, project_id, attachments }, ctx) => {
+    const result = await autoTasks.createTask(ctx.userId, {
+      ...(typeof id === 'string' && id ? { id } : {}),
+      content: typeof content === 'string' ? content : '',
+      message_parts: Array.isArray(message_parts) ? message_parts : undefined,
+      schedule,
+      title: typeof title === 'string' ? title : undefined,
+      enabled: enabled !== false,
+      recipient: recipient && typeof recipient === 'object' ? recipient : undefined,
+      skill: skill && typeof skill === 'object' ? skill : undefined,
+      connector: connector && typeof connector === 'object' ? connector : undefined,
+      project_id: typeof project_id === 'string' ? project_id : undefined,
+      attachments: Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string' && n) : undefined,
+    });
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { task: result.task };
+  },
+
+  'autoTasks.allocateDraftId': async () => {
+    return { id: autoTasks.allocateDraftTaskId() };
+  },
+
+  // Current device fingerprint — { id: <MAC>, name: <hostname> }. Renderer
+  // uses this to decide which task rows are "本机" (matches MAC) vs. show
+  // the device_name from the task as-is (other devices).
+  'autoTasks.currentDevice': async () => {
+    const d = autoTasks.getCurrentDevice();
+    return { device: { id: d.id, name: d.name } };
+  },
+
+  'autoTasks.attachments.list': async ({ taskId } = {}, ctx) => {
+    if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
+    return { items: await autoTasks.listAttachments(ctx.userId, taskId) };
+  },
+
+  'autoTasks.attachments.upload': async ({ taskId, name, dataBase64 }, ctx) => {
+    if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
+    if (typeof name !== 'string' || !name) throw new Error('invalid name');
+    if (typeof dataBase64 !== 'string') throw new Error('invalid data');
+    const buf = Buffer.from(dataBase64, 'base64');
+    const res = await autoTasks.uploadAttachment(ctx.userId, taskId, name, buf);
+    if (!res.ok) throw new Error((res as { error: string }).error);
+    return { name: res.name };
+  },
+
+  'autoTasks.attachments.attachContext': async ({ taskId, relPath } = {}, ctx) => {
+    if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
+    if (typeof relPath !== 'string' || !relPath.trim()) throw new Error('missing relPath');
+    const absPath = contexts.resolveContextFileAbsPath(relPath);
+    const st = fs.statSync(absPath);
+    if (!st.isFile()) throw new Error('not_a_file');
+    const res = await autoTasks.uploadAttachment(
+      ctx.userId,
+      taskId,
+      path.basename(absPath),
+      fs.readFileSync(absPath),
+    );
+    if (!res.ok) throw new Error((res as { error: string }).error);
+    return { name: res.name };
+  },
+
+  'autoTasks.attachments.attachProjectFile': async ({ taskId, projectId, name } = {}, ctx) => {
+    if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof name !== 'string' || !name.trim()) throw new Error('missing name');
+    const resolved = await projectFiles.resolveProjectFileAbsPath(ctx.userId, projectId, name);
+    if (!resolved.ok) throw new Error((resolved as { error?: string }).error || 'not_found');
+    const st = fs.statSync(resolved.absPath);
+    if (!st.isFile()) throw new Error('not_a_file');
+    const res = await autoTasks.uploadAttachment(
+      ctx.userId,
+      taskId,
+      path.basename(resolved.absPath),
+      fs.readFileSync(resolved.absPath),
+    );
+    if (!res.ok) throw new Error((res as { error: string }).error);
+    return { name: res.name };
+  },
+
+  'autoTasks.attachments.import': async (payload = {}, ctx) => {
+    const taskId = (payload as any)?.taskId;
+    const sourcePath = (payload as any)?.path;
+    if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
+    if (typeof sourcePath !== 'string' || !sourcePath) throw new Error('missing path');
+
+    const norm = path.resolve(sourcePath);
+    const allowedRoots = await _ipcFileSandboxAllowedRoots(ctx.userId, payload);
+    if (!isPathAllowed(norm, allowedRoots)) {
+      throw new Error('path is outside the user workspace');
+    }
+
+    let st: fs.Stats;
+    try { st = fs.statSync(norm); }
+    catch { throw new Error('file not found'); }
+    if (!st.isFile()) throw new Error('file not found');
+
+    const displayName = typeof (payload as any)?.name === 'string' && (payload as any).name.trim()
+      ? (payload as any).name.trim()
+      : path.basename(norm);
+    const ext = path.extname(displayName).replace(/^\./, '').toLowerCase();
+    if (!CHAT_PICK_EXTENSIONS.includes(ext)) throw new Error('unsupported_format');
+
+    const res = await autoTasks.uploadAttachment(
+      ctx.userId,
+      taskId,
+      path.basename(displayName),
+      fs.readFileSync(norm),
+    );
+    if (!res.ok) throw new Error((res as { error: string }).error);
+    return { name: res.name };
+  },
+
+  'autoTasks.attachments.pickAndUpload': async ({ taskId } = {}, ctx) => {
+    if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
+    const picked = await _pickLocalFiles('Choose files', CHAT_PICK_EXTENSIONS, true);
+    const items: string[] = [];
+    const failed: Array<{ name: string; error: string }> = [];
+    for (const filePath of picked) {
+      const name = path.basename(filePath);
+      try {
+        const buf = fs.readFileSync(filePath);
+        const res = await autoTasks.uploadAttachment(ctx.userId, taskId, name, buf);
+        if (res.ok) items.push(res.name);
+        else failed.push({ name, error: (res as any).error });
+      } catch (err) {
+        failed.push({ name, error: (err as Error)?.message || String(err) });
+      }
+    }
+    return { items, failed };
+  },
+
+  'autoTasks.attachments.delete': async ({ taskId, name }, ctx) => {
+    if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
+    if (typeof name !== 'string' || !name) throw new Error('invalid name');
+    await recycleBin.createAppRecycleBatchForCloudEntry(
+      ctx.userId,
+      `${(findAutoTaskLocation(ctx.userId, taskId) || globalAutoTaskLocation(ctx.userId, taskId)).attachmentsRelBase}/${name}`,
+      'attachment',
+    );
+    const res = await autoTasks.deleteAttachment(ctx.userId, taskId, name);
+    return { deleted: res.ok };
+  },
+
+  'autoTasks.update': async ({ taskId, updates }, ctx) => {
+    if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
+    if (!updates || typeof updates !== 'object') throw new Error('invalid updates');
+    const result = await autoTasks.updateTask(ctx.userId, taskId, updates as any);
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { task: result.task };
+  },
+
+  'autoTasks.delete': async ({ taskId }, ctx) => {
+    if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
+    await recycleBin.createAppRecycleBatchForAutoTask(ctx.userId, taskId);
+    const res = await autoTasks.deleteTask(ctx.userId, taskId);
+    return { deleted: res.ok };
+  },
+
+  'autoTasks.setEnabled': async ({ taskId, enabled }, ctx) => {
+    if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
+    const result = await autoTasks.setTaskEnabled(ctx.userId, taskId, !!enabled);
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { task: result.task };
+  },
+
+  // ── Group chat (replaces legacy conversations.send / .stream / .markFormSubmitted) ──
+  'groupChat.send': async ({ cid, content, attachments, use_selections, references }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const text = (content || '').trim();
+    if (!text) throw new Error('empty message');
+    const atts = Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string') : [];
+    const useSelections = Array.isArray(use_selections) ? use_selections : [];
+    const refs = Array.isArray(references) ? references : [];
+    return groupChat.send({
+      userId: ctx.userId, cid, text,
+      ...(atts.length ? { attachments: atts } : {}),
+      ...(useSelections.length ? { use_selections: useSelections } : {}),
+      ...(refs.length ? { references: refs } : {}),
+    });
+  },
+
+  'p3394.listWakeRequests': async ({ cid }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    return { ok: true, requests: await p3394.listWakeRequests(ctx.userId, cid) };
+  },
+
+  'p3394.decideWakeRequest': async ({ cid, requestId, decision, reason }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (!safeId(requestId)) throw new Error('invalid request id');
+    if (decision !== 'approve' && decision !== 'reject') throw new Error('invalid decision');
+    const request = await p3394.getWakeRequest(ctx.userId, requestId);
+    if (!request || request.conversation_id !== cid) throw new Error('wake request not found');
+    return p3394.decideWakeRequest(ctx.userId, {
+      requestId,
+      decision,
+      ...(typeof reason === 'string' && reason.trim() ? { reason: reason.trim() } : {}),
+    });
+  },
+
+  'p3394.listKStarRuns': async ({ cid }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const [runs, experienceCandidates] = await Promise.all([
+      p3394.listKStarRuns(ctx.userId, cid),
+      p3394.listExperienceCandidates(ctx.userId, cid),
+    ]);
+    return { ok: true, runs, experience_candidates: experienceCandidates };
+  },
+
+  'p3394.reviewKStarRun': async ({ cid, runId, decision, notes }, ctx) => {
+    if (!safeId(cid) || !safeId(runId)) throw new Error('invalid KSTAR scope');
+    if (decision !== 'pass' && decision !== 'fail') throw new Error('invalid review decision');
+    const run = (await p3394.listKStarRuns(ctx.userId, cid)).find((item) => item.id === runId);
+    if (!run) throw new Error('KSTAR run not found');
+    return { ok: true, ...(await p3394.reviewKStarRun(ctx.userId, runId, {
+      decision, ...(typeof notes === 'string' ? { notes } : {}),
+    })) };
+  },
+
+  'p3394.decideExperienceCandidate': async ({ cid, candidateId, decision }, ctx) => {
+    if (!safeId(cid) || !safeId(candidateId)) throw new Error('invalid experience scope');
+    if (decision !== 'approve' && decision !== 'reject') throw new Error('invalid experience decision');
+    const existing = await p3394.getExperienceCandidate(ctx.userId, candidateId);
+    if (!existing || existing.conversation_id !== cid) throw new Error('experience candidate not found');
+    const candidate = await p3394.decideExperienceCandidate(ctx.userId, candidateId, decision);
+    return { ok: true, candidate };
+  },
+
+  'groupChat.abort': async ({ cid }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    return groupChat.abort(ctx.userId, cid);
+  },
+
+  'groupChat.deleteMessages': async ({ cid, message_ids }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const ids = Array.isArray(message_ids) ? message_ids.filter((id: unknown) => typeof id === 'string') : [];
+    return groupChat.deleteMessages(ctx.userId, cid, ids);
+  },
+
+  'groupChat.listMembers': async (args, ctx) => {
+    const { cid } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const projectIdHint = conversationProjectHint(args);
+    const conv = await chats.getConversation(ctx.userId, cid, projectIdHint);
+    if (!conv) {
+      return { ok: false, error: 'conversation not found', actors: [] };
+    }
+    return groupChat.listMembers(ctx.userId, cid, conv.project_id ?? null);
+  },
+
+  'groupChat.runtimeStatus': async (args, ctx) => {
+    const { cid } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const projectIdHint = conversationProjectHint(args);
+    const conv = await chats.getConversation(ctx.userId, cid, projectIdHint);
+    return groupChat.runtimeStatus(ctx.userId, cid, conv?.project_id ?? projectIdHint);
+  },
+
+  'groupChat.markFormSubmitted': async ({ cid, msgId, formId, values }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (typeof msgId !== 'string' || !msgId) throw new Error('invalid msgId');
+    if (typeof formId !== 'string' || !/^[a-f0-9]{8,64}$/.test(formId)) {
+      throw new Error('invalid formId');
+    }
+    if (!values || typeof values !== 'object' || Array.isArray(values)) {
+      throw new Error('invalid values');
+    }
+    return groupChat.markFormSubmittedAndDispatch({
+      userId: ctx.userId, cid, msgId, formId, values: values as Record<string, unknown>,
+    });
+  },
+
+  'groupChat.resolveMarketplaceInstallRequest': async ({ cid, msgId, requestId, decision }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (typeof msgId !== 'string' || !safeId(msgId)) throw new Error('invalid msgId');
+    if (typeof requestId !== 'string' || !safeId(requestId)) throw new Error('invalid requestId');
+    if (decision !== 'install' && decision !== 'skip') throw new Error('invalid decision');
+    return groupChat.resolveMarketplaceInstallRequest({
+      userId: ctx.userId,
+      cid,
+      msgId,
+      requestId,
+      decision,
+    });
+  },
+
+  // Generic native directory picker. Used by the agent-input-form
+  // `directory` type so coding agents (claude / codex) collect their
+  // project directory through the standard input-form pipeline.
+  'common.pickDirectory': async ({ title } = {}) => {
+    const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const opts: Electron.OpenDialogOptions = {
+      properties: ['openDirectory'],
+      title: typeof title === 'string' && title ? title : t('dialog.choose_directory'),
+    };
+    const res = parent
+      ? await dialog.showOpenDialog(parent, opts)
+      : await dialog.showOpenDialog(opts);
+    if (res.canceled || !res.filePaths?.length) return { cancelled: true };
+    return { cancelled: false, path: res.filePaths[0] };
+  },
+
+  'common.pickFiles': async ({ title, extensions, multiple } = {}) => {
+    const rawExts = Array.isArray(extensions) ? extensions : CHAT_PICK_EXTENSIONS;
+    const picked = await _pickLocalFiles(
+      typeof title === 'string' && title ? title : 'Choose files',
+      rawExts,
+      multiple !== false,
+    );
+    const files = picked.map((filePath) => {
+      const buf = fs.readFileSync(filePath);
+      return {
+        name: path.basename(filePath),
+        dataBase64: buf.toString('base64'),
+        size: buf.length,
+      };
+    });
+    return { files };
+  },
+
+  // ── Chat attachments (per-cid file pool for main chat) ──
+  'conversations.attachments.list': async ({ cid }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    return { items: chatAttachments.listPendingAttachments(ctx.userId, cid) };
+  },
+
+  'conversations.attachments.upload': async ({ cid, name, data }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    // `data` arrives as base64 (contextBridge can't ferry Buffers cleanly —
+    // same convention as contexts.tmp.upload).
+    const buf = typeof data === 'string' ? Buffer.from(data, 'base64') : Buffer.from(data || []);
+    return chatAttachments.uploadAttachment(ctx.userId, cid, name || '', buf);
+  },
+
+  'conversations.attachments.pickAndUpload': async ({ cid } = {}, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const picked = await _pickLocalFiles('Choose files', CHAT_PICK_EXTENSIONS, true);
+    const items = [];
+    const failed: Array<{ name: string; error: string }> = [];
+    for (const filePath of picked) {
+      const name = path.basename(filePath);
+      try {
+        const buf = fs.readFileSync(filePath);
+        const res = await chatAttachments.uploadAttachment(ctx.userId, cid, name, buf);
+        if (res.ok) items.push({ displayName: name, info: res.info, reused: !!res.reused });
+        else failed.push({ name, error: (res as any).error });
+      } catch (err) {
+        failed.push({ name, error: (err as Error)?.message || String(err) });
+      }
+    }
+    return { items, failed };
+  },
+
+  'conversations.attachments.import': async (payload, ctx) => {
+    const cid = payload?.cid;
+    const sourcePath = payload?.path;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (typeof sourcePath !== 'string' || !sourcePath) throw new Error('missing path');
+
+    const norm = path.resolve(sourcePath);
+    const allowedRoots = await _ipcFileSandboxAllowedRoots(ctx.userId, payload);
+    const inSandbox = isPathAllowed(norm, allowedRoots);
+    const inRecordedFile = !inSandbox && await _isConversationRecordedFile(ctx.userId, cid, norm);
+    if (!inSandbox && !inRecordedFile) {
+      throw new Error('path is outside the user workspace');
+    }
+    return chatAttachments.importAttachmentFromPath(ctx.userId, cid, norm);
+  },
+
+  'conversations.attachments.delete': async ({ cid, name }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (!chatAttachments.isDraftAttachmentCid(cid)) {
+      await recycleBin.createAppRecycleBatchForCloudEntry(
+        ctx.userId,
+        chatAttachmentRelPath(ctx.userId, cid, name || ''),
+        'attachment',
+      );
+    }
+    return chatAttachments.deleteAttachment(ctx.userId, cid, name || '');
+  },
+
+  'conversations.attachments.adopt': async ({ from_cid, to_cid }, ctx) => {
+    if (!safeId(from_cid)) throw new Error('invalid from_cid');
+    if (!safeId(to_cid)) throw new Error('invalid to_cid');
+    return chatAttachments.adoptDraftAttachments(ctx.userId, from_cid, to_cid);
+  },
+
+  // ── Chat artifacts (interactive web-app bundles, served via chat-app://) ──
+  // Open the artifact's index.html in the OS default browser (a `file://`
+  // URL via `shell.openPath`). Path is resolved through
+  // `chatArtifacts.resolveArtifactFilePath` so caller-supplied cid /
+  // artifactId can only ever reach a file inside that artifact's pool.
+  'conversations.artifacts.openExternal': async ({ cid, artifactId }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const r = chatArtifacts.resolveArtifactFilePath(ctx.userId, String(cid), String(artifactId || ''), 'index.html');
+    if (!r.ok) throw new Error((r as { error?: string }).error || 'artifact not found');
+    const absPath = (r as { absPath: string }).absPath;
+    const err = await shell.openPath(absPath);
+    if (err) throw new Error(err);
+    return { ok: true, path: absPath };
+  },
+  // Read-only health check used by the renderer to avoid displaying a stale
+  // compacted-history preview as if it were a real interactive app.
+  'conversations.artifacts.inspect': async ({ cid, artifactId }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    return chatArtifacts.inspectArtifactIndex(ctx.userId, String(cid), String(artifactId || ''));
+  },
+  // Copy a chat artifact into the persistent "My Apps" pool
+  // (`<uid>/cloud/saved_apps/<appId>/`). Surfaced as the artifact card's
+  // `⋯` → "保存".
+  'conversations.artifacts.save': async ({ cid, artifactId }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const r = savedApps.saveFromArtifact(ctx.userId, String(cid), String(artifactId || ''));
+    if (!r.ok) throw new Error((r as { error?: string }).error || 'failed to save app');
+    return { ok: true, id: (r as { id: string }).id, title: (r as { title: string }).title };
+  },
+
+  'savedApps.inspectBundleFromPath': async (payload, ctx) => {
+    const target = payload?.path;
+    if (typeof target !== 'string' || !target) throw new Error('missing path');
+    const norm = path.resolve(target);
+    if (!await _isAllowedFileActionPath(ctx.userId, payload, norm)) {
+      throw new Error('path is outside the user workspace');
+    }
+    return savedApps.inspectBundleFromPath(norm, {
+      fenceRoots: await _ipcFileSandboxAllowedRoots(ctx.userId, payload),
+    });
+  },
+
+  'savedApps.saveFromPath': async (payload, ctx) => {
+    const target = payload?.path;
+    if (typeof target !== 'string' || !target) throw new Error('missing path');
+    const norm = path.resolve(target);
+    if (!await _isAllowedFileActionPath(ctx.userId, payload, norm)) {
+      throw new Error('path is outside the user workspace');
+    }
+    const r = savedApps.saveFromPath(ctx.userId, norm, {
+      title: payload?.title,
+      sourceCid: payload?.cid,
+      fenceRoots: await _ipcFileSandboxAllowedRoots(ctx.userId, payload),
+    });
+    if (!r.ok) throw new Error((r as { error?: string }).error || 'failed to save app');
+    return r;
+  },
+
+  // ── Saved apps ("My Apps" — user-kept copies of create_artifact bundles) ──
+  'savedApps.list': async (_payload, ctx) => ({ apps: savedApps.listSavedApps(ctx.userId) }),
+  'savedApps.openExternal': async ({ appId }, ctx) => {
+    const r = savedApps.resolveSavedAppIndex(ctx.userId, String(appId || ''));
+    if (!r.ok) throw new Error((r as { error?: string }).error || 'app not found');
+    const absPath = (r as { absPath: string }).absPath;
+    const err = await shell.openPath(absPath);
+    if (err) throw new Error(err);
+    return { ok: true, path: absPath };
+  },
+  'savedApps.openInApp': async ({ appId }, ctx) => {
+    const id = String(appId || '');
+    const r = savedApps.resolveSavedAppFilePath(ctx.userId, id, '');
+    if (!r.ok) throw new Error((r as { error?: string }).error || 'app not found');
+    const entry = (r as { entry: string }).entry || 'index.html';
+    const url = ['chat-app://saved', encodeURIComponent(id)]
+      .concat(entry.split('/').map((part) => encodeURIComponent(part)))
+      .join('/');
+    return { ok: true, url, entry };
+  },
+  // Open a saved app for editing — creates a fresh conversation with the
+  // app's source bundled in as an `app-source.md` attachment. The renderer
+  // navigates to it + pre-fills a draft.
+  'savedApps.openForEditing': async ({ appId }, ctx) => {
+    const r = await savedApps.openForEditing(ctx.userId, String(appId || ''));
+    if (!r.ok) throw new Error((r as { error?: string }).error || 'failed to open the app for editing');
+    return {
+      ok: true,
+      conversation: (r as { conversation: unknown }).conversation,
+      title: (r as { title: string }).title,
+      sourceFileName: (r as { sourceFileName: string }).sourceFileName,
+    };
+  },
+  'savedApps.rename': async ({ appId, title }, ctx) => {
+    const r = savedApps.renameSavedApp(ctx.userId, String(appId || ''), title);
+    if (!r.ok) throw new Error((r as { error?: string }).error || 'failed to rename');
+    return { ok: true, title: (r as { title: string }).title };
+  },
+  'savedApps.delete': async ({ appId }, ctx) => {
+    await recycleBin.createAppRecycleBatchForCloudEntry(
+      ctx.userId,
+      `cloud/saved_apps/${String(appId || '')}`,
+      'saved_app',
+    );
+    const r = savedApps.deleteSavedApp(ctx.userId, String(appId || ''));
+    if (!r.ok) throw new Error((r as { error?: string }).error || 'failed to delete');
+    return { ok: true };
+  },
+
+  // ── Agents ──
+  'agents.list': async ({ summary } = {}) => {
+    // `force` is a renderer-cache concern: callers may need a fresh payload,
+    // but ordinary navigation must not delete the validated on-disk Agent
+    // catalog and reopen every agent.json. Actual definition mutations,
+    // marketplace reconcile and sync already invalidate the main cache at
+    // their write boundary.
+    return {
+      agents: summary === true || summary === '1'
+        ? await agents.listAgentSummaries()
+        : await agents.listAgents(),
+    };
+  },
+
+  'agents.get': async ({ agent_id }) => {
+    if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
+    const agent = await agents.getAgent(agent_id);
+    if (!agent) throw new Error('agent not found');
+    return { agent };
+  },
+
+  'agents.create': async ({ name = '', description = '', description_zh, description_en, workflow = '', icon, color, runtime, category, output_format } = {}) => {
+    return { agent: await agents.createCustomAgent({ name, description, description_zh, description_en, workflow, icon, color, runtime, category, output_format }) };
+  },
+
+
+  'agents.update': async ({ agent_id, updates }) => {
+    if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
+    const data = await agents.updateCustomAgent(agent_id, updates || {});
+    if (!data) throw new Error('agent not found or read-only');
+    return { agent: data };
+  },
+
+  'agents.delete': async ({ agent_id }, ctx) => {
+    if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
+    await recycleBin.createAppRecycleBatchForAgent(ctx.userId, agent_id);
+    return { deleted: await agents.deleteCustomAgent(agent_id) };
+  },
+
+  // Per-user enable/disable toggle. enabled=true clears the override; both
+  // builtin and custom agents are toggleable (it's a personal preference,
+  // not a spec mutation). Returns the resolved state for the renderer to
+  // confirm the new value.
+  'agents.setEnabled': async ({ agent_id, enabled }) => {
+    if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
+    if (typeof enabled !== 'boolean') throw new Error('enabled must be boolean');
+    agents.setAgentEnabledForActiveUser(agent_id, enabled);
+    return { ok: true, enabled };
+  },
+
+  'agents.cliProjectDir.get': async ({ agent_id }, ctx) => {
+    if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
+    const info = await agents.getAgentCliProjectDirInfo(ctx.userId, agent_id);
+    if (!info) throw new Error('agent not found');
+    return { info };
+  },
+
+  'agents.cliProjectDir.set': async ({ agent_id, path: dirPath = '' }, ctx) => {
+    if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
+    if (typeof dirPath !== 'string') throw new Error('path must be string');
+    const info = await agents.setAgentCliProjectDir(ctx.userId, agent_id, dirPath);
+    if (!info) throw new Error('agent not found');
+    return { info };
+  },
+
+  'agents.chat.history': async ({ agent_id, limit = 500 }, ctx) => {
+    if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
+    if (!(await agents.getAgent(agent_id))) throw new Error('agent not found');
+    return { messages: await agents.getAgentChatMessages(ctx.userId, agent_id, limit) };
+  },
+
+  'agents.chat.clear': async ({ agent_id }, ctx) => {
+    if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
+    return { cleared: await agents.clearAgentChat(ctx.userId, agent_id) };
+  },
+
+  'agents.chat.send': async ({ agent_id, content, model_text, attachments }, ctx) => {
+    if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
+    const text = (content || '').trim();
+    if (!text) throw new Error('empty message');
+    const modelText = typeof model_text === 'string' ? model_text.trim() : '';
+    const atts = Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string' && n) : [];
+    return agents.sendToAgentEditChat(ctx.userId, agent_id, text, {
+      ...(atts.length ? { attachments: atts } : {}),
+      ...(modelText ? { modelText } : {}),
+    });
+  },
+
+  // ── Skills ──
+  'skills.list': async ({ force } = {}) => {
+    if (force === true || force === '1') skills.clearSkillListCache();
+    return { skills: await skills.listSkills() };
+  },
+
+  'skills.read': async ({ source, id, file = 'SKILL.md' }) => {
+    if (source !== 'marketplace' && source !== 'builtin' && source !== 'custom') throw new Error('invalid source');
+    if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
+    return skills.readSkillFile(source, id, file);
+  },
+
+  'skills.writeFile': async ({ id, file, content }) => {
+    if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
+    if (!file) throw new Error('missing file');
+    // Routes to custom in normal mode; in dev, built-in writes are accepted
+    // and dual-write (src + data) via the dev module.
+    const ok = await skills.writeSkillFileForEdit(id, file, content || '');
+    if (!ok) throw new Error(t('errors.skill_write_failed'));
+    return { written: true };
+  },
+
+  'skills.tree': async ({ source, id }) => {
+    if (source !== 'marketplace' && source !== 'builtin' && source !== 'custom') throw new Error('invalid source');
+    if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
+    return skills.listSkillTree(source, id);
+  },
+
+  'skills.create': async ({ name, description, category }) => {
+    return { skill: await skills.createCustomSkill(name, description || '', category || '') };
+  },
+
+  'skills.pickImportDir': async () => {
+    // Runs in main; show a native directory picker attached to the focused
+    // BrowserWindow so the dialog is modal to Orkas.
+    const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const opts: Electron.OpenDialogOptions = {
+      properties: ['openDirectory'],
+      title: t('dialog.choose_skill_source_directory'),
+    };
+    const res = parent
+      ? await dialog.showOpenDialog(parent, opts)
+      : await dialog.showOpenDialog(opts);
+    if (res.canceled || !res.filePaths?.length) return { cancelled: true };
+    return { cancelled: false, path: res.filePaths[0] };
+  },
+
+  'skills.createFromUrl': async ({ name, description, url }) => {
+    const r = await skills.createFromUrl(name ?? null, description ?? null, String(url || ''));
+    if (!r.ok) return r;
+    return { skill: r.skill, skills: r.skills, seedModelText: r.seedModelText, seedMessage: r.seedMessage };
+  },
+
+  'skills.createFromDir': async ({ name, description, srcDir, force }) => {
+    const r = await skills.createFromDir(name ?? null, description ?? null, String(srcDir || ''), { force: force === true });
+    if (!r.ok) return r;
+    return { skill: r.skill, skills: r.skills, seedModelText: r.seedModelText, seedMessage: r.seedMessage };
+  },
+
+  'skills.discardImportDraft': async ({ id }) => {
+    if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
+    return { discarded: await skills.discardImportDraftIfPristine(id) };
+  },
+
+  'skills.update': async ({ id, updates, skipRename }) => {
+    if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
+    const data = await skills.updateCustomSkill(id, updates || {}, { skipRename: !!skipRename });
+    if (!data) throw new Error('skill not found');
+    return { skill: data };
+  },
+
+  'skills.updateForEdit': async ({ id, updates }) => {
+    if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
+    const data = await skills.applySkillMetadataForEdit(id, updates || {});
+    if (!data.ok) {
+      return {
+        ok: false,
+        error: data.reason || 'skill not found or read-only',
+        report: data.report,
+      };
+    }
+    return {
+      skill: { id: data.skillId, name: data.name },
+      written: data.written,
+      report: data.report,
+    };
+  },
+
+  'skills.delete': async ({ id }, ctx) => {
+    if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
+    await recycleBin.createAppRecycleBatchForSkill(ctx.userId, id);
+    return { deleted: await skills.deleteCustomSkill(id) };
+  },
+
+  // Per-user enable/disable toggle. Builtin and custom both toggleable (it's
+  // a personal preference, not a spec mutation). Wrapper handles the
+  // _invalidateSkillListCache + invalidateCoreAgentSkills chain so the next
+  // runner build re-renders the skills system-prompt block.
+  'skills.setEnabled': async ({ id, enabled }) => {
+    if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
+    if (typeof enabled !== 'boolean') throw new Error('enabled must be boolean');
+    skills.setSkillEnabledForActiveUser(id, enabled);
+    return { ok: true, enabled };
+  },
+
+  'skills.get': async ({ id }) => {
+    if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
+    const skill = await skills.getCustomSkill(id);
+    if (!skill) throw new Error('skill not found');
+    return { skill };
+  },
+
+  'skills.chat.history': async ({ id, limit = 500 }, ctx) => {
+    if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
+    if (!(await skills.getSkillForEdit(id))) throw new Error('skill not found');
+    return { messages: await skills.getSkillChatMessages(ctx.userId, id, limit) };
+  },
+
+  'skills.chat.clear': async ({ id }, ctx) => {
+    if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
+    return { cleared: await skills.clearSkillChat(ctx.userId, id) };
+  },
+
+  'skills.chat.send': async ({ id, content, model_text, attachments }, ctx) => {
+    if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
+    const text = (content || '').trim();
+    if (!text) throw new Error('empty message');
+    const modelText = typeof model_text === 'string' ? model_text.trim() : '';
+    const atts = Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string' && n) : [];
+    return skills.sendToSkillChat(ctx.userId, id, text, {
+      ...(atts.length ? { attachments: atts } : {}),
+      ...(modelText ? { modelText } : {}),
+    });
+  },
+
+  // ── Marketplace ──
+  // Listing + detail + install endpoints hit the public Server catalog; categories are served
+  // from the local biz cache when callers pass `local_only`, otherwise refreshed on stale cache.
+  'marketplace.categories': async (opts = {}) => ({
+    list: await marketplaceBiz.getMarketplaceCategories({
+      localOnly: !!opts.local_only,
+      forceRefresh: !!opts.force_refresh,
+    }),
+  }),
+
+  'marketplace.listAgents': async (opts = {}) => marketplace.listMarketplaceAgents(opts),
+
+  'marketplace.listSkills': async (opts = {}) => marketplace.listMarketplaceSkills(opts),
+
+  // Curated open-source projects catalog (read-only). Returns { list, total, categories }.
+  'marketplace.listProjects': async (opts = {}) => marketplace.listMarketplaceProjects(opts),
+
+  // Detail endpoints (cache-first) — used by the marketplace panel's detail view to render
+  // full content. Caller passes the list-row's (version, freshness timestamp) so we can short-circuit
+  // on a hot cache. Sweep is invoked once per openMarketplace at the entry point.
+  'marketplace.detailAgent': async ({ id, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion }) => {
+    if (!id || typeof id !== 'string') throw new Error('id required');
+    if (typeof version !== 'string' || typeof published_at !== 'number') {
+      throw new Error('version + published_at required');
+    }
+    return marketplace.getAgentDetail(id, {
+      version, published_at,
+      ...(typeof updated_at === 'number' ? { updated_at } : {}),
+      ...(typeof min_app_version === 'string' ? { min_app_version } : {}),
+      ...(typeof minAppVersion === 'string' ? { minAppVersion } : {}),
+      ...(typeof min_version === 'string' ? { min_version } : {}),
+      ...(typeof minVersion === 'string' ? { minVersion } : {}),
+      ...(typeof min_pc_version === 'string' ? { min_pc_version } : {}),
+      ...(typeof minPcVersion === 'string' ? { minPcVersion } : {}),
+    });
+  },
+
+  'marketplace.detailSkill': async ({ id, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion }) => {
+    if (!id || typeof id !== 'string') throw new Error('id required');
+    if (typeof version !== 'string' || typeof published_at !== 'number') {
+      throw new Error('version + published_at required');
+    }
+    return marketplace.getSkillDetail(id, {
+      version, published_at,
+      ...(typeof updated_at === 'number' ? { updated_at } : {}),
+      ...(typeof min_app_version === 'string' ? { min_app_version } : {}),
+      ...(typeof minAppVersion === 'string' ? { minAppVersion } : {}),
+      ...(typeof min_version === 'string' ? { min_version } : {}),
+      ...(typeof minVersion === 'string' ? { minVersion } : {}),
+      ...(typeof min_pc_version === 'string' ? { min_pc_version } : {}),
+      ...(typeof minPcVersion === 'string' ? { minPcVersion } : {}),
+    });
+  },
+
+  'marketplace.installAgent': async ({ id, name, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion, force }) => {
+    if (!id || typeof id !== 'string') throw new Error('id required');
+    if (typeof version !== 'string' || typeof published_at !== 'number') {
+      throw new Error('version + published_at required');
+    }
+    return marketplace.installMarketplaceAgent(id, {
+      version, published_at,
+      ...(typeof updated_at === 'number' ? { updated_at } : {}),
+      ...(typeof min_app_version === 'string' ? { min_app_version } : {}),
+      ...(typeof minAppVersion === 'string' ? { minAppVersion } : {}),
+      ...(typeof min_version === 'string' ? { min_version } : {}),
+      ...(typeof minVersion === 'string' ? { minVersion } : {}),
+      ...(typeof min_pc_version === 'string' ? { min_pc_version } : {}),
+      ...(typeof minPcVersion === 'string' ? { minPcVersion } : {}),
+    }, { force: force === true, name: typeof name === 'string' ? name : undefined });
+  },
+
+  'marketplace.installSkill': async ({ id, name, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion, force }) => {
+    if (!id || typeof id !== 'string') throw new Error('id required');
+    if (typeof version !== 'string' || typeof published_at !== 'number') {
+      throw new Error('version + published_at required');
+    }
+    return marketplace.installMarketplaceSkill(id, {
+      version, published_at,
+      ...(typeof updated_at === 'number' ? { updated_at } : {}),
+      ...(typeof min_app_version === 'string' ? { min_app_version } : {}),
+      ...(typeof minAppVersion === 'string' ? { minAppVersion } : {}),
+      ...(typeof min_version === 'string' ? { min_version } : {}),
+      ...(typeof minVersion === 'string' ? { minVersion } : {}),
+      ...(typeof min_pc_version === 'string' ? { min_pc_version } : {}),
+      ...(typeof minPcVersion === 'string' ? { minPcVersion } : {}),
+    }, { force: force === true, name: typeof name === 'string' ? name : undefined });
+  },
+
+  // Uninstall is non-dev: wipes the local install copy + manifest entry. Does NOT touch the
+  // server row (`marketplace_dev.deleteMarketplace*` does that, dev-only).
+  'marketplace.uninstallAgent': async ({ id }) => {
+    if (!id || typeof id !== 'string') throw new Error('id required');
+    return marketplace.uninstallMarketplaceAgent(id);
+  },
+
+  'marketplace.uninstallSkill': async ({ id }) => {
+    if (!id || typeof id !== 'string') throw new Error('id required');
+    return marketplace.uninstallMarketplaceSkill(id);
+  },
+
+  // Entry-point housekeeping for the marketplace panel: sweep stale + over-sized cache entries.
+  // Cheap (O(N entries) stat), so it's safe to call once per openMarketplace from the renderer.
+  'marketplace.sweepCache': async () => ({ bytes_freed: await marketplaceCache.sweepIfNeeded() }),
+
+  // Renderer queries this once at startup to learn the current reconcile state, then subscribes
+  // to push-events `marketplace:reconcile-status` for in-flight progress. See main/index.ts
+  // boot wiring + features/marketplace_reconcile.ts::subscribeReconcileStatus.
+  'marketplace.reconcileStatus': async () => marketplaceReconcile.getReconcileStatus(),
+
+  // Persistent listing-grid cache so cold starts don't show a blank panel. Renderer hydrates
+  // from this on `openMarketplace` and writes back after every fresh /list response. See
+  // `marketplace_cache.ts::{getListingsCache,setListingsCache}`.
+  'marketplace.getListingsCache': async () => marketplaceCache.getListingsCache(),
+
+  'marketplace.setListingsCache': async ({ entries }) => {
+    if (!entries || typeof entries !== 'object') throw new Error('entries required');
+    await marketplaceCache.setListingsCache(entries);
+    return { ok: true as const };
+  },
+
+  'marketplace.mergeListingsCache': async ({ entries }) => {
+    if (!entries || typeof entries !== 'object') throw new Error('entries required');
+    await marketplaceCache.mergeListingsCache(entries);
+    return { ok: true as const };
+  },
+
+  // Detail-page file viewer (skill kind only — agent payload is fully in the detail response).
+  'marketplace.cacheSkillFiles': async ({ id }) => {
+    if (!id || typeof id !== 'string') throw new Error('id required');
+    return { list: await marketplaceCache.listSkillCacheFiles(id) };
+  },
+
+  'marketplace.cacheSkillRead': async ({ id, file }) => {
+    if (!id || typeof id !== 'string') throw new Error('id required');
+    if (!file || typeof file !== 'string') throw new Error('file required');
+    const content = await marketplaceCache.readSkillCacheFile(id, file);
+    return { content: content || '' };
+  },
+
+  // ── Global recycle bin (sync tombstones + in-app deletes) ──
+  'recycle.list': async (_payload, ctx) => ({
+    batches: await recycleBin.listRecycleBatches(ctx.userId),
+  }),
+
+  'recycle.restore': async ({ id }, ctx) => {
+    const res = await recycleBin.restoreRecycleBatch(ctx.userId, String(id || ''));
+    if (!res.batch) throw _codedError('recycle_batch_not_found');
+    const changed = Array.from(new Set([
+      ...res.restored_paths,
+      ...res.skipped_paths,
+      ...res.reactivated_paths,
+    ]));
+    await _afterRecycleRestore(ctx, changed);
+    return {
+      ok: true,
+      restored: changed.length,
+      restored_paths: res.restored_paths,
+      skipped_paths: res.skipped_paths,
+      failed_paths: res.failed_paths,
+      reactivated_paths: res.reactivated_paths,
+    };
+  },
+
+  'recycle.delete': async ({ id }, ctx) => {
+    const { deleted } = await recycleBin.deleteRecycleBatch(ctx.userId, String(id || ''));
+    return { deleted };
+  },
+
+  // ── Cache (clearable umbrella under `<uid>/local/cache/<bucket>/`) ──
+  'cache.listClearable': async () => ({ list: await cacheClearable.listClearableBuckets() }),
+
+  'cache.clearBucket': async ({ name }) => {
+    if (!name || typeof name !== 'string') throw new Error('name required');
+    return { bytes_freed: await cacheClearable.clearBucket(name) };
+  },
+
+  'cache.clearAll': async () => ({ bytes_freed: await cacheClearable.clearAllClearable() }),
+
+  // ── Contexts (user-owned directory tree; vectorized via kb_indexer) ──
+  'contexts.tree': async () => ({ tree: contexts.listContextsTree() }),
+
+  'contexts.read': async ({ path }) => {
+    return contexts.readContextFile(path || '');
+  },
+
+  'contexts.index': async () => ({
+    markdown: await contexts.getContextIndexMarkdown(),
+    entries: await contexts.getContextIndexEntries(),
+  }),
+
+  // Create / overwrite a text file (md/txt/json/...).
+  'contexts.write': async ({ path, content }) => {
+    return contexts.writeContextFile(path || '', content || '');
+  },
+
+  // Edit an existing text file (refuses to create).
+  'contexts.update': async ({ path, content }) => {
+    return contexts.updateContextFile(path || '', content || '');
+  },
+
+  // Save an uploaded file (binary-safe: pdf / docx / image / text). The shim
+  // encodes the target path in the `X-Filename` header and turns it into
+  // `name` on this side; payload may also arrive with an explicit `path`
+  // (direct programmatic callers). `data` is base64 (renderer can't cross
+  // contextBridge with Buffer).
+  'contexts.upload': async (payload) => {
+    const target = payload?.path || payload?.name || '';
+    const data = payload?.data;
+    if (typeof data === 'string' && data.length > 12 * 1024 * 1024) {
+      return { ok: false, error: 'large uploads require path-based import', code: 'E_IMPORT_PATH_REQUIRED' };
+    }
+    const buf = typeof data === 'string' ? Buffer.from(data, 'base64') : Buffer.from(data || []);
+    return contexts.uploadContextFile(target, buf);
+  },
+
+  'contexts.pickAndUpload': async ({ targetDir } = {}) => {
+    const picked = await _pickLocalFiles('Choose files', CONTEXT_PICK_EXTENSIONS, true, /* seedWorkspaceOnFirstOpen */ true);
+    const results = [];
+    for (const filePath of picked) {
+      const name = path.basename(filePath);
+      const ext = path.extname(name).toLowerCase();
+      let bytes = 0;
+      try { bytes = fs.statSync(filePath).size; } catch { bytes = 0; }
+      try {
+        const target = _targetInDir(targetDir, name);
+        if (contexts.hasHiddenContextPathSegment(target)) {
+          results.push({ ok: false, name, target, bytes, ext, reason: 'hidden' });
+          continue;
+        }
+        if (!contexts.isSupportedContextFileName(target)) {
+          results.push({ ok: false, name, target, bytes, ext, reason: 'ext' });
+          continue;
+        }
+        const res = await contexts.importContextFileFromPath(target, filePath);
+        results.push({ name, target, bytes, ext, ...res });
+      } catch (err) {
+        results.push({ ok: false, name, bytes, ext, error: (err as Error)?.message || String(err) });
+      }
+    }
+    return { files: results };
+  },
+
+  'contexts.mkdir': async ({ path }) => {
+    return contexts.createContextDir(path || '');
+  },
+
+  'contexts.rename': async ({ src, dst }) => {
+    return contexts.renameContextEntry(src || '', dst || '');
+  },
+
+  'contexts.delete': async ({ path }, ctx) => {
+    await recycleBin.createAppRecycleBatchForCloudEntry(
+      ctx.userId,
+      `cloud/contexts/${path || ''}`,
+      'context',
+    );
+    return contexts.deleteContextTarget(path || '');
+  },
+
+  // Read an image file's bytes for inline viewer display.
+  'contexts.image': async ({ path }) => {
+    return contexts.readContextImage(path || '');
+  },
+
+  // Render a .docx as HTML (via mammoth) for the inline preview pane.
+  'contexts.docxHtml': async ({ path }) => {
+    return contexts.readContextDocxHtml(path || '');
+  },
+
+  // Reveal a Library file in the OS file manager.
+  'contexts.reveal': async ({ path }) => {
+    return contexts.showContextFileInSystem(path || '');
+  },
+
+  // ── Library import compatibility layer ──
+  // First migration step for the unified "Library" product surface. Produced
+  // files import into the current project's file pool when the cid belongs to
+  // a project; otherwise they import into the global contexts tree. Future
+  // work will replace both backends with a single scope-aware library module.
+  'library.importProduced': async (payload, ctx) => {
+    return _importProducedToLibrary(payload, ctx);
+  },
+
+  'library.writeText': async (payload, ctx) => {
+    return _writeTextToLibrary(payload, ctx);
+  },
+
+  // ── Knowledge base (vector store) ──
+  // Snapshot of what's in `kb_files`: status summary + per-file rows.
+  // Renderer subscribes to the `kb.events` stream (below) for incremental
+  // updates; this endpoint is the initial-load / full-refresh fetch.
+  'kb.status': async (_payload, ctx) => {
+    const summary = kbVector.statusSummary(ctx.userId);
+    const files = kbVector.listFiles(ctx.userId).map((r) => ({
+      path: r.rel_path,
+      kind: r.kind,
+      status: r.status,
+      chunks: r.chunks,
+      bytes: r.bytes,
+      mtime: r.mtime,
+      error: r.error || undefined,
+    }));
+    return { summary, files };
+  },
+
+  // Force a disk-vs-db reconcile pass. Useful after users drop files into
+  // contexts/ via Finder, or when vector.db is swapped out by sync and the
+  // UI wants to catch up without restarting the app.
+  'kb.reconcile': async (_payload, ctx) => {
+    const r = await kbIndexer.reconcile(ctx.userId);
+    return { result: r };
+  },
+
+  // Re-enqueue a single file (typically the UI's "reprocess" button after
+  // a failed extraction).
+  'kb.reprocess': async ({ path }, ctx) => {
+    if (typeof path !== 'string' || !path) throw new Error('path required');
+    kbIndexer.enqueue(ctx.userId, path, 'upsert');
+    return { ok: true, path };
+  },
+
+  // ── Global search (knowledge base + chat history) ──
+  'search.global': async ({ query, limit, scope, projectId }, ctx) => {
+    return search.searchAll(ctx.userId, query || '', {
+      limit: typeof limit === 'number' ? limit : 30,
+      scope: scope || 'all',
+      ...(typeof projectId === 'string' && safeId(projectId) ? { projectId } : {}),
+    });
+  },
+
+  // ── UI language & locale tables (renderer i18n) ──
+  'config.getLanguage': async () => ({ language: appConfig.getLanguage() }),
+  'config.setLanguage': async ({ language }) => {
+    if (!isLang(language)) throw new Error(`unsupported language: ${String(language)}`);
+    const next = appConfig.setLanguage(language);
+    markPreferencesDirty();
+    return { language: next };
+  },
+  'config.getLocales': async () => ({ tables: getRendererTables() }),
+
+  // Avatar catalog (icons + colors + commander default) — single source of
+  // truth lives in src/main/data/avatars.json. The renderer fetches once at
+  // startup, then uses its local cache.
+  'avatars.getCatalog': async () => ({ catalog: avatars.getCatalog() }),
+
+  // Commander display/profile catalog. Static localized content lives in
+  // src/main/data/commander.json; mutable state (avatar, memory, stats) is
+  // stored separately.
+  'commander.getProfile': async () => ({ profile: commanderProfile.getProfile() }),
+  'commander.runtimeStats.get': async (_payload, ctx) => ({
+    runtime_stats: await commanderRuntimeStats.readCommanderRuntimeStats(ctx.userId),
+  }),
+
+  // Commander avatar preference (cloud-synced). avatar = { icon, color };
+  // tokens are validated against the catalog allow-list. When absent the
+  // renderer falls back to the commander default (crown + gold).
+  'prefs.getCommanderAvatar': async () => ({ avatar: appConfig.getCommanderAvatar() }),
+  'prefs.setCommanderAvatar': async ({ icon, color }) => {
+    const avatar = appConfig.setCommanderAvatar({ icon, color });
+    markPreferencesDirty();
+    return { avatar };
+  },
+
+  // Metacognition-level agent self-evolution toggle. Stored at
+  // preferences.json::metacognition_enabled; the actual gate's single
+  // source of truth is features/metacognition.isFeatureEnabled (with the
+  // env kill switch on top). The env var `ORKAS_METACOGNITION='0'` always
+  // overrides the UI setting.
+  'prefs.getMetacognition': async () => ({
+    enabled: appConfig.getMetacognitionEnabled(),
+    envForcedOff: process.env.ORKAS_METACOGNITION === '0',
+  }),
+  'prefs.setMetacognition': async ({ enabled }) => {
+    return { enabled: appConfig.setMetacognitionEnabled(!!enabled) };
+  },
+
+  // ── Auth / model config (settings page) ──
+  'auth.listProviders': async () => auth.listProviders(),
+  'auth.listModels': async ({ provider }) => auth.listModels(provider),
+  'auth.addApiKey': async ({ provider, apiKey, label }) => auth.addApiKey(provider, apiKey, label),
+  // Legacy alias; renderer migrated to auth.addApiKey.
+  'auth.saveApiKey': async ({ provider, apiKey, label }) => auth.saveApiKey(provider, apiKey, label),
+  'auth.renameProfile': async ({ profileId, label }) => auth.renameProfile(profileId, label),
+  'auth.removeCredential': async ({ profileId }) => auth.removeCredential(profileId),
+  'auth.testConnection': async ({ provider, model, profileId }) => auth.testConnection(provider, model, profileId),
+  'auth.getConfig': async () => auth.getConfig(),
+  'auth.hasConfiguredModel': async () => auth.hasConfiguredModel(),
+  'auth.getProfilesStoreStatus': async () => auth.getProfilesStoreStatus(),
+  'auth.resetProfilesStoreAfterDecryptFailure': async () => auth.resetProfilesStoreAfterDecryptFailure(),
+  // OAuth flow — startOAuth kicks off a background login; renderer polls
+  // via pollOAuthFlow, feeds prompt answers via submitOAuthInput.
+  'auth.startOAuth':       async ({ provider, label }) => auth.startOAuth(provider, label),
+  'auth.pollOAuthFlow':    async ({ flowId }) => auth.pollOAuthFlow(flowId),
+  'auth.submitOAuthInput': async ({ flowId, value }) => auth.submitOAuthInput(flowId, value),
+  'auth.cancelOAuthFlow':  async ({ flowId }) => auth.cancelOAuthFlow(flowId),
+  // Open a URL in the user's default browser (OAuth flow uses this so the
+  // consent page renders where the user is already logged in).
+  'auth.openExternal':     async ({ url }) => auth.openExternalUrl(url),
+  // Priority list (entries) — ordered (provider, model, profile) tuples.
+  'auth.listEntries':     async () => auth.listEntries(),
+  'auth.addEntry':        async ({ provider, model, profileId }) => auth.addEntry({ provider, model, profileId }),
+  'auth.removeEntry':     async ({ entryId }) => auth.removeEntry(entryId),
+  'auth.reorderEntries':  async ({ orderedIds }) => auth.reorderEntries(orderedIds || []),
+  'auth.updateEntryModel':async ({ entryId, model }) => auth.updateEntryModel(entryId, model),
+
+  // ── Commander backend binding (settings page) ──
+  'settings.getCommanderBackend': async () => commanderBackend.getCommanderBackendView(),
+  'settings.setCommanderBackend': async ({ settings }) => ({
+    settings: commanderBackend.setCommanderBackendSettings(settings),
+  }),
+  'settings.detectCommanderBackends': async () => commanderBackend.detectCommanderBackends(),
+
+  // ── Image-generation API key (independent from chat entries) ──
+  // `list` strips raw apiKey and replaces it with `apiKeyMasked` so
+  // renderer never sees the full key (parity with chat entries' `profileMasked`).
+  'imageAuth.list':     async () => ({
+    ok: true,
+    profiles: imageAuth.listImageProfiles().map((p) => ({
+      id: p.id, provider: p.provider, label: p.label, createdAt: p.createdAt,
+      apiKeyMasked: auth.maskKey(p.apiKey),
+    })),
+  }),
+  'imageAuth.add':      async ({ provider, apiKey, label }) => imageAuth.addImageProfile({ provider, apiKey, label }),
+  'imageAuth.remove':   async ({ id }) => imageAuth.removeImageProfile(id),
+  'imageAuth.reorder':  async ({ orderedIds }) => imageAuth.reorderImageProfiles(orderedIds || []),
+  'imageAuth.test':     async ({ id }) => imageAuth.testImageProfile(id),
+
+  // ── Video-generation API key (independent from chat/image entries) ──
+  'videoAuth.list':     async () => ({
+    ok: true,
+    providers: videoAuth.listVideoProviderOptions(),
+    profiles: videoAuth.listVideoProfiles().map((p) => ({
+      id: p.id, provider: p.provider, label: p.label, createdAt: p.createdAt,
+      apiKeyMasked: auth.maskKey(p.apiKey),
+    })),
+  }),
+  'videoAuth.add':      async ({ provider, model, apiKey, label }) => videoAuth.addVideoProfile({ provider, model, apiKey, label }),
+  'videoAuth.remove':   async ({ id }) => videoAuth.removeVideoProfile(id),
+  'videoAuth.reorder':  async ({ orderedIds }) => videoAuth.reorderVideoProfiles(orderedIds || []),
+
+  // ── Text-to-speech API key (user-owned speech providers) ──
+  'ttsAuth.list':       async () => ({
+    ok: true,
+    presets: ttsAuth.listTtsProviderPresets(),
+    profiles: ttsAuth.listTtsProfiles().map((p) => ({
+      id: p.id, provider: p.provider, baseUrl: p.baseUrl, model: p.model,
+      resourceId: p.resourceId,
+      voice: p.voice, format: p.format, label: p.label, createdAt: p.createdAt,
+      apiKeyMasked: auth.maskKey(p.apiKey),
+    })),
+  }),
+  'ttsAuth.add':        async ({ provider, baseUrl, model, apiKey, resourceId, voice, format, label }) =>
+    ttsAuth.addTtsProfile({ provider, baseUrl, model, apiKey, resourceId, voice, format, label }),
+  'ttsAuth.remove':     async ({ id }) => ttsAuth.removeTtsProfile(id),
+  'ttsAuth.reorder':    async ({ orderedIds }) => ttsAuth.reorderTtsProfiles(orderedIds || []),
+
+  // ── Search-tool API key (overrides built-in keyless web_search) ──
+  'searchAuth.list':    async () => ({
+    ok: true,
+    profiles: searchAuth.listSearchProfiles().map((p) => ({
+      id: p.id, provider: p.provider, label: p.label, createdAt: p.createdAt,
+      extras: p.extras, apiKeyMasked: auth.maskKey(p.apiKey),
+    })),
+  }),
+  'searchAuth.add':     async ({ provider, apiKey, label, extras }) => searchAuth.addSearchProfile({ provider, apiKey, label, extras }),
+  'searchAuth.remove':  async ({ id }) => searchAuth.removeSearchProfile(id),
+  'searchAuth.reorder': async ({ orderedIds }) => searchAuth.reorderSearchProfiles(orderedIds || []),
+  'searchAuth.test':    async ({ id }) => searchAuth.testSearchProfile(id),
+
+  // ── Local-exec permission (gates bash / write_file / *_to_pdf tools) ──
+  // Flat state object returned as handler result so the renderer receives
+  // `{ ok: true, granted, grantedAt?, revokedAt? }` — settings.js reads
+  // those fields directly off the response.
+  'permissions.getLocalExec':    async () => permissions.getLocalExecState(),
+  'permissions.grantLocalExec':  async () => permissions.grantLocalExec(),
+  'permissions.revokeLocalExec': async () => permissions.revokeLocalExec(),
+  // Three-mode setter (off / risk_prompt / allow_all). Returns the new state
+  // in the same shape as getLocalExec so settings.js can read it back.
+  'permissions.setLocalExecMode': async ({ mode }: { mode?: unknown }) => {
+    let normalized: 'workspace_approval' | 'all_files_approval' | 'all_files_auto';
+    if (mode === 'workspace_approval' || mode === 'all_files_approval' || mode === 'all_files_auto') {
+      normalized = mode;
+    } else if (mode === 'off') {
+      normalized = 'workspace_approval';
+    } else if (mode === 'risk_prompt') {
+      normalized = 'all_files_approval';
+    } else if (mode === 'allow_all') {
+      normalized = 'all_files_auto';
+    } else {
+      throw new Error('invalid mode');
+    }
+    return permissions.setLocalExecMode(normalized);
+  },
+
+  // ── User-granted folder access (plan §B2) ──────────────────────────────
+  // Extra directories the file/bash tools may touch beyond workspace +
+  // attachments. Grant goes through a native folder picker; the feature
+  // enforces the deny-list (credential/system dirs) + realpath.
+  'grantedRoots.list': async (_payload: unknown, ctx: { userId: string }) => {
+    const granted = await import('../features/granted_roots');
+    return { roots: granted.listGrantedRoots(ctx.userId) };
+  },
+  'grantedRoots.add': async (_payload: unknown, ctx: { userId: string }) => {
+    const selected = await userWorkspace.selectDirectory();
+    if (!selected) return { ok: false as const, cancelled: true };
+    const granted = await import('../features/granted_roots');
+    try {
+      const row = granted.grantRoot(ctx.userId, selected);
+      return { ok: true as const, root: row };
+    } catch (err) {
+      const code = err instanceof granted.GrantedRootError ? err.code : 'E_UNKNOWN';
+      return { ok: false as const, error: code };
+    }
+  },
+  'grantedRoots.remove': async (payload: { path?: unknown }, ctx: { userId: string }) => {
+    if (typeof payload?.path !== 'string') throw new Error('invalid path');
+    const granted = await import('../features/granted_roots');
+    return { ok: true as const, removed: granted.revokeRoot(ctx.userId, payload.path) };
+  },
+
+  // ── External packages management (plan §A; UI is read + manage only) ────
+  // Install stays on the commander/CLI path (it needs the clone + dependency
+  // consent flow). The registry's single-writer is bin/orkas-pkg.cjs.
+  'packages.list': async (_payload: unknown, ctx: { userId: string }) => {
+    const pkgs = await import('../features/packages');
+    return { ok: true as const, packages: pkgs.listPackagesForUi(ctx.userId) };
+  },
+  'packages.action': async (payload: { command?: unknown; name?: unknown }, ctx: { userId: string }) => {
+    if (typeof payload?.command !== 'string' || typeof payload?.name !== 'string') {
+      throw new Error('invalid command/name');
+    }
+    const pkgs = await import('../features/packages');
+    const result = await pkgs.runPackageCommand(ctx.userId, payload.command, payload.name);
+    // Skill listing reflects enable/disable + remove immediately.
+    try { (await import('../model/core-agent/skill-registry')).invalidateSkills(); } catch { /* runner not loaded */ }
+    return result;
+  },
+  // Open-tier skills (external packages + global folders) for the read-only
+  // "From packages & global folders" group in the skills panel. External and
+  // global are listed independently (no cross-tier display-name dedupe) so a
+  // skill present in BOTH an installed package and a global folder shows under
+  // each provenance. Disabled ids are NOT filtered here — the panel renders the
+  // toggle state itself. (enable/disable is keyed by id, so a same-id skill in
+  // both tiers shares one toggle state.)
+  'skills.listOpen': async (_payload: unknown, ctx: { userId: string }) => {
+    const reg = await import('../model/core-agent/skill-registry');
+    const componentEnabled = await import('../features/component_enabled');
+    const disabled = componentEnabled.readDisabledSets(ctx.userId).skills;
+    const { external, global } = await reg.listOpenSkillsByTier(ctx.userId);
+    const rows = [...external, ...global].map((r) => ({
+      id: r.id,
+      name: r.name,
+      description: r.description,
+      source: r.source,
+      enabled: r.package_name ? r.package_enabled !== false : !disabled.has(r.id),
+      ...(r.package_name ? { package_name: r.package_name } : {}),
+      ...(r.package_kind ? { package_kind: r.package_kind } : {}),
+      ...(typeof r.package_enabled === 'boolean' ? { package_enabled: r.package_enabled } : {}),
+    }));
+    return { ok: true as const, skills: rows };
+  },
+
+  // Renderer reply for the inline `delete_file` confirmation card. The
+  // main-side tool is NOT blocking on this — it returned a token-bearing
+  // `requires_user_confirmation` already (see core-agent/delete-file-confirm.ts).
+  // This handler just flips the token state to granted / denied so the
+  // LLM's NEXT delete_file call (Step 2, with the same token) can resolve
+  // it. Idempotent: a second call with the same id is a no-op.
+  'delete_file.respond': async ({ confirm_id, granted }: { confirm_id: string; granted: boolean }) => {
+    // Static import (not dynamic) — dynamic `await import()` of a path that
+    // is also reached via static `import` elsewhere can resolve to a
+    // distinct module instance under tsx/ESM, yielding two independent
+    // `_entries` Maps. The IPC handler then flips state on one Map while
+    // the tool reads from the other → LLM Step 2 sees `pending` forever.
+    const ok = resolveDeleteConfirmation(String(confirm_id || ''), !!granted);
+    return { ok };
+  },
+
+  'delete_file.visible': async ({ confirm_id }: { confirm_id: string }) => {
+    const ok = markDeleteConfirmationVisible(String(confirm_id || ''));
+    return { ok };
+  },
+
+  // Renderer-side logs — forwarded here so all logging ends up in the
+  // same daily file (with a `renderer/<module>` scope). Payload matches
+  // `logFromRenderer` in main/logger.ts: { level, module, message, data }.
+  'log.record': async (payload) => {
+    logFromRenderer(payload || {});
+    return {};
+  },
+
+  // ── User workspace (working directory) ──
+  // Workspace handlers accept an optional scope hint:
+  //   `{ cid }`        → main resolves cid → conv.project_id → scope
+  //   `{ projectId }`  → renderer-supplied scope (commander tab project chip,
+  //                      where there's no cid yet)
+  //   neither          → default scope
+  // When both are passed, cid takes precedence (it's the authoritative source
+  // — conv.project_id is the truth). Project membership is frozen at conv
+  // create time, so `cid → projectId` is a stable mapping.
+  'workspace.get': async (payload, ctx) => {
+    const projectId = await _resolveWorkspaceScope(ctx.userId, payload);
+    return { path: userWorkspace.getWorkspacePath(ctx.userId, projectId) };
+  },
+  'workspace.getInfo': async (payload, ctx) => {
+    const projectId = await _resolveWorkspaceScope(ctx.userId, payload);
+    return userWorkspace.getWorkspaceInfo(ctx.userId, projectId);
+  },
+  'workspace.set': async (payload, ctx) => {
+    const target = payload?.path;
+    if (!target || typeof target !== 'string') throw new Error('missing path');
+    const projectId = await _resolveWorkspaceScope(ctx.userId, payload);
+    const result = userWorkspace.setWorkspacePath(ctx.userId, target, projectId);
+    if (!result.ok) return { ok: false, error: (result as any).error };
+    return { path: result.path };
+  },
+  'workspace.reset': async (payload, ctx) => {
+    const projectId = await _resolveWorkspaceScope(ctx.userId, payload);
+    const result = userWorkspace.resetWorkspacePath(ctx.userId, projectId);
+    return { path: result.path };
+  },
+  'workspace.selectDirectory': async () => {
+    const selected = await userWorkspace.selectDirectory();
+    return { path: selected };
+  },
+  'workspace.openPath': async (payload, ctx) => {
+    const projectId = await _resolveWorkspaceScope(ctx.userId, payload);
+    const result = await userWorkspace.openWorkspaceInFileManager(ctx.userId, projectId);
+    if (!result.ok) throw new Error((result as { ok: false; error: string }).error);
+    return { path: result.path };
+  },
+
+  // Open the OS file manager focused on a single file (Finder on macOS,
+  // Explorer on Windows, default file manager on Linux). The path must sit
+  // inside the active user's file scope, or be an exact produced-file path
+  // already recorded on the current conversation.
+  'workspace.revealPath': async (payload, ctx) => {
+    const target = payload?.path;
+    if (typeof target !== 'string' || !target) {
+      throw new Error('missing path');
+    }
+    const norm = path.resolve(target);
+    if (!await _isAllowedFileActionPath(ctx.userId, payload, norm)) {
+      throw new Error('path is outside the user workspace');
+    }
+    let st: fs.Stats;
+    try { st = fs.statSync(norm); }
+    catch { throw new Error('file not found'); }
+    if (st.isDirectory()) {
+      const openErr = await shell.openPath(norm);
+      if (openErr) throw new Error(openErr);
+    } else {
+      shell.showItemInFolder(norm);
+    }
+    return { path: norm };
+  },
+
+  // Lightweight existence check for renderer previews. Same scope as
+  // reveal/delete/read: workspace, current cid attachments, project library,
+  // or an exact produced path already recorded on the conversation.
+  'workspace.statPath': async (payload, ctx) => {
+    const target = payload?.path;
+    if (typeof target !== 'string' || !target) {
+      throw new Error('missing path');
+    }
+    const norm = path.resolve(target);
+    if (!await _isAllowedFileActionPath(ctx.userId, payload, norm)) {
+      throw new Error('path is outside the user workspace');
+    }
+    let st: fs.Stats;
+    try { st = fs.statSync(norm); }
+    catch { return { exists: false, path: norm }; }
+    return {
+      exists: true,
+      path: norm,
+      isFile: st.isFile(),
+      isDirectory: st.isDirectory(),
+      size: st.size,
+      mtimeMs: st.mtimeMs,
+    };
+  },
+
+  'workspace.deletePath': async (payload, ctx) => {
+    const target = payload?.path;
+    if (typeof target !== 'string' || !target) {
+      throw new Error('missing path');
+    }
+    const norm = path.resolve(target);
+    if (!await _isAllowedFileActionPath(ctx.userId, payload, norm)) {
+      throw new Error('path is outside the user workspace');
+    }
+
+    let st: fs.Stats;
+    try { st = fs.statSync(norm); }
+    catch { return { ok: false, error: 'not_found' }; }
+    if (!st.isFile() && !st.isDirectory()) return { ok: false, error: 'not_supported' };
+
+    try {
+      if (typeof shell.trashItem === 'function') await shell.trashItem(norm);
+      else if (st.isDirectory()) fs.rmSync(norm, { recursive: true });
+      else fs.unlinkSync(norm);
+    } catch (err) {
+      try {
+        if (st.isDirectory()) fs.rmSync(norm, { recursive: true });
+        else fs.unlinkSync(norm);
+      }
+      catch {
+        return { ok: false, error: String((err as Error).message || 'delete failed') };
+      }
+    }
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
+      const fileIndexer = require('../features/file_indexer') as { invalidateFileCache?: (userId: string, absPath: string) => void };
+      fileIndexer.invalidateFileCache?.(ctx.userId, norm);
+    } catch { /* cache invalidation is best-effort */ }
+
+    return { ok: true, path: norm };
+  },
+
+  // Resolve a per-conversation attachment's absolute path. The renderer's
+  // chip carries (cid, name) but the in-app file viewer's contract is
+  // "abs path in"; we go through `resolveAttachmentAbsPath` so the same
+  // safe-name / traversal / not-a-file gates the chat-media:// handler
+  // already enforces apply here.
+  'attachments.absPath': async (payload, ctx) => {
+    const cid = payload?.cid;
+    const name = payload?.name;
+    if (typeof cid !== 'string' || !cid) throw new Error('missing cid');
+    if (typeof name !== 'string' || !name) throw new Error('missing name');
+    const r = chatAttachments.resolveAttachmentAbsPath(ctx.userId, cid, name);
+    if (!r.ok) {
+      const err = r as { code?: string; error?: string };
+      return { ok: false, error: err.error || err.code || 'failed' };
+    }
+    return { ok: true, path: r.absPath, kind: r.kind };
+  },
+
+  // Diagnose a failed <img>/<video> request without returning or reporting a
+  // local path. Monitor uses the stable reason to distinguish missing/moved
+  // files from unsupported/oversized media and browser decode/stream errors.
+  'media.diagnose': async ({ url }, ctx) => {
+    let parsed: URL;
+    try { parsed = new URL(String(url || '')); }
+    catch { return { diagnosis: 'invalid_url' }; }
+    if (parsed.protocol !== 'chat-media:') return { diagnosis: 'unsupported_scheme' };
+    const host = parsed.hostname.toLowerCase();
+    if (host === 'local') {
+      const absPath = chatMediaLocalPathFromUrl(parsed.toString());
+      if (!absPath) return { diagnosis: 'invalid_url' };
+      const resolved = chatAttachments.resolveLocalMediaPath(absPath);
+      if (!resolved.ok) {
+        return { diagnosis: (resolved as { code?: string }).code || 'unavailable' };
+      }
+      if (path.extname(resolved.absPath).toLowerCase() === '.svg') {
+        const svg = chatAttachments.materializeLocalDisplaySvg(resolved.absPath);
+        if (!svg.ok) return { diagnosis: (svg as { code?: string }).code || 'unavailable', media_kind: resolved.kind };
+      }
+      return { diagnosis: 'available', media_kind: resolved.kind };
+    }
+    if (host === 'cid') {
+      let decoded = '';
+      try { decoded = decodeURIComponent(parsed.pathname || '').replace(/^\/+/, ''); }
+      catch { return { diagnosis: 'invalid_url' }; }
+      const segments = decoded.split('/');
+      const cid = segments.shift() || '';
+      const name = segments.join('/');
+      if (!cid || !name) return { diagnosis: 'invalid_url' };
+      const resolved = chatAttachments.resolveAttachmentAbsPath(ctx.userId, cid, name);
+      if (!resolved.ok) {
+        return { diagnosis: (resolved as { code?: string }).code || 'unavailable' };
+      }
+      return { diagnosis: 'available', media_kind: resolved.kind };
+    }
+    return { diagnosis: 'unknown_route' };
+  },
+
+  // Read a file's text content for the in-app preview overlay
+  // (markdown / plain text — pdf and html are streamed via `chat-media://`
+  // instead). Same scope as the file actions above: active workspace ∪ the
+  // attachment dir of the current cid ∪ exact recorded produced files. Full
+  // reads keep the 2 MB cap because their contents cross IPC. The HTML viewer
+  // uses `compositionRootOnly` to scan files of any size while returning only
+  // the small composition tag; the HTML body itself never crosses this IPC.
+  'produced.readText': async (payload, ctx) => {
+    const target = payload?.path;
+    if (typeof target !== 'string' || !target) {
+      throw new Error('missing path');
+    }
+    const norm = path.resolve(target);
+    if (!await _isAllowedFileActionPath(ctx.userId, payload, norm)) {
+      throw new Error('path is outside the user workspace');
+    }
+    let st: fs.Stats;
+    try { st = fs.statSync(norm); }
+    catch { return { ok: false, error: 'not_found' }; }
+    if (!st.isFile()) return { ok: false, error: 'not_found' };
+    const MAX_TEXT_BYTES = 2 * 1024 * 1024;
+    const compositionRootOnly = payload?.compositionRootOnly === true;
+    if (!compositionRootOnly && st.size > MAX_TEXT_BYTES) {
+      return { ok: false, error: 'too_large', size: st.size, cap: MAX_TEXT_BYTES };
+    }
+    let text: string;
+    try {
+      text = compositionRootOnly
+        ? await _readHtmlCompositionRootTag(norm)
+        : fs.readFileSync(norm, 'utf8');
+    }
+    catch (err) { return { ok: false, error: String((err as Error).message || 'read failed') }; }
+    // Strip UTF-8 BOM so markdown / json don't render a leading invisible char.
+    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+    return { ok: true, text, size: st.size };
+  },
+
+  // Convert modern Office files into a local, sandboxed HTML preview.
+  // This is a content preview, not a high-fidelity Office layout renderer.
+  // It shares the same path scope as produced.readText and revealPath.
+  'produced.officePreviewHtml': async (payload, ctx) => {
+    const target = payload?.path;
+    if (typeof target !== 'string' || !target) {
+      throw new Error('missing path');
+    }
+    const norm = path.resolve(target);
+    if (!await _isAllowedFileActionPath(ctx.userId, payload, norm)) {
+      throw new Error('path is outside the user workspace');
+    }
+    const kind = _officePreviewKindForExt(path.extname(norm).toLowerCase());
+    if (!kind) return { ok: false, error: 'unsupported' };
+    let st: fs.Stats;
+    try { st = fs.statSync(norm); }
+    catch { return { ok: false, error: 'not_found' }; }
+    if (!st.isFile()) return { ok: false, error: 'not_found' };
+    const MAX_OFFICE_PREVIEW_BYTES = 50 * 1024 * 1024;
+    if (st.size > MAX_OFFICE_PREVIEW_BYTES) {
+      return { ok: false, error: 'too_large', size: st.size, cap: MAX_OFFICE_PREVIEW_BYTES };
+    }
+
+    try {
+      const buf = fs.readFileSync(norm);
+      let fragment = '';
+      if (kind === 'word') {
+        const { docxBufferToHtml } = await import('../util/extract-docx');
+        fragment = await docxBufferToHtml(buf);
+      } else if (kind === 'spreadsheet') {
+        const { xlsxBufferToHtml } = await import('../util/extract-office');
+        fragment = xlsxBufferToHtml(buf);
+      } else {
+        const { pptxBufferToHtml } = await import('../util/extract-office');
+        fragment = pptxBufferToHtml(buf);
+      }
+      const html = _wrapOfficePreviewHtml(kind, path.basename(norm), fragment || '<p class="office-muted">(no previewable content)</p>');
+      return { ok: true, html, kind, size: st.size };
+    } catch (err) {
+      return { ok: false, error: String((err as Error).message || 'preview failed') };
+    }
+  },
+
+  // Write a UTF-8 text file into the workspace (or current cid's attachment
+  // dir). Sandbox parity with `produced.readText`: same scope, same 2MB cap on
+  // the resulting bytes — the chat-md drawer is the sole caller today, and
+  // the file's job is "human edits the LLM's md output", so anything larger
+  // belongs in the OS editor (open via reveal).
+  'produced.writeText': async (payload, ctx) => {
+    const target = payload?.path;
+    const content = payload?.content;
+    if (typeof target !== 'string' || !target) {
+      throw new Error('missing path');
+    }
+    if (typeof content !== 'string') {
+      throw new Error('missing content');
+    }
+    const MAX_TEXT_BYTES = 2 * 1024 * 1024;
+    const bytes = Buffer.byteLength(content, 'utf8');
+    if (bytes > MAX_TEXT_BYTES) {
+      return { ok: false, error: 'too_large', size: bytes, cap: MAX_TEXT_BYTES };
+    }
+    const norm = path.resolve(target);
+    if (!isPathAllowed(norm, await _ipcFileSandboxAllowedRoots(ctx.userId, payload))) {
+      throw new Error('path is outside the user workspace');
+    }
+
+    try {
+      fs.writeFileSync(norm, content, 'utf8');
+    } catch (err) {
+      return { ok: false, error: String((err as Error).message || 'write failed') };
+    }
+    return { ok: true, size: bytes };
+  },
+
+  // Read the install data root (`<container>/data`) — read-only display
+  // for the settings page "Data root" row. WS_ROOT is process-stable so
+  // no async work is needed.
+  'app.dataRootPath': async () => ({ ok: true, path: WS_ROOT }),
+
+  // Open the install data root in the OS file manager. WS_ROOT is the
+  // only path this opens — no caller-supplied path, so no sandbox check.
+  'app.openDataRoot': async () => {
+    const target = WS_ROOT;
+    if (!fs.existsSync(target)) throw new Error('data root not found');
+    shell.openPath(target);
+    return { ok: true, path: target };
+  },
+
+  // Internal debug panel data is stripped from the open-source build. Keep stable
+  // handler shapes so stale renderer calls receive empty results.
+  'devtools.listArchives':  async () => ({ items: [] }),
+  'devtools.readArchive':   async () => ({ item: null }),
+  'devtools.clearArchives': async () => ({ ok: true }),
+  'devtools.getNativeSearchEnabled': async () => ({ enabled: true }),
+  'devtools.setNativeSearchEnabled': async () => ({ enabled: true }),
+  'devtools.skillMetricsReport': async ({ sinceDays } = {}) => {
+    const { aggregateSkillMetrics } = await import('../features/skill_metrics');
+    return aggregateSkillMetrics({ sinceDays: Number.isFinite(sinceDays) ? Number(sinceDays) : undefined });
+  },
+
+  // User-account login (Google OAuth). Stripped from the open-source build.
+
+  // User feedback from Settings. Depends on the account session for Server auth.
+
+  // Multi-device sync. Stripped from the open-source build (depends on account).
+
+  // Local coding CLI agents (Claude Code, Codex, etc.). Kept in the open-source
+  // build; the renderer's External Agent picker depends on localAgents.list.
+  ...localAgentsHandlers,
+
+  // Quality validator — renderer reads persisted ValidationReports to display
+  // why a spec write / marketplace install was rejected.
+  ...qualityHandlers,
+  // Connectors (MCP-based). User-installed MCP servers expose tools to commander + selected
+  // agents. No Server dependency, so kept in the open-source build.
+  ...connectorsHandlers,
+
+  // Cross-session memory UI — view/edit/import/export over features/memory.ts.
+  ...memoryHandlers,
+};
+
+// ── Stream handlers ──────────────────────────────────────────────────────
+// Contract: `async function*(payload, ctx) yielding SSE-shape events`.
+// The runtime ensures a terminal `{ type: 'done' }` is always sent, even on
+// unexpected throws.
+
+const streamHandlers: Record<string, StreamHandler> = {
+  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, retry_message_id }, ctx, signal) {
+    if (!safeId(cid)) {
+      yield { type: 'error', text: 'invalid cid' };
+      return;
+    }
+    const text = (content || '').trim();
+    if (!text) {
+      yield { type: 'error', text: 'empty message' };
+      return;
+    }
+    const atts = Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string') : [];
+    const useSelections = Array.isArray(use_selections) ? use_selections : [];
+    const refs = Array.isArray(references) ? references : [];
+    // Legacy `conversations.stream` is now a thin wrapper around the
+    // group_chat bus. Subscribe to the bus directly BEFORE calling
+    // `groupChat.send` — `send` internally wakes the recipient worker
+    // synchronously, and that worker's first state_changed / process events
+    // can fire on the same microtask cycle as `send` returns. We also drain
+    // the subscription while `send` is still in flight: plan-triggered runs
+    // can spend real time dispatching/reconciling before `send` resolves,
+    // but the bus is already carrying the agent's process/delta stream.
+    //
+    // We relay events until the bus is fully quiescent (no worker running
+    // AND every actor's queue empty) — checked via the in-memory bus
+    // state, since on-disk state.json briefly shows 'idle' in the gap
+    // between an actor finishing and the next one's wake.
+    const buf: GroupEvent[] = [];
+    let wake: (() => void) | null = null;
+    let cancelled = signal.aborted;
+    const notify = () => {
+      const w = wake; wake = null; w?.();
+    };
+    const onAbort = () => {
+      cancelled = true;
+      notify();
+    };
+    if (!cancelled) signal.addEventListener('abort', onAbort, { once: true });
+    const unsub = groupChat.subscribeBus(ctx.userId, cid, (ev) => {
+      buf.push(ev);
+      notify();
+    });
+    let relayCount = 0;
+    let processCount = 0;
+    let firstProcessLogged = false;
+    let sendDone = false;
+    let sendRes: Awaited<ReturnType<typeof groupChat.send>>
+      | Awaited<ReturnType<typeof groupChat.retryFailedTurn>>
+      | null = null;
+    let sendErr: unknown = null;
+    const sendPromise = (async () => {
+      try {
+        const retryMessageId = typeof retry_message_id === 'string' ? retry_message_id.trim() : '';
+        sendRes = retryMessageId
+          ? await groupChat.retryFailedTurn({
+              userId: ctx.userId,
+              cid,
+              failedMessageId: retryMessageId,
+              visibleText: text,
+            })
+          : await groupChat.send({
+              userId: ctx.userId, cid, text,
+              ...(atts.length ? { attachments: atts } : {}),
+              ...(useSelections.length ? { use_selections: useSelections } : {}),
+              ...(refs.length ? { references: refs } : {}),
+            });
+      } catch (err) {
+        sendErr = err;
+      } finally {
+        sendDone = true;
+        notify();
+      }
+    })();
+    void sendPromise;
+    try {
+      drainLoop: while (!cancelled) {
+        while (buf.length) {
+          const ev = buf.shift()!;
+          relayCount += 1;
+          if (ev.type === 'process') {
+            processCount += 1;
+            if (!firstProcessLogged) {
+              firstProcessLogged = true;
+              log.info(`sendStream first process cid=${cid} actor=${(ev as any).actor || ''} kind=${(ev as any).data?.type || ''}`);
+            }
+          }
+          yield { type: 'event', event: { stream: 'group', data: ev } };
+        }
+        if (sendDone) {
+          if (sendErr) {
+            const errText = sendErr instanceof Error ? sendErr.message : String(sendErr || 'send failed');
+            yield { type: 'error', text: errText };
+            return;
+          }
+          if (!sendRes?.ok) {
+            yield { type: 'error', text: sendRes?.error || 'send failed' };
+            return;
+          }
+          if (groupChat.busIsQuiescent(ctx.userId, cid)) break drainLoop;
+        }
+        if (cancelled) break;
+        await new Promise<void>((resolve) => { wake = resolve; });
+      }
+    } finally {
+      log.info(`sendStream closed cid=${cid} relayed=${relayCount} process=${processCount} sendDone=${sendDone} cancelled=${cancelled}`);
+      try { unsub(); } catch { /* ignore */ }
+      try { signal.removeEventListener?.('abort', onAbort); } catch { /* ignore */ }
+    }
+  },
+
+  'groupChat.events': async function* ({ cid, untilIdle }, ctx, signal) {
+    if (!safeId(cid)) {
+      yield { type: 'error', text: 'invalid cid' };
+      return;
+    }
+    if (untilIdle) {
+      const buf: GroupEvent[] = [];
+      let wake: (() => void) | null = null;
+      let cancelled = signal.aborted;
+      let sawWorkActivity = !groupChat.busIsQuiescent(ctx.userId, cid);
+      let relayCount = 0;
+      let processCount = 0;
+      let firstProcessLogged = false;
+      const onAbort = () => { cancelled = true; const w = wake; wake = null; w?.(); };
+      if (!cancelled) signal.addEventListener('abort', onAbort, { once: true });
+      const unsub = groupChat.subscribeBus(ctx.userId, cid, (ev) => {
+        buf.push(ev);
+        const w = wake; wake = null; w?.();
+      });
+      try {
+        while (!cancelled) {
+          while (buf.length) {
+            const ev = buf.shift()!;
+            if (ev.type === 'process') sawWorkActivity = true;
+            if (ev.type === 'artifact_created') sawWorkActivity = true;
+            if (ev.type === 'message') {
+              const msg = (ev as any).msg;
+              if (msg && msg.from !== 'user') sawWorkActivity = true;
+            }
+            if (ev.type === 'state_changed') {
+              const st = ev.state;
+              const inFlight = Array.isArray(st?.in_flight) ? st.in_flight : [];
+              if (st?.status === 'running' || inFlight.length > 0 || !groupChat.busIsQuiescent(ctx.userId, cid)) {
+                sawWorkActivity = true;
+              }
+            }
+            relayCount += 1;
+            if (ev.type === 'process') {
+              processCount += 1;
+              if (!firstProcessLogged) {
+                firstProcessLogged = true;
+                log.info(`groupEvents first process cid=${cid} actor=${(ev as any).actor || ''} kind=${(ev as any).data?.type || ''}`);
+              }
+            }
+            yield ev;
+            if (sawWorkActivity && groupChat.busIsQuiescent(ctx.userId, cid)) return;
+          }
+          if (sawWorkActivity && groupChat.busIsQuiescent(ctx.userId, cid)) return;
+          if (cancelled) break;
+          await new Promise<void>((resolve) => { wake = resolve; });
+        }
+      } finally {
+        log.info(`groupEvents closed cid=${cid} relayed=${relayCount} process=${processCount} cancelled=${cancelled}`);
+        try { unsub(); } catch { /* ignore */ }
+        try { signal.removeEventListener?.('abort', onAbort); } catch { /* ignore */ }
+      }
+      return;
+    }
+    for await (const ev of groupChat.streamEvents(ctx.userId, cid, { abortSignal: signal })) {
+      yield ev;
+    }
+  },
+
+  // Long-lived global stream the renderer opens once on boot. Each
+  // auto-task fire produces a `conv_created` event so the sidebar can
+  // reload its conv list (manual runs mutate the list locally, but auto
+  // fires create the conv from main with no other notification path).
+  'autoTasks.events': async function* (_payload, _ctx, signal) {
+    const buf: autoTasks.AutoFireEvent[] = [];
+    let wake: (() => void) | null = null;
+    let cancelled = signal.aborted;
+    const onAbort = () => { cancelled = true; const w = wake; wake = null; w?.(); };
+    if (!cancelled) signal.addEventListener('abort', onAbort, { once: true });
+    const unsub = autoTasks.subscribeFires((ev) => {
+      buf.push(ev);
+      const w = wake; wake = null; w?.();
+    });
+    try {
+      while (!cancelled) {
+        while (buf.length) {
+          const ev = buf.shift()!;
+          yield { type: 'event', event: ev };
+        }
+        if (cancelled) break;
+        await new Promise<void>((resolve) => { wake = resolve; });
+      }
+    } finally {
+      try { unsub(); } catch { /* ignore */ }
+      try { signal.removeEventListener?.('abort', onAbort); } catch { /* ignore */ }
+    }
+  },
+
+  'skills.chat.sendStream': async function* ({ id, content, model_text, attachments }, ctx, signal) {
+    if (!skills.isValidSkillId(id)) {
+      yield { type: 'error', text: 'invalid skill id' };
+      return;
+    }
+    const text = (content || '').trim();
+    if (!text) {
+      yield { type: 'error', text: 'empty message' };
+      return;
+    }
+    const modelText = typeof model_text === 'string' ? model_text.trim() : '';
+    const atts = Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string' && n) : [];
+    yield* skills.streamSendToSkillChat(ctx.userId, id, text, {
+      abortSignal: signal,
+      ...(atts.length ? { attachments: atts } : {}),
+      ...(modelText ? { modelText } : {}),
+    });
+  },
+
+  'agents.chat.sendStream': async function* ({ id, content, model_text, attachments }, ctx, signal) {
+    if (!safeId(id)) {
+      yield { type: 'error', text: 'invalid agent id' };
+      return;
+    }
+    const text = (content || '').trim();
+    if (!text) {
+      yield { type: 'error', text: 'empty message' };
+      return;
+    }
+    const modelText = typeof model_text === 'string' ? model_text.trim() : '';
+    const atts = Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string' && n) : [];
+    yield* agents.streamSendToAgentEditChat(ctx.userId, id, text, {
+      abortSignal: signal,
+      ...(atts.length ? { attachments: atts } : {}),
+      ...(modelText ? { modelText } : {}),
+    });
+  },
+
+  'project.kb.events': async function* ({ projectId }, ctx, signal) {
+    if (!safeId(projectId)) {
+      yield { type: 'error', text: 'invalid projectId' };
+      return;
+    }
+    const queue: import('../features/project_library_indexer').ProjectLibraryStatusEvent[] = [];
+    let notify: (() => void) | null = null;
+    const listener = (ev: import('../features/project_library_indexer').ProjectLibraryStatusEvent) => {
+      if (ev.userId !== ctx.userId || ev.projectId !== projectId) return;
+      queue.push(ev);
+      notify?.();
+    };
+    projectLibraryIndexer.projectLibraryEvents.on('status', listener);
+    const abortPromise = new Promise<void>((r) => {
+      if (signal.aborted) r();
+      else signal.addEventListener('abort', () => r(), { once: true });
+    });
+    try {
+      while (!signal.aborted) {
+        if (queue.length) {
+          yield { type: 'event', event: queue.shift()! };
+          continue;
+        }
+        await Promise.race([
+          new Promise<void>((r) => { notify = () => { notify = null; r(); }; }),
+          abortPromise,
+        ]);
+      }
+    } finally {
+      projectLibraryIndexer.projectLibraryEvents.off('status', listener);
+    }
+  },
+
+  // Long-lived subscription: each kb_indexer status transition (pending →
+  // processing → ready / failed, plus deletes) is pushed to the renderer so
+  // UI chips update live without polling. Filter to the caller's uid — in the
+  // current single-active-user world that's the only uid anyway, but the
+  // guard keeps us honest when multi-uid lands.
+  'kb.events': async function* (_payload, ctx, signal) {
+    const queue: import('../features/kb_indexer').KbStatusEvent[] = [];
+    let notify: (() => void) | null = null;
+    const listener = (ev: import('../features/kb_indexer').KbStatusEvent) => {
+      if (ev.userId !== ctx.userId) return;
+      queue.push(ev);
+      notify?.();
+    };
+    kbIndexer.kbEvents.on('status', listener);
+    const abortPromise = new Promise<void>((r) => {
+      if (signal.aborted) r();
+      else signal.addEventListener('abort', () => r(), { once: true });
+    });
+    try {
+      while (!signal.aborted) {
+        if (queue.length) {
+          yield { type: 'event', event: queue.shift()! };
+          continue;
+        }
+        await Promise.race([
+          new Promise<void>((r) => { notify = () => { notify = null; r(); }; }),
+          abortPromise,
+        ]);
+      }
+    } finally {
+      kbIndexer.kbEvents.off('status', listener);
+    }
+  },
+};
+
+// ── Runtime ──────────────────────────────────────────────────────────────
+
+interface StreamState { cancelled: boolean; controller: AbortController; sender: WebContents }
+const activeStreams = new Map<string, StreamState>();
+
+/**
+ * Resolve the current user context for an IPC request. `user.init` must be
+ * callable without context (bootstrap); every other handler gets a resolved
+ * `userId` injected.
+ */
+async function resolveContext(sender: WebContents): Promise<IpcContext> {
+  const user = await users.getOrCreateSelfUser();
+  return { userId: user.user_id, user, sender };
+}
+
+/** Send a push-event to every open renderer. Channel name must match preload's
+ *  `PUSH_EVENT_PREFIXES` allow-list. Used by main-initiated status broadcasts
+ *  (boot-time reconcile / sync / updater state). */
+export function broadcastToRenderer(channel: string, payload: unknown): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(channel, payload);
+  }
+}
+
+export function register(): void {
+  ipcMain.handle('orkas.invoke', async (event, request: unknown) => {
+    if (!isTrustedIpcSender(event.sender)) {
+      log.warn('rejected invoke from untrusted renderer');
+      return { ok: false, error: 'untrusted ipc sender', code: 'E_IPC_SENDER' };
+    }
+    const envelope = parseInvokeEnvelope(request);
+    if (!envelope) return { ok: false, error: 'invalid ipc request', code: 'E_IPC_REQUEST' };
+    const { channel, payload } = envelope;
+    const handler = invokeHandlers[channel];
+    if (!handler) return { ok: false, error: `unknown channel: ${channel}` };
+    try {
+      const ctx = await resolveContext(event.sender);
+      const result = await handler(payload || {}, ctx);
+      return { ok: true, ...(result || {}) };
+    } catch (err) {
+      const normalized = normalizeAppError(err);
+      const rawCode = (err as { code?: unknown }).code;
+      const code = typeof rawCode === 'number'
+        ? rawCode
+        : (typeof rawCode === 'string' && /^\d+$/.test(rawCode.trim())
+          ? Number(rawCode.trim())
+          : (typeof rawCode === 'string' && rawCode ? rawCode : normalized.code));
+      log.error(`invoke ${channel} failed`, { error: normalized.error, code });
+      const out: {
+        ok: false;
+        error: string;
+        code: string | number;
+        marketplaceKind?: string;
+        marketplaceId?: string;
+        marketplaceName?: string;
+        marketplaceReason?: string;
+        marketplaceAppUpdateRequired?: boolean;
+        marketplaceMinAppVersion?: string;
+        marketplaceCurrentAppVersion?: string;
+        qualityReport?: unknown;
+      } = {
+        ok: false,
+        error: normalized.error,
+        code,
+      };
+      const qualityReport = (err as { qualityReport?: unknown }).qualityReport;
+      if (qualityReport) out.qualityReport = qualityReport;
+      const installInfo = marketplace.getMarketplaceInstallErrorInfo(err);
+      if (installInfo.kind) {
+        out.marketplaceKind = installInfo.kind;
+        if (installInfo.id) out.marketplaceId = installInfo.id;
+        if (installInfo.name) out.marketplaceName = installInfo.name;
+        if (installInfo.reason) out.marketplaceReason = installInfo.reason;
+      }
+      if (installInfo.appUpdateRequired) {
+        out.marketplaceAppUpdateRequired = true;
+        out.marketplaceMinAppVersion = installInfo.minAppVersion || '';
+        out.marketplaceCurrentAppVersion = installInfo.currentAppVersion || '';
+      }
+      return out;
+    }
+  });
+
+  // File objects cannot cross the regular JSON invoke envelope without being
+  // copied into base64. Preload resolves only genuine user-selected DOM File
+  // objects through Electron `webUtils.getPathForFile` and sends their paths
+  // on this private channel; the renderer never receives a raw local path.
+  ipcMain.handle('orkas.importLocalFiles', async (event, request: unknown) => {
+    if (!isTrustedIpcSender(event.sender)) {
+      log.warn('rejected local file import from untrusted renderer');
+      return { ok: false, error: 'untrusted ipc sender', code: 'E_IPC_SENDER' };
+    }
+    if (!request || typeof request !== 'object') {
+      return { ok: false, error: 'invalid import request', code: 'E_IPC_REQUEST' };
+    }
+    try {
+      const ctx = await resolveContext(event.sender);
+      const result = await _importLocalFileEntries(request, ctx);
+      return { ok: true, ...result };
+    } catch (err) {
+      const normalized = normalizeAppError(err);
+      log.warn('local file import request failed', {
+        code: normalized.code,
+        error: normalized.error,
+      });
+      return { ok: false, error: normalized.error, code: normalized.code };
+    }
+  });
+
+  ipcMain.on('orkas.streamStart', async (event, request: unknown) => {
+    if (!isTrustedIpcSender(event.sender)) return;
+    const envelope = parseStreamEnvelope(request);
+    if (!envelope) return;
+    const { requestId, channel, payload } = envelope;
+    const out = (ev: unknown) => {
+      if (event.sender.isDestroyed()) return;
+      event.sender.send(`stream:${requestId}`, ev);
+    };
+
+    const handler = streamHandlers[channel];
+    if (!handler) {
+      out({ type: 'error', text: `unknown stream channel: ${channel}` });
+      out({ type: 'done' });
+      return;
+    }
+
+    if (activeStreams.has(requestId)) {
+      out({ type: 'error', text: 'duplicate stream request id' });
+      out({ type: 'done' });
+      return;
+    }
+    const controller = new AbortController();
+    const state: StreamState = { cancelled: false, controller, sender: event.sender };
+    activeStreams.set(requestId, state);
+    log.info(`streamStart channel=${channel} requestId=${requestId} cid=${payload?.cid || payload?.id || payload?.agent_id || ''}`);
+    try {
+      const ctx = await resolveContext(event.sender);
+      for await (const ev of handler(payload || {}, ctx, controller.signal)) {
+        if (state.cancelled) break;
+        if (ev && ev.type === 'done') continue; // normalize below
+        out(ev);
+      }
+    } catch (err) {
+      log.error(`stream ${channel} failed`, { error: (err as Error)?.message || String(err) });
+      out({ type: 'error', text: (err as Error).message || String(err) });
+    } finally {
+      activeStreams.delete(requestId);
+      log.info(`streamDone channel=${channel} requestId=${requestId} cancelled=${state.cancelled}`);
+      out({ type: 'done' });
+    }
+  });
+
+  ipcMain.on('orkas.streamCancel', (event, rawRequestId: unknown) => {
+    if (!isTrustedIpcSender(event.sender)) return;
+    const requestId = parseStreamRequestId(rawRequestId);
+    if (!requestId) return;
+    const state = activeStreams.get(requestId);
+    if (!state) {
+      log.warn(`streamCancel: unknown requestId=${requestId}`);
+      return;
+    }
+    if (state.sender !== event.sender) {
+      log.warn(`streamCancel: sender mismatch requestId=${requestId}`);
+      return;
+    }
+    log.info(`streamCancel requestId=${requestId}`);
+    state.cancelled = true;
+    // Propagate the cancel into the generator's async work — in particular
+    // the in-flight LLM HTTP call inside `streamChatWithModel`. Without this
+    // the `for await` loop above only breaks on the *next* yield, which can
+    // be minutes away while the provider is blocked on network I/O, and the
+    // `processing` flag stays pinned until the generator's finally runs.
+    try { state.controller.abort(); } catch (_) { /* already aborted */ }
+  });
+}
