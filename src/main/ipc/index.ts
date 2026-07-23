@@ -23,6 +23,7 @@ import * as projectFiles from '../features/project_files';
 import * as projectTasks from '../features/project_tasks';
 import * as projectLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
+import * as companionRepro from '../features/companion_repro';
 import * as p3394 from '../features/p3394';
 import type { GroupEvent } from '../features/group_chat/bus';
 import * as agents from '../features/agents';
@@ -1390,6 +1391,77 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     });
   },
 
+  'companionRepro.getState': async ({ cid }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    return { ok: true, state: await companionRepro.readCompanionReproStateOrCreate(ctx.userId, cid) };
+  },
+
+  'companionRepro.saveDraft': async (payload, ctx) => {
+    const cid = payload?.cid;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const draft = payload?.draft || {};
+    const workspacePath = typeof draft.workspace_path === 'string' ? path.resolve(draft.workspace_path) : '';
+    if (!workspacePath) throw new Error('missing workspace path');
+    if (!isPathAllowed(workspacePath, await _ipcFileSandboxAllowedRoots(ctx.userId, payload))) {
+      throw new Error('path is outside the user workspace');
+    }
+    const state = await companionRepro.saveDraft(ctx.userId, cid, {
+      paper_title: typeof draft.paper_title === 'string' ? draft.paper_title.trim() : undefined,
+      paper_selection: String(draft.paper_selection || '').trim(),
+      repo_url: String(draft.repo_url || '').trim(),
+      commit: String(draft.commit || '').trim(),
+      workspace_path: workspacePath,
+      user_intent: String(draft.user_intent || '').trim(),
+    });
+    return { ok: true, state };
+  },
+
+  'companionRepro.submitGuideMessage': async ({ cid, text }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    return { ok: true, state: await companionRepro.submitGuideMessage(ctx.userId, cid, String(text || '')) };
+  },
+
+  'companionRepro.generateProjectContext': async ({ cid }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    return { ok: true, project_context: await companionRepro.generateProjectContext(ctx.userId, cid) };
+  },
+
+  'companionRepro.applyProjectContextRevision': async ({ cid, before, after, reason }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    return { ok: true, project_context: await companionRepro.applyProjectContextRevision(ctx.userId, cid, {
+      before: String(before || '').trim(),
+      after: String(after || '').trim(),
+      reason: String(reason || '').trim(),
+    }) };
+  },
+
+  'companionRepro.generateTaskContract': async ({ cid }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    return { ok: true, task_contract: await companionRepro.generateTaskContract(ctx.userId, cid) };
+  },
+
+  'companionRepro.confirmTaskContract': async ({ cid }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    return { ok: true, task_contract: await companionRepro.confirmTaskContract(ctx.userId, cid, ctx.userId) };
+  },
+
+  'companionRepro.startExecution': async ({ cid }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const result = await companionRepro.startExecution(ctx.userId, cid, {
+      send: async ({ text }) => {
+        const sent = await groupChat.send({ userId: ctx.userId, cid, text });
+        return sent?.ok ? { ok: true } : { ok: false, error: String((sent as any)?.error || 'send_failed') };
+      },
+    });
+    if (result.ok) return { ok: true, execution: result.execution };
+    return { ok: false, error: 'error' in result ? result.error : 'start_failed' };
+  },
+
+  'companionRepro.readEvidence': async ({ cid, limit }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    return { ok: true, events: await companionRepro.readEvidence(ctx.userId, cid, Number(limit) || 50) };
+  },
+
   'p3394.listWakeRequests': async ({ cid }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
     return { ok: true, requests: await p3394.listWakeRequests(ctx.userId, cid) };
@@ -1464,6 +1536,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const projectIdHint = conversationProjectHint(args);
     const conv = await chats.getConversation(ctx.userId, cid, projectIdHint);
     return groupChat.runtimeStatus(ctx.userId, cid, conv?.project_id ?? projectIdHint);
+  },
+
+  'groupChat.reviewCollaborationGate': async (args, ctx) => {
+    const { cid, gateId, decision, reason } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (!safeId(gateId)) throw new Error('invalid gate id');
+    if (decision !== 'approve' && decision !== 'reject') throw new Error('invalid gate review decision');
+    const projectIdHint = conversationProjectHint(args);
+    const conv = await chats.getConversation(ctx.userId, cid, projectIdHint);
+    if (!conv) throw new Error('conversation not found');
+    return groupChat.reviewCollaborationGate(ctx.userId, cid, gateId, {
+      decision,
+      reviewed_by: 'user',
+      ...(typeof reason === 'string' && reason.trim() ? { reason: reason.trim() } : {}),
+    });
   },
 
   'groupChat.markFormSubmitted': async ({ cid, msgId, formId, values }, ctx) => {

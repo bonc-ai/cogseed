@@ -62,6 +62,14 @@ vi.mock('../../../../src/main/model/client', () => ({
       yield { type: 'done' };
       return;
     }
+    if (String(_opts?.message || '').includes('CONTEXT_PATCH_TEST')) {
+      yield {
+        type: 'final',
+        text: 'Shared state updated.\n<context-patch>\n{"facts_add":[{"text":"Agents can exchange durable state through ContextPatch"}],"open_questions_add":[{"text":"Should Gate become user-reviewable in the next slice?"}]}\n</context-patch>',
+      };
+      yield { type: 'done' };
+      return;
+    }
     const xmlMarker = 'SYNC_CONFLICT_XML_RESULT:';
     const xmlIdx = String(_opts?.message || '').indexOf(xmlMarker);
     if (xmlIdx >= 0) {
@@ -360,6 +368,34 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(call).toContain('name="orkas-1.0.5-update.md"');
     expect(call).toContain('kind="text"');
     expect(call).toContain('total_chars=');
+  });
+
+  it('extracts commander context-patch blocks into the active shared context', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    const collaboration = await import('../../../../src/main/features/group_chat/collaboration');
+    const cid = 'cid-context-patch';
+    const { context } = await collaboration.createWorkflowRun(TEST_UID, cid, {
+      objective: 'Patch extraction integration',
+      kind: 'discussion',
+      created_by: 'commander',
+    });
+
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'user',
+      text: 'CONTEXT_PATCH_TEST',
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const updated = await collaboration.readSharedTaskContext(TEST_UID, cid, context.id);
+    expect(updated?.facts.map((item) => item.text)).toContain('Agents can exchange durable state through ContextPatch');
+    expect(updated?.open_questions.map((item) => item.text)).toContain('Should Gate become user-reviewable in the next slice?');
+
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+    const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+    const reply = lines.find((line) => line.from === 'commander');
+    expect(reply?.text).toBe('Shared state updated.');
+    expect(reply?.text).not.toContain('context-patch');
   });
 
   it('strips commander result markers and records commander model failures', async () => {
@@ -1045,6 +1081,80 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(commanderMsg?.produced).toBeUndefined();
     expect(fs.existsSync(scriptPath)).toBe(true);
     expect(fs.existsSync(shotlistPath)).toBe(true);
+  });
+
+  it('approving a collaboration Gate automatically resumes the commander', async () => {
+    const collaboration = await import('../../../../src/main/features/group_chat/collaboration');
+    const groupChat = await import('../../../../src/main/features/group_chat');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const cid = 'cid-collaboration-gate-auto-resume';
+    const { run } = await collaboration.createWorkflowRun(TEST_UID, cid, {
+      objective: 'Auto resume after gate approval',
+      kind: 'review',
+      created_by: 'commander',
+    });
+    const step = await collaboration.startWorkflowStep(TEST_UID, cid, run.id, {
+      title: 'Manual review',
+      actor_id: 'reviewer',
+      type: 'gate',
+    });
+    const gate = await collaboration.recordGateResult(TEST_UID, cid, run.id, step.id, {
+      name: 'manual_review',
+      status: 'needs_review',
+      reason: 'Wait for approval.',
+      checks: [{ name: 'manual_review_required', status: 'needs_review' }],
+    });
+
+    const result = await groupChat.reviewCollaborationGate(TEST_UID, cid, gate.id, {
+      decision: 'approve',
+      reviewed_by: 'user',
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    expect(result.ok).toBe(true);
+    expect(bus.isQuiescent(TEST_UID, cid)).toBe(true);
+    expect(streamProbe.messages.some((message) => message.includes('<collaboration-gate-resume>'))).toBe(true);
+    expect(streamProbe.messages.some((message) => message.includes('Gate approved: manual_review'))).toBe(true);
+  });
+
+  it('collaboration Gate blocks commander dispatch_to before a named Agent starts', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const collaboration = await import('../../../../src/main/features/group_chat/collaboration');
+    const cid = 'cid-collaboration-dispatch-gate';
+    const processPath = path.join(tmpDir, 'workspace', 'collaboration-blocked-output.json');
+    const { run } = await collaboration.createWorkflowRun(TEST_UID, cid, {
+      objective: 'Blocked dispatch guard',
+      kind: 'review',
+      created_by: 'commander',
+    });
+    const step = await collaboration.startWorkflowStep(TEST_UID, cid, run.id, {
+      title: 'Manual review',
+      actor_id: 'reviewer',
+      type: 'gate',
+    });
+    await collaboration.recordGateResult(TEST_UID, cid, run.id, step.id, {
+      name: 'manual_review',
+      status: 'needs_review',
+      reason: 'Wait for approval.',
+      checks: [{ name: 'manual_review_required', status: 'needs_review' }],
+    });
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: 'user',
+      text: `NESTED_OUTPUT_VISIBILITY_TEST:${Buffer.from(JSON.stringify({
+        tool: 'dispatch_to',
+        path: processPath,
+      })).toString('base64')}`,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const members = await state.readMembers(TEST_UID, cid);
+    expect(members.actors.some((actor) => actor.id === AGENT_ID)).toBe(false);
+    expect(fs.existsSync(processPath)).toBe(false);
+    expect(streamProbe.dispatchResults.some((result) => result.includes('Workflow is blocked by collaboration gate'))).toBe(true);
   });
 
   it('P3394 Wake Gate blocks commander dispatch_to before a named Agent starts', async () => {

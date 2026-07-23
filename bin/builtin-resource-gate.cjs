@@ -30,6 +30,7 @@ const REQUIRED_BUILTIN_INVENTORY = Object.freeze({
   ]),
   marketplace_skills: Object.freeze([
     '6743aa0797a2',
+    '8d2f4b7c9a10',
     '9be6fda271a5',
     'e7f5c0e6f1be',
     'ee99fbb42964',

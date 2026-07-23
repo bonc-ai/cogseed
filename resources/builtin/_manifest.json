@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "9492fb4411957e71463fdc6e8e0c24e8dd1dd7f9301ff2511adf09b133a6dc2c",
+  "content_tree_sha256": "40382ce2bc0d33605154c2602abb6c92ae1cb70ee0e23ea7defe3d018f00dfcf",
   "files": [
     {
       "path": "marketplace/agents/78900d8758bc/_meta.json",
@@ -94,8 +94,8 @@
     },
     {
       "path": "marketplace/agents/79df9cc89f5f/skills/gate-control/scripts/resolve-transition.mjs",
-      "bytes": 12629,
-      "sha256": "566ab4d6dd3e76cb657f6b1b7432832fc3ab2446887e2208edd9c07ee3419214"
+      "bytes": 12738,
+      "sha256": "a6a87788ff21f9f0c094f7ec13b5506992e84bbf7aacd2293b5f45f8a726e80e"
     },
     {
       "path": "marketplace/agents/79df9cc89f5f/skills/gate-control/SKILL.md",
@@ -453,6 +453,16 @@
       "sha256": "d5e622a858d65e3295f5af198748074de261d50bccf72b7527419ade4e6a0da6"
     },
     {
+      "path": "marketplace/skills/8d2f4b7c9a10/_meta.json",
+      "bytes": 64,
+      "sha256": "f7d6fb0c4516d62b3abd2b239f64a2ea415063bd76d8ce9686595457c19849b3"
+    },
+    {
+      "path": "marketplace/skills/8d2f4b7c9a10/SKILL.md",
+      "bytes": 8392,
+      "sha256": "1da9b65e1f1affff87dafb98c2b986c691c1ffc88df2a7b237429b02c1713d5f"
+    },
+    {
       "path": "marketplace/skills/9be6fda271a5/_meta.json",
       "bytes": 64,
       "sha256": "33595bddd2938219c0b712e70bbb5fb2a237355566b45cfd358d1959b3a58b17"
@@ -802,6 +812,12 @@
         "name": "brand-research",
         "version": "1.0.1",
         "updated_at": "2026-07-04T00:00:00"
+      },
+      {
+        "id": "8d2f4b7c9a10",
+        "name": "paper-repro",
+        "version": "1.0.0",
+        "updated_at": "2026-07-23T00:00:00"
       },
       {
         "id": "9be6fda271a5",

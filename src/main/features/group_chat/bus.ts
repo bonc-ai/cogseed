@@ -49,6 +49,14 @@ import {
   type WakeRequestSummary,
 } from './visibility';
 import {
+  applyContextPatch,
+  buildSharedContextSummary,
+  extractContextPatchBlocks,
+  readActiveSharedTaskContext,
+  readCollaborationSnapshot,
+  recordNestedDispatchStep,
+} from './collaboration';
+import {
   resolveRecipients, parseMentions, buildMention,
   extractFormFromFinal, computeFormId, ChatFormPayload,
   extractHandbackFromFinal,
@@ -2143,7 +2151,7 @@ async function runActorTurn(
     // and reuse the agent-in-group prompt (duck-typed). The default tool set
     // (files / shell / kb / …) comes from the runner like any LLM turn; no
     // extraTools, no skills, no inputs/forms (headless — see WORKER_WORKFLOW).
-    systemPrompt = await buildAgentInGroupSystemPrompt(uid, {
+    systemPrompt = await buildAgentInGroupSystemPrompt(uid, cid, {
       agent_id: actor.id,
       name: actor.name || 'Worker',
       description: 'Ephemeral sub-task worker spun up by the commander.',
@@ -2183,7 +2191,7 @@ async function runActorTurn(
       cliAgent = agent;
       systemPrompt = ''; // unused on CLI path
     } else {
-      systemPrompt = await buildAgentInGroupSystemPrompt(uid, agent, workingDir);
+      systemPrompt = await buildAgentInGroupSystemPrompt(uid, cid, agent, workingDir);
       // Runtime skills start from the agent-authored skill_list and append
       // agent-owned private/self-evolved skills. User-explicit picker choices
       // are appended at the tail even if they are outside the authored list.
@@ -2434,7 +2442,7 @@ async function runActorTurn(
             });
           },
         });
-        const { parseHermesCommanderDecision } = await import('../commander_backends/hermes');
+        const { parseHermesCommanderDecision, hasHermesCommanderDispatchClaim } = await import('../commander_backends/hermes');
         const decision = parseHermesCommanderDecision(hermesOut.text);
         if (decision) {
           if (decision.kind === 'reply' || decision.kind === 'ask_user') {
@@ -2484,6 +2492,9 @@ async function runActorTurn(
             }
             streamingText = finalText;
           }
+        } else if (hasHermesCommanderDispatchClaim(hermesOut.text)) {
+          finalText = t('commander.hermes.dispatch_claim_blocked');
+          streamingText = finalText;
         } else {
           finalText = hermesOut.text;
           streamingText = hermesOut.text;
@@ -2783,6 +2794,28 @@ async function runActorTurn(
     if (result.status) {
       workingText = result.cleanText;
       if (!errText && !aborted) actorRunStatus = result.status;
+    }
+  }
+
+  if ((actor.kind === 'agent' || isCommander) && workingText && !errText && !aborted) {
+    const extracted = extractContextPatchBlocks(workingText, actor.id || (isCommander ? COMMANDER_ID : 'agent'));
+    if (extracted.errors.length) {
+      log.warn(`context_patch parse warnings cid=${cid} actor=${actor.id}: ${extracted.errors.join('; ')}`);
+    }
+    if (extracted.patches.length) {
+      try {
+        const activeContext = await readActiveSharedTaskContext(uid, cid);
+        if (activeContext) {
+          for (const patch of extracted.patches) {
+            await applyContextPatch(uid, cid, activeContext.id, patch);
+          }
+          workingText = extracted.cleanText;
+        } else {
+          log.warn(`context_patch ignored because no active shared context cid=${cid} actor=${actor.id}`);
+        }
+      } catch (err) {
+        log.warn(`context_patch apply failed cid=${cid} actor=${actor.id}: ${(err as Error).message}`);
+      }
     }
   }
 
@@ -3390,6 +3423,38 @@ async function runActorTurn(
 
 // ── System prompts ───────────────────────────────────────────────────────
 
+async function buildActiveSharedTaskContextBlock(uid: string, cid: string): Promise<string> {
+  try {
+    const active = await readActiveSharedTaskContext(uid, cid);
+    if (!active) return '';
+    const summary = await buildSharedContextSummary(uid, cid, active.id);
+    if (!summary.trim()) return '';
+    const snapshot = await readCollaborationSnapshot(uid, cid).catch(() => null);
+    const gate = snapshot?.blocking_gate;
+    const gateBlock = gate
+      ? [
+        '',
+        '### Blocking Gate',
+        `Gate: ${gate.name}`,
+        `Status: ${gate.status}`,
+        gate.reason ? `Reason: ${gate.reason}` : '',
+        'Instruction: this workflow is blocked. Do not call dispatch_to, hand_off_to, or run_worker until the user approves/rejects the gate or explicitly asks for a non-dispatch explanation of the blocker.',
+      ].filter(Boolean).join('\n')
+      : '';
+    return `### Shared task context
+<shared-task-context>
+${summary.trim()}${gateBlock}
+</shared-task-context>`;
+  } catch (err) {
+    log.warn(`shared task context prompt injection failed cid=${cid}: ${(err as Error).message}`);
+    return '';
+  }
+}
+
+export async function _buildActiveSharedTaskContextBlockForTest(uid: string, cid: string): Promise<string> {
+  return buildActiveSharedTaskContextBlock(uid, cid);
+}
+
 async function buildCommanderSystemPrompt(
   uid: string,
   cid: string,
@@ -3433,6 +3498,7 @@ async function buildCommanderSystemPrompt(
       : '',
     local_exec_state: permState,
     env_summary: envSummary,
+    shared_task_context_block: await buildActiveSharedTaskContextBlock(uid, cid),
     output_format_hint: buildOutputFormatHint('auto'),
   });
   const shared = prompts.load('chat_shared_rules', {});
@@ -3540,7 +3606,8 @@ async function buildAgentsIndexBlock(uid: string, allowedIds?: readonly string[]
 }
 
 async function buildAgentInGroupSystemPrompt(
-  _uid: string,
+  uid: string,
+  cid: string,
   agent: { name?: string; description?: string; description_zh?: string; description_en?: string; workflow?: string; agent_id: string; inputs?: unknown; output_format?: string; interactive?: boolean; profile?: unknown },
   workingDir: string,
 ): Promise<string> {
@@ -3568,6 +3635,7 @@ async function buildAgentInGroupSystemPrompt(
     workflow: (agent.workflow || '').trim() || '(not provided)',
     agent_runtime_guidance: runtimeGuidance,
     inputs_schema: inputsSchemaJson || '(none)',
+    shared_task_context_block: await buildActiveSharedTaskContextBlock(uid, cid),
     working_dir: workingDir,
     output_format_hint: buildOutputFormatHint(agent.output_format),
     plan_interaction_hint: buildPlanInteractionHint(agent.interactive === true),
@@ -4124,6 +4192,18 @@ function buildSkillSearchTool(uid: string): AgentTool {
 }
 
 
+async function blockedByCollaborationGateToolResult(uid: string, cid: string): Promise<ReturnType<typeof _toolError> | null> {
+  try {
+    const snapshot = await readCollaborationSnapshot(uid, cid);
+    if (!snapshot || snapshot.status !== 'blocked' || !snapshot.blocking_gate) return null;
+    const gate = snapshot.blocking_gate;
+    return _toolError(`Workflow is blocked by collaboration gate "${gate.name}" (${gate.status}). Do not dispatch more agents until the user reviews the gate. Reason: ${gate.reason || 'none'}`);
+  } catch (err) {
+    log.warn(`collaboration gate dispatch guard failed cid=${cid}: ${(err as Error).message}`);
+    return null;
+  }
+}
+
 async function buildCommanderExtraTools(
   state: CidState,
   w: WorkerState,
@@ -4523,6 +4603,8 @@ async function buildCommanderExtraTools(
       if (!message) {
         return { content: JSON.stringify({ ok: false, error: '`message` is required' }), isError: true };
       }
+      const blocked = await blockedByCollaborationGateToolResult(uid, cid);
+      if (blocked) return blocked;
       // Resolve `to` → actor id via the shared name-map resolver.
       const resolvedId = await resolveDispatchTarget(cid, toRaw);
       if (!resolvedId) {
@@ -4546,6 +4628,14 @@ async function buildCommanderExtraTools(
       // bubble (commander loop bubbles).
       await onVisibleDispatch?.();
       const dispatchResult = await runNestedDispatch(state, ctx?.signal, dispatchActor, message, currentTurnAttachments, 'process');
+      void recordNestedDispatchStep(uid, cid, {
+        objective: _unwrapLlmTurnPayload(currentTurnPayload) || currentTurnPayload,
+        actor_id: resolvedId,
+        actor_name: dispatchActor.name,
+        source_tool: 'dispatch_to',
+        task: message,
+        result: dispatchResult,
+      }).catch((err) => log.warn(`collaboration dispatch_to record failed cid=${cid}: ${(err as Error).message}`));
       try {
         await _setFormWaitLedgerFromWorkerResult({
           uid, cid,
@@ -4596,6 +4686,8 @@ async function buildCommanderExtraTools(
       const resume = String(input?.resume || '').trim();
       if (!toRaw) return _toolError('`to` is required');
       if (!message) return _toolError('`message` is required');
+      const blocked = await blockedByCollaborationGateToolResult(uid, cid);
+      if (blocked) return blocked;
       const resolvedId = await resolveDispatchTarget(cid, toRaw);
       if (!resolvedId) return _toolError(t('errors.unknown_actor', { name: toRaw }));
       if (resolvedId === COMMANDER_ID || resolvedId === USER_ID) {
@@ -4635,6 +4727,14 @@ async function buildCommanderExtraTools(
       // Run the agent's turn — it posts its reply straight to the user (same path
       // as dispatch, but we do NOT read the result back to synthesize).
       const handoffResult = await runNestedDispatch(state, ctx?.signal, handoffActor, message, currentTurnAttachments, 'final');
+      void recordNestedDispatchStep(uid, cid, {
+        objective: _unwrapLlmTurnPayload(currentTurnPayload) || currentTurnPayload,
+        actor_id: resolvedId,
+        actor_name: handoffActor.name,
+        source_tool: 'hand_off_to',
+        task: message,
+        result: handoffResult,
+      }).catch((err) => log.warn(`collaboration hand_off_to record failed cid=${cid}: ${(err as Error).message}`));
       if (resume && handoffAgent?.interactive !== true) {
         try {
           const blocked = await _setFormWaitLedgerFromWorkerResult({
@@ -4717,6 +4817,8 @@ async function buildCommanderExtraTools(
       const task = String(input?.task || '').trim();
       const resume = String(input?.resume || '').trim();
       if (!task) return _toolError('`task` is required');
+      const blocked = await blockedByCollaborationGateToolResult(uid, cid);
+      if (blocked) return blocked;
       if (!toRaw) {
         // Anonymous ephemeral worker — the commander's private isolated helper. G8d step 3:
         // run it in-process, synchronously, and hand its FULL result straight
@@ -4724,6 +4826,14 @@ async function buildCommanderExtraTools(
         // turn-end flush, no re-wake; the handback IS the tool result).
         const workerActor: Actor = { kind: 'worker', id: genId12(), name: 'Worker', joined_at: nowIso() };
         const result = await runNestedDispatch(state, ctx?.signal, workerActor, task, currentTurnAttachments, 'process');
+        void recordNestedDispatchStep(uid, cid, {
+          objective: _unwrapLlmTurnPayload(currentTurnPayload) || currentTurnPayload,
+          actor_id: workerActor.id,
+          actor_name: workerActor.name,
+          source_tool: 'run_worker',
+          task,
+          result,
+        }).catch((err) => log.warn(`collaboration anonymous run_worker record failed cid=${cid}: ${(err as Error).message}`));
         return { content: result };
       }
       const resolvedId = await resolveDispatchTarget(cid, toRaw);
@@ -4745,6 +4855,14 @@ async function buildCommanderExtraTools(
       // pre-dispatch reasoning first (commander loop bubbles).
       await onVisibleDispatch?.();
       const namedResult = await runNestedDispatch(state, ctx?.signal, namedActor, task, currentTurnAttachments, 'process');
+      void recordNestedDispatchStep(uid, cid, {
+        objective: _unwrapLlmTurnPayload(currentTurnPayload) || currentTurnPayload,
+        actor_id: resolvedId,
+        actor_name: namedActor.name,
+        source_tool: 'run_worker',
+        task,
+        result: namedResult,
+      }).catch((err) => log.warn(`collaboration run_worker record failed cid=${cid}: ${(err as Error).message}`));
       try {
         await _setFormWaitLedgerFromWorkerResult({
           uid, cid,
@@ -4983,7 +5101,8 @@ async function _runHermesCommanderTurn(opts: {
     '{"kind":"dispatch_to","targetAgentId":"agent name or id","task":"...","reason":"..."}',
     '{"kind":"hand_off_to","targetAgentId":"agent name or id","task":"...","reason":"..."}',
     '{"kind":"run_worker","task":"...","targetAgentId":"optional agent name or id","reason":"..."}',
-    'Do not include extra JSON fields. Otherwise answer normally in text.',
+    'Do not include extra JSON fields. Text cannot start agents or create delegation ids. Never claim that dispatch/background execution started unless you output one of the strict JSON orchestration objects above; the host blocks text-only dispatch claims.',
+    'If you are not orchestrating, answer normally in text.',
     '</commander-system>',
     '',
     '<user-message>',
@@ -5441,6 +5560,8 @@ async function _buildCliPrompt(
     taskBody = item.llmPayload;
   }
 
+  const sharedContextBlock = await buildActiveSharedTaskContextBlock(uid, cid);
+
   const render = (conversationBlock: string) => prompts.load('chat_cli_agent', {
     agent_name: agent.name || agent.agent_id,
     agent_description: (agent.description_en || agent.description_zh || '').trim(),
@@ -5449,6 +5570,7 @@ async function _buildCliPrompt(
     language_block: buildLanguageDirective(getLanguage()),
     attachments_block: filesBlock,
     conversation_block: conversationBlock,
+    shared_task_context_block: sharedContextBlock,
     task_body: taskBody,
     runtime_datetime_block: buildRuntimeDatetimeBlock(),
   });

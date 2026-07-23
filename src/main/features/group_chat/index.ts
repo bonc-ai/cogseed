@@ -31,6 +31,11 @@ import {
   abort as busAbort, dropConv as busDropConv, enqueue, subscribe, isQuiescent, runtimeSnapshot,
   type GroupEvent,
 } from './bus';
+import {
+  readCollaborationSnapshot,
+  reviewCollaborationGate as reviewGateFeature,
+  type CollaborationSnapshot,
+} from './collaboration';
 
 /** Re-export so the IPC layer can poll the bus's true quiescent state on
  *  every state_changed event — the on-disk state.json briefly shows 'idle'
@@ -38,11 +43,55 @@ import {
  *  authoritative source. */
 export const busIsQuiescent = isQuiescent;
 
+export interface GroupChatRuntimeStatus {
+  processing: boolean;
+  processing_since: string | null;
+  in_flight: string[];
+  active_turns: Array<{ actor: string; turn_id: string; msg_id?: string; started_at_ms: number }>;
+  active_recipient?: string;
+  collaboration?: CollaborationSnapshot;
+}
+
+export async function reviewCollaborationGate(
+  userId: string,
+  cid: string,
+  gateId: string,
+  input: { decision: 'approve' | 'reject'; reviewed_by?: string; reason?: string },
+): Promise<{ ok: true; collaboration: CollaborationSnapshot | null }> {
+  if (!safeId(cid)) throw new Error('invalid cid');
+  if (!safeId(gateId)) throw new Error('invalid gate id');
+  if (input.decision !== 'approve' && input.decision !== 'reject') throw new Error('invalid gate review decision');
+  const reviewed = await reviewGateFeature(userId, cid, gateId, {
+    decision: input.decision,
+    reviewed_by: input.reviewed_by || 'user',
+    ...(typeof input.reason === 'string' && input.reason.trim() ? { reason: input.reason.trim() } : {}),
+  });
+  const collaboration = await readCollaborationSnapshot(userId, cid);
+  if (input.decision === 'approve') {
+    await enqueue({
+      uid: userId,
+      cid,
+      fromActorId: USER_ID,
+      text: 'Continue workflow',
+      model_text: [
+        '<collaboration-gate-resume>',
+        `Gate approved: ${reviewed.gate.name}`,
+        `Gate id: ${reviewed.gate.id}`,
+        `Workflow run id: ${reviewed.run.id}`,
+        'Continue the workflow from the shared task context. Do not repeat completed steps; choose the next unblocked step or explain if nothing remains.',
+        '</collaboration-gate-resume>',
+      ].join('\n'),
+      forceTo: [COMMANDER_ID],
+    });
+  }
+  return { ok: true, collaboration };
+}
+
 export async function runtimeStatus(
   userId: string,
   cid: string,
   projectIdHint?: string | null,
-): Promise<{ processing: boolean; processing_since: string | null; in_flight: string[]; active_turns: Array<{ actor: string; turn_id: string; msg_id?: string; started_at_ms: number }>; active_recipient?: string }> {
+): Promise<GroupChatRuntimeStatus> {
   if (!safeId(cid)) return { processing: false, processing_since: null, in_flight: [], active_turns: [] };
   try {
     const state = await readState(userId, cid, projectIdHint);
@@ -50,6 +99,11 @@ export async function runtimeStatus(
     const diskInFlight = Array.isArray(state.in_flight)
       ? state.in_flight.filter(Boolean)
       : [];
+    const collaboration = await readCollaborationSnapshot(userId, cid).catch((err) => {
+      log.warn(`collaboration snapshot unavailable user=${userId} cid=${cid}: ${(err as Error).message}`);
+      return null;
+    });
+    const collaborationPart = collaboration ? { collaboration } : {};
     // The conversation floor — included so a renderer reload / recovery poll
     // restores the composer target (the agent the commander handed off to)
     // instead of dropping back to the commander until the next state_changed.
@@ -57,7 +111,7 @@ export async function runtimeStatus(
     if ((state.status === 'running' || diskInFlight.length > 0) && !runtime.processing) {
       log.warn(`healing orphan running state user=${userId} cid=${cid} status=${state.status} in_flight=${diskInFlight.join(',')}`);
       await setStatus(userId, cid, 'idle');
-      return { processing: false, processing_since: null, in_flight: [], active_turns: [], ...floor };
+      return { processing: false, processing_since: null, in_flight: [], active_turns: [], ...collaborationPart, ...floor };
     }
     const inFlight = Array.from(new Set([
       ...diskInFlight,
@@ -69,6 +123,7 @@ export async function runtimeStatus(
       processing_since: processing ? (state.last_active_at || null) : null,
       in_flight: inFlight,
       active_turns: runtime.activeTurns,
+      ...collaborationPart,
       ...floor,
     };
   } catch {

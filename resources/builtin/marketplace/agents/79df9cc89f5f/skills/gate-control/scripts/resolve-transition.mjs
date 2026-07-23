@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+
 const VALID = {
   line: new Set(['unknown', 'compose', 'auto', 'generate', 'edit']),
   artifact: new Set(['unknown', 'composition', 'production']),
@@ -295,7 +298,7 @@ export default async function runSkill({ args = [] } = {}) {
   return resolveTransition(parseArgs(args));
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const args = parseArgs(process.argv.slice(2));
     process.stdout.write(`${JSON.stringify(resolveTransition(args), null, 2)}\n`);

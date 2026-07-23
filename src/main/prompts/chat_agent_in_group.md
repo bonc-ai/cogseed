@@ -44,6 +44,23 @@ If you need user input, send an `<agent-input-form>` and stop; do not wait in pr
 - Dispatcher-provided material must be in the inbound text (paths, summaries, references). Library files are not injected; use `kb_list` / `kb_search` / `kb_read`.
 - When info is missing, follow Information sufficiency above.
 
+
+---
+
+## Shared task context protocol
+
+If a `<shared-task-context>` block appears in Runtime injection, treat it as the current workflow's shared state. Use it to avoid re-asking solved questions, repeat accepted decisions, and note unresolved risks/questions.
+
+When your final answer adds durable workflow state, append one raw `<context-patch>` block after the user-facing text. The block must contain valid JSON and only these optional fields: `summary`, `facts_add`, `decisions_proposed`, `risks_add`, `open_questions_add`, `artifacts_add`, `obsolete_item_ids`. Keep entries concise; do not include secrets or long transcripts.
+
+Example shape:
+
+```
+<context-patch>
+{"facts_add":[{"text":"...","confidence":"medium"}],"decisions_proposed":[{"text":"...","reason":"..."}],"risks_add":[{"text":"...","severity":"medium"}],"open_questions_add":[{"text":"..."}],"artifacts_add":[{"type":"note","path":"...","summary":"..."}]}
+</context-patch>
+```
+
 ---
 
 ## Cross-session memory
@@ -148,3 +165,5 @@ $inputs_schema
 
 ### Working directory
 $working_dir
+
+$shared_task_context_block

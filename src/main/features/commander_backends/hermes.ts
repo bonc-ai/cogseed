@@ -38,3 +38,25 @@ export function parseHermesCommanderDecision(text: string): CommanderDecision | 
   if ((out.kind === 'reply' || out.kind === 'ask_user') && !out.message) return null;
   return out;
 }
+
+
+const DISPATCH_CLAIM_PATTERNS = [
+  /delegation_id\s*[:：]\s*deleg_[A-Za-z0-9_-]+/i,
+  /(?:已|真正|已经)\s*(?:启动|派发|调度|dispatch)/i,
+  /(?:后台|并行).*?(?:运行中|执行中|跑)/i,
+  /(?:运行中|执行中).*?(?:@|agent|Agent|智能体)/i,
+];
+
+const NON_EXECUTION_HINTS = [
+  /还没有执行/,
+  /未执行/,
+  /没有(?:真正)?(?:启动|调度|dispatch)/i,
+  /建议.*(?:dispatch_to|调度|派发)/i,
+];
+
+export function hasHermesCommanderDispatchClaim(text: string): boolean {
+  const value = String(text || '');
+  if (!value.trim()) return false;
+  if (NON_EXECUTION_HINTS.some((pattern) => pattern.test(value))) return false;
+  return DISPATCH_CLAIM_PATTERNS.some((pattern) => pattern.test(value));
+}
