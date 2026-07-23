@@ -1929,5 +1929,9 @@
   "settings.modal.base_url": "Base URL",
   "settings.modal.model_id": "模型 ID",
   "settings.modal.base_url_required": "请填写 Base URL",
-  "settings.modal.model_required": "请填写模型 ID"
+  "settings.modal.model_required": "请填写模型 ID",
+  "settings.custom.label": "标签",
+  "settings.custom.base_url": "Base URL",
+  "settings.custom.model_id": "模型 ID",
+  "settings.custom.api_key": "API Key"
 }

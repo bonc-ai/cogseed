@@ -1929,5 +1929,9 @@
   "settings.modal.base_url": "Base URL",
   "settings.modal.model_id": "Model ID",
   "settings.modal.base_url_required": "Please enter a Base URL",
-  "settings.modal.model_required": "Please enter a model ID"
+  "settings.modal.model_required": "Please enter a model ID",
+  "settings.custom.label": "Label",
+  "settings.custom.base_url": "Base URL",
+  "settings.custom.model_id": "Model ID",
+  "settings.custom.api_key": "API Key"
 }

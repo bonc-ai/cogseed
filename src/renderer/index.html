@@ -1127,6 +1127,24 @@
                   <label data-i18n="settings.model">Model</label>
                   <div class="ai-select" id="settings-picker-model"></div>
                 </div>
+                <div id="settings-custom-model-fields" hidden>
+                  <div class="settings-row">
+                    <label data-i18n="settings.custom.label">Label</label>
+                    <input type="text" class="form-input" id="settings-custom-label-input" autocomplete="off" spellcheck="false" />
+                  </div>
+                  <div class="settings-row">
+                    <label data-i18n="settings.custom.base_url">Base URL</label>
+                    <input type="text" class="form-input" id="settings-custom-base-url-input" placeholder="https://api.example.com/v1" autocomplete="off" spellcheck="false" />
+                  </div>
+                  <div class="settings-row">
+                    <label data-i18n="settings.custom.model_id">Model ID</label>
+                    <input type="text" class="form-input" id="settings-custom-model-input" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false" />
+                  </div>
+                  <div class="settings-row">
+                    <label data-i18n="settings.custom.api_key">API Key</label>
+                    <input type="text" class="form-input" id="settings-custom-api-key-input" placeholder="sk-…" autocomplete="off" spellcheck="false" />
+                  </div>
+                </div>
                 <div class="settings-row settings-model-auth-actions">
                   <button class="btn btn-primary" id="settings-add-entry-btn" data-i18n="settings.add_account">+ Add account</button>
                   <span class="settings-status" id="settings-picker-status"></span>

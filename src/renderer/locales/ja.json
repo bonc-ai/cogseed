@@ -1816,5 +1816,9 @@
   "settings.modal.base_url": "Base URL",
   "settings.modal.model_id": "モデル ID",
   "settings.modal.base_url_required": "Base URL を入力してください",
-  "settings.modal.model_required": "モデル ID を入力してください"
+  "settings.modal.model_required": "モデル ID を入力してください",
+  "settings.custom.label": "ラベル",
+  "settings.custom.base_url": "Base URL",
+  "settings.custom.model_id": "モデル ID",
+  "settings.custom.api_key": "API Key"
 }

@@ -15,6 +15,7 @@ class FakeElement {
   dataset: Record<string, string> = {};
   classList = new FakeClassList();
   className = '';
+  hidden = false;
   private _innerHTML = '';
   value = '';
   textContent = '';
@@ -72,6 +73,11 @@ function loadSettingsClickHarness() {
     'settings-picker-model',
     'settings-add-entry-btn',
     'settings-picker-status',
+    'settings-custom-model-fields',
+    'settings-custom-label-input',
+    'settings-custom-base-url-input',
+    'settings-custom-model-input',
+    'settings-custom-api-key-input',
     'add-account-modal',
     'add-account-title',
     'add-account-body',
@@ -199,14 +205,12 @@ describe('settings model authorization add account', () => {
 
     await vm.runInContext('_settingsRenderPicker()', context);
     await vm.runInContext("_settingsState.pickerProviderSel.emitChange('openai-compatible')", context);
+    expect(elements.get('settings-custom-model-fields')!.hidden).toBe(false);
+    elements.get('settings-custom-label-input')!.value = 'work';
+    elements.get('settings-custom-base-url-input')!.value = 'https://llm.example.test/v1';
+    elements.get('settings-custom-model-input')!.value = 'custom-chat';
+    elements.get('settings-custom-api-key-input')!.value = 'sk-custom-xxxxxxxx';
     await elements.get('settings-add-entry-btn')!.click();
-
-    const body = elements.get('add-account-body')!;
-    body.querySelector('.api-label-input')!.value = 'work';
-    body.querySelector('.api-base-url-input')!.value = 'https://llm.example.test/v1';
-    body.querySelector('.api-model-input')!.value = 'custom-chat';
-    body.querySelector('.api-key-input')!.value = 'sk-custom-xxxxxxxx';
-    await elements.get('add-account-actions')!.appended[1].click();
 
     expect(invoke).toHaveBeenCalledWith('auth.addApiKey', {
       provider: 'openai-compatible',

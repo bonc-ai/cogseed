@@ -1816,5 +1816,9 @@
   "settings.modal.base_url": "Base URL",
   "settings.modal.model_id": "ID do modelo",
   "settings.modal.base_url_required": "Informe uma Base URL",
-  "settings.modal.model_required": "Informe um ID de modelo"
+  "settings.modal.model_required": "Informe um ID de modelo",
+  "settings.custom.label": "Etiqueta",
+  "settings.custom.base_url": "Base URL",
+  "settings.custom.model_id": "ID do modelo",
+  "settings.custom.api_key": "Chave de API"
 }

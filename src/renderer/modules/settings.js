@@ -598,6 +598,13 @@ async function _settingsDetectCommanderBackend() {
   _settingsSetStatus('settings-commander-backend-status', res.hermes && res.hermes.available ? 'ok' : 'error', res.hermes && res.hermes.available ? t('settings.commander_backend.detect_ok') : t('settings.commander_backend.detect_missing'));
 }
 
+function _settingsSyncCustomModelFields(providerId) {
+  const provider = _settingsState.providers.find((p) => p.id === providerId);
+  const box = document.getElementById('settings-custom-model-fields');
+  if (!box) return;
+  box.hidden = !(provider && provider.manualModel);
+}
+
 async function _settingsGetModels(providerId) {
   if (!providerId) return [];
   if (_settingsState.modelsCache[providerId]) return _settingsState.modelsCache[providerId];
@@ -640,6 +647,7 @@ async function _settingsRenderPicker() {
       placeholder: t('settings.picker.select_provider'),
     });
     _settingsState.pickerProviderSel.onChange(async (val) => {
+      _settingsSyncCustomModelFields(val);
       await _settingsPopulatePickerModel(val, '');
       _settingsSetStatus('settings-picker-status', '', '');
     });
@@ -648,6 +656,7 @@ async function _settingsRenderPicker() {
     value: prevProvider,
     placeholder: t('settings.picker.select_provider'),
   });
+  _settingsSyncCustomModelFields(_settingsState.pickerProviderSel.getValue());
 
   const prevModel = _settingsState.pickerModelSel?.getValue()
     || modelEl.dataset.value
@@ -670,6 +679,15 @@ async function _settingsRenderPicker() {
   if (addBtn && _settingsState.addBtnEl !== addBtn) {
     _settingsState.addBtnEl = addBtn;
     addBtn.addEventListener('click', _settingsClickAddEntry);
+    for (const id of ['settings-custom-label-input', 'settings-custom-base-url-input', 'settings-custom-model-input', 'settings-custom-api-key-input']) {
+      const input = document.getElementById(id);
+      if (!input || input.dataset.boundCustomModel) continue;
+      input.dataset.boundCustomModel = '1';
+      input.addEventListener('keydown', (e) => {
+        if (e.isComposing || e.keyCode === 229) return;
+        if (e.key === 'Enter') { _settingsClickAddEntry(); e.preventDefault(); }
+      });
+    }
   }
 }
 
@@ -688,6 +706,44 @@ async function _settingsPopulatePickerModel(providerId, selected) {
   );
 }
 
+async function _settingsAddManualModelEntry(provider) {
+  const labelEl = document.getElementById('settings-custom-label-input');
+  const baseUrlEl = document.getElementById('settings-custom-base-url-input');
+  const modelEl = document.getElementById('settings-custom-model-input');
+  const keyEl = document.getElementById('settings-custom-api-key-input');
+  const label = (labelEl?.value || '').trim();
+  const baseUrl = (baseUrlEl?.value || '').trim();
+  const model = (modelEl?.value || '').trim();
+  const apiKey = (keyEl?.value || '').trim();
+  if (!baseUrl) { _settingsSetStatus('settings-picker-status', 'error', t('settings.modal.base_url_required')); return; }
+  if (!model) { _settingsSetStatus('settings-picker-status', 'error', t('settings.modal.model_required')); return; }
+  if (!apiKey) { _settingsSetStatus('settings-picker-status', 'error', t('settings.paste_key_first')); return; }
+
+  _settingsSetStatus('settings-picker-status', '', t('settings.save_loading'));
+  const addRes = await window.orkas.invoke('auth.addApiKey', {
+    provider: provider.id,
+    apiKey,
+    label: label || undefined,
+    baseUrl,
+  });
+  if (!addRes || !addRes.ok) {
+    _settingsSetStatus('settings-picker-status', 'error', (addRes && addRes.error) || t('settings.save_failed'));
+    return;
+  }
+  const entryRes = await window.orkas.invoke('auth.addEntry', {
+    provider: provider.id,
+    model,
+    profileId: addRes.profileId,
+  });
+  if (!entryRes || !entryRes.ok) {
+    _settingsSetStatus('settings-picker-status', 'error', (entryRes && entryRes.error) || t('settings.add_entry_failed'));
+    return;
+  }
+  _settingsSetStatus('settings-picker-status', 'ok', t('settings.save_ok'));
+  if (keyEl) keyEl.value = '';
+  await _settingsReload();
+}
+
 async function _settingsClickAddEntry() {
   const providerId = _settingsState.pickerProviderSel?.getValue() || '';
   let modelId    = _settingsState.pickerModelSel?.getValue() || '';
@@ -695,8 +751,11 @@ async function _settingsClickAddEntry() {
 
   const provider = _settingsState.providers.find((p) => p.id === providerId);
   if (!provider) { _settingsSetStatus('settings-picker-status', 'error', t('settings.picker.error_provider_missing')); return; }
-  if (provider.manualModel) modelId = '';
-  if (!provider.manualModel && !modelId) { _settingsSetStatus('settings-picker-status', 'error', t('settings.picker.error_model_needed')); return; }
+  if (provider.manualModel) {
+    await _settingsAddManualModelEntry(provider);
+    return;
+  }
+  if (!modelId) { _settingsSetStatus('settings-picker-status', 'error', t('settings.picker.error_model_needed')); return; }
 
   _settingsSetStatus('settings-picker-status', '', '');
   _settingsChooseAccountMethod(provider, modelId);
