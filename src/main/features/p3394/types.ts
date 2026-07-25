@@ -1,14 +1,15 @@
 export type WakeSource =
-  | 'user_mention'
-  | 'dispatch_to'
-  | 'hand_off_to'
-  | 'run_worker'
-  | 'plan_step'
-  | 'resume'
-  | 'ui_select';
+  | "user_mention"
+  | "dispatch_to"
+  | "hand_off_to"
+  | "run_worker"
+  | "plan_step"
+  | "resume"
+  | "ui_select";
 
-export type WakeRequestStatus = 'pending' | 'approved' | 'rejected' | 'executed' | 'expired';
-export type WakeApprovalStatus = 'active' | 'revoked' | 'expired';
+export type WakeRequestStatus =
+  "pending" | "approved" | "rejected" | "executed" | "expired";
+export type WakeApprovalStatus = "active" | "revoked" | "expired";
 
 export interface WakeDispatchPayload {
   text: string;
@@ -36,6 +37,13 @@ export interface AgentWakeRequest {
   updated_at: string;
   decided_at?: string;
   executed_at?: string;
+  /** Commander-owned continuation to restore if a wake-gated hand_off_to is approved. */
+  resume_instruction?: string;
+  /** Bound collaboration workflow step for exact-once nested dispatch lifecycle. */
+  workflow_step_id?: string;
+  workflow_resume_token?: string;
+  pending_cleanup_step_ids?: string[];
+  workflow_transition?: "rejecting" | "approving";
 }
 
 export interface WakeApproval {
@@ -69,6 +77,9 @@ export interface EvaluateWakeInput {
   sourceMessageId?: string;
   objective: string;
   dispatchPayload: WakeDispatchPayload;
+  resumeInstruction?: string;
+  workflow_step_id?: string;
+  workflow_resume_token?: string;
 }
 
 export type WakeEvaluation =

@@ -47,20 +47,6 @@ If you need user input, send an `<agent-input-form>` and stop; do not wait in pr
 
 ---
 
-## Shared task context protocol
-
-If a `<shared-task-context>` block appears in Runtime injection, treat it as the current workflow's shared state. Use it to avoid re-asking solved questions, repeat accepted decisions, and note unresolved risks/questions.
-
-When your final answer adds durable workflow state, append one raw `<context-patch>` block after the user-facing text. The block must contain valid JSON and only these optional fields: `summary`, `facts_add`, `decisions_proposed`, `risks_add`, `open_questions_add`, `artifacts_add`, `obsolete_item_ids`. Keep entries concise; do not include secrets or long transcripts.
-
-Example shape:
-
-```
-<context-patch>
-{"facts_add":[{"text":"...","confidence":"medium"}],"decisions_proposed":[{"text":"...","reason":"..."}],"risks_add":[{"text":"...","severity":"medium"}],"open_questions_add":[{"text":"..."}],"artifacts_add":[{"type":"note","path":"...","summary":"..."}]}
-</context-patch>
-```
-
 ---
 
 ## Cross-session memory
@@ -144,6 +130,11 @@ Tools are auto-registered; call them by name (`read_file` / `bash` / `kb_search`
 $output_format_hint
 
 ---
+
+## Chunked writing protocol
+
+When producing long-form documents or large file edits (for example reports, papers, chapters, datasets, or source files), split the work into small chunks instead of trying to emit the entire artifact in one model turn. For `write_file.content` or similarly large tool arguments, keep each chunk under 6000 characters and write one chunk per turn/tool call. If the deliverable needs more content, write the first chunk, clearly note the continuation point, and continue in a later turn or after the commander schedules the next small step.
+
 
 ## Runtime injection
 

@@ -227,6 +227,10 @@ export interface Agent {
    *  via the dedicated `chat_agent_setup_cli.md` prompt; the LLM
    *  doesn't author it directly. */
   runtime?: AgentRuntime;
+  /** Normalized Orkas agent protocol contract. Derived at load time and
+   *  optionally persisted so runtime callers have one stable governance shape
+   *  for in-process agents and external CLI expert agents. */
+  interface_contract?: AgentInterfaceContract;
   /** Marketplace category code. Empty string only for legacy/manual specs.
    *  Maintained by hidden create defaults and by the agent-edit LLM's `<category>` sub-tag. */
   category: string;
@@ -296,6 +300,7 @@ export interface AgentRaw {
   color?: unknown;
   interactive?: unknown;
   runtime?: unknown;
+  interface_contract?: unknown;
   category?: unknown;
   status?: unknown;
   state?: unknown;
@@ -348,6 +353,23 @@ export type AgentRuntime =
        *  not shell-parsed by us. */
       custom_args?: string[];
     };
+
+export interface AgentInterfaceContract {
+  version: 1;
+  role: 'orkas_core' | 'external_expert';
+  runtime: { kind: 'in_process' } | { kind: 'cli'; cli: string };
+  io: {
+    input: 'task_message';
+    output: 'final_message' | 'final_message_with_artifacts';
+  };
+  governance: {
+    session_role: 'owner_capable' | 'participant_only';
+    data_scope: 'visibility_slice' | 'visibility_slice_with_workspace';
+    uses_mate_skills: boolean;
+    records_process: boolean;
+    records_tool_evidence: boolean;
+  };
+}
 
 // Avatar tokens are validated against the catalog allow-list
 // (src/main/data/avatars.json is the single source of truth).
@@ -931,6 +953,7 @@ export function normalizeAgent(raw: AgentRaw | null | undefined, source: AgentSo
   if (outputFormat && outputFormat !== 'auto') {
     agent.output_format = outputFormat;
   }
+  agent.interface_contract = normalizeAgentInterfaceContract(raw.interface_contract, rt, outputFormat);
   return agent;
 }
 
@@ -970,6 +993,62 @@ export function cliIsCodingAgent(cli: string | undefined): boolean {
  *  all import this rather than re-checking `runtime?.kind` directly. */
 export function isCliAgent(agent: Pick<Agent, 'runtime'> | null | undefined): boolean {
   return !!agent && agent.runtime?.kind === 'cli';
+}
+
+function _agentContractOutput(outputFormat: ReturnType<typeof _canonicalOutputFormat>): AgentInterfaceContract['io']['output'] {
+  return outputFormat === 'artifact' ? 'final_message_with_artifacts' : 'final_message';
+}
+
+function deriveAgentInterfaceContract(
+  runtime: AgentRuntime | null | undefined,
+  outputFormat: ReturnType<typeof _canonicalOutputFormat>,
+): AgentInterfaceContract {
+  if (runtime?.kind === 'cli') {
+    return {
+      version: 1,
+      role: 'external_expert',
+      runtime: { kind: 'cli', cli: runtime.cli },
+      io: { input: 'task_message', output: _agentContractOutput(outputFormat) },
+      governance: {
+        session_role: 'participant_only',
+        data_scope: 'visibility_slice_with_workspace',
+        uses_mate_skills: false,
+        records_process: true,
+        records_tool_evidence: true,
+      },
+    };
+  }
+  return {
+    version: 1,
+    role: 'orkas_core',
+    runtime: { kind: 'in_process' },
+    io: { input: 'task_message', output: _agentContractOutput(outputFormat) },
+    governance: {
+      session_role: 'owner_capable',
+      data_scope: 'visibility_slice_with_workspace',
+      uses_mate_skills: true,
+      records_process: true,
+      records_tool_evidence: true,
+    },
+  };
+}
+
+function normalizeAgentInterfaceContract(
+  raw: unknown,
+  runtime: AgentRuntime | null | undefined,
+  outputFormat: ReturnType<typeof _canonicalOutputFormat>,
+): AgentInterfaceContract {
+  const derived = deriveAgentInterfaceContract(runtime, outputFormat);
+  const obj = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : null;
+  if (!obj || obj.version !== 1) return derived;
+  const io = obj.io && typeof obj.io === 'object' && !Array.isArray(obj.io) ? obj.io as Record<string, unknown> : {};
+  return {
+    ...derived,
+    io: {
+      input: 'task_message',
+      output: io.output === 'final_message_with_artifacts' ? 'final_message_with_artifacts' : derived.io.output,
+    },
+  };
 }
 
 interface AgentRuntimeLocalConfig {
@@ -1591,6 +1670,10 @@ export async function createCustomAgent(
       data.inputs = [_buildProjectDirInput()];
     }
   }
+  data.interface_contract = deriveAgentInterfaceContract(
+    _normalizeRuntime(data.runtime),
+    _canonicalOutputFormat(data.output_format),
+  );
   // Quality validation gate. EXTREME findings (missing required fields / red
   // flags in workflow text / etc.) block the write; MEDIUM warnings pass
   // through but are persisted for UI surfacing. Persist runs in both branches
@@ -1983,6 +2066,10 @@ async function _applyAgentUpdates(
     else if (without.length) data.inputs = without;
     else delete data.inputs;
   }
+  data.interface_contract = deriveAgentInterfaceContract(
+    _normalizeRuntime(data.runtime),
+    _canonicalOutputFormat(data.output_format),
+  );
   if (!data.name) data.name = t('agent.default_name');
   bumpAgentSpecRevision(data);
   data.updated_at = nowIso();

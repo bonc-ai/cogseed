@@ -46,7 +46,11 @@ import { logErrorSummary, logPathRef, maskId } from '../util/log-redact';
 const log = createLogger('contexts');
 
 function contextsRoot(): string {
-  return userContextsDir(getActiveUserId());
+  return contextsRootForUser(getActiveUserId());
+}
+
+function contextsRootForUser(uid: string): string {
+  return userContextsDir(uid);
 }
 
 export const CONTEXTS_INDEX_FILENAME = '_INDEX.md';
@@ -155,7 +159,7 @@ export function hasHiddenContextPathSegment(relpath: string): boolean {
  * Returns absolute path; throws on traversal, absolute inputs, empty
  * segments, or (when mustExist) missing files.
  */
-function resolvePath(relpath: string, { mustExist = false }: ResolveOpts = {}): string {
+function resolvePathForRoot(rootDir: string, relpath: string, { mustExist = false }: ResolveOpts = {}): string {
   if (typeof relpath !== 'string') throw new Error('path required');
   const s = relpath.trim().replace(/^\/+|\/+$/g, '');
   if (!s) return path.resolve(contextsRoot());
@@ -173,7 +177,7 @@ function resolvePath(relpath: string, { mustExist = false }: ResolveOpts = {}): 
       throw new Error(t('errors.kb_name_too_long', { name: p }));
     }
   }
-  const root = path.resolve(contextsRoot());
+  const root = path.resolve(rootDir);
   const target = path.resolve(root, s);
   const rel = path.relative(root, target);
   if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error('path escapes contexts root');
@@ -183,6 +187,11 @@ function resolvePath(relpath: string, { mustExist = false }: ResolveOpts = {}): 
     throw err;
   }
   return target;
+}
+
+
+function resolvePath(relpath: string, opts: ResolveOpts = {}): string {
+  return resolvePathForRoot(contextsRoot(), relpath, opts);
 }
 
 /** Absolute path of a context file for a user-supplied relpath, with the same
@@ -362,10 +371,10 @@ const IMAGE_MEDIA_TYPE: Record<string, string> = {
  * renderer windows and native pickers cannot exploit the indexer's short row-
  * creation delay. In-memory upload callers remain synchronous after hashing.
  */
-function checkDuplicateContent(sha1: string): Result<null> | null {
+function checkDuplicateContentForUser(uid: string, sha1: string): Result<null> | null {
   let existing: kbVector.KbFileRow | null;
   try {
-    existing = kbVector.findBySha1(getActiveUserId(), sha1);
+    existing = kbVector.findBySha1(uid, sha1);
   } catch (err) {
     log.warn(`duplicate content check skipped: ${(err as Error).message}`);
     return null;
@@ -378,6 +387,10 @@ function checkDuplicateContent(sha1: string): Result<null> | null {
     code: 'duplicate_content',
     existingDir: existingDir === '.' ? '' : existingDir,
   };
+}
+
+function checkDuplicateContent(sha1: string): Result<null> | null {
+  return checkDuplicateContentForUser(getActiveUserId(), sha1);
 }
 
 function kbKindForContextName(name: string): kbVector.KbKind {
@@ -407,8 +420,12 @@ function notifyDirtyContext(relPath: string): void {
 }
 
 export function writeContextFile(relpath: string, content: string): Result<{ path: string }> {
+  return writeContextFileForUser(getActiveUserId(), relpath, content);
+}
+
+export function writeContextFileForUser(uid: string, relpath: string, content: string): Result<{ path: string }> {
   let p: string;
-  try { p = resolvePath(relpath); }
+  try { p = resolvePathForRoot(contextsRootForUser(uid), relpath); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
   const ext = extOf(p);
   if (!TEXT_EXTS.has(ext)) {
@@ -428,14 +445,13 @@ export function writeContextFile(relpath: string, content: string): Result<{ pat
   // content (sha1 of an empty string is meaningless for dedup).
   if (path.basename(p) !== CONTEXTS_INDEX_FILENAME && body.length > 0) {
     const sha1 = crypto.createHash('sha1').update(body, 'utf8').digest('hex');
-    const dup = checkDuplicateContent(sha1);
+    const dup = checkDuplicateContentForUser(uid, sha1);
     if (dup) return dup;
   }
   try { fs.writeFileSync(p, body, 'utf8'); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
-  invalidateIndex();
+  if (uid === getActiveUserId()) invalidateIndex();
   if (path.basename(p) !== CONTEXTS_INDEX_FILENAME) {
-    const uid = getActiveUserId();
     search.upsertContext(uid, relpath);
     kbIndexer.enqueue(uid, relpath, 'upsert');
     notifyDirtyContext(relpath);

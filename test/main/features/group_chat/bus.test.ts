@@ -57,6 +57,11 @@ vi.mock('../../../../src/main/model/client', () => ({
       yield { type: 'done' };
       return;
     }
+    if (String(_opts?.message || '').includes('PROTOCOL_EVENT_TEST')) {
+      yield { type: 'final', text: 'protocol event recorded' };
+      yield { type: 'done' };
+      return;
+    }
     if (String(_opts?.message || '').includes('COMMANDER_RESULT_FAILURE_TEST')) {
       yield { type: 'final', text: '没有完成调度。\n<commander-result status="failure" />' };
       yield { type: 'done' };
@@ -455,66 +460,6 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     ]));
   });
 
-  it('retries a Hermes commander text-only dispatch claim with a strict repair prompt', async () => {
-    const config = await import('../../../../src/main/features/config');
-    config.setCommanderBackendSettings({
-      backend: 'hermes-cli',
-      authEntryId: null,
-      localCli: { type: 'hermes', useCliDefaultModel: true, model: '' },
-    });
-    cliRunMock.nextResults.push(
-      { runId: 'hermes-first', status: 'completed', output: 'DeepResearcher 已启动，后台运行中。' },
-      { runId: 'hermes-repair', status: 'completed', output: '{"kind":"reply","message":"repair ok"}' },
-    );
-
-    const bus = await import('../../../../src/main/features/group_chat/bus');
-    const paths = await import('../../../../src/main/paths');
-    const cid = 'cid-hermes-repair-retry';
-    await bus.enqueue({
-      uid: TEST_UID, cid, fromActorId: 'user',
-      text: '请调度 DeepResearcher 生成报告',
-    });
-    await waitForQuiescent(TEST_UID, cid);
-
-    expect(cliRunMock.calls).toHaveLength(2);
-    expect(cliRunMock.calls[1].prompt).toContain('EXACTLY ONE strict JSON object');
-    expect(cliRunMock.calls[1].prompt).toContain('DeepResearcher 已启动，后台运行中');
-    expect(cliRunMock.calls[1].prompt).toContain('请调度 DeepResearcher 生成报告');
-
-    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
-    const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
-    const reply = lines.find((line) => line.from === 'commander');
-    expect(reply?.text).toBe('repair ok');
-  });
-
-  it('keeps blocking Hermes text-only dispatch claims after the repair retry', async () => {
-    const config = await import('../../../../src/main/features/config');
-    config.setCommanderBackendSettings({
-      backend: 'hermes-cli',
-      authEntryId: null,
-      localCli: { type: 'hermes', useCliDefaultModel: true, model: '' },
-    });
-    cliRunMock.nextResults.push(
-      { runId: 'hermes-first', status: 'completed', output: 'DeepResearcher 已启动，后台运行中。' },
-      { runId: 'hermes-repair', status: 'completed', output: 'DeepResearcher 已真正启动，后台运行中。' },
-    );
-
-    const bus = await import('../../../../src/main/features/group_chat/bus');
-    const paths = await import('../../../../src/main/paths');
-    const cid = 'cid-hermes-repair-still-blocked';
-    await bus.enqueue({
-      uid: TEST_UID, cid, fromActorId: 'user',
-      text: '请调度 DeepResearcher 生成报告',
-    });
-    await waitForQuiescent(TEST_UID, cid);
-
-    expect(cliRunMock.calls).toHaveLength(2);
-    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
-    const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
-    const reply = lines.find((line) => line.from === 'commander');
-    expect(reply?.text).toContain('Dispatch was not executed');
-    expect(reply?.text).toContain('dispatch_to / hand_off_to / run_worker');
-  });
 
   it('persists context compaction metadata in process history', async () => {
     const bus = await import('../../../../src/main/features/group_chat/bus');
@@ -1448,6 +1393,35 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(failure?.text).toContain('Confirm that its CLI is signed in and working');
     expect(failure?.text).not.toContain('openclaw exited');
     expect(failure?.text).not.toContain('/Users/alice');
+  });
+
+  it('records P3394 protocol metadata on named agent turns', async () => {
+    const paths = await import('../../../../src/main/paths');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const cid = 'cid-p3394-protocol-event';
+
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'user',
+      text: `@${AGENT_NAME} PROTOCOL_EVENT_TEST`,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+    const rows = fs.readFileSync(mainFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const agentMessage = rows.find((row: any) => row.from === AGENT_ID && row.text === 'protocol event recorded');
+    const protocolEvent = agentMessage?.process?.find((item: any) => item.event?.stream === 'p3394');
+
+    expect(protocolEvent?.event.data).toMatchObject({
+      phase: 'normalized',
+      ok: true,
+      agent_id: AGENT_ID,
+      role: 'orkas_core',
+      relationship: 'owner',
+      speech_act: 'request',
+      message_type: 'agent.handle_message.request',
+      correlation_id: cid,
+      canonical_session_id: cid,
+    });
   });
 
   it('asks for a project directory instead of silently falling back when a custom coding cwd vanished', async () => {

@@ -32,9 +32,12 @@ import {
   type GroupEvent,
 } from './bus';
 import {
+  readActiveCollaborationSnapshot,
   readCollaborationSnapshot,
+  resolveActiveContextConflictForActor,
   reviewCollaborationGate as reviewGateFeature,
   type CollaborationSnapshot,
+  type ResolveContextConflictSelectionInput,
 } from './collaboration';
 
 /** Re-export so the IPC layer can poll the bus's true quiescent state on
@@ -66,7 +69,7 @@ export async function reviewCollaborationGate(
     reviewed_by: input.reviewed_by || 'user',
     ...(typeof input.reason === 'string' && input.reason.trim() ? { reason: input.reason.trim() } : {}),
   });
-  const collaboration = await readCollaborationSnapshot(userId, cid);
+  const collaboration = reviewed.collaboration;
   if (input.decision === 'approve') {
     await enqueue({
       uid: userId,
@@ -85,6 +88,44 @@ export async function reviewCollaborationGate(
     });
   }
   return { ok: true, collaboration };
+}
+
+export async function listCollaborationConflicts(userId: string, cid: string) {
+  if (!safeId(cid)) throw new Error('invalid cid');
+  const collaboration = await readActiveCollaborationSnapshot(userId, cid);
+  return {
+    ok: true as const,
+    conflicts: collaboration?.active_conflicts || [],
+  };
+}
+
+export async function resolveCollaborationConflict(
+  userId: string,
+  cid: string,
+  conflictId: string,
+  input: ResolveContextConflictSelectionInput,
+): Promise<{ ok: true; collaboration: CollaborationSnapshot | null }> {
+  return resolveCollaborationConflictForActor(userId, cid, conflictId, input, USER_ID);
+}
+
+export async function resolveCollaborationConflictForActor(
+  userId: string,
+  cid: string,
+  conflictId: string,
+  input: ResolveContextConflictSelectionInput,
+  resolvedBy: string,
+): Promise<{ ok: true; collaboration: CollaborationSnapshot | null }> {
+  if (!safeId(cid)) throw new Error('invalid cid');
+  if (!safeId(conflictId)) throw new Error('invalid conflict id');
+  if (!input || typeof input !== 'object') throw new Error('invalid conflict resolution input');
+  const { decision, selected_proposal_ids, text, reason } = input;
+  const resolved = await resolveActiveContextConflictForActor(userId, cid, conflictId, {
+    decision,
+    selected_proposal_ids,
+    text,
+    ...(typeof reason === 'string' ? { reason } : {}),
+  }, resolvedBy);
+  return { ok: true, collaboration: resolved.collaboration };
 }
 
 export async function runtimeStatus(
