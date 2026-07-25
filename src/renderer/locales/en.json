@@ -1183,7 +1183,7 @@
   "settings.auth_recovery.reset_ok": "Reset. Add a model account again if you want Core Agent mode.",
   "settings.auth_recovery.reset_failed": "Reset failed",
   "settings.commander_backend.title": "Commander backend",
-  "settings.commander_backend.sub": "Choose whether the commander uses the built-in Core Agent or the local Hermes CLI.",
+  "settings.commander_backend.sub": "Commander always uses the built-in Core Agent.",
   "settings.commander_backend.backend": "Backend",
   "settings.commander_backend.pick_backend": "Pick backend",
   "settings.commander_backend.option_core": "Mate Agent Core Agent",

@@ -33,21 +33,14 @@ export interface CommanderAvatar {
   color: string;
 }
 
-export type CommanderBackendKind = 'orkas-core-agent' | 'hermes-cli';
-
-export interface CommanderBackendLocalCliSettings {
-  type: 'hermes';
-  /** Optional Hermes model identifier. Empty/missing means use the CLI default. */
-  model?: string;
-  useCliDefaultModel?: boolean;
-}
+export type CommanderBackendKind = 'orkas-core-agent';
 
 export interface CommanderBackendSettings {
   backend: CommanderBackendKind;
   /** Optional auth entry override for Orkas Core Agent. Missing/null uses the existing priority chain. */
   authEntryId?: string | null;
-  /** Local CLI settings for non-cloud commander backends. Never stores secrets. */
-  localCli?: CommanderBackendLocalCliSettings | null;
+  /** Reserved for legacy preference compatibility. The commander no longer uses local CLI backends. */
+  localCli?: null;
 }
 
 export const DEFAULT_COMMANDER_BACKEND_SETTINGS: CommanderBackendSettings = Object.freeze({
@@ -137,7 +130,7 @@ function normalizeCommanderBackendSettings(value: unknown, strict = false): Comm
   if (!value || typeof value !== 'object') return { ...DEFAULT_COMMANDER_BACKEND_SETTINGS };
   const raw = value as Partial<CommanderBackendSettings> & Record<string, unknown>;
   const backend = raw.backend;
-  if (backend !== 'orkas-core-agent' && backend !== 'hermes-cli') {
+  if (backend !== 'orkas-core-agent') {
     if (strict) throw new Error('invalid commander backend');
     return { ...DEFAULT_COMMANDER_BACKEND_SETTINGS };
   }
@@ -145,26 +138,7 @@ function normalizeCommanderBackendSettings(value: unknown, strict = false): Comm
     ? raw.authEntryId.trim()
     : null;
 
-  if (backend === 'orkas-core-agent') {
-    return { backend, authEntryId, localCli: null };
-  }
-
-  const localCli = raw.localCli;
-  if (!localCli || typeof localCli !== 'object' || (localCli as unknown as Record<string, unknown>).type !== 'hermes') {
-    if (strict) throw new Error('hermes backend requires hermes localCli settings');
-    return { ...DEFAULT_COMMANDER_BACKEND_SETTINGS };
-  }
-  const cli = localCli as unknown as Record<string, unknown>;
-  const model = typeof cli.model === 'string' ? cli.model.trim() : '';
-  return {
-    backend,
-    authEntryId,
-    localCli: {
-      type: 'hermes',
-      model,
-      useCliDefaultModel: cli.useCliDefaultModel !== false,
-    },
-  };
+  return { backend, authEntryId, localCli: null };
 }
 
 export function getCommanderBackendSettings(): CommanderBackendSettings {

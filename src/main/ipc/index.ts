@@ -2480,7 +2480,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'settings.setCommanderBackend': async ({ settings }) => ({
     settings: commanderBackend.setCommanderBackendSettings(settings),
   }),
-  'settings.detectCommanderBackends': async () => commanderBackend.detectCommanderBackends(),
 
   // ── Image-generation API key (independent from chat entries) ──
   // `list` strips raw apiKey and replaces it with `apiKeyMasked` so

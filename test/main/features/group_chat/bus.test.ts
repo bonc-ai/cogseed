@@ -460,6 +460,32 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     ]));
   });
 
+  it('ignores legacy Hermes commander backend config and runs the Orkas commander', async () => {
+    const config = await import('../../../../src/main/features/config');
+    config.writePreferences({
+      commander_backend: {
+        backend: 'hermes-cli',
+        authEntryId: null,
+        localCli: { type: 'hermes', useCliDefaultModel: true, model: '' },
+      } as never,
+    });
+
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const cid = 'cid-legacy-hermes-commander-disabled';
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'user',
+      text: '普通问题',
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    expect(cliRunMock.calls).toHaveLength(0);
+    expect(streamProbe.messages.some((message) => message.includes('普通问题'))).toBe(true);
+    expect(config.getCommanderBackendSettings()).toEqual({
+      backend: 'orkas-core-agent',
+      authEntryId: null,
+      localCli: null,
+    });
+  });
 
   it('persists context compaction metadata in process history', async () => {
     const bus = await import('../../../../src/main/features/group_chat/bus');

@@ -1183,7 +1183,7 @@
   "settings.auth_recovery.reset_ok": "已重置。如需使用 Core Agent，请重新添加模型账号。",
   "settings.auth_recovery.reset_failed": "重置失败",
   "settings.commander_backend.title": "指挥官后端",
-  "settings.commander_backend.sub": "选择指挥官使用内置 Core Agent，还是本机 Hermes CLI。",
+  "settings.commander_backend.sub": "指挥官始终使用内置 Core Agent。",
   "settings.commander_backend.backend": "后端",
   "settings.commander_backend.pick_backend": "选择后端",
   "settings.commander_backend.option_core": "Mate Agent Core Agent",

@@ -45,6 +45,20 @@ node "$APP_DIR/scripts/ensure-dev-dependencies.cjs"
 # packaged apps. This never starts a local server; it only registers the `mateagent://` primary protocol and `orkas://` OAuth compatibility protocol.
 node "$APP_DIR/scripts/prepare-source-protocol.cjs" || true
 
+KSTAR_ENGINE_DIR="$APP_DIR/userWorkSpace/meta-skill-engine-package"
+KSTAR_ENGINE_ENTRY="$KSTAR_ENGINE_DIR/dist/index.js"
+if [ -f "$KSTAR_ENGINE_ENTRY" ]; then
+  export ORKAS_KSTAR_ENGINE_COMMAND="${ORKAS_KSTAR_ENGINE_COMMAND:-node}"
+  if [ -z "${ORKAS_KSTAR_ENGINE_ARGS:-}" ]; then
+    export ORKAS_KSTAR_ENGINE_ARGS="[\"$KSTAR_ENGINE_ENTRY\"]"
+  fi
+  export ORKAS_KSTAR_ENGINE_CWD="${ORKAS_KSTAR_ENGINE_CWD:-$KSTAR_ENGINE_DIR}"
+  export ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR="${ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR:-$KSTAR_ENGINE_DIR/ontologies}"
+  echo "[Mate Agent] KSTAR engine configured: $KSTAR_ENGINE_ENTRY"
+else
+  echo "[Mate Agent] KSTAR engine not found at $KSTAR_ENGINE_ENTRY; continuing without external KSTAR engine."
+fi
+
 cd "$APP_DIR"
 pkill -9 -f "$APP_DIR/node_modules/electron/dist" >/dev/null 2>&1 || true
 sleep 0.3
@@ -53,6 +67,12 @@ if [ "$(uname -s)" = "Darwin" ]; then
   APP_BUNDLE="$APP_DIR/node_modules/electron/dist/Mate Agent.app"
   if [ -d "$APP_BUNDLE" ]; then
     ARGS=("$APP_DIR")
+    if [ -n "${ORKAS_KSTAR_ENGINE_COMMAND:-}" ]; then
+      ARGS+=("--orkas-kstar-engine-command=$ORKAS_KSTAR_ENGINE_COMMAND")
+      ARGS+=("--orkas-kstar-engine-args=$ORKAS_KSTAR_ENGINE_ARGS")
+      ARGS+=("--orkas-kstar-engine-cwd=$ORKAS_KSTAR_ENGINE_CWD")
+      ARGS+=("--orkas-kstar-engine-ontology-dir=$ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR")
+    fi
     # Launch through LaunchServices so the patched app name/icon are used in source runs.
     exec open -W -n "$APP_BUNDLE" --args "${ARGS[@]}"
   fi

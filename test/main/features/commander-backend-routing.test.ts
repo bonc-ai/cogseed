@@ -33,22 +33,19 @@ describe('commander backend routing', () => {
     });
   });
 
-  it('surfaces Hermes availability in the backend view', async () => {
+  it('does not surface Hermes as a commander backend candidate', async () => {
     const mod = await import('../../../src/main/features/commander_backend');
     const view = await mod.getCommanderBackendView();
-    expect(typeof view.hermes.available).toBe('boolean');
-    expect(view.hermes.path === null || typeof view.hermes.path === 'string').toBe(true);
-    expect(view.hermes.version === null || typeof view.hermes.version === 'string').toBe(true);
+    expect(view).not.toHaveProperty('hermes');
   });
 
-  it('resolves Hermes when explicitly selected', async () => {
+  it('normalizes explicit legacy Hermes selection to Orkas Core Agent', async () => {
     const mod = await import('../../../src/main/features/commander_backend');
     const resolved = await mod.resolveCommanderBackend({
-      backend: 'hermes-cli',
+      backend: 'hermes-cli' as never,
       authEntryId: null,
-      localCli: { type: 'hermes', useCliDefaultModel: true },
+      localCli: { type: 'hermes', useCliDefaultModel: true } as never,
     });
-    expect(resolved.backend).toBe('hermes-cli');
-    expect(resolved.localCli).toMatchObject({ type: 'hermes', useCliDefaultModel: true });
+    expect(resolved).toEqual({ backend: 'orkas-core-agent', authEntryId: null, localCli: null });
   });
 });

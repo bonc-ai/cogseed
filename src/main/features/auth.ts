@@ -175,6 +175,8 @@ interface ApiKeyProfile {
   key: string;
   /** Optional custom endpoint for openai-compatible profiles. */
   baseUrl?: string;
+  /** Per-profile output-token cap for OpenAI-compatible chat endpoints. */
+  maxOutputTokens?: number;
   email?: string;
   createdAt: number;
   lastUsed: number;
@@ -712,6 +714,7 @@ export interface ProfileView {
   type: 'api_key' | 'oauth';
   masked?: string;
   baseUrl?: string;
+  maxOutputTokens?: number;
   email?: string;
   expired?: boolean;
   createdAt: number;
@@ -756,6 +759,9 @@ function profileToView(id: string, p: StoredProfile): ProfileView {
     type: 'api_key',
     masked: maskKey(p.key),
     ...(p.baseUrl ? { baseUrl: p.baseUrl } : {}),
+    ...(isOpenAICompatibleProvider(p.provider)
+      ? { maxOutputTokens: normalizeOpenAICompatibleMaxOutputTokens(p.provider, p.maxOutputTokens) }
+      : {}),
   };
   return { ...base, type: 'oauth', expired: Date.now() >= p.expires };
 }
@@ -910,13 +916,28 @@ function normalizeCustomBaseUrl(providerId: string, raw: unknown): string | unde
   return value.replace(/\/+$/, '');
 }
 
+const OPENAI_COMPATIBLE_DEFAULT_MAX_OUTPUT_TOKENS = 32768;
+const OPENAI_COMPATIBLE_MIN_MAX_OUTPUT_TOKENS = 8192;
+const OPENAI_COMPATIBLE_MAX_MAX_OUTPUT_TOKENS = 32768;
+
+function normalizeOpenAICompatibleMaxOutputTokens(providerId: string, raw: unknown): number | undefined {
+  if (!isOpenAICompatibleProvider(providerId)) return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return OPENAI_COMPATIBLE_DEFAULT_MAX_OUTPUT_TOKENS;
+  const value = Math.trunc(n);
+  return Math.max(
+    OPENAI_COMPATIBLE_MIN_MAX_OUTPUT_TOKENS,
+    Math.min(OPENAI_COMPATIBLE_MAX_MAX_OUTPUT_TOKENS, value),
+  );
+}
+
 // ── Credential writes ────────────────────────────────────────────────────
 
 export async function addApiKey(
   providerId: string,
   apiKey: string,
   label?: string,
-  opts?: { baseUrl?: string },
+  opts?: { baseUrl?: string; maxOutputTokens?: number },
 ): Promise<{ profileId: string }> {
   const id = String(providerId || '').trim();
   const key = String(apiKey || '').trim();
@@ -924,6 +945,7 @@ export async function addApiKey(
   if (!key) throw new Error('api key required');
   assertModelProviderAllowed(id);
   const baseUrl = normalizeCustomBaseUrl(id, opts?.baseUrl);
+  const maxOutputTokens = normalizeOpenAICompatibleMaxOutputTokens(id, opts?.maxOutputTokens);
 
   const store = loadProfiles();
   const chosenLabel = label ? sanitizeLabel(label) : autoLabel(store, id);
@@ -936,6 +958,7 @@ export async function addApiKey(
     label: chosenLabel,
     key,
     ...(baseUrl ? { baseUrl } : {}),
+    ...(maxOutputTokens ? { maxOutputTokens } : {}),
     email: (existing as ApiKeyProfile | undefined)?.email,
     createdAt: existing?.createdAt ?? now,
     lastUsed: 0,
@@ -1422,6 +1445,7 @@ export interface ChatEntryChoice {
   model: string;
   apiKey: string;
   baseUrl?: string;
+  maxOutputTokens?: number;
 }
 
 /**
@@ -1570,14 +1594,17 @@ export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
     }
     const apiKey = await resolveEntryApiKey(store, entry);
     if (!apiKey) continue;
+    const prof = store.profiles[entry.profileId];
+    const apiProfile = prof?.type === 'api_key' ? prof as ApiKeyProfile : undefined;
     choices.push({
       entryId: entry.entryId,
       profileId: entry.profileId,
       provider: entry.provider,
       model: entry.model,
       apiKey,
-      ...(store.profiles[entry.profileId]?.type === 'api_key' && (store.profiles[entry.profileId] as ApiKeyProfile).baseUrl
-        ? { baseUrl: (store.profiles[entry.profileId] as ApiKeyProfile).baseUrl }
+      ...(apiProfile?.baseUrl ? { baseUrl: apiProfile.baseUrl } : {}),
+      ...(apiProfile && isOpenAICompatibleProvider(entry.provider)
+        ? { maxOutputTokens: normalizeOpenAICompatibleMaxOutputTokens(entry.provider, apiProfile.maxOutputTokens) }
         : {}),
     });
   }
@@ -1823,5 +1850,5 @@ export async function testConnection(
 }
 
 // ── Legacy aliases ───────────────────────────────────────────────────────
-export const saveApiKey = (providerId: string, apiKey: string, label?: string, opts?: { baseUrl?: string }) =>
+export const saveApiKey = (providerId: string, apiKey: string, label?: string, opts?: { baseUrl?: string; maxOutputTokens?: number }) =>
   addApiKey(providerId, apiKey, label, opts);

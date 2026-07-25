@@ -32,19 +32,20 @@ describe('commander backend settings', () => {
     });
   });
 
-  it('persists Hermes CLI selection without storing secrets', async () => {
+  it('normalizes legacy Hermes commander preferences back to Orkas Core Agent', async () => {
     const config = await import('../../../src/main/features/config');
-    config.setCommanderBackendSettings({
-      backend: 'hermes-cli',
-      authEntryId: null,
-      localCli: { type: 'hermes', model: '', useCliDefaultModel: true },
+    config.writePreferences({
+      commander_backend: {
+        backend: 'hermes-cli',
+        authEntryId: null,
+        localCli: { type: 'hermes', model: '', useCliDefaultModel: true },
+      } as never,
     });
-    expect(config.readPreferences().commander_backend).toMatchObject({
-      backend: 'hermes-cli',
+    expect(config.getCommanderBackendSettings()).toEqual({
+      backend: 'orkas-core-agent',
       authEntryId: null,
-      localCli: { type: 'hermes', model: '', useCliDefaultModel: true },
+      localCli: null,
     });
-    expect(JSON.stringify(config.readPreferences().commander_backend)).not.toMatch(/api|secret|key|token/i);
   });
 
   it('rejects unknown backend kinds', async () => {
@@ -56,12 +57,12 @@ describe('commander backend settings', () => {
     })).toThrow('invalid commander backend');
   });
 
-  it('rejects Hermes without Hermes localCli settings', async () => {
+  it('rejects Hermes as a commander backend', async () => {
     const config = await import('../../../src/main/features/config');
     expect(() => config.setCommanderBackendSettings({
-      backend: 'hermes-cli',
+      backend: 'hermes-cli' as never,
       authEntryId: null,
-      localCli: null,
-    })).toThrow('hermes backend requires hermes localCli settings');
+      localCli: { type: 'hermes', useCliDefaultModel: true } as never,
+    })).toThrow('invalid commander backend');
   });
 });

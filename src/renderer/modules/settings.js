@@ -484,20 +484,17 @@ async function _settingsRefreshCommanderBackend() {
     _settingsState.commanderBackendView = {
       settings: res.settings || { backend: 'orkas-core-agent', authEntryId: null, localCli: null },
       cloudConfigured: !!res.cloudConfigured,
-      hermes: res.hermes || { available: false, path: null, version: null },
     };
     return;
   }
   _settingsState.commanderBackendView = {
     settings: { backend: 'orkas-core-agent', authEntryId: null, localCli: null },
     cloudConfigured: false,
-    hermes: { available: false, path: null, version: null, error: res && res.error },
   };
 }
 
 function _settingsCommanderBackendOptions() {
   const view = _settingsState.commanderBackendView || {};
-  const hermes = view.hermes || {};
   return [
     {
       value: 'orkas-core-agent',
@@ -506,19 +503,7 @@ function _settingsCommanderBackendOptions() {
         ? t('settings.commander_backend.core_ready')
         : t('settings.commander_backend.core_needs_model'),
     },
-    {
-      value: 'hermes-cli',
-      label: t('settings.commander_backend.option_hermes'),
-      hint: hermes.available
-        ? t('settings.commander_backend.hermes_ready', { path: hermes.path || 'hermes' })
-        : (hermes.error || t('settings.commander_backend.hermes_missing')),
-    },
   ];
-}
-
-function _settingsSyncCommanderBackendFields(backend) {
-  const row = document.getElementById('settings-commander-hermes-model-row');
-  if (row) row.hidden = backend !== 'hermes-cli';
 }
 
 function _settingsRenderCommanderBackend() {
@@ -527,52 +512,34 @@ function _settingsRenderCommanderBackend() {
   const view = _settingsState.commanderBackendView || {
     settings: { backend: 'orkas-core-agent', authEntryId: null, localCli: null },
     cloudConfigured: false,
-    hermes: { available: false, path: null, version: null },
   };
-  const backend = view.settings && view.settings.backend === 'hermes-cli' ? 'hermes-cli' : 'orkas-core-agent';
+  const backend = 'orkas-core-agent';
   if (!_settingsState.commanderBackendSel || _settingsState.commanderBackendEl !== el) {
     _settingsState.commanderBackendEl = el;
     _settingsState.commanderBackendSel = _aiSelectMount(el, {
       placeholder: t('settings.commander_backend.pick_backend'),
     });
-    _settingsState.commanderBackendSel.onChange((next) => _settingsSyncCommanderBackendFields(next));
   }
   _settingsState.commanderBackendSel.setOptions(_settingsCommanderBackendOptions(), {
     value: backend,
     placeholder: t('settings.commander_backend.pick_backend'),
   });
-  const modelInput = document.getElementById('settings-commander-hermes-model');
-  if (modelInput) {
-    modelInput.placeholder = t('settings.commander_backend.hermes_model_placeholder');
-    modelInput.value = (view.settings && view.settings.localCli && view.settings.localCli.model) || '';
-  }
-  _settingsSyncCommanderBackendFields(backend);
-
   const detail = document.getElementById('settings-commander-backend-detail');
   if (detail) {
-    const hermes = view.hermes || {};
-    const hermesText = hermes.available
-      ? t('settings.commander_backend.hermes_detail_ready', { version: hermes.version || '-', path: hermes.path || 'hermes' })
-      : t('settings.commander_backend.hermes_detail_missing', { error: hermes.error || t('settings.commander_backend.hermes_missing') });
-    detail.textContent = `${view.cloudConfigured ? t('settings.commander_backend.core_ready') : t('settings.commander_backend.core_needs_model')} · ${hermesText}`;
+    detail.textContent = view.cloudConfigured
+      ? t('settings.commander_backend.core_ready')
+      : t('settings.commander_backend.core_needs_model');
   }
 
   if (!_settingsState.commanderBackendBound) {
     _settingsState.commanderBackendBound = true;
     const saveBtn = document.getElementById('settings-commander-backend-save');
-    const detectBtn = document.getElementById('settings-commander-backend-detect');
     if (saveBtn) saveBtn.addEventListener('click', _settingsSaveCommanderBackend);
-    if (detectBtn) detectBtn.addEventListener('click', _settingsDetectCommanderBackend);
   }
 }
 
 async function _settingsSaveCommanderBackend() {
-  const backend = _settingsState.commanderBackendSel?.getValue() || 'orkas-core-agent';
-  const modelInput = document.getElementById('settings-commander-hermes-model');
-  const model = String((modelInput && modelInput.value) || '').trim();
-  const settings = backend === 'hermes-cli'
-    ? { backend: 'hermes-cli', authEntryId: null, localCli: { type: 'hermes', model, useCliDefaultModel: !model } }
-    : { backend: 'orkas-core-agent', authEntryId: null, localCli: null };
+  const settings = { backend: 'orkas-core-agent', authEntryId: null, localCli: null };
   _settingsSetStatus('settings-commander-backend-status', '', t('settings.save_loading'));
   const res = await window.orkas.invoke('settings.setCommanderBackend', { settings });
   if (!res || !res.ok) {
@@ -583,19 +550,6 @@ async function _settingsSaveCommanderBackend() {
   _settingsRenderCommanderBackend();
   if (typeof refreshModelGuard === 'function') refreshModelGuard().catch(() => {});
   _settingsSetStatus('settings-commander-backend-status', 'ok', t('settings.save_ok'));
-}
-
-async function _settingsDetectCommanderBackend() {
-  _settingsSetStatus('settings-commander-backend-status', '', t('settings.commander_backend.detecting'));
-  const res = await window.orkas.invoke('settings.detectCommanderBackends');
-  if (!res || !res.ok) {
-    _settingsSetStatus('settings-commander-backend-status', 'error', (res && res.error) || t('settings.commander_backend.detect_failed'));
-    return;
-  }
-  const view = _settingsState.commanderBackendView || { settings: { backend: 'orkas-core-agent', authEntryId: null, localCli: null }, cloudConfigured: false };
-  _settingsState.commanderBackendView = { ...view, hermes: res.hermes || { available: false, path: null, version: null } };
-  _settingsRenderCommanderBackend();
-  _settingsSetStatus('settings-commander-backend-status', res.hermes && res.hermes.available ? 'ok' : 'error', res.hermes && res.hermes.available ? t('settings.commander_backend.detect_ok') : t('settings.commander_backend.detect_missing'));
 }
 
 function _settingsSyncCustomModelFields(providerId) {

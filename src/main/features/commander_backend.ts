@@ -1,10 +1,9 @@
 /**
  * Commander backend binding and runtime view.
  *
- * The commander keeps using Orkas Core Agent by default. Hermes CLI is a
- * user-selected local backend, but this module only resolves configuration and
- * availability; dispatch, Wake Gate, KSTAR, and persistence remain owned by
- * group_chat / p3394.
+ * The commander is always the in-process Orkas Core Agent. External CLIs such
+ * as Hermes can still be configured as specialist local agents, but not as a
+ * replacement commander backend.
  */
 
 import {
@@ -13,49 +12,19 @@ import {
   type CommanderBackendSettings,
 } from './config';
 import { hasConfiguredModel } from './auth';
-import { detectOne } from './local_agents/registry';
 
 export type { CommanderBackendKind, CommanderBackendSettings } from './config';
-
-export interface CommanderBackendHermesView {
-  available: boolean;
-  path: string | null;
-  version: string | null;
-  error?: string;
-}
 
 export interface CommanderBackendView {
   settings: CommanderBackendSettings;
   cloudConfigured: boolean;
-  hermes: CommanderBackendHermesView;
-}
-
-function hermesError(entry: Awaited<ReturnType<typeof detectOne>>): string | undefined {
-  if (entry.available) return undefined;
-  return entry.errorDetail || entry.error || 'Hermes CLI is unavailable';
-}
-
-export async function detectCommanderBackends(): Promise<{ hermes: CommanderBackendHermesView }> {
-  const hermes = await detectOne('hermes');
-  return {
-    hermes: {
-      available: !!hermes.available,
-      path: hermes.path,
-      version: hermes.version,
-      ...(hermesError(hermes) ? { error: hermesError(hermes) } : {}),
-    },
-  };
 }
 
 export async function getCommanderBackendView(): Promise<CommanderBackendView> {
-  const [detected, configured] = await Promise.all([
-    detectCommanderBackends(),
-    Promise.resolve(hasConfiguredModel()),
-  ]);
+  const configured = await Promise.resolve(hasConfiguredModel());
   return {
     settings: readCommanderBackendPreference(),
     cloudConfigured: !!configured.configured,
-    hermes: detected.hermes,
   };
 }
 
@@ -68,11 +37,14 @@ export function setCommanderBackendSettings(settings: CommanderBackendSettings):
 }
 
 /**
- * Normalize a caller-provided backend selection into the exact setting shape
- * group_chat should branch on. This function intentionally does not auto-switch
- * away from an unavailable backend; UI/runtime surfaces should report the
- * availability problem explicitly instead of silently changing user preference.
+ * Normalize a caller-provided backend selection into the exact setting shape.
+ * Legacy Hermes commander selections are folded back to Orkas Core Agent.
  */
 export async function resolveCommanderBackend(input?: CommanderBackendSettings): Promise<CommanderBackendSettings> {
-  return input ? writeCommanderBackendPreference(input) : readCommanderBackendPreference();
+  if (!input) return readCommanderBackendPreference();
+  const raw = input as CommanderBackendSettings & { backend?: string };
+  if (raw.backend !== 'orkas-core-agent') {
+    return writeCommanderBackendPreference({ backend: 'orkas-core-agent', authEntryId: null, localCli: null });
+  }
+  return writeCommanderBackendPreference(input);
 }

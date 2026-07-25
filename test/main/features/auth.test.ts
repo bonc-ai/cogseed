@@ -172,6 +172,32 @@ describe('auth › multi-profile store (addApiKey / removeCredential / renamePro
     })).rejects.toThrow(/base URL/);
   });
 
+
+  it('OpenAI-compatible profiles expose configurable max output tokens with a 32k default', async () => {
+    const a = await import('../../../src/main/features/auth');
+    const defaultProfile = await a.addApiKey('openai-compatible', 'sk-default-xxxxxxxx', 'default', {
+      baseUrl: 'https://llm.example.test/v1',
+    });
+    const customProfile = await a.addApiKey('openai-compatible', 'sk-long-xxxxxxxx', 'long', {
+      baseUrl: 'https://llm.example.test/v1',
+      maxOutputTokens: 16384,
+    });
+    await a.addEntry({ provider: 'openai-compatible', model: 'custom-chat', profileId: defaultProfile.profileId });
+    await a.addEntry({ provider: 'openai-compatible', model: 'custom-chat', profileId: customProfile.profileId });
+
+    const { providers } = await a.listProviders();
+    const custom = providers.find((provider) => provider.id === 'openai-compatible')!;
+    expect(custom.profiles.find((profile) => profile.profileId === defaultProfile.profileId)?.maxOutputTokens).toBe(32768);
+    expect(custom.profiles.find((profile) => profile.profileId === customProfile.profileId)?.maxOutputTokens).toBe(16384);
+
+    const group = await a.pickChatEntryGroup();
+    // addEntry prepends entries; the latest entry is the default/first candidate.
+    expect(group.map((choice) => ({ profileId: choice.profileId, maxOutputTokens: choice.maxOutputTokens }))).toEqual([
+      { profileId: customProfile.profileId, maxOutputTokens: 16384 },
+      { profileId: defaultProfile.profileId, maxOutputTokens: 32768 },
+    ]);
+  });
+
   it('addApiKey with explicit label sanitises invalid characters', async () => {
     const a = await import('../../../src/main/features/auth');
     const { profileId } = await a.addApiKey('openai', 'key-xxxxxxxxxxxx', 'work @home/1');

@@ -59,10 +59,10 @@ describe('prompts ↔ code contract', () => {
     // `@用户`. We assert that the four strip-token aliases all appear in
     // the bus source as string literals (in the `stripTokens.add(...)`
     // calls or equivalent).
-    expect(bus).toContain("'user'");
-    expect(bus).toContain("'commander'");
-    expect(bus).toContain("'用户'");
-    expect(bus).toContain("'指挥官'");
+    expect(bus).toMatch(/["']user["']/);
+    expect(bus).toMatch(/["']commander["']/);
+    expect(bus).toMatch(/["']用户["']/);
+    expect(bus).toMatch(/["']指挥官["']/);
 
     // Agent prompt should NOT outright forbid `@user` (since bus strips
     // it harmlessly anyway, an outright ban makes the LLM avoid even
@@ -87,7 +87,7 @@ describe('prompts ↔ code contract', () => {
     expect(fs.existsSync(sharedFile)).toBe(true);
 
     const bus = readFile('src/main/features/group_chat/bus.ts');
-    expect(bus).toContain("prompts.load('chat_shared_rules'");
+    expect(bus).toMatch(/promptLoader\.load\(["']chat_shared_rules["']/);
     expect(bus).toMatch(/concatSharedRules/);
 
     // Sanity: the shared file mentions the canonical rules so they don't
@@ -110,6 +110,42 @@ describe('prompts ↔ code contract', () => {
     // Distinctive PDF fallback phrase only in shared:
     expect(commanderPrompt).not.toMatch(/Even when the built-in PDF tools error, do not fall back/i);
     expect(agentPrompt).not.toMatch(/Even when the built-in PDF tools error, do not fall back/i);
+  });
+
+  it('renders the canonical shared task context protocol exactly once before runtime injection for every role', async () => {
+    const bus = await import('../../../src/main/features/group_chat/bus');
+    type RenderPrompt = (
+      template: 'chat_commander' | 'chat_agent_in_group' | 'chat_cli_agent',
+      args: Record<string, string | number | boolean>,
+      includeGeneralSharedRules: boolean,
+    ) => Promise<string>;
+    const render = (bus as unknown as { _renderPromptWithSharedRulesForTest?: RenderPrompt })
+      ._renderPromptWithSharedRulesForTest;
+    expect(typeof render).toBe('function');
+    if (!render) return;
+
+    const canonical = fs.readFileSync(
+      path.join(PROMPTS_DIR, 'chat_shared_task_context_protocol.md'),
+      'utf8',
+    ).trim();
+    const cases = [
+      { template: 'chat_commander' as const, includeGeneralSharedRules: true },
+      { template: 'chat_agent_in_group' as const, includeGeneralSharedRules: true },
+      { template: 'chat_cli_agent' as const, includeGeneralSharedRules: false },
+    ];
+    const busSource = readFile('src/main/features/group_chat/bus.ts');
+    for (const item of cases) {
+      expect(busSource, `${item.template} must use the shared prompt renderer`)
+        .toMatch(new RegExp(`renderPromptWithSharedRules\\s*\\(\\s*prompts\\s*,\\s*["']${item.template}["']`));
+    }
+
+    for (const item of cases) {
+      const rendered = await render(item.template, {}, item.includeGeneralSharedRules);
+      expect(rendered.split(canonical).length - 1, `${item.template} canonical block count`).toBe(1);
+      expect(rendered.indexOf(canonical), `${item.template} canonical block placement`)
+        .toBeLessThan(rendered.indexOf('## Runtime injection'));
+      expect(rendered.match(/^## Runtime injection$/gm), `${item.template} runtime section count`).toHaveLength(1);
+    }
   });
 
   it('agent authoring and execution prompts distinguish skills from tools', () => {
@@ -177,7 +213,7 @@ describe('prompts ↔ code contract', () => {
     expect(commanderPrompt).not.toContain('current response/UI language');
     expect(sharedPrompt).toContain('current response/UI language');
     expect(sharedPrompt).toContain('Preserve proper nouns, commands, file paths, code identifiers, URLs');
-    expect(readFile('src/main/features/group_chat/bus.ts')).toContain("prompts.load('chat_shared_rules'");
+    expect(readFile('src/main/features/group_chat/bus.ts')).toMatch(/promptLoader\.load\(["']chat_shared_rules["']/);
   });
 
   it('group-chat system prompts inject the current User UI language directive', () => {
@@ -199,7 +235,7 @@ describe('prompts ↔ code contract', () => {
     expect(bus).toContain('description_zh?: string');
     expect(bus).toContain('description_en?: string');
     expect(bus).toMatch(/description:\s*pickAgentRuntimeDescription\(agent\)/);
-    expect(bus).toMatch(/descriptionLang\(getLanguage\(\)\).*=== 'zh'/s);
+    expect(bus).toMatch(/descriptionLang\(getLanguage\(\)\)\s*===\s*["']zh["']/s);
   });
 
   it('authoring prompt shells leave category field rules to creator skills', () => {
@@ -475,7 +511,7 @@ describe('prompts ↔ code contract', () => {
     const skills = readFile('src/main/features/skills.ts');
     const cliPrompt = fs.readFileSync(path.join(PROMPTS_DIR, 'chat_cli_agent.md'), 'utf-8');
 
-    expect(bus).toContain("const marker = '## Runtime injection';");
+    expect(bus).toMatch(/const marker = ["']## Runtime injection["'];/);
     expect(bus).toMatch(/prompt\.slice\(0, idx\)[\s\S]+\$\{language\}[\s\S]+prompt\.slice\(idx\)/);
     expect(bus).not.toContain('<runtime-context');
     expect(runner).toContain('splitVolatilePromptTail');

@@ -369,9 +369,10 @@ export async function createDoubaoProvider(config: CreateDoubaoProviderConfig): 
 
 // ── User OpenAI-compatible endpoint (cc-switch style) ──────────────────
 
-export function buildOpenAICompatibleModel(modelId: string, baseUrl: string): Model<'openai-completions'> {
+export function buildOpenAICompatibleModel(modelId: string, baseUrl: string, maxOutputTokens?: number): Model<'openai-completions'> {
   const id = String(modelId || '').trim();
   const url = String(baseUrl || '').trim().replace(/\/+$/, '');
+  const maxTokens = Math.max(8192, Math.min(32768, Math.trunc(Number(maxOutputTokens) || 32768)));
   return {
     id,
     name: id,
@@ -386,7 +387,7 @@ export function buildOpenAICompatibleModel(modelId: string, baseUrl: string): Mo
     input: ['text', 'image'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 131072,
-    maxTokens: 8192,
+    maxTokens,
   };
 }
 
@@ -394,6 +395,7 @@ export interface CreateOpenAICompatibleProviderConfig {
   apiKey: string;
   baseUrl: string;
   modelId: string;
+  maxOutputTokens?: number;
 }
 
 export async function createOpenAICompatibleProvider(config: CreateOpenAICompatibleProviderConfig): Promise<LLMProvider> {
@@ -401,7 +403,7 @@ export async function createOpenAICompatibleProvider(config: CreateOpenAICompati
   if (!config.baseUrl) throw new Error('openai-compatible: baseUrl required');
   if (!config.modelId) throw new Error('openai-compatible: modelId required');
   const mod = await ca();
-  const model = buildOpenAICompatibleModel(config.modelId, config.baseUrl);
+  const model = buildOpenAICompatibleModel(config.modelId, config.baseUrl, config.maxOutputTokens);
   return mod.createPiProvider({
     provider: 'openai-compatible',
     apiKey: config.apiKey,

@@ -69,18 +69,7 @@ async function refreshModelGuard() {
     // out of every feature. The backend runner still fails loudly on
     // actual sends if no entry exists, so we don't lose correctness.
     if (res && res.ok) {
-      let configured = !!res.configured;
-      if (!configured) {
-        try {
-          const backend = await window.orkas.invoke('settings.getCommanderBackend');
-          configured = !!(backend && backend.ok
-            && backend.settings && backend.settings.backend === 'hermes-cli'
-            && backend.hermes && backend.hermes.available === true);
-        } catch (err) {
-          _guardLog.warn('commander backend guard check failed', { error: (err && err.message) || String(err) });
-        }
-      }
-      _hasConfiguredModel = configured;
+      _hasConfiguredModel = !!res.configured;
       _guardChecked = true;
       await refreshModelConfigSnapshot();
     } else {

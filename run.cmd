@@ -33,6 +33,19 @@ if errorlevel 1 exit /b 1
 call node "%APP_DIR%\scripts\ensure-dev-dependencies.cjs"
 if errorlevel 1 exit /b 1
 
+set "KSTAR_ENGINE_DIR=%APP_DIR%\userWorkSpace\meta-skill-engine-package"
+set "KSTAR_ENGINE_ENTRY=%KSTAR_ENGINE_DIR%\dist\index.js"
+if exist "%KSTAR_ENGINE_ENTRY%" (
+  if not defined ORKAS_KSTAR_ENGINE_COMMAND set "ORKAS_KSTAR_ENGINE_COMMAND=node"
+  set "KSTAR_ENGINE_ENTRY_JSON=%KSTAR_ENGINE_ENTRY:\=/%"
+  if not defined ORKAS_KSTAR_ENGINE_ARGS set "ORKAS_KSTAR_ENGINE_ARGS=[""!KSTAR_ENGINE_ENTRY_JSON!""]"
+  if not defined ORKAS_KSTAR_ENGINE_CWD set "ORKAS_KSTAR_ENGINE_CWD=%KSTAR_ENGINE_DIR%"
+  if not defined ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR set "ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR=%KSTAR_ENGINE_DIR%\ontologies"
+  echo [Mate Agent] KSTAR engine configured: %KSTAR_ENGINE_ENTRY%
+) else (
+  echo [Mate Agent] KSTAR engine not found at %KSTAR_ENGINE_ENTRY%; continuing without external KSTAR engine.
+)
+
 pushd "%APP_DIR%"
 taskkill /F /IM electron.exe >nul 2>nul
 call npm run start:electron

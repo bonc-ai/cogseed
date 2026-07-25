@@ -100,7 +100,7 @@ function isNativeSearchEnabled(): boolean {
   return true;
 }
 
-function buildExternalProviderModel(providerId: string, modelId: string): { contextWindow?: number; maxTokens?: number } | null {
+function buildExternalProviderModel(providerId: string, modelId: string, maxOutputTokens?: number): { contextWindow?: number; maxTokens?: number } | null {
   switch (providerId) {
     case 'moonshot':
       return buildMoonshotModel(modelId);
@@ -109,7 +109,7 @@ function buildExternalProviderModel(providerId: string, modelId: string): { cont
     case 'doubao':
       return buildDoubaoModel(modelId);
     case 'openai-compatible':
-      return { contextWindow: 131072, maxTokens: 8192 };
+      return { contextWindow: 131072, maxTokens: Math.max(8192, Math.min(32768, Math.trunc(Number(maxOutputTokens) || 32768))) };
     default:
       return null;
   }
@@ -967,7 +967,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   for (const choice of group) {
     if (modelCatalog[choice.model]) continue;
     const model = EXTERNAL_API_PROVIDERS.includes(choice.provider)
-      ? buildExternalProviderModel(choice.provider, choice.model)
+      ? buildExternalProviderModel(choice.provider, choice.model, choice.maxOutputTokens)
       : resolveConfiguredPiModel(mod, choice.provider, choice.model)?.model;
     const entry = modelCatalogEntryFromModel(model);
     if (entry) modelCatalog[choice.model] = { provider: choice.provider, model: choice.model, ...entry };
@@ -1122,7 +1122,7 @@ export function openSkillSourcesExposureFromSessionId(sessionId: string): boolea
  * Extend the switch when a new id is added to `EXTERNAL_API_PROVIDERS`.
  * Async because the underlying factories await core-agent dynamic import.
  */
-async function buildExternalProvider(providerId: string, apiKey: string, modelId: string, baseUrl?: string): Promise<LLMProvider> {
+async function buildExternalProvider(providerId: string, apiKey: string, modelId: string, baseUrl?: string, maxOutputTokens?: number): Promise<LLMProvider> {
   switch (providerId) {
     case 'moonshot':
       return await createMoonshotProvider({ apiKey, modelId });
@@ -1131,7 +1131,7 @@ async function buildExternalProvider(providerId: string, apiKey: string, modelId
     case 'doubao':
       return await createDoubaoProvider({ apiKey, modelId });
     case 'openai-compatible':
-      return await createOpenAICompatibleProvider({ apiKey, baseUrl: baseUrl || '', modelId });
+      return await createOpenAICompatibleProvider({ apiKey, baseUrl: baseUrl || '', modelId, maxOutputTokens });
     default:
       throw new Error(`no external provider factory for "${providerId}"`);
   }
@@ -1175,7 +1175,7 @@ async function buildRotatingProvider(
       modelId: candModelId,
       build: async () => {
         if (isExternal) {
-          return buildExternalProvider(candProviderId, choice.apiKey, candModelId, choice.baseUrl);
+          return buildExternalProvider(candProviderId, choice.apiKey, candModelId, choice.baseUrl, choice.maxOutputTokens);
         }
         const resolvedModel = resolveConfiguredPiModel(mod, candProviderId, candModelId);
         if (resolvedModel?.isConfiguredFallback) {

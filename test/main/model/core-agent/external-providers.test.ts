@@ -86,8 +86,14 @@ describe('external-providers › OpenAI-compatible custom endpoint', () => {
       api: 'openai-completions',
       baseUrl: 'https://llm.example.test/v1',
       contextWindow: 131072,
-      maxTokens: 8192,
+      maxTokens: 32768,
     });
+  });
+
+  it('clamps user-configured OpenAI-compatible max output tokens to the supported range', () => {
+    expect(buildOpenAICompatibleModel('custom-chat', 'https://llm.example.test/v1', 16384).maxTokens).toBe(16384);
+    expect(buildOpenAICompatibleModel('custom-chat', 'https://llm.example.test/v1', 999).maxTokens).toBe(8192);
+    expect(buildOpenAICompatibleModel('custom-chat', 'https://llm.example.test/v1', 999999).maxTokens).toBe(32768);
   });
 
   it('validates custom provider credentials before constructing the pi provider', async () => {

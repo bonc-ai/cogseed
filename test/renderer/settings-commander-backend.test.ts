@@ -37,19 +37,13 @@ function loadHarness() {
   const indexHtml = readFileSync(resolve(__dirname, '../../src/renderer/index.html'), 'utf8');
   const ids = [
     'settings-commander-backend-select',
-    'settings-commander-hermes-model-row',
-    'settings-commander-hermes-model',
     'settings-commander-backend-save',
-    'settings-commander-backend-detect',
     'settings-commander-backend-status',
     'settings-commander-backend-detail',
   ];
   const elements = new Map(ids.map((id) => [id, new FakeElement()]));
   const invoke = vi.fn(async (channel: string, payload?: unknown) => {
     if (channel === 'settings.setCommanderBackend') return { ok: true, settings: (payload as any).settings };
-    if (channel === 'settings.detectCommanderBackends') {
-      return { ok: true, hermes: { available: true, path: '/bin/hermes', version: '1.2.3' } };
-    }
     return { ok: true };
   });
   const aiSelectMount = (element: FakeElement, config: Record<string, unknown> = {}) => {
@@ -96,28 +90,26 @@ describe('settings commander backend', () => {
   it('renders the commander backend settings controls', () => {
     const { indexHtml } = loadHarness();
     expect(indexHtml).toContain('id="settings-commander-backend-select"');
-    expect(indexHtml).toContain('id="settings-commander-hermes-model"');
     expect(indexHtml).toContain('id="settings-commander-backend-save"');
+    expect(indexHtml).not.toContain('id="settings-commander-hermes-model"');
+    expect(indexHtml).not.toContain('id="settings-commander-backend-detect"');
   });
 
-  it('saves Hermes backend selection without secrets', async () => {
+  it('saves only the Orkas Core Agent commander backend', async () => {
     const { context, elements, invoke } = loadHarness();
     vm.runInContext(`
       _settingsState.commanderBackendView = {
-        settings: { backend: 'orkas-core-agent', authEntryId: null, localCli: null },
+        settings: { backend: 'hermes-cli', authEntryId: null, localCli: { type: 'hermes', model: 'legacy' } },
         cloudConfigured: true,
-        hermes: { available: true, path: '/bin/hermes', version: '1.2.3' }
       };
       _settingsRenderCommanderBackend();
-      _settingsState.commanderBackendSel.emitChange('hermes-cli');
     `, context);
-    elements.get('settings-commander-hermes-model')!.value = 'hermes-fast';
     await elements.get('settings-commander-backend-save')!.click();
     expect(invoke).toHaveBeenCalledWith('settings.setCommanderBackend', {
       settings: {
-        backend: 'hermes-cli',
+        backend: 'orkas-core-agent',
         authEntryId: null,
-        localCli: { type: 'hermes', model: 'hermes-fast', useCliDefaultModel: false },
+        localCli: null,
       },
     });
     expect(JSON.stringify(invoke.mock.calls)).not.toMatch(/apiKey|secret|token/i);
