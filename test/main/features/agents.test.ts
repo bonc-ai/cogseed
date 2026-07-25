@@ -80,6 +80,7 @@ function writeCustomAgent(agentId: string, fields: Partial<Record<string, any>> 
   };
   if ('skill_list' in fields) data.skill_list = fields.skill_list;
   if ('runtime' in fields) data.runtime = fields.runtime;
+  if ('interface_contract' in fields) data.interface_contract = fields.interface_contract;
   fs.writeFileSync(path.join(dir, 'agent.json'), JSON.stringify(data));
 }
 
@@ -170,6 +171,19 @@ describe('agents › normalizeAgent', () => {
       workflow: 'W',
       source: 'marketplace', created_at: 't1', updated_at: 't2',
       category: '',
+      interface_contract: {
+        version: 1,
+        role: 'orkas_core',
+        runtime: { kind: 'in_process' },
+        io: { input: 'task_message', output: 'final_message' },
+        governance: {
+          session_role: 'owner_capable',
+          data_scope: 'visibility_slice_with_workspace',
+          uses_mate_skills: true,
+          records_process: true,
+          records_tool_evidence: true,
+        },
+      },
       // computed-at-load default; overridden by listAgents/getAgent at the boundary
       enabled: true,
     });
@@ -331,6 +345,64 @@ describe('agents › normalizeAgent', () => {
     expect(norm?.runtime).toEqual({
       kind: 'cli', cli: 'claude', custom_args: ['--ok', '--other'],
     });
+  });
+
+  it('derives an Orkas Core interface contract for legacy in-process agents', async () => {
+    const a = await loadAgents();
+    const norm = a.normalizeAgent({ agent_id: 'x', name: 'N' }, 'custom');
+    expect(norm?.interface_contract).toEqual({
+      version: 1,
+      role: 'orkas_core',
+      runtime: { kind: 'in_process' },
+      io: { input: 'task_message', output: 'final_message' },
+      governance: {
+        session_role: 'owner_capable',
+        data_scope: 'visibility_slice_with_workspace',
+        uses_mate_skills: true,
+        records_process: true,
+        records_tool_evidence: true,
+      },
+    });
+  });
+
+  it('derives an external expert interface contract for CLI agents', async () => {
+    const a = await loadAgents();
+    const norm = a.normalizeAgent({
+      agent_id: 'x', name: 'N',
+      runtime: { kind: 'cli', cli: 'hermes' },
+      output_format: 'artifact',
+    } as any, 'custom');
+    expect(norm?.interface_contract).toEqual({
+      version: 1,
+      role: 'external_expert',
+      runtime: { kind: 'cli', cli: 'hermes' },
+      io: { input: 'task_message', output: 'final_message_with_artifacts' },
+      governance: {
+        session_role: 'participant_only',
+        data_scope: 'visibility_slice_with_workspace',
+        uses_mate_skills: false,
+        records_process: true,
+        records_tool_evidence: true,
+      },
+    });
+  });
+
+  it('ignores contradictory persisted interface contracts in favor of runtime', async () => {
+    const a = await loadAgents();
+    const norm = a.normalizeAgent({
+      agent_id: 'x', name: 'N',
+      runtime: { kind: 'cli', cli: 'codex' },
+      interface_contract: {
+        version: 1,
+        role: 'orkas_core',
+        runtime: { kind: 'in_process' },
+        governance: { uses_mate_skills: true },
+      },
+    } as any, 'custom');
+    expect(norm?.interface_contract.role).toBe('external_expert');
+    expect(norm?.interface_contract.runtime).toEqual({ kind: 'cli', cli: 'codex' });
+    expect(norm?.interface_contract.governance.session_role).toBe('participant_only');
+    expect(norm?.interface_contract.governance.uses_mate_skills).toBe(false);
   });
 
   it('keeps category and only recognized output_format values', async () => {
@@ -947,6 +1019,31 @@ describe('agents › createCustomAgent', () => {
     expect(JSON.parse(fs.readFileSync(file, 'utf8')).workflow).toBe('`agent-creator` skill');
   });
 
+  it('persists a reconciled interface contract when creating a CLI agent', async () => {
+    const a = await loadAgents();
+    const agent = await a.createCustomAgent({
+      name: 'ContractCLI',
+      description: 'desc',
+      category: 'general',
+      runtime: { kind: 'cli', cli: 'codex' },
+      output_format: 'artifact',
+    });
+    const raw = JSON.parse(fs.readFileSync(path.join(customAgentsDir(), agent!.agent_id, 'agent.json'), 'utf8'));
+    expect(raw.interface_contract).toEqual({
+      version: 1,
+      role: 'external_expert',
+      runtime: { kind: 'cli', cli: 'codex' },
+      io: { input: 'task_message', output: 'final_message_with_artifacts' },
+      governance: {
+        session_role: 'participant_only',
+        data_scope: 'visibility_slice_with_workspace',
+        uses_mate_skills: false,
+        records_process: true,
+        records_tool_evidence: true,
+      },
+    });
+  });
+
   it('rejects direct bundled-script commands while creating the agent', async () => {
     const a = await loadAgents();
     await expect(a.createCustomAgent({
@@ -1240,6 +1337,27 @@ describe('agents › updateCustomAgent', () => {
       runtime: { kind: 'cli', cli: 'codex' },
     } as any);
     expect(updated?.runtime).toEqual({ kind: 'cli', cli: 'codex' });
+  });
+
+  it('reconciles interface contract when updating a CLI backend', async () => {
+    writeCustomAgent('abc', {
+      name: 'N',
+      runtime: { kind: 'cli', cli: 'claude' },
+      interface_contract: {
+        version: 1,
+        role: 'orkas_core',
+        runtime: { kind: 'in_process' },
+      },
+    } as any);
+    const a = await loadAgents();
+    const updated = await a.updateCustomAgent('abc', {
+      runtime: { kind: 'cli', cli: 'hermes' },
+    } as any);
+    expect(updated?.interface_contract.role).toBe('external_expert');
+    expect(updated?.interface_contract.runtime).toEqual({ kind: 'cli', cli: 'hermes' });
+    const raw = JSON.parse(fs.readFileSync(path.join(customAgentsDir(), 'abc', 'agent.json'), 'utf8'));
+    expect(raw.interface_contract.runtime).toEqual({ kind: 'cli', cli: 'hermes' });
+    expect(raw.interface_contract.governance.uses_mate_skills).toBe(false);
   });
 
   it('locks runtime kind: cli agent cannot revert to in_process', async () => {
