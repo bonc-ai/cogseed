@@ -74,6 +74,14 @@ describe('conversation produced chips', () => {
     expect(styleSource).toContain('width: 100%;');
   });
 
+
+
+  it('folds intermediate process logs by default while keeping the activity strip visible', () => {
+    expect(source).toContain('<details class="stream-process" data-role="process-container" style="display:none">');
+    expect(source).not.toContain('<details class="stream-process" data-role="process-container" open style="display:none">');
+    expect(source).toContain('stream-activity');
+  });
+
   it('reuses the task-detail Files menu for produced-file actions', () => {
     expect(source).toContain('window.ConversationInfo.openFileMenu(menuBtn, p, base');
     expect(conversationInfoSource).toContain('function openFileMenu(anchorBtn, absPath, displayName, options = {})');

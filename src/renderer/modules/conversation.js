@@ -9396,7 +9396,7 @@ function _createStreamingAssistantMessage(container, opts = {}) {
       <span class="chat-msg-time">${formatTime(new Date().toISOString())}</span>
     </div>
     <div class="chat-bubble">
-      <details class="stream-process" data-role="process-container" open style="display:none">
+      <details class="stream-process" data-role="process-container" style="display:none">
         <summary class="stream-process-summary">
           <span class="stream-process-caret" aria-hidden="true">${_uiIconHtml('chevron-right', 'ui-icon stream-process-caret-icon')}</span>
           <span class="stream-process-label">${escapeHtml(t('chat.process_info'))}</span>
