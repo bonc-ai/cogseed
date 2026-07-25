@@ -175,6 +175,193 @@ describe('conversation run observer cleanup', () => {
 });
 
 describe('conversation sidebar task row actions', () => {
+  it('fetches and renders a recently-active task that is missing from the bounded startup cache', async () => {
+    const context = loadConversationRenderer();
+    const container = {
+      innerHTML: '',
+      querySelectorAll: () => [],
+    };
+    context.document.getElementById = (id: string) => id === 'conversation-list' ? container : null;
+    context.conversations = [];
+    context.apiFetch = async (url: string) => {
+      expect(url).toBe('/api/conversations/fresh-bg');
+      return {
+        json: async () => ({
+          ok: true,
+          conversation: {
+            conversation_id: 'fresh-bg',
+            title: 'Fresh background task',
+            created_at: '2026-07-24T00:00:00.000Z',
+            updated_at: '2026-07-24T00:00:00.000Z',
+            last_active_at: '2026-07-24T00:00:00.000Z',
+          },
+        }),
+      };
+    };
+
+    await context._bumpConvToTop('fresh-bg');
+
+    expect(context.conversations.map((c: any) => c.conversation_id)).toEqual(['fresh-bg']);
+    expect(container.innerHTML).toContain('Fresh background task');
+    expect(container.innerHTML).not.toContain('sidebar.conv_empty');
+  });
+
+  it('keeps an optimistically-created task when an older startup list response arrives later', async () => {
+    const context = loadConversationRenderer();
+    const container = {
+      innerHTML: '',
+      querySelectorAll: () => [],
+    };
+    context.document.getElementById = (id: string) => id === 'conversation-list' ? container : null;
+
+    let resolveList: (value: any) => void = () => {};
+    context.apiFetch = () => new Promise((resolve) => {
+      resolveList = resolve;
+    });
+
+    const loadPromise = context.loadConversations({ startup: true });
+    context._markConversationListLocallyChanged();
+    context.conversations.unshift({
+      conversation_id: 'fresh',
+      title: 'Fresh task',
+      created_at: '2026-07-24T00:00:00.000Z',
+      updated_at: '2026-07-24T00:00:00.000Z',
+      last_active_at: '2026-07-24T00:00:00.000Z',
+    });
+    context.renderConversationList();
+
+    resolveList({
+      json: async () => ({
+        ok: true,
+        conversations: [],
+        deferred_unprojected: { last30: 0, older: 0 },
+      }),
+    });
+    await loadPromise;
+
+    expect(context.conversations.map((c: any) => c.conversation_id)).toEqual(['fresh']);
+    expect(container.innerHTML).toContain('Fresh task');
+    expect(container.innerHTML).not.toContain('sidebar.conv_empty');
+  });
+
+  it('backfills remaining startup project pages after first paint', async () => {
+    const context = loadConversationRenderer();
+    const listContainer = {
+      innerHTML: '',
+      querySelectorAll: () => [],
+    };
+    const projectsContainer = {
+      innerHTML: '',
+      querySelectorAll: () => [],
+    };
+    context.document.getElementById = (id: string) => {
+      if (id === 'conversation-list') return listContainer;
+      if (id === 'projects-list') return projectsContainer;
+      return null;
+    };
+    context._projectsCache = [{ project_id: 'p1', name: 'Project One' }];
+    context._projectsExpanded = { p1: true };
+    context.renderProjectsSection = function renderProjectsSection() {
+      const rows = context.conversations
+        .filter((c: any) => c && c.project_id === 'p1')
+        .map((c: any) => c.title)
+        .join('|');
+      projectsContainer.innerHTML = rows;
+    };
+    const urls: string[] = [];
+    context.apiFetch = async (url: string) => {
+      urls.push(url);
+      if (url.startsWith('/api/conversations/list?mode=startup')) {
+        return {
+          json: async () => ({
+            ok: true,
+            conversations: Array.from({ length: 10 }, (_, i) => ({
+              conversation_id: `p1-${i}`,
+              project_id: 'p1',
+              title: `Project task ${i}`,
+              created_at: '2026-07-24T00:00:00.000Z',
+              updated_at: '2026-07-24T00:00:00.000Z',
+              last_active_at: '2026-07-24T00:00:00.000Z',
+            })),
+            deferred_unprojected: { last30: 0, older: 0 },
+            loaded_project_ids: ['p1'],
+            project_pagination: { p1: { total: 12, next_offset: 10 } },
+          }),
+        };
+      }
+      expect(url).toBe('/api/conversations/list?mode=project&project_id=p1&offset=10');
+      return {
+        json: async () => ({
+          ok: true,
+          conversations: [
+            {
+              conversation_id: 'p1-10',
+              project_id: 'p1',
+              title: 'Project task 10',
+              created_at: '2026-07-24T00:00:00.000Z',
+              updated_at: '2026-07-24T00:00:00.000Z',
+              last_active_at: '2026-07-24T00:00:00.000Z',
+            },
+            {
+              conversation_id: 'p1-11',
+              project_id: 'p1',
+              title: 'Project task 11',
+              created_at: '2026-07-24T00:00:00.000Z',
+              updated_at: '2026-07-24T00:00:00.000Z',
+              last_active_at: '2026-07-24T00:00:00.000Z',
+            },
+          ],
+          total: 12,
+          next_offset: null,
+        }),
+      };
+    };
+
+    await context.loadConversations({ startup: true });
+
+    expect(urls).toEqual([
+      '/api/conversations/list?mode=startup&expanded_projects=p1',
+      '/api/conversations/list?mode=project&project_id=p1&offset=10',
+    ]);
+    expect(context.conversations.map((c: any) => c.conversation_id)).toContain('p1-11');
+    expect(projectsContainer.innerHTML).toContain('Project task 11');
+  });
+
+  it('does not append a stale project page after a local sidebar change', async () => {
+    const context = loadConversationRenderer();
+    const container = { innerHTML: '', querySelectorAll: () => [] };
+    context.document.getElementById = (id: string) => id === 'conversation-list' ? container : null;
+    let pageRequestStarted = false;
+    context.apiFetch = async (url: string) => {
+      if (url.startsWith('/api/conversations/list?mode=startup')) {
+        return {
+          json: async () => ({
+            ok: true,
+            conversations: [{ conversation_id: 'p1-0', project_id: 'p1', title: 'Current task' }],
+            deferred_unprojected: { last30: 0, older: 0 },
+            loaded_project_ids: ['p1'],
+            project_pagination: { p1: { total: 2, next_offset: 10 } },
+          }),
+        };
+      }
+      pageRequestStarted = true;
+      context._markConversationListLocallyChanged();
+      return {
+        json: async () => ({
+          ok: true,
+          conversations: [{ conversation_id: 'stale', project_id: 'p1', title: 'Stale task' }],
+          total: 2,
+          next_offset: null,
+        }),
+      };
+    };
+
+    await context.loadConversations({ startup: true });
+
+    expect(pageRequestStarted).toBe(true);
+    expect(context.conversations.map((c: any) => c.conversation_id)).toEqual(['p1-0']);
+  });
+
   it('renders a single menu button after the title', () => {
     const context = loadConversationRenderer();
     const html = context._renderConversationSidebarItem({

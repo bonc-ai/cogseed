@@ -3886,10 +3886,12 @@ function _initNewChatAttachInput() {
 
 let _loadConversationsInFlight = null;
 let _loadConversationsMode = '';
+let _conversationListLocalGeneration = 0;
 let _conversationDeferredBuckets = { last30: 0, older: 0 };
 const _loadedConversationProjectIds = new Set();
 const _conversationProjectPages = new Map();
 const _projectConversationLoads = new Map();
+const _conversationRowHydrationLoads = new Map();
 const _oldConversationPages = {
   last30: { initialized: false, total: 0, nextOffset: 0, loading: false },
   older: { initialized: false, total: 0, nextOffset: 0, loading: false },
@@ -3926,6 +3928,37 @@ function _appendConversationSlice(rows) {
   conversations = Array.from(byCid.values());
 }
 
+async function _hydrateConversationRow(cid) {
+  const id = String(cid || '');
+  if (!id) return null;
+  if (Array.isArray(conversations)) {
+    const existing = conversations.find((row) => row && row.conversation_id === id);
+    if (existing) return existing;
+  }
+  const active = _conversationRowHydrationLoads.get(id);
+  if (active) return active;
+  const run = (async () => {
+    try {
+      const res = await apiFetch(`/api/conversations/${encodeURIComponent(id)}`);
+      const data = await res.json();
+      if (!data?.ok || !data.conversation?.conversation_id) return null;
+      _appendConversationSlice([data.conversation]);
+      return data.conversation;
+    } catch (err) {
+      _convLog.warn('hydrate conversation row failed', err);
+      return null;
+    } finally {
+      if (_conversationRowHydrationLoads.get(id) === run) _conversationRowHydrationLoads.delete(id);
+    }
+  })();
+  _conversationRowHydrationLoads.set(id, run);
+  return run;
+}
+
+function _markConversationListLocallyChanged() {
+  _conversationListLocalGeneration += 1;
+}
+
 function _projectConversationPageInfo(projectId) {
   return _conversationProjectPages.get(String(projectId || '')) || null;
 }
@@ -3940,6 +3973,36 @@ function _projectConversationTotal(projectId) {
   return page ? Number(page.total) || 0 : 0;
 }
 
+/** Finish the pages for projects that were visible in the startup slice.
+ * Startup still paints only the first page, but an expanded project should
+ * not remain permanently truncated just because its first request was the
+ * bounded startup request. Yield between pages so the first paint and other
+ * renderer work get a chance to run. */
+async function _backfillStartupProjectConversations(projectIds, requestGeneration) {
+  const ids = Array.from(new Set(
+    (Array.isArray(projectIds) ? projectIds : [])
+      .map((pid) => String(pid || ''))
+      .filter(Boolean),
+  ));
+  for (const pid of ids) {
+    while (requestGeneration === _conversationListLocalGeneration
+      && _projectConversationHasMore(pid)) {
+      const before = _projectConversationPageInfo(pid)?.nextOffset;
+      try {
+        await loadConversationProject(pid, { append: true });
+      } catch (err) {
+        _convLog.warn('startup project conversation backfill failed', { projectId: pid, error: err });
+        break;
+      }
+      const after = _projectConversationPageInfo(pid)?.nextOffset;
+      // Avoid retrying forever if a malformed response returns the same
+      // cursor. The visible load-more control remains available in that case.
+      if (after !== null && after === before) break;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+}
+
 async function loadConversations(options = {}) {
   // Routine refreshes retain the bounded startup slice. A caller must opt in
   // explicitly when its UI genuinely needs every conversation.
@@ -3950,6 +4013,7 @@ async function loadConversations(options = {}) {
     return loadConversations(options);
   }
   _loadConversationsMode = startup ? 'startup' : 'full';
+  const requestGeneration = _conversationListLocalGeneration;
   _loadConversationsInFlight = (async () => {
     try {
       const url = startup
@@ -3958,6 +4022,7 @@ async function loadConversations(options = {}) {
       const res = await apiFetch(url);
       const data = await res.json();
       if (data.ok) {
+        if (requestGeneration !== _conversationListLocalGeneration) return;
         conversations = data.conversations || [];
         _conversationDeferredBuckets = startup
           ? { last30: Number(data.deferred_unprojected?.last30) || 0, older: Number(data.deferred_unprojected?.older) || 0 }
@@ -4008,6 +4073,9 @@ async function loadConversations(options = {}) {
           }
         }
         renderConversationList();
+        if (startup && requestGeneration === _conversationListLocalGeneration) {
+          await _backfillStartupProjectConversations(data.loaded_project_ids, requestGeneration);
+        }
       }
     } catch (e) {
       _convLog.error('load conversations failed', e);
@@ -4028,11 +4096,13 @@ async function loadConversationProject(projectId, options = {}) {
   if (append && !_projectConversationHasMore(pid)) return;
   const existing = _projectConversationLoads.get(pid);
   if (existing) return existing;
+  const requestGeneration = _conversationListLocalGeneration;
   const run = (async () => {
     const offset = append ? currentPage.nextOffset : 0;
     const res = await apiFetch(`/api/conversations/list?mode=project&project_id=${encodeURIComponent(pid)}&offset=${offset}`);
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'project conversation list failed');
+    if (requestGeneration !== _conversationListLocalGeneration) return;
     if (append) _appendConversationSlice(data.conversations);
     else _replaceConversationSlice(data.conversations, (c) => c && c.project_id === pid);
     const next = data.next_offset === null ? null : Number(data.next_offset);
@@ -4090,10 +4160,15 @@ function startRelayActivitySubscription() {
 // Called whenever a non-internal message lands on a cid so the list stays
 // ordered by pin state first, then last activity (matches backend
 // listConversations sort on the next full reload).
-function _bumpConvToTop(cid) {
-  if (!cid || !Array.isArray(conversations) || !conversations.length) return;
-  const c = conversations.find((row) => row && row.conversation_id === cid);
-  if (!c) return;
+async function _bumpConvToTop(cid) {
+  if (!cid) return;
+  if (!Array.isArray(conversations)) conversations = [];
+  let c = conversations.find((row) => row && row.conversation_id === cid);
+  if (!c) {
+    c = await _hydrateConversationRow(cid);
+    if (!c) return;
+  }
+  _markConversationListLocallyChanged();
   c.last_active_at = new Date().toISOString();
   _sortConversationCacheForSidebar();
   renderConversationList();
@@ -4317,6 +4392,7 @@ async function _toggleConversationPinned(cid, pinned) {
   const snapshot = conversations.map((c) => (c ? { ...c } : c));
   const local = conversations.find((c) => c && c.conversation_id === cid);
   if (!local) return;
+  _markConversationListLocallyChanged();
   if (pinned) local.pinned_at = new Date().toISOString();
   else delete local.pinned_at;
   _sortConversationCacheForSidebar();
@@ -4334,12 +4410,14 @@ async function _toggleConversationPinned(cid, pinned) {
     }
     const idx = conversations.findIndex((c) => c && c.conversation_id === cid);
     if (idx >= 0) {
+      _markConversationListLocallyChanged();
       conversations[idx] = { ...conversations[idx], ...data.conversation };
       _sortConversationCacheForSidebar();
       renderConversationList();
       _refreshChatHeader();
     }
   } catch (err) {
+    _markConversationListLocallyChanged();
     conversations = snapshot;
     renderConversationList();
     _refreshChatHeader();
@@ -4381,7 +4459,10 @@ async function _saveConversationTitle(cid, raw, opts = {}) {
       throw new Error((data && data.error) || 'rename failed');
     }
     const idx = conversations.findIndex((c) => c && c.conversation_id === cid);
-    if (idx >= 0) conversations[idx] = { ...conversations[idx], ...data.conversation };
+    if (idx >= 0) {
+      _markConversationListLocallyChanged();
+      conversations[idx] = { ...conversations[idx], ...data.conversation };
+    }
     if (_conversationInlineRenameCid === cid) _conversationInlineRenameCid = null;
     if (_conversationHeaderRenameCid === cid) _conversationHeaderRenameCid = null;
     renderConversationList();
@@ -4455,6 +4536,7 @@ async function _deleteConversationWithConfirm(cid, opts = {}) {
     method: 'DELETE',
   });
   if (currentCid === cid) setView('new-chat');
+  _markConversationListLocallyChanged();
   conversations = (Array.isArray(conversations) ? conversations : [])
     .filter((item) => item && item.conversation_id !== cid);
   if (conversation?.project_id) {
@@ -4829,6 +4911,7 @@ async function _recoverMissingConversation(cid, source = 'history') {
   if (!cid) return;
   try { abortConvStream(cid); } catch (_) {}
   try { _forgetConvLocal(cid); } catch (_) {}
+  _markConversationListLocallyChanged();
   conversations = (Array.isArray(conversations) ? conversations : [])
     .filter((item) => item && item.conversation_id !== cid);
   try { renderConversationList(); } catch (_) {}
@@ -5076,6 +5159,37 @@ function _revealConversationHistorySearchTarget(cid, target = {}) {
   return true;
 }
 
+function focusConversationAttention(kind, ref, messageId = '') {
+  if (!currentCid) return false;
+  const targetKind = String(kind || '');
+  const targetRef = String(ref || '');
+  const fallbackMessageId = String(messageId || '');
+  const escapedRef = targetRef ? CSS.escape(targetRef) : '';
+  const selectors = {
+    wake: escapedRef ? `.chat-wake-request[data-wake-request-id="${escapedRef}"]` : '',
+    kstar: escapedRef ? `.chat-kstar-review[data-kstar-run-id="${escapedRef}"]` : '',
+    patch: escapedRef ? `.chat-patch-candidate[data-patch-candidate-id="${escapedRef}"]` : '',
+  };
+  if (targetKind === 'conflict') {
+    const container = document.getElementById('chat-history');
+    if (!container) return false;
+    _flashConversationHistorySearchTarget(container);
+    return true;
+  }
+  const selector = selectors[targetKind] || '';
+  const target = selector ? document.querySelector(selector) : null;
+  if (target) {
+    _flashConversationHistorySearchTarget(target);
+    return true;
+  }
+  if (fallbackMessageId) {
+    return _revealConversationHistorySearchTarget(currentCid, { msgId: fallbackMessageId });
+  }
+  return false;
+}
+
+if (typeof window !== 'undefined') window.focusConversationAttention = focusConversationAttention;
+
 
 function _collaborationCount(value) {
   const n = Number(value);
@@ -5189,37 +5303,6 @@ function _renderCollaborationStatusHtml(collaboration) {
     ${detailsHtml}
   `;
 }
-
-function focusConversationAttention(kind, ref, messageId = '') {
-  if (!currentCid) return false;
-  const targetKind = String(kind || '');
-  const targetRef = String(ref || '');
-  const fallbackMessageId = String(messageId || '');
-  const escapedRef = targetRef ? CSS.escape(targetRef) : '';
-  const selectors = {
-    wake: escapedRef ? `.chat-wake-request[data-wake-request-id="${escapedRef}"]` : '',
-    kstar: escapedRef ? `.chat-kstar-review[data-kstar-run-id="${escapedRef}"]` : '',
-    patch: escapedRef ? `.chat-patch-candidate[data-patch-candidate-id="${escapedRef}"]` : '',
-  };
-  if (targetKind === 'conflict') {
-    const container = document.getElementById('chat-history');
-    if (!container) return false;
-    _flashConversationHistorySearchTarget(container);
-    return true;
-  }
-  const selector = selectors[targetKind] || '';
-  const target = selector ? document.querySelector(selector) : null;
-  if (target) {
-    _flashConversationHistorySearchTarget(target);
-    return true;
-  }
-  if (fallbackMessageId) {
-    return _revealConversationHistorySearchTarget(currentCid, { msgId: fallbackMessageId });
-  }
-  return false;
-}
-
-if (typeof window !== 'undefined') window.focusConversationAttention = focusConversationAttention;
 
 
 async function _resolveCollaborationGate(card, collaboration, decision) {
@@ -6648,6 +6731,9 @@ function _renderKStarReviewCard(card, review, cid, candidate = null) {
   for (const button of card.querySelectorAll('[data-experience-decision]')) {
     button.addEventListener('click', () => _resolveExperienceCandidate(card, review, candidate, cid, button.dataset.experienceDecision));
   }
+  for (const button of card.querySelectorAll('[data-experience-notion-sync]')) {
+    button.addEventListener('click', () => _syncExperienceCandidateToNotion(card, review, candidate, cid));
+  }
 }
 
 function _mountKStarReviewCard(host, review, cid) {
@@ -6906,9 +6992,6 @@ async function _hydratePendingWakeRequests(cid) {
   } catch (err) {
     _convLog.warn('wake request hydration failed', (err && err.message) || String(err));
   }
-  for (const button of card.querySelectorAll('[data-experience-notion-sync]')) {
-    button.addEventListener('click', () => _syncExperienceCandidateToNotion(card, review, candidate, cid));
-  }
 }
 
 function _wakeRequestSemanticKey(request) {
@@ -7017,6 +7100,8 @@ function _mountWakeRequestCards(host, message, opts = {}) {
     host.appendChild(card);
     _renderWakeRequestCard(card, request, cid);
   }
+  _pruneWakeRequestHost(host);
+  try { _updateChatInputReserve(); } catch (_) {}
 }
 
 async function _resolveWakeRequest(card, request, cid, decision) {
@@ -7093,8 +7178,6 @@ async function _resolveMarketplaceInstallRequest(card, req, cid, msgId, decision
     _convLog.warn('marketplace install request failed', reason);
     try { await uiAlert(_marketplaceInstallFailedText(req.kind, req.name || req.id, reason)); } catch (_) {}
   }
-  _pruneWakeRequestHost(host);
-  try { _updateChatInputReserve(); } catch (_) {}
 }
 
 // Insert a "process info" block above the assistant bubble content
@@ -7576,6 +7659,7 @@ async function _transferSelectedReferences(targetCid, payloads, opts = {}) {
   _closeReferenceTargetPicker();
   _exitMessageSelection();
   if (opts.conversation) {
+    _markConversationListLocallyChanged();
     conversations = (Array.isArray(conversations) ? conversations : []).filter((c) => c.conversation_id !== targetCid);
     conversations.unshift(opts.conversation);
     renderConversationList();
@@ -8124,6 +8208,7 @@ async function handleNewChatSubmit() {
     // output). Set it explicitly so `timeBucket` puts the brand-new row in
     // the 'today' bucket instead of falling through to 'older'.
     conv.last_active_at = new Date().toISOString();
+    _markConversationListLocallyChanged();
     conversations.unshift(conv);
     renderConversationList();
   } catch (e) {
