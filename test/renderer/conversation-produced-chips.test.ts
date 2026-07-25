@@ -60,8 +60,15 @@ describe('conversation produced chips', () => {
     expect(source).toContain('bubble.appendChild(node)');
     expect(source).toContain('<div class="chat-msg-produced-item"');
     expect(source).toContain('class="chat-msg-produced-main"');
+    expect(source).toContain('class="chat-msg-produced-open-btn btn btn-sm"');
+    expect(source).toContain('chat-msg-produced-path');
+    expect(source).toContain('chat-msg-produced-badge');
+    expect(source).toContain('data-produced-status');
     expect(source).toContain('class="chat-msg-produced-menu-btn"');
     expect(styleSource).toContain('.chat-msg-produced {');
+    expect(styleSource).toContain('.chat-msg-produced-open-btn {');
+    expect(styleSource).toContain('.chat-msg-produced-path {');
+    expect(styleSource).toContain('.chat-msg-produced-badge.is-draft');
     expect(styleSource).toContain('flex-direction: column;');
     expect(styleSource).toContain('border-top: 1px solid rgba(148, 163, 184, 0.2);');
     expect(styleSource).toContain('width: 100%;');

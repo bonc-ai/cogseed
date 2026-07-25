@@ -112,4 +112,82 @@ describe('P3394 KSTAR experience controls', () => {
     expect(apiFetch.mock.calls[1][0]).toContain('/experience/exp-1/decision');
     expect(card.dataset.busy).toBe('');
   });
+
+  it('syncs promoted experience candidates to Notion and re-renders the returned state', async () => {
+    const card: any = {
+      dataset: {},
+      className: '',
+      innerHTML: '',
+      querySelectorAll: vi.fn(() => []),
+    };
+    const apiFetch = vi.fn(async () => ({
+      json: async () => ({
+        ok: true,
+        candidate: {
+          id: 'exp-1',
+          status: 'approved',
+          promotion_status: 'promoted',
+          kb_path: 'kstar-experiences/2026/07/exp-1.md',
+          notion_sync: { status: 'synced', url: 'https://notion.test/page' },
+        },
+      }),
+    }));
+    const sandbox: any = {
+      apiFetch,
+      encodeURIComponent,
+      escapeHtml: (value: unknown) => String(value ?? ''),
+      t: (key: string) => key,
+      _convLog: { warn: vi.fn() },
+      uiAlert: vi.fn(async () => undefined),
+      console,
+    };
+    vm.runInNewContext(p3394CardSource, sandbox, { filename: 'conversation-p3394-card.js' });
+
+    await sandbox._syncExperienceCandidateToNotion(card, { run_id: 'run-1', status: 'completed' }, { id: 'exp-1' }, 'cid-1');
+
+    expect(apiFetch).toHaveBeenCalledWith('/api/conversations/cid-1/experience/exp-1/notion-sync', expect.objectContaining({ method: 'POST' }));
+    expect(card.dataset.busy).toBe('');
+    expect(card.innerHTML).toContain('p3394.experience.notion_synced');
+    expect(card.innerHTML).toContain('https://notion.test/page');
+  });
+
+  it('shows the Notion failure reason returned by the backend', async () => {
+    const card: any = {
+      dataset: {},
+      className: '',
+      innerHTML: '',
+      querySelectorAll: vi.fn(() => []),
+    };
+    const apiFetch = vi.fn(async () => ({
+      json: async () => ({
+        ok: false,
+        error: 'Notion sync target is not configured. Set ORKAS_KSTAR_NOTION_PARENT_ID.',
+        candidate: {
+          id: 'exp-1',
+          status: 'approved',
+          promotion_status: 'promoted',
+          kb_path: 'kstar-experiences/2026/07/exp-1.md',
+          notion_sync: { status: 'failed', error: 'Notion sync target is not configured. Set ORKAS_KSTAR_NOTION_PARENT_ID.' },
+        },
+      }),
+    }));
+    const uiAlert = vi.fn(async () => undefined);
+    const sandbox: any = {
+      apiFetch,
+      encodeURIComponent,
+      escapeHtml: (value: unknown) => String(value ?? ''),
+      t: (key: string) => key,
+      _convLog: { warn: vi.fn() },
+      uiAlert,
+      console,
+    };
+    vm.runInNewContext(p3394CardSource, sandbox, { filename: 'conversation-p3394-card.js' });
+
+    await sandbox._syncExperienceCandidateToNotion(card, { run_id: 'run-1', status: 'completed' }, { id: 'exp-1' }, 'cid-1');
+
+    expect(card.dataset.busy).toBe('');
+    expect(card.innerHTML).toContain('ORKAS_KSTAR_NOTION_PARENT_ID');
+    expect(uiAlert).toHaveBeenCalledWith(expect.stringContaining('ORKAS_KSTAR_NOTION_PARENT_ID'));
+  });
+
 });

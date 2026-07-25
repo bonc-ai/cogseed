@@ -77,6 +77,57 @@ describe('ipc-shim streams', () => {
 describe('ipc-shim invoke results', () => {
   const idleStream = () => ({ promise: Promise.resolve(), cancel: () => {} });
 
+  it('routes single-conversation reads through IPC', async () => {
+    const invoke = vi.fn(async () => ({ ok: true, conversation: { conversation_id: 'c1' } }));
+    const { apiFetch } = loadShim(idleStream, invoke);
+
+    const response = await apiFetch('/api/conversations/c1');
+
+    await expect(response.json()).resolves.toMatchObject({ ok: true, conversation: { conversation_id: 'c1' } });
+    expect(invoke).toHaveBeenCalledWith('conversations.get', { cid: 'c1' });
+  });
+
+  it('routes collaboration conflict list reads through IPC', async () => {
+    const invoke = vi.fn(async () => ({ ok: true, conflicts: [] }));
+    const { apiFetch } = loadShim(idleStream, invoke);
+
+    const response = await apiFetch('/api/conversations/c1/collaboration/conflicts');
+
+    await expect(response.json()).resolves.toMatchObject({ ok: true, conflicts: [] });
+    expect(invoke).toHaveBeenCalledWith('groupChat.listCollaborationConflicts', { cid: 'c1' });
+  });
+
+  it('routes collaboration conflict resolution through IPC with the JSON body', async () => {
+    const invoke = vi.fn(async () => ({ ok: true, collaboration: null }));
+    const { apiFetch } = loadShim(idleStream, invoke);
+
+    const response = await apiFetch('/api/conversations/c1/collaboration/conflicts/wconflict-1/resolve', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ decision: 'accept', selected_proposal_ids: ['p1'], text: 'Use p1', reason: 'Evidence' }),
+    });
+
+    await expect(response.json()).resolves.toMatchObject({ ok: true });
+    expect(invoke).toHaveBeenCalledWith('groupChat.resolveCollaborationConflict', {
+      cid: 'c1',
+      conflictId: 'wconflict-1',
+      decision: 'accept',
+      selected_proposal_ids: ['p1'],
+      text: 'Use p1',
+      reason: 'Evidence',
+    });
+  });
+
+  it('routes P3394 protocol event reads through IPC', async () => {
+    const invoke = vi.fn(async () => ({ ok: true, protocol_events: [] }));
+    const { apiFetch } = loadShim(idleStream, invoke);
+
+    const response = await apiFetch('/api/conversations/cid-protocol/protocol-events');
+
+    await expect(response.json()).resolves.toMatchObject({ ok: true, protocol_events: [] });
+    expect(invoke).toHaveBeenCalledWith('p3394.listProtocolEvents', { cid: 'cid-protocol' });
+  });
+
   it('does not classify expected business failures as IPC transport errors', async () => {
     const invoke = vi.fn(async () => ({ ok: false, error: 'conversation not found', code: 'E_NOT_FOUND' }));
     const { apiFetch, monitorError } = loadShim(idleStream, invoke);

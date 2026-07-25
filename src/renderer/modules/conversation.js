@@ -2160,6 +2160,15 @@ function _bindChatHeaderActions() {
     agentStatusBtn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if (!currentCid) return;
+      if (window.ConversationInfo && typeof window.ConversationInfo.openCollaboration === 'function') {
+        window.ConversationInfo.openCollaboration(currentCid);
+        return;
+      }
+      if (window.ConversationInfo && typeof window.ConversationInfo.openAndSetTab === 'function') {
+        window.ConversationInfo.openAndSetTab('collaboration');
+        return;
+      }
       _toggleAgentStatusPopover(agentStatusBtn);
     });
   }
@@ -3454,33 +3463,66 @@ function _orderProducedPaths(absPaths) {
     .sort((a, b) => _producedDeliverableRank(a.base) - _producedDeliverableRank(b.base) || a.i - b.i);
 }
 
-function _renderMessageProducedHtml(absPaths) {
+function _producedStatusFromReviewStatus(reviewStatus) {
+  const status = String(reviewStatus || '').trim();
+  if (status === 'needs_review') return 'draft';
+  if (status === 'failed') return 'failed';
+  return 'final';
+}
+
+function _producedStatusLabel(status) {
+  if (status === 'draft') return t('chat.produced_status.draft');
+  if (status === 'failed') return t('chat.produced_status.failed');
+  return t('chat.produced_status.final');
+}
+
+function _renderMessageProducedHtml(absPaths, opts = {}) {
   // Chip shows just the filename. The full absolute path lives only in
   // `data-produced-path` for the click handler; tooltip is a static
   // localized "preview" hint instead of the raw OS path (which exposes
   // the user's home directory and is hostile UX in mixed-locale contexts).
   const hint = t('chat.produced_preview_title');
   const moreHint = t('contexts.menu.more_actions');
+  const outputStatus = opts.status || 'final';
+  const statusLabel = _producedStatusLabel(outputStatus);
   const ordered = _orderProducedPaths(absPaths);
   const items = ordered.map((e) => {
     const icon = _iconForProduced(e.base);
     return `<div class="chat-msg-produced-item" data-produced-path="${escapeHtml(e.path)}">
       <button type="button" class="chat-msg-produced-main" title="${escapeHtml(hint)}">
         <span class="chat-msg-produced-icon">${icon}</span>
-        <span class="chat-msg-produced-label">${escapeHtml(e.base)}</span>
+        <span class="chat-msg-produced-main-text">
+          <span class="chat-msg-produced-label-row"><span class="chat-msg-produced-label">${escapeHtml(e.base)}</span><span class="chat-msg-produced-badge is-${escapeHtml(outputStatus)}">${escapeHtml(statusLabel)}</span></span>
+          <span class="chat-msg-produced-path" title="${escapeHtml(e.path)}">${escapeHtml(e.path)}</span>
+        </span>
       </button>
+      <button type="button" class="chat-msg-produced-open-btn btn btn-sm" title="${escapeHtml(hint)}">${escapeHtml(t('chat.produced_open'))}</button>
       <button type="button" class="chat-msg-produced-menu-btn" title="${escapeHtml(moreHint)}" aria-label="${escapeHtml(moreHint)}">⋯</button>
     </div>`;
   });
-  return `<div class="chat-msg-produced">${items.join('')}</div>`;
+  return `<div class="chat-msg-produced is-${escapeHtml(outputStatus)}" data-produced-status="${escapeHtml(outputStatus)}">${items.join('')}</div>`;
 }
 
-function _mountMessageProducedFooter(msgDiv, absPaths) {
+function _applyMessageProducedStatus(msgDiv, status) {
+  const footer = msgDiv?.querySelector?.('.chat-msg-produced');
+  if (!footer) return;
+  const next = status || 'final';
+  footer.dataset.producedStatus = next;
+  footer.classList.remove('is-final', 'is-draft', 'is-failed');
+  footer.classList.add(`is-${next}`);
+  const label = _producedStatusLabel(next);
+  for (const badge of footer.querySelectorAll('.chat-msg-produced-badge')) {
+    badge.className = `chat-msg-produced-badge is-${next}`;
+    badge.textContent = label;
+  }
+}
+
+function _mountMessageProducedFooter(msgDiv, absPaths, opts = {}) {
   if (!msgDiv || !Array.isArray(absPaths) || !absPaths.length) return;
   const bubble = msgDiv.querySelector('.chat-bubble');
   if (!bubble || bubble.querySelector('.chat-msg-produced')) return;
   const wrap = document.createElement('div');
-  wrap.innerHTML = _renderMessageProducedHtml(absPaths);
+  wrap.innerHTML = _renderMessageProducedHtml(absPaths, { status: opts.status || 'final' });
   const node = wrap.firstElementChild;
   if (!node) return;
   bubble.appendChild(node);
@@ -3586,6 +3628,7 @@ function _hydrateMessageProducedChips(msgDiv) {
   const rows = msgDiv.querySelectorAll('.chat-msg-produced-item[data-produced-path]');
   rows.forEach((row) => {
     const main = row.querySelector('.chat-msg-produced-main');
+    const openBtn = row.querySelector('.chat-msg-produced-open-btn');
     const menuBtn = row.querySelector('.chat-msg-produced-menu-btn');
     if (main && main.dataset.bound !== '1') {
       main.dataset.bound = '1';
@@ -3595,6 +3638,19 @@ function _hydrateMessageProducedChips(msgDiv) {
         if (!p) return;
         if (typeof openChatFileViewer === 'function') {
           const base = p.split(/[\\/]/).pop() || p;
+          openChatFileViewer(p, base, currentCid ? { cid: currentCid } : undefined);
+        }
+      });
+    }
+    if (openBtn && openBtn.dataset.bound !== '1') {
+      openBtn.dataset.bound = '1';
+      openBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const p = row.dataset.producedPath;
+        if (!p) return;
+        if (typeof openChatFileViewer === 'function') {
+          const base = p.split(/[\/]/).pop() || p;
           openChatFileViewer(p, base, currentCid ? { cid: currentCid } : undefined);
         }
       });
@@ -5134,6 +5190,37 @@ function _renderCollaborationStatusHtml(collaboration) {
   `;
 }
 
+function focusConversationAttention(kind, ref, messageId = '') {
+  if (!currentCid) return false;
+  const targetKind = String(kind || '');
+  const targetRef = String(ref || '');
+  const fallbackMessageId = String(messageId || '');
+  const escapedRef = targetRef ? CSS.escape(targetRef) : '';
+  const selectors = {
+    wake: escapedRef ? `.chat-wake-request[data-wake-request-id="${escapedRef}"]` : '',
+    kstar: escapedRef ? `.chat-kstar-review[data-kstar-run-id="${escapedRef}"]` : '',
+    patch: escapedRef ? `.chat-patch-candidate[data-patch-candidate-id="${escapedRef}"]` : '',
+  };
+  if (targetKind === 'conflict') {
+    const container = document.getElementById('chat-history');
+    if (!container) return false;
+    _flashConversationHistorySearchTarget(container);
+    return true;
+  }
+  const selector = selectors[targetKind] || '';
+  const target = selector ? document.querySelector(selector) : null;
+  if (target) {
+    _flashConversationHistorySearchTarget(target);
+    return true;
+  }
+  if (fallbackMessageId) {
+    return _revealConversationHistorySearchTarget(currentCid, { msgId: fallbackMessageId });
+  }
+  return false;
+}
+
+if (typeof window !== 'undefined') window.focusConversationAttention = focusConversationAttention;
+
 
 async function _resolveCollaborationGate(card, collaboration, decision) {
   const gate = collaboration && collaboration.blocking_gate;
@@ -5424,6 +5511,7 @@ async function loadConversationHistory(cid, opts = {}) {
     _replayBufferedGroupEvents(cid);
     void _hydratePendingWakeRequests(cid);
     void _hydrateKStarReviews(cid);
+    void _hydratePatchCandidates(cid);
 
     // Re-add the inline "create agent" entry BEFORE scrolling so it's part of
     // scrollHeight when we jump to the bottom — otherwise the MutationObserver
@@ -6234,13 +6322,10 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
       _mountChatInputForm(formHost, msgDiv, message, opts);
     }
   }
-  // P3394 Wake Gate approval cards belong to the visible user intent that was
-  // deliberately not dispatched. They are rendered for both live events and
-  // history reloads from the same persisted GroupMessage field.
-  if (role === 'user' && Array.isArray(message.wake_requests) && message.wake_requests.length) {
-    const bubble = msgDiv.querySelector('.chat-bubble');
-    if (bubble) _mountWakeRequestCards(bubble, message, opts);
-  }
+  // P3394 Wake Gate approval cards are rendered in the current composer
+  // pending-action area, not inside historical chat bubbles. That keeps the
+  // human approval affordance near the input instead of forcing users to scroll
+  // back to the message that triggered the gate.
 
   // Commander → user marketplace install confirmation cards. The model can
   // request approval, but only this human click path performs the install.
@@ -6261,7 +6346,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble) window.mountMessageArtifacts(bubble, message.artifacts, opts.cid || currentCid);
   }
-  if (producedPaths) _mountMessageProducedFooter(msgDiv, producedPaths);
+  if (producedPaths) _mountMessageProducedFooter(msgDiv, producedPaths, { status: _producedStatusFromReviewStatus(message.kstar_review?.status) });
   // Every assistant reply gets actions. Archive remains limited to final
   // raw-markdown replies; sanitized HTML status stubs are not archivable.
   if (role === 'assistant' && failedAssistant) {
@@ -6536,12 +6621,27 @@ function _renderKStarReviewCard(card, review, cid, candidate = null) {
   card.className = `chat-kstar-review is-${status}`;
   card.dataset.kstarRunId = String(review?.run_id || '');
   const reviewActions = status === 'needs_review'
-    ? `<button type="button" class="btn primary small" data-kstar-review="pass">${escapeHtml(t('p3394.kstar.pass'))}</button><button type="button" class="btn small" data-kstar-review="fail">${escapeHtml(t('p3394.kstar.fail'))}</button>`
+    ? `<button type="button" class="btn btn-primary btn-sm" data-kstar-review="pass">${escapeHtml(t('p3394.kstar.pass'))}</button><button type="button" class="btn btn-sm" data-kstar-review="fail">${escapeHtml(t('p3394.kstar.fail'))}</button>`
     : '';
   const experienceActions = candidate?.status === 'pending'
-    ? `<div class="chat-kstar-experience"><span>${escapeHtml(t('p3394.experience.title'))}</span><button type="button" class="btn primary small" data-experience-decision="approve">${escapeHtml(t('p3394.experience.approve'))}</button><button type="button" class="btn small" data-experience-decision="reject">${escapeHtml(t('p3394.experience.reject'))}</button></div>`
+    ? `<div class="chat-kstar-experience"><span>${escapeHtml(t('p3394.experience.title'))}</span><button type="button" class="btn btn-primary btn-sm" data-experience-decision="approve">${escapeHtml(t('p3394.experience.approve'))}</button><button type="button" class="btn btn-sm" data-experience-decision="reject">${escapeHtml(t('p3394.experience.reject'))}</button></div>`
     : '';
-  card.innerHTML = `<div class="chat-kstar-title">${escapeHtml(t('p3394.kstar.title'))}</div><div class="chat-kstar-status">${escapeHtml(t(`p3394.kstar.status.${status}`))}</div><div class="chat-kstar-actions">${reviewActions}</div>${experienceActions}`;
+  const kbError = candidate?.promotion_error ? `${t('p3394.experience.kb_failed')}: ${candidate.promotion_error}` : t('p3394.experience.kb_failed');
+  const experienceStatus = candidate?.promotion_status === 'promoted' && candidate?.kb_path
+    ? `<div class="chat-kstar-experience-status is-promoted">${escapeHtml(t('p3394.experience.kb_promoted', { path: candidate.kb_path }))}</div>`
+    : candidate?.promotion_status === 'failed'
+      ? `<div class="chat-kstar-experience-status is-failed">${escapeHtml(kbError)}</div>`
+      : '';
+  const notionError = candidate?.notion_sync?.error ? `${t('p3394.experience.notion_failed')}: ${candidate.notion_sync.error}` : t('p3394.experience.notion_failed');
+  const notionStatus = candidate?.notion_sync?.status === 'synced'
+    ? `<div class="chat-kstar-experience-status is-promoted">${escapeHtml(t('p3394.experience.notion_synced'))}${candidate.notion_sync.url ? ` <a href="${escapeHtml(candidate.notion_sync.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t('common.open'))}</a>` : ''}</div>`
+    : candidate?.notion_sync?.status === 'failed'
+      ? `<div class="chat-kstar-experience-status is-failed">${escapeHtml(notionError)}</div>`
+      : '';
+  const notionActions = candidate?.promotion_status === 'promoted' && candidate?.notion_sync?.status !== 'synced'
+    ? `<div class="chat-kstar-experience"><span>${escapeHtml(t('p3394.experience.notion_title'))}</span><button type="button" class="btn btn-sm" data-experience-notion-sync="1">${escapeHtml(t('p3394.experience.notion_sync'))}</button></div>`
+    : '';
+  card.innerHTML = `<div class="chat-kstar-title">${escapeHtml(t('p3394.kstar.title'))}</div><div class="chat-kstar-status">${escapeHtml(t(`p3394.kstar.status.${status}`))}</div><div class="chat-kstar-actions">${reviewActions}</div>${experienceActions}${experienceStatus}${notionActions}${notionStatus}`;
   for (const button of card.querySelectorAll('[data-kstar-review]')) {
     button.addEventListener('click', () => _resolveKStarReview(card, review, cid, button.dataset.kstarReview));
   }
@@ -6569,6 +6669,7 @@ async function _resolveKStarReview(card, review, cid, decision) {
     const data = await res.json();
     if (!data?.ok) throw new Error(data?.error || 'KSTAR review failed');
     _renderKStarReviewCard(card, { ...review, status: data.run.status }, cid, data.experience_candidate);
+    _applyMessageProducedStatus(card.closest('.chat-message'), _producedStatusFromReviewStatus(data.run.status));
   } catch (err) {
     card.dataset.busy = '';
     _convLog.warn('KSTAR review failed', (err && err.message) || String(err));
@@ -6592,6 +6693,28 @@ async function _resolveExperienceCandidate(card, review, candidate, cid, decisio
   }
 }
 
+async function _syncExperienceCandidateToNotion(card, review, candidate, cid) {
+  if (!candidate?.id || card.dataset.busy === '1') return;
+  card.dataset.busy = '1';
+  try {
+    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/experience/${encodeURIComponent(candidate.id)}/notion-sync`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+    });
+    const data = await res.json();
+    if (!data?.ok) {
+      if (data?.candidate?.id) _renderKStarReviewCard(card, review, cid, data.candidate);
+      throw new Error(data?.error || 'Notion sync failed');
+    }
+    if (!data.candidate?.id) throw new Error('Notion sync returned no candidate');
+    _renderKStarReviewCard(card, review, cid, data.candidate);
+  } catch (err) {
+    card.dataset.busy = '';
+    const message = (err && err.message) || String(err);
+    _convLog.warn('Notion sync failed', message);
+    try { await uiAlert(`${t('p3394.experience.notion_failed')}: ${message}`); } catch (_) {}
+  }
+}
+
 async function _hydrateKStarReviews(cid) {
   try {
     const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/kstar`);
@@ -6605,37 +6728,200 @@ async function _hydrateKStarReviews(cid) {
       const run = runsById.get(String(card.dataset.kstarRunId || ''));
       if (!run) continue;
       const candidate = candidatesByRunId.get(String(run.id || '')) || null;
-      _renderKStarReviewCard(card, {
+      const latestReview = {
         run_id: run.id,
         status: run.status,
         agent_id: run.agent_id,
         turn_id: run.turn_id,
-      }, cid, candidate);
+      };
+      _renderKStarReviewCard(card, latestReview, cid, candidate);
+      _applyMessageProducedStatus(card.closest('.chat-message'), _producedStatusFromReviewStatus(run.status));
     }
   } catch (err) {
     _convLog.warn('KSTAR hydration failed', (err && err.message) || String(err));
   }
 }
 
-function _wakeRequestHost(cid) {
+
+function _renderPatchCandidateCard(card, cid, candidate) {
+  if (!card || !candidate?.id) return;
+  const status = String(candidate.status || 'unknown');
+  const type = String(candidate.type || 'unknown');
+  const proposal = candidate.proposal && typeof candidate.proposal === 'object' ? candidate.proposal : {};
+  const engine = candidate.engine && typeof candidate.engine === 'object' ? candidate.engine : {};
+  const review = candidate.review && typeof candidate.review === 'object' ? candidate.review : {};
+  const title = _patchCandidateText(proposal.title, t('p3394.patch.untitled'));
+  const summary = _patchCandidateText(proposal.summary, t('p3394.patch.no_summary'));
+  const rationale = _patchCandidateText(proposal.rationale);
+  const proposed = _patchCandidateText(proposal.proposed_content);
+  const routeAction = _patchCandidateText(engine.route_action);
+  const attributionId = _patchCandidateText(engine.attribution_id);
+  const reviewNotes = _patchCandidateText(review.notes || candidate.review_notes || candidate.notes);
+  const canReview = status === 'needs_review' || status === 'proposed';
+
+  card.className = `chat-patch-candidate is-${status}`;
+  card.dataset.patchCandidateId = String(candidate.id);
+  card.dataset.busy = '';
+  card.innerHTML = `
+    <div class="chat-patch-candidate-head">
+      <div>
+        <div class="chat-patch-candidate-kicker">${escapeHtml(t('p3394.patch.kicker'))}</div>
+        <div class="chat-patch-candidate-title">${escapeHtml(title)}</div>
+      </div>
+      <div class="chat-patch-candidate-badges">
+        <span class="chat-patch-candidate-badge">${escapeHtml(_patchCandidateTypeLabel(type))}</span>
+        <span class="chat-patch-candidate-badge is-status">${escapeHtml(_patchCandidateStatusLabel(status))}</span>
+      </div>
+    </div>
+    <div class="chat-patch-candidate-summary">${escapeHtml(summary)}</div>
+    <details class="chat-patch-candidate-details">
+      <summary>${escapeHtml(t('p3394.patch.details'))}</summary>
+      ${rationale ? `<div class="chat-patch-candidate-field"><strong>${escapeHtml(t('p3394.patch.rationale'))}</strong><div>${escapeHtml(rationale)}</div></div>` : ''}
+      ${proposed ? `<div class="chat-patch-candidate-field"><strong>${escapeHtml(t('p3394.patch.proposed'))}</strong><pre>${escapeHtml(proposed)}</pre></div>` : ''}
+      ${routeAction ? `<div class="chat-patch-candidate-meta">${escapeHtml(t('p3394.patch.route_action'))}: ${escapeHtml(routeAction)}</div>` : ''}
+      ${attributionId ? `<div class="chat-patch-candidate-meta">${escapeHtml(t('p3394.patch.attribution_id'))}: ${escapeHtml(attributionId)}</div>` : ''}
+      ${reviewNotes ? `<div class="chat-patch-candidate-meta">${escapeHtml(t('p3394.patch.review_notes'))}: ${escapeHtml(reviewNotes)}</div>` : ''}
+    </details>
+    ${canReview ? `
+      <textarea class="chat-patch-candidate-notes" rows="2" placeholder="${escapeHtml(t('p3394.patch.notes_placeholder'))}"></textarea>
+      <div class="chat-patch-candidate-actions">
+        <button type="button" class="btn btn-primary btn-sm" data-patch-candidate-review="approve">${escapeHtml(t('p3394.patch.approve'))}</button>
+        <button type="button" class="btn btn-sm" data-patch-candidate-review="reject">${escapeHtml(t('p3394.patch.reject'))}</button>
+      </div>` : ''}
+  `;
+  for (const button of card.querySelectorAll('[data-patch-candidate-review]')) {
+    button.addEventListener('click', () => _resolvePatchCandidateReview(card, cid, candidate, button.dataset.patchCandidateReview));
+  }
+}
+
+function _patchCandidateStatusLabel(status) {
+  const rawStatus = String(status || 'unknown');
+  const key = `p3394.patch.status.${rawStatus}`;
+  const label = t(key);
+  return label === key ? rawStatus : label;
+}
+
+function _patchCandidateTypeLabel(type) {
+  const rawType = String(type || 'unknown');
+  const key = `p3394.patch.type.${rawType}`;
+  const label = t(key);
+  return label === key ? rawType : label;
+}
+
+function _patchCandidateText(value, fallback = '') {
+  const text = String(value || '').trim();
+  return text || fallback;
+}
+
+async function _resolvePatchCandidateReview(card, cid, candidate, decision) {
+  if (!card || !candidate?.id || card.dataset.busy === '1') return;
+  card.dataset.busy = '1';
+  try {
+    const notesEl = card.querySelector('.chat-patch-candidate-notes');
+    const notes = notesEl && typeof notesEl.value === 'string' ? notesEl.value : '';
+    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/patch-candidates/${encodeURIComponent(candidate.id)}/review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision, notes }),
+    });
+    const data = await res.json();
+    if (!data?.ok) throw new Error(data?.error || 'patch candidate review failed');
+    if (!data.patch_candidate?.id) throw new Error('patch candidate review returned no candidate');
+    _renderPatchCandidateCard(card, cid, data.patch_candidate);
+  } catch (err) {
+    card.dataset.busy = '';
+    _convLog.warn('patch candidate review failed', (err && err.message) || String(err));
+    try { await uiAlert(t('p3394.patch.review_failed')); } catch (_) {}
+  }
+}
+
+function _patchCandidateHost(cid, options = {}) {
   if (!cid || cid !== currentCid) return null;
-  const messages = Array.from(document.querySelectorAll('#chat-history .chat-message.user'));
-  const latest = messages[messages.length - 1];
-  return latest?.querySelector('.chat-bubble') || null;
+  const existing = document.querySelector('#chat-patch-candidates-host');
+  if (existing || options.create === false) return existing || null;
+  const history = document.getElementById ? document.getElementById('chat-history') : document.querySelector('#chat-history');
+  if (!history) return null;
+  const host = document.createElement('div');
+  host.id = 'chat-patch-candidates-host';
+  host.className = 'chat-patch-candidates-host';
+  host.setAttribute('role', 'region');
+  host.setAttribute('aria-live', 'polite');
+  if (typeof _appendBeforeSpacer === 'function') _appendBeforeSpacer(history, host);
+  else history.appendChild(host);
+  return host;
+}
+
+async function _hydratePatchCandidates(cid) {
+  if (!cid || cid !== currentCid) return;
+  const host = _patchCandidateHost(cid, { create: true });
+  if (!host) return;
+  host.innerHTML = `<div class="chat-patch-candidates-title">${escapeHtml(t('p3394.patch.center_title'))}</div><div class="chat-patch-candidates-loading">${escapeHtml(t('p3394.patch.loading'))}</div>`;
+  try {
+    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/patch-candidates`);
+    const data = await res.json();
+    if (!data?.ok || cid !== currentCid) return;
+    const candidates = Array.isArray(data.patch_candidates) ? data.patch_candidates : [];
+    host.innerHTML = `<div class="chat-patch-candidates-title"><span>${escapeHtml(t('p3394.patch.center_title'))}</span><span>${escapeHtml(String(candidates.length))}</span></div>`;
+    if (!candidates.length) {
+      host.innerHTML += `<div class="chat-patch-candidates-empty">${escapeHtml(t('p3394.patch.empty'))}</div>`;
+      return;
+    }
+    for (const candidate of candidates) {
+      const card = document.createElement('div');
+      host.appendChild(card);
+      _renderPatchCandidateCard(card, cid, candidate);
+    }
+  } catch (err) {
+    _convLog.warn('patch candidate hydration failed', (err && err.message) || String(err));
+    host.innerHTML = `<div class="chat-patch-candidates-title">${escapeHtml(t('p3394.patch.center_title'))}</div><div class="chat-patch-candidates-error">${escapeHtml(t('p3394.patch.load_failed'))}</div>`;
+  }
+}
+
+function _wakeRequestHost(cid, options = {}) {
+  if (!cid || cid !== currentCid) return null;
+  const wrap = document.querySelector('#panel-conversation .chat-input-wrapper');
+  if (!wrap) return null;
+  let host = wrap.querySelector('.chat-wake-pending-host');
+  if (!host && options.create !== false) {
+    host = document.createElement('div');
+    host.className = 'chat-wake-pending-host';
+    host.setAttribute('role', 'region');
+    host.setAttribute('aria-live', 'polite');
+    const anchor = wrap.querySelector('.chat-input-area');
+    wrap.insertBefore(host, anchor || wrap.firstChild);
+    try { _updateChatInputReserve(); } catch (_) {}
+  }
+  return host || null;
 }
 
 async function _hydratePendingWakeRequests(cid) {
-  const host = _wakeRequestHost(cid);
-  if (!host) return;
   try {
     const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/wake-requests`);
     const data = await res.json();
     if (!data?.ok || cid !== currentCid) return;
-    const requests = Array.isArray(data.requests) ? data.requests : [];
-    if (requests.length) _mountWakeRequestCards(host, { wake_requests: requests }, { cid });
+    const requests = Array.isArray(data.requests)
+      ? data.requests.filter((request) => String(request?.status || 'pending') === 'pending')
+      : [];
+    _mountWakeRequestCards(_wakeRequestHost(cid, { create: requests.length > 0 }), { wake_requests: requests }, { cid, replace: true });
   } catch (err) {
     _convLog.warn('wake request hydration failed', (err && err.message) || String(err));
   }
+  for (const button of card.querySelectorAll('[data-experience-notion-sync]')) {
+    button.addEventListener('click', () => _syncExperienceCandidateToNotion(card, review, candidate, cid));
+  }
+}
+
+function _wakeRequestSemanticKey(request) {
+  return `${String(request?.agent_id || request?.agent_name || '')}::${String(request?.objective || '').trim().replace(/\s+/g, ' ')}`;
+}
+
+function _wakeRequestPreview(text, max = 120) {
+  const normalized = String(text || '')
+    .replace(/[#*_`>\[\]().-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (normalized.length <= max) return normalized;
+  return `${normalized.slice(0, Math.max(1, max - 1)).trimEnd()}…`;
 }
 
 function _renderWakeRequestCard(card, request, cid) {
@@ -6643,36 +6929,90 @@ function _renderWakeRequestCard(card, request, cid) {
   const pending = status === 'pending';
   const agentName = String(request?.agent_name || request?.agent_id || t('chat.from_agent_unknown'));
   const objective = String(request?.objective || '');
-  card.className = `chat-wake-request is-${status}`;
+  const preview = _wakeRequestPreview(objective) || t('p3394.wake.scope');
+  const hasDetails = objective.trim().length > preview.replace(/…$/, '').length;
+  const detailsOpen = card.dataset.detailsOpen === '1';
+  card.className = `chat-wake-request is-${status}${detailsOpen ? ' is-expanded' : ''}`;
   card.dataset.wakeRequestId = String(request?.id || '');
+  card.dataset.wakeRequestKey = _wakeRequestSemanticKey(request);
   card.innerHTML = `
-    <div class="chat-wake-request-title">${escapeHtml(t('p3394.wake.title'))}</div>
-    <div class="chat-wake-request-agent">${escapeHtml(t('p3394.wake.agent', { name: agentName }))}</div>
-    <div class="chat-wake-request-objective">${escapeHtml(objective)}</div>
-    <div class="chat-wake-request-scope">${escapeHtml(t('p3394.wake.scope'))}</div>
-    <div class="chat-wake-request-actions">
-      ${pending ? `<button type="button" class="btn primary small" data-wake-decision="approve">${escapeHtml(t('p3394.wake.approve'))}</button><button type="button" class="btn small" data-wake-decision="reject">${escapeHtml(t('p3394.wake.reject'))}</button>` : ''}
-      <span class="chat-wake-request-status">${escapeHtml(t(`p3394.wake.status.${status}`))}</span>
-    </div>`;
+    <div class="chat-wake-request-row">
+      <div class="chat-wake-request-main">
+        <div class="chat-wake-request-title"><span class="chat-wake-request-title-text">${escapeHtml(t('p3394.wake.title'))}</span><span class="chat-wake-request-agent">${escapeHtml(t('p3394.wake.agent', { name: agentName }))}</span></div>
+        <div class="chat-wake-request-objective" title="${escapeHtml(objective)}">${escapeHtml(preview)}</div>
+      </div>
+      <div class="chat-wake-request-actions">
+        ${hasDetails ? `<button type="button" class="btn btn-sm" data-wake-details>${escapeHtml(t(detailsOpen ? 'p3394.wake.details.hide' : 'p3394.wake.details.show'))}</button>` : ''}
+        ${pending ? `<button type="button" class="btn btn-primary btn-sm" data-wake-decision="approve">${escapeHtml(t('p3394.wake.approve'))}</button><button type="button" class="btn btn-sm" data-wake-decision="reject">${escapeHtml(t('p3394.wake.reject'))}</button>` : `<span class="chat-wake-request-status">${escapeHtml(t(`p3394.wake.status.${status}`))}</span>`}
+      </div>
+    </div>
+    ${detailsOpen ? `<div class="chat-wake-request-details">${escapeHtml(objective)}</div>` : ''}`;
+  const detailsButton = card.querySelector('[data-wake-details]');
+  if (detailsButton) {
+    detailsButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      card.dataset.detailsOpen = detailsOpen ? '0' : '1';
+      _renderWakeRequestCard(card, request, cid);
+    });
+  }
   for (const button of card.querySelectorAll('[data-wake-decision]')) {
-    button.addEventListener('click', () => {
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       _resolveWakeRequest(card, request, cid, button.dataset.wakeDecision);
     });
   }
 }
 
-function _mountWakeRequestCards(host, message, opts) {
+function _pruneWakeRequestHost(host) {
+  if (!host) return;
+  if (!host.querySelector('.chat-wake-request')) {
+    host.remove();
+    try { _updateChatInputReserve(); } catch (_) {}
+  }
+}
+
+function _mountWakeRequestCards(host, message, opts = {}) {
   const cid = opts.cid || currentCid;
-  if (!cid || !host) return;
+  if (!cid) return;
+  if (!host) {
+    if (opts.replace) _pruneWakeRequestHost(_wakeRequestHost(cid, { create: false }));
+    return;
+  }
+  const requestsByKey = new Map();
   for (const request of message.wake_requests || []) {
-    if (!request?.id) continue;
+    if (!request?.id || String(request.status || 'pending') !== 'pending') continue;
+    const key = _wakeRequestSemanticKey(request);
+    if (!requestsByKey.has(key)) requestsByKey.set(key, request);
+  }
+  const requests = Array.from(requestsByKey.values());
+  if (opts.replace) {
+    const keepIds = new Set(requests.map((request) => String(request.id)));
+    const keepKeys = new Set(requests.map((request) => _wakeRequestSemanticKey(request)));
+    for (const existing of Array.from(host.querySelectorAll('.chat-wake-request[data-wake-request-id]'))) {
+      const existingId = String(existing.dataset.wakeRequestId || '');
+      const existingKey = String(existing.dataset.wakeRequestKey || '');
+      if (!keepIds.has(existingId) && !keepKeys.has(existingKey)) existing.remove();
+    }
+  }
+  const seenKeys = new Set();
+  for (const existing of Array.from(host.querySelectorAll('.chat-wake-request[data-wake-request-id]'))) {
+    const key = String(existing.dataset.wakeRequestKey || '');
+    if (!key) continue;
+    if (seenKeys.has(key)) existing.remove();
+    else seenKeys.add(key);
+  }
+  for (const request of requests) {
+    const key = _wakeRequestSemanticKey(request);
     const selector = `.chat-wake-request[data-wake-request-id="${CSS.escape(String(request.id))}"]`;
-    const existing = document.querySelector(selector);
+    const existing = host.querySelector(selector)
+      || host.querySelector(`.chat-wake-request[data-wake-request-key="${CSS.escape(key)}"]`)
+      || document.querySelector(selector);
     if (existing) {
       _renderWakeRequestCard(existing, request, cid);
       continue;
     }
-    if (request.status !== 'pending' && request.status !== 'approved') continue;
     const card = document.createElement('div');
     host.appendChild(card);
     _renderWakeRequestCard(card, request, cid);
@@ -6694,7 +7034,8 @@ async function _resolveWakeRequest(card, request, cid, decision) {
     });
     const data = await res.json();
     if (!data || data.ok === false) throw new Error(data?.error || 'wake decision failed');
-    _renderWakeRequestCard(card, data.request || { ...request, status: decision === 'approve' ? 'executed' : 'rejected' }, cid);
+    card.remove();
+    _pruneWakeRequestHost(_wakeRequestHost(cid, { create: false }));
   } catch (err) {
     observer?.abort?.();
     card.dataset.busy = '';
@@ -6752,6 +7093,8 @@ async function _resolveMarketplaceInstallRequest(card, req, cid, msgId, decision
     _convLog.warn('marketplace install request failed', reason);
     try { await uiAlert(_marketplaceInstallFailedText(req.kind, req.name || req.id, reason)); } catch (_) {}
   }
+  _pruneWakeRequestHost(host);
+  try { _updateChatInputReserve(); } catch (_) {}
 }
 
 // Insert a "process info" block above the assistant bubble content
@@ -10750,7 +11093,7 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
     if (bubble) window.mountMessageArtifacts(bubble, gm.artifacts, cid);
   }
   if (Array.isArray(gm.produced) && gm.produced.length) {
-    _mountMessageProducedFooter(ph, gm.produced);
+    _mountMessageProducedFooter(ph, gm.produced, { status: _producedStatusFromReviewStatus(gm.kstar_review?.status) });
   }
   _scheduleConversationInfoFileRefresh(cid);
 }
@@ -10769,7 +11112,7 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
     return;
   }
   if (evData.type === 'wake_request' && evData.request) {
-    const host = _wakeRequestHost(cid);
+    const host = _wakeRequestHost(cid, { create: String(evData.request.status || 'pending') === 'pending' });
     if (host) _mountWakeRequestCards(host, { wake_requests: [evData.request] }, { cid });
     return;
   }
@@ -10890,7 +11233,10 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
           try { loadSkills(true); } catch (_) {}
         }
       }
-      if (isTurnEnd) _evaluateAutoRecipient(cid);
+      if (isTurnEnd) {
+        _evaluateAutoRecipient(cid);
+        void _hydratePatchCandidates(cid);
+      }
     } else {
       // Mid-turn side-effect message (plan announcement etc., no `seg`) —
       // append a new bubble alongside, leave the streaming placeholder alive

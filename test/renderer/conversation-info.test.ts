@@ -8,15 +8,28 @@ type RenderFilesResult = {
   counts: {
     files: string;
     attachments: string;
+    collaboration: string;
+    protocol: string;
   };
+  urls: string[];
+  focusCalls: Array<[string, string, string]>;
+  panelHidden: boolean;
 };
 
 function renderFilesResult(snapshot: {
   history: any[];
   files: any;
   attachments?: any[];
+  actors?: any[];
+  runtime?: any;
+  collaboration?: any;
+  wakeRequests?: any[];
+  kstarRuns?: any[];
+  patchCandidates?: any[];
+  protocolEvents?: any[];
+  protocolError?: string;
   syncEnabled?: boolean;
-  activeTab?: 'files' | 'attachments';
+  activeTab?: 'files' | 'attachments' | 'collaboration' | 'protocol';
 }, afterMount?: (context: any) => Promise<void> | void): Promise<RenderFilesResult> {
   const elements = new Map<string, any>();
   const getEl = (id: string) => {
@@ -37,7 +50,11 @@ function renderFilesResult(snapshot: {
   const tabs = [
     { dataset: { infoTab: 'files' }, classList: { toggle() {} }, addEventListener(type: string, fn: () => void) { (this as any)[`on${type}`] = fn; } },
     { dataset: { infoTab: 'attachments' }, classList: { toggle() {} }, addEventListener(type: string, fn: () => void) { (this as any)[`on${type}`] = fn; } },
+    { dataset: { infoTab: 'collaboration' }, classList: { toggle() {} }, addEventListener(type: string, fn: () => void) { (this as any)[`on${type}`] = fn; } },
+    { dataset: { infoTab: 'protocol' }, classList: { toggle() {} }, addEventListener(type: string, fn: () => void) { (this as any)[`on${type}`] = fn; } },
   ];
+  const urls: string[] = [];
+  const focusCalls: Array<[string, string, string]> = [];
 
   const context: any = {
     console,
@@ -59,14 +76,23 @@ function renderFilesResult(snapshot: {
       '"': '&quot;',
     }[c] || c)),
     conversations: [{ conversation_id: 'c1', title: 'Current title' }],
-    apiFetch: async (url: string) => ({
+    apiFetch: async (url: string) => {
+      urls.push(url);
+      return ({
       json: async () => {
         if (url.includes('/history')) return { ok: true, conversation: { title: 'Current title' }, history: snapshot.history };
         if (url.includes('/files')) return { ok: true, ...snapshot.files };
         if (url.includes('/attachments')) return { ok: true, items: snapshot.attachments || [] };
+        if (url.includes('/wake-requests')) return { ok: true, requests: snapshot.wakeRequests || [] };
+        if (url.includes('/kstar')) return { ok: true, runs: snapshot.kstarRuns || [] };
+        if (url.includes('/patch-candidates')) return { ok: true, patch_candidates: snapshot.patchCandidates || [] };
+        if (url.includes('/protocol-events')) return snapshot.protocolError ? { ok: false, error: snapshot.protocolError } : { ok: true, events: snapshot.protocolEvents || [] };
+        if (url.includes('/members')) return { ok: true, actors: snapshot.actors || [] };
+        if (url.includes('/runtime')) return { ok: true, ...(snapshot.runtime || {}), ...(snapshot.collaboration ? { collaboration: snapshot.collaboration } : {}) };
         return { ok: false, error: 'unknown' };
       },
-    }),
+    });
+    },
     document: {
       readyState: 'complete',
       getElementById: getEl,
@@ -77,6 +103,10 @@ function renderFilesResult(snapshot: {
       addEventListener() {},
       uiIconHtml: (name: string) => `[${name}]`,
       fileKindIconHtml: () => '',
+      focusConversationAttention: (kind: string, ref: string, messageId: string) => {
+        focusCalls.push([kind, ref, messageId]);
+        return true;
+      },
       orkas: {
         sync: {
           getEnabled: async () => ({ ok: true, enabled: snapshot.syncEnabled === true }),
@@ -91,7 +121,7 @@ function renderFilesResult(snapshot: {
   const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/conversation-info.js'), 'utf8');
   vm.runInContext(source, context);
   context.window.ConversationInfo.bind('c1');
-  const tabIndex = snapshot.activeTab === 'attachments' ? 1 : 0;
+  const tabIndex = snapshot.activeTab === 'attachments' ? 1 : snapshot.activeTab === 'collaboration' ? 2 : snapshot.activeTab === 'protocol' ? 3 : 0;
   (tabs[tabIndex] as any).onclick();
   getEl('conversation-info-toggle').onclick();
   return new Promise((resolve, reject) => setTimeout(async () => {
@@ -102,7 +132,12 @@ function renderFilesResult(snapshot: {
         counts: {
           files: String(getEl('conversation-info-tab-count-files').textContent || ''),
           attachments: String(getEl('conversation-info-tab-count-attachments').textContent || ''),
+          collaboration: String(getEl('conversation-info-tab-count-collaboration').textContent || ''),
+          protocol: String(getEl('conversation-info-tab-count-protocol').textContent || ''),
         },
+        urls,
+        focusCalls,
+        panelHidden: getEl('conversation-info-panel').hidden === true,
       });
     } catch (err) {
       reject(err);
@@ -114,11 +149,344 @@ function renderFilesHtml(snapshot: {
   history: any[];
   files: any;
   attachments?: any[];
+  actors?: any[];
+  runtime?: any;
+  collaboration?: any;
   syncEnabled?: boolean;
-  activeTab?: 'files' | 'attachments';
+  activeTab?: 'files' | 'attachments' | 'collaboration' | 'protocol';
 }, afterMount?: (context: any) => Promise<void> | void): Promise<string> {
   return renderFilesResult(snapshot, afterMount).then((result) => result.html);
 }
+
+describe('ConversationInfo Collaboration tab shell', () => {
+  it('does not expose the unsupported legacy Tasks tab', () => {
+    const html = fs.readFileSync(path.join(__dirname, '../../src/renderer/index.html'), 'utf8');
+
+    expect(html).not.toContain('data-info-tab="tasks"');
+    expect(html).not.toContain('conversation_info.tab_tasks');
+    expect(html).toContain('class="conversation-info-tab is-active" data-info-tab="files"');
+  });
+
+  it('renders a Collaboration tab in the conversation info drawer', async () => {
+    const html = fs.readFileSync(path.join(__dirname, '../../src/renderer/index.html'), 'utf8');
+
+    expect(html).toContain('data-info-tab="collaboration"');
+    expect(html).toContain('conversation_info.tab_collaboration');
+    expect(html).toContain('conversation-info-tab-count-collaboration');
+    expect(html).not.toContain('data-info-tab="agent-activity"');
+  });
+
+  it('renders the Collaboration empty state in the drawer body', async () => {
+    const result = await renderFilesResult({
+      activeTab: 'collaboration',
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      attachments: [],
+      actors: [],
+      runtime: { processing: false },
+      collaboration: null,
+      wakeRequests: [],
+      kstarRuns: [],
+      patchCandidates: [],
+    });
+
+    expect(result.html).toContain('No active collaboration yet.');
+  });
+
+  it('renders task overview from collaboration snapshot', async () => {
+    const result = await renderFilesResult({
+      activeTab: 'collaboration',
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      attachments: [],
+      actors: [],
+      runtime: { processing: true },
+      collaboration: {
+        run_id: 'wf-1',
+        objective: 'Ship the release note draft',
+        status: 'running',
+        phase: 'drafting',
+        steps: [{ title: 'Draft', status: 'running' }],
+      },
+    });
+
+    expect(result.html).toContain('Ship the release note draft');
+    expect(result.html).toContain('drafting');
+    expect(result.html).toContain('Running');
+  });
+
+  it('renders Agent Activity as a section inside the collaboration drawer', async () => {
+    const result = await renderFilesResult({
+      activeTab: 'collaboration',
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      attachments: [],
+      actors: [{ kind: 'agent', id: 'deep', name: 'DeepResearcher' }],
+      runtime: { processing: true, in_flight: ['deep'], active_turns: [{ actor: 'deep', turn_id: 'turn-1' }] },
+      collaboration: { objective: 'Ship the release note draft', status: 'running', phase: 'drafting', steps: [] },
+    });
+
+    expect(result.html).toContain('Agent Activity');
+    expect(result.html).toContain('DeepResearcher');
+  });
+
+  it('renders an attention-needed section from wake, KSTAR, and patch candidate state', async () => {
+    const result = await renderFilesResult({
+      activeTab: 'collaboration',
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      attachments: [],
+      actors: [],
+      runtime: { processing: false },
+      collaboration: { objective: 'Audit release', status: 'blocked', phase: 'review', steps: [] },
+      wakeRequests: [{ id: 'wake-1', status: 'pending', agent_name: 'Researcher' }],
+      kstarRuns: [{ id: 'run-1', status: 'needs_review' }],
+      patchCandidates: [{ id: 'patch-1', status: 'needs_review', proposal: { title: 'Fix routing rule' } }],
+    });
+
+    expect(result.html).toContain('Attention Needed');
+    expect(result.html).toContain('Researcher');
+    expect(result.html).toContain('Fix routing rule');
+    expect(result.html).toContain('Open in chat');
+  });
+
+  it('renders active shared-context conflicts as read-only attention items', async () => {
+    const result = await renderFilesResult({
+      activeTab: 'collaboration',
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      attachments: [],
+      actors: [],
+      runtime: { processing: false },
+      collaboration: {
+        objective: 'Audit release',
+        status: 'running',
+        phase: 'review',
+        steps: [],
+        active_conflicts: [{
+          id: 'wconflict-1',
+          conflict_key: 'market.entry_mode',
+          status: 'detected',
+          proposal_ids: ['p1', 'p2'],
+          affected_step_ids: ['step-final'],
+        }],
+      },
+    });
+
+    expect(result.html).toContain('Different views: market.entry_mode');
+    expect(result.html).toContain('2 proposals · 1 affected steps · detected');
+    expect(result.html).toContain('Open in chat');
+    expect(result.html).not.toContain('data-conflict-resolve');
+    expect(result.html).not.toContain('Approve');
+    expect(result.html).not.toContain('Reject');
+  });
+
+  it('routes attention items back to their main-chat card and closes the drawer', async () => {
+    const result = await renderFilesResult({
+      activeTab: 'collaboration',
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      attachments: [],
+      actors: [],
+      runtime: { processing: false },
+      collaboration: { objective: 'Audit release', status: 'blocked', phase: 'review', steps: [] },
+      wakeRequests: [{ id: 'wake-1', source_message_id: 'msg-7', status: 'pending', agent_name: 'Researcher' }],
+    }, async (context) => {
+      const item = {
+        dataset: { attentionKind: 'wake', openInChat: 'wake-1', openInChatMessageId: 'msg-7' },
+      };
+      const button = {
+        closest(selector: string) {
+          if (selector === '.conversation-info-collaboration-open-in-chat') return this;
+          if (selector === '[data-attention-kind][data-open-in-chat]') return item;
+          return null;
+        },
+      };
+      await context.document.getElementById('conversation-info-body').onclick({
+        target: button,
+        preventDefault() {},
+        stopPropagation() {},
+      });
+    });
+
+    expect(result.focusCalls).toEqual([['wake', 'wake-1', 'msg-7']]);
+    expect(result.panelHidden).toBe(true);
+  });
+
+  it('does not render approval action buttons inside the attention section', async () => {
+    const result = await renderFilesResult({
+      activeTab: 'collaboration',
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      attachments: [],
+      actors: [],
+      runtime: { processing: false },
+      collaboration: { objective: 'Audit release', status: 'blocked', phase: 'review', steps: [] },
+      wakeRequests: [{ id: 'wake-1', status: 'pending', agent_name: 'Researcher' }],
+      kstarRuns: [{ id: 'run-1', status: 'needs_review' }],
+      patchCandidates: [{ id: 'patch-1', status: 'needs_review', proposal: { title: 'Fix routing rule' } }],
+    });
+
+    expect(result.html).not.toContain('data-kstar-review');
+    expect(result.html).not.toContain('data-wake-decision');
+    expect(result.html).not.toContain('data-patch-candidate-review');
+  });
+
+  it('still references the legacy Agent Activity implementation while collaboration work is in progress', async () => {
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/conversation-info.js'), 'utf8');
+
+    expect(source).toContain('conversation_info.agent_activity.empty');
+    expect(source).toContain('Agent Activity');
+  });
+});
+
+describe('ConversationInfo P3394 Protocol Inspector', () => {
+  it('renders a Protocol tab in the conversation info drawer', async () => {
+    const html = fs.readFileSync(path.join(__dirname, '../../src/renderer/index.html'), 'utf8');
+
+    expect(html).toContain('data-info-tab="protocol"');
+    expect(html).toContain('conversation_info.tab_protocol');
+    expect(html).toContain('conversation-info-tab-count-protocol');
+  });
+
+  it('loads protocol events through the per-conversation API route', async () => {
+    const result = await renderFilesResult({
+      activeTab: 'protocol',
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      protocolEvents: [],
+    });
+
+    expect(result.urls).toContain('/api/conversations/c1/protocol-events');
+  });
+
+  it('renders protocol summary, filters, and expandable event details', async () => {
+    const result = await renderFilesResult({
+      activeTab: 'protocol',
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      protocolEvents: [
+        {
+          conversation_id: 'c1',
+          message_id: 'msg-1',
+          agent_id: 'agent-writer',
+          turn_id: 'turn-1',
+          index: 0,
+          data: {
+            ok: true,
+            role: 'orkas_core',
+            runtime_kind: 'in_process',
+            relationship: 'peer',
+            speech_act: 'delegate',
+            message_type: 'agent.handle_message.delegate',
+            correlation_id: 'corr-1',
+            canonical_session_id: 'c1',
+            session_role: 'owner_capable',
+            uses_mate_skills: true,
+          },
+        },
+        {
+          conversation_id: 'c1',
+          message_id: 'msg-2',
+          agent_id: 'agent-codex',
+          turn_id: 'turn-2',
+          index: 0,
+          data: {
+            ok: false,
+            role: 'external_expert',
+            runtime_kind: 'cli',
+            relationship: 'client',
+            speech_act: 'request',
+            message_type: 'agent.error',
+            correlation_id: 'corr-2',
+            canonical_session_id: 'c1',
+            session_role: 'participant_only',
+            uses_mate_skills: false,
+            error: 'speech_act_denied',
+            detail: 'configure is not allowed',
+          },
+        },
+      ],
+    });
+
+    expect(result.counts.protocol).toBe('2');
+    expect(result.html).toContain('Protocol Inspector');
+    expect(result.html).toContain('data-protocol-filter="agent"');
+    expect(result.html).toContain('data-protocol-filter="role"');
+    expect(result.html).toContain('data-protocol-filter="result"');
+    expect(result.html).toContain('agent-writer');
+    expect(result.html).toContain('agent-codex');
+    expect(result.html).toContain('Orkas Core');
+    expect(result.html).toContain('External Expert');
+    expect(result.html).toContain('Success');
+    expect(result.html).toContain('Error');
+    expect(result.html).toContain('corr-1');
+    expect(result.html).toContain('participant_only');
+    expect(result.html).toContain('configure is not allowed');
+  });
+
+  it('filters protocol events by agent, role, and result without reloading', async () => {
+    const result = await renderFilesResult({
+      activeTab: 'protocol',
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      protocolEvents: [
+        { message_id: 'msg-1', agent_id: 'agent-writer', data: { ok: true, role: 'orkas_core', runtime_kind: 'in_process' } },
+        { message_id: 'msg-2', agent_id: 'agent-codex', data: { ok: false, role: 'external_expert', runtime_kind: 'cli', error: 'failed' } },
+        { message_id: 'msg-3', agent_id: 'agent-reviewer', data: { ok: true, role: 'orkas_core', runtime_kind: 'in_process' } },
+      ],
+    }, async (context) => {
+      context.window.ConversationInfo.setProtocolFilters({ agent: 'agent-codex', role: 'external_expert', result: 'error' });
+    });
+
+    expect(result.html).toContain('agent-codex');
+    expect(result.html).not.toContain('<div class="conversation-info-protocol-agent">agent-writer</div>');
+    expect(result.html).not.toContain('<div class="conversation-info-protocol-agent">agent-reviewer</div>');
+  });
+
+  it('renders protocol empty and filtered-empty states', async () => {
+    const empty = await renderFilesResult({
+      activeTab: 'protocol',
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      protocolEvents: [],
+    });
+    expect(empty.html).toContain('No P3394 protocol events yet.');
+    expect(empty.html).toContain('data-protocol-refresh');
+
+    const filtered = await renderFilesResult({
+      activeTab: 'protocol',
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      protocolEvents: [{ message_id: 'msg-1', agent_id: 'agent-writer', data: { ok: true, role: 'orkas_core' } }],
+    }, async (context) => {
+      context.window.ConversationInfo.setProtocolFilters({ result: 'error' });
+    });
+    expect(filtered.html).toContain('No protocol events match the current filters.');
+  });
+
+  it('renders a retryable protocol load failure separately from the empty state', async () => {
+    const result = await renderFilesResult({
+      activeTab: 'protocol',
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      protocolError: 'protocol service unavailable',
+    });
+
+    expect(result.html).toContain('Could not load protocol events');
+    expect(result.html).toContain('protocol service unavailable');
+    expect(result.html).toContain('data-protocol-refresh');
+  });
+
+  it('defines Protocol Inspector locale strings for supported renderer languages', () => {
+    for (const locale of ['en', 'zh', 'ja', 'pt']) {
+      const data = JSON.parse(fs.readFileSync(path.join(__dirname, `../../src/renderer/locales/${locale}.json`), 'utf8'));
+      expect(data['conversation_info.tab_protocol']).toBeTruthy();
+      expect(data['conversation_info.protocol.title']).toBeTruthy();
+      expect(data['conversation_info.protocol.filter_all_results']).toBeTruthy();
+    }
+  });
+});
 
 describe('ConversationInfo files tab', () => {
   it('renders the live workspace file listing and drops stale produced files under that root', async () => {

@@ -108,4 +108,9 @@ describe('conversation agent status panel', () => {
     expect(html).toContain('turn turn-runtime');
   });
 
+  it('routes the header agent status button into the Collaboration drawer tab', () => {
+    expect(conversationSource).toContain('ConversationInfo');
+    expect(conversationSource).toContain("openAndSetTab('collaboration')");
+  });
+
 });

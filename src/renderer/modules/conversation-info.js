@@ -33,7 +33,16 @@ const ConversationInfo = (() => {
     filesScanSkipped: false,
     syncEnabled: false,
     attachments: [],
+    runtime: null,
+    actors: [],
+    collaboration: null,
+    wakeRequests: [],
+    kstarRuns: [],
+    patchCandidates: [],
+    protocolEvents: [],
+    protocolError: '',
   };
+  const _protocolFilters = { agent: '', role: '', result: '' };
   const _CI_TEXT_EXTS = new Set([
     'md', 'markdown', 'txt', 'csv', 'tsv', 'json', 'yaml', 'yml', 'log',
     'html', 'htm', 'xml', 'toml', 'ini', 'conf',
@@ -50,11 +59,18 @@ const ConversationInfo = (() => {
   const _CI_OFFICE_PRESENTATION_EXTS = new Set(['pptx', 'pptm']);
 
   function _label(key, fallback, vars) {
+    const formatFallback = () => {
+      const raw = String(fallback || '');
+      if (!vars) return raw;
+      return raw.replace(/\{(\w+)\}/g, (match, name) => (
+        vars[name] != null ? String(vars[name]) : match
+      ));
+    };
     try {
       const v = typeof t === 'function' ? t(key, vars || undefined) : key;
-      return v && v !== key ? v : fallback;
+      return v && v !== key ? v : formatFallback();
     } catch (_) {
-      return fallback;
+      return formatFallback();
     }
   }
 
@@ -225,7 +241,7 @@ const ConversationInfo = (() => {
 
   async function _load(cid) {
     const enc = encodeURIComponent(cid);
-    const [historyData, filesData, attachmentData, syncEnabled] = await Promise.all([
+    const [historyData, filesData, attachmentData, syncEnabled, activity, wakeData, kstarData, patchData, protocolData] = await Promise.all([
       _fetchJson(typeof _historyRequestUrl === 'function'
         ? _historyRequestUrl(cid)
         : `/api/conversations/${enc}/history?limit=10`),
@@ -238,6 +254,11 @@ const ConversationInfo = (() => {
         return { items: [] };
       }),
       _loadSyncEnabled(),
+      _loadAgentActivitySnapshot(cid),
+      _fetchJson(`/api/conversations/${enc}/wake-requests`).catch(() => ({ requests: [] })),
+      _fetchJson(`/api/conversations/${enc}/kstar`).catch(() => ({ runs: [] })),
+      _fetchJson(`/api/conversations/${enc}/patch-candidates`).catch(() => ({ patch_candidates: [] })),
+      _fetchJson(`/api/conversations/${enc}/protocol-events`).catch((err) => ({ events: [], error: (err && err.message) || String(err) })),
     ]);
     return {
       conversation: historyData.conversation || null,
@@ -250,6 +271,29 @@ const ConversationInfo = (() => {
       filesScanSkipped: filesData.scanSkipped === true,
       syncEnabled: syncEnabled === true,
       attachments: Array.isArray(attachmentData.items) ? attachmentData.items : [],
+      runtime: activity.runtime || null,
+      actors: Array.isArray(activity.actors) ? activity.actors : [],
+      collaboration: activity.runtime && activity.runtime.collaboration ? activity.runtime.collaboration : null,
+      wakeRequests: Array.isArray(wakeData.requests) ? wakeData.requests : [],
+      kstarRuns: Array.isArray(kstarData.runs) ? kstarData.runs : [],
+      patchCandidates: Array.isArray(patchData.patch_candidates) ? patchData.patch_candidates : [],
+      protocolEvents: Array.isArray(protocolData.events) ? protocolData.events : [],
+      protocolError: protocolData.error ? String(protocolData.error) : '',
+    };
+  }
+
+  async function _loadAgentActivitySnapshot(cid) {
+    if (!cid) return { actors: [], runtime: {} };
+    const membersUrl = typeof _membersRequestUrl === 'function'
+      ? _membersRequestUrl(cid)
+      : `/api/conversations/${encodeURIComponent(cid)}/members`;
+    const [membersRes, runtimeRes] = await Promise.all([
+      _fetchJson(membersUrl).catch(() => null),
+      _fetchJson(`/api/conversations/${encodeURIComponent(cid)}/runtime`).catch(() => null),
+    ]);
+    return {
+      actors: membersRes && Array.isArray(membersRes.actors) ? membersRes.actors : [],
+      runtime: runtimeRes || {},
     };
   }
 
@@ -535,6 +579,402 @@ const ConversationInfo = (() => {
       const count = _collectConversationAttachments().length;
       attachEl.textContent = count > 0 ? String(count) : '';
     }
+    const collaborationEl = document.getElementById('conversation-info-tab-count-collaboration');
+    if (collaborationEl) {
+      const count = _snapshot.collaboration ? 1 : 0;
+      collaborationEl.textContent = count > 0 ? String(count) : '';
+    }
+    const protocolEl = document.getElementById('conversation-info-tab-count-protocol');
+    if (protocolEl) {
+      const count = Array.isArray(_snapshot.protocolEvents) ? _snapshot.protocolEvents.length : 0;
+      protocolEl.textContent = count > 0 ? String(count) : '';
+    }
+  }
+
+  function _safeSection(renderFn, fallbackHtml) {
+    try {
+      return renderFn();
+    } catch (err) {
+      _infoLog.warn('collaboration section render failed', { error: err && err.message });
+      return fallbackHtml;
+    }
+  }
+
+  function _agentActivityActorName(actor) {
+    if (!actor) return '';
+    const id = String(actor.id || '');
+    if (actor.name) return String(actor.name);
+    if (id === 'commander') return _label('chat.agent_status.commander', 'Commander');
+    return id || _label('chat.from_agent_unknown', 'Agent');
+  }
+
+  function _agentActivityNormaliseActiveTurns(raw) {
+    if (typeof _normaliseActiveTurns === 'function') return _normaliseActiveTurns(raw);
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((t) => ({ actor: String(t && (t.actor || t.actor_id) || ''), turn_id: String(t && (t.turn_id || t.turnId) || '') }))
+      .filter((t) => t.actor && t.turn_id);
+  }
+
+  function _deriveAgentActivityRows(snapshot) {
+    const runtime = snapshot && snapshot.runtime ? snapshot.runtime : {};
+    const inFlight = Array.isArray(runtime.in_flight) ? runtime.in_flight.filter(Boolean).map(String) : [];
+    const activeTurns = _agentActivityNormaliseActiveTurns(runtime.active_turns);
+    const running = new Set(inFlight);
+    for (const turn of activeTurns) running.add(String(turn.actor || ''));
+    const activeRecipient = typeof runtime.active_recipient === 'string' ? runtime.active_recipient : '';
+    const byId = new Map();
+    const actors = Array.isArray(snapshot && snapshot.actors) ? snapshot.actors : [];
+    for (const actor of actors) {
+      if (actor && actor.id && (actor.kind === 'commander' || actor.kind === 'agent')) {
+        byId.set(String(actor.id), actor);
+      }
+    }
+    for (const actorId of running) {
+      if (!byId.has(actorId)) byId.set(actorId, { kind: actorId === 'commander' ? 'commander' : 'agent', id: actorId, name: actorId });
+    }
+    if (activeRecipient && !byId.has(activeRecipient)) {
+      byId.set(activeRecipient, { kind: activeRecipient === 'commander' ? 'commander' : 'agent', id: activeRecipient, name: activeRecipient });
+    }
+    const history = Array.isArray(snapshot && snapshot.history) ? snapshot.history : [];
+    const rows = Array.from(byId.values()).map((actor) => {
+      const id = String(actor.id || '');
+      let state = 'joined';
+      if (running.has(id)) state = 'running';
+      else if (activeRecipient && activeRecipient === id) state = 'current_recipient';
+      const activeTurn = activeTurns.find((turn) => String(turn.actor || '') === id);
+      const lastMessage = [...history].reverse().find((msg) => msg && String(msg.from || '') === id) || null;
+      const lastDispatch = [...history].reverse().find((msg) => msg && Array.isArray(msg.to) && msg.to.map(String).includes(id)) || null;
+      const p3394Event = Array.isArray(lastMessage && lastMessage.process)
+        ? lastMessage.process.find((item) => item && item.event && item.event.stream === 'p3394' && item.event.data)
+        : null;
+      const p3394Data = p3394Event && p3394Event.event && p3394Event.event.data ? p3394Event.event.data : null;
+      if (state === 'joined' && p3394Data && (p3394Data.error || p3394Data.detail)) state = 'failed';
+      return {
+        id,
+        kind: actor.kind === 'commander' ? 'commander' : 'agent',
+        name: _agentActivityActorName(actor),
+        state,
+        turnId: activeTurn && activeTurn.turn_id ? String(activeTurn.turn_id) : '',
+        activeRecipient: activeRecipient === id,
+        lastMessage,
+        lastDispatch,
+        p3394Data,
+      };
+    });
+    const order = { running: 0, current_recipient: 1, joined: 2, failed: 3, completed: 4 };
+    return rows.sort((a, b) => {
+      const orderDiff = (order[a.state] ?? 99) - (order[b.state] ?? 99);
+      if (orderDiff) return orderDiff;
+      if (a.id === 'commander') return -1;
+      if (b.id === 'commander') return 1;
+      return a.name.localeCompare(b.name);
+    });
+  }
+
+  function _renderAgentActivitySummary(rows, runtime) {
+    const running = rows.filter((row) => row.state === 'running').length;
+    const processing = runtime && runtime.processing
+      ? _label('conversation_info.agent_activity.processing_active', 'Processing')
+      : _label('conversation_info.agent_activity.processing_idle', 'Idle');
+    return `<div class="conversation-info-agent-activity-summary">
+      <div class="conversation-info-agent-activity-stat is-primary"><span>${escapeHtml(_label('conversation_info.agent_activity.summary_agents', 'Agents'))}</span><strong>${rows.length}</strong><small>${escapeHtml(_label('conversation_info.agent_activity.summary_scope', 'In this conversation'))}</small></div>
+      <div class="conversation-info-agent-activity-stat"><span>${escapeHtml(_label('conversation_info.agent_activity.summary_running', 'Running'))}</span><strong>${running}</strong></div>
+      <div class="conversation-info-agent-activity-stat ${runtime && runtime.processing ? 'is-processing' : 'is-idle'}"><span>${escapeHtml(_label('conversation_info.agent_activity.summary_processing', 'Processing'))}</span><strong>${escapeHtml(processing)}</strong></div>
+    </div>`;
+  }
+
+  function _renderAgentActivityRows(rows) {
+    const fallbackLabels = {
+      running: 'Running',
+      current_recipient: 'Current recipient',
+      joined: 'Joined',
+      failed: 'Failed',
+      completed: 'Completed',
+    };
+    return rows.map((row) => {
+      const meta = [
+        row.kind === 'commander' ? _label('chat.agent_status.kind.commander', 'Commander') : _label('chat.agent_status.kind.agent', 'Agent'),
+        row.turnId ? _label('chat.agent_status.turn_id', 'turn {id}', { id: row.turnId }) : '',
+        row.activeRecipient ? _label('chat.agent_status.floor', 'receives next message') : '',
+      ].filter(Boolean).join(' · ');
+      const activitySummary = row.lastMessage && (row.lastMessage.text || row.lastMessage.model_text)
+        ? _compactText(String(row.lastMessage.text || row.lastMessage.model_text), 100)
+        : row.state === 'running'
+          ? _label('conversation_info.agent_activity.activity_running', 'Working on the current task')
+          : row.activeRecipient
+            ? _label('conversation_info.agent_activity.activity_recipient', 'Ready to receive the next message')
+            : _label('conversation_info.agent_activity.activity_joined', 'Available in this conversation');
+      const activityDetail = `<div class="conversation-info-agent-activity-detail-block is-summary"><div class="conversation-info-agent-activity-detail-title">${escapeHtml(_label('conversation_info.agent_activity.activity_summary', 'Activity Summary'))}</div><div>${escapeHtml(activitySummary)}</div></div>`;
+      const technicalRows = row.p3394Data ? [
+        row.p3394Data.runtime_kind ? `<div><strong>runtime</strong>: ${escapeHtml(String(row.p3394Data.runtime_kind))}</div>` : '',
+        row.p3394Data.relationship ? `<div><strong>relationship</strong>: ${escapeHtml(String(row.p3394Data.relationship))}</div>` : '',
+        row.p3394Data.speech_act ? `<div><strong>speech_act</strong>: ${escapeHtml(String(row.p3394Data.speech_act))}</div>` : '',
+        row.p3394Data.session_role ? `<div><strong>session_role</strong>: ${escapeHtml(String(row.p3394Data.session_role))}</div>` : '',
+        row.p3394Data.correlation_id ? `<div><strong>correlation_id</strong>: ${escapeHtml(String(row.p3394Data.correlation_id))}</div>` : '',
+        row.p3394Data.message_type ? `<div><strong>message_type</strong>: ${escapeHtml(String(row.p3394Data.message_type))}</div>` : '',
+        row.p3394Data.error ? `<div><strong>error</strong>: ${escapeHtml(String(row.p3394Data.error))}</div>` : '',
+        row.p3394Data.detail ? `<div><strong>detail</strong>: ${escapeHtml(String(row.p3394Data.detail))}</div>` : '',
+      ].filter(Boolean).join('') : '';
+      const dispatchContext = row.lastDispatch ? `<div class="conversation-info-agent-activity-detail-block"><div class="conversation-info-agent-activity-detail-title">${escapeHtml(_label('conversation_info.agent_activity.dispatch_context', 'Dispatch Context'))}</div><div>${escapeHtml(_compactText(String(row.lastDispatch.text || row.lastDispatch.model_text || ''), 120))}</div><div><strong>source</strong>: ${escapeHtml(String(row.lastDispatch.from || ''))}</div><div><strong>attachments</strong>: ${escapeHtml(String(Array.isArray(row.lastDispatch.attachments) ? row.lastDispatch.attachments.length : 0))}</div></div>` : '';
+      const traceItems = [
+        row.lastDispatch ? 'task received' : '',
+        row.turnId ? `execution started (${row.turnId})` : '',
+        row.state === 'running' ? 'currently running' : '',
+        row.lastMessage && row.state !== 'failed' ? 'produced a result' : '',
+        row.p3394Data && row.p3394Data.error ? `failed: ${String(row.p3394Data.error)}` : '',
+      ].filter(Boolean);
+      const processingTrace = traceItems.length ? `<div class="conversation-info-agent-activity-detail-block"><div class="conversation-info-agent-activity-detail-title">${escapeHtml(_label('conversation_info.agent_activity.processing_trace', 'Processing Trace'))}</div>${traceItems.map((item) => `<div>${escapeHtml(item)}</div>`).join('')}</div>` : '';
+      const technicalDetail = technicalRows ? `<div class="conversation-info-agent-activity-detail-block"><div class="conversation-info-agent-activity-detail-title">${escapeHtml(_label('conversation_info.agent_activity.technical_detail', 'Technical Detail'))}</div>${technicalRows}</div>` : '';
+      return `<details class="conversation-info-agent-activity-row is-${escapeHtml(row.state)}" data-agent-activity-id="${escapeHtml(row.id)}">
+        <summary>
+          <div class="conversation-info-agent-activity-row-main">
+            <div class="conversation-info-agent-activity-name">${escapeHtml(row.name)}</div>
+            <div class="conversation-info-agent-activity-meta">${escapeHtml(meta)}</div>
+            <div class="conversation-info-agent-activity-summary-line">${escapeHtml(activitySummary)}</div>
+          </div>
+          <span class="conversation-info-agent-activity-pill is-${escapeHtml(row.state)}">${escapeHtml(_label(`conversation_info.agent_activity.state.${row.state}`, fallbackLabels[row.state] || row.state))}</span>
+        </summary>
+        <div class="conversation-info-agent-activity-detail">${activityDetail}${dispatchContext}${processingTrace}${technicalDetail}</div>
+      </details>`;
+    }).join('');
+  }
+
+  function _renderAgentActivity() {
+    const rows = _deriveAgentActivityRows(_snapshot);
+    if (!rows.length) {
+      return `<div class="conversation-info-empty">${escapeHtml(_label('conversation_info.agent_activity.empty', 'No agents have joined this conversation yet.'))}</div>`;
+    }
+    return `<div class="conversation-info-agent-activity"><div class="conversation-info-agent-activity-toolbar"><div><div class="conversation-info-agent-activity-heading">${escapeHtml(_label('conversation_info.agent_activity.title', 'Agent Activity'))}</div><div class="conversation-info-agent-activity-subtitle">${escapeHtml(_label('conversation_info.agent_activity.subtitle', 'What agents are doing in this conversation'))}</div></div><button type="button" class="conversation-info-agent-activity-refresh" data-agent-activity-refresh title="${escapeHtml(_label('common.refresh', 'Refresh'))}" aria-label="${escapeHtml(_label('common.refresh', 'Refresh'))}">${_uiIcon('refresh-cw', 'conversation-info-agent-activity-refresh-icon')}</button></div><div class="conversation-info-agent-activity-layout"><div class="conversation-info-agent-activity-rail">${_renderAgentActivitySummary(rows, _snapshot.runtime || {})}</div><div class="conversation-info-agent-activity-list">${_renderAgentActivityRows(rows)}</div></div></div>`;
+  }
+
+  function _renderCollaborationTaskOverview(collaboration, runtime) {
+    const status = collaboration && collaboration.status ? String(collaboration.status) : (runtime && runtime.processing ? 'running' : 'idle');
+    const phase = collaboration && collaboration.phase ? String(collaboration.phase) : '';
+    const objective = collaboration && collaboration.objective ? String(collaboration.objective) : _label('conversation_info.collaboration.empty', 'No active collaboration yet.');
+    const stepCount = Array.isArray(collaboration && collaboration.steps) ? collaboration.steps.length : 0;
+    const fallbackStatus = status === 'running' ? 'Running' : status === 'blocked' ? 'Blocked' : status === 'failed' ? 'Failed' : status === 'completed' ? 'Completed' : status === 'idle' ? 'Idle' : status;
+    const stepLabel = stepCount
+      ? _label('conversation_info.collaboration.step_count', '{count} steps', { count: stepCount })
+      : '';
+    return `<section class="conversation-info-collaboration-section conversation-info-collaboration-task-overview"><div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.collaboration.section_task_overview', 'Task Overview'))}</div><div class="conversation-info-collaboration-objective">${escapeHtml(objective)}</div><div class="conversation-info-collaboration-meta">${escapeHtml(_label(`conversation_info.collaboration.status.${status}`, fallbackStatus))}${phase ? ` · ${escapeHtml(phase)}` : ''}${stepLabel ? ` · ${escapeHtml(stepLabel)}` : ''}</div></section>`;
+  }
+
+  function _renderCollaborationAgentActivitySection() {
+    const rows = _deriveAgentActivityRows(_snapshot);
+    const body = rows.length
+      ? `<div class="conversation-info-collaboration-agent-activity-body">${_renderAgentActivitySummary(rows, _snapshot.runtime || {})}${_renderAgentActivityRows(rows)}</div>`
+      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.agent_activity.empty', 'No agents have joined this conversation yet.'))}</div>`;
+    return `<section class="conversation-info-collaboration-section"><div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.collaboration.section_agent_activity', 'Agent Activity'))}</div>${body}</section>`;
+  }
+
+  function _collectCollaborationAttentionItems() {
+    const items = [];
+    for (const request of Array.isArray(_snapshot.wakeRequests) ? _snapshot.wakeRequests : []) {
+      if (request && request.status === 'pending') {
+        const agent = String(request.agent_name || request.agent_id || _label('chat.from_agent_unknown', 'Agent'));
+        items.push({
+          kind: 'wake',
+          label: _label('conversation_info.collaboration.attention.wake', '{agent} needs wake approval', { agent }),
+          target: {
+            type: 'message',
+            ref: String(request.id || ''),
+            messageId: String(request.source_message_id || ''),
+          },
+        });
+      }
+    }
+    for (const run of Array.isArray(_snapshot.kstarRuns) ? _snapshot.kstarRuns : []) {
+      if (run && run.status === 'needs_review') {
+        items.push({ kind: 'kstar', label: _label('conversation_info.collaboration.attention.kstar', 'KSTAR review required'), target: { type: 'review_center', ref: String(run.id || '') } });
+      }
+    }
+    for (const candidate of Array.isArray(_snapshot.patchCandidates) ? _snapshot.patchCandidates : []) {
+      if (candidate && candidate.status === 'needs_review') {
+        items.push({ kind: 'patch', label: String(candidate.proposal && candidate.proposal.title || _label('conversation_info.collaboration.attention.patch', 'Patch candidate requires review')), target: { type: 'review_center', ref: String(candidate.id || '') } });
+      }
+    }
+    const collaboration = _snapshot.collaboration || {};
+    const conflictStatus = (status) => {
+      const normalized = String(status || 'detected');
+      const supported = ['detected', 'gathering_evidence', 'under_review', 'awaiting_user'];
+      return supported.includes(normalized) ? normalized : 'detected';
+    };
+    for (const conflict of Array.isArray(collaboration.active_conflicts) ? collaboration.active_conflicts : []) {
+      if (!conflict || !conflict.id) continue;
+      const status = conflictStatus(conflict.status);
+      const proposalCount = Array.isArray(conflict.proposal_ids) ? conflict.proposal_ids.length : 0;
+      const affectedStepCount = Array.isArray(conflict.affected_step_ids) ? conflict.affected_step_ids.length : 0;
+      items.push({
+        kind: 'conflict',
+        label: _label('conversation_info.collaboration.attention.conflict', 'Different views: {key}', { key: String(conflict.conflict_key || '') }),
+        meta: _label('conversation_info.collaboration.attention.conflict_meta', '{proposals} proposals · {steps} affected steps · {status}', {
+          proposals: proposalCount,
+          steps: affectedStepCount,
+          status: _label(`conversation_info.collaboration.conflict_status.${status}`, status),
+        }),
+        target: { type: 'chat', ref: String(conflict.id) },
+      });
+    }
+    return items;
+  }
+
+  function _renderCollaborationAttentionSection(items) {
+    const rows = Array.isArray(items) ? items : [];
+    const body = rows.length
+      ? rows.map((item) => `<div class="conversation-info-collaboration-attention-item" data-attention-kind="${escapeHtml(item.kind)}" data-open-in-chat="${escapeHtml(item.target.ref)}" data-open-in-chat-message-id="${escapeHtml(item.target.messageId || '')}"><div class="conversation-info-collaboration-attention-label">${escapeHtml(item.label)}</div>${item.meta ? `<div class="conversation-info-collaboration-attention-meta">${escapeHtml(item.meta)}</div>` : ''}<button type="button" class="conversation-info-collaboration-open-in-chat">${escapeHtml(_label('conversation_info.collaboration.open_in_chat', 'Open in chat'))}</button></div>`).join('')
+      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.attention_none', 'Nothing needs attention right now.'))}</div>`;
+    return `<section class="conversation-info-collaboration-section"><div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.collaboration.section_attention', 'Attention Needed'))}</div><div class="conversation-info-collaboration-attention-list">${body}</div></section>`;
+  }
+
+  function _renderCollaborationOverview() {
+    if (!_snapshot.collaboration && !_deriveAgentActivityRows(_snapshot).length && !_collectCollaborationAttentionItems().length) {
+      return `<div class="conversation-info-empty">${escapeHtml(_label('conversation_info.collaboration.empty', 'No active collaboration yet.'))}</div>`;
+    }
+    const collaboration = _snapshot.collaboration || null;
+    const runtime = _snapshot.runtime || {};
+    const attentionItems = _collectCollaborationAttentionItems();
+    return `<div class="conversation-info-collaboration"><div class="conversation-info-collaboration-header"><div class="conversation-info-collaboration-heading">${escapeHtml(_label('conversation_info.collaboration.title', 'Collaboration'))}</div><div class="conversation-info-collaboration-subtitle">${escapeHtml(_label('conversation_info.collaboration.subtitle', 'How this conversation is progressing'))}</div></div>${_safeSection(() => _renderCollaborationTaskOverview(collaboration, runtime), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAgentActivitySection(), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAttentionSection(attentionItems), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}</div>`;
+  }
+
+  function _protocolEventData(event) {
+    return event && event.data && typeof event.data === 'object' ? event.data : {};
+  }
+
+  function _protocolResult(event) {
+    const data = _protocolEventData(event);
+    if (data.ok === false || data.error || data.detail) return 'error';
+    return 'success';
+  }
+
+  function _protocolRoleLabel(role) {
+    const value = String(role || '');
+    if (value === 'orkas_core') return _label('conversation_info.protocol.role.orkas_core', 'Orkas Core');
+    if (value === 'external_expert') return _label('conversation_info.protocol.role.external_expert', 'External Expert');
+    return value || _label('conversation_info.protocol.unknown', 'Unknown');
+  }
+
+  function _protocolResultLabel(result) {
+    return result === 'error'
+      ? _label('conversation_info.protocol.result.error', 'Error')
+      : _label('conversation_info.protocol.result.success', 'Success');
+  }
+
+  function _protocolFilteredEvents() {
+    const events = Array.isArray(_snapshot.protocolEvents) ? _snapshot.protocolEvents : [];
+    return events.filter((event) => {
+      const data = _protocolEventData(event);
+      const agent = String(event && event.agent_id || '');
+      const role = String(data.role || '');
+      const result = _protocolResult(event);
+      if (_protocolFilters.agent && _protocolFilters.agent !== agent) return false;
+      if (_protocolFilters.role && _protocolFilters.role !== role) return false;
+      if (_protocolFilters.result && _protocolFilters.result !== result) return false;
+      return true;
+    });
+  }
+
+  function _protocolFilterSelect(name, options, current) {
+    return `<label class="conversation-info-protocol-filter"><span>${escapeHtml(_label(`conversation_info.protocol.filter.${name}`, name))}</span><select data-protocol-filter="${escapeHtml(name)}">${options.map((option) => `<option value="${escapeHtml(option.value)}"${option.value === current ? ' selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select></label>`;
+  }
+
+  function _renderProtocolFilters(events) {
+    const agents = Array.from(new Set(events.map((event) => String(event && event.agent_id || '')).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+    const roles = Array.from(new Set(events.map((event) => String(_protocolEventData(event).role || '')).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+    const agentOptions = [{ value: '', label: _label('conversation_info.protocol.filter_all_agents', 'All agents') }]
+      .concat(agents.map((agent) => ({ value: agent, label: agent })));
+    const roleOptions = [{ value: '', label: _label('conversation_info.protocol.filter_all_roles', 'All roles') }]
+      .concat(roles.map((role) => ({ value: role, label: _protocolRoleLabel(role) })));
+    const resultOptions = [
+      { value: '', label: _label('conversation_info.protocol.filter_all_results', 'All results') },
+      { value: 'success', label: _protocolResultLabel('success') },
+      { value: 'error', label: _protocolResultLabel('error') },
+    ];
+    return `<div class="conversation-info-protocol-filters">${_protocolFilterSelect('agent', agentOptions, _protocolFilters.agent)}${_protocolFilterSelect('role', roleOptions, _protocolFilters.role)}${_protocolFilterSelect('result', resultOptions, _protocolFilters.result)}</div>`;
+  }
+
+  function _renderProtocolSummary(events) {
+    const total = events.length;
+    const success = events.filter((event) => _protocolResult(event) === 'success').length;
+    const error = total - success;
+    const core = events.filter((event) => _protocolEventData(event).role === 'orkas_core').length;
+    const external = events.filter((event) => _protocolEventData(event).role === 'external_expert').length;
+    return `<div class="conversation-info-protocol-summary">
+      <div class="conversation-info-protocol-stat is-primary"><span>${escapeHtml(_label('conversation_info.protocol.stat_total', 'Calls'))}</span><strong>${total}</strong></div>
+      <div class="conversation-info-protocol-stat"><span>${escapeHtml(_protocolResultLabel('success'))}</span><strong>${success}</strong></div>
+      <div class="conversation-info-protocol-stat ${error ? 'is-error' : ''}"><span>${escapeHtml(_protocolResultLabel('error'))}</span><strong>${error}</strong></div>
+      <div class="conversation-info-protocol-stat"><span>${escapeHtml(_protocolRoleLabel('orkas_core'))}</span><strong>${core}</strong></div>
+      <div class="conversation-info-protocol-stat"><span>${escapeHtml(_protocolRoleLabel('external_expert'))}</span><strong>${external}</strong></div>
+    </div>`;
+  }
+
+  function _protocolDetailRows(event) {
+    const data = _protocolEventData(event);
+    const rows = [
+      ['message_type', data.message_type],
+      ['correlation_id', data.correlation_id],
+      ['canonical_session_id', data.canonical_session_id],
+      ['session_role', data.session_role],
+      ['uses_mate_skills', typeof data.uses_mate_skills === 'boolean' ? String(data.uses_mate_skills) : data.uses_mate_skills],
+      ['relationship', data.relationship],
+      ['speech_act', data.speech_act],
+      ['runtime_kind', data.runtime_kind],
+      ['error', data.error],
+      ['detail', data.detail],
+      ['workflow_run_id', data.collaboration && data.collaboration.workflow_run_id],
+      ['context_id', data.collaboration && data.collaboration.context_id],
+      ['context_revision', data.collaboration && data.collaboration.context_revision],
+      ['step_id', data.collaboration && data.collaboration.step_id],
+      ['conflict_ids', data.collaboration && Array.isArray(data.collaboration.conflict_ids) ? data.collaboration.conflict_ids.join(', ') : data.collaboration && data.collaboration.conflict_ids],
+    ];
+    return rows
+      .filter(([, value]) => value !== undefined && value !== null && String(value) !== '')
+      .map(([key, value]) => `<div><strong>${escapeHtml(key)}</strong>: ${escapeHtml(String(value))}</div>`)
+      .join('');
+  }
+
+  function _renderProtocolEvents(events) {
+    return events.map((event) => {
+      const data = _protocolEventData(event);
+      const result = _protocolResult(event);
+      const agent = String(event && event.agent_id || _label('chat.from_agent_unknown', 'Agent'));
+      const role = String(data.role || '');
+      const runtime = String(data.runtime_kind || '');
+      const meta = [
+        _protocolRoleLabel(role),
+        runtime,
+        data.relationship ? String(data.relationship) : '',
+        data.speech_act ? String(data.speech_act) : '',
+      ].filter(Boolean).join(' · ');
+      const detailRows = _protocolDetailRows(event);
+      return `<details class="conversation-info-protocol-row is-${escapeHtml(result)}">
+        <summary>
+          <div class="conversation-info-protocol-row-main">
+            <div class="conversation-info-protocol-agent">${escapeHtml(agent)}</div>
+            <div class="conversation-info-protocol-meta">${escapeHtml(meta)}</div>
+          </div>
+          <span class="conversation-info-protocol-pill is-${escapeHtml(result)}">${escapeHtml(_protocolResultLabel(result))}</span>
+        </summary>
+        <div class="conversation-info-protocol-detail">${detailRows}</div>
+      </details>`;
+    }).join('');
+  }
+
+  function _renderProtocolInspector() {
+    const events = Array.isArray(_snapshot.protocolEvents) ? _snapshot.protocolEvents : [];
+    const header = `<div class="conversation-info-protocol-header"><div><div class="conversation-info-protocol-heading">${escapeHtml(_label('conversation_info.protocol.title', 'Protocol Inspector'))}</div><div class="conversation-info-protocol-subtitle">${escapeHtml(_label('conversation_info.protocol.subtitle', 'P3394 agent protocol events in this conversation'))}</div></div><button type="button" class="conversation-info-agent-activity-refresh" data-protocol-refresh title="${escapeHtml(_label('common.refresh', 'Refresh'))}" aria-label="${escapeHtml(_label('common.refresh', 'Refresh'))}">${_uiIcon('refresh-cw', 'conversation-info-agent-activity-refresh-icon')}</button></div>`;
+    if (_snapshot.protocolError) {
+      const message = _label('conversation_info.protocol.load_failed', 'Could not load protocol events: {reason}', { reason: _snapshot.protocolError });
+      return `<div class="conversation-info-protocol">${header}<div class="conversation-info-empty is-small is-error">${escapeHtml(message)}</div></div>`;
+    }
+    if (!events.length) {
+      return `<div class="conversation-info-protocol">${header}<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.protocol.empty', 'No P3394 protocol events yet.'))}</div></div>`;
+    }
+    const filtered = _protocolFilteredEvents();
+    const list = filtered.length
+      ? `<div class="conversation-info-protocol-list">${_renderProtocolEvents(filtered)}</div>`
+      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.protocol.empty_filtered', 'No protocol events match the current filters.'))}</div>`;
+    return `<div class="conversation-info-protocol">${header}${_renderProtocolSummary(events)}${_renderProtocolFilters(events)}${list}</div>`;
   }
 
   function _renderBody() {
@@ -557,6 +997,8 @@ const ConversationInfo = (() => {
       return;
     }
     if (_activeTab === 'attachments') body.innerHTML = _renderAttachments();
+    else if (_activeTab === 'collaboration') body.innerHTML = _renderCollaborationOverview();
+    else if (_activeTab === 'protocol') body.innerHTML = _renderProtocolInspector();
     else body.innerHTML = _renderFiles();
     // Hydrate any data-ui-icon placeholders that the renderers emitted.
     if (typeof window !== 'undefined' && typeof window.hydrateUiIcons === 'function') {
@@ -698,7 +1140,10 @@ const ConversationInfo = (() => {
   function bind(cid) {
     _cid = cid || null;
     _open = false;
-    _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [] };
+    _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [], runtime: null, actors: [], collaboration: null, wakeRequests: [], kstarRuns: [], patchCandidates: [], protocolEvents: [], protocolError: '' };
+    _protocolFilters.agent = '';
+    _protocolFilters.role = '';
+    _protocolFilters.result = '';
     _error = '';
     _resetLoading();
     _seq++;
@@ -1050,6 +1495,35 @@ const ConversationInfo = (() => {
     if (body && body.dataset.bound !== '1') {
       body.dataset.bound = '1';
       body.addEventListener('click', (ev) => {
+        const openInChat = ev.target.closest('.conversation-info-collaboration-open-in-chat');
+        if (openInChat) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const item = openInChat.closest('[data-attention-kind][data-open-in-chat]');
+          if (item && typeof window.focusConversationAttention === 'function') {
+            window.focusConversationAttention(
+              item.dataset.attentionKind || '',
+              item.dataset.openInChat || '',
+              item.dataset.openInChatMessageId || '',
+            );
+          }
+          _setOpen(false);
+          return;
+        }
+        const activityRefresh = ev.target.closest('[data-agent-activity-refresh]');
+        if (activityRefresh) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          void refresh(_cid);
+          return;
+        }
+        const protocolRefresh = ev.target.closest('[data-protocol-refresh]');
+        if (protocolRefresh) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          void refresh(_cid);
+          return;
+        }
         const ciAttach = ev.target.closest('.ci-attach-row[data-attachment-name]');
         if (ciAttach) {
           ev.preventDefault();
@@ -1087,6 +1561,14 @@ const ConversationInfo = (() => {
         ev.preventDefault();
         _openFile(file.dataset.filePath || '');
       });
+      body.addEventListener('change', (ev) => {
+        const select = ev.target && ev.target.closest ? ev.target.closest('[data-protocol-filter]') : null;
+        if (!select) return;
+        const name = select.dataset.protocolFilter || '';
+        if (!Object.prototype.hasOwnProperty.call(_protocolFilters, name)) return;
+        _protocolFilters[name] = String(select.value || '');
+        _renderBody();
+      });
       body.addEventListener('dragstart', (ev) => {
         const file = ev.target.closest('.conversation-info-file[data-file-path]');
         if (!file || !ev.dataTransfer) return;
@@ -1122,6 +1604,25 @@ const ConversationInfo = (() => {
   function open()  { _setOpen(true); }
   function close() { _setOpen(false); }
   function toggle() { _setOpen(!_open); }
+  function openAgentActivity(cid) {
+    if (cid) _cid = cid;
+    openAndSetTab('collaboration');
+  }
+  function openCollaboration(cid) {
+    if (cid) _cid = cid;
+    openAndSetTab('collaboration');
+  }
+  function openProtocol(cid) {
+    if (cid) _cid = cid;
+    openAndSetTab('protocol');
+  }
+  function setProtocolFilters(filters) {
+    if (!filters || typeof filters !== 'object') return;
+    if (Object.prototype.hasOwnProperty.call(filters, 'agent')) _protocolFilters.agent = String(filters.agent || '');
+    if (Object.prototype.hasOwnProperty.call(filters, 'role')) _protocolFilters.role = String(filters.role || '');
+    if (Object.prototype.hasOwnProperty.call(filters, 'result')) _protocolFilters.result = String(filters.result || '');
+    _renderBody();
+  }
   function openAndSetTab(tab) {
     _activeTab = tab || 'files';
     _setOpen(true);
@@ -1141,7 +1642,11 @@ const ConversationInfo = (() => {
     open,
     close,
     toggle,
+    openAgentActivity,
+    openCollaboration,
+    openProtocol,
     openAndSetTab,
+    setProtocolFilters,
     openFileMenu,
   };
 })();

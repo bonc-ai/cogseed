@@ -289,12 +289,7 @@
                  chrome (underline + bold + soft-primary chip) handled in CSS
                  via .is-active. -->
             <div class="conversation-info-tabs" role="tablist">
-              <button type="button" class="conversation-info-tab is-active" data-info-tab="tasks">
-                <span data-ui-icon="clipboard-list" data-ui-icon-class="conversation-info-tab-icon"></span>
-                <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_tasks">Tasks</span>
-                <span class="conversation-info-tab-count" id="conversation-info-tab-count-tasks"></span>
-              </button>
-              <button type="button" class="conversation-info-tab" data-info-tab="files">
+              <button type="button" class="conversation-info-tab is-active" data-info-tab="files">
                 <span data-ui-icon="folder" data-ui-icon-class="conversation-info-tab-icon"></span>
                 <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_files">Files</span>
                 <span class="conversation-info-tab-count" id="conversation-info-tab-count-files"></span>
@@ -303,6 +298,16 @@
                 <span data-ui-icon="paperclip" data-ui-icon-class="conversation-info-tab-icon"></span>
                 <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_attachments">Attachments</span>
                 <span class="conversation-info-tab-count" id="conversation-info-tab-count-attachments"></span>
+              </button>
+              <button type="button" class="conversation-info-tab" data-info-tab="collaboration">
+                <span data-ui-icon="layout-dashboard" data-ui-icon-class="conversation-info-tab-icon"></span>
+                <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_collaboration">Collaboration</span>
+                <span class="conversation-info-tab-count" id="conversation-info-tab-count-collaboration"></span>
+              </button>
+              <button type="button" class="conversation-info-tab" data-info-tab="protocol">
+                <span data-ui-icon="route" data-ui-icon-class="conversation-info-tab-icon"></span>
+                <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_protocol">Protocol</span>
+                <span class="conversation-info-tab-count" id="conversation-info-tab-count-protocol"></span>
               </button>
             </div>
             <div class="conversation-info-body" id="conversation-info-body"></div>

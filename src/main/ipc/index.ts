@@ -1489,6 +1489,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, runs, experience_candidates: experienceCandidates };
   },
 
+  'p3394.listProtocolEvents': async ({ cid }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    return { ok: true, protocol_events: await p3394.listP3394ProtocolEvents(ctx.userId, cid) };
+  },
+
   'p3394.reviewKStarRun': async ({ cid, runId, decision, notes }, ctx) => {
     if (!safeId(cid) || !safeId(runId)) throw new Error('invalid KSTAR scope');
     if (decision !== 'pass' && decision !== 'fail') throw new Error('invalid review decision');
@@ -1505,7 +1510,33 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const existing = await p3394.getExperienceCandidate(ctx.userId, candidateId);
     if (!existing || existing.conversation_id !== cid) throw new Error('experience candidate not found');
     const candidate = await p3394.decideExperienceCandidate(ctx.userId, candidateId, decision);
-    return { ok: true, candidate };
+    if (decision !== 'approve') return { ok: true, candidate };
+    const promotion = await p3394.promoteExperienceCandidateToKnowledgeBase(ctx.userId, candidate.id);
+    return { ok: true, candidate: promotion.ok ? promotion.candidate : candidate, kb_promotion: promotion };
+  },
+
+
+  'p3394.syncExperienceCandidateToNotion': async ({ cid, candidateId }, ctx) => {
+    if (!safeId(cid) || !safeId(candidateId)) throw new Error('invalid experience scope');
+    const existing = await p3394.getExperienceCandidate(ctx.userId, candidateId);
+    if (!existing || existing.conversation_id !== cid) throw new Error('experience candidate not found');
+    const result = await p3394.syncExperienceCandidateToNotion(ctx.userId, candidateId);
+    return { ok: result.ok, ...result };
+  },
+
+
+  'p3394.listPatchCandidates': async ({ cid }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    return { ok: true, patch_candidates: await p3394.listPatchCandidates(ctx.userId, cid) };
+  },
+
+  'p3394.reviewPatchCandidate': async ({ cid, candidateId, decision, notes }, ctx) => {
+    if (!safeId(cid) || !safeId(candidateId)) throw new Error('invalid patch candidate scope');
+    if (decision !== 'approve' && decision !== 'reject') throw new Error('invalid patch candidate decision');
+    const existing = (await p3394.listPatchCandidates(ctx.userId, cid)).find((item) => item.id === candidateId);
+    if (!existing) throw new Error('patch candidate not found');
+    const patch_candidate = await p3394.reviewPatchCandidate(ctx.userId, candidateId, decision, typeof notes === 'string' ? notes : '');
+    return { ok: true, patch_candidate };
   },
 
   'groupChat.abort': async ({ cid }, ctx) => {
@@ -1536,6 +1567,33 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const projectIdHint = conversationProjectHint(args);
     const conv = await chats.getConversation(ctx.userId, cid, projectIdHint);
     return groupChat.runtimeStatus(ctx.userId, cid, conv?.project_id ?? projectIdHint);
+  },
+
+  'groupChat.listCollaborationConflicts': async (args, ctx) => {
+    const { cid } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const projectIdHint = conversationProjectHint(args);
+    const conv = await chats.getConversation(ctx.userId, cid, projectIdHint);
+    if (!conv) throw new Error('conversation not found');
+    return groupChat.listCollaborationConflicts(ctx.userId, cid);
+  },
+
+  'groupChat.resolveCollaborationConflict': async (args, ctx) => {
+    const { cid, conflictId, decision, selected_proposal_ids, text, reason } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (!safeId(conflictId)) throw new Error('invalid conflict id');
+    if (decision !== 'accept' && decision !== 'reject' && decision !== 'merge') throw new Error('invalid conflict resolution decision');
+    if (!Array.isArray(selected_proposal_ids)) throw new Error('invalid selected proposal ids');
+    if (typeof text !== 'string' || !text.trim()) throw new Error('invalid conflict resolution text');
+    const projectIdHint = conversationProjectHint(args);
+    const conv = await chats.getConversation(ctx.userId, cid, projectIdHint);
+    if (!conv) throw new Error('conversation not found');
+    return groupChat.resolveCollaborationConflict(ctx.userId, cid, conflictId, {
+      decision,
+      selected_proposal_ids,
+      text: text.trim(),
+      ...(typeof reason === 'string' && reason.trim() ? { reason: reason.trim() } : {}),
+    });
   },
 
   'groupChat.reviewCollaborationGate': async (args, ctx) => {
