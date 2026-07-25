@@ -1,15 +1,15 @@
-import * as path from 'node:path';
-import { Mutex } from 'async-mutex';
-import { conversationLayout } from '../../util/project-layout';
-import { appendJsonlAtomic, genId12, nowIso, readJson, readJsonl, safeId, writeJson } from '../../storage';
+import * as path from "node:path";
+import { Mutex } from "async-mutex";
+import { conversationLayout } from "../../util/project-layout";
+import { appendJsonlAtomic, genId12, nowIso, readJson, readJsonl, safeId, writeJson } from "../../storage";
 
-export type WorkflowRunKind = 'discussion' | 'implementation' | 'review' | 'custom';
-export type WorkflowRunStatus = 'created' | 'running' | 'blocked' | 'failed' | 'completed' | 'cancelled';
-export type WorkflowStepType = 'prompt' | 'discussion_round' | 'implementation' | 'test' | 'review' | 'gate' | 'summary' | 'dispatch';
-export type WorkflowStepStatus = 'pending' | 'running' | 'blocked' | 'failed' | 'completed' | 'skipped';
-export type GateStatus = 'passed' | 'failed' | 'needs_review';
-export type ContextItemSource = 'user' | 'agent' | 'code' | 'artifact' | 'system' | 'spec';
-export type ContextConfidence = 'low' | 'medium' | 'high';
+export type WorkflowRunKind = "discussion" | "implementation" | "review" | "custom";
+export type WorkflowRunStatus = "created" | "running" | "blocked" | "failed" | "completed" | "cancelled";
+export type WorkflowStepType = "prompt" | "discussion_round" | "implementation" | "test" | "review" | "gate" | "summary" | "dispatch";
+export type WorkflowStepStatus = "pending" | "running" | "blocked" | "failed" | "completed" | "skipped";
+export type GateStatus = "passed" | "failed" | "needs_review";
+export type ContextItemSource = "user" | "agent" | "code" | "artifact" | "system" | "spec";
+export type ContextConfidence = "low" | "medium" | "high";
 
 export interface CollaborationPaths {
   rootDir: string;
@@ -22,7 +22,7 @@ export interface CollaborationPaths {
 }
 
 export interface OutputContract {
-  kind: 'analysis' | 'plan' | 'implementation_result' | 'test_result' | 'review_result' | 'discussion_opinion' | 'dispatch_result';
+  kind: "analysis" | "plan" | "implementation_result" | "test_result" | "review_result" | "discussion_opinion" | "dispatch_result";
   required_fields: string[];
   optional_fields?: string[];
   artifact_required?: boolean;
@@ -40,7 +40,7 @@ export interface WorkflowStep {
   result_ref?: string;
   result_summary?: string;
   gate_result_id?: string;
-  source_tool?: 'dispatch_to' | 'hand_off_to' | 'run_worker';
+  source_tool?: "dispatch_to" | "hand_off_to" | "run_worker";
   started_at?: string;
   completed_at?: string;
 }
@@ -82,7 +82,7 @@ export interface DecisionItem extends ContextItem {
 }
 
 export interface RiskItem extends ContextItem {
-  severity: 'low' | 'medium' | 'high';
+  severity: "low" | "medium" | "high";
 }
 
 export interface ArtifactRef {
@@ -107,7 +107,7 @@ export interface GateCheck {
   reason?: string;
 }
 
-export type GateReviewDecision = 'approved' | 'rejected';
+export type GateReviewDecision = "approved" | "rejected";
 
 export interface GateResult {
   id: string;
@@ -144,20 +144,20 @@ export interface SharedTaskContext {
 }
 
 export type CollaborationEventType =
-  | 'workflow_created'
-  | 'workflow_planned'
-  | 'workflow_resumed'
-  | 'workflow_aborted'
-  | 'step_retried'
-  | 'step_skipped'
-  | 'step_started'
-  | 'step_completed'
-  | 'gate_recorded'
-  | 'gate_reviewed'
-  | 'context_patch_applied'
-  | 'conflict_resolved'
-  | 'events_replayed'
-  | 'discussion_recorded';
+  | "workflow_created"
+  | "workflow_planned"
+  | "workflow_resumed"
+  | "workflow_aborted"
+  | "step_retried"
+  | "step_skipped"
+  | "step_started"
+  | "step_completed"
+  | "gate_recorded"
+  | "gate_reviewed"
+  | "context_patch_applied"
+  | "conflict_resolved"
+  | "events_replayed"
+  | "discussion_recorded";
 
 export interface CollaborationEvent {
   version: 1;
@@ -177,7 +177,7 @@ export interface CollaborationEvent {
 async function appendCollaborationEvent(
   uid: string,
   cid: string,
-  event: Omit<CollaborationEvent, 'version' | 'id' | 'cid' | 'created_at'>,
+  event: Omit<CollaborationEvent, "version" | "id" | "cid" | "created_at">,
 ): Promise<CollaborationEvent> {
   const record: CollaborationEvent = {
     version: 1,
@@ -194,7 +194,7 @@ export async function readCollaborationEvents(uid: string, cid: string, limit = 
   const rows = await readJsonl<unknown>(collaborationPaths(uid, cid).eventsFile, limit);
   return rows.filter((row): row is CollaborationEvent => {
     const item = row as Partial<CollaborationEvent>;
-    return item?.version === 1 && safeId(item.id || '') && typeof item.type === 'string' && typeof item.run_id === 'string';
+    return item?.version === 1 && safeId(item.id || "") && typeof item.type === "string" && typeof item.run_id === "string";
   });
 }
 
@@ -212,21 +212,21 @@ function conversationLock(uid: string, cid: string): Mutex {
 
 export function collaborationPaths(uid: string, cid: string): CollaborationPaths {
   const groupDir = conversationLayout(uid, cid).groupDir;
-  const rootDir = path.join(groupDir, 'collaboration');
-  const runsDir = path.join(rootDir, 'workflow_runs');
-  const contextsDir = path.join(rootDir, 'workflow_contexts');
+  const rootDir = path.join(groupDir, "collaboration");
+  const runsDir = path.join(rootDir, "workflow_runs");
+  const contextsDir = path.join(rootDir, "workflow_contexts");
   return {
     rootDir,
     runsDir,
     contextsDir,
-    activeFile: path.join(rootDir, 'active.json'),
-    eventsFile: path.join(rootDir, 'events.jsonl'),
+    activeFile: path.join(rootDir, "active.json"),
+    eventsFile: path.join(rootDir, "events.jsonl"),
     runFile(runId: string) {
-      if (!safeId(runId)) throw new Error('invalid workflow run id');
+      if (!safeId(runId)) throw new Error("invalid workflow run id");
       return path.join(runsDir, `${runId}.json`);
     },
     contextFile(contextId: string) {
-      if (!safeId(contextId)) throw new Error('invalid workflow context id');
+      if (!safeId(contextId)) throw new Error("invalid workflow context id");
       return path.join(contextsDir, `${contextId}.json`);
     },
   };
@@ -239,12 +239,12 @@ function validActiveFile(value: unknown): value is ActiveWorkflowFile {
 
 function validRun(value: unknown): value is WorkflowRun {
   const item = value as Partial<WorkflowRun>;
-  return item?.version === 1 && safeId(item.id) && typeof item.cid === 'string' && safeId(item.context_id) && Array.isArray(item.steps);
+  return item?.version === 1 && safeId(item.id) && typeof item.cid === "string" && safeId(item.context_id) && Array.isArray(item.steps);
 }
 
 function validContext(value: unknown): value is SharedTaskContext {
   const item = value as Partial<SharedTaskContext>;
-  return item?.version === 1 && safeId(item.id) && typeof item.cid === 'string' && safeId(item.run_id) && Array.isArray(item.facts);
+  return item?.version === 1 && safeId(item.id) && typeof item.cid === "string" && safeId(item.run_id) && Array.isArray(item.facts);
 }
 
 export async function readWorkflowRun(uid: string, cid: string, runId: string): Promise<WorkflowRun | null> {
@@ -285,18 +285,18 @@ export async function createWorkflowRun(
   const now = nowIso();
   const runId = `wf-${genId12()}`;
   const contextId = `wctx-${genId12()}`;
-  const objective = String(input.objective || '').trim() || 'Multi-agent collaboration';
+  const objective = String(input.objective || "").trim() || "Multi-agent collaboration";
   const run: WorkflowRun = {
     version: 1,
     id: runId,
     cid,
     objective,
-    kind: input.kind || 'custom',
-    status: 'running',
-    phase: 'created',
+    kind: input.kind || "custom",
+    status: "running",
+    phase: "created",
     steps: [],
     context_id: contextId,
-    created_by: String(input.created_by || 'commander'),
+    created_by: String(input.created_by || "commander"),
     created_at: now,
     updated_at: now,
   };
@@ -322,7 +322,7 @@ export async function createWorkflowRun(
   await writeJson(paths.contextFile(contextId), context);
   await writeJson(paths.activeFile, { version: 1, run_id: runId, context_id: contextId, updated_at: now } satisfies ActiveWorkflowFile);
   await appendCollaborationEvent(uid, cid, {
-    type: 'workflow_created',
+    type: "workflow_created",
     run_id: runId,
     context_id: contextId,
     actor_id: run.created_by,
@@ -338,7 +338,7 @@ export async function ensureActiveWorkflowRun(
   input: CreateWorkflowRunInput,
 ): Promise<{ run: WorkflowRun; context: SharedTaskContext }> {
   const run = await readActiveWorkflowRun(uid, cid);
-  if (run && run.status === 'running') {
+  if (run && run.status === "running") {
     const context = await readSharedTaskContext(uid, cid, run.context_id);
     if (context) return { run, context };
   }
@@ -361,7 +361,7 @@ export interface PlanWorkflowStepInput {
   type?: WorkflowStepType;
   depends_on?: string[];
   expected_output?: OutputContract;
-  source_tool?: 'dispatch_to' | 'hand_off_to' | 'run_worker';
+  source_tool?: "dispatch_to" | "hand_off_to" | "run_worker";
 }
 
 export async function planWorkflowSteps(
@@ -371,20 +371,20 @@ export async function planWorkflowSteps(
   steps: PlanWorkflowStepInput[],
 ): Promise<WorkflowRun> {
   const run = await readWorkflowRun(uid, cid, runId);
-  if (!run) throw new Error('workflow run not found');
-  if (run.status === 'blocked') throw new Error('workflow run is blocked by gate');
+  if (!run) throw new Error("workflow run not found");
+  if (run.status === "blocked") throw new Error("workflow run is blocked by gate");
   const now = nowIso();
   const planned: WorkflowStep[] = [];
   for (const input of steps || []) {
-    const title = String(input.title || '').trim();
+    const title = String(input.title || "").trim();
     if (!title) continue;
     planned.push({
       id: `wstep-${genId12()}`,
       run_id: run.id,
       title,
       actor_id: input.actor_id || null,
-      type: input.type || 'dispatch',
-      status: 'pending',
+      type: input.type || "dispatch",
+      status: "pending",
       depends_on: input.depends_on || [],
       expected_output: input.expected_output,
       source_tool: input.source_tool,
@@ -392,7 +392,7 @@ export async function planWorkflowSteps(
   }
   if (!planned.length) return run;
   run.steps.push(...planned);
-  run.phase = 'planned';
+  run.phase = "planned";
   run.updated_at = now;
   await writeRun(uid, cid, run);
   const context = await readSharedTaskContext(uid, cid, run.context_id);
@@ -402,7 +402,7 @@ export async function planWorkflowSteps(
     await writeContext(uid, cid, context);
   }
   await appendCollaborationEvent(uid, cid, {
-    type: 'workflow_planned',
+    type: "workflow_planned",
     run_id: run.id,
     context_id: run.context_id,
     actor_id: run.created_by,
@@ -419,19 +419,19 @@ export async function startPlannedWorkflowStep(
   stepId: string,
 ): Promise<WorkflowStep> {
   const run = await readWorkflowRun(uid, cid, runId);
-  if (!run) throw new Error('workflow run not found');
-  if (run.status === 'blocked') throw new Error('workflow run is blocked by gate');
-  if (run.status === 'failed' || run.status === 'cancelled' || run.status === 'completed') {
+  if (!run) throw new Error("workflow run not found");
+  if (run.status === "blocked") throw new Error("workflow run is blocked by gate");
+  if (run.status === "failed" || run.status === "cancelled" || run.status === "completed") {
     throw new Error(`workflow run is not active: ${run.status}`);
   }
   const step = run.steps.find((item) => item.id === stepId);
-  if (!step) throw new Error('workflow step not found');
-  if (step.status !== 'pending') throw new Error(`workflow step is not pending: ${step.status}`);
-  const completed = new Set(run.steps.filter((item) => item.status === 'completed' || item.status === 'skipped').map((item) => item.id));
+  if (!step) throw new Error("workflow step not found");
+  if (step.status !== "pending") throw new Error(`workflow step is not pending: ${step.status}`);
+  const completed = new Set(run.steps.filter((item) => item.status === "completed" || item.status === "skipped").map((item) => item.id));
   const missing = (step.depends_on || []).filter((id) => !completed.has(id));
-  if (missing.length) throw new Error(`workflow step dependencies are not completed: ${missing.join(',')}`);
+  if (missing.length) throw new Error(`workflow step dependencies are not completed: ${missing.join(",")}`);
   const now = nowIso();
-  step.status = 'running';
+  step.status = "running";
   step.started_at = now;
   run.phase = step.type;
   run.updated_at = now;
@@ -443,7 +443,7 @@ export async function startPlannedWorkflowStep(
     await writeContext(uid, cid, context);
   }
   await appendCollaborationEvent(uid, cid, {
-    type: 'step_started',
+    type: "step_started",
     run_id: run.id,
     context_id: run.context_id,
     actor_id: step.actor_id,
@@ -460,7 +460,7 @@ export interface StartWorkflowStepInput {
   type?: WorkflowStepType;
   depends_on?: string[];
   expected_output?: OutputContract;
-  source_tool?: 'dispatch_to' | 'hand_off_to' | 'run_worker';
+  source_tool?: "dispatch_to" | "hand_off_to" | "run_worker";
 }
 
 export async function startWorkflowStep(
@@ -470,19 +470,19 @@ export async function startWorkflowStep(
   input: StartWorkflowStepInput,
 ): Promise<WorkflowStep> {
   const run = await readWorkflowRun(uid, cid, runId);
-  if (!run) throw new Error('workflow run not found');
-  if (run.status === 'blocked') throw new Error('workflow run is blocked by gate');
-  if (run.status === 'failed' || run.status === 'cancelled' || run.status === 'completed') {
+  if (!run) throw new Error("workflow run not found");
+  if (run.status === "blocked") throw new Error("workflow run is blocked by gate");
+  if (run.status === "failed" || run.status === "cancelled" || run.status === "completed") {
     throw new Error(`workflow run is not active: ${run.status}`);
   }
   const now = nowIso();
   const step: WorkflowStep = {
     id: `wstep-${genId12()}`,
     run_id: run.id,
-    title: String(input.title || 'Agent step'),
+    title: String(input.title || "Agent step"),
     actor_id: input.actor_id || null,
-    type: input.type || 'dispatch',
-    status: 'running',
+    type: input.type || "dispatch",
+    status: "running",
     depends_on: input.depends_on || [],
     expected_output: input.expected_output,
     source_tool: input.source_tool,
@@ -499,7 +499,7 @@ export async function startWorkflowStep(
     await writeContext(uid, cid, context);
   }
   await appendCollaborationEvent(uid, cid, {
-    type: 'step_started',
+    type: "step_started",
     run_id: run.id,
     context_id: run.context_id,
     actor_id: step.actor_id,
@@ -511,7 +511,7 @@ export async function startWorkflowStep(
 }
 
 export interface CompleteWorkflowStepInput {
-  status: Extract<WorkflowStepStatus, 'completed' | 'blocked' | 'failed' | 'skipped'>;
+  status: Extract<WorkflowStepStatus, "completed" | "blocked" | "failed" | "skipped">;
   result_summary?: string;
   result_ref?: string;
 }
@@ -524,9 +524,9 @@ export async function completeWorkflowStep(
   input: CompleteWorkflowStepInput,
 ): Promise<WorkflowStep> {
   const run = await readWorkflowRun(uid, cid, runId);
-  if (!run) throw new Error('workflow run not found');
+  if (!run) throw new Error("workflow run not found");
   const step = run.steps.find((item) => item.id === stepId);
-  if (!step) throw new Error('workflow step not found');
+  if (!step) throw new Error("workflow step not found");
   const now = nowIso();
   step.status = input.status;
   step.result_summary = input.result_summary;
@@ -546,7 +546,7 @@ export async function completeWorkflowStep(
     await writeContext(uid, cid, context);
   }
   await appendCollaborationEvent(uid, cid, {
-    type: 'step_completed',
+    type: "step_completed",
     run_id: run.id,
     context_id: run.context_id,
     actor_id: step.actor_id,
@@ -564,21 +564,21 @@ export async function retryWorkflowStep(
   stepId: string,
 ): Promise<WorkflowStep> {
   const run = await readWorkflowRun(uid, cid, runId);
-  if (!run) throw new Error('workflow run not found');
+  if (!run) throw new Error("workflow run not found");
   const step = run.steps.find((item) => item.id === stepId);
-  if (!step) throw new Error('workflow step not found');
-  if (step.status !== 'failed' && step.status !== 'blocked' && step.status !== 'skipped') {
+  if (!step) throw new Error("workflow step not found");
+  if (step.status !== "failed" && step.status !== "blocked" && step.status !== "skipped") {
     throw new Error(`workflow step cannot be retried from status: ${step.status}`);
   }
   const now = nowIso();
-  step.status = 'pending';
+  step.status = "pending";
   delete step.started_at;
   delete step.completed_at;
   delete step.result_summary;
   delete step.result_ref;
   delete step.gate_result_id;
-  run.status = 'running';
-  run.phase = 'step_retry';
+  run.status = "running";
+  run.phase = "step_retry";
   run.updated_at = now;
   await writeRun(uid, cid, run);
   const context = await readSharedTaskContext(uid, cid, run.context_id);
@@ -588,7 +588,7 @@ export async function retryWorkflowStep(
     await writeContext(uid, cid, context);
   }
   await appendCollaborationEvent(uid, cid, {
-    type: 'step_retried',
+    type: "step_retried",
     run_id: run.id,
     context_id: run.context_id,
     actor_id: step.actor_id,
@@ -606,19 +606,19 @@ export async function skipWorkflowStep(
   reason?: string,
 ): Promise<WorkflowStep> {
   const run = await readWorkflowRun(uid, cid, runId);
-  if (!run) throw new Error('workflow run not found');
+  if (!run) throw new Error("workflow run not found");
   const step = run.steps.find((item) => item.id === stepId);
-  if (!step) throw new Error('workflow step not found');
+  if (!step) throw new Error("workflow step not found");
   const now = nowIso();
-  step.status = 'skipped';
+  step.status = "skipped";
   step.completed_at = now;
-  step.result_summary = reason || 'Skipped.';
-  run.status = run.status === 'cancelled' ? run.status : 'running';
-  run.phase = 'step_skipped';
+  step.result_summary = reason || "Skipped.";
+  run.status = run.status === "cancelled" ? run.status : "running";
+  run.phase = "step_skipped";
   run.updated_at = now;
   for (const candidate of run.steps) {
-    if (candidate.status === 'blocked' && (candidate.depends_on || []).includes(step.id)) {
-      candidate.status = 'pending';
+    if (candidate.status === "blocked" && (candidate.depends_on || []).includes(step.id)) {
+      candidate.status = "pending";
     }
   }
   await writeRun(uid, cid, run);
@@ -629,7 +629,7 @@ export async function skipWorkflowStep(
     await writeContext(uid, cid, context);
   }
   await appendCollaborationEvent(uid, cid, {
-    type: 'step_skipped',
+    type: "step_skipped",
     run_id: run.id,
     context_id: run.context_id,
     actor_id: step.actor_id,
@@ -646,10 +646,10 @@ export async function resumeWorkflowRun(
   reason?: string,
 ): Promise<WorkflowRun> {
   const run = await readWorkflowRun(uid, cid, runId);
-  if (!run) throw new Error('workflow run not found');
+  if (!run) throw new Error("workflow run not found");
   const now = nowIso();
-  run.status = 'running';
-  run.phase = 'resumed';
+  run.status = "running";
+  run.phase = "resumed";
   run.updated_at = now;
   await writeRun(uid, cid, run);
   const context = await readSharedTaskContext(uid, cid, run.context_id);
@@ -659,11 +659,11 @@ export async function resumeWorkflowRun(
     await writeContext(uid, cid, context);
   }
   await appendCollaborationEvent(uid, cid, {
-    type: 'workflow_resumed',
+    type: "workflow_resumed",
     run_id: run.id,
     context_id: run.context_id,
-    actor_id: 'user',
-    summary: reason || 'Workflow resumed.',
+    actor_id: "user",
+    summary: reason || "Workflow resumed.",
   });
   return run;
 }
@@ -675,15 +675,15 @@ export async function abortWorkflowRun(
   reason?: string,
 ): Promise<WorkflowRun> {
   const run = await readWorkflowRun(uid, cid, runId);
-  if (!run) throw new Error('workflow run not found');
+  if (!run) throw new Error("workflow run not found");
   const now = nowIso();
-  run.status = 'cancelled';
-  run.phase = 'aborted';
+  run.status = "cancelled";
+  run.phase = "aborted";
   for (const step of run.steps) {
-    if (step.status === 'pending' || step.status === 'running' || step.status === 'blocked') {
-      step.status = 'skipped';
+    if (step.status === "pending" || step.status === "running" || step.status === "blocked") {
+      step.status = "skipped";
       step.completed_at = now;
-      step.result_summary = reason || 'Workflow aborted.';
+      step.result_summary = reason || "Workflow aborted.";
     }
   }
   run.updated_at = now;
@@ -695,11 +695,11 @@ export async function abortWorkflowRun(
     await writeContext(uid, cid, context);
   }
   await appendCollaborationEvent(uid, cid, {
-    type: 'workflow_aborted',
+    type: "workflow_aborted",
     run_id: run.id,
     context_id: run.context_id,
-    actor_id: 'user',
-    summary: reason || 'Workflow aborted.',
+    actor_id: "user",
+    summary: reason || "Workflow aborted.",
   });
   return run;
 }
@@ -720,15 +720,15 @@ export async function recordGateResult(
   input: RecordGateResultInput,
 ): Promise<GateResult> {
   const run = await readWorkflowRun(uid, cid, runId);
-  if (!run) throw new Error('workflow run not found');
+  if (!run) throw new Error("workflow run not found");
   const step = run.steps.find((item) => item.id === stepId);
-  if (!step) throw new Error('workflow step not found');
+  if (!step) throw new Error("workflow step not found");
   const now = nowIso();
   const gate: GateResult = {
     id: `wgate-${genId12()}`,
     run_id: run.id,
     step_id: step.id,
-    name: String(input.name || 'gate'),
+    name: String(input.name || "gate"),
     status: input.status,
     checks: input.checks || [],
     reason: input.reason,
@@ -736,12 +736,12 @@ export async function recordGateResult(
     created_at: now,
   };
   step.gate_result_id = gate.id;
-  if (gate.blocks_workflow !== false && (gate.status === 'needs_review' || gate.status === 'failed')) {
-    run.status = 'blocked';
-    run.phase = gate.status === 'needs_review' ? 'gate_needs_review' : 'gate_failed';
+  if (gate.blocks_workflow !== false && (gate.status === "needs_review" || gate.status === "failed")) {
+    run.status = "blocked";
+    run.phase = gate.status === "needs_review" ? "gate_needs_review" : "gate_failed";
     for (const candidate of run.steps) {
-      if (candidate.status === 'pending' && (candidate.depends_on || []).includes(step.id)) {
-        candidate.status = 'blocked';
+      if (candidate.status === "pending" && (candidate.depends_on || []).includes(step.id)) {
+        candidate.status = "blocked";
       }
     }
   }
@@ -754,7 +754,7 @@ export async function recordGateResult(
     await writeContext(uid, cid, context);
   }
   await appendCollaborationEvent(uid, cid, {
-    type: 'gate_recorded',
+    type: "gate_recorded",
     run_id: run.id,
     context_id: run.context_id,
     actor_id: step.actor_id,
@@ -767,7 +767,7 @@ export async function recordGateResult(
 }
 
 export interface ReviewCollaborationGateInput {
-  decision: 'approve' | 'reject';
+  decision: "approve" | "reject";
   reviewed_by: string;
   reason?: string;
 }
@@ -778,36 +778,36 @@ export async function reviewCollaborationGate(
   gateId: string,
   input: ReviewCollaborationGateInput,
 ): Promise<{ run: WorkflowRun; context: SharedTaskContext; gate: GateResult }> {
-  if (!safeId(gateId)) throw new Error('invalid gate id');
+  if (!safeId(gateId)) throw new Error("invalid gate id");
   return conversationLock(uid, cid).runExclusive(async () => {
     const run = await readActiveWorkflowRun(uid, cid);
-    if (!run) throw new Error('workflow run not found');
+    if (!run) throw new Error("workflow run not found");
     const context = await readSharedTaskContext(uid, cid, run.context_id);
-    if (!context) throw new Error('shared task context not found');
+    if (!context) throw new Error("shared task context not found");
     const gate = context.gates.find((item) => item.id === gateId);
-    if (!gate) throw new Error('collaboration gate not found');
+    if (!gate) throw new Error("collaboration gate not found");
     const step = run.steps.find((item) => item.id === gate.step_id);
     const now = nowIso();
     const decision = input.decision;
-    gate.review_decision = decision === 'approve' ? 'approved' : 'rejected';
-    gate.reviewed_by = String(input.reviewed_by || 'user');
+    gate.review_decision = decision === "approve" ? "approved" : "rejected";
+    gate.reviewed_by = String(input.reviewed_by || "user");
     gate.reviewed_at = now;
-    gate.review_reason = typeof input.reason === 'string' && input.reason.trim() ? input.reason.trim() : undefined;
-    if (decision === 'approve') {
-      gate.status = 'passed';
-      run.status = 'running';
-      run.phase = 'gate_approved';
+    gate.review_reason = typeof input.reason === "string" && input.reason.trim() ? input.reason.trim() : undefined;
+    if (decision === "approve") {
+      gate.status = "passed";
+      run.status = "running";
+      run.phase = "gate_approved";
       if (step) {
         for (const candidate of run.steps) {
-          if (candidate.status === 'blocked' && (candidate.depends_on || []).includes(step.id)) {
-            candidate.status = 'pending';
+          if (candidate.status === "blocked" && (candidate.depends_on || []).includes(step.id)) {
+            candidate.status = "pending";
           }
         }
       }
     } else {
-      gate.status = 'failed';
-      run.status = 'blocked';
-      run.phase = 'gate_rejected';
+      gate.status = "failed";
+      run.status = "blocked";
+      run.phase = "gate_rejected";
       if (gate.review_reason) gate.reason = gate.review_reason;
     }
     run.updated_at = now;
@@ -815,7 +815,7 @@ export async function reviewCollaborationGate(
     await writeRun(uid, cid, run);
     await writeContext(uid, cid, context);
     await appendCollaborationEvent(uid, cid, {
-      type: 'gate_reviewed',
+      type: "gate_reviewed",
       run_id: run.id,
       context_id: context.id,
       actor_id: gate.reviewed_by,
@@ -841,7 +841,7 @@ export interface DecisionDraft extends ContextItemDraft {
 }
 
 export interface RiskDraft extends ContextItemDraft {
-  severity?: 'low' | 'medium' | 'high';
+  severity?: "low" | "medium" | "high";
 }
 
 export interface ArtifactRefDraft {
@@ -852,7 +852,7 @@ export interface ArtifactRefDraft {
 }
 
 export interface ResolveContextConflictInput {
-  decision: 'accept' | 'reject' | 'merge';
+  decision: "accept" | "reject" | "merge";
   text: string;
   resolved_by: string;
   reason?: string;
@@ -866,18 +866,18 @@ export async function resolveContextConflict(
   input: ResolveContextConflictInput,
 ): Promise<SharedTaskContext> {
   const context = await readSharedTaskContext(uid, cid, contextId);
-  if (!context) throw new Error('shared task context not found');
-  const text = String(input.text || '').trim();
-  if (!text) throw new Error('conflict resolution text is required');
+  if (!context) throw new Error("shared task context not found");
+  const text = String(input.text || "").trim();
+  if (!text) throw new Error("conflict resolution text is required");
   const now = nowIso();
-  const resolvedBy = String(input.resolved_by || 'user');
-  if (input.decision === 'accept' || input.decision === 'merge') {
+  const resolvedBy = String(input.resolved_by || "user");
+  if (input.decision === "accept" || input.decision === "merge") {
     if (!hasText(context.decisions, text)) {
       context.decisions.push({
         id: `witem-${genId12()}`,
         text,
-        source: 'user',
-        confidence: 'high',
+        source: "user",
+        confidence: "high",
         added_by: resolvedBy,
         created_at: now,
         reason: input.reason,
@@ -888,7 +888,7 @@ export async function resolveContextConflict(
   context.open_questions = context.open_questions.filter((item) => {
     if (obsolete.has(item.id)) return false;
     if (item.text.includes(text)) return false;
-    if (item.text.startsWith('Conflicting decision proposed:') && input.decision !== 'reject') return false;
+    if (item.text.startsWith("Conflicting decision proposed:") && input.decision !== "reject") return false;
     return true;
   });
   if (obsolete.size) {
@@ -899,7 +899,7 @@ export async function resolveContextConflict(
   context.updated_at = now;
   const written = await writeContext(uid, cid, context);
   await appendCollaborationEvent(uid, cid, {
-    type: 'conflict_resolved',
+    type: "conflict_resolved",
     run_id: context.run_id,
     context_id: context.id,
     actor_id: resolvedBy,
@@ -925,16 +925,16 @@ export async function replayCollaborationEvents(uid: string, cid: string): Promi
     byType[event.type] = (byType[event.type] || 0) + 1;
     if (event.run_id) replay.latest_run_id = event.run_id;
     if (event.context_id) replay.latest_context_id = event.context_id;
-    if (event.type === 'gate_recorded' && event.gate_id) replay.blocking_gate_id = event.gate_id;
-    if (event.type === 'gate_reviewed' && event.gate_id && event.gate_id === replay.blocking_gate_id) {
+    if (event.type === "gate_recorded" && event.gate_id) replay.blocking_gate_id = event.gate_id;
+    if (event.type === "gate_reviewed" && event.gate_id && event.gate_id === replay.blocking_gate_id) {
       replay.blocking_gate_id = undefined;
     }
   }
   await appendCollaborationEvent(uid, cid, {
-    type: 'events_replayed',
-    run_id: replay.latest_run_id || 'none',
+    type: "events_replayed",
+    run_id: replay.latest_run_id || "none",
     context_id: replay.latest_context_id,
-    actor_id: 'system',
+    actor_id: "system",
     summary: `Replayed ${events.length} collaboration event(s).`,
     payload: { by_type: byType },
   }).catch(() => undefined);
@@ -955,10 +955,10 @@ export interface ContextPatch {
 function contextItemFromDraft(draft: ContextItemDraft, addedBy: string): ContextItem {
   return {
     id: `witem-${genId12()}`,
-    text: String(draft.text || '').trim(),
-    source: draft.source || 'agent',
+    text: String(draft.text || "").trim(),
+    source: draft.source || "agent",
     source_ref: draft.source_ref,
-    confidence: draft.confidence || 'medium',
+    confidence: draft.confidence || "medium",
     added_by: addedBy,
     created_at: nowIso(),
   };
@@ -975,8 +975,8 @@ export async function applyContextPatch(
   patch: ContextPatch,
 ): Promise<SharedTaskContext> {
   const context = await readSharedTaskContext(uid, cid, contextId);
-  if (!context) throw new Error('shared task context not found');
-  const addedBy = String(patch.added_by || 'agent');
+  if (!context) throw new Error("shared task context not found");
+  const addedBy = String(patch.added_by || "agent");
   const now = nowIso();
   const before = {
     facts: context.facts.length,
@@ -992,16 +992,16 @@ export async function applyContextPatch(
   }
 
   for (const draft of patch.decisions_proposed || []) {
-    const text = String(draft.text || '').trim();
+    const text = String(draft.text || "").trim();
     if (!text) continue;
     const conflicts = (draft.conflicts_with || []).filter((value) => hasText(context.decisions, value));
     if (conflicts.length > 0) {
       context.open_questions.push({
         id: `witem-${genId12()}`,
         text: `Conflicting decision proposed: ${text}`,
-        source: draft.source || 'agent',
+        source: draft.source || "agent",
         source_ref: draft.source_ref,
-        confidence: draft.confidence || 'medium',
+        confidence: draft.confidence || "medium",
         added_by: addedBy,
         created_at: now,
       });
@@ -1016,7 +1016,7 @@ export async function applyContextPatch(
   for (const draft of patch.risks_add || []) {
     const base = contextItemFromDraft(draft, addedBy);
     if (base.text && !hasText(context.risks, base.text)) {
-      context.risks.push({ ...base, severity: draft.severity || 'medium' });
+      context.risks.push({ ...base, severity: draft.severity || "medium" });
     }
   }
 
@@ -1030,7 +1030,7 @@ export async function applyContextPatch(
     if (!id || context.artifacts.some((item) => item.id === id)) continue;
     context.artifacts.push({
       id,
-      type: String(draft.type || 'artifact'),
+      type: String(draft.type || "artifact"),
       path: draft.path,
       summary: draft.summary,
       added_by: addedBy,
@@ -1049,7 +1049,7 @@ export async function applyContextPatch(
   context.updated_at = now;
   const written = await writeContext(uid, cid, context);
   await appendCollaborationEvent(uid, cid, {
-    type: 'context_patch_applied',
+    type: "context_patch_applied",
     run_id: context.run_id,
     context_id: context.id,
     actor_id: addedBy,
@@ -1074,19 +1074,19 @@ export interface ExtractedContextPatchBlocks {
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function stringOrUndefined(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function normalizeConfidence(value: unknown): ContextConfidence | undefined {
-  return value === 'low' || value === 'medium' || value === 'high' ? value : undefined;
+  return value === "low" || value === "medium" || value === "high" ? value : undefined;
 }
 
 function normalizeSource(value: unknown): ContextItemSource | undefined {
-  return value === 'user' || value === 'agent' || value === 'code' || value === 'artifact' || value === 'system' || value === 'spec'
+  return value === "user" || value === "agent" || value === "code" || value === "artifact" || value === "system" || value === "spec"
     ? value
     : undefined;
 }
@@ -1136,7 +1136,7 @@ function normalizeRiskDraftArray(value: unknown): RiskDraft[] | undefined {
     if (!isPlainRecord(raw)) continue;
     const text = stringOrUndefined(raw.text);
     if (!text) continue;
-    const severity = raw.severity === 'low' || raw.severity === 'medium' || raw.severity === 'high' ? raw.severity : undefined;
+    const severity = raw.severity === "low" || raw.severity === "medium" || raw.severity === "high" ? raw.severity : undefined;
     drafts.push({
       text,
       source: normalizeSource(raw.source),
@@ -1153,7 +1153,7 @@ function normalizeArtifactDraftArray(value: unknown): ArtifactRefDraft[] | undef
   const drafts: ArtifactRefDraft[] = [];
   for (const raw of value) {
     if (!isPlainRecord(raw)) continue;
-    const type = stringOrUndefined(raw.type) || 'artifact';
+    const type = stringOrUndefined(raw.type) || "artifact";
     const id = stringOrUndefined(raw.id);
     const artifactPath = stringOrUndefined(raw.path);
     const summary = stringOrUndefined(raw.summary);
@@ -1195,17 +1195,17 @@ function normalizeContextPatch(value: unknown, addedBy: string): ContextPatch | 
 }
 
 export function extractContextPatchBlocks(text: string, addedBy: string): ExtractedContextPatchBlocks {
-  const source = String(text || '');
-  if (!source) return { cleanText: '', patches: [], errors: [] };
+  const source = String(text || "");
+  if (!source) return { cleanText: "", patches: [], errors: [] };
   const re = /<context-patch>\s*([\s\S]*?)\s*<\/context-patch>/gi;
   let lastIndex = 0;
   let changed = false;
-  let clean = '';
+  let clean = "";
   const patches: ContextPatch[] = [];
   const errors: string[] = [];
   for (const match of source.matchAll(re)) {
     const full = match[0];
-    const body = match[1] || '';
+    const body = match[1] || "";
     const index = match.index ?? 0;
     let parsed: unknown;
     try {
@@ -1216,9 +1216,9 @@ export function extractContextPatchBlocks(text: string, addedBy: string): Extrac
       lastIndex = index + full.length;
       continue;
     }
-    const patch = normalizeContextPatch(parsed, String(addedBy || 'agent'));
+    const patch = normalizeContextPatch(parsed, String(addedBy || "agent"));
     if (!patch) {
-      errors.push('invalid context-patch payload: no supported patch fields');
+      errors.push("invalid context-patch payload: no supported patch fields");
       clean += source.slice(lastIndex, index + full.length);
       lastIndex = index + full.length;
       continue;
@@ -1229,7 +1229,7 @@ export function extractContextPatchBlocks(text: string, addedBy: string): Extrac
     changed = true;
   }
   clean += source.slice(lastIndex);
-  if (changed) clean = clean.replace(/[ \t]*\n[ \t]*\n/g, '\n').trim();
+  if (changed) clean = clean.replace(/[ \t]*\n[ \t]*\n/g, "\n").trim();
   return { cleanText: changed ? clean : source, patches, errors };
 }
 
@@ -1240,7 +1240,7 @@ export interface CollaborationSnapshotItem {
   confidence?: ContextConfidence;
   created_at: string;
   reason?: string;
-  severity?: 'low' | 'medium' | 'high';
+  severity?: "low" | "medium" | "high";
 }
 
 export interface CollaborationSnapshotArtifact {
@@ -1258,7 +1258,7 @@ export interface CollaborationSnapshot {
   objective: string;
   status: WorkflowRunStatus;
   phase: string;
-  steps: Array<Pick<WorkflowStep, 'id' | 'title' | 'actor_id' | 'type' | 'status' | 'source_tool' | 'started_at' | 'completed_at' | 'result_summary' | 'gate_result_id'>>;
+  steps: Array<Pick<WorkflowStep, "id" | "title" | "actor_id" | "type" | "status" | "source_tool" | "started_at" | "completed_at" | "result_summary" | "gate_result_id">>;
   facts_count: number;
   decisions_count: number;
   risks_count: number;
@@ -1295,7 +1295,7 @@ export async function readCollaborationSnapshot(uid: string, cid: string): Promi
   const context = await readSharedTaskContext(uid, cid, run.context_id);
   if (!context) return null;
   const recentEvents = await readCollaborationEvents(uid, cid, 20);
-  const blockingGate = context.gates.find((gate) => gate.blocks_workflow !== false && (gate.status === 'needs_review' || gate.status === 'failed'));
+  const blockingGate = context.gates.find((gate) => gate.blocks_workflow !== false && (gate.status === "needs_review" || gate.status === "failed"));
   return {
     run_id: run.id,
     context_id: context.id,
@@ -1344,21 +1344,21 @@ function bulletList(items: Array<{ text: string }>, limit = 8): string[] {
 
 export async function buildSharedContextSummary(uid: string, cid: string, contextId: string): Promise<string> {
   const context = await readSharedTaskContext(uid, cid, contextId);
-  if (!context) return '';
+  if (!context) return "";
   const parts: string[] = [
-    '## Shared Task Context',
+    "## Shared Task Context",
     `Objective: ${context.objective}`,
     `Phase: ${context.phase}`,
   ];
-  if (context.constraints.length) parts.push('', '### Constraints', ...bulletList(context.constraints));
-  if (context.facts.length) parts.push('', '### Facts', ...bulletList(context.facts));
-  if (context.decisions.length) parts.push('', '### Decisions', ...bulletList(context.decisions));
-  if (context.open_questions.length) parts.push('', '### Open Questions', ...bulletList(context.open_questions));
-  if (context.risks.length) parts.push('', '### Risks', ...bulletList(context.risks));
+  if (context.constraints.length) parts.push("", "### Constraints", ...bulletList(context.constraints));
+  if (context.facts.length) parts.push("", "### Facts", ...bulletList(context.facts));
+  if (context.decisions.length) parts.push("", "### Decisions", ...bulletList(context.decisions));
+  if (context.open_questions.length) parts.push("", "### Open Questions", ...bulletList(context.open_questions));
+  if (context.risks.length) parts.push("", "### Risks", ...bulletList(context.risks));
   if (context.artifacts.length) {
-    parts.push('', '### Artifacts', ...context.artifacts.slice(0, 8).map((item) => `- ${item.id}${item.summary ? `: ${item.summary}` : ''}`));
+    parts.push("", "### Artifacts", ...context.artifacts.slice(0, 8).map((item) => `- ${item.id}${item.summary ? `: ${item.summary}` : ""}`));
   }
-  return parts.join('\n');
+  return parts.join("\n");
 }
 
 export interface RecordDiscussionRoundInput {
@@ -1376,26 +1376,26 @@ export async function recordDiscussionRound(
   input: RecordDiscussionRoundInput,
 ): Promise<WorkflowStep> {
   const step = await startWorkflowStep(uid, cid, runId, {
-    title: input.title || 'Discussion round',
+    title: input.title || "Discussion round",
     actor_id: input.actor_id,
-    type: 'discussion_round',
+    type: "discussion_round",
     expected_output: {
-      kind: 'discussion_opinion',
-      required_fields: ['opinion'],
-      optional_fields: ['critiques', 'revision'],
+      kind: "discussion_opinion",
+      required_fields: ["opinion"],
+      optional_fields: ["critiques", "revision"],
     },
   });
-  const summary = [input.opinion, ...(input.critiques || []), input.revision || '']
-    .map((item) => String(item || '').trim())
+  const summary = [input.opinion, ...(input.critiques || []), input.revision || ""]
+    .map((item) => String(item || "").trim())
     .filter(Boolean)
-    .join('\n');
+    .join("\n");
   const completed = await completeWorkflowStep(uid, cid, runId, step.id, {
-    status: 'completed',
-    result_summary: summary || 'Discussion round completed.',
+    status: "completed",
+    result_summary: summary || "Discussion round completed.",
   });
   const run = await readWorkflowRun(uid, cid, runId);
   await appendCollaborationEvent(uid, cid, {
-    type: 'discussion_recorded',
+    type: "discussion_recorded",
     run_id: runId,
     context_id: run?.context_id,
     actor_id: input.actor_id,
@@ -1410,7 +1410,7 @@ export interface RecordNestedDispatchStepInput {
   objective: string;
   actor_id: string | null;
   actor_name?: string;
-  source_tool: 'dispatch_to' | 'hand_off_to' | 'run_worker';
+  source_tool: "dispatch_to" | "hand_off_to" | "run_worker";
   task: string;
   result?: string;
   error?: string;
@@ -1424,37 +1424,37 @@ export async function recordNestedDispatchStep(
   return conversationLock(uid, cid).runExclusive(async () => {
     const active = await ensureActiveWorkflowRun(uid, cid, {
       objective: input.objective,
-      kind: 'custom',
-      created_by: 'commander',
+      kind: "custom",
+      created_by: "commander",
     });
     const step = await startWorkflowStep(uid, cid, active.run.id, {
-      title: `${input.source_tool}: ${input.actor_name || input.actor_id || 'worker'}`,
+      title: `${input.source_tool}: ${input.actor_name || input.actor_id || "worker"}`,
       actor_id: input.actor_id,
-      type: 'dispatch',
+      type: "dispatch",
       source_tool: input.source_tool,
       expected_output: {
-        kind: 'dispatch_result',
-        required_fields: ['result_summary'],
+        kind: "dispatch_result",
+        required_fields: ["result_summary"],
       },
     });
-    const resultText = String(input.result || '').trim();
-    const errorText = String(input.error || '').trim();
+    const resultText = String(input.result || "").trim();
+    const errorText = String(input.error || "").trim();
     const completed = await completeWorkflowStep(uid, cid, active.run.id, step.id, {
-      status: errorText ? 'failed' : 'completed',
-      result_summary: errorText || resultText || '(empty result)',
+      status: errorText ? "failed" : "completed",
+      result_summary: errorText || resultText || "(empty result)",
     });
     const gate = await recordGateResult(uid, cid, active.run.id, completed.id, {
-      name: 'dispatch_result_present',
-      status: errorText ? 'failed' : (resultText ? 'passed' : 'needs_review'),
-      reason: errorText || (!resultText ? 'Nested dispatch returned an empty result.' : undefined),
+      name: "dispatch_result_present",
+      status: errorText ? "failed" : (resultText ? "passed" : "needs_review"),
+      reason: errorText || (!resultText ? "Nested dispatch returned an empty result." : undefined),
       checks: [
-        { name: 'result_summary_present', status: resultText || errorText ? 'passed' : 'needs_review' },
+        { name: "result_summary_present", status: resultText || errorText ? "passed" : "needs_review" },
       ],
       blocks_workflow: false,
     });
     const run = await readWorkflowRun(uid, cid, active.run.id);
     const context = await readSharedTaskContext(uid, cid, active.context.id);
-    if (!run || !context) throw new Error('workflow record disappeared after nested dispatch recording');
+    if (!run || !context) throw new Error("workflow record disappeared after nested dispatch recording");
     return { run, context, step: completed, gate };
   });
 }
