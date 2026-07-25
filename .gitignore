@@ -19,3 +19,10 @@
 task.md
 plan.md
 .collab-poc/
+
+# Local document/render outputs and workflow state
+/.docx_render_*/
+/.pdf_render_*/
+/.superpowers/
+__pycache__/
+*.py[cod]
