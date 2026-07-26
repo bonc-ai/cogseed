@@ -110,13 +110,50 @@ packages/nseap-meta-skill-engine/
 - `userWorkSpace/meta-skill-engine-package/` 不再作为运行时来源。
 - 用户工作目录中的副本不参与构建、测试或版本选择。
 
-### 5.2 构建产物
+### 5.2 构建产物与 MCP 启动
 
 开发和打包统一使用：
 
 ```text
 packages/nseap-meta-skill-engine/dist/index.js
 ```
+
+PC 不增加新的 spawn 特例。`kstar-adapter.ts` 必须复用 `features/connectors/mcp-client.ts` 的 `McpConnection`，由现有 MCP stdio choke point 启动：
+
+```text
+node packages/nseap-meta-skill-engine/dist/index.js --stdio
+```
+
+Engine 在没有 `--stdio` 时可以执行 CLI health/help，但产品运行时只允许 `--stdio` 模式。
+
+Engine `package.json` 增加机器可读字段：
+
+```json
+{
+  "kstar": {
+    "protocolVersion": "1.0.0",
+    "snapshotSchemaVersion": "1.0.0"
+  }
+}
+```
+
+运行时不直接信任 package.json；MCP `get_engine_info` 返回值才是握手事实源：
+
+```text
+engine_name
+engine_version
+protocol_version
+snapshot_schema_version
+tools_hash
+capabilities:
+  snapshot_import_export
+  snapshot_migration
+  legacy_pc_import
+  compatibility_projection
+  governance
+```
+
+PC 启动时比较协议 major version、所需 capability 和 tools hash；不兼容时进入 degraded，不尝试调用未知 mutation。
 
 需要更新：
 
@@ -219,6 +256,8 @@ KB/Notion 功能不能继续依赖旧 `KStarRun`，必须接收 Engine ID 和 En
 
 ```text
 get_engine_info
+validate_snapshot
+migrate_snapshot
 import_snapshot
 export_snapshot
 record_evidence_bundle
@@ -232,9 +271,24 @@ import_legacy_pc_kstar
 project_compat_view
 ```
 
+`get_engine_info` 合同：
+
+```ts
+{
+  engine_name: string;
+  engine_version: string;
+  protocol_version: string;
+  snapshot_schema_version: string;
+  tools_hash: string;
+  capabilities: string[];
+}
+```
+
 约束：
 
-- 所有 mutating tool 返回新的 snapshot generation；
+- 所有 mutating tool 输入 `base_generation`，成功后由 Engine 将 generation 精确递增 1；
+- mutation 返回完整 snapshot envelope、new generation 和 operation ids；
+- base generation 不匹配返回 `E_SNAPSHOT_GENERATION_CONFLICT`，不得隐式合并；
 - Engine tool 不接收真实文件系统根路径；
 - PC 传入/取出对象，PC 负责保存；
 - Engine 不直接读写 `<uid>` 用户目录；
@@ -247,26 +301,69 @@ project_compat_view
 ```text
 <uid>/local/kstar/
   engine.json                 # engine/schema/version/generation
-  snapshot.json               # Engine opaque snapshot
-  pending-evidence.jsonl      # Engine 不可用时的待提交证据
+  snapshot.json               # Engine opaque snapshot envelope
+  pending-evidence.jsonl      # Engine 不可用时的 append-only evidence 状态事件
   migration.json              # migration version/status/counts/hash
   archives/
     legacy-pc-kstar-2026-07-26.json
 ```
 
-PC 视 `snapshot.json` 为 Engine 拥有的 opaque object：
+Snapshot envelope 由 Engine 定义：
 
-- 可以原子保存、校验 hash、做备份；
+```ts
+{
+  engine_schema_version: string;
+  engine_version: string;
+  protocol_version: string;
+  generation: number;
+  kstar_timestamp: string;
+  state: unknown;
+  state_hash: string;
+}
+```
+
+PC 视 `state` 为 Engine 拥有的 opaque object：
+
+- 可以保存 envelope、校验 hash、做备份；
 - 不能修改其中 Episode/Proposal/Governance 字段；
-- 兼容投影必须通过 Engine tool 生成。
+- 兼容投影必须通过 Engine tool 生成；
+- generation 只由 Engine mutation 递增，PC 不自行生成。
 
-### 8.2 并发
+### 8.2 并发与 generation CAS
 
 - 每 uid 一个 KSTAR mutex；
-- mutation 顺序：load snapshot → import → call mutating tool → export → atomic write；
-- snapshot 带 generation，防止旧写覆盖新写；
-- PC 崩溃时保留上一个完整 snapshot；
-- pending evidence 使用 JSONL append，成功导入后按 id 标记/压缩。
+- mutation 顺序：load envelope → `import_snapshot` → call mutating tool with `base_generation` → `export_snapshot` → verify generation/hash → atomic write；
+- Engine mutation 必须返回 `generation = base_generation + 1`；
+- PC 写入前再次确认磁盘 generation 等于 base generation；否则丢弃返回值并重试完整事务；
+- `E_SNAPSHOT_GENERATION_CONFLICT` 不可通过 last-write-wins 处理；
+- PC 崩溃时保留上一个完整 snapshot 和 `.previous` generation；
+- 同一证据使用 stable evidence id，Engine import 必须幂等。
+
+### 8.3 Pending evidence 日志
+
+`pending-evidence.jsonl` 是 append-only 状态事件流，不原地更新已有行：
+
+```jsonl
+{"type":"pending","evidence_id":"ev-uuid","evidence":{},"created_at":"..."}
+{"type":"imported","evidence_id":"ev-uuid","engine_episode_id":"ep-123","generation":43,"created_at":"..."}
+{"type":"failed","evidence_id":"ev-uuid","retryable":true,"error_code":"...","created_at":"..."}
+```
+
+读取时按 `evidence_id` fold 最后状态：
+
+1. scan JSONL；
+2. 取最后状态为 pending 或 retryable failed 的记录；
+3. 调用 Engine idempotent import；
+4. snapshot 原子写成功后才 append imported 事件；
+5. 如果 snapshot 写失败，不写 imported，允许安全重放。
+
+Compact 规则：
+
+- 在 uid mutex 下写临时文件并原子替换；
+- 永久保留所有 unresolved evidence；
+- 保留最近 500 条 imported/terminal failed 状态用于审计；
+- 更旧的 imported 状态只保留 compact summary、count 和 hash；
+- compact 不能改变 stable evidence id 或 Engine episode mapping。
 
 ### 8.3 云端经验
 
@@ -277,6 +374,25 @@ PC 视 `snapshot.json` 为 Engine 拥有的 opaque object：
 ```
 
 但推广资格、summary、source episode、governance status 必须来自 Engine。PC 只负责调用 `writeContextFileForUser` 和回写 promotion result。
+
+KB 文档和 Notion payload 使用 Engine identity：
+
+```yaml
+experience_id: exp-123
+source_episode_id: ep-xyz
+source_bundle_id: bundle-xyz
+governance_decision_id: decision-xyz
+engine_version: 1.0.0
+promoted_by: meta_skill_engine
+source_legacy_run_id: legacy-run-abc   # optional，仅迁移对象存在
+```
+
+兼容规则：
+
+- 旧 IPC `source_run_id` 优先返回 `source_legacy_run_id`，无 legacy 时返回 `source_episode_id`；
+- 新内部代码禁止用 `source_run_id` 查询 Engine；
+- KB/Notion 回写结果以 `experience_id` 和 `source_episode_id` 关联；
+- Notion 重试不得创建同一 experience 的重复页面，使用 experience id 作为幂等键。
 
 ## 9. 数据迁移
 
@@ -351,7 +467,47 @@ non_claim_note: >
 - rejected/archived reason；
 - migration timestamp。
 
-### 9.4 原文件处置
+### 9.4 Migration stamp 与多机器语义
+
+`<uid>/local/kstar/migration.json`：
+
+```json
+{
+  "migration_version": 1,
+  "status": "completed",
+  "source_file": "local/p3394/kstar-state.json",
+  "source_file_hash": "sha256:...",
+  "archive_hash": "sha256:...",
+  "snapshot_generation": 1,
+  "engine_version": "1.0.0",
+  "engine_schema_version": "1.0.0",
+  "migrated_at": "2026-07-26T...",
+  "counts": {
+    "episodes_migrated": 5,
+    "runs_archived": 19,
+    "experiences_imported_as_draft": 4,
+    "patches_archived": 5
+  },
+  "migrated_source_ids": [],
+  "archived_source_ids": []
+}
+```
+
+Idempotency：
+
+- completed + source hash 匹配：返回 already_migrated；
+- completed + source hash 不匹配：不自动重新导入，进入 `legacy_changed_after_migration` degraded 状态；
+- failed/in_progress：从原文件和临时文件 hash 判断安全重试或回滚；
+- Engine import 以 legacy source id 去重，重复 dry-run 不产生新 Episode。
+
+KSTAR runtime state 是 local machine-private，不参与云同步，因此迁移 stamp 也是每台机器独立。若同一账号多台机器各自存在旧数据：
+
+- 每台机器独立迁移自己的 legacy file；
+- promoted cloud experience 使用 `source_episode_id + source_file_hash` 去重；
+- 同一 legacy source 不因设备重复产生多个 cloud experience；
+- 不使用 OAuth uid 推断数据内容相同。
+
+### 9.5 原文件处置
 
 迁移事务：
 
@@ -403,6 +559,21 @@ IPC
 - Renderer 不直接收到 opaque snapshot；
 - archive 不计入 active attention count；
 - archive 只能通过新的 read-only history API 读取，不能 review/apply。
+
+新增只读 IPC：
+
+```text
+p3394.listArchivedKStarRuns(cid?, cursor?, limit?)
+p3394.getArchivedKStarRun(archiveId)
+```
+
+Archive 由 PC `kstar-store.ts` 读取，不导入 Engine active snapshot：
+
+- list 只返回 id、legacy type/status、timestamp、conversation id 和截断 summary；
+- detail 按 archive id 返回完整 legacy record；
+- 不提供 review/apply/promote mutation；
+- Renderer 放入单独“历史 KSTAR”section；
+- archive 不计入 attention badge、active metrics 或 Engine benchmark。
 
 ## 11. Group Chat / Wake 数据流
 
@@ -461,7 +632,41 @@ Engine 启动、tool call 或 snapshot import 失败时：
 - Renderer 显示 KSTAR 暂不可用，不要求用户重做 Agent 任务；
 - 日志只记录 id/count/status，原始内容不进入日志。
 
-### 12.2 恢复
+### 12.2 Snapshot 版本兼容
+
+启动时先读取 envelope：
+
+```text
+engine_schema_version
+engine_version
+protocol_version
+generation
+```
+
+处理规则：
+
+- snapshot schema == current：validate/import；
+- snapshot schema < current：调用 Engine `migrate_snapshot`，按连续版本 migration 链升级；
+- migration 前保存 `.previous` 和原 hash；
+- migration 后必须通过 `validate_snapshot`、generation 单调性和 object/ref count 检查；
+- snapshot schema > current：进入 `snapshot_from_newer_engine` degraded，禁止 downgrade 写入；
+- protocol major 不兼容：进入 `protocol_incompatible` degraded；
+- 未知 migration path：保留旧 snapshot，只缓存 pending evidence，等待支持该版本的 Engine；
+- PC 永远不能自行改写 Engine snapshot schema。
+
+`migrate_snapshot` 返回：
+
+```ts
+{
+  from_schema_version: string;
+  to_schema_version: string;
+  migrated_snapshot: SnapshotEnvelope;
+  migration_steps: string[];
+  warnings: string[];
+}
+```
+
+### 12.3 恢复
 
 恢复后：
 
@@ -568,28 +773,34 @@ Renderer 结构尽量保持：
 
 ## 16. 实施分批
 
-### Batch 1：迁入 Engine，不切流量
+### Batch 1a：前置依赖与 Engine 入库，不切流量
 
-- 复制并跟踪 package；
-- 统一依赖/构建；
-- 加 snapshot/import/export；
-- package tests；
-- PC health adapter。
+- 明确批准 `yaml@^2.6.1`；
+- 复制并跟踪 package/ontology/tests；
+- 统一 build/package scripts；
+- 加 `--stdio`、`get_engine_info`、protocol/capability health；
+- 加 snapshot envelope、generation、validate/import/export/migrate；
+- package tests 和 packaged MCP smoke。
 
-### Batch 2：兼容适配与 shadow read
+### Batch 1b：PC 基础适配与 shadow read
 
-- kstar-store/adapter/compat；
-- IPC 从 Engine projection 读取，但旧 runtime 保持只读 fallback；
-- 对比 old/new projection fixture，不双写用户生产数据。
+- 实现 kstar-store/adapter/compat；
+- Engine snapshot persistence 和 pending evidence event log；
+- IPC 从 Engine projection shadow read；
+- 旧 runtime 仅作只读对照，不双写用户生产数据；
+- old/new projection fixture diff；
+- degraded/recovery tests。
 
-### Batch 3：迁移与切换
+### Batch 2：Migration 与 cutover
 
-- legacy migration；
+- 实现 kstar-migration 和 archive IPC；
+- legacy import dry-run/fixtures；
+- Wake metadata preservation；
 - Engine 成为唯一 write path；
-- Review Center/KB/Notion 切换；
-- degraded/recovery。
+- Review Center/KB/Notion 切换到 Engine ids；
+- 多机器/cloud experience dedupe。
 
-### Batch 4：删除旧实现
+### Batch 3：删除旧实现与最终验证
 
 - 删除旧 runtime/engine types/algorithms；
 - 删除旧 tests；
@@ -645,8 +856,18 @@ Renderer 结构尽量保持：
 - Engine 不可用时 Agent 协作不受阻且 evidence 不丢；
 - 后续 retrieval-first 增强只修改 Engine 核心和明确的 adapter contract，不再新增第二套实现。
 
-## 20. 开放确认项
+## 20. 最终批准项
 
 实施前只剩一个需要明确批准的依赖项：
 
 - 是否允许在根 `package.json` 新增 `yaml@^2.6.1` 作为 Meta Skill Engine ontology reader 的运行时依赖。
+
+其余审计澄清项已经固化为实施约束：
+
+- MCP 统一经现有 `McpConnection` stdio choke point；
+- Engine 拥有 snapshot generation/schema migration；
+- KB/Notion 以 Engine episode/bundle/experience id 为事实源；
+- pending evidence 使用 append-only 状态事件与幂等 replay；
+- archive 使用新增只读 IPC；
+- migration stamp 按机器、uid 和 source hash 幂等；
+- 新 Engine 不能读取较新 schema 时必须 degraded，不能降级覆盖。
