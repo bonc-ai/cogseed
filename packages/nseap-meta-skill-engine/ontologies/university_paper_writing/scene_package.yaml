@@ -1,0 +1,123 @@
+---
+# ============================================================
+# 大学生写论文本体 — Package（包清单）
+# 版本: v1.0.0
+# 描述: 绑定所有本体资产，定义元数据和依赖
+# 适用: OntoMem 的版本管理和 Skill 的 ontology-mapping 引用
+# ============================================================
+
+package_type: scene_ontology_package
+
+scene:
+  id: university_paper_writing
+  name: 大学生写论文本体
+  version: "1.0.0"
+
+# ============================================================
+# 资产清单（Assets）
+# ============================================================
+
+assets:
+  tbox:
+    file: scene_tbox.yaml
+    description: 概念层 — 12个核心类 + 5个对象属性 + 17个数据属性 + 受控词表
+    checksum: "sha256:placeholder"
+  rbox:
+    file: scene_rbox.yaml
+    description: 规则层 — 30条规则（结构完整性/引用规范/学术诚信/方法论/IMRAD）
+    checksum: "sha256:placeholder"
+  abox:
+    file: scene_abox.yaml
+    description: 实例层 — 15个案例示例 + 6个实例事实
+    checksum: "sha256:placeholder"
+  mapping:
+    file: scene_mapping.yaml
+    description: 映射层 — 7个映射配置（论文/人员/机构/领域/文献/引用）
+    checksum: "sha256:placeholder"
+
+# ============================================================
+# 元数据（Metadata）
+# ============================================================
+
+metadata:
+  title: 大学生写论文本体
+  description: 大学生学术论文写作领域的完整本体，覆盖论文类型、结构组成、研究方法、引用规范、学术诚信等核心概念，为 NSEAP KSTAR 架构中的 Meta-Skill Engine 和 Agent 提供领域知识支撑
+  creator: NSEAP Ontology Factory
+  created: 2026-07-23
+  modified: 2026-07-23
+  license: Apache-2.0
+  language: zh-CN
+  domain: 高等教育 / 学术论文写作
+  target_audience:
+    - 大学生（本科/硕士/博士）
+    - 论文指导教师
+    - 论文写作 Agent
+    - Meta-Skill Engine
+
+# ============================================================
+# 依赖（Dependencies）
+# ============================================================
+
+dependencies:
+  - id: nseap_kstar_spec
+    name: NSEAP KSTAR 技能架构标准
+    version: "1.0.0"
+    type: standard
+  - id: agentskills_spec
+    name: Agent Skills Specification
+    version: "1.0.0"
+    type: standard
+    url: https://agentskills.io/specification
+
+# ============================================================
+# 运行时说明（Runtime Notes）
+# ============================================================
+
+runtime_note: |
+  本本体设计用于 NSEAP KSTAR 架构中的以下场景：
+
+  1. Agent 通过 ontology-mapping.md 引用本体，获取论文写作领域知识
+     - 示例: ontId: university_paper_writing:v1.0.0
+     - 按需加载 TBox 类/属性 + RBox 规则 + ABox 示例
+
+  2. Meta-Skill Engine 通过本体进行语义匹配和归因
+     - 用户请求 → 意图识别 → 本体语义检索 → 匹配 Skill
+     - KSTAR Episode 中的 Knowledge 字段引用本体概念
+
+  3. OntoMem 提供 Ontology Slice（按需裁剪的本体切片）
+     - 根据 Skill 声明的 ontId 和版本号定位本体文件
+     - 只提取 Skill 需要的类/规则/实例（不加载全部）
+
+  4. Skill-Creator 参考本体创建论文写作相关 Skill
+     - 参考 TBox 定义 Skill 的领域边界
+     - 参考 RBox 定义 Skill 的执行规则
+     - 参考 ABox 定义 Skill 的 fewshot 示例
+
+# ============================================================
+# 版本历史（Version History）
+# ============================================================
+
+version_history:
+  - version: "1.0.0"
+    date: 2026-07-23
+    changes: |
+      - 初始版本
+      - 定义 12 个核心类、5 个对象属性、17 个数据属性
+      - 定义 30 条业务规则
+      - 收录 15 个案例示例和 6 个实例事实
+      - 定义 7 个物理数据映射
+
+# ============================================================
+# 治理信息（Governance）
+# ============================================================
+
+governance:
+  owner_team: NSEAP Ontology Factory
+  author_team: NSEAP Ontology Factory
+  approver_team: NSEAP KSTAR Committee
+  source_mode: auto-generated
+  authority_level: staged
+  data_boundary: public
+  export_allowed: true
+  retention_policy_ref: standard
+  non_claim_note: "本本体基于公开学术规范构建，不替代各高校的具体规定"

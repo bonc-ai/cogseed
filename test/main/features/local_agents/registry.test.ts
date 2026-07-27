@@ -241,6 +241,33 @@ describe('local_agents/registry', () => {
     expect(r.error).toBeUndefined();
   });
 
+  it('falls back to Hermes install metadata when version probes produce no semver', async () => {
+    if (isWindows) return;
+    const installRoot = path.join(tmpDir, 'hermes-agent');
+    fs.mkdirSync(path.join(installRoot, 'venv', 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(installRoot, 'pyproject.toml'), [
+      '[project]',
+      'name = "hermes-agent"',
+      'version = "0.18.2"',
+      '',
+    ].join('\n'));
+    const fake = path.join(tmpDir, 'hermes');
+    fs.writeFileSync(fake, [
+      '#!/bin/sh',
+      `exec ${JSON.stringify(path.join(installRoot, 'venv', 'bin', 'hermes'))} "$@"`,
+      '',
+    ].join('\n'));
+    fs.chmodSync(fake, 0o755);
+    process.env.PATH = '';
+    process.env.ORKAS_HERMES_PATH = fake;
+
+    const r = await detectOne('hermes');
+    expect(r.path).toBe(fake);
+    expect(r.version).toBe('0.18.2');
+    expect(r.available).toBe(true);
+    expect(r.error).toBeUndefined();
+  });
+
   it('detectAll caches results within the TTL window', async () => {
     const fake = writeMockCli(path.join(tmpDir, 'ok-opencode'), '0.10.0');
     process.env.PATH = '';

@@ -1,0 +1,271 @@
+---
+# ============================================================
+# 大学生写论文本体 — MappingConfig（映射层）
+# 版本: v1.0.0
+# 描述: 本体概念到物理数据源的映射配置
+# 适用: Agent 执行时查询实际数据（学生信息、课程、提交记录等）
+# ============================================================
+
+schema_version: "1.0.0"
+profile: scene_mapping/1.0
+
+scene:
+  id: university_paper_writing
+  name: 大学生写论文
+
+tbox_ref:
+  ontology_id: university_paper_writing
+  ontology_version: "1.0.0"
+  file: scene_tbox.yaml
+
+# ============================================================
+# 映射配置（Mapping Configs）
+# ============================================================
+
+mapping_configs:
+  # ======================================================
+  # 论文 → 论文管理系统
+  # ======================================================
+  - id: MAP_PAPER_01
+    target_class: AcademicPaper
+    source:
+      data_source_id: paper_management_system
+      entity_type: table
+      entity_name: t_paper_submission
+    identity_mapping:
+      target_property: title
+      source_field: paper_title
+      datatype: varchar
+      transform_hint: "直接映射"
+      mapping_status: confirmed
+    property_mappings:
+      - target_property: title
+        source_field: paper_title
+        datatype: varchar
+        transform_hint: "直接映射"
+        mapping_status: confirmed
+      - target_property: abstract
+        source_field: paper_abstract
+        datatype: text
+        transform_hint: "直接映射"
+        mapping_status: confirmed
+      - target_property: wordCount
+        source_field: word_count
+        datatype: integer
+        transform_hint: "直接映射"
+        mapping_status: confirmed
+      - target_property: publicationYear
+        source_field: submit_year
+        datatype: year
+        transform_hint: "直接映射"
+        mapping_status: confirmed
+      - target_property: similarityRate
+        source_field: similarity_rate
+        datatype: decimal
+        transform_hint: "直接映射"
+        mapping_status: confirmed
+      - target_property: citationStyle
+        source_field: citation_style
+        datatype: varchar
+        transform_hint: "可选: APA, MLA, Chicago, IEEE, GB-T7714"
+        mapping_status: confirmed
+      - target_property: keywords
+        source_field: keywords
+        datatype: varchar
+        transform_hint: "逗号分隔的关键词列表"
+        mapping_status: confirmed
+      - target_property: doi
+        source_field: doi_number
+        datatype: varchar
+        transform_hint: "期刊论文有DOI，毕业论文通常无"
+        mapping_status: needs_review
+    relation_mappings:
+      - target_relation: hasAuthor
+        strategy: join
+        join_ref: "t_paper_submission.author_id = t_student.student_id"
+      - target_relation: belongsToField
+        strategy: join
+        join_ref: "t_paper_submission.major_code = t_major.major_code"
+    evidence: "学校论文管理系统数据库"
+    confidence: 0.90
+
+  # ======================================================
+  # 作者 → 学生信息表
+  # ======================================================
+  - id: MAP_PERSON_01
+    target_class: Person
+    source:
+      data_source_id: student_information_system
+      entity_type: table
+      entity_name: t_student
+    identity_mapping:
+      target_property: name
+      source_field: student_name
+      datatype: varchar
+      transform_hint: "直接映射"
+      mapping_status: confirmed
+    property_mappings:
+      - target_property: name
+        source_field: student_name
+        datatype: varchar
+        transform_hint: "直接映射"
+        mapping_status: confirmed
+    relation_mappings:
+      - target_relation: affiliatedWith
+        strategy: join
+        join_ref: "t_student.college_id = t_college.college_id"
+    evidence: "学生信息管理系统"
+    confidence: 0.95
+
+  # ======================================================
+  # 导师 → 教师信息表
+  # ======================================================
+  - id: MAP_PERSON_02
+    target_class: Person
+    source:
+      data_source_id: teacher_information_system
+      entity_type: table
+      entity_name: t_teacher
+    identity_mapping:
+      target_property: name
+      source_field: teacher_name
+      datatype: varchar
+      transform_hint: "直接映射"
+      mapping_status: confirmed
+    property_mappings:
+      - target_property: name
+        source_field: teacher_name
+        datatype: varchar
+        transform_hint: "直接映射"
+        mapping_status: confirmed
+    relation_mappings:
+      - target_relation: affiliatedWith
+        strategy: join
+        join_ref: "t_teacher.college_id = t_college.college_id"
+    evidence: "教师信息管理系统"
+    confidence: 0.95
+
+  # ======================================================
+  # 机构 → 学院信息表
+  # ======================================================
+  - id: MAP_INSTITUTION_01
+    target_class: Institution
+    source:
+      data_source_id: college_information_system
+      entity_type: table
+      entity_name: t_college
+    identity_mapping:
+      target_property: name
+      source_field: college_name
+      datatype: varchar
+      transform_hint: "直接映射"
+      mapping_status: confirmed
+    property_mappings:
+      - target_property: name
+        source_field: college_name
+        datatype: varchar
+        transform_hint: "直接映射"
+        mapping_status: confirmed
+    relation_mappings: []
+    evidence: "学院信息管理系统"
+    confidence: 0.95
+
+  # ======================================================
+  # 研究领域 → 专业信息表
+  # ======================================================
+  - id: MAP_FIELD_01
+    target_class: ResearchField
+    source:
+      data_source_id: major_information_system
+      entity_type: table
+      entity_name: t_major
+    identity_mapping:
+      target_property: fieldName
+      source_field: major_name
+      datatype: varchar
+      transform_hint: "直接映射"
+      mapping_status: confirmed
+    property_mappings:
+      - target_property: fieldName
+        source_field: major_name
+        datatype: varchar
+        transform_hint: "直接映射"
+        mapping_status: confirmed
+      - target_property: fieldCode
+        source_field: major_code
+        datatype: varchar
+        transform_hint: "直接映射"
+        mapping_status: confirmed
+    relation_mappings: []
+    evidence: "专业信息管理系统"
+    confidence: 0.95
+
+  # ======================================================
+  # 参考文献 → 文献管理表
+  # ======================================================
+  - id: MAP_REFERENCE_01
+    target_class: Reference
+    source:
+      data_source_id: paper_management_system
+      entity_type: table
+      entity_name: t_reference
+    identity_mapping:
+      target_property: referenceId
+      source_field: ref_id
+      datatype: integer
+      transform_hint: "直接映射"
+      mapping_status: confirmed
+    property_mappings:
+      - target_property: doi
+        source_field: ref_doi
+        datatype: varchar
+        transform_hint: "直接映射"
+        mapping_status: confirmed
+      - target_property: title
+        source_field: ref_title
+        datatype: varchar
+        transform_hint: "直接映射"
+        mapping_status: confirmed
+      - target_property: publicationYear
+        source_field: ref_year
+        datatype: year
+        transform_hint: "直接映射"
+        mapping_status: confirmed
+    relation_mappings: []
+    evidence: "论文管理系统参考文献表"
+    confidence: 0.90
+
+  # ======================================================
+  # 引用 → 文内引用表
+  # ======================================================
+  - id: MAP_CITATION_01
+    target_class: Citation
+    source:
+      data_source_id: paper_management_system
+      entity_type: table
+      entity_name: t_citation
+    identity_mapping:
+      target_property: citationId
+      source_field: citation_id
+      datatype: integer
+      transform_hint: "直接映射"
+      mapping_status: confirmed
+    property_mappings:
+      - target_property: citationStyle
+        source_field: citation_format
+        datatype: varchar
+        transform_hint: "直接映射"
+        mapping_status: confirmed
+    relation_mappings:
+      - target_relation: cites
+        strategy: join
+        join_ref: "t_citation.ref_id = t_reference.ref_id"
+    evidence: "论文管理系统引用表"
+    confidence: 0.90
+
+# ============================================================
+# 证据（Evidence）
+# ============================================================
+
+evidence: "映射基于典型高校论文管理系统数据库设计"
+confidence: 0.90

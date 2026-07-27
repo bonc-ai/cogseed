@@ -1,0 +1,777 @@
+---
+# ============================================================
+# 大学生写论文本体 — TBox（概念层）
+# 版本: v1.0.0
+# 描述: 定义论文写作领域的核心概念、类和属性
+# 适用: NSEAP KSTAR 架构中的 Meta-Skill Engine 和 Agent
+# ============================================================
+
+schema_version: "1.0.0"
+profile: scene_tbox/1.0
+serialization_policy: utf-8
+
+ontology:
+  id: university_paper_writing
+  iri: https://nseap.io/ontologies/university_paper_writing
+  version: "1.0.0"
+  title: 大学生写论文本体
+  description: 大学生学术论文写作领域的概念模型，包含论文类型、结构组成、研究方法、引用规范等核心概念
+  namespaces:
+    base: https://nseap.io/ontologies/university_paper_writing#
+    rdf: http://www.w3.org/1999/02/22-rdf-syntax-ns#
+    rdfs: http://www.w3.org/2000/01/rdf-schema#
+    owl: http://www.w3.org/2002/07/owl#
+    xsd: http://www.w3.org/2001/XMLSchema#
+    sh: http://www.w3.org/ns/shacl#
+    dcterms: http://purl.org/dc/terms/
+  imports: []
+  annotations:
+    creator: NSEAP Ontology Factory
+    created: 2026-07-23
+    lifecycle_status: staged
+
+cognitive_governance:
+  purpose:
+    - 为大学生论文写作 Agent 提供领域知识支撑
+    - 为 Meta-Skill Engine 提供语义匹配和归因依据
+    - 为 Skill-Creator 提供论文写作 Skill 的概念基础
+  scope:
+    included:
+      - 本科/硕士/博士毕业论文
+      - 课程论文、期刊论文、会议论文
+      - 论文写作流程（选题→文献综述→方法→写作→答辩）
+      - 引用格式规范（APA/MLA/Chicago/IEEE/GB-T7714）
+      - 学术诚信与查重规范
+      - 研究方法的分类与选择
+    excluded:
+      - 论文排版格式（字体、行距、页边距等物理格式）
+      - 论文提交系统的技术实现
+      - 导师评审的具体评分标准
+      - 不定义 SQL、物理表、物理字段或 Join 条件
+  quality_dimensions:
+    - 概念覆盖完整性
+    - 规则可执行性
+    - 实例代表性
+    - 跨格式兼容性
+
+# ============================================================
+# 核心类（Classes）
+# ============================================================
+
+classes:
+  - id: AcademicPaper
+    label: 学术论文
+    description: 大学生撰写的正式学术文体，包含研究成果的系统性呈现
+    alternative_labels: [论文, 毕业论文, 学位论文, 研究论文]
+    class_kind: domain_entity
+    grain: 单篇论文
+    identifier_properties: [title, doi]
+    agent.query_entry: true
+
+  - id: PaperComponent
+    label: 论文组成部分
+    description: 论文的抽象组成单元（前置/主体/后置）
+    alternative_labels: [论文章节, 论文结构]
+    class_kind: domain_entity
+    grain: 章节级
+    identifier_properties: [componentType]
+
+  - id: FrontMatter
+    label: 前置部分
+    description: 论文正文之前的部分（标题、摘要、关键词、目录）
+    class_kind: domain_entity
+    grain: 章节级
+    parent: PaperComponent
+
+  - id: MainBody
+    label: 主体部分
+    description: 论文的 IMRAD 核心部分（引言→方法→结果→讨论→结论）
+    class_kind: domain_entity
+    grain: 章节级
+    parent: PaperComponent
+
+  - id: BackMatter
+    label: 后置部分
+    description: 论文正文之后的部分（参考文献、附录、致谢）
+    class_kind: domain_entity
+    grain: 章节级
+    parent: PaperComponent
+
+  - id: Person
+    label: 人员
+    description: 与论文相关的人员（作者、导师、评审人）
+    alternative_labels: [作者, 导师, 学生]
+    class_kind: domain_entity
+    grain: 人员级
+    identifier_properties: [personId, name]
+
+  - id: Institution
+    label: 教育机构
+    description: 学生所属的高校或研究机构
+    alternative_labels: [学校, 大学, 学院]
+    class_kind: domain_entity
+    grain: 机构级
+    identifier_properties: [institutionId, name]
+
+  - id: ResearchField
+    label: 研究领域
+    description: 论文所属的学科领域
+    alternative_labels: [学科, 专业, 研究方向]
+    class_kind: domain_entity
+    grain: 领域级
+    identifier_properties: [fieldCode, fieldName]
+
+  - id: ResearchMethod
+    label: 研究方法
+    description: 论文采用的研究设计和方法论
+    alternative_labels: [方法论, 研究设计, 研究方法论]
+    class_kind: domain_entity
+    grain: 方法级
+    identifier_properties: [methodName, methodType]
+
+  - id: Citation
+    label: 引用
+    description: 文内对他人研究成果的标注
+    alternative_labels: [文内引用, 引注]
+    class_kind: domain_entity
+    grain: 引用级
+    identifier_properties: [citationId, citationStyle]
+
+  - id: Reference
+    label: 参考文献
+    description: 论文末尾列出的引用文献列表条目
+    alternative_labels: [参考书目, 文献列表]
+    class_kind: domain_entity
+    grain: 条目级
+    identifier_properties: [referenceId, doi, isbn]
+
+  - id: ResearchEthics
+    label: 研究伦理
+    description: 研究过程中需遵守的伦理规范
+    alternative_labels: [学术伦理, 学术规范, 学术诚信]
+    class_kind: domain_entity
+    grain: 规范级
+    identifier_properties: [ethicsId, ethicsType]
+
+# ============================================================
+# 论文类型子类（Paper Type Hierarchy）
+# ============================================================
+
+  - id: CoursePaper
+    label: 课程论文
+    description: 课程作业性质的学术论文，通常 3000-5000 字
+    class_kind: paper_type
+    grain: 单篇论文
+    parent: AcademicPaper
+
+  - id: BachelorThesis
+    label: 本科毕业论文
+    description: 本科毕业要求论文，通常 8000-15000 字
+    class_kind: paper_type
+    grain: 单篇论文
+    parent: AcademicPaper
+
+  - id: MasterThesis
+    label: 硕士学位论文
+    description: 硕士毕业要求论文，通常 30000-50000 字
+    class_kind: paper_type
+    grain: 单篇论文
+    parent: AcademicPaper
+
+  - id: DoctoralDissertation
+    label: 博士学位论文
+    description: 博士毕业要求论文，通常 80000-150000 字
+    class_kind: paper_type
+    grain: 单篇论文
+    parent: AcademicPaper
+
+  - id: JournalArticle
+    label: 期刊论文
+    description: 投稿至学术期刊的研究文章
+    class_kind: paper_type
+    grain: 单篇论文
+    parent: AcademicPaper
+
+  - id: ConferencePaper
+    label: 会议论文
+    description: 学术会议发表的研究论文
+    class_kind: paper_type
+    grain: 单篇论文
+    parent: AcademicPaper
+
+  - id: LiteratureReview
+    label: 文献综述论文
+    description: 对某一领域已有研究进行系统性梳理和评价的论文
+    class_kind: paper_type
+    grain: 单篇论文
+    parent: AcademicPaper
+
+# ============================================================
+# 论文章节子类（Paper Section Hierarchy）
+# ============================================================
+
+  - id: Title
+    label: 标题
+    description: 论文题目，一般不超过 20 个中文字
+    class_kind: paper_section
+    grain: 章节级
+    parent: FrontMatter
+
+  - id: Abstract
+    label: 摘要
+    description: 论文内容的简要概述，中文 200-300 字，英文 150-250 词
+    class_kind: paper_section
+    grain: 章节级
+    parent: FrontMatter
+
+  - id: Keywords
+    label: 关键词
+    description: 3-8 个反映论文核心内容的词或短语
+    class_kind: paper_section
+    grain: 章节级
+    parent: FrontMatter
+
+  - id: Introduction
+    label: 引言
+    description: 研究背景、问题提出、研究目的和意义
+    class_kind: paper_section
+    grain: 章节级
+    parent: MainBody
+
+  - id: LiteratureReviewSection
+    label: 文献综述
+    description: 对已有研究的系统性梳理、评价和定位
+    class_kind: paper_section
+    grain: 章节级
+    parent: MainBody
+
+  - id: Methodology
+    label: 研究方法
+    description: 研究设计、数据收集和分析方法的详细描述
+    class_kind: paper_section
+    grain: 章节级
+    parent: MainBody
+
+  - id: Results
+    label: 研究结果
+    description: 研究发现的客观呈现，不含解释
+    class_kind: paper_section
+    grain: 章节级
+    parent: MainBody
+
+  - id: Discussion
+    label: 讨论
+    description: 对结果的解释、与已有研究的比较、理论和实践意义
+    class_kind: paper_section
+    grain: 章节级
+    parent: MainBody
+
+  - id: Conclusion
+    label: 结论
+    description: 研究总结、局限性和未来展望
+    class_kind: paper_section
+    grain: 章节级
+    parent: MainBody
+
+  - id: ReferenceList
+    label: 参考文献
+    description: 论文末尾列出的引用文献列表
+    class_kind: paper_section
+    grain: 章节级
+    parent: BackMatter
+
+  - id: Appendix
+    label: 附录
+    description: 补充材料（问卷、数据表、代码等）
+    class_kind: paper_section
+    grain: 章节级
+    parent: BackMatter
+
+  - id: Acknowledgments
+    label: 致谢
+    description: 对研究提供帮助的人员和机构的感谢
+    class_kind: paper_section
+    grain: 章节级
+    parent: BackMatter
+
+# ============================================================
+# 研究方法子类（Research Method Hierarchy）
+# ============================================================
+
+  - id: EmpiricalResearch
+    label: 实证研究
+    description: 通过观察、实验收集数据进行分析
+    class_kind: method_type
+    grain: 方法级
+    parent: ResearchMethod
+
+  - id: TheoreticalResearch
+    label: 理论研究
+    description: 基于已有理论进行逻辑推演
+    class_kind: method_type
+    grain: 方法级
+    parent: ResearchMethod
+
+  - id: QuantitativeResearch
+    label: 定量研究
+    description: 数值化数据统计分析
+    class_kind: method_type
+    grain: 方法级
+    parent: EmpiricalResearch
+
+  - id: QualitativeResearch
+    label: 定性研究
+    description: 非数值化深度分析（访谈、观察等）
+    class_kind: method_type
+    grain: 方法级
+    parent: EmpiricalResearch
+
+  - id: MixedMethods
+    label: 混合研究
+    description: 定量与定性方法结合
+    class_kind: method_type
+    grain: 方法级
+    parent: EmpiricalResearch
+
+  - id: CaseStudy
+    label: 案例研究
+    description: 对特定案例进行深入分析
+    class_kind: method_type
+    grain: 方法级
+    parent: QualitativeResearch
+
+  - id: ExperimentalResearch
+    label: 实验研究
+    description: 控制变量的实验研究
+    class_kind: method_type
+    grain: 方法级
+    parent: QuantitativeResearch
+
+  - id: SurveyResearch
+    label: 调查研究
+    description: 问卷或访谈调查
+    class_kind: method_type
+    grain: 方法级
+    parent: QuantitativeResearch
+
+  - id: ActionResearch
+    label: 行动研究
+    description: 实践者自我反思的循环研究
+    class_kind: method_type
+    grain: 方法级
+    parent: QualitativeResearch
+
+  - id: LiteratureResearch
+    label: 文献研究
+    description: 纯文献分析研究
+    class_kind: method_type
+    grain: 方法级
+    parent: TheoreticalResearch
+
+# ============================================================
+# 对象属性（Object Properties）
+# ============================================================
+
+object_properties:
+  - id: hasComponent
+    label: 包含章节
+    domain: AcademicPaper
+    range: PaperComponent
+    inverse_of: isComponentOf
+    annotations:
+      relationshipCardinality: "1..*"
+      grainChange: "论文→章节"
+      reasoningConstraint: "一篇论文必须包含多个章节"
+
+  - id: hasAuthor
+    label: 有作者
+    domain: AcademicPaper
+    range: Person
+    inverse_of: authors
+    annotations:
+      relationshipCardinality: "1..*"
+      grainChange: "论文→人员"
+      reasoningConstraint: "一篇论文至少有一位作者"
+
+  - id: supervisedBy
+    label: 被指导
+    domain: AcademicPaper
+    range: Person
+    annotations:
+      relationshipCardinality: "0..1"
+      grainChange: "论文→导师"
+      reasoningConstraint: "毕业论文必须有指导教师"
+
+  - id: belongsToField
+    label: 属于领域
+    domain: AcademicPaper
+    range: ResearchField
+    annotations:
+      relationshipCardinality: "1..*"
+      grainChange: "论文→领域"
+      reasoningConstraint: "一篇论文可跨多个领域"
+
+  - id: usesMethod
+    label: 使用方法
+    domain: AcademicPaper
+    range: ResearchMethod
+    annotations:
+      relationshipCardinality: "1..*"
+      grainChange: "论文→方法"
+      reasoningConstraint: "一篇论文至少使用一种研究方法"
+
+  - id: hasCitation
+    label: 包含引用
+    domain: PaperComponent
+    range: Citation
+    annotations:
+      relationshipCardinality: "0..*"
+      grainChange: "章节→引用"
+      reasoningConstraint: "引用主要出现在引言、文献综述和讨论中"
+
+  - id: cites
+    label: 引用了
+    domain: Citation
+    range: Reference
+    annotations:
+      relationshipCardinality: "1"
+      grainChange: "引用→参考文献"
+      reasoningConstraint: "每个引用必须对应一条参考文献"
+
+  - id: hasReference
+    label: 有参考文献
+    domain: AcademicPaper
+    range: Reference
+    annotations:
+      relationshipCardinality: "1..*"
+      grainChange: "论文→参考文献"
+      reasoningConstraint: "论文必须有参考文献列表"
+
+  - id: hasEthics
+    label: 涉及伦理
+    domain: AcademicPaper
+    range: ResearchEthics
+    annotations:
+      relationshipCardinality: "0..*"
+      grainChange: "论文→伦理"
+      reasoningConstraint: "涉及人体/动物研究需伦理审批"
+
+  - id: affiliatedWith
+    label: 所属机构
+    domain: Person
+    range: Institution
+    annotations:
+      relationshipCardinality: "1..*"
+      grainChange: "人员→机构"
+      reasoningConstraint: "每位作者至少属于一个机构"
+
+# ============================================================
+# 数据属性（Datatype Properties）
+# ============================================================
+
+datatype_properties:
+  - id: title
+    label: 标题
+    domain: AcademicPaper
+    range: string
+    annotations:
+      semanticRole: identifier
+      dataGrain: 论文级
+      valueSemantics: 论文题目
+      supportedQueryOperations: [equals, contains, matches]
+
+  - id: abstract
+    label: 摘要
+    domain: AcademicPaper
+    range: text
+    annotations:
+      semanticRole: descriptive
+      dataGrain: 论文级
+      valueSemantics: 论文内容概要
+      supportedQueryOperations: [contains, matches]
+      aggregationConstraint: "中文 200-300 字，英文 150-250 词"
+
+  - id: doi
+    label: DOI
+    domain: AcademicPaper
+    range: string
+    annotations:
+      semanticRole: identifier
+      dataGrain: 论文级
+      valueSemantics: 数字对象标识符
+      supportedQueryOperations: [equals]
+
+  - id: publicationYear
+    label: 发表年份
+    domain: AcademicPaper
+    range: gYear
+    annotations:
+      semanticRole: time
+      dataGrain: 论文级
+      valueSemantics: 论文发表或完成年份
+      supportedQueryOperations: [equals, lessThan, greaterThan]
+
+  - id: wordCount
+    label: 字数
+    domain: AcademicPaper
+    range: integer
+    annotations:
+      semanticRole: metric
+      dataGrain: 论文级
+      defaultAggregation: none
+      valueSemantics: 论文正文字数
+      supportedQueryOperations: [equals, lessThan, greaterThan]
+      aggregationConstraint: "本科≥8000, 硕士≥30000, 博士≥80000"
+
+  - id: citationCount
+    label: 引用次数
+    domain: AcademicPaper
+    range: integer
+    annotations:
+      semanticRole: derived_metric
+      dataGrain: 论文级
+      defaultAggregation: sum
+      valueSemantics: 被其他论文引用的次数
+      supportedQueryOperations: [equals, lessThan, greaterThan]
+
+  - id: keywords
+    label: 关键词
+    domain: AcademicPaper
+    range: string
+    annotations:
+      semanticRole: dimension
+      dataGrain: 论文级
+      valueSemantics: 3-8 个核心关键词
+      supportedQueryOperations: [contains, matches]
+      aggregationConstraint: "数量 3-8 个"
+
+  - id: language
+    label: 语言
+    domain: AcademicPaper
+    range: string
+    annotations:
+      semanticRole: dimension
+      dataGrain: 论文级
+      valueSemantics: 论文撰写语言
+      supportedQueryOperations: [equals]
+
+  - id: peerReviewed
+    label: 同行评审
+    domain: AcademicPaper
+    range: boolean
+    annotations:
+      semanticRole: status
+      dataGrain: 论文级
+      valueSemantics: 是否经过同行评审
+      supportedQueryOperations: [equals]
+
+  - id: openAccess
+    label: 开放获取
+    domain: AcademicPaper
+    range: boolean
+    annotations:
+      semanticRole: status
+      dataGrain: 论文级
+      valueSemantics: 是否开放获取
+      supportedQueryOperations: [equals]
+
+  - id: fundingInfo
+    label: 资助信息
+    domain: AcademicPaper
+    range: string
+    annotations:
+      semanticRole: descriptive
+      dataGrain: 论文级
+      valueSemantics: 研究资助来源
+      supportedQueryOperations: [contains]
+
+  - id: conflictOfInterest
+    label: 利益冲突声明
+    domain: AcademicPaper
+    range: string
+    annotations:
+      semanticRole: status
+      dataGrain: 论文级
+      valueSemantics: 利益冲突声明内容
+      supportedQueryOperations: [contains]
+
+  - id: dataAvailability
+    label: 数据可用性声明
+    domain: AcademicPaper
+    range: string
+    annotations:
+      semanticRole: status
+      dataGrain: 论文级
+      valueSemantics: 研究数据是否公开可用
+      supportedQueryOperations: [contains]
+
+  - id: similarityRate
+    label: 查重率
+    domain: AcademicPaper
+    range: decimal
+    annotations:
+      semanticRole: metric
+      dataGrain: 论文级
+      defaultAggregation: none
+      valueSemantics: 论文与已有文献的重复比例
+      supportedQueryOperations: [equals, lessThan, greaterThan]
+      aggregationConstraint: "必须 ≤ 0.20（20%），严重超标 ≤ 0.40（40%）"
+
+  - id: referenceCount
+    label: 参考文献数量
+    domain: AcademicPaper
+    range: integer
+    annotations:
+      semanticRole: metric
+      dataGrain: 论文级
+      defaultAggregation: none
+      valueSemantics: 参考文献列表条目数
+      supportedQueryOperations: [equals, lessThan, greaterThan]
+      aggregationConstraint: "本科≥10, 硕士≥30, 博士≥50"
+
+  - id: selfCitationRate
+    label: 自引率
+    domain: AcademicPaper
+    range: decimal
+    annotations:
+      semanticRole: derived_metric
+      dataGrain: 论文级
+      defaultAggregation: none
+      valueSemantics: 引用自己先前研究的比例
+      supportedQueryOperations: [lessThan, greaterThan]
+      aggregationConstraint: "必须 ≤ 0.20（20%）"
+
+  - id: recentReferenceRatio
+    label: 近五年文献比例
+    domain: AcademicPaper
+    range: decimal
+    annotations:
+      semanticRole: derived_metric
+      dataGrain: 论文级
+      defaultAggregation: none
+      valueSemantics: 近五年参考文献占总参考文献的比例
+      supportedQueryOperations: [lessThan, greaterThan]
+      aggregationConstraint: "建议 ≥ 0.30（30%）"
+
+  - id: citationStyle
+    label: 引用格式
+    domain: AcademicPaper
+    range: string
+    annotations:
+      semanticRole: dimension
+      dataGrain: 论文级
+      valueSemantics: 论文采用的引用格式标准
+      supportedQueryOperations: [equals]
+      aggregationConstraint: "可选: APA, MLA, Chicago, IEEE, GB-T7714"
+
+# ============================================================
+# 受控词表（Controlled Vocabularies）
+# ============================================================
+
+controlled_vocabularies:
+  - id: CitationStyleVocabulary
+    label: 引用格式词表
+    description: 学术论文引用格式标准
+    terms:
+      - APA
+      - MLA
+      - Chicago
+      - IEEE
+      - AMA
+      - ASA
+      - GB-T7714
+
+  - id: PaperTypeVocabulary
+    label: 论文类型词表
+    description: 按层次和体裁的论文分类
+    terms:
+      - 课程论文
+      - 本科毕业论文
+      - 硕士学位论文
+      - 博士学位论文
+      - 期刊论文
+      - 会议论文
+      - 文献综述论文
+
+  - id: ResearchFieldVocabulary
+    label: 学科领域词表
+    description: 中国学科分类体系
+    terms:
+      - 文学
+      - 理学
+      - 工学
+      - 法学
+      - 教育学
+      - 经济学
+      - 管理学
+      - 历史学
+      - 农学
+      - 医学
+      - 艺术学
+      - 哲学
+
+  - id: MethodTypeVocabulary
+    label: 研究方法词表
+    description: 研究方法分类体系
+    terms:
+      - 实证研究
+      - 理论研究
+      - 定量研究
+      - 定性研究
+      - 混合研究
+      - 案例研究
+      - 实验研究
+      - 调查研究
+      - 行动研究
+      - 文献研究
+
+  - id: SectionTypeVocabulary
+    label: 论文章节词表
+    description: 论文结构组成分类
+    terms:
+      - 标题
+      - 摘要
+      - 关键词
+      - 目录
+      - 引言
+      - 文献综述
+      - 研究方法
+      - 研究结果
+      - 讨论
+      - 结论
+      - 参考文献
+      - 附录
+      - 致谢
+
+# ============================================================
+# 公理（Axioms）
+# ============================================================
+
+axioms:
+  disjoint_classes:
+    - [FrontMatter, MainBody, BackMatter]
+    - [CoursePaper, BachelorThesis, MasterThesis, DoctoralDissertation, JournalArticle, ConferencePaper, LiteratureReview]
+  class_restrictions:
+    - class: BachelorThesis
+      restriction: wordCount min 8000
+    - class: MasterThesis
+      restriction: wordCount min 30000
+    - class: DoctoralDissertation
+      restriction: wordCount min 80000
+    - class: AcademicPaper
+      restriction: hasComponent min 1 PaperComponent
+
+# ============================================================
+# 验证（Validation）
+# ============================================================
+
+validation:
+  enabled: true
+  shacl_shapes: []
+
+mapping_hints:
+  target: university_paper_management_system
+  description: 映射到学校论文管理系统数据库
+
+physical_mapping_placeholder:
+  enabled: false

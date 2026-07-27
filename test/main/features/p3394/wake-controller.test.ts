@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   resetWakeApproval: vi.fn(),
   getAgent: vi.fn(),
   isAgentEnabled: vi.fn(),
+  setOrchestrationLedger: vi.fn(),
 }));
 
 vi.mock("../../../../src/main/logger", () => ({
@@ -33,7 +34,7 @@ vi.mock("../../../../src/main/features/group_chat/state", () => ({
   COMMANDER_ID: "commander",
   USER_ID: "user",
   setActiveRecipient: vi.fn(),
-  setOrchestrationLedger: vi.fn(),
+  setOrchestrationLedger: mocks.setOrchestrationLedger,
 }));
 vi.mock("../../../../src/main/features/agents", () => ({
   getAgent: mocks.getAgent,
@@ -52,6 +53,7 @@ beforeEach(() => {
   mocks.resetWakeApproval.mockReset();
   mocks.getAgent.mockReset();
   mocks.isAgentEnabled.mockReset();
+  mocks.setOrchestrationLedger.mockReset();
   mocks.getAgent.mockResolvedValue({ agent_id: "agent-1", interactive: false });
   mocks.isAgentEnabled.mockReturnValue(true);
 });
@@ -102,6 +104,55 @@ describe("P3394 wake controller workflow binding", () => {
         cid: "cid-1",
         forceTo: ["agent-1"],
         workflow_step_id: "wstep-1",
+      }),
+    );
+  });
+
+  it("creates a commander continuation ledger for an approved dispatch_to wake without an explicit resume", async () => {
+    const request = {
+      id: "wake-dispatch-continuation",
+      conversation_id: "cid-1",
+      agent_id: "agent-1",
+      agent_name: "Hermes",
+      source: "dispatch_to",
+      source_actor_id: "commander",
+      objective: "Audit the paper, then continue the remaining review stages",
+      context_scope: ["conversation:cid-1"],
+      behavior_scope: ["dispatch_to"],
+      dispatch_payload: { text: "Audit the paper" },
+      status: "pending",
+      workflow_step_id: "wstep-continue",
+      workflow_resume_token: "wcap-continue",
+      created_at: "t",
+      updated_at: "t",
+    } as any;
+    mocks.getWakeRequest.mockResolvedValue(request);
+    mocks.approveWakeRequest.mockResolvedValue({
+      request: { ...request, status: "approved" },
+      approval: {},
+    });
+    mocks.enqueue.mockResolvedValue({ to: ["agent-1"] });
+    mocks.markWakeRequestExecuted.mockResolvedValue({
+      ...request,
+      status: "executed",
+    });
+
+    const controller =
+      await import("../../../../src/main/features/p3394/wake-controller");
+    await controller.decideWakeRequest("user-1", {
+      requestId: request.id,
+      decision: "approve",
+    });
+
+    expect(mocks.setOrchestrationLedger).toHaveBeenCalledWith(
+      "user-1",
+      "cid-1",
+      expect.objectContaining({
+        status: "waiting_for_agent",
+        blocked_on: "agent_handoff",
+        source_tool: "dispatch_to",
+        owner_agent_id: "agent-1",
+        resume_instruction: expect.stringContaining("continue"),
       }),
     );
   });

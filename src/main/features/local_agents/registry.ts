@@ -126,6 +126,59 @@ async function detectCodexPackageVersion(binPath: string): Promise<string | null
   return null;
 }
 
+function parseProjectVersionToml(raw: string): string | null {
+  const m = /^\s*version\s*=\s*["']([^"']+)["']/m.exec(raw);
+  if (!m) return null;
+  const sv = parseSemver(m[1]);
+  return sv ? `${sv.major}.${sv.minor}.${sv.patch}` : null;
+}
+
+async function readHermesPyprojectVersion(root: string): Promise<string | null> {
+  try {
+    return parseProjectVersionToml(await fs.readFile(path.join(root, 'pyproject.toml'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+async function hermesInstallRoots(binPath: string): Promise<string[]> {
+  const roots: string[] = [];
+  const add = (candidate: string | null | undefined) => {
+    if (!candidate) return;
+    const value = path.resolve(candidate);
+    if (!roots.includes(value)) roots.push(value);
+  };
+  const addFromExecutable = (candidate: string) => {
+    const parts = path.normalize(candidate).split(path.sep);
+    const venvIndex = parts.lastIndexOf('venv');
+    if (venvIndex > 0) add(parts.slice(0, venvIndex).join(path.sep) || path.sep);
+  };
+
+  addFromExecutable(binPath);
+  try {
+    addFromExecutable(await fs.realpath(binPath));
+  } catch {
+    // Symlink resolution is optional.
+  }
+  try {
+    const launcher = await fs.readFile(binPath, 'utf8');
+    const execPath = /exec\s+["']([^"']+\/venv\/bin\/hermes)["']/.exec(launcher)?.[1];
+    if (execPath) addFromExecutable(execPath);
+  } catch {
+    // Native/binary launchers are fine; fall through to the default install root.
+  }
+  add(path.join(os.homedir(), '.hermes', 'hermes-agent'));
+  return roots;
+}
+
+async function detectHermesInstallVersion(binPath: string): Promise<string | null> {
+  for (const root of await hermesInstallRoots(binPath)) {
+    const version = await readHermesPyprojectVersion(root);
+    if (version) return version;
+  }
+  return null;
+}
+
 /** Detection result for a single CLI. */
 export type LocalCliEntry = {
   type: LocalCliType;
@@ -192,6 +245,9 @@ export async function detectOne(type: LocalCliType): Promise<LocalCliEntry> {
   for (const versionArgs of versionProbes) {
     if (version) break;
     version = await detectVersion(resolved, 5000, versionArgs);
+  }
+  if (!version && type === 'hermes') {
+    version = await detectHermesInstallVersion(resolved);
   }
   if (!version) {
     const attempted = versionProbes

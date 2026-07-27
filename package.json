@@ -37,7 +37,10 @@
     "rebuild:sqlite:electron": "node scripts/ensure-sqlite-electron-abi.mjs",
     "postinstall": "node scripts/ensure-sqlite-electron-abi.mjs && node scripts/fetch-embedding-model.mjs",
     "prepare": "node scripts/install-git-hooks.mjs",
-    "prepack": "node scripts/ensure-dev-dependencies.cjs"
+    "prepack": "node scripts/ensure-dev-dependencies.cjs",
+    "engine:build": "npm run build --workspace=nseap-meta-skill-engine",
+    "engine:test": "npm run test --workspace=nseap-meta-skill-engine",
+    "engine:check": "npm run check --workspace=nseap-meta-skill-engine"
   },
   "devDependencies": {
     "@ffprobe-installer/ffprobe": "^2.1.2",
@@ -46,6 +49,7 @@
     "@vitest/coverage-v8": "^4.1.5",
     "7zip-bin": "^5.2.0",
     "electron": "^41.7.1",
+    "electron-builder": "^26.15.3",
     "ffmpeg-static": "^5.3.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.5"
@@ -65,6 +69,7 @@
     "sqlite-vec": "^0.1.9",
     "tsx": "^4.21.0",
     "undici": "^7.28.0",
+    "yaml": "^2.6.1",
     "zod": "^3.24.0"
   },
   "overrides": {
@@ -165,6 +170,17 @@
         ]
       },
       {
+        "from": "packages/nseap-meta-skill-engine",
+        "to": "packages/nseap-meta-skill-engine",
+        "filter": [
+          "dist/**/*",
+          "ontologies/**/*",
+          "package.json",
+          "README.md",
+          "!**/.DS_Store"
+        ]
+      },
+      {
         "from": "resources/mac-locales",
         "to": ".",
         "filter": [
@@ -230,5 +246,8 @@
     },
     "artifactName": "Mate-Agent-${version}-${os}-${arch}.${ext}"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "workspaces": [
+    "packages/*"
+  ]
 }

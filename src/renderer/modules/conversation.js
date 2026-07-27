@@ -11194,6 +11194,9 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
 function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {}) {
   if (!evData || typeof evData !== 'object') return;
   if (evData.type === 'agent_run_result') {
+    if (window.ConversationInfo && typeof window.ConversationInfo.refreshAgentActivity === 'function') {
+      void window.ConversationInfo.refreshAgentActivity(cid);
+    }
     return;
   }
   if (evData.type === 'wake_request' && evData.request) {
@@ -11593,6 +11596,9 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
     // neutral streaming shell.
     _rememberGroupActor(cid, evData.actor);
     _refreshGroupMembers(cid);
+    if (window.ConversationInfo && typeof window.ConversationInfo.refreshAgentActivity === 'function') {
+      void window.ConversationInfo.refreshAgentActivity(cid);
+    }
   }
 }
 

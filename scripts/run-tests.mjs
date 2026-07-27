@@ -16,7 +16,21 @@ const require_ = createRequire(import.meta.url);
 const electronBin = require_('electron');
 const vitestBin = resolve(here, '..', 'node_modules', 'vitest', 'vitest.mjs');
 
-const child = spawn(electronBin, [vitestBin, ...process.argv.slice(2)], {
+const forwardedArgs = process.argv.slice(2);
+const hasWorkerLimit = forwardedArgs.some((arg) =>
+  arg === '--maxWorkers' ||
+  arg.startsWith('--maxWorkers=') ||
+  arg === '--minWorkers' ||
+  arg.startsWith('--minWorkers='),
+);
+if (!hasWorkerLimit && forwardedArgs[0] === 'run') {
+  // The full Electron-as-Node suite can otherwise over-spawn Vitest fork
+  // workers and intermittently lose workers without a test failure. Keep a
+  // bounded default while preserving explicit caller overrides.
+  forwardedArgs.push('--maxWorkers=4');
+}
+
+const child = spawn(electronBin, [vitestBin, ...forwardedArgs], {
   stdio: 'inherit',
   env: {
     ...process.env,

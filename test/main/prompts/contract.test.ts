@@ -379,6 +379,27 @@ describe('prompts ↔ code contract', () => {
     expect(commanderPrompt).toMatch(/A good `resume` says exactly what remains/i);
   });
 
+  it('commander prompt makes the last requested Agent in a dependent chain the terminal delivery', () => {
+    const commanderPrompt = fs.readFileSync(path.join(PROMPTS_DIR, 'chat_commander.md'), 'utf-8');
+    const bus = readFile('src/main/features/group_chat/bus.ts');
+
+    expect(commanderPrompt).toMatch(/intermediate agents?[^\n]+`dispatch_to`/i);
+    expect(commanderPrompt).toMatch(/last requested agent[^\n]+`hand_off_to`/i);
+    expect(commanderPrompt).toMatch(/do not append a separate[^\n]+synthesis[^\n]+delivery step/i);
+    expect(commanderPrompt).toMatch(/reviewed, edited, validated, or saved the final deliverable/i);
+    expect(bus).toMatch(/last requested agent[^\n]+hand_off_to/i);
+    expect(bus).toMatch(/Do not create a trailing Commander summary/i);
+  });
+
+  it('commander owns one terminal KSTAR validation instead of per-Agent gates', () => {
+    const commanderPrompt = fs.readFileSync(path.join(PROMPTS_DIR, 'chat_commander.md'), 'utf-8');
+
+    expect(commanderPrompt).toMatch(/Each Agent contributes execution evidence without opening its own validation gate/i);
+    expect(commanderPrompt).toMatch(/Commander owns one KSTAR validation/i);
+    expect(commanderPrompt).toMatch(/do not ask the user to validate each Agent separately/i);
+    expect(commanderPrompt).not.toMatch(/forces the resulting agent output into Review Gate/i);
+  });
+
   it('commander prompt separates conversation floor from suspended orchestration resume', () => {
     const commanderPrompt = fs.readFileSync(path.join(PROMPTS_DIR, 'chat_commander.md'), 'utf-8');
 

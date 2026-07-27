@@ -28,6 +28,7 @@ function renderFilesResult(snapshot: {
   patchCandidates?: any[];
   protocolEvents?: any[];
   protocolError?: string;
+  protocolResponse?: any;
   syncEnabled?: boolean;
   activeTab?: 'files' | 'attachments' | 'collaboration' | 'protocol';
 }, afterMount?: (context: any) => Promise<void> | void): Promise<RenderFilesResult> {
@@ -86,7 +87,7 @@ function renderFilesResult(snapshot: {
         if (url.includes('/wake-requests')) return { ok: true, requests: snapshot.wakeRequests || [] };
         if (url.includes('/kstar')) return { ok: true, runs: snapshot.kstarRuns || [] };
         if (url.includes('/patch-candidates')) return { ok: true, patch_candidates: snapshot.patchCandidates || [] };
-        if (url.includes('/protocol-events')) return snapshot.protocolError ? { ok: false, error: snapshot.protocolError } : { ok: true, events: snapshot.protocolEvents || [] };
+        if (url.includes('/protocol-events')) return snapshot.protocolResponse || (snapshot.protocolError ? { ok: false, error: snapshot.protocolError } : { ok: true, events: snapshot.protocolEvents || [] });
         if (url.includes('/members')) return { ok: true, actors: snapshot.actors || [] };
         if (url.includes('/runtime')) return { ok: true, ...(snapshot.runtime || {}), ...(snapshot.collaboration ? { collaboration: snapshot.collaboration } : {}) };
         return { ok: false, error: 'unknown' };
@@ -340,6 +341,29 @@ describe('ConversationInfo Collaboration tab shell', () => {
   });
 });
 
+describe('ConversationInfo live agent activity refresh', () => {
+  it('refreshes the open collaboration drawer after a newly joined agent appears', async () => {
+    const snapshot: any = {
+      activeTab: 'collaboration',
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      actors: [{ kind: 'commander', id: 'commander', name: 'Commander' }],
+      runtime: { processing: false, in_flight: [], active_turns: [] },
+      collaboration: null,
+    };
+    const result = await renderFilesResult(snapshot, async (context) => {
+      snapshot.actors = [
+        ...snapshot.actors,
+        { kind: 'agent', id: 'hermes', name: 'Hermes' },
+      ];
+      await context.window.ConversationInfo.refreshAgentActivity('c1');
+    });
+
+    expect(result.html).toContain('Hermes');
+    expect(result.html).toContain('<strong>2</strong>');
+  });
+});
+
 describe('ConversationInfo P3394 Protocol Inspector', () => {
   it('renders a Protocol tab in the conversation info drawer', async () => {
     const html = fs.readFileSync(path.join(__dirname, '../../src/renderer/index.html'), 'utf8');
@@ -358,6 +382,24 @@ describe('ConversationInfo P3394 Protocol Inspector', () => {
     });
 
     expect(result.urls).toContain('/api/conversations/c1/protocol-events');
+  });
+
+
+  it('accepts the IPC shim protocol_events response shape from the backend', async () => {
+    const result = await renderFilesResult({
+      activeTab: 'protocol',
+      history: [],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      protocolResponse: {
+        ok: true,
+        protocol_events: [
+          { message_id: 'msg-1', agent_id: 'agent-writer', data: { ok: true, role: 'orkas_core' } },
+        ],
+      },
+    });
+
+    expect(result.counts.protocol).toBe('1');
+    expect(result.html).toContain('agent-writer');
   });
 
   it('renders protocol summary, filters, and expandable event details', async () => {

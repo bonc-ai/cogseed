@@ -45,12 +45,21 @@ node "$APP_DIR/scripts/ensure-dev-dependencies.cjs"
 # packaged apps. This never starts a local server; it only registers the `mateagent://` primary protocol and `orkas://` OAuth compatibility protocol.
 node "$APP_DIR/scripts/prepare-source-protocol.cjs" || true
 
-KSTAR_ENGINE_DIR="$APP_DIR/userWorkSpace/meta-skill-engine-package"
+# Build meta-skill engine if present
+KSTAR_ENGINE_DIR="$APP_DIR/packages/nseap-meta-skill-engine"
+if [ -d "$KSTAR_ENGINE_DIR" ]; then
+  echo "[Mate Agent] Building meta-skill engine..."
+  (cd "$KSTAR_ENGINE_DIR" && npm run build) || {
+    echo "[Mate Agent] Meta-skill engine build failed; continuing without it." >&2
+  }
+fi
+
+# Configure KSTAR engine from fixed repository package path
 KSTAR_ENGINE_ENTRY="$KSTAR_ENGINE_DIR/dist/index.js"
 if [ -f "$KSTAR_ENGINE_ENTRY" ]; then
   export ORKAS_KSTAR_ENGINE_COMMAND="${ORKAS_KSTAR_ENGINE_COMMAND:-node}"
   if [ -z "${ORKAS_KSTAR_ENGINE_ARGS:-}" ]; then
-    export ORKAS_KSTAR_ENGINE_ARGS="[\"$KSTAR_ENGINE_ENTRY\"]"
+    export ORKAS_KSTAR_ENGINE_ARGS="[\"$KSTAR_ENGINE_ENTRY\",\"--stdio\"]"
   fi
   export ORKAS_KSTAR_ENGINE_CWD="${ORKAS_KSTAR_ENGINE_CWD:-$KSTAR_ENGINE_DIR}"
   export ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR="${ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR:-$KSTAR_ENGINE_DIR/ontologies}"

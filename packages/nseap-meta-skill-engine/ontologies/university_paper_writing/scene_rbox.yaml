@@ -1,0 +1,566 @@
+---
+# ============================================================
+# 大学生写论文本体 — RBox（规则层）
+# 版本: v1.0.0
+# 描述: 定义论文写作领域的业务规则和约束
+# 适用: Meta-Skill Engine 的归因分析和 Agent 的执行判断
+# ============================================================
+
+schema_version: "1.0.0"
+profile: scene_rbox/1.0
+
+scene:
+  id: university_paper_writing
+  name: 大学生写论文
+
+tbox_ref:
+  ontology_id: university_paper_writing
+  ontology_version: "1.0.0"
+  file: scene_tbox.yaml
+
+# ============================================================
+# 规则集（Rules）
+# ============================================================
+
+rbox:
+  rules:
+    # ========================================================
+    # 结构完整性规则（R_STRUCT_01 ~ R_STRUCT_10）
+    # ========================================================
+    - id: R_STRUCT_01
+      type: completeness
+      name: 本科论文最低字数
+      description: 本科毕业论文正文不少于 8000 字
+      applies_to:
+        classes: [BachelorThesis]
+        properties: [wordCount]
+      condition:
+        when: "wordCount < 8000"
+        user_exceptions: [理工艺类可适当降低至 6000]
+      action:
+        type: flag_for_review
+        instruction: 标记为字数不足，需补充内容
+      severity: blocking
+      evidence:
+        - text: "教育部《普通高等学校本科教学工作合格评估指标体系》"
+          source: "教育部文件"
+      confidence: 0.95
+      review_required: true
+
+    - id: R_STRUCT_02
+      type: completeness
+      name: 硕士论文最低字数
+      description: 硕士学位论文正文不少于 30000 字
+      applies_to:
+        classes: [MasterThesis]
+        properties: [wordCount]
+      condition:
+        when: "wordCount < 30000"
+      action:
+        type: flag_for_review
+        instruction: 标记为字数不足，需补充内容
+      severity: blocking
+      evidence:
+        - text: "《学位论文编写规则》GB/T 7713.1"
+          source: "国家标准"
+      confidence: 0.95
+      review_required: true
+
+    - id: R_STRUCT_03
+      type: completeness
+      name: 博士论文最低字数
+      description: 博士学位论文正文不少于 80000 字
+      applies_to:
+        classes: [DoctoralDissertation]
+        properties: [wordCount]
+      condition:
+        when: "wordCount < 80000"
+      action:
+        type: flag_for_review
+        instruction: 标记为字数不足，需补充内容
+      severity: blocking
+      evidence:
+        - text: "《学位论文编写规则》GB/T 7713.1"
+          source: "国家标准"
+      confidence: 0.95
+      review_required: true
+
+    - id: R_STRUCT_04
+      type: completeness
+      name: 必须有摘要
+      description: 论文必须包含摘要部分，中文 200-300 字
+      applies_to:
+        classes: [AcademicPaper]
+        properties: [abstract]
+      condition:
+        when: "abstract 为空 OR abstract 字数 < 100"
+      action:
+        type: flag_for_review
+        instruction: 标记为缺少摘要或摘要过短
+      severity: blocking
+      evidence:
+        - text: "GB/T 7713-2006 科学技术报告、学位论文和学术论文的编写格式"
+          source: "国家标准"
+      confidence: 0.98
+      review_required: true
+
+    - id: R_STRUCT_05
+      type: completeness
+      name: 必须有标题
+      description: 论文必须有明确的标题，不少于 5 个字符
+      applies_to:
+        classes: [AcademicPaper]
+        properties: [title]
+      condition:
+        when: "title 为空 OR title 长度 < 5"
+      action:
+        type: flag_for_review
+        instruction: 标记为缺少标题或标题过短
+      severity: blocking
+      confidence: 0.99
+      review_required: true
+
+    - id: R_STRUCT_06
+      type: completeness
+      name: 参考文献最低数量
+      description: 本科论文参考文献不少于 10 篇，硕士不少于 30 篇，博士不少于 50 篇
+      applies_to:
+        classes: [AcademicPaper]
+        properties: [referenceCount]
+      condition:
+        when: "(type=BachelorThesis AND referenceCount < 10) OR (type=MasterThesis AND referenceCount < 30) OR (type=DoctoralDissertation AND referenceCount < 50)"
+      action:
+        type: flag_for_review
+        instruction: 标记为参考文献不足，需补充
+      severity: warning
+      confidence: 0.90
+      review_required: false
+
+    - id: R_STRUCT_07
+      type: completeness
+      name: 摘要字数限制
+      description: 中文摘要 200-300 字，英文摘要 150-250 词
+      applies_to:
+        classes: [Abstract]
+        properties: []
+      condition:
+        when: "abstract 字数 > 300 (中文) OR abstract 词数 > 250 (英文)"
+      action:
+        type: flag_for_review
+        instruction: 标记为摘要过长，需精简
+      severity: warning
+      confidence: 0.90
+      review_required: false
+
+    - id: R_STRUCT_08
+      type: completeness
+      name: 关键词数量
+      description: 关键词数量应为 3-8 个
+      applies_to:
+        classes: [Keywords]
+        properties: []
+      condition:
+        when: "keywords 数量 < 3 OR keywords 数量 > 8"
+      action:
+        type: flag_for_review
+        instruction: 标记为关键词数量不符
+      severity: warning
+      confidence: 0.90
+      review_required: false
+
+    - id: R_STRUCT_09
+      type: completeness
+      name: 必须有研究问题
+      description: 论文主体部分必须包含明确的研究问题或研究假设
+      applies_to:
+        classes: [Introduction]
+        properties: []
+      condition:
+        when: "主体部分未包含明确研究问题"
+      action:
+        type: flag_for_review
+        instruction: 标记为缺少研究问题
+      severity: blocking
+      confidence: 0.85
+      review_required: true
+
+    - id: R_STRUCT_10
+      type: completeness
+      name: 结论与引言呼应
+      description: 结论部分必须回应引言中提出的研究问题
+      applies_to:
+        classes: [Conclusion]
+        properties: []
+      condition:
+        when: "conclusion 未回应 introduction 中的研究问题"
+      action:
+        type: flag_for_review
+        instruction: 标记为结论与引言脱节
+      severity: warning
+      confidence: 0.80
+      review_required: false
+
+    # ========================================================
+    # 引用规范规则（R_CITE_01 ~ R_CITE_06）
+    # ========================================================
+    - id: R_CITE_01
+      type: citation_standard
+      name: 引用格式一致性
+      description: 同一篇论文必须使用统一的引用格式
+      applies_to:
+        classes: [AcademicPaper]
+        properties: [citationStyle]
+      condition:
+        when: "文中出现多种引用格式混用"
+      action:
+        type: flag_for_review
+        instruction: 标记为引用格式不一致，需统一
+      severity: blocking
+      confidence: 0.95
+      review_required: true
+
+    - id: R_CITE_02
+      type: citation_standard
+      name: 参考文献完整性
+      description: 文内所有引用必须在参考文献列表中有对应条目
+      applies_to:
+        classes: [Citation, ReferenceList]
+        properties: []
+      condition:
+        when: "文内引用在参考文献列表中找不到对应条目"
+      action:
+        type: flag_for_review
+        instruction: 标记为引用缺失，需补充参考文献
+      severity: blocking
+      confidence: 0.95
+      review_required: true
+
+    - id: R_CITE_03
+      type: citation_standard
+      name: 参考文献必要性
+      description: 参考文献列表中的所有条目必须被正文引用
+      applies_to:
+        classes: [ReferenceList]
+        properties: []
+      condition:
+        when: "参考文献列表中有条目未被正文引用"
+      action:
+        type: flag_for_review
+        instruction: 标记为冗余引用，需删除或补充引用
+      severity: warning
+      confidence: 0.85
+      review_required: false
+
+    - id: R_CITE_04
+      type: citation_standard
+      name: 自引比例限制
+      description: 自引率不应超过 20%
+      applies_to:
+        classes: [AcademicPaper]
+        properties: [selfCitationRate]
+      condition:
+        when: "selfCitationRate > 0.20"
+      action:
+        type: flag_for_review
+        instruction: 标记为自引过高，需减少自引
+      severity: warning
+      confidence: 0.85
+      review_required: false
+
+    - id: R_CITE_05
+      type: citation_standard
+      name: 近五年文献比例
+      description: 近五年参考文献应占总参考文献的 30% 以上
+      applies_to:
+        classes: [AcademicPaper]
+        properties: [recentReferenceRatio]
+      condition:
+        when: "recentReferenceRatio < 0.30"
+      action:
+        type: flag_for_review
+        instruction: 标记为文献陈旧，需补充近期研究
+      severity: warning
+      confidence: 0.80
+      review_required: false
+
+    - id: R_CITE_06
+      type: citation_standard
+      name: 一级文献比例
+      description: 一级文献（原始研究）应占参考文献的 50% 以上
+      applies_to:
+        classes: [AcademicPaper]
+        properties: []
+      condition:
+        when: "primarySourceRatio < 0.50"
+      action:
+        type: flag_for_review
+        instruction: 标记为二级文献过多，需补充原始研究
+      severity: info
+      confidence: 0.75
+      review_required: false
+
+    # ========================================================
+    # 学术诚信规则（R_ETHICS_01 ~ R_ETHICS_05）
+    # ========================================================
+    - id: R_ETHICS_01
+      type: academic_integrity
+      name: 查重率限制
+      description: 论文查重率不得超过 20%
+      applies_to:
+        classes: [AcademicPaper]
+        properties: [similarityRate]
+      condition:
+        when: "similarityRate > 0.20"
+      action:
+        type: flag_for_review
+        instruction: 标记为重复率过高，需修改降重
+      severity: blocking
+      evidence:
+        - text: "各高校学位论文查重检测要求"
+          source: "学校规定"
+      confidence: 0.95
+      review_required: true
+
+    - id: R_ETHICS_02
+      type: academic_integrity
+      name: 查重率严重超标
+      description: 论文查重率超过 40% 视为严重抄袭
+      applies_to:
+        classes: [AcademicPaper]
+        properties: [similarityRate]
+      condition:
+        when: "similarityRate > 0.40"
+      action:
+        type: block_submission
+        instruction: 标记为疑似抄袭，需大幅修改
+      severity: blocking
+      evidence:
+        - text: "《高等学校预防与处理学术不端行为办法》"
+          source: "教育部令第40号"
+      confidence: 0.95
+      review_required: true
+
+    - id: R_ETHICS_03
+      type: academic_integrity
+      name: 数据真实性
+      description: 研究数据必须真实可验证，不得伪造或篡改
+      applies_to:
+        classes: [AcademicPaper]
+        properties: [dataAvailability]
+      condition:
+        when: "数据来源不明或无法验证"
+      action:
+        type: flag_for_review
+        instruction: 标记为数据可信度存疑
+      severity: warning
+      confidence: 0.80
+      review_required: true
+
+    - id: R_ETHICS_04
+      type: academic_integrity
+      name: 伦理审批
+      description: 涉及人体/动物研究必须通过伦理审查
+      applies_to:
+        classes: [AcademicPaper]
+        properties: []
+      condition:
+        when: "涉及人体/动物研究但无伦理审批"
+      action:
+        type: block_submission
+        instruction: 标记为缺少伦理审批，需补充
+      severity: blocking
+      evidence:
+        - text: "《涉及人的生物医学研究伦理审查办法》"
+          source: "卫生部"
+      confidence: 0.95
+      review_required: true
+
+    - id: R_ETHICS_05
+      type: academic_integrity
+      name: 署名规范
+      description: 论文作者需有实质贡献声明
+      applies_to:
+        classes: [AcademicPaper]
+        properties: []
+      condition:
+        when: "作者列表中缺少贡献声明"
+      action:
+        type: flag_for_review
+        instruction: 标记为署名规范问题
+      severity: info
+      confidence: 0.70
+      review_required: false
+
+    # ========================================================
+    # 方法论规则（R_METHOD_01 ~ R_METHOD_04）
+    # ========================================================
+    - id: R_METHOD_01
+      type: methodology
+      name: 方法描述充分性
+      description: 研究方法部分必须详细描述样本选择和数据处理
+      applies_to:
+        classes: [Methodology]
+        properties: []
+      condition:
+        when: "methodology 部分缺少样本描述"
+      action:
+        type: flag_for_review
+        instruction: 标记为方法描述不足
+      severity: blocking
+      confidence: 0.85
+      review_required: true
+
+    - id: R_METHOD_02
+      type: methodology
+      name: 方法选择合理性
+      description: 研究方法必须与研究问题匹配
+      applies_to:
+        classes: [AcademicPaper]
+        properties: []
+      condition:
+        when: "研究问题与方法论不匹配"
+      action:
+        type: flag_for_review
+        instruction: 标记为方法不匹配
+      severity: warning
+      confidence: 0.80
+      review_required: false
+
+    - id: R_METHOD_03
+      type: methodology
+      name: 数据与结论一致性
+      description: 研究结论不得超出数据支撑范围
+      applies_to:
+        classes: [Discussion]
+        properties: []
+      condition:
+        when: "结论超出数据支撑范围"
+      action:
+        type: flag_for_review
+        instruction: 标记为过度推断
+      severity: blocking
+      confidence: 0.85
+      review_required: true
+
+    - id: R_METHOD_04
+      type: methodology
+      name: 可重复性
+      description: 方法描述应足以让他人重复研究
+      applies_to:
+        classes: [Methodology]
+        properties: []
+      condition:
+        when: "方法描述不足以让他人重复"
+      action:
+        type: flag_for_review
+        instruction: 标记为可重复性不足
+      severity: warning
+      confidence: 0.80
+      review_required: false
+
+    # ========================================================
+    # IMRAD 对应规则（R_IMRAD_01 ~ R_IMRAD_05）
+    # ========================================================
+    - id: R_IMRAD_01
+      type: imrad_correspondence
+      name: 引言包含研究目的
+      description: 引言部分必须包含明确的研究目的陈述
+      applies_to:
+        classes: [Introduction]
+        properties: []
+      condition:
+        when: "introduction 缺少明确的研究目的陈述"
+      action:
+        type: flag_for_review
+        instruction: 标记为缺少研究目的
+      severity: blocking
+      confidence: 0.90
+      review_required: true
+
+    - id: R_IMRAD_02
+      type: imrad_correspondence
+      name: 方法使用过去时
+      description: 研究方法部分应主要使用过去时态
+      applies_to:
+        classes: [Methodology]
+        properties: []
+      condition:
+        when: "methodology 部分主要使用现在时"
+      action:
+        type: flag_for_review
+        instruction: 标记为时态错误
+      severity: warning
+      confidence: 0.85
+      review_required: false
+
+    - id: R_IMRAD_03
+      type: imrad_correspondence
+      name: 结果不包含解释
+      description: 结果部分应客观呈现发现，不含讨论性内容
+      applies_to:
+        classes: [Results]
+        properties: []
+      condition:
+        when: "results 部分包含讨论性内容"
+      action:
+        type: flag_for_review
+        instruction: 标记为结果讨论混淆
+      severity: warning
+      confidence: 0.85
+      review_required: false
+
+    - id: R_IMRAD_04
+      type: imrad_correspondence
+      name: 讨论回应引言
+      description: 讨论部分必须回应引言中提出的研究问题
+      applies_to:
+        classes: [Discussion]
+        properties: []
+      condition:
+        when: "discussion 未回应 introduction 中的问题"
+      action:
+        type: flag_for_review
+        instruction: 标记为讨论脱节
+      severity: blocking
+      confidence: 0.85
+      review_required: true
+
+    - id: R_IMRAD_05
+      type: imrad_correspondence
+      name: 结论不引入新观点
+      description: 结论部分不应引入全新的观点或子话题
+      applies_to:
+        classes: [Conclusion]
+        properties: []
+      condition:
+        when: "conclusion 中出现了全新观点"
+      action:
+        type: flag_for_review
+        instruction: 标记为结论越界
+      severity: warning
+      confidence: 0.80
+      review_required: false
+
+  # ========================================================
+  # 缺失的 TBox 引用（Missing TBox References）
+  # ========================================================
+  missing_tbox_references: []
+
+  # ========================================================
+  # 被拒绝的候选规则（Rejected Candidates）
+  # ========================================================
+  rejected_candidates:
+    - id: R_REJECTED_01
+      reason: "论文必须有英文摘要 — 部分学校不要求，不宜作为通用规则"
+    - id: R_REJECTED_02
+      reason: "论文必须包含研究创新点 — 综述类论文无此要求"
+
+  # ========================================================
+  # ABox 候选说明（ABox Candidate Notes）
+  # ========================================================
+  abox_candidate_notes:
+    - "需要更多正负 fewshot 示例来覆盖各类型论文"
+    - "需要补充不同学科的写作规范差异示例"
+    - "需要补充引用格式的正误对比示例"
+
+  extraction_summary: "共提取 30 条规则，覆盖结构完整性(10)、引用规范(6)、学术诚信(5)、方法论(4)、IMRAD对应(5)五个类别"

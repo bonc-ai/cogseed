@@ -62,28 +62,44 @@ function call(channel: string, payload: unknown = {}): ReturnType<InvokeFn> {
 }
 
 async function seedPatchCandidate(conversationId: string, suffix: string) {
-  const runtime = await import('../../../src/main/features/p3394/kstar-runtime');
-  const run = await runtime.finalizeAgentTurn(TEST_UID, {
-    conversationId,
-    agentId: 'writer-agent',
-    turnId: `turn-${suffix}`,
-    messageId: `msg-${suffix}`,
-    actualResult: `draft result ${suffix}`,
-    kstarDecision: {
-      required: true,
-      reason: `durable deliverable ${suffix}`,
-      expectation: { task: `write draft ${suffix}`, action_hat: 'draft', result_hat: 'reviewable draft' },
-    },
-  });
-  const candidate = await runtime.createPatchCandidateFromEngineRun(TEST_UID, run.id, {
+  const statePath = path.join(tmpDir, TEST_UID, 'local', 'p3394', 'kstar-state.json');
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  const existing = fs.existsSync(statePath)
+    ? JSON.parse(fs.readFileSync(statePath, 'utf8'))
+    : { version: 1, runs: [], experience_candidates: [], patch_candidates: [], updated_at: '2026-07-24T00:00:00.000Z' };
+  const run = {
+    id: `run-${suffix}`,
+    conversation_id: conversationId,
+    agent_id: 'writer-agent',
+    turn_id: `turn-${suffix}`,
     status: 'completed',
-    tool_calls: [],
-    route_recommendation: { action: 'propose_skill_patch', message: `Improve workflow ${suffix}.` },
-    analyze_attribution: { attribution_id: `attr-${suffix}` },
-    reason: `Workflow should improve ${suffix}.`,
-    updated_at: new Date().toISOString(),
-  });
-  if (!candidate) throw new Error('expected patch candidate');
+    actual_result: `draft result ${suffix}`,
+    evidence_items: [],
+    verification: null,
+    created_at: '2026-07-24T00:00:00.000Z',
+    updated_at: '2026-07-24T00:00:00.000Z',
+  };
+  const candidate = {
+    id: `patch-${suffix}`,
+    source_run_id: run.id,
+    conversation_id: conversationId,
+    agent_id: 'writer-agent',
+    type: 'skill_patch',
+    target: { kind: 'custom_skill', id: 'writer-agent' },
+    proposal: {
+      title: 'KSTAR propose_skill_patch',
+      summary: `Improve workflow ${suffix}.`,
+      rationale: `Workflow should improve ${suffix}.`,
+      proposed_content: `Improve workflow ${suffix}.`,
+    },
+    engine: { attribution_id: `attr-${suffix}`, route_action: 'propose_skill_patch' },
+    status: 'needs_review',
+    created_at: '2026-07-24T00:00:00.000Z',
+    updated_at: '2026-07-24T00:00:00.000Z',
+  };
+  existing.runs.push(run);
+  existing.patch_candidates.push(candidate);
+  fs.writeFileSync(statePath, JSON.stringify(existing, null, 2));
   return { run, candidate };
 }
 

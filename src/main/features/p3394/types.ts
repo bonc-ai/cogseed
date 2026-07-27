@@ -1,3 +1,5 @@
+import type { KStarDecisionRecord } from './kstar-compat';
+
 export type WakeSource =
   | "user_mention"
   | "dispatch_to"
@@ -44,6 +46,8 @@ export interface AgentWakeRequest {
   workflow_resume_token?: string;
   pending_cleanup_step_ids?: string[];
   workflow_transition?: "rejecting" | "approving";
+  /** Commander-selected KSTAR evidence contract restored after approval. */
+  kstar_decision?: KStarDecisionRecord;
 }
 
 export interface WakeApproval {
@@ -80,8 +84,14 @@ export interface EvaluateWakeInput {
   resumeInstruction?: string;
   workflow_step_id?: string;
   workflow_resume_token?: string;
+  kstar_decision?: KStarDecisionRecord;
 }
 
 export type WakeEvaluation =
-  | { approved: true; approval: WakeApproval }
+  | {
+      approved: true;
+      approval: WakeApproval;
+      /** The same approved dispatch is already queued/running; do not run it again. */
+      duplicate_request?: AgentWakeRequest;
+    }
   | { approved: false; request: AgentWakeRequest };

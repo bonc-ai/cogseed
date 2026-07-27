@@ -138,15 +138,18 @@ import {
   type SkillAllowlistRef,
 } from "../../model/core-agent/skill-registry";
 import { buildRuntimeDatetimeBlock } from "../../prompts/runtime_context";
-import { evaluateWake } from "../p3394/wake-service";
+import { evaluateWake, listWakeRequests } from "../p3394/wake-service";
 import {
-  finalizeAgentTurn,
-  recordAgentRunEvidence,
-  recordKStarToolCycle,
   type KStarDecisionRecord,
   type KStarExpectation,
-} from "../p3394/kstar-runtime";
-import { runKStarEngineForRun } from "../p3394/kstar-engine";
+} from "../p3394/kstar-compat";
+import {
+  recordToolCycleEvidence,
+  recordAgentRunStartEvidence,
+  recordAgentContributionEvidence,
+  closeCollaborationEvidence,
+} from "../p3394/kstar-bus-integration";
+import { promoteExperienceCandidateToKnowledgeBase } from "../p3394/kstar-kb";
 import {
   buildP3394Level2Manifest,
   normalizeP3394AgentMessage,
@@ -794,7 +797,10 @@ async function maybeRecordKStarToolCycle(input: {
     data.result_preview || data.output || data.message || data.error || "",
     1000,
   );
-  const cycle = await recordKStarToolCycle(input.uid, {
+
+  // Route through adapter integration layer
+  const result = await recordToolCycleEvidence({
+    userId: input.uid,
     conversationId: input.cid,
     agentId: input.actor.id,
     turnId: input.turnId,
@@ -811,9 +817,16 @@ async function maybeRecordKStarToolCycle(input: {
       String(data.status || "").toLowerCase() === "failed",
     durationMs: numericField(data.duration_ms || data.durationMs),
   });
+
   input.argumentShapes.delete(toolCallId);
+
+  // Build tool summary for actualAction (used in contribution evidence)
+  const toolFailed = data.isError === true ||
+    data.is_error === true ||
+    String(data.status || "").toLowerCase() === "failed";
+  const status = toolFailed ? "failed" : "succeeded";
   input.toolSummaries.push(
-    `${cycle.tool_name} ${cycle.status} delta_r=${cycle.delta_r}`,
+    `${toolName} ${status}`,
   );
 }
 
@@ -1415,6 +1428,45 @@ function _emitTaskRunTerminalIfQuiescent(
   }
 }
 
+function scheduleCommanderKStarValidation(
+  state: CidState,
+  stateFile: StateFile,
+  taskStatus: TaskTerminalStatus | null,
+): void {
+  const waitingOnLedger =
+    stateFile.orchestration_ledger?.status === "waiting_for_form" ||
+    stateFile.orchestration_ledger?.status === "waiting_for_agent";
+  if (waitingOnLedger || taskStatus === "waiting_input") return;
+  const outcomeStatus: "completed" | "failed" | "cancelled" =
+    stateFile.status === "aborted" || taskStatus === "cancelled"
+      ? "cancelled"
+      : taskStatus === "failed"
+        ? "failed"
+        : "completed";
+  trackBackgroundWrite(
+    state,
+    (async () => {
+      const wakeRequests = await listWakeRequests(state.uid, state.cid);
+      if (
+        wakeRequests.some(
+          (request) => request.status === "pending" || request.status === "approved",
+        )
+      ) {
+        return;
+      }
+      const result = await closeCollaborationEvidence(state.uid, {
+        conversationId: state.cid,
+        commanderId: COMMANDER_ID,
+        outcomeStatus,
+      });
+      if (result.success && result.runId) {
+        log.info(`Commander collaboration closed cid=${state.cid} runId=${result.runId}`);
+      }
+    })(),
+    "Commander KSTAR collaboration validation",
+  );
+}
+
 function emit(state: CidState, ev: GroupEvent): void {
   for (const l of state.listeners) {
     try {
@@ -1549,7 +1601,11 @@ async function _syncStateStatus(
       active_turns: activeTurnsForState(state),
     });
   }
-  if (want === "idle") _emitTaskRunTerminalIfQuiescent(state, result.state);
+  if (want === "idle") {
+    const taskStatus = state.taskRun?.status || null;
+    _emitTaskRunTerminalIfQuiescent(state, result.state);
+    scheduleCommanderKStarValidation(state, result.state, taskStatus);
+  }
 }
 
 // ── Main jsonl helpers ───────────────────────────────────────────────────
@@ -1661,6 +1717,8 @@ export interface EnqueueParams {
   kstarDecision?: KStarDecisionRecord;
   /** Compact tool-cycle summaries captured during this agent turn for KSTAR attribution. */
   kstarToolSummaries?: string[];
+  /** Terminal outcome recorded with an Agent contribution for Commander validation. */
+  kstarOutcomeStatus?: AgentRunStatus;
 }
 
 /**
@@ -2122,36 +2180,26 @@ async function _enqueueBody(
           params.produced,
         )
       : undefined;
-  if (
-    fromKind === "agent" &&
-    params.turn_end &&
-    params.turn_id &&
-    guardedKStarDecision?.required
-  ) {
+  if (fromKind === "agent" && params.turn_end && params.turn_id && guardedKStarDecision?.required) {
     try {
-      const run = await finalizeAgentTurn(uid, {
+      await recordAgentContributionEvidence({
+        userId: uid,
         conversationId: cid,
         agentId: fromActorId,
         turnId: params.turn_id,
         messageId: msgId,
         actualResult: rewrittenText,
         kstarDecision: guardedKStarDecision,
+        outcomeStatus: params.kstarOutcomeStatus || "success",
         actualAction: buildKStarActualActionSummary(
           fromActorId,
           params.produced,
           params.kstarToolSummaries,
         ),
       });
-      msg.kstar_review = {
-        run_id: run.id,
-        status: run.status === "running" ? "needs_review" : run.status,
-        agent_id: fromActorId,
-        turn_id: params.turn_id,
-      };
-      await runKStarEngineForRun(uid, run);
     } catch (err) {
       log.warn(
-        `P3394 KSTAR finalize failed cid=${cid} actor=${fromActorId}: ${(err as Error).message}`,
+        `P3394 KSTAR contribution record failed cid=${cid} actor=${fromActorId}: ${(err as Error).message}`,
       );
     }
   }
@@ -2225,6 +2273,9 @@ async function _enqueueBody(
       ...(params.resumeActiveTurn ? { resumeActiveTurn: true } : {}),
       ...(params.workflow_step_id
         ? { workflow_step_id: params.workflow_step_id }
+        : {}),
+      ...(params.kstarDecision?.required
+        ? { kstarDecision: params.kstarDecision }
         : {}),
     });
     const wake = w.wake;
@@ -3686,7 +3737,8 @@ async function runActorTurnBody(
           if (actor.kind !== "worker") {
             if (actor.kind === "agent" && item.kstarDecision?.required) {
               try {
-                await recordAgentRunEvidence(uid, {
+                await recordAgentRunStartEvidence({
+                  userId: uid,
                   conversationId: cid,
                   agentId: actor.id,
                   turnId: item.turnId,
@@ -3844,6 +3896,10 @@ async function runActorTurnBody(
     agentResult: string;
   } | null = null;
   let resumeAfterForm: {
+    ledger: NonNullable<StateFile["orchestration_ledger"]>;
+    agentResult: string;
+  } | null = null;
+  let resumeAfterAgent: {
     ledger: NonNullable<StateFile["orchestration_ledger"]>;
     agentResult: string;
   } | null = null;
@@ -4465,6 +4521,9 @@ async function runActorTurnBody(
       ...(item.kstarDecision?.required && kstarToolSummaries.length
         ? { kstarToolSummaries }
         : {}),
+      ...(actor.kind === "agent" && item.kstarDecision?.required
+        ? { kstarOutcomeStatus: actorRunStatus }
+        : {}),
     });
     await registerFinalOutputResources(outcome.produced || []);
   } else if (outcome.kind === "silent" && actor.kind !== "worker") {
@@ -4534,6 +4593,21 @@ async function runActorTurnBody(
     });
   }
 
+  if (actor.kind === "agent" && !resumeAfterHandback && !resumeAfterForm) {
+    try {
+      const currentLedger = await readState(uid, cid);
+      const sourceTool = currentLedger.orchestration_ledger?.source_tool;
+      if (sourceTool === "dispatch_to" || sourceTool === "run_worker") {
+        const ledger = await takeOrchestrationLedgerForAgent(uid, cid, actor.id);
+        if (ledger) resumeAfterAgent = { ledger, agentResult: workingText };
+      }
+    } catch (err) {
+      log.warn(
+        `agent continuation ledger take failed cid=${cid} actor=${actor.id}: ${(err as Error).message}`,
+      );
+    }
+  }
+
   if (resumeAfterHandback && actor.kind === "agent") {
     await _enqueueOrchestrationResumeFromAgent({
       state,
@@ -4550,6 +4624,15 @@ async function runActorTurnBody(
       fromActorName: actor.name,
       ledger: resumeAfterForm.ledger,
       agentResult: resumeAfterForm.agentResult,
+    });
+  }
+  if (resumeAfterAgent && actor.kind === "agent") {
+    await _enqueueOrchestrationResumeFromAgent({
+      state,
+      fromActorId: actor.id,
+      fromActorName: actor.name,
+      ledger: resumeAfterAgent.ledger,
+      agentResult: resumeAfterAgent.agentResult,
     });
   }
 
@@ -5216,6 +5299,7 @@ async function gateNestedAgentWake(
   resumeInstruction?: string,
   workflowStepId?: string,
   workflowResumeToken?: string,
+  kstarDecision?: KStarDecisionRecord,
 ): Promise<WakeRequestSummary | null> {
   if (actor.kind !== "agent" || process.env.ORKAS_P3394_WAKE_GATE === "0")
     return null;
@@ -5234,33 +5318,38 @@ async function gateNestedAgentWake(
     ...(workflowResumeToken
       ? { workflow_resume_token: workflowResumeToken }
       : {}),
+    ...(kstarDecision?.required ? { kstar_decision: kstarDecision } : {}),
   });
-  if ("approval" in decision) return null;
+  const request =
+    "approval" in decision ? decision.duplicate_request : decision.request;
+  if (!request) return null;
   const summary: WakeRequestSummary = {
-    id: decision.request.id,
-    agent_id: decision.request.agent_id,
-    ...(decision.request.agent_name
-      ? { agent_name: decision.request.agent_name }
+    id: request.id,
+    agent_id: request.agent_id,
+    ...(request.agent_name ? { agent_name: request.agent_name } : {}),
+    source: request.source,
+    objective: request.objective,
+    status: request.status,
+    ...(request.workflow_step_id
+      ? { workflow_step_id: request.workflow_step_id }
       : {}),
-    source: decision.request.source,
-    objective: decision.request.objective,
-    status: decision.request.status,
-    ...(decision.request.workflow_step_id
-      ? { workflow_step_id: decision.request.workflow_step_id }
-      : {}),
-    ...(decision.request.workflow_resume_token
-      ? { workflow_resume_token: decision.request.workflow_resume_token }
+    ...(request.workflow_resume_token
+      ? { workflow_resume_token: request.workflow_resume_token }
       : {}),
   };
-  emit(state, { type: "wake_request", cid: state.cid, request: summary });
+  if (!("approval" in decision))
+    emit(state, { type: "wake_request", cid: state.cid, request: summary });
   return summary;
 }
 
 function pendingWakeToolResult(request: WakeRequestSummary) {
+  const duplicate = request.status === "approved" || request.status === "executed";
   return {
     content: JSON.stringify({
-      ok: false,
-      status: "pending_wake_approval",
+      ok: duplicate,
+      status: duplicate
+        ? "wake_dispatch_already_in_progress"
+        : "pending_wake_approval",
       request_id: request.id,
       agent_id: request.agent_id,
       ...(request.workflow_step_id
@@ -5269,8 +5358,9 @@ function pendingWakeToolResult(request: WakeRequestSummary) {
       ...(request.workflow_resume_token
         ? { resume_token: request.workflow_resume_token }
         : {}),
-      instruction:
-        "Agent wake approval is pending. Do not retry this dispatch in the current turn; wait for the user decision.",
+      instruction: duplicate
+        ? "This exact approved Wake dispatch is already queued or running. Do not dispatch it again; wait for its Agent result."
+        : "Agent wake approval is pending. Do not retry this dispatch in the current turn; wait for the user decision.",
     }),
   };
 }
@@ -6179,6 +6269,7 @@ async function buildCommanderExtraTools(
       "Run a single named agent and get its FULL result back so you can do MORE work on it — you stay in the loop and then synthesize. The agent runs and returns within this same call (no separate later turn); it also posts its own visible reply.",
       "Use this ONLY when you can name a concrete NEXT action you will take this same turn after the agent replies — another dispatch, a tool call, or a synthesis that combines its result with at least one other distinct result. If the only thing left is to deliver the agent's reply, you have no next action — do NOT use this; `hand_off_to` it instead and let its bubble stand.",
       "When you do synthesize, ADD the new material; never restate, re-format, or re-bless the agent's reply — that redundant re-summary is exactly what `hand_off_to` avoids.",
+      "In a dependent Agent chain, intermediate Agents use `dispatch_to`. The last requested Agent uses `hand_off_to` when it reviews, edits, validates, or saves the user-facing final deliverable. Do not create a trailing Commander summary after that final Agent.",
       "For a generic bounded sub-task you own, use `run_worker`.",
       "If the agent asks the user for missing information with a form while this is part of a broader commander-owned task, include `resume` so the system can resume you after the form is submitted and the agent completes.",
       "`to` is the agent name (recommended, matching the `name` in the \"Agents list\") or the agent_id — it must be an agent (not `commander` / `user`).",
@@ -6309,6 +6400,7 @@ async function buildCommanderExtraTools(
         resume,
         prepared.step.id,
         prepared.step.resume_token,
+        kstarDecisionRecord(kstar),
       );
       if (pendingWake) return pendingWakeToolResult(pendingWake);
       // Flush the commander's pre-dispatch reasoning as its own bubble first, so
@@ -6354,6 +6446,7 @@ async function buildCommanderExtraTools(
     description: [
       "DELIVER a single agent's result to the user: the agent answers directly and its own bubble stands as the answer — you do NOT repeat, re-format, or re-bless it, and your turn ends here (no wasted \"summary\" turn).",
       "This is the DEFAULT whenever the agent's reply is itself what the user asked for — a post, report, analysis, review, diagnosis, or any finished specialist output. If you would only be presenting or blessing the agent's reply, hand off instead of `dispatch_to`.",
+      "In a dependent Agent chain, the last requested Agent uses `hand_off_to` when its assigned task reviews, edits, validates, or saves the final deliverable; intermediate Agents use `dispatch_to`. Do not create a trailing Commander summary.",
       "Lightweight, NOT \"giving up the conversation\": for a one-shot (non-interactive) agent the floor does NOT move — control returns to you on the user's next message. Only an interactive agent (teach / coach / guide) additionally keeps the floor so follow-ups go straight to it until it hands back or the user addresses you.",
       "Do any prep first (search, download, set things up), then hand off as your final action.",
       "If this hand-off is only one outcome inside a broader commander-owned task, include `resume` with exactly what the commander must do after the agent finishes or asks the user for a form; that creates a lightweight suspended-orchestration ledger and will wake the commander when the blocking outcome completes.",
@@ -6460,6 +6553,7 @@ async function buildCommanderExtraTools(
         resume,
         prepared.step.id,
         prepared.step.resume_token,
+        kstarDecisionRecord(kstar),
       );
       if (pendingWake) return pendingWakeToolResult(pendingWake);
       // Flush the commander's pre-hand-off narration as its own bubble first.
@@ -6721,6 +6815,7 @@ async function buildCommanderExtraTools(
         resume,
         prepared.step.id,
         prepared.step.resume_token,
+        kstarDecisionRecord(kstar),
       );
       if (pendingWake) return pendingWakeToolResult(pendingWake);
       // Named run_worker is also a visible agent bubble — flush the commander's

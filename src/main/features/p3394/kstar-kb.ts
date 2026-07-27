@@ -1,13 +1,12 @@
 import * as path from 'node:path';
 
 import { writeContextFileForUser } from '../contexts';
+import type { CompatExperienceCandidate, KStarCompatRun } from './kstar-compat';
 import {
   getExperienceCandidate,
-  getKStarRun,
+  getKstarCompatProjection,
   markExperienceCandidateKnowledgePromotion,
-  type ExperienceCandidate,
-  type KStarRun,
-} from './kstar-runtime';
+} from './kstar-legacy-data';
 
 function mdEscape(value: unknown): string {
   return String(value ?? '').replace(/\r\n/g, '\n').trim();
@@ -24,12 +23,13 @@ function yearMonthFromIso(iso: string | undefined): { year: string; month: strin
   return { year: String(ok.getUTCFullYear()), month: String(ok.getUTCMonth() + 1).padStart(2, '0') };
 }
 
-function buildKnowledgePath(candidate: ExperienceCandidate): string {
+function buildKnowledgePath(candidate: CompatExperienceCandidate): string {
   const { year, month } = yearMonthFromIso(candidate.updated_at || candidate.created_at);
+  // Use experience_id as primary filename for stable identity
   return path.posix.join('kstar-experiences', year, month, `${candidate.id}.md`);
 }
 
-function summarizeEngine(run: KStarRun): string {
+function summarizeEngine(run: KStarCompatRun): string {
   const engine = run.kstar_engine;
   if (!engine) return '- Engine: not run yet';
   const lines = [
@@ -47,9 +47,15 @@ function summarizeEngine(run: KStarRun): string {
   return lines.join('\n');
 }
 
-export function buildKStarExperienceKnowledgeMarkdown(candidate: ExperienceCandidate, run: KStarRun): string {
+export function buildKStarExperienceKnowledgeMarkdown(candidate: CompatExperienceCandidate, run: KStarCompatRun): string {
   const episode = run.kstar_episode;
   const verification = run.verification;
+  const verificationOwner = run.kstar_decision?.source === 'commander'
+    ? 'Commander verification'
+    : 'Human verification';
+  const approvalGuidance = run.kstar_decision?.source === 'commander'
+    ? '- Treat this as Commander-validated collaborative experience grounded in the recorded Agent evidence, not as a universal policy.'
+    : '- Treat this as user-approved experience, not as a universal policy.';
   return [
     `# KSTAR Experience: ${candidate.id}`,
     '',
@@ -57,12 +63,13 @@ export function buildKStarExperienceKnowledgeMarkdown(candidate: ExperienceCandi
     truncate(candidate.summary, 1200) || 'No summary recorded.',
     '',
     '## Source',
+    `- Experience ID: ${candidate.id}`,
     `- Conversation: ${run.conversation_id}`,
     `- Agent: ${run.agent_id}`,
     `- KSTAR run: ${run.id}`,
-    `- Experience candidate: ${candidate.id}`,
+    `- Episode: ${episode?.episode_id || 'n/a'}`,
     `- Review status: ${run.status}`,
-    verification ? `- Human verification: ${verification.status}${verification.notes ? ` — ${verification.notes}` : ''}` : '- Human verification: not recorded',
+    verification ? `- ${verificationOwner}: ${verification.status}${verification.notes ? ` — ${verification.notes}` : ''}` : `- ${verificationOwner}: not recorded`,
     '',
     '## Situation',
     truncate(episode?.situation || run.kstar_decision?.expectation?.situation || ''),
@@ -87,8 +94,8 @@ export function buildKStarExperienceKnowledgeMarkdown(candidate: ExperienceCandi
     '',
     '## Reuse Guidance',
     '- Reuse this only for tasks with a similar situation and deliverable type.',
-    '- Treat this as user-approved experience, not as a universal policy.',
-    '- For durable deliverables, keep using KSTAR Review Gate before final delivery.',
+    approvalGuidance,
+    '- For durable collaborative deliverables, retain Agent execution evidence and let Commander perform one terminal KSTAR validation over the whole collaboration.',
     '',
   ].join('\n');
 }
@@ -96,14 +103,14 @@ export function buildKStarExperienceKnowledgeMarkdown(candidate: ExperienceCandi
 export async function promoteExperienceCandidateToKnowledgeBase(
   uid: string,
   candidateId: string,
-): Promise<{ ok: true; candidate: ExperienceCandidate; path: string } | { ok: false; error: string }> {
+): Promise<{ ok: true; candidate: CompatExperienceCandidate; path: string } | { ok: false; error: string }> {
   const candidate = await getExperienceCandidate(uid, candidateId);
   if (!candidate) return { ok: false, error: 'experience candidate not found' };
   if (candidate.status !== 'approved') return { ok: false, error: `experience candidate must be approved before KB promotion (current: ${candidate.status})` };
   if (candidate.kb_path && candidate.promotion_status === 'promoted') {
     return { ok: true, candidate, path: candidate.kb_path };
   }
-  const run = await getKStarRun(uid, candidate.source_run_id);
+  const run = await getKstarCompatProjection(uid, candidate.source_run_id);
   if (!run) return { ok: false, error: 'source KSTAR run not found' };
   const relPath = buildKnowledgePath(candidate);
   const content = buildKStarExperienceKnowledgeMarkdown(candidate, run);

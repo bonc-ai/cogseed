@@ -163,6 +163,76 @@ describe("P3394 wake service", () => {
     expect(otherAgent.approved).toBe(false);
   });
 
+  it("suppresses a retry while the approved wake dispatch is already running", async () => {
+    const wake =
+      await import("../../../../src/main/features/p3394/wake-service");
+    const collaboration =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const activeCid = "wake-active-dispatch";
+    await collaboration.createWorkflowRun(uid, activeCid, {
+      objective: "Review report",
+      created_by: "commander",
+    });
+    const admittedStep = await collaboration.prepareNestedDispatchStep(
+      uid,
+      activeCid,
+      {
+        objective: "Review report",
+        actor_id: agentId,
+        source_tool: "dispatch_to",
+        task: "Review report",
+      },
+    );
+    const pending = await wake.evaluateWake(uid, {
+      conversationId: activeCid,
+      agentId,
+      source: "dispatch_to",
+      sourceActorId: "commander",
+      objective: "Review report",
+      dispatchPayload: { text: "Review report" },
+      workflow_step_id: admittedStep.step.id,
+    });
+    await wake.approveWakeRequest(uid, pending.request.id);
+    await wake.markWakeRequestExecuted(uid, pending.request.id);
+    await collaboration.startPreparedNestedDispatchStep(
+      uid,
+      activeCid,
+      admittedStep.step.id,
+    );
+
+    const redundantStep = await collaboration.prepareNestedDispatchStep(
+      uid,
+      activeCid,
+      {
+        objective: "Review report",
+        actor_id: agentId,
+        source_tool: "dispatch_to",
+        task: "Review report",
+      },
+    );
+    const retried = await wake.evaluateWake(uid, {
+      conversationId: activeCid,
+      agentId,
+      source: "dispatch_to",
+      sourceActorId: "commander",
+      objective: "  Review report  ",
+      dispatchPayload: { text: "Review report" },
+      workflow_step_id: redundantStep.step.id,
+    });
+
+    expect(retried).toMatchObject({
+      approved: true,
+      duplicate_request: {
+        id: pending.request.id,
+        workflow_step_id: admittedStep.step.id,
+      },
+    });
+    const run = await collaboration.readActiveWorkflowRun(uid, activeCid);
+    expect(
+      run?.steps.find((step) => step.id === redundantStep.step.id)?.status,
+    ).toBe("skipped");
+  });
+
   it("records rejection and execution as explicit state transitions", async () => {
     const wake =
       await import("../../../../src/main/features/p3394/wake-service");

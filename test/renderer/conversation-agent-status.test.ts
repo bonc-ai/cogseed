@@ -113,4 +113,10 @@ describe('conversation agent status panel', () => {
     expect(conversationSource).toContain("openAndSetTab('collaboration')");
   });
 
+  it('refreshes the collaboration drawer when a member joins or an agent run completes', () => {
+    expect(conversationSource).toContain("evData.type === 'member_joined'");
+    expect(conversationSource).toContain('ConversationInfo.refreshAgentActivity');
+    expect(conversationSource).toContain("evData.type === 'agent_run_result'");
+  });
+
 });

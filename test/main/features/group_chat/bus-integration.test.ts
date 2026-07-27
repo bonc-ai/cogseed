@@ -228,6 +228,33 @@ async function waitUntil(
   return false;
 }
 
+async function readPendingKStarEvidence(uid: string): Promise<any[]> {
+  const store = await import(
+    "../../../../src/main/features/p3394/kstar-store"
+  );
+  const pendingPath = store.getPendingEvidencePath(uid);
+  if (!fs.existsSync(pendingPath)) return [];
+  return fs
+    .readFileSync(pendingPath, "utf-8")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+async function waitForPendingKStarEvidence(
+  uid: string,
+  predicate: (record: any) => boolean,
+  timeoutMs = 2000,
+): Promise<any | null> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const found = (await readPendingKStarEvidence(uid)).find(predicate);
+    if (found) return found;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  return null;
+}
+
 describe("group_chat bus integration › disabled skills", () => {
   it("does not let commander substitute another skill when user explicitly requests a disabled one", async () => {
     const cid = newCid();
@@ -874,16 +901,13 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     ).toBe(1);
   }, 12_000);
 
-  it("dispatch_to with kstar=required stores a compatible episode and attaches Review Gate metadata", async () => {
+  it("dispatch_to with kstar=required contributes evidence to one Commander validation", async () => {
     const cid = newCid();
     const state =
       await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const paths = await import("../../../../src/main/paths");
     const storage = await import("../../../../src/main/storage");
-    const kstarRuntime =
-      await import("../../../../src/main/features/p3394/kstar-runtime");
-
     const AGENT_REPLY = "KSTAR-AGENT-DRAFT: 完成论文初稿并保存 draft.md";
     _setScript(state.buildGconvSessionId(cid), [
       {
@@ -924,26 +948,34 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       (m: any) =>
         m.from === AGENT_ID && String(m.text || "").includes(AGENT_REPLY),
     );
-    expect(agentMessage?.kstar_review).toMatchObject({
-      status: "needs_review",
-      agent_id: AGENT_ID,
-    });
+    expect(agentMessage?.kstar_review).toBeUndefined();
 
-    const [run] = await kstarRuntime.listKStarRuns(TEST_UID, cid);
-    expect(run).toBeTruthy();
-    expect(run.kstar_decision).toMatchObject({
-      required: true,
-      reason: "论文初稿是用户可审阅交付物",
+    const closeEvidence = await waitForPendingKStarEvidence(
+      TEST_UID,
+      (record) => record.conversation_id === cid && record.type === "collaboration_close",
+      2000,
+    );
+    expect(closeEvidence).toMatchObject({
+      commander_id: "commander",
+      outcome_status: "completed",
     });
-    expect(run.kstar_episode).toMatchObject({
-      situation: "已有 DeepResearcher 研究报告",
+    const contribution = await waitForPendingKStarEvidence(
+      TEST_UID,
+      (record) => record.conversation_id === cid && record.type === "conversation_message",
+      2000,
+    );
+    expect(contribution).toMatchObject({
+      agent_id: AGENT_ID,
+      actual_result: expect.stringContaining(AGENT_REPLY),
+      kstar_decision: {
+        required: true,
+        source: "commander",
+        reason: "论文初稿是用户可审阅交付物",
+      },
+    });
+    expect(contribution.kstar_decision.expectation).toMatchObject({
       task: "根据研究报告写论文初稿",
-      action_hat: "生成论文初稿文件并说明结构",
       result_hat: "得到可审阅论文初稿",
-      actual_result: AGENT_REPLY,
-      delta_r: 0,
-      delta_a: 0,
-      delta_a_confidence_gate: "pass",
     });
   }, 12_000);
 
@@ -952,9 +984,6 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     const state =
       await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
-    const kstarRuntime =
-      await import("../../../../src/main/features/p3394/kstar-runtime");
-
     _setScript(state.buildGconvSessionId(cid), [
       {
         type: "__call_tool__",
@@ -984,7 +1013,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
             name: "bash",
             arguments: {
               command:
-                "npm run test:js -- test/main/features/p3394/kstar-runtime.test.ts",
+                "npm run test:js -- test/main/features/p3394/kstar-adapter.test.ts",
             },
           },
         },
@@ -1015,7 +1044,11 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     });
     await waitForQuiescent(TEST_UID, cid, 4000);
 
-    const [cycle] = await kstarRuntime.listKStarToolCycles(TEST_UID, cid);
+    const cycle = await waitForPendingKStarEvidence(
+      TEST_UID,
+      (record) => record.conversation_id === cid && record.type === "tool_cycle",
+      2000,
+    );
     expect(cycle).toMatchObject({
       conversation_id: cid,
       agent_id: AGENT_ID,
@@ -1025,27 +1058,22 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       verifier_method: "error_signal",
       arguments_shape: { command: "string" },
     });
-    expect(cycle.delta_r).toBeLessThan(0);
 
-    const [run] = await kstarRuntime.listKStarRuns(TEST_UID, cid);
-    expect(run.evidence_items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "tool_cycle", source_id: cycle.id }),
-      ]),
+    const contribution = await waitForPendingKStarEvidence(
+      TEST_UID,
+      (record) => record.conversation_id === cid && record.type === "conversation_message",
+      2000,
     );
-    expect(run.kstar_episode?.actual_action).toContain("bash failed");
+    expect(contribution?.actual_action).toContain("bash failed");
   }, 12_000);
 
-  it("bus KSTAR guard upgrades skipped long deliverables into Review Gate", async () => {
+  it("bus KSTAR guard upgrades skipped long deliverables into Commander evidence", async () => {
     const cid = newCid();
     const state =
       await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const paths = await import("../../../../src/main/paths");
     const storage = await import("../../../../src/main/storage");
-    const kstarRuntime =
-      await import("../../../../src/main/features/p3394/kstar-runtime");
-
     const LONG_REPORT = `报告正文 ${"需要验收的长文内容。".repeat(260)}`;
     _setScript(state.buildGconvSessionId(cid), [
       {
@@ -1080,18 +1108,28 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       (m: any) =>
         m.from === AGENT_ID && String(m.text || "").includes("报告正文"),
     );
-    expect(agentMessage?.kstar_review).toMatchObject({
-      status: "needs_review",
-      agent_id: AGENT_ID,
-    });
+    expect(agentMessage?.kstar_review).toBeUndefined();
 
-    const [run] = await kstarRuntime.listKStarRuns(TEST_UID, cid);
-    expect(run.kstar_decision).toMatchObject({
+    const closeEvidence = await waitForPendingKStarEvidence(
+      TEST_UID,
+      (record) => record.conversation_id === cid && record.type === "collaboration_close",
+      2000,
+    );
+    expect(closeEvidence).toMatchObject({
+      commander_id: "commander",
+      outcome_status: "completed",
+    });
+    const contribution = await waitForPendingKStarEvidence(
+      TEST_UID,
+      (record) => record.conversation_id === cid && record.type === "conversation_message",
+      2000,
+    );
+    expect(contribution.kstar_decision).toMatchObject({
       required: true,
       source: "bus_guard",
       guard: { upgraded: true },
     });
-    expect(run.kstar_decision?.guard?.matched_rules).toEqual(
+    expect(contribution.kstar_decision.guard?.matched_rules).toEqual(
       expect.arrayContaining(["deliverable_keywords"]),
     );
   }, 12_000);
@@ -1103,9 +1141,6 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const paths = await import("../../../../src/main/paths");
     const storage = await import("../../../../src/main/storage");
-    const kstarRuntime =
-      await import("../../../../src/main/features/p3394/kstar-runtime");
-
     const AGENT_REPLY = "LIGHTWEIGHT-EXPLAIN: 这是一个简单解释。";
     _setScript(state.buildGconvSessionId(cid), [
       {
@@ -1142,7 +1177,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     );
     expect(agentMessage).toBeTruthy();
     expect(agentMessage?.kstar_review).toBeUndefined();
-    expect(await kstarRuntime.listKStarRuns(TEST_UID, cid)).toEqual([]);
+    expect(await readPendingKStarEvidence(TEST_UID)).toEqual([]);
   }, 12_000);
 
   it("dispatch_to can fan out to multiple named agents in one commander turn and keep both visible replies", async () => {
@@ -3082,6 +3117,87 @@ describe("group_chat bus integration › Task 5 anonymous resume", () => {
       true,
     );
   });
+});
+
+describe("group_chat bus integration › wake-gated dispatch continuation", () => {
+  it("resumes Commander after an approved dispatch_to Agent completes without an explicit resume", async () => {
+    process.env.ORKAS_P3394_WAKE_GATE = "1";
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const paths = await import("../../../../src/main/paths");
+    const wakeController = await import("../../../../src/main/features/p3394/wake-controller");
+    const wakeService = await import("../../../../src/main/features/p3394/wake-service");
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: {
+          to: AGENT_NAME,
+          message: "Audit the paper",
+          kstar: "required",
+          kstar_reason: "The audit contributes evidence to the collaboration.",
+          kstar_expectation: {
+            task: "Audit the paper",
+            action_hat: "Produce an audit result",
+            result_hat: "Reviewable audit evidence",
+          },
+        },
+      },
+      { type: "final", text: "Waiting for Agent approval." },
+    ]);
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "Audit this paper, then have Codex review the result.",
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const [request] = await wakeService.listWakeRequests(TEST_UID, cid);
+    expect(request).toMatchObject({
+      source: "dispatch_to",
+      status: "pending",
+      workflow_step_id: expect.stringMatching(/^wstep-/),
+    });
+    expect(await readPendingKStarEvidence(TEST_UID)).toHaveLength(0);
+
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "HERMES-AUDIT-RESULT" },
+    ]);
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "final", text: "CODEX-REVIEW-RESULT" },
+    ]);
+
+    const approved = await wakeController.decideWakeRequest(TEST_UID, {
+      requestId: request!.id,
+      decision: "approve",
+    });
+    expect(approved).toMatchObject({ ok: true, dispatched: true });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const commanderResume = _recordedCalls.find(
+      (call) => call.sid === state.buildGconvSessionId(cid) && call.message.includes("<orchestration-resume>"),
+    );
+    expect(commanderResume?.message).toContain("HERMES-AUDIT-RESULT");
+
+    const lines = fs
+      .readFileSync(path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`), "utf-8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    expect(lines.some((message: any) => String(message.text || "").includes("CODEX-REVIEW-RESULT"))).toBe(true);
+    const closeEvidence = await waitForPendingKStarEvidence(
+      TEST_UID,
+      (record) => record.conversation_id === cid && record.type === "collaboration_close",
+      2000,
+    );
+    expect(closeEvidence).toMatchObject({
+      commander_id: "commander",
+      outcome_status: "completed",
+    });
+  }, 15_000);
 });
 
 describe("group_chat bus integration › Task 5 Wake rejection", () => {

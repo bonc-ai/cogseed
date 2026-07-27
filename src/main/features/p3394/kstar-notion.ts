@@ -3,13 +3,12 @@ import * as path from 'node:path';
 
 import { userContextsDir } from '../../paths';
 import * as connectors from '../connectors/manager';
+import type { CompatExperienceCandidate, KStarCompatRun } from './kstar-compat';
 import {
   getExperienceCandidate,
-  getKStarRun,
+  getKstarCompatProjection,
   markExperienceCandidateNotionSync,
-  type ExperienceCandidate,
-  type KStarRun,
-} from './kstar-runtime';
+} from './kstar-legacy-data';
 
 interface NotionSyncConfig {
   connectorId: string;
@@ -32,7 +31,7 @@ function readConfig(): NotionSyncConfig | null {
   };
 }
 
-function titleFor(candidate: ExperienceCandidate, run: KStarRun): string {
+function titleFor(candidate: CompatExperienceCandidate, run: KStarCompatRun): string {
   const task = run.kstar_episode?.task || run.kstar_decision?.expectation?.task || candidate.summary || candidate.id;
   const clipped = task.length > 80 ? `${task.slice(0, 80)}…` : task;
   return `KSTAR Experience: ${clipped}`;
@@ -111,7 +110,7 @@ function findStringDeep(obj: unknown, keys: string[]): string {
   return '';
 }
 
-function buildCreatePageArgs(config: NotionSyncConfig, candidate: ExperienceCandidate, run: KStarRun, markdown: string): Record<string, unknown> {
+function buildCreatePageArgs(config: NotionSyncConfig, candidate: CompatExperienceCandidate, run: KStarCompatRun, markdown: string): Record<string, unknown> {
   const title = titleFor(candidate, run);
   const parent = config.parentType === 'database'
     ? { database_id: config.parentId }
@@ -119,8 +118,10 @@ function buildCreatePageArgs(config: NotionSyncConfig, candidate: ExperienceCand
   const properties = config.parentType === 'database'
     ? {
         [config.titleProperty]: { title: richText(title) },
+        'Experience ID': { rich_text: richText(candidate.id) },
         'KB Path': { rich_text: richText(candidate.kb_path || '') },
         'Agent': { rich_text: richText(run.agent_id) },
+        'Episode': { rich_text: richText(run.kstar_episode?.episode_id || '') },
       }
     : { title: { title: richText(title) } };
   return {
@@ -130,10 +131,17 @@ function buildCreatePageArgs(config: NotionSyncConfig, candidate: ExperienceCand
   };
 }
 
+/**
+ * Sync experience candidate to Notion.
+ *
+ * Idempotency: Uses experience_id (candidate.id) as primary key.
+ * If candidate.notion_sync.status === 'synced', returns existing page without re-creating.
+ * Notion database should have 'Experience ID' property to track duplicates.
+ */
 export async function syncExperienceCandidateToNotion(
   uid: string,
   candidateId: string,
-): Promise<{ ok: true; candidate: ExperienceCandidate; page_id?: string; url?: string } | { ok: false; error: string; candidate?: ExperienceCandidate }> {
+): Promise<{ ok: true; candidate: CompatExperienceCandidate; page_id?: string; url?: string } | { ok: false; error: string; candidate?: CompatExperienceCandidate }> {
   const candidate = await getExperienceCandidate(uid, candidateId);
   if (!candidate) return { ok: false, error: 'experience candidate not found' };
   if (candidate.status !== 'approved') return { ok: false, error: `experience candidate must be approved before Notion sync (current: ${candidate.status})`, candidate };
@@ -151,7 +159,7 @@ export async function syncExperienceCandidateToNotion(
     });
     return { ok: false, error: updated.notion_sync?.error || 'Notion sync target is not configured.', candidate: updated };
   }
-  const run = await getKStarRun(uid, candidate.source_run_id);
+  const run = await getKstarCompatProjection(uid, candidate.source_run_id);
   if (!run) return { ok: false, error: 'source KSTAR run not found', candidate };
   const kbAbs = path.join(userContextsDir(uid), candidate.kb_path);
   let markdown = '';

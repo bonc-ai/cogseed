@@ -29,6 +29,10 @@ export type DecideWakeRequestResult =
   | { ok: true; request: AgentWakeRequest; dispatched: boolean }
   | { ok: false; error: string };
 
+function defaultDispatchContinuation(agentName: string): string {
+  return `After ${agentName || "the agent"} completes, continue the original Commander task, use the agent's result, and execute any remaining requested stages.`;
+}
+
 /**
  * Applies the human decision and, on approval, resumes the saved intent through
  * Orkas's existing group-chat enqueue choke point. This module never creates a
@@ -79,6 +83,9 @@ export async function decideWakeRequest(
         ...(request.workflow_step_id
           ? { workflow_step_id: request.workflow_step_id }
           : {}),
+        ...(request.kstar_decision?.required
+          ? { kstarDecision: request.kstar_decision }
+          : {}),
       });
       if (
         !Array.isArray(admitted.to) ||
@@ -93,6 +100,26 @@ export async function decideWakeRequest(
         `Wake enqueue failed: ${(err as Error).message}`,
       );
       throw err;
+    }
+
+    // A wake-gated dispatch_to/run_worker ended the original Commander turn
+    // before the nested Agent could run. Preserve a continuation ledger so the
+    // Agent's terminal result wakes Commander again; otherwise the Agent can
+    // finish successfully but any downstream stage (for example Codex review)
+    // is silently lost.
+    if (request.source === "dispatch_to" || request.source === "run_worker") {
+      await setOrchestrationLedger(userId, request.conversation_id, {
+        status: "waiting_for_agent",
+        blocked_on: "agent_handoff",
+        source_tool: request.source,
+        owner_agent_id: request.agent_id,
+        ...(request.agent_name ? { owner_agent_name: request.agent_name } : {}),
+        user_goal: request.objective,
+        handoff_message: request.dispatch_payload.text,
+        resume_instruction:
+          request.resume_instruction?.trim() ||
+          defaultDispatchContinuation(request.agent_name || request.agent_id),
+      });
     }
 
     // Restore interactive hand-off state only after queue admission succeeds.

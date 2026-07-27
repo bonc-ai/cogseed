@@ -14,6 +14,7 @@ const ConversationInfo = (() => {
   let _open = false;
   let _activeTab = 'files';
   let _seq = 0;
+  let _activitySeq = 0;
   let _fileSeq = 0;
   let _attachmentSeq = 0;
   const _locallyDeletedPaths = new Set();
@@ -41,6 +42,8 @@ const ConversationInfo = (() => {
     patchCandidates: [],
     protocolEvents: [],
     protocolError: '',
+    migrationStatus: null,
+    archives: [],
   };
   const _protocolFilters = { agent: '', role: '', result: '' };
   const _CI_TEXT_EXTS = new Set([
@@ -239,9 +242,22 @@ const ConversationInfo = (() => {
     return data;
   }
 
+  async function _invokeOrDefault(channel, payload, fallback) {
+    const invoke = window && window.orkas && typeof window.orkas.invoke === 'function'
+      ? window.orkas.invoke.bind(window.orkas)
+      : null;
+    if (!invoke) return fallback;
+    try {
+      const result = await invoke(channel, payload);
+      return result || fallback;
+    } catch (_) {
+      return fallback;
+    }
+  }
+
   async function _load(cid) {
     const enc = encodeURIComponent(cid);
-    const [historyData, filesData, attachmentData, syncEnabled, activity, wakeData, kstarData, patchData, protocolData] = await Promise.all([
+    const [historyData, filesData, attachmentData, syncEnabled, activity, wakeData, kstarData, patchData, protocolData, migrationData, archivesData] = await Promise.all([
       _fetchJson(typeof _historyRequestUrl === 'function'
         ? _historyRequestUrl(cid)
         : `/api/conversations/${enc}/history?limit=10`),
@@ -259,6 +275,8 @@ const ConversationInfo = (() => {
       _fetchJson(`/api/conversations/${enc}/kstar`).catch(() => ({ runs: [] })),
       _fetchJson(`/api/conversations/${enc}/patch-candidates`).catch(() => ({ patch_candidates: [] })),
       _fetchJson(`/api/conversations/${enc}/protocol-events`).catch((err) => ({ events: [], error: (err && err.message) || String(err) })),
+      _invokeOrDefault('p3394.checkMigrationStatus', {}, { migrated: false }),
+      _invokeOrDefault('p3394.listArchives', {}, { archives: [] }),
     ]);
     return {
       conversation: historyData.conversation || null,
@@ -277,8 +295,10 @@ const ConversationInfo = (() => {
       wakeRequests: Array.isArray(wakeData.requests) ? wakeData.requests : [],
       kstarRuns: Array.isArray(kstarData.runs) ? kstarData.runs : [],
       patchCandidates: Array.isArray(patchData.patch_candidates) ? patchData.patch_candidates : [],
-      protocolEvents: Array.isArray(protocolData.events) ? protocolData.events : [],
+      protocolEvents: Array.isArray(protocolData.events) ? protocolData.events : (Array.isArray(protocolData.protocol_events) ? protocolData.protocol_events : []),
       protocolError: protocolData.error ? String(protocolData.error) : '',
+      migrationStatus: migrationData || null,
+      archives: Array.isArray(archivesData.archives) ? archivesData.archives : [],
     };
   }
 
@@ -295,6 +315,27 @@ const ConversationInfo = (() => {
       actors: membersRes && Array.isArray(membersRes.actors) ? membersRes.actors : [],
       runtime: runtimeRes || {},
     };
+  }
+
+  async function refreshAgentActivity(cid, opts = {}) {
+    const target = cid || _cid;
+    if (!target || target !== _cid || !_open) return;
+    const seq = ++_activitySeq;
+    try {
+      const activity = await _loadAgentActivitySnapshot(target);
+      if (seq !== _activitySeq || target !== _cid) return;
+      _snapshot = {
+        ..._snapshot,
+        actors: Array.isArray(activity.actors) ? activity.actors : [],
+        runtime: activity.runtime || {},
+        collaboration: activity.runtime && activity.runtime.collaboration
+          ? activity.runtime.collaboration
+          : _snapshot.collaboration,
+      };
+      if (_activeTab === "collaboration" || opts.render === true) _renderBody();
+    } catch (err) {
+      _infoLog.warn("agent activity refresh failed", { cid: target, error: err && err.message });
+    }
   }
 
   async function _loadFileSnapshot(cid) {
@@ -827,6 +868,54 @@ const ConversationInfo = (() => {
     return `<section class="conversation-info-collaboration-section"><div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.collaboration.section_attention', 'Attention Needed'))}</div><div class="conversation-info-collaboration-attention-list">${body}</div></section>`;
   }
 
+  function _renderKStarHistorySection() {
+    const migrationStatus = _snapshot.migrationStatus || null;
+    const archives = Array.isArray(_snapshot.archives) ? _snapshot.archives : [];
+
+    if (!migrationStatus && archives.length === 0) return '';
+
+    let statusHtml = '';
+    if (migrationStatus && migrationStatus.migrated) {
+      const stamp = migrationStatus.stamp || {};
+      const migratedAt = stamp.migrated_at ? new Date(stamp.migrated_at).toLocaleString() : '';
+      statusHtml = `<div class="conversation-info-kstar-migration-status is-migrated">
+        <div class="conversation-info-kstar-migration-label">${escapeHtml(_label('conversation_info.kstar.migration_completed', 'KSTAR Engine migration completed'))}</div>
+        ${migratedAt ? `<div class="conversation-info-kstar-migration-time">${escapeHtml(migratedAt)}</div>` : ''}
+      </div>`;
+    } else if (migrationStatus && migrationStatus.degraded) {
+      statusHtml = `<div class="conversation-info-kstar-migration-status is-degraded">
+        <div class="conversation-info-kstar-migration-label">${escapeHtml(_label('conversation_info.kstar.migration_degraded', 'KSTAR Engine running in degraded mode'))}</div>
+        <div class="conversation-info-kstar-migration-note">${escapeHtml(_label('conversation_info.kstar.migration_degraded_note', 'Newer schema detected'))}</div>
+      </div>`;
+    }
+
+    let archivesHtml = '';
+    if (archives.length > 0) {
+      const archiveRows = archives.slice(0, 5).map((timestamp) => {
+        const displayTime = timestamp.replace(/T/, ' ').replace(/-/g, ':');
+        return `<div class="conversation-info-kstar-archive-item" data-archive-timestamp="${escapeHtml(timestamp)}">
+          <div class="conversation-info-kstar-archive-time">${escapeHtml(displayTime)}</div>
+        </div>`;
+      }).join('');
+      const truncatedNote = archives.length > 5
+        ? `<div class="conversation-info-kstar-archive-truncated">${escapeHtml(_label('conversation_info.kstar.archives_truncated', 'Showing {shown} of {total}', { shown: 5, total: archives.length }))}</div>`
+        : '';
+      archivesHtml = `<div class="conversation-info-kstar-archives">
+        <div class="conversation-info-kstar-archives-label">${escapeHtml(_label('conversation_info.kstar.archives', 'Archived snapshots'))}</div>
+        <div class="conversation-info-kstar-archives-list">${archiveRows}</div>
+        ${truncatedNote}
+      </div>`;
+    }
+
+    if (!statusHtml && !archivesHtml) return '';
+
+    return `<section class="conversation-info-collaboration-section">
+      <div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.kstar.section_history', 'KSTAR History'))}</div>
+      ${statusHtml}
+      ${archivesHtml}
+    </section>`;
+  }
+
   function _renderCollaborationOverview() {
     if (!_snapshot.collaboration && !_deriveAgentActivityRows(_snapshot).length && !_collectCollaborationAttentionItems().length) {
       return `<div class="conversation-info-empty">${escapeHtml(_label('conversation_info.collaboration.empty', 'No active collaboration yet.'))}</div>`;
@@ -834,7 +923,7 @@ const ConversationInfo = (() => {
     const collaboration = _snapshot.collaboration || null;
     const runtime = _snapshot.runtime || {};
     const attentionItems = _collectCollaborationAttentionItems();
-    return `<div class="conversation-info-collaboration"><div class="conversation-info-collaboration-header"><div class="conversation-info-collaboration-heading">${escapeHtml(_label('conversation_info.collaboration.title', 'Collaboration'))}</div><div class="conversation-info-collaboration-subtitle">${escapeHtml(_label('conversation_info.collaboration.subtitle', 'How this conversation is progressing'))}</div></div>${_safeSection(() => _renderCollaborationTaskOverview(collaboration, runtime), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAgentActivitySection(), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAttentionSection(attentionItems), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}</div>`;
+    return `<div class="conversation-info-collaboration"><div class="conversation-info-collaboration-header"><div class="conversation-info-collaboration-heading">${escapeHtml(_label('conversation_info.collaboration.title', 'Collaboration'))}</div><div class="conversation-info-collaboration-subtitle">${escapeHtml(_label('conversation_info.collaboration.subtitle', 'How this conversation is progressing'))}</div></div>${_safeSection(() => _renderCollaborationTaskOverview(collaboration, runtime), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAgentActivitySection(), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAttentionSection(attentionItems), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderKStarHistorySection(), '')}</div>`;
   }
 
   function _protocolEventData(event) {
@@ -1140,13 +1229,14 @@ const ConversationInfo = (() => {
   function bind(cid) {
     _cid = cid || null;
     _open = false;
-    _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [], runtime: null, actors: [], collaboration: null, wakeRequests: [], kstarRuns: [], patchCandidates: [], protocolEvents: [], protocolError: '' };
+    _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [], runtime: null, actors: [], collaboration: null, wakeRequests: [], kstarRuns: [], patchCandidates: [], protocolEvents: [], protocolError: '', migrationStatus: null, archives: [] };
     _protocolFilters.agent = '';
     _protocolFilters.role = '';
     _protocolFilters.result = '';
     _error = '';
     _resetLoading();
     _seq++;
+    _activitySeq++;
     _fileSeq++;
     _attachmentSeq++;
     _syncChrome();
@@ -1637,6 +1727,7 @@ const ConversationInfo = (() => {
     bind,
     unbind,
     refresh,
+    refreshAgentActivity,
     refreshFiles,
     refreshAttachments,
     open,

@@ -56,12 +56,17 @@ afterEach(() => {
 
 describe('P3394 KSTAR Notion sync', () => {
   async function createPromotedCandidate(): Promise<string> {
-    const runtime = await import('../../../../src/main/features/p3394/kstar-runtime');
     const kb = await import('../../../../src/main/features/p3394/kstar-kb');
-    const run = await runtime.finalizeAgentTurn(uid, {
-      conversationId: 'gconv-notion', agentId: 'writer-agent', turnId: 'turn-notion',
-      messageId: 'msg-notion', actualResult: '交付结果',
-      kstarDecision: {
+    const run = {
+      id: 'run-notion',
+      conversation_id: 'gconv-notion',
+      agent_id: 'writer-agent',
+      turn_id: 'turn-notion',
+      status: 'completed',
+      actual_result: '交付结果',
+      evidence_items: [],
+      verification: { status: 'passed', notes: '', reviewed_at: '2026-07-24T00:00:00.000Z' },
+      kstar_decision: {
         required: true,
         reason: 'durable deliverable',
         expectation: {
@@ -71,13 +76,44 @@ describe('P3394 KSTAR Notion sync', () => {
           result_hat: '初稿',
         },
       },
-      actualAction: 'writer-agent wrote a draft',
-    });
-    const reviewed = await runtime.reviewKStarRun(uid, run.id, { decision: 'pass' });
-    const approved = await runtime.decideExperienceCandidate(uid, reviewed.experience_candidate!.id, 'approve');
-    const promoted = await kb.promoteExperienceCandidateToKnowledgeBase(uid, approved.id);
+      kstar_episode: {
+        episode_id: 'ep-notion',
+        bundle_id: 'bundle-notion',
+        k_snapshot_ref: 'conversation:gconv-notion',
+        situation: '已有研究报告',
+        task: '写论文初稿',
+        action_hat: '写初稿',
+        result_hat: '初稿',
+        actual_action: 'writer-agent wrote a draft',
+        actual_result: '交付结果',
+        delta_r: 0,
+        delta_a: 0,
+        delta_a_confidence_gate: 'pass',
+        timestamp: '2026-07-24T00:00:00.000Z',
+        session_id: 'gconv-notion',
+      },
+      kstar_engine: { status: 'completed', tool_calls: [], updated_at: '2026-07-24T00:00:00.000Z' },
+      experience_candidate_id: 'exp-notion',
+      created_at: '2026-07-24T00:00:00.000Z',
+      updated_at: '2026-07-24T00:00:00.000Z',
+    };
+    const candidate = {
+      id: 'exp-notion',
+      source_run_id: run.id,
+      conversation_id: run.conversation_id,
+      agent_id: run.agent_id,
+      summary: run.actual_result,
+      status: 'approved',
+      promotion_status: 'none',
+      created_at: '2026-07-24T00:00:00.000Z',
+      updated_at: '2026-07-24T00:00:00.000Z',
+    };
+    const statePath = path.join(root, uid, 'local', 'p3394', 'kstar-state.json');
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs.writeFileSync(statePath, JSON.stringify({ version: 1, runs: [run], experience_candidates: [candidate], patch_candidates: [], updated_at: '2026-07-24T00:00:00.000Z' }, null, 2));
+    const promoted = await kb.promoteExperienceCandidateToKnowledgeBase(uid, candidate.id);
     if (!promoted.ok) throw new Error(promoted.error);
-    return approved.id;
+    return candidate.id;
   }
 
   it('records a failed sync when Notion target is not configured', async () => {
@@ -87,8 +123,8 @@ describe('P3394 KSTAR Notion sync', () => {
 
     expect(result.ok).toBe(false);
     expect(callToolMock).not.toHaveBeenCalled();
-    const runtime = await import('../../../../src/main/features/p3394/kstar-runtime');
-    const candidate = await runtime.getExperienceCandidate(uid, candidateId);
+    const legacy = await import('../../../../src/main/features/p3394/kstar-legacy-data');
+    const candidate = await legacy.getExperienceCandidate(uid, candidateId);
     expect(candidate?.notion_sync).toMatchObject({ status: 'failed' });
   });
 
@@ -107,14 +143,34 @@ describe('P3394 KSTAR Notion sync', () => {
     expect(callToolMock.mock.calls[0][3]).toMatchObject({
       parent: { page_id: 'parent-page-1' },
     });
-    expect(JSON.stringify(callToolMock.mock.calls[0][3])).toContain('写论文初稿');
+    const callArgs = callToolMock.mock.calls[0][3];
+    expect(JSON.stringify(callArgs)).toContain('写论文初稿');
+    expect(JSON.stringify(callArgs)).toContain(candidateId); // Experience ID in properties
 
-    const runtime = await import('../../../../src/main/features/p3394/kstar-runtime');
-    const candidate = await runtime.getExperienceCandidate(uid, candidateId);
+    const legacy = await import('../../../../src/main/features/p3394/kstar-legacy-data');
+    const candidate = await legacy.getExperienceCandidate(uid, candidateId);
     expect(candidate?.notion_sync).toMatchObject({
       status: 'synced',
       page_id: 'notion-page-1',
       url: 'https://notion.test/page',
     });
+  });
+
+  it('returns existing page without re-creating when already synced (idempotent by experience_id)', async () => {
+    process.env.ORKAS_KSTAR_NOTION_PARENT_ID = 'parent-page-1';
+    const candidateId = await createPromotedCandidate();
+    const notion = await import('../../../../src/main/features/p3394/kstar-notion');
+
+    // First sync
+    const first = await notion.syncExperienceCandidateToNotion(uid, candidateId);
+    expect(first.ok).toBe(true);
+    expect(callToolMock).toHaveBeenCalledTimes(1);
+
+    // Second sync should skip without calling API
+    callToolMock.mockClear();
+    const second = await notion.syncExperienceCandidateToNotion(uid, candidateId);
+    expect(second.ok).toBe(true);
+    expect(second.page_id).toBe(first.page_id);
+    expect(callToolMock).not.toHaveBeenCalled();
   });
 });

@@ -684,6 +684,20 @@ export function runtimeResourcesDir(): string {
   return path.join(PC_ROOT, 'resources', 'runtime');
 }
 
+/** Repository-owned Meta Skill Engine package shipped with the desktop app.
+ *
+ *   dev:    PC/packages/nseap-meta-skill-engine/
+ *   packed: <app>/Contents/Resources/packages/nseap-meta-skill-engine/      (darwin)
+ *           <app>/resources/packages/nseap-meta-skill-engine/               (win/linux)
+ */
+export function metaSkillEnginePackageDir(): string {
+  const rp = (process as unknown as { resourcesPath?: string }).resourcesPath;
+  if (rp && !rp.includes(`${path.sep}node_modules${path.sep}electron${path.sep}`)) {
+    return path.join(rp, 'packages', 'nseap-meta-skill-engine');
+  }
+  return path.join(PC_ROOT, 'packages', 'nseap-meta-skill-engine');
+}
+
 /** `${process.platform}-${process.arch}` → vendored OfficeCLI asset name.
  *  Mirrors `scripts/fetch-officecli.cjs`. Desktop targets only (mac + win). */
 const OFFICECLI_ASSETS: Readonly<Record<string, string>> = {

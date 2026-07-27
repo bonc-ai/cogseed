@@ -26,3 +26,14 @@ plan.md
 /.superpowers/
 __pycache__/
 *.py[cod]
+
+# engine build artifacts
+packages/*/node_modules
+packages/*/dist
+
+# electron-builder output and runtime render outputs
+/dist
+/output
+
+# stray sidecar edits
+package.json.new

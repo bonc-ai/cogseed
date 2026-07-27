@@ -1480,10 +1480,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     });
   },
 
-  'p3394.listKStarRuns': async ({ cid }, ctx) => {
+  'p3394.listKstarCompatProjections': async ({ cid }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
     const [runs, experienceCandidates] = await Promise.all([
-      p3394.listKStarRuns(ctx.userId, cid),
+      p3394.listKstarCompatProjections(ctx.userId, cid),
       p3394.listExperienceCandidates(ctx.userId, cid),
     ]);
     return { ok: true, runs, experience_candidates: experienceCandidates };
@@ -1494,12 +1494,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, protocol_events: await p3394.listP3394ProtocolEvents(ctx.userId, cid) };
   },
 
-  'p3394.reviewKStarRun': async ({ cid, runId, decision, notes }, ctx) => {
+  'p3394.reviewKstarCompatProjection': async ({ cid, runId, decision, notes }, ctx) => {
     if (!safeId(cid) || !safeId(runId)) throw new Error('invalid KSTAR scope');
     if (decision !== 'pass' && decision !== 'fail') throw new Error('invalid review decision');
-    const run = (await p3394.listKStarRuns(ctx.userId, cid)).find((item) => item.id === runId);
+    const run = (await p3394.listKstarCompatProjections(ctx.userId, cid)).find((item) => item.id === runId);
     if (!run) throw new Error('KSTAR run not found');
-    return { ok: true, ...(await p3394.reviewKStarRun(ctx.userId, runId, {
+    return { ok: true, ...(await p3394.reviewKstarCompatProjection(ctx.userId, runId, {
       decision, ...(typeof notes === 'string' ? { notes } : {}),
     })) };
   },
@@ -1537,6 +1537,20 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!existing) throw new Error('patch candidate not found');
     const patch_candidate = await p3394.reviewPatchCandidate(ctx.userId, candidateId, decision, typeof notes === 'string' ? notes : '');
     return { ok: true, patch_candidate };
+  },
+
+  'p3394.listArchives': async (_args, ctx) => {
+    return { ok: true, archives: await p3394.listArchives(ctx.userId) };
+  },
+
+  'p3394.readArchive': async ({ timestamp }, ctx) => {
+    if (typeof timestamp !== 'string' || !timestamp.trim()) throw new Error('invalid archive timestamp');
+    const archive = await p3394.readArchive(ctx.userId, timestamp.trim());
+    return archive ? { ok: true, archive } : { ok: false, error: 'archive not found' };
+  },
+
+  'p3394.checkMigrationStatus': async (_args, ctx) => {
+    return { ok: true, ...(await p3394.checkMigrationStatus(ctx.userId)) };
   },
 
   'groupChat.abort': async ({ cid }, ctx) => {

@@ -93,7 +93,7 @@ export interface GroupMessage {
   unknown_mentions?: string[];
   /** P3394 approval gates created instead of immediately waking an Agent. */
   wake_requests?: WakeRequestSummary[];
-  /** P3394 verification gate created from this Agent turn. */
+  /** Legacy/per-message P3394 review metadata. New collaboration validation is Commander-owned and stored in KSTAR runtime state. */
   kstar_review?: KStarReviewSummary;
   /** Plain `@token` list (raw text mentions). */
   mentions?: string[];

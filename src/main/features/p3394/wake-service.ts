@@ -64,13 +64,12 @@ function scopesOverlap(
   return right.some((item) => set.has(item));
 }
 
-function samePendingIntent(
+function sameIntent(
   request: AgentWakeRequest,
   input: EvaluateWakeInput,
 ): boolean {
   const incomingScope = behaviorScopeForSource(input.source);
   return (
-    request.status === "pending" &&
     request.conversation_id === input.conversationId &&
     request.agent_id === input.agentId &&
     normalizeIntentText(request.objective) ===
@@ -82,6 +81,17 @@ function samePendingIntent(
       incomingScope,
     )
   );
+}
+
+function samePendingIntent(
+  request: AgentWakeRequest,
+  input: EvaluateWakeInput,
+): boolean {
+  return request.status === "pending" && sameIntent(request, input);
+}
+
+function canHaveQueuedWakeDispatch(source: EvaluateWakeInput["source"]): boolean {
+  return source === "dispatch_to" || source === "run_worker" || source === "hand_off_to";
 }
 
 function mergePendingIntent(
@@ -229,9 +239,55 @@ export async function evaluateWake(
     throw new Error("wake dispatch text is required");
 
   await reconcileWakeTransitions(userId, input.conversationId);
-  const result = await mutateWakeState(userId, (state) => {
+  const result = await mutateWakeState(userId, async (state) => {
     const approval = matchingApproval(state, input);
-    if (approval) return { approved: true, approval } as const;
+    if (approval) {
+      // Approval decisions enqueue the bound workflow step asynchronously. The
+      // original Commander turn can still retry the same tool call before that
+      // queued Agent starts. Treat that retry as the same admitted dispatch,
+      // rather than letting the approval cache launch a second nested run.
+      const run =
+        canHaveQueuedWakeDispatch(input.source) && input.workflow_step_id
+          ? await readActiveWorkflowRun(userId, input.conversationId)
+          : null;
+      const duplicate = run
+        ? state.requests.find((request) => {
+            if (
+              (request.status !== "approved" && request.status !== "executed") ||
+              !request.workflow_step_id ||
+              !sameIntent(request, input)
+            ) {
+              return false;
+            }
+            const step = run.steps.find(
+              (candidate) => candidate.id === request.workflow_step_id,
+            );
+            return (
+              step?.status === "pending" ||
+              step?.status === "running" ||
+              step?.status === "blocked"
+            );
+          })
+        : undefined;
+      if (
+        duplicate?.workflow_step_id &&
+        input.workflow_step_id &&
+        input.workflow_step_id !== duplicate.workflow_step_id
+      ) {
+        await cancelPreparedNestedDispatchStep(
+          userId,
+          input.conversationId,
+          input.workflow_step_id,
+          "Superseded by the already admitted Wake dispatch.",
+        );
+        return {
+          approved: true,
+          approval,
+          duplicate_request: duplicate,
+        } as const;
+      }
+      return { approved: true, approval } as const;
+    }
 
     const existing = state.requests.find((request) =>
       samePendingIntent(request, input),
@@ -293,6 +349,14 @@ export async function evaluateWake(
         : {}),
       ...(input.workflow_resume_token
         ? { workflow_resume_token: input.workflow_resume_token }
+        : {}),
+      ...(input.kstar_decision?.required
+        ? {
+            kstar_decision: {
+              ...input.kstar_decision,
+              expectation: { ...(input.kstar_decision.expectation || {}) },
+            },
+          }
         : {}),
       created_at: now,
       updated_at: now,
