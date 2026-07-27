@@ -91,9 +91,7 @@ run.cmd
 
 ## 文档
 
-- [文稿总目录](./docs/README.md) — 设计依据、规格文档、实施计划索引
-- [品牌设计规范](./docs/superpowers/specs/2026-07-22-mate-agent-brand-design.md)
-- [指挥官后端设计](./docs/superpowers/specs/2026-07-22-mate-agent-commander-backend-design.md)
+- [文稿总目录（唯一总体文档）](./docs/README.md) — 定位、已交付能力总览、确定件索引
 - [项目约束](./CLAUDE.md) — 仓库级设计约束与工作规则
 
 ---
