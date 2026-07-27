@@ -98,11 +98,75 @@
 
 阻塞依赖：B 层分支 `codex/meta-skill-engine-single-core` @ `5e7480f` 未推送 / 未集成（对应 Evidence R-07）；`yaml@^2.6.1` 待批准；需真实 electron-builder 打包核验 `yaml` 在 asar 边界的可用性。
 
-验证命令见 §6。代码约束以 [`../CLAUDE.md`](../CLAUDE.md) 为准。
+验证命令见 §7。代码约束以 [`../CLAUDE.md`](../CLAUDE.md) 为准。
 
 ---
 
-## 5. 核心原则与约束（速记）
+## 5. 交付包（P3394 Meta Skill Engine · 本地锚点）
+
+> 本节是"周末增量"可交付件的清单与自证。范围：Engine 单核 + 本地锚点。正式签名打包与 PC↔Engine 端到端集成不在本包内（见 §5.4、§5.5）。
+
+### 5.1 可追溯 Commit / Tag（本地）
+
+- 集成分支：`integration/abc-meta-skill-engine`（基于 `origin/main`）。
+- 打包提交：本节所在的这次提交即打包提交；随后在其上打本地附注标签 `p3394-meta-skill-engine-20260727`。
+- 本地核验：
+
+```bash
+git tag -l p3394-meta-skill-engine-20260727
+git show --stat p3394-meta-skill-engine-20260727
+```
+
+> 说明：标签与提交仅落在本地集成分支，不推送、不合并。集成进 main 由本人操作。
+
+### 5.2 可运行包与启动说明
+
+Engine 工作区：`packages/nseap-meta-skill-engine/`（ESM · MCP stdio 服务器 · 产物 `dist/index.js`）。
+
+```bash
+cd packages/nseap-meta-skill-engine
+npm install
+npm run build        # tsc -p tsconfig.json → 生成 dist/index.js
+npm start            # node dist/index.js --stdio，MCP stdio 服务器
+```
+
+MCP 客户端接入（stdio）：命令 `node dist/index.js --stdio`，环境变量 `NSEAP_ONTOLOGY_DIR` 指向本体目录。嵌入 PC 时由 `kstar-adapter.ts` / `kstar-factory.ts` 经既有 `McpConnection` 拉起，无需手动启动。
+
+### 5.3 一次真实运行 Evidence
+
+在 `packages/nseap-meta-skill-engine/` 下，`rm -rf dist && npm run build` 起，实测结果：
+
+| 环节 | 命令 | 结果 |
+| --- | --- | --- |
+| 干净构建 | `npm run build` | exit 0，产出 `dist/index.js`（约 30 KB） |
+| 单元测试 | `npm test` | 11 个测试文件 · 49 用例全部通过 |
+| Engine 自检 | `npm run check` | 30 项通过 / 0 失败，判定 L5 Meta-Skill 合规 |
+| MCP 握手 | `node dist/index.js --stdio` | `initialize` → `notifications/initialized` → `tools/list` 正常；serverInfo=`nseap-meta-skill-engine`，暴露 26 个工具；stderr 打印 `NSEAP Meta-Skill Engine running on stdio` |
+
+### 5.4 Mock 边界
+
+- 单元测试（隔离层）：打桩 `McpConnection`、`apiFetch`、本地 CLI 二进制、DOM/i18n；不触网、不真正 spawn。
+- 真实集成（无 Mock）：加载真实 Engine 包并起真实 stdio 进程，走真实文件系统与 MCP 进程（如 `mcp-process-get-engine-info` 类用例）。
+- 本包只保证 **Engine 侧** 真实运行覆盖；**PC↔Engine 端到端** 与 **正式签名打包** 属 Sprint 2 范围，本包未覆盖。
+
+### 5.5 Known Issues
+
+| # | 问题 | 影响 / 归属 |
+| --- | --- | --- |
+| 1 | serverInfo 版本 `0.1.0` ≠ package.json `1.0.0` | 版本漂移，需对齐 |
+| 2 | README 声称 "23 个 MCP 工具"，运行时 `tools/list` 暴露 26 个 | 文档漂移，需对齐 |
+| 3 | PC adapter 调 `record_evidence`，Engine catalog 为 `add_evidence` | KSTAR 证据写入命名不一致（冯静雯） |
+| 4 | Engine DeltaR 为原型级：仅字符串相等/不等，无语义预测 | 原型实现（冯静雯） |
+| 5 | P3394 当前为"记录型"协议，dispatch 前无法预约束 Agent 边界 | 协议能力缺口（张照航） |
+| 6 | B 层分支未推送/未集成（Evidence R-07） | 端到端集成瓶颈 |
+| 7 | `yaml@^2.6.1` 依赖待批准；asar 打包边界待真实 electron-builder 验证 | 依赖/打包待确认 |
+| 8 | 无 Apple / Windows 签名证书，正式 `.dmg`/`.exe` 不可用 | 仅可提供 unsigned `--dir` 包 |
+| 9 | 源码多处标注 `Simplified`/`Heuristic` | 原型占位，Sprint 2 升级为 typed Delta 与语义评分 |
+
+
+---
+
+## 6. 核心原则与约束（速记）
 
 1. Orkas 是基座，不是对外品牌；Mate Agent 是对外品牌，Mate 智伴是中文名。
 2. P3394 负责治理闭环：Wake Gate、KSTAR、ExperienceCandidate。
@@ -114,7 +178,7 @@
 
 ---
 
-## 6. 验证命令
+## 7. 验证命令
 
 ```bash
 # 全量测试（脚本自管 sqlite ABI 切换）
@@ -133,7 +197,7 @@ npm run typecheck
 
 ---
 
-## 7. 收敛说明
+## 8. 收敛说明
 
 - 累计从 `docs/superpowers/` 删除 27 份文稿：首轮 24 份过程稿（10 份 plans、11 份 specs、3 份阶段 reports），本轮再删 3 份确定件（引擎迁移设计、KSTAR 一致性审计、Sprint 2 技术交接）——其要点已内化进本页 §4.1–§4.3。
   过程稿是 superpowers-zh 工作流"设计先于编码"按功能逐版产出的规格 / 计划 / 报告，功能落地后即为过程副产物。
@@ -142,7 +206,7 @@ npm run typecheck
 
 ---
 
-## 8. 备注
+## 9. 备注
 
 `docs/` 顶层还有若干独立工作文档（`P3394_Team2_RouteB_*`、`Mate Agent 开发实施说明.*`、
 `companion-repro-demo-runbook.md`、`research/`），不属于本次 `docs/superpowers/` 收敛范围，保持原样。
