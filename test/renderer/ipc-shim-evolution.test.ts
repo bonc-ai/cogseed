@@ -43,6 +43,20 @@ describe('evolution ipc-shim routes', () => {
     expect(invoke).toHaveBeenCalledWith('evolution.evals.get', expect.objectContaining({ skillId: 'sk1' }));
   });
 
+  it('GET /api/evolution/ontology/:skillId/bindings → evolution.ontology.bindings', async () => {
+    const invoke = vi.fn(async () => ({ ok: true, refs: [] }));
+    const { apiFetch } = loadShim(invoke);
+    await apiFetch('/api/evolution/ontology/sk1/bindings');
+    expect(invoke).toHaveBeenCalledWith('evolution.ontology.bindings', expect.objectContaining({ skillId: 'sk1' }));
+  });
+
+  it('POST /api/evolution/ontology/:skillId/bind → evolution.ontology.bind', async () => {
+    const invoke = vi.fn(async () => ({ ok: true, refs: ['onto-b'] }));
+    const { apiFetch } = loadShim(invoke);
+    await apiFetch('/api/evolution/ontology/sk1/bind', { method: 'POST', body: JSON.stringify({ ontologyId: 'onto-b' }) });
+    expect(invoke).toHaveBeenCalledWith('evolution.ontology.bind', expect.objectContaining({ skillId: 'sk1', ontologyId: 'onto-b' }));
+  });
+
   it('POST /api/evolution/evals/run 走流式（stream 被调用）', async () => {
     const stream = vi.fn(() => ({ promise: Promise.resolve(), cancel: () => {} }));
     const { apiFetch } = loadShim(vi.fn(async () => ({ ok: true })), stream);

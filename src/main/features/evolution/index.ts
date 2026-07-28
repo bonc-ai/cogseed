@@ -5,4 +5,5 @@ export type { EvalRecord, EvalRecordCase, EvalRecordRun, EvalStreamEvent } from 
 export { buildDashboard } from './dashboard';
 export type { DashboardData } from './dashboard';
 export { extractAndSaveOntology, listSkillOntologies } from './ontology-service';
+export { bindOntology, unbindOntology, listOntologyBindings } from './ontology-bindings';
 export { applyPatchToSkill, bumpSemver } from './patch-service';

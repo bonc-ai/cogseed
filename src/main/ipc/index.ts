@@ -1997,6 +1997,20 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (typeof newContent !== 'string' || !newContent.trim()) throw new Error('missing newContent');
     return evolution.applyPatchToSkill(ctx.userId, { skillId, newContent });
   },
+  'evolution.ontology.bindings': async ({ skillId }, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skillId');
+    return { refs: await evolution.listOntologyBindings(ctx.userId, skillId) };
+  },
+  'evolution.ontology.bind': async ({ skillId, ontologyId }, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skillId');
+    if (!ontologyId || typeof ontologyId !== 'string') throw new Error('missing ontologyId');
+    return { refs: await evolution.bindOntology(ctx.userId, skillId, ontologyId) };
+  },
+  'evolution.ontology.unbind': async ({ skillId, ontologyId }, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skillId');
+    if (!ontologyId || typeof ontologyId !== 'string') throw new Error('missing ontologyId');
+    return { refs: await evolution.unbindOntology(ctx.userId, skillId, ontologyId) };
+  },
 
   'skills.list': async ({ force } = {}) => {
     if (force === true || force === '1') skills.clearSkillListCache();

@@ -46,6 +46,17 @@
     ).join('') + '</ul>';
   }
 
+  // 本体页:展示已绑定 id + 一个绑定输入。refs 为已绑定本体 id 列表。
+  function renderOntologyBindings(refs) {
+    const list = (refs && refs.length)
+      ? '<ul class="evo-onto-list">' + refs.map(id =>
+          `<li class="evo-onto-item" data-onto-id="${escapeHtml(id)}"><span>${escapeHtml(id)}</span><button class="btn btn-sm evo-onto-unbind" data-onto-id="${escapeHtml(id)}">解绑</button></li>`
+        ).join('') + '</ul>'
+      : '<div class="evo-empty">暂无绑定本体</div>';
+    const form = '<div class="evo-onto-bind-form"><input type="text" id="evo-onto-bind-input" placeholder="本体 id" /><button class="btn btn-sm" id="evo-onto-bind-btn">绑定</button></div>';
+    return list + form;
+  }
+
   function renderEvalRecord(rec) {
     if (!rec || !rec.cases || !rec.cases.length) return '<div class="evo-empty">暂无评估用例</div>';
     const cases = rec.cases.map(c =>
@@ -63,7 +74,7 @@
     ).join('') + '</ul>';
   }
 
-  const api = { escapeHtml, renderDashboard, renderSkillsList, renderKstarTimeline, renderOntologyList, renderEvalRecord, renderPatchList };
+  const api = { escapeHtml, renderDashboard, renderSkillsList, renderKstarTimeline, renderOntologyList, renderOntologyBindings, renderEvalRecord, renderPatchList };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;   // 测试桥
   else root.EvolutionPages = api;                                             // 浏览器全局
 })(typeof window !== 'undefined' ? window : globalThis);

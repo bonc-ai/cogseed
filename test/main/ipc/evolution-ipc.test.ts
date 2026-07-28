@@ -39,6 +39,9 @@ vi.mock('../../../src/main/features/evolution', () => ({
   upsertEvalCase: vi.fn(async (_uid: string, skillId: string) => ({ skillId, cases: [{ id: 1 }], runs: [] })),
   extractAndSaveOntology: vi.fn(async () => ({ slice: { tbox: [], rbox: [], abox: [] }, degraded: false })),
   listSkillOntologies: vi.fn(async () => ([])),
+  listOntologyBindings: vi.fn(async () => (['onto-a'])),
+  bindOntology: vi.fn(async (_uid: string, _skillId: string, ontologyId: string) => (['onto-a', ontologyId])),
+  unbindOntology: vi.fn(async () => ([])),
   applyPatchToSkill: vi.fn(async (_uid: string, input: any) => ({ ok: true, newVersion: '0.1.1', skillId: input.skillId })),
 }));
 
@@ -86,5 +89,19 @@ describe('ipc › evolution channels', () => {
   it('evolution.patches.apply 缺 newContent 时 ok:false', async () => {
     const r = await call('evolution.patches.apply', { skillId: 'sk1' });
     expect(r.ok).toBe(false);
+  });
+  it('evolution.ontology.bindings 返回 refs', async () => {
+    const r = await call('evolution.ontology.bindings', { skillId: 'sk1' });
+    expect(r.ok).toBe(true);
+    expect(r.refs).toEqual(['onto-a']);
+  });
+  it('evolution.ontology.bind 缺 ontologyId 时 ok:false', async () => {
+    const r = await call('evolution.ontology.bind', { skillId: 'sk1' });
+    expect(r.ok).toBe(false);
+  });
+  it('evolution.ontology.bind 转发并返回 refs', async () => {
+    const r = await call('evolution.ontology.bind', { skillId: 'sk1', ontologyId: 'onto-b' });
+    expect(r.ok).toBe(true);
+    expect(r.refs).toContain('onto-b');
   });
 });

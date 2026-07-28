@@ -4,6 +4,7 @@ const P = require('../../src/renderer/modules/evolution/pages.js') as {
   renderDashboard: (d: any) => string;
   renderKstarTimeline: (r: any) => string;
   renderPatchList: (p: any[]) => string;
+  renderOntologyBindings: (refs: string[]) => string;
   escapeHtml: (s: unknown) => string;
 };
 
@@ -42,5 +43,16 @@ describe('evolution pages 纯渲染', () => {
     const html = P.renderPatchList([{ id: 'x', status: 'proposed', risk_level: 0, description: '<img src=x onerror=alert(1)>' }]);
     expect(html).not.toContain('<img src=x');
     expect(html).toContain('&lt;img');
+  });
+  it('renderOntologyBindings 渲染已绑定 id + 解绑按钮 + 绑定表单', () => {
+    const html = P.renderOntologyBindings(['onto-a', 'onto-b']);
+    expect(html).toContain('onto-a');
+    expect(html).toContain('evo-onto-unbind');
+    expect(html).toContain('evo-onto-bind-btn');
+  });
+  it('renderOntologyBindings 空绑定显示空态但仍有绑定表单', () => {
+    const html = P.renderOntologyBindings([]);
+    expect(html).toContain('暂无绑定本体');
+    expect(html).toContain('evo-onto-bind-btn');
   });
 });

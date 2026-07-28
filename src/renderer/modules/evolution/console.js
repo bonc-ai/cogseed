@@ -44,8 +44,9 @@
         _bindEvolveControls(body);
       } else if (page === 'ontology') {
         if (!activeSkillId) { body.innerHTML = '<div class="evo-empty">先在「技能」页选择一个技能</div>'; return; }
-        const { ontologies } = await window.apiFetch(`/api/evolution/ontology/${encodeURIComponent(activeSkillId)}`).then(r => r.json());
-        body.innerHTML = P.renderOntologyList(ontologies || []);
+        const { refs } = await window.apiFetch(`/api/evolution/ontology/${encodeURIComponent(activeSkillId)}/bindings`).then(r => r.json());
+        body.innerHTML = P.renderOntologyBindings(refs || []);
+        _bindOntologyControls(body);
       } else if (page === 'evals') {
         if (!activeSkillId) { body.innerHTML = '<div class="evo-empty">先在「技能」页选择一个技能</div>'; return; }
         const rec = await window.apiFetch(`/api/evolution/evals/${encodeURIComponent(activeSkillId)}`).then(r => r.json());
@@ -91,6 +92,25 @@
   function _bindSkillSelect(body) {
     body.querySelectorAll('[data-skill-id]').forEach(item => {
       item.addEventListener('click', () => { activeSkillId = item.dataset.skillId; renderNav(); });
+    });
+  }
+
+  function _bindOntologyControls(body) {
+    const bindBtn = body.querySelector('#evo-onto-bind-btn');
+    if (bindBtn) bindBtn.addEventListener('click', async () => {
+      const input = body.querySelector('#evo-onto-bind-input');
+      const ontologyId = (input && input.value || '').trim();
+      if (!ontologyId || !activeSkillId) return;
+      await window.apiFetch(`/api/evolution/ontology/${encodeURIComponent(activeSkillId)}/bind`, { method: 'POST', body: JSON.stringify({ ontologyId }) });
+      loadPage('ontology');
+    });
+    body.querySelectorAll('.evo-onto-unbind').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const ontologyId = btn.dataset.ontoId;
+        if (!ontologyId || !activeSkillId) return;
+        await window.apiFetch(`/api/evolution/ontology/${encodeURIComponent(activeSkillId)}/unbind`, { method: 'POST', body: JSON.stringify({ ontologyId }) });
+        loadPage('ontology');
+      });
     });
   }
 
