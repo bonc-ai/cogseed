@@ -16701,6 +16701,12 @@ body.model-not-configured .main-content { flex-direction: column; }
 .evo-skill-item:hover, .evo-patch-item:hover { background: hsl(210 40% 98%); }
 .evo-skill-list > li:last-child, .evo-patch-list > li:last-child, .evo-onto-list > li:last-child, .evo-reco-list > li:last-child, .evo-version-list > li:last-child { border-bottom: none; }
 .evo-skill-name, .evo-version-tag { font-weight: 500; }
+/* 技能选择器(进化控制台不重复管技能,只选一个来演化) */
+.evo-select-hint { margin-bottom: 12px; padding: 10px 14px; font-size: 12px; line-height: 1.6; color: var(--evo-muted); background: hsl(210 40% 97%); border: 1px solid var(--evo-border); border-radius: 8px; }
+.evo-skill-search { width: 100%; margin-bottom: 12px; padding: 9px 14px; border: 1px solid var(--evo-border); border-radius: 10px; font-size: 13px; background: #fff; color: var(--evo-fg); box-sizing: border-box; }
+.evo-skill-search:focus { outline: none; border-color: var(--evo-blue); box-shadow: 0 0 0 3px var(--evo-blue-soft); }
+.evo-skill-item-active { background: var(--evo-blue-soft) !important; }
+.evo-skill-selected-tag { margin-left: 8px; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--evo-blue); color: #fff; }
 /* 胶囊 badge(原型 rounded-full text-xs) */
 .evo-skill-cat, .evo-patch-risk, .evo-patch-status, .evo-version-tag {
   display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 600;

@@ -31,6 +31,25 @@
     ).join('') + '</ul>';
   }
 
+  // 技能选择器:进化控制台不再重复"管技能",只"选一个技能来演化"。
+  // 浏览/新建/编辑归技能库。activeId = 当前选中(高亮)。
+  function renderSkillSelector(skills, activeId, query) {
+    const q = (query || '').trim().toLowerCase();
+    const filtered = q
+      ? (skills || []).filter(s => (s.name || '').toLowerCase().includes(q) || (s.id || '').toLowerCase().includes(q))
+      : (skills || []);
+    const hint = '<div class="evo-select-hint">选择要演化的技能，其余页(进化/本体/评估/补丁)将作用于所选技能。技能的浏览、新建、编辑请到「技能库」。</div>';
+    const search = `<input type="text" id="evo-skill-search" class="evo-skill-search" placeholder="搜索技能…" value="${escapeHtml(query || '')}" />`;
+    if (!skills || !skills.length) return hint + '<div class="evo-empty">技能库暂无技能，请先到「技能库」创建</div>';
+    const list = filtered.length
+      ? '<ul class="evo-skill-list">' + filtered.map(s => {
+          const active = s.id === activeId ? ' evo-skill-item-active' : '';
+          return `<li class="evo-skill-item${active}" data-skill-id="${escapeHtml(s.id)}"><span class="evo-skill-name">${escapeHtml(s.name)}</span><span class="evo-skill-cat">${escapeHtml(s.category || '未分类')}</span>${s.id === activeId ? '<span class="evo-skill-selected-tag">已选</span>' : ''}</li>`;
+        }).join('') + '</ul>'
+      : '<div class="evo-empty">无匹配技能</div>';
+    return hint + search + list;
+  }
+
   function renderKstarTimeline(run) {
     if (!run || !run.steps) return '<div class="evo-empty">尚未开始进化运行</div>';
     return '<ol class="kstar-timeline">' + run.steps.map(st => {
@@ -138,7 +157,7 @@
     ).join('') + '</ul>';
   }
 
-  const api = { escapeHtml, renderDashboard, renderSkillsList, renderKstarTimeline, renderOntologyList, renderOntologyBindings, renderSkillVersions, renderCreateForm, renderInterviewQuestions, renderRecommendations, renderEvalRecord, renderEvalStandard, renderPatchList };
+  const api = { escapeHtml, renderDashboard, renderSkillsList, renderSkillSelector, renderKstarTimeline, renderOntologyList, renderOntologyBindings, renderSkillVersions, renderCreateForm, renderInterviewQuestions, renderRecommendations, renderEvalRecord, renderEvalStandard, renderPatchList };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;   // 测试桥
   else root.EvolutionPages = api;                                             // 浏览器全局
 })(typeof window !== 'undefined' ? window : globalThis);

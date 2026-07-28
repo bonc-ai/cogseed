@@ -10,6 +10,7 @@ const P = require('../../src/renderer/modules/evolution/pages.js') as {
   renderInterviewQuestions: (questions: string[]) => string;
   renderRecommendations: (suggestions: any[]) => string;
   renderEvalStandard: (std: any) => string;
+  renderSkillSelector: (skills: any[], activeId?: string, query?: string) => string;
   escapeHtml: (s: unknown) => string;
 };
 
@@ -110,5 +111,26 @@ describe('evolution pages 纯渲染', () => {
       ready: true,
     };
     expect(P.renderEvalStandard(std)).toContain('已就绪');
+  });
+  it('renderSkillSelector 含搜索框、提示、不含创建表单', () => {
+    const html = P.renderSkillSelector([{ id: 's1', name: '技能A', category: 'x' }], undefined, '');
+    expect(html).toContain('evo-skill-search');
+    expect(html).toContain('技能库');           // 提示指向技能库
+    expect(html).toContain('技能A');
+    expect(html).not.toContain('evo-create-name'); // 不再有创建向导
+  });
+  it('renderSkillSelector 高亮选中项', () => {
+    const html = P.renderSkillSelector([{ id: 's1', name: 'A' }, { id: 's2', name: 'B' }], 's2', '');
+    expect(html).toContain('evo-skill-item-active');
+    expect(html).toContain('已选');
+  });
+  it('renderSkillSelector 按 query 过滤', () => {
+    const html = P.renderSkillSelector([{ id: 's1', name: '论文查重' }, { id: 's2', name: '翻译' }], undefined, '查重');
+    expect(html).toContain('论文查重');
+    expect(html).not.toContain('翻译');
+  });
+  it('renderSkillSelector 空技能库提示去技能库创建', () => {
+    const html = P.renderSkillSelector([], undefined, '');
+    expect(html).toContain('技能库');
   });
 });

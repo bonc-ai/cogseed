@@ -10,6 +10,7 @@
   ];
   let activePage = 'dashboard';
   let activeSkillId = null;
+  let skillQuery = '';
 
   function el(id) { return document.getElementById(id); }
 
@@ -35,18 +36,18 @@
         body.innerHTML = P.renderDashboard(d);
       } else if (page === 'skills') {
         const { skills } = await window.apiFetch('/api/skills/list').then(r => r.json());
-        let html = P.renderCreateForm() + P.renderSkillsList(skills || []);
+        let html = P.renderSkillSelector(skills || [], activeSkillId, skillQuery);
         if (activeSkillId) {
           const { versions } = await window.apiFetch(`/api/evolution/skills/${encodeURIComponent(activeSkillId)}/versions`).then(r => r.json());
           const latestVer = (versions && versions[0] && versions[0].version) || '0.1.0';
-          html += '<div class="evo-skill-versions"><div class="evo-section-title">版本历史</div>'
+          html += '<div class="evo-skill-versions"><div class="evo-section-title">所选技能 · 版本历史</div>'
             + `<button class="btn btn-sm" id="evo-skill-export-btn" data-version="${latestVer}">导出为 .zip</button>`
             + P.renderSkillVersions(versions || []) + '</div>';
         }
         body.innerHTML = html;
         _bindSkillSelect(body);
         _bindSkillExport(body);
-        _bindCreateWizard(body);
+        _bindSkillSearch(body);
       } else if (page === 'evolution') {
         const { runs } = await window.apiFetch('/api/evolution/evolve').then(r => r.json());
         const latest = runs && runs[0];
@@ -108,35 +109,26 @@
   }
   function _bindSkillSelect(body) {
     body.querySelectorAll('[data-skill-id]').forEach(item => {
-      item.addEventListener('click', () => { activeSkillId = item.dataset.skillId; renderNav(); });
+      item.addEventListener('click', () => {
+        activeSkillId = item.dataset.skillId;
+        renderNav();
+        loadPage('skills'); // 重渲染:显示所选技能的版本历史/导出 + 高亮
+      });
     });
   }
 
-  function _bindCreateWizard(body) {
-    const intentBtn = body.querySelector('#evo-create-intent-btn');
-    const draftBtn = body.querySelector('#evo-create-draft-btn');
-    const read = () => ({
-      name: (body.querySelector('#evo-create-name') || {}).value || '',
-      purpose: (body.querySelector('#evo-create-purpose') || {}).value || '',
-      triggers: (body.querySelector('#evo-create-triggers') || {}).value || '',
-    });
-    if (intentBtn) intentBtn.addEventListener('click', async () => {
-      const { name, purpose, triggers } = read();
-      if (!name.trim() || !purpose.trim()) return;
-      const res = await window.apiFetch('/api/evolution/skills/capture-intent', {
-        method: 'POST',
-        body: JSON.stringify({ name, purpose, trigger_contexts: triggers.split(',').map(s => s.trim()).filter(Boolean) }),
-      }).then(r => r.json());
-      const box = body.querySelector('#evo-create-questions');
-      if (box && res && res.ok) box.innerHTML = window.EvolutionPages.renderInterviewQuestions(res.questions || []);
-    });
-    if (draftBtn) draftBtn.addEventListener('click', async () => {
-      const { name, purpose } = read();
-      if (!name.trim()) return;
-      const res = await window.apiFetch('/api/evolution/skills/create-draft', {
-        method: 'POST', body: JSON.stringify({ name, description: purpose, category: '' }),
-      }).then(r => r.json());
-      if (res && res.ok) loadPage('skills');
+  function _bindSkillSearch(body) {
+    const input = body.querySelector('#evo-skill-search');
+    if (!input) return;
+    input.addEventListener('input', () => {
+      skillQuery = input.value || '';
+      const list = body.querySelector('.evo-skill-list') || body.querySelector('.evo-empty');
+      // 仅重渲染列表部分,避免输入框失焦。简单起见整页重载并把焦点还原。
+      const caret = input.selectionStart;
+      loadPage('skills').then(() => {
+        const again = document.getElementById('evo-skill-search');
+        if (again) { again.focus(); try { again.setSelectionRange(caret, caret); } catch (e) {} }
+      });
     });
   }
 
