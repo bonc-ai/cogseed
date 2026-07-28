@@ -163,7 +163,7 @@ export class SkillCreator {
    */
   async extractIntentFromHistory(
     interactionHistory: Array<{ role: string; content: string }>,
-    llm?: import('./llm-port').LlmComplete,
+    llm?: import('./llm-port.js').LlmComplete,
   ): Promise<SkillIntent> {
     const lastUserMsg = interactionHistory.filter(m => m.role === 'user').pop();
     const context = lastUserMsg?.content ?? '';
@@ -557,7 +557,7 @@ export class SkillCreator {
   async gradeEvalWithLlmAsync(
     skillId: string,
     assertions: string[],
-    llm?: import('./llm-port').LlmComplete,
+    llm?: import('./llm-port.js').LlmComplete,
   ): Promise<Map<number, GradingResult>> {
     const results = this.evals.get(skillId) ?? [];
     const grades = new Map<number, GradingResult>();
