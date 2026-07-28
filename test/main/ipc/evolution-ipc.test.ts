@@ -39,6 +39,7 @@ vi.mock('../../../src/main/features/evolution', () => ({
   upsertEvalCase: vi.fn(async (_uid: string, skillId: string) => ({ skillId, cases: [{ id: 1 }], runs: [] })),
   extractAndSaveOntology: vi.fn(async () => ({ slice: { tbox: [], rbox: [], abox: [] }, degraded: false })),
   listSkillOntologies: vi.fn(async () => ([])),
+  listSkillVersions: vi.fn(async () => ([{ version: '0.1.1', at: 't' }])),
   listOntologyBindings: vi.fn(async () => (['onto-a'])),
   bindOntology: vi.fn(async (_uid: string, _skillId: string, ontologyId: string) => (['onto-a', ontologyId])),
   unbindOntology: vi.fn(async () => ([])),
@@ -89,6 +90,11 @@ describe('ipc › evolution channels', () => {
   it('evolution.patches.apply 缺 newContent 时 ok:false', async () => {
     const r = await call('evolution.patches.apply', { skillId: 'sk1' });
     expect(r.ok).toBe(false);
+  });
+  it('evolution.skills.versions 返回 versions', async () => {
+    const r = await call('evolution.skills.versions', { skillId: 'sk1' });
+    expect(r.ok).toBe(true);
+    expect(r.versions[0].version).toBe('0.1.1');
   });
   it('evolution.ontology.bindings 返回 refs', async () => {
     const r = await call('evolution.ontology.bindings', { skillId: 'sk1' });

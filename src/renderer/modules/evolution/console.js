@@ -35,7 +35,12 @@
         body.innerHTML = P.renderDashboard(d);
       } else if (page === 'skills') {
         const { skills } = await window.apiFetch('/api/skills/list').then(r => r.json());
-        body.innerHTML = P.renderSkillsList(skills || []);
+        let html = P.renderSkillsList(skills || []);
+        if (activeSkillId) {
+          const { versions } = await window.apiFetch(`/api/evolution/skills/${encodeURIComponent(activeSkillId)}/versions`).then(r => r.json());
+          html += '<div class="evo-skill-versions"><div class="evo-section-title">版本历史</div>' + P.renderSkillVersions(versions || []) + '</div>';
+        }
+        body.innerHTML = html;
         _bindSkillSelect(body);
       } else if (page === 'evolution') {
         const { runs } = await window.apiFetch('/api/evolution/evolve').then(r => r.json());

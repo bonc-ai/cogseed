@@ -46,6 +46,13 @@
     ).join('') + '</ul>';
   }
 
+  function renderSkillVersions(versions) {
+    if (!versions || !versions.length) return '<div class="evo-empty">暂无版本记录</div>';
+    return '<ul class="evo-version-list">' + versions.map(v =>
+      `<li class="evo-version-item"><span class="evo-version-tag">v${escapeHtml(v.version)}</span><span class="evo-version-at">${escapeHtml(v.at || '')}</span>${v.note ? `<span class="evo-version-note">${escapeHtml(v.note)}</span>` : ''}</li>`
+    ).join('') + '</ul>';
+  }
+
   // 本体页:展示已绑定 id + 一个绑定输入。refs 为已绑定本体 id 列表。
   function renderOntologyBindings(refs) {
     const list = (refs && refs.length)
@@ -74,7 +81,7 @@
     ).join('') + '</ul>';
   }
 
-  const api = { escapeHtml, renderDashboard, renderSkillsList, renderKstarTimeline, renderOntologyList, renderOntologyBindings, renderEvalRecord, renderPatchList };
+  const api = { escapeHtml, renderDashboard, renderSkillsList, renderKstarTimeline, renderOntologyList, renderOntologyBindings, renderSkillVersions, renderEvalRecord, renderPatchList };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;   // 测试桥
   else root.EvolutionPages = api;                                             // 浏览器全局
 })(typeof window !== 'undefined' ? window : globalThis);

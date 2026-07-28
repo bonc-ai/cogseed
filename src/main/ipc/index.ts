@@ -1997,6 +1997,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (typeof newContent !== 'string' || !newContent.trim()) throw new Error('missing newContent');
     return evolution.applyPatchToSkill(ctx.userId, { skillId, newContent });
   },
+  'evolution.skills.versions': async ({ skillId }, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skillId');
+    return { versions: await evolution.listSkillVersions(ctx.userId, skillId) };
+  },
   'evolution.ontology.bindings': async ({ skillId }, ctx) => {
     if (!safeId(skillId)) throw new Error('invalid skillId');
     return { refs: await evolution.listOntologyBindings(ctx.userId, skillId) };

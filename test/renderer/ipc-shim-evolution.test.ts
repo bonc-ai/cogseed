@@ -43,6 +43,13 @@ describe('evolution ipc-shim routes', () => {
     expect(invoke).toHaveBeenCalledWith('evolution.evals.get', expect.objectContaining({ skillId: 'sk1' }));
   });
 
+  it('GET /api/evolution/skills/:skillId/versions → evolution.skills.versions', async () => {
+    const invoke = vi.fn(async () => ({ ok: true, versions: [] }));
+    const { apiFetch } = loadShim(invoke);
+    await apiFetch('/api/evolution/skills/sk1/versions');
+    expect(invoke).toHaveBeenCalledWith('evolution.skills.versions', expect.objectContaining({ skillId: 'sk1' }));
+  });
+
   it('GET /api/evolution/ontology/:skillId/bindings → evolution.ontology.bindings', async () => {
     const invoke = vi.fn(async () => ({ ok: true, refs: [] }));
     const { apiFetch } = loadShim(invoke);

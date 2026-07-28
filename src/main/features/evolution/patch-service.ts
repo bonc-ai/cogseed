@@ -1,6 +1,8 @@
 import { writeSkillFileForEdit } from '../skills';
+import { appendSkillVersion } from './versions-store';
 
 type WriteFn = (skillId: string, file: string, content: string) => Promise<boolean>;
+type AppendVersionFn = (uid: string, skillId: string, entry: { version: string; note?: string; runId?: string }) => Promise<unknown>;
 
 /** semver patch 位 +1。空/非法 → 0.1.0。 */
 export function bumpSemver(v: string): string {
@@ -21,17 +23,21 @@ function withBumpedVersion(content: string): { content: string; newVersion: stri
   return { content: `version: ${next}\n${content}`, newVersion: next };
 }
 
-interface ApplyInput { skillId: string; newContent: string; writeFn?: WriteFn; }
+interface ApplyInput { skillId: string; newContent: string; note?: string; runId?: string; writeFn?: WriteFn; appendVersionFn?: AppendVersionFn; }
 
 /**
- * Apply 步：把改进正文写进 SKILL.md 并 bump semver。
+ * Apply 步：把改进正文写进 SKILL.md 并 bump semver，成功后追加一条版本历史。
  * 不自动把 status 改成 production——晋升需人工（治理 promotion_ceiling）。
  */
 export async function applyPatchToSkill(
-  _uid: string, input: ApplyInput,
+  uid: string, input: ApplyInput,
 ): Promise<{ ok: boolean; newVersion: string }> {
   const write = input.writeFn ?? ((id, file, content) => writeSkillFileForEdit(id, file, content));
+  const appendVersion = input.appendVersionFn ?? appendSkillVersion;
   const { content, newVersion } = withBumpedVersion(input.newContent);
   const ok = await write(input.skillId, 'SKILL.md', content);
+  if (ok) {
+    await appendVersion(uid, input.skillId, { version: newVersion, note: input.note, runId: input.runId });
+  }
   return { ok, newVersion };
 }

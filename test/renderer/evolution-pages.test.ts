@@ -5,6 +5,7 @@ const P = require('../../src/renderer/modules/evolution/pages.js') as {
   renderKstarTimeline: (r: any) => string;
   renderPatchList: (p: any[]) => string;
   renderOntologyBindings: (refs: string[]) => string;
+  renderSkillVersions: (versions: any[]) => string;
   escapeHtml: (s: unknown) => string;
 };
 
@@ -54,5 +55,14 @@ describe('evolution pages 纯渲染', () => {
     const html = P.renderOntologyBindings([]);
     expect(html).toContain('暂无绑定本体');
     expect(html).toContain('evo-onto-bind-btn');
+  });
+  it('renderSkillVersions 渲染版本列表', () => {
+    const html = P.renderSkillVersions([{ version: '0.1.2', at: '2026-07-28', note: '改进' }, { version: '0.1.1', at: '2026-07-27' }]);
+    expect(html).toContain('v0.1.2');
+    expect(html).toContain('v0.1.1');
+    expect(html).toContain('改进');
+  });
+  it('renderSkillVersions 空列表显示空态', () => {
+    expect(P.renderSkillVersions([])).toContain('暂无版本记录');
   });
 });

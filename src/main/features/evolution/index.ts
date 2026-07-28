@@ -7,3 +7,5 @@ export type { DashboardData } from './dashboard';
 export { extractAndSaveOntology, listSkillOntologies } from './ontology-service';
 export { bindOntology, unbindOntology, listOntologyBindings } from './ontology-bindings';
 export { applyPatchToSkill, bumpSemver } from './patch-service';
+export { listSkillVersions, appendSkillVersion } from './versions-store';
+export type { SkillVersionRecord } from './versions-store';
