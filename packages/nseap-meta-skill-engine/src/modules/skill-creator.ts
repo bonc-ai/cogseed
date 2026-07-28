@@ -161,11 +161,39 @@ export class SkillCreator {
    * Auto-extract intent from interaction history (auto-trigger channel)
    * LLM summarizes what the user was trying to do
    */
-  async extractIntentFromHistory(interactionHistory: Array<{ role: string; content: string }>): Promise<SkillIntent> {
-    // In production, this calls LLM to summarize
-    // Simplified: extract from last user message
+  async extractIntentFromHistory(
+    interactionHistory: Array<{ role: string; content: string }>,
+    llm?: import('./llm-port').LlmComplete,
+  ): Promise<SkillIntent> {
     const lastUserMsg = interactionHistory.filter(m => m.role === 'user').pop();
     const context = lastUserMsg?.content ?? '';
+
+    if (llm) {
+      const transcript = interactionHistory
+        .map(m => `${m.role}: ${m.content}`)
+        .join('\n')
+        .slice(0, 4000);
+      const prompt = [
+        '请总结用户在以下交互中试图达成的意图，只输出 JSON，字段：',
+        'purpose(字符串), trigger_contexts(字符串数组), output_format(字符串),',
+        'edge_cases(字符串数组), examples(数组，每项 {input, expected_output})。',
+        '交互记录：',
+        transcript,
+      ].join('\n');
+      const { text } = await llm(prompt);
+      const parsed = this.tryParseIntentJson(text);
+      if (parsed) {
+        return {
+          purpose: parsed.purpose ?? `Handle: "${context.substring(0, 100)}"`,
+          trigger_contexts: parsed.trigger_contexts ?? [context.substring(0, 50)],
+          output_format: parsed.output_format ?? 'structured_analysis',
+          needs_test_cases: true,
+          edge_cases: parsed.edge_cases ?? [],
+          dependencies: [],
+          examples: parsed.examples ?? [{ input: context, expected_output: '[to be defined]' }],
+        };
+      }
+    }
 
     return {
       purpose: `Handle queries like: "${context.substring(0, 100)}..."`,
@@ -176,6 +204,16 @@ export class SkillCreator {
       dependencies: [],
       examples: [{ input: context, expected_output: '[to be defined]' }],
     };
+  }
+
+  private tryParseIntentJson(text: string): {
+    purpose?: string; trigger_contexts?: string[]; output_format?: string;
+    edge_cases?: string[]; examples?: Array<{ input: string; expected_output: string }>;
+  } | null {
+    try {
+      const m = text.match(/\{[\s\S]*\}/);
+      return m ? JSON.parse(m[0]) : null;
+    } catch { return null; }
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -510,6 +548,65 @@ export class SkillCreator {
     }
 
     return grades;
+  }
+
+  /**
+   * LLM 真裁判：逐断言调用注入的 llm 判定 pass/fail。
+   * 无 llm 或解析失败时回退到 semanticGrade（规则版），并在证据里标注降级。
+   */
+  async gradeEvalWithLlmAsync(
+    skillId: string,
+    assertions: string[],
+    llm?: import('./llm-port').LlmComplete,
+  ): Promise<Map<number, GradingResult>> {
+    const results = this.evals.get(skillId) ?? [];
+    const grades = new Map<number, GradingResult>();
+
+    for (const result of results) {
+      const output = result.with_skill_output ?? '';
+      const expectationResults = [];
+      for (const assertion of assertions) {
+        let passed: boolean;
+        let evidence: string;
+        if (llm) {
+          const prompt = [
+            '判断下述输出是否满足断言，只输出 JSON：{ "passed": true|false, "reason": "..." }。',
+            `断言：${assertion}`,
+            `输出：${output.slice(0, 2000)}`,
+          ].join('\n');
+          const { text, degraded } = await llm(prompt);
+          const verdict = this.tryParseVerdict(text);
+          if (verdict && !degraded) {
+            passed = verdict.passed;
+            evidence = `LLM 判定：${verdict.reason ?? ''}`;
+          } else {
+            passed = this.semanticGrade(output, assertion);
+            evidence = `[规则降级] 关键词覆盖判定：${passed ? '满足' : '不满足'}`;
+          }
+        } else {
+          passed = this.semanticGrade(output, assertion);
+          evidence = `[规则降级] 关键词覆盖判定：${passed ? '满足' : '不满足'}`;
+        }
+        expectationResults.push({ text: assertion, passed, evidence });
+      }
+      const passedN = expectationResults.filter(r => r.passed).length;
+      const total = expectationResults.length;
+      grades.set(result.eval_id, {
+        expectations: expectationResults,
+        summary: { passed: passedN, failed: total - passedN, total, pass_rate: total > 0 ? passedN / total : 0 },
+      });
+    }
+    return grades;
+  }
+
+  private tryParseVerdict(text: string): { passed: boolean; reason?: string } | null {
+    try {
+      const m = text.match(/\{[\s\S]*\}/);
+      if (!m) return null;
+      const o = JSON.parse(m[0]);
+      if (typeof o.passed === 'boolean') return { passed: o.passed, reason: o.reason };
+      return null;
+    } catch { return null; }
   }
 
   /**
