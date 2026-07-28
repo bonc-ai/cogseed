@@ -1383,25 +1383,15 @@ const ConversationInfo = (() => {
     const revealLabel = _label('conversation_info.file_reveal_action', 'Show in folder');
     const addLabel = _label('conversation_info.file_add_to_chat_action', 'Add to chat');
     const addLibraryLabel = _label('conversation_info.file_add_to_library_action', 'Add to Library');
-    const saveAppLabel = _label('apps.save_from_file_action', 'Save as app');
     const deleteLabel = _label('common.delete', 'Delete');
-    let canSaveApp = false;
-    try {
-      const inspected = await window.orkas.invoke('savedApps.inspectBundleFromPath', _fileActionPayload(absPath, targetCid));
-      canSaveApp = !!(inspected && inspected.ok !== false && inspected.canSave);
-    } catch (_) { canSaveApp = false; }
     const addItem = entryKind === 'file' && _canAddEntryToChat(name || absPath)
       ? `<div class="ctx-row-menu-item" data-action="add-to-chat">${escapeHtml(addLabel)}</div>`
       : '';
     const addLibraryItem = entryKind === 'file' && _canAddEntryToLibrary(name || absPath, projectScoped)
       ? `<div class="ctx-row-menu-item" data-action="add-to-library">${escapeHtml(addLibraryLabel)}</div>`
       : '';
-    const saveAppItem = canSaveApp
-      ? `<div class="ctx-row-menu-item" data-action="save-as-app">${escapeHtml(saveAppLabel)}</div>`
-      : '';
     menu.innerHTML = `
       <div class="ctx-row-menu-item" data-action="reveal">${escapeHtml(revealLabel)}</div>
-      ${saveAppItem}
       ${addLibraryItem}
       ${addItem}
       <div class="ctx-row-menu-item is-danger" data-action="delete">${escapeHtml(deleteLabel)}</div>
@@ -1481,19 +1471,6 @@ const ConversationInfo = (() => {
     }
   }
 
-  async function _saveEntryAsApp(absPath, cidOverride) {
-    try {
-      const res = await window.orkas.invoke('savedApps.saveFromPath', _fileActionPayload(absPath, cidOverride));
-      if (!res || res.ok === false) throw new Error((res && res.error) || 'failed');
-      const message = _label('apps.saved_toast', 'Saved to My Apps');
-      if (typeof uiToast === 'function') uiToast(message, { variant: 'success' });
-      else if (typeof uiAlert === 'function') await uiAlert(message);
-      try { if (typeof loadSavedApps === 'function') loadSavedApps(true); } catch (_) {}
-    } catch (err) {
-      await uiAlert(_label('apps.save_failed', 'Could not save the app') + ': ' + String(err && err.message || err));
-    }
-  }
-
   async function _deleteEntry(absPath, displayName, kind, options = {}) {
     const name = displayName || _baseName(absPath);
     const isDir = kind === 'dir';
@@ -1535,7 +1512,6 @@ const ConversationInfo = (() => {
 
   async function _runFileMenuAction(action, absPath, displayName, kind, options = {}) {
     if (action === 'reveal') return _revealEntry(absPath, options.cid);
-    if (action === 'save-as-app') return _saveEntryAsApp(absPath, options.cid);
     if (action === 'add-to-library') return _addEntryToLibrary(absPath, options.cid);
     if (action === 'add-to-chat') return _addEntryToChat(absPath, kind, options.cid);
     if (action === 'delete') return _deleteEntry(absPath, displayName, kind, options);

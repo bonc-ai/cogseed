@@ -104,7 +104,6 @@ describe('renderer lazy feature loader', () => {
       'project-detail.js',
       'contexts.js',
       'kb-picker.js',
-      'saved-apps.js',
       'skills.js',
       'auto.js',
     ]) {

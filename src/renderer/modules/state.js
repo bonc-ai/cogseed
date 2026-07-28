@@ -315,7 +315,6 @@ function bindStaticHandlers() {
   document.getElementById('agents-btn').addEventListener('click', () => _setViewFromSidebar('agents'));
   document.getElementById('skills-btn').addEventListener('click', () => _setViewFromSidebar('skills'));
   document.getElementById('connectors-btn')?.addEventListener('click', () => _setViewFromSidebar('connectors'));
-  document.getElementById('apps-btn')?.addEventListener('click', () => _setViewFromSidebar('apps'));
   document.getElementById('evolution-btn')?.addEventListener('click', () => _setViewFromSidebar('evolution'));
   document.getElementById('topbar-evolution-toggle')?.addEventListener('click', () => _setViewFromSidebar('evolution'));
   document.getElementById('contexts-btn').addEventListener('click', () => _setViewFromSidebar('contexts'));

@@ -174,7 +174,6 @@ import * as builtinMarketplaceStartup from './features/builtin_marketplace_start
 import type { BuiltinMarketplaceSeedResult } from './features/builtin_marketplace';
 import * as chatAttachments from './features/chat_attachments';
 import * as chatArtifacts from './features/chat_artifacts';
-import * as savedApps from './features/saved_apps';
 import * as clientConfigFeature from './features/client_config';
 import * as connectorsFeature from './features/connectors';
 import * as taskNotifications from './features/task_notifications';
@@ -982,31 +981,6 @@ function registerChatAppProtocol(): void {
       const cid = rawSegs[0] ? decodeURIComponent(rawSegs[0]) : '';
       const artifactId = rawSegs[1] ? decodeURIComponent(rawSegs[1]) : '';
       const relPath = rawSegs.slice(2).map((s) => (s ? decodeURIComponent(s) : '')).join('/');
-
-      if (host === 'saved') {
-        const appId = cid;
-        const savedRelPath = rawSegs.slice(1).map((s) => (s ? decodeURIComponent(s) : '')).join('/');
-        if (!appId) {
-          log.warn('chat-app/saved: bad URL (need appId)', { reqUrl });
-          return new Response('bad request', { status: 400 });
-        }
-        if (savedRelPath === chatArtifacts.BRIDGE_RELPATH) {
-          return _withArtifactCors(new Response(chatArtifacts.BRIDGE_JS, {
-            headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'private, max-age=60' },
-          }));
-        }
-        const uid = users.getActiveUserId();
-        const resolved = savedApps.resolveSavedAppFilePath(uid, appId, savedRelPath);
-        if (!resolved.ok) {
-          const code = (resolved as { code?: string }).code;
-          const errMsg = (resolved as { error?: string }).error;
-          log.warn('chat-app/saved: reject', { reqUrl, code, error: errMsg });
-          return new Response(String(errMsg || code || 'error'), { status: _statusFor(code) });
-        }
-        const st = fs.statSync(resolved.absPath);
-        log.info('chat-app/saved: serving', { abs: resolved.absPath, mime: resolved.mime, bytes: st.size });
-        return _withArtifactCors(serveFileRange(request, resolved.absPath, resolved.mime, st.size));
-      }
 
       if (host !== 'cid') {
         log.warn('chat-app: unknown host', { reqUrl, host: u.host });

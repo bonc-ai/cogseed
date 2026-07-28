@@ -140,14 +140,6 @@ export const chatArtifactCidDir   = (uid: string, cid: string) => path.join(user
 export const artifactDir          = (uid: string, cid: string, artifactId: string) =>
   path.join(chatArtifactCidDir(uid, cid), artifactId);
 
-// User-kept copies of `create_artifact` apps ("My Apps"). Layout:
-// `<uid>/cloud/saved_apps/<appId>/{index.html, ...siblings, __orkas-meta.json}`.
-// Cloud-synced; never auto-purged (conversation-independent — only the user's
-// explicit delete from the My Apps tab removes one). Served read-only via the
-// `chat-app://saved` protocol for the in-app viewer; external open still uses
-// `shell.openPath`. See `features/saved_apps.ts`.
-export const userSavedAppsDir = (uid: string) => path.join(userCloudRoot(uid), 'saved_apps');
-export const savedAppDir      = (uid: string, appId: string) => path.join(userSavedAppsDir(uid), appId);
 
 // core-agent session jsonl (LLM-view). Two regions:
 //   cloud/sessions/  — "resumable" kinds: gconv / gmember / skill / agent.
@@ -755,7 +747,6 @@ export function ensureUserLayout(uid: string): void {
     userChatsDir(uid),
     userChatAttachmentsDir(uid),
     userChatArtifactsDir(uid),
-    userSavedAppsDir(uid),
     userSessionsDir(uid),
     userContextsDir(uid),
     userKbDir(uid),

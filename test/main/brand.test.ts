@@ -69,7 +69,6 @@ describe('Mate Agent brand contract', () => {
       expect(read(file), file).not.toContain('Orkas');
     }
     expect(read('src/renderer/modules/settings.js')).not.toContain("badge.textContent = 'Orkas'");
-    expect(read('src/renderer/modules/saved-apps.js')).not.toContain("'Open in Orkas'");
   });
 
   it('keeps approved internal compatibility symbols', () => {

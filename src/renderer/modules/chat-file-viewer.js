@@ -49,7 +49,6 @@ let _viewerBody = null;
 let _viewerTitle = null;
 let _viewerRevealBtn = null;
 let _viewerAddLibraryBtn = null;
-let _viewerSaveAppBtn = null;
 let _viewerMdActions = null;
 let _viewerKeyHandler = null;
 let _viewerCurrentPath = null;
@@ -194,21 +193,11 @@ function _viewerAddLibraryButtonHtml(_label, iconName = 'database') {
   return _viewerUiIconHtml(iconName, 'chat-file-viewer-add-library-icon');
 }
 
-function _viewerSaveAppButtonHtml(_label, iconName = 'layout-grid') {
-  return _viewerUiIconHtml(iconName, 'chat-file-viewer-save-app-icon');
-}
-
 function _setViewerButtonLabel(btn, label) {
   if (!btn) return;
   btn.setAttribute('aria-label', label);
   btn.setAttribute('title', label);
   btn.dataset.tooltip = label;
-}
-
-function _setSaveAppVisible(visible) {
-  if (!_viewerSaveAppBtn) return;
-  _viewerSaveAppBtn.hidden = !visible;
-  _viewerSaveAppBtn.disabled = !visible;
 }
 
 function _viewerFileOperationPolicy() {
@@ -243,7 +232,6 @@ function _ensureViewer() {
   const closeLabel = _viewerLabel('chat.preview_close_title', 'Close');
   const revealLabel = _viewerLabel('chat.preview_reveal_title', 'Open in folder');
   const addLibraryLabel = _viewerLabel('chat.preview_add_library_title', 'Add to Library');
-  const saveAppLabel = _viewerLabel('apps.save_from_file_action', 'Save as app');
   const folderIcon = _viewerUiIconHtml('folder', 'chat-file-viewer-folder-icon');
   root.innerHTML = `
     <div class="chat-file-viewer-backdrop"></div>
@@ -254,9 +242,6 @@ function _ensureViewer() {
           <div class="chat-file-viewer-md-actions"></div>
           <button type="button" class="chat-file-viewer-add-library" aria-label="${addLibraryLabel}" title="${addLibraryLabel}" data-tooltip="${addLibraryLabel}">
             ${_viewerAddLibraryButtonHtml(addLibraryLabel)}
-          </button>
-          <button type="button" class="chat-file-viewer-save-app" aria-label="${saveAppLabel}" title="${saveAppLabel}" data-tooltip="${saveAppLabel}" hidden>
-            ${_viewerSaveAppButtonHtml(saveAppLabel)}
           </button>
           <button type="button" class="chat-file-viewer-reveal" aria-label="${revealLabel}" title="${revealLabel}" data-tooltip="${revealLabel}">${folderIcon}</button>
           <button type="button" class="modal-close-btn chat-file-viewer-close" aria-label="${closeLabel}" title="${closeLabel}" data-tooltip="${closeLabel}">${_viewerUiIconHtml('x', 'modal-close-icon')}</button>
@@ -272,7 +257,6 @@ function _ensureViewer() {
   _viewerTitle = root.querySelector('.chat-file-viewer-title');
   _viewerRevealBtn = root.querySelector('.chat-file-viewer-reveal');
   _viewerAddLibraryBtn = root.querySelector('.chat-file-viewer-add-library');
-  _viewerSaveAppBtn = root.querySelector('.chat-file-viewer-save-app');
   _viewerMdActions = root.querySelector('.chat-file-viewer-md-actions');
 
   // i18n change → re-label the icon-only buttons. Same lazy listener pattern
@@ -283,27 +267,20 @@ function _ensureViewer() {
     const c = _viewerEl.querySelector('.chat-file-viewer-close');
     const r = _viewerEl.querySelector('.chat-file-viewer-reveal');
     const a = _viewerEl.querySelector('.chat-file-viewer-add-library');
-    const s = _viewerEl.querySelector('.chat-file-viewer-save-app');
     const cl = _viewerLabel('chat.preview_close_title', 'Close');
     const rl = _viewerLabel('chat.preview_reveal_title', 'Open in folder');
     const al = _viewerLabel('chat.preview_add_library_title', 'Add to Library');
-    const sl = _viewerLabel('apps.save_from_file_action', 'Save as app');
     _setViewerButtonLabel(c, cl);
     _setViewerButtonLabel(r, rl);
     if (a) {
       _setViewerButtonLabel(a, al);
       if (!a.disabled) a.innerHTML = _viewerAddLibraryButtonHtml(al);
     }
-    if (s) {
-      _setViewerButtonLabel(s, sl);
-      if (!s.disabled) s.innerHTML = _viewerSaveAppButtonHtml(sl);
-    }
   });
 
   root.querySelector('.chat-file-viewer-close').addEventListener('click', closeChatFileViewer);
   _viewerRevealBtn.addEventListener('click', _onRevealClick);
   _viewerAddLibraryBtn.addEventListener('click', _onAddLibraryClick);
-  _viewerSaveAppBtn.addEventListener('click', _onSaveAppClick);
 
   return root;
 }
@@ -423,61 +400,6 @@ function _viewerFileActionPayload(path) {
   return payload;
 }
 
-async function _refreshSaveAppButton(path) {
-  if (!_viewerSaveAppBtn) return;
-  _setSaveAppVisible(false);
-  if (!path) return;
-  try {
-    const inspected = await window.orkas.invoke('savedApps.inspectBundleFromPath', _viewerFileActionPayload(path));
-    if (!_isViewerOpen() || _viewerCurrentPath !== path) return;
-    const canSave = !!(inspected && inspected.ok !== false && inspected.canSave);
-    _setSaveAppVisible(canSave);
-  } catch (err) {
-    if (!_isViewerOpen() || _viewerCurrentPath !== path) return;
-    _viewerLog.warn('inspect app bundle failed', { path, error: String(err && err.message || err) });
-    _setSaveAppVisible(false);
-  }
-}
-
-async function _onSaveAppClick() {
-  const p = _viewerCurrentPath;
-  if (!p || !_viewerSaveAppBtn || _viewerSaveAppBtn.disabled) return;
-  _viewerTrack('file_preview_save_app', { kind: _kindOf(p), has_project: !!_viewerCurrentProjectId });
-  if (_viewerDirty) {
-    _viewerTrackEvent('file_preview_save_app_result', { result: 'failure', kind: _kindOf(p), error_code: 'unsaved_changes' });
-    const message = _viewerLabel('apps.save_from_file_dirty', 'Save the file changes before saving it as an app.');
-    if (typeof uiAlert === 'function') await uiAlert(message);
-    return;
-  }
-  const label = _viewerLabel('apps.save_from_file_action', 'Save as app');
-  const doneLabel = _viewerLabel('apps.saved_toast', 'Saved to My Apps');
-  const original = _viewerSaveAppButtonHtml(label);
-  _setSaveAppVisible(false);
-  try {
-    const res = await window.orkas.invoke('savedApps.saveFromPath', _viewerFileActionPayload(p));
-    if (!res || res.ok === false) throw new Error((res && res.error) || 'failed');
-    _viewerTrackEvent('file_preview_save_app_result', { result: 'success', kind: _kindOf(p) });
-    _viewerSaveAppBtn.innerHTML = _viewerSaveAppButtonHtml(doneLabel, 'check');
-    if (typeof uiToast === 'function') uiToast(doneLabel, { variant: 'success' });
-    else if (typeof uiAlert === 'function') await uiAlert(doneLabel);
-    try { if (typeof loadSavedApps === 'function') loadSavedApps(true); } catch (_) {}
-  } catch (err) {
-    const reason = String(err && err.message || err);
-    _viewerTrackEvent('file_preview_save_app_result', { result: 'failure', kind: _kindOf(p) });
-    _viewerTrackError('file_preview_save_app', { kind: _kindOf(p), error_message: reason });
-    _viewerLog.warn('save as app failed', { path: p, error: reason });
-    if (typeof uiAlert === 'function') {
-      const prefix = _viewerLabel('apps.save_failed', 'Could not save the app');
-      await uiAlert(`${prefix}: ${reason}`);
-    }
-  } finally {
-    setTimeout(() => {
-      if (!_viewerSaveAppBtn) return;
-      _viewerSaveAppBtn.innerHTML = original;
-      _refreshSaveAppButton(p);
-    }, 1500);
-  }
-}
 
 async function _openViewerShell(displayName, opts) {
   const el = _ensureViewer();
@@ -498,7 +420,6 @@ async function _openViewerShell(displayName, opts) {
       projectScoped: _viewerLibraryProjectScoped,
     });
   }
-  void _refreshSaveAppButton(_viewerCurrentPath);
   _viewerTitle.textContent = displayName || '';
   // `is-markdown` / `is-text` switch the body to a flex column so an editor
   // textarea can fill the available height. View-mode `<pre>` and view-mode
@@ -538,7 +459,6 @@ async function closeChatFileViewer(opts) {
   _viewerCurrentCid = null;
   _viewerCurrentProjectId = null;
   if (_viewerAddLibraryBtn) _viewerAddLibraryBtn.hidden = true;
-  if (_viewerSaveAppBtn) _viewerSaveAppBtn.hidden = true;
   if (_viewerKeyHandler) {
     document.removeEventListener('keydown', _viewerKeyHandler);
     _viewerKeyHandler = null;

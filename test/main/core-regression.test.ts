@@ -197,9 +197,8 @@ describe('PC core regression unit coverage', () => {
     expect(attachments.listAttachments(TEST_UID, cid)).toEqual([]);
   });
 
-  it('[PC-FILE-004] creates, serves, saves, edits, and deletes interactive app artifacts', async () => {
+  it('[PC-FILE-004] creates and serves interactive app artifacts with path-sandboxing', async () => {
     const artifacts = await import('../../src/main/features/chat_artifacts');
-    const savedApps = await import('../../src/main/features/saved_apps');
     const cid = 'cid_artifact_regression';
 
     const created = artifacts.createArtifact(TEST_UID, cid, 'RegressionAgent', {
@@ -219,30 +218,6 @@ describe('PC core regression unit coverage', () => {
       expect(fs.readFileSync(resolved.absPath, 'utf8')).toContain('Regression');
     }
     expect(artifacts.resolveArtifactFilePath(TEST_UID, cid, created.artifactId, '../secrets.txt').ok).toBe(false);
-
-    const saved = savedApps.saveFromArtifact(TEST_UID, cid, created.artifactId);
-    expect(saved.ok).toBe(true);
-    if (!saved.ok) return;
-    expect(savedApps.listSavedApps(TEST_UID).map((app) => app.title)).toEqual(['Regression App']);
-    expect(savedApps.renameSavedApp(TEST_UID, saved.id, 'Renamed App')).toEqual({
-      ok: true,
-      title: 'Renamed App',
-    });
-
-    const edit = await savedApps.openForEditing(TEST_UID, saved.id);
-    expect(edit.ok).toBe(true);
-    if (edit.ok) {
-      const conversation = edit.conversation as { conversation_id: string };
-      const source = fs.readFileSync(
-        userPath('cloud', 'chat_attachments', conversation.conversation_id, edit.sourceFileName),
-        'utf8',
-      );
-      expect(source).toContain('========== FILE: index.html ==========');
-      expect(source).toContain('========== FILE: assets/app.js ==========');
-    }
-
-    expect(savedApps.deleteSavedApp(TEST_UID, saved.id).ok).toBe(true);
-    expect(savedApps.listSavedApps(TEST_UID)).toEqual([]);
   });
 
   it('[PC-AGENT-001][PC-AGENT-002][PC-AGENT-003][PC-AGENT-004][PC-COLLAB-004] creates, toggles, configures, and deletes agents', async () => {

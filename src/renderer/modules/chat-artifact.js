@@ -260,7 +260,6 @@
     const defs = [
       ['reload', _t('artifact.reload', 'Reload')],
       ['open', _t('artifact.open_external', 'Open')],
-      ['save', _t('artifact.menu_save', 'Save')],
     ];
     for (const [action, label] of defs) {
       const it = document.createElement('div');
@@ -274,7 +273,6 @@
         if (!ctx) return;
         if (action === 'reload') _doReload(ctx);
         else if (action === 'open') _doOpen(ctx);
-        else if (action === 'save') _doSave(ctx);
       });
       el.appendChild(it);
     }
@@ -376,28 +374,6 @@
   function _doOpen(ctx) {
     try { _openViewer(ctx); }
     catch (err) { _trackError('artifact_open_viewer', { error_message: String(err && err.message || err) }); _notifyFail(_t('artifact.open_failed', 'Could not open'), err); }
-  }
-
-  async function _doSave(ctx) {
-    _track('artifact_save', { surface: 'conversation' });
-    try {
-      const r = await window.orkas.invoke('conversations.artifacts.save', {
-        cid: String(ctx.cid), artifactId: String(ctx.artifactId),
-      });
-      if (!r || r.ok === false) throw new Error((r && r.error) || 'save failed');
-      _trackEvent('artifact_save_result', { result: 'success', surface: 'conversation' });
-      try {
-        const message = _t('apps.saved_toast', 'Saved to My Apps');
-        if (typeof uiToast === 'function') uiToast(message, { variant: 'success' });
-        else if (typeof uiAlert === 'function') uiAlert(message);
-      } catch (_) {}
-      // Refresh the "My Apps" tab if its module is loaded.
-      try { if (typeof loadSavedApps === 'function') loadSavedApps(true); } catch (_) {}
-    } catch (err) {
-      _trackEvent('artifact_save_result', { result: 'failure', surface: 'conversation' });
-      _trackError('artifact_save', { error_message: String(err && err.message || err) });
-      _notifyFail(_t('apps.save_failed', 'Could not save the app'), err);
-    }
   }
 
   // ── render ──────────────────────────────────────────────────────────────

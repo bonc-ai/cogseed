@@ -7,7 +7,6 @@ const root = path.join(__dirname, '../..');
 const source = fs.readFileSync(path.join(root, 'src/renderer/modules/artifact-security.js'), 'utf8');
 const indexSource = fs.readFileSync(path.join(root, 'src/renderer/index.html'), 'utf8');
 const chatSource = fs.readFileSync(path.join(root, 'src/renderer/modules/chat-artifact.js'), 'utf8');
-const savedSource = fs.readFileSync(path.join(root, 'src/renderer/modules/saved-apps.js'), 'utf8');
 
 function loadSecurity() {
   const context: any = { URL };
@@ -24,7 +23,6 @@ describe('artifact iframe security boundary', () => {
       indexSource.indexOf('./modules/chat-artifact.js'),
     );
     expect(chatSource).toContain('artifactSecurity.trustedArtifactMessage');
-    expect(savedSource).toContain('artifactSecurity.trustedArtifactMessage');
   });
 
   it('does not grant popup or top-navigation capabilities', () => {

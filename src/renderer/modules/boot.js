@@ -286,7 +286,6 @@ function _lazyFeaturePanel(view) {
     : view === 'skills' ? 'panel-skills'
     : view === 'evolution' ? 'panel-evolution'
     : view === 'contexts' ? 'panel-contexts'
-    : view === 'apps' ? 'panel-apps'
     : view === 'settings' ? 'panel-settings'
     : view === 'project' ? 'panel-project'
     : view === 'auto' ? 'panel-auto'
@@ -371,7 +370,6 @@ function setView(view, cid, opts = {}) {
                 : view === 'skills' ? 'panel-skills'
                 : view === 'connectors' ? 'panel-connectors'
                 : view === 'contexts' ? 'panel-contexts'
-                : view === 'apps' ? 'panel-apps'
                 : view === 'evolution' ? 'panel-evolution'
                 : view === 'settings' ? 'panel-settings'
                 : view === 'memory' ? 'panel-memory'
@@ -387,7 +385,6 @@ function setView(view, cid, opts = {}) {
   document.getElementById('skills-btn').classList.toggle('active', view === 'skills');
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connectors');
   document.getElementById('contexts-btn')?.classList.toggle('active', view === 'contexts');
-  document.getElementById('apps-btn')?.classList.toggle('active', view === 'apps');
   document.getElementById('evolution-btn')?.classList.toggle('active', view === 'evolution');
   document.getElementById('settings-btn')?.classList.toggle('active', view === 'settings');
   document.getElementById('devtools-btn')?.classList.toggle('active', view === 'devtools');
@@ -525,17 +522,6 @@ function setView(view, cid, opts = {}) {
     _deferSidebarNavWork('auto-tab-load', () => {
       _loadViewFeature('auto', 'auto', () => {
         if (typeof loadAutoList === 'function') loadAutoList(true);
-      });
-    });
-  } else if (view === 'apps') {
-    currentCid = null;
-    // Force-refresh on every visit (same rationale as agents/skills): a
-    // "保存" can land while the user is on another tab — the tab is the
-    // recovery path, so it should always show ground truth. Cheap (one IPC
-    // + dir scan).
-    _deferSidebarNavWork('apps-tab-load', () => {
-      _loadViewFeature('apps', 'apps', () => {
-        if (typeof loadSavedApps === 'function') loadSavedApps(true);
       });
     });
   } else if (view === 'evolution') {

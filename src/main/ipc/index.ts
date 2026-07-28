@@ -43,7 +43,6 @@ import * as kbIndexer from '../features/kb_indexer';
 import * as chatAttachments from '../features/chat_attachments';
 import * as chatArtifacts from '../features/chat_artifacts';
 import * as conversationFiles from '../features/conversation_files';
-import * as savedApps from '../features/saved_apps';
 import * as recycleBin from '../features/recycle_bin';
 import * as search from '../features/search';
 import * as auth from '../features/auth';
@@ -676,7 +675,6 @@ function _recycleDataChangeForPaths(paths: string[]): { domains: string[]; cids:
       }
     }
     else if (first === 'auto_tasks') domains.add('auto_tasks');
-    else if (first === 'saved_apps') domains.add('saved_apps');
     else if (first === 'agents') domains.add('agents');
     else if (first === 'skills') domains.add('skills');
     else if (first === 'marketplace') domains.add('marketplace');
@@ -1775,93 +1773,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(cid)) throw new Error('invalid cid');
     return chatArtifacts.inspectArtifactIndex(ctx.userId, String(cid), String(artifactId || ''));
   },
-  // Copy a chat artifact into the persistent "My Apps" pool
-  // (`<uid>/cloud/saved_apps/<appId>/`). Surfaced as the artifact card's
-  // `⋯` → "保存".
-  'conversations.artifacts.save': async ({ cid, artifactId }, ctx) => {
-    if (!safeId(cid)) throw new Error('invalid cid');
-    const r = savedApps.saveFromArtifact(ctx.userId, String(cid), String(artifactId || ''));
-    if (!r.ok) throw new Error((r as { error?: string }).error || 'failed to save app');
-    return { ok: true, id: (r as { id: string }).id, title: (r as { title: string }).title };
-  },
-
-  'savedApps.inspectBundleFromPath': async (payload, ctx) => {
-    const target = payload?.path;
-    if (typeof target !== 'string' || !target) throw new Error('missing path');
-    const norm = path.resolve(target);
-    if (!await _isAllowedFileActionPath(ctx.userId, payload, norm)) {
-      throw new Error('path is outside the user workspace');
-    }
-    return savedApps.inspectBundleFromPath(norm, {
-      fenceRoots: await _ipcFileSandboxAllowedRoots(ctx.userId, payload),
-    });
-  },
-
-  'savedApps.saveFromPath': async (payload, ctx) => {
-    const target = payload?.path;
-    if (typeof target !== 'string' || !target) throw new Error('missing path');
-    const norm = path.resolve(target);
-    if (!await _isAllowedFileActionPath(ctx.userId, payload, norm)) {
-      throw new Error('path is outside the user workspace');
-    }
-    const r = savedApps.saveFromPath(ctx.userId, norm, {
-      title: payload?.title,
-      sourceCid: payload?.cid,
-      fenceRoots: await _ipcFileSandboxAllowedRoots(ctx.userId, payload),
-    });
-    if (!r.ok) throw new Error((r as { error?: string }).error || 'failed to save app');
-    return r;
-  },
-
-  // ── Saved apps ("My Apps" — user-kept copies of create_artifact bundles) ──
-  'savedApps.list': async (_payload, ctx) => ({ apps: savedApps.listSavedApps(ctx.userId) }),
-  'savedApps.openExternal': async ({ appId }, ctx) => {
-    const r = savedApps.resolveSavedAppIndex(ctx.userId, String(appId || ''));
-    if (!r.ok) throw new Error((r as { error?: string }).error || 'app not found');
-    const absPath = (r as { absPath: string }).absPath;
-    const err = await shell.openPath(absPath);
-    if (err) throw new Error(err);
-    return { ok: true, path: absPath };
-  },
-  'savedApps.openInApp': async ({ appId }, ctx) => {
-    const id = String(appId || '');
-    const r = savedApps.resolveSavedAppFilePath(ctx.userId, id, '');
-    if (!r.ok) throw new Error((r as { error?: string }).error || 'app not found');
-    const entry = (r as { entry: string }).entry || 'index.html';
-    const url = ['chat-app://saved', encodeURIComponent(id)]
-      .concat(entry.split('/').map((part) => encodeURIComponent(part)))
-      .join('/');
-    return { ok: true, url, entry };
-  },
-  // Open a saved app for editing — creates a fresh conversation with the
-  // app's source bundled in as an `app-source.md` attachment. The renderer
-  // navigates to it + pre-fills a draft.
-  'savedApps.openForEditing': async ({ appId }, ctx) => {
-    const r = await savedApps.openForEditing(ctx.userId, String(appId || ''));
-    if (!r.ok) throw new Error((r as { error?: string }).error || 'failed to open the app for editing');
-    return {
-      ok: true,
-      conversation: (r as { conversation: unknown }).conversation,
-      title: (r as { title: string }).title,
-      sourceFileName: (r as { sourceFileName: string }).sourceFileName,
-    };
-  },
-  'savedApps.rename': async ({ appId, title }, ctx) => {
-    const r = savedApps.renameSavedApp(ctx.userId, String(appId || ''), title);
-    if (!r.ok) throw new Error((r as { error?: string }).error || 'failed to rename');
-    return { ok: true, title: (r as { title: string }).title };
-  },
-  'savedApps.delete': async ({ appId }, ctx) => {
-    await recycleBin.createAppRecycleBatchForCloudEntry(
-      ctx.userId,
-      `cloud/saved_apps/${String(appId || '')}`,
-      'saved_app',
-    );
-    const r = savedApps.deleteSavedApp(ctx.userId, String(appId || ''));
-    if (!r.ok) throw new Error((r as { error?: string }).error || 'failed to delete');
-    return { ok: true };
-  },
-
   // ── Agents ──
   'agents.list': async ({ summary } = {}) => {
     // `force` is a renderer-cache concern: callers may need a fresh payload,

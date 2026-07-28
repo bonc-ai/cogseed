@@ -29,9 +29,6 @@ const _rendererFeatureManifest = Object.freeze({
   'kb-picker': [
     { src: './modules/kb-picker.js' },
   ],
-  apps: [
-    { src: './modules/saved-apps.js' },
-  ],
   skills: [
     { src: './modules/skills.js' },
     { src: './modules/skills-bindings.js' },

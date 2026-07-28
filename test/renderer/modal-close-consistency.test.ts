@@ -20,7 +20,6 @@ const dialogSources = [
   read('src/renderer/modules/chat-file-viewer.js'),
   read('src/renderer/modules/chat-lightbox.js'),
   read('src/renderer/modules/chat-artifact.js'),
-  read('src/renderer/modules/saved-apps.js'),
 ];
 
 describe('modal close control consistency', () => {
