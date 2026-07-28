@@ -50,7 +50,12 @@
       } else if (page === 'evolution') {
         const { runs } = await window.apiFetch('/api/evolution/evolve').then(r => r.json());
         const latest = runs && runs[0];
-        body.innerHTML = P.renderKstarTimeline(latest || null) + _evolveControls();
+        let html = P.renderKstarTimeline(latest || null) + _evolveControls();
+        if (activeSkillId) {
+          const reco = await window.apiFetch(`/api/evolution/skills/${encodeURIComponent(activeSkillId)}/recommend`).then(r => r.json());
+          html += '<div class="evo-reco-section"><div class="evo-section-title">进化建议</div>' + P.renderRecommendations((reco && reco.suggestions) || []) + '</div>';
+        }
+        body.innerHTML = html;
         _bindEvolveControls(body);
       } else if (page === 'ontology') {
         if (!activeSkillId) { body.innerHTML = '<div class="evo-empty">先在「技能」页选择一个技能</div>'; return; }

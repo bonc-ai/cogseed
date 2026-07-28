@@ -57,6 +57,13 @@ describe('evolution ipc-shim routes', () => {
     expect(invoke).toHaveBeenCalledWith('evolution.skills.export', expect.objectContaining({ skillId: 'sk1', version: '0.2.0' }));
   });
 
+  it('GET /api/evolution/skills/:skillId/recommend → evolution.evolve.recommend', async () => {
+    const invoke = vi.fn(async () => ({ ok: true, suggestions: [] }));
+    const { apiFetch } = loadShim(invoke);
+    await apiFetch('/api/evolution/skills/sk1/recommend');
+    expect(invoke).toHaveBeenCalledWith('evolution.evolve.recommend', expect.objectContaining({ skillId: 'sk1' }));
+  });
+
   it('POST /api/evolution/skills/capture-intent → evolution.skills.captureIntent', async () => {
     const invoke = vi.fn(async () => ({ ok: true, questions: [] }));
     const { apiFetch } = loadShim(invoke);

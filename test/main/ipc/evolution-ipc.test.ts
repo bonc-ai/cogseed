@@ -43,6 +43,7 @@ vi.mock('../../../src/main/features/evolution', () => ({
   exportSkillZip: vi.fn(async (_uid: string, skillId: string) => ({ ok: true, zipPath: `/tmp/${skillId}-v0.2.0.zip` })),
   captureSkillIntent: vi.fn(async (_uid: string, input: any) => ({ skill_id: 'skill_x', intent: { purpose: input.purpose }, questions: ['q1'] })),
   createSkillFromDraft: vi.fn(async (_uid: string, input: any) => ({ skill: { id: 'sk-new', name: input.name } })),
+  recommendForSkill: vi.fn(async (_uid: string, skillId: string) => ({ skillId, suggestions: [{ id: 's1', ontology: '学术规范', rule: 'R1', description: 'd', severity: 'warning', suggestion: '加规则', selected: false }] })),
   listOntologyBindings: vi.fn(async () => (['onto-a'])),
   bindOntology: vi.fn(async (_uid: string, _skillId: string, ontologyId: string) => (['onto-a', ontologyId])),
   unbindOntology: vi.fn(async () => ([])),
@@ -84,6 +85,15 @@ describe('ipc › evolution channels', () => {
     const r = await call('evolution.evolve.step', { runId: 'r1' });
     expect(r.ok).toBe(true);
     expect(r.runId).toBe('r1');
+  });
+  it('evolution.evolve.recommend 返回建议列表', async () => {
+    const r = await call('evolution.evolve.recommend', { skillId: 'sk1' });
+    expect(r.ok).toBe(true);
+    expect(r.suggestions[0].rule).toBe('R1');
+  });
+  it('evolution.evolve.recommend 缺 skillId 时 ok:false', async () => {
+    const r = await call('evolution.evolve.recommend', {});
+    expect(r.ok).toBe(false);
   });
   it('evolution.ontology.extract 返回 degraded 标记', async () => {
     const r = await call('evolution.ontology.extract', { skillId: 'sk1', text: 't' });

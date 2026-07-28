@@ -35,6 +35,7 @@ const _IPC_ROUTES = [
   ['POST',   '/api/evolution/evolve/abort',   'evolution.evolve.abort'],
   ['GET',    /^\/api\/evolution\/evolve\/([^/]+)$/, 'evolution.evolve.get', ['runId']],
   ['GET',    '/api/evolution/evolve',         'evolution.evolve.list'],
+  ['GET',    /^\/api\/evolution\/skills\/([^/]+)\/recommend$/, 'evolution.evolve.recommend', ['skillId']],
   ['GET',    /^\/api\/evolution\/evals\/([^/]+)$/, 'evolution.evals.get', ['skillId']],
   ['POST',   '/api/evolution/evals/save-case', 'evolution.evals.saveCase'],
   ['POST',   '/api/evolution/evals/run',      'evolution.evals.run', null, { stream: true }],

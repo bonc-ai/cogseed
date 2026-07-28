@@ -11,3 +11,5 @@ export { listSkillVersions, appendSkillVersion } from './versions-store';
 export type { SkillVersionRecord } from './versions-store';
 export { exportSkillZip } from './export-service';
 export { captureSkillIntent, createSkillFromDraft } from './create-wizard';
+export { recommendForSkill, buildRecommendations } from './recommend-service';
+export type { RecommendSuggestion } from './recommend-service';

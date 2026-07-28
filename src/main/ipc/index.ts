@@ -1974,6 +1974,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'evolution.evolve.list': async (_payload, ctx) => {
     return { runs: await evolution.listEvolutionRuns(ctx.userId) };
   },
+  'evolution.evolve.recommend': async ({ skillId }, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skillId');
+    return evolution.recommendForSkill(ctx.userId, skillId);
+  },
   'evolution.evals.get': async ({ skillId }, ctx) => {
     if (!safeId(skillId)) throw new Error('invalid skillId');
     return evolution.readEvalRecord(ctx.userId, skillId);

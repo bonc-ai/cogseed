@@ -46,6 +46,13 @@
     ).join('') + '</ul>';
   }
 
+  function renderRecommendations(suggestions) {
+    if (!suggestions || !suggestions.length) return '<div class="evo-empty">暂无进化建议（绑定领域本体或积累交互记录后生成）</div>';
+    return '<ul class="evo-reco-list">' + suggestions.map(s =>
+      `<li class="evo-reco-item evo-reco-${escapeHtml(s.severity || 'info')}"><span class="evo-reco-onto">${escapeHtml(s.ontology || '')}</span><span class="evo-reco-rule">${escapeHtml(s.rule || '')}</span><span class="evo-reco-sug">${escapeHtml(s.suggestion || '')}</span></li>`
+    ).join('') + '</ul>';
+  }
+
   function renderCreateForm() {
     return '<div class="evo-create-form">'
       + '<div class="evo-section-title">创建技能</div>'
@@ -99,7 +106,7 @@
     ).join('') + '</ul>';
   }
 
-  const api = { escapeHtml, renderDashboard, renderSkillsList, renderKstarTimeline, renderOntologyList, renderOntologyBindings, renderSkillVersions, renderCreateForm, renderInterviewQuestions, renderEvalRecord, renderPatchList };
+  const api = { escapeHtml, renderDashboard, renderSkillsList, renderKstarTimeline, renderOntologyList, renderOntologyBindings, renderSkillVersions, renderCreateForm, renderInterviewQuestions, renderRecommendations, renderEvalRecord, renderPatchList };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;   // 测试桥
   else root.EvolutionPages = api;                                             // 浏览器全局
 })(typeof window !== 'undefined' ? window : globalThis);

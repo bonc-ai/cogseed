@@ -8,6 +8,7 @@ const P = require('../../src/renderer/modules/evolution/pages.js') as {
   renderSkillVersions: (versions: any[]) => string;
   renderCreateForm: () => string;
   renderInterviewQuestions: (questions: string[]) => string;
+  renderRecommendations: (suggestions: any[]) => string;
   escapeHtml: (s: unknown) => string;
 };
 
@@ -77,5 +78,14 @@ describe('evolution pages 纯渲染', () => {
     const html = P.renderInterviewQuestions(['触发场景?', '输出格式?']);
     expect(html).toContain('触发场景?');
     expect(html).toContain('访谈问题');
+  });
+  it('renderRecommendations 渲染建议 + 严重级样式', () => {
+    const html = P.renderRecommendations([{ ontology: '学术规范', rule: '查重门槛', suggestion: '加规则', severity: 'warning' }]);
+    expect(html).toContain('学术规范');
+    expect(html).toContain('加规则');
+    expect(html).toContain('evo-reco-warning');
+  });
+  it('renderRecommendations 空列表显示空态', () => {
+    expect(P.renderRecommendations([])).toContain('暂无进化建议');
   });
 });
