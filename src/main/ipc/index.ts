@@ -3293,6 +3293,18 @@ const streamHandlers: Record<string, StreamHandler> = {
     });
   },
 
+  'evolution.evals.run': async function* ({ skillId, cases, outputs, agentId }, ctx) {
+    if (!safeId(skillId)) {
+      yield { type: 'error', text: 'invalid skillId' };
+      return;
+    }
+    if (!Array.isArray(cases)) {
+      yield { type: 'error', text: 'invalid cases' };
+      return;
+    }
+    yield* evolution.runEvalStream(ctx.userId, skillId, { cases, outputs: outputs ?? {}, agentId });
+  },
+
   'agents.chat.sendStream': async function* ({ id, content, model_text, attachments }, ctx, signal) {
     if (!safeId(id)) {
       yield { type: 'error', text: 'invalid agent id' };
