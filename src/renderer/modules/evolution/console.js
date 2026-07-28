@@ -35,7 +35,7 @@
         body.innerHTML = P.renderDashboard(d);
       } else if (page === 'skills') {
         const { skills } = await window.apiFetch('/api/skills/list').then(r => r.json());
-        let html = P.renderSkillsList(skills || []);
+        let html = P.renderCreateForm() + P.renderSkillsList(skills || []);
         if (activeSkillId) {
           const { versions } = await window.apiFetch(`/api/evolution/skills/${encodeURIComponent(activeSkillId)}/versions`).then(r => r.json());
           const latestVer = (versions && versions[0] && versions[0].version) || '0.1.0';
@@ -46,6 +46,7 @@
         body.innerHTML = html;
         _bindSkillSelect(body);
         _bindSkillExport(body);
+        _bindCreateWizard(body);
       } else if (page === 'evolution') {
         const { runs } = await window.apiFetch('/api/evolution/evolve').then(r => r.json());
         const latest = runs && runs[0];
@@ -101,6 +102,34 @@
   function _bindSkillSelect(body) {
     body.querySelectorAll('[data-skill-id]').forEach(item => {
       item.addEventListener('click', () => { activeSkillId = item.dataset.skillId; renderNav(); });
+    });
+  }
+
+  function _bindCreateWizard(body) {
+    const intentBtn = body.querySelector('#evo-create-intent-btn');
+    const draftBtn = body.querySelector('#evo-create-draft-btn');
+    const read = () => ({
+      name: (body.querySelector('#evo-create-name') || {}).value || '',
+      purpose: (body.querySelector('#evo-create-purpose') || {}).value || '',
+      triggers: (body.querySelector('#evo-create-triggers') || {}).value || '',
+    });
+    if (intentBtn) intentBtn.addEventListener('click', async () => {
+      const { name, purpose, triggers } = read();
+      if (!name.trim() || !purpose.trim()) return;
+      const res = await window.apiFetch('/api/evolution/skills/capture-intent', {
+        method: 'POST',
+        body: JSON.stringify({ name, purpose, trigger_contexts: triggers.split(',').map(s => s.trim()).filter(Boolean) }),
+      }).then(r => r.json());
+      const box = body.querySelector('#evo-create-questions');
+      if (box && res && res.ok) box.innerHTML = window.EvolutionPages.renderInterviewQuestions(res.questions || []);
+    });
+    if (draftBtn) draftBtn.addEventListener('click', async () => {
+      const { name, purpose } = read();
+      if (!name.trim()) return;
+      const res = await window.apiFetch('/api/evolution/skills/create-draft', {
+        method: 'POST', body: JSON.stringify({ name, description: purpose, category: '' }),
+      }).then(r => r.json());
+      if (res && res.ok) loadPage('skills');
     });
   }
 

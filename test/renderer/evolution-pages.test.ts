@@ -6,6 +6,8 @@ const P = require('../../src/renderer/modules/evolution/pages.js') as {
   renderPatchList: (p: any[]) => string;
   renderOntologyBindings: (refs: string[]) => string;
   renderSkillVersions: (versions: any[]) => string;
+  renderCreateForm: () => string;
+  renderInterviewQuestions: (questions: string[]) => string;
   escapeHtml: (s: unknown) => string;
 };
 
@@ -64,5 +66,16 @@ describe('evolution pages 纯渲染', () => {
   });
   it('renderSkillVersions 空列表显示空态', () => {
     expect(P.renderSkillVersions([])).toContain('暂无版本记录');
+  });
+  it('renderCreateForm 含名称/用途输入 + 捕获意图/创建草稿按钮', () => {
+    const html = P.renderCreateForm();
+    expect(html).toContain('evo-create-name');
+    expect(html).toContain('evo-create-intent-btn');
+    expect(html).toContain('evo-create-draft-btn');
+  });
+  it('renderInterviewQuestions 渲染访谈问题列表', () => {
+    const html = P.renderInterviewQuestions(['触发场景?', '输出格式?']);
+    expect(html).toContain('触发场景?');
+    expect(html).toContain('访谈问题');
   });
 });

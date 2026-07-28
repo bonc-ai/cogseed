@@ -40,6 +40,8 @@ const _IPC_ROUTES = [
   ['POST',   '/api/evolution/evals/run',      'evolution.evals.run', null, { stream: true }],
   ['GET',    /^\/api\/evolution\/skills\/([^/]+)\/versions$/, 'evolution.skills.versions', ['skillId']],
   ['POST',   /^\/api\/evolution\/skills\/([^/]+)\/export$/, 'evolution.skills.export', ['skillId']],
+  ['POST',   '/api/evolution/skills/capture-intent', 'evolution.skills.captureIntent'],
+  ['POST',   '/api/evolution/skills/create-draft', 'evolution.skills.createDraft'],
   ['GET',    /^\/api\/evolution\/ontology\/([^/]+)$/, 'evolution.ontology.list', ['skillId']],
   ['POST',   '/api/evolution/ontology/extract', 'evolution.ontology.extract'],
   ['GET',    /^\/api\/evolution\/ontology\/([^/]+)\/bindings$/, 'evolution.ontology.bindings', ['skillId']],

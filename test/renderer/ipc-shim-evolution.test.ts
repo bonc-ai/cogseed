@@ -57,6 +57,20 @@ describe('evolution ipc-shim routes', () => {
     expect(invoke).toHaveBeenCalledWith('evolution.skills.export', expect.objectContaining({ skillId: 'sk1', version: '0.2.0' }));
   });
 
+  it('POST /api/evolution/skills/capture-intent → evolution.skills.captureIntent', async () => {
+    const invoke = vi.fn(async () => ({ ok: true, questions: [] }));
+    const { apiFetch } = loadShim(invoke);
+    await apiFetch('/api/evolution/skills/capture-intent', { method: 'POST', body: JSON.stringify({ name: 'x', purpose: 'p' }) });
+    expect(invoke).toHaveBeenCalledWith('evolution.skills.captureIntent', expect.objectContaining({ name: 'x', purpose: 'p' }));
+  });
+
+  it('POST /api/evolution/skills/create-draft → evolution.skills.createDraft', async () => {
+    const invoke = vi.fn(async () => ({ ok: true, skill: { id: 'sk-new' } }));
+    const { apiFetch } = loadShim(invoke);
+    await apiFetch('/api/evolution/skills/create-draft', { method: 'POST', body: JSON.stringify({ name: 'x' }) });
+    expect(invoke).toHaveBeenCalledWith('evolution.skills.createDraft', expect.objectContaining({ name: 'x' }));
+  });
+
   it('GET /api/evolution/ontology/:skillId/bindings → evolution.ontology.bindings', async () => {
     const invoke = vi.fn(async () => ({ ok: true, refs: [] }));
     const { apiFetch } = loadShim(invoke);

@@ -41,6 +41,8 @@ vi.mock('../../../src/main/features/evolution', () => ({
   listSkillOntologies: vi.fn(async () => ([])),
   listSkillVersions: vi.fn(async () => ([{ version: '0.1.1', at: 't' }])),
   exportSkillZip: vi.fn(async (_uid: string, skillId: string) => ({ ok: true, zipPath: `/tmp/${skillId}-v0.2.0.zip` })),
+  captureSkillIntent: vi.fn(async (_uid: string, input: any) => ({ skill_id: 'skill_x', intent: { purpose: input.purpose }, questions: ['q1'] })),
+  createSkillFromDraft: vi.fn(async (_uid: string, input: any) => ({ skill: { id: 'sk-new', name: input.name } })),
   listOntologyBindings: vi.fn(async () => (['onto-a'])),
   bindOntology: vi.fn(async (_uid: string, _skillId: string, ontologyId: string) => (['onto-a', ontologyId])),
   unbindOntology: vi.fn(async () => ([])),
@@ -101,6 +103,24 @@ describe('ipc › evolution channels', () => {
     const r = await call('evolution.skills.export', { skillId: 'sk1', version: '0.2.0' });
     expect(r.ok).toBe(true);
     expect(r.zipPath).toContain('sk1-v0.2.0.zip');
+  });
+  it('evolution.skills.captureIntent 缺 purpose 时 ok:false', async () => {
+    const r = await call('evolution.skills.captureIntent', { name: 'x' });
+    expect(r.ok).toBe(false);
+  });
+  it('evolution.skills.captureIntent 返回意图+问题', async () => {
+    const r = await call('evolution.skills.captureIntent', { name: 'x', purpose: '目的' });
+    expect(r.ok).toBe(true);
+    expect(r.questions).toContain('q1');
+  });
+  it('evolution.skills.createDraft 缺 name 时 ok:false', async () => {
+    const r = await call('evolution.skills.createDraft', { description: 'x' });
+    expect(r.ok).toBe(false);
+  });
+  it('evolution.skills.createDraft 返回新技能', async () => {
+    const r = await call('evolution.skills.createDraft', { name: '论文查重', description: 'd', category: 'academic' });
+    expect(r.ok).toBe(true);
+    expect(r.skill.id).toBe('sk-new');
   });
   it('evolution.ontology.bindings 返回 refs', async () => {
     const r = await call('evolution.ontology.bindings', { skillId: 'sk1' });

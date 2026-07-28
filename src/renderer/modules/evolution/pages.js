@@ -46,6 +46,24 @@
     ).join('') + '</ul>';
   }
 
+  function renderCreateForm() {
+    return '<div class="evo-create-form">'
+      + '<div class="evo-section-title">创建技能</div>'
+      + '<input type="text" id="evo-create-name" placeholder="技能名称" />'
+      + '<input type="text" id="evo-create-purpose" placeholder="用途（做什么）" />'
+      + '<input type="text" id="evo-create-triggers" placeholder="触发场景（逗号分隔）" />'
+      + '<button class="btn btn-sm" id="evo-create-intent-btn">捕获意图</button>'
+      + '<button class="btn btn-sm" id="evo-create-draft-btn">创建草稿</button>'
+      + '<div class="evo-create-questions" id="evo-create-questions"></div>'
+      + '</div>';
+  }
+
+  function renderInterviewQuestions(questions) {
+    if (!questions || !questions.length) return '';
+    return '<div class="evo-section-title">访谈问题</div><ul class="evo-question-list">'
+      + questions.map(q => `<li>${escapeHtml(q)}</li>`).join('') + '</ul>';
+  }
+
   function renderSkillVersions(versions) {
     if (!versions || !versions.length) return '<div class="evo-empty">暂无版本记录</div>';
     return '<ul class="evo-version-list">' + versions.map(v =>
@@ -81,7 +99,7 @@
     ).join('') + '</ul>';
   }
 
-  const api = { escapeHtml, renderDashboard, renderSkillsList, renderKstarTimeline, renderOntologyList, renderOntologyBindings, renderSkillVersions, renderEvalRecord, renderPatchList };
+  const api = { escapeHtml, renderDashboard, renderSkillsList, renderKstarTimeline, renderOntologyList, renderOntologyBindings, renderSkillVersions, renderCreateForm, renderInterviewQuestions, renderEvalRecord, renderPatchList };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;   // 测试桥
   else root.EvolutionPages = api;                                             // 浏览器全局
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -2005,6 +2005,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(skillId)) throw new Error('invalid skillId');
     return evolution.exportSkillZip(ctx.userId, skillId, typeof version === 'string' ? version : '0.0.0');
   },
+  'evolution.skills.captureIntent': async ({ name, purpose, trigger_contexts, output_format, edge_cases, dependencies, examples }, ctx) => {
+    if (typeof name !== 'string' || !name.trim()) throw new Error('missing name');
+    if (typeof purpose !== 'string' || !purpose.trim()) throw new Error('missing purpose');
+    return evolution.captureSkillIntent(ctx.userId, {
+      name, purpose,
+      trigger_contexts: Array.isArray(trigger_contexts) ? trigger_contexts : [],
+      output_format: typeof output_format === 'string' ? output_format : 'structured_analysis',
+      edge_cases: Array.isArray(edge_cases) ? edge_cases : [],
+      dependencies: Array.isArray(dependencies) ? dependencies : [],
+      examples: Array.isArray(examples) ? examples : [],
+    });
+  },
+  'evolution.skills.createDraft': async ({ name, description, category }, ctx) => {
+    if (typeof name !== 'string' || !name.trim()) throw new Error('missing name');
+    return evolution.createSkillFromDraft(ctx.userId, {
+      name, description: typeof description === 'string' ? description : '', category: typeof category === 'string' ? category : '',
+    });
+  },
   'evolution.ontology.bindings': async ({ skillId }, ctx) => {
     if (!safeId(skillId)) throw new Error('invalid skillId');
     return { refs: await evolution.listOntologyBindings(ctx.userId, skillId) };
