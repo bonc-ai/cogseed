@@ -25,6 +25,7 @@ import * as projectLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
 import * as companionRepro from '../features/companion_repro';
 import * as p3394 from '../features/p3394';
+import * as evolution from '../features/evolution';
 import type { GroupEvent } from '../features/group_chat/bus';
 import * as agents from '../features/agents';
 import * as autoTasks from '../features/auto_tasks';
@@ -1950,6 +1951,53 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   // ── Skills ──
+  'evolution.dashboard': async (_payload, ctx) => {
+    return evolution.buildDashboard(ctx.userId);
+  },
+  'evolution.evolve.start': async ({ skillId, episode, currentContent, agentId }, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skillId');
+    if (!episode || typeof currentContent !== 'string') throw new Error('missing episode/currentContent');
+    return evolution.startEvolutionRun(ctx.userId, { skillId, episode, currentContent, agentId });
+  },
+  'evolution.evolve.step': async ({ runId }, ctx) => {
+    if (!safeId(runId)) throw new Error('invalid runId');
+    return evolution.stepEvolutionRun(ctx.userId, runId);
+  },
+  'evolution.evolve.abort': async ({ runId }, ctx) => {
+    if (!safeId(runId)) throw new Error('invalid runId');
+    return evolution.abortEvolutionRun(ctx.userId, runId);
+  },
+  'evolution.evolve.get': async ({ runId }, ctx) => {
+    if (!safeId(runId)) throw new Error('invalid runId');
+    return { run: await evolution.readEvolutionRun(ctx.userId, runId) };
+  },
+  'evolution.evolve.list': async (_payload, ctx) => {
+    return { runs: await evolution.listEvolutionRuns(ctx.userId) };
+  },
+  'evolution.evals.get': async ({ skillId }, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skillId');
+    return evolution.readEvalRecord(ctx.userId, skillId);
+  },
+  'evolution.evals.saveCase': async ({ skillId, evalCase }, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skillId');
+    if (!evalCase || typeof evalCase.id !== 'number') throw new Error('invalid evalCase');
+    return evolution.upsertEvalCase(ctx.userId, skillId, evalCase);
+  },
+  'evolution.ontology.list': async ({ skillId }, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skillId');
+    return { ontologies: await evolution.listSkillOntologies(ctx.userId, skillId) };
+  },
+  'evolution.ontology.extract': async ({ skillId, text, agentId }, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skillId');
+    if (typeof text !== 'string' || !text.trim()) throw new Error('missing text');
+    return evolution.extractAndSaveOntology(ctx.userId, skillId, text, agentId ?? '');
+  },
+  'evolution.patches.apply': async ({ skillId, newContent }, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skillId');
+    if (typeof newContent !== 'string' || !newContent.trim()) throw new Error('missing newContent');
+    return evolution.applyPatchToSkill(ctx.userId, { skillId, newContent });
+  },
+
   'skills.list': async ({ force } = {}) => {
     if (force === true || force === '1') skills.clearSkillListCache();
     return { skills: await skills.listSkills() };
