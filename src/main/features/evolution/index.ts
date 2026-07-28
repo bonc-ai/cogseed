@@ -1,7 +1,7 @@
 export { startEvolutionRun, stepEvolutionRun, abortEvolutionRun, readEvolutionRun, listEvolutionRuns } from './orchestrator-bridge';
 export type { EvolutionRun } from './orchestrator-bridge';
-export { readEvalRecord, saveEvalRecord, upsertEvalCase, appendEvalRun, runEvalStream } from './evals-store';
-export type { EvalRecord, EvalRecordCase, EvalRecordRun, EvalStreamEvent } from './evals-store';
+export { readEvalRecord, saveEvalRecord, upsertEvalCase, appendEvalRun, runEvalStream, readEvalStandard, saveEvalStandard } from './evals-store';
+export type { EvalRecord, EvalRecordCase, EvalRecordRun, EvalStreamEvent, EvalStandardView, EvalStandardRaw } from './evals-store';
 export { buildDashboard } from './dashboard';
 export type { DashboardData } from './dashboard';
 export { extractAndSaveOntology, listSkillOntologies } from './ontology-service';

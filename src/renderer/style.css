@@ -16741,3 +16741,19 @@ body.model-not-configured .main-content { flex-direction: column; }
 .evo-evolve-controls, .evo-create-questions, .evo-skill-versions, .evo-reco-section { margin-top: 14px; }
 .evo-evolve-controls { display: flex; gap: 8px; }
 .evo-onto-unbind { margin-left: auto; }
+/* 评估标准 */
+.evo-std-view { margin-bottom: 18px; padding: 16px; background: var(--evo-card); border: 1px solid var(--evo-border); border-radius: var(--evo-radius); box-shadow: var(--evo-shadow); }
+.evo-std-header { display: flex; align-items: center; gap: 10px; }
+.evo-std-ready { padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; background: hsl(142 76% 92%); color: hsl(142 76% 30%); }
+.evo-std-notready { padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; background: hsl(38 92% 92%); color: hsl(38 92% 40%); }
+.evo-std-block-title { font-size: 13px; font-weight: 600; color: var(--evo-muted); margin: 14px 0 8px; }
+.evo-std-group { margin-bottom: 10px; }
+.evo-std-group-head { font-size: 13px; font-weight: 500; margin-bottom: 4px; }
+.evo-std-count { color: var(--evo-muted); font-size: 12px; font-weight: 400; }
+.evo-std-items { list-style: disc; padding-left: 22px; margin: 0; font-size: 13px; }
+.evo-std-items li { padding: 2px 0; }
+.evo-std-empty { font-size: 12px; color: var(--evo-muted); padding-left: 4px; }
+.evo-std-form { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+#panel-evolution .evo-std-form select { padding: 8px 10px; border: 1px solid var(--evo-border); border-radius: 8px; font-size: 13px; background: #fff; color: var(--evo-fg); }
+#panel-evolution #evo-std-save { background: var(--evo-blue); border-color: var(--evo-blue); color: #fff; margin-left: auto; }
+#panel-evolution #evo-std-save:hover { background: hsl(222 47% 40%); }

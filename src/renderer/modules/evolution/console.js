@@ -64,8 +64,10 @@
         _bindOntologyControls(body);
       } else if (page === 'evals') {
         if (!activeSkillId) { body.innerHTML = '<div class="evo-empty">先在「技能」页选择一个技能</div>'; return; }
+        const std = await window.apiFetch(`/api/evolution/evals/${encodeURIComponent(activeSkillId)}/standard`).then(r => r.json());
         const rec = await window.apiFetch(`/api/evolution/evals/${encodeURIComponent(activeSkillId)}`).then(r => r.json());
-        body.innerHTML = P.renderEvalRecord(rec);
+        body.innerHTML = P.renderEvalStandard(std) + P.renderEvalRecord(rec);
+        _bindEvalStandard(body, std);
       } else if (page === 'patches') {
         const { runs } = await window.apiFetch('/api/evolution/evolve').then(r => r.json());
         const patches = (runs || []).flatMap(_extractPatches);
@@ -150,6 +152,45 @@
       } else {
         btn.textContent = '导出失败';
       }
+    });
+  }
+
+  function _bindEvalStandard(body, std) {
+    // 从已存视图重建可编辑缓冲(展平回原始 assertions/cases)。
+    const buf = {
+      assertions: [
+        ...(std.assertions.qualitative || []),
+        ...(std.assertions.invariant || []),
+        ...(std.assertions.boundary || []),
+      ],
+      cases: [
+        ...(std.cases.positive || []).map(c => ({ ...c, negative: false })),
+        ...(std.cases.negative || []).map(c => ({ ...c, negative: true })),
+      ],
+    };
+    const addAssert = body.querySelector('#evo-std-add-assert');
+    if (addAssert) addAssert.addEventListener('click', () => {
+      const text = (body.querySelector('#evo-std-assert-text') || {}).value || '';
+      const type = (body.querySelector('#evo-std-assert-type') || {}).value || 'qualitative';
+      if (!text.trim()) return;
+      buf.assertions.push({ type, text: text.trim() });
+      const input = body.querySelector('#evo-std-assert-text'); if (input) input.value = '';
+    });
+    const addCase = body.querySelector('#evo-std-add-case');
+    if (addCase) addCase.addEventListener('click', () => {
+      const input = (body.querySelector('#evo-std-case-input') || {}).value || '';
+      const neg = (body.querySelector('#evo-std-case-neg') || {}).value === '1';
+      if (!input.trim()) return;
+      buf.cases.push({ input: input.trim(), negative: neg });
+      const el = body.querySelector('#evo-std-case-input'); if (el) el.value = '';
+    });
+    const saveBtn = body.querySelector('#evo-std-save');
+    if (saveBtn) saveBtn.addEventListener('click', async () => {
+      if (!activeSkillId) return;
+      await window.apiFetch(`/api/evolution/evals/${encodeURIComponent(activeSkillId)}/standard`, {
+        method: 'POST', body: JSON.stringify({ assertions: buf.assertions, cases: buf.cases }),
+      });
+      loadPage('evals');
     });
   }
 

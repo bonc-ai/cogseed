@@ -1987,6 +1987,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!evalCase || typeof evalCase.id !== 'number') throw new Error('invalid evalCase');
     return evolution.upsertEvalCase(ctx.userId, skillId, evalCase);
   },
+  'evolution.evals.standard.get': async ({ skillId }, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skillId');
+    return evolution.readEvalStandard(ctx.userId, skillId);
+  },
+  'evolution.evals.standard.save': async ({ skillId, assertions, cases }, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skillId');
+    return evolution.saveEvalStandard(ctx.userId, skillId, {
+      assertions: Array.isArray(assertions) ? assertions : [],
+      cases: Array.isArray(cases) ? cases : [],
+    });
+  },
   'evolution.ontology.list': async ({ skillId }, ctx) => {
     if (!safeId(skillId)) throw new Error('invalid skillId');
     return { ontologies: await evolution.listSkillOntologies(ctx.userId, skillId) };

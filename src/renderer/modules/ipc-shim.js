@@ -38,6 +38,8 @@ const _IPC_ROUTES = [
   ['GET',    /^\/api\/evolution\/skills\/([^/]+)\/recommend$/, 'evolution.evolve.recommend', ['skillId']],
   ['GET',    /^\/api\/evolution\/evals\/([^/]+)$/, 'evolution.evals.get', ['skillId']],
   ['POST',   '/api/evolution/evals/save-case', 'evolution.evals.saveCase'],
+  ['GET',    /^\/api\/evolution\/evals\/([^/]+)\/standard$/, 'evolution.evals.standard.get', ['skillId']],
+  ['POST',   /^\/api\/evolution\/evals\/([^/]+)\/standard$/, 'evolution.evals.standard.save', ['skillId']],
   ['POST',   '/api/evolution/evals/run',      'evolution.evals.run', null, { stream: true }],
   ['GET',    /^\/api\/evolution\/skills\/([^/]+)\/versions$/, 'evolution.skills.versions', ['skillId']],
   ['POST',   /^\/api\/evolution\/skills\/([^/]+)\/export$/, 'evolution.skills.export', ['skillId']],

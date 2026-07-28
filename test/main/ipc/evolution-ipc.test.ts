@@ -40,6 +40,8 @@ vi.mock('../../../src/main/features/evolution', () => ({
   extractAndSaveOntology: vi.fn(async () => ({ slice: { tbox: [], rbox: [], abox: [] }, degraded: false })),
   listSkillOntologies: vi.fn(async () => ([])),
   listSkillVersions: vi.fn(async () => ([{ version: '0.1.1', at: 't' }])),
+  readEvalStandard: vi.fn(async (_uid: string, skillId: string) => ({ skillId, assertions: { qualitative: [], invariant: [], boundary: [], total: 0, min_required: { qualitative: 3, invariant: 2, boundary: 4 } }, cases: { positive: [], negative: [], total: 0, min_positive: 6, min_negative: 4 }, ready: false })),
+  saveEvalStandard: vi.fn(async (_uid: string, skillId: string) => ({ skillId, assertions: { qualitative: [{ type: 'qualitative', text: 'x' }], invariant: [], boundary: [], total: 1, min_required: { qualitative: 3, invariant: 2, boundary: 4 } }, cases: { positive: [], negative: [], total: 0, min_positive: 6, min_negative: 4 }, ready: false })),
   exportSkillZip: vi.fn(async (_uid: string, skillId: string) => ({ ok: true, zipPath: `/tmp/${skillId}-v0.2.0.zip` })),
   captureSkillIntent: vi.fn(async (_uid: string, input: any) => ({ skill_id: 'skill_x', intent: { purpose: input.purpose }, questions: ['q1'] })),
   createSkillFromDraft: vi.fn(async (_uid: string, input: any) => ({ skill: { id: 'sk-new', name: input.name } })),
@@ -108,6 +110,17 @@ describe('ipc › evolution channels', () => {
     const r = await call('evolution.skills.versions', { skillId: 'sk1' });
     expect(r.ok).toBe(true);
     expect(r.versions[0].version).toBe('0.1.1');
+  });
+  it('evolution.evals.standard.get 返回标准视图 + 门槛', async () => {
+    const r = await call('evolution.evals.standard.get', { skillId: 'sk1' });
+    expect(r.ok).toBe(true);
+    expect(r.assertions.min_required).toEqual({ qualitative: 3, invariant: 2, boundary: 4 });
+    expect(r.ready).toBe(false);
+  });
+  it('evolution.evals.standard.save 保存后返回更新视图', async () => {
+    const r = await call('evolution.evals.standard.save', { skillId: 'sk1', assertions: [{ type: 'qualitative', text: 'x' }], cases: [] });
+    expect(r.ok).toBe(true);
+    expect(r.assertions.total).toBe(1);
   });
   it('evolution.skills.export 返回 zipPath', async () => {
     const r = await call('evolution.skills.export', { skillId: 'sk1', version: '0.2.0' });

@@ -9,6 +9,7 @@ const P = require('../../src/renderer/modules/evolution/pages.js') as {
   renderCreateForm: () => string;
   renderInterviewQuestions: (questions: string[]) => string;
   renderRecommendations: (suggestions: any[]) => string;
+  renderEvalStandard: (std: any) => string;
   escapeHtml: (s: unknown) => string;
 };
 
@@ -87,5 +88,27 @@ describe('evolution pages 纯渲染', () => {
   });
   it('renderRecommendations 空列表显示空态', () => {
     expect(P.renderRecommendations([])).toContain('暂无进化建议');
+  });
+  it('renderEvalStandard 渲染分类断言 + 门槛 + 就绪态 + 表单', () => {
+    const std = {
+      skillId: 'sk1',
+      assertions: { qualitative: [{ type: 'qualitative', text: '定性A' }], invariant: [], boundary: [], total: 1, min_required: { qualitative: 3, invariant: 2, boundary: 4 } },
+      cases: { positive: [], negative: [], total: 0, min_positive: 6, min_negative: 4 },
+      ready: false,
+    };
+    const html = P.renderEvalStandard(std);
+    expect(html).toContain('定性A');
+    expect(html).toContain('未达标');
+    expect(html).toContain('evo-std-add-assert');
+    expect(html).toContain('evo-std-save');
+  });
+  it('renderEvalStandard ready 时显示已就绪', () => {
+    const std = {
+      skillId: 'sk1',
+      assertions: { qualitative: [], invariant: [], boundary: [], total: 9, min_required: { qualitative: 3, invariant: 2, boundary: 4 } },
+      cases: { positive: [], negative: [], total: 10, min_positive: 6, min_negative: 4 },
+      ready: true,
+    };
+    expect(P.renderEvalStandard(std)).toContain('已就绪');
   });
 });

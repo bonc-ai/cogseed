@@ -99,6 +99,38 @@
     return summary + '<ul class="evo-eval-cases">' + cases + '</ul>';
   }
 
+  // 评估标准:人写的分类断言(定性/不变式/边界)+ 正负用例 + 就绪门槛。
+  function renderEvalStandard(std) {
+    if (!std || !std.assertions) return '<div class="evo-empty">暂无评估标准</div>';
+    const a = std.assertions, c = std.cases;
+    const readyBadge = std.ready
+      ? '<span class="evo-std-ready">已就绪</span>'
+      : '<span class="evo-std-notready">未达标</span>';
+    const group = (label, items, min) =>
+      `<div class="evo-std-group"><div class="evo-std-group-head">${escapeHtml(label)} <span class="evo-std-count">${items.length}/${min}</span></div>`
+      + (items.length ? '<ul class="evo-std-items">' + items.map(x => `<li>${escapeHtml(x.text || '')}</li>`).join('') + '</ul>' : '<div class="evo-std-empty">未填写</div>')
+      + '</div>';
+    return '<div class="evo-std-view">'
+      + `<div class="evo-std-header"><span class="evo-section-title">评估标准</span>${readyBadge}</div>`
+      + '<div class="evo-std-block-title">断言（共 ' + a.total + '，需 ≥9）</div>'
+      + group('定性 qualitative', a.qualitative, a.min_required.qualitative)
+      + group('不变式 invariant', a.invariant, a.min_required.invariant)
+      + group('边界 boundary', a.boundary, a.min_required.boundary)
+      + '<div class="evo-std-block-title">用例（正 ' + c.positive.length + ' / 负 ' + c.negative.length + '，需 ≥' + c.min_positive + ' 正 · ≥' + c.min_negative + ' 负）</div>'
+      + '<div class="evo-std-form">'
+      + '<input type="text" id="evo-std-assert-text" placeholder="断言内容" />'
+      + '<select id="evo-std-assert-type"><option value="qualitative">定性</option><option value="invariant">不变式</option><option value="boundary">边界</option></select>'
+      + '<button class="btn btn-sm" id="evo-std-add-assert">加断言</button>'
+      + '</div>'
+      + '<div class="evo-std-form">'
+      + '<input type="text" id="evo-std-case-input" placeholder="用例输入" />'
+      + '<select id="evo-std-case-neg"><option value="0">正例</option><option value="1">负例</option></select>'
+      + '<button class="btn btn-sm" id="evo-std-add-case">加用例</button>'
+      + '<button class="btn btn-sm" id="evo-std-save">保存标准</button>'
+      + '</div>'
+      + '</div>';
+  }
+
   function renderPatchList(patches) {
     if (!patches || !patches.length) return '<div class="evo-empty">暂无补丁提议</div>';
     return '<ul class="evo-patch-list">' + patches.map(p =>
@@ -106,7 +138,7 @@
     ).join('') + '</ul>';
   }
 
-  const api = { escapeHtml, renderDashboard, renderSkillsList, renderKstarTimeline, renderOntologyList, renderOntologyBindings, renderSkillVersions, renderCreateForm, renderInterviewQuestions, renderRecommendations, renderEvalRecord, renderPatchList };
+  const api = { escapeHtml, renderDashboard, renderSkillsList, renderKstarTimeline, renderOntologyList, renderOntologyBindings, renderSkillVersions, renderCreateForm, renderInterviewQuestions, renderRecommendations, renderEvalRecord, renderEvalStandard, renderPatchList };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;   // 测试桥
   else root.EvolutionPages = api;                                             // 浏览器全局
 })(typeof window !== 'undefined' ? window : globalThis);

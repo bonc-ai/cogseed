@@ -50,6 +50,20 @@ describe('evolution ipc-shim routes', () => {
     expect(invoke).toHaveBeenCalledWith('evolution.skills.versions', expect.objectContaining({ skillId: 'sk1' }));
   });
 
+  it('GET /api/evolution/evals/:skillId/standard → evolution.evals.standard.get', async () => {
+    const invoke = vi.fn(async () => ({ ok: true, ready: false }));
+    const { apiFetch } = loadShim(invoke);
+    await apiFetch('/api/evolution/evals/sk1/standard');
+    expect(invoke).toHaveBeenCalledWith('evolution.evals.standard.get', expect.objectContaining({ skillId: 'sk1' }));
+  });
+
+  it('POST /api/evolution/evals/:skillId/standard → evolution.evals.standard.save', async () => {
+    const invoke = vi.fn(async () => ({ ok: true }));
+    const { apiFetch } = loadShim(invoke);
+    await apiFetch('/api/evolution/evals/sk1/standard', { method: 'POST', body: JSON.stringify({ assertions: [], cases: [] }) });
+    expect(invoke).toHaveBeenCalledWith('evolution.evals.standard.save', expect.objectContaining({ skillId: 'sk1' }));
+  });
+
   it('POST /api/evolution/skills/:skillId/export → evolution.skills.export', async () => {
     const invoke = vi.fn(async () => ({ ok: true, zipPath: '/tmp/sk1-v0.2.0.zip' }));
     const { apiFetch } = loadShim(invoke);
