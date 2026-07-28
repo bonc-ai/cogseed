@@ -284,6 +284,7 @@ function _loadViewFeature(feature, view, run) {
 function _lazyFeaturePanel(view) {
   const panelId = view === 'memory' ? 'panel-memory'
     : view === 'skills' ? 'panel-skills'
+    : view === 'evolution' ? 'panel-evolution'
     : view === 'contexts' ? 'panel-contexts'
     : view === 'apps' ? 'panel-apps'
     : view === 'settings' ? 'panel-settings'
@@ -371,6 +372,7 @@ function setView(view, cid, opts = {}) {
                 : view === 'connectors' ? 'panel-connectors'
                 : view === 'contexts' ? 'panel-contexts'
                 : view === 'apps' ? 'panel-apps'
+                : view === 'evolution' ? 'panel-evolution'
                 : view === 'settings' ? 'panel-settings'
                 : view === 'memory' ? 'panel-memory'
                 : view === 'devtools' ? 'panel-devtools'
@@ -386,6 +388,7 @@ function setView(view, cid, opts = {}) {
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connectors');
   document.getElementById('contexts-btn')?.classList.toggle('active', view === 'contexts');
   document.getElementById('apps-btn')?.classList.toggle('active', view === 'apps');
+  document.getElementById('evolution-btn')?.classList.toggle('active', view === 'evolution');
   document.getElementById('settings-btn')?.classList.toggle('active', view === 'settings');
   document.getElementById('devtools-btn')?.classList.toggle('active', view === 'devtools');
   document.querySelectorAll('.conv-item').forEach(it => {
@@ -533,6 +536,13 @@ function setView(view, cid, opts = {}) {
     _deferSidebarNavWork('apps-tab-load', () => {
       _loadViewFeature('apps', 'apps', () => {
         if (typeof loadSavedApps === 'function') loadSavedApps(true);
+      });
+    });
+  } else if (view === 'evolution') {
+    currentCid = null;
+    _deferSidebarNavWork('evolution-tab-load', () => {
+      _loadViewFeature('evolution', 'evolution', () => {
+        if (typeof renderEvolutionConsole === 'function') renderEvolutionConsole();
       });
     });
   } else if (view === 'settings') {
