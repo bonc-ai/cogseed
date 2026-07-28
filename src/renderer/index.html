@@ -33,6 +33,7 @@
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connectors">Connectors</span></button>
         <button class="sidebar-btn" id="contexts-btn"><span data-ui-icon="database" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.contexts">Library</span></button>
         <button class="sidebar-btn" id="apps-btn"><span data-ui-icon="layout-grid" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.apps">My Apps</span></button>
+        <button class="sidebar-btn" id="evolution-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.evolution">进化控制台</span></button>
       </div>
       <div class="sidebar-conversation-nav">
         <div class="sidebar-section sidebar-projects-section">
@@ -946,6 +947,17 @@
             <div class="apps-grid" id="apps-grid"></div>
             <div class="agents-empty" id="apps-empty" data-i18n="apps.empty">No apps</div>
           </div>
+        </div>
+      </section>
+
+      <!-- Evolution Console -->
+      <section class="panel" id="panel-evolution">
+        <div class="evo-console">
+          <aside class="evo-console-sidebar">
+            <div class="evo-console-title" data-i18n="evolution.title">进化控制台</div>
+            <nav class="evo-console-nav" id="evo-console-nav"></nav>
+          </aside>
+          <div class="evo-console-content" id="evo-console-body"></div>
         </div>
       </section>
 
