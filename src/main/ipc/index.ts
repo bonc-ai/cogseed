@@ -2001,6 +2001,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(skillId)) throw new Error('invalid skillId');
     return { versions: await evolution.listSkillVersions(ctx.userId, skillId) };
   },
+  'evolution.skills.export': async ({ skillId, version }, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skillId');
+    return evolution.exportSkillZip(ctx.userId, skillId, typeof version === 'string' ? version : '0.0.0');
+  },
   'evolution.ontology.bindings': async ({ skillId }, ctx) => {
     if (!safeId(skillId)) throw new Error('invalid skillId');
     return { refs: await evolution.listOntologyBindings(ctx.userId, skillId) };

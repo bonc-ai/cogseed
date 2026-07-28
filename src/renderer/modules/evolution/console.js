@@ -38,10 +38,14 @@
         let html = P.renderSkillsList(skills || []);
         if (activeSkillId) {
           const { versions } = await window.apiFetch(`/api/evolution/skills/${encodeURIComponent(activeSkillId)}/versions`).then(r => r.json());
-          html += '<div class="evo-skill-versions"><div class="evo-section-title">版本历史</div>' + P.renderSkillVersions(versions || []) + '</div>';
+          const latestVer = (versions && versions[0] && versions[0].version) || '0.1.0';
+          html += '<div class="evo-skill-versions"><div class="evo-section-title">版本历史</div>'
+            + `<button class="btn btn-sm" id="evo-skill-export-btn" data-version="${latestVer}">导出为 .zip</button>`
+            + P.renderSkillVersions(versions || []) + '</div>';
         }
         body.innerHTML = html;
         _bindSkillSelect(body);
+        _bindSkillExport(body);
       } else if (page === 'evolution') {
         const { runs } = await window.apiFetch('/api/evolution/evolve').then(r => r.json());
         const latest = runs && runs[0];
@@ -97,6 +101,21 @@
   function _bindSkillSelect(body) {
     body.querySelectorAll('[data-skill-id]').forEach(item => {
       item.addEventListener('click', () => { activeSkillId = item.dataset.skillId; renderNav(); });
+    });
+  }
+
+  function _bindSkillExport(body) {
+    const btn = body.querySelector('#evo-skill-export-btn');
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      if (!activeSkillId) return;
+      const version = btn.dataset.version || '0.1.0';
+      const res = await window.apiFetch(`/api/evolution/skills/${encodeURIComponent(activeSkillId)}/export`, { method: 'POST', body: JSON.stringify({ version }) }).then(r => r.json());
+      if (res && res.ok && res.zipPath) {
+        btn.textContent = '已导出: ' + res.zipPath.split('/').pop();
+      } else {
+        btn.textContent = '导出失败';
+      }
     });
   }
 

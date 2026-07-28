@@ -9,3 +9,4 @@ export { bindOntology, unbindOntology, listOntologyBindings } from './ontology-b
 export { applyPatchToSkill, bumpSemver } from './patch-service';
 export { listSkillVersions, appendSkillVersion } from './versions-store';
 export type { SkillVersionRecord } from './versions-store';
+export { exportSkillZip } from './export-service';

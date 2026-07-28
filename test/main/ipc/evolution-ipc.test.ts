@@ -40,6 +40,7 @@ vi.mock('../../../src/main/features/evolution', () => ({
   extractAndSaveOntology: vi.fn(async () => ({ slice: { tbox: [], rbox: [], abox: [] }, degraded: false })),
   listSkillOntologies: vi.fn(async () => ([])),
   listSkillVersions: vi.fn(async () => ([{ version: '0.1.1', at: 't' }])),
+  exportSkillZip: vi.fn(async (_uid: string, skillId: string) => ({ ok: true, zipPath: `/tmp/${skillId}-v0.2.0.zip` })),
   listOntologyBindings: vi.fn(async () => (['onto-a'])),
   bindOntology: vi.fn(async (_uid: string, _skillId: string, ontologyId: string) => (['onto-a', ontologyId])),
   unbindOntology: vi.fn(async () => ([])),
@@ -95,6 +96,11 @@ describe('ipc › evolution channels', () => {
     const r = await call('evolution.skills.versions', { skillId: 'sk1' });
     expect(r.ok).toBe(true);
     expect(r.versions[0].version).toBe('0.1.1');
+  });
+  it('evolution.skills.export 返回 zipPath', async () => {
+    const r = await call('evolution.skills.export', { skillId: 'sk1', version: '0.2.0' });
+    expect(r.ok).toBe(true);
+    expect(r.zipPath).toContain('sk1-v0.2.0.zip');
   });
   it('evolution.ontology.bindings 返回 refs', async () => {
     const r = await call('evolution.ontology.bindings', { skillId: 'sk1' });

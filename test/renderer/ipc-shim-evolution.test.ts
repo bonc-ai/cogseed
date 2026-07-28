@@ -50,6 +50,13 @@ describe('evolution ipc-shim routes', () => {
     expect(invoke).toHaveBeenCalledWith('evolution.skills.versions', expect.objectContaining({ skillId: 'sk1' }));
   });
 
+  it('POST /api/evolution/skills/:skillId/export → evolution.skills.export', async () => {
+    const invoke = vi.fn(async () => ({ ok: true, zipPath: '/tmp/sk1-v0.2.0.zip' }));
+    const { apiFetch } = loadShim(invoke);
+    await apiFetch('/api/evolution/skills/sk1/export', { method: 'POST', body: JSON.stringify({ version: '0.2.0' }) });
+    expect(invoke).toHaveBeenCalledWith('evolution.skills.export', expect.objectContaining({ skillId: 'sk1', version: '0.2.0' }));
+  });
+
   it('GET /api/evolution/ontology/:skillId/bindings → evolution.ontology.bindings', async () => {
     const invoke = vi.fn(async () => ({ ok: true, refs: [] }));
     const { apiFetch } = loadShim(invoke);
