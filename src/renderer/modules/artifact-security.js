@@ -1,7 +1,7 @@
 // Shared security boundary for generated-artifact iframes.
 //
 // This file is intentionally a classic script: chat-artifact.js is eager and
-// saved-apps.js is lazy-loaded, so both consume the same small global API.
+// consumes this small global API.
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
