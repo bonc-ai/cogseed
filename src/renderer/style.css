@@ -16644,31 +16644,100 @@ body.model-not-configured .main-content { flex-direction: column; }
   padding-bottom: 0;
 }
 
-/* ── Evolution Console (进化控制台) ─────────────────────────── */
+/* ── Evolution Console (进化控制台) — 原型 Tailwind 观感翻译为 vanilla CSS ──
+   作用域限定 #panel-evolution，浅色主题(gray-50 底 / 白卡片 / 蓝 accent)，
+   不影响 app 其它界面。原型设计变量:radius .5rem、card 白、border hsl(214 32% 91%)、
+   primary hsl(222 47% 31%)、accent 蓝、muted-foreground hsl(215 16% 47%)。 */
+#panel-evolution {
+  --evo-bg: hsl(210 40% 98%);
+  --evo-card: #fff;
+  --evo-border: hsl(214 32% 91%);
+  --evo-fg: hsl(222 47% 11%);
+  --evo-muted: hsl(215 16% 47%);
+  --evo-primary: hsl(222 47% 31%);
+  --evo-blue: #2563eb;
+  --evo-blue-soft: hsl(214 95% 96%);
+  --evo-radius: 0.75rem;
+  --evo-shadow: 0 1px 2px 0 rgba(0,0,0,.05), 0 1px 3px 0 rgba(0,0,0,.06);
+  background: var(--evo-bg);
+  color: var(--evo-fg);
+}
 .evo-console { display: flex; height: 100%; }
-.evo-console-sidebar { width: 160px; border-right: 1px solid var(--border-color, #2a2f3a); padding: 12px; flex-shrink: 0; }
-.evo-console-title { font-weight: 600; margin-bottom: 8px; }
+.evo-console-sidebar { width: 220px; background: var(--evo-card); border-right: 1px solid var(--evo-border); padding: 16px 12px; flex-shrink: 0; }
+.evo-console-title { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 14px; color: var(--evo-blue); margin: 0 4px 14px; }
 .evo-console-nav { display: flex; flex-direction: column; gap: 2px; }
-.evo-nav-btn { display: block; width: 100%; text-align: left; padding: 6px 8px; background: none; border: none; border-radius: 6px; cursor: pointer; color: var(--text-color, inherit); font-size: 13px; }
-.evo-nav-btn:hover { background: var(--hover-bg, rgba(127,127,127,0.08)); }
-.evo-nav-btn.active { background: var(--accent, #4f6bed); color: #fff; }
-.evo-console-content { flex: 1; padding: 16px; overflow: auto; }
-.evo-stat-row { display: flex; gap: 12px; flex-wrap: wrap; }
-.evo-stat-card { padding: 12px 16px; border: 1px solid var(--border-color, #2a2f3a); border-radius: 8px; min-width: 96px; }
-.evo-stat-value { font-size: 24px; font-weight: 700; }
-.evo-stat-label { font-size: 12px; color: var(--text-muted, #94a3b8); }
-.evo-degraded-banner, .kstar-step-degraded { color: var(--warning-color, #d9a441); }
-.evo-degraded-banner { margin-bottom: 12px; font-size: 13px; }
-.kstar-step-degraded { margin-left: 8px; font-size: 12px; }
-.kstar-timeline { list-style: none; padding: 0; margin: 0; }
-.kstar-step { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border-color, #2a2f3a); }
-.kstar-step-no { width: 20px; text-align: center; color: var(--text-muted, #94a3b8); }
-.kstar-step-status { margin-left: auto; font-size: 12px; color: var(--text-muted, #94a3b8); }
-.evo-skill-list, .evo-onto-list, .evo-eval-cases, .evo-patch-list { list-style: none; padding: 0; margin: 0; }
-.evo-skill-item, .evo-patch-item { display: flex; gap: 8px; align-items: center; padding: 8px; border-radius: 6px; cursor: pointer; }
-.evo-skill-item:hover, .evo-patch-item:hover { background: var(--hover-bg, rgba(127,127,127,0.08)); }
-.evo-skill-cat, .evo-patch-risk, .evo-patch-status { margin-left: auto; font-size: 12px; color: var(--text-muted, #94a3b8); }
-.evo-eval-case { padding: 8px 0; border-bottom: 1px solid var(--border-color, #2a2f3a); }
+.evo-nav-btn { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 8px 12px; background: none; border: none; border-radius: 8px; cursor: pointer; color: var(--evo-muted); font-size: 13px; transition: background .12s, color .12s; }
+.evo-nav-btn:hover { background: hsl(210 40% 96%); color: var(--evo-fg); }
+.evo-nav-btn.active { background: var(--evo-blue-soft); color: var(--evo-blue); font-weight: 600; }
+.evo-console-content { flex: 1; padding: 24px; overflow: auto; }
+.evo-section-title { font-weight: 600; font-size: 14px; margin: 18px 0 10px; }
+/* 统计卡片 */
+.evo-stat-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; }
+.evo-stat-card { padding: 18px 20px; background: var(--evo-card); border: 1px solid var(--evo-border); border-radius: var(--evo-radius); box-shadow: var(--evo-shadow); }
+.evo-stat-value { font-size: 26px; font-weight: 700; line-height: 1.1; }
+.evo-stat-label { font-size: 12px; color: var(--evo-muted); margin-top: 4px; }
+/* 降级提示 */
+.evo-degraded-banner { margin-bottom: 14px; padding: 8px 12px; font-size: 13px; color: hsl(38 92% 30%); background: hsl(38 92% 95%); border: 1px solid hsl(38 92% 82%); border-radius: 8px; }
+.kstar-step-degraded { margin-left: 8px; font-size: 11px; font-weight: 600; color: hsl(38 92% 40%); background: hsl(38 92% 94%); padding: 1px 8px; border-radius: 999px; }
+/* KSTAR 时间线 */
+.kstar-timeline { list-style: none; padding: 0; margin: 0; background: var(--evo-card); border: 1px solid var(--evo-border); border-radius: var(--evo-radius); box-shadow: var(--evo-shadow); overflow: hidden; }
+.kstar-step { display: flex; gap: 12px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--evo-border); font-size: 13px; }
+.kstar-step:last-child { border-bottom: none; }
+.kstar-step-no { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 999px; background: hsl(210 40% 94%); color: var(--evo-muted); font-size: 12px; font-weight: 600; flex-shrink: 0; }
+.kstar-step-done .kstar-step-no { background: hsl(142 76% 92%); color: hsl(142 76% 30%); }
+.kstar-step-running .kstar-step-no { background: var(--evo-blue-soft); color: var(--evo-blue); }
+.kstar-step-degraded .kstar-step-no { background: hsl(38 92% 92%); color: hsl(38 92% 40%); }
+.kstar-step-name { font-weight: 500; }
+.kstar-step-status { margin-left: auto; font-size: 12px; color: var(--evo-muted); }
+/* 列表通用:白卡容器 */
+.evo-skill-list, .evo-onto-list, .evo-eval-cases, .evo-patch-list, .evo-reco-list, .evo-version-list, .evo-question-list {
+  list-style: none; padding: 0; margin: 0;
+  background: var(--evo-card); border: 1px solid var(--evo-border); border-radius: var(--evo-radius); box-shadow: var(--evo-shadow); overflow: hidden;
+}
+.evo-skill-item, .evo-patch-item, .evo-onto-item, .evo-reco-item, .evo-version-item {
+  display: flex; gap: 10px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--evo-border); font-size: 13px; cursor: default;
+}
+.evo-skill-item { cursor: pointer; transition: background .1s; }
+.evo-skill-item:hover, .evo-patch-item:hover { background: hsl(210 40% 98%); }
+.evo-skill-list > li:last-child, .evo-patch-list > li:last-child, .evo-onto-list > li:last-child, .evo-reco-list > li:last-child, .evo-version-list > li:last-child { border-bottom: none; }
+.evo-skill-name, .evo-version-tag { font-weight: 500; }
+/* 胶囊 badge(原型 rounded-full text-xs) */
+.evo-skill-cat, .evo-patch-risk, .evo-patch-status, .evo-version-tag {
+  display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 600;
+}
+.evo-skill-cat { margin-left: auto; background: hsl(210 40% 94%); color: var(--evo-muted); }
+.evo-patch-desc, .evo-reco-sug { flex: 1; }
+.evo-patch-risk { background: hsl(0 84% 95%); color: hsl(0 84% 45%); }
+.evo-patch-status { background: var(--evo-blue-soft); color: var(--evo-blue); }
+.evo-version-tag { background: hsl(142 76% 92%); color: hsl(142 76% 30%); }
+.evo-version-at { color: var(--evo-muted); font-size: 12px; }
+.evo-version-note { margin-left: auto; color: var(--evo-muted); font-size: 12px; }
+/* 推荐项按严重级左边框 */
+.evo-reco-item { border-left: 3px solid transparent; }
+.evo-reco-warning { border-left-color: hsl(38 92% 50%); }
+.evo-reco-info { border-left-color: var(--evo-blue); }
+.evo-reco-onto { font-weight: 600; color: var(--evo-primary); min-width: 84px; }
+.evo-reco-rule { color: var(--evo-muted); min-width: 96px; }
+/* 评估 */
 .evo-eval-summary { margin-bottom: 12px; font-weight: 600; }
-.evo-empty, .evo-loading, .evo-error { color: var(--text-muted, #94a3b8); padding: 16px; }
-.evo-evolve-controls { margin-top: 12px; display: flex; gap: 8px; }
+.evo-eval-case { padding: 12px 16px; border-bottom: 1px solid var(--evo-border); }
+.evo-eval-input { font-weight: 500; margin-bottom: 6px; }
+.evo-eval-assertions { list-style: disc; padding-left: 20px; color: var(--evo-muted); font-size: 12px; margin: 0; }
+/* 访谈问题 */
+.evo-question-list { padding: 8px 0; }
+.evo-question-list li { padding: 6px 16px; font-size: 13px; color: var(--evo-muted); }
+/* 空/加载/错误态 */
+.evo-empty, .evo-loading, .evo-error { color: var(--evo-muted); padding: 32px; text-align: center; font-size: 13px; background: var(--evo-card); border: 1px dashed var(--evo-border); border-radius: var(--evo-radius); }
+.evo-error { color: hsl(0 84% 45%); border-color: hsl(0 84% 82%); border-style: solid; }
+/* 表单 + 按钮(原型 primary 蓝) */
+.evo-create-form, .evo-onto-bind-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; padding: 16px; background: var(--evo-card); border: 1px solid var(--evo-border); border-radius: var(--evo-radius); box-shadow: var(--evo-shadow); }
+.evo-create-form { flex-direction: column; align-items: stretch; }
+#panel-evolution input[type="text"] { padding: 8px 12px; border: 1px solid var(--evo-border); border-radius: 8px; font-size: 13px; background: #fff; color: var(--evo-fg); }
+#panel-evolution input[type="text"]:focus { outline: none; border-color: var(--evo-blue); box-shadow: 0 0 0 3px var(--evo-blue-soft); }
+#panel-evolution .btn { padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 500; border: 1px solid var(--evo-border); background: var(--evo-card); color: var(--evo-fg); cursor: pointer; transition: background .12s, border-color .12s; }
+#panel-evolution .btn:hover { background: hsl(210 40% 96%); }
+#panel-evolution #evo-create-intent-btn, #panel-evolution #evo-create-draft-btn, #panel-evolution #evo-onto-bind-btn, #panel-evolution #evo-skill-export-btn { background: var(--evo-blue); border-color: var(--evo-blue); color: #fff; }
+#panel-evolution #evo-create-intent-btn:hover, #panel-evolution #evo-create-draft-btn:hover, #panel-evolution #evo-onto-bind-btn:hover, #panel-evolution #evo-skill-export-btn:hover { background: hsl(222 47% 40%); }
+.evo-evolve-controls, .evo-create-questions, .evo-skill-versions, .evo-reco-section { margin-top: 14px; }
+.evo-evolve-controls { display: flex; gap: 8px; }
+.evo-onto-unbind { margin-left: auto; }
