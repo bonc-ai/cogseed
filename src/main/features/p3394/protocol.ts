@@ -256,6 +256,45 @@ function relationshipAllowsSpeechAct(relationship: P3394Relationship, speechAct:
   return allowed === 'unrestricted' || allowed.includes(speechAct);
 }
 
+// 关系权限等级（与 RELATIONSHIP_SPEECH_ACTS 的层级一致）。用于委托链校验：
+// 委托只能平级或降级，不得抬高（防提权）。
+const RELATIONSHIP_RANK: Record<P3394Relationship, number> = {
+  anonymous: 0,
+  client: 1,
+  peer: 2,
+  administrator: 3,
+  owner: 4,
+};
+
+const MAX_DELEGATION_HOPS = 5;
+
+/**
+ * 委托链准入校验（改法 2）：把 delegation_chain 从「只记录」升级为「先审后放」。
+ * 三条规则：
+ *   1. 只降不升 —— 每一跳继承的 relationship 不得高于 original_relationship（防提权）。
+ *   2. 防环 —— delegate 不得是链中已出现过的 delegator（防 A→B→A 循环委托）。
+ *   3. 限长 —— 链长不得超过 MAX_DELEGATION_HOPS（防无限膨胀）。
+ * 不改任何数据，仅返回是否放行 + 原因。
+ */
+function validateDelegation(d: P3394DelegationContext): { ok: boolean; detail?: string } {
+  const chain = d.delegation_chain || [];
+  if (chain.length > MAX_DELEGATION_HOPS) {
+    return { ok: false, detail: `delegation chain too long (${chain.length} > ${MAX_DELEGATION_HOPS})` };
+  }
+  const originRank = RELATIONSHIP_RANK[d.original_relationship];
+  const seen = new Set<string>();
+  for (const hop of chain) {
+    if (RELATIONSHIP_RANK[hop.inherited_relationship] > originRank) {
+      return { ok: false, detail: `delegation escalation: ${hop.inherited_relationship} exceeds original ${d.original_relationship}` };
+    }
+    if (seen.has(hop.delegate)) {
+      return { ok: false, detail: `delegation cycle detected at ${hop.delegate}` };
+    }
+    seen.add(hop.delegator);
+  }
+  return { ok: true };
+}
+
 function relationshipAllowsCapability(manifest: P3394LiteManifest, relationship: P3394Relationship, capability: string): boolean {
   const rel = manifest.relationships.find((r) => r.name === relationship);
   if (!rel) return false;
@@ -308,6 +347,12 @@ export function normalizeP3394AgentMessage(input: NormalizeP3394AgentMessageInpu
   }
   if (containsExecutableBlock(input.body)) {
     return { ok: false, error: makeError(input, 'semantic_block_violation', 'Message contains an executable semantic block.') };
+  }
+  if (input.delegation) {
+    const dv = validateDelegation(input.delegation);
+    if (!dv.ok) {
+      return { ok: false, error: makeError(input, 'speech_act_denied', dv.detail || 'delegation rejected') };
+    }
   }
 
   const collaboration = normalizeCollaborationRef(input.collaboration);
