@@ -5,6 +5,9 @@ import {
   type P3394LiteMessage,
   type P3394AgentError,
 } from './protocol';
+import { createLogger } from '../../logger';
+
+const log = createLogger('p3394-controller');
 
 // 会话解析结果:由外部 session-store 提供,把 sessionId 映射到真实 kind/region。
 export interface SessionResolution { sessionId: string; kind: string; region: string; valid: boolean; }
@@ -46,8 +49,9 @@ export class P3394Controller {
       (message.metadata as any).session_kind = res.kind;
       (message.metadata as any).session_region = res.region;
       (message.metadata as any).session_resolved = res.valid;
-    } catch {
+    } catch (e) {
       (message.metadata as any).session_resolved = false;
+      log.warn('p3394 session resolve failed, degraded pass', { uid: input.uid, sessionId: input.sessionId, error: (e as Error).message });
     }
 
     // epoch 水位:incomingEpoch <= 已见水位视为重放拦截;正常路径领新 epoch。
@@ -60,9 +64,10 @@ export class P3394Controller {
         }
       }
       message.metadata.session_epoch = await this.deps.epochStore.nextEpoch(input.uid, input.sessionId);
-    } catch {
+    } catch (e) {
       message.metadata.session_epoch = 0;
       (message.metadata as any).epoch_degraded = true;
+      log.warn('p3394 epoch watermark failed, degraded epoch=0', { uid: input.uid, sessionId: input.sessionId, error: (e as Error).message });
     }
 
     const ctx = await this.assessContext(input, message);
@@ -71,8 +76,21 @@ export class P3394Controller {
     return { ok: true, message };
   }
 
-  // 任务5填充:基于 contextSource 做 context 作用域裁决,可返回 context_scope_violation。
-  protected async assessContext(_input: AdmitInput, _message: P3394LiteMessage): Promise<P3394NormalizeResult | null> {
+  // 基于 contextSource 做 context 作用域裁决,可返回 context_scope_violation。
+  protected async assessContext(input: AdmitInput, _message: P3394LiteMessage): Promise<P3394NormalizeResult | null> {
+    const claimed = input.collaboration?.context_id;
+    if (!claimed) return null;
+    let snap: ContextSourceSnapshot | null;
+    try {
+      snap = await this.deps.contextSource.snapshot(input.uid, input.conversationId);
+    } catch (err) {
+      log.warn('p3394 context snapshot read failed, skipping context scope check', { uid: input.uid, cid: input.conversationId, error: (err as Error).message });
+      return null;
+    }
+    if (!snap) return null;
+    if (snap.context_id !== claimed) {
+      return makeControllerError(input, 'context_scope_violation', `context ${claimed} not in workflow ${snap.context_id}`);
+    }
     return null;
   }
 }

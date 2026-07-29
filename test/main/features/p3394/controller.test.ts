@@ -63,3 +63,53 @@ describe('P3394Controller.admitMessage — session', () => {
     expect((r.message.metadata as any).session_resolved).toBe(false);
   });
 });
+
+describe('P3394Controller.admitMessage — epoch 重放', () => {
+  const sess = { resolve: async (sid: string) => ({ sessionId: sid, kind: 'gconv', region: 'cloud', valid: true }) };
+  it('incomingEpoch <= 水位 → 拒 replay_detected', async () => {
+    const { P3394Controller } = await import('../../../../src/main/features/p3394/controller');
+    const c = new P3394Controller({ sessionSource: sess, epochStore: { current: async () => 5, nextEpoch: async () => 6 }, contextSource: { snapshot: async () => null } } as any);
+    const r = await c.admitMessage(baseInput({ incomingEpoch: 5 }));
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('should reject');
+    expect(r.error.body.reason_code).toBe('replay_detected');
+  });
+  it('EpochStore 故障 → 降级放行,epoch=0 + epoch_degraded', async () => {
+    const { P3394Controller } = await import('../../../../src/main/features/p3394/controller');
+    const c = new P3394Controller({ sessionSource: sess, epochStore: { current: async () => { throw new Error('io'); }, nextEpoch: async () => { throw new Error('io'); } }, contextSource: { snapshot: async () => null } } as any);
+    const r = await c.admitMessage(baseInput());
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('should pass degraded');
+    expect(r.message.metadata.session_epoch).toBe(0);
+    expect((r.message.metadata as any).epoch_degraded).toBe(true);
+  });
+});
+
+describe('P3394Controller.admitMessage — context 归属', () => {
+  const sess = { resolve: async (sid: string) => ({ sessionId: sid, kind: 'gconv', region: 'cloud', valid: true }) };
+  const epoch = { current: async () => 0, nextEpoch: async () => 1 };
+  const collab = (context_id: string) => ({ workflow_run_id: 'run-1', context_id, context_revision: 1 });
+  it('context_id 越界 → 拒 context_scope_violation', async () => {
+    const { P3394Controller } = await import('../../../../src/main/features/p3394/controller');
+    const c = new P3394Controller({ sessionSource: sess, epochStore: epoch, contextSource: { snapshot: async () => ({ context_id: 'ctx-current', status: 'running' }) } } as any);
+    const r = await c.admitMessage(baseInput({ collaboration: collab('ctx-other') }));
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('should reject');
+    expect(r.error.body.reason_code).toBe('context_scope_violation');
+  });
+  it('context_id 相符 → 放行', async () => {
+    const { P3394Controller } = await import('../../../../src/main/features/p3394/controller');
+    const c = new P3394Controller({ sessionSource: sess, epochStore: epoch, contextSource: { snapshot: async () => ({ context_id: 'ctx-current', status: 'running' }) } } as any);
+    expect((await c.admitMessage(baseInput({ collaboration: collab('ctx-current') }))).ok).toBe(true);
+  });
+  it('不带 collaboration → 放行', async () => {
+    const { P3394Controller } = await import('../../../../src/main/features/p3394/controller');
+    const c = new P3394Controller({ sessionSource: sess, epochStore: epoch, contextSource: { snapshot: async () => ({ context_id: 'ctx-current', status: 'running' }) } } as any);
+    expect((await c.admitMessage(baseInput())).ok).toBe(true);
+  });
+  it('snapshot 读失败 → 降级放行', async () => {
+    const { P3394Controller } = await import('../../../../src/main/features/p3394/controller');
+    const c = new P3394Controller({ sessionSource: sess, epochStore: epoch, contextSource: { snapshot: async () => { throw new Error('io'); } } } as any);
+    expect((await c.admitMessage(baseInput({ collaboration: collab('ctx-other') }))).ok).toBe(true);
+  });
+});
