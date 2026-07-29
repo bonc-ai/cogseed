@@ -70,4 +70,41 @@ export class EpochStore {
       return next;
     });
   }
+
+  /**
+   * 原子地判定重放 + 推进水位(接收方水位语义:见过的最大 epoch)。
+   * 全程在 uid 锁内,消除 current/nextEpoch 两次调用的 TOCTOU。
+   * - incomingEpoch 省略: 水位 +1,返回 { replay:false, epoch:新水位 }。
+   * - incomingEpoch 为安全整数:
+   *     <= 当前水位 → { replay:true, epoch:当前水位 }(不推进/不落盘)
+   *     否则 → 水位 = incomingEpoch,返回 { replay:false, epoch:incomingEpoch }
+   * - incomingEpoch 非安全整数(NaN/Infinity/非整): 当作无效,按 +1 处理,不视为重放。
+   */
+  async admit(uid: string, sessionId: string, incomingEpoch?: number): Promise<{ replay: boolean; epoch: number }> {
+    return this.mutex(uid).runExclusive(async () => {
+      const map = await this.read(uid);
+      const cur = Number.isSafeInteger(map[sessionId]) ? map[sessionId] as number : 0;
+      let next: number;
+      if (typeof incomingEpoch === 'number' && Number.isSafeInteger(incomingEpoch)) {
+        if (incomingEpoch <= cur) {
+          return { replay: true, epoch: cur };
+        }
+        next = incomingEpoch;
+      } else {
+        next = cur + 1;
+      }
+      map[sessionId] = next;
+      const f = epochFile(uid);
+      await fs.mkdir(path.dirname(f), { recursive: true });
+      const tmp = f + `.${process.pid}.${Date.now()}.tmp`;
+      try {
+        await fs.writeFile(tmp, JSON.stringify(map, null, 2), 'utf8');
+        await fs.rename(tmp, f);
+      } catch (err) {
+        await fs.rm(tmp, { force: true }).catch(() => {});
+        throw err;
+      }
+      return { replay: false, epoch: next };
+    });
+  }
 }

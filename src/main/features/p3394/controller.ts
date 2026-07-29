@@ -14,7 +14,12 @@ export interface SessionResolution { sessionId: string; kind: string; region: st
 export interface SessionSource { resolve(sessionId: string): Promise<SessionResolution>; }
 
 // epoch 水位存储(EpochStore 兼容形状):防重复投递。
-export interface EpochStoreLike { current(uid: string, sessionId: string): Promise<number>; nextEpoch(uid: string, sessionId: string): Promise<number>; }
+// admit 原子判定重放 + 推进水位(max(水位,incomingEpoch)),消除 TOCTOU。current/nextEpoch 保留供其它调用点。
+export interface EpochStoreLike {
+  current(uid: string, sessionId: string): Promise<number>;
+  nextEpoch(uid: string, sessionId: string): Promise<number>;
+  admit(uid: string, sessionId: string, incomingEpoch?: number): Promise<{ replay: boolean; epoch: number }>;
+}
 
 // context 快照:任务5 填充 context 裁决时使用。
 export interface ContextSourceSnapshot { context_id: string; status: string; }
@@ -54,16 +59,13 @@ export class P3394Controller {
       log.warn('p3394 session resolve failed, degraded pass', { uid: input.uid, sessionId: input.sessionId, error: (e as Error).message });
     }
 
-    // epoch 水位:incomingEpoch <= 已见水位视为重放拦截;正常路径领新 epoch。
-    // IO 失败降级为 epoch=0 并标 epoch_degraded,不阻断放行。
+    // epoch 水位:原子判定重放 + 推进(见过的最大 epoch);IO 失败降级 epoch=0。
     try {
-      if (typeof input.incomingEpoch === 'number') {
-        const seen = await this.deps.epochStore.current(input.uid, input.sessionId);
-        if (input.incomingEpoch <= seen) {
-          return makeControllerError(input, 'replay_detected', `epoch ${input.incomingEpoch} <= watermark ${seen}`);
-        }
+      const res = await this.deps.epochStore.admit(input.uid, input.sessionId, input.incomingEpoch);
+      if (res.replay) {
+        return makeControllerError(input, 'replay_detected', `epoch ${input.incomingEpoch} <= watermark ${res.epoch}`);
       }
-      message.metadata.session_epoch = await this.deps.epochStore.nextEpoch(input.uid, input.sessionId);
+      message.metadata.session_epoch = res.epoch;
     } catch (e) {
       message.metadata.session_epoch = 0;
       (message.metadata as any).epoch_degraded = true;
