@@ -44,4 +44,13 @@ describe('P3394 EpochStore', () => {
     await Promise.all(Array.from({ length: 10 }, () => store.nextEpoch('u1', 'gconv-x')));
     expect(await store.current('u1', 'gconv-x')).toBe(10);
   });
+
+  it('磁盘坏 JSON 不崩,current 返回 0', async () => {
+    const dir = path.join(root, 'u1', 'local', 'kstar');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'p3394-epochs.json'), 'not json{{{', 'utf8');
+    const { EpochStore } = await import('../../../../src/main/features/p3394/epoch-store');
+    const store = new EpochStore();
+    expect(await store.current('u1', 'gconv-abc')).toBe(0);
+  });
 });
