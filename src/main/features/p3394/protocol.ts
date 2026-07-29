@@ -104,7 +104,7 @@ export interface P3394AgentError {
   timestamp: string;
   content_type: 'application/json';
   body: {
-    reason_code: 'unknown_capability' | 'speech_act_denied' | 'semantic_block_violation';
+    reason_code: 'unknown_capability' | 'speech_act_denied' | 'semantic_block_violation' | 'replay_detected' | 'context_scope_violation';
     detail: string;
     original_message_id: string;
   };
