@@ -7,7 +7,7 @@ import {
 } from './protocol';
 import { createLogger } from '../../logger';
 
-const log = createLogger('p3394-controller');
+const log = createLogger('p3394.controller');
 
 // 会话解析结果:由外部 session-store 提供,把 sessionId 映射到真实 kind/region。
 export interface SessionResolution { sessionId: string; kind: string; region: string; valid: boolean; }
@@ -77,8 +77,8 @@ export class P3394Controller {
   }
 
   // 基于 contextSource 做 context 作用域裁决,可返回 context_scope_violation。
-  protected async assessContext(input: AdmitInput, _message: P3394LiteMessage): Promise<P3394NormalizeResult | null> {
-    const claimed = input.collaboration?.context_id;
+  protected async assessContext(input: AdmitInput, message: P3394LiteMessage): Promise<P3394NormalizeResult | null> {
+    const claimed = message.metadata.collaboration?.context_id;
     if (!claimed) return null;
     let snap: ContextSourceSnapshot | null;
     try {

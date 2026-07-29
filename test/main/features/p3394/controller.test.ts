@@ -112,4 +112,9 @@ describe('P3394Controller.admitMessage — context 归属', () => {
     const c = new P3394Controller({ sessionSource: sess, epochStore: epoch, contextSource: { snapshot: async () => { throw new Error('io'); } } } as any);
     expect((await c.admitMessage(baseInput({ collaboration: collab('ctx-other') }))).ok).toBe(true);
   });
+  it('带 collaboration 但 snapshot 为 null → 降级放行', async () => {
+    const { P3394Controller } = await import('../../../../src/main/features/p3394/controller');
+    const c = new P3394Controller({ sessionSource: sess, epochStore: epoch, contextSource: { snapshot: async () => null } } as any);
+    expect((await c.admitMessage(baseInput({ collaboration: collab('ctx-anything') }))).ok).toBe(true);
+  });
 });
