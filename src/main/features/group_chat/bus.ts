@@ -960,9 +960,17 @@ async function p3394ProtocolProcessItem(input: {
         org: "mate-agent",
         role: fromCommander ? "commander" : "agent",
       };
+  // sessionId 必须是真实 <kind>-<tail>(gconv/gmember/gworker),不是裸 cid。
+  // actorSessionId 对 commander/agent/worker 均有映射;非常规 actor 回退到 cid 防抛错断流。
+  let p3394SessionId: string;
+  try {
+    p3394SessionId = actorSessionId(input.cid, input.actor);
+  } catch {
+    p3394SessionId = input.cid;
+  }
   const result = await _p3394Controller.admitMessage({
     uid: input.uid,
-    sessionId: input.cid,
+    sessionId: p3394SessionId,
     agent: input.agent,
     conversationId: input.cid,
     turnId: input.item.turnId,
