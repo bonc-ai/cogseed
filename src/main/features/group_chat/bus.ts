@@ -154,8 +154,47 @@ import {
   buildP3394Level2Manifest,
   normalizeP3394AgentMessage,
 } from "../p3394/protocol";
+import { P3394Controller } from "../p3394/controller";
+import { EpochStore } from "../p3394/epoch-store";
 
 const log = createLogger("group_chat.bus");
+
+/** Derive the session kind prefix used by session-kind gates. Compound kinds
+ *  (extract-img, memory-extract) are matched before the generic first-dash
+ *  split so their multi-segment names aren't truncated. */
+function parseSessionKind(sessionId: string): string {
+  for (const k of ["extract-img", "memory-extract"]) {
+    if (sessionId === k || sessionId.startsWith(`${k}-`)) return k;
+  }
+  const dash = sessionId.indexOf("-");
+  return dash < 0 ? sessionId : sessionId.slice(0, dash);
+}
+const P3394_RESUMABLE_KINDS = new Set(["gconv", "gmember", "skill", "agent"]);
+
+// Process-wide P3394 admission controller: wraps the stateless normalize kernel
+// with real session resolution, epoch watermarking, and context-scope checks.
+// The EpochStore persists receiver watermarks under <uid>/local/kstar/.
+const _p3394EpochStore = new EpochStore();
+const _p3394Controller = new P3394Controller({
+  sessionSource: {
+    async resolve(sessionId: string) {
+      const kind = parseSessionKind(sessionId);
+      return {
+        sessionId,
+        kind,
+        region: P3394_RESUMABLE_KINDS.has(kind) ? "cloud" : "local",
+        valid: !!kind,
+      };
+    },
+  },
+  epochStore: _p3394EpochStore,
+  contextSource: {
+    async snapshot(uid: string, cid: string) {
+      const snap = await readCollaborationSnapshot(uid, cid).catch(() => null);
+      return snap ? { context_id: snap.context_id, status: snap.status } : null;
+    },
+  },
+});
 
 /** Minimal HTML escape for embedding raw error strings inside the
  *  failure-style `<span>` we emit on stream errors. Keeps `<`/`>`/`&`/`"`
@@ -921,7 +960,9 @@ async function p3394ProtocolProcessItem(input: {
         org: "mate-agent",
         role: fromCommander ? "commander" : "agent",
       };
-  const result = normalizeP3394AgentMessage({
+  const result = await _p3394Controller.admitMessage({
+    uid: input.uid,
+    sessionId: input.cid,
     agent: input.agent,
     conversationId: input.cid,
     turnId: input.item.turnId,
