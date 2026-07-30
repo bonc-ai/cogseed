@@ -7,6 +7,7 @@ const root = resolve(__dirname, '../..');
 const routeSource = readFileSync(resolve(root, 'src/renderer/modules/ipc-shim.js'), 'utf8');
 const html = readFileSync(resolve(root, 'src/renderer/index.html'), 'utf8');
 const boot = readFileSync(resolve(root, 'src/renderer/modules/boot.js'), 'utf8');
+const state = readFileSync(resolve(root, 'src/renderer/modules/state.js'), 'utf8');
 const lazy = readFileSync(resolve(root, 'src/renderer/modules/lazy-features.js'), 'utf8');
 const ontology = readFileSync(resolve(root, 'src/renderer/modules/personal-ontology.js'), 'utf8');
 
@@ -43,6 +44,7 @@ describe('personal ontology renderer integration', () => {
     ]) expect(html).toContain(`id="${id}"`);
     expect(boot).toContain("view === 'personal-ontology' ? 'panel-personal-ontology'");
     expect(boot).toContain("_loadViewFeature('personal-ontology', 'personal-ontology'");
+    expect(state).toContain("document.getElementById('personal-ontology-btn')?.addEventListener('click', () => _setViewFromSidebar('personal-ontology'));");
     expect(lazy).toContain("'personal-ontology'");
     expect(lazy).toContain("./modules/personal-ontology.js");
   });

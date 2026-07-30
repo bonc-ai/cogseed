@@ -316,6 +316,7 @@ function bindStaticHandlers() {
   document.getElementById('skills-btn').addEventListener('click', () => _setViewFromSidebar('skills'));
   document.getElementById('connectors-btn')?.addEventListener('click', () => _setViewFromSidebar('connectors'));
   document.getElementById('evolution-btn')?.addEventListener('click', () => _setViewFromSidebar('evolution'));
+  document.getElementById('personal-ontology-btn')?.addEventListener('click', () => _setViewFromSidebar('personal-ontology'));
   document.getElementById('topbar-evolution-toggle')?.addEventListener('click', () => _setViewFromSidebar('evolution'));
   document.getElementById('contexts-btn').addEventListener('click', () => _setViewFromSidebar('contexts'));
   document.getElementById('settings-btn')?.addEventListener('click', () => _setViewFromSidebar('settings'));
