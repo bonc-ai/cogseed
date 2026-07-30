@@ -263,8 +263,25 @@ export interface TtsProfile {
   createdAt: number;
 }
 
+export interface CustomProvider {
+  id: string;
+  name: string;
+  protocol: 'anthropic' | 'openai' | 'gemini';
+  baseUrl: string;
+  apiKey: string;
+  notes?: string;
+  websiteUrl?: string;
+  needsKey?: boolean;
+  needsModelMapping?: boolean;
+  models?: string[];
+  source: 'manual' | 'ccswitch';
+  externalId?: string;
+  createdAt: number;
+  updatedAt?: number;
+}
+
 interface ProfilesFile {
-  /** v3 = chat profiles only. v4 adds BYO search / image / video / speech profiles. */
+  /** v3 = chat profiles only. v4 adds media profiles. v5 adds custom providers. */
   version: number;
   profiles: Record<string, StoredProfile>;
   entries: Entry[];
@@ -272,9 +289,10 @@ interface ProfilesFile {
   imageProfiles?: ImageProfile[];
   videoProfiles?: VideoProfile[];
   ttsProfiles?: TtsProfile[];
+  customProviders?: CustomProvider[];
 }
 
-const PROFILES_FILE_VERSION = 4;
+const PROFILES_FILE_VERSION = 5;
 const AUTH_SECRET_NAMESPACE = 'auth.profiles';
 const AUTH_SECRET_RECORD_ID = 'auth-profiles.json';
 
@@ -298,6 +316,7 @@ function emptyProfilesStore(): ProfilesFile {
     imageProfiles: [],
     videoProfiles: [],
     ttsProfiles: [],
+    customProviders: [],
   };
 }
 
@@ -399,7 +418,8 @@ function loadProfiles(): ProfilesFile {
       const imageProfiles = parseImageProfilesArray((data as any).imageProfiles);
       const videoProfiles = parseVideoProfilesArray((data as any).videoProfiles);
       const ttsProfiles = parseTtsProfilesArray((data as any).ttsProfiles);
-      const store = { version: PROFILES_FILE_VERSION, profiles, entries, searchProfiles, imageProfiles, videoProfiles, ttsProfiles };
+      const customProviders = parseCustomProvidersArray((data as any).customProviders);
+      const store = { version: PROFILES_FILE_VERSION, profiles, entries, searchProfiles, imageProfiles, videoProfiles, ttsProfiles, customProviders };
       if (needsRewrite) saveProfiles(store);
       return store;
     }
@@ -547,6 +567,34 @@ function parseTtsProfilesArray(arr: unknown): TtsProfile[] {
   return out;
 }
 
+function parseCustomProvidersArray(arr: unknown): CustomProvider[] {
+  if (!Array.isArray(arr)) return [];
+  const protocols = new Set<CustomProvider['protocol']>(['anthropic', 'openai', 'gemini']);
+  const out: CustomProvider[] = [];
+  for (const raw of arr) {
+    const p = raw as any;
+    if (!p || typeof p !== 'object' || !p.id || !p.name || !p.baseUrl) continue;
+    const protocol = protocols.has(p.protocol) ? p.protocol as CustomProvider['protocol'] : 'anthropic';
+    out.push({
+      id: String(p.id),
+      name: String(p.name),
+      protocol,
+      baseUrl: String(p.baseUrl),
+      apiKey: typeof p.apiKey === 'string' ? p.apiKey : '',
+      ...(p.notes ? { notes: String(p.notes) } : {}),
+      ...(p.websiteUrl ? { websiteUrl: String(p.websiteUrl) } : {}),
+      ...(p.needsKey ? { needsKey: true } : {}),
+      ...(p.needsModelMapping ? { needsModelMapping: true } : {}),
+      ...(Array.isArray(p.models) ? { models: p.models.map(String).filter(Boolean).slice(0, 100) } : {}),
+      source: p.source === 'ccswitch' ? 'ccswitch' : 'manual',
+      ...(p.externalId ? { externalId: String(p.externalId) } : {}),
+      createdAt: typeof p.createdAt === 'number' ? p.createdAt : Date.now(),
+      ...(typeof p.updatedAt === 'number' ? { updatedAt: p.updatedAt } : {}),
+    });
+  }
+  return out;
+}
+
 // ── Search / Image / Video / TTS profiles store IO (low-level) ────────────
 //
 // These helpers expose the new top-level fields so feature modules
@@ -595,6 +643,33 @@ export function saveTtsProfiles(list: TtsProfile[]): void {
   saveProfiles(store);
 }
 
+function assertActiveUser(userId: string): void {
+  if (getActiveUserId() !== userId) throw new Error('user scope mismatch');
+}
+
+export function loadCustomProviders(userId: string): CustomProvider[] {
+  assertActiveUser(userId);
+  return loadProfiles().customProviders || [];
+}
+
+export function saveCustomProviders(userId: string, list: CustomProvider[]): void {
+  assertActiveUser(userId);
+  const store = loadProfiles();
+  store.customProviders = [...list];
+  saveProfiles(store);
+  invalidateCoreAgentRunner();
+}
+
+export function removeEntriesForProvider(userId: string, providerId: string): number {
+  assertActiveUser(userId);
+  const store = loadProfiles();
+  const before = store.entries.length;
+  store.entries = store.entries.filter((entry) => entry.provider !== providerId);
+  if (store.entries.length !== before) saveProfiles(store);
+  invalidateCoreAgentRunner();
+  return before - store.entries.length;
+}
+
 function saveProfiles(store: ProfilesFile): void {
   ensureAuthDir();
   const json = JSON.stringify(store, null, 2);
@@ -612,7 +687,25 @@ function isStoredProfileAllowed(profile: StoredProfile | undefined): profile is 
   return !!profile && !isStoredProfileBlocked(profile);
 }
 
+export function isCustomProviderId(providerId: string): boolean {
+  return String(providerId || '').startsWith('cp:');
+}
+
+function customProviderForId(store: ProfilesFile, providerId: string): CustomProvider | undefined {
+  if (!isCustomProviderId(providerId)) return undefined;
+  const id = providerId.slice(3);
+  return (store.customProviders || []).find((provider) => provider.id === id);
+}
+
+function isCustomProviderModelAllowed(provider: CustomProvider, model: string): boolean {
+  const normalized = String(model || '').trim();
+  if (!normalized) return false;
+  return !provider.models?.length || provider.models.includes(normalized);
+}
+
 function isEntryAllowed(store: ProfilesFile, entry: Entry): boolean {
+  const custom = customProviderForId(store, entry.provider);
+  if (custom) return !!custom.apiKey && isCustomProviderModelAllowed(custom, entry.model);
   const prof = store.profiles[entry.profileId];
   return isModelProviderAllowed(entry.provider, entry.model)
     && !isStoredProfileBlocked(prof);
@@ -672,7 +765,6 @@ export function getConfiguredModelCooldown(): {
   let best: { profileId: string; cooledUntil: number; kind: KeyFailureKind; reason: string } | null = null;
   for (const entry of store.entries) {
     if (!isEntryAllowed(store, entry)) continue;
-    if (!store.profiles[entry.profileId]) continue;
     const cooldown = getCooldown(entry.profileId);
     if (!cooldown) continue;
     const current = { profileId: entry.profileId, ...cooldown };
@@ -866,6 +958,27 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
     };
   });
 
+  for (const custom of store.customProviders || []) {
+    providers.push({
+      id: `cp:${custom.id}`,
+      label: custom.name,
+      featured: false,
+      supportsApiKey: true,
+      supportsOAuth: false,
+      manualModel: !custom.models?.length,
+      profiles: [{
+        profileId: `cp:${custom.id}`,
+        provider: `cp:${custom.id}`,
+        label: custom.name,
+        type: 'api_key',
+        masked: maskKey(custom.apiKey),
+        baseUrl: custom.baseUrl,
+        createdAt: custom.createdAt,
+        lastUsed: 0,
+      }],
+    });
+  }
+
   return { providers };
 }
 
@@ -882,6 +995,10 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
 export async function listModels(providerId: string): Promise<{ models: { id: string; name: string }[] }> {
   const id = String(providerId || '').trim();
   if (!id) return { models: [] };
+  if (isCustomProviderId(id)) {
+    const custom = customProviderForId(loadProfiles(), id);
+    return { models: (custom?.models || []).map((model) => ({ id: model, name: model })) };
+  }
   if (!isModelProviderAllowed(id)) return { models: [] };
   const allowed = (models: { id: string; name: string }[]) =>
     models.filter((m) => isModelProviderAllowed(id, m.id));
@@ -1026,6 +1143,22 @@ export interface EntryView {
 }
 
 function entryToView(e: Entry, store: ProfilesFile, modelNameLookup: (p: string, m: string) => string): EntryView {
+  const custom = customProviderForId(store, e.provider);
+  if (custom) {
+    return {
+      entryId: e.entryId,
+      provider: e.provider,
+      providerLabel: custom.name,
+      model: e.model,
+      modelName: e.model,
+      profileId: e.profileId,
+      profileLabel: custom.name,
+      profileType: 'api_key',
+      profileMasked: maskKey(custom.apiKey),
+      createdAt: e.createdAt,
+      lastUsed: e.lastUsed,
+    };
+  }
   const prof = store.profiles[e.profileId];
   const base = {
     entryId: e.entryId,
@@ -1086,10 +1219,16 @@ export async function addEntry({
   const m = String(model || '').trim();
   const pid = String(profileId || '').trim();
   if (!p || !m || !pid) throw new Error('provider / model / profileId required');
-  assertModelProviderAllowed(p, m);
   const store = loadProfiles();
-  if (!store.profiles[pid]) throw new Error('profile not found');
-  if (store.profiles[pid].provider !== p) throw new Error('profile does not belong to provider');
+  const custom = customProviderForId(store, p);
+  if (custom) {
+    if (pid !== p) throw new Error('custom provider profile mismatch');
+    if (!isCustomProviderModelAllowed(custom, m)) throw new Error('custom provider model not found');
+  } else {
+    assertModelProviderAllowed(p, m);
+    if (!store.profiles[pid]) throw new Error('profile not found');
+    if (store.profiles[pid].provider !== p) throw new Error('profile does not belong to provider');
+  }
 
   // Deduplicate: if an entry with the same (provider, model, profileId)
   // already exists, don't create a second one. Returning the existing id
@@ -1119,7 +1258,12 @@ export async function updateEntryModel(entryId: string, model: string): Promise<
   const store = loadProfiles();
   const target = store.entries.find((e) => e.entryId === id);
   if (!target) throw new Error('entry not found');
-  assertModelProviderAllowed(target.provider, m);
+  const custom = customProviderForId(store, target.provider);
+  if (custom) {
+    if (!isCustomProviderModelAllowed(custom, m)) throw new Error('custom provider model not found');
+  } else {
+    assertModelProviderAllowed(target.provider, m);
+  }
   // Deduplicate: if another entry with the same (provider, model, profileId)
   // already exists, removing the target makes the priority list cleaner.
   const collision = store.entries.find(
@@ -1477,6 +1621,8 @@ function groupEntries(entries: Entry[]): Entry[][] {
  * profile is gone, the OAuth token expired and refresh fails, etc.).
  */
 async function resolveEntryApiKey(store: ProfilesFile, entry: Entry): Promise<string | undefined> {
+  const custom = customProviderForId(store, entry.provider);
+  if (custom) return custom.apiKey || undefined;
   const prof = store.profiles[entry.profileId];
   if (!prof || !isStoredProfileAllowed(prof)) return undefined;
   if (prof.type === 'api_key') return prof.key;
@@ -1596,12 +1742,14 @@ export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
     if (!apiKey) continue;
     const prof = store.profiles[entry.profileId];
     const apiProfile = prof?.type === 'api_key' ? prof as ApiKeyProfile : undefined;
+    const custom = customProviderForId(store, entry.provider);
     choices.push({
       entryId: entry.entryId,
       profileId: entry.profileId,
       provider: entry.provider,
       model: entry.model,
       apiKey,
+      ...(custom?.baseUrl ? { baseUrl: custom.baseUrl } : {}),
       ...(apiProfile?.baseUrl ? { baseUrl: apiProfile.baseUrl } : {}),
       ...(apiProfile && isOpenAICompatibleProvider(entry.provider)
         ? { maxOutputTokens: normalizeOpenAICompatibleMaxOutputTokens(entry.provider, apiProfile.maxOutputTokens) }

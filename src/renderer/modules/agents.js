@@ -72,6 +72,86 @@ function _isAgentProfileMock() {
   return false;
 }
 
+
+// CLI custom-provider bindings are intentionally renderer-only here: the
+// provider list is masked by main IPC and the selected `cp:<id>` is stored
+// with the CLI runtime. Claude accepts Anthropic providers; Codex accepts
+// OpenAI providers. Other CLI runtimes keep their CLI-owned configuration.
+function _cliProviderProtocol(cli) {
+  if (cli === 'claude') return 'anthropic';
+  if (cli === 'codex') return 'openai';
+  return '';
+}
+
+function filterCliProviders(cli, providers) {
+  const protocol = _cliProviderProtocol(cli);
+  if (!protocol || !Array.isArray(providers)) return [];
+  return providers.filter((provider) => provider && provider.protocol === protocol);
+}
+
+function normalizeCliProviderSelection(cli, selectedId, providers) {
+  if (!selectedId) return '';
+  const match = String(selectedId).match(/^cp:(.+)$/);
+  if (!match) return '';
+  return filterCliProviders(cli, providers).some((provider) => String(provider.id) === match[1])
+    ? selectedId
+    : '';
+}
+
+function withCliProviderSelection(runtime, selectedId) {
+  const next = { ...(runtime || {}) };
+  delete next.cli_provider_id;
+  if (selectedId) next.cli_provider_id = selectedId;
+  return next;
+}
+
+let _externalCliProviders = [];
+let _externalCliProviderSelect = null;
+
+async function _loadExternalCliProviders() {
+  const res = await window.orkas.invoke('customProviders.list');
+  _externalCliProviders = (res && res.ok && Array.isArray(res.providers)) ? res.providers : [];
+  return _externalCliProviders;
+}
+
+function _renderExternalCliProviderSelect(cli, selectedId = '') {
+  const row = document.getElementById('agent-ext-provider-row');
+  const mount = document.getElementById('agent-modal-ext-provider-select');
+  if (!row || !mount) return;
+  const providers = filterCliProviders(cli, _externalCliProviders);
+  const compatibleSelected = normalizeCliProviderSelection(cli, selectedId, _externalCliProviders);
+  row.hidden = !(cli === 'claude' || cli === 'codex');
+  if (row.hidden) {
+    _externalCliProviderSelect?.setValue('');
+    return;
+  }
+  const options = [
+    { value: '', label: t('agent_modal.ext_provider_none') },
+    ...providers.map((provider) => ({
+      value: `cp:${provider.id}`,
+      label: provider.name || provider.id,
+      hint: provider.apiKeyMasked || provider.baseUrl || '',
+    })),
+  ];
+  if (!_externalCliProviderSelect) {
+    _externalCliProviderSelect = _aiSelectMount(mount, {
+      options, value: compatibleSelected,
+      placeholder: t('agent_modal.ext_provider_none'),
+    });
+  } else {
+    _externalCliProviderSelect.setOptions(options, { value: compatibleSelected });
+  }
+}
+
+function _getExternalCliProviderValue(cli) {
+  const selected = _externalCliProviderSelect?.getValue() || '';
+  return normalizeCliProviderSelection(cli, selected, _externalCliProviders);
+}
+
+window.filterCliProviders = filterCliProviders;
+window.normalizeCliProviderSelection = normalizeCliProviderSelection;
+window.withCliProviderSelection = withCliProviderSelection;
+
 function _isAgentPlatformSource(source) {
   return (typeof isMarketplaceCatalogSource === 'function')
     ? isMarketplaceCatalogSource(source)
@@ -2444,8 +2524,13 @@ function openAgentModal(options = {}) {
 
   // Refresh the External-tab CLI selector. Re-mount each open so newly-
   // installed CLIs surface without an app restart.
+  _externalCliProviderSelect?.setValue('');
+  const providerLoad = _loadExternalCliProviders().catch(() => []);
   if (typeof mountExternalCliSelect === 'function') {
-    mountExternalCliSelect((cli) => _applyExternalCliDefaults(cli)).catch(() => {});
+    mountExternalCliSelect((cli) => {
+      _applyExternalCliDefaults(cli);
+      providerLoad.then(() => _renderExternalCliProviderSelect(cli, _getExternalCliProviderValue(cli)));
+    }).catch(() => {});
   }
 
   modal.classList.add('open');
@@ -2616,7 +2701,7 @@ async function _saveExternalAgent({ msgEl }) {
       // CLI-backed agents do not run the LLM authoring pass, so use the
       // stable role-specific coding avatar instead of a random pair.
       icon: 'code', color: 'sage',
-      runtime: { kind: 'cli', cli },
+      runtime: withCliProviderSelection({ kind: 'cli', cli }, _getExternalCliProviderValue(cli)),
       category: 'general',
     };
     const res = await apiFetch('/api/agents/create', {

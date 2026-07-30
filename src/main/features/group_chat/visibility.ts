@@ -97,6 +97,9 @@ export interface GroupMessage {
   kstar_review?: KStarReviewSummary;
   /** Plain `@token` list (raw text mentions). */
   mentions?: string[];
+  /** Host-owned P3394 delivery metadata. Epochs are scoped to the persisted
+   * message and recipient so a replay/re-dispatch reuses the original value. */
+  p3394?: { recipient_epochs: Record<string, number> };
   /** Stable actor-execution id that produced this record. Live process,
    * terminal bus events, persisted history and renderer placeholders all use
    * this value to refer to the same reply. Older records may omit it. */

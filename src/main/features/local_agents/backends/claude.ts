@@ -32,7 +32,7 @@ const log = createLogger('local-agents:claude');
 export const claudeBackend: LocalBackend = {
   async run(opts: BackendRunOptions): Promise<void> {
     const args = buildClaudeArgs(opts);
-    const child = spawnCli(opts.binPath, args, opts.cwd);
+    const child = spawnCli(opts.binPath, args, opts.cwd, undefined, opts.providerEnv);
     const detachAbort = bindAbort(child, opts.signal);
     const tail = new StderrTail();
     const startedAt = Date.now();

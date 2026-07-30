@@ -16557,3 +16557,13 @@ body.model-not-configured .main-content { flex-direction: column; }
 #panel-evolution .evo-std-form select { padding: 8px 10px; border: 1px solid var(--evo-border); border-radius: 8px; font-size: 13px; background: #fff; color: var(--evo-fg); }
 #panel-evolution #evo-std-save { background: var(--evo-blue); border-color: var(--evo-blue); color: #fff; margin-left: auto; }
 #panel-evolution #evo-std-save:hover { background: hsl(222 47% 40%); }
+
+/* Unified model providers */
+.settings-custom-provider-toolbar { flex-wrap: wrap; gap: 8px; }
+.settings-custom-provider-list { margin-top: 12px; }
+.settings-custom-provider-row .entry-meta { color: var(--text-muted, #777); font-size: 12px; margin-top: 4px; }
+.settings-ccswitch-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border-subtle, #eee); }
+.settings-ccswitch-row-main { flex: 1; }
+.settings-ccswitch-row-meta { color: var(--text-muted, #777); font-size: 12px; }
+.settings-custom-provider-modal .form-row { margin-bottom: 12px; }
+.settings-custom-provider-modal .form-row label { display: block; margin-bottom: 5px; }

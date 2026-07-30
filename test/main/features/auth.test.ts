@@ -669,6 +669,48 @@ describe('auth › listModels', () => {
   });
 });
 
+describe('auth › custom providers', () => {
+  it('lists models, creates an entry, and resolves its encrypted key', async () => {
+    const providers = await import('../../../src/main/features/custom_providers');
+    const created = providers.addCustomProvider(TEST_UID, {
+      name: 'Custom Relay',
+      protocol: 'openai',
+      baseUrl: 'https://relay.example/v1',
+      apiKey: 'custom-secret-key',
+      models: ['relay-model'],
+    });
+    if (!created.ok) throw new Error(created.error);
+    const providerId = `cp:${created.id}`;
+
+    const auth = await import('../../../src/main/features/auth');
+    const listed = await auth.listProviders();
+    expect(listed.providers).toContainEqual(expect.objectContaining({
+      id: providerId,
+      label: 'Custom Relay',
+      supportsApiKey: true,
+      supportsOAuth: false,
+      manualModel: false,
+    }));
+    expect(await auth.listModels(providerId)).toEqual({
+      models: [{ id: 'relay-model', name: 'relay-model' }],
+    });
+
+    await auth.addEntry({ provider: providerId, model: 'relay-model', profileId: providerId });
+    const entries = await auth.listEntries();
+    expect(entries.entries[0]).toMatchObject({
+      provider: providerId,
+      providerLabel: 'Custom Relay',
+      profileMasked: 'cust…-key',
+    });
+    expect(await auth.pickChatEntry()).toMatchObject({
+      provider: providerId,
+      model: 'relay-model',
+      apiKey: 'custom-secret-key',
+      baseUrl: 'https://relay.example/v1',
+    });
+  });
+});
+
 describe('auth › DeepSeek policy gate', () => {
   it('keeps DeepSeek visible by default without Server config', async () => {
     const a = await import('../../../src/main/features/auth');

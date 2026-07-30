@@ -154,8 +154,56 @@ import {
   buildP3394Level2Manifest,
   normalizeP3394AgentMessage,
 } from "../p3394/protocol";
+import { P3394Controller } from "../p3394/controller";
+import { EpochStore } from "../p3394/epoch-store";
+import { SenderEpochStore } from "../p3394/sender-epoch-store";
 
 const log = createLogger("group_chat.bus");
+
+/** Derive the session kind prefix used by session-kind gates. Compound kinds
+ *  (extract-img, memory-extract) are matched before the generic first-dash
+ *  split so their multi-segment names aren't truncated. */
+function parseSessionKind(sessionId: string): string {
+  for (const k of ["extract-img", "memory-extract"]) {
+    if (sessionId === k || sessionId.startsWith(`${k}-`)) return k;
+  }
+  const dash = sessionId.indexOf("-");
+  return dash < 0 ? sessionId : sessionId.slice(0, dash);
+}
+const P3394_RESUMABLE_KINDS = new Set(["gconv", "gmember", "skill", "agent"]);
+
+// Process-wide P3394 admission controller: wraps the stateless normalize kernel
+// with real session resolution, epoch watermarking, and context-scope checks.
+// The EpochStore persists receiver watermarks under <uid>/local/kstar/.
+const _p3394EpochStore = new EpochStore();
+const _p3394SenderEpochStore = new SenderEpochStore();
+const _defaultP3394Controller = new P3394Controller({
+  sessionSource: {
+    async resolve(sessionId: string) {
+      const kind = parseSessionKind(sessionId);
+      return {
+        sessionId,
+        kind,
+        region: P3394_RESUMABLE_KINDS.has(kind) ? "cloud" : "local",
+        valid: !!kind,
+      };
+    },
+  },
+  epochStore: _p3394EpochStore,
+  contextSource: {
+    async snapshot(uid: string, cid: string) {
+      const snap = await readCollaborationSnapshot(uid, cid).catch(() => null);
+      return snap ? { context_id: snap.context_id, status: snap.status } : null;
+    },
+  },
+});
+let _p3394ControllerForTest: Pick<P3394Controller, "admitMessage"> | null = null;
+
+export function _setP3394ControllerForTest(
+  controller: Pick<P3394Controller, "admitMessage"> | null,
+): void {
+  _p3394ControllerForTest = controller;
+}
 
 /** Minimal HTML escape for embedding raw error strings inside the
  *  failure-style `<span>` we emit on stream errors. Keeps `<`/`>`/`&`/`"`
@@ -903,13 +951,19 @@ function runtimeProcessItem(
   };
 }
 
+interface P3394AdmissionOutcome {
+  processItem: ProcessItem;
+  admitted: boolean;
+  reasonCode?: string;
+}
+
 async function p3394ProtocolProcessItem(input: {
   uid: string;
   cid: string;
   actor: Actor;
   item: QueueItem;
   agent: agentsFeat.Agent;
-}): Promise<ProcessItem> {
+}): Promise<P3394AdmissionOutcome> {
   const fromUser = input.item.fromActorId === USER_ID;
   const fromCommander = input.item.fromActorId === COMMANDER_ID;
   const relationship = fromUser ? "owner" : "peer";
@@ -921,7 +975,18 @@ async function p3394ProtocolProcessItem(input: {
         org: "mate-agent",
         role: fromCommander ? "commander" : "agent",
       };
-  const result = normalizeP3394AgentMessage({
+  // sessionId 必须是真实 <kind>-<tail>(gconv/gmember/gworker),不是裸 cid。
+  // actorSessionId 对 commander/agent/worker 均有映射;非常规 actor 回退到 cid 防抛错断流。
+  let p3394SessionId: string;
+  try {
+    p3394SessionId = actorSessionId(input.cid, input.actor);
+  } catch {
+    p3394SessionId = input.cid;
+  }
+  const controller = _p3394ControllerForTest || _defaultP3394Controller;
+  const result = await controller.admitMessage({
+    uid: input.uid,
+    sessionId: p3394SessionId,
     agent: input.agent,
     conversationId: input.cid,
     turnId: input.item.turnId,
@@ -931,6 +996,9 @@ async function p3394ProtocolProcessItem(input: {
     speechAct,
     capability: "handle_message",
     body: _unwrapLlmTurnPayload(input.item.llmPayload) || input.item.llmPayload,
+    ...(input.item.incomingEpoch !== undefined
+      ? { incomingEpoch: input.item.incomingEpoch }
+      : {}),
     collaboration: await (async () => {
       const snapshot = await readCollaborationSnapshot(input.uid, input.cid).catch(() => null);
       if (!snapshot) return undefined;
@@ -963,54 +1031,61 @@ async function p3394ProtocolProcessItem(input: {
   if (result.ok === false) {
     const error = result.error;
     return {
+      admitted: false,
+      reasonCode: error.body.reason_code,
+      processItem: {
+        type: "event",
+        event: {
+          stream: "p3394",
+          data: {
+            phase: "normalized",
+            ok: false,
+            agent_id: input.actor.id,
+            role:
+              contract?.role ||
+              (input.agent.runtime?.kind === "cli"
+                ? "external_expert"
+                : "orkas_core"),
+            relationship,
+            speech_act: speechAct,
+            error: error.body.reason_code,
+            detail: error.body.detail,
+            correlation_id: error.correlation_id,
+            canonical_session_id: error.canonical_session_id,
+          },
+        },
+      },
+    };
+  }
+  return {
+    admitted: true,
+    processItem: {
       type: "event",
       event: {
         stream: "p3394",
         data: {
           phase: "normalized",
-          ok: false,
+          ok: true,
           agent_id: input.actor.id,
           role:
             contract?.role ||
             (input.agent.runtime?.kind === "cli"
               ? "external_expert"
               : "orkas_core"),
-          relationship,
+          runtime_kind:
+            contract?.runtime.kind ||
+            (input.agent.runtime?.kind === "cli" ? "cli" : "in_process"),
+          p3394_level: manifest.conformance.p3394_level,
+          relationship: result.message.metadata.relationship,
           speech_act: speechAct,
-          error: error.body.reason_code,
-          detail: error.body.detail,
-          correlation_id: error.correlation_id,
-          canonical_session_id: error.canonical_session_id,
+          message_type: result.message.message_type,
+          correlation_id: result.message.correlation_id,
+          canonical_session_id: result.message.canonical_session_id,
+          session_role: manifest.session.ownership.role,
+          uses_mate_skills:
+            contract?.governance.uses_mate_skills ??
+            input.agent.runtime?.kind !== "cli",
         },
-      },
-    };
-  }
-  return {
-    type: "event",
-    event: {
-      stream: "p3394",
-      data: {
-        phase: "normalized",
-        ok: true,
-        agent_id: input.actor.id,
-        role:
-          contract?.role ||
-          (input.agent.runtime?.kind === "cli"
-            ? "external_expert"
-            : "orkas_core"),
-        runtime_kind:
-          contract?.runtime.kind ||
-          (input.agent.runtime?.kind === "cli" ? "cli" : "in_process"),
-        p3394_level: manifest.conformance.p3394_level,
-        relationship: result.message.metadata.relationship,
-        speech_act: speechAct,
-        message_type: result.message.message_type,
-        correlation_id: result.message.correlation_id,
-        canonical_session_id: result.message.canonical_session_id,
-        session_role: manifest.session.ownership.role,
-        uses_mate_skills:
-          contract?.governance.uses_mate_skills ??
-          input.agent.runtime?.kind !== "cli",
       },
     },
   };
@@ -1152,6 +1227,8 @@ interface QueueItem {
   /** Commander-selected first-stage KSTAR gate for this delegated turn. */
   kstarDecision?: KStarDecisionRecord;
   workflow_step_id?: string;
+  /** Sender-assigned epoch persisted on the source GroupMessage. */
+  incomingEpoch?: number;
 }
 
 interface WorkerState {
@@ -2122,6 +2199,28 @@ async function _enqueueBody(
   const ts = nowIso();
   const mentions = parseMentions(rewrittenText);
   const useSelections = _normalizeUseSelections(params.use_selections);
+  const dispatchMembers = await readMembers(uid, cid);
+  const recipientEpochs: Record<string, number> = {};
+  for (const recipientId of to) {
+    if (recipientId === USER_ID) continue;
+    const actor = dispatchMembers.actors.find((candidate) => candidate.id === recipientId);
+    if (!actor) continue;
+    try {
+      recipientEpochs[recipientId] = await _p3394SenderEpochStore.next(
+        uid,
+        fromActorId,
+        actorSessionId(cid, actor),
+      );
+    } catch (err) {
+      log.warn('p3394 sender epoch allocation failed, degraded delivery', {
+        uid,
+        cid,
+        sender: fromActorId,
+        recipient: recipientId,
+        error: (err as Error).message,
+      });
+    }
+  }
 
   const msg: GroupMessage = {
     id: msgId,
@@ -2133,6 +2232,9 @@ async function _enqueueBody(
       ? { wake_requests: pendingWakeRequests }
       : {}),
     ...(mentions.length ? { mentions } : {}),
+    ...(Object.keys(recipientEpochs).length
+      ? { p3394: { recipient_epochs: recipientEpochs } }
+      : {}),
     text: rewrittenText,
     ...(params.failure_kind ? { failure_kind: params.failure_kind } : {}),
     ...(params.failure_code ? { failure_code: params.failure_code } : {}),
@@ -2242,7 +2344,7 @@ async function _enqueueBody(
   );
 
   // Dispatch to non-user recipients.
-  const refreshed = await readMembers(uid, cid);
+  const refreshed = dispatchMembers;
   for (const recipientId of to) {
     if (recipientId === USER_ID) continue;
     const actor = refreshed.actors.find((a) => a.id === recipientId);
@@ -2261,6 +2363,9 @@ async function _enqueueBody(
       msgId,
       fromActorId,
       llmPayload: composeLlmTurnPayload(uid, fromActorId, msg),
+      ...(msg.p3394?.recipient_epochs[recipientId] !== undefined
+        ? { incomingEpoch: msg.p3394.recipient_epochs[recipientId] }
+        : {}),
       ...(msg.attachments && msg.attachments.length
         ? { attachments: msg.attachments.slice() }
         : {}),
@@ -3279,10 +3384,35 @@ async function runActorTurnBody(
       return { kind: "early" };
     }
     actorInteractive = agent.interactive === true;
-    appendProcessItem(
-      processItems,
-      await p3394ProtocolProcessItem({ uid, cid, actor, item, agent }),
-    );
+    const p3394Admission = await p3394ProtocolProcessItem({ uid, cid, actor, item, agent });
+    appendProcessItem(processItems, p3394Admission.processItem);
+    if (!p3394Admission.admitted) {
+      const reasonCode = p3394Admission.reasonCode || "rejected";
+      const reply = `<span style="color:var(--danger)">${escapeHtmlForBubble(t("p3394.admission_blocked"))}</span>`;
+      w.abortController = null;
+      await enqueue({
+        uid,
+        cid,
+        fromActorId: actor.id,
+        text: reply,
+        failure_kind: "validation",
+        failure_code: `p3394_${reasonCode}`,
+        forceTo: [USER_ID],
+        turn_end: true,
+        turn_id: item.turnId,
+        process: processItems,
+      });
+      await markInFlight(uid, cid, actor.id, false);
+      await emitStateChanged(state);
+      await _syncStateStatus(state);
+      log.warn("p3394 admission blocked agent turn", {
+        uid,
+        cid,
+        actor: actor.id,
+        reason: reasonCode,
+      });
+      return { kind: "early" };
+    }
     if (agentsFeat.isCliAgent(agent)) {
       cliAgent = agent;
       systemPrompt = ""; // unused on CLI path
@@ -7285,6 +7415,7 @@ async function _runCliAgentTurn(opts: {
     cli: runtime.cli as import("../local_agents/registry").LocalCliType,
     model: runtime.model,
     customArgs: runtime.custom_args,
+    ...(runtime.cli_provider_id ? { cliProviderId: runtime.cli_provider_id } : {}),
     resumeSessionId: resumeSessionId || undefined,
     prompt: promptText,
     cwd: opts.workingDir,

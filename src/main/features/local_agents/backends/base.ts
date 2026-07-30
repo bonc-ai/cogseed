@@ -93,6 +93,8 @@ export interface BackendRunOptions {
    *  openclaw) should pass a smaller value so users get an early "still
    *  alive" pulse instead of staring at a blank rail for the full run. */
   idleMs?: number;
+  /** Custom-provider variables applied only to the spawned child process. */
+  providerEnv?: Record<string, string>;
   /** orkas-bridge injection (plan §D — set by runner.ts when a bridge
    *  host is live for this run). Backends that support adding an MCP
    *  server pass the config through (claude: `--mcp-config`; codex:
@@ -154,8 +156,13 @@ export function spawnCli(
   args: string[],
   cwd: string,
   env?: NodeJS.ProcessEnv,
+  providerEnv?: Record<string, string>,
 ): ChildProcessWithoutNullStreams {
   const childEnv = buildCliSpawnEnv(binPath, env ?? process.env);
+  for (const [key, value] of Object.entries(providerEnv || {})) {
+    if (key === 'PATH' || key === 'Path') continue;
+    childEnv[key] = value;
+  }
   const launch = resolveCliCommand(binPath, args, process.platform, childEnv);
   const child = spawn(launch.command, launch.args, {
     cwd,

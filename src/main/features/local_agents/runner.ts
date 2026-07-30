@@ -26,6 +26,7 @@ import { openclawBackend } from './backends/openclaw.js';
 import { opencodeBackend } from './backends/opencode.js';
 import { hermesBackend } from './backends/hermes.js';
 import { type LocalBackend, type LocalEvent } from './backends/base.js';
+import { resolveCliProviderEnv } from './provider_env.js';
 import * as persist from './persist.js';
 import { sessionToolResultsDir } from '../../paths.js';
 import { maybeSpillToolResult } from '../../util/tool-result-cap.js';
@@ -545,6 +546,8 @@ export interface RunCliAgentOpts {
   cli: LocalCliType;
   model?: string;
   customArgs?: string[];
+  /** Optional synthetic custom-provider id bound to this CLI Agent. */
+  cliProviderId?: string;
   /** If set, the dispatch resumes a CLI-side session (claude
    *  `--resume <id>`) and the caller has already trimmed the prompt
    *  to "just the new turn" content — the CLI provides the prior
@@ -734,6 +737,14 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
   }
 
   try {
+    const providerEnv = resolveCliProviderEnv(opts.uid, opts.cli, opts.cliProviderId);
+    if (providerEnv) {
+      log.info('local agent provider env injected', {
+        ...runLogContext,
+        cli_provider: maskId(opts.cliProviderId || ''),
+        env_keys: Object.keys(providerEnv).join(','),
+      });
+    }
     await backend.run({
       binPath: entry.path,
       prompt: opts.prompt,
@@ -745,6 +756,7 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
       onEvent,
       timeoutMs,
       idleKillMs,
+      ...(providerEnv ? { providerEnv } : {}),
       // Activity clock for the backend's idle-kill watchdog. Reads the
       // same `lastEventAt` the idle heartbeat uses (self-emitted idle
       // pulses excluded), so heartbeat rows always precede a kill.

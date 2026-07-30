@@ -46,6 +46,8 @@ import * as conversationFiles from '../features/conversation_files';
 import * as recycleBin from '../features/recycle_bin';
 import * as search from '../features/search';
 import * as auth from '../features/auth';
+import * as customProviders from '../features/custom_providers';
+import { probeCcSwitch } from '../features/ccswitch_import';
 import * as imageAuth from '../features/image_auth';
 import * as searchAuth from '../features/search_auth';
 import * as videoAuth from '../features/video_auth';
@@ -2502,6 +2504,63 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'auth.removeEntry':     async ({ entryId }) => auth.removeEntry(entryId),
   'auth.reorderEntries':  async ({ orderedIds }) => auth.reorderEntries(orderedIds || []),
   'auth.updateEntryModel':async ({ entryId, model }) => auth.updateEntryModel(entryId, model),
+
+  // ── Unified custom model providers ──
+  'customProviders.list': async (_args, ctx) => ({
+    protocols: customProviders.listCustomProviderProtocols(),
+    providers: customProviders.listCustomProviders(ctx.userId).map((provider) => ({
+      id: provider.id,
+      name: provider.name,
+      protocol: provider.protocol,
+      baseUrl: provider.baseUrl,
+      notes: provider.notes,
+      websiteUrl: provider.websiteUrl,
+      needsKey: !!provider.needsKey,
+      needsModelMapping: !!provider.needsModelMapping,
+      models: provider.models || [],
+      source: provider.source,
+      externalId: provider.externalId,
+      createdAt: provider.createdAt,
+      updatedAt: provider.updatedAt,
+      apiKeyMasked: auth.maskKey(provider.apiKey),
+    })),
+  }),
+  'customProviders.add': async (args, ctx) => customProviders.addCustomProvider(ctx.userId, args || {}),
+  'customProviders.update': async ({ id, ...updates }, ctx) => {
+    if (typeof id !== 'string' || !id) throw new Error('invalid id');
+    return customProviders.updateCustomProvider(ctx.userId, id, updates);
+  },
+  'customProviders.remove': async ({ id }, ctx) => {
+    if (typeof id !== 'string' || !id) throw new Error('invalid id');
+    return customProviders.removeCustomProvider(ctx.userId, id);
+  },
+  'customProviders.ccswitch.probe': async () => {
+    const probe = probeCcSwitch();
+    return { available: probe.available, reason: probe.reason };
+  },
+  'customProviders.ccswitch.preview': async (_args, ctx) => {
+    const preview = customProviders.previewCcSwitchImport(ctx.userId);
+    if (!preview.ok) return preview;
+    return {
+      ok: true,
+      items: preview.items.map((item) => ({
+        externalId: item.externalId,
+        name: item.name,
+        protocol: item.protocol,
+        baseUrl: item.baseUrl,
+        notes: item.notes,
+        websiteUrl: item.websiteUrl,
+        needsKey: !!item.needsKey,
+        apiKeyMasked: auth.maskKey(item.apiKey),
+      })),
+    };
+  },
+  'customProviders.ccswitch.sync': async ({ externalIds } = {}, ctx) => {
+    const selected = Array.isArray(externalIds)
+      ? externalIds.filter((id): id is string => typeof id === 'string' && !!id)
+      : undefined;
+    return customProviders.syncFromCcSwitch(ctx.userId, selected);
+  },
 
   // ── Commander backend binding (settings page) ──
   'settings.getCommanderBackend': async () => commanderBackend.getCommanderBackendView(),
