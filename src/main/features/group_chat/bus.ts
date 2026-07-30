@@ -156,6 +156,7 @@ import {
 } from "../p3394/protocol";
 import { P3394Controller } from "../p3394/controller";
 import { EpochStore } from "../p3394/epoch-store";
+import { SenderEpochStore } from "../p3394/sender-epoch-store";
 
 const log = createLogger("group_chat.bus");
 
@@ -175,7 +176,8 @@ const P3394_RESUMABLE_KINDS = new Set(["gconv", "gmember", "skill", "agent"]);
 // with real session resolution, epoch watermarking, and context-scope checks.
 // The EpochStore persists receiver watermarks under <uid>/local/kstar/.
 const _p3394EpochStore = new EpochStore();
-const _p3394Controller = new P3394Controller({
+const _p3394SenderEpochStore = new SenderEpochStore();
+const _defaultP3394Controller = new P3394Controller({
   sessionSource: {
     async resolve(sessionId: string) {
       const kind = parseSessionKind(sessionId);
@@ -195,6 +197,13 @@ const _p3394Controller = new P3394Controller({
     },
   },
 });
+let _p3394ControllerForTest: Pick<P3394Controller, "admitMessage"> | null = null;
+
+export function _setP3394ControllerForTest(
+  controller: Pick<P3394Controller, "admitMessage"> | null,
+): void {
+  _p3394ControllerForTest = controller;
+}
 
 /** Minimal HTML escape for embedding raw error strings inside the
  *  failure-style `<span>` we emit on stream errors. Keeps `<`/`>`/`&`/`"`
@@ -968,7 +977,8 @@ async function p3394ProtocolProcessItem(input: {
   } catch {
     p3394SessionId = input.cid;
   }
-  const result = await _p3394Controller.admitMessage({
+  const controller = _p3394ControllerForTest || _defaultP3394Controller;
+  const result = await controller.admitMessage({
     uid: input.uid,
     sessionId: p3394SessionId,
     agent: input.agent,
@@ -980,6 +990,9 @@ async function p3394ProtocolProcessItem(input: {
     speechAct,
     capability: "handle_message",
     body: _unwrapLlmTurnPayload(input.item.llmPayload) || input.item.llmPayload,
+    ...(input.item.incomingEpoch !== undefined
+      ? { incomingEpoch: input.item.incomingEpoch }
+      : {}),
     collaboration: await (async () => {
       const snapshot = await readCollaborationSnapshot(input.uid, input.cid).catch(() => null);
       if (!snapshot) return undefined;
@@ -1201,6 +1214,8 @@ interface QueueItem {
   /** Commander-selected first-stage KSTAR gate for this delegated turn. */
   kstarDecision?: KStarDecisionRecord;
   workflow_step_id?: string;
+  /** Sender-assigned epoch persisted on the source GroupMessage. */
+  incomingEpoch?: number;
 }
 
 interface WorkerState {
@@ -2171,6 +2186,28 @@ async function _enqueueBody(
   const ts = nowIso();
   const mentions = parseMentions(rewrittenText);
   const useSelections = _normalizeUseSelections(params.use_selections);
+  const dispatchMembers = await readMembers(uid, cid);
+  const recipientEpochs: Record<string, number> = {};
+  for (const recipientId of to) {
+    if (recipientId === USER_ID) continue;
+    const actor = dispatchMembers.actors.find((candidate) => candidate.id === recipientId);
+    if (!actor) continue;
+    try {
+      recipientEpochs[recipientId] = await _p3394SenderEpochStore.next(
+        uid,
+        fromActorId,
+        actorSessionId(cid, actor),
+      );
+    } catch (err) {
+      log.warn('p3394 sender epoch allocation failed, degraded delivery', {
+        uid,
+        cid,
+        sender: fromActorId,
+        recipient: recipientId,
+        error: (err as Error).message,
+      });
+    }
+  }
 
   const msg: GroupMessage = {
     id: msgId,
@@ -2182,6 +2219,9 @@ async function _enqueueBody(
       ? { wake_requests: pendingWakeRequests }
       : {}),
     ...(mentions.length ? { mentions } : {}),
+    ...(Object.keys(recipientEpochs).length
+      ? { p3394: { recipient_epochs: recipientEpochs } }
+      : {}),
     text: rewrittenText,
     ...(params.failure_kind ? { failure_kind: params.failure_kind } : {}),
     ...(params.failure_code ? { failure_code: params.failure_code } : {}),
@@ -2291,7 +2331,7 @@ async function _enqueueBody(
   );
 
   // Dispatch to non-user recipients.
-  const refreshed = await readMembers(uid, cid);
+  const refreshed = dispatchMembers;
   for (const recipientId of to) {
     if (recipientId === USER_ID) continue;
     const actor = refreshed.actors.find((a) => a.id === recipientId);
@@ -2310,6 +2350,9 @@ async function _enqueueBody(
       msgId,
       fromActorId,
       llmPayload: composeLlmTurnPayload(uid, fromActorId, msg),
+      ...(msg.p3394?.recipient_epochs[recipientId] !== undefined
+        ? { incomingEpoch: msg.p3394.recipient_epochs[recipientId] }
+        : {}),
       ...(msg.attachments && msg.attachments.length
         ? { attachments: msg.attachments.slice() }
         : {}),

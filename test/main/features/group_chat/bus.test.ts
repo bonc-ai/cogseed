@@ -286,6 +286,48 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(events.find((e) => e.type === 'message' && e.msg.id === msg.id)).toBeTruthy();
   });
 
+  it('persists a recipient epoch and passes the same value to P3394 admission', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const observed: any[] = [];
+    bus._setP3394ControllerForTest({
+      async admitMessage(input: any) {
+        observed.push(input);
+        return {
+          ok: true,
+          message: {
+            message_type: 'agent.request',
+            correlation_id: input.conversationId,
+            canonical_session_id: input.sessionId,
+            metadata: {
+              relationship: input.relationship,
+              session_epoch: input.incomingEpoch || 0,
+            },
+          },
+        } as any;
+      },
+    } as any);
+
+    try {
+      const msg = await bus.enqueue({
+        uid: TEST_UID,
+        cid: TEST_CID,
+        fromActorId: 'user',
+        text: `@${AGENT_NAME} EPOCH_PROPAGATION_TEST`,
+      });
+      await waitForQuiescent(TEST_UID, TEST_CID);
+
+      const persistedEpoch = msg.p3394?.recipient_epochs[AGENT_ID];
+      expect(persistedEpoch).toBe(1);
+      expect(observed).toHaveLength(1);
+      expect(observed[0]).toMatchObject({
+        sender: 'user',
+        incomingEpoch: persistedEpoch,
+      });
+    } finally {
+      bus._setP3394ControllerForTest(null);
+    }
+  });
+
   it('persists short visible text while sending model_text to the worker', async () => {
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const visibility = await import('../../../../src/main/features/group_chat/visibility');
