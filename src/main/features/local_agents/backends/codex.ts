@@ -61,7 +61,7 @@ export const codexBackend: LocalBackend = {
   async run(opts: BackendRunOptions): Promise<void> {
     const args = buildCodexArgs(opts);
     const childEnv = opts.bridge?.server.env ? { ...process.env, ...opts.bridge.server.env } : process.env;
-    const child = spawnCli(opts.binPath, args, opts.cwd, childEnv);
+    const child = spawnCli(opts.binPath, args, opts.cwd, childEnv, opts.providerEnv);
     const detachAbort = bindAbort(child, opts.signal);
     const tail = new StderrTail();
     const startedAt = Date.now();

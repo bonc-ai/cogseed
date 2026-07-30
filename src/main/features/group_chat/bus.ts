@@ -7415,6 +7415,7 @@ async function _runCliAgentTurn(opts: {
     cli: runtime.cli as import("../local_agents/registry").LocalCliType,
     model: runtime.model,
     customArgs: runtime.custom_args,
+    ...(runtime.cli_provider_id ? { cliProviderId: runtime.cli_provider_id } : {}),
     resumeSessionId: resumeSessionId || undefined,
     prompt: promptText,
     cwd: opts.workingDir,
