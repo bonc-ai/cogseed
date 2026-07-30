@@ -108,4 +108,20 @@ describe('local_agents/backends/opencode › trusted local permissions', () => {
       'hi',
     ]);
   });
+
+  it('passes --dir so opencode resolves file tools against the real working directory', () => {
+    // T2-07 Evidence finding: opencode 1.18.x does not inherit the spawned
+    // process's cwd for its file-tool root; without --dir, read/write/glob
+    // resolve against opencode's own default directory instead of the cwd
+    // we pass to child_process.spawn.
+    expect(buildOpencodeArgs({ prompt: 'hi', cwd: '/tmp/some-project' })).toEqual([
+      'run',
+      '--format',
+      'json',
+      '--dangerously-skip-permissions',
+      '--dir',
+      '/tmp/some-project',
+      'hi',
+    ]);
+  });
 });
