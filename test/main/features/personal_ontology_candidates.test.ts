@@ -43,6 +43,10 @@ function sharedMemoryPath(): string {
   return path.join(tmpDir, UID, 'cloud', 'memory', 'MEMORY.md');
 }
 
+function rejectedAuditPath(): string {
+  return path.join(tmpDir, UID, 'local', 'ontology_candidates', 'rejected_items.md');
+}
+
 // ── parse/serialize round-trip ──────────────────────────────────────────
 
 describe('personal_ontology_candidates › markdown parse/serialize', () => {
@@ -215,6 +219,8 @@ describe('personal_ontology_candidates › rejectCandidate', () => {
     expect(after.candidate_updates).toHaveLength(0);
     expect(fs.existsSync(userProfilePath())).toBe(false);
     expect(fs.existsSync(sharedMemoryPath())).toBe(false);
+    expect(fs.readFileSync(rejectedAuditPath(), 'utf8')).toContain('cand-rej-1');
+    expect(fs.readFileSync(rejectedAuditPath(), 'utf8')).toContain('not accurate');
   });
 });
 
@@ -255,6 +261,7 @@ describe('personal_ontology_candidates › batch confirm/reject', () => {
     const after = await poc.listCandidates(UID);
     expect(after.candidate_updates).toHaveLength(1);
     expect(after.candidate_updates[0].candidate_id).toBe('c2');
+    expect(fs.readFileSync(rejectedAuditPath(), 'utf8')).toContain('c1');
   });
 });
 

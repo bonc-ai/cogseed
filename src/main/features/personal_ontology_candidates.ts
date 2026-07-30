@@ -78,6 +78,10 @@ function blockedItemsMdPath(uid: string): string {
   return path.join(candidatesDir(uid), 'blocked_items.md');
 }
 
+function rejectedItemsMdPath(uid: string): string {
+  return path.join(candidatesDir(uid), 'rejected_items.md');
+}
+
 function readTextSafe(filePath: string): string {
   try {
     return fs.readFileSync(filePath, 'utf8');
@@ -276,6 +280,13 @@ function writeCandidates(uid: string, candidates: CandidateUpdate[]): void {
   writeTextAtomicSync(candidatesMdPath(uid), serializeCandidatesMarkdown(candidates));
 }
 
+function appendRejectedAudit(uid: string, candidateId: string, reason?: string): void {
+  const auditPath = rejectedItemsMdPath(uid);
+  const existing = readTextSafe(auditPath);
+  const record = `### ${candidateId}\n- 原因: ${String(reason || '').trim()}\n- 时间: ${nowIso()}\n`;
+  writeTextAtomicSync(auditPath, existing ? `${existing.trimEnd()}\n\n${record}` : `# 已驳回候选\n\n${record}`);
+}
+
 function readBlockedItems(uid: string): BlockedItem[] {
   return parseBlockedItemsMarkdown(readTextSafe(blockedItemsMdPath(uid)));
 }
@@ -336,9 +347,15 @@ export async function rejectCandidate(uid: string, candidateId: string, reason?:
     return { ok: false };
   }
 
+  try {
+    appendRejectedAudit(uid, candidateId, reason);
+  } catch (err) {
+    log.warn('rejectCandidate: audit write failed', { uid, candidateId, error: (err as Error).message });
+    return { ok: false };
+  }
   candidates.splice(idx, 1);
   writeCandidates(uid, candidates);
-  log.info('candidate rejected', { uid, candidateId, reason });
+  log.info('candidate rejected', { uid, candidateId });
   return { ok: true };
 }
 
@@ -379,13 +396,24 @@ export async function rejectCandidates(uid: string, candidateIds: string[], reas
 
   const candidates = readCandidates(uid);
   const idSet = new Set(candidateIds);
-  const remaining = candidates.filter(c => !idSet.has(c.candidate_id));
-  const rejectedCount = candidates.length - remaining.length;
-
+  const remaining: CandidateUpdate[] = [];
+  let rejectedCount = 0;
+  for (const candidate of candidates) {
+    if (!idSet.has(candidate.candidate_id)) {
+      remaining.push(candidate);
+      continue;
+    }
+    try {
+      appendRejectedAudit(uid, candidate.candidate_id, reason);
+      rejectedCount++;
+    } catch (err) {
+      remaining.push(candidate);
+      log.warn('rejectCandidates: audit write failed', { uid, candidateId: candidate.candidate_id, error: (err as Error).message });
+    }
+  }
   if (rejectedCount > 0) {
     writeCandidates(uid, remaining);
-    log.info('candidates batch rejected', { uid, rejectedCount, reason });
+    log.info('candidates batch rejected', { uid, rejectedCount });
   }
-
   return { ok: true, rejectedCount };
 }
