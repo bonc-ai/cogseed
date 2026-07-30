@@ -33,6 +33,7 @@
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connectors">Connectors</span></button>
         <button class="sidebar-btn" id="contexts-btn"><span data-ui-icon="database" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.contexts">Library</span></button>
         <button class="sidebar-btn" id="evolution-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.evolution">进化控制台</span></button>
+        <button class="sidebar-btn" id="personal-ontology-btn"><span data-ui-icon="brain" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.personal_ontology">Personal Ontology</span></button>
       </div>
       <div class="sidebar-conversation-nav">
         <div class="sidebar-section sidebar-projects-section">
@@ -949,6 +950,18 @@
         </div>
       </section>
 
+      <!-- Personal Ontology Candidates -->
+      <section class="panel" id="panel-personal-ontology">
+        <div class="personal-onto-container">
+          <div class="personal-onto-header">
+            <h2 data-i18n="personalOntology.title">Personal Ontology Candidates</h2>
+            <div id="personal-onto-actions"></div>
+          </div>
+          <div id="personal-onto-stats"></div>
+          <div id="personal-onto-body"></div>
+        </div>
+      </section>
+
       <!-- Settings -->
       <section class="panel" id="panel-settings">
         <div class="settings-container">
@@ -1449,6 +1462,19 @@
       <div class="modal-body" id="settings-ccswitch-preview-modal-body"></div>
       <div class="form-msg" id="settings-ccswitch-preview-modal-status"></div>
       <div class="modal-actions" id="settings-ccswitch-preview-modal-actions"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="personal-onto-modal" hidden>
+    <div class="modal modal-standard" role="dialog" aria-modal="true" aria-labelledby="personal-onto-modal-title">
+      <h3 class="modal-title" id="personal-onto-modal-title" data-i18n="personalOntology.reject_title">Reject candidate</h3>
+      <div class="modal-body">
+        <textarea class="form-input" id="personal-onto-modal-reason" rows="4" data-i18n-placeholder="personalOntology.reject_placeholder"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="personal-onto-modal-cancel" data-i18n="common.cancel">Cancel</button>
+        <button class="btn btn-danger" id="personal-onto-modal-ok" data-i18n="common.confirm">Confirm</button>
+      </div>
     </div>
   </div>
 

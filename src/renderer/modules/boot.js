@@ -285,6 +285,7 @@ function _lazyFeaturePanel(view) {
   const panelId = view === 'memory' ? 'panel-memory'
     : view === 'skills' ? 'panel-skills'
     : view === 'evolution' ? 'panel-evolution'
+    : view === 'personal-ontology' ? 'panel-personal-ontology'
     : view === 'contexts' ? 'panel-contexts'
     : view === 'settings' ? 'panel-settings'
     : view === 'project' ? 'panel-project'
@@ -371,6 +372,7 @@ function setView(view, cid, opts = {}) {
                 : view === 'connectors' ? 'panel-connectors'
                 : view === 'contexts' ? 'panel-contexts'
                 : view === 'evolution' ? 'panel-evolution'
+                : view === 'personal-ontology' ? 'panel-personal-ontology'
                 : view === 'settings' ? 'panel-settings'
                 : view === 'memory' ? 'panel-memory'
                 : view === 'devtools' ? 'panel-devtools'
@@ -386,6 +388,7 @@ function setView(view, cid, opts = {}) {
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connectors');
   document.getElementById('contexts-btn')?.classList.toggle('active', view === 'contexts');
   document.getElementById('evolution-btn')?.classList.toggle('active', view === 'evolution');
+  document.getElementById('personal-ontology-btn')?.classList.toggle('active', view === 'personal-ontology');
   document.getElementById('settings-btn')?.classList.toggle('active', view === 'settings');
   document.getElementById('devtools-btn')?.classList.toggle('active', view === 'devtools');
   document.querySelectorAll('.conv-item').forEach(it => {
@@ -529,6 +532,13 @@ function setView(view, cid, opts = {}) {
     _deferSidebarNavWork('evolution-tab-load', () => {
       _loadViewFeature('evolution', 'evolution', () => {
         if (typeof renderEvolutionConsole === 'function') renderEvolutionConsole();
+      });
+    });
+  } else if (view === 'personal-ontology') {
+    currentCid = null;
+    _deferSidebarNavWork('personal-ontology-tab-load', () => {
+      _loadViewFeature('personal-ontology', 'personal-ontology', () => {
+        if (typeof renderPersonalOntology === 'function') renderPersonalOntology();
       });
     });
   } else if (view === 'settings') {

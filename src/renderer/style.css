@@ -16567,3 +16567,23 @@ body.model-not-configured .main-content { flex-direction: column; }
 .settings-ccswitch-row-meta { color: var(--text-muted, #777); font-size: 12px; }
 .settings-custom-provider-modal .form-row { margin-bottom: 12px; }
 .settings-custom-provider-modal .form-row label { display: block; margin-bottom: 5px; }
+
+/* Personal ontology candidate review */
+.personal-onto-container { max-width: 980px; margin: 0 auto; padding: 28px; }
+.personal-onto-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.personal-onto-header h2 { margin: 0; }
+.personal-onto-stats-row { display: flex; gap: 12px; margin-bottom: 18px; }
+.personal-onto-stat-card { min-width: 130px; padding: 14px 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-1); }
+.personal-onto-stat-value { font-size: 24px; font-weight: 700; }
+.personal-onto-stat-label { color: var(--text-muted); font-size: 12px; }
+.personal-onto-section { margin-top: 22px; }
+.personal-onto-section-title { margin: 0 0 10px; font-size: 14px; }
+.personal-onto-cards, .personal-onto-blocked-cards { display: grid; gap: 10px; }
+.personal-onto-card, .personal-onto-blocked-card { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-1); }
+.personal-onto-card-header, .personal-onto-blocked-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.personal-onto-card-kind, .personal-onto-card-confidence, .personal-onto-card-scope { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); }
+.personal-onto-card-body, .personal-onto-blocked-body { display: grid; gap: 6px; }
+.personal-onto-card-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.personal-onto-loading, .personal-onto-empty, .personal-onto-error { padding: 28px; text-align: center; color: var(--text-muted); }
+.personal-onto-error { color: var(--danger); }
+#personal-onto-modal-reason { width: 100%; resize: vertical; }
