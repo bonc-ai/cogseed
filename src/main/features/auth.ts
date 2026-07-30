@@ -263,8 +263,25 @@ export interface TtsProfile {
   createdAt: number;
 }
 
+export interface CustomProvider {
+  id: string;
+  name: string;
+  protocol: 'anthropic' | 'openai' | 'gemini';
+  baseUrl: string;
+  apiKey: string;
+  notes?: string;
+  websiteUrl?: string;
+  needsKey?: boolean;
+  needsModelMapping?: boolean;
+  models?: string[];
+  source: 'manual' | 'ccswitch';
+  externalId?: string;
+  createdAt: number;
+  updatedAt?: number;
+}
+
 interface ProfilesFile {
-  /** v3 = chat profiles only. v4 adds BYO search / image / video / speech profiles. */
+  /** v3 = chat profiles only. v4 adds media profiles. v5 adds custom providers. */
   version: number;
   profiles: Record<string, StoredProfile>;
   entries: Entry[];
@@ -272,9 +289,10 @@ interface ProfilesFile {
   imageProfiles?: ImageProfile[];
   videoProfiles?: VideoProfile[];
   ttsProfiles?: TtsProfile[];
+  customProviders?: CustomProvider[];
 }
 
-const PROFILES_FILE_VERSION = 4;
+const PROFILES_FILE_VERSION = 5;
 const AUTH_SECRET_NAMESPACE = 'auth.profiles';
 const AUTH_SECRET_RECORD_ID = 'auth-profiles.json';
 
@@ -298,6 +316,7 @@ function emptyProfilesStore(): ProfilesFile {
     imageProfiles: [],
     videoProfiles: [],
     ttsProfiles: [],
+    customProviders: [],
   };
 }
 
@@ -399,7 +418,8 @@ function loadProfiles(): ProfilesFile {
       const imageProfiles = parseImageProfilesArray((data as any).imageProfiles);
       const videoProfiles = parseVideoProfilesArray((data as any).videoProfiles);
       const ttsProfiles = parseTtsProfilesArray((data as any).ttsProfiles);
-      const store = { version: PROFILES_FILE_VERSION, profiles, entries, searchProfiles, imageProfiles, videoProfiles, ttsProfiles };
+      const customProviders = parseCustomProvidersArray((data as any).customProviders);
+      const store = { version: PROFILES_FILE_VERSION, profiles, entries, searchProfiles, imageProfiles, videoProfiles, ttsProfiles, customProviders };
       if (needsRewrite) saveProfiles(store);
       return store;
     }
@@ -547,6 +567,34 @@ function parseTtsProfilesArray(arr: unknown): TtsProfile[] {
   return out;
 }
 
+function parseCustomProvidersArray(arr: unknown): CustomProvider[] {
+  if (!Array.isArray(arr)) return [];
+  const protocols = new Set<CustomProvider['protocol']>(['anthropic', 'openai', 'gemini']);
+  const out: CustomProvider[] = [];
+  for (const raw of arr) {
+    const p = raw as any;
+    if (!p || typeof p !== 'object' || !p.id || !p.name || !p.baseUrl) continue;
+    const protocol = protocols.has(p.protocol) ? p.protocol as CustomProvider['protocol'] : 'anthropic';
+    out.push({
+      id: String(p.id),
+      name: String(p.name),
+      protocol,
+      baseUrl: String(p.baseUrl),
+      apiKey: typeof p.apiKey === 'string' ? p.apiKey : '',
+      ...(p.notes ? { notes: String(p.notes) } : {}),
+      ...(p.websiteUrl ? { websiteUrl: String(p.websiteUrl) } : {}),
+      ...(p.needsKey ? { needsKey: true } : {}),
+      ...(p.needsModelMapping ? { needsModelMapping: true } : {}),
+      ...(Array.isArray(p.models) ? { models: p.models.map(String).filter(Boolean).slice(0, 100) } : {}),
+      source: p.source === 'ccswitch' ? 'ccswitch' : 'manual',
+      ...(p.externalId ? { externalId: String(p.externalId) } : {}),
+      createdAt: typeof p.createdAt === 'number' ? p.createdAt : Date.now(),
+      ...(typeof p.updatedAt === 'number' ? { updatedAt: p.updatedAt } : {}),
+    });
+  }
+  return out;
+}
+
 // ── Search / Image / Video / TTS profiles store IO (low-level) ────────────
 //
 // These helpers expose the new top-level fields so feature modules
@@ -593,6 +641,33 @@ export function saveTtsProfiles(list: TtsProfile[]): void {
   const store = loadProfiles();
   store.ttsProfiles = [...list];
   saveProfiles(store);
+}
+
+function assertActiveUser(userId: string): void {
+  if (getActiveUserId() !== userId) throw new Error('user scope mismatch');
+}
+
+export function loadCustomProviders(userId: string): CustomProvider[] {
+  assertActiveUser(userId);
+  return loadProfiles().customProviders || [];
+}
+
+export function saveCustomProviders(userId: string, list: CustomProvider[]): void {
+  assertActiveUser(userId);
+  const store = loadProfiles();
+  store.customProviders = [...list];
+  saveProfiles(store);
+  invalidateCoreAgentRunner();
+}
+
+export function removeEntriesForProvider(userId: string, providerId: string): number {
+  assertActiveUser(userId);
+  const store = loadProfiles();
+  const before = store.entries.length;
+  store.entries = store.entries.filter((entry) => entry.provider !== providerId);
+  if (store.entries.length !== before) saveProfiles(store);
+  invalidateCoreAgentRunner();
+  return before - store.entries.length;
 }
 
 function saveProfiles(store: ProfilesFile): void {
