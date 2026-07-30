@@ -43,6 +43,7 @@ import {
   spawnCli,
   bindAbort,
   armKillWatchdog,
+  FileChangeFallbackTracker,
 } from './base.js';
 
 const log = createLogger('local-agents:openclaw');
@@ -55,6 +56,11 @@ export const openclawBackend: LocalBackend = {
     const detachAbort = bindAbort(child, opts.signal);
     const tail = new StderrTail();
     const startedAt = Date.now();
+    // Fallback file-change detection: openclaw never reports touched file
+    // paths in any structured event, so this is the only signal source
+    // for the produced-files UI. See FileChangeFallbackTracker's doc
+    // comment in backends/base.ts.
+    const fileChangeFallback = new FileChangeFallbackTracker(opts.cwd);
 
     let exited = false;
     // openclaw writes everything to stderr; we accumulate the FULL
@@ -105,6 +111,9 @@ export const openclawBackend: LocalBackend = {
         exited = true;
         watchdog.disarm();
         detachAbort();
+        // Best-effort — swallowed internally, never blocks the terminal
+        // `done` event below.
+        if (status === 'completed') fileChangeFallback.sweep(e => opts.onEvent(e));
         opts.onEvent({
           type: 'done', status,
           durationMs: Date.now() - startedAt,

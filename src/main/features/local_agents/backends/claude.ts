@@ -25,6 +25,7 @@ import {
   armKillWatchdog,
   LineSplitter,
   levelOrInfo,
+  FileChangeFallbackTracker,
 } from './base.js';
 
 const log = createLogger('local-agents:claude');
@@ -36,6 +37,11 @@ export const claudeBackend: LocalBackend = {
     const detachAbort = bindAbort(child, opts.signal);
     const tail = new StderrTail();
     const startedAt = Date.now();
+    // Fallback file-change detection: catches writes claude makes via its
+    // Bash tool (or any tool whose name/args don't match the
+    // write/edit/patch pattern group_chat/bus.ts looks for). See
+    // FileChangeFallbackTracker's doc comment in backends/base.ts.
+    const fileChangeFallback = new FileChangeFallbackTracker(opts.cwd);
 
     let sessionId: string | undefined;
     let exited = false;
@@ -213,6 +219,9 @@ export const claudeBackend: LocalBackend = {
         watchdog.disarm();
         detachAbort();
         const durationMs = Date.now() - startedAt;
+        // Best-effort — swallowed internally, never blocks the terminal
+        // `done` event below.
+        if (status === 'completed') fileChangeFallback.sweep(e => opts.onEvent(e));
         opts.onEvent({
           type: 'done',
           status,
