@@ -1754,6 +1754,34 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return chatAttachments.adoptDraftAttachments(ctx.userId, from_cid, to_cid);
   },
 
+  // Import a global Library (contexts) file into a composer draft pool —
+  // the "@ Library" picker path. `cid` is the draft pool (main_chat /
+  // projchat-<id>), not a real conversation yet; `relPath` is validated by
+  // `resolveContextFileAbsPath` (traversal / hidden-segment / must-exist).
+  'contexts.attachToDraft': async ({ relPath, cid } = {}, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (typeof relPath !== 'string' || !relPath.trim()) throw new Error('missing relPath');
+    const absPath = contexts.resolveContextFileAbsPath(relPath);
+    const st = fs.statSync(absPath);
+    if (!st.isFile()) throw new Error('not_a_file');
+    const res = await chatAttachments.importAttachmentFromPath(ctx.userId, cid, absPath);
+    if (!res.ok) throw new Error((res as { error: string }).error);
+    return { info: res.info };
+  },
+
+  // Same as above but for a project-scoped Library file — resolves through
+  // `resolveProjectFileAbsPath`, which validates project ownership + name.
+  'projects.files.attachToDraft': async ({ projectId, name, cid } = {}, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof name !== 'string' || !name.trim()) throw new Error('missing name');
+    const resolved = await projectFiles.resolveProjectFileAbsPath(ctx.userId, projectId, name);
+    if (!resolved.ok) throw new Error((resolved as { error?: string }).error || 'not_found');
+    const res = await chatAttachments.importAttachmentFromPath(ctx.userId, cid, resolved.absPath);
+    if (!res.ok) throw new Error((res as { error: string }).error);
+    return { info: res.info };
+  },
+
   // ── Chat artifacts (interactive web-app bundles, served via chat-app://) ──
   // Open the artifact's index.html in the OS default browser (a `file://`
   // URL via `shell.openPath`). Path is resolved through

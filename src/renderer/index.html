@@ -33,6 +33,7 @@
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connectors">Connectors</span></button>
         <button class="sidebar-btn" id="contexts-btn"><span data-ui-icon="database" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.contexts">Library</span></button>
         <button class="sidebar-btn" id="evolution-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.evolution">进化控制台</span></button>
+        <button class="sidebar-btn" id="personal-ontology-btn"><span data-ui-icon="database" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.personal_ontology">个人本体</span></button>
       </div>
       <div class="sidebar-conversation-nav">
         <div class="sidebar-section sidebar-projects-section">
@@ -946,6 +947,35 @@
             <nav class="evo-console-nav" id="evo-console-nav"></nav>
           </aside>
           <div class="evo-console-content" id="evo-console-body"></div>
+        </div>
+      </section>
+
+      <!-- Personal Ontology Candidates -->
+      <section class="panel" id="panel-personal-ontology">
+        <div class="personal-onto-view">
+          <div class="personal-onto-header">
+            <h2 class="personal-onto-title" data-i18n="personalOntology.title">个人本体候选</h2>
+            <div class="personal-onto-actions" id="personal-onto-actions"></div>
+          </div>
+          <div class="personal-onto-scroll">
+            <div class="personal-onto-stats" id="personal-onto-stats"></div>
+            <div class="personal-onto-body" id="personal-onto-body"></div>
+          </div>
+        </div>
+        <!-- Reject reason modal -->
+        <div class="personal-onto-modal-overlay" id="personal-onto-modal" style="display:none">
+          <div class="personal-onto-modal">
+            <div class="personal-onto-modal-header">
+              <span data-i18n="personalOntology.reject_reason_title">驳回原因</span>
+            </div>
+            <div class="personal-onto-modal-body">
+              <textarea id="personal-onto-modal-reason" rows="3" placeholder="可选，填写驳回原因..." data-i18n-placeholder="personalOntology.reject_reason_placeholder"></textarea>
+            </div>
+            <div class="personal-onto-modal-footer">
+              <button class="btn btn-sm" id="personal-onto-modal-cancel" data-i18n="common.cancel">取消</button>
+              <button class="btn btn-sm btn-primary" id="personal-onto-modal-ok" data-i18n="personalOntology.reject_btn">驳回</button>
+            </div>
+          </div>
         </div>
       </section>
 

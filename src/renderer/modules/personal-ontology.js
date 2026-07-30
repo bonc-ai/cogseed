@@ -142,7 +142,7 @@
     bodyEl.innerHTML = '<div class="personal-onto-loading">' + _t('personalOntology.loading', '加载中...') + '</div>';
 
     try {
-      const data = await window.apiFetch('/api/personalOntology/candidates').then(r => r.json());
+      const data = await window.orkas.invoke('personalOntology.candidates.list');
 
       // 渲染统计
       statsEl.innerHTML = renderStats(data);
@@ -214,10 +214,7 @@
   async function confirmCandidate(candidateId) {
     if (!candidateId) return;
     try {
-      await window.apiFetch('/api/personalOntology/candidates/confirm', {
-        method: 'POST',
-        body: JSON.stringify({ candidateId }),
-      });
+      await window.orkas.invoke('personalOntology.candidates.confirm', { candidateId });
       renderPersonalOntology(); // 重新渲染
     } catch (err) {
       _notifyFail(_t('personalOntology.confirm_error', '确认失败'), err);
@@ -229,10 +226,7 @@
     const reason = await showRejectReasonModal();
     if (reason === null) return; // 用户取消
     try {
-      await window.apiFetch('/api/personalOntology/candidates/reject', {
-        method: 'POST',
-        body: JSON.stringify({ candidateId, reason: reason || '' }),
-      });
+      await window.orkas.invoke('personalOntology.candidates.reject', { candidateId, reason: reason || '' });
       renderPersonalOntology();
     } catch (err) {
       _notifyFail(_t('personalOntology.reject_error', '驳回失败'), err);
@@ -244,10 +238,7 @@
     if (!confirm(_t('personalOntology.confirm_all_prompt', `确认全部 ${pending.length} 个候选？`))) return;
     try {
       const candidateIds = pending.map(c => c.candidate_id);
-      await window.apiFetch('/api/personalOntology/candidates/confirmBatch', {
-        method: 'POST',
-        body: JSON.stringify({ candidateIds }),
-      });
+      await window.orkas.invoke('personalOntology.candidates.confirmBatch', { candidateIds });
       renderPersonalOntology();
     } catch (err) {
       _notifyFail(_t('personalOntology.confirm_all_error', '批量确认失败'), err);
@@ -260,10 +251,7 @@
     if (reason === null) return;
     try {
       const candidateIds = pending.map(c => c.candidate_id);
-      await window.apiFetch('/api/personalOntology/candidates/rejectBatch', {
-        method: 'POST',
-        body: JSON.stringify({ candidateIds, reason: reason || '' }),
-      });
+      await window.orkas.invoke('personalOntology.candidates.rejectBatch', { candidateIds, reason: reason || '' });
       renderPersonalOntology();
     } catch (err) {
       _notifyFail(_t('personalOntology.reject_all_error', '批量驳回失败'), err);
