@@ -16,6 +16,7 @@
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { buildCliSpawnEnv, resolveCliCommand } from '../spawn-command.js';
 
@@ -361,4 +362,119 @@ export function bindAbort(child: ChildProcessWithoutNullStreams, signal: AbortSi
     signal.removeEventListener('abort', onAbort);
     if (killTimer) { clearTimeout(killTimer); killTimer = null; }
   };
+}
+
+// ── Fallback file-change detection (shared across all CLI backends) ──────
+// Every backend's structured "tool → file-change" path (patch/diff events,
+// or `extractWritablePathsFromCliTool`-style tool-name/arg matching in
+// group_chat/bus.ts) only fires when the CLI *tells us* it edited a file
+// through one of its own structured editing tools (Write/Edit/apply_patch/
+// …). Every CLI examined so far (claude, codex, opencode, openclaw, hermes)
+// can *also* touch files by running an arbitrary shell/exec command — and
+// in that case none of them reliably reports the touched path in a way we
+// can parse (shell command text has too many write idioms — redirects,
+// `cp`, `tee`, `sed -i`, script-calls-script — to parse safely without
+// misattributing changes to the wrong file or missing writes chained
+// through variables/pipes).
+//
+// This is a filesystem-truth fallback instead: snapshot the working
+// directory's file mtimes/sizes before the turn, snapshot again when it
+// ends, and treat every added/modified path as a produced artifact —
+// tool-agnostic, so it does not matter which of a CLI's tools made the
+// change. Deletions are intentionally excluded (the produced-files UI is
+// "here's something you can open", not a change log).
+const FILE_CHANGE_SNAPSHOT_SKIP_DIRS = new Set([
+  'node_modules', '.git', '.hg', '.svn', 'dist', 'build', '.next', '.cache',
+  '.venv', 'venv', '__pycache__', '.turbo', 'target',
+]);
+const FILE_CHANGE_SNAPSHOT_MAX_ENTRIES = 20_000;
+const FILE_CHANGE_SNAPSHOT_MAX_DEPTH = 12;
+
+export type FileChangeSnapshot = Map<string, { mtimeMs: number; size: number }>;
+
+/** Best-effort recursive mtime/size snapshot of `cwd`. Bounded by entry
+ *  count and depth so a huge or symlink-cyclic tree can't hang a turn;
+ *  swallows per-file/per-dir errors (permissions, races) since this is a
+ *  heuristic aid, not a correctness-critical read. */
+export function snapshotWorkingDir(cwd: string): FileChangeSnapshot {
+  const out: FileChangeSnapshot = new Map();
+  let budget = FILE_CHANGE_SNAPSHOT_MAX_ENTRIES;
+  const walk = (dir: string, depth: number) => {
+    if (budget <= 0 || depth > FILE_CHANGE_SNAPSHOT_MAX_DEPTH) return;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+    catch { return; }
+    for (const entry of entries) {
+      if (budget <= 0) return;
+      if (FILE_CHANGE_SNAPSHOT_SKIP_DIRS.has(entry.name)) continue;
+      const abs = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(abs, depth + 1);
+      } else if (entry.isFile()) {
+        try {
+          const st = fs.statSync(abs);
+          out.set(abs, { mtimeMs: st.mtimeMs, size: st.size });
+          budget -= 1;
+        } catch { /* file vanished mid-scan; skip */ }
+      }
+    }
+  };
+  try { walk(cwd, 0); } catch { /* best-effort only */ }
+  return out;
+}
+
+/** Paths present in `after` that are new or changed vs `before` (a
+ *  size/mtime heuristic — good enough for "did this file get touched",
+ *  not a content hash). */
+export function diffWorkingDirSnapshots(before: FileChangeSnapshot, after: FileChangeSnapshot): string[] {
+  const changed: string[] = [];
+  for (const [abs, stat] of after) {
+    const prev = before.get(abs);
+    if (!prev || prev.mtimeMs !== stat.mtimeMs || prev.size !== stat.size) {
+      changed.push(abs);
+    }
+  }
+  return changed;
+}
+
+/**
+ * Stateful helper each backend wires around its turn boundary:
+ *   1. Construct at/after spawn, once `cwd` is known.
+ *   2. Call `noteReported(paths)` whenever the backend emits its own
+ *      structured `file-change` event, so the fallback sweep doesn't
+ *      double-report the same file.
+ *   3. Call `sweep(onEvent)` when the turn/run finishes (before process
+ *      teardown) — emits one `file-change` event for anything the
+ *      snapshot diff found that wasn't already reported.
+ * All methods are best-effort: failures are swallowed so this can never
+ * block a CLI run or corrupt its primary event stream.
+ */
+export class FileChangeFallbackTracker {
+  private readonly cwd: string;
+  private readonly reported = new Set<string>();
+  private before: FileChangeSnapshot | undefined;
+
+  constructor(cwd: string) {
+    this.cwd = cwd;
+    try { this.before = snapshotWorkingDir(cwd); } catch { this.before = undefined; }
+  }
+
+  noteReported(paths: readonly string[]): void {
+    for (const p of paths) {
+      try { this.reported.add(path.resolve(this.cwd, p)); } catch { /* ignore */ }
+    }
+  }
+
+  sweep(onEvent: (e: { type: 'file-change'; paths: string[] }) => void): void {
+    if (!this.before) return;
+    try {
+      const after = snapshotWorkingDir(this.cwd);
+      const changed = diffWorkingDirSnapshots(this.before, after)
+        .filter(abs => !this.reported.has(abs));
+      if (changed.length) {
+        for (const abs of changed) this.reported.add(abs);
+        onEvent({ type: 'file-change', paths: changed });
+      }
+    } catch { /* best-effort only */ }
+  }
 }
