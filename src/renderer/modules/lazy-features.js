@@ -37,6 +37,9 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/evolution/pages.js' },
     { src: './modules/evolution/console.js' },
   ],
+  'personal-ontology': [
+    { src: './modules/personal-ontology.js' },
+  ],
 });
 
 const _rendererFeatureLoads = new Map();

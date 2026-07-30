@@ -26,6 +26,7 @@ import * as groupChat from '../features/group_chat';
 import * as companionRepro from '../features/companion_repro';
 import * as p3394 from '../features/p3394';
 import * as evolution from '../features/evolution';
+import * as personalOntologyCandidates from '../features/personal_ontology_candidates';
 import type { GroupEvent } from '../features/group_chat/bus';
 import * as agents from '../features/agents';
 import * as autoTasks from '../features/auto_tasks';
@@ -1962,6 +1963,27 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(skillId)) throw new Error('invalid skillId');
     if (!ontologyId || typeof ontologyId !== 'string') throw new Error('missing ontologyId');
     return { refs: await evolution.unbindOntology(ctx.userId, skillId, ontologyId) };
+  },
+
+  // ── Personal Ontology Candidates ──
+  'personalOntology.candidates.list': async (_payload, ctx) => {
+    return personalOntologyCandidates.listCandidates(ctx.userId);
+  },
+  'personalOntology.candidates.confirm': async ({ candidateId }, ctx) => {
+    if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
+    return personalOntologyCandidates.confirmCandidate(ctx.userId, candidateId);
+  },
+  'personalOntology.candidates.reject': async ({ candidateId, reason }, ctx) => {
+    if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
+    return personalOntologyCandidates.rejectCandidate(ctx.userId, candidateId, reason);
+  },
+  'personalOntology.candidates.confirmBatch': async ({ candidateIds }, ctx) => {
+    if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
+    return personalOntologyCandidates.confirmCandidates(ctx.userId, candidateIds);
+  },
+  'personalOntology.candidates.rejectBatch': async ({ candidateIds, reason }, ctx) => {
+    if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
+    return personalOntologyCandidates.rejectCandidates(ctx.userId, candidateIds, reason);
   },
 
   'skills.list': async ({ force } = {}) => {
