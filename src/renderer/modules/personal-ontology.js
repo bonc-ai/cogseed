@@ -20,6 +20,12 @@
     } catch (_) {}
   }
 
+  async function _readApiResult(response, fallback) {
+    const data = await response.json();
+    if (!data || data.ok === false) throw new Error((data && data.error) || fallback);
+    return data;
+  }
+
   // Show a modal to collect reject reason. Returns Promise<string|null>.
   // null = user cancelled; '' = confirmed with no reason.
   function showRejectReasonModal() {
@@ -31,11 +37,13 @@
       if (!overlay || !textarea) { resolve(''); return; }
 
       textarea.value = '';
-      overlay.style.display = 'flex';
+      overlay.hidden = false;
+      overlay.classList.add('open');
       textarea.focus();
 
       function cleanup(value) {
-        overlay.style.display = 'none';
+        overlay.classList.remove('open');
+        overlay.hidden = true;
         okBtn.removeEventListener('click', onOk);
         cancelBtn.removeEventListener('click', onCancel);
         overlay.removeEventListener('click', onOverlay);
@@ -143,7 +151,10 @@
     bodyEl.innerHTML = '<div class="personal-onto-loading">' + _t('personalOntology.loading', '加载中...') + '</div>';
 
     try {
-      const data = await window.apiFetch('/api/personalOntology/candidates').then(r => r.json());
+      const data = await _readApiResult(
+        await window.apiFetch('/api/personalOntology/candidates'),
+        _t('personalOntology.load_error', '加载失败'),
+      );
 
       // 渲染统计
       statsEl.innerHTML = renderStats(data);
@@ -215,10 +226,10 @@
   async function confirmCandidate(candidateId) {
     if (!candidateId) return;
     try {
-      await window.apiFetch('/api/personalOntology/candidates/confirm', {
+      await _readApiResult(await window.apiFetch('/api/personalOntology/candidates/confirm', {
         method: 'POST',
         body: JSON.stringify({ candidateId }),
-      });
+      }), _t('personalOntology.confirm_error', '确认失败'));
       renderPersonalOntology(); // 重新渲染
     } catch (err) {
       _notifyFail(_t('personalOntology.confirm_error', '确认失败'), err);
@@ -230,10 +241,10 @@
     const reason = await showRejectReasonModal();
     if (reason === null) return; // 用户取消
     try {
-      await window.apiFetch('/api/personalOntology/candidates/reject', {
+      await _readApiResult(await window.apiFetch('/api/personalOntology/candidates/reject', {
         method: 'POST',
         body: JSON.stringify({ candidateId, reason: reason || '' }),
-      });
+      }), _t('personalOntology.reject_error', '驳回失败'));
       renderPersonalOntology();
     } catch (err) {
       _notifyFail(_t('personalOntology.reject_error', '驳回失败'), err);
@@ -245,10 +256,10 @@
     if (!confirm(_t('personalOntology.confirm_all_prompt', `确认全部 ${pending.length} 个候选？`))) return;
     try {
       const candidateIds = pending.map(c => c.candidate_id);
-      await window.apiFetch('/api/personalOntology/candidates/confirmBatch', {
+      await _readApiResult(await window.apiFetch('/api/personalOntology/candidates/confirmBatch', {
         method: 'POST',
         body: JSON.stringify({ candidateIds }),
-      });
+      }), _t('personalOntology.confirm_all_error', '批量确认失败'));
       renderPersonalOntology();
     } catch (err) {
       _notifyFail(_t('personalOntology.confirm_all_error', '批量确认失败'), err);
@@ -261,10 +272,10 @@
     if (reason === null) return;
     try {
       const candidateIds = pending.map(c => c.candidate_id);
-      await window.apiFetch('/api/personalOntology/candidates/rejectBatch', {
+      await _readApiResult(await window.apiFetch('/api/personalOntology/candidates/rejectBatch', {
         method: 'POST',
         body: JSON.stringify({ candidateIds, reason: reason || '' }),
-      });
+      }), _t('personalOntology.reject_all_error', '批量驳回失败'));
       renderPersonalOntology();
     } catch (err) {
       _notifyFail(_t('personalOntology.reject_all_error', '批量驳回失败'), err);
