@@ -2013,5 +2013,8 @@
   "personalOntology.confirm_all_error": "一括確認に失敗しました",
   "personalOntology.reject_all_error": "一括却下に失敗しました",
   "personalOntology.reject_title": "候補を却下",
-  "personalOntology.reject_placeholder": "任意：却下理由"
+  "personalOntology.reject_placeholder": "任意：却下理由",
+  "sidebar.build_title": "ビルド {channel} · {commit} · {dirty} · {time}",
+  "sidebar.build_dirty": "未コミット変更あり",
+  "sidebar.build_clean": "クリーン"
 }

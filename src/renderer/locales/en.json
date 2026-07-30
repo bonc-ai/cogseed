@@ -2100,5 +2100,8 @@
   "personalOntology.confirm_all_error": "Failed to confirm all",
   "personalOntology.reject_all_error": "Failed to reject all",
   "personalOntology.reject_title": "Reject candidate",
-  "personalOntology.reject_placeholder": "Optional rejection reason"
+  "personalOntology.reject_placeholder": "Optional rejection reason",
+  "sidebar.build_title": "Build {channel} · {commit} · {dirty} · {time}",
+  "sidebar.build_dirty": "dirty",
+  "sidebar.build_clean": "clean"
 }

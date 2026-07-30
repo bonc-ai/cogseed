@@ -2013,5 +2013,8 @@
   "personalOntology.confirm_all_error": "Falha ao confirmar todos",
   "personalOntology.reject_all_error": "Falha ao rejeitar todos",
   "personalOntology.reject_title": "Rejeitar candidato",
-  "personalOntology.reject_placeholder": "Opcional: motivo da rejeição"
+  "personalOntology.reject_placeholder": "Opcional: motivo da rejeição",
+  "sidebar.build_title": "Build {channel} · {commit} · {dirty} · {time}",
+  "sidebar.build_dirty": "com alterações não confirmadas",
+  "sidebar.build_clean": "limpo"
 }

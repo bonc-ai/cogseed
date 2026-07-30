@@ -2100,5 +2100,8 @@
   "personalOntology.confirm_all_error": "批量确认失败",
   "personalOntology.reject_all_error": "批量驳回失败",
   "personalOntology.reject_title": "驳回候选",
-  "personalOntology.reject_placeholder": "可选：填写驳回原因"
+  "personalOntology.reject_placeholder": "可选：填写驳回原因",
+  "sidebar.build_title": "构建 {channel} · {commit} · {dirty} · {time}",
+  "sidebar.build_dirty": "有未提交改动",
+  "sidebar.build_clean": "工作区干净"
 }

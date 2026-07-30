@@ -42,6 +42,7 @@ import './install-data-root.cjs';
 import { APP_BRAND } from './brand';
 import { desktopPlatform, osVersion } from './system_info';
 import { hardenedWebPreferences, installExternalNavigationGuard } from './util/window-security';
+import { formatBuildIdentityLabel, resolveBuildIdentity } from './util/build-identity';
 import { resolveContainedProtocolFile } from './util/protocol-path';
 
 const WINDOWS_TASK_BADGE_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAPklEQVR4nGNgoAX4jwNQpJkoQ2CK3ru4YMV4DSGkGa8hxGrGacioAVQwgOJopEpCQjcEF8CrmZAhRGkmFQAAcdLnkJb3ml4AAAAASUVORK5CYII=';
@@ -354,11 +355,21 @@ function registerIpc(): void {
   ipcMain.handle('orkas.env', () => {
     const systemVersion = osVersion();
     const platform = desktopPlatform();
+    const buildIdentity = resolveBuildIdentity({
+      env: process.env,
+      packagedInfoPath: path.join(app.getAppPath(), '.build', 'build-info.json'),
+    });
+    const version = app.getVersion();
     return {
       ok: true,
       isDev: !app.isPackaged,
       isPackaged: app.isPackaged,
-      version: app.getVersion(),
+      version,
+      versionLabel: formatBuildIdentityLabel(version, buildIdentity),
+      buildChannel: buildIdentity.channel,
+      buildCommit: buildIdentity.commit,
+      buildDirty: buildIdentity.dirty,
+      buildTime: buildIdentity.builtAt,
       platform,
       osVersion: systemVersion,
       arch: process.arch,

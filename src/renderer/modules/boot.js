@@ -29,6 +29,7 @@ const _BOOT_STAGE_WARN_MS = 1500;
 const _BOOT_TOTAL_WARN_MS = 3000;
 const _SIDEBAR_NAV_BOOT_WARM_MS = 3500;
 let _sidebarVersionBaseLabel = '';
+let _sidebarVersionBuildTitle = '';
 let _sidebarNavWarmUntil = 0;
 const _sidebarNavTimers = new Map();
 const _sidebarNavTokens = new Map();
@@ -171,7 +172,13 @@ async function _stampSettingsVersion() {
   try {
     const env = await window.orkas.env();
     if (env && env.version) {
-      _setRendererVersionLabel(env.version);
+      const buildTooltip = t('sidebar.build_title', {
+        channel: env.buildChannel || 'unknown',
+        commit: env.buildCommit || 'unknown',
+        dirty: env.buildDirty === true ? t('sidebar.build_dirty') : t('sidebar.build_clean'),
+        time: env.buildTime || 'unknown',
+      });
+      _setRendererVersionLabel(env.versionLabel || env.version, buildTooltip);
     }
     // Stamp body so renderer modules can branch on dev mode synchronously
     // via `document.body.classList.contains('is-dev')`. Used by skills /
@@ -187,10 +194,11 @@ function _formatRendererVersionLabel(version) {
   return raw.toLowerCase().startsWith('v') ? raw : `v${raw}`;
 }
 
-function _setRendererVersionLabel(version) {
+function _setRendererVersionLabel(version, buildTitle = '') {
   const label = _formatRendererVersionLabel(version);
   if (!label) return;
   _sidebarVersionBaseLabel = label;
+  _sidebarVersionBuildTitle = String(buildTitle || '');
   _renderSidebarVersionUpdate();
 }
 
@@ -198,7 +206,7 @@ function _renderSidebarVersionUpdate() {
   const el = document.getElementById('sidebar-version');
   if (!el) return;
   el.textContent = _sidebarVersionBaseLabel || '';
-  el.title = _sidebarVersionBaseLabel ? t('sidebar.version_title', { version: _sidebarVersionBaseLabel }) : '';
+  el.title = _sidebarVersionBuildTitle || (_sidebarVersionBaseLabel ? t('sidebar.version_title', { version: _sidebarVersionBaseLabel }) : '');
   el.setAttribute('aria-label', el.title || el.textContent || 'Version');
   el.disabled = true;
   el.classList.remove('is-actionable', 'is-progress');

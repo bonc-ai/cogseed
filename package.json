@@ -119,7 +119,8 @@
       "!**/.DS_Store",
       "!src/core-agent/test/**",
       "!src/main/features/*_dev.ts",
-      "!src/main/ipc/dev_handlers.ts"
+      "!src/main/ipc/dev_handlers.ts",
+      ".build/build-info.json"
     ],
     "asar": true,
     "asarUnpack": [
