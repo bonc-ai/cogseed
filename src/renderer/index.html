@@ -959,7 +959,7 @@
           </div>
           <div class="settings-tabs" role="tablist">
             <button class="settings-tab is-active" data-settings-tab="data" data-i18n="settings.tab.data">数据</button>
-            <button class="settings-tab" data-settings-tab="credentials" data-i18n="settings.tab.credentials">配置</button>
+            <button class="settings-tab" data-settings-tab="credentials" data-i18n="settings.tab.credentials">Model Providers</button>
             <button class="settings-tab" data-settings-tab="general" data-i18n="settings.tab.general">通用</button>
           </div>
 
@@ -1093,6 +1093,22 @@
                 <div class="settings-row">
                   <button class="btn btn-primary" id="settings-auth-profiles-reset" data-i18n="settings.auth_recovery.reset">Reset model authorization</button>
                   <span class="settings-status" id="settings-auth-profiles-reset-status"></span>
+                </div>
+              </div>
+
+              <div class="settings-group settings-custom-providers-group" id="settings-custom-providers-group">
+                <div class="settings-group-head">
+                  <div class="settings-group-title" data-i18n="settings.models.title">Model providers</div>
+                  <div class="settings-group-sub" data-i18n="settings.custom_providers.sub">Manage built-in authorization, custom endpoints, and optional CC Switch imports.</div>
+                </div>
+                <div class="settings-row settings-custom-provider-toolbar">
+                  <button class="btn btn-primary" id="settings-custom-provider-add-btn" data-i18n="settings.custom_providers.add">+ Add provider</button>
+                  <button class="btn" id="settings-ccswitch-preview-btn" data-i18n="settings.custom_providers.ccswitch_preview">Preview CC Switch</button>
+                  <span class="settings-status" id="settings-ccswitch-status"></span>
+                  <span class="settings-status" id="settings-custom-providers-status"></span>
+                </div>
+                <div class="settings-entries settings-custom-provider-list" id="settings-custom-provider-list">
+                  <div class="settings-empty" data-i18n="settings.loading">Loading…</div>
                 </div>
               </div>
 
@@ -1319,6 +1335,11 @@
           <label data-i18n="agent_modal.ext_cli_label">Agent</label>
           <div class="ai-select" id="agent-modal-ext-cli-select"></div>
         </div>
+        <div class="form-row" id="agent-ext-provider-row" hidden>
+          <label data-i18n="agent_modal.ext_provider_label">Model provider</label>
+          <div class="ai-select" id="agent-modal-ext-provider-select"></div>
+          <div class="form-hint" data-i18n="agent_modal.ext_provider_hint">Optional. Leave empty to use the CLI's own configuration.</div>
+        </div>
         <div class="form-row">
           <label data-i18n="agent_modal.ext_name">Name</label>
           <input type="text" id="agent-ext-name-input" data-i18n-placeholder="agent_modal.ext_name_placeholder" placeholder="e.g. ClaudeCode" />
@@ -1409,6 +1430,28 @@
   </div>
 
   <!-- Add-account modal (settings page) -->
+  <div class="modal-overlay" id="settings-custom-provider-modal">
+    <div class="modal modal-standard settings-custom-provider-modal" role="dialog" aria-modal="true" aria-labelledby="settings-custom-provider-modal-title">
+      <div class="modal-header">
+        <h3 class="modal-title" id="settings-custom-provider-modal-title">Model provider</h3>
+      </div>
+      <div class="modal-body" id="settings-custom-provider-modal-body"></div>
+      <div class="form-msg" id="settings-custom-provider-modal-status"></div>
+      <div class="modal-actions" id="settings-custom-provider-modal-actions"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="settings-ccswitch-preview-modal">
+    <div class="modal modal-standard settings-ccswitch-preview-modal" role="dialog" aria-modal="true" aria-labelledby="settings-ccswitch-preview-modal-title">
+      <div class="modal-header">
+        <h3 class="modal-title" id="settings-ccswitch-preview-modal-title">CC Switch</h3>
+      </div>
+      <div class="modal-body" id="settings-ccswitch-preview-modal-body"></div>
+      <div class="form-msg" id="settings-ccswitch-preview-modal-status"></div>
+      <div class="modal-actions" id="settings-ccswitch-preview-modal-actions"></div>
+    </div>
+  </div>
+
   <div class="modal-overlay" id="add-account-modal">
     <div class="modal add-account-modal modal-standard" role="dialog" aria-modal="true" aria-labelledby="add-account-title">
       <h3 class="modal-title" id="add-account-title" data-i18n="add_account.title">Add account</h3>

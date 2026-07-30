@@ -90,6 +90,8 @@ describe('settings tabs module', () => {
     const settingsScript = '<script src="./modules/settings.js"></script>';
 
     expect(fs.existsSync(modulePath)).toBe(true);
+    expect(indexHtml).toContain('data-i18n="settings.tab.credentials">Model Providers</button>');
+    expect(indexHtml).not.toContain('Model Authorization');
     expect(indexHtml.indexOf(tabsScript)).toBeGreaterThanOrEqual(0);
     expect(indexHtml.indexOf(settingsScript)).toBe(-1);
     expect(lazyFeatures).toContain("{ src: './modules/settings.js' }");
