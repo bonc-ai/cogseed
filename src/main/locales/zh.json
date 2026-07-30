@@ -80,6 +80,7 @@
   "errors.unsupported_file_no_ext": "无扩展名",
   "errors.contexts.formats_only": "仅支持以下格式（{allowed}）",
   "p3394.wake.pending_short": "正在等待用户批准唤醒 {name}。",
+  "p3394.admission_blocked": "本次 Agent 执行已被消息协议策略阻止。",
   "commander.hermes.dispatch_claim_blocked": "未执行调度：外接指挥官只输出了“已启动/后台运行”的文字，但没有输出平台可执行的结构化调度指令。请重新发送任务，或切回 Orkas Core Agent 指挥官；只有真实 dispatch_to / hand_off_to / run_worker 执行后，Agent 状态里才会显示运行中。",
   "errors.unknown_actor": "unknown actor: \"{name}\" — 名字要跟「智能体列表」里的 name 一致；或检查 agent 是否禁用",
   "errors.no_model_configured": "未配置模型，请到「设置」页添加 API 密钥或登录账号",

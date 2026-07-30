@@ -80,6 +80,7 @@
   "errors.unsupported_file_no_ext": "拡張子なし",
   "errors.contexts.formats_only": "対応形式は次のみです: {allowed}",
   "p3394.wake.pending_short": "{name} の起動承認待ちです。",
+  "p3394.admission_blocked": "この Agent の実行はメッセージプロトコルポリシーによりブロックされました。",
   "commander.hermes.dispatch_claim_blocked": "Dispatch was not executed: the external commander only wrote text claiming agents had started, but did not output a structured orchestration command the host can execute. Please send the task again or switch back to the Orkas Core Agent commander; agents show as running only after a real dispatch_to / hand_off_to / run_worker executes.",
   "errors.unknown_actor": "不明な actor: 「{name}」。名前は「エージェント一覧」の `name` フィールドと一致する必要があります。エージェントが無効になっていないかも確認してください。",
   "errors.no_model_configured": "モデルが設定されていません。設定ページで API キーを追加するかサインインしてください。",

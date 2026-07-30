@@ -951,13 +951,19 @@ function runtimeProcessItem(
   };
 }
 
+interface P3394AdmissionOutcome {
+  processItem: ProcessItem;
+  admitted: boolean;
+  reasonCode?: string;
+}
+
 async function p3394ProtocolProcessItem(input: {
   uid: string;
   cid: string;
   actor: Actor;
   item: QueueItem;
   agent: agentsFeat.Agent;
-}): Promise<ProcessItem> {
+}): Promise<P3394AdmissionOutcome> {
   const fromUser = input.item.fromActorId === USER_ID;
   const fromCommander = input.item.fromActorId === COMMANDER_ID;
   const relationship = fromUser ? "owner" : "peer";
@@ -1025,54 +1031,61 @@ async function p3394ProtocolProcessItem(input: {
   if (result.ok === false) {
     const error = result.error;
     return {
+      admitted: false,
+      reasonCode: error.body.reason_code,
+      processItem: {
+        type: "event",
+        event: {
+          stream: "p3394",
+          data: {
+            phase: "normalized",
+            ok: false,
+            agent_id: input.actor.id,
+            role:
+              contract?.role ||
+              (input.agent.runtime?.kind === "cli"
+                ? "external_expert"
+                : "orkas_core"),
+            relationship,
+            speech_act: speechAct,
+            error: error.body.reason_code,
+            detail: error.body.detail,
+            correlation_id: error.correlation_id,
+            canonical_session_id: error.canonical_session_id,
+          },
+        },
+      },
+    };
+  }
+  return {
+    admitted: true,
+    processItem: {
       type: "event",
       event: {
         stream: "p3394",
         data: {
           phase: "normalized",
-          ok: false,
+          ok: true,
           agent_id: input.actor.id,
           role:
             contract?.role ||
             (input.agent.runtime?.kind === "cli"
               ? "external_expert"
               : "orkas_core"),
-          relationship,
+          runtime_kind:
+            contract?.runtime.kind ||
+            (input.agent.runtime?.kind === "cli" ? "cli" : "in_process"),
+          p3394_level: manifest.conformance.p3394_level,
+          relationship: result.message.metadata.relationship,
           speech_act: speechAct,
-          error: error.body.reason_code,
-          detail: error.body.detail,
-          correlation_id: error.correlation_id,
-          canonical_session_id: error.canonical_session_id,
+          message_type: result.message.message_type,
+          correlation_id: result.message.correlation_id,
+          canonical_session_id: result.message.canonical_session_id,
+          session_role: manifest.session.ownership.role,
+          uses_mate_skills:
+            contract?.governance.uses_mate_skills ??
+            input.agent.runtime?.kind !== "cli",
         },
-      },
-    };
-  }
-  return {
-    type: "event",
-    event: {
-      stream: "p3394",
-      data: {
-        phase: "normalized",
-        ok: true,
-        agent_id: input.actor.id,
-        role:
-          contract?.role ||
-          (input.agent.runtime?.kind === "cli"
-            ? "external_expert"
-            : "orkas_core"),
-        runtime_kind:
-          contract?.runtime.kind ||
-          (input.agent.runtime?.kind === "cli" ? "cli" : "in_process"),
-        p3394_level: manifest.conformance.p3394_level,
-        relationship: result.message.metadata.relationship,
-        speech_act: speechAct,
-        message_type: result.message.message_type,
-        correlation_id: result.message.correlation_id,
-        canonical_session_id: result.message.canonical_session_id,
-        session_role: manifest.session.ownership.role,
-        uses_mate_skills:
-          contract?.governance.uses_mate_skills ??
-          input.agent.runtime?.kind !== "cli",
       },
     },
   };
@@ -3371,10 +3384,35 @@ async function runActorTurnBody(
       return { kind: "early" };
     }
     actorInteractive = agent.interactive === true;
-    appendProcessItem(
-      processItems,
-      await p3394ProtocolProcessItem({ uid, cid, actor, item, agent }),
-    );
+    const p3394Admission = await p3394ProtocolProcessItem({ uid, cid, actor, item, agent });
+    appendProcessItem(processItems, p3394Admission.processItem);
+    if (!p3394Admission.admitted) {
+      const reasonCode = p3394Admission.reasonCode || "rejected";
+      const reply = `<span style="color:var(--danger)">${escapeHtmlForBubble(t("p3394.admission_blocked"))}</span>`;
+      w.abortController = null;
+      await enqueue({
+        uid,
+        cid,
+        fromActorId: actor.id,
+        text: reply,
+        failure_kind: "validation",
+        failure_code: `p3394_${reasonCode}`,
+        forceTo: [USER_ID],
+        turn_end: true,
+        turn_id: item.turnId,
+        process: processItems,
+      });
+      await markInFlight(uid, cid, actor.id, false);
+      await emitStateChanged(state);
+      await _syncStateStatus(state);
+      log.warn("p3394 admission blocked agent turn", {
+        uid,
+        cid,
+        actor: actor.id,
+        reason: reasonCode,
+      });
+      return { kind: "early" };
+    }
     if (agentsFeat.isCliAgent(agent)) {
       cliAgent = agent;
       systemPrompt = ""; // unused on CLI path

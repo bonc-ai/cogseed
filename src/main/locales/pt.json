@@ -80,6 +80,7 @@
   "errors.unsupported_file_no_ext": "sem extensão",
   "errors.contexts.formats_only": "Somente os seguintes formatos são aceitos: {allowed}",
   "p3394.wake.pending_short": "A aprovação para ativar {name} está pendente.",
+  "p3394.admission_blocked": "Esta execução do Agent foi bloqueada pela política do protocolo de mensagens.",
   "commander.hermes.dispatch_claim_blocked": "Dispatch was not executed: the external commander only wrote text claiming agents had started, but did not output a structured orchestration command the host can execute. Please send the task again or switch back to the Orkas Core Agent commander; agents show as running only after a real dispatch_to / hand_off_to / run_worker executes.",
   "errors.unknown_actor": "ator desconhecido: \"{name}\" — o nome deve corresponder a uma entrada na \"Lista de agentes\" pelo campo `name`; verifique também se o agente está desativado.",
   "errors.no_model_configured": "Nenhum modelo configurado. Adicione uma chave de API na página Configurações ou faça login.",
