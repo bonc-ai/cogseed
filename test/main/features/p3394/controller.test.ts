@@ -66,6 +66,30 @@ describe('P3394Controller.admitMessage — session', () => {
 
 describe('P3394Controller.admitMessage — epoch 重放', () => {
   const sess = { resolve: async (sid: string) => ({ sessionId: sid, kind: 'gconv', region: 'cloud', valid: true }) };
+  it('不同 sender 对同一 recipient session 的相同 epoch 不互相碰撞', async () => {
+    const { P3394Controller } = await import('../../../../src/main/features/p3394/controller');
+    const watermarks = new Map<string, number>();
+    const epochStore = {
+      admit: async (_uid: string, streamId: string, incomingEpoch?: number) => {
+        const current = watermarks.get(streamId) || 0;
+        if (incomingEpoch !== undefined && incomingEpoch <= current) {
+          return { replay: true, epoch: current };
+        }
+        const next = incomingEpoch ?? current + 1;
+        watermarks.set(streamId, next);
+        return { replay: false, epoch: next };
+      },
+    };
+    const c = new P3394Controller({ sessionSource: sess, epochStore, contextSource: { snapshot: async () => null } } as any);
+
+    expect((await c.admitMessage(baseInput({ sender: 'agent-a', incomingEpoch: 1 }))).ok).toBe(true);
+    expect((await c.admitMessage(baseInput({ sender: 'agent-b', incomingEpoch: 1 }))).ok).toBe(true);
+    const replay = await c.admitMessage(baseInput({ sender: 'agent-a', incomingEpoch: 1 }));
+    expect(replay.ok).toBe(false);
+    if (replay.ok) throw new Error('should reject same-stream replay');
+    expect(replay.error.body.reason_code).toBe('replay_detected');
+  });
+
   it('incomingEpoch <= 水位 → 拒 replay_detected', async () => {
     const { P3394Controller } = await import('../../../../src/main/features/p3394/controller');
     const c = new P3394Controller({ sessionSource: sess, epochStore: { admit: async () => ({ replay: true, epoch: 5 }) }, contextSource: { snapshot: async () => null } } as any);

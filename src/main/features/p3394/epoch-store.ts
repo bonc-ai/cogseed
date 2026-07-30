@@ -5,6 +5,10 @@ import { createLogger } from '../../logger';
 
 const log = createLogger('p3394.epoch-store');
 
+export function p3394EpochStreamKey(senderActorId: string, recipientSessionId: string): string {
+  return JSON.stringify([senderActorId, recipientSessionId]);
+}
+
 function workspaceRoot(): string {
   const root = process.env.ORKAS_WORKSPACE_ROOT || '';
   if (!root) throw new Error('ORKAS_WORKSPACE_ROOT not set');

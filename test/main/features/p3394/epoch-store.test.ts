@@ -20,6 +20,15 @@ describe('P3394 EpochStore', () => {
     expect(await store.current('u1', 'gconv-abc')).toBe(0);
   });
 
+  it('sender-scoped stream key is collision-safe', async () => {
+    const { p3394EpochStreamKey } = await import('../../../../src/main/features/p3394/epoch-store');
+    expect(p3394EpochStreamKey('a:b', 'c')).not.toBe(p3394EpochStreamKey('a', 'b:c'));
+    expect(JSON.parse(p3394EpochStreamKey('agent-a', 'gmember-c1-a1'))).toEqual([
+      'agent-a',
+      'gmember-c1-a1',
+    ]);
+  });
+
   it('nextEpoch 单调递增并持久化', async () => {
     const { EpochStore } = await import('../../../../src/main/features/p3394/epoch-store');
     const store = new EpochStore();

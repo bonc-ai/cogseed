@@ -5,6 +5,7 @@ import {
   type P3394LiteMessage,
   type P3394AgentError,
 } from './protocol';
+import { p3394EpochStreamKey } from './epoch-store';
 import { createLogger } from '../../logger';
 
 const log = createLogger('p3394.controller');
@@ -21,7 +22,7 @@ export interface EpochStoreLike {
   admit(uid: string, sessionId: string, incomingEpoch?: number): Promise<{ replay: boolean; epoch: number }>;
 }
 
-// context 快照:任务5 填充 context 裁决时使用。
+// context 快照用于校验消息声明的协作 context 是否属于当前 workflow。
 export interface ContextSourceSnapshot { context_id: string; status: string; }
 export interface ContextSource { snapshot(uid: string, cid: string): Promise<ContextSourceSnapshot | null>; }
 
@@ -37,7 +38,7 @@ interface ControllerDeps { sessionSource: SessionSource; epochStore: EpochStoreL
  * P3394Controller —— 外包无状态内核 normalizeP3394AgentMessage,叠加有状态裁决:
  *   1. session 解析(带 kind/region,IO 失败降级放行,标 session_resolved:false)
  *   2. epoch 水位(重放拦截 + 单调递增,IO 失败降级 epoch=0)
- *   3. context 裁决(占位,任务5填充)
+ *   3. context 归属裁决(context 越界拒绝,读取失败降级放行)
  * 不改内核逻辑:capability/speechAct/executable/委托 四道校验仍由内核完成。
  */
 export class P3394Controller {
@@ -61,7 +62,8 @@ export class P3394Controller {
 
     // epoch 水位:原子判定重放 + 推进(见过的最大 epoch);IO 失败降级 epoch=0。
     try {
-      const res = await this.deps.epochStore.admit(input.uid, input.sessionId, input.incomingEpoch);
+      const streamId = p3394EpochStreamKey(input.sender, input.sessionId);
+      const res = await this.deps.epochStore.admit(input.uid, streamId, input.incomingEpoch);
       if (res.replay) {
         return makeControllerError(input, 'replay_detected', `epoch ${input.incomingEpoch} <= watermark ${res.epoch}`);
       }
