@@ -7,6 +7,7 @@
 
 const _rendererFeatureManifest = Object.freeze({
   settings: [
+    { src: './modules/model-authorization.js' },
     { src: './modules/settings.js' },
     { src: './modules/memory.js' },
   ],
