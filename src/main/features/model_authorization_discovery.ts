@@ -240,3 +240,55 @@ export async function discoverAuthorizationModels(
   }
   return discoverLiveModels(input.protocol, input.baseUrl, input.apiKey, deps);
 }
+
+export async function testPreparedAuthorizationDraft(
+  userId: string,
+  input:
+    | auth.AuthorizationDraftTestInput
+    | { kind: 'ccswitch_draft'; draftId: string; model: string },
+): Promise<auth.TestConnectionResult> {
+  assertUser(userId);
+  if (input.kind !== 'ccswitch_draft') return auth.testAuthorizationDraft(userId, input);
+  const draft = resolveCcSwitchAuthorizationDraft(userId, input.draftId);
+  if (!draft.ok) return { ok: false, error: (draft as { ok: false; errorCode: string }).errorCode };
+  return auth.testAuthorizationDraft(userId, {
+    kind: 'custom_api_key',
+    protocol: draft.item.protocol,
+    baseUrl: draft.item.baseUrl,
+    apiKey: draft.item.apiKey,
+    model: input.model,
+  });
+}
+
+export async function completePreparedCcSwitchAuthorization(
+  userId: string,
+  input: {
+    draftId: string;
+    requestId: string;
+    selectedModels: string[];
+    defaultModel: string;
+  },
+): Promise<{ ok: true; authorization: auth.AuthorizationSummary }> {
+  assertUser(userId);
+  const draft = resolveCcSwitchAuthorizationDraft(userId, input.draftId);
+  if (!draft.ok) throw new Error((draft as { ok: false; errorCode: string }).errorCode);
+  const result = await auth.completeAuthorization(userId, {
+    requestId: input.requestId,
+    authType: 'api_key',
+    source: 'ccswitch',
+    providerKind: 'custom',
+    customProvider: {
+      name: draft.item.name,
+      protocol: draft.item.protocol,
+      baseUrl: draft.item.baseUrl,
+      apiKey: draft.item.apiKey,
+      externalId: draft.item.externalId,
+      notes: draft.item.notes,
+      websiteUrl: draft.item.websiteUrl,
+    },
+    selectedModels: input.selectedModels,
+    defaultModel: input.defaultModel,
+  });
+  resolveCcSwitchAuthorizationDraft(userId, input.draftId, { consume: true });
+  return result;
+}

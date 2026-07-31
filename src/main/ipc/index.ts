@@ -48,6 +48,7 @@ import * as recycleBin from '../features/recycle_bin';
 import * as search from '../features/search';
 import * as auth from '../features/auth';
 import * as customProviders from '../features/custom_providers';
+import * as modelAuthorizationDiscovery from '../features/model_authorization_discovery';
 import { probeCcSwitch } from '../features/ccswitch_import';
 import * as imageAuth from '../features/image_auth';
 import * as searchAuth from '../features/search_auth';
@@ -113,6 +114,18 @@ interface IpcContext {
 }
 
 type InvokeHandler = (payload: any, ctx: IpcContext) => Promise<any>;
+
+function boundedText(value: unknown, field: string, max: number, required = true): string {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (required && !text) throw new Error(`${field} required`);
+  if (text.length > max) throw new Error(`${field} too long`);
+  return text;
+}
+
+function boundedModelIds(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new Error('selectedModels must be array');
+  return value.slice(0, 100).map((model) => boundedText(model, 'model', 200)).filter(Boolean);
+}
 type StreamHandler = (
   payload: any,
   ctx: IpcContext,
@@ -2525,6 +2538,133 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'auth.reorderEntries':  async ({ orderedIds }) => auth.reorderEntries(orderedIds || []),
   'auth.updateEntryModel':async ({ entryId, model }) => auth.updateEntryModel(entryId, model),
 
+  // ── Unified model authorization workflow ──
+  'modelAuthorizations.list': async (_args, ctx) =>
+    auth.listAuthorizationSummaries(ctx.userId),
+  'modelAuthorizations.prepareCcSwitch': async ({ externalId }, ctx) =>
+    modelAuthorizationDiscovery.prepareCcSwitchAuthorization(
+      ctx.userId,
+      boundedText(externalId, 'externalId', 160),
+    ),
+  'modelAuthorizations.discover': async (args, ctx) => {
+    const kind = boundedText(args?.kind, 'kind', 40);
+    if (kind === 'builtin') {
+      return modelAuthorizationDiscovery.discoverAuthorizationModels(ctx.userId, {
+        kind,
+        providerId: boundedText(args.providerId, 'providerId', 120),
+      });
+    }
+    if (kind === 'ccswitch_draft') {
+      return modelAuthorizationDiscovery.discoverAuthorizationModels(ctx.userId, {
+        kind,
+        draftId: boundedText(args.draftId, 'draftId', 120),
+      });
+    }
+    if (kind === 'custom_api_key') {
+      const protocol = boundedText(args.protocol, 'protocol', 20);
+      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
+      return modelAuthorizationDiscovery.discoverAuthorizationModels(ctx.userId, {
+        kind,
+        protocol,
+        baseUrl: boundedText(args.baseUrl, 'baseUrl', 500),
+        apiKey: boundedText(args.apiKey, 'apiKey', 20_000),
+      });
+    }
+    throw new Error('invalid discovery kind');
+  },
+  'modelAuthorizations.testDraft': async (args, ctx) => {
+    const kind = boundedText(args?.kind, 'kind', 40);
+    const model = boundedText(args?.model, 'model', 200);
+    if (kind === 'ccswitch_draft') {
+      return modelAuthorizationDiscovery.testPreparedAuthorizationDraft(ctx.userId, {
+        kind,
+        draftId: boundedText(args.draftId, 'draftId', 120),
+        model,
+      });
+    }
+    if (kind === 'oauth') {
+      return modelAuthorizationDiscovery.testPreparedAuthorizationDraft(ctx.userId, {
+        kind,
+        providerId: boundedText(args.providerId, 'providerId', 120),
+        profileId: boundedText(args.profileId, 'profileId', 180),
+        model,
+      });
+    }
+    if (kind === 'builtin_api_key') {
+      return modelAuthorizationDiscovery.testPreparedAuthorizationDraft(ctx.userId, {
+        kind,
+        providerId: boundedText(args.providerId, 'providerId', 120),
+        apiKey: boundedText(args.apiKey, 'apiKey', 20_000),
+        baseUrl: boundedText(args.baseUrl, 'baseUrl', 500, false) || undefined,
+        model,
+      });
+    }
+    if (kind === 'custom_api_key') {
+      const protocol = boundedText(args.protocol, 'protocol', 20);
+      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
+      return modelAuthorizationDiscovery.testPreparedAuthorizationDraft(ctx.userId, {
+        kind,
+        protocol,
+        baseUrl: boundedText(args.baseUrl, 'baseUrl', 500),
+        apiKey: boundedText(args.apiKey, 'apiKey', 20_000),
+        model,
+      });
+    }
+    throw new Error('invalid test draft kind');
+  },
+  'modelAuthorizations.complete': async (args, ctx) => {
+    const selectedModels = boundedModelIds(args?.selectedModels);
+    const defaultModel = boundedText(args?.defaultModel, 'defaultModel', 200);
+    const requestId = boundedText(args?.requestId, 'requestId', 120);
+    if (args?.source === 'ccswitch') {
+      return modelAuthorizationDiscovery.completePreparedCcSwitchAuthorization(ctx.userId, {
+        draftId: boundedText(args.draftId, 'draftId', 120), requestId, selectedModels, defaultModel,
+      });
+    }
+    if (args?.providerKind === 'builtin' && args?.authType === 'oauth') {
+      return auth.completeAuthorization(ctx.userId, {
+        requestId, selectedModels, defaultModel,
+        authType: 'oauth', source: 'manual', providerKind: 'builtin',
+        providerId: boundedText(args.providerId, 'providerId', 120),
+        profileId: boundedText(args.profileId, 'profileId', 180),
+      });
+    }
+    if (args?.providerKind === 'builtin' && args?.authType === 'api_key') {
+      return auth.completeAuthorization(ctx.userId, {
+        requestId, selectedModels, defaultModel,
+        authType: 'api_key', source: 'manual', providerKind: 'builtin',
+        providerId: boundedText(args.providerId, 'providerId', 120),
+        label: boundedText(args.label, 'label', 40, false) || undefined,
+        apiKey: boundedText(args.apiKey, 'apiKey', 20_000),
+        baseUrl: boundedText(args.baseUrl, 'baseUrl', 500, false) || undefined,
+      });
+    }
+    if (args?.providerKind === 'custom' && args?.authType === 'api_key') {
+      const protocol = boundedText(args?.customProvider?.protocol, 'protocol', 20);
+      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
+      return auth.completeAuthorization(ctx.userId, {
+        requestId, selectedModels, defaultModel,
+        authType: 'api_key', source: 'manual', providerKind: 'custom',
+        customProvider: {
+          id: boundedText(args.customProvider.id, 'id', 120, false) || undefined,
+          name: boundedText(args.customProvider.name, 'name', 60),
+          protocol,
+          baseUrl: boundedText(args.customProvider.baseUrl, 'baseUrl', 500),
+          apiKey: boundedText(args.customProvider.apiKey, 'apiKey', 20_000),
+        },
+      });
+    }
+    throw new Error('invalid authorization completion');
+  },
+  'modelAuthorizations.removeModel': async ({ authorizationId, entryId }, ctx) =>
+    auth.removeAuthorizationModel(
+      ctx.userId,
+      boundedText(authorizationId, 'authorizationId', 180),
+      boundedText(entryId, 'entryId', 180),
+    ),
+  'modelAuthorizations.remove': async ({ authorizationId }, ctx) =>
+    auth.removeAuthorization(ctx.userId, boundedText(authorizationId, 'authorizationId', 180)),
+
   // ── Unified custom model providers ──
   'customProviders.list': async (_args, ctx) => ({
     protocols: customProviders.listCustomProviderProtocols(),
@@ -2570,6 +2710,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         baseUrl: item.baseUrl,
         notes: item.notes,
         websiteUrl: item.websiteUrl,
+        models: item.models || [],
         needsKey: !!item.needsKey,
         apiKeyMasked: auth.maskKey(item.apiKey),
       })),

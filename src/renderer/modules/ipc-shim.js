@@ -19,6 +19,13 @@ const _shimLog = createLogger('ipc-shim');
 const _IPC_ROUTES = [
   // Exact routes
   ['GET',    '/api/auth/status',              { fake: { ok: true, authenticated: true } }],
+  ['GET',    '/api/model-authorizations',     'modelAuthorizations.list'],
+  ['POST',   '/api/model-authorizations/ccswitch/prepare', 'modelAuthorizations.prepareCcSwitch'],
+  ['POST',   '/api/model-authorizations/discover', 'modelAuthorizations.discover'],
+  ['POST',   '/api/model-authorizations/test', 'modelAuthorizations.testDraft'],
+  ['POST',   '/api/model-authorizations/complete', 'modelAuthorizations.complete'],
+  ['POST',   '/api/model-authorizations/remove-model', 'modelAuthorizations.removeModel'],
+  ['POST',   '/api/model-authorizations/remove', 'modelAuthorizations.remove'],
   ['GET',    '/api/user/init',                'user.init'],
   ['GET',    '/api/conversations/list',       'conversations.list'],
   ['POST',   '/api/conversations/create',     'conversations.create'],
