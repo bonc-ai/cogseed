@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url);
 const {
   createDevBuilderConfig,
   expectedDevAppPath,
+  resolveLocalElectronDist,
 } = require('../../scripts/package-dev-mac.cjs');
 
 describe('isolated mac development packaging', () => {
@@ -20,13 +21,13 @@ describe('isolated mac development packaging', () => {
       mac: { category: 'public.app-category.productivity', target: ['dmg'] },
     };
     const snapshot = structuredClone(base);
-    const config = createDevBuilderConfig(base, { channel: 'packaged-dev' });
+    const config = createDevBuilderConfig(base, { channel: 'packaged-dev' }, { electronDist: '/cache/electron.zip' });
 
     expect(base).toEqual(snapshot);
     expect(config).toMatchObject({
       appId: 'com.mateagent.desktop.dev',
       productName: 'Mate Agent Dev',
-      electronDist: 'node_modules/electron/dist',
+      electronDist: '/cache/electron.zip',
       directories: { output: 'dist-dev' },
       extraMetadata: { retained: true, orkasBuildChannel: 'packaged-dev' },
       mac: { category: 'public.app-category.productivity', target: [{ target: 'dir', arch: ['arm64'] }] },
@@ -37,5 +38,15 @@ describe('isolated mac development packaging', () => {
 
   it('computes the isolated app bundle path', () => {
     expect(expectedDevAppPath('/repo')).toBe(path.join('/repo', 'dist-dev', 'mac-arm64', 'Mate Agent Dev.app'));
+  });
+
+  it('uses a cached Electron zip and rejects a renamed source bundle', () => {
+    expect(resolveLocalElectronDist({
+      electronVersion: '41.7.1',
+      cacheRoot: '/cache',
+      exists: (candidate: string) => candidate === '/cache' || candidate === '/cache/hash/electron-v41.7.1-darwin-arm64.zip',
+      listDirs: () => ['hash'],
+    })).toBe('/cache/hash/electron-v41.7.1-darwin-arm64.zip');
+    expect(resolveLocalElectronDist({ electronVersion: '41.7.1', cacheRoot: '/cache', exists: () => false, listDirs: () => [] })).toBe('');
   });
 });

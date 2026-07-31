@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
@@ -11,11 +12,11 @@ function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
-function createDevBuilderConfig(baseConfig = {}, identity = {}) {
+function createDevBuilderConfig(baseConfig = {}, identity = {}, options = {}) {
   const config = clone(baseConfig) || {};
   config.appId = 'com.mateagent.desktop.dev';
   config.productName = 'Mate Agent Dev';
-  config.electronDist = 'node_modules/electron/dist';
+  if (options.electronDist) config.electronDist = options.electronDist;
   delete config.protocols;
   config.directories = { ...(config.directories || {}), output: 'dist-dev' };
   const files = Array.isArray(config.files) ? [...config.files] : [];
@@ -32,6 +33,22 @@ function createDevBuilderConfig(baseConfig = {}, identity = {}) {
   return config;
 }
 
+function resolveLocalElectronDist({
+  electronVersion,
+  cacheRoot = path.join(os.homedir(), 'Library', 'Caches', 'electron'),
+  exists = fs.existsSync,
+  listDirs = (root) => fs.readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory()).map((entry) => entry.name),
+} = {}) {
+  if (!electronVersion || !exists(cacheRoot)) return '';
+  const zipName = `electron-v${electronVersion}-darwin-arm64.zip`;
+  for (const directory of listDirs(cacheRoot)) {
+    const candidate = path.join(cacheRoot, directory, zipName);
+    if (exists(candidate)) return candidate;
+  }
+  return '';
+}
+
 function expectedDevAppPath(root = ROOT, arch = 'arm64') {
   return path.join(root, 'dist-dev', `mac-${arch}`, 'Mate Agent Dev.app');
 }
@@ -46,7 +63,12 @@ function main() {
   if (process.platform !== 'darwin') throw new Error('package:dev:mac is supported only on macOS');
   run(process.execPath, [path.join(ROOT, 'scripts', 'write-build-info.cjs'), '--channel=packaged-dev']);
   const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-  const config = createDevBuilderConfig(packageJson.build, { channel: 'packaged-dev' });
+  const electronVersion = require(path.join(ROOT, 'node_modules', 'electron', 'package.json')).version;
+  const electronDist = resolveLocalElectronDist({ electronVersion });
+  if (!electronDist) {
+    throw new Error(`Electron ${electronVersion} arm64 zip is not cached; run the normal dependency setup once before packaging`);
+  }
+  const config = createDevBuilderConfig(packageJson.build, { channel: 'packaged-dev' }, { electronDist });
   const configPath = path.join(ROOT, '.build', 'electron-builder-dev.json');
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
@@ -57,7 +79,7 @@ function main() {
   process.stdout.write(`${appPath}\n`);
 }
 
-module.exports = { createDevBuilderConfig, expectedDevAppPath };
+module.exports = { createDevBuilderConfig, expectedDevAppPath, resolveLocalElectronDist };
 
 if (require.main === module) {
   try { main(); }
