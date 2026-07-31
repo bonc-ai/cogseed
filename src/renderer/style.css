@@ -16587,3 +16587,24 @@ body.model-not-configured .main-content { flex-direction: column; }
 .personal-onto-loading, .personal-onto-empty, .personal-onto-error { padding: 28px; text-align: center; color: var(--text-muted); }
 .personal-onto-error { color: var(--danger); }
 #personal-onto-modal-reason { width: 100%; resize: vertical; }
+
+/* Unified model authorization settings */
+.settings-group-head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.model-authorization-list { display: grid; gap: 10px; margin-top: 12px; }
+.model-authorization-card { display: grid; gap: 8px; padding: 14px; border: 1px solid var(--border, #e5e7eb); border-radius: 12px; background: var(--surface-1, #fff); }
+.model-authorization-card-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.model-authorization-card-title { font-weight: 650; }
+.model-authorization-card-meta { color: var(--text-muted, #6b7280); font-size: 12px; }
+.model-authorization-card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.model-authorization-steps { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 18px 12px; }
+.model-authorization-step { padding: 4px 9px; border-radius: 999px; background: var(--surface-2, #f3f4f6); color: var(--text-muted, #6b7280); font-size: 12px; }
+.model-authorization-step.is-active { background: var(--accent-soft, #eef2ff); color: var(--accent, #4f46e5); font-weight: 650; }
+.model-authorization-body { display: grid; gap: 14px; }
+.model-authorization-choice-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.model-authorization-choice { text-align: left; padding: 14px; border: 1px solid var(--border, #e5e7eb); border-radius: 12px; background: var(--surface-1, #fff); }
+.model-authorization-choice:hover { border-color: var(--accent, #4f46e5); }
+.model-authorization-model-list { display: grid; gap: 6px; max-height: 280px; overflow: auto; border: 1px solid var(--border, #e5e7eb); border-radius: 12px; padding: 8px; }
+.model-authorization-model-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; }
+.model-authorization-model-row:hover { background: var(--surface-2, #f3f4f6); }
+.model-authorization-warning { border: 1px solid var(--warning, #f59e0b); background: var(--warning-soft, #fffbeb); color: var(--warning-text, #92400e); border-radius: 10px; padding: 10px 12px; }
+.model-authorization-progress { color: var(--text-muted, #6b7280); font-size: 13px; }
