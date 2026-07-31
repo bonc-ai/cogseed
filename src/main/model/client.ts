@@ -54,6 +54,30 @@ export interface ChatAttachmentMetadata {
   attachmentTypes: string[];
 }
 
+/** Optional host-owned lifecycle sink for shared execution records. The model
+ * layer emits only bounded callback data and never imports execution storage. */
+export interface ChatExecutionLifecycle {
+  queued(input: {
+    kind?: 'core-agent';
+    sessionId?: string;
+    conversationId?: string;
+    agentId?: string;
+  }): void | Promise<void>;
+  started(input: {
+    kind?: 'core-agent';
+    sessionId?: string;
+    conversationId?: string;
+    agentId?: string;
+  }): void | Promise<void>;
+  event(type: string, metadata?: Record<string, unknown>, at?: string): void | Promise<void>;
+  artifact(input: { cid: string; artifactId: string; title: string }): void | Promise<void>;
+  terminal(input: {
+    status: 'completed' | 'failed' | 'cancelled' | 'timed_out';
+    sessionId?: string;
+    output?: string;
+  }): void | Promise<unknown>;
+}
+
 export interface ChatOptions {
   userId: string;
   message: string;
@@ -178,6 +202,9 @@ export interface ChatOptions {
    *  and attaches a `artifacts[]` list to the assistant message so the
    *  renderer embeds each interactive web-app artifact in the bubble. */
   onArtifactCreated?: (a: { id: string; title: string }) => void;
+  /** Shared execution lifecycle callback. Feature/main callers own the sink;
+   * core-agent emits process/tool/output/artifact/terminal observations only. */
+  executionLifecycle?: ChatExecutionLifecycle;
   /** Fired at turn start with each skill id that entered the system-prompt
    *  index, split by source system (`A.custom` / `A.platform` / `B`).
    *  `features/group_chat` buffers per turn and emits `skill_advertised`

@@ -217,4 +217,52 @@ describe('streamChatWithModel — phase-aware idle watchdog (Phase 1)', () => {
     await drain({});
     expect(h.lastBuildRunnerParams?.maxToolLoops).toBeUndefined();
   }, 8000);
+  it('persists the shared core-agent lifecycle without importing execution storage into model code', async () => {
+    const records = await import('../../../../src/main/features/execution-records');
+    const artifacts = await import('../../../../src/main/features/chat_artifacts');
+    const artifact = artifacts.createArtifact('u1', 'conversation-1', 'agent-1', {
+      title: 'Core artifact',
+      files: [{ path: 'index.html', content: '<!doctype html><title>core</title>' }],
+    });
+    expect(artifact.ok).toBe(true);
+    if (!artifact.ok) throw new Error(artifact.error);
+
+    h.makeStream = () => (async function* () {
+      const artifactCallback = h.lastBuildRunnerParams?.onExecutionArtifactCreated as
+        | ((artifact: { id: string; title: string }) => void)
+        | undefined;
+      artifactCallback?.({ id: artifact.artifactId, title: artifact.title });
+      yield { type: 'tool_start', id: 'tool-1', name: 'bash', input: { command: 'pwd' } };
+      yield { type: 'tool_end', id: 'tool-1', name: 'bash', result: 'ok', isError: false };
+      yield { type: 'text_delta', text: 'core result' };
+    })();
+
+    const lifecycle = records.createLifecycleSink('u1', {
+      executionId: 'exec-core-1',
+      boundary: 'test-double',
+      permissionMode: 'workspace-write',
+    });
+    await drain({
+      cid: 'conversation-1',
+      agentId: 'agent-1',
+      onArtifactCreated: () => {},
+      executionLifecycle: lifecycle,
+    });
+
+    const record = await records.read('u1', 'exec-core-1');
+    expect(record).toMatchObject({
+      kind: 'core-agent',
+      sessionId: 'gconv-stalltest',
+      conversationId: 'conversation-1',
+      agentId: 'agent-1',
+      status: 'completed',
+    });
+    expect(record.resultRef).toMatch(/^output:/);
+    expect(record.artifactIds).toEqual([artifact.artifactId]);
+    expect(await records.readResult('u1', 'exec-core-1', record.resultRef!)).toBe('core result');
+    expect((await records.readEvents('u1', 'exec-core-1')).map((event) => event.type)).toEqual([
+      'queued', 'started', 'process', 'artifact', 'tool', 'tool', 'output', 'terminal',
+    ]);
+  });
+
 });

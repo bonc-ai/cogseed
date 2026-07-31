@@ -36,6 +36,7 @@ export type LocalEventType =
   | 'log'
   | 'raw-line'
   | 'permission-request'
+  | 'artifact'
   | 'idle'
   | 'done';
 
@@ -53,6 +54,7 @@ export interface LocalEvent {
    *    log:                { level: 'debug'|'info'|'warn'|'error', message, source? }
    *    raw-line:           { line }             // stdout line we couldn't parse as our protocol
    *    permission-request: { id, tool?, input?, autoDecided: 'allow'|'deny', reason }
+   *    artifact:           { cid, artifactId, title } // validated by execution sink before linkage
    *    idle:               { stalledMs }        // runner-emitted heartbeat on prolonged silence
    *    done:               { status: 'completed'|'failed'|'cancelled'|'timeout'|
    *                                  'missing_cli', error?, durationMs?, sessionId?, usage? }
