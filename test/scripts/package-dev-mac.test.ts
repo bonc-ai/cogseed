@@ -26,6 +26,7 @@ describe('isolated mac development packaging', () => {
     expect(config).toMatchObject({
       appId: 'com.mateagent.desktop.dev',
       productName: 'Mate Agent Dev',
+      electronDist: 'node_modules/electron/dist',
       directories: { output: 'dist-dev' },
       extraMetadata: { retained: true, orkasBuildChannel: 'packaged-dev' },
       mac: { category: 'public.app-category.productivity', target: [{ target: 'dir', arch: ['arm64'] }] },

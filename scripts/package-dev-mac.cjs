@@ -15,6 +15,7 @@ function createDevBuilderConfig(baseConfig = {}, identity = {}) {
   const config = clone(baseConfig) || {};
   config.appId = 'com.mateagent.desktop.dev';
   config.productName = 'Mate Agent Dev';
+  config.electronDist = 'node_modules/electron/dist';
   delete config.protocols;
   config.directories = { ...(config.directories || {}), output: 'dist-dev' };
   const files = Array.isArray(config.files) ? [...config.files] : [];
