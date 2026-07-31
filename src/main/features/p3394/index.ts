@@ -12,3 +12,4 @@ export * from './kstar-recovery';
 export * from './session-source';
 export * from './context-reuse-receipt';
 export * from './behavior-contrast';
+export * from './skill-validation-run';

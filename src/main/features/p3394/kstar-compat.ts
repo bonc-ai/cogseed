@@ -57,6 +57,8 @@ export interface CompatPatchCandidate {
   engine: { attribution_id?: string; proposal_id?: string; governance_decision_id?: string; route_action?: string; raw?: Record<string, unknown> };
   status: 'proposed' | 'needs_review' | 'approved' | 'rejected' | 'applied' | 'failed';
   review?: { decision: 'approve' | 'reject'; notes?: string; reviewed_at: string };
+  validation_id?: string;
+  validation_status?: 'pass' | 'risk' | 'blocked' | 'degraded';
   applied?: { target_path?: string; applied_at: string };
   created_at: string;
   updated_at: string;

@@ -77,7 +77,7 @@ import {
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { shell } from 'electron';
-import { DEFAULT_USER_WORKSPACE, WS_ROOT, projectFilesDir } from '../paths';
+import { DEFAULT_USER_WORKSPACE, WS_ROOT, projectFilesDir, userMarketplaceSkillDir } from '../paths';
 import {
   chatAttachmentDirForConversation,
   chatAttachmentRelPath,
@@ -1476,6 +1476,20 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'companionRepro.readEvidence': async ({ cid, limit }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
     return { ok: true, events: await companionRepro.readEvidence(ctx.userId, cid, Number(limit) || 50) };
+  },
+
+  'p3394.validation.scan': async ({ skillId, target }, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skill id');
+    if (target !== 'installed-skill') throw new Error('unsupported validation target');
+    const skillDir = userMarketplaceSkillDir(ctx.userId, skillId);
+    return { ok: true, validation: await p3394.runSkillValidation(ctx.userId, {
+      skillId, target, skillDir, allowedRoots: [skillDir], boundary: 'real',
+    }) };
+  },
+
+  'p3394.validation.read': async ({ validationId }, ctx) => {
+    if (!safeId(validationId)) throw new Error('invalid validation id');
+    return { ok: true, validation: await p3394.readSkillValidation(ctx.userId, validationId) };
   },
 
   'p3394.execution.list': async (_args, ctx) => {

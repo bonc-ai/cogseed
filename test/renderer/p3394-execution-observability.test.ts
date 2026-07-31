@@ -27,4 +27,9 @@ describe('P3394 execution observability renderer', () => {
     expect(html).not.toContain('hash-secret-baseline');
     expect(html).not.toContain('hash-secret-treatment');
   });
+  it('renders normalized validator status and counts', () => {
+    const html = P.renderValidationRun({ status: 'blocked', validatorVersion: '0.3.0', scannedFiles: 3, violations: [{ rule: 'x' }], boundary: 'real' });
+    expect(html).toContain('阻断'); expect(html).toContain('0.3.0'); expect(html).toContain('3'); expect(html).toContain('真实执行');
+  });
+
 });

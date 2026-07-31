@@ -179,7 +179,19 @@
       + '</section>';
   }
 
-  const api = { escapeHtml, renderDashboard, renderSkillsList, renderSkillSelector, renderKstarTimeline, renderOntologyList, renderOntologyBindings, renderSkillVersions, renderCreateForm, renderInterviewQuestions, renderRecommendations, renderEvalRecord, renderEvalStandard, renderPatchList, renderExecutionObservability, boundaryLabel };
+  function renderValidationRun(run) {
+    if (!run) return '<div class="evo-empty">暂无验证结果</div>';
+    const labels = { pass: '通过', risk: '风险', blocked: '阻断', degraded: '降级' };
+    return '<section class="evo-validation-run">'
+      + `<div class="evo-validation-status">${escapeHtml(labels[run.status] || run.status)}</div>`
+      + `<div>Validator: ${escapeHtml(run.validatorVersion || '')}</div>`
+      + `<div>Scanned files: ${escapeHtml(run.scannedFiles || 0)}</div>`
+      + `<div>Violations: ${escapeHtml((run.violations || []).length)}</div>`
+      + `<div>${escapeHtml(boundaryLabel(run.boundary))}</div>`
+      + '</section>';
+  }
+
+  const api = { escapeHtml, renderDashboard, renderSkillsList, renderSkillSelector, renderKstarTimeline, renderOntologyList, renderOntologyBindings, renderSkillVersions, renderCreateForm, renderInterviewQuestions, renderRecommendations, renderEvalRecord, renderEvalStandard, renderPatchList, renderExecutionObservability, renderValidationRun, boundaryLabel };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;   // 测试桥
   else root.EvolutionPages = api;                                             // 浏览器全局
 })(typeof window !== 'undefined' ? window : globalThis);

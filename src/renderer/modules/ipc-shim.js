@@ -58,6 +58,8 @@ const _IPC_ROUTES = [
   ['POST',   /^\/api\/evolution\/ontology\/([^/]+)\/bind$/, 'evolution.ontology.bind', ['skillId']],
   ['POST',   /^\/api\/evolution\/ontology\/([^/]+)\/unbind$/, 'evolution.ontology.unbind', ['skillId']],
   ['POST',   '/api/evolution/patches/apply',  'evolution.patches.apply'],
+  ['POST',   '/api/p3394/validations/scan', 'p3394.validation.scan'],
+  ['GET',    /^\/api\/p3394\/validations\/([^/]+)$/, 'p3394.validation.read', ['validationId']],
   ['GET',    '/api/p3394/executions', 'p3394.execution.list'],
   ['GET',    /^\/api\/p3394\/executions\/([^/]+)$/, 'p3394.execution.read', ['executionId']],
   ['GET',    /^\/api\/p3394\/executions\/([^/]+)\/context-reuse-receipt$/, 'p3394.contextReuseReceipt.read', ['executionId']],
