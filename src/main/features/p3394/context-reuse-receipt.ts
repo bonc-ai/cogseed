@@ -12,6 +12,10 @@ const MAX_REF_LENGTH = 512;
 const MAX_REFS = 100;
 const MAX_SCOPES = 32;
 const PROMPT_VALUE_RE = /\b((?:system|user)?_?prompt)(\s*[:=]\s*)([^,;&\n]+)/gi;
+const SENSITIVE_REFERENCE_FIELD_RE = new RegExp(
+  String.raw`\b((?:api_?key|access_?token|refresh_?token|id_?token|client_?secret|private_?key|password|passwd|pwd|secret|token|authorization|cookie|set-cookie))(\s*[:=]\s*)([^,;&\n]+)`,
+  'gi',
+);
 const PERMISSION_TAG_RE = /^[A-Za-z0-9_.:/-]+$/;
 
 export type ContextReuseReceiptStatus = 'prepared' | 'completed' | 'rejected' | 'degraded';
@@ -118,6 +122,11 @@ function redactReference(value: unknown): string {
   const trimmed = value.trim();
   if (!trimmed || trimmed.length > MAX_REF_LENGTH) throw new Error('invalid context reference');
   return sanitizeLogTextForUpload(trimmed)
+    .replace(SENSITIVE_REFERENCE_FIELD_RE, (
+      _match,
+      field: string,
+      separator: string,
+    ) => `${field}${separator}[REDACTED]`)
     .replace(PROMPT_VALUE_RE, (_match, field: string, separator: string) => (
       `${field}${separator}[REDACTED]`
     ));

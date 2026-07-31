@@ -92,6 +92,46 @@ describe('P3394 context reuse receipts', () => {
     expect(serialized).toContain('[REDACTED]');
   });
 
+  it('redacts colon-form token, key, and bearer values without masking normal words', async () => {
+    const { prepareReceipt } = await import(
+      '../../../../src/main/features/p3394/context-reuse-receipt'
+    );
+    const input = baseInput();
+    input.reusedRefs = [
+      'token: colon-token-secret',
+      'AcCeSs_ToKeN: mixed-access-secret',
+      'api_key: colon-api-key-secret',
+      'Authorization: Bearer bearer-secret-value',
+      'artifact:token-usage-summary',
+    ];
+    input.omittedRefs = [
+      'ToKeN: mixed-token-secret',
+      'ACCESS_TOKEN: upper-access-secret',
+      'API_KEY: upper-api-key-secret',
+      'aUtHoRiZaTiOn: bEaReR mixed-bearer-secret',
+      'note: authorization design overview',
+    ];
+
+    const receipt = await prepareReceipt(userId, input, expectedTarget);
+    const serialized = JSON.stringify(receipt);
+
+    for (const secret of [
+      'colon-token-secret',
+      'mixed-access-secret',
+      'colon-api-key-secret',
+      'bearer-secret-value',
+      'mixed-token-secret',
+      'upper-access-secret',
+      'upper-api-key-secret',
+      'mixed-bearer-secret',
+    ]) {
+      expect(serialized).not.toContain(secret);
+    }
+    expect(receipt.reusedRefs).toContain('artifact:token-usage-summary');
+    expect(receipt.omittedRefs).toContain('note: authorization design overview');
+    expect(serialized.match(/\[REDACTED\]/g)?.length).toBeGreaterThanOrEqual(8);
+  });
+
   it('preserves bounded permission scope identifiers with namespace separators', async () => {
     const { prepareReceipt } = await import(
       '../../../../src/main/features/p3394/context-reuse-receipt'
