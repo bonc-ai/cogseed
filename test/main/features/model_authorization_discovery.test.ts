@@ -65,6 +65,22 @@ describe('model authorization discovery', () => {
     }));
   });
 
+
+  it('discovers OpenAI-compatible models from root base URLs by adding v1', async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      calls.push(String(url));
+      return jsonResponse(200, { data: [{ id: 'deepseek-chat' }] });
+    });
+    const discovery = await import('../../../src/main/features/model_authorization_discovery');
+    const result = await discovery.discoverAuthorizationModels(UID, {
+      kind: 'custom_api_key', protocol: 'openai', baseUrl: 'https://api.deepseek.com', apiKey: 'secret-openai',
+    }, { fetchImpl });
+
+    expect(result).toMatchObject({ ok: true, models: [{ id: 'deepseek-chat' }] });
+    expect(calls[0]).toBe('https://api.deepseek.com/v1/models');
+  });
+
   it('uses Anthropic and Gemini model endpoints and headers', async () => {
     const calls: Array<[string, RequestInit]> = [];
     const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {

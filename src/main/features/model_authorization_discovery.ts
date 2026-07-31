@@ -76,7 +76,7 @@ function normalizeBaseUrl(raw: unknown): string {
 
 function appendModelsPath(baseUrl: string, protocol: Protocol): string {
   const base = normalizeBaseUrl(baseUrl);
-  if (protocol === 'openai') return `${base}/models`;
+  if (protocol === 'openai') return /\/v1(?:\/)?$/i.test(base) ? `${base}/models` : `${base}/v1/models`;
   if (protocol === 'anthropic') return /\/v1$/i.test(base) ? `${base}/models` : `${base}/v1/models`;
   return /\/v\d+(?:beta\d*)?$/i.test(base) ? `${base}/models` : `${base}/v1beta/models`;
 }
