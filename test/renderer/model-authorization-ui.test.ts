@@ -167,40 +167,24 @@ function loadInteractiveHarness() {
 }
 
 describe('model authorization interactive wizard', () => {
-  it('opens at auth type selection, expands advanced management, and ignores IME enter handlers', async () => {
+  it('opens at API key source selection without an OAuth account route, expands advanced management, and ignores IME enter handlers', async () => {
     const { context, registry } = loadInteractiveHarness();
     await context.window.initModelAuthorizationSettings();
     await registry.get('settings-model-authorization-add-btn')!.click();
     expect(registry.get('model-authorization-modal')!.classList.contains('open')).toBe(true);
-    expect(registry.get('model-authorization-body')!.innerHTML).toContain('choose-oauth');
+    expect(registry.get('model-authorization-body')!.innerHTML).not.toContain('choose-oauth');
+    expect(registry.get('model-authorization-body')!.innerHTML).toContain('source-manual');
+    expect(registry.get('model-authorization-body')!.innerHTML).toContain('source-ccswitch');
     await registry.get('settings-model-authorization-advanced-btn')!.click();
     expect(registry.get('settings-model-authorization-advanced')!.hidden).toBe(false);
     await registry.get('model-authorization-body')!.dispatch('keydown', { key: 'Enter', isComposing: true, keyCode: 229, preventDefault: vi.fn() });
-    expect(registry.get('model-authorization-body')!.innerHTML).toContain('choose-oauth');
-  });
-
-  it('OAuth uses OAuth-capable providers and proceeds to discovery instead of creating an entry', async () => {
-    const { context, registry, invoke, discoverResolvers } = loadInteractiveHarness();
-    await context.window.initModelAuthorizationSettings();
-    await registry.get('settings-model-authorization-add-btn')!.click();
-    await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'choose-oauth' } } });
-    expect(registry.get('model-authorization-body')!.innerHTML).toContain('openai-codex');
-    expect(registry.get('model-authorization-body')!.innerHTML).not.toContain('openai-compatible');
-    const oauthRun = registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'choose-provider', providerId: 'openai-codex', providerKind: 'builtin' } } });
-    await flushAsync();
-    expect(invoke).toHaveBeenCalledWith('auth.startOAuth', { provider: 'openai-codex' });
-    expect(invoke).not.toHaveBeenCalledWith('auth.addEntry', expect.anything());
-    expect(invoke).toHaveBeenCalledWith('modelAuthorizations.discover', expect.objectContaining({ kind: 'oauth', profileId: 'openai-codex:profile' }));
-    discoverResolvers.shift()!({ ok: true, token: 'discovery-1', models: [{ id: 'gpt-5.6-sol' }] });
-    await oauthRun;
-    expect(registry.get('model-authorization-body')!.innerHTML).toContain('gpt-5.6-sol');
+    expect(registry.get('model-authorization-body')!.innerHTML).toContain('source-manual');
   });
 
   it('validates manual API key fields and discards late discovery after source changes', async () => {
     const { context, registry, invoke, discoverResolvers } = loadInteractiveHarness();
     await context.window.initModelAuthorizationSettings();
     await registry.get('settings-model-authorization-add-btn')!.click();
-    await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'choose-api-key' } } });
     await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'source-manual' } } });
     await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'choose-provider', providerId: 'openai-compatible', providerKind: 'builtin' } } });
     await registry.get('model-authorization-actions')!.dispatch('click', { target: { dataset: { modelAuthAction: 'continue-credentials' } } });
@@ -221,7 +205,6 @@ describe('model authorization interactive wizard', () => {
     const { context, registry, invoke, discoverResolvers } = loadInteractiveHarness();
     await context.window.initModelAuthorizationSettings();
     await registry.get('settings-model-authorization-add-btn')!.click();
-    await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'choose-api-key' } } });
     await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'source-ccswitch' } } });
     expect(registry.get('model-authorization-body')!.innerHTML).toContain('sk-***');
     expect(registry.get('model-authorization-body')!.innerHTML).not.toContain('sk-raw-secret');
@@ -256,7 +239,6 @@ describe('model authorization interactive wizard', () => {
     });
     await context.window.initModelAuthorizationSettings();
     await registry.get('settings-model-authorization-add-btn')!.click();
-    await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'choose-api-key' } } });
     await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'source-manual' } } });
     await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'choose-provider', providerId: 'anthropic', providerKind: 'builtin' } } });
     registry.get('model-authorization-api-key')!.value = 'sk-ant-secret';

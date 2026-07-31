@@ -419,7 +419,7 @@
   }
 
   function startDraft() {
-    controller.draft = createDraft();
+    controller.draft = transition(createDraft(), { type: 'choose_auth_type', authType: 'api_key' });
     controller.ccswitchRows = [];
     controller.busy = false;
     setStatus('', '');
