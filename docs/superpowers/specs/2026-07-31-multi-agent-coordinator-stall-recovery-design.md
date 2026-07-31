@@ -1,7 +1,7 @@
 # 多 Agent 协调器与分阶段停滞恢复设计
 
 **日期：** 2026-07-31
-**状态：** 待评审
+**状态：** 已批准
 **范围：** Group Chat 中由 Commander 发起的 `dispatch_to`、`hand_off_to`、具名/匿名 `run_worker`，以及这些调度背后的 in-process Agent 和本地 CLI Agent
 
 ## 1. 目标
