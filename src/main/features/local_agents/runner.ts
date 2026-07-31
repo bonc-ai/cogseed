@@ -31,6 +31,8 @@ import * as persist from './persist.js';
 import { sessionToolResultsDir } from '../../paths.js';
 import { maybeSpillToolResult, toolResultRefForPath } from '../../util/tool-result-cap.js';
 import type { ExecutionKind, ExecutionLifecycleSink } from '../execution-records.js';
+import type { PreparedExecutionContext } from '../p3394/execution-context.js';
+import { isPathAllowed } from '../../util/path-sandbox.js';
 
 const log = createLogger('local-agents:runner');
 
@@ -586,6 +588,8 @@ export interface RunCliAgentOpts {
   bridgeOrchestration?: import('./bridge').BridgeOrchestrationTools;
   /** Optional shared execution recorder. Absent keeps legacy behavior. */
   executionLifecycle?: ExecutionLifecycleSink;
+  /** Prepared receipt-bound prompt/root/permission context. */
+  preparedContext?: PreparedExecutionContext;
   /** Forwarded each backend event verbatim, after persistence. */
   onEvent: (e: LocalEvent) => void;
 }
@@ -603,6 +607,14 @@ export interface RunCliAgentResult {
 }
 
 export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
+  if (opts.preparedContext) {
+    const roots = opts.preparedContext.permissionMode === 'read-only' ? opts.preparedContext.readOnlyRoots : [...opts.preparedContext.writableRoots, ...opts.preparedContext.readOnlyRoots];
+    if (opts.prompt !== opts.preparedContext.prompt || !isPathAllowed(opts.cwd, roots)) {
+      const error = 'prepared execution context denied prompt or working directory';
+      opts.onEvent({ type: 'done', status: 'failed', error, blocked: true });
+      return { runId: '', status: 'failed', error };
+    }
+  }
   const backend = BACKENDS[opts.cli];
   let runLogContext = localAgentRunContextForLog({
     uid: opts.uid,
@@ -860,6 +872,7 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
       timeoutMs,
       idleKillMs,
       ...(providerEnv ? { providerEnv } : {}),
+      ...(opts.preparedContext ? { executionContext: { sessionId: opts.preparedContext.sessionId, ...(opts.preparedContext.contextId ? { contextId: opts.preparedContext.contextId } : {}), readOnlyRoots: [...opts.preparedContext.readOnlyRoots], writableRoots: [...opts.preparedContext.writableRoots], permissionMode: opts.preparedContext.permissionMode, receiptId: opts.preparedContext.receiptId } } : {}),
       // Activity clock for the backend's idle-kill watchdog. Reads the
       // same `lastEventAt` the idle heartbeat uses (self-emitted idle
       // pulses excluded), so heartbeat rows always precede a kill.

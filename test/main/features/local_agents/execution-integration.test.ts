@@ -157,4 +157,13 @@ describe('local agent shared execution lifecycle', () => {
       status: executionStatus,
     });
   });
+  it('blocks a prepared context whose prompt or cwd is outside the approved contract before backend dispatch', async () => {
+    mockDetect.mockResolvedValue({ type: 'codex', available: true, path: '/fake/codex', version: '1.2.3' });
+    let called = false; codexImpl = async () => { called = true; };
+    const runner = await import('../../../../src/main/features/local_agents/runner');
+    const result = await runner.run({ uid: UID, cid: 'conversation-1', agentId: 'agent-1', cli: 'codex', prompt: 'different prompt', cwd: root, signal: new AbortController().signal,
+      preparedContext: { executionId: 'exec-prepared-1', sessionId: 'gmember-target', prompt: 'approved prompt', readOnlyRoots: [], writableRoots: [path.join(root, 'approved')], permissionMode: 'workspace-write', receiptId: 'receipt-1' }, onEvent: () => {} });
+    expect(result.status).toBe('failed'); expect(result.error).toMatch(/prepared execution context denied/i); expect(called).toBe(false);
+  });
+
 });
