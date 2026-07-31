@@ -489,9 +489,23 @@
 
   async function selectCcswitch(externalId) {
     const res = await invoke('modelAuthorizations.prepareCcSwitch', { externalId });
-    if (!res || !res.ok) { setStatus((res && res.error) || tr('settings.model_authorization.error_required'), 'error'); return; }
-    controller.draft = transition(controller.draft, { type: 'ccswitch_ready', draftId: res.draftId, externalId: res.externalId || externalId, maskedKey: res.maskedKey });
-    await discoverModels({ kind: 'ccswitch_draft', draftId: res.draftId, declaredModels: res.declaredModels || [] });
+    if (!res || !res.ok) {
+      setStatus((res && (res.error || res.errorCode)) || tr('settings.model_authorization.error_required'), 'error');
+      return;
+    }
+    const prepared = res.draft && typeof res.draft === 'object' ? res.draft : res;
+    const draftId = String(prepared.draftId || '').trim();
+    if (!draftId) {
+      setStatus(tr('settings.model_authorization.error_discovery_failed'), 'error');
+      return;
+    }
+    controller.draft = transition(controller.draft, {
+      type: 'ccswitch_ready',
+      draftId,
+      externalId: prepared.externalId || externalId,
+      maskedKey: prepared.maskedKey || '',
+    });
+    await discoverModels({ kind: 'ccswitch_draft', draftId, declaredModels: prepared.declaredModels || [] });
   }
 
   async function continueCredentials() {

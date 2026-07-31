@@ -152,7 +152,7 @@ function loadInteractiveHarness() {
       { externalId: 'cc-needs-key', name: 'Needs key', reason: 'missing_api_key' },
       { externalId: 'hermes:1', name: 'DeepSeek', reason: 'unsupported_protocol' },
     ] });
-    if (channel === 'modelAuthorizations.prepareCcSwitch') return Promise.resolve({ ok: true, draftId: 'draft-cc-1', externalId: payload.externalId, declaredModels: ['claude-3-5-sonnet'], maskedKey: 'sk-***' });
+    if (channel === 'modelAuthorizations.prepareCcSwitch') return Promise.resolve({ ok: true, draft: { draftId: 'draft-cc-1', externalId: payload.externalId, declaredModels: ['claude-3-5-sonnet'], maskedKey: 'sk-***' } });
     if (channel === 'modelAuthorizations.discover') return new Promise((resolve) => discoverResolvers.push(resolve));
     if (channel === 'modelAuthorizations.testDraft') return Promise.resolve({ ok: true });
     if (channel === 'modelAuthorizations.complete') return Promise.resolve({ ok: true, authorizationId: 'auth-1' });
