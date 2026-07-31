@@ -438,7 +438,7 @@
     if (source === 'ccswitch') {
       setStatus(tr('settings.model_authorization.ccswitch_preview_loading'), '');
       const res = await invoke('customProviders.ccswitch.preview');
-      controller.ccswitchRows = (res && res.ok && Array.isArray(res.rows)) ? res.rows : [];
+      controller.ccswitchRows = (res && res.ok && Array.isArray(res.items)) ? res.items : ((res && res.ok && Array.isArray(res.rows)) ? res.rows : []);
       setStatus('', '');
     } else {
       await ensureProviders();

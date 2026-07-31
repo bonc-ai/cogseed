@@ -136,7 +136,7 @@ function loadInteractiveHarness() {
       { id: 'anthropic', label: 'Anthropic', supportsOAuth: false, supportsApiKey: true },
     ] });
     if (channel === 'auth.startOAuth') return Promise.resolve({ ok: true, kind: 'done', profileId: `${payload.provider}:profile` });
-    if (channel === 'customProviders.ccswitch.preview') return Promise.resolve({ ok: true, rows: [
+    if (channel === 'customProviders.ccswitch.preview') return Promise.resolve({ ok: true, items: [
       { externalId: 'cc-1', name: 'Claude Desktop', protocol: 'anthropic', maskedKey: 'sk-***', declaredModels: ['claude-3-5-sonnet'] },
       { externalId: 'cc-raw', name: 'Bad', protocol: 'openai', apiKey: 'sk-raw-secret', maskedKey: 'sk-***' },
     ] });
