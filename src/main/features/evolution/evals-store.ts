@@ -6,6 +6,7 @@ import { buildLlmComplete } from './llm-bridge';
 export interface EvalRecordCase { id: number; input: string; assertions: string[]; }
 export interface EvalRecordRun {
   runId: string; at: string; model?: string; degraded: boolean;
+  baselineExecutionId?: string; treatmentExecutionId?: string; contrastId?: string; receiptId?: string;
   results: Array<{ caseId: number; assertionId: number; withPass: boolean; withoutPass: boolean; verdict: 'pass' | 'fail'; evidence: string }>;
   passRate: number; regression: boolean;
 }
@@ -108,12 +109,14 @@ export async function appendEvalRun(uid: string, skillId: string, run: EvalRecor
 
 interface RunEvalInput {
   cases: EvalRecordCase[];
-  outputs: Record<number, string>;   // caseId → with_skill_output
+  outputs: Record<number, string>;   // caseId → treatment output
+  baselineOutputs?: Record<number, string>;
+  baselineExecutionId?: string; treatmentExecutionId?: string; contrastId?: string; receiptId?: string;
   agentId?: string;
 }
 export type EvalStreamEvent =
   | { type: 'verdict'; caseId: number; assertionId: number; passed: boolean; evidence: string }
-  | { type: 'done'; runId: string; passRate: number; degraded: boolean };
+  | { type: 'done'; runId: string; passRate: number; degraded: boolean; regression: boolean };
 
 /**
  * 逐断言流式评估：喂输出进引擎 SkillCreator，走 gradeEvalWithLlmAsync（LLM 真裁判，
@@ -127,13 +130,20 @@ export async function* runEvalStream(
     addEvalResult?: (skillId: string, r: unknown) => void;
     gradeEvalWithLlmAsync: (skillId: string, assertions: string[], llm?: unknown) => Promise<Map<number, { expectations: Array<{ text: string; passed: boolean; evidence: string }>; summary: { pass_rate: number } }>>;
   };
-  const sc = new Ctor();
+  const treatmentSc = new Ctor();
+  const baselineSc = new Ctor();
   const llm = buildLlmComplete({ userId: uid, agentId: input.agentId ?? '' });
 
   const allAssertions = [...new Set(input.cases.flatMap(c => c.assertions))];
-  input.cases.forEach((c) => sc.addEvalResult?.(skillId, { eval_id: c.id, with_skill_output: input.outputs[c.id] ?? '' }));
+  input.cases.forEach((c) => {
+    treatmentSc.addEvalResult?.(skillId, { eval_id: c.id, with_skill_output: input.outputs[c.id] ?? '' });
+    baselineSc.addEvalResult?.(skillId, { eval_id: c.id, with_skill_output: input.baselineOutputs?.[c.id] ?? '' });
+  });
 
-  const grades = await sc.gradeEvalWithLlmAsync(skillId, allAssertions, llm);
+  const [grades, baselineGrades] = await Promise.all([
+    treatmentSc.gradeEvalWithLlmAsync(skillId, allAssertions, llm),
+    baselineSc.gradeEvalWithLlmAsync(skillId, allAssertions, llm),
+  ]);
 
   const runResults: EvalRecordRun['results'] = [];
   let degraded = false;
@@ -142,14 +152,22 @@ export async function* runEvalStream(
     if (!g) continue;
     for (let idx = 0; idx < g.expectations.length; idx++) {
       const e = g.expectations[idx];
-      if (e.evidence.includes('[规则降级]')) degraded = true;
-      runResults.push({ caseId: c.id, assertionId: idx, withPass: e.passed, withoutPass: false, verdict: e.passed ? 'pass' : 'fail', evidence: e.evidence });
+      const baseline = baselineGrades.get(c.id)?.expectations[idx];
+      if (e.evidence.includes('[规则降级]') || baseline?.evidence.includes('[规则降级]')) degraded = true;
+      runResults.push({ caseId: c.id, assertionId: idx, withPass: e.passed, withoutPass: !!baseline?.passed, verdict: e.passed ? 'pass' : 'fail', evidence: e.evidence });
       yield { type: 'verdict', caseId: c.id, assertionId: idx, passed: e.passed, evidence: e.evidence };
     }
   }
   const passCount = runResults.filter(r => r.verdict === 'pass').length;
   const passRate = runResults.length > 0 ? passCount / runResults.length : 0;
+  const regression = runResults.some((result) => result.withoutPass && !result.withPass);
   const runId = `evalrun-${Date.now().toString(36)}`;
-  await appendEvalRun(uid, skillId, { runId, at: new Date().toISOString(), degraded, results: runResults, passRate, regression: false });
-  yield { type: 'done', runId, passRate, degraded };
+  await appendEvalRun(uid, skillId, {
+    runId, at: new Date().toISOString(), degraded, results: runResults, passRate, regression,
+    ...(input.baselineExecutionId ? { baselineExecutionId: input.baselineExecutionId } : {}),
+    ...(input.treatmentExecutionId ? { treatmentExecutionId: input.treatmentExecutionId } : {}),
+    ...(input.contrastId ? { contrastId: input.contrastId } : {}),
+    ...(input.receiptId ? { receiptId: input.receiptId } : {}),
+  });
+  yield { type: 'done', runId, passRate, degraded, regression };
 }

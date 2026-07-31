@@ -25,6 +25,7 @@ import * as projectLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
 import * as companionRepro from '../features/companion_repro';
 import * as p3394 from '../features/p3394';
+import * as executionRecords from '../features/execution-records';
 import * as evolution from '../features/evolution';
 import * as personalOntologyCandidates from '../features/personal_ontology_candidates';
 import type { GroupEvent } from '../features/group_chat/bus';
@@ -1475,6 +1476,42 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'companionRepro.readEvidence': async ({ cid, limit }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
     return { ok: true, events: await companionRepro.readEvidence(ctx.userId, cid, Number(limit) || 50) };
+  },
+
+  'p3394.execution.list': async (_args, ctx) => {
+    return { ok: true, executions: await executionRecords.list(ctx.userId) };
+  },
+
+  'p3394.execution.read': async ({ executionId }, ctx) => {
+    if (!safeId(executionId)) throw new Error('invalid execution id');
+    return { ok: true, execution: await executionRecords.read(ctx.userId, executionId) };
+  },
+
+  'p3394.contextReuseReceipt.read': async ({ executionId }, ctx) => {
+    if (!safeId(executionId)) throw new Error('invalid execution id');
+    return { ok: true, receipt: await p3394.readReceipt(ctx.userId, executionId) };
+  },
+
+  'p3394.behaviorContrast.start': async ({ contrastId, receiptExecutionId, task, attachmentIds, conversationId, agentId, executionKind }, ctx) => {
+    if (contrastId !== undefined && !safeId(contrastId)) throw new Error('invalid contrast id');
+    if (!safeId(receiptExecutionId) || !safeId(conversationId)) throw new Error('invalid behavior contrast scope');
+    if (agentId !== undefined && !safeId(agentId)) throw new Error('invalid agent id');
+    if (!Array.isArray(attachmentIds)) throw new Error('invalid attachment ids');
+    const contrast = await p3394.runConfiguredBehaviorContrast(ctx.userId, {
+      ...(contrastId ? { contrastId } : {}),
+      receiptExecutionId,
+      task: boundedText(task, 'task', 100_000),
+      attachmentIds,
+      conversationId,
+      ...(agentId ? { agentId } : {}),
+      executionKind,
+    });
+    return { ok: true, contrast };
+  },
+
+  'p3394.behaviorContrast.read': async ({ contrastId }, ctx) => {
+    if (!safeId(contrastId)) throw new Error('invalid contrast id');
+    return { ok: true, contrast: await p3394.readBehaviorContrast(ctx.userId, contrastId) };
   },
 
   'p3394.listWakeRequests': async ({ cid }, ctx) => {

@@ -157,7 +157,29 @@
     ).join('') + '</ul>';
   }
 
-  const api = { escapeHtml, renderDashboard, renderSkillsList, renderSkillSelector, renderKstarTimeline, renderOntologyList, renderOntologyBindings, renderSkillVersions, renderCreateForm, renderInterviewQuestions, renderRecommendations, renderEvalRecord, renderEvalStandard, renderPatchList };
+  function boundaryLabel(boundary) {
+    if (boundary === 'real') return '真实执行';
+    if (boundary === 'degraded') return '降级执行';
+    if (boundary === 'test-double') return '测试替身';
+    return '未知边界';
+  }
+
+  function renderExecutionObservability(data) {
+    const contrast = data && data.contrast || {};
+    const receipt = data && data.receipt || {};
+    const refs = (label, values) => `<div class="evo-exec-refs"><b>${escapeHtml(label)}</b>: ${escapeHtml((values || []).join(', ') || '无')}</div>`;
+    const side = (label, value) => `<div class="evo-exec-side"><h4>${escapeHtml(label)}</h4><div>状态: ${escapeHtml(value && value.status || 'unknown')}</div><div>Artifacts: ${escapeHtml((value && value.artifactIds || []).length)}</div></div>`;
+    return '<section class="evo-execution-observability">'
+      + `<div class="evo-boundary-label">${escapeHtml(boundaryLabel(contrast.boundary || receipt.boundary))}</div>`
+      + '<div class="evo-exec-compare">' + side('Baseline', contrast.baseline) + side('Treatment', contrast.treatment) + '</div>'
+      + `<div>Receipt: ${escapeHtml(receipt.status || 'unknown')}</div>`
+      + `<div>Permission: ${escapeHtml(receipt.permissionMode || '')}</div>`
+      + refs('Reused refs', receipt.reusedRefs)
+      + refs('Omitted refs', receipt.omittedRefs)
+      + '</section>';
+  }
+
+  const api = { escapeHtml, renderDashboard, renderSkillsList, renderSkillSelector, renderKstarTimeline, renderOntologyList, renderOntologyBindings, renderSkillVersions, renderCreateForm, renderInterviewQuestions, renderRecommendations, renderEvalRecord, renderEvalStandard, renderPatchList, renderExecutionObservability, boundaryLabel };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;   // 测试桥
   else root.EvolutionPages = api;                                             // 浏览器全局
 })(typeof window !== 'undefined' ? window : globalThis);
