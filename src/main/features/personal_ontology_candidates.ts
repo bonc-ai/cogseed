@@ -22,9 +22,31 @@ import * as path from 'node:path';
 import { userLocalRoot } from '../paths';
 import { writeTextAtomicSync, safeId, nowIso, readJsonSync } from '../storage';
 import { addEntry as addMemoryEntry } from './memory';
+import { appendToGroup } from './personal_ontology_groups';
 import { createLogger } from '../logger';
 
 const log = createLogger('personal-ontology-candidates');
+
+/** "选择去向"控件：确认一条候选时可以同时/分别写入全局记忆和任意数量的记忆
+ *  分组，两者不互斥。`toGlobalMemory` 缺省为 true（向后兼容旧的单一去向行为）；
+ *  `toGroupIds` 缺省为空数组（不写任何分组）。 */
+export interface ConfirmDestinations {
+  toGlobalMemory?: boolean;
+  toGroupIds?: string[];
+}
+
+/** Per-destination outcome, so the UI can tell "全局记忆写入失败" apart from
+ *  "某个分组写入失败" and show them separately. */
+export interface ConfirmCandidateResult {
+  /** True once the candidate was actually placed somewhere (global memory
+   *  and/or at least one group) and removed from the pending pool. False
+   *  means every requested destination failed — the candidate stays in the
+   *  pool, exactly like the pre-existing single-target behavior. */
+  ok: boolean;
+  error?: string;
+  globalMemory?: { ok: boolean; error?: string };
+  groups?: Array<{ groupId: string; ok: boolean; error?: string }>;
+}
 
 /** 候选类型。`preference`（偏好）是一等公民，不再藏在 relation 里。 */
 export type CandidateKind = 'preference' | 'instance' | 'property' | 'relation' | 'rule';
@@ -292,11 +314,62 @@ export async function listCandidates(uid: string): Promise<CandidatesData> {
 }
 
 /**
- * 确认一个候选：从候选池移除，真正写入 `features/memory.ts` 管理的
- * USER.md（memory_scope=user）或 MEMORY.md（memory_scope=shared）。
- * 写入失败（比如触发了敏感内容扫描）时候选保留在池里，不会静默丢失。
+ * 把一条候选实际写入所有请求的去向（全局记忆 + 0..N 个记忆分组）。不改候选池，
+ * 纯粹的“写”这一步 —— 池的增删由调用方（confirmCandidate/confirmCandidates）
+ * 负责，方便批量场景复用同一份落地逻辑。
+ *
+ * 容错风格跟现有批量确认一致：一个去向失败不影响其余去向。只要至少一个去向
+ * 写入成功，就认为这条候选“已处理”，应该从池里移除；如果全部去向都失败
+ * （或没有任何去向被请求），候选保留在池里，不会静默丢失。
  */
-export async function confirmCandidate(uid: string, candidateId: string): Promise<{ ok: boolean; error?: string }> {
+async function writeCandidateToDestinations(
+  uid: string,
+  candidate: CandidateUpdate,
+  dest: ConfirmDestinations,
+): Promise<ConfirmCandidateResult> {
+  const text = (candidate.memory_text || candidate.summary || '').trim();
+  if (!text) return { ok: false, error: 'candidate has no memory text' };
+
+  const wantsGlobal = dest.toGlobalMemory !== false; // default true — back-compat
+  const groupIds = Array.isArray(dest.toGroupIds) ? dest.toGroupIds.filter(Boolean) : [];
+
+  const result: ConfirmCandidateResult = { ok: false };
+  let anySucceeded = false;
+
+  if (wantsGlobal) {
+    const target = candidate.memory_scope === 'shared' ? 'memory' : 'user';
+    const res = addMemoryEntry(uid, target, text);
+    result.globalMemory = { ok: res.ok, ...(res.error ? { error: res.error } : {}) };
+    if (res.ok) anySucceeded = true;
+    else log.warn('candidate global-memory write blocked', { uid, candidateId: candidate.candidate_id, error: res.error });
+  }
+
+  if (groupIds.length) {
+    result.groups = [];
+    for (const groupId of groupIds) {
+      const res = await appendToGroup(uid, groupId, text);
+      result.groups.push({ groupId, ok: res.ok, ...(res.error ? { error: res.error } : {}) });
+      if (res.ok) anySucceeded = true;
+      else log.warn('candidate group write failed', { uid, candidateId: candidate.candidate_id, groupId, error: res.error });
+    }
+  }
+
+  result.ok = anySucceeded;
+  if (!anySucceeded && !result.error) {
+    result.error = wantsGlobal || groupIds.length ? 'all destinations failed' : 'no destination selected';
+  }
+  return result;
+}
+
+/**
+ * 确认一个候选：写入所有请求的去向（默认只写全局记忆，向后兼容旧行为），
+ * 至少一个去向成功即从候选池移除；全部失败则保留在池里，不会静默丢失。
+ */
+export async function confirmCandidate(
+  uid: string,
+  candidateId: string,
+  dest: ConfirmDestinations = {},
+): Promise<ConfirmCandidateResult> {
   if (!safeId(uid) || !candidateId) throw new Error('invalid uid or candidateId');
 
   const candidates = readCandidates(uid);
@@ -307,20 +380,17 @@ export async function confirmCandidate(uid: string, candidateId: string): Promis
   }
 
   const candidate = candidates[idx];
-  const text = (candidate.memory_text || candidate.summary || '').trim();
-  if (!text) return { ok: false, error: 'candidate has no memory text' };
-
-  const target = candidate.memory_scope === 'shared' ? 'memory' : 'user';
-  const res = addMemoryEntry(uid, target, text);
-  if (!res.ok) {
-    log.warn('confirmCandidate: memory write blocked', { uid, candidateId, error: res.error });
-    return { ok: false, error: res.error };
-  }
+  const result = await writeCandidateToDestinations(uid, candidate, dest);
+  if (!result.ok) return result;
 
   candidates.splice(idx, 1);
   writeCandidates(uid, candidates);
-  log.info('candidate confirmed and written to memory', { uid, candidateId, scope: candidate.memory_scope });
-  return { ok: true };
+  log.info('candidate confirmed and written to destinations', {
+    uid, candidateId,
+    globalMemory: result.globalMemory?.ok,
+    groupCount: result.groups?.length || 0,
+  });
+  return result;
 }
 
 /**
@@ -343,31 +413,37 @@ export async function rejectCandidate(uid: string, candidateId: string, reason?:
 }
 
 /**
- * 批量确认。逐条尝试写入记忆；某条写入失败（如触发注入扫描）不影响其余条目，
- * 失败的条目会保留在候选池里，不会静默丢失。
+ * 批量确认。逐条尝试写入所有请求的去向；某条候选的某个去向失败不影响其余候选
+ * 或其余去向 —— 一条候选只要至少一个去向成功就算确认，全部失败才保留在池里。
+ * `dest` 对这一批里的每一条候选生效（跟审阅面板"批量操作走同一份选择去向"的
+ * 用法一致；如需要逐条不同去向，调用方应改用单条 `confirmCandidate`）。
  */
-export async function confirmCandidates(uid: string, candidateIds: string[]): Promise<{ ok: boolean; confirmedCount: number; failedIds: string[] }> {
+export async function confirmCandidates(
+  uid: string,
+  candidateIds: string[],
+  dest: ConfirmDestinations = {},
+): Promise<{ ok: boolean; confirmedCount: number; failedIds: string[]; results: Record<string, ConfirmCandidateResult> }> {
   if (!safeId(uid)) throw new Error('invalid uid');
-  if (!Array.isArray(candidateIds) || !candidateIds.length) return { ok: true, confirmedCount: 0, failedIds: [] };
+  if (!Array.isArray(candidateIds) || !candidateIds.length) return { ok: true, confirmedCount: 0, failedIds: [], results: {} };
 
   const candidates = readCandidates(uid);
   const idSet = new Set(candidateIds);
   const remaining: CandidateUpdate[] = [];
   const failedIds: string[] = [];
+  const results: Record<string, ConfirmCandidateResult> = {};
   let confirmedCount = 0;
 
   for (const c of candidates) {
     if (!idSet.has(c.candidate_id)) { remaining.push(c); continue; }
-    const text = (c.memory_text || c.summary || '').trim();
-    const target = c.memory_scope === 'shared' ? 'memory' : 'user';
-    const res = text ? addMemoryEntry(uid, target, text) : { ok: false, error: 'empty memory text' };
+    const res = await writeCandidateToDestinations(uid, c, dest);
+    results[c.candidate_id] = res;
     if (res.ok) confirmedCount++;
     else { remaining.push(c); failedIds.push(c.candidate_id); }
   }
 
   writeCandidates(uid, remaining);
   log.info('candidates batch confirmed', { uid, confirmedCount, failed: failedIds.length });
-  return { ok: true, confirmedCount, failedIds };
+  return { ok: true, confirmedCount, failedIds, results };
 }
 
 /**

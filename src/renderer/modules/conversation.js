@@ -5605,7 +5605,9 @@ async function loadConversationHistory(cid, opts = {}) {
     else if (!searchTargetRevealed) _scrollToBottomNoAnim(container);
     if (window.ConversationInfo) window.ConversationInfo.refreshFiles(cid);
     if (cid === currentCid && !isConvPending(cid) && (messageQueues.get(cid) || []).length) {
-      _dispatchNextQueued(cid);
+      // Fire-and-forget: _dispatchNextQueued is async (ontology_group token
+      // expansion needs an IPC round-trip); this call site never awaited it.
+      Promise.resolve(_dispatchNextQueued(cid)).catch(() => {});
     }
     void membersPromise;
   } catch (e) {
@@ -8161,7 +8163,13 @@ async function handleNewChatSubmit() {
   // here and conv-create doesn't reset it before we can transfer.
   const recipientSnapshot = _recipientSnapshotForSend('new-chat');
   _pendingNewChatRecipient = _normaliseRecipientSnapshot(recipientSnapshot) || { ..._COMMANDER };
-  const content = applyRecipientPrefix(transformWithChatUse(requestText), 'new-chat', {
+  // Async: an ontology_group token in requestText needs an IPC round-trip to
+  // fetch the group's actual content before it can be inlined (see chat-use.js
+  // transformWithChatUseAsync). handleNewChatSubmit is already async.
+  const transformed = (typeof transformWithChatUseAsync === 'function')
+    ? await transformWithChatUseAsync(requestText)
+    : transformWithChatUse(requestText);
+  const content = applyRecipientPrefix(transformed, 'new-chat', {
     recipientSnapshot,
   });
   const draftItems = _chatAttachList(DRAFT_CID);
@@ -8338,8 +8346,11 @@ async function handleChatSubmit() {
     return;
   }
 
+  const transformedText = (typeof transformWithChatUseAsync === 'function')
+    ? await transformWithChatUseAsync(requestText)
+    : transformWithChatUse(requestText);
   const content = applyRecipientPrefix(
-    transformWithChatUse(requestText),
+    transformedText,
     'conversation',
     { recipientSnapshot },
   );
@@ -10100,8 +10111,10 @@ function _finishStreamingMsg(cid) {
     _settleDanglingActorPlaceholders(cid, { preserveProcess: wasAborted });
     _updateConvSendUI(cid);
   }
-  // Drain the next queued message for this conversation, if any.
-  _dispatchNextQueued(cid);
+  // Drain the next queued message for this conversation, if any. Fire-and-
+  // forget: _dispatchNextQueued is async (ontology_group token expansion
+  // needs an IPC round-trip); this call site never awaited it.
+  Promise.resolve(_dispatchNextQueued(cid)).catch(() => {});
 }
 
 // Scroll the given message to the top of the visible chat area.

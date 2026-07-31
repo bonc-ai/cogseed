@@ -15167,6 +15167,14 @@ body.model-not-configured .main-content { flex-direction: column; }
 .memory-icon-btn:hover { background: var(--surface-2); }
 .memory-icon-btn.is-muted { color: var(--muted); }
 
+/* Memory groups section — row is clickable to expand the whole-file editor. */
+.memory-group-row { cursor: default; }
+.memory-group-row-main { display: flex; flex-direction: column; gap: 2px; cursor: pointer; }
+.memory-group-row-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.memory-group-row-preview { font-size: 12px; line-height: 1.5; }
+.memory-group-row.is-active { border-color: rgba(91, 87, 214, 0.25); }
+.memory-group-editor-textarea { min-height: 160px; font-family: var(--font-mono); font-size: 12.5px; }
+
 /* Modal. */
 .memory-modal-overlay {
   position: fixed;
@@ -15648,6 +15656,38 @@ body.model-not-configured .main-content { flex-direction: column; }
   flex-shrink: 0;
   color: var(--muted);
   font-size: 11px;
+}
+
+/* "本体" tab rows: checkbox-style multi-select — click toggles, doesn't close
+ * the picker or fire-and-close like the other four tabs. */
+.skill-picker-item.is-checkable {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.skill-picker-item-checkbox {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--surface);
+  position: relative;
+}
+.skill-picker-item.is-checked .skill-picker-item-checkbox {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.skill-picker-item.is-checked .skill-picker-item-checkbox::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 5px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
 }
 
 /* PDF viewer — full-height iframe, Chromium's PDFium handles rendering. */
@@ -16701,6 +16741,41 @@ body.model-not-configured .main-content { flex-direction: column; }
 .personal-onto-card-actions {
   display: flex; gap: 8px; margin-top: 12px;
   padding-top: 12px; border-top: 1px solid var(--personal-onto-border);
+}
+
+/* "选择去向"面板 — 常驻在确认/驳回按钮上方，不弹二次面板。 */
+.personal-onto-dest-panel {
+  margin-top: 12px; padding-top: 12px;
+  border-top: 1px solid var(--personal-onto-border);
+  font-size: 12.5px;
+}
+.personal-onto-dest-title {
+  font-weight: 600; color: var(--personal-onto-muted);
+  margin-bottom: 8px;
+}
+.personal-onto-dest-global-row,
+.personal-onto-dest-group-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 0; cursor: pointer;
+}
+.personal-onto-dest-groups {
+  margin-left: 4px;
+  padding-left: 14px;
+  border-left: 2px solid var(--personal-onto-border);
+}
+.personal-onto-dest-empty {
+  padding: 4px 0 4px 14px;
+  font-size: 12px;
+}
+.personal-onto-dest-create-row {
+  display: flex; gap: 6px; margin-top: 8px;
+}
+.personal-onto-dest-new-group-input {
+  flex: 1; min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--personal-onto-border);
+  border-radius: 6px;
+  font-size: 12.5px;
 }
 
 .personal-onto-btn-confirm {

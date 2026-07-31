@@ -3,6 +3,19 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+// Group destinations write through personal_ontology_groups.ts, which triggers
+// kb_indexer/search side effects (mirrors contexts.ts's write path). Mocked
+// here the same way contexts.test.ts does, so loading these modules doesn't
+// pull in fastembed/sqlite-vec.
+vi.mock('../../../src/main/features/kb_indexer', () => ({
+  enqueue: () => {},
+  kbEvents: { on: () => {}, off: () => {}, emit: () => {} },
+}));
+vi.mock('../../../src/main/features/search', () => ({
+  upsertContext: () => {},
+  dropContext: () => {},
+}));
+
 let tmpDir: string;
 let prevWs: string | undefined;
 const UID = 'test-user-001';
@@ -25,6 +38,10 @@ async function loadModule() {
 
 async function loadMemory() {
   return import('../../../src/main/features/memory');
+}
+
+async function loadGroups() {
+  return import('../../../src/main/features/personal_ontology_groups');
 }
 
 function candidatesMdPath(): string {
@@ -191,6 +208,98 @@ describe('personal_ontology_candidates › confirmCandidate writes to real memor
   });
 });
 
+// ── confirmCandidate: "选择去向" — global memory + memory groups ─────────
+
+describe('personal_ontology_candidates › confirmCandidate destination selection', () => {
+  async function seedOneCandidate(id = 'cand-dest-1') {
+    const poc = await loadModule();
+    const file = candidatesMdPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, poc.serializeCandidatesMarkdown([{
+      candidate_id: id,
+      kind: 'preference',
+      confidence: 'high',
+      summary: '摘要',
+      memory_scope: 'user',
+      memory_text: '记忆文本内容',
+      source_memory_refs: [],
+    }]));
+    return poc;
+  }
+
+  it('default (no dest arg) still writes global memory only — back-compat with the old single-target behavior', async () => {
+    const poc = await seedOneCandidate();
+    const res = await poc.confirmCandidate(UID, 'cand-dest-1');
+    expect(res.ok).toBe(true);
+    expect(res.globalMemory?.ok).toBe(true);
+    expect(res.groups).toBeUndefined();
+    expect(fs.readFileSync(userProfilePath(), 'utf8')).toContain('记忆文本内容');
+  });
+
+  it('writes to one memory group only when toGlobalMemory:false + toGroupIds', async () => {
+    const poc = await seedOneCandidate();
+    const groups = await loadGroups();
+    const created = await groups.createGroup(UID, '工作偏好');
+    const groupId = created.group!.group_id;
+
+    const res = await poc.confirmCandidate(UID, 'cand-dest-1', { toGlobalMemory: false, toGroupIds: [groupId] });
+    expect(res.ok).toBe(true);
+    expect(res.globalMemory).toBeUndefined();
+    expect(res.groups).toEqual([{ groupId, ok: true }]);
+
+    // Not written to global memory.
+    expect(fs.existsSync(userProfilePath())).toBe(false);
+    // Written to the group's content file.
+    const content = await groups.readGroupContent(UID, groupId);
+    expect(content.content).toBe('记忆文本内容');
+
+    // Candidate removed from the pool since at least one destination succeeded.
+    expect((await poc.listCandidates(UID)).candidate_updates).toHaveLength(0);
+  });
+
+  it('writes to BOTH global memory and multiple groups when both are requested — content duplicated per decision 3', async () => {
+    const poc = await seedOneCandidate();
+    const groups = await loadGroups();
+    const g1 = (await groups.createGroup(UID, 'g1')).group!.group_id;
+    const g2 = (await groups.createGroup(UID, 'g2')).group!.group_id;
+
+    const res = await poc.confirmCandidate(UID, 'cand-dest-1', { toGroupIds: [g1, g2] });
+    expect(res.ok).toBe(true);
+    expect(res.globalMemory?.ok).toBe(true);
+    expect(res.groups).toEqual([{ groupId: g1, ok: true }, { groupId: g2, ok: true }]);
+
+    expect(fs.readFileSync(userProfilePath(), 'utf8')).toContain('记忆文本内容');
+    expect((await groups.readGroupContent(UID, g1)).content).toBe('记忆文本内容');
+    expect((await groups.readGroupContent(UID, g2)).content).toBe('记忆文本内容');
+  });
+
+  it('one failing group does not block the others or global memory — per-destination result reported', async () => {
+    const poc = await seedOneCandidate();
+    const groups = await loadGroups();
+    const okGroup = (await groups.createGroup(UID, 'ok')).group!.group_id;
+
+    const res = await poc.confirmCandidate(UID, 'cand-dest-1', { toGroupIds: [okGroup, 'does-not-exist'] });
+    expect(res.ok).toBe(true); // at least one destination succeeded
+    expect(res.globalMemory?.ok).toBe(true);
+    expect(res.groups).toEqual([
+      { groupId: okGroup, ok: true },
+      { groupId: 'does-not-exist', ok: false, error: expect.stringMatching(/not found/) },
+    ]);
+    expect((await groups.readGroupContent(UID, okGroup)).content).toBe('记忆文本内容');
+  });
+
+  it('candidate stays in the pool when every requested destination fails', async () => {
+    const poc = await seedOneCandidate();
+    const res = await poc.confirmCandidate(UID, 'cand-dest-1', { toGlobalMemory: false, toGroupIds: ['does-not-exist'] });
+    expect(res.ok).toBe(false);
+    expect(res.groups).toEqual([{ groupId: 'does-not-exist', ok: false, error: expect.stringMatching(/not found/) }]);
+
+    const after = await poc.listCandidates(UID);
+    expect(after.candidate_updates).toHaveLength(1);
+    expect(after.candidate_updates[0].candidate_id).toBe('cand-dest-1');
+  });
+});
+
 // ── rejectCandidate ────────────────────────────────────────────────────
 
 describe('personal_ontology_candidates › rejectCandidate', () => {
@@ -255,6 +364,33 @@ describe('personal_ontology_candidates › batch confirm/reject', () => {
     const after = await poc.listCandidates(UID);
     expect(after.candidate_updates).toHaveLength(1);
     expect(after.candidate_updates[0].candidate_id).toBe('c2');
+  });
+
+  it('confirmCandidates applies the same dest to every candidate in the batch and reports per-candidate results', async () => {
+    const poc = await loadModule();
+    const groups = await loadGroups();
+    const groupId = (await groups.createGroup(UID, 'batch group')).group!.group_id;
+
+    const file = candidatesMdPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, poc.serializeCandidatesMarkdown([
+      { candidate_id: 'c1', kind: 'preference', confidence: 'high', summary: 'a', memory_scope: 'user', memory_text: 'memory A', source_memory_refs: [] },
+      { candidate_id: 'c2', kind: 'rule', confidence: 'medium', summary: 'b', memory_scope: 'shared', memory_text: 'memory B', source_memory_refs: [] },
+    ]));
+
+    const res = await poc.confirmCandidates(UID, ['c1', 'c2'], { toGlobalMemory: false, toGroupIds: [groupId] });
+    expect(res.confirmedCount).toBe(2);
+    expect(res.failedIds).toEqual([]);
+    expect(res.results.c1.groups).toEqual([{ groupId, ok: true }]);
+    expect(res.results.c2.groups).toEqual([{ groupId, ok: true }]);
+
+    // Not written to global memory (toGlobalMemory:false).
+    expect(fs.existsSync(userProfilePath())).toBe(false);
+    expect(fs.existsSync(sharedMemoryPath())).toBe(false);
+
+    const content = (await groups.readGroupContent(UID, groupId)).content || '';
+    expect(content).toContain('memory A');
+    expect(content).toContain('memory B');
   });
 });
 

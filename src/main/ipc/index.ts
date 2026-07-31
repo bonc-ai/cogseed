@@ -27,6 +27,7 @@ import * as companionRepro from '../features/companion_repro';
 import * as p3394 from '../features/p3394';
 import * as evolution from '../features/evolution';
 import * as personalOntologyCandidates from '../features/personal_ontology_candidates';
+import * as personalOntologyGroups from '../features/personal_ontology_groups';
 import type { GroupEvent } from '../features/group_chat/bus';
 import * as agents from '../features/agents';
 import * as autoTasks from '../features/auto_tasks';
@@ -1997,21 +1998,53 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'personalOntology.candidates.list': async (_payload, ctx) => {
     return personalOntologyCandidates.listCandidates(ctx.userId);
   },
-  'personalOntology.candidates.confirm': async ({ candidateId }, ctx) => {
+  'personalOntology.candidates.confirm': async ({ candidateId, toGlobalMemory, toGroupIds }, ctx) => {
     if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
-    return personalOntologyCandidates.confirmCandidate(ctx.userId, candidateId);
+    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[] } = {};
+    if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
+    if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
+    return personalOntologyCandidates.confirmCandidate(ctx.userId, candidateId, dest);
   },
   'personalOntology.candidates.reject': async ({ candidateId, reason }, ctx) => {
     if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
     return personalOntologyCandidates.rejectCandidate(ctx.userId, candidateId, reason);
   },
-  'personalOntology.candidates.confirmBatch': async ({ candidateIds }, ctx) => {
+  'personalOntology.candidates.confirmBatch': async ({ candidateIds, toGlobalMemory, toGroupIds }, ctx) => {
     if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
-    return personalOntologyCandidates.confirmCandidates(ctx.userId, candidateIds);
+    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[] } = {};
+    if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
+    if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
+    return personalOntologyCandidates.confirmCandidates(ctx.userId, candidateIds, dest);
   },
   'personalOntology.candidates.rejectBatch': async ({ candidateIds, reason }, ctx) => {
     if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
     return personalOntologyCandidates.rejectCandidates(ctx.userId, candidateIds, reason);
+  },
+
+  // ── Personal Ontology Groups ("记忆分组") ──
+  'personalOntology.groups.list': async (_payload, ctx) => {
+    return { groups: await personalOntologyGroups.listGroups(ctx.userId) };
+  },
+  'personalOntology.groups.create': async ({ title }, ctx) => {
+    if (!title || typeof title !== 'string') throw new Error('missing title');
+    return personalOntologyGroups.createGroup(ctx.userId, title);
+  },
+  'personalOntology.groups.rename': async ({ groupId, title }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!title || typeof title !== 'string') throw new Error('missing title');
+    return personalOntologyGroups.renameGroup(ctx.userId, groupId, title);
+  },
+  'personalOntology.groups.delete': async ({ groupId }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    return personalOntologyGroups.deleteGroup(ctx.userId, groupId);
+  },
+  'personalOntology.groups.read': async ({ groupId }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    return personalOntologyGroups.readGroupContent(ctx.userId, groupId);
+  },
+  'personalOntology.groups.write': async ({ groupId, content }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    return personalOntologyGroups.writeGroupContent(ctx.userId, groupId, String(content ?? ''));
   },
 
   'skills.list': async ({ force } = {}) => {
