@@ -92,7 +92,7 @@
       if (next.authType !== 'api_key') throw new Error('api key auth type required');
       if (action.source !== 'manual' && action.source !== 'ccswitch') throw new Error('invalid api key source');
       next.source = action.source;
-      next.step = action.source === 'ccswitch' ? 'ccswitch_select' : 'provider';
+      next.step = action.source === 'ccswitch' ? 'ccswitch_select' : 'protocol';
       next.credential = {};
       next.discoveryToken = '';
       next.discoveryStatus = 'idle';
@@ -279,6 +279,7 @@
     authorizations: [],
     draft: createDraft(),
     ccswitchRows: [],
+    ccswitchUnsupported: [],
     discoverySeq: 0,
     busy: false,
   };
@@ -348,35 +349,47 @@
     </div>`;
   }
 
-  function providerAllowed(provider) {
-    if (controller.draft.authType === 'oauth') return !!provider.supportsOAuth;
-    return !!provider.supportsApiKey;
+  function renderProtocols() {
+    return `<div class="model-authorization-protocols">
+      <div class="model-authorization-progress">${esc(tr('settings.model_authorization.protocol_title'))}</div>
+      <div class="model-authorization-choice-grid">
+        <button class="model-authorization-choice" data-model-auth-action="choose-protocol" data-protocol="openai">${esc(tr('settings.model_authorization.protocol_openai'))}</button>
+        <button class="model-authorization-choice" data-model-auth-action="choose-protocol" data-protocol="anthropic">${esc(tr('settings.model_authorization.protocol_anthropic'))}</button>
+        <button class="model-authorization-choice" data-model-auth-action="choose-protocol" data-protocol="gemini">${esc(tr('settings.model_authorization.protocol_gemini'))}</button>
+      </div>
+    </div>`;
   }
 
-  function renderProviders() {
-    const buttons = controller.providers.filter(providerAllowed).map((provider) => `
-      <button class="model-authorization-choice" data-model-auth-action="choose-provider" data-provider-id="${esc(provider.id)}" data-provider-kind="builtin">
-        <strong>${esc(provider.label || provider.id)}</strong>
-      </button>`).join('');
-    return `<div class="model-authorization-choice-grid">${buttons || `<div class="settings-empty">${esc(tr('settings.empty'))}</div>`}</div>`;
+  function endpointLabel(baseUrl) {
+    try { return new URL(baseUrl).hostname || 'Custom endpoint'; }
+    catch { return 'Custom endpoint'; }
   }
 
   function renderCredentials() {
-    const provider = controller.providers.find((item) => item.id === controller.draft.providerId) || {};
-    const needsBaseUrl = !!provider.manualModel || controller.draft.providerKind === 'custom';
     return `<div class="model-authorization-credentials">
+      <div class="model-authorization-progress">${esc(tr('settings.model_authorization.api_key_flow_hint'))}</div>
       <div class="form-row"><label>${esc(tr('settings.custom.api_key'))}</label><input id="model-authorization-api-key" class="form-input" type="text" autocomplete="off" spellcheck="false" /></div>
-      ${needsBaseUrl ? `<div class="form-row"><label>${esc(tr('settings.custom.base_url'))}</label><input id="model-authorization-base-url" class="form-input" type="text" autocomplete="off" spellcheck="false" /></div>` : ''}
+      <div class="form-row"><label>${esc(tr('settings.custom.base_url'))}</label><input id="model-authorization-base-url" class="form-input" type="url" autocomplete="off" spellcheck="false" placeholder="https://api.example.com/v1" /></div>
     </div>`;
   }
 
   function renderCcswitchRows() {
-    if (!controller.ccswitchRows.length) return `<div class="settings-empty">${esc(tr('settings.model_authorization.ccswitch_preview_empty'))}</div>`;
-    return `<div class="model-authorization-choice-grid">${controller.ccswitchRows.map((row) => `
-      <button class="model-authorization-choice" data-model-auth-action="select-ccswitch" data-external-id="${esc(row.externalId)}"${row.missingKey ? ' disabled' : ''}>
+    const supported = controller.ccswitchRows.length
+      ? `<div class="model-authorization-choice-grid">${controller.ccswitchRows.map((row) => {
+        const needsKey = !!row.missingKey;
+        const statusKey = needsKey ? 'settings.model_authorization.needs_api_key' : 'settings.model_authorization.ready_to_import';
+        return `
+      <button class="model-authorization-choice" data-model-auth-action="select-ccswitch" data-external-id="${esc(row.externalId)}"${needsKey ? ' disabled' : ''}>
         <strong>${esc(row.name || row.externalId)}</strong><br />
-        <span class="muted">${esc(row.protocol || '')} ${esc(row.maskedKey || '')}</span>
-      </button>`).join('')}</div>`;
+        <span class="muted">${esc(row.protocol || '')} ${esc(row.maskedKey || '')}</span><br />
+        <span class="model-authorization-ccswitch-status ${needsKey ? 'needs-api-key' : 'ready-to-import'}">${esc(tr(statusKey))}</span>
+      </button>`;
+      }).join('')}</div>`
+      : `<div class="settings-empty">${esc(tr('settings.model_authorization.ccswitch_preview_empty'))}</div>`;
+    const unsupported = controller.ccswitchUnsupported.length
+      ? `<div class="model-authorization-warning model-authorization-ccswitch-unsupported"><strong>${esc(tr('settings.model_authorization.unsupported'))}</strong><div>${esc(tr('settings.model_authorization.ccswitch_unsupported_hint'))}</div><ul>${controller.ccswitchUnsupported.map((row) => `<li>${esc(row.name || row.externalId || '')}</li>`).join('')}</ul></div>`
+      : '';
+    return `${supported}${unsupported}`;
   }
 
   function renderModels() {
@@ -406,7 +419,7 @@
     actions.innerHTML = '';
     if (controller.draft.step === 'auth_type') body.innerHTML = renderChoices();
     else if (controller.draft.step === 'api_key_source') body.innerHTML = renderSourceChoices();
-    else if (controller.draft.step === 'provider') body.innerHTML = renderProviders();
+    else if (controller.draft.step === 'provider' || controller.draft.step === 'protocol') body.innerHTML = renderProtocols();
     else if (controller.draft.step === 'ccswitch_select') body.innerHTML = renderCcswitchRows();
     else if (controller.draft.step === 'credentials' || controller.draft.step === 'credential_ready') {
       body.innerHTML = renderCredentials();
@@ -438,11 +451,25 @@
     if (source === 'ccswitch') {
       setStatus(tr('settings.model_authorization.ccswitch_preview_loading'), '');
       const res = await invoke('customProviders.ccswitch.preview');
-      controller.ccswitchRows = (res && res.ok && Array.isArray(res.items)) ? res.items : ((res && res.ok && Array.isArray(res.rows)) ? res.rows : []);
+      const rawItems = (res && res.ok && Array.isArray(res.items)) ? res.items : ((res && res.ok && Array.isArray(res.rows)) ? res.rows : []);
+      controller.ccswitchRows = rawItems.map((item) => ({
+        ...item,
+        maskedKey: item.maskedKey || item.apiKeyMasked || '',
+        declaredModels: item.declaredModels || item.models || [],
+        missingKey: !!(item.missingKey || item.needsKey),
+      }));
+      controller.ccswitchUnsupported = (res && res.ok && Array.isArray(res.unsupported)) ? res.unsupported : [];
       setStatus('', '');
     } else {
-      await ensureProviders();
+      // Manual API-key flow is protocol-first; provider catalogs are not part of this path.
     }
+    render();
+  }
+
+  async function chooseProtocol(protocol) {
+    if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') return;
+    controller.draft = transition(controller.draft, { type: 'choose_provider', providerId: protocol, providerKind: 'custom' });
+    controller.draft.customProvider = { ...(controller.draft.customProvider || {}), protocol };
     render();
   }
 
@@ -472,13 +499,22 @@
     const baseUrlEl = el('model-authorization-base-url');
     const apiKey = String((keyEl && keyEl.value) || '').trim();
     const baseUrl = String((baseUrlEl && baseUrlEl.value) || '').trim();
-    const provider = controller.providers.find((item) => item.id === controller.draft.providerId) || {};
-    if (!apiKey || ((provider.manualModel || controller.draft.providerKind === 'custom') && !baseUrl)) {
+    const protocol = controller.draft.customProvider && controller.draft.customProvider.protocol;
+    if (!apiKey || !baseUrl || !protocol) {
       setStatus(tr('settings.model_authorization.error_required'), 'error');
       return;
     }
-    controller.draft = transition(controller.draft, { type: 'set_api_key_credentials', providerKind: controller.draft.providerKind || 'builtin', providerId: controller.draft.providerId, apiKey, baseUrl });
-    await discoverModels({ kind: controller.draft.providerKind === 'custom' ? 'custom_api_key' : 'builtin', providerId: controller.draft.providerId, apiKey, baseUrl });
+    const name = endpointLabel(baseUrl);
+    controller.draft = transition(controller.draft, {
+      type: 'set_api_key_credentials',
+      providerKind: 'custom',
+      providerId: protocol,
+      protocol,
+      name,
+      apiKey,
+      baseUrl,
+    });
+    await discoverModels({ kind: 'custom_api_key', protocol, apiKey, baseUrl });
   }
 
   async function discoverModels(payload) {
@@ -496,7 +532,10 @@
     let payload;
     try { payload = buildCompletionPayload(controller.draft); }
     catch (err) { setStatus((err && err.message) || tr('settings.model_authorization.error_required'), 'error'); return; }
-    const testRes = await invoke('modelAuthorizations.testDraft', { ...payload, model: payload.defaultModel });
+    const testPayload = payload.source === 'ccswitch'
+      ? { kind: 'ccswitch_draft', draftId: payload.draftId, model: payload.defaultModel }
+      : { kind: 'custom_api_key', protocol: payload.customProvider.protocol, baseUrl: payload.customProvider.baseUrl, apiKey: payload.customProvider.apiKey, model: payload.defaultModel };
+    const testRes = await invoke('modelAuthorizations.testDraft', testPayload);
     if (!testRes || !testRes.ok) { setStatus((testRes && testRes.error) || tr('settings.model_authorization.error_test_failed'), 'error'); return; }
     const res = await invoke('modelAuthorizations.complete', payload);
     if (!res || !res.ok) { setStatus((res && res.error) || tr('settings.model_authorization.complete_failed'), 'error'); return; }
@@ -512,6 +551,7 @@
     if (action === 'source-manual') return chooseApiKeySource('manual');
     if (action === 'source-ccswitch') return chooseApiKeySource('ccswitch');
     if (action === 'choose-provider') return chooseProvider(dataset);
+    if (action === 'choose-protocol') return chooseProtocol(dataset.protocol);
     if (action === 'select-ccswitch') return selectCcswitch(dataset.externalId);
     if (action === 'continue-credentials') return continueCredentials();
     if (action === 'toggle-model') { controller.draft = toggleModel(controller.draft, dataset.modelId, dataset.checked !== 'false'); render(); return; }

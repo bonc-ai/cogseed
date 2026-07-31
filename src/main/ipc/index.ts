@@ -2714,6 +2714,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         needsKey: !!item.needsKey,
         apiKeyMasked: auth.maskKey(item.apiKey),
       })),
+      unsupported: preview.skipped.filter((item) => item.reason !== 'official').map((item) => ({
+        externalId: item.externalId,
+        name: item.name,
+        appType: item.appType,
+        reason: item.reason,
+      })),
     };
   },
   'customProviders.ccswitch.sync': async ({ externalIds } = {}, ctx) => {

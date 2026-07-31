@@ -19,7 +19,7 @@ describe('model authorization pure wizard state', () => {
     expect(apiKey.step).toBe('api_key_source');
 
     const manual = flow.transition(apiKey, { type: 'choose_api_key_source', source: 'manual' });
-    expect(manual).toMatchObject({ authType: 'api_key', source: 'manual', step: 'provider' });
+    expect(manual).toMatchObject({ authType: 'api_key', source: 'manual', step: 'protocol' });
 
     const ccswitch = flow.transition(apiKey, { type: 'choose_api_key_source', source: 'ccswitch' });
     expect(ccswitch).toMatchObject({ authType: 'api_key', source: 'ccswitch', step: 'ccswitch_select' });

@@ -62,6 +62,13 @@ export interface CcSwitchImportItem {
   needsKey?: boolean;
 }
 
+export interface CcSwitchSkippedItem {
+  externalId: string;
+  name: string;
+  appType: string;
+  reason: 'official' | 'unsupported_protocol' | 'missing_base_url' | 'invalid_config';
+}
+
 export interface CcSwitchProbe {
   available: boolean;
   reason?: 'not_installed' | 'unreadable' | 'bad_schema';
@@ -201,7 +208,7 @@ function mapRow(
  */
 export function readCcSwitchImportItems(
   home = os.homedir(),
-): { ok: true; items: CcSwitchImportItem[] } | { ok: false; reason: NonNullable<CcSwitchProbe['reason']> } {
+): { ok: true; items: CcSwitchImportItem[]; skipped: CcSwitchSkippedItem[] } | { ok: false; reason: NonNullable<CcSwitchProbe['reason']> } {
   const probe = probeCcSwitch(home);
   if (!probe.available) return { ok: false, reason: probe.reason || 'not_installed' };
 
@@ -226,11 +233,28 @@ export function readCcSwitchImportItems(
     }>;
 
     const items: CcSwitchImportItem[] = [];
+    const skipped: CcSwitchSkippedItem[] = [];
     for (const r of rows) {
       const item = mapRow(r.app_type, r.id, r.name, r.category, r.settings_config, r.website_url, r.notes);
-      if (item) items.push(item);
+      if (item) {
+        items.push(item);
+        continue;
+      }
+      let reason: CcSwitchSkippedItem['reason'] = 'missing_base_url';
+      if (r.category === 'official') reason = 'official';
+      else if (!['claude', 'claude-desktop', 'codex', 'gemini'].includes(r.app_type)) reason = 'unsupported_protocol';
+      else {
+        try { JSON.parse(r.settings_config || '{}'); }
+        catch { reason = 'invalid_config'; }
+      }
+      skipped.push({
+        externalId: `${r.app_type}:${r.id}`,
+        name: r.name || r.id,
+        appType: r.app_type,
+        reason,
+      });
     }
-    return { ok: true, items };
+    return { ok: true, items, skipped };
   } catch (err) {
     log.warn('cc-switch read failed', { error: (err as Error).message });
     return { ok: false, reason: 'unreadable' };

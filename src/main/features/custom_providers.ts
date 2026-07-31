@@ -303,13 +303,13 @@ export function syncFromCcSwitch(userId: string, selectedExternalIds?: string[],
 /** Preview importable CC Switch providers (no write). apiKey is masked by the
  *  IPC layer before reaching the renderer. */
 export function previewCcSwitchImport(userId: string):
-  | { ok: true; items: import('./ccswitch_import').CcSwitchImportItem[] }
+  | { ok: true; items: import('./ccswitch_import').CcSwitchImportItem[]; skipped: import('./ccswitch_import').CcSwitchSkippedItem[] }
   | { ok: false; reason: string } {
   const { readCcSwitchImportItems } = require('./ccswitch_import') as typeof import('./ccswitch_import');
   void userId;
   const res = readCcSwitchImportItems();
   if (!res.ok) return { ok: false, reason: (res as { reason: string }).reason };
-  return { ok: true, items: res.items };
+  return { ok: true, items: res.items, skipped: res.skipped };
 }
 
 /** Resolve one exact CC Switch row for the unified authorization workflow.

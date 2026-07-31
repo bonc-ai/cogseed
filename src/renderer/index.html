@@ -1113,11 +1113,12 @@
                 <div class="settings-group-head">
                   <div>
                     <div class="settings-group-title" data-i18n="settings.model_authorization.title">Model authorizations</div>
-                    <div class="settings-group-sub" data-i18n="settings.model_authorization.subtitle">Connect OAuth accounts, API keys, or CC Switch credentials, then choose one or more models for each authorization.</div>
+                    <div class="settings-group-sub" data-i18n="settings.model_authorization.subtitle">Use an API key or import from CC Switch, test the connection, then choose one or more returned models.</div>
+                    <div class="settings-group-sub" id="settings-model-authorization-api-key-flow-hint" data-i18n="settings.model_authorization.api_key_flow_hint">API Key flow: choose an interface type, enter the key and URL, test the connection, then select models from the response.</div>
                   </div>
                   <div class="settings-group-head-actions">
                     <button class="btn btn-primary" id="settings-model-authorization-add-btn" data-ui-icon="plus" data-i18n="settings.model_authorization.add">Add authorization</button>
-                    <button class="btn" id="settings-model-authorization-advanced-btn" data-ui-icon="settings" data-i18n="settings.model_authorization.advanced">Advanced</button>
+                    <button class="btn" id="settings-model-authorization-advanced-btn" data-ui-icon="settings" data-i18n="settings.model_authorization.advanced">Custom endpoint management</button>
                   </div>
                 </div>
                 <div class="settings-entries model-authorization-list" id="settings-model-authorization-list">
@@ -1128,8 +1129,9 @@
 
               <div class="settings-group settings-custom-providers-group" id="settings-model-authorization-advanced" hidden>
                 <div class="settings-group-head">
-                  <div class="settings-group-title" data-i18n="settings.model_authorization.advanced_title">Advanced provider management</div>
-                  <div class="settings-group-sub" data-i18n="settings.model_authorization.advanced_subtitle">Edit custom endpoint metadata used by existing authorizations. New accounts start from Add authorization.</div>
+                  <div class="settings-group-title" data-i18n="settings.model_authorization.advanced_title">Custom endpoint management</div>
+                  <div class="settings-group-sub" id="settings-model-authorization-advanced-hint" data-i18n="settings.model_authorization.advanced_hint">Only edit existing custom API endpoints here. To connect a new model service, use Add authorization above.</div>
+                  <div class="settings-group-sub" data-i18n="settings.model_authorization.advanced_subtitle">Manage endpoint metadata, protocol, and saved custom-provider details.</div>
                 </div>
                 <div class="settings-row settings-custom-provider-toolbar">
                   <button class="btn" id="settings-custom-provider-add-btn" data-i18n="settings.custom_providers.add">Add provider</button>

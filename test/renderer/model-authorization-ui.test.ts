@@ -37,6 +37,16 @@ describe('unified model authorization settings surface', () => {
     expect(indexHtml).not.toContain('id="settings-add-entry-btn"');
   });
 
+  it('describes API key discovery as protocol plus key and URL before model selection', () => {
+    expect(indexHtml).toContain('data-i18n="settings.model_authorization.api_key_flow_hint"');
+  });
+
+  it('labels advanced management as custom endpoint management and explains its scope', () => {
+    expect(indexHtml).toContain('data-i18n="settings.model_authorization.advanced"');
+    expect(indexHtml).toContain('id="settings-model-authorization-advanced-hint"');
+    expect(indexHtml).toContain('data-i18n="settings.model_authorization.advanced_hint"');
+  });
+
   it('keeps advanced custom provider management collapsed away from the primary flow', () => {
     expect(indexHtml).toContain('id="settings-model-authorization-advanced"');
     expect(indexHtml).toMatch(/id="settings-model-authorization-advanced"[^>]*hidden/);
@@ -137,8 +147,10 @@ function loadInteractiveHarness() {
     ] });
     if (channel === 'auth.startOAuth') return Promise.resolve({ ok: true, kind: 'done', profileId: `${payload.provider}:profile` });
     if (channel === 'customProviders.ccswitch.preview') return Promise.resolve({ ok: true, items: [
-      { externalId: 'cc-1', name: 'Claude Desktop', protocol: 'anthropic', maskedKey: 'sk-***', declaredModels: ['claude-3-5-sonnet'] },
-      { externalId: 'cc-raw', name: 'Bad', protocol: 'openai', apiKey: 'sk-raw-secret', maskedKey: 'sk-***' },
+      { externalId: 'cc-1', name: 'Claude Desktop', protocol: 'anthropic', apiKeyMasked: 'sk-***', models: ['claude-3-5-sonnet'], needsKey: false },
+      { externalId: 'cc-needs-key', name: 'Needs key', protocol: 'openai', apiKeyMasked: '', models: [], needsKey: true },
+    ], unsupported: [
+      { externalId: 'hermes:1', name: 'DeepSeek', reason: 'unsupported_protocol' },
     ] });
     if (channel === 'modelAuthorizations.prepareCcSwitch') return Promise.resolve({ ok: true, draftId: 'draft-cc-1', externalId: payload.externalId, declaredModels: ['claude-3-5-sonnet'], maskedKey: 'sk-***' });
     if (channel === 'modelAuthorizations.discover') return new Promise((resolve) => discoverResolvers.push(resolve));
@@ -186,7 +198,9 @@ describe('model authorization interactive wizard', () => {
     await context.window.initModelAuthorizationSettings();
     await registry.get('settings-model-authorization-add-btn')!.click();
     await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'source-manual' } } });
-    await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'choose-provider', providerId: 'openai-compatible', providerKind: 'builtin' } } });
+    expect(registry.get('model-authorization-body')!.innerHTML).toContain('choose-protocol');
+    expect(registry.get('model-authorization-body')!.innerHTML).not.toContain('openai-compatible');
+    await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'choose-protocol', protocol: 'openai' } } });
     await registry.get('model-authorization-actions')!.dispatch('click', { target: { dataset: { modelAuthAction: 'continue-credentials' } } });
     expect(registry.get('model-authorization-status')!.textContent).toContain('error_required');
     registry.get('model-authorization-api-key')!.value = 'sk-live-secret';
@@ -194,8 +208,8 @@ describe('model authorization interactive wizard', () => {
     const first = registry.get('model-authorization-actions')!.dispatch('click', { target: { dataset: { modelAuthAction: 'continue-credentials' } } });
     await Promise.resolve();
     expect(JSON.stringify(registry.get('model-authorization-body')!.innerHTML)).not.toContain('sk-live-secret');
-    expect(invoke).toHaveBeenCalledWith('modelAuthorizations.discover', expect.objectContaining({ kind: 'builtin', apiKey: 'sk-live-secret' }));
-    await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'choose-api-key' } } });
+    expect(invoke).toHaveBeenCalledWith('modelAuthorizations.discover', expect.objectContaining({ kind: 'custom_api_key', protocol: 'openai', apiKey: 'sk-live-secret', baseUrl: 'https://relay.example/v1' }));
+    await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'source-ccswitch' } } });
     discoverResolvers.shift()!({ ok: true, token: 'discovery-1', models: [{ id: 'stale-model' }] });
     await first;
     expect(registry.get('model-authorization-body')!.innerHTML).not.toContain('stale-model');
@@ -208,6 +222,9 @@ describe('model authorization interactive wizard', () => {
     await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'source-ccswitch' } } });
     expect(registry.get('model-authorization-body')!.innerHTML).toContain('sk-***');
     expect(registry.get('model-authorization-body')!.innerHTML).not.toContain('sk-raw-secret');
+    expect(registry.get('model-authorization-body')!.innerHTML).toContain('ready-to-import');
+    expect(registry.get('model-authorization-body')!.innerHTML).toContain('needs-api-key');
+    expect(registry.get('model-authorization-body')!.innerHTML).toContain('unsupported');
     const run = registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'select-ccswitch', externalId: 'cc-1' } } });
     await flushAsync();
     expect(invoke).toHaveBeenCalledWith('modelAuthorizations.prepareCcSwitch', { externalId: 'cc-1' });
@@ -240,10 +257,11 @@ describe('model authorization interactive wizard', () => {
     await context.window.initModelAuthorizationSettings();
     await registry.get('settings-model-authorization-add-btn')!.click();
     await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'source-manual' } } });
-    await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'choose-provider', providerId: 'anthropic', providerKind: 'builtin' } } });
+    await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'choose-protocol', protocol: 'anthropic' } } });
     registry.get('model-authorization-api-key')!.value = 'sk-ant-secret';
+    registry.get('model-authorization-base-url')!.value = 'https://anthropic.example/v1';
     const run = registry.get('model-authorization-actions')!.dispatch('click', { target: { dataset: { modelAuthAction: 'continue-credentials' } } });
-    await Promise.resolve();
+    await flushAsync();
     discoverResolvers.shift()!({ ok: true, token: 'discovery-1', models: [{ id: 'claude-3-5-sonnet' }] });
     await run;
     await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'toggle-model', modelId: 'claude-3-5-sonnet', checked: 'true' } } });

@@ -60,6 +60,10 @@ describe('CC Switch importer', () => {
         id: 'official', app_type: 'claude', name: 'Official', category: 'official',
         settings_config: JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com', ANTHROPIC_AUTH_TOKEN: 'skip' } }),
       },
+      {
+        id: 'unsupported-hermes', app_type: 'hermes', name: 'DeepSeek', category: null,
+        settings_config: JSON.stringify({ env: { API_KEY: 'hidden' } }),
+      },
     ]);
 
     const importer = await import('../../../src/main/features/ccswitch_import');
@@ -75,6 +79,10 @@ describe('CC Switch importer', () => {
       expect.objectContaining({ externalId: 'gemini:gemini-relay', protocol: 'gemini', apiKey: 'gk' }),
     ]));
     expect(result.items).toHaveLength(3);
+    expect(result.skipped).toEqual(expect.arrayContaining([
+      expect.objectContaining({ externalId: 'claude:official', reason: 'official' }),
+      expect.objectContaining({ externalId: 'hermes:unsupported-hermes', reason: 'unsupported_protocol' }),
+    ]));
   });
 
   it('returns structured failures for missing and incompatible databases', async () => {
