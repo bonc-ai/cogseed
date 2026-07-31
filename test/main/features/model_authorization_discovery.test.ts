@@ -149,7 +149,7 @@ describe('model authorization discovery', () => {
   it('rejects missing keys and expires or consumes drafts', async () => {
     createCcSwitchDb({ env: { OPENAI_BASE_URL: 'https://cc.example/v1' } });
     const discovery = await import('../../../src/main/features/model_authorization_discovery');
-    expect(discovery.prepareCcSwitchAuthorization(UID, 'codex:relay', { home })).toEqual({ ok: false, errorCode: 'missing_key' });
+    expect(discovery.prepareCcSwitchAuthorization(UID, 'codex:relay', { home })).toEqual({ ok: false, errorCode: 'not_found' });
 
     fs.rmSync(path.join(home, '.cc-switch', 'cc-switch.db'));
     createCcSwitchDb({ auth: { OPENAI_API_KEY: 'cc-secret' }, env: { OPENAI_BASE_URL: 'https://cc.example/v1' } });

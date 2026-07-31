@@ -57,6 +57,11 @@ describe('CC Switch importer', () => {
         settings_config: JSON.stringify({ env: { GEMINI_BASE_URL: 'https://gemini.example', GEMINI_API_KEY: 'gk' } }),
       },
       {
+        id: 'codex-env-key', app_type: 'codex', name: 'Env Key Only',
+        settings_config: JSON.stringify({ config: `base_url = "https://env.example/v1"
+env_key = "OPENAI_API_KEY"` }),
+      },
+      {
         id: 'official', app_type: 'claude', name: 'Official', category: 'official',
         settings_config: JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com', ANTHROPIC_AUTH_TOKEN: 'skip' } }),
       },
@@ -82,6 +87,7 @@ describe('CC Switch importer', () => {
     expect(result.skipped).toEqual(expect.arrayContaining([
       expect.objectContaining({ externalId: 'claude:official', reason: 'official' }),
       expect.objectContaining({ externalId: 'hermes:unsupported-hermes', reason: 'unsupported_protocol' }),
+      expect.objectContaining({ externalId: 'codex:codex-env-key', reason: 'missing_api_key' }),
     ]));
   });
 

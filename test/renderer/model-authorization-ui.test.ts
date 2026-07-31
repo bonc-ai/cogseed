@@ -148,8 +148,8 @@ function loadInteractiveHarness() {
     if (channel === 'auth.startOAuth') return Promise.resolve({ ok: true, kind: 'done', profileId: `${payload.provider}:profile` });
     if (channel === 'customProviders.ccswitch.preview') return Promise.resolve({ ok: true, items: [
       { externalId: 'cc-1', name: 'Claude Desktop', protocol: 'anthropic', apiKeyMasked: 'sk-***', models: ['claude-3-5-sonnet'], needsKey: false },
-      { externalId: 'cc-needs-key', name: 'Needs key', protocol: 'openai', apiKeyMasked: '', models: [], needsKey: true },
     ], unsupported: [
+      { externalId: 'cc-needs-key', name: 'Needs key', reason: 'missing_api_key' },
       { externalId: 'hermes:1', name: 'DeepSeek', reason: 'unsupported_protocol' },
     ] });
     if (channel === 'modelAuthorizations.prepareCcSwitch') return Promise.resolve({ ok: true, draftId: 'draft-cc-1', externalId: payload.externalId, declaredModels: ['claude-3-5-sonnet'], maskedKey: 'sk-***' });
@@ -223,8 +223,9 @@ describe('model authorization interactive wizard', () => {
     expect(registry.get('model-authorization-body')!.innerHTML).toContain('sk-***');
     expect(registry.get('model-authorization-body')!.innerHTML).not.toContain('sk-raw-secret');
     expect(registry.get('model-authorization-body')!.innerHTML).toContain('ready-to-import');
-    expect(registry.get('model-authorization-body')!.innerHTML).toContain('needs-api-key');
+    expect(registry.get('model-authorization-body')!.innerHTML).not.toContain('needs-api-key');
     expect(registry.get('model-authorization-body')!.innerHTML).toContain('unsupported');
+    expect(registry.get('model-authorization-body')!.innerHTML).toContain('Needs key');
     const run = registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'select-ccswitch', externalId: 'cc-1' } } });
     await flushAsync();
     expect(invoke).toHaveBeenCalledWith('modelAuthorizations.prepareCcSwitch', { externalId: 'cc-1' });

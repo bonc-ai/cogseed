@@ -66,7 +66,7 @@ export interface CcSwitchSkippedItem {
   externalId: string;
   name: string;
   appType: string;
-  reason: 'official' | 'unsupported_protocol' | 'missing_base_url' | 'invalid_config';
+  reason: 'official' | 'unsupported_protocol' | 'missing_base_url' | 'missing_api_key' | 'invalid_config';
 }
 
 export interface CcSwitchProbe {
@@ -236,11 +236,11 @@ export function readCcSwitchImportItems(
     const skipped: CcSwitchSkippedItem[] = [];
     for (const r of rows) {
       const item = mapRow(r.app_type, r.id, r.name, r.category, r.settings_config, r.website_url, r.notes);
-      if (item) {
+      if (item && String(item.apiKey || '').trim() && !item.needsKey) {
         items.push(item);
         continue;
       }
-      let reason: CcSwitchSkippedItem['reason'] = 'missing_base_url';
+      let reason: CcSwitchSkippedItem['reason'] = item ? 'missing_api_key' : 'missing_base_url';
       if (r.category === 'official') reason = 'official';
       else if (!['claude', 'claude-desktop', 'codex', 'gemini'].includes(r.app_type)) reason = 'unsupported_protocol';
       else {
