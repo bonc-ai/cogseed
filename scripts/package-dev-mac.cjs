@@ -28,6 +28,8 @@ function createDevBuilderConfig(baseConfig = {}, identity = {}, options = {}) {
   };
   config.mac = {
     ...(config.mac || {}),
+    forceCodeSigning: false,
+    identity: null,
     target: [{ target: 'dir', arch: ['arm64'] }],
   };
   return config;

@@ -30,7 +30,12 @@ describe('isolated mac development packaging', () => {
       electronDist: '/cache/electron.zip',
       directories: { output: 'dist-dev' },
       extraMetadata: { retained: true, orkasBuildChannel: 'packaged-dev' },
-      mac: { category: 'public.app-category.productivity', target: [{ target: 'dir', arch: ['arm64'] }] },
+      mac: {
+        category: 'public.app-category.productivity',
+        forceCodeSigning: false,
+        identity: null,
+        target: [{ target: 'dir', arch: ['arm64'] }],
+      },
     });
     expect(config.protocols).toBeUndefined();
     expect(config.files).toEqual(expect.arrayContaining(['bootstrap.cjs', '.build/build-info.json']));
