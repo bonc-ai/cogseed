@@ -41,7 +41,8 @@
     "engine:build": "npm run build --workspace=nseap-meta-skill-engine",
     "engine:test": "npm run test --workspace=nseap-meta-skill-engine",
     "engine:check": "npm run check --workspace=nseap-meta-skill-engine",
-    "test:resources:setup": "node scripts/setup-python-test-env.mjs"
+    "test:resources:setup": "node scripts/setup-python-test-env.mjs",
+    "audit:workspace": "node scripts/audit-local-workspace.mjs"
   },
   "devDependencies": {
     "@ffprobe-installer/ffprobe": "^2.1.2",
