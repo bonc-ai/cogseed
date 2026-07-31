@@ -249,6 +249,7 @@ export async function reviewPatchCandidate(
   if (!existing) throw new Error('patch candidate not found');
   const skillId = existing.target.kind === 'custom_skill' ? existing.target.id : undefined;
   const validation = skillId ? await findLatestSkillValidation(uid, skillId) : null;
+  if (decision === 'approve' && existing.boundary?.mode === 'test-double') throw new Error('test-double result cannot approve production patch');
   if (decision === 'approve' && validation?.status === 'blocked') throw new Error('blocked validation cannot approve patch');
   if (decision === 'approve' && validation?.status === 'risk' && !notes.trim()) throw new Error('risk validation requires reviewer notes');
   return mutate(uid, (state) => {

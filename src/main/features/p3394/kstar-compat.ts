@@ -59,6 +59,8 @@ export interface CompatPatchCandidate {
   review?: { decision: 'approve' | 'reject'; notes?: string; reviewed_at: string };
   validation_id?: string;
   validation_status?: 'pass' | 'risk' | 'blocked' | 'degraded';
+  execution_id?: string; receipt_id?: string; contrast_id?: string;
+  boundary?: import('./execution-boundary').ExecutionBoundaryInfo;
   applied?: { target_path?: string; applied_at: string };
   created_at: string;
   updated_at: string;

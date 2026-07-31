@@ -11,6 +11,7 @@
  * All Engine interaction goes through the provided McpConnection.
  */
 
+import type { ExecutionBoundaryInfo } from './execution-boundary';
 import { createLogger } from '../../logger';
 import type { McpConnection } from '../connectors/mcp-client';
 import {
@@ -122,6 +123,12 @@ export class KstarAdapter {
 
   getDegradedReason(): string | null {
     return this.degradedReason;
+  }
+
+  getBoundary(): ExecutionBoundaryInfo {
+    return this.available
+      ? { mode: 'real', provider: 'meta-skill-engine-mcp' }
+      : { mode: 'degraded', provider: 'meta-skill-engine-mcp', reason: this.degradedReason || 'engine_not_initialized' };
   }
 
   /**
