@@ -2278,6 +2278,94 @@ export interface TestConnectionResult {
   profileId?: string;
 }
 
+export type AuthorizationDraftTestInput =
+  | { kind: 'oauth'; providerId: string; profileId: string; model: string }
+  | { kind: 'builtin_api_key'; providerId: string; apiKey: string; baseUrl?: string; model: string }
+  | { kind: 'custom_api_key'; protocol: CustomProvider['protocol']; apiKey: string; baseUrl: string; model: string };
+
+async function completeConnectivityProbe(provider: any, model: string): Promise<{ model?: string }> {
+  return provider.complete({
+    model,
+    systemPrompt: 'You are a connectivity probe; reply with a single word.',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
+    maxTokens: 1,
+  });
+}
+
+/** Test a credential before the unified authorization flow persists it. */
+export async function testAuthorizationDraft(
+  userId: string,
+  input: AuthorizationDraftTestInput,
+): Promise<TestConnectionResult> {
+  assertActiveUser(userId);
+  const model = String(input?.model || '').trim();
+  if (!model) return { ok: false, error: 'model required' };
+  if (input.kind === 'oauth') {
+    return testConnection(String(input.providerId || '').trim(), model, String(input.profileId || '').trim());
+  }
+  const apiKey = String(input.apiKey || '').trim();
+  if (!apiKey) return { ok: false, error: 'apiKey required' };
+  const t0 = Date.now();
+  try {
+    let provider: any;
+    if (input.kind === 'custom_api_key') {
+      const baseUrl = normalizeAuthorizationBaseUrl(input.baseUrl);
+      const runtime = await import('../model/core-agent/custom_provider_runtime');
+      const mod = await ca();
+      const draftProvider: CustomProvider = {
+        id: 'authorization-draft',
+        name: 'Authorization draft',
+        protocol: input.protocol,
+        baseUrl,
+        apiKey,
+        models: [model],
+        source: 'manual',
+        createdAt: Date.now(),
+      };
+      provider = mod.createPiProvider({
+        provider: 'cp:authorization-draft',
+        apiKey,
+        customModel: runtime.buildCustomProviderModel(draftProvider, model),
+      });
+    } else {
+      const providerId = String(input.providerId || '').trim();
+      if (!providerId) return { ok: false, error: 'provider required' };
+      if (!isModelProviderAllowed(providerId, model)) return { ok: false, error: 'provider/model disabled' };
+      if (EXTERNAL_API_PROVIDERS.includes(providerId)) {
+        const ext = await import('../model/core-agent/external-providers');
+        if (providerId === 'moonshot') provider = await ext.createMoonshotProvider({ apiKey, modelId: model });
+        else if (providerId === 'deepseek') provider = await ext.createDeepSeekProvider({ apiKey, modelId: model });
+        else if (providerId === 'doubao') provider = await ext.createDoubaoProvider({ apiKey, modelId: model });
+        else if (providerId === 'openai-compatible') {
+          provider = await ext.createOpenAICompatibleProvider({ apiKey, baseUrl: input.baseUrl || '', modelId: model });
+        } else return { ok: false, error: `provider "${providerId}" has no draft probe` };
+      } else {
+        const mod = await ca();
+        const resolvedModel = resolveConfiguredPiModel(mod, providerId, model);
+        provider = mod.createPiProvider({
+          provider: providerId,
+          ...(resolvedModel?.needsCustomModel ? { customModel: resolvedModel.model } : { model }),
+          apiKey,
+        });
+      }
+    }
+    const message = await completeConnectivityProbe(provider, model);
+    return { ok: true, durationMs: Date.now() - t0, model: message.model || model };
+  } catch (error) {
+    const rawError = (error as Error)?.message || String(error);
+    const safeError = rawError
+      .split(apiKey).join('[redacted]')
+      .replace(/https?:\/\/[^\s"']+/gi, '[endpoint]')
+      .slice(0, 500);
+    log.warn('authorization draft connection failed', {
+      kind: input.kind,
+      durationMs: Date.now() - t0,
+      error_chars: safeError.length,
+    });
+    return { ok: false, error: safeError, durationMs: Date.now() - t0 };
+  }
+}
+
 export async function testConnection(
   providerId: string,
   modelId?: string,

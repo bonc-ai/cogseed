@@ -271,6 +271,7 @@ export function syncFromCcSwitch(userId: string, selectedExternalIds?: string[],
         apiKey: apiKey || prev.apiKey,
         notes: it.notes ?? prev.notes,
         websiteUrl: it.websiteUrl ?? prev.websiteUrl,
+        models: it.models?.length ? it.models : prev.models,
         ...(apiKey || prev.apiKey ? { needsKey: false } : { needsKey: true }),
         updatedAt: Date.now(),
       };
@@ -284,6 +285,7 @@ export function syncFromCcSwitch(userId: string, selectedExternalIds?: string[],
         apiKey,
         ...(it.notes ? { notes: it.notes } : {}),
         ...(it.websiteUrl ? { websiteUrl: it.websiteUrl } : {}),
+        ...(it.models?.length ? { models: it.models } : {}),
         source: 'ccswitch',
         externalId: it.externalId,
         ...(needsKey ? { needsKey: true } : {}),
@@ -308,4 +310,22 @@ export function previewCcSwitchImport(userId: string):
   const res = readCcSwitchImportItems();
   if (!res.ok) return { ok: false, reason: (res as { reason: string }).reason };
   return { ok: true, items: res.items };
+}
+
+/** Resolve one exact CC Switch row for the unified authorization workflow.
+ *  This stays main-process-only: IPC callers receive a short-lived opaque
+ *  draft id instead of the raw key. */
+export function getCcSwitchAuthorizationSource(
+  userId: string,
+  externalId: string,
+  home?: string,
+): { ok: true; item: import('./ccswitch_import').CcSwitchImportItem } | { ok: false; reason: string } {
+  void listCustomProviders(userId); // active-user scope assertion
+  const id = String(externalId || '').trim().slice(0, 160);
+  if (!id) return { ok: false, reason: 'invalid_external_id' };
+  const { readCcSwitchImportItems } = require('./ccswitch_import') as typeof import('./ccswitch_import');
+  const result = readCcSwitchImportItems(home);
+  if (!result.ok) return { ok: false, reason: (result as { ok: false; reason: string }).reason };
+  const item = result.items.find((row) => row.externalId === id);
+  return item ? { ok: true, item } : { ok: false, reason: 'not_found' };
 }

@@ -43,7 +43,10 @@ describe('CC Switch importer', () => {
     createDb([
       {
         id: 'claude-relay', app_type: 'claude', name: 'Claude Relay',
-        settings_config: JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://claude.example', ANTHROPIC_AUTH_TOKEN: 'ak' } }),
+        settings_config: JSON.stringify({
+          models: ['claude-sonnet-4-6', 'claude-haiku-4-5'],
+          env: { ANTHROPIC_BASE_URL: 'https://claude.example', ANTHROPIC_AUTH_TOKEN: 'ak', ANTHROPIC_MODEL: 'claude-sonnet-4-6' },
+        }),
       },
       {
         id: 'codex-relay', app_type: 'codex', name: 'Codex Relay',
@@ -64,7 +67,10 @@ describe('CC Switch importer', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error(result.reason);
     expect(result.items).toEqual(expect.arrayContaining([
-      expect.objectContaining({ externalId: 'claude:claude-relay', protocol: 'anthropic', apiKey: 'ak' }),
+      expect.objectContaining({
+        externalId: 'claude:claude-relay', protocol: 'anthropic', apiKey: 'ak',
+        models: ['claude-sonnet-4-6', 'claude-haiku-4-5'],
+      }),
       expect.objectContaining({ externalId: 'codex:codex-relay', protocol: 'openai', apiKey: 'ok' }),
       expect.objectContaining({ externalId: 'gemini:gemini-relay', protocol: 'gemini', apiKey: 'gk' }),
     ]));

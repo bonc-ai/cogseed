@@ -52,6 +52,8 @@ export interface CcSwitchImportItem {
   protocol: 'anthropic' | 'openai' | 'gemini';
   baseUrl: string;
   apiKey: string;
+  /** Optional model hints declared in CC Switch's provider configuration. */
+  models?: string[];
   notes?: string;
   websiteUrl?: string;
   /** True when CC Switch stored no usable key for this row (e.g. codex rows
@@ -103,6 +105,30 @@ function apiKeyFromCodexConfigToml(configToml: unknown): string | undefined {
   return m ? m[1] : undefined;
 }
 
+function modelFromCodexConfigToml(configToml: unknown): string | undefined {
+  if (typeof configToml !== 'string' || !configToml) return undefined;
+  const m = /(?:^|\n)\s*model\s*=\s*"([^"]+)"/.exec(configToml);
+  return m ? m[1] : undefined;
+}
+
+function modelHints(cfg: Record<string, unknown>, env: Record<string, unknown>): string[] | undefined {
+  const raw: unknown[] = [];
+  if (Array.isArray(cfg.models)) raw.push(...cfg.models);
+  raw.push(cfg.model, cfg.defaultModel, cfg.default_model);
+  raw.push(env.ANTHROPIC_MODEL, env.OPENAI_MODEL, env.GEMINI_MODEL, env.GOOGLE_MODEL);
+  raw.push(modelFromCodexConfigToml(cfg.config));
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of raw) {
+    const model = typeof value === 'string' ? value.trim().slice(0, 200) : '';
+    if (!model || seen.has(model)) continue;
+    seen.add(model);
+    out.push(model);
+    if (out.length >= 100) break;
+  }
+  return out.length ? out : undefined;
+}
+
 function asObject(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
 }
@@ -125,10 +151,12 @@ function mapRow(
 
   const env = asObject(cfg.env);
   const base = (k: string) => (typeof env[k] === 'string' ? (env[k] as string) : '');
+  const models = modelHints(cfg, env);
 
   const common = {
     externalId: `${appType}:${id}`,
     name: name || id,
+    ...(models ? { models } : {}),
     ...(notes ? { notes } : {}),
     ...(websiteUrl ? { websiteUrl } : {}),
   };
