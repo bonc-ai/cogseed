@@ -1363,6 +1363,14 @@ export interface AuthorizationModelSummary {
   model: string;
 }
 
+export type AuthorizationWarningCode = 'orphan_entry' | 'missing_custom_provider' | 'unbound_authorization';
+
+export interface AuthorizationWarning {
+  code: AuthorizationWarningCode;
+  entryId?: string;
+  authorizationId?: string;
+}
+
 export interface AuthorizationSummary {
   authorizationId: string;
   authType: 'api_key' | 'oauth';
@@ -1378,6 +1386,7 @@ export interface AuthorizationSummary {
   enabledModels: string[];
   defaultModel: string;
   unbound: boolean;
+  warningCode?: AuthorizationWarningCode;
 }
 
 interface AuthorizationCompletionBase {
@@ -1527,6 +1536,7 @@ function profileAuthorizationSummary(
     enabledModels: entries.map((entry) => entry.model),
     defaultModel: entries[0]?.model || '',
     unbound: entries.length === 0,
+    ...(entries.length === 0 ? { warningCode: 'unbound_authorization' as const } : {}),
   };
 }
 
@@ -1536,7 +1546,7 @@ function customAuthorizationSummary(store: ProfilesFile, provider: CustomProvide
   return {
     authorizationId: `custom:${provider.id}`,
     authType: 'api_key',
-    source: provider.source,
+    source: provider.source || 'manual',
     providerId: synthetic,
     profileId: synthetic,
     label: provider.name,
@@ -1547,6 +1557,7 @@ function customAuthorizationSummary(store: ProfilesFile, provider: CustomProvide
     enabledModels: entries.map((entry) => entry.model),
     defaultModel: entries[0]?.model || '',
     unbound: entries.length === 0,
+    ...(entries.length === 0 ? { warningCode: 'unbound_authorization' as const } : {}),
   };
 }
 
@@ -1564,7 +1575,34 @@ function authorizationSummaryById(store: ProfilesFile, authorizationId: string):
   return undefined;
 }
 
-export function listAuthorizationSummaries(userId: string): { authorizations: AuthorizationSummary[] } {
+function authorizationStoreWarnings(store: ProfilesFile): AuthorizationWarning[] {
+  const warnings: AuthorizationWarning[] = [];
+  const customIds = new Set((store.customProviders || []).map((provider) => provider.id));
+  const pushUnique = (warning: AuthorizationWarning) => {
+    if (!warnings.some((row) => row.code === warning.code && row.entryId === warning.entryId && row.authorizationId === warning.authorizationId)) {
+      warnings.push(warning);
+    }
+  };
+  for (const entry of store.entries || []) {
+    if (entry.provider.startsWith('cp:') || entry.profileId.startsWith('cp:')) {
+      const customId = (entry.provider.startsWith('cp:') ? entry.provider : entry.profileId).slice('cp:'.length);
+      if (!customIds.has(customId)) pushUnique({ code: 'missing_custom_provider', entryId: entry.entryId });
+      continue;
+    }
+    const profile = store.profiles[entry.profileId];
+    if (!profile || profile.provider !== entry.provider) pushUnique({ code: 'orphan_entry', entryId: entry.entryId });
+  }
+  for (const [profileId, profile] of Object.entries(store.profiles)) {
+    if (entriesForProfile(store, profileId).length === 0) pushUnique({ code: 'unbound_authorization', authorizationId: `profile:${profileId}` });
+    void profile;
+  }
+  for (const provider of store.customProviders || []) {
+    if (entriesForCustomProvider(store, provider.id).length === 0) pushUnique({ code: 'unbound_authorization', authorizationId: `custom:${provider.id}` });
+  }
+  return warnings.slice(0, 100);
+}
+
+export function listAuthorizationSummaries(userId: string): { authorizations: AuthorizationSummary[]; warnings: AuthorizationWarning[] } {
   assertActiveUser(userId);
   const store = loadProfiles();
   return {
@@ -1572,6 +1610,7 @@ export function listAuthorizationSummaries(userId: string): { authorizations: Au
       ...Object.entries(store.profiles).map(([profileId, profile]) => profileAuthorizationSummary(store, profileId, profile)),
       ...(store.customProviders || []).map((provider) => customAuthorizationSummary(store, provider)),
     ],
+    warnings: authorizationStoreWarnings(store),
   };
 }
 

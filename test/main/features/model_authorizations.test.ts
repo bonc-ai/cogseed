@@ -177,4 +177,61 @@ describe('model authorizations', () => {
       `profile:${unbound.profileId}`,
     ]);
   });
+  it('reports legacy orphan and unbound warnings without repairing during list', async () => {
+    const paths = await import('../../../src/main/paths');
+    const localSecrets = await import('../../../src/main/util/local-secret-store');
+    const auth = await import('../../../src/main/features/auth');
+    const storePath = paths.userAuthProfilesFile(UID);
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    const legacyStore = {
+      version: 6,
+      profiles: {
+        'openai:unbound': { type: 'api_key', provider: 'openai', label: 'unbound', key: 'sk-unbound', createdAt: 1, lastUsed: 0 },
+        'anthropic:work': { type: 'api_key', provider: 'anthropic', label: 'work', key: 'sk-work', createdAt: 1, lastUsed: 0 },
+      },
+      entries: [
+        { entryId: 'entry-ok', provider: 'anthropic', profileId: 'anthropic:work', model: 'claude-opus-4-8', createdAt: 1, lastUsed: 0 },
+        { entryId: 'entry-orphan', provider: 'openai', profileId: 'openai:missing', model: 'gpt-5.5', createdAt: 1, lastUsed: 0 },
+        { entryId: 'entry-missing-custom', provider: 'cp:missing', profileId: 'cp:missing', model: 'custom-chat', createdAt: 1, lastUsed: 0 },
+      ],
+      searchProfiles: [], imageProfiles: [], videoProfiles: [], ttsProfiles: [], customProviders: [], authorizationRequests: [],
+    };
+    const encrypted = localSecrets.encryptLocalSecret({ namespace: 'auth.profiles', ownerId: UID, recordId: 'auth-profiles.json' }, JSON.stringify(legacyStore));
+    fs.writeFileSync(storePath, encrypted, 'utf8');
+    const before = fs.readFileSync(storePath, 'utf8');
+
+    const listed = auth.listAuthorizationSummaries(UID);
+
+    expect(fs.readFileSync(storePath, 'utf8')).toBe(before);
+    expect(listed.authorizations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ authorizationId: 'profile:openai:unbound', unbound: true, warningCode: 'unbound_authorization' }),
+      expect.objectContaining({ authorizationId: 'profile:anthropic:work', enabledModels: ['claude-opus-4-8'] }),
+    ]));
+    expect(listed.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'orphan_entry', entryId: 'entry-orphan' }),
+      expect.objectContaining({ code: 'missing_custom_provider', entryId: 'entry-missing-custom' }),
+    ]));
+  });
+
+  it('reuses an existing CC Switch custom authorization only after explicit completion', async () => {
+    const auth = await import('../../../src/main/features/auth');
+    const first = await auth.completeAuthorization(UID, {
+      requestId: 'req-cc-first', authType: 'api_key', source: 'ccswitch', providerKind: 'custom',
+      customProvider: { name: 'Claude Desktop', protocol: 'anthropic', baseUrl: 'https://api.anthropic.com', apiKey: 'first-secret', externalId: 'claude:desktop' },
+      selectedModels: ['claude-opus-4-8'], defaultModel: 'claude-opus-4-8',
+    });
+
+    expect(auth.listAuthorizationSummaries(UID).authorizations.find((row) => row.authorizationId === first.authorization.authorizationId)?.enabledModels).toEqual(['claude-opus-4-8']);
+
+    const second = await auth.completeAuthorization(UID, {
+      requestId: 'req-cc-second', authType: 'api_key', source: 'ccswitch', providerKind: 'custom',
+      customProvider: { name: 'Claude Desktop Updated', protocol: 'anthropic', baseUrl: 'https://api.anthropic.com', apiKey: 'second-secret', externalId: 'claude:desktop' },
+      selectedModels: ['claude-sonnet-4-6'], defaultModel: 'claude-sonnet-4-6',
+    });
+
+    expect(second.authorization.authorizationId).toBe(first.authorization.authorizationId);
+    expect(second.authorization.enabledModels).toEqual(['claude-sonnet-4-6']);
+    expect(auth.listAuthorizationSummaries(UID).authorizations.filter((row) => row.source === 'ccswitch')).toHaveLength(1);
+  });
+
 });
