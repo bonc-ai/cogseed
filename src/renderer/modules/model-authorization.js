@@ -555,6 +555,7 @@
     if (!res || !res.ok) { setStatus((res && res.error) || tr('settings.model_authorization.complete_failed'), 'error'); return; }
     closeModal();
     await refreshModelAuthorizationSettings();
+    if (typeof refreshModelGuard === 'function') await refreshModelGuard();
   }
 
   async function handleAction(dataset) {

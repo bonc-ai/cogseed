@@ -162,8 +162,10 @@ function loadInteractiveHarness() {
     orkas: { invoke },
     addEventListener(type: string, handler: (...args: any[]) => unknown) { const list = windowListeners.get(type) || []; list.push(handler); windowListeners.set(type, list); },
   };
+  const refreshModelGuard = vi.fn(async () => true);
   const context: any = {
     window: windowObj,
+    refreshModelGuard,
     document: {
       getElementById: (id: string) => registry.get(id) || null,
       addEventListener: vi.fn(),
@@ -175,7 +177,7 @@ function loadInteractiveHarness() {
   };
   vm.createContext(context);
   vm.runInContext(readFileSync(resolve(root, 'src/renderer/modules/model-authorization.js'), 'utf8'), context, { filename: 'model-authorization.js' });
-  return { context, registry, invoke, discoverResolvers, windowListeners };
+  return { context, registry, invoke, discoverResolvers, windowListeners, refreshModelGuard };
 }
 
 describe('model authorization interactive wizard', () => {
@@ -239,6 +241,7 @@ describe('model authorization interactive wizard', () => {
     expect(invoke).toHaveBeenCalledWith('modelAuthorizations.testDraft', expect.objectContaining({ model: 'claude-3-opus' }));
     expect(invoke).toHaveBeenCalledWith('modelAuthorizations.complete', expect.objectContaining({ selectedModels: ['claude-3-5-sonnet', 'claude-3-opus'], defaultModel: 'claude-3-opus' }));
     expect(invoke.mock.calls.filter((call) => call[0] === 'modelAuthorizations.complete')).toHaveLength(1);
+    expect(context.refreshModelGuard).toHaveBeenCalled();
   });
 
   it('preserves failed completion drafts for retry and refreshes rendered cards on success', async () => {
