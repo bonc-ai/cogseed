@@ -254,6 +254,24 @@ describe('kstar-bus-integration', () => {
 
       expect(result.runId).toContain('commander');
     });
+
+    it('marks a failed close fallback as degraded while preserving the Engine boundary', async () => {
+      vi.mocked(mockAdapter.recordEvidence!).mockResolvedValue({
+        success: false,
+        boundary: { mode: 'real', provider: 'meta-skill-engine-mcp' },
+      });
+
+      const result = await closeCollaborationEvidence('user-123', {
+        conversationId: 'conv-456',
+        outcomeStatus: 'completed',
+      });
+
+      expect(result).toMatchObject({
+        success: false,
+        degraded: true,
+        boundary: { mode: 'real', provider: 'meta-skill-engine-mcp' },
+      });
+    });
   });
 
   describe('degraded mode', () => {

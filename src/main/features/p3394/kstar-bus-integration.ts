@@ -22,6 +22,7 @@ import { getKstarAdapter } from './kstar-factory';
 import { appendPendingEvidence, getPendingEvidencePath } from './kstar-store';
 import * as fs from 'node:fs/promises';
 import type { KStarDecisionRecord } from './kstar-compat';
+import type { ExecutionBoundaryInfo } from './execution-boundary';
 
 const log = createLogger('p3394.kstar-bus-integration');
 
@@ -62,9 +63,9 @@ export interface AgentContributionEvidenceInput {
 async function appendPendingAdapterEvidence(
   userId: string,
   evidence: Record<string, unknown>,
-): Promise<{ success: false; degraded: true }> {
+): Promise<{ success: false; degraded: true; boundary: ExecutionBoundaryInfo }> {
   try {
-    await appendPendingEvidence(userId, evidence);
+    await appendPendingEvidence(userId, { ...evidence, boundary: { mode: 'degraded', provider: 'meta-skill-engine-mcp', reason: 'engine_unavailable_pending_evidence' } });
   } catch (err) {
     log.warn('failed to append pending kstar evidence', {
       userId,
@@ -72,7 +73,7 @@ async function appendPendingAdapterEvidence(
       error: (err as Error).message,
     });
   }
-  return { success: false, degraded: true };
+  return { success: false, degraded: true, boundary: { mode: 'degraded', provider: 'meta-skill-engine-mcp', reason: 'engine_unavailable_pending_evidence' } };
 }
 
 async function hasPendingContributionEvidence(
@@ -106,7 +107,7 @@ async function hasPendingContributionEvidence(
  */
 export async function recordToolCycleEvidence(
   input: ToolCycleEvidenceInput,
-): Promise<{ success: boolean; degraded?: boolean }> {
+): Promise<{ success: boolean; degraded?: boolean; boundary?: ExecutionBoundaryInfo }> {
   const evidenceId = `tool-${input.conversationId}-${input.agentId}-${input.turnId}-${input.toolCallId}`;
   const evidence = {
     id: evidenceId,
@@ -147,7 +148,7 @@ export async function recordToolCycleEvidence(
  */
 export async function recordAgentRunStartEvidence(
   input: AgentRunStartEvidenceInput,
-): Promise<{ success: boolean; degraded?: boolean }> {
+): Promise<{ success: boolean; degraded?: boolean; boundary?: ExecutionBoundaryInfo }> {
   const evidenceId = `run-start-${input.conversationId}-${input.agentId}-${input.turnId}`;
   const evidence = {
     id: evidenceId,
@@ -180,7 +181,7 @@ export async function recordAgentRunStartEvidence(
  */
 export async function recordAgentContributionEvidence(
   input: AgentContributionEvidenceInput,
-): Promise<{ success: boolean; degraded?: boolean }> {
+): Promise<{ success: boolean; degraded?: boolean; boundary?: ExecutionBoundaryInfo }> {
   const evidenceId = `contribution-${input.conversationId}-${input.agentId}-${input.turnId}-${input.messageId}`;
   const evidence = {
     id: evidenceId,
@@ -221,7 +222,7 @@ export async function closeCollaborationEvidence(
     commanderId?: string;
     outcomeStatus: 'completed' | 'failed' | 'cancelled';
   },
-): Promise<{ success: boolean; runId?: string }> {
+): Promise<{ success: boolean; runId?: string; degraded?: boolean; boundary?: ExecutionBoundaryInfo }> {
   const commanderId = input.commanderId || 'commander';
   const runId = `collab-${input.conversationId}-${commanderId}-${Date.now()}`;
   const evidence = {
@@ -242,13 +243,13 @@ export async function closeCollaborationEvidence(
     if (await hasPendingContributionEvidence(userId, input.conversationId)) {
       await appendPendingAdapterEvidence(userId, evidence);
     }
-    return { success: false };
+    return { success: false, degraded: true, boundary: { mode: 'degraded', provider: 'meta-skill-engine-mcp', reason: 'engine_unavailable' } };
   }
 
   const result = await adapter.recordEvidence(evidence);
   if (!result.success) {
     await appendPendingAdapterEvidence(userId, evidence);
-    return { success: false };
+    return { success: false, degraded: true, boundary: result.boundary };
   }
-  return { success: true, runId };
+  return { success: true, runId, boundary: result.boundary };
 }

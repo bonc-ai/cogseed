@@ -203,41 +203,43 @@ export class KstarAdapter {
     status?: string;
     delta_r?: number;
     [key: string]: unknown;
-  }): Promise<{ success: boolean; deduplicated?: boolean; degraded?: boolean }> {
+  }): Promise<{ success: boolean; deduplicated?: boolean; degraded?: boolean; boundary: ExecutionBoundaryInfo }> {
+    const boundary = this.getBoundary();
+    const boundedEvidence = { ...evidence, boundary };
     if (!this.available) {
       // In degraded mode, append to pending log
       try {
-        await appendPendingEvidence(this.userId, evidence);
-        return { success: false, degraded: true };
+        await appendPendingEvidence(this.userId, boundedEvidence);
+        return { success: false, degraded: true, boundary };
       } catch (err) {
         log.warn('failed to append pending evidence', {
           userId: this.userId,
           error: (err as Error).message,
         });
-        return { success: false, degraded: true };
+        return { success: false, degraded: true, boundary };
       }
     }
 
     try {
       const result = await this.connection.callTool(
         'record_evidence',
-        evidence,
+        boundedEvidence,
         { timeoutMs: 15_000 },
       );
       const parsed = parseToolResult<{ success: boolean; deduplicated?: boolean }>(result);
 
       if (!parsed?.success) {
-        return { success: false };
+        return { success: false, boundary };
       }
 
-      return { success: true, deduplicated: parsed.deduplicated };
+      return { success: true, deduplicated: parsed.deduplicated, boundary };
     } catch (err) {
       log.warn('evidence recording failed', {
         userId: this.userId,
         evidenceId: evidence.id,
         error: (err as Error).message,
       });
-      return { success: false };
+      return { success: false, boundary };
     }
   }
 
