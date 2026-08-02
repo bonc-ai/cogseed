@@ -169,5 +169,20 @@
   "notification.task.failed.body": "Abra o Orkas para ver os detalhes.",
   "notification.task.waiting_input.title": "Status da tarefa atualizado",
   "notification.task.waiting_input.body": "Abra o Orkas para ver os detalhes.",
-  "chat.reply_interrupted": "A resposta anterior foi interrompida quando o aplicativo foi encerrado. O progresso persistido foi mantido; envie uma mensagem para continuar."
+  "chat.reply_interrupted": "A resposta anterior foi interrompida quando o aplicativo foi encerrado. O progresso persistido foi mantido; envie uma mensagem para continuar.",
+  "conversation.copy.title": "{title} (Cópia)",
+  "conversation.merge.heading": "{count} conversas mescladas: {title}",
+  "conversation.merge.section.sources": "Conversas de origem",
+  "conversation.merge.section.decisions": "Decisões confirmadas",
+  "conversation.merge.decisions.merged": "O contexto compartilhado e o contexto privado dos agentes foram mesclados de forma estruturada.",
+  "conversation.merge.section.current_state": "Estado atual",
+  "conversation.merge.current_state.fresh_sessions": "A nova conversa começa com uma única mensagem de resumo e novos IDs de sessão.",
+  "conversation.merge.section.agent_context": "Índice de contexto privado dos agentes",
+  "conversation.merge.none_recorded": "Nenhum registro.",
+  "conversation.merge.section.references": "Referências de origem",
+  "conversation.merge.references.not_copied": "As referências de conversas e mensagens foram mantidas; os conteúdos de anexos, artifacts e arquivos produzidos não foram copiados.",
+  "conversation.merge.section.open_questions": "Questões em aberto",
+  "conversation.merge.open_questions.review": "Revise os fluxos de trabalho mesclados dos agentes antes de atribuir novas responsabilidades.",
+  "conversation.merge.section.risks": "Conflitos / Riscos",
+  "conversation.merge.risks.none": "Nenhum conflito ou risco explícito foi detectado nas mensagens de UI de origem."
 }

@@ -29,6 +29,8 @@ const _IPC_ROUTES = [
   ['GET',    '/api/user/init',                'user.init'],
   ['GET',    '/api/conversations/list',       'conversations.list'],
   ['POST',   '/api/conversations/create',     'conversations.create'],
+  ['POST',   '/api/conversations/merge',      'conversations.merge'],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/clone$/, 'conversations.clone', ['cid']],
   ['GET',    '/api/agents/list',              'agents.list'],
   ['POST',   '/api/agents/create',            'agents.create'],
   ['GET',    '/api/skills/list',              'skills.list'],

@@ -42,6 +42,7 @@ import * as libraryTransfer from '../features/library_transfer';
 import * as kbVector from '../features/kb_vector';
 import * as kbIndexer from '../features/kb_indexer';
 import * as chatAttachments from '../features/chat_attachments';
+import * as conversationCopyMerge from '../features/conversation_copy_merge';
 import * as chatArtifacts from '../features/chat_artifacts';
 import * as conversationFiles from '../features/conversation_files';
 import * as recycleBin from '../features/recycle_bin';
@@ -102,8 +103,8 @@ function markPreferencesDirty(): void {}
 function conversationProjectHint(args: Record<string, any>): string | null | undefined {
   if (!Object.prototype.hasOwnProperty.call(args, 'project_id')) return undefined;
   const raw = args.project_id;
-  if (raw === '') return null;
-  if (!safeId(raw)) throw new Error('invalid project id');
+  if (raw === '' || raw === null) return null;
+  if (typeof raw !== 'string' || !safeId(raw)) throw new Error('invalid project id');
   return raw;
 }
 
@@ -840,6 +841,43 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ? path.join(workspaceRoot, state.workspace_dir)
       : workspaceRoot;
     return conversationFiles.listWorkspaceFiles(root);
+  },
+
+  'conversations.clone': async (args, ctx) => {
+    const { cid } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const projectIdHint = conversationProjectHint(args);
+    const result = await conversationCopyMerge.cloneConversation(
+      ctx.userId,
+      cid,
+      Object.prototype.hasOwnProperty.call(args, 'project_id') ? { projectIdHint } : {},
+    );
+    return { conversation: result.newConversation };
+  },
+
+  'conversations.merge': async (args, ctx) => {
+    const { cids, title } = args;
+    if (!Array.isArray(cids) || cids.some((cid) => !safeId(cid))) {
+      throw new Error('invalid cids');
+    }
+    if (new Set(cids).size < 2) {
+      throw new Error('at least two source conversations are required');
+    }
+    if (typeof title !== 'string') throw new Error('invalid title');
+    const projectIdHint = conversationProjectHint(args);
+    const result = await conversationCopyMerge.mergeConversations(
+      ctx.userId,
+      cids,
+      {
+        title,
+        ...(Object.prototype.hasOwnProperty.call(args, 'project_id') ? { projectIdHint } : {}),
+      },
+    );
+    return {
+      conversation: result.newConversation,
+      summary: result.summaryMessage,
+      agent_summaries: result.agentSummaries,
+    };
   },
 
   'conversations.create': async ({ title = '', projectId = '' } = {}, ctx) => {

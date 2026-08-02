@@ -169,5 +169,20 @@
   "notification.task.failed.body": "打开 Orkas 查看详情。",
   "notification.task.waiting_input.title": "任务状态已更新",
   "notification.task.waiting_input.body": "打开 Orkas 查看详情。",
-  "chat.reply_interrupted": "应用退出时，上一次回复被中断。已完成的持久化进度仍会保留，请发送消息继续。"
+  "chat.reply_interrupted": "应用退出时，上一次回复被中断。已完成的持久化进度仍会保留，请发送消息继续。",
+  "conversation.copy.title": "{title}（副本）",
+  "conversation.merge.heading": "已合并 {count} 个会话：{title}",
+  "conversation.merge.section.sources": "来源会话",
+  "conversation.merge.section.decisions": "已确认决策",
+  "conversation.merge.decisions.merged": "共享上下文和智能体私有上下文已完成结构化合并。",
+  "conversation.merge.section.current_state": "当前状态",
+  "conversation.merge.current_state.fresh_sessions": "新会话从一条摘要消息和全新的会话 ID 开始。",
+  "conversation.merge.section.agent_context": "智能体私有上下文索引",
+  "conversation.merge.none_recorded": "暂无记录。",
+  "conversation.merge.section.references": "来源引用",
+  "conversation.merge.references.not_copied": "会话和消息引用已保留；附件、artifact 和产出文件本体未复制。",
+  "conversation.merge.section.open_questions": "未决问题",
+  "conversation.merge.open_questions.review": "分配新职责前，请检查合并后的智能体工作流。",
+  "conversation.merge.section.risks": "冲突 / 风险",
+  "conversation.merge.risks.none": "来源 UI 消息中未检测到明确的冲突或风险。"
 }
