@@ -3744,6 +3744,17 @@ async function runActorTurnBody(
   } else {
     try {
       const actorMaxToolLoops = maxToolLoopsForActorKind(actor.kind);
+      const { createLifecycleSink } = await import("../execution-records");
+      const { getLocalExecMode } = await import("../permissions");
+      const executionLifecycle = createLifecycleSink(uid, {
+        executionId: `turn-${item.turnId}`,
+        kind: "core-agent",
+        sessionId,
+        conversationId: cid,
+        ...(actor.kind === "agent" ? { agentId: actor.id } : {}),
+        boundary: "real",
+        permissionMode: getLocalExecMode(),
+      });
       for await (const ev of streamChatWithModel({
         userId: uid,
         message: messageText,
@@ -3760,6 +3771,7 @@ async function runActorTurnBody(
         onOutputsPublished,
         hasProducedPath,
         onArtifactCreated,
+        executionLifecycle,
         onSkillAdvertised: (id, sys) => skillBuffer.recordAdvertised(id, sys),
         onSkillInvoked: (id, sys, trig) =>
           skillBuffer.recordInvoked(id, sys, trig),

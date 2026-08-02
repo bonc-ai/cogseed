@@ -16,6 +16,7 @@ const streamProbe = vi.hoisted(() => ({
   readOnlyRoots: [] as string[][],
   dispatchResults: [] as string[],
   maxToolLoops: [] as Array<number | undefined>,
+  lifecycleSeen: [] as boolean[],
 }));
 
 // Mock the model client so `runTurn` doesn't try to do a real LLM call.
@@ -29,6 +30,7 @@ vi.mock('../../../../src/main/model/client', () => ({
     streamProbe.messages.push(String(_opts?.message || ''));
     streamProbe.readOnlyRoots.push(Array.isArray(_opts?.readOnlyExtraRoots) ? [..._opts.readOnlyExtraRoots] : []);
     streamProbe.maxToolLoops.push(typeof _opts?.maxToolLoops === 'number' ? _opts.maxToolLoops : undefined);
+    streamProbe.lifecycleSeen.push(!!_opts?.executionLifecycle);
     if (String(_opts?.message || '').includes('ARTIFACT_EVENT_TEST')) {
       _opts?.onArtifactCreated?.({ id: 'art-live-1', title: 'Live App' });
     }
@@ -161,6 +163,29 @@ vi.mock('../../../../src/main/model/client', () => ({
       yield { type: 'done' };
       return;
     }
+    if (String(_opts?.message || '').includes('EXECUTION_LIFECYCLE_TEST')) {
+      await _opts?.executionLifecycle?.queued?.({
+        kind: 'core-agent',
+        sessionId: _opts.sessionId,
+        conversationId: _opts.cid,
+        ...(_opts.agentId ? { agentId: _opts.agentId } : {}),
+      });
+      await _opts?.executionLifecycle?.started?.({
+        kind: 'core-agent',
+        sessionId: _opts.sessionId,
+        conversationId: _opts.cid,
+        ...(_opts.agentId ? { agentId: _opts.agentId } : {}),
+      });
+      await _opts?.executionLifecycle?.event?.('output', { output: 'mock lifecycle output' });
+      await _opts?.executionLifecycle?.terminal?.({
+        status: 'completed',
+        sessionId: _opts.sessionId,
+        output: 'mock lifecycle output',
+      });
+      yield { type: 'final', text: 'execution lifecycle recorded' };
+      yield { type: 'done' };
+      return;
+    }
     yield { type: 'final', text: '' };
     yield { type: 'done' };
   },
@@ -212,6 +237,7 @@ beforeEach(async () => {
   streamProbe.readOnlyRoots.length = 0;
   streamProbe.dispatchResults.length = 0;
   streamProbe.maxToolLoops.length = 0;
+  streamProbe.lifecycleSeen.length = 0;
   streamGate.releaseActiveTurn = null;
   cidsToDrop.clear();
   const users = await import('../../../../src/main/features/users');
@@ -588,6 +614,37 @@ describe('group_chat bus › enqueue routing + persistence', () => {
       other_ms: 3,
       failure_phase: 'tool',
     });
+  });
+
+  it('passes a P3394 execution lifecycle sink to real core-agent group turns', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const records = await import('../../../../src/main/features/execution-records');
+    const cid = 'cid-execution-lifecycle';
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'user', text: 'EXECUTION_LIFECYCLE_TEST',
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    expect(streamProbe.lifecycleSeen).toContain(true);
+    const executionRecords = await records.list(TEST_UID);
+    const record = executionRecords.find((candidate) => candidate.conversationId === cid);
+    expect(record).toMatchObject({
+      kind: 'core-agent',
+      sessionId: `gconv-${cid}`,
+      conversationId: cid,
+      status: 'completed',
+      boundary: 'real',
+      permissionMode: 'all_files_approval',
+      artifactIds: [],
+    });
+    expect(record?.executionId).toMatch(/^turn-/);
+    const events = await records.readEvents(TEST_UID, record!.executionId);
+    expect(events.map((event) => event.type)).toEqual(expect.arrayContaining([
+      'queued',
+      'started',
+      'output',
+      'terminal',
+    ]));
   });
 
   it('P3394 Wake Gate keeps an unapproved mentioned agent out of the roster and runtime', async () => {
