@@ -11,8 +11,15 @@ import { createLogger } from '../../logger';
 const log = createLogger('p3394.controller');
 
 // 会话解析结果:由外部 session-store 提供,把 sessionId 映射到真实 kind/region。
-export interface SessionResolution { sessionId: string; kind: string; region: string; valid: boolean; }
-export interface SessionSource { resolve(sessionId: string): Promise<SessionResolution>; }
+export interface SessionResolution {
+  sessionId: string;
+  kind: string | null;
+  region: 'cloud' | 'local';
+  valid: boolean;
+}
+export interface SessionSource {
+  resolve(userId: string, sessionId: string): Promise<SessionResolution>;
+}
 
 // epoch 水位存储(EpochStore 兼容形状):防重复投递。
 // admit 原子判定重放 + 推进水位(max(水位,incomingEpoch)),消除 TOCTOU。current/nextEpoch 保留供其它调用点。
@@ -51,7 +58,7 @@ export class P3394Controller {
 
     // session 解析:成功写真实 kind/region/valid;IO 失败降级放行只标 resolved:false。
     try {
-      const res = await this.deps.sessionSource.resolve(input.sessionId);
+      const res = await this.deps.sessionSource.resolve(input.uid, input.sessionId);
       (message.metadata as any).session_kind = res.kind;
       (message.metadata as any).session_region = res.region;
       (message.metadata as any).session_resolved = res.valid;

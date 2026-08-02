@@ -80,6 +80,26 @@ describe('kstar-factory', () => {
       expect(adapter.initialize).toHaveBeenCalled();
     });
 
+
+    test('connects the MCP transport before adapter handshake initialization', async () => {
+      const { McpConnection } = await import(
+        '../../../../src/main/features/connectors/mcp-client'
+      );
+
+      await createKstarAdapter({
+        userId: 'test-user',
+        engineCommand: 'node',
+        engineArgs: ['engine.js'],
+      });
+
+      const connection = vi.mocked(McpConnection).mock.results.at(-1)?.value as { connect: ReturnType<typeof vi.fn> };
+      const adapter = vi.mocked(KstarAdapter).mock.results.at(-1)?.value as { initialize: ReturnType<typeof vi.fn> };
+      expect(connection.connect).toHaveBeenCalledOnce();
+      expect(connection.connect.mock.invocationCallOrder[0]).toBeLessThan(
+        adapter.initialize.mock.invocationCallOrder[0],
+      );
+    });
+
     test('uses default protocol version when not specified', async () => {
       await createKstarAdapter({
         userId: 'test-user',

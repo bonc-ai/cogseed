@@ -36,6 +36,7 @@ export type LocalEventType =
   | 'log'
   | 'raw-line'
   | 'permission-request'
+  | 'artifact'
   | 'idle'
   | 'done';
 
@@ -53,6 +54,7 @@ export interface LocalEvent {
    *    log:                { level: 'debug'|'info'|'warn'|'error', message, source? }
    *    raw-line:           { line }             // stdout line we couldn't parse as our protocol
    *    permission-request: { id, tool?, input?, autoDecided: 'allow'|'deny', reason }
+   *    artifact:           { cid, artifactId, title } // validated by execution sink before linkage
    *    idle:               { stalledMs }        // runner-emitted heartbeat on prolonged silence
    *    done:               { status: 'completed'|'failed'|'cancelled'|'timeout'|
    *                                  'missing_cli', error?, durationMs?, sessionId?, usage? }
@@ -95,6 +97,11 @@ export interface BackendRunOptions {
   idleMs?: number;
   /** Custom-provider variables applied only to the spawned child process. */
   providerEnv?: Record<string, string>;
+  /** Host-validated context boundary. Backends may project only these bounded fields. */
+  executionContext?: {
+    sessionId: string; contextId?: string; readOnlyRoots: string[]; writableRoots: string[];
+    permissionMode: string; receiptId: string;
+  };
   /** orkas-bridge injection (plan §D — set by runner.ts when a bridge
    *  host is live for this run). Backends that support adding an MCP
    *  server pass the config through (claude: `--mcp-config`; codex:
@@ -138,6 +145,18 @@ export class StderrTail {
   toString(): string {
     return this.chunks.join('');
   }
+}
+
+export function executionContextEnv(context: BackendRunOptions['executionContext']): Record<string, string> | undefined {
+  if (!context) return undefined;
+  return {
+    ORKAS_EXECUTION_SESSION_ID: context.sessionId,
+    ...(context.contextId ? { ORKAS_EXECUTION_CONTEXT_ID: context.contextId } : {}),
+    ORKAS_EXECUTION_RECEIPT_ID: context.receiptId,
+    ORKAS_PERMISSION_MODE: context.permissionMode,
+    ORKAS_ALLOWED_READ_ROOTS: JSON.stringify(context.readOnlyRoots),
+    ORKAS_ALLOWED_WRITE_ROOTS: JSON.stringify(context.writableRoots),
+  };
 }
 
 /** Standard spawn options. Returns a child with stdio: pipe/pipe/pipe.

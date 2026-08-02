@@ -45,7 +45,8 @@
     "audit:workspace": "node scripts/audit-local-workspace.mjs",
     "package:dev:mac": "node scripts/package-dev-mac.cjs",
     "verify:package:dev:mac": "node scripts/verify-packaged-dev.cjs",
-    "audit:branch": "node scripts/audit-branch-diff.mjs"
+    "audit:branch": "node scripts/audit-branch-diff.mjs",
+    "smoke:p3394": "node scripts/smoke-p3394-real-execution.mjs"
   },
   "devDependencies": {
     "@ffprobe-installer/ffprobe": "^2.1.2",

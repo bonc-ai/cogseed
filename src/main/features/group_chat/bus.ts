@@ -155,22 +155,11 @@ import {
   normalizeP3394AgentMessage,
 } from "../p3394/protocol";
 import { P3394Controller } from "../p3394/controller";
+import { authoritativeSessionSource } from "../p3394/session-source";
 import { EpochStore } from "../p3394/epoch-store";
 import { SenderEpochStore } from "../p3394/sender-epoch-store";
 
 const log = createLogger("group_chat.bus");
-
-/** Derive the session kind prefix used by session-kind gates. Compound kinds
- *  (extract-img, memory-extract) are matched before the generic first-dash
- *  split so their multi-segment names aren't truncated. */
-function parseSessionKind(sessionId: string): string {
-  for (const k of ["extract-img", "memory-extract"]) {
-    if (sessionId === k || sessionId.startsWith(`${k}-`)) return k;
-  }
-  const dash = sessionId.indexOf("-");
-  return dash < 0 ? sessionId : sessionId.slice(0, dash);
-}
-const P3394_RESUMABLE_KINDS = new Set(["gconv", "gmember", "skill", "agent"]);
 
 // Process-wide P3394 admission controller: wraps the stateless normalize kernel
 // with real session resolution, epoch watermarking, and context-scope checks.
@@ -178,17 +167,7 @@ const P3394_RESUMABLE_KINDS = new Set(["gconv", "gmember", "skill", "agent"]);
 const _p3394EpochStore = new EpochStore();
 const _p3394SenderEpochStore = new SenderEpochStore();
 const _defaultP3394Controller = new P3394Controller({
-  sessionSource: {
-    async resolve(sessionId: string) {
-      const kind = parseSessionKind(sessionId);
-      return {
-        sessionId,
-        kind,
-        region: P3394_RESUMABLE_KINDS.has(kind) ? "cloud" : "local",
-        valid: !!kind,
-      };
-    },
-  },
+  sessionSource: authoritativeSessionSource,
   epochStore: _p3394EpochStore,
   contextSource: {
     async snapshot(uid: string, cid: string) {
@@ -3765,6 +3744,17 @@ async function runActorTurnBody(
   } else {
     try {
       const actorMaxToolLoops = maxToolLoopsForActorKind(actor.kind);
+      const { createLifecycleSink } = await import("../execution-records");
+      const { getLocalExecMode } = await import("../permissions");
+      const executionLifecycle = createLifecycleSink(uid, {
+        executionId: `turn-${item.turnId}`,
+        kind: "core-agent",
+        sessionId,
+        conversationId: cid,
+        ...(actor.kind === "agent" ? { agentId: actor.id } : {}),
+        boundary: "real",
+        permissionMode: getLocalExecMode(),
+      });
       for await (const ev of streamChatWithModel({
         userId: uid,
         message: messageText,
@@ -3781,6 +3771,7 @@ async function runActorTurnBody(
         onOutputsPublished,
         hasProducedPath,
         onArtifactCreated,
+        executionLifecycle,
         onSkillAdvertised: (id, sys) => skillBuffer.recordAdvertised(id, sys),
         onSkillInvoked: (id, sys, trig) =>
           skillBuffer.recordInvoked(id, sys, trig),
