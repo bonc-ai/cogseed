@@ -113,8 +113,13 @@ function reorderQueuedMessage(cid, fromIdx, toIdx) {
   if (cid === currentCid) renderMessageQueue(cid);
 }
 
-// Called by _finishStreamingMsg when a reply completes/aborts/errors.
-function _dispatchNextQueued(cid) {
+// Called by _finishStreamingMsg when a reply completes/aborts/errors. Async
+// because expanding an ontology_group token needs an IPC round-trip to fetch
+// the group's actual content (see chat-use.js::transformWithChatUseAsync).
+// Callers (boot.js, conversation.js ×2) fire this without awaiting — none of
+// them depend on completion before continuing — so the async conversion is a
+// drop-in change; no caller signature needed updating.
+async function _dispatchNextQueued(cid) {
   const q = _getQueue(cid);
   if (!q.length) return;
   if (isConvPending(cid)) return;
@@ -153,9 +158,9 @@ function _dispatchNextQueued(cid) {
     use = null;
     try { uiAlert(t('connectors.dropped_at_drain', { connector: label })); } catch (_) {}
   }
-  const withUse = (typeof transformWithChatUse === 'function')
-    ? transformWithChatUse(next.content, use)
-    : next.content;
+  const withUse = (typeof transformWithChatUseAsync === 'function')
+    ? await transformWithChatUseAsync(next.content, use)
+    : (typeof transformWithChatUse === 'function' ? transformWithChatUse(next.content, use) : next.content);
   const content = next.direct
     ? next.content
     : applyRecipientPrefix(withUse, 'conversation', { recipientSnapshot: next.recipient });

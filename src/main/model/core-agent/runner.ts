@@ -84,6 +84,12 @@ import {
 } from './external-providers';
 import { createRotatingProvider, type RotatingCandidate } from './rotating-provider';
 import { clearCooldown } from './profile-cooldown';
+import {
+  buildCustomProviderModelMeta,
+  createCustomProvider,
+  findCustomProvider,
+  isCustomProviderId,
+} from './custom_provider_runtime';
 import { EXTERNAL_API_PROVIDERS, resolveConfiguredPiModel } from '../provider_catalog';
 import { readDisabledSets } from '../../features/component_enabled';
 import { nativeSearchToolForApi, nativeSearchToolName } from './native-search-tools';
@@ -100,7 +106,11 @@ function isNativeSearchEnabled(): boolean {
   return true;
 }
 
-function buildExternalProviderModel(providerId: string, modelId: string, maxOutputTokens?: number): { contextWindow?: number; maxTokens?: number } | null {
+function buildExternalProviderModel(userId: string | null, providerId: string, modelId: string, maxOutputTokens?: number): { contextWindow?: number; maxTokens?: number } | null {
+  if (isCustomProviderId(providerId)) {
+    const provider = userId ? findCustomProvider(userId, providerId) : undefined;
+    return provider ? buildCustomProviderModelMeta(provider) : null;
+  }
   switch (providerId) {
     case 'moonshot':
       return buildMoonshotModel(modelId);
@@ -239,6 +249,9 @@ export interface BuildRunnerParams {
   /** Fires after each successful `create_artifact` call. See `model/client.ts`
    *  `ChatOptions.onArtifactCreated`. */
   onArtifactCreated?: (a: { id: string; title: string }) => void;
+  /** Secondary host callback used only to mirror a validated artifact into an
+   * execution record. It never enables create_artifact by itself. */
+  onExecutionArtifactCreated?: (a: { id: string; title: string }) => void;
   /** Fires once per skill id rendered into the system-prompt skills index,
    *  with its source system. Called at runner build time (before the LLM
    *  sees the prompt). Bus collects per turn for `skill_advertised`. */
@@ -476,6 +489,13 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
         try {
           params.onArtifactCreated!(a);
         } finally {
+          try { params.onExecutionArtifactCreated?.(a); }
+          catch (err) {
+            log.warn('execution artifact callback failed', {
+              artifact_id: maskId(a.id),
+              error: logErrorSummary(err),
+            });
+          }
           if (uid && params.cid) {
             recordHistoryResource({
               kind: 'final_output',
@@ -966,8 +986,8 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   const modelCatalog: Record<string, { provider: string; model: string; contextWindow?: number; maxOutputTokens?: number }> = {};
   for (const choice of group) {
     if (modelCatalog[choice.model]) continue;
-    const model = EXTERNAL_API_PROVIDERS.includes(choice.provider)
-      ? buildExternalProviderModel(choice.provider, choice.model, choice.maxOutputTokens)
+    const model = (EXTERNAL_API_PROVIDERS.includes(choice.provider) || isCustomProviderId(choice.provider))
+      ? buildExternalProviderModel(uid, choice.provider, choice.model, choice.maxOutputTokens)
       : resolveConfiguredPiModel(mod, choice.provider, choice.model)?.model;
     const entry = modelCatalogEntryFromModel(model);
     if (entry) modelCatalog[choice.model] = { provider: choice.provider, model: choice.model, ...entry };
@@ -1002,6 +1022,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     // pass-through) and keeps the code path uniform.
     const rotating = await buildRotatingProvider(
       mod,
+      uid,
       providerId,
       group,
       params.onNativeSearchInjected,
@@ -1122,7 +1143,11 @@ export function openSkillSourcesExposureFromSessionId(sessionId: string): boolea
  * Extend the switch when a new id is added to `EXTERNAL_API_PROVIDERS`.
  * Async because the underlying factories await core-agent dynamic import.
  */
-async function buildExternalProvider(providerId: string, apiKey: string, modelId: string, baseUrl?: string, maxOutputTokens?: number): Promise<LLMProvider> {
+async function buildExternalProvider(userId: string | null, providerId: string, apiKey: string, modelId: string, baseUrl?: string, maxOutputTokens?: number): Promise<LLMProvider> {
+  if (isCustomProviderId(providerId)) {
+    if (!userId) throw new Error('custom provider requires an active user');
+    return createCustomProvider(userId, providerId, apiKey, modelId);
+  }
   switch (providerId) {
     case 'moonshot':
       return await createMoonshotProvider({ apiKey, modelId });
@@ -1159,6 +1184,7 @@ async function buildExternalProvider(providerId: string, apiKey: string, modelId
  */
 async function buildRotatingProvider(
   mod: CA,
+  userId: string | null,
   providerId: string,
   group: ChatEntryChoice[],
   onNativeSearchInjected?: (info: NativeSearchInjectedInfo) => void,
@@ -1168,14 +1194,14 @@ async function buildRotatingProvider(
   const candidates: RotatingCandidate[] = group.map((choice) => {
     const candProviderId = choice.provider;
     const candModelId = choice.model;
-    const isExternal = EXTERNAL_API_PROVIDERS.includes(candProviderId);
+    const isExternal = EXTERNAL_API_PROVIDERS.includes(candProviderId) || isCustomProviderId(candProviderId);
     return {
       profileId: choice.profileId,
       providerId: candProviderId,
       modelId: candModelId,
       build: async () => {
         if (isExternal) {
-          return buildExternalProvider(candProviderId, choice.apiKey, candModelId, choice.baseUrl, choice.maxOutputTokens);
+          return buildExternalProvider(userId, candProviderId, choice.apiKey, candModelId, choice.baseUrl, choice.maxOutputTokens);
         }
         const resolvedModel = resolveConfiguredPiModel(mod, candProviderId, candModelId);
         if (resolvedModel?.isConfiguredFallback) {

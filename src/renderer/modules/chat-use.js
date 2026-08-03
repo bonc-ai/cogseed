@@ -39,7 +39,8 @@ function _normalizeChatUseSelection(value) {
     return name ? { kind: 'skill', id: name, name } : null;
   }
   if (typeof value !== 'object') return null;
-  const kind = value.kind === 'connector' ? 'connector' : (value.kind === 'skill' ? 'skill' : '');
+  const kind = value.kind === 'connector' ? 'connector'
+    : (value.kind === 'ontology_group' ? 'ontology_group' : (value.kind === 'skill' ? 'skill' : ''));
   if (!kind) return null;
   const name = String(value.name || value.id || '').trim();
   const id = String(value.id || name).trim();
@@ -295,10 +296,18 @@ function getChatUseSelection(target) {
   return cur ? { ...cur } : null;
 }
 
+/** 本体分组的多选读取：从当前所有 token 中筛出 kind==='ontology_group' 的项，
+ *  供 picker 渲染勾选状态、UI 展示"已选中N个分组"用。跟 skill/connector 的单选
+ *  语义（getChatUseSelection 只取第一个）不同——分组是多选，所以这里返回全部。 */
+function getChatUseOntologyGroups(target) {
+  return getChatUseSelections(target).filter((sel) => sel && sel.kind === 'ontology_group');
+}
+
 function formatChatUseLabel(selection) {
   const sel = _normalizeChatUseSelection(selection);
   if (!sel) return '';
   if (sel.kind === 'connector') return t('connectors.use_label', { connector: sel.name || sel.id });
+  if (sel.kind === 'ontology_group') return `${t('agent_picker.ontology_group')}：${sel.name || sel.id}`;
   return t('skills.use_label', { skill: sel.name || sel.id });
 }
 
@@ -306,6 +315,10 @@ function _chatUseLabelParts(selection) {
   const sel = _normalizeChatUseSelection(selection);
   if (!sel) return null;
   const name = sel.name || sel.id;
+  if (sel.kind === 'ontology_group') {
+    const prefix = `${t('agent_picker.ontology_group')}：`;
+    return { name, label: `${prefix}${name}`, prefix };
+  }
   const token = sel.kind === 'connector' ? 'connector' : 'skill';
   const key = sel.kind === 'connector' ? 'connectors.use_label' : 'skills.use_label';
   return {
@@ -428,6 +441,57 @@ function _removeChatUseTokensFromInput(target) {
   return true;
 }
 
+/** 移除输入框里跟 `selection` 匹配的单个 token，保留其余所有 token（包括同类型
+ *  的其他分组）。不能用 `_removeChatUseTokensFromInput`——那个函数一次性清空
+ *  全部 token，是给单选场景（技能/连接器）用的；本体分组是多选，取消一个不能
+ *  影响其他已选中的。基于 `_findChatUseTokens` 定位到目标 token 的 start/end
+ *  后做局部字符串替换。 */
+function _removeChatUseTokenMatching(target, selection) {
+  const sel = _normalizeChatUseSelection(selection);
+  if (!sel) return false;
+  const input = _chatUseInputForTarget(target);
+  if (!input) return false;
+  const value = String(input.value || '');
+  const tokens = _findChatUseTokens(value);
+  const hit = tokens.find((token) => {
+    const s = _normalizeChatUseSelection(token.selection);
+    return s && s.kind === sel.kind && (s.id || s.name) === (sel.id || sel.name);
+  });
+  if (!hit) return false;
+  let { start, end } = hit;
+  if (value.charAt(end) === ' ') end += 1;
+  else if (start > 0 && value.charAt(start - 1) === ' ') start -= 1;
+  input.value = value.slice(0, start) + value.slice(end);
+  try { input.setSelectionRange(start, start); } catch (_) {}
+  _chatUseDispatchInput(input, target);
+  return true;
+}
+
+/** 本体分组多选：插入一个新 token，不清空输入框里已有的任何 token（同类型的
+ *  其他分组 or 技能/连接器）。跳过 setChatUseSelection 里的清空逻辑——那是
+ *  单选语义，选一个新的会把已有同类 token 全部清空，这是本体分组要打破的行为。 */
+function addChatUseOntologyGroup(target, groupId, groupTitle) {
+  const id = String(groupId || '').trim();
+  if (!id) return false;
+  const name = String(groupTitle || id).trim();
+  const sel = { kind: 'ontology_group', id, name };
+  // Avoid inserting a duplicate token for the same group already present.
+  if (getChatUseOntologyGroups(target).some((s) => (s.id || s.name) === id)) return false;
+  const inserted = _insertChatUseToken(target, sel);
+  if (inserted && target === 'conversation' && currentCid) _saveDraft(currentCid);
+  return inserted;
+}
+
+/** 取消单个分组的勾选：只移除该分组对应的那一个 token，保留输入框里其余所有
+ *  token（其他分组、技能、连接器都不受影响）。 */
+function removeChatUseOntologyGroup(target, groupId) {
+  const id = String(groupId || '').trim();
+  if (!id) return false;
+  const removed = _removeChatUseTokenMatching(target, { kind: 'ontology_group', id, name: id });
+  if (removed && target === 'conversation' && currentCid) _saveDraft(currentCid);
+  return removed;
+}
+
 function setChatUseSelection(target, selection, opts = {}) {
   const prev = JSON.stringify(_normalizeChatUseSelection(_chatUse[target]) || null);
   const normalized = _normalizeChatUseSelection(selection);
@@ -491,6 +555,13 @@ function _chatUseInlineText(selection) {
   if (sel.kind === 'connector') {
     return _localizedChatUseText('connectors.inline_text', { connector: name }, `${name} connector`);
   }
+  if (sel.kind === 'ontology_group') {
+    // Sync fallback for callers that just want a short readable label (e.g.
+    // conversation title seeding) — NOT the actual emphasis path. The real
+    // "拼进消息本身" flow (with fetched group content) lives in
+    // transformWithChatUseAsync below.
+    return name;
+  }
   return _localizedChatUseText('skills.inline_text', { skill: name }, `${name} skill`);
 }
 
@@ -513,13 +584,95 @@ function transformChatUseTokens(content) {
   return _replaceChatUseTokens(content, (selection) => _chatUseInlineText(selection));
 }
 
+/** 读取一个本体分组的实际内容（发送时用，走 IPC，异步）。失败时返回空字符串
+ *  并把错误打到 console——发送不应该因为一个分组读取失败就整体卡死；调用方
+ *  (transformWithChatUseAsync) 在拿到空内容时会跳过套模板，直接保留分组名当
+ *  一句提示文本，避免拼出一个空洞的"请参考：''"。 */
+async function _fetchOntologyGroupContent(groupId) {
+  try {
+    if (!window.orkas || typeof window.orkas.invoke !== 'function') return '';
+    const res = await window.orkas.invoke('personalOntology.groups.read', { groupId });
+    return (res && res.ok !== false && typeof res.content === 'string') ? res.content : '';
+  } catch (err) {
+    console.warn('[chat-use] failed to read ontology group content', groupId, err);
+    return '';
+  }
+}
+
+/**
+ * 异步版 token 替换：跟 `transformChatUseTokens` 一样把隐藏 token 换成人类
+ * 可读文字拼进消息本身，但遇到 kind==='ontology_group' 的 token 时，不走
+ * `_chatUseInlineText` 那种"就地替换成一句提示"的逻辑，而是：
+ *   a. 异步读取该分组 md 文件的实际内容
+ *   b. 套用 personalOntology.use_prefix 模板
+ *   c. 把套好模板的整段文字换进消息文本原地（跟 skill/connector 的 token 位置
+ *      一致，不是拼在整段消息前后）
+ * 非 ontology_group 的 token（skill/connector）走原来的同步逻辑，行为不变。
+ */
+async function transformChatUseTokensAsync(content) {
+  const text = String(content || '');
+  const tokens = _findChatUseTokens(text);
+  if (!tokens.length) return text;
+
+  const ontologyTokens = tokens.filter((token) => {
+    const sel = _normalizeChatUseSelection(token.selection);
+    return sel && sel.kind === 'ontology_group';
+  });
+  const contentById = new Map();
+  await Promise.all(
+    [...new Set(ontologyTokens.map((token) => _normalizeChatUseSelection(token.selection).id))]
+      .map(async (groupId) => contentById.set(groupId, await _fetchOntologyGroupContent(groupId))),
+  );
+
+  let out = '';
+  let last = 0;
+  tokens.forEach((token) => {
+    out += text.slice(last, token.start);
+    const sel = _normalizeChatUseSelection(token.selection);
+    if (sel && sel.kind === 'ontology_group') {
+      const groupContent = contentById.get(sel.id) || '';
+      const title = sel.name || sel.id;
+      out += groupContent
+        ? t('personalOntology.use_prefix', { title, content: groupContent })
+        : title; // empty/unreadable group — fall back to just the name, no empty template.
+    } else {
+      out += _chatUseInlineText(token.selection);
+    }
+    last = token.end;
+  });
+  out += text.slice(last);
+  return out;
+}
+
+/**
+ * 异步版 transformWithChatUse——发送前的转换入口，供 conversation.js/
+ * queue-draft.js/project-detail.js 的三处发送调用点用。旧的同步
+ * `transformWithChatUse` 继续保留给不涉及本体分组的调用点（display/mirror/
+ * title-seed），三处真正发送的入口需要改成 await 这个异步版本。
+ */
+async function transformWithChatUseAsync(content, selection) {
+  let out = await transformChatUseTokensAsync(content);
+  const selections = _normalizeChatUseSelections(selection);
+  selections.forEach((sel) => {
+    if (sel.kind === 'connector') {
+      out = t('connectors.use_prefix', { connector: sel.name || sel.id, content: out });
+    } else if (sel.kind !== 'ontology_group') {
+      // ontology_group selections are only reachable via inline tokens in the
+      // input text (multi-select, no legacy `_chatUse[target]` single-slot
+      // state), so they're already handled by transformChatUseTokensAsync above.
+      out = transformWithSkill(out, sel.name || sel.id);
+    }
+  });
+  return out;
+}
+
 function transformWithChatUse(content, selection) {
   let out = transformChatUseTokens(content);
   const selections = _normalizeChatUseSelections(selection);
   selections.forEach((sel) => {
     if (sel.kind === 'connector') {
       out = t('connectors.use_prefix', { connector: sel.name || sel.id, content: out });
-    } else {
+    } else if (sel.kind !== 'ontology_group') {
       out = transformWithSkill(out, sel.name || sel.id);
     }
   });

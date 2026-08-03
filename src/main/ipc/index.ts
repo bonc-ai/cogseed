@@ -25,7 +25,10 @@ import * as projectLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
 import * as companionRepro from '../features/companion_repro';
 import * as p3394 from '../features/p3394';
+import * as executionRecords from '../features/execution-records';
 import * as evolution from '../features/evolution';
+import * as personalOntologyCandidates from '../features/personal_ontology_candidates';
+import * as personalOntologyGroups from '../features/personal_ontology_groups';
 import type { GroupEvent } from '../features/group_chat/bus';
 import * as agents from '../features/agents';
 import * as autoTasks from '../features/auto_tasks';
@@ -41,11 +44,15 @@ import * as libraryTransfer from '../features/library_transfer';
 import * as kbVector from '../features/kb_vector';
 import * as kbIndexer from '../features/kb_indexer';
 import * as chatAttachments from '../features/chat_attachments';
+import * as conversationCopyMerge from '../features/conversation_copy_merge';
 import * as chatArtifacts from '../features/chat_artifacts';
 import * as conversationFiles from '../features/conversation_files';
 import * as recycleBin from '../features/recycle_bin';
 import * as search from '../features/search';
 import * as auth from '../features/auth';
+import * as customProviders from '../features/custom_providers';
+import * as modelAuthorizationDiscovery from '../features/model_authorization_discovery';
+import { probeCcSwitch } from '../features/ccswitch_import';
 import * as imageAuth from '../features/image_auth';
 import * as searchAuth from '../features/search_auth';
 import * as videoAuth from '../features/video_auth';
@@ -72,7 +79,7 @@ import {
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { shell } from 'electron';
-import { DEFAULT_USER_WORKSPACE, WS_ROOT, projectFilesDir } from '../paths';
+import { DEFAULT_USER_WORKSPACE, WS_ROOT, projectFilesDir, userMarketplaceSkillDir } from '../paths';
 import {
   chatAttachmentDirForConversation,
   chatAttachmentRelPath,
@@ -98,8 +105,8 @@ function markPreferencesDirty(): void {}
 function conversationProjectHint(args: Record<string, any>): string | null | undefined {
   if (!Object.prototype.hasOwnProperty.call(args, 'project_id')) return undefined;
   const raw = args.project_id;
-  if (raw === '') return null;
-  if (!safeId(raw)) throw new Error('invalid project id');
+  if (raw === '' || raw === null) return null;
+  if (typeof raw !== 'string' || !safeId(raw)) throw new Error('invalid project id');
   return raw;
 }
 
@@ -110,6 +117,18 @@ interface IpcContext {
 }
 
 type InvokeHandler = (payload: any, ctx: IpcContext) => Promise<any>;
+
+function boundedText(value: unknown, field: string, max: number, required = true): string {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (required && !text) throw new Error(`${field} required`);
+  if (text.length > max) throw new Error(`${field} too long`);
+  return text;
+}
+
+function boundedModelIds(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new Error('selectedModels must be array');
+  return value.slice(0, 100).map((model) => boundedText(model, 'model', 200)).filter(Boolean);
+}
 type StreamHandler = (
   payload: any,
   ctx: IpcContext,
@@ -826,6 +845,43 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return conversationFiles.listWorkspaceFiles(root);
   },
 
+  'conversations.clone': async (args, ctx) => {
+    const { cid } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const projectIdHint = conversationProjectHint(args);
+    const result = await conversationCopyMerge.cloneConversation(
+      ctx.userId,
+      cid,
+      Object.prototype.hasOwnProperty.call(args, 'project_id') ? { projectIdHint } : {},
+    );
+    return { conversation: result.newConversation };
+  },
+
+  'conversations.merge': async (args, ctx) => {
+    const { cids, title } = args;
+    if (!Array.isArray(cids) || cids.some((cid) => !safeId(cid))) {
+      throw new Error('invalid cids');
+    }
+    if (new Set(cids).size < 2) {
+      throw new Error('at least two source conversations are required');
+    }
+    if (typeof title !== 'string') throw new Error('invalid title');
+    const projectIdHint = conversationProjectHint(args);
+    const result = await conversationCopyMerge.mergeConversations(
+      ctx.userId,
+      cids,
+      {
+        title,
+        ...(Object.prototype.hasOwnProperty.call(args, 'project_id') ? { projectIdHint } : {}),
+      },
+    );
+    return {
+      conversation: result.newConversation,
+      summary: result.summaryMessage,
+      agent_summaries: result.agentSummaries,
+    };
+  },
+
   'conversations.create': async ({ title = '', projectId = '' } = {}, ctx) => {
     // Validate the projectId belongs to this user before persisting it on
     // the conv record. Unknown / invalid projectIds are dropped silently
@@ -1461,6 +1517,56 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, events: await companionRepro.readEvidence(ctx.userId, cid, Number(limit) || 50) };
   },
 
+  'p3394.validation.scan': async ({ skillId, target }, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skill id');
+    if (target !== 'installed-skill') throw new Error('unsupported validation target');
+    const skillDir = userMarketplaceSkillDir(ctx.userId, skillId);
+    return { ok: true, validation: await p3394.runSkillValidation(ctx.userId, {
+      skillId, target, skillDir, allowedRoots: [skillDir], boundary: 'real',
+    }) };
+  },
+
+  'p3394.validation.read': async ({ validationId }, ctx) => {
+    if (!safeId(validationId)) throw new Error('invalid validation id');
+    return { ok: true, validation: await p3394.readSkillValidation(ctx.userId, validationId) };
+  },
+
+  'p3394.execution.list': async (_args, ctx) => {
+    return { ok: true, executions: await executionRecords.list(ctx.userId) };
+  },
+
+  'p3394.execution.read': async ({ executionId }, ctx) => {
+    if (!safeId(executionId)) throw new Error('invalid execution id');
+    return { ok: true, execution: await executionRecords.read(ctx.userId, executionId) };
+  },
+
+  'p3394.contextReuseReceipt.read': async ({ executionId }, ctx) => {
+    if (!safeId(executionId)) throw new Error('invalid execution id');
+    return { ok: true, receipt: await p3394.readReceipt(ctx.userId, executionId) };
+  },
+
+  'p3394.behaviorContrast.start': async ({ contrastId, receiptExecutionId, task, attachmentIds, conversationId, agentId, executionKind }, ctx) => {
+    if (contrastId !== undefined && !safeId(contrastId)) throw new Error('invalid contrast id');
+    if (!safeId(receiptExecutionId) || !safeId(conversationId)) throw new Error('invalid behavior contrast scope');
+    if (agentId !== undefined && !safeId(agentId)) throw new Error('invalid agent id');
+    if (!Array.isArray(attachmentIds)) throw new Error('invalid attachment ids');
+    const contrast = await p3394.runConfiguredBehaviorContrast(ctx.userId, {
+      ...(contrastId ? { contrastId } : {}),
+      receiptExecutionId,
+      task: boundedText(task, 'task', 100_000),
+      attachmentIds,
+      conversationId,
+      ...(agentId ? { agentId } : {}),
+      executionKind,
+    });
+    return { ok: true, contrast };
+  },
+
+  'p3394.behaviorContrast.read': async ({ contrastId }, ctx) => {
+    if (!safeId(contrastId)) throw new Error('invalid contrast id');
+    return { ok: true, contrast: await p3394.readBehaviorContrast(ctx.userId, contrastId) };
+  },
+
   'p3394.listWakeRequests': async ({ cid }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
     return { ok: true, requests: await p3394.listWakeRequests(ctx.userId, cid) };
@@ -1753,6 +1859,34 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return chatAttachments.adoptDraftAttachments(ctx.userId, from_cid, to_cid);
   },
 
+  // Import a global Library (contexts) file into a composer draft pool —
+  // the "@ Library" picker path. `cid` is the draft pool (main_chat /
+  // projchat-<id>), not a real conversation yet; `relPath` is validated by
+  // `resolveContextFileAbsPath` (traversal / hidden-segment / must-exist).
+  'contexts.attachToDraft': async ({ relPath, cid } = {}, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (typeof relPath !== 'string' || !relPath.trim()) throw new Error('missing relPath');
+    const absPath = contexts.resolveContextFileAbsPath(relPath);
+    const st = fs.statSync(absPath);
+    if (!st.isFile()) throw new Error('not_a_file');
+    const res = await chatAttachments.importAttachmentFromPath(ctx.userId, cid, absPath);
+    if (!res.ok) throw new Error((res as { error: string }).error);
+    return { info: res.info };
+  },
+
+  // Same as above but for a project-scoped Library file — resolves through
+  // `resolveProjectFileAbsPath`, which validates project ownership + name.
+  'projects.files.attachToDraft': async ({ projectId, name, cid } = {}, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof name !== 'string' || !name.trim()) throw new Error('missing name');
+    const resolved = await projectFiles.resolveProjectFileAbsPath(ctx.userId, projectId, name);
+    if (!resolved.ok) throw new Error((resolved as { error?: string }).error || 'not_found');
+    const res = await chatAttachments.importAttachmentFromPath(ctx.userId, cid, resolved.absPath);
+    if (!res.ok) throw new Error((res as { error: string }).error);
+    return { info: res.info };
+  },
+
   // ── Chat artifacts (interactive web-app bundles, served via chat-app://) ──
   // Open the artifact's index.html in the OS default browser (a `file://`
   // URL via `shell.openPath`). Path is resolved through
@@ -1962,6 +2096,59 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(skillId)) throw new Error('invalid skillId');
     if (!ontologyId || typeof ontologyId !== 'string') throw new Error('missing ontologyId');
     return { refs: await evolution.unbindOntology(ctx.userId, skillId, ontologyId) };
+  },
+
+  // ── Personal Ontology Candidates ──
+  'personalOntology.candidates.list': async (_payload, ctx) => {
+    return personalOntologyCandidates.listCandidates(ctx.userId);
+  },
+  'personalOntology.candidates.confirm': async ({ candidateId, toGlobalMemory, toGroupIds }, ctx) => {
+    if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
+    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[] } = {};
+    if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
+    if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
+    return personalOntologyCandidates.confirmCandidate(ctx.userId, candidateId, dest);
+  },
+  'personalOntology.candidates.reject': async ({ candidateId, reason }, ctx) => {
+    if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
+    return personalOntologyCandidates.rejectCandidate(ctx.userId, candidateId, reason);
+  },
+  'personalOntology.candidates.confirmBatch': async ({ candidateIds, toGlobalMemory, toGroupIds }, ctx) => {
+    if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
+    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[] } = {};
+    if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
+    if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
+    return personalOntologyCandidates.confirmCandidates(ctx.userId, candidateIds, dest);
+  },
+  'personalOntology.candidates.rejectBatch': async ({ candidateIds, reason }, ctx) => {
+    if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
+    return personalOntologyCandidates.rejectCandidates(ctx.userId, candidateIds, reason);
+  },
+
+  // ── Personal Ontology Groups ("记忆分组") ──
+  'personalOntology.groups.list': async (_payload, ctx) => {
+    return { groups: await personalOntologyGroups.listGroups(ctx.userId) };
+  },
+  'personalOntology.groups.create': async ({ title }, ctx) => {
+    if (!title || typeof title !== 'string') throw new Error('missing title');
+    return personalOntologyGroups.createGroup(ctx.userId, title);
+  },
+  'personalOntology.groups.rename': async ({ groupId, title }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!title || typeof title !== 'string') throw new Error('missing title');
+    return personalOntologyGroups.renameGroup(ctx.userId, groupId, title);
+  },
+  'personalOntology.groups.delete': async ({ groupId }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    return personalOntologyGroups.deleteGroup(ctx.userId, groupId);
+  },
+  'personalOntology.groups.read': async ({ groupId }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    return personalOntologyGroups.readGroupContent(ctx.userId, groupId);
+  },
+  'personalOntology.groups.write': async ({ groupId, content }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    return personalOntologyGroups.writeGroupContent(ctx.userId, groupId, String(content ?? ''));
   },
 
   'skills.list': async ({ force } = {}) => {
@@ -2502,6 +2689,197 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'auth.removeEntry':     async ({ entryId }) => auth.removeEntry(entryId),
   'auth.reorderEntries':  async ({ orderedIds }) => auth.reorderEntries(orderedIds || []),
   'auth.updateEntryModel':async ({ entryId, model }) => auth.updateEntryModel(entryId, model),
+
+  // ── Unified model authorization workflow ──
+  'modelAuthorizations.list': async (_args, ctx) =>
+    auth.listAuthorizationSummaries(ctx.userId),
+  'modelAuthorizations.prepareCcSwitch': async ({ externalId }, ctx) =>
+    modelAuthorizationDiscovery.prepareCcSwitchAuthorization(
+      ctx.userId,
+      boundedText(externalId, 'externalId', 160),
+    ),
+  'modelAuthorizations.discover': async (args, ctx) => {
+    const kind = boundedText(args?.kind, 'kind', 40);
+    if (kind === 'builtin') {
+      return modelAuthorizationDiscovery.discoverAuthorizationModels(ctx.userId, {
+        kind,
+        providerId: boundedText(args.providerId, 'providerId', 120),
+      });
+    }
+    if (kind === 'ccswitch_draft') {
+      return modelAuthorizationDiscovery.discoverAuthorizationModels(ctx.userId, {
+        kind,
+        draftId: boundedText(args.draftId, 'draftId', 120),
+      });
+    }
+    if (kind === 'custom_api_key') {
+      const protocol = boundedText(args.protocol, 'protocol', 20);
+      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
+      return modelAuthorizationDiscovery.discoverAuthorizationModels(ctx.userId, {
+        kind,
+        protocol,
+        baseUrl: boundedText(args.baseUrl, 'baseUrl', 500),
+        apiKey: boundedText(args.apiKey, 'apiKey', 20_000),
+      });
+    }
+    throw new Error('invalid discovery kind');
+  },
+  'modelAuthorizations.testDraft': async (args, ctx) => {
+    const kind = boundedText(args?.kind, 'kind', 40);
+    const model = boundedText(args?.model, 'model', 200);
+    if (kind === 'ccswitch_draft') {
+      return modelAuthorizationDiscovery.testPreparedAuthorizationDraft(ctx.userId, {
+        kind,
+        draftId: boundedText(args.draftId, 'draftId', 120),
+        model,
+      });
+    }
+    if (kind === 'oauth') {
+      return modelAuthorizationDiscovery.testPreparedAuthorizationDraft(ctx.userId, {
+        kind,
+        providerId: boundedText(args.providerId, 'providerId', 120),
+        profileId: boundedText(args.profileId, 'profileId', 180),
+        model,
+      });
+    }
+    if (kind === 'builtin_api_key') {
+      return modelAuthorizationDiscovery.testPreparedAuthorizationDraft(ctx.userId, {
+        kind,
+        providerId: boundedText(args.providerId, 'providerId', 120),
+        apiKey: boundedText(args.apiKey, 'apiKey', 20_000),
+        baseUrl: boundedText(args.baseUrl, 'baseUrl', 500, false) || undefined,
+        model,
+      });
+    }
+    if (kind === 'custom_api_key') {
+      const protocol = boundedText(args.protocol, 'protocol', 20);
+      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
+      return modelAuthorizationDiscovery.testPreparedAuthorizationDraft(ctx.userId, {
+        kind,
+        protocol,
+        baseUrl: boundedText(args.baseUrl, 'baseUrl', 500),
+        apiKey: boundedText(args.apiKey, 'apiKey', 20_000),
+        model,
+      });
+    }
+    throw new Error('invalid test draft kind');
+  },
+  'modelAuthorizations.complete': async (args, ctx) => {
+    const selectedModels = boundedModelIds(args?.selectedModels);
+    const defaultModel = boundedText(args?.defaultModel, 'defaultModel', 200);
+    const requestId = boundedText(args?.requestId, 'requestId', 120);
+    if (args?.source === 'ccswitch') {
+      return modelAuthorizationDiscovery.completePreparedCcSwitchAuthorization(ctx.userId, {
+        draftId: boundedText(args.draftId, 'draftId', 120), requestId, selectedModels, defaultModel,
+      });
+    }
+    if (args?.providerKind === 'builtin' && args?.authType === 'oauth') {
+      return auth.completeAuthorization(ctx.userId, {
+        requestId, selectedModels, defaultModel,
+        authType: 'oauth', source: 'manual', providerKind: 'builtin',
+        providerId: boundedText(args.providerId, 'providerId', 120),
+        profileId: boundedText(args.profileId, 'profileId', 180),
+      });
+    }
+    if (args?.providerKind === 'builtin' && args?.authType === 'api_key') {
+      return auth.completeAuthorization(ctx.userId, {
+        requestId, selectedModels, defaultModel,
+        authType: 'api_key', source: 'manual', providerKind: 'builtin',
+        providerId: boundedText(args.providerId, 'providerId', 120),
+        label: boundedText(args.label, 'label', 40, false) || undefined,
+        apiKey: boundedText(args.apiKey, 'apiKey', 20_000),
+        baseUrl: boundedText(args.baseUrl, 'baseUrl', 500, false) || undefined,
+      });
+    }
+    if (args?.providerKind === 'custom' && args?.authType === 'api_key') {
+      const protocol = boundedText(args?.customProvider?.protocol, 'protocol', 20);
+      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
+      return auth.completeAuthorization(ctx.userId, {
+        requestId, selectedModels, defaultModel,
+        authType: 'api_key', source: 'manual', providerKind: 'custom',
+        customProvider: {
+          id: boundedText(args.customProvider.id, 'id', 120, false) || undefined,
+          name: boundedText(args.customProvider.name, 'name', 60),
+          protocol,
+          baseUrl: boundedText(args.customProvider.baseUrl, 'baseUrl', 500),
+          apiKey: boundedText(args.customProvider.apiKey, 'apiKey', 20_000),
+        },
+      });
+    }
+    throw new Error('invalid authorization completion');
+  },
+  'modelAuthorizations.removeModel': async ({ authorizationId, entryId }, ctx) =>
+    auth.removeAuthorizationModel(
+      ctx.userId,
+      boundedText(authorizationId, 'authorizationId', 180),
+      boundedText(entryId, 'entryId', 180),
+    ),
+  'modelAuthorizations.remove': async ({ authorizationId }, ctx) =>
+    auth.removeAuthorization(ctx.userId, boundedText(authorizationId, 'authorizationId', 180)),
+
+  // ── Unified custom model providers ──
+  'customProviders.list': async (_args, ctx) => ({
+    protocols: customProviders.listCustomProviderProtocols(),
+    providers: customProviders.listCustomProviders(ctx.userId).map((provider) => ({
+      id: provider.id,
+      name: provider.name,
+      protocol: provider.protocol,
+      baseUrl: provider.baseUrl,
+      notes: provider.notes,
+      websiteUrl: provider.websiteUrl,
+      needsKey: !!provider.needsKey,
+      needsModelMapping: !!provider.needsModelMapping,
+      models: provider.models || [],
+      source: provider.source,
+      externalId: provider.externalId,
+      createdAt: provider.createdAt,
+      updatedAt: provider.updatedAt,
+      apiKeyMasked: auth.maskKey(provider.apiKey),
+    })),
+  }),
+  'customProviders.add': async (args, ctx) => customProviders.addCustomProvider(ctx.userId, args || {}),
+  'customProviders.update': async ({ id, ...updates }, ctx) => {
+    if (typeof id !== 'string' || !id) throw new Error('invalid id');
+    return customProviders.updateCustomProvider(ctx.userId, id, updates);
+  },
+  'customProviders.remove': async ({ id }, ctx) => {
+    if (typeof id !== 'string' || !id) throw new Error('invalid id');
+    return customProviders.removeCustomProvider(ctx.userId, id);
+  },
+  'customProviders.ccswitch.probe': async () => {
+    const probe = probeCcSwitch();
+    return { available: probe.available, reason: probe.reason };
+  },
+  'customProviders.ccswitch.preview': async (_args, ctx) => {
+    const preview = customProviders.previewCcSwitchImport(ctx.userId);
+    if (!preview.ok) return preview;
+    return {
+      ok: true,
+      items: preview.items.map((item) => ({
+        externalId: item.externalId,
+        name: item.name,
+        protocol: item.protocol,
+        baseUrl: item.baseUrl,
+        notes: item.notes,
+        websiteUrl: item.websiteUrl,
+        models: item.models || [],
+        needsKey: !!item.needsKey,
+        apiKeyMasked: auth.maskKey(item.apiKey),
+      })),
+      unsupported: preview.skipped.filter((item) => item.reason !== 'official').map((item) => ({
+        externalId: item.externalId,
+        name: item.name,
+        appType: item.appType,
+        reason: item.reason,
+      })),
+    };
+  },
+  'customProviders.ccswitch.sync': async ({ externalIds } = {}, ctx) => {
+    const selected = Array.isArray(externalIds)
+      ? externalIds.filter((id): id is string => typeof id === 'string' && !!id)
+      : undefined;
+    return customProviders.syncFromCcSwitch(ctx.userId, selected);
+  },
 
   // ── Commander backend binding (settings page) ──
   'settings.getCommanderBackend': async () => commanderBackend.getCommanderBackendView(),

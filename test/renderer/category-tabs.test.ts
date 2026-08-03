@@ -491,7 +491,7 @@ describe('agent and skill category tabs', () => {
 
     // Commander: all picker tabs; global open-tier skill selectable.
     expect(vm.runInContext('_agentPickerVisibleTabs("new-chat-recipient-chip")', context))
-      .toEqual(['agents', 'skills', 'connectors', 'library']);
+      .toEqual(['agents', 'skills', 'connectors', 'library', 'ontology']);
     await context._triggerPickerItem('skill', 'global-helper', 'Global Helper', 'new-chat-recipient-chip');
     expect(context.pickedSkillCalls).toEqual([['new-chat', 'global-helper', 'Global Helper']]);
 
@@ -500,7 +500,7 @@ describe('agent and skill category tabs', () => {
     context.pickedSkillCalls = [];
     context.getChatRecipient = () => ({ kind: 'agent', id: 'agent-1', name: 'Agent One' });
     expect(vm.runInContext('_agentPickerVisibleTabs("new-chat-recipient-chip")', context))
-      .toEqual(['agents', 'skills', 'connectors', 'library']);
+      .toEqual(['agents', 'skills', 'connectors', 'library', 'ontology']);
     await context._triggerPickerItem('skill', 'trusted', 'Trusted Skill', 'new-chat-recipient-chip');
     expect(context.pickedSkillCalls).toEqual([['new-chat', 'trusted', 'Trusted Skill']]);
   });
@@ -511,7 +511,7 @@ describe('agent and skill category tabs', () => {
     context.window._autoAttachLibraryFile = async (ref: any) => { calls.push(ref); };
 
     expect(vm.runInContext('_agentPickerVisibleTabs("auto-recipient-chip")', context))
-      .toEqual(['agents', 'skills', 'connectors', 'library']);
+      .toEqual(['agents', 'skills', 'connectors', 'library', 'ontology']);
 
     await context._triggerPickerItem('library', 'library:global:brief.md', 'brief.md', 'auto-recipient-chip', {
       libraryScope: 'global',

@@ -7,6 +7,7 @@
 
 const _rendererFeatureManifest = Object.freeze({
   settings: [
+    { src: './modules/model-authorization.js' },
     { src: './modules/settings.js' },
     { src: './modules/memory.js' },
   ],
@@ -36,6 +37,9 @@ const _rendererFeatureManifest = Object.freeze({
   evolution: [
     { src: './modules/evolution/pages.js' },
     { src: './modules/evolution/console.js' },
+  ],
+  'personal-ontology': [
+    { src: './modules/personal-ontology.js' },
   ],
 });
 

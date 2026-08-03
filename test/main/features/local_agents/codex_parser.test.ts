@@ -131,4 +131,13 @@ describe('local_agents/backends/codex › extractCodexDiffFiles', () => {
     ].join('\n'));
     expect(files).toEqual(['new.txt']);
   });
+  it('projects prepared permission roots into a bounded sandbox policy', () => {
+    expect(buildCodexTurnPermissionOverrides('/tmp/project', {
+      sessionId: 'session-1', contextId: 'ctx-1', readOnlyRoots: ['/tmp/read'], writableRoots: ['/tmp/project'], permissionMode: 'workspace-write', receiptId: 'receipt-1',
+    })).toEqual({ cwd: '/tmp/project', approvalPolicy: 'never', sandboxPolicy: { type: 'workspaceWrite', writableRoots: ['/tmp/project'], networkAccess: true } });
+    expect(buildCodexTurnPermissionOverrides('/tmp/project', {
+      sessionId: 'session-1', readOnlyRoots: ['/tmp/project'], writableRoots: [], permissionMode: 'read-only', receiptId: 'receipt-1',
+    }).sandboxPolicy).toEqual({ type: 'readOnly' });
+  });
+
 });

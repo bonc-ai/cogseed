@@ -25,10 +25,17 @@ export const MEMORY_CHAR_LIMIT = 2500;   // SHARED tier (the global MEMORY.md): 
 export const USER_CHAR_LIMIT   = 1500;   // user profile/preferences (cross-agent): stays concise
 export const AGENT_CHAR_LIMIT  = 2000;   // per-agent domain notes: each agent gets its own budget
 export const PROJECT_CHAR_LIMIT = MEMORY_CHAR_LIMIT; // per-project facts: same budget as shared, but per project
-export const MEMORY_ENTRY_LIMIT = 16;    // keep memory prompts bounded by item count as well as chars
-export const USER_ENTRY_LIMIT   = 16;
-export const AGENT_ENTRY_LIMIT  = MEMORY_ENTRY_LIMIT;
-export const PROJECT_ENTRY_LIMIT = MEMORY_ENTRY_LIMIT;
+// Entry-COUNT caps only apply to the agent/project tiers now. USER.md/MEMORY.md
+// (the 'user'/'memory' scopes) dropped their entry-count cap and silent
+// oldest-eviction: writes there are char-limit-gated only, and a write that
+// would exceed the char budget is rejected outright (see `saveEntries`'s
+// `strict` mode) rather than quietly dropping old content.
+export const AGENT_ENTRY_LIMIT  = 16;
+export const PROJECT_ENTRY_LIMIT = AGENT_ENTRY_LIMIT;
+// Soft-warning threshold for the strict (user/shared) write path: once a
+// store crosses this fraction of its char budget, writes still succeed but
+// the result carries `nearLimit: true` so the UI can nudge the user.
+const NEAR_LIMIT_RATIO = 0.8;
 export const ENTRY_SEPARATOR   = '\n§\n';
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -59,6 +66,9 @@ export interface MemoryOpResult {
   error?: string;
   entries: string[];
   usage: { current: number; limit: number; entries_current?: number; entries_limit?: number };
+  /** Set on a successful strict-mode (user/shared) write once usage crosses
+   *  `NEAR_LIMIT_RATIO` of the char budget — advisory only, does not block. */
+  nearLimit?: boolean;
 }
 
 // ── Security: injection pattern scanning ─────────────────────────────────
@@ -98,9 +108,17 @@ function limitForTarget(target: MemoryScope): number {
   return AGENT_CHAR_LIMIT;
 }
 
-function entryLimitForTarget(target: MemoryScope): number {
-  if (target === 'user') return USER_ENTRY_LIMIT;
-  if (target === 'memory') return MEMORY_ENTRY_LIMIT;
+/** 'user'/'memory' (USER.md/MEMORY.md) are the STRICT scopes: no entry-count
+ *  cap, char-limit-exceeding writes are rejected outright rather than
+ *  silently evicting the oldest entry. Agent/project tiers keep the legacy
+ *  "evict oldest until it fits" behavior. */
+function isStrictScope(target: MemoryScope): boolean {
+  return target === 'user' || target === 'memory';
+}
+
+/** Undefined for the strict scopes — they have no entry-count cap. */
+function entryLimitForTarget(target: MemoryScope): number | undefined {
+  if (isStrictScope(target)) return undefined;
   if (isProjectScope(target)) return PROJECT_ENTRY_LIMIT;
   return AGENT_ENTRY_LIMIT;
 }
@@ -144,7 +162,9 @@ export function loadEntries(filePath: string): MemoryEntry[] {
     .map(text => ({ text }));
 }
 
-/** Save entries atomically, respecting count + char limits.
+/** Save entries atomically, respecting count + char limits. LEGACY / agent
+ *  + project tiers only — 'user' and 'memory' (USER.md/MEMORY.md) no longer
+ *  go through here for their own writes; see `writeStrictEntries` below.
  *
  * Entries are ordered oldest → newest. New writes are appended by callers, so
  * when a cap is exceeded we evict from the front and preserve the latest
@@ -177,14 +197,41 @@ export function saveEntries(filePath: string, entries: MemoryEntry[], charLimit:
   writeTextAtomicSync(filePath, text);
 }
 
-function buildResult(userId: string, target: MemoryScope, ok: boolean, error?: string): MemoryOpResult {
+/** Strict write for the 'user'/'memory' scopes: no entry-count cap, and a
+ *  write that would push the store over `charLimit` is rejected outright —
+ *  the file is left untouched and the caller gets `ok:false,
+ *  error:'char_limit_exceeded'`. No silent oldest-eviction. Uses the same
+ *  keep-newest dedup rule as `saveEntries` (see `dedupeNewest` below). */
+interface StrictWriteOk { ok: true; nearLimit: boolean; error?: undefined }
+interface StrictWriteErr { ok: false; error: string; nearLimit?: undefined }
+type StrictWriteResult = StrictWriteOk | StrictWriteErr;
+
+function writeStrictEntries(filePath: string, entries: MemoryEntry[], charLimit: number): StrictWriteResult {
+  const deduped = dedupeNewest(entries);
+  const text = deduped.map(e => e.text).join(ENTRY_SEPARATOR);
+  if (text.length > charLimit) {
+    return { ok: false, error: 'char_limit_exceeded' };
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  writeTextAtomicSync(filePath, text);
+  return { ok: true, nearLimit: charLimit > 0 && text.length >= charLimit * NEAR_LIMIT_RATIO };
+}
+
+function buildResult(userId: string, target: MemoryScope, ok: boolean, error?: string, extra?: { nearLimit?: boolean }): MemoryOpResult {
   const entries = loadEntries(fileForTarget(userId, target));
   const text = entries.map(e => e.text).join(ENTRY_SEPARATOR);
+  const entryLimit = entryLimitForTarget(target);
   return {
     ok,
     ...(error ? { error } : {}),
+    ...(extra?.nearLimit ? { nearLimit: true } : {}),
     entries: entries.map(e => e.text),
-    usage: { current: text.length, limit: limitForTarget(target), entries_current: entries.length, entries_limit: entryLimitForTarget(target) },
+    usage: {
+      current: text.length,
+      limit: limitForTarget(target),
+      entries_current: entries.length,
+      ...(entryLimit !== undefined ? { entries_limit: entryLimit } : {}),
+    },
   };
 }
 
@@ -259,10 +306,17 @@ export function addEntry(userId: string, target: MemoryScope, content: string): 
 
   const filePath = fileForTarget(userId, target);
   const limit = limitForTarget(target);
-  const entryLimit = entryLimitForTarget(target);
   const entries = loadEntries(filePath);
   entries.push({ text: trimmed });
-  saveEntries(filePath, entries, limit, entryLimit);
+
+  if (isStrictScope(target)) {
+    const res = writeStrictEntries(filePath, entries, limit);
+    if (!res.ok) return buildResult(userId, target, false, res.error);
+    notifyMemoryDirty(target);
+    return buildResult(userId, target, true, undefined, { nearLimit: res.nearLimit });
+  }
+
+  saveEntries(filePath, entries, limit, entryLimitForTarget(target));
   notifyMemoryDirty(target);
   return buildResult(userId, target, true);
 }
@@ -284,13 +338,20 @@ export function replaceEntry(userId: string, target: MemoryScope, oldText: strin
 
   const filePath = fileForTarget(userId, target);
   const limit = limitForTarget(target);
-  const entryLimit = entryLimitForTarget(target);
   const entries = loadEntries(filePath);
   const idx = entries.findIndex(e => e.text.includes(oldText));
   if (idx === -1) return buildResult(userId, target, false, 'old_text not found');
 
   entries[idx] = { text: trimmed };
-  saveEntries(filePath, entries, limit, entryLimit);
+
+  if (isStrictScope(target)) {
+    const res = writeStrictEntries(filePath, entries, limit);
+    if (!res.ok) return buildResult(userId, target, false, res.error);
+    notifyMemoryDirty(target);
+    return buildResult(userId, target, true, undefined, { nearLimit: res.nearLimit });
+  }
+
+  saveEntries(filePath, entries, limit, entryLimitForTarget(target));
   notifyMemoryDirty(target);
   return buildResult(userId, target, true);
 }
@@ -328,6 +389,15 @@ export function removeEntry(userId: string, target: MemoryScope, oldText: string
   if (idx === -1) return buildResult(userId, target, false, 'old_text not found');
 
   entries.splice(idx, 1);
+
+  if (isStrictScope(target)) {
+    // Removal only shrinks the store, so this can never trip char_limit_exceeded.
+    const res = writeStrictEntries(filePath, entries, limit);
+    if (!res.ok) return buildResult(userId, target, false, res.error);
+    notifyMemoryDirty(target);
+    return buildResult(userId, target, true);
+  }
+
   saveEntries(filePath, entries, limit, entryLimitForTarget(target));
   notifyMemoryDirty(target);
   return buildResult(userId, target, true);

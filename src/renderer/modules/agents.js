@@ -72,6 +72,86 @@ function _isAgentProfileMock() {
   return false;
 }
 
+
+// CLI custom-provider bindings are intentionally renderer-only here: the
+// provider list is masked by main IPC and the selected `cp:<id>` is stored
+// with the CLI runtime. Claude accepts Anthropic providers; Codex accepts
+// OpenAI providers. Other CLI runtimes keep their CLI-owned configuration.
+function _cliProviderProtocol(cli) {
+  if (cli === 'claude') return 'anthropic';
+  if (cli === 'codex') return 'openai';
+  return '';
+}
+
+function filterCliProviders(cli, providers) {
+  const protocol = _cliProviderProtocol(cli);
+  if (!protocol || !Array.isArray(providers)) return [];
+  return providers.filter((provider) => provider && provider.protocol === protocol);
+}
+
+function normalizeCliProviderSelection(cli, selectedId, providers) {
+  if (!selectedId) return '';
+  const match = String(selectedId).match(/^cp:(.+)$/);
+  if (!match) return '';
+  return filterCliProviders(cli, providers).some((provider) => String(provider.id) === match[1])
+    ? selectedId
+    : '';
+}
+
+function withCliProviderSelection(runtime, selectedId) {
+  const next = { ...(runtime || {}) };
+  delete next.cli_provider_id;
+  if (selectedId) next.cli_provider_id = selectedId;
+  return next;
+}
+
+let _externalCliProviders = [];
+let _externalCliProviderSelect = null;
+
+async function _loadExternalCliProviders() {
+  const res = await window.orkas.invoke('customProviders.list');
+  _externalCliProviders = (res && res.ok && Array.isArray(res.providers)) ? res.providers : [];
+  return _externalCliProviders;
+}
+
+function _renderExternalCliProviderSelect(cli, selectedId = '') {
+  const row = document.getElementById('agent-ext-provider-row');
+  const mount = document.getElementById('agent-modal-ext-provider-select');
+  if (!row || !mount) return;
+  const providers = filterCliProviders(cli, _externalCliProviders);
+  const compatibleSelected = normalizeCliProviderSelection(cli, selectedId, _externalCliProviders);
+  row.hidden = !(cli === 'claude' || cli === 'codex');
+  if (row.hidden) {
+    _externalCliProviderSelect?.setValue('');
+    return;
+  }
+  const options = [
+    { value: '', label: t('agent_modal.ext_provider_none') },
+    ...providers.map((provider) => ({
+      value: `cp:${provider.id}`,
+      label: provider.name || provider.id,
+      hint: provider.apiKeyMasked || provider.baseUrl || '',
+    })),
+  ];
+  if (!_externalCliProviderSelect) {
+    _externalCliProviderSelect = _aiSelectMount(mount, {
+      options, value: compatibleSelected,
+      placeholder: t('agent_modal.ext_provider_none'),
+    });
+  } else {
+    _externalCliProviderSelect.setOptions(options, { value: compatibleSelected });
+  }
+}
+
+function _getExternalCliProviderValue(cli) {
+  const selected = _externalCliProviderSelect?.getValue() || '';
+  return normalizeCliProviderSelection(cli, selected, _externalCliProviders);
+}
+
+window.filterCliProviders = filterCliProviders;
+window.normalizeCliProviderSelection = normalizeCliProviderSelection;
+window.withCliProviderSelection = withCliProviderSelection;
+
 function _isAgentPlatformSource(source) {
   return (typeof isMarketplaceCatalogSource === 'function')
     ? isMarketplaceCatalogSource(source)
@@ -2444,8 +2524,13 @@ function openAgentModal(options = {}) {
 
   // Refresh the External-tab CLI selector. Re-mount each open so newly-
   // installed CLIs surface without an app restart.
+  _externalCliProviderSelect?.setValue('');
+  const providerLoad = _loadExternalCliProviders().catch(() => []);
   if (typeof mountExternalCliSelect === 'function') {
-    mountExternalCliSelect((cli) => _applyExternalCliDefaults(cli)).catch(() => {});
+    mountExternalCliSelect((cli) => {
+      _applyExternalCliDefaults(cli);
+      providerLoad.then(() => _renderExternalCliProviderSelect(cli, _getExternalCliProviderValue(cli)));
+    }).catch(() => {});
   }
 
   modal.classList.add('open');
@@ -2616,7 +2701,7 @@ async function _saveExternalAgent({ msgEl }) {
       // CLI-backed agents do not run the LLM authoring pass, so use the
       // stable role-specific coding avatar instead of a random pair.
       icon: 'code', color: 'sage',
-      runtime: { kind: 'cli', cli },
+      runtime: withCliProviderSelection({ kind: 'cli', cli }, _getExternalCliProviderValue(cli)),
       category: 'general',
     };
     const res = await apiFetch('/api/agents/create', {
@@ -3027,13 +3112,19 @@ let _pickerProjectId = '';
 let _pickerLibraryRows = null;
 let _pickerLibraryLoading = null;
 let _pickerLibraryRenderSeq = 0;
+// "本体" tab cache — same lazy-load-once-per-picker-session pattern as
+// _pickerLibraryRows above, but scoped to personalOntology.groups.list (no
+// project-scoped variant, per §3.7's "only the hidden groups sub-dir" bound).
+let _pickerOntologyGroups = null;
+let _pickerOntologyLoading = null;
+let _pickerOntologyRenderSeq = 0;
 let _agentPickerTab = 'agents';
 let _agentPickerOpenSeq = 0;
 let _agentPickerLoadedTabs = new Set();
 const _agentPickerTabLoads = new Map();
 let _pickerProjectContextLoading = false;
 let _pickerProjectContextSeq = 0;
-const _AGENT_PICKER_TAB_ORDER = ['agents', 'skills', 'connectors', 'library'];
+const _AGENT_PICKER_TAB_ORDER = ['agents', 'skills', 'connectors', 'library', 'ontology'];
 const _AGENT_PICKER_TABS = new Set(_AGENT_PICKER_TAB_ORDER);
 
 function _normalizeAgentPickerTab(tab) {
@@ -3047,16 +3138,29 @@ function _agentPickerAllowsLibrary(anchorId) {
     || anchorId === 'auto-recipient-chip';
 }
 
+// "本体" tab reuses the exact same anchor gate as library — see requirements
+// doc §3.7: no independent anchor scenario identified for ontology groups
+// yet, so default to matching library's visibility rather than showing it
+// everywhere.
+function _agentPickerAllowsOntology(anchorId) {
+  return _agentPickerAllowsLibrary(anchorId);
+}
+
 function _agentPickerVisibleTabs(anchorId) {
   // Skills and connectors use the same visible picker surface for commander
   // and agent recipients; runtime capability gates live in the main process.
-  return _AGENT_PICKER_TAB_ORDER.filter((tab) => tab !== 'library' || _agentPickerAllowsLibrary(anchorId));
+  return _AGENT_PICKER_TAB_ORDER.filter((tab) => {
+    if (tab === 'library') return _agentPickerAllowsLibrary(anchorId);
+    if (tab === 'ontology') return _agentPickerAllowsOntology(anchorId);
+    return true;
+  });
 }
 
 function _agentPickerSearchPlaceholder() {
   if (_agentPickerTab === 'skills') return t('agent_picker.search_skills_placeholder');
   if (_agentPickerTab === 'connectors') return t('agent_picker.search_connectors_placeholder');
   if (_agentPickerTab === 'library') return t('agent_picker.search_library_placeholder');
+  if (_agentPickerTab === 'ontology') return t('agent_picker.search_ontology_placeholder');
   return t('agent_picker.search_placeholder');
 }
 
@@ -3093,7 +3197,10 @@ function _setAgentPickerTab(tab, opts = {}) {
 
 function _ensureAgentPickerTabData(tab, openSeq) {
   const normalized = _normalizeAgentPickerTab(tab);
-  if (normalized === 'library' || _agentPickerLoadedTabs.has(normalized)) {
+  // library and ontology own their own lazy-load + cache inside their render
+  // functions (_renderLibraryPickerList / _renderOntologyPickerList) — same
+  // pattern, skip the generic loadedTabs bookkeeping here.
+  if (normalized === 'library' || normalized === 'ontology' || _agentPickerLoadedTabs.has(normalized)) {
     return Promise.resolve();
   }
   const existing = _agentPickerTabLoads.get(normalized);
@@ -3208,6 +3315,12 @@ async function _refreshAgentPickerProjectContext(anchorId) {
   _pickerLibraryRows = null;
   _pickerLibraryLoading = null;
   _pickerLibraryRenderSeq += 1;
+  // Ontology groups aren't project-scoped, but re-fetch every picker open so
+  // a group created/deleted via the management page since the last open is
+  // reflected without requiring a manual refresh.
+  _pickerOntologyGroups = null;
+  _pickerOntologyLoading = null;
+  _pickerOntologyRenderSeq += 1;
   if (_pickerProjectId) {
     try {
       const res = await window.orkas.invoke('projects.bindings.list', { projectId: _pickerProjectId });
@@ -3289,6 +3402,10 @@ function _renderAgentPickerList(filterText) {
   }
   if (_agentPickerTab === 'library') {
     _renderLibraryPickerList(listEl, filterText, anchorId);
+    return;
+  }
+  if (_agentPickerTab === 'ontology') {
+    _renderOntologyPickerList(listEl, filterText, anchorId);
     return;
   }
   // Disabled agents are filtered out — picker is a "what can I dispatch right
@@ -3617,9 +3734,85 @@ function _renderLibraryPickerList(listEl, filterText, anchorId) {
   _bindAgentPickerListItems(listEl, anchorId);
 }
 
+async function _loadOntologyPickerGroups() {
+  try {
+    const res = await window.orkas.invoke('personalOntology.groups.list', {});
+    return (res && res.ok !== false && Array.isArray(res.groups)) ? res.groups : [];
+  } catch (err) {
+    _agentsLog.warn('ontology group picker load failed', err);
+    return [];
+  }
+}
+
+function _ontologyPickerRowHtml(group, checked) {
+  return `
+    <div class="skill-picker-item is-checkable${checked ? ' is-checked' : ''}" data-kind="ontology_group"
+         data-id="${escapeHtml(group.group_id)}" data-name="${escapeHtml(group.title || '')}">
+      <span class="skill-picker-item-checkbox" aria-hidden="true"></span>
+      <div class="skill-picker-item-meta">
+        <div class="skill-picker-item-name">${escapeHtml(group.title || '')}</div>
+      </div>
+    </div>`;
+}
+
+function _renderOntologyPickerList(listEl, filterText, anchorId) {
+  const q = (filterText || '').toLowerCase();
+  const renderSeq = ++_pickerOntologyRenderSeq;
+  if (!_pickerOntologyGroups) {
+    listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
+    if (!_pickerOntologyLoading) {
+      _pickerOntologyLoading = _loadOntologyPickerGroups()
+        .then((groups) => {
+          _pickerOntologyGroups = groups || [];
+          _pickerOntologyLoading = null;
+        })
+        .catch(() => {
+          _pickerOntologyGroups = [];
+          _pickerOntologyLoading = null;
+        });
+    }
+    _pickerOntologyLoading.then(() => {
+      if (renderSeq !== _pickerOntologyRenderSeq) return;
+      const picker = document.getElementById('agent-picker');
+      if (!picker || picker.style.display === 'none' || _agentPickerTab !== 'ontology') return;
+      const search = document.getElementById('agent-picker-search');
+      _renderOntologyPickerList(listEl, search ? search.value : filterText, anchorId);
+    });
+    return;
+  }
+
+  const allGroups = _pickerOntologyGroups || [];
+  const filtered = q
+    ? allGroups
+        .filter((g) => _matchPickerItem(q, g.title, '', g.group_id))
+        .sort((a, b) => _pickerMatchScore(q, a.title || a.group_id) - _pickerMatchScore(q, b.title || b.group_id))
+    : allGroups;
+
+  if (!filtered.length) {
+    const key = allGroups.length ? 'agent_picker.ontology_no_match' : 'agent_picker.ontology_empty';
+    listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t(key))}</div>`;
+    return;
+  }
+
+  const target = _targetFromPickerAnchor(anchorId);
+  const selectedIds = new Set(
+    (typeof getChatUseOntologyGroups === 'function' ? getChatUseOntologyGroups(target) : [])
+      .map((sel) => sel.id),
+  );
+  listEl.innerHTML = filtered.map((g) => _ontologyPickerRowHtml(g, selectedIds.has(g.group_id))).join('');
+  _bindAgentPickerListItems(listEl, anchorId);
+}
+
 function _bindAgentPickerListItems(listEl, anchorId) {
   for (const el of listEl.querySelectorAll('[data-id]')) {
     el.addEventListener('click', async () => {
+      // "本体" rows are checkboxes, not click-to-trigger-and-close — this is
+      // the one behavioral difference from the other four tabs (§3.7). Toggle
+      // the checked state and keep the picker open so the user can multi-select.
+      if (el.dataset.kind === 'ontology_group') {
+        await _triggerPickerItem('ontology_group', el.dataset.id, el.dataset.name, anchorId, el.dataset);
+        return;
+      }
       _closeAgentPicker();
       await _triggerPickerItem(el.dataset.kind || 'agent', el.dataset.id, el.dataset.name, anchorId, el.dataset);
     });
@@ -3691,7 +3884,36 @@ async function _triggerPickerItem(kind, itemId, itemName, anchorId, dataset) {
     await _triggerLibraryFile(dataset || {}, anchorId);
     return;
   }
+  if (kind === 'ontology_group') {
+    _triggerOntologyGroup(itemId, itemName, anchorId);
+    return;
+  }
   await _triggerAgent(itemId, itemName, anchorId);
+}
+
+/**
+ * 本体分组行的点击处理：不走 _triggerAgent/_triggerLibraryFile 那种"触发即关闭
+ * picker"的分支，而是切换该分组的勾选状态（类似多选下拉）。第一次选中会顺带
+ * 消费掉输入框里那个 `@` 字符（跟其余 tab 一致）；之后的多选不会再有 `@` 可消费
+ * （_consumeAtKeyChar 在标记已清空时是安全的空操作）。选中/取消不关闭 picker，
+ * 也不 focus 回输入框——用户还在挑选，focus 跳走会打断多选操作。
+ */
+function _triggerOntologyGroup(groupId, groupTitle, anchorId) {
+  const target = _targetFromPickerAnchor(anchorId);
+  const alreadySelected = (typeof getChatUseOntologyGroups === 'function')
+    ? getChatUseOntologyGroups(target).some((sel) => sel.id === groupId)
+    : false;
+  _consumeAtKeyChar();
+  if (alreadySelected) {
+    if (typeof removeChatUseOntologyGroup === 'function') removeChatUseOntologyGroup(target, groupId);
+  } else {
+    if (typeof addChatUseOntologyGroup === 'function') addChatUseOntologyGroup(target, groupId, groupTitle);
+  }
+  // Re-render just the list so the checkbox reflects the new state; the
+  // search input keeps focus and the picker stays open for further picks.
+  const listEl = document.getElementById('agent-picker-list');
+  const search = document.getElementById('agent-picker-search');
+  if (listEl) _renderOntologyPickerList(listEl, search ? search.value : '', anchorId);
 }
 
 function _libraryPickerInputIdForTarget(target) {

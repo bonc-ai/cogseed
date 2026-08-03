@@ -762,6 +762,8 @@ describe('builtin marketplace seed', () => {
 
   it('keeps a newer builtin agent uninstall tombstone respected', async () => {
     const agentId = '78900d8758bc';
+    const tombstoneAt = Date.now();
+    const reseedCutoff = new Date(tombstoneAt).toISOString();
     writeBuiltinAgent(agentId, {
       version: '1.0.2',
       name: 'DeepResearcher',
@@ -771,7 +773,7 @@ describe('builtin marketplace seed', () => {
       updated_at: '2026-07-04T00:00:00Z',
     });
     writeBuiltinAgentMeta(agentId, {
-      reseed_if_deleted_before: '2026-07-05T00:00:00Z',
+      reseed_if_deleted_before: reseedCutoff,
     });
 
     const seed = await import('../../../src/main/features/builtin_marketplace');
@@ -782,7 +784,7 @@ describe('builtin marketplace seed', () => {
       agents: [],
       skills: [],
       _deleted_at: {
-        agents: { [agentId]: Date.parse('2026-07-05T00:00:00Z') },
+        agents: { [agentId]: tombstoneAt },
       },
     });
 
@@ -793,16 +795,18 @@ describe('builtin marketplace seed', () => {
 
     expect(fs.existsSync(path.join(paths.userMarketplaceAgentDir('u1', agentId), 'agent.json'))).toBe(false);
     const manifest = await installs.readInstalls('u1');
-    expect(manifest._deleted_at?.agents?.[agentId]).toEqual(Date.parse('2026-07-05T00:00:00Z'));
+    expect(manifest._deleted_at?.agents?.[agentId]).toEqual(tombstoneAt);
     expect(manifest.agents).toEqual([]);
   });
 
   it('keeps a newer builtin skill uninstall tombstone respected', async () => {
     const skillId = 'ee99fbb42964';
+    const tombstoneAt = Date.now();
+    const reseedCutoff = new Date(tombstoneAt).toISOString();
     writeBuiltinSkill(skillId, 'deep-research');
     writeBuiltinSkillMeta(skillId, {
       version: '1.0.1',
-      reseed_if_deleted_before: '2026-07-03T00:00:00Z',
+      reseed_if_deleted_before: reseedCutoff,
     });
 
     const seed = await import('../../../src/main/features/builtin_marketplace');
@@ -813,7 +817,7 @@ describe('builtin marketplace seed', () => {
       agents: [],
       skills: [],
       _deleted_at: {
-        skills: { [skillId]: Date.parse('2026-07-03T00:00:00Z') },
+        skills: { [skillId]: tombstoneAt },
       },
     });
 
@@ -824,7 +828,7 @@ describe('builtin marketplace seed', () => {
 
     expect(fs.existsSync(path.join(paths.userMarketplaceSkillDir('u1', skillId), 'SKILL.md'))).toBe(false);
     const manifest = await installs.readInstalls('u1');
-    expect(manifest._deleted_at?.skills?.[skillId]).toEqual(Date.parse('2026-07-03T00:00:00Z'));
+    expect(manifest._deleted_at?.skills?.[skillId]).toEqual(tombstoneAt);
     expect(manifest.skills).toEqual([]);
   });
 

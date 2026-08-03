@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "40382ce2bc0d33605154c2602abb6c92ae1cb70ee0e23ea7defe3d018f00dfcf",
+  "content_tree_sha256": "5826b4d154afcaf8b1e741dda05c1a692312e8f550e944c3d31a8edb557ab91e",
   "files": [
     {
       "path": "marketplace/agents/78900d8758bc/_meta.json",
@@ -629,8 +629,8 @@
     },
     {
       "path": "system/skills/_system.json",
-      "bytes": 338,
-      "sha256": "08087e37466d918dbcd99882b2333b47ebc7781469a364eedcad270112ddee6f"
+      "bytes": 427,
+      "sha256": "e23e067565253b349946463b7679a98dcea8c73454c4a485677fc886048aec40"
     },
     {
       "path": "system/skills/agent-creator/SKILL.md",
@@ -651,6 +651,41 @@
       "path": "system/skills/package-installer/SKILL.md",
       "bytes": 5317,
       "sha256": "647e22ac279f7c5ad6267e7e4d8736b72a86734836e4ad7e81337db4e6f69865"
+    },
+    {
+      "path": "system/skills/personal-ontology-candidate-builder/references/examples.md",
+      "bytes": 2670,
+      "sha256": "9cf234f9f49ec30d8e6166376c5f1b4fe93605d45a88e6deface0f51bb3158f3"
+    },
+    {
+      "path": "system/skills/personal-ontology-candidate-builder/references/failure-modes.md",
+      "bytes": 1718,
+      "sha256": "40938710d98825e4371b7a515f20a52aa454deef84de659f70f71e03083f375c"
+    },
+    {
+      "path": "system/skills/personal-ontology-candidate-builder/references/governance-boundaries.md",
+      "bytes": 1793,
+      "sha256": "e843017caa3f98e05427d62526252abefae32935083cedfc4f0c5037310ddae5"
+    },
+    {
+      "path": "system/skills/personal-ontology-candidate-builder/references/input-contract.md",
+      "bytes": 1325,
+      "sha256": "1d0aa38578c243c7d6d5d13e7fe40fbcc98c5fa883ed3365852c1ab284155baa"
+    },
+    {
+      "path": "system/skills/personal-ontology-candidate-builder/references/output-contract.md",
+      "bytes": 4432,
+      "sha256": "631d83ed54008d047b38aa6a7483ce2b84ddc95f512bbf094e229cdaf6d700a4"
+    },
+    {
+      "path": "system/skills/personal-ontology-candidate-builder/schemas.json",
+      "bytes": 4083,
+      "sha256": "120a9e17b28690f2014b9251c5b5ad9d8fb697a052ef25ce48dcd9d9df085673"
+    },
+    {
+      "path": "system/skills/personal-ontology-candidate-builder/SKILL.md",
+      "bytes": 6128,
+      "sha256": "3c3cc1de31bb3fc38dad2b11c3a86654c51165f19f5be1c881d6748b282b770f"
     },
     {
       "path": "system/skills/skill-creator/SKILL.md",
@@ -675,6 +710,10 @@
       {
         "id": "package-installer",
         "update_at": 1781568000000
+      },
+      {
+        "id": "personal-ontology-candidate-builder",
+        "update_at": 1785324240017
       },
       {
         "id": "skill-creator",
