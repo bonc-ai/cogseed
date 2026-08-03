@@ -55,7 +55,7 @@ describe('connector callback protocol', () => {
 
   it('registers before readiness and dispatches both callback kinds to the running app', async () => {
     const protocol = await import('../../../../src/main/features/connectors/protocol');
-    protocol.registerConnectorProtocol();
+    expect(protocol.registerConnectorProtocol({ owner: true })).toBe(true);
 
     expect(electronMock.app.setAsDefaultProtocolClient).toHaveBeenCalledWith('mateagent');
     expect(electronMock.app.setAsDefaultProtocolClient).toHaveBeenCalledWith('orkas');
@@ -75,7 +75,7 @@ describe('connector callback protocol', () => {
 
   it('does not intercept stripped account-login links', async () => {
     const protocol = await import('../../../../src/main/features/connectors/protocol');
-    protocol.registerConnectorProtocol();
+    protocol.registerConnectorProtocol({ owner: true });
     const openUrl = electronMock.listeners.get('open-url');
     const preventDefault = vi.fn();
 
@@ -84,5 +84,13 @@ describe('connector callback protocol', () => {
     expect(preventDefault).not.toHaveBeenCalled();
     expect(connectorMock.handleCallbackUrl).not.toHaveBeenCalled();
     expect(connectorMock.handleDcrCallbackUrl).not.toHaveBeenCalled();
+  });
+
+  it('does not register or intercept callbacks when this runtime is not the owner', async () => {
+    const protocol = await import('../../../../src/main/features/connectors/protocol');
+
+    expect(protocol.registerConnectorProtocol({ owner: false })).toBe(false);
+    expect(electronMock.app.setAsDefaultProtocolClient).not.toHaveBeenCalled();
+    expect(electronMock.listeners.size).toBe(0);
   });
 });

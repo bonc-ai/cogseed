@@ -14,6 +14,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const {
+  initializeInstallDataRoot,
+  selectRuntimeVariant,
+} = require('./src/main/install-data-root.cjs');
 
 try {
   const packageMeta = require('./package.json');
@@ -22,11 +26,29 @@ try {
   }
 } catch { /* build metadata is optional in source runs */ }
 
+function detectPackagedRuntime() {
+  const appPath = String(process.resourcesPath || '');
+  return !!process.versions.electron
+    && !!appPath
+    && !appPath.includes(`${path.sep}node_modules${path.sep}electron${path.sep}`);
+}
+
+try {
+  process.env.ORKAS_RUNTIME_VARIANT = selectRuntimeVariant({
+    argv: process.argv.slice(1),
+    envVariant: process.env.ORKAS_RUNTIME_VARIANT,
+    isPackaged: detectPackagedRuntime(),
+  });
+  initializeInstallDataRoot(process.env.ORKAS_RUNTIME_VARIANT);
+} catch (err) {
+  process.stderr.write(`[Mate Agent] ${err instanceof Error ? err.message : String(err)}\n`);
+  process.exitCode = 2;
+  throw err;
+}
+
 for (const arg of process.argv.slice(1)) {
   if (typeof arg !== 'string') continue;
-  if (arg.startsWith('--orkas-profile=')) {
-    process.env.ORKAS_PROFILE = arg.slice('--orkas-profile='.length);
-  } else if (arg.startsWith('--orkas-api-base-url=')) {
+  if (arg.startsWith('--orkas-api-base-url=')) {
     process.env.ORKAS_API_BASE_URL = arg.slice('--orkas-api-base-url='.length);
   } else if (arg.startsWith('--orkas-voice-api-base=')) {
     process.env.ORKAS_VOICE_API_BASE = arg.slice('--orkas-voice-api-base='.length);

@@ -14,11 +14,13 @@ describe('Mate Agent source-run branding', () => {
     expect(source).toContain("['CFBundleIdentifier', APP_ID]");
   });
 
-  it('declares the new identity and both connector schemes in Info.plist', () => {
+  it('retains the legacy source protocol patcher but launchers do not invoke it', () => {
     const source = read('scripts/prepare-source-protocol.cjs');
     expect(source).toContain("const brand = require('../src/resources/brand.json');");
     expect(source).toContain('CFBundleURLSchemes: [brand.protocolScheme, brand.legacyConnectorScheme]');
     expect(source).toContain("CFBundleURLName: 'com.mateagent.connectors'");
+    expect(read('run.sh')).not.toContain('prepare-source-protocol.cjs');
+    expect(read('run.cmd')).not.toContain('prepare-source-protocol.cjs');
   });
 
   it('launches the renamed macOS bundle', () => {
