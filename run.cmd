@@ -12,6 +12,13 @@ if not exist "%APP_DIR%\package.json" (
 
 echo [Mate Agent] Starting Mate Agent
 
+set "ORKAS_BUILD_CHANNEL=dev"
+for /f "delims=" %%G in ('git -C "%APP_DIR%" rev-parse HEAD 2^>nul') do set "ORKAS_BUILD_COMMIT=%%G"
+set "ORKAS_BUILD_DIRTY=0"
+for /f "delims=" %%G in ('git -C "%APP_DIR%" status --porcelain 2^>nul') do set "ORKAS_BUILD_DIRTY=1"
+for /f "delims=" %%G in ('powershell -NoLogo -NoProfile -Command "[DateTime]::UtcNow.ToString('o')"') do set "ORKAS_BUILD_TIME=%%G"
+echo [Mate Agent] Build identity: !ORKAS_BUILD_CHANNEL! !ORKAS_BUILD_COMMIT! dirty=!ORKAS_BUILD_DIRTY!
+
 node --version >nul 2>nul
 if errorlevel 1 (
   echo [Mate Agent] Node.js is unavailable; preparing the pinned bundled runtime...

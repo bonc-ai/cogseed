@@ -10,7 +10,7 @@ vi.mock('../../../../src/main/features/evolution/engine-loader', () => {
     async gradeEvalWithLlmAsync(skillId: string, assertions: string[]) {
       const grades = new Map();
       (this.evals.get(skillId) ?? []).forEach((r: any) =>
-        grades.set(r.eval_id, { expectations: assertions.map(a => ({ text: a, passed: true, evidence: 'ok' })), summary: { passed: assertions.length, failed: 0, total: assertions.length, pass_rate: 1 } }));
+        grades.set(r.eval_id, { expectations: assertions.map(a => ({ text: a, passed: String(r.with_skill_output).includes('pass'), evidence: 'ok' })), summary: { passed: assertions.length, failed: 0, total: assertions.length, pass_rate: 1 } }));
       return grades;
     }
   }
@@ -29,11 +29,14 @@ describe('runEvalStream', () => {
     const events: any[] = [];
     for await (const ev of runEvalStream('u1', 'sk1', {
       cases: [{ id: 1, input: 'q', assertions: ['断言A', '断言B'] }],
-      outputs: { 1: '技能输出内容' },
+      outputs: { 1: 'treatment fail' },
+      baselineOutputs: { 1: 'baseline pass' },
+      baselineExecutionId: 'baseline-1', treatmentExecutionId: 'treatment-1', contrastId: 'contrast-1', receiptId: 'receipt-1',
     })) events.push(ev);
     const verdicts = events.filter(e => e.type === 'verdict');
     expect(verdicts.length).toBe(2);
     const done = events.find(e => e.type === 'done');
-    expect(done.passRate).toBe(1);
+    expect(done.passRate).toBe(0);
+    expect(done.regression).toBe(true);
   });
 });

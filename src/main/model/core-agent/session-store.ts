@@ -31,6 +31,7 @@
 
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 
 import {
   sessionToolResultsDir,
@@ -172,6 +173,127 @@ export async function getSession(sessionId: string): Promise<PersistentSessionIn
   });
   cache.set(sessionId, session);
   return session;
+}
+
+export interface SessionMessageRecord {
+  role: 'user' | 'assistant' | 'system';
+  content: unknown[];
+  turnId?: number;
+}
+
+/** Copy a durable session JSONL and its PersistentSession context sidecar.
+ * Tool-result spill directories are intentionally not copied: copy/merge
+ * preserve references in history, not produced-file bodies. */
+export async function cloneSessionForUser(
+  userId: string,
+  sourceSessionId: string,
+  destinationSessionId: string,
+): Promise<void> {
+  const source = resolveSessionPath(userId, sourceSessionId);
+  const destination = resolveSessionPath(userId, destinationSessionId);
+  if (source === destination) throw new Error('source and destination sessions must differ');
+  await fsp.mkdir(path.dirname(destination), { recursive: true });
+  if (fs.existsSync(source)) await fsp.copyFile(source, destination);
+  else await fsp.writeFile(destination, '', 'utf8');
+  const sourceContext = `${source}.context.json`;
+  const destinationContext = `${destination}.context.json`;
+  if (fs.existsSync(sourceContext)) {
+    let durableContext: Record<string, unknown> | null = null;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(sourceContext, 'utf8')) as Record<string, unknown>;
+      if (parsed?.version === 1) {
+        durableContext = {
+          version: 1,
+          nextTurnId: Number.isInteger(parsed.nextTurnId) && Number(parsed.nextTurnId) > 0
+            ? Number(parsed.nextTurnId)
+            : 1,
+          ...(typeof parsed.historySummary === 'string' && parsed.historySummary
+            ? { historySummary: parsed.historySummary }
+            : {}),
+          ...(Number.isInteger(parsed.summaryVersion) && Number(parsed.summaryVersion) > 0
+            ? { summaryVersion: Number(parsed.summaryVersion) }
+            : {}),
+          ...(Number.isInteger(parsed.summaryThroughTurnId) && Number(parsed.summaryThroughTurnId) > 0
+            ? { summaryThroughTurnId: Number(parsed.summaryThroughTurnId) }
+            : {}),
+        };
+      }
+    } catch (err) {
+      log.warn('session context clone skipped malformed sidecar', {
+        user_id: maskId(userId),
+        session_id: maskId(sourceSessionId),
+        error: logErrorRef(err),
+      });
+    }
+    if (durableContext) {
+      const tmp = `${destinationContext}.tmp`;
+      try {
+        await fsp.writeFile(tmp, `${JSON.stringify(durableContext, null, 2)}\n`, 'utf8');
+        await fsp.rename(tmp, destinationContext);
+      } catch (err) {
+        await fsp.rm(tmp, { force: true });
+        throw err;
+      }
+    } else {
+      await fsp.rm(destinationContext, { force: true });
+    }
+  } else await fsp.rm(destinationContext, { force: true });
+  evictSession(destinationSessionId);
+}
+
+export async function readSessionMessagesForUser(
+  userId: string,
+  sessionId: string,
+): Promise<SessionMessageRecord[]> {
+  const file = resolveSessionPath(userId, sessionId);
+  if (!fs.existsSync(file)) return [];
+  const lines = (await fsp.readFile(file, 'utf8')).split('\n');
+  const out: SessionMessageRecord[] = [];
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const row = JSON.parse(line) as Partial<SessionMessageRecord>;
+      if ((row.role === 'user' || row.role === 'assistant' || row.role === 'system') && Array.isArray(row.content)) {
+        out.push({ role: row.role, content: row.content, ...(Number.isInteger(row.turnId) ? { turnId: row.turnId } : {}) });
+      }
+    } catch { /* ignore malformed session lines */ }
+  }
+  return out;
+}
+
+export async function writeSessionMessagesForUser(
+  userId: string,
+  sessionId: string,
+  messages: SessionMessageRecord[],
+): Promise<void> {
+  const file = resolveSessionPath(userId, sessionId);
+  await fsp.mkdir(path.dirname(file), { recursive: true });
+  const body = messages.map((message) => JSON.stringify({ ...message, ts: Date.now() })).join('\n');
+  await fsp.writeFile(file, body ? `${body}\n` : '', 'utf8');
+  await fsp.rm(`${file}.context.json`, { force: true });
+  evictSession(sessionId);
+}
+
+/** Write a merged summary transcript together with the minimal context state
+ * PersistentSession needs to resume from that summary. */
+export async function writeMergedSessionSummaryForUser(
+  userId: string,
+  sessionId: string,
+  messages: SessionMessageRecord[],
+  summary: string,
+): Promise<void> {
+  await writeSessionMessagesForUser(userId, sessionId, messages);
+  const contextFile = `${resolveSessionPath(userId, sessionId)}.context.json`;
+  const tmp = `${contextFile}.tmp`;
+  const context = {
+    version: 1,
+    nextTurnId: 1,
+    historySummary: summary,
+    summaryVersion: 1,
+  } as const;
+  await fsp.writeFile(tmp, `${JSON.stringify(context, null, 2)}\n`, 'utf8');
+  await fsp.rename(tmp, contextFile);
+  evictSession(sessionId);
 }
 
 /** Drop a cached session — used when the underlying conversation is deleted. */

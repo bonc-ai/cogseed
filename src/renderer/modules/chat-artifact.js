@@ -442,7 +442,7 @@
       host.className = 'chat-artifact-host';
       bubbleEl.appendChild(host);
       renderChatArtifact(host, {
-        cid: cid,
+        cid: a.source_cid || cid,
         artifactId: a.id,
         title: a.title || '',
         agentId: a.agent_id || '',

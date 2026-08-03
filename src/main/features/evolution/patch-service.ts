@@ -1,5 +1,6 @@
 import { writeSkillFileForEdit } from '../skills';
 import { appendSkillVersion } from './versions-store';
+import { validatePatchCandidateContent, type ValidationBoundary, type ValidationStatus } from '../p3394/skill-validation-run';
 
 type WriteFn = (skillId: string, file: string, content: string) => Promise<boolean>;
 type AppendVersionFn = (uid: string, skillId: string, entry: { version: string; note?: string; runId?: string }) => Promise<unknown>;
@@ -19,11 +20,13 @@ function withBumpedVersion(content: string): { content: string; newVersion: stri
   if (verLine) {
     return { content: content.replace(/version:\s*[0-9.]+/, `version: ${next}`), newVersion: next };
   }
-  // 无 version 行：加在开头（若有 frontmatter 分隔则插入其内）。
+  // 无 version 行：若有标准 frontmatter，插入 opening delimiter 后；否则保留旧格式兼容。
+  if (content.startsWith('---\n')) return { content: `---\nversion: ${next}\n${content.slice(4)}`, newVersion: next };
+  if (content.startsWith('---\r\n')) return { content: `---\r\nversion: ${next}\r\n${content.slice(5)}`, newVersion: next };
   return { content: `version: ${next}\n${content}`, newVersion: next };
 }
 
-interface ApplyInput { skillId: string; newContent: string; note?: string; runId?: string; writeFn?: WriteFn; appendVersionFn?: AppendVersionFn; }
+interface ApplyInput { skillId: string; newContent: string; note?: string; runId?: string; writeFn?: WriteFn; appendVersionFn?: AppendVersionFn; validationBoundary?: ValidationBoundary; }
 
 /**
  * Apply 步：把改进正文写进 SKILL.md 并 bump semver，成功后追加一条版本历史。
@@ -31,13 +34,17 @@ interface ApplyInput { skillId: string; newContent: string; note?: string; runId
  */
 export async function applyPatchToSkill(
   uid: string, input: ApplyInput,
-): Promise<{ ok: boolean; newVersion: string }> {
+): Promise<{ ok: boolean; newVersion: string; validationId: string; validationStatus: ValidationStatus }> {
   const write = input.writeFn ?? ((id, file, content) => writeSkillFileForEdit(id, file, content));
   const appendVersion = input.appendVersionFn ?? appendSkillVersion;
   const { content, newVersion } = withBumpedVersion(input.newContent);
+  const validation = await validatePatchCandidateContent(uid, input.skillId, content, input.validationBoundary || 'real');
+  if (validation.status === 'blocked') {
+    return { ok: false, newVersion, validationId: validation.validationId, validationStatus: validation.status };
+  }
   const ok = await write(input.skillId, 'SKILL.md', content);
   if (ok) {
     await appendVersion(uid, input.skillId, { version: newVersion, note: input.note, runId: input.runId });
   }
-  return { ok, newVersion };
+  return { ok, newVersion, validationId: validation.validationId, validationStatus: validation.status };
 }

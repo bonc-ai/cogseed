@@ -989,7 +989,7 @@
           </div>
           <div class="settings-tabs" role="tablist">
             <button class="settings-tab is-active" data-settings-tab="data" data-i18n="settings.tab.data">数据</button>
-            <button class="settings-tab" data-settings-tab="credentials" data-i18n="settings.tab.credentials">配置</button>
+            <button class="settings-tab" data-settings-tab="credentials" data-i18n="settings.tab.credentials">Model Providers</button>
             <button class="settings-tab" data-settings-tab="general" data-i18n="settings.tab.general">通用</button>
           </div>
 
@@ -1126,6 +1126,40 @@
                 </div>
               </div>
 
+              <div class="settings-group settings-model-auth-group" id="settings-model-authorizations">
+                <div class="settings-group-head">
+                  <div>
+                    <div class="settings-group-title" data-i18n="settings.model_authorization.title">Model authorizations</div>
+                    <div class="settings-group-sub" data-i18n="settings.model_authorization.subtitle">Use an API key or import from CC Switch, test the connection, then choose one or more returned models.</div>
+                    <div class="settings-group-sub" id="settings-model-authorization-api-key-flow-hint" data-i18n="settings.model_authorization.api_key_flow_hint">API Key flow: choose an interface type, enter the key and URL, test the connection, then select models from the response.</div>
+                  </div>
+                  <div class="settings-group-head-actions">
+                    <button class="btn btn-primary" id="settings-model-authorization-add-btn" data-ui-icon="plus" data-i18n="settings.model_authorization.add">Add authorization</button>
+                    <button class="btn" id="settings-model-authorization-advanced-btn" data-ui-icon="settings" data-i18n="settings.model_authorization.advanced">Custom endpoint management</button>
+                  </div>
+                </div>
+                <div class="settings-entries model-authorization-list" id="settings-model-authorization-list">
+                  <div class="settings-empty" data-i18n="settings.loading">Loading…</div>
+                </div>
+                <div class="settings-status" id="settings-model-authorization-status"></div>
+              </div>
+
+              <div class="settings-group settings-custom-providers-group" id="settings-model-authorization-advanced" hidden>
+                <div class="settings-group-head">
+                  <div class="settings-group-title" data-i18n="settings.model_authorization.advanced_title">Custom endpoint management</div>
+                  <div class="settings-group-sub" id="settings-model-authorization-advanced-hint" data-i18n="settings.model_authorization.advanced_hint">Only edit existing custom API endpoints here. To connect a new model service, use Add authorization above.</div>
+                  <div class="settings-group-sub" data-i18n="settings.model_authorization.advanced_subtitle">Manage endpoint metadata, protocol, and saved custom-provider details.</div>
+                </div>
+                <div class="settings-row settings-custom-provider-toolbar">
+                  <button class="btn" id="settings-custom-provider-add-btn" data-i18n="settings.custom_providers.add">Add provider</button>
+                  <span class="settings-status" id="settings-ccswitch-status"></span>
+                  <span class="settings-status" id="settings-custom-providers-status"></span>
+                </div>
+                <div class="settings-entries settings-custom-provider-list" id="settings-custom-provider-list">
+                  <div class="settings-empty" data-i18n="settings.loading">Loading…</div>
+                </div>
+              </div>
+
               <div class="settings-group settings-commander-backend-group">
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.commander_backend.title">Commander backend</div>
@@ -1144,51 +1178,8 @@
                 </div>
               </div>
 
-              <div class="settings-group settings-model-auth-group">
-                <div class="settings-group-head">
-                  <div class="settings-group-title" data-i18n="settings.add_auth_title">Add model authorization</div>
-                  <div class="settings-group-sub" data-i18n="settings.add_auth_sub">Pick a provider and model, then add an API key or OAuth account.</div>
-                </div>
-                <div class="settings-row">
-                  <label data-i18n="settings.provider">Provider</label>
-                  <div class="ai-select" id="settings-picker-provider"></div>
-                </div>
-                <div class="settings-row">
-                  <label data-i18n="settings.model">Model</label>
-                  <div class="ai-select" id="settings-picker-model"></div>
-                </div>
-                <div id="settings-custom-model-fields" hidden>
-                  <div class="settings-row">
-                    <label data-i18n="settings.custom.label">Label</label>
-                    <input type="text" class="form-input" id="settings-custom-label-input" autocomplete="off" spellcheck="false" />
-                  </div>
-                  <div class="settings-row">
-                    <label data-i18n="settings.custom.base_url">Base URL</label>
-                    <input type="text" class="form-input" id="settings-custom-base-url-input" placeholder="https://api.example.com/v1" autocomplete="off" spellcheck="false" />
-                  </div>
-                  <div class="settings-row">
-                    <label data-i18n="settings.custom.model_id">Model ID</label>
-                    <input type="text" class="form-input" id="settings-custom-model-input" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false" />
-                  </div>
-                  <div class="settings-row">
-                    <label data-i18n="settings.custom.api_key">API Key</label>
-                    <input type="text" class="form-input" id="settings-custom-api-key-input" placeholder="sk-…" autocomplete="off" spellcheck="false" />
-                  </div>
-                </div>
-                <div class="settings-row settings-model-auth-actions">
-                  <button class="btn btn-primary" id="settings-add-entry-btn" data-i18n="settings.add_account">+ Add account</button>
-                  <span class="settings-status" id="settings-picker-status"></span>
-                </div>
-
-                <div class="settings-group-subsection">
-                  <div class="settings-group-head">
-                    <div class="settings-group-title" data-i18n="settings.configured_title">Configured (by priority)</div>
-                    <div class="settings-group-sub" data-i18n="settings.configured_sub">The first entry is the default model; later entries are the fallback chain. Drag to reorder.</div>
-                  </div>
-                  <div class="settings-entries" id="settings-entries">
-                    <div class="settings-empty" data-i18n="settings.loading">Loading…</div>
-                  </div>
-                </div>
+              <div class="settings-group-subsection" id="settings-legacy-entries" hidden>
+                <div class="settings-entries" id="settings-entries"></div>
               </div>
 
               <div class="settings-group">
@@ -1349,6 +1340,11 @@
           <label data-i18n="agent_modal.ext_cli_label">Agent</label>
           <div class="ai-select" id="agent-modal-ext-cli-select"></div>
         </div>
+        <div class="form-row" id="agent-ext-provider-row" hidden>
+          <label data-i18n="agent_modal.ext_provider_label">Model provider</label>
+          <div class="ai-select" id="agent-modal-ext-provider-select"></div>
+          <div class="form-hint" data-i18n="agent_modal.ext_provider_hint">Optional. Leave empty to use the CLI's own configuration.</div>
+        </div>
         <div class="form-row">
           <label data-i18n="agent_modal.ext_name">Name</label>
           <input type="text" id="agent-ext-name-input" data-i18n-placeholder="agent_modal.ext_name_placeholder" placeholder="e.g. ClaudeCode" />
@@ -1440,7 +1436,55 @@
     <div class="agent-row-menu-item is-danger" data-action="delete" data-i18n="agents.delete">Delete</div>
   </div>
 
-  <!-- Add-account modal (settings page) -->
+  <!-- Unified model authorization modal (settings page) -->
+  <div class="modal-overlay" id="model-authorization-modal">
+    <div class="modal modal-standard model-authorization-modal" role="dialog" aria-modal="true" aria-labelledby="model-authorization-title">
+      <div class="modal-header">
+        <h3 class="modal-title" id="model-authorization-title" data-i18n="settings.model_authorization.modal_title">Model authorization</h3>
+        <button type="button" class="modal-close-btn" id="model-authorization-close-btn" data-i18n-title="common.close" title="Close">×</button>
+      </div>
+      <div class="model-authorization-steps" id="model-authorization-steps"></div>
+      <div class="modal-body model-authorization-body" id="model-authorization-body"></div>
+      <div class="form-msg" id="model-authorization-status"></div>
+      <div class="modal-actions" id="model-authorization-actions"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="settings-custom-provider-modal">
+    <div class="modal modal-standard settings-custom-provider-modal" role="dialog" aria-modal="true" aria-labelledby="settings-custom-provider-modal-title">
+      <div class="modal-header">
+        <h3 class="modal-title" id="settings-custom-provider-modal-title">Model provider</h3>
+      </div>
+      <div class="modal-body" id="settings-custom-provider-modal-body"></div>
+      <div class="form-msg" id="settings-custom-provider-modal-status"></div>
+      <div class="modal-actions" id="settings-custom-provider-modal-actions"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="settings-ccswitch-preview-modal">
+    <div class="modal modal-standard settings-ccswitch-preview-modal" role="dialog" aria-modal="true" aria-labelledby="settings-ccswitch-preview-modal-title">
+      <div class="modal-header">
+        <h3 class="modal-title" id="settings-ccswitch-preview-modal-title">CC Switch</h3>
+      </div>
+      <div class="modal-body" id="settings-ccswitch-preview-modal-body"></div>
+      <div class="form-msg" id="settings-ccswitch-preview-modal-status"></div>
+      <div class="modal-actions" id="settings-ccswitch-preview-modal-actions"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="personal-onto-modal" hidden>
+    <div class="modal modal-standard" role="dialog" aria-modal="true" aria-labelledby="personal-onto-modal-title">
+      <h3 class="modal-title" id="personal-onto-modal-title" data-i18n="personalOntology.reject_title">Reject candidate</h3>
+      <div class="modal-body">
+        <textarea class="form-input" id="personal-onto-modal-reason" rows="4" data-i18n-placeholder="personalOntology.reject_placeholder"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="personal-onto-modal-cancel" data-i18n="common.cancel">Cancel</button>
+        <button class="btn btn-danger" id="personal-onto-modal-ok" data-i18n="common.confirm">Confirm</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-overlay" id="add-account-modal">
     <div class="modal add-account-modal modal-standard" role="dialog" aria-modal="true" aria-labelledby="add-account-title">
       <h3 class="modal-title" id="add-account-title" data-i18n="add_account.title">Add account</h3>

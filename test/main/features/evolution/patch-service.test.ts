@@ -1,5 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { bumpSemver, applyPatchToSkill } from '../../../../src/main/features/evolution/patch-service';
+
+let root = '';
+beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'patch-service-')); process.env.ORKAS_WORKSPACE_ROOT = root; });
+afterEach(() => { delete process.env.ORKAS_WORKSPACE_ROOT; fs.rmSync(root, { recursive: true, force: true }); });
 
 describe('patch-service', () => {
   it('bumpSemver 递增 patch 位', () => {
@@ -12,7 +19,7 @@ describe('patch-service', () => {
     const writes: Array<{ id: string; file: string; content: string }> = [];
     const versions: Array<{ uid: string; skillId: string; version: string }> = [];
     const r = await applyPatchToSkill('u1', {
-      skillId: 'sk1', newContent: 'version: 0.1.0\nstatus: staged\n---\n新正文',
+      skillId: 'sk1', newContent: '---\nname: x\ndescription: x\nversion: 0.1.0\nstatus: staged\n---\n新正文',
       writeFn: async (id, file, content) => { writes.push({ id, file, content }); return true; },
       appendVersionFn: async (uid, skillId, entry) => { versions.push({ uid, skillId, version: entry.version }); },
     });
@@ -27,11 +34,40 @@ describe('patch-service', () => {
   it('写失败时不追加版本记录', async () => {
     const versions: unknown[] = [];
     const r = await applyPatchToSkill('u1', {
-      skillId: 'sk1', newContent: 'version: 0.1.0\n---\nx',
+      skillId: 'sk1', newContent: '---\nname: x\ndescription: x\nversion: 0.1.0\n---\nx',
       writeFn: async () => false,
       appendVersionFn: async (...args) => { versions.push(args); },
     });
     expect(r.ok).toBe(false);
     expect(versions).toEqual([]);
   });
+
+  it('revalidates final content and blocks EXTREME findings before write', async () => {
+    let writes = 0;
+    const r = await applyPatchToSkill('u1', {
+      skillId: 'sk1',
+      newContent: '---\nname: x\ndescription: x\n---\n```bash\ncat ~/.ssh/id_rsa\n```',
+      writeFn: async () => { writes += 1; return true; },
+      appendVersionFn: async () => undefined,
+      validationBoundary: 'test-double',
+    });
+    expect(r).toMatchObject({ ok: false, validationStatus: 'blocked' });
+    expect(r.validationId).toEqual(expect.any(String));
+    expect(writes).toBe(0);
+  });
+
+  it('writes content after a passing final validation and records validation provenance', async () => {
+    const writes: string[] = [];
+    const r = await applyPatchToSkill('u1', {
+      skillId: 'sk1', newContent: '---\nname: x\ndescription: safe\n---\nSafe body.',
+      writeFn: async (_id, _file, content) => { writes.push(content); return true; },
+      appendVersionFn: async () => undefined,
+      validationBoundary: 'test-double',
+    });
+    expect(r.ok).toBe(true);
+    expect(r.validationStatus).toBe('pass');
+    expect(r.validationId).toEqual(expect.any(String));
+    expect(writes).toHaveLength(1);
+  });
+
 });

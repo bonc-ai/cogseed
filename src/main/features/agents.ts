@@ -352,6 +352,8 @@ export type AgentRuntime =
       /** Extra CLI flags appended after our own args. Strings only;
        *  not shell-parsed by us. */
       custom_args?: string[];
+      /** Optional synthetic custom-provider id (`cp:<id>`). */
+      cli_provider_id?: string;
     };
 
 export interface AgentInterfaceContract {
@@ -974,6 +976,9 @@ function _normalizeRuntime(raw: unknown): AgentRuntime | null {
   if (Array.isArray(r.custom_args)) {
     const args = r.custom_args.filter((s): s is string => typeof s === 'string');
     if (args.length) out.custom_args = args;
+  }
+  if (typeof r.cli_provider_id === 'string' && r.cli_provider_id.trim().startsWith('cp:')) {
+    out.cli_provider_id = r.cli_provider_id.trim();
   }
   return out;
 }
