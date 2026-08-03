@@ -714,6 +714,8 @@
   "agents.use": "Use",
   "agents.use_label": "Agent: {agent}",
   "agents.use_tooltip": "Use this agent",
+  "agents.manage": "Manage",
+  "agents.manage_tooltip": "Open this agent's management workbench",
   "agents.more_actions": "More actions",
   "agents.edit": "Edit",
   "agents.delete": "Uninstall",

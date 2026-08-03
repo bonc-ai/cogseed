@@ -24,7 +24,7 @@ import { userReflectionStateFile, userLocalConfigDir } from '../paths';
 import { writeJsonSync } from '../storage';
 import { createLogger } from '../logger';
 import { logErrorRef } from '../util/log-redact';
-import { listAgents } from './agents';
+import { isAgentChatDispatchable, listAgents } from './agents';
 import { listConversations, type Conversation } from './chats';
 import * as metacognition from './metacognition';
 import { buildTranscript, listAgentGmemberFiles } from './reflection-transcript';
@@ -275,7 +275,10 @@ export async function runOneCycle(uid: string, opts: RunCycleOpts = {}): Promise
 
   // `_default` first so the most common bucket gets attention even if a
   // long agent list later in the loop hits issues.
-  const agentIds = [DEFAULT_AGENT_ID, ...agents.map((a) => a.agent_id)];
+  const agentIds = [
+    DEFAULT_AGENT_ID,
+    ...agents.filter((agent) => isAgentChatDispatchable(agent)).map((agent) => agent.agent_id),
+  ];
   const state = readReflectionState(uid);
   const eligible = await pickAgentsForCycle(uid, agentIds, state, now, dirtyFn, opts.signal);
 

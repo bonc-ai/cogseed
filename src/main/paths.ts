@@ -399,6 +399,19 @@ export const userRemoteConfigFile = (uid: string) => path.join(userLocalConfigDi
 // Machine-local defaults for external coding agents. Values are absolute
 // project directories, so they must not sync across devices.
 export const userAgentRuntimeConfigFile = (uid: string) => path.join(userLocalConfigDir(uid), 'agent-runtime.json');
+// Machine-private configuration and process state for the canonical expense workbench.
+export const userExpenseWorkbenchConfigFile = (uid: string) =>
+  path.join(userLocalConfigDir(uid), 'expense-workbench.json');
+export const userExpenseWorkbenchRuntimeDir = (uid: string) =>
+  path.join(userLocalRoot(uid), 'expense-workbench');
+export const userExpenseWorkbenchHomeDir = (uid: string) =>
+  path.join(userExpenseWorkbenchRuntimeDir(uid), 'home');
+export const userExpenseWorkbenchTempDir = (uid: string) =>
+  path.join(userExpenseWorkbenchRuntimeDir(uid), 'tmp');
+export const userExpenseWorkbenchComponentDataDir = (uid: string) =>
+  path.join(userExpenseWorkbenchHomeDir(uid), '.expense_reimbursement');
+export const userExpenseWorkbenchConfirmationsDir = (uid: string) =>
+  path.join(userExpenseWorkbenchComponentDataDir(uid), 'host-confirmations');
 
 // Local search index (derived data, self-healing via reconcile, never synced).
 // Only the main conversation + knowledge base get a persistent inverted

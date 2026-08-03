@@ -14,11 +14,12 @@ describe('source runtime launchers', () => {
     expect(windows).toContain('set "VARIANT=expense"');
     expect(shell).toContain('--orkas-runtime-variant=$VARIANT');
     expect(windows).toContain('--orkas-runtime-variant=!VARIANT!');
-    for (const source of [shell, windows]) {
-      for (const variant of ['main', 'cognition', 'expense', 'integration']) {
-        expect(source).toContain(variant);
-      }
-    }
+    expect(shell).toContain('prepare-source-runtime.cjs" --variant="$VARIANT"');
+    expect(windows).toContain('prepare-source-runtime.cjs" --variant=!VARIANT!');
+    expect(shell).not.toContain('--variant=integration');
+    expect(windows).not.toContain('--variant=integration');
+    expect(shell).toContain('locked to the expense runtime');
+    expect(windows).toContain('locked to the expense runtime');
   });
 
   it('never kills a global Electron process or bypasses the single-instance lock', () => {
@@ -38,5 +39,11 @@ describe('source runtime launchers', () => {
     const sources = `${read('run.sh')}\n${read('run.cmd')}`;
     expect(sources).not.toContain('prepare-source-protocol.cjs');
     expect(sources).not.toContain('setAsDefaultProtocolClient');
+  });
+
+  it('locks the case-sensitive Windows environment value to expense', () => {
+    const windows = read('run.cmd');
+    expect(windows).toContain('if not "%ORKAS_RUNTIME_VARIANT%"=="expense"');
+    expect(windows).not.toMatch(/if \/I not "%ORKAS_RUNTIME_VARIANT%"/);
   });
 });

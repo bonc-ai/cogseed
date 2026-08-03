@@ -652,6 +652,8 @@
   "agents.update_failed": "更新に失敗しました",
   "agents.use": "使用",
   "agents.use_tooltip": "このエージェントを使用",
+  "agents.manage": "管理",
+  "agents.manage_tooltip": "このエージェントの管理ワークベンチを開く",
   "agents.more_actions": "その他の操作",
   "agents.edit": "編集",
   "agents.delete": "アンインストール",

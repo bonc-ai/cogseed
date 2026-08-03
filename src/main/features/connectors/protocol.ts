@@ -73,42 +73,44 @@ async function _dispatch(rawUrl: string): Promise<void> {
 
 /** Register callback handling only in the one runtime that owns the OS schemes. */
 export function registerConnectorProtocol(options: Readonly<{ owner: boolean }>): boolean {
-  if (!options.owner) {
-    log.info('connector protocol registration disabled for this runtime');
-    return false;
-  }
-  for (const scheme of CONNECTOR_PROTOCOL_SCHEMES) {
-    try {
-      if (!app.isPackaged && process.argv.length >= 2) {
-        app.setAsDefaultProtocolClient(scheme, process.execPath, [path.resolve(process.argv[1])]);
-      } else {
-        app.setAsDefaultProtocolClient(scheme);
+  if (options.owner) {
+    for (const scheme of CONNECTOR_PROTOCOL_SCHEMES) {
+      try {
+        if (!app.isPackaged && process.argv.length >= 2) {
+          app.setAsDefaultProtocolClient(scheme, process.execPath, [path.resolve(process.argv[1])]);
+        } else {
+          app.setAsDefaultProtocolClient(scheme);
+        }
+      } catch (err) {
+        log.warn('connector protocol registration failed', { scheme, error: (err as Error).message });
       }
-    } catch (err) {
-      log.warn('connector protocol registration failed', { scheme, error: (err as Error).message });
+
+      let isDefaultHandler = false;
+      try { isDefaultHandler = app.isDefaultProtocolClient(scheme); }
+      catch { /* diagnostics only */ }
+      log.info('connector protocol registration', { scheme, isDefaultHandler });
     }
 
-    let isDefaultHandler = false;
-    try { isDefaultHandler = app.isDefaultProtocolClient(scheme); }
-    catch { /* diagnostics only */ }
-    log.info('connector protocol registration', { scheme, isDefaultHandler });
+    app.on('open-url', (event, rawUrl) => {
+      if (!_connectorCallbackKind(rawUrl)) return;
+      event.preventDefault();
+      void _dispatch(rawUrl);
+    });
+
+    const cold = _extractConnectorCallback(process.argv);
+    if (cold) _pending = cold;
+  } else {
+    log.info('connector protocol registration disabled for this runtime');
   }
 
-  app.on('open-url', (event, rawUrl) => {
-    if (!_connectorCallbackKind(rawUrl)) return;
-    event.preventDefault();
-    void _dispatch(rawUrl);
-  });
-
+  // Window activation belongs to the single-instance contract, not protocol
+  // ownership. Every runtime must focus its existing window on a duplicate launch.
   app.on('second-instance', (_event, argv) => {
-    const rawUrl = _extractConnectorCallback(argv);
+    const rawUrl = options.owner ? _extractConnectorCallback(argv) : null;
     if (rawUrl) void _dispatch(rawUrl);
     else _focusMainWindow();
   });
-
-  const cold = _extractConnectorCallback(process.argv);
-  if (cold) _pending = cold;
-  return true;
+  return options.owner;
 }
 
 /** Flush a callback delivered while Electron was still starting. */

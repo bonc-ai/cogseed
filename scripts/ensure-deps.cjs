@@ -10,7 +10,6 @@ const { spawnSync } = require('node:child_process');
 const BRAND = require('../src/resources/brand.json');
 
 const APP_NAME = BRAND.appName;
-const APP_ID = BRAND.appId;
 const LOG_PREFIX = `[${APP_NAME}]`;
 
 const PC_DIR = path.resolve(__dirname, '..');
@@ -383,82 +382,6 @@ function ensureElectronReady(reason = 'missing binary') {
   process.exit(1);
 }
 
-// macOS dev 模式下 Dock tooltip + Cmd-Tab + 菜单栏左上角的应用名，全部
-// 来自 `Electron.app/Contents/Info.plist` 的 CFBundleName / CFBundleDisplayName。
-// `app.setName()` 只改菜单栏第一项，**改不了 Dock**。
-//
-// 单独改 plist 不够：macOS Launch Services 对 bundle identifier
-// `com.github.Electron` 有持久缓存，即使 `lsregister -f` 也常常拒绝刷新。
-// 唯一可靠方案是把 .app 目录本身重命名（让 macOS 当成新 app 重新登记），
-// 同时同步更新 `electron/path.txt`（npm electron launcher 就是靠它定位
-// 二进制的）。重命名 + 改 plist + ad-hoc 重签 + lsregister + killall Dock
-// 一套打下来才算数。
-//
-// 幂等：node_modules/electron/dist/Orkas.app 已存在就跳过。npm install
-// 会重新落地 Electron.app（覆盖 Orkas.app 的话也无所谓，下次启动重新走
-// 这套流程）。
-function patchElectronAppName() {
-  if (process.platform !== 'darwin') return;
-  const distDir = path.join(NODE_MODULES, 'electron', 'dist');
-  const electronApp = path.join(distDir, 'Electron.app');
-  const legacyApp = path.join(distDir, 'Orkas.app');
-  const brandedApp = path.join(distDir, `${APP_NAME}.app`);
-  const pathTxt = path.join(NODE_MODULES, 'electron', 'path.txt');
-  const brandedExecutable = `${APP_NAME}.app/Contents/MacOS/Electron`;
-  if (!fs.existsSync(distDir)) return;
-
-  if (fs.existsSync(brandedApp) && !fs.existsSync(electronApp) && !fs.existsSync(legacyApp)) {
-    let pathTxtContent = '';
-    try { pathTxtContent = fs.readFileSync(pathTxt, 'utf8').trim(); } catch { /* */ }
-    if (pathTxtContent === brandedExecutable) return;
-  }
-
-  const sourceApp = fs.existsSync(electronApp)
-    ? electronApp
-    : fs.existsSync(legacyApp)
-      ? legacyApp
-      : '';
-  if (sourceApp) {
-    if (fs.existsSync(brandedApp)) fs.rmSync(brandedApp, { recursive: true, force: true });
-    try { fs.renameSync(sourceApp, brandedApp); }
-    catch (err) {
-      console.warn(`${LOG_PREFIX} 重命名 ${path.basename(sourceApp)} 失败（${err.message}）：可能有进程仍在占用，跳过此次 patch`);
-      return;
-    }
-  } else if (!fs.existsSync(brandedApp)) {
-    return;
-  }
-
-  const plistPath = path.join(brandedApp, 'Contents', 'Info.plist');
-  for (const [key, val] of [
-    ['CFBundleIdentifier', APP_ID],
-    ['CFBundleName', APP_NAME],
-    ['CFBundleDisplayName', APP_NAME],
-  ]) {
-    const r = spawnSync('plutil', ['-replace', key, '-string', val, plistPath], { stdio: 'pipe' });
-    if (r.status !== 0) {
-      console.warn(`${LOG_PREFIX} plutil -replace ${key} 失败：`, (r.stderr || '').toString().trim());
-    }
-  }
-
-  const cs = spawnSync('codesign', ['--force', '--deep', '--sign', '-', brandedApp], { stdio: 'pipe' });
-  if (cs.status !== 0) {
-    console.warn(`${LOG_PREFIX} ${APP_NAME}.app ad-hoc 重签失败（手动修复：codesign --force --deep --sign - "${brandedApp}"）：`, (cs.stderr || '').toString().trim());
-  }
-
-  try { fs.writeFileSync(pathTxt, brandedExecutable); }
-  catch (err) {
-    console.warn(`${LOG_PREFIX} 更新 electron/path.txt 失败（${err.message}）：electron CLI 可能找不到二进制`);
-  }
-
-  const lsregister = '/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister';
-  spawnSync(lsregister, ['-u', electronApp], { stdio: 'pipe' });
-  spawnSync(lsregister, ['-u', legacyApp], { stdio: 'pipe' });
-  spawnSync(lsregister, ['-f', brandedApp], { stdio: 'pipe' });
-  spawnSync('killall', ['Dock'], { stdio: 'pipe' });
-  console.log(`${LOG_PREFIX} Dock 名称已改为 ${APP_NAME}（下次启动生效）`);
-}
-
 function main() {
   if (!fs.existsSync(PKG)) {
     console.error('[Mate Agent] 找不到 package.json：', PKG);
@@ -483,8 +406,6 @@ function main() {
       runModelFetch();
     }
     ensureElectronReady('dependency stamp is current but Electron files are incomplete');
-    patchElectronAppName();
-    ensureElectronReady('Electron app-name patch left Electron files incomplete');
     return;
   }
 
@@ -510,11 +431,6 @@ function main() {
     console.log('[Mate Agent] 嵌入模型尚未就绪，补下载...');
     runModelFetch();
   }
-
-  // npm install 重新落地的 Electron 会带回 "Electron" 字样的 Info.plist —
-  // 必须紧接着再 patch 一遍，否则 Dock 又会显示 Electron。
-  patchElectronAppName();
-  ensureElectronReady('Electron app-name patch left Electron files incomplete');
 
   // 安装后重新算一次（postinstall 钩子不会改 package.json/lockfile，但保险起见）
   const finalHash = depFingerprint();

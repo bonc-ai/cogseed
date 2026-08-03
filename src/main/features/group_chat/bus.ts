@@ -28,6 +28,7 @@ import { dispatchSlots } from "../../util/locks";
 import { appendJsonlAtomic, genId12, nowIso, safeId } from "../../storage";
 import * as path from "node:path";
 import * as fs from "node:fs";
+import { isAgentChatDispatchable } from "../agents";
 
 import {
   Actor,
@@ -1899,7 +1900,7 @@ async function _enqueueBody(
     try {
       const all = await agentsFeat.listAgents();
       for (const a of all) {
-        if (a.enabled === false) continue;
+        if (!isAgentChatDispatchable(a)) continue;
         if (a.name) {
           const key = a.name.toLowerCase().replace(/\s+/g, "");
           agentNameToId.set(key, a.agent_id);
@@ -1937,7 +1938,7 @@ async function _enqueueBody(
     if (!safeId(token)) continue;
     try {
       const ag = await agentsFeat.getAgent(token);
-      if (ag && isAgentEnabled(uid, ag.agent_id)) {
+      if (isAgentChatDispatchable(ag) && isAgentEnabled(uid, ag.agent_id)) {
         to.push(ag.agent_id);
         unknown = unknown.filter((u) => u !== token);
       }
@@ -1946,6 +1947,26 @@ async function _enqueueBody(
     }
   }
   to = Array.from(new Set(to));
+
+  // `forceTo`, stale rosters, project plans and wake approvals all converge
+  // here. Re-resolve every non-reserved recipient so no caller can bypass the
+  // management-only policy by supplying a raw id.
+  const dispatchableRecipients: string[] = [];
+  for (const recipientId of to) {
+    if (RESERVED_IDS.has(recipientId)) {
+      dispatchableRecipients.push(recipientId);
+      continue;
+    }
+    try {
+      const agent = await agentsFeat.getAgent(recipientId);
+      if (isAgentChatDispatchable(agent) && isAgentEnabled(uid, recipientId)) {
+        dispatchableRecipients.push(recipientId);
+      }
+    } catch (err) {
+      log.warn(`dispatch policy lookup failed cid=${cid} agent=${recipientId}: ${(err as Error).message}`);
+    }
+  }
+  to = dispatchableRecipients;
 
   // Project scope at dispatch time: if the conversation belongs to a
   // project, drop any recipient agent_id that isn't bound to the project
@@ -2000,7 +2021,7 @@ async function _enqueueBody(
       }
       try {
         const agent = await agentsFeat.getAgent(recipientId);
-        if (!agent || !isAgentEnabled(uid, recipientId)) continue;
+        if (!isAgentChatDispatchable(agent) || !isAgentEnabled(uid, recipientId)) continue;
         const decision = await evaluateWake(uid, {
           conversationId: cid,
           agentId: recipientId,
@@ -2102,7 +2123,7 @@ async function _enqueueBody(
     if (RESERVED_IDS.has(recipientId)) continue;
     try {
       const ag = await agentsFeat.getAgent(recipientId);
-      if (!ag || !isAgentEnabled(uid, ag.agent_id)) continue;
+      if (!isAgentChatDispatchable(ag) || !isAgentEnabled(uid, ag.agent_id)) continue;
       if (ag.name) idToName.set(ag.agent_id, ag.name);
       const added = await ensureAgentMember(uid, cid, ag.agent_id, ag.name);
       if (added) {
@@ -3334,7 +3355,7 @@ async function runActorTurnBody(
     );
   } else {
     const agent = await agentsFeat.getAgent(actor.id);
-    if (!agent) {
+    if (!agent || !isAgentChatDispatchable(agent)) {
       log.warn(`agent ${actor.id} disappeared mid-turn`);
       // User-visible signal — without this the user's @-dispatch hangs
       // forever with no feedback (in-flight cleared, no bubble surfaces).
@@ -5082,7 +5103,7 @@ async function buildAgentsIndexBlock(
         ? null
         : new Set(allowedIds);
     const list = (await agentsFeat.listAgents())
-      .filter((a: any) => a.enabled !== false)
+      .filter((a) => isAgentChatDispatchable(a))
       .filter((a: any) => (allow ? allow.has(a.agent_id) : true));
     if (!list.length) return `${header}(no agents)`;
     const entries = list
@@ -5347,7 +5368,7 @@ async function resolveDispatchTarget(
   try {
     const all = await agentsFeat.listAgents();
     const matches = all
-      .filter((a) => a.enabled !== false)
+      .filter((a) => isAgentChatDispatchable(a))
       .filter(
         (a) => !!a.name && a.name.toLowerCase().replace(/\s+/g, "") === key,
       )
@@ -5365,7 +5386,7 @@ async function resolveDispatchTarget(
   if (safeId(toRaw)) {
     try {
       const ag = await agentsFeat.getAgent(toRaw);
-      if (ag && (ag as any).enabled !== false) return toRaw;
+      if (isAgentChatDispatchable(ag)) return toRaw;
     } catch {
       /* ignore */
     }
@@ -5595,6 +5616,15 @@ async function runNestedDispatch(
   kstarDecision?: KStarDecisionRecord,
   workflowStepId?: string,
 ): Promise<string> {
+  if (actor.kind === "agent") {
+    const dispatchAgent = await agentsFeat.getAgent(actor.id);
+    if (!isAgentChatDispatchable(dispatchAgent) || !isAgentEnabled(state.uid, actor.id)) {
+      return buildWorkerErrorPayload(
+        actor.name || actor.id,
+        "This Agent is available only through its management surface.",
+      );
+    }
+  }
   // A named agent must be a roster member so its handed-back bubble renders with
   // proper attribution. The old async dispatch path seeded this via enqueue's
   // `to` resolution; the in-process path seeds it here. Anonymous workers

@@ -714,6 +714,8 @@
   "agents.use": "使用",
   "agents.use_label": "智能体：{agent}",
   "agents.use_tooltip": "使用此智能体",
+  "agents.manage": "管理",
+  "agents.manage_tooltip": "打开此智能体的管理工作台",
   "agents.more_actions": "更多操作",
   "agents.edit": "编辑",
   "agents.delete": "卸载",

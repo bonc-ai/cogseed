@@ -11,17 +11,10 @@ are `main`, `cognition`, `expense`, and `integration`.
 ```
 
 Each source variant also gets its own Electron `userData`, application name,
-application ID, and single-instance lock. `npm start` defaults to `main`. This
-expense worktree's `run.sh` and `run.cmd` default to `expense`; use exactly one
-explicit override when necessary:
-
-```bash
-./run.sh --variant integration
-```
-
-```bat
-run.cmd --variant integration
-```
+application ID, and single-instance lock. A worktree launcher is locked to its
+assigned identity: this worktree always uses `expense`. Run cognition or
+integration acceptance from their dedicated worktrees; do not override an
+identity from another feature directory.
 
 Source runs do not own the `mateagent://` or `orkas://` system protocols by
 default. Only the explicit `integration` variant registers connector callback

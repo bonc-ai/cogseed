@@ -5,31 +5,18 @@ set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 VARIANT="expense"
-VARIANT_SET=0
 
 usage() {
   cat <<'EOF'
-Usage: ./run.sh [--variant main|cognition|expense|integration]
+Usage: ./run.sh
 
-This expense worktree defaults to --variant expense. The integration variant
-is the only source runtime allowed to own connector callback protocols.
+This worktree is locked to the expense runtime identity. Run integration
+acceptance from the dedicated mate-agent-dev worktree.
 EOF
 }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --variant=*)
-      VALUE="${1#--variant=}"
-      ;;
-    --variant)
-      if [ "$#" -lt 2 ]; then
-        echo "[Mate Agent] --variant requires a value." >&2
-        usage >&2
-        exit 2
-      fi
-      shift
-      VALUE="$1"
-      ;;
     -h|--help)
       usage
       exit 0
@@ -40,28 +27,14 @@ while [ "$#" -gt 0 ]; do
       exit 2
       ;;
   esac
-  case "$VALUE" in
-    main|cognition|expense|integration) ;;
-    *)
-      echo "[Mate Agent] Invalid variant: $VALUE" >&2
-      usage >&2
-      exit 2
-      ;;
-  esac
-  if [ "$VARIANT_SET" -eq 1 ] && [ "$VARIANT" != "$VALUE" ]; then
-    echo "[Mate Agent] Conflicting --variant values: $VARIANT and $VALUE" >&2
-    exit 2
-  fi
-  VARIANT="$VALUE"
-  VARIANT_SET=1
   shift
 done
 
-if [ -n "${ORKAS_RUNTIME_VARIANT:-}" ] && [ "$ORKAS_RUNTIME_VARIANT" != "$VARIANT" ]; then
-  echo "[Mate Agent] --variant $VARIANT conflicts with ORKAS_RUNTIME_VARIANT=$ORKAS_RUNTIME_VARIANT" >&2
+if [ -n "${ORKAS_RUNTIME_VARIANT:-}" ] && [ "$ORKAS_RUNTIME_VARIANT" != "expense" ]; then
+  echo "[Mate Agent] This worktree is locked to the expense runtime; ORKAS_RUNTIME_VARIANT=$ORKAS_RUNTIME_VARIANT is not allowed." >&2
   exit 2
 fi
-export ORKAS_RUNTIME_VARIANT="$VARIANT"
+export ORKAS_RUNTIME_VARIANT="expense"
 
 if [ ! -f "$APP_DIR/package.json" ]; then
   echo "[Mate Agent] $APP_DIR/package.json not found; check the project directory layout." >&2
@@ -81,7 +54,7 @@ if is_wsl; then
 [Mate Agent] WSL/WSLg detected.
 [Mate Agent] Launching the Windows-native $VARIANT runtime via run.cmd.
 EOF
-    exec cmd.exe /d /s /c "pushd \"$WIN_APP_DIR\" && run.cmd --variant=$VARIANT"
+    exec cmd.exe /d /s /c "pushd \"$WIN_APP_DIR\" && run.cmd"
   fi
   cat >&2 <<'EOF'
 [Mate Agent] WSL/WSLg detected, but cmd.exe/wslpath is unavailable.
@@ -103,6 +76,7 @@ echo "[Mate Agent] Build identity: ${ORKAS_BUILD_CHANNEL} ${ORKAS_BUILD_COMMIT:-
 
 node "$APP_DIR/scripts/ensure-deps.cjs"
 node "$APP_DIR/scripts/ensure-dev-dependencies.cjs"
+node "$APP_DIR/scripts/prepare-source-runtime.cjs" --variant="$VARIANT"
 
 # Build meta-skill engine if present.
 KSTAR_ENGINE_DIR="$APP_DIR/packages/nseap-meta-skill-engine"
@@ -128,7 +102,7 @@ fi
 
 cd "$APP_DIR"
 if [ "$(uname -s)" = "Darwin" ]; then
-  APP_BUNDLE="$APP_DIR/node_modules/electron/dist/Mate Agent.app"
+  APP_BUNDLE="$APP_DIR/node_modules/electron/dist/Mate Agent [Expense].app"
   if [ -d "$APP_BUNDLE" ]; then
     ARGS=("$APP_DIR" "--orkas-runtime-variant=$VARIANT")
     if [ -n "${ORKAS_KSTAR_ENGINE_COMMAND:-}" ]; then

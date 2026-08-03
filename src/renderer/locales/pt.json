@@ -659,6 +659,8 @@
   "agents.use": "Usar",
   "agents.use_label": "Agente: {agent}",
   "agents.use_tooltip": "Use este agente",
+  "agents.manage": "Gerenciar",
+  "agents.manage_tooltip": "Abrir a bancada de gerenciamento deste agente",
   "agents.more_actions": "Mais ações",
   "agents.edit": "Editar",
   "agents.delete": "Desinstalar",

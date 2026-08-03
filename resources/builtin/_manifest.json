@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "5826b4d154afcaf8b1e741dda05c1a692312e8f550e944c3d31a8edb557ab91e",
+  "content_tree_sha256": "dc62a1604a55e963e8296a272a338e8e4d0015911623d78821f7d04a98210144",
   "files": [
     {
       "path": "marketplace/agents/78900d8758bc/_meta.json",
@@ -271,6 +271,11 @@
       "path": "marketplace/agents/bcfcb4921dce/skills/ui-taste/SKILL.md",
       "bytes": 6387,
       "sha256": "3e60b232f5f28128e8f04a93cec6fdc6895e3c9a93b0607a9b11ae5d5bb723e6"
+    },
+    {
+      "path": "marketplace/agents/c045605cb916/agent.json",
+      "bytes": 4873,
+      "sha256": "da49b015d0460b583c897ccbdb1f9c43d87ff41bf427612de9656b82eda916dd"
     },
     {
       "path": "marketplace/agents/e064dca9e1bd/agent.json",
@@ -811,6 +816,16 @@
           "ui-reference-packs",
           "ui-taste"
         ]
+      },
+      {
+        "id": "c045605cb916",
+        "name": "本地报销准备助手",
+        "version": "0.2.0",
+        "icon": "target",
+        "color": "gold",
+        "updated_at": "2026-08-02T00:00:00",
+        "skill_list": [],
+        "embedded_skills": []
       },
       {
         "id": "e064dca9e1bd",

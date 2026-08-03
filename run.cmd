@@ -4,47 +4,21 @@ setlocal EnableExtensions EnableDelayedExpansion
 set "APP_DIR=%~dp0"
 if "%APP_DIR:~-1%"=="\" set "APP_DIR=%APP_DIR:~0,-1%"
 set "VARIANT=expense"
-set "VARIANT_SET=0"
 
 :parse_args
 if "%~1"=="" goto args_done
 set "ARG=%~1"
-if /I "!ARG!"=="--help" goto usage_ok
-if /I "!ARG!"=="-h" goto usage_ok
-if /I "!ARG!"=="--variant" (
-  if "%~2"=="" goto missing_variant
-  set "VALUE=%~2"
-  shift
-) else if /I "!ARG:~0,10!"=="--variant=" (
-  set "VALUE=!ARG:~10!"
-) else (
-  echo [Mate Agent] Unknown argument: !ARG! 1>&2
-  goto usage_error
-)
-
-if /I "!VALUE!"=="main" goto valid_variant
-if /I "!VALUE!"=="cognition" goto valid_variant
-if /I "!VALUE!"=="expense" goto valid_variant
-if /I "!VALUE!"=="integration" goto valid_variant
-echo [Mate Agent] Invalid variant: !VALUE! 1>&2
+if "!ARG!"=="--help" goto usage_ok
+if "!ARG!"=="-h" goto usage_ok
+echo [Mate Agent] Unknown argument: !ARG! 1>&2
 goto usage_error
 
-:valid_variant
-if "!VARIANT_SET!"=="1" if /I not "!VARIANT!"=="!VALUE!" (
-  echo [Mate Agent] Conflicting --variant values: !VARIANT! and !VALUE! 1>&2
-  exit /b 2
-)
-set "VARIANT=!VALUE!"
-set "VARIANT_SET=1"
-shift
-goto parse_args
-
 :args_done
-if defined ORKAS_RUNTIME_VARIANT if /I not "%ORKAS_RUNTIME_VARIANT%"=="!VARIANT!" (
-  echo [Mate Agent] --variant !VARIANT! conflicts with ORKAS_RUNTIME_VARIANT=%ORKAS_RUNTIME_VARIANT% 1>&2
+if defined ORKAS_RUNTIME_VARIANT if not "%ORKAS_RUNTIME_VARIANT%"=="expense" (
+  echo [Mate Agent] This worktree is locked to the expense runtime; ORKAS_RUNTIME_VARIANT=%ORKAS_RUNTIME_VARIANT% is not allowed. 1>&2
   exit /b 2
 )
-set "ORKAS_RUNTIME_VARIANT=!VARIANT!"
+set "ORKAS_RUNTIME_VARIANT=expense"
 
 if not exist "%APP_DIR%\package.json" (
   echo [Mate Agent] %APP_DIR%\package.json not found; check the project directory layout. 1>&2
@@ -80,6 +54,8 @@ call node "%APP_DIR%\scripts\ensure-deps.cjs"
 if errorlevel 1 exit /b 1
 call node "%APP_DIR%\scripts\ensure-dev-dependencies.cjs"
 if errorlevel 1 exit /b 1
+call node "%APP_DIR%\scripts\prepare-source-runtime.cjs" --variant=!VARIANT!
+if errorlevel 1 exit /b 1
 
 set "KSTAR_ENGINE_DIR=%APP_DIR%\packages\nseap-meta-skill-engine"
 set "KSTAR_ENGINE_ENTRY=%KSTAR_ENGINE_DIR%\dist\index.js"
@@ -100,13 +76,11 @@ set "RC=%ERRORLEVEL%"
 popd
 exit /b %RC%
 
-:missing_variant
-echo [Mate Agent] --variant requires a value. 1>&2
 :usage_error
-echo Usage: run.cmd [--variant main^|cognition^|expense^|integration] 1>&2
+echo Usage: run.cmd 1>&2
 exit /b 2
 
 :usage_ok
-echo Usage: run.cmd [--variant main^|cognition^|expense^|integration]
-echo This expense worktree defaults to --variant expense.
+echo Usage: run.cmd
+echo This worktree is locked to the expense runtime identity.
 exit /b 0

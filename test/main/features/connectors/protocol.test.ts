@@ -86,11 +86,21 @@ describe('connector callback protocol', () => {
     expect(connectorMock.handleDcrCallbackUrl).not.toHaveBeenCalled();
   });
 
-  it('does not register or intercept callbacks when this runtime is not the owner', async () => {
+  it('focuses the existing window without registering or dispatching protocols when not the owner', async () => {
     const protocol = await import('../../../../src/main/features/connectors/protocol');
 
     expect(protocol.registerConnectorProtocol({ owner: false })).toBe(false);
     expect(electronMock.app.setAsDefaultProtocolClient).not.toHaveBeenCalled();
-    expect(electronMock.listeners.size).toBe(0);
+    expect(electronMock.listeners.has('open-url')).toBe(false);
+    const secondInstance = electronMock.listeners.get('second-instance');
+    expect(secondInstance).toBeTypeOf('function');
+
+    await secondInstance?.({}, ['mateagent://connectors/oauth/callback?exchange_code=ignored']);
+
+    expect(electronMock.window.restore).toHaveBeenCalledOnce();
+    expect(electronMock.window.show).toHaveBeenCalledOnce();
+    expect(electronMock.window.focus).toHaveBeenCalledOnce();
+    expect(connectorMock.handleCallbackUrl).not.toHaveBeenCalled();
+    expect(connectorMock.handleDcrCallbackUrl).not.toHaveBeenCalled();
   });
 });
