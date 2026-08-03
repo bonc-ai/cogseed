@@ -19,9 +19,9 @@ describe('Mate Agent source-run branding', () => {
     expect(fs.existsSync(path.join(root, 'scripts/prepare-source-protocol.cjs'))).toBe(false);
   });
 
-  it('launches the prepared variant-specific macOS bundle', () => {
+  it('launches the prepared expense-specific macOS bundle', () => {
     const source = read('run.sh');
-    expect(source).toContain('Mate Agent [$VARIANT_LABEL].app');
+    expect(source).toContain('Mate Agent [Expense].app');
     expect(source).not.toContain('APP_BUNDLE="$APP_DIR/node_modules/electron/dist/Orkas.app"');
   });
 
