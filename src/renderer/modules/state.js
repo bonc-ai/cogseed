@@ -399,6 +399,11 @@ function bindStaticHandlers() {
       useAgent(_selectedAgent.id);
     }
   });
+  document.getElementById('agent-manage-btn')?.addEventListener('click', () => {
+    if (_selectedAgent && typeof openExpenseWorkbench === 'function') {
+      void openExpenseWorkbench(_selectedAgent.id);
+    }
+  });
   document.getElementById('agent-edit-btn')?.addEventListener('click', toggleAgentEditMode);
   document.getElementById('agent-delete-btn')?.addEventListener('click', deleteSelectedAgent);
   document.getElementById('agent-upload-marketplace-btn')?.addEventListener('click', () => {

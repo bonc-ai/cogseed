@@ -475,6 +475,21 @@ describe('agent and skill category tabs', () => {
     expect(html).not.toContain('Disabled Package');
   });
 
+  it('keeps management-only agents out of ordinary recipient pickers', () => {
+    const { context, el } = loadCategoryRenderers();
+    vm.runInContext(`
+      _agentsCache = [
+        { agent_id: 'chat-agent', name: 'Chat Agent', source: 'custom', enabled: true },
+        { agent_id: 'expense-agent', name: 'Expense Workbench', source: 'marketplace', enabled: true, interaction_mode: 'management_only' }
+      ];
+      _renderAgentPickerList('', 'new-chat-recipient-chip');
+    `, context);
+
+    const html = el('agent-picker-list').innerHTML;
+    expect(html).toContain('Chat Agent');
+    expect(html).not.toContain('Expense Workbench');
+  });
+
   it('keeps external package recipes out of the picker while preserving global open-tier selection', async () => {
     const { context } = loadCategoryRenderers();
     context.pickedSkillCalls = [];

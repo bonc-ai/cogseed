@@ -58,6 +58,8 @@ const autoRuntime = vi.hoisted(() => ({
   createConversation: vi.fn(),
   deleteConversation: vi.fn(),
   send: vi.fn(),
+  getAgent: vi.fn(),
+  isAgentChatDispatchable: vi.fn(),
 }));
 
 vi.mock('../../../src/main/features/chats', () => ({
@@ -67,6 +69,11 @@ vi.mock('../../../src/main/features/chats', () => ({
 
 vi.mock('../../../src/main/features/group_chat', () => ({
   send: autoRuntime.send,
+}));
+
+vi.mock('../../../src/main/features/agents', () => ({
+  getAgent: autoRuntime.getAgent,
+  isAgentChatDispatchable: autoRuntime.isAgentChatDispatchable,
 }));
 
 const TEST_UID = 'auto-unit-user';
@@ -107,9 +114,15 @@ beforeEach(() => {
   autoRuntime.createConversation.mockReset();
   autoRuntime.deleteConversation.mockReset();
   autoRuntime.send.mockReset();
+  autoRuntime.getAgent.mockReset();
+  autoRuntime.isAgentChatDispatchable.mockReset();
   autoRuntime.createConversation.mockResolvedValue({ conversation_id: 'cid_auto' });
   autoRuntime.deleteConversation.mockResolvedValue(true);
   autoRuntime.send.mockResolvedValue({ ok: true });
+  autoRuntime.getAgent.mockImplementation(async (agentId: string) => ({ agent_id: agentId, enabled: true }));
+  autoRuntime.isAgentChatDispatchable.mockImplementation((agent: { enabled?: boolean; interaction_mode?: string } | null) => (
+    !!agent && agent.enabled !== false && agent.interaction_mode !== 'management_only'
+  ));
 });
 
 afterEach(() => {
@@ -163,6 +176,32 @@ describe('seed text composition', () => {
 });
 
 describe('task CRUD normalization', () => {
+  it('rejects management-only recipients for global and project automation', async () => {
+    autoRuntime.getAgent.mockResolvedValue({
+      agent_id: 'expense-agent',
+      enabled: true,
+      interaction_mode: 'management_only',
+    });
+
+    const global = await createTask(TEST_UID, {
+      id: 'at_10101010',
+      content: 'run reimbursement automation',
+      recipient: { kind: 'agent', id: 'expense-agent', name: 'Expense Workbench' },
+      schedule: { type: 'daily', hour: 9, minute: 0 },
+    });
+    expect(global).toEqual({ ok: false, error: 'invalid_recipient' });
+
+    writeProject(TEST_UID, 'p_auto_management', ['expense-agent']);
+    const project = await createTask(TEST_UID, {
+      id: 'at_11110000',
+      content: 'run project reimbursement automation',
+      project_id: 'p_auto_management',
+      recipient: { kind: 'agent', id: 'expense-agent', name: 'Expense Workbench' },
+      schedule: { type: 'daily', hour: 9, minute: 0 },
+    });
+    expect(project).toEqual({ ok: false, error: 'invalid_recipient' });
+  });
+
   it('normalizes drafts and clears optional fields on update', async () => {
     const created = await createTask(TEST_UID, {
       id: 'at_11111111',
@@ -523,6 +562,40 @@ describe('attachments', () => {
 });
 
 describe('scheduler dispatch', () => {
+  it('rejects a legacy management-only recipient before creating a conversation', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-22T09:00:00.000Z'));
+    const taskId = 'at_56560000';
+    const config = makeTask(
+      { type: 'one_time', at: '2026-05-22T08:59:00.000Z' },
+      {
+        id: taskId,
+        recipient: { kind: 'agent', id: 'expense-agent', name: 'Expense Workbench' },
+      },
+    );
+    fs.mkdirSync(path.dirname(autoTaskConfigFile(TEST_UID, taskId)), { recursive: true });
+    fs.writeFileSync(autoTaskConfigFile(TEST_UID, taskId), JSON.stringify(config));
+    autoRuntime.getAgent.mockResolvedValue({
+      agent_id: 'expense-agent',
+      enabled: true,
+      interaction_mode: 'management_only',
+    });
+    autoRuntime.isAgentChatDispatchable.mockReturnValue(false);
+    const events: any[] = [];
+    const unsubscribe = subscribeFires((event) => events.push(event));
+
+    await _onTimerFireForTest(TEST_UID, taskId);
+    unsubscribe();
+
+    expect(autoRuntime.createConversation).not.toHaveBeenCalled();
+    expect(autoRuntime.send).not.toHaveBeenCalled();
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'fire_failed',
+      task_id: taskId,
+      error_code: 'recipient_unavailable',
+    }));
+  });
+
   it('fires a due one-time task, copies attachments, emits an event, and disables the task', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-05-22T09:00:00.000Z'));

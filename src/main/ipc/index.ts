@@ -67,6 +67,7 @@ import { getRendererTables, isLang, t } from '../i18n';
 import { isPathAllowed } from '../util/path-sandbox';
 import * as userWorkspace from '../features/user_workspace';
 import { invokeHandlers as localAgentsHandlers } from './local_agents';
+import { invokeHandlers as expenseWorkbenchHandlers } from './expense_workbench';
 import { invokeHandlers as qualityHandlers } from './quality';
 import { invokeHandlers as connectorsHandlers } from './connectors';
 import { invokeHandlers as memoryHandlers } from './memory';
@@ -1185,10 +1186,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       agents.listAgentSummaries(),
       skills.listSkills(),
     ]);
-    const agentById = new Map(agentList.map((a: any) => [a.agent_id, a]));
+    const dispatchableAgents = agentList.filter((agent) => agents.isAgentChatDispatchable(agent));
+    const agentById = new Map(dispatchableAgents.map((agent) => [agent.agent_id, agent]));
     const skillById = new Map(skillList.map((s: any) => [s.id, s]));
     const pruned = await projects.pruneBindings(ctx.userId, projectId, {
-      agents: new Set(agentList.map((a: any) => a.agent_id)),
+      agents: new Set(dispatchableAgents.map((agent) => agent.agent_id)),
       skills: new Set(skillList.map((s: any) => s.id)),
     });
     if (!pruned.ok) throw new Error((pruned as { error: string }).error);
@@ -1211,7 +1213,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (kind === 'agent') {
       if (!agents.isValidAgentId(id)) throw new Error('invalid id');
       const agent = await agents.getAgent(id);
-      if (!agent || agent.enabled === false) throw new Error('agent_disabled');
+      if (!agents.isAgentChatDispatchable(agent)) throw new Error('agent_disabled');
       result = await projects.addAgentBinding(ctx.userId, projectId, id);
     } else if (kind === 'skill') {
       result = await projects.addSkillBinding(ctx.userId, projectId, id);
@@ -1251,7 +1253,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       skills.listSkills(),
     ]);
     return {
-      agents: agentList.filter((a: any) => a.enabled !== false && !boundAgents.has(a.agent_id)),
+      agents: agentList.filter((agent) => agents.isAgentChatDispatchable(agent) && !boundAgents.has(agent.agent_id)),
       skills: skillList.filter((s: any) => !boundSkills.has(s.id)),
     };
   },
@@ -3399,6 +3401,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // Local coding CLI agents (Claude Code, Codex, etc.). Kept in the open-source
   // build; the renderer's External Agent picker depends on localAgents.list.
   ...localAgentsHandlers,
+
+  // Canonical reimbursement management surface. Its feature layer validates
+  // the active user, trusted Agent identity and bounded stdio protocol.
+  ...expenseWorkbenchHandlers,
 
   // Quality validator — renderer reads persisted ValidationReports to display
   // why a spec write / marketplace install was rejected.

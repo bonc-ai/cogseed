@@ -567,12 +567,13 @@ export async function listMembers(
     if (a.kind !== 'agent') return a;
     try {
       const ag = await agentsFeat.getAgent(a.id);
+      if (!agentsFeat.isAgentChatDispatchable(ag)) return null;
       return ag && ag.interactive === true ? { ...a, interactive: true } : a;
     } catch {
-      return a;
+      return null;
     }
   }));
-  return { ok: true, actors: enriched };
+  return { ok: true, actors: enriched.filter((actor): actor is NonNullable<typeof actor> => actor !== null) };
 }
 
 // ── Streaming events ─────────────────────────────────────────────────────

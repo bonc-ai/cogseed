@@ -49,7 +49,13 @@ import {
 } from '../../features/projects';
 import * as projectTasks from '../../features/project_tasks';
 import * as metacognition from '../../features/metacognition';
-import { appendAgentSkill, listAgents } from '../../features/agents';
+import {
+  MANAGEMENT_ONLY_AGENT_ERROR_CODE,
+  appendAgentSkill,
+  getAgent,
+  isAgentChatDispatchable,
+  listAgents,
+} from '../../features/agents';
 const log = createLogger('model/runner');
 import { createLocalTools, createFileTools } from './local-tools';
 import { createOfficeTools } from './office-tools';
@@ -385,6 +391,16 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
    *  Not injected into model context; reused for process-log labels. */
   agentDisplayNameById: Map<string, string>;
 }> {
+  if (params.agentId) {
+    const boundAgent = await getAgent(params.agentId);
+    if (boundAgent && !isAgentChatDispatchable(boundAgent)) {
+      throw Object.assign(
+        new Error('Management-only Agents can run only through their host-owned management surface.'),
+        { code: MANAGEMENT_ONLY_AGENT_ERROR_CODE },
+      );
+    }
+  }
+
   // Auth gate first — if no group has any usable candidate, fail before
   // loading core-agent / scanning skills / opening a session file. Gives
   // a clear user message instead of the Anthropic SDK's "Could not

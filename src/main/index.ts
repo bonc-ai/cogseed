@@ -2,15 +2,13 @@
  * Orkas — Electron main entry.
  *
  * Boot sequence:
- *   1. Side-effect import of `./install-data-root` resolves the install
+ *   1. `bootstrap.cjs` resolves the install
  *      container (`~/.orkas` on macOS/Linux; on Windows a drive recorded
  *      in `%LOCALAPPDATA%\Orkas\install-pin.json`), runs the one-shot
  *      `PC/data` → `<container>/data` migration, and sets
- *      `ORKAS_WORKSPACE_ROOT`. Both dev and packaged go through this
- *      single path — the old dev/prod data-root split is gone. The side
- *      effect lives at module load (not in body code) because esbuild's
- *      CJS transformer hoists imports — `paths.ts` would otherwise load
- *      with an unset env var. See install-data-root.cjs header.
+ *      `ORKAS_WORKSPACE_ROOT` before tsx loads this module. Source variants
+ *      use separate containers; packaged builds use the stable main path.
+ *      See install-data-root.cjs for the pre-TypeScript boot contract.
  *   2. Pin CORE_AGENT_AUTH_DIR to <WS_ROOT>/config/ so core-agent's
  *      credential store lives under data/ (local-only, never synced).
  *      The env var name is core-agent's public API — kept as
@@ -31,15 +29,7 @@ import * as fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { app, BrowserWindow, Menu, Notification, ipcMain, nativeImage, net, protocol, session, shell } from 'electron';
-// Side-effect import: at module-load time this resolves the install
-// container, runs the one-shot PC/data → <container>/data migration, and
-// sets process.env.ORKAS_WORKSPACE_ROOT. Must be the FIRST project import
-// — any module loaded before this would not see the env var. See
-// install-data-root.cjs header for why the side effect lives at load time
-// rather than in index.ts body (esbuild CJS hoists imports → body runs
-// after paths.ts loads, which is too late to set the env var).
-import './install-data-root.cjs';
-import { APP_BRAND } from './brand';
+import { resolveRuntimeIdentity } from './brand';
 import { desktopPlatform, osVersion } from './system_info';
 import { hardenedWebPreferences, installExternalNavigationGuard } from './util/window-security';
 import { formatBuildIdentityLabel, resolveBuildIdentity } from './util/build-identity';
@@ -54,16 +44,14 @@ const MARKETPLACE_DEFAULTS_REFRESH_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const MARKETPLACE_SERVER_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const MARKETPLACE_DEFAULTS_RETRY_DELAYS_MS = [3_000, 3_000, 3_000] as const;
 
-// Source and packaged builds share one app identity and one server
-// environment: global prod. This keeps local data paths and OS app grouping
-// stable across run modes.
-app.setName(APP_BRAND.appName);
-try {
-  if (IS_PACKAGED_LAUNCH_SMOKE) {
-    app.setPath('userData', path.join(path.dirname(PACKAGED_LAUNCH_SMOKE_FILE), 'user-data'));
-  }
-} catch {
-  /* userData may be unavailable in unusual test hosts; the default is fine. */
+const RUNTIME_IDENTITY = resolveRuntimeIdentity(app.isPackaged);
+app.setName(RUNTIME_IDENTITY.appName);
+if (IS_PACKAGED_LAUNCH_SMOKE) {
+  app.setPath('userData', path.join(path.dirname(PACKAGED_LAUNCH_SMOKE_FILE), 'user-data'));
+} else if (!app.isPackaged) {
+  const container = String(process.env.ORKAS_RUNTIME_CONTAINER || '').trim();
+  if (!container) throw new Error('ORKAS_RUNTIME_CONTAINER was not initialized');
+  app.setPath('userData', path.join(container, 'electron-user-data'));
 }
 
 // Register the KB file protocol BEFORE `app.whenReady()` — privileged
@@ -380,15 +368,16 @@ function registerIpc(): void {
     // The relaunch button shells out to run.sh / run.cmd instead of using
     // `app.relaunch()` so we can reuse `scripts/ensure-deps.cjs` for
     // dependency self-healing — otherwise pulling new code + relaunching
-    // crashes immediately due to missing packages. The shell script handles
-    // ensure-deps + killing the old electron + npm start; here we just
-    // detach-spawn it and call `app.exit(0)`.
+    // crashes immediately due to missing packages. The launcher handles
+    // dependency checks, runtime bundle preparation, and npm start; here we
+    // detach-spawn it and call `app.exit(0)` so the instance lock is released.
     ipcMain.handle('orkas.relaunch', () => {
       const isWin = process.platform === 'win32';
       const script = path.join(paths.PC_ROOT, isWin ? 'run.cmd' : 'run.sh');
+      const variantArg = `--variant=${RUNTIME_IDENTITY.variant}`;
       const [cmd, args] = isWin
-        ? ['cmd.exe', ['/c', script]] as const
-        : ['bash',    [script]]       as const;
+        ? ['cmd.exe', ['/d', '/s', '/c', `"${script}" ${variantArg}`]] as const
+        : ['bash',    [script, variantArg]]                             as const;
       const child = spawn(cmd, args, {
         cwd: paths.PC_ROOT,
         detached: true,
@@ -1031,14 +1020,13 @@ function registerChatAppProtocol(): void {
 
 // Single-instance lock prevents double-launch from duplicating the backend.
 const gotLock = IS_PACKAGED_LAUNCH_SMOKE
-  || process.env.ORKAS_ALLOW_MULTI_INSTANCE === '1'
   || app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
   // Account login is stripped, but connector OAuth still returns through the OS protocol. Keep
   // this connector-only receiver outside the removed account protocol module.
-  registerConnectorProtocol();
+  registerConnectorProtocol({ owner: RUNTIME_IDENTITY.protocolOwner });
   app.whenReady().then(async () => {
     await runBootSelfCheck();
     // Source-run macOS uses Electron.app's own Info.plist, so set the dock
@@ -1049,7 +1037,7 @@ if (!gotLock) {
       if (!img.isEmpty()) app.dock.setIcon(img);
     }
     if (process.platform === 'win32') {
-      app.setAppUserModelId(APP_BRAND.appId);
+      app.setAppUserModelId(RUNTIME_IDENTITY.appId);
     }
     if (process.platform === 'darwin') {
       Menu.setApplicationMenu(Menu.buildFromTemplate([

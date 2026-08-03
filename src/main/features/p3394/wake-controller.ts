@@ -6,7 +6,7 @@ import {
   setActiveRecipient,
   setOrchestrationLedger,
 } from "../group_chat/state";
-import { getAgent } from "../agents";
+import { getAgent, isAgentChatDispatchable } from "../agents";
 import { isAgentEnabled } from "../component_enabled";
 import {
   approveWakeRequest,
@@ -56,7 +56,7 @@ export async function decideWakeRequest(
     }
 
     const target = await getAgent(existing.agent_id);
-    if (!target || !isAgentEnabled(userId, existing.agent_id)) {
+    if (!isAgentChatDispatchable(target) || !isAgentEnabled(userId, existing.agent_id)) {
       return { ok: false, error: "wake target agent is unavailable" };
     }
 

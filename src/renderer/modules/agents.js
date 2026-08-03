@@ -906,6 +906,7 @@ async function _flipAgentEnabled(agentId, nextEnabled) {
 // ─── View switching: grid ↔ detail ─────────────────────────────────────
 
 function _showAgentsGridView() {
+  if (typeof closeExpenseWorkbench === 'function') closeExpenseWorkbench();
   const grid = document.getElementById('agents-grid-view');
   const detail = document.getElementById('agents-detail-view');
   if (_agentEditing) {
@@ -1123,6 +1124,7 @@ async function selectAgent(agentId) {
     return;
   }
   try {
+    if (typeof closeExpenseWorkbench === 'function') closeExpenseWorkbench();
     const res = await apiFetch(`/api/agents/${encodeURIComponent(agentId)}`);
     const data = await res.json();
     if (!data.ok || !data.agent) return;
@@ -1734,6 +1736,7 @@ function _renderAgentDetail(agent, editing) {
   // Edit mode hides everything except the "done" button (the relabeled
   // "edit" button).
   const useBtn = document.getElementById('agent-use-btn');
+  const manageBtn = document.getElementById('agent-manage-btn');
   const enableBtn = document.getElementById('agent-enabled-btn');
   const uploadBtn = document.getElementById('agent-upload-marketplace-btn');
   const delBtn = document.getElementById('agent-delete-btn');
@@ -1742,9 +1745,18 @@ function _renderAgentDetail(agent, editing) {
   const canEditDefinition = !isMock && isCustom;
   const canEdit = isCommander || canEditDefinition || _canEditAgentMemory(agent);
   if (useBtn) {
-    useBtn.style.display = editing ? 'none' : '';
-    useBtn.disabled = isMock || agent.enabled === false;
-    useBtn.setAttribute('aria-disabled', (isMock || agent.enabled === false) ? 'true' : 'false');
+    const managementOnly = agent.interaction_mode === 'management_only';
+    useBtn.style.display = editing || managementOnly ? 'none' : '';
+    useBtn.disabled = isMock || managementOnly || agent.enabled === false;
+    useBtn.setAttribute('aria-disabled', (isMock || managementOnly || agent.enabled === false) ? 'true' : 'false');
+  }
+  if (manageBtn) {
+    const canManage = agent.management_surface === 'expense_workbench'
+      && agent.interaction_mode === 'management_only'
+      && agent.reimbursement_entry_role === 'canonical';
+    manageBtn.hidden = editing || !canManage;
+    manageBtn.disabled = editing || !canManage || agent.enabled === false;
+    manageBtn.setAttribute('aria-hidden', (!canManage || editing) ? 'true' : 'false');
   }
   if (enableBtn && isCommander) {
     enableBtn.style.display = 'none';
@@ -2988,6 +3000,14 @@ async function useAgent(agentId) {
     if (!aData.ok || !aData.agent) throw new Error(aData.error || t('agents.agent_not_found'));
     const agent = aData.agent;
     if (agent.enabled === false) return;
+    if (agent.interaction_mode === 'management_only') {
+      if (agent.management_surface === 'expense_workbench'
+          && agent.reimbursement_entry_role === 'canonical'
+          && typeof openExpenseWorkbench === 'function') {
+        await openExpenseWorkbench(agent.agent_id);
+      }
+      return;
+    }
 
     _agentsLog.info('use agent', { agent_id: agentId });
     _agentsTrackClick('agent_use', {
@@ -3414,7 +3434,9 @@ function _renderAgentPickerList(filterText) {
     listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
     return;
   }
-  let agents = (_agentsCache || []).filter((a) => a.enabled !== false);
+  let agents = (_agentsCache || []).filter((a) => (
+    a.enabled !== false && a.interaction_mode !== 'management_only'
+  ));
   // Project scope: only show agents bound to the active context's project.
   // Applied AFTER the enabled filter (per CLAUDE.md §6 outer-intersection
   // rule). `null` = no project scope, full listing.

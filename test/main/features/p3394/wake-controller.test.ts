@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   markWakeRequestExecuted: vi.fn(),
   resetWakeApproval: vi.fn(),
   getAgent: vi.fn(),
+  isAgentChatDispatchable: vi.fn(),
   isAgentEnabled: vi.fn(),
   setOrchestrationLedger: vi.fn(),
 }));
@@ -38,6 +39,7 @@ vi.mock("../../../../src/main/features/group_chat/state", () => ({
 }));
 vi.mock("../../../../src/main/features/agents", () => ({
   getAgent: mocks.getAgent,
+  isAgentChatDispatchable: mocks.isAgentChatDispatchable,
 }));
 vi.mock("../../../../src/main/features/component_enabled", () => ({
   isAgentEnabled: mocks.isAgentEnabled,
@@ -52,13 +54,49 @@ beforeEach(() => {
   mocks.markWakeRequestExecuted.mockReset();
   mocks.resetWakeApproval.mockReset();
   mocks.getAgent.mockReset();
+  mocks.isAgentChatDispatchable.mockReset();
   mocks.isAgentEnabled.mockReset();
   mocks.setOrchestrationLedger.mockReset();
   mocks.getAgent.mockResolvedValue({ agent_id: "agent-1", interactive: false });
+  mocks.isAgentChatDispatchable.mockReturnValue(true);
   mocks.isAgentEnabled.mockReturnValue(true);
 });
 
 describe("P3394 wake controller workflow binding", () => {
+  it("rejects a management-only target before approving a persisted wake request", async () => {
+    const request = {
+      id: "wake-management-only",
+      conversation_id: "cid-1",
+      agent_id: "expense-agent",
+      source: "ui_select",
+      source_actor_id: "user",
+      objective: "Run reimbursement workbench",
+      context_scope: ["conversation:cid-1"],
+      behavior_scope: ["ui_select"],
+      dispatch_payload: { text: "Run reimbursement workbench" },
+      status: "pending",
+      created_at: "t",
+      updated_at: "t",
+    } as any;
+    mocks.getWakeRequest.mockResolvedValue(request);
+    mocks.getAgent.mockResolvedValue({
+      agent_id: "expense-agent",
+      interaction_mode: "management_only",
+    });
+    mocks.isAgentChatDispatchable.mockReturnValue(false);
+
+    const controller =
+      await import("../../../../src/main/features/p3394/wake-controller");
+    const result = await controller.decideWakeRequest("user-1", {
+      requestId: request.id,
+      decision: "approve",
+    });
+
+    expect(result).toEqual({ ok: false, error: "wake target agent is unavailable" });
+    expect(mocks.approveWakeRequest).not.toHaveBeenCalled();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
   it("approves and enqueues the exact persisted workflow step", async () => {
     const request = {
       id: "wake-1",

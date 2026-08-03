@@ -89,6 +89,15 @@ export interface AgentInputOption {
 
 export type AgentInputUiLanguage = 'zh' | 'en' | 'ja' | 'pt';
 
+/** Host-owned detail surfaces that an Agent definition may expose. */
+export type AgentManagementSurface = 'expense_workbench';
+export const AGENT_MANAGEMENT_SURFACES: ReadonlySet<string> = new Set(['expense_workbench']);
+
+/** Canonical role of the single reimbursement entry exposed by this build. */
+export type ReimbursementEntryRole = 'canonical';
+export const REIMBURSEMENT_ENTRY_ROLES: ReadonlySet<string> = new Set(['canonical']);
+export const MANAGEMENT_ONLY_AGENT_ERROR_CODE = 'E_AGENT_MANAGEMENT_ONLY';
+
 /** Declarative schema for an agent's user-facing input parameters.
  * Populated by the agent-edit LLM (or commander quick-create) via the
  * `<inputs>` child of the `<agent>` update container; consumed at run
@@ -231,6 +240,12 @@ export interface Agent {
    *  optionally persisted so runtime callers have one stable governance shape
    *  for in-process agents and external CLI expert agents. */
   interface_contract?: AgentInterfaceContract;
+  /** Optional host-owned management surface. */
+  management_surface?: AgentManagementSurface;
+  /** Declares the canonical reimbursement management entry. */
+  reimbursement_entry_role?: ReimbursementEntryRole;
+  /** Management-only Agents cannot be launched as ordinary chat workers. */
+  interaction_mode?: 'management_only';
   /** Marketplace category code. Empty string only for legacy/manual specs.
    *  Maintained by hidden create defaults and by the agent-edit LLM's `<category>` sub-tag. */
   category: string;
@@ -301,6 +316,9 @@ export interface AgentRaw {
   interactive?: unknown;
   runtime?: unknown;
   interface_contract?: unknown;
+  management_surface?: unknown;
+  reimbursement_entry_role?: unknown;
+  interaction_mode?: unknown;
   category?: unknown;
   status?: unknown;
   state?: unknown;
@@ -321,6 +339,15 @@ export interface AgentRaw {
   memory?: unknown;
   assets?: unknown;
   serving?: unknown;
+}
+
+type AgentDispatchPolicy = Pick<Agent, 'enabled' | 'interaction_mode'>;
+
+/** Ordinary chat/model runtimes must never execute host-owned management surfaces. */
+export function isAgentChatDispatchable(
+  agent: AgentDispatchPolicy | null | undefined,
+): boolean {
+  return !!agent && agent.enabled !== false && agent.interaction_mode !== 'management_only';
 }
 
 /** Agent output rendering preference. Four user-facing values
@@ -956,6 +983,18 @@ export function normalizeAgent(raw: AgentRaw | null | undefined, source: AgentSo
     agent.output_format = outputFormat;
   }
   agent.interface_contract = normalizeAgentInterfaceContract(raw.interface_contract, rt, outputFormat);
+  if (typeof raw.management_surface === 'string' && AGENT_MANAGEMENT_SURFACES.has(raw.management_surface)) {
+    agent.management_surface = raw.management_surface as AgentManagementSurface;
+  } else if (raw.management_surface !== undefined && raw.management_surface !== null) {
+    log.warn('ignoring unknown agent management surface');
+  }
+  if (typeof raw.reimbursement_entry_role === 'string'
+      && REIMBURSEMENT_ENTRY_ROLES.has(raw.reimbursement_entry_role)) {
+    agent.reimbursement_entry_role = raw.reimbursement_entry_role as ReimbursementEntryRole;
+  } else if (raw.reimbursement_entry_role !== undefined && raw.reimbursement_entry_role !== null) {
+    log.warn('ignoring unknown reimbursement entry role');
+  }
+  if (raw.interaction_mode === 'management_only') agent.interaction_mode = 'management_only';
   return agent;
 }
 
@@ -1381,14 +1420,14 @@ async function _listAgentSpecs(): Promise<Agent[]> {
  * Agents-tab contract. */
 export type AgentSummary = Pick<
   Agent,
-  'agent_id' | 'name' | 'source' | 'icon' | 'color' | 'category' | 'runtime'
+  'agent_id' | 'name' | 'source' | 'icon' | 'color' | 'category' | 'runtime' | 'interaction_mode'
 > & { enabled: boolean };
 
 /** Minimal data needed for global agent search. This deliberately avoids the
  * full-list enrichments (workflow display skills, memory and runtime stats). */
 export type AgentSearchListing = Pick<
   Agent,
-  'agent_id' | 'name' | 'source' | 'description_zh' | 'description_en'
+  'agent_id' | 'name' | 'source' | 'description_zh' | 'description_en' | 'interaction_mode'
 > & { enabled: boolean };
 
 export async function listAgentSummaries(): Promise<AgentSummary[]> {
@@ -1402,6 +1441,7 @@ export async function listAgentSummaries(): Promise<AgentSummary[]> {
     color: agent.color,
     category: agent.category,
     runtime: agent.runtime,
+    interaction_mode: agent.interaction_mode,
     enabled: !disabledAgentIds.has(agent.agent_id),
   }));
 }
@@ -1415,6 +1455,7 @@ export async function listAgentSearchListings(): Promise<AgentSearchListing[]> {
     source: agent.source,
     description_zh: agent.description_zh,
     description_en: agent.description_en,
+    interaction_mode: agent.interaction_mode,
     enabled: !disabledAgentIds.has(agent.agent_id),
   }));
 }
