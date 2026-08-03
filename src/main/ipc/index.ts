@@ -28,6 +28,7 @@ import * as p3394 from '../features/p3394';
 import * as executionRecords from '../features/execution-records';
 import * as evolution from '../features/evolution';
 import * as personalOntologyCandidates from '../features/personal_ontology_candidates';
+import * as personalOntologyGroups from '../features/personal_ontology_groups';
 import type { GroupEvent } from '../features/group_chat/bus';
 import * as agents from '../features/agents';
 import * as autoTasks from '../features/auto_tasks';
@@ -1858,6 +1859,34 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return chatAttachments.adoptDraftAttachments(ctx.userId, from_cid, to_cid);
   },
 
+  // Import a global Library (contexts) file into a composer draft pool —
+  // the "@ Library" picker path. `cid` is the draft pool (main_chat /
+  // projchat-<id>), not a real conversation yet; `relPath` is validated by
+  // `resolveContextFileAbsPath` (traversal / hidden-segment / must-exist).
+  'contexts.attachToDraft': async ({ relPath, cid } = {}, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (typeof relPath !== 'string' || !relPath.trim()) throw new Error('missing relPath');
+    const absPath = contexts.resolveContextFileAbsPath(relPath);
+    const st = fs.statSync(absPath);
+    if (!st.isFile()) throw new Error('not_a_file');
+    const res = await chatAttachments.importAttachmentFromPath(ctx.userId, cid, absPath);
+    if (!res.ok) throw new Error((res as { error: string }).error);
+    return { info: res.info };
+  },
+
+  // Same as above but for a project-scoped Library file — resolves through
+  // `resolveProjectFileAbsPath`, which validates project ownership + name.
+  'projects.files.attachToDraft': async ({ projectId, name, cid } = {}, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (typeof name !== 'string' || !name.trim()) throw new Error('missing name');
+    const resolved = await projectFiles.resolveProjectFileAbsPath(ctx.userId, projectId, name);
+    if (!resolved.ok) throw new Error((resolved as { error?: string }).error || 'not_found');
+    const res = await chatAttachments.importAttachmentFromPath(ctx.userId, cid, resolved.absPath);
+    if (!res.ok) throw new Error((res as { error: string }).error);
+    return { info: res.info };
+  },
+
   // ── Chat artifacts (interactive web-app bundles, served via chat-app://) ──
   // Open the artifact's index.html in the OS default browser (a `file://`
   // URL via `shell.openPath`). Path is resolved through
@@ -2069,23 +2098,57 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { refs: await evolution.unbindOntology(ctx.userId, skillId, ontologyId) };
   },
 
-  'personalOntology.candidates.list': async (_payload, ctx) =>
-    personalOntologyCandidates.listCandidates(ctx.userId),
-  'personalOntology.candidates.confirm': async ({ candidateId }, ctx) => {
+  // ── Personal Ontology Candidates ──
+  'personalOntology.candidates.list': async (_payload, ctx) => {
+    return personalOntologyCandidates.listCandidates(ctx.userId);
+  },
+  'personalOntology.candidates.confirm': async ({ candidateId, toGlobalMemory, toGroupIds }, ctx) => {
     if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
-    return personalOntologyCandidates.confirmCandidate(ctx.userId, candidateId);
+    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[] } = {};
+    if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
+    if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
+    return personalOntologyCandidates.confirmCandidate(ctx.userId, candidateId, dest);
   },
   'personalOntology.candidates.reject': async ({ candidateId, reason }, ctx) => {
     if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
     return personalOntologyCandidates.rejectCandidate(ctx.userId, candidateId, reason);
   },
-  'personalOntology.candidates.confirmBatch': async ({ candidateIds }, ctx) => {
+  'personalOntology.candidates.confirmBatch': async ({ candidateIds, toGlobalMemory, toGroupIds }, ctx) => {
     if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
-    return personalOntologyCandidates.confirmCandidates(ctx.userId, candidateIds);
+    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[] } = {};
+    if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
+    if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
+    return personalOntologyCandidates.confirmCandidates(ctx.userId, candidateIds, dest);
   },
   'personalOntology.candidates.rejectBatch': async ({ candidateIds, reason }, ctx) => {
     if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
     return personalOntologyCandidates.rejectCandidates(ctx.userId, candidateIds, reason);
+  },
+
+  // ── Personal Ontology Groups ("记忆分组") ──
+  'personalOntology.groups.list': async (_payload, ctx) => {
+    return { groups: await personalOntologyGroups.listGroups(ctx.userId) };
+  },
+  'personalOntology.groups.create': async ({ title }, ctx) => {
+    if (!title || typeof title !== 'string') throw new Error('missing title');
+    return personalOntologyGroups.createGroup(ctx.userId, title);
+  },
+  'personalOntology.groups.rename': async ({ groupId, title }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!title || typeof title !== 'string') throw new Error('missing title');
+    return personalOntologyGroups.renameGroup(ctx.userId, groupId, title);
+  },
+  'personalOntology.groups.delete': async ({ groupId }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    return personalOntologyGroups.deleteGroup(ctx.userId, groupId);
+  },
+  'personalOntology.groups.read': async ({ groupId }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    return personalOntologyGroups.readGroupContent(ctx.userId, groupId);
+  },
+  'personalOntology.groups.write': async ({ groupId, content }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    return personalOntologyGroups.writeGroupContent(ctx.userId, groupId, String(content ?? ''));
   },
 
   'skills.list': async ({ force } = {}) => {

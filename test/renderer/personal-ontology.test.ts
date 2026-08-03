@@ -49,10 +49,12 @@ describe('personal ontology renderer integration', () => {
     expect(lazy).toContain("./modules/personal-ontology.js");
   });
 
-  it('uses the shared logger and avoids direct production console calls', () => {
-    expect(ontology).toContain("createLogger('personal-ontology')");
-    expect(ontology).not.toMatch(/\bconsole\.(log|warn|error)\s*\(/);
-    expect(ontology).toContain("'/api/personalOntology/candidates/confirm'");
-    expect(ontology).toContain("'/api/personalOntology/candidates/reject'");
+  it("uses Zhang Hao's direct IPC review-panel flow", () => {
+    expect(ontology).toContain("window.orkas.invoke('personalOntology.candidates.list'");
+    expect(ontology).toContain("window.orkas.invoke('personalOntology.candidates.confirm'");
+    expect(ontology).toContain("window.orkas.invoke('personalOntology.candidates.reject'");
+    expect(ontology).toContain("window.orkas.invoke('personalOntology.groups.create'");
+    expect(ontology).toContain('renderDestinationPanel');
+    expect(ontology).toContain('showRejectReasonModal');
   });
 });

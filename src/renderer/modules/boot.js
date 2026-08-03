@@ -450,7 +450,9 @@ function setView(view, cid, opts = {}) {
     // If we returned to a conversation with queued items and nothing is
     // streaming, kick off the next one automatically.
     if (!isConvPending(cid) && (messageQueues.get(cid) || []).length) {
-      _dispatchNextQueued(cid);
+      // Fire-and-forget: _dispatchNextQueued is async (ontology_group token
+      // expansion needs an IPC round-trip); this call site never awaited it.
+      Promise.resolve(_dispatchNextQueued(cid)).catch(() => {});
     }
     _updateConvSendUI(cid);
     setTimeout(() => document.getElementById('chat-input')?.focus(), 50);

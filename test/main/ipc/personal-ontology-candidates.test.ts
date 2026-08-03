@@ -10,7 +10,7 @@ const feature = {
   listCandidates: vi.fn(async (uid: string) => ({ candidate_updates: [], blocked_items: [], uid })),
   confirmCandidate: vi.fn(async (uid: string, candidateId: string) => ({ ok: true, uid, candidateId })),
   rejectCandidate: vi.fn(async (uid: string, candidateId: string, reason?: string) => ({ ok: true, uid, candidateId, reason })),
-  confirmCandidates: vi.fn(async (uid: string, candidateIds: string[]) => ({ ok: true, uid, candidateIds })),
+  confirmCandidates: vi.fn(async (uid: string, candidateIds: string[], dest?: unknown) => ({ ok: true, uid, candidateIds, dest })),
   rejectCandidates: vi.fn(async (uid: string, candidateIds: string[], reason?: string) => ({ ok: true, uid, candidateIds, reason })),
 };
 
@@ -62,9 +62,9 @@ describe('ipc › personal ontology candidate channels', () => {
   it('validates batch candidate ids and forwards user scope', async () => {
     expect((await call('personalOntology.candidates.confirmBatch', { candidateIds: 'bad' })).ok).toBe(false);
     expect((await call('personalOntology.candidates.rejectBatch', { candidateIds: {} })).ok).toBe(false);
-    await call('personalOntology.candidates.confirmBatch', { candidateIds: ['a', 'b'], uid: 'attacker' });
+    await call('personalOntology.candidates.confirmBatch', { candidateIds: ['a', 'b'], toGlobalMemory: false, toGroupIds: ['g1'], uid: 'attacker' });
     await call('personalOntology.candidates.rejectBatch', { candidateIds: ['c'], reason: 'no', uid: 'attacker' });
-    expect(feature.confirmCandidates).toHaveBeenCalledWith(TEST_UID, ['a', 'b']);
+    expect(feature.confirmCandidates).toHaveBeenCalledWith(TEST_UID, ['a', 'b'], { toGlobalMemory: false, toGroupIds: ['g1'] });
     expect(feature.rejectCandidates).toHaveBeenCalledWith(TEST_UID, ['c'], 'no');
   });
 });
