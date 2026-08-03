@@ -1016,6 +1016,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     onOutputsPublished,
     hasProducedPath,
     onArtifactCreated,
+    executionLifecycle,
     onSkillAdvertised,
     onSkillInvoked,
     cacheRetention,
@@ -1055,6 +1056,29 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
   });
   const maskedSessionId = maskId(sessionId);
   const turnTag = `session=${maskedSessionId}`;
+  let executionLifecycleTail = Promise.resolve();
+  const queueExecutionLifecycle = (phase: string, task: (() => void | Promise<unknown>) | undefined): void => {
+    if (!task) return;
+    executionLifecycleTail = executionLifecycleTail
+      .then(() => task())
+      .then(() => undefined)
+      .catch((err) => {
+        log.warn('core execution lifecycle callback failed', {
+          session_id: maskedSessionId,
+          phase,
+          error: logErrorRef(err),
+        });
+      });
+  };
+  const executionStart = {
+    kind: 'core-agent' as const,
+    sessionId,
+    ...(cid ? { conversationId: cid } : {}),
+    ...(agentId ? { agentId } : {}),
+  };
+  queueExecutionLifecycle('queued', executionLifecycle
+    ? () => executionLifecycle.queued(executionStart)
+    : undefined);
 
   // Acquire session lock first (scoped to this conversation), then one of
   // the global slots. Release in reverse order in `finally`. Both releases
@@ -1233,6 +1257,15 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       ...(onOutputsPublished ? { onOutputsPublished } : {}),
       ...(hasProducedPath ? { hasProducedPath } : {}),
       ...(onArtifactCreated ? { onArtifactCreated } : {}),
+      ...(onArtifactCreated && executionLifecycle && cid ? {
+        onExecutionArtifactCreated: (artifact: { id: string; title: string }) => {
+          queueExecutionLifecycle('artifact', () => executionLifecycle.artifact({
+            cid,
+            artifactId: artifact.id,
+            title: artifact.title,
+          }));
+        },
+      } : {}),
       ...(onSkillAdvertised ? { onSkillAdvertised } : {}),
       ...(onSkillInvoked ? { onSkillInvoked } : {}),
       onNativeSearchInjected: (info) => {
@@ -1335,6 +1368,17 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     const requestMetadata = attachmentMetadata ? { attachmentMetadata } : {};
 
     modelRunStarted = true;
+    queueExecutionLifecycle('started', executionLifecycle
+      ? () => executionLifecycle.started(executionStart)
+      : undefined);
+    queueExecutionLifecycle('process', executionLifecycle
+      ? () => executionLifecycle.event('process', {
+        backend: 'in-process',
+        providerId,
+        modelId,
+        toolCount: toolDefs.length,
+      })
+      : undefined);
     transitionLiveRunTimings(liveRunTimings, 'provider');
     const rawEvents = runner.runStream({
       message,
@@ -1370,6 +1414,57 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
           transitionLiveRunTimings(liveRunTimings, 'tool', liveNow);
         }
         recordModelRawEventForLog(diagnostics, ev);
+        if (ev.type === 'text_delta') {
+          queueExecutionLifecycle('output', executionLifecycle
+            ? () => executionLifecycle.event('output', { output: ev.text })
+            : undefined);
+        } else if (ev.type === 'tool_start') {
+          const inputKeys = ev.input && typeof ev.input === 'object' && !Array.isArray(ev.input)
+            ? Object.keys(ev.input as Record<string, unknown>).slice(0, 64)
+            : [];
+          let inputChars = 0;
+          try { inputChars = JSON.stringify(ev.input ?? null).length; } catch { /* bounded metadata only */ }
+          queueExecutionLifecycle('tool', executionLifecycle
+            ? () => executionLifecycle.event('tool', {
+              phase: 'use', tool: ev.name, callId: ev.id, inputKeys, inputChars,
+            })
+            : undefined);
+        } else if (ev.type === 'tool_progress') {
+          queueExecutionLifecycle('tool', executionLifecycle
+            ? () => executionLifecycle.event('tool', {
+              phase: ev.phase || 'progress', tool: ev.name, callId: ev.id,
+              message: ev.message,
+            })
+            : undefined);
+        } else if (ev.type === 'tool_end') {
+          queueExecutionLifecycle('tool', executionLifecycle
+            ? () => executionLifecycle.event('tool', {
+              phase: 'result', tool: ev.name, callId: ev.id,
+              resultChars: typeof ev.result === 'string' ? ev.result.length : 0,
+              resultRef: ev.persistedOutput?.ref,
+              isError: !!ev.isError,
+              durationMs: ev.durationMs,
+            })
+            : undefined);
+        } else if (ev.type === 'tool_delta') {
+          queueExecutionLifecycle('tool', executionLifecycle
+            ? () => executionLifecycle.event('tool', {
+              phase: 'input', tool: ev.name, callId: ev.id, inputBytes: ev.inputBytes,
+            })
+            : undefined);
+        } else if (ev.type === 'compaction') {
+          queueExecutionLifecycle('event', executionLifecycle
+            ? () => executionLifecycle.event('event', {
+              eventType: ev.type, tokensBefore: ev.tokensBefore, tokensAfter: ev.tokensAfter,
+              durationMs: ev.durationMs,
+            })
+            : undefined);
+        } else if (ev.type !== 'done') {
+          const { type: eventType, ...metadata } = ev;
+          queueExecutionLifecycle('event', executionLifecycle
+            ? () => executionLifecycle.event('event', { eventType, ...metadata })
+            : undefined);
+        }
         if (ev.type === 'done') agentRunResult = ev.result;
         // Track tool-execution phase from the RAW events (stable discriminants)
         // so the idle watchdog uses the long window while a tool is in flight.
@@ -1550,6 +1645,17 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     const terminalStatus = abortedFlag
       ? 'aborted'
       : (errText ? (idleHit ? 'idle_timeout' : 'error') : (finalText ? 'completed' : 'empty'));
+    const sharedTerminalStatus = abortedFlag
+      ? 'cancelled'
+      : (idleHit ? 'timed_out' : (errText || !finalText ? 'failed' : 'completed'));
+    queueExecutionLifecycle('terminal', executionLifecycle
+      ? () => executionLifecycle.terminal({
+        status: sharedTerminalStatus,
+        sessionId,
+        ...(finalText ? { output: finalText } : {}),
+      })
+      : undefined);
+    await executionLifecycleTail;
     yield agentRunResultEventForTelemetry({
       status: terminalStatus,
       durationMs: Date.now() - runStartedAt,

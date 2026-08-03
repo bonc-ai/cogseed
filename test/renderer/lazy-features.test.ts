@@ -41,6 +41,7 @@ describe('renderer lazy feature loader', () => {
     await first;
 
     expect(appended.map((script) => script.src)).toEqual([
+      './modules/model-authorization.js',
       './modules/settings.js',
       './modules/memory.js',
     ]);

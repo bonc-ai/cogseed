@@ -20,6 +20,17 @@ let _memData = {};
 //   { target /* scope-key */, mode:'edit'|'add', oldText? } — null when closed.
 let _memEditor = null;
 
+// ── "记忆分组" (personal-ontology groups) section state ──────────────────
+// Embedded in this same page per the requirements doc's default choice
+// (§3.6): a dedicated management surface, not shoved into the user/shared
+// scope list above. group_id/title/rel_path/created_at/updated_at — see
+// features/personal_ontology_groups.ts::GroupMeta.
+let _memGroups = [];
+let _memGroupsLoaded = false;
+// At most one group's content editor open at a time.
+//   { groupId, content, loaded, dirty } — null when closed.
+let _memGroupEditor = null;
+
 function _memIc(name, className) {
   return (typeof uiIconHtml === 'function') ? uiIconHtml(name, className) : '';
 }
@@ -78,6 +89,14 @@ async function _memLoad() {
     const r = results[i];
     _memData[s.key] = (r && r.ok) ? r : { entries: [], usage: { current: 0, limit: 0 }, path: '' };
   });
+
+  await _memLoadGroups();
+}
+
+async function _memLoadGroups() {
+  const res = await _memInvoke('personalOntology.groups.list', {});
+  _memGroups = (res && res.ok !== false && Array.isArray(res.groups)) ? res.groups : [];
+  _memGroupsLoaded = true;
 }
 
 // ── Page render ──────────────────────────────────────────────────────────────
@@ -120,12 +139,14 @@ function _memRenderInto(host) {
     <div class="memory-scroll o-scroll">
       <div class="memory-col">
         ${sections.join('')}
+        ${_memRenderGroupsSection()}
       </div>
     </div>
   `;
 
   if (typeof window.hydrateUiIcons === 'function') window.hydrateUiIcons(host);
   _memBindPage(host);
+  _memBindGroupsSection(host);
 }
 
 function _memRenderSection(scope, data) {
@@ -204,6 +225,218 @@ function _memRenderEditor(target, text) {
       </div>
     </div>
   `;
+}
+
+// ── "记忆分组" section ────────────────────────────────────────────────────
+// Scope: create / rename / delete a group + edit its content as one whole-file
+// textarea (§3.6 in the requirements doc — no per-entry management here, and
+// no "used by these past conversations" tracking, per the doc's explicit
+// out-of-scope list).
+
+function _memGroupPreview(content) {
+  const s = String(content || '').replace(/\n?§\n?/g, ' · ').trim();
+  if (!s) return t('memory.groups_empty_preview');
+  return s.length > 80 ? `${s.slice(0, 80)}…` : s;
+}
+
+function _memRenderGroupsSection() {
+  const rows = _memGroups.map((g) => _memRenderGroupRow(g)).join('');
+  const editorRow = _memGroupEditor ? _memRenderGroupEditor() : '';
+  return `
+    <div class="memory-section memory-groups-section">
+      <div class="memory-section-head">
+        <span class="memory-section-icon">${_memIc('folder')}</span>
+        <h2 class="memory-section-title">${escapeHtml(t('memory.groups_title'))}</h2>
+        <span class="memory-section-file">${t('memory.count', { n: _memGroups.length })}</span>
+        <span class="memory-flex"></span>
+        <button type="button" class="memory-icon-btn" data-mem-group-action="create" title="${escapeHtml(t('memory.groups_create'))}">${_memIc('plus')}</button>
+      </div>
+      <p class="memory-section-sub">${escapeHtml(t('memory.groups_sub'))}</p>
+      ${!_memGroups.length ? `<div class="memory-empty muted">${escapeHtml(t('memory.groups_empty'))}</div>` : rows}
+      ${editorRow}
+    </div>
+  `;
+}
+
+function _memRenderGroupRow(g) {
+  const isEditing = _memGroupEditor && _memGroupEditor.groupId === g.group_id;
+  const preview = _memGroupEditor && _memGroupEditor.groupId === g.group_id && _memGroupEditor.loaded
+    ? _memGroupPreview(_memGroupEditor.content)
+    : (g.preview !== undefined ? _memGroupPreview(g.preview) : t('memory.groups_preview_placeholder'));
+  return `
+    <div class="memory-entry memory-group-row${isEditing ? ' is-active' : ''}" data-mem-group-id="${escapeHtml(g.group_id)}">
+      <div class="memory-group-row-main" data-mem-group-action="toggle-edit" data-mem-group-id="${escapeHtml(g.group_id)}">
+        <div class="memory-group-row-title">${escapeHtml(g.title || '')}</div>
+        <div class="memory-group-row-preview muted">${escapeHtml(preview)}</div>
+      </div>
+      <div class="memory-entry-foot">
+        <span class="memory-flex"></span>
+        <button type="button" class="memory-icon-btn" data-mem-group-action="rename" data-mem-group-id="${escapeHtml(g.group_id)}" title="${escapeHtml(t('memory.groups_rename'))}">${_memIc('edit-pencil')}</button>
+        <button type="button" class="memory-icon-btn is-muted" data-mem-group-action="delete" data-mem-group-id="${escapeHtml(g.group_id)}" title="${escapeHtml(t('memory.groups_delete'))}">${_memIc('x')}</button>
+      </div>
+    </div>
+  `;
+}
+
+function _memRenderGroupEditor() {
+  const ed = _memGroupEditor;
+  if (!ed) return '';
+  const content = ed.loaded ? ed.content : '';
+  return `
+    <div class="memory-entry is-editing memory-group-editor" data-mem-group-editor="${escapeHtml(ed.groupId)}">
+      ${!ed.loaded
+        ? `<div class="memory-empty muted">${escapeHtml(t('common.loading'))}</div>`
+        : `<textarea class="memory-entry-textarea memory-group-editor-textarea" rows="10" data-mem-group-content>${escapeHtml(content)}</textarea>`}
+      <div class="memory-entry-foot">
+        <span class="memory-entry-charcount">${ed.loaded ? content.length : 0}</span>
+        <span class="memory-flex"></span>
+        <button type="button" class="btn btn-sm" data-mem-group-action="close-edit">${escapeHtml(t('memory.cancel'))}</button>
+        <button type="button" class="btn btn-sm btn-primary" data-mem-group-action="save-content" data-mem-group-id="${escapeHtml(ed.groupId)}" ${ed.loaded ? '' : 'disabled'}>${escapeHtml(t('memory.save'))}</button>
+      </div>
+    </div>
+  `;
+}
+
+function _memRerenderGroups() {
+  const host = document.getElementById('memory-page');
+  if (!host) return;
+  const prev = host.querySelector('.memory-scroll');
+  const scrollTop = prev ? prev.scrollTop : 0;
+  _memRenderInto(host);
+  const next = host.querySelector('.memory-scroll');
+  if (next) next.scrollTop = scrollTop;
+}
+
+async function _memOpenGroupEditor(groupId) {
+  if (_memGroupEditor && _memGroupEditor.groupId === groupId) {
+    _memGroupEditor = null;
+    _memRerenderGroups();
+    return;
+  }
+  _memGroupEditor = { groupId, content: '', loaded: false };
+  _memRerenderGroups();
+  const res = await _memInvoke('personalOntology.groups.read', { groupId });
+  if (!_memGroupEditor || _memGroupEditor.groupId !== groupId) return; // closed/switched while loading
+  if (!res || res.ok === false) {
+    _memToast(t('memory.groups_load_error'), 'error');
+    _memGroupEditor = null;
+    _memRerenderGroups();
+    return;
+  }
+  _memGroupEditor = { groupId, content: res.content || '', loaded: true };
+  _memRerenderGroups();
+}
+
+async function _memCreateGroup() {
+  const title = (typeof uiPrompt === 'function')
+    ? await uiPrompt(t('memory.groups_create_prompt'), '')
+    : null;
+  if (title === null) return;
+  const trimmed = String(title || '').trim();
+  if (!trimmed) return;
+  const res = await _memInvoke('personalOntology.groups.create', { title: trimmed });
+  if (!res || res.ok === false) {
+    _memToast((res && res.error) || t('memory.error_generic'), 'error');
+    return;
+  }
+  await _memLoadGroups();
+  _memRerenderGroups();
+}
+
+async function _memRenameGroup(groupId) {
+  const group = _memGroups.find((g) => g.group_id === groupId);
+  const title = (typeof uiPrompt === 'function')
+    ? await uiPrompt(t('memory.groups_rename_prompt'), group ? group.title : '')
+    : null;
+  if (title === null) return;
+  const trimmed = String(title || '').trim();
+  if (!trimmed) return;
+  const res = await _memInvoke('personalOntology.groups.rename', { groupId, title: trimmed });
+  if (!res || res.ok === false) {
+    _memToast((res && res.error) || t('memory.error_generic'), 'error');
+    return;
+  }
+  await _memLoadGroups();
+  _memRerenderGroups();
+}
+
+async function _memDeleteGroup(groupId) {
+  const ok = (typeof uiConfirmDanger === 'function')
+    ? await uiConfirmDanger({
+        title: t('memory.groups_delete'),
+        message: t('memory.groups_delete_confirm'),
+        dangerLabel: t('memory.groups_delete'),
+      })
+    : (typeof uiConfirm === 'function' ? await uiConfirm({ message: t('memory.groups_delete_confirm') }) : true);
+  if (!ok) return;
+  const res = await _memInvoke('personalOntology.groups.delete', { groupId });
+  if (!res || res.ok === false) {
+    _memToast((res && res.error) || t('memory.error_generic'), 'error');
+    return;
+  }
+  if (_memGroupEditor && _memGroupEditor.groupId === groupId) _memGroupEditor = null;
+  await _memLoadGroups();
+  _memRerenderGroups();
+}
+
+async function _memSaveGroupContent(groupId) {
+  const editorEl = document.querySelector(`[data-mem-group-editor="${CSS.escape(groupId)}"]`);
+  const ta = editorEl && editorEl.querySelector('[data-mem-group-content]');
+  if (!ta) return;
+  const content = ta.value;
+  const res = await _memInvoke('personalOntology.groups.write', { groupId, content });
+  if (!res || res.ok === false) {
+    _memToast((res && res.error) || t('memory.error_generic'), 'error');
+    return;
+  }
+  _memToast(t('memory.groups_saved'), 'success');
+  if (_memGroupEditor && _memGroupEditor.groupId === groupId) {
+    _memGroupEditor = { groupId, content, loaded: true };
+  }
+  _memRerenderGroups();
+}
+
+function _memBindGroupsSection(host) {
+  host.querySelectorAll('[data-mem-group-action]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      const action = el.getAttribute('data-mem-group-action');
+      const groupId = el.getAttribute('data-mem-group-id') || (_memGroupEditor && _memGroupEditor.groupId);
+      switch (action) {
+        case 'create':
+          _memCreateGroup();
+          return;
+        case 'toggle-edit':
+          if (groupId) _memOpenGroupEditor(groupId);
+          return;
+        case 'rename':
+          e.stopPropagation();
+          if (groupId) _memRenameGroup(groupId);
+          return;
+        case 'delete':
+          e.stopPropagation();
+          if (groupId) _memDeleteGroup(groupId);
+          return;
+        case 'close-edit':
+          _memGroupEditor = null;
+          _memRerenderGroups();
+          return;
+        case 'save-content':
+          if (groupId) _memSaveGroupContent(groupId);
+          return;
+        default:
+          return;
+      }
+    });
+  });
+
+  const ta = host.querySelector('[data-mem-group-content]');
+  if (ta) {
+    const countEl = ta.closest('.memory-entry')?.querySelector('.memory-entry-charcount');
+    ta.addEventListener('input', () => {
+      if (countEl) countEl.textContent = String(ta.value.length);
+    });
+    try { ta.focus({ preventScroll: true }); } catch (_) { ta.focus(); }
+  }
 }
 
 // ── Page events ──────────────────────────────────────────────────────────────

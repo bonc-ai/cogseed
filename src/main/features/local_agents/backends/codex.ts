@@ -35,6 +35,7 @@ import {
   StderrTail,
   spawnCli,
   bindAbort,
+  executionContextEnv,
   armKillWatchdog,
   LineSplitter,
 } from './base.js';
@@ -61,7 +62,7 @@ export const codexBackend: LocalBackend = {
   async run(opts: BackendRunOptions): Promise<void> {
     const args = buildCodexArgs(opts);
     const childEnv = opts.bridge?.server.env ? { ...process.env, ...opts.bridge.server.env } : process.env;
-    const child = spawnCli(opts.binPath, args, opts.cwd, childEnv);
+    const child = spawnCli(opts.binPath, args, opts.cwd, childEnv, { ...opts.providerEnv, ...executionContextEnv(opts.executionContext) });
     const detachAbort = bindAbort(child, opts.signal);
     const tail = new StderrTail();
     const startedAt = Date.now();
@@ -442,7 +443,7 @@ export const codexBackend: LocalBackend = {
         await rpc('turn/start', {
           threadId,
           input: [{ type: 'text', text: opts.prompt }],
-          ...buildCodexTurnPermissionOverrides(opts.cwd),
+          ...buildCodexTurnPermissionOverrides(opts.cwd, opts.executionContext),
         });
         // After turn/start succeeds we wait passively — turn end is
         // driven by `turn/completed` / `task_complete` notifications,
@@ -557,16 +558,12 @@ export function buildCodexThreadPermissionOverrides(): { approvalPolicy: string;
   };
 }
 
-export function buildCodexTurnPermissionOverrides(cwd: string): {
-  cwd: string;
-  approvalPolicy: string;
-  sandboxPolicy: { type: string };
+export function buildCodexTurnPermissionOverrides(cwd: string, context?: BackendRunOptions['executionContext']): {
+  cwd: string; approvalPolicy: string; sandboxPolicy: Record<string, unknown>;
 } {
-  return {
-    cwd,
-    approvalPolicy: TRUSTED_LOCAL_APPROVAL_POLICY,
-    sandboxPolicy: { ...TRUSTED_LOCAL_SANDBOX_POLICY },
-  };
+  if (context?.permissionMode === 'read-only') return { cwd, approvalPolicy: TRUSTED_LOCAL_APPROVAL_POLICY, sandboxPolicy: { type: 'readOnly' } };
+  if (context) return { cwd, approvalPolicy: TRUSTED_LOCAL_APPROVAL_POLICY, sandboxPolicy: { type: 'workspaceWrite', writableRoots: context.writableRoots, networkAccess: true } };
+  return { cwd, approvalPolicy: TRUSTED_LOCAL_APPROVAL_POLICY, sandboxPolicy: { ...TRUSTED_LOCAL_SANDBOX_POLICY } };
 }
 
 export function extractCodexDiffFiles(diff: string): string[] {

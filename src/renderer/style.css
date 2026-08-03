@@ -15167,6 +15167,14 @@ body.model-not-configured .main-content { flex-direction: column; }
 .memory-icon-btn:hover { background: var(--surface-2); }
 .memory-icon-btn.is-muted { color: var(--muted); }
 
+/* Memory groups section — row is clickable to expand the whole-file editor. */
+.memory-group-row { cursor: default; }
+.memory-group-row-main { display: flex; flex-direction: column; gap: 2px; cursor: pointer; }
+.memory-group-row-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.memory-group-row-preview { font-size: 12px; line-height: 1.5; }
+.memory-group-row.is-active { border-color: rgba(91, 87, 214, 0.25); }
+.memory-group-editor-textarea { min-height: 160px; font-family: var(--font-mono); font-size: 12.5px; }
+
 /* Modal. */
 .memory-modal-overlay {
   position: fixed;
@@ -15648,6 +15656,38 @@ body.model-not-configured .main-content { flex-direction: column; }
   flex-shrink: 0;
   color: var(--muted);
   font-size: 11px;
+}
+
+/* "本体" tab rows: checkbox-style multi-select — click toggles, doesn't close
+ * the picker or fire-and-close like the other four tabs. */
+.skill-picker-item.is-checkable {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.skill-picker-item-checkbox {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--surface);
+  position: relative;
+}
+.skill-picker-item.is-checked .skill-picker-item-checkbox {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.skill-picker-item.is-checked .skill-picker-item-checkbox::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 5px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
 }
 
 /* PDF viewer — full-height iframe, Chromium's PDFium handles rendering. */
@@ -16557,3 +16597,296 @@ body.model-not-configured .main-content { flex-direction: column; }
 #panel-evolution .evo-std-form select { padding: 8px 10px; border: 1px solid var(--evo-border); border-radius: 8px; font-size: 13px; background: #fff; color: var(--evo-fg); }
 #panel-evolution #evo-std-save { background: var(--evo-blue); border-color: var(--evo-blue); color: #fff; margin-left: auto; }
 #panel-evolution #evo-std-save:hover { background: hsl(222 47% 40%); }
+.model-authorization-list { display: grid; gap: 10px; margin-top: 12px; }
+.model-authorization-card { display: grid; gap: 8px; padding: 14px; border: 1px solid var(--border, #e5e7eb); border-radius: 12px; background: var(--surface-1, #fff); }
+.model-authorization-card-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.model-authorization-card-title { font-weight: 650; }
+.model-authorization-card-meta { color: var(--text-muted, #6b7280); font-size: 12px; }
+.model-authorization-card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.model-authorization-steps { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 18px 12px; }
+.model-authorization-step { padding: 4px 9px; border-radius: 999px; background: var(--surface-2, #f3f4f6); color: var(--text-muted, #6b7280); font-size: 12px; }
+.model-authorization-step.is-active { background: var(--accent-soft, #eef2ff); color: var(--accent, #4f46e5); font-weight: 650; }
+.model-authorization-body { display: grid; gap: 14px; }
+.model-authorization-choice-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.model-authorization-choice { text-align: left; padding: 14px; border: 1px solid var(--border, #e5e7eb); border-radius: 12px; background: var(--surface-1, #fff); }
+.model-authorization-choice:hover { border-color: var(--accent, #4f46e5); }
+.model-authorization-model-list { display: grid; gap: 6px; max-height: 280px; overflow: auto; border: 1px solid var(--border, #e5e7eb); border-radius: 12px; padding: 8px; }
+.model-authorization-model-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; }
+.model-authorization-model-row:hover { background: var(--surface-2, #f3f4f6); }
+.model-authorization-warning { border: 1px solid var(--warning, #f59e0b); background: var(--warning-soft, #fffbeb); color: var(--warning-text, #92400e); border-radius: 10px; padding: 10px 12px; }
+.model-authorization-progress { color: var(--text-muted, #6b7280); font-size: 13px; }
+
+#panel-personal-ontology {
+  --personal-onto-bg: hsl(210 40% 98%);
+  --personal-onto-card: #fff;
+  --personal-onto-border: hsl(214 32% 91%);
+  --personal-onto-fg: hsl(222 47% 11%);
+  --personal-onto-muted: hsl(215 16% 47%);
+  --personal-onto-primary: hsl(222 47% 31%);
+  --personal-onto-blue: #2563eb;
+  --personal-onto-green: hsl(142 76% 36%);
+  --personal-onto-red: hsl(0 84% 45%);
+  --personal-onto-orange: hsl(38 92% 45%);
+  --personal-onto-radius: 0.75rem;
+  --personal-onto-shadow: 0 1px 2px 0 rgba(0,0,0,.05), 0 1px 3px 0 rgba(0,0,0,.06);
+  background: var(--personal-onto-bg);
+  color: var(--personal-onto-fg);
+}
+
+.personal-onto-view { display: flex; flex-direction: column; height: 100%; }
+
+.personal-onto-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 24px 32px 16px;
+  border-bottom: 1px solid var(--personal-onto-border);
+  background: var(--personal-onto-card);
+}
+
+.personal-onto-title {
+  font-size: 20px; font-weight: 700; margin: 0;
+  color: var(--personal-onto-primary);
+}
+
+.personal-onto-actions { display: flex; gap: 8px; }
+
+.personal-onto-scroll {
+  flex: 1; padding: 24px 32px; overflow: auto;
+}
+
+/* 统计卡片 */
+.personal-onto-stats-row {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 16px;
+  margin-bottom: 24px;
+}
+
+.personal-onto-stat-card {
+  padding: 18px 20px;
+  background: var(--personal-onto-card);
+  border: 1px solid var(--personal-onto-border);
+  border-radius: var(--personal-onto-radius);
+  box-shadow: var(--personal-onto-shadow);
+}
+
+.personal-onto-stat-card-confirmed { border-left: 3px solid var(--personal-onto-green); }
+.personal-onto-stat-card-rejected { border-left: 3px solid var(--personal-onto-red); }
+.personal-onto-stat-card-blocked { border-left: 3px solid var(--personal-onto-orange); }
+
+.personal-onto-stat-value {
+  font-size: 28px; font-weight: 700; line-height: 1.1;
+}
+
+.personal-onto-stat-label {
+  font-size: 12px; color: var(--personal-onto-muted); margin-top: 4px;
+}
+
+/* 候选卡片 */
+.personal-onto-section {
+  margin-bottom: 32px;
+}
+
+.personal-onto-section-title {
+  font-size: 16px; font-weight: 600; margin: 0 0 16px;
+  color: var(--personal-onto-primary);
+}
+
+.personal-onto-cards {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 16px;
+}
+
+.personal-onto-card {
+  background: var(--personal-onto-card);
+  border: 1px solid var(--personal-onto-border);
+  border-radius: var(--personal-onto-radius);
+  box-shadow: var(--personal-onto-shadow);
+  padding: 16px;
+  transition: border-color .2s;
+}
+
+.personal-onto-card-pending { border-left: 3px solid var(--personal-onto-blue); }
+.personal-onto-card-confirmed { border-left: 3px solid var(--personal-onto-green); opacity: 0.7; }
+.personal-onto-card-rejected { border-left: 3px solid var(--personal-onto-red); opacity: 0.6; }
+
+.personal-onto-card-header {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 12px; padding-bottom: 12px;
+  border-bottom: 1px solid var(--personal-onto-border);
+}
+
+.personal-onto-card-kind {
+  font-weight: 600; font-size: 13px;
+  padding: 2px 10px; border-radius: 999px;
+  background: var(--personal-onto-blue); color: #fff;
+}
+
+.personal-onto-card-confidence {
+  font-size: 12px; color: var(--personal-onto-muted);
+}
+
+.personal-onto-card-status {
+  margin-left: auto;
+  font-size: 11px; font-weight: 600;
+  padding: 2px 10px; border-radius: 999px;
+  background: hsl(210 40% 94%); color: var(--personal-onto-muted);
+}
+
+.personal-onto-card-confirmed .personal-onto-card-status {
+  background: hsl(142 76% 92%); color: var(--personal-onto-green);
+}
+
+.personal-onto-card-rejected .personal-onto-card-status {
+  background: hsl(0 84% 95%); color: var(--personal-onto-red);
+}
+
+.personal-onto-card-body {
+  font-size: 13px; line-height: 1.6;
+}
+
+.personal-onto-card-field {
+  margin-bottom: 8px;
+}
+
+.personal-onto-card-field strong {
+  color: var(--personal-onto-primary);
+}
+
+.personal-onto-card-payload pre {
+  margin: 4px 0 0 0; padding: 8px;
+  background: hsl(210 40% 97%);
+  border: 1px solid var(--personal-onto-border);
+  border-radius: 6px;
+  font-size: 11px; white-space: pre-wrap; word-break: break-word;
+}
+
+.personal-onto-card-actions {
+  display: flex; gap: 8px; margin-top: 12px;
+  padding-top: 12px; border-top: 1px solid var(--personal-onto-border);
+}
+
+/* "选择去向"面板 — 常驻在确认/驳回按钮上方，不弹二次面板。 */
+.personal-onto-dest-panel {
+  margin-top: 12px; padding-top: 12px;
+  border-top: 1px solid var(--personal-onto-border);
+  font-size: 12.5px;
+}
+.personal-onto-dest-title {
+  font-weight: 600; color: var(--personal-onto-muted);
+  margin-bottom: 8px;
+}
+.personal-onto-dest-global-row,
+.personal-onto-dest-group-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 0; cursor: pointer;
+}
+.personal-onto-dest-groups {
+  margin-left: 4px;
+  padding-left: 14px;
+  border-left: 2px solid var(--personal-onto-border);
+}
+.personal-onto-dest-empty {
+  padding: 4px 0 4px 14px;
+  font-size: 12px;
+}
+.personal-onto-dest-create-row {
+  display: flex; gap: 6px; margin-top: 8px;
+}
+.personal-onto-dest-new-group-input {
+  flex: 1; min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--personal-onto-border);
+  border-radius: 6px;
+  font-size: 12.5px;
+}
+
+.personal-onto-btn-confirm {
+  background: var(--personal-onto-green);
+  border-color: var(--personal-onto-green);
+  color: #fff;
+}
+
+.personal-onto-btn-confirm:hover {
+  background: hsl(142 76% 30%);
+}
+
+.personal-onto-btn-reject {
+  background: var(--personal-onto-card);
+  border-color: var(--personal-onto-red);
+  color: var(--personal-onto-red);
+}
+
+.personal-onto-btn-reject:hover {
+  background: var(--personal-onto-red);
+  color: #fff;
+}
+
+/* 阻断项卡片 */
+.personal-onto-blocked-cards {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 16px;
+}
+
+.personal-onto-blocked-card {
+  background: var(--personal-onto-card);
+  border: 1px solid var(--personal-onto-orange);
+  border-left: 3px solid var(--personal-onto-orange);
+  border-radius: var(--personal-onto-radius);
+  box-shadow: var(--personal-onto-shadow);
+  padding: 16px;
+}
+
+.personal-onto-blocked-header {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 12px; padding-bottom: 12px;
+  border-bottom: 1px solid var(--personal-onto-border);
+}
+
+.personal-onto-blocked-icon {
+  font-size: 18px; color: var(--personal-onto-orange);
+}
+
+.personal-onto-blocked-source {
+  font-weight: 600; font-size: 13px;
+}
+
+.personal-onto-blocked-body {
+  font-size: 13px; line-height: 1.6;
+}
+
+.personal-onto-blocked-field {
+  margin-bottom: 8px;
+}
+
+.personal-onto-blocked-field strong {
+  color: var(--personal-onto-primary);
+}
+
+/* 空态/加载/错误 */
+.personal-onto-empty,
+.personal-onto-loading,
+.personal-onto-error {
+  text-align: center; padding: 48px 24px;
+  color: var(--personal-onto-muted);
+  background: var(--personal-onto-card);
+  border: 1px dashed var(--personal-onto-border);
+  border-radius: var(--personal-onto-radius);
+}
+
+.personal-onto-error {
+  color: var(--personal-onto-red);
+  border-color: var(--personal-onto-red);
+  border-style: solid;
+}
+
+/* 驳回原因弹窗 */
+.personal-onto-modal-overlay {
+  position: absolute; inset: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,.35);
+  backdrop-filter: blur(2px);
+}
+
+.personal-onto-modal {
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.18);
+  width: 420px; max-width: 90vw;
+  overflow: hidden;
+}

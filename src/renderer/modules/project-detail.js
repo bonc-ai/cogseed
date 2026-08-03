@@ -2945,9 +2945,9 @@ async function _submitProjectChat() {
   const recipient = (typeof getChatRecipient === 'function')
     ? getChatRecipient('project')
     : null;
-  const withUse = (typeof transformWithChatUse === 'function')
-    ? transformWithChatUse(requestText)
-    : requestText;
+  const withUse = (typeof transformWithChatUseAsync === 'function')
+    ? await transformWithChatUseAsync(requestText)
+    : (typeof transformWithChatUse === 'function' ? transformWithChatUse(requestText) : requestText);
   const content = (typeof applyRecipientPrefix === 'function')
     ? applyRecipientPrefix(withUse, 'project')
     : withUse;

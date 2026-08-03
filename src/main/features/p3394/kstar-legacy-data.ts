@@ -16,6 +16,7 @@
 
 import { Mutex } from 'async-mutex';
 import * as path from 'node:path';
+import { findLatestSkillValidation } from './skill-validation-run';
 
 import { userLocalRoot } from '../../paths';
 import { genId12, nowIso, readJson, safeId, writeJson } from '../../storage';
@@ -226,9 +227,15 @@ export async function listPatchCandidates(
   conversationId?: string,
 ): Promise<CompatPatchCandidate[]> {
   const state = await readState(uid);
-  return state.patch_candidates
+  const candidates = state.patch_candidates
     .filter((candidate) => !conversationId || candidate.conversation_id === conversationId)
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
+  return Promise.all(candidates.map(async (candidate) => {
+    const skillId = candidate.target.kind === 'custom_skill' ? candidate.target.id : undefined;
+    if (!skillId) return candidate;
+    const latest = await findLatestSkillValidation(uid, skillId);
+    return latest ? { ...candidate, validation_id: latest.validationId, validation_status: latest.status } : candidate;
+  }));
 }
 
 export async function reviewPatchCandidate(
@@ -238,6 +245,13 @@ export async function reviewPatchCandidate(
   notes = '',
 ): Promise<CompatPatchCandidate> {
   if (!safeId(candidateId)) throw new Error('invalid patch candidate id');
+  const existing = (await readState(uid)).patch_candidates.find((item) => item.id === candidateId);
+  if (!existing) throw new Error('patch candidate not found');
+  const skillId = existing.target.kind === 'custom_skill' ? existing.target.id : undefined;
+  const validation = skillId ? await findLatestSkillValidation(uid, skillId) : null;
+  if (decision === 'approve' && existing.boundary?.mode === 'test-double') throw new Error('test-double result cannot approve production patch');
+  if (decision === 'approve' && validation?.status === 'blocked') throw new Error('blocked validation cannot approve patch');
+  if (decision === 'approve' && validation?.status === 'risk' && !notes.trim()) throw new Error('risk validation requires reviewer notes');
   return mutate(uid, (state) => {
     const candidate = state.patch_candidates.find((item) => item.id === candidateId);
     if (!candidate) throw new Error('patch candidate not found');
@@ -246,6 +260,7 @@ export async function reviewPatchCandidate(
     }
     const now = nowIso();
     candidate.status = decision === 'approve' ? 'approved' : 'rejected';
+    if (validation) { candidate.validation_id = validation.validationId; candidate.validation_status = validation.status; }
     candidate.review = { decision, ...(notes.trim() ? { notes: notes.trim() } : {}), reviewed_at: now };
     candidate.updated_at = now;
     return candidate;

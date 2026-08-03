@@ -29,6 +29,7 @@ const _BOOT_STAGE_WARN_MS = 1500;
 const _BOOT_TOTAL_WARN_MS = 3000;
 const _SIDEBAR_NAV_BOOT_WARM_MS = 3500;
 let _sidebarVersionBaseLabel = '';
+let _sidebarVersionBuildTitle = '';
 let _sidebarNavWarmUntil = 0;
 const _sidebarNavTimers = new Map();
 const _sidebarNavTokens = new Map();
@@ -171,7 +172,13 @@ async function _stampSettingsVersion() {
   try {
     const env = await window.orkas.env();
     if (env && env.version) {
-      _setRendererVersionLabel(env.version);
+      const buildTooltip = t('sidebar.build_title', {
+        channel: env.buildChannel || 'unknown',
+        commit: env.buildCommit || 'unknown',
+        dirty: env.buildDirty === true ? t('sidebar.build_dirty') : t('sidebar.build_clean'),
+        time: env.buildTime || 'unknown',
+      });
+      _setRendererVersionLabel(env.versionLabel || env.version, buildTooltip);
     }
     // Stamp body so renderer modules can branch on dev mode synchronously
     // via `document.body.classList.contains('is-dev')`. Used by skills /
@@ -187,10 +194,11 @@ function _formatRendererVersionLabel(version) {
   return raw.toLowerCase().startsWith('v') ? raw : `v${raw}`;
 }
 
-function _setRendererVersionLabel(version) {
+function _setRendererVersionLabel(version, buildTitle = '') {
   const label = _formatRendererVersionLabel(version);
   if (!label) return;
   _sidebarVersionBaseLabel = label;
+  _sidebarVersionBuildTitle = String(buildTitle || '');
   _renderSidebarVersionUpdate();
 }
 
@@ -198,7 +206,7 @@ function _renderSidebarVersionUpdate() {
   const el = document.getElementById('sidebar-version');
   if (!el) return;
   el.textContent = _sidebarVersionBaseLabel || '';
-  el.title = _sidebarVersionBaseLabel ? t('sidebar.version_title', { version: _sidebarVersionBaseLabel }) : '';
+  el.title = _sidebarVersionBuildTitle || (_sidebarVersionBaseLabel ? t('sidebar.version_title', { version: _sidebarVersionBaseLabel }) : '');
   el.setAttribute('aria-label', el.title || el.textContent || 'Version');
   el.disabled = true;
   el.classList.remove('is-actionable', 'is-progress');
@@ -285,6 +293,7 @@ function _lazyFeaturePanel(view) {
   const panelId = view === 'memory' ? 'panel-memory'
     : view === 'skills' ? 'panel-skills'
     : view === 'evolution' ? 'panel-evolution'
+    : view === 'personal-ontology' ? 'panel-personal-ontology'
     : view === 'contexts' ? 'panel-contexts'
     : view === 'settings' ? 'panel-settings'
     : view === 'project' ? 'panel-project'
@@ -371,6 +380,7 @@ function setView(view, cid, opts = {}) {
                 : view === 'connectors' ? 'panel-connectors'
                 : view === 'contexts' ? 'panel-contexts'
                 : view === 'evolution' ? 'panel-evolution'
+                : view === 'personal-ontology' ? 'panel-personal-ontology'
                 : view === 'settings' ? 'panel-settings'
                 : view === 'memory' ? 'panel-memory'
                 : view === 'devtools' ? 'panel-devtools'
@@ -386,6 +396,7 @@ function setView(view, cid, opts = {}) {
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connectors');
   document.getElementById('contexts-btn')?.classList.toggle('active', view === 'contexts');
   document.getElementById('evolution-btn')?.classList.toggle('active', view === 'evolution');
+  document.getElementById('personal-ontology-btn')?.classList.toggle('active', view === 'personal-ontology');
   document.getElementById('settings-btn')?.classList.toggle('active', view === 'settings');
   document.getElementById('devtools-btn')?.classList.toggle('active', view === 'devtools');
   document.querySelectorAll('.conv-item').forEach(it => {
@@ -439,7 +450,9 @@ function setView(view, cid, opts = {}) {
     // If we returned to a conversation with queued items and nothing is
     // streaming, kick off the next one automatically.
     if (!isConvPending(cid) && (messageQueues.get(cid) || []).length) {
-      _dispatchNextQueued(cid);
+      // Fire-and-forget: _dispatchNextQueued is async (ontology_group token
+      // expansion needs an IPC round-trip); this call site never awaited it.
+      Promise.resolve(_dispatchNextQueued(cid)).catch(() => {});
     }
     _updateConvSendUI(cid);
     setTimeout(() => document.getElementById('chat-input')?.focus(), 50);
@@ -529,6 +542,13 @@ function setView(view, cid, opts = {}) {
     _deferSidebarNavWork('evolution-tab-load', () => {
       _loadViewFeature('evolution', 'evolution', () => {
         if (typeof renderEvolutionConsole === 'function') renderEvolutionConsole();
+      });
+    });
+  } else if (view === 'personal-ontology') {
+    currentCid = null;
+    _deferSidebarNavWork('personal-ontology-tab-load', () => {
+      _loadViewFeature('personal-ontology', 'personal-ontology', () => {
+        if (typeof renderPersonalOntology === 'function') renderPersonalOntology();
       });
     });
   } else if (view === 'settings') {

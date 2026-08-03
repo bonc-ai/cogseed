@@ -20,6 +20,7 @@ const REQUIRED_BUILTIN_INVENTORY = Object.freeze({
     'autotask-creator',
     'coding',
     'package-installer',
+    'personal-ontology-candidate-builder',
     'skill-creator',
   ]),
   marketplace_agents: Object.freeze([

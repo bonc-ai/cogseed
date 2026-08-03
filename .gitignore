@@ -37,3 +37,7 @@ packages/*/dist
 
 # stray sidecar edits
 package.json.new
+
+# local build identity and development package output
+/.build
+/dist-dev

@@ -160,6 +160,16 @@ export const userLocalSessionFile   = (uid: string, sessionId: string) => path.j
 // Curated knowledge base (the "organized" region of the historical
 // two-region contexts design).
 export const userContextsDir        = (uid: string) => path.join(userCloudRoot(uid), 'contexts');
+// "本体" memory-group storage — a hidden sub-dir of contexts/ so its .md files
+// physically live under the Library tree (and therefore get picked up by
+// kb_search/kb_read like any other Library file — this is intentional, see
+// features/personal_ontology_groups.ts's file header) but the dot-prefix
+// keeps them out of listContextsTree/the user-facing Library browser, same
+// convention as `.kb/`. Because it's hidden, contexts.ts's own resolvePath
+// refuses to touch it (hasHiddenContextPathSegment) — personal_ontology_groups.ts
+// owns its own path-safety + atomic-write logic instead of reusing
+// writeContextFile/resolveContextFileAbsPath.
+export const userOntologyGroupsDir  = (uid: string) => path.join(userContextsDir(uid), '.personal_ontology_groups');
 // Machine-private mirror of contexts/ — holds derived state that must NOT
 // cross devices (currently just the KB vector store; see `userKbDir` below).
 // **Why** mirror the cloud structure under local/ instead of an ad-hoc

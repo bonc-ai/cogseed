@@ -319,8 +319,9 @@ function conversationLock(uid: string, cid: string): Mutex {
 export function collaborationPaths(
   uid: string,
   cid: string,
+  projectIdHint?: string | null,
 ): CollaborationPaths {
-  const groupDir = conversationLayout(uid, cid).groupDir;
+  const groupDir = conversationLayout(uid, cid, projectIdHint).groupDir;
   const rootDir = path.join(groupDir, "collaboration");
   const runsDir = path.join(rootDir, "workflow_runs");
   const contextsDir = path.join(rootDir, "workflow_contexts");
@@ -410,10 +411,11 @@ export async function readWorkflowRun(
   uid: string,
   cid: string,
   runId: string,
+  projectIdHint?: string | null,
 ): Promise<WorkflowRun | null> {
   if (!safeId(runId)) return null;
   const raw = await readJson<unknown>(
-    collaborationPaths(uid, cid).runFile(runId),
+    collaborationPaths(uid, cid, projectIdHint).runFile(runId),
   );
   return normalizeWorkflowRun(raw);
 }
@@ -422,10 +424,11 @@ export async function readSharedTaskContext(
   uid: string,
   cid: string,
   contextId: string,
+  projectIdHint?: string | null,
 ): Promise<SharedTaskContext | null> {
   if (!safeId(contextId)) return null;
   const raw = await readJson<unknown>(
-    collaborationPaths(uid, cid).contextFile(contextId),
+    collaborationPaths(uid, cid, projectIdHint).contextFile(contextId),
   );
   return normalizeSharedTaskContext(raw);
 }
@@ -469,14 +472,15 @@ export async function readActiveSharedTaskContext(
 async function readActiveWorkflowStateUnlocked(
   uid: string,
   cid: string,
+  projectIdHint?: string | null,
 ): Promise<{ run: WorkflowRun; context: SharedTaskContext } | null> {
   const active = await readJson<unknown>(
-    collaborationPaths(uid, cid).activeFile,
+    collaborationPaths(uid, cid, projectIdHint).activeFile,
   );
   if (!validActiveFile(active)) return null;
-  const run = await readWorkflowRun(uid, cid, active.run_id);
+  const run = await readWorkflowRun(uid, cid, active.run_id, projectIdHint);
   if (!run || run.context_id !== active.context_id) return null;
-  const context = await readSharedTaskContext(uid, cid, active.context_id);
+  const context = await readSharedTaskContext(uid, cid, active.context_id, projectIdHint);
   if (!context || context.run_id !== run.id) return null;
   return { run, context };
 }
@@ -2715,8 +2719,9 @@ export interface ActiveCollaborationState {
 async function readActiveCollaborationStateUnlocked(
   uid: string,
   cid: string,
+  projectIdHint?: string | null,
 ): Promise<ActiveCollaborationState | null> {
-  const active = await readActiveWorkflowStateUnlocked(uid, cid);
+  const active = await readActiveWorkflowStateUnlocked(uid, cid, projectIdHint);
   if (!active) return null;
   return {
     ...active,
@@ -2732,36 +2737,40 @@ async function readActiveCollaborationStateUnlocked(
 export async function readActiveCollaborationState(
   uid: string,
   cid: string,
+  projectIdHint?: string | null,
 ): Promise<ActiveCollaborationState | null> {
   return conversationLock(uid, cid).runExclusive(() =>
-    readActiveCollaborationStateUnlocked(uid, cid),
+    readActiveCollaborationStateUnlocked(uid, cid, projectIdHint),
   );
 }
 
 async function readActiveCollaborationSnapshotUnlocked(
   uid: string,
   cid: string,
+  projectIdHint?: string | null,
 ): Promise<CollaborationSnapshot | null> {
   return (
-    (await readActiveCollaborationStateUnlocked(uid, cid))?.snapshot || null
+    (await readActiveCollaborationStateUnlocked(uid, cid, projectIdHint))?.snapshot || null
   );
 }
 
 export async function readCollaborationSnapshot(
   uid: string,
   cid: string,
+  projectIdHint?: string | null,
 ): Promise<CollaborationSnapshot | null> {
   return conversationLock(uid, cid).runExclusive(() =>
-    readActiveCollaborationSnapshotUnlocked(uid, cid),
+    readActiveCollaborationSnapshotUnlocked(uid, cid, projectIdHint),
   );
 }
 
 export async function readActiveCollaborationSnapshot(
   uid: string,
   cid: string,
+  projectIdHint?: string | null,
 ): Promise<CollaborationSnapshot | null> {
   return conversationLock(uid, cid).runExclusive(() =>
-    readActiveCollaborationSnapshotUnlocked(uid, cid),
+    readActiveCollaborationSnapshotUnlocked(uid, cid, projectIdHint),
   );
 }
 

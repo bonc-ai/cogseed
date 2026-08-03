@@ -37,6 +37,12 @@ let _settingsState = {
   commanderBackendBound: false,
   authProfilesStatus: null,
   authProfilesRecoveryBound: false,
+  customProviders: [],
+  customProvidersBound: false,
+  ccswitchStatus: null,
+  ccswitchPreviewRows: [],
+  ccswitchPreviewSelectedIds: [],
+  ccswitchPreviewBound: false,
 };
 
 function _settingsTrackClick() {}
@@ -81,9 +87,10 @@ async function loadSettings() {
     _settingsSafeCall('settings data root refresh', _settingsRefreshDataRoot),
     _settingsSafeCall('settings commander backend refresh', _settingsRefreshCommanderBackend),
     _settingsSafeCall('settings auth profiles status refresh', _settingsRefreshAuthProfilesStatus),
+    _settingsSafeCall('settings custom providers refresh', _settingsRefreshCustomProviders),
+    _settingsSafeCall('settings ccswitch status refresh', _settingsRefreshCcswitchStatus),
   ]);
-  await _settingsSafeCall('settings picker render', _settingsRenderPicker);
-  await _settingsSafeCall('settings entries render', _settingsRenderEntries);
+  await _settingsSafeCall('settings model authorization init', () => window.initModelAuthorizationSettings && window.initModelAuthorizationSettings());
   await _settingsSafeCall('settings local execution render', _settingsRenderLocalExec);
   await _settingsSafeCall('settings search render', _settingsRenderSearchSection);
   await _settingsSafeCall('settings image render', _settingsRenderImageSection);
@@ -94,6 +101,8 @@ async function loadSettings() {
   await _settingsSafeCall('settings data root render', _settingsRenderDataRoot);
   await _settingsSafeCall('settings commander backend render', _settingsRenderCommanderBackend);
   await _settingsSafeCall('settings auth profiles recovery render', _settingsRenderAuthProfilesRecovery);
+  await _settingsSafeCall('settings custom providers render', _settingsRenderCustomProviders);
+  await _settingsSafeCall('settings ccswitch render', _settingsRenderCcswitchStatus);
   // Account card + subscription card (views/login/account_settings.js — absent in
   // the open-source build, so these are no-ops there). renderSubscriptionSettings rebinds the
   // action button's click handler with the current subscription state on every
@@ -421,13 +430,15 @@ function _settingsSyncLanguageRadio() {
 window.addEventListener('i18n-change', () => {
   _settingsSyncLanguageRadio();
   _settingsRenderLocalExec();
-  _settingsRenderPicker();
-  _settingsRenderEntries();
+  if (window.refreshModelAuthorizationSettings) window.refreshModelAuthorizationSettings();
   _settingsRenderSearchSection();
   _settingsRenderImageSection();
   _settingsRenderVideoSection();
   _settingsRenderMetacognition();
   _settingsRenderCommanderBackend();
+  _settingsRenderCustomProviders();
+  _settingsRenderCcswitchStatus();
+  if (_settingsState.ccswitchPreviewRows.length) _settingsRenderCcswitchPreviewDialog();
 });
 
 async function _settingsRefreshProviders() {
@@ -550,6 +561,257 @@ async function _settingsSaveCommanderBackend() {
   _settingsRenderCommanderBackend();
   if (typeof refreshModelGuard === 'function') refreshModelGuard().catch(() => {});
   _settingsSetStatus('settings-commander-backend-status', 'ok', t('settings.save_ok'));
+}
+
+function _settingsCustomProviderProtocolLabel(protocol) {
+  const key = String(protocol || '').toLowerCase();
+  if (key === 'anthropic') return t('settings.custom_providers.protocol_anthropic');
+  if (key === 'openai') return t('settings.custom_providers.protocol_openai');
+  if (key === 'gemini') return t('settings.custom_providers.protocol_gemini');
+  return key || t('settings.custom_providers.protocol_unknown');
+}
+
+async function _settingsRefreshCustomProviders() {
+  const res = await window.orkas.invoke('customProviders.list');
+  _settingsState.customProviders = (res && res.ok && Array.isArray(res.providers)) ? res.providers : [];
+}
+
+async function _settingsRefreshCcswitchStatus() {
+  const res = await window.orkas.invoke('customProviders.ccswitch.probe');
+  _settingsState.ccswitchStatus = (res && res.ok !== false) ? res : { ok: false, available: false, error: (res && res.error) || t('settings.ccswitch.probe_failed') };
+}
+
+function _settingsRenderCcswitchStatus() {
+  const statusEl = document.getElementById('settings-ccswitch-status');
+  if (!statusEl) return;
+  const status = _settingsState.ccswitchStatus || { ok: false, available: false };
+  if (status.ok) {
+    statusEl.className = 'settings-status ok';
+    statusEl.textContent = status.available === false
+      ? t('settings.ccswitch.not_available')
+      : t('settings.ccswitch.ready');
+  } else {
+    statusEl.className = 'settings-status error';
+    statusEl.textContent = status.error || t('settings.ccswitch.probe_failed');
+  }
+  const btn = document.getElementById('settings-ccswitch-preview-btn');
+  if (btn && !btn.dataset.bound) {
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', _settingsOpenCcswitchPreviewDialog);
+  }
+}
+
+function _settingsRenderCustomProviders() {
+  const container = document.getElementById('settings-custom-provider-list');
+  if (!container) return;
+  container.innerHTML = '';
+  const list = _settingsState.customProviders || [];
+  const addBtn = document.getElementById('settings-custom-provider-add-btn');
+  if (addBtn && !addBtn.dataset.bound) {
+    addBtn.dataset.bound = '1';
+    addBtn.addEventListener('click', () => _settingsOpenCustomProviderModal());
+  }
+  if (!list.length) {
+    container.innerHTML = `<div class="settings-empty">${escapeHtml(t('settings.custom_providers.empty'))}</div>`;
+    return;
+  }
+  list.forEach((provider) => {
+    const row = document.createElement('div');
+    row.className = 'entry-row settings-custom-provider-row';
+    row.dataset.providerId = provider.id;
+
+    const main = document.createElement('div');
+    main.className = 'entry-main';
+    const primary = document.createElement('div');
+    primary.className = 'entry-primary';
+    primary.innerHTML = `
+      <span class="entry-provider">${escapeHtml(provider.name || provider.id)}</span>
+      <span class="entry-sep">·</span>
+      <span class="entry-model">${escapeHtml(_settingsCustomProviderProtocolLabel(provider.protocol))}</span>
+      ${provider.apiKeyMasked ? `<span class="account-mask">${escapeHtml(provider.apiKeyMasked)}</span>` : ''}
+    `;
+    main.appendChild(primary);
+    row.textContent = provider.name || provider.id;
+
+    const meta = document.createElement('div');
+    meta.className = 'entry-meta';
+    const metaBits = [provider.baseUrl, Array.isArray(provider.models) ? `${provider.models.length}` : '', provider.source ? t(`settings.custom_providers.source_${provider.source}`) : ''].filter(Boolean);
+    meta.textContent = metaBits.join(' · ');
+    main.appendChild(meta);
+    row.appendChild(main);
+
+    const actions = document.createElement('div');
+    actions.className = 'entry-actions';
+    const editBtn = document.createElement('button');
+    editBtn.className = 'btn btn-sm';
+    editBtn.textContent = t('settings.edit');
+    editBtn.addEventListener('click', () => _settingsOpenCustomProviderModal(provider));
+    actions.appendChild(editBtn);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn btn-sm btn-danger';
+    delBtn.textContent = t('settings.delete');
+    delBtn.addEventListener('click', async () => {
+      const ok = typeof uiConfirm === 'function' ? await uiConfirm(t('settings.custom_providers.confirm_delete', { name: provider.name || provider.id })) : true;
+      if (!ok) return;
+      _settingsSetStatus('settings-custom-providers-status', 'busy', t('settings.custom_providers.deleting'));
+      const res = await window.orkas.invoke('customProviders.remove', { id: provider.id });
+      if (!res || !res.ok) {
+        _settingsSetStatus('settings-custom-providers-status', 'error', (res && res.error) || t('settings.custom_providers.delete_failed'));
+        return;
+      }
+      await _settingsRefreshCustomProviders();
+      _settingsRenderCustomProviders();
+      _settingsSetStatus('settings-custom-providers-status', 'ok', t('settings.custom_providers.delete_ok'));
+    });
+    actions.appendChild(delBtn);
+    row.appendChild(actions);
+    container.appendChild(row);
+  });
+}
+
+function _settingsOpenCustomProviderModal(provider = null) {
+  const overlay = document.getElementById('settings-custom-provider-modal');
+  const title = document.getElementById('settings-custom-provider-modal-title');
+  const body = document.getElementById('settings-custom-provider-modal-body');
+  const actions = document.getElementById('settings-custom-provider-modal-actions');
+  const status = document.getElementById('settings-custom-provider-modal-status');
+  if (!overlay || !title || !body || !actions || !status) return;
+  const editing = !!provider?.id;
+  title.textContent = editing ? t('settings.custom_providers.edit_title') : t('settings.custom_providers.add_title');
+  body.innerHTML = `
+    <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.name'))}</label><input id="settings-custom-provider-name" type="text" class="form-input" autocomplete="off" spellcheck="false" /></div>
+    <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.protocol'))}</label><select id="settings-custom-provider-protocol" class="form-input"><option value="anthropic">${escapeHtml(t('settings.custom_providers.protocol_anthropic'))}</option><option value="openai">${escapeHtml(t('settings.custom_providers.protocol_openai'))}</option><option value="gemini">${escapeHtml(t('settings.custom_providers.protocol_gemini'))}</option></select></div>
+    <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.base_url'))}</label><input id="settings-custom-provider-base-url" type="text" class="form-input" autocomplete="off" spellcheck="false" placeholder="https://api.example.com/v1" /></div>
+    <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.api_key'))}</label><input id="settings-custom-provider-api-key" type="text" class="form-input" autocomplete="off" spellcheck="false" placeholder="sk-…" /></div>
+    <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.models'))}</label><input id="settings-custom-provider-models" type="text" class="form-input" autocomplete="off" spellcheck="false" placeholder="gpt-4.1-mini, claude-3-5-sonnet" /></div>
+  `;
+  const nameInput = body.querySelector('#settings-custom-provider-name') || document.getElementById('settings-custom-provider-name');
+  const protocolInput = body.querySelector('#settings-custom-provider-protocol') || document.getElementById('settings-custom-provider-protocol');
+  const baseUrlInput = body.querySelector('#settings-custom-provider-base-url') || document.getElementById('settings-custom-provider-base-url');
+  const apiKeyInput = body.querySelector('#settings-custom-provider-api-key') || document.getElementById('settings-custom-provider-api-key');
+  const modelsInput = body.querySelector('#settings-custom-provider-models') || document.getElementById('settings-custom-provider-models');
+  if (nameInput) nameInput.value = provider?.name || '';
+  if (protocolInput) protocolInput.value = provider?.protocol || 'anthropic';
+  if (baseUrlInput) baseUrlInput.value = provider?.baseUrl || '';
+  if (apiKeyInput) apiKeyInput.value = '';
+  if (apiKeyInput && provider?.apiKeyMasked) apiKeyInput.placeholder = t('settings.custom_providers.api_key_placeholder_masked');
+  if (modelsInput) modelsInput.value = Array.isArray(provider?.models) ? provider.models.join(', ') : '';
+  actions.innerHTML = '';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn';
+  cancelBtn.textContent = t('common.cancel');
+  cancelBtn.addEventListener('click', () => _settingsCloseModal(overlay));
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'btn btn-primary';
+  saveBtn.textContent = t('settings.save');
+  saveBtn.addEventListener('click', async () => {
+    const name = String(nameInput?.value || '').trim();
+    const protocol = String(protocolInput?.value || 'anthropic').trim();
+    const baseUrl = String(baseUrlInput?.value || '').trim();
+    const apiKey = String(apiKeyInput?.value || '').trim();
+    const models = String(modelsInput?.value || '').split(/[,\n]/).map((value) => value.trim()).filter(Boolean);
+    if (!baseUrl) { status.textContent = t('settings.custom_providers.error_base_url'); status.className = 'form-msg error'; return; }
+    const payload = { name, protocol, baseUrl, models, source: provider?.source || 'manual' };
+    if (apiKey) payload.apiKey = apiKey;
+    if (provider?.id) payload.id = provider.id;
+    status.textContent = t('settings.custom_providers.saving');
+    status.className = 'form-msg';
+    saveBtn.disabled = true;
+    const channel = provider?.id ? 'customProviders.update' : 'customProviders.add';
+    const res = await window.orkas.invoke(channel, payload);
+    saveBtn.disabled = false;
+    if (!res || !res.ok) {
+      status.textContent = (res && res.error) || t('settings.custom_providers.save_failed');
+      status.className = 'form-msg error';
+      return;
+    }
+    await _settingsRefreshCustomProviders();
+    _settingsRenderCustomProviders();
+    _settingsCloseModal(overlay);
+    _settingsSetStatus('settings-custom-providers-status', 'ok', editing ? t('settings.custom_providers.update_ok') : t('settings.custom_providers.add_ok'));
+  });
+  actions.appendChild(cancelBtn);
+  actions.appendChild(saveBtn);
+  _settingsOpenModal(overlay);
+}
+
+async function _settingsOpenCcswitchPreviewDialog() {
+  const overlay = document.getElementById('settings-ccswitch-preview-modal');
+  const title = document.getElementById('settings-ccswitch-preview-modal-title');
+  const body = document.getElementById('settings-ccswitch-preview-modal-body');
+  const actions = document.getElementById('settings-ccswitch-preview-modal-actions');
+  const status = document.getElementById('settings-ccswitch-preview-modal-status');
+  if (!overlay || !title || !body || !actions || !status) return;
+  title.textContent = t('settings.ccswitch.preview_title');
+  status.textContent = t('settings.ccswitch.loading');
+  status.className = 'form-msg';
+  const res = await window.orkas.invoke('customProviders.ccswitch.preview');
+  _settingsState.ccswitchPreviewRows = (res && res.ok && Array.isArray(res.rows)) ? res.rows : (res && res.ok && Array.isArray(res.items) ? res.items : []);
+  _settingsState.ccswitchPreviewSelectedIds = _settingsState.ccswitchPreviewRows.filter((row) => row.selected !== false).map((row) => row.externalId);
+  _settingsRenderCcswitchPreviewDialog();
+  _settingsOpenModal(overlay);
+}
+
+function _settingsRenderCcswitchPreviewDialog() {
+  const overlay = document.getElementById('settings-ccswitch-preview-modal');
+  const body = document.getElementById('settings-ccswitch-preview-modal-body');
+  const actions = document.getElementById('settings-ccswitch-preview-modal-actions');
+  const status = document.getElementById('settings-ccswitch-preview-modal-status');
+  if (!overlay || !body || !actions || !status) return;
+  body.innerHTML = '';
+  const rows = _settingsState.ccswitchPreviewRows || [];
+  if (!rows.length) {
+    body.innerHTML = `<div class="settings-empty">${escapeHtml(t('settings.ccswitch.preview_empty'))}</div>`;
+  } else {
+    rows.forEach((row) => {
+      const item = document.createElement('label');
+      item.className = 'settings-ccswitch-row';
+      item.textContent = `${row.name || row.externalId} ${(row.missingKey || row.needsKey) ? t('settings.ccswitch.missing_key') : ''}`.trim();
+      item.innerHTML = `
+        <input type="checkbox" ${_settingsState.ccswitchPreviewSelectedIds.includes(row.externalId) ? 'checked' : ''} />
+        <span class="settings-ccswitch-row-main">${escapeHtml(row.name || row.externalId)}</span>
+        <span class="settings-ccswitch-row-meta">${escapeHtml(_settingsCustomProviderProtocolLabel(row.protocol))}${(row.missingKey || row.needsKey) ? ` · ${escapeHtml(t('settings.ccswitch.missing_key'))}` : ''}${row.maskedKey || row.apiKeyMasked ? ` · ${escapeHtml(row.maskedKey || row.apiKeyMasked)}` : ''}</span>
+      `;
+      const cb = item.querySelector('input');
+      cb?.addEventListener('change', () => {
+        if (cb.checked) {
+          if (!_settingsState.ccswitchPreviewSelectedIds.includes(row.externalId)) _settingsState.ccswitchPreviewSelectedIds.push(row.externalId);
+        } else {
+          _settingsState.ccswitchPreviewSelectedIds = _settingsState.ccswitchPreviewSelectedIds.filter((id) => id !== row.externalId);
+        }
+      });
+      body.appendChild(item);
+    });
+  }
+  actions.innerHTML = '';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn';
+  cancelBtn.textContent = t('common.close');
+  cancelBtn.addEventListener('click', () => _settingsCloseModal(overlay));
+  const syncBtn = document.createElement('button');
+  syncBtn.className = 'btn btn-primary';
+  syncBtn.id = 'settings-ccswitch-preview-sync-btn';
+  syncBtn.textContent = t('settings.ccswitch.sync');
+  syncBtn.addEventListener('click', async () => {
+    status.textContent = t('settings.ccswitch.syncing');
+    status.className = 'form-msg';
+    const res = await window.orkas.invoke('customProviders.ccswitch.sync', { externalIds: _settingsState.ccswitchPreviewSelectedIds });
+    if (!res || !res.ok) {
+      status.textContent = (res && res.error) || t('settings.ccswitch.sync_failed');
+      status.className = 'form-msg error';
+      return;
+    }
+    await _settingsRefreshCustomProviders();
+    await _settingsRefreshCcswitchStatus();
+    _settingsRenderCustomProviders();
+    _settingsRenderCcswitchStatus();
+    _settingsCloseModal(overlay);
+    _settingsSetStatus('settings-ccswitch-status', 'ok', t('settings.ccswitch.sync_ok'));
+  });
+  actions.appendChild(cancelBtn);
+  actions.appendChild(syncBtn);
+  if (overlay.classList.contains('open')) overlay.classList.add('open');
 }
 
 function _settingsSyncCustomModelFields(providerId) {
@@ -1342,8 +1604,7 @@ async function _settingsRemoveEntry(entry) {
 
 async function _settingsReload() {
   await Promise.all([_settingsRefreshProviders(), _settingsRefreshEntries(), _settingsRefreshCommanderBackend(), _settingsRefreshAuthProfilesStatus()]);
-  _settingsRenderPicker();
-  _settingsRenderEntries();
+  if (window.refreshModelAuthorizationSettings) window.refreshModelAuthorizationSettings();
   _settingsRenderCommanderBackend();
   _settingsRenderAuthProfilesRecovery();
   // The priority list just changed — re-check the model-guard flag so the

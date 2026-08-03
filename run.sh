@@ -38,6 +38,16 @@ EOF
 fi
 
 echo "[Mate Agent] Starting Mate Agent (global prod)"
+if command -v git >/dev/null 2>&1; then
+  export ORKAS_BUILD_COMMIT="${ORKAS_BUILD_COMMIT:-$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || true)}"
+  if [ -z "${ORKAS_BUILD_DIRTY:-}" ]; then
+    if [ -n "$(git -C "$APP_DIR" status --porcelain 2>/dev/null)" ]; then export ORKAS_BUILD_DIRTY=1; else export ORKAS_BUILD_DIRTY=0; fi
+  fi
+fi
+export ORKAS_BUILD_CHANNEL="${ORKAS_BUILD_CHANNEL:-dev}"
+export ORKAS_BUILD_TIME="${ORKAS_BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+echo "[Mate Agent] Build identity: ${ORKAS_BUILD_CHANNEL} ${ORKAS_BUILD_COMMIT:-unknown} dirty=${ORKAS_BUILD_DIRTY:-unknown}"
+
 
 node "$APP_DIR/scripts/ensure-deps.cjs"
 node "$APP_DIR/scripts/ensure-dev-dependencies.cjs"
