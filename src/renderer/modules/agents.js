@@ -3032,6 +3032,8 @@ let _pickerLibraryRenderSeq = 0;
 // project-scoped variant, per §3.7's "only the hidden groups sub-dir" bound).
 let _pickerOntologyGroups = null;
 let _pickerOntologyLoading = null;
+// 本体 tab：被用户收起的模板（template_id 集合）—— 模板标题行可折叠子组
+let _pickerOntologyCollapsed = new Set();
 let _pickerOntologyRenderSeq = 0;
 let _agentPickerTab = 'agents';
 let _agentPickerOpenSeq = 0;
@@ -3661,13 +3663,55 @@ async function _loadOntologyPickerGroups() {
 
 function _ontologyPickerRowHtml(group, checked) {
   return `
-    <div class="skill-picker-item is-checkable${checked ? ' is-checked' : ''}" data-kind="ontology_group"
+    <div class="skill-picker-item is-checkable${checked ? ' is-checked' : ''}${group.template_id ? ' is-template-child' : ''}" data-kind="ontology_group"
          data-id="${escapeHtml(group.group_id)}" data-name="${escapeHtml(group.title || '')}">
       <span class="skill-picker-item-checkbox" aria-hidden="true"></span>
       <div class="skill-picker-item-meta">
         <div class="skill-picker-item-name">${escapeHtml(group.title || '')}</div>
       </div>
     </div>`;
+}
+
+// 本体 tab 层级渲染：非模板组平铺；模板预置组收纳在模板标题行（可折叠）下缩进。
+// 标题行不带 data-id —— 不参与键盘导航（_setAgentPickerActive 只遍历 [data-id]）
+// 也不参与点击选中（_bindAgentPickerListItems 只绑 [data-id]），多选逻辑零改动。
+// 标题行点击折叠/展开子组（data-ontology-template-toggle 单独绑定）。
+function _ontologyPickerSectionsHtml(groups, selectedIds) {
+  const plain = [];
+  const byTemplate = new Map();
+  for (const g of groups) {
+    if (!g.template_id) { plain.push(g); continue; }
+    const key = g.template_id;
+    if (!byTemplate.has(key)) byTemplate.set(key, { id: key, name: g.template_name || key, groups: [] });
+    byTemplate.get(key).groups.push(g);
+  }
+  const rows = [];
+  for (const g of plain) {
+    rows.push(_ontologyPickerRowHtml(g, selectedIds.has(g.group_id)));
+  }
+  for (const t of byTemplate.values()) {
+    const collapsed = _pickerOntologyCollapsed.has(t.id);
+    rows.push(`<button type="button" class="skill-picker-template-header" data-ontology-template-toggle="${escapeHtml(t.id)}">
+      <span class="skill-picker-template-caret">${collapsed ? '▶' : '▼'}</span>${escapeHtml(t.name)}</button>`);
+    if (!collapsed) {
+      rows.push(`<div class="skill-picker-template-groups">${t.groups.map((g) => _ontologyPickerRowHtml(g, selectedIds.has(g.group_id))).join('')}</div>`);
+    }
+  }
+  return rows.join('');
+}
+
+function _bindAgentPickerTemplateToggles(listEl) {
+  for (const btn of listEl.querySelectorAll('[data-ontology-template-toggle]')) {
+    btn.addEventListener('click', () => {
+      const tid = btn.dataset.ontologyTemplateToggle;
+      if (!tid) return;
+      if (_pickerOntologyCollapsed.has(tid)) _pickerOntologyCollapsed.delete(tid);
+      else _pickerOntologyCollapsed.add(tid);
+      const picker = document.getElementById('agent-picker');
+      const search = document.getElementById('agent-picker-search');
+      _renderOntologyPickerList(listEl, search ? search.value : '', picker ? picker.dataset.anchorId || '' : '');
+    });
+  }
 }
 
 function _renderOntologyPickerList(listEl, filterText, anchorId) {
@@ -3697,10 +3741,17 @@ function _renderOntologyPickerList(listEl, filterText, anchorId) {
   }
 
   const allGroups = _pickerOntologyGroups || [];
+  // 搜索匹配组标题/模板名：模板名命中时保留该模板全部预置组
   const filtered = q
-    ? allGroups
-        .filter((g) => _matchPickerItem(q, g.title, '', g.group_id))
-        .sort((a, b) => _pickerMatchScore(q, a.title || a.group_id) - _pickerMatchScore(q, b.title || b.group_id))
+    ? (() => {
+        const templateIds = new Set(
+          allGroups.filter((g) => g.template_name && _matchPickerItem(q, g.template_name, '', ''))
+            .map((g) => g.template_id),
+        );
+        return allGroups
+          .filter((g) => _matchPickerItem(q, g.title, '', g.group_id) || (g.template_id && templateIds.has(g.template_id)))
+          .sort((a, b) => _pickerMatchScore(q, a.title || a.group_id) - _pickerMatchScore(q, b.title || b.group_id));
+      })()
     : allGroups;
 
   if (!filtered.length) {
@@ -3714,7 +3765,8 @@ function _renderOntologyPickerList(listEl, filterText, anchorId) {
     (typeof getChatUseOntologyGroups === 'function' ? getChatUseOntologyGroups(target) : [])
       .map((sel) => sel.id),
   );
-  listEl.innerHTML = filtered.map((g) => _ontologyPickerRowHtml(g, selectedIds.has(g.group_id))).join('');
+  listEl.innerHTML = _ontologyPickerSectionsHtml(filtered, selectedIds);
+  _bindAgentPickerTemplateToggles(listEl);
   _bindAgentPickerListItems(listEl, anchorId);
 }
 

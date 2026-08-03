@@ -22,17 +22,20 @@ import * as path from 'node:path';
 import { userLocalRoot } from '../paths';
 import { writeTextAtomicSync, safeId, nowIso, readJsonSync } from '../storage';
 import { addEntry as addMemoryEntry } from './memory';
-import { appendToGroup } from './personal_ontology_groups';
+import { appendToGroup, appendFieldValue, listGroupFields, listGroups, listRoleTemplateStatus } from './personal_ontology_groups';
+import { routeCandidateToField, type RouteDecision } from './personal_ontology_router';
 import { createLogger } from '../logger';
 
 const log = createLogger('personal-ontology-candidates');
 
 /** "选择去向"控件：确认一条候选时可以同时/分别写入全局记忆和任意数量的记忆
  *  分组，两者不互斥。`toGlobalMemory` 缺省为 true（向后兼容旧的单一去向行为）；
- *  `toGroupIds` 缺省为空数组（不写任何分组）。 */
+ *  `toGroupIds` 缺省为空数组（不写任何分组）。`targetField`（可选）：建议字段
+ *  名（来自候选的 `target_field` / 用户在下拉里改选）——有坑填坑、没坑进流水区。 */
 export interface ConfirmDestinations {
   toGlobalMemory?: boolean;
   toGroupIds?: string[];
+  targetField?: string;
 }
 
 /** Per-destination outcome, so the UI can tell "全局记忆写入失败" apart from
@@ -46,6 +49,9 @@ export interface ConfirmCandidateResult {
   error?: string;
   globalMemory?: { ok: boolean; error?: string };
   groups?: Array<{ groupId: string; ok: boolean; error?: string }>;
+  /** 阶段 B：每条填坑尝试（appendFieldValue）的结果；`ok:false` = 该组无此
+   *  字段，已回退流水区（流水区结果在 `groups` 里）。无 targetField 时缺省。 */
+  fieldWrites?: Array<{ groupId: string; fieldName: string; ok: boolean; error?: string }>;
 }
 
 /** 候选类型。`preference`（偏好）是一等公民，不再藏在 relation 里。 */
@@ -70,6 +76,9 @@ export interface CandidateUpdate {
   registry_like_path?: string;
   /** 可选：相对当前记忆的差异说明。 */
   diff_summary?: string;
+  /** 阶段 B（可选）：建议字段名（技能预判，`- 建议字段:` 行）。确认时 App 预选，
+   *  用户可在下拉里改；目标分组无此字段时回退流水区。 */
+  target_field?: string;
   source_memory_refs: string[];
 }
 
@@ -118,6 +127,7 @@ const CANDIDATE_FIELD_LABELS: Record<string, string> = {
   '记忆文本': 'memory_text',
   '路径': 'registry_like_path',
   '差异': 'diff_summary',
+  '建议字段': 'target_field',
   '来源': 'source_memory_refs',
 };
 
@@ -162,6 +172,7 @@ export function parseCandidatesMarkdown(text: string): CandidateUpdate[] {
       memory_text: raw.memory_text || raw.summary || '',
       ...(raw.registry_like_path ? { registry_like_path: raw.registry_like_path } : {}),
       ...(raw.diff_summary ? { diff_summary: raw.diff_summary } : {}),
+      ...(raw.target_field ? { target_field: raw.target_field } : {}),
       source_memory_refs: raw.source_memory_refs
         ? raw.source_memory_refs.split(',').map(s => s.trim()).filter(Boolean)
         : [],
@@ -183,6 +194,7 @@ export function serializeCandidatesMarkdown(candidates: CandidateUpdate[]): stri
     if (c.memory_text) lines.push(`- 记忆文本: ${c.memory_text}`);
     if (c.registry_like_path) lines.push(`- 路径: ${c.registry_like_path}`);
     if (c.diff_summary) lines.push(`- 差异: ${c.diff_summary}`);
+    if (c.target_field) lines.push(`- 建议字段: ${c.target_field}`);
     if (c.source_memory_refs?.length) lines.push(`- 来源: ${c.source_memory_refs.join(', ')}`);
     return lines.join('\n');
   });
@@ -326,6 +338,7 @@ async function writeCandidateToDestinations(
   uid: string,
   candidate: CandidateUpdate,
   dest: ConfirmDestinations,
+  source = '候选',
 ): Promise<ConfirmCandidateResult> {
   const text = (candidate.memory_text || candidate.summary || '').trim();
   if (!text) return { ok: false, error: 'candidate has no memory text' };
@@ -345,9 +358,37 @@ async function writeCandidateToDestinations(
   }
 
   if (groupIds.length) {
-    result.groups = [];
     for (const groupId of groupIds) {
+      // 阶段 B 路由：有 targetField → 先判该组有没有这个“坑”（模板声明或实例
+      // 字段，见 listGroupFields），有 → appendFieldValue（多值追加+[候选]来源）；
+      // 没有 → 回退流水区 appendToGroup。无 targetField → 直接流水区（旧行为）。
+      // 裁决说明：任务书 §3.3 的“返回 field not found 则回退”通过 listGroupFields
+      // 预检查实现，避免与 §3.2“appendFieldValue 字段小节不存在则创建”冲突。
+      if (dest.targetField) {
+        if (!result.fieldWrites) result.fieldWrites = [];
+        let fieldExists = false;
+        try {
+          const fieldsRes = await listGroupFields(uid, groupId);
+          fieldExists = !!fieldsRes.fields?.some((f) => f.name === dest.targetField);
+        } catch {
+          fieldExists = false;
+        }
+        if (fieldExists) {
+          const res = await appendFieldValue(uid, groupId, dest.targetField, text, source);
+          result.fieldWrites.push({
+            groupId,
+            fieldName: dest.targetField as string,
+            ok: res.ok,
+            ...(res.error ? { error: res.error } : {}),
+          });
+          if (res.ok) anySucceeded = true;
+          else log.warn('candidate field write failed', { uid, candidateId: candidate.candidate_id, groupId, error: res.error });
+          continue; // 已尝试填坑，不再写流水区
+        }
+        result.fieldWrites.push({ groupId, fieldName: dest.targetField, ok: false, error: 'field not found' });
+      }
       const res = await appendToGroup(uid, groupId, text);
+      if (!result.groups) result.groups = [];
       result.groups.push({ groupId, ok: res.ok, ...(res.error ? { error: res.error } : {}) });
       if (res.ok) anySucceeded = true;
       else log.warn('candidate group write failed', { uid, candidateId: candidate.candidate_id, groupId, error: res.error });
@@ -361,14 +402,57 @@ async function writeCandidateToDestinations(
   return result;
 }
 
+export interface ConfirmCandidateOptions {
+  /** 确认时经一轮 LLM 识别路由：没显式指定字段的候选，由 LLM 判断填哪个模板组
+   *  字段（来源标「智能」）；拿不准/失败回退流水区。默认关闭（老行为）。 */
+  routeWithLlm?: boolean;
+}
+
+/**
+ * LLM 路由解析：routeWithLlm 且候选未显式指定 targetField 时，调 LLM 判断
+ * 填哪个模板组字段。用户已指定字段 → 不覆盖（用户意图优先）。
+ * 返回生效的 dest + 来源标记（'智能' 或 '候选'）。
+ */
+async function resolveLlmRoute(
+  uid: string,
+  candidate: CandidateUpdate,
+  dest: ConfirmDestinations,
+  opts: ConfirmCandidateOptions,
+): Promise<{ effectiveDest: ConfirmDestinations; source: string }> {
+  if (!opts.routeWithLlm || dest.targetField) return { effectiveDest: dest, source: '候选' };
+  const text = (candidate.memory_text || candidate.summary || '').trim();
+  if (!text) return { effectiveDest: dest, source: '候选' };
+
+  const templates = await listRoleTemplateStatus(uid);
+  const decision: RouteDecision = await routeCandidateToField(uid, text, templates);
+  if (decision.action !== 'field' || !decision.group_title || !decision.field_name) {
+    return { effectiveDest: dest, source: '候选' }; // flow → 维持原 dest（流水区）
+  }
+
+  const dest2: ConfirmDestinations = { ...dest, toGroupIds: dest.toGroupIds ? [...dest.toGroupIds] : [] };
+  // 优先用户已选组（title 匹配）；用户没选组 → 用已安装模板组
+  let targetGroup = (await listGroups(uid)).find(
+    (g) => dest2.toGroupIds.includes(g.group_id) && g.title === decision.group_title,
+  );
+  if (!targetGroup && !dest2.toGroupIds.length) {
+    targetGroup = (await listGroups(uid)).find((g) => g.template_id && g.title === decision.group_title);
+    if (targetGroup) dest2.toGroupIds.push(targetGroup.group_id);
+  }
+  if (!targetGroup) return { effectiveDest: dest, source: '候选' };
+  dest2.targetField = decision.field_name;
+  return { effectiveDest: dest2, source: '智能' };
+}
+
 /**
  * 确认一个候选：写入所有请求的去向（默认只写全局记忆，向后兼容旧行为），
  * 至少一个去向成功即从候选池移除；全部失败则保留在池里，不会静默丢失。
+ * `opts.routeWithLlm` 开启时先做一轮 LLM 对号入座路由（见 resolveLlmRoute）。
  */
 export async function confirmCandidate(
   uid: string,
   candidateId: string,
   dest: ConfirmDestinations = {},
+  opts: ConfirmCandidateOptions = {},
 ): Promise<ConfirmCandidateResult> {
   if (!safeId(uid) || !candidateId) throw new Error('invalid uid or candidateId');
 
@@ -380,7 +464,8 @@ export async function confirmCandidate(
   }
 
   const candidate = candidates[idx];
-  const result = await writeCandidateToDestinations(uid, candidate, dest);
+  const { effectiveDest, source } = await resolveLlmRoute(uid, candidate, dest, opts);
+  const result = await writeCandidateToDestinations(uid, candidate, effectiveDest, source);
   if (!result.ok) return result;
 
   candidates.splice(idx, 1);
@@ -389,6 +474,8 @@ export async function confirmCandidate(
     uid, candidateId,
     globalMemory: result.globalMemory?.ok,
     groupCount: result.groups?.length || 0,
+    fieldCount: result.fieldWrites?.length || 0,
+    source,
   });
   return result;
 }
@@ -412,19 +499,36 @@ export async function rejectCandidate(uid: string, candidateId: string, reason?:
   return { ok: true };
 }
 
+/** 批量确认的去向总览：`toFields` = 各字段名实际填坑成功条数，`toEntries` =
+ *  实际进入流水区的条数（每条候选每个组的流水区写入计一次）。供确认前总览提示。 */
+export interface ConfirmSummary {
+  toFields: Array<{ fieldName: string; count: number }>;
+  toEntries: number;
+}
+
 /**
  * 批量确认。逐条尝试写入所有请求的去向；某条候选的某个去向失败不影响其余候选
  * 或其余去向 —— 一条候选只要至少一个去向成功就算确认，全部失败才保留在池里。
  * `dest` 对这一批里的每一条候选生效（跟审阅面板"批量操作走同一份选择去向"的
  * 用法一致；如需要逐条不同去向，调用方应改用单条 `confirmCandidate`）。
+ * 返回体带 `summary`（实际路由总览：填坑 vs 流水区）。
  */
 export async function confirmCandidates(
   uid: string,
   candidateIds: string[],
   dest: ConfirmDestinations = {},
-): Promise<{ ok: boolean; confirmedCount: number; failedIds: string[]; results: Record<string, ConfirmCandidateResult> }> {
+  opts: ConfirmCandidateOptions = {},
+): Promise<{
+  ok: boolean;
+  confirmedCount: number;
+  failedIds: string[];
+  results: Record<string, ConfirmCandidateResult>;
+  summary: ConfirmSummary;
+}> {
   if (!safeId(uid)) throw new Error('invalid uid');
-  if (!Array.isArray(candidateIds) || !candidateIds.length) return { ok: true, confirmedCount: 0, failedIds: [], results: {} };
+  if (!Array.isArray(candidateIds) || !candidateIds.length) {
+    return { ok: true, confirmedCount: 0, failedIds: [], results: {}, summary: { toFields: [], toEntries: 0 } };
+  }
 
   const candidates = readCandidates(uid);
   const idSet = new Set(candidateIds);
@@ -435,7 +539,8 @@ export async function confirmCandidates(
 
   for (const c of candidates) {
     if (!idSet.has(c.candidate_id)) { remaining.push(c); continue; }
-    const res = await writeCandidateToDestinations(uid, c, dest);
+    const { effectiveDest, source } = await resolveLlmRoute(uid, c, dest, opts);
+    const res = await writeCandidateToDestinations(uid, c, effectiveDest, source);
     results[c.candidate_id] = res;
     if (res.ok) confirmedCount++;
     else { remaining.push(c); failedIds.push(c.candidate_id); }
@@ -443,7 +548,27 @@ export async function confirmCandidates(
 
   writeCandidates(uid, remaining);
   log.info('candidates batch confirmed', { uid, confirmedCount, failed: failedIds.length });
-  return { ok: true, confirmedCount, failedIds, results };
+
+  // 按每条候选各自的实际路由结果统计总览（填坑 ok 的按字段名聚合；流水区计数）
+  const fieldCounts = new Map<string, number>();
+  let toEntries = 0;
+  for (const res of Object.values(results)) {
+    if (!res.ok) continue;
+    for (const fw of res.fieldWrites || []) {
+      if (fw.ok) fieldCounts.set(fw.fieldName, (fieldCounts.get(fw.fieldName) || 0) + 1);
+    }
+    for (const g of res.groups || []) {
+      if (!g.ok) continue;
+      const hadFieldWrite = (res.fieldWrites || []).some((fw) => fw.ok && fw.groupId === g.groupId);
+      if (!hadFieldWrite) toEntries++;
+    }
+  }
+  const summary: ConfirmSummary = {
+    toFields: Array.from(fieldCounts.entries()).map(([fieldName, count]) => ({ fieldName, count })),
+    toEntries,
+  };
+
+  return { ok: true, confirmedCount, failedIds, results, summary };
 }
 
 /**

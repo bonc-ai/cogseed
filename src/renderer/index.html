@@ -952,14 +952,19 @@
 
       <!-- Personal Ontology Candidates -->
       <section class="panel" id="panel-personal-ontology">
-        <div class="personal-onto-view">
-          <div class="personal-onto-header">
-            <h2 class="personal-onto-title" data-i18n="personalOntology.title">个人本体候选</h2>
-            <div class="personal-onto-actions" id="personal-onto-actions"></div>
+        <div class="personal-onto-layout">
+          <!-- 左栏：文件列表（候选 / 角色模板 / 记忆分组）资料库风格 -->
+          <div class="personal-onto-sidebar" id="personal-onto-sidebar">
+            <div class="personal-onto-sidebar-header">
+              <span class="personal-onto-sidebar-title" data-i18n="personalOntology.title">个人本体</span>
+              <span class="personal-onto-sidebar-actions" id="personal-onto-sidebar-actions"></span>
+            </div>
+            <div class="personal-onto-nav" id="personal-onto-nav"></div>
           </div>
-          <div class="personal-onto-scroll">
-            <div class="personal-onto-stats" id="personal-onto-stats"></div>
-            <div class="personal-onto-body" id="personal-onto-body"></div>
+          <!-- 右栏：内容（候选详情 / 分组 md 内容） -->
+          <div class="personal-onto-main">
+            <div class="personal-onto-main-header" id="personal-onto-main-header"></div>
+            <div class="personal-onto-main-body" id="personal-onto-main-body"></div>
           </div>
         </div>
         <!-- Reject reason modal -->

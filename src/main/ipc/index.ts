@@ -28,6 +28,7 @@ import * as p3394 from '../features/p3394';
 import * as evolution from '../features/evolution';
 import * as personalOntologyCandidates from '../features/personal_ontology_candidates';
 import * as personalOntologyGroups from '../features/personal_ontology_groups';
+import { getRoleTemplate } from '../features/role_templates';
 import type { GroupEvent } from '../features/group_chat/bus';
 import * as agents from '../features/agents';
 import * as autoTasks from '../features/auto_tasks';
@@ -1998,23 +1999,25 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'personalOntology.candidates.list': async (_payload, ctx) => {
     return personalOntologyCandidates.listCandidates(ctx.userId);
   },
-  'personalOntology.candidates.confirm': async ({ candidateId, toGlobalMemory, toGroupIds }, ctx) => {
+  'personalOntology.candidates.confirm': async ({ candidateId, toGlobalMemory, toGroupIds, targetField, routeWithLlm }, ctx) => {
     if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
-    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[] } = {};
+    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string } = {};
     if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
     if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
-    return personalOntologyCandidates.confirmCandidate(ctx.userId, candidateId, dest);
+    if (typeof targetField === 'string' && targetField.trim()) dest.targetField = targetField.trim();
+    return personalOntologyCandidates.confirmCandidate(ctx.userId, candidateId, dest, { routeWithLlm: routeWithLlm === true });
   },
   'personalOntology.candidates.reject': async ({ candidateId, reason }, ctx) => {
     if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
     return personalOntologyCandidates.rejectCandidate(ctx.userId, candidateId, reason);
   },
-  'personalOntology.candidates.confirmBatch': async ({ candidateIds, toGlobalMemory, toGroupIds }, ctx) => {
+  'personalOntology.candidates.confirmBatch': async ({ candidateIds, toGlobalMemory, toGroupIds, targetField, routeWithLlm }, ctx) => {
     if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
-    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[] } = {};
+    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string } = {};
     if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
     if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
-    return personalOntologyCandidates.confirmCandidates(ctx.userId, candidateIds, dest);
+    if (typeof targetField === 'string' && targetField.trim()) dest.targetField = targetField.trim();
+    return personalOntologyCandidates.confirmCandidates(ctx.userId, candidateIds, dest, { routeWithLlm: routeWithLlm === true });
   },
   'personalOntology.candidates.rejectBatch': async ({ candidateIds, reason }, ctx) => {
     if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
@@ -2023,7 +2026,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   // ── Personal Ontology Groups ("记忆分组") ──
   'personalOntology.groups.list': async (_payload, ctx) => {
-    return { groups: await personalOntologyGroups.listGroups(ctx.userId) };
+    const groups = await personalOntologyGroups.listGroups(ctx.userId);
+    // 运行时附加模板显示名（渲染层层级展示用，不落盘）
+    for (const g of groups) {
+      if (g.template_id) {
+        const template = getRoleTemplate(g.template_id);
+        if (template) g.template_name = template.name;
+      }
+    }
+    return { groups };
   },
   'personalOntology.groups.create': async ({ title }, ctx) => {
     if (!title || typeof title !== 'string') throw new Error('missing title');
@@ -2045,6 +2056,57 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'personalOntology.groups.write': async ({ groupId, content }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
     return personalOntologyGroups.writeGroupContent(ctx.userId, groupId, String(content ?? ''));
+  },
+
+  // ── Personal Ontology Role Templates (角色模板) ──
+  'personalOntology.templates.list': async (_payload, ctx) => {
+    return { templates: await personalOntologyGroups.listRoleTemplateStatus(ctx.userId) };
+  },
+  'personalOntology.templates.install': async ({ templateId }, ctx) => {
+    if (!templateId || typeof templateId !== 'string') throw new Error('missing templateId');
+    return personalOntologyGroups.installRoleTemplate(ctx.userId, templateId);
+  },
+
+  // ── Personal Ontology Group Fields (挖空表单字段) ──
+  'personalOntology.groups.fields.list': async ({ groupId }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    return personalOntologyGroups.listGroupFields(ctx.userId, groupId);
+  },
+  'personalOntology.groups.fields.append': async ({ groupId, fieldName, value, source }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
+    if (typeof value !== 'string') throw new Error('missing value');
+    return personalOntologyGroups.appendFieldValue(ctx.userId, groupId, fieldName, value, typeof source === 'string' ? source : '手动');
+  },
+  'personalOntology.groups.fields.setValue': async ({ groupId, fieldName, value, oldValue }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
+    if (typeof value !== 'string') throw new Error('missing value');
+    return personalOntologyGroups.setFieldValue(ctx.userId, groupId, fieldName, String(oldValue ?? ''), value);
+  },
+  'personalOntology.groups.fields.removeValue': async ({ groupId, fieldName, value }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
+    if (typeof value !== 'string') throw new Error('missing value');
+    return personalOntologyGroups.removeFieldValue(ctx.userId, groupId, fieldName, value);
+  },
+  'personalOntology.groups.fields.remove': async ({ groupId, fieldName }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
+    return personalOntologyGroups.removeField(ctx.userId, groupId, fieldName);
+  },
+
+  // ── Personal Ontology Group Entries (流水区) ──
+  'personalOntology.groups.entries.remove': async ({ groupId, entryText }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (typeof entryText !== 'string') throw new Error('missing entryText');
+    return personalOntologyGroups.removeEntry(ctx.userId, groupId, entryText);
+  },
+  'personalOntology.groups.entries.promote': async ({ groupId, entryText, fieldName }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (typeof entryText !== 'string') throw new Error('missing entryText');
+    if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
+    return personalOntologyGroups.promoteEntryToField(ctx.userId, groupId, entryText, fieldName);
   },
 
   'skills.list': async ({ force } = {}) => {
