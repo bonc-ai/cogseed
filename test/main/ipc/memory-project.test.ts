@@ -93,3 +93,48 @@ describe('ipc/memory project scope', () => {
       .rejects.toThrow(/invalid project id/);
   });
 });
+
+describe('ipc/memory cognition binding', () => {
+  const evidence = {
+    kind: 'manual' as const,
+    summary: '用户确认这条认知来自可核验证据。',
+    sourceLabel: '人工证据',
+  };
+
+  it('替换已确认的共享记忆后，在 IPC 返回前完成认知失效', async () => {
+    const cognition = await import('../../../src/main/features/cognition');
+    const candidate = await cognition.createCognitionAssetWithEvidence(UID, {
+      title: '替换联动',
+      summary: '被替换的已确认记忆。',
+      evidence,
+    });
+    await cognition.confirmCognitionAsset(UID, candidate.id);
+
+    expect(await call('memory.replace', {
+      target: 'shared',
+      oldText: candidate.summary,
+      content: '用户独立保存的新记忆。',
+    })).toMatchObject({ ok: true, entries: ['用户独立保存的新记忆。'] });
+
+    const invalidated = await cognition.getCognitionAsset(UID, candidate.id);
+    expect(invalidated.reviewState).toBe('invalidated');
+    expect(invalidated.invalidation?.reason).toBe('replaced');
+  });
+
+  it('删除已确认的共享记忆后，在 IPC 返回前完成认知失效', async () => {
+    const cognition = await import('../../../src/main/features/cognition');
+    const candidate = await cognition.createCognitionAssetWithEvidence(UID, {
+      title: '删除联动',
+      summary: '被删除的已确认记忆。',
+      evidence,
+    });
+    await cognition.confirmCognitionAsset(UID, candidate.id);
+
+    expect(await call('memory.remove', { target: 'shared', oldText: candidate.summary }))
+      .toMatchObject({ ok: true, entries: [] });
+
+    const invalidated = await cognition.getCognitionAsset(UID, candidate.id);
+    expect(invalidated.reviewState).toBe('invalidated');
+    expect(invalidated.invalidation?.reason).toBe('removed');
+  });
+});

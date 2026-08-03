@@ -12,9 +12,11 @@ are `main`, `cognition`, `expense`, and `integration`.
 
 Each source variant also gets its own Electron `userData`, application name,
 application ID, and single-instance lock. A worktree launcher is locked to its
-assigned identity: this worktree always uses `expense`. Run cognition or
-integration acceptance from their dedicated worktrees; do not override an
-identity from another feature directory.
+assigned identity: this worktree always uses `integration`. Run cognition or
+expense module development from their dedicated worktrees; neither `--variant`
+nor `ORKAS_RUNTIME_VARIANT` may override this integration worktree's identity.
+The launcher also rejects an inherited `ORKAS_WORKSPACE_ROOT`, because accepting
+a shared legacy override would defeat the data and Electron `userData` boundary.
 
 Source runs do not own the `mateagent://` or `orkas://` system protocols by
 default. Only the explicit `integration` variant registers connector callback

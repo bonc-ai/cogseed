@@ -33,7 +33,7 @@
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connectors">Connectors</span></button>
         <button class="sidebar-btn" id="contexts-btn"><span data-ui-icon="database" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.contexts">Library</span></button>
         <button class="sidebar-btn" id="evolution-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.evolution">进化控制台</span></button>
-        <button class="sidebar-btn" id="personal-ontology-btn"><span data-ui-icon="database" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.personal_ontology">个人本体</span></button>
+        <button class="sidebar-btn" id="personal-ontology-btn"><span data-ui-icon="sparkles" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.personal_ontology">我的认知</span></button>
       </div>
       <div class="sidebar-conversation-nav">
         <div class="sidebar-section sidebar-projects-section">
@@ -956,12 +956,24 @@
       <section class="panel" id="panel-personal-ontology">
         <div class="personal-onto-view">
           <div class="personal-onto-header">
-            <h2 class="personal-onto-title" data-i18n="personalOntology.title">个人本体候选</h2>
-            <div class="personal-onto-actions" id="personal-onto-actions"></div>
+            <div>
+              <h2 class="personal-onto-title" id="personal-ontology-workspace-title" data-i18n="personalOntology.workspace_title">我的认知</h2>
+              <p class="personal-onto-subtitle" data-i18n="personalOntology.workspace_subtitle">先审阅认知候选，再用证据和复用记录观察已沉淀认知的成长。</p>
+            </div>
+            <div class="personal-onto-workspace-tabs" role="tablist" aria-labelledby="personal-ontology-workspace-title">
+              <button type="button" class="personal-onto-workspace-tab active" id="personal-onto-candidates-tab" data-personal-onto-workspace-tab="candidates" role="tab" aria-controls="personal-onto-candidates-pane" aria-selected="true" data-i18n="personalOntology.tab_candidates">候选审阅</button>
+              <button type="button" class="personal-onto-workspace-tab" id="personal-onto-growth-tab" data-personal-onto-workspace-tab="growth" role="tab" aria-controls="personal-onto-growth-pane" aria-selected="false" data-i18n="personalOntology.tab_growth">证据成长</button>
+            </div>
           </div>
-          <div class="personal-onto-scroll">
-            <div class="personal-onto-stats" id="personal-onto-stats"></div>
-            <div class="personal-onto-body" id="personal-onto-body"></div>
+          <div class="personal-onto-workspace-pane" id="personal-onto-candidates-pane" data-personal-onto-workspace-pane="candidates" role="tabpanel" aria-labelledby="personal-onto-candidates-tab">
+            <div class="personal-onto-candidate-toolbar"><div class="personal-onto-actions" id="personal-onto-actions"></div></div>
+            <div class="personal-onto-scroll">
+              <div class="personal-onto-stats" id="personal-onto-stats"></div>
+              <div class="personal-onto-body" id="personal-onto-body"></div>
+            </div>
+          </div>
+          <div class="personal-onto-workspace-pane" id="personal-onto-growth-pane" data-personal-onto-workspace-pane="growth" role="tabpanel" aria-labelledby="personal-onto-growth-tab" hidden>
+            <div class="cognition-page-host" id="cognition-page"></div>
           </div>
         </div>
         <!-- Reject reason modal -->

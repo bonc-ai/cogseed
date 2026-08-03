@@ -1,5 +1,7 @@
 // 个人本体候选审阅面板 — classic script (window.renderPersonalOntology)
 (function () {
+  let _pocWorkspaceView = 'candidates';
+
   function escapeHtml(s) {
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -22,6 +24,45 @@
       if (typeof uiAlert === 'function') uiAlert(msg ? `${prefix}: ${msg}` : prefix);
       else console.warn('[personal-ontology]', prefix, msg);
     } catch (_) {}
+  }
+
+  function _renderWorkspaceView() {
+    document.querySelectorAll('[data-personal-onto-workspace-tab]').forEach((button) => {
+      const active = button.dataset.personalOntoWorkspaceTab === _pocWorkspaceView;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-selected', String(active));
+      button.tabIndex = active ? 0 : -1;
+    });
+    document.querySelectorAll('[data-personal-onto-workspace-pane]').forEach((pane) => {
+      pane.hidden = pane.dataset.personalOntoWorkspacePane !== _pocWorkspaceView;
+    });
+    if (_pocWorkspaceView === 'growth' && typeof window.renderCognitionPage === 'function') {
+      window.renderCognitionPage();
+    }
+  }
+
+  function _bindWorkspaceTabs() {
+    const buttons = Array.from(document.querySelectorAll('[data-personal-onto-workspace-tab]'));
+    buttons.forEach((button, index) => {
+      if (button.dataset.personalOntoWorkspaceBound === '1') return;
+      button.dataset.personalOntoWorkspaceBound = '1';
+      button.addEventListener('click', () => {
+        _pocWorkspaceView = button.dataset.personalOntoWorkspaceTab === 'growth' ? 'growth' : 'candidates';
+        _renderWorkspaceView();
+      });
+      button.addEventListener('keydown', (event) => {
+        let nextIndex = null;
+        if (event.key === 'ArrowRight') nextIndex = (index + 1) % buttons.length;
+        else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + buttons.length) % buttons.length;
+        else if (event.key === 'Home') nextIndex = 0;
+        else if (event.key === 'End') nextIndex = buttons.length - 1;
+        if (nextIndex === null) return;
+        event.preventDefault();
+        buttons[nextIndex].click();
+        buttons[nextIndex].focus();
+      });
+    });
+    _renderWorkspaceView();
   }
 
   // ── "选择去向" state ─────────────────────────────────────────────────────
@@ -200,13 +241,13 @@
 
   // 渲染主体
   async function renderPersonalOntology() {
-    console.log('[personal-ontology] renderPersonalOntology called');
+    _bindWorkspaceTabs();
     const statsEl = document.getElementById('personal-onto-stats');
     const bodyEl = document.getElementById('personal-onto-body');
     const actionsEl = document.getElementById('personal-onto-actions');
 
     if (!statsEl || !bodyEl) {
-      console.error('[personal-ontology] missing DOM elements', { statsEl: !!statsEl, bodyEl: !!bodyEl });
+      _notifyFail(_t('personalOntology.load_error', '加载失败'), new Error('personal ontology panel is incomplete'));
       return;
     }
 
@@ -274,7 +315,7 @@
       }
 
     } catch (err) {
-      console.error('[personal-ontology] render failed', err);
+      _notifyFail(_t('personalOntology.load_error', '加载失败'), err);
       bodyEl.innerHTML = '<div class="personal-onto-error">' + _t('personalOntology.load_error', '加载失败') + ': ' + escapeHtml((err && err.message) || String(err)) + '</div>';
     }
   }
@@ -457,5 +498,13 @@
   }
 
   window.renderPersonalOntology = renderPersonalOntology;
-  console.log('[personal-ontology] module loaded, renderPersonalOntology available');
+  window.openPersonalOntologyGrowth = function openPersonalOntologyGrowth() {
+    _pocWorkspaceView = 'growth';
+    _renderWorkspaceView();
+  };
+  window.addEventListener('i18n-change', () => {
+    if (document.getElementById('panel-personal-ontology')?.classList.contains('active')) {
+      renderPersonalOntology();
+    }
+  });
 })();

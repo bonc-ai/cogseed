@@ -168,10 +168,11 @@ export function writeJsonSync(filePath: string, data: unknown): void {
  * (e.g. SKILL.md, custom skill files) where a torn write would lose the
  * definition entirely.
  */
-export function writeTextAtomicSync(filePath: string, text: string, encoding: BufferEncoding = 'utf8'): void {
+export function writeTextAtomicSync(filePath: string, text: string | Buffer, encoding: BufferEncoding = 'utf8'): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmp = atomicTmpPath(filePath);
-  fs.writeFileSync(tmp, text, { encoding });
+  if (typeof text === 'string') fs.writeFileSync(tmp, text, { encoding });
+  else fs.writeFileSync(tmp, text);
   try {
     renameWithRetrySync(tmp, filePath);
   } catch (err) {

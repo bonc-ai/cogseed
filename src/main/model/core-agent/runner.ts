@@ -35,13 +35,14 @@ import { t } from '../../i18n';
 // future targeted use; runtime no longer renders the prompt block from it.
 import { getSession, memoryScopeForSession, sessionKindOf, toolResultsDirForSession } from './session-store';
 import {
-  addEntry,
-  replaceEntry,
-  removeEntry,
+  addEntryTransactional,
+  replaceEntryTransactional,
+  removeEntryTransactional,
   listEntries,
   formatForSystemPrompt as formatMemoryForSystemPrompt,
   type MemoryScope,
 } from '../../features/memory';
+import { listActiveCognitionSourceIds } from '../../features/cognition';
 import {
   formatProjectContextPolicyForSystemPrompt,
   formatProjectInstructionsForSystemPrompt,
@@ -537,9 +538,15 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
       : tier === 'project' ? { project: projectScopeId }
       : tier === 'shared' ? 'memory' : 'user';
     const memoryHandler: MemoryToolHandler = {
-      add: (tier, content) => addEntry(uid, toScope(tier), content),
-      replace: (tier, oldText, content) => replaceEntry(uid, toScope(tier), oldText, content),
-      remove: (tier, oldText) => removeEntry(uid, toScope(tier), oldText),
+      add: (tier, content) => addEntryTransactional(uid, toScope(tier), content),
+      replace: async (tier, oldText, content) => {
+        const scope = toScope(tier);
+        return replaceEntryTransactional(uid, scope, oldText, content);
+      },
+      remove: async (tier, oldText) => {
+        const scope = toScope(tier);
+        return removeEntryTransactional(uid, scope, oldText);
+      },
       list: (tier) => listEntries(uid, toScope(tier)),
     };
     const { createCrossSessionMemoryTool } = await import('../../../core-agent/src/tools/memory-tool');
@@ -946,7 +953,22 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // Empty string when nothing is stored (no tokens for new users).
   // Re-read each turn — a mid-conversation write shows up next turn.
   // Project sessions additionally render the project's own notes section.
-  const memoryBlock = (uid && memoryAgentScope) ? formatMemoryForSystemPrompt(uid, memoryAgentScope, params.projectId) : '';
+  let activeCognitionSourceIds: ReadonlySet<string> = new Set();
+  if (uid && memoryAgentScope) {
+    try {
+      activeCognitionSourceIds = await listActiveCognitionSourceIds(uid);
+    } catch (err) {
+      // Fail closed for machine-owned cognition records while leaving the
+      // user's independent USER/MEMORY entries available to the model.
+      log.warn('active cognition memory scan failed', {
+        user_id: maskId(uid),
+        error: logErrorSummary(err),
+      });
+    }
+  }
+  const memoryBlock = (uid && memoryAgentScope)
+    ? formatMemoryForSystemPrompt(uid, memoryAgentScope, params.projectId, activeCognitionSourceIds)
+    : '';
   if (memoryBlock) parts.push(memoryBlock);
   const resolvedSystemPrompt = parts.join('\n\n');
   // P2: the truly per-turn-volatile blocks — the orchestration ledger (~7-9K

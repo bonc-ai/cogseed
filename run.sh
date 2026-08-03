@@ -4,14 +4,14 @@
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
-VARIANT="expense"
+VARIANT="integration"
 
 usage() {
   cat <<'EOF'
 Usage: ./run.sh
 
-This worktree is locked to the expense runtime identity. Run integration
-acceptance from the dedicated mate-agent-dev worktree.
+This worktree is locked to the integration runtime identity. Run cognition or
+expense module development from their dedicated worktrees.
 EOF
 }
 
@@ -30,11 +30,15 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-if [ -n "${ORKAS_RUNTIME_VARIANT:-}" ] && [ "$ORKAS_RUNTIME_VARIANT" != "expense" ]; then
-  echo "[Mate Agent] This worktree is locked to the expense runtime; ORKAS_RUNTIME_VARIANT=$ORKAS_RUNTIME_VARIANT is not allowed." >&2
+if [ -n "${ORKAS_RUNTIME_VARIANT:-}" ] && [ "$ORKAS_RUNTIME_VARIANT" != "integration" ]; then
+  echo "[Mate Agent] This worktree is locked to the integration runtime; ORKAS_RUNTIME_VARIANT=$ORKAS_RUNTIME_VARIANT is not allowed." >&2
   exit 2
 fi
-export ORKAS_RUNTIME_VARIANT="expense"
+if [ -n "${ORKAS_WORKSPACE_ROOT:-}" ]; then
+  echo "[Mate Agent] This worktree manages its own integration data root; inherited ORKAS_WORKSPACE_ROOT is not allowed." >&2
+  exit 2
+fi
+export ORKAS_RUNTIME_VARIANT="integration"
 
 if [ ! -f "$APP_DIR/package.json" ]; then
   echo "[Mate Agent] $APP_DIR/package.json not found; check the project directory layout." >&2
@@ -102,7 +106,7 @@ fi
 
 cd "$APP_DIR"
 if [ "$(uname -s)" = "Darwin" ]; then
-  APP_BUNDLE="$APP_DIR/node_modules/electron/dist/Mate Agent [Expense].app"
+  APP_BUNDLE="$APP_DIR/node_modules/electron/dist/Mate Agent [Integration].app"
   if [ -d "$APP_BUNDLE" ]; then
     ARGS=("$APP_DIR" "--orkas-runtime-variant=$VARIANT")
     if [ -n "${ORKAS_KSTAR_ENGINE_COMMAND:-}" ]; then

@@ -71,6 +71,7 @@ import { invokeHandlers as expenseWorkbenchHandlers } from './expense_workbench'
 import { invokeHandlers as qualityHandlers } from './quality';
 import { invokeHandlers as connectorsHandlers } from './connectors';
 import { invokeHandlers as memoryHandlers } from './memory';
+import { invokeHandlers as cognitionHandlers } from './cognition';
 import { safeId } from '../storage';
 import { createLogger, logFromRenderer } from '../logger';
 import {
@@ -3415,6 +3416,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   // Cross-session memory UI — view/edit/import/export over features/memory.ts.
   ...memoryHandlers,
+
+  // Evidence-backed cognition assets. Confirmation reuses the canonical
+  // memory write path; these handlers own only longitudinal evidence, review,
+  // reuse, and growth state.
+  ...cognitionHandlers,
 };
 
 // ── Stream handlers ──────────────────────────────────────────────────────

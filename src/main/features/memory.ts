@@ -17,6 +17,25 @@ import * as path from 'node:path';
 import { userMemoryFile, userProfileFile, agentMemoryFile, userAgentMemoryFile, projectMemoryFile } from '../paths';
 import { writeTextAtomicSync } from '../storage';
 import { createLogger } from '../logger';
+import {
+  assertCognitionMemoryTransaction,
+  withCognitionMemoryTransaction,
+  type CognitionMemoryTransaction,
+} from './cognition-memory-transaction';
+import {
+  ENTRY_SEPARATOR,
+  detachMemorySource,
+  ensureSourcedMemoryRecord,
+  findSourcedMemoryRecord,
+  loadMemoryRecords,
+  loadMemoryRecordsWithStatus,
+  markMatchingRecordIndependent,
+  memoryContentHash,
+  newIndependentRecord,
+  validateMemoryText,
+  writeMemoryRecords,
+  type SourcedMemoryRecord,
+} from './memory-records';
 
 const log = createLogger('memory');
 
@@ -35,8 +54,7 @@ export const PROJECT_ENTRY_LIMIT = AGENT_ENTRY_LIMIT;
 // Soft-warning threshold for the strict (user/shared) write path: once a
 // store crosses this fraction of its char budget, writes still succeed but
 // the result carries `nearLimit: true` so the UI can nudge the user.
-const NEAR_LIMIT_RATIO = 0.8;
-export const ENTRY_SEPARATOR   = '\n§\n';
+export { ENTRY_SEPARATOR, memoryContentHash };
 
 // ── Types ────────────────────────────────────────────────────────────────
 export interface MemoryEntry {
@@ -67,8 +85,123 @@ export interface MemoryOpResult {
   entries: string[];
   usage: { current: number; limit: number; entries_current?: number; entries_limit?: number };
   /** Set on a successful strict-mode (user/shared) write once usage crosses
-   *  `NEAR_LIMIT_RATIO` of the char budget — advisory only, does not block. */
+   *  80% of the char budget — advisory only, does not block. */
   nearLimit?: boolean;
+  detachedCognitionSourceIds?: string[];
+}
+
+export interface ClearMemoryResult extends MemoryOpResult {
+  detachedCognitionSourceIds?: string[];
+}
+
+export async function mutateMemoryAndInvalidateCognition(
+  userId: string,
+  target: MemoryScope,
+  reason: 'removed' | 'replaced',
+  mutation: () => MemoryOpResult,
+): Promise<MemoryOpResult> {
+  if (target !== 'memory') return mutation();
+  return withCognitionMemoryTransaction(userId, async (transaction) =>
+    mutateSharedMemoryAndInvalidateCognitionLocked(userId, reason, mutation, transaction));
+}
+
+/** Internal transaction body. Only cognition and memory production wrappers
+ * may call this while holding the shared per-user lease. */
+export async function mutateSharedMemoryAndInvalidateCognitionLocked(
+  userId: string,
+  reason: 'removed' | 'replaced',
+  mutation: () => MemoryOpResult,
+  transaction: CognitionMemoryTransaction,
+): Promise<MemoryOpResult> {
+  assertCognitionMemoryTransaction(transaction, userId);
+  const filePath = userMemoryFile(userId);
+  let previousBytes: Buffer | null;
+  try {
+    previousBytes = fs.readFileSync(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw new Error('failed to snapshot shared memory before cognition update', { cause: error });
+    }
+    previousBytes = null;
+  }
+  const result = mutation();
+  if (!result.ok || !result.detachedCognitionSourceIds?.length) return result;
+  const { invalidateCognitionMemorySourcesLocked } = await import('./cognition');
+  try {
+    await invalidateCognitionMemorySourcesLocked(
+      userId,
+      result.detachedCognitionSourceIds,
+      reason,
+      transaction,
+    );
+    return result;
+  } catch (error) {
+    try {
+      if (previousBytes === null) fs.rmSync(filePath, { force: true });
+      else writeTextAtomicSync(filePath, previousBytes);
+      notifyMemoryDirty('memory');
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        'cognition invalidation failed and shared memory rollback also failed',
+      );
+    }
+    throw new Error('cognition invalidation failed; shared memory was rolled back', { cause: error });
+  }
+}
+
+export async function clearMemoryAndInvalidateCognition(
+  userId: string,
+  target: MemoryScope,
+): Promise<ClearMemoryResult> {
+  return mutateMemoryAndInvalidateCognition(
+    userId,
+    target,
+    'removed',
+    () => clearMemory(userId, target),
+  );
+}
+
+/** Production add entrypoint. Shared MEMORY writes join the same per-user
+ * transaction as cognition; other stores have no cross-file invariant. */
+export async function addEntryTransactional(
+  userId: string,
+  target: MemoryScope,
+  content: string,
+): Promise<MemoryOpResult> {
+  if (target !== 'memory') return addEntry(userId, target, content);
+  return withCognitionMemoryTransaction(userId, () => addEntry(userId, target, content));
+}
+
+/** Production replace entrypoint, including cognition invalidation and
+ * byte-exact rollback when either store cannot be committed. */
+export async function replaceEntryTransactional(
+  userId: string,
+  target: MemoryScope,
+  oldText: string,
+  content: string,
+): Promise<MemoryOpResult> {
+  return mutateMemoryAndInvalidateCognition(
+    userId,
+    target,
+    'replaced',
+    () => replaceEntry(userId, target, oldText, content),
+  );
+}
+
+/** Production remove entrypoint, including cognition invalidation and
+ * byte-exact rollback when either store cannot be committed. */
+export async function removeEntryTransactional(
+  userId: string,
+  target: MemoryScope,
+  oldText: string,
+): Promise<MemoryOpResult> {
+  return mutateMemoryAndInvalidateCognition(
+    userId,
+    target,
+    'removed',
+    () => removeEntry(userId, target, oldText),
+  );
 }
 
 // ── Security: injection pattern scanning ─────────────────────────────────
@@ -148,18 +281,7 @@ function notifyLegacyAgentMemoryDirty(agentId: string): void {
 
 /** Load §-separated entries from a markdown file. */
 export function loadEntries(filePath: string): MemoryEntry[] {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(filePath, 'utf8');
-  } catch {
-    return [];
-  }
-  if (!raw.trim()) return [];
-  // Split by § (may be surrounded by newlines)
-  return raw.split(/\n?§\n?/)
-    .map(t => t.trim())
-    .filter(Boolean)
-    .map(text => ({ text }));
+  return loadMemoryRecords(filePath).map(({ text }) => ({ text }));
 }
 
 /** Save entries atomically, respecting count + char limits. LEGACY / agent
@@ -177,6 +299,8 @@ export function saveEntries(filePath: string, entries: MemoryEntry[], charLimit:
   for (let i = entries.length - 1; i >= 0; i--) {
     const text = String(entries[i]?.text || '').trim();
     if (!text || seen.has(text)) continue;
+    const invalid = validateMemoryText(text);
+    if (invalid) throw new Error(invalid);
     seen.add(text);
     deduped.unshift({ text });
   }
@@ -208,13 +332,12 @@ type StrictWriteResult = StrictWriteOk | StrictWriteErr;
 
 function writeStrictEntries(filePath: string, entries: MemoryEntry[], charLimit: number): StrictWriteResult {
   const deduped = dedupeNewest(entries);
-  const text = deduped.map(e => e.text).join(ENTRY_SEPARATOR);
-  if (text.length > charLimit) {
-    return { ok: false, error: 'char_limit_exceeded' };
-  }
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  writeTextAtomicSync(filePath, text);
-  return { ok: true, nearLimit: charLimit > 0 && text.length >= charLimit * NEAR_LIMIT_RATIO };
+  const invalid = deduped.map(({ text }) => validateMemoryText(text)).find(Boolean);
+  if (invalid) return { ok: false, error: invalid };
+  const result = writeMemoryRecords(filePath, deduped.map(({ text }) => newIndependentRecord(text)), charLimit);
+  return result.ok
+    ? { ok: true, nearLimit: !!result.nearLimit }
+    : { ok: false, error: result.error || 'memory_write_failed' };
 }
 
 function buildResult(userId: string, target: MemoryScope, ok: boolean, error?: string, extra?: { nearLimit?: boolean }): MemoryOpResult {
@@ -294,9 +417,14 @@ function buildAgentResult(userId: string, agentId: string, ok: boolean, error?: 
 
 // ── Public API ───────────────────────────────────────────────────────────
 
+/** Synchronous primitive. Production callers targeting shared MEMORY use
+ * `addEntryTransactional`; direct use is for tests or non-shared scopes. */
 export function addEntry(userId: string, target: MemoryScope, content: string): MemoryOpResult {
   const trimmed = content.trim();
   if (!trimmed) return buildResult(userId, target, false, 'empty content');
+
+  const invalid = validateMemoryText(trimmed);
+  if (invalid) return buildResult(userId, target, false, invalid);
 
   const threat = scanForInjection(trimmed);
   if (threat) {
@@ -306,6 +434,24 @@ export function addEntry(userId: string, target: MemoryScope, content: string): 
 
   const filePath = fileForTarget(userId, target);
   const limit = limitForTarget(target);
+
+  if (target === 'memory') {
+    const loaded = loadMemoryRecordsWithStatus(filePath);
+    if (loaded.corruptMetadata) return buildResult(userId, target, false, 'corrupt_metadata');
+    const promoted = markMatchingRecordIndependent(filePath, trimmed, limit);
+    if (promoted) {
+      if (!promoted.ok) return buildResult(userId, target, false, promoted.error);
+      notifyMemoryDirty(target);
+      return buildResult(userId, target, true, undefined, { nearLimit: promoted.nearLimit });
+    }
+    const records = loaded.records;
+    if (records.some((record) => record.text === trimmed)) return buildResult(userId, target, true);
+    records.push(newIndependentRecord(trimmed));
+    const write = writeMemoryRecords(filePath, records, limit);
+    if (!write.ok) return buildResult(userId, target, false, write.error);
+    notifyMemoryDirty(target);
+    return buildResult(userId, target, true, undefined, { nearLimit: write.nearLimit });
+  }
   const entries = loadEntries(filePath);
   entries.push({ text: trimmed });
 
@@ -326,9 +472,13 @@ export function addAgentEntry(userId: string, agentId: string, content: string):
   return buildAgentResult(userId, agentId, res.ok, res.error);
 }
 
+/** Shared-MEMORY production callers use `replaceEntryTransactional`. */
 export function replaceEntry(userId: string, target: MemoryScope, oldText: string, content: string): MemoryOpResult {
   const trimmed = content.trim();
   if (!trimmed) return buildResult(userId, target, false, 'empty content');
+
+  const invalid = validateMemoryText(trimmed);
+  if (invalid) return buildResult(userId, target, false, invalid);
 
   const threat = scanForInjection(trimmed);
   if (threat) {
@@ -338,6 +488,29 @@ export function replaceEntry(userId: string, target: MemoryScope, oldText: strin
 
   const filePath = fileForTarget(userId, target);
   const limit = limitForTarget(target);
+  if (target === 'memory') {
+    const loaded = loadMemoryRecordsWithStatus(filePath);
+    if (loaded.corruptMetadata) return buildResult(userId, target, false, 'corrupt_metadata');
+    const records = loaded.records;
+    const matches = records
+      .map((record, index) => ({ record, index }))
+      .filter(({ record }) => record.text.includes(oldText));
+    if (matches.length === 0) return buildResult(userId, target, false, 'old_text not found');
+    if (matches.length > 1) return buildResult(userId, target, false, 'old_text is ambiguous');
+    const { record, index } = matches[0];
+    if (records.some((candidate, candidateIndex) => candidateIndex !== index && candidate.text === trimmed)) {
+      return buildResult(userId, target, false, 'content already exists');
+    }
+    const detachedSourceIds = record.sources.map((source) => source.sourceId);
+    records[index] = newIndependentRecord(trimmed);
+    const write = writeMemoryRecords(filePath, records, limit);
+    if (!write.ok) return buildResult(userId, target, false, write.error);
+    notifyMemoryDirty(target);
+    return {
+      ...buildResult(userId, target, true, undefined, { nearLimit: write.nearLimit }),
+      ...(detachedSourceIds.length ? { detachedCognitionSourceIds: detachedSourceIds } : {}),
+    };
+  }
   const entries = loadEntries(filePath);
   const idx = entries.findIndex(e => e.text.includes(oldText));
   if (idx === -1) return buildResult(userId, target, false, 'old_text not found');
@@ -360,6 +533,9 @@ export function replaceAgentEntry(userId: string, agentId: string, oldText: stri
   const trimmed = content.trim();
   if (!trimmed) return buildAgentResult(userId, agentId, false, 'empty content');
 
+  const invalid = validateMemoryText(trimmed);
+  if (invalid) return buildAgentResult(userId, agentId, false, invalid);
+
   const threat = scanForInjection(trimmed);
   if (threat) {
     log.warn('blocked agent memory write', { threat, content_chars: trimmed.length });
@@ -381,9 +557,30 @@ export function replaceAgentEntry(userId: string, agentId: string, oldText: stri
   return buildAgentResult(userId, agentId, changed, changed ? undefined : 'old_text not found');
 }
 
+/** Shared-MEMORY production callers use `removeEntryTransactional`. */
 export function removeEntry(userId: string, target: MemoryScope, oldText: string): MemoryOpResult {
   const filePath = fileForTarget(userId, target);
   const limit = limitForTarget(target);
+  if (target === 'memory') {
+    const loaded = loadMemoryRecordsWithStatus(filePath);
+    if (loaded.corruptMetadata) return buildResult(userId, target, false, 'corrupt_metadata');
+    const records = loaded.records;
+    const matches = records
+      .map((record, index) => ({ record, index }))
+      .filter(({ record }) => record.text.includes(oldText));
+    if (matches.length === 0) return buildResult(userId, target, false, 'old_text not found');
+    if (matches.length > 1) return buildResult(userId, target, false, 'old_text is ambiguous');
+    const { record, index } = matches[0];
+    const detachedSourceIds = record.sources.map((source) => source.sourceId);
+    records.splice(index, 1);
+    const write = writeMemoryRecords(filePath, records, limit);
+    if (!write.ok) return buildResult(userId, target, false, write.error);
+    notifyMemoryDirty(target);
+    return {
+      ...buildResult(userId, target, true),
+      ...(detachedSourceIds.length ? { detachedCognitionSourceIds: detachedSourceIds } : {}),
+    };
+  }
   const entries = loadEntries(filePath);
   const idx = entries.findIndex(e => e.text.includes(oldText));
   if (idx === -1) return buildResult(userId, target, false, 'old_text not found');
@@ -423,18 +620,95 @@ export function listEntries(userId: string, target: MemoryScope): MemoryOpResult
   return buildResult(userId, target, true);
 }
 
+/** Low-level synchronous helper for tests and callers already inside a
+ * cognition-memory transaction. Production cognition calls the locked form. */
+export function ensureCognitionMemoryEntry(
+  userId: string,
+  sourceId: string,
+  content: string,
+): { ok: boolean; error?: string; record?: SourcedMemoryRecord } {
+  const result = ensureSourcedMemoryRecord(
+    userMemoryFile(userId),
+    sourceId,
+    content,
+    MEMORY_CHAR_LIMIT,
+  );
+  if (result.ok && result.record) notifyMemoryDirty('memory');
+  return {
+    ok: result.ok,
+    ...(result.error ? { error: result.error } : {}),
+    ...(result.record ? { record: result.record } : {}),
+  };
+}
+
+export function ensureCognitionMemoryEntryLocked(
+  userId: string,
+  sourceId: string,
+  content: string,
+  transaction: CognitionMemoryTransaction,
+): { ok: boolean; error?: string; record?: SourcedMemoryRecord } {
+  assertCognitionMemoryTransaction(transaction, userId);
+  return ensureCognitionMemoryEntry(userId, sourceId, content);
+}
+
+/** Read-only low-level helper. Cognition uses the locked form so reconciliation
+ * observes the same snapshot as the related store write. */
+export function findCognitionMemoryEntry(userId: string, sourceId: string): SourcedMemoryRecord | null {
+  return findSourcedMemoryRecord(userMemoryFile(userId), sourceId);
+}
+
+export function findCognitionMemoryEntryLocked(
+  userId: string,
+  sourceId: string,
+  transaction: CognitionMemoryTransaction,
+): SourcedMemoryRecord | null {
+  assertCognitionMemoryTransaction(transaction, userId);
+  return findCognitionMemoryEntry(userId, sourceId);
+}
+
+/** Low-level synchronous helper for tests and callers already inside a
+ * cognition-memory transaction. Production cognition calls the locked form. */
+export function detachCognitionMemoryEntry(userId: string, sourceId: string): MemoryOpResult {
+  const result = detachMemorySource(userMemoryFile(userId), sourceId, MEMORY_CHAR_LIMIT);
+  if (!result.ok) return buildResult(userId, 'memory', false, result.error);
+  if (result.detachedSourceIds.length) notifyMemoryDirty('memory');
+  return {
+    ...buildResult(userId, 'memory', true),
+    ...(result.detachedSourceIds.length ? { detachedCognitionSourceIds: result.detachedSourceIds } : {}),
+  };
+}
+
+export function detachCognitionMemoryEntryLocked(
+  userId: string,
+  sourceId: string,
+  transaction: CognitionMemoryTransaction,
+): MemoryOpResult {
+  assertCognitionMemoryTransaction(transaction, userId);
+  return detachCognitionMemoryEntry(userId, sourceId);
+}
+
 export function listAgentEntries(userId: string, agentId: string): MemoryOpResult {
   return buildAgentResult(userId, agentId, true);
 }
 
-export function clearMemory(userId: string, target: MemoryScope): void {
+/** Production shared-MEMORY clear flows use
+ * `clearMemoryAndInvalidateCognition`. */
+export function clearMemory(userId: string, target: MemoryScope): ClearMemoryResult {
   const filePath = fileForTarget(userId, target);
+  const detachedCognitionSourceIds = target === 'memory'
+    ? Array.from(new Set(loadMemoryRecords(filePath).flatMap((record) => record.sources.map((source) => source.sourceId))))
+    : [];
   try {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     writeTextAtomicSync(filePath, '');
     notifyMemoryDirty(target);
+    return {
+      ...buildResult(userId, target, true),
+      ...(detachedCognitionSourceIds.length ? { detachedCognitionSourceIds } : {}),
+    };
   } catch (err) {
     log.warn(`clearMemory failed: ${(err as Error).message}`);
+    return buildResult(userId, target, false, (err as Error).message);
   }
 }
 
@@ -536,9 +810,17 @@ export function parseImportText(text: string): ParsedImportEntry[] {
  * write mid-conversation is visible on the next turn (cache re-prefills only on
  * the rare write turns; writes are infrequent by design).
  */
-export function formatForSystemPrompt(userId: string, agentId?: string, projectId?: string): string {
+export function formatForSystemPrompt(
+  userId: string,
+  agentId?: string,
+  projectId?: string,
+  activeCognitionSourceIds: ReadonlySet<string> = new Set(),
+): string {
   const userEntries = loadEntries(userProfileFile(userId));     // cross-agent profile
-  const sharedEntries = loadEntries(userMemoryFile(userId));    // cross-project, cross-agent facts
+  const sharedEntries = loadMemoryRecords(userMemoryFile(userId))
+    .filter((record) => record.independent || record.sources.length === 0
+      || record.sources.some((source) => activeCognitionSourceIds.has(source.sourceId)))
+    .map(({ text }) => ({ text }));                              // cross-project, cross-agent facts
   const projectEntries = projectId ? loadEntries(projectMemoryFile(userId, projectId)) : []; // this project only
   const agentEntries = agentId ? loadAgentEntries(userId, agentId) : []; // this agent only
   if (userEntries.length === 0 && sharedEntries.length === 0 && projectEntries.length === 0 && agentEntries.length === 0) return '';

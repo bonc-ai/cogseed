@@ -14,6 +14,13 @@ const LABELS = Object.freeze({
   integration: 'Integration',
 });
 const LSREGISTER = '/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister';
+const MAIN_EXECUTABLE = path.join('Contents', 'MacOS', 'Electron');
+const REQUIRED_RUNTIME_EXECUTABLES = Object.freeze([
+  path.join('Contents', 'Frameworks', 'Electron Framework.framework', 'Electron Framework'),
+  path.join('Contents', 'Frameworks', 'Electron Helper.app', 'Contents', 'MacOS', 'Electron Helper'),
+  path.join('Contents', 'Frameworks', 'Electron Helper (GPU).app', 'Contents', 'MacOS', 'Electron Helper (GPU)'),
+  path.join('Contents', 'Frameworks', 'Electron Helper (Renderer).app', 'Contents', 'MacOS', 'Electron Helper (Renderer)'),
+]);
 
 function sourceRuntimeIdentity(value) {
   if (typeof value !== 'string' || !RUNTIME_VARIANTS.includes(value)) {
@@ -103,10 +110,28 @@ function readProtocolSchemes(plist) {
   }
 }
 
+function executableFileIsUsable(file, requireDirectFile = false) {
+  try {
+    const entry = fs.lstatSync(file);
+    if (requireDirectFile && !entry.isFile()) return false;
+    const target = requireDirectFile ? entry : fs.statSync(file);
+    return target.isFile() && (target.mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
+}
+
+function bundleRuntimeFilesAreUsable(destination) {
+  if (!executableFileIsUsable(path.join(destination, MAIN_EXECUTABLE), true)) return false;
+  return REQUIRED_RUNTIME_EXECUTABLES.every((relative) => (
+    executableFileIsUsable(path.join(destination, relative))
+  ));
+}
+
 function bundleIsCurrent(destination, identity, electronVersion) {
   const plist = path.join(destination, 'Contents', 'Info.plist');
   const stamp = `${destination}.runtime.json`;
-  if (!fs.existsSync(plist)) return false;
+  if (!fs.existsSync(plist) || !bundleRuntimeFilesAreUsable(destination)) return false;
   let metadata;
   try { metadata = JSON.parse(fs.readFileSync(stamp, 'utf8')); } catch { return false; }
   return metadata?.schema_version === 1
@@ -136,7 +161,6 @@ function prepareSourceRuntimeBundle(options = {}) {
   }
 
   const source = findSourceApp(distDir, pathFile);
-
   if (source !== destination) {
     if (fs.existsSync(destination)) fs.rmSync(destination, { recursive: true, force: true });
     fs.cpSync(source, destination, { recursive: true, preserveTimestamps: true });
@@ -179,17 +203,17 @@ function parseVariant(argv) {
   return sourceRuntimeIdentity(values[0]).variant;
 }
 
-function parseExpenseWorktreeVariant(argv) {
+function parseIntegrationWorktreeVariant(argv) {
   const variant = parseVariant(argv);
-  if (variant !== 'expense') {
-    throw new Error('this source worktree is locked to the expense runtime variant');
+  if (variant !== 'integration') {
+    throw new Error('this source worktree is locked to the integration runtime variant');
   }
   return variant;
 }
 
 function main() {
   try {
-    const result = prepareSourceRuntimeBundle({ variant: parseExpenseWorktreeVariant(process.argv.slice(2)) });
+    const result = prepareSourceRuntimeBundle({ variant: parseIntegrationWorktreeVariant(process.argv.slice(2)) });
     if (result.appBundle) console.log(`[Mate Agent] Prepared source runtime bundle: ${result.appName}`);
   } catch (error) {
     console.error(`[Mate Agent] ${error instanceof Error ? error.message : String(error)}`);
@@ -206,6 +230,6 @@ module.exports = {
   currentAppFromPathFile,
   bundleIsCurrent,
   parseVariant,
-  parseExpenseWorktreeVariant,
+  parseIntegrationWorktreeVariant,
   prepareSourceRuntimeBundle,
 };

@@ -368,16 +368,15 @@ function registerIpc(): void {
     // The relaunch button shells out to run.sh / run.cmd instead of using
     // `app.relaunch()` so we can reuse `scripts/ensure-deps.cjs` for
     // dependency self-healing — otherwise pulling new code + relaunching
-    // crashes immediately due to missing packages. The launcher handles
-    // dependency checks, runtime bundle preparation, and npm start; here we
-    // detach-spawn it and call `app.exit(0)` so the instance lock is released.
+    // crashes immediately due to missing packages. The worktree-locked
+    // launcher owns runtime selection and bundle preparation; here we only
+    // detach-spawn it and exit so the instance lock can be released.
     ipcMain.handle('orkas.relaunch', () => {
       const isWin = process.platform === 'win32';
       const script = path.join(paths.PC_ROOT, isWin ? 'run.cmd' : 'run.sh');
-      const variantArg = `--variant=${RUNTIME_IDENTITY.variant}`;
       const [cmd, args] = isWin
-        ? ['cmd.exe', ['/d', '/s', '/c', `"${script}" ${variantArg}`]] as const
-        : ['bash',    [script, variantArg]]                             as const;
+        ? ['cmd.exe', ['/d', '/s', '/c', `"${script}"`]] as const
+        : ['bash',    [script]]                            as const;
       const child = spawn(cmd, args, {
         cwd: paths.PC_ROOT,
         detached: true,
