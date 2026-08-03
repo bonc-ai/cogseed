@@ -39,6 +39,8 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/evolution/console.js' },
   ],
   'personal-ontology': [
+    { src: './modules/cognition/pages.js' },
+    { src: './modules/cognition/cognition.js' },
     { src: './modules/personal-ontology.js' },
   ],
 });

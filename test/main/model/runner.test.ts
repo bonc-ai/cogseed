@@ -111,6 +111,48 @@ describe('runner › buildRunner auth gate', () => {
 
 });
 
+describe('runner › cognition memory boundary', () => {
+  it('仅把当前有效的已确认认知来源交给模型', async () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test-placeholder';
+    const uid = 'runner-cognition';
+    const users = await import('../../../src/main/features/users');
+    users.activateUser(uid);
+    const cognition = await import('../../../src/main/features/cognition');
+    const memory = await import('../../../src/main/features/memory');
+    const evidence = {
+      kind: 'conversation' as const,
+      summary: '用户在当前对话中验证了这个结论。',
+      sourceLabel: '当前对话',
+      conversationId: 'conv_runner_cognition',
+    };
+
+    const interrupted = await cognition.createCognitionAssetWithEvidence(uid, {
+      title: '中断的确认',
+      summary: '这条机器记忆已写入，但认知确认尚未落盘。',
+      evidence,
+    });
+    expect(memory.ensureCognitionMemoryEntry(uid, interrupted.id, interrupted.summary).ok).toBe(true);
+
+    const confirmed = await cognition.createCognitionAssetWithEvidence(uid, {
+      title: '完成的确认',
+      summary: '这条认知已经由用户明确确认。',
+      evidence,
+    });
+    await cognition.confirmCognitionAsset(uid, confirmed.id);
+    expect(memory.addEntry(uid, 'memory', '这是用户独立保存的长期记忆。').ok).toBe(true);
+
+    const { buildRunner } = await loadRunner();
+    const result = await buildRunner({
+      sessionId: 'gconv-cognition-memory',
+      userId: uid,
+    });
+
+    expect(result.resolvedSystemPrompt).toContain(confirmed.summary);
+    expect(result.resolvedSystemPrompt).toContain('这是用户独立保存的长期记忆。');
+    expect(result.resolvedSystemPrompt).not.toContain(interrupted.summary);
+  });
+});
+
 describe('splitCommanderOrchestrationBlock (cache-prefix hygiene)', () => {
   it('moves the volatile orchestration ledger out of the stable prefix, keeping surrounding rules', async () => {
     const { _splitCommanderOrchestrationBlock } = await loadRunner();

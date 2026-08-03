@@ -6,24 +6,30 @@ const root = path.join(__dirname, '../../..');
 const read = (rel: string) => fs.readFileSync(path.join(root, rel), 'utf8');
 
 describe('Mate Agent source-run branding', () => {
-  it('migrates Electron.app and legacy Orkas.app to Mate Agent.app', () => {
-    const source = read('scripts/ensure-deps.cjs');
-    expect(source).toContain("const legacyApp = path.join(distDir, 'Orkas.app');");
-    expect(source).toContain("const brandedApp = path.join(distDir, `${APP_NAME}.app`);");
-    expect(source).toContain("`${APP_NAME}.app/Contents/MacOS/Electron`");
-    expect(source).toContain("['CFBundleIdentifier', APP_ID]");
+  it('prepares one variant-specific macOS bundle after dependency repair', () => {
+    const source = read('scripts/prepare-source-runtime.cjs');
+    expect(source).toContain('CFBundleIdentifier');
+    expect(source).toContain('CFBundleName');
+    expect(source).toContain('CFBundleDisplayName');
+    expect(source).toContain('`${brand.appId}.source.${value}`');
+    expect(source).toContain('`${brand.appName} [${LABELS[value]}]`');
+    expect(source).toContain('CFBundleURLSchemes: schemes');
+    expect(read('run.sh')).toContain('scripts/prepare-source-runtime.cjs');
+    expect(read('run.cmd')).toContain('scripts\\prepare-source-runtime.cjs');
   });
 
-  it('declares the new identity and both connector schemes in Info.plist', () => {
+  it('retains the legacy source protocol patcher but launchers do not invoke it', () => {
     const source = read('scripts/prepare-source-protocol.cjs');
     expect(source).toContain("const brand = require('../src/resources/brand.json');");
     expect(source).toContain('CFBundleURLSchemes: [brand.protocolScheme, brand.legacyConnectorScheme]');
     expect(source).toContain("CFBundleURLName: 'com.mateagent.connectors'");
+    expect(read('run.sh')).not.toContain('prepare-source-protocol.cjs');
+    expect(read('run.cmd')).not.toContain('prepare-source-protocol.cjs');
   });
 
-  it('launches the renamed macOS bundle', () => {
+  it('launches the prepared cognition-specific macOS bundle', () => {
     const source = read('run.sh');
-    expect(source).toContain('Mate Agent.app');
+    expect(source).toContain('Mate Agent [Cognition].app');
     expect(source).not.toContain('APP_BUNDLE="$APP_DIR/node_modules/electron/dist/Orkas.app"');
   });
   it('uses Mate Agent in cross-platform launcher output', () => {

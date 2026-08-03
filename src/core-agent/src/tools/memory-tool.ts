@@ -20,22 +20,15 @@ export type MemoryTier = 'agent' | 'project' | 'shared' | 'user';
 
 /** Handler interface implemented by the features layer. */
 export interface MemoryToolHandler {
-  add(tier: MemoryTier, content: string): {
+  add(tier: MemoryTier, content: string): MemoryToolResult | Promise<MemoryToolResult>;
+  replace(tier: MemoryTier, oldText: string, content: string): MemoryToolResult | Promise<MemoryToolResult>;
+  remove(tier: MemoryTier, oldText: string): MemoryToolResult | Promise<MemoryToolResult>;
+  list(tier: MemoryTier): MemoryToolResult | Promise<MemoryToolResult>;
+}
+
+export interface MemoryToolResult {
     ok: boolean; error?: string; entries: string[];
     usage: { current: number; limit: number };
-  };
-  replace(tier: MemoryTier, oldText: string, content: string): {
-    ok: boolean; error?: string; entries: string[];
-    usage: { current: number; limit: number };
-  };
-  remove(tier: MemoryTier, oldText: string): {
-    ok: boolean; error?: string; entries: string[];
-    usage: { current: number; limit: number };
-  };
-  list(tier: MemoryTier): {
-    ok: boolean; entries: string[];
-    usage: { current: number; limit: number };
-  };
 }
 
 /** Base description (non-project sessions): three memory scopes. */
@@ -145,24 +138,24 @@ export function createCrossSessionMemoryTool(handler: MemoryToolHandler, opts: C
         return { content: JSON.stringify({ ok: false, error: 'project memory is read-only for you; only the commander can add/replace/remove project entries' }), isError: true };
       }
 
-      let result: ReturnType<MemoryToolHandler['add']>;
+      let result: MemoryToolResult;
 
       switch (action) {
         case 'add':
           if (!content) return { content: JSON.stringify({ ok: false, error: '"content" is required for add' }), isError: true };
-          result = handler.add(target, content);
+          result = await handler.add(target, content);
           break;
         case 'replace':
           if (!oldText) return { content: JSON.stringify({ ok: false, error: '"old_text" is required for replace' }), isError: true };
           if (!content) return { content: JSON.stringify({ ok: false, error: '"content" is required for replace' }), isError: true };
-          result = handler.replace(target, oldText, content);
+          result = await handler.replace(target, oldText, content);
           break;
         case 'remove':
           if (!oldText) return { content: JSON.stringify({ ok: false, error: '"old_text" is required for remove' }), isError: true };
-          result = handler.remove(target, oldText);
+          result = await handler.remove(target, oldText);
           break;
         case 'list':
-          result = handler.list(target);
+          result = await handler.list(target);
           break;
         default:
           return { content: JSON.stringify({ ok: false, error: `unknown action: ${action}` }), isError: true };

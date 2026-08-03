@@ -71,8 +71,12 @@ async function _dispatch(rawUrl: string): Promise<void> {
   }
 }
 
-/** Register the connector callback scheme before app readiness and the single-instance handoff. */
-export function registerConnectorProtocol(): void {
+/** Register callback handling only in the one runtime that owns the OS schemes. */
+export function registerConnectorProtocol(options: Readonly<{ owner: boolean }>): boolean {
+  if (!options.owner) {
+    log.info('connector protocol registration disabled for this runtime');
+    return false;
+  }
   for (const scheme of CONNECTOR_PROTOCOL_SCHEMES) {
     try {
       if (!app.isPackaged && process.argv.length >= 2) {
@@ -104,6 +108,7 @@ export function registerConnectorProtocol(): void {
 
   const cold = _extractConnectorCallback(process.argv);
   if (cold) _pending = cold;
+  return true;
 }
 
 /** Flush a callback delivered while Electron was still starting. */

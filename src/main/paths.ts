@@ -196,6 +196,12 @@ export const userMemoryDir   = (uid: string) => path.join(userCloudRoot(uid), 'm
 export const userMemoryFile  = (uid: string) => path.join(userMemoryDir(uid), 'MEMORY.md'); // shared/project tier
 export const userProfileFile = (uid: string) => path.join(userMemoryDir(uid), 'USER.md');
 
+// Evidence-backed reusable working patterns. This is separate from the terse
+// USER.md/MEMORY.md stores and from personal-ontology groups: cognition owns
+// review state, evidence, reuse history, and its derived growth stage.
+export const userCognitionDir  = (uid: string) => path.join(userCloudRoot(uid), 'cognition');
+export const userCognitionFile = (uid: string) => path.join(userCognitionDir(uid), 'assets.json');
+
 /** Guard an agent id used as a single path segment for agent-scoped memory.
  *  The id is bound by the runner to the calling agent (never model-supplied),
  *  but memory paths derive from it, so reject traversal / separators defensively. */
@@ -761,6 +767,7 @@ export function ensureUserLayout(uid: string): void {
     userContextsDir(uid),
     userKbDir(uid),
     userMemoryDir(uid),
+    userCognitionDir(uid),
     userAgentsDir(uid),
     userSkillsDir(uid),
     userProjectsDir(uid),
