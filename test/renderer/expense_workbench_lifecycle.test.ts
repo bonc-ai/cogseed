@@ -28,7 +28,7 @@ function target(dataset: Record<string, string>, attributes: readonly string[] =
   return { dataset, hasAttribute: (name) => names.has(name) };
 }
 
-function loadWorkbench(handler: InvokeHandler) {
+function loadWorkbench(handler: InvokeHandler, options: { openError?: Error } = {}) {
   const source = fs.readFileSync(
     path.join(process.cwd(), 'src/renderer/modules/expense-workbench.js'),
     'utf8',
@@ -55,16 +55,51 @@ function loadWorkbench(handler: InvokeHandler) {
     return value;
   };
   const workbenchWindow: {
-    orkas: { invoke: InvokeHandler };
+    orkas: {
+      expenseWorkbench: {
+        prepareOpen: (agentId: string, gesture: string) => Promise<JsonObject>;
+        open: (agentId: string) => Promise<JsonObject>;
+        status: () => Promise<JsonObject>;
+        configure: () => Promise<JsonObject>;
+        invoke: (operation: string, payload: JsonObject) => Promise<JsonObject>;
+        invokeExternal: (operation: string, payload: JsonObject) => Promise<JsonObject>;
+        pickAndAddMaterials: (applicationId: string) => Promise<JsonObject>;
+        confirmAndSubmit: (applicationId: string, version: number, payloadHash: string) => Promise<JsonObject>;
+        close: () => Promise<JsonObject>;
+      };
+    };
     expenseWorkbenchMarkup: JsonObject;
     confirm: () => boolean;
-    openExpenseWorkbench?: (agentId: string) => Promise<void>;
+    openExpenseWorkbench?: (agentId: string, gesture: string) => Promise<void>;
     closeExpenseWorkbench?: () => void;
   } = {
     orkas: {
-      invoke: async (channel, payload) => {
-        calls.push({ channel, payload });
-        return handler(channel, payload);
+      expenseWorkbench: {
+        prepareOpen: async (agentId, gesture) => {
+          calls.push({
+            channel: 'expenseWorkbench.prepareOpen',
+            payload: { agent_id: agentId, gesture },
+          });
+          return { ok: true };
+        },
+        open: async (agentId) => {
+          calls.push({ channel: 'expenseWorkbench.open', payload: { agent_id: agentId } });
+          if (options.openError) throw options.openError;
+          return { ok: true };
+        },
+        status: () => record('expenseWorkbench.status', {}),
+        configure: () => record('expenseWorkbench.pickAndConfigure', {}),
+        invoke: (operation, payload) => record('expenseWorkbench.invoke', { operation, payload }),
+        invokeExternal: (operation, payload) => record('expenseWorkbench.invokeExternal', { operation, payload }),
+        pickAndAddMaterials: (applicationId) => record(
+          'expenseWorkbench.pickAndAddMaterials',
+          { application_id: applicationId },
+        ),
+        confirmAndSubmit: (applicationId, version, payloadHash) => record(
+          'expenseWorkbench.confirmAndSubmit',
+          { application_id: applicationId, version, payload_hash: payloadHash },
+        ),
+        close: () => record('expenseWorkbench.close', {}),
       },
     },
     expenseWorkbenchMarkup: {
@@ -80,6 +115,10 @@ function loadWorkbench(handler: InvokeHandler) {
     },
     confirm: () => true,
   };
+  function record(channel: string, payload: JsonObject): Promise<JsonObject> {
+    calls.push({ channel, payload });
+    return handler(channel, payload);
+  }
   const context = {
     window: workbenchWindow,
     document: { getElementById: (id: string) => elements[id] || null },
@@ -95,7 +134,7 @@ function loadWorkbench(handler: InvokeHandler) {
     host,
     open: async (agentId = 'expense-agent') => {
       if (!workbenchWindow.openExpenseWorkbench) throw new Error('open handler is unavailable');
-      await workbenchWindow.openExpenseWorkbench(agentId);
+      await workbenchWindow.openExpenseWorkbench(agentId, 'agent_detail');
     },
     close: () => {
       if (!workbenchWindow.closeExpenseWorkbench) throw new Error('close handler is unavailable');
@@ -125,6 +164,19 @@ function applicationState(applicationId: string): JsonObject {
 }
 
 describe('expense workbench renderer lifecycle isolation', () => {
+  it('clears the prepared host state when capability opening fails', async () => {
+    const workbench = loadWorkbench(async (channel) => {
+      if (channel === 'expenseWorkbench.close') return { ok: true, closed: true };
+      throw new Error(`unexpected call: ${channel}`);
+    }, { openError: new Error('host authorization denied') });
+
+    await expect(workbench.open()).rejects.toThrow('host authorization denied');
+
+    expect(workbench.host.hidden).toBe(true);
+    expect(workbench.host.innerHTML).toBe('');
+    expect(workbench.calls.filter(({ channel }) => channel === 'expenseWorkbench.close')).toHaveLength(1);
+  });
+
   it('drops a page response that arrives after the workbench closes', async () => {
     const settings = deferred<JsonObject>();
     const workbench = loadWorkbench(async (channel, payload) => {

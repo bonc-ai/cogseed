@@ -1,10 +1,10 @@
 import { buildRunner } from '../../model/core-agent/runner';
 import { loadEngine } from './engine-loader';
 import {
+  AGENT_CHAT_UNAVAILABLE_ERROR_CODE,
   MANAGEMENT_ONLY_AGENT_ERROR_CODE,
-  getAgent,
-  isAgentChatDispatchable,
-} from '../agents';
+  assertAgentChatDispatchable,
+} from '../agent-dispatch-policy';
 
 // 引擎的 LlmResult 结构（进程内引擎导出，本文件只需结构约定）。
 export interface LlmResult { text: string; degraded: boolean; }
@@ -30,20 +30,17 @@ export function buildLlmComplete(opts: BridgeOptions): LlmComplete {
   return async (prompt: string) => {
     try {
       if (opts.agentId) {
-        const agent = await getAgent(opts.agentId);
-        if (agent && !isAgentChatDispatchable(agent)) {
-          throw Object.assign(
-            new Error('Management-only Agents cannot run Evolution.'),
-            { code: MANAGEMENT_ONLY_AGENT_ERROR_CODE },
-          );
-        }
+        await assertAgentChatDispatchable(opts.userId, opts.agentId);
       }
       const tail = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
       const { runner } = await build({ sessionId: `evolution-${tail}`, userId: opts.userId, agentId: opts.agentId });
       const text = await runner.runReflection(prompt);
       if (text && text.trim()) return { text, degraded: false };
     } catch (error) {
-      if ((error as { code?: string }).code === MANAGEMENT_ONLY_AGENT_ERROR_CODE) throw error;
+      const code = (error as { code?: string }).code;
+      if (code === MANAGEMENT_ONLY_AGENT_ERROR_CODE || code === AGENT_CHAT_UNAVAILABLE_ERROR_CODE) {
+        throw error;
+      }
       /* fall through to degraded */
     }
     const engine = await loadEngine();

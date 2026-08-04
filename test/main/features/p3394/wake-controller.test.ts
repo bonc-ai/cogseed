@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
   rejectWakeRequest: vi.fn(),
   markWakeRequestExecuted: vi.fn(),
   resetWakeApproval: vi.fn(),
-  getAgent: vi.fn(),
+  getAgentForChatDispatch: vi.fn(),
+  getAgentDispatchPolicy: vi.fn(),
   isAgentChatDispatchable: vi.fn(),
   isAgentEnabled: vi.fn(),
   setOrchestrationLedger: vi.fn(),
@@ -38,7 +39,8 @@ vi.mock("../../../../src/main/features/group_chat/state", () => ({
   setOrchestrationLedger: mocks.setOrchestrationLedger,
 }));
 vi.mock("../../../../src/main/features/agents", () => ({
-  getAgent: mocks.getAgent,
+  getAgentForChatDispatch: mocks.getAgentForChatDispatch,
+  getAgentDispatchPolicy: mocks.getAgentDispatchPolicy,
   isAgentChatDispatchable: mocks.isAgentChatDispatchable,
 }));
 vi.mock("../../../../src/main/features/component_enabled", () => ({
@@ -53,11 +55,15 @@ beforeEach(() => {
   mocks.rejectWakeRequest.mockReset();
   mocks.markWakeRequestExecuted.mockReset();
   mocks.resetWakeApproval.mockReset();
-  mocks.getAgent.mockReset();
+  mocks.getAgentForChatDispatch.mockReset();
+  mocks.getAgentDispatchPolicy.mockReset();
   mocks.isAgentChatDispatchable.mockReset();
   mocks.isAgentEnabled.mockReset();
   mocks.setOrchestrationLedger.mockReset();
-  mocks.getAgent.mockResolvedValue({ agent_id: "agent-1", interactive: false });
+  mocks.getAgentForChatDispatch.mockResolvedValue({ agent_id: "agent-1", interactive: false });
+  mocks.getAgentDispatchPolicy.mockImplementation(async (_uid: string, agentId: string) => (
+    mocks.getAgentForChatDispatch(_uid, agentId)
+  ));
   mocks.isAgentChatDispatchable.mockReturnValue(true);
   mocks.isAgentEnabled.mockReturnValue(true);
 });
@@ -79,7 +85,7 @@ describe("P3394 wake controller workflow binding", () => {
       updated_at: "t",
     } as any;
     mocks.getWakeRequest.mockResolvedValue(request);
-    mocks.getAgent.mockResolvedValue({
+    mocks.getAgentForChatDispatch.mockResolvedValue({
       agent_id: "expense-agent",
       interaction_mode: "management_only",
     });

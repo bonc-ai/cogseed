@@ -1,41 +1,28 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const getAgent = vi.fn();
 const adapter = { callExpenseWorkbench: vi.fn() };
 const confirmation = { issueExpenseWorkbenchConfirmation: vi.fn() };
+const canonical = { assertCanonicalExpenseWorkbenchAgent: vi.fn() };
 const CANONICAL_AGENT_ID = 'c045605cb916';
-
-function trustedAgent() {
-  return {
-    agent_id: CANONICAL_AGENT_ID,
-    source: 'marketplace',
-    seed_source: 'builtin',
-    enabled: true,
-    management_surface: 'expense_workbench',
-    reimbursement_entry_role: 'canonical',
-    interaction_mode: 'management_only',
-  };
-}
 
 beforeEach(() => {
   vi.resetModules();
-  getAgent.mockReset();
+  canonical.assertCanonicalExpenseWorkbenchAgent.mockReset().mockResolvedValue({});
   adapter.callExpenseWorkbench.mockReset();
   confirmation.issueExpenseWorkbenchConfirmation.mockReset();
-  vi.doMock('../../../src/main/features/agents', () => ({ getAgent }));
+  vi.doMock('../../../src/main/features/expense_workbench/canonical-agent', () => canonical);
   vi.doMock('../../../src/main/features/expense_workbench/adapter', () => adapter);
   vi.doMock('../../../src/main/features/expense_workbench/confirmation', () => confirmation);
 });
 
 afterEach(() => {
-  vi.doUnmock('../../../src/main/features/agents');
+  vi.doUnmock('../../../src/main/features/expense_workbench/canonical-agent');
   vi.doUnmock('../../../src/main/features/expense_workbench/adapter');
   vi.doUnmock('../../../src/main/features/expense_workbench/confirmation');
 });
 
 describe('expense workbench submission', () => {
   it('issues a host capability only after the current draft and Feishu target validate', async () => {
-    getAgent.mockResolvedValue(trustedAgent());
     confirmation.issueExpenseWorkbenchConfirmation.mockResolvedValue({ issued: true, capabilityId: 'hcap-test-1' });
     adapter.callExpenseWorkbench
       .mockResolvedValueOnce({
@@ -64,6 +51,8 @@ describe('expense workbench submission', () => {
     expect(confirmation.issueExpenseWorkbenchConfirmation).toHaveBeenCalledWith(expect.objectContaining({
       userId: 'u-1', applicationId: 'APP-1', draftVersion: 2, draftHash: 'a'.repeat(64),
     }));
+    expect(canonical.assertCanonicalExpenseWorkbenchAgent)
+      .toHaveBeenCalledWith('u-1', CANONICAL_AGENT_ID);
     expect(adapter.callExpenseWorkbench).toHaveBeenNthCalledWith(
       2,
       'u-1',
@@ -75,7 +64,6 @@ describe('expense workbench submission', () => {
   });
 
   it('rejects a stale draft without issuing a host capability', async () => {
-    getAgent.mockResolvedValue(trustedAgent());
     adapter.callExpenseWorkbench.mockResolvedValue({
       application: {
         application_id: 'APP-1', current_version: 3, current_payload_hash: 'a'.repeat(64),

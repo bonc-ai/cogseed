@@ -33,6 +33,31 @@ async function loadRunner() {
 }
 
 describe('runner › buildRunner auth gate', () => {
+  it('rejects a management-only Agent before auth, Session, skills, memory, cognition, projects, or tools', async () => {
+    const uid = 'runner-management';
+    const users = await import('../../../src/main/features/users');
+    users.activateUser(uid);
+    const paths = await import('../../../src/main/paths');
+    const agentDir = paths.agentDir(uid, 'expense-agent');
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(path.join(agentDir, 'agent.json'), JSON.stringify({
+      agent_id: 'expense-agent',
+      interaction_mode: 'management_only',
+    }));
+
+    const { buildRunner } = await loadRunner();
+    await expect(buildRunner({
+      sessionId: 'gmember-management-only',
+      userId: uid,
+      agentId: 'expense-agent',
+      projectId: 'project-that-must-not-be-read',
+      systemPrompt: 'prompt-that-must-not-be-processed',
+    })).rejects.toMatchObject({ code: 'E_AGENT_MANAGEMENT_ONLY' });
+
+    expect(fs.existsSync(paths.userSessionFile(uid, 'gmember-management-only'))).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, uid, 'cloud', 'projects', 'project-that-must-not-be-read'))).toBe(false);
+  });
+
   it('throws a clear "no model configured" error when no entries exist and no env fallback', async () => {
     // Fresh tmpDir → no workspace/auth/auth-profiles.json → pickChatEntry
     // returns null. ANTHROPIC_API_KEY cleared in beforeEach.

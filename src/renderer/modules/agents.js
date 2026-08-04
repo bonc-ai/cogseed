@@ -866,7 +866,7 @@ function renderAgentsGrid(agents) {
     card.addEventListener('click', (e) => {
       if (e.target.closest('[data-agent-use]')) {
         e.stopPropagation();
-        if (!card.classList.contains('is-disabled')) useAgent(id);
+        if (!card.classList.contains('is-disabled')) useAgent(id, 'agent_card');
         return;
       }
       if (e.target.closest('[data-agent-more]')) {
@@ -1757,6 +1757,8 @@ function _renderAgentDetail(agent, editing) {
     manageBtn.hidden = editing || !canManage;
     manageBtn.disabled = editing || !canManage || agent.enabled === false;
     manageBtn.setAttribute('aria-hidden', (!canManage || editing) ? 'true' : 'false');
+    if (canManage && agent.agent_id) manageBtn.setAttribute('data-expense-agent-id', agent.agent_id);
+    else manageBtn.removeAttribute('data-expense-agent-id');
   }
   if (enableBtn && isCommander) {
     enableBtn.style.display = 'none';
@@ -2978,7 +2980,7 @@ async function clearAgentChat() {
 /**
  * Select an agent in the Commander tab and wait for the user's next message.
  */
-async function useAgent(agentId) {
+async function useAgent(agentId, managementOpenGesture) {
   if (_isAgentProfileMock(agentId)) return;
   if (_isCommanderAgent(agentId)) {
     _agentsLog.info('use commander');
@@ -2993,7 +2995,24 @@ async function useAgent(agentId) {
     }, 50);
     return;
   }
-  if (_agentsCache?.some((a) => a.agent_id === agentId && a.enabled === false)) return;
+  const cachedAgent = _agentsCache?.find((a) => a.agent_id === agentId);
+  if (cachedAgent?.enabled === false) return;
+  const cachedCanonicalExpenseAgent = cachedAgent
+    && cachedAgent.interaction_mode === 'management_only'
+    && cachedAgent.management_surface === 'expense_workbench'
+    && cachedAgent.reimbursement_entry_role === 'canonical';
+  const preparedManagementOpen = cachedCanonicalExpenseAgent
+    && managementOpenGesture === 'agent_card'
+    && window.orkas?.expenseWorkbench?.prepareOpen
+    ? window.orkas.expenseWorkbench.prepareOpen(agentId, managementOpenGesture).then(
+      () => ({ ok: true }),
+      (error) => ({
+        ok: false,
+        error: error instanceof Error ? error : new Error(String(error || '报销工作台打开授权失败')),
+      }),
+    )
+    : null;
+  let preparedManagementOpenConsumed = false;
   try {
     const aRes = await apiFetch(`/api/agents/${encodeURIComponent(agentId)}`);
     const aData = await aRes.json();
@@ -3004,7 +3023,21 @@ async function useAgent(agentId) {
       if (agent.management_surface === 'expense_workbench'
           && agent.reimbursement_entry_role === 'canonical'
           && typeof openExpenseWorkbench === 'function') {
-        await openExpenseWorkbench(agent.agent_id);
+        const prepared = preparedManagementOpen ? await preparedManagementOpen : null;
+        if (prepared && !prepared.ok) throw prepared.error;
+        if (managementOpenGesture === 'agent_card') {
+          if (!prepared) throw new Error('管理 Agent 信息已更新，请从详情页重新打开');
+          const grid = document.getElementById('agents-grid-view');
+          const detail = document.getElementById('agents-detail-view');
+          if (grid) grid.style.display = 'none';
+          if (detail) detail.style.display = 'flex';
+          agent.source = _agentSource(agent.source);
+          _selectedAgent = { id: agent.agent_id, name: agent.name, source: agent.source };
+          _renderAgentDetail(agent, false);
+          _resetAgentDetailScroll();
+        }
+        preparedManagementOpenConsumed = !!prepared;
+        await openExpenseWorkbench(agent.agent_id, managementOpenGesture, !!prepared);
       }
       return;
     }
@@ -3025,7 +3058,13 @@ async function useAgent(agentId) {
       document.getElementById('new-chat-input')?.focus();
     }, 50);
   } catch (e) {
-    await uiAlert(t('agents.launch_failed', { reason: e.message || e }));
+    const reason = e instanceof Error ? e.message : String(e || '未知错误');
+    await uiAlert(t('agents.launch_failed', { reason }));
+  } finally {
+    if (preparedManagementOpen && !preparedManagementOpenConsumed) {
+      await preparedManagementOpen;
+      await window.orkas.expenseWorkbench.close().catch(() => {});
+    }
   }
 }
 

@@ -26,12 +26,7 @@ import { codexBackend } from './backends/codex.js';
 import { openclawBackend } from './backends/openclaw.js';
 import { opencodeBackend } from './backends/opencode.js';
 import { hermesBackend } from './backends/hermes.js';
-import {
-  killProcessTree,
-  spawnCli,
-  type LocalBackend,
-  type LocalEvent,
-} from './backends/base.js';
+import { type LocalBackend, type LocalEvent } from './backends/base.js';
 import { resolveCliProviderEnv } from './provider_env.js';
 import * as persist from './persist.js';
 import { sessionToolResultsDir } from '../../paths.js';
@@ -39,195 +34,14 @@ import { maybeSpillToolResult, toolResultRefForPath } from '../../util/tool-resu
 import type { ExecutionKind, ExecutionLifecycleSink } from '../execution-records.js';
 import type { PreparedExecutionContext } from '../p3394/execution-context.js';
 import { isPathAllowed } from '../../util/path-sandbox.js';
+import { assertAgentChatDispatchable } from '../agent-dispatch-policy.js';
 
 const log = createLogger('local-agents:runner');
-const DEFAULT_MANAGED_STDIO_LINE_BYTES = 1024 * 1024;
-const MAX_CONFIGURABLE_MANAGED_STDIO_LINE_BYTES = 64 * 1024 * 1024;
-
-/** Line-oriented child process for non-chat integrations. Keeping this here
- * preserves the application's single local-process spawn choke point. */
-export interface ManagedStdioProcessOptions {
-  command: string;
-  args: string[];
-  cwd: string;
-  env?: NodeJS.ProcessEnv;
-  signal?: AbortSignal;
-  maxInputLineBytes?: number;
-  maxOutputLineBytes?: number;
-}
-
-export interface ManagedStdioProcess {
-  readonly pid: number | undefined;
-  writeLine(line: string): Promise<void>;
-  onLine(listener: (line: string) => void): () => void;
-  onStderr(listener: (chunk: string) => void): () => void;
-  onExit(listener: (error: Error | null) => void): () => void;
-  close(): Promise<void>;
-}
-
-function resolveManagedStdioLineLimit(value: number | undefined, optionName: string): number {
-  // Only omission selects the default. Runtime callers that bypass TypeScript
-  // must not turn null or another malformed value into a valid configuration.
-  const limit = value === undefined ? DEFAULT_MANAGED_STDIO_LINE_BYTES : value;
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_CONFIGURABLE_MANAGED_STDIO_LINE_BYTES) {
-    throw new Error(`${optionName} must be a positive safe integer no greater than ${MAX_CONFIGURABLE_MANAGED_STDIO_LINE_BYTES}`);
-  }
-  return limit;
-}
-
-export function startManagedStdioProcess(opts: ManagedStdioProcessOptions): ManagedStdioProcess {
-  if (typeof opts.command !== 'string' || !opts.command || opts.command.includes('\0') || !path.isAbsolute(opts.command)) {
-    throw new Error('managed process command must be an absolute path without null bytes');
-  }
-  if (typeof opts.cwd !== 'string' || !opts.cwd || opts.cwd.includes('\0') || !path.isAbsolute(opts.cwd)) {
-    throw new Error('managed process cwd must be an absolute path without null bytes');
-  }
-  if (!Array.isArray(opts.args) || opts.args.some((arg) => typeof arg !== 'string' || arg.includes('\0'))) {
-    throw new Error('managed process args must be strings without null bytes');
-  }
-  const maxInputLineBytes = resolveManagedStdioLineLimit(opts.maxInputLineBytes, 'maxInputLineBytes');
-  const maxOutputLineBytes = resolveManagedStdioLineLimit(opts.maxOutputLineBytes, 'maxOutputLineBytes');
-  const child = spawnCli(opts.command, opts.args, opts.cwd, opts.env);
-  let stdoutBuffer = '';
-  let stdoutBufferBytes = 0;
-  let closed = false;
-  let closePromise: Promise<void> | null = null;
-  let abortListener: (() => void) | undefined;
-  const lineListeners = new Set<(line: string) => void>();
-  const stderrListeners = new Set<(chunk: string) => void>();
-  const exitListeners = new Set<(error: Error | null) => void>();
-  const pendingWrites = new Set<(error: Error) => void>();
-
-  const notifyExit = (error: Error | null): void => {
-    if (closed) return;
-    closed = true;
-    if (opts.signal && abortListener) opts.signal.removeEventListener('abort', abortListener);
-    const writeFailure = error || new Error('managed process exited before stdin write completed');
-    for (const rejectWrite of [...pendingWrites]) rejectWrite(writeFailure);
-    pendingWrites.clear();
-    for (const listener of [...exitListeners]) listener(error);
-    lineListeners.clear();
-    stderrListeners.clear();
-    exitListeners.clear();
-  };
-
-  child.stdout.setEncoding('utf8');
-  child.stdout.on('data', (chunk: string) => {
-    if (closed) return;
-    stdoutBuffer += chunk;
-    stdoutBufferBytes += Buffer.byteLength(chunk, 'utf8');
-    let newline = stdoutBuffer.indexOf('\n');
-    while (newline >= 0) {
-      const rawLine = stdoutBuffer.slice(0, newline);
-      const rawLineBytes = Buffer.byteLength(rawLine, 'utf8');
-      const hasCarriageReturn = rawLine.endsWith('\r');
-      const line = hasCarriageReturn ? rawLine.slice(0, -1) : rawLine;
-      const lineBytes = rawLineBytes - (hasCarriageReturn ? 1 : 0);
-      stdoutBuffer = stdoutBuffer.slice(newline + 1);
-      stdoutBufferBytes -= rawLineBytes + 1;
-      if (lineBytes > maxOutputLineBytes) {
-        stdoutBuffer = '';
-        stdoutBufferBytes = 0;
-        const error = new Error(`managed process stdout line exceeds ${maxOutputLineBytes} bytes`);
-        notifyExit(error);
-        killProcessTree(child, 'SIGTERM');
-        return;
-      }
-      for (const listener of [...lineListeners]) listener(line);
-      newline = stdoutBuffer.indexOf('\n');
-    }
-    if (stdoutBufferBytes > maxOutputLineBytes) {
-      stdoutBuffer = '';
-      stdoutBufferBytes = 0;
-      const error = new Error(`managed process stdout line exceeds ${maxOutputLineBytes} bytes`);
-      notifyExit(error);
-      killProcessTree(child, 'SIGTERM');
-    }
-  });
-  child.stderr.setEncoding('utf8');
-  child.stderr.on('data', (chunk: string) => {
-    if (closed) return;
-    for (const listener of [...stderrListeners]) listener(chunk);
-  });
-  child.once('error', (error) => notifyExit(error));
-  child.once('close', (code, signal) => {
-    if (closed) return;
-    if (stdoutBuffer) {
-      const hasCarriageReturn = stdoutBuffer.endsWith('\r');
-      const line = hasCarriageReturn ? stdoutBuffer.slice(0, -1) : stdoutBuffer;
-      const lineBytes = stdoutBufferBytes - (hasCarriageReturn ? 1 : 0);
-      if (lineBytes > maxOutputLineBytes) {
-        stdoutBuffer = '';
-        stdoutBufferBytes = 0;
-        notifyExit(new Error(`managed process stdout line exceeds ${maxOutputLineBytes} bytes`));
-        return;
-      }
-      for (const listener of [...lineListeners]) listener(line);
-      stdoutBuffer = '';
-      stdoutBufferBytes = 0;
-    }
-    if (code === 0 || (code === null && signal === 'SIGTERM')) notifyExit(null);
-    else notifyExit(new Error(`managed process exited (${code ?? 'null'}${signal ? `/${signal}` : ''})`));
-  });
-  if (opts.signal) {
-    abortListener = () => killProcessTree(child, 'SIGTERM');
-    if (opts.signal.aborted) abortListener();
-    else opts.signal.addEventListener('abort', abortListener, { once: true });
-  }
-
-  const remove = <T>(set: Set<T>, item: T): (() => void) => () => { set.delete(item); };
-  return {
-    pid: child.pid,
-    writeLine(line: string): Promise<void> {
-      if (closed) return Promise.reject(new Error('managed process is closed'));
-      if (typeof line !== 'string' || !line || line.includes('\n') || line.includes('\r') || line.includes('\0')) {
-        return Promise.reject(new Error('line must be a non-empty string without line breaks or null bytes'));
-      }
-      if (Buffer.byteLength(line, 'utf8') > maxInputLineBytes) {
-        return Promise.reject(new Error(`managed process stdin line exceeds ${maxInputLineBytes} bytes`));
-      }
-      return new Promise((resolve, reject) => {
-        let settled = false;
-        const settle = (error?: Error | null): void => {
-          if (settled) return;
-          settled = true;
-          child.stdin.off('error', onError);
-          pendingWrites.delete(rejectPending);
-          if (error) reject(error);
-          else resolve();
-        };
-        const onError = (error: Error): void => settle(error);
-        const rejectPending = (error: Error): void => settle(error);
-        pendingWrites.add(rejectPending);
-        child.stdin.once('error', onError);
-        child.stdin.write(`${line}\n`, 'utf8', (error?: Error | null) => settle(error));
-      });
-    },
-    onLine(listener) { lineListeners.add(listener); return remove(lineListeners, listener); },
-    onStderr(listener) { stderrListeners.add(listener); return remove(stderrListeners, listener); },
-    onExit(listener) { exitListeners.add(listener); return remove(exitListeners, listener); },
-    close(): Promise<void> {
-      if (closePromise) return closePromise;
-      closePromise = new Promise((resolve) => {
-        if (closed) { resolve(); return; }
-        let timer: ReturnType<typeof setTimeout>;
-        const removeExit = () => {
-          exitListeners.delete(removeExit);
-          clearTimeout(timer);
-          resolve();
-        };
-        exitListeners.add(removeExit);
-        timer = setTimeout(() => {
-          if (!closed) killProcessTree(child, 'SIGKILL');
-        }, 5000);
-        if (typeof timer.unref === 'function') timer.unref();
-        try { child.stdin.end(); } catch { /* process may already be gone */ }
-        killProcessTree(child, 'SIGTERM');
-      });
-      return closePromise;
-    },
-  };
-}
+export {
+  startManagedStdioProcess,
+  type ManagedStdioProcess,
+  type ManagedStdioProcessOptions,
+} from '../../util/managed-stdio-process.js';
 
 /** Hard wall-clock cap for a single CLI dispatch — zombie insurance
  *  only. The hang detector is the idle-kill below, so this can be
@@ -800,6 +614,7 @@ export interface RunCliAgentResult {
 }
 
 export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
+  await assertAgentChatDispatchable(opts.uid, opts.agentId);
   if (opts.preparedContext) {
     const roots = opts.preparedContext.permissionMode === 'read-only' ? opts.preparedContext.readOnlyRoots : [...opts.preparedContext.writableRoots, ...opts.preparedContext.readOnlyRoots];
     if (opts.prompt !== opts.preparedContext.prompt || !isPathAllowed(opts.cwd, roots)) {

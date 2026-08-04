@@ -2,7 +2,8 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
-import { userExpenseWorkbenchConfirmationsDir } from '../../paths';
+import { userExpenseWorkbenchConfirmationsDir, WS_ROOT } from '../../paths';
+import { ensurePrivateDirectoryWithin } from '../../util/private-directory';
 
 const CAPABILITY_TTL_SECONDS = 15 * 60;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -60,25 +61,17 @@ function capabilityRoot(userId: string): string {
   return userExpenseWorkbenchConfirmationsDir(userId);
 }
 
-async function ensurePrivateDirectory(directory: string): Promise<void> {
-  try {
-    const existing = await fs.lstat(directory);
-    if (!existing.isDirectory() || existing.isSymbolicLink()) throw new Error('confirmation storage is not a safe directory');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-  }
-  await fs.chmod(directory, 0o700);
-}
-
 export async function issueExpenseWorkbenchConfirmation(input: ExpenseWorkbenchConfirmationInput): Promise<{ issued: true; capabilityId: string }> {
   const userId = requireSafeId(input.userId, 'user id');
   const applicationId = requireSafeId(input.applicationId, 'application id');
   if (!Number.isInteger(input.draftVersion) || input.draftVersion < 1) throw new Error('draft version is invalid');
   if (!HASH.test(input.draftHash)) throw new Error('draft hash is invalid');
   const target = requireTarget(input.target);
-  const root = capabilityRoot(userId);
-  await ensurePrivateDirectory(root);
+  const root = ensurePrivateDirectoryWithin(
+    WS_ROOT,
+    capabilityRoot(userId),
+    'confirmation storage is not a safe directory',
+  );
   const capabilityId = `hcap-${crypto.randomBytes(18).toString('hex')}`;
   const now = new Date();
   const expires = new Date(now.getTime() + CAPABILITY_TTL_SECONDS * 1000);

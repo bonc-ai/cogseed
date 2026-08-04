@@ -23,13 +23,9 @@
     if (!isActive(active)) throw new StaleWorkbenchError();
   }
 
-  function invokeFor(active, channel, operation, payload) {
+  function invokeFor(active, operation, payload) {
     if (!isActive(active)) return Promise.reject(new StaleWorkbenchError());
-    return window.orkas.invoke(channel, {
-      agent_id: active.agentId,
-      operation,
-      payload: payload || {},
-    }).then((response) => {
+    return window.orkas.expenseWorkbench.invoke(operation, payload || {}).then((response) => {
       assertActive(active);
       if (!response || response.ok !== true) throw new Error(response && response.error ? response.error : '报销工作台调用失败');
       return response;
@@ -37,17 +33,13 @@
   }
 
   function invoke(operation, payload, active) {
-    return invokeFor(active || runtime, 'expenseWorkbench.invoke', operation, payload);
+    return invokeFor(active || runtime, operation, payload);
   }
 
   function invokeExternal(operation, payload, active) {
     const current = active || runtime;
     if (!isActive(current)) return Promise.reject(new StaleWorkbenchError());
-    return window.orkas.invoke('expenseWorkbench.invokeExternal', {
-      agent_id: current.agentId,
-      operation,
-      payload: payload || {},
-    }).then((response) => {
+    return window.orkas.expenseWorkbench.invokeExternal(operation, payload || {}).then((response) => {
       assertActive(current);
       if (!response || response.ok !== true) throw new Error(response && response.error ? response.error : '外部系统操作未完成');
       return response;
@@ -166,9 +158,7 @@
   async function configureProject() {
     const active = runtime;
     if (!active) return;
-    const response = await window.orkas.invoke('expenseWorkbench.pickAndConfigure', {
-      agent_id: active.agentId,
-    });
+    const response = await window.orkas.expenseWorkbench.configure();
     assertActive(active);
     if (!response || response.ok !== true) throw new Error(response && response.error ? response.error : '项目配置失败');
     if (response.cancelled) return;
@@ -228,10 +218,9 @@
     assertActive(active);
     const selected = selectedApplication();
     if (!selected || !selected.application) return;
-    const response = await window.orkas.invoke('expenseWorkbench.pickAndAddMaterials', {
-      agent_id: active.agentId,
-      application_id: selected.application.application_id,
-    });
+    const response = await window.orkas.expenseWorkbench.pickAndAddMaterials(
+      selected.application.application_id,
+    );
     assertActive(active);
     if (!response || response.ok !== true) {
       throw new Error(response && response.error ? response.error : markup().text('material_add_failed', '材料登记失败'));
@@ -293,12 +282,11 @@
     assertActive(active);
     if (!confirmed) return;
     setHeader('提交中…', active);
-    const response = await window.orkas.invoke('expenseWorkbench.confirmAndSubmit', {
-      agent_id: active.agentId,
-      application_id: app.application_id,
-      version: Number(app.current_version || 0),
-      payload_hash: String(app.current_payload_hash || ''),
-    });
+    const response = await window.orkas.expenseWorkbench.confirmAndSubmit(
+      app.application_id,
+      Number(app.current_version || 0),
+      String(app.current_payload_hash || ''),
+    );
     assertActive(active);
     if (!response || response.ok !== true) throw new Error(response && response.error ? response.error : markup().text('submit_failed', '飞书提交失败'));
     active.state.selectedApplication = response.submitted || response.confirmed || selected;
@@ -413,7 +401,11 @@
   }
 
   function closeExpenseWorkbench() {
-    if (!runtime) return;
+    if (!runtime) {
+      const closeRequest = window.orkas.expenseWorkbench.close().catch(() => {});
+      closing = Promise.allSettled([closing, closeRequest]).then(() => undefined);
+      return;
+    }
     const current = runtime;
     current.closed = true;
     runtime = null;
@@ -427,16 +419,23 @@
     if (detail) detail.style.display = current.detailDisplay || '';
     const chat = document.getElementById('agents-chat-col');
     if (chat) chat.style.display = current.chatDisplay || 'none';
-    const closeRequest = window.orkas.invoke('expenseWorkbench.close', {}).catch(() => {});
+    const closeRequest = window.orkas.expenseWorkbench.close().catch(() => {});
     closing = Promise.allSettled([closing, closeRequest]).then(() => undefined);
   }
 
-  async function openExpenseWorkbench(agentId) {
+  async function openExpenseWorkbench(agentId, openGesture, preparedOpen = false) {
     if (!agentId) return;
+    if (openGesture !== 'agent_card' && openGesture !== 'agent_detail') {
+      throw new Error('报销工作台必须由用户点击受信任入口打开');
+    }
+    if (!preparedOpen) await window.orkas.expenseWorkbench.prepareOpen(agentId, openGesture);
     if (runtime) closeExpenseWorkbench();
     await closing;
     const target = host();
-    if (!target) return;
+    if (!target) {
+      await window.orkas.expenseWorkbench.close().catch(() => {});
+      throw new Error('报销工作台管理容器不存在');
+    }
     const detail = document.getElementById('agents-detail-content');
     const chat = document.getElementById('agents-chat-col');
     const active = {
@@ -450,14 +449,18 @@
       inFlight: new Set(),
       closed: false,
     };
-    runtime = active;
-    if (detail) detail.style.display = 'none';
-    if (chat) chat.style.display = 'none';
-    target.hidden = false;
-    target.innerHTML = markup().shell((typeof _selectedAgent !== 'undefined' && _selectedAgent) ? _selectedAgent.name : '报销智能体');
-    target.onclick = handleClick;
+    let hostOpened = false;
     try {
-      const status = await window.orkas.invoke('expenseWorkbench.status', {});
+      runtime = active;
+      if (detail) detail.style.display = 'none';
+      if (chat) chat.style.display = 'none';
+      target.hidden = false;
+      target.innerHTML = markup().shell((typeof _selectedAgent !== 'undefined' && _selectedAgent) ? _selectedAgent.name : '报销智能体');
+      target.onclick = handleClick;
+      await window.orkas.expenseWorkbench.open(agentId);
+      hostOpened = true;
+      assertActive(active);
+      const status = await window.orkas.expenseWorkbench.status();
       assertActive(active);
       active.projectStatus = status && status.ok ? status : { configured: false };
       const banner = document.getElementById('ew-config-banner');
@@ -465,6 +468,12 @@
       if (active.projectStatus.configured) await loadPage('assistant', active);
       else { renderPage(active); setHeader('未配置项目', active); }
     } catch (error) {
+      if (!hostOpened) {
+        if (isActive(active)) closeExpenseWorkbench();
+        else await window.orkas.expenseWorkbench.close().catch(() => {});
+        await closing;
+        throw error;
+      }
       if (error instanceof StaleWorkbenchError || !isActive(active)) return;
       active.state.message = error && error.message ? error.message : '无法读取项目配置';
       const banner = document.getElementById('ew-config-banner');

@@ -8,11 +8,22 @@ import * as path from 'node:path';
 const require = createRequire(import.meta.url);
 const {
   verifyFfmpegRuntimeDir,
+  verifyRuntimeDir,
   verifyRuntimeRoot,
   verifyWhisperRuntimeDir,
   verifyWindowsVcImportClosure,
 } = require('../../../bin/runtime-gate.cjs') as {
   verifyFfmpegRuntimeDir: (root: string, platform: string, arch: string, options?: Record<string, unknown>) => string[];
+  verifyRuntimeDir: (
+    kind: 'python' | 'uv' | 'node',
+    directory: string,
+    key: string,
+    specification: Record<string, unknown>,
+    asset: Record<string, unknown>,
+    platform: string,
+    arch: string,
+    options?: Record<string, unknown>,
+  ) => string;
   verifyRuntimeRoot: (root: string, platform: string, arch: string, options?: {
     allowedKeys?: string[];
     whisperContract?: any;
@@ -32,14 +43,20 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-const RUNTIME_SIZES: Record<'python' | 'uv' | 'node', number> = { python: 101, uv: 202, node: 303 };
+const PYTHON_ARCHIVE = Buffer.alloc(101, 0x50);
+const PYTHON_ARCHIVE_SHA256 = crypto.createHash('sha256').update(PYTHON_ARCHIVE).digest('hex');
+const RUNTIME_SIZES: Record<'python' | 'uv' | 'node', number> = {
+  python: PYTHON_ARCHIVE.length,
+  uv: 202,
+  node: 303,
+};
 
 function writeManifest(root: string, keys: string[]): void {
   const assets = Object.fromEntries(keys.map((key) => [key, {
     python: {
       name: 'python.zip',
       url: 'https://example.invalid/python.zip',
-      sha256: 'python-sha',
+      sha256: PYTHON_ARCHIVE_SHA256,
       size: RUNTIME_SIZES.python,
       archive: 'zip',
       executable: 'python/python.exe',
@@ -95,6 +112,9 @@ function writeRuntime(root: string, kind: 'python' | 'uv' | 'node', key: string,
     const scriptsDir = path.join(path.dirname(exe), 'Scripts');
     fs.mkdirSync(scriptsDir, { recursive: true });
     for (const name of ['pip', 'pip3']) fs.writeFileSync(path.join(scriptsDir, `${name}.cmd`), '@echo off\r\n');
+    const archiveDir = path.join(dir, 'archive');
+    fs.mkdirSync(archiveDir);
+    fs.writeFileSync(path.join(archiveDir, 'python.zip'), PYTHON_ARCHIVE);
   } else if (kind === 'uv') {
     fs.writeFileSync(path.join(path.dirname(exe), 'uvx.exe'), '');
   } else if (withNodeCompanions) {
@@ -109,7 +129,7 @@ function writeRuntime(root: string, kind: 'python' | 'uv' | 'node', key: string,
     source: 'test',
     release: 'test',
     asset: `${kind}.zip`,
-    sha256: `${kind}-sha`,
+    sha256: kind === 'python' ? PYTHON_ARCHIVE_SHA256 : `${kind}-sha`,
     size: RUNTIME_SIZES[kind],
   }, null, 2));
 }
@@ -412,6 +432,77 @@ describe('runtime-gate', () => {
       whisperContract: contract,
       windowsVcContract: windowsVcContract(key),
     })).toThrow(/ffmpeg runtime hash\/size mismatch/);
+  });
+
+  it('fails when the opaque Python source archive is missing or modified', () => {
+    const root = path.join(tmpDir, 'runtime');
+    const key = 'win32-x64';
+    const contract = whisperContract([key]);
+    writeManifest(root, [key]);
+    writeAllRuntimes(root, key, contract);
+    const archive = path.join(root, 'python', key, 'archive', 'python.zip');
+    fs.appendFileSync(archive, 'tampered');
+
+    expect(() => verifyRuntimeRoot(root, 'win32', 'x64', {
+      whisperContract: contract,
+      windowsVcContract: windowsVcContract(key),
+    })).toThrow(/python runtime source archive hash\/size mismatch/);
+
+    fs.rmSync(archive);
+    expect(() => verifyRuntimeRoot(root, 'win32', 'x64', {
+      whisperContract: contract,
+      windowsVcContract: windowsVcContract(key),
+    })).toThrow(/missing python runtime source archive/);
+  });
+
+  it('keeps the Python source archive immutable when Darwin signing changes extracted executables', () => {
+    const key = 'darwin-arm64';
+    const directory = path.join(tmpDir, 'runtime', 'python', key);
+    const executable = path.join(directory, 'python', 'bin', 'python3');
+    const archiveName = 'python.tar.gz';
+    const archive = path.join(directory, 'archive', archiveName);
+    const specification = { version: '3.12.13', source: 'test', release: 'test' };
+    const asset = {
+      name: archiveName,
+      sha256: PYTHON_ARCHIVE_SHA256,
+      size: PYTHON_ARCHIVE.length,
+      archive: 'tar.gz',
+      executable: 'python/bin/python3',
+    };
+    fs.mkdirSync(path.dirname(executable), { recursive: true });
+    fs.mkdirSync(path.dirname(archive), { recursive: true });
+    fs.writeFileSync(executable, Buffer.from('original Mach-O fixture'));
+    for (const name of ['pip', 'pip3', 'pip3.12']) {
+      fs.writeFileSync(path.join(path.dirname(executable), name), '');
+    }
+    fs.writeFileSync(archive, PYTHON_ARCHIVE);
+    fs.writeFileSync(path.join(directory, '.orkas-runtime.json'), JSON.stringify({
+      schema: 1,
+      kind: 'python',
+      platformKey: key,
+      version: specification.version,
+      source: specification.source,
+      release: specification.release,
+      asset: asset.name,
+      sha256: asset.sha256,
+      size: asset.size,
+    }));
+
+    fs.appendFileSync(executable, 'Developer ID signature');
+    expect(verifyRuntimeDir(
+      'python', directory, key, specification, asset, 'darwin', 'arm64', {
+        checkArch: false,
+        allowSignedDarwinRuntime: true,
+      },
+    )).toBe(executable);
+
+    fs.appendFileSync(archive, 'tampered');
+    expect(() => verifyRuntimeDir(
+      'python', directory, key, specification, asset, 'darwin', 'arm64', {
+        checkArch: false,
+        allowSignedDarwinRuntime: true,
+      },
+    )).toThrow(/python runtime source archive hash\/size mismatch/);
   });
 
   it('accepts signed Darwin FFmpeg mutations only after expected-team signature verification', () => {

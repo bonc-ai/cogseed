@@ -59,7 +59,7 @@ export { getCurrentDevice };
 import { getActiveUserId, hasActiveUser } from './users';
 import * as chats from './chats';
 import * as groupChat from './group_chat';
-import { getAgent, isAgentChatDispatchable } from './agents';
+import { getAgentForChatDispatch, getAgentDispatchPolicy, isAgentChatDispatchable } from './agents';
 
 const log = createLogger('auto-tasks');
 
@@ -453,7 +453,8 @@ async function _projectAllowsRecipientAgent(uid: string, fields: NormalisedField
   const projectId = fields.project_id;
   const recipient = fields.recipient;
   if (!recipient || recipient.kind !== 'agent') return true;
-  const agent = await getAgent(recipient.id);
+  if (!isAgentChatDispatchable(await getAgentDispatchPolicy(uid, recipient.id))) return false;
+  const agent = await getAgentForChatDispatch(uid, recipient.id);
   if (!isAgentChatDispatchable(agent)) return false;
   if (!projectId) return true;
   if (!fs.existsSync(projectMetaFile(uid, projectId))) return true;
@@ -1105,7 +1106,12 @@ async function _fireTask(uid: string, task: AutoTask): Promise<void> {
     });
   };
   if (task.recipient?.kind === 'agent') {
-    const agent = await getAgent(task.recipient.id);
+    if (!isAgentChatDispatchable(await getAgentDispatchPolicy(uid, task.recipient.id))) {
+      log.warn(`fire rejected uid=${uid} id=${task.id} reason=recipient_unavailable`);
+      emitFailure('recipient_unavailable');
+      return;
+    }
+    const agent = await getAgentForChatDispatch(uid, task.recipient.id);
     if (!isAgentChatDispatchable(agent)) {
       log.warn(`fire rejected uid=${uid} id=${task.id} reason=recipient_unavailable`);
       emitFailure('recipient_unavailable');

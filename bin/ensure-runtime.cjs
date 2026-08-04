@@ -17,7 +17,11 @@ const path = require('node:path');
 const https = require('node:https');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
-const { MANIFEST_RUNTIME_KINDS, verifyRuntimeDir } = require('./runtime-gate.cjs');
+const {
+  MANIFEST_RUNTIME_KINDS,
+  runtimeSourceArchivePath,
+  verifyRuntimeDir,
+} = require('./runtime-gate.cjs');
 
 const MARKER = '.orkas-runtime.json';
 const KINDS = MANIFEST_RUNTIME_KINDS;
@@ -332,6 +336,24 @@ function preparePayload(kind, extractDir, payloadDir, asset) {
   copyTree(extractDir, payloadDir);
 }
 
+function retainPythonSourceArchive(source, payloadDir, asset) {
+  const destination = runtimeSourceArchivePath(payloadDir, asset);
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
+  const stat = fs.lstatSync(destination);
+  const digest = sha256File(destination);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== asset.size || digest !== asset.sha256) {
+    die('retained python runtime archive failed verification', {
+      archive: destination,
+      expectedSize: asset.size,
+      actualSize: stat.size,
+      expectedSha256: asset.sha256,
+      actualSha256: digest,
+    });
+  }
+  try { fs.chmodSync(destination, 0o444); } catch { /* Windows has no POSIX mode contract. */ }
+}
+
 function pythonVersionSuffix(spec) {
   const m = /^(\d+)\.(\d+)/.exec(String(spec.version || ''));
   return m ? `${m[1]}.${m[2]}` : '';
@@ -520,11 +542,12 @@ async function ensureInRoot(root, kind, key, spec, asset, opts) {
     }
     extractArchive(archive, extractDir, asset, opts);
     preparePayload(kind, extractDir, payloadDir, asset);
+    if (kind === 'python') retainPythonSourceArchive(archive, payloadDir, asset);
     doctorDir(payloadDir, kind, spec, asset, opts);
     writeMarker(payloadDir, kind, key, spec, asset);
+    const versionOutput = selfCheck(kind, payloadDir, asset, key, { ...opts, manifestSpec: spec });
     replaceDir(dest, payloadDir);
     fs.rmSync(tmp, { recursive: true, force: true });
-    const versionOutput = selfCheck(kind, dest, asset, key, { ...opts, manifestSpec: spec });
     return {
       kind,
       key,

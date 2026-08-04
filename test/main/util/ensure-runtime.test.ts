@@ -1,10 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import * as crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
 const TEST_NODE = process.env.ORKAS_TEST_NODE || process.execPath;
+const PYTHON_ARCHIVE = Buffer.alloc(123, 0x50);
+const PYTHON_ARCHIVE_SHA256 = crypto.createHash('sha256').update(PYTHON_ARCHIVE).digest('hex');
 
 let tmpDir: string;
 
@@ -27,8 +30,8 @@ function writeManifest(key: string, executable: string): string {
         [key]: {
           name: 'python-test.tar.gz',
           url: 'https://example.invalid/python-test.tar.gz',
-          sha256: 'abc123',
-          size: 123,
+          sha256: PYTHON_ARCHIVE_SHA256,
+          size: PYTHON_ARCHIVE.length,
           archive: 'tar.gz',
           executable,
         },
@@ -94,6 +97,12 @@ function writePythonPipShims(exe: string): void {
   }
 }
 
+function writePythonArchive(dir: string): void {
+  const archiveDir = path.join(dir, 'archive');
+  fs.mkdirSync(archiveDir, { recursive: true });
+  fs.writeFileSync(path.join(archiveDir, 'python-test.tar.gz'), PYTHON_ARCHIVE);
+}
+
 function runEnsure(root: string, manifest: string, key: string, kind = 'python') {
   const [platform, arch] = key.split('-');
   return spawnSync(TEST_NODE, [
@@ -137,7 +146,8 @@ describe('ensure-runtime.cjs', () => {
     fs.mkdirSync(path.dirname(exe), { recursive: true });
     fs.writeFileSync(exe, '');
     writePythonPipShims(exe);
-    writeMarker(dir, 'python', key, 'python-test.tar.gz', 'abc123', 123);
+    writePythonArchive(dir);
+    writeMarker(dir, 'python', key, 'python-test.tar.gz', PYTHON_ARCHIVE_SHA256, PYTHON_ARCHIVE.length);
 
     const r = runEnsure(root, manifest, key);
 
@@ -179,7 +189,8 @@ describe('ensure-runtime.cjs', () => {
     fs.mkdirSync(path.dirname(exe), { recursive: true });
     fs.writeFileSync(exe, '');
     writePythonPipShims(exe);
-    writeMarker(dir, 'python', key, 'python-test.tar.gz', 'abc123', 123);
+    writePythonArchive(dir);
+    writeMarker(dir, 'python', key, 'python-test.tar.gz', PYTHON_ARCHIVE_SHA256, PYTHON_ARCHIVE.length);
 
     const r = runEnsure(root, manifest, key);
 
@@ -199,7 +210,8 @@ describe('ensure-runtime.cjs', () => {
     const exe = path.join(dir, ...executable.split('/'));
     fs.mkdirSync(path.dirname(exe), { recursive: true });
     fs.writeFileSync(exe, '');
-    writeMarker(dir, 'python', key, 'python-test.tar.gz', 'abc123', 123);
+    writePythonArchive(dir);
+    writeMarker(dir, 'python', key, 'python-test.tar.gz', PYTHON_ARCHIVE_SHA256, PYTHON_ARCHIVE.length);
 
     const r = runEnsureMutable(root, manifest, key);
 

@@ -2,9 +2,10 @@ import * as fs from 'node:fs';
 import { createRequire } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const require = createRequire(import.meta.url);
+const mutableFs = require('node:fs') as typeof fs;
 const sourceRuntime = require('../../../scripts/prepare-source-runtime.cjs') as {
   sourceRuntimeBundleSpec(variant: string): {
     variant: string;
@@ -19,6 +20,7 @@ const sourceRuntime = require('../../../scripts/prepare-source-runtime.cjs') as 
     identity: ReturnType<typeof sourceRuntime.sourceRuntimeBundleSpec>,
     electronVersion: string,
   ): boolean;
+  copyRuntimeBundle(source: string, destination: string): void;
   parseVariant(argv: readonly string[]): string;
   parseIntegrationWorktreeVariant(argv: readonly string[]): string;
 };
@@ -30,6 +32,7 @@ const REQUIRED_RUNTIME_EXECUTABLES = [
   path.join('Contents', 'Frameworks', 'Electron Framework.framework', 'Electron Framework'),
   path.join('Contents', 'Frameworks', 'Electron Helper.app', 'Contents', 'MacOS', 'Electron Helper'),
   path.join('Contents', 'Frameworks', 'Electron Helper (GPU).app', 'Contents', 'MacOS', 'Electron Helper (GPU)'),
+  path.join('Contents', 'Frameworks', 'Electron Helper (Plugin).app', 'Contents', 'MacOS', 'Electron Helper (Plugin)'),
   path.join('Contents', 'Frameworks', 'Electron Helper (Renderer).app', 'Contents', 'MacOS', 'Electron Helper (Renderer)'),
 ] as const;
 
@@ -76,6 +79,7 @@ function createCurrentBundleFixture() {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const root of temporaryRoots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -102,6 +106,88 @@ describe('macOS source runtime bundle contract', () => {
     }
     expect(sourceRuntime.sourceRuntimeBundleSpec('integration').protocolSchemes)
       .toEqual(['mateagent', 'orkas']);
+  });
+
+  it('preserves relative framework symlinks when copying the Electron app', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-source-copy-'));
+    temporaryRoots.push(root);
+    const distDir = path.join(root, 'dist');
+    const source = path.join(distDir, 'Electron.app');
+    const destination = path.join(distDir, 'Mate Agent [Integration].app');
+    const frameworkVersions = path.join(
+      source,
+      'Contents',
+      'Frameworks',
+      'Electron Framework.framework',
+      'Versions',
+    );
+    fs.mkdirSync(path.join(source, 'Contents', 'MacOS'), { recursive: true });
+    fs.mkdirSync(path.join(frameworkVersions, 'A'), { recursive: true });
+    fs.writeFileSync(path.join(source, 'Contents', 'MacOS', 'Electron'), '#!/bin/sh\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(frameworkVersions, 'A', 'Electron Framework'), '#!/bin/sh\n', { mode: 0o755 });
+    fs.symlinkSync('A', path.join(frameworkVersions, 'Current'));
+    fs.symlinkSync(
+      path.join('Versions', 'Current', 'Electron Framework'),
+      path.join(source, 'Contents', 'Frameworks', 'Electron Framework.framework', 'Electron Framework'),
+    );
+    for (const helper of ['Electron Helper', 'Electron Helper (GPU)', 'Electron Helper (Plugin)', 'Electron Helper (Renderer)']) {
+      const executable = path.join(source, 'Contents', 'Frameworks', `${helper}.app`, 'Contents', 'MacOS', helper);
+      fs.mkdirSync(path.dirname(executable), { recursive: true });
+      fs.writeFileSync(executable, '#!/bin/sh\n', { mode: 0o755 });
+    }
+    sourceRuntime.copyRuntimeBundle(source, destination);
+    const copiedLink = path.join(
+      destination,
+      'Contents',
+      'Frameworks',
+      'Electron Framework.framework',
+      'Versions',
+      'Current',
+    );
+    expect(fs.readlinkSync(copiedLink)).toBe('A');
+    fs.rmSync(source, { recursive: true, force: true });
+    expect(fs.statSync(path.join(copiedLink, 'Electron Framework')).isFile()).toBe(true);
+  });
+
+  it('removes a partial destination when runtime copying fails', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-source-copy-failure-'));
+    temporaryRoots.push(root);
+    const source = path.join(root, 'missing.app');
+    const destination = path.join(root, 'Mate Agent [Integration].app');
+    fs.mkdirSync(destination);
+    fs.writeFileSync(path.join(destination, 'partial'), 'stale', 'utf8');
+
+    expect(() => sourceRuntime.copyRuntimeBundle(source, destination)).toThrow();
+    expect(fs.existsSync(destination)).toBe(false);
+  });
+
+  it('preserves both the copy and cleanup errors when fail-closed cleanup fails', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-source-copy-cleanup-failure-'));
+    temporaryRoots.push(root);
+    const source = path.join(root, 'missing.app');
+    const destination = path.join(root, 'Mate Agent [Integration].app');
+    fs.mkdirSync(destination);
+    const cleanupError = new Error('simulated cleanup failure');
+    const realRmSync = mutableFs.rmSync.bind(mutableFs);
+    vi.spyOn(mutableFs, 'rmSync').mockImplementation((target, options) => {
+      if (path.resolve(String(target)) === destination) throw cleanupError;
+      return realRmSync(target, options);
+    });
+
+    let thrown: unknown;
+    try {
+      sourceRuntime.copyRuntimeBundle(source, destination);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(AggregateError);
+    const aggregate = thrown as AggregateError;
+    expect(aggregate.message).toContain('cleanup failed');
+    expect(aggregate.errors).toHaveLength(2);
+    expect(aggregate.errors[0]).toMatchObject({ code: 'ENOENT' });
+    expect(aggregate.errors[1]).toBe(cleanupError);
+    expect(aggregate.cause).toBe(aggregate.errors[0]);
   });
 
   it('requires exactly one canonical, case-sensitive preparation variant', () => {
@@ -155,9 +241,25 @@ describe('macOS source runtime bundle contract', () => {
     expect(sourceRuntime.bundleIsCurrent(fixture.destination, fixture.identity, ELECTRON_VERSION)).toBe(false);
   });
 
+  it.runIf(process.platform === 'darwin')('rejects framework executables that resolve outside the bundle', () => {
+    const fixture = createCurrentBundleFixture();
+    const framework = path.join(
+      fixture.destination,
+      'Contents',
+      'Frameworks',
+      'Electron Framework.framework',
+      'Electron Framework',
+    );
+    fs.rmSync(framework);
+    fs.symlinkSync('/bin/sh', framework);
+
+    expect(sourceRuntime.bundleIsCurrent(fixture.destination, fixture.identity, ELECTRON_VERSION)).toBe(false);
+  });
+
   it.runIf(process.platform === 'darwin').each([
     'Electron Helper',
     'Electron Helper (GPU)',
+    'Electron Helper (Plugin)',
     'Electron Helper (Renderer)',
   ])('rejects a cached bundle whose %s executable is missing', (helperName) => {
     const fixture = createCurrentBundleFixture();

@@ -61,7 +61,7 @@ export async function confirmAndSubmitExpenseWorkbench(
   if (!HASH.test(input.payloadHash)) throw new Error('payload hash is invalid');
   const payloadHash = input.payloadHash.toLowerCase();
 
-  await assertCanonicalExpenseWorkbenchAgent(agentId);
+  await assertCanonicalExpenseWorkbenchAgent(userId, agentId);
   const current = await callExpenseWorkbench(userId, agentId, 'applications.get', { application_id: applicationId });
   const application = requireJsonObject(current.application, 'application state');
   if (requireStringField(application, 'application_id') !== applicationId) throw new Error('application state is unavailable');

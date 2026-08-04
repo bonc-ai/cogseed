@@ -1,29 +1,46 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { issueExpenseWorkbenchConfirmation } from '../../../src/main/features/expense_workbench/confirmation';
-import { userExpenseWorkbenchConfirmationsDir } from '../../../src/main/paths';
+import {
+  userExpenseWorkbenchComponentDataDir,
+  userExpenseWorkbenchConfirmationsDir,
+  userExpenseWorkbenchHomeDir,
+  userExpenseWorkbenchRuntimeDir,
+} from '../../../src/main/paths';
 
 const userId = 'employee-1';
+let outsideRoot = '';
+
+function validInput() {
+  return {
+    userId,
+    applicationId: 'APP-1',
+    draftVersion: 3,
+    draftHash: 'a'.repeat(64),
+    target: {
+      system: 'oa',
+      environment: 'feishu',
+      adapter: 'feishu-approval',
+      form_type: 'approval.v4',
+      mapping_version: 'feishu-expense-v1',
+    },
+  };
+}
+
+beforeEach(() => {
+  outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-confirmation-outside-'));
+});
 
 afterEach(() => {
-  fs.rmSync(userExpenseWorkbenchConfirmationsDir(userId), { recursive: true, force: true });
+  fs.rmSync(userExpenseWorkbenchRuntimeDir(userId), { recursive: true, force: true });
+  fs.rmSync(outsideRoot, { recursive: true, force: true });
 });
 
 describe('expense workbench host confirmation', () => {
   it('issues a private one-shot capability envelope under the active user local data root', async () => {
-    const result = await issueExpenseWorkbenchConfirmation({
-      userId,
-      applicationId: 'APP-1',
-      draftVersion: 3,
-      draftHash: 'a'.repeat(64),
-      target: {
-        system: 'oa',
-        environment: 'feishu',
-        adapter: 'feishu-approval',
-        form_type: 'approval.v4',
-        mapping_version: 'feishu-expense-v1',
-      },
-    });
+    const result = await issueExpenseWorkbenchConfirmation(validInput());
     expect(result.issued).toBe(true);
     const directory = userExpenseWorkbenchConfirmationsDir(userId);
     const files = fs.readdirSync(directory);
@@ -51,5 +68,30 @@ describe('expense workbench host confirmation', () => {
         mapping_version: 'feishu-expense-v1',
       },
     })).rejects.toThrow('draft hash');
+  });
+
+  it.skipIf(process.platform === 'win32')('rejects a symlinked confirmation parent before writing', async () => {
+    fs.mkdirSync(userExpenseWorkbenchHomeDir(userId), { recursive: true });
+    fs.symlinkSync(outsideRoot, userExpenseWorkbenchComponentDataDir(userId), 'dir');
+
+    await expect(issueExpenseWorkbenchConfirmation(validInput())).rejects.toThrow('symbolic links');
+    expect(fs.readdirSync(outsideRoot)).toEqual([]);
+  });
+
+  it.skipIf(process.platform === 'win32')('rejects a symlink at the confirmation directory', async () => {
+    fs.mkdirSync(userExpenseWorkbenchComponentDataDir(userId), { recursive: true });
+    fs.symlinkSync(outsideRoot, userExpenseWorkbenchConfirmationsDir(userId), 'dir');
+
+    await expect(issueExpenseWorkbenchConfirmation(validInput())).rejects.toThrow('symbolic links');
+    expect(fs.readdirSync(outsideRoot)).toEqual([]);
+  });
+
+  it.skipIf(process.platform === 'win32')('rechecks confirmation parents after a previously safe issue', async () => {
+    await issueExpenseWorkbenchConfirmation(validInput());
+    fs.rmSync(userExpenseWorkbenchComponentDataDir(userId), { recursive: true });
+    fs.symlinkSync(outsideRoot, userExpenseWorkbenchComponentDataDir(userId), 'dir');
+
+    await expect(issueExpenseWorkbenchConfirmation(validInput())).rejects.toThrow('symbolic links');
+    expect(fs.readdirSync(outsideRoot)).toEqual([]);
   });
 });

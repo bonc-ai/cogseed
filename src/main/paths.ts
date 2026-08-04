@@ -51,13 +51,19 @@ export const PC_ROOT       = path.resolve(__dirname, '..', '..');      // PC
 export const APP_ROOT      = PC_ROOT;
 export const PROJECT_ROOT  = path.resolve(PC_ROOT, '..');              // Orkas
 
+export function packagedResourcesRoot(): string | null {
+  const resourcesPath = (process as unknown as { resourcesPath?: string }).resourcesPath;
+  return resourcesPath && !resourcesPath.includes(`${path.sep}node_modules${path.sep}electron${path.sep}`)
+    ? resourcesPath
+    : null;
+}
+
 function packagedResourceDir(name: string): string {
-  if (name === 'builtin' && process.env.ORKAS_BUILTIN_ROOT) {
+  if (name === 'builtin' && process.env.ORKAS_BUILTIN_ROOT && !packagedResourcesRoot()) {
     return path.resolve(process.env.ORKAS_BUILTIN_ROOT);
   }
-  const rp = (process as unknown as { resourcesPath?: string }).resourcesPath;
-  const looksPackaged = rp && !rp.includes(`${path.sep}node_modules${path.sep}electron${path.sep}`);
-  return looksPackaged ? path.join(rp, name) : path.join(PC_ROOT, 'resources', name);
+  const resourcesRoot = packagedResourcesRoot();
+  return resourcesRoot ? path.join(resourcesRoot, name) : path.join(PC_ROOT, 'resources', name);
 }
 
 // ── Data root ────────────────────────────────────────────────────────────

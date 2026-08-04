@@ -49,8 +49,8 @@
         <div class="ew-header-status" id="ew-header-status" aria-live="polite">${escape(text('loading', '加载中…'))}</div>
       </header>
       <div class="ew-config-banner" id="ew-config-banner" hidden>
-        <div><strong>${escape(text('configure_title', '连接本地报销项目'))}</strong><span>${escape(text('configure_hint', '选择包含 .venv 的报销智能体目录，Mate 不会启动网页服务。'))}</span></div>
-        <button type="button" class="btn btn-primary btn-sm" data-ew-configure>${escape(text('configure', '选择项目目录'))}</button>
+        <div><strong>${escape(text('configure_title', '验证本地报销组件'))}</strong><span>${escape(text('configure_hint', '选择报销项目目录。Mate 只执行固定发布归档解出的受信 Python 和完整校验后的私有缓存，不执行项目解释器或网页服务。'))}</span></div>
+        <button type="button" class="btn btn-primary btn-sm" data-ew-configure>${escape(text('configure', '选择并验证项目'))}</button>
       </div>
       <div class="ew-layout">
         <nav class="ew-nav" aria-label="${escape(text('nav_label', '报销工作区'))}">${nav}</nav>

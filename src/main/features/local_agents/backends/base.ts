@@ -16,11 +16,9 @@
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import * as path from 'node:path';
 import { buildCliSpawnEnv, resolveCliCommand } from '../spawn-command.js';
-
-type KillableChild = Pick<ChildProcessWithoutNullStreams, 'kill' | 'pid'>;
-type SpawnFn = typeof spawn;
+import { killProcessTree } from '../../../util/process-tree.js';
+export { killProcessTree } from '../../../util/process-tree.js';
 
 /** All event types a backend can emit. The runner persists these to
  *  `events.jsonl` verbatim and forwards them to the renderer through
@@ -195,59 +193,6 @@ export function spawnCli(
   // child dies before we finish writing the prompt.
   child.stdin.on('error', () => { /* noop */ });
   return child;
-}
-
-function windowsSystem32Tool(name: string): string {
-  const root = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
-  return path.win32.join(root, 'System32', name);
-}
-
-/** Send `signal` to the child's whole process group on POSIX (the child
- *  is spawned detached, so its pgid == pid and `-pid` addresses the
- *  group). This reaps grandchildren that inherited the stdio pipes;
- *  signaling only the direct child leaves them orphaned and the run's
- *  `close` hangs for their full lifetime (see `spawnCli`). Windows uses
- *  taskkill's tree mode for the same reason. Both paths fall back to a
- *  direct child kill when the platform mechanism cannot start or fails. */
-export function killProcessTree(
-  child: KillableChild,
-  signal: NodeJS.Signals,
-  opts: { platform?: NodeJS.Platform; spawnFn?: SpawnFn } = {},
-): void {
-  const pid = child.pid;
-  const platform = opts.platform ?? process.platform;
-  if (pid && platform === 'win32') {
-    try {
-      const killer = (opts.spawnFn ?? spawn)(
-        windowsSystem32Tool('taskkill.exe'),
-        ['/pid', String(pid), '/t', '/f'],
-        { stdio: 'ignore', windowsHide: true },
-      );
-      const fallback = () => {
-        try { child.kill(signal); } catch { /* already gone */ }
-      };
-      killer.once('error', fallback);
-      killer.once('exit', (code) => {
-        if (code !== 0) fallback();
-      });
-      if (typeof killer.unref === 'function') killer.unref();
-      return;
-    } catch {
-      // Fall through to a best-effort direct child kill.
-    }
-  }
-  if (pid && platform !== 'win32') {
-    try {
-      process.kill(-pid, signal);
-      return;
-    } catch (err) {
-      // ESRCH: the group is already gone — nothing left to signal.
-      if ((err as NodeJS.ErrnoException).code === 'ESRCH') return;
-      // Any other error (e.g. the child never became a group leader):
-      // fall through to a best-effort direct kill.
-    }
-  }
-  try { child.kill(signal); } catch { /* already gone */ }
 }
 
 /**

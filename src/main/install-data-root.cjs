@@ -26,8 +26,10 @@
  *      could set it. CJS require has no hoisting; doing this in
  *      bootstrap.cjs's pre-tsx phase keeps the contract simple.
  *
- *      `ORKAS_WORKSPACE_ROOT` already set → short-circuit, letting tests
- *      (`test/setup-env.ts`) and power users override the whole flow.
+ *      A caller may opt into a pre-set `ORKAS_WORKSPACE_ROOT` only for
+ *      controlled packaged-dev verification. Normal source and packaged
+ *      startup reject inherited roots so one app identity cannot silently
+ *      attach to another identity's data.
  */
 
 'use strict';
@@ -38,6 +40,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const RUNTIME_VARIANTS = Object.freeze(['main', 'cognition', 'expense', 'integration']);
+const SOURCE_RUNTIME_VARIANTS = Object.freeze(['cognition', 'expense', 'integration']);
 
 // Early-boot diagnostics buffer. This file runs before logger.ts can be
 // loaded (logger imports paths.ts, which depends on the env var THIS file
@@ -67,10 +70,10 @@ function validateRuntimeVariant(value) {
 }
 
 /**
- * @param {{ argv?: readonly string[], envVariant?: string, isPackaged?: boolean }} [options]
+ * @param {{ argv?: readonly string[], envVariant?: string, isPackaged?: boolean, sourceVariant?: string }} [options]
  */
 function selectRuntimeVariant(options = {}) {
-  const { argv = [], envVariant, isPackaged = false } = options;
+  const { argv = [], envVariant, isPackaged = false, sourceVariant } = options;
   const values = [];
   for (const arg of argv) {
     if (typeof arg !== 'string') continue;
@@ -95,11 +98,27 @@ function selectRuntimeVariant(options = {}) {
     );
   }
 
-  const selected = isPackaged ? 'main' : (cliVariant || inheritedVariant || 'main');
-  if (isPackaged && (cliVariant || inheritedVariant) && (cliVariant || inheritedVariant) !== 'main') {
-    throw new Error('packaged Mate Agent only supports the main runtime variant');
+  const requested = cliVariant || inheritedVariant;
+  if (requested) validateRuntimeVariant(requested);
+  if (isPackaged) {
+    if (requested && requested !== 'main') {
+      throw new Error('packaged Mate Agent only supports the main runtime variant');
+    }
+    return 'main';
   }
-  return validateRuntimeVariant(selected);
+
+  const lockedVariant = typeof sourceVariant === 'string' ? sourceVariant.trim() : '';
+  if (!SOURCE_RUNTIME_VARIANTS.includes(lockedVariant)) {
+    throw new Error(
+      `invalid or missing source runtime lock ${JSON.stringify(sourceVariant)}; expected ${SOURCE_RUNTIME_VARIANTS.join('|')}`,
+    );
+  }
+  if (requested && requested !== lockedVariant) {
+    throw new Error(
+      `source runtime is locked to ${lockedVariant}; requested ${requested} is not allowed`,
+    );
+  }
+  return lockedVariant;
 }
 
 function resolveVariantContainer(baseContainer, variant) {
@@ -272,10 +291,18 @@ function listFixedDrivesWin() {
 
 // ── Module-load setup ────────────────────────────────────────────────────
 // Called exactly once from bootstrap before tsx loads project TypeScript.
-// Pre-set workspace roots remain supported for tests and controlled tooling.
-function initializeInstallDataRoot(variantValue = process.env.ORKAS_RUNTIME_VARIANT) {
+// Pre-set workspace roots are accepted only when the caller explicitly marks
+// a controlled verification launch. Normal app startup must derive its root
+// from the already-locked runtime identity.
+function initializeInstallDataRoot(
+  variantValue = process.env.ORKAS_RUNTIME_VARIANT,
+  options = {},
+) {
   const variant = validateRuntimeVariant(variantValue);
   if (process.env.ORKAS_WORKSPACE_ROOT) {
+    if (options.allowWorkspaceOverride !== true) {
+      throw new Error('inherited ORKAS_WORKSPACE_ROOT is not allowed for normal app startup');
+    }
     process.env.ORKAS_RUNTIME_CONTAINER = path.dirname(
       path.resolve(process.env.ORKAS_WORKSPACE_ROOT),
     );
@@ -313,6 +340,7 @@ function initializeInstallDataRoot(variantValue = process.env.ORKAS_RUNTIME_VARI
 
 module.exports = {
   RUNTIME_VARIANTS,
+  SOURCE_RUNTIME_VARIANTS,
   validateRuntimeVariant,
   selectRuntimeVariant,
   resolveVariantContainer,

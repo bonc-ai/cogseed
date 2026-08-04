@@ -18,13 +18,7 @@ const {
   initializeInstallDataRoot,
   selectRuntimeVariant,
 } = require('./src/main/install-data-root.cjs');
-
-try {
-  const packageMeta = require('./package.json');
-  if (packageMeta.orkasBuildChannel === 'packaged-dev' && !process.env.ORKAS_WORKSPACE_ROOT) {
-    process.env.ORKAS_WORKSPACE_ROOT = path.join(os.homedir(), '.orkas-dev', 'data');
-  }
-} catch { /* build metadata is optional in source runs */ }
+const packageMeta = require('./package.json');
 
 function detectPackagedRuntime() {
   const appPath = String(process.resourcesPath || '');
@@ -34,12 +28,20 @@ function detectPackagedRuntime() {
 }
 
 try {
+  const isPackaged = detectPackagedRuntime();
+  const isPackagedDev = isPackaged && packageMeta.orkasBuildChannel === 'packaged-dev';
+  if (isPackagedDev && !process.env.ORKAS_WORKSPACE_ROOT) {
+    process.env.ORKAS_WORKSPACE_ROOT = path.join(os.homedir(), '.orkas-dev', 'data');
+  }
   process.env.ORKAS_RUNTIME_VARIANT = selectRuntimeVariant({
     argv: process.argv.slice(1),
     envVariant: process.env.ORKAS_RUNTIME_VARIANT,
-    isPackaged: detectPackagedRuntime(),
+    isPackaged,
+    sourceVariant: packageMeta.orkasSourceRuntimeVariant,
   });
-  initializeInstallDataRoot(process.env.ORKAS_RUNTIME_VARIANT);
+  initializeInstallDataRoot(process.env.ORKAS_RUNTIME_VARIANT, {
+    allowWorkspaceOverride: isPackagedDev,
+  });
 } catch (err) {
   process.stderr.write(`[Mate Agent] ${err instanceof Error ? err.message : String(err)}\n`);
   process.exitCode = 2;

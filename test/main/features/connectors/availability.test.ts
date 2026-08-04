@@ -149,7 +149,7 @@ describe('Google connector remote switches', () => {
       isConnectorEnabled: vi.fn(() => true),
     }));
     vi.doMock('../../../../src/main/features/agents', () => ({
-      getAgent: vi.fn(),
+      getAgentForChatDispatch: vi.fn(),
     }));
 
     const toolsAdapter = await import('../../../../src/main/features/connectors/tools-adapter');

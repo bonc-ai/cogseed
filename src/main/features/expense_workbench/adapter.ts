@@ -8,12 +8,20 @@ import { createLogger } from '../../logger';
 import {
   userExpenseWorkbenchConfigFile,
   userExpenseWorkbenchHomeDir,
+  userExpenseWorkbenchRuntimeDir,
   userExpenseWorkbenchTempDir,
   userLocalConfigDir,
+  runtimeResourcesDir,
+  WS_ROOT,
 } from '../../paths';
 import { getActiveUserId } from '../users';
-import { isPathAllowed } from '../../util/path-sandbox';
-import { startManagedStdioProcess, type ManagedStdioProcess } from '../local_agents/runner';
+import { startManagedStdioProcess, type ManagedStdioProcess } from '../../util/managed-stdio-process';
+import { ensurePrivateDirectoryWithin } from '../../util/private-directory';
+import {
+  assertTrustedTarTree,
+  extractTrustedTarGzip,
+  type TrustedTarTree,
+} from '../../util/trusted-tar';
 import { assertCanonicalExpenseWorkbenchAgent } from './canonical-agent';
 import {
   type ExpenseWorkbenchError,
@@ -27,6 +35,15 @@ import {
   isExpenseWorkbenchExternalOperation,
   isJsonObject,
 } from './contracts';
+import {
+  TRUSTED_EXPENSE_BRIDGE_PATH,
+  TRUSTED_EXPENSE_COMPONENT_FILES,
+  TRUSTED_EXPENSE_PLATFORM_ARTIFACTS,
+  TRUSTED_EXPENSE_COMPONENT_VERSION,
+  type TrustedExpenseComponentFile,
+  type TrustedPythonArchive,
+  type TrustedPythonDistribution,
+} from './trusted-component-manifest';
 
 const log = createLogger('expense-workbench:adapter');
 const MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -35,35 +52,54 @@ export const MAX_EXPENSE_WORKBENCH_REQUEST_LINE_BYTES = 512 * 1024;
 const REQUEST_TIMEOUT_MS = 120_000;
 const WORKBENCH_PRINCIPAL_ROLE = 'employee';
 const WORKBENCH_COMPONENT_ID = 'expense-precheck';
-const WORKBENCH_ENTRYPOINT = 'expense_reimbursement.task_agent.stdio_bridge';
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
-
-function inheritedEnvironmentValue(name: string): string | undefined {
-  const value = process.env[name];
-  return typeof value === 'string' && value ? value : undefined;
-}
+const BASE64URL_SHA256_PATTERN = /^sha256=([A-Za-z0-9_-]{43})$/;
+const DISTRIBUTION_VERSION_PATTERN = /^[0-9][A-Za-z0-9.!+_-]{0,63}$/;
+const RELATIVE_RUNTIME_PATH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+/@-]*(?:\/[A-Za-z0-9][A-Za-z0-9._+@-]*)*$/;
+const RUNTIME_ARCHIVE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,255}\.tar\.gz$/;
+const MAX_RECORD_BYTES = 2 * 1024 * 1024;
+const MAX_RECORD_FILES = 4_096;
+const MAX_TRUSTED_DEPENDENCY_FILE_BYTES = 32 * 1024 * 1024;
+const ARCHIVE_COPY_BUFFER_BYTES = 1024 * 1024;
+const EXPENSE_RUNTIME_CACHE_SCHEMA = 2;
+const PYTHON_BOOTSTRAP = [
+  'import runpy,sys',
+  'source_root,site_packages,bridge=sys.argv[1:4]',
+  'sys.path[:0]=[source_root,site_packages]',
+  'runpy.run_path(bridge,run_name="__main__")',
+].join(';');
 
 /** The bridge gets only neutral process settings and a host-selected role.
  * Secrets and privilege-bearing values from Electron's environment are never
  * inherited by the reimbursement child process. */
-export function buildExpenseWorkbenchEnvironment(projectRoot: string, userId: string): NodeJS.ProcessEnv {
+export function buildExpenseWorkbenchEnvironment(
+  _projectRoot: string,
+  userId: string,
+): NodeJS.ProcessEnv {
   const home = userExpenseWorkbenchHomeDir(userId);
   const temp = userExpenseWorkbenchTempDir(userId);
-  for (const directory of [home, temp]) {
-    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-    try { fs.chmodSync(directory, 0o700); } catch { /* Windows has no POSIX mode contract. */ }
-  }
+  const privateHome = ensurePrivateDirectoryWithin(
+    WS_ROOT,
+    home,
+    'Mate 报销组件 HOME 目录不可用',
+  );
+  const privateTemp = ensurePrivateDirectoryWithin(
+    WS_ROOT,
+    temp,
+    'Mate 报销组件临时目录不可用',
+  );
+  const lang = typeof process.env.LANG === 'string' && process.env.LANG ? process.env.LANG : undefined;
+  const locale = typeof process.env.LC_ALL === 'string' && process.env.LC_ALL
+    ? process.env.LC_ALL
+    : undefined;
   return {
-    ...(inheritedEnvironmentValue('PATH') ? { PATH: inheritedEnvironmentValue('PATH') } : {}),
-    ...(inheritedEnvironmentValue('Path') ? { Path: inheritedEnvironmentValue('Path') } : {}),
-    HOME: home,
-    USERPROFILE: home,
-    ...(inheritedEnvironmentValue('LANG') ? { LANG: inheritedEnvironmentValue('LANG') } : {}),
-    ...(inheritedEnvironmentValue('LC_ALL') ? { LC_ALL: inheritedEnvironmentValue('LC_ALL') } : {}),
-    TMPDIR: temp,
-    TEMP: temp,
-    TMP: temp,
-    PYTHONPATH: path.join(projectRoot, 'src'),
+    HOME: privateHome,
+    USERPROFILE: privateHome,
+    ...(lang ? { LANG: lang } : {}),
+    ...(locale ? { LC_ALL: locale } : {}),
+    TMPDIR: privateTemp,
+    TEMP: privateTemp,
+    TMP: privateTemp,
     PYTHONNOUSERSITE: '1',
     PYTHONDONTWRITEBYTECODE: '1',
     WORKBENCH_PRINCIPAL_ROLE,
@@ -176,8 +212,8 @@ const reviewSchema = z.object({
 const externalResultSchema = z.object({ application: applicationSchema, external_status: boundedJsonValue }).strict();
 
 const RESPONSE_RESULT_SCHEMAS: Readonly<Record<ExpenseWorkbenchOperation, z.ZodType<JsonObject>>> = {
-  manifest: z.object({ protocol_version: z.literal(1), component_id: z.literal(WORKBENCH_COMPONENT_ID), component_version: z.literal('v1.3.0-rc1'), operations: operationList, data_scope: z.literal('isolated_host_user') }).strict(),
-  'health.get': z.object({ status: z.enum(['ready', 'degraded']), component_version: z.literal('v1.3.0-rc1'), checks: z.object({ domain_store: z.enum(['ready', 'unavailable']), data_scope: z.literal('isolated_host_user'), external_connections: z.literal('unconfigured') }).strict() }).strict(),
+  manifest: z.object({ protocol_version: z.literal(1), component_id: z.literal(WORKBENCH_COMPONENT_ID), component_version: z.literal(TRUSTED_EXPENSE_COMPONENT_VERSION), operations: operationList, data_scope: z.literal('isolated_host_user') }).strict(),
+  'health.get': z.object({ status: z.enum(['ready', 'degraded']), component_version: z.literal(TRUSTED_EXPENSE_COMPONENT_VERSION), checks: z.object({ domain_store: z.enum(['ready', 'unavailable']), data_scope: z.literal('isolated_host_user'), external_connections: z.literal('unconfigured') }).strict() }).strict(),
   'identity.get': z.object({ role: z.enum(['employee', 'reviewer']), capabilities: operationList }).strict(),
   'overview.stats': z.object({ total_applications: z.number().int().min(0), status_counts: z.record(z.string(), z.number().int().min(0)) }).strict(),
   'applications.list': z.object({ applications: z.array(applicationSchema).max(100) }).strict(),
@@ -332,105 +368,890 @@ export function parseExpenseWorkbenchResponse(line: string): ExpenseWorkbenchRes
 }
 
 function readStoredConfig(userId: string): ExpenseWorkbenchProjectConfig | null {
-  const file = userExpenseWorkbenchConfigFile(userId);
+  const requestedFile = userExpenseWorkbenchConfigFile(userId);
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as JsonValue;
-    if (!isJsonObject(parsed) || parsed.version !== 1 || typeof parsed.project_root !== 'string') return null;
+    const configDirectory = ensurePrivateDirectoryWithin(
+      WS_ROOT,
+      userLocalConfigDir(userId),
+      'Mate 报销组件配置目录不可用',
+    );
+    const file = path.join(configDirectory, path.basename(requestedFile));
+    try {
+      fs.lstatSync(file);
+    } catch (cause) {
+      if (cause && typeof cause === 'object' && 'code' in cause
+          && String((cause as { code?: unknown }).code || '') === 'ENOENT') {
+        return null;
+      }
+      throw cause;
+    }
+    const parsed = JSON.parse(
+      readDirectFile(file, 2, 16 * 1024, 'Mate 报销组件配置').toString('utf8'),
+    ) as JsonValue;
+    if (!isJsonObject(parsed) || parsed.version !== 1 || typeof parsed.project_root !== 'string') {
+      log.warn('expense workbench configuration has an unsupported shape', { user_id: userId });
+      return null;
+    }
     return { version: 1, project_root: parsed.project_root };
-  } catch { return null; }
+  } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error
+      ? String((error as { code?: unknown }).code || '')
+      : '';
+    if (code !== 'ENOENT') {
+      log.warn('expense workbench configuration is unavailable', {
+        user_id: userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return null;
+  }
 }
 
 async function writeStoredConfig(userId: string, config: StoredProjectConfig): Promise<void> {
-  const file = userExpenseWorkbenchConfigFile(userId);
-  await fsp.mkdir(userLocalConfigDir(userId), { recursive: true, mode: 0o700 });
+  const requestedFile = userExpenseWorkbenchConfigFile(userId);
+  const configDirectory = ensurePrivateDirectoryWithin(
+    WS_ROOT,
+    userLocalConfigDir(userId),
+    'Mate 报销组件配置目录不可用',
+  );
+  const file = path.join(configDirectory, path.basename(requestedFile));
   const temp = `${file}.${crypto.randomBytes(6).toString('hex')}.tmp`;
   try {
-    await fsp.writeFile(temp, JSON.stringify(config), { encoding: 'utf8', mode: 0o600 });
+    await fsp.writeFile(temp, JSON.stringify(config), {
+      encoding: 'utf8',
+      mode: 0o600,
+      flag: 'wx',
+    });
     await fsp.rename(temp, file);
   } finally {
-    await fsp.rm(temp, { force: true }).catch(() => undefined);
-  }
-}
-
-function interpreterFor(projectRoot: string): string {
-  const relative = process.platform === 'win32'
-    ? path.join('.venv', 'Scripts', 'python.exe')
-    : path.join('.venv', 'bin', 'python3');
-  return path.join(projectRoot, relative);
-}
-
-interface WorkbenchManifest {
-  schema_version: 1;
-  component_id: typeof WORKBENCH_COMPONENT_ID;
-  protocol_version: 1;
-  entrypoint: typeof WORKBENCH_ENTRYPOINT;
-  bridge_sha256: string;
-}
-
-function readWorkbenchManifest(root: string, bridge: string): WorkbenchManifest {
-  const manifestPath = path.join(root, 'src', 'expense_reimbursement', 'task_agent', 'workbench_manifest.json');
-  if (!isPathAllowed(manifestPath, [root])) throw new Error('报销项目组件清单不在项目边界内');
-  let manifest: JsonValue;
-  try {
-    const stat = fs.lstatSync(manifestPath);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16 * 1024) {
-      throw new Error('component manifest is not a bounded regular file');
+    try {
+      await fsp.rm(temp, { force: true });
+    } catch (error) {
+      log.warn('failed to clean expense workbench configuration temporary file', {
+        user_id: userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
-    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as JsonValue;
+  }
+}
+
+interface ValidatedExpenseComponent {
+  projectRoot: string;
+  interpreter: string;
+  assertExecutionIntegrity: () => void;
+  trustedSourceRoot: string;
+  trustedSitePackages: string;
+  trustedBridge: string;
+}
+
+interface RuntimeManifestAsset {
+  archive: string;
+  executable: string;
+  name: string;
+  sha256: string;
+  size: number;
+}
+
+interface RuntimePythonManifest {
+  version: string;
+  source: string;
+  release: string;
+  assets: Record<string, RuntimeManifestAsset>;
+}
+
+interface RuntimeMarker {
+  schema: number;
+  kind: string;
+  platformKey: string;
+  version: string;
+  source: string;
+  release: string;
+  asset: string;
+  sha256: string;
+  size: number;
+}
+
+interface ParsedRecordFile {
+  relativePath: string;
+  bytes: number;
+  sha256: Buffer;
+}
+
+interface ExpectedCacheFile {
+  relativePath: string;
+  bytes: number;
+  sha256: Buffer;
+}
+
+function safeRealpath(file: string, label: string): string {
+  try {
+    return fs.realpathSync(file);
   } catch (cause) {
-    throw new Error('报销项目组件清单无效', { cause: cause instanceof Error ? cause : undefined });
+    throw new Error(label, { cause: cause instanceof Error ? cause : undefined });
   }
-  if (!isJsonObject(manifest)
-      || Object.keys(manifest).sort().join(',') !== 'bridge_sha256,component_id,entrypoint,protocol_version,schema_version'
-      || manifest.schema_version !== 1
-      || manifest.component_id !== WORKBENCH_COMPONENT_ID
-      || manifest.protocol_version !== 1
-      || manifest.entrypoint !== WORKBENCH_ENTRYPOINT
-      || typeof manifest.bridge_sha256 !== 'string'
-      || !SHA256_PATTERN.test(manifest.bridge_sha256)) {
-    throw new Error('报销项目组件身份不受支持');
+}
+
+function isPathInside(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function sha256File(file: string): Buffer {
+  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest();
+}
+
+function readDirectFile(file: string, minimumBytes: number, maximumBytes: number, label: string): Buffer {
+  let entry: fs.Stats;
+  try { entry = fs.lstatSync(file); }
+  catch (cause) { throw new Error(`${label}缺失`, { cause: cause instanceof Error ? cause : undefined }); }
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.size < minimumBytes || entry.size > maximumBytes) {
+    throw new Error(`${label}无效`);
   }
-  const actualHash = crypto.createHash('sha256').update(fs.readFileSync(bridge)).digest('hex');
-  if (!crypto.timingSafeEqual(Buffer.from(actualHash, 'hex'), Buffer.from(manifest.bridge_sha256, 'hex'))) {
-    throw new Error('报销项目桥接文件与组件清单不匹配');
+
+  let descriptor: number;
+  try {
+    descriptor = fs.openSync(
+      file,
+      fs.constants.O_RDONLY | (process.platform === 'win32' ? 0 : fs.constants.O_NOFOLLOW),
+    );
+  } catch (cause) {
+    throw new Error(`${label}不可读取`, { cause: cause instanceof Error ? cause : undefined });
+  }
+  try {
+    const stat = fs.fstatSync(descriptor);
+    if (!stat.isFile() || stat.size !== entry.size || stat.size < minimumBytes || stat.size > maximumBytes) {
+      throw new Error(`${label}在读取前发生变化`);
+    }
+    const content = Buffer.allocUnsafe(stat.size);
+    let offset = 0;
+    while (offset < content.length) {
+      const bytesRead = fs.readSync(descriptor, content, offset, content.length - offset, null);
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    const finalStat = fs.fstatSync(descriptor);
+    if (offset !== content.length || finalStat.size !== stat.size
+        || finalStat.dev !== stat.dev || finalStat.ino !== stat.ino) {
+      throw new Error(`${label}在读取期间发生变化`);
+    }
+    return content;
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function digestMatches(actual: Buffer, expectedHex: string): boolean {
+  if (!SHA256_PATTERN.test(expectedHex)) return false;
+  return crypto.timingSafeEqual(actual, Buffer.from(expectedHex, 'hex'));
+}
+
+function assertDirectFile(file: string, root: string, expected: TrustedExpenseComponentFile, label: string): void {
+  if (!isPathInside(path.resolve(file), path.resolve(root))) throw new Error(`${label}不在受信边界内`);
+  let stat: fs.Stats;
+  try { stat = fs.lstatSync(file); }
+  catch (cause) {
+    throw new Error(`${label}缺失`, { cause: cause instanceof Error ? cause : undefined });
+  }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== expected.bytes) {
+    throw new Error(`${label}不是受信的普通文件`);
+  }
+  if (!digestMatches(sha256File(file), expected.sha256)) {
+    throw new Error(`${label}与 Mate 受信发布清单不匹配`);
+  }
+}
+
+function readBoundedJsonFile(file: string, maxBytes: number, label: string): JsonValue {
+  let stat: fs.Stats;
+  try { stat = fs.lstatSync(file); }
+  catch (cause) { throw new Error(`${label}缺失`, { cause: cause instanceof Error ? cause : undefined }); }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 2 || stat.size > maxBytes) {
+    throw new Error(`${label}无效`);
+  }
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')) as JsonValue; }
+  catch (cause) { throw new Error(`${label}不是有效 JSON`, { cause: cause instanceof Error ? cause : undefined }); }
+}
+
+function runtimeManifest(value: JsonValue, platformKey: string): { python: RuntimePythonManifest; asset: RuntimeManifestAsset } {
+  if (!isJsonObject(value) || value.schema !== 1 || !isJsonObject(value.python)
+      || typeof value.python.version !== 'string' || !DISTRIBUTION_VERSION_PATTERN.test(value.python.version)
+      || typeof value.python.source !== 'string' || !value.python.source
+      || typeof value.python.release !== 'string' || !value.python.release
+      || !isJsonObject(value.python.assets)) {
+    throw new Error('Mate 宿主 Python 发布清单无效');
+  }
+  const candidate = value.python.assets[platformKey];
+  if (!isJsonObject(candidate)
+      || candidate.archive !== 'tar.gz'
+      || typeof candidate.executable !== 'string' || !RELATIVE_RUNTIME_PATH_PATTERN.test(candidate.executable)
+      || typeof candidate.name !== 'string' || !RUNTIME_ARCHIVE_NAME_PATTERN.test(candidate.name)
+      || typeof candidate.sha256 !== 'string' || !SHA256_PATTERN.test(candidate.sha256)
+      || typeof candidate.size !== 'number' || !Number.isSafeInteger(candidate.size) || candidate.size < 1) {
+    throw new Error(`Mate 宿主 Python 不支持当前平台: ${platformKey}`);
   }
   return {
-    schema_version: 1,
-    component_id: WORKBENCH_COMPONENT_ID,
-    protocol_version: 1,
-    entrypoint: WORKBENCH_ENTRYPOINT,
-    bridge_sha256: manifest.bridge_sha256,
+    python: value.python as unknown as RuntimePythonManifest,
+    asset: candidate as unknown as RuntimeManifestAsset,
   };
 }
 
-export function validateExpenseProjectRoot(projectRoot: string): string {
-  if (!projectRoot || !path.isAbsolute(projectRoot)) throw new Error('报销项目必须是绝对目录');
+function runtimeMarker(value: JsonValue): RuntimeMarker {
+  if (!isJsonObject(value)
+      || value.schema !== 1
+      || value.kind !== 'python'
+      || typeof value.platformKey !== 'string'
+      || typeof value.version !== 'string'
+      || typeof value.source !== 'string'
+      || typeof value.release !== 'string'
+      || typeof value.asset !== 'string'
+      || typeof value.sha256 !== 'string'
+      || typeof value.size !== 'number') {
+    throw new Error('Mate 宿主 Python 安装标记无效');
+  }
+  return value as unknown as RuntimeMarker;
+}
+
+interface PackagedPythonArchive {
+  archive: string;
+  platformKey: string;
+  trusted: TrustedPythonArchive;
+}
+
+interface PreparedHostPython {
+  interpreter: string;
+  assertIntegrity: () => void;
+}
+
+interface CachedPythonRuntime {
+  cacheRoot: string;
+  markerIdentity: string;
+  runtimeRoot: string;
+  tree: TrustedTarTree;
+  trusted: TrustedPythonArchive;
+}
+
+const initializedPythonRuntimeRoots = new Set<string>();
+const cachedPythonRuntimes = new Map<string, CachedPythonRuntime>();
+
+function ensurePrivateDirectory(directory: string, label: string): string {
+  return ensurePrivateDirectoryWithin(WS_ROOT, directory, label);
+}
+
+function resolvePackagedPythonArchive(platformKey: string, trusted: TrustedPythonArchive): PackagedPythonArchive {
+  const requestedRoot = runtimeResourcesDir();
+  let requestedRootStat: fs.Stats;
+  try { requestedRootStat = fs.lstatSync(requestedRoot); }
+  catch (cause) {
+    throw new Error('Mate 宿主运行时目录不可用', { cause: cause instanceof Error ? cause : undefined });
+  }
+  if (!requestedRootStat.isDirectory() || requestedRootStat.isSymbolicLink()) {
+    throw new Error('Mate 宿主运行时目录无效');
+  }
+  const root = safeRealpath(requestedRoot, 'Mate 宿主运行时目录不可用');
+  const { python, asset } = runtimeManifest(
+    readBoundedJsonFile(path.join(root, 'manifest.json'), 2 * 1024 * 1024, 'Mate 宿主 Python 发布清单'),
+    platformKey,
+  );
+  if (asset.name !== trusted.name || asset.size !== trusted.bytes
+      || asset.sha256 !== trusted.sha256 || asset.executable !== trusted.manifestExecutable) {
+    throw new Error('Mate 宿主 Python 发布归档与应用受信清单不匹配');
+  }
+
+  const variantRoot = path.join(root, 'python', platformKey);
+  let variantStat: fs.Stats;
+  try { variantStat = fs.lstatSync(variantRoot); }
+  catch (cause) { throw new Error('Mate 宿主 Python 目录不可用', { cause: cause instanceof Error ? cause : undefined }); }
+  if (!variantStat.isDirectory() || variantStat.isSymbolicLink()) throw new Error('Mate 宿主 Python 目录无效');
+  const realVariantRoot = safeRealpath(variantRoot, 'Mate 宿主 Python 目录不可用');
+  if (!isPathInside(realVariantRoot, root)) throw new Error('Mate 宿主 Python 目录越界');
+
+  const marker = runtimeMarker(readBoundedJsonFile(
+    path.join(realVariantRoot, '.orkas-runtime.json'),
+    16 * 1024,
+    'Mate 宿主 Python 安装标记',
+  ));
+  if (marker.platformKey !== platformKey || marker.version !== python.version
+      || marker.source !== python.source || marker.release !== python.release
+      || marker.asset !== asset.name || marker.sha256 !== asset.sha256 || marker.size !== asset.size) {
+    throw new Error('Mate 宿主 Python 安装标记与发布清单不匹配');
+  }
+
+  const archiveDirectory = path.join(realVariantRoot, 'archive');
+  let archiveDirectoryStat: fs.Stats;
+  try { archiveDirectoryStat = fs.lstatSync(archiveDirectory); }
+  catch (cause) { throw new Error('Mate 宿主 Python 发布归档缺失', { cause: cause instanceof Error ? cause : undefined }); }
+  if (!archiveDirectoryStat.isDirectory() || archiveDirectoryStat.isSymbolicLink()) {
+    throw new Error('Mate 宿主 Python 发布归档目录无效');
+  }
+  const realArchiveDirectory = safeRealpath(archiveDirectory, 'Mate 宿主 Python 发布归档不可用');
+  if (!isPathInside(realArchiveDirectory, realVariantRoot)) throw new Error('Mate 宿主 Python 发布归档目录越界');
+  const archive = path.join(realArchiveDirectory, trusted.name);
+  let archiveStat: fs.Stats;
+  try { archiveStat = fs.lstatSync(archive); }
+  catch (cause) { throw new Error('Mate 宿主 Python 发布归档缺失', { cause: cause instanceof Error ? cause : undefined }); }
+  if (!archiveStat.isFile() || archiveStat.isSymbolicLink() || archiveStat.size !== trusted.bytes) {
+    throw new Error('Mate 宿主 Python 发布归档无效');
+  }
+  return { archive, platformKey, trusted };
+}
+
+function writeAll(descriptor: number, buffer: Buffer): void {
+  let offset = 0;
+  while (offset < buffer.length) {
+    const written = fs.writeSync(descriptor, buffer, offset, buffer.length - offset);
+    if (written < 1) throw new Error('Mate 宿主 Python 发布归档复制失败');
+    offset += written;
+  }
+}
+
+function copyVerifiedArchive(source: string, destination: string, trusted: TrustedPythonArchive): void {
+  const sourceFlags = fs.constants.O_RDONLY | (process.platform === 'win32' ? 0 : fs.constants.O_NOFOLLOW);
+  let sourceDescriptor: number | undefined;
+  let destinationDescriptor: number | undefined;
+  try {
+    sourceDescriptor = fs.openSync(source, sourceFlags);
+    const initialStat = fs.fstatSync(sourceDescriptor);
+    if (!initialStat.isFile() || initialStat.size !== trusted.bytes) {
+      throw new Error('Mate 宿主 Python 发布归档大小不匹配');
+    }
+    destinationDescriptor = fs.openSync(destination, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
+    const hash = crypto.createHash('sha256');
+    const buffer = Buffer.allocUnsafe(Math.min(ARCHIVE_COPY_BUFFER_BYTES, trusted.bytes));
+    let copied = 0;
+    while (copied < trusted.bytes) {
+      const requested = Math.min(buffer.length, trusted.bytes - copied);
+      const bytesRead = fs.readSync(sourceDescriptor, buffer, 0, requested, null);
+      if (bytesRead < 1) throw new Error('Mate 宿主 Python 发布归档在复制期间被截断');
+      const chunk = buffer.subarray(0, bytesRead);
+      hash.update(chunk);
+      writeAll(destinationDescriptor, chunk);
+      copied += bytesRead;
+    }
+    const finalSourceStat = fs.fstatSync(sourceDescriptor);
+    const finalDestinationStat = fs.fstatSync(destinationDescriptor);
+    if (finalSourceStat.dev !== initialStat.dev || finalSourceStat.ino !== initialStat.ino
+        || finalSourceStat.size !== initialStat.size || finalDestinationStat.size !== trusted.bytes
+        || copied !== trusted.bytes || !digestMatches(hash.digest(), trusted.sha256)) {
+      throw new Error('Mate 宿主 Python 发布归档与应用受信清单不匹配');
+    }
+    fs.fsyncSync(destinationDescriptor);
+  } catch (cause) {
+    try { fs.rmSync(destination, { force: true }); } catch { /* cleanup error is reported by the caller's failure */ }
+    throw new Error('Mate 宿主 Python 发布归档验证失败', {
+      cause: cause instanceof Error ? cause : undefined,
+    });
+  } finally {
+    if (destinationDescriptor !== undefined) fs.closeSync(destinationDescriptor);
+    if (sourceDescriptor !== undefined) fs.closeSync(sourceDescriptor);
+  }
+  if (process.platform !== 'win32') fs.chmodSync(destination, 0o400);
+}
+
+function freezeRuntimeTree(root: string): void {
+  const visit = (directory: string): void => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const absolute = path.join(directory, entry.name);
+      const stat = fs.lstatSync(absolute);
+      if (stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) {
+        visit(absolute);
+        fs.chmodSync(absolute, 0o500);
+      } else if (stat.isFile()) {
+        fs.chmodSync(absolute, (stat.mode & 0o111) !== 0 ? 0o500 : 0o400);
+      } else {
+        throw new Error(`Mate 宿主 Python 运行时包含特殊文件: ${absolute}`);
+      }
+    }
+  };
+  if (process.platform !== 'win32') {
+    visit(root);
+    fs.chmodSync(root, 0o500);
+  }
+}
+
+function removePrivateTree(root: string): void {
+  let rootStat: fs.Stats;
+  try { rootStat = fs.lstatSync(root); }
+  catch (cause) {
+    const code = cause && typeof cause === 'object' && 'code' in cause
+      ? String((cause as { code?: unknown }).code || '')
+      : '';
+    if (code === 'ENOENT') return;
+    throw cause;
+  }
+  if (process.platform !== 'win32' && rootStat.isDirectory() && !rootStat.isSymbolicLink()) {
+    const makeWritable = (directory: string): void => {
+      fs.chmodSync(directory, 0o700);
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        if (entry.isDirectory() && !entry.isSymbolicLink()) makeWritable(path.join(directory, entry.name));
+      }
+    };
+    makeWritable(root);
+  }
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
+function assertReadOnlyRuntimeTree(root: string): void {
+  if (process.platform === 'win32') return;
+  const visit = (directory: string): void => {
+    const directoryStat = fs.lstatSync(directory);
+    if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink() || (directoryStat.mode & 0o222) !== 0) {
+      throw new Error('Mate 宿主 Python 缓存目录权限无效');
+    }
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const absolute = path.join(directory, entry.name);
+      const stat = fs.lstatSync(absolute);
+      if (stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) visit(absolute);
+      else if (!stat.isFile() || (stat.mode & 0o222) !== 0) {
+        throw new Error('Mate 宿主 Python 缓存文件权限无效');
+      }
+    }
+  };
+  visit(root);
+}
+
+function cachedInterpreter(runtimeRoot: string, trusted: TrustedPythonArchive): string {
+  const requested = path.join(runtimeRoot, ...trusted.manifestExecutable.split('/'));
+  if (!isPathInside(path.resolve(requested), path.resolve(runtimeRoot))) throw new Error('Mate 宿主 Python 缓存入口越界');
+  const interpreter = safeRealpath(requested, 'Mate 宿主 Python 缓存入口不可用');
+  if (!isPathInside(interpreter, safeRealpath(runtimeRoot, 'Mate 宿主 Python 缓存不可用'))) {
+    throw new Error('Mate 宿主 Python 缓存符号链接越界');
+  }
+  const stat = fs.lstatSync(interpreter);
+  if (!stat.isFile() || stat.isSymbolicLink() || (process.platform !== 'win32' && (stat.mode & 0o111) === 0)) {
+    throw new Error('Mate 宿主 Python 缓存入口无效');
+  }
+  return interpreter;
+}
+
+function assertCachedPythonRuntime(
+  runtime: CachedPythonRuntime,
+  privateRuntimeRoot: string,
+  verifyContent: boolean,
+): string {
+  const cacheStat = fs.lstatSync(runtime.cacheRoot);
+  if (!cacheStat.isDirectory() || cacheStat.isSymbolicLink()
+      || !isPathInside(safeRealpath(runtime.cacheRoot, 'Mate 宿主 Python 缓存不可用'), privateRuntimeRoot)) {
+    throw new Error('Mate 宿主 Python 缓存目录无效');
+  }
+  const marker = path.join(runtime.cacheRoot, '.complete.json');
+  const markerStat = fs.lstatSync(marker);
+  if (!markerStat.isFile() || markerStat.isSymbolicLink()
+      || fs.readFileSync(marker, 'utf8') !== runtime.markerIdentity) {
+    throw new Error('Mate 宿主 Python 缓存完成标记无效');
+  }
+  assertTrustedTarTree(runtime.runtimeRoot, runtime.tree, { verifyContent });
+  assertReadOnlyRuntimeTree(runtime.runtimeRoot);
+  return cachedInterpreter(runtime.runtimeRoot, runtime.trusted);
+}
+
+function pythonRuntimeCacheKey(platformKey: string, trusted: TrustedPythonArchive): string {
+  return crypto.createHash('sha256').update(JSON.stringify({
+    schema: EXPENSE_RUNTIME_CACHE_SCHEMA,
+    platformKey,
+    trusted,
+  })).digest('hex');
+}
+
+function buildCachedPythonRuntime(
+  packaged: PackagedPythonArchive,
+  privateRuntimeRoot: string,
+  cacheRoot: string,
+  markerIdentity: string,
+  userId: string,
+): CachedPythonRuntime {
+  const privateTempRoot = ensurePrivateDirectory(userExpenseWorkbenchTempDir(userId), 'Mate 报销组件临时目录不可用');
+  if (!isPathInside(privateTempRoot, privateRuntimeRoot)) throw new Error('Mate 报销组件临时目录越界');
+  const stagingRoot = fs.mkdtempSync(path.join(privateTempRoot, 'python-runtime-'));
+  if (process.platform !== 'win32') fs.chmodSync(stagingRoot, 0o700);
+  const copiedArchive = path.join(stagingRoot, packaged.trusted.name);
+  const candidateRoot = path.join(stagingRoot, 'candidate');
+  const candidateRuntimeRoot = path.join(candidateRoot, 'runtime');
+  try {
+    copyVerifiedArchive(packaged.archive, copiedArchive, packaged.trusted);
+    fs.mkdirSync(candidateRuntimeRoot, { recursive: true, mode: 0o700 });
+    const tree = extractTrustedTarGzip(copiedArchive, candidateRuntimeRoot);
+    cachedInterpreter(candidateRuntimeRoot, packaged.trusted);
+    fs.writeFileSync(path.join(candidateRoot, '.complete.json'), markerIdentity, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    freezeRuntimeTree(candidateRuntimeRoot);
+    if (process.platform !== 'win32') {
+      fs.chmodSync(path.join(candidateRoot, '.complete.json'), 0o400);
+    }
+    removePrivateTree(cacheRoot);
+    fs.mkdirSync(path.dirname(cacheRoot), { recursive: true, mode: 0o700 });
+    fs.renameSync(candidateRoot, cacheRoot);
+    if (process.platform !== 'win32') fs.chmodSync(cacheRoot, 0o500);
+    const runtime: CachedPythonRuntime = {
+      cacheRoot,
+      markerIdentity,
+      runtimeRoot: path.join(cacheRoot, 'runtime'),
+      tree,
+      trusted: packaged.trusted,
+    };
+    assertCachedPythonRuntime(runtime, privateRuntimeRoot, true);
+    return runtime;
+  } finally {
+    removePrivateTree(stagingRoot);
+  }
+}
+
+function prepareHostPythonRuntime(userId: string): PreparedHostPython {
+  const platformKey = `${process.platform}-${process.arch}`;
+  const artifacts = TRUSTED_EXPENSE_PLATFORM_ARTIFACTS[platformKey];
+  if (!artifacts) throw new Error(`Mate 报销组件尚未固定当前平台运行时: ${platformKey}`);
+  const packaged = resolvePackagedPythonArchive(platformKey, artifacts.pythonArchive);
+  const privateRuntimeRoot = ensurePrivateDirectory(
+    userExpenseWorkbenchRuntimeDir(userId),
+    'Mate 报销组件运行目录不可用',
+  );
+  const cacheParent = path.join(privateRuntimeRoot, 'python-runtime');
+  const initializationKey = `${privateRuntimeRoot}\u0000${platformKey}`;
+  if (!initializedPythonRuntimeRoots.has(initializationKey)) {
+    removePrivateTree(cacheParent);
+    for (const cachedPath of cachedPythonRuntimes.keys()) {
+      if (isPathInside(cachedPath, cacheParent)) cachedPythonRuntimes.delete(cachedPath);
+    }
+    initializedPythonRuntimeRoots.add(initializationKey);
+  }
+  ensurePrivateDirectory(cacheParent, 'Mate 宿主 Python 缓存根目录不可用');
+  const cacheRoot = path.join(cacheParent, pythonRuntimeCacheKey(platformKey, packaged.trusted));
+  const markerIdentity = JSON.stringify({
+    schema: EXPENSE_RUNTIME_CACHE_SCHEMA,
+    platformKey,
+    archive: {
+      name: packaged.trusted.name,
+      bytes: packaged.trusted.bytes,
+      sha256: packaged.trusted.sha256,
+    },
+  });
+
+  let runtime = cachedPythonRuntimes.get(cacheRoot);
+  if (runtime) {
+    try {
+      assertCachedPythonRuntime(runtime, privateRuntimeRoot, false);
+    } catch {
+      cachedPythonRuntimes.delete(cacheRoot);
+      runtime = undefined;
+    }
+  }
+  if (!runtime) {
+    runtime = buildCachedPythonRuntime(packaged, privateRuntimeRoot, cacheRoot, markerIdentity, userId);
+    cachedPythonRuntimes.set(cacheRoot, runtime);
+  }
+  const interpreter = assertCachedPythonRuntime(runtime, privateRuntimeRoot, false);
+  return {
+    interpreter,
+    assertIntegrity: () => {
+      assertCachedPythonRuntime(runtime!, privateRuntimeRoot, true);
+    },
+  };
+}
+
+function pythonSitePackages(projectRoot: string): string {
+  if (process.platform === 'win32') return path.join(projectRoot, '.venv', 'Lib', 'site-packages');
+  const libDir = path.join(projectRoot, '.venv', 'lib');
+  let versions: fs.Dirent[];
+  try { versions = fs.readdirSync(libDir, { withFileTypes: true }); }
+  catch (cause) {
+    throw new Error('报销项目的 Python 依赖环境无效', { cause: cause instanceof Error ? cause : undefined });
+  }
+  const candidates = versions.filter((entry) => entry.isDirectory() && !entry.isSymbolicLink() && /^python3\.\d+$/.test(entry.name));
+  if (candidates.length !== 1) throw new Error('报销项目的 Python 依赖环境不唯一');
+  return path.join(libDir, candidates[0].name, 'site-packages');
+}
+
+function parseCsvRecordLine(line: string): string[] {
+  const fields: string[] = [];
+  let field = '';
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (quoted) {
+      if (character === '"' && line[index + 1] === '"') { field += '"'; index += 1; }
+      else if (character === '"') quoted = false;
+      else field += character;
+    } else if (character === '"' && field.length === 0) quoted = true;
+    else if (character === ',') { fields.push(field); field = ''; }
+    else field += character;
+  }
+  if (quoted) throw new Error('Python 依赖 RECORD 含未闭合引号');
+  fields.push(field);
+  return fields;
+}
+
+function recordFiles(sitePackages: string, distribution: TrustedPythonDistribution): ParsedRecordFile[] {
+  const distInfo = path.join(sitePackages, distribution.distInfoDirectory);
+  let distInfoStat: fs.Stats;
+  try { distInfoStat = fs.lstatSync(distInfo); }
+  catch (cause) {
+    throw new Error(`报销项目的 Python 依赖安装记录缺失: ${distribution.distribution}`, {
+      cause: cause instanceof Error ? cause : undefined,
+    });
+  }
+  if (!distInfoStat.isDirectory() || distInfoStat.isSymbolicLink()) {
+    throw new Error(`报销项目的 Python 依赖安装记录无效: ${distribution.distribution}`);
+  }
+  const record = path.join(distInfo, 'RECORD');
+  const recordContent = readDirectFile(
+    record,
+    1,
+    MAX_RECORD_BYTES,
+    `报销项目的 Python 依赖安装记录: ${distribution.distribution}`,
+  );
+  if (!digestMatches(crypto.createHash('sha256').update(recordContent).digest(), distribution.recordSha256)) {
+    throw new Error(`报销项目的 Python 依赖安装记录不受支持: ${distribution.distribution}`);
+  }
+  const lines = recordContent.toString('utf8').split(/\r?\n/).filter(Boolean);
+  if (lines.length < 1 || lines.length > MAX_RECORD_FILES) {
+    throw new Error(`报销项目的 Python 依赖文件清单无效: ${distribution.distribution}`);
+  }
+  const verified: ParsedRecordFile[] = [];
+  const seen = new Set<string>();
+  for (const line of lines) {
+    const fields = parseCsvRecordLine(line);
+    if (fields.length !== 3) throw new Error(`报销项目的 Python 依赖文件清单无效: ${distribution.distribution}`);
+    const [relativePath, encodedHash, rawBytes] = fields;
+    if (!encodedHash && !rawBytes) {
+      if (relativePath === `${distribution.distInfoDirectory}/RECORD` || relativePath.includes('/__pycache__/')
+          || relativePath.startsWith('__pycache__/')) continue;
+      throw new Error(`报销项目的 Python 依赖存在未校验文件: ${distribution.distribution}`);
+    }
+    const hashMatch = BASE64URL_SHA256_PATTERN.exec(encodedHash);
+    const bytes = Number(rawBytes);
+    if (!RELATIVE_RUNTIME_PATH_PATTERN.test(relativePath) || !hashMatch || !Number.isSafeInteger(bytes)
+        || bytes < 0 || bytes > MAX_TRUSTED_DEPENDENCY_FILE_BYTES || seen.has(relativePath)) {
+      throw new Error(`报销项目的 Python 依赖文件清单无效: ${distribution.distribution}`);
+    }
+    seen.add(relativePath);
+    const source = path.join(sitePackages, ...relativePath.split('/'));
+    if (!isPathInside(path.resolve(source), path.resolve(sitePackages))) {
+      throw new Error(`报销项目的 Python 依赖路径越界: ${distribution.distribution}`);
+    }
+    let sourceStat: fs.Stats;
+    try { sourceStat = fs.lstatSync(source); }
+    catch (cause) {
+      throw new Error(`报销项目的 Python 依赖文件缺失: ${relativePath}`, {
+        cause: cause instanceof Error ? cause : undefined,
+      });
+    }
+    const expectedHash = Buffer.from(hashMatch[1], 'base64url');
+    if (!sourceStat.isFile() || sourceStat.isSymbolicLink() || sourceStat.size !== bytes
+        || expectedHash.length !== 32 || !crypto.timingSafeEqual(sha256File(source), expectedHash)) {
+      throw new Error(`报销项目的 Python 依赖文件被修改: ${relativePath}`);
+    }
+    verified.push({ relativePath, bytes, sha256: expectedHash });
+  }
+  if (!verified.length) throw new Error(`报销项目的 Python 依赖文件清单为空: ${distribution.distribution}`);
+  return verified;
+}
+
+function runtimeCacheKey(platformKey: string): string {
+  const identity = JSON.stringify({
+    schema: EXPENSE_RUNTIME_CACHE_SCHEMA,
+    componentVersion: TRUSTED_EXPENSE_COMPONENT_VERSION,
+    platformKey,
+    sourceFiles: TRUSTED_EXPENSE_COMPONENT_FILES,
+    distributions: TRUSTED_EXPENSE_PLATFORM_ARTIFACTS[platformKey]?.pythonDistributions,
+  });
+  return crypto.createHash('sha256').update(identity).digest('hex');
+}
+
+function copyVerifiedFile(source: string, destination: string, expectedBytes: number, expectedSha256: Buffer): void {
+  fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
+  const sourceDescriptor = fs.openSync(source, fs.constants.O_RDONLY | (process.platform === 'win32' ? 0 : fs.constants.O_NOFOLLOW));
+  try {
+    const stat = fs.fstatSync(sourceDescriptor);
+    const content = Buffer.allocUnsafe(expectedBytes);
+    let offset = 0;
+    while (offset < content.length) {
+      const read = fs.readSync(sourceDescriptor, content, offset, content.length - offset, null);
+      if (read === 0) break;
+      offset += read;
+    }
+    if (!stat.isFile() || stat.size !== expectedBytes || offset !== expectedBytes
+        || !crypto.timingSafeEqual(crypto.createHash('sha256').update(content).digest(), expectedSha256)) {
+      throw new Error(`受信文件在复制期间发生变化: ${source}`);
+    }
+    fs.writeFileSync(destination, content, { mode: 0o600, flag: 'wx' });
+  } finally {
+    fs.closeSync(sourceDescriptor);
+  }
+}
+
+function assertCachedFile(file: string, cacheRoot: string, expectedBytes: number, expectedSha256: Buffer): void {
+  if (!isPathInside(path.resolve(file), path.resolve(cacheRoot))) throw new Error('可信缓存路径越界');
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== expectedBytes
+      || !crypto.timingSafeEqual(sha256File(file), expectedSha256)) {
+    throw new Error('可信缓存文件完整性校验失败');
+  }
+}
+
+function listCacheFiles(cacheRoot: string): string[] {
+  const files: string[] = [];
+  const visit = (directory: string): void => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const absolute = path.join(directory, entry.name);
+      const relative = path.relative(cacheRoot, absolute).split(path.sep).join('/');
+      if (entry.isSymbolicLink()) throw new Error(`可信缓存包含符号链接: ${relative}`);
+      const stat = fs.lstatSync(absolute);
+      if (process.platform !== 'win32' && (stat.mode & 0o222) !== 0) {
+        throw new Error(`可信缓存包含可写入路径: ${relative}`);
+      }
+      if (entry.isDirectory()) visit(absolute);
+      else if (entry.isFile()) files.push(relative);
+      else throw new Error(`可信缓存包含非普通文件: ${relative}`);
+    }
+  };
+  visit(cacheRoot);
+  return files.sort();
+}
+
+function assertCompleteCache(
+  cacheRoot: string,
+  runtimeRoot: string,
+  markerIdentity: string,
+  expectedFiles: readonly ExpectedCacheFile[],
+): void {
+  const completeMarker = path.join(cacheRoot, '.complete.json');
+  const cacheStat = fs.lstatSync(cacheRoot);
+  const markerStat = fs.lstatSync(completeMarker);
+  if (!cacheStat.isDirectory() || cacheStat.isSymbolicLink()
+      || !isPathInside(safeRealpath(cacheRoot, '可信缓存目录不可用'), runtimeRoot)
+      || !markerStat.isFile() || markerStat.isSymbolicLink()
+      || (process.platform !== 'win32' && ((cacheStat.mode & 0o222) !== 0 || (markerStat.mode & 0o222) !== 0))
+      || fs.readFileSync(completeMarker, 'utf8') !== markerIdentity) {
+    throw new Error('可信缓存完成标记无效');
+  }
+  const allowed = new Set(['.complete.json', ...expectedFiles.map(({ relativePath }) => relativePath)]);
+  const actual = listCacheFiles(cacheRoot);
+  if (actual.length !== allowed.size || actual.some((relativePath) => !allowed.has(relativePath))) {
+    throw new Error('可信缓存包含未经宿主批准的文件');
+  }
+  for (const expected of expectedFiles) {
+    assertCachedFile(
+      path.join(cacheRoot, ...expected.relativePath.split('/')),
+      cacheRoot,
+      expected.bytes,
+      expected.sha256,
+    );
+  }
+}
+
+function prepareTrustedRuntime(
+  userId: string,
+  projectRoot: string,
+): Omit<ValidatedExpenseComponent, 'projectRoot' | 'interpreter' | 'assertExecutionIntegrity'> & {
+  assertIntegrity: () => void;
+} {
+  const platformKey = `${process.platform}-${process.arch}`;
+  const artifacts = TRUSTED_EXPENSE_PLATFORM_ARTIFACTS[platformKey];
+  if (!artifacts) throw new Error(`Mate 报销组件尚未固定当前平台依赖: ${platformKey}`);
+  const sitePackages = safeRealpath(pythonSitePackages(projectRoot), '报销项目的 Python 依赖环境不可用');
+  const sourceFiles = TRUSTED_EXPENSE_COMPONENT_FILES.map((expected) => {
+    const source = path.join(projectRoot, 'src', ...expected.path.split('/'));
+    assertDirectFile(source, projectRoot, expected, `报销项目组件 ${expected.path}`);
+    return { source, expected };
+  });
+  const dependencyFiles = artifacts.pythonDistributions.flatMap((distribution) => (
+    recordFiles(sitePackages, distribution).map((file) => ({
+      source: path.join(sitePackages, ...file.relativePath.split('/')),
+      expected: file,
+    }))
+  ));
+  const realRuntimeRoot = ensurePrivateDirectory(
+    userExpenseWorkbenchRuntimeDir(userId),
+    'Mate 报销组件运行目录不可用',
+  );
+  const trustedCacheRoot = ensurePrivateDirectory(
+    path.join(realRuntimeRoot, 'trusted-cache'),
+    'Mate 报销组件可信缓存根目录不可用',
+  );
+  const cacheRoot = path.join(trustedCacheRoot, runtimeCacheKey(platformKey));
+  const completeMarker = path.join(cacheRoot, '.complete.json');
+  const markerIdentity = JSON.stringify({ schema: EXPENSE_RUNTIME_CACHE_SCHEMA, platformKey, componentVersion: TRUSTED_EXPENSE_COMPONENT_VERSION });
+  const expectedCacheFiles: ExpectedCacheFile[] = [
+    ...sourceFiles.map(({ expected }) => ({
+      relativePath: `source/${expected.path}`,
+      bytes: expected.bytes,
+      sha256: Buffer.from(expected.sha256, 'hex'),
+    })),
+    ...dependencyFiles.map(({ expected }) => ({
+      relativePath: `site-packages/${expected.relativePath}`,
+      bytes: expected.bytes,
+      sha256: expected.sha256,
+    })),
+  ];
+  try {
+    assertCompleteCache(cacheRoot, realRuntimeRoot, markerIdentity, expectedCacheFiles);
+  } catch {
+    removePrivateTree(cacheRoot);
+    const temporaryRoot = `${cacheRoot}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
+    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+    try {
+      fs.mkdirSync(path.join(temporaryRoot, 'source'), { recursive: true, mode: 0o700 });
+      fs.mkdirSync(path.join(temporaryRoot, 'site-packages'), { recursive: true, mode: 0o700 });
+      for (const { source, expected } of sourceFiles) {
+        copyVerifiedFile(source, path.join(temporaryRoot, 'source', ...expected.path.split('/')), expected.bytes, Buffer.from(expected.sha256, 'hex'));
+      }
+      for (const { source, expected } of dependencyFiles) {
+        copyVerifiedFile(source, path.join(temporaryRoot, 'site-packages', ...expected.relativePath.split('/')), expected.bytes, expected.sha256);
+      }
+      fs.writeFileSync(path.join(temporaryRoot, '.complete.json'), markerIdentity, { mode: 0o600, flag: 'wx' });
+      freezeRuntimeTree(temporaryRoot);
+      fs.mkdirSync(path.dirname(cacheRoot), { recursive: true, mode: 0o700 });
+      try { fs.renameSync(temporaryRoot, cacheRoot); }
+      catch (cause) {
+        if (!fs.existsSync(completeMarker)) throw cause;
+      }
+    } finally {
+      removePrivateTree(temporaryRoot);
+    }
+  }
+  assertCompleteCache(cacheRoot, realRuntimeRoot, markerIdentity, expectedCacheFiles);
+  const trustedSourceRoot = safeRealpath(path.join(cacheRoot, 'source'), 'Mate 报销组件可信源码缓存不可用');
+  const trustedSitePackages = safeRealpath(path.join(cacheRoot, 'site-packages'), 'Mate 报销组件可信依赖缓存不可用');
+  const trustedBridge = path.join(trustedSourceRoot, ...TRUSTED_EXPENSE_BRIDGE_PATH.split('/'));
+  return {
+    trustedSourceRoot,
+    trustedSitePackages,
+    trustedBridge,
+    assertIntegrity: () => assertCompleteCache(
+      cacheRoot,
+      realRuntimeRoot,
+      markerIdentity,
+      expectedCacheFiles,
+    ),
+  };
+}
+
+function validateExpenseComponent(userId: string, projectRoot: string): ValidatedExpenseComponent {
+  if (typeof projectRoot !== 'string' || !projectRoot || projectRoot.includes('\0') || !path.isAbsolute(projectRoot)) {
+    throw new Error('报销项目必须是绝对目录');
+  }
   const requested = path.resolve(projectRoot);
   let rootStat: fs.Stats;
   try { rootStat = fs.lstatSync(requested); }
   catch { throw new Error('报销项目目录不存在'); }
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('报销项目必须是非符号链接目录');
-  const root = fs.realpathSync(requested);
-  const python = interpreterFor(root);
-  let pythonStat: fs.Stats;
-  try { pythonStat = fs.statSync(python); }
-  catch { throw new Error('报销项目的 Python 虚拟环境不存在'); }
-  // Virtualenv launchers are normally symlinks (for example, python3 ->
-  // python3.12). Follow that expected link, but require the resolved target
-  // to be a regular executable. The user-selected project path itself remains
-  // lexical and absolute, so a caller cannot redirect the launcher path.
-  if (!pythonStat.isFile()) throw new Error('报销项目的 Python 解释器无效');
-  if (process.platform !== 'win32' && (pythonStat.mode & 0o111) === 0) throw new Error('报销项目的 Python 解释器不可执行');
-  const bridge = path.join(root, 'src', 'expense_reimbursement', 'task_agent', 'stdio_bridge.py');
-  let bridgeStat: fs.Stats;
-  try { bridgeStat = fs.lstatSync(bridge); }
-  catch { throw new Error('报销项目缺少 Mate 桥接文件'); }
-  if (!bridgeStat.isFile() || bridgeStat.isSymbolicLink() || bridgeStat.size < 1 || bridgeStat.size > 2 * 1024 * 1024
-      || !isPathAllowed(bridge, [root])) {
-    throw new Error('报销项目缺少安全的 Mate 桥接文件');
-  }
-  readWorkbenchManifest(root, bridge);
-  return root;
+  const root = safeRealpath(requested, '报销项目目录不可用');
+  const trustedRuntime = prepareTrustedRuntime(userId, root);
+  const hostPython = prepareHostPythonRuntime(userId);
+  return {
+    projectRoot: root,
+    interpreter: hostPython.interpreter,
+    assertExecutionIntegrity: () => {
+      hostPython.assertIntegrity();
+      trustedRuntime.assertIntegrity();
+    },
+    trustedSourceRoot: trustedRuntime.trustedSourceRoot,
+    trustedSitePackages: trustedRuntime.trustedSitePackages,
+    trustedBridge: trustedRuntime.trustedBridge,
+  };
+}
+
+export function validateExpenseProjectRoot(projectRoot: string): string {
+  return validateExpenseComponent(getActiveUserId(), projectRoot).projectRoot;
 }
 
 class ExpenseWorkbenchSession {
@@ -438,16 +1259,25 @@ class ExpenseWorkbenchSession {
   private readonly pending = new Map<string, PendingRequest>();
   private queue: Promise<void> = Promise.resolve();
 
-  constructor(private readonly userId: string, private readonly projectRoot: string) {}
+  constructor(private readonly userId: string, private readonly component: ValidatedExpenseComponent) {}
 
   private ensureProcess(): ManagedStdioProcess {
     if (this.process) return this.process;
-    const interpreter = interpreterFor(this.projectRoot);
+    this.component.assertExecutionIntegrity();
     const childProcess = startManagedStdioProcess({
-      command: interpreter,
-      args: ['-m', 'expense_reimbursement.task_agent.stdio_bridge'],
-      cwd: this.projectRoot,
-      env: buildExpenseWorkbenchEnvironment(this.projectRoot, this.userId),
+      command: this.component.interpreter,
+      args: [
+        '-I',
+        '-S',
+        '-B',
+        '-c',
+        PYTHON_BOOTSTRAP,
+        this.component.trustedSourceRoot,
+        this.component.trustedSitePackages,
+        this.component.trustedBridge,
+      ],
+      cwd: this.component.trustedSourceRoot,
+      env: buildExpenseWorkbenchEnvironment(this.component.projectRoot, this.userId),
       maxInputLineBytes: MAX_EXPENSE_WORKBENCH_REQUEST_LINE_BYTES,
       maxOutputLineBytes: MAX_RESPONSE_BYTES,
     });
@@ -496,14 +1326,21 @@ class ExpenseWorkbenchSession {
   }
 
   request(operation: ExpenseWorkbenchOperation, payload: JsonObject, hostRequest: ExpenseWorkbenchHostRequest = {}): Promise<ExpenseWorkbenchResponse> {
-    const run = this.queue.then(() => this.send(operation, payload, hostRequest));
+    const requestId = `mate-${crypto.randomBytes(12).toString('hex')}`;
+    const request = serializeExpenseWorkbenchRequest(requestId, operation, this.userId, payload, hostRequest);
+    return this.requestSerialized(operation, request);
+  }
+
+  requestSerialized(operation: ExpenseWorkbenchOperation, request: string): Promise<ExpenseWorkbenchResponse> {
+    const run = this.queue.then(() => this.sendSerialized(operation, request));
     this.queue = run.then(() => undefined, () => undefined);
     return run;
   }
 
-  private async send(operation: ExpenseWorkbenchOperation, payload: JsonObject, hostRequest: ExpenseWorkbenchHostRequest): Promise<ExpenseWorkbenchResponse> {
-    const requestId = `mate-${crypto.randomBytes(12).toString('hex')}`;
-    const request = serializeExpenseWorkbenchRequest(requestId, operation, this.userId, payload, hostRequest);
+  private async sendSerialized(operation: ExpenseWorkbenchOperation, request: string): Promise<ExpenseWorkbenchResponse> {
+    const parsedRequest = JSON.parse(request) as { request_id?: string };
+    const requestId = parsedRequest.request_id;
+    if (!requestId) throw new Error(`expense bridge ${operation} request id is missing`);
     const process = this.ensureProcess();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -540,10 +1377,12 @@ export async function configureExpenseProject(
   projectRoot: string,
   agentId: string,
 ): Promise<ExpenseWorkbenchProjectStatus> {
-  await assertCanonicalExpenseWorkbenchAgent(agentId);
-  const root = validateExpenseProjectRoot(projectRoot);
+  if (!userId || userId !== getActiveUserId()) throw new Error('active user context changed');
+  await assertCanonicalExpenseWorkbenchAgent(userId, agentId);
+  const component = validateExpenseComponent(userId, projectRoot);
+  const root = component.projectRoot;
   await closeExpenseWorkbenchSessions(userId);
-  const probe = new ExpenseWorkbenchSession(userId, root);
+  const probe = new ExpenseWorkbenchSession(userId, component);
   probe.start();
   try {
     const performHandshake = async (
@@ -578,7 +1417,7 @@ export function getExpenseProjectStatus(userId: string): ExpenseWorkbenchProject
   const config = readStoredConfig(userId);
   if (!config) return { configured: false, platform: process.platform === 'win32' ? 'windows' : 'posix' };
   try {
-    const root = validateExpenseProjectRoot(config.project_root);
+    const root = validateExpenseComponent(userId, config.project_root).projectRoot;
     return { configured: true, project_name: path.basename(root), platform: process.platform === 'win32' ? 'windows' : 'posix' };
   } catch {
     return { configured: false, platform: process.platform === 'win32' ? 'windows' : 'posix' };
@@ -593,20 +1432,28 @@ export async function callExpenseWorkbench(
   hostRequest: ExpenseWorkbenchHostRequest = {},
 ): Promise<JsonObject> {
   if (!userId || userId !== getActiveUserId()) throw new Error('active user context changed');
-  await assertCanonicalExpenseWorkbenchAgent(agentId);
+  await assertCanonicalExpenseWorkbenchAgent(userId, agentId);
+  const request = serializeExpenseWorkbenchRequest(
+    `mate-${crypto.randomBytes(12).toString('hex')}`,
+    operation,
+    userId,
+    payload,
+    hostRequest,
+  );
   const config = readStoredConfig(userId);
   if (!config) throw new Error('请先选择报销项目目录');
-  const projectRoot = validateExpenseProjectRoot(config.project_root);
+  const component = validateExpenseComponent(userId, config.project_root);
+  const projectRoot = component.projectRoot;
   const key = sessionKey(userId, projectRoot);
   let session = sessions.get(key);
   if (!session) {
-    session = new ExpenseWorkbenchSession(userId, projectRoot);
+    session = new ExpenseWorkbenchSession(userId, component);
     sessions.set(key, session);
   }
   if (hostRequest.host_capability_id !== undefined && (!hostRequest.host_capability_id || !/^hcap-[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(hostRequest.host_capability_id))) {
     throw new Error('invalid host confirmation capability');
   }
-  const response = await session.request(operation, payload, hostRequest);
+  const response = await session.requestSerialized(operation, request);
   if (!response.ok) throw new Error(response.error?.message || 'expense workbench operation failed');
   return validateExpenseWorkbenchResult(operation, response.result || {});
 }

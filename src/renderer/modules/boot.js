@@ -371,6 +371,9 @@ function setView(view, cid, opts = {}) {
     _bootLog.info('view change', { view, cid: cid || undefined });
   }
   currentView = view;
+  if (view !== 'agents' && typeof closeExpenseWorkbench === 'function') {
+    closeExpenseWorkbench();
+  }
   _saveLastView(view, cid);
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   const panelId = view === 'new-chat' ? 'panel-new-chat'

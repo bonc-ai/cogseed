@@ -566,7 +566,7 @@ export async function listMembers(
   const enriched = await Promise.all(m.actors.map(async (a) => {
     if (a.kind !== 'agent') return a;
     try {
-      const ag = await agentsFeat.getAgent(a.id);
+      const ag = await agentsFeat.getAgentForChatDispatch(userId, a.id);
       if (!agentsFeat.isAgentChatDispatchable(ag)) return null;
       return ag && ag.interactive === true ? { ...a, interactive: true } : a;
     } catch {
@@ -710,7 +710,7 @@ export async function markFormSubmittedAndDispatch(
       : '';
     if (projDir) {
       const agentsFeat = await import('../agents');
-      const ag = await agentsFeat.getAgent(agentId);
+      const ag = await agentsFeat.getAgentForChatDispatch(userId, agentId);
       const cli = ag?.runtime?.kind === 'cli' ? ag.runtime.cli : '';
       if (agentsFeat.cliIsCodingAgent(cli)) {
         const prev = await readState(userId, cid);
@@ -760,7 +760,7 @@ export async function markFormSubmittedAndDispatch(
   if (agentId !== USER_ID) {
     try {
       const agentsFeat = await import('../agents');
-      const ag = await agentsFeat.getAgent(agentId);
+      const ag = await agentsFeat.getAgentForChatDispatch(userId, agentId);
       if (ag && ag.name) mention = buildMention(ag.name);
     } catch (err) {
       log.warn(`form-submit name lookup failed agent=${agentId}: ${(err as Error).message}`);

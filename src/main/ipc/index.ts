@@ -67,7 +67,10 @@ import { getRendererTables, isLang, t } from '../i18n';
 import { isPathAllowed } from '../util/path-sandbox';
 import * as userWorkspace from '../features/user_workspace';
 import { invokeHandlers as localAgentsHandlers } from './local_agents';
-import { invokeHandlers as expenseWorkbenchHandlers } from './expense_workbench';
+import {
+  invokeHandlers as expenseWorkbenchHandlers,
+  registerExpenseWorkbenchHostIpc,
+} from './expense_workbench';
 import { invokeHandlers as qualityHandlers } from './quality';
 import { invokeHandlers as connectorsHandlers } from './connectors';
 import { invokeHandlers as memoryHandlers } from './memory';
@@ -3773,6 +3776,7 @@ export function broadcastToRenderer(channel: string, payload: unknown): void {
 }
 
 export function register(): void {
+  registerExpenseWorkbenchHostIpc();
   ipcMain.handle('orkas.invoke', async (event, request: unknown) => {
     if (!isTrustedIpcSender(event.sender)) {
       log.warn('rejected invoke from untrusted renderer');

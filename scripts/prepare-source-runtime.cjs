@@ -19,6 +19,7 @@ const REQUIRED_RUNTIME_EXECUTABLES = Object.freeze([
   path.join('Contents', 'Frameworks', 'Electron Framework.framework', 'Electron Framework'),
   path.join('Contents', 'Frameworks', 'Electron Helper.app', 'Contents', 'MacOS', 'Electron Helper'),
   path.join('Contents', 'Frameworks', 'Electron Helper (GPU).app', 'Contents', 'MacOS', 'Electron Helper (GPU)'),
+  path.join('Contents', 'Frameworks', 'Electron Helper (Plugin).app', 'Contents', 'MacOS', 'Electron Helper (Plugin)'),
   path.join('Contents', 'Frameworks', 'Electron Helper (Renderer).app', 'Contents', 'MacOS', 'Electron Helper (Renderer)'),
 ]);
 
@@ -110,21 +111,28 @@ function readProtocolSchemes(plist) {
   }
 }
 
-function executableFileIsUsable(file, requireDirectFile = false) {
+function executableFileIsUsable(file, bundleRoot, requireDirectFile = false) {
   try {
     const entry = fs.lstatSync(file);
     if (requireDirectFile && !entry.isFile()) return false;
     const target = requireDirectFile ? entry : fs.statSync(file);
-    return target.isFile() && (target.mode & 0o111) !== 0;
+    const realBundle = fs.realpathSync(bundleRoot);
+    const realFile = fs.realpathSync(file);
+    const relative = path.relative(realBundle, realFile);
+    return target.isFile()
+      && (target.mode & 0o111) !== 0
+      && relative !== '..'
+      && !relative.startsWith(`..${path.sep}`)
+      && !path.isAbsolute(relative);
   } catch {
     return false;
   }
 }
 
 function bundleRuntimeFilesAreUsable(destination) {
-  if (!executableFileIsUsable(path.join(destination, MAIN_EXECUTABLE), true)) return false;
+  if (!executableFileIsUsable(path.join(destination, MAIN_EXECUTABLE), destination, true)) return false;
   return REQUIRED_RUNTIME_EXECUTABLES.every((relative) => (
-    executableFileIsUsable(path.join(destination, relative))
+    executableFileIsUsable(path.join(destination, relative), destination)
   ));
 }
 
@@ -141,6 +149,45 @@ function bundleIsCurrent(destination, identity, electronVersion) {
     && readPlistString(plist, 'CFBundleName') === identity.appName
     && readPlistString(plist, 'CFBundleDisplayName') === identity.appName
     && JSON.stringify(readProtocolSchemes(plist)) === JSON.stringify(identity.protocolSchemes);
+}
+
+function copyRuntimeBundle(source, destination) {
+  const sourcePath = path.resolve(source);
+  const destinationPath = path.resolve(destination);
+  if (sourcePath === destinationPath) {
+    throw new Error('source and destination runtime bundles must be different');
+  }
+  const destinationParent = path.dirname(destinationPath);
+  if (!fs.existsSync(destinationParent) || !fs.statSync(destinationParent).isDirectory()) {
+    throw new Error('source runtime destination directory is unavailable');
+  }
+  try {
+    const sourceEntry = fs.lstatSync(sourcePath);
+    if (!sourceEntry.isDirectory() || sourceEntry.isSymbolicLink()) {
+      throw new Error('source runtime bundle must be a direct directory');
+    }
+    if (fs.existsSync(destinationPath)) {
+      fs.rmSync(destinationPath, { recursive: true, force: true });
+    }
+    // macOS frameworks depend on relative symlinks. Node's default cpSync
+    // rewrites them to absolute paths pointing back into the source bundle.
+    fs.cpSync(sourcePath, destinationPath, {
+      recursive: true,
+      preserveTimestamps: true,
+      verbatimSymlinks: true,
+    });
+  } catch (cause) {
+    try {
+      fs.rmSync(destinationPath, { recursive: true, force: true });
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [cause, cleanupError],
+        'copy source runtime bundle failed and partial destination cleanup failed',
+        { cause },
+      );
+    }
+    throw new Error('copy source runtime bundle failed', { cause });
+  }
 }
 
 function prepareSourceRuntimeBundle(options = {}) {
@@ -161,10 +208,10 @@ function prepareSourceRuntimeBundle(options = {}) {
   }
 
   const source = findSourceApp(distDir, pathFile);
-  if (source !== destination) {
-    if (fs.existsSync(destination)) fs.rmSync(destination, { recursive: true, force: true });
-    fs.cpSync(source, destination, { recursive: true, preserveTimestamps: true });
+  if (source === destination) {
+    throw new Error('isolated source runtime bundle is damaged and no pristine Electron app is available; rerun dependency preparation');
   }
+  copyRuntimeBundle(source, destination);
 
   const plist = path.join(destination, 'Contents', 'Info.plist');
   if (!fs.existsSync(plist)) throw new Error('Electron macOS application bundle has no Info.plist');
@@ -229,6 +276,7 @@ module.exports = {
   sourceRuntimeBundleSpec,
   currentAppFromPathFile,
   bundleIsCurrent,
+  copyRuntimeBundle,
   parseVariant,
   parseIntegrationWorktreeVariant,
   prepareSourceRuntimeBundle,

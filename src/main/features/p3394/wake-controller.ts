@@ -6,7 +6,7 @@ import {
   setActiveRecipient,
   setOrchestrationLedger,
 } from "../group_chat/state";
-import { getAgent, isAgentChatDispatchable } from "../agents";
+import { getAgentDispatchPolicy, getAgentForChatDispatch, isAgentChatDispatchable } from "../agents";
 import { isAgentEnabled } from "../component_enabled";
 import {
   approveWakeRequest,
@@ -55,7 +55,11 @@ export async function decideWakeRequest(
       return { ok: true, request, dispatched: false };
     }
 
-    const target = await getAgent(existing.agent_id);
+    const policy = await getAgentDispatchPolicy(userId, existing.agent_id);
+    if (!isAgentChatDispatchable(policy) || !isAgentEnabled(userId, existing.agent_id)) {
+      return { ok: false, error: "wake target agent is unavailable" };
+    }
+    const target = await getAgentForChatDispatch(userId, existing.agent_id);
     if (!isAgentChatDispatchable(target) || !isAgentEnabled(userId, existing.agent_id)) {
       return { ok: false, error: "wake target agent is unavailable" };
     }

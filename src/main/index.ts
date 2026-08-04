@@ -377,11 +377,16 @@ function registerIpc(): void {
       const [cmd, args] = isWin
         ? ['cmd.exe', ['/d', '/s', '/c', `"${script}"`]] as const
         : ['bash',    [script]]                            as const;
+      const relaunchEnv = { ...process.env };
+      delete relaunchEnv.ORKAS_WORKSPACE_ROOT;
+      delete relaunchEnv.ORKAS_RUNTIME_CONTAINER;
+      delete relaunchEnv.CORE_AGENT_AUTH_DIR;
       const child = spawn(cmd, args, {
         cwd: paths.PC_ROOT,
         detached: true,
         stdio: 'ignore',
         windowsHide: true,
+        env: relaunchEnv,
       });
       child.unref();
       log.info('relaunch via shell script', { script });

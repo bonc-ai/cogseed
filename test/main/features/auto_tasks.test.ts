@@ -58,7 +58,8 @@ const autoRuntime = vi.hoisted(() => ({
   createConversation: vi.fn(),
   deleteConversation: vi.fn(),
   send: vi.fn(),
-  getAgent: vi.fn(),
+  getAgentForChatDispatch: vi.fn(),
+  getAgentDispatchPolicy: vi.fn(),
   isAgentChatDispatchable: vi.fn(),
 }));
 
@@ -72,7 +73,8 @@ vi.mock('../../../src/main/features/group_chat', () => ({
 }));
 
 vi.mock('../../../src/main/features/agents', () => ({
-  getAgent: autoRuntime.getAgent,
+  getAgentForChatDispatch: autoRuntime.getAgentForChatDispatch,
+  getAgentDispatchPolicy: autoRuntime.getAgentDispatchPolicy,
   isAgentChatDispatchable: autoRuntime.isAgentChatDispatchable,
 }));
 
@@ -114,12 +116,16 @@ beforeEach(() => {
   autoRuntime.createConversation.mockReset();
   autoRuntime.deleteConversation.mockReset();
   autoRuntime.send.mockReset();
-  autoRuntime.getAgent.mockReset();
+  autoRuntime.getAgentForChatDispatch.mockReset();
+  autoRuntime.getAgentDispatchPolicy.mockReset();
   autoRuntime.isAgentChatDispatchable.mockReset();
   autoRuntime.createConversation.mockResolvedValue({ conversation_id: 'cid_auto' });
   autoRuntime.deleteConversation.mockResolvedValue(true);
   autoRuntime.send.mockResolvedValue({ ok: true });
-  autoRuntime.getAgent.mockImplementation(async (agentId: string) => ({ agent_id: agentId, enabled: true }));
+  autoRuntime.getAgentForChatDispatch.mockImplementation(async (_uid: string, agentId: string) => ({ agent_id: agentId, enabled: true }));
+  autoRuntime.getAgentDispatchPolicy.mockImplementation(async (_uid: string, agentId: string) => (
+    autoRuntime.getAgentForChatDispatch(_uid, agentId)
+  ));
   autoRuntime.isAgentChatDispatchable.mockImplementation((agent: { enabled?: boolean; interaction_mode?: string } | null) => (
     !!agent && agent.enabled !== false && agent.interaction_mode !== 'management_only'
   ));
@@ -177,7 +183,7 @@ describe('seed text composition', () => {
 
 describe('task CRUD normalization', () => {
   it('rejects management-only recipients for global and project automation', async () => {
-    autoRuntime.getAgent.mockResolvedValue({
+    autoRuntime.getAgentForChatDispatch.mockResolvedValue({
       agent_id: 'expense-agent',
       enabled: true,
       interaction_mode: 'management_only',
@@ -575,7 +581,7 @@ describe('scheduler dispatch', () => {
     );
     fs.mkdirSync(path.dirname(autoTaskConfigFile(TEST_UID, taskId)), { recursive: true });
     fs.writeFileSync(autoTaskConfigFile(TEST_UID, taskId), JSON.stringify(config));
-    autoRuntime.getAgent.mockResolvedValue({
+    autoRuntime.getAgentForChatDispatch.mockResolvedValue({
       agent_id: 'expense-agent',
       enabled: true,
       interaction_mode: 'management_only',

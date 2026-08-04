@@ -10,6 +10,8 @@ describe('source runtime launchers', () => {
   it('locks this worktree to integration and passes that identity to Electron', () => {
     const shell = read('run.sh');
     const windows = read('run.cmd');
+    const bootstrap = read('bootstrap.cjs');
+    const packageMeta = JSON.parse(read('package.json')) as { orkasSourceRuntimeVariant?: string };
 
     expect(shell).toContain('VARIANT="integration"');
     expect(windows).toContain('set "VARIANT=integration"');
@@ -22,6 +24,9 @@ describe('source runtime launchers', () => {
     expect(shell).toContain('Mate Agent [Integration].app');
     expect(shell).not.toContain('Usage: ./run.sh [--variant');
     expect(windows).not.toContain('Usage: run.cmd [--variant');
+    expect(packageMeta.orkasSourceRuntimeVariant).toBe('integration');
+    expect(bootstrap).toContain('sourceVariant: packageMeta.orkasSourceRuntimeVariant');
+    expect(bootstrap).toContain('allowWorkspaceOverride: isPackagedDev');
   });
 
   it('rejects every shell argument or environment attempt to override integration', () => {
@@ -69,6 +74,10 @@ describe('source runtime launchers', () => {
     );
     expect(main).not.toContain('variantArg');
     expect(main).toContain("['bash',    [script]]");
+    expect(main).toContain('delete relaunchEnv.ORKAS_WORKSPACE_ROOT');
+    expect(main).toContain('delete relaunchEnv.ORKAS_RUNTIME_CONTAINER');
+    expect(main).toContain('delete relaunchEnv.CORE_AGENT_AUTH_DIR');
+    expect(main).toContain('env: relaunchEnv');
   });
 
   it('keeps protocol ownership in the prepared integration bundle, not launcher code', () => {

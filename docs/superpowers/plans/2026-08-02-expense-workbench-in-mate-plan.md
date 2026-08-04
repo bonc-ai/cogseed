@@ -1,12 +1,18 @@
 # Expense Workbench In Mate Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical record:** This file preserves the 2026-08-02 implementation sequence; unchecked boxes are not current execution instructions. Current development and integration start only from `origin/develop`, accepted release content moves from `develop` to `origin/master`, and retired `origin/main` is not a source for development, release, or code recovery.
+
+> **Current trust-chain correction:** A reimbursement project may use its `.venv` for standalone development and tests. Mate never executes that project interpreter, activates the environment, or imports through project/user `PYTHONPATH`. Mate pins the original host Python release archive by name, byte count, and SHA-256, safely extracts and revalidates the complete runtime tree, then pins the complete reachable Python source closure and approved dependency `RECORD` files. It copies only verified files into a per-user private `trusted-cache`, verifies the runtime tree and cache contents again, then launches the extracted trusted runtime with `-I -S -B -c`. A platform without pinned artifacts fails closed; the current pinned target is `darwin-arm64`.
+
+> **Renderer boundary correction:** The management surface renders in Mate's existing Renderer/WebContents. Its button and route are navigation, not an authorization boundary or an isolated security sandbox. The main process must treat every renderer request as untrusted and independently bind the active user, canonical Agent, operation, resource scope, and any required human confirmation.
+
+> **Original execution note (retained for traceability, not a current instruction):** The 2026-08-02 draft asked agentic workers to use the then-available `superpowers:subagent-driven-development` or `superpowers:executing-plans` workflow and represented steps as unchecked boxes.
 
 **Goal:** Move the existing reimbursement workbench into Mate's Agent detail management surface, replace browser HTTP calls with a validated IPC/stdio bridge, and remove the old browser UI after parity verification.
 
-**Architecture:** The Agent spec declares an optional `management_surface` key. Mate's renderer opens the `expense_workbench` surface only for agents that declare it. Renderer requests go through `window.orkas.invoke('expenseWorkbench.*')`; main validates the active user, agent surface, project configuration, material references, and versions before calling a machine-readable stdio bridge owned by the reimbursement project. The reimbursement project's `ApplicationService`, database, T/R/A-BOX, audit log, and security gates remain the only business source of truth.
+**Architecture:** The Agent spec declares an optional `management_surface` key. Mate's renderer uses it to expose the `expense_workbench` route, while the preload allow-list and main-process handlers constrain callable operations. Main validates the active user, canonical Agent, project configuration, material references, versions, and confirmation requirements before calling a machine-readable JSONL stdio bridge. Before launch, Mate verifies and copies the host-pinned reimbursement source closure and dependency files into a private trusted cache; the reimbursement component's `ApplicationService`, database, T/R/A-BOX, audit log, and security gates remain the only business source of truth.
 
-**Tech Stack:** Electron renderer classic JavaScript, existing Mate CSS/i18n/icon helpers, Electron contextBridge IPC, TypeScript main features, Python 3.12 reimbursement service, JSONL stdio protocol, Vitest/pytest contract tests.
+**Tech Stack:** Electron renderer classic JavaScript, existing Mate CSS/i18n/icon helpers, Electron contextBridge IPC, TypeScript main features, a byte-pinned Mate-hosted Python 3.12 runtime, a verified private source/dependency cache, JSONL stdio, and Vitest/pytest contract tests. The project `.venv` remains a standalone development/test environment and a candidate dependency source for verification, not Mate's executable runtime.
 
 ---
 
@@ -27,7 +33,7 @@
 - Modify: `resources/builtin/marketplace/agents/c045605cb916/agent.json` — declare `management_surface: "expense_workbench"` and align the input/bridge description with the versioned application contract.
 - Modify: `src/main/features/agents.ts` — parse and validate optional management-surface metadata without coupling platform code to the built-in agent id.
 - Create: `src/main/features/expense_workbench/contracts.ts` — typed payload/result schemas and stable error codes.
-- Create: `src/main/features/expense_workbench/adapter.ts` — active-user/project resolution, approved stdio process lifecycle, JSONL request correlation, result caps, redaction and domain error mapping.
+- Create: `src/main/features/expense_workbench/adapter.ts` — active-user/project resolution, host Python/source/dependency trust verification, private-cache preparation, approved stdio process lifecycle, JSONL request correlation, result caps, redaction and domain error mapping.
 - Create: `src/main/features/expense_workbench/materials.ts` — project/material reference projection using existing attachment and path-sandbox helpers.
 - Create: `src/main/features/expense_workbench/settings.ts` — safe non-secret project and connection configuration operations.
 - Modify: `src/main/ipc/index.ts` — register the `expenseWorkbench.*` handler table.
@@ -87,7 +93,7 @@ or:
 - [ ] Add typed dispatch functions for `manifest`, `health`, application list/get/create/draft/precheck/report, materials list/add, reviews list/decide, audit list, settings get/update/test, and assistant inspect/propose. Dispatch must call the existing `ApplicationService` or its existing safe projection helpers, not duplicate domain rules.
 - [ ] Bind every operation to the `user_id` supplied by the host context and apply the same owner/role checks used by the current API. Never return user identifiers, capability tokens, raw credentials, local absolute paths or internal projections.
 - [ ] Add graceful SIGTERM/SIGINT shutdown, flush each response before the next read, write diagnostics only to stderr, and return non-zero only for unrecoverable bootstrap failure.
-- [ ] Run `cd '/Users/an/东方国信项目/报销智能体' && PYTHONPATH=src .venv/bin/python3 -m pytest tests/test_task_agent_stdio_bridge.py -q`; expected result is PASS.
+- [ ] As a standalone reimbursement-project test only, run `cd '<reimbursement-project>' && .venv/bin/python3 -m pytest tests/test_task_agent_stdio_bridge.py -q`; expected result is PASS. This project interpreter is never the Mate runtime.
 - [ ] Commit the bridge and tests in the reimbursement repository: `git -C '/Users/an/东方国信项目/报销智能体' add src/expense_reimbursement/task_agent src/expense_reimbursement/bootstrap.py tests/test_task_agent_stdio_bridge.py && git -C '/Users/an/东方国信项目/报销智能体' commit -m "feat: add reimbursement stdio bridge"`.
 
 ## Task 3: Add Mate's Controlled Reimbursement Adapter
@@ -99,10 +105,10 @@ or:
 - Create: `src/main/features/expense_workbench/settings.ts`
 - Test: `test/main/features/expense_workbench_adapter.test.ts`
 
-- [ ] Write failing tests for project path resolution: only an absolute directory containing `.venv/bin/python3` (POSIX) or the documented Windows interpreter is accepted; the resolved path must pass `isPathAllowed` and must not be a file, symlink escape, or arbitrary parent directory.
+- [ ] Write failing tests for project path resolution and trust verification: accept only an absolute, non-symlink project directory whose complete pinned source closure and approved `.venv` dependency `RECORD` files match the host manifest. Reject missing, extra, modified, escaping, or unpinned files and unsupported platforms. Never accept or execute a project interpreter.
 - [ ] Write failing tests for adapter request correlation, one in-flight request per project/user session, process exit, malformed JSON, stderr redaction, response-size caps, timeout/idle recovery and cancellation.
 - [ ] Implement typed `ExpenseWorkbenchOperation`, `ExpenseWorkbenchRequest`, `ExpenseWorkbenchResult`, `ExpenseWorkbenchError`, and `ExpenseWorkbenchProjectConfig` types. Do not use `any` or `unknown` for public boundaries.
-- [ ] Implement the adapter through the repository's approved local CLI/child-process dispatch entry point; do not call `child_process.spawn` from this feature. Pass the project path and interpreter as validated process configuration, never as shell text.
+- [ ] Implement the adapter through the repository's approved managed stdio dispatch entry point; do not call `child_process.spawn` from this feature. Launch only a complete runtime extracted from the application-pinned release archive with `-I -S -B -c`, point its fixed bootstrap only at the reverified private trusted cache, omit project/user `PYTHONPATH`, and never place the selected project root or its interpreter in the command, arguments, or working directory.
 - [ ] Implement a request queue keyed by active user plus validated project root, preserving response order and preventing concurrent writes to one reimbursement store. Ensure process cleanup on app shutdown and project switch.
 - [ ] Implement `materials.ts` to accept only Mate-issued attachment/material references, verify current conversation/application scope, and project metadata without exposing source paths to Python or renderer.
 - [ ] Implement `settings.ts` so API keys remain in the existing secret facade; renderer receives only configured/unconfigured state and safe non-secret fields.
@@ -174,7 +180,7 @@ or:
 - [ ] Port the assistant page as a bounded application-scoped conversation. Parse only the structured operation proposal returned by the adapter; display a diff before applying a proposal.
 - [ ] Port reviews, audit records and settings with role/error states. Approval and submission actions remain behind their existing human confirmation and role gates.
 - [ ] Add tests for missing materials, `needs_review`, `version_conflict`, unavailable model/configuration, duplicate click, and adapter process restart recovery.
-- [ ] Run both `npm test -- --runInBand test/main/ipc/expense_workbench_ipc.test.ts` and `cd '/Users/an/东方国信项目/报销智能体' && PYTHONPATH=src .venv/bin/python3 -m pytest tests/test_task_agent_stdio_bridge.py tests/test_application_lifecycle.py -q`; expected result is PASS.
+- [ ] Run the Mate test and the independent Python-project tests separately: `npm test -- --runInBand test/main/ipc/expense_workbench_ipc.test.ts` and `cd '<reimbursement-project>' && .venv/bin/python3 -m pytest tests/test_task_agent_stdio_bridge.py tests/test_application_lifecycle.py -q`; both must PASS. The second command is not Mate's runtime launch path.
 - [ ] Commit the Mate operations: `git add src/renderer/modules/expense-workbench* src/main/features/expense_workbench test/main/ipc/expense_workbench_ipc.test.ts && git commit -m "feat: port expense workbench operations"`.
 - [ ] Commit the reimbursement-side contract changes separately: `git -C '/Users/an/东方国信项目/报销智能体' add tests/test_task_agent_stdio_bridge.py && git -C '/Users/an/东方国信项目/报销智能体' commit -m "test: align reimbursement bridge contract"`.
 
@@ -187,10 +193,10 @@ or:
 - Reference: `src/main/util/path-sandbox.ts`, `src/main/features/attachments*`, existing renderer test harness.
 
 - [ ] Run the full Mate test script with sqlite ABI management: `npm test`.
-- [ ] Run the reimbursement project's focused suite: `cd '/Users/an/东方国信项目/报销智能体' && PYTHONPATH=src .venv/bin/python3 -m pytest tests/test_task_agent_stdio_bridge.py tests/test_ontology_backend.py tests/test_ontology_sync.py tests/test_application_lifecycle.py -q`.
+- [ ] Run the reimbursement project's focused suite independently of Mate: `cd '<reimbursement-project>' && .venv/bin/python3 -m pytest tests/test_task_agent_stdio_bridge.py tests/test_ontology_backend.py tests/test_ontology_sync.py tests/test_application_lifecycle.py -q`.
 - [ ] Start Mate with `cd PC && ./run.sh`, verify no report-project port is listening, open Agents, open the reimbursement Agent, and exercise all seven workbench sections.
-- [ ] Verify macOS paths containing Chinese characters and spaces, directory selection, Python interpreter detection, process recovery and app quit.
-- [ ] Verify Windows path normalization, process termination, renderer layout and a clear unsupported-platform state if the bridge cannot run there.
+- [ ] Verify macOS paths containing Chinese characters and spaces, directory selection, byte-pinned host Python verification, private trusted-cache creation/reverification, process recovery and app quit.
+- [ ] Verify Windows path normalization without launching code and a clear fail-closed unsupported-platform state. Do not fall back to a system or project Python until a separately reviewed Windows host runtime and dependency set are pinned.
 - [ ] Verify cross-user access rejection, material scope rejection, redacted logs, no user_id in visible UI, and no local absolute path in artifacts or assistant output.
 - [ ] Capture a parity checklist against `legacy-contract.json`; every legacy workbench action must have a passing Mate action before deletion.
 - [ ] Commit verification-only changes: `git add test src/main src/renderer && git commit -m "test: verify expense workbench migration"`.
@@ -235,6 +241,8 @@ or:
 - [ ] Mate's Agent detail shows “管理” only for an Agent with a valid management surface.
 - [ ] The migrated workbench renders all seven sections with loading, empty, success, error and permission states.
 - [ ] No renderer code calls the reimbursement HTTP API or starts a local report-project server.
+- [ ] The Renderer/WebContents is explicitly treated as untrusted; management-button visibility and page lifecycle are never used as authorization.
+- [ ] Mate launches only the pinned host Python and verified private cache with isolated flags; it never executes a project interpreter or trusts project/user `PYTHONPATH`.
 - [ ] The stdio bridge uses the existing domain service, database, T/R/A-BOX and audit gates.
 - [ ] User scope, path sandbox, material authorization, version conflict and confirmation gates are tested.
 - [ ] The standalone browser templates and browser-only routes are removed only after parity passes.

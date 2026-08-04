@@ -43,7 +43,7 @@ vi.mock('../../../../src/main/features/analytics/connectors', () => ({
 }));
 
 vi.mock('../../../../src/main/features/agents', () => ({
-  getAgent: async (agentId: string | null | undefined) =>
+  getAgentForChatDispatch: async (_uid: string, agentId: string | null | undefined) =>
     (agentId ? fixtures.agents[agentId] ?? null : null),
 }));
 

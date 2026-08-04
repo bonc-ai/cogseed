@@ -67,6 +67,31 @@ function loadWorkbench(options: { application?: Record<string, unknown> } = {}) 
     }
     return { ok: true };
   });
+  const expenseWorkbench = {
+    prepareOpen: async (agentId: string, gesture: string) => (
+      invoke('expenseWorkbench.prepareOpen', { agent_id: agentId, gesture })
+    ),
+    open: async (agentId: string) => invoke('expenseWorkbench.open', { agent_id: agentId }),
+    status: async () => invoke('expenseWorkbench.status', {}),
+    configure: async () => invoke('expenseWorkbench.pickAndConfigure', {}),
+    invoke: async (operation: string, payload: Record<string, object | string>) => (
+      invoke('expenseWorkbench.invoke', { operation, payload })
+    ),
+    invokeExternal: async (operation: string, payload: Record<string, object | string>) => (
+      invoke('expenseWorkbench.invokeExternal', { operation, payload })
+    ),
+    pickAndAddMaterials: async (applicationId: string) => (
+      invoke('expenseWorkbench.pickAndAddMaterials', { application_id: applicationId })
+    ),
+    confirmAndSubmit: async (applicationId: string, version: number, payloadHash: string) => (
+      invoke('expenseWorkbench.confirmAndSubmit', {
+        application_id: applicationId,
+        version,
+        payload_hash: payloadHash,
+      })
+    ),
+    close: async () => invoke('expenseWorkbench.close', {}),
+  };
   const markup = {
     shell: () => '<section></section>',
     assistant: () => '',
@@ -79,7 +104,7 @@ function loadWorkbench(options: { application?: Record<string, unknown> } = {}) 
     text: (_key: string, fallback: string) => fallback,
   };
   const context = {
-    window: { orkas: { invoke }, expenseWorkbenchMarkup: markup },
+    window: { orkas: { expenseWorkbench }, expenseWorkbenchMarkup: markup },
     document: { getElementById: (id: string) => elements[id] || null },
     console,
   };
@@ -102,26 +127,26 @@ function clickTarget(attributes: string[]) {
 describe('expense workbench external controls', () => {
   it('does not contact Feishu when the connections page loads', async () => {
     const { calls, context, host } = loadWorkbench();
-    await context.window.openExpenseWorkbench('expense-agent');
+    await context.window.openExpenseWorkbench('expense-agent', 'agent_detail');
     if (!host.onclick) throw new Error('workbench click handler is unavailable');
     await host.onclick({ target: { closest: () => ({ dataset: { ewPage: 'connections' }, hasAttribute: () => false }) } });
 
     expect(calls.filter((call) => call.channel === 'expenseWorkbench.invokeExternal')).toEqual([]);
     expect(calls).toContainEqual({
       channel: 'expenseWorkbench.invoke',
-      payload: { agent_id: 'expense-agent', operation: 'settings.get', payload: {} },
+      payload: { operation: 'settings.get', payload: {} },
     });
   });
 
   it('uses the dedicated external route only after the user clicks the disclosed action', async () => {
     const { calls, context, host } = loadWorkbench();
-    await context.window.openExpenseWorkbench('expense-agent');
+    await context.window.openExpenseWorkbench('expense-agent', 'agent_detail');
     if (!host.onclick) throw new Error('workbench click handler is unavailable');
     await host.onclick({ target: { closest: () => clickTarget(['data-ew-settings-test']) } });
 
     expect(calls).toContainEqual({
       channel: 'expenseWorkbench.invokeExternal',
-      payload: { agent_id: 'expense-agent', operation: 'settings.preflight', payload: {} },
+      payload: { operation: 'settings.preflight', payload: {} },
     });
     expect(calls.some((call) => (
       call.channel === 'expenseWorkbench.invoke'
@@ -132,13 +157,13 @@ describe('expense workbench external controls', () => {
   it('adds materials through the dedicated route without receiving paths or bytes', async () => {
     const application = { application_id: 'APP-1', current_version: 1 };
     const { calls, context, host } = loadWorkbench({ application });
-    await context.window.openExpenseWorkbench('expense-agent');
+    await context.window.openExpenseWorkbench('expense-agent', 'agent_detail');
     if (!host.onclick) throw new Error('workbench click handler is unavailable');
     await host.onclick({ target: { closest: () => clickTarget(['data-ew-add-material']) } });
 
     expect(calls).toContainEqual({
       channel: 'expenseWorkbench.pickAndAddMaterials',
-      payload: { agent_id: 'expense-agent', application_id: 'APP-1' },
+      payload: { application_id: 'APP-1' },
     });
     expect(calls.some((call) => call.channel === 'common.pickFiles')).toBe(false);
     expect(calls.some((call) => (
@@ -151,13 +176,13 @@ describe('expense workbench external controls', () => {
 
   it('configures the project through a main-only atomic picker', async () => {
     const { calls, context, host } = loadWorkbench();
-    await context.window.openExpenseWorkbench('expense-agent');
+    await context.window.openExpenseWorkbench('expense-agent', 'agent_detail');
     if (!host.onclick) throw new Error('workbench click handler is unavailable');
     await host.onclick({ target: { closest: () => clickTarget(['data-ew-configure']) } });
 
     expect(calls).toContainEqual({
       channel: 'expenseWorkbench.pickAndConfigure',
-      payload: { agent_id: 'expense-agent' },
+      payload: {},
     });
     expect(calls.some((call) => call.channel === 'common.pickDirectory')).toBe(false);
     expect(JSON.stringify(calls)).not.toContain('project_root');

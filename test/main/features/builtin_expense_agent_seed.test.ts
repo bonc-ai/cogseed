@@ -72,7 +72,10 @@ describe('builtin marketplace › expense-reimbursement seed', () => {
       assertCanonicalExpenseWorkbenchAgent,
       CANONICAL_EXPENSE_WORKBENCH_AGENT_ID,
     } = await import('../../../src/main/features/expense_workbench/canonical-agent');
-    await expect(assertCanonicalExpenseWorkbenchAgent(CANONICAL_EXPENSE_WORKBENCH_AGENT_ID))
+    await expect(assertCanonicalExpenseWorkbenchAgent(
+      'u-expense-seed',
+      CANONICAL_EXPENSE_WORKBENCH_AGENT_ID,
+    ))
       .resolves.toMatchObject({
         agent_id: EXPENSE_AGENT_ID,
         source: 'marketplace',

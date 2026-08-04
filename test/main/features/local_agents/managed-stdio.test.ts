@@ -12,15 +12,22 @@ interface FakeChild extends EventEmitter {
 
 const processMocks = vi.hoisted(() => ({
   children: [] as FakeChild[],
-  spawnCli: vi.fn(),
+  spawn: vi.fn(),
   killProcessTree: vi.fn(),
 }));
 
-vi.mock('../../../../src/main/features/local_agents/backends/base', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../../../src/main/features/local_agents/backends/base')>();
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
   return {
     ...actual,
-    spawnCli: processMocks.spawnCli,
+    spawn: processMocks.spawn,
+  };
+});
+
+vi.mock('../../../../src/main/util/process-tree', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../src/main/util/process-tree')>();
+  return {
+    ...actual,
     killProcessTree: processMocks.killProcessTree,
   };
 });
@@ -36,7 +43,7 @@ function createFakeChild(): FakeChild {
 }
 
 async function loadStartManagedStdioProcess() {
-  const module = await import('../../../../src/main/features/local_agents/runner');
+  const module = await import('../../../../src/main/util/managed-stdio-process');
   return module.startManagedStdioProcess;
 }
 
@@ -50,9 +57,9 @@ function absoluteWorkingDirectory(): string {
 
 beforeEach(() => {
   processMocks.children.length = 0;
-  processMocks.spawnCli.mockReset();
+  processMocks.spawn.mockReset();
   processMocks.killProcessTree.mockReset();
-  processMocks.spawnCli.mockImplementation(() => {
+  processMocks.spawn.mockImplementation(() => {
     const child = createFakeChild();
     processMocks.children.push(child);
     return child;
@@ -115,7 +122,7 @@ describe('managed stdio line limits', () => {
       cwd: absoluteWorkingDirectory(),
       ...limits,
     })).toThrow(/positive safe integer/);
-    expect(processMocks.spawnCli).not.toHaveBeenCalled();
+    expect(processMocks.spawn).not.toHaveBeenCalled();
   });
 
   it('accepts the strict 64 MiB configuration ceiling', async () => {
@@ -128,7 +135,7 @@ describe('managed stdio line limits', () => {
       maxInputLineBytes: 64 * 1024 * 1024,
       maxOutputLineBytes: 64 * 1024 * 1024,
     })).not.toThrow();
-    expect(processMocks.spawnCli).toHaveBeenCalledOnce();
+    expect(processMocks.spawn).toHaveBeenCalledOnce();
   });
 
   it('emits ASCII and multibyte output at the exact boundary', async () => {
@@ -170,5 +177,35 @@ describe('managed stdio line limits', () => {
     expect(exits[0]?.message).toContain('exceeds 6 bytes');
     expect(processMocks.killProcessTree).toHaveBeenCalledOnce();
     expect(processMocks.killProcessTree).toHaveBeenCalledWith(child, 'SIGTERM');
+  });
+
+  it('escalates an output-limit termination to SIGKILL and waits for the real close event', async () => {
+    vi.useFakeTimers();
+    try {
+      const startManagedStdioProcess = await loadStartManagedStdioProcess();
+      const managed = startManagedStdioProcess({
+        command: absoluteExecutable(),
+        args: [],
+        cwd: absoluteWorkingDirectory(),
+        maxOutputLineBytes: 4,
+      });
+      const child = processMocks.children[0];
+
+      child.stdout.write('abcde');
+      let closeResolved = false;
+      const close = managed.close().then(() => { closeResolved = true; });
+
+      expect(processMocks.killProcessTree).toHaveBeenCalledWith(child, 'SIGTERM');
+      expect(closeResolved).toBe(false);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(processMocks.killProcessTree).toHaveBeenNthCalledWith(2, child, 'SIGKILL');
+      expect(closeResolved).toBe(false);
+
+      child.emit('close', null, 'SIGKILL');
+      await close;
+      expect(closeResolved).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -400,7 +400,10 @@ function bindStaticHandlers() {
   });
   document.getElementById('agent-manage-btn')?.addEventListener('click', () => {
     if (_selectedAgent && typeof openExpenseWorkbench === 'function') {
-      void openExpenseWorkbench(_selectedAgent.id);
+      void openExpenseWorkbench(_selectedAgent.id, 'agent_detail').catch(async (error) => {
+        const reason = error instanceof Error ? error.message : String(error || '未知错误');
+        await uiAlert(t('agents.launch_failed', { reason }));
+      });
     }
   });
   document.getElementById('agent-edit-btn')?.addEventListener('click', toggleAgentEditMode);

@@ -28,7 +28,11 @@ import { dispatchSlots } from "../../util/locks";
 import { appendJsonlAtomic, genId12, nowIso, safeId } from "../../storage";
 import * as path from "node:path";
 import * as fs from "node:fs";
-import { isAgentChatDispatchable } from "../agents";
+import {
+  assertAgentChatDispatchable,
+  getAgentDispatchPolicy,
+  isAgentChatDispatchable,
+} from "../agents";
 
 import {
   Actor,
@@ -1898,7 +1902,7 @@ async function _enqueueBody(
     // doc on `ResolveOpts` in router.ts.
     const agentDisplayNames: string[] = [];
     try {
-      const all = await agentsFeat.listAgents();
+      const all = await agentsFeat.listAgentSearchListings();
       for (const a of all) {
         if (!isAgentChatDispatchable(a)) continue;
         if (a.name) {
@@ -1937,7 +1941,8 @@ async function _enqueueBody(
   for (const token of unknown.slice()) {
     if (!safeId(token)) continue;
     try {
-      const ag = await agentsFeat.getAgent(token);
+      if (!isAgentChatDispatchable(await getAgentDispatchPolicy(uid, token))) continue;
+      const ag = await agentsFeat.getAgentForChatDispatch(uid, token);
       if (isAgentChatDispatchable(ag) && isAgentEnabled(uid, ag.agent_id)) {
         to.push(ag.agent_id);
         unknown = unknown.filter((u) => u !== token);
@@ -1958,7 +1963,8 @@ async function _enqueueBody(
       continue;
     }
     try {
-      const agent = await agentsFeat.getAgent(recipientId);
+      if (!isAgentChatDispatchable(await getAgentDispatchPolicy(uid, recipientId))) continue;
+      const agent = await agentsFeat.getAgentForChatDispatch(uid, recipientId);
       if (isAgentChatDispatchable(agent) && isAgentEnabled(uid, recipientId)) {
         dispatchableRecipients.push(recipientId);
       }
@@ -2020,7 +2026,8 @@ async function _enqueueBody(
         continue;
       }
       try {
-        const agent = await agentsFeat.getAgent(recipientId);
+        if (!isAgentChatDispatchable(await getAgentDispatchPolicy(uid, recipientId))) continue;
+        const agent = await agentsFeat.getAgentForChatDispatch(uid, recipientId);
         if (!isAgentChatDispatchable(agent) || !isAgentEnabled(uid, recipientId)) continue;
         const decision = await evaluateWake(uid, {
           conversationId: cid,
@@ -2122,7 +2129,8 @@ async function _enqueueBody(
   for (const recipientId of to) {
     if (RESERVED_IDS.has(recipientId)) continue;
     try {
-      const ag = await agentsFeat.getAgent(recipientId);
+      if (!isAgentChatDispatchable(await getAgentDispatchPolicy(uid, recipientId))) continue;
+      const ag = await agentsFeat.getAgentForChatDispatch(uid, recipientId);
       if (!isAgentChatDispatchable(ag) || !isAgentEnabled(uid, ag.agent_id)) continue;
       if (ag.name) idToName.set(ag.agent_id, ag.name);
       const added = await ensureAgentMember(uid, cid, ag.agent_id, ag.name);
@@ -3063,6 +3071,29 @@ async function runActorTurnBody(
   turnStartedAt: number,
 ): Promise<ActorTurnResult> {
   const { uid, cid, actor } = w;
+  if (actor.kind === "agent") {
+    try {
+      await assertAgentChatDispatchable(uid, actor.id);
+    } catch {
+      log.warn(`agent ${actor.id} is unavailable for ordinary chat dispatch`);
+      const name = actor.name || actor.id;
+      const errBubble = `<span style="color:var(--danger)">${escapeHtmlForBubble(t("chat.agent_load_failed", { name }))}</span>`;
+      await enqueue({
+        uid,
+        cid,
+        fromActorId: actor.id,
+        text: errBubble,
+        failure_kind: "dependency",
+        failure_code: "agent_unavailable",
+        forceTo: [USER_ID],
+        turn_end: true,
+        turn_id: item.turnId,
+      });
+      await markInFlight(uid, cid, actor.id, false);
+      await emitStateChanged(state);
+      return { kind: "early" };
+    }
+  }
   const sessionId = actorSessionId(cid, actor);
   const isCommander = actor.kind === "commander";
   // Per-conv subdir under the user's root workspace — keeps repeat
@@ -3354,7 +3385,7 @@ async function runActorTurnBody(
       workingDir,
     );
   } else {
-    const agent = await agentsFeat.getAgent(actor.id);
+    const agent = await agentsFeat.getAgentForChatDispatch(uid, actor.id);
     if (!agent || !isAgentChatDispatchable(agent)) {
       log.warn(`agent ${actor.id} disappeared mid-turn`);
       // User-visible signal — without this the user's @-dispatch hangs
@@ -5102,7 +5133,7 @@ async function buildAgentsIndexBlock(
       allowedIds === null || allowedIds === undefined
         ? null
         : new Set(allowedIds);
-    const list = (await agentsFeat.listAgents())
+    const list = (await agentsFeat.listAgentDispatchSpecs())
       .filter((a) => isAgentChatDispatchable(a))
       .filter((a: any) => (allow ? allow.has(a.agent_id) : true));
     if (!list.length) return `${header}(no agents)`;
@@ -5359,6 +5390,7 @@ function _toolJson(data: unknown): { content: string } {
  * Shared by `dispatch_to` and `run_worker` so both honour the same name-map
  * rules the router uses. */
 async function resolveDispatchTarget(
+  uid: string,
   cid: string,
   toRaw: string,
 ): Promise<string | null> {
@@ -5366,7 +5398,7 @@ async function resolveDispatchTarget(
   if (key === "commander" || key === "指挥官") return COMMANDER_ID;
   if (key === "user" || key === "用户") return USER_ID;
   try {
-    const all = await agentsFeat.listAgents();
+    const all = await agentsFeat.listAgentDispatchSpecs();
     const matches = all
       .filter((a) => isAgentChatDispatchable(a))
       .filter(
@@ -5385,7 +5417,10 @@ async function resolveDispatchTarget(
   }
   if (safeId(toRaw)) {
     try {
-      const ag = await agentsFeat.getAgent(toRaw);
+      if (!isAgentChatDispatchable(await getAgentDispatchPolicy(uid, toRaw))) {
+        return null;
+      }
+      const ag = await agentsFeat.getAgentForChatDispatch(uid, toRaw);
       if (isAgentChatDispatchable(ag)) return toRaw;
     } catch {
       /* ignore */
@@ -5617,7 +5652,13 @@ async function runNestedDispatch(
   workflowStepId?: string,
 ): Promise<string> {
   if (actor.kind === "agent") {
-    const dispatchAgent = await agentsFeat.getAgent(actor.id);
+    if (!isAgentChatDispatchable(await getAgentDispatchPolicy(state.uid, actor.id))) {
+      return buildWorkerErrorPayload(
+        actor.name || actor.id,
+        "This Agent is available only through its management surface.",
+      );
+    }
+    const dispatchAgent = await agentsFeat.getAgentForChatDispatch(state.uid, actor.id);
     if (!isAgentChatDispatchable(dispatchAgent) || !isAgentEnabled(state.uid, actor.id)) {
       return buildWorkerErrorPayload(
         actor.name || actor.id,
@@ -6507,7 +6548,7 @@ async function buildCommanderExtraTools(
       const blocked = await blockedByCollaborationGateToolResult(uid, cid);
       if (blocked) return blocked;
       // Resolve `to` → actor id via the shared name-map resolver.
-      const resolvedId = await resolveDispatchTarget(cid, toRaw);
+      const resolvedId = await resolveDispatchTarget(uid, cid, toRaw);
       if (!resolvedId) {
         return {
           content: JSON.stringify({
@@ -6525,7 +6566,7 @@ async function buildCommanderExtraTools(
       // Run the agent's turn in-process and hand its FULL result back as this
       // tool's result; the agent also persists its own visible bubble and the
       // commander then synthesises (Option B). The commander stays in the loop.
-      const dispatchAgent = await agentsFeat.getAgent(resolvedId);
+      const dispatchAgent = await agentsFeat.getAgentForChatDispatch(uid, resolvedId);
       const dispatchActor: Actor = {
         kind: "agent",
         id: resolvedId,
@@ -6670,7 +6711,7 @@ async function buildCommanderExtraTools(
       if (!message) return _toolError("`message` is required");
       const blocked = await blockedByCollaborationGateToolResult(uid, cid);
       if (blocked) return blocked;
-      const resolvedId = await resolveDispatchTarget(cid, toRaw);
+      const resolvedId = await resolveDispatchTarget(uid, cid, toRaw);
       if (!resolvedId)
         return _toolError(t("errors.unknown_actor", { name: toRaw }));
       if (resolvedId === COMMANDER_ID || resolvedId === USER_ID) {
@@ -6678,7 +6719,7 @@ async function buildCommanderExtraTools(
           "hand_off_to target must be an agent (not commander / user)",
         );
       }
-      const handoffAgent = await agentsFeat.getAgent(resolvedId);
+      const handoffAgent = await agentsFeat.getAgentForChatDispatch(uid, resolvedId);
       const handoffActor: Actor = {
         kind: "agent",
         id: resolvedId,
@@ -6927,7 +6968,7 @@ async function buildCommanderExtraTools(
         );
         return { content: result };
       }
-      const resolvedId = await resolveDispatchTarget(cid, toRaw);
+      const resolvedId = await resolveDispatchTarget(uid, cid, toRaw);
       if (!resolvedId) {
         return _toolError(t("errors.unknown_actor", { name: toRaw }));
       }
@@ -6940,7 +6981,7 @@ async function buildCommanderExtraTools(
       // back as this tool's result (same single-layer dispatch as the anonymous
       // branch). The agent also persists its own visible bubble; the commander
       // then synthesises (Option B).
-      const namedAgent = await agentsFeat.getAgent(resolvedId);
+      const namedAgent = await agentsFeat.getAgentForChatDispatch(uid, resolvedId);
       const namedActor: Actor = {
         kind: "agent",
         id: resolvedId,
