@@ -5,6 +5,9 @@ const _conversationExpandedBuckets = new Set();
 let _conversationBucketDateKey = _conversationLocalDateKey();
 let _conversationBucketDateRefreshTimer = null;
 let _conversationBucketDateRefreshBound = false;
+const _conversationMergeSelection = new Set();
+let _conversationMergeSelectionActive = false;
+const _conversationResultCards = new Map();
 let _latestCollaborationSnapshot = null;
 
 function _convTrackClick(action, data) {
@@ -4363,6 +4366,11 @@ function _renderConversationSidebarItem(c, opts = {}) {
   const metaRow = membersHtml
     ? `<div class="conv-item-meta">${membersHtml}</div>`
     : '';
+  const selectionHtml = _conversationMergeSelectionActive
+    ? `<button type="button" class="conv-item-select${_conversationMergeSelection.has(c.conversation_id) ? ' is-selected' : ''}"
+        data-conv-select-cid="${cid}" aria-pressed="${_conversationMergeSelection.has(c.conversation_id) ? 'true' : 'false'}"
+        aria-label="${escapeHtml(t('chat.merge.select_conversation'))}"><span aria-hidden="true"></span></button>`
+    : '';
   const actionsHtml = `
         <span class="conv-item-actions">
           <button type="button" class="conv-item-action conv-item-menu"
@@ -4372,6 +4380,7 @@ function _renderConversationSidebarItem(c, opts = {}) {
   return `
     <div class="${classes}" data-cid="${cid}">
       <div class="conv-item-row">
+        ${selectionHtml}
         ${autoIconHtml}
         ${titleNode}
         ${actionsHtml}
@@ -4558,6 +4567,333 @@ async function _deleteConversationWithConfirm(cid, opts = {}) {
   if (typeof opts.afterDelete === 'function') await opts.afterDelete(cid);
 }
 
+
+function _conversationById(cid) {
+  return Array.isArray(conversations)
+    ? conversations.find((item) => item && item.conversation_id === cid) || null
+    : null;
+}
+
+function _conversationOperationDialog(options = {}) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay ui-dialog-overlay conversation-operation-overlay open';
+    const title = escapeHtml(options.title || '');
+    const message = escapeHtml(options.message || '').replace(/\n/g, '<br />');
+    const confirmLabel = escapeHtml(options.confirmLabel || t('common.confirm'));
+    const cancelLabel = escapeHtml(t('common.cancel'));
+    const loadingLabel = escapeHtml(options.loadingLabel || t('common.loading'));
+    const inputHtml = options.inputLabel
+      ? `<label class="conversation-operation-field">
+          <span>${escapeHtml(options.inputLabel)}</span>
+          <input type="text" class="ui-dialog-input" data-operation-title value="${escapeHtml(options.inputValue || '')}" autocomplete="off" spellcheck="false" />
+        </label>`
+      : '';
+    const sourcesHtml = Array.isArray(options.sources) && options.sources.length
+      ? `<div class="conversation-operation-sources">
+          <div class="conversation-operation-sources-label">${escapeHtml(t('chat.merge.sources_label'))}</div>
+          ${options.sources.map((item) => `<div class="conversation-operation-source">${escapeHtml(item.title || item.conversation_id || '')}</div>`).join('')}
+        </div>`
+      : '';
+    overlay.innerHTML = `
+      <div class="modal modal-standard ui-dialog conversation-operation-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-operation-title">
+        <div class="modal-title ui-dialog-title" id="conversation-operation-title">${title}</div>
+        <div class="modal-body">
+          <div class="ui-dialog-message">${message}</div>
+          ${inputHtml}
+          ${sourcesHtml}
+          <div class="conversation-operation-error" data-operation-error hidden></div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn" data-operation-cancel>${cancelLabel}</button>
+          <button type="button" class="btn btn-primary" data-operation-confirm>${confirmLabel}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const input = overlay.querySelector('[data-operation-title]');
+    const cancel = overlay.querySelector('[data-operation-cancel]');
+    const confirm = overlay.querySelector('[data-operation-confirm]');
+    const error = overlay.querySelector('[data-operation-error]');
+    let busy = false;
+    const finish = (value) => {
+      if (busy && value == null) return;
+      document.removeEventListener('keydown', onKey, true);
+      overlay.remove();
+      resolve(value);
+    };
+    const onKey = (event) => {
+      if (event.isComposing || event.keyCode === 229) return;
+      if (event.key === 'Escape') finish(null);
+      else if (event.key === 'Enter') confirm.click();
+    };
+    cancel.addEventListener('click', () => finish(null));
+    confirm.addEventListener('click', async () => {
+      if (busy) return;
+      const value = input ? String(input.value || '').trim() : true;
+      if (input && !value) {
+        error.hidden = false;
+        error.textContent = t('chat.merge.title_required');
+        input.focus();
+        return;
+      }
+      busy = true;
+      error.hidden = true;
+      cancel.disabled = true;
+      confirm.disabled = true;
+      confirm.classList.add('is-loading');
+      confirm.textContent = loadingLabel;
+      try {
+        const result = await options.onConfirm(value);
+        finish(result === undefined ? true : result);
+      } catch (err) {
+        busy = false;
+        cancel.disabled = false;
+        confirm.disabled = false;
+        confirm.classList.remove('is-loading');
+        confirm.textContent = options.confirmLabel || t('common.confirm');
+        error.hidden = false;
+        error.textContent = options.errorMessage
+          ? t(options.errorMessage, { reason: err?.message || String(err) })
+          : (err?.message || String(err));
+      }
+    });
+    document.addEventListener('keydown', onKey, true);
+    setTimeout(() => (input || confirm).focus(), 0);
+  });
+}
+
+function _rememberConversationResultCard(cid, card) {
+  if (!cid || !card) return;
+  _conversationResultCards.set(cid, card);
+}
+
+function _copyNoticeBodyHtml() {
+  return `<p>${escapeHtml(t('chat.copy.notice_body'))}</p>
+    <p class="conversation-result-card-note">${escapeHtml(t('chat.copy.notice_files'))}</p>`;
+}
+
+function _mergeSummarySectionLabel(raw) {
+  const normalized = String(raw || '').trim().toLowerCase();
+  const labels = {
+    'source conversations': 'chat.merge.section.source_conversations',
+    'confirmed decisions': 'chat.merge.section.confirmed_decisions',
+    'current state': 'chat.merge.section.current_state',
+    'agent private context index': 'chat.merge.section.agent_private_context',
+    'source references': 'chat.merge.section.source_references',
+    'open questions': 'chat.merge.section.open_questions',
+    'conflicts / risks': 'chat.merge.section.conflicts_risks',
+  };
+  const key = labels[normalized];
+  return key ? t(key) : raw;
+}
+
+function _renderMergeSummaryDetails(summary) {
+  const text = String(summary || '').trim();
+  if (!text) return '';
+  const chunks = [];
+  let current = null;
+  for (const line of text.split('\n')) {
+    const heading = line.match(/^#{2,4}\s+(.+)$/);
+    if (heading) {
+      if (current) chunks.push(current);
+      current = { title: _mergeSummarySectionLabel(heading[1]), lines: [] };
+    } else if (current) {
+      current.lines.push(line);
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks.map((section) => {
+    const body = section.lines.join('\n').trim();
+    return `<section class="conversation-merge-summary-section">
+      <h4>${escapeHtml(section.title)}</h4>
+      <div class="markdown-body">${body ? _renderMessageMarkdown(body) : ''}</div>
+    </section>`;
+  }).join('');
+}
+
+function _renderConversationResultCardHtml(card = {}) {
+  const isMerge = card.kind === 'merge';
+  const title = isMerge
+    ? t('chat.merge.summary_title', { count: Math.max(0, Number(card.sourceCount) || 0) })
+    : t('chat.copy.notice_title');
+  const subtitle = isMerge
+    ? t('chat.merge.summary_subtitle', { agentCount: Math.max(0, Number(card.agentCount) || 0) })
+    : t('chat.copy.notice_subtitle');
+  const details = isMerge ? _renderMergeSummaryDetails(card.summary) : _copyNoticeBodyHtml();
+  return `<details class="conversation-result-card ${isMerge ? 'is-merge' : 'is-copy'}">
+    <summary>
+      <span class="conversation-result-card-copy">
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(subtitle)}</span>
+      </span>
+      <span class="conversation-result-card-expand">
+        <span class="when-closed">${escapeHtml(t(isMerge ? 'chat.merge.expand' : 'chat.copy.expand'))}</span>
+        <span class="when-open">${escapeHtml(t(isMerge ? 'chat.merge.collapse' : 'chat.copy.collapse'))}</span>
+      </span>
+    </summary>
+    <div class="conversation-result-card-body">${details}</div>
+  </details>`;
+}
+
+function _mountConversationResultCard(cid) {
+  if (!cid || cid !== currentCid) return;
+  const container = document.getElementById('chat-history');
+  const card = _conversationResultCards.get(cid);
+  if (!container || !card) return;
+  const existing = container.querySelector('.conversation-result-card');
+  if (existing) existing.remove();
+  const wrap = document.createElement('div');
+  wrap.innerHTML = _renderConversationResultCardHtml(card);
+  const node = wrap.firstElementChild;
+  if (!node) return;
+  const firstMessage = container.querySelector('.chat-message, .chat-history-load-earlier, .conv-create-agent-inline');
+  container.insertBefore(node, firstMessage || container.firstChild);
+}
+
+function _addConversationToCache(conversation) {
+  if (!conversation || !conversation.conversation_id) return;
+  const cid = conversation.conversation_id;
+  const normalized = {
+    ...conversation,
+    last_active_at: conversation.last_active_at || conversation.updated_at || conversation.created_at || new Date().toISOString(),
+  };
+  const index = Array.isArray(conversations)
+    ? conversations.findIndex((item) => item && item.conversation_id === cid)
+    : -1;
+  _markConversationListLocallyChanged();
+  if (index >= 0) conversations[index] = { ...conversations[index], ...normalized };
+  else conversations.unshift(normalized);
+  _sortConversationCacheForSidebar();
+  renderConversationList();
+}
+
+async function _cloneConversationWithConfirm(cid) {
+  const source = _conversationById(cid);
+  if (!source) return;
+  const result = await _conversationOperationDialog({
+    title: t('chat.copy.dialog_title'),
+    message: t('chat.copy.dialog_body'),
+    confirmLabel: t('chat.copy.confirm'),
+    loadingLabel: t('chat.copy.loading'),
+    errorMessage: 'chat.copy.failed',
+    onConfirm: async () => {
+      const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/clone`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: _projectIdForConversation(cid) || null }),
+      });
+      const data = await res.json();
+      if (!data || data.ok === false || !data.conversation) throw new Error(data?.error || t('chat.unknown_error'));
+      return data;
+    },
+  });
+  if (!result || !result.conversation) return;
+  _addConversationToCache(result.conversation);
+  _rememberConversationResultCard(result.conversation.conversation_id, { kind: 'copy' });
+  uiToast(t('chat.copy.success'), { variant: 'success' });
+  setView('conversation', result.conversation.conversation_id);
+}
+
+function _renderConversationMergeActionBar(selectedCount) {
+  const count = Math.max(0, Number(selectedCount) || 0);
+  return `<div class="conversation-merge-action-bar" role="status">
+    <span>${escapeHtml(t('chat.merge.selected_count', { count }))}</span>
+    <span class="conversation-merge-action-spacer"></span>
+    <button type="button" class="btn btn-sm" data-merge-cancel>${escapeHtml(t('common.cancel'))}</button>
+    <button type="button" class="btn btn-sm btn-primary" data-merge-confirm${count < 2 ? ' disabled' : ''}>${escapeHtml(t('chat.merge.action'))}</button>
+  </div>`;
+}
+
+function _ensureConversationMergeActionBar() {
+  if (typeof document === 'undefined' || typeof document.createElement !== 'function'
+    || typeof document.getElementById !== 'function') return;
+  let bar = document.getElementById('conversation-merge-action-bar');
+  if (!_conversationMergeSelectionActive) {
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'conversation-merge-action-bar';
+      const list = document.getElementById('conversation-list');
+      if (list && list.parentElement) list.parentElement.insertBefore(bar, list);
+    }
+    bar.innerHTML = `<button type="button" class="btn btn-sm conversation-merge-start" data-merge-start>${escapeHtml(t('chat.merge.select_action'))}</button>`;
+    bar.querySelector('[data-merge-start]')?.addEventListener('click', () => _enterConversationMergeSelection());
+    return;
+  }
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'conversation-merge-action-bar';
+    const list = document.getElementById('conversation-list');
+    if (list && list.parentElement) list.parentElement.insertBefore(bar, list);
+  }
+  bar.innerHTML = _renderConversationMergeActionBar(_conversationMergeSelection.size);
+  bar.querySelector('[data-merge-cancel]')?.addEventListener('click', _exitConversationMergeSelection);
+  bar.querySelector('[data-merge-confirm]')?.addEventListener('click', _mergeSelectedConversationsWithConfirm);
+}
+
+function _enterConversationMergeSelection(initialCid) {
+  _conversationMergeSelectionActive = true;
+  if (initialCid) _conversationMergeSelection.add(initialCid);
+  _closeConversationActionMenu();
+  renderConversationList();
+}
+
+function _exitConversationMergeSelection() {
+  _conversationMergeSelectionActive = false;
+  _conversationMergeSelection.clear();
+  renderConversationList();
+}
+
+function _toggleConversationMergeSelection(cid) {
+  if (!cid) return;
+  if (_conversationMergeSelection.has(cid)) _conversationMergeSelection.delete(cid);
+  else _conversationMergeSelection.add(cid);
+  renderConversationList();
+}
+
+async function _mergeSelectedConversationsWithConfirm() {
+  const cids = [..._conversationMergeSelection];
+  if (cids.length < 2) return;
+  const sources = cids.map(_conversationById).filter(Boolean);
+  const result = await _conversationOperationDialog({
+    title: t('chat.merge.dialog_title'),
+    message: t('chat.merge.dialog_body'),
+    confirmLabel: t('chat.merge.confirm'),
+    loadingLabel: t('chat.merge.loading'),
+    errorMessage: 'chat.merge.failed',
+    inputLabel: t('chat.merge.title_label'),
+    inputValue: t('chat.merge.default_title'),
+    sources,
+    onConfirm: async (title) => {
+      const projectIds = [...new Set(sources.map((source) => source.project_id || ''))];
+      const projectId = projectIds.length === 1 ? projectIds[0] : '';
+      const res = await apiFetch('/api/conversations/merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cids, title, project_id: projectId || null }),
+      });
+      const data = await res.json();
+      if (!data || data.ok === false || !data.conversation) throw new Error(data?.error || t('chat.unknown_error'));
+      return data;
+    },
+  });
+  if (!result || !result.conversation) return;
+  const agentCount = result.agent_summaries && typeof result.agent_summaries === 'object'
+    ? Object.keys(result.agent_summaries).length
+    : 0;
+  _addConversationToCache(result.conversation);
+  _rememberConversationResultCard(result.conversation.conversation_id, {
+    kind: 'merge',
+    sourceCount: cids.length,
+    agentCount,
+    summary: result.summary || '',
+  });
+  _conversationMergeSelectionActive = false;
+  _conversationMergeSelection.clear();
+  renderConversationList();
+  uiToast(t('chat.merge.success'), { variant: 'success' });
+  setView('conversation', result.conversation.conversation_id);
+}
+
 function _conversationActionItems(cid, opts = {}) {
   const conv = Array.isArray(conversations)
     ? conversations.find((c) => c && c.conversation_id === cid)
@@ -4575,6 +4911,11 @@ function _conversationActionItems(cid, opts = {}) {
     action: 'rename',
     label: t('chat.conv_rename_title'),
     onClick: () => opts.renameInHeader ? _startConversationHeaderRename(cid) : _renameConversation(cid),
+  });
+  items.push({
+    action: 'copy',
+    label: t('chat.conv_copy_title'),
+    onClick: () => _cloneConversationWithConfirm(cid),
   });
   items.push({
     action: 'delete',
@@ -4653,7 +4994,11 @@ document.addEventListener('mousedown', (e) => {
   _closeConversationActionMenu();
 }, true);
 window.addEventListener('resize', _closeConversationActionMenu);
-window.addEventListener('i18n-change', _closeConversationActionMenu);
+window.addEventListener('i18n-change', () => {
+  _closeConversationActionMenu();
+  _ensureConversationMergeActionBar();
+  _mountConversationResultCard(currentCid);
+});
 window.openConversationActionMenu = _openConversationActionMenu;
 window.closeConversationActionMenu = _closeConversationActionMenu;
 
@@ -4729,10 +5074,21 @@ function _bindConversationSidebarItems(container, opts = {}) {
     });
     input.addEventListener('blur', () => commit(true));
   });
+  container.querySelectorAll('.conv-item-select').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      _toggleConversationMergeSelection(btn.dataset.convSelectCid);
+    });
+  });
   container.querySelectorAll(selector).forEach(el => {
     el.addEventListener('click', (e) => {
       if (e.target.closest('.conv-item-title-input')) return;
       if (e.target.closest('.conv-item-action')) return;
+      if (_conversationMergeSelectionActive) {
+        _toggleConversationMergeSelection(el.dataset.cid);
+        return;
+      }
       setView('conversation', el.dataset.cid);
     });
   });
@@ -4759,6 +5115,7 @@ function renderConversationList() {
   const unprojected = (conversations || []).filter((c) => !c || !c.project_id);
   const hasDeferredUnprojected = _conversationDeferredBuckets.last30 > 0
     || _conversationDeferredBuckets.older > 0;
+  _ensureConversationMergeActionBar();
   if (!unprojected.length && !hasDeferredUnprojected) {
     container.innerHTML = `<div class="conv-empty" data-i18n="sidebar.conv_empty">${escapeHtml(t('sidebar.conv_empty'))}</div>`;
     // Still re-render the projects section so its badges refresh (the call
@@ -4766,6 +5123,7 @@ function renderConversationList() {
     if (typeof renderProjectsSection === 'function') renderProjectsSection();
     if (typeof _renderProjectAllTasks === 'function') _renderProjectAllTasks();
     if (typeof _refreshAutoExpandedTaskConvs === 'function') _refreshAutoExpandedTaskConvs();
+    _ensureConversationMergeActionBar();
     return;
   }
   container.innerHTML = _renderConversationTimeBucketList(unprojected, {
@@ -4817,6 +5175,7 @@ function renderConversationList() {
   // (covers both the unprojected list and the projects section's nested
   // conv items, since the helper queries by cid only).
   _refreshAllConvBadges();
+  _ensureConversationMergeActionBar();
 }
 
 // ─── Conversation history render ───
@@ -5596,6 +5955,8 @@ async function loadConversationHistory(cid, opts = {}) {
     void _hydrateKStarReviews(cid);
     void _hydratePatchCandidates(cid);
 
+    _mountConversationResultCard(cid);
+
     // Re-add the inline "create agent" entry BEFORE scrolling so it's part of
     // scrollHeight when we jump to the bottom — otherwise the MutationObserver
     // adds it post-scroll and it ends up below the visible area.
@@ -5605,7 +5966,9 @@ async function loadConversationHistory(cid, opts = {}) {
     else if (!searchTargetRevealed) _scrollToBottomNoAnim(container);
     if (window.ConversationInfo) window.ConversationInfo.refreshFiles(cid);
     if (cid === currentCid && !isConvPending(cid) && (messageQueues.get(cid) || []).length) {
-      _dispatchNextQueued(cid);
+      // Fire-and-forget: _dispatchNextQueued is async (ontology_group token
+      // expansion needs an IPC round-trip); this call site never awaited it.
+      Promise.resolve(_dispatchNextQueued(cid)).catch(() => {});
     }
     void membersPromise;
   } catch (e) {
@@ -6311,7 +6674,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const producedPaths = (role === 'assistant' && Array.isArray(message.produced) && message.produced.length)
     ? message.produced
     : null;
-  const referencesHtml = (role === 'user' && Array.isArray(message.references) && message.references.length)
+  const referencesHtml = (Array.isArray(message.references) && message.references.length)
     ? _renderMessageReferencesHtml(message.references)
     : '';
   const failedAssistant = role === 'assistant' && _isFailedAssistantContent(rawContent, message);
@@ -8161,7 +8524,13 @@ async function handleNewChatSubmit() {
   // here and conv-create doesn't reset it before we can transfer.
   const recipientSnapshot = _recipientSnapshotForSend('new-chat');
   _pendingNewChatRecipient = _normaliseRecipientSnapshot(recipientSnapshot) || { ..._COMMANDER };
-  const content = applyRecipientPrefix(transformWithChatUse(requestText), 'new-chat', {
+  // Async: an ontology_group token in requestText needs an IPC round-trip to
+  // fetch the group's actual content before it can be inlined (see chat-use.js
+  // transformWithChatUseAsync). handleNewChatSubmit is already async.
+  const transformed = (typeof transformWithChatUseAsync === 'function')
+    ? await transformWithChatUseAsync(requestText)
+    : transformWithChatUse(requestText);
+  const content = applyRecipientPrefix(transformed, 'new-chat', {
     recipientSnapshot,
   });
   const draftItems = _chatAttachList(DRAFT_CID);
@@ -8338,8 +8707,11 @@ async function handleChatSubmit() {
     return;
   }
 
+  const transformedText = (typeof transformWithChatUseAsync === 'function')
+    ? await transformWithChatUseAsync(requestText)
+    : transformWithChatUse(requestText);
   const content = applyRecipientPrefix(
-    transformWithChatUse(requestText),
+    transformedText,
     'conversation',
     { recipientSnapshot },
   );
@@ -10100,8 +10472,10 @@ function _finishStreamingMsg(cid) {
     _settleDanglingActorPlaceholders(cid, { preserveProcess: wasAborted });
     _updateConvSendUI(cid);
   }
-  // Drain the next queued message for this conversation, if any.
-  _dispatchNextQueued(cid);
+  // Drain the next queued message for this conversation, if any. Fire-and-
+  // forget: _dispatchNextQueued is async (ontology_group token expansion
+  // needs an IPC round-trip); this call site never awaited it.
+  Promise.resolve(_dispatchNextQueued(cid)).catch(() => {});
 }
 
 // Scroll the given message to the top of the visible chat area.

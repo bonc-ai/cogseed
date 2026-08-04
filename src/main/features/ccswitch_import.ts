@@ -52,12 +52,21 @@ export interface CcSwitchImportItem {
   protocol: 'anthropic' | 'openai' | 'gemini';
   baseUrl: string;
   apiKey: string;
+  /** Optional model hints declared in CC Switch's provider configuration. */
+  models?: string[];
   notes?: string;
   websiteUrl?: string;
   /** True when CC Switch stored no usable key for this row (e.g. codex rows
    *  that rely on the OPENAI_API_KEY env var, or OAuth). The provider is still
    *  importable so the user sees it, but must supply the key afterwards. */
   needsKey?: boolean;
+}
+
+export interface CcSwitchSkippedItem {
+  externalId: string;
+  name: string;
+  appType: string;
+  reason: 'official' | 'unsupported_protocol' | 'missing_base_url' | 'missing_api_key' | 'invalid_config';
 }
 
 export interface CcSwitchProbe {
@@ -103,6 +112,30 @@ function apiKeyFromCodexConfigToml(configToml: unknown): string | undefined {
   return m ? m[1] : undefined;
 }
 
+function modelFromCodexConfigToml(configToml: unknown): string | undefined {
+  if (typeof configToml !== 'string' || !configToml) return undefined;
+  const m = /(?:^|\n)\s*model\s*=\s*"([^"]+)"/.exec(configToml);
+  return m ? m[1] : undefined;
+}
+
+function modelHints(cfg: Record<string, unknown>, env: Record<string, unknown>): string[] | undefined {
+  const raw: unknown[] = [];
+  if (Array.isArray(cfg.models)) raw.push(...cfg.models);
+  raw.push(cfg.model, cfg.defaultModel, cfg.default_model);
+  raw.push(env.ANTHROPIC_MODEL, env.OPENAI_MODEL, env.GEMINI_MODEL, env.GOOGLE_MODEL);
+  raw.push(modelFromCodexConfigToml(cfg.config));
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of raw) {
+    const model = typeof value === 'string' ? value.trim().slice(0, 200) : '';
+    if (!model || seen.has(model)) continue;
+    seen.add(model);
+    out.push(model);
+    if (out.length >= 100) break;
+  }
+  return out.length ? out : undefined;
+}
+
 function asObject(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
 }
@@ -125,10 +158,12 @@ function mapRow(
 
   const env = asObject(cfg.env);
   const base = (k: string) => (typeof env[k] === 'string' ? (env[k] as string) : '');
+  const models = modelHints(cfg, env);
 
   const common = {
     externalId: `${appType}:${id}`,
     name: name || id,
+    ...(models ? { models } : {}),
     ...(notes ? { notes } : {}),
     ...(websiteUrl ? { websiteUrl } : {}),
   };
@@ -173,7 +208,7 @@ function mapRow(
  */
 export function readCcSwitchImportItems(
   home = os.homedir(),
-): { ok: true; items: CcSwitchImportItem[] } | { ok: false; reason: NonNullable<CcSwitchProbe['reason']> } {
+): { ok: true; items: CcSwitchImportItem[]; skipped: CcSwitchSkippedItem[] } | { ok: false; reason: NonNullable<CcSwitchProbe['reason']> } {
   const probe = probeCcSwitch(home);
   if (!probe.available) return { ok: false, reason: probe.reason || 'not_installed' };
 
@@ -198,11 +233,28 @@ export function readCcSwitchImportItems(
     }>;
 
     const items: CcSwitchImportItem[] = [];
+    const skipped: CcSwitchSkippedItem[] = [];
     for (const r of rows) {
       const item = mapRow(r.app_type, r.id, r.name, r.category, r.settings_config, r.website_url, r.notes);
-      if (item) items.push(item);
+      if (item && String(item.apiKey || '').trim() && !item.needsKey) {
+        items.push(item);
+        continue;
+      }
+      let reason: CcSwitchSkippedItem['reason'] = item ? 'missing_api_key' : 'missing_base_url';
+      if (r.category === 'official') reason = 'official';
+      else if (!['claude', 'claude-desktop', 'codex', 'gemini'].includes(r.app_type)) reason = 'unsupported_protocol';
+      else {
+        try { JSON.parse(r.settings_config || '{}'); }
+        catch { reason = 'invalid_config'; }
+      }
+      skipped.push({
+        externalId: `${r.app_type}:${r.id}`,
+        name: r.name || r.id,
+        appType: r.app_type,
+        reason,
+      });
     }
-    return { ok: true, items };
+    return { ok: true, items, skipped };
   } catch (err) {
     log.warn('cc-switch read failed', { error: (err as Error).message });
     return { ok: false, reason: 'unreadable' };

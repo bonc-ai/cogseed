@@ -42,6 +42,7 @@ import {
   StderrTail,
   spawnCli,
   bindAbort,
+  executionContextEnv,
   armKillWatchdog,
   FileChangeFallbackTracker,
 } from './base.js';
@@ -52,7 +53,7 @@ export const openclawBackend: LocalBackend = {
   async run(opts: BackendRunOptions): Promise<void> {
     const sessionId = opts.resumeSessionId || crypto.randomUUID();
     const args = buildOpenclawArgs(opts, sessionId);
-    const child = spawnCli(opts.binPath, args, opts.cwd);
+    const child = spawnCli(opts.binPath, args, opts.cwd, process.env, { ...opts.providerEnv, ...executionContextEnv(opts.executionContext) });
     const detachAbort = bindAbort(child, opts.signal);
     const tail = new StderrTail();
     const startedAt = Date.now();

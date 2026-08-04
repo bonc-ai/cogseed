@@ -249,6 +249,9 @@ export interface BuildRunnerParams {
   /** Fires after each successful `create_artifact` call. See `model/client.ts`
    *  `ChatOptions.onArtifactCreated`. */
   onArtifactCreated?: (a: { id: string; title: string }) => void;
+  /** Secondary host callback used only to mirror a validated artifact into an
+   * execution record. It never enables create_artifact by itself. */
+  onExecutionArtifactCreated?: (a: { id: string; title: string }) => void;
   /** Fires once per skill id rendered into the system-prompt skills index,
    *  with its source system. Called at runner build time (before the LLM
    *  sees the prompt). Bus collects per turn for `skill_advertised`. */
@@ -486,6 +489,13 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
         try {
           params.onArtifactCreated!(a);
         } finally {
+          try { params.onExecutionArtifactCreated?.(a); }
+          catch (err) {
+            log.warn('execution artifact callback failed', {
+              artifact_id: maskId(a.id),
+              error: logErrorSummary(err),
+            });
+          }
           if (uid && params.cid) {
             recordHistoryResource({
               kind: 'final_output',

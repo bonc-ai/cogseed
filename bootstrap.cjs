@@ -13,6 +13,14 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
+
+try {
+  const packageMeta = require('./package.json');
+  if (packageMeta.orkasBuildChannel === 'packaged-dev' && !process.env.ORKAS_WORKSPACE_ROOT) {
+    process.env.ORKAS_WORKSPACE_ROOT = path.join(os.homedir(), '.orkas-dev', 'data');
+  }
+} catch { /* build metadata is optional in source runs */ }
 
 for (const arg of process.argv.slice(1)) {
   if (typeof arg !== 'string') continue;

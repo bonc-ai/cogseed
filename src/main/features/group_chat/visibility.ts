@@ -154,7 +154,14 @@ export interface GroupMessage {
    * (`'commander'` or an agent id) — the renderer routes a user→artifact
    * interaction result back to it. Rendered as a sandboxed `<iframe>`
    * (`chat-app://`) at the bottom of the bubble. */
-  artifacts?: Array<{ id: string; title: string; agent_id: string }>;
+  artifacts?: Array<{
+    id: string;
+    title: string;
+    agent_id: string;
+    /** Historical clone locator. When present, the iframe resolves against
+     * the source conversation rather than the conversation displaying it. */
+    source_cid?: string;
+  }>;
   /** Commander-requested marketplace installs. The model can search the
    * official marketplace and request a user decision, but the install only
    * happens after the human clicks the rendered card. */
@@ -234,8 +241,9 @@ export async function appendVisible(
   cid: string,
   msg: GroupMessage,
   actorIds: string[],
+  projectIdHint?: string | null,
 ): Promise<void> {
-  const layout = conversationLayout(uid, cid);
+  const layout = conversationLayout(uid, cid, projectIdHint);
   fs.mkdirSync(layout.visibilityDir, { recursive: true });
   for (const actorId of actorIds) {
     if (actorId === USER_ID) continue; // user reads main jsonl
@@ -256,8 +264,9 @@ export async function readSlice(
   cid: string,
   actorId: string,
   limit = 10_000,
+  projectIdHint?: string | null,
 ): Promise<GroupMessage[]> {
-  const file = conversationLayout(uid, cid).visibilityFile(actorId);
+  const file = conversationLayout(uid, cid, projectIdHint).visibilityFile(actorId);
   if (!fs.existsSync(file)) return [];
   return (await readJsonl<GroupMessage>(file, limit)).filter(
     (msg) => !msg.deleted_at,

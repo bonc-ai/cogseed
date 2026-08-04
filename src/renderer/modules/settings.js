@@ -90,8 +90,7 @@ async function loadSettings() {
     _settingsSafeCall('settings custom providers refresh', _settingsRefreshCustomProviders),
     _settingsSafeCall('settings ccswitch status refresh', _settingsRefreshCcswitchStatus),
   ]);
-  await _settingsSafeCall('settings picker render', _settingsRenderPicker);
-  await _settingsSafeCall('settings entries render', _settingsRenderEntries);
+  await _settingsSafeCall('settings model authorization init', () => window.initModelAuthorizationSettings && window.initModelAuthorizationSettings());
   await _settingsSafeCall('settings local execution render', _settingsRenderLocalExec);
   await _settingsSafeCall('settings search render', _settingsRenderSearchSection);
   await _settingsSafeCall('settings image render', _settingsRenderImageSection);
@@ -431,8 +430,7 @@ function _settingsSyncLanguageRadio() {
 window.addEventListener('i18n-change', () => {
   _settingsSyncLanguageRadio();
   _settingsRenderLocalExec();
-  _settingsRenderPicker();
-  _settingsRenderEntries();
+  if (window.refreshModelAuthorizationSettings) window.refreshModelAuthorizationSettings();
   _settingsRenderSearchSection();
   _settingsRenderImageSection();
   _settingsRenderVideoSection();
@@ -1606,8 +1604,7 @@ async function _settingsRemoveEntry(entry) {
 
 async function _settingsReload() {
   await Promise.all([_settingsRefreshProviders(), _settingsRefreshEntries(), _settingsRefreshCommanderBackend(), _settingsRefreshAuthProfilesStatus()]);
-  _settingsRenderPicker();
-  _settingsRenderEntries();
+  if (window.refreshModelAuthorizationSettings) window.refreshModelAuthorizationSettings();
   _settingsRenderCommanderBackend();
   _settingsRenderAuthProfilesRecovery();
   // The priority list just changed — re-check the model-guard flag so the

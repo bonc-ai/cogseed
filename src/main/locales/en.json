@@ -169,5 +169,20 @@
   "notification.task.failed.body": "Open Orkas to view details.",
   "notification.task.waiting_input.title": "Task status updated",
   "notification.task.waiting_input.body": "Open Orkas to view details.",
-  "chat.reply_interrupted": "The previous response was interrupted when the app exited. Durable progress was kept; send a message to continue."
+  "chat.reply_interrupted": "The previous response was interrupted when the app exited. Durable progress was kept; send a message to continue.",
+  "conversation.copy.title": "{title} (Copy)",
+  "conversation.merge.heading": "Merged {count} conversations: {title}",
+  "conversation.merge.section.sources": "Source Conversations",
+  "conversation.merge.section.decisions": "Confirmed Decisions",
+  "conversation.merge.decisions.merged": "Shared context and private agent context were structurally merged.",
+  "conversation.merge.section.current_state": "Current State",
+  "conversation.merge.current_state.fresh_sessions": "The new conversation starts from a single summary message and fresh session ids.",
+  "conversation.merge.section.agent_context": "Agent Private Context Index",
+  "conversation.merge.none_recorded": "None recorded.",
+  "conversation.merge.section.references": "Source References",
+  "conversation.merge.references.not_copied": "Conversation and message references are retained; attachment, artifact, and produced-file bodies were not copied.",
+  "conversation.merge.section.open_questions": "Open Questions",
+  "conversation.merge.open_questions.review": "Review the merged agent workstreams before assigning new responsibilities.",
+  "conversation.merge.section.risks": "Conflicts / Risks",
+  "conversation.merge.risks.none": "No explicit conflicts or risks were detected in source UI messages."
 }

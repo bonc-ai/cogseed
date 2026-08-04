@@ -144,16 +144,48 @@ describe('memory › addEntry', () => {
     expect(result.error).toMatch(/empty/);
   });
 
-  it('trims excess entries when at char limit', async () => {
+  it('rejects a write that would exceed the char limit — no silent truncation, existing content preserved', async () => {
     const mem = await loadMemory();
-    // Fill up memory near limit
     const longNote = 'x'.repeat(mem.MEMORY_CHAR_LIMIT - 10);
-    mem.addEntry('u1', 'memory', longNote);
-    mem.addEntry('u1', 'memory', 'will be trimmed if over limit');
+    const first = mem.addEntry('u1', 'memory', longNote);
+    expect(first.ok).toBe(true);
+
+    const second = mem.addEntry('u1', 'memory', 'will be rejected, not trimmed');
+    expect(second.ok).toBe(false);
+    expect(second.error).toBe('char_limit_exceeded');
+
+    // The original entry is still there, untouched — no oldest-eviction.
     const result = mem.listEntries('u1', 'memory');
-    // Should have at least the first entry
-    expect(result.entries.length).toBeGreaterThanOrEqual(1);
+    expect(result.entries).toEqual([longNote]);
     expect(result.usage.current).toBeLessThanOrEqual(mem.MEMORY_CHAR_LIMIT);
+  });
+
+  it('no entry-count cap on the user/shared scopes — many small entries all persist', async () => {
+    const mem = await loadMemory();
+    for (let i = 0; i < 40; i++) {
+      const res = mem.addEntry('u1', 'memory', `n${i}`);
+      expect(res.ok).toBe(true);
+    }
+    const result = mem.listEntries('u1', 'memory');
+    expect(result.entries).toHaveLength(40);
+    expect(result.entries).toContain('n0');   // oldest survives — no eviction
+    expect(result.entries).toContain('n39');
+    expect(result.usage.entries_limit).toBeUndefined();
+  });
+
+  it('sets nearLimit once usage crosses ~80% of the char budget, without blocking the write', async () => {
+    const mem = await loadMemory();
+    const near = 'x'.repeat(Math.ceil(mem.USER_CHAR_LIMIT * 0.85));
+    const result = mem.addEntry('u1', 'user', near);
+    expect(result.ok).toBe(true);
+    expect(result.nearLimit).toBe(true);
+  });
+
+  it('does not set nearLimit for a small write well under the budget', async () => {
+    const mem = await loadMemory();
+    const result = mem.addEntry('u1', 'user', 'small note');
+    expect(result.ok).toBe(true);
+    expect(result.nearLimit).toBeFalsy();
   });
 });
 
@@ -182,6 +214,16 @@ describe('memory › replaceEntry', () => {
     mem.addEntry('u1', 'memory', 'note A');
     const result = mem.replaceEntry('u1', 'memory', 'note A', '');
     expect(result.ok).toBe(false);
+  });
+
+  it('rejects a replace that would exceed the char limit — original entry stays intact', async () => {
+    const mem = await loadMemory();
+    mem.addEntry('u1', 'memory', 'short');
+    const tooLong = 'x'.repeat(mem.MEMORY_CHAR_LIMIT + 1);
+    const result = mem.replaceEntry('u1', 'memory', 'short', tooLong);
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('char_limit_exceeded');
+    expect(mem.listEntries('u1', 'memory').entries).toEqual(['short']);
   });
 });
 

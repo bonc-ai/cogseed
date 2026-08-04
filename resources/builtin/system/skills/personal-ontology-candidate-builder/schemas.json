@@ -1,0 +1,56 @@
+{
+  "schema_contract": {
+    "standard_id": "nseap-skill-creator",
+    "language": "zh-CN",
+    "skill_category": "ProductionProcessSkill",
+    "principle": "Every candidate requires explicit user confirmation before it becomes durable memory. No auto-adopt.",
+    "output_format": "human_readable_markdown",
+    "auto_adopt_allowed": false
+  },
+  "output_location": {
+    "candidates_file": "$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/local/ontology_candidates/candidates.md",
+    "blocked_items_file": "$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/local/ontology_candidates/blocked_items.md",
+    "note": "Both env vars are present in the execution environment. Never hardcode a path such as a specific user's Documents folder. Append new candidates; never overwrite unprocessed ones already in the file."
+  },
+  "candidates_md_format": {
+    "description": "candidates.md is a sequence of level-3 markdown headers, one per candidate. Each header is the candidate_id; fields below it are '- 字段: 值' lines.",
+    "example": "### cand-abc123\n- 类型: preference\n- 置信度: high\n- 摘要: 喜欢先讲原理再举例子，最后才给代码\n- 记忆去向: user\n- 记忆文本: 沟通风格：先讲原理，再用例子带入，最后才给代码，不堆术语\n- 来源: conv-xxxx-turn-3",
+    "fields": {
+      "类型 (kind)": "preference | instance | property | relation | rule",
+      "置信度 (confidence)": "low | medium | high — evidence strength only, never implies auto-adopt",
+      "摘要 (summary)": "one plain-language sentence shown directly on the review card",
+      "记忆去向 (memory_scope)": "user (→ USER.md, personal profile/preferences) | shared (→ MEMORY.md, broader shared facts)",
+      "记忆文本 (memory_text)": "the exact text that will be written into USER.md/MEMORY.md once confirmed — concise, no raw JSON blobs, no large config dumps",
+      "路径 (registry_like_path)": "optional navigation hint, e.g. Personal/Preferences/CommunicationStyle",
+      "差异 (diff_summary)": "optional — what changed vs. an existing memory entry, if this updates one",
+      "来源 (source_memory_refs)": "comma-separated source refs (conversation ids / turn ids) so the user can trace where this came from"
+    }
+  },
+  "blocked_items_md_format": {
+    "description": "blocked_items.md is a sequence of level-3 markdown headers, one per blocked item. The header text is the source_ref.",
+    "example": "### mem-with-api-key\n- 原因: 内容包含未脱敏的 API Key\n- 修复建议: 移除或替换 API Key 后再重新提炼",
+    "fields": {
+      "原因 (reason)": "why this was blocked",
+      "修复建议 (required_fix)": "what would need to change for this to become a candidate"
+    }
+  },
+  "candidate_kind_guidance": {
+    "preference": "喜欢/不喜欢、习惯用什么方式、沟通风格、工具偏好、生活习惯。这是最常见也最应优先识别的一类。",
+    "instance": "值得记住的人、项目、工具、地点等实体。",
+    "property": "某个实体的具体特征、设置、配置要点（避免整段原始配置照抄，提炼成一句话）。",
+    "relation": "实体之间的关联，比如常用某工具做某件事。",
+    "rule": "摸索出来的经验法则/踩坑教训，通常是 if/then 结构。"
+  },
+  "memory_scope_guidance": {
+    "user": "跟用户本人强相关、长期稳定的内容：沟通风格、工具偏好、身份信息、个人习惯。写入 USER.md，容量较小（约 1500 字/16 条），要精炼。",
+    "shared": "更泛化、可能跨项目复用的事实/规则/项目信息。写入 MEMORY.md，容量稍大（约 2500 字/16 条）。"
+  },
+  "safety_contract": {
+    "blocked_unless_masked": [
+      "API key / token / password / credential",
+      "他人的身份信息、联系方式等未授权隐私内容"
+    ],
+    "confirmation_required": true,
+    "confirmation_mechanism": "App 内候选审阅面板；用户点击确认后由 App 后端写入 USER.md/MEMORY.md 并从候选池移除，技能本身不直接触碰这两个文件。"
+  }
+}

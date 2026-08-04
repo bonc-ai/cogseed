@@ -33,6 +33,7 @@
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connectors">Connectors</span></button>
         <button class="sidebar-btn" id="contexts-btn"><span data-ui-icon="database" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.contexts">Library</span></button>
         <button class="sidebar-btn" id="evolution-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.evolution">进化控制台</span></button>
+        <button class="sidebar-btn" id="personal-ontology-btn"><span data-ui-icon="database" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.personal_ontology">个人本体</span></button>
       </div>
       <div class="sidebar-conversation-nav">
         <div class="sidebar-section sidebar-projects-section">
@@ -949,6 +950,35 @@
         </div>
       </section>
 
+      <!-- Personal Ontology Candidates -->
+      <section class="panel" id="panel-personal-ontology">
+        <div class="personal-onto-view">
+          <div class="personal-onto-header">
+            <h2 class="personal-onto-title" data-i18n="personalOntology.title">个人本体候选</h2>
+            <div class="personal-onto-actions" id="personal-onto-actions"></div>
+          </div>
+          <div class="personal-onto-scroll">
+            <div class="personal-onto-stats" id="personal-onto-stats"></div>
+            <div class="personal-onto-body" id="personal-onto-body"></div>
+          </div>
+        </div>
+        <!-- Reject reason modal -->
+        <div class="personal-onto-modal-overlay" id="personal-onto-modal" style="display:none">
+          <div class="personal-onto-modal">
+            <div class="personal-onto-modal-header">
+              <span data-i18n="personalOntology.reject_reason_title">驳回原因</span>
+            </div>
+            <div class="personal-onto-modal-body">
+              <textarea id="personal-onto-modal-reason" rows="3" placeholder="可选，填写驳回原因..." data-i18n-placeholder="personalOntology.reject_reason_placeholder"></textarea>
+            </div>
+            <div class="personal-onto-modal-footer">
+              <button class="btn btn-sm" id="personal-onto-modal-cancel" data-i18n="common.cancel">取消</button>
+              <button class="btn btn-sm btn-primary" id="personal-onto-modal-ok" data-i18n="personalOntology.reject_btn">驳回</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- Settings -->
       <section class="panel" id="panel-settings">
         <div class="settings-container">
@@ -1096,14 +1126,32 @@
                 </div>
               </div>
 
-              <div class="settings-group settings-custom-providers-group" id="settings-custom-providers-group">
+              <div class="settings-group settings-model-auth-group" id="settings-model-authorizations">
                 <div class="settings-group-head">
-                  <div class="settings-group-title" data-i18n="settings.models.title">Model providers</div>
-                  <div class="settings-group-sub" data-i18n="settings.custom_providers.sub">Manage built-in authorization, custom endpoints, and optional CC Switch imports.</div>
+                  <div>
+                    <div class="settings-group-title" data-i18n="settings.model_authorization.title">Model authorizations</div>
+                    <div class="settings-group-sub" data-i18n="settings.model_authorization.subtitle">Use an API key or import from CC Switch, test the connection, then choose one or more returned models.</div>
+                    <div class="settings-group-sub" id="settings-model-authorization-api-key-flow-hint" data-i18n="settings.model_authorization.api_key_flow_hint">API Key flow: choose an interface type, enter the key and URL, test the connection, then select models from the response.</div>
+                  </div>
+                  <div class="settings-group-head-actions">
+                    <button class="btn btn-primary" id="settings-model-authorization-add-btn" data-ui-icon="plus" data-i18n="settings.model_authorization.add">Add authorization</button>
+                    <button class="btn" id="settings-model-authorization-advanced-btn" data-ui-icon="settings" data-i18n="settings.model_authorization.advanced">Custom endpoint management</button>
+                  </div>
+                </div>
+                <div class="settings-entries model-authorization-list" id="settings-model-authorization-list">
+                  <div class="settings-empty" data-i18n="settings.loading">Loading…</div>
+                </div>
+                <div class="settings-status" id="settings-model-authorization-status"></div>
+              </div>
+
+              <div class="settings-group settings-custom-providers-group" id="settings-model-authorization-advanced" hidden>
+                <div class="settings-group-head">
+                  <div class="settings-group-title" data-i18n="settings.model_authorization.advanced_title">Custom endpoint management</div>
+                  <div class="settings-group-sub" id="settings-model-authorization-advanced-hint" data-i18n="settings.model_authorization.advanced_hint">Only edit existing custom API endpoints here. To connect a new model service, use Add authorization above.</div>
+                  <div class="settings-group-sub" data-i18n="settings.model_authorization.advanced_subtitle">Manage endpoint metadata, protocol, and saved custom-provider details.</div>
                 </div>
                 <div class="settings-row settings-custom-provider-toolbar">
-                  <button class="btn btn-primary" id="settings-custom-provider-add-btn" data-i18n="settings.custom_providers.add">+ Add provider</button>
-                  <button class="btn" id="settings-ccswitch-preview-btn" data-i18n="settings.custom_providers.ccswitch_preview">Preview CC Switch</button>
+                  <button class="btn" id="settings-custom-provider-add-btn" data-i18n="settings.custom_providers.add">Add provider</button>
                   <span class="settings-status" id="settings-ccswitch-status"></span>
                   <span class="settings-status" id="settings-custom-providers-status"></span>
                 </div>
@@ -1130,51 +1178,8 @@
                 </div>
               </div>
 
-              <div class="settings-group settings-model-auth-group">
-                <div class="settings-group-head">
-                  <div class="settings-group-title" data-i18n="settings.add_auth_title">Add model authorization</div>
-                  <div class="settings-group-sub" data-i18n="settings.add_auth_sub">Pick a provider and model, then add an API key or OAuth account.</div>
-                </div>
-                <div class="settings-row">
-                  <label data-i18n="settings.provider">Provider</label>
-                  <div class="ai-select" id="settings-picker-provider"></div>
-                </div>
-                <div class="settings-row">
-                  <label data-i18n="settings.model">Model</label>
-                  <div class="ai-select" id="settings-picker-model"></div>
-                </div>
-                <div id="settings-custom-model-fields" hidden>
-                  <div class="settings-row">
-                    <label data-i18n="settings.custom.label">Label</label>
-                    <input type="text" class="form-input" id="settings-custom-label-input" autocomplete="off" spellcheck="false" />
-                  </div>
-                  <div class="settings-row">
-                    <label data-i18n="settings.custom.base_url">Base URL</label>
-                    <input type="text" class="form-input" id="settings-custom-base-url-input" placeholder="https://api.example.com/v1" autocomplete="off" spellcheck="false" />
-                  </div>
-                  <div class="settings-row">
-                    <label data-i18n="settings.custom.model_id">Model ID</label>
-                    <input type="text" class="form-input" id="settings-custom-model-input" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false" />
-                  </div>
-                  <div class="settings-row">
-                    <label data-i18n="settings.custom.api_key">API Key</label>
-                    <input type="text" class="form-input" id="settings-custom-api-key-input" placeholder="sk-…" autocomplete="off" spellcheck="false" />
-                  </div>
-                </div>
-                <div class="settings-row settings-model-auth-actions">
-                  <button class="btn btn-primary" id="settings-add-entry-btn" data-i18n="settings.add_account">+ Add account</button>
-                  <span class="settings-status" id="settings-picker-status"></span>
-                </div>
-
-                <div class="settings-group-subsection">
-                  <div class="settings-group-head">
-                    <div class="settings-group-title" data-i18n="settings.configured_title">Configured (by priority)</div>
-                    <div class="settings-group-sub" data-i18n="settings.configured_sub">The first entry is the default model; later entries are the fallback chain. Drag to reorder.</div>
-                  </div>
-                  <div class="settings-entries" id="settings-entries">
-                    <div class="settings-empty" data-i18n="settings.loading">Loading…</div>
-                  </div>
-                </div>
+              <div class="settings-group-subsection" id="settings-legacy-entries" hidden>
+                <div class="settings-entries" id="settings-entries"></div>
               </div>
 
               <div class="settings-group">
@@ -1417,6 +1422,8 @@
       <button type="button" class="skill-picker-tab active" data-agent-picker-tab="agents" data-i18n="agent_picker.tab_agents">Agents</button>
       <button type="button" class="skill-picker-tab" data-agent-picker-tab="skills" data-i18n="agent_picker.tab_skills">Skills</button>
       <button type="button" class="skill-picker-tab" data-agent-picker-tab="connectors" data-i18n="agent_picker.tab_connectors">Connectors</button>
+      <button type="button" class="skill-picker-tab" data-agent-picker-tab="library" data-i18n="agent_picker.tab_library" style="display:none">Library</button>
+      <button type="button" class="skill-picker-tab" data-agent-picker-tab="ontology" data-i18n="agent_picker.tab_ontology" style="display:none">本体</button>
     </div>
     <div class="skill-picker-header">
       <input type="text" id="agent-picker-search" data-i18n-placeholder="agent_picker.search_placeholder" placeholder="Search agents..." autocomplete="off" />
@@ -1429,7 +1436,20 @@
     <div class="agent-row-menu-item is-danger" data-action="delete" data-i18n="agents.delete">Delete</div>
   </div>
 
-  <!-- Add-account modal (settings page) -->
+  <!-- Unified model authorization modal (settings page) -->
+  <div class="modal-overlay" id="model-authorization-modal">
+    <div class="modal modal-standard model-authorization-modal" role="dialog" aria-modal="true" aria-labelledby="model-authorization-title">
+      <div class="modal-header">
+        <h3 class="modal-title" id="model-authorization-title" data-i18n="settings.model_authorization.modal_title">Model authorization</h3>
+        <button type="button" class="modal-close-btn" id="model-authorization-close-btn" data-i18n-title="common.close" title="Close">×</button>
+      </div>
+      <div class="model-authorization-steps" id="model-authorization-steps"></div>
+      <div class="modal-body model-authorization-body" id="model-authorization-body"></div>
+      <div class="form-msg" id="model-authorization-status"></div>
+      <div class="modal-actions" id="model-authorization-actions"></div>
+    </div>
+  </div>
+
   <div class="modal-overlay" id="settings-custom-provider-modal">
     <div class="modal modal-standard settings-custom-provider-modal" role="dialog" aria-modal="true" aria-labelledby="settings-custom-provider-modal-title">
       <div class="modal-header">
@@ -1449,6 +1469,19 @@
       <div class="modal-body" id="settings-ccswitch-preview-modal-body"></div>
       <div class="form-msg" id="settings-ccswitch-preview-modal-status"></div>
       <div class="modal-actions" id="settings-ccswitch-preview-modal-actions"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="personal-onto-modal" hidden>
+    <div class="modal modal-standard" role="dialog" aria-modal="true" aria-labelledby="personal-onto-modal-title">
+      <h3 class="modal-title" id="personal-onto-modal-title" data-i18n="personalOntology.reject_title">Reject candidate</h3>
+      <div class="modal-body">
+        <textarea class="form-input" id="personal-onto-modal-reason" rows="4" data-i18n-placeholder="personalOntology.reject_placeholder"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="personal-onto-modal-cancel" data-i18n="common.cancel">Cancel</button>
+        <button class="btn btn-danger" id="personal-onto-modal-ok" data-i18n="common.confirm">Confirm</button>
+      </div>
     </div>
   </div>
 

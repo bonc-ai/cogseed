@@ -40,7 +40,13 @@
     "prepack": "node scripts/ensure-dev-dependencies.cjs",
     "engine:build": "npm run build --workspace=nseap-meta-skill-engine",
     "engine:test": "npm run test --workspace=nseap-meta-skill-engine",
-    "engine:check": "npm run check --workspace=nseap-meta-skill-engine"
+    "engine:check": "npm run check --workspace=nseap-meta-skill-engine",
+    "test:resources:setup": "node scripts/setup-python-test-env.mjs",
+    "audit:workspace": "node scripts/audit-local-workspace.mjs",
+    "package:dev:mac": "node scripts/package-dev-mac.cjs",
+    "verify:package:dev:mac": "node scripts/verify-packaged-dev.cjs",
+    "audit:branch": "node scripts/audit-branch-diff.mjs",
+    "smoke:p3394": "node scripts/smoke-p3394-real-execution.mjs"
   },
   "devDependencies": {
     "@ffprobe-installer/ffprobe": "^2.1.2",
@@ -118,7 +124,8 @@
       "!**/.DS_Store",
       "!src/core-agent/test/**",
       "!src/main/features/*_dev.ts",
-      "!src/main/ipc/dev_handlers.ts"
+      "!src/main/ipc/dev_handlers.ts",
+      ".build/build-info.json"
     ],
     "asar": true,
     "asarUnpack": [

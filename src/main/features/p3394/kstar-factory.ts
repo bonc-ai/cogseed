@@ -80,6 +80,7 @@ export async function createKstarAdapter(
   };
 
   const adapter = new KstarAdapter(config);
+  await connection.connect();
   await adapter.initialize();
 
   return adapter;

@@ -3,7 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
-  readEvalRecord, saveEvalRecord, upsertEvalCase,
+  readEvalRecord, saveEvalRecord, upsertEvalCase, appendEvalRun,
 } from '../../../../src/main/features/evolution/evals-store';
 
 let dir: string;
@@ -34,4 +34,20 @@ describe('evals-store', () => {
     expect(rec.cases).toHaveLength(1);
     expect(rec.cases[0].input).toBe('q1-改');
   });
+
+  it('persists real baseline/treatment provenance and regression state', async () => {
+    await appendEvalRun('u1', 'sk1', {
+      runId: 'run-contrast-1', at: '2026-07-31T00:00:00.000Z', degraded: false,
+      baselineExecutionId: 'baseline-exec-1', treatmentExecutionId: 'treatment-exec-1',
+      contrastId: 'contrast-1', receiptId: 'receipt-1',
+      results: [{ caseId: 1, assertionId: 0, withPass: false, withoutPass: true, verdict: 'fail', evidence: 'regressed' }],
+      passRate: 0, regression: true,
+    });
+    expect((await readEvalRecord('u1', 'sk1')).runs[0]).toMatchObject({
+      baselineExecutionId: 'baseline-exec-1', treatmentExecutionId: 'treatment-exec-1',
+      contrastId: 'contrast-1', receiptId: 'receipt-1', regression: true,
+      results: [{ withPass: false, withoutPass: true }],
+    });
+  });
+
 });

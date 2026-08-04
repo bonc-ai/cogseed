@@ -43,7 +43,10 @@ describe('CC Switch importer', () => {
     createDb([
       {
         id: 'claude-relay', app_type: 'claude', name: 'Claude Relay',
-        settings_config: JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://claude.example', ANTHROPIC_AUTH_TOKEN: 'ak' } }),
+        settings_config: JSON.stringify({
+          models: ['claude-sonnet-4-6', 'claude-haiku-4-5'],
+          env: { ANTHROPIC_BASE_URL: 'https://claude.example', ANTHROPIC_AUTH_TOKEN: 'ak', ANTHROPIC_MODEL: 'claude-sonnet-4-6' },
+        }),
       },
       {
         id: 'codex-relay', app_type: 'codex', name: 'Codex Relay',
@@ -54,8 +57,17 @@ describe('CC Switch importer', () => {
         settings_config: JSON.stringify({ env: { GEMINI_BASE_URL: 'https://gemini.example', GEMINI_API_KEY: 'gk' } }),
       },
       {
+        id: 'codex-env-key', app_type: 'codex', name: 'Env Key Only',
+        settings_config: JSON.stringify({ config: `base_url = "https://env.example/v1"
+env_key = "OPENAI_API_KEY"` }),
+      },
+      {
         id: 'official', app_type: 'claude', name: 'Official', category: 'official',
         settings_config: JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com', ANTHROPIC_AUTH_TOKEN: 'skip' } }),
+      },
+      {
+        id: 'unsupported-hermes', app_type: 'hermes', name: 'DeepSeek', category: null,
+        settings_config: JSON.stringify({ env: { API_KEY: 'hidden' } }),
       },
     ]);
 
@@ -64,11 +76,19 @@ describe('CC Switch importer', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error(result.reason);
     expect(result.items).toEqual(expect.arrayContaining([
-      expect.objectContaining({ externalId: 'claude:claude-relay', protocol: 'anthropic', apiKey: 'ak' }),
+      expect.objectContaining({
+        externalId: 'claude:claude-relay', protocol: 'anthropic', apiKey: 'ak',
+        models: ['claude-sonnet-4-6', 'claude-haiku-4-5'],
+      }),
       expect.objectContaining({ externalId: 'codex:codex-relay', protocol: 'openai', apiKey: 'ok' }),
       expect.objectContaining({ externalId: 'gemini:gemini-relay', protocol: 'gemini', apiKey: 'gk' }),
     ]));
     expect(result.items).toHaveLength(3);
+    expect(result.skipped).toEqual(expect.arrayContaining([
+      expect.objectContaining({ externalId: 'claude:official', reason: 'official' }),
+      expect.objectContaining({ externalId: 'hermes:unsupported-hermes', reason: 'unsupported_protocol' }),
+      expect.objectContaining({ externalId: 'codex:codex-env-key', reason: 'missing_api_key' }),
+    ]));
   });
 
   it('returns structured failures for missing and incompatible databases', async () => {

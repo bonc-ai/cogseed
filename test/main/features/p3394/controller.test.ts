@@ -23,7 +23,7 @@ function baseInput(overrides: Record<string, any> = {}) {
   };
 }
 const okDeps = () => ({
-  sessionSource: { resolve: async (sid: string) => ({ sessionId: sid, kind: 'gconv', region: 'cloud', valid: true }) },
+  sessionSource: { resolve: async (_uid: string, sid: string) => ({ sessionId: sid, kind: 'gconv', region: 'cloud', valid: true }) },
   epochStore: { admit: async (_u: string, _s: string, inc?: number) => ({ replay: false, epoch: inc ?? 1 }) },
   contextSource: { snapshot: async () => null },
 });
@@ -52,6 +52,24 @@ describe('P3394Controller.admitMessage — session', () => {
     expect(r.error.body.detail).toMatch(/escalat/i);
   });
 
+  it('passes uid to the authoritative source and marks missing sessions unresolved', async () => {
+    const { P3394Controller } = await import('../../../../src/main/features/p3394/controller');
+    const calls: Array<[string, string]> = [];
+    const deps = okDeps();
+    deps.sessionSource.resolve = async (uid: string, sessionId: string) => {
+      calls.push([uid, sessionId]);
+      return { sessionId, kind: null, region: 'cloud', valid: false };
+    };
+    const c = new P3394Controller(deps as any);
+    const r = await c.admitMessage(baseInput());
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('should pass with unresolved session metadata');
+    expect(calls).toEqual([['u1', 'gconv-demo']]);
+    expect((r.message.metadata as any).session_kind).toBeNull();
+    expect((r.message.metadata as any).session_region).toBe('cloud');
+    expect((r.message.metadata as any).session_resolved).toBe(false);
+  });
+
   it('session 解析失败降级放行,标 session_resolved:false', async () => {
     const { P3394Controller } = await import('../../../../src/main/features/p3394/controller');
     const deps = okDeps();
@@ -65,7 +83,7 @@ describe('P3394Controller.admitMessage — session', () => {
 });
 
 describe('P3394Controller.admitMessage — epoch 重放', () => {
-  const sess = { resolve: async (sid: string) => ({ sessionId: sid, kind: 'gconv', region: 'cloud', valid: true }) };
+  const sess = { resolve: async (_uid: string, sid: string) => ({ sessionId: sid, kind: 'gconv', region: 'cloud', valid: true }) };
   it('不同 sender 对同一 recipient session 的相同 epoch 不互相碰撞', async () => {
     const { P3394Controller } = await import('../../../../src/main/features/p3394/controller');
     const watermarks = new Map<string, number>();
@@ -110,7 +128,7 @@ describe('P3394Controller.admitMessage — epoch 重放', () => {
 });
 
 describe('P3394Controller.admitMessage — context 归属', () => {
-  const sess = { resolve: async (sid: string) => ({ sessionId: sid, kind: 'gconv', region: 'cloud', valid: true }) };
+  const sess = { resolve: async (_uid: string, sid: string) => ({ sessionId: sid, kind: 'gconv', region: 'cloud', valid: true }) };
   const epoch = { admit: async (_u: string, _s: string, inc?: number) => ({ replay: false, epoch: inc ?? 1 }) };
   const collab = (context_id: string) => ({ workflow_run_id: 'run-1', context_id, context_revision: 1 });
   it('context_id 越界 → 拒 context_scope_violation', async () => {

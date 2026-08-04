@@ -169,5 +169,20 @@
   "notification.task.failed.body": "Orkas を開いて詳細を確認してください。",
   "notification.task.waiting_input.title": "タスクのステータスが更新されました",
   "notification.task.waiting_input.body": "Orkas を開いて詳細を確認してください。",
-  "chat.reply_interrupted": "アプリ終了時に前回の応答が中断されました。保存済みの進捗は保持されています。メッセージを送信して続行してください。"
+  "chat.reply_interrupted": "アプリ終了時に前回の応答が中断されました。保存済みの進捗は保持されています。メッセージを送信して続行してください。",
+  "conversation.copy.title": "{title}（コピー）",
+  "conversation.merge.heading": "{count} 件の会話を統合しました：{title}",
+  "conversation.merge.section.sources": "統合元の会話",
+  "conversation.merge.section.decisions": "確定した決定",
+  "conversation.merge.decisions.merged": "共有コンテキストとエージェントの非公開コンテキストを構造的に統合しました。",
+  "conversation.merge.section.current_state": "現在の状態",
+  "conversation.merge.current_state.fresh_sessions": "新しい会話は、1 件の要約メッセージと新しいセッション ID から開始します。",
+  "conversation.merge.section.agent_context": "エージェント非公開コンテキスト索引",
+  "conversation.merge.none_recorded": "記録はありません。",
+  "conversation.merge.section.references": "参照元",
+  "conversation.merge.references.not_copied": "会話とメッセージの参照は保持されますが、添付ファイル、artifact、生成ファイルの本体はコピーされません。",
+  "conversation.merge.section.open_questions": "未解決事項",
+  "conversation.merge.open_questions.review": "新しい担当を割り当てる前に、統合されたエージェントの作業履歴を確認してください。",
+  "conversation.merge.section.risks": "競合 / リスク",
+  "conversation.merge.risks.none": "統合元の UI メッセージから明示的な競合やリスクは検出されませんでした。"
 }
