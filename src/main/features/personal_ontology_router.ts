@@ -2,7 +2,11 @@
  * Personal Ontology Router — 候选确认的"对号入座"LLM 路由。
  *
  * 候选确认时，把候选文本 + 已安装角色模板的字段清单喂给 LLM，让它判断
- * 这条候选应填入哪个模板组的哪个字段（挖空表单的"坑"）；拿不准就进流水区。
+ * 这条候选应填入哪个模板文件的哪个分节字段（挖空表单的"坑"）；拿不准就进
+ * 流水区。
+ *
+ * 阶段 D 起字段清单来源 = 模板文件（listTemplateFileCatalog，文件是唯一事实
+ * 来源：含空坑、自定义字段）；`group_title` 语义 = 模板文件分节名。
  *
  * 可靠性契约（不阻塞用户操作）：
  * - LLM 调用失败 / 返回空 / JSON 解析失败 / 结果不在清单内 → `action: 'flow'`
@@ -16,13 +20,13 @@
 
 import { buildRunner } from '../model/core-agent/runner';
 import { createLogger } from '../logger';
-import type { RoleTemplateStatus } from './personal_ontology_groups';
+import type { TemplateCatalogEntry } from './personal_ontology_template_files';
 
 const log = createLogger('personal-ontology-router');
 
 export interface RouteDecision {
   action: 'field' | 'flow';
-  /** 目标模板组标题（如「课程」），action=field 时有效。 */
+  /** 目标模板文件分节名（如「课程」），action=field 时有效。 */
   group_title?: string;
   /** 目标字段名（如「课程名称」），action=field 时有效。 */
   field_name?: string;
@@ -52,25 +56,24 @@ export function parseRouteDecision(text: string): RouteDecision | null {
   }
 }
 
-/** 构造路由 prompt：候选文本 + 已安装模板字段清单。 */
-export function buildRoutePrompt(candidateText: string, templates: RoleTemplateStatus[]): string {
-  const installed = templates.filter((t) => t.installed);
-  const catalog = installed
+/** 构造路由 prompt：候选文本 + 已安装模板文件的分节字段清单（读文件）。 */
+export function buildRoutePrompt(candidateText: string, catalog: TemplateCatalogEntry[]): string {
+  const list = catalog
     .map((t) => {
-      const groups = t.preset_groups
-        .map((p) => `  ${p.title}: [${p.fields.map((f) => f.name).join(', ')}]`)
+      const sections = t.sections
+        .map((s) => `  ${s.title}: [${s.fields.join(', ')}]`)
         .join('\n');
-      return `[${t.name}]（${t.template_id}@${t.version}）\n${groups}`;
+      return `[${t.name}]（${t.template_id}@${t.version}）\n${sections}`;
     })
     .join('\n');
 
   return `你是个人本体的"对号入座"路由器。候选确认时，要把一条记忆文本填入某个已安装角色模板的字段（挖空表单的坑），或者放流水区。
 
-已安装角色模板的字段清单：
-${catalog}
+已安装角色模板的字段清单（分节: [字段...]）：
+${list}
 
 规则：
-- 判断候选文本能填入哪个模板组的哪个字段：值语义与字段名匹配才算命中（如"喜欢大白话"→ 偏好.沟通风格；"《知识工程》"→ 课程.课程名称）。
+- 判断候选文本能填入哪个模板分节的哪个字段：值语义与字段名匹配才算命中（如"喜欢大白话"→ 偏好.沟通风格；"《知识工程》"→ 课程.课程名称）。
 - 候选是通用事实/偏好/规则，没有明显对应字段 → 流水区（action: flow）。
 - 拿不准一律 flow，不要硬填。
 - 只输出一个 JSON 对象，不要任何其他文字或解释。
@@ -85,17 +88,17 @@ ${String(candidateText || '').slice(0, 500)}
 
 /**
  * 候选 → LLM 路由。失败/拿不准一律返回 flow（不抛错、不阻塞确认流程）。
+ * `catalog` = 已安装模板文件的分节字段清单（listTemplateFileCatalog 产出）。
  */
 export async function routeCandidateToField(
   uid: string,
   candidateText: string,
-  templates: RoleTemplateStatus[],
+  catalog: TemplateCatalogEntry[],
   opts: RouterOptions = {},
 ): Promise<RouteDecision> {
-  const installed = templates.filter((t) => t.installed);
-  if (!installed.length) return { action: 'flow' };
+  if (!catalog || !catalog.length) return { action: 'flow' };
 
-  const prompt = buildRoutePrompt(candidateText, templates);
+  const prompt = buildRoutePrompt(candidateText, catalog);
   try {
     const build = opts.buildRunnerFn ?? buildRunner;
     const tail = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -106,9 +109,9 @@ export async function routeCandidateToField(
     const decision = parseRouteDecision(text);
     if (!decision) return { action: 'flow' };
     if (decision.action === 'field') {
-      // 校验目标组/字段确实在已安装模板清单内（防 LLM 幻觉）
-      const hit = installed.some((t) =>
-        t.preset_groups.some((p) => p.title === decision.group_title && p.fields.some((f) => f.name === decision.field_name)),
+      // 校验目标分节/字段确实在已安装模板文件清单内（防 LLM 幻觉）
+      const hit = catalog.some((t) =>
+        t.sections.some((s) => s.title === decision.group_title && s.fields.includes(decision.field_name)),
       );
       if (!hit) {
         log.warn('llm route returned unknown field, falling back to flow', { uid, decision });

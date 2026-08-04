@@ -28,6 +28,7 @@ import * as p3394 from '../features/p3394';
 import * as evolution from '../features/evolution';
 import * as personalOntologyCandidates from '../features/personal_ontology_candidates';
 import * as personalOntologyGroups from '../features/personal_ontology_groups';
+import * as personalOntologyTemplateFiles from '../features/personal_ontology_template_files';
 import { getRoleTemplate } from '../features/role_templates';
 import type { GroupEvent } from '../features/group_chat/bus';
 import * as agents from '../features/agents';
@@ -2051,7 +2052,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
   'personalOntology.groups.read': async ({ groupId }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
-    return personalOntologyGroups.readGroupContent(ctx.userId, groupId);
+    // 复合 id（groupId::分节）→ 返回分节内容；普通 id → 整文件（chat-use 兼容）
+    return personalOntologyTemplateFiles.readContentById(ctx.userId, groupId);
   },
   'personalOntology.groups.write': async ({ groupId, content }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
@@ -2060,53 +2062,53 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   // ── Personal Ontology Role Templates (角色模板) ──
   'personalOntology.templates.list': async (_payload, ctx) => {
-    return { templates: await personalOntologyGroups.listRoleTemplateStatus(ctx.userId) };
+    return { templates: await personalOntologyTemplateFiles.listTemplateStatus(ctx.userId) };
   },
   'personalOntology.templates.install': async ({ templateId }, ctx) => {
     if (!templateId || typeof templateId !== 'string') throw new Error('missing templateId');
-    return personalOntologyGroups.installRoleTemplate(ctx.userId, templateId);
+    return personalOntologyTemplateFiles.installTemplateFile(ctx.userId, templateId);
   },
 
-  // ── Personal Ontology Group Fields (挖空表单字段) ──
+  // ── Personal Ontology Group Fields (挖空表单字段，兼容复合 id) ──
   'personalOntology.groups.fields.list': async ({ groupId }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
-    return personalOntologyGroups.listGroupFields(ctx.userId, groupId);
+    return personalOntologyTemplateFiles.listFieldsByRef(ctx.userId, groupId);
   },
   'personalOntology.groups.fields.append': async ({ groupId, fieldName, value, source }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
     if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
     if (typeof value !== 'string') throw new Error('missing value');
-    return personalOntologyGroups.appendFieldValue(ctx.userId, groupId, fieldName, value, typeof source === 'string' ? source : '手动');
+    return personalOntologyTemplateFiles.appendFieldValueToRef(ctx.userId, groupId, fieldName, value, typeof source === 'string' ? source : '手动');
   },
   'personalOntology.groups.fields.setValue': async ({ groupId, fieldName, value, oldValue }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
     if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
     if (typeof value !== 'string') throw new Error('missing value');
-    return personalOntologyGroups.setFieldValue(ctx.userId, groupId, fieldName, String(oldValue ?? ''), value);
+    return personalOntologyTemplateFiles.setFieldValueToRef(ctx.userId, groupId, fieldName, String(oldValue ?? ''), value);
   },
   'personalOntology.groups.fields.removeValue': async ({ groupId, fieldName, value }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
     if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
     if (typeof value !== 'string') throw new Error('missing value');
-    return personalOntologyGroups.removeFieldValue(ctx.userId, groupId, fieldName, value);
+    return personalOntologyTemplateFiles.removeFieldValueToRef(ctx.userId, groupId, fieldName, value);
   },
   'personalOntology.groups.fields.remove': async ({ groupId, fieldName }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
     if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
-    return personalOntologyGroups.removeField(ctx.userId, groupId, fieldName);
+    return personalOntologyTemplateFiles.removeFieldToRef(ctx.userId, groupId, fieldName);
   },
 
-  // ── Personal Ontology Group Entries (流水区) ──
+  // ── Personal Ontology Group Entries (流水区，兼容复合 id) ──
   'personalOntology.groups.entries.remove': async ({ groupId, entryText }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
     if (typeof entryText !== 'string') throw new Error('missing entryText');
-    return personalOntologyGroups.removeEntry(ctx.userId, groupId, entryText);
+    return personalOntologyTemplateFiles.removeEntryToRef(ctx.userId, groupId, entryText);
   },
   'personalOntology.groups.entries.promote': async ({ groupId, entryText, fieldName }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
     if (typeof entryText !== 'string') throw new Error('missing entryText');
     if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
-    return personalOntologyGroups.promoteEntryToField(ctx.userId, groupId, entryText, fieldName);
+    return personalOntologyTemplateFiles.promoteEntryToRef(ctx.userId, groupId, entryText, fieldName);
   },
 
   'skills.list': async ({ force } = {}) => {

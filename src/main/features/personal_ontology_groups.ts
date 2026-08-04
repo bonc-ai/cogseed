@@ -111,6 +111,21 @@ function groupFileRelPathFromContextsRoot(groupId: string): string {
 }
 
 /**
+ * 按台账 meta 解析内容文件绝对路径。普通组行 rel_path 恒等于
+ * `<groupId>.md`（与 resolveGroupFileAbsPath 一致）；模板文件行
+ * （阶段 D）rel_path 是真实文件名（如 `student.md`），与 groupId 无关，
+ * 必须按 rel_path 解析——否则读到的是一块不存在的 `<groupId>.md`。
+ */
+function resolveGroupFileAbsPathFromMeta(uid: string, meta: GroupMeta): string {
+  const rel = meta.rel_path || groupFileRelPathFromContextsRoot(meta.group_id);
+  const prefix = '.personal_ontology_groups/';
+  if (rel.startsWith(prefix) && !rel.includes('..')) {
+    return path.join(userOntologyGroupsDir(uid), rel.slice(prefix.length));
+  }
+  return resolveGroupFileAbsPath(uid, meta.group_id);
+}
+
+/**
  * Resolve a group's content-file absolute path with the same traversal
  * safety `contexts.ts::resolvePathForRoot` applies, minus the hidden-path
  * rejection (this whole directory IS the hidden one, by design). `groupId`
@@ -134,7 +149,7 @@ function readTextSafe(filePath: string): string {
 // ── 双区格式 parse/serialize（纯函数，可导出供测试）────────────────────────
 
 /** 把流水区文本按 ENTRY_SEPARATOR 切成条目数组（逐段 trim、滤空）。 */
-function splitFlowEntries(text: string): string[] {
+export function splitFlowEntries(text: string): string[] {
   return String(text ?? '')
     .split(ENTRY_SEPARATOR)
     .map((s) => s.trim())
@@ -153,7 +168,7 @@ export function parseFieldValueLine(line: string): { value: string; source: stri
 }
 
 /** 序列化单条值行：值内 `[` 转义为 `\[`，避免与来源标记冲突。 */
-function serializeFieldValueLine(fv: FieldValue): string {
+export function serializeFieldValueLine(fv: FieldValue): string {
   return `- ${String(fv.value).replace(/\[/g, '\\[')} [${fv.source}]`;
 }
 
@@ -236,6 +251,8 @@ function normalizeSource(source: unknown): string {
   return (FIELD_VALUE_SOURCES as readonly string[]).includes(v) ? v : '手动';
 }
 
+export { normalizeSource };
+
 // ── groups.md parse/serialize (人读 markdown 台账，风格同 candidates.md) ──
 
 const GROUP_FIELD_LABELS: Record<string, string> = {
@@ -308,9 +325,13 @@ function readGroups(uid: string): GroupMeta[] {
   return parseGroupsMarkdown(readTextSafe(groupsMdPath(uid)));
 }
 
+export { readGroups };
+
 function writeGroups(uid: string, groups: GroupMeta[]): void {
   writeTextAtomicSync(groupsMdPath(uid), serializeGroupsMarkdown(groups));
 }
+
+export { writeGroups };
 
 // ── kb-index side effects (mirrors contexts.ts's mutation → reindex hooks;
 //    see the file header's decision-6 note for why this is intentional) ──
@@ -333,6 +354,8 @@ function notifyGroupDeleted(uid: string, relPath: string): void {
   }
 }
 
+export { notifyGroupUpserted, notifyGroupDeleted };
+
 // ── 共享的“读改写”骨架：字段/流水操作统一走 parse → mutate → serialize → 原子写 ──
 
 type Mutator = (content: GroupContent) => { changed?: boolean; ok?: boolean; error?: string };
@@ -344,7 +367,7 @@ async function mutateGroupContent(uid: string, groupId: string, mutator: Mutator
   if (idx === -1) return { ok: false, error: 'group not found' };
 
   let abs: string;
-  try { abs = resolveGroupFileAbsPath(uid, groupId); }
+  try { abs = resolveGroupFileAbsPathFromMeta(uid, groups[idx]); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
 
   const content = parseGroupContent(readTextSafe(abs));
@@ -427,9 +450,8 @@ export async function deleteGroup(uid: string, groupId: string): Promise<SimpleR
 
   const [removed] = groups.splice(idx, 1);
   writeGroups(uid, groups);
-
   try {
-    const abs = resolveGroupFileAbsPath(uid, groupId);
+    const abs = resolveGroupFileAbsPathFromMeta(uid, removed);
     fs.rmSync(abs, { force: true });
   } catch (err) {
     log.warn('failed to remove group content file', { uid, groupId, error: (err as Error).message });
@@ -442,10 +464,11 @@ export async function deleteGroup(uid: string, groupId: string): Promise<SimpleR
 export async function readGroupContent(uid: string, groupId: string): Promise<GroupContentResult> {
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
   const groups = readGroups(uid);
-  if (!groups.some((g) => g.group_id === groupId)) return { ok: false, error: 'group not found' };
+  const meta = groups.find((g) => g.group_id === groupId);
+  if (!meta) return { ok: false, error: 'group not found' };
 
   let abs: string;
-  try { abs = resolveGroupFileAbsPath(uid, groupId); }
+  try { abs = resolveGroupFileAbsPathFromMeta(uid, meta); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
 
   return { ok: true, content: readTextSafe(abs) };
@@ -465,7 +488,7 @@ export async function writeGroupContent(uid: string, groupId: string, content: s
   }
 
   let abs: string;
-  try { abs = resolveGroupFileAbsPath(uid, groupId); }
+  try { abs = resolveGroupFileAbsPathFromMeta(uid, groups[idx]); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
 
   try {
@@ -655,7 +678,7 @@ export async function listGroupFields(uid: string, groupId: string): Promise<Lis
   if (!meta) return { ok: false, error: 'group not found' };
 
   let abs: string;
-  try { abs = resolveGroupFileAbsPath(uid, groupId); }
+  try { abs = resolveGroupFileAbsPathFromMeta(uid, meta); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
   const content = parseGroupContent(readTextSafe(abs));
 

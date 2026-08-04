@@ -3,24 +3,23 @@ import { describe, it, expect } from 'vitest';
 /**
  * personal_ontology_router.ts — 候选确认的 LLM 对号入座路由。
  * 核心契约：LLM 失败/垃圾输出/字段不在清单内 → 一律 flow，绝不外抛、不阻塞确认。
+ * 阶段 D：字段清单来自模板文件 catalog（分节.字段），`group_title` = 分节名。
  */
 
 async function loadModule() {
   return import('../../../src/main/features/personal_ontology_router');
 }
 
-function fakeTemplates() {
+function fakeCatalog() {
   return [
     {
+      group_id: 'g1',
       template_id: 'student',
       name: '学生',
       version: '1.0.0',
-      installed: true,
-      gaps: [],
-      installed_groups: [],
-      preset_groups: [
-        { title: '课程', fields: [{ name: '课程名称' }, { name: '学校' }] },
-        { title: '偏好', fields: [{ name: '沟通风格' }, { name: '工具偏好' }] },
+      sections: [
+        { title: '课程', fields: ['课程名称', '学校'] },
+        { title: '偏好', fields: ['沟通风格', '工具偏好'] },
       ],
     },
   ] as any[];
@@ -62,9 +61,9 @@ describe('personal_ontology_router › parseRouteDecision', () => {
 });
 
 describe('personal_ontology_router › buildRoutePrompt', () => {
-  it('includes the installed-template field catalog and the candidate text', async () => {
+  it('includes the installed-template section/field catalog and the candidate text', async () => {
     const r = await loadModule();
-    const prompt = r.buildRoutePrompt('喜欢用大白话解释', fakeTemplates());
+    const prompt = r.buildRoutePrompt('喜欢用大白话解释', fakeCatalog());
     expect(prompt).toContain('课程: [课程名称, 学校]');
     expect(prompt).toContain('偏好: [沟通风格, 工具偏好]');
     expect(prompt).toContain('喜欢用大白话解释');
@@ -74,7 +73,7 @@ describe('personal_ontology_router › buildRoutePrompt', () => {
 describe('personal_ontology_router › routeCandidateToField', () => {
   it('returns a validated field decision when LLM output is in the catalog', async () => {
     const r = await loadModule();
-    const decision = await r.routeCandidateToField('u1', '喜欢大白话', fakeTemplates(), {
+    const decision = await r.routeCandidateToField('u1', '喜欢大白话', fakeCatalog(), {
       buildRunnerFn: fakeBuildRunner('{"action":"field","group_title":"偏好","field_name":"沟通风格"}') as any,
     });
     expect(decision).toEqual({ action: 'field', group_title: '偏好', field_name: '沟通风格' });
@@ -82,36 +81,35 @@ describe('personal_ontology_router › routeCandidateToField', () => {
 
   it('flow when LLM says flow', async () => {
     const r = await loadModule();
-    const decision = await r.routeCandidateToField('u1', '今天是周一', fakeTemplates(), {
+    const decision = await r.routeCandidateToField('u1', '今天是周一', fakeCatalog(), {
       buildRunnerFn: fakeBuildRunner('{"action":"flow"}') as any,
     });
     expect(decision).toEqual({ action: 'flow' });
   });
 
-  it('flow when LLM hallucinates a field not in the catalog', async () => {
+  it('flow when LLM hallucinates a section/field not in the catalog', async () => {
     const r = await loadModule();
-    const decision = await r.routeCandidateToField('u1', 'x', fakeTemplates(), {
-      buildRunnerFn: fakeBuildRunner('{"action":"field","group_title":"不存在的组","field_name":"不存在的字段"}') as any,
+    const decision = await r.routeCandidateToField('u1', 'x', fakeCatalog(), {
+      buildRunnerFn: fakeBuildRunner('{"action":"field","group_title":"不存在的分节","field_name":"不存在的字段"}') as any,
     });
     expect(decision).toEqual({ action: 'flow' });
   });
 
   it('flow when LLM throws / returns empty — never throws to caller', async () => {
     const r = await loadModule();
-    const d1 = await r.routeCandidateToField('u1', 'x', fakeTemplates(), {
+    const d1 = await r.routeCandidateToField('u1', 'x', fakeCatalog(), {
       buildRunnerFn: fakeBuildRunner('') as any,
     });
     expect(d1).toEqual({ action: 'flow' });
-    const d2 = await r.routeCandidateToField('u1', 'x', fakeTemplates(), {
+    const d2 = await r.routeCandidateToField('u1', 'x', fakeCatalog(), {
       buildRunnerFn: (async () => { throw new Error('provider down'); }) as any,
     });
     expect(d2).toEqual({ action: 'flow' });
   });
 
-  it('flow when no template is installed', async () => {
+  it('flow when catalog is empty (no installed templates)', async () => {
     const r = await loadModule();
-    const noInstalled = [{ ...fakeTemplates()[0], installed: false }] as any[];
-    const decision = await r.routeCandidateToField('u1', 'x', noInstalled, {
+    const decision = await r.routeCandidateToField('u1', 'x', [], {
       buildRunnerFn: fakeBuildRunner('{"action":"field","group_title":"课程","field_name":"课程名称"}') as any,
     });
     expect(decision).toEqual({ action: 'flow' });

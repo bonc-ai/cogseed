@@ -70,17 +70,10 @@
     await Promise.all([_pocLoadGroups(), _pocLoadTemplates()]);
   }
 
-  // ── 分组选择（去向面板）：模板折叠 + 快捷全选 ──────────────────────────────
+  // ── 分组选择（去向面板）：模板文件分节（复合 id）+ 快捷全选 ───────────────
   function _pocRenderGroupRows(candidateId) {
     const state = _pocDestFor(candidateId);
     const plain = _pocGroups.filter((g) => !g.template_id);
-    const byTemplate = new Map();
-    for (const g of _pocGroups) {
-      if (!g.template_id) continue;
-      const key = g.template_id;
-      if (!byTemplate.has(key)) byTemplate.set(key, { id: key, name: g.template_name || key, groups: [] });
-      byTemplate.get(key).groups.push(g);
-    }
     const rows = [];
     for (const g of plain) {
       const checked = state.groupIds.has(g.group_id);
@@ -91,26 +84,29 @@
         <span>${escapeHtml(g.title || '')}</span>
       </label>`);
     }
-    for (const t of byTemplate.values()) {
-      const collapsed = _pocCollapsedTemplates.has(t.id);
-      const allChecked = t.groups.every((g) => state.groupIds.has(g.group_id));
-      const someChecked = t.groups.some((g) => state.groupIds.has(g.group_id));
-      rows.push(`<div class="personal-onto-dest-template" data-template-id="${escapeHtml(t.id)}">
+    for (const t of _pocTemplates) {
+      if (!t.installed || !t.sections || !t.sections.length) continue;
+      const collapsed = _pocCollapsedTemplates.has(t.template_id);
+      const refs = t.sections.map((s) => `${t.group_id}::${s.title}`);
+      const allChecked = refs.every((r) => state.groupIds.has(r));
+      const someChecked = refs.some((r) => state.groupIds.has(r));
+      rows.push(`<div class="personal-onto-dest-template" data-template-id="${escapeHtml(t.template_id)}">
         <label class="personal-onto-dest-template-row">
           <input type="checkbox" class="personal-onto-dest-template-checkbox"
-                 data-candidate-id="${escapeHtml(candidateId)}" data-template-id="${escapeHtml(t.id)}"
-                 ${allChecked ? 'checked' : ''} />
-          <span class="personal-onto-dest-template-caret" data-candidate-id="${escapeHtml(candidateId)}" data-template-id="${escapeHtml(t.id)}">${collapsed ? '▶' : '▼'}</span>
+                data-candidate-id="${escapeHtml(candidateId)}" data-template-id="${escapeHtml(t.template_id)}"
+                ${allChecked ? 'checked' : ''} />
+          <span class="personal-onto-dest-template-caret" data-candidate-id="${escapeHtml(candidateId)}" data-template-id="${escapeHtml(t.template_id)}">${collapsed ? '▶' : '▼'}</span>
           <span class="personal-onto-dest-template-name">${escapeHtml(t.name)}</span>
           ${someChecked && !allChecked ? `<span class="personal-onto-dest-template-partial muted">(部分)</span>` : ''}
         </label>
-        ${!collapsed ? `<div class="personal-onto-dest-template-groups">${t.groups.map((g) => {
-          const checked = state.groupIds.has(g.group_id);
+        ${!collapsed ? `<div class="personal-onto-dest-template-groups">${t.sections.map((s) => {
+          const ref = `${t.group_id}::${s.title}`;
+          const checked = state.groupIds.has(ref);
           return `<label class="personal-onto-dest-group-row is-template-child">
             <input type="checkbox" class="personal-onto-dest-group-checkbox"
-                   data-candidate-id="${escapeHtml(candidateId)}" data-group-id="${escapeHtml(g.group_id)}"
-                   ${checked ? 'checked' : ''} />
-            <span>${escapeHtml(g.title || '')}</span>
+                  data-candidate-id="${escapeHtml(candidateId)}" data-group-id="${escapeHtml(ref)}"
+                  ${checked ? 'checked' : ''} />
+            <span>${escapeHtml(s.title)}</span>
           </label>`;
         }).join('')}</div>` : ''}
       </div>`);
@@ -288,11 +284,83 @@
     </div>`;
   }
 
-  // ── 分组内容编辑器（右栏，双区 md）────────────────────────────────────────
+  // ── 分组内容编辑器（右栏，双区 md / 模板文件分节式）────────────────────────
   function _pocParseFlowEntries(content) {
     const flowIdx = String(content || '').indexOf('## 流水区');
     const flowText = flowIdx === -1 ? String(content || '') : String(content || '').slice(flowIdx + '## 流水区'.length);
     return flowText.split('\n§\n').map((s) => s.trim()).filter(Boolean);
+  }
+
+  // 模板文件分节解析（渲染层简易版，格式与主进程 parseTemplateContent 一致）：
+  // 按 `## 分节` 切块，块内取 `### 流水` 小节按 § 切条目。
+  function _pocParseTemplateSections(content) {
+    const out = {};
+    const parts = String(content || '').split(/^##\s+(.+)$/m);
+    for (let i = 1; i < parts.length; i += 2) {
+      const title = parts[i].trim();
+      const body = parts[i + 1] || '';
+      const flowIdx = body.indexOf('### 流水');
+      const flowText = flowIdx === -1 ? '' : body.slice(flowIdx + '### 流水'.length);
+      out[title] = flowText.split('\n§\n').map((s) => s.trim()).filter(Boolean);
+    }
+    return out;
+  }
+
+  // 模板文件表单视图：全部分节平铺，每分节 = 字段表单 + 分节流水。
+  // 字段/流水操作走复合 id（`groupId::分节`）。
+  function _pocRenderTemplateFormView(ed) {
+    if (!ed.sections || !ed.sections.length) {
+      return `<div class="memory-empty muted">${escapeHtml(_t('memory.group_form_no_fields', '该模板没有分节'))}</div>`;
+    }
+    return ed.sections.map((sec) => {
+      const ref = `${ed.groupId}::${sec.title}`;
+      const fields = (sec.fields || []).map((f) => `
+        <div class="memory-group-field" data-mem-group-field="${escapeHtml(f.name)}">
+          <div class="memory-group-field-name">
+            <span class="memory-group-field-name-text">${escapeHtml(f.name)}</span>
+          </div>
+          <div class="memory-group-field-values">
+            ${f.values && f.values.length
+              ? f.values.map((v) => `
+                <div class="memory-group-field-value">
+                  <span class="memory-group-field-value-text">${escapeHtml(v.value)}</span>
+                  <span class="memory-group-field-source muted">${escapeHtml(_tv('memory.group_field_value_source', { value: '', source: v.source }))}</span>
+                  <button type="button" class="memory-icon-btn" data-poc-group-action="field-edit-value"
+                    data-poc-ref="${escapeHtml(ref)}" data-poc-field="${escapeHtml(f.name)}" data-poc-value="${escapeHtml(v.value)}"
+                    title="${escapeHtml(_t('memory.edit', '编辑'))}">✎</button>
+                  <button type="button" class="memory-icon-btn is-muted" data-poc-group-action="field-remove-value"
+                    data-poc-ref="${escapeHtml(ref)}" data-poc-field="${escapeHtml(f.name)}" data-poc-value="${escapeHtml(v.value)}"
+                    title="${escapeHtml(_t('memory.delete', '删除'))}">×</button>
+                </div>`).join('')
+              : `<span class="memory-group-field-empty muted">${escapeHtml(_t('memory.group_field_empty', '暂无值'))}</span>`}
+          </div>
+          <div class="memory-group-field-add">
+            <input type="text" class="memory-group-field-input" data-poc-ref="${escapeHtml(ref)}" data-poc-field="${escapeHtml(f.name)}"
+              placeholder="${escapeHtml(_t('memory.group_field_add_placeholder', '填值…'))}" />
+            <button type="button" class="btn btn-sm btn-primary" data-poc-group-action="field-add-value"
+              data-poc-ref="${escapeHtml(ref)}" data-poc-field="${escapeHtml(f.name)}">${escapeHtml(_t('memory.save', '保存'))}</button>
+          </div>
+        </div>`).join('');
+      const flows = (ed.entriesBySection && ed.entriesBySection[sec.title]) || [];
+      const flowRows = flows.length
+        ? flows.map((e) => `
+          <div class="memory-group-flow-entry">
+            <span class="memory-group-flow-text">${escapeHtml(e)}</span>
+            <button type="button" class="btn btn-sm" data-poc-group-action="entry-promote"
+              data-poc-ref="${escapeHtml(ref)}" data-poc-entry="${escapeHtml(e)}">${escapeHtml(_t('memory.group_promote', '升格'))}</button>
+            <button type="button" class="memory-icon-btn is-muted" data-poc-group-action="entry-remove"
+              data-poc-ref="${escapeHtml(ref)}" data-poc-entry="${escapeHtml(e)}" title="${escapeHtml(_t('memory.delete', '删除'))}">×</button>
+          </div>`).join('')
+        : `<div class="memory-empty muted">${escapeHtml(_t('memory.group_flow_empty', '暂无流水条目'))}</div>`;
+      return `<div class="memory-group-template-section">
+        <div class="memory-group-template-section-title">${escapeHtml(sec.title)}</div>
+        <div class="memory-group-template-section-fields">${fields}</div>
+        <div class="memory-group-template-section-flow">
+          <div class="memory-group-template-flow-title">${escapeHtml(_t('memory.group_flow_view', '流水'))}</div>
+          ${flowRows}
+        </div>
+      </div>`;
+    }).join('');
   }
 
   function _pocRenderGroupFormView(ed) {
@@ -350,7 +418,31 @@
   function _pocRenderGroupEditorHtml() {
     const ed = _pocGroupEditor;
     if (!ed) return '';
-    const view = ed.view || (ed.isTemplated ? 'form' : 'raw');
+    if (ed.isTemplated) {
+      // 模板文件：多分节平铺（表单 / 原文）
+      const view = ed.view || 'form';
+      const tab = (key, label) => `<button type="button" class="memory-group-editor-tab${view === key ? ' is-active' : ''}" data-poc-group-action="view-${key}">${escapeHtml(label)}</button>`;
+      const group = _pocGroups.find((g) => g.group_id === ed.groupId);
+      return `<div class="personal-onto-group-editor" data-poc-group-editor="${escapeHtml(ed.groupId)}">
+        <div class="personal-onto-group-editor-head">
+          <span class="personal-onto-group-editor-title">${escapeHtml((group && group.title) || ed.groupId)}</span>
+          <span class="memory-template-name-suffix">${escapeHtml(_t('memory.templates_suffix', '模板'))}</span>
+        </div>
+        <div class="memory-group-editor-tabs">
+          ${tab('form', _t('memory.group_form_view', '表单'))}
+          ${tab('raw', _t('memory.group_raw_view', '原文'))}
+        </div>
+        <div class="personal-onto-group-editor-body">
+          ${view === 'form' ? _pocRenderTemplateFormView(ed) : _pocRenderGroupRawView(ed)}
+        </div>
+        <div class="memory-entry-foot">
+          <span class="memory-entry-charcount">${ed.content ? ed.content.length : 0}</span>
+          <span class="memory-flex"></span>
+          ${view === 'raw' ? `<button type="button" class="btn btn-sm btn-primary" data-poc-group-action="save-content">${escapeHtml(_t('memory.save', '保存'))}</button>` : ''}
+        </div>
+      </div>`;
+    }
+    const view = ed.view || 'raw';
     const tab = (key, label) => `<button type="button" class="memory-group-editor-tab${view === key ? ' is-active' : ''}" data-poc-group-action="view-${key}">${escapeHtml(label)}</button>`;
     const group = _pocGroups.find((g) => g.group_id === ed.groupId);
     const badge = (group && group.template_id)
@@ -384,7 +476,18 @@
   async function _pocOpenGroup(groupId) {
     _pocSelected = { kind: 'group', id: groupId };
     const group = _pocGroups.find((g) => g.group_id === groupId);
-    _pocGroupEditor = { groupId, content: '', loaded: false, isTemplated: !!(group && group.template_id), view: (group && group.template_id) ? 'form' : 'raw' };
+    const isTemplate = !!(group && group.template_id);
+    const tmpl = isTemplate ? _pocTemplates.find((t) => t.template_id === group.template_id) : null;
+    _pocGroupEditor = {
+      groupId,
+      content: '',
+      loaded: false,
+      isTemplated: isTemplate,
+      templateId: isTemplate ? group.template_id : undefined,
+      sections: isTemplate && tmpl ? tmpl.sections : undefined,
+      entriesBySection: null,
+      view: isTemplate ? 'form' : 'raw',
+    };
     renderPersonalOntology();
     const res = await _pocInvoke('personalOntology.groups.read', { groupId });
     if (!_pocGroupEditor || _pocGroupEditor.groupId !== groupId) return;
@@ -392,6 +495,9 @@
     _pocGroupEditor.content = res.content || '';
     _pocGroupEditor.loaded = true;
     if (_pocGroupEditor.isTemplated) {
+      // 模板文件：分节流水从原文解析（渲染层简易解析，格式同主进程）
+      _pocGroupEditor.entriesBySection = _pocParseTemplateSections(_pocGroupEditor.content);
+    } else {
       const fieldsRes = await _pocInvoke('personalOntology.groups.fields.list', { groupId });
       if (_pocGroupEditor && _pocGroupEditor.groupId === groupId) {
         _pocGroupEditor.fields = (fieldsRes && fieldsRes.ok !== false && Array.isArray(fieldsRes.fields)) ? fieldsRes.fields : [];
@@ -404,6 +510,25 @@
   async function _pocRefreshGroupData() {
     const ed = _pocGroupEditor;
     if (!ed) return;
+    // 模板文件：重新拉 templates（文件是唯一事实来源）刷新分节/字段/流水
+    if (ed.isTemplated) {
+      const [res, tRes] = await Promise.all([
+        _pocInvoke('personalOntology.groups.read', { groupId: ed.groupId }),
+        _pocInvoke('personalOntology.templates.list', {}),
+      ]);
+      if (!_pocGroupEditor || _pocGroupEditor.groupId !== ed.groupId) return;
+      if (res && res.ok !== false) {
+        _pocGroupEditor.content = res.content || '';
+        _pocGroupEditor.entriesBySection = _pocParseTemplateSections(_pocGroupEditor.content);
+      }
+      if (tRes && tRes.ok !== false && Array.isArray(tRes.templates)) {
+        _pocTemplates = tRes.templates;
+        const tmpl = _pocTemplates.find((t) => t.template_id === ed.templateId);
+        _pocGroupEditor.sections = tmpl && tmpl.sections ? tmpl.sections : [];
+      }
+      renderPersonalOntology();
+      return;
+    }
     const res = await _pocInvoke('personalOntology.groups.read', { groupId: ed.groupId });
     if (!_pocGroupEditor || _pocGroupEditor.groupId !== ed.groupId || !res || res.ok === false) return;
     _pocGroupEditor.content = res.content || '';
@@ -429,7 +554,7 @@
   // ── 模板管理 ─────────────────────────────────────────────────────────────
   async function _pocInstallTemplate(templateId) {
     const tmpl = _pocTemplates.find((x) => x.template_id === templateId);
-    const groupCount = tmpl ? tmpl.preset_groups.length : 0;
+    const groupCount = tmpl && tmpl.sections ? tmpl.sections.length : 0;
     const ok = (typeof uiConfirmDanger === 'function')
       ? await uiConfirmDanger({ title: _t('memory.templates_install', '安装'), message: _t('memory.templates_install_confirm', { n: groupCount }), dangerLabel: _t('memory.templates_install', '安装') })
       : (typeof uiConfirm === 'function' ? await uiConfirm({ message: _t('memory.templates_install_confirm', { n: groupCount }) }) : true);
@@ -458,6 +583,16 @@
     const nav = document.getElementById('personal-onto-nav');
     if (!nav) return;
 
+    const section = (title, count, body) => body
+      ? `<div class="personal-onto-nav-section">
+          <div class="personal-onto-nav-section-head"><span>${escapeHtml(title)}</span><span class="muted">${count}</span></div>
+          ${body}
+        </div>`
+      : `<div class="personal-onto-nav-section">
+          <div class="personal-onto-nav-section-head"><span>${escapeHtml(title)}</span><span class="muted">${count}</span></div>
+          <div class="personal-onto-nav-empty muted">${escapeHtml(_t('personalOntology.nav_empty', '暂无'))}</div>
+        </div>`;
+
     // 候选区
     const pendingCount = _pocCandidates.length;
     const blockedCount = _pocBlocked.length;
@@ -469,30 +604,26 @@
       </button>`;
     }).join('');
 
-    // 模板区
-    const templateBlocks = _pocTemplates.map((tmpl) => {
-      const collapsed = _pocCollapsedTemplates.has(tmpl.template_id);
-      const badge = tmpl.installed
-        ? `<span class="personal-onto-template-badge is-installed">${escapeHtml(_tv('memory.templates_installed', { version: tmpl.installed_version || tmpl.version }))}</span>`
-        : `<button type="button" class="btn btn-sm personal-onto-template-install" data-poc-nav="template-install" data-poc-template-id="${escapeHtml(tmpl.template_id)}">${escapeHtml(_t('memory.templates_install', '安装'))}</button>`;
-      const groupRows = (tmpl.installed && tmpl.installed_groups && tmpl.installed_groups.length)
-        ? tmpl.installed_groups.map((g) => {
-            const selected = _pocSelected.kind === 'group' && _pocSelected.id === g.group_id;
-            return `<button type="button" class="personal-onto-nav-row is-file${selected ? ' is-active' : ''}" data-poc-nav="group" data-poc-id="${escapeHtml(g.group_id)}">
-              <span class="personal-onto-nav-file-icon">📄</span>
-              <span class="personal-onto-nav-row-text">${escapeHtml(g.title)}</span>
-            </button>`;
-          }).join('')
-        : '';
-      return `<div class="personal-onto-nav-template">
-        <div class="personal-onto-nav-template-head">
-          <button type="button" class="personal-onto-nav-caret" data-poc-nav="template-toggle" data-poc-template-id="${escapeHtml(tmpl.template_id)}">${collapsed ? '▶' : '▼'}</button>
-          <span class="personal-onto-nav-template-name">${escapeHtml(tmpl.name)}${tmpl.installed ? `<span class="memory-template-name-suffix">${escapeHtml(_t('memory.templates_suffix', '模板'))}</span>` : ''}</span>
-          ${badge}
-        </div>
-        ${!collapsed && groupRows ? `<div class="personal-onto-nav-template-groups">${groupRows}</div>` : ''}
-      </div>`;
+    // 模板区（阶段 D：一行一个文件，无折叠树）
+    const templateRows = _pocTemplates.map((tmpl) => {
+      if (!tmpl.installed) {
+        return `<div class="personal-onto-nav-template">
+          <span class="personal-onto-nav-template-name">${escapeHtml(tmpl.name)}</span>
+          <button type="button" class="btn btn-sm personal-onto-template-install" data-poc-nav="template-install" data-poc-template-id="${escapeHtml(tmpl.template_id)}">${escapeHtml(_t('memory.templates_install', '安装'))}</button>
+        </div>`;
+      }
+      const selected = _pocSelected.kind === 'group' && _pocSelected.id === tmpl.group_id;
+      return `<button type="button" class="personal-onto-nav-row is-file${selected ? ' is-active' : ''}" data-poc-nav="group" data-poc-id="${escapeHtml(tmpl.group_id || '')}">
+        <span class="personal-onto-nav-file-icon">📄</span>
+        <span class="personal-onto-nav-row-text">${escapeHtml(tmpl.name)}</span>
+        <span class="memory-template-name-suffix">${escapeHtml(_t('memory.templates_suffix', '模板'))}</span>
+      </button>`;
     }).join('');
+    const templateSection = section(
+      _t('personalOntology.nav_templates', '角色模板'),
+      _pocTemplates.length,
+      templateRows ? `<div class="personal-onto-nav-template-list">${templateRows}</div>` : '',
+    );
 
     // 普通分组区
     const plainGroups = _pocGroups.filter((g) => !g.template_id);
@@ -504,19 +635,9 @@
       </button>`;
     }).join('');
 
-    const section = (title, count, body) => body
-      ? `<div class="personal-onto-nav-section">
-          <div class="personal-onto-nav-section-head"><span>${escapeHtml(title)}</span><span class="muted">${count}</span></div>
-          ${body}
-        </div>`
-      : `<div class="personal-onto-nav-section">
-          <div class="personal-onto-nav-section-head"><span>${escapeHtml(title)}</span><span class="muted">${count}</span></div>
-          <div class="personal-onto-nav-empty muted">${escapeHtml(_t('personalOntology.nav_empty', '暂无'))}</div>
-        </div>`;
-
     nav.innerHTML =
       section(_t('personalOntology.nav_candidates', '候选'), pendingCount, candRows) +
-      section(_t('personalOntology.nav_templates', '角色模板'), _pocTemplates.length, templateBlocks) +
+      templateSection +
       section(_t('personalOntology.nav_groups', '记忆分组'), plainGroups.length, groupRows);
   }
 
@@ -578,12 +699,6 @@
         const id = el.getAttribute('data-poc-id');
         if (action === 'candidate') { _pocSelected = { kind: 'candidate', id }; renderPersonalOntology(); }
         else if (action === 'group') { _pocOpenGroup(id); }
-        else if (action === 'template-toggle') {
-          const tid = el.getAttribute('data-poc-template-id');
-          if (_pocCollapsedTemplates.has(tid)) _pocCollapsedTemplates.delete(tid);
-          else _pocCollapsedTemplates.add(tid);
-          renderPersonalOntology();
-        }
         else if (action === 'template-install') {
           const tid = el.getAttribute('data-poc-template-id');
           if (tid) _pocInstallTemplate(tid);
@@ -618,11 +733,12 @@
     root.querySelectorAll('.personal-onto-dest-template-checkbox').forEach((cb) => {
       cb.addEventListener('change', () => {
         const state = _pocDestFor(cb.dataset.candidateId);
-        const tid = cb.dataset.templateId;
-        const groupIds = _pocGroups.filter((g) => g.template_id === tid).map((g) => g.group_id);
-        for (const gid of groupIds) {
-          if (cb.checked) state.groupIds.add(gid);
-          else state.groupIds.delete(gid);
+        const t = _pocTemplates.find((x) => x.template_id === cb.dataset.templateId);
+        if (!t || !t.installed || !t.sections) return;
+        const refs = t.sections.map((s) => `${t.group_id}::${s.title}`);
+        for (const ref of refs) {
+          if (cb.checked) state.groupIds.add(ref);
+          else state.groupIds.delete(ref);
         }
         _pocRerenderDetail();
         _pocMaybeLoadFieldOptions(cb.dataset.candidateId);
@@ -670,7 +786,8 @@
         const action = el.getAttribute('data-poc-group-action');
         const ed = _pocGroupEditor;
         if (!ed) return;
-        const groupId = ed.groupId;
+        // 模板文件分节操作走复合 id（data-poc-ref）；普通组回退 ed.groupId
+        const groupId = el.getAttribute('data-poc-ref') || ed.groupId;
         if (action === 'view-form' || action === 'view-flow' || action === 'view-raw') {
           ed.view = action.slice('view-'.length);
           renderPersonalOntology();
@@ -687,7 +804,7 @@
         }
         if (action === 'field-add-value') {
           const fieldName = el.getAttribute('data-poc-field');
-          const input = root.querySelector(`.memory-group-field-input[data-poc-field="${CSS.escape(fieldName)}"]`);
+          const input = root.querySelector(`.memory-group-field-input[data-poc-field="${CSS.escape(fieldName)}"][data-poc-ref="${CSS.escape(groupId)}"]`);
           const value = (input && input.value || '').trim();
           if (!value) return;
           if (await _pocGroupAction('personalOntology.groups.fields.append', { groupId, fieldName, value, source: '手动' })) {
@@ -740,6 +857,16 @@
   }
 
   // ── 确认 / 驳回 / 批量 ────────────────────────────────────────────────────
+  // 复合 id（groupId::分节）→ 可读标签（模板名.分节名 / 组名）
+  function _pocRefLabel(ref) {
+    const parts = String(ref || '').split('::');
+    const gid = parts[0];
+    const sec = parts[1];
+    const group = _pocGroups.find((g) => g.group_id === gid);
+    if (group) return sec ? `${group.title}.${sec}` : group.title;
+    return ref;
+  }
+
   function _destPayloadFor(candidateId) {
     const state = _pocDestFor(candidateId);
     const payload = { toGlobalMemory: !!state.toGlobalMemory, toGroupIds: Array.from(state.groupIds) };
@@ -756,9 +883,8 @@
     if (res && Array.isArray(res.groups)) {
       res.groups.forEach((g) => {
         if (g.ok === false) {
-          const group = _pocGroups.find((x) => x.group_id === g.groupId);
-          warnings.push(_tv('personalOntology.dest_group_failed', { group: group ? group.title : g.groupId, error: g.error || '' },
-            `分组「${group ? group.title : g.groupId}」写入失败: ${g.error || ''}`));
+          warnings.push(_tv('personalOntology.dest_group_failed', { group: _pocRefLabel(g.groupId), error: g.error || '' },
+            `分组「${_pocRefLabel(g.groupId)}」写入失败: ${g.error || ''}`));
         }
       });
     }
@@ -783,9 +909,8 @@
         if (typeof uiToast === 'function') {
           if (res.fieldWrites && res.fieldWrites.some((fw) => fw.ok)) {
             const fw = res.fieldWrites.find((x) => x.ok);
-            const group = _pocGroups.find((g) => g.group_id === fw.groupId);
-            uiToast(_tv('personalOntology.confirm_field_ok', { group: group ? group.title : fw.groupId, field: fw.fieldName },
-              `已填入 ${group ? group.title : fw.groupId}.${fw.fieldName}`), { variant: 'success' });
+            uiToast(_tv('personalOntology.confirm_field_ok', { group: _pocRefLabel(fw.groupId), field: fw.fieldName },
+              `已填入 ${_pocRefLabel(fw.groupId)}.${fw.fieldName}`), { variant: 'success' });
           }
           warnings.forEach((w) => uiToast(w, { variant: 'warning' }));
         }

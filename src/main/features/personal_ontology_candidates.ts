@@ -22,8 +22,16 @@ import * as path from 'node:path';
 import { userLocalRoot } from '../paths';
 import { writeTextAtomicSync, safeId, nowIso, readJsonSync } from '../storage';
 import { addEntry as addMemoryEntry } from './memory';
-import { appendToGroup, appendFieldValue, listGroupFields, listGroups, listRoleTemplateStatus } from './personal_ontology_groups';
-import { routeCandidateToField, type RouteDecision } from './personal_ontology_router';
+import { listGroups } from './personal_ontology_groups';
+import { routeCandidateToField } from './personal_ontology_router';
+import {
+  listTemplateFileCatalog,
+  listFieldsByRef,
+  appendFieldValueToRef,
+  appendFlowEntryToRef,
+  buildContentRef,
+  splitContentRef,
+} from './personal_ontology_template_files';
 import { createLogger } from '../logger';
 
 const log = createLogger('personal-ontology-candidates');
@@ -359,22 +367,23 @@ async function writeCandidateToDestinations(
 
   if (groupIds.length) {
     for (const groupId of groupIds) {
-      // 阶段 B 路由：有 targetField → 先判该组有没有这个“坑”（模板声明或实例
-      // 字段，见 listGroupFields），有 → appendFieldValue（多值追加+[候选]来源）；
-      // 没有 → 回退流水区 appendToGroup。无 targetField → 直接流水区（旧行为）。
-      // 裁决说明：任务书 §3.3 的“返回 field not found 则回退”通过 listGroupFields
+      // 阶段 B/D 路由：有 targetField → 先判该去向有没有这个“坑”（模板分节
+      // 字段或普通组实例字段，见 listFieldsByRef），有 → appendFieldValueToRef
+      // （多值追加+[候选]/[智能]来源）；没有 → 回退流水区 appendFlowEntryToRef。
+      // 无 targetField → 直接流水区（旧行为）。
+      // 裁决说明：任务书 §3.3 的“返回 field not found 则回退”通过 listFieldsByRef
       // 预检查实现，避免与 §3.2“appendFieldValue 字段小节不存在则创建”冲突。
       if (dest.targetField) {
         if (!result.fieldWrites) result.fieldWrites = [];
         let fieldExists = false;
         try {
-          const fieldsRes = await listGroupFields(uid, groupId);
+          const fieldsRes = await listFieldsByRef(uid, groupId);
           fieldExists = !!fieldsRes.fields?.some((f) => f.name === dest.targetField);
         } catch {
           fieldExists = false;
         }
         if (fieldExists) {
-          const res = await appendFieldValue(uid, groupId, dest.targetField, text, source);
+          const res = await appendFieldValueToRef(uid, groupId, dest.targetField, text, source);
           result.fieldWrites.push({
             groupId,
             fieldName: dest.targetField as string,
@@ -387,7 +396,7 @@ async function writeCandidateToDestinations(
         }
         result.fieldWrites.push({ groupId, fieldName: dest.targetField, ok: false, error: 'field not found' });
       }
-      const res = await appendToGroup(uid, groupId, text);
+      const res = await appendFlowEntryToRef(uid, groupId, text);
       if (!result.groups) result.groups = [];
       result.groups.push({ groupId, ok: res.ok, ...(res.error ? { error: res.error } : {}) });
       if (res.ok) anySucceeded = true;
@@ -410,7 +419,9 @@ export interface ConfirmCandidateOptions {
 
 /**
  * LLM 路由解析：routeWithLlm 且候选未显式指定 targetField 时，调 LLM 判断
- * 填哪个模板组字段。用户已指定字段 → 不覆盖（用户意图优先）。
+ * 填哪个模板文件分节的哪个字段。用户已指定字段 → 不覆盖（用户意图优先）。
+ * 命中模板分节 → toGroupIds push 复合 id（`groupId::分节`，分节编码在内，
+ * 无需新增 targetSection 参数）；命中普通组 → 仅设 targetField（预检查兜底）。
  * 返回生效的 dest + 来源标记（'智能' 或 '候选'）。
  */
 async function resolveLlmRoute(
@@ -423,24 +434,45 @@ async function resolveLlmRoute(
   const text = (candidate.memory_text || candidate.summary || '').trim();
   if (!text) return { effectiveDest: dest, source: '候选' };
 
-  const templates = await listRoleTemplateStatus(uid);
-  const decision: RouteDecision = await routeCandidateToField(uid, text, templates);
+  const catalog = await listTemplateFileCatalog(uid);
+  if (!catalog.length) return { effectiveDest: dest, source: '候选' };
+  const decision = await routeCandidateToField(uid, text, catalog);
   if (decision.action !== 'field' || !decision.group_title || !decision.field_name) {
     return { effectiveDest: dest, source: '候选' }; // flow → 维持原 dest（流水区）
   }
 
   const dest2: ConfirmDestinations = { ...dest, toGroupIds: dest.toGroupIds ? [...dest.toGroupIds] : [] };
-  // 优先用户已选组（title 匹配）；用户没选组 → 用已安装模板组
-  let targetGroup = (await listGroups(uid)).find(
-    (g) => dest2.toGroupIds.includes(g.group_id) && g.title === decision.group_title,
-  );
-  if (!targetGroup && !dest2.toGroupIds.length) {
-    targetGroup = (await listGroups(uid)).find((g) => g.template_id && g.title === decision.group_title);
-    if (targetGroup) dest2.toGroupIds.push(targetGroup.group_id);
+
+  // 1) 用户已选模板分节（复合 id）→ 字段必须在该分节内
+  for (const ref of dest2.toGroupIds) {
+    const { groupId, section } = splitContentRef(ref);
+    if (!section) continue;
+    const entry = catalog.find((e) => e.group_id === groupId);
+    if (entry && entry.sections.some((s) => s.title === section && s.fields.includes(decision.field_name))) {
+      dest2.targetField = decision.field_name;
+      return { effectiveDest: dest2, source: '智能' };
+    }
   }
-  if (!targetGroup) return { effectiveDest: dest, source: '候选' };
-  dest2.targetField = decision.field_name;
-  return { effectiveDest: dest2, source: '智能' };
+  // 2) 用户已选普通组（title 匹配）→ 建议字段，最终由 listFieldsByRef 预检查兜底
+  const groups = await listGroups(uid);
+  if (dest2.toGroupIds.some((id) =>
+    groups.some((g) => g.group_id === id && !g.template_id && g.title === decision.group_title),
+  )) {
+    dest2.targetField = decision.field_name;
+    return { effectiveDest: dest2, source: '智能' };
+  }
+  // 3) 用户没选组 → 找第一个含该分节.字段的模板文件，自动加入（复合 id）
+  if (!dest2.toGroupIds.length) {
+    const hit = catalog.find((e) =>
+      e.sections.some((s) => s.title === decision.group_title && s.fields.includes(decision.field_name)),
+    );
+    if (hit) {
+      dest2.toGroupIds.push(buildContentRef(hit.group_id, decision.group_title));
+      dest2.targetField = decision.field_name;
+      return { effectiveDest: dest2, source: '智能' };
+    }
+  }
+  return { effectiveDest: dest, source: '候选' };
 }
 
 /**

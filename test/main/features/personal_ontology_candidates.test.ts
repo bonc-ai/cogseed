@@ -615,30 +615,33 @@ describe('personal_ontology_candidates › routeWithLlm integration (router mock
     return poc;
   }
 
-  it('routeWithLlm fills the LLM-picked template field with [智能] source', async () => {
-    const groups = await import('../../../src/main/features/personal_ontology_groups');
-    await groups.installRoleTemplate(UID, 'student');
-    const prefGroup = (await groups.listGroups(UID)).find((g) => g.title === '偏好')!.group_id;
+  it('routeWithLlm fills the LLM-picked template section field with [智能] source', async () => {
+    const tmpl = await import('../../../src/main/features/personal_ontology_template_files');
+    await tmpl.installTemplateFile(UID, 'student');
+    const row = tmpl.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const sectionRef = tmpl.buildContentRef(row.group_id, '偏好');
 
     const poc = await seedCandidate('cand-llm-1');
     const res = await poc.confirmCandidate(UID, 'cand-llm-1', { toGlobalMemory: false }, { routeWithLlm: true });
     expect(res.ok).toBe(true);
-    expect(res.fieldWrites).toEqual([{ groupId: prefGroup, fieldName: '沟通风格', ok: true }]);
+    // LLM 命中 偏好.沟通风格 → toGroupIds 自动加入复合 id（groupId::偏好）
+    expect(res.fieldWrites).toEqual([{ groupId: sectionRef, fieldName: '沟通风格', ok: true }]);
 
-    const content = (await groups.readGroupContent(UID, prefGroup)).content || '';
-    expect(content).toContain('- 喜欢用大白话解释 [智能]');
+    const content = tmpl.readTemplateFileText(UID, 'student');
+    expect(content).toContain('### 沟通风格\n- 喜欢用大白话解释 [智能]');
   });
 
   it('user-specified targetField wins over LLM (no override)', async () => {
-    const groups = await import('../../../src/main/features/personal_ontology_groups');
-    await groups.installRoleTemplate(UID, 'student');
-    const prefGroup = (await groups.listGroups(UID)).find((g) => g.title === '偏好')!.group_id;
+    const tmpl = await import('../../../src/main/features/personal_ontology_template_files');
+    await tmpl.installTemplateFile(UID, 'student');
+    const row = tmpl.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const sectionRef = tmpl.buildContentRef(row.group_id, '偏好');
 
     const poc = await seedCandidate('cand-llm-2');
-    const res = await poc.confirmCandidate(UID, 'cand-llm-2', { toGlobalMemory: false, toGroupIds: [prefGroup], targetField: '工具偏好' }, { routeWithLlm: true });
+    const res = await poc.confirmCandidate(UID, 'cand-llm-2', { toGlobalMemory: false, toGroupIds: [sectionRef], targetField: '工具偏好' }, { routeWithLlm: true });
     expect(res.ok).toBe(true);
-    expect(res.fieldWrites).toEqual([{ groupId: prefGroup, fieldName: '工具偏好', ok: true }]);
-    const content = (await groups.readGroupContent(UID, prefGroup)).content || '';
-    expect(content).toContain('- 喜欢用大白话解释 [候选]');
+    expect(res.fieldWrites).toEqual([{ groupId: sectionRef, fieldName: '工具偏好', ok: true }]);
+    const content = tmpl.readTemplateFileText(UID, 'student');
+    expect(content).toContain('### 工具偏好\n- 喜欢用大白话解释 [候选]');
   });
 });
