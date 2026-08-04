@@ -6,6 +6,7 @@
   "main": "bootstrap.cjs",
   "type": "commonjs",
   "packageManager": "npm@11.11.0",
+  "orkasSourceRuntimeVariant": "cognition",
   "imports": {
     "#core-agent": "./src/core-agent/src/index.ts"
   },

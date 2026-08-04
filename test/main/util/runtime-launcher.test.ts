@@ -10,6 +10,8 @@ describe('source runtime launchers', () => {
   it('locks this worktree to cognition and passes that identity to Electron', () => {
     const shell = read('run.sh');
     const windows = read('run.cmd');
+    const bootstrap = read('bootstrap.cjs');
+    const packageMeta = JSON.parse(read('package.json')) as { orkasSourceRuntimeVariant?: string };
 
     expect(shell).toContain('VARIANT="cognition"');
     expect(windows).toContain('set "VARIANT=cognition"');
@@ -24,6 +26,9 @@ describe('source runtime launchers', () => {
     expect(shell).toContain('Mate Agent [Cognition].app');
     expect(shell).not.toContain('Usage: ./run.sh [--variant');
     expect(windows).not.toContain('Usage: run.cmd [--variant');
+    expect(packageMeta.orkasSourceRuntimeVariant).toBe('cognition');
+    expect(bootstrap).toContain('sourceVariant: packageMeta.orkasSourceRuntimeVariant');
+    expect(bootstrap).toContain('allowWorkspaceOverride: isPackagedDev');
   });
 
   it('rejects every shell argument or environment attempt to override cognition', () => {
@@ -75,6 +80,10 @@ describe('source runtime launchers', () => {
     );
     expect(main).not.toContain('variantArg');
     expect(main).toContain("['bash',    [script]]");
+    expect(main).toContain('delete relaunchEnv.ORKAS_WORKSPACE_ROOT');
+    expect(main).toContain('delete relaunchEnv.ORKAS_RUNTIME_CONTAINER');
+    expect(main).toContain('delete relaunchEnv.CORE_AGENT_AUTH_DIR');
+    expect(main).toContain('env: relaunchEnv');
   });
 
   it('does not let a source launcher claim connector protocols', () => {
