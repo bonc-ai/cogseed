@@ -18,6 +18,10 @@ if defined ORKAS_RUNTIME_VARIANT if not "%ORKAS_RUNTIME_VARIANT%"=="expense" (
   echo [Mate Agent] This worktree is locked to the expense runtime; ORKAS_RUNTIME_VARIANT=%ORKAS_RUNTIME_VARIANT% is not allowed. 1>&2
   exit /b 2
 )
+if defined ORKAS_WORKSPACE_ROOT (
+  echo [Mate Agent] This worktree manages its own expense data root; inherited ORKAS_WORKSPACE_ROOT is not allowed. 1>&2
+  exit /b 2
+)
 set "ORKAS_RUNTIME_VARIANT=expense"
 
 if not exist "%APP_DIR%\package.json" (

@@ -34,6 +34,10 @@ if [ -n "${ORKAS_RUNTIME_VARIANT:-}" ] && [ "$ORKAS_RUNTIME_VARIANT" != "expense
   echo "[Mate Agent] This worktree is locked to the expense runtime; ORKAS_RUNTIME_VARIANT=$ORKAS_RUNTIME_VARIANT is not allowed." >&2
   exit 2
 fi
+if [ -n "${ORKAS_WORKSPACE_ROOT:-}" ]; then
+  echo "[Mate Agent] This worktree manages its own expense data root; inherited ORKAS_WORKSPACE_ROOT is not allowed." >&2
+  exit 2
+fi
 export ORKAS_RUNTIME_VARIANT="expense"
 
 if [ ! -f "$APP_DIR/package.json" ]; then
