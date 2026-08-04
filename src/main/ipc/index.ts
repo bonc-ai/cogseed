@@ -26,6 +26,7 @@ import * as groupChat from '../features/group_chat';
 import * as companionRepro from '../features/companion_repro';
 import * as p3394 from '../features/p3394';
 import * as executionRecords from '../features/execution-records';
+import * as workbench from '../features/workbench';
 import * as evolution from '../features/evolution';
 import * as personalOntologyCandidates from '../features/personal_ontology_candidates';
 import * as personalOntologyGroups from '../features/personal_ontology_groups';
@@ -1543,6 +1544,69 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'p3394.contextReuseReceipt.read': async ({ executionId }, ctx) => {
     if (!safeId(executionId)) throw new Error('invalid execution id');
     return { ok: true, receipt: await p3394.readReceipt(ctx.userId, executionId) };
+  },
+
+  // ── Workbench: complex-delivery Workspace (US-20) ─────────────────────
+  // The gate decides whether the renderer may paint the Workspace body at
+  // all ("未达Gate不得展示空Workspace"). The skill tree is resolved here from
+  // the marketplace path rather than accepted from the renderer, so a caller
+  // cannot point a baseline check at an arbitrary directory.
+
+  'workbench.baseline.freeze': async ({ assetId, version, source, evaluationContractRef }, ctx) => {
+    if (!safeId(assetId)) throw new Error('invalid asset id');
+    const skillDir = userMarketplaceSkillDir(ctx.userId, assetId);
+    return {
+      ok: true,
+      baseline: await workbench.freezeBaseline(ctx.userId, {
+        assetId,
+        version: String(version || ''),
+        skillDir,
+        allowedRoots: [skillDir],
+        source,
+        ...(evaluationContractRef ? { evaluationContractRef: String(evaluationContractRef) } : {}),
+      }),
+    };
+  },
+
+  'workbench.baseline.list': async (_args, ctx) => {
+    return { ok: true, baselines: await workbench.listBaselines(ctx.userId) };
+  },
+
+  'workbench.baseline.verify': async ({ baselineId }, ctx) => {
+    if (!safeId(baselineId)) throw new Error('invalid baseline id');
+    const baseline = await workbench.readBaseline(ctx.userId, baselineId);
+    const skillDir = userMarketplaceSkillDir(ctx.userId, baseline.skill_ref.asset_id);
+    return {
+      ok: true,
+      result: await workbench.verifyBaseline(ctx.userId, baselineId, skillDir, [skillDir]),
+    };
+  },
+
+  'workbench.gate.evaluate': async ({ baselineId, receiptExecutionId }, ctx) => {
+    if (!safeId(baselineId)) throw new Error('invalid baseline id');
+    if (!safeId(receiptExecutionId)) throw new Error('invalid execution id');
+    const baseline = await workbench.readBaseline(ctx.userId, baselineId);
+    const skillDir = userMarketplaceSkillDir(ctx.userId, baseline.skill_ref.asset_id);
+    return {
+      ok: true,
+      decision: await workbench.evaluateWorkspaceGate(ctx.userId, {
+        baselineId,
+        skillDir,
+        allowedRoots: [skillDir],
+        receiptExecutionId,
+      }),
+    };
+  },
+
+  'workbench.actionPlan.read': async ({ projectId }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid project id');
+    return { ok: true, plan: await workbench.projectActionPlan(ctx.userId, projectId) };
+  },
+
+  'workbench.taskRuns.list': async ({ projectId, taskId }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid project id');
+    if (!safeId(taskId)) throw new Error('invalid task id');
+    return { ok: true, runs: await workbench.listTaskRuns(ctx.userId, projectId, taskId) };
   },
 
   'p3394.behaviorContrast.start': async ({ contrastId, receiptExecutionId, task, attachmentIds, conversationId, agentId, executionKind }, ctx) => {
