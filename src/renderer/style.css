@@ -1204,6 +1204,26 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 
 /* Complex-delivery Workspace (US-20). A blocked gate renders the gap list and
    withholds the body entirely — an unmet Workspace is never shown as a shell. */
+.workbench-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+.workbench-actions-row { display: flex; align-items: center; gap: 8px; }
+.workbench-freeze-label { font-size: 12px; }
+.workbench-freeze-select {
+  flex: 1;
+  min-width: 0;
+  max-width: 320px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: inherit;
+  font-size: 13px;
+}
+.workbench-actions-hint { font-size: 12px; margin-bottom: 10px; }
 .workbench-gate-card {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1246,6 +1266,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 .workbench-step[data-state="failed"] .workbench-step-state { color: var(--danger, #c0524a); opacity: 1; }
 .workbench-step-deps,
 .workbench-step-runs { font-size: 11px; flex: none; }
+.workbench-step-run { flex: none; }
 
 .project-detail-side {
   min-width: 0;

@@ -180,3 +180,56 @@ describe('IPC workbench action plan', () => {
     expect(String(result.error)).toMatch(/invalid project id/);
   });
 });
+
+describe('IPC workbench task run', () => {
+  it('starts a run for a task under a frozen baseline', async () => {
+    await installSkill();
+    const projects = await import('../../../src/main/features/projects');
+    const projectTasks = await import('../../../src/main/features/project_tasks');
+    const created = await projects.createProject(UID, 'Delivery');
+    if (!created.ok) throw new Error('project fixture failed');
+    const pid = created.project.project_id;
+    const task = await projectTasks.createTask(UID, pid, { title: 'Execute' });
+    if (!task.ok) throw new Error('task fixture failed');
+
+    const frozen = await call('workbench.baseline.freeze', {
+      assetId: ASSET_ID, version: '1.0', source: 'workspace-builtin',
+    });
+
+    const started = await call('workbench.taskRun.start', {
+      projectId: pid, taskId: task.task.id, baselineId: frozen.baseline.baseline_id, role: 'agent-b',
+    });
+
+    expect(started.ok).toBe(true);
+    expect(started.role).toBe('agent-b');
+
+    const runs = await call('workbench.taskRuns.list', { projectId: pid, taskId: task.task.id });
+    expect(runs.runs.map((run: any) => run.executionId)).toEqual([started.executionId]);
+  });
+
+  it('reports a drift refusal instead of starting', async () => {
+    const dir = await installSkill();
+    const projects = await import('../../../src/main/features/projects');
+    const projectTasks = await import('../../../src/main/features/project_tasks');
+    const created = await projects.createProject(UID, 'Delivery');
+    if (!created.ok) throw new Error('project fixture failed');
+    const pid = created.project.project_id;
+    const task = await projectTasks.createTask(UID, pid, { title: 'Execute' });
+    if (!task.ok) throw new Error('task fixture failed');
+
+    const frozen = await call('workbench.baseline.freeze', {
+      assetId: ASSET_ID, version: '1.0', source: 'workspace-builtin',
+    });
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), '---\nname: continuity\n---\nMutated.\n');
+
+    const refused = await call('workbench.taskRun.start', {
+      projectId: pid, taskId: task.task.id, baselineId: frozen.baseline.baseline_id, role: 'agent-b',
+    });
+
+    expect(refused.ok).toBe(false);
+    expect(refused.refusal).toBe('baseline_drift');
+    // Nothing was recorded for the refused attempt.
+    const runs = await call('workbench.taskRuns.list', { projectId: pid, taskId: task.task.id });
+    expect(runs.runs).toEqual([]);
+  });
+});

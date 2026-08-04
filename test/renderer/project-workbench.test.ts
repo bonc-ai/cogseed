@@ -100,3 +100,56 @@ describe('workbench action plan rendering', () => {
     expect(W._workbenchStepStateLabel('blocked_by_user')).toBe('project.wb_state_blocked_user');
   });
 });
+
+describe('workbench actions', () => {
+  const skills = [{ id: 'sk-a', name: 'Delivery skill' }, { id: 'sk-b', name: 'Review' }];
+
+  it('offers the project-bound skills as freeze candidates', () => {
+    const html = W.buildWorkbenchActionsHtml({ skillChoices: skills });
+    expect(html).toContain('workbench-freeze-btn');
+    expect(html).toContain('value="sk-a"');
+    expect(html).toContain('Delivery skill');
+  });
+
+  it('explains what to do when the project has no bound skills', () => {
+    const html = W.buildWorkbenchActionsHtml({ skillChoices: [] });
+    expect(html).toContain('project.wb_freeze_none');
+    expect(html).not.toContain('workbench-freeze-btn');
+  });
+
+  it('escapes skill names', () => {
+    const html = W.buildWorkbenchActionsHtml({
+      skillChoices: [{ id: 'sk-x', name: '<script>alert(1)</script>' }],
+    });
+    expect(html).not.toContain('<script>');
+    expect(html).toContain('&lt;script&gt;');
+  });
+});
+
+describe('workbench run buttons', () => {
+  const steps = [
+    { taskId: 't1', title: 'Ready', state: 'not_started', runCount: 0, unmetDependencies: [] },
+    { taskId: 't2', title: 'Waiting', state: 'blocked_by_dependency', runCount: 0, unmetDependencies: ['t1'] },
+    { taskId: 't3', title: 'In flight', state: 'running', runCount: 1, unmetDependencies: [] },
+    { taskId: 't4', title: 'Retryable', state: 'failed', runCount: 1, unmetDependencies: [] },
+    { taskId: 't5', title: 'Closed', state: 'done', runCount: 1, unmetDependencies: [] },
+  ];
+
+  it('offers a run button only where running is meaningful', () => {
+    const html = W.buildWorkbenchBodyHtml({ steps });
+    const targets = [...html.matchAll(/data-task-id="([^"]+)"/g)].map((m: any) => m[1]);
+    // A step waiting on a prerequisite must not be launchable from the plan —
+    // that would make a read-only projection into a scheduling authority.
+    // Running and closed steps have nothing to start.
+    expect(targets).toEqual(['t1', 't4']);
+  });
+
+  it('maps every refusal code the main process can return', () => {
+    expect(Object.keys(W.WORKBENCH_REFUSAL_KEYS).sort()).toEqual([
+      'baseline_drift',
+      'baseline_missing',
+      'baseline_unreadable',
+      'task_not_found',
+    ]);
+  });
+});

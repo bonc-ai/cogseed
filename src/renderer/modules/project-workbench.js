@@ -6,9 +6,9 @@
  * has not met its conditions shows the concrete gap list instead of an empty
  * shell — the user learns what is missing rather than facing a silent wall.
  *
- * Read-only by design: this panel evaluates and projects, it never freezes a
- * baseline or starts a run. Those are deliberate user actions that belong to
- * their own flows.
+ * Two deliberate user actions live here: freezing a main skill baseline, and
+ * starting a run for a step. Both are explicit — nothing is frozen or executed
+ * as a side effect of opening the panel.
  *
  * Classic script (no ESM): relies on the globals `escapeHtml`, `t` and
  * `window.orkas`, matching the sibling renderer modules. Local fallbacks keep
@@ -52,17 +52,21 @@ function _workbenchStepStateLabel(state) {
 }
 
 let _workbenchLoadSeq = 0;
+/** Skills bound to the current project — the freeze picker's candidates. */
+let _workbenchSkillChoices = [];
+let _workbenchPid = null;
 
 /**
  * Load and render the panel for a project.
  *
- * The gate needs a baseline plus the receipt of the run it governs. Neither is
- * chosen here: the newest frozen baseline is used, and its own
- * `evaluation_contract_ref` is not a receipt, so with no run yet the gate is
- * simply reported as unmet. That is the honest empty state.
+ * The gate needs a baseline plus the receipt of the run it governs. The newest
+ * frozen baseline is used, and until a real cross-agent reuse has produced a
+ * receipt the gate reports that gap rather than inventing one. That is the
+ * honest empty state.
  */
 async function loadProjectWorkbench(pid) {
   if (!pid) return;
+  _workbenchPid = pid;
   const seq = ++_workbenchLoadSeq;
   const gateEl = document.getElementById('workbench-gate');
   const bodyEl = document.getElementById('workbench-body');
@@ -74,13 +78,17 @@ async function loadProjectWorkbench(pid) {
   let baselines = [];
   let plan = null;
   try {
-    const [baselineRes, planRes] = await Promise.all([
+    const [baselineRes, planRes, bindingsRes] = await Promise.all([
       window.orkas.invoke('workbench.baseline.list').catch(() => ({ ok: false })),
       window.orkas.invoke('workbench.actionPlan.read', { projectId: pid }).catch(() => ({ ok: false })),
+      // Freeze candidates come from the project's bound skills, so the main
+      // skill stays inside the project's declared scope.
+      window.orkas.invoke('projects.bindings.list', { projectId: pid }).catch(() => ({ ok: false })),
     ]);
     if (seq !== _workbenchLoadSeq) return;  // a newer load superseded this one
     baselines = (baselineRes && baselineRes.ok && baselineRes.baselines) || [];
     plan = (planRes && planRes.ok && planRes.plan) || null;
+    _workbenchSkillChoices = (bindingsRes && bindingsRes.skillDetails) || [];
   } catch {
     if (seq !== _workbenchLoadSeq) return;
   }
@@ -88,9 +96,6 @@ async function loadProjectWorkbench(pid) {
   const baseline = baselines[0] || null;
   let decision = null;
   if (baseline) {
-    // No receipt id is known from this surface yet, so the gate is asked about
-    // the baseline's own execution scope. A missing receipt is a legitimate
-    // outcome, not an error to swallow.
     const res = await window.orkas
       .invoke('workbench.gate.evaluate', {
         baselineId: baseline.baseline_id,
@@ -140,6 +145,30 @@ function buildWorkbenchGateHtml({ baseline, decision }) {
     </div>`;
 }
 
+/**
+ * Build the actions bar. Pure.
+ *
+ * Freeze stays available after a baseline exists: drift is repaired by freezing
+ * a NEW baseline, never by mutating the old one, so the user needs this control
+ * exactly when the gate reports drift.
+ */
+function buildWorkbenchActionsHtml({ skillChoices }) {
+  const choices = skillChoices || [];
+  if (!choices.length) {
+    return `<div class="workbench-actions-hint muted">${_wbEscape(_wbT('project.wb_freeze_none'))}</div>`;
+  }
+  const options = choices
+    .map((skill) => `<option value="${_wbEscape(skill.id)}">${_wbEscape(skill.name || skill.id)}</option>`)
+    .join('');
+  return `
+    <label class="workbench-freeze-label muted" for="workbench-freeze-skill">${_wbEscape(_wbT('project.wb_freeze_pick'))}</label>
+    <div class="workbench-actions-row">
+      <select class="workbench-freeze-select" id="workbench-freeze-skill">${options}</select>
+      <button type="button" class="btn btn-sm" id="workbench-freeze-btn">${_wbEscape(_wbT('project.wb_freeze_btn'))}</button>
+      <button type="button" class="btn btn-sm" id="workbench-refresh-btn">${_wbEscape(_wbT('project.wb_refresh'))}</button>
+    </div>`;
+}
+
 /** Build the Action Plan body. Pure, same reasoning as the gate builder. */
 function buildWorkbenchBodyHtml(plan) {
   const steps = (plan && plan.steps) || [];
@@ -152,11 +181,21 @@ function buildWorkbenchBodyHtml(plan) {
         const runs = step.runCount
           ? `<span class="workbench-step-runs muted">${_wbEscape(_wbT('project.wb_runs'))} ${_wbEscape(String(step.runCount))}</span>`
           : '';
+        // A step waiting on a prerequisite offers no run button: the plan is a
+        // projection, and letting it launch out-of-order work would make it a
+        // second scheduling authority.
+        const runnable = step.state !== 'blocked_by_dependency'
+          && step.state !== 'done'
+          && step.state !== 'cancelled'
+          && step.state !== 'running';
+        const runBtn = runnable
+          ? `<button type="button" class="btn btn-xs workbench-step-run" data-task-id="${_wbEscape(step.taskId)}">${_wbEscape(_wbT('project.wb_run_btn'))}</button>`
+          : '';
         return `
           <div class="workbench-step" data-state="${_wbEscape(step.state)}">
             <span class="workbench-step-title">${_wbEscape(step.title)}</span>
             <span class="workbench-step-state">${_wbEscape(_workbenchStepStateLabel(step.state))}</span>
-            ${deps}${runs}
+            ${deps}${runs}${runBtn}
           </div>`;
       })
       .join('')
@@ -166,10 +205,71 @@ function buildWorkbenchBodyHtml(plan) {
     <div class="workbench-steps">${stepRows}</div>`;
 }
 
+/** Refusal code → locale key. Mirrors StartTaskRunRefusal in task-run.ts. */
+const WORKBENCH_REFUSAL_KEYS = {
+  baseline_missing: 'project.wb_refused_baseline_missing',
+  baseline_drift: 'project.wb_refused_baseline_drift',
+  baseline_unreadable: 'project.wb_refused_baseline_unreadable',
+  task_not_found: 'project.wb_refused_task_not_found',
+};
+
+async function _workbenchFreeze() {
+  const select = document.getElementById('workbench-freeze-skill');
+  const assetId = select && select.value;
+  if (!assetId) return;
+  const res = await window.orkas
+    .invoke('workbench.baseline.freeze', {
+      assetId,
+      // The asset layer (T2-S3-01) will own real versioning; until then a
+      // single baseline per freeze is pinned at v1.0 and distinguished by its
+      // content hash.
+      version: '1.0',
+      source: 'workspace-builtin',
+    })
+    .catch((err) => ({ ok: false, error: err && err.message }));
+  if (!res || res.ok !== true) {
+    if (typeof uiAlert === 'function') {
+      uiAlert(`${_wbT('project.wb_freeze_failed')}: ${(res && res.error) || ''}`);
+    }
+    return;
+  }
+  if (typeof uiToast === 'function') uiToast(_wbT('project.wb_freeze_ok'));
+  await loadProjectWorkbench(_workbenchPid);
+}
+
+async function _workbenchStartRun(taskId, baselineId) {
+  if (!taskId || !baselineId || !_workbenchPid) return;
+  const res = await window.orkas
+    .invoke('workbench.taskRun.start', {
+      projectId: _workbenchPid,
+      taskId,
+      baselineId,
+      role: 'agent-b',
+    })
+    .catch((err) => ({ ok: false, error: err && err.message }));
+  if (!res || res.ok !== true) {
+    const key = res && WORKBENCH_REFUSAL_KEYS[res.refusal];
+    const detail = key ? _wbT(key) : ((res && (res.error || res.refusal)) || '');
+    if (typeof uiAlert === 'function') uiAlert(`${_wbT('project.wb_run_refused')}: ${detail}`);
+    return;
+  }
+  if (typeof uiToast === 'function') uiToast(_wbT('project.wb_run_started'));
+  await loadProjectWorkbench(_workbenchPid);
+}
+
 function _renderProjectWorkbench({ baseline, decision, plan }) {
+  const actionsEl = document.getElementById('workbench-actions');
   const gateEl = document.getElementById('workbench-gate');
   const bodyEl = document.getElementById('workbench-body');
   if (!gateEl || !bodyEl) return;
+
+  if (actionsEl) {
+    actionsEl.innerHTML = buildWorkbenchActionsHtml({ skillChoices: _workbenchSkillChoices });
+    const freezeBtn = document.getElementById('workbench-freeze-btn');
+    if (freezeBtn) freezeBtn.addEventListener('click', () => { _workbenchFreeze(); });
+    const refreshBtn = document.getElementById('workbench-refresh-btn');
+    if (refreshBtn) refreshBtn.addEventListener('click', () => { loadProjectWorkbench(_workbenchPid); });
+  }
 
   gateEl.innerHTML = buildWorkbenchGateHtml({ baseline, decision });
 
@@ -183,6 +283,11 @@ function _renderProjectWorkbench({ baseline, decision, plan }) {
   }
   bodyEl.innerHTML = buildWorkbenchBodyHtml(plan);
   bodyEl.hidden = false;
+  for (const btn of bodyEl.querySelectorAll('.workbench-step-run')) {
+    btn.addEventListener('click', () => {
+      _workbenchStartRun(btn.dataset.taskId, baseline.baseline_id);
+    });
+  }
 }
 
 if (typeof window !== 'undefined') {
@@ -194,8 +299,10 @@ if (typeof window !== 'undefined') {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     WORKBENCH_REASON_KEYS,
+    WORKBENCH_REFUSAL_KEYS,
     _workbenchStepStateLabel,
     buildWorkbenchGateHtml,
     buildWorkbenchBodyHtml,
+    buildWorkbenchActionsHtml,
   };
 }

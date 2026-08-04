@@ -73,6 +73,7 @@ const _IPC_ROUTES = [
   ['POST',   '/api/workbench/gate', 'workbench.gate.evaluate'],
   ['GET',    /^\/api\/workbench\/projects\/([^/]+)\/action-plan$/, 'workbench.actionPlan.read', ['projectId']],
   ['GET',    /^\/api\/workbench\/projects\/([^/]+)\/tasks\/([^/]+)\/runs$/, 'workbench.taskRuns.list', ['projectId', 'taskId']],
+  ['POST',   /^\/api\/workbench\/projects\/([^/]+)\/tasks\/([^/]+)\/runs$/, 'workbench.taskRun.start', ['projectId', 'taskId']],
   ['GET',    '/api/personalOntology/candidates',              'personalOntology.candidates.list'],
   ['POST',   '/api/personalOntology/candidates/confirm',      'personalOntology.candidates.confirm'],
   ['POST',   '/api/personalOntology/candidates/reject',       'personalOntology.candidates.reject'],

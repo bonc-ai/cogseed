@@ -80,7 +80,7 @@ import {
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { shell } from 'electron';
-import { DEFAULT_USER_WORKSPACE, WS_ROOT, projectFilesDir, userMarketplaceSkillDir } from '../paths';
+import { DEFAULT_USER_WORKSPACE, WS_ROOT, projectFilesDir, userMarketplaceSkillDir, userSkillsDir } from '../paths';
 import {
   chatAttachmentDirForConversation,
   chatAttachmentRelPath,
@@ -752,6 +752,25 @@ async function _afterRecycleRestore(ctx: IpcContext, paths: string[]): Promise<v
 // ── Invoke handlers ──────────────────────────────────────────────────────
 // Contract: `(payload, { userId, sender }) => result` where result is
 // merged into a `{ ok: true, ...result }` response. Throw to signal error.
+
+/**
+ * Resolve an installed skill's content directory for the workbench handlers.
+ *
+ * Checks the same roots in the same precedence order as
+ * `skills.getSkillForEdit` (marketplace before custom) so a baseline pins the
+ * tree the runtime would actually load. Returns null when the skill is absent,
+ * letting callers report a readable refusal instead of hashing a missing path.
+ */
+function _resolveWorkbenchSkillDir(userId: string, skillId: string): string | null {
+  const candidates = [
+    userMarketplaceSkillDir(userId, skillId),
+    path.join(userSkillsDir(userId), skillId),
+  ];
+  for (const dir of candidates) {
+    if (fs.existsSync(path.join(dir, 'SKILL.md'))) return dir;
+  }
+  return null;
+}
 
 const invokeHandlers: Record<string, InvokeHandler> = {
   'user.init': async () => {
@@ -1549,12 +1568,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // ── Workbench: complex-delivery Workspace (US-20) ─────────────────────
   // The gate decides whether the renderer may paint the Workspace body at
   // all ("未达Gate不得展示空Workspace"). The skill tree is resolved here from
-  // the marketplace path rather than accepted from the renderer, so a caller
-  // cannot point a baseline check at an arbitrary directory.
+  // the installed skill roots rather than accepted from the renderer, so a
+  // caller cannot point a baseline check at an arbitrary directory.
 
   'workbench.baseline.freeze': async ({ assetId, version, source, evaluationContractRef }, ctx) => {
     if (!safeId(assetId)) throw new Error('invalid asset id');
-    const skillDir = userMarketplaceSkillDir(ctx.userId, assetId);
+    const skillDir = _resolveWorkbenchSkillDir(ctx.userId, assetId);
+    if (!skillDir) throw new Error('skill not found');
     return {
       ok: true,
       baseline: await workbench.freezeBaseline(ctx.userId, {
@@ -1575,7 +1595,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'workbench.baseline.verify': async ({ baselineId }, ctx) => {
     if (!safeId(baselineId)) throw new Error('invalid baseline id');
     const baseline = await workbench.readBaseline(ctx.userId, baselineId);
-    const skillDir = userMarketplaceSkillDir(ctx.userId, baseline.skill_ref.asset_id);
+    const skillDir = _resolveWorkbenchSkillDir(ctx.userId, baseline.skill_ref.asset_id);
+    if (!skillDir) return { ok: true, result: { ok: false, reason: 'unreadable' } };
     return {
       ok: true,
       result: await workbench.verifyBaseline(ctx.userId, baselineId, skillDir, [skillDir]),
@@ -1586,7 +1607,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(baselineId)) throw new Error('invalid baseline id');
     if (!safeId(receiptExecutionId)) throw new Error('invalid execution id');
     const baseline = await workbench.readBaseline(ctx.userId, baselineId);
-    const skillDir = userMarketplaceSkillDir(ctx.userId, baseline.skill_ref.asset_id);
+    const skillDir = _resolveWorkbenchSkillDir(ctx.userId, baseline.skill_ref.asset_id)
+      || userMarketplaceSkillDir(ctx.userId, baseline.skill_ref.asset_id);
     return {
       ok: true,
       decision: await workbench.evaluateWorkspaceGate(ctx.userId, {
@@ -1607,6 +1629,33 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(projectId)) throw new Error('invalid project id');
     if (!safeId(taskId)) throw new Error('invalid task id');
     return { ok: true, runs: await workbench.listTaskRuns(ctx.userId, projectId, taskId) };
+  },
+
+  'workbench.taskRun.start': async ({ projectId, taskId, baselineId, role }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid project id');
+    if (!safeId(taskId)) throw new Error('invalid task id');
+    if (!safeId(baselineId)) throw new Error('invalid baseline id');
+    const baseline = await workbench.readBaseline(ctx.userId, baselineId);
+    const skillDir = _resolveWorkbenchSkillDir(ctx.userId, baseline.skill_ref.asset_id);
+    if (!skillDir) return { ok: false, refusal: 'baseline_unreadable' };
+    const started = await workbench.startTaskRun(ctx.userId, {
+      projectId,
+      taskId,
+      baselineId,
+      skillDir,
+      allowedRoots: [skillDir],
+      role: role === 'agent-a' ? 'agent-a' : 'agent-b',
+      // The Workspace surface starts an in-process run; CLI-backed dispatch
+      // keeps flowing through the local-agents runner, which owns its own
+      // adapter identity.
+      kind: 'core-agent',
+      boundary: 'real',
+      permissionMode: 'ask',
+    });
+    // A refusal is a normal outcome (a drifted or absent baseline must block),
+    // so it is reported rather than thrown.
+    if (started.ok !== true) return { ok: false, refusal: started.reason };
+    return { ok: true, executionId: started.executionId, role: started.role };
   },
 
   'p3394.behaviorContrast.start': async ({ contrastId, receiptExecutionId, task, attachmentIds, conversationId, agentId, executionKind }, ctx) => {
