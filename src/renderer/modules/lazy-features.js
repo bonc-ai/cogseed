@@ -17,6 +17,7 @@ const _rendererFeatureManifest = Object.freeze({
   agents: [],
   project: [
     { src: './modules/library-transfer.js' },
+    { src: './modules/project-workbench.js' },
     { src: './modules/project-detail.js' },
   ],
   auto: [

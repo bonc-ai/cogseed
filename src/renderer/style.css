@@ -1202,6 +1202,51 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   text-align: center;
 }
 
+/* Complex-delivery Workspace (US-20). A blocked gate renders the gap list and
+   withholds the body entirely — an unmet Workspace is never shown as a shell. */
+.workbench-gate-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.workbench-gate-card.is-ready { border-left: 3px solid var(--ok, #3fa46a); }
+.workbench-gate-card.is-blocked { border-left: 3px solid var(--warn, #d08a2a); }
+.workbench-gate-title { font-weight: 600; }
+.workbench-gate-gaps {
+  margin: 2px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+.workbench-gate-baseline { font-size: 12px; }
+.workbench-gate-baseline code { font-size: 11px; opacity: 0.8; }
+.workbench-section-title {
+  margin: 14px 0 6px;
+  font-weight: 600;
+  font-size: 13px;
+}
+.workbench-steps { display: flex; flex-direction: column; gap: 4px; }
+.workbench-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+}
+.workbench-step-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workbench-step-state { font-size: 12px; opacity: 0.75; flex: none; }
+.workbench-step[data-state="running"] .workbench-step-state { color: var(--accent, #4a90d9); opacity: 1; }
+.workbench-step[data-state="failed"] .workbench-step-state { color: var(--danger, #c0524a); opacity: 1; }
+.workbench-step-deps,
+.workbench-step-runs { font-size: 11px; flex: none; }
+
 .project-detail-side {
   min-width: 0;
   min-height: 0;

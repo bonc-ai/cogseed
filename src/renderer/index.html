@@ -672,6 +672,9 @@
                         <span data-i18n="project.tab_auto">Automation</span>
                         <span class="project-detail-tab-count" id="project-auto-tab-count">0</span>
                       </button>
+                      <button type="button" class="project-detail-tab" data-project-tab="workbench">
+                        <span data-i18n="project.tab_workbench">Workspace</span>
+                      </button>
                     </div>
                   </div>
                   <div class="project-detail-tab-panel" data-project-panel="tasks">
@@ -685,6 +688,13 @@
                     </div>
                     <div class="auto-list" id="project-auto-list"></div>
                     <div class="empty muted" id="project-auto-empty" data-i18n="auto.empty">No auto tasks yet</div>
+                  </div>
+                  <!-- Complex-delivery Workspace (US-20). The body stays hidden
+                       until the gate reports ready: an unmet gate must not be
+                       papered over with an empty shell. -->
+                  <div class="project-detail-tab-panel" data-project-panel="workbench" hidden>
+                    <div class="workbench-gate" id="workbench-gate"></div>
+                    <div class="workbench-body" id="workbench-body" hidden></div>
                   </div>
                 </section>
               </div>
