@@ -177,6 +177,8 @@
   "expense_workbench.submit_confirmation.detail": "Destino externo: {target}\nSolicitação de reembolso: {application}\nVersão: v{version}\nImpressão digital da carga: {hash}\n\nImpacto do envio externo: Os dados de reembolso sairão deste aplicativo e criarão ou darão continuidade a uma solicitação de aprovação de OA no Feishu.\nAprovação humana: Esta ação não aprova a solicitação nem efetua um pagamento. Um aprovador humano ainda deverá analisá-la no Feishu / OA.",
   "expense_workbench.submit_confirmation.unavailable": "Não foi possível exibir a confirmação segura de envio. Nada foi enviado.",
   "expense_workbench.submit_confirmation.cancelled": "O envio foi cancelado. Nenhum dado foi enviado ao Feishu / OA.",
+  "expense_workbench.external.retry_feishu_notifications.action": "tentar novamente a notificação com falha desta solicitação de reembolso",
+  "expense_workbench.external.retry_feishu_notifications.consequence": "A notificação será enviada ao Feishu novamente, sem reenviar a aprovação OA nem alterar o rascunho.",
   "expense_workbench.material.pick_title": "Escolher comprovantes de reembolso",
   "expense_workbench.material.filter_name": "Comprovantes de reembolso",
   "expense_workbench.material.invalid_path": "O caminho do comprovante selecionado é inválido.",

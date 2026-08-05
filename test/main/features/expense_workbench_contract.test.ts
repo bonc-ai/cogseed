@@ -53,6 +53,7 @@ describe('expense workbench migration contract', () => {
       'settings.test',
       'applications.recoverSubmission',
       'applications.retryFeishu',
+      'applications.retryFeishuNotifications',
     ]);
     for (const operation of EXPENSE_WORKBENCH_EXTERNAL_OPERATIONS) {
       expect(isExpenseWorkbenchOperation(operation), operation).toBe(true);
@@ -63,6 +64,7 @@ describe('expense workbench migration contract', () => {
   it('requires extra confirmation for recovery/retry and fails closed without a safe UI', () => {
     expect(isExpenseWorkbenchExternalSideEffectOperation('applications.recoverSubmission')).toBe(true);
     expect(isExpenseWorkbenchExternalSideEffectOperation('applications.retryFeishu')).toBe(true);
+    expect(isExpenseWorkbenchExternalSideEffectOperation('applications.retryFeishuNotifications')).toBe(true);
     expect(isExpenseWorkbenchExternalSideEffectOperation('applications.submitStatus')).toBe(false);
     expect(isExpenseWorkbenchExplicitExternalOperation('applications.refreshStatus')).toBe(false);
     expect(isExpenseWorkbenchExplicitExternalOperation('settings.test')).toBe(false);

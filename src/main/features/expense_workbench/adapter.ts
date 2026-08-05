@@ -53,6 +53,7 @@ const REQUEST_TIMEOUT_MS = 120_000;
 const WORKBENCH_PRINCIPAL_ROLE = 'employee';
 const WORKBENCH_COMPONENT_ID = 'expense-precheck';
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const BRIDGE_ERROR_CODE_PATTERN = /^(?:[a-z][a-z0-9_]*|[A-Z][A-Z0-9_]*)$/;
 const BASE64URL_SHA256_PATTERN = /^sha256=([A-Za-z0-9_-]{43})$/;
 const DISTRIBUTION_VERSION_PATTERN = /^[0-9][A-Za-z0-9.!+_-]{0,63}$/;
 const RELATIVE_RUNTIME_PATH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+/@-]*(?:\/[A-Za-z0-9][A-Za-z0-9._+@-]*)*$/;
@@ -118,6 +119,7 @@ export interface ExpenseWorkbenchHostRequest {
 
 const safeId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/);
+const approvalRole = z.string().min(1).max(128).refine((value) => !/[\u0000-\u001f\u007f]/.test(value), 'approval role contains control characters');
 const timestamp = z.string().datetime({ offset: true });
 const boundedJsonScalar = z.union([z.string().max(16_000), z.number().finite(), z.boolean(), z.null()]);
 const boundedJsonValue: z.ZodType<JsonValue> = z.lazy(() => z.union([
@@ -128,8 +130,9 @@ const boundedJsonValue: z.ZodType<JsonValue> = z.lazy(() => z.union([
 const operation = z.enum([
   'manifest', 'health.get', 'identity.get', 'overview.stats', 'applications.list',
   'applications.get', 'applications.create', 'applications.draft', 'applications.precheck',
-  'applications.confirm', 'applications.submit', 'applications.report',
+  'applications.confirm', 'applications.submit', 'applications.report', 'applications.approve',
   'applications.refreshStatus', 'applications.recoverSubmission', 'applications.retryFeishu',
+  'applications.retryFeishuNotifications',
   'applications.submitStatus', 'materials.list', 'materials.add', 'materials.addAndBind',
   'materials.delete', 'reviews.list', 'reviews.approve', 'reviews.reject', 'audit.list',
   'settings.get', 'settings.update', 'settings.test', 'settings.preflight', 'settings.models',
@@ -141,41 +144,63 @@ const targetSchema = z.object({
   system: safeId, environment: safeId, adapter: safeId, form_type: safeId, mapping_version: safeId,
 }).strict();
 const materialSchema = z.object({
-  ref: z.string().regex(/^workspace:\/\/mat-[0-9a-f]{32}$/),
+  ref: z.string().regex(/^workspace:\/\/mat-[0-9a-f]{32}$/i),
   name: z.string().min(1).max(256),
   media_type: z.enum(['application/pdf', 'image/png', 'image/jpeg', 'image/heic']),
   size: z.number().int().min(1).max(176 * 1024),
   sha256,
-  material_category: z.literal('expense_receipt'),
+  material_category: z.enum(['expense_receipt', 'travel_itinerary', 'hotel_stay_proof', 'other']),
 }).strict();
 const applicationSchema = z.object({
+  schema_version: z.number().int().min(1).max(10).optional(),
   application_id: safeId,
   application_type: z.enum(['daily_expense', 'travel_expense', 'rental_expense', 'communication_expense']),
   application_type_label: z.string().max(256),
   status: z.string().min(1).max(64),
   current_version: z.number().int().min(0),
   current_payload_hash: sha256,
+  external_application_id: z.union([safeId, z.literal('')]).optional(),
   precheck_status: z.string().min(1).max(64),
   confirmation_status: z.enum(['confirmed', 'not_confirmed']),
-  oa_status: z.literal('not_submitted'),
-  feishu_status: z.literal('not_configured'),
+  oa_status: z.string().min(1).max(64),
+  feishu_status: z.string().min(1).max(64),
   target: targetSchema,
+  submission_gate: boundedJsonValue.optional(),
+  formal_report_gate: boundedJsonValue.optional(),
+  created_at: timestamp,
+  updated_at: timestamp,
+}).strict();
+const notificationSchema = z.object({
+  schema_version: z.number().int().min(1).max(10),
+  notification_id: safeId,
+  application_id: safeId,
+  event: safeId,
+  state: z.enum(['pending', 'in_flight', 'sent', 'failed']),
+  attempts: z.number().int().min(0).max(1000),
+  message_id: z.string().max(128),
   created_at: timestamp,
   updated_at: timestamp,
 }).strict();
 const draftSchema = z.object({
+  schema_version: z.number().int().min(1).max(10).optional(),
+  version_id: safeId.optional(),
+  application_id: safeId.optional(),
   version: z.number().int().min(0),
   payload: z.record(z.string().min(1).max(256), boundedJsonValue),
   payload_hash: sha256,
   material_refs: z.array(materialSchema).max(20),
-  material_categories: z.record(z.string().regex(/^workspace:\/\/mat-[0-9a-f]{32}$/), z.literal('expense_receipt')),
+  material_categories: z.record(z.string().regex(/^workspace:\/\/mat-[0-9a-f]{32}$/i), z.enum(['expense_receipt', 'travel_itinerary', 'hotel_stay_proof', 'other'])),
   review_reasons: z.array(z.string().max(4_000)).max(100),
   created_at: timestamp,
 }).strict();
 const precheckSchema = z.object({
-  status: z.literal('needs_review'), policy_version: z.string().min(1).max(128),
+  status: z.enum(['ready', 'needs_review']), policy_version: z.string().min(1).max(128),
   reason_codes: z.array(z.string().min(1).max(256)).max(500), application_id: safeId,
   version: z.number().int().min(0),
+  run_id: safeId.optional(), artifact_hash: sha256.optional(),
+  approval_subject_hash: sha256.optional(), bundle_hash: sha256.optional(),
+  required_approval_roles: z.array(approvalRole).max(32).optional(),
+  unassigned_approval_roles: z.array(approvalRole).max(32).optional(),
 }).strict();
 const reportLineSchema = z.object({
   line_id: z.string().max(128), expense_type: z.string().max(256), category: z.string().max(256),
@@ -187,17 +212,19 @@ const reportLineSchema = z.object({
   verification_is_authentic: z.boolean(), verification_is_reimbursable: z.boolean(),
   verification_issues: z.array(boundedJsonValue).max(500), evidence_refs: z.array(z.string().max(256)).max(500),
 }).strict();
-const reportSchema = z.object({
-  report_id: z.string().max(128), title: z.string().max(256), status: z.literal('draft'),
-  report_mode: z.literal('draft'), created_at: timestamp, updated_at: timestamp,
-  total_amount: z.number().finite(), total_approved: z.number().finite(), total_tax: z.number().finite(),
-  line_items: z.array(reportLineSchema).max(200), summary_by_category: z.record(z.string().max(256), boundedJsonValue),
-  overall_compliance: z.string().max(256), gate_result: z.record(z.string().max(256), boundedJsonValue),
-  evidence_summary: z.record(z.string().max(256), boundedJsonValue),
-}).strict();
+const reportSchema = z.record(z.string().min(1).max(256), boundedJsonValue)
+  .refine((value) => Object.keys(value).length <= 200, 'report contains too many fields');
 const applicationBundleSchema = z.object({
   application: applicationSchema, draft: draftSchema, materials: z.array(materialSchema).max(20),
+  feishu_notifications: z.array(notificationSchema).max(100).optional(),
   unified_precheck: precheckSchema.optional(), report: reportSchema.optional(),
+  approval: z.object({
+    status: z.enum(['unavailable', 'pending', 'approved', 'rejected']),
+    required_roles: z.array(approvalRole).max(32), pending_roles: z.array(approvalRole).max(32),
+    approved_roles: z.array(approvalRole).max(32), rejected_roles: z.array(approvalRole).max(32),
+    artifact_hash: z.union([sha256, z.literal('')]), subject_hash: z.union([sha256, z.literal('')]),
+    can_decide: z.boolean().optional(),
+  }).strict().optional(),
 }).strict();
 const confirmationSchema = z.object({
   status: z.literal('confirmed'), confirmed_at: timestamp, version: z.number().int().min(1),
@@ -210,6 +237,11 @@ const reviewSchema = z.object({
   created_at: timestamp.optional(), reviewed_at: timestamp.optional(),
 }).strict();
 const externalResultSchema = z.object({ application: applicationSchema, external_status: boundedJsonValue }).strict();
+const approvalResultSchema = z.object({
+  approval_id: safeId, application_id: safeId, application_version: z.number().int().min(1),
+  approval_role: approvalRole, status: z.enum(['approved', 'rejected']), decision: z.enum(['approve', 'reject']),
+  acted_at: timestamp, subject_hash: sha256, artifact_hash: sha256, bundle_hash: sha256,
+}).strict();
 
 const RESPONSE_RESULT_SCHEMAS: Readonly<Record<ExpenseWorkbenchOperation, z.ZodType<JsonObject>>> = {
   manifest: z.object({ protocol_version: z.literal(1), component_id: z.literal(WORKBENCH_COMPONENT_ID), component_version: z.literal(TRUSTED_EXPENSE_COMPONENT_VERSION), operations: operationList, data_scope: z.literal('isolated_host_user') }).strict(),
@@ -223,10 +255,12 @@ const RESPONSE_RESULT_SCHEMAS: Readonly<Record<ExpenseWorkbenchOperation, z.ZodT
   'applications.precheck': precheckSchema,
   'applications.confirm': z.object({ application: applicationSchema, confirmation: confirmationSchema }).strict(),
   'applications.submit': z.object({ application: applicationSchema, submission: boundedJsonValue }).strict(),
-  'applications.report': z.object({ status: z.literal('draft'), application_id: safeId, version: z.number().int().min(0), report: reportSchema }).strict(),
+  'applications.report': z.object({ status: z.string().min(1).max(64), application_id: safeId, version: z.number().int().min(0), report: reportSchema }).strict(),
+  'applications.approve': approvalResultSchema,
   'applications.refreshStatus': externalResultSchema,
   'applications.recoverSubmission': externalResultSchema,
   'applications.retryFeishu': externalResultSchema,
+  'applications.retryFeishuNotifications': externalResultSchema,
   'applications.submitStatus': externalResultSchema,
   'materials.list': z.object({ materials: z.array(materialSchema).max(20) }).strict(),
   'materials.add': z.object({ material: materialSchema }).strict(),
@@ -236,7 +270,7 @@ const RESPONSE_RESULT_SCHEMAS: Readonly<Record<ExpenseWorkbenchOperation, z.ZodT
   'reviews.approve': z.object({ review: reviewSchema }).strict(),
   'reviews.reject': z.object({ review: reviewSchema }).strict(),
   'audit.list': z.object({ total: z.number().int().min(0), logs: z.array(z.object({ session_id: z.string().max(128), action: z.string().max(256), created_at: timestamp }).strict()).max(100) }).strict(),
-  'settings.get': z.object({ configured: z.literal(false), external_connections: z.object({ feishu: z.object({ status: z.literal('unconfigured') }).strict(), ocr_provider: z.object({ status: z.literal('unconfigured') }).strict(), invoice_verification: z.object({ status: z.literal('unconfigured') }).strict() }).strict(), data_scope: z.literal('isolated_host_user') }).strict(),
+  'settings.get': z.object({ configured: z.boolean(), external_connections: z.object({ feishu: z.object({ status: z.string().min(1).max(64) }).strict(), ocr_provider: z.object({ status: z.string().min(1).max(64) }).strict(), invoice_verification: z.object({ status: z.string().min(1).max(64) }).strict() }).strict(), data_scope: z.literal('isolated_host_user') }).strict(),
   'settings.update': z.never(),
   'settings.test': z.object({ status: z.string(), error_codes: z.array(z.string()) }).strict(),
   'settings.preflight': z.object({ status: z.string(), error_codes: z.array(z.string()) }).strict(),
@@ -357,7 +391,7 @@ export function parseExpenseWorkbenchResponse(line: string): ExpenseWorkbenchRes
     const code = asString(errorValue.code);
     const message = asString(errorValue.message);
     const retryable = asBoolean(errorValue.retryable);
-    if (code && code.length <= 128 && /^[A-Z][A-Z0-9_]*$/.test(code)
+    if (code && code.length <= 128 && BRIDGE_ERROR_CODE_PATTERN.test(code)
         && message && message.length <= 4_000 && retryable !== undefined) {
       error = { code, message, retryable };
     }
@@ -1454,7 +1488,11 @@ export async function callExpenseWorkbench(
     throw new Error('invalid host confirmation capability');
   }
   const response = await session.requestSerialized(operation, request);
-  if (!response.ok) throw new Error(response.error?.message || 'expense workbench operation failed');
+  if (!response.ok) {
+    const failure = new Error(response.error?.message || 'expense workbench operation failed');
+    if (response.error) Object.assign(failure, { code: response.error.code, retryable: response.error.retryable });
+    throw failure;
+  }
   return validateExpenseWorkbenchResult(operation, response.result || {});
 }
 

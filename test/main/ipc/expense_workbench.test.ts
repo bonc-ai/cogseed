@@ -618,6 +618,7 @@ describe('expense workbench IPC', () => {
     'applications.refreshStatus',
     'applications.recoverSubmission',
     'applications.retryFeishu',
+    'applications.retryFeishuNotifications',
     'settings.preflight',
     'settings.test',
   ] as const)('blocks %s on the generic invoke route', async (operation) => {
@@ -630,6 +631,92 @@ describe('expense workbench IPC', () => {
       requestContext(),
     )).rejects.toThrow('显式确认入口');
     expect(adapter.callExpenseWorkbench).not.toHaveBeenCalled();
+  });
+
+  it('does not allow personnel approval through the generic renderer route', async () => {
+    const { invokeHandlers } = await import('../../../src/main/ipc/expense_workbench');
+    await expect(invokeHandlers['expenseWorkbench.invoke'](
+      authorized(
+        { operation: 'applications.approve', payload: { application_id: 'APP-1' } },
+        'invoke:applications.approve',
+      ),
+      requestContext(),
+    )).rejects.toThrow('人工复核决策需要独立的身份与确认入口');
+    expect(adapter.callExpenseWorkbench).not.toHaveBeenCalled();
+  });
+
+  it('binds personnel approval to the capability agent and two native confirmations', async () => {
+    const artifactHash = 'b'.repeat(64);
+    const { invokeHandlers } = await import('../../../src/main/ipc/expense_workbench');
+    const result = await invokeHandlers['expenseWorkbench.approveApplication'](
+      authorized({
+        application_id: 'APP-1',
+        approval_role: 'manager',
+        decision: 'approve',
+        expected_artifact_hash: artifactHash,
+        comment: 'checked',
+      }, `approve:APP-1:manager:approve:${artifactHash}`),
+      requestContext(),
+    );
+
+    expect(result).toEqual({ applications: [] });
+    expect(showMessageBox).toHaveBeenCalledTimes(2);
+    expect(adapter.callExpenseWorkbench).toHaveBeenCalledWith(
+      'u-ipc',
+      'c045605cb916',
+      'applications.approve',
+      {
+        application_id: 'APP-1',
+        approval_role: 'manager',
+        decision: 'approve',
+        expected_artifact_hash: artifactHash,
+        comment: 'checked',
+      },
+    );
+  });
+
+  it('rejects renderer-provided agent identity on the personnel approval route', async () => {
+    const artifactHash = 'b'.repeat(64);
+    const { invokeHandlers } = await import('../../../src/main/ipc/expense_workbench');
+    await expect(invokeHandlers['expenseWorkbench.approveApplication'](
+      authorized({
+        agent_id: 'attacker-controlled',
+        application_id: 'APP-1',
+        approval_role: 'manager',
+        decision: 'approve',
+        expected_artifact_hash: artifactHash,
+        comment: '',
+      }, `approve:APP-1:manager:approve:${artifactHash}`),
+      requestContext(),
+    )).rejects.toThrow('invalid expense workbench management-surface request');
+    expect(showMessageBox).not.toHaveBeenCalled();
+    expect(adapter.callExpenseWorkbench).not.toHaveBeenCalled();
+  });
+
+  it('does not record personnel approval when the active user changes during confirmation', async () => {
+    const artifactHash = 'b'.repeat(64);
+    const secondConfirmation = deferred<{ response: number }>();
+    showMessageBox
+      .mockResolvedValueOnce({ response: 1 })
+      .mockImplementationOnce(() => secondConfirmation.promise);
+    const { invokeHandlers } = await import('../../../src/main/ipc/expense_workbench');
+    const approving = invokeHandlers['expenseWorkbench.approveApplication'](
+      authorized({
+        application_id: 'APP-1',
+        approval_role: 'manager',
+        decision: 'reject',
+        expected_artifact_hash: artifactHash,
+        comment: 'incorrect total',
+      }, `approve:APP-1:manager:reject:${artifactHash}`),
+      requestContext(),
+    );
+    await vi.waitFor(() => expect(showMessageBox).toHaveBeenCalledTimes(2));
+    authRuntime.activeUserId = 'u-other';
+    secondConfirmation.resolve({ response: 1 });
+
+    await expect(approving).rejects.toThrow('different active user');
+    expect(adapter.callExpenseWorkbench).not.toHaveBeenCalled();
+    expect(adapter.closeExpenseWorkbenchSessions).toHaveBeenCalledWith('u-ipc');
   });
 
   it('discloses the external target before a status query and dispatches only after consent', async () => {
@@ -669,6 +756,7 @@ describe('expense workbench IPC', () => {
   it.each([
     ['applications.recoverSubmission', 'OA'],
     ['applications.retryFeishu', '飞书'],
+    ['applications.retryFeishuNotifications', '飞书'],
   ] as const)('requires a second confirmation before %s', async (operation, target) => {
     const { invokeHandlers } = await import('../../../src/main/ipc/expense_workbench');
     await invokeHandlers['expenseWorkbench.invokeExternal'](

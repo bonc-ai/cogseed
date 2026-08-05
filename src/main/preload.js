@@ -259,6 +259,23 @@ const expenseWorkbench = Object.freeze({
     `materials:add:${String(applicationId || '')}`,
     { application_id: String(applicationId || '') },
   ),
+  approveApplication: (applicationId, approvalRole, decision, expectedArtifactHash, comment) => {
+    const normalizedApplicationId = String(applicationId || '');
+    const normalizedApprovalRole = String(approvalRole || '');
+    const normalizedDecision = String(decision || '');
+    const normalizedArtifactHash = String(expectedArtifactHash || '');
+    return expenseWorkbenchInvoke(
+      'expenseWorkbench.approveApplication',
+      `approve:${normalizedApplicationId}:${normalizedApprovalRole}:${normalizedDecision}:${normalizedArtifactHash}`,
+      {
+        application_id: normalizedApplicationId,
+        approval_role: normalizedApprovalRole,
+        decision: normalizedDecision,
+        expected_artifact_hash: normalizedArtifactHash,
+        comment: String(comment || ''),
+      },
+    );
+  },
   confirmAndSubmit: (applicationId, version, payloadHash) => expenseWorkbenchInvoke(
     'expenseWorkbench.confirmAndSubmit',
     `submit:${String(applicationId || '')}:${String(version)}:${String(payloadHash || '')}`,

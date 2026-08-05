@@ -706,12 +706,19 @@ describe('expense workbench response boundary', () => {
       request_id: 'request-2', ok: false,
       error: { code: 'E_INVALID_REQUEST', message: 'invalid', retryable: false },
     });
+    expect(parseExpenseWorkbenchResponse(JSON.stringify({
+      request_id: 'request-python-1', ok: false,
+      error: { code: 'internal_error', message: 'operation failed', retryable: true },
+    }))).toEqual({
+      request_id: 'request-python-1', ok: false,
+      error: { code: 'internal_error', message: 'operation failed', retryable: true },
+    });
 
     const invalidEnvelopes = [
       { request_id: 'request-3', ok: true, result: {}, error: { code: 'E_BAD', message: 'bad', retryable: false } },
       { request_id: 'request-4', ok: false, result: {}, error: { code: 'E_BAD', message: 'bad', retryable: false } },
       { request_id: 'request-5', ok: true, result: {}, extra: true },
-      { request_id: 'request-6', ok: false, error: { code: 'bad', message: 'bad', retryable: false } },
+      { request_id: 'request-6', ok: false, error: { code: 'bad-code', message: 'bad', retryable: false } },
       { request_id: 'request-7', ok: false, error: { code: 'E_BAD', message: 'x'.repeat(4_001), retryable: false } },
       { request_id: 'request-8', ok: false, error: { code: 'E_BAD', message: 'bad', retryable: false, extra: true } },
     ];
@@ -731,6 +738,49 @@ describe('expense workbench response boundary', () => {
       status_counts: {},
       ok: true,
     })).toThrow('schema');
+  });
+
+  it('accepts the live application projection fields used after external submission', async () => {
+    const { validateExpenseWorkbenchResult } = await import('../../../../src/main/features/expense_workbench/adapter');
+    const timestamp = '2026-08-04T00:00:00+00:00';
+    expect(validateExpenseWorkbenchResult('applications.list', {
+      applications: [{
+        schema_version: 1,
+        application_id: 'APP-1',
+        application_type: 'daily_expense',
+        application_type_label: '日常费用报销',
+        status: 'submitted',
+        current_version: 2,
+        current_payload_hash: 'a'.repeat(64),
+        external_application_id: 'instance-1',
+        precheck_status: 'ready_for_confirmation',
+        confirmation_status: 'confirmed',
+        oa_status: 'submitted',
+        feishu_status: 'synced',
+        target: {
+          system: 'oa', environment: 'feishu', adapter: 'feishu-approval',
+          form_type: 'approval.v4', mapping_version: 'feishu-expense-v1',
+        },
+        submission_gate: { status: 'passed' },
+        formal_report_gate: { status: 'passed' },
+        created_at: timestamp,
+        updated_at: timestamp,
+      }],
+    })).toMatchObject({ applications: [{ external_application_id: 'instance-1', oa_status: 'submitted' }] });
+  });
+
+  it('accepts Unicode approval roles and explicitly blocked formal reports', async () => {
+    const { validateExpenseWorkbenchResult } = await import('../../../../src/main/features/expense_workbench/adapter');
+    expect(validateExpenseWorkbenchResult('applications.approve', {
+      approval_id: 'APR-1', application_id: 'APP-1', application_version: 1,
+      approval_role: '直属经理', status: 'approved', decision: 'approve',
+      acted_at: '2026-08-04T00:00:00+00:00', subject_hash: 'a'.repeat(64),
+      artifact_hash: 'b'.repeat(64), bundle_hash: 'c'.repeat(64),
+    })).toMatchObject({ approval_role: '直属经理', status: 'approved' });
+    expect(validateExpenseWorkbenchResult('applications.report', {
+      status: 'formal_report_blocked', application_id: 'APP-1', version: 1,
+      report: { error_code: 'formal_report_blocked', message: 'approval.missing' },
+    })).toMatchObject({ status: 'formal_report_blocked' });
   });
 
   it('rejects unknown and mistyped fields at nested operation-specific locations', async () => {

@@ -177,6 +177,8 @@
   "expense_workbench.submit_confirmation.detail": "外部目标：{target}\n报销申请：{application}\n版本：v{version}\n负载指纹：{hash}\n\n外发影响：报销数据将离开本应用，并在飞书中新建或推进 OA 审批请求。\n人工审批：此操作不等于审批通过或付款，仍需人工审批人在飞书 / OA 中审核。",
   "expense_workbench.submit_confirmation.unavailable": "无法显示安全提交确认，本次未提交。",
   "expense_workbench.submit_confirmation.cancelled": "用户已取消提交，未向飞书 / OA 发送数据。",
+  "expense_workbench.external.retry_feishu_notifications.action": "重试发送当前报销申请的失败通知",
+  "expense_workbench.external.retry_feishu_notifications.consequence": "会向飞书重新发送通知，但不会重复提交 OA 审批或修改报销草稿。",
   "expense_workbench.material.pick_title": "选择报销材料",
   "expense_workbench.material.filter_name": "报销材料",
   "expense_workbench.material.invalid_path": "所选材料路径无效。",

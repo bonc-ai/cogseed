@@ -15,6 +15,7 @@ import {
   getExpenseProjectStatus,
 } from '../features/expense_workbench/adapter';
 import { confirmAndSubmitExpenseWorkbench } from '../features/expense_workbench/submission';
+import { assertCanonicalExpenseWorkbenchAgent } from '../features/expense_workbench/canonical-agent';
 import {
   addAndBindExpenseMaterialsFromPaths,
   assertExpenseMaterialTarget,
@@ -32,7 +33,6 @@ import {
   type JsonObject,
   type JsonValue,
 } from '../features/expense_workbench/contracts';
-import { assertCanonicalExpenseWorkbenchAgent } from '../features/expense_workbench/canonical-agent';
 import { getActiveUserId } from '../features/users';
 import { t } from '../i18n';
 import { createLogger } from '../logger';
@@ -59,6 +59,14 @@ interface ConfirmAndSubmitPayload extends CapabilityPayload {
   application_id?: JsonValue;
   version?: JsonValue;
   payload_hash?: JsonValue;
+}
+
+interface ApproveApplicationPayload extends CapabilityPayload {
+  application_id?: JsonValue;
+  approval_role?: JsonValue;
+  decision?: JsonValue;
+  expected_artifact_hash?: JsonValue;
+  comment?: JsonValue;
 }
 
 interface PickAndAddMaterialsPayload extends CapabilityPayload {
@@ -122,6 +130,11 @@ const EXTERNAL_OPERATION_NOTICES: Record<ExpenseWorkbenchExternalOperation, Exte
     targetKey: 'expense_workbench.external.target.feishu', targetFallback: '飞书',
     actionKey: 'expense_workbench.external.retry_feishu.action', actionFallback: '重试发送当前报销申请的失败同步',
     consequenceKey: 'expense_workbench.external.retry_feishu.consequence', consequenceFallback: '会向飞书重新发送数据，但不会重复提交 OA 审批。',
+  },
+  'applications.retryFeishuNotifications': {
+    targetKey: 'expense_workbench.external.target.feishu', targetFallback: '飞书',
+    actionKey: 'expense_workbench.external.retry_feishu_notifications.action', actionFallback: '重试发送当前报销申请的失败通知',
+    consequenceKey: 'expense_workbench.external.retry_feishu_notifications.consequence', consequenceFallback: '会向飞书重新发送通知，但不会重复提交 OA 审批或修改报销草稿。',
   },
   'settings.preflight': {
     targetKey: 'expense_workbench.external.target.feishu', targetFallback: '飞书',
@@ -560,6 +573,76 @@ function requirePayloadHash(value: JsonValue | undefined): string {
   return value.toLowerCase();
 }
 
+function requireApprovalRole(value: JsonValue | undefined): string {
+  if (typeof value !== 'string' || !value.trim() || value.length > 128 || /[\u0000-\u001f\u007f]/.test(value)) {
+    throw new Error('invalid approval role');
+  }
+  return value.trim();
+}
+
+function requireApprovalDecision(value: JsonValue | undefined): 'approve' | 'reject' {
+  if (value !== 'approve' && value !== 'reject') throw new Error('invalid approval decision');
+  return value;
+}
+
+function approvalConfirmationOptions(
+  applicationId: string,
+  approvalRole: string,
+  decision: 'approve' | 'reject',
+  artifactHash: string,
+  secondConfirmation: boolean,
+): MessageBoxOptions {
+  const action = decision === 'approve'
+    ? localized('expense_workbench.approval.approve_action', '批准')
+    : localized('expense_workbench.approval.reject_action', '驳回');
+  const replacements = { application: applicationId, role: approvalRole, action, hash: maskedPayloadHash(artifactHash) };
+  return {
+    type: secondConfirmation ? 'warning' : 'info',
+    buttons: [
+      localized('expense_workbench.approval.cancel', '取消'),
+      localized(
+        secondConfirmation ? 'expense_workbench.approval.confirm_again' : 'expense_workbench.approval.confirm',
+        secondConfirmation ? '再次确认执行' : `确认${action}`,
+      ),
+    ],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+    title: localized('expense_workbench.approval.title', '确认人员审批'),
+    message: formatLocalized(
+      'expense_workbench.approval.message',
+      '将以“{role}”身份{action}申请 {application}？',
+      replacements,
+    ),
+    detail: formatLocalized(
+      'expense_workbench.approval.detail',
+      '审批对象：{application}\n审批角色：{role}\n动作：{action}\n材料指纹：{hash}\n\n该操作会写入不可变人员审批记录；不代表付款或外部 OA 状态已完成。',
+      replacements,
+    ),
+  };
+}
+
+async function requireApprovalConfirmation(
+  applicationId: string,
+  approvalRole: string,
+  decision: 'approve' | 'reject',
+  artifactHash: string,
+  sender: WebContents,
+): Promise<void> {
+  if (!dialog || typeof dialog.showMessageBox !== 'function') throw new Error('无法显示人员审批确认，操作已取消');
+  const parent = requireExpenseWorkbenchWindow(sender);
+  const first = await dialog.showMessageBox(
+    parent,
+    approvalConfirmationOptions(applicationId, approvalRole, decision, artifactHash, false),
+  );
+  if (!first || first.response !== 1) throw new Error('用户已取消人员审批');
+  const second = await dialog.showMessageBox(
+    parent,
+    approvalConfirmationOptions(applicationId, approvalRole, decision, artifactHash, true),
+  );
+  if (!second || second.response !== 1) throw new Error('用户已取消人员审批');
+}
+
 function formatLocalized(
   key: string,
   fallback: string,
@@ -776,6 +859,48 @@ export const invokeHandlers = {
       capability.agentId,
       payload.operation,
       requirePayload(payload?.payload),
+    );
+  },
+
+  'expenseWorkbench.approveApplication': async (payload: ApproveApplicationPayload, ctx: ExpenseContext) => {
+    requireOnlyKeys(payload, [
+      ...CAPABILITY_ENVELOPE_KEYS,
+      'application_id',
+      'approval_role',
+      'decision',
+      'expected_artifact_hash',
+      'comment',
+    ]);
+    const applicationId = requireApplicationId(payload?.application_id);
+    const approvalRole = requireApprovalRole(payload?.approval_role);
+    const decision = requireApprovalDecision(payload?.decision);
+    const expectedArtifactHash = requirePayloadHash(payload?.expected_artifact_hash);
+    const comment = payload?.comment === undefined ? '' : payload.comment;
+    if (typeof comment !== 'string' || comment.length > 1_000) throw new Error('invalid approval comment');
+    const capability = await requireCapability(
+      payload,
+      ctx,
+      `approve:${applicationId}:${approvalRole}:${decision}:${expectedArtifactHash}`,
+    );
+    await requireApprovalConfirmation(
+      applicationId,
+      approvalRole,
+      decision,
+      expectedArtifactHash,
+      ctx.sender,
+    );
+    await requireCapabilityStillCurrent(capability, ctx.userId);
+    return callExpenseWorkbench(
+      capability.userId,
+      capability.agentId,
+      'applications.approve',
+      {
+        application_id: applicationId,
+        approval_role: approvalRole,
+        decision,
+        expected_artifact_hash: expectedArtifactHash,
+        comment,
+      },
     );
   },
 

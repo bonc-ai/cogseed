@@ -17,6 +17,15 @@ interface ClickTarget {
   hasAttribute: (name: string) => boolean;
 }
 
+interface NavigationButton {
+  dataset: { ewPage: string };
+  classList: { toggle: (name: string, force: boolean) => void };
+  setAttribute: (name: string, value: string) => void;
+  removeAttribute: (name: string) => void;
+  active: boolean;
+  ariaCurrent: string | null;
+}
+
 function deferred<T>() {
   let resolvePromise!: (value: T) => void;
   const promise = new Promise<T>((resolve) => { resolvePromise = resolve; });
@@ -36,18 +45,39 @@ function loadWorkbench(handler: InvokeHandler, options: { openError?: Error } = 
   const calls: InvokeCall[] = [];
   const renders: string[] = [];
   const main = { innerHTML: '', querySelectorAll: () => [] };
+  const navigation = ['assistant', 'applications', 'precheck', 'overview', 'reviews', 'connections', 'audit']
+    .map((page): NavigationButton => {
+      const button: NavigationButton = {
+        dataset: { ewPage: page },
+        classList: {
+          toggle: (name, force) => { if (name === 'is-active') button.active = force; },
+        },
+        setAttribute: (name, value) => { if (name === 'aria-current') button.ariaCurrent = value; },
+        removeAttribute: (name) => { if (name === 'aria-current') button.ariaCurrent = null; },
+        active: page === 'assistant',
+        ariaCurrent: page === 'assistant' ? 'page' : null,
+      };
+      return button;
+    });
   const host: {
     hidden: boolean;
     innerHTML: string;
     onclick: ((event: { target: { closest: () => ClickTarget } }) => Promise<void>) | null;
-  } = { hidden: true, innerHTML: '', onclick: null };
+    querySelectorAll: (selector: string) => NavigationButton[];
+  } = {
+    hidden: true,
+    innerHTML: '',
+    onclick: null,
+    querySelectorAll: (selector) => selector === '[data-ew-page]' ? navigation : [],
+  };
+  const configBanner = { hidden: true };
   const elements: Record<string, JsonObject> = {
     'agent-management-surface': host,
     'agents-detail-content': { style: { display: '' } },
     'agents-chat-col': { style: { display: 'none' } },
     'ew-main': main,
     'ew-header-status': { textContent: '' },
-    'ew-config-banner': { hidden: true },
+    'ew-config-banner': configBanner,
   };
   const render = (page: string) => (state: JsonObject) => {
     const value = `${page}:${JSON.stringify(state.selectedApplication ?? null)}`;
@@ -104,6 +134,7 @@ function loadWorkbench(handler: InvokeHandler, options: { openError?: Error } = 
     },
     expenseWorkbenchMarkup: {
       shell: () => '<section></section>',
+      unconfigured: render('unconfigured'),
       assistant: render('assistant'),
       applications: render('applications'),
       precheck: render('precheck'),
@@ -131,6 +162,9 @@ function loadWorkbench(handler: InvokeHandler, options: { openError?: Error } = 
   return {
     calls,
     renders,
+    main,
+    navigation,
+    configBanner,
     host,
     open: async (agentId = 'expense-agent') => {
       if (!workbenchWindow.openExpenseWorkbench) throw new Error('open handler is unavailable');
@@ -175,6 +209,72 @@ describe('expense workbench renderer lifecycle isolation', () => {
     expect(workbench.host.hidden).toBe(true);
     expect(workbench.host.innerHTML).toBe('');
     expect(workbench.calls.filter(({ channel }) => channel === 'expenseWorkbench.close')).toHaveLength(1);
+  });
+
+  it('moves the sole active navigation state before and after asynchronous page loading', async () => {
+    const overview = deferred<JsonObject>();
+    const workbench = loadWorkbench(async (channel, payload) => {
+      if (channel === 'expenseWorkbench.status') return { ok: true, configured: true };
+      if (channel === 'expenseWorkbench.invoke' && payload.operation === 'applications.list') {
+        return { ok: true, applications: [] };
+      }
+      if (channel === 'expenseWorkbench.invoke' && payload.operation === 'overview.stats') return overview.promise;
+      throw new Error(`unexpected call: ${channel}:${String(payload.operation || '')}`);
+    });
+    await workbench.open();
+
+    const loading = workbench.click(target({ ewPage: 'overview' }));
+    expect(workbench.navigation.filter((button) => button.active).map((button) => button.dataset.ewPage))
+      .toEqual(['overview']);
+    expect(workbench.navigation.find((button) => button.dataset.ewPage === 'overview')?.ariaCurrent).toBe('page');
+    overview.resolve({ ok: true, total: 0 });
+    await loading;
+
+    expect(workbench.navigation.filter((button) => button.active).map((button) => button.dataset.ewPage))
+      .toEqual(['overview']);
+  });
+
+  it('keeps unconfigured navigation local and blocks all project-backed actions', async () => {
+    const workbench = loadWorkbench(async (channel, payload) => {
+      if (channel === 'expenseWorkbench.status') return { ok: true, configured: false };
+      throw new Error(`unexpected call: ${channel}:${String(payload.operation || '')}`);
+    });
+    await workbench.open();
+
+    for (const page of ['applications', 'precheck', 'overview', 'reviews', 'connections', 'audit']) {
+      await workbench.click(target({ ewPage: page }));
+    }
+    await workbench.click(target({}, ['data-ew-create']));
+    await workbench.click(target({}, ['data-ew-refresh']));
+
+    expect(workbench.calls).toEqual([
+      { channel: 'expenseWorkbench.prepareOpen', payload: { agent_id: 'expense-agent', gesture: 'agent_detail' } },
+      { channel: 'expenseWorkbench.open', payload: { agent_id: 'expense-agent' } },
+      { channel: 'expenseWorkbench.status', payload: {} },
+    ]);
+    expect(workbench.renders.at(-1)).toContain('unconfigured');
+    expect(workbench.navigation.filter((button) => button.active).map((button) => button.dataset.ewPage))
+      .toEqual(['audit']);
+    expect(workbench.configBanner.hidden).toBe(false);
+  });
+
+  it('treats cancelled project selection as a stable non-error state', async () => {
+    const workbench = loadWorkbench(async (channel, payload) => {
+      if (channel === 'expenseWorkbench.status') return { ok: true, configured: false };
+      if (channel === 'expenseWorkbench.pickAndConfigure') return { ok: true, cancelled: true, configured: false };
+      throw new Error(`unexpected call: ${channel}:${String(payload.operation || '')}`);
+    });
+    await workbench.open();
+    await workbench.click(target({}, ['data-ew-configure']));
+
+    expect(workbench.calls.map(({ channel }) => channel)).toEqual([
+      'expenseWorkbench.prepareOpen',
+      'expenseWorkbench.open',
+      'expenseWorkbench.status',
+      'expenseWorkbench.pickAndConfigure',
+    ]);
+    expect(workbench.renders.at(-1)).toContain('unconfigured');
+    expect(workbench.configBanner.hidden).toBe(false);
   });
 
   it('drops a page response that arrives after the workbench closes', async () => {
@@ -277,6 +377,32 @@ describe('expense workbench renderer lifecycle isolation', () => {
     expect(workbench.calls.filter(({ channel }) => channel === 'expenseWorkbench.invokeExternal')).toHaveLength(1);
 
     recovery.resolve(applicationState('APP-1'));
+    await Promise.all([firstClick, secondClick]);
+  });
+
+  it('coalesces repeated notification-retry clicks while the external operation is in flight', async () => {
+    const retry = deferred<JsonObject>();
+    const workbench = loadWorkbench(async (channel, payload) => {
+      if (channel === 'expenseWorkbench.status') return { ok: true, configured: true };
+      if (channel === 'expenseWorkbench.invoke' && payload.operation === 'applications.list') {
+        return { ok: true, applications: [{ application_id: 'APP-1' }] };
+      }
+      if (channel === 'expenseWorkbench.invoke' && payload.operation === 'applications.get') {
+        return { ...applicationState('APP-1'), feishu_notifications: [{ state: 'failed' }] };
+      }
+      if (channel === 'expenseWorkbench.invokeExternal' && payload.operation === 'applications.retryFeishuNotifications') {
+        return retry.promise;
+      }
+      throw new Error(`unexpected call: ${channel}:${String(payload.operation || '')}`);
+    });
+    await workbench.open();
+
+    const firstClick = workbench.click(target({ ewRetryFeishuNotifications: '' }));
+    const secondClick = workbench.click(target({ ewRetryFeishuNotifications: '' }));
+    await Promise.resolve();
+    expect(workbench.calls.filter(({ channel }) => channel === 'expenseWorkbench.invokeExternal')).toHaveLength(1);
+
+    retry.resolve(applicationState('APP-1'));
     await Promise.all([firstClick, secondClick]);
   });
 });

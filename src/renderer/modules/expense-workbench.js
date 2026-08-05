@@ -6,6 +6,38 @@
   let openEpoch = 0;
   let closing = Promise.resolve();
 
+  function stateTools() {
+    return window.expenseWorkbenchState || {
+      createState: (seed) => ({
+        page: 'assistant', pageEpoch: 0, applications: [], selectedId: '', selectedApplication: null,
+        precheck: null, reviews: [], audit: [], stats: null, settings: null, feishuPreflight: null,
+        assistantMessage: '', message: '', loading: false, error: null, conflict: null, recovery: null,
+        progress: null, busy: {}, ...(seed || {}),
+      }),
+      normalizeError: (error, fallback) => ({
+        code: error && error.code ? error.code : 'workbench_operation_failed',
+        message: error && error.message ? error.message : fallback,
+        retryable: !!(error && error.retryable),
+      }),
+      parseDraftText: (value) => {
+        try {
+          const parsed = JSON.parse(value);
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ok: false, message: '草稿必须是 JSON 对象。' };
+          if (!Array.isArray(parsed.expense_items) || parsed.expense_items.length === 0) return { ok: false, message: '至少填写一笔费用明细后再保存。' };
+          return { ok: true, value: parsed };
+        } catch (_) { return { ok: false, message: '草稿数据不是有效 JSON。' }; }
+      },
+    };
+  }
+
+  function setStateError(active, error, fallback) {
+    const tools = stateTools();
+    active.state.error = tools.normalizeError(error, fallback);
+    active.state.recovery = active.state.error.retryable
+      ? { code: active.state.error.code, action: 'retry', message: active.state.error.message }
+      : null;
+  }
+
   class StaleWorkbenchError extends Error {
     constructor() {
       super('报销工作台会话已关闭');
@@ -14,6 +46,14 @@
   }
 
   function markup() { return window.expenseWorkbenchMarkup; }
+
+  function uiText(key, fallback, replacements = {}) {
+    let value = markup().text(key, fallback);
+    for (const [name, replacement] of Object.entries(replacements)) {
+      value = value.replaceAll(`{${name}}`, String(replacement));
+    }
+    return value;
+  }
 
   function isActive(active) {
     return !!active && runtime === active && !active.closed;
@@ -27,7 +67,12 @@
     if (!isActive(active)) return Promise.reject(new StaleWorkbenchError());
     return window.orkas.expenseWorkbench.invoke(operation, payload || {}).then((response) => {
       assertActive(active);
-      if (!response || response.ok !== true) throw new Error(response && response.error ? response.error : '报销工作台调用失败');
+      if (!response || response.ok !== true) {
+        const details = response && response.error && typeof response.error === 'object' ? response.error : {};
+        const failure = new Error(details.message || response && response.error || uiText('invoke_failed', '报销工作台调用失败'));
+        Object.assign(failure, details);
+        throw failure;
+      }
       return response;
     });
   }
@@ -41,7 +86,12 @@
     if (!isActive(current)) return Promise.reject(new StaleWorkbenchError());
     return window.orkas.expenseWorkbench.invokeExternal(operation, payload || {}).then((response) => {
       assertActive(current);
-      if (!response || response.ok !== true) throw new Error(response && response.error ? response.error : '外部系统操作未完成');
+      if (!response || response.ok !== true) {
+        const details = response && response.error && typeof response.error === 'object' ? response.error : {};
+        const failure = new Error(details.message || response && response.error || uiText('external_operation_failed', '外部系统操作未完成'));
+        Object.assign(failure, details);
+        throw failure;
+      }
       return response;
     });
   }
@@ -58,6 +108,10 @@
     return runtime && runtime.state.selectedApplication;
   }
 
+  function hasConfiguredProject(active) {
+    return !!(active && active.projectStatus && active.projectStatus.configured === true);
+  }
+
   function renderPage(active) {
     const current = active || runtime;
     if (!isActive(current)) return;
@@ -65,15 +119,46 @@
     if (!target) return;
     const m = markup();
     const page = current.state.page;
-    if (page === 'assistant') target.innerHTML = m.assistant(current.state);
+    if (!hasConfiguredProject(current) && typeof m.unconfigured === 'function') target.innerHTML = m.unconfigured(current.state);
+    else if (page === 'assistant') target.innerHTML = m.assistant(current.state);
     else if (page === 'applications') target.innerHTML = m.applications(current.state);
     else if (page === 'precheck') target.innerHTML = m.precheck(current.state);
     else if (page === 'overview') target.innerHTML = m.overview(current.state);
     else if (page === 'reviews') target.innerHTML = m.reviews(current.state);
     else if (page === 'connections') target.innerHTML = m.connections(current.state);
     else if (page === 'audit') target.innerHTML = m.audit(current.state);
-    target.querySelectorAll('[data-ew-page]').forEach((button) => {
-      button.classList.toggle('is-active', button.dataset.ewPage === page);
+    if (typeof target.setAttribute === 'function') target.setAttribute('aria-busy', current.state.loading ? 'true' : 'false');
+    if (typeof target.dataset === 'object' && target.dataset) target.dataset.ewBusy = current.state.loading ? '1' : '0';
+    const progress = document.getElementById('ew-progress');
+    if (progress) {
+      const visible = !!(current.state.progress && current.state.progress.message);
+      progress.hidden = !visible;
+      progress.textContent = visible ? current.state.progress.message : '';
+      if (typeof progress.dataset === 'object' && progress.dataset) {
+        progress.dataset.status = visible ? (current.state.progress.status || 'running') : '';
+      }
+    }
+    const error = document.getElementById('ew-error');
+    if (error) {
+      const failure = current.state.error;
+      const code = failure && failure.code ? ` [${failure.code}]` : '';
+      error.hidden = !failure || !failure.message;
+      error.textContent = failure && failure.message
+        ? `${uiText('error_title', '操作失败')}：${failure.message}${code}`
+        : '';
+      if (typeof error.dataset === 'object' && error.dataset) {
+        error.dataset.retryable = failure && failure.retryable ? '1' : '0';
+      }
+    }
+    const surface = host();
+    const navigationButtons = surface && typeof surface.querySelectorAll === 'function'
+      ? surface.querySelectorAll('[data-ew-page]')
+      : [];
+    navigationButtons.forEach((button) => {
+      const selected = button.dataset.ewPage === page;
+      button.classList.toggle('is-active', selected);
+      if (selected) button.setAttribute('aria-current', 'page');
+      else button.removeAttribute('aria-current');
     });
   }
 
@@ -119,11 +204,18 @@
   async function loadPage(page, active) {
     const current = active || runtime;
     assertActive(current);
+    current.state.loading = true;
     const serial = beginRequest(current, 'page');
     current.state.page = page;
     current.state.message = '';
+    if (!hasConfiguredProject(current)) {
+      current.state.loading = false;
+      renderPage(current);
+      setHeader(uiText('unconfigured_header', '未配置项目'), current);
+      return;
+    }
     renderPage(current);
-    setHeader('加载中…', current);
+    setHeader(uiText('loading', '加载中…'), current);
     try {
       if (page === 'overview') {
         const response = await invoke('overview.stats', {}, current);
@@ -145,13 +237,17 @@
         await refreshApplications(undefined, current, serial);
         assertCurrentRequest(current, 'page', serial);
       }
+      current.state.loading = false;
+      current.state.error = null;
       renderPage(current);
-      setHeader(current.projectStatus.configured ? '已连接本地项目' : '未配置项目', current);
+      setHeader(current.projectStatus.configured ? uiText('configured_header', '已连接本地项目') : uiText('unconfigured_header', '未配置项目'), current);
     } catch (error) {
       if (error instanceof StaleWorkbenchError || !isActive(current)) return;
-      current.state.message = error && error.message ? error.message : '加载失败';
+      current.state.loading = false;
+      setStateError(current, error, uiText('load_failed', '加载失败'));
+      current.state.message = error && error.message ? error.message : uiText('load_failed', '加载失败');
       renderPage(current);
-      setHeader('需要检查', current);
+      setHeader(uiText('needs_attention', '需要检查'), current);
     }
   }
 
@@ -160,11 +256,16 @@
     if (!active) return;
     const response = await window.orkas.expenseWorkbench.configure();
     assertActive(active);
-    if (!response || response.ok !== true) throw new Error(response && response.error ? response.error : '项目配置失败');
+    if (!response || response.ok !== true) throw new Error(response && response.error ? response.error : uiText('configure_failed', '项目配置失败'));
     if (response.cancelled) return;
-    active.projectStatus = response;
+    active.projectStatus = response.configured === true ? response : { configured: false };
     const banner = document.getElementById('ew-config-banner');
-    if (banner) banner.hidden = true;
+    if (banner) banner.hidden = !hasConfiguredProject(active);
+    if (!hasConfiguredProject(active)) {
+      renderPage(active);
+      setHeader(uiText('unconfigured_header', '未配置项目'), active);
+      return;
+    }
     await loadPage(active.state.page, active);
   }
 
@@ -185,19 +286,9 @@
     const selected = selectedApplication();
     if (!selected || !selected.application) return;
     const editor = document.getElementById('ew-draft-json');
-    let payload;
-    try { payload = JSON.parse(editor ? editor.value : '{}'); }
-    catch (_) { throw new Error('草稿数据不是有效 JSON'); }
-    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('草稿必须是 JSON 对象');
-    if (!Array.isArray(payload.expense_items) || payload.expense_items.length === 0) {
-      throw new Error(markup().text('draft_missing_items', '至少填写一笔费用明细后再保存。'));
-    }
-    if (payload.expense_items.some((item) => (
-      !item || typeof item !== 'object' || Array.isArray(item)
-      || typeof item.amount !== 'number' || !Number.isFinite(item.amount) || item.amount <= 0
-    ))) {
-      throw new Error(markup().text('draft_invalid_amount', '每笔费用明细都必须包含大于 0 的金额。'));
-    }
+    const parsed = stateTools().parseDraftText(editor ? editor.value : '{}');
+    if (!parsed.ok) throw new Error(parsed.message || markup().text('draft_invalid_json', '草稿数据无效。'));
+    const payload = parsed.value;
     const draft = selected.draft || {};
     const response = await invoke('applications.draft', {
       application_id: selected.application.application_id,
@@ -208,7 +299,7 @@
       review_reasons: Array.isArray(draft.review_reasons) ? draft.review_reasons : [],
     }, active);
     active.state.selectedApplication = response;
-    active.state.message = '草稿已保存为新版本。';
+    active.state.message = uiText('draft_saved', '草稿已保存为新版本。');
     await refreshApplications(selected.application.application_id, active);
     renderPage(active);
   }
@@ -229,11 +320,11 @@
     const refs = Array.isArray(response.materials) ? response.materials : [];
     const failed = Array.isArray(response.failed) ? response.failed : [];
     const failureDetails = failed
-      .map((item) => `${String(item && item.name || markup().text('material_unnamed', '未命名材料'))}：${String(item && item.error || markup().text('material_add_failed', '登记失败'))}`)
-      .join('；');
+      .map((item) => `${String(item && item.name || uiText('material_unnamed', '未命名材料'))}: ${String(item && item.error || uiText('material_add_failed', '登记失败'))}`)
+      .join('; ');
     active.state.message = failed.length
-      ? `${refs.length} 项材料已登记，${failed.length} 项未登记。${failureDetails}`
-      : `${refs.length} 项材料已登记并绑定到新的草稿版本。`;
+      ? uiText('materials_partial', '{registered} 项材料已登记，{failed} 项未登记：{details}', { registered: refs.length, failed: failed.length, details: failureDetails })
+      : uiText('materials_added', '{count} 项材料已登记并绑定到新的草稿版本。', { count: refs.length });
     if (response.application) active.state.selectedApplication = response.application;
     await refreshApplications(selected.application.application_id, active);
     renderPage(active);
@@ -246,8 +337,46 @@
     if (!selected || !selected.application) return;
     const response = await invoke('applications.precheck', { application_id: selected.application.application_id }, active);
     active.state.precheck = response;
-    active.state.assistantMessage = response.status === 'ready' ? '当前版本预审通过，可以进入显式确认。' : '预审完成，仍有项目需要人工复核。';
+    active.state.assistantMessage = response.status === 'ready'
+      ? uiText('precheck_ready_message', '当前版本预审通过，可以进入显式确认。')
+      : uiText('precheck_review_message', '预审完成，仍有项目需要人工复核。');
     await loadApplication(selected.application.application_id, active);
+    renderPage(active);
+  }
+
+  async function decideApplication(decision, role) {
+    const active = runtime;
+    assertActive(active);
+    const selected = selectedApplication();
+    const app = selected && selected.application;
+    const approval = selected && selected.approval;
+    if (!app || !approval || !approval.can_decide || !approval.artifact_hash || !role) return;
+    const comment = typeof window.prompt === 'function'
+      ? (window.prompt(
+        decision === 'approve'
+          ? markup().text('approval_comment_prompt', '审批意见（可选）')
+          : markup().text('approval_reject_prompt', '驳回原因（必填）'),
+        '',
+      ) || '')
+      : '';
+    if (decision === 'reject' && !comment.trim()) {
+      throw new Error(markup().text('approval_reject_required', '驳回必须填写原因'));
+    }
+    const response = await window.orkas.expenseWorkbench.approveApplication(
+      app.application_id,
+      role,
+      decision,
+      approval.artifact_hash,
+      comment,
+    );
+    assertActive(active);
+    if (!response || response.ok === false) {
+      throw new Error(response && response.error ? response.error : markup().text('approval_failed', '人员审批未完成'));
+    }
+    active.state.message = decision === 'approve'
+      ? markup().text('approval_recorded', '人员审批已记录。')
+      : markup().text('approval_rejected', '人员审批已驳回。');
+    await loadApplication(app.application_id, active);
     renderPage(active);
   }
 
@@ -258,9 +387,9 @@
     if (!selected || !selected.application) return;
     const response = await invoke(action === 'precheck' ? 'assistant.propose' : 'assistant.inspect', {
       application_id: selected.application.application_id,
-      command: action === 'precheck' ? '同步材料并执行预审' : '检查当前申请',
+      command: action === 'precheck' ? uiText('assistant_precheck_command', '同步材料并执行预审') : uiText('assistant_inspect_command', '检查当前申请'),
     }, active);
-    active.state.assistantMessage = response.message || '已完成当前申请检查。';
+    active.state.assistantMessage = response.message || uiText('assistant_completed', '已完成当前申请检查。');
     if (response.precheck) active.state.precheck = response.precheck;
     await loadApplication(selected.application.application_id, active);
     renderPage(active);
@@ -281,7 +410,7 @@
       : window.confirm(markup().text('submit_confirm_short', '提交当前版本到飞书审批？'));
     assertActive(active);
     if (!confirmed) return;
-    setHeader('提交中…', active);
+    setHeader(uiText('submitting', '提交中…'), active);
     const response = await window.orkas.expenseWorkbench.confirmAndSubmit(
       app.application_id,
       Number(app.current_version || 0),
@@ -295,7 +424,7 @@
       : markup().text('confirmed_refresh', '已完成确认，提交状态需要刷新。');
     await refreshApplications(app.application_id, active);
     renderPage(active);
-    setHeader(markup().text('submitted_header', '已提交飞书审批'), active);
+    setHeader(uiText('submitted_header', '已提交飞书审批'), active);
   }
 
   async function refreshFeishuStatus() {
@@ -334,21 +463,38 @@
     assertActive(active);
     if (active.inFlight.has(key)) return;
     active.inFlight.add(key);
+    active.state.error = null;
+    active.state.conflict = null;
+    active.state.recovery = null;
+    const tools = stateTools();
+    if (typeof tools.setBusy === 'function') tools.setBusy(active.state, key, true);
+    if (typeof tools.setProgress === 'function') {
+      tools.setProgress(active.state, key, markup().text(`progress_${key}`, '正在处理当前操作…'), 'running');
+    }
+    renderPage(active);
     try {
       await operation();
     } finally {
       active.inFlight.delete(key);
+      if (typeof tools.setBusy === 'function') tools.setBusy(active.state, key, false);
+      if (typeof tools.setProgress === 'function') tools.setProgress(active.state, null, null, null);
+      if (isActive(active)) renderPage(active);
     }
   }
 
   async function handleClick(event) {
-    const target = event.target.closest('[data-ew-page],[data-ew-close],[data-ew-configure],[data-ew-create],[data-ew-refresh],[data-ew-application],[data-ew-save-draft],[data-ew-add-material],[data-ew-precheck],[data-ew-report],[data-ew-submit],[data-ew-submit-status],[data-ew-recover-submission],[data-ew-retry-feishu],[data-ew-assistant],[data-ew-settings-test]');
+    const target = event.target.closest('[data-ew-page],[data-ew-close],[data-ew-configure],[data-ew-create],[data-ew-refresh],[data-ew-application],[data-ew-save-draft],[data-ew-add-material],[data-ew-precheck],[data-ew-report],[data-ew-formal-report],[data-ew-submit],[data-ew-submit-status],[data-ew-recover-submission],[data-ew-retry-feishu],[data-ew-retry-feishu-notifications],[data-ew-approve],[data-ew-assistant],[data-ew-settings-test]');
     if (!target || !runtime) return;
     const active = runtime;
     try {
       if (target.hasAttribute('data-ew-close')) { closeExpenseWorkbench(); return; }
       if (target.hasAttribute('data-ew-configure')) { await runLocked(active, 'configure', configureProject); return; }
       if (target.dataset.ewPage) { await loadPage(target.dataset.ewPage, active); return; }
+      if (!hasConfiguredProject(active)) {
+        renderPage(active);
+        setHeader(uiText('unconfigured_header', '未配置项目'), active);
+        return;
+      }
       if (target.dataset.ewApplication) { await loadApplication(target.dataset.ewApplication, active); renderPage(active); return; }
       if (target.hasAttribute('data-ew-create')) { await runLocked(active, 'create', createApplication); return; }
       if (target.hasAttribute('data-ew-refresh')) { await loadPage(active.state.page, active); return; }
@@ -360,10 +506,30 @@
           const selected = selectedApplication();
           if (selected && selected.application) {
             const report = await invoke('applications.report', { application_id: selected.application.application_id, mode: 'draft' }, active);
-            active.state.message = report.status === 'draft' ? '草稿报告已生成。' : '报告操作完成。';
+            active.state.message = report.status === 'draft'
+              ? uiText('draft_report_generated', '草稿报告已生成。')
+              : uiText('report_completed', '报告操作完成。');
             renderPage(active);
           }
         });
+        return;
+      }
+      if (target.dataset.ewFormalReport !== undefined) {
+        await runLocked(active, 'formal-report', async () => {
+          const selected = selectedApplication();
+          if (selected && selected.application) {
+            const report = await invoke('applications.report', { application_id: selected.application.application_id, mode: 'formal' }, active);
+            active.state.message = report.status === 'formal'
+              ? markup().text('formal_report_generated', '正式报告已生成。')
+              : markup().text('formal_report_blocked', '正式报告未生成：{status}').replace('{status}', report.status || markup().text('gate_blocked', '闸门未通过'));
+            renderPage(active);
+          }
+        });
+        return;
+      }
+      if (target.dataset.ewApprove) {
+        const role = target.dataset.ewApprovalRole || '';
+        await runLocked(active, `approval-${role}`, () => decideApplication(target.dataset.ewApprove, role));
         return;
       }
       if (target.dataset.ewSubmit !== undefined) { await runLocked(active, 'submit', confirmAndSubmit); return; }
@@ -384,6 +550,14 @@
         ));
         return;
       }
+      if (target.dataset.ewRetryFeishuNotifications !== undefined) {
+        await runLocked(active, 'retry-feishu-notifications', () => runExternalApplicationOperation(
+          'applications.retryFeishuNotifications',
+          markup().text('retrying_feishu_notifications', '正在重试发送飞书通知…'),
+          markup().text('feishu_notifications_retried', '飞书通知重试已执行。'),
+        ));
+        return;
+      }
       if (target.dataset.ewAssistant) { await runLocked(active, 'assistant', () => assistantAction(target.dataset.ewAssistant)); return; }
       if (target.hasAttribute('data-ew-settings-test')) {
         await runLocked(active, 'settings-preflight', async () => {
@@ -395,7 +569,8 @@
       }
     } catch (error) {
       if (error instanceof StaleWorkbenchError || !isActive(active)) return;
-      active.state.message = error && error.message ? error.message : '操作失败';
+      setStateError(active, error, uiText('operation_failed', '操作失败'));
+      active.state.message = error && error.message ? error.message : uiText('operation_failed', '操作失败');
       renderPage(active);
     }
   }
@@ -441,7 +616,7 @@
     const active = {
       epoch: ++openEpoch,
       agentId,
-      state: { page: 'assistant', applications: [], selectedId: '', selectedApplication: null, precheck: null, reviews: [], audit: [], stats: null, settings: null, feishuPreflight: null, assistantMessage: '', message: '' },
+      state: stateTools().createState({ page: 'assistant' }),
       detailDisplay: detail ? detail.style.display : '',
       chatDisplay: chat ? chat.style.display : 'none',
       projectStatus: { configured: false },
@@ -466,7 +641,7 @@
       const banner = document.getElementById('ew-config-banner');
       if (banner) banner.hidden = !!active.projectStatus.configured;
       if (active.projectStatus.configured) await loadPage('assistant', active);
-      else { renderPage(active); setHeader('未配置项目', active); }
+      else { renderPage(active); setHeader(uiText('unconfigured_header', '未配置项目'), active); }
     } catch (error) {
       if (!hostOpened) {
         if (isActive(active)) closeExpenseWorkbench();
@@ -475,14 +650,20 @@
         throw error;
       }
       if (error instanceof StaleWorkbenchError || !isActive(active)) return;
-      active.state.message = error && error.message ? error.message : '无法读取项目配置';
+      setStateError(active, error, uiText('status_failed', '无法读取项目配置'));
+      active.state.message = error && error.message ? error.message : uiText('status_failed', '无法读取项目配置');
       const banner = document.getElementById('ew-config-banner');
       if (banner) banner.hidden = false;
       renderPage(active);
-      setHeader('需要配置', active);
+      setHeader(uiText('configure_required', '需要配置'), active);
     }
   }
 
   window.openExpenseWorkbench = openExpenseWorkbench;
   window.closeExpenseWorkbench = closeExpenseWorkbench;
+  if (typeof window.addEventListener === 'function') {
+    window.addEventListener('i18n-change', () => {
+      if (runtime && !runtime.closed) renderPage(runtime);
+    });
+  }
 }());
