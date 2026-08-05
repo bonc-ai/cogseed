@@ -94,6 +94,13 @@ function loadWorkbench(handler: InvokeHandler, options: { openError?: Error } = 
         invoke: (operation: string, payload: JsonObject) => Promise<JsonObject>;
         invokeExternal: (operation: string, payload: JsonObject) => Promise<JsonObject>;
         pickAndAddMaterials: (applicationId: string) => Promise<JsonObject>;
+        approveApplication: (
+          applicationId: string,
+          approvalRole: string,
+          decision: string,
+          expectedArtifactHash: string,
+          comment: string,
+        ) => Promise<JsonObject>;
         confirmAndSubmit: (applicationId: string, version: number, payloadHash: string) => Promise<JsonObject>;
         close: () => Promise<JsonObject>;
       };
@@ -124,6 +131,16 @@ function loadWorkbench(handler: InvokeHandler, options: { openError?: Error } = 
         pickAndAddMaterials: (applicationId) => record(
           'expenseWorkbench.pickAndAddMaterials',
           { application_id: applicationId },
+        ),
+        approveApplication: (applicationId, approvalRole, decision, expectedArtifactHash, comment) => record(
+          'expenseWorkbench.approveApplication',
+          {
+            application_id: applicationId,
+            approval_role: approvalRole,
+            decision,
+            expected_artifact_hash: expectedArtifactHash,
+            comment,
+          },
         ),
         confirmAndSubmit: (applicationId, version, payloadHash) => record(
           'expenseWorkbench.confirmAndSubmit',
@@ -378,6 +395,39 @@ describe('expense workbench renderer lifecycle isolation', () => {
 
     recovery.resolve(applicationState('APP-1'));
     await Promise.all([firstClick, secondClick]);
+  });
+
+  it('routes personnel approval through the dedicated capability facade', async () => {
+    const artifactHash = 'b'.repeat(64);
+    const workbench = loadWorkbench(async (channel, payload) => {
+      if (channel === 'expenseWorkbench.status') return { ok: true, configured: true };
+      if (channel === 'expenseWorkbench.invoke' && payload.operation === 'applications.list') {
+        return { ok: true, applications: [{ application_id: 'APP-1' }] };
+      }
+      if (channel === 'expenseWorkbench.invoke' && payload.operation === 'applications.get') {
+        return {
+          ...applicationState('APP-1'),
+          approval: { can_decide: true, artifact_hash: artifactHash, pending_roles: ['manager'] },
+        };
+      }
+      if (channel === 'expenseWorkbench.approveApplication') return { ok: true };
+      throw new Error(`unexpected call: ${channel}:${String(payload.operation || '')}`);
+    });
+    await workbench.open();
+
+    await workbench.click(target({ ewApprove: 'approve', ewApprovalRole: 'manager' }));
+
+    expect(workbench.calls.filter(({ channel }) => channel === 'expenseWorkbench.approveApplication'))
+      .toEqual([{
+        channel: 'expenseWorkbench.approveApplication',
+        payload: {
+          application_id: 'APP-1',
+          approval_role: 'manager',
+          decision: 'approve',
+          expected_artifact_hash: artifactHash,
+          comment: '',
+        },
+      }]);
   });
 
   it('coalesces repeated notification-retry clicks while the external operation is in flight', async () => {

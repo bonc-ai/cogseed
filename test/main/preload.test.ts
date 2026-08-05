@@ -133,6 +133,13 @@ function loadPreload(bootResponse: unknown = null) {
       prepareOpen: (agentId: string, gesture: string) => Promise<Record<string, unknown>>;
       open: (agentId: string) => Promise<Record<string, unknown>>;
       status: () => Promise<Record<string, unknown>>;
+      approveApplication: (
+        applicationId: string,
+        approvalRole: string,
+        decision: string,
+        expectedArtifactHash: string,
+        comment: string,
+      ) => Promise<Record<string, unknown>>;
       close: () => Promise<Record<string, unknown>>;
     };
   };
@@ -313,6 +320,39 @@ describe('preload bridge', () => {
         page_instance: PAGE_INSTANCE,
         request_nonce: expect.stringMatching(/^ewreq_[A-Za-z0-9_-]{8,96}$/),
         operation_scope: 'status',
+      },
+    });
+  });
+
+  it('binds personnel approval fields to the active expense capability envelope', async () => {
+    const preload = loadPreload();
+    await authorizeExpenseWorkbench(preload);
+    const artifactHash = 'b'.repeat(64);
+
+    await preload.api.expenseWorkbench.approveApplication(
+      'APP-1',
+      'manager',
+      'approve',
+      artifactHash,
+      'checked',
+    );
+
+    const approvalCall = preload.ipcRenderer.invoke.mock.calls.find(([channel, request]) => (
+      channel === 'orkas.invoke'
+      && (request as { channel?: string }).channel === 'expenseWorkbench.approveApplication'
+    ));
+    expect(approvalCall?.[1]).toEqual({
+      channel: 'expenseWorkbench.approveApplication',
+      payload: {
+        host_capability: HOST_CAPABILITY,
+        page_instance: PAGE_INSTANCE,
+        request_nonce: expect.stringMatching(/^ewreq_[A-Za-z0-9_-]{8,96}$/),
+        operation_scope: `approve:APP-1:manager:approve:${artifactHash}`,
+        application_id: 'APP-1',
+        approval_role: 'manager',
+        decision: 'approve',
+        expected_artifact_hash: artifactHash,
+        comment: 'checked',
       },
     });
   });
