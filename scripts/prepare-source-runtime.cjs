@@ -219,6 +219,9 @@ function prepareSourceRuntimeBundle(options = {}) {
   replacePlistString(plist, 'CFBundleName', identity.appName);
   replacePlistString(plist, 'CFBundleDisplayName', identity.appName);
   configureProtocols(plist, identity.protocolSchemes);
+  // Electron's distributed signature can be stale after the plist mutation.
+  // Removing it first lets ad-hoc signing rebuild every nested framework seal.
+  runChecked('codesign', ['--remove-signature', destination], 'remove source runtime signature');
   runChecked('codesign', ['--force', '--deep', '--sign', '-', destination], 'ad-hoc sign source runtime');
   fs.writeFileSync(`${destination}.runtime.json`, `${JSON.stringify({
     schema_version: 1,
