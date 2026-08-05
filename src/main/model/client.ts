@@ -81,6 +81,9 @@ export interface ChatExecutionLifecycle {
 export interface ChatOptions {
   userId: string;
   message: string;
+  /** Disable every builtin, injected, caller-supplied, and evolution tool.
+   * Used by bounded utility calls whose model output must remain text-only. */
+  disableTools?: boolean;
   sessionId?: string;
   /** Continue a verified failed active turn in the same persistent session.
    * Falls back to a normal new turn if no active turn remains. */

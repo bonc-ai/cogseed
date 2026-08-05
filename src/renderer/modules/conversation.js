@@ -8258,15 +8258,15 @@ function _syncBubbleReferenceActionState(msgDiv) {
 // Attach small action buttons below the bubble. Kept outside the bubble so
 // they never overlap content. `getContent` is a callback so it can return the
 // latest text after streaming completes.
-async function _openCognitionCaptureFromBubble(getContent, cognitionBtn) {
-  const text = typeof getContent === 'function' ? (getContent() || '') : '';
-  if (!cognitionBtn || !text.trim() || cognitionBtn.disabled) return false;
+async function _openCognitionCaptureFromBubble(msgDiv, getContent, cognitionBtn) {
+  const text = typeof getContent === 'function' ? String(getContent() || '') : '';
+  const messageId = String(msgDiv?.dataset?.msgId || '').trim();
+  if (!cognitionBtn || !text.trim() || !messageId || cognitionBtn.disabled) return false;
 
   // The feature can load after the user has navigated elsewhere. Preserve the
   // source task at click time so the evidence is never attributed to that
   // later task.
   const sourceCid = currentCid;
-  const sourceLabel = _conversationTitleForCid(sourceCid);
   const loader = typeof loadRendererFeature === 'function'
     ? loadRendererFeature
     : window.loadRendererFeature;
@@ -8283,9 +8283,8 @@ async function _openCognitionCaptureFromBubble(getContent, cognitionBtn) {
   if (typeof window.openCognitionCapture !== 'function') return false;
   try {
     return window.openCognitionCapture({
-      summary: text,
-      sourceLabel,
       conversationId: sourceCid,
+      messageId,
     }) !== false;
   } catch (error) {
     _convLog.warn('cognition capture open failed', { error: error?.message || String(error) });
@@ -8388,7 +8387,7 @@ function _attachBubbleActions(msgDiv, getContent, opts = {}) {
   });
   cognitionBtn?.addEventListener('click', (e) => {
     e.stopPropagation();
-    void _openCognitionCaptureFromBubble(getContent, cognitionBtn);
+    void _openCognitionCaptureFromBubble(msgDiv, getContent, cognitionBtn);
   });
   copyBtn?.addEventListener('click', async (e) => {
     e.stopPropagation();

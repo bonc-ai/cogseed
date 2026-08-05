@@ -13,11 +13,13 @@ const pages = require('../../src/renderer/modules/cognition/pages.js') as {
     view?: string;
   }) => string;
   renderCognitionCapture: (input: {
+    state?: 'loading' | 'ready' | 'error';
     title: string;
     summary: string;
     evidence?: string;
     sourceLabel: string;
     conversationId: string;
+    error?: string;
   }) => string;
   escapeHtml: (value: string) => string;
 };
@@ -40,6 +42,24 @@ const asset = {
 };
 
 describe('cognition pages', () => {
+  it('shows generation progress before exposing editable model output', () => {
+    const loading = pages.renderCognitionCapture({
+      state: 'loading', title: '', summary: '', evidence: '', sourceLabel: '', conversationId: 'conv_1',
+    });
+    expect(loading).toContain('data-cognition-capture-status');
+    expect(loading).toContain('正在从会话中提炼可复用认知');
+    expect(loading).not.toContain('data-cognition-capture-submit');
+
+    const ready = pages.renderCognitionCapture({
+      state: 'ready', title: '模型生成名称', summary: '模型生成方法', evidence: '模型生成证据',
+      sourceLabel: '当前会话', conversationId: 'conv_1',
+    });
+    expect(ready).toContain('模型生成名称');
+    expect(ready).toContain('模型生成方法');
+    expect(ready).toContain('模型生成证据');
+    expect(ready).toContain('data-cognition-capture-submit');
+  });
+
   it('摘要列表可渲染成长树，但完整详情未加载前不冒充零证据', () => {
     const html = pages.renderCognitionPage({ assets: [summary], activeId: summary.id, view: 'tree' });
     expect(html).toContain('data-cognition-growth-visual');
@@ -55,6 +75,28 @@ describe('cognition pages', () => {
     expect(html).toContain('用户要求先调研，再确认方案');
     expect(html).toContain('data-cognition-action="confirm"');
     expect(html).toContain('长期记忆');
+  });
+
+  it('成长记录页展示结构化生命周期轨迹并保留失效原因', () => {
+    const html = pages.renderCognitionPage({
+      assets: [{ ...summary, stage: 'growing', reviewState: 'confirmed' }],
+      activeAsset: {
+        ...asset,
+        stage: 'growing',
+        reviewState: 'confirmed',
+        transitions: [
+          { id: 'tr_1', kind: 'created', at: '2026-08-03T09:00:00' },
+          { id: 'tr_2', kind: 'evidence_added', at: '2026-08-03T09:01:00' },
+          { id: 'tr_3', kind: 'confirmed', at: '2026-08-03T09:02:00' },
+          { id: 'tr_4', kind: 'invalidated', at: '2026-08-03T09:03:00', reason: 'content_changed' },
+        ],
+      },
+      view: 'history',
+    });
+    expect(html).toContain('生命周期记录');
+    expect(html).toContain('创建认知候选');
+    expect(html).toContain('确认并写入长期记忆');
+    expect(html).toContain('长期记忆内容与这项认知已不一致');
   });
 
   it('详情请求进行中显示加载态而不是错误态', () => {
@@ -154,6 +196,18 @@ describe('cognition pages', () => {
         'cognition.invalidated.reason.replaced',
         'cognition.invalidated.reason.content_changed',
         'cognition.invalidated.reason.metadata_missing',
+        'cognition.section.history',
+        'cognition.history.empty',
+        'cognition.transition.created',
+        'cognition.transition.evidence_added',
+        'cognition.transition.confirmation_requested',
+        'cognition.transition.defer_requested',
+        'cognition.transition.confirmed',
+        'cognition.transition.reconfirmed',
+        'cognition.transition.deferred',
+        'cognition.transition.reused',
+        'cognition.transition.invalidated',
+        'cognition.transition.unknown',
         'cognition.pagination.previous',
         'cognition.pagination.next',
       ]) expect(strings[key]).toBeTruthy();

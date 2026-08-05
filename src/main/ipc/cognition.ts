@@ -1,4 +1,5 @@
 import * as cognition from '../features/cognition';
+import { generateCognitionDraft } from '../features/cognition/capture-draft';
 import type {
   CognitionEvidenceInput,
   CognitionEvidenceKind,
@@ -20,6 +21,13 @@ function optionalId(value: unknown, field: string): string | undefined {
   if (value === undefined || value === null || value === '') return undefined;
   if (!safeId(value)) throw new Error(`invalid cognition ${field}`);
   return value as string;
+}
+
+function requiredId(value: unknown, field: string): string {
+  if (!safeId(value) || typeof value !== 'string' || value.length > 160) {
+    throw new Error(`invalid cognition ${field}`);
+  }
+  return value;
 }
 
 function assetId(payload: Payload): string {
@@ -75,6 +83,12 @@ function reuseInput(payload: Payload): cognition.CognitionReuseInput {
 }
 
 export const invokeHandlers = {
+  'cognition.capture.draft': async (payload: Payload, ctx: IpcContext) => {
+    const conversationId = requiredId(payload.conversationId, 'conversation id');
+    const messageId = requiredId(payload.messageId, 'message id');
+    return generateCognitionDraft(ctx.userId, { conversationId, messageId });
+  },
+
   'cognition.assets.list': async (_payload: Payload, ctx: IpcContext) => ({
     assets: await cognition.listCognitionAssets(ctx.userId),
   }),

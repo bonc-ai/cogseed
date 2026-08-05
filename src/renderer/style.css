@@ -17039,19 +17039,28 @@ body.model-not-configured .main-content { flex-direction: column; }
 #panel-personal-ontology .cognition-invalidated p { margin: 6px 0; font-size: 12px; line-height: 1.55; }
 #panel-personal-ontology .cognition-invalidated span { font-size: 11px; line-height: 1.5; }
 #panel-personal-ontology .cognition-evidence-list,
-#panel-personal-ontology .cognition-reuse-list { margin: 0; padding: 0 0 0 18px; border-left: 2px solid #b8d7c5; list-style: none; }
+#panel-personal-ontology .cognition-reuse-list,
+#panel-personal-ontology .cognition-history-list { margin: 0; padding: 0 0 0 18px; border-left: 2px solid #b8d7c5; list-style: none; }
 #panel-personal-ontology .cognition-evidence-list li,
-#panel-personal-ontology .cognition-reuse-list li { position: relative; padding: 0 0 13px 0; }
+#panel-personal-ontology .cognition-reuse-list li,
+#panel-personal-ontology .cognition-history-list li { position: relative; padding: 0 0 13px 0; }
 #panel-personal-ontology .cognition-evidence-list li::before,
-#panel-personal-ontology .cognition-reuse-list li::before { position: absolute; left: -23px; top: 3px; width: 7px; height: 7px; border: 2px solid #fff; border-radius: 50%; background: var(--cog-green); box-shadow: 0 0 0 1px #b8d7c5; content: ''; }
+#panel-personal-ontology .cognition-reuse-list li::before,
+#panel-personal-ontology .cognition-history-list li::before { position: absolute; left: -23px; top: 3px; width: 7px; height: 7px; border: 2px solid #fff; border-radius: 50%; background: var(--cog-green); box-shadow: 0 0 0 1px #b8d7c5; content: ''; }
 #panel-personal-ontology .cognition-evidence-list strong,
 #panel-personal-ontology .cognition-reuse-list strong,
+#panel-personal-ontology .cognition-history-list strong,
 #panel-personal-ontology .cognition-evidence-list span,
-#panel-personal-ontology .cognition-reuse-list span { display: block; }
+#panel-personal-ontology .cognition-reuse-list span,
+#panel-personal-ontology .cognition-history-list span,
+#panel-personal-ontology .cognition-history-list time { display: block; }
 #panel-personal-ontology .cognition-evidence-list strong,
-#panel-personal-ontology .cognition-reuse-list strong { font-size: 13px; font-weight: 500; line-height: 1.5; }
+#panel-personal-ontology .cognition-reuse-list strong,
+#panel-personal-ontology .cognition-history-list strong { font-size: 13px; font-weight: 500; line-height: 1.5; }
 #panel-personal-ontology .cognition-evidence-list span,
-#panel-personal-ontology .cognition-reuse-list span { margin-top: 4px; color: var(--cog-muted); font-size: 11px; }
+#panel-personal-ontology .cognition-reuse-list span,
+#panel-personal-ontology .cognition-history-list span,
+#panel-personal-ontology .cognition-history-list time { margin-top: 4px; color: var(--cog-muted); font-size: 11px; }
 #panel-personal-ontology .cognition-empty,
 #panel-personal-ontology .cognition-empty-page,
 #panel-personal-ontology .cognition-empty-inline { color: var(--cog-muted); font-size: 13px; line-height: 1.6; }
@@ -17084,8 +17093,11 @@ body.model-not-configured .main-content { flex-direction: column; }
 .cognition-capture-header span { margin-top: 5px; color: #66778d; font-size: 12px; line-height: 1.5; }
 .cognition-capture-close { border: 0; background: transparent; color: #66778d; cursor: pointer; font-size: 22px; line-height: 1; padding: 0 2px; }
 .cognition-capture-body { display: grid; gap: 13px; padding: 18px 20px 6px; }
+.cognition-capture-status { margin: 0; border-left: 3px solid #277b5d; background: #eef8f2; color: #276148; padding: 9px 11px; font-size: 12px; line-height: 1.5; }
+.cognition-capture-status-error { border-left-color: #b34a4a; background: #fff3f3; color: #9b3a3a; }
 .cognition-capture-body label { display: grid; gap: 6px; color: #66778d; font-size: 12px; }
 .cognition-capture-body input, .cognition-capture-body textarea { width: 100%; border: 1px solid #d9e1e8; border-radius: 5px; background: #fff; color: #17263b; padding: 9px 10px; font: inherit; font-size: 13px; }
+.cognition-capture-body input:disabled, .cognition-capture-body textarea:disabled { background: #f5f7f9; color: #8a98a8; cursor: wait; }
 .cognition-capture-body textarea { min-height: 74px; resize: vertical; line-height: 1.55; }
 .cognition-capture-body input:focus, .cognition-capture-body textarea:focus { outline: none; border-color: #277b5d; box-shadow: 0 0 0 3px rgba(39,123,93,.12); }
 .cognition-capture-note { margin: 0; border-left: 3px solid #b97816; background: #fff8e8; color: #7b5b25; padding: 9px 11px; font-size: 12px; line-height: 1.5; }
