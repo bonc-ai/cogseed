@@ -167,6 +167,43 @@
     }).join('') + '</ol>';
   }
 
+  function transitionLabel(kind) {
+    const labels = {
+      created: text('cognition.transition.created', '创建认知候选'),
+      evidence_added: text('cognition.transition.evidence_added', '补充来源证据'),
+      confirmation_requested: text('cognition.transition.confirmation_requested', '发起长期记忆确认'),
+      defer_requested: text('cognition.transition.defer_requested', '发起暂缓确认'),
+      confirmed: text('cognition.transition.confirmed', '确认并写入长期记忆'),
+      reconfirmed: text('cognition.transition.reconfirmed', '重新确认并恢复长期记忆'),
+      deferred: text('cognition.transition.deferred', '暂缓确认'),
+      reused: text('cognition.transition.reused', '记录一次复用'),
+      invalidated: text('cognition.transition.invalidated', '长期记忆关联失效'),
+    };
+    return labels[kind] || text('cognition.transition.unknown', '生命周期状态更新');
+  }
+
+  function transitionDetail(transition) {
+    if (transition.kind !== 'invalidated') return '';
+    const reasons = {
+      removed: text('cognition.invalidated.reason.removed', '对应的长期记忆已被删除。'),
+      replaced: text('cognition.invalidated.reason.replaced', '对应的长期记忆已被其他内容替换。'),
+      content_changed: text('cognition.invalidated.reason.content_changed', '长期记忆内容与这项认知已不一致。'),
+      metadata_missing: text('cognition.invalidated.reason.metadata_missing', '长期记忆的关联信息缺失或损坏。'),
+    };
+    return reasons[transition.reason] || text('cognition.invalidated.reason.unknown', '长期记忆关联已失效。');
+  }
+
+  function renderTransitions(asset) {
+    const transitions = Array.isArray(asset.transitions) ? asset.transitions : [];
+    if (!transitions.length) return `<div class="cognition-empty-inline">${escapeHtml(text('cognition.history.empty', '还没有生命周期记录'))}</div>`;
+    return '<ol class="cognition-history-list">' + transitions.slice().reverse().map((transition) => {
+      const date = new Date(transition.at);
+      const label = Number.isNaN(date.getTime()) ? transition.at : date.toLocaleString();
+      const detail = transitionDetail(transition);
+      return `<li><strong>${escapeHtml(transitionLabel(transition.kind))}</strong><time datetime="${escapeHtml(transition.at)}">${escapeHtml(label)}</time>${detail ? `<span>${escapeHtml(detail)}</span>` : ''}</li>`;
+    }).join('') + '</ol>';
+  }
+
   function renderActions(asset) {
     const evidence = Array.isArray(asset.evidence) ? asset.evidence : [];
     if (asset.reviewState === 'confirmed') {
@@ -204,35 +241,46 @@
   }
 
   function renderCognitionCapture(input) {
+    const state = input?.state === 'loading' || input?.state === 'error' ? input.state : 'ready';
+    const loading = state === 'loading';
+    const error = String(input?.error || '').trim();
     const title = String(input?.title || '').trim();
     const summary = String(input?.summary || '').trim();
     const evidence = String(input?.evidence || '').trim();
     const sourceLabel = String(input?.sourceLabel || '').trim();
     const conversationId = String(input?.conversationId || '').trim();
+    const disabled = state !== 'ready' ? ' disabled' : '';
+    const status = loading
+      ? `<p class="cognition-capture-status" data-cognition-capture-status aria-live="polite">${escapeHtml(text('cognition.capture.generating', '正在从会话中提炼可复用认知…'))}</p>`
+      : (state === 'error'
+        ? `<p class="cognition-capture-status cognition-capture-status-error" data-cognition-capture-status role="alert">${escapeHtml(error || text('cognition.capture.generation_failed', '认知草稿生成失败，请稍后重试。'))}</p>`
+        : `<p class="cognition-capture-status" data-cognition-capture-status>${escapeHtml(text('cognition.capture.generated', '以下内容由模型生成，可编辑后保存。'))}</p>`);
+    const actions = loading || state === 'error'
+      ? `<button type="button" class="btn" data-cognition-capture-cancel>${escapeHtml(text('cognition.action.cancel', '取消'))}</button>`
+      : `<button type="button" class="btn" data-cognition-capture-cancel>${escapeHtml(text('cognition.action.cancel', '取消'))}</button><button type="submit" class="btn btn-primary" data-cognition-capture-submit>${escapeHtml(text('cognition.capture.submit', '保存待确认认知'))}</button>`;
     return '<div class="cognition-capture-overlay" data-cognition-capture-overlay>'
-      + '<form class="cognition-capture-modal" data-cognition-capture-form role="dialog" aria-modal="true">'
+      + `<form class="cognition-capture-modal" data-cognition-capture-form role="dialog" aria-modal="true" aria-busy="${loading ? 'true' : 'false'}">`
       + '<div class="cognition-capture-header"><div>'
       + '<strong>' + escapeHtml(text('cognition.capture.title', '沉淀为认知')) + '</strong>'
-      + '<span>' + escapeHtml(text('cognition.capture.subtitle', '把这次有效做法保存为待确认候选。')) + '</span>'
+      + `<span>${escapeHtml(loading ? text('cognition.capture.subtitle_generating', '正在生成候选草稿。') : text('cognition.capture.subtitle', '把这次有效做法保存为待确认候选。'))}</span>`
       + '</div>'
       + '<button type="button" class="cognition-capture-close" data-cognition-capture-cancel aria-label="'
       + escapeHtml(text('common.close', 'Close')) + '">x</button>'
       + '</div>'
       + '<div class="cognition-capture-body">'
+      + status
       + '<label>' + escapeHtml(text('cognition.capture.name', '认知名称')) + '<input data-cognition-capture-title maxlength="120" required value="'
-      + escapeHtml(title) + '" /></label>'
-      + '<label>' + escapeHtml(text('cognition.capture.summary', '可复用的工作方式')) + '<textarea data-cognition-capture-summary maxlength="2000" required>'
-      + escapeHtml(summary) + '</textarea></label>'
-      + '<label>' + escapeHtml(text('cognition.capture.evidence', '本次证据')) + '<textarea data-cognition-capture-evidence maxlength="2000" required>'
+      + escapeHtml(title) + `"${disabled} /></label>`
+      + '<label>' + escapeHtml(text('cognition.capture.summary', '可复用的工作方式')) + `<textarea data-cognition-capture-summary maxlength="2000" required${disabled}>`
+      + `${escapeHtml(summary)}</textarea></label>`
+      + '<label>' + escapeHtml(text('cognition.capture.evidence', '本次证据')) + `<textarea data-cognition-capture-evidence maxlength="2000" required${disabled}>`
       + escapeHtml(evidence) + '</textarea></label>'
       + '<label>' + escapeHtml(text('cognition.capture.source', '来源')) + '<input data-cognition-capture-source maxlength="160" required value="'
-      + escapeHtml(sourceLabel) + '" /></label>'
+      + escapeHtml(sourceLabel) + `"${disabled} /></label>`
       + '<input type="hidden" data-cognition-capture-conversation value="' + escapeHtml(conversationId) + '" />'
       + '<p class="cognition-capture-note">' + escapeHtml(text('cognition.capture.note', '保存后会进入待确认列表；确认会将它写入长期记忆。')) + '</p>'
       + '</div>'
-      + '<div class="cognition-capture-actions"><button type="button" class="btn" data-cognition-capture-cancel>'
-      + escapeHtml(text('cognition.action.cancel', '取消')) + '</button><button type="submit" class="btn btn-primary" data-cognition-capture-submit>'
-      + escapeHtml(text('cognition.capture.submit', '保存待确认认知')) + '</button></div>'
+      + `<div class="cognition-capture-actions">${actions}</div>`
       + '</form>'
       + '</div>';
   }
@@ -280,6 +328,8 @@
       + `<div><strong>${reuseEvents.length}</strong><span>${escapeHtml(text('cognition.metric.reuse', '复用次数'))}</span></div>`
       + '</div>'
       + `<div class="cognition-detail-section"><h3>${escapeHtml(text('cognition.section.evidence', '推动成长的证据'))}</h3>${renderEvidence(asset)}</div>`
+      + (view === 'history'
+        ? `<div class="cognition-detail-section"><h3>${escapeHtml(text('cognition.section.history', '生命周期记录'))}</h3>${renderTransitions(asset)}</div>` : '')
       + (asset.reviewState !== 'invalidated' && (view === 'history' || asset.reviewState === 'confirmed')
         ? `<div class="cognition-detail-section"><h3>${escapeHtml(text('cognition.section.reuse', '复用记录'))}</h3>${renderReuseEvents(asset)}</div>` : '')
       + renderActions(asset)

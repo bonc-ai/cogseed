@@ -168,6 +168,38 @@ describe('cognition store', () => {
     await expect(listCognitionAssets(uid)).rejects.toThrow('deferred cognition asset has pending confirmation');
   });
 
+  it('拒绝缺失证据或复用覆盖的生命周期事件', async () => {
+    const created = await createCognitionAssetWithEvidence(uid, {
+      title: '不完整轨迹',
+      summary: '证据事件必须与实体一一对应。',
+      evidence,
+    });
+    const store = JSON.parse(await fs.readFile(cognitionFile, 'utf8')) as {
+      assets: Array<{ transitions: Array<Record<string, unknown>> }>;
+    };
+    store.assets[0].transitions = store.assets[0].transitions
+      .filter((transition) => transition.kind !== 'evidence_added');
+    await fs.writeFile(cognitionFile, JSON.stringify(store), 'utf8');
+
+    await expect(listCognitionAssets(uid)).rejects.toThrow('evidence transition coverage is incomplete');
+    expect(created.id).toBeTruthy();
+  });
+
+  it('拒绝时间倒序或创建时间不匹配的生命周期事件', async () => {
+    await createCognitionAssetWithEvidence(uid, {
+      title: '乱序轨迹',
+      summary: '生命周期时间必须保持非递减顺序。',
+      evidence,
+    });
+    const store = JSON.parse(await fs.readFile(cognitionFile, 'utf8')) as {
+      assets: Array<{ createdAt?: string; transitions: Array<Record<string, unknown>> }>;
+    };
+    store.assets[0].transitions[0].at = '2026-08-03T12:00:01';
+    await fs.writeFile(cognitionFile, JSON.stringify(store), 'utf8');
+
+    await expect(listCognitionAssets(uid)).rejects.toThrow('matching created transition');
+  });
+
   it('迁移 v1 已确认资产时，没有稳定来源 metadata 则保守失效并要求重新确认', async () => {
     const timestamp = '2026-08-03T12:00:00';
     const legacySummary = '旧版已确认认知的正文。';
@@ -202,12 +234,41 @@ describe('cognition store', () => {
     expect(migrated.reviewState).toBe('invalidated');
     expect(migrated.stage).toBe('sprout');
     expect(migrated.invalidation?.reason).toBe('metadata_missing');
+    expect(migrated.transitions.map((item) => item.kind)).toEqual([
+      'created', 'evidence_added', 'confirmed', 'invalidated',
+    ]);
     expect(migrated.memoryBinding).toBeUndefined();
     expect(listMemoryEntries(uid, 'memory').entries).toEqual([legacySummary]);
     expect(JSON.parse(await fs.readFile(cognitionFile, 'utf8'))).toMatchObject({
-      version: 2,
+      version: 3,
       assets: [{ reviewState: 'invalidated' }],
     });
+  });
+
+  it('记录完整的生命周期轨迹，并在失效后重新确认时追加而不是覆盖历史', async () => {
+    const candidate = await createCognitionAssetWithEvidence(uid, {
+      title: '生命周期审计',
+      summary: '认知状态的每次关键转移都必须可追溯。',
+      evidence,
+    });
+    expect(candidate.transitions.map((item) => item.kind)).toEqual(['created', 'evidence_added']);
+
+    await confirmCognitionAsset(uid, candidate.id);
+    await recordCognitionReuse(uid, candidate.id, { sourceLabel: '审计回归任务' });
+
+    const memory = await import('../../../../src/main/features/memory');
+    const removed = memory.removeEntry(uid, 'memory', candidate.summary);
+    await invalidateCognitionMemorySources(uid, removed.detachedCognitionSourceIds || [], 'removed');
+    await confirmCognitionAsset(uid, candidate.id);
+
+    const [stored] = await listCognitionAssets(uid);
+    expect(stored.transitions.map((item) => item.kind)).toEqual([
+      'created', 'evidence_added', 'confirmation_requested', 'confirmed',
+      'reused', 'invalidated', 'confirmation_requested', 'reconfirmed',
+    ]);
+    expect(stored.transitions.at(-2)?.kind).toBe('confirmation_requested');
+    expect(stored.transitions.at(-1)?.kind).toBe('reconfirmed');
+    expect(new Set(stored.transitions.map((item) => item.id)).size).toBe(stored.transitions.length);
   });
 
   it('拒绝会解析到数据根目录之外或共享目录的 UID', async () => {
@@ -330,6 +391,9 @@ describe('cognition store', () => {
     const deferred = await deferCognitionAsset(uid, created.id);
     expect(deferred.reviewState).toBe('deferred');
     expect(deferred.evidence).toHaveLength(1);
+    expect(deferred.transitions.map((item) => item.kind)).toEqual([
+      'created', 'evidence_added', 'defer_requested', 'deferred',
+    ]);
 
     const confirmed = await confirmCognitionAsset(uid, created.id);
     expect(confirmed.reviewState).toBe('confirmed');
@@ -513,6 +577,10 @@ describe('cognition store', () => {
     confirmed.reviewState = 'invalidated';
     confirmed.stage = 'sprout';
     confirmed.invalidation = { at: requestedAt, reason: 'removed' };
+    confirmed.transitions = [
+      ...(confirmed.transitions as Array<Record<string, unknown>>),
+      { id: 'transition_test_invalidated', kind: 'invalidated', at: requestedAt, reason: 'removed' },
+    ];
     delete confirmed.memoryBinding;
     await fs.writeFile(cognitionFile, JSON.stringify(confirmedStore), 'utf8');
 
@@ -526,6 +594,13 @@ describe('cognition store', () => {
 
     storageMocks.writeJson.mockReset();
     storageMocks.writeJson.mockImplementation(actualStorage.writeJson);
+    const [recovered] = await listCognitionAssets(uid);
+    expect(recovered.reviewState).toBe('deferred');
+    expect(recovered.transitions.map((item) => item.kind)).toEqual([
+      'created', 'evidence_added', 'confirmation_requested', 'confirmed',
+      'invalidated', 'defer_requested', 'deferred',
+    ]);
+
     const deferred = await deferCognitionAsset(uid, candidate.id);
     expect(deferred.reviewState).toBe('deferred');
     expect(listMemoryEntries(uid, 'memory').entries).toEqual([]);
@@ -578,6 +653,25 @@ describe('cognition store', () => {
     expect(reconfirmed.reviewState).toBe('confirmed');
     expect(reconfirmed.invalidation).toBeUndefined();
     expect(listMemoryEntries(uid, 'memory').entries).toEqual([candidate.summary]);
+  });
+
+  it('已复用的认知暂缓后可在失效状态中恢复并追加重新确认轨迹', async () => {
+    const candidate = await createCognitionAssetWithEvidence(uid, {
+      title: '暂缓后恢复',
+      summary: '已失效且暂缓的认知可以重新确认。',
+      evidence,
+    });
+    await confirmCognitionAsset(uid, candidate.id);
+    await recordCognitionReuse(uid, candidate.id, { sourceLabel: '恢复前复用' });
+    const memory = await import('../../../../src/main/features/memory');
+    const removed = memory.removeEntry(uid, 'memory', candidate.summary);
+    await invalidateCognitionMemorySources(uid, removed.detachedCognitionSourceIds || [], 'removed');
+    await deferCognitionAsset(uid, candidate.id);
+
+    const reconfirmed = await confirmCognitionAsset(uid, candidate.id);
+    expect(reconfirmed.reviewState).toBe('confirmed');
+    expect(reconfirmed.transitions.at(-2)?.kind).toBe('confirmation_requested');
+    expect(reconfirmed.transitions.at(-1)?.kind).toBe('reconfirmed');
   });
 
   it('替换成已有认知来源正文时拒绝去重，且原文件字节不变', async () => {

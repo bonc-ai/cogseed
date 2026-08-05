@@ -176,6 +176,8 @@ function _intersectRenderAllowlist(
 
 export interface BuildRunnerParams {
   sessionId: string;
+  /** Disable all SDK and host tools for text-only utility calls. */
+  disableTools?: boolean;
   systemPrompt?: string;
   userId?: string;
   /** Conversation id. Used by file-tools to scope read_file / search_file
@@ -832,9 +834,11 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // never reach another actor's tools[] regardless of which injection path
   // produced it. Caller-supplied extraTools / core-agent builtins aren't in the
   // catalog, so `isToolVisibleToAgent` returns true for them (unaffected).
-  const visibleTools = allTools.filter((tool) => isToolVisibleToAgent(tool.name, agentId));
+  const visibleTools = params.disableTools
+    ? []
+    : allTools.filter((tool) => isToolVisibleToAgent(tool.name, agentId));
   const visibleToolNameSet = new Set(visibleTools.map((tool) => tool.name));
-  const builtinTools = mod.getBuiltinTools();
+  const builtinTools = params.disableTools ? [] : mod.getBuiltinTools();
 
   // Apply one simple 8K per-result policy at AgentRunner's FINAL result
   // boundary. Keeping this as a result transformer (instead of pre-wrapping
@@ -1088,7 +1092,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     config,
     providers,
     session,
-    ...(visibleTools.length ? { tools: visibleTools } : {}),
+    ...(params.disableTools ? { disableTools: true } : (visibleTools.length ? { tools: visibleTools } : {})),
     ...(transformToolResult ? { transformToolResult } : {}),
     ...(toolResultsDir ? { toolContextState: { toolResultSpoolDir: toolResultsDir } } : {}),
     ...(params.skillList !== undefined ? { skillAllowlist: params.skillList } : {}),

@@ -46,6 +46,21 @@ vi.mock('../../../src/main/features/cognition', () => ({
   recordCognitionReuse: vi.fn(async (_uid: string, assetId: string) => ({ id: assetId, title: '认知', stage: 'bright' })),
 }));
 
+vi.mock('../../../src/main/features/cognition/capture-draft', () => ({
+  generateCognitionDraft: vi.fn(async (_uid: string, request: { conversationId: string; messageId: string }) => ({
+    status: 'ready',
+    draft: {
+      title: '模型草稿',
+      summary: '可复用方法',
+      evidenceSummary: '本次证据',
+      sourceLabel: '当前会话',
+      conversationId: request.conversationId,
+      messageId: request.messageId,
+    },
+    context: { messageCount: 3, characterCount: 100 },
+  })),
+}));
+
 beforeEach(async () => {
   process.env.ORKAS_WORKSPACE_ROOT = os.tmpdir();
   invokeHandler = null;
@@ -68,6 +83,17 @@ function call(channel: string, payload: unknown = {}): Promise<InvokeResult> {
 }
 
 describe('ipc cognition channels', () => {
+  it('只接受会话和消息 ID，并把生成请求交给主进程 feature', async () => {
+    expect((await call('cognition.capture.draft', { conversationId: 'conv_1' })).ok).toBe(false);
+    const result = await call('cognition.capture.draft', {
+      conversationId: 'conv_1',
+      messageId: 'msg_2',
+      text: 'renderer 不应提交对话正文',
+    });
+    expect(result.ok).toBe(true);
+    expect(result.draft).toEqual(expect.objectContaining({ conversationId: 'conv_1', messageId: 'msg_2' }));
+  });
+
   it('列表与创建使用当前用户，并校验必填文本', async () => {
     expect((await call('cognition.assets.list')).assets).toEqual([
       expect.objectContaining({ id: 'cog_1' }),

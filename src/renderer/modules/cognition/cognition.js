@@ -66,6 +66,12 @@
       && typeof value.sourceLabel === 'string'
       && typeof value.createdAt === 'string';
   }
+  function isTransition(value) {
+    return isRecord(value)
+      && typeof value.id === 'string' && !!value.id
+      && ['created', 'evidence_added', 'confirmation_requested', 'defer_requested', 'confirmed', 'reconfirmed', 'deferred', 'reused', 'invalidated'].includes(value.kind)
+      && typeof value.at === 'string';
+  }
   function isSummary(value) {
     return isRecord(value)
       && typeof value.id === 'string' && !!value.id
@@ -87,6 +93,7 @@
       && REVIEW_STATES.has(value.reviewState)
       && Array.isArray(value.evidence) && value.evidence.every(isEvidence)
       && Array.isArray(value.reuseEvents) && value.reuseEvents.every(isReuseEvent)
+      && (value.transitions === undefined || (Array.isArray(value.transitions) && value.transitions.every(isTransition)))
       && typeof value.updatedAt === 'string'
       && isInvalidation(value.invalidation);
   }
@@ -382,32 +389,36 @@
     if (trigger?.isConnected && typeof trigger.focus === 'function') trigger.focus();
   }
 
-  function defaultCaptureTitle(summary) {
-    const firstLine = String(summary || '').split(/\r?\n/)[0].replace(/\s+/g, ' ').trim();
-    if (!firstLine) return '';
-    return firstLine.length > 48 ? firstLine.slice(0, 48) + '…' : firstLine;
-  }
-
   function openCognitionCapture(input = {}) {
     if (!window.CognitionPages || typeof window.CognitionPages.renderCognitionCapture !== 'function') return false;
     if (document.querySelector('.cognition-capture-overlay')) return false;
+    const payload = input && typeof input === 'object' ? input : {};
+    const conversationId = String(payload.conversationId || '').trim();
+    const messageId = String(payload.messageId || '').trim();
+    if (!conversationId || !messageId) return false;
     const trigger = document.activeElement;
-    const summary = String(input.summary || '').trim();
     const overlay = document.createElement('div');
-    overlay.innerHTML = window.CognitionPages.renderCognitionCapture({
-      title: (String(input.title || '').trim() || defaultCaptureTitle(summary)).slice(0, 120),
-      summary: summary.slice(0, 2000),
-      evidence: String(input.evidence || summary).trim().slice(0, 2000),
-      sourceLabel: (String(input.sourceLabel || '').trim() || translate('cognition.capture.default_source', '当前对话')).slice(0, 160),
-      conversationId: String(input.conversationId || '').trim(),
-    });
-    const rendered = overlay.firstElementChild;
+    const rendered = document.createElement('div');
+    rendered.className = 'cognition-capture-overlay';
     if (!rendered) return false;
+    const renderMarkup = (state, values = {}) => {
+      rendered.innerHTML = window.CognitionPages.renderCognitionCapture({
+        state,
+        title: values.title || '',
+        summary: values.summary || '',
+        evidence: values.evidence || '',
+        sourceLabel: values.sourceLabel || '',
+        conversationId,
+        error: values.error || '',
+      });
+    };
+    renderMarkup('loading');
     document.body.appendChild(rendered);
-    const form = rendered.querySelector('[data-cognition-capture-form]');
+    let closed = false;
     const onKeyDown = (event) => {
       if (event.isComposing || event.keyCode === 229) return;
       if (event.key === 'Escape') {
+        closed = true;
         closeCaptureOverlay(rendered, onKeyDown, trigger, onBackdropClick);
         return;
       }
@@ -427,59 +438,101 @@
       }
     };
     const onBackdropClick = (event) => {
-      if (event.target === rendered) closeCaptureOverlay(rendered, onKeyDown, trigger, onBackdropClick);
+      if (event.target === rendered) {
+        closed = true;
+        closeCaptureOverlay(rendered, onKeyDown, trigger, onBackdropClick);
+      }
     };
-    rendered.querySelectorAll('[data-cognition-capture-cancel]').forEach((button) => {
-      button.addEventListener('click', () => closeCaptureOverlay(rendered, onKeyDown, trigger, onBackdropClick));
-    });
+    const bindControls = () => {
+      rendered.querySelectorAll('[data-cognition-capture-cancel]').forEach((button) => {
+        button.addEventListener('click', () => {
+          closed = true;
+          closeCaptureOverlay(rendered, onKeyDown, trigger, onBackdropClick);
+        });
+      });
+      const form = rendered.querySelector('[data-cognition-capture-form]');
+      if (!form || !form.querySelector('[data-cognition-capture-submit]')) return;
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const title = String(form.querySelector('[data-cognition-capture-title]')?.value || '').trim();
+        const captureSummary = String(form.querySelector('[data-cognition-capture-summary]')?.value || '').trim();
+        const evidenceSummary = String(form.querySelector('[data-cognition-capture-evidence]')?.value || '').trim();
+        const sourceLabel = String(form.querySelector('[data-cognition-capture-source]')?.value || '').trim();
+        if (!title || !captureSummary || !evidenceSummary || !sourceLabel) return;
+        const submit = form.querySelector('[data-cognition-capture-submit]');
+        if (submit?.disabled) return;
+        if (submit) submit.disabled = true;
+        try {
+          const response = await window.apiFetch('/api/cognition/assets/capture', {
+            method: 'POST',
+            body: JSON.stringify({
+              title,
+              summary: captureSummary,
+              evidence: {
+                kind: 'conversation',
+                summary: evidenceSummary,
+                sourceLabel,
+                conversationId,
+              },
+            }),
+          });
+          const result = await parseResponse(response, translate('cognition.error.action_failed', '认知操作失败'));
+          const asset = assertFullAsset(result?.asset, translate('cognition.error.invalid_response', '认知操作返回无效'));
+          updateAsset(asset, { moveToFirstPage: true, isNew: true });
+          clearError();
+          if (!document.querySelector('[data-personal-onto-workspace-pane="growth"]')?.hidden) render();
+          void reloadAfterMutation();
+          closed = true;
+          closeCaptureOverlay(rendered, onKeyDown, trigger, onBackdropClick);
+          if (typeof uiToast === 'function') uiToast(translate('cognition.capture.saved', '已保存到待确认认知'), { variant: 'success' });
+        } catch (error) {
+          if (submit) submit.disabled = false;
+          let errorNode = form.querySelector('[data-cognition-capture-error]');
+          if (!errorNode) {
+            errorNode = document.createElement('p');
+            errorNode.dataset.cognitionCaptureError = '1';
+            errorNode.className = 'cognition-capture-error';
+            form.querySelector('.cognition-capture-body')?.appendChild(errorNode);
+          }
+          errorNode.textContent = apiError(error);
+        }
+      });
+    };
     rendered.addEventListener('click', onBackdropClick);
     document.addEventListener('keydown', onKeyDown, true);
-    form?.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const title = String(form.querySelector('[data-cognition-capture-title]')?.value || '').trim();
-      const captureSummary = String(form.querySelector('[data-cognition-capture-summary]')?.value || '').trim();
-      const evidenceSummary = String(form.querySelector('[data-cognition-capture-evidence]')?.value || '').trim();
-      const sourceLabel = String(form.querySelector('[data-cognition-capture-source]')?.value || '').trim();
-      const conversationId = String(form.querySelector('[data-cognition-capture-conversation]')?.value || '').trim();
-      if (!title || !captureSummary || !evidenceSummary || !sourceLabel) return;
-      const submit = form.querySelector('[data-cognition-capture-submit]');
-      if (submit?.disabled) return;
-      if (submit) submit.disabled = true;
+    bindControls();
+    const generate = async () => {
       try {
-        const response = await window.apiFetch('/api/cognition/assets/capture', {
-          method: 'POST',
-          body: JSON.stringify({
-            title,
-            summary: captureSummary,
-            evidence: {
-              kind: 'conversation',
-              summary: evidenceSummary,
-              sourceLabel,
-              ...(conversationId ? { conversationId } : {}),
-            },
-          }),
-        });
-        const result = await parseResponse(response, translate('cognition.error.action_failed', '认知操作失败'));
-        const asset = assertFullAsset(result?.asset, translate('cognition.error.invalid_response', '认知操作返回无效'));
-        updateAsset(asset, { moveToFirstPage: true, isNew: true });
-        clearError();
-        if (!document.querySelector('[data-personal-onto-workspace-pane="growth"]')?.hidden) render();
-        void reloadAfterMutation();
-        closeCaptureOverlay(rendered, onKeyDown, trigger, onBackdropClick);
-        if (typeof uiToast === 'function') uiToast(translate('cognition.capture.saved', '已保存到待确认认知'), { variant: 'success' });
-      } catch (error) {
-        if (submit) submit.disabled = false;
-        let errorNode = form.querySelector('[data-cognition-capture-error]');
-        if (!errorNode) {
-          errorNode = document.createElement('p');
-          errorNode.dataset.cognitionCaptureError = '1';
-          errorNode.className = 'cognition-capture-error';
-          form.querySelector('.cognition-capture-body')?.appendChild(errorNode);
+        if (!window.orkas || typeof window.orkas.invoke !== 'function') throw new Error(translate('cognition.capture.generation_failed', '认知草稿生成失败，请稍后重试。'));
+        const result = await window.orkas.invoke('cognition.capture.draft', { conversationId, messageId });
+        if (closed || !rendered.isConnected) return;
+        if (!result || result.ok === false) throw new Error(String(result?.error || translate('cognition.capture.generation_failed', '认知草稿生成失败，请稍后重试。')));
+        if (result.status === 'not_reusable') {
+          renderMarkup('error', { error: result.reason || translate('cognition.capture.no_candidate', '这条回复没有足够的可复用工作方式。') });
+          bindControls();
+          return;
         }
-        errorNode.textContent = apiError(error);
+        const draft = result.draft;
+        if (result.status !== 'ready' || !draft || typeof draft.title !== 'string'
+            || typeof draft.summary !== 'string' || typeof draft.evidenceSummary !== 'string'
+            || typeof draft.sourceLabel !== 'string') {
+          throw new Error(translate('cognition.capture.generation_failed', '认知草稿生成失败，请稍后重试。'));
+        }
+        renderMarkup('ready', {
+          title: draft.title,
+          summary: draft.summary,
+          evidence: draft.evidenceSummary,
+          sourceLabel: draft.sourceLabel,
+        });
+        bindControls();
+        rendered.querySelector('[data-cognition-capture-title]')?.focus();
+      } catch (error) {
+        if (closed || !rendered.isConnected) return;
+        renderMarkup('error', { error: apiError(error) || translate('cognition.capture.generation_failed', '认知草稿生成失败，请稍后重试。') });
+        bindControls();
       }
-    });
-    rendered.querySelector('[data-cognition-capture-title]')?.focus();
+    };
+    void generate();
     return true;
   }
 

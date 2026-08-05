@@ -20,13 +20,15 @@ import {
 } from '../cognition-memory-transaction';
 
 const log = createLogger('cognition');
-const STORE_VERSION = 2;
-const LEGACY_STORE_VERSION = 1;
+const STORE_VERSION = 3;
+const LEGACY_STORE_VERSIONS = new Set([1, 2]);
 export const BRIGHT_REUSE_THRESHOLD = 3;
 export const COGNITION_STORE_BYTE_LIMIT = 8 * 1024 * 1024;
 const MAX_ASSETS = 500;
 const MAX_EVIDENCE_PER_ASSET = 200;
 const MAX_REUSE_EVENTS_PER_ASSET = 500;
+const MAX_TRANSITIONS_PER_ASSET = 1200;
+const MAX_NON_INVALIDATION_TRANSITIONS = MAX_TRANSITIONS_PER_ASSET - 1;
 const MAX_ID_LENGTH = 80;
 const MAX_TITLE_LENGTH = 120;
 const MAX_SUMMARY_LENGTH = 2000;
@@ -38,6 +40,16 @@ export type CognitionStage = 'seed' | 'sprout' | 'growing' | 'bright';
 export type CognitionReviewState = 'pending' | 'confirmed' | 'deferred' | 'invalidated';
 export type CognitionEvidenceKind = 'conversation' | 'project' | 'execution' | 'manual';
 export type CognitionInvalidationReason = 'removed' | 'replaced' | 'content_changed' | 'metadata_missing';
+export type CognitionTransitionKind =
+  | 'created'
+  | 'evidence_added'
+  | 'confirmation_requested'
+  | 'defer_requested'
+  | 'confirmed'
+  | 'reconfirmed'
+  | 'deferred'
+  | 'reused'
+  | 'invalidated';
 
 export interface CognitionEvidenceInput {
   kind: CognitionEvidenceKind;
@@ -92,6 +104,15 @@ export interface CognitionInvalidation {
   previousRecordId?: string;
 }
 
+export interface CognitionTransition {
+  id: string;
+  kind: CognitionTransitionKind;
+  at: string;
+  reason?: CognitionInvalidationReason;
+  evidenceId?: string;
+  reuseEventId?: string;
+}
+
 export interface CognitionAsset {
   id: string;
   title: string;
@@ -100,6 +121,7 @@ export interface CognitionAsset {
   reviewState: CognitionReviewState;
   evidence: CognitionEvidence[];
   reuseEvents: CognitionReuseEvent[];
+  transitions: CognitionTransition[];
   createdAt: string;
   updatedAt: string;
   confirmedAt?: string;
@@ -275,7 +297,107 @@ function parseInvalidation(value: JsonValue | undefined, field: string): Cogniti
   };
 }
 
-function parseAsset(value: JsonValue, index: number, legacy: boolean): CognitionAsset {
+function isTransitionKind(value: JsonValue | undefined): value is CognitionTransitionKind {
+  return value === 'created' || value === 'evidence_added' || value === 'confirmation_requested'
+    || value === 'defer_requested' || value === 'confirmed' || value === 'reconfirmed' || value === 'deferred'
+    || value === 'reused' || value === 'invalidated';
+}
+
+function parseTransition(value: JsonValue, index: number): CognitionTransition {
+  if (!isObject(value) || !isTransitionKind(value.kind)) {
+    throw new Error(`invalid cognition transition at index ${index}`);
+  }
+  const transition: CognitionTransition = {
+    id: requiredSafeId(value.id, `transitions[${index}].id`),
+    kind: value.kind,
+    at: requiredTimestamp(value.at, `transitions[${index}].at`),
+  };
+  const evidenceId = optionalSafeId(value.evidenceId, `transitions[${index}].evidenceId`);
+  const reuseEventId = optionalSafeId(value.reuseEventId, `transitions[${index}].reuseEventId`);
+  if (evidenceId) transition.evidenceId = evidenceId;
+  if (reuseEventId) transition.reuseEventId = reuseEventId;
+  if (value.reason !== undefined) {
+    if (!['removed', 'replaced', 'content_changed', 'metadata_missing'].includes(String(value.reason))) {
+      throw new Error(`invalid cognition transition reason at index ${index}`);
+    }
+    transition.reason = value.reason as CognitionInvalidationReason;
+  }
+  if (transition.kind === 'evidence_added' && !transition.evidenceId) {
+    throw new Error(`cognition evidence transition is missing evidence id at index ${index}`);
+  }
+  if (transition.kind === 'reused' && !transition.reuseEventId) {
+    throw new Error(`cognition reuse transition is missing reuse event id at index ${index}`);
+  }
+  if (transition.kind === 'invalidated' && !transition.reason) {
+    throw new Error(`cognition invalidation transition is missing reason at index ${index}`);
+  }
+  if (transition.kind !== 'invalidated' && transition.reason !== undefined) {
+    throw new Error(`cognition transition has an unexpected reason at index ${index}`);
+  }
+  if (transition.kind !== 'evidence_added' && transition.evidenceId !== undefined) {
+    throw new Error(`cognition transition has an unexpected evidence id at index ${index}`);
+  }
+  if (transition.kind !== 'reused' && transition.reuseEventId !== undefined) {
+    throw new Error(`cognition transition has an unexpected reuse event id at index ${index}`);
+  }
+  return transition;
+}
+
+function migratedTransitionId(assetId: string, discriminator: string): string {
+  const digest = crypto.createHash('sha256').update(`${assetId}\0${discriminator}`).digest('hex').slice(0, 16);
+  return `transition_${digest}`;
+}
+
+function synthesizeTransitions(asset: CognitionAsset): CognitionTransition[] {
+  const transitionOrder: Record<CognitionTransitionKind, number> = {
+    created: 0,
+    evidence_added: 1,
+    confirmation_requested: 2,
+    defer_requested: 2,
+    confirmed: 3,
+    reconfirmed: 3,
+    reused: 4,
+    deferred: 5,
+    invalidated: 6,
+  };
+  const transitions: CognitionTransition[] = [{
+    id: migratedTransitionId(asset.id, 'created'), kind: 'created', at: asset.createdAt,
+  }];
+  for (const item of asset.evidence) transitions.push({
+    id: migratedTransitionId(asset.id, `evidence:${item.id}`),
+    kind: 'evidence_added', at: item.createdAt, evidenceId: item.id,
+  });
+  if (asset.confirmedAt) transitions.push({
+    id: migratedTransitionId(asset.id, `confirmed:${asset.confirmedAt}`),
+    kind: 'confirmed', at: asset.confirmedAt,
+  });
+  for (const item of asset.reuseEvents) transitions.push({
+    id: migratedTransitionId(asset.id, `reuse:${item.id}`),
+    kind: 'reused', at: item.createdAt, reuseEventId: item.id,
+  });
+  if (asset.invalidation) transitions.push({
+    id: migratedTransitionId(asset.id, `invalidated:${asset.invalidation.at}:${asset.invalidation.reason}`),
+    kind: 'invalidated', at: asset.invalidation.at, reason: asset.invalidation.reason,
+  });
+  if (asset.reviewState === 'deferred') transitions.push({
+    id: migratedTransitionId(asset.id, `deferred:${asset.updatedAt}`),
+    kind: 'deferred', at: asset.updatedAt,
+  });
+  if (asset.memoryTransition?.kind === 'activate') transitions.push({
+    id: migratedTransitionId(asset.id, `confirmation-requested:${asset.memoryTransition.requestedAt}`),
+    kind: 'confirmation_requested', at: asset.memoryTransition.requestedAt,
+  });
+  if (asset.memoryTransition?.kind === 'deactivate') transitions.push({
+    id: migratedTransitionId(asset.id, `defer-requested:${asset.memoryTransition.requestedAt}`),
+    kind: 'defer_requested', at: asset.memoryTransition.requestedAt,
+  });
+  return transitions.sort((left, right) => left.at.localeCompare(right.at)
+    || transitionOrder[left.kind] - transitionOrder[right.kind]
+    || left.id.localeCompare(right.id));
+}
+
+function parseAsset(value: JsonValue, index: number, storeVersion: number): CognitionAsset {
+  const legacy = storeVersion === 1;
   if (!isObject(value)) throw new Error(`invalid cognition asset at index ${index}`);
   const stage = value.stage;
   const reviewState = value.reviewState;
@@ -303,6 +425,7 @@ function parseAsset(value: JsonValue, index: number, legacy: boolean): Cognition
     reviewState: reviewState as CognitionReviewState,
     evidence,
     reuseEvents,
+    transitions: [],
     createdAt: requiredTimestamp(value.createdAt, `assets[${index}].createdAt`),
     updatedAt: requiredTimestamp(value.updatedAt, `assets[${index}].updatedAt`),
   };
@@ -337,16 +460,158 @@ function parseAsset(value: JsonValue, index: number, legacy: boolean): Cognition
   }
   if (binding) asset.memoryBinding = binding;
   if (invalidation) asset.invalidation = invalidation;
+  if (storeVersion >= STORE_VERSION) {
+    if (!Array.isArray(value.transitions) || value.transitions.length > MAX_TRANSITIONS_PER_ASSET) {
+      throw new Error(`invalid cognition transitions at index ${index}`);
+    }
+    asset.transitions = value.transitions.map((item, itemIndex) => parseTransition(item, itemIndex));
+    assertUniqueIds(asset.transitions, `assets[${index}].transition`);
+  } else {
+    asset.transitions = synthesizeTransitions(asset);
+  }
   if (!legacy) validateAssetState(asset, index);
   return asset;
 }
 
 function validateAssetState(asset: CognitionAsset, index: number): void {
-  const active = asset.reviewState === 'confirmed';
-  if (active && !asset.evidence.length) {
+  if (!Array.isArray(asset.transitions) || !asset.transitions.length
+      || asset.transitions.length > MAX_TRANSITIONS_PER_ASSET) {
+    throw new Error(`invalid cognition transition history at index ${index}`);
+  }
+  if (asset.reviewState === 'confirmed' && !asset.evidence.length) {
     throw new Error(`confirmed cognition asset needs evidence at index ${index}`);
   }
-  if (active && (!asset.confirmedAt || !asset.memoryBinding || asset.memoryTransition)) {
+  if (asset.transitions.length === MAX_TRANSITIONS_PER_ASSET
+      && asset.transitions[asset.transitions.length - 1]?.kind !== 'invalidated') {
+    throw new Error(`cognition transition history has no capacity for invalidation at index ${index}`);
+  }
+  const createdTransitions = asset.transitions.filter((transition) => transition.kind === 'created');
+  if (createdTransitions.length !== 1 || asset.transitions[0]?.kind !== 'created'
+      || createdTransitions[0].at !== asset.createdAt) {
+    throw new Error(`cognition asset needs a matching created transition at index ${index}`);
+  }
+  const evidenceIds = new Set(asset.evidence.map((item) => item.id));
+  const reuseEventIds = new Set(asset.reuseEvents.map((item) => item.id));
+  const evidenceTransitionIds = new Set<string>();
+  const reuseTransitionIds = new Set<string>();
+  let previousAt: string | undefined;
+  let active = false;
+  let confirmationPending = false;
+  let deferPending = false;
+  let confirmedSeen = false;
+  let firstConfirmedAt: string | undefined;
+  let deferredSeen = false;
+  let lastInvalidation: CognitionTransition | undefined;
+  for (const transition of asset.transitions) {
+    if (previousAt && transition.at.localeCompare(previousAt) < 0) {
+      throw new Error(`cognition transition history is out of order at index ${index}`);
+    }
+    previousAt = transition.at;
+    if (transition.evidenceId && !evidenceIds.has(transition.evidenceId)) {
+      throw new Error(`cognition transition references unknown evidence at index ${index}`);
+    }
+    if (transition.reuseEventId && !reuseEventIds.has(transition.reuseEventId)) {
+      throw new Error(`cognition transition references unknown reuse event at index ${index}`);
+    }
+    if (transition.kind === 'evidence_added') {
+      if (!transition.evidenceId || evidenceTransitionIds.has(transition.evidenceId)) {
+        throw new Error(`cognition evidence transition coverage is invalid at index ${index}`);
+      }
+      const evidence = asset.evidence.find((item) => item.id === transition.evidenceId);
+      if (!evidence || evidence.createdAt !== transition.at) {
+        throw new Error(`cognition evidence transition timestamp is invalid at index ${index}`);
+      }
+      evidenceTransitionIds.add(transition.evidenceId);
+    }
+    if (transition.kind === 'reused') {
+      if (!transition.reuseEventId || reuseTransitionIds.has(transition.reuseEventId)) {
+        throw new Error(`cognition reuse transition coverage is invalid at index ${index}`);
+      }
+      const reuseEvent = asset.reuseEvents.find((item) => item.id === transition.reuseEventId);
+      if (!reuseEvent || reuseEvent.createdAt !== transition.at) {
+        throw new Error(`cognition reuse transition timestamp is invalid at index ${index}`);
+      }
+      if (!active) throw new Error(`cognition reuse transition is not active at index ${index}`);
+      reuseTransitionIds.add(transition.reuseEventId);
+    }
+    if (transition.kind === 'confirmation_requested') {
+      if (active || confirmationPending) throw new Error(`cognition confirmation request is out of sequence at index ${index}`);
+      confirmationPending = true;
+      deferPending = false;
+    }
+    if (transition.kind === 'defer_requested') {
+      if (active || deferPending) throw new Error(`cognition defer request is out of sequence at index ${index}`);
+      confirmationPending = false;
+      deferPending = true;
+    }
+    if (transition.kind === 'confirmed' || transition.kind === 'reconfirmed') {
+      if (transition.kind === 'confirmed' && confirmedSeen) {
+        throw new Error(`cognition asset has duplicate confirmed transitions at index ${index}`);
+      }
+      if (transition.kind === 'reconfirmed' && (!confirmedSeen || active)) {
+        throw new Error(`cognition reconfirmation is out of sequence at index ${index}`);
+      }
+      if (!firstConfirmedAt) firstConfirmedAt = transition.at;
+      confirmedSeen = true;
+      active = true;
+      confirmationPending = false;
+      deferPending = false;
+    }
+    if (transition.kind === 'deferred') {
+      deferredSeen = true;
+      active = false;
+      deferPending = false;
+      confirmationPending = false;
+    }
+    if (transition.kind === 'invalidated') {
+      if (!confirmedSeen) throw new Error(`cognition invalidation precedes confirmation at index ${index}`);
+      lastInvalidation = transition;
+      active = false;
+      deferPending = false;
+      confirmationPending = false;
+    }
+  }
+  if (evidenceTransitionIds.size !== evidenceIds.size || evidenceTransitionIds.size !== asset.evidence.length) {
+    throw new Error(`cognition evidence transition coverage is incomplete at index ${index}`);
+  }
+  if (reuseTransitionIds.size !== reuseEventIds.size || reuseTransitionIds.size !== asset.reuseEvents.length) {
+    throw new Error(`cognition reuse transition coverage is incomplete at index ${index}`);
+  }
+  if (asset.confirmedAt !== firstConfirmedAt) {
+    throw new Error(`cognition confirmation timestamp does not match history at index ${index}`);
+  }
+  if (asset.reviewState === 'confirmed' && !confirmedSeen) {
+    throw new Error(`confirmed cognition asset has no confirmation transition at index ${index}`);
+  }
+  if (asset.reviewState === 'deferred' && !deferredSeen) {
+    throw new Error(`deferred cognition asset has no deferred transition at index ${index}`);
+  }
+  if (asset.reviewState === 'invalidated'
+      && (!lastInvalidation || !asset.invalidation || lastInvalidation.at !== asset.invalidation.at
+        || lastInvalidation.reason !== asset.invalidation.reason)) {
+    throw new Error(`invalidated cognition asset has no matching invalidation transition at index ${index}`);
+  }
+  if (asset.memoryTransition?.kind === 'activate') {
+    const request = asset.transitions.slice().reverse().find((transition) => transition.kind === 'confirmation_requested');
+    if (!request || request.at !== asset.memoryTransition.requestedAt) {
+      throw new Error(`cognition activation transition is missing its history event at index ${index}`);
+    }
+  }
+  if (asset.memoryTransition?.kind === 'deactivate') {
+    const request = asset.transitions.slice().reverse().find((transition) => transition.kind === 'defer_requested');
+    if (!request || request.at !== asset.memoryTransition.requestedAt) {
+      throw new Error(`cognition deactivation transition is missing its history event at index ${index}`);
+    }
+  }
+  if (asset.memoryTransition && (!confirmationPending && asset.memoryTransition.kind === 'activate'
+      || !deferPending && asset.memoryTransition.kind === 'deactivate')) {
+    throw new Error(`cognition memory transition is inconsistent with history at index ${index}`);
+  }
+  if (active !== (asset.reviewState === 'confirmed')) {
+    throw new Error(`cognition transition history does not match review state at index ${index}`);
+  }
+  const reviewActive = asset.reviewState === 'confirmed';
+  if (reviewActive && (!asset.confirmedAt || !asset.memoryBinding || asset.memoryTransition)) {
     throw new Error(`confirmed cognition asset is not actively bound at index ${index}`);
   }
   if (asset.reviewState === 'invalidated'
@@ -356,7 +621,9 @@ function validateAssetState(asset: CognitionAsset, index: number): void {
   if ((asset.reviewState === 'pending' || asset.reviewState === 'deferred') && asset.memoryBinding) {
     throw new Error(`unconfirmed cognition asset has memory binding at index ${index}`);
   }
-  if (asset.reviewState === 'pending' && asset.confirmedAt) {
+  const pendingReactivation = asset.reviewState === 'pending'
+    && asset.memoryTransition?.kind === 'activate' && confirmedSeen;
+  if (asset.reviewState === 'pending' && asset.confirmedAt && !pendingReactivation) {
     throw new Error(`pending cognition asset has confirmation timestamp at index ${index}`);
   }
   if (asset.reviewState === 'deferred' && asset.memoryTransition) {
@@ -387,7 +654,7 @@ function validateAssetState(asset: CognitionAsset, index: number): void {
       && asset.reviewState !== 'pending' && asset.reviewState !== 'invalidated') {
     throw new Error(`cognition deactivation transition has invalid review state at index ${index}`);
   }
-  if (asset.reviewState === 'pending' && asset.reuseEvents.length) {
+  if (asset.reviewState === 'pending' && asset.reuseEvents.length && !pendingReactivation) {
     throw new Error(`pending cognition asset has reuse events at index ${index}`);
   }
   if (asset.reviewState === 'deferred' && asset.reuseEvents.length && !asset.confirmedAt) {
@@ -422,12 +689,13 @@ async function readStore(userId: string): Promise<CognitionStore> {
       throw new Error(`invalid cognition store JSON for user ${userId}`, { cause: error });
     }
     if (!isObject(parsed) || !Array.isArray(parsed.assets)
-        || (parsed.version !== STORE_VERSION && parsed.version !== LEGACY_STORE_VERSION)) {
+        || (parsed.version !== STORE_VERSION
+          && (typeof parsed.version !== 'number' || !LEGACY_STORE_VERSIONS.has(parsed.version)))) {
       throw new Error(`invalid cognition store schema for user ${userId}`);
     }
     if (parsed.assets.length > MAX_ASSETS) throw new Error(`cognition asset count exceeds ${MAX_ASSETS}`);
-    const legacy = parsed.version === LEGACY_STORE_VERSION;
-    const assets = parsed.assets.map((item, index) => parseAsset(item, index, legacy));
+    const storeVersion = parsed.version as number;
+    const assets = parsed.assets.map((item, index) => parseAsset(item, index, storeVersion));
     assertUniqueIds(assets, 'asset');
     return { version: STORE_VERSION, assets };
   } catch (error) {
@@ -518,13 +786,42 @@ function refreshStage(asset: CognitionAsset): void {
   asset.updatedAt = nowIso();
 }
 
+function appendTransition(
+  asset: CognitionAsset,
+  kind: CognitionTransitionKind,
+  details: Pick<CognitionTransition, 'reason' | 'evidenceId' | 'reuseEventId'> = {},
+  at = nowIso(),
+): CognitionTransition {
+  const maxTransitions = kind === 'invalidated'
+    ? MAX_TRANSITIONS_PER_ASSET
+    : MAX_NON_INVALIDATION_TRANSITIONS;
+  if (asset.transitions.length >= maxTransitions) {
+    throw new Error(`cognition transition count exceeds ${MAX_TRANSITIONS_PER_ASSET}`);
+  }
+  const transition: CognitionTransition = { id: newId('transition'), kind, at, ...details };
+  asset.transitions.push(transition);
+  return transition;
+}
+
+function assertTransitionCapacity(asset: CognitionAsset, additional: number): void {
+  if (!Number.isSafeInteger(additional) || additional < 0
+      || asset.transitions.length + additional > MAX_NON_INVALIDATION_TRANSITIONS) {
+    throw new Error(`cognition transition count exceeds ${MAX_TRANSITIONS_PER_ASSET}`);
+  }
+}
+
 function invalidateAsset(asset: CognitionAsset, reason: CognitionInvalidationReason): void {
+  if (asset.transitions.length >= MAX_TRANSITIONS_PER_ASSET) {
+    throw new Error(`cognition transition count exceeds ${MAX_TRANSITIONS_PER_ASSET}`);
+  }
+  const at = nowIso();
   const previousRecordId = asset.memoryBinding?.recordId;
   asset.reviewState = 'invalidated';
-  asset.invalidation = { at: nowIso(), reason, ...(previousRecordId ? { previousRecordId } : {}) };
+  asset.invalidation = { at, reason, ...(previousRecordId ? { previousRecordId } : {}) };
   delete asset.memoryBinding;
   delete asset.memoryTransition;
   delete asset.confirmationRequestedAt;
+  appendTransition(asset, 'invalidated', { reason }, at);
   refreshStage(asset);
 }
 
@@ -535,15 +832,14 @@ function reconcileAsset(
 ): boolean {
   assertCognitionMemoryTransaction(transaction, userId);
   if (asset.memoryTransition?.kind === 'deactivate') {
+    // The intent may have been persisted before the final cognition write
+    // failed. Reserve the completion event before touching the shared memory
+    // file so recovery cannot leave an un-audited deferred state.
+    assertTransitionCapacity(asset, 1);
     const detached = detachCognitionMemoryEntryLocked(userId, asset.id, transaction);
     if (!detached.ok) {
       if (detached.error === 'corrupt_metadata') {
-        asset.reviewState = 'invalidated';
-        asset.invalidation = asset.invalidation || { at: nowIso(), reason: 'metadata_missing' };
-        delete asset.memoryBinding;
-        delete asset.memoryTransition;
-        delete asset.confirmationRequestedAt;
-        refreshStage(asset);
+        invalidateAsset(asset, 'metadata_missing');
         return true;
       }
       throw new Error(`cognition memory detach failed: ${detached.error || 'unknown error'}`);
@@ -553,6 +849,7 @@ function reconcileAsset(
     delete asset.memoryTransition;
     delete asset.confirmationRequestedAt;
     delete asset.invalidation;
+    appendTransition(asset, 'deferred');
     refreshStage(asset);
     return true;
   }
@@ -638,11 +935,14 @@ async function mutateAsset(
 
 function newAsset(title: string, summary: string, evidence: CognitionEvidence[]): CognitionAsset {
   const timestamp = nowIso();
-  return {
+  const asset: CognitionAsset = {
     id: newId('cog'), title, summary,
-    stage: evidence.length ? 'sprout' : 'seed',
-    reviewState: 'pending', evidence, reuseEvents: [], createdAt: timestamp, updatedAt: timestamp,
+    stage: evidence.length ? 'sprout' : 'seed', reviewState: 'pending', evidence, reuseEvents: [],
+    transitions: [], createdAt: timestamp, updatedAt: timestamp,
   };
+  appendTransition(asset, 'created', {}, timestamp);
+  for (const item of evidence) appendTransition(asset, 'evidence_added', { evidenceId: item.id }, item.createdAt);
+  return asset;
 }
 
 export async function createCognitionAsset(userId: string, input: CognitionCreateInput): Promise<CognitionAsset> {
@@ -753,7 +1053,9 @@ export async function addCognitionEvidence(
     if (asset.evidence.length >= MAX_EVIDENCE_PER_ASSET) {
       throw new Error(`cognition evidence count exceeds ${MAX_EVIDENCE_PER_ASSET}`);
     }
-    asset.evidence.push({ id: newId('evidence'), ...evidence, createdAt: nowIso() });
+    const item = { id: newId('evidence'), ...evidence, createdAt: nowIso() };
+    asset.evidence.push(item);
+    appendTransition(asset, 'evidence_added', { evidenceId: item.id }, item.createdAt);
   });
 }
 
@@ -767,6 +1069,7 @@ export async function confirmCognitionAsset(userId: string, assetId: string): Pr
     if (!asset.evidence.length) throw new Error('cognition asset needs evidence before confirmation');
     if (asset.reviewState === 'confirmed' && !reconcileAsset(userId, asset, transaction)) return structuredClone(asset);
 
+    const wasPreviouslyConfirmed = Boolean(asset.confirmedAt);
     const threat = scanForInjection(asset.summary);
     if (threat) throw new Error(`cognition confirmation blocked: suspicious content (${threat})`);
     const hash = memoryContentHash(asset.summary);
@@ -774,11 +1077,13 @@ export async function confirmCognitionAsset(userId: string, assetId: string): Pr
     if (existingTransition?.kind === 'activate' && existingTransition.contentSha256 !== hash) {
       throw new Error('cognition activation content changed during retry');
     }
+    assertTransitionCapacity(asset, existingTransition?.kind === 'activate' ? 1 : 2);
     if (!existingTransition || existingTransition.kind !== 'activate') {
       const requestedAt = nowIso();
       if (asset.reviewState === 'deferred') asset.reviewState = 'pending';
       asset.memoryTransition = { kind: 'activate', sourceId: asset.id, contentSha256: hash, requestedAt };
       asset.confirmationRequestedAt = requestedAt;
+      appendTransition(asset, 'confirmation_requested', {}, requestedAt);
       refreshStage(asset);
       await writeStore(userId, store);
     }
@@ -805,6 +1110,7 @@ export async function confirmCognitionAsset(userId: string, assetId: string): Pr
     delete asset.memoryTransition;
     delete asset.confirmationRequestedAt;
     delete asset.invalidation;
+    appendTransition(asset, wasPreviouslyConfirmed ? 'reconfirmed' : 'confirmed', {}, confirmedAt);
     refreshStage(asset);
     const result = structuredClone(asset);
     await writeStore(userId, store);
@@ -824,6 +1130,7 @@ export async function deferCognitionAsset(userId: string, assetId: string): Prom
     if (!asset.memoryTransition || asset.memoryTransition.kind !== 'deactivate') {
       const requestedAt = nowIso();
       if (asset.reviewState === 'deferred' && !asset.memoryTransition) return structuredClone(asset);
+      assertTransitionCapacity(asset, 2);
       if (asset.reviewState !== 'invalidated') asset.reviewState = 'pending';
       asset.memoryTransition = {
         kind: 'deactivate',
@@ -832,10 +1139,13 @@ export async function deferCognitionAsset(userId: string, assetId: string): Prom
         requestedAt,
       };
       asset.confirmationRequestedAt = requestedAt;
+      appendTransition(asset, 'defer_requested', {}, requestedAt);
       // A deactivate transition is a valid in-flight form of an invalidated
       // asset; the invalidation is cleared only after the detach is durable.
       refreshStage(asset);
       await writeStore(userId, store);
+    } else {
+      assertTransitionCapacity(asset, 1);
     }
     const detached = detachCognitionMemoryEntryLocked(userId, asset.id, transaction);
     if (!detached.ok) throw new Error(`cognition memory detach failed: ${detached.error || 'unknown error'}`);
@@ -844,6 +1154,7 @@ export async function deferCognitionAsset(userId: string, assetId: string): Prom
     delete asset.memoryTransition;
     delete asset.confirmationRequestedAt;
     delete asset.invalidation;
+    appendTransition(asset, 'deferred');
     refreshStage(asset);
     const result = structuredClone(asset);
     await writeStore(userId, store);
@@ -900,6 +1211,8 @@ export async function recordCognitionReuse(
     if (asset.reuseEvents.length >= MAX_REUSE_EVENTS_PER_ASSET) {
       throw new Error(`cognition reuse count exceeds ${MAX_REUSE_EVENTS_PER_ASSET}`);
     }
-    asset.reuseEvents.push({ id: newId('reuse'), ...reuse, createdAt: nowIso() });
+    const event = { id: newId('reuse'), ...reuse, createdAt: nowIso() };
+    asset.reuseEvents.push(event);
+    appendTransition(asset, 'reused', { reuseEventId: event.id }, event.createdAt);
   });
 }

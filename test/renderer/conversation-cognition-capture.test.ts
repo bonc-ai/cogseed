@@ -35,7 +35,6 @@ describe('conversation cognition capture', () => {
         await featureLoaded;
         (sandbox.window as Record<string, unknown>).openCognitionCapture = openCognitionCapture;
       }),
-      _conversationTitleForCid: vi.fn((cid: string) => `Task ${cid}`),
       _convLog: { warn: vi.fn() },
       window: {},
     };
@@ -43,9 +42,15 @@ describe('conversation cognition capture', () => {
       `${extractFunction('_openCognitionCaptureFromBubble')}\nthis.openCapture = _openCognitionCaptureFromBubble;`,
       sandbox,
     );
+    const message = { dataset: { msgId: 'msg-1' } };
     const button = { disabled: false };
 
-    const opening = (sandbox.openCapture as (getContent: () => string, target: typeof button) => Promise<boolean>)(
+    const opening = (sandbox.openCapture as (
+      source: typeof message,
+      getContent: () => string,
+      target: typeof button,
+    ) => Promise<boolean>)(
+      message,
       () => 'Reusable approach',
       button,
     );
@@ -56,9 +61,8 @@ describe('conversation cognition capture', () => {
     await expect(opening).resolves.toBe(true);
     expect(button.disabled).toBe(false);
     expect(openCognitionCapture).toHaveBeenCalledWith({
-      summary: 'Reusable approach',
-      sourceLabel: 'Task cid-a',
       conversationId: 'cid-a',
+      messageId: 'msg-1',
     });
   });
 });
