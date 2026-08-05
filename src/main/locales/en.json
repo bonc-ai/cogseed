@@ -177,6 +177,8 @@
   "expense_workbench.submit_confirmation.detail": "External target: {target}\nExpense application: {application}\nVersion: v{version}\nPayload fingerprint: {hash}\n\nExternal disclosure: Expense data will leave this application and create or advance an OA approval request in Feishu.\nHuman approval: This action does not approve the request or make a payment. A human approver must still review it in Feishu / OA.",
   "expense_workbench.submit_confirmation.unavailable": "The secure submission confirmation could not be displayed. Nothing was submitted.",
   "expense_workbench.submit_confirmation.cancelled": "Submission was cancelled. No data was sent to Feishu / OA.",
+  "expense_workbench.external.retry_feishu_notifications.action": "retry the failed notification for this reimbursement application",
+  "expense_workbench.external.retry_feishu_notifications.consequence": "Mate will send the notification to Feishu again, without resubmitting OA approval or changing the draft.",
   "expense_workbench.material.pick_title": "Choose reimbursement materials",
   "expense_workbench.material.filter_name": "Reimbursement materials",
   "expense_workbench.material.invalid_path": "The selected material path is invalid.",

@@ -44,6 +44,7 @@ export const EXPENSE_WORKBENCH_EXTERNAL_QUERY_OPERATIONS = [
 export const EXPENSE_WORKBENCH_EXTERNAL_SIDE_EFFECT_OPERATIONS = [
   'applications.recoverSubmission',
   'applications.retryFeishu',
+  'applications.retryFeishuNotifications',
 ] as const;
 
 export const EXPENSE_WORKBENCH_EXTERNAL_OPERATIONS = [
@@ -58,10 +59,12 @@ export const EXPENSE_WORKBENCH_EXPLICIT_EXTERNAL_OPERATIONS = [
   'applications.submitStatus',
   'applications.recoverSubmission',
   'applications.retryFeishu',
+  'applications.retryFeishuNotifications',
   'settings.preflight',
 ] as const;
 
 export const EXPENSE_WORKBENCH_REVIEW_OPERATIONS = [
+  'applications.approve',
   'reviews.approve',
   'reviews.reject',
 ] as const;
@@ -88,9 +91,11 @@ export type ExpenseWorkbenchOperation =
   | 'applications.confirm'
   | 'applications.submit'
   | 'applications.report'
+  | 'applications.approve'
   | 'applications.refreshStatus'
   | 'applications.recoverSubmission'
   | 'applications.retryFeishu'
+  | 'applications.retryFeishuNotifications'
   | 'applications.submitStatus'
   | 'materials.list'
   | 'materials.add'

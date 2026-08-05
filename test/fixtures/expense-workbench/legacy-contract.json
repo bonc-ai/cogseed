@@ -25,6 +25,7 @@
     {"legacy": "POST /applications/{application_id}/refresh-status", "operation": "applications.refreshStatus", "kind": "write"},
     {"legacy": "POST /applications/{application_id}/recover-submission", "operation": "applications.recoverSubmission", "kind": "write"},
     {"legacy": "POST /applications/{application_id}/retry-feishu", "operation": "applications.retryFeishu", "kind": "write"},
+    {"legacy": "POST /applications/{application_id}/retry-feishu-notifications", "operation": "applications.retryFeishuNotifications", "kind": "write"},
     {"legacy": "POST /applications/{application_id}/submit-status", "operation": "applications.submitStatus", "kind": "read"},
     {"legacy": "GET /applications/{application_id}/materials", "operation": "materials.list", "kind": "read"},
     {"legacy": "POST /applications/{application_id}/materials", "operation": "materials.add", "kind": "write"},

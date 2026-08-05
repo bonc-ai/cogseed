@@ -107,7 +107,7 @@
       "!bin/packaged-entrypoint-gate.cjs",
       "!bin/packaged-resource-gate.cjs",
       "!bin/runtime-gate.cjs",
-      "src/main/**/*.{js,ts,mjs,md,json}",
+      "src/main/**/*.{cjs,js,ts,mjs,md,json}",
       "src/main/native/build/*.node",
       "src/renderer/**/*",
       "src/resources/brand.json",

@@ -139,7 +139,13 @@ function prepareSourceRuntimeBundle(options = {}) {
 
   if (source !== destination) {
     if (fs.existsSync(destination)) fs.rmSync(destination, { recursive: true, force: true });
-    fs.cpSync(source, destination, { recursive: true, preserveTimestamps: true });
+    // macOS frameworks rely on relative symlinks. The default copy behavior
+    // rewrites those links to absolute paths in the source bundle.
+    fs.cpSync(source, destination, {
+      recursive: true,
+      preserveTimestamps: true,
+      verbatimSymlinks: true,
+    });
   }
 
   const plist = path.join(destination, 'Contents', 'Info.plist');
@@ -148,6 +154,9 @@ function prepareSourceRuntimeBundle(options = {}) {
   replacePlistString(plist, 'CFBundleName', identity.appName);
   replacePlistString(plist, 'CFBundleDisplayName', identity.appName);
   configureProtocols(plist, identity.protocolSchemes);
+  // Electron's distributed signature can be stale after the plist mutation.
+  // Removing it first lets ad-hoc signing rebuild every nested framework seal.
+  runChecked('codesign', ['--remove-signature', destination], 'remove source runtime signature');
   runChecked('codesign', ['--force', '--deep', '--sign', '-', destination], 'ad-hoc sign source runtime');
   fs.writeFileSync(`${destination}.runtime.json`, `${JSON.stringify({
     schema_version: 1,

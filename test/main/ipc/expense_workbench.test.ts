@@ -251,6 +251,7 @@ describe('expense workbench IPC', () => {
     'applications.refreshStatus',
     'applications.recoverSubmission',
     'applications.retryFeishu',
+    'applications.retryFeishuNotifications',
     'settings.preflight',
     'settings.test',
   ] as const)('blocks %s on the generic invoke route', async (operation) => {
@@ -259,6 +260,15 @@ describe('expense workbench IPC', () => {
       { agent_id: 'expense-agent', operation, payload: operation.startsWith('applications.') ? { application_id: 'APP-1' } : {} },
       { userId: 'u-ipc' },
     )).rejects.toThrow('显式确认入口');
+    expect(adapter.callExpenseWorkbench).not.toHaveBeenCalled();
+  });
+
+  it('does not allow personnel approval through the generic renderer route', async () => {
+    const { invokeHandlers } = await import('../../../src/main/ipc/expense_workbench');
+    await expect(invokeHandlers['expenseWorkbench.invoke'](
+      { agent_id: 'expense-agent', operation: 'applications.approve', payload: { application_id: 'APP-1' } },
+      { userId: 'u-ipc' },
+    )).rejects.toThrow('人工复核决策需要独立的身份与确认入口');
     expect(adapter.callExpenseWorkbench).not.toHaveBeenCalled();
   });
 
@@ -293,6 +303,7 @@ describe('expense workbench IPC', () => {
   it.each([
     ['applications.recoverSubmission', 'OA'],
     ['applications.retryFeishu', '飞书'],
+    ['applications.retryFeishuNotifications', '飞书'],
   ] as const)('requires a second confirmation before %s', async (operation, target) => {
     const { invokeHandlers } = await import('../../../src/main/ipc/expense_workbench');
     await invokeHandlers['expenseWorkbench.invokeExternal'](
