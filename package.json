@@ -35,7 +35,7 @@
     "builtin:manifest": "node scripts/update-builtin-manifest.cjs",
     "builtin:manifest:check": "node scripts/update-builtin-manifest.cjs --check",
     "rebuild:sqlite:electron": "node scripts/ensure-sqlite-electron-abi.mjs",
-    "postinstall": "node scripts/ensure-sqlite-electron-abi.mjs && node scripts/fetch-embedding-model.mjs",
+    "postinstall": "node scripts/ensure-sqlite-electron-abi.mjs && node scripts/fetch-embedding-model.mjs && npm run engine:build",
     "prepare": "node scripts/install-git-hooks.mjs",
     "prepack": "node scripts/ensure-dev-dependencies.cjs",
     "engine:build": "npm run build --workspace=nseap-meta-skill-engine",
