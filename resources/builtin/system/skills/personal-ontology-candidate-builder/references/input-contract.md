@@ -7,6 +7,7 @@
 - 当前会话或最近若干轮对话。
 - 用户明确说"记住这个"之类的交代。
 - 已有的记忆条目（USER.md / MEMORY.md 现有内容），用于判断新候选是不是在更新已有条目，避免重复。
+- 已安装角色模板的字段清单（`$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/cloud/contexts/.personal_ontology_groups/groups.md` 中带 `- 模板:` 行的分组 + 内置模板字段定义）——作为 `建议字段` 的候选池，让候选能对号入座到模板字段。
 
 ## 提炼前必须确认的信息
 

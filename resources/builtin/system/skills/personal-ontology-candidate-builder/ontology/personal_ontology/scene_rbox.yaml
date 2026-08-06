@@ -1,0 +1,275 @@
+---
+# ============================================================
+# 个人本体候选构建本体 — RBox（规则层）
+# 版本: v1.0.0
+# 描述: 定义个人本体候选提炼的规则和约束
+# 适用: 候选提炼时的边界判断与执行规则
+# ============================================================
+
+schema_version: "1.0.0"
+profile: scene_rbox/1.0
+
+scene:
+  id: personal_ontology
+  name: 个人本体候选构建
+
+tbox_ref:
+  ontology_id: personal_ontology
+  ontology_version: "1.0.0"
+  file: scene_tbox.yaml
+
+# ============================================================
+# 规则集（Rules）
+# ============================================================
+
+rbox:
+  rules:
+    # ========================================================
+    # 确认制规则（R_CONFIRM_01 ~ R_CONFIRM_03）
+    # ========================================================
+    - id: R_CONFIRM_01
+      type: mandatory
+      name: 候选必须用户确认
+      description: 任何候选都不能跳过用户确认直接生效，这是本技能存在的核心前提
+      applies_to:
+        classes: [PersonalOntologyCandidate]
+      condition:
+        when: "候选状态 != 用户已确认"
+      action:
+        type: block
+        instruction: 候选保持 state=candidate，等待用户在审阅面板确认或驳回
+      severity: blocking
+      confidence: 1.0
+      review_required: true
+
+    - id: R_CONFIRM_02
+      type: mandatory
+      name: 高置信度不自动生效
+      description: confidence=high 只代表证据充分、值得优先请用户看一眼，不代表可以跳过确认
+      applies_to:
+        classes: [PersonalOntologyCandidate]
+        properties: [confidence]
+      condition:
+        when: "confidence == high"
+      action:
+        type: flag_for_review
+        instruction: 标记为优先请用户确认，但仍需用户确认
+      severity: blocking
+      confidence: 1.0
+      review_required: true
+
+    - id: R_CONFIRM_03
+      type: mandatory
+      name: 确认后多去向
+      description: 候选去向由用户在 App 确认面板决定：全局记忆（user/shared）、分组字段区（对号入座填坑）、分组流水区（不填坑）
+      applies_to:
+        classes: [PersonalOntologyCandidate, MemoryTarget]
+      condition:
+        when: "用户确认候选"
+      action:
+        type: route
+        instruction: 技能只提供建议（建议字段预选、memory_scope 建议），不指定具体分组、不决定最终去向
+      severity: advisory
+      confidence: 1.0
+      review_required: false
+
+    # ========================================================
+    # 边界规则（R_BOUNDARY_01 ~ R_BOUNDARY_05）
+    # ========================================================
+    - id: R_BOUNDARY_01
+      type: mandatory
+      name: 本地存储
+      description: 候选内容强制本地存储（local_only），不离开用户本机，不进入任何团队/组织共享的存储
+      applies_to:
+        classes: [PersonalOntologyCandidate]
+      condition:
+        when: "候选将被写入任何共享存储"
+      action:
+        type: block
+        instruction: 只写入 $ORKAS_WORKSPACE_ROOT/$ORKAS_UID/ 下的本地数据目录
+      severity: blocking
+      confidence: 1.0
+      review_required: true
+
+    - id: R_BOUNDARY_02
+      type: mandatory
+      name: 敏感信息拦截
+      description: 客户/他人隐私标识、密钥、密码等敏感信息必须先脱敏；无法确认已脱敏时，直接进 blocked_items，不生成候选
+      applies_to:
+        classes: [PersonalOntologyCandidate, MaskingStatus]
+      condition:
+        when: "masking_status 为 unmasked 或 unknown，且内容可能含敏感信息"
+      action:
+        type: block
+        instruction: 进入 blocked_items（带原因和修复建议），不生成正式候选
+      severity: blocking
+      confidence: 1.0
+      review_required: true
+
+    - id: R_BOUNDARY_03
+      type: mandatory
+      name: 不做企业级组织路由
+      description: 本技能只服务用户个人，不存在"组织本体""业务本体"这类第三方层级；支持个人角色模板（学生/学者/FDE）的字段建议
+      applies_to:
+        classes: [RoleTemplate]
+      condition:
+        when: "内容被路由到组织/业务层级"
+      action:
+        type: block
+        instruction: 一律按个人候选处理，或进入 blocked_items
+      severity: blocking
+      confidence: 1.0
+      review_required: true
+
+    - id: R_BOUNDARY_04
+      type: mandatory
+      name: 来源引用必须
+      description: 每条候选必须带 source_memory_refs（来源引用），方便用户在审阅时回溯来源
+      applies_to:
+        classes: [PersonalOntologyCandidate]
+        properties: [source_memory_refs]
+      condition:
+        when: "候选缺少来源引用"
+      action:
+        type: block
+        instruction: 补全来源引用（会话 id/轮次 id）后才可生成候选
+      severity: blocking
+      confidence: 1.0
+      review_required: true
+
+    - id: R_BOUNDARY_05
+      type: mandatory
+      name: 修改痕迹保护
+      description: 输入材料、原稿、草图、批注或待优化文档里已有用户自己的修改痕迹时，默认优先保护，不擅自覆盖、重写或清理任务范围外内容
+      applies_to:
+        classes: [PersonalMemoryEpisode]
+      condition:
+        when: "输入材料含用户修改痕迹且用户未明确要求改动"
+      action:
+        type: preserve
+        instruction: 不覆盖、不重写、不清理，仅提炼候选
+      severity: blocking
+      confidence: 1.0
+      review_required: true
+
+    # ========================================================
+    # 提炼规则（R_EXTRACT_01 ~ R_EXTRACT_04）
+    # ========================================================
+    - id: R_EXTRACT_01
+      type: mandatory
+      name: 五类候选识别
+      description: 从对话/记忆中识别偏好、实例、属性、关系、规则五类候选；识别偏好时优先看重复出现的模式
+      applies_to:
+        classes: [CandidateKind]
+      condition:
+        when: "扫描对话/记忆材料"
+      action:
+        type: classify
+        instruction: 按五类候选分类提炼；同类偏好被提及多次说明是稳定习惯，不是一次性吐槽
+      severity: advisory
+      confidence: 0.9
+      review_required: false
+
+    - id: R_EXTRACT_02
+      type: mandatory
+      name: 建议字段对号入座
+      description: 读取已安装角色模板的字段清单作为建议字段候选池；拿不准就不填建议字段
+      applies_to:
+        classes: [GroupField, RoleTemplate]
+      condition:
+        when: "候选能对号入座到已安装模板字段"
+      action:
+        type: suggest
+        instruction: 填 target_field（如 沟通风格/工具偏好）；拿不准不填，宁缺毋滥
+      severity: advisory
+      confidence: 0.8
+      review_required: false
+
+    - id: R_EXTRACT_03
+      type: mandatory
+      name: 记忆去向建议
+      description: "跟用户本人强相关的归 user 去向（USER.md 个人画像）；更泛化的事实/规则/项目信息归 shared 去向（MEMORY.md）"
+      applies_to:
+        classes: [MemoryTarget]
+      condition:
+        when: "判断候选记忆去向"
+      action:
+        type: suggest
+        instruction: "归 user → USER.md（个人画像：沟通风格/工具偏好/身份信息）；归 shared → MEMORY.md（共享记忆：更泛化的事实/规则/项目信息）"
+      severity: advisory
+      confidence: 0.8
+      review_required: false
+
+    - id: R_EXTRACT_04
+      type: mandatory
+      name: 追加不覆盖
+      description: 把候选追加进候选池文件，不覆盖已有的待确认候选；写之前先读当前候选池内容，避免重复候选 id
+      applies_to:
+        classes: [PersonalOntologyCandidate]
+      condition:
+        when: "写入候选池 candidates.md"
+      action:
+        type: append
+        instruction: 追加新候选，保留用户还没处理的旧候选；候选 id 用 cand- 前缀 + 短随机串或语义简写 + 序号
+      severity: blocking
+      confidence: 1.0
+      review_required: true
+
+    # ========================================================
+    # 输出格式规则（R_OUTPUT_01 ~ R_OUTPUT_02）
+    # ========================================================
+    - id: R_OUTPUT_01
+      type: mandatory
+      name: 人读 markdown 输出
+      description: candidates.md 和 blocked_items.md 都是人读 markdown，不是 JSON；格式不对 App 里的候选审阅面板读不出来
+      applies_to:
+        classes: [PersonalOntologyCandidate]
+      condition:
+        when: "产出候选/阻断项文件"
+      action:
+        type: format
+        instruction: 按 references/output-contract.md 定义的 ### id + '- 字段: 值' 格式输出
+      severity: blocking
+      confidence: 1.0
+      review_required: true
+
+    - id: R_OUTPUT_02
+      type: mandatory
+      name: 环境变量拼路径
+      description: 用 $ORKAS_WORKSPACE_ROOT/$ORKAS_UID 环境变量拼出真实路径，不猜测、不写死具体用户路径；目录不存在时自动创建
+      applies_to:
+        classes: [PersonalOntologyCandidate]
+      condition:
+        when: "确定候选池/阻断项文件路径"
+      action:
+        type: path
+        instruction: |
+          候选池：$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/local/ontology_candidates/candidates.md
+          阻断项：$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/local/ontology_candidates/blocked_items.md
+      severity: blocking
+      confidence: 1.0
+      review_required: true
+
+# ============================================================
+# 约束（Constraints）
+# ============================================================
+
+constraints:
+  - sync_policy: local_only
+  - state: candidate
+  - target_state: candidate_only
+  - no_direct_resource_access: true
+  - no_production_release_claim: true
+
+# ============================================================
+# 禁止动作（Forbidden Actions）
+# ============================================================
+
+forbidden_actions:
+  - write_active_personal_ontology_without_confirmation
+  - inject_into_business_ontology
+  - enter_team_shared_storage
+  - submit_to_nseap_org
+  - publish_team_visible_personal_asset
+  - cross_user_reuse
+  - auto_adopt_high_confidence_candidate
