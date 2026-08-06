@@ -373,6 +373,8 @@ Expected: FAIL（`normalizeFeishuReaction` 未定义 / 事件未注册）
 
 **types.ts** — `InboundEnvelope` 末尾（`receivedAt: string;` 之后）加：
 
+```
+
 ```ts
   /** Synthetic feedback event (a reaction on one of our messages), not a
    * real user text message. Skips burst merging and carries the interaction
