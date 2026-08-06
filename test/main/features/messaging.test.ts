@@ -727,6 +727,112 @@ describe('messaging manager adapter flow', () => {
       vi.resetModules();
     }
   });
+
+  it('bridges a pending wake request into an approval card in the bound chat', async () => {
+    let busListener: ((event: unknown) => void) | undefined;
+    const groupSend = vi.fn(async () => ({ ok: true }));
+    const subscribe = vi.fn((_uid: string, _cid: string, listener: (event: unknown) => void) => {
+      busListener = listener;
+      return () => { busListener = undefined; };
+    });
+    const sendApprovalCard = vi.fn(async () => ({ deliveryId: 'om_approval_wake_1' }));
+    const adapter: MessagingCardAdapter = {
+      platform: 'feishu_lark',
+      async start(signal, callbacks) {
+        await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      async stop() {},
+      async checkHealth() {
+        return { kind: 'connected', checkedAt: new Date().toISOString() };
+      },
+      sendMessage: vi.fn(async () => ({})),
+      sendCard: vi.fn(async () => ({})),
+      updateCard: vi.fn(async () => ({})),
+      sendApprovalCard,
+    };
+
+    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
+      createAdapter: vi.fn(() => adapter),
+    }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe }));
+
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const created = await registry.createInstance('user-1', {
+        platform: 'feishu_lark',
+        displayName: 'Wake bridge bot',
+        policy: { allowUserIds: ['user-1'] },
+        secret: { appId: 'cli_1234567890abcdef', appSecret: 'secret' },
+      });
+      await manager.setEnabled('user-1', created.id, true);
+      await vi.waitFor(async () => {
+        const instances = await manager.listInstances('user-1');
+        expect(instances[0]?.status.kind).toBe('connected');
+      });
+      await manager.ingestInbound('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'incoming-wake-1',
+        externalChatId: 'oc_wake',
+        externalUserId: 'user-1',
+        text: 'dispatch something',
+        isGroup: false,
+        mentionPresent: false,
+        receivedAt: new Date().toISOString(),
+      });
+      expect(busListener).toBeTypeOf('function');
+
+      busListener?.({
+        type: 'wake_request',
+        cid: 'cid-any',
+        request: {
+          id: 'wake-bridge-1',
+          agent_id: 'agent-1',
+          agent_name: '研究员',
+          source: 'dispatch_to',
+          objective: '对比三种传感器方案',
+          status: 'pending',
+        },
+      });
+      await vi.waitFor(() => expect(sendApprovalCard).toHaveBeenCalledTimes(1));
+      expect(sendApprovalCard.mock.calls[0]?.[0]).toBe('oc_wake');
+      expect(sendApprovalCard.mock.calls[0]?.[1]).toMatchObject({
+        wakeId: 'wake-bridge-1',
+        title: '需要你的审批：研究员',
+        description: '对比三种传感器方案',
+      });
+
+      // Non-pending requests must not produce cards.
+      busListener?.({
+        type: 'wake_request',
+        cid: 'cid-any',
+        request: {
+          id: 'wake-bridge-2',
+          agent_id: 'agent-1',
+          source: 'dispatch_to',
+          objective: 'x',
+          status: 'approved',
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(sendApprovalCard).toHaveBeenCalledTimes(1);
+      await manager.stopForUser('user-1');
+    } finally {
+      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      vi.doUnmock('../../../src/main/features/group_chat');
+      vi.doUnmock('../../../src/main/features/group_chat/bus');
+      vi.resetModules();
+    }
+  });
 });
 
 describe('feishu message media degradation', () => {

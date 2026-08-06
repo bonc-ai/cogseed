@@ -4,7 +4,7 @@ import { createLogger } from '../../logger';
 import { safeId } from '../../storage';
 import * as groupChat from '../group_chat';
 import { subscribe, type GroupEvent } from '../group_chat/bus';
-import type { GroupMessage } from '../group_chat/visibility';
+import type { GroupMessage, WakeRequestSummary } from '../group_chat/visibility';
 import * as projects from '../projects';
 import * as wakeService from '../p3394/wake-service';
 import * as registry from './registry';
@@ -395,6 +395,19 @@ async function attachBindingListener(
   const streamingEnabled = instance.responseMode === 'streaming_card' && isCardAdapter(runtime.adapter);
   const unsubscribe = subscribe(uid, binding.cid, (event: GroupEvent) => {
     if (!isCurrentRuntime(uid, runtime)) return;
+    if (event.type === 'wake_request') {
+      // A pending agent wake inside this bound conversation surfaces as an
+      // interactive approval card in the same Feishu chat.
+      if (event.request.status === 'pending') {
+        void sendWakeApprovalCard(runtime, binding, event.request).catch((error) => {
+          log.warn('messaging wake approval card send failed', {
+            instanceId: instance.id,
+            error: (error as Error).message,
+          });
+        });
+      }
+      return;
+    }
     if (event.type === 'process') {
       if (streamingEnabled) handleCardProcessEvent(uid, runtime, binding, event);
       return;
@@ -412,6 +425,26 @@ async function attachBindingListener(
     });
   });
   runtime.listeners.set(binding.key, unsubscribe);
+}
+
+/** Bridge a pending wake request into an interactive approval card on the
+ * bound Feishu chat. Buttons route back through ingestCardAction → the wake
+ * gate; the card is finalized by handleCardAction after the decision. */
+async function sendWakeApprovalCard(
+  runtime: RuntimeInstance,
+  binding: MessagingBinding,
+  request: WakeRequestSummary,
+): Promise<void> {
+  const adapter = runtime.adapter;
+  if (!isCardAdapter(adapter) || !adapter.sendApprovalCard) return;
+  const agentLabel = request.agent_name || request.agent_id;
+  await adapter.sendApprovalCard(binding.externalChatId, {
+    wakeId: request.id,
+    title: `需要你的审批：${agentLabel}`,
+    description: request.objective.slice(0, 1500),
+    allowSession: true,
+    allowPermanent: false,
+  });
 }
 
 function isCardAdapter(adapter: MessagingAdapter): adapter is MessagingCardAdapter {
