@@ -384,7 +384,11 @@ async function runRegistration(flow: RegistrationFlow, activation: RegistrationA
     const result = await lark.registerApp({
       source: 'desktop-messaging',
       signal: flow.controller.signal,
-      createOnly: true,
+      // Keep both entry points on the official landing page: "立即创建" (create
+      // a fresh app) and "已有应用" (reuse an app the scanning account already
+      // manages). Omitting createOnly leaves the existing-app option enabled;
+      // either path yields the same client_id/client_secret result that the
+      // activation below binds.
       appPreset: { name: flow.draft.displayName },
       addons: APP_ADDONS,
       onQRCodeReady: (info) => {

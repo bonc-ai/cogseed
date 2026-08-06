@@ -85,7 +85,6 @@ describe('Feishu QR registration', () => {
     expect(started).not.toHaveProperty('client_secret');
     expect(qrReady).toBeTypeOf('function');
     expect(registerApp).toHaveBeenCalledWith(expect.objectContaining({
-      createOnly: true,
       appPreset: { name: 'Team helper' },
       addons: {
         preset: false,
@@ -93,6 +92,9 @@ describe('Feishu QR registration', () => {
         events: { items: { tenant: ['im.message.receive_v1'] } },
       },
     }));
+    // The landing page must keep the "已有应用" (reuse existing app) entry
+    // point enabled next to "立即创建"; passing createOnly would disable it.
+    expect(registerApp.mock.calls[0]?.[0]).not.toHaveProperty('createOnly');
 
     qrReady?.({ url: 'https://accounts.feishu.cn/oauth/authorize?code=temporary', expireIn: 600 });
     const waiting = feature.getFeishuQrRegistrationStatus('user-1', started.flowId);
