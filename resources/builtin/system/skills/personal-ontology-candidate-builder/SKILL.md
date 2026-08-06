@@ -41,12 +41,17 @@ negative_examples:
 
 1. 判断触发类型：这是一次主动的"帮我整理记忆"请求，还是对话里自然出现的"记住这个"信号。
 2. 扫描最近的对话/记忆材料，识别偏好、实例、属性、关系、规则五类候选。识别偏好时优先看重复出现的模式（同类偏好被提及多次，说明是稳定习惯，不是一次性吐槽）。
-3. 读取已安装角色模板的字段清单，作为 `建议字段` 的候选池：查看 `$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/cloud/contexts/.personal_ontology_groups/groups.md` 中带 `- 模板:` 行的分组（`- 模板: student@1.0.0` 这种格式），结合内置模板（学生/学者/FDE）的字段定义，判断这条候选能对号入座到哪个模板字段（如"沟通风格""工具偏好"）。拿不准就不填建议字段。
-4. 对每条候选，先检查是否涉及未脱敏的敏感信息（密钥、密码、他人隐私）——有问题的直接进 `blocked_items`，不要悄悄丢弃、也不要生成候选。
-5. 判断候选该进哪本记忆：跟"这个人本身"强相关的（沟通风格、工具偏好、身份信息）归 `memory_scope: user`；更泛化的事实/规则/项目信息归 `memory_scope: shared`。
-6. 给每条候选写一句**人话摘要**（`summary`），要具体、口语化，让用户一看就懂是什么内容；同时准备好确认后要写进记忆的**精炼文本**（`memory_text`，通常和 summary 一致或更简练）。
-7. 把候选追加进候选池文件（见下方"输出位置"），**不要覆盖已有的待确认候选**，只追加新的。
-8. 用一两句话跟用户说明本次提炼了几条候选、大致是什么内容，请用户去候选审阅面板确认或驳回；不要在对话里罗列全部候选细节。
+3. **读全本体（强制门禁，不可跳过）**：提炼前必须先完整读取本技能本体 `ontology/personal_ontology/` 下**全部五份 yaml**——`scene_package.yaml`（包元数据/启用项）、`scene_tbox.yaml`（候选类型/来源/去向概念定义）、`scene_rbox.yaml`（确认制/边界/提炼规则）、`scene_abox.yaml`（fewshot 示例）、`scene_mapping.yaml`（候选/确认/分组字段映射）。候选的分类、置信度、去向、字段映射全部以 yaml 为准，**不得跳步、不得凭印象拍脑袋**；本体规则与本文件硬边界一致，冲突时以本文件为准。
+4. 读取已安装角色模板的字段清单，作为 `建议字段` 的候选池：查看 `$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/cloud/contexts/.personal_ontology_groups/groups.md` 中带 `- 模板:` 行的分组（`- 模板: student@1.0.0` 这种格式），结合内置模板（学生/学者/FDE）的字段定义，判断这条候选能对号入座到哪个模板字段（如"沟通风格""工具偏好"）。拿不准就不填建议字段。
+5. 对每条候选，先检查是否涉及未脱敏的敏感信息（密钥、密码、他人隐私）——有问题的直接进 `blocked_items`，不要悄悄丢弃、也不要生成候选。
+6. 判断候选该进哪本记忆：跟"这个人本身"强相关的（沟通风格、工具偏好、身份信息）归 `memory_scope: user`；更泛化的事实/规则/项目信息归 `memory_scope: shared`。
+7. 给每条候选写一句**人话摘要**（`summary`），要具体、口语化，让用户一看就懂是什么内容；同时准备好确认后要写进记忆的**精炼文本**（`memory_text`，通常和 summary 一致或更简练）。
+8. **查重门禁（强制，不可跳过）**：写候选池之前，先 read 当前候选池 `candidates.md`，并逐条对照已生效记忆 `$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/cloud/memory/USER.md`（user 去向）和 `$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/cloud/memory/MEMORY.md`（shared 去向）：
+   - 与已生效记忆**完全重复**的事实 → **不进候选池**（已生效事实不得再次进池；候选 ID 池内也禁止重复）；
+   - 与已生效记忆同源但类型/表述不同（如"事实"vs"推断偏好"）→ 可进池，但必须在第 10 步汇报里向用户说明与已有记忆的重叠关系；
+   - 拿不准是否重复时，先查再写，不要默认当成新候选。
+9. **追加 + 三方同步（强制）**：把候选追加进候选池文件（见下方"输出位置"），**不要覆盖已有的待确认候选**，只追加新的；同时核对角色模板文件 `$ORKAS_WORKSPACE_ROOT/$ORKAS_UID/cloud/contexts/.personal_ontology_groups/`（如 `student.md`）里的 `[候选]` 标记：进池的条目同步改为 `[候选池: <candidateId>]`，已在记忆生效的改为 `[已生效]`——候选池、模板标记、生效记忆**三方必须一致**，缺一即状态漂移。
+10. **落盘核验（强制）**：追加完成后用 cat 核对实际落盘内容（候选条数、候选 ID、字段是否齐全、标记是否同步），再向用户汇报；**禁止凭记忆或上次的汇报复述候选数量**。最后用一两句话跟用户说明本次提炼了几条候选、大致是什么内容，请用户去候选审阅面板确认或驳回；不要在对话里罗列全部候选细节。
 
 ## 输出位置（必须严格遵守）
 
@@ -71,12 +76,26 @@ negative_examples:
 - 客户/他人隐私标识、密钥、密码等敏感信息必须先脱敏；无法确认已脱敏时，直接进 `blocked_items`，不生成候选。
 - `confidence=high` 只代表证据充分、值得优先请用户看一眼，不代表可以跳过确认。
 - 每条候选必须带 `source_memory_refs`（来源引用），方便用户在审阅时回溯这条候选是从哪段对话/记忆来的。
+- 追加候选前必须对照已生效记忆（USER.md/MEMORY.md）逐条查重：**已生效事实不得再次进池**；运行结束前必须 cat 核验实际落盘内容再汇报。历史教训：曾虚报"已写入候选池"、写错文件名、已生效事实重复进池，三类偏差都源于跳步。
 
 ## 参考
 
 - `schemas.json`
+- `references/skill-spec.yaml` — 技能规范（ProductionProcessSkill 元数据/成熟度/契约）
+- `references/ontology-mapping.md` — 三层本体入口（TBox/RBox/ABox 链接）
+- `references/validation-contract.md` — 静态/触发/执行检查清单
+- `references/kstar-evolution.md` — KSTAR 进化记录（A_hat/R_hat/DeltaA/DeltaR）
+- `ontology/personal_ontology/` — 本技能的个人本体候选构建本体（scene 规范 YAML，v1.0.0）：
+  - `scene_package.yaml` — 包清单与元数据
+  - `scene_tbox.yaml` — 概念层（候选五类/角色模板/来源/去向/脱敏）
+  - `scene_rbox.yaml` — 规则层（确认制/local_only/敏感拦截/追加不覆盖/双区路由）
+  - `scene_abox.yaml` — 实例层（学生/学者/FDE 场景 fewshot 示例）
+  - `scene_mapping.yaml` — 映射层（候选/确认/分组/模板到物理数据源）
+  - 本体规则与本文件硬边界一致；运行时输出契约以本文件 + `references/output-contract.md` 为准
 - `references/output-contract.md`
 - `references/input-contract.md`
 - `references/examples.md`
 - `references/failure-modes.md`
 - `references/governance-boundaries.md`
+- `evals/` — 评测套件（eval-cases.yaml / evals.json）
+- `agents/openai.yaml` — 平台技能接口声明
