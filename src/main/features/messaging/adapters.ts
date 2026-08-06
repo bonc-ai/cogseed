@@ -82,6 +82,10 @@ interface FeishuEventData {
 
 interface FeishuReactionEvent {
   message_id?: string;
+  /** Real shape of SDK-flattened events: the operator is a `user_id` object
+   * ({ union_id, user_id, open_id }). `operator_id` is kept only for
+   * compatibility with historical/gateway event shapes. */
+  user_id?: { union_id?: string; user_id?: string; open_id?: string };
   operator_id?: string;
   operator_type?: string;
   reaction_type?: { emoji_type?: string };
@@ -279,7 +283,7 @@ function normalizeFeishuReaction(event: FeishuReactionEvent): {
 } | null {
   if (event.operator_type !== 'user') return null;
   const messageId = event.message_id?.trim() || '';
-  const operatorOpenId = event.operator_id?.trim() || '';
+  const operatorOpenId = event.user_id?.open_id?.trim() || event.operator_id?.trim() || '';
   const emoji = event.reaction_type?.emoji_type?.trim() || '';
   if (!messageId || !operatorOpenId || !emoji) return null;
   const rawCreateTime = Number(event.create_time);

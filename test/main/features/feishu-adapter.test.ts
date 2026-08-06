@@ -345,7 +345,7 @@ describe('Feishu official event adapter', () => {
     const { normalizeFeishuReaction } = _adapterTestHooks;
     expect(normalizeFeishuReaction({
       message_id: 'om_9',
-      operator_id: 'ou_1',
+      user_id: { open_id: 'ou_1' },
       operator_type: 'user',
       reaction_type: { emoji_type: 'THUMBSUP' },
       create_time: '1710000000000',
@@ -362,7 +362,7 @@ describe('Feishu official event adapter', () => {
       reaction_type: { emoji_type: 'Typing' },
     })).toBeNull();
     expect(normalizeFeishuReaction({ operator_type: 'user' })).toBeNull();
-    expect(normalizeFeishuReaction({ message_id: 'om_9', operator_id: 'ou_1', operator_type: 'user' })).toBeNull();
+    expect(normalizeFeishuReaction({ message_id: 'om_9', user_id: { open_id: 'ou_1' }, operator_type: 'user' })).toBeNull();
   });
 
   it('synthesizes an inbound envelope only for reactions on our own messages', async () => {
@@ -417,11 +417,11 @@ describe('Feishu official event adapter', () => {
 
     // 不是我们发的消息 → 不合成
     resolveDelivery.mockResolvedValueOnce(null);
-    await reaction({ operator_type: 'user', operator_id: 'ou_1', message_id: 'om_9', reaction_type: { emoji_type: 'THUMBSUP' }, create_time: '1710000000000' });
+    await reaction({ operator_type: 'user', user_id: { open_id: 'ou_1' }, message_id: 'om_9', reaction_type: { emoji_type: 'THUMBSUP' }, create_time: '1710000000000' });
     expect(onInbound).not.toHaveBeenCalled();
 
     // 我们发过的消息 → 合成 synthetic envelope
-    await reaction({ operator_type: 'user', operator_id: 'ou_1', message_id: 'om_9', reaction_type: { emoji_type: 'THUMBSUP' }, create_time: '1710000000000' });
+    await reaction({ operator_type: 'user', user_id: { open_id: 'ou_1' }, message_id: 'om_9', reaction_type: { emoji_type: 'THUMBSUP' }, create_time: '1710000000000' });
     expect(onInbound).toHaveBeenCalledTimes(1);
     const envelope = onInbound.mock.calls[0][0];
     expect(envelope).toMatchObject({
