@@ -489,4 +489,12 @@ describe('Feishu QR registration', () => {
     });
     expect(feature.getFeishuQrRegistrationStatus('user-1', started.flowId)).toMatchObject({ state: 'cancelled' });
   });
+
+  it('accepts the official SDK launcher hosts for QR presentation', async () => {
+    const { qrUrl } = (await import('../../../src/main/features/messaging/feishu-registration'))._feishuRegistrationTestHooks;
+    expect(qrUrl('https://open.feishu.cn/page/launcher?user_code=AB12-CD34&from=sdk')).toContain('open.feishu.cn');
+    expect(qrUrl('https://open.larksuite.com/page/launcher?user_code=AB12-CD34&from=sdk')).toContain('open.larksuite.com');
+    expect(qrUrl('https://accounts.feishu.cn/oauth/authorize?code=temporary')).toContain('accounts.feishu.cn');
+    expect(() => qrUrl('https://evil.example/steal?code=x')).toThrow('untrusted QR URL');
+  });
 });

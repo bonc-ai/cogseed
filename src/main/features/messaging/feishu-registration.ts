@@ -19,7 +19,14 @@ const log = createLogger('messaging:feishu-registration');
 const FLOW_RETENTION_MS = 10 * 60 * 1000;
 const QR_MIN_LIFETIME_SECONDS = 30;
 const QR_MAX_LIFETIME_SECONDS = 60 * 60;
-const ALLOWED_QR_HOSTS = new Set(['accounts.feishu.cn', 'accounts.larksuite.com']);
+const ALLOWED_QR_HOSTS = new Set([
+  // The official SDK serves its launcher QR from open.feishu.cn; the
+  // accounts.* hosts are kept for historical/verification fixtures.
+  'accounts.feishu.cn',
+  'accounts.larksuite.com',
+  'open.feishu.cn',
+  'open.larksuite.com',
+]);
 const STALE_INSTANCE_CLEANUP_DELAYS_MS = [0, 50, 150] as const;
 
 export type FeishuRegistrationState =
