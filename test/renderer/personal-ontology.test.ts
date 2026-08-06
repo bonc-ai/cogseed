@@ -38,9 +38,9 @@ describe('personal ontology renderer integration', () => {
 
   it('contains the panel, sidebar entry, rejection modal, and lazy view wiring', () => {
     for (const id of [
-      'personal-ontology-btn', 'panel-personal-ontology', 'personal-onto-stats',
-      'personal-onto-body', 'personal-onto-actions', 'personal-onto-modal',
-      'personal-onto-modal-reason', 'personal-onto-modal-ok', 'personal-onto-modal-cancel',
+      'personal-ontology-btn', 'panel-personal-ontology', 'personal-onto-sidebar',
+      'personal-onto-nav', 'personal-onto-main-header', 'personal-onto-main-body',
+      'personal-onto-modal', 'personal-onto-modal-reason', 'personal-onto-modal-ok', 'personal-onto-modal-cancel',
     ]) expect(html).toContain(`id="${id}"`);
     expect(boot).toContain("view === 'personal-ontology' ? 'panel-personal-ontology'");
     expect(boot).toContain("_loadViewFeature('personal-ontology', 'personal-ontology'");
@@ -50,10 +50,10 @@ describe('personal ontology renderer integration', () => {
   });
 
   it("uses Zhang Hao's direct IPC review-panel flow", () => {
-    expect(ontology).toContain("window.orkas.invoke('personalOntology.candidates.list'");
+    expect(ontology).toContain("_pocInvoke('personalOntology.candidates.list'");
     expect(ontology).toContain("window.orkas.invoke('personalOntology.candidates.confirm'");
-    expect(ontology).toContain("window.orkas.invoke('personalOntology.candidates.reject'");
-    expect(ontology).toContain("window.orkas.invoke('personalOntology.groups.create'");
+    expect(ontology).toContain("_pocInvoke('personalOntology.candidates.reject'");
+    expect(ontology).toContain("_pocInvoke('personalOntology.groups.create'");
     expect(ontology).toContain('renderDestinationPanel');
     expect(ontology).toContain('showRejectReasonModal');
   });

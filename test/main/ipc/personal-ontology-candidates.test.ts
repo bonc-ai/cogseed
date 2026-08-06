@@ -64,7 +64,7 @@ describe('ipc › personal ontology candidate channels', () => {
     expect((await call('personalOntology.candidates.rejectBatch', { candidateIds: {} })).ok).toBe(false);
     await call('personalOntology.candidates.confirmBatch', { candidateIds: ['a', 'b'], toGlobalMemory: false, toGroupIds: ['g1'], uid: 'attacker' });
     await call('personalOntology.candidates.rejectBatch', { candidateIds: ['c'], reason: 'no', uid: 'attacker' });
-    expect(feature.confirmCandidates).toHaveBeenCalledWith(TEST_UID, ['a', 'b'], { toGlobalMemory: false, toGroupIds: ['g1'] });
+    expect(feature.confirmCandidates).toHaveBeenCalledWith(TEST_UID, ['a', 'b'], { toGlobalMemory: false, toGroupIds: ['g1'] }, { routeWithLlm: false });
     expect(feature.rejectCandidates).toHaveBeenCalledWith(TEST_UID, ['c'], 'no');
   });
 });

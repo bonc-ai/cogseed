@@ -14,7 +14,7 @@
   },
   "candidates_md_format": {
     "description": "candidates.md is a sequence of level-3 markdown headers, one per candidate. Each header is the candidate_id; fields below it are '- 字段: 值' lines.",
-    "example": "### cand-abc123\n- 类型: preference\n- 置信度: high\n- 摘要: 喜欢先讲原理再举例子，最后才给代码\n- 记忆去向: user\n- 记忆文本: 沟通风格：先讲原理，再用例子带入，最后才给代码，不堆术语\n- 来源: conv-xxxx-turn-3",
+    "example": "### cand-abc123\n- 类型: preference\n- 置信度: high\n- 摘要: 喜欢先讲原理再举例子，最后才给代码\n- 记忆去向: user\n- 记忆文本: 沟通风格：先讲原理，再用例子带入，最后才给代码，不堆术语\n- 建议字段: 偏好\n- 来源: conv-xxxx-turn-3",
     "fields": {
       "类型 (kind)": "preference | instance | property | relation | rule",
       "置信度 (confidence)": "low | medium | high — evidence strength only, never implies auto-adopt",
@@ -23,6 +23,7 @@
       "记忆文本 (memory_text)": "the exact text that will be written into USER.md/MEMORY.md once confirmed — concise, no raw JSON blobs, no large config dumps",
       "路径 (registry_like_path)": "optional navigation hint, e.g. Personal/Preferences/CommunicationStyle",
       "差异 (diff_summary)": "optional — what changed vs. an existing memory entry, if this updates one",
+      "建议字段 (target_field)": "optional — template field name from the installed role-template field list (e.g. 沟通风格, 工具偏好); leave out when unsure; App preselects it on confirm, user can override",
       "来源 (source_memory_refs)": "comma-separated source refs (conversation ids / turn ids) so the user can trace where this came from"
     }
   },

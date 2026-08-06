@@ -28,7 +28,8 @@ let _memEditor = null;
 let _memGroups = [];
 let _memGroupsLoaded = false;
 // At most one group's content editor open at a time.
-//   { groupId, content, loaded, dirty } — null when closed.
+//   { groupId, content, loaded, dirty, isTemplated, view:'form'|'flow'|'raw',
+//     fields?, entries? } — null when closed.
 let _memGroupEditor = null;
 
 function _memIc(name, className) {
@@ -240,19 +241,21 @@ function _memGroupPreview(content) {
 }
 
 function _memRenderGroupsSection() {
-  const rows = _memGroups.map((g) => _memRenderGroupRow(g)).join('');
+  // 模板预置组收纳在角色模板卡片内（可展开），这里只平铺非模板组
+  const plainGroups = _memGroups.filter((g) => !g.template_id);
+  const rows = plainGroups.map((g) => _memRenderGroupRow(g)).join('');
   const editorRow = _memGroupEditor ? _memRenderGroupEditor() : '';
   return `
     <div class="memory-section memory-groups-section">
       <div class="memory-section-head">
         <span class="memory-section-icon">${_memIc('folder')}</span>
         <h2 class="memory-section-title">${escapeHtml(t('memory.groups_title'))}</h2>
-        <span class="memory-section-file">${t('memory.count', { n: _memGroups.length })}</span>
+        <span class="memory-section-file">${t('memory.count', { n: plainGroups.length })}</span>
         <span class="memory-flex"></span>
         <button type="button" class="memory-icon-btn" data-mem-group-action="create" title="${escapeHtml(t('memory.groups_create'))}">${_memIc('plus')}</button>
       </div>
       <p class="memory-section-sub">${escapeHtml(t('memory.groups_sub'))}</p>
-      ${!_memGroups.length ? `<div class="memory-empty muted">${escapeHtml(t('memory.groups_empty'))}</div>` : rows}
+      ${!plainGroups.length ? `<div class="memory-empty muted">${escapeHtml(t('memory.groups_empty'))}</div>` : rows}
       ${editorRow}
     </div>
   `;
@@ -263,10 +266,13 @@ function _memRenderGroupRow(g) {
   const preview = _memGroupEditor && _memGroupEditor.groupId === g.group_id && _memGroupEditor.loaded
     ? _memGroupPreview(_memGroupEditor.content)
     : (g.preview !== undefined ? _memGroupPreview(g.preview) : t('memory.groups_preview_placeholder'));
+  const templateBadge = (g.template_id && g.template_version)
+    ? `<span class="memory-group-template-badge">${escapeHtml(t('memory.group_template_badge', { name: g.template_id, version: g.template_version }))}</span>`
+    : '';
   return `
     <div class="memory-entry memory-group-row${isEditing ? ' is-active' : ''}" data-mem-group-id="${escapeHtml(g.group_id)}">
       <div class="memory-group-row-main" data-mem-group-action="toggle-edit" data-mem-group-id="${escapeHtml(g.group_id)}">
-        <div class="memory-group-row-title">${escapeHtml(g.title || '')}</div>
+        <div class="memory-group-row-title">${escapeHtml(g.title || '')}${templateBadge}</div>
         <div class="memory-group-row-preview muted">${escapeHtml(preview)}</div>
       </div>
       <div class="memory-entry-foot">
@@ -278,17 +284,103 @@ function _memRenderGroupRow(g) {
   `;
 }
 
+function _memParseFlowEntries(content) {
+  const flowIdx = String(content || '').indexOf('## 流水区');
+  const flowText = flowIdx === -1 ? String(content || '') : String(content || '').slice(flowIdx + '## 流水区'.length);
+  return flowText.split('\n§\n').map((s) => s.trim()).filter(Boolean);
+}
+
+function _memRenderGroupFormView(ed) {
+  if (!ed.fields) return `<div class="memory-empty muted">${escapeHtml(t('common.loading'))}</div>`;
+  if (!ed.fields.length) return `<div class="memory-empty muted">${escapeHtml(t('memory.group_form_no_fields'))}</div>`;
+  const rows = ed.fields.map((f) => `
+    <div class="memory-group-field" data-mem-group-field="${escapeHtml(f.name)}">
+      <div class="memory-group-field-name">
+        <span class="memory-group-field-name-text">${escapeHtml(f.name)}</span>
+        ${f.isCustom ? `<span class="memory-group-field-custom-badge">${escapeHtml(t('memory.group_field_custom_badge', { name: '' }))}</span>` : ''}
+        ${f.isRelation ? `<span class="memory-group-field-rel" title="关系字段">A → B</span>` : ''}
+        ${f.description ? `<span class="memory-group-field-desc muted">${escapeHtml(f.description)}</span>` : ''}
+      </div>
+      <div class="memory-group-field-values">
+        ${f.values && f.values.length
+          ? f.values.map((v) => `
+            <div class="memory-group-field-value">
+              <span class="memory-group-field-value-text">${escapeHtml(v.value)}</span>
+              <span class="memory-group-field-source muted">${escapeHtml(t('memory.group_field_value_source', { value: '', source: v.source }))}</span>
+              <button type="button" class="memory-icon-btn" data-mem-group-action="field-edit-value"
+                data-mem-group-field="${escapeHtml(f.name)}" data-mem-value="${escapeHtml(v.value)}"
+                title="${escapeHtml(t('memory.edit'))}">${_memIc('edit-pencil')}</button>
+              <button type="button" class="memory-icon-btn is-muted" data-mem-group-action="field-remove-value"
+                data-mem-group-field="${escapeHtml(f.name)}" data-mem-value="${escapeHtml(v.value)}"
+                title="${escapeHtml(t('memory.delete'))}">${_memIc('x')}</button>
+            </div>`).join('')
+          : `<span class="memory-group-field-empty muted">${escapeHtml(t('memory.group_field_empty'))}</span>`}
+      </div>
+      <div class="memory-group-field-add">
+        <input type="text" class="memory-group-field-input" data-mem-group-field="${escapeHtml(f.name)}"
+          placeholder="${escapeHtml(t('memory.group_field_add_placeholder'))}" />
+        <button type="button" class="btn btn-sm btn-primary" data-mem-group-action="field-add-value"
+          data-mem-group-field="${escapeHtml(f.name)}">${escapeHtml(t('memory.save'))}</button>
+      </div>
+    </div>`).join('');
+  return `<div class="memory-group-form-view">${rows}</div>`;
+}
+
+function _memRenderGroupFlowView(ed) {
+  const entries = ed.entries || [];
+  if (!entries.length) return `<div class="memory-empty muted">${escapeHtml(t('memory.group_flow_empty'))}</div>`;
+  const rows = entries.map((e) => `
+    <div class="memory-group-flow-entry">
+      <span class="memory-group-flow-idx">${escapeHtml(String(entries.indexOf(e) + 1))}.</span>
+      <span class="memory-group-flow-text">${escapeHtml(e)}</span>
+      <button type="button" class="btn btn-sm" data-mem-group-action="entry-promote" data-mem-entry="${escapeHtml(e)}">${escapeHtml(t('memory.group_promote'))}</button>
+      <button type="button" class="memory-icon-btn is-muted" data-mem-group-action="entry-remove" data-mem-entry="${escapeHtml(e)}" title="${escapeHtml(t('memory.delete'))}">${_memIc('x')}</button>
+    </div>`).join('');
+  return `<div class="memory-group-flow-view">${rows}</div>`;
+}
+
+function _memRenderGroupRawView(ed) {
+  const content = ed.loaded ? ed.content : '';
+  return `<textarea class="memory-entry-textarea memory-group-editor-textarea" rows="10" data-mem-group-content>${escapeHtml(content)}</textarea>`;
+}
+
 function _memRenderGroupEditor() {
   const ed = _memGroupEditor;
   if (!ed) return '';
-  const content = ed.loaded ? ed.content : '';
-  return `
+  const isTemplated = !!ed.isTemplated;
+  const view = isTemplated ? (ed.view || 'form') : 'raw';
+
+  if (!isTemplated) {
+    return `
     <div class="memory-entry is-editing memory-group-editor" data-mem-group-editor="${escapeHtml(ed.groupId)}">
       ${!ed.loaded
         ? `<div class="memory-empty muted">${escapeHtml(t('common.loading'))}</div>`
-        : `<textarea class="memory-entry-textarea memory-group-editor-textarea" rows="10" data-mem-group-content>${escapeHtml(content)}</textarea>`}
+        : _memRenderGroupRawView(ed)}
       <div class="memory-entry-foot">
-        <span class="memory-entry-charcount">${ed.loaded ? content.length : 0}</span>
+        <span class="memory-entry-charcount">${ed.loaded ? (ed.content || '').length : 0}</span>
+        <span class="memory-flex"></span>
+        <button type="button" class="btn btn-sm" data-mem-group-action="close-edit">${escapeHtml(t('memory.cancel'))}</button>
+        <button type="button" class="btn btn-sm btn-primary" data-mem-group-action="save-content" data-mem-group-id="${escapeHtml(ed.groupId)}" ${ed.loaded ? '' : 'disabled'}>${escapeHtml(t('memory.save'))}</button>
+      </div>
+    </div>
+  `;
+  }
+
+  const tab = (key, label) => `<button type="button" class="memory-group-editor-tab${view === key ? ' is-active' : ''}" data-mem-group-action="view-${key}">${escapeHtml(label)}</button>`;
+  return `
+    <div class="memory-entry is-editing memory-group-editor" data-mem-group-editor="${escapeHtml(ed.groupId)}">
+      <div class="memory-group-editor-tabs">
+        ${tab('form', t('memory.group_form_view'))}
+        ${tab('flow', t('memory.group_flow_view'))}
+        ${tab('raw', t('memory.group_raw_view'))}
+      </div>
+      ${!ed.loaded
+        ? `<div class="memory-empty muted">${escapeHtml(t('common.loading'))}</div>`
+        : view === 'form' ? _memRenderGroupFormView(ed)
+        : view === 'flow' ? _memRenderGroupFlowView(ed)
+        : _memRenderGroupRawView(ed)}
+      <div class="memory-entry-foot">
+        <span class="memory-entry-charcount">${ed.loaded ? (ed.content || '').length : 0}</span>
         <span class="memory-flex"></span>
         <button type="button" class="btn btn-sm" data-mem-group-action="close-edit">${escapeHtml(t('memory.cancel'))}</button>
         <button type="button" class="btn btn-sm btn-primary" data-mem-group-action="save-content" data-mem-group-id="${escapeHtml(ed.groupId)}" ${ed.loaded ? '' : 'disabled'}>${escapeHtml(t('memory.save'))}</button>
@@ -323,7 +415,22 @@ async function _memOpenGroupEditor(groupId) {
     _memRerenderGroups();
     return;
   }
-  _memGroupEditor = { groupId, content: res.content || '', loaded: true };
+  const group = _memGroups.find((g) => g.group_id === groupId);
+  const isTemplated = !!(group && group.template_id);
+  _memGroupEditor = {
+    groupId,
+    content: res.content || '',
+    loaded: true,
+    isTemplated,
+    view: isTemplated ? 'form' : 'raw',
+  };
+  if (isTemplated) {
+    const fieldsRes = await _memInvoke('personalOntology.groups.fields.list', { groupId });
+    if (_memGroupEditor && _memGroupEditor.groupId === groupId) {
+      _memGroupEditor.fields = (fieldsRes && fieldsRes.ok !== false && Array.isArray(fieldsRes.fields)) ? fieldsRes.fields : [];
+      _memGroupEditor.entries = _memParseFlowEntries(_memGroupEditor.content);
+    }
+  }
   _memRerenderGroups();
 }
 
@@ -391,9 +498,103 @@ async function _memSaveGroupContent(groupId) {
   }
   _memToast(t('memory.groups_saved'), 'success');
   if (_memGroupEditor && _memGroupEditor.groupId === groupId) {
-    _memGroupEditor = { groupId, content, loaded: true };
+    _memGroupEditor = { ..._memGroupEditor, content, loaded: true };
+    if (_memGroupEditor.isTemplated) {
+      const fieldsRes = await _memInvoke('personalOntology.groups.fields.list', { groupId });
+      if (_memGroupEditor && _memGroupEditor.groupId === groupId) {
+        _memGroupEditor.fields = (fieldsRes && fieldsRes.ok !== false && Array.isArray(fieldsRes.fields)) ? fieldsRes.fields : [];
+        _memGroupEditor.entries = _memParseFlowEntries(content);
+      }
+    }
   }
   _memRerenderGroups();
+}
+
+// ── 模板组表单/流水操作（阶段 B）──────────────────────────────────────────
+
+async function _memRefreshGroupEditorData(groupId) {
+  if (!_memGroupEditor || _memGroupEditor.groupId !== groupId) return;
+  const res = await _memInvoke('personalOntology.groups.read', { groupId });
+  if (_memGroupEditor && _memGroupEditor.groupId === groupId && res && res.ok !== false) {
+    _memGroupEditor.content = res.content || '';
+    const fieldsRes = await _memInvoke('personalOntology.groups.fields.list', { groupId });
+    if (_memGroupEditor && _memGroupEditor.groupId === groupId) {
+      _memGroupEditor.fields = (fieldsRes && fieldsRes.ok !== false && Array.isArray(fieldsRes.fields)) ? fieldsRes.fields : [];
+      _memGroupEditor.entries = _memParseFlowEntries(_memGroupEditor.content);
+    }
+  }
+  _memRerenderGroups();
+}
+
+async function _memGroupFieldAdd(groupId, fieldName) {
+  const input = document.querySelector(`[data-mem-group-field="${CSS.escape(fieldName)}"] .memory-group-field-input`);
+  const value = (input && input.value || '').trim();
+  if (!value) return;
+  const res = await _memInvoke('personalOntology.groups.fields.append', { groupId, fieldName, value, source: '手动' });
+  if (!res || res.ok === false) {
+    _memToast((res && res.error) || t('memory.error_generic'), 'error');
+    return;
+  }
+  _memToast(t('memory.groups_saved'), 'success');
+  await _memRefreshGroupEditorData(groupId);
+}
+
+async function _memGroupFieldEdit(groupId, fieldName, oldValue) {
+  const newValue = (typeof uiPrompt === 'function')
+    ? await uiPrompt(t('memory.group_field_edit_prompt'), oldValue)
+    : null;
+  if (newValue === null) return;
+  const trimmed = String(newValue || '').trim();
+  if (!trimmed || trimmed === oldValue) return;
+  const res = await _memInvoke('personalOntology.groups.fields.setValue', { groupId, fieldName, value: trimmed, oldValue });
+  if (!res || res.ok === false) {
+    _memToast((res && res.error) || t('memory.error_generic'), 'error');
+    return;
+  }
+  _memToast(t('memory.groups_saved'), 'success');
+  await _memRefreshGroupEditorData(groupId);
+}
+
+async function _memGroupFieldRemove(groupId, fieldName, value) {
+  const res = await _memInvoke('personalOntology.groups.fields.removeValue', { groupId, fieldName, value });
+  if (!res || res.ok === false) {
+    _memToast((res && res.error) || t('memory.error_generic'), 'error');
+    return;
+  }
+  await _memRefreshGroupEditorData(groupId);
+}
+
+async function _memGroupEntryPromote(groupId, entryText) {
+  const fieldName = (typeof uiPrompt === 'function')
+    ? await uiPrompt(t('memory.group_promote_prompt'), '')
+    : null;
+  if (fieldName === null) return;
+  const trimmed = String(fieldName || '').trim();
+  if (!trimmed) return;
+  const res = await _memInvoke('personalOntology.groups.entries.promote', { groupId, entryText, fieldName: trimmed });
+  if (!res || res.ok === false) {
+    _memToast((res && res.error) || t('memory.error_generic'), 'error');
+    return;
+  }
+  if (res.isCustom) {
+    _memToast(t('memory.group_promote_custom_done', { name: trimmed }), 'info');
+  } else {
+    _memToast(t('memory.groups_saved'), 'success');
+  }
+  await _memRefreshGroupEditorData(groupId);
+}
+
+async function _memGroupEntryRemove(groupId, entryText) {
+  const ok = (typeof uiConfirmDanger === 'function')
+    ? await uiConfirmDanger({ title: t('memory.group_entry_delete_confirm'), message: t('memory.group_entry_delete_confirm'), dangerLabel: t('memory.delete') })
+    : (typeof uiConfirm === 'function' ? await uiConfirm({ message: t('memory.group_entry_delete_confirm') }) : true);
+  if (!ok) return;
+  const res = await _memInvoke('personalOntology.groups.entries.remove', { groupId, entryText });
+  if (!res || res.ok === false) {
+    _memToast((res && res.error) || t('memory.error_generic'), 'error');
+    return;
+  }
+  await _memRefreshGroupEditorData(groupId);
 }
 
 function _memBindGroupsSection(host) {
@@ -423,6 +624,42 @@ function _memBindGroupsSection(host) {
         case 'save-content':
           if (groupId) _memSaveGroupContent(groupId);
           return;
+        // 阶段 B：双视图切换 + 表单/流水操作
+        case 'view-form':
+        case 'view-flow':
+        case 'view-raw':
+          if (_memGroupEditor) {
+            _memGroupEditor.view = action.slice('view-'.length);
+            _memRerenderGroups();
+          }
+          return;
+        case 'field-add-value': {
+          const fieldName = el.getAttribute('data-mem-group-field');
+          if (groupId && fieldName) _memGroupFieldAdd(groupId, fieldName);
+          return;
+        }
+        case 'field-edit-value': {
+          const fieldName = el.getAttribute('data-mem-group-field');
+          const value = el.getAttribute('data-mem-value');
+          if (groupId && fieldName && value !== null) _memGroupFieldEdit(groupId, fieldName, value);
+          return;
+        }
+        case 'field-remove-value': {
+          const fieldName = el.getAttribute('data-mem-group-field');
+          const value = el.getAttribute('data-mem-value');
+          if (groupId && fieldName && value !== null) _memGroupFieldRemove(groupId, fieldName, value);
+          return;
+        }
+        case 'entry-promote': {
+          const entryText = el.getAttribute('data-mem-entry');
+          if (groupId && entryText !== null) _memGroupEntryPromote(groupId, entryText);
+          return;
+        }
+        case 'entry-remove': {
+          const entryText = el.getAttribute('data-mem-entry');
+          if (groupId && entryText !== null) _memGroupEntryRemove(groupId, entryText);
+          return;
+        }
         default:
           return;
       }
