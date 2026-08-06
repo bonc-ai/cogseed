@@ -650,8 +650,8 @@ async function startRuntime(uid: string, instanceId: string): Promise<void> {
   };
   const callbacks: AdapterCallbacks = {
     onInbound: async (envelope) => {
-      if (!isCurrentRuntime(uid, runtime)) return;
-      await handleInbound(uid, envelope);
+      if (!isCurrentRuntime(uid, runtime)) return { accepted: false, duplicate: false, reason: 'instance_not_found' };
+      return handleInbound(uid, envelope);
     },
     onStatus: async (nextStatus) => {
       queueRuntimeStatus(uid, runtime, nextStatus);

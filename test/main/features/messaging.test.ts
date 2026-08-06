@@ -808,6 +808,106 @@ describe('feishu message media degradation', () => {
   });
 });
 
+describe('feishu adapter processing reaction', () => {
+  function baseEnvelope(overrides: Record<string, unknown> = {}) {
+    return {
+      platform: 'feishu_lark' as const,
+      instanceId: 'feishu-reaction-test',
+      externalMessageId: 'om_reaction_1',
+      externalChatId: 'oc_1',
+      externalUserId: 'ou_sender_1',
+      text: 'hello',
+      isGroup: false,
+      mentionPresent: false,
+      receivedAt: new Date().toISOString(),
+      ...overrides,
+    };
+  }
+
+  it('adds a Typing reaction before dispatch and removes it when the message is rejected', async () => {
+    const { FeishuAdapter } = await import('../../../src/main/features/messaging/adapters');
+    const instance = {
+      id: 'feishu-reaction-test',
+      platform: 'feishu_lark' as const,
+      feishuTenantBrand: 'feishu' as const,
+      displayName: 'Reaction bot',
+      enabled: true,
+      workspace: { type: 'default' as const },
+      policy: { replyMode: 'every_message' as const, allowUserIds: [], allowGroupIds: [], requireMentionInGroups: true },
+      status: { kind: 'connected' as const, checkedAt: new Date().toISOString() },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const adapter = new FeishuAdapter(instance, { appId: 'cli_reaction_test', appSecret: 'secret' });
+    const create = vi.fn(async () => ({ code: 0, data: { reaction_id: 'reaction-1' } }));
+    const remove = vi.fn(async () => ({ code: 0 }));
+    (adapter as unknown as { client: { im: { v1: { message_reaction: { create: typeof create; delete: typeof remove } } } } }).client.im.v1.messageReaction = { create, delete: remove };
+    const onInbound = vi.fn(async () => ({ accepted: false, duplicate: false, reason: 'user_not_allowed' }));
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onInbound, onStatus: vi.fn(async () => {}) };
+
+    await (adapter as unknown as { handleInboundWithReaction(envelope: unknown): Promise<void> }).handleInboundWithReaction(baseEnvelope());
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      path: { message_id: 'om_reaction_1' },
+      data: { reaction_type: { emoji_type: 'Typing' } },
+    }));
+    expect(remove).toHaveBeenCalledWith({ path: { message_id: 'om_reaction_1', reaction_id: 'reaction-1' } });
+  });
+
+  it('keeps the reaction while the message is accepted and removes it after the reply is sent', async () => {
+    const { FeishuAdapter } = await import('../../../src/main/features/messaging/adapters');
+    const instance = {
+      id: 'feishu-reaction-test',
+      platform: 'feishu_lark' as const,
+      feishuTenantBrand: 'feishu' as const,
+      displayName: 'Reaction bot',
+      enabled: true,
+      workspace: { type: 'default' as const },
+      policy: { replyMode: 'every_message' as const, allowUserIds: [], allowGroupIds: [], requireMentionInGroups: true },
+      status: { kind: 'connected' as const, checkedAt: new Date().toISOString() },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const adapter = new FeishuAdapter(instance, { appId: 'cli_reaction_test', appSecret: 'secret' });
+    const create = vi.fn(async () => ({ code: 0, data: { reaction_id: 'reaction-2' } }));
+    const remove = vi.fn(async () => ({ code: 0 }));
+    const reply = vi.fn(async () => ({ code: 0, data: { message_id: 'om_reply_1' } }));
+    (adapter as unknown as { client: { im: { v1: { message_reaction: { create: typeof create; delete: typeof remove }; message: { reply: typeof reply } } } } }).client.im.v1.messageReaction = { create, delete: remove };
+    (adapter as unknown as { client: { im: { v1: { message: { reply: typeof reply } } } } }).client.im.v1.message.reply = reply;
+    const onInbound = vi.fn(async () => ({ accepted: true, duplicate: false, cid: 'cid-1' }));
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onInbound, onStatus: vi.fn(async () => {}) };
+
+    await (adapter as unknown as { handleInboundWithReaction(envelope: unknown): Promise<void> }).handleInboundWithReaction(baseEnvelope());
+    expect(remove).not.toHaveBeenCalled();
+
+    await adapter.sendMessage('oc_1', 'reply text', undefined, { replyToMessageId: 'om_reaction_1' });
+    await vi.waitFor(() => expect(remove).toHaveBeenCalledWith({ path: { message_id: 'om_reaction_1', reaction_id: 'reaction-2' } }));
+  });
+
+  it('tolerates missing reaction permissions without failing the message flow', async () => {
+    const { FeishuAdapter } = await import('../../../src/main/features/messaging/adapters');
+    const instance = {
+      id: 'feishu-reaction-test',
+      platform: 'feishu_lark' as const,
+      feishuTenantBrand: 'feishu' as const,
+      displayName: 'Reaction bot',
+      enabled: true,
+      workspace: { type: 'default' as const },
+      policy: { replyMode: 'every_message' as const, allowUserIds: [], allowGroupIds: [], requireMentionInGroups: true },
+      status: { kind: 'connected' as const, checkedAt: new Date().toISOString() },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const adapter = new FeishuAdapter(instance, { appId: 'cli_reaction_test', appSecret: 'secret' });
+    const create = vi.fn(async () => { throw new Error('permission denied'); });
+    (adapter as unknown as { client: { im: { v1: { message_reaction: { create: typeof create } } } } }).client.im.v1.messageReaction = { create };
+    const onInbound = vi.fn(async () => ({ accepted: true, duplicate: false, cid: 'cid-1' }));
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onInbound, onStatus: vi.fn(async () => {}) };
+
+    await expect((adapter as unknown as { handleInboundWithReaction(envelope: unknown): Promise<void> }).handleInboundWithReaction(baseEnvelope())).resolves.toBeUndefined();
+    expect(onInbound).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('feishu bot identity parsing', () => {
   it('extracts the bot open id from the real bot/v3/info response shape', async () => {
     const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');

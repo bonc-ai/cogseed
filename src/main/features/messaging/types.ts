@@ -203,7 +203,10 @@ export interface MessagingDeliveryLedgerFile {
 }
 
 export interface AdapterCallbacks {
-  onInbound: (envelope: InboundEnvelope) => Promise<void>;
+  /** Inbound envelope dispatch. The result tells the adapter whether the
+   * message was accepted, so it can remove transient UI state (e.g. a
+   * processing reaction) when the message is rejected or duplicated. */
+  onInbound: (envelope: InboundEnvelope) => Promise<MessagingInboundResult>;
   onStatus: (status: MessagingInstanceStatus) => Promise<void>;
 }
 

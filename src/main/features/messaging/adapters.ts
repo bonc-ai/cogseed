@@ -84,6 +84,14 @@ interface FeishuBotInfoResponse extends FeishuApiResponse {
   data?: { open_id?: string };
 }
 
+interface FeishuReactionResponse extends FeishuApiResponse {
+  data?: { reaction_id?: string };
+}
+
+/** Processing indicator reaction (Feishu emoji name, mirrors Hermes). */
+const FEISHU_REACTION_IN_PROGRESS = 'Typing';
+const PROCESSING_REACTIONS_MAX = 1024;
+
 function parseFeishuBotOpenId(response: FeishuBotInfoResponse): string {
   const topLevel = response.bot?.open_id?.trim() || '';
   if (topLevel) return topLevel;
@@ -479,6 +487,8 @@ export class FeishuAdapter implements MessagingCardAdapter {
   private wakeLifecycle: (() => void) | null = null;
   private botOpenId = '';
   private identityLookup: Promise<void> | null = null;
+  /** inbound message id → reaction id of the active processing indicator */
+  private processingReactions = new Map<string, string>();
 
   constructor(instance: MessagingInstance, secret: MessagingSecret) {
     if (!secret.appId || !secret.appSecret) throw new Error('Feishu app credentials missing');
@@ -502,14 +512,58 @@ export class FeishuAdapter implements MessagingCardAdapter {
       'im.message.receive_v1': async (event: FeishuEventData) => {
         const envelope = this.normalize(event);
         if (!envelope || !this.callbacks) return {};
-        // ACK the SDK event immediately. Agent dispatch can involve disk and
-        // queue work and must not consume Feishu's short ACK deadline.
-        void this.callbacks.onInbound(envelope).catch(() => {
-          log.warn('Feishu inbound dispatch failed', { instanceId: this.instance.id });
-        });
+        void this.handleInboundWithReaction(envelope);
         return {};
       },
     });
+  }
+
+  /** Processing indicator around inbound dispatch: add a reaction before the
+   * agent runs, remove it when the message is rejected/duplicated or when the
+   * reply for it is delivered. Reaction support is permission-gated on the
+   * Feishu side, so every failure here stays silent. */
+  private async handleInboundWithReaction(envelope: InboundEnvelope): Promise<void> {
+    const callbacks = this.callbacks;
+    if (!callbacks) return;
+    const messageId = envelope.externalMessageId;
+    await this.addProcessingReaction(messageId);
+    try {
+      const result = await callbacks.onInbound(envelope);
+      if (!result.accepted) await this.removeProcessingReaction(messageId);
+    } catch (error) {
+      log.warn('Feishu inbound dispatch failed', {
+        instanceId: this.instance.id,
+        error: logErrorSummary(error),
+      });
+      await this.removeProcessingReaction(messageId);
+    }
+  }
+
+  private async addProcessingReaction(messageId: string): Promise<void> {
+    if (!messageId || this.processingReactions.has(messageId)) return;
+    if (this.processingReactions.size >= PROCESSING_REACTIONS_MAX) return;
+    try {
+      const response = await this.client.im.v1.messageReaction.create({
+        path: { message_id: messageId },
+        data: { reaction_type: { emoji_type: FEISHU_REACTION_IN_PROGRESS } },
+      }) as unknown as FeishuReactionResponse;
+      if (response.code !== undefined && response.code !== 0) return;
+      const reactionId = response.data?.reaction_id;
+      if (typeof reactionId === 'string' && reactionId) {
+        this.processingReactions.set(messageId, reactionId);
+      }
+    } catch { /* optional capability; never fail the message flow */ }
+  }
+
+  private async removeProcessingReaction(messageId: string): Promise<void> {
+    const reactionId = this.processingReactions.get(messageId);
+    if (!reactionId) return;
+    this.processingReactions.delete(messageId);
+    try {
+      await this.client.im.v1.messageReaction.delete({
+        path: { message_id: messageId, reaction_id: reactionId },
+      });
+    } catch { /* best effort; a stale reaction is harmless */ }
   }
 
   private notifyStatus(next: MessagingInstanceStatus): void {
@@ -601,6 +655,7 @@ export class FeishuAdapter implements MessagingCardAdapter {
     this.terminalError = null;
     this.botOpenId = '';
     this.identityLookup = null;
+    this.processingReactions.clear();
     const wsClient = this.createWsClient();
     this.wsClient = wsClient;
     try {
@@ -679,6 +734,7 @@ export class FeishuAdapter implements MessagingCardAdapter {
     if (response.code !== undefined && response.code !== 0) throw new Error(response.msg || 'Feishu send failed');
     if (lifecycleSignal?.aborted) throw new Error('Feishu delivery aborted');
     const messageId = response.data?.message_id;
+    if (replyToMessageId) void this.removeProcessingReaction(replyToMessageId);
     return typeof messageId === 'string' && messageId ? { deliveryId: messageId } : {};
   }
 
@@ -714,6 +770,7 @@ export class FeishuAdapter implements MessagingCardAdapter {
     if (response.code !== undefined && response.code !== 0) throw new Error(response.msg || 'Feishu card send failed');
     if (lifecycleSignal?.aborted) throw new Error('Feishu delivery aborted');
     const messageId = response.data?.message_id;
+    if (replyToMessageId) void this.removeProcessingReaction(replyToMessageId);
     return typeof messageId === 'string' && messageId ? { deliveryId: messageId } : {};
   }
 
