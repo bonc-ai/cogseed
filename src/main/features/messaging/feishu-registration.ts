@@ -108,11 +108,24 @@ interface SdkErrorLike {
 }
 
 const APP_ADDONS = {
-  // The minimal official preset is enough for this local two-way gateway:
-  // send bot messages and receive the event over Feishu's persistent channel.
+  // The official preset plus the scopes/events the polish features need:
+  // reaction events (feedback loop), contact user names and chat titles for
+  // readable bindings. Instances bound before this change keep their old
+  // grant; the adapters degrade silently when the API denies those calls.
   preset: false,
-  scopes: { tenant: ['im:message:send_as_bot'] },
-  events: { items: { tenant: ['im.message.receive_v1'] } },
+  scopes: {
+    tenant: [
+      'im:message:send_as_bot',
+      'im:message:reaction:readonly',
+      'contact:user.base:readonly',
+      'im:chat:readonly',
+    ],
+  },
+  events: {
+    items: {
+      tenant: ['im.message.receive_v1', 'im.message.reaction.created_v1'],
+    },
+  },
 } satisfies lark.AppAddons;
 
 const flows = new Map<string, RegistrationFlow>();

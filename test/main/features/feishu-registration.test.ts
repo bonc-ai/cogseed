@@ -88,8 +88,15 @@ describe('Feishu QR registration', () => {
       appPreset: { name: 'Team helper' },
       addons: {
         preset: false,
-        scopes: { tenant: ['im:message:send_as_bot'] },
-        events: { items: { tenant: ['im.message.receive_v1'] } },
+        scopes: {
+          tenant: [
+            'im:message:send_as_bot',
+            'im:message:reaction:readonly',
+            'contact:user.base:readonly',
+            'im:chat:readonly',
+          ],
+        },
+        events: { items: { tenant: ['im.message.receive_v1', 'im.message.reaction.created_v1'] } },
       },
     }));
     // The landing page must keep the "已有应用" (reuse existing app) entry
