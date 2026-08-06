@@ -2362,5 +2362,19 @@
   "aside.thinking": "正在解释…",
   "aside.failed": "追问失败",
   "aside.clear_confirm": "清空本会话的所有追问记录？",
-  "aside.anchor_missing": "未定位到选中消息"
+  "aside.anchor_missing": "未定位到选中消息",
+  "sideBrowser.tab": "浏览器",
+  "sideBrowser.toggle_width": "切换宽度",
+  "sideBrowser.reload": "重新加载",
+  "sideBrowser.zoom_in": "放大",
+  "sideBrowser.zoom_out": "缩小",
+  "sideBrowser.zoom_reset": "重置缩放",
+  "sideBrowser.fullscreen": "全屏查看",
+  "sideBrowser.reveal": "在文件夹中显示",
+  "sideBrowser.empty": "从对话中的文件打开预览",
+  "sideBrowser.open_side": "在侧栏预览",
+  "sideBrowser.open_side_title": "在右侧栏预览此文件",
+  "sideBrowser.preview_badge": "可预览",
+  "sideBrowser.unsupported": "该文件类型无法预览",
+  "sideBrowser.load_failed": "预览加载失败"
 }

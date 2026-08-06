@@ -2362,5 +2362,19 @@
   "aside.thinking": "Explaining…",
   "aside.failed": "Ask failed",
   "aside.clear_confirm": "Clear all aside history for this conversation?",
-  "aside.anchor_missing": "Selected message not found"
+  "aside.anchor_missing": "Selected message not found",
+  "sideBrowser.tab": "Browser",
+  "sideBrowser.toggle_width": "Toggle width",
+  "sideBrowser.reload": "Reload",
+  "sideBrowser.zoom_in": "Zoom in",
+  "sideBrowser.zoom_out": "Zoom out",
+  "sideBrowser.zoom_reset": "Reset zoom",
+  "sideBrowser.fullscreen": "Fullscreen",
+  "sideBrowser.reveal": "Show in folder",
+  "sideBrowser.empty": "Open a file from the conversation to preview it",
+  "sideBrowser.open_side": "Preview in side panel",
+  "sideBrowser.open_side_title": "Preview this file in the side panel",
+  "sideBrowser.preview_badge": "previewable",
+  "sideBrowser.unsupported": "This file type cannot be previewed",
+  "sideBrowser.load_failed": "Preview failed to load"
 }

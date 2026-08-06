@@ -99,11 +99,17 @@ async function loadChatAside(cid, projectId) {
   _renderAsideAbout();
 }
 
-/** Open the drawer, optionally anchored to a specific message. */
+/**
+ * Open the aside pane, optionally anchored to a specific message.
+ *
+ * The pane now lives inside the shared side host (`chat-side-host.js`), so
+ * "open" means: make our tab available, then activate it. The external
+ * signature is unchanged — `conversation.js` calls this the same way as before.
+ */
 function openChatAside(anchor) {
   const panel = _asideEl('chat-aside-panel');
   if (!panel) return;
-  // Bind on first open rather than at startup: the drawer is opt-in, and this
+  // Bind on first open rather than at startup: the pane is opt-in, and this
   // keeps it out of the boot path entirely.
   bindChatAside();
   // A rendered bubble always has a msgId; msgIndex only exists for anchored
@@ -115,25 +121,35 @@ function openChatAside(anchor) {
       excerpt: String(anchor.excerpt || '').slice(0, 200),
     };
   }
-  panel.hidden = false;
+  if (typeof setSideTabAvailable === 'function') setSideTabAvailable('aside', true);
+  if (typeof activateSidePane === 'function') activateSidePane('aside');
+  else panel.hidden = false;   // host missing (e.g. isolated test DOM)
   _renderAsideAbout();
   if (typeof applyDomI18n === 'function') applyDomI18n(panel);
   const input = _asideEl('chat-aside-input');
   if (input) input.focus();
 }
 
+/**
+ * Close the aside. Abandons an in-flight ask rather than letting it stream into
+ * a hidden pane. Kept as its own function (not just the host's close) so the
+ * caller can dismiss this pane without collapsing the whole side column.
+ */
 function closeChatAside() {
   const panel = _asideEl('chat-aside-panel');
   if (panel) panel.hidden = true;
-  // An in-flight ask is abandoned rather than left writing into a hidden panel.
   if (_asideCancel) { try { _asideCancel(); } catch { /* already settled */ } }
   _asideCancel = null;
   _asideStreaming = false;
+  if (typeof setSideTabAvailable === 'function') setSideTabAvailable('aside', false);
 }
 
 function isChatAsideOpen() {
   const panel = _asideEl('chat-aside-panel');
-  return !!panel && !panel.hidden;
+  if (!panel || panel.hidden) return false;
+  // Inside the host a pane can be non-hidden while the host itself is closed.
+  if (typeof isSideHostOpen === 'function') return isSideHostOpen();
+  return true;
 }
 
 async function _submitAside() {
@@ -196,6 +212,24 @@ async function _clearAside() {
 }
 
 function bindChatAside() {
+  // The host owns the tab strip's close button; register this pane with it so
+  // switching tabs and closing the column both route through one place.
+  if (typeof bindSideHost === 'function') bindSideHost();
+  if (typeof registerSidePane === 'function') {
+    registerSidePane('aside', {
+      paneElId: 'chat-aside-panel',
+      onActivate: () => {
+        const input = _asideEl('chat-aside-input');
+        if (input) input.focus();
+      },
+      // Closing the column must not leave a stream writing into a hidden pane.
+      onClose: () => {
+        if (_asideCancel) { try { _asideCancel(); } catch { /* already settled */ } }
+        _asideCancel = null;
+        _asideStreaming = false;
+      },
+    });
+  }
   const form = _asideEl('chat-aside-form');
   if (form && form.dataset.bound !== '1') {
     form.dataset.bound = '1';
@@ -211,11 +245,6 @@ function bindChatAside() {
         _submitAside();
       }
     });
-  }
-  const close = _asideEl('chat-aside-close');
-  if (close && close.dataset.bound !== '1') {
-    close.dataset.bound = '1';
-    close.addEventListener('click', closeChatAside);
   }
   const clear = _asideEl('chat-aside-clear');
   if (clear && clear.dataset.bound !== '1') {

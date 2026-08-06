@@ -328,35 +328,80 @@
             </div>
             <div class="chat-md-drawer-body markdown-body" id="chat-md-drawer-body"></div>
           </aside>
-          <!-- Ask-aside drawer. A read-only side thread for asking about the
-               main conversation: it receives the anchored context but its Q/A
-               never enters the main transcript, so a clarification cannot
-               derail the task. Visually distinct on purpose — the user must
-               never mistake this for the task conversation. -->
-          <aside class="chat-aside-panel" id="chat-aside-panel" hidden
-                 aria-label="Ask aside">
-            <div class="chat-aside-header">
-              <div class="chat-aside-title" data-i18n="aside.title">Ask aside</div>
-              <span class="chat-aside-badge" data-i18n="aside.readonly_badge">read-only</span>
-              <button type="button" class="chat-aside-clear" id="chat-aside-clear"
-                      data-i18n="aside.clear" data-i18n-title="aside.clear_title"
-                      title="Clear">Clear</button>
-              <button type="button" class="chat-aside-close" id="chat-aside-close"
+          <!-- Right-side panel host. Owns the tab strip and the single visible
+               panel beneath it: the ask-aside thread and the file browser share
+               this one column instead of each claiming its own, which would
+               squeeze the conversation列 when both are open.
+               Tabs are shown only for panels that actually have content, so an
+               empty "Browser" tab never sits there before a file is opened. -->
+          <aside class="chat-side-host" id="chat-side-host" hidden>
+            <div class="chat-side-tabs" id="chat-side-tabs" role="tablist">
+              <button type="button" class="chat-side-tab" id="chat-side-tab-browser"
+                      role="tab" data-side-tab="browser" hidden
+                      data-i18n="sideBrowser.tab">Browser</button>
+              <button type="button" class="chat-side-tab" id="chat-side-tab-aside"
+                      role="tab" data-side-tab="aside" hidden
+                      data-i18n="aside.title">Ask aside</button>
+              <span class="chat-side-tabs-spacer"></span>
+              <button type="button" class="chat-side-wide" id="chat-side-wide"
+                      data-i18n-title="sideBrowser.toggle_width"
+                      title="Toggle width" aria-label="Toggle width">⇔</button>
+              <button type="button" class="chat-side-close" id="chat-side-close"
                       data-i18n-title="common.close" data-i18n-aria-label="common.close"
                       title="Close" aria-label="Close">×</button>
             </div>
-            <div class="chat-aside-hint muted" data-i18n="aside.hint">
-              Answers here never enter the task conversation.
+
+            <!-- Ask-aside thread. Read-only: it receives the anchored context
+                 but its Q/A never enters the main transcript, so a
+                 clarification cannot derail the task. Visually distinct on
+                 purpose — the user must never mistake this for the task
+                 conversation. -->
+            <div class="chat-side-pane chat-aside-panel" id="chat-aside-panel" hidden
+                 role="tabpanel" aria-label="Ask aside">
+              <div class="chat-aside-hint muted" data-i18n="aside.hint">
+                Answers here never enter the task conversation.
+              </div>
+              <div class="chat-aside-about" id="chat-aside-about" hidden></div>
+              <div class="chat-aside-body" id="chat-aside-body"></div>
+              <form class="chat-aside-form" id="chat-aside-form">
+                <textarea class="chat-aside-input" id="chat-aside-input" rows="2"
+                          data-i18n-placeholder="aside.placeholder"
+                          placeholder="Ask about the selected message…"></textarea>
+                <button type="submit" class="btn btn-sm chat-aside-send" id="chat-aside-send"
+                        data-i18n="aside.send">Send</button>
+              </form>
+              <div class="chat-aside-footer">
+                <button type="button" class="chat-aside-clear" id="chat-aside-clear"
+                        data-i18n="aside.clear" data-i18n-title="aside.clear_title"
+                        title="Clear">Clear</button>
+              </div>
             </div>
-            <div class="chat-aside-about" id="chat-aside-about" hidden></div>
-            <div class="chat-aside-body" id="chat-aside-body"></div>
-            <form class="chat-aside-form" id="chat-aside-form">
-              <textarea class="chat-aside-input" id="chat-aside-input" rows="2"
-                        data-i18n-placeholder="aside.placeholder"
-                        placeholder="Ask about the selected message…"></textarea>
-              <button type="submit" class="btn btn-sm chat-aside-send" id="chat-aside-send"
-                      data-i18n="aside.send">Send</button>
-            </form>
+
+            <!-- File browser pane (side preview of local HTML / PDF / images).
+                 Local files only — there is no address bar and the iframe
+                 sandbox forbids top-level navigation, so it cannot reach the
+                 open web. -->
+            <div class="chat-side-pane chat-side-browser" id="chat-side-browser" hidden
+                 role="tabpanel" aria-label="Browser">
+              <div class="chat-side-browser-bar">
+                <span class="chat-side-browser-name" id="chat-side-browser-name"></span>
+                <span class="chat-side-browser-tools">
+                  <button type="button" id="chat-side-browser-reload"
+                          data-i18n-title="sideBrowser.reload" title="Reload">⟳</button>
+                  <button type="button" id="chat-side-browser-zoom-out"
+                          data-i18n-title="sideBrowser.zoom_out" title="Zoom out">−</button>
+                  <button type="button" id="chat-side-browser-zoom-reset"
+                          data-i18n-title="sideBrowser.zoom_reset" title="Reset zoom">100%</button>
+                  <button type="button" id="chat-side-browser-zoom-in"
+                          data-i18n-title="sideBrowser.zoom_in" title="Zoom in">+</button>
+                  <button type="button" id="chat-side-browser-fullscreen"
+                          data-i18n-title="sideBrowser.fullscreen" title="Fullscreen">⛶</button>
+                  <button type="button" id="chat-side-browser-reveal"
+                          data-i18n-title="sideBrowser.reveal" title="Show in folder">📁</button>
+                </span>
+              </div>
+              <div class="chat-side-browser-body" id="chat-side-browser-body"></div>
+            </div>
           </aside>
         </div>
       </section>
@@ -1771,7 +1816,9 @@
   <script src="./modules/text-view-edit.js"></script>
   <script src="./modules/context-menu.js"></script>
   <script src="./modules/chat-md-drawer.js"></script>
+  <script src="./modules/chat-side-host.js"></script>
   <script src="./modules/chat-aside.js"></script>
+  <script src="./modules/chat-side-browser.js"></script>
   <script src="./modules/strip-structural-blocks.js"></script>
   <script src="./modules/name-limit.js"></script>
   <script src="./modules/projects.js"></script>

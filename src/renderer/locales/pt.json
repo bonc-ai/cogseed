@@ -2260,5 +2260,19 @@
   "aside.thinking": "Explicando…",
   "aside.failed": "Falha na pergunta",
   "aside.clear_confirm": "Limpar todo o histórico lateral desta conversa?",
-  "aside.anchor_missing": "Mensagem selecionada não encontrada"
+  "aside.anchor_missing": "Mensagem selecionada não encontrada",
+  "sideBrowser.tab": "Navegador",
+  "sideBrowser.toggle_width": "Alternar largura",
+  "sideBrowser.reload": "Recarregar",
+  "sideBrowser.zoom_in": "Ampliar",
+  "sideBrowser.zoom_out": "Reduzir",
+  "sideBrowser.zoom_reset": "Redefinir zoom",
+  "sideBrowser.fullscreen": "Tela cheia",
+  "sideBrowser.reveal": "Mostrar na pasta",
+  "sideBrowser.empty": "Abra um arquivo da conversa para visualizá-lo",
+  "sideBrowser.open_side": "Visualizar no painel lateral",
+  "sideBrowser.open_side_title": "Visualizar este arquivo no painel lateral",
+  "sideBrowser.preview_badge": "visualizável",
+  "sideBrowser.unsupported": "Este tipo de arquivo não pode ser visualizado",
+  "sideBrowser.load_failed": "Falha ao carregar a visualização"
 }

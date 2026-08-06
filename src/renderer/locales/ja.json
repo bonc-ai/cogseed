@@ -2260,5 +2260,19 @@
   "aside.thinking": "説明中…",
   "aside.failed": "質問に失敗しました",
   "aside.clear_confirm": "この会話のサイド質問履歴をすべて削除しますか？",
-  "aside.anchor_missing": "選択したメッセージが見つかりません"
+  "aside.anchor_missing": "選択したメッセージが見つかりません",
+  "sideBrowser.tab": "ブラウザ",
+  "sideBrowser.toggle_width": "幅を切り替え",
+  "sideBrowser.reload": "再読み込み",
+  "sideBrowser.zoom_in": "拡大",
+  "sideBrowser.zoom_out": "縮小",
+  "sideBrowser.zoom_reset": "ズームをリセット",
+  "sideBrowser.fullscreen": "全画面表示",
+  "sideBrowser.reveal": "フォルダで表示",
+  "sideBrowser.empty": "会話内のファイルを開くとここでプレビューできます",
+  "sideBrowser.open_side": "サイドパネルでプレビュー",
+  "sideBrowser.open_side_title": "このファイルをサイドパネルでプレビュー",
+  "sideBrowser.preview_badge": "プレビュー可",
+  "sideBrowser.unsupported": "このファイル形式はプレビューできません",
+  "sideBrowser.load_failed": "プレビューの読み込みに失敗しました"
 }

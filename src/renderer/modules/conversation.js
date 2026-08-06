@@ -1171,6 +1171,24 @@ function _renderRecipientChip(target) {
 }
 
 // Hooks called by setView (boot.js) so the chip mirrors the active context.
+
+/**
+ * Drop the side column when the mounted conversation changes.
+ *
+ * Tracked by cid rather than closed unconditionally: `onEnterConversationView`
+ * also fires on re-entering the same conversation, and collapsing the panel the
+ * user just opened would be hostile.
+ */
+let _sideColumnCid = null;
+function _resetSideColumnForConversation() {
+  const cid = typeof currentCid === 'string' ? currentCid : '';
+  if (_sideColumnCid === cid) return;
+  _sideColumnCid = cid;
+  if (typeof closeSideBrowser === 'function') closeSideBrowser();
+  if (typeof closeChatAside === 'function') closeChatAside();
+  if (typeof closeSideHost === 'function') closeSideHost();
+}
+
 function onEnterNewChatView() {
   if (typeof _exitMessageSelection === 'function') _exitMessageSelection();
   // The new-chat input is the only place the recipient is ephemeral. Reset
@@ -1462,6 +1480,11 @@ function _initEmptyStateScenarios() {
 }
 function onEnterConversationView() {
   if (_messageSelectionState && _messageSelectionState.cid !== currentCid) _exitMessageSelection();
+  // The side column is per-conversation: its aside thread is anchored to a
+  // message here, and its preview is a file this conversation produced. Leaving
+  // it mounted across a switch would show the previous conversation's content
+  // under the new one's header.
+  if (typeof _resetSideColumnForConversation === 'function') _resetSideColumnForConversation();
   _renderRecipientChip('conversation');
   _refreshChatHeader();
   // Workspace chip scope follows the active conv's project (resolved on
@@ -3491,15 +3514,27 @@ function _renderMessageProducedHtml(absPaths, opts = {}) {
   const ordered = _orderProducedPaths(absPaths);
   const items = ordered.map((e) => {
     const icon = _iconForProduced(e.base);
-    return `<div class="chat-msg-produced-item" data-produced-path="${escapeHtml(e.path)}">
+    // Mark files the side pane can actually render, so the user knows which
+    // ones show a result rather than just opening a text/binary view. The
+    // judgement is delegated to the viewer's own classifier — a second
+    // extension table here would drift from what the pane really supports.
+    const previewable = typeof isSidePreviewableKind === 'function'
+      && typeof previewKindOf === 'function'
+      && isSidePreviewableKind(previewKindOf(e.base));
+    const previewBadge = previewable
+      ? `<span class="chat-msg-produced-preview-badge" title="${escapeHtml(t('sideBrowser.open_side_title'))}">${escapeHtml(t('sideBrowser.preview_badge'))}</span>`
+      : '';
+    const openLabel = previewable ? t('sideBrowser.open_side') : t('chat.produced_open');
+    const openTitle = previewable ? t('sideBrowser.open_side_title') : hint;
+    return `<div class="chat-msg-produced-item" data-produced-path="${escapeHtml(e.path)}"${previewable ? ' data-previewable="1"' : ''}>
       <button type="button" class="chat-msg-produced-main" title="${escapeHtml(hint)}">
         <span class="chat-msg-produced-icon">${icon}</span>
         <span class="chat-msg-produced-main-text">
-          <span class="chat-msg-produced-label-row"><span class="chat-msg-produced-label">${escapeHtml(e.base)}</span><span class="chat-msg-produced-badge is-${escapeHtml(outputStatus)}">${escapeHtml(statusLabel)}</span></span>
+          <span class="chat-msg-produced-label-row"><span class="chat-msg-produced-label">${escapeHtml(e.base)}</span>${previewBadge}<span class="chat-msg-produced-badge is-${escapeHtml(outputStatus)}">${escapeHtml(statusLabel)}</span></span>
           <span class="chat-msg-produced-path" title="${escapeHtml(e.path)}">${escapeHtml(e.path)}</span>
         </span>
       </button>
-      <button type="button" class="chat-msg-produced-open-btn btn btn-sm" title="${escapeHtml(hint)}">${escapeHtml(t('chat.produced_open'))}</button>
+      <button type="button" class="chat-msg-produced-open-btn btn btn-sm" title="${escapeHtml(openTitle)}">${escapeHtml(openLabel)}</button>
       <button type="button" class="chat-msg-produced-menu-btn" title="${escapeHtml(moreHint)}" aria-label="${escapeHtml(moreHint)}">⋯</button>
     </div>`;
   });
@@ -3627,6 +3662,23 @@ function _hydrateMessageCreatedSkillChip(msgDiv) {
   }
 }
 
+/**
+ * Open a produced file, preferring the side pane.
+ *
+ * Side-previewable kinds (html / pdf / image) render next to the conversation
+ * so the user can compare the page against what was asked for. Everything else
+ * falls back to the fullscreen viewer, which owns markdown / text / office /
+ * media. `openSideBrowser` returning false is the signal to fall back — that
+ * keeps the kind list in one place instead of duplicating it here.
+ */
+function _openProducedFile(absPath) {
+  if (!absPath) return;
+  const base = absPath.split(/[\\/]/).pop() || absPath;
+  const opts = currentCid ? { cid: currentCid } : undefined;
+  if (typeof openSideBrowser === 'function' && openSideBrowser(absPath, base, opts || {})) return;
+  if (typeof openChatFileViewer === 'function') openChatFileViewer(absPath, base, opts);
+}
+
 function _hydrateMessageProducedChips(msgDiv) {
   const rows = msgDiv.querySelectorAll('.chat-msg-produced-item[data-produced-path]');
   rows.forEach((row) => {
@@ -3637,12 +3689,7 @@ function _hydrateMessageProducedChips(msgDiv) {
       main.dataset.bound = '1';
       main.addEventListener('click', (e) => {
         e.stopPropagation();
-        const p = row.dataset.producedPath;
-        if (!p) return;
-        if (typeof openChatFileViewer === 'function') {
-          const base = p.split(/[\\/]/).pop() || p;
-          openChatFileViewer(p, base, currentCid ? { cid: currentCid } : undefined);
-        }
+        _openProducedFile(row.dataset.producedPath);
       });
     }
     if (openBtn && openBtn.dataset.bound !== '1') {
@@ -3650,12 +3697,7 @@ function _hydrateMessageProducedChips(msgDiv) {
       openBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        const p = row.dataset.producedPath;
-        if (!p) return;
-        if (typeof openChatFileViewer === 'function') {
-          const base = p.split(/[\/]/).pop() || p;
-          openChatFileViewer(p, base, currentCid ? { cid: currentCid } : undefined);
-        }
+        _openProducedFile(row.dataset.producedPath);
       });
     }
     if (menuBtn && menuBtn.dataset.bound !== '1') {
