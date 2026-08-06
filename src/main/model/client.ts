@@ -120,6 +120,16 @@ export interface ChatOptions {
    *  which legitimately run long multi-step builds (e.g. VideoStudio draft/render,
    *  DeepResearcher gathering); loop_detection still guards true runaway loops. */
   maxToolLoops?: number;
+  /**
+   * Hard opt-out of every tool for this turn: no local tools, no file tools,
+   * no MCP, no extras. For explain-only callers such as
+   * `features/conversation_aside`.
+   *
+   * Note `maxToolLoops: 0` does NOT do this — falsy values are dropped by the
+   * option spreads on the way to the runner, so the turn keeps the default loop
+   * budget and the full tool set.
+   */
+  disableTools?: boolean;
   abortSignal?: AbortSignal | null;
   /** Legacy openclaw CLI timeout — ignored, retained for signature parity. */
   timeout?: number;

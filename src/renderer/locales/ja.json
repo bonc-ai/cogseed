@@ -2160,5 +2160,21 @@
   "chat.merge.section.agent_private_context": "エージェントのプライベートコンテキスト索引",
   "chat.merge.section.source_references": "参照元",
   "chat.merge.section.open_questions": "未解決の質問",
-  "chat.merge.section.conflicts_risks": "競合 / リスク"
+  "chat.merge.section.conflicts_risks": "競合 / リスク",
+  "aside.title": "サイド質問",
+  "aside.readonly_badge": "読み取り専用",
+  "aside.hint": "ここでのやり取りはタスク会話には入りません。",
+  "aside.placeholder": "選択した内容について質問…",
+  "aside.send": "送信",
+  "aside.clear": "クリア",
+  "aside.clear_title": "この会話のサイド質問履歴をクリア",
+  "aside.open": "サイド質問",
+  "aside.ask_btn": "サイド質問",
+  "aside.ask_btn_title": "このメッセージをサイドパネルで質問",
+  "aside.about": "対象",
+  "aside.empty": "メッセージを選ぶとここで質問できます",
+  "aside.thinking": "説明中…",
+  "aside.failed": "質問に失敗しました",
+  "aside.clear_confirm": "この会話のサイド質問履歴をすべて削除しますか？",
+  "aside.anchor_missing": "選択したメッセージが見つかりません"
 }

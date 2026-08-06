@@ -335,6 +335,36 @@
             </div>
             <div class="chat-md-drawer-body markdown-body" id="chat-md-drawer-body"></div>
           </aside>
+          <!-- Ask-aside drawer. A read-only side thread for asking about the
+               main conversation: it receives the anchored context but its Q/A
+               never enters the main transcript, so a clarification cannot
+               derail the task. Visually distinct on purpose — the user must
+               never mistake this for the task conversation. -->
+          <aside class="chat-aside-panel" id="chat-aside-panel" hidden
+                 aria-label="Ask aside">
+            <div class="chat-aside-header">
+              <div class="chat-aside-title" data-i18n="aside.title">Ask aside</div>
+              <span class="chat-aside-badge" data-i18n="aside.readonly_badge">read-only</span>
+              <button type="button" class="chat-aside-clear" id="chat-aside-clear"
+                      data-i18n="aside.clear" data-i18n-title="aside.clear_title"
+                      title="Clear">Clear</button>
+              <button type="button" class="chat-aside-close" id="chat-aside-close"
+                      data-i18n-title="common.close" data-i18n-aria-label="common.close"
+                      title="Close" aria-label="Close">×</button>
+            </div>
+            <div class="chat-aside-hint muted" data-i18n="aside.hint">
+              Answers here never enter the task conversation.
+            </div>
+            <div class="chat-aside-about" id="chat-aside-about" hidden></div>
+            <div class="chat-aside-body" id="chat-aside-body"></div>
+            <form class="chat-aside-form" id="chat-aside-form">
+              <textarea class="chat-aside-input" id="chat-aside-input" rows="2"
+                        data-i18n-placeholder="aside.placeholder"
+                        placeholder="Ask about the selected message…"></textarea>
+              <button type="submit" class="btn btn-sm chat-aside-send" id="chat-aside-send"
+                      data-i18n="aside.send">Send</button>
+            </form>
+          </aside>
         </div>
       </section>
 
@@ -1717,6 +1747,7 @@
   <script src="./modules/text-view-edit.js"></script>
   <script src="./modules/context-menu.js"></script>
   <script src="./modules/chat-md-drawer.js"></script>
+  <script src="./modules/chat-aside.js"></script>
   <script src="./modules/strip-structural-blocks.js"></script>
   <script src="./modules/name-limit.js"></script>
   <script src="./modules/projects.js"></script>

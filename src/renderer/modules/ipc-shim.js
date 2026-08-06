@@ -67,6 +67,8 @@ const _IPC_ROUTES = [
   ['GET',    /^\/api\/p3394\/executions\/([^/]+)\/context-reuse-receipt$/, 'p3394.contextReuseReceipt.read', ['executionId']],
   ['POST',   '/api/p3394/behavior-contrasts', 'p3394.behaviorContrast.start'],
   ['GET',    /^\/api\/p3394\/behavior-contrasts\/([^/]+)$/, 'p3394.behaviorContrast.read', ['contrastId']],
+  ['GET',    /^\/api\/conversations\/([^/]+)\/aside$/, 'aside.list', ['cid']],
+  ['DELETE', /^\/api\/conversations\/([^/]+)\/aside$/, 'aside.clear', ['cid']],
   ['POST',   '/api/workbench/baselines', 'workbench.baseline.freeze'],
   ['GET',    '/api/workbench/baselines', 'workbench.baseline.list'],
   ['GET',    /^\/api\/workbench\/baselines\/([^/]+)\/verify$/, 'workbench.baseline.verify', ['baselineId']],

@@ -2262,5 +2262,21 @@
   "chat.merge.section.agent_private_context": "Agent 私有上下文索引",
   "chat.merge.section.source_references": "来源引用",
   "chat.merge.section.open_questions": "未决问题",
-  "chat.merge.section.conflicts_risks": "冲突 / 风险"
+  "chat.merge.section.conflicts_risks": "冲突 / 风险",
+  "aside.title": "追问",
+  "aside.readonly_badge": "只读",
+  "aside.hint": "这里的问答不会进入任务对话，也不会影响主线进行。",
+  "aside.placeholder": "针对选中的内容提问…",
+  "aside.send": "发送",
+  "aside.clear": "清空",
+  "aside.clear_title": "清空本会话的追问记录",
+  "aside.open": "追问",
+  "aside.ask_btn": "追问",
+  "aside.ask_btn_title": "在侧栏追问这条消息",
+  "aside.about": "关于",
+  "aside.empty": "选择一条消息后在这里追问",
+  "aside.thinking": "正在解释…",
+  "aside.failed": "追问失败",
+  "aside.clear_confirm": "清空本会话的所有追问记录？",
+  "aside.anchor_missing": "未定位到选中消息"
 }

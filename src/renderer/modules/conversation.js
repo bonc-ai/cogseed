@@ -8285,6 +8285,7 @@ function _attachBubbleActions(msgDiv, getContent, opts = {}) {
   actions.dataset.mode = mode;
   const quoteButton = `<button type="button" class="bubble-action-btn bubble-quote-btn" title="${escapeHtml(t('chat.quote_btn_title'))}">${escapeHtml(t('chat.quote_btn'))}</button>`;
   const overflowItems = `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-copy-btn" title="${escapeHtml(t('chat.copy_btn_title'))}">${escapeHtml(t('chat.copy_btn'))}</button>
+    <button type="button" role="menuitem" class="chat-bubble-menu-item bubble-aside-btn" title="${escapeHtml(t('aside.ask_btn_title'))}">${escapeHtml(t('aside.ask_btn'))}</button>
     <button type="button" role="menuitem" class="chat-bubble-menu-item bubble-select-btn" title="${escapeHtml(t('chat.message_select_title'))}">${escapeHtml(t('chat.message_select'))}</button>
     ${includeArchive ? `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-archive-btn" title="${escapeHtml(t('chat.archive_btn_title'))}">${escapeHtml(t('chat.archive_btn'))}</button>` : ''}`;
   actions.innerHTML = `
@@ -8299,8 +8300,36 @@ function _attachBubbleActions(msgDiv, getContent, opts = {}) {
   const copyBtn = actions.querySelector('.bubble-copy-btn');
   const quoteBtn = actions.querySelector('.bubble-quote-btn');
   const selectBtn = actions.querySelector('.bubble-select-btn');
+  const asideBtn = actions.querySelector('.bubble-aside-btn');
   if (includeRetry) _attachBubbleRetryBtn(directActions, msgDiv);
   _wireBubbleActionMenu(actions);
+  if (asideBtn) {
+    asideBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // Anchor the aside thread to this message. The drawer only reads — it
+      // cannot alter this conversation.
+      // msgId is always stamped on a rendered bubble; msgIndex only exists when
+      // the history was read anchored (e.g. jumping from search). Pass both and
+      // let the backend prefer the id.
+      const msgId = msgDiv.dataset.msgId || '';
+      const index = Number(msgDiv.dataset.msgIndex);
+      const text = typeof getContent === 'function' ? (getContent() || '') : '';
+      if (typeof openChatAside !== 'function') return;
+      if (!msgId && !Number.isSafeInteger(index)) {
+        // Not yet persisted (optimistic bubble) — nothing stable to anchor to.
+        if (typeof uiAlert === 'function') uiAlert(t('aside.anchor_missing'));
+        return;
+      }
+      if (typeof loadChatAside === 'function' && typeof currentCid === 'string' && currentCid) {
+        loadChatAside(currentCid, _projectIdForConversation(currentCid) || null);
+      }
+      openChatAside({
+        ...(msgId ? { msgId } : {}),
+        ...(Number.isSafeInteger(index) && index >= 0 ? { index } : {}),
+        excerpt: String(text).replace(/\s+/g, ' ').trim().slice(0, 200),
+      });
+    });
+  }
   quoteBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     if (quoteBtn.disabled) return;

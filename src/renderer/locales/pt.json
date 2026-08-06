@@ -2160,5 +2160,21 @@
   "chat.merge.section.agent_private_context": "Índice de contexto privado dos agentes",
   "chat.merge.section.source_references": "Referências de origem",
   "chat.merge.section.open_questions": "Questões em aberto",
-  "chat.merge.section.conflicts_risks": "Conflitos / riscos"
+  "chat.merge.section.conflicts_risks": "Conflitos / riscos",
+  "aside.title": "Perguntar ao lado",
+  "aside.readonly_badge": "somente leitura",
+  "aside.hint": "As respostas aqui nunca entram na conversa da tarefa.",
+  "aside.placeholder": "Pergunte sobre a mensagem selecionada…",
+  "aside.send": "Enviar",
+  "aside.clear": "Limpar",
+  "aside.clear_title": "Limpar o histórico lateral desta conversa",
+  "aside.open": "Perguntar ao lado",
+  "aside.ask_btn": "Perguntar ao lado",
+  "aside.ask_btn_title": "Perguntar sobre esta mensagem no painel lateral",
+  "aside.about": "Sobre",
+  "aside.empty": "Escolha uma mensagem para perguntar aqui",
+  "aside.thinking": "Explicando…",
+  "aside.failed": "Falha na pergunta",
+  "aside.clear_confirm": "Limpar todo o histórico lateral desta conversa?",
+  "aside.anchor_missing": "Mensagem selecionada não encontrada"
 }

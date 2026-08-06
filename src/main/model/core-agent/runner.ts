@@ -199,6 +199,17 @@ export interface BuildRunnerParams {
   /** Max tool-call rounds per turn before force-end. Undefined → core-agent
    *  default (50). Group chat raises it for the commander's long builds. */
   maxToolLoops?: number;
+  /**
+   * Hard opt-out of every tool for this turn: no local tools, no file tools,
+   * no MCP, no extras. For explain-only callers (see
+   * `features/conversation_aside`) that must not be able to touch the
+   * filesystem or run commands.
+   *
+   * `maxToolLoops: 0` does NOT achieve this — it is filtered out as falsy by
+   * the option spreads on the way down, so the turn silently keeps the default
+   * loop budget and the full tool set.
+   */
+  disableTools?: boolean;
   /** Provider stream deadline before its first usable text/tool event. This
    * boundary is safe for fallback because no visible output has committed. */
   providerFirstEventTimeoutMs?: number;
@@ -803,7 +814,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     : [];
 
   // Merge injected tools with extra tools from caller
-  const allTools = [
+  const allTools = params.disableTools ? [] : [
     ...injectedTools,
     ...localTools,
     ...fileTools,

@@ -2262,5 +2262,21 @@
   "chat.merge.section.agent_private_context": "Agent Private Context Index",
   "chat.merge.section.source_references": "Source References",
   "chat.merge.section.open_questions": "Open Questions",
-  "chat.merge.section.conflicts_risks": "Conflicts / Risks"
+  "chat.merge.section.conflicts_risks": "Conflicts / Risks",
+  "aside.title": "Ask aside",
+  "aside.readonly_badge": "read-only",
+  "aside.hint": "Answers here never enter the task conversation.",
+  "aside.placeholder": "Ask about the selected message…",
+  "aside.send": "Send",
+  "aside.clear": "Clear",
+  "aside.clear_title": "Clear this conversation's aside history",
+  "aside.open": "Ask aside",
+  "aside.ask_btn": "Ask aside",
+  "aside.ask_btn_title": "Ask about this message in the side panel",
+  "aside.about": "About",
+  "aside.empty": "Pick a message to ask about it here",
+  "aside.thinking": "Explaining…",
+  "aside.failed": "Ask failed",
+  "aside.clear_confirm": "Clear all aside history for this conversation?",
+  "aside.anchor_missing": "Selected message not found"
 }

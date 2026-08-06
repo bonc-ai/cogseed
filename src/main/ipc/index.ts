@@ -18,6 +18,8 @@ import { app, ipcMain, dialog, BrowserWindow, type WebContents } from 'electron'
 
 import * as users from '../features/users';
 import * as chats from '../features/chats';
+import * as conversationAside from '../features/conversation_aside';
+import * as modelClient from '../model/client';
 import * as projects from '../features/projects';
 import * as projectFiles from '../features/project_files';
 import * as projectTasks from '../features/project_tasks';
@@ -852,6 +854,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         history_indexes: page.historyIndexes,
       } : {}),
     };
+  },
+
+  // ── Conversation aside: read-only side thread (see features/conversation_aside) ──
+  // Never touches the main transcript or the group-chat bus. Business logic
+  // stays in the feature; these handlers only validate and delegate.
+
+  'aside.list': async ({ cid, project_id }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    return {
+      ok: true,
+      turns: await conversationAside.listAsideTurns(ctx.userId, cid, project_id ?? null),
+    };
+  },
+
+  'aside.clear': async ({ cid, project_id }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    await conversationAside.clearAsideTurns(ctx.userId, cid, project_id ?? null);
+    return { ok: true };
   },
 
   'conversations.files.list': async ({ cid }, ctx) => {
@@ -3530,6 +3550,57 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 // unexpected throws.
 
 const streamHandlers: Record<string, StreamHandler> = {
+  /**
+   * Read-only aside answer. Deliberately NOT routed through groupChat.send /
+   * bus.enqueue: doing so would append to the main transcript and add a second
+   * dispatch path. The model is called directly with no tools, so the
+   * read-only property is structural rather than enforced.
+   */
+  'aside.askStream': async function* ({ cid, anchor_index, anchor_msg_id, question, project_id }, ctx, signal) {
+    if (!safeId(cid)) {
+      yield { type: 'error', text: 'invalid cid' };
+      return;
+    }
+    const conv = await chats.getConversation(ctx.userId, cid, project_id ?? null);
+    if (!conv) {
+      yield { type: 'error', text: 'conversation not found' };
+      return;
+    }
+    try {
+      const events = conversationAside.askAside(ctx.userId, {
+        cid,
+        // Prefer the message id: a normally-opened conversation's bubbles carry
+        // no global index, only an id.
+        ...(anchor_msg_id ? { anchorMsgId: String(anchor_msg_id) } : { anchorIndex: Number(anchor_index) }),
+        question: String(question ?? ''),
+        projectHint: conv.project_id ?? null,
+        boundAgentId: conv.agent_id || null,
+      }, {
+        getAgent: (id: string) => agents.getAgent(id) as any,
+        isAgentEnabled: (id: string) => isAgentEnabled(ctx.userId, id),
+        stream: (opts) => modelClient.streamChatWithModel({
+          userId: opts.userId,
+          message: opts.message,
+          systemPrompt: opts.systemPrompt,
+          sessionId: opts.sessionId,
+          ...(opts.agentName ? { agentName: opts.agentName } : {}),
+          // Explain-only: no skills in the prompt and NO tools at all. The
+          // `disableTools` flag is what actually enforces this — `maxToolLoops: 0`
+          // would be dropped as falsy and leave the full tool set attached.
+          skillList: [],
+          disableTools: true,
+          abortSignal: signal,
+        }) as AsyncIterable<{ type: string; text?: string }>,
+      });
+      for await (const event of events) {
+        if (signal.aborted) return;
+        yield event as { type: string; text?: string };
+      }
+    } catch (err) {
+      yield { type: 'error', text: (err as Error).message };
+    }
+  },
+
   'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, retry_message_id }, ctx, signal) {
     if (!safeId(cid)) {
       yield { type: 'error', text: 'invalid cid' };
