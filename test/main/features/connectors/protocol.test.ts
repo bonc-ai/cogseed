@@ -55,7 +55,7 @@ describe('connector callback protocol', () => {
 
   it('registers before readiness and dispatches both callback kinds to the running app', async () => {
     const protocol = await import('../../../../src/main/features/connectors/protocol');
-    protocol.registerConnectorProtocol();
+    expect(protocol.registerConnectorProtocol({ owner: true })).toBe(true);
 
     expect(electronMock.app.setAsDefaultProtocolClient).toHaveBeenCalledWith('mateagent');
     expect(electronMock.app.setAsDefaultProtocolClient).toHaveBeenCalledWith('orkas');
@@ -75,13 +75,31 @@ describe('connector callback protocol', () => {
 
   it('does not intercept stripped account-login links', async () => {
     const protocol = await import('../../../../src/main/features/connectors/protocol');
-    protocol.registerConnectorProtocol();
+    protocol.registerConnectorProtocol({ owner: true });
     const openUrl = electronMock.listeners.get('open-url');
     const preventDefault = vi.fn();
 
     await openUrl?.({ preventDefault }, 'mateagent://account/login?exchange_code=account');
 
     expect(preventDefault).not.toHaveBeenCalled();
+    expect(connectorMock.handleCallbackUrl).not.toHaveBeenCalled();
+    expect(connectorMock.handleDcrCallbackUrl).not.toHaveBeenCalled();
+  });
+
+  it('focuses the existing window without owning connector protocols', async () => {
+    const protocol = await import('../../../../src/main/features/connectors/protocol');
+
+    expect(protocol.registerConnectorProtocol({ owner: false })).toBe(false);
+    expect(electronMock.app.setAsDefaultProtocolClient).not.toHaveBeenCalled();
+    expect(electronMock.listeners.has('open-url')).toBe(false);
+    const secondInstance = electronMock.listeners.get('second-instance');
+    expect(secondInstance).toBeTypeOf('function');
+
+    await secondInstance?.({}, ['mateagent://connectors/oauth/callback?exchange_code=ignored']);
+
+    expect(electronMock.window.restore).toHaveBeenCalledOnce();
+    expect(electronMock.window.show).toHaveBeenCalledOnce();
+    expect(electronMock.window.focus).toHaveBeenCalledOnce();
     expect(connectorMock.handleCallbackUrl).not.toHaveBeenCalled();
     expect(connectorMock.handleDcrCallbackUrl).not.toHaveBeenCalled();
   });

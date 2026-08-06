@@ -42,9 +42,9 @@ describe('Mate Agent brand contract', () => {
   });
   it('uses the shared identity in the Electron main process', () => {
     const main = read('src/main/index.ts');
-    expect(main).toContain("import { APP_BRAND } from './brand';");
-    expect(main).toContain('app.setName(APP_BRAND.appName);');
-    expect(main).toContain('app.setAppUserModelId(APP_BRAND.appId);');
+    expect(main).toContain("import { resolveRuntimeIdentity } from './brand';");
+    expect(main).toContain('app.setName(RUNTIME_IDENTITY.appName);');
+    expect(main).toContain('app.setAppUserModelId(RUNTIME_IDENTITY.appId);');
     expect(main).not.toContain("const APP_USER_MODEL_ID = 'com.orkas.desktop'");
   });
 
