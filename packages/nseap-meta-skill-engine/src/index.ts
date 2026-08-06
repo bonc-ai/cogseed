@@ -21,6 +21,7 @@ import { RegistryManager } from './modules/registry-manager.js';
 import { ENGINE_CONFIG } from './config/engine-config.js';
 import type { InteractionContext } from './types/index.js';
 import { stableHash } from './persistence/canonical-json.js';
+import { KstarState } from './persistence/kstar-state.js';
 
 // ── Engine Info ─────────────────────────────────────────────
 export interface EngineInfo {
@@ -62,6 +63,8 @@ const patchGenerator = new PatchGenerator();
 const governanceGates = new GovernanceGates();
 const skillCreator = new SkillCreator();
 const registry = new RegistryManager();
+// KSTAR state the PC round-trips via snapshot_import / snapshot_export.
+const kstarState = new KstarState();
 
 // ── MCP Server ──────────────────────────────────────────────
 const server = new Server(
@@ -394,6 +397,36 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description: 'Get the current engine configuration (identity contract, guardrails, gates).',
       inputSchema: { type: 'object', properties: {} },
     },
+
+    // ── KSTAR Snapshot Tools ────────────────────────────────
+    // The PC-side CAS cycle in features/p3394/kstar-adapter.ts calls these.
+    {
+      name: 'snapshot_import',
+      description: 'Load a KSTAR state snapshot into the engine, replacing in-memory state. Omit the snapshot to start from empty.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          snapshot: { type: 'object', description: 'Snapshot previously produced by snapshot_export' },
+        },
+      },
+    },
+    {
+      name: 'snapshot_export',
+      description: 'Export the current KSTAR state snapshot for the caller to persist.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'record_evidence',
+      description: 'Record one execution evidence record, deduplicated by its stable id. Returns the updated snapshot so the caller can persist it.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Stable evidence id; repeat calls with the same id are deduplicated' },
+          type: { type: 'string', description: 'Evidence kind, e.g. tool_cycle or agent_run_result' },
+        },
+        required: ['id'],
+      },
+    },
   ],
 }));
 
@@ -648,6 +681,47 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // ── Config Tools ─────────────────────────────────────
       case 'get_engine_config': {
         return jsonResponse(ENGINE_CONFIG);
+      }
+
+      // ── KSTAR Snapshot Tools ─────────────────────────────
+      case 'snapshot_import': {
+        const { snapshot } = (args ?? {}) as { snapshot?: unknown };
+        if (snapshot === undefined || snapshot === null) {
+          kstarState.reset();
+          const exported = kstarState.export();
+          return jsonResponse({
+            success: true,
+            generation: exported.generation,
+            evidence_count: exported.evidence.length,
+          });
+        }
+        // A malformed snapshot is reported as a failed import, not a thrown
+        // tool error: the PC aborts the CAS transaction and keeps its evidence
+        // in the pending log rather than folding corrupt history forward.
+        try {
+          const { generation, evidence_count } = kstarState.import(snapshot);
+          return jsonResponse({ success: true, generation, evidence_count });
+        } catch (err: any) {
+          return jsonResponse({ success: false, error: err.message ?? 'invalid snapshot' });
+        }
+      }
+
+      case 'snapshot_export': {
+        return jsonResponse({ success: true, snapshot: kstarState.export() });
+      }
+
+      case 'record_evidence': {
+        try {
+          const { deduplicated, generation } = kstarState.recordEvidence(args ?? {});
+          return jsonResponse({
+            success: true,
+            deduplicated,
+            generation,
+            snapshot: kstarState.export(),
+          });
+        } catch (err: any) {
+          return jsonResponse({ success: false, error: err.message ?? 'invalid evidence' });
+        }
       }
 
       default:

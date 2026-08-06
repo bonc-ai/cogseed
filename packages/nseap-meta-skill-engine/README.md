@@ -43,7 +43,7 @@ npm run dev
 ```
 meta-skill-engine/
 ├── src/
-│   ├── index.ts                      # MCP Server 入口（23 个工具）
+│   ├── index.ts                      # MCP Server 入口（29 个工具）
 │   ├── config/engine-config.ts       # 引擎配置（身份合约 + 护栏）
 │   ├── types/index.ts                # 核心类型定义
 │   ├── utils/ids.ts                  # ID/哈希生成
@@ -76,10 +76,13 @@ meta-skill-engine/
 └── package.json
 ```
 
-## 23 个 MCP 工具
+## 29 个 MCP 工具
+
+以 `tools/list` 实际返回为准；`test/mcp-process-kstar-snapshot.test.ts` 会对真实进程核验这份清单。
 
 | 类别 | 工具 |
 |------|------|
+| **引擎** | get_engine_info |
 | **本体** | read_ontology, list_ontologies, extract_ontology_slice |
 | **证据** | capture_interaction, query_episodes |
 | **归因** | analyze_attribution, analyze_no_match, route_recommendation |
@@ -88,6 +91,11 @@ meta-skill-engine/
 | **评估** | generate_eval_cases, run_eval, grade_eval, grade_eval_llm, benchmark_skill, improve_skill, generate_eval_viewer, optimize_description |
 | **注册表** | register_skill, list_registry |
 | **配置** | get_engine_config |
+| **KSTAR 快照** | snapshot_import, snapshot_export, record_evidence |
+
+> KSTAR 快照三件套是 PC 侧 `features/p3394/kstar-adapter.ts` 的 CAS 循环所调用的接口：
+> PC 把 `snapshot.json` 交给 `snapshot_import`，引擎执行并累积证据，PC 再把
+> `snapshot_export` 的结果写回磁盘。快照结构由引擎持有，PC 视其为不透明数据。
 
 ## 全流程
 
