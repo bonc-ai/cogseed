@@ -28,6 +28,7 @@
 
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { app, BrowserWindow, Menu, Notification, ipcMain, nativeImage, net, protocol, session, shell } from 'electron';
@@ -41,7 +42,13 @@ import { app, BrowserWindow, Menu, Notification, ipcMain, nativeImage, net, prot
 import './install-data-root.cjs';
 import { APP_BRAND } from './brand';
 import { desktopPlatform, osVersion } from './system_info';
-import { hardenedWebPreferences, installExternalNavigationGuard } from './util/window-security';
+import {
+  hardenedWebPreferences,
+  installDenyAllRemotePermissionGate,
+  installExternalNavigationGuard,
+  installWecomQuickCreatePopupGuard,
+  isOfficialWecomQuickCreateUrl,
+} from './util/window-security';
 import { formatBuildIdentityLabel, resolveBuildIdentity } from './util/build-identity';
 import { resolveContainedProtocolFile } from './util/protocol-path';
 
@@ -177,6 +184,7 @@ import * as chatAttachments from './features/chat_attachments';
 import * as chatArtifacts from './features/chat_artifacts';
 import * as clientConfigFeature from './features/client_config';
 import * as connectorsFeature from './features/connectors';
+import * as messagingFeature from './features/messaging';
 import * as taskNotifications from './features/task_notifications';
 import * as notificationPermissions from './features/notification_permissions';
 import {
@@ -209,6 +217,10 @@ function setTaskNotificationBadgeCount(count: number): void {
 function createWindow(): BrowserWindow {
   const dev = !app.isPackaged;
   const restored = windowState.restoreWindowState();
+  // This is deliberately not a `persist:` partition. The official remote
+  // creator gets a memory-only browser session, separate from the app UI.
+  const wecomPopupPartition = `wecom-quick-create-${randomUUID()}`;
+  installDenyAllRemotePermissionGate(session.fromPartition(wecomPopupPartition));
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -250,7 +262,36 @@ function createWindow(): BrowserWindow {
     win.webContents,
     (url) => shell.openExternal(url),
     (err) => log.warn('openExternal failed', { error: (err as Error)?.message || String(err) }),
+    {
+      allowWindowOpen: isOfficialWecomQuickCreateUrl,
+      allowedWindowOpenOptions: {
+        width: 520,
+        height: 650,
+        resizable: false,
+        maximizable: false,
+        minimizable: true,
+        title: 'WeCom',
+        webPreferences: hardenedWebPreferences({
+          // Remote auth content deliberately gets an empty preload rather
+          // than the renderer bridge used by the application window.
+          preload: path.join(__dirname, 'wecom-popup-preload.js'),
+          partition: wecomPopupPartition,
+        }),
+      },
+    },
   );
+
+  // An allowed popup is intentionally limited to the official quick-create
+  // URL. It has no bridge API, cannot spawn further windows, and cannot turn
+  // into an arbitrary in-app browser if the remote page redirects.
+  win.webContents.on('did-create-window', (popup, details) => {
+    if (!isOfficialWecomQuickCreateUrl(details.url)) {
+      popup.close();
+      return;
+    }
+    popup.setMenuBarVisibility(false);
+    installWecomQuickCreatePopupGuard(popup.webContents);
+  });
 
   // Hijack Cmd/Ctrl+R / F5 uniformly:
   //   - Packaged: refresh disabled (the App doesn't need reload).
@@ -1122,6 +1163,11 @@ if (!gotLock) {
       });
     }, CONNECTORS_BOOTSTRAP_DELAY_MS);
     connectorsTimer.unref?.();
+    registerDeferred('messaging:start', () => messagingFeature.startForUser(users.getActiveUserId()), 'serial', CONNECTORS_BOOTSTRAP_DELAY_MS, {
+      resourceClass: 'network',
+      preferIdle: true,
+      maxSliceMs: 20_000,
+    });
     createWindow();
     await consumeColdLaunchConnectorCallback();
 
