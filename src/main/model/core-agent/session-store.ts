@@ -5,7 +5,7 @@
  *
  * session_id format (see CLAUDE.md §5):
  *   `<kind>-<tail>` — kind ∈ {gconv | gmember | skill | agent | extract-img |
- *   reflect | memory-extract | anon | cli}. The kind keyword is the FIRST
+ *   reflect | memory-extract | anon | cli | mruntime}. The kind keyword is the FIRST
  *   segment, never an arbitrary prefix.
  *
  *   user scoping comes from path root: `<activeUid>/{cloud,local}/sessions/<sid>.jsonl`
@@ -34,6 +34,8 @@ import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 
 import {
+  mateRuntimeSessionFile,
+  mateRuntimeSessionToolResultsDir,
   sessionToolResultsDir,
   userLocalSessionFile,
 } from '../../paths';
@@ -61,13 +63,13 @@ const log = createLogger('model');
  * stays in `cloud/sessions/`, life-cycled with its owning entity (cid /
  * sid / aid).
  */
-const EPHEMERAL_KINDS = ['extract-img', 'reflect', 'memory-extract', 'anon', 'gworker'] as const;
+const EPHEMERAL_KINDS = ['extract-img', 'reflect', 'memory-extract', 'anon', 'gworker', 'mruntime'] as const;
 
 /** All recognised kind keywords (used by `resolveSessionPath`'s kind-anchor assertion).
  *  Order matters in the regex alternation: longer alternatives must come before their
  *  shorter prefix overlaps so that e.g. `extract-img-…` matches as one kind, not as
  *  `extract` + leftover. */
-const KNOWN_KINDS_RE = /^(gmember|gworker|gconv|memory-extract|extract-img|reflect|skill|agent|anon|cli)(?:-|$)/;
+const KNOWN_KINDS_RE = /^(gmember|gworker|gconv|mruntime|memory-extract|extract-img|reflect|skill|agent|anon|cli)(?:-|$)/;
 
 export function isEphemeralSessionId(sessionId: string): boolean {
   for (const kind of EPHEMERAL_KINDS) {
@@ -116,9 +118,10 @@ export function resolveSessionPath(userId: string, sessionId: string): string {
   if (!KNOWN_KINDS_RE.test(sessionId)) {
     throw new Error(
       `invalid session id "${sessionId}" — must start with a known kind ` +
-      `(gconv | gmember | gworker | skill | agent | extract-img | reflect | memory-extract | anon | cli)`,
+      `(gconv | gmember | gworker | mruntime | skill | agent | extract-img | reflect | memory-extract | anon | cli)`,
     );
   }
+  if (sessionKindOf(sessionId) === 'mruntime') return mateRuntimeSessionFile(userId, sessionId);
   return isEphemeralSessionId(sessionId)
     ? userLocalSessionFile(userId, sessionId)
     : cloudSessionFileFor(userId, sessionId);
@@ -131,6 +134,7 @@ export function sessionFileFor(sessionId: string): string {
 export function toolResultsDirForSession(userId: string, sessionId: string): string {
   // Validate the id with the same router that owns the session jsonl path.
   resolveSessionPath(userId, sessionId);
+  if (sessionKindOf(sessionId) === 'mruntime') return mateRuntimeSessionToolResultsDir(userId, sessionId);
   return isEphemeralSessionId(sessionId)
     ? sessionToolResultsDir(userId, sessionId)
     : cloudSessionToolResultsDirFor(userId, sessionId);

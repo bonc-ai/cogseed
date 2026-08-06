@@ -1782,3 +1782,33 @@ describe('group_chat bus › processItemsAreRoutingOnly (abort promotion guard)'
     expect(bus.processItemsAreRoutingOnly([])).toBe(false);
   });
 });
+
+describe('group_chat bus › nested worker payload escaping', () => {
+  it('escapes workflow step ids and all result/error XML content', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const result = (bus as any)._buildWorkerResultPayloadForTest({
+      workerName: 'Worker <&"',
+      text: 'result <&>',
+      produced: ['file<&>.txt'],
+      workflowStepId: 'step<&"',
+    });
+    expect(result).toContain(
+      '<worker-result from="Worker &lt;&amp;&quot;" workflow_step_id="step&lt;&amp;&quot;">',
+    );
+    expect(result).toContain('result &lt;&amp;&gt;');
+    expect(result).toContain('file&lt;&amp;&gt;.txt');
+
+    const error = (bus as any)._buildWorkerErrorPayloadForTest({
+      workerName: 'Worker <&"',
+      errorText: 'failed <&>',
+      aborted: true,
+      failureCode: 'bad<&"',
+      retryable: false,
+      workflowStepId: 'step<&"',
+    });
+    expect(error).toContain(
+      '<worker-error from="Worker &lt;&amp;&quot;" workflow_step_id="step&lt;&amp;&quot;" aborted="true" failure_code="bad&lt;&amp;&quot;" retryable="false">',
+    );
+    expect(error).toContain('failed &lt;&amp;&gt;');
+  });
+});

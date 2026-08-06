@@ -34,6 +34,7 @@ function matchingApproval(
     state.approvals.find(
       (approval) =>
         approval.conversation_id === input.conversationId &&
+        (approval.execution_domain || 'group_chat') === (input.executionDomain || 'group_chat') &&
         approval.agent_id === input.agentId &&
         approval.behavior_scope.includes(input.source) &&
         approval.context_scope.includes(
@@ -71,6 +72,7 @@ function sameIntent(
   const incomingScope = behaviorScopeForSource(input.source);
   return (
     request.conversation_id === input.conversationId &&
+    (request.execution_domain || 'group_chat') === (input.executionDomain || 'group_chat') &&
     request.agent_id === input.agentId &&
     normalizeIntentText(request.objective) ===
       normalizeIntentText(input.objective) &&
@@ -125,6 +127,7 @@ function mergePendingIntent(
 function requestNeedsWorkflowReconciliation(
   request: AgentWakeRequest,
 ): boolean {
+  if (request.execution_domain === 'mate') return false;
   return !!(
     request.pending_cleanup_step_ids?.length ||
     request.workflow_transition === "rejecting" ||
@@ -315,6 +318,8 @@ export async function evaluateWake(
     const request: AgentWakeRequest = {
       id: genId12(),
       conversation_id: input.conversationId,
+      execution_domain: input.executionDomain || 'group_chat',
+      execution_scope_id: input.executionScopeId || input.conversationId,
       ...(input.taskId ? { task_id: input.taskId } : {}),
       agent_id: input.agentId,
       ...(input.agentName?.trim()
@@ -425,6 +430,8 @@ export async function approveWakeRequest(
         id: genId12(),
         request_id: request.id,
         conversation_id: request.conversation_id,
+        execution_domain: request.execution_domain || 'group_chat',
+        execution_scope_id: request.execution_scope_id || request.conversation_id,
         ...(request.task_id ? { task_id: request.task_id } : {}),
         agent_id: request.agent_id,
         context_scope: [...request.context_scope],

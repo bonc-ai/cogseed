@@ -1,0 +1,26 @@
+{
+  "source_revision": "dbe40f765de220829f24a93d947f76108f20c8ca",
+  "capture_command": "node_modules/.bin/tsx scripts/capture-orkas-parity-fixtures.ts --only H-no-path-leak-v1",
+  "inputs": {
+    "path_samples": [
+      "__TMP_ROOT__/private/file.txt",
+      "__TMP_ROOT__/allowed/safe.txt"
+    ]
+  },
+  "canonicalization_notes": [
+    "timestamps are replaced with __TIMESTAMP__",
+    "generated ids are normalized by semantic prefix and encounter order",
+    "temporary workspace roots are replaced with __TMP_ROOT__",
+    "object keys are sorted; array order is preserved where it is observable"
+  ],
+  "expected": {
+    "allowed_root_normalized": [
+      "__TMP_ROOT__/allowed"
+    ],
+    "outside_path_denied": true,
+    "raw_internal_path_exposed": false
+  },
+  "notes": [
+    "Absolute temporary roots are canonicalized and internal paths are not part of the public result."
+  ]
+}

@@ -1,0 +1,149 @@
+{
+  "source_revision": "dbe40f765de220829f24a93d947f76108f20c8ca",
+  "capture_command": "node_modules/.bin/tsx scripts/capture-orkas-parity-fixtures.ts --only E-collaboration-reconcile-v1",
+  "inputs": {
+    "cid": "c-parity-e-reconcile",
+    "run_id": "wf-1",
+    "uid": "u-parity-capture"
+  },
+  "canonicalization_notes": [
+    "timestamps are replaced with __TIMESTAMP__",
+    "generated ids are normalized by semantic prefix and encounter order",
+    "temporary workspace roots are replaced with __TMP_ROOT__",
+    "object keys are sorted; array order is preserved where it is observable"
+  ],
+  "expected": {
+    "active": {
+      "active_conflicts": [],
+      "artifacts_count": 0,
+      "artifacts_preview": [],
+      "context_id": "wctx-1",
+      "context_revision": 3,
+      "decisions_count": 0,
+      "decisions_preview": [],
+      "facts_count": 0,
+      "facts_preview": [],
+      "gates": [],
+      "objective": "Reconcile partial failure",
+      "open_questions_count": 0,
+      "open_questions_preview": [],
+      "phase": "dispatch",
+      "recent_events": [
+        {
+          "actor_id": "commander",
+          "cid": "c-parity-e-reconcile",
+          "context_id": "wctx-1",
+          "created_at": "__TIMESTAMP__",
+          "id": "wevt-1",
+          "payload": {
+            "kind": "custom"
+          },
+          "run_id": "wf-1",
+          "summary": "Reconcile partial failure",
+          "type": "workflow_created",
+          "version": 1
+        },
+        {
+          "actor_id": "agent-a",
+          "cid": "c-parity-e-reconcile",
+          "context_id": "wctx-1",
+          "created_at": "__TIMESTAMP__",
+          "id": "wevt-2",
+          "payload": {
+            "source_tool": "dispatch_to",
+            "step_type": "dispatch"
+          },
+          "run_id": "wf-1",
+          "step_id": "wstep-1",
+          "summary": "Already completed child",
+          "type": "step_started",
+          "version": 1
+        },
+        {
+          "actor_id": "agent-a",
+          "cid": "c-parity-e-reconcile",
+          "context_id": "wctx-1",
+          "created_at": "__TIMESTAMP__",
+          "id": "wevt-3",
+          "payload": {
+            "status": "completed"
+          },
+          "run_id": "wf-1",
+          "step_id": "wstep-1",
+          "summary": "Completed before restart",
+          "type": "step_completed",
+          "version": 1
+        }
+      ],
+      "resolved_conflicts_count": 0,
+      "risks_count": 0,
+      "risks_preview": [],
+      "run_id": "wf-1",
+      "status": "running",
+      "steps": [
+        {
+          "actor_id": "agent-a",
+          "completed_at": "__TIMESTAMP__",
+          "id": "wstep-1",
+          "result_summary": "Completed before restart",
+          "source_tool": "dispatch_to",
+          "started_at": "__TIMESTAMP__",
+          "status": "completed",
+          "title": "Already completed child",
+          "type": "dispatch"
+        }
+      ],
+      "updated_at": "__TIMESTAMP__"
+    },
+    "events": [
+      {
+        "actor_id": "commander",
+        "cid": "c-parity-e-reconcile",
+        "context_id": "wctx-1",
+        "created_at": "__TIMESTAMP__",
+        "id": "wevt-1",
+        "payload": {
+          "kind": "custom"
+        },
+        "run_id": "wf-1",
+        "summary": "Reconcile partial failure",
+        "type": "workflow_created",
+        "version": 1
+      },
+      {
+        "actor_id": "agent-a",
+        "cid": "c-parity-e-reconcile",
+        "context_id": "wctx-1",
+        "created_at": "__TIMESTAMP__",
+        "id": "wevt-2",
+        "payload": {
+          "source_tool": "dispatch_to",
+          "step_type": "dispatch"
+        },
+        "run_id": "wf-1",
+        "step_id": "wstep-1",
+        "summary": "Already completed child",
+        "type": "step_started",
+        "version": 1
+      },
+      {
+        "actor_id": "agent-a",
+        "cid": "c-parity-e-reconcile",
+        "context_id": "wctx-1",
+        "created_at": "__TIMESTAMP__",
+        "id": "wevt-3",
+        "payload": {
+          "status": "completed"
+        },
+        "run_id": "wf-1",
+        "step_id": "wstep-1",
+        "summary": "Completed before restart",
+        "type": "step_completed",
+        "version": 1
+      }
+    ]
+  },
+  "notes": [
+    "Reconciliation observes the persisted completed step instead of creating a duplicate child."
+  ]
+}

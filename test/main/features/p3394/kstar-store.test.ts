@@ -9,7 +9,7 @@
  * 5. Per-user mutex (no torn writes)
  */
 
-import { describe, test, expect, beforeEach, afterEach } from 'vitest';
+import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
@@ -32,6 +32,7 @@ describe('kstar-store', () => {
     testRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'kstar-store-test-'));
     testUid = 'test-user-001';
     process.env.ORKAS_WORKSPACE_ROOT = testRoot;
+    vi.resetModules();
   });
 
   afterEach(async () => {
@@ -228,4 +229,65 @@ describe('kstar-store', () => {
       expect(logPath).toMatch(/pending-evidence\.jsonl$/);
     });
   });
+
+  describe('shared kstar lock', () => {
+    test('legacy candidate and asset store mutations share one per-user lock', async () => {
+      const { withKstarUserLock } = await import('../../../../src/main/features/p3394/kstar-lock');
+      const { createAbilityAssetRecord, getAbilityAsset } = await import('../../../../src/main/features/p3394/ability-asset-store');
+      const { createAbilityAsset } = await import('../../../../src/main/features/p3394/ability-assets');
+      const { decideExperienceCandidate, getExperienceCandidate } = await import('../../../../src/main/features/p3394/kstar-legacy-data');
+      const asset = createAbilityAsset({
+        id: 'aa-shared-lock-001',
+        sourceCandidateId: 'cand-shared-lock-001',
+        sourceRunId: 'run-shared-lock-001',
+        type: 'skill_method',
+        capabilityStatement: 'Shared lock regression asset.',
+        scope: {
+          purpose_tags: ['shared-lock'],
+          workspace_ids: ['workspace-001'],
+        },
+        evidenceRefs: [{ kind: 'episode', id: 'ep-shared-lock-001' }],
+        workspaceRefs: [{ workspace_id: 'workspace-001', enabled: true }],
+        actor: { by: 'user', id: 'user-001' },
+        createdAt: '2026-08-05T10:00:00.000Z',
+      });
+      const legacyStatePath = path.join(testRoot, testUid, 'local', 'p3394', 'kstar-state.json');
+      await fs.mkdir(path.dirname(legacyStatePath), { recursive: true });
+      await fs.writeFile(legacyStatePath, JSON.stringify({
+        version: 1,
+        runs: [],
+        experience_candidates: [{
+          id: 'cand-shared-lock-001',
+          source_run_id: 'run-shared-lock-001',
+          status: 'pending',
+          created_at: '2026-08-05T09:00:00.000Z',
+          updated_at: '2026-08-05T09:00:00.000Z',
+        }],
+        patch_candidates: [],
+        updated_at: '2026-08-05T09:00:00.000Z',
+      }), 'utf8');
+
+      let release!: () => void;
+      let gateEntered = false;
+      const gate = withKstarUserLock(testUid, async () => {
+        gateEntered = true;
+        await new Promise<void>((resolve) => { release = resolve; });
+      });
+      while (!gateEntered) await new Promise((resolve) => setTimeout(resolve, 5));
+
+      let assetSettled = false;
+      let legacySettled = false;
+      const assetOp = createAbilityAssetRecord(testUid, asset).finally(() => { assetSettled = true; });
+      const legacyOp = decideExperienceCandidate(testUid, 'cand-shared-lock-001', 'approve').finally(() => { legacySettled = true; });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(assetSettled).toBe(false);
+      expect(legacySettled).toBe(false);
+
+      release();
+      await Promise.all([gate, assetOp, legacyOp]);
+      await expect(getExperienceCandidate(testUid, 'cand-shared-lock-001')).resolves.toMatchObject({ status: 'approved' });
+      await expect(getAbilityAsset(testUid, 'aa-shared-lock-001')).resolves.toMatchObject({ id: 'aa-shared-lock-001' });
+    });
+  });
+
 });

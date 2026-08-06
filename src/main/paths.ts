@@ -109,6 +109,20 @@ export const userCloudRoot  = (uid: string) => path.join(userRoot(uid), 'cloud')
 export const userLocalRoot  = (uid: string) => path.join(userRoot(uid), 'local');
 
 // ── Cloud-synced per-user ────────────────────────────────────────────────
+export const mateAgentCloudRoot    = (uid: string) => path.join(userCloudRoot(uid), 'mate_agent');
+export const mateAgentTasksDir     = (uid: string) => path.join(mateAgentCloudRoot(uid), 'tasks');
+export const mateAgentTaskEventsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'task-events');
+export const mateAgentSessionsDir  = (uid: string) => path.join(mateAgentCloudRoot(uid), 'sessions');
+export const mateAgentRequestClaimsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'requests');
+export const mateAgentExecutionRecordsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'execution-records');
+export const mateAgentConnectorsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'connectors');
+export const mateAgentConnectorSecretsDir = (uid: string) => path.join(mateAgentLocalRoot(uid), 'connectors');
+export const mateAgentKbSourcesDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'kb', 'sources');
+export const mateAgentKbVectorDir = (uid: string) => path.join(mateAgentLocalRoot(uid), 'kb', 'vector');
+export const mateAgentLocalRoot    = (uid: string) => path.join(userLocalRoot(uid), 'mate_agent');
+export const mateAgentWorkerStateDir = (uid: string) => path.join(mateAgentLocalRoot(uid), 'worker-state');
+export const mateAgentRecoveryStateFile = (uid: string) => path.join(mateAgentWorkerStateDir(uid), 'last-recovery.json');
+export const mateAgentCoordinationsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'coordinations');
 export const userChatsDir           = (uid: string) => path.join(userCloudRoot(uid), 'chats');
 export const userSkillChatDir       = (uid: string, sid: string) => path.join(userChatsDir(uid), 'skill', sid);
 export const userAgentChatDir       = (uid: string, aid: string) => path.join(userChatsDir(uid), 'agent', aid);
@@ -156,6 +170,23 @@ export const sessionCloudToolResultsDir = (uid: string, sessionId: string) =>
   path.join(userSessionsDir(uid), `${sessionId}.tool-results`);
 export const userLocalSessionsDir   = (uid: string) => path.join(userLocalRoot(uid), 'sessions');
 export const userLocalSessionFile   = (uid: string, sessionId: string) => path.join(userLocalSessionsDir(uid), `${sessionId}.jsonl`);
+
+// Mate Agent Runtime — machine-private execution boundary. Runtime sessions,
+// context mirrors, memory, and run logs stay under local/mate_runtime so they
+// never sync with Mate Agent cloud chats/sessions and cannot be mistaken for
+// UI-facing group-chat state.
+export const mateRuntimeRoot             = (uid: string) => path.join(userLocalRoot(uid), 'mate_runtime');
+export const mateRuntimeSessionsDir      = (uid: string) => path.join(mateRuntimeRoot(uid), 'sessions');
+export const mateRuntimeSessionFile      = (uid: string, sessionId: string) => path.join(mateRuntimeSessionsDir(uid), `${sessionId}.jsonl`);
+export const mateRuntimeSessionToolResultsDir = (uid: string, sessionId: string) =>
+  path.join(mateRuntimeSessionsDir(uid), `${sessionId}.tool-results`);
+export const mateRuntimeConversationsDir = (uid: string) => path.join(mateRuntimeRoot(uid), 'conversations');
+export const mateRuntimeMemoryDir        = (uid: string) => path.join(mateRuntimeRoot(uid), 'memory');
+export const mateRuntimeContextsDir      = (uid: string) => path.join(mateRuntimeRoot(uid), 'contexts');
+export const mateRuntimeRunsDir          = (uid: string) => path.join(mateRuntimeRoot(uid), 'runs');
+export const mateRuntimeRunDir           = (uid: string, runId: string) => path.join(mateRuntimeRunsDir(uid), runId);
+export const mateRuntimeRunMetaFile      = (uid: string, runId: string) => path.join(mateRuntimeRunDir(uid, runId), 'meta.json');
+export const mateRuntimeRunEventsFile    = (uid: string, runId: string) => path.join(mateRuntimeRunDir(uid, runId), 'events.jsonl');
 
 // Curated knowledge base (the "organized" region of the historical
 // two-region contexts design).

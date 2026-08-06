@@ -52,6 +52,14 @@ vi.mock('../../../../src/main/model/core-agent/session-store', () => ({
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+async function waitUntil(fn: () => boolean, timeoutMs = 2000): Promise<void> {
+  const startedAt = Date.now();
+  while (!fn()) {
+    if (Date.now() - startedAt >= timeoutMs) throw new Error('condition did not become true');
+    await delay(10);
+  }
+}
+
 let tmpDir: string;
 let prevWs: string | undefined;
 
@@ -202,6 +210,55 @@ describe('streamChatWithModel — phase-aware idle watchdog (Phase 1)', () => {
     const types = events.map((e) => e.type);
     expect(types).toContain('error');
     expect(types[types.length - 1]).toBe('done');
+  }, 8000);
+
+  it('reports an active session only while the mocked stream is running', async () => {
+    let releaseStream!: () => void;
+    const streamGate = new Promise<void>((resolve) => { releaseStream = resolve; });
+    h.makeStream = () =>
+      (async function* () {
+        yield { type: 'text_delta', text: 'working' };
+        await streamGate;
+        yield { type: 'text_delta', text: 'done' };
+      })();
+
+    const client = await import('../../../../src/main/model/core-agent/client');
+    const runPromise = drain({});
+    await waitUntil(() => client.hasActiveSession('gconv-stalltest'));
+    expect(client.hasActiveSession('gconv-stalltest')).toBe(true);
+
+    releaseStream();
+    await runPromise;
+    expect(client.hasActiveSession('gconv-stalltest')).toBe(false);
+  }, 8000);
+
+  it('cleans up active-session liveness after stream rejection and abort', async () => {
+    let rejectStream!: () => void;
+    const rejectGate = new Promise<void>((resolve) => { rejectStream = resolve; });
+    h.makeStream = () =>
+      (async function* () {
+        yield { type: 'text_delta', text: 'before rejection' };
+        await rejectGate;
+        throw new Error('mock provider rejection');
+      })();
+
+    const client = await import('../../../../src/main/model/core-agent/client');
+    const rejectedRun = drain({});
+    await waitUntil(() => client.hasActiveSession('gconv-stalltest'));
+    rejectStream();
+    await rejectedRun;
+    expect(client.hasActiveSession('gconv-stalltest')).toBe(false);
+
+    h.makeStream = () =>
+      (async function* () {
+        yield { type: 'text_delta', text: 'before abort' };
+        await new Promise(() => {});
+      })();
+    const abortedRun = drain({ idleTimeout: 10, streamIdleTimeout: 10 });
+    await waitUntil(() => client.hasActiveSession('gconv-stalltest'));
+    expect(client.abortActiveSession('gconv-stalltest')).toBe(1);
+    await abortedRun;
+    expect(client.hasActiveSession('gconv-stalltest')).toBe(false);
   }, 8000);
 
   it('forwards maxToolLoops to buildRunner when set (commander policy), omits it otherwise', async () => {
