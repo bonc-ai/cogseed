@@ -943,11 +943,12 @@ function mergerFor(uid: string): BurstMerger<{ envelope: InboundEnvelope; resolv
 
 /** Flush one merged batch: mark the trailing message ids as seen so a lone
  * redelivery is rejected as a duplicate, then dispatch as a single envelope
- * carrying the first message id. The original caller's promise resolves only
- * after the merged turn is dispatched (or failed). */
+ * carrying the first message id. Every enqueued promise settles: the first
+ * caller resolves with the merged dispatch result, trailing callers resolve
+ * as merged duplicates (or all fail when the dispatch errors). */
 async function flushBurstBatch(uid: string, batch: BurstBatch<{ envelope: InboundEnvelope; resolve: (result: MessagingInboundResult) => void }>): Promise<void> {
-  const first = batch.payload.envelope;
-  const resolve = batch.payload.resolve;
+  const first = batch.payloads[0].envelope;
+  const firstResolve = batch.payloads[0].resolve;
   try {
     for (const id of batch.ids.slice(1)) {
       const key = ledger.inboundKey(first.instanceId, id);
@@ -959,13 +960,19 @@ async function flushBurstBatch(uid: string, batch: BurstBatch<{ envelope: Inboun
       }
     }
     const envelope: InboundEnvelope = { ...first, externalMessageId: batch.ids[0], text: batch.text };
-    resolve(await handleInbound(uid, envelope));
+    const result = await handleInbound(uid, envelope);
+    firstResolve(result);
+    for (const item of batch.payloads.slice(1)) {
+      item.resolve({ accepted: false, duplicate: true, reason: 'merged' });
+    }
   } catch (error) {
     log.warn('messaging burst merge dispatch failed', {
       instanceId: first.instanceId,
       error: logErrorSummary(error),
     });
-    resolve({ accepted: false, duplicate: false, reason: 'burst_merge_failed' });
+    for (const item of batch.payloads) {
+      item.resolve({ accepted: false, duplicate: false, reason: 'burst_merge_failed' });
+    }
   }
 }
 

@@ -1862,6 +1862,33 @@ describe('messaging burst merge on inbound', () => {
     vi.useRealTimers();
   });
 
+  it('resolves every enqueued promise when a batch flushes', async () => {
+    const uid = 'user-1';
+    const { manager, groupSend } = await seededInstance(uid);
+    const base = async (id: string, text: string) => ({
+      platform: 'feishu_lark' as const,
+      instanceId: (await (await import('../../../src/main/features/messaging/registry')).listInstances(uid))[0].id,
+      externalMessageId: id,
+      externalChatId: 'oc_1',
+      externalUserId: uid,
+      text,
+      isGroup: true,
+      mentionPresent: true,
+      receivedAt: new Date().toISOString(),
+    });
+    // Hold the promises before advancing the clock: every enqueued promise
+    // must settle on flush, not only the batch's first one.
+    const first = manager.enqueueInbound(uid, await base('m-1', 'part one'));
+    const second = manager.enqueueInbound(uid, await base('m-2', 'part two'));
+    expect(groupSend).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(600);
+    await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(1));
+    await expect(first).resolves.toMatchObject({ accepted: true, duplicate: false });
+    await expect(second).resolves.toEqual({ accepted: false, duplicate: true, reason: 'merged' });
+    await manager.stopForUser(uid);
+    vi.useRealTimers();
+  });
+
   it('dispatches synthetic envelopes immediately, bypassing the merger', async () => {
     const uid = 'user-1';
     const { manager, groupSend } = await seededInstance(uid);

@@ -696,7 +696,8 @@ export class FeishuAdapter implements MessagingCardAdapter {
       const result = await callbacks.onInbound(envelope);
       if (!result.accepted) {
         await this.removeProcessingReaction(messageId);
-        await this.addFailureReaction(messageId);
+        // Merged burst chunks are consumed, not failures: no failure marker.
+        if (result.reason !== 'merged') await this.addFailureReaction(messageId);
       }
     } catch (error) {
       log.warn('Feishu inbound dispatch failed', {

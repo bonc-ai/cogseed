@@ -22,7 +22,7 @@ export interface BurstMergeOptions {
 export interface BurstItem<T> {
   id: string;
   text: string;
-  /** Opaque caller payload; the first item's payload rides on the batch. */
+  /** Opaque caller payload; every item's payload rides on the batch. */
   payload: T;
 }
 
@@ -32,7 +32,10 @@ export interface BurstBatch<T> {
   ids: string[];
   /** Items joined with "\n". */
   text: string;
-  payload: T;
+  /** Every item's payload, in arrival order; the caller consumes each one
+   * (e.g. resolves the per-item promise) so no enqueued caller is left
+   * hanging when the batch flushes. */
+  payloads: T[];
 }
 
 export interface BurstMerger<T> {
@@ -74,7 +77,7 @@ export function createBurstMerger<T>(
       key,
       ids: group.items.map((item) => item.id),
       text: group.items.map((item) => item.text).join('\n'),
-      payload: group.items[0].payload,
+      payloads: group.items.map((item) => item.payload),
     });
   };
 

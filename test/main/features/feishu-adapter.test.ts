@@ -436,4 +436,37 @@ describe('Feishu official event adapter', () => {
     });
     expect(envelope.externalMessageId).toContain('om_9');
   });
+
+  it('removes the processing reaction without a failure marker when the inbound is merged', async () => {
+    const { FeishuAdapter } = await import('../../../src/main/features/messaging/adapters');
+    const adapter = new FeishuAdapter(feishuInstance(), {
+      appId: 'cli_1234567890abcdef',
+      appSecret: 'app-secret',
+    });
+    const create = vi.fn(async () => ({ code: 0, data: { reaction_id: 'reaction-1' } }));
+    const remove = vi.fn(async () => ({ code: 0 }));
+    (adapter as unknown as { client: { im: { v1: { message_reaction: { create: typeof create; delete: typeof remove } } } } }).client.im.v1.messageReaction = { create, delete: remove };
+    const onInbound = vi.fn(async () => ({ accepted: false, duplicate: true, reason: 'merged' }));
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onInbound, onStatus: vi.fn(async () => {}) };
+
+    await (adapter as unknown as { handleInboundWithReaction(envelope: unknown): Promise<void> }).handleInboundWithReaction({
+      platform: 'feishu_lark',
+      instanceId: 'feishu-bot-1',
+      externalMessageId: 'om_merged_1',
+      externalChatId: 'oc_1',
+      externalUserId: 'ou_1',
+      text: 'trailing chunk',
+      isGroup: true,
+      mentionPresent: true,
+      receivedAt: new Date().toISOString(),
+    });
+    // Merged burst chunks are consumed, not failures: only the Typing
+    // processing reaction is created, then removed, with no CrossMark.
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      path: { message_id: 'om_merged_1' },
+      data: { reaction_type: { emoji_type: 'Typing' } },
+    }));
+    expect(remove).toHaveBeenCalledWith({ path: { message_id: 'om_merged_1', reaction_id: 'reaction-1' } });
+  });
 });
