@@ -1778,3 +1778,96 @@ describe('messaging session reset (/new)', () => {
     }
   });
 });
+
+describe('messaging burst merge on inbound', () => {
+  async function seededInstance(uid: string): Promise<{ manager: typeof import('../../../src/main/features/messaging/manager'); groupSend: ReturnType<typeof vi.fn> }> {
+    vi.useFakeTimers();
+    const groupSend = vi.fn(async () => ({ ok: true }));
+    // Same adapter mock shape as the rest of this file: start reports
+    // 'connected' through onStatus so the seeded runtime is live.
+    const adapter: MessagingAdapter = {
+      platform: 'feishu_lark',
+      async start(signal, callbacks) {
+        await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      async stop() {},
+      async checkHealth() {
+        return { kind: 'connected', checkedAt: new Date().toISOString() };
+      },
+      sendMessage: vi.fn(async () => ({ deliveryId: 'om_9' })),
+    };
+    vi.doMock('../../../src/main/features/messaging/adapters', () => ({ createAdapter: vi.fn(() => adapter) }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe: vi.fn() }));
+    const registry = await import('../../../src/main/features/messaging/registry');
+    const manager = await import('../../../src/main/features/messaging/manager');
+    const created = await registry.createInstance(uid, {
+      platform: 'feishu_lark',
+      displayName: 'Test Feishu',
+      policy: { allowUserIds: [uid], allowGroupIds: ['oc_1'] },
+      secret: { appId: 'cli_1234567890abcdef', appSecret: 'app-secret' },
+    });
+    await manager.setEnabled(uid, created.id, true);
+    await vi.waitFor(async () => {
+      const instances = await manager.listInstances(uid);
+      expect(instances[0]?.status.kind).toBe('connected');
+    });
+    return { manager, groupSend };
+  }
+
+  it('merges split messages into one dispatch', async () => {
+    const uid = 'user-1';
+    const { manager, groupSend } = await seededInstance(uid);
+    const base = async (id: string, text: string) => ({
+      platform: 'feishu_lark' as const,
+      instanceId: (await (await import('../../../src/main/features/messaging/registry')).listInstances(uid))[0].id,
+      externalMessageId: id,
+      externalChatId: 'oc_1',
+      externalUserId: uid,
+      text,
+      isGroup: true,
+      mentionPresent: true,
+      receivedAt: new Date().toISOString(),
+    });
+    // enqueueInbound's promise resolves only after the merged flush, so the
+    // pushes must not be awaited before the fake clock advances the window.
+    void manager.enqueueInbound(uid, await base('m-1', 'part one'));
+    void manager.enqueueInbound(uid, await base('m-2', 'part two'));
+    expect(groupSend).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(600);
+    // The flush runs ledger I/O (real fs) under fake timers, so drain the
+    // event loop with vi.waitFor (real interval) before asserting.
+    await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(1));
+    expect(groupSend.mock.calls[0][0]).toMatchObject({ text: 'part one\npart two' });
+    await manager.stopForUser(uid);
+    vi.useRealTimers();
+  });
+
+  it('dispatches synthetic envelopes immediately, bypassing the merger', async () => {
+    const uid = 'user-1';
+    const { manager, groupSend } = await seededInstance(uid);
+    const instanceId = (await (await import('../../../src/main/features/messaging/registry')).listInstances(uid))[0].id;
+    await manager.enqueueInbound(uid, {
+      platform: 'feishu_lark',
+      instanceId,
+      externalMessageId: 'evt-1',
+      externalChatId: 'oc_1',
+      externalUserId: uid,
+      text: 'reaction:added:THUMBSUP',
+      isGroup: true,
+      mentionPresent: true,
+      synthetic: true,
+      receivedAt: new Date().toISOString(),
+    });
+    expect(groupSend).toHaveBeenCalledTimes(1);
+    await manager.stopForUser(uid);
+    vi.useRealTimers();
+  });
+});

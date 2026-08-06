@@ -1,6 +1,8 @@
 import { Mutex } from 'async-mutex';
 
 import { createLogger } from '../../logger';
+import { logErrorSummary } from '../../util/log-redact';
+import { createBurstMerger, FEISHU_BURST_DEFAULTS, type BurstBatch, type BurstMerger } from './burst-merge';
 import { safeId } from '../../storage';
 import * as groupChat from '../group_chat';
 import { subscribe, type GroupEvent } from '../group_chat/bus';
@@ -873,6 +875,9 @@ async function handleTurnEndMessage(
 const CHAT_LOCKS_MAX = 1000;
 const chatLocks = new Map<string, Mutex>();
 
+/** Per-user burst mergers; synthetic envelopes bypass them entirely. */
+const burstMergers = new Map<string, BurstMerger<{ envelope: InboundEnvelope; resolve: (result: MessagingInboundResult) => void }>>();
+
 function chatLockKey(uid: string, instanceId: string, externalChatId: string): string {
   return `${uid}:${instanceId}:${externalChatId}`;
 }
@@ -923,6 +928,65 @@ async function handleInbound(uid: string, envelope: InboundEnvelope): Promise<Me
   if (reservation.duplicate) return { accepted: false, duplicate: true, cid: reservation.entry.cid };
   const lock = getChatLock(uid, instance.id, envelope.externalChatId);
   return lock.runExclusive(() => handleInboundLocked(uid, envelope, instance, key));
+}
+
+function mergerFor(uid: string): BurstMerger<{ envelope: InboundEnvelope; resolve: (result: MessagingInboundResult) => void }> {
+  let merger = burstMergers.get(uid);
+  if (!merger) {
+    merger = createBurstMerger(FEISHU_BURST_DEFAULTS, (batch) => {
+      void flushBurstBatch(uid, batch);
+    });
+    burstMergers.set(uid, merger);
+  }
+  return merger;
+}
+
+/** Flush one merged batch: mark the trailing message ids as seen so a lone
+ * redelivery is rejected as a duplicate, then dispatch as a single envelope
+ * carrying the first message id. The original caller's promise resolves only
+ * after the merged turn is dispatched (or failed). */
+async function flushBurstBatch(uid: string, batch: BurstBatch<{ envelope: InboundEnvelope; resolve: (result: MessagingInboundResult) => void }>): Promise<void> {
+  const first = batch.payload.envelope;
+  const resolve = batch.payload.resolve;
+  try {
+    for (const id of batch.ids.slice(1)) {
+      const key = ledger.inboundKey(first.instanceId, id);
+      try {
+        const reservation = await ledger.reserveInbound(uid, key, first.receivedAt);
+        if (!reservation.duplicate) await ledger.completeInbound(uid, key, { status: 'duplicate' });
+      } catch {
+        // Trailing ids are best-effort dedup markers; a bad id must not fail the batch.
+      }
+    }
+    const envelope: InboundEnvelope = { ...first, externalMessageId: batch.ids[0], text: batch.text };
+    resolve(await handleInbound(uid, envelope));
+  } catch (error) {
+    log.warn('messaging burst merge dispatch failed', {
+      instanceId: first.instanceId,
+      error: logErrorSummary(error),
+    });
+    resolve({ accepted: false, duplicate: false, reason: 'burst_merge_failed' });
+  }
+}
+
+/** Inbound entry for adapters: synthetic feedback envelopes dispatch
+ * immediately; regular text goes through the burst merger so split platform
+ * messages consume a single agent turn. */
+export async function enqueueInbound(uid: string, envelope: InboundEnvelope): Promise<MessagingInboundResult> {
+  assertUserId(uid);
+  if (!envelope || typeof envelope !== 'object') throw new Error('invalid inbound envelope');
+  if (!envelope.instanceId || !envelope.externalMessageId || !envelope.externalChatId || !envelope.externalUserId || !envelope.text) {
+    throw new Error('inbound envelope missing required fields');
+  }
+  if (envelope.synthetic) return handleInbound(uid, envelope);
+  return new Promise<MessagingInboundResult>((resolve) => {
+    const merger = mergerFor(uid);
+    merger.push(`${envelope.instanceId}\u0000${envelope.externalChatId}`, {
+      id: envelope.externalMessageId,
+      text: envelope.text,
+      payload: { envelope, resolve },
+    });
+  });
 }
 
 async function handleInboundLocked(
@@ -1117,7 +1181,7 @@ async function startRuntime(uid: string, instanceId: string): Promise<void> {
   const callbacks: AdapterCallbacks = {
     onInbound: async (envelope) => {
       if (!isCurrentRuntime(uid, runtime)) return { accepted: false, duplicate: false, reason: 'instance_not_found' };
-      return handleInbound(uid, envelope);
+      return enqueueInbound(uid, envelope);
     },
     resolveDelivery: async (deliveryId) => ledger.getDeliveryByExternalId(uid, instanceId, deliveryId),
     onStatus: async (nextStatus) => {
@@ -1430,4 +1494,5 @@ export const _managerTestHooks = {
   liveStatuses,
   renderToolLine,
   toolLinesFromProcessEvent,
+  enqueueInbound,
 };
