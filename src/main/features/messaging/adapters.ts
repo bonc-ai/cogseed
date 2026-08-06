@@ -849,6 +849,61 @@ export class FeishuAdapter implements MessagingCardAdapter {
     if (response.code !== undefined && response.code !== 0) throw new Error(response.msg || 'Feishu card update failed');
     return { deliveryId: messageId };
   }
+
+  /** Interactive approval card (mirrors Hermes' send_exec_approval). The
+   * buttons carry { action, wake_id } in their value so card.action.trigger
+   * events route back through manager.ingestCardAction into the wake gate. */
+  async sendApprovalCard(
+    chatId: string,
+    approval: {
+      wakeId: string;
+      title: string;
+      description: string;
+      allowSession?: boolean;
+      allowPermanent?: boolean;
+      replyToMessageId?: string;
+    },
+    lifecycleSignal?: AbortSignal,
+  ): Promise<{ deliveryId?: string }> {
+    if (lifecycleSignal?.aborted) throw new Error('Feishu approval card aborted');
+    const button = (label: string, action: string, type = 'default'): Record<string, JsonCompatibleValue> => ({
+      tag: 'button',
+      text: { tag: 'plain_text', content: label },
+      type,
+      value: { action, wake_id: approval.wakeId },
+    });
+    const actions: Record<string, JsonCompatibleValue>[] = [
+      button('✅ 允许一次', 'approve', 'primary'),
+    ];
+    if (approval.allowSession !== false) actions.push(button('✅ 本次会话', 'approve_session'));
+    if (approval.allowPermanent !== false) actions.push(button('✅ 总是允许', 'approve_always'));
+    actions.push(button('❌ 拒绝', 'deny', 'danger'));
+    const card: Record<string, JsonCompatibleValue> = {
+      config: { wide_screen_mode: true },
+      header: {
+        title: { content: approval.title.slice(0, 120), tag: 'plain_text' },
+        template: 'orange',
+      },
+      elements: [
+        { tag: 'markdown', content: approval.description.slice(0, 1500) },
+        { tag: 'action', actions },
+      ],
+    };
+    const content = JSON.stringify(card);
+    const replyToMessageId = approval.replyToMessageId?.trim() || '';
+    const response = replyToMessageId
+      ? await this.client.im.v1.message.reply({
+        path: { message_id: replyToMessageId },
+        data: { msg_type: 'interactive', content },
+      })
+      : await this.client.im.v1.message.create({
+        params: { receive_id_type: 'chat_id' },
+        data: { receive_id: chatId, msg_type: 'interactive', content },
+      });
+    if (response.code !== undefined && response.code !== 0) throw new Error(response.msg || 'Feishu approval card send failed');
+    const messageId = response.data?.message_id;
+    return typeof messageId === 'string' && messageId ? { deliveryId: messageId } : {};
+  }
 }
 
 const wecomSdkLogger = {

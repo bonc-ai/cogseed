@@ -1028,6 +1028,58 @@ describe('messaging card action dispatch', () => {
   });
 });
 
+describe('feishu approval cards', () => {
+  it('builds an approval card whose buttons carry the wake id and action', async () => {
+    const { FeishuAdapter } = await import('../../../src/main/features/messaging/adapters');
+    const instance = {
+      id: 'feishu-approval-test',
+      platform: 'feishu_lark' as const,
+      feishuTenantBrand: 'feishu' as const,
+      displayName: 'Approval bot',
+      enabled: true,
+      workspace: { type: 'default' as const },
+      policy: { replyMode: 'every_message' as const, allowUserIds: [], allowGroupIds: [], requireMentionInGroups: true },
+      status: { kind: 'connected' as const, checkedAt: new Date().toISOString() },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const adapter = new FeishuAdapter(instance, { appId: 'cli_1234567890abcdef', appSecret: 'secret' });
+    const create = vi.fn(async () => ({ code: 0, data: { message_id: 'om_approval_1' } }));
+    (adapter as unknown as { client: { im: { v1: { message: { create: typeof create } } } } }).client.im.v1.message.create = create;
+    const receipt = await adapter.sendApprovalCard('oc_1', {
+      wakeId: 'wake-7',
+      title: '需要你的审批',
+      description: 'Agent 想执行: npm run deploy',
+      allowSession: true,
+      allowPermanent: false,
+    });
+    expect(receipt).toEqual({ deliveryId: 'om_approval_1' });
+    const payload = JSON.parse(String(create.mock.calls[0]?.[0]?.data?.content)) as Record<string, any>;
+    expect(payload.header.title.content).toBe('需要你的审批');
+    const buttons = (payload.elements.find((element: Record<string, any>) => element.tag === 'action')?.actions || []) as Array<Record<string, any>>;
+    expect(buttons.map((button) => button.value)).toEqual([
+      { action: 'approve', wake_id: 'wake-7' },
+      { action: 'approve_session', wake_id: 'wake-7' },
+      { action: 'deny', wake_id: 'wake-7' },
+    ]);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      params: expect.objectContaining({ receive_id_type: 'chat_id' }),
+      data: expect.objectContaining({ receive_id: 'oc_1', msg_type: 'interactive' }),
+    }));
+  });
+
+  it('builds a terminal resolved card for approved and denied choices', async () => {
+    const manager = await import('../../../src/main/features/messaging/manager');
+    const approved = manager._managerTestHooks.buildResolvedApprovalCard('approve', 'Admin');
+    expect(approved.header.template).toBe('green');
+    expect(JSON.stringify(approved)).toContain('已允许');
+    expect(JSON.stringify(approved)).toContain('Admin');
+    const denied = manager._managerTestHooks.buildResolvedApprovalCard('deny');
+    expect(denied.header.template).toBe('red');
+    expect(JSON.stringify(denied)).toContain('已拒绝');
+  });
+});
+
 describe('feishu bot identity parsing', () => {
   it('extracts the bot open id from the real bot/v3/info response shape', async () => {
     const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');

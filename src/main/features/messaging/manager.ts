@@ -641,13 +641,55 @@ async function handleCardAction(uid: string, action: CardActionEnvelope): Promis
   if (action.action === 'approve' || action.action === 'approve_once'
     || action.action === 'approve_session' || action.action === 'approve_always') {
     await wakeService.approveWakeRequest(uid, wakeId);
+    void finalizeApprovalCard(uid, action);
     return { accepted: true, duplicate: false };
   }
   if (action.action === 'deny') {
     await wakeService.rejectWakeRequest(uid, wakeId);
+    void finalizeApprovalCard(uid, action);
     return { accepted: true, duplicate: false };
   }
   return { accepted: false, duplicate: false, reason: 'unsupported_card_action' };
+}
+
+const APPROVAL_CHOICE_LABELS: Record<string, string> = {
+  approve: '已允许',
+  approve_once: '已允许一次',
+  approve_session: '已允许本次会话',
+  approve_always: '已总是允许',
+  deny: '已拒绝',
+};
+
+/** Replaces a resolved approval card with a terminal state so the same
+ * buttons cannot be clicked twice (mirrors Hermes' resolved card). */
+function buildResolvedApprovalCard(choice: string, userName = ''): Record<string, JsonCompatibleValue> {
+  const denied = choice === 'deny';
+  const label = APPROVAL_CHOICE_LABELS[choice] || choice;
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      title: { content: `${denied ? '❌' : '✅'} ${label}`, tag: 'plain_text' },
+      template: denied ? 'red' : 'green',
+    },
+    elements: [
+      { tag: 'markdown', content: `${denied ? '❌' : '✅'} **${label}**${userName ? ` — ${userName}` : ''}` },
+    ],
+  };
+}
+
+async function finalizeApprovalCard(uid: string, action: CardActionEnvelope): Promise<void> {
+  const runtime = runtimes.get(uid)?.get(action.instanceId);
+  if (!runtime || !isCurrentRuntime(uid, runtime)) return;
+  const adapter = runtime.adapter;
+  if (!isCardAdapter(adapter)) return;
+  try {
+    await adapter.updateCard(action.externalMessageId, buildResolvedApprovalCard(action.action));
+  } catch (error) {
+    log.warn('messaging approval card finalize failed', {
+      instanceId: action.instanceId,
+      error: (error as Error).message,
+    });
+  }
 }
 
 async function startRuntime(uid: string, instanceId: string): Promise<void> {
@@ -961,10 +1003,36 @@ export async function ingestCardAction(uid: string, action: CardActionEnvelope):
   return handleCardAction(uid, action);
 }
 
+/** Send an interactive approval card through a running instance. The wake
+ * bridge (or any future caller) uses this to surface approvals on Feishu. */
+export async function sendApprovalCard(
+  uid: string,
+  instanceId: string,
+  chatId: string,
+  approval: {
+    wakeId: string;
+    title: string;
+    description: string;
+    allowSession?: boolean;
+    allowPermanent?: boolean;
+    replyToMessageId?: string;
+  },
+): Promise<{ deliveryId?: string }> {
+  assertUserId(uid);
+  assertInstanceId(instanceId);
+  const runtime = runtimes.get(uid)?.get(instanceId);
+  if (!runtime || !isCurrentRuntime(uid, runtime)) throw new Error('messaging instance is not running');
+  if (!isCardAdapter(runtime.adapter) || !runtime.adapter.sendApprovalCard) {
+    throw new Error('approval cards are not supported by this instance');
+  }
+  return runtime.adapter.sendApprovalCard(chatId, approval, runtime.controller.signal);
+}
+
 export const _managerTestHooks = {
   runtimeMap,
   handleInbound,
   handleCardAction,
+  buildResolvedApprovalCard,
   stopInstance,
   liveStatuses,
 };

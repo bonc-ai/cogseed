@@ -253,6 +253,20 @@ export interface MessagingCardAdapter extends MessagingAdapter {
     card: Record<string, JsonCompatibleValue>,
     signal?: AbortSignal,
   ): Promise<{ deliveryId?: string }>;
+  /** Interactive approval card whose buttons route back through
+   * onCardAction (currently Feishu-only). */
+  sendApprovalCard?(
+    chatId: string,
+    approval: {
+      wakeId: string;
+      title: string;
+      description: string;
+      allowSession?: boolean;
+      allowPermanent?: boolean;
+      replyToMessageId?: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<{ deliveryId?: string }>;
 }
 
 export type JsonCompatibleValue = string | number | boolean | null | JsonCompatibleValue[] | { [key: string]: JsonCompatibleValue };
