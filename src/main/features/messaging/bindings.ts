@@ -9,6 +9,8 @@ import type { InboundEnvelope, MessagingBinding, MessagingBindingsFile, Messagin
 const EMPTY: MessagingBindingsFile = { version: 1, bindings: {} };
 const locks = new Map<string, Mutex>();
 
+type ConversationScope = MessagingBinding['conversationScope'];
+
 function assertUserId(uid: string): void {
   if (!safeId(uid)) throw new Error('invalid user id');
 }
@@ -28,9 +30,74 @@ function assertExternalId(value: string, field: string): string {
   return result;
 }
 
-export function bindingKey(instanceId: string, externalChatId: string): string {
+function legacyBindingKey(instanceId: string, externalChatId: string): string {
   if (!safeId(instanceId)) throw new Error('invalid messaging instance id');
   return `${instanceId}:${encodeURIComponent(assertExternalId(externalChatId, 'external chat id'))}`;
+}
+
+/**
+ * Versioned keys make group routing include the sender identity. The old key
+ * format intentionally remains readable only for direct-message migration;
+ * using it for a group would reintroduce cross-user conversation sharing.
+ */
+export function bindingKey(
+  instanceId: string,
+  externalChatId: string,
+  externalUserId?: string,
+  isGroup = false,
+): string {
+  if (!safeId(instanceId)) throw new Error('invalid messaging instance id');
+  const chatId = encodeURIComponent(assertExternalId(externalChatId, 'external chat id'));
+  if (!isGroup) return `v2:${instanceId}:direct:${chatId}`;
+  const userId = encodeURIComponent(assertExternalId(externalUserId || '', 'external user id'));
+  return `v2:${instanceId}:group_sender:${chatId}:${userId}`;
+}
+
+function scopeForEnvelope(envelope: InboundEnvelope): Exclude<ConversationScope, 'legacy'> {
+  return envelope.isGroup ? 'group_sender' : 'direct';
+}
+
+function keyForEnvelope(instanceId: string, envelope: InboundEnvelope): string {
+  return bindingKey(instanceId, envelope.externalChatId, envelope.externalUserId, envelope.isGroup);
+}
+
+function boundedOptionalText(value: unknown, max: number): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const result = value.trim();
+  if (!result || result.length > max || result.includes('\0')) return undefined;
+  return result;
+}
+
+function normalizeScope(value: unknown): ConversationScope {
+  if (value === 'direct' || value === 'group_sender') return value;
+  return 'legacy';
+}
+
+function normalizeBinding(key: string, value: unknown): MessagingBinding | null {
+  if (!value || typeof value !== 'object') return null;
+  const item = value as Partial<MessagingBinding>;
+  if (typeof item.cid !== 'string' || !safeId(item.cid)
+    || typeof item.instanceId !== 'string' || !safeId(item.instanceId)) return null;
+  const externalChatId = boundedOptionalText(item.externalChatId, 512);
+  if (!externalChatId) return null;
+  const conversationScope = normalizeScope(item.conversationScope);
+  const externalUserId = boundedOptionalText(item.externalUserId, 512);
+  if (conversationScope === 'group_sender' && !externalUserId) return null;
+  return {
+    key,
+    instanceId: item.instanceId,
+    conversationScope,
+    externalChatId,
+    ...(externalUserId ? { externalUserId } : {}),
+    ...(boundedOptionalText(item.externalChatTitle, 240) ? { externalChatTitle: boundedOptionalText(item.externalChatTitle, 240) } : {}),
+    cid: item.cid,
+    ...(typeof item.projectId === 'string' && safeId(item.projectId) ? { projectId: item.projectId } : {}),
+    ...(boundedOptionalText(item.replyToMessageId, 512) ? { replyToMessageId: boundedOptionalText(item.replyToMessageId, 512) } : {}),
+    ...(boundedOptionalText(item.threadId, 512) ? { threadId: boundedOptionalText(item.threadId, 512) } : {}),
+    ...(item.replyInThread === true ? { replyInThread: true } : {}),
+    createdAt: typeof item.createdAt === 'string' ? item.createdAt : nowIso(),
+    updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : nowIso(),
+  };
 }
 
 async function readBindings(uid: string): Promise<MessagingBindingsFile> {
@@ -39,19 +106,8 @@ async function readBindings(uid: string): Promise<MessagingBindingsFile> {
   if (raw.version !== 1 || !raw.bindings || typeof raw.bindings !== 'object') return { ...EMPTY };
   const bindings: Record<string, MessagingBinding> = {};
   for (const [key, value] of Object.entries(raw.bindings)) {
-    const item = value as MessagingBinding;
-    if (!item || typeof item.cid !== 'string' || !safeId(item.cid) || typeof item.instanceId !== 'string' || !safeId(item.instanceId)) continue;
-    if (typeof item.externalChatId !== 'string' || !item.externalChatId.trim()) continue;
-    bindings[key] = {
-      key,
-      instanceId: item.instanceId,
-      externalChatId: item.externalChatId,
-      ...(typeof item.externalChatTitle === 'string' && item.externalChatTitle ? { externalChatTitle: item.externalChatTitle.slice(0, 240) } : {}),
-      cid: item.cid,
-      ...(typeof item.projectId === 'string' && safeId(item.projectId) ? { projectId: item.projectId } : {}),
-      createdAt: typeof item.createdAt === 'string' ? item.createdAt : nowIso(),
-      updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : nowIso(),
-    };
+    const binding = normalizeBinding(key, value);
+    if (binding) bindings[key] = binding;
   }
   return { version: 1, bindings };
 }
@@ -61,11 +117,58 @@ async function writeBindings(uid: string, data: MessagingBindingsFile): Promise<
   await writeJson(userMessagingBindingsFile(uid), data);
 }
 
-export async function getBinding(uid: string, instanceId: string, externalChatId: string): Promise<MessagingBinding | null> {
+function replyContextFromEnvelope(envelope: InboundEnvelope): Pick<MessagingBinding, 'replyToMessageId' | 'threadId' | 'replyInThread'> {
+  const replyToMessageId = boundedOptionalText(envelope.replyToMessageId, 512);
+  const threadId = boundedOptionalText(envelope.threadId, 512);
+  return {
+    ...(replyToMessageId ? { replyToMessageId } : {}),
+    ...(threadId ? { threadId } : {}),
+    ...(envelope.replyInThread === true ? { replyInThread: true } : {}),
+  };
+}
+
+function refreshBinding(binding: MessagingBinding, envelope: InboundEnvelope): MessagingBinding {
+  const next: MessagingBinding = {
+    ...binding,
+    externalChatId: envelope.externalChatId,
+    ...(envelope.externalUserId ? { externalUserId: envelope.externalUserId } : {}),
+    ...(envelope.externalChatTitle ? { externalChatTitle: envelope.externalChatTitle.slice(0, 240) } : {}),
+    ...replyContextFromEnvelope(envelope),
+    updatedAt: nowIso(),
+  };
+  if (!envelope.replyToMessageId) delete next.replyToMessageId;
+  if (!envelope.threadId) delete next.threadId;
+  if (envelope.replyInThread !== true) delete next.replyInThread;
+  return next;
+}
+
+async function projectForWorkspace(uid: string, instance: MessagingInstance): Promise<string | undefined> {
+  if (instance.workspace.type !== 'project') return undefined;
+  const configuredProjectId = instance.workspace.projectId;
+  if (!configuredProjectId || !safeId(configuredProjectId) || !await projects.projectExists(uid, configuredProjectId)) {
+    throw new Error('messaging workspace project not found');
+  }
+  return configuredProjectId;
+}
+
+function sameProject(binding: MessagingBinding, projectId: string | undefined): boolean {
+  return binding.projectId === projectId;
+}
+
+export async function getBinding(
+  uid: string,
+  instanceId: string,
+  externalChatId: string,
+  externalUserId?: string,
+  isGroup = false,
+): Promise<MessagingBinding | null> {
   assertUserId(uid);
-  const key = bindingKey(instanceId, externalChatId);
+  const key = bindingKey(instanceId, externalChatId, externalUserId, isGroup);
   const data = await readBindings(uid);
-  return data.bindings[key] ? { ...data.bindings[key] } : null;
+  if (data.bindings[key]) return { ...data.bindings[key] };
+  if (isGroup) return null;
+  const legacy = data.bindings[legacyBindingKey(instanceId, externalChatId)];
+  return legacy ? { ...legacy } : null;
 }
 
 export async function listBindings(uid: string): Promise<MessagingBinding[]> {
@@ -80,30 +183,45 @@ export async function resolveOrCreateBinding(
   envelope: InboundEnvelope,
 ): Promise<MessagingBinding> {
   assertUserId(uid);
-  const key = bindingKey(instance.id, envelope.externalChatId);
+  const conversationScope = scopeForEnvelope(envelope);
+  const key = keyForEnvelope(instance.id, envelope);
   return lockFor(uid).runExclusive(async () => {
     const data = await readBindings(uid);
-    let projectId: string | undefined;
-    if (instance.workspace.type === 'project') {
-      const configuredProjectId = instance.workspace.projectId;
-      if (!configuredProjectId || !safeId(configuredProjectId) || !await projects.projectExists(uid, configuredProjectId)) {
-        throw new Error('messaging workspace project not found');
-      }
-      projectId = configuredProjectId;
-    }
+    const projectId = await projectForWorkspace(uid, instance);
     const existing = data.bindings[key];
-    if (existing && existing.projectId === projectId) {
-      existing.updatedAt = nowIso();
-      if (envelope.externalChatTitle) existing.externalChatTitle = envelope.externalChatTitle.slice(0, 240);
+    if (existing && sameProject(existing, projectId)) {
+      const refreshed = refreshBinding(existing, envelope);
+      data.bindings[key] = refreshed;
       await writeBindings(uid, data);
-      return { ...existing };
+      return { ...refreshed };
     }
-    if (existing) {
-      delete data.bindings[key];
-      await writeBindings(uid, data);
+    if (existing) delete data.bindings[key];
+
+    // Direct-message bindings can safely retain their historical conversation.
+    // Group bindings never consult the old chat-only key, because it could
+    // belong to another sender in that group.
+    if (conversationScope === 'direct') {
+      const oldKey = legacyBindingKey(instance.id, envelope.externalChatId);
+      const legacy = data.bindings[oldKey];
+      if (legacy && legacy.conversationScope === 'legacy' && sameProject(legacy, projectId)) {
+        const migrated: MessagingBinding = {
+          ...refreshBinding(legacy, envelope),
+          key,
+          conversationScope: 'direct',
+        };
+        delete data.bindings[oldKey];
+        data.bindings[key] = migrated;
+        await writeBindings(uid, data);
+        return { ...migrated };
+      }
+      if (legacy && legacy.conversationScope === 'legacy') delete data.bindings[oldKey];
     }
+
     const chatLabel = envelope.externalChatTitle?.trim() || envelope.externalChatId;
-    const title = `${instance.displayName} · ${chatLabel}`.slice(0, 120);
+    const senderLabel = conversationScope === 'group_sender'
+      ? (envelope.externalUserName?.trim() || envelope.externalUserId)
+      : '';
+    const title = [instance.displayName, chatLabel, senderLabel].filter(Boolean).join(' · ').slice(0, 120);
     const conversation = await chats.createConversation(uid, {
       title,
       ...(projectId ? { projectId } : {}),
@@ -112,10 +230,13 @@ export async function resolveOrCreateBinding(
     const binding: MessagingBinding = {
       key,
       instanceId: instance.id,
+      conversationScope,
       externalChatId: envelope.externalChatId,
+      ...(envelope.externalUserId ? { externalUserId: envelope.externalUserId } : {}),
       ...(envelope.externalChatTitle ? { externalChatTitle: envelope.externalChatTitle.slice(0, 240) } : {}),
       cid: conversation.conversation_id,
       ...(projectId ? { projectId } : {}),
+      ...replyContextFromEnvelope(envelope),
       createdAt: now,
       updatedAt: now,
     };
@@ -142,4 +263,4 @@ export async function removeBindingsForInstance(uid: string, instanceId: string)
   });
 }
 
-export const _bindingsTestHooks = { bindingKey, readBindings };
+export const _bindingsTestHooks = { bindingKey, legacyBindingKey, readBindings };

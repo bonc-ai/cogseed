@@ -7,11 +7,14 @@ import type {
   AdapterCallbacks,
   FeishuTenantBrand,
   InboundEnvelope,
+  JsonCompatibleValue,
   MessagingAdapter,
+  MessagingCardAdapter,
   MessagingInstance,
   MessagingInstanceStatus,
   MessagingPlatform,
   MessagingSecret,
+  MessagingSendContext,
 } from './types';
 
 const log = createLogger('messaging:adapters');
@@ -50,7 +53,15 @@ interface FeishuMessage {
   message_type?: string;
   content?: string;
   create_time?: string;
-  mentions?: Array<{ key?: string }>;
+  root_id?: string;
+  parent_id?: string;
+  thread_id?: string;
+  mentions?: Array<{
+    key?: string;
+    open_id?: string;
+    id?: { open_id?: string } | string;
+    id_type?: string;
+  }>;
 }
 
 interface FeishuEventData {
@@ -64,6 +75,10 @@ interface FeishuEventData {
 interface FeishuApiResponse {
   code?: number;
   msg?: string;
+}
+
+interface FeishuBotInfoResponse extends FeishuApiResponse {
+  data?: { open_id?: string };
 }
 
 interface WecomMessageFrame extends WsFrame<TextMessage> {}
@@ -105,7 +120,20 @@ function normalizeWecomEvent(
   };
 }
 
-function normalizeFeishuEvent(instance: MessagingInstance, payload: FeishuEventData): InboundEnvelope | null {
+function feishuMentionOpenId(mention: NonNullable<FeishuMessage['mentions']>[number]): string {
+  if (typeof mention.open_id === 'string') return mention.open_id.trim();
+  if (mention.id && typeof mention.id === 'object' && typeof mention.id.open_id === 'string') {
+    return mention.id.open_id.trim();
+  }
+  if (mention.id_type === 'open_id' && typeof mention.id === 'string') return mention.id.trim();
+  return '';
+}
+
+function normalizeFeishuEvent(
+  instance: MessagingInstance,
+  payload: FeishuEventData,
+  botOpenId = '',
+): InboundEnvelope | null {
   const message = payload.message;
   const senderInfo = payload.sender;
   const sender = senderInfo?.sender_id;
@@ -119,6 +147,13 @@ function normalizeFeishuEvent(instance: MessagingInstance, payload: FeishuEventD
   text = text.trim();
   if (!text) return null;
   const isGroup = message.chat_type === 'group';
+  const normalizedBotOpenId = botOpenId.trim();
+  const botMentionTokens = normalizedBotOpenId
+    ? (message.mentions || [])
+      .filter((mention) => feishuMentionOpenId(mention) === normalizedBotOpenId)
+      .map((mention) => typeof mention.key === 'string' ? mention.key.trim() : '')
+      .filter((token): token is string => !!token)
+    : [];
   const rawCreateTime = Number(message.create_time);
   const createTime = Number.isFinite(rawCreateTime)
     ? new Date((rawCreateTime > 10_000_000_000 ? rawCreateTime : rawCreateTime * 1000))
@@ -131,7 +166,10 @@ function normalizeFeishuEvent(instance: MessagingInstance, payload: FeishuEventD
     externalUserId: sender.open_id,
     text,
     isGroup,
-    mentionPresent: (message.mentions || []).length > 0,
+    mentionPresent: botMentionTokens.length > 0,
+    ...(botMentionTokens.length ? { botMentionTokens } : {}),
+    replyToMessageId: message.message_id,
+    ...(message.thread_id?.trim() || message.root_id?.trim() ? { replyInThread: true } : {}),
     receivedAt: Number.isNaN(createTime.getTime()) ? new Date().toISOString() : createTime.toISOString(),
   };
 }
@@ -309,17 +347,28 @@ export class TelegramAdapter implements MessagingAdapter {
     }
   }
 
-  async sendMessage(chatId: string, text: string, lifecycleSignal?: AbortSignal): Promise<{ deliveryId?: string }> {
+  async sendMessage(
+    chatId: string,
+    text: string,
+    lifecycleSignal?: AbortSignal,
+    context?: import('./types').MessagingSendContext,
+  ): Promise<{ deliveryId?: string }> {
+    const replyToMessageId = typeof context?.replyToMessageId === 'string' ? context.replyToMessageId.trim() : '';
+    const replyToMessageIdNumber = /^\d+$/.test(replyToMessageId) ? Number(replyToMessageId) : undefined;
     const result = await this.api<{ message_id?: number }>('sendMessage', {
       chat_id: chatId,
       text,
       disable_web_page_preview: true,
+      ...(replyToMessageIdNumber !== undefined ? {
+        reply_to_message_id: replyToMessageIdNumber,
+        allow_sending_without_reply: true,
+      } : {}),
     }, 20_000, lifecycleSignal);
     return result.message_id === undefined ? {} : { deliveryId: String(result.message_id) };
   }
 }
 
-export class FeishuAdapter implements MessagingAdapter {
+export class FeishuAdapter implements MessagingCardAdapter {
   readonly platform: MessagingPlatform = 'feishu_lark';
   private readonly instance: MessagingInstance;
   private readonly appId: string;
@@ -332,6 +381,8 @@ export class FeishuAdapter implements MessagingAdapter {
   private callbacks: AdapterCallbacks | null = null;
   private terminalError: Error | null = null;
   private wakeLifecycle: (() => void) | null = null;
+  private botOpenId = '';
+  private identityLookup: Promise<void> | null = null;
 
   constructor(instance: MessagingInstance, secret: MessagingSecret) {
     if (!secret.appId || !secret.appSecret) throw new Error('Feishu app credentials missing');
@@ -387,6 +438,30 @@ export class FeishuAdapter implements MessagingAdapter {
     this.wakeLifecycle?.();
   }
 
+  private async resolveBotIdentity(): Promise<void> {
+    const response = await this.client.request<FeishuBotInfoResponse>({
+      method: 'GET',
+      url: '/open-apis/bot/v3/info',
+    });
+    if (response.code !== undefined && response.code !== 0) {
+      throw new Error(response.msg || 'Feishu bot identity request failed');
+    }
+    const openId = typeof response.data?.open_id === 'string' ? response.data.open_id.trim() : '';
+    if (!openId) throw new Error('Feishu bot identity missing open id');
+    this.botOpenId = openId;
+  }
+
+  private markReady(): void {
+    if (this.identityLookup) return;
+    this.identityLookup = this.resolveBotIdentity()
+      .then(() => {
+        if (!this.terminalError) this.notifyStatus(status('connected'));
+      })
+      .catch((error) => {
+        this.markTerminalError(error instanceof Error ? error : new Error(String(error)));
+      });
+  }
+
   private createWsClient(): lark.WSClient {
     return new lark.WSClient({
       appId: this.appId,
@@ -396,9 +471,12 @@ export class FeishuAdapter implements MessagingAdapter {
       logger: sdkLogger,
       loggerLevel: lark.LoggerLevel.error,
       handshakeTimeoutMs: 15_000,
-      onReady: () => this.notifyStatus(status('connected')),
+      onReady: () => this.markReady(),
       onReconnecting: () => this.notifyStatus(status('connecting')),
-      onReconnected: () => this.notifyStatus(status('connected')),
+      onReconnected: () => {
+        if (this.botOpenId) this.notifyStatus(status('connected'));
+        else this.markReady();
+      },
       onError: (error) => this.markTerminalError(error),
     });
   }
@@ -417,7 +495,7 @@ export class FeishuAdapter implements MessagingAdapter {
   }
 
   private normalize(payload: FeishuEventData): InboundEnvelope | null {
-    return normalizeFeishuEvent(this.instance, payload);
+    return normalizeFeishuEvent(this.instance, payload, this.botOpenId);
   }
 
   async start(signal: AbortSignal, callbacks: AdapterCallbacks): Promise<void> {
@@ -425,6 +503,8 @@ export class FeishuAdapter implements MessagingAdapter {
     if (this.callbacks) throw new Error('Feishu adapter already started');
     this.callbacks = callbacks;
     this.terminalError = null;
+    this.botOpenId = '';
+    this.identityLookup = null;
     const wsClient = this.createWsClient();
     this.wsClient = wsClient;
     try {
@@ -440,6 +520,7 @@ export class FeishuAdapter implements MessagingAdapter {
       }
       this.callbacks = null;
       this.wakeLifecycle = null;
+      this.identityLookup = null;
       if (!signal.aborted && !this.terminalError) await callbacks.onStatus(status('disconnected'));
     }
   }
@@ -451,13 +532,15 @@ export class FeishuAdapter implements MessagingAdapter {
 
   async checkHealth(): Promise<MessagingInstanceStatus> {
     try {
-      const response = await this.client.request<FeishuApiResponse>({
+      const response = await this.client.request<FeishuBotInfoResponse>({
         method: 'GET',
         url: '/open-apis/bot/v3/info',
       });
       if (response.code !== undefined && response.code !== 0) {
         throw new Error(response.msg || 'Feishu health check failed');
       }
+      const openId = typeof response.data?.open_id === 'string' ? response.data.open_id.trim() : '';
+      if (openId) this.botOpenId = openId;
       return status('connected');
     } catch (error) {
       log.warn('Feishu health check failed', {
@@ -468,19 +551,88 @@ export class FeishuAdapter implements MessagingAdapter {
     }
   }
 
-  async sendMessage(chatId: string, text: string, lifecycleSignal?: AbortSignal): Promise<{ deliveryId?: string }> {
+  async sendMessage(
+    chatId: string,
+    text: string,
+    lifecycleSignal?: AbortSignal,
+    context?: import('./types').MessagingSendContext,
+  ): Promise<{ deliveryId?: string }> {
     if (lifecycleSignal?.aborted) throw new Error('Feishu delivery aborted');
-    const response = await this.client.im.v1.message.create({
-      params: { receive_id_type: 'chat_id' },
-      data: {
-        receive_id: chatId,
-        msg_type: 'text',
-        content: JSON.stringify({ text }),
-      },
-    });
+    const content = JSON.stringify({ text });
+    const replyToMessageId = typeof context?.replyToMessageId === 'string' ? context.replyToMessageId.trim() : '';
+    const idempotencyKey = typeof context?.idempotencyKey === 'string' ? context.idempotencyKey.trim() : '';
+    const response = replyToMessageId
+      ? await this.client.im.v1.message.reply({
+        path: { message_id: replyToMessageId },
+        data: {
+          msg_type: 'text',
+          content,
+          ...(context?.replyInThread ? { reply_in_thread: true } : {}),
+          ...(idempotencyKey ? { uuid: idempotencyKey } : {}),
+        },
+      })
+      : await this.client.im.v1.message.create({
+        params: { receive_id_type: 'chat_id' },
+        data: {
+          receive_id: chatId,
+          msg_type: 'text',
+          content,
+          ...(idempotencyKey ? { uuid: idempotencyKey } : {}),
+        },
+      });
     if (response.code !== undefined && response.code !== 0) throw new Error(response.msg || 'Feishu send failed');
+    if (lifecycleSignal?.aborted) throw new Error('Feishu delivery aborted');
     const messageId = response.data?.message_id;
     return typeof messageId === 'string' && messageId ? { deliveryId: messageId } : {};
+  }
+
+  async sendCard(
+    chatId: string,
+    card: Record<string, JsonCompatibleValue>,
+    lifecycleSignal?: AbortSignal,
+    context?: MessagingSendContext,
+  ): Promise<{ deliveryId?: string }> {
+    if (lifecycleSignal?.aborted) throw new Error('Feishu delivery aborted');
+    const content = JSON.stringify(card);
+    const replyToMessageId = typeof context?.replyToMessageId === 'string' ? context.replyToMessageId.trim() : '';
+    const idempotencyKey = typeof context?.idempotencyKey === 'string' ? context.idempotencyKey.trim() : '';
+    const response = replyToMessageId
+      ? await this.client.im.v1.message.reply({
+        path: { message_id: replyToMessageId },
+        data: {
+          msg_type: 'interactive',
+          content,
+          ...(context?.replyInThread ? { reply_in_thread: true } : {}),
+          ...(idempotencyKey ? { uuid: idempotencyKey } : {}),
+        },
+      })
+      : await this.client.im.v1.message.create({
+        params: { receive_id_type: 'chat_id' },
+        data: {
+          receive_id: chatId,
+          msg_type: 'interactive',
+          content,
+          ...(idempotencyKey ? { uuid: idempotencyKey } : {}),
+        },
+      });
+    if (response.code !== undefined && response.code !== 0) throw new Error(response.msg || 'Feishu card send failed');
+    if (lifecycleSignal?.aborted) throw new Error('Feishu delivery aborted');
+    const messageId = response.data?.message_id;
+    return typeof messageId === 'string' && messageId ? { deliveryId: messageId } : {};
+  }
+
+  async updateCard(
+    messageId: string,
+    card: Record<string, JsonCompatibleValue>,
+    lifecycleSignal?: AbortSignal,
+  ): Promise<{ deliveryId?: string }> {
+    if (lifecycleSignal?.aborted) throw new Error('Feishu card update aborted');
+    const response = await this.client.im.v1.message.patch({
+      path: { message_id: messageId },
+      data: { content: JSON.stringify(card) },
+    });
+    if (response.code !== undefined && response.code !== 0) throw new Error(response.msg || 'Feishu card update failed');
+    return { deliveryId: messageId };
   }
 }
 

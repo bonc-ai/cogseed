@@ -1290,30 +1290,8 @@
 
             <!-- ─────────────────────── 消息平台 ─────────────────────── -->
             <div class="settings-tab-pane" data-settings-pane="messaging" hidden>
-              <div class="messaging-settings-shell" id="messaging-settings-shell">
-                <aside class="messaging-instance-rail" aria-label="Messaging platforms">
-                  <div class="messaging-rail-head">
-                    <div class="messaging-rail-title-wrap">
-                      <div class="messaging-rail-title" data-i18n="messaging.instances">机器人实例</div>
-                      <div class="messaging-rail-sub" data-i18n="messaging.instances_sub">所有消息平台配置都在这里管理</div>
-                    </div>
-                    <button type="button" class="messaging-add-btn" id="messaging-add-btn" data-i18n-title="messaging.add_title" title="新建机器人" aria-label="新建机器人">
-                      <span data-ui-icon="plus"></span>
-                    </button>
-                  </div>
-                  <div class="messaging-rail-label" id="messaging-configured-title" data-i18n="messaging.configured_title">已配置机器人</div>
-                  <div class="messaging-instance-list" id="messaging-instance-list">
-                    <div class="settings-empty" data-i18n="settings.loading">Loading…</div>
-                  </div>
-                  <div class="messaging-catalog" id="messaging-catalog"></div>
-                </aside>
-                <section class="messaging-detail" id="messaging-detail" aria-live="polite">
-                  <div class="messaging-detail-empty" id="messaging-detail-empty">
-                    <span class="messaging-empty-mark" data-ui-icon="message-square"></span>
-                    <strong data-i18n="messaging.empty_title">选择一个机器人或平台</strong>
-                    <span data-i18n="messaging.empty_sub">从左侧选择已配置机器人，或选择平台开始新建</span>
-                  </div>
-                </section>
+              <div class="messaging-settings-shell" id="messaging-settings-shell" aria-live="polite">
+                <div class="messaging-page" id="messaging-page"></div>
               </div>
             </div>
 

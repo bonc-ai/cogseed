@@ -36,10 +36,13 @@ describe('Feishu official event adapter', () => {
         message_type: 'text',
         content: JSON.stringify({ text: ' hello ' }),
         create_time: '1710000000000',
-        mentions: [{ key: '@_user_1' }],
+        mentions: [
+          { key: '@_user_1', open_id: 'ou_bot' },
+          { key: '@_alice', open_id: 'ou_alice' },
+        ],
       },
       sender: { sender_type: 'user', sender_id: { open_id: 'ou_1' } },
-    });
+    }, 'ou_bot');
     expect(event).toMatchObject({
       platform: 'feishu_lark',
       externalMessageId: 'om_1',
@@ -48,6 +51,7 @@ describe('Feishu official event adapter', () => {
       text: 'hello',
       isGroup: true,
       mentionPresent: true,
+      botMentionTokens: ['@_user_1'],
     });
     expect(_adapterTestHooks.normalizeFeishuEvent(instance, {
       message: { message_id: 'om_2', chat_id: 'oc_1', message_type: 'text', content: JSON.stringify({ text: 'bot' }) },
@@ -71,7 +75,7 @@ describe('Feishu official event adapter', () => {
       close: vi.fn(),
     };
     const client = {
-      request: vi.fn(),
+      request: vi.fn(async () => ({ code: 0, data: { open_id: 'ou_bot' } })),
       im: { v1: { message: { create: vi.fn() } } },
     };
     const EventDispatcher = vi.fn(function EventDispatcher() { return dispatcher; });
@@ -112,5 +116,60 @@ describe('Feishu official event adapter', () => {
     await expect(running).rejects.toThrow('Feishu persistent connection failed');
     expect(states.at(-1)).toMatchObject({ kind: 'error', message: 'Feishu connection failed' });
     expect(wsClient.close).toHaveBeenCalledWith({ force: true });
+  });
+
+  it('sends and patches interactive cards through the official SDK', async () => {
+    const create = vi.fn(async () => ({ code: 0, data: { message_id: 'om_card_1' } }));
+    const reply = vi.fn(async () => ({ code: 0, data: { message_id: 'om_card_2' } }));
+    const patch = vi.fn(async () => ({ code: 0, data: {} }));
+    const dispatcher = { register: vi.fn(function register() { return dispatcher; }) };
+    const client = {
+      request: vi.fn(async () => ({ code: 0, data: { open_id: 'ou_bot' } })),
+      im: { v1: { message: { create, reply, patch } } },
+    };
+    vi.doMock('@larksuiteoapi/node-sdk', () => ({
+      AppType: { SelfBuild: 'SelfBuild' },
+      Client: vi.fn(function Client() { return client; }),
+      Domain: { Feishu: 'https://open.feishu.cn', Lark: 'https://open.larksuite.com' },
+      EventDispatcher: vi.fn(function EventDispatcher() { return dispatcher; }),
+      LoggerLevel: { error: 'error' },
+      WSClient: vi.fn(),
+    }));
+
+    const { FeishuAdapter } = await import('../../../src/main/features/messaging/adapters');
+    const adapter = new FeishuAdapter(feishuInstance(), {
+      appId: 'cli_1234567890abcdef',
+      appSecret: 'app-secret',
+    });
+    const card = {
+      config: { wide_screen_mode: true },
+      header: { title: { tag: 'plain_text', content: 'Mate Agent' } },
+      elements: [{ tag: 'markdown', content: 'hello' }],
+    };
+    const sent = await adapter.sendCard('oc_1', card);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      params: { receive_id_type: 'chat_id' },
+      data: expect.objectContaining({
+        receive_id: 'oc_1',
+        msg_type: 'interactive',
+        content: JSON.stringify(card),
+      }),
+    }));
+    expect(sent).toEqual({ deliveryId: 'om_card_1' });
+
+    const replied = await adapter.sendCard('oc_1', card, undefined, { replyToMessageId: 'om_0' });
+    expect(reply).toHaveBeenCalledWith(expect.objectContaining({
+      path: { message_id: 'om_0' },
+      data: expect.objectContaining({ msg_type: 'interactive' }),
+    }));
+    expect(replied).toEqual({ deliveryId: 'om_card_2' });
+
+    const nextCard = { ...card, elements: [{ tag: 'markdown', content: 'hello world' }] };
+    const updated = await adapter.updateCard('om_card_1', nextCard);
+    expect(patch).toHaveBeenCalledWith({
+      path: { message_id: 'om_card_1' },
+      data: { content: JSON.stringify(nextCard) },
+    });
+    expect(updated).toEqual({ deliveryId: 'om_card_1' });
   });
 });

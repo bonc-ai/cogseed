@@ -101,7 +101,7 @@ function loadMessagingSettingsTestHooks() {
 }
 
 describe('settings tabs module', () => {
-  it('loads tabs eagerly and the settings page on demand', () => {
+  it('loads tabs eagerly and loads the focused messaging settings page on demand', () => {
     const indexHtml = fs.readFileSync(path.join(root, 'src/renderer/index.html'), 'utf8');
     const lazyFeatures = fs.readFileSync(path.join(root, 'src/renderer/modules/lazy-features.js'), 'utf8');
     const messagingSettings = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
@@ -114,31 +114,27 @@ describe('settings tabs module', () => {
     expect(indexHtml).toContain('data-i18n="settings.tab.credentials">Model Providers</button>');
     expect(indexHtml).toContain('data-i18n="settings.tab.messaging">消息平台</button>');
     expect(lazyFeatures).toContain("{ src: './modules/messaging-settings.js' }");
-    expect(indexHtml).toContain('id="messaging-catalog"');
-    expect(indexHtml).toContain('data-i18n-title="messaging.add_title"');
-    expect(style).toContain('max-width: none;');
-    expect(style).toContain('grid-template-columns: minmax(320px, 34%) minmax(0, 1fr);');
-    expect(style).toContain('.messaging-detail-form { width: 100%; margin: 0; }');
-    expect(style).toContain('.messaging-catalog.is-only-section');
-    expect(indexHtml).toContain('data-i18n="messaging.instances">机器人实例</div>');
-    expect(messagingSettings).toContain('root.hidden = true;');
-    expect(messagingSettings).toContain('messaging-status-dot is-${headerStatusKind}');
-    expect(messagingSettings).toContain("details.appendChild(fieldRow(labelFor('messaging.name', '机器人名称'), nameInput));");
+    expect(indexHtml).toContain('id="messaging-page"');
+    expect(indexHtml).not.toContain('id="messaging-catalog"');
+    expect(style).toContain('.messaging-channel-grid');
+    expect(style).toContain('.messaging-preferences-card');
+    expect(style).not.toContain('.messaging-instance-rail');
+    expect(messagingSettings).toContain("view: 'catalog'");
+    expect(messagingSettings).toContain("state.view = 'detail';");
+    expect(messagingSettings).toContain('messaging.feishu_draft.create');
     expect(messagingSettings).toContain("messaging.feishu_qr.start");
     expect(messagingSettings).toContain("messaging.feishu_qr.status");
     expect(messagingSettings).toContain("messaging.feishu_qr.cancel");
-    expect(messagingSettings).toContain("messaging.wecom_qr.start");
-    expect(messagingSettings).toContain("messaging.wecom_qr.complete");
-    expect(messagingSettings).toContain("messaging.wecom_qr.cancel");
-    expect(messagingSettings).toContain("event.origin === 'https://work.weixin.qq.com'");
-    expect(messagingSettings).toContain('event.source === state.wecomQr.popup');
-    expect(messagingSettings).toContain("data.type !== 'AUTH_SUCCESS'");
-    expect(messagingSettings).toContain("window.removeEventListener('message', handleWecomQrMessage)");
-    expect(messagingSettings).toContain('wecomBotId, wecomBotSecret');
     expect(lazyFeatures).toContain("./vendor/qrcode-generator/qrcode.js");
-    expect(style).toContain('.messaging-feishu-qr-layout');
-    expect(style).toContain('.messaging-wecom-qr-layout');
-    expect(messagingSettings).not.toContain('details.hidden = !canConfigureCredentials;');
+    expect(messagingSettings).toContain("instanceId: instance.id");
+    expect(messagingSettings).toContain("responseMode: responseSelect.value");
+    expect(messagingSettings).toContain("workspace: { type: 'all' }");
+    expect(messagingSettings).not.toContain('messaging.feishu_app_id');
+    expect(messagingSettings).not.toContain('messaging.feishu_app_secret');
+    expect(messagingSettings).not.toContain('messaging.allow_users');
+    expect(messagingSettings).not.toContain('messaging.allow_groups');
+    expect(messagingSettings).not.toContain('messaging.wecom_qr');
+    expect(messagingSettings).not.toContain('messaging.health');
     expect(indexHtml).not.toContain('Model Authorization');
     expect(indexHtml.indexOf(tabsScript)).toBeGreaterThanOrEqual(0);
     expect(indexHtml.indexOf(settingsScript)).toBe(-1);
@@ -170,71 +166,76 @@ describe('settings tabs module', () => {
     expect(panes[2].hidden).toBe(true);
   });
 
-  it('accepts only the official WeCom authorization URL and structurally valid callback payloads', () => {
+  it('keeps Feishu China and Lark Global as distinct supported channels', () => {
     const { hooks } = loadMessagingSettingsTestHooks();
 
-    expect(hooks.isValidWecomAuthorizationUrl('https://work.weixin.qq.com/ai/qc/gen')).toBe(true);
-    expect(hooks.isValidWecomAuthorizationUrl('https://work.weixin.qq.com/ai/qc/gen?state=untrusted')).toBe(false);
-    expect(hooks.isValidWecomAuthorizationUrl('https://name@work.weixin.qq.com/ai/qc/gen')).toBe(false);
-    expect(hooks.isValidWecomAuthorizationUrl('https://work.weixin.qq.com/ai/qc/gen#result')).toBe(false);
-    expect(hooks.isValidWecomAuthorizationUrl('https://work.weixin.qq.com/other')).toBe(false);
-    expect(hooks.isValidWecomAuthorizationUrl('https://attacker.example/ai/qc/gen')).toBe(false);
-    expect(hooks.validateWecomAuthPayload({
-      type: 'AUTH_SUCCESS',
-      payload: { botid: 'bot-123', secret: 'abcdefgh' },
-    })).toEqual({ botId: 'bot-123', botSecret: 'abcdefgh' });
-    expect(hooks.validateWecomAuthPayload({
-      type: 'AUTH_SUCCESS',
-      payload: { botid: 'bot-123', secret: 'contains space' },
-    })).toBeNull();
-    expect(hooks.validateWecomAuthPayload({ type: 'AUTH_SUCCESS', payload: { botid: 'bot-123' } })).toBeNull();
-    expect(hooks.validateWecomAuthPayload({ type: 'OTHER', payload: { botid: 'bot-123', secret: 'abcdefgh' } })).toBeNull();
-
-    const credentials = {
-      telegramToken: { value: '' },
-      feishuAppId: { value: '' },
-      feishuAppSecret: { value: '' },
-      feishuTenantToken: { value: '' },
-      wecomBotId: { value: ' bot-123 ' },
-      wecomBotSecret: { value: ' abcdefgh ' },
-    };
-    expect(hooks.manualSecretForPlatform('wecom', credentials, true)).toEqual({
-      wecomBotId: 'bot-123',
-      wecomBotSecret: 'abcdefgh',
-    });
-    credentials.wecomBotId.value = '';
-    credentials.wecomBotSecret.value = '';
-    expect(hooks.manualSecretForPlatform('wecom', credentials, false)).toBeNull();
-    credentials.wecomBotId.value = 'bot-123';
-    expect(() => hooks.manualSecretForPlatform('wecom', credentials, false)).toThrow();
+    const feishu = hooks.CHANNELS.find((channel: { key: string }) => channel.key === 'feishu');
+    const lark = hooks.CHANNELS.find((channel: { key: string }) => channel.key === 'lark');
+    expect(feishu).toMatchObject({ platform: 'feishu_lark', feishuTenantBrand: 'feishu', available: true });
+    expect(lark).toMatchObject({ platform: 'feishu_lark', feishuTenantBrand: 'lark', available: true });
+    expect(hooks.CHANNELS.filter((channel: { available: boolean }) => channel.available)).toHaveLength(2);
+    expect(hooks.channelForInstance({ platform: 'feishu_lark', feishuTenantBrand: 'feishu' })).toBe('feishu');
+    expect(hooks.channelForInstance({ platform: 'feishu_lark', feishuTenantBrand: 'lark' })).toBe('lark');
+    expect(hooks.channelForInstance({ platform: 'telegram' })).toBeNull();
   });
 
-  it('detaches the WeCom popup before activating an authorized registration', () => {
-    const { hooks, removeEventListener } = loadMessagingSettingsTestHooks();
-    const popup = {
-      closed: false,
-      close() { this.closed = true; },
-    };
-    const qr = hooks.__test.state.wecomQr;
-    qr.flowId = 'wecom-flow-1';
-    qr.revision = 7;
-    qr.state = 'awaiting_scan';
-    qr.popup = popup;
-    qr.messageListenerBound = true;
-    qr.popupWatchTimer = 1;
-    qr.timeoutTimer = 2;
-    qr.statusTimer = 3;
+  it('keeps only WeChat, Feishu China and Lark Global in the channel catalog', () => {
+    const { hooks } = loadMessagingSettingsTestHooks();
 
-    expect(hooks.__test.beginWecomQrActivation('wecom-flow-1', 7)).toBe(true);
-    expect(popup.closed).toBe(true);
-    expect(qr.popup).toBeNull();
-    expect(qr.messageListenerBound).toBe(false);
-    expect(qr.popupWatchTimer).toBeNull();
-    expect(qr.timeoutTimer).toBeNull();
-    expect(qr.statusTimer).toBeNull();
-    expect(qr.completing).toBe(true);
-    expect(qr.state).toBe('activating');
-    expect(removeEventListener).toHaveBeenCalledExactlyOnceWith('message', hooks.__test.handleWecomQrMessage);
-    expect(hooks.__test.beginWecomQrActivation('wecom-flow-1', 7)).toBe(false);
+    expect(hooks.CHANNELS.map((channel: { key: string }) => channel.key)).toEqual(['wechat', 'feishu', 'lark']);
+    expect(hooks.CHANNELS[0]).toMatchObject({ platform: 'wechat_personal', available: false });
+    expect(hooks.CHANNELS.filter((channel: { available: boolean }) => channel.available)).toHaveLength(2);
+    expect(hooks.CHANNELS.some((channel: { key: string }) => channel.key === 'telegram')).toBe(false);
+    expect(hooks.CHANNELS.some((channel: { key: string }) => channel.key === 'wecom')).toBe(false);
+  });
+
+  it('shows the QR panel only after scan state starts and rejects lookalike QR states', () => {
+    const { hooks } = loadMessagingSettingsTestHooks();
+    const instance = { id: 'feishu-draft-1' };
+    const qr = hooks.__test.state.qr;
+
+    hooks.__test.resetQrState();
+    expect(hooks.__test.qrIsVisibleFor(instance)).toBe(false);
+    qr.instanceId = instance.id;
+    expect(hooks.__test.qrIsVisibleFor(instance)).toBe(false);
+    qr.starting = true;
+    expect(hooks.__test.qrIsVisibleFor(instance)).toBe(true);
+    expect(hooks.normalizeFeishuQrStatus({ state: 'awaiting_scan', qrUrl: 'https://example.test/qr' })).toMatchObject({
+      state: 'awaiting_scan',
+      qrUrl: 'https://example.test/qr',
+    });
+    expect(hooks.normalizeFeishuQrStatus({ state: 'completed-but-not-really' })).toMatchObject({ state: 'failed' });
+    hooks.__test.resetQrState();
+  });
+
+  it('provides every visible catalog and detail label in each renderer locale', () => {
+    const keys = [
+      'messaging.catalog.page_title',
+      'messaging.catalog.page_subtitle',
+      'messaging.catalog.back',
+      'messaging.channel.coming_soon',
+      'messaging.channel.feishu.title',
+      'messaging.channel.feishu.description',
+      'messaging.channel.feishu.badge',
+      'messaging.channel.lark.title',
+      'messaging.channel.lark.description',
+      'messaging.channel.lark.badge',
+      'messaging.association_title',
+      'messaging.association_sub',
+      'messaging.scan',
+      'messaging.response_title',
+      'messaging.response_subtitle',
+      'messaging.response_streaming_card',
+      'messaging.workspace_all',
+      'messaging.workspace_subtitle',
+      'messaging.delete_subtitle',
+      'messaging.updated',
+      'messaging.update_failed',
+      'messaging.open_failed',
+    ];
+    for (const locale of ['zh', 'en', 'ja', 'pt']) {
+      const messages = JSON.parse(fs.readFileSync(path.join(root, `src/renderer/locales/${locale}.json`), 'utf8')) as Record<string, string>;
+      for (const key of keys) expect(messages[key]).toEqual(expect.any(String));
+    }
   });
 });

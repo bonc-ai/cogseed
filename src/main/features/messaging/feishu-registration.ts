@@ -6,6 +6,7 @@ import { createLogger } from '../../logger';
 import { safeId } from '../../storage';
 import { logErrorSummary } from '../../util/log-redact';
 import * as manager from './manager';
+import * as registry from './registry';
 import type {
   FeishuTenantBrand,
   MessagingInstanceClient,
@@ -59,11 +60,30 @@ export interface FeishuRegistrationStatus {
   instance?: MessagingInstanceClient;
 }
 
+/** Shape of the official QR result that activation needs. Secrets stay in
+ * main; the public flow never carries them. */
+interface RegistrationResultLike {
+  client_id: string;
+  client_secret: string;
+  user_info?: { tenant_brand?: string; open_id?: string };
+}
+
+interface RegistrationActivation {
+  /** Attach QR-issued credentials and return the active instance. Throws on
+   * rejection so the whole flow fails instead of leaving a half-bound robot. */
+  apply(flow: RegistrationFlow, result: RegistrationResultLike): Promise<MessagingInstanceClient>;
+  /** Compensate a partially applied activation on cancel/expiry/race. The
+   * draft itself must survive; only credentials/created instances are undone. */
+  discard(flow: RegistrationFlow, instance: MessagingInstanceClient): Promise<void>;
+}
+
 interface RegistrationFlow {
   readonly uid: string;
   readonly flowId: string;
   readonly draft: FeishuRegistrationDraft;
   readonly controller: AbortController;
+  /** Draft-bound flows register against an existing unbound instance. */
+  readonly instanceId?: string;
   state: FeishuRegistrationState;
   qrUrl?: string;
   expiresAt?: number;
@@ -276,9 +296,13 @@ async function removeStaleInstance(uid: string, instanceId: string): Promise<voi
   throw new Error('unable to remove stale Feishu registration instance', { cause: lastError });
 }
 
-async function discardCreatedInstance(flow: RegistrationFlow, instance: MessagingInstanceClient): Promise<boolean> {
+async function discardCreatedInstance(
+  flow: RegistrationFlow,
+  instance: MessagingInstanceClient,
+  activation: RegistrationActivation,
+): Promise<boolean> {
   try {
-    await removeStaleInstance(flow.uid, instance.id);
+    await activation.discard(flow, instance);
     if (isCurrent(flow) && flow.instance?.id === instance.id) flow.instance = undefined;
     if (!isCurrent(flow)) releaseRetainedFlow(flow);
     return true;
@@ -303,7 +327,52 @@ async function discardCreatedInstance(flow: RegistrationFlow, instance: Messagin
   }
 }
 
-async function runRegistration(flow: RegistrationFlow): Promise<void> {
+/** Historical activation: the QR flow owns a brand-new instance. */
+function newInstanceActivation(): RegistrationActivation {
+  return {
+    async apply(flow, result) {
+      const tenantBrand = registrationDomain(result.user_info?.tenant_brand as FeishuTenantBrand | undefined);
+      return manager.createInstance(flow.uid, {
+        platform: 'feishu_lark',
+        feishuTenantBrand: tenantBrand,
+        displayName: flow.draft.displayName,
+        workspace: flow.draft.workspace,
+        policy: flow.draft.policy,
+        secret: { appId: result.client_id.trim(), appSecret: result.client_secret.trim() },
+      });
+    },
+    async discard(flow, instance) {
+      await removeStaleInstance(flow.uid, instance.id);
+    },
+  };
+}
+
+/** Draft-bound activation: bind credentials to the exact existing draft and
+ * authorize the scanning account as the first allowed user. */
+function draftActivation(uid: string, instanceId: string): RegistrationActivation {
+  let boundSecret: { appId: string; appSecret: string } | null = null;
+  return {
+    async apply(_flow, result) {
+      const tenantBrand = registrationDomain(result.user_info?.tenant_brand as FeishuTenantBrand | undefined);
+      const openId = typeof result.user_info?.open_id === 'string' ? result.user_info.open_id.trim() : '';
+      if (!openId) throw new Error('Feishu registration account identifier missing');
+      const secret = { appId: result.client_id.trim(), appSecret: result.client_secret.trim() };
+      const bound = await registry.bindFeishuDraft(uid, instanceId, {
+        feishuTenantBrand: tenantBrand,
+        secret,
+        initialAllowUserId: openId,
+      });
+      boundSecret = secret;
+      return bound;
+    },
+    async discard() {
+      if (!boundSecret) return;
+      await registry.revokeFeishuDraftCredentials(uid, instanceId, boundSecret);
+    },
+  };
+}
+
+async function runRegistration(flow: RegistrationFlow, activation: RegistrationActivation): Promise<void> {
   try {
     const result = await lark.registerApp({
       source: 'desktop-messaging',
@@ -343,30 +412,20 @@ async function runRegistration(flow: RegistrationFlow): Promise<void> {
       return;
     }
 
-    const tenantBrand = registrationDomain(result.user_info?.tenant_brand);
-    const appId = result.client_id.trim();
-    const appSecret = result.client_secret.trim();
     flow.state = 'activating';
     clearSensitiveFlowState(flow);
     let created: MessagingInstanceClient | undefined;
     try {
-      created = await manager.createInstance(flow.uid, {
-        platform: 'feishu_lark',
-        feishuTenantBrand: tenantBrand,
-        displayName: flow.draft.displayName,
-        workspace: flow.draft.workspace,
-        policy: flow.draft.policy,
-        secret: { appId, appSecret },
-      });
+      created = await activation.apply(flow, result as RegistrationResultLike);
       flow.instance = created;
       if (!canActivate(flow)) {
-        await discardCreatedInstance(flow, created);
+        await discardCreatedInstance(flow, created, activation);
         return;
       }
       const enabled = await manager.setEnabled(flow.uid, created.id, true);
       flow.instance = enabled;
       if (!canActivate(flow)) {
-        await discardCreatedInstance(flow, enabled);
+        await discardCreatedInstance(flow, enabled, activation);
         return;
       }
       finish(flow, 'completed');
@@ -378,7 +437,7 @@ async function runRegistration(flow: RegistrationFlow): Promise<void> {
         error: logErrorSummary(error),
       });
       if (created) {
-        const discarded = await discardCreatedInstance(flow, created);
+        const discarded = await discardCreatedInstance(flow, created, activation);
         if (!discarded) return;
       }
       if (isCurrent(flow) && flow.state === 'activating' && !expired) {
@@ -421,7 +480,48 @@ export async function startFeishuQrRegistration(
     state: 'starting',
   };
   flows.set(uid, flow);
-  void runRegistration(flow);
+  void runRegistration(flow, newInstanceActivation());
+  return publicStatus(flow);
+}
+
+/**
+ * Start QR onboarding for an existing unbound Feishu/Lark draft. On success
+ * the credentials are encrypted onto that exact draft and the scanning
+ * account's open id is seeded as the first allowed user; cancel/expiry keep
+ * the draft and only revoke credentials issued by this flow.
+ */
+export async function startFeishuQrRegistrationForInstance(
+  uid: string,
+  instanceId: string,
+): Promise<FeishuRegistrationStatus> {
+  assertUserId(uid);
+  if (!registry.isValidInstanceId(instanceId)) throw new Error('invalid messaging instance id');
+  const draftInstance = await registry.getInstance(uid, instanceId);
+  if (!draftInstance) throw new Error('messaging draft not found');
+  if (draftInstance.platform !== 'feishu_lark') throw new Error('messaging draft is not a Feishu/Lark robot');
+  if (draftInstance.enabled || await registry.getInstanceWithSecret(uid, instanceId)) {
+    throw new Error('messaging instance already has credentials');
+  }
+  const previous = pruneFlow(uid);
+  if (previous) {
+    const previousPending = isPending(previous);
+    cancelFlow(previous);
+    if (previousPending || previous.instance) retainFlow(previous);
+  }
+  const flow: RegistrationFlow = {
+    uid,
+    flowId: randomUUID(),
+    draft: {
+      displayName: draftInstance.displayName,
+      workspace: draftInstance.workspace,
+      policy: draftInstance.policy,
+    },
+    controller: new AbortController(),
+    state: 'starting',
+    instanceId,
+  };
+  flows.set(uid, flow);
+  void runRegistration(flow, draftActivation(uid, instanceId));
   return publicStatus(flow);
 }
 

@@ -29,11 +29,22 @@ export function isValidWecomBotSecret(value: string): boolean {
 export const REPLY_MODES = ['every_message', 'mentions_only', 'commands_only'] as const;
 export type ReplyMode = (typeof REPLY_MODES)[number];
 
+/** The Feishu connector renders the only supported rich response mode as an
+ * incrementally updated interactive card. Other transports remain text-only. */
+export const RESPONSE_MODES = ['text', 'streaming_card'] as const;
+export type MessagingResponseMode = (typeof RESPONSE_MODES)[number];
+
 export const INSTANCE_STATUS_KINDS = ['disabled', 'disconnected', 'connecting', 'connected', 'error'] as const;
 export type InstanceStatusKind = (typeof INSTANCE_STATUS_KINDS)[number];
 
 export interface WorkspaceScope {
-  type: 'default' | 'project';
+  /**
+   * `all` is the explicit UI choice for every workspace. It intentionally
+   * routes to a normal, project-free conversation rather than granting a
+   * connector access to arbitrary project paths. `default` is retained for
+   * existing persisted configuration and has the same project-free routing.
+   */
+  type: 'default' | 'all' | 'project';
   projectId?: string;
 }
 
@@ -57,6 +68,7 @@ export interface MessagingInstance {
   feishuTenantBrand?: FeishuTenantBrand;
   displayName: string;
   enabled: boolean;
+  responseMode: MessagingResponseMode;
   workspace: WorkspaceScope;
   policy: MessagingPolicy;
   status: MessagingInstanceStatus;
@@ -85,10 +97,21 @@ export interface MessagingConfigFile {
 export interface MessagingBinding {
   key: string;
   instanceId: string;
+  /**
+   * Legacy bindings were keyed only by chat and are never reused for group
+   * traffic. New group bindings include the external sender so distinct
+   * people in one group cannot share a Mate Agent conversation.
+   */
+  conversationScope: 'direct' | 'group_sender' | 'legacy';
   externalChatId: string;
+  externalUserId?: string;
   externalChatTitle?: string;
   cid: string;
   projectId?: string;
+  /** Latest inbound platform context for the isolated conversation. */
+  replyToMessageId?: string;
+  threadId?: string;
+  replyInThread?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -105,10 +128,27 @@ export interface InboundEnvelope {
   externalChatId: string;
   externalChatTitle?: string;
   externalUserId: string;
+  /**
+   * Feishu may eventually provide a tenant plus union id. Policy prefers the
+   * pair when present and falls back to the stable platform user id (today,
+   * Feishu open_id) for compatibility with already-authorized users.
+   */
+  externalTenantId?: string;
+  externalUnionId?: string;
   externalUserName?: string;
   text: string;
   isGroup: boolean;
   mentionPresent: boolean;
+  /** Exact serialized mention placeholders for this bot. They let policy
+   * remove only the bot address and preserve @mentions to other people. */
+  botMentionTokens?: string[];
+  /** The external message this response should address, when the platform
+   * supports native replies. This is deliberately separate from the chat id:
+   * two concurrent messages in one chat must never share a reply target. */
+  replyToMessageId?: string;
+  threadId?: string;
+  /** Preserve a platform thread/topic when replying to the inbound message. */
+  replyInThread?: boolean;
   receivedAt: string;
 }
 
@@ -116,6 +156,11 @@ export interface InboundLedgerEntry {
   key: string;
   status: 'pending' | 'accepted' | 'rejected' | 'duplicate' | 'failed';
   cid?: string;
+  /** Internal group-chat message id created for this inbound event. */
+  internalMessageId?: string;
+  replyToMessageId?: string;
+  threadId?: string;
+  replyInThread?: boolean;
   reason?: string;
   receivedAt: string;
   updatedAt: string;
@@ -132,13 +177,23 @@ export interface DeliveryLedgerEntry {
   externalChatId: string;
   sourceMessageId: string;
   textHash: string;
+  /** Outbound text is kept in the machine-private ledger so a process restart
+   * can recover a failed send without reading mutable conversation history. */
+  text?: string;
+  replyToMessageId?: string;
+  threadId?: string;
+  replyInThread?: boolean;
+  /** Feishu uses this as the API uuid; keeping it stable makes timeout retries
+   * idempotent. Other adapters may ignore it. */
+  idempotencyKey?: string;
   // A cancelled delivery is terminal: it was intentionally suppressed because
   // its runtime was disabled, unbound, or deleted. It must never be retried
   // after the instance is later enabled again.
-  status: 'pending' | 'sent' | 'failed' | 'cancelled';
+  status: 'pending' | 'retry_pending' | 'sent' | 'failed' | 'cancelled';
   externalDeliveryId?: string;
   error?: string;
   attempts: number;
+  nextAttemptAt?: string;
   updatedAt: string;
 }
 
@@ -157,7 +212,35 @@ export interface MessagingAdapter {
   start(signal: AbortSignal, callbacks: AdapterCallbacks): Promise<void>;
   stop(): Promise<void>;
   checkHealth(): Promise<MessagingInstanceStatus>;
-  sendMessage(chatId: string, text: string, signal?: AbortSignal): Promise<{ deliveryId?: string }>;
+  sendMessage(
+    chatId: string,
+    text: string,
+    signal?: AbortSignal,
+    context?: MessagingSendContext,
+  ): Promise<{ deliveryId?: string }>;
+}
+
+export interface MessagingCardAdapter extends MessagingAdapter {
+  sendCard(
+    chatId: string,
+    card: Record<string, JsonCompatibleValue>,
+    signal?: AbortSignal,
+    context?: MessagingSendContext,
+  ): Promise<{ deliveryId?: string }>;
+  updateCard(
+    messageId: string,
+    card: Record<string, JsonCompatibleValue>,
+    signal?: AbortSignal,
+  ): Promise<{ deliveryId?: string }>;
+}
+
+export type JsonCompatibleValue = string | number | boolean | null | JsonCompatibleValue[] | { [key: string]: JsonCompatibleValue };
+
+export interface MessagingSendContext {
+  replyToMessageId?: string;
+  threadId?: string;
+  replyInThread?: boolean;
+  idempotencyKey?: string;
 }
 
 export interface MessagingAdapterFactory {

@@ -19,6 +19,8 @@ const pendingInbound = new Map<string, Set<string>>();
 const pendingDeliveries = new Map<string, Set<string>>();
 const EMPTY_INBOUND: MessagingInboundLedgerFile = { version: 1, entries: {} };
 const EMPTY_DELIVERY: MessagingDeliveryLedgerFile = { version: 1, entries: {} };
+const MAX_DELIVERY_TEXT_LENGTH = 12_000;
+const MAX_DELIVERY_IDEMPOTENCY_KEY_LENGTH = 160;
 
 function assertUserId(uid: string): void {
   if (!safeId(uid)) throw new Error('invalid user id');
@@ -73,6 +75,16 @@ function normalizeInbound(raw: Partial<MessagingInboundLedgerFile>): MessagingIn
       key,
       status: candidate.status,
       ...(typeof candidate.cid === 'string' ? { cid: candidate.cid } : {}),
+      ...(typeof candidate.internalMessageId === 'string' && candidate.internalMessageId.trim()
+        ? { internalMessageId: candidate.internalMessageId.trim().slice(0, 160) }
+        : {}),
+      ...(typeof candidate.replyToMessageId === 'string' && candidate.replyToMessageId.trim()
+        ? { replyToMessageId: candidate.replyToMessageId.trim().slice(0, 512) }
+        : {}),
+      ...(typeof candidate.threadId === 'string' && candidate.threadId.trim()
+        ? { threadId: candidate.threadId.trim().slice(0, 512) }
+        : {}),
+      ...(candidate.replyInThread === true ? { replyInThread: true } : {}),
       ...(typeof candidate.reason === 'string' ? { reason: candidate.reason.slice(0, 300) } : {}),
       receivedAt: typeof candidate.receivedAt === 'string' ? candidate.receivedAt : candidate.updatedAt,
       updatedAt: candidate.updatedAt,
@@ -86,17 +98,48 @@ function normalizeDelivery(raw: Partial<MessagingDeliveryLedgerFile>): Messaging
   const entries: Record<string, DeliveryLedgerEntry> = {};
   for (const [key, value] of Object.entries(raw.entries)) {
     const candidate = value as DeliveryLedgerEntry;
-    if (!candidate || typeof candidate.updatedAt !== 'string' || !['pending', 'sent', 'failed', 'cancelled'].includes(candidate.status)) continue;
+    if (!candidate || typeof candidate.updatedAt !== 'string'
+      || !['pending', 'retry_pending', 'sent', 'failed', 'cancelled'].includes(candidate.status)) continue;
+    const text = typeof candidate.text === 'string' && candidate.text.trim()
+      ? candidate.text.trim().slice(0, MAX_DELIVERY_TEXT_LENGTH)
+      : undefined;
+    const idempotencyKey = typeof candidate.idempotencyKey === 'string' && candidate.idempotencyKey.trim()
+      ? candidate.idempotencyKey.trim().slice(0, MAX_DELIVERY_IDEMPOTENCY_KEY_LENGTH)
+      : undefined;
+    // Old ledgers retained only a text hash. They cannot safely replay a
+    // delivery after restart, so make their interrupted records terminal
+    // instead of leaving an invisible permanent pending state.
+    const replayable = !!text && !!idempotencyKey;
+    const rawStatus = candidate.status;
+    const status = (rawStatus === 'pending' || rawStatus === 'retry_pending') && !replayable
+      ? 'failed'
+      : rawStatus;
     entries[key] = {
       key,
       instanceId: String(candidate.instanceId || '').slice(0, 160),
       externalChatId: String(candidate.externalChatId || '').slice(0, 512),
       sourceMessageId: String(candidate.sourceMessageId || '').slice(0, 160),
       textHash: String(candidate.textHash || '').slice(0, 128),
-      status: candidate.status,
+      ...(text ? { text } : {}),
+      ...(typeof candidate.replyToMessageId === 'string' && candidate.replyToMessageId.trim()
+        ? { replyToMessageId: candidate.replyToMessageId.trim().slice(0, 512) }
+        : {}),
+      ...(typeof candidate.threadId === 'string' && candidate.threadId.trim()
+        ? { threadId: candidate.threadId.trim().slice(0, 512) }
+        : {}),
+      ...(candidate.replyInThread === true ? { replyInThread: true } : {}),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      status,
       ...(typeof candidate.externalDeliveryId === 'string' ? { externalDeliveryId: candidate.externalDeliveryId.slice(0, 512) } : {}),
-      ...(typeof candidate.error === 'string' ? { error: candidate.error.slice(0, 500) } : {}),
+      ...(typeof candidate.error === 'string'
+        ? { error: candidate.error.slice(0, 500) }
+        : status === 'failed' && !replayable && (rawStatus === 'pending' || rawStatus === 'retry_pending')
+          ? { error: 'legacy delivery payload unavailable for recovery' }
+          : {}),
       attempts: Number.isInteger(candidate.attempts) && candidate.attempts >= 0 ? candidate.attempts : 0,
+      ...(status === 'retry_pending' && typeof candidate.nextAttemptAt === 'string' && candidate.nextAttemptAt.trim()
+        ? { nextAttemptAt: candidate.nextAttemptAt.trim().slice(0, 80) }
+        : {}),
       updatedAt: candidate.updatedAt,
     };
   }
@@ -145,7 +188,11 @@ export async function reserveInbound(uid: string, key: string, receivedAt = nowI
   });
 }
 
-export async function completeInbound(uid: string, key: string, patch: Pick<InboundLedgerEntry, 'status'> & Partial<Pick<InboundLedgerEntry, 'cid' | 'reason'>>): Promise<InboundLedgerEntry> {
+export async function completeInbound(
+  uid: string,
+  key: string,
+  patch: Pick<InboundLedgerEntry, 'status'> & Partial<Pick<InboundLedgerEntry, 'cid' | 'internalMessageId' | 'replyToMessageId' | 'threadId' | 'replyInThread' | 'reason'>>,
+): Promise<InboundLedgerEntry> {
   assertUserId(uid);
   boundedKey(key, 'inbound key');
   return getLock(inboundLocks, uid).runExclusive(async () => {
@@ -155,6 +202,10 @@ export async function completeInbound(uid: string, key: string, patch: Pick<Inbo
       ...current,
       status: patch.status,
       ...(patch.cid ? { cid: patch.cid } : {}),
+      ...(patch.internalMessageId ? { internalMessageId: patch.internalMessageId.slice(0, 160) } : {}),
+      ...(patch.replyToMessageId ? { replyToMessageId: patch.replyToMessageId.slice(0, 512) } : {}),
+      ...(patch.threadId ? { threadId: patch.threadId.slice(0, 512) } : {}),
+      ...(patch.replyInThread === true ? { replyInThread: true } : {}),
       ...(patch.reason ? { reason: patch.reason.slice(0, 300) } : {}),
       updatedAt: nowIso(),
     };
@@ -172,26 +223,45 @@ export async function getDelivery(uid: string, key: string): Promise<DeliveryLed
   return data.entries[key] || null;
 }
 
-export async function beginDelivery(uid: string, entry: Omit<DeliveryLedgerEntry, 'status' | 'attempts' | 'updatedAt'>): Promise<{ duplicate: boolean; entry: DeliveryLedgerEntry }> {
+export async function beginDelivery(
+  uid: string,
+  entry: Omit<DeliveryLedgerEntry, 'status' | 'attempts' | 'updatedAt' | 'nextAttemptAt' | 'idempotencyKey'> & {
+    idempotencyKey?: string;
+  },
+): Promise<{ duplicate: boolean; entry: DeliveryLedgerEntry }> {
   assertUserId(uid);
   assertInstanceId(entry.instanceId);
   boundedKey(entry.key, 'delivery key');
+  const text = typeof entry.text === 'string' ? entry.text.trim().slice(0, MAX_DELIVERY_TEXT_LENGTH) : '';
+  if (!text) throw new Error('delivery text required for recovery');
   return getLock(deliveryLocks, uid).runExclusive(async () => {
     const data = normalizeDelivery(await readJson<Partial<MessagingDeliveryLedgerFile>>(userMessagingDeliveryLedgerFile(uid)));
     const existing = data.entries[entry.key];
-    if (existing && (
-      existing.status === 'sent'
+    const now = Date.now();
+    const retryDueAt = existing?.nextAttemptAt ? Date.parse(existing.nextAttemptAt) : Number.NaN;
+    if (existing && (existing.status === 'sent'
       || existing.status === 'cancelled'
+      || existing.status === 'failed'
       || (existing.status === 'pending' && pendingContains(pendingDeliveries, uid, entry.key))
-    )) {
+      || (existing.status === 'retry_pending' && Number.isFinite(retryDueAt) && retryDueAt > now))) {
       return { duplicate: true, entry: existing };
     }
+    if (existing && existing.textHash !== entry.textHash) {
+      throw new Error('delivery payload hash does not match existing outbox entry');
+    }
     const next: DeliveryLedgerEntry = {
-      ...entry,
+      ...(existing || entry),
+      text: existing?.text || text,
+      idempotencyKey: existing?.idempotencyKey
+        || (typeof entry.idempotencyKey === 'string' && entry.idempotencyKey.trim()
+          ? entry.idempotencyKey.trim().slice(0, MAX_DELIVERY_IDEMPOTENCY_KEY_LENGTH)
+          : crypto.randomUUID()),
       status: 'pending',
       attempts: (existing?.attempts || 0) + 1,
       updatedAt: nowIso(),
     };
+    delete next.nextAttemptAt;
+    delete next.error;
     data.entries[entry.key] = next;
     await writeJson(userMessagingDeliveryLedgerFile(uid), data);
     markPending(pendingDeliveries, uid, entry.key);
@@ -199,24 +269,89 @@ export async function beginDelivery(uid: string, entry: Omit<DeliveryLedgerEntry
   });
 }
 
-export async function finishDelivery(uid: string, key: string, patch: Pick<DeliveryLedgerEntry, 'status'> & Partial<Pick<DeliveryLedgerEntry, 'externalDeliveryId' | 'error'>>): Promise<DeliveryLedgerEntry> {
+export async function finishDelivery(
+  uid: string,
+  key: string,
+  patch: Pick<DeliveryLedgerEntry, 'status'> & Partial<Pick<DeliveryLedgerEntry, 'externalDeliveryId' | 'error' | 'nextAttemptAt'>>,
+): Promise<DeliveryLedgerEntry> {
   assertUserId(uid);
   boundedKey(key, 'delivery key');
   return getLock(deliveryLocks, uid).runExclusive(async () => {
     const data = normalizeDelivery(await readJson<Partial<MessagingDeliveryLedgerFile>>(userMessagingDeliveryLedgerFile(uid)));
     const current = data.entries[key];
     if (!current) throw new Error('delivery ledger entry not found');
+    if (current.status === 'cancelled' && patch.status !== 'cancelled') {
+      clearPending(pendingDeliveries, uid, key);
+      return current;
+    }
+    const nextAttemptAt = patch.status === 'retry_pending' && typeof patch.nextAttemptAt === 'string'
+      && Number.isFinite(Date.parse(patch.nextAttemptAt))
+      ? patch.nextAttemptAt
+      : undefined;
     const next: DeliveryLedgerEntry = {
       ...current,
       status: patch.status,
       ...(patch.externalDeliveryId ? { externalDeliveryId: patch.externalDeliveryId.slice(0, 512) } : {}),
       ...(patch.error ? { error: patch.error.slice(0, 500) } : {}),
+      ...(nextAttemptAt ? { nextAttemptAt } : {}),
       updatedAt: nowIso(),
     };
     data.entries[key] = next;
     await writeJson(userMessagingDeliveryLedgerFile(uid), data);
     clearPending(pendingDeliveries, uid, key);
     return next;
+  });
+}
+
+export async function listRecoverableDeliveries(uid: string, instanceId: string, now = Date.now()): Promise<DeliveryLedgerEntry[]> {
+  assertUserId(uid);
+  assertInstanceId(instanceId);
+  const data = normalizeDelivery(await readJson<Partial<MessagingDeliveryLedgerFile>>(userMessagingDeliveryLedgerFile(uid)));
+  return Object.values(data.entries)
+    .filter((entry) => {
+      if (entry.instanceId !== instanceId || pendingContains(pendingDeliveries, uid, entry.key)) return false;
+      if (entry.status === 'pending') return !!entry.text && !!entry.idempotencyKey;
+      if (entry.status !== 'retry_pending' || !entry.text || !entry.idempotencyKey) return false;
+      const retryAt = entry.nextAttemptAt ? Date.parse(entry.nextAttemptAt) : Number.NaN;
+      return !Number.isFinite(retryAt) || retryAt <= now;
+    })
+    .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+}
+
+export async function nextRecoverableDeliveryAt(uid: string, instanceId: string): Promise<number | null> {
+  assertUserId(uid);
+  assertInstanceId(instanceId);
+  const data = normalizeDelivery(await readJson<Partial<MessagingDeliveryLedgerFile>>(userMessagingDeliveryLedgerFile(uid)));
+  let next: number | null = null;
+  for (const entry of Object.values(data.entries)) {
+    if (entry.instanceId !== instanceId || pendingContains(pendingDeliveries, uid, entry.key)) continue;
+    if (entry.status === 'pending' && entry.text && entry.idempotencyKey) return Date.now();
+    if (entry.status !== 'retry_pending' || !entry.text || !entry.idempotencyKey) continue;
+    const retryAt = entry.nextAttemptAt ? Date.parse(entry.nextAttemptAt) : Number.NaN;
+    const candidate = Number.isFinite(retryAt) ? retryAt : Date.now();
+    if (next === null || candidate < next) next = candidate;
+  }
+  return next;
+}
+
+export async function cancelRecoverableDeliveriesForInstance(uid: string, instanceId: string, reason: string): Promise<number> {
+  assertUserId(uid);
+  assertInstanceId(instanceId);
+  const boundedReason = reason.trim().slice(0, 500) || 'delivery cancelled';
+  return getLock(deliveryLocks, uid).runExclusive(async () => {
+    const data = normalizeDelivery(await readJson<Partial<MessagingDeliveryLedgerFile>>(userMessagingDeliveryLedgerFile(uid)));
+    let cancelled = 0;
+    for (const entry of Object.values(data.entries)) {
+      if (entry.instanceId !== instanceId || (entry.status !== 'pending' && entry.status !== 'retry_pending')) continue;
+      entry.status = 'cancelled';
+      entry.error = boundedReason;
+      delete entry.nextAttemptAt;
+      entry.updatedAt = nowIso();
+      clearPending(pendingDeliveries, uid, entry.key);
+      cancelled += 1;
+    }
+    if (cancelled) await writeJson(userMessagingDeliveryLedgerFile(uid), data);
+    return cancelled;
   });
 }
 

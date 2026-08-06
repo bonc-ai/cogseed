@@ -4,6 +4,7 @@ import { createLogger } from '../../logger';
 import { safeId } from '../../storage';
 import * as groupChat from '../group_chat';
 import { subscribe, type GroupEvent } from '../group_chat/bus';
+import type { GroupMessage } from '../group_chat/visibility';
 import * as projects from '../projects';
 import * as registry from './registry';
 import * as bindings from './bindings';
@@ -12,20 +13,43 @@ import { evaluateInboundPolicy, stripBotMention } from './policy';
 import { createAdapter } from './adapters';
 import type {
   AdapterCallbacks,
+  DeliveryLedgerEntry,
   InboundEnvelope,
+  JsonCompatibleValue,
   MessagingAdapter,
+  MessagingCardAdapter,
   MessagingInboundResult,
   MessagingInstance,
   MessagingInstanceClient,
   MessagingInstanceStatus,
+  MessagingBinding,
   MessagingPlatformCatalogEntry,
   WorkspaceScope,
 } from './types';
 
 const log = createLogger('messaging:manager');
 
+/** Initial attempt plus two bounded retries. The timer is owned by the
+ * connector runtime and survives neither disable nor unbind, while the
+ * persisted ledger survives a normal app shutdown for startup recovery. */
+export const OUTBOUND_MAX_ATTEMPTS = 3;
+export const OUTBOUND_RETRY_DELAYS_MS = [1_000, 5_000] as const;
+const MAX_RETRY_TIMER_DELAY_MS = 2_147_000_000;
+/** Debounce window for streaming-card updates. Process deltas arrive faster
+ * than Feishu can accept card patches; flushing on a short timer keeps the
+ * card interactive without flooding the API. */
+const CARD_FLUSH_DELAY_MS = 400;
+const CARD_MAX_TEXT_LENGTH = 12_000;
+
+interface CardStreamState {
+  messageId?: string;
+  accumulated: string;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
 interface RuntimeInstance {
   instanceId: string;
+  instance: MessagingInstance;
   adapter: MessagingAdapter;
   controller: AbortController;
   started: Promise<void>;
@@ -33,6 +57,12 @@ interface RuntimeInstance {
   outboundDeliveries: Set<Promise<void>>;
   active: boolean;
   statusWrite: Promise<void>;
+  bindingContexts: Map<string, MessagingBinding>;
+  statusListeners: Set<(status: MessagingInstanceStatus) => void>;
+  retryTimer: ReturnType<typeof setTimeout> | null;
+  retryScheduledAt: number | null;
+  /** Streaming-card state keyed by `binding.key + turn_id`. */
+  cardStates: Map<string, CardStreamState>;
 }
 
 interface OutboundMessage {
@@ -170,38 +200,60 @@ function isMessageEvent(event: GroupEvent): event is Extract<GroupEvent, { type:
 }
 
 function messageFromEvent(event: Extract<GroupEvent, { type: 'message' }>): OutboundMessage {
-  return event.msg as OutboundMessage;
+  const message: GroupMessage = event.msg;
+  return {
+    id: message.id,
+    from: message.from,
+    text: message.text,
+    ...(message.dispatch ? { dispatch: true } : {}),
+  };
 }
 
-async function deliverGroupMessage(
+function deliveryContext(entry: { replyToMessageId?: string; threadId?: string; replyInThread?: boolean; idempotencyKey?: string }) {
+  return {
+    ...(entry.replyToMessageId ? { replyToMessageId: entry.replyToMessageId } : {}),
+    ...(entry.threadId ? { threadId: entry.threadId } : {}),
+    ...(entry.replyInThread ? { replyInThread: true } : {}),
+    ...(entry.idempotencyKey ? { idempotencyKey: entry.idempotencyKey } : {}),
+  };
+}
+
+function beginDeliveryEntry(
+  instanceId: string,
+  binding: { externalChatId: string; replyToMessageId?: string; threadId?: string; replyInThread?: boolean },
+  message: OutboundMessage,
+  text: string,
+  idempotencyKey?: string,
+) {
+  const key = ledger.deliveryKey(instanceId, message.id as string);
+  return {
+    key,
+    instanceId,
+    externalChatId: binding.externalChatId,
+    sourceMessageId: message.id as string,
+    textHash: ledger.textHash(text),
+    text,
+    ...(binding.replyToMessageId ? { replyToMessageId: binding.replyToMessageId } : {}),
+    ...(binding.threadId ? { threadId: binding.threadId } : {}),
+    ...(binding.replyInThread ? { replyInThread: true } : {}),
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+  };
+}
+
+async function attemptDelivery(
   uid: string,
   runtime: RuntimeInstance,
-  instance: MessagingInstance,
-  binding: { externalChatId: string },
-  message: OutboundMessage,
+  key: string,
+  entry: DeliveryLedgerEntry,
 ): Promise<void> {
   if (!isCurrentRuntime(uid, runtime)) return;
-  const sourceMessageId = typeof message.id === 'string' && message.id ? message.id : '';
-  const text = typeof message.text === 'string' ? message.text.trim().slice(0, 12_000) : '';
-  if (!sourceMessageId || !text || message.dispatch || message.from === 'user') return;
-  const key = ledger.deliveryKey(instance.id, sourceMessageId);
-  const begun = await ledger.beginDelivery(uid, {
-    key,
-    instanceId: instance.id,
-    externalChatId: binding.externalChatId,
-    sourceMessageId,
-    textHash: ledger.textHash(text),
-  });
-  if (begun.duplicate) return;
-  if (!isCurrentRuntime(uid, runtime) || runtime.controller.signal.aborted) {
-    await ledger.finishDelivery(uid, key, {
-      status: 'cancelled',
-      error: 'delivery cancelled because messaging instance stopped',
-    });
-    return;
-  }
   try {
-    const receipt = await runtime.adapter.sendMessage(binding.externalChatId, text, runtime.controller.signal);
+    const receipt = await runtime.adapter.sendMessage(
+      entry.externalChatId,
+      entry.text || '',
+      runtime.controller.signal,
+      deliveryContext(entry),
+    );
     await ledger.finishDelivery(uid, key, {
       status: 'sent',
       ...(receipt.deliveryId ? { externalDeliveryId: receipt.deliveryId } : {}),
@@ -215,16 +267,96 @@ async function deliverGroupMessage(
       return;
     }
     const messageText = (error as Error).message || 'delivery failed';
-    await ledger.finishDelivery(uid, key, { status: 'failed', error: messageText });
-    log.warn('messaging delivery failed', { instanceId: instance.id, sourceMessageId, error: messageText });
+    await scheduleRetry(uid, runtime, key, messageText);
   }
+}
+
+async function scheduleRetry(uid: string, runtime: RuntimeInstance, key: string, messageText: string): Promise<void> {
+  const entry = await ledger.getDelivery(uid, key);
+  if (!entry) return;
+  if (entry.attempts >= OUTBOUND_MAX_ATTEMPTS) {
+    await ledger.finishDelivery(uid, key, { status: 'failed', error: messageText });
+    log.warn('messaging delivery failed after retries', {
+      instanceId: runtime.instanceId,
+      key,
+      attempts: entry.attempts,
+      error: messageText,
+    });
+    return;
+  }
+  const delayMs = OUTBOUND_RETRY_DELAYS_MS[Math.min(entry.attempts - 1, OUTBOUND_RETRY_DELAYS_MS.length - 1)];
+  const nextAttemptAt = new Date(Date.now() + delayMs).toISOString();
+  await ledger.finishDelivery(uid, key, { status: 'retry_pending', error: messageText, nextAttemptAt });
+  await scheduleRetryTimer(uid, runtime);
+}
+
+async function retryDelayMs(uid: string, instanceId: string): Promise<number | null> {
+  const nextAt = await ledger.nextRecoverableDeliveryAt(uid, instanceId);
+  if (nextAt === null) return null;
+  return Math.max(0, Math.min(nextAt - Date.now(), MAX_RETRY_TIMER_DELAY_MS));
+}
+
+async function scheduleRetryTimer(uid: string, runtime: RuntimeInstance): Promise<void> {
+  if (runtime.retryTimer !== null) return;
+  const delay = await retryDelayMs(uid, runtime.instanceId);
+  if (delay === null) return;
+  runtime.retryTimer = setTimeout(() => {
+    runtime.retryTimer = null;
+    runtime.retryScheduledAt = null;
+    void recoverDeliveries(uid, runtime);
+  }, delay);
+  runtime.retryScheduledAt = Date.now() + delay;
+}
+
+function clearRetryTimer(runtime: RuntimeInstance): void {
+  if (runtime.retryTimer !== null) {
+    clearTimeout(runtime.retryTimer);
+    runtime.retryTimer = null;
+    runtime.retryScheduledAt = null;
+  }
+}
+
+async function recoverDeliveries(uid: string, runtime: RuntimeInstance): Promise<void> {
+  if (!isCurrentRuntime(uid, runtime)) return;
+  const due = await ledger.listRecoverableDeliveries(uid, runtime.instanceId);
+  for (const entry of due) {
+    if (!isCurrentRuntime(uid, runtime)) return;
+    const begun = await ledger.beginDelivery(uid, beginDeliveryEntry(runtime.instanceId, entry, { id: entry.sourceMessageId, text: entry.text || '' }, entry.text || '', entry.idempotencyKey));
+    if (begun.duplicate) continue;
+    await attemptDelivery(uid, runtime, entry.key, begun.entry);
+  }
+  await scheduleRetryTimer(uid, runtime);
+}
+
+async function deliverGroupMessage(
+  uid: string,
+  runtime: RuntimeInstance,
+  instance: MessagingInstance,
+  binding: MessagingBinding,
+  message: OutboundMessage,
+): Promise<void> {
+  if (!isCurrentRuntime(uid, runtime)) return;
+  const sourceMessageId = typeof message.id === 'string' && message.id ? message.id : '';
+  const text = typeof message.text === 'string' ? message.text.trim().slice(0, 12_000) : '';
+  if (!sourceMessageId || !text || message.dispatch || message.from === 'user') return;
+  const key = ledger.deliveryKey(instance.id, sourceMessageId);
+  const begun = await ledger.beginDelivery(uid, beginDeliveryEntry(instance.id, binding, message, text));
+  if (begun.duplicate) return;
+  if (!isCurrentRuntime(uid, runtime) || runtime.controller.signal.aborted) {
+    await ledger.finishDelivery(uid, key, {
+      status: 'cancelled',
+      error: 'delivery cancelled because messaging instance stopped',
+    });
+    return;
+  }
+  await attemptDelivery(uid, runtime, key, begun.entry);
 }
 
 function trackOutboundDelivery(
   uid: string,
   runtime: RuntimeInstance,
   instance: MessagingInstance,
-  binding: { externalChatId: string },
+  binding: MessagingBinding,
   message: OutboundMessage,
 ): void {
   const delivery = deliverGroupMessage(uid, runtime, instance, binding, message);
@@ -255,14 +387,196 @@ async function attachBindingListener(
   uid: string,
   runtime: RuntimeInstance,
   instance: MessagingInstance,
-  binding: { key: string; cid: string; externalChatId: string },
+  binding: MessagingBinding,
 ): Promise<void> {
   if (!isCurrentRuntime(uid, runtime) || runtime.listeners.has(binding.key)) return;
+  const streamingEnabled = instance.responseMode === 'streaming_card' && isCardAdapter(runtime.adapter);
   const unsubscribe = subscribe(uid, binding.cid, (event: GroupEvent) => {
-    if (!isCurrentRuntime(uid, runtime) || !isMessageEvent(event) || event.turn_end !== true) return;
-    trackOutboundDelivery(uid, runtime, instance, binding, messageFromEvent(event));
+    if (!isCurrentRuntime(uid, runtime)) return;
+    if (event.type === 'process') {
+      if (streamingEnabled) handleCardProcessEvent(uid, runtime, binding, event);
+      return;
+    }
+    if (event.type === 'turn_silent') {
+      if (streamingEnabled) handleCardTurnSilent(runtime, binding, event);
+      return;
+    }
+    if (!isMessageEvent(event) || event.turn_end !== true) return;
+    void handleTurnEndMessage(uid, runtime, instance, binding, event).catch((error) => {
+      log.warn('messaging turn-end delivery failed', {
+        instanceId: instance.id,
+        error: (error as Error).message,
+      });
+    });
   });
   runtime.listeners.set(binding.key, unsubscribe);
+}
+
+function isCardAdapter(adapter: MessagingAdapter): adapter is MessagingCardAdapter {
+  return typeof (adapter as MessagingCardAdapter).sendCard === 'function'
+    && typeof (adapter as MessagingCardAdapter).updateCard === 'function';
+}
+
+function cardStateKey(bindingKey: string, turnId: string): string {
+  return `${bindingKey}\u0000${turnId}`;
+}
+
+function cardEventTurnId(event: { turn_id?: string }): string {
+  return typeof event.turn_id === 'string' && event.turn_id ? event.turn_id : '';
+}
+
+function buildStreamCard(title: string, text: string): Record<string, JsonCompatibleValue> {
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      template: 'blue',
+      title: { tag: 'plain_text', content: title.slice(0, 120) },
+    },
+    elements: [
+      { tag: 'markdown', content: text || '…' },
+    ],
+  };
+}
+
+function clearCardTimer(state: CardStreamState): void {
+  if (state.timer !== null) {
+    clearTimeout(state.timer);
+    state.timer = null;
+  }
+}
+
+async function flushCardUpdate(
+  uid: string,
+  runtime: RuntimeInstance,
+  binding: MessagingBinding,
+  key: string,
+  state: CardStreamState,
+): Promise<void> {
+  if (!isCurrentRuntime(uid, runtime) || !state.accumulated) return;
+  const adapter = runtime.adapter;
+  if (!isCardAdapter(adapter)) return;
+  const card = buildStreamCard(runtime.instance.displayName, state.accumulated);
+  try {
+    if (state.messageId) {
+      await adapter.updateCard(state.messageId, card, runtime.controller.signal);
+    } else {
+      const receipt = await adapter.sendCard(binding.externalChatId, card, runtime.controller.signal, deliveryContext(binding));
+      state.messageId = receipt.deliveryId;
+    }
+  } catch (error) {
+    if (!isCurrentRuntime(uid, runtime) || runtime.controller.signal.aborted) return;
+    log.warn('messaging streaming card delivery failed', {
+      instanceId: runtime.instanceId,
+      error: (error as Error).message,
+    });
+    clearCardTimer(state);
+    runtime.cardStates.delete(key);
+  }
+}
+
+function scheduleCardFlush(
+  uid: string,
+  runtime: RuntimeInstance,
+  binding: MessagingBinding,
+  key: string,
+  state: CardStreamState,
+): void {
+  if (state.timer !== null) return;
+  state.timer = setTimeout(() => {
+    state.timer = null;
+    void flushCardUpdate(uid, runtime, binding, key, state);
+  }, CARD_FLUSH_DELAY_MS);
+}
+
+function handleCardProcessEvent(
+  uid: string,
+  runtime: RuntimeInstance,
+  binding: MessagingBinding,
+  event: Extract<GroupEvent, { type: 'process' }>,
+): void {
+  const data = event.data && typeof event.data === 'object' ? event.data : {};
+  if (data.type !== 'delta' || typeof data.text !== 'string') return;
+  const turnId = cardEventTurnId(event);
+  if (!turnId) return;
+  const key = cardStateKey(binding.key, turnId);
+  let state = runtime.cardStates.get(key);
+  if (!state) {
+    state = { accumulated: '', timer: null };
+    runtime.cardStates.set(key, state);
+  }
+  state.accumulated = (state.accumulated + data.text).slice(0, CARD_MAX_TEXT_LENGTH);
+  scheduleCardFlush(uid, runtime, binding, key, state);
+}
+
+async function finalizeCardForTurnEnd(
+  uid: string,
+  runtime: RuntimeInstance,
+  binding: MessagingBinding,
+  event: Extract<GroupEvent, { type: 'message' }>,
+): Promise<boolean> {
+  const turnId = cardEventTurnId(event);
+  if (!turnId) return false;
+  const key = cardStateKey(binding.key, turnId);
+  const state = runtime.cardStates.get(key);
+  if (!state) return false;
+  clearCardTimer(state);
+  const message = messageFromEvent(event);
+  const finalText = typeof message.text === 'string' && message.text.trim()
+    ? message.text.trim().slice(0, CARD_MAX_TEXT_LENGTH)
+    : state.accumulated;
+  if (state.messageId && finalText) {
+    const adapter = runtime.adapter;
+    if (isCardAdapter(adapter)) {
+      try {
+        await adapter.updateCard(state.messageId, buildStreamCard(runtime.instance.displayName, finalText), runtime.controller.signal);
+      } catch (error) {
+        if (!isCurrentRuntime(uid, runtime) || runtime.controller.signal.aborted) {
+          runtime.cardStates.delete(key);
+          return true;
+        }
+        log.warn('messaging streaming card finalize failed', {
+          instanceId: runtime.instanceId,
+          error: (error as Error).message,
+        });
+        runtime.cardStates.delete(key);
+        // Fall through to the plain-text delivery path so the answer still arrives.
+        return false;
+      }
+    }
+  }
+  runtime.cardStates.delete(key);
+  return true;
+}
+
+function handleCardTurnSilent(
+  runtime: RuntimeInstance,
+  binding: MessagingBinding,
+  event: Extract<GroupEvent, { type: 'turn_silent' }>,
+): void {
+  const turnId = cardEventTurnId(event);
+  if (!turnId) return;
+  const key = cardStateKey(binding.key, turnId);
+  const state = runtime.cardStates.get(key);
+  if (!state) return;
+  clearCardTimer(state);
+  // An already-sent card keeps its accumulated content; a silent turn only
+  // stops further updates. Unsent drafts are dropped without creating a card.
+  runtime.cardStates.delete(key);
+}
+
+async function handleTurnEndMessage(
+  uid: string,
+  runtime: RuntimeInstance,
+  instance: MessagingInstance,
+  binding: MessagingBinding,
+  event: Extract<GroupEvent, { type: 'message' }>,
+): Promise<void> {
+  if (!isCurrentRuntime(uid, runtime)) return;
+  const message = messageFromEvent(event);
+  if (instance.responseMode === 'streaming_card' && isCardAdapter(runtime.adapter)) {
+    if (await finalizeCardForTurnEnd(uid, runtime, binding, event)) return;
+  }
+  trackOutboundDelivery(uid, runtime, instance, binding, message);
 }
 
 async function handleInbound(uid: string, envelope: InboundEnvelope): Promise<MessagingInboundResult> {
@@ -320,6 +634,7 @@ async function startRuntime(uid: string, instanceId: string): Promise<void> {
 
   const runtime: RuntimeInstance = {
     instanceId,
+    instance: loaded.instance,
     adapter,
     controller: new AbortController(),
     started: Promise.resolve(),
@@ -327,6 +642,11 @@ async function startRuntime(uid: string, instanceId: string): Promise<void> {
     outboundDeliveries: new Set(),
     active: true,
     statusWrite: Promise.resolve(),
+    bindingContexts: new Map(),
+    statusListeners: new Set(),
+    retryTimer: null,
+    retryScheduledAt: null,
+    cardStates: new Map(),
   };
   const callbacks: AdapterCallbacks = {
     onInbound: async (envelope) => {
@@ -363,6 +683,8 @@ async function startRuntime(uid: string, instanceId: string): Promise<void> {
     for (const binding of existingBindings) {
       if (binding.instanceId === instanceId) await attachBindingListener(uid, runtime, loaded.instance, binding);
     }
+    // Resume deliveries that were interrupted by a previous process restart.
+    await recoverDeliveries(uid, runtime);
   } catch (error) {
     log.warn('messaging binding listener restore failed', {
       instanceId,
@@ -381,6 +703,9 @@ async function stopRuntime(uid: string, instanceId: string): Promise<void> {
   runtime.active = false;
   map?.delete(instanceId);
   if (!map?.size) runtimes.delete(uid);
+  clearRetryTimer(runtime);
+  for (const state of runtime.cardStates.values()) clearCardTimer(state);
+  runtime.cardStates.clear();
 
   let stopFailure: Error | null = null;
   try {
@@ -491,6 +816,7 @@ export async function updateInstance(
     const updated = await registry.updateInstance(uid, instanceId, input);
     if (!nextEnabled) {
       if (current.enabled) {
+        await ledger.cancelRecoverableDeliveriesForInstance(uid, instanceId, 'messaging instance disabled');
         try {
           await stopRuntime(uid, instanceId);
         } finally {
@@ -515,6 +841,7 @@ export async function unbindInstance(uid: string, instanceId: string): Promise<M
   return withLifecycle(uid, instanceId, async () => {
     const current = await registry.getInstance(uid, instanceId);
     if (!current) throw new Error('messaging instance not found');
+    await ledger.cancelRecoverableDeliveriesForInstance(uid, instanceId, 'messaging instance unbound');
     const client = await registry.updateInstance(uid, instanceId, { enabled: false, clearSecret: true });
     try {
       await stopRuntime(uid, instanceId);
@@ -536,6 +863,7 @@ export async function deleteInstance(uid: string, instanceId: string): Promise<b
   return withLifecycle(uid, instanceId, async () => {
     const current = await registry.getInstance(uid, instanceId);
     if (current?.enabled) await registry.updateInstance(uid, instanceId, { enabled: false });
+    await ledger.cancelRecoverableDeliveriesForInstance(uid, instanceId, 'messaging instance deleted');
     try {
       await stopRuntime(uid, instanceId);
     } catch (error) {

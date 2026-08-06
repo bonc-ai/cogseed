@@ -80,9 +80,10 @@ function workspace(value: unknown): WorkspaceScope | undefined {
   if (value === undefined || value === null) return undefined;
   if (!value || typeof value !== 'object') throw new Error('invalid workspace');
   const input = value as Record<string, unknown>;
-  const type = input.type === 'project' ? 'project' : input.type === 'default' ? 'default' : '';
+  const type = input.type === 'project' ? 'project' : input.type === 'default' ? 'default' : input.type === 'all' ? 'all' : '';
   if (!type) throw new Error('invalid workspace type');
   if (type === 'default') return { type: 'default' };
+  if (type === 'all') return { type: 'all' };
   const projectId = text(input.projectId, 'projectId', 160);
   if (!safeId(projectId)) throw new Error('invalid projectId');
   return { type: 'project', projectId };
@@ -125,14 +126,6 @@ function registrationFlowId(value: unknown): string {
   return result;
 }
 
-function registrationDraft(payload: Record<string, unknown>): feishuRegistration.FeishuRegistrationDraft {
-  return {
-    displayName: text(payload?.displayName, 'displayName', 120),
-    workspace: workspace(payload?.workspace),
-    policy: policy(payload?.policy),
-  };
-}
-
 function wecomRegistrationDraft(payload: Record<string, unknown>): wecomRegistration.WecomRegistrationDraft {
   return {
     displayName: text(payload?.displayName, 'displayName', 120),
@@ -147,6 +140,17 @@ export const invokeHandlers = {
   'messaging.list': async (_payload: unknown, ctx: MessagingContext) => ({
     instances: await messaging.listInstances(ctx.userId),
   }),
+
+  'messaging.feishu_draft.create': async (payload: Record<string, unknown>, ctx: MessagingContext) => {
+    const brand = feishuTenantBrand(payload?.feishuTenantBrand) || 'feishu';
+    const instance = await registry.createFeishuDraft(ctx.userId, {
+      feishuTenantBrand: brand,
+      displayName: text(payload?.displayName, 'displayName', 120),
+      workspace: workspace(payload?.workspace),
+      policy: policy(payload?.policy),
+    });
+    return { instance };
+  },
 
   'messaging.create': async (payload: Record<string, unknown>, ctx: MessagingContext) => {
     const selectedPlatform = platform(payload?.platform);
@@ -195,7 +199,7 @@ export const invokeHandlers = {
   }),
 
   'messaging.feishu_qr.start': async (payload: Record<string, unknown>, ctx: MessagingContext) => ({
-    registration: await feishuRegistration.startFeishuQrRegistration(ctx.userId, registrationDraft(payload)),
+    registration: await feishuRegistration.startFeishuQrRegistrationForInstance(ctx.userId, instanceId(payload?.instanceId)),
   }),
 
   'messaging.feishu_qr.status': async (payload: Record<string, unknown>, ctx: MessagingContext) => ({

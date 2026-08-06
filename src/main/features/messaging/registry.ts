@@ -19,6 +19,7 @@ import type {
   MessagingInstanceStatus,
   FeishuTenantBrand,
   WorkspaceScope,
+  MessagingResponseMode,
 } from './types';
 import {
   FEISHU_TENANT_BRANDS,
@@ -28,6 +29,7 @@ import {
   isValidWecomBotSecret,
   MESSAGING_PLATFORMS,
   REPLY_MODES,
+  RESPONSE_MODES,
 } from './types';
 
 const log = createLogger('messaging:registry');
@@ -39,14 +41,36 @@ export interface CreateMessagingInstanceInput {
   platform: MessagingPlatform;
   feishuTenantBrand?: FeishuTenantBrand;
   displayName: string;
+  responseMode?: MessagingResponseMode;
   workspace?: WorkspaceScope;
   policy?: Partial<MessagingPolicy>;
   secret: MessagingSecret;
 }
 
+/**
+ * Feishu/Lark credentials are issued only after the official QR flow. A draft
+ * deliberately has no `secretsEnc` value, cannot be enabled, and exposes no
+ * sensitive material to the renderer.
+ */
+export interface CreateFeishuDraftInput {
+  feishuTenantBrand: FeishuTenantBrand;
+  displayName: string;
+  responseMode?: MessagingResponseMode;
+  workspace?: WorkspaceScope;
+  policy?: Partial<MessagingPolicy>;
+}
+
+export interface BindFeishuDraftInput {
+  feishuTenantBrand: FeishuTenantBrand;
+  secret: Pick<MessagingSecret, 'appId' | 'appSecret'>;
+  /** The successful QR account is always explicitly authorized first. */
+  initialAllowUserId: string;
+}
+
 export interface UpdateMessagingInstanceInput {
   displayName?: string;
   feishuTenantBrand?: FeishuTenantBrand;
+  responseMode?: MessagingResponseMode;
   enabled?: boolean;
   workspace?: WorkspaceScope;
   policy?: Partial<MessagingPolicy>;
@@ -127,6 +151,8 @@ function normalizePolicy(input?: Partial<MessagingPolicy>, strict = false): Mess
   if (rawRequireMention !== undefined && typeof rawRequireMention !== 'boolean' && strict) {
     throw new Error('invalid group mention requirement');
   }
+  // Missing allowlists are persisted as empty arrays. Inbound policy evaluates
+  // empty arrays as deny-all, so malformed or legacy config never opens access.
   return {
     replyMode: replyMode as MessagingPolicy['replyMode'],
     allowUserIds: normalizeIdList(input?.allowUserIds, 'allowUserIds', strict),
@@ -137,10 +163,29 @@ function normalizePolicy(input?: Partial<MessagingPolicy>, strict = false): Mess
 
 function normalizeWorkspace(input?: WorkspaceScope): WorkspaceScope {
   if (!input || input.type === 'default') return { type: 'default' };
+  if (input.type === 'all') return { type: 'all' };
   if (input.type !== 'project' || !input.projectId || !safeId(input.projectId)) {
     throw new Error('invalid workspace scope');
   }
   return { type: 'project', projectId: input.projectId };
+}
+
+function normalizeResponseMode(
+  platform: MessagingPlatform,
+  value: MessagingResponseMode | undefined,
+  strict = false,
+): MessagingResponseMode {
+  const fallback: MessagingResponseMode = platform === 'feishu_lark' ? 'streaming_card' : 'text';
+  if (value === undefined) return fallback;
+  if (!(RESPONSE_MODES as readonly string[]).includes(value)) {
+    if (strict) throw new Error('invalid response mode');
+    return fallback;
+  }
+  if (platform !== 'feishu_lark' && value !== 'text') {
+    if (strict) throw new Error('streaming cards are only supported by Feishu/Lark');
+    return 'text';
+  }
+  return value;
 }
 
 function normalizeFeishuTenantBrand(
@@ -183,6 +228,7 @@ function normalizeInstance(raw: MessagingInstanceDisk): MessagingInstanceDisk {
     feishuTenantBrand: normalizeFeishuTenantBrand(raw.platform, raw.feishuTenantBrand),
     displayName,
     enabled: raw.enabled === true,
+    responseMode: normalizeResponseMode(raw.platform, raw.responseMode),
     workspace: normalizeWorkspace(raw.workspace),
     policy: normalizePolicy(raw.policy),
     status: normalizeStatus(raw.status),
@@ -303,6 +349,7 @@ export async function createInstance(uid: string, input: CreateMessagingInstance
       feishuTenantBrand: normalizeFeishuTenantBrand(input.platform, input.feishuTenantBrand, true),
       displayName,
       enabled: false,
+      responseMode: normalizeResponseMode(input.platform, input.responseMode, true),
       workspace: normalizeWorkspace(input.workspace),
       policy: normalizePolicy(input.policy, true),
       status: { kind: 'disconnected', checkedAt: now },
@@ -313,6 +360,117 @@ export async function createInstance(uid: string, input: CreateMessagingInstance
     config.instances[id] = instance;
     await writeConfig(uid, config);
     return toClient(instance, true);
+  });
+}
+
+export async function createFeishuDraft(uid: string, input: CreateFeishuDraftInput): Promise<MessagingInstanceClient> {
+  assertUserId(uid);
+  const displayName = boundedText(input.displayName, 'display name', 120);
+  const feishuTenantBrand = normalizeFeishuTenantBrand('feishu_lark', input.feishuTenantBrand, true);
+  if (!feishuTenantBrand) throw new Error('Feishu tenant brand required');
+  const workspace = normalizeWorkspace(input.workspace);
+  const policy = normalizePolicy(input.policy, true);
+  return getLock(uid).runExclusive(async () => {
+    const config = await readConfig(uid);
+    const id = genId12();
+    const now = nowIso();
+    const instance: MessagingInstanceDisk = {
+      id,
+      platform: 'feishu_lark',
+      feishuTenantBrand,
+      displayName,
+      enabled: false,
+      responseMode: normalizeResponseMode('feishu_lark', input.responseMode, true),
+      workspace,
+      policy,
+      status: { kind: 'disabled', checkedAt: now },
+      createdAt: now,
+      updatedAt: now,
+    };
+    config.instances[id] = instance;
+    await writeConfig(uid, config);
+    return toClient(instance, false);
+  });
+}
+
+function normalizeInitialAllowUserId(value: string): string {
+  const userId = boundedText(value, 'initial allowed user id', 160);
+  if (userId.includes('\0')) throw new Error('invalid initial allowed user id');
+  return userId;
+}
+
+/**
+ * Atomically attach QR-issued credentials to the exact existing draft. This
+ * intentionally refuses to overwrite a configured robot, which makes a late
+ * or superseded QR flow unable to replace user-owned credentials.
+ */
+export async function bindFeishuDraft(
+  uid: string,
+  instanceId: string,
+  input: BindFeishuDraftInput,
+): Promise<MessagingInstanceClient> {
+  assertUserId(uid);
+  assertInstanceId(instanceId);
+  const feishuTenantBrand = normalizeFeishuTenantBrand('feishu_lark', input.feishuTenantBrand, true);
+  if (!feishuTenantBrand) throw new Error('Feishu tenant brand required');
+  const secret = validateSecret('feishu_lark', input.secret);
+  const initialAllowUserId = normalizeInitialAllowUserId(input.initialAllowUserId);
+  return getLock(uid).runExclusive(async () => {
+    const config = await readConfig(uid);
+    const current = config.instances[instanceId];
+    if (!current) throw new Error('messaging draft not found');
+    if (current.platform !== 'feishu_lark') throw new Error('messaging draft is not a Feishu/Lark robot');
+    if (current.enabled || decryptSecret(uid, current)) {
+      throw new Error('messaging draft already has credentials');
+    }
+    const allowUserIds = Array.from(new Set([...current.policy.allowUserIds, initialAllowUserId]));
+    const next: MessagingInstanceDisk = {
+      ...current,
+      feishuTenantBrand,
+      enabled: false,
+      policy: normalizePolicy({ ...current.policy, allowUserIds }, true),
+      status: { kind: 'disconnected', checkedAt: nowIso() },
+      secretsEnc: encryptSecret(uid, instanceId, secret),
+      updatedAt: nowIso(),
+    };
+    config.instances[instanceId] = next;
+    await writeConfig(uid, config);
+    return toClient(next, true);
+  });
+}
+
+/**
+ * Cancel/expiry compensation must preserve the draft itself. Credentials are
+ * cleared only when they still exactly match the QR result owned by the flow;
+ * a newer user configuration is left untouched.
+ */
+export async function revokeFeishuDraftCredentials(
+  uid: string,
+  instanceId: string,
+  expectedSecret: Pick<MessagingSecret, 'appId' | 'appSecret'>,
+): Promise<{ revoked: boolean; instance: MessagingInstanceClient | null }> {
+  assertUserId(uid);
+  assertInstanceId(instanceId);
+  const normalizedSecret = validateSecret('feishu_lark', expectedSecret);
+  return getLock(uid).runExclusive(async () => {
+    const config = await readConfig(uid);
+    const current = config.instances[instanceId];
+    if (!current) return { revoked: false, instance: null };
+    if (current.platform !== 'feishu_lark') return { revoked: false, instance: toClient(current, !!decryptSecret(uid, current)) };
+    const currentSecret = decryptSecret(uid, current);
+    if (currentSecret?.appId !== normalizedSecret.appId || currentSecret.appSecret !== normalizedSecret.appSecret) {
+      return { revoked: false, instance: toClient(current, !!currentSecret) };
+    }
+    const { secretsEnc: _secretsEnc, ...withoutCredentials } = current;
+    const next: MessagingInstanceDisk = {
+      ...withoutCredentials,
+      enabled: false,
+      status: { kind: 'disabled', checkedAt: nowIso() },
+      updatedAt: nowIso(),
+    };
+    config.instances[instanceId] = next;
+    await writeConfig(uid, config);
+    return { revoked: true, instance: toClient(next, false) };
   });
 }
 
@@ -331,6 +489,9 @@ export async function updateInstance(uid: string, instanceId: string, input: Upd
         ? { feishuTenantBrand: normalizeFeishuTenantBrand(current.platform, input.feishuTenantBrand, true) }
         : {}),
       ...(typeof input.enabled === 'boolean' ? { enabled: input.enabled } : {}),
+      ...(input.responseMode !== undefined
+        ? { responseMode: normalizeResponseMode(current.platform, input.responseMode, true) }
+        : {}),
       ...(input.workspace ? { workspace: normalizeWorkspace(input.workspace) } : {}),
       ...(input.policy ? { policy: normalizePolicy({ ...current.policy, ...input.policy }, true) } : {}),
       ...(input.secret ? { secretsEnc: encryptSecret(uid, instanceId, validateSecret(current.platform, input.secret)) } : {}),
@@ -375,6 +536,7 @@ export function removeConfigFileForTest(uid: string): void {
 export const _registryTestHooks = {
   normalizePolicy,
   normalizeWorkspace,
+  normalizeResponseMode,
   normalizeFeishuTenantBrand,
   validateSecret,
   toClient,
