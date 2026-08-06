@@ -172,4 +172,171 @@ describe('Feishu official event adapter', () => {
     });
     expect(updated).toEqual({ deliveryId: 'om_card_1' });
   });
+
+  it('sends markdown as a post payload and plain text as text', async () => {
+    const create = vi.fn(async () => ({ code: 0, data: { message_id: 'om_post_1' } }));
+    const dispatcher = { register: vi.fn(function register() { return dispatcher; }) };
+    const client = {
+      request: vi.fn(async () => ({ code: 0, data: { open_id: 'ou_bot' } })),
+      im: { v1: { message: { create, reply: vi.fn(), patch: vi.fn() } } },
+    };
+    vi.doMock('@larksuiteoapi/node-sdk', () => ({
+      AppType: { SelfBuild: 'SelfBuild' },
+      Client: vi.fn(function Client() { return client; }),
+      Domain: { Feishu: 'https://open.feishu.cn', Lark: 'https://open.larksuite.com' },
+      EventDispatcher: vi.fn(function EventDispatcher() { return dispatcher; }),
+      LoggerLevel: { error: 'error' },
+      WSClient: vi.fn(),
+    }));
+
+    const { FeishuAdapter } = await import('../../../src/main/features/messaging/adapters');
+    const adapter = new FeishuAdapter(feishuInstance(), {
+      appId: 'cli_1234567890abcdef',
+      appSecret: 'app-secret',
+    });
+
+    const rich = await adapter.sendMessage('oc_1', '**加粗**和`code`');
+    expect(create).toHaveBeenLastCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ msg_type: 'post' }),
+    }));
+    const postPayload = JSON.parse((create.mock.calls[0][0] as { data: { content: string } }).data.content);
+    expect(postPayload.zh_cn.content).toEqual([[{ tag: 'md', text: '**加粗**和`code`' }]]);
+    expect(rich).toEqual({ deliveryId: 'om_post_1' });
+
+    const plain = await adapter.sendMessage('oc_1', '就是纯文本');
+    expect(create).toHaveBeenLastCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        msg_type: 'text',
+        content: JSON.stringify({ text: '就是纯文本' }),
+      }),
+    }));
+    expect(plain).toEqual({ deliveryId: 'om_post_1' });
+  });
+
+  it('splits long replies into multiple messages with per-chunk uuids', async () => {
+    const create = vi.fn(async () => ({ code: 0, data: { message_id: 'om_chunk' } }));
+    const dispatcher = { register: vi.fn(function register() { return dispatcher; }) };
+    const client = {
+      request: vi.fn(async () => ({ code: 0, data: { open_id: 'ou_bot' } })),
+      im: { v1: { message: { create, reply: vi.fn(), patch: vi.fn() } } },
+    };
+    vi.doMock('@larksuiteoapi/node-sdk', () => ({
+      AppType: { SelfBuild: 'SelfBuild' },
+      Client: vi.fn(function Client() { return client; }),
+      Domain: { Feishu: 'https://open.feishu.cn', Lark: 'https://open.larksuite.com' },
+      EventDispatcher: vi.fn(function EventDispatcher() { return dispatcher; }),
+      LoggerLevel: { error: 'error' },
+      WSClient: vi.fn(),
+    }));
+
+    const { FeishuAdapter } = await import('../../../src/main/features/messaging/adapters');
+    const adapter = new FeishuAdapter(feishuInstance(), {
+      appId: 'cli_1234567890abcdef',
+      appSecret: 'app-secret',
+    });
+
+    const long = Array.from({ length: 600 }, (_, i) => `第 ${i} 行内容，用于撑到分块阈值。`).join('\n');
+    await adapter.sendMessage('oc_1', long, undefined, { idempotencyKey: 'key-1' });
+    expect(create.mock.calls.length).toBeGreaterThan(1);
+    const uuids = create.mock.calls.map((call) => (call[0] as { data: { uuid?: string } }).data.uuid);
+    expect(uuids[0]).toBe('key-1#0');
+    expect(new Set(uuids).size).toBe(uuids.length);
+  });
+
+  it('degrades a rejected post payload to plain text', async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce({ code: 190001, msg: 'content format of the post type is incorrect' })
+      .mockResolvedValue({ code: 0, data: { message_id: 'om_text_1' } });
+    const dispatcher = { register: vi.fn(function register() { return dispatcher; }) };
+    const client = {
+      request: vi.fn(async () => ({ code: 0, data: { open_id: 'ou_bot' } })),
+      im: { v1: { message: { create, reply: vi.fn(), patch: vi.fn() } } },
+    };
+    vi.doMock('@larksuiteoapi/node-sdk', () => ({
+      AppType: { SelfBuild: 'SelfBuild' },
+      Client: vi.fn(function Client() { return client; }),
+      Domain: { Feishu: 'https://open.feishu.cn', Lark: 'https://open.larksuite.com' },
+      EventDispatcher: vi.fn(function EventDispatcher() { return dispatcher; }),
+      LoggerLevel: { error: 'error' },
+      WSClient: vi.fn(),
+    }));
+
+    const { FeishuAdapter } = await import('../../../src/main/features/messaging/adapters');
+    const adapter = new FeishuAdapter(feishuInstance(), {
+      appId: 'cli_1234567890abcdef',
+      appSecret: 'app-secret',
+    });
+
+    const sent = await adapter.sendMessage('oc_1', '**加粗**内容');
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[0][0]).toMatchObject({ data: { msg_type: 'post' } });
+    const fallback = create.mock.calls[1][0] as { data: { msg_type: string; content: string } };
+    expect(fallback.data.msg_type).toBe('text');
+    expect(JSON.parse(fallback.data.content)).toEqual({ text: '加粗内容' });
+    expect(sent).toEqual({ deliveryId: 'om_text_1' });
+  });
+
+  it('falls back to a fresh message when the reply target no longer exists', async () => {
+    const reply = vi.fn(async () => ({ code: 230011, msg: 'message not exist' }));
+    const create = vi.fn(async () => ({ code: 0, data: { message_id: 'om_new_1' } }));
+    const dispatcher = { register: vi.fn(function register() { return dispatcher; }) };
+    const client = {
+      request: vi.fn(async () => ({ code: 0, data: { open_id: 'ou_bot' } })),
+      im: { v1: { message: { create, reply, patch: vi.fn() } } },
+    };
+    vi.doMock('@larksuiteoapi/node-sdk', () => ({
+      AppType: { SelfBuild: 'SelfBuild' },
+      Client: vi.fn(function Client() { return client; }),
+      Domain: { Feishu: 'https://open.feishu.cn', Lark: 'https://open.larksuite.com' },
+      EventDispatcher: vi.fn(function EventDispatcher() { return dispatcher; }),
+      LoggerLevel: { error: 'error' },
+      WSClient: vi.fn(),
+    }));
+
+    const { FeishuAdapter } = await import('../../../src/main/features/messaging/adapters');
+    const adapter = new FeishuAdapter(feishuInstance(), {
+      appId: 'cli_1234567890abcdef',
+      appSecret: 'app-secret',
+    });
+
+    const sent = await adapter.sendMessage('oc_1', '普通文本', undefined, { replyToMessageId: 'om_gone' });
+    expect(reply).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      params: { receive_id_type: 'chat_id' },
+      data: expect.objectContaining({ receive_id: 'oc_1' }),
+    }));
+    expect(sent).toEqual({ deliveryId: 'om_new_1' });
+  });
+
+  it('does not fall back to a fresh message inside a thread', async () => {
+    const reply = vi.fn(async () => ({ code: 230011, msg: 'message not exist' }));
+    const create = vi.fn(async () => ({ code: 0, data: { message_id: 'om_new_1' } }));
+    const dispatcher = { register: vi.fn(function register() { return dispatcher; }) };
+    const client = {
+      request: vi.fn(async () => ({ code: 0, data: { open_id: 'ou_bot' } })),
+      im: { v1: { message: { create, reply, patch: vi.fn() } } },
+    };
+    vi.doMock('@larksuiteoapi/node-sdk', () => ({
+      AppType: { SelfBuild: 'SelfBuild' },
+      Client: vi.fn(function Client() { return client; }),
+      Domain: { Feishu: 'https://open.feishu.cn', Lark: 'https://open.larksuite.com' },
+      EventDispatcher: vi.fn(function EventDispatcher() { return dispatcher; }),
+      LoggerLevel: { error: 'error' },
+      WSClient: vi.fn(),
+    }));
+
+    const { FeishuAdapter } = await import('../../../src/main/features/messaging/adapters');
+    const adapter = new FeishuAdapter(feishuInstance(), {
+      appId: 'cli_1234567890abcdef',
+      appSecret: 'app-secret',
+    });
+
+    await expect(adapter.sendMessage('oc_1', '线程内', undefined, {
+      replyToMessageId: 'om_gone',
+      replyInThread: true,
+    })).rejects.toThrow('message not exist');
+    expect(reply).toHaveBeenCalledTimes(1);
+    expect(create).not.toHaveBeenCalled();
+  });
 });
