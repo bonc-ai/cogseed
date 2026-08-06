@@ -729,6 +729,85 @@ describe('messaging manager adapter flow', () => {
   });
 });
 
+describe('feishu message media degradation', () => {
+  it('degrades every inbound message type to a model-readable text envelope', async () => {
+    const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');
+    const { feishuMessageToText } = _adapterTestHooks;
+    expect(feishuMessageToText('text', JSON.stringify({ text: 'hello' }))).toBe('hello');
+    expect(feishuMessageToText('image', JSON.stringify({ image_key: 'img_v2_1' }))).toBe('[图片]');
+    expect(feishuMessageToText('file', JSON.stringify({ file_key: 'file_1', file_name: 'plan.pdf' }))).toBe('[文件] plan.pdf');
+    expect(feishuMessageToText('audio', JSON.stringify({ file_name: 'voice.mp3' }))).toBe('[语音] voice.mp3');
+    expect(feishuMessageToText('media', JSON.stringify({ file_name: 'demo.mp4' }))).toBe('[视频] demo.mp4');
+    expect(feishuMessageToText('sticker', JSON.stringify({ image_key: 'img_1' }))).toBe('[表情]');
+    expect(feishuMessageToText('share_chat', JSON.stringify({ chat_name: '项目群' }))).toBe('[分享了群聊] 项目群');
+    expect(feishuMessageToText('share_user', JSON.stringify({ user_name: '张三' }))).toBe('[分享了联系人] 张三');
+    expect(feishuMessageToText('interactive', JSON.stringify({ card: {} }))).toBe('[卡片消息]');
+    expect(feishuMessageToText('unknown_type', '{"x":1}')).toBe('[unknown_type 消息]');
+  });
+
+  it('flattens rich text posts and merged forwards into readable lines', async () => {
+    const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');
+    const { feishuMessageToText } = _adapterTestHooks;
+    const post = {
+      zh_cn: {
+        title: '公告',
+        content: [
+          [
+            { tag: 'text', text: '第一行' },
+            { tag: 'a', text: '链接', href: 'https://example.test' },
+          ],
+          [{ tag: 'text', text: '第二行' }],
+        ],
+      },
+    };
+    expect(feishuMessageToText('post', JSON.stringify(post))).toBe('公告\n第一行 链接\n第二行');
+    const forward = {
+      title: '合并的对话',
+      preview: ['msg-1', 'msg-2', 'msg-3'],
+    };
+    expect(feishuMessageToText('merge_forward', JSON.stringify(forward))).toBe('合并的对话\nmsg-1\nmsg-2\nmsg-3');
+  });
+
+  it('falls back to type markers when content is empty or malformed', async () => {
+    const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');
+    const { feishuMessageToText } = _adapterTestHooks;
+    expect(feishuMessageToText('file', '')).toBe('[文件]');
+    expect(feishuMessageToText('post', 'not-json')).toBe('not-json');
+    expect(feishuMessageToText('merge_forward', JSON.stringify({ preview: [] }))).toBe('[合并转发]');
+  });
+
+  it('accepts media messages through the full inbound envelope normalization', async () => {
+    const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');
+    const envelope = _adapterTestHooks.normalizeFeishuEvent({
+      id: 'bot-media',
+      platform: 'feishu_lark',
+      displayName: 'Bot',
+      enabled: true,
+      workspace: { type: 'default' },
+      policy: { replyMode: 'every_message', allowUserIds: [], allowGroupIds: [], requireMentionInGroups: true },
+      status: { kind: 'connected', checkedAt: new Date().toISOString() },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }, {
+      message: {
+        message_id: 'om_media_1',
+        chat_id: 'oc_1',
+        chat_type: 'p2p',
+        message_type: 'file',
+        content: JSON.stringify({ file_key: 'file_1', file_name: 'data.xlsx' }),
+        create_time: '1700000000000',
+      },
+      sender: { sender_type: 'user', sender_id: { open_id: 'ou_sender_1' } },
+    }, 'ou_bot_1');
+    expect(envelope).toMatchObject({
+      platform: 'feishu_lark',
+      text: '[文件] data.xlsx',
+      externalChatId: 'oc_1',
+      externalUserId: 'ou_sender_1',
+    });
+  });
+});
+
 describe('feishu bot identity parsing', () => {
   it('extracts the bot open id from the real bot/v3/info response shape', async () => {
     const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');

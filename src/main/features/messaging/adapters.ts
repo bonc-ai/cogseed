@@ -138,6 +138,97 @@ function feishuMentionOpenId(mention: NonNullable<FeishuMessage['mentions']>[num
   return '';
 }
 
+/** Fallback text for media/forward/card messages. Every inbound Feishu
+ * message degrades to a model-readable text envelope instead of being
+ * dropped (mirrors Hermes' normalize_feishu_message chain). */
+function feishuMessageToText(messageType: string, rawContent: string): string {
+  let payload: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(rawContent || '{}');
+    payload = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+  } catch {
+    return rawContent.trim();
+  }
+  const str = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
+  const firstText = (...keys: string[]): string => {
+    for (const key of keys) {
+      const value = str(payload[key]);
+      if (value) return value;
+    }
+    return '';
+  };
+  switch (messageType) {
+    case 'text':
+      return firstText('text');
+    case 'post': {
+      // Rich text: pick the locale payload, then flatten content cells that
+      // carry text/a tags into lines.
+      const post = (typeof payload.zh_cn === 'object' && payload.zh_cn
+        ? payload.zh_cn
+        : typeof payload.en_us === 'object' && payload.en_us
+          ? payload.en_us
+          : payload) as Record<string, unknown>;
+      const title = str(post.title);
+      const lines: string[] = [];
+      const content = post.content;
+      if (Array.isArray(content)) {
+        for (const row of content) {
+          if (!Array.isArray(row)) continue;
+          const parts: string[] = [];
+          for (const cell of row) {
+            if (!cell || typeof cell !== 'object') continue;
+            const item = cell as Record<string, unknown>;
+            if (item.tag === 'text' || item.tag === 'a') {
+              const text = str(item.text);
+              if (text) parts.push(text);
+            }
+          }
+          const line = parts.join(' ').trim();
+          if (line) lines.push(line);
+        }
+      }
+      const body = lines.join('\n');
+      if (title && body) return `${title}\n${body}`;
+      return title || body || '[富文本消息]';
+    }
+    case 'image':
+      return '[图片]';
+    case 'file':
+      return `[文件] ${firstText('file_name', 'file_key')}`.trim();
+    case 'audio':
+      return `[语音] ${firstText('file_name')}`.trim();
+    case 'media':
+      return `[视频] ${firstText('file_name')}`.trim();
+    case 'sticker':
+      return '[表情]';
+    case 'share_chat':
+      return `[分享了群聊] ${firstText('chat_name', 'name', 'title')}`.trim();
+    case 'share_user':
+      return `[分享了联系人] ${firstText('user_name', 'name')}`.trim();
+    case 'merge_forward': {
+      // Merged forward: title/summary plus the first few preview entries.
+      const title = firstText('title', 'summary');
+      const preview = payload.preview;
+      const entries: string[] = [];
+      if (Array.isArray(preview)) {
+        for (const entry of preview) {
+          const text = str(entry);
+          if (text) entries.push(text);
+          if (entries.length >= 8) break;
+        }
+      } else if (typeof preview === 'string' && preview.trim()) {
+        entries.push(preview.trim());
+      }
+      const head = title ? [title] : ['[合并转发]'];
+      return head.concat(entries).join('\n').trim();
+    }
+    case 'interactive':
+      return '[卡片消息]';
+    default:
+      return `[${messageType} 消息]`;
+  }
+}
+
 function normalizeFeishuEvent(
   instance: MessagingInstance,
   payload: FeishuEventData,
@@ -147,13 +238,9 @@ function normalizeFeishuEvent(
   const senderInfo = payload.sender;
   const sender = senderInfo?.sender_id;
   if (senderInfo?.sender_type && senderInfo.sender_type !== 'user') return null;
-  if (!message?.message_id || !message.chat_id || !sender?.open_id || message.message_type !== 'text') return null;
-  let text = message.content || '';
-  try {
-    const content = JSON.parse(text) as { text?: string };
-    if (typeof content.text === 'string') text = content.text;
-  } catch { /* malformed content is ignored */ }
-  text = text.trim();
+  if (!message?.message_id || !message.chat_id || !sender?.open_id) return null;
+  const messageType = typeof message.message_type === 'string' ? message.message_type.trim().toLowerCase() : '';
+  const text = feishuMessageToText(messageType, message.content || '').trim();
   if (!text) return null;
   const isGroup = message.chat_type === 'group';
   const normalizedBotOpenId = botOpenId.trim();
@@ -903,4 +990,4 @@ export function createAdapter(instance: MessagingInstance, secret: MessagingSecr
   return new FeishuAdapter(instance, secret);
 }
 
-export const _adapterTestHooks = { fetchJson, status, normalizeFeishuEvent, normalizeWecomEvent, boundedWecomText, parseFeishuBotOpenId };
+export const _adapterTestHooks = { fetchJson, status, normalizeFeishuEvent, normalizeWecomEvent, boundedWecomText, parseFeishuBotOpenId, feishuMessageToText };
