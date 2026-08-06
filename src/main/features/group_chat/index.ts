@@ -39,6 +39,7 @@ import {
   type CollaborationSnapshot,
   type ResolveContextConflictSelectionInput,
 } from './collaboration';
+import { buildRetryResumeModelText } from './retry_resume';
 
 /** Re-export so the IPC layer can poll the bus's true quiescent state on
  *  every state_changed event — the on-disk state.json briefly shows 'idle'
@@ -382,15 +383,6 @@ export interface ResolvedFailedTurnRetry {
   enqueue: Parameters<typeof enqueue>[0];
 }
 
-const RETRY_RESUME_MODEL_TEXT = [
-  '<task-retry mode="resume">',
-  'Continue the unfinished task from the durable state in this same session.',
-  'Read the authoritative execution plan, completed-work ledger, prior tool results, and history resources before acting.',
-  'Do not repeat work already verified as successful. If an external, paid, destructive, or otherwise non-idempotent operation was interrupted with an uncertain outcome, verify its current state before deciding whether to run it again.',
-  'Respect every existing confirmation and permission gate. Complete the remaining work or report the smallest blocker that still requires the user.',
-  '</task-retry>',
-].join('\n');
-
 function _processHasCompletedOrStartedTool(msg: GroupMessage): boolean {
   return (msg.process || []).some((item) => {
     const event = item && typeof item === 'object' && 'event' in item ? item.event : undefined;
@@ -508,7 +500,11 @@ export async function resolveFailedTurnRetry(
         fromActorId: USER_ID,
         text: visibleText,
         model_text: mode === 'resume'
-          ? `${RETRY_RESUME_MODEL_TEXT}\n\nOriginal user request (quoted for objective continuity):\n${JSON.stringify(originalModelText)}`
+          ? buildRetryResumeModelText({
+              originalRequest: originalModelText,
+              uncertainToolState: hasToolState,
+              failureCode: failed.failure_code,
+            })
           : originalModelText,
         forceTo: [actor.id],
         ...(mode === 'resume' ? { resumeActiveTurn: true } : {}),

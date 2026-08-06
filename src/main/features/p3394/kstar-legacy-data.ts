@@ -14,9 +14,9 @@
  * file.
  */
 
-import { Mutex } from 'async-mutex';
 import * as path from 'node:path';
 import { findLatestSkillValidation } from './skill-validation-run';
+import { withKstarUserLock } from './kstar-lock';
 
 import { userLocalRoot } from '../../paths';
 import { genId12, nowIso, readJson, safeId, writeJson } from '../../storage';
@@ -45,15 +45,6 @@ interface KStarLegacyState {
   [passthroughKey: string]: unknown;
 }
 
-const locks = new Map<string, Mutex>();
-function lockFor(uid: string): Mutex {
-  const found = locks.get(uid);
-  if (found) return found;
-  const created = new Mutex();
-  locks.set(uid, created);
-  return created;
-}
-
 function stateFile(uid: string): string {
   return path.join(userLocalRoot(uid), 'p3394', 'kstar-state.json');
 }
@@ -71,7 +62,7 @@ async function readState(uid: string): Promise<KStarLegacyState> {
 }
 
 async function mutate<T>(uid: string, fn: (state: KStarLegacyState) => T | Promise<T>): Promise<T> {
-  return lockFor(uid).runExclusive(async () => {
+  return await withKstarUserLock(uid, async () => {
     const state = await readState(uid);
     const result = await fn(state);
     state.updated_at = nowIso();

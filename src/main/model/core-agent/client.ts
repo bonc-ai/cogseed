@@ -220,6 +220,10 @@ function removeActiveSessionAbort(sessionId: string, entry: ActiveSessionAbort):
   if (set.size === 0) activeSessionAborts.delete(sessionId);
 }
 
+export function hasActiveSession(sessionId: string): boolean {
+  return (activeSessionAborts.get(sessionId)?.size || 0) > 0;
+}
+
 export function abortActiveSession(sessionId: string): number {
   const set = activeSessionAborts.get(sessionId);
   if (!set || set.size === 0) return 0;

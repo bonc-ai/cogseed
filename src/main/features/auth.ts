@@ -62,6 +62,7 @@ import * as path from 'node:path';
 import { shell } from 'electron';
 
 import { userAuthProfilesFile, userLocalConfigDir } from '../paths';
+import { safeId } from '../storage';
 import * as localSecrets from '../util/local-secret-store';
 import { safeExternalUserActionUrl } from '../util/window-security';
 import { getActiveUserId } from './users';
@@ -151,8 +152,13 @@ export async function warmup(): Promise<void> {
 }
 
 // ── File paths ───────────────────────────────────────────────────────────
-function profilesFile(): string { return userAuthProfilesFile(getActiveUserId()); }
-function authDir(): string { return userLocalConfigDir(getActiveUserId()); }
+function assertAuthUserId(userId: string): string {
+  if (!safeId(userId)) throw new Error('invalid user id');
+  return userId;
+}
+
+function profilesFile(userId = getActiveUserId()): string { return userAuthProfilesFile(assertAuthUserId(userId)); }
+function authDir(userId = getActiveUserId()): string { return userLocalConfigDir(assertAuthUserId(userId)); }
 
 // Legacy compat for tests/callers that expect this shape.
 export const FEATURED_PROVIDERS: readonly string[] =
@@ -331,8 +337,8 @@ function emptyProfilesStore(): ProfilesFile {
 
 // ── Profiles store IO ────────────────────────────────────────────────────
 
-function ensureAuthDir(): void {
-  const d = authDir();
+function ensureAuthDir(userId = getActiveUserId()): void {
+  const d = authDir(userId);
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 }
 
@@ -390,12 +396,12 @@ function decryptProfilesPayload(raw: string, localId: string): { json: string; n
   throw new Error('auth-profiles decrypt failed');
 }
 
-function loadProfiles(): ProfilesFile {
+export function loadProfilesForUser(userId: string): ProfilesFile {
+  const uid = assertAuthUserId(userId);
   try {
-    const raw = fs.readFileSync(profilesFile(), 'utf-8');
+    const raw = fs.readFileSync(profilesFile(uid), 'utf-8');
     // Decrypt current Hosted/Open fallback payloads, or the previous crypto-vault whole-file
     // format. Plain JSON is also accepted as a one-shot migration input.
-    const uid = getActiveUserId();
     const { json, needsRewrite } = decryptProfilesPayload(raw, uid);
     const data = JSON.parse(json) as Partial<ProfilesFile>;
     if (data && typeof data === 'object' && data.profiles && typeof data.profiles === 'object') {
@@ -430,7 +436,7 @@ function loadProfiles(): ProfilesFile {
       const customProviders = parseCustomProvidersArray((data as any).customProviders);
       const authorizationRequests = parseAuthorizationRequestReceipts((data as any).authorizationRequests);
       const store = { version: PROFILES_FILE_VERSION, profiles, entries, searchProfiles, imageProfiles, videoProfiles, ttsProfiles, customProviders, authorizationRequests };
-      if (needsRewrite) saveProfiles(store);
+      if (needsRewrite) saveProfilesForUser(uid, store);
       return store;
     }
   } catch (err) {
@@ -439,6 +445,19 @@ function loadProfiles(): ProfilesFile {
     }
   }
   return emptyProfilesStore();
+}
+
+function loadProfiles(): ProfilesFile {
+  return loadProfilesForUser(getActiveUserId());
+}
+
+function loadProfilesForActiveUserOrEmpty(): ProfilesFile {
+  try { return loadProfiles(); }
+  catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/no active user/i.test(message)) return emptyProfilesStore();
+    throw error;
+  }
 }
 
 export function getProfilesStoreStatus(): ProfilesStoreStatus {
@@ -702,17 +721,18 @@ export function __setAuthorizationStoreSaveForTests(
   authorizationStoreSaveForTests = save;
 }
 
-function saveProfiles(store: ProfilesFile): void {
+export function saveProfilesForUser(userId: string, store: ProfilesFile): void {
+  const uid = assertAuthUserId(userId);
   if (authorizationStoreSaveForTests) {
     authorizationStoreSaveForTests(store);
     return;
   }
-  ensureAuthDir();
+  ensureAuthDir(uid);
   const json = JSON.stringify(store, null, 2);
-  const localId = getActiveUserId();
+  const localId = uid;
   const ownerId = authSecretOwner(localId);
   const out = ownerId ? localSecrets.encryptLocalSecret(authSecretContext(ownerId), json) : json;
-  const target = profilesFile();
+  const target = profilesFile(uid);
   const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
   try {
     fs.writeFileSync(temp, out, { encoding: 'utf-8', mode: 0o600 });
@@ -721,6 +741,10 @@ function saveProfiles(store: ProfilesFile): void {
     try { fs.unlinkSync(temp); } catch { /* missing/locked temporary */ }
     throw error;
   }
+}
+
+function saveProfiles(store: ProfilesFile): void {
+  saveProfilesForUser(getActiveUserId(), store);
 }
 
 function isStoredProfileBlocked(profile: StoredProfile | undefined): boolean {
@@ -793,7 +817,7 @@ export interface AuthConfig { provider: string; model: string }
  * pending setup" and redirect the user to the settings page.
  */
 export function hasConfiguredModel(): { configured: boolean } {
-  const store = loadProfiles();
+  const store = loadProfilesForActiveUserOrEmpty();
   if (store.entries.some((e) => isEntryAllowed(store, e))) return { configured: true };
   if (process.env.ANTHROPIC_API_KEY) return { configured: true };
   return { configured: false };
@@ -805,7 +829,7 @@ export function getConfiguredModelCooldown(): {
   kind: KeyFailureKind;
   reason: string;
 } | null {
-  const store = loadProfiles();
+  const store = loadProfilesForActiveUserOrEmpty();
   let best: { profileId: string; cooledUntil: number; kind: KeyFailureKind; reason: string } | null = null;
   for (const entry of store.entries) {
     if (!isEntryAllowed(store, entry)) continue;
@@ -825,7 +849,7 @@ export async function getConfig(): Promise<AuthConfig> {
   // Default (provider, model) pair is `entries[0]` — the top of the priority
   // list. Credentials + model selection share one source of truth
   // (auth-profiles.json); there's no longer a fallback config.json.
-  const store = loadProfiles();
+  const store = loadProfilesForActiveUserOrEmpty();
   const first = store.entries.find((e) => isEntryAllowed(store, e));
   if (first) return { provider: first.provider, model: first.model };
   return { provider: '', model: '' };
@@ -2050,6 +2074,37 @@ export interface ChatEntryChoice {
   maxOutputTokens?: number;
 }
 
+/** Resolve one API-key chat entry for an explicit user. This is intentionally
+ * independent from active-user state, OAuth refresh, and Core Agent rotation. */
+export function pickApiKeyChatEntryForUser(
+  userId: string,
+  profileId?: string,
+): ChatEntryChoice | null {
+  const uid = assertAuthUserId(userId);
+  const wantedProfileId = profileId === undefined ? undefined : String(profileId).trim();
+  if (profileId !== undefined && !wantedProfileId) throw new Error('invalid profile id');
+
+  const store = loadProfilesForUser(uid);
+  for (const entry of store.entries) {
+    if (wantedProfileId && entry.profileId !== wantedProfileId) continue;
+    if (!isEntryAllowed(store, entry)) continue;
+    const profile = store.profiles[entry.profileId];
+    if (!profile || profile.type !== 'api_key') continue;
+    return {
+      entryId: entry.entryId,
+      profileId: entry.profileId,
+      provider: entry.provider,
+      model: entry.model,
+      apiKey: profile.key,
+      ...(profile.baseUrl ? { baseUrl: profile.baseUrl } : {}),
+      ...(isOpenAICompatibleProvider(entry.provider)
+        ? { maxOutputTokens: normalizeOpenAICompatibleMaxOutputTokens(entry.provider, profile.maxOutputTokens) }
+        : {}),
+    };
+  }
+  return null;
+}
+
 /**
  * Group consecutive entries by `(provider, model)`. Dropped into a helper
  * so `pickChatEntry` (single winner) and `pickChatEntryGroup` (whole
@@ -2174,7 +2229,7 @@ export function bumpEntryLastUsed(entryId: string): void {
  * bumps the winning candidate via `onSuccess`).
  */
 export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
-  const store = loadProfiles();
+  const store = loadProfilesForActiveUserOrEmpty();
   if (store.entries.length === 0) return [];
 
   // Flatten: preserve entries[] order across groups, but within a

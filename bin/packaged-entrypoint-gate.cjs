@@ -28,6 +28,9 @@ const CONNECTOR_CATALOG_SOURCE_FILES = Object.freeze([
 const GOOGLE_CONNECTOR_CATALOG_SOURCE = 'src/main/features/connectors/catalog-google.ts';
 
 const INTERNAL_ENTRYPOINT_CONSUMERS = Object.freeze({
+  'mate-runtime-worker.cjs': Object.freeze([
+    'src/main/features/mate_agent_runtime/worker-process.ts',
+  ]),
   'orkas-bridge.cjs': Object.freeze([
     'src/main/features/local_agents/bridge.ts',
     'src/main/features/local_agents/runner.ts',

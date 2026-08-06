@@ -6,6 +6,7 @@ import * as path from "node:path";
 const storageMocks = vi.hoisted(() => ({
   readJson: vi.fn(),
   writeJson: vi.fn(),
+  appendJsonlAtomic: vi.fn(),
 }));
 vi.mock("../../../../src/main/storage", async (importOriginal) => {
   const actual =
@@ -16,6 +17,8 @@ vi.mock("../../../../src/main/storage", async (importOriginal) => {
       storageMocks.readJson(...args),
     writeJson: (...args: Parameters<typeof actual.writeJson>) =>
       storageMocks.writeJson(...args),
+    appendJsonlAtomic: (filePath: string, record: unknown) =>
+      storageMocks.appendJsonlAtomic(filePath, record),
   };
 });
 
@@ -31,16 +34,25 @@ beforeEach(async () => {
   vi.resetModules();
   storageMocks.readJson.mockReset();
   storageMocks.writeJson.mockReset();
+  storageMocks.appendJsonlAtomic.mockReset();
   const storage = await vi.importActual<
     typeof import("../../../../src/main/storage")
   >("../../../../src/main/storage");
   storageMocks.readJson.mockImplementation(storage.readJson);
   storageMocks.writeJson.mockImplementation(storage.writeJson);
+  storageMocks.appendJsonlAtomic.mockImplementation(storage.appendJsonlAtomic);
   const users = await import("../../../../src/main/features/users");
   users.activateUser(TEST_UID);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  try {
+    const collaboration =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    (collaboration as any)._setRetryPreparationBoundaryHookForTest?.(null);
+  } catch {
+    /* ignore */
+  }
   process.env.ORKAS_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -357,7 +369,7 @@ describe("group_chat collaboration › workflow lifecycle", () => {
 
     await expect(
       c.startPlannedWorkflowStep(TEST_UID, TEST_CID, run.id, second.id),
-    ).rejects.toThrow(/dependencies are not completed/);
+    ).rejects.toThrow(`workflow step dependencies incomplete: ${first.id}`);
     const started = await c.startPlannedWorkflowStep(
       TEST_UID,
       TEST_CID,
@@ -3814,5 +3826,1961 @@ describe("group_chat collaboration › terminal settlement repair", () => {
           event.type === "gate_recorded" && event.step_id === prepared.step.id,
       ),
     ).toHaveLength(1);
+  });
+});
+
+describe("group_chat collaboration › bounded workflow attempts", () => {
+  it("persists begin and finish mutations with privacy-safe audit events", async () => {
+    const c =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const cid = `${TEST_CID}-attempt-lifecycle`;
+    const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Coordinate an implementation attempt",
+      actor_id: "agent-a",
+      actor_name: "Agent A",
+      source_tool: "dispatch_to",
+      task: "private task text must not enter attempt audit events",
+    });
+
+    const started = await c.beginWorkflowStepAttempt(
+      TEST_UID,
+      cid,
+      prepared.step.id,
+      {
+        actor_id: " agent-a ",
+        actor_kind: "agent",
+        actor_name: " Agent A ",
+      },
+    );
+
+    expect(started.original_actor_id).toBe("agent-a");
+    expect(started.current_actor_id).toBe("agent-a");
+    expect(started.attempts).toMatchObject([
+      {
+        attempt: 1,
+        actor_id: "agent-a",
+        actor_kind: "agent",
+        actor_name: "Agent A",
+        status: "running",
+        started_at: expect.any(String),
+      },
+    ]);
+
+    const failed = await c.finishWorkflowStepAttempt(
+      TEST_UID,
+      cid,
+      prepared.step.id,
+      {
+        status: "failed",
+        failure_code: "coordinator_agent_idle",
+      },
+    );
+    expect(failed.attempts?.[0]).toMatchObject({
+      status: "failed",
+      failure_code: "coordinator_agent_idle",
+      completed_at: expect.any(String),
+    });
+
+    const events = await c.readCollaborationEvents(TEST_UID, cid, 0);
+    const attemptEvents = events.filter(
+      (event) =>
+        event.type === "step_attempt_started" ||
+        event.type === "step_attempt_finished",
+    );
+    expect(attemptEvents).toHaveLength(2);
+    expect(attemptEvents[0]).toMatchObject({
+      type: "step_attempt_started",
+      actor_id: "agent-a",
+      step_id: prepared.step.id,
+      payload: { attempt: 1, actor_kind: "agent" },
+    });
+    expect(attemptEvents[1]).toMatchObject({
+      type: "step_attempt_finished",
+      actor_id: "agent-a",
+      step_id: prepared.step.id,
+      payload: {
+        attempt: 1,
+        status: "failed",
+        failure_code: "coordinator_agent_idle",
+      },
+    });
+    expect(attemptEvents.every((event) => event.summary === undefined)).toBe(
+      true,
+    );
+    expect(JSON.stringify(attemptEvents)).not.toContain("private task text");
+  });
+
+  it("normalizes malformed legacy attempt metadata while preserving canonical coordination metadata", async () => {
+    const c =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const runId = "wf-attempt-legacy";
+    const runFile = c.collaborationPaths(TEST_UID, TEST_CID).runFile(runId);
+    fs.mkdirSync(path.dirname(runFile), { recursive: true });
+    fs.writeFileSync(
+      runFile,
+      JSON.stringify({
+        version: 1,
+        id: runId,
+        cid: TEST_CID,
+        objective: "Legacy attempt data",
+        kind: "custom",
+        status: "running",
+        phase: "planned",
+        steps: [
+          {
+            id: "wstep-attempt-legacy",
+            run_id: runId,
+            title: "Legacy step",
+            actor_id: "agent-f",
+            type: "dispatch",
+            status: "pending",
+            depends_on: [],
+            original_actor_id: " original-agent ",
+            current_actor_id: { malformed: true },
+            required_capabilities: ["code"],
+            access_mode: "write",
+            write_scopes: ["src/main"],
+            attempts: [
+              {
+                attempt: 1,
+                actor_id: "agent-a",
+                actor_kind: "agent",
+                status: "failed",
+                failure_code: "runtime_failed",
+                started_at: "2026-07-31T00:00:00.000Z",
+                completed_at: "2026-07-31T00:01:00.000Z",
+              },
+              {
+                attempt: 5,
+                actor_id: "agent-invalid-number",
+                actor_kind: "agent",
+                status: "failed",
+                started_at: "2026-07-31T00:02:00.000Z",
+              },
+              {
+                attempt: 2,
+                actor_id: " agent-b ",
+                actor_kind: "agent",
+                actor_name: " Agent B ",
+                status: "failed",
+                started_at: "2026-07-31T00:03:00.000Z",
+                completed_at: "2026-07-31T00:04:00.000Z",
+              },
+              {
+                attempt: 3,
+                actor_id: "agent-c",
+                actor_kind: "agent",
+                status: "completed",
+                started_at: "2026-07-31T00:05:00.000Z",
+                completed_at: "2026-07-31T00:06:00.000Z",
+              },
+              {
+                attempt: 3,
+                actor_id: "agent-invalid-status",
+                actor_kind: "agent",
+                status: "waiting",
+                started_at: "2026-07-31T00:07:00.000Z",
+              },
+              {
+                attempt: 4,
+                actor_id: "agent-d",
+                actor_kind: "agent",
+                status: "failed",
+                started_at: "2026-07-31T00:08:00.000Z",
+                completed_at: "2026-07-31T00:09:00.000Z",
+              },
+              {
+                attempt: 4,
+                actor_id: "agent-e",
+                actor_kind: "agent",
+                status: "failed",
+                failure_code: "raw-stack-trace",
+                started_at: "2026-07-31T00:10:00.000Z",
+                completed_at: "2026-07-31T00:11:00.000Z",
+                pid: 1234,
+                cli_run_id: "machine-local-run",
+                task: "sensitive task",
+                output: "sensitive output",
+                error: "sensitive error",
+              },
+              {
+                attempt: 4,
+                actor_id: null,
+                actor_kind: "anonymous_worker",
+                status: "cancelled",
+                started_at: "2026-07-31T00:12:00.000Z",
+                completed_at: "2026-07-31T00:13:00.000Z",
+              },
+            ],
+          },
+        ],
+        context_id: "wctx-attempt-legacy",
+        created_by: "commander",
+        created_at: "2026-07-31T00:00:00.000Z",
+        updated_at: "2026-07-31T00:13:00.000Z",
+      }),
+      "utf8",
+    );
+
+    const run = await c.readWorkflowRun(TEST_UID, TEST_CID, runId);
+    const step = run?.steps[0];
+    expect(step?.original_actor_id).toBe("original-agent");
+    expect(step).not.toHaveProperty("current_actor_id");
+    expect(step?.required_capabilities).toEqual(["code"]);
+    expect(step?.access_mode).toBe("write");
+    expect(step?.write_scopes).toEqual(["src/main"]);
+    expect(step?.attempts?.map((attempt) => attempt.actor_id)).toEqual([
+      "agent-c",
+      "agent-d",
+      "agent-e",
+      null,
+    ]);
+    expect(step?.attempts?.[2]).not.toHaveProperty("failure_code");
+    expect(JSON.stringify(step?.attempts)).not.toMatch(
+      /sensitive task|sensitive output|sensitive error|machine-local-run|1234/,
+    );
+  });
+
+  it("serializes concurrent attempt starts through the collaboration lock", async () => {
+    const c =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const cid = `${TEST_CID}-attempt-lock`;
+    const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Lock attempt starts",
+      actor_id: "agent-a",
+      source_tool: "dispatch_to",
+      task: "Lock attempt starts",
+    });
+
+    const results = await Promise.allSettled([
+      c.beginWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, {
+        actor_id: "agent-a",
+        actor_kind: "agent",
+      }),
+      c.beginWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, {
+        actor_id: "agent-b",
+        actor_kind: "agent",
+      }),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(
+      1,
+    );
+    const rejected = results.find((result) => result.status === "rejected");
+    expect(rejected).toMatchObject({
+      status: "rejected",
+      reason: expect.objectContaining({
+        message: "workflow step already has a running attempt",
+      }),
+    });
+    const persisted = await c.readWorkflowRun(
+      TEST_UID,
+      cid,
+      prepared.run.id,
+    );
+    expect(persisted?.steps[0].attempts).toHaveLength(1);
+  });
+
+  it("rejects concurrent same-actor duplicate begin calls after the first attempt starts", async () => {
+    const c =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const cid = `${TEST_CID}-attempt-same-actor-lock`;
+    const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Reject duplicate same-actor starts",
+      actor_id: "agent-a",
+      source_tool: "dispatch_to",
+      task: "Reject duplicate same-actor starts",
+    });
+    const input = {
+      actor_id: "agent-a",
+      actor_kind: "agent" as const,
+    };
+
+    const results = await Promise.allSettled([
+      c.beginWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, input),
+      c.beginWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, input),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(
+      1,
+    );
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(
+      1,
+    );
+    expect(
+      results.find((result) => result.status === "rejected"),
+    ).toMatchObject({
+      status: "rejected",
+      reason: expect.objectContaining({
+        message: "workflow step attempt already started",
+      }),
+    });
+    const persisted = await c.readWorkflowRun(
+      TEST_UID,
+      cid,
+      prepared.run.id,
+    );
+    expect(persisted?.steps[0].attempts).toHaveLength(1);
+    expect(
+      (await c.readCollaborationEvents(TEST_UID, cid, 0)).filter(
+        (event) => event.type === "step_attempt_started",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("rejects actor kind and actor id mismatches before writing attempt state", async () => {
+    const c =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const cases = [
+      {
+        cid: `${TEST_CID}-attempt-invalid-agent`,
+        input: {
+          actor_id: null,
+          actor_kind: "agent" as const,
+        },
+      },
+      {
+        cid: `${TEST_CID}-attempt-invalid-worker`,
+        input: {
+          actor_id: "agent-a",
+          actor_kind: "anonymous_worker" as const,
+        },
+      },
+    ];
+
+    for (const { cid, input } of cases) {
+      const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+        objective: "Reject invalid actor contract",
+        actor_id: "agent-a",
+        source_tool: "dispatch_to",
+        task: "Reject invalid actor contract",
+      });
+      const writeCount = storageMocks.writeJson.mock.calls.length;
+      const appendCount = storageMocks.appendJsonlAtomic.mock.calls.length;
+
+      await expect(
+        c.beginWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, input),
+      ).rejects.toThrow("workflow step attempt actor kind/id mismatch");
+
+      expect(storageMocks.writeJson.mock.calls.length).toBe(writeCount);
+      expect(storageMocks.appendJsonlAtomic.mock.calls.length).toBe(appendCount);
+      const persisted = await c.readWorkflowRun(
+        TEST_UID,
+        cid,
+        prepared.run.id,
+      );
+      expect(persisted?.steps[0].attempts).toBeUndefined();
+      expect(
+        (await c.readCollaborationEvents(TEST_UID, cid, 0)).filter(
+          (event) =>
+            event.type === "step_attempt_started" ||
+            event.type === "step_attempt_finished",
+        ),
+      ).toHaveLength(0);
+    }
+  });
+
+  it("rejects a fifth attempt after four settled attempts", async () => {
+    const c =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const cid = `${TEST_CID}-attempt-limit`;
+    const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Bound recovery attempts",
+      actor_id: "agent-a",
+      source_tool: "dispatch_to",
+      task: "Bound recovery attempts",
+    });
+
+    for (let index = 0; index < 4; index += 1) {
+      await c.beginWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, {
+        actor_id: `agent-${index + 1}`,
+        actor_kind: "agent",
+      });
+      await c.finishWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, {
+        status: "failed",
+        failure_code: "runtime_failed",
+      });
+    }
+
+    await expect(
+      c.beginWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, {
+        actor_id: null,
+        actor_kind: "anonymous_worker",
+      }),
+    ).rejects.toThrow("workflow step attempt limit reached");
+    const persisted = await c.readWorkflowRun(
+      TEST_UID,
+      cid,
+      prepared.run.id,
+    );
+    expect(persisted?.steps[0].attempts).toHaveLength(4);
+  });
+
+  it("repairs a missing attempt-started event without creating another attempt", async () => {
+    const c =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const storage = await vi.importActual<
+      typeof import("../../../../src/main/storage")
+    >("../../../../src/main/storage");
+    const cid = `${TEST_CID}-attempt-start-repair`;
+    const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Repair attempt start audit",
+      actor_id: "agent-a",
+      source_tool: "dispatch_to",
+      task: "Repair attempt start audit",
+    });
+    let failed = false;
+    storageMocks.appendJsonlAtomic.mockImplementation(
+      async (filePath: string, record: { type?: string }) => {
+        if (!failed && record.type === "step_attempt_started") {
+          failed = true;
+          throw new Error("forced attempt start append failure");
+        }
+        return storage.appendJsonlAtomic(filePath, record);
+      },
+    );
+    const input = {
+      actor_id: "agent-a",
+      actor_kind: "agent" as const,
+      actor_name: "Agent A",
+    };
+
+    await expect(
+      c.beginWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, input),
+    ).rejects.toThrow("forced attempt start append failure");
+    const committed = await c.readWorkflowRun(
+      TEST_UID,
+      cid,
+      prepared.run.id,
+    );
+    expect(committed?.steps[0].attempts).toMatchObject([
+      { attempt: 1, actor_id: "agent-a", status: "running" },
+    ]);
+    expect(
+      (await c.readCollaborationEvents(TEST_UID, cid, 0)).filter(
+        (event) => event.type === "step_attempt_started",
+      ),
+    ).toHaveLength(0);
+
+    await expect(
+      c.beginWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, input),
+    ).resolves.toMatchObject({ attempts: [{ attempt: 1, status: "running" }] });
+    await expect(
+      c.beginWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, input),
+    ).rejects.toThrow("workflow step attempt already started");
+
+    const repaired = await c.readWorkflowRun(
+      TEST_UID,
+      cid,
+      prepared.run.id,
+    );
+    expect(repaired?.steps[0].attempts).toHaveLength(1);
+    expect(
+      (await c.readCollaborationEvents(TEST_UID, cid, 0)).filter(
+        (event) =>
+          event.type === "step_attempt_started" &&
+          event.step_id === prepared.step.id &&
+          event.payload?.attempt === 1,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("repairs a missing attempt-finished event without requiring a running attempt", async () => {
+    const c =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const storage = await vi.importActual<
+      typeof import("../../../../src/main/storage")
+    >("../../../../src/main/storage");
+    const cid = `${TEST_CID}-attempt-finish-repair`;
+    const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Repair attempt finish audit",
+      actor_id: "agent-a",
+      source_tool: "dispatch_to",
+      task: "Repair attempt finish audit",
+    });
+    await c.beginWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, {
+      actor_id: "agent-a",
+      actor_kind: "agent",
+    });
+    let failed = false;
+    storageMocks.appendJsonlAtomic.mockImplementation(
+      async (filePath: string, record: { type?: string }) => {
+        if (!failed && record.type === "step_attempt_finished") {
+          failed = true;
+          throw new Error("forced attempt finish append failure");
+        }
+        return storage.appendJsonlAtomic(filePath, record);
+      },
+    );
+    const input = {
+      status: "failed" as const,
+      failure_code: "coordinator_agent_idle" as const,
+    };
+
+    await expect(
+      c.finishWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, input),
+    ).rejects.toThrow("forced attempt finish append failure");
+    const committed = await c.readWorkflowRun(
+      TEST_UID,
+      cid,
+      prepared.run.id,
+    );
+    expect(committed?.steps[0].attempts).toMatchObject([
+      {
+        attempt: 1,
+        status: "failed",
+        failure_code: "coordinator_agent_idle",
+        completed_at: expect.any(String),
+      },
+    ]);
+    expect(
+      (await c.readCollaborationEvents(TEST_UID, cid, 0)).filter(
+        (event) => event.type === "step_attempt_finished",
+      ),
+    ).toHaveLength(0);
+
+    await expect(
+      c.finishWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, input),
+    ).resolves.toMatchObject({ attempts: [{ attempt: 1, status: "failed" }] });
+    await expect(
+      c.finishWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, input),
+    ).resolves.toMatchObject({ attempts: [{ attempt: 1, status: "failed" }] });
+
+    const repaired = await c.readWorkflowRun(
+      TEST_UID,
+      cid,
+      prepared.run.id,
+    );
+    expect(repaired?.steps[0].attempts).toHaveLength(1);
+    expect(
+      (await c.readCollaborationEvents(TEST_UID, cid, 0)).filter(
+        (event) =>
+          event.type === "step_attempt_finished" &&
+          event.step_id === prepared.step.id &&
+          event.payload?.attempt === 1,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("canonicalizes malformed attempt histories into one sequential lifecycle", async () => {
+    const c =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const runId = "wf-attempt-lifecycle-malformed";
+    const runFile = c.collaborationPaths(TEST_UID, TEST_CID).runFile(runId);
+    fs.mkdirSync(path.dirname(runFile), { recursive: true });
+    fs.writeFileSync(
+      runFile,
+      JSON.stringify({
+        version: 1,
+        id: runId,
+        cid: TEST_CID,
+        objective: "Malformed attempt lifecycle",
+        kind: "custom",
+        status: "running",
+        phase: "planned",
+        steps: [
+          {
+            id: "wstep-attempt-lifecycle-malformed",
+            run_id: runId,
+            title: "Malformed lifecycle step",
+            actor_id: "agent-final",
+            type: "dispatch",
+            status: "pending",
+            depends_on: [],
+            attempts: [
+              {
+                attempt: 3,
+                actor_id: "agent-c",
+                actor_kind: "agent",
+                status: "failed",
+                failure_code: "runtime_failed",
+                started_at: "2026-07-31T00:00:00.000Z",
+                completed_at: "2026-07-31T00:01:00.000Z",
+              },
+              {
+                attempt: 3,
+                actor_id: "agent-d",
+                actor_kind: "agent",
+                status: "completed",
+                started_at: "2026-07-31T00:02:00.000Z",
+                completed_at: "2026-07-31T00:03:00.000Z",
+              },
+              {
+                attempt: 2,
+                actor_id: "agent-running-old",
+                actor_kind: "agent",
+                status: "running",
+                failure_code: "coordinator_tool_idle",
+                started_at: "2026-07-31T00:04:00.000Z",
+                completed_at: "2026-07-31T00:05:00.000Z",
+              },
+              {
+                attempt: 1,
+                actor_id: "agent-missing-completion",
+                actor_kind: "agent",
+                status: "failed",
+                started_at: "2026-07-31T00:06:00.000Z",
+              },
+              {
+                attempt: 2,
+                actor_id: null,
+                actor_kind: "agent",
+                status: "completed",
+                started_at: "2026-07-31T00:07:00.000Z",
+                completed_at: "2026-07-31T00:08:00.000Z",
+              },
+              {
+                attempt: 2,
+                actor_id: "agent-not-anonymous",
+                actor_kind: "anonymous_worker",
+                status: "completed",
+                started_at: "2026-07-31T00:09:00.000Z",
+                completed_at: "2026-07-31T00:10:00.000Z",
+              },
+              {
+                attempt: 4,
+                actor_id: "agent-e",
+                actor_kind: "agent",
+                status: "failed",
+                failure_code: "dependency_failed",
+                started_at: "2026-07-31T00:11:00.000Z",
+                completed_at: "2026-07-31T00:12:00.000Z",
+              },
+              {
+                attempt: 4,
+                actor_id: "agent-final",
+                actor_kind: "agent",
+                status: "running",
+                failure_code: "coordinator_agent_idle",
+                started_at: "2026-07-31T00:13:00.000Z",
+                completed_at: "2026-07-31T00:14:00.000Z",
+              },
+            ],
+          },
+        ],
+        context_id: "wctx-attempt-lifecycle-malformed",
+        created_by: "commander",
+        created_at: "2026-07-31T00:00:00.000Z",
+        updated_at: "2026-07-31T00:14:00.000Z",
+      }),
+      "utf8",
+    );
+
+    const run = await c.readWorkflowRun(TEST_UID, TEST_CID, runId);
+    expect(run?.steps[0].attempts).toEqual([
+      {
+        attempt: 1,
+        actor_id: "agent-c",
+        actor_kind: "agent",
+        status: "failed",
+        failure_code: "runtime_failed",
+        started_at: "2026-07-31T00:00:00.000Z",
+        completed_at: "2026-07-31T00:01:00.000Z",
+      },
+      {
+        attempt: 2,
+        actor_id: "agent-d",
+        actor_kind: "agent",
+        status: "completed",
+        started_at: "2026-07-31T00:02:00.000Z",
+        completed_at: "2026-07-31T00:03:00.000Z",
+      },
+      {
+        attempt: 3,
+        actor_id: "agent-e",
+        actor_kind: "agent",
+        status: "failed",
+        failure_code: "dependency_failed",
+        started_at: "2026-07-31T00:11:00.000Z",
+        completed_at: "2026-07-31T00:12:00.000Z",
+      },
+      {
+        attempt: 4,
+        actor_id: "agent-final",
+        actor_kind: "agent",
+        status: "running",
+        started_at: "2026-07-31T00:13:00.000Z",
+      },
+    ]);
+  });
+
+
+  it.each([true, false])(
+    "idempotently terminalizes an aborted nested step with runningAttempt=%s",
+    async (runningAttempt) => {
+      const c =
+        await import("../../../../src/main/features/group_chat/collaboration");
+      const cid = `${TEST_CID}-abort-settlement-${runningAttempt}`;
+      const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+        objective: "Terminalize an aborted nested step",
+        actor_id: runningAttempt ? "agent-a" : null,
+        actor_name: runningAttempt ? "Agent A" : "Worker",
+        actor_kind: runningAttempt ? "agent" : "anonymous_worker",
+        source_tool: "run_worker",
+        task: "Terminalize an aborted nested step",
+      });
+      if (runningAttempt) {
+        await c.beginWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, {
+          actor_id: "agent-a",
+          actor_kind: "agent",
+        });
+      }
+
+      const first = await (c as any).settleNestedDispatchAbort(
+        TEST_UID,
+        cid,
+        prepared.step.id,
+        "Nested dispatch aborted.",
+      );
+      const second = await (c as any).settleNestedDispatchAbort(
+        TEST_UID,
+        cid,
+        prepared.step.id,
+        "Nested dispatch aborted.",
+      );
+
+      expect(first.status).toBe("skipped");
+      expect(second.status).toBe("skipped");
+      const run = await c.readActiveWorkflowRun(TEST_UID, cid);
+      const step = run?.steps[0];
+      expect(step?.status).toBe("skipped");
+      expect(step?.completed_at).toBeTruthy();
+      if (runningAttempt) {
+        expect(step?.attempts).toHaveLength(1);
+        expect(step?.attempts?.[0]).toMatchObject({ status: "cancelled" });
+        expect(step?.attempts?.[0]).not.toHaveProperty("failure_code");
+      } else {
+        expect(step?.attempts || []).toHaveLength(0);
+      }
+      const context = await c.readActiveSharedTaskContext(TEST_UID, cid);
+      const gate = context?.gates.find(
+        (candidate) => candidate.step_id === prepared.step.id,
+      );
+      expect(gate).toMatchObject({ status: "failed", blocks_workflow: false });
+      const events = await c.readCollaborationEvents(TEST_UID, cid, 0);
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "step_completed" &&
+            event.step_id === prepared.step.id,
+        ),
+      ).toHaveLength(1);
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "gate_recorded" &&
+            event.step_id === prepared.step.id,
+        ),
+      ).toHaveLength(1);
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "step_attempt_finished" &&
+            event.step_id === prepared.step.id,
+        ),
+      ).toHaveLength(runningAttempt ? 1 : 0);
+      await expect(
+        c.prepareNestedDispatchStep(TEST_UID, cid, {
+          objective: "resume must stay closed",
+          actor_id: runningAttempt ? "agent-a" : null,
+          actor_name: runningAttempt ? "Agent A" : "Worker",
+          actor_kind: runningAttempt ? "agent" : "anonymous_worker",
+          source_tool: "run_worker",
+          task: "Terminalize an aborted nested step",
+          resume_step_id: prepared.step.id,
+          resume_token: prepared.step.resume_token,
+        }),
+      ).rejects.toThrow(/cannot be reused/);
+    },
+  );
+
+  it.each(["context", "start_audit"] as const)(
+    "repairs a partially persisted prepared start after %s failure",
+    async (boundary) => {
+      const c = await import("../../../../src/main/features/group_chat/collaboration");
+      const cid = `${TEST_CID}-infrastructure-start-${boundary}`;
+      const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+        objective: "Repair infrastructure start",
+        actor_id: "agent-infrastructure",
+        actor_name: "Infrastructure Agent",
+        actor_kind: "agent",
+        source_tool: "dispatch_to",
+        task: "Repair infrastructure start",
+      });
+      const actualStorage = await vi.importActual<
+        typeof import("../../../../src/main/storage")
+      >("../../../../src/main/storage");
+      const paths = c.collaborationPaths(TEST_UID, cid);
+      let failed = false;
+      storageMocks.writeJson.mockImplementation(async (file, value) => {
+        if (
+          !failed &&
+          boundary === "context" &&
+          file === paths.contextFile(prepared.context.id) &&
+          (value as any)?.phase === "dispatch"
+        ) {
+          failed = true;
+          throw new Error("RAW_START_CONTEXT_SENTINEL");
+        }
+        return actualStorage.writeJson(file, value);
+      });
+      storageMocks.appendJsonlAtomic.mockImplementation(
+        async (file, record) => {
+          if (
+            !failed &&
+            boundary === "start_audit" &&
+            (record as any)?.type === "step_started" &&
+            (record as any)?.step_id === prepared.step.id
+          ) {
+            failed = true;
+            throw new Error("RAW_START_AUDIT_SENTINEL");
+          }
+          return actualStorage.appendJsonlAtomic(file, record);
+        },
+      );
+
+      await expect(
+        c.startPreparedNestedDispatchStep(TEST_UID, cid, prepared.step.id),
+      ).rejects.toThrow(/RAW_START_/);
+      const partial = await c.readActiveWorkflowRun(TEST_UID, cid);
+      expect(partial?.steps[0]).toMatchObject({ status: "running" });
+
+      const settled = await c.settleNestedDispatchInfrastructureFailure(
+        TEST_UID,
+        cid,
+        prepared.step.id,
+      );
+
+      expect(failed).toBe(true);
+      expect(settled).toMatchObject({
+        status: "failed",
+        result_summary: "Nested dispatch infrastructure failed.",
+      });
+      expect(settled.attempts || []).toHaveLength(0);
+      const context = await c.readActiveSharedTaskContext(TEST_UID, cid);
+      expect(
+        context?.gates.filter((gate) => gate.step_id === prepared.step.id),
+      ).toHaveLength(1);
+      const events = await c.readCollaborationEvents(TEST_UID, cid, 0);
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "step_started" && event.step_id === prepared.step.id,
+        ),
+      ).toHaveLength(1);
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "step_completed" && event.step_id === prepared.step.id,
+        ),
+      ).toHaveLength(1);
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "gate_recorded" && event.step_id === prepared.step.id,
+        ),
+      ).toHaveLength(1);
+      await expect(
+        c.prepareNestedDispatchStep(TEST_UID, cid, {
+          objective: "Resume closed",
+          actor_id: "agent-infrastructure",
+          source_tool: "dispatch_to",
+          task: "Repair infrastructure start",
+          resume_step_id: prepared.step.id,
+          resume_token: prepared.step.resume_token,
+        }),
+      ).rejects.toThrow(/cannot be reused/);
+      await expect(
+        c.prepareWorkflowStepForRetry(TEST_UID, cid, prepared.step.id),
+      ).resolves.toMatchObject({ status: "pending" });
+    },
+  );
+
+  it("idempotently fails a running attempt during infrastructure settlement", async () => {
+    const c = await import("../../../../src/main/features/group_chat/collaboration");
+    const cid = `${TEST_CID}-infrastructure-running-attempt`;
+    const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Running attempt infrastructure failure",
+      actor_id: "agent-infrastructure",
+      actor_kind: "agent",
+      source_tool: "dispatch_to",
+      task: "Running attempt infrastructure failure",
+    });
+    await c.startPreparedNestedDispatchStep(TEST_UID, cid, prepared.step.id);
+    await c.beginWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, {
+      actor_id: "agent-infrastructure",
+      actor_kind: "agent",
+    });
+
+    const first = await c.settleNestedDispatchInfrastructureFailure(
+      TEST_UID,
+      cid,
+      prepared.step.id,
+    );
+    const second = await c.settleNestedDispatchInfrastructureFailure(
+      TEST_UID,
+      cid,
+      prepared.step.id,
+    );
+
+    expect(first).toMatchObject({ status: "failed" });
+    expect(second).toMatchObject({ status: "failed" });
+    expect(second.attempts).toEqual([
+      expect.objectContaining({
+        status: "failed",
+        failure_code: "runtime_failed",
+      }),
+    ]);
+    const events = await c.readCollaborationEvents(TEST_UID, cid, 0);
+    expect(
+      events.filter(
+        (event) =>
+          event.type === "step_attempt_finished" &&
+          event.step_id === prepared.step.id,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      status: "completed" as const,
+      finish: { result: "Authoritative completed result" },
+      summary: "Authoritative completed result",
+      gateStatus: "passed",
+    },
+    {
+      status: "failed" as const,
+      finish: { error: "Authoritative failed result" },
+      summary: "Authoritative failed result",
+      gateStatus: "failed",
+    },
+  ])(
+    "preserves an authoritative $status step while repairing its missing context and audits",
+    async ({ status, finish, summary, gateStatus }) => {
+      const c = await import("../../../../src/main/features/group_chat/collaboration");
+      const cid = `${TEST_CID}-infrastructure-authoritative-${status}`;
+      const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+        objective: `Preserve authoritative ${status}`,
+        actor_id: "agent-infrastructure",
+        source_tool: "dispatch_to",
+        task: `Preserve authoritative ${status}`,
+      });
+      await c.startPreparedNestedDispatchStep(TEST_UID, cid, prepared.step.id);
+      const actualStorage = await vi.importActual<
+        typeof import("../../../../src/main/storage")
+      >("../../../../src/main/storage");
+      const contextFile = c
+        .collaborationPaths(TEST_UID, cid)
+        .contextFile(prepared.context.id);
+      let failed = false;
+      storageMocks.writeJson.mockImplementation(async (file, value) => {
+        if (
+          !failed &&
+          file === contextFile &&
+          (value as any)?.gates?.some(
+            (gate: any) => gate.step_id === prepared.step.id,
+          )
+        ) {
+          failed = true;
+          throw new Error("RAW_AUTHORITATIVE_CONTEXT_SENTINEL");
+        }
+        return actualStorage.writeJson(file, value);
+      });
+
+      await expect(
+        c.finishNestedDispatchStep(TEST_UID, cid, prepared.step.id, finish),
+      ).rejects.toThrow(/RAW_AUTHORITATIVE_CONTEXT_SENTINEL/);
+
+      const settled = await c.settleNestedDispatchInfrastructureFailure(
+        TEST_UID,
+        cid,
+        prepared.step.id,
+      );
+
+      expect(settled).toMatchObject({ status, result_summary: summary });
+      const context = await c.readActiveSharedTaskContext(TEST_UID, cid);
+      expect(
+        context?.gates.filter((gate) => gate.step_id === prepared.step.id),
+      ).toEqual([expect.objectContaining({ status: gateStatus })]);
+      const events = await c.readCollaborationEvents(TEST_UID, cid, 0);
+      for (const type of ["step_started", "step_completed", "gate_recorded"]) {
+        expect(
+          events.filter(
+            (event) => event.type === type && event.step_id === prepared.step.id,
+          ),
+        ).toHaveLength(1);
+      }
+    },
+  );
+
+  it("throws a stable invariant when infrastructure settlement cannot persist", async () => {
+    const c = await import("../../../../src/main/features/group_chat/collaboration");
+    const cid = `${TEST_CID}-infrastructure-persistent`;
+    const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Persistent infrastructure failure",
+      actor_id: "agent-infrastructure",
+      source_tool: "dispatch_to",
+      task: "Persistent infrastructure failure",
+    });
+    const actualStorage = await vi.importActual<
+      typeof import("../../../../src/main/storage")
+    >("../../../../src/main/storage");
+    const runFile = c.collaborationPaths(TEST_UID, cid).runFile(prepared.run.id);
+    const sentinel = "RAW_INFRASTRUCTURE_SENTINEL /private/path token=secret";
+    storageMocks.writeJson.mockImplementation(async (file, value) => {
+      if (
+        file === runFile &&
+        (value as any)?.steps?.some(
+          (step: any) =>
+            step.id === prepared.step.id && step.status === "failed",
+        )
+      ) {
+        throw new Error(sentinel);
+      }
+      return actualStorage.writeJson(file, value);
+    });
+
+    const error = await c
+      .settleNestedDispatchInfrastructureFailure(
+        TEST_UID,
+        cid,
+        prepared.step.id,
+      )
+      .catch((caught) => caught as Error);
+    expect(error).toMatchObject({
+      name: "Error",
+      message: "nested dispatch infrastructure settlement invariant",
+    });
+    expect(String(error)).not.toContain(sentinel);
+  });
+
+  it.each(["run", "context", "audit"] as const)(
+    "repairs the first queued-abort %s failure and verifies terminal artifacts once",
+    async (boundary) => {
+      const c = await import("../../../../src/main/features/group_chat/collaboration");
+      const cid = `${TEST_CID}-queued-abort-${boundary}-repair`;
+      const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+        objective: "Repair queued abort",
+        actor_id: null,
+        actor_name: "Worker",
+        actor_kind: "anonymous_worker",
+        source_tool: "run_worker",
+        task: "Repair queued abort",
+      });
+      const actualStorage = await vi.importActual<
+        typeof import("../../../../src/main/storage")
+      >("../../../../src/main/storage");
+      const paths = c.collaborationPaths(TEST_UID, cid);
+      let failed = false;
+      storageMocks.writeJson.mockImplementation(async (file, value) => {
+        const runFailure =
+          boundary === "run" &&
+          file === paths.runFile(prepared.run.id) &&
+          (value as any)?.steps?.some(
+            (step: any) =>
+              step.id === prepared.step.id && step.status === "skipped",
+          );
+        const contextFailure =
+          boundary === "context" &&
+          file === paths.contextFile(prepared.context.id) &&
+          (value as any)?.gates?.some(
+            (gate: any) => gate.step_id === prepared.step.id,
+          );
+        if (!failed && (runFailure || contextFailure)) {
+          failed = true;
+          throw new Error(`first ${boundary} failure`);
+        }
+        return actualStorage.writeJson(file, value);
+      });
+      storageMocks.appendJsonlAtomic.mockImplementation(
+        async (file, record) => {
+          if (
+            !failed &&
+            boundary === "audit" &&
+            (record as any)?.type === "step_completed" &&
+            (record as any)?.step_id === prepared.step.id
+          ) {
+            failed = true;
+            throw new Error("first audit failure");
+          }
+          return actualStorage.appendJsonlAtomic(file, record);
+        },
+      );
+
+      const settled = await c.settleNestedDispatchAbort(
+        TEST_UID,
+        cid,
+        prepared.step.id,
+        "Nested dispatch cancelled before access admission.",
+      );
+
+      expect(failed).toBe(true);
+      expect(settled).toMatchObject({ status: "skipped" });
+      expect(settled.attempts || []).toHaveLength(0);
+      const context = await c.readActiveSharedTaskContext(TEST_UID, cid);
+      expect(
+        context?.gates.filter((gate) => gate.step_id === prepared.step.id),
+      ).toHaveLength(1);
+      const events = await c.readCollaborationEvents(TEST_UID, cid, 0);
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "step_completed" &&
+            event.step_id === prepared.step.id,
+        ),
+      ).toHaveLength(1);
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "gate_recorded" &&
+            event.step_id === prepared.step.id,
+        ),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("repairs partially persisted abort settlement without duplicate audits", async () => {
+    const c =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const cid = `${TEST_CID}-abort-settlement-partial`;
+    const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Repair partial abort settlement",
+      actor_id: "agent-a",
+      actor_name: "Agent A",
+      actor_kind: "agent",
+      source_tool: "run_worker",
+      task: "Repair partial abort settlement",
+    });
+    await c.beginWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, {
+      actor_id: "agent-a",
+      actor_kind: "agent",
+    });
+    await (c as any).settleNestedDispatchAbort(
+      TEST_UID,
+      cid,
+      prepared.step.id,
+      "Nested dispatch aborted.",
+    );
+
+    const actualStorage = await vi.importActual<
+      typeof import("../../../../src/main/storage")
+    >("../../../../src/main/storage");
+    const paths = c.collaborationPaths(TEST_UID, cid);
+    const contextFile = paths.contextFile(prepared.context.id);
+    const context = await actualStorage.readJson<any>(contextFile);
+    context.gates = context.gates.filter(
+      (gate: any) => gate.step_id !== prepared.step.id,
+    );
+    await actualStorage.writeJson(contextFile, context);
+    const retainedEvents = fs
+      .readFileSync(paths.eventsFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line))
+      .filter(
+        (event) =>
+          event.step_id !== prepared.step.id ||
+          ![
+            "step_attempt_finished",
+            "step_completed",
+            "gate_recorded",
+          ].includes(event.type),
+      );
+    fs.writeFileSync(
+      paths.eventsFile,
+      `${retainedEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const repaired = await (c as any).settleNestedDispatchAbort(
+      TEST_UID,
+      cid,
+      prepared.step.id,
+      "Nested dispatch aborted.",
+    );
+
+    expect(repaired).toMatchObject({ status: "skipped" });
+    expect(repaired.attempts?.[0]).toMatchObject({ status: "cancelled" });
+    const repairedContext = await c.readActiveSharedTaskContext(TEST_UID, cid);
+    expect(
+      repairedContext?.gates.filter(
+        (gate) => gate.step_id === prepared.step.id,
+      ),
+    ).toHaveLength(1);
+    const events = await c.readCollaborationEvents(TEST_UID, cid, 0);
+    for (const type of [
+      "step_attempt_finished",
+      "step_completed",
+      "gate_recorded",
+    ]) {
+      expect(
+        events.filter(
+          (event) =>
+            event.type === type && event.step_id === prepared.step.id,
+        ),
+      ).toHaveLength(1);
+    }
+  });
+
+  it("prepares a failed workflow step for retry without losing attempt metadata", async () => {
+    const c =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const cid = `${TEST_CID}-attempt-prepare-retry`;
+    const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Resume coordinated work",
+      actor_id: "agent-a",
+      actor_name: "Agent A",
+      source_tool: "dispatch_to",
+      task: "Resume coordinated work",
+      context_dependencies: ["decision.runtime"],
+    });
+    await c.beginWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, {
+      actor_id: "agent-a",
+      actor_kind: "agent",
+      actor_name: "Agent A",
+    });
+    await c.finishWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, {
+      status: "failed",
+      failure_code: "coordinator_agent_idle",
+    });
+    await c.startPreparedNestedDispatchStep(TEST_UID, cid, prepared.step.id);
+    await c.finishNestedDispatchStep(TEST_UID, cid, prepared.step.id, {
+      error: "stalled",
+    });
+
+    const retried = await c.prepareWorkflowStepForRetry(
+      TEST_UID,
+      cid,
+      prepared.step.id,
+    );
+
+    expect(retried).toMatchObject({
+      id: prepared.step.id,
+      status: "pending",
+      original_actor_id: "agent-a",
+      current_actor_id: "agent-a",
+      dispatch_intent: "Resume coordinated work",
+      context_dependencies: ["decision.runtime"],
+      attempts: [
+        {
+          attempt: 1,
+          actor_id: "agent-a",
+          actor_kind: "agent",
+          status: "failed",
+          failure_code: "coordinator_agent_idle",
+        },
+      ],
+    });
+    expect(retried.resume_token).toBe(prepared.step.resume_token);
+  });
+
+  it.each(["context", "audit"] as const)(
+    "repairs a pending retry after the $s boundary throws without duplicating audit",
+    async (boundary) => {
+      const c =
+        await import("../../../../src/main/features/group_chat/collaboration");
+      const cid = `${TEST_CID}-retry-partial-${boundary}`;
+      const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+        objective: "Repair a partially durable retry",
+        actor_id: "agent-a",
+        actor_name: "Agent A",
+        source_tool: "run_worker",
+        task: "Repair a partially durable retry",
+      });
+      await c.beginWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, {
+        actor_id: "agent-a",
+        actor_kind: "agent",
+      });
+      await c.finishWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, {
+        status: "failed",
+        failure_code: "runtime_failed",
+      });
+      await c.startPreparedNestedDispatchStep(TEST_UID, cid, prepared.step.id);
+      await c.finishNestedDispatchStep(TEST_UID, cid, prepared.step.id, {
+        error: "structured failure",
+      });
+      let injected = false;
+      (c as any)._setRetryPreparationBoundaryHookForTest(
+        async (candidate: string) => {
+          if (!injected && candidate === boundary) {
+            injected = true;
+            throw new Error(`SECRET_RETRY_${boundary.toUpperCase()}`);
+          }
+        },
+      );
+
+      const retried = await c.prepareWorkflowStepForRetry(
+        TEST_UID,
+        cid,
+        prepared.step.id,
+      );
+      const repeated = await c.prepareWorkflowStepForRetry(
+        TEST_UID,
+        cid,
+        prepared.step.id,
+      );
+
+      expect(injected).toBe(true);
+      expect(retried.status).toBe("pending");
+      expect(repeated.status).toBe("pending");
+      const run = await c.readActiveWorkflowRun(TEST_UID, cid);
+      expect(run?.steps[0]?.status).toBe("pending");
+      const context = await c.readActiveSharedTaskContext(TEST_UID, cid);
+      expect(context?.phase).toBe("step_retry");
+      const events = await c.readCollaborationEvents(TEST_UID, cid, 0);
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "step_retried" &&
+            event.step_id === prepared.step.id,
+        ),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("keeps the failed step authoritative when retry preparation fails before the run write", async () => {
+    const c =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const cid = `${TEST_CID}-retry-prewrite-failure`;
+    const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Do not invent retry durability",
+      actor_id: "agent-a",
+      actor_name: "Agent A",
+      source_tool: "run_worker",
+      task: "Do not invent retry durability",
+    });
+    await c.beginWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, {
+      actor_id: "agent-a",
+      actor_kind: "agent",
+    });
+    await c.finishWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, {
+      status: "failed",
+      failure_code: "runtime_failed",
+    });
+    await c.startPreparedNestedDispatchStep(TEST_UID, cid, prepared.step.id);
+    await c.finishNestedDispatchStep(TEST_UID, cid, prepared.step.id, {
+      error: "structured failure",
+    });
+    (c as any)._setRetryPreparationBoundaryHookForTest(
+      async (boundary: string) => {
+        if (boundary === "run") throw new Error("SECRET_RETRY_PREWRITE");
+      },
+    );
+
+    await expect(
+      c.prepareWorkflowStepForRetry(TEST_UID, cid, prepared.step.id),
+    ).rejects.toThrow("workflow step retry lifecycle invariant");
+
+    const run = await c.readActiveWorkflowRun(TEST_UID, cid);
+    expect(run?.steps[0]?.status).toBe("failed");
+    expect(run?.steps[0]?.attempts).toHaveLength(1);
+    const events = await c.readCollaborationEvents(TEST_UID, cid, 0);
+    expect(events.filter((event) => event.type === "step_retried")).toHaveLength(
+      0,
+    );
+  });
+
+  it("keeps attempt and coordination metadata when retrying a failed step", async () => {
+    const c =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const cid = `${TEST_CID}-attempt-retry`;
+    const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Resume durable work",
+      actor_id: "agent-a",
+      actor_name: "Agent A",
+      source_tool: "dispatch_to",
+      task: "Resume durable work",
+      context_dependencies: ["decision.runtime"],
+    });
+    await c.beginWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, {
+      actor_id: "agent-a",
+      actor_kind: "agent",
+      actor_name: "Agent A",
+    });
+    await c.finishWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, {
+      status: "failed",
+      failure_code: "coordinator_tool_idle",
+    });
+    await c.startPreparedNestedDispatchStep(TEST_UID, cid, prepared.step.id);
+    await c.finishNestedDispatchStep(TEST_UID, cid, prepared.step.id, {
+      error: "runtime failed",
+    });
+
+    const actualStorage = await vi.importActual<
+      typeof import("../../../../src/main/storage")
+    >("../../../../src/main/storage");
+    const runFile = c.collaborationPaths(TEST_UID, cid).runFile(prepared.run.id);
+    const stored = await actualStorage.readJson<any>(runFile);
+    const storedStep = stored.steps.find(
+      (step: { id: string }) => step.id === prepared.step.id,
+    );
+    storedStep.required_capabilities = ["code-edit"];
+    storedStep.access_mode = "write";
+    storedStep.write_scopes = ["src/main/features/group_chat"];
+    await actualStorage.writeJson(runFile, stored);
+
+    const retried = await c.retryWorkflowStep(
+      TEST_UID,
+      cid,
+      prepared.run.id,
+      prepared.step.id,
+    );
+
+    expect(retried).toMatchObject({
+      status: "pending",
+      original_actor_id: "agent-a",
+      current_actor_id: "agent-a",
+      required_capabilities: ["code-edit"],
+      access_mode: "write",
+      write_scopes: ["src/main/features/group_chat"],
+      dispatch_intent: "Resume durable work",
+      context_dependencies: ["decision.runtime"],
+      attempts: [
+        {
+          attempt: 1,
+          actor_id: "agent-a",
+          status: "failed",
+          failure_code: "coordinator_tool_idle",
+        },
+      ],
+    });
+    expect(retried).not.toHaveProperty("started_at");
+    expect(retried).not.toHaveProperty("completed_at");
+    expect(retried).not.toHaveProperty("result_summary");
+    expect(retried.resume_token).toBe(prepared.step.resume_token);
+  });
+});
+
+describe("group_chat collaboration › fail-closed durable access metadata", () => {
+  const corruptions: Array<[string, string, unknown]> = [
+    ["required capabilities non-array", "required_capabilities", "review"],
+    ["required capabilities invalid entry", "required_capabilities", [42]],
+    ["required capabilities empty entry", "required_capabilities", [""]],
+    ["required capabilities overlong", "required_capabilities", ["x".repeat(16_385)]],
+    ["required capabilities excessive", "required_capabilities", Array.from({ length: 257 }, (_, index) => `cap-${index}`)],
+    ["required capabilities duplicate", "required_capabilities", ["review", "review"]],
+    ["required capabilities whitespace", "required_capabilities", [" review"]],
+    ["write scopes non-array", "write_scopes", "src"],
+    ["write scopes invalid entry", "write_scopes", [null]],
+    ["write scopes empty entry", "write_scopes", ["   "]],
+    ["write scopes overlong", "write_scopes", ["x".repeat(16_385)]],
+    ["write scopes excessive", "write_scopes", Array.from({ length: 257 }, (_, index) => `scope-${index}`)],
+    ["write scopes duplicate", "write_scopes", ["src", "src"]],
+    ["write scopes whitespace", "write_scopes", [" src"]],
+    ["bad access mode", "access_mode", "execute"],
+  ];
+
+  it.each(corruptions)("invalidates a run with %s", async (_label, field, value) => {
+    const c = await import("../../../../src/main/features/group_chat/collaboration");
+    const cid = `${TEST_CID}-metadata-${String(_label).replace(/[^a-z0-9]+/gi, "-")}`;
+    const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Durable metadata validation",
+      actor_id: "agent-metadata",
+      source_tool: "dispatch_to",
+      task: "Validate metadata",
+      required_capabilities: ["review"],
+      access_mode: "write",
+      write_scopes: ["src"],
+    });
+    const runFile = c.collaborationPaths(TEST_UID, cid).runFile(prepared.run.id);
+    const stored = JSON.parse(fs.readFileSync(runFile, "utf8"));
+    stored.steps[0][field] = value;
+    fs.writeFileSync(runFile, JSON.stringify(stored), "utf8");
+
+    await expect(c.readWorkflowRun(TEST_UID, cid, prepared.run.id)).resolves.toBeNull();
+    await expect(
+      c.prepareNestedDispatchStep(TEST_UID, cid, {
+        objective: "Durable metadata validation",
+        actor_id: "agent-metadata",
+        source_tool: "dispatch_to",
+        task: "Validate metadata",
+        resume_step_id: prepared.step.id,
+        resume_token: prepared.step.resume_token,
+        required_capabilities: ["review"],
+        access_mode: "write",
+        write_scopes: ["src"],
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("allows missing durable access metadata for legacy default behavior", async () => {
+    const c = await import("../../../../src/main/features/group_chat/collaboration");
+    const cid = `${TEST_CID}-metadata-legacy-missing`;
+    const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Legacy metadata",
+      actor_id: "agent-legacy",
+      source_tool: "dispatch_to",
+      task: "Legacy task",
+    });
+    const runFile = c.collaborationPaths(TEST_UID, cid).runFile(prepared.run.id);
+    const stored = JSON.parse(fs.readFileSync(runFile, "utf8"));
+    delete stored.steps[0].required_capabilities;
+    delete stored.steps[0].access_mode;
+    delete stored.steps[0].write_scopes;
+    fs.writeFileSync(runFile, JSON.stringify(stored), "utf8");
+
+    await expect(c.readWorkflowRun(TEST_UID, cid, prepared.run.id)).resolves.toMatchObject({
+      steps: [expect.not.objectContaining({
+        required_capabilities: expect.anything(),
+        access_mode: expect.anything(),
+        write_scopes: expect.anything(),
+      })],
+    });
+  });
+});
+
+describe("group_chat collaboration › terminal dependency readiness", () => {
+  it("does not let a passed gate satisfy a nonterminal planned-step dependency", async () => {
+    const c = await import("../../../../src/main/features/group_chat/collaboration");
+    const cid = `${TEST_CID}-planned-passed-gate-dependency`;
+    const created = await c.createWorkflowRun(TEST_UID, cid, {
+      objective: "Terminal dependencies only",
+      created_by: "commander",
+    });
+    const planned = await c.planWorkflowSteps(TEST_UID, cid, created.run.id, [
+      { title: "Dependency", actor_id: "agent-dependency", type: "gate" },
+      {
+        title: "Dependent",
+        actor_id: "agent-dependent",
+        depends_on: [],
+      },
+    ]);
+    const dependency = planned.steps[0];
+    const dependentRun = await c.planWorkflowSteps(TEST_UID, cid, created.run.id, [
+      {
+        title: "Actually dependent",
+        actor_id: "agent-dependent",
+        depends_on: [dependency.id],
+      },
+    ]);
+    const dependent = dependentRun.steps[2];
+    await c.startPlannedWorkflowStep(TEST_UID, cid, created.run.id, dependency.id);
+    await c.recordGateResult(TEST_UID, cid, created.run.id, dependency.id, {
+      name: "evidence_present",
+      status: "passed",
+      checks: [{ name: "evidence", status: "passed" }],
+      blocks_workflow: false,
+    });
+
+    await expect(
+      c.startPlannedWorkflowStep(TEST_UID, cid, created.run.id, dependent.id),
+    ).rejects.toThrow(
+      `workflow step dependencies incomplete: ${dependency.id}`,
+    );
+  });
+
+  it("does not let a passed gate satisfy a nonterminal prepared-step dependency", async () => {
+    const c = await import("../../../../src/main/features/group_chat/collaboration");
+    const cid = `${TEST_CID}-prepared-passed-gate-dependency`;
+    const dependency = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Terminal dependencies only",
+      actor_id: "agent-dependency",
+      source_tool: "dispatch_to",
+      task: "Dependency",
+    });
+    await c.startPreparedNestedDispatchStep(TEST_UID, cid, dependency.step.id);
+    await c.recordGateResult(TEST_UID, cid, dependency.run.id, dependency.step.id, {
+      name: "evidence_present",
+      status: "passed",
+      checks: [{ name: "evidence", status: "passed" }],
+      blocks_workflow: false,
+    });
+    const dependent = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Terminal dependencies only",
+      actor_id: "agent-dependent",
+      source_tool: "dispatch_to",
+      task: "Dependent",
+      depends_on: [dependency.step.id],
+    });
+
+    await expect(
+      c.startPreparedNestedDispatchStep(TEST_UID, cid, dependent.step.id),
+    ).rejects.toThrow(
+      `workflow step dependencies incomplete: ${dependency.step.id}`,
+    );
+  });
+});
+
+describe("group_chat collaboration › dependency and access contracts", () => {
+  it("persists normalized nested metadata and blocks start until dependencies complete", async () => {
+    const c =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const cid = `${TEST_CID}-access-contract`;
+    const first = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Dependency order",
+      actor_id: "agent-first",
+      source_tool: "dispatch_to",
+      task: "First task",
+    });
+    const second = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Dependency order",
+      actor_id: "agent-second",
+      source_tool: "dispatch_to",
+      task: "Second task",
+      depends_on: [first.step.id, first.step.id],
+      required_capabilities: [" review ", "review", "typescript"],
+      access_mode: "read",
+      write_scopes: [" src/main ", "src/main", "test"],
+    } as any);
+
+    expect(second.step).toMatchObject({
+      depends_on: [first.step.id],
+      required_capabilities: ["review", "typescript"],
+      access_mode: "read",
+      write_scopes: ["src/main", "test"],
+    });
+    await expect(
+      c.startPreparedNestedDispatchStep(TEST_UID, cid, second.step.id),
+    ).rejects.toThrow(
+      `workflow step dependencies incomplete: ${first.step.id}`,
+    );
+
+    await c.startPreparedNestedDispatchStep(TEST_UID, cid, first.step.id);
+    await c.finishNestedDispatchStep(TEST_UID, cid, first.step.id, {
+      result: "first complete",
+    });
+    await expect(
+      c.startPreparedNestedDispatchStep(TEST_UID, cid, second.step.id),
+    ).resolves.toMatchObject({ status: "running" });
+  });
+
+  it("accepts skipped dependencies but fails safe for unknown and malformed dependency ids", async () => {
+    const c =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const cid = `${TEST_CID}-dependency-safe`;
+    const dependency = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Dependency safety",
+      actor_id: "agent-dependency",
+      source_tool: "dispatch_to",
+      task: "Dependency",
+    });
+    await c.cancelPreparedNestedDispatchStep(
+      TEST_UID,
+      cid,
+      dependency.step.id,
+      "not required",
+    );
+    const allowed = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Dependency safety",
+      actor_id: "agent-allowed",
+      source_tool: "dispatch_to",
+      task: "Allowed after skip",
+      depends_on: [dependency.step.id],
+    } as any);
+    await expect(
+      c.startPreparedNestedDispatchStep(TEST_UID, cid, allowed.step.id),
+    ).resolves.toMatchObject({ status: "running" });
+
+    const unknown = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Dependency safety",
+      actor_id: "agent-unknown",
+      source_tool: "dispatch_to",
+      task: "Unknown dependency",
+      depends_on: ["wstep-unknown"],
+    } as any);
+    await expect(
+      c.startPreparedNestedDispatchStep(TEST_UID, cid, unknown.step.id),
+    ).rejects.toThrow(
+      "workflow step dependencies incomplete: wstep-unknown",
+    );
+
+    await expect(
+      c.prepareNestedDispatchStep(TEST_UID, cid, {
+        objective: "Dependency safety",
+        actor_id: "agent-malformed",
+        source_tool: "dispatch_to",
+        task: "Malformed dependency",
+        depends_on: ["../outside"],
+      } as any),
+    ).rejects.toThrow("invalid workflow step dependency id");
+  });
+
+  it("requires exact normalized dependency, capability, and access contracts for resume", async () => {
+    const c =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const cid = `${TEST_CID}-resume-access-contract`;
+    const dependency = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Resume contract",
+      actor_id: "agent-dependency",
+      source_tool: "dispatch_to",
+      task: "Dependency",
+    });
+    const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Resume contract",
+      actor_id: "agent-resume",
+      source_tool: "dispatch_to",
+      task: "Resume task",
+      depends_on: [dependency.step.id],
+      required_capabilities: ["typescript", "review"],
+      access_mode: "write",
+      write_scopes: ["src", "test"],
+    } as any);
+    const base = {
+      objective: "Resume contract",
+      actor_id: "agent-resume",
+      source_tool: "dispatch_to" as const,
+      task: "Resume task",
+      resume_step_id: prepared.step.id,
+      resume_token: prepared.step.resume_token,
+      depends_on: [dependency.step.id],
+      required_capabilities: ["typescript", "review"],
+      access_mode: "write",
+      write_scopes: ["src", "test"],
+    };
+
+    await expect(
+      c.prepareNestedDispatchStep(TEST_UID, cid, base as any),
+    ).resolves.toMatchObject({ step: { id: prepared.step.id } });
+    for (const mismatch of [
+      { depends_on: [] },
+      { required_capabilities: ["typescript"] },
+      { access_mode: "read" },
+      { write_scopes: ["src"] },
+    ]) {
+      await expect(
+        c.prepareNestedDispatchStep(TEST_UID, cid, {
+          ...base,
+          ...mismatch,
+        } as any),
+      ).rejects.toThrow("resume workflow step access contract mismatch");
+    }
+  });
+
+  it("persists plan metadata and preserves it with attempt history across retry", async () => {
+    const c =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const cid = `${TEST_CID}-plan-access-contract`;
+    const created = await c.createWorkflowRun(TEST_UID, cid, {
+      objective: "Plan contract",
+      created_by: "commander",
+    });
+    const planned = await c.planWorkflowSteps(TEST_UID, cid, created.run.id, [
+      {
+        title: "Planned access",
+        actor_id: "agent-plan",
+        depends_on: [],
+        required_capabilities: [" review ", "review"],
+        access_mode: "write",
+        write_scopes: ["src", "src"],
+      } as any,
+    ]);
+    expect(planned.steps[0]).toMatchObject({
+      required_capabilities: ["review"],
+      access_mode: "write",
+      write_scopes: ["src"],
+    });
+
+    const nested = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Plan contract",
+      actor_id: "agent-retry",
+      actor_kind: "agent",
+      source_tool: "run_worker",
+      task: "Retry metadata",
+      required_capabilities: ["typescript"],
+      access_mode: "write",
+      write_scopes: ["src/main"],
+    } as any);
+    await c.startPreparedNestedDispatchStep(TEST_UID, cid, nested.step.id);
+    await c.beginWorkflowStepAttempt(TEST_UID, cid, nested.step.id, {
+      actor_id: "agent-retry",
+      actor_kind: "agent",
+    });
+    await c.finishWorkflowStepAttempt(TEST_UID, cid, nested.step.id, {
+      status: "failed",
+      failure_code: "runtime_failed",
+    });
+    await c.finishNestedDispatchStep(TEST_UID, cid, nested.step.id, {
+      error: "failed",
+    });
+    const retried = await c.prepareWorkflowStepForRetry(
+      TEST_UID,
+      cid,
+      nested.step.id,
+    );
+    expect(retried).toMatchObject({
+      status: "pending",
+      original_actor_id: "agent-retry",
+      required_capabilities: ["typescript"],
+      access_mode: "write",
+      write_scopes: ["src/main"],
+      attempts: [
+        expect.objectContaining({ status: "failed", actor_id: "agent-retry" }),
+      ],
+    });
+  });
+});
+
+describe("group_chat collaboration › handoff finalization failure settlement", () => {
+  function requireSettlement(module: any): (
+    uid: string,
+    cid: string,
+    stepId: string,
+  ) => Promise<any> {
+    expect(typeof module.settleHandoffFinalizationFailure).toBe("function");
+    return module.settleHandoffFinalizationFailure;
+  }
+
+  async function completedHandoff(c: any, cid: string) {
+    const prepared = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Deliver final result",
+      actor_id: "agent-final",
+      actor_name: "Private Final Agent",
+      actor_kind: "agent",
+      source_tool: "hand_off_to",
+      task: "private final task",
+    });
+    await c.startPreparedNestedDispatchStep(TEST_UID, cid, prepared.step.id);
+    await c.beginWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, {
+      actor_id: "agent-final",
+      actor_kind: "agent",
+    });
+    await c.finishWorkflowStepAttempt(TEST_UID, cid, prepared.step.id, {
+      status: "completed",
+    });
+    await c.finishNestedDispatchStep(TEST_UID, cid, prepared.step.id, {
+      result: "private successful Agent output",
+    });
+    return prepared;
+  }
+
+  it("invalidates a completed handoff result, blocks dependents, and appends one idempotent audit", async () => {
+    const c = await import("../../../../src/main/features/group_chat/collaboration");
+    const settle = requireSettlement(c);
+    const cid = `${TEST_CID}-handoff-finalization-failed`;
+    const completed = await completedHandoff(c, cid);
+    const dependent = await c.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Deliver final result",
+      actor_id: "agent-dependent",
+      source_tool: "dispatch_to",
+      task: "consume final result",
+      depends_on: [completed.step.id],
+    });
+
+    const first = await settle(TEST_UID, cid, completed.step.id);
+    const second = await settle(TEST_UID, cid, completed.step.id);
+
+    expect(first).toMatchObject({
+      status: "failed",
+      result_summary: "Handoff finalization failed.",
+      attempts: [expect.objectContaining({ status: "completed" })],
+    });
+    expect(second).toMatchObject({ status: "failed" });
+    const run = await c.readActiveWorkflowRun(TEST_UID, cid);
+    const context = await c.readActiveSharedTaskContext(TEST_UID, cid);
+    expect(run).toMatchObject({
+      status: "failed",
+      phase: "handoff_finalization_failed",
+    });
+    expect(context?.phase).toBe("handoff_finalization_failed");
+    expect(context?.agent_outputs[completed.step.id]).toBeUndefined();
+    expect(
+      context?.gates.find((gate: any) => gate.step_id === completed.step.id),
+    ).toMatchObject({
+      status: "failed",
+      reason: "Handoff finalization failed.",
+      blocks_workflow: false,
+    });
+    await expect(
+      c.startPreparedNestedDispatchStep(TEST_UID, cid, dependent.step.id),
+    ).rejects.toThrow(
+      `workflow step dependencies incomplete: ${completed.step.id}`,
+    );
+    const events = await c.readCollaborationEvents(TEST_UID, cid, 0);
+    const audits = events.filter(
+      (event: any) =>
+        event.type === "handoff_finalization_failed" &&
+        event.step_id === completed.step.id,
+    );
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      summary: "Handoff finalization failed.",
+      payload: { failure_code: "handoff_finalization_failed" },
+    });
+    expect(JSON.stringify(audits)).not.toMatch(
+      /private final task|Private Final Agent|private successful Agent output/,
+    );
+  });
+
+  it.each(["context", "audit"] as const)(
+    "repairs one partial %s write while settling finalization failure",
+    async (boundary) => {
+      const c = await import("../../../../src/main/features/group_chat/collaboration");
+      const settle = requireSettlement(c);
+      const cid = `${TEST_CID}-handoff-finalization-repair-${boundary}`;
+      const completed = await completedHandoff(c, cid);
+      const actualStorage = await vi.importActual<
+        typeof import("../../../../src/main/storage")
+      >("../../../../src/main/storage");
+      const paths = c.collaborationPaths(TEST_UID, cid);
+      let failed = false;
+      storageMocks.writeJson.mockImplementation(async (file, value) => {
+        if (
+          !failed &&
+          boundary === "context" &&
+          file === paths.contextFile(completed.context.id) &&
+          (value as any)?.phase === "handoff_finalization_failed"
+        ) {
+          failed = true;
+          throw new Error("RAW_CONTEXT_FINALIZATION_FAILURE");
+        }
+        return actualStorage.writeJson(file, value);
+      });
+      storageMocks.appendJsonlAtomic.mockImplementation(async (file, value) => {
+        if (
+          !failed &&
+          boundary === "audit" &&
+          (value as any)?.type === "handoff_finalization_failed"
+        ) {
+          failed = true;
+          throw new Error("RAW_AUDIT_FINALIZATION_FAILURE");
+        }
+        return actualStorage.appendJsonlAtomic(file, value);
+      });
+
+      await expect(
+        settle(TEST_UID, cid, completed.step.id),
+      ).resolves.toMatchObject({ status: "failed" });
+      expect(failed).toBe(true);
+      const events = await c.readCollaborationEvents(TEST_UID, cid, 0);
+      expect(
+        events.filter(
+          (event: any) =>
+            event.type === "handoff_finalization_failed" &&
+            event.step_id === completed.step.id,
+        ),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("throws a stable invariant when finalization failure settlement cannot persist", async () => {
+    const c = await import("../../../../src/main/features/group_chat/collaboration");
+    const settle = requireSettlement(c);
+    const cid = `${TEST_CID}-handoff-finalization-invariant`;
+    const completed = await completedHandoff(c, cid);
+    const actualStorage = await vi.importActual<
+      typeof import("../../../../src/main/storage")
+    >("../../../../src/main/storage");
+    const runFile = c.collaborationPaths(TEST_UID, cid).runFile(completed.run.id);
+    storageMocks.writeJson.mockImplementation(async (file, value) => {
+      if (
+        file === runFile &&
+        (value as any)?.steps?.some(
+          (step: any) =>
+            step.id === completed.step.id && step.status === "failed",
+        )
+      ) {
+        throw new Error("RAW_FINALIZATION_INVARIANT /private/path token=secret");
+      }
+      return actualStorage.writeJson(file, value);
+    });
+
+    const error = await settle(TEST_UID, cid, completed.step.id).catch(
+      (caught: unknown) => caught as Error,
+    );
+    expect(error).toMatchObject({
+      name: "Error",
+      message: "handoff finalization settlement invariant",
+    });
+    expect(String(error)).not.toContain("RAW_FINALIZATION_INVARIANT");
   });
 });

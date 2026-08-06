@@ -3,7 +3,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { isPathAllowed } from '../../../src/main/util/path-sandbox';
+import {
+  canonicalizePath,
+  isFileSystemCaseSensitive,
+  isPathAllowed,
+} from '../../../src/main/util/path-sandbox';
 
 let tmpRoot: string;
 let workspace: string;
@@ -104,5 +108,55 @@ describe('path-sandbox › isPathAllowed', () => {
     } finally {
       fs.rmSync(wsB, { recursive: true, force: true });
     }
+  });
+});
+
+
+describe('path-sandbox › canonical path identity', () => {
+  it('canonicalizes existing symlink aliases to one path', () => {
+    const target = path.join(workspace, 'canonical-target');
+    const alias = path.join(workspace, 'canonical-alias');
+    fs.mkdirSync(target, { recursive: true });
+    try { fs.symlinkSync(target, alias, 'dir'); }
+    catch { return; }
+    try {
+      expect(canonicalizePath(alias)).toBe(canonicalizePath(target));
+    } finally {
+      fs.rmSync(alias, { force: true });
+      fs.rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('canonicalizes prospective children through the nearest existing symlink ancestor', () => {
+    const target = path.join(workspace, 'prospective-target');
+    const alias = path.join(workspace, 'prospective-alias');
+    fs.mkdirSync(target, { recursive: true });
+    try { fs.symlinkSync(target, alias, 'dir'); }
+    catch { return; }
+    try {
+      expect(canonicalizePath(path.join(alias, 'future', 'file.txt'))).toBe(
+        path.join(canonicalizePath(target), 'future', 'file.txt'),
+      );
+    } finally {
+      fs.rmSync(alias, { force: true });
+      fs.rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('detects case sensitivity from existing path resolvability without writing probe files', () => {
+    const before = fs.readdirSync(tmpRoot).sort();
+    const toggled = path.join(tmpRoot, path.basename(workspace).toUpperCase());
+    let expectedSensitive = process.platform !== 'win32';
+    if (process.platform !== 'win32' && toggled !== workspace) {
+      try {
+        expectedSensitive = fs.realpathSync(toggled) !== fs.realpathSync(workspace);
+      } catch {
+        expectedSensitive = true;
+      }
+    } else if (process.platform === 'win32') {
+      expectedSensitive = false;
+    }
+    expect(isFileSystemCaseSensitive(workspace)).toBe(expectedSensitive);
+    expect(fs.readdirSync(tmpRoot).sort()).toEqual(before);
   });
 });
