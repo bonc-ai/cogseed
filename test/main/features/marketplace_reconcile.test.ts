@@ -103,6 +103,41 @@ describe('marketplace reconcile', () => {
     fs.writeFileSync(path.join(dir, 'installs.json'), JSON.stringify(data, null, 2), 'utf8');
   }
 
+  it('does not enqueue builtin installs whose download URLs are empty', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected network request'));
+    writeManifest({
+      version: 1,
+      agents: [{
+        id: 'builtin-agent',
+        version: '1.0.0',
+        published_at: 0,
+        agent_json_url: '',
+        installed_at: 100,
+        seed_source: 'builtin',
+      }],
+      skills: [{
+        id: 'builtin-skill',
+        version: '1.0.0',
+        published_at: 0,
+        bundle_url: '',
+        installed_at: 100,
+        seed_source: 'builtin',
+      }],
+    });
+
+    try {
+      const reconcile = await import('../../../src/main/features/marketplace_reconcile');
+      await expect(reconcile.reconcileInstalls('u1')).resolves.toMatchObject({
+        pulled_agents: 0,
+        pulled_skills: 0,
+        failed: [],
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it('marks an installed item stale when updated_at changes even if version and published_at do not', async () => {
     postJsonMock.mockImplementation(async (p: string) => {
       if (p === '/marketplace/agents/list') {
