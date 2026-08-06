@@ -3432,7 +3432,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 // unexpected throws.
 
 const streamHandlers: Record<string, StreamHandler> = {
-  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, retry_message_id }, ctx, signal) {
+  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, retry_message_id, edit_message_id }, ctx, signal) {
     if (!safeId(cid)) {
       yield { type: 'error', text: 'invalid cid' };
       return;
@@ -3484,19 +3484,30 @@ const streamHandlers: Record<string, StreamHandler> = {
     const sendPromise = (async () => {
       try {
         const retryMessageId = typeof retry_message_id === 'string' ? retry_message_id.trim() : '';
-        sendRes = retryMessageId
-          ? await groupChat.retryFailedTurn({
+        const editMessageId = typeof edit_message_id === 'string' ? edit_message_id.trim() : '';
+        if (retryMessageId && editMessageId) {
+          throw new Error('message retry and edit cannot be combined');
+        }
+        sendRes = editMessageId
+          ? await groupChat.replaceUserMessage({
+              userId: ctx.userId,
+              cid,
+              messageId: editMessageId,
+              text,
+            })
+          : retryMessageId
+            ? await groupChat.retryFailedTurn({
               userId: ctx.userId,
               cid,
               failedMessageId: retryMessageId,
               visibleText: text,
             })
-          : await groupChat.send({
-              userId: ctx.userId, cid, text,
-              ...(atts.length ? { attachments: atts } : {}),
-              ...(useSelections.length ? { use_selections: useSelections } : {}),
-              ...(refs.length ? { references: refs } : {}),
-            });
+            : await groupChat.send({
+                userId: ctx.userId, cid, text,
+                ...(atts.length ? { attachments: atts } : {}),
+                ...(useSelections.length ? { use_selections: useSelections } : {}),
+                ...(refs.length ? { references: refs } : {}),
+              });
       } catch (err) {
         sendErr = err;
       } finally {

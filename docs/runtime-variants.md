@@ -1,20 +1,22 @@
 # Source-run runtime variants
 
 Source worktrees must not share mutable runtime state. The supported variants
-are `main`, `cognition`, `expense`, and `integration`.
+are `main`, `cognition`, `expense`, `integration`, and `optimization`.
 
 ```text
 ~/.orkas/data                                  main data
 ~/.orkas/runtime-variants/cognition/data       cognition data
 ~/.orkas/runtime-variants/expense/data         expense data
 ~/.orkas/runtime-variants/integration/data     integration data
+~/.orkas/runtime-variants/optimization/data    optimization data
 ```
 
 Each source variant also gets its own Electron `userData`, application name,
 application ID, and single-instance lock. A worktree launcher is locked to its
-assigned identity: this worktree always uses `integration`. Run cognition or
-expense module development from their dedicated worktrees; neither `--variant`
-nor `ORKAS_RUNTIME_VARIANT` may override this integration worktree's identity.
+assigned identity: this worktree always uses `integration`. Run cognition,
+expense, or optimization module development from their dedicated worktrees;
+neither `--variant` nor `ORKAS_RUNTIME_VARIANT` may override this integration
+worktree's identity.
 The launcher also rejects an inherited `ORKAS_WORKSPACE_ROOT`, because accepting
 a shared legacy override would defeat the data and Electron `userData` boundary.
 

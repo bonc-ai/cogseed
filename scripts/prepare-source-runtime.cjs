@@ -6,12 +6,13 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const brand = require('../src/resources/brand.json');
 
-const RUNTIME_VARIANTS = Object.freeze(['main', 'cognition', 'expense', 'integration']);
+const RUNTIME_VARIANTS = Object.freeze(['main', 'cognition', 'expense', 'integration', 'optimization']);
 const LABELS = Object.freeze({
   main: 'Main',
   cognition: 'Cognition',
   expense: 'Expense',
   integration: 'Integration',
+  optimization: 'Optimization',
 });
 const LSREGISTER = '/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister';
 const MAIN_EXECUTABLE = path.join('Contents', 'MacOS', 'Electron');

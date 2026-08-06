@@ -305,6 +305,59 @@ export async function rewriteJsonlLine<T extends object>(
   });
 }
 
+/** Result of an atomic JSONL record-set rewrite. The replacement keeps the
+ * original physical record count, so callers that persist JSONL line indexes
+ * retain stable locators after changing several records in one operation. */
+export type RewriteJsonlRecordsResult<T> =
+  | { ok: true; records: T[] }
+  | { ok: false; error: string };
+
+/**
+ * Atomically rewrite every non-empty JSONL record under the same file lock as
+ * appendJsonlAtomic. The mutator must return the same number of records: this
+ * helper is for revisions/tombstones, not compaction, and preserves stable
+ * line-based references used by conversation history.
+ */
+export async function rewriteJsonlRecords<T extends object>(
+  filePath: string,
+  mutate: (records: readonly T[]) => T[] | null,
+): Promise<RewriteJsonlRecordsResult<T>> {
+  const lock = _getLineLock(filePath);
+  return lock.runExclusive<RewriteJsonlRecordsResult<T>>(async () => {
+    let text: string;
+    try { text = await fsp.readFile(filePath, 'utf8'); }
+    catch (err) { return { ok: false, error: `read failed: ${(err as Error).message}` }; }
+
+    const lines = text.split('\n');
+    const hasTrailing = lines.length > 0 && lines[lines.length - 1] === '';
+    const body = hasTrailing ? lines.slice(0, -1) : lines;
+    const records: T[] = [];
+    for (let index = 0; index < body.length; index += 1) {
+      if (!body[index].trim()) return { ok: false, error: `line ${index} is empty` };
+      try { records.push(JSON.parse(body[index]) as T); }
+      catch (err) { return { ok: false, error: `line ${index} not JSON: ${(err as Error).message}` }; }
+    }
+
+    const next = mutate(records);
+    if (next === null) return { ok: false, error: 'mutate aborted' };
+    if (!Array.isArray(next) || next.length !== records.length) {
+      return { ok: false, error: 'mutate changed record count' };
+    }
+
+    const out = next.map((record) => JSON.stringify(record)).join('\n') + (hasTrailing ? '\n' : '');
+    const tmp = atomicTmpPath(filePath);
+    await fsp.writeFile(tmp, out, 'utf8');
+    try {
+      await renameWithRetry(tmp, filePath);
+    } catch (err) {
+      await fsp.rm(tmp, { force: true }).catch(() => {});
+      throw err;
+    }
+    _lineCounts.set(filePath, records.length);
+    return { ok: true, records: next };
+  });
+}
+
 const JSONL_TAIL_CHUNK_BYTES = 64 * 1024;
 
 function _parseJsonlRecord<T>(line: string): T | undefined {

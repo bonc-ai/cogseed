@@ -28,8 +28,8 @@ const SOURCE_VARIANT = 'integration';
 
 describe('runtime variant isolation', () => {
   it('locks every direct source entry to this worktree identity', () => {
-    expect(RUNTIME_VARIANTS).toEqual(['main', 'cognition', 'expense', 'integration']);
-    expect(installRoot.SOURCE_RUNTIME_VARIANTS).toEqual(['cognition', 'expense', 'integration']);
+    expect(RUNTIME_VARIANTS).toEqual(['main', 'cognition', 'expense', 'integration', 'optimization']);
+    expect(installRoot.SOURCE_RUNTIME_VARIANTS).toEqual(['cognition', 'expense', 'integration', 'optimization']);
     expect(packageMeta.orkasSourceRuntimeVariant).toBe(SOURCE_VARIANT);
     expect(installRoot.selectRuntimeVariant({ sourceVariant: SOURCE_VARIANT }))
       .toBe(SOURCE_VARIANT);

@@ -10,8 +10,8 @@ usage() {
   cat <<'EOF'
 Usage: ./run.sh
 
-This worktree is locked to the integration runtime identity. Run cognition or
-expense module development from their dedicated worktrees.
+This worktree is locked to the integration runtime identity. Run cognition,
+expense, or optimization module development from their dedicated worktrees.
 EOF
 }
 

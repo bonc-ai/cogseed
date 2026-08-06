@@ -87,7 +87,7 @@ afterEach(() => {
 
 describe('macOS source runtime bundle contract', () => {
   it('assigns unique bundle names and identifiers to every source variant', () => {
-    const variants = ['main', 'cognition', 'expense', 'integration'];
+    const variants = ['main', 'cognition', 'expense', 'integration', 'optimization'];
     const specs = variants.map((variant) => sourceRuntime.sourceRuntimeBundleSpec(variant));
 
     expect(new Set(specs.map((spec) => spec.appName)).size).toBe(variants.length);
@@ -97,11 +97,12 @@ describe('macOS source runtime bundle contract', () => {
       'com.mateagent.desktop.source.cognition',
       'com.mateagent.desktop.source.expense',
       'com.mateagent.desktop.source.integration',
+      'com.mateagent.desktop.source.optimization',
     ]);
   });
 
   it('declares connector schemes only for integration', () => {
-    for (const variant of ['main', 'cognition', 'expense']) {
+    for (const variant of ['main', 'cognition', 'expense', 'optimization']) {
       expect(sourceRuntime.sourceRuntimeBundleSpec(variant).protocolSchemes).toEqual([]);
     }
     expect(sourceRuntime.sourceRuntimeBundleSpec('integration').protocolSchemes)

@@ -132,6 +132,7 @@ function loadInteractiveHarness() {
   for (const id of [
     'settings-model-authorization-add-btn', 'settings-model-authorization-advanced-btn',
     'settings-model-authorization-advanced', 'settings-model-authorization-list',
+    'settings-model-authorization-status',
     'model-authorization-modal', 'model-authorization-close-btn', 'model-authorization-steps',
     'model-authorization-body', 'model-authorization-status', 'model-authorization-actions',
   ]) registry.set(id, new FakeElement(registry, id));
@@ -181,6 +182,109 @@ function loadInteractiveHarness() {
 }
 
 describe('model authorization interactive wizard', () => {
+  it('renders a localized model-selection warning for an unbound authorization', async () => {
+    const { context, registry, invoke } = loadInteractiveHarness();
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'modelAuthorizations.list') {
+        return Promise.resolve({ ok: true, authorizations: [
+          {
+            authorizationId: 'profile:deepseek:default',
+            label: 'default',
+            authType: 'api_key',
+            source: 'manual',
+            unbound: true,
+            warningCode: 'unbound_authorization',
+            models: [],
+          },
+          {
+            authorizationId: 'profile:deepseek:active',
+            label: 'active',
+            authType: 'api_key',
+            source: 'manual',
+            unbound: false,
+            models: [{ entryId: 'entry-1', model: 'deepseek-v4-flash', default: true }],
+          },
+        ] });
+      }
+      if (channel === 'auth.listProviders') return Promise.resolve({ ok: true, providers: [] });
+      return Promise.resolve({ ok: true });
+    });
+
+    await context.window.initModelAuthorizationSettings();
+
+    const cards = registry.get('settings-model-authorization-list')!.innerHTML;
+    expect(cards).toContain('settings.model_authorization.unbound_title');
+    expect(cards).not.toContain('unbound_authorization');
+    expect(cards).toContain('deepseek-v4-flash');
+  });
+
+  it('keeps an authorization card when removal is not confirmed', async () => {
+    const { context, registry, invoke } = loadInteractiveHarness();
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'modelAuthorizations.list') return Promise.resolve({ ok: true, authorizations: [{
+        authorizationId: 'profile:deepseek:broken', label: 'broken', authType: 'api_key', source: 'manual', unbound: true, models: [],
+      }] });
+      if (channel === 'auth.listProviders') return Promise.resolve({ ok: true, providers: [] });
+      return Promise.resolve({ ok: true });
+    });
+    context.uiConfirm.mockResolvedValue(false);
+
+    await context.window.initModelAuthorizationSettings();
+    await registry.get('settings-model-authorization-list')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'remove-authorization', authorizationId: 'profile:deepseek:broken' } },
+    });
+
+    expect(context.uiConfirm).toHaveBeenCalledWith('settings.model_authorization.confirm_remove_authorization');
+    expect(invoke).not.toHaveBeenCalledWith('modelAuthorizations.remove', expect.anything());
+    expect(registry.get('settings-model-authorization-list')!.innerHTML).toContain('broken');
+  });
+
+  it('removes a confirmed authorization and refreshes model settings', async () => {
+    const { context, registry, invoke, refreshModelGuard } = loadInteractiveHarness();
+    let listed = true;
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'modelAuthorizations.list') return Promise.resolve({ ok: true, authorizations: listed ? [{
+        authorizationId: 'profile:deepseek:broken', label: 'broken', authType: 'api_key', source: 'manual', unbound: true, models: [],
+      }] : [] });
+      if (channel === 'modelAuthorizations.remove') {
+        listed = false;
+        return Promise.resolve({ ok: true, removed: true });
+      }
+      if (channel === 'auth.listProviders') return Promise.resolve({ ok: true, providers: [] });
+      return Promise.resolve({ ok: true });
+    });
+
+    await context.window.initModelAuthorizationSettings();
+    await registry.get('settings-model-authorization-list')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'remove-authorization', authorizationId: 'profile:deepseek:broken' } },
+    });
+
+    expect(invoke).toHaveBeenCalledWith('modelAuthorizations.remove', { authorizationId: 'profile:deepseek:broken' });
+    expect(registry.get('settings-model-authorization-list')!.innerHTML).toContain('settings.entries.empty');
+    expect(refreshModelGuard).toHaveBeenCalledOnce();
+  });
+
+  it('reports a failed authorization removal without clearing the card', async () => {
+    const { context, registry, invoke, refreshModelGuard } = loadInteractiveHarness();
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'modelAuthorizations.list') return Promise.resolve({ ok: true, authorizations: [{
+        authorizationId: 'profile:deepseek:broken', label: 'broken', authType: 'api_key', source: 'manual', unbound: true, models: [],
+      }] });
+      if (channel === 'modelAuthorizations.remove') return Promise.resolve({ ok: false, error: 'removal failed' });
+      if (channel === 'auth.listProviders') return Promise.resolve({ ok: true, providers: [] });
+      return Promise.resolve({ ok: true });
+    });
+
+    await context.window.initModelAuthorizationSettings();
+    await registry.get('settings-model-authorization-list')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'remove-authorization', authorizationId: 'profile:deepseek:broken' } },
+    });
+
+    expect(registry.get('settings-model-authorization-status')!.textContent).toBe('removal failed');
+    expect(registry.get('settings-model-authorization-list')!.innerHTML).toContain('broken');
+    expect(refreshModelGuard).not.toHaveBeenCalled();
+  });
+
   it('opens at API key source selection without an OAuth account route, expands advanced management, and ignores IME enter handlers', async () => {
     const { context, registry } = loadInteractiveHarness();
     await context.window.initModelAuthorizationSettings();

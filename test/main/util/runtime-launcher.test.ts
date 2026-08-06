@@ -30,7 +30,7 @@ describe('source runtime launchers', () => {
   });
 
   it('rejects every shell argument or environment attempt to override integration', () => {
-    for (const variant of ['main', 'cognition', 'expense', 'integration']) {
+    for (const variant of ['main', 'cognition', 'expense', 'integration', 'optimization']) {
       const result = spawnSync('bash', [path.join(root, 'run.sh'), `--variant=${variant}`], {
         encoding: 'utf8',
         env: { ...process.env, ORKAS_RUNTIME_VARIANT: '' },
@@ -39,7 +39,7 @@ describe('source runtime launchers', () => {
       expect(result.stderr).toContain(`Unknown argument: --variant=${variant}`);
     }
 
-    for (const variant of ['main', 'cognition', 'expense']) {
+    for (const variant of ['main', 'cognition', 'expense', 'optimization']) {
       const result = spawnSync('bash', [path.join(root, 'run.sh')], {
         encoding: 'utf8',
         env: { ...process.env, ORKAS_RUNTIME_VARIANT: variant },
