@@ -12365,6 +12365,34 @@ body.model-not-configured .main-content { flex-direction: column; }
 .messaging-secondary-button { border-color: var(--border); background: var(--surface); color: var(--text-2); }
 .messaging-secondary-button:hover:not(:disabled) { background: var(--surface-2); }
 .messaging-action-icon { width: 18px; height: 18px; }
+.messaging-manual-link {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+.messaging-manual-link .messaging-config-card-heading h4 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+.messaging-manual-fields {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.messaging-manual-fields .form-input {
+  min-width: 0;
+  flex: 1 1 220px;
+  min-height: 44px;
+}
+.messaging-manual-bound {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--text-2);
+}
 .messaging-detail-select {
   width: min(360px, 100%);
   min-height: 46px;

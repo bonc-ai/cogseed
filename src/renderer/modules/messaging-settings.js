@@ -467,7 +467,108 @@
     row.appendChild(scan);
     section.appendChild(row);
     renderQrPanel(instance, section);
+    const manual = manualLinkSection(instance);
+    if (manual) section.appendChild(manual);
     return section;
+  }
+
+  function manualLinkSection(instance) {
+    const qrActive = qrIsVisibleFor(instance) || qrIsPending();
+    if (instance.hasCredentials === true) {
+      const bound = el('div', 'messaging-manual-link');
+      const boundRow = el('div', 'messaging-manual-bound');
+      boundRow.append(icon('check-circle', 'messaging-status-icon'), el('span', '', labelFor('messaging.connection_bound', '')));
+      const unbind = el('button', 'btn messaging-secondary-button', labelFor('messaging.unbind', ''));
+      unbind.type = 'button';
+      unbind.disabled = state.updating || qrActive;
+      unbind.addEventListener('click', () => void unbindInstance(instance, unbind));
+      boundRow.appendChild(unbind);
+      bound.appendChild(boundRow);
+      return bound;
+    }
+    if (qrActive) return null;
+    const section = el('div', 'messaging-manual-link');
+    const heading = el('div', 'messaging-config-card-heading');
+    heading.appendChild(el('h4', '', labelFor('messaging.use_existing', '')));
+    heading.appendChild(el('p', '', labelFor('messaging.use_existing_sub', '')));
+    const appIdInput = document.createElement('input');
+    appIdInput.type = 'text';
+    appIdInput.className = 'form-input';
+    appIdInput.placeholder = 'cli_xxxxxxxxxxxxxxxx';
+    appIdInput.autocomplete = 'off';
+    appIdInput.spellcheck = false;
+    appIdInput.setAttribute('aria-label', labelFor('messaging.app_id', ''));
+    const appSecretInput = document.createElement('input');
+    appSecretInput.type = 'password';
+    appSecretInput.className = 'form-input';
+    appSecretInput.placeholder = '••••••••••••••••';
+    appSecretInput.autocomplete = 'off';
+    appSecretInput.spellcheck = false;
+    appSecretInput.setAttribute('aria-label', labelFor('messaging.app_secret', ''));
+    const link = el('button', 'btn messaging-link-button', labelFor('messaging.link', ''));
+    link.type = 'button';
+    link.disabled = state.updating;
+    link.addEventListener('click', () => void linkWithCredentials(instance, appIdInput, appSecretInput, link));
+    const rows = el('div', 'messaging-manual-fields');
+    rows.append(appIdInput, appSecretInput, link);
+    section.append(heading, rows);
+    return section;
+  }
+
+  async function linkWithCredentials(instance, appIdInput, appSecretInput, button) {
+    if (!instance || !instance.id || button.disabled) return;
+    const appId = String(appIdInput.value || '').trim();
+    const appSecret = String(appSecretInput.value || '').trim();
+    if (!/^cli_[0-9a-fA-F]{16}$/.test(appId)) {
+      setNotice(labelFor('messaging.app_id_invalid', ''), 'error');
+      appIdInput.focus();
+      return;
+    }
+    if (!appSecret) {
+      setNotice(labelFor('messaging.app_secret_required', ''), 'error');
+      appSecretInput.focus();
+      return;
+    }
+    button.disabled = true;
+    state.updating = true;
+    setNotice('', '');
+    renderCurrent();
+    try {
+      const result = await invoke('messaging.update', { instanceId: instance.id, secret: { appId, appSecret } });
+      if (!result || !result.instance || typeof result.instance.id !== 'string') {
+        throw new Error(result?.error || labelFor('messaging.link_failed', ''));
+      }
+      state.instances = state.instances.map((candidate) => candidate.id === result.instance.id ? result.instance : candidate);
+      setNotice(labelFor('messaging.link_success', ''), 'success');
+    } catch (error) {
+      setNotice(errorMessage(error, labelFor('messaging.link_failed', '')), 'error');
+    } finally {
+      state.updating = false;
+      renderCurrent();
+    }
+  }
+
+  async function unbindInstance(instance, button) {
+    if (!instance || !instance.id || button.disabled) return;
+    if (typeof window.confirm === 'function'
+      && !window.confirm(labelFor('messaging.unbind_confirm', ''))) return;
+    button.disabled = true;
+    state.updating = true;
+    setNotice('', '');
+    try {
+      if (state.qr.instanceId === instance.id) await cancelQr({ silent: true, render: false });
+      const result = await invoke('messaging.unbind', { instanceId: instance.id });
+      if (!result || !result.instance || typeof result.instance.id !== 'string') {
+        throw new Error(result?.error || labelFor('messaging.unbind_failed', ''));
+      }
+      state.instances = state.instances.map((candidate) => candidate.id === result.instance.id ? result.instance : candidate);
+      setNotice(labelFor('messaging.unbind_success', ''), 'success');
+    } catch (error) {
+      setNotice(errorMessage(error, labelFor('messaging.unbind_failed', '')), 'error');
+    } finally {
+      state.updating = false;
+      renderCurrent();
+    }
   }
 
   async function updateInstance(patch, control) {
