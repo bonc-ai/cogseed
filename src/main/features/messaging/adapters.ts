@@ -78,7 +78,16 @@ interface FeishuApiResponse {
 }
 
 interface FeishuBotInfoResponse extends FeishuApiResponse {
+  /** Real shape: the bot payload sits at the top level (not wrapped in `data`). */
+  bot?: { open_id?: string; activate_status?: number; app_name?: string; avatar_url?: string; ip_white_list?: string[] };
+  /** Kept for tolerance of gateway wrappers that still nest under `data`. */
   data?: { open_id?: string };
+}
+
+function parseFeishuBotOpenId(response: FeishuBotInfoResponse): string {
+  const topLevel = response.bot?.open_id?.trim() || '';
+  if (topLevel) return topLevel;
+  return response.data?.open_id?.trim() || '';
 }
 
 interface WecomMessageFrame extends WsFrame<TextMessage> {}
@@ -446,7 +455,7 @@ export class FeishuAdapter implements MessagingCardAdapter {
     if (response.code !== undefined && response.code !== 0) {
       throw new Error(response.msg || 'Feishu bot identity request failed');
     }
-    const openId = typeof response.data?.open_id === 'string' ? response.data.open_id.trim() : '';
+    const openId = parseFeishuBotOpenId(response);
     if (!openId) throw new Error('Feishu bot identity missing open id');
     this.botOpenId = openId;
   }
@@ -539,7 +548,7 @@ export class FeishuAdapter implements MessagingCardAdapter {
       if (response.code !== undefined && response.code !== 0) {
         throw new Error(response.msg || 'Feishu health check failed');
       }
-      const openId = typeof response.data?.open_id === 'string' ? response.data.open_id.trim() : '';
+      const openId = parseFeishuBotOpenId(response);
       if (openId) this.botOpenId = openId;
       return status('connected');
     } catch (error) {
@@ -894,4 +903,4 @@ export function createAdapter(instance: MessagingInstance, secret: MessagingSecr
   return new FeishuAdapter(instance, secret);
 }
 
-export const _adapterTestHooks = { fetchJson, status, normalizeFeishuEvent, normalizeWecomEvent, boundedWecomText };
+export const _adapterTestHooks = { fetchJson, status, normalizeFeishuEvent, normalizeWecomEvent, boundedWecomText, parseFeishuBotOpenId };

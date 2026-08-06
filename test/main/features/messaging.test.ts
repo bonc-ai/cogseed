@@ -728,3 +728,76 @@ describe('messaging manager adapter flow', () => {
     }
   });
 });
+
+describe('feishu bot identity parsing', () => {
+  it('extracts the bot open id from the real bot/v3/info response shape', async () => {
+    const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');
+    const openId = _adapterTestHooks.parseFeishuBotOpenId({
+      code: 0,
+      msg: 'ok',
+      bot: {
+        activate_status: 2,
+        app_name: '飞书',
+        avatar_url: 'https://example.test/avatar.png',
+        ip_white_list: [],
+        open_id: 'ou_9c331defc6a7862b9b9ee9c5b4827680',
+      },
+    });
+    expect(openId).toBe('ou_9c331defc6a7862b9b9ee9c5b4827680');
+  });
+
+  it('accepts the legacy data.open_id wrapper for compatibility', async () => {
+    const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');
+    const openId = _adapterTestHooks.parseFeishuBotOpenId({ code: 0, data: { open_id: 'ou_legacy' } });
+    expect(openId).toBe('ou_legacy');
+  });
+
+  it('returns an empty string when the response has no bot identity', async () => {
+    const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');
+    expect(_adapterTestHooks.parseFeishuBotOpenId({ code: 0, msg: 'ok' })).toBe('');
+    expect(_adapterTestHooks.parseFeishuBotOpenId({ code: 99991, msg: 'system busy' })).toBe('');
+    expect(_adapterTestHooks.parseFeishuBotOpenId({ bot: { open_id: '  ' } })).toBe('');
+  });
+});
+
+describe('feishu adapter bot identity resolution', () => {
+  it('resolves the bot open id from the real bot/v3/info response shape', async () => {
+    const { FeishuAdapter } = await import('../../../src/main/features/messaging/adapters');
+    const instance = {
+      id: 'feishu-identity-test',
+      platform: 'feishu_lark' as const,
+      feishuTenantBrand: 'feishu' as const,
+      displayName: 'Feishu identity test',
+      enabled: true,
+      workspace: { type: 'default' as const },
+      policy: {
+        replyMode: 'every_message' as const,
+        allowUserIds: [],
+        allowGroupIds: [],
+        requireMentionInGroups: true,
+      },
+      status: { kind: 'disconnected' as const, checkedAt: new Date().toISOString() },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const adapter = new FeishuAdapter(instance, {
+      appId: 'cli_aafef89eb9785be8',
+      appSecret: 'fake-secret-for-identity-test',
+    });
+    const request = vi.fn(async () => ({
+      code: 0,
+      msg: 'ok',
+      bot: {
+        activate_status: 2,
+        app_name: '飞书',
+        avatar_url: 'https://example.test/avatar.png',
+        ip_white_list: [],
+        open_id: 'ou_9c331defc6a7862b9b9ee9c5b4827680',
+      },
+    }));
+    (adapter as unknown as { client: { request: typeof request } }).client.request = request;
+    await (adapter as unknown as { resolveBotIdentity(): Promise<void> }).resolveBotIdentity();
+    expect((adapter as unknown as { botOpenId: string }).botOpenId).toBe('ou_9c331defc6a7862b9b9ee9c5b4827680');
+    expect(request).toHaveBeenCalledWith({ method: 'GET', url: '/open-apis/bot/v3/info' });
+  });
+});
