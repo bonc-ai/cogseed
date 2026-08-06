@@ -1258,3 +1258,523 @@ describe('feishu adapter bot identity resolution', () => {
     expect(request).toHaveBeenCalledWith({ method: 'GET', url: '/open-apis/bot/v3/info' });
   });
 });
+
+describe('messaging per-chat inbound serialization', () => {
+  it('processes concurrent inbound messages from the same chat one at a time', async () => {
+    const order: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const groupSend = vi.fn(async (input: { text?: string }) => {
+      order.push(input.text ?? '');
+      if (order.length === 1) await firstGate;
+      return { ok: true };
+    });
+    const subscribe = vi.fn(() => () => {});
+    const adapter: MessagingCardAdapter = {
+      platform: 'feishu_lark',
+      async start(signal, callbacks) {
+        await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      async stop() {},
+      async checkHealth() {
+        return { kind: 'connected', checkedAt: new Date().toISOString() };
+      },
+      async sendMessage() {
+        return {};
+      },
+      async sendCard() {
+        return {};
+      },
+      async updateCard() {
+        return {};
+      },
+    };
+
+    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
+      createAdapter: vi.fn(() => adapter),
+    }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe }));
+
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const created = await registry.createInstance('user-1', {
+        platform: 'feishu_lark',
+        displayName: 'Feishu bot',
+        responseMode: 'text',
+        policy: { allowUserIds: ['ou_sender_1'] },
+        secret: { appId: 'cli_1234567890abcdef', appSecret: 'app-secret' },
+      });
+      await manager.setEnabled('user-1', created.id, true);
+      await vi.waitFor(async () => {
+        const instances = await manager.listInstances('user-1');
+        expect(instances[0]?.status.kind).toBe('connected');
+      });
+      const envelope = (externalMessageId: string, text: string) => ({
+        platform: 'feishu_lark' as const,
+        instanceId: created.id,
+        externalMessageId,
+        externalChatId: 'oc_serial',
+        externalUserId: 'ou_sender_1',
+        text,
+        isGroup: false,
+        mentionPresent: false,
+        receivedAt: new Date().toISOString(),
+      });
+
+      const first = manager.ingestInbound('user-1', envelope('om_serial_1', 'first'));
+      // The first message blocks inside groupChat.send; the second one must
+      // wait on the per-chat lock instead of entering the chat concurrently.
+      await vi.waitFor(() => expect(order).toEqual(['first']));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(order).toEqual(['first']);
+      releaseFirst?.();
+      const second = manager.ingestInbound('user-1', envelope('om_serial_2', 'second'));
+      await Promise.all([first, second]);
+      expect(order).toEqual(['first', 'second']);
+      await manager.stopForUser('user-1');
+    } finally {
+      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      vi.doUnmock('../../../src/main/features/group_chat');
+      vi.doUnmock('../../../src/main/features/group_chat/bus');
+      vi.resetModules();
+    }
+  });
+});
+
+describe('messaging streaming card concurrency', () => {
+  it('never creates a second card when deltas arrive during an in-flight flush', async () => {
+    let busListener: ((event: unknown) => void) | undefined;
+    let releaseSend: ((value: { deliveryId: string }) => void) | undefined;
+    const sendGate = new Promise<{ deliveryId: string }>((resolve) => {
+      releaseSend = resolve;
+    });
+    const sendCard = vi.fn(() => sendGate);
+    const updateCard = vi.fn(async () => ({}));
+    const subscribe = vi.fn((_uid: string, _cid: string, listener: (event: unknown) => void) => {
+      busListener = listener;
+      return () => { busListener = undefined; };
+    });
+    const groupSend = vi.fn(async () => ({ ok: true }));
+    const adapter: MessagingCardAdapter = {
+      platform: 'feishu_lark',
+      async start(signal, callbacks) {
+        await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      async stop() {},
+      async checkHealth() {
+        return { kind: 'connected', checkedAt: new Date().toISOString() };
+      },
+      async sendMessage() {
+        return {};
+      },
+      sendCard,
+      updateCard,
+    };
+
+    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
+      createAdapter: vi.fn(() => adapter),
+    }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe }));
+
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const created = await registry.createInstance('user-1', {
+        platform: 'feishu_lark',
+        displayName: 'Feishu bot',
+        responseMode: 'streaming_card',
+        policy: { allowUserIds: ['ou_sender_1'] },
+        secret: { appId: 'cli_1234567890abcdef', appSecret: 'app-secret' },
+      });
+      await manager.setEnabled('user-1', created.id, true);
+      await vi.waitFor(async () => {
+        const instances = await manager.listInstances('user-1');
+        expect(instances[0]?.status.kind).toBe('connected');
+      });
+      const inbound = await manager.ingestInbound('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'om_concurrent_1',
+        externalChatId: 'oc_concurrent',
+        externalUserId: 'ou_sender_1',
+        text: 'hello',
+        isGroup: false,
+        mentionPresent: false,
+        receivedAt: new Date().toISOString(),
+      });
+      expect(inbound.accepted).toBe(true);
+
+      // First delta schedules flush 1, which blocks on the sendCard gate.
+      busListener?.({
+        type: 'process', cid: inbound.cid, actor: 'agent', turn_id: 'turn-1',
+        data: { type: 'delta', text: 'start ' },
+      });
+      await vi.waitFor(() => expect(sendCard).toHaveBeenCalledTimes(1));
+
+      // Deltas that arrive while flush 1 is awaiting the network must only
+      // accumulate — they must not schedule a second concurrent sendCard.
+      busListener?.({
+        type: 'process', cid: inbound.cid, actor: 'agent', turn_id: 'turn-1',
+        data: { type: 'delta', text: 'more ' },
+      });
+      busListener?.({
+        type: 'process', cid: inbound.cid, actor: 'agent', turn_id: 'turn-1',
+        data: { type: 'delta', text: 'final' },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      expect(sendCard).toHaveBeenCalledTimes(1);
+
+      // Release flush 1; the trailing flush must update the existing card
+      // instead of creating a second one.
+      releaseSend?.({ deliveryId: 'om_card_1' });
+      await vi.waitFor(() => expect(updateCard).toHaveBeenCalledTimes(1));
+      expect(sendCard).toHaveBeenCalledTimes(1);
+      expect(updateCard.mock.calls[0]?.[1]).toMatchObject({
+        elements: [{ tag: 'markdown', content: 'start more final' }],
+      });
+      await manager.stopForUser('user-1');
+    } finally {
+      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      vi.doUnmock('../../../src/main/features/group_chat');
+      vi.doUnmock('../../../src/main/features/group_chat/bus');
+      vi.resetModules();
+    }
+  });
+});
+
+describe('messaging tool chrome', () => {
+  it('renders Hermes-style tool lines with emoji, name and truncated preview', async () => {
+    const { _managerTestHooks } = await import('../../../src/main/features/messaging/manager');
+    expect(_managerTestHooks.renderToolLine('web_search', { query: 'site:openai.com Codex 2026' }))
+      .toBe('🔍 web_search: "site:openai.com Codex 2026"');
+    expect(_managerTestHooks.renderToolLine('terminal', { command: 'ollama run qwen3-vl:8b hello' }))
+      .toBe('🖥️ terminal: "ollama run qwen3-vl:8b hello"');
+    // Unknown tools fall back to the default emoji; long previews truncate.
+    const long = _managerTestHooks.renderToolLine('write_file', { path: '/a/very/long/path/that/exceeds/the/forty/character/preview/cap/definitely' });
+    expect(long.startsWith('✍️ write_file: "')).toBe(true);
+    expect(long.length).toBeLessThanOrEqual(60);
+    expect(long.endsWith('…"')).toBe(true);
+  });
+
+  it('extracts tool lines from bus process events', async () => {
+    const { _managerTestHooks } = await import('../../../src/main/features/messaging/manager');
+    const lines = _managerTestHooks.toolLinesFromProcessEvent({
+      type: 'process',
+      cid: 'c',
+      turn_id: 't1',
+      data: {
+        type: 'event',
+        event: {
+          stream: 'tool',
+          data: { phase: 'start', id: 'call_1', name: 'web_search', arguments: { query: 'hello' } },
+        },
+      },
+    } as never);
+    expect(lines).toEqual(['🔍 web_search: "hello"']);
+    expect(_managerTestHooks.toolLinesFromProcessEvent({
+      type: 'process', cid: 'c', turn_id: 't1', data: { type: 'delta', text: 'x' },
+    } as never)).toEqual([]);
+    expect(_managerTestHooks.toolLinesFromProcessEvent({
+      type: 'process', cid: 'c', turn_id: 't1',
+      data: { type: 'event', event: { stream: 'tool', data: { phase: 'end', id: 'call_1', name: 'web_search' } } },
+    } as never)).toEqual([]);
+  });
+
+  it('shows tool chrome inside the streaming card and keeps it at finalize', async () => {
+    let busListener: ((event: unknown) => void) | undefined;
+    const sendCard = vi.fn(async () => ({ deliveryId: 'om_card_tool' }));
+    const updateCard = vi.fn(async () => ({}));
+    const subscribe = vi.fn((_uid: string, _cid: string, listener: (event: unknown) => void) => {
+      busListener = listener;
+      return () => { busListener = undefined; };
+    });
+    const groupSend = vi.fn(async () => ({ ok: true }));
+    const adapter: MessagingCardAdapter = {
+      platform: 'feishu_lark',
+      async start(signal, callbacks) {
+        await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      async stop() {},
+      async checkHealth() {
+        return { kind: 'connected', checkedAt: new Date().toISOString() };
+      },
+      async sendMessage() {
+        return {};
+      },
+      sendCard,
+      updateCard,
+    };
+
+    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
+      createAdapter: vi.fn(() => adapter),
+    }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe }));
+
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const created = await registry.createInstance('user-1', {
+        platform: 'feishu_lark',
+        displayName: 'Feishu bot',
+        responseMode: 'streaming_card',
+        policy: { allowUserIds: ['ou_sender_1'] },
+        secret: { appId: 'cli_1234567890abcdef', appSecret: 'app-secret' },
+      });
+      await manager.setEnabled('user-1', created.id, true);
+      await vi.waitFor(async () => {
+        const instances = await manager.listInstances('user-1');
+        expect(instances[0]?.status.kind).toBe('connected');
+      });
+      const inbound = await manager.ingestInbound('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'om_tool_1',
+        externalChatId: 'oc_tool',
+        externalUserId: 'ou_sender_1',
+        text: 'search for me',
+        isGroup: false,
+        mentionPresent: false,
+        receivedAt: new Date().toISOString(),
+      });
+      expect(inbound.accepted).toBe(true);
+
+      // Tool start event → tool chrome appears in the card before any text.
+      busListener?.({
+        type: 'process', cid: inbound.cid, actor: 'agent', turn_id: 'turn-tool',
+        data: {
+          type: 'event',
+          event: { stream: 'tool', data: { phase: 'start', id: 'call_1', name: 'web_search', arguments: { query: 'Codex 2026' } } },
+        },
+      });
+      busListener?.({
+        type: 'process', cid: inbound.cid, actor: 'agent', turn_id: 'turn-tool',
+        data: { type: 'delta', text: '结果如下' },
+      });
+      await vi.waitFor(() => expect(sendCard).toHaveBeenCalledTimes(1));
+      const card = sendCard.mock.calls[0]?.[1];
+      expect(card.elements[0]).toMatchObject({
+        tag: 'markdown',
+        content: expect.stringContaining('🔍 web_search: "Codex 2026"'),
+      });
+      expect(card.elements[1]).toMatchObject({ tag: 'hr' });
+
+      // Finalize keeps the tool chrome and appends the final text.
+      busListener?.({
+        type: 'message', cid: inbound.cid, turn_end: true, turn_id: 'turn-tool',
+        msg: { id: 'reply-tool', from: 'agent', text: '最终回答' },
+      });
+      await vi.waitFor(() => expect(updateCard).toHaveBeenCalledTimes(1));
+      const finalCard = updateCard.mock.calls[0]?.[1];
+      expect(finalCard.elements[0].content).toContain('🔍 web_search: "Codex 2026"');
+      expect(finalCard.elements[2].content).toBe('最终回答');
+      await manager.stopForUser('user-1');
+    } finally {
+      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      vi.doUnmock('../../../src/main/features/group_chat');
+      vi.doUnmock('../../../src/main/features/group_chat/bus');
+      vi.resetModules();
+    }
+  });
+
+  it('merges tool chrome into the plain-text reply', async () => {
+    let busListener: ((event: unknown) => void) | undefined;
+    const sendMessage = vi.fn(async () => ({ deliveryId: 'om_text_tool' }));
+    const subscribe = vi.fn((_uid: string, _cid: string, listener: (event: unknown) => void) => {
+      busListener = listener;
+      return () => { busListener = undefined; };
+    });
+    const groupSend = vi.fn(async () => ({ ok: true }));
+    const adapter: MessagingAdapter = {
+      platform: 'feishu_lark',
+      async start(signal, callbacks) {
+        await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      async stop() {},
+      async checkHealth() {
+        return { kind: 'connected', checkedAt: new Date().toISOString() };
+      },
+      sendMessage,
+    };
+
+    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
+      createAdapter: vi.fn(() => adapter),
+    }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe }));
+
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const created = await registry.createInstance('user-1', {
+        platform: 'feishu_lark',
+        displayName: 'Feishu bot',
+        responseMode: 'text',
+        policy: { allowUserIds: ['ou_sender_1'] },
+        secret: { appId: 'cli_1234567890abcdef', appSecret: 'app-secret' },
+      });
+      await manager.setEnabled('user-1', created.id, true);
+      await vi.waitFor(async () => {
+        const instances = await manager.listInstances('user-1');
+        expect(instances[0]?.status.kind).toBe('connected');
+      });
+      const inbound = await manager.ingestInbound('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'om_text_tool_1',
+        externalChatId: 'oc_text_tool',
+        externalUserId: 'ou_sender_1',
+        text: 'search',
+        isGroup: false,
+        mentionPresent: false,
+        receivedAt: new Date().toISOString(),
+      });
+      expect(inbound.accepted).toBe(true);
+
+      busListener?.({
+        type: 'process', cid: inbound.cid, actor: 'agent', turn_id: 'turn-text',
+        data: {
+          type: 'event',
+          event: { stream: 'tool', data: { phase: 'start', id: 'call_1', name: 'web_search', arguments: { query: 'Codex' } } },
+        },
+      });
+      busListener?.({
+        type: 'message', cid: inbound.cid, turn_end: true, turn_id: 'turn-text',
+        msg: { id: 'reply-text', from: 'agent', text: '正文回复' },
+      });
+      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+      const sentText = sendMessage.mock.calls[0]?.[1] as string;
+      expect(sentText).toContain('🔍 web_search: "Codex"');
+      expect(sentText).toContain('正文回复');
+      await manager.stopForUser('user-1');
+    } finally {
+      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      vi.doUnmock('../../../src/main/features/group_chat');
+      vi.doUnmock('../../../src/main/features/group_chat/bus');
+      vi.resetModules();
+    }
+  });
+});
+
+describe('messaging session reset (/new)', () => {
+  it('rotates to a fresh conversation on /new and confirms with a system message', async () => {
+    const groupSend = vi.fn(async () => ({ ok: true }));
+    const sendMessage = vi.fn(async () => ({ deliveryId: 'om_new_confirm' }));
+    const subscribe = vi.fn(() => () => {});
+    const adapter: MessagingAdapter = {
+      platform: 'feishu_lark',
+      async start(signal, callbacks) {
+        await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      async stop() {},
+      async checkHealth() {
+        return { kind: 'connected', checkedAt: new Date().toISOString() };
+      },
+      sendMessage,
+    };
+
+    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
+      createAdapter: vi.fn(() => adapter),
+    }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe }));
+
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const created = await registry.createInstance('user-1', {
+        platform: 'feishu_lark',
+        displayName: 'Feishu bot',
+        responseMode: 'text',
+        policy: { allowUserIds: ['ou_sender_1'] },
+        secret: { appId: 'cli_1234567890abcdef', appSecret: 'app-secret' },
+      });
+      await manager.setEnabled('user-1', created.id, true);
+      await vi.waitFor(async () => {
+        const instances = await manager.listInstances('user-1');
+        expect(instances[0]?.status.kind).toBe('connected');
+      });
+      const envelope = (externalMessageId: string, text: string) => ({
+        platform: 'feishu_lark' as const,
+        instanceId: created.id,
+        externalMessageId,
+        externalChatId: 'oc_reset',
+        externalUserId: 'ou_sender_1',
+        text,
+        isGroup: false,
+        mentionPresent: false,
+        receivedAt: new Date().toISOString(),
+      });
+
+      // First message binds to conversation A.
+      const first = await manager.ingestInbound('user-1', envelope('om_reset_1', 'hello'));
+      expect(first.accepted).toBe(true);
+      expect(groupSend).toHaveBeenCalledTimes(1);
+      const cidA = first.cid;
+      expect(cidA).toBeTruthy();
+
+      // /new rotates to a fresh conversation and sends the confirmation
+      // without consuming a Meta Agent turn.
+      const reset = await manager.ingestInbound('user-1', envelope('om_reset_2', '/new'));
+      expect(reset.accepted).toBe(true);
+      expect(reset.cid).toBeTruthy();
+      expect(reset.cid).not.toBe(cidA);
+      expect(groupSend).toHaveBeenCalledTimes(1); // no commander turn for /new
+      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+      expect(sendMessage.mock.calls[0]?.[1]).toContain('已开始新的对话');
+
+      // The next message continues in the fresh conversation B.
+      const next = await manager.ingestInbound('user-1', envelope('om_reset_3', '继续'));
+      expect(next.accepted).toBe(true);
+      expect(next.cid).toBe(reset.cid);
+      expect(groupSend).toHaveBeenCalledTimes(2);
+      expect(groupSend.mock.calls[1]?.[0]).toMatchObject({ cid: reset.cid });
+      await manager.stopForUser('user-1');
+    } finally {
+      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      vi.doUnmock('../../../src/main/features/group_chat');
+      vi.doUnmock('../../../src/main/features/group_chat/bus');
+      vi.resetModules();
+    }
+  });
+});

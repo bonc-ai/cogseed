@@ -42,11 +42,136 @@ const MAX_RETRY_TIMER_DELAY_MS = 2_147_000_000;
  * card interactive without flooding the API. */
 const CARD_FLUSH_DELAY_MS = 400;
 const CARD_MAX_TEXT_LENGTH = 12_000;
+/** Per-turn cap on rendered tool lines; older lines are dropped so a long
+ * tool-heavy turn cannot blow the card payload. */
+const MAX_TOOL_LINES = 20;
+/** Tool chrome preview length (mirrors Hermes `_tool_preview_max_len`). */
+const TOOL_PREVIEW_MAX_LEN = 40;
+/** System confirmation for the `/new` session-reset command (mirrors Hermes'
+ * `gateway.reset.header_default` banner). */
+const NEW_SESSION_CONFIRMATION = '已开始新的对话。请告诉我接下来要处理什么。';
+
+/** True when the inbound text is a session-reset slash command. */
+function isNewSessionCommand(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed === '/new' || trimmed.startsWith('/new ')
+    || trimmed === '/reset' || trimmed.startsWith('/reset ');
+}
+
+/** Display emoji per tool (mirrors Hermes' tool registry `emoji` fields). */
+const TOOL_EMOJI: Record<string, string> = {
+  web_search: '🔍',
+  web_extract: '📄',
+  read_file: '📖',
+  write_file: '✍️',
+  search_files: '🔎',
+  terminal: '🖥️',
+  run_command: '🖥️',
+  process: '⚙️',
+  vision_analyze: '👁️',
+  analyze_image: '👁️',
+  browser_navigate: '🌐',
+  browser_click: '👆',
+  browser_type: '⌨️',
+  image_generate: '🎨',
+  execute_code: '💻',
+  delegate_task: '🎯',
+};
+const DEFAULT_TOOL_EMOJI = '⚙️';
+
+/** Primary argument used for the one-line preview per tool (mirrors Hermes
+ * `build_tool_preview`'s `primary_args` table). */
+const TOOL_PREVIEW_PRIMARY_ARG: Record<string, string> = {
+  web_search: 'query',
+  web_extract: 'urls',
+  read_file: 'path',
+  write_file: 'path',
+  patch: 'path',
+  search_files: 'pattern',
+  terminal: 'command',
+  run_command: 'command',
+  vision_analyze: 'question',
+  analyze_image: 'question',
+  browser_navigate: 'url',
+  browser_click: 'ref',
+  browser_type: 'text',
+  image_generate: 'prompt',
+  execute_code: 'code',
+  delegate_task: 'goal',
+  process: 'action',
+};
+
+function toolPreviewText(name: string, args: Record<string, unknown>): string {
+  const key = TOOL_PREVIEW_PRIMARY_ARG[name];
+  const raw = key ? args[key] : undefined;
+  let text = typeof raw === 'string' ? raw : JSON.stringify(raw ?? args);
+  text = text.replace(/\s+/g, ' ').trim();
+  if (text.length > TOOL_PREVIEW_MAX_LEN) return `${text.slice(0, TOOL_PREVIEW_MAX_LEN)}…`;
+  return text;
+}
+
+/** Render one tool-call chrome line, e.g. `🔍 web_search: "site:openai.com …"`
+ * (mirrors Hermes `format_tool_event`). */
+function renderToolLine(name: string, args: Record<string, unknown>): string {
+  const emoji = TOOL_EMOJI[name] || DEFAULT_TOOL_EMOJI;
+  return `${emoji} ${name}: "${toolPreviewText(name, args)}"`;
+}
+
+/** Extract tool-call lines from a process event. Returns [] for non-tool
+ * events. The bus tool shape is `{ type: 'event', event: { stream: 'tool',
+ * data: { phase, name, arguments } } }`. */
+function toolLinesFromProcessEvent(event: Extract<GroupEvent, { type: 'process' }>): string[] {
+  const data = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {};
+  if (data.type !== 'event') return [];
+  const inner = data.event && typeof data.event === 'object' ? data.event as Record<string, unknown> : {};
+  if (inner.stream !== 'tool') return [];
+  const toolData = inner.data && typeof inner.data === 'object' ? inner.data as Record<string, unknown> : {};
+  if (toolData.phase !== 'start') return [];
+  const name = typeof toolData.name === 'string' && toolData.name ? toolData.name : '';
+  if (!name) return [];
+  const args = toolData.arguments && typeof toolData.arguments === 'object'
+    ? toolData.arguments as Record<string, unknown>
+    : {};
+  return [renderToolLine(name, args)];
+}
+
+/** Accumulate rendered tool lines for a turn (bounded to MAX_TOOL_LINES). */
+function recordToolLines(runtime: RuntimeInstance, event: Extract<GroupEvent, { type: 'process' }>): void {
+  const lines = toolLinesFromProcessEvent(event);
+  if (!lines.length) return;
+  const turnId = cardEventTurnId(event);
+  if (!turnId) return;
+  let perTurn = runtime.toolLinesByTurn.get(turnId);
+  if (!perTurn) {
+    perTurn = [];
+    runtime.toolLinesByTurn.set(turnId, perTurn);
+  }
+  for (const line of lines) {
+    if (perTurn.length >= MAX_TOOL_LINES) perTurn.shift();
+    perTurn.push(line);
+  }
+}
+
+/** Tool lines of a turn, bounded to the card display cap. */
+function toolLinesForTurn(runtime: RuntimeInstance, turnId: string): string[] {
+  const lines = runtime.toolLinesByTurn.get(turnId);
+  if (!lines || !lines.length) return [];
+  return lines.length > MAX_TOOL_LINES ? lines.slice(-MAX_TOOL_LINES) : lines;
+}
+
+/** Drop per-turn tool lines once the turn is finished. */
+function clearToolLinesForTurn(runtime: RuntimeInstance, turnId: string): void {
+  runtime.toolLinesByTurn.delete(turnId);
+}
 
 interface CardStreamState {
   messageId?: string;
   accumulated: string;
   timer: ReturnType<typeof setTimeout> | null;
+  /** A flush is in flight. Prevents the debounce from scheduling a second
+   * concurrent flush while the first is awaiting the network — two parallel
+   * flushes both see an empty `messageId` and each create their own card. */
+  flushing: boolean;
 }
 
 interface RuntimeInstance {
@@ -65,6 +190,9 @@ interface RuntimeInstance {
   retryScheduledAt: number | null;
   /** Streaming-card state keyed by `binding.key + turn_id`. */
   cardStates: Map<string, CardStreamState>;
+  /** Rendered tool-call chrome lines keyed by turn_id, for both card and
+   * plain-text reply paths. */
+  toolLinesByTurn: Map<string, string[]>;
 }
 
 interface OutboundMessage {
@@ -330,6 +458,25 @@ async function recoverDeliveries(uid: string, runtime: RuntimeInstance): Promise
   await scheduleRetryTimer(uid, runtime);
 }
 
+/** Send the session-reset confirmation through the same ledger-backed path
+ * as ordinary replies, keyed on the inbound command message. */
+async function deliverConfirmationMessage(
+  uid: string,
+  runtime: RuntimeInstance,
+  instance: MessagingInstance,
+  binding: MessagingBinding,
+  envelope: InboundEnvelope,
+): Promise<void> {
+  const text = NEW_SESSION_CONFIRMATION;
+  const key = ledger.deliveryKey(instance.id, envelope.externalMessageId);
+  const begun = await ledger.beginDelivery(
+    uid,
+    beginDeliveryEntry(instance.id, binding, { id: envelope.externalMessageId, text }, text),
+  );
+  if (begun.duplicate) return;
+  await attemptDelivery(uid, runtime, key, begun.entry);
+}
+
 async function deliverGroupMessage(
   uid: string,
   runtime: RuntimeInstance,
@@ -393,13 +540,26 @@ async function attachBindingListener(
 ): Promise<void> {
   if (!isCurrentRuntime(uid, runtime) || runtime.listeners.has(binding.key)) return;
   const streamingEnabled = instance.responseMode === 'streaming_card' && isCardAdapter(runtime.adapter);
+  log.info('messaging binding listener attached', { instanceId: instance.id, key: binding.key, cid: binding.cid, streamingEnabled });
   const unsubscribe = subscribe(uid, binding.cid, (event: GroupEvent) => {
-    if (!isCurrentRuntime(uid, runtime)) return;
+    if (!isCurrentRuntime(uid, runtime)) {
+      log.info('messaging bus event dropped: runtime no longer current', {
+        instanceId: instance.id,
+        key: binding.key,
+        eventType: event.type,
+      });
+      return;
+    }
+    // The listener closure holds the binding snapshot from attach time; the
+    // live binding (fresh replyToMessageId etc.) lives in bindingContexts and
+    // is refreshed on every inbound message. Always send against the latest
+    // so replies reference the message they actually answer.
+    const currentBinding = runtime.bindingContexts.get(binding.key) || binding;
     if (event.type === 'wake_request') {
       // A pending agent wake inside this bound conversation surfaces as an
       // interactive approval card in the same Feishu chat.
       if (event.request.status === 'pending') {
-        void sendWakeApprovalCard(runtime, binding, event.request).catch((error) => {
+        void sendWakeApprovalCard(runtime, currentBinding, event.request).catch((error) => {
           log.warn('messaging wake approval card send failed', {
             instanceId: instance.id,
             error: (error as Error).message,
@@ -409,15 +569,24 @@ async function attachBindingListener(
       return;
     }
     if (event.type === 'process') {
-      if (streamingEnabled) handleCardProcessEvent(uid, runtime, binding, event);
+      // Tool chrome is collected for every response mode; the card path
+      // renders it live while the plain-text path merges it at turn end.
+      recordToolLines(runtime, event);
+      if (streamingEnabled) handleCardProcessEvent(uid, runtime, currentBinding, event);
       return;
     }
     if (event.type === 'turn_silent') {
-      if (streamingEnabled) handleCardTurnSilent(runtime, binding, event);
+      if (streamingEnabled) handleCardTurnSilent(runtime, currentBinding, event);
       return;
     }
     if (!isMessageEvent(event) || event.turn_end !== true) return;
-    void handleTurnEndMessage(uid, runtime, instance, binding, event).catch((error) => {
+    log.info('messaging bus turn-end message event', {
+      instanceId: instance.id,
+      key: binding.key,
+      msgId: event.msg?.id,
+      textLen: typeof event.msg?.text === 'string' ? event.msg.text.length : 0,
+    });
+    void handleTurnEndMessage(uid, runtime, instance, currentBinding, event).catch((error) => {
       log.warn('messaging turn-end delivery failed', {
         instanceId: instance.id,
         error: (error as Error).message,
@@ -460,16 +629,22 @@ function cardEventTurnId(event: { turn_id?: string }): string {
   return typeof event.turn_id === 'string' && event.turn_id ? event.turn_id : '';
 }
 
-function buildStreamCard(title: string, text: string): Record<string, JsonCompatibleValue> {
+function buildStreamCard(title: string, toolLines: string[], text: string): Record<string, JsonCompatibleValue> {
+  const elements: Array<Record<string, JsonCompatibleValue>> = [];
+  if (toolLines.length) {
+    // Tool chrome in inline-code style so each call reads as a monospaced
+    // chip, mirroring Hermes' progress bubbles on Feishu.
+    elements.push({ tag: 'markdown', content: toolLines.map((line) => `\`${line}\``).join('\n') });
+    elements.push({ tag: 'hr' });
+  }
+  elements.push({ tag: 'markdown', content: text || '…' });
   return {
     config: { wide_screen_mode: true },
     header: {
       template: 'blue',
       title: { tag: 'plain_text', content: title.slice(0, 120) },
     },
-    elements: [
-      { tag: 'markdown', content: text || '…' },
-    ],
+    elements,
   };
 }
 
@@ -487,25 +662,48 @@ async function flushCardUpdate(
   key: string,
   state: CardStreamState,
 ): Promise<void> {
-  if (!isCurrentRuntime(uid, runtime) || !state.accumulated) return;
-  const adapter = runtime.adapter;
-  if (!isCardAdapter(adapter)) return;
-  const card = buildStreamCard(runtime.instance.displayName, state.accumulated);
+  if (state.flushing) return;
+  const turnId = key.split('\u0000')[1] || '';
+  const flushedToolCount = toolLinesForTurn(runtime, turnId).length;
+  if (!isCurrentRuntime(uid, runtime) || (!state.accumulated && flushedToolCount === 0)) return;
+  state.flushing = true;
+  const flushedLen = state.accumulated.length;
   try {
+    const adapter = runtime.adapter;
+    if (!isCardAdapter(adapter)) return;
+    const toolLines = toolLinesForTurn(runtime, turnId);
+    const card = buildStreamCard(runtime.instance.displayName, toolLines, state.accumulated);
     if (state.messageId) {
       await adapter.updateCard(state.messageId, card, runtime.controller.signal);
     } else {
       const receipt = await adapter.sendCard(binding.externalChatId, card, runtime.controller.signal, deliveryContext(binding));
       state.messageId = receipt.deliveryId;
+      log.info('messaging streaming card created', {
+        instanceId: runtime.instanceId,
+        turnId: key.split('\u0000')[1] || '',
+        deliveryId: receipt.deliveryId || '',
+        textLen: state.accumulated.length,
+      });
     }
   } catch (error) {
     if (!isCurrentRuntime(uid, runtime) || runtime.controller.signal.aborted) return;
     log.warn('messaging streaming card delivery failed', {
       instanceId: runtime.instanceId,
+      hadMessageId: !!state.messageId,
       error: (error as Error).message,
     });
     clearCardTimer(state);
     runtime.cardStates.delete(key);
+  } finally {
+    state.flushing = false;
+    // Deltas or tool lines that arrived while this flush was awaiting the
+    // network were only accumulated (the debounce saw `flushing` and skipped
+    // scheduling). Trail one more flush so the latest content still reaches
+    // the card.
+    if (isCurrentRuntime(uid, runtime)
+      && (state.accumulated.length > flushedLen || toolLinesForTurn(runtime, turnId).length > flushedToolCount)) {
+      scheduleCardFlush(uid, runtime, binding, key, state);
+    }
   }
 }
 
@@ -516,7 +714,7 @@ function scheduleCardFlush(
   key: string,
   state: CardStreamState,
 ): void {
-  if (state.timer !== null) return;
+  if (state.timer !== null || state.flushing) return;
   state.timer = setTimeout(() => {
     state.timer = null;
     void flushCardUpdate(uid, runtime, binding, key, state);
@@ -530,16 +728,25 @@ function handleCardProcessEvent(
   event: Extract<GroupEvent, { type: 'process' }>,
 ): void {
   const data = event.data && typeof event.data === 'object' ? event.data : {};
-  if (data.type !== 'delta' || typeof data.text !== 'string') return;
+  const isDelta = data.type === 'delta' && typeof data.text === 'string';
+  if (!isDelta && !toolLinesFromProcessEvent(event).length) return;
   const turnId = cardEventTurnId(event);
   if (!turnId) return;
   const key = cardStateKey(binding.key, turnId);
   let state = runtime.cardStates.get(key);
   if (!state) {
-    state = { accumulated: '', timer: null };
+    state = { accumulated: '', timer: null, flushing: false };
     runtime.cardStates.set(key, state);
+    log.info('messaging streaming card state created', {
+      instanceId: runtime.instanceId,
+      turnId,
+      cardStates: runtime.cardStates.size,
+      keys: [...runtime.cardStates.keys()].map((k) => k.split('\u0000')[1] || ''),
+    });
   }
-  state.accumulated = (state.accumulated + data.text).slice(0, CARD_MAX_TEXT_LENGTH);
+  if (isDelta) {
+    state.accumulated = (state.accumulated + data.text).slice(0, CARD_MAX_TEXT_LENGTH);
+  }
   scheduleCardFlush(uid, runtime, binding, key, state);
 }
 
@@ -553,17 +760,38 @@ async function finalizeCardForTurnEnd(
   if (!turnId) return false;
   const key = cardStateKey(binding.key, turnId);
   const state = runtime.cardStates.get(key);
+  log.info('messaging streaming card finalize', {
+    instanceId: runtime.instanceId,
+    key,
+    turnId,
+    statePresent: !!state,
+    cardStates: runtime.cardStates.size,
+  });
   if (!state) return false;
   clearCardTimer(state);
   const message = messageFromEvent(event);
   const finalText = typeof message.text === 'string' && message.text.trim()
     ? message.text.trim().slice(0, CARD_MAX_TEXT_LENGTH)
     : state.accumulated;
+  log.info('messaging streaming card finalize text', {
+    instanceId: runtime.instanceId,
+    messageId: state.messageId || '',
+    finalTextLen: finalText.length,
+    accumulatedLen: state.accumulated.length,
+  });
   if (state.messageId && finalText) {
     const adapter = runtime.adapter;
     if (isCardAdapter(adapter)) {
       try {
-        await adapter.updateCard(state.messageId, buildStreamCard(runtime.instance.displayName, finalText), runtime.controller.signal);
+        await adapter.updateCard(
+          state.messageId,
+          buildStreamCard(runtime.instance.displayName, toolLinesForTurn(runtime, turnId), finalText),
+          runtime.controller.signal,
+        );
+        log.info('messaging streaming card finalized ok', {
+          instanceId: runtime.instanceId,
+          messageId: state.messageId,
+        });
       } catch (error) {
         if (!isCurrentRuntime(uid, runtime) || runtime.controller.signal.aborted) {
           runtime.cardStates.delete(key);
@@ -580,6 +808,7 @@ async function finalizeCardForTurnEnd(
     }
   }
   runtime.cardStates.delete(key);
+  clearToolLinesForTurn(runtime, turnId);
   return true;
 }
 
@@ -597,6 +826,7 @@ function handleCardTurnSilent(
   // An already-sent card keeps its accumulated content; a silent turn only
   // stops further updates. Unsent drafts are dropped without creating a card.
   runtime.cardStates.delete(key);
+  clearToolLinesForTurn(runtime, turnId);
 }
 
 async function handleTurnEndMessage(
@@ -607,11 +837,74 @@ async function handleTurnEndMessage(
   event: Extract<GroupEvent, { type: 'message' }>,
 ): Promise<void> {
   if (!isCurrentRuntime(uid, runtime)) return;
+  const turnId = cardEventTurnId(event);
   const message = messageFromEvent(event);
+  log.info('messaging turn-end handling', {
+    instanceId: instance.id,
+    key: binding.key,
+    responseMode: instance.responseMode,
+    cardAdapter: isCardAdapter(runtime.adapter),
+    turnId,
+    cardStateCount: runtime.cardStates.size,
+  });
   if (instance.responseMode === 'streaming_card' && isCardAdapter(runtime.adapter)) {
     if (await finalizeCardForTurnEnd(uid, runtime, binding, event)) return;
+    log.info('messaging turn-end card finalize skipped, falling back to text delivery', {
+      instanceId: instance.id,
+      key: binding.key,
+      turnId,
+    });
+  }
+  // Plain-text path: merge the turn's tool chrome into the reply so the tool
+  // trail stays visible without emitting a second message (mirrors Hermes'
+  // progress bubbles, folded into the final post).
+  const toolLines = turnId ? toolLinesForTurn(runtime, turnId) : [];
+  if (toolLines.length && typeof message.text === 'string') {
+    message.text = `${toolLines.map((line) => `\`${line}\``).join('\n')}\n\n---\n\n${message.text}`;
   }
   trackOutboundDelivery(uid, runtime, instance, binding, message);
+  if (turnId) clearToolLinesForTurn(runtime, turnId);
+}
+
+/** Per-chat serialization for inbound dispatch (mirrors Hermes
+ * `_handle_message_with_guards`): messages arriving from the same external
+ * chat are processed one at a time so concurrent turns cannot interleave.
+ * Bounded LRU; eviction skips locks that are currently held. */
+const CHAT_LOCKS_MAX = 1000;
+const chatLocks = new Map<string, Mutex>();
+
+function chatLockKey(uid: string, instanceId: string, externalChatId: string): string {
+  return `${uid}:${instanceId}:${externalChatId}`;
+}
+
+function getChatLock(uid: string, instanceId: string, externalChatId: string): Mutex {
+  const key = chatLockKey(uid, instanceId, externalChatId);
+  const existing = chatLocks.get(key);
+  if (existing) {
+    // LRU touch: re-insert so the most recently used lock sits last.
+    chatLocks.delete(key);
+    chatLocks.set(key, existing);
+    return existing;
+  }
+  if (chatLocks.size >= CHAT_LOCKS_MAX) {
+    let evicted = false;
+    for (const [candidateKey, candidate] of chatLocks) {
+      if (!candidate.isLocked()) {
+        chatLocks.delete(candidateKey);
+        evicted = true;
+        break;
+      }
+    }
+    if (!evicted) {
+      // Every lock is held; drop the oldest regardless (Hermes behaves the
+      // same way — the caller for that chat simply gets a fresh lock).
+      const oldestKey = chatLocks.keys().next().value;
+      if (oldestKey !== undefined) chatLocks.delete(oldestKey);
+    }
+  }
+  const lock = new Mutex();
+  chatLocks.set(key, lock);
+  return lock;
 }
 
 async function handleInbound(uid: string, envelope: InboundEnvelope): Promise<MessagingInboundResult> {
@@ -623,8 +916,29 @@ async function handleInbound(uid: string, envelope: InboundEnvelope): Promise<Me
   const instance = loaded.instance;
   if (!instance.enabled) return { accepted: false, duplicate: false, reason: 'instance_disabled' };
   const key = ledger.inboundKey(instance.id, envelope.externalMessageId);
+  // Idempotency reservation happens outside the per-chat lock: the ledger is
+  // itself atomic, so a concurrent duplicate of an in-flight message is
+  // rejected immediately instead of queueing behind the lock.
   const reservation = await ledger.reserveInbound(uid, key, envelope.receivedAt);
   if (reservation.duplicate) return { accepted: false, duplicate: true, cid: reservation.entry.cid };
+  const lock = getChatLock(uid, instance.id, envelope.externalChatId);
+  return lock.runExclusive(() => handleInboundLocked(uid, envelope, instance, key));
+}
+
+async function handleInboundLocked(
+  uid: string,
+  envelope: InboundEnvelope,
+  instance: MessagingInstance,
+  key: string,
+): Promise<MessagingInboundResult> {
+  log.info('messaging inbound envelope received', {
+    instanceId: envelope.instanceId,
+    platform: envelope.platform,
+    externalMessageId: envelope.externalMessageId,
+    isGroup: envelope.isGroup,
+    textLen: typeof envelope.text === 'string' ? envelope.text.length : 0,
+    mentionPresent: envelope.mentionPresent,
+  });
   const decision = evaluateInboundPolicy(instance, envelope);
   if (!decision.allowed) {
     await ledger.completeInbound(uid, key, { status: 'rejected', reason: decision.reason || 'policy_rejected' });
@@ -635,10 +949,51 @@ async function handleInbound(uid: string, envelope: InboundEnvelope): Promise<Me
     await ledger.completeInbound(uid, key, { status: 'rejected', reason: 'empty_message' });
     return { accepted: false, duplicate: false, reason: 'empty_message' };
   }
+  // Session-reset slashes rotate the bound conversation to a fresh cid and
+  // confirm with a system message instead of consuming a Meta Agent turn
+  // (mirrors Hermes' `/new` session reset).
+  if (isNewSessionCommand(text)) {
+    try {
+      const binding = await bindings.resolveOrCreateBinding(uid, instance, envelope, { forceNew: true });
+      const runtime = runtimes.get(uid)?.get(instance.id);
+      if (runtime) {
+        const oldListener = runtime.listeners.get(binding.key);
+        if (oldListener) {
+          oldListener();
+          runtime.listeners.delete(binding.key);
+        }
+        runtime.bindingContexts.set(binding.key, binding);
+        await attachBindingListener(uid, runtime, instance, binding);
+        await deliverConfirmationMessage(uid, runtime, instance, binding, envelope);
+      } else {
+        log.warn('messaging new-session: runtime not present, confirmation skipped', {
+          instanceId: instance.id,
+        });
+      }
+      await ledger.completeInbound(uid, key, { status: 'accepted', cid: binding.cid });
+      return { accepted: true, duplicate: false, cid: binding.cid };
+    } catch (error) {
+      const message = (error as Error).message || 'messaging new-session dispatch failed';
+      await ledger.completeInbound(uid, key, { status: 'failed', reason: message });
+      throw new Error(`messaging new-session dispatch failed: ${message}`);
+    }
+  }
   try {
     const binding = await bindings.resolveOrCreateBinding(uid, instance, envelope);
     const runtime = runtimes.get(uid)?.get(instance.id);
-    if (runtime) await attachBindingListener(uid, runtime, instance, binding);
+    log.info('messaging inbound accepted, dispatching to group chat', {
+      instanceId: instance.id,
+      key,
+      cid: binding.cid,
+      runtimePresent: !!runtime,
+      bindingKey: binding.key,
+    });
+    if (runtime) {
+      // Refresh the live binding (replyToMessageId etc.) so outbound replies
+      // reference the message they actually answer.
+      runtime.bindingContexts.set(binding.key, binding);
+      await attachBindingListener(uid, runtime, instance, binding);
+    }
     const result = await groupChat.send({ userId: uid, cid: binding.cid, text });
     if (!result.ok) throw new Error(result.error || 'group chat enqueue failed');
     await ledger.completeInbound(uid, key, { status: 'accepted', cid: binding.cid });
@@ -757,6 +1112,7 @@ async function startRuntime(uid: string, instanceId: string): Promise<void> {
     retryTimer: null,
     retryScheduledAt: null,
     cardStates: new Map(),
+    toolLinesByTurn: new Map(),
   };
   const callbacks: AdapterCallbacks = {
     onInbound: async (envelope) => {
@@ -764,6 +1120,7 @@ async function startRuntime(uid: string, instanceId: string): Promise<void> {
       return handleInbound(uid, envelope);
     },
     onStatus: async (nextStatus) => {
+      log.info('messaging adapter status change', { instanceId, kind: nextStatus.kind, message: nextStatus.message || '' });
       queueRuntimeStatus(uid, runtime, nextStatus);
     },
     onCardAction: async (action) => handleCardAction(uid, action),
@@ -781,6 +1138,7 @@ async function startRuntime(uid: string, instanceId: string): Promise<void> {
       log.warn('messaging runtime stopped unexpectedly', { instanceId, error: message });
     })
     .finally(async () => {
+      log.info('messaging runtime lifecycle ended', { instanceId, wasCurrent: runtimes.get(uid)?.get(instanceId) === runtime });
       await runtime.statusWrite;
       if (runtimes.get(uid)?.get(instanceId) === runtime) {
         runtimes.get(uid)?.delete(instanceId);
@@ -817,6 +1175,7 @@ async function stopRuntime(uid: string, instanceId: string): Promise<void> {
   clearRetryTimer(runtime);
   for (const state of runtime.cardStates.values()) clearCardTimer(state);
   runtime.cardStates.clear();
+  runtime.toolLinesByTurn.clear();
 
   let stopFailure: Error | null = null;
   try {
@@ -1068,4 +1427,6 @@ export const _managerTestHooks = {
   buildResolvedApprovalCard,
   stopInstance,
   liveStatuses,
+  renderToolLine,
+  toolLinesFromProcessEvent,
 };

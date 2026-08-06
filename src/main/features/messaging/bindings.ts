@@ -181,6 +181,7 @@ export async function resolveOrCreateBinding(
   uid: string,
   instance: MessagingInstance,
   envelope: InboundEnvelope,
+  opts: { forceNew?: boolean } = {},
 ): Promise<MessagingBinding> {
   assertUserId(uid);
   const conversationScope = scopeForEnvelope(envelope);
@@ -189,7 +190,9 @@ export async function resolveOrCreateBinding(
     const data = await readBindings(uid);
     const projectId = await projectForWorkspace(uid, instance);
     const existing = data.bindings[key];
-    if (existing && sameProject(existing, projectId)) {
+    // forceNew rotates the bound conversation (e.g. `/new`): the historical
+    // cid keeps its message file, but new inbound goes to a fresh cid.
+    if (existing && !opts.forceNew && sameProject(existing, projectId)) {
       const refreshed = refreshBinding(existing, envelope);
       data.bindings[key] = refreshed;
       await writeBindings(uid, data);
