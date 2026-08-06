@@ -223,6 +223,27 @@ export async function getDelivery(uid: string, key: string): Promise<DeliveryLed
   return data.entries[key] || null;
 }
 
+/** Reverse lookup of a delivered message by its platform delivery id.
+ * Reaction events carry the outbound message id without any chat context;
+ * this resolves the owning delivery (and its chat) locally so a reaction on
+ * a message we never sent is simply ignored. The ledger keeps terminal
+ * entries, so the match survives the delivery being finished long ago. */
+export async function getDeliveryByExternalId(
+  uid: string,
+  instanceId: string,
+  externalDeliveryId: string,
+): Promise<DeliveryLedgerEntry | null> {
+  assertUserId(uid);
+  assertInstanceId(instanceId);
+  const id = externalDeliveryId.trim();
+  if (!id || id.length > 512) return null;
+  const data = normalizeDelivery(await readJson<Partial<MessagingDeliveryLedgerFile>>(userMessagingDeliveryLedgerFile(uid)));
+  for (const entry of Object.values(data.entries)) {
+    if (entry.instanceId === instanceId && entry.externalDeliveryId === id) return entry;
+  }
+  return null;
+}
+
 export async function beginDelivery(
   uid: string,
   entry: Omit<DeliveryLedgerEntry, 'status' | 'attempts' | 'updatedAt' | 'nextAttemptAt' | 'idempotencyKey'> & {
