@@ -173,9 +173,14 @@ export async function reserveInbound(uid: string, key: string, receivedAt = nowI
   return getLock(inboundLocks, uid).runExclusive(async () => {
     const data = normalizeInbound(await readJson<Partial<MessagingInboundLedgerFile>>(userMessagingInboundLedgerFile(uid)));
     const existing = data.entries[key];
+    // A duplicate entry is an inbound message already consumed (e.g. its id was
+    // marked seen when the burst merger swallowed it into a later batch), so a
+    // redelivery of the same platform message id must keep being rejected
+    // instead of being dispatched again.
     if (existing && (
       existing.status === 'accepted'
       || existing.status === 'rejected'
+      || existing.status === 'duplicate'
       || (existing.status === 'pending' && pendingContains(pendingInbound, uid, key))
     )) {
       return { duplicate: true, entry: { ...existing, status: 'duplicate', updatedAt: nowIso() } };

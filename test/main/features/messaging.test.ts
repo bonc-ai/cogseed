@@ -225,6 +225,18 @@ describe('messaging registry and ledgers', () => {
     expect(cancelledRepeat.duplicate).toBe(true);
   });
 
+  it('keeps rejecting a redelivered inbound id already marked duplicate', async () => {
+    const ledger = await import('../../../src/main/features/messaging/ledger');
+    const key = ledger.inboundKey('bot-1', 'message-1');
+    const first = await ledger.reserveInbound('user-1', key);
+    expect(first.duplicate).toBe(false);
+    await ledger.completeInbound('user-1', first.entry.key, { status: 'duplicate' });
+    const redelivered = await ledger.reserveInbound('user-1', key);
+    expect(redelivered.duplicate).toBe(true);
+    expect(redelivered.entry.status).toBe('duplicate');
+    expect((await ledger.readInbound('user-1', key))?.status).toBe('duplicate');
+  });
+
   it('removes local ledgers idempotently when a robot is deleted', async () => {
     const registry = await import('../../../src/main/features/messaging/registry');
     const manager = await import('../../../src/main/features/messaging/manager');
