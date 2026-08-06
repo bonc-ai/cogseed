@@ -208,6 +208,24 @@ export interface AdapterCallbacks {
    * processing reaction) when the message is rejected or duplicated. */
   onInbound: (envelope: InboundEnvelope) => Promise<MessagingInboundResult>;
   onStatus: (status: MessagingInstanceStatus) => Promise<void>;
+  /** Card button clicks (Feishu interactive cards). Optional: adapters that
+   * never send interactive cards leave it unset. */
+  onCardAction?: (action: CardActionEnvelope) => Promise<MessagingInboundResult>;
+}
+
+/** A button click on an interactive card (e.g. an approval card). The
+ * scanning operator acts as the user; `action` and `payload` come from the
+ * button's `value` so the sending card controls its own semantics. */
+export interface CardActionEnvelope {
+  platform: MessagingPlatform;
+  instanceId: string;
+  /** The message the card lives on; also the dedup key. */
+  externalMessageId: string;
+  externalChatId: string;
+  externalUserId: string;
+  action: string;
+  payload: Record<string, JsonCompatibleValue>;
+  receivedAt: string;
 }
 
 export interface MessagingAdapter {

@@ -5,6 +5,7 @@ import * as wecom from '@wecom/aibot-node-sdk';
 import type { TextMessage, WsFrame } from '@wecom/aibot-node-sdk';
 import type {
   AdapterCallbacks,
+  CardActionEnvelope,
   FeishuTenantBrand,
   InboundEnvelope,
   JsonCompatibleValue,
@@ -236,6 +237,49 @@ function feishuMessageToText(messageType: string, rawContent: string): string {
       return `[${messageType} 消息]`;
   }
 }
+
+interface FeishuCardActionEvent {
+  context?: { open_message_id?: string; open_chat_id?: string };
+  open_message_id?: string;
+  open_chat_id?: string;
+  operator?: { open_id?: string; user_id?: string; name?: string };
+  action?: { tag?: string; value?: Record<string, unknown> };
+}
+
+function normalizeFeishuCardAction(
+  instance: MessagingInstance,
+  event: FeishuCardActionEvent,
+): CardActionEnvelope | null {
+  const messageId = event.context?.open_message_id?.trim() || event.open_message_id?.trim() || '';
+  const chatId = event.context?.open_chat_id?.trim() || event.open_chat_id?.trim() || '';
+  const operatorOpenId = event.operator?.open_id?.trim() || '';
+  if (!messageId || !chatId || !operatorOpenId) return null;
+  const value = event.action?.value && typeof event.action.value === 'object' ? event.action.value : {};
+  const action = typeof value.action === 'string' && value.action.trim()
+    ? value.action.trim()
+    : (event.action?.tag?.trim() || 'unknown');
+  // Buttons only carry JSON-serializable primitives; anything else is dropped.
+  const payload: Record<string, JsonCompatibleValue> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === 'action') continue;
+    if (entry === null || typeof entry === 'string' || typeof entry === 'number' || typeof entry === 'boolean') {
+      payload[key] = entry as JsonCompatibleValue;
+    }
+  }
+  return {
+    platform: 'feishu_lark',
+    instanceId: instance.id,
+    externalMessageId: messageId,
+    externalChatId: chatId,
+    externalUserId: operatorOpenId,
+    action,
+    payload,
+    receivedAt: new Date().toISOString(),
+  };
+}
+
+/** Dedup cache for card clicks keyed by message + operator + action. */
+const CARD_ACTION_DEDUP_MAX = 2048;
 
 function normalizeFeishuEvent(
   instance: MessagingInstance,
@@ -489,6 +533,8 @@ export class FeishuAdapter implements MessagingCardAdapter {
   private identityLookup: Promise<void> | null = null;
   /** inbound message id → reaction id of the active processing indicator */
   private processingReactions = new Map<string, string>();
+  /** card click dedup: message + operator + action identity */
+  private cardActionDedup = new Set<string>();
 
   constructor(instance: MessagingInstance, secret: MessagingSecret) {
     if (!secret.appId || !secret.appSecret) throw new Error('Feishu app credentials missing');
@@ -513,6 +559,22 @@ export class FeishuAdapter implements MessagingCardAdapter {
         const envelope = this.normalize(event);
         if (!envelope || !this.callbacks) return {};
         void this.handleInboundWithReaction(envelope);
+        return {};
+      },
+      'card.action.trigger': async (event: FeishuCardActionEvent) => {
+        if (!this.callbacks?.onCardAction) return {};
+        const envelope = normalizeFeishuCardAction(this.instance, event);
+        if (!envelope) return {};
+        const dedupKey = `${envelope.externalMessageId}\u0000${envelope.externalUserId}\u0000${envelope.action}\u0000${JSON.stringify(envelope.payload)}`;
+        if (this.cardActionDedup.has(dedupKey)) return {};
+        if (this.cardActionDedup.size >= CARD_ACTION_DEDUP_MAX) this.cardActionDedup.clear();
+        this.cardActionDedup.add(dedupKey);
+        void this.callbacks.onCardAction(envelope).catch((error) => {
+          log.warn('Feishu card action dispatch failed', {
+            instanceId: this.instance.id,
+            error: logErrorSummary(error),
+          });
+        });
         return {};
       },
     });
@@ -1047,4 +1109,4 @@ export function createAdapter(instance: MessagingInstance, secret: MessagingSecr
   return new FeishuAdapter(instance, secret);
 }
 
-export const _adapterTestHooks = { fetchJson, status, normalizeFeishuEvent, normalizeWecomEvent, boundedWecomText, parseFeishuBotOpenId, feishuMessageToText };
+export const _adapterTestHooks = { fetchJson, status, normalizeFeishuEvent, normalizeWecomEvent, boundedWecomText, parseFeishuBotOpenId, feishuMessageToText, normalizeFeishuCardAction };

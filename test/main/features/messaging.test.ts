@@ -908,6 +908,126 @@ describe('feishu adapter processing reaction', () => {
   });
 });
 
+describe('feishu card action normalization', () => {
+  const instance = {
+    id: 'feishu-card-test',
+    platform: 'feishu_lark' as const,
+    feishuTenantBrand: 'feishu' as const,
+    displayName: 'Card bot',
+    enabled: true,
+    workspace: { type: 'default' as const },
+    policy: { replyMode: 'every_message' as const, allowUserIds: ['ou_admin'], allowGroupIds: [], requireMentionInGroups: true },
+    status: { kind: 'connected' as const, checkedAt: new Date().toISOString() },
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  it('extracts operator, chat and button value from the SDK event shape', async () => {
+    const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');
+    const action = _adapterTestHooks.normalizeFeishuCardAction(instance, {
+      context: { open_message_id: 'om_card_1', open_chat_id: 'oc_group' },
+      operator: { open_id: 'ou_admin', name: 'Admin' },
+      action: { tag: 'button', value: { action: 'approve', wake_id: 'wake-1' } },
+    });
+    expect(action).toMatchObject({
+      platform: 'feishu_lark',
+      instanceId: 'feishu-card-test',
+      externalMessageId: 'om_card_1',
+      externalChatId: 'oc_group',
+      externalUserId: 'ou_admin',
+      action: 'approve',
+      payload: { wake_id: 'wake-1' },
+    });
+  });
+
+  it('rejects card events missing the message, chat or operator', async () => {
+    const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');
+    expect(_adapterTestHooks.normalizeFeishuCardAction(instance, { operator: { open_id: 'ou_x' } })).toBeNull();
+    expect(_adapterTestHooks.normalizeFeishuCardAction(instance, {
+      context: { open_message_id: 'om_1', open_chat_id: 'oc_1' },
+    })).toBeNull();
+  });
+
+  it('falls back to the button tag when the value has no action field', async () => {
+    const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');
+    const action = _adapterTestHooks.normalizeFeishuCardAction(instance, {
+      context: { open_message_id: 'om_1', open_chat_id: 'oc_1' },
+      operator: { open_id: 'ou_admin' },
+      action: { tag: 'button', value: { wake_id: 'wake-2' } },
+    });
+    expect(action?.action).toBe('button');
+    expect(action?.payload).toEqual({ wake_id: 'wake-2' });
+  });
+});
+
+describe('messaging card action dispatch', () => {
+  it('rejects card clicks from users outside the allowlist', async () => {
+    const registry = await import('../../../src/main/features/messaging/registry');
+    const manager = await import('../../../src/main/features/messaging/manager');
+    const created = await registry.createInstance('user-1', {
+      platform: 'feishu_lark',
+      displayName: 'Card bot',
+      policy: { allowUserIds: ['ou_admin'] },
+      secret: { appId: 'cli_1234567890abcdef', appSecret: 'secret' },
+    });
+    // Enable at the registry level: ingestCardAction only reads config state,
+    // and starting the runtime would construct a real adapter.
+    await registry.updateInstance('user-1', created.id, { enabled: true });
+    const result = await manager.ingestCardAction('user-1', {
+      platform: 'feishu_lark',
+      instanceId: created.id,
+      externalMessageId: 'om_card_1',
+      externalChatId: 'oc_1',
+      externalUserId: 'ou_stranger',
+      action: 'approve',
+      payload: { wake_id: 'wake-1' },
+      receivedAt: new Date().toISOString(),
+    });
+    expect(result).toMatchObject({ accepted: false, reason: 'user_not_allowed' });
+  });
+
+  it('routes approve/deny card actions to the wake approval gate', async () => {
+    const approveWakeRequest = vi.fn(async () => ({ request: { id: 'wake-1' }, approval: {} }));
+    const rejectWakeRequest = vi.fn(async () => ({}));
+    vi.doMock('../../../src/main/features/p3394/wake-service', () => ({
+      approveWakeRequest,
+      rejectWakeRequest,
+    }));
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const created = await registry.createInstance('user-1', {
+        platform: 'feishu_lark',
+        displayName: 'Card bot',
+        policy: { allowUserIds: ['ou_admin'] },
+        secret: { appId: 'cli_1234567890abcdef', appSecret: 'secret' },
+      });
+      // Enable at the registry level: ingestCardAction only reads config state,
+      // and starting the runtime would construct a real adapter.
+      await registry.updateInstance('user-1', created.id, { enabled: true });
+      const base = {
+        platform: 'feishu_lark' as const,
+        instanceId: created.id,
+        externalMessageId: 'om_card_1',
+        externalChatId: 'oc_1',
+        externalUserId: 'ou_admin',
+        receivedAt: new Date().toISOString(),
+      };
+      const approved = await manager.ingestCardAction('user-1', { ...base, action: 'approve', payload: { wake_id: 'wake-1' } });
+      expect(approved.accepted).toBe(true);
+      expect(approveWakeRequest).toHaveBeenCalledWith('user-1', 'wake-1');
+      const denied = await manager.ingestCardAction('user-1', { ...base, action: 'deny', payload: { wake_id: 'wake-2' } });
+      expect(denied.accepted).toBe(true);
+      expect(rejectWakeRequest).toHaveBeenCalledWith('user-1', 'wake-2');
+      const unsupported = await manager.ingestCardAction('user-1', { ...base, action: 'jump', payload: { wake_id: 'wake-3' } });
+      expect(unsupported).toMatchObject({ accepted: false, reason: 'unsupported_card_action' });
+    } finally {
+      vi.doUnmock('../../../src/main/features/p3394/wake-service');
+      vi.resetModules();
+    }
+  });
+});
+
 describe('feishu bot identity parsing', () => {
   it('extracts the bot open id from the real bot/v3/info response shape', async () => {
     const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');

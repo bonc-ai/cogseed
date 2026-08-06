@@ -6,6 +6,7 @@ import * as groupChat from '../group_chat';
 import { subscribe, type GroupEvent } from '../group_chat/bus';
 import type { GroupMessage } from '../group_chat/visibility';
 import * as projects from '../projects';
+import * as wakeService from '../p3394/wake-service';
 import * as registry from './registry';
 import * as bindings from './bindings';
 import * as ledger from './ledger';
@@ -13,6 +14,7 @@ import { evaluateInboundPolicy, stripBotMention } from './policy';
 import { createAdapter } from './adapters';
 import type {
   AdapterCallbacks,
+  CardActionEnvelope,
   DeliveryLedgerEntry,
   InboundEnvelope,
   JsonCompatibleValue,
@@ -615,6 +617,39 @@ async function handleInbound(uid: string, envelope: InboundEnvelope): Promise<Me
   }
 }
 
+/** Buttons on interactive cards are explicit operator actions: the clicker
+ * must be an allowed user (no group-mention requirement), and the payload
+ * decides the handler. Today the only wired action is wake approvals. */
+async function handleCardAction(uid: string, action: CardActionEnvelope): Promise<MessagingInboundResult> {
+  assertUserId(uid);
+  if (!action || typeof action !== 'object' || !action.instanceId || !action.externalUserId || !action.action) {
+    return { accepted: false, duplicate: false, reason: 'invalid_card_action' };
+  }
+  const loaded = await registry.getInstanceWithSecret(uid, action.instanceId);
+  if (!loaded || loaded.instance.platform !== action.platform) {
+    return { accepted: false, duplicate: false, reason: 'instance_not_found' };
+  }
+  const instance = loaded.instance;
+  if (!instance.enabled) return { accepted: false, duplicate: false, reason: 'instance_disabled' };
+  if (!instance.policy.allowUserIds.includes(action.externalUserId)) {
+    return { accepted: false, duplicate: false, reason: 'user_not_allowed' };
+  }
+  const wakeId = typeof action.payload.wake_id === 'string' && action.payload.wake_id.trim()
+    ? action.payload.wake_id.trim()
+    : '';
+  if (!wakeId) return { accepted: false, duplicate: false, reason: 'unsupported_card_action' };
+  if (action.action === 'approve' || action.action === 'approve_once'
+    || action.action === 'approve_session' || action.action === 'approve_always') {
+    await wakeService.approveWakeRequest(uid, wakeId);
+    return { accepted: true, duplicate: false };
+  }
+  if (action.action === 'deny') {
+    await wakeService.rejectWakeRequest(uid, wakeId);
+    return { accepted: true, duplicate: false };
+  }
+  return { accepted: false, duplicate: false, reason: 'unsupported_card_action' };
+}
+
 async function startRuntime(uid: string, instanceId: string): Promise<void> {
   const map = runtimeMap(uid);
   if (map.has(instanceId)) return;
@@ -656,6 +691,7 @@ async function startRuntime(uid: string, instanceId: string): Promise<void> {
     onStatus: async (nextStatus) => {
       queueRuntimeStatus(uid, runtime, nextStatus);
     },
+    onCardAction: async (action) => handleCardAction(uid, action),
   };
 
   map.set(instanceId, runtime);
@@ -920,9 +956,15 @@ export async function ingestInbound(uid: string, envelope: InboundEnvelope): Pro
   return handleInbound(uid, envelope);
 }
 
+export async function ingestCardAction(uid: string, action: CardActionEnvelope): Promise<MessagingInboundResult> {
+  assertUserId(uid);
+  return handleCardAction(uid, action);
+}
+
 export const _managerTestHooks = {
   runtimeMap,
   handleInbound,
+  handleCardAction,
   stopInstance,
   liveStatuses,
 };
