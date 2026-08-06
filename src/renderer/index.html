@@ -32,7 +32,6 @@
         <button class="sidebar-btn" id="skills-btn"><span data-ui-icon="sparkles" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.skills">Skills</span></button>
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connectors">Connectors</span></button>
         <button class="sidebar-btn" id="contexts-btn"><span data-ui-icon="database" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.contexts">Library</span></button>
-        <button class="sidebar-btn" id="evolution-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.evolution">进化控制台</span></button>
         <button class="sidebar-btn" id="personal-ontology-btn"><span data-ui-icon="database" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.personal_ontology">个人本体</span></button>
       </div>
       <div class="sidebar-conversation-nav">
@@ -190,12 +189,6 @@
                 <div class="chat-header-meta" id="chat-header-meta"></div>
               </div>
               <div class="chat-header-actions">
-                <button type="button" class="chat-header-details-btn" id="topbar-evolution-toggle"
-                        data-i18n-title="evolution.enter_title"
-                        data-i18n-aria-label="evolution.enter_title"
-                        title="进化控制台" aria-label="进化控制台">
-                  <span data-ui-icon="git-branch" data-ui-icon-class="chat-header-details-icon"></span>
-                </button>
                 <button type="button" class="chat-header-details-btn" id="chat-agent-status-btn"
                         data-i18n-title="chat.agent_status.toggle_title"
                         data-i18n-aria-label="chat.agent_status.toggle_title"
@@ -370,6 +363,25 @@
 
       <!-- Skills -->
       <section class="panel" id="panel-skills">
+        <div class="skills-cognition-console">
+          <div class="skills-cognition-surface">
+          <header class="skills-cognition-header">
+            <div>
+              <h1 data-i18n="cognition.title">技能资产中心</h1>
+              <p data-i18n="cognition.subtitle">管理技能、复用证明、候选与版本</p>
+            </div>
+          </header>
+          <nav class="skills-cognition-tabs" id="skills-cognition-tabs" role="tablist">
+            <button type="button" class="skills-cognition-tab is-active" data-cognition-page="overview" data-i18n="cognition.overview">总览</button>
+            <button type="button" class="skills-cognition-tab" data-cognition-page="skills" data-i18n="cognition.skills">技能</button>
+            <button type="button" class="skills-cognition-tab" data-cognition-page="candidates" data-i18n="cognition.candidates">候选</button>
+            <button type="button" class="skills-cognition-tab" data-cognition-page="receipts" data-i18n="cognition.receipts">复用证明</button>
+            <button type="button" class="skills-cognition-tab" data-cognition-page="assets" data-i18n="cognition.assets">资产</button>
+          </nav>
+          <section class="skills-cognition-page" id="skills-cognition-overview" data-cognition-page-body="overview">
+            <div id="skills-cognition-overview-body"></div>
+          </section>
+          <section class="skills-cognition-page" id="skills-cognition-skills" data-cognition-page-body="skills" hidden>
         <!-- Grid view (default) -->
         <div class="skills-grid-view" id="skills-grid-view">
           <div class="skills-grid-header">
@@ -422,6 +434,11 @@
                 <div class="skills-doc-section-body" id="skills-detail-extra"></div>
               </section>
 
+              <section class="skills-doc-section" id="skills-section-cognition" style="display:none">
+                <h3 class="skills-doc-section-label" data-i18n="cognition.skill_summary">认知资产摘要</h3>
+                <div class="skills-doc-section-body" id="skills-cognition-summary"></div>
+              </section>
+
               <section class="skills-doc-section skills-usage-section">
                 <h3 class="skills-doc-section-label skills-usage-label">
                   <span data-i18n="skills.label_usage">Usage</span>
@@ -471,6 +488,24 @@
                 <span data-ui-icon="stop" data-ui-icon-class="stop-icon"></span>
               </button>
             </div>
+          </div>
+        </div>
+          </section>
+          <section class="skills-cognition-page" id="skills-cognition-candidates" data-cognition-page-body="candidates" hidden>
+            <div id="skills-cognition-candidates-body"></div>
+          </section>
+          <section class="skills-cognition-page" id="skills-cognition-receipts" data-cognition-page-body="receipts" hidden>
+            <div id="skills-cognition-receipts-body"></div>
+          </section>
+          <section class="skills-cognition-page" id="skills-cognition-assets" data-cognition-page-body="assets" hidden>
+            <div class="ability-assets-tabs" id="ability-assets-tabs" role="tablist" aria-label="能力资产视图">
+              <button type="button" class="ability-assets-tab is-active" data-ability-assets-view="list" data-i18n="cognition.asset_list">资产列表</button>
+              <button type="button" class="ability-assets-tab" data-ability-assets-view="tree" data-i18n="cognition.cognition_tree">认知树</button>
+            </div>
+            <div id="skills-cognition-assets-body"></div>
+            <div class="ability-assets-view-panel" data-ability-assets-view-panel="list" hidden></div>
+            <div class="ability-assets-view-panel" data-ability-assets-view-panel="tree" hidden></div>
+          </section>
           </div>
         </div>
       </section>
@@ -979,17 +1014,6 @@
         </div>
       </section>
 
-
-      <!-- Evolution Console -->
-      <section class="panel" id="panel-evolution">
-        <div class="evo-console">
-          <aside class="evo-console-sidebar">
-            <div class="evo-console-title" data-i18n="evolution.title">进化控制台</div>
-            <nav class="evo-console-nav" id="evo-console-nav"></nav>
-          </aside>
-          <div class="evo-console-content" id="evo-console-body"></div>
-        </div>
-      </section>
 
       <!-- Personal Ontology Candidates -->
       <section class="panel" id="panel-personal-ontology">

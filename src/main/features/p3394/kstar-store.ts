@@ -18,8 +18,8 @@
 
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { Mutex } from 'async-mutex';
 import { createLogger } from '../../logger';
+import { withKstarUserLock } from './kstar-lock';
 
 const log = createLogger('p3394.kstar-store');
 
@@ -43,18 +43,6 @@ export function getPendingEvidencePath(uid: string): string {
   return path.join(userKstarDir(uid), 'pending-evidence.jsonl');
 }
 
-// Per-user mutex for atomic operations
-const userMutexes = new Map<string, Mutex>();
-
-function getUserMutex(uid: string): Mutex {
-  let mutex = userMutexes.get(uid);
-  if (!mutex) {
-    mutex = new Mutex();
-    userMutexes.set(uid, mutex);
-  }
-  return mutex;
-}
-
 // ── Snapshot operations ─────────────────────────────────────────────────
 
 /**
@@ -68,8 +56,7 @@ export async function writeKstarSnapshot(
   uid: string,
   snapshot: unknown,
 ): Promise<void> {
-  const mutex = getUserMutex(uid);
-  await mutex.runExclusive(async () => {
+  await withKstarUserLock(uid, async () => {
     const dir = userKstarDir(uid);
     await fs.mkdir(dir, { recursive: true });
 
@@ -131,8 +118,7 @@ export async function appendPendingEvidence(
   uid: string,
   record: unknown,
 ): Promise<void> {
-  const mutex = getUserMutex(uid);
-  await mutex.runExclusive(async () => {
+  await withKstarUserLock(uid, async () => {
     const dir = userKstarDir(uid);
     await fs.mkdir(dir, { recursive: true });
 
@@ -156,8 +142,7 @@ export async function compactPendingEvidence(
   uid: string,
   folder: (records: unknown[]) => unknown[],
 ): Promise<void> {
-  const mutex = getUserMutex(uid);
-  await mutex.runExclusive(async () => {
+  await withKstarUserLock(uid, async () => {
     const logPath = getPendingEvidencePath(uid);
 
     // Read all records

@@ -1,4 +1,4 @@
-const _shimLog = createLogger('ipc-shim');
+const _shimLog = typeof createLogger === 'function' ? createLogger('ipc-shim') : { warn() {}, info() {}, error() {} };
 // ─── HTTP → IPC shim ─────────────────────────────────────────────────
 // The original app was served over HTTP; every network call went through
 // `apiFetch(url, options)` which wrapped `fetch`. In Electron we route the
@@ -231,6 +231,67 @@ function _hasOrkasInvoke() {
 function _hasOrkasStream() {
   return !!(window.orkas && typeof window.orkas.stream === 'function');
 }
+
+const _mateProjectionCache = new Map();
+const _mateProjectionInflight = new Map();
+let _mateProjectionInvokeOverride = null;
+
+function _mateProjectionInvoke(channel, payload) {
+  if (_mateProjectionInvokeOverride) return _mateProjectionInvokeOverride(channel, payload);
+  if (!_hasOrkasInvoke()) return Promise.reject(new Error('ipc bridge unavailable'));
+  return window.orkas.invoke(channel, payload);
+}
+
+function _mateProjectionEntry(key, loader, onUpdate) {
+  const snapshot = _mateProjectionCache.has(key) ? _mateProjectionCache.get(key) : null;
+  let refresh = _mateProjectionInflight.get(key);
+  if (!refresh) {
+    refresh = Promise.resolve().then(async () => {
+      const next = await loader();
+      _mateProjectionCache.set(key, next);
+      return next;
+    }).finally(() => {
+      _mateProjectionInflight.delete(key);
+    });
+    _mateProjectionInflight.set(key, refresh);
+  }
+  if (typeof onUpdate === 'function') {
+    refresh.then((next) => { try { onUpdate(next); } catch (_) {} }).catch(() => {});
+  }
+  return { snapshot, refresh };
+}
+
+function _mateProjectionSessionList(options) {
+  return _mateProjectionEntry('mate:sessions', async () => {
+    const result = await _mateProjectionInvoke('mate_agent.session.list', {});
+    if (!result || result.ok === false) throw new Error((result && result.error) || 'load failed');
+    return Array.isArray(result.sessions) ? result.sessions : (Array.isArray(result) ? result : []);
+  }, options && options.onUpdate);
+}
+
+function _mateProjectionSessionReference(sessionId) {
+  const id = String(sessionId || '').trim();
+  if (!id) return id;
+  if (/^(?:mate-session-|gconv-|gmember-)/.test(id)) return id;
+  return `gconv-${id}`;
+}
+
+function _mateProjectionSession(sessionId, options) {
+  const reference = _mateProjectionSessionReference(sessionId);
+  const key = `mate:session:${reference}`;
+  return _mateProjectionEntry(key, async () => {
+    const result = await _mateProjectionInvoke('mate_agent.session.read', { sessionId: reference });
+    if (!result || result.ok === false) throw new Error((result && result.error) || 'load failed');
+    return result;
+  }, options && options.onUpdate);
+}
+
+window.mateAgentProjection = window.mateAgentProjection || {
+  setInvoker(fn) { _mateProjectionInvokeOverride = typeof fn === 'function' ? fn : null; },
+  sessions(options) { return _mateProjectionSessionList(options || {}); },
+  session(sessionId, options) { return _mateProjectionSession(sessionId, options || {}); },
+  collaboration(sessionId, options) { return _mateProjectionSession(sessionId, options || {}); },
+};
 
 function _isStreamCancel(err) {
   const msg = err && err.message ? String(err.message) : String(err || '');

@@ -20,7 +20,11 @@ export interface WakeDispatchPayload {
   references?: Array<{ source_cid: string; source_msg_id: string }>;
 }
 
+export type WakeExecutionDomain = 'group_chat' | 'mate';
+
 export interface AgentWakeRequest {
+  execution_domain?: WakeExecutionDomain;
+  execution_scope_id?: string;
   id: string;
   conversation_id: string;
   task_id?: string;
@@ -51,6 +55,8 @@ export interface AgentWakeRequest {
 }
 
 export interface WakeApproval {
+  execution_domain?: WakeExecutionDomain;
+  execution_scope_id?: string;
   id: string;
   request_id: string;
   conversation_id: string;
@@ -72,6 +78,8 @@ export interface WakeState {
 }
 
 export interface EvaluateWakeInput {
+  executionDomain?: WakeExecutionDomain;
+  executionScopeId?: string;
   conversationId: string;
   taskId?: string;
   agentId: string;

@@ -1,0 +1,29 @@
+{
+  "source_revision": "dbe40f765de220829f24a93d947f76108f20c8ca",
+  "capture_command": "node_modules/.bin/tsx scripts/capture-orkas-parity-fixtures.ts --only F-legacy-session-migration-v1",
+  "inputs": {
+    "legacy_filename": "legacy-user-gconv-c1.jsonl",
+    "legacy_session_id": "legacy-user-gconv-c1"
+  },
+  "canonicalization_notes": [
+    "timestamps are replaced with __TIMESTAMP__",
+    "generated ids are normalized by semantic prefix and encounter order",
+    "temporary workspace roots are replaced with __TMP_ROOT__",
+    "object keys are sorted; array order is preserved where it is observable"
+  ],
+  "expected": {
+    "files": [
+      "legacy-user-gconv-c1.jsonl"
+    ],
+    "stats": {
+      "alreadyMigrated": 0,
+      "conflicts": 0,
+      "fieldsRewritten": 0,
+      "renamed": 0,
+      "scanned": 0
+    }
+  },
+  "notes": [
+    "Migration is invoked through the existing public migration function and records conversion counts."
+  ]
+}
