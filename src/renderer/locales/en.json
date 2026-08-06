@@ -2421,5 +2421,16 @@
   "messaging.delete_subtitle": "Remove this bot.",
   "messaging.updated": "Settings updated",
   "messaging.update_failed": "Could not update settings",
-  "messaging.open_failed": "Could not open bot settings"
+  "messaging.open_failed": "Could not open bot settings",
+  "messaging.use_existing": "Use an existing app",
+  "messaging.use_existing_sub": "Already created the bot in the Feishu open platform? Enter its app credentials to link without scanning again.",
+  "messaging.app_id": "App ID",
+  "messaging.app_secret": "App Secret",
+  "messaging.link": "Link",
+  "messaging.link_success": "App credentials linked. Toggle the switch to enable the bot.",
+  "messaging.link_failed": "Failed to link",
+  "messaging.app_id_invalid": "Invalid App ID format (expects cli_ plus 16 hex digits)",
+  "messaging.app_secret_required": "App Secret is required",
+  "messaging.unbind_failed": "Failed to unlink",
+  "messaging.unbind_success": "Unlinked. Scan again or enter credentials to link."
 }

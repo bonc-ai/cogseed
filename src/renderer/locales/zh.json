@@ -2421,5 +2421,16 @@
   "messaging.delete_subtitle": "移除这个机器人。",
   "messaging.updated": "设置已更新",
   "messaging.update_failed": "设置更新失败",
-  "messaging.open_failed": "无法打开机器人设置"
+  "messaging.open_failed": "无法打开机器人设置",
+  "messaging.use_existing": "使用已有应用",
+  "messaging.use_existing_sub": "已在飞书开放平台创建过机器人？直接填入应用凭据关联，无需重新扫码创建。",
+  "messaging.app_id": "App ID",
+  "messaging.app_secret": "App Secret",
+  "messaging.link": "关联",
+  "messaging.link_success": "已关联应用凭据，打开开关即可启用机器人。",
+  "messaging.link_failed": "关联失败",
+  "messaging.app_id_invalid": "App ID 格式不正确（应为 cli_ 加 16 位十六进制）",
+  "messaging.app_secret_required": "请输入 App Secret",
+  "messaging.unbind_failed": "解绑失败",
+  "messaging.unbind_success": "已解绑，可重新扫码或输入凭据关联。"
 }

@@ -2222,5 +2222,19 @@
   "messaging.delete_subtitle": "このボットを削除します。",
   "messaging.updated": "設定を更新しました",
   "messaging.update_failed": "設定を更新できませんでした",
-  "messaging.open_failed": "ボット設定を開けませんでした"
+  "messaging.open_failed": "ボット設定を開けませんでした",
+  "messaging.use_existing": "既存のアプリを使う",
+  "messaging.use_existing_sub": "飛書オープンプラットフォームで作成済みのボットがある場合、アプリの認証情報を入力して連携します（再スキャン不要）。",
+  "messaging.app_id": "App ID",
+  "messaging.app_secret": "App Secret",
+  "messaging.link": "連携",
+  "messaging.link_success": "アプリの認証情報を連携しました。スイッチをオンにするとボットを有効化できます。",
+  "messaging.link_failed": "連携に失敗しました",
+  "messaging.app_id_invalid": "App ID の形式が正しくありません（cli_ と16桁の16進数）",
+  "messaging.app_secret_required": "App Secret を入力してください",
+  "messaging.connection_bound": "連携済み",
+  "messaging.unbind": "連携解除",
+  "messaging.unbind_confirm": "連携を解除すると、認証情報を再入力するまでメッセージを受信できません。続行しますか？",
+  "messaging.unbind_failed": "連携解除に失敗しました",
+  "messaging.unbind_success": "連携を解除しました。再スキャンまたは認証情報の入力で連携できます。"
 }

@@ -2222,5 +2222,19 @@
   "messaging.delete_subtitle": "Remova este bot.",
   "messaging.updated": "Configurações atualizadas",
   "messaging.update_failed": "Não foi possível atualizar as configurações",
-  "messaging.open_failed": "Não foi possível abrir as configurações do bot"
+  "messaging.open_failed": "Não foi possível abrir as configurações do bot",
+  "messaging.use_existing": "Usar um aplicativo existente",
+  "messaging.use_existing_sub": "Já criou o bot na plataforma aberta do Feishu? Insira as credenciais do aplicativo para vincular sem escanear novamente.",
+  "messaging.app_id": "App ID",
+  "messaging.app_secret": "App Secret",
+  "messaging.link": "Vincular",
+  "messaging.link_success": "Credenciais do aplicativo vinculadas. Ative o bot com o interruptor.",
+  "messaging.link_failed": "Falha ao vincular",
+  "messaging.app_id_invalid": "Formato de App ID inválido (espera cli_ mais 16 dígitos hexadecimais)",
+  "messaging.app_secret_required": "O App Secret é obrigatório",
+  "messaging.connection_bound": "Vinculado",
+  "messaging.unbind": "Desvincular",
+  "messaging.unbind_confirm": "Desvincular interrompe o recebimento de mensagens até que as credenciais sejam inseridas novamente. Continuar?",
+  "messaging.unbind_failed": "Falha ao desvincular",
+  "messaging.unbind_success": "Desvinculado. Escaneie novamente ou insira as credenciais para vincular."
 }
