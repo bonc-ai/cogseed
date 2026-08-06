@@ -3,6 +3,12 @@ import { logErrorSummary } from '../../util/log-redact';
 import * as lark from '@larksuiteoapi/node-sdk';
 import * as wecom from '@wecom/aibot-node-sdk';
 import type { TextMessage, WsFrame } from '@wecom/aibot-node-sdk';
+import {
+  buildMarkdownPostPayload,
+  chunkMarkdownMessage,
+  isMarkdown,
+  stripMarkdownToPlainText,
+} from './feishu-post';
 import type {
   AdapterCallbacks,
   CardActionEnvelope,
@@ -89,9 +95,24 @@ interface FeishuReactionResponse extends FeishuApiResponse {
   data?: { reaction_id?: string };
 }
 
+interface FeishuMessageSendResponse extends FeishuApiResponse {
+  data?: { message_id?: string };
+}
+
 /** Processing indicator reaction (Feishu emoji name, mirrors Hermes). */
 const FEISHU_REACTION_IN_PROGRESS = 'Typing';
+/** Failure reaction added when an inbound message is rejected or its
+ * dispatch fails (mirrors Hermes' FEISHU_REACTION_FAILURE). */
+const FEISHU_REACTION_FAILURE = 'CrossMark';
 const PROCESSING_REACTIONS_MAX = 1024;
+
+/** Feishu API rejects an outbound `post` payload with this message text;
+ * the adapter then degrades the chunk to plain text (mirrors Hermes). */
+const FEISHU_POST_CONTENT_INVALID_RE = /content format of the post type is incorrect/i;
+/** Reply target no longer exists (message recalled / chat gone). The adapter
+ * falls back to a fresh message in the same chat (mirrors Hermes
+ * _FEISHU_REPLY_FALLBACK_CODES). */
+const FEISHU_REPLY_FALLBACK_CODES = new Set([230011, 231003]);
 
 function parseFeishuBotOpenId(response: FeishuBotInfoResponse): string {
   const topLevel = response.bot?.open_id?.trim() || '';
@@ -582,8 +603,9 @@ export class FeishuAdapter implements MessagingCardAdapter {
 
   /** Processing indicator around inbound dispatch: add a reaction before the
    * agent runs, remove it when the message is rejected/duplicated or when the
-   * reply for it is delivered. Reaction support is permission-gated on the
-   * Feishu side, so every failure here stays silent. */
+   * reply for it is delivered. Rejection or dispatch failure adds a failure
+   * reaction instead. Reaction support is permission-gated on the Feishu
+   * side, so every failure here stays silent. */
   private async handleInboundWithReaction(envelope: InboundEnvelope): Promise<void> {
     const callbacks = this.callbacks;
     if (!callbacks) return;
@@ -591,14 +613,28 @@ export class FeishuAdapter implements MessagingCardAdapter {
     await this.addProcessingReaction(messageId);
     try {
       const result = await callbacks.onInbound(envelope);
-      if (!result.accepted) await this.removeProcessingReaction(messageId);
+      if (!result.accepted) {
+        await this.removeProcessingReaction(messageId);
+        await this.addFailureReaction(messageId);
+      }
     } catch (error) {
       log.warn('Feishu inbound dispatch failed', {
         instanceId: this.instance.id,
         error: logErrorSummary(error),
       });
       await this.removeProcessingReaction(messageId);
+      await this.addFailureReaction(messageId);
     }
+  }
+
+  private async addFailureReaction(messageId: string): Promise<void> {
+    if (!messageId) return;
+    try {
+      await this.client.im.v1.messageReaction.create({
+        path: { message_id: messageId },
+        data: { reaction_type: { emoji_type: FEISHU_REACTION_FAILURE } },
+      });
+    } catch { /* optional capability; never fail the message flow */ }
   }
 
   private async addProcessingReaction(messageId: string): Promise<void> {
@@ -771,33 +807,97 @@ export class FeishuAdapter implements MessagingCardAdapter {
     context?: import('./types').MessagingSendContext,
   ): Promise<{ deliveryId?: string }> {
     if (lifecycleSignal?.aborted) throw new Error('Feishu delivery aborted');
-    const content = JSON.stringify({ text });
     const replyToMessageId = typeof context?.replyToMessageId === 'string' ? context.replyToMessageId.trim() : '';
     const idempotencyKey = typeof context?.idempotencyKey === 'string' ? context.idempotencyKey.trim() : '';
-    const response = replyToMessageId
-      ? await this.client.im.v1.message.reply({
-        path: { message_id: replyToMessageId },
-        data: {
-          msg_type: 'text',
-          content,
-          ...(context?.replyInThread ? { reply_in_thread: true } : {}),
-          ...(idempotencyKey ? { uuid: idempotencyKey } : {}),
-        },
-      })
-      : await this.client.im.v1.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: {
-          receive_id: chatId,
-          msg_type: 'text',
-          content,
-          ...(idempotencyKey ? { uuid: idempotencyKey } : {}),
-        },
-      });
-    if (response.code !== undefined && response.code !== 0) throw new Error(response.msg || 'Feishu send failed');
-    if (lifecycleSignal?.aborted) throw new Error('Feishu delivery aborted');
-    const messageId = response.data?.message_id;
+    // Markdown detection is locked at the whole-message level so every chunk
+    // of a split reply consistently uses `post` (mirrors Hermes #26841); a
+    // plain-prose chunk that lost its formatting markers would otherwise be
+    // sent as `text` with literal `**bold**` visible to the user.
+    const preferPost = isMarkdown(text);
+    const chunks = chunkMarkdownMessage(text.trim());
+    let deliveryId: string | undefined;
+    for (let index = 0; index < chunks.length; index += 1) {
+      if (lifecycleSignal?.aborted) throw new Error('Feishu delivery aborted');
+      const chunk = chunks[index];
+      // Per-chunk uuid derived from the delivery idempotency key: a ledger
+      // retry re-sends the same chunk uuids, which Feishu deduplicates.
+      const chunkUuid = idempotencyKey ? `${idempotencyKey}#${index}` : undefined;
+      const content = preferPost ? buildMarkdownPostPayload(chunk) : JSON.stringify({ text: chunk });
+      try {
+        const response = await this.sendFeishuMessage(
+          chatId, preferPost ? 'post' : 'text', content,
+          replyToMessageId, context, chunkUuid, lifecycleSignal,
+        );
+        const messageId = response.data?.message_id;
+        if (typeof messageId === 'string' && messageId) deliveryId = messageId;
+      } catch (error) {
+        if (!preferPost || !FEISHU_POST_CONTENT_INVALID_RE.test((error as Error).message || String(error))) throw error;
+        log.warn('Feishu post payload rejected, falling back to plain text', {
+          instanceId: this.instance.id,
+        });
+        const plainContent = JSON.stringify({ text: stripMarkdownToPlainText(chunk) });
+        const response = await this.sendFeishuMessage(
+          chatId, 'text', plainContent,
+          replyToMessageId, context, chunkUuid, lifecycleSignal,
+        );
+        const messageId = response.data?.message_id;
+        if (typeof messageId === 'string' && messageId) deliveryId = messageId;
+      }
+    }
     if (replyToMessageId) void this.removeProcessingReaction(replyToMessageId);
-    return typeof messageId === 'string' && messageId ? { deliveryId: messageId } : {};
+    return deliveryId ? { deliveryId } : {};
+  }
+
+  /** One Feishu message send (reply or fresh), with reply-target fallback:
+   * when the reply fails because the target was recalled or the chat changed
+   * (230011/231003), a fresh message is created in the same chat instead.
+   * Replies inside a thread never fall back, to avoid spawning a new topic
+   * (mirrors Hermes `_feishu_send_with_retry`). */
+  private async sendFeishuMessage(
+    chatId: string,
+    msgType: string,
+    content: string,
+    replyToMessageId: string,
+    context: MessagingSendContext | undefined,
+    uuid: string | undefined,
+    lifecycleSignal?: AbortSignal,
+  ): Promise<FeishuMessageSendResponse> {
+    if (lifecycleSignal?.aborted) throw new Error('Feishu delivery aborted');
+    const sendOnce = async (replyTo: string | undefined): Promise<FeishuMessageSendResponse> => {
+      const response = replyTo
+        ? await this.client.im.v1.message.reply({
+          path: { message_id: replyTo },
+          data: {
+            msg_type: msgType,
+            content,
+            ...(context?.replyInThread ? { reply_in_thread: true } : {}),
+            ...(uuid ? { uuid } : {}),
+          },
+        })
+        : await this.client.im.v1.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: {
+            receive_id: chatId,
+            msg_type: msgType,
+            content,
+            ...(uuid ? { uuid } : {}),
+          },
+        });
+      return response as unknown as FeishuMessageSendResponse;
+    };
+
+    let response = await sendOnce(replyToMessageId || undefined);
+    const responseCode = typeof response.code === 'number' ? response.code : 0;
+    if (replyToMessageId && !context?.replyInThread && responseCode !== 0 && FEISHU_REPLY_FALLBACK_CODES.has(responseCode)) {
+      log.info('Feishu reply target unavailable, sending a fresh message', {
+        instanceId: this.instance.id,
+      });
+      response = await sendOnce(undefined);
+    }
+    if (response.code !== undefined && response.code !== 0) {
+      throw new Error(response.msg || 'Feishu send failed');
+    }
+    return response;
   }
 
   async sendCard(

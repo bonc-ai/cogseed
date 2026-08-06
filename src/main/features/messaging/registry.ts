@@ -175,7 +175,9 @@ function normalizeResponseMode(
   value: MessagingResponseMode | undefined,
   strict = false,
 ): MessagingResponseMode {
-  const fallback: MessagingResponseMode = platform === 'feishu_lark' ? 'streaming_card' : 'text';
+  // Rich-text `post` replies are the default Feishu experience; streaming
+  // cards remain available as an opt-in mode.
+  const fallback: MessagingResponseMode = 'text';
   if (value === undefined) return fallback;
   if (!(RESPONSE_MODES as readonly string[]).includes(value)) {
     if (strict) throw new Error('invalid response mode');

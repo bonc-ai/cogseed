@@ -627,8 +627,9 @@
 
     page.appendChild(associationCard(instance));
 
-    const responseMode = 'streaming_card';
+    const responseMode = instance.responseMode || 'text';
     const responseSelect = selectControl([
+      { value: 'text', label: labelFor('messaging.response_text', '') },
       { value: 'streaming_card', label: labelFor('messaging.response_streaming_card', '') },
     ], responseMode, state.updating);
     responseSelect.setAttribute('aria-label', labelFor('messaging.response_title', ''));
