@@ -339,4 +339,101 @@ describe('Feishu official event adapter', () => {
     expect(reply).toHaveBeenCalledTimes(1);
     expect(create).not.toHaveBeenCalled();
   });
+
+  it('normalizes reaction events and rejects non-user operators', async () => {
+    const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');
+    const { normalizeFeishuReaction } = _adapterTestHooks;
+    expect(normalizeFeishuReaction({
+      message_id: 'om_9',
+      operator_id: 'ou_1',
+      operator_type: 'user',
+      reaction_type: { emoji_type: 'THUMBSUP' },
+      create_time: '1710000000000',
+    })).toEqual({
+      messageId: 'om_9',
+      operatorOpenId: 'ou_1',
+      emoji: 'THUMBSUP',
+      createTime: '2024-03-09T16:00:00.000Z',
+    });
+    expect(normalizeFeishuReaction({
+      message_id: 'om_9',
+      operator_id: 'ou_bot',
+      operator_type: 'app',
+      reaction_type: { emoji_type: 'Typing' },
+    })).toBeNull();
+    expect(normalizeFeishuReaction({ operator_type: 'user' })).toBeNull();
+    expect(normalizeFeishuReaction({ message_id: 'om_9', operator_id: 'ou_1', operator_type: 'user' })).toBeNull();
+  });
+
+  it('synthesizes an inbound envelope only for reactions on our own messages', async () => {
+    let handlers: Record<string, (event: unknown) => Promise<unknown>> = {};
+    const dispatcher = {
+      register: vi.fn((registered: Record<string, (event: unknown) => Promise<unknown>>) => {
+        handlers = registered;
+        return dispatcher;
+      }),
+    };
+    const EventDispatcher = vi.fn(function EventDispatcher() { return dispatcher; });
+    const WSClient = vi.fn(function WSClient() { return { start: vi.fn(async () => {}), close: vi.fn() }; });
+    const Client = vi.fn(function Client() { return {
+      request: vi.fn(async () => ({ code: 0, data: { open_id: 'ou_bot' } })),
+      im: { v1: { message: { create: vi.fn() } } },
+    }; });
+    vi.doMock('@larksuiteoapi/node-sdk', () => ({
+      AppType: { SelfBuild: 'SelfBuild' },
+      Client,
+      Domain: { Feishu: 'https://open.feishu.cn', Lark: 'https://open.larksuite.com' },
+      EventDispatcher,
+      LoggerLevel: { error: 'error' },
+      WSClient,
+    }));
+    const { FeishuAdapter } = await import('../../../src/main/features/messaging/adapters');
+    const adapter = new FeishuAdapter(feishuInstance(), {
+      appId: 'cli_1234567890abcdef',
+      appSecret: 'app-secret',
+    });
+    const onInbound = vi.fn(async () => ({ accepted: true, duplicate: false }));
+    const delivery = {
+      key: 'k',
+      instanceId: 'feishu-bot-1',
+      externalChatId: 'oc_1',
+      sourceMessageId: 'src-1',
+      textHash: 'h',
+      status: 'sent' as const,
+      attempts: 1,
+      updatedAt: new Date().toISOString(),
+      externalDeliveryId: 'om_9',
+    };
+    const resolveDelivery = vi.fn(async () => delivery);
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onInbound, resolveDelivery };
+
+    const reaction = handlers['im.message.reaction.created_v1'];
+    expect(reaction).toBeTypeOf('function');
+
+    // app 操作者（bot 自己的处理中 reaction）→ 不查账本
+    await reaction({ operator_type: 'app', message_id: 'om_9', reaction_type: { emoji_type: 'Typing' } });
+    expect(resolveDelivery).not.toHaveBeenCalled();
+    expect(onInbound).not.toHaveBeenCalled();
+
+    // 不是我们发的消息 → 不合成
+    resolveDelivery.mockResolvedValueOnce(null);
+    await reaction({ operator_type: 'user', operator_id: 'ou_1', message_id: 'om_9', reaction_type: { emoji_type: 'THUMBSUP' }, create_time: '1710000000000' });
+    expect(onInbound).not.toHaveBeenCalled();
+
+    // 我们发过的消息 → 合成 synthetic envelope
+    await reaction({ operator_type: 'user', operator_id: 'ou_1', message_id: 'om_9', reaction_type: { emoji_type: 'THUMBSUP' }, create_time: '1710000000000' });
+    expect(onInbound).toHaveBeenCalledTimes(1);
+    const envelope = onInbound.mock.calls[0][0];
+    expect(envelope).toMatchObject({
+      platform: 'feishu_lark',
+      instanceId: 'feishu-bot-1',
+      externalChatId: 'oc_1',
+      externalUserId: 'ou_1',
+      text: 'reaction:added:THUMBSUP',
+      isGroup: true,
+      mentionPresent: true,
+      synthetic: true,
+    });
+    expect(envelope.externalMessageId).toContain('om_9');
+  });
 });

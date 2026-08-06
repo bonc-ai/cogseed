@@ -12,6 +12,7 @@ import {
 import type {
   AdapterCallbacks,
   CardActionEnvelope,
+  DeliveryLedgerEntry,
   FeishuTenantBrand,
   InboundEnvelope,
   JsonCompatibleValue,
@@ -77,6 +78,14 @@ interface FeishuEventData {
     sender_type?: string;
     sender_id?: { open_id?: string; user_id?: string };
   };
+}
+
+interface FeishuReactionEvent {
+  message_id?: string;
+  operator_id?: string;
+  operator_type?: string;
+  reaction_type?: { emoji_type?: string };
+  create_time?: string;
 }
 
 interface FeishuApiResponse {
@@ -257,6 +266,52 @@ function feishuMessageToText(messageType: string, rawContent: string): string {
     default:
       return `[${messageType} 消息]`;
   }
+}
+
+/** Reaction events are feedback signals, not chat traffic: only a real user
+ * reacting to one of our own messages is forwarded. Bot reactions (including
+ * our own processing indicator) must never loop back into the agent. */
+function normalizeFeishuReaction(event: FeishuReactionEvent): {
+  messageId: string;
+  operatorOpenId: string;
+  emoji: string;
+  createTime: string;
+} | null {
+  if (event.operator_type !== 'user') return null;
+  const messageId = event.message_id?.trim() || '';
+  const operatorOpenId = event.operator_id?.trim() || '';
+  const emoji = event.reaction_type?.emoji_type?.trim() || '';
+  if (!messageId || !operatorOpenId || !emoji) return null;
+  const rawCreateTime = Number(event.create_time);
+  const createTime = Number.isFinite(rawCreateTime) && rawCreateTime > 0
+    ? new Date(rawCreateTime > 10_000_000_000 ? rawCreateTime : rawCreateTime * 1000).toISOString()
+    : new Date().toISOString();
+  return { messageId, operatorOpenId, emoji, createTime };
+}
+
+/** Feishu group chat ids are oc_-prefixed; p2p chat ids are the peer's
+ * open_id (ou_-prefixed), so the delivery's chat id tells the group bit. */
+function reactionIsGroup(delivery: DeliveryLedgerEntry): boolean {
+  return delivery.externalChatId.startsWith('oc_');
+}
+
+function reactionEnvelope(
+  instance: MessagingInstance,
+  reaction: NonNullable<ReturnType<typeof normalizeFeishuReaction>>,
+  delivery: DeliveryLedgerEntry,
+): InboundEnvelope {
+  return {
+    platform: 'feishu_lark',
+    instanceId: instance.id,
+    externalMessageId: `${reaction.messageId}:${reaction.operatorOpenId}:${reaction.emoji}:${reaction.createTime}`,
+    externalChatId: delivery.externalChatId,
+    externalUserId: reaction.operatorOpenId,
+    text: `reaction:added:${reaction.emoji}`,
+    isGroup: reactionIsGroup(delivery),
+    mentionPresent: true,
+    synthetic: true,
+    receivedAt: reaction.createTime,
+  };
 }
 
 interface FeishuCardActionEvent {
@@ -596,6 +651,28 @@ export class FeishuAdapter implements MessagingCardAdapter {
             error: logErrorSummary(error),
           });
         });
+        return {};
+      },
+      'im.message.reaction.created_v1': async (event: FeishuReactionEvent) => {
+        if (!this.callbacks?.onInbound || !this.callbacks.resolveDelivery) return {};
+        const reaction = normalizeFeishuReaction(event);
+        if (!reaction) return {};
+        try {
+          const delivery = await this.callbacks.resolveDelivery(reaction.messageId);
+          if (!delivery) return {};
+          const envelope = reactionEnvelope(this.instance, reaction, delivery);
+          void this.callbacks.onInbound(envelope).catch((error) => {
+            log.warn('Feishu reaction dispatch failed', {
+              instanceId: this.instance.id,
+              error: logErrorSummary(error),
+            });
+          });
+        } catch (error) {
+          log.warn('Feishu reaction delivery lookup failed', {
+            instanceId: this.instance.id,
+            error: logErrorSummary(error),
+          });
+        }
         return {};
       },
     });
@@ -1264,4 +1341,4 @@ export function createAdapter(instance: MessagingInstance, secret: MessagingSecr
   return new FeishuAdapter(instance, secret);
 }
 
-export const _adapterTestHooks = { fetchJson, status, normalizeFeishuEvent, normalizeWecomEvent, boundedWecomText, parseFeishuBotOpenId, feishuMessageToText, normalizeFeishuCardAction };
+export const _adapterTestHooks = { fetchJson, status, normalizeFeishuEvent, normalizeWecomEvent, boundedWecomText, parseFeishuBotOpenId, feishuMessageToText, normalizeFeishuCardAction, normalizeFeishuReaction };

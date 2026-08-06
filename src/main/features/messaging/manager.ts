@@ -1119,6 +1119,7 @@ async function startRuntime(uid: string, instanceId: string): Promise<void> {
       if (!isCurrentRuntime(uid, runtime)) return { accepted: false, duplicate: false, reason: 'instance_not_found' };
       return handleInbound(uid, envelope);
     },
+    resolveDelivery: async (deliveryId) => ledger.getDeliveryByExternalId(uid, instanceId, deliveryId),
     onStatus: async (nextStatus) => {
       log.info('messaging adapter status change', { instanceId, kind: nextStatus.kind, message: nextStatus.message || '' });
       queueRuntimeStatus(uid, runtime, nextStatus);

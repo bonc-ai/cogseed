@@ -150,6 +150,10 @@ export interface InboundEnvelope {
   /** Preserve a platform thread/topic when replying to the inbound message. */
   replyInThread?: boolean;
   receivedAt: string;
+  /** Synthetic feedback event (a reaction on one of our messages), not a
+   * real user text message. Skips burst merging and carries the interaction
+   * intent of the original message. */
+  synthetic?: boolean;
 }
 
 export interface InboundLedgerEntry {
@@ -211,6 +215,10 @@ export interface AdapterCallbacks {
   /** Card button clicks (Feishu interactive cards). Optional: adapters that
    * never send interactive cards leave it unset. */
   onCardAction?: (action: CardActionEnvelope) => Promise<MessagingInboundResult>;
+  /** Resolve a previously delivered outbound message by its platform
+   * delivery id, or null when it is not ours. Feishu reaction events use
+   * this to scope feedback to messages this bot actually sent. */
+  resolveDelivery?(externalDeliveryId: string): Promise<DeliveryLedgerEntry | null>;
 }
 
 /** A button click on an interactive card (e.g. an approval card). The
