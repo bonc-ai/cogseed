@@ -5712,6 +5712,7 @@ function _ensureCreateAgentInlineObserver() {
 async function loadConversationHistory(cid, opts = {}) {
   const perfStartedAt = performance.now();
   const container = document.getElementById('chat-history');
+  _cancelActiveUserMessageEdit({ focus: false });
   const preserveScroll = opts && opts.preserveScroll === true;
   const scrollSnapshot = preserveScroll ? _captureHistoryReloadScroll(container) : null;
   container.classList.remove('has-scroll-offset');
@@ -6724,6 +6725,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   msgDiv.dataset.ts = String(_msTs(message.time));
   if (role === 'user') {
     msgDiv.dataset.retryContent = String(rawContent || '');
+    msgDiv.dataset.messageEditContent = String(rawContent || '');
     if (Array.isArray(message.attachments) && message.attachments.length) {
       msgDiv.dataset.retryAttachments = JSON.stringify(message.attachments);
     }
@@ -6808,6 +6810,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
         '.chat-reference-bundle, .chat-msg-attachments, .chat-input-form, .chat-artifacts, iframe',
       ) || String(displayContent || '')
     ), { archive: false });
+    if (message._msg_id) _attachUserMessageEditAction(msgDiv);
   }
   // Persisted-process trail is independent of body type — it must render
   // for HTML-stub bodies too (e.g. CLI warning spans),
@@ -7891,6 +7894,7 @@ function _failedAssistantErrorText(msgDiv) {
 
 let _bubbleActionMenuListenersBound = false;
 let _openBubbleActionMenu = null;
+let _activeUserMessageEdit = null;
 
 function _closeBubbleActionMenus() {
   const menu = _openBubbleActionMenu;
@@ -7946,6 +7950,188 @@ function _attachBubbleRetryBtn(actions, msgDiv) {
     await _retryFailedAssistantMessage(msgDiv, retryBtn);
   });
   actions.appendChild(retryBtn);
+}
+
+function _messageEditDatasetArray(msgDiv, key) {
+  try {
+    const parsed = JSON.parse(msgDiv?.dataset?.[key] || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function _cancelActiveUserMessageEdit(opts = {}) {
+  const state = _activeUserMessageEdit;
+  if (!state) return false;
+  _activeUserMessageEdit = null;
+  state.msgDiv.classList.remove('is-message-editing');
+  state.hiddenChildren.forEach(({ element, hidden }) => {
+    if (element?.isConnected) element.hidden = hidden;
+  });
+  state.composer.remove();
+  state.editButton.disabled = false;
+  if (opts.focus !== false && state.editButton.isConnected) state.editButton.focus();
+  return true;
+}
+
+function _removeRenderedHistoryFrom(msgDiv) {
+  const container = msgDiv?.parentElement;
+  if (!container) return;
+  let node = msgDiv;
+  while (node) {
+    const next = node.nextElementSibling;
+    node.remove();
+    node = next;
+  }
+  for (const key of Array.from(_groupPlaceholders.keys())) {
+    if (key.startsWith(`${currentCid}:`)) _groupPlaceholders.delete(key);
+  }
+}
+
+async function _confirmUserMessageEdit() {
+  const message = t('chat.message_edit_confirm');
+  if (typeof uiConfirm === 'function') {
+    return uiConfirm({
+      message,
+      okLabel: t('chat.message_edit_submit'),
+      cancelLabel: t('common.cancel'),
+    });
+  }
+  return typeof window.confirm === 'function' ? window.confirm(message) : false;
+}
+
+async function _submitUserMessageEdit(state) {
+  if (!state || state.submitting || _activeUserMessageEdit !== state) return;
+  const text = String(state.textarea.value || '').trim();
+  if (!text) {
+    await uiAlert(t('chat.message_edit_empty'));
+    state.textarea.focus();
+    return;
+  }
+  if (isConvPending(state.cid)) {
+    await uiAlert(t('chat.message_edit_running'));
+    return;
+  }
+  if (!(await _confirmUserMessageEdit())) return;
+
+  state.submitting = true;
+  state.textarea.disabled = true;
+  state.submitButton.disabled = true;
+  const attachments = _messageEditDatasetArray(state.msgDiv, 'attachments');
+  const references = _messageEditDatasetArray(state.msgDiv, 'references');
+  const extra = {
+    edit_message_id: state.messageId,
+    ...(attachments.length ? { attachments } : {}),
+    ...(references.length ? { references } : {}),
+  };
+  _activeUserMessageEdit = null;
+  _removeRenderedHistoryFrom(state.msgDiv);
+
+  let failed = false;
+  try {
+    const result = await sendInConversation(state.cid, text, extra);
+    failed = !!result?.errored || result?.started === false;
+  } catch (error) {
+    failed = true;
+    _convLog.error('user message edit send failed', { cid: state.cid, error });
+  }
+
+  if (state.cid === currentCid) {
+    await loadConversationHistory(state.cid, { preserveScroll: true });
+    if (failed) await uiAlert(t('chat.message_edit_failed'));
+  }
+}
+
+function _beginUserMessageEdit(msgDiv, editButton) {
+  const cid = currentCid;
+  const messageId = String(msgDiv?.dataset?.msgId || '').trim();
+  if (!cid || !messageId || !msgDiv?.isConnected) return;
+  if (isConvPending(cid)) {
+    void uiAlert(t('chat.message_edit_running'));
+    return;
+  }
+  if (_activeUserMessageEdit?.msgDiv === msgDiv) {
+    _activeUserMessageEdit.textarea.focus();
+    return;
+  }
+  _cancelActiveUserMessageEdit({ focus: false });
+
+  const bubble = msgDiv.querySelector('.chat-bubble');
+  if (!bubble) return;
+  const originalText = String(msgDiv.dataset.messageEditContent || msgDiv.dataset.retryContent || '');
+  const hiddenChildren = Array.from(bubble.children).map((element) => ({
+    element,
+    hidden: element.hidden,
+  }));
+  hiddenChildren.forEach(({ element }) => { element.hidden = true; });
+
+  const composer = document.createElement('form');
+  composer.className = 'chat-message-edit-composer';
+  composer.innerHTML = `
+    <textarea class="chat-message-edit-input" aria-label="${escapeHtml(t('chat.message_edit_title'))}"></textarea>
+    <div class="chat-message-edit-actions">
+      <button type="button" class="btn btn-sm chat-message-edit-cancel">${escapeHtml(t('common.cancel'))}</button>
+      <button type="submit" class="btn btn-primary btn-sm chat-message-edit-submit">${escapeHtml(t('chat.message_edit_submit'))}</button>
+    </div>
+  `;
+  const textarea = composer.querySelector('.chat-message-edit-input');
+  const cancelButton = composer.querySelector('.chat-message-edit-cancel');
+  const submitButton = composer.querySelector('.chat-message-edit-submit');
+  textarea.value = originalText;
+  bubble.appendChild(composer);
+  msgDiv.classList.add('is-message-editing');
+  editButton.disabled = true;
+
+  const state = {
+    cid,
+    messageId,
+    msgDiv,
+    editButton,
+    composer,
+    textarea,
+    submitButton,
+    hiddenChildren,
+    submitting: false,
+  };
+  _activeUserMessageEdit = state;
+  cancelButton.addEventListener('click', () => _cancelActiveUserMessageEdit());
+  composer.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void _submitUserMessageEdit(state);
+  });
+  textarea.addEventListener('input', () => autoGrow(textarea, 260));
+  textarea.addEventListener('keydown', (event) => {
+    if (event.isComposing || event.keyCode === 229) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      _cancelActiveUserMessageEdit();
+      return;
+    }
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      composer.requestSubmit();
+    }
+  });
+  autoGrow(textarea, 260);
+  textarea.focus();
+  textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+}
+
+function _attachUserMessageEditAction(msgDiv) {
+  const header = msgDiv?.querySelector('.chat-msg-header-user');
+  if (!header || header.querySelector('.chat-message-edit-btn')) return;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'chat-message-edit-btn';
+  button.title = t('chat.message_edit_title');
+  button.setAttribute('aria-label', t('chat.message_edit_title'));
+  button.innerHTML = _uiIconHtml('edit-pencil', 'ui-icon');
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    _beginUserMessageEdit(msgDiv, button);
+  });
+  header.appendChild(button);
 }
 
 function _attachFailedAssistantActions(msgDiv, getContent) {
@@ -8258,6 +8444,40 @@ function _syncBubbleReferenceActionState(msgDiv) {
 // Attach small action buttons below the bubble. Kept outside the bubble so
 // they never overlap content. `getContent` is a callback so it can return the
 // latest text after streaming completes.
+async function _openCognitionCaptureFromBubble(msgDiv, getContent, cognitionBtn) {
+  const text = typeof getContent === 'function' ? String(getContent() || '') : '';
+  const messageId = String(msgDiv?.dataset?.msgId || '').trim();
+  if (!cognitionBtn || !text.trim() || !messageId || cognitionBtn.disabled) return false;
+
+  // The feature can load after the user has navigated elsewhere. Preserve the
+  // source task at click time so the evidence is never attributed to that
+  // later task.
+  const sourceCid = currentCid;
+  const loader = typeof loadRendererFeature === 'function'
+    ? loadRendererFeature
+    : window.loadRendererFeature;
+  if (typeof window.openCognitionCapture !== 'function' && typeof loader === 'function') {
+    cognitionBtn.disabled = true;
+    try {
+      await loader('personal-ontology');
+    } catch (error) {
+      _convLog.warn('cognition capture feature load failed', { error: error?.message || String(error) });
+    } finally {
+      cognitionBtn.disabled = false;
+    }
+  }
+  if (typeof window.openCognitionCapture !== 'function') return false;
+  try {
+    return window.openCognitionCapture({
+      conversationId: sourceCid,
+      messageId,
+    }) !== false;
+  } catch (error) {
+    _convLog.warn('cognition capture open failed', { error: error?.message || String(error) });
+    return false;
+  }
+}
+
 function _attachBubbleActions(msgDiv, getContent, opts = {}) {
   const includeArchive = opts.archive !== false;
   const includeRetry = opts.retry === true;
@@ -8286,6 +8506,7 @@ function _attachBubbleActions(msgDiv, getContent, opts = {}) {
   const quoteButton = `<button type="button" class="bubble-action-btn bubble-quote-btn" title="${escapeHtml(t('chat.quote_btn_title'))}">${escapeHtml(t('chat.quote_btn'))}</button>`;
   const overflowItems = `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-copy-btn" title="${escapeHtml(t('chat.copy_btn_title'))}">${escapeHtml(t('chat.copy_btn'))}</button>
     <button type="button" role="menuitem" class="chat-bubble-menu-item bubble-select-btn" title="${escapeHtml(t('chat.message_select_title'))}">${escapeHtml(t('chat.message_select'))}</button>
+    ${includeArchive && !includeRetry ? `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-cognition-btn" title="${escapeHtml(t('cognition.capture.menu_title'))}">${escapeHtml(t('cognition.capture.menu'))}</button>` : ''}
     ${includeArchive ? `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-archive-btn" title="${escapeHtml(t('chat.archive_btn_title'))}">${escapeHtml(t('chat.archive_btn'))}</button>` : ''}`;
   actions.innerHTML = `
     <span class="chat-bubble-direct-actions">${quoteButton}</span>
@@ -8299,6 +8520,7 @@ function _attachBubbleActions(msgDiv, getContent, opts = {}) {
   const copyBtn = actions.querySelector('.bubble-copy-btn');
   const quoteBtn = actions.querySelector('.bubble-quote-btn');
   const selectBtn = actions.querySelector('.bubble-select-btn');
+  const cognitionBtn = actions.querySelector('.bubble-cognition-btn');
   if (includeRetry) _attachBubbleRetryBtn(directActions, msgDiv);
   _wireBubbleActionMenu(actions);
   quoteBtn.addEventListener('click', (e) => {
@@ -8348,6 +8570,10 @@ function _attachBubbleActions(msgDiv, getContent, opts = {}) {
     e.stopPropagation();
     if (selectBtn.disabled) return;
     _enterMessageSelection(msgDiv);
+  });
+  cognitionBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    void _openCognitionCaptureFromBubble(msgDiv, getContent, cognitionBtn);
   });
   copyBtn?.addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -9141,6 +9367,12 @@ async function sendInConversation(cid, content, extra, options = {}) {
   let taskStarted = false;
   const attachmentCount = Array.isArray(extra && extra.attachments) ? extra.attachments.length : 0;
   if (isConvPending(cid)) {
+    // Historical replacement is a destructive linear-history operation. It
+    // must never enter the ordinary FIFO queue after a race with a new turn;
+    // the main side will reject it while the conversation is running.
+    if (extra && typeof extra.edit_message_id === 'string' && extra.edit_message_id.trim()) {
+      return { started: false, queued: false, aborted: false, errored: true, result: 'failure' };
+    }
     // Queued input starts a new execution stream after the current one ends,
     // so it must not be merged into the active task-turn sample.
     enqueueMessage(cid, content, '', { direct: true, extra });

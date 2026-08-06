@@ -47,6 +47,257 @@ function invoke(channel, payload) {
   return ipcRenderer.invoke('orkas.invoke', { channel, payload: payload || {} });
 }
 
+const EXPENSE_WORKBENCH_GESTURE_TTL_MS = 1500;
+const EXPENSE_WORKBENCH_PAGE_INSTANCE_PATTERN = /^ewpage_[A-Za-z0-9_-]{43}$/;
+const EXPENSE_WORKBENCH_OPEN_TICKET_PATTERN = /^ewopen_[A-Za-z0-9_-]{43}$/;
+const EXPENSE_WORKBENCH_CAPABILITY_PATTERN = /^ewcap_[A-Za-z0-9_-]{43}$/;
+let _expenseWorkbenchCapability = '';
+let _expenseWorkbenchPageInstance = '';
+let _expenseWorkbenchPreparedOpen = null;
+let _expenseWorkbenchGesture = null;
+let _expenseWorkbenchRequestCounter = 0;
+let _expenseWorkbenchLifecycleObserver = null;
+
+function expenseWorkbenchElementFromPath(event, predicate) {
+  const path = event && typeof event.composedPath === 'function'
+    ? event.composedPath()
+    : [event && event.target];
+  for (const node of path) {
+    if (node && typeof node.getAttribute === 'function' && predicate(node)) return node;
+  }
+  return null;
+}
+
+function captureExpenseWorkbenchGesture(event) {
+  _expenseWorkbenchGesture = null;
+  if (!event || event.isTrusted !== true || (typeof event.button === 'number' && event.button !== 0)) return;
+
+  const detailButton = expenseWorkbenchElementFromPath(event, (node) => node.id === 'agent-manage-btn');
+  if (detailButton && !detailButton.disabled && !detailButton.hidden
+      && detailButton.getAttribute('aria-hidden') !== 'true') {
+    const agentId = String(detailButton.getAttribute('data-expense-agent-id') || '');
+    if (agentId) {
+      _expenseWorkbenchGesture = { agentId, gesture: 'agent_detail', capturedAt: Date.now() };
+      return;
+    }
+  }
+
+  const useButton = expenseWorkbenchElementFromPath(
+    event,
+    (node) => typeof node.hasAttribute === 'function' && node.hasAttribute('data-agent-use'),
+  );
+  const card = useButton && typeof useButton.closest === 'function'
+    ? useButton.closest('.agent-card[data-id]')
+    : null;
+  if (useButton && card && !useButton.disabled && useButton.getAttribute('aria-disabled') !== 'true') {
+    const agentId = String(card.getAttribute('data-id') || '');
+    if (agentId) _expenseWorkbenchGesture = { agentId, gesture: 'agent_card', capturedAt: Date.now() };
+  }
+}
+
+function consumeExpenseWorkbenchGesture(agentId, gesture) {
+  const captured = _expenseWorkbenchGesture;
+  _expenseWorkbenchGesture = null;
+  if (!captured || captured.agentId !== agentId || captured.gesture !== gesture
+      || Date.now() - captured.capturedAt > EXPENSE_WORKBENCH_GESTURE_TTL_MS) {
+    throw new Error('expense workbench requires a current trusted user action');
+  }
+}
+
+function nextExpenseWorkbenchRequestNonce() {
+  _expenseWorkbenchRequestCounter += 1;
+  return `ewreq_${Date.now().toString(36)}_${_expenseWorkbenchRequestCounter.toString(36)}`;
+}
+
+function isExpenseWorkbenchSurfaceActive() {
+  if (typeof document.getElementById !== 'function') return false;
+  const panel = document.getElementById('panel-agents');
+  const detail = document.getElementById('agents-detail-view');
+  const host = document.getElementById('agent-management-surface');
+  return !!panel && !!detail && !!host
+    && panel.classList.contains('active')
+    && detail.style.display !== 'none'
+    && host.hidden === false;
+}
+
+function requireExpenseWorkbenchCapability() {
+  if (!_expenseWorkbenchCapability || !_expenseWorkbenchPageInstance
+      || !isExpenseWorkbenchSurfaceActive()) {
+    throw new Error('expense workbench management surface is not active');
+  }
+  return {
+    host_capability: _expenseWorkbenchCapability,
+    page_instance: _expenseWorkbenchPageInstance,
+  };
+}
+
+function expenseWorkbenchInvoke(channel, operationScope, payload) {
+  const capability = requireExpenseWorkbenchCapability();
+  return invoke(channel, {
+    ...(payload || {}),
+    ...capability,
+    request_nonce: nextExpenseWorkbenchRequestNonce(),
+    operation_scope: operationScope,
+  });
+}
+
+async function closeExpenseWorkbenchCapability() {
+  const capability = _expenseWorkbenchCapability;
+  const pageInstance = _expenseWorkbenchPageInstance;
+  _expenseWorkbenchCapability = '';
+  _expenseWorkbenchPageInstance = '';
+  _expenseWorkbenchPreparedOpen = null;
+  if (!capability || !pageInstance) return { ok: true, closed: true };
+  try {
+    return await invoke('expenseWorkbench.close', {
+      host_capability: capability,
+      page_instance: pageInstance,
+      request_nonce: nextExpenseWorkbenchRequestNonce(),
+      operation_scope: 'close',
+    });
+  } catch (error) {
+    throw error;
+  }
+}
+
+function bindExpenseWorkbenchLifecycle() {
+  if (_expenseWorkbenchLifecycleObserver || typeof MutationObserver !== 'function'
+      || typeof document.getElementById !== 'function') return;
+  const panel = document.getElementById('panel-agents');
+  const detail = document.getElementById('agents-detail-view');
+  const host = document.getElementById('agent-management-surface');
+  if (!panel || !detail || !host) return;
+  _expenseWorkbenchLifecycleObserver = new MutationObserver(() => {
+    if (_expenseWorkbenchCapability && !isExpenseWorkbenchSurfaceActive()) {
+      closeExpenseWorkbenchCapability().catch(() => {});
+    }
+  });
+  _expenseWorkbenchLifecycleObserver.observe(panel, { attributes: true, attributeFilter: ['class'] });
+  _expenseWorkbenchLifecycleObserver.observe(detail, { attributes: true, attributeFilter: ['style'] });
+  _expenseWorkbenchLifecycleObserver.observe(host, { attributes: true, attributeFilter: ['hidden'] });
+}
+
+const expenseWorkbench = Object.freeze({
+  prepareOpen: async (agentIdValue, gestureValue) => {
+    const agentId = String(agentIdValue || '');
+    const gesture = String(gestureValue || '');
+    if (gesture !== 'agent_card' && gesture !== 'agent_detail') {
+      throw new Error('invalid expense workbench open gesture');
+    }
+    consumeExpenseWorkbenchGesture(agentId, gesture);
+    await closeExpenseWorkbenchCapability();
+    const response = await ipcRenderer.invoke('orkas.expenseWorkbenchHost.prepareOpen', {
+      agent_id: agentId,
+      gesture,
+    });
+    if (!response || response.ok !== true
+        || typeof response.open_ticket !== 'string'
+        || !EXPENSE_WORKBENCH_OPEN_TICKET_PATTERN.test(response.open_ticket)
+        || typeof response.page_instance !== 'string'
+        || !EXPENSE_WORKBENCH_PAGE_INSTANCE_PATTERN.test(response.page_instance)) {
+      throw new Error(response && response.error ? response.error : 'expense workbench open authorization failed');
+    }
+    _expenseWorkbenchPreparedOpen = {
+      agentId,
+      openTicket: response.open_ticket,
+      pageInstance: response.page_instance,
+    };
+    return {
+      ok: true,
+      expires_at: typeof response.expires_at === 'string' ? response.expires_at : '',
+    };
+  },
+  open: async (agentId) => {
+    const normalizedAgentId = String(agentId || '');
+    const prepared = _expenseWorkbenchPreparedOpen;
+    _expenseWorkbenchPreparedOpen = null;
+    if (!prepared || prepared.agentId !== normalizedAgentId) {
+      throw new Error('expense workbench open authorization is missing or belongs to another Agent');
+    }
+    const response = await ipcRenderer.invoke('orkas.expenseWorkbenchHost.open', {
+      open_ticket: prepared.openTicket,
+      page_instance: prepared.pageInstance,
+    });
+    if (!response || response.ok !== true
+        || typeof response.host_capability !== 'string'
+        || !EXPENSE_WORKBENCH_CAPABILITY_PATTERN.test(response.host_capability)) {
+      throw new Error(response && response.error ? response.error : 'expense workbench could not be opened');
+    }
+    _expenseWorkbenchCapability = response.host_capability;
+    _expenseWorkbenchPageInstance = prepared.pageInstance;
+    bindExpenseWorkbenchLifecycle();
+    if (!isExpenseWorkbenchSurfaceActive()) {
+      await closeExpenseWorkbenchCapability().catch(() => {});
+      throw new Error('expense workbench page is no longer active');
+    }
+    return {
+      ok: true,
+      expires_at: typeof response.expires_at === 'string' ? response.expires_at : '',
+      management_surface: response.management_surface === 'expense_workbench'
+        ? response.management_surface
+        : 'expense_workbench',
+    };
+  },
+  status: () => expenseWorkbenchInvoke('expenseWorkbench.status', 'status', {}),
+  configure: () => expenseWorkbenchInvoke('expenseWorkbench.pickAndConfigure', 'configure', {}),
+  invoke: (operationValue, payload) => {
+    const operation = String(operationValue || '');
+    return expenseWorkbenchInvoke('expenseWorkbench.invoke', `invoke:${operation}`, {
+      operation,
+      payload: payload || {},
+    });
+  },
+  invokeExternal: (operationValue, payload) => {
+    const operation = String(operationValue || '');
+    return expenseWorkbenchInvoke('expenseWorkbench.invokeExternal', `external:${operation}`, {
+      operation,
+      payload: payload || {},
+    });
+  },
+  pickAndAddMaterials: (applicationId) => expenseWorkbenchInvoke(
+    'expenseWorkbench.pickAndAddMaterials',
+    `materials:add:${String(applicationId || '')}`,
+    { application_id: String(applicationId || '') },
+  ),
+  approveApplication: (applicationId, approvalRole, decision, expectedArtifactHash, comment) => {
+    const normalizedApplicationId = String(applicationId || '');
+    const normalizedApprovalRole = String(approvalRole || '');
+    const normalizedDecision = String(decision || '');
+    const normalizedArtifactHash = String(expectedArtifactHash || '');
+    return expenseWorkbenchInvoke(
+      'expenseWorkbench.approveApplication',
+      `approve:${normalizedApplicationId}:${normalizedApprovalRole}:${normalizedDecision}:${normalizedArtifactHash}`,
+      {
+        application_id: normalizedApplicationId,
+        approval_role: normalizedApprovalRole,
+        decision: normalizedDecision,
+        expected_artifact_hash: normalizedArtifactHash,
+        comment: String(comment || ''),
+      },
+    );
+  },
+  confirmAndSubmit: (applicationId, version, payloadHash) => expenseWorkbenchInvoke(
+    'expenseWorkbench.confirmAndSubmit',
+    `submit:${String(applicationId || '')}:${String(version)}:${String(payloadHash || '')}`,
+    {
+      application_id: String(applicationId || ''),
+      version,
+      payload_hash: String(payloadHash || ''),
+    },
+  ),
+  close: async () => {
+    try {
+      return await closeExpenseWorkbenchCapability();
+    } catch (_) {
+      return { ok: true, closed: true };
+    }
+  },
+});
+
+window.addEventListener('click', captureExpenseWorkbenchGesture, true);
+window.addEventListener('DOMContentLoaded', bindExpenseWorkbenchLifecycle, { once: true });
+if (document.readyState !== 'loading') bindExpenseWorkbenchLifecycle();
+
 /**
  * Resolve genuine DOM File objects to OS paths inside preload and immediately
  * hand them to main. Raw paths are never exposed to renderer JavaScript, and
@@ -188,6 +439,7 @@ contextBridge.exposeInMainWorld('orkas', {
   getLocales: () => invoke('config.getLocales'),
   recycleBin,
   quality,
+  expenseWorkbench,
   invoke,
   stream,
   onPushEvent,

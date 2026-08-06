@@ -29,11 +29,13 @@ vi.mock('../../../../src/main/features/group_chat/bus', () => ({
   })),
 }));
 vi.mock('../../../../src/main/features/agents', () => ({
-  getAgent: vi.fn(async (id: string) => ({
+  getAgentForChatDispatch: vi.fn(async (_uid: string, id: string) => ({
     id,
     name: 'Test Agent',
     interactive: false,
   })),
+  getAgentDispatchPolicy: vi.fn(async () => ({ enabled: true })),
+  isAgentChatDispatchable: vi.fn(() => true),
 }));
 vi.mock('../../../../src/main/features/component_enabled', () => ({
   isAgentEnabled: vi.fn(() => true),

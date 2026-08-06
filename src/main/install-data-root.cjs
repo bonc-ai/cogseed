@@ -1,7 +1,5 @@
 /**
- * Platform-aware resolution of the install data root + boot-time env-var
- * initialization. Source-run (dev) and packaged builds resolve to the SAME
- * container — no dev-vs-prod data split.
+ * Platform-aware resolution of the install data root and source-run variant.
  *
  * Two responsibilities packed in one file:
  *
@@ -18,9 +16,8 @@
  *        (machine-private), not Roaming (cross-machine), because it
  *        records a drive choice on THIS machine.
  *
- *   2. **Module-load side effect** — the `_initInstallRoot()` IIFE at the
- *      bottom resolves the container, runs the one-shot source-run
- *      `<repoRoot>/data` → `<container>/data` migration, and sets
+ *   2. `initializeInstallDataRoot()` resolves the variant container, runs
+ *      the one-shot legacy source migration for `main` only, and sets
  *      `process.env.ORKAS_WORKSPACE_ROOT`. **This MUST be a `.cjs` file
  *      called from `bootstrap.cjs` BEFORE `tsx/cjs` is registered:** any
  *      TypeScript module that touches `paths.ts` reads `WS_ROOT` from the
@@ -29,8 +26,10 @@
  *      could set it. CJS require has no hoisting; doing this in
  *      bootstrap.cjs's pre-tsx phase keeps the contract simple.
  *
- *      `ORKAS_WORKSPACE_ROOT` already set → short-circuit, letting tests
- *      (`test/setup-env.ts`) and power users override the whole flow.
+ *      A caller may opt into a pre-set `ORKAS_WORKSPACE_ROOT` only for
+ *      controlled packaged-dev verification. Normal source and packaged
+ *      startup reject inherited roots so one app identity cannot silently
+ *      attach to another identity's data.
  */
 
 'use strict';
@@ -39,6 +38,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+
+const RUNTIME_VARIANTS = Object.freeze(['main', 'cognition', 'expense', 'integration', 'optimization']);
+const SOURCE_RUNTIME_VARIANTS = Object.freeze(['cognition', 'expense', 'integration', 'optimization']);
 
 // Early-boot diagnostics buffer. This file runs before logger.ts can be
 // loaded (logger imports paths.ts, which depends on the env var THIS file
@@ -57,9 +59,79 @@ function flushEarlyDiagnostics(sink) {
   _earlyDiagnostics.length = 0;
 }
 
-function resolveInstallContainer() {
-  if (process.platform === 'win32') return resolveWindowsContainer();
-  return path.join(os.homedir(), '.orkas');
+function validateRuntimeVariant(value) {
+  const variant = typeof value === 'string' ? value.trim() : '';
+  if (!RUNTIME_VARIANTS.includes(variant)) {
+    throw new Error(
+      `invalid ORKAS_RUNTIME_VARIANT ${JSON.stringify(value)}; expected ${RUNTIME_VARIANTS.join('|')}`,
+    );
+  }
+  return variant;
+}
+
+/**
+ * @param {{ argv?: readonly string[], envVariant?: string, isPackaged?: boolean, sourceVariant?: string }} [options]
+ */
+function selectRuntimeVariant(options = {}) {
+  const { argv = [], envVariant, isPackaged = false, sourceVariant } = options;
+  const values = [];
+  for (const arg of argv) {
+    if (typeof arg !== 'string') continue;
+    if (arg === '--orkas-runtime-variant') {
+      throw new Error('--orkas-runtime-variant requires =main|cognition|expense|integration|optimization');
+    }
+    if (arg.startsWith('--orkas-runtime-variant=')) {
+      values.push(arg.slice('--orkas-runtime-variant='.length));
+    }
+  }
+  if (values.length > 1 && new Set(values).size > 1) {
+    throw new Error('conflicting --orkas-runtime-variant values');
+  }
+
+  const cliVariant = values[0];
+  const inheritedVariant = typeof envVariant === 'string' && envVariant.trim()
+    ? envVariant.trim()
+    : undefined;
+  if (cliVariant && inheritedVariant && cliVariant !== inheritedVariant) {
+    throw new Error(
+      `runtime variant conflict: argument=${cliVariant}, ORKAS_RUNTIME_VARIANT=${inheritedVariant}`,
+    );
+  }
+
+  const requested = cliVariant || inheritedVariant;
+  if (requested) validateRuntimeVariant(requested);
+  if (isPackaged) {
+    if (requested && requested !== 'main') {
+      throw new Error('packaged Mate Agent only supports the main runtime variant');
+    }
+    return 'main';
+  }
+
+  const lockedVariant = typeof sourceVariant === 'string' ? sourceVariant.trim() : '';
+  if (!SOURCE_RUNTIME_VARIANTS.includes(lockedVariant)) {
+    throw new Error(
+      `invalid or missing source runtime lock ${JSON.stringify(sourceVariant)}; expected ${SOURCE_RUNTIME_VARIANTS.join('|')}`,
+    );
+  }
+  if (requested && requested !== lockedVariant) {
+    throw new Error(
+      `source runtime is locked to ${lockedVariant}; requested ${requested} is not allowed`,
+    );
+  }
+  return lockedVariant;
+}
+
+function resolveVariantContainer(baseContainer, variant) {
+  const normalized = validateRuntimeVariant(variant);
+  const base = path.resolve(baseContainer);
+  return normalized === 'main' ? base : path.join(base, 'runtime-variants', normalized);
+}
+
+function resolveInstallContainer(variant = process.env.ORKAS_RUNTIME_VARIANT) {
+  const base = process.platform === 'win32'
+    ? resolveWindowsContainer()
+    : path.join(os.homedir(), '.orkas');
+  return resolveVariantContainer(base, variant);
 }
 
 // ── Windows pin file ─────────────────────────────────────────────────────
@@ -218,22 +290,41 @@ function listFixedDrivesWin() {
 }
 
 // ── Module-load setup ────────────────────────────────────────────────────
-// IIFE: resolve the container, migrate any pre-unification source-run data
-// into it, and set `ORKAS_WORKSPACE_ROOT`. Runs once at require time. The
-// `ORKAS_WORKSPACE_ROOT` short-circuit lets tests / power users override
-// the whole flow by pre-setting the env var.
-(function _initInstallRoot() {
-  if (process.env.ORKAS_WORKSPACE_ROOT) return;
+// Called exactly once from bootstrap before tsx loads project TypeScript.
+// Pre-set workspace roots are accepted only when the caller explicitly marks
+// a controlled verification launch. Normal app startup must derive its root
+// from the already-locked runtime identity.
+function initializeInstallDataRoot(
+  variantValue = process.env.ORKAS_RUNTIME_VARIANT,
+  options = {},
+) {
+  const variant = validateRuntimeVariant(variantValue);
+  if (process.env.ORKAS_WORKSPACE_ROOT) {
+    if (options.allowWorkspaceOverride !== true) {
+      throw new Error('inherited ORKAS_WORKSPACE_ROOT is not allowed for normal app startup');
+    }
+    process.env.ORKAS_RUNTIME_CONTAINER = path.dirname(
+      path.resolve(process.env.ORKAS_WORKSPACE_ROOT),
+    );
+    return Object.freeze({
+      variant,
+      container: process.env.ORKAS_RUNTIME_CONTAINER,
+      workspaceRoot: path.resolve(process.env.ORKAS_WORKSPACE_ROOT),
+      overridden: true,
+    });
+  }
 
-  const container = resolveInstallContainer();
+  const container = resolveInstallContainer(variant);
 
   // Migration is best-effort: a failure here should not block boot. The
   // source-run `<repoRoot>/data` is left in place for retry;
   // `<container>/data` is still mkdir'd below so paths.ts has a usable
   // WS_ROOT either way.
   try {
-    const { migrateSourceDataRoot } = require('./util/migrate-source-data-root.cjs');
-    migrateSourceDataRoot(container);
+    if (variant === 'main') {
+      const { migrateSourceDataRoot } = require('./util/migrate-source-data-root.cjs');
+      migrateSourceDataRoot(container);
+    }
   } catch (err) {
     _earlyWarn(
       `[install-data-root] source-run data migration failed: ${err.message}\n`,
@@ -242,7 +333,18 @@ function listFixedDrivesWin() {
 
   const ws = path.join(container, 'data');
   fs.mkdirSync(ws, { recursive: true });
+  process.env.ORKAS_RUNTIME_CONTAINER = container;
   process.env.ORKAS_WORKSPACE_ROOT = ws;
-})();
+  return Object.freeze({ variant, container, workspaceRoot: ws, overridden: false });
+}
 
-module.exports = { resolveInstallContainer, flushEarlyDiagnostics };
+module.exports = {
+  RUNTIME_VARIANTS,
+  SOURCE_RUNTIME_VARIANTS,
+  validateRuntimeVariant,
+  selectRuntimeVariant,
+  resolveVariantContainer,
+  resolveInstallContainer,
+  initializeInstallDataRoot,
+  flushEarlyDiagnostics,
+};

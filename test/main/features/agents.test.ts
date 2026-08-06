@@ -28,6 +28,7 @@ vi.mock('../../../src/main/model/client', () => ({
 let tmpDir: string;
 let prevWs: string | undefined;
 const TEST_UID = 'u1';
+const CANONICAL_EXPENSE_AGENT_ID = 'c045605cb916';
 
 beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-agents-'));
@@ -81,6 +82,7 @@ function writeCustomAgent(agentId: string, fields: Partial<Record<string, any>> 
   if ('skill_list' in fields) data.skill_list = fields.skill_list;
   if ('runtime' in fields) data.runtime = fields.runtime;
   if ('interface_contract' in fields) data.interface_contract = fields.interface_contract;
+  if ('interaction_mode' in fields) data.interaction_mode = fields.interaction_mode;
   fs.writeFileSync(path.join(dir, 'agent.json'), JSON.stringify(data));
 }
 
@@ -140,6 +142,174 @@ function writeExternalPackageSkill(pkgName: string, skillId: string): string {
   }));
   return root;
 }
+
+describe('agents › ordinary dispatch policy', () => {
+  it('reads only policy files and rejects management-only Agents', async () => {
+    writeCustomAgent('expense-agent', { interaction_mode: 'management_only' });
+    const memoryDir = path.join(customAgentsDir(), 'expense-agent', 'memory');
+    fs.mkdirSync(memoryDir, { recursive: true });
+    fs.writeFileSync(path.join(memoryDir, 'MEMORY.md'), 'private agent memory');
+    fs.writeFileSync(
+      path.join(customAgentsDir(), 'expense-agent', 'runtime_stats.json'),
+      '{broken runtime stats',
+    );
+
+    const opened: string[] = [];
+    vi.doMock('node:fs/promises', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('node:fs/promises')>();
+      return {
+        ...actual,
+        open: async (...args: Parameters<typeof actual.open>) => {
+          opened.push(path.resolve(String(args[0])));
+          return actual.open(...args);
+        },
+        readFile: async (...args: Parameters<typeof actual.readFile>) => {
+          opened.push(path.resolve(String(args[0])));
+          return (actual.readFile as (...readArgs: Parameters<typeof actual.readFile>) => ReturnType<typeof actual.readFile>)(...args);
+        },
+      };
+    });
+    try {
+      const agents = await loadAgents();
+      opened.length = 0;
+      await expect(agents.assertAgentChatDispatchable(TEST_UID, 'expense-agent'))
+        .rejects.toMatchObject({ code: agents.MANAGEMENT_ONLY_AGENT_ERROR_CODE });
+      expect(opened).toContain(path.join(customAgentsDir(), 'expense-agent', 'agent.json'));
+      expect(opened.every((file) => (
+        file.endsWith(`${path.sep}agent.json`)
+        || file.endsWith(`${path.sep}component-enabled.json`)
+      ))).toBe(true);
+      expect(opened).not.toContain(path.join(memoryDir, 'MEMORY.md'));
+      expect(opened).not.toContain(path.join(customAgentsDir(), 'expense-agent', 'runtime_stats.json'));
+    } finally {
+      vi.doUnmock('node:fs/promises');
+    }
+  });
+
+  it('fails closed for missing, malformed, mismatched, and invalid policies', async () => {
+    const malformedDir = path.join(customAgentsDir(), 'malformed');
+    fs.mkdirSync(malformedDir, { recursive: true });
+    fs.writeFileSync(path.join(malformedDir, 'agent.json'), '{not-json');
+    writeCustomAgent('mismatch');
+    fs.writeFileSync(
+      path.join(customAgentsDir(), 'mismatch', 'agent.json'),
+      JSON.stringify({ agent_id: 'another-agent' }),
+    );
+
+    const agents = await loadAgents();
+    for (const agentId of ['missing', 'malformed', 'mismatch', '../escape']) {
+      await expect(agents.assertAgentChatDispatchable(TEST_UID, agentId))
+        .rejects.toMatchObject({ code: 'E_AGENT_CHAT_UNAVAILABLE' });
+    }
+  });
+
+  it('allows a valid enabled ordinary Agent and rejects a disabled one', async () => {
+    writeCustomAgent('ordinary-agent');
+    const agents = await loadAgents();
+    await expect(agents.assertAgentChatDispatchable(TEST_UID, 'ordinary-agent')).resolves.toBeUndefined();
+
+    agents.setAgentEnabledForActiveUser('ordinary-agent', false);
+    await expect(agents.assertAgentChatDispatchable(TEST_UID, 'ordinary-agent'))
+      .rejects.toMatchObject({ code: 'E_AGENT_CHAT_UNAVAILABLE' });
+  });
+
+  it('builds a runtime-safe ordinary Agent projection without memory or statistics', async () => {
+    writeSkillOnDisk('16e1bfcb3426', 'agent-creator');
+    writeCustomAgent('ordinary-agent', {
+      workflow: 'skill: follow the `16e1bfcb3426` skill',
+      runtime: { kind: 'in_process' },
+      interface_contract: { protocol_version: 1 },
+    });
+    const memoryDir = path.join(customAgentsDir(), 'ordinary-agent', 'memory');
+    fs.mkdirSync(memoryDir, { recursive: true });
+    fs.writeFileSync(path.join(memoryDir, 'MEMORY.md'), 'runtime private memory');
+    fs.writeFileSync(
+      path.join(customAgentsDir(), 'ordinary-agent', 'runtime_stats.json'),
+      JSON.stringify({ total_runs: 7 }),
+    );
+
+    const agents = await loadAgents();
+    const runtimeAgent = await agents.getAgentForChatDispatch(TEST_UID, 'ordinary-agent');
+
+    expect(runtimeAgent?.workflow).toBe('`agent-creator` skill');
+    expect(runtimeAgent?.runtime).toEqual({ kind: 'in_process' });
+    expect(runtimeAgent?.interface_contract).toBeTruthy();
+    expect(runtimeAgent?.profile?.memory).toBeUndefined();
+    expect(runtimeAgent?.runtime_stats).toBeUndefined();
+  });
+
+  it('rejects a management-only Agent before loading skill metadata, memory, or statistics', async () => {
+    writeCustomAgent('management-agent', { interaction_mode: 'management_only' });
+    writeSkillOnDisk('private-skill', 'private-skill');
+    const memoryDir = path.join(customAgentsDir(), 'management-agent', 'memory');
+    fs.mkdirSync(memoryDir, { recursive: true });
+    fs.writeFileSync(path.join(memoryDir, 'MEMORY.md'), 'private agent memory');
+
+    const opened: string[] = [];
+    vi.doMock('node:fs/promises', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('node:fs/promises')>();
+      return {
+        ...actual,
+        readFile: async (...args: Parameters<typeof actual.readFile>) => {
+          opened.push(path.resolve(String(args[0])));
+          return (actual.readFile as (...readArgs: Parameters<typeof actual.readFile>) => ReturnType<typeof actual.readFile>)(...args);
+        },
+      };
+    });
+    try {
+      const agents = await loadAgents();
+      opened.length = 0;
+      await expect(agents.getAgentForChatDispatch(TEST_UID, 'management-agent')).resolves.toBeNull();
+      expect(opened.some((file) => file.endsWith(`${path.sep}SKILL.md`))).toBe(false);
+      expect(opened).not.toContain(path.join(memoryDir, 'MEMORY.md'));
+      expect(opened).not.toContain(path.join(customAgentsDir(), 'management-agent', 'runtime_stats.json'));
+    } finally {
+      vi.doUnmock('node:fs/promises');
+    }
+  });
+
+  it('uses the same tolerant interaction-mode semantics as normalizeAgent', async () => {
+    writeCustomAgent('future-ordinary-agent', { interaction_mode: 'ordinary' });
+    const agents = await loadAgents();
+
+    expect(agents.normalizeAgent({
+      agent_id: 'future-ordinary-agent',
+      interaction_mode: 'ordinary',
+    }, 'custom')?.interaction_mode).toBeUndefined();
+    await expect(agents.assertAgentChatDispatchable(TEST_UID, 'future-ordinary-agent'))
+      .resolves.toBeUndefined();
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['invalid', 'ordinary'],
+    ['malformed type', { forged: true }],
+  ])('keeps the fixed reimbursement identity management-only when its mode is %s', async (
+    _label,
+    interactionMode,
+  ) => {
+    writeCustomAgent(CANONICAL_EXPENSE_AGENT_ID, { interaction_mode: interactionMode });
+    const agents = await loadAgents();
+
+    expect(agents.normalizeAgent({
+      agent_id: CANONICAL_EXPENSE_AGENT_ID,
+      interaction_mode: interactionMode,
+    }, 'custom')?.interaction_mode).toBe('management_only');
+    await expect(agents.assertAgentChatDispatchable(TEST_UID, CANONICAL_EXPENSE_AGENT_ID))
+      .rejects.toMatchObject({ code: agents.MANAGEMENT_ONLY_AGENT_ERROR_CODE });
+  });
+
+  it('fails closed when a malformed marketplace definition shadows a forged custom fixed identity', async () => {
+    writeCustomAgent(CANONICAL_EXPENSE_AGENT_ID, { interaction_mode: 'ordinary' });
+    const marketplaceDir = path.join(builtinAgentsDir(), CANONICAL_EXPENSE_AGENT_ID);
+    fs.mkdirSync(marketplaceDir, { recursive: true });
+    fs.writeFileSync(path.join(marketplaceDir, 'agent.json'), '{not-json');
+    const agents = await loadAgents();
+
+    await expect(agents.assertAgentChatDispatchable(TEST_UID, CANONICAL_EXPENSE_AGENT_ID))
+      .rejects.toMatchObject({ code: agents.AGENT_CHAT_UNAVAILABLE_ERROR_CODE });
+  });
+});
 
 describe('agents › normalizeAgent', () => {
   it('returns null for missing agent_id', async () => {

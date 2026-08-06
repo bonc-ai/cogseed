@@ -35,13 +35,14 @@ import { t } from '../../i18n';
 // future targeted use; runtime no longer renders the prompt block from it.
 import { getSession, memoryScopeForSession, sessionKindOf, toolResultsDirForSession } from './session-store';
 import {
-  addEntry,
-  replaceEntry,
-  removeEntry,
+  addEntryTransactional,
+  replaceEntryTransactional,
+  removeEntryTransactional,
   listEntries,
   formatForSystemPrompt as formatMemoryForSystemPrompt,
   type MemoryScope,
 } from '../../features/memory';
+import { listActiveCognitionSourceIds } from '../../features/cognition';
 import {
   formatProjectContextPolicyForSystemPrompt,
   formatProjectInstructionsForSystemPrompt,
@@ -49,7 +50,8 @@ import {
 } from '../../features/projects';
 import * as projectTasks from '../../features/project_tasks';
 import * as metacognition from '../../features/metacognition';
-import { appendAgentSkill, listAgents } from '../../features/agents';
+import { assertAgentChatDispatchable } from '../../features/agent-dispatch-policy';
+import { appendAgentSkill, listAgentSummaries } from '../../features/agents';
 const log = createLogger('model/runner');
 import { createLocalTools, createFileTools } from './local-tools';
 import { createOfficeTools } from './office-tools';
@@ -175,6 +177,8 @@ function _intersectRenderAllowlist(
 
 export interface BuildRunnerParams {
   sessionId: string;
+  /** Disable all SDK and host tools for text-only utility calls. */
+  disableTools?: boolean;
   systemPrompt?: string;
   userId?: string;
   /** Conversation id. Used by file-tools to scope read_file / search_file
@@ -385,6 +389,11 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
    *  Not injected into model context; reused for process-log labels. */
   agentDisplayNameById: Map<string, string>;
 }> {
+  if (params.agentId) await assertAgentChatDispatchable(
+    params.userId || _safeActiveUserId() || '',
+    params.agentId,
+  );
+
   // Auth gate first — if no group has any usable candidate, fail before
   // loading core-agent / scanning skills / opening a session file. Gives
   // a clear user message instead of the Anthropic SDK's "Could not
@@ -463,7 +472,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   const agentDisplayNameById = new Map<string, string>();
   if (uid) {
     try {
-      for (const agent of await listAgents()) {
+      for (const agent of await listAgentSummaries()) {
         if (agent?.agent_id) agentDisplayNameById.set(agent.agent_id, agent.name || agent.agent_id);
       }
     } catch (err) {
@@ -521,9 +530,15 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
       : tier === 'project' ? { project: projectScopeId }
       : tier === 'shared' ? 'memory' : 'user';
     const memoryHandler: MemoryToolHandler = {
-      add: (tier, content) => addEntry(uid, toScope(tier), content),
-      replace: (tier, oldText, content) => replaceEntry(uid, toScope(tier), oldText, content),
-      remove: (tier, oldText) => removeEntry(uid, toScope(tier), oldText),
+      add: (tier, content) => addEntryTransactional(uid, toScope(tier), content),
+      replace: async (tier, oldText, content) => {
+        const scope = toScope(tier);
+        return replaceEntryTransactional(uid, scope, oldText, content);
+      },
+      remove: async (tier, oldText) => {
+        const scope = toScope(tier);
+        return removeEntryTransactional(uid, scope, oldText);
+      },
       list: (tier) => listEntries(uid, toScope(tier)),
     };
     const { createCrossSessionMemoryTool } = await import('../../../core-agent/src/tools/memory-tool');
@@ -825,9 +840,11 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // never reach another actor's tools[] regardless of which injection path
   // produced it. Caller-supplied extraTools / core-agent builtins aren't in the
   // catalog, so `isToolVisibleToAgent` returns true for them (unaffected).
-  const visibleTools = allTools.filter((tool) => isToolVisibleToAgent(tool.name, agentId));
+  const visibleTools = params.disableTools
+    ? []
+    : allTools.filter((tool) => isToolVisibleToAgent(tool.name, agentId));
   const visibleToolNameSet = new Set(visibleTools.map((tool) => tool.name));
-  const builtinTools = mod.getBuiltinTools();
+  const builtinTools = params.disableTools ? [] : mod.getBuiltinTools();
 
   // Apply one simple 8K per-result policy at AgentRunner's FINAL result
   // boundary. Keeping this as a result transformer (instead of pre-wrapping
@@ -930,7 +947,22 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // Empty string when nothing is stored (no tokens for new users).
   // Re-read each turn — a mid-conversation write shows up next turn.
   // Project sessions additionally render the project's own notes section.
-  const memoryBlock = (uid && memoryAgentScope) ? formatMemoryForSystemPrompt(uid, memoryAgentScope, params.projectId) : '';
+  let activeCognitionSourceIds: ReadonlySet<string> = new Set();
+  if (uid && memoryAgentScope) {
+    try {
+      activeCognitionSourceIds = await listActiveCognitionSourceIds(uid);
+    } catch (err) {
+      // Fail closed for machine-owned cognition records while leaving the
+      // user's independent USER/MEMORY entries available to the model.
+      log.warn('active cognition memory scan failed', {
+        user_id: maskId(uid),
+        error: logErrorSummary(err),
+      });
+    }
+  }
+  const memoryBlock = (uid && memoryAgentScope)
+    ? formatMemoryForSystemPrompt(uid, memoryAgentScope, params.projectId, activeCognitionSourceIds)
+    : '';
   if (memoryBlock) parts.push(memoryBlock);
   const resolvedSystemPrompt = parts.join('\n\n');
   // P2: the truly per-turn-volatile blocks — the orchestration ledger (~7-9K
@@ -1066,7 +1098,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     config,
     providers,
     session,
-    ...(visibleTools.length ? { tools: visibleTools } : {}),
+    ...(params.disableTools ? { disableTools: true } : (visibleTools.length ? { tools: visibleTools } : {})),
     ...(transformToolResult ? { transformToolResult } : {}),
     ...(toolResultsDir ? { toolContextState: { toolResultSpoolDir: toolResultsDir } } : {}),
     ...(params.skillList !== undefined ? { skillAllowlist: params.skillList } : {}),

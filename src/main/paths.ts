@@ -51,13 +51,19 @@ export const PC_ROOT       = path.resolve(__dirname, '..', '..');      // PC
 export const APP_ROOT      = PC_ROOT;
 export const PROJECT_ROOT  = path.resolve(PC_ROOT, '..');              // Orkas
 
+export function packagedResourcesRoot(): string | null {
+  const resourcesPath = (process as unknown as { resourcesPath?: string }).resourcesPath;
+  return resourcesPath && !resourcesPath.includes(`${path.sep}node_modules${path.sep}electron${path.sep}`)
+    ? resourcesPath
+    : null;
+}
+
 function packagedResourceDir(name: string): string {
-  if (name === 'builtin' && process.env.ORKAS_BUILTIN_ROOT) {
+  if (name === 'builtin' && process.env.ORKAS_BUILTIN_ROOT && !packagedResourcesRoot()) {
     return path.resolve(process.env.ORKAS_BUILTIN_ROOT);
   }
-  const rp = (process as unknown as { resourcesPath?: string }).resourcesPath;
-  const looksPackaged = rp && !rp.includes(`${path.sep}node_modules${path.sep}electron${path.sep}`);
-  return looksPackaged ? path.join(rp, name) : path.join(PC_ROOT, 'resources', name);
+  const resourcesRoot = packagedResourcesRoot();
+  return resourcesRoot ? path.join(resourcesRoot, name) : path.join(PC_ROOT, 'resources', name);
 }
 
 // ── Data root ────────────────────────────────────────────────────────────
@@ -195,6 +201,12 @@ export const userKbConfigPath    = (uid: string) => path.join(userKbDir(uid), 'c
 export const userMemoryDir   = (uid: string) => path.join(userCloudRoot(uid), 'memory');
 export const userMemoryFile  = (uid: string) => path.join(userMemoryDir(uid), 'MEMORY.md'); // shared/project tier
 export const userProfileFile = (uid: string) => path.join(userMemoryDir(uid), 'USER.md');
+
+// Evidence-backed reusable working patterns. This is separate from the terse
+// USER.md/MEMORY.md stores and from personal-ontology groups: cognition owns
+// review state, evidence, reuse history, and its derived growth stage.
+export const userCognitionDir  = (uid: string) => path.join(userCloudRoot(uid), 'cognition');
+export const userCognitionFile = (uid: string) => path.join(userCognitionDir(uid), 'assets.json');
 
 /** Guard an agent id used as a single path segment for agent-scoped memory.
  *  The id is bound by the runner to the calling agent (never model-supplied),
@@ -399,6 +411,19 @@ export const userRemoteConfigFile = (uid: string) => path.join(userLocalConfigDi
 // Machine-local defaults for external coding agents. Values are absolute
 // project directories, so they must not sync across devices.
 export const userAgentRuntimeConfigFile = (uid: string) => path.join(userLocalConfigDir(uid), 'agent-runtime.json');
+// Machine-private configuration and process state for the canonical expense workbench.
+export const userExpenseWorkbenchConfigFile = (uid: string) =>
+  path.join(userLocalConfigDir(uid), 'expense-workbench.json');
+export const userExpenseWorkbenchRuntimeDir = (uid: string) =>
+  path.join(userLocalRoot(uid), 'expense-workbench');
+export const userExpenseWorkbenchHomeDir = (uid: string) =>
+  path.join(userExpenseWorkbenchRuntimeDir(uid), 'home');
+export const userExpenseWorkbenchTempDir = (uid: string) =>
+  path.join(userExpenseWorkbenchRuntimeDir(uid), 'tmp');
+export const userExpenseWorkbenchComponentDataDir = (uid: string) =>
+  path.join(userExpenseWorkbenchHomeDir(uid), '.expense_reimbursement');
+export const userExpenseWorkbenchConfirmationsDir = (uid: string) =>
+  path.join(userExpenseWorkbenchComponentDataDir(uid), 'host-confirmations');
 
 // Local search index (derived data, self-healing via reconcile, never synced).
 // Only the main conversation + knowledge base get a persistent inverted
@@ -761,6 +786,7 @@ export function ensureUserLayout(uid: string): void {
     userContextsDir(uid),
     userKbDir(uid),
     userMemoryDir(uid),
+    userCognitionDir(uid),
     userAgentsDir(uid),
     userSkillsDir(uid),
     userProjectsDir(uid),

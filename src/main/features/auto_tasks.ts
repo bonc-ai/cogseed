@@ -59,6 +59,7 @@ export { getCurrentDevice };
 import { getActiveUserId, hasActiveUser } from './users';
 import * as chats from './chats';
 import * as groupChat from './group_chat';
+import { getAgentForChatDispatch, getAgentDispatchPolicy, isAgentChatDispatchable } from './agents';
 
 const log = createLogger('auto-tasks');
 
@@ -451,7 +452,11 @@ function _normaliseDraft(d: TaskDraft): { ok: true; fields: NormalisedFields } |
 async function _projectAllowsRecipientAgent(uid: string, fields: NormalisedFields): Promise<boolean> {
   const projectId = fields.project_id;
   const recipient = fields.recipient;
-  if (!projectId || !recipient || recipient.kind !== 'agent') return true;
+  if (!recipient || recipient.kind !== 'agent') return true;
+  if (!isAgentChatDispatchable(await getAgentDispatchPolicy(uid, recipient.id))) return false;
+  const agent = await getAgentForChatDispatch(uid, recipient.id);
+  if (!isAgentChatDispatchable(agent)) return false;
+  if (!projectId) return true;
   if (!fs.existsSync(projectMetaFile(uid, projectId))) return true;
   const raw: any = await readJson(projectBindingsFile(uid, projectId));
   const allowed = Array.isArray(raw?.agents)
@@ -1100,6 +1105,19 @@ async function _fireTask(uid: string, task: AutoTask): Promise<void> {
       duration_ms: Math.max(0, Date.now() - startedAt),
     });
   };
+  if (task.recipient?.kind === 'agent') {
+    if (!isAgentChatDispatchable(await getAgentDispatchPolicy(uid, task.recipient.id))) {
+      log.warn(`fire rejected uid=${uid} id=${task.id} reason=recipient_unavailable`);
+      emitFailure('recipient_unavailable');
+      return;
+    }
+    const agent = await getAgentForChatDispatch(uid, task.recipient.id);
+    if (!isAgentChatDispatchable(agent)) {
+      log.warn(`fire rejected uid=${uid} id=${task.id} reason=recipient_unavailable`);
+      emitFailure('recipient_unavailable');
+      return;
+    }
+  }
   try {
     const conv = await chats.createConversation(uid, {
       kind: 'normal',

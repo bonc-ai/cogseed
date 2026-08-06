@@ -75,6 +75,20 @@ import {
 } from './marketplace_biz';
 import { normalizeInstallVersion } from './marketplace_installs';
 import { NAME_DISPLAY_MAX_UNITS, nameDisplayWidth } from '../util/name-limit';
+import {
+  getAgentDispatchPolicy,
+  isAgentChatDispatchable,
+  normalizeAgentInteractionMode,
+  type AgentInteractionMode,
+} from './agent-dispatch-policy';
+export {
+  AGENT_CHAT_UNAVAILABLE_ERROR_CODE,
+  MANAGEMENT_ONLY_AGENT_ERROR_CODE,
+  assertAgentChatDispatchable,
+  normalizeAgentInteractionMode,
+  type AgentDispatchPolicy,
+} from './agent-dispatch-policy';
+export { getAgentDispatchPolicy, isAgentChatDispatchable };
 
 export type AgentSource = 'marketplace' | 'custom';
 type AgentSourceInput = AgentSource | 'builtin';
@@ -88,6 +102,14 @@ export interface AgentInputOption {
 }
 
 export type AgentInputUiLanguage = 'zh' | 'en' | 'ja' | 'pt';
+
+/** Host-owned detail surfaces that an Agent definition may expose. */
+export type AgentManagementSurface = 'expense_workbench';
+export const AGENT_MANAGEMENT_SURFACES: ReadonlySet<string> = new Set(['expense_workbench']);
+
+/** Canonical role of the single reimbursement entry exposed by this build. */
+export type ReimbursementEntryRole = 'canonical';
+export const REIMBURSEMENT_ENTRY_ROLES: ReadonlySet<string> = new Set(['canonical']);
 
 /** Declarative schema for an agent's user-facing input parameters.
  * Populated by the agent-edit LLM (or commander quick-create) via the
@@ -231,6 +253,12 @@ export interface Agent {
    *  optionally persisted so runtime callers have one stable governance shape
    *  for in-process agents and external CLI expert agents. */
   interface_contract?: AgentInterfaceContract;
+  /** Optional host-owned management surface. */
+  management_surface?: AgentManagementSurface;
+  /** Declares the canonical reimbursement management entry. */
+  reimbursement_entry_role?: ReimbursementEntryRole;
+  /** Management-only Agents cannot be launched as ordinary chat workers. */
+  interaction_mode?: AgentInteractionMode;
   /** Marketplace category code. Empty string only for legacy/manual specs.
    *  Maintained by hidden create defaults and by the agent-edit LLM's `<category>` sub-tag. */
   category: string;
@@ -301,6 +329,9 @@ export interface AgentRaw {
   interactive?: unknown;
   runtime?: unknown;
   interface_contract?: unknown;
+  management_surface?: unknown;
+  reimbursement_entry_role?: unknown;
+  interaction_mode?: unknown;
   category?: unknown;
   status?: unknown;
   state?: unknown;
@@ -956,6 +987,19 @@ export function normalizeAgent(raw: AgentRaw | null | undefined, source: AgentSo
     agent.output_format = outputFormat;
   }
   agent.interface_contract = normalizeAgentInterfaceContract(raw.interface_contract, rt, outputFormat);
+  if (typeof raw.management_surface === 'string' && AGENT_MANAGEMENT_SURFACES.has(raw.management_surface)) {
+    agent.management_surface = raw.management_surface as AgentManagementSurface;
+  } else if (raw.management_surface !== undefined && raw.management_surface !== null) {
+    log.warn('ignoring unknown agent management surface');
+  }
+  if (typeof raw.reimbursement_entry_role === 'string'
+      && REIMBURSEMENT_ENTRY_ROLES.has(raw.reimbursement_entry_role)) {
+    agent.reimbursement_entry_role = raw.reimbursement_entry_role as ReimbursementEntryRole;
+  } else if (raw.reimbursement_entry_role !== undefined && raw.reimbursement_entry_role !== null) {
+    log.warn('ignoring unknown reimbursement entry role');
+  }
+  const interactionMode = normalizeAgentInteractionMode(raw.interaction_mode, raw.agent_id);
+  if (interactionMode) agent.interaction_mode = interactionMode;
   return agent;
 }
 
@@ -1381,14 +1425,14 @@ async function _listAgentSpecs(): Promise<Agent[]> {
  * Agents-tab contract. */
 export type AgentSummary = Pick<
   Agent,
-  'agent_id' | 'name' | 'source' | 'icon' | 'color' | 'category' | 'runtime'
+  'agent_id' | 'name' | 'source' | 'icon' | 'color' | 'category' | 'runtime' | 'interaction_mode'
 > & { enabled: boolean };
 
 /** Minimal data needed for global agent search. This deliberately avoids the
  * full-list enrichments (workflow display skills, memory and runtime stats). */
 export type AgentSearchListing = Pick<
   Agent,
-  'agent_id' | 'name' | 'source' | 'description_zh' | 'description_en'
+  'agent_id' | 'name' | 'source' | 'description_zh' | 'description_en' | 'interaction_mode'
 > & { enabled: boolean };
 
 export async function listAgentSummaries(): Promise<AgentSummary[]> {
@@ -1402,6 +1446,7 @@ export async function listAgentSummaries(): Promise<AgentSummary[]> {
     color: agent.color,
     category: agent.category,
     runtime: agent.runtime,
+    interaction_mode: agent.interaction_mode,
     enabled: !disabledAgentIds.has(agent.agent_id),
   }));
 }
@@ -1415,6 +1460,21 @@ export async function listAgentSearchListings(): Promise<AgentSearchListing[]> {
     source: agent.source,
     description_zh: agent.description_zh,
     description_en: agent.description_en,
+    interaction_mode: agent.interaction_mode,
+    enabled: !disabledAgentIds.has(agent.agent_id),
+  }));
+}
+
+/**
+ * Full declarative Agent specs for dispatch routing, without loading skill
+ * catalogs, private memory, or runtime statistics. Runtime code must use this
+ * view until the lightweight dispatch policy has admitted a concrete Agent.
+ */
+export async function listAgentDispatchSpecs(): Promise<Agent[]> {
+  const specs = await _listAgentSpecs();
+  const { agents: disabledAgentIds } = readDisabledSets(getActiveUserId());
+  return specs.map((agent) => ({
+    ...agent,
     enabled: !disabledAgentIds.has(agent.agent_id),
   }));
 }
@@ -1437,11 +1497,24 @@ export async function listAgents(): Promise<Agent[]> {
  * Returns normalized agent or null.
  */
 export async function getAgent(agentId: string | null | undefined): Promise<Agent | null> {
-  if (!agentId) return null;
+  const userId = getActiveUserId();
+  const norm = await _readAgentSpec(userId, agentId);
+  if (!norm) return null;
+  return _withAgentRuntimeStats(
+    userId,
+    _withAgentMemoryEntries(userId, _withDisplaySkillRefs(norm, await _skillSpecsForDisplay())),
+  );
+}
+
+async function _readAgentSpec(
+  userId: string,
+  agentId: string | null | undefined,
+): Promise<Agent | null> {
+  if (!agentId || !safeId(agentId)) return null;
   for (const source of ['marketplace', 'custom'] as AgentSource[]) {
     const f = isMarketplaceSource(source)
-      ? _platformAgentSpecFile(agentId)
-      : agentDefinitionFile(getActiveUserId(), agentId);
+      ? path.join(userMarketplaceAgentDir(userId, agentId), 'agent.json')
+      : agentDefinitionFile(userId, agentId);
     if (!fs.existsSync(f)) continue;
     try {
       const data = await readJson<AgentRaw>(f);
@@ -1450,16 +1523,32 @@ export async function getAgent(agentId: string | null | undefined): Promise<Agen
         if (isMarketplaceSource(source)) {
           _applyMarketplaceInstallMeta(norm, path.dirname(f));
         }
-        const { agents: disabledAgentIds } = readDisabledSets(getActiveUserId());
+        const { agents: disabledAgentIds } = readDisabledSets(userId);
         norm.enabled = !disabledAgentIds.has(norm.agent_id);
-        return _withAgentRuntimeStats(
-          getActiveUserId(),
-          _withAgentMemoryEntries(getActiveUserId(), _withDisplaySkillRefs(norm, await _skillSpecsForDisplay())),
-        );
+        return norm;
       }
     } catch { /* ignore */ }
   }
   return null;
+}
+
+/**
+ * Resolve an ordinary runtime target without touching its private memory or
+ * runtime statistics. Once the lightweight policy admits the Agent, normalize
+ * legacy workflow skill ids for the model-facing prompt, then recheck policy
+ * so a concurrent disable or management-mode transition fails closed.
+ */
+export async function getAgentForChatDispatch(
+  userId: string,
+  agentId: string | null | undefined,
+): Promise<Agent | null> {
+  const initialPolicy = await getAgentDispatchPolicy(userId, agentId);
+  if (!isAgentChatDispatchable(initialPolicy)) return null;
+  const agent = await _readAgentSpec(userId, agentId);
+  if (!isAgentChatDispatchable(agent)) return null;
+  const runtimeAgent = _withDisplaySkillRefs(agent, await _skillSpecsForDisplay(userId));
+  const currentPolicy = await getAgentDispatchPolicy(userId, agentId);
+  return isAgentChatDispatchable(currentPolicy) ? runtimeAgent : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1519,8 +1608,8 @@ function resolveBilingualDescription(
   };
 }
 
-async function _skillSpecsForDisplay(): Promise<SkillAllowlistRef[]> {
-  try { return await listSkillSpecsForAgentMetadata(getActiveUserId()); }
+async function _skillSpecsForDisplay(userId = getActiveUserId()): Promise<SkillAllowlistRef[]> {
+  try { return await listSkillSpecsForAgentMetadata(userId); }
   catch (err) {
     log.warn(`skill display-name map unavailable: ${(err as Error).message}`);
     return [];
@@ -2502,6 +2591,7 @@ async function saveAgentChatMeta(userId: string, agentId: string, meta: AgentCha
 }
 
 export async function getAgentChatMessages(userId: string, agentId: string, limit = 500): Promise<any[]> {
+  if (!isAgentChatDispatchable(await getAgentDispatchPolicy(userId, agentId))) return [];
   return readJsonl(agentChatMsgsPath(userId, agentId), limit);
 }
 
@@ -2511,6 +2601,7 @@ async function _appendAgentChatMessage(userId: string, agentId: string, record: 
 }
 
 export async function clearAgentChat(userId: string, agentId: string): Promise<boolean> {
+  if (!isAgentChatDispatchable(await getAgentDispatchPolicy(userId, agentId))) return false;
   const agent = await getAgent(agentId);
   // Custom agents always allow clearing; built-in chat dirs only exist when
   // dev mode has been editing them — allow clearing those too.
@@ -2736,6 +2827,9 @@ export async function sendToAgentEditChat(
   content: string,
   opts: { attachments?: string[]; modelText?: string } = {},
 ): Promise<AgentEditResult> {
+  if (!isAgentChatDispatchable(await getAgentDispatchPolicy(userId, agentId))) {
+    return { ok: false, error: 'agent unavailable for ordinary chat' };
+  }
   const agent = await getAgent(agentId);
   if (!agent) return { ok: false, error: 'agent not found' };
   if (agent.source !== 'custom' && !false) {
@@ -2804,6 +2898,11 @@ export async function* streamSendToAgentEditChat(
   userId: string, agentId: string, content: string,
   opts: { abortSignal?: AbortSignal; attachments?: string[]; modelText?: string } = {},
 ): AsyncGenerator<any, void, unknown> {
+  if (!isAgentChatDispatchable(await getAgentDispatchPolicy(userId, agentId))) {
+    yield { type: 'error', text: 'agent unavailable for ordinary chat' };
+    yield { type: 'done' };
+    return;
+  }
   const agent = await getAgent(agentId);
   if (!agent) {
     yield { type: 'error', text: 'agent not found' };

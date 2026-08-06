@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import * as fsp from "node:fs/promises";
 import { Mutex } from "async-mutex";
 import { conversationLayout } from "../../util/project-layout";
 import {
@@ -2772,6 +2773,24 @@ export async function readActiveCollaborationSnapshot(
   return conversationLock(uid, cid).runExclusive(() =>
     readActiveCollaborationSnapshotUnlocked(uid, cid, projectIdHint),
   );
+}
+
+/** Remove only the active pointer when a message edit invalidates the current
+ * workflow. Historical run/context files remain available for audit, while
+ * subsequent turns cannot inherit an obsolete shared-task context. */
+export async function clearActiveCollaborationState(
+  uid: string,
+  cid: string,
+  projectIdHint?: string | null,
+): Promise<void> {
+  await conversationLock(uid, cid).runExclusive(async () => {
+    const activeFile = collaborationPaths(uid, cid, projectIdHint).activeFile;
+    try {
+      await fsp.unlink(activeFile);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+  });
 }
 
 function bulletList(items: Array<{ text: string }>, limit = 8): string[] {
