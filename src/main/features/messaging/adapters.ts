@@ -181,6 +181,18 @@ function feishuMentionOpenId(mention: NonNullable<FeishuMessage['mentions']>[num
   return '';
 }
 
+/** Feishu renders "@所有人" as an at-mention with id "all" (or the
+ * "@_all" key). Policy gates group traffic on mentions; an @all message
+ * addresses the bot as much as any explicit mention, so it counts. */
+function feishuMentionIsAll(mention: NonNullable<FeishuMessage['mentions']>[number]): boolean {
+  if (mention.key === '@_all') return true;
+  const idObject = typeof mention.id === 'object' && mention.id ? mention.id as Record<string, unknown> : null;
+  const idValue = typeof mention.id === 'string' ? mention.id : '';
+  const openId = typeof mention.open_id === 'string' ? mention.open_id : '';
+  const idOpenId = idObject && typeof idObject.open_id === 'string' ? idObject.open_id : '';
+  return ['all', '@_all'].includes((idValue || openId || idOpenId).trim());
+}
+
 /** Fallback text for media/forward/card messages. Every inbound Feishu
  * message degrades to a model-readable text envelope instead of being
  * dropped (mirrors Hermes' normalize_feishu_message chain). */
@@ -376,6 +388,7 @@ function normalizeFeishuEvent(
   if (!text) return null;
   const isGroup = message.chat_type === 'group';
   const normalizedBotOpenId = botOpenId.trim();
+  const mentionsAll = (message.mentions || []).some(feishuMentionIsAll);
   const botMentionTokens = normalizedBotOpenId
     ? (message.mentions || [])
       .filter((mention) => feishuMentionOpenId(mention) === normalizedBotOpenId)
@@ -394,7 +407,7 @@ function normalizeFeishuEvent(
     externalUserId: sender.open_id,
     text,
     isGroup,
-    mentionPresent: botMentionTokens.length > 0,
+    mentionPresent: botMentionTokens.length > 0 || mentionsAll,
     ...(botMentionTokens.length ? { botMentionTokens } : {}),
     replyToMessageId: message.message_id,
     ...(message.thread_id?.trim() || message.root_id?.trim() ? { replyInThread: true } : {}),
@@ -1346,4 +1359,4 @@ export function createAdapter(instance: MessagingInstance, secret: MessagingSecr
   return new FeishuAdapter(instance, secret);
 }
 
-export const _adapterTestHooks = { fetchJson, status, normalizeFeishuEvent, normalizeWecomEvent, boundedWecomText, parseFeishuBotOpenId, feishuMessageToText, normalizeFeishuCardAction, normalizeFeishuReaction };
+export const _adapterTestHooks = { fetchJson, status, normalizeFeishuEvent, normalizeWecomEvent, boundedWecomText, parseFeishuBotOpenId, feishuMessageToText, normalizeFeishuCardAction, normalizeFeishuReaction, feishuMentionIsAll };

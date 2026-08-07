@@ -469,4 +469,37 @@ describe('Feishu official event adapter', () => {
     }));
     expect(remove).toHaveBeenCalledWith({ path: { message_id: 'om_merged_1', reaction_id: 'reaction-1' } });
   });
+
+  it('treats @all mentions as a present mention in text and post messages', async () => {
+    const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');
+    const instance = feishuInstance();
+    const textAll = _adapterTestHooks.normalizeFeishuEvent(instance, {
+      message: {
+        message_id: 'om_3',
+        chat_id: 'oc_1',
+        chat_type: 'group',
+        message_type: 'text',
+        content: JSON.stringify({ text: '@_all 明天同步进度' }),
+        create_time: '1710000000000',
+        mentions: [{ key: '@_all', id_type: 'user_id', id: 'all' }],
+      },
+      sender: { sender_type: 'user', sender_id: { open_id: 'ou_1' } },
+    }, 'ou_bot');
+    expect(textAll).toMatchObject({ mentionPresent: true });
+    const postAll = _adapterTestHooks.normalizeFeishuEvent(instance, {
+      message: {
+        message_id: 'om_4',
+        chat_id: 'oc_1',
+        chat_type: 'group',
+        message_type: 'post',
+        content: JSON.stringify({
+          zh_cn: { title: '', content: [[{ tag: 'text', text: '通知' }]] },
+        }),
+        create_time: '1710000000000',
+        mentions: [{ key: '@_all', id_type: 'user_id', id: 'all' }],
+      },
+      sender: { sender_type: 'user', sender_id: { open_id: 'ou_1' } },
+    }, 'ou_bot');
+    expect(postAll).toMatchObject({ mentionPresent: true });
+  });
 });
