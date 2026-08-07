@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
@@ -81,16 +81,60 @@ function loadSettingsTabsModule() {
   return { window: context.window, tabs, panes };
 }
 
+function loadMessagingSettingsTestHooks() {
+  const addEventListener = vi.fn();
+  const removeEventListener = vi.fn();
+  const context: any = {
+    Array,
+    Object,
+    URL,
+    clearInterval,
+    clearTimeout,
+    module: { exports: {} },
+    window: { addEventListener, removeEventListener },
+  };
+  context.window.window = context.window;
+  vm.createContext(context);
+  const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+  vm.runInContext(source, context, { filename: 'messaging-settings.js' });
+  return { hooks: context.module.exports, removeEventListener };
+}
+
 describe('settings tabs module', () => {
-  it('loads tabs eagerly and the settings page on demand', () => {
+  it('loads tabs eagerly and loads the focused messaging settings page on demand', () => {
     const indexHtml = fs.readFileSync(path.join(root, 'src/renderer/index.html'), 'utf8');
     const lazyFeatures = fs.readFileSync(path.join(root, 'src/renderer/modules/lazy-features.js'), 'utf8');
+    const messagingSettings = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    const style = fs.readFileSync(path.join(root, 'src/renderer/style.css'), 'utf8');
     const modulePath = path.join(root, 'src/renderer/modules/settings_tabs.js');
     const tabsScript = '<script src="./modules/settings_tabs.js"></script>';
     const settingsScript = '<script src="./modules/settings.js"></script>';
 
     expect(fs.existsSync(modulePath)).toBe(true);
     expect(indexHtml).toContain('data-i18n="settings.tab.credentials">Model Providers</button>');
+    expect(indexHtml).toContain('data-i18n="settings.tab.messaging">消息平台</button>');
+    expect(lazyFeatures).toContain("{ src: './modules/messaging-settings.js' }");
+    expect(indexHtml).toContain('id="messaging-page"');
+    expect(indexHtml).not.toContain('id="messaging-catalog"');
+    expect(style).toContain('.messaging-channel-grid');
+    expect(style).toContain('.messaging-preferences-card');
+    expect(style).not.toContain('.messaging-instance-rail');
+    expect(messagingSettings).toContain("view: 'catalog'");
+    expect(messagingSettings).toContain("state.view = 'detail';");
+    expect(messagingSettings).toContain('messaging.feishu_draft.create');
+    expect(messagingSettings).toContain("messaging.feishu_qr.start");
+    expect(messagingSettings).toContain("messaging.feishu_qr.status");
+    expect(messagingSettings).toContain("messaging.feishu_qr.cancel");
+    expect(lazyFeatures).toContain("./vendor/qrcode-generator/qrcode.js");
+    expect(messagingSettings).toContain("instanceId: instance.id");
+    expect(messagingSettings).toContain("responseMode: responseSelect.value");
+    expect(messagingSettings).toContain("workspace: { type: 'all' }");
+    expect(messagingSettings).not.toContain('messaging.feishu_app_id');
+    expect(messagingSettings).not.toContain('messaging.feishu_app_secret');
+    expect(messagingSettings).not.toContain('messaging.allow_users');
+    expect(messagingSettings).not.toContain('messaging.allow_groups');
+    expect(messagingSettings).not.toContain('messaging.wecom_qr');
+    expect(messagingSettings).not.toContain('messaging.health');
     expect(indexHtml).not.toContain('Model Authorization');
     expect(indexHtml.indexOf(tabsScript)).toBeGreaterThanOrEqual(0);
     expect(indexHtml.indexOf(settingsScript)).toBe(-1);
@@ -120,5 +164,78 @@ describe('settings tabs module', () => {
     expect(panes[0].hidden).toBe(false);
     expect(panes[1].hidden).toBe(true);
     expect(panes[2].hidden).toBe(true);
+  });
+
+  it('keeps Feishu China and Lark Global as distinct supported channels', () => {
+    const { hooks } = loadMessagingSettingsTestHooks();
+
+    const feishu = hooks.CHANNELS.find((channel: { key: string }) => channel.key === 'feishu');
+    const lark = hooks.CHANNELS.find((channel: { key: string }) => channel.key === 'lark');
+    expect(feishu).toMatchObject({ platform: 'feishu_lark', feishuTenantBrand: 'feishu', available: true });
+    expect(lark).toMatchObject({ platform: 'feishu_lark', feishuTenantBrand: 'lark', available: true });
+    expect(hooks.CHANNELS.filter((channel: { available: boolean }) => channel.available)).toHaveLength(2);
+    expect(hooks.channelForInstance({ platform: 'feishu_lark', feishuTenantBrand: 'feishu' })).toBe('feishu');
+    expect(hooks.channelForInstance({ platform: 'feishu_lark', feishuTenantBrand: 'lark' })).toBe('lark');
+    expect(hooks.channelForInstance({ platform: 'telegram' })).toBeNull();
+  });
+
+  it('keeps only WeChat, Feishu China and Lark Global in the channel catalog', () => {
+    const { hooks } = loadMessagingSettingsTestHooks();
+
+    expect(hooks.CHANNELS.map((channel: { key: string }) => channel.key)).toEqual(['wechat', 'feishu', 'lark']);
+    expect(hooks.CHANNELS[0]).toMatchObject({ platform: 'wechat_personal', available: false });
+    expect(hooks.CHANNELS.filter((channel: { available: boolean }) => channel.available)).toHaveLength(2);
+    expect(hooks.CHANNELS.some((channel: { key: string }) => channel.key === 'telegram')).toBe(false);
+    expect(hooks.CHANNELS.some((channel: { key: string }) => channel.key === 'wecom')).toBe(false);
+  });
+
+  it('shows the QR panel only after scan state starts and rejects lookalike QR states', () => {
+    const { hooks } = loadMessagingSettingsTestHooks();
+    const instance = { id: 'feishu-draft-1' };
+    const qr = hooks.__test.state.qr;
+
+    hooks.__test.resetQrState();
+    expect(hooks.__test.qrIsVisibleFor(instance)).toBe(false);
+    qr.instanceId = instance.id;
+    expect(hooks.__test.qrIsVisibleFor(instance)).toBe(false);
+    qr.starting = true;
+    expect(hooks.__test.qrIsVisibleFor(instance)).toBe(true);
+    expect(hooks.normalizeFeishuQrStatus({ state: 'awaiting_scan', qrUrl: 'https://example.test/qr' })).toMatchObject({
+      state: 'awaiting_scan',
+      qrUrl: 'https://example.test/qr',
+    });
+    expect(hooks.normalizeFeishuQrStatus({ state: 'completed-but-not-really' })).toMatchObject({ state: 'failed' });
+    hooks.__test.resetQrState();
+  });
+
+  it('provides every visible catalog and detail label in each renderer locale', () => {
+    const keys = [
+      'messaging.catalog.page_title',
+      'messaging.catalog.page_subtitle',
+      'messaging.catalog.back',
+      'messaging.channel.coming_soon',
+      'messaging.channel.feishu.title',
+      'messaging.channel.feishu.description',
+      'messaging.channel.feishu.badge',
+      'messaging.channel.lark.title',
+      'messaging.channel.lark.description',
+      'messaging.channel.lark.badge',
+      'messaging.association_title',
+      'messaging.association_sub',
+      'messaging.scan',
+      'messaging.response_title',
+      'messaging.response_subtitle',
+      'messaging.response_streaming_card',
+      'messaging.workspace_all',
+      'messaging.workspace_subtitle',
+      'messaging.delete_subtitle',
+      'messaging.updated',
+      'messaging.update_failed',
+      'messaging.open_failed',
+    ];
+    for (const locale of ['zh', 'en', 'ja', 'pt']) {
+      const messages = JSON.parse(fs.readFileSync(path.join(root, `src/renderer/locales/${locale}.json`), 'utf8')) as Record<string, string>;
+      for (const key of keys) expect(messages[key]).toEqual(expect.any(String));
+    }
   });
 });

@@ -19,6 +19,7 @@ export const RUNTIME_VARIANTS = Object.freeze([
   'cognition',
   'expense',
   'integration',
+  'messaging',
   'optimization',
 ] as const);
 
@@ -55,6 +56,12 @@ const SOURCE_IDENTITIES: Readonly<Record<RuntimeVariant, RuntimeIdentity>> = Obj
     appName: `${APP_BRAND.appName} [Integration]`,
     appId: `${APP_BRAND.appId}.source.integration`,
     protocolOwner: true,
+  }),
+  messaging: Object.freeze({
+    variant: 'messaging',
+    appName: `${APP_BRAND.appName} [Messaging]`,
+    appId: `${APP_BRAND.appId}.source.messaging`,
+    protocolOwner: false,
   }),
   optimization: Object.freeze({
     variant: 'optimization',
