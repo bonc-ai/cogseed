@@ -2882,7 +2882,7 @@
   "messaging.channel.wecom.description": "公式スマートボットをQRコードで作成し、WebSocket長接続で双方向会話。",
   "messaging.group.open": "利用可能",
   "messaging.group.soon": "近日対応",
-  "messaging.status.bound": "接続済み",
+  "messaging.status.bound": "連携済み",
   "messaging.channel.qq.title": "QQボット",
   "messaging.association_title": "ボットを連携",
   "messaging.association_sub": "QR コードをスキャンしてアプリの認証情報を取得します。",

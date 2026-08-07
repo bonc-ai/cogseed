@@ -2882,7 +2882,7 @@
   "messaging.channel.wecom.description": "Crie um bot oficial via QR code com conversa bidirecional por WebSocket.",
   "messaging.group.open": "Disponível",
   "messaging.group.soon": "Em breve",
-  "messaging.status.bound": "Conectado",
+  "messaging.status.bound": "Vinculado",
   "messaging.channel.qq.title": "QQ Bot",
   "messaging.association_title": "Vincular bot",
   "messaging.association_sub": "Escaneie para obter as credenciais do aplicativo.",
