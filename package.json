@@ -63,7 +63,9 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.79.9",
+    "@larksuiteoapi/node-sdk": "^1.72.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@wecom/aibot-node-sdk": "1.0.7",
     "adm-zip": "^0.6.0",
     "async-mutex": "^0.5.0",
     "better-sqlite3": "^12.10.0",
