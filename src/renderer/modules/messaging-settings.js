@@ -31,12 +31,18 @@
     },
   };
 
-  // The disabled WeChat entry is deliberately visible so the unsupported
-  // channel does not become a false affordance or disappear from the catalog.
+  // The messaging channel catalog is product content: `open` channels get a
+  // live configuration panel, `soon` channels render disabled so the roadmap
+  // stays visible without a false affordance.
   const CHANNELS = Object.freeze([
-    { key: 'wechat', platform: 'wechat_personal', icon: 'message-square', available: false },
-    { key: 'feishu', platform: 'feishu_lark', feishuTenantBrand: 'feishu', icon: 'message-square', available: true },
-    { key: 'lark', platform: 'feishu_lark', feishuTenantBrand: 'lark', icon: 'message-square', available: true },
+    { key: 'feishu', platform: 'feishu_lark', feishuTenantBrand: 'feishu', icon: 'feishu', group: 'open' },
+    { key: 'lark', platform: 'feishu_lark', feishuTenantBrand: 'lark', icon: 'lark', group: 'open' },
+    { key: 'wecom', platform: 'wecom', icon: 'wecom', group: 'open' },
+    { key: 'telegram', platform: 'telegram', icon: 'telegram', group: 'open' },
+    { key: 'wechat', platform: 'wechat_personal', icon: 'wechat', group: 'soon' },
+    { key: 'qq', platform: 'qq', icon: 'qq', group: 'soon' },
+    { key: 'dingtalk', platform: 'dingtalk', icon: 'dingtalk', group: 'soon' },
+    { key: 'discord', platform: 'discord', icon: 'discord', group: 'soon' },
   ]);
 
   const QR_TERMINAL_STATES = new Set(['completed', 'cancelled', 'expired', 'denied', 'failed']);
@@ -102,8 +108,10 @@
   }
 
   function channelForInstance(instance) {
-    if (!instance || instance.platform !== 'feishu_lark') return null;
-    return instance.feishuTenantBrand === 'lark' ? 'lark' : 'feishu';
+    if (!instance) return null;
+    if (instance.platform === 'wecom' || instance.platform === 'telegram') return instance.platform;
+    if (instance.platform === 'feishu_lark') return instance.feishuTenantBrand === 'lark' ? 'lark' : 'feishu';
+    return null;
   }
 
   function currentInstance() {
@@ -115,6 +123,13 @@
     return state.instances
       .filter((instance) => channelForInstance(instance) === channel.key)
       .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))[0] || null;
+  }
+
+  function instancesForChannel(channel) {
+    if (!channel) return [];
+    return state.instances
+      .filter((instance) => channelForInstance(instance) === channel.key)
+      .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
   }
 
   function setNotice(message, kind) {
@@ -847,7 +862,7 @@
       CHANNELS,
       normalizeFeishuQrStatus,
       channelForInstance,
-      __test: { state, applyFeishuQrStatus, qrIsVisibleFor, qrPollDelay, resetQrState },
+      __test: { state, applyFeishuQrStatus, qrIsVisibleFor, qrPollDelay, resetQrState, instancesForChannel },
     };
   }
 })();

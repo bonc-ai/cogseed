@@ -171,22 +171,39 @@ describe('settings tabs module', () => {
 
     const feishu = hooks.CHANNELS.find((channel: { key: string }) => channel.key === 'feishu');
     const lark = hooks.CHANNELS.find((channel: { key: string }) => channel.key === 'lark');
-    expect(feishu).toMatchObject({ platform: 'feishu_lark', feishuTenantBrand: 'feishu', available: true });
-    expect(lark).toMatchObject({ platform: 'feishu_lark', feishuTenantBrand: 'lark', available: true });
-    expect(hooks.CHANNELS.filter((channel: { available: boolean }) => channel.available)).toHaveLength(2);
+    expect(feishu).toMatchObject({ platform: 'feishu_lark', feishuTenantBrand: 'feishu', group: 'open' });
+    expect(lark).toMatchObject({ platform: 'feishu_lark', feishuTenantBrand: 'lark', group: 'open' });
     expect(hooks.channelForInstance({ platform: 'feishu_lark', feishuTenantBrand: 'feishu' })).toBe('feishu');
     expect(hooks.channelForInstance({ platform: 'feishu_lark', feishuTenantBrand: 'lark' })).toBe('lark');
-    expect(hooks.channelForInstance({ platform: 'telegram' })).toBeNull();
   });
 
-  it('keeps only WeChat, Feishu China and Lark Global in the channel catalog', () => {
+  it('exposes the full grouped channel catalog and maps every platform instance', () => {
     const { hooks } = loadMessagingSettingsTestHooks();
 
-    expect(hooks.CHANNELS.map((channel: { key: string }) => channel.key)).toEqual(['wechat', 'feishu', 'lark']);
-    expect(hooks.CHANNELS[0]).toMatchObject({ platform: 'wechat_personal', available: false });
-    expect(hooks.CHANNELS.filter((channel: { available: boolean }) => channel.available)).toHaveLength(2);
-    expect(hooks.CHANNELS.some((channel: { key: string }) => channel.key === 'telegram')).toBe(false);
-    expect(hooks.CHANNELS.some((channel: { key: string }) => channel.key === 'wecom')).toBe(false);
+    expect(hooks.CHANNELS.map((channel: any) => channel.key)).toEqual([
+      'feishu', 'lark', 'wecom', 'telegram', 'wechat', 'qq', 'dingtalk', 'discord',
+    ]);
+    const open = hooks.CHANNELS.filter((channel: any) => channel.group === 'open').map((channel: any) => channel.key);
+    const soon = hooks.CHANNELS.filter((channel: any) => channel.group === 'soon').map((channel: any) => channel.key);
+    expect(open).toEqual(['feishu', 'lark', 'wecom', 'telegram']);
+    expect(soon).toEqual(['wechat', 'qq', 'dingtalk', 'discord']);
+    for (const channel of hooks.CHANNELS) expect(typeof channel.icon).toBe('string');
+
+    expect(hooks.channelForInstance({ id: 'a', platform: 'wecom' })).toBe('wecom');
+    expect(hooks.channelForInstance({ id: 'b', platform: 'telegram' })).toBe('telegram');
+    expect(hooks.channelForInstance({ id: 'c', platform: 'feishu_lark', feishuTenantBrand: 'lark' })).toBe('lark');
+    expect(hooks.channelForInstance({ id: 'd', platform: 'feishu_lark', feishuTenantBrand: 'feishu' })).toBe('feishu');
+    expect(hooks.channelForInstance({ id: 'e', platform: 'wechat_personal' })).toBeNull();
+  });
+
+  it('lists every instance of a channel instead of hiding older ones', () => {
+    const { hooks } = loadMessagingSettingsTestHooks();
+    hooks.__test.state.instances = [
+      { id: 'old', platform: 'feishu_lark', feishuTenantBrand: 'feishu', updatedAt: '2026-08-01T00:00:00.000Z' },
+      { id: 'new', platform: 'feishu_lark', feishuTenantBrand: 'feishu', updatedAt: '2026-08-02T00:00:00.000Z' },
+    ];
+    const list = hooks.__test.instancesForChannel(hooks.CHANNELS[0]);
+    expect(list.map((instance: any) => instance.id)).toEqual(['new', 'old']);
   });
 
   it('shows the QR panel only after scan state starts and rejects lookalike QR states', () => {
