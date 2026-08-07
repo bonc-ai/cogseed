@@ -125,6 +125,7 @@ describe('renderer lazy feature loader', () => {
     await context.loadRendererFeature('project');
     expect(appended.map((script) => script.src)).toEqual([
       './modules/library-transfer.js',
+      './modules/project-workbench.js',
       './modules/project-detail.js',
     ]);
 
@@ -132,6 +133,7 @@ describe('renderer lazy feature loader', () => {
 
     expect(appended.map((script) => script.src)).toEqual([
       './modules/library-transfer.js',
+      './modules/project-workbench.js',
       './modules/project-detail.js',
       './modules/auto.js',
     ]);

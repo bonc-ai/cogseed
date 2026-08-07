@@ -99,6 +99,11 @@ import { createLogger } from '../../logger';
 import { logErrorSummary, maskId } from '../../util/log-redact';
 import type { MemoryToolHandler } from '../../../core-agent/src/tools/memory-tool';
 import type { MetacognitionToolHandler } from '../../../core-agent/src/tools/metacognition-tool';
+import {
+  recordTeachingSignalAfterMemoryWrite,
+  teachingMemoryRef,
+  type UserTeachingScope,
+} from '../../features/recall/teaching-service';
 
 const runnerLog = createLogger('runner');
 
@@ -177,6 +182,8 @@ export interface BuildRunnerParams {
   sessionId: string;
   systemPrompt?: string;
   userId?: string;
+  /** Use an in-memory Session so utility model calls leave no resumable transcript. */
+  ephemeralSession?: boolean;
   /** Conversation id. Used by file-tools to scope read_file / search_file
    *  / process_file_full calls whose path targets the attachment dir of the
    *  current conv. */
@@ -187,6 +194,15 @@ export interface BuildRunnerParams {
   /** Current real user text, used by tools that must bind an approval action
    * to explicit user intent rather than merely to the existence of a turn. */
   userMessage?: string;
+  sourceMessageId?: string;
+  sourceMessageFromUser?: boolean;
+  onTeachingReceipt?: (receipt: {
+    id: string;
+    summary: string;
+    scope: UserTeachingScope;
+    status: 'active' | 'revoked';
+    candidateIds: string[];
+  }) => void | Promise<void>;
   /** Project id of the conversation, when it belongs to one. Threaded
    *  through to local-tools / file-tools / image-gen-tool so workspace
    *  resolution picks up the project-scoped selection. Resolved once at
@@ -199,6 +215,17 @@ export interface BuildRunnerParams {
   /** Max tool-call rounds per turn before force-end. Undefined → core-agent
    *  default (50). Group chat raises it for the commander's long builds. */
   maxToolLoops?: number;
+  /**
+   * Hard opt-out of every tool for this turn: no local tools, no file tools,
+   * no MCP, no extras. For explain-only callers (see
+   * `features/conversation_aside`) that must not be able to touch the
+   * filesystem or run commands.
+   *
+   * `maxToolLoops: 0` does NOT achieve this — it is filtered out as falsy by
+   * the option spreads on the way down, so the turn silently keeps the default
+   * loop budget and the full tool set.
+   */
+  disableTools?: boolean;
   /** Provider stream deadline before its first usable text/tool event. This
    * boundary is safe for fallback because no visible output has committed. */
   providerFirstEventTimeoutMs?: number;
@@ -425,9 +452,13 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   const skillDisplayNameById = new Map<string, string>();
   const systemSkillsVisible = systemSkillsExposureFromSessionId(params.sessionId);
   const openSkillSourcesVisible = openSkillSourcesExposureFromSessionId(params.sessionId);
+  const modPromise = ca();
+  const sessionPromise = params.ephemeralSession
+    ? modPromise.then((loaded) => new loaded.Session())
+    : getSession(params.sessionId);
   const [mod, session, systemSkillsBlock, skillsBlock] = await Promise.all([
-    ca(),
-    getSession(params.sessionId),
+    modPromise,
+    sessionPromise,
     systemSkillsVisible ? getSystemSkillsPromptBlock(earlyUid || undefined) : Promise.resolve(''),
     getSystemPromptBlock({
       ...(renderAllowlist === undefined ? {} : { allowlist: [...renderAllowlist] }),
@@ -520,9 +551,52 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
       tier === 'agent' ? { agent: scopeId }
       : tier === 'project' ? { project: projectScopeId }
       : tier === 'shared' ? 'memory' : 'user';
+    const teachingScope = (tier: 'agent' | 'project' | 'shared' | 'user'): UserTeachingScope => (
+      tier === 'agent' ? 'agent' : tier === 'project' ? 'project' : 'personal'
+    );
+    const recordTeaching = async (
+      tier: 'agent' | 'project' | 'shared' | 'user',
+      content: string,
+      result: ReturnType<typeof addEntry>,
+    ) => {
+      if (
+        !result.ok
+        || !isCommander
+        || !params.cid
+        || !params.sourceMessageId
+        || !params.sourceMessageFromUser
+        || !params.userMessage
+      ) return result;
+      try {
+        const scope = teachingScope(tier);
+        const signal = await recordTeachingSignalAfterMemoryWrite(uid, {
+          conversationId: params.cid,
+          messageId: params.sourceMessageId,
+          userMessage: params.userMessage,
+          memoryContent: content,
+          memoryScope: scope,
+          memoryRef: teachingMemoryRef(scope, content),
+        });
+        if (signal) {
+          await params.onTeachingReceipt?.({
+            id: signal.id,
+            summary: signal.summary,
+            scope: signal.scope,
+            status: signal.status,
+            candidateIds: signal.candidateIds,
+          });
+        }
+      } catch (error) {
+        log.warn('teaching signal persistence failed after memory write', {
+          conversation_id: maskId(params.cid),
+          error: logErrorSummary(error),
+        });
+      }
+      return result;
+    };
     const memoryHandler: MemoryToolHandler = {
-      add: (tier, content) => addEntry(uid, toScope(tier), content),
-      replace: (tier, oldText, content) => replaceEntry(uid, toScope(tier), oldText, content),
+      add: async (tier, content) => recordTeaching(tier, content, addEntry(uid, toScope(tier), content)),
+      replace: async (tier, oldText, content) => recordTeaching(tier, content, replaceEntry(uid, toScope(tier), oldText, content)),
       remove: (tier, oldText) => removeEntry(uid, toScope(tier), oldText),
       list: (tier) => listEntries(uid, toScope(tier)),
     };
@@ -623,13 +697,15 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ...systemSkillReadRoots,
     ...agentPrivateSkillReadRoots,
   ];
-  const toolResultsDir = uid ? toolResultsDirForSession(uid, params.sessionId) : '';
+  const toolResultsDir = uid && !params.disableTools
+    ? toolResultsDirForSession(uid, params.sessionId)
+    : '';
   const localReadOnlyDenyRoots = [
     ...fileReadOnlyExtraRoots,
     ...(toolResultsDir ? [toolResultsDir] : []),
   ];
 
-  const localTools = createLocalTools({
+  const localTools = params.disableTools ? [] : createLocalTools({
     ...(uid ? { userId: uid } : {}),
     ...(params.cid ? { cid: params.cid } : {}),
     ...(params.turnId ? { turnId: params.turnId } : {}),
@@ -654,7 +730,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // `readOnlyExtraRoots` is threaded here for the read scope (workspace +
   // attachment + extraRoots + readOnlyExtraRoots all visible). Local write
   // and delete tools never receive those roots.
-  const fileTools = uid
+  const fileTools = uid && !params.disableTools
     ? createFileTools({
         userId: uid,
         ...(params.cid ? { cid: params.cid } : {}),
@@ -680,7 +756,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // / skill-edit sessions also get them (the LLM may want to preview KB
   // content when building workflows). Skipped when uid is unknown
   // (matches file-tools).
-  const kbTools = uid ? createKbTools({
+  const kbTools = uid && !params.disableTools ? createKbTools({
     userId: uid,
     ...(params.projectId ? { projectId: params.projectId } : {}),
   }) : [];
@@ -700,7 +776,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // local-tools (writing image bytes is the same blast radius as write_file).
   // Skipped when uid is unknown — generators need the
   // workspace + attachment scope to validate paths.
-  const imageGenTools: AgentTool[] = uid
+  const imageGenTools: AgentTool[] = uid && !params.disableTools
     ? [createImageGenTool({
         userId: uid,
         ...(params.cid ? { cid: params.cid } : {}),
@@ -712,7 +788,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
         ...(params.hasProducedPath ? { hasProducedPath: params.hasProducedPath } : {}),
       })]
     : [];
-  const videoStudioTools: AgentTool[] = uid
+  const videoStudioTools: AgentTool[] = uid && !params.disableTools
     ? [createVideoStudioTool({
         userId: uid,
         ...(params.cid ? { cid: params.cid } : {}),
@@ -732,7 +808,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // + ranking), so no uid / workspace scope and no Tool Execution Access needed;
   // hidden from the commander and every other actor via isToolVisibleToAgent.
   const deepResearchTools: AgentTool[] = [];
-  if (isToolVisibleToAgent('research_rerank', agentId)) {
+  if (!params.disableTools && isToolVisibleToAgent('research_rerank', agentId)) {
     deepResearchTools.push(createResearchRerankTool());
   }
 
@@ -740,7 +816,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // local-tools (writing a docx/xlsx/pptx is the same blast radius as
   // write_file). Skipped when uid is unknown — the factory needs the
   // workspace + attachment scope to sandbox output paths.
-  const officeTools: AgentTool[] = uid && officeCliAvailable()
+  const officeTools: AgentTool[] = uid && !params.disableTools && officeCliAvailable()
     ? createOfficeTools({
         userId: uid,
         ...(params.cid ? { cid: params.cid } : {}),
@@ -757,7 +833,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // built-in Brave/Bing scraper. See `model/core-agent/search-tools.ts`.
   // Async because the factory pulls `defineTool` / `runBuiltinWebSearch`
   // off the ESM core-agent dynamic import.
-  const searchOverrideTools: AgentTool[] = [await createWebSearchOverrideTool()];
+  const searchOverrideTools: AgentTool[] = params.disableTools ? [] : [await createWebSearchOverrideTool()];
 
   // Connector meta-tools + system-prompt block (MCP-based, umbrella pattern). When ≥1
   // connector is visible to this actor we inject the two meta-tools (`list_connector_tools` /
@@ -787,7 +863,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // Group-chat agents intentionally share the commander's connector visibility:
   // do not pass agentId here. Agent-edit also bypasses `agent.enabled_connectors`
   // so the editor LLM can inspect every installed connector while authoring.
-  const exposure = uid ? connectorExposureFromSessionId(params.sessionId) : 'none';
+  const exposure = uid && !params.disableTools ? connectorExposureFromSessionId(params.sessionId) : 'none';
   const blockAgentId = undefined;
   const connectorBlock = exposure !== 'none' && uid
     ? await getConnectorPromptBlock(uid, blockAgentId)
@@ -825,9 +901,11 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // never reach another actor's tools[] regardless of which injection path
   // produced it. Caller-supplied extraTools / core-agent builtins aren't in the
   // catalog, so `isToolVisibleToAgent` returns true for them (unaffected).
-  const visibleTools = allTools.filter((tool) => isToolVisibleToAgent(tool.name, agentId));
+  const visibleTools = params.disableTools
+    ? []
+    : allTools.filter((tool) => isToolVisibleToAgent(tool.name, agentId));
   const visibleToolNameSet = new Set(visibleTools.map((tool) => tool.name));
-  const builtinTools = mod.getBuiltinTools();
+  const builtinTools = params.disableTools ? [] : mod.getBuiltinTools();
 
   // Apply one simple 8K per-result policy at AgentRunner's FINAL result
   // boundary. Keeping this as a result transformer (instead of pre-wrapping
@@ -1066,6 +1144,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     config,
     providers,
     session,
+    ...(params.disableTools ? { disableTools: true } : {}),
     ...(visibleTools.length ? { tools: visibleTools } : {}),
     ...(transformToolResult ? { transformToolResult } : {}),
     ...(toolResultsDir ? { toolContextState: { toolResultSpoolDir: toolResultsDir } } : {}),

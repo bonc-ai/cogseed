@@ -1,6 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as personalOntologyCandidates from '../personal_ontology_candidates';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 
 import { genId12, safeId } from '../../storage';
 import { recallJsonRecordPath } from './paths';
@@ -14,6 +15,7 @@ import { initializeAbilityAsset } from './asset-service';
 import {
   cognitionSourceRefKey,
   normalizeCognitionSourceRefs,
+  normalizeCognitionSourceRefsForWrite,
   type CognitionSourceRef,
 } from './source-service';
 
@@ -22,6 +24,7 @@ export type AbilityAssetType = 'personal' | 'rule' | 'template' | 'skill_method'
 
 export interface RecallCandidateRecord extends RecallJsonRecord {
   id: string;
+  taxonomyVersion: 2;
   status: RecallCandidateStatus;
   judgment: string;
   summary?: string;
@@ -29,6 +32,7 @@ export interface RecallCandidateRecord extends RecallJsonRecord {
   suggestedType: AbilityAssetType;
   suggestedScope: string;
   sourceRefs: CognitionSourceRef[];
+  captureKey?: string;
   promotedAssetId?: string;
   decisionNote?: string;
   createdAt: string;
@@ -57,6 +61,7 @@ export interface SaveRecallCandidateInput {
   suggestedType: AbilityAssetType;
   suggestedScope: string;
   sourceRefs: unknown[];
+  captureKey?: string;
 }
 
 function boundedText(value: unknown, field: string, max: number, required = false): string | undefined {
@@ -88,7 +93,9 @@ function asCandidate(value: RecallJsonRecord): RecallCandidateRecord {
     typeof value.createdAt !== 'string' ||
     typeof value.updatedAt !== 'string'
   ) throw new Error('malformed recall candidate');
-  return value as RecallCandidateRecord;
+  const sourceRefs = normalizeCognitionSourceRefs(value.sourceRefs);
+  if (!sourceRefs.length) throw new Error('malformed recall candidate evidence');
+  return { ...value, taxonomyVersion: 2, sourceRefs } as RecallCandidateRecord;
 }
 
 function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
@@ -97,7 +104,9 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
     typeof value.statement !== 'string' || !Array.isArray(value.evidenceRefs) ||
     typeof value.scope !== 'string' || typeof value.version !== 'string'
   ) throw new Error('malformed recall ability asset');
-  return value as RecallAbilityAssetRecord;
+  const evidenceRefs = normalizeCognitionSourceRefs(value.evidenceRefs);
+  if (!evidenceRefs.length) throw new Error('malformed recall ability asset evidence');
+  return { ...value, evidenceRefs } as RecallAbilityAssetRecord;
 }
 
 function candidateDirectory(userId: string): string {
@@ -106,6 +115,10 @@ function candidateDirectory(userId: string): string {
 
 function fingerprint(input: Pick<RecallCandidateRecord, 'judgment' | 'sourceRefs'>): string {
   return `${input.judgment.toLocaleLowerCase()}\n${input.sourceRefs.map(cognitionSourceRefKey).sort().join('\n')}`;
+}
+
+function candidateIdForCaptureKey(captureKey: string): string {
+  return `cand-${createHash('sha256').update(captureKey).digest('hex').slice(0, 24)}`;
 }
 
 export async function listRecallCandidates(userId: string): Promise<RecallCandidateRecord[]> {
@@ -148,8 +161,16 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
   const summary = boundedText(input.summary, 'summary', 1_000);
   const uncertainty = boundedText(input.uncertainty, 'uncertainty', 1_000);
   const suggestedScope = boundedText(input.suggestedScope, 'suggested scope', 500, true)!;
-  const sourceRefs = normalizeCognitionSourceRefs(input.sourceRefs);
+  const sourceRefs = normalizeCognitionSourceRefsForWrite(input.sourceRefs);
   if (!sourceRefs.length) throw new Error('candidate evidence is required');
+  const captureKey = input.captureKey === undefined
+    ? undefined
+    : boundedText(input.captureKey, 'capture key', 160, true);
+  if (captureKey && !safeId(captureKey)) throw new Error('invalid capture key');
+  if (captureKey) {
+    const captured = (await listRecallCandidates(userId)).find((candidate) => candidate.captureKey === captureKey);
+    if (captured) return captured;
+  }
   const candidateDraft = { judgment, sourceRefs } as Pick<RecallCandidateRecord, 'judgment' | 'sourceRefs'>;
   const existing = (await listRecallCandidates(userId)).find((candidate) => fingerprint(candidate) === fingerprint(candidateDraft));
   if (existing) return existing;
@@ -157,8 +178,9 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
   const now = new Date().toISOString();
   const record: RecallCandidateRecord = {
     schemaVersion: 1,
+    taxonomyVersion: 2,
     ownerId: userId,
-    id: `cand-${genId12()}`,
+    id: captureKey ? candidateIdForCaptureKey(captureKey) : `cand-${genId12()}`,
     status: 'pending',
     judgment,
     ...(summary ? { summary } : {}),
@@ -166,9 +188,18 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
     suggestedType: requireAssetType(input.suggestedType),
     suggestedScope,
     sourceRefs,
+    ...(captureKey ? { captureKey } : {}),
     createdAt: now,
     updatedAt: now,
   };
+  if (captureKey) {
+    return asCandidate(await updateRecallJsonRecord(
+      userId,
+      'candidates',
+      record.id,
+      (current) => current || record,
+    ));
+  }
   await writeRecallJsonRecord(userId, 'candidates', record.id, record);
   return record;
 }
@@ -201,7 +232,7 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
   const uncertainty = boundedText(input.uncertainty, 'uncertainty', 1_000);
   const suggestedScope = boundedText(input.suggestedScope, 'suggested scope', 500, true)!;
   const suggestedType = requireAssetType(input.suggestedType);
-  const sourceRefs = normalizeCognitionSourceRefs(input.sourceRefs);
+  const sourceRefs = normalizeCognitionSourceRefsForWrite(input.sourceRefs);
   if (!sourceRefs.length) throw new Error('candidate evidence is required');
   const duplicates = await listRecallCandidates(userId);
   const nextFingerprint = fingerprint({ judgment, sourceRefs });

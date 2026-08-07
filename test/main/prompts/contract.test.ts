@@ -171,8 +171,10 @@ describe('prompts ↔ code contract', () => {
     expect(agentPrompt).toContain('silently check the result against every listed standard');
     expect(agentPrompt).toContain('`### Agent strengths` block');
     expect(agentPrompt).toContain('<agent-result status="success" />');
+    expect(agentPrompt).toContain('<agent-result status="waiting_input" />');
     expect(agentPrompt).toContain('<agent-result status="failure" />');
     expect(commanderPrompt).toContain('<commander-result status="success" />');
+    expect(commanderPrompt).toContain('<commander-result status="waiting_input" />');
     expect(commanderPrompt).toContain('<commander-result status="failure" />');
     expect(agentPrompt).not.toContain('capability_context');
     expect(bus).not.toContain('src.memory');

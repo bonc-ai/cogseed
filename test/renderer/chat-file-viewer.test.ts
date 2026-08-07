@@ -195,3 +195,68 @@ describe('chat-file-viewer › VideoStudio composition dimensions', () => {
     expect(_videoCompositionDimensions('<main data-composition-id="main" data-width="99999" data-height="1080"></main>')).toBeNull();
   });
 });
+
+// The extracted preview builder is shared by the fullscreen viewer and the side
+// browser pane. Both surfaces must produce byte-identical frames — a drift in
+// the sandbox flags would silently weaken one of them.
+describe('chat-file-viewer › shared preview builder', () => {
+  // `escapeHtml` is a renderer global the module relies on; provide the real
+  // escaping so the XSS assertion below is meaningful.
+  (globalThis as any).escapeHtml = (s: unknown) => String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+  const { buildFilePreviewHtml, isSidePreviewableKind, PREVIEW_HTML_SANDBOX } = viewer as {
+    buildFilePreviewHtml: (kind: string, url: string, name?: string) => string;
+    isSidePreviewableKind: (kind: string) => boolean;
+    PREVIEW_HTML_SANDBOX: string;
+  };
+
+  it('sandboxes local HTML with allow-scripts only', () => {
+    // Widening this set is a security regression: allow-same-origin would hand
+    // the page cookie / localStorage / sibling-fetch reach, and
+    // allow-top-navigation would let it hijack the app frame.
+    expect(PREVIEW_HTML_SANDBOX).toBe('allow-scripts');
+    const html = buildFilePreviewHtml('html', 'chat-media://local/tmp/a.html', 'a.html');
+    expect(html).toContain('sandbox="allow-scripts"');
+    expect(html).not.toContain('allow-same-origin');
+    expect(html).not.toContain('allow-popups');
+    expect(html).not.toContain('allow-top-navigation');
+  });
+
+  it('keeps the PDFium toolbar hints on the pdf frame', () => {
+    const html = buildFilePreviewHtml('pdf', 'chat-media://local/tmp/r.pdf', 'r.pdf');
+    expect(html).toContain('#toolbar=1&navpanes=0');
+  });
+
+  it('escapes the display name into the frame title', () => {
+    const html = buildFilePreviewHtml('html', 'chat-media://local/x', '<img src=x onerror=alert(1)>');
+    expect(html).not.toContain('<img src=x');
+    expect(html).toContain('&lt;img');
+  });
+
+  it('returns nothing for kinds it does not own', () => {
+    // markdown / text go to editor components, office is server-rendered.
+    for (const kind of ['markdown', 'text', 'office', 'video', 'audio', 'unsupported']) {
+      expect(buildFilePreviewHtml(kind, 'chat-media://local/x', 'x'), kind).toBe('');
+    }
+  });
+
+  it('declares exactly the kinds the side pane can render', () => {
+    for (const kind of ['html', 'pdf', 'image']) {
+      expect(isSidePreviewableKind(kind), kind).toBe(true);
+    }
+    for (const kind of ['markdown', 'text', 'office', 'video', 'audio', 'unsupported']) {
+      expect(isSidePreviewableKind(kind), kind).toBe(false);
+    }
+  });
+
+  it('classifies real filenames into side-previewable kinds', () => {
+    // Guards the chip badge: it must agree with what the pane can actually show.
+    expect(isSidePreviewableKind(_kindOf('report.html'))).toBe(true);
+    expect(isSidePreviewableKind(_kindOf('slides.pdf'))).toBe(true);
+    expect(isSidePreviewableKind(_kindOf('chart.png'))).toBe(true);
+    expect(isSidePreviewableKind(_kindOf('bundle.zip'))).toBe(false);
+    expect(isSidePreviewableKind(_kindOf('notes.md'))).toBe(false);
+  });
+});

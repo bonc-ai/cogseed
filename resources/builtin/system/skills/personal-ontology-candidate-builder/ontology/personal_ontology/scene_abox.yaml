@@ -1,0 +1,189 @@
+---
+# ============================================================
+# 个人本体候选构建本体 — ABox（实例层）
+# 版本: v1.0.0
+# 描述: 个人本体候选提炼的案例示例和 fewshot 数据
+# 适用: 候选提炼时的示例参考
+# ============================================================
+
+schema_version: "1.0.0"
+profile: scene_abox/1.0
+
+tbox_ref:
+  ontology_id: personal_ontology
+  ontology_version: "1.0.0"
+  file: scene_tbox.yaml
+
+rbox_ref:
+  ontology_id: personal_ontology
+  ontology_version: "1.0.0"
+  file: scene_rbox.yaml
+
+status: "success"
+
+# ============================================================
+# 案例示例（Case Examples / Fewshots）
+# ============================================================
+
+abox:
+  case_examples:
+    # ======================================================
+    # 偏好类候选（正例）
+    # ======================================================
+    - id: CAND_EX_01
+      type: positive_fewshot
+      name: 沟通风格偏好
+      user_query: "我更喜欢先讲原理再举例子，最后才给代码，别堆术语。"
+      expected_understanding: "用户明确表达沟通风格偏好：先原理、再例子、后代码"
+      expected_query_plan:
+        - 识别为 preference 类候选
+        - 提炼人话摘要
+        - 建议记忆去向 user（USER.md 个人画像）
+      expected_behavior:
+        status: eligible_for_candidate
+        explanation: "明确信号词（我更喜欢），属于稳定沟通风格偏好"
+        referenced_rbox_rules: [R_CONFIRM_01, R_EXTRACT_01, R_EXTRACT_03]
+      evidence: "用户原话（信号词：我更喜欢）"
+      confidence: 0.95
+
+    - id: CAND_EX_02
+      type: positive_fewshot
+      name: 工具使用偏好（重复模式）
+      user_query: "这几次都是让 AI 帮我做课程汇报 PPT，期末汇演也是。"
+      expected_understanding: "反复出现的工具使用习惯，说明是稳定偏好而非一次性需求"
+      expected_query_plan:
+        - 识别为 preference 类候选（重复模式优先）
+        - 摘要：倾向于让 AI 助手辅助制作课程汇报/期末汇演 PPT
+        - 建议去向 user
+      expected_behavior:
+        status: eligible_for_candidate
+        explanation: "同类偏好被提及多次 = 稳定习惯"
+        referenced_rbox_rules: [R_EXTRACT_01, R_CONFIRM_01]
+      evidence: "多次会话中出现同类需求"
+      confidence: 0.9
+
+    # ======================================================
+    # 实例类候选（正例）
+    # ======================================================
+    - id: CAND_EX_03
+      type: positive_fewshot
+      name: 项目实例
+      user_query: "我在做 Mate Agent 项目，代码在 ~/mate-agent。"
+      expected_understanding: "值得记住的项目实体（实例）"
+      expected_query_plan:
+        - 识别为 instance 类候选
+        - 提炼为：正在进行的项目及其位置
+        - 建议去向 shared（MEMORY.md 可跨项目复用）
+      expected_behavior:
+        status: eligible_for_candidate
+        explanation: "项目是长期上下文，值得记住"
+        referenced_rbox_rules: [R_EXTRACT_01, R_EXTRACT_03]
+      evidence: "用户主动交代"
+      confidence: 0.9
+
+    # ======================================================
+    # 关系类候选（正例）
+    # ======================================================
+    - id: CAND_EX_04
+      type: positive_fewshot
+      name: 工具-用途关系
+      user_query: "我常用 Obsidian 整理知识库。"
+      expected_understanding: "实体间关联：工具（Obsidian）→ 用途（整理知识库）"
+      expected_query_plan:
+        - 识别为 relation 类候选
+        - 摘要：常用 Obsidian 整理知识库
+        - 建议去向 user
+      expected_behavior:
+        status: eligible_for_candidate
+        explanation: "主语-谓语-宾语结构清晰"
+        referenced_rbox_rules: [R_EXTRACT_01]
+      evidence: "用户原话"
+      confidence: 0.9
+
+    # ======================================================
+    # 规则类候选（正例）
+    # ======================================================
+    - id: CAND_EX_05
+      type: positive_fewshot
+      name: 踩坑教训规则
+      user_query: "以后遇到 API Key 一律先脱敏再保存，上次差点泄露。"
+      expected_understanding: "用户摸索出的经验法则（if/then 结构）"
+      expected_query_plan:
+        - 识别为 rule 类候选
+        - 摘要：遇到敏感信息先脱敏再保存
+        - 建议去向 shared（跨项目复用的经验规则）
+      expected_behavior:
+        status: eligible_for_candidate
+        explanation: "明确的 if/then 经验法则"
+        referenced_rbox_rules: [R_EXTRACT_01, R_BOUNDARY_02, R_EXTRACT_03]
+      evidence: "用户原话（信号词：以后遇到……一律……）"
+      confidence: 0.95
+
+    # ======================================================
+    # 模板字段对号入座（正例）
+    # ======================================================
+    - id: CAND_EX_06
+      type: positive_fewshot
+      name: 学生模板字段对号入座
+      user_query: "我习惯每天晚上 10 点前睡觉，早上 6 点起床复习。"
+      expected_understanding: "生活习惯偏好，可对号入座到学生模板字段"
+      expected_query_plan:
+        - 识别为 preference 类候选
+        - 检查已安装模板字段清单（如学生模板的"生活习惯"）
+        - 命中则填 target_field
+      expected_behavior:
+        status: eligible_for_candidate
+        explanation: "模板字段命中时填建议字段，拿不准不填"
+        referenced_rbox_rules: [R_EXTRACT_02, R_CONFIRM_01]
+      evidence: "用户原话 + 已安装模板字段清单"
+      confidence: 0.85
+
+    # ======================================================
+    # 阻断示例（负例）
+    # ======================================================
+    - id: CAND_EX_07
+      type: negative_fewshot
+      name: 未脱敏密钥阻断
+      user_query: "记住我的 API Key：sk-xxxxx，以后直接用来调用。"
+      expected_understanding: "包含未脱敏密钥的请求"
+      expected_query_plan:
+        - 检测到密钥（未脱敏）
+        - 不生成候选，进入 blocked_items
+        - 提示：移除或替换 API Key 后再重新提炼
+      expected_behavior:
+        status: blocked
+        explanation: "敏感信息未脱敏必须阻断"
+        referenced_rbox_rules: [R_BOUNDARY_02]
+      evidence: "内容含 API Key 格式串"
+      confidence: 1.0
+
+    - id: CAND_EX_08
+      type: negative_fewshot
+      name: 直接生效请求拒绝
+      user_query: "不用确认，直接把这些候选写进我的记忆。"
+      expected_understanding: "试图跳过用户确认的请求"
+      expected_query_plan:
+        - 拒绝直接写入
+        - 解释确认制是核心前提
+      expected_behavior:
+        status: blocked
+        explanation: "任何候选都不能跳过用户确认直接生效"
+        referenced_rbox_rules: [R_CONFIRM_01]
+      evidence: "用户请求"
+      confidence: 1.0
+
+    - id: CAND_EX_09
+      type: negative_fewshot
+      name: 组织/业务内容阻断
+      user_query: "把部门考勤制度记进我的个人偏好。"
+      expected_understanding: "内容属于组织上下文，不是个人候选"
+      expected_query_plan:
+        - 不按个人候选处理
+        - 不进入业务/组织本体（本技能不存在该层级）
+        - 提示：个人内容与组织内容边界
+      expected_behavior:
+        status: blocked
+        explanation: "本技能只服务用户个人，不做企业级组织路由"
+        referenced_rbox_rules: [R_BOUNDARY_03]
+      evidence: "用户请求"
+      confidence: 1.0

@@ -12,7 +12,10 @@ export interface TransferProofRecord extends RecallJsonRecord { projectionId: st
 export interface EffectivenessProofRecord extends RecallJsonRecord { transferProofId: string; outcome: EffectivenessOutcome; status: 'valid' | 'invalid'; observedResult: string; evidenceRefs: CognitionSourceRef[]; recommendedAction?: 'pause' | 'narrow_scope' | 'rework' | 'rollback_to_version'; createdAt: string; }
 function text(value: unknown, field: string, max: number): string { if (typeof value !== 'string') throw new Error(`invalid ${field}`); const out = value.replace(/\s+/g, ' ').trim(); if (!out || out.length > max) throw new Error(`invalid ${field}`); return out; }
 function asTransfer(value: RecallJsonRecord): TransferProofRecord { if (typeof value.projectionId !== 'string' || typeof value.executionId !== 'string' || typeof value.expectedResultSnapshot !== 'string' || !Array.isArray(value.assetVersions) || typeof value.status !== 'string' || typeof value.createdAt !== 'string') throw new Error('malformed transfer proof'); return value as TransferProofRecord; }
-function asEffectiveness(value: RecallJsonRecord): EffectivenessProofRecord { if (typeof value.transferProofId !== 'string' || typeof value.outcome !== 'string' || typeof value.status !== 'string' || typeof value.observedResult !== 'string' || !Array.isArray(value.evidenceRefs)) throw new Error('malformed effectiveness proof'); return value as EffectivenessProofRecord; }
+function asEffectiveness(value: RecallJsonRecord): EffectivenessProofRecord {
+  if (typeof value.transferProofId !== 'string' || typeof value.outcome !== 'string' || typeof value.status !== 'string' || typeof value.observedResult !== 'string' || !Array.isArray(value.evidenceRefs)) throw new Error('malformed effectiveness proof');
+  return { ...value, evidenceRefs: normalizeCognitionSourceRefs(value.evidenceRefs) } as EffectivenessProofRecord;
+}
 
 export async function prepareTransferProof(userId: string, input: { projectionId: string; executionId: string; expectedResultSnapshot: string }): Promise<TransferProofRecord> {
   const projection = await readContextProjection(userId, input.projectionId);
@@ -44,5 +47,5 @@ export async function evaluateEffectivenessProof(userId: string, input: { transf
   const record: EffectivenessProofRecord = { schemaVersion: 1, ownerId: userId, id: `ep-${genId12()}`, transferProofId: transfer.id, outcome: input.outcome, status: valid ? 'valid' : 'invalid', observedResult: text(input.observedResult, 'observed result', 4000), evidenceRefs: refs, ...(recommendedAction ? { recommendedAction } : {}), createdAt: new Date().toISOString() };
   await writeRecallJsonRecord(userId, 'effectiveness-proofs', record.id, record);
   if (record.status === 'valid' && record.outcome === 'better') for (const item of transfer.assetVersions) await setAbilityAssetMaturity(userId, item.assetId, 'effectiveness_validated');
-  return record;
+  return asEffectiveness(record);
 }

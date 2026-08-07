@@ -18,6 +18,8 @@ import { app, ipcMain, dialog, BrowserWindow, type WebContents } from 'electron'
 
 import * as users from '../features/users';
 import * as chats from '../features/chats';
+import * as conversationAside from '../features/conversation_aside';
+import * as modelClient from '../model/client';
 import * as projects from '../features/projects';
 import * as projectFiles from '../features/project_files';
 import * as projectTasks from '../features/project_tasks';
@@ -26,6 +28,7 @@ import * as groupChat from '../features/group_chat';
 import * as companionRepro from '../features/companion_repro';
 import * as p3394 from '../features/p3394';
 import * as executionRecords from '../features/execution-records';
+import * as workbench from '../features/workbench';
 import * as evolution from '../features/evolution';
 import * as cognition from '../features/cognition';
 import * as recallCandidates from '../features/recall/candidate-service';
@@ -35,14 +38,22 @@ import * as recallProjection from '../features/recall/context-projection';
 import * as recallProofs from '../features/recall/proof-service';
 import * as recallTree from '../features/recall/tree-service';
 import * as recallUsage from '../features/recall/usage-service';
+import * as recallSources from '../features/recall/source-catalog';
+import * as recallCaptures from '../features/recall/capture-service';
+import * as recallCaptureSettings from '../features/recall/capture-settings';
+import * as recallViews from '../features/recall/recall-view-service';
+import * as recallTeaching from '../features/recall/teaching-service';
 import * as personalOntologyCandidates from '../features/personal_ontology_candidates';
 import * as personalOntologyGroups from '../features/personal_ontology_groups';
+import * as personalOntologyTemplateFiles from '../features/personal_ontology_template_files';
+import { getRoleTemplate } from '../features/role_templates';
 import type { GroupEvent } from '../features/group_chat/bus';
 import * as agents from '../features/agents';
 import * as autoTasks from '../features/auto_tasks';
 import { isAgentEnabled } from '../features/component_enabled';
 import * as skills from '../features/skills';
 import * as marketplace from '../features/marketplace';
+import * as notificationPermissions from '../features/notification_permissions';
 import * as marketplaceBiz from '../features/marketplace_biz';
 import * as marketplaceCache from '../features/marketplace_cache';
 import * as marketplaceReconcile from '../features/marketplace_reconcile';
@@ -51,6 +62,7 @@ import * as contexts from '../features/contexts';
 import * as libraryTransfer from '../features/library_transfer';
 import * as kbVector from '../features/kb_vector';
 import * as kbIndexer from '../features/kb_indexer';
+import { terminalEvents } from '../features/terminal/pty-sessions';
 import * as chatAttachments from '../features/chat_attachments';
 import * as conversationCopyMerge from '../features/conversation_copy_merge';
 import * as chatArtifacts from '../features/chat_artifacts';
@@ -88,7 +100,7 @@ import {
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { shell } from 'electron';
-import { DEFAULT_USER_WORKSPACE, WS_ROOT, projectFilesDir, userMarketplaceSkillDir } from '../paths';
+import { DEFAULT_USER_WORKSPACE, WS_ROOT, projectFilesDir, userMarketplaceSkillDir, userSkillsDir } from '../paths';
 import {
   chatAttachmentDirForConversation,
   chatAttachmentRelPath,
@@ -761,6 +773,25 @@ async function _afterRecycleRestore(ctx: IpcContext, paths: string[]): Promise<v
 // Contract: `(payload, { userId, sender }) => result` where result is
 // merged into a `{ ok: true, ...result }` response. Throw to signal error.
 
+/**
+ * Resolve an installed skill's content directory for the workbench handlers.
+ *
+ * Checks the same roots in the same precedence order as
+ * `skills.getSkillForEdit` (marketplace before custom) so a baseline pins the
+ * tree the runtime would actually load. Returns null when the skill is absent,
+ * letting callers report a readable refusal instead of hashing a missing path.
+ */
+function _resolveWorkbenchSkillDir(userId: string, skillId: string): string | null {
+  const candidates = [
+    userMarketplaceSkillDir(userId, skillId),
+    path.join(userSkillsDir(userId), skillId),
+  ];
+  for (const dir of candidates) {
+    if (fs.existsSync(path.join(dir, 'SKILL.md'))) return dir;
+  }
+  return null;
+}
+
 const invokeHandlers: Record<string, InvokeHandler> = {
   'mate_agent.task.start': async (payload, ctx) => mateAgentBackend.mateIpcService.start(ctx.userId, payload),
   'mate_agent.task.read': async (payload, ctx) => mateAgentBackend.mateIpcService.read(ctx.userId, payload),
@@ -861,6 +892,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         history_indexes: page.historyIndexes,
       } : {}),
     };
+  },
+
+  // ── Conversation aside: read-only side thread (see features/conversation_aside) ──
+  // Never touches the main transcript or the group-chat bus. Business logic
+  // stays in the feature; these handlers only validate and delegate.
+
+  'aside.list': async ({ cid, project_id }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    return {
+      ok: true,
+      turns: await conversationAside.listAsideTurns(ctx.userId, cid, project_id ?? null),
+    };
+  },
+
+  'aside.clear': async ({ cid, project_id }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    await conversationAside.clearAsideTurns(ctx.userId, cid, project_id ?? null);
+    return { ok: true };
   },
 
   'conversations.files.list': async ({ cid }, ctx) => {
@@ -1574,6 +1623,99 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, receipt: await p3394.readReceipt(ctx.userId, executionId) };
   },
 
+  // ── Workbench: complex-delivery Workspace (US-20) ─────────────────────
+  // The gate decides whether the renderer may paint the Workspace body at
+  // all ("未达Gate不得展示空Workspace"). The skill tree is resolved here from
+  // the installed skill roots rather than accepted from the renderer, so a
+  // caller cannot point a baseline check at an arbitrary directory.
+
+  'workbench.baseline.freeze': async ({ assetId, version, source, evaluationContractRef }, ctx) => {
+    if (!safeId(assetId)) throw new Error('invalid asset id');
+    const skillDir = _resolveWorkbenchSkillDir(ctx.userId, assetId);
+    if (!skillDir) throw new Error('skill not found');
+    return {
+      ok: true,
+      baseline: await workbench.freezeBaseline(ctx.userId, {
+        assetId,
+        version: String(version || ''),
+        skillDir,
+        allowedRoots: [skillDir],
+        source,
+        ...(evaluationContractRef ? { evaluationContractRef: String(evaluationContractRef) } : {}),
+      }),
+    };
+  },
+
+  'workbench.baseline.list': async (_args, ctx) => {
+    return { ok: true, baselines: await workbench.listBaselines(ctx.userId) };
+  },
+
+  'workbench.baseline.verify': async ({ baselineId }, ctx) => {
+    if (!safeId(baselineId)) throw new Error('invalid baseline id');
+    const baseline = await workbench.readBaseline(ctx.userId, baselineId);
+    const skillDir = _resolveWorkbenchSkillDir(ctx.userId, baseline.skill_ref.asset_id);
+    if (!skillDir) return { ok: true, result: { ok: false, reason: 'unreadable' } };
+    return {
+      ok: true,
+      result: await workbench.verifyBaseline(ctx.userId, baselineId, skillDir, [skillDir]),
+    };
+  },
+
+  'workbench.gate.evaluate': async ({ baselineId, receiptExecutionId }, ctx) => {
+    if (!safeId(baselineId)) throw new Error('invalid baseline id');
+    if (!safeId(receiptExecutionId)) throw new Error('invalid execution id');
+    const baseline = await workbench.readBaseline(ctx.userId, baselineId);
+    const skillDir = _resolveWorkbenchSkillDir(ctx.userId, baseline.skill_ref.asset_id)
+      || userMarketplaceSkillDir(ctx.userId, baseline.skill_ref.asset_id);
+    return {
+      ok: true,
+      decision: await workbench.evaluateWorkspaceGate(ctx.userId, {
+        baselineId,
+        skillDir,
+        allowedRoots: [skillDir],
+        receiptExecutionId,
+      }),
+    };
+  },
+
+  'workbench.actionPlan.read': async ({ projectId }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid project id');
+    return { ok: true, plan: await workbench.projectActionPlan(ctx.userId, projectId) };
+  },
+
+  'workbench.taskRuns.list': async ({ projectId, taskId }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid project id');
+    if (!safeId(taskId)) throw new Error('invalid task id');
+    return { ok: true, runs: await workbench.listTaskRuns(ctx.userId, projectId, taskId) };
+  },
+
+  'workbench.taskRun.start': async ({ projectId, taskId, baselineId, role }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid project id');
+    if (!safeId(taskId)) throw new Error('invalid task id');
+    if (!safeId(baselineId)) throw new Error('invalid baseline id');
+    const baseline = await workbench.readBaseline(ctx.userId, baselineId);
+    const skillDir = _resolveWorkbenchSkillDir(ctx.userId, baseline.skill_ref.asset_id);
+    if (!skillDir) return { ok: false, refusal: 'baseline_unreadable' };
+    const started = await workbench.startTaskRun(ctx.userId, {
+      projectId,
+      taskId,
+      baselineId,
+      skillDir,
+      allowedRoots: [skillDir],
+      role: role === 'agent-a' ? 'agent-a' : 'agent-b',
+      // The Workspace surface starts an in-process run; CLI-backed dispatch
+      // keeps flowing through the local-agents runner, which owns its own
+      // adapter identity.
+      kind: 'core-agent',
+      boundary: 'real',
+      permissionMode: 'ask',
+    });
+    // A refusal is a normal outcome (a drifted or absent baseline must block),
+    // so it is reported rather than thrown.
+    if (started.ok !== true) return { ok: false, refusal: started.reason };
+    return { ok: true, executionId: started.executionId, role: started.role };
+  },
+
   'p3394.behaviorContrast.start': async ({ contrastId, receiptExecutionId, task, attachmentIds, conversationId, agentId, executionKind }, ctx) => {
     if (contrastId !== undefined && !safeId(contrastId)) throw new Error('invalid contrast id');
     if (!safeId(receiptExecutionId) || !safeId(conversationId)) throw new Error('invalid behavior contrast scope');
@@ -1689,6 +1831,149 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'recall.candidates.list': async (_args, ctx) => ({ ok: true, candidates: await recallCandidates.listRecallCandidates(ctx.userId) }),
 
+  'recall.sources.list': async ({ kinds, conversationId, limit } = {}, ctx) => {
+    if (kinds !== undefined && (
+      !Array.isArray(kinds)
+      || kinds.length > recallSources.COGNITION_CATALOG_KINDS.length
+      || kinds.some((kind) => !recallSources.COGNITION_CATALOG_KINDS.includes(kind))
+    )) throw new Error('invalid cognition source kinds');
+    if (conversationId !== undefined && !safeId(conversationId)) throw new Error('invalid conversation id');
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid source limit');
+    return {
+      ok: true,
+      sources: await recallSources.listCognitionSources(ctx.userId, {
+        ...(kinds !== undefined ? { kinds } : {}),
+        ...(conversationId !== undefined ? { conversationId } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      }),
+    };
+  },
+
+  'recall.views.list': async ({ purpose, workspaceId, includeExpired, limit } = {}, ctx) => {
+    if (purpose !== undefined && purpose !== 'conversation_capture' && purpose !== 'task_context') throw new Error('invalid recall view purpose');
+    if (workspaceId !== undefined && !safeId(workspaceId)) throw new Error('invalid workspace id');
+    if (includeExpired !== undefined && typeof includeExpired !== 'boolean') throw new Error('invalid include expired');
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid recall view limit');
+    return {
+      ok: true,
+      views: await recallViews.listRecallViews(ctx.userId, {
+        ...(purpose !== undefined ? { purpose } : {}),
+        ...(workspaceId !== undefined ? { workspaceId } : {}),
+        ...(includeExpired !== undefined ? { includeExpired } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      }),
+    };
+  },
+
+  'recall.views.read': async ({ viewId } = {}, ctx) => {
+    if (!safeId(viewId)) throw new Error('invalid recall view id');
+    return { ok: true, view: await recallViews.readRecallView(ctx.userId, viewId) };
+  },
+
+  'recall.teaching.list': async ({ conversationId, status, limit } = {}, ctx) => {
+    if (conversationId !== undefined && !safeId(conversationId)) throw new Error('invalid conversation id');
+    if (status !== undefined && status !== 'active' && status !== 'revoked') throw new Error('invalid teaching status');
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid teaching limit');
+    return {
+      ok: true,
+      signals: await recallTeaching.listUserTeachingSignals(ctx.userId, {
+        ...(conversationId !== undefined ? { conversationId } : {}),
+        ...(status !== undefined ? { status } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      }),
+    };
+  },
+
+  'recall.teaching.revoke': async ({ signalId } = {}, ctx) => {
+    if (!safeId(signalId)) throw new Error('invalid teaching signal id');
+    return { ok: true, signal: await recallTeaching.revokeUserTeachingSignal(ctx.userId, signalId) };
+  },
+
+  'recall.captures.list': async ({ limit, statuses, executionPolicy, cursor } = {}, ctx) => {
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid capture limit');
+    const validStatuses = new Set([
+      'waiting_quiet', 'waiting_completion', 'waiting_manual', 'scheduled', 'queued', 'extracting', 'paused',
+      'review_ready', 'no_candidate', 'configuration_required', 'failed', 'cancelled',
+    ]);
+    if (statuses !== undefined && (
+      !Array.isArray(statuses)
+      || statuses.length > validStatuses.size
+      || statuses.some((status) => typeof status !== 'string' || !validStatuses.has(status))
+    )) throw new Error('invalid recall capture statuses');
+    if (executionPolicy !== undefined && !['smart', 'immediate', 'nightly', 'manual'].includes(executionPolicy)) {
+      throw new Error('invalid recall capture execution policy');
+    }
+    if (cursor !== undefined && (typeof cursor !== 'string' || !cursor || cursor.length > 500)) {
+      throw new Error('invalid recall capture cursor');
+    }
+    const page = await recallCaptures.queryRecallCaptures(ctx.userId, {
+      ...(limit === undefined ? {} : { limit }),
+      ...(statuses === undefined ? {} : { statuses }),
+      ...(executionPolicy === undefined ? {} : { executionPolicy }),
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    return { ok: true, ...page };
+  },
+
+  'recall.captures.read': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, capture: await recallCaptures.readRecallCapture(ctx.userId, captureId) };
+  },
+
+  'recall.captures.retry': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, capture: await recallCaptures.retryRecallCapture(ctx.userId, captureId) };
+  },
+
+  'recall.captures.pause': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, capture: await recallCaptures.pauseRecallCapture(ctx.userId, captureId) };
+  },
+
+  'recall.captures.resume': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, capture: await recallCaptures.resumeRecallCapture(ctx.userId, captureId) };
+  },
+
+  'recall.captures.cancel': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, capture: await recallCaptures.cancelRecallCapture(ctx.userId, captureId) };
+  },
+
+  'recall.captures.runNow': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, capture: await recallCaptures.runRecallCaptureNow(ctx.userId, captureId) };
+  },
+
+  'recall.captures.manualCreate': async ({ conversationId } = {}, ctx) => {
+    if (!safeId(conversationId)) throw new Error('invalid conversation id');
+    return {
+      ok: true,
+      capture: await recallCaptures.queueManualRecallCaptureFromConversation(ctx.userId, conversationId),
+    };
+  },
+
+  'recall.captures.settings.get': async (_input, ctx) => {
+    const [settings, model] = await Promise.all([
+      recallCaptureSettings.readRecallCaptureSettings(ctx.userId),
+      auth.getConfig(),
+    ]);
+    return {
+      ok: true,
+      settings,
+      model: {
+        ...model,
+        configured: auth.hasConfiguredModel().configured,
+        authorizationRequired: Boolean(auth.getConfiguredModelOAuthExpiredMessage()),
+      },
+    };
+  },
+
+  'recall.captures.settings.update': async (input = {}, ctx) => {
+    const settings = await recallCaptureSettings.updateRecallCaptureSettings(ctx.userId, input);
+    return { ok: true, settings };
+  },
+
   'recall.candidates.importPersonalOntology': async ({ candidateId } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid personal ontology candidate id');
     return { ok: true, candidate: await recallCandidates.importPersonalOntologyCandidate(ctx.userId, candidateId) };
@@ -1748,6 +2033,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.workspaceRefs.remove': async ({ id } = {}, ctx) => { if (!safeId(id)) throw new Error('invalid workspace reference id'); await recallWorkspaceRefs.removeWorkspaceAssetReference(ctx.userId, id); return { ok: true }; },
 
   'recall.projections.preview': async ({ taskRunId, workspaceId, purpose, authorization, expiresAt } = {}, ctx) => { if (!safeId(taskRunId) || (workspaceId !== undefined && !safeId(workspaceId)) || typeof purpose !== 'string' || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid recall projection'); return { ok: true, projection: await recallProjection.previewContextProjection(ctx.userId, { taskRunId, ...(workspaceId !== undefined ? { workspaceId } : {}), purpose, ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }) }; },
+  'recall.projections.list': async ({ workspaceId, status, includeExpired, limit } = {}, ctx) => {
+    if (workspaceId !== undefined && !safeId(workspaceId)) throw new Error('invalid workspace id');
+    if (status !== undefined && !['preview', 'confirmed', 'expired', 'revoked'].includes(status)) throw new Error('invalid projection status');
+    if (includeExpired !== undefined && typeof includeExpired !== 'boolean') throw new Error('invalid include expired');
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid projection limit');
+    return {
+      ok: true,
+      projections: await recallProjection.listContextProjections(ctx.userId, {
+        ...(workspaceId !== undefined ? { workspaceId } : {}),
+        ...(status !== undefined ? { status } : {}),
+        ...(includeExpired !== undefined ? { includeExpired } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      }),
+    };
+  },
   'recall.projections.confirm': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.confirmContextProjection(ctx.userId, projectionId) }; },
   'recall.projections.read': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.readContextProjection(ctx.userId, projectionId) }; },
 
@@ -2278,23 +2578,25 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'personalOntology.candidates.list': async (_payload, ctx) => {
     return personalOntologyCandidates.listCandidates(ctx.userId);
   },
-  'personalOntology.candidates.confirm': async ({ candidateId, toGlobalMemory, toGroupIds }, ctx) => {
+  'personalOntology.candidates.confirm': async ({ candidateId, toGlobalMemory, toGroupIds, targetField, routeWithLlm }, ctx) => {
     if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
-    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[] } = {};
+    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string } = {};
     if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
     if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
-    return personalOntologyCandidates.confirmCandidate(ctx.userId, candidateId, dest);
+    if (typeof targetField === 'string' && targetField.trim()) dest.targetField = targetField.trim();
+    return personalOntologyCandidates.confirmCandidate(ctx.userId, candidateId, dest, { routeWithLlm: routeWithLlm === true });
   },
   'personalOntology.candidates.reject': async ({ candidateId, reason }, ctx) => {
     if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
     return personalOntologyCandidates.rejectCandidate(ctx.userId, candidateId, reason);
   },
-  'personalOntology.candidates.confirmBatch': async ({ candidateIds, toGlobalMemory, toGroupIds }, ctx) => {
+  'personalOntology.candidates.confirmBatch': async ({ candidateIds, toGlobalMemory, toGroupIds, targetField, routeWithLlm }, ctx) => {
     if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
-    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[] } = {};
+    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string } = {};
     if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
     if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
-    return personalOntologyCandidates.confirmCandidates(ctx.userId, candidateIds, dest);
+    if (typeof targetField === 'string' && targetField.trim()) dest.targetField = targetField.trim();
+    return personalOntologyCandidates.confirmCandidates(ctx.userId, candidateIds, dest, { routeWithLlm: routeWithLlm === true });
   },
   'personalOntology.candidates.rejectBatch': async ({ candidateIds, reason }, ctx) => {
     if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
@@ -2303,7 +2605,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   // ── Personal Ontology Groups ("记忆分组") ──
   'personalOntology.groups.list': async (_payload, ctx) => {
-    return { groups: await personalOntologyGroups.listGroups(ctx.userId) };
+    const groups = await personalOntologyGroups.listGroups(ctx.userId);
+    // 运行时附加模板显示名（渲染层层级展示用，不落盘）
+    for (const g of groups) {
+      if (g.template_id) {
+        const template = getRoleTemplate(g.template_id);
+        if (template) g.template_name = template.name;
+      }
+    }
+    return { groups };
   },
   'personalOntology.groups.create': async ({ title }, ctx) => {
     if (!title || typeof title !== 'string') throw new Error('missing title');
@@ -2320,11 +2630,97 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
   'personalOntology.groups.read': async ({ groupId }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
-    return personalOntologyGroups.readGroupContent(ctx.userId, groupId);
+    // 复合 id（groupId::分节）→ 返回分节内容；普通 id → 整文件（chat-use 兼容）
+    return personalOntologyTemplateFiles.readContentById(ctx.userId, groupId);
   },
   'personalOntology.groups.write': async ({ groupId, content }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
     return personalOntologyGroups.writeGroupContent(ctx.userId, groupId, String(content ?? ''));
+  },
+
+  // ── Personal Ontology Role Templates (角色模板) ──
+  'personalOntology.templates.list': async (_payload, ctx) => {
+    return { templates: await personalOntologyTemplateFiles.listTemplateStatus(ctx.userId) };
+  },
+  'personalOntology.templates.install': async ({ templateId }, ctx) => {
+    if (!templateId || typeof templateId !== 'string') throw new Error('missing templateId');
+    return personalOntologyTemplateFiles.installTemplateFile(ctx.userId, templateId);
+  },
+
+  // ── Personal Ontology Group Fields (挖空表单字段，兼容复合 id) ──
+  'personalOntology.groups.fields.list': async ({ groupId }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    return personalOntologyTemplateFiles.listFieldsByRef(ctx.userId, groupId);
+  },
+  'personalOntology.groups.fields.append': async ({ groupId, fieldName, value, source }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
+    if (typeof value !== 'string') throw new Error('missing value');
+    return personalOntologyTemplateFiles.appendFieldValueToRef(ctx.userId, groupId, fieldName, value, typeof source === 'string' ? source : '手动');
+  },
+  'personalOntology.groups.fields.setValue': async ({ groupId, fieldName, value, oldValue }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
+    if (typeof value !== 'string') throw new Error('missing value');
+    return personalOntologyTemplateFiles.setFieldValueToRef(ctx.userId, groupId, fieldName, String(oldValue ?? ''), value);
+  },
+  'personalOntology.groups.fields.removeValue': async ({ groupId, fieldName, value }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
+    if (typeof value !== 'string') throw new Error('missing value');
+    return personalOntologyTemplateFiles.removeFieldValueToRef(ctx.userId, groupId, fieldName, value);
+  },
+  'personalOntology.groups.fields.remove': async ({ groupId, fieldName }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
+    return personalOntologyTemplateFiles.removeFieldToRef(ctx.userId, groupId, fieldName);
+  },
+
+  // ── Personal Ontology Group Entries (流水区，兼容复合 id) ──
+  'personalOntology.groups.entries.remove': async ({ groupId, entryText }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (typeof entryText !== 'string') throw new Error('missing entryText');
+    return personalOntologyTemplateFiles.removeEntryToRef(ctx.userId, groupId, entryText);
+  },
+  'personalOntology.groups.entries.promote': async ({ groupId, entryText, fieldName }, ctx) => {
+    if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
+    if (typeof entryText !== 'string') throw new Error('missing entryText');
+    if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
+    return personalOntologyTemplateFiles.promoteEntryToRef(ctx.userId, groupId, entryText, fieldName);
+  },
+
+  // ── 桥接注册：renderer 引用但主分支原版漏注册的通道（纯转发到现成能力，
+  //  零逻辑变更；功能等同 renderer 期望语义）。──
+  'agents.builtin.delete': async ({ agent_id }, ctx) => {
+    if (!agent_id || typeof agent_id !== 'string') throw new Error('missing agent_id');
+    return marketplace.uninstallMarketplaceAgent(agent_id);
+  },
+
+  'skills.builtin.delete': async ({ id }, ctx) => {
+    if (!id || typeof id !== 'string') throw new Error('missing id');
+    return marketplace.uninstallMarketplaceSkill(id);
+  },
+
+  'projects.files.officeHtml': async ({ projectId, name }, ctx) => {
+    if (!projectId || typeof projectId !== 'string') throw new Error('missing projectId');
+    if (!name || typeof name !== 'string') throw new Error('missing name');
+    return projectFiles.readProjectOfficeHtml(ctx.userId, projectId, name);
+  },
+
+  'prefs.getTaskNotifications': async () => ({
+    ok: true,
+    enabled: appConfig.getTaskNotificationsEnabled(),
+  }),
+
+  'prefs.setTaskNotifications': async ({ enabled }) => {
+    appConfig.setTaskNotificationsEnabled(enabled === true);
+    return { ok: true, enabled: appConfig.getTaskNotificationsEnabled() };
+  },
+
+  'prefs.openTaskNotificationSettings': async () => {
+    const url = notificationPermissions.systemNotificationSettingsUrl(process.platform, app.getName());
+    if (url) void shell.openExternal(url);
+    return { ok: true };
   },
 
   'skills.list': async ({ force } = {}) => {
@@ -3593,6 +3989,57 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 // unexpected throws.
 
 const streamHandlers: Record<string, StreamHandler> = {
+  /**
+   * Read-only aside answer. Deliberately NOT routed through groupChat.send /
+   * bus.enqueue: doing so would append to the main transcript and add a second
+   * dispatch path. The model is called directly with no tools, so the
+   * read-only property is structural rather than enforced.
+   */
+  'aside.askStream': async function* ({ cid, anchor_index, anchor_msg_id, question, project_id }, ctx, signal) {
+    if (!safeId(cid)) {
+      yield { type: 'error', text: 'invalid cid' };
+      return;
+    }
+    const conv = await chats.getConversation(ctx.userId, cid, project_id ?? null);
+    if (!conv) {
+      yield { type: 'error', text: 'conversation not found' };
+      return;
+    }
+    try {
+      const events = conversationAside.askAside(ctx.userId, {
+        cid,
+        // Prefer the message id: a normally-opened conversation's bubbles carry
+        // no global index, only an id.
+        ...(anchor_msg_id ? { anchorMsgId: String(anchor_msg_id) } : { anchorIndex: Number(anchor_index) }),
+        question: String(question ?? ''),
+        projectHint: conv.project_id ?? null,
+        boundAgentId: conv.agent_id || null,
+      }, {
+        getAgent: (id: string) => agents.getAgent(id) as any,
+        isAgentEnabled: (id: string) => isAgentEnabled(ctx.userId, id),
+        stream: (opts) => modelClient.streamChatWithModel({
+          userId: opts.userId,
+          message: opts.message,
+          systemPrompt: opts.systemPrompt,
+          sessionId: opts.sessionId,
+          ...(opts.agentName ? { agentName: opts.agentName } : {}),
+          // Explain-only: no skills in the prompt and NO tools at all. The
+          // `disableTools` flag is what actually enforces this — `maxToolLoops: 0`
+          // would be dropped as falsy and leave the full tool set attached.
+          skillList: [],
+          disableTools: true,
+          abortSignal: signal,
+        }) as AsyncIterable<{ type: string; text?: string }>,
+      });
+      for await (const event of events) {
+        if (signal.aborted) return;
+        yield event as { type: string; text?: string };
+      }
+    } catch (err) {
+      yield { type: 'error', text: (err as Error).message };
+    }
+  },
+
   'mate_agent.task.events': async function* (payload, ctx, signal) {
     yield* mateAgentBackend.mateIpcService.streamEvents(ctx.userId, payload, signal);
   },
@@ -3912,6 +4359,56 @@ const streamHandlers: Record<string, StreamHandler> = {
       }
     } finally {
       kbIndexer.kbEvents.off('status', listener);
+    }
+  },
+
+  // Streams a single PTY terminal session's output to the renderer. Opened by
+  // terminal-panel.js after `terminal.create`. Filters to the owning user +
+  // session id. Raw bytes (ANSI intact) are forwarded for xterm.js to render.
+  'terminal.stream': async function* (
+    payload: { session_id?: unknown },
+    ctx,
+    signal,
+  ) {
+    const sessionId = typeof payload?.session_id === 'string' ? payload.session_id : '';
+    if (!sessionId) {
+      yield { type: 'error', error: 'invalid session_id' };
+      return;
+    }
+    const queue: Array<{ kind: 'output'; data: string } | { kind: 'exit'; exitCode: number | null }> = [];
+    let notify: (() => void) | null = null;
+    const onData = (ev: { userId: string; sessionId: string; chunk: string }) => {
+      if (ev.userId !== ctx.userId || ev.sessionId !== sessionId) return;
+      queue.push({ kind: 'output', data: ev.chunk });
+      notify?.();
+    };
+    const onExit = (ev: { userId: string; sessionId: string; exitCode: number | null }) => {
+      if (ev.userId !== ctx.userId || ev.sessionId !== sessionId) return;
+      queue.push({ kind: 'exit', exitCode: ev.exitCode });
+      notify?.();
+    };
+    terminalEvents.on('data', onData);
+    terminalEvents.on('exit', onExit);
+    const abortPromise = new Promise<void>((r) => {
+      if (signal.aborted) r();
+      else signal.addEventListener('abort', () => r(), { once: true });
+    });
+    try {
+      while (!signal.aborted) {
+        if (queue.length) {
+          const item = queue.shift()!;
+          if (item.kind === 'output') yield { type: 'output', data: item.data };
+          else yield { type: 'exit', exit_code: item.exitCode };
+          continue;
+        }
+        await Promise.race([
+          new Promise<void>((r) => { notify = () => { notify = null; r(); }; }),
+          abortPromise,
+        ]);
+      }
+    } finally {
+      terminalEvents.off('data', onData);
+      terminalEvents.off('exit', onExit);
     }
   },
 };

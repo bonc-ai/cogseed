@@ -17,6 +17,7 @@ const _rendererFeatureManifest = Object.freeze({
   agents: [],
   project: [
     { src: './modules/library-transfer.js' },
+    { src: './modules/project-workbench.js' },
     { src: './modules/project-detail.js' },
   ],
   auto: [
@@ -31,6 +32,10 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/kb-picker.js' },
   ],
   skills: [
+    { src: './modules/skills.js' },
+    { src: './modules/skills-bindings.js' },
+  ],
+  recall: [
     { src: './modules/skills.js' },
     { src: './modules/skills-bindings.js' },
   ],

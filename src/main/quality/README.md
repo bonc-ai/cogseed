@@ -41,6 +41,34 @@ The `skill_script_requires_runner` rule is an authoring/publishing contract, not
 
 There is intentionally NO override for EXTREME. If a real use case triggers a red flag, restructure the spec to remove the pattern (typically: accept the path as a user-provided argument rather than hard-coding a sensitive location).
 
+### Enforcing "no EXTREME override"
+
+`ValidationReport.ok === false` means "at least one EXTREME violation", so `ok`
+is the block condition and no caller may weaken it with a `force` flag. Two
+chokepoints own this:
+
+| Path | Chokepoint |
+|---|---|
+| Marketplace install (agent + skill) | `features/marketplace.ts::_assertQualityGatePassed` |
+| Local dir import (both import shapes) | `features/skills.ts::_isQualityBlockedImport` |
+
+Both deliberately ignore `force`. `force` still means something for the rest of
+the install flow (dependency propagation, MEDIUM advisories that never blocked)
+— it just cannot buy past a red flag. The renderer correspondingly shows the
+violation report **without** an "Install anyway" / "Import anyway" action.
+
+Two regressions this closes, both of which contradicted the paragraph above:
+
+- Marketplace install accepted `force: true` and skipped the gate entirely, so
+  the renderer's "Install anyway" button could install content the validator
+  had rejected as explicitly malicious.
+- Dir import hard-blocked only `skill_script_requires_runner` — an authoring
+  convention — while letting `force` bypass all nine genuine red flags. The
+  convention rule was unskippable while the security rules were skippable.
+
+When adding a new install/import path, route its rejection through one of the
+two helpers above rather than re-deriving the condition.
+
 ## Things this module does NOT do
 
 - LLM calls / judgment — out of scope (validator is deterministic).

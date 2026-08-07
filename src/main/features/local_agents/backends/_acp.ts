@@ -25,6 +25,7 @@ import {
   armKillWatchdog,
   LineSplitter,
   levelOrInfo,
+  FileChangeFallbackTracker,
 } from './base.js';
 
 export interface AcpBackendDef {
@@ -79,6 +80,13 @@ export function makeAcpBackend(def: AcpBackendDef): LocalBackend {
       // failed turn look successful. We sniff stderr for these and
       // promote them to the run-level error if no text streamed.
       let stderrErrorHint: string | undefined;
+
+      // Fallback file-change detection: ACP session/update never reports
+      // touched file paths in a structured way we can rely on (tool
+      // names/args vary per server), so we snapshot the working directory
+      // and diff on prompt completion. See FileChangeFallbackTracker's
+      // doc comment in backends/base.ts.
+      const fileChangeFallback = new FileChangeFallbackTracker(opts.cwd);
 
       const PROMPT_REQ_ID = 100;
 
@@ -166,6 +174,9 @@ export function makeAcpBackend(def: AcpBackendDef): LocalBackend {
               resultStatus = r.ok ? 'completed' : 'failed';
               if (r.ok && r.text) resultText = r.text;
               if (!r.ok) resultError = r.error;
+              // Best-effort — must never block the stdin-close shutdown
+              // path below even if the sweep itself throws.
+              if (r.ok) fileChangeFallback.sweep(e => opts.onEvent(e));
               // ACP servers (hermes / kimi / kiro) keep stdin open
               // ready for the next prompt — they're long-running.
               // We're a one-shot dispatcher; closing stdin signals

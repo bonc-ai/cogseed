@@ -30,12 +30,25 @@ describe('cognition feature aggregate layer', () => {
     users.activateUser(UID);
     const memory = await import('../../../src/main/features/memory');
     const groups = await import('../../../src/main/features/personal_ontology_groups');
+    const recallCandidates = await import('../../../src/main/features/recall/candidate-service');
     const { userLocalRoot } = await import('../../../src/main/paths');
     const cognition = await import('../../../src/main/features/cognition');
 
     expect(memory.addEntry(UID, 'user', 'Prefers local-first memory flows.').ok).toBe(true);
     const created = await groups.createGroup(UID, 'Research ontology');
     expect(created.ok).toBe(true);
+    const recallCandidate = await recallCandidates.saveRecallCandidate(UID, {
+      judgment: 'Keep review evidence traceable.',
+      suggestedType: 'rule',
+      suggestedScope: 'project',
+      sourceRefs: [
+        { kind: 'artifact_file', subtype: 'context_file', id: 'context-a' },
+        { kind: 'execution_evaluation', subtype: 'evaluation', id: 'evaluation-a' },
+        { kind: 'conversation', subtype: 'message', id: 'message-a' },
+        { kind: 'user_teaching_signal', subtype: 'teaching', id: 'teaching-a' },
+      ],
+    });
+    const { asset: recallAsset } = await recallCandidates.promoteRecallCandidate(UID, recallCandidate.id);
 
     const statePath = path.join(userLocalRoot(UID), 'p3394', 'kstar-state.json');
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
@@ -97,6 +110,16 @@ describe('cognition feature aggregate layer', () => {
         maturity: 'bud',
         status: 'candidate',
         baselineSkillRef: 'skill:skill-a',
+      }),
+      expect.objectContaining({
+        id: recallAsset.id,
+        source: 'recall_ability_asset',
+        relationRefs: expect.arrayContaining([
+          expect.objectContaining({ type: 'knowledge', id: 'context-a' }),
+          expect.objectContaining({ type: 'evaluation', id: 'evaluation-a' }),
+          expect.objectContaining({ type: 'conversation', id: 'message-a' }),
+          expect.objectContaining({ type: 'memory', id: 'teaching-a' }),
+        ]),
       }),
     ]));
 

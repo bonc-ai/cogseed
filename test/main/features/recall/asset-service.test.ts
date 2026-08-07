@@ -49,4 +49,70 @@ describe('Recall ability assets', () => {
     await expect(assets.updateAbilityAsset('user-a', asset.id, { id: 'aa-other' } as never)).rejects.toThrow(/identity/i);
     await expect(assets.readAbilityAsset('user-b', asset.id)).rejects.toThrow(/not found/i);
   });
+
+  it('preserves legacy kinds while normalizing evidence metadata at asset boundaries', async () => {
+    const { candidates, assets } = await modules();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Keep source compatibility explicit.',
+      suggestedType: 'rule',
+      suggestedScope: 'project',
+      sourceRefs: [{ kind: 'message', id: 'msg-a' }],
+    });
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id);
+    const store = await import('../../../../src/main/features/recall/store');
+    await store.updateRecallJsonRecord('user-a', 'ability-assets', asset.id, (current) => ({
+      ...current!,
+      evidenceRefs: [
+        { kind: 'message', id: 'msg-a' },
+        { kind: 'context', id: 'context-a' },
+        { kind: 'memory', id: 'memory-a' },
+      ],
+    }));
+
+    const legacy = await assets.readAbilityAsset('user-a', asset.id);
+    expect(legacy.evidenceRefs).toEqual([
+      expect.objectContaining({ kind: 'message', subtype: 'message', id: 'msg-a', taxonomyVersion: 1 }),
+      expect.objectContaining({ kind: 'context', subtype: 'context_file', id: 'context-a', taxonomyVersion: 1 }),
+      expect.objectContaining({ kind: 'memory', subtype: 'teaching', id: 'memory-a', taxonomyVersion: 1, degraded: true, reason: 'legacy_memory_untraceable' }),
+    ]);
+
+    const updated = await assets.updateAbilityAsset('user-a', asset.id, {
+      evidenceRefs: [{ kind: 'execution', id: 'exec-a' } as never],
+    });
+    expect(updated.evidenceRefs).toEqual([
+      expect.objectContaining({ kind: 'execution', subtype: 'execution', id: 'exec-a', taxonomyVersion: 1 }),
+    ]);
+  });
+
+  it('preserves legacy evidence kinds in historical asset snapshots', async () => {
+    const { assets } = await modules();
+    const store = await import('../../../../src/main/features/recall/store');
+    await store.appendRecallJsonlRecord('user-a', 'ability-asset-versions', 'aa-legacy', {
+      schemaVersion: 1,
+      ownerId: 'user-a',
+      id: 'aa-legacy-v1',
+      assetId: 'aa-legacy',
+      version: '1',
+      at: '2026-01-01T00:00:00.000Z',
+      snapshot: {
+        title: 'Legacy asset',
+        statement: 'Legacy evidence remains readable.',
+        type: 'rule',
+        scope: 'project',
+        evidenceRefs: [
+          { kind: 'message', id: 'msg-legacy' },
+          { kind: 'ontology', id: 'ontology-legacy' },
+        ],
+        status: 'active',
+        maturity: 'seed',
+        version: '1',
+      },
+    });
+
+    const [version] = await assets.listAbilityAssetVersions('user-a', 'aa-legacy');
+    expect(version.snapshot.evidenceRefs).toEqual([
+      expect.objectContaining({ kind: 'message', subtype: 'message', id: 'msg-legacy', taxonomyVersion: 1 }),
+      expect.objectContaining({ kind: 'ontology', subtype: 'artifact', id: 'ontology-legacy', taxonomyVersion: 1, degraded: true, reason: 'legacy_ontology_asset_ref' }),
+    ]);
+  });
 });

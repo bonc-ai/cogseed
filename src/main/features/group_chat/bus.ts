@@ -1271,6 +1271,9 @@ interface QueueItem {
   turnId: string;
   msgId: string;
   fromActorId: string;
+  /** Exact visible user text, kept separate from the LLM payload so teaching
+   * intent cannot be inferred from injected references or attachment metadata. */
+  sourceMessageText?: string;
   /** Composed runtime payload — what the worker actually feeds the LLM,
    * including the `<msg from=X>...</msg>` wrapper. Built at enqueue time
    * so the queue is a real FIFO of LLM-ready turns, no last-minute
@@ -1405,6 +1408,8 @@ interface CidState {
     runId: string;
     startedAtMs: number;
     status: TaskTerminalStatus | null;
+    anchorMessageId?: string;
+    lastMessageId?: string;
   };
 }
 
@@ -1418,6 +1423,10 @@ export interface TaskTerminalEvent {
   status: TaskTerminalStatus;
   started_at_ms: number;
   finished_at_ms: number;
+  /** First persisted user message that started this run. */
+  anchor_message_id?: string;
+  /** Last persisted message owned by this run when it became quiescent. */
+  finished_message_id?: string;
 }
 
 export type TaskTerminalListener = (event: TaskTerminalEvent) => void;
@@ -1585,6 +1594,8 @@ function _emitTaskRunTerminalIfQuiescent(
     status,
     started_at_ms: run.startedAtMs,
     finished_at_ms: Date.now(),
+    ...(run.anchorMessageId ? { anchor_message_id: run.anchorMessageId } : {}),
+    ...(run.lastMessageId ? { finished_message_id: run.lastMessageId } : {}),
   };
   for (const listener of _taskTerminalListeners) {
     try {
@@ -1843,6 +1854,7 @@ export interface EnqueueParams {
    * `agent_id` is the producing actor — the renderer routes a user→artifact
    * interaction result back to it. */
   artifacts?: Array<{ id: string; title: string; agent_id: string }>;
+  teaching_receipts?: GroupMessage["teaching_receipts"];
   marketplace_requests?: MarketplaceInstallRequest[];
   plan_announcement?: boolean;
   /** Override resolved recipients (commander emitting plan announcement
@@ -2351,6 +2363,9 @@ async function _enqueueBody(
     ...(params.artifacts && params.artifacts.length
       ? { artifacts: params.artifacts }
       : {}),
+    ...(params.teaching_receipts && params.teaching_receipts.length
+      ? { teaching_receipts: params.teaching_receipts }
+      : {}),
     ...(params.marketplace_requests && params.marketplace_requests.length
       ? { marketplace_requests: params.marketplace_requests }
       : {}),
@@ -2404,6 +2419,12 @@ async function _enqueueBody(
     senderId: fromActorId,
     agentIds: to.filter((id) => !RESERVED_IDS.has(id)),
   });
+  if (state.taskRun) {
+    if (fromActorId === USER_ID && !state.taskRun.anchorMessageId) {
+      state.taskRun.anchorMessageId = msg.id;
+    }
+    state.taskRun.lastMessageId = msg.id;
+  }
   // Strip the process trail before writing visibility slices: only the user-
   // facing main jsonl needs it for history reload. Agent workers replay
   // their slice into the LLM session (`buildReplayPrefix`); leaking the
@@ -2452,6 +2473,7 @@ async function _enqueueBody(
       turnId: genId12(),
       msgId,
       fromActorId,
+      ...(fromActorId === USER_ID ? { sourceMessageText: msg.text } : {}),
       llmPayload: composeLlmTurnPayload(uid, fromActorId, msg),
       ...(msg.p3394?.recipient_epochs[recipientId] !== undefined
         ? { incomingEpoch: msg.p3394.recipient_epochs[recipientId] }
@@ -3711,6 +3733,7 @@ async function runActorTurnBody(
   // one as a sandboxed `<iframe>` (`chat-app://`); `agent_id` = this actor,
   // the routing target for a user→artifact interaction result.
   const turnArtifacts: Array<{ id: string; title: string }> = [];
+  const turnTeachingReceipts: NonNullable<GroupMessage["teaching_receipts"]> = [];
   const onArtifactCreated = (a: { id: string; title: string }) => {
     turnArtifacts.push(a);
     emit(state, {
@@ -3998,6 +4021,19 @@ async function runActorTurnBody(
         ...(actor.kind === "agent" ? { agentId: actor.id } : {}),
         cid,
         turnId: item.turnId,
+        sourceMessageId: item.msgId,
+        sourceMessageFromUser: item.fromActorId === USER_ID,
+        ...(item.sourceMessageText ? { sourceMessageText: item.sourceMessageText } : {}),
+        onTeachingReceipt: (receipt) => {
+          if (turnTeachingReceipts.some((item) => item.id === receipt.id)) return;
+          turnTeachingReceipts.push({
+            id: receipt.id,
+            summary: receipt.summary,
+            scope: receipt.scope,
+            status: receipt.status,
+            candidate_ids: receipt.candidateIds,
+          });
+        },
         ...(item.resumeActiveTurn ? { resumeActiveTurn: true } : {}),
         ...(turnProjectId ? { projectId: turnProjectId } : {}),
         onFileWritten,
@@ -4307,12 +4343,20 @@ async function runActorTurnBody(
     kind: "created" | "updated";
   }> = [];
   let actorRunStatus: AgentRunStatus = errText || aborted ? "error" : "success";
+  let actorTerminalOverride: TaskTerminalStatus | undefined;
 
   if ((actor.kind === "agent" || isCommander) && workingText) {
     const result = extractActorResultFromFinal(workingText);
     if (result.status) {
       workingText = result.cleanText;
-      if (!errText && !aborted) actorRunStatus = result.status;
+      if (!errText && !aborted) {
+        if (result.status === "waiting_input") {
+          actorRunStatus = "success";
+          actorTerminalOverride = "waiting_input";
+        } else {
+          actorRunStatus = result.status;
+        }
+      }
     }
   }
 
@@ -4770,6 +4814,9 @@ async function runActorTurnBody(
   if (turnArtifacts.length > 0 && outcome.kind === "silent") {
     outcome = { kind: "persist", text: "" };
   }
+  if (turnTeachingReceipts.length > 0 && outcome.kind === "silent") {
+    outcome = { kind: "persist", text: "" };
+  }
 
   // Commander loop bubbles: when this turn was split at visible-dispatch
   // boundaries, the pre-dispatch reasoning is already persisted as its own
@@ -4785,6 +4832,7 @@ async function runActorTurnBody(
       (outcome.createdAgents && outcome.createdAgents.length) ||
       (outcome.createdSkills && outcome.createdSkills.length) ||
       turnArtifacts.length ||
+      turnTeachingReceipts.length ||
       turnMarketplaceRequests.length
     );
     outcome =
@@ -4894,6 +4942,9 @@ async function runActorTurnBody(
               agent_id: actor.id,
             })),
           }
+        : {}),
+      ...(turnTeachingReceipts.length
+        ? { teaching_receipts: turnTeachingReceipts }
         : {}),
       ...(turnMarketplaceRequests.length
         ? { marketplace_requests: turnMarketplaceRequests }
@@ -5092,7 +5143,7 @@ async function runActorTurnBody(
 
   const terminalStatus: TaskTerminalStatus = aborted
     ? "cancelled"
-    : form || planInteraction === "open"
+    : form || planInteraction === "open" || actorTerminalOverride === "waiting_input"
       ? "waiting_input"
       : errText ||
           actorRunStatus === "failure" ||

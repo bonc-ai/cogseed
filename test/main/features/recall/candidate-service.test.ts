@@ -74,7 +74,52 @@ describe('Recall candidate governance', () => {
     const imported = await candidates.importPersonalOntologyCandidate('user-a', 'legacy-a');
     expect(imported.status).toBe('pending');
     expect(imported.suggestedType).toBe('personal');
-    expect(imported.sourceRefs).toEqual([expect.objectContaining({ kind: 'memory', id: 'mem-a' })]);
+    expect(imported.sourceRefs).toEqual([expect.objectContaining({
+      kind: 'memory', subtype: 'teaching', id: 'mem-a', taxonomyVersion: 1,
+      degraded: true, reason: 'legacy_memory_untraceable',
+    })]);
+  });
+
+  it('does not persist source body text or absolute paths on a new candidate', async () => {
+    const candidates = await service();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Keep source references metadata-only.',
+      suggestedType: 'rule',
+      suggestedScope: 'project',
+      sourceRefs: [{
+        kind: 'artifact_file',
+        subtype: 'context_file',
+        id: 'ctx-a',
+        title: 'C:\\private\\context.md',
+        excerpt: 'private context body',
+      }],
+    });
+
+    expect(candidate.sourceRefs[0]).toMatchObject({ kind: 'artifact_file', subtype: 'context_file', id: 'ctx-a' });
+    expect(candidate.sourceRefs[0]).not.toHaveProperty('title');
+    expect(candidate.sourceRefs[0]).not.toHaveProperty('excerpt');
+  });
+
+  it('uses the capture key as the retry idempotency boundary', async () => {
+    const candidates = await service();
+    const first = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Keep the original extracted decision.',
+      suggestedType: 'rule',
+      suggestedScope: 'project',
+      sourceRefs: [{ kind: 'message', id: 'msg-a' }],
+      captureKey: 'capture-rcap-a-0',
+    });
+    const retried = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'A retry returned slightly different wording.',
+      suggestedType: 'rule',
+      suggestedScope: 'project',
+      sourceRefs: [{ kind: 'message', id: 'msg-a' }],
+      captureKey: 'capture-rcap-a-0',
+    });
+
+    expect(retried.id).toBe(first.id);
+    expect(retried.judgment).toBe('Keep the original extracted decision.');
+    expect(retried.status).toBe('pending');
   });
 
   it('promotes a pending candidate exactly once into a stable formal ability asset', async () => {
@@ -103,6 +148,30 @@ describe('Recall candidate governance', () => {
 
     const listed = await candidates.listRecallCandidates('user-a');
     expect(listed).toEqual([expect.objectContaining({ id: candidate.id, promotedAssetId: first.asset.id })]);
+  });
+
+  it('preserves legacy evidence identity when returning an already-promoted asset', async () => {
+    const candidates = await service();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Keep legacy evidence readable.',
+      suggestedType: 'rule',
+      suggestedScope: 'project',
+      sourceRefs: [{ kind: 'message', id: 'msg-a' }],
+    });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id);
+    const store = await import('../../../../src/main/features/recall/store');
+    await store.updateRecallJsonRecord('user-a', 'ability-assets', promoted.asset.id, (current) => ({
+      ...current!,
+      evidenceRefs: [{ kind: 'ontology', id: 'ontology-a' }],
+    }));
+
+    const repeated = await candidates.promoteRecallCandidate('user-a', candidate.id);
+    expect(repeated.asset.evidenceRefs).toEqual([
+      expect.objectContaining({
+        kind: 'ontology', subtype: 'artifact', id: 'ontology-a', taxonomyVersion: 1,
+        degraded: true, reason: 'legacy_ontology_asset_ref',
+      }),
+    ]);
   });
 
   it('rejects promotion of a rejected candidate and isolates records by owner', async () => {

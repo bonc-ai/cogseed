@@ -3,6 +3,7 @@ import * as path from 'node:path';
 
 import { safeId } from '../../storage';
 import { recallJsonRecordPath } from './paths';
+import { normalizeCognitionSourceRefs } from './source-service';
 import { appendRecallJsonlRecord, listRecallJsonlRecords, readRecallJsonRecord, updateRecallJsonRecord } from './store';
 import type { RecallJsonRecord } from './types';
 import type { RecallAbilityAssetRecord } from './candidate-service';
@@ -42,7 +43,9 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
     typeof value.scope !== 'string' || typeof value.version !== 'string' ||
     (value.status !== 'active' && value.status !== 'paused' && value.status !== 'revoked')
   ) throw new Error('malformed recall ability asset');
-  return value as RecallAbilityAssetRecord;
+  const evidenceRefs = normalizeCognitionSourceRefs(value.evidenceRefs);
+  if (!evidenceRefs.length) throw new Error('malformed recall ability asset evidence');
+  return { ...value, evidenceRefs } as RecallAbilityAssetRecord;
 }
 
 function bounded(value: unknown, field: string, max: number): string {
@@ -69,6 +72,23 @@ function snapshot(asset: RecallAbilityAssetRecord): AbilityAssetVersionRecord['s
     maturity: asset.maturity,
     version: asset.version,
   };
+}
+
+function asVersion(value: RecallJsonRecord): AbilityAssetVersionRecord {
+  const rawSnapshot = value.snapshot;
+  if (
+    typeof value.assetId !== 'string' || typeof value.version !== 'string' || typeof value.at !== 'string' ||
+    !rawSnapshot || typeof rawSnapshot !== 'object' || Array.isArray(rawSnapshot)
+  ) throw new Error('malformed recall ability asset version');
+  const versionSnapshot = rawSnapshot as Record<string, unknown>;
+  if (!Array.isArray(versionSnapshot.evidenceRefs)) throw new Error('malformed recall ability asset version evidence');
+  return {
+    ...value,
+    snapshot: {
+      ...versionSnapshot,
+      evidenceRefs: normalizeCognitionSourceRefs(versionSnapshot.evidenceRefs),
+    },
+  } as AbilityAssetVersionRecord;
 }
 
 async function appendVersion(userId: string, asset: RecallAbilityAssetRecord): Promise<void> {
@@ -125,6 +145,10 @@ export async function listAbilityAssets(userId: string): Promise<RecallAbilityAs
 
 export async function updateAbilityAsset(userId: string, assetId: string, input: UpdateAbilityAssetInput): Promise<RecallAbilityAssetRecord> {
   if ('id' in input || 'ownerId' in input) throw new Error('ability asset identity is immutable');
+  const evidenceRefs = input.evidenceRefs === undefined
+    ? undefined
+    : normalizeCognitionSourceRefs(input.evidenceRefs);
+  if (evidenceRefs && !evidenceRefs.length) throw new Error('ability asset evidence is required');
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
@@ -134,7 +158,7 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
       ...(input.statement !== undefined ? { statement: bounded(input.statement, 'statement', 4_000) } : {}),
       ...(input.scope !== undefined ? { scope: bounded(input.scope, 'scope', 500) } : {}),
       ...(input.type !== undefined ? { type: input.type } : {}),
-      ...(input.evidenceRefs !== undefined ? { evidenceRefs: input.evidenceRefs } : {}),
+      ...(evidenceRefs !== undefined ? { evidenceRefs } : {}),
       version: nextVersion(current.version),
       updatedAt: new Date().toISOString(),
     };
@@ -167,7 +191,7 @@ export function revokeAbilityAsset(userId: string, assetId: string, note?: strin
 }
 
 export async function listAbilityAssetVersions(userId: string, assetId: string): Promise<AbilityAssetVersionRecord[]> {
-  return (await listRecallJsonlRecords(userId, 'ability-asset-versions', assetId, 0)) as AbilityAssetVersionRecord[];
+  return (await listRecallJsonlRecords(userId, 'ability-asset-versions', assetId, 0)).map(asVersion);
 }
 
 export async function listAbilityAssetAudit(userId: string, assetId: string): Promise<AbilityAssetAuditRecord[]> {

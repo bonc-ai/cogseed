@@ -372,6 +372,13 @@ describe('group_chat router › form encoding', () => {
     expect(r.cleanText).not.toContain('commander-result');
   });
 
+  it('extractActorResultFromFinal accepts an explicit waiting-input result', () => {
+    const text = '请选择论文类型和目标篇幅。\n<commander-result status="waiting_input" />';
+    const r = extractActorResultFromFinal(text);
+    expect(r.status).toBe('waiting_input');
+    expect(r.cleanText).toBe('请选择论文类型和目标篇幅。');
+  });
+
   it('extractActorResultFromFinal strips invalid markers without accepting the status', () => {
     const text = '部分完成。\n<agent-result status="error" />';
     const r = extractActorResultFromFinal(text);

@@ -86,7 +86,26 @@ export async function listCognitionAssets(
       owner: asset.ownerId,
       scope: asset.scope,
       candidateRefs: [asset.candidateId],
-      relationRefs: asset.evidenceRefs.map((ref) => relationRef(ref.kind === 'context' ? 'knowledge' : ref.kind === 'execution' ? 'execution' : ref.kind === 'conversation' ? 'conversation' : ref.kind === 'ontology' ? 'ontology' : 'memory', ref.id, ref.title)),
+      relationRefs: asset.evidenceRefs.map((ref) => relationRef(
+        ref.kind === 'artifact_file'
+          || ref.kind === 'authorized_external_system'
+          || ref.kind === 'context'
+          || ref.kind === 'artifact'
+          ? 'knowledge'
+          : ref.kind === 'execution_evaluation'
+            ? ref.subtype === 'evaluation' ? 'evaluation' : 'execution'
+            : ref.kind === 'execution'
+              ? 'execution'
+              : ref.kind === 'p3394_experience' || ref.kind === 'p3394_patch'
+                ? 'evaluation'
+                : ref.kind === 'conversation' || ref.kind === 'message'
+              ? 'conversation'
+                  : ref.kind === 'ontology'
+                    ? 'ontology'
+                    : 'memory',
+        ref.id,
+        ref.title,
+      )),
     }));
   }
 
