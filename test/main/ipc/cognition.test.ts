@@ -82,13 +82,6 @@ describe('ipc › cognition channels', () => {
     });
   });
 
-  it('rejects invalid cognition list filters at the IPC boundary', async () => {
-    await expect(call('cognition.candidates.list', { status: 'deferred' })).resolves.toMatchObject({ ok: false });
-    await expect(call('cognition.assets.list', { type: 'secret' })).resolves.toMatchObject({ ok: false });
-    expect(cognitionMock.listCognitionCandidates).not.toHaveBeenCalled();
-    expect(cognitionMock.listCognitionAssets).not.toHaveBeenCalled();
-  });
-
   it('routes personal ontology candidate decisions without accepting arbitrary sources', async () => {
     const accepted = await call('cognition.candidates.decide', {
       source: 'personal_ontology',

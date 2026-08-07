@@ -292,6 +292,7 @@ function _loadViewFeature(feature, view, run) {
 function _lazyFeaturePanel(view) {
   const panelId = view === 'memory' ? 'panel-memory'
     : view === 'skills' ? 'panel-skills'
+    : view === 'evolution' ? 'panel-evolution'
     : view === 'personal-ontology' ? 'panel-personal-ontology'
     : view === 'contexts' ? 'panel-contexts'
     : view === 'settings' ? 'panel-settings'
@@ -366,7 +367,6 @@ async function initUser() {
 // ─── View routing ───
 
 function setView(view, cid, opts = {}) {
-  if (view === 'evolution') view = 'skills';
   if (currentView !== view || (view === 'conversation' && currentCid !== cid)) {
     _bootLog.info('view change', { view, cid: cid || undefined });
   }
@@ -382,6 +382,7 @@ function setView(view, cid, opts = {}) {
                 : view === 'skills' ? 'panel-skills'
                 : view === 'connectors' ? 'panel-connectors'
                 : view === 'contexts' ? 'panel-contexts'
+                : view === 'evolution' ? 'panel-evolution'
                 : view === 'personal-ontology' ? 'panel-personal-ontology'
                 : view === 'settings' ? 'panel-settings'
                 : view === 'memory' ? 'panel-memory'
@@ -397,6 +398,7 @@ function setView(view, cid, opts = {}) {
   document.getElementById('skills-btn').classList.toggle('active', view === 'skills');
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connectors');
   document.getElementById('contexts-btn')?.classList.toggle('active', view === 'contexts');
+  document.getElementById('evolution-btn')?.classList.toggle('active', view === 'evolution');
   document.getElementById('personal-ontology-btn')?.classList.toggle('active', view === 'personal-ontology');
   document.getElementById('settings-btn')?.classList.toggle('active', view === 'settings');
   document.getElementById('devtools-btn')?.classList.toggle('active', view === 'devtools');
@@ -536,6 +538,13 @@ function setView(view, cid, opts = {}) {
     _deferSidebarNavWork('auto-tab-load', () => {
       _loadViewFeature('auto', 'auto', () => {
         if (typeof loadAutoList === 'function') loadAutoList(true);
+      });
+    });
+  } else if (view === 'evolution') {
+    currentCid = null;
+    _deferSidebarNavWork('evolution-tab-load', () => {
+      _loadViewFeature('evolution', 'evolution', () => {
+        if (typeof renderEvolutionConsole === 'function') renderEvolutionConsole();
       });
     });
   } else if (view === 'personal-ontology') {
