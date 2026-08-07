@@ -31,6 +31,8 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/kb-picker.js' },
   ],
   skills: [
+    // Pure status mapping; must load before skills.js reads it at render time.
+    { src: './modules/ability-asset-status.js' },
     { src: './modules/skills.js' },
     { src: './modules/skills-bindings.js' },
   ],

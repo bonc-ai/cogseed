@@ -70,7 +70,10 @@ const kstarState = new KstarState();
 const server = new Server(
   {
     name: 'nseap-meta-skill-engine',
-    version: '0.1.0',
+    // Matches package.json and the version get_engine_info reports. MCP clients
+    // read serverInfo.version, so a stale value here would make any future
+    // capability gate see an older engine than the one actually running.
+    version: '1.0.0',
     description: 'NSEAP Meta-Skill Engine — reads ontology, captures interactions, evolves skills via KSTAR',
   },
   {

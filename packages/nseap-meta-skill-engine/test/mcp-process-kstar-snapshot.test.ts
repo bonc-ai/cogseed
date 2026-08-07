@@ -63,7 +63,12 @@ class EngineProcess {
   }
 
   async handshake(): Promise<void> {
-    await this.request('initialize', {
+    await this.handshakeInfo();
+  }
+
+  /** Handshake and return the server's advertised identity. */
+  async handshakeInfo(): Promise<{ name: string; version: string }> {
+    const msg = await this.request('initialize', {
       protocolVersion: '2024-11-05',
       capabilities: {},
       clientInfo: { name: 'kstar-contract-test', version: '1.0.0' },
@@ -71,6 +76,7 @@ class EngineProcess {
     this.child.stdin.write(
       JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }) + '\n',
     );
+    return msg.result?.serverInfo ?? { name: '', version: '' };
   }
 
   async listToolNames(): Promise<string[]> {
@@ -106,6 +112,22 @@ afterEach(() => {
 });
 
 describe('MCP process KSTAR snapshot contract', () => {
+  it('reports one version across serverInfo, get_engine_info and package.json', async () => {
+    // MCP clients read serverInfo.version. It drifted to 0.1.0 while the rest
+    // of the engine said 1.0.0, so a future capability gate would have seen an
+    // older engine than the one running.
+    const fs = await import('node:fs');
+    const pkg = JSON.parse(fs.readFileSync(path.join(ENGINE_ROOT, 'package.json'), 'utf8'));
+
+    const engine = startEngine();
+    const serverInfo = await engine.handshakeInfo();
+    const info = await engine.callTool('get_engine_info', {});
+
+    expect(serverInfo.version).toBe(pkg.version);
+    expect(info.engine_version).toBe(pkg.version);
+    expect(info.version).toBe(pkg.version);
+  });
+
   it('exposes every tool kstar-adapter.ts calls', async () => {
     const engine = startEngine();
     await engine.handshake();
