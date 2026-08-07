@@ -215,8 +215,24 @@
 
 **聚合键**：`conversation_id::agent_id::turn_id`，三者缺一不成 run。
 
-**四种跳过原因**（结构化返回，非静默丢弃）：
-`no_judgment` · `incomplete_run` · `degraded_evidence` · `no_evidence_refs`
+**两类结果，两套 reason 词表。** 都是结构化返回、非静默丢弃，但含义完全不同，
+联调方必须分开处理：
+
+| | 词表 | 取值 | 出现位置 |
+|---|---|---|---|
+| **① 已归入 run，因条件不足跳过候选生成** | `SkipReason` | `no_judgment` · `incomplete_run` · `degraded_evidence` · `no_evidence_refs` | `buildCandidateInput()` 返回 `{ ok: false, reason }` |
+| **② 根本无法归入任何 run** | `UnattributedReason` | `malformed` · `incomplete_run` | `groupEvidenceIntoRuns()` 返回值里的 `unattributed[]`，每项带 `evidenceId` |
+
+**`malformed` 和 `incomplete_run` 进的是 `unattributed[]`，不是候选跳过结果。**
+它们描述的是「这条记录没能进入任何 run」，此时 `buildCandidateInput()` 根本不会被调用，
+自然也不会产生 `SkipReason`。只监听 ①、不读 `unattributed[]` 的一方，
+会完全看不到畸形记录这条路径——证据消失且无任何信号。
+
+> ⚠️ `incomplete_run` **在两套词表里都存在**，语义不同：
+> 在 ① 里是「run 成立但内容不足以建候选」，在 ② 里是「三元组缺项，压根没形成 run」。
+> 按字符串值判断而不看来源，会把两种情况混为一谈。
+>
+> 要统计「这批证据有多少没被消化」，①②都要读。
 
 ### 2.8 下游：跨 Session 复用与效果回流
 

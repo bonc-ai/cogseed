@@ -110,7 +110,17 @@ interface SaveRecallCandidateInput {
 
 ## ③ 正式资产：扩字段
 
-以 `RecallAbilityAssetRecord` 为准（`candidate-service.ts:38`），现有字段：
+以 `RecallAbilityAssetRecord` 为准（`candidate-service.ts:44`），现有字段：
+
+> **它是唯一的正式运行 Schema。** `features/p3394/ability-assets.ts` 里还有一套同名概念的
+> `AbilityAsset`，已于 2026-08-06 标记 `@deprecated`：无任何生产调用方、不在
+> `p3394/index.ts` barrel 里、只有测试还引用。它的每个字段在 recall 侧都有等价物
+> （`scope` 对象 → `scope` 字符串 + `workspace-refs.ts`；`versions[]` / `audit[]` →
+> 独立记录；`recommended_action` → `proof-service.ts::EffectivenessProofRecord
+> .recommendedAction`；`evidence_refs` → `CognitionSourceRef`），**没有需要迁移的调用**。
+> 落盘位置也不同（`local/kstar/ability-assets.json` vs
+> `cloud/recall/records/ability-assets/`），两者不会争抢同一份文件。
+> 尚未删除的原因见该文件头部注释。**任何一方都不要基于那套 P3394 类型写新代码。**
 
 ```ts
 { id, candidateId, type, title, statement, evidenceRefs, scope,
@@ -126,14 +136,15 @@ confidence?: number;          // 0..1，两位小数
 sourceSessionIds?: string[];  // 去重后的会话 id，上限 50
 ```
 
-**写入点**：`promoteRecallCandidate()` 内构造 asset 处（`candidate-service.ts:240`）。
+**写入点**：`promoteRecallCandidate()` 内构造 asset 处（`candidate-service.ts:279` 起，
+asset 字面量在 `:290`）。
 
 - `sourceSessionIds` ← 从 `candidate.sourceRefs` 中筛 `kind==='conversation'` 的 `id`，去重
 - `confidence` ← 由候选识别给出并存在候选上；候选无该值时资产也不写，**不用默认值假装有置信度**
 
 `evidenceRefs` 已由 promote 从 `candidate.sourceRefs` 继承，无需新增来源引用通道。
 
-**版本历史与审计**：`listAbilityAssetVersions()` / `listAbilityAssetAudit()` 已存在且已由 `recall.assets.versions` 暴露，**详情页当前未调用**。这是接线缺口，不是能力缺口。P3394 那套 `AbilityAsset` 的 `versions[]` / `audit[]` 字段不再合并——recall 侧已用独立记录实现了同等能力，合并反而会造成双写。
+**版本历史与审计**：`listAbilityAssetVersions()` / `listAbilityAssetAudit()` 已存在且已由 `recall.assets.versions` 暴露。~~详情页当前未调用~~ —— **已于 N3/N4 接线完成**（`skills.js:180` 调 `recall.assets.versions`，`:188` 调 `recall.usage.list`）。P3394 那套 `AbilityAsset` 的 `versions[]` / `audit[]` 字段不再合并——recall 侧已用独立记录实现了同等能力，合并反而会造成双写。
 
 **状态展示映射**（展示层，不改底层）：
 

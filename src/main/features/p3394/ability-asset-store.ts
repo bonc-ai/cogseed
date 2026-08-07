@@ -1,3 +1,16 @@
+/**
+ * DEPRECATED — superseded by `features/recall/asset-service.ts`.
+ *
+ * Persists the deprecated `AbilityAsset` shape to
+ * `<uid>/local/kstar/ability-assets.json`. recall/ stores the formal schema
+ * under `<uid>/cloud/recall/records/ability-assets/` instead, so the two never
+ * fight over the same file — this one is simply orphaned.
+ *
+ * No production caller. The only remaining reference is
+ * `test/main/features/p3394/kstar-store.test.ts`, which uses these mutations to
+ * exercise `withKstarUserLock`. See `./ability-assets.ts` for the full field
+ * map and the conditions for deleting both files.
+ */
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { createLogger } from '../../logger';
@@ -6,6 +19,7 @@ import { userLocalRoot } from '../../paths';
 import { withKstarUserLock } from './kstar-lock';
 import type { AbilityAsset } from './ability-assets';
 
+/** @deprecated Use `features/recall/asset-service`. */
 export interface AbilityAssetStoreState {
   version: 1;
   assets: AbilityAsset[];
@@ -23,6 +37,7 @@ function abilityAssetsDir(uid: string): string {
   return path.join(userLocalRoot(assertSafeId(uid, 'uid')), 'kstar');
 }
 
+/** @deprecated Use `features/recall/asset-service`. */
 export function abilityAssetsPath(uid: string): string {
   return path.join(abilityAssetsDir(uid), 'ability-assets.json');
 }
@@ -81,16 +96,19 @@ async function mutateState(
   });
 }
 
+/** @deprecated Use `features/recall/asset-service`. */
 export async function listAbilityAssets(uid: string): Promise<AbilityAsset[]> {
   return cloneAssets((await readState(uid)).assets);
 }
 
+/** @deprecated Use `features/recall/asset-service`. */
 export async function getAbilityAsset(uid: string, assetId: string): Promise<AbilityAsset | null> {
   const id = assertSafeId(assetId, 'asset id');
   const asset = (await readState(uid)).assets.find((item) => item.id === id);
   return asset ? cloneAsset(asset) : null;
 }
 
+/** @deprecated Use `features/recall/asset-service`. */
 export async function createAbilityAssetRecord(uid: string, asset: AbilityAsset): Promise<AbilityAsset> {
   const nextAsset = assertAsset(asset);
   const next = await mutateState(uid, (state) => {
@@ -101,6 +119,7 @@ export async function createAbilityAssetRecord(uid: string, asset: AbilityAsset)
   return cloneAsset(next.assets.find((item) => item.id === nextAsset.id) ?? nextAsset);
 }
 
+/** @deprecated Use `features/recall/asset-service`. */
 export async function updateAbilityAssetRecord(uid: string, asset: AbilityAsset): Promise<AbilityAsset> {
   const nextAsset = assertAsset(asset);
   const next = await mutateState(uid, (state) => {

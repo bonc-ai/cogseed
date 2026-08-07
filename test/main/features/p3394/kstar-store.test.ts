@@ -230,6 +230,14 @@ describe('kstar-store', () => {
     });
   });
 
+  // The subject here is `withKstarUserLock`, not the asset schema. It reaches
+  // for the deprecated p3394 ability-asset store only because that store is a
+  // convenient second writer under the same per-user lock. recall/ is the
+  // formal schema (see `features/p3394/ability-assets.ts` header).
+  //
+  // This is the last reference keeping that module alive. Whoever deletes it
+  // must re-point this case at another lock participant -- deleting the module
+  // without doing so silently drops the shared-lock regression.
   describe('shared kstar lock', () => {
     test('legacy candidate and asset store mutations share one per-user lock', async () => {
       const { withKstarUserLock } = await import('../../../../src/main/features/p3394/kstar-lock');
