@@ -257,7 +257,7 @@
 
 | 字段 | 约定 | 违反后果 |
 |---|---|---|
-| `boundary` | 每条 evidence 必带 `{ mode: 'real' \| 'degraded' }` | **缺失按 degraded 处理**，该次执行不会产生候选 |
+| `boundary` | 每条 evidence 必带，完整结构见下方「boundary 完整结构」 | **缺失按 degraded 处理**，该次执行不会产生候选 |
 | `boundary`（usage 记录） | `real` / `degraded` / `test-double` | 非 `real` 在详情页显式标注，避免 mock 被当证据 |
 | `confidence` | 缺失即 absent；非法值抛错 | 伪造默认值会让用户误以为系统有把握 |
 | `sourceRefs.kind` | 仅限白名单 8 种 | 非白名单 kind 被 `normalizeCognitionSourceRefs` 静默丢弃 |
@@ -268,6 +268,41 @@
 > `sourceRefs.id` 那条是个真实陷阱：runKey 用 `::` 分隔，直接当 ref id 会被
 > `safeId` 拒绝并**静默丢弃**，锚点消失且不报错。所以锚点用 sha256 摘要，
 > 可读三元组放在 `title` 里。任何需要构造 ref 的一方都要注意这条。
+
+### boundary 完整结构
+
+共享类型 `ExecutionBoundaryInfo`（`features/p3394/execution-boundary.ts`）：
+
+```ts
+{
+  mode: 'real' | 'degraded' | 'test-double',
+  provider: 'meta-skill-engine-mcp' | 'core-agent' | 'local-agent' | 'fixture',
+  reason?: string,
+}
+```
+
+**evidence 场景下只用两个 mode**：`real` 与 `degraded`。`test-double` 属于 usage
+记录（见上表 `boundary`（usage 记录）那行），不应出现在 evidence 上；真出现了，
+N1 的 `isRealBoundary()` 只认 `mode === 'real'`，会把它一并按降级处理。
+
+| 字段 | 用途 |
+|---|---|
+| `mode` | 这条证据是不是真实执行产生的。非 `real` 一律视为降级 |
+| `provider` | **degraded 场景下标明是哪一层降的**。同样是 degraded，`meta-skill-engine-mcp` 代表引擎侧不可用，`fixture` 代表来自测试替身，处置方式完全不同 |
+| `reason` | **degraded 场景下的机器可读原因**，如 `engine_unavailable`、`engine_unavailable_pending_evidence` |
+
+**`reason` 会被 N1 用于生成可观测的降级原因**：`buildCandidateInput()` 在标注降级
+来源时读 `boundary.reason` 并写进 sourceRef 的 `reason` 字段
+（`kstar-evidence-adapter.ts:293`）。**缺失时才回退为 `boundary_not_real`**——
+那个回退值只说明「不是 real」，说不出为什么，排查时等于没有信息。
+
+所以发射端在 degraded 分支上必须带 `reason`，不能只发 `mode`。当前
+`kstar-bus-integration.ts` 发的是
+`{ mode: 'degraded', provider: 'meta-skill-engine-mcp', reason: 'engine_unavailable' }`，
+是正确示范。
+
+> 类型上 `provider` 是必填，`reason` 可选。但对 degraded 证据而言 `reason` 事实上是
+> 必填——省了它，下游拿到的就是一个没有原因的降级标记。
 
 ---
 
