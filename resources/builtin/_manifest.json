@@ -1,7 +1,67 @@
 {
   "schema": 1,
-  "content_tree_sha256": "26f9ad306d9e515ded489b14f4e8c44d1075eef4704570c110fca5fde2fc6376",
+  "content_tree_sha256": "dff05c39c0aed8a61e9bd1eb20aaaa915f02f21fc187c965b585adfc81995a0c",
   "files": [
+    {
+      "path": "marketplace/agents/0fdb4da8a080/agent.json",
+      "bytes": 1218,
+      "sha256": "0920089986ca764588125fbf64159f52f4ceae04a46078d7b06c19cc5de9aaa5"
+    },
+    {
+      "path": "marketplace/agents/2ec891859db3/agent.json",
+      "bytes": 1179,
+      "sha256": "cd056da49724a47c5e14b2fe09e7aad3636227136cf78f8768cc14c84b36e766"
+    },
+    {
+      "path": "marketplace/agents/36cb9c97ac31/agent.json",
+      "bytes": 1176,
+      "sha256": "ec992192804a52c6858cd1ff19201d56a6022b189eea90ab029fe53521c1a5f5"
+    },
+    {
+      "path": "marketplace/agents/37054bcc1740/agent.json",
+      "bytes": 1176,
+      "sha256": "d62c60ef3d66e250b920feb830874b60bb39045d64532bc56d731b4d7adea4fd"
+    },
+    {
+      "path": "marketplace/agents/373f22475ab4/agent.json",
+      "bytes": 1185,
+      "sha256": "405356144370f4c0d2feead416347b28c9e21cea8fa43136743ead7a6cd0f47b"
+    },
+    {
+      "path": "marketplace/agents/39f682807819/agent.json",
+      "bytes": 1210,
+      "sha256": "5ca7f3fe45856c518ff00051380856715e3e3270350ffc14bedb2a23289b1e55"
+    },
+    {
+      "path": "marketplace/agents/3bf780cd23be/agent.json",
+      "bytes": 1184,
+      "sha256": "5934f7550f71e89d41ebd3f839f82e0d694f7ada5e3e09449a4c35c104d4f340"
+    },
+    {
+      "path": "marketplace/agents/54f102b6c1ee/agent.json",
+      "bytes": 1151,
+      "sha256": "84787054fa6ace0981e2057c0f9d893516f42c5c3b53f3978c9dd2e6dc6a448c"
+    },
+    {
+      "path": "marketplace/agents/57f6f828af9f/agent.json",
+      "bytes": 1198,
+      "sha256": "12c8fa33c8f15e38fc9cced47786d4ab6ac2853f38266a2cf15b2694082592e9"
+    },
+    {
+      "path": "marketplace/agents/5a5fe1598ed0/agent.json",
+      "bytes": 1163,
+      "sha256": "a1812500a39339d09867504a90e4c73bc0290f339081824c73bba0291a09b43d"
+    },
+    {
+      "path": "marketplace/agents/662cb1c1de2c/agent.json",
+      "bytes": 1237,
+      "sha256": "9238ee56ce5319f5a06fc0ab904e4ecb5d5a58f67159671f5faa0a078d7c71c0"
+    },
+    {
+      "path": "marketplace/agents/736cc1ac94b4/agent.json",
+      "bytes": 1209,
+      "sha256": "957f0636f258c1e2c8f7d0c58ac09d0f0cb5787733e343e6846da75887dd8dde"
+    },
     {
       "path": "marketplace/agents/78900d8758bc/_meta.json",
       "bytes": 57,
@@ -11,6 +71,11 @@
       "path": "marketplace/agents/78900d8758bc/agent.json",
       "bytes": 8655,
       "sha256": "c325a71e2ea2c08734624bed48ae5597ee744cb0c2063cc31d5ee2f3c7c8880f"
+    },
+    {
+      "path": "marketplace/agents/78ef7f901e81/agent.json",
+      "bytes": 1235,
+      "sha256": "66542440a86cbf127cc003b79db72a9cf786e9f51e6144a78c02da9d0c5a8cc9"
     },
     {
       "path": "marketplace/agents/79df9cc89f5f/agent.json",
@@ -188,6 +253,46 @@
       "sha256": "64cb69eab12530dd144e8f75154e8f08b5cf1cc26c2e962651e64d660fbec607"
     },
     {
+      "path": "marketplace/agents/7c3138523589/agent.json",
+      "bytes": 1088,
+      "sha256": "a8f830564f73c3799d7e4149c4fcf557f04e2924f3d47d2a5fb06fad719308e0"
+    },
+    {
+      "path": "marketplace/agents/7ece3121592e/agent.json",
+      "bytes": 1218,
+      "sha256": "10abd7f2007b220de1486f458f500f347d098bf263e46f3a4fb86c7ff15f0e90"
+    },
+    {
+      "path": "marketplace/agents/876218dd6c3f/agent.json",
+      "bytes": 1193,
+      "sha256": "ee63aba65af219a6fbe60c760f624e0ce7961df272affc85dde0cdf3ff3fee49"
+    },
+    {
+      "path": "marketplace/agents/8dcba242d360/agent.json",
+      "bytes": 1198,
+      "sha256": "873b4458ccbab4a6bda3f956628e578b9780d7250d448c7b7c67197a6b75bb90"
+    },
+    {
+      "path": "marketplace/agents/9099ea65848a/agent.json",
+      "bytes": 1180,
+      "sha256": "3a8c0b3ef88bbe164305443f62d44224078c350847e0588de29c464c7825ff0e"
+    },
+    {
+      "path": "marketplace/agents/9a26f9f2336d/agent.json",
+      "bytes": 1196,
+      "sha256": "ce75a3115feb95f35833d7964a5d2b79bb5c7ecd1266e89824dc45f2cbb577de"
+    },
+    {
+      "path": "marketplace/agents/a0aaf36d3c37/agent.json",
+      "bytes": 1221,
+      "sha256": "35747afe083138f0e502c0384e7c6fdc92b957e8e99ac7802b660782d962b06f"
+    },
+    {
+      "path": "marketplace/agents/a37e8dbcc57e/agent.json",
+      "bytes": 1159,
+      "sha256": "ee266bb7ef2678d1e7d8856bc2457b2c7d63f227cfa08ee2bef7f159d1e1d9bd"
+    },
+    {
       "path": "marketplace/agents/bcfcb4921dce/agent.json",
       "bytes": 15578,
       "sha256": "67fd40e6799d1592e67a075498442542350bc07fb5f8a1d6abed7fc7f901bed2"
@@ -271,6 +376,11 @@
       "path": "marketplace/agents/bcfcb4921dce/skills/ui-taste/SKILL.md",
       "bytes": 6387,
       "sha256": "3e60b232f5f28128e8f04a93cec6fdc6895e3c9a93b0607a9b11ae5d5bb723e6"
+    },
+    {
+      "path": "marketplace/agents/c0e5a377b91c/agent.json",
+      "bytes": 1207,
+      "sha256": "8eeaecc952f969aa22d3d755b8598df794bbb34fce473270325d0d42fbfab563"
     },
     {
       "path": "marketplace/agents/e064dca9e1bd/agent.json",
@@ -438,6 +548,271 @@
       "sha256": "a745ba98d614856ddfa633f2600c65595520bd3e588ccd552b118ea7b0cc78ba"
     },
     {
+      "path": "marketplace/agents/fb836f8b51ca/agent.json",
+      "bytes": 1228,
+      "sha256": "e89f3934dc97e0722336a4aafd307117475b436dd80b72c9ee659ace958c64eb"
+    },
+    {
+      "path": "marketplace/agents/fce0f5110ab2/agent.json",
+      "bytes": 1160,
+      "sha256": "2764ac4559ea4ad12f3679efdd2e5eaad6f611ebeb8581b3fced44edad9803f3"
+    },
+    {
+      "path": "marketplace/skills/058e3bb57bf5/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/058e3bb57bf5/references/method.md",
+      "bytes": 3238,
+      "sha256": "679f57387cc6832863a5050f4eaa8f014308324471757b362c052acba6cbe6f7"
+    },
+    {
+      "path": "marketplace/skills/058e3bb57bf5/SKILL.md",
+      "bytes": 2163,
+      "sha256": "949155caca2ab5fd5a4a9840e3852ef88e0eb67324ad70c76567a6f0e8361219"
+    },
+    {
+      "path": "marketplace/skills/06d69ee5f1bc/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/06d69ee5f1bc/references/method.md",
+      "bytes": 3202,
+      "sha256": "a747ef82204bf60cd49cf4a3d6184e1f96ca9a803ee8c0297fd1233bfe3a8b16"
+    },
+    {
+      "path": "marketplace/skills/06d69ee5f1bc/SKILL.md",
+      "bytes": 2120,
+      "sha256": "dcb35a0f9a273e375575aecf3108de70aaf17e9380a23172ee7c41b3c04194c9"
+    },
+    {
+      "path": "marketplace/skills/0d95910c7f2f/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/0d95910c7f2f/references/method.md",
+      "bytes": 3151,
+      "sha256": "4957b19060b9062cbd30c958d4b9c42402989da14ad5be5d71590e7b71da98c2"
+    },
+    {
+      "path": "marketplace/skills/0d95910c7f2f/SKILL.md",
+      "bytes": 2113,
+      "sha256": "3b35c847352d70d4ebf75ddf66ee7efeafe3b5eeb77d954123af5c8aceec8d02"
+    },
+    {
+      "path": "marketplace/skills/0e847fc8685e/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/0e847fc8685e/references/method.md",
+      "bytes": 3231,
+      "sha256": "87189013d6981a830619a379f2cd8be63a7dc8c1c074810f3da633ca1fcec882"
+    },
+    {
+      "path": "marketplace/skills/0e847fc8685e/SKILL.md",
+      "bytes": 2127,
+      "sha256": "68de7199b757a9c92a4d76e4b427a0d34d4f740ab96f230746a1689ae3dbd60a"
+    },
+    {
+      "path": "marketplace/skills/13ac643c3ef9/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/13ac643c3ef9/references/method.md",
+      "bytes": 3134,
+      "sha256": "aa6fa5f4d4c4d3ea58afb955087c503ad761eab81b8abdc84b85049847d40949"
+    },
+    {
+      "path": "marketplace/skills/13ac643c3ef9/SKILL.md",
+      "bytes": 2107,
+      "sha256": "657bd23246817ad356c047f683d1f103ab7271fa9d86d4e62f79318e0204f3b6"
+    },
+    {
+      "path": "marketplace/skills/15af984d02a5/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/15af984d02a5/references/method.md",
+      "bytes": 3282,
+      "sha256": "7ac7797fb7238b9f947f88228857c52e674d8f87c4ebf4838b5ca876ddde7755"
+    },
+    {
+      "path": "marketplace/skills/15af984d02a5/SKILL.md",
+      "bytes": 2159,
+      "sha256": "7414fa906693794adf93498c8a13e4280a3681b47198798e58c4d6006d4dc663"
+    },
+    {
+      "path": "marketplace/skills/17b2d5e85d87/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/17b2d5e85d87/references/method.md",
+      "bytes": 3308,
+      "sha256": "d98ea242356f1b026a6d647b8bb83592dde2c173d925b369e3a6ec12f8564f68"
+    },
+    {
+      "path": "marketplace/skills/17b2d5e85d87/SKILL.md",
+      "bytes": 2211,
+      "sha256": "4c2c7a84b19383fcd84349cf8568022fad64d79dcc82cb195b7bea362f5a8fa9"
+    },
+    {
+      "path": "marketplace/skills/181e249741e9/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/181e249741e9/references/method.md",
+      "bytes": 3255,
+      "sha256": "b9f59a7c28d8841e550d56d8156c571f1f384c745572f07f8f555979517b6117"
+    },
+    {
+      "path": "marketplace/skills/181e249741e9/SKILL.md",
+      "bytes": 2153,
+      "sha256": "7227e1e5918345d458eafe0beeaa2760588ee8639d58b0f105c2e94efdd501d8"
+    },
+    {
+      "path": "marketplace/skills/2b7f7c8621d5/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/2b7f7c8621d5/references/method.md",
+      "bytes": 3230,
+      "sha256": "40aa6d18fb5523ed74f9dd3d1405fdb2785153a8ad8c0dd8279be105c6ce5bce"
+    },
+    {
+      "path": "marketplace/skills/2b7f7c8621d5/SKILL.md",
+      "bytes": 2115,
+      "sha256": "ee6dea1f9e3001a49e397dccd804321f4701e2420ee6c26f563e0fda4d4e3d81"
+    },
+    {
+      "path": "marketplace/skills/3def7f0eb34a/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/3def7f0eb34a/references/method.md",
+      "bytes": 3186,
+      "sha256": "c2332244ac62cc00d5cdd672bdc0b2cd5ea630312062c568dcc15067b56ebba2"
+    },
+    {
+      "path": "marketplace/skills/3def7f0eb34a/SKILL.md",
+      "bytes": 2081,
+      "sha256": "db827eb7f5f8757db4eb685a591ee46d855f3a47788dd75c0eefa22d99ca135c"
+    },
+    {
+      "path": "marketplace/skills/4334030f8314/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/4334030f8314/references/method.md",
+      "bytes": 3156,
+      "sha256": "e9d397da08c0dd985c1bacbf5beddf03dd8f8b28173c2ba59b59afd22e0d4ac4"
+    },
+    {
+      "path": "marketplace/skills/4334030f8314/SKILL.md",
+      "bytes": 2084,
+      "sha256": "2e241d3bfba4c25b3f89c168e203e97a18f4426a1db34fd172d0a8d34ef99187"
+    },
+    {
+      "path": "marketplace/skills/464e3f3416cf/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/464e3f3416cf/references/method.md",
+      "bytes": 3220,
+      "sha256": "5702eb43eeda5c7b978909d528d9536853ba970c1e6ac9e5445358365f1f81b6"
+    },
+    {
+      "path": "marketplace/skills/464e3f3416cf/SKILL.md",
+      "bytes": 2160,
+      "sha256": "bed04855386939c5e864000e706941426c65374db0b0c9d4de026d640a57ac0a"
+    },
+    {
+      "path": "marketplace/skills/4a8054f512e9/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/4a8054f512e9/references/method.md",
+      "bytes": 3213,
+      "sha256": "5f319ff95076f418190bdf9d42004f5b298bccdab1035361f3c728680d7ba68b"
+    },
+    {
+      "path": "marketplace/skills/4a8054f512e9/SKILL.md",
+      "bytes": 2123,
+      "sha256": "54f7957cf774683480891ddadd1fa1eceefd7378494dda4df9899eee7ddc354d"
+    },
+    {
+      "path": "marketplace/skills/4bb1813c8335/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/4bb1813c8335/references/method.md",
+      "bytes": 3216,
+      "sha256": "11a73c45cbd6582ab3fde7a0541875032fa9135061f152e2bf844809b548220f"
+    },
+    {
+      "path": "marketplace/skills/4bb1813c8335/SKILL.md",
+      "bytes": 2109,
+      "sha256": "faa71f1d40c2425ca7ad68fc5e2a93a556b2bcde4dc630c51f9da44a9dae3c92"
+    },
+    {
+      "path": "marketplace/skills/4ff31e1cab6f/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/4ff31e1cab6f/references/method.md",
+      "bytes": 3222,
+      "sha256": "a22dd5b57609e63d103e59811801e1b5401ef40f13d0fb1802c1929514982c3b"
+    },
+    {
+      "path": "marketplace/skills/4ff31e1cab6f/SKILL.md",
+      "bytes": 2144,
+      "sha256": "9c0ddca3d789fa99cdb928663c15d225e4d072b6d7985bb65f5bbf15f3e1f9a5"
+    },
+    {
+      "path": "marketplace/skills/577787fb975e/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/577787fb975e/references/method.md",
+      "bytes": 2264,
+      "sha256": "3e606bea3e2a47c5443975a6cebfa612890423621553c2564a5d2639b58629b7"
+    },
+    {
+      "path": "marketplace/skills/577787fb975e/SKILL.md",
+      "bytes": 3009,
+      "sha256": "47d83dc7e7cea5273a87efe87a5079a65d0a9f297bcc9b7e14bed8fe27877740"
+    },
+    {
+      "path": "marketplace/skills/5a131fa3f845/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/5a131fa3f845/references/method.md",
+      "bytes": 2232,
+      "sha256": "b57159e778f0136da0300ea485419f342b2f92d44cb9b871423c9e0be685ee4d"
+    },
+    {
+      "path": "marketplace/skills/5a131fa3f845/SKILL.md",
+      "bytes": 2987,
+      "sha256": "ae099699ba58416c76ea375f66cfbd95fb4f3d74eb7a1df2ca46339b03efdeb2"
+    },
+    {
       "path": "marketplace/skills/6743aa0797a2/_meta.json",
       "bytes": 64,
       "sha256": "33595bddd2938219c0b712e70bbb5fb2a237355566b45cfd358d1959b3a58b17"
@@ -453,6 +828,81 @@
       "sha256": "d5e622a858d65e3295f5af198748074de261d50bccf72b7527419ade4e6a0da6"
     },
     {
+      "path": "marketplace/skills/6ba6255ee930/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/6ba6255ee930/references/method.md",
+      "bytes": 3229,
+      "sha256": "9f5ef677ff78870f1ee7dcd9b577db60bfcb6140ea5ab15af56fd5ee2e7da970"
+    },
+    {
+      "path": "marketplace/skills/6ba6255ee930/SKILL.md",
+      "bytes": 2190,
+      "sha256": "c02145ec340e56bae68339b9f8a498f7b92652208e122884ae47c4acee442337"
+    },
+    {
+      "path": "marketplace/skills/6c5609e76cf0/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/6c5609e76cf0/references/method.md",
+      "bytes": 3283,
+      "sha256": "fe28a4495a88090d49014441ce1c749183862453e916b42c5ec159ab70e1b01b"
+    },
+    {
+      "path": "marketplace/skills/6c5609e76cf0/SKILL.md",
+      "bytes": 2176,
+      "sha256": "db5b4bbac857174ce794b611a75042c12ed0982c7d02b0f087b466f91810d078"
+    },
+    {
+      "path": "marketplace/skills/7432875f93bf/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/7432875f93bf/references/method.md",
+      "bytes": 2639,
+      "sha256": "353a027958c19d1685c143077aed73bb7d5f89d0357366768cd11d3216675612"
+    },
+    {
+      "path": "marketplace/skills/7432875f93bf/SKILL.md",
+      "bytes": 3253,
+      "sha256": "24c046cae8d949b1b2b861cf34e0c7b4f4aa789633a36e6ba1ffdd224ebba716"
+    },
+    {
+      "path": "marketplace/skills/78967e9cfe10/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/78967e9cfe10/references/method.md",
+      "bytes": 3234,
+      "sha256": "b69b42e40d6ae8571a3a8e8e8da258d2c07913aa868518d4e4a42be75890bd7f"
+    },
+    {
+      "path": "marketplace/skills/78967e9cfe10/SKILL.md",
+      "bytes": 2117,
+      "sha256": "3e1b6f0a2c8de2424b5dfd799dc7f0e2de79259706f4a9c6454bc830202185a0"
+    },
+    {
+      "path": "marketplace/skills/86cea925e282/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/86cea925e282/references/method.md",
+      "bytes": 3232,
+      "sha256": "e1b1e6dd9a65b3e879fe7c3de1fc078745c2baa4afc389074bbf5a13b12e7601"
+    },
+    {
+      "path": "marketplace/skills/86cea925e282/SKILL.md",
+      "bytes": 2138,
+      "sha256": "19d93404eb03f296bb8993bb2ce1ebc7ec168307db330e82f2ed797bca150a34"
+    },
+    {
       "path": "marketplace/skills/8d2f4b7c9a10/_meta.json",
       "bytes": 64,
       "sha256": "f7d6fb0c4516d62b3abd2b239f64a2ea415063bd76d8ce9686595457c19849b3"
@@ -461,6 +911,96 @@
       "path": "marketplace/skills/8d2f4b7c9a10/SKILL.md",
       "bytes": 8392,
       "sha256": "1da9b65e1f1affff87dafb98c2b986c691c1ffc88df2a7b237429b02c1713d5f"
+    },
+    {
+      "path": "marketplace/skills/8f090a1b0c27/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/8f090a1b0c27/references/method.md",
+      "bytes": 3193,
+      "sha256": "e2bbd8a9e2f525e1dbb0c6af878bc35971c24fc77f67b8cfd8a558855c31580f"
+    },
+    {
+      "path": "marketplace/skills/8f090a1b0c27/SKILL.md",
+      "bytes": 2102,
+      "sha256": "9b29e9aef293784ebb8f4888187831bc4c6373d42773607453491afe5dad2881"
+    },
+    {
+      "path": "marketplace/skills/90da4ae1fac4/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/90da4ae1fac4/references/method.md",
+      "bytes": 3192,
+      "sha256": "be5e6bb7f73b02c082bb0373539d001c1788e8ede5b987ca13e3edaaecd9df88"
+    },
+    {
+      "path": "marketplace/skills/90da4ae1fac4/SKILL.md",
+      "bytes": 2137,
+      "sha256": "2106c9c66d30395f0901a19a99ee82a0395d0557d886ed597fdfa1be63997757"
+    },
+    {
+      "path": "marketplace/skills/93d7b28fb6b4/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/93d7b28fb6b4/references/method.md",
+      "bytes": 3229,
+      "sha256": "fc70aa441b9a057ad58bf21fb07bf8e4c34094bb8ab41aad9120d7ac38f19385"
+    },
+    {
+      "path": "marketplace/skills/93d7b28fb6b4/SKILL.md",
+      "bytes": 2161,
+      "sha256": "cd0dcbdd8699cae2f752121400bf52bf52fff4f1c999db88cc12c9ae4cb9e43c"
+    },
+    {
+      "path": "marketplace/skills/98e6c144f229/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/98e6c144f229/references/method.md",
+      "bytes": 3174,
+      "sha256": "a2b5c5260ebb32a2b6094080764b1c0cb96597095475af6df2f808f968986827"
+    },
+    {
+      "path": "marketplace/skills/98e6c144f229/SKILL.md",
+      "bytes": 2086,
+      "sha256": "b57de814a5c46d8c2d797b8046bdd6e298d8cf09166f29b6a7b6d9ff8de3aca1"
+    },
+    {
+      "path": "marketplace/skills/991ac94fc4e1/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/991ac94fc4e1/references/method.md",
+      "bytes": 3215,
+      "sha256": "7142a9d5978e0eefe2bb0738f35cac0f1571bd86ceb9e00c8dc89a78ccd1ea0d"
+    },
+    {
+      "path": "marketplace/skills/991ac94fc4e1/SKILL.md",
+      "bytes": 2149,
+      "sha256": "47bba5137afbc25c853d45b438951e1d4fde0b42821bd82e11ee57c3fa368983"
+    },
+    {
+      "path": "marketplace/skills/9a2bc04da822/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/9a2bc04da822/references/method.md",
+      "bytes": 3282,
+      "sha256": "b05987814400c001fc3750c709c7df28cb5b12f9860948e44b27747264c06a8f"
+    },
+    {
+      "path": "marketplace/skills/9a2bc04da822/SKILL.md",
+      "bytes": 2165,
+      "sha256": "74a7a4d57eb644f612629b1789626c4ebd5a1fa2b49fec86d067a26d9c0b0a22"
     },
     {
       "path": "marketplace/skills/9be6fda271a5/_meta.json",
@@ -501,6 +1041,186 @@
       "path": "marketplace/skills/9be6fda271a5/SKILL.md",
       "bytes": 8664,
       "sha256": "e748cf1c5dadd8ec51ce2473dce6acac9767ba810e5a2367543aeefca408084f"
+    },
+    {
+      "path": "marketplace/skills/a827416958f6/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/a827416958f6/references/method.md",
+      "bytes": 2213,
+      "sha256": "f184772a0ae889947e950bb644d8d60ab83cea669318c3090191e86a68783af7"
+    },
+    {
+      "path": "marketplace/skills/a827416958f6/SKILL.md",
+      "bytes": 2985,
+      "sha256": "cddf59658a9a8e1206e089a937979d9f4d65a9a9e87f308f4bac7463d8ddc8f9"
+    },
+    {
+      "path": "marketplace/skills/a988c001dc65/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/a988c001dc65/references/method.md",
+      "bytes": 3209,
+      "sha256": "4dfae4fcf0507302820cae1431392f7b4218161fb24489a0ddf0f40094d749f6"
+    },
+    {
+      "path": "marketplace/skills/a988c001dc65/SKILL.md",
+      "bytes": 2137,
+      "sha256": "db99bde595a34907f8fa3515d3ba91696f8c29946995e9989448c4ad28814d59"
+    },
+    {
+      "path": "marketplace/skills/aef5bf07573f/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/aef5bf07573f/references/method.md",
+      "bytes": 3200,
+      "sha256": "117895a07b24cfec1f6dbe6791f5a27eb8cd13d5659581a5c7f9a1079ac84253"
+    },
+    {
+      "path": "marketplace/skills/aef5bf07573f/SKILL.md",
+      "bytes": 2106,
+      "sha256": "31950d3524afcbbd589cf05eba396c762ac4b113723c38e3a4c1d9ec47be57c8"
+    },
+    {
+      "path": "marketplace/skills/afae324569e2/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/afae324569e2/references/method.md",
+      "bytes": 2229,
+      "sha256": "dce54cf9b324261c9611899603b130efcbbe78029a0ae3b9668bf4b86a5e36d4"
+    },
+    {
+      "path": "marketplace/skills/afae324569e2/SKILL.md",
+      "bytes": 3033,
+      "sha256": "d29d1722c9e30b9c7de1ca165c6874b2cababa73e6baf0010008e0358fde6bf4"
+    },
+    {
+      "path": "marketplace/skills/bc0be37d6755/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/bc0be37d6755/references/method.md",
+      "bytes": 2227,
+      "sha256": "bd0432bc646a13579c02f1115e4f64d521cd17ab31cdbd1fcd86a6828e941dbd"
+    },
+    {
+      "path": "marketplace/skills/bc0be37d6755/SKILL.md",
+      "bytes": 2887,
+      "sha256": "7062baf45b0bd1fbb7238378ea153ad22ce0a78126b6f5a253392a21a96ddd21"
+    },
+    {
+      "path": "marketplace/skills/c07c2cab295d/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/c07c2cab295d/references/method.md",
+      "bytes": 3210,
+      "sha256": "9627717bc2203fe19d1672f52871aefc3cbd97aa6c7fb57c11eb7336587ccfa9"
+    },
+    {
+      "path": "marketplace/skills/c07c2cab295d/SKILL.md",
+      "bytes": 2125,
+      "sha256": "9aa74570fbc2702a44b34a0de5b628ea31814665dff91fc9be10d13eeef10ebd"
+    },
+    {
+      "path": "marketplace/skills/c65fa3eae763/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/c65fa3eae763/references/method.md",
+      "bytes": 3198,
+      "sha256": "be79b68bdf35a630371440c522f25582955af6c6199fd1d599db6523578e9209"
+    },
+    {
+      "path": "marketplace/skills/c65fa3eae763/SKILL.md",
+      "bytes": 2168,
+      "sha256": "950cbbdc0ef79a0c938861e60be707c1f1277f46650394f7fd181c56b4056a25"
+    },
+    {
+      "path": "marketplace/skills/d3d406dffdbc/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/d3d406dffdbc/references/method.md",
+      "bytes": 3228,
+      "sha256": "c78640b39fccc6f9713e3a2a2c633e82f4d8414dc9f1f133dbc8d5b16e50adf9"
+    },
+    {
+      "path": "marketplace/skills/d3d406dffdbc/SKILL.md",
+      "bytes": 2189,
+      "sha256": "03c262fdc40e4531fac211c436c3eec5435c6caff25f49ced341f76de9af492d"
+    },
+    {
+      "path": "marketplace/skills/d5041e397e79/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/d5041e397e79/references/method.md",
+      "bytes": 3136,
+      "sha256": "f1acfe780c723ebfb5515018a53c84a1acca1aa5da05c4270a108eabcad7b150"
+    },
+    {
+      "path": "marketplace/skills/d5041e397e79/SKILL.md",
+      "bytes": 2043,
+      "sha256": "00db7a9fb2108d28a7b826929090182c6cc4e95e813b2aafd15fe673aa276435"
+    },
+    {
+      "path": "marketplace/skills/d5d2fb6337fb/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/d5d2fb6337fb/references/method.md",
+      "bytes": 3203,
+      "sha256": "03fbd11fd13488d827bc6668fc716b5434240b93ff9f5a7af4d867d9c5b27faf"
+    },
+    {
+      "path": "marketplace/skills/d5d2fb6337fb/SKILL.md",
+      "bytes": 2132,
+      "sha256": "347d0134889a00d113190fbe9e0027fd479148af18904018c68cbf68ccff9206"
+    },
+    {
+      "path": "marketplace/skills/e117a4a3afef/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/e117a4a3afef/references/method.md",
+      "bytes": 3250,
+      "sha256": "6444c7a2b09daccb7d144eea85fa4f16837d51c420eacf87ef7b2cd7906f5772"
+    },
+    {
+      "path": "marketplace/skills/e117a4a3afef/SKILL.md",
+      "bytes": 2137,
+      "sha256": "182cb69f302f2355f6a13a972345f004aa4fbbcbf05398408fcde8e5de17e1e8"
+    },
+    {
+      "path": "marketplace/skills/e12403164f5f/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/e12403164f5f/references/method.md",
+      "bytes": 3226,
+      "sha256": "db2a0caf37e843ad25e3f7d8e336f1412c6d4c7bda941c8e0278e0337eefae44"
+    },
+    {
+      "path": "marketplace/skills/e12403164f5f/SKILL.md",
+      "bytes": 2167,
+      "sha256": "19b50aacedb9631656c10ba8fb50c53d8affe593458ecd4f9d25d932ad89cf27"
     },
     {
       "path": "marketplace/skills/e7f5c0e6f1be/_meta.json",
@@ -628,6 +1348,21 @@
       "sha256": "9bde4837822605373873aef1d96304b50f9fed2517442ee4543da761645784e8"
     },
     {
+      "path": "marketplace/skills/ffaad9705891/_meta.json",
+      "bytes": 72,
+      "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
+    },
+    {
+      "path": "marketplace/skills/ffaad9705891/references/method.md",
+      "bytes": 3185,
+      "sha256": "ebeddd20841c7eb36888dc055d54ed3d65b93e6d0967cff7b5ef3264acc4562f"
+    },
+    {
+      "path": "marketplace/skills/ffaad9705891/SKILL.md",
+      "bytes": 2112,
+      "sha256": "7c527aa416fdceccb73f1457cc82deae0dfac193720ab0b1c4bfd575b43216df"
+    },
+    {
       "path": "system/skills/_system.json",
       "bytes": 427,
       "sha256": "ec755e73b455fa98e3d1579da44a5de6b382eadff7876faea1a919702638eaec"
@@ -674,23 +1409,23 @@
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/ontology/personal_ontology/scene_mapping.yaml",
-      "bytes": 7718,
-      "sha256": "7f0c4bc5c7a60a38fa08151928f405823b3f2b31bed9c18f0ac91400bcd0a7dc"
+      "bytes": 7727,
+      "sha256": "6570e0e57d27494a9f279c5524735309fe97c429c4d68ee5772563c9666892f9"
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/ontology/personal_ontology/scene_package.yaml",
-      "bytes": 4672,
-      "sha256": "ed97e673d5558e057293ba666fa3b900724d28e254dc5dc0d5b272ec341288b6"
+      "bytes": 4738,
+      "sha256": "3f32f214e562065151dc1745f84218f0ce43209430ba18e359b78610177a8c86"
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/ontology/personal_ontology/scene_rbox.yaml",
-      "bytes": 10427,
-      "sha256": "3842602b80f007bc4cc9aab0f17b6956521cd38482b49c8117eb254dda47af40"
+      "bytes": 10516,
+      "sha256": "7d5a953c6cbfd357d33bfaf93733511ebe540e4c69dff7ca5d56362ef780ab1b"
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/ontology/personal_ontology/scene_tbox.yaml",
-      "bytes": 13552,
-      "sha256": "5280259759f092b61e16fa4e7fc01ebbde1fe5468fb63043c516e088cef342f3"
+      "bytes": 13819,
+      "sha256": "743232368c5e710c14705a6aba6236fffc0ba53dce08ec68e1772df049fc81c6"
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/references/examples.md",
@@ -704,8 +1439,8 @@
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/references/governance-boundaries.md",
-      "bytes": 2367,
-      "sha256": "e97b68818660ef212e38778c772d059af64aa90212c659e39f26047dc5102ed4"
+      "bytes": 2456,
+      "sha256": "dc374fe12ebb12ca84d5c366f865700be313eb92c3999491b994ff6185dc829e"
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/references/input-contract.md",
@@ -719,18 +1454,18 @@
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/references/ontology-mapping.md",
-      "bytes": 2357,
-      "sha256": "564ed84d150d97aee02b4c6fa88f39f13a9b65924d924c1ae40631c0fba4c986"
+      "bytes": 2449,
+      "sha256": "2b504f315c595bb7b48b2c15a5839c0531166431c09e8bec6aca86804c821ea6"
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/references/output-contract.md",
-      "bytes": 4773,
-      "sha256": "ad01958fdf476ffa1b56f5bcd6c431214cd90455ba40c9d3485038eda5619a0d"
+      "bytes": 4862,
+      "sha256": "891ef0539c615e6d627192bd9448fb1f1a9fc2f66b3819e414198adb21a90849"
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/references/skill-spec.yaml",
-      "bytes": 4949,
-      "sha256": "96a9bfb9e8ac20e8088ee62829b1acf8f1af88700ed73346f542414946a8047b"
+      "bytes": 4952,
+      "sha256": "a6c69e20212dab28faefe03a6a2203faca7a2d0f5b0eb9ea99d116f191968f16"
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/references/validation-contract.md",
@@ -744,8 +1479,8 @@
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/SKILL.md",
-      "bytes": 10273,
-      "sha256": "8dd1f0344e384eb025c8d9cdd0aca8a261629f593b171b68aa63d9ec839d4f1b"
+      "bytes": 10454,
+      "sha256": "7118aa34b75654db0968c2ffad5cf8af80168cbb785b24933049abe10b191df1"
     },
     {
       "path": "system/skills/skill-creator/SKILL.md",
@@ -782,6 +1517,163 @@
     ],
     "marketplace_agents": [
       {
+        "id": "0fdb4da8a080",
+        "name": "PRD一致性检查Agent",
+        "version": "0.2.0-review.1",
+        "icon": "target",
+        "color": "violet",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "577787fb975e",
+          "7432875f93bf"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "2ec891859db3",
+        "name": "文档一致性检查Agent",
+        "version": "0.2.0-review.1",
+        "icon": "doc",
+        "color": "emerald",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "06d69ee5f1bc",
+          "d5d2fb6337fb"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "36cb9c97ac31",
+        "name": "代码库探索Agent",
+        "version": "0.2.0-review.1",
+        "icon": "code",
+        "color": "sky",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "93d7b28fb6b4",
+          "d3d406dffdbc"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "37054bcc1740",
+        "name": "文献综述Agent",
+        "version": "0.2.0-review.1",
+        "icon": "book",
+        "color": "emerald",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "2b7f7c8621d5",
+          "6c5609e76cf0"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "373f22475ab4",
+        "name": "解决方案草案Agent",
+        "version": "0.2.0-review.1",
+        "icon": "pen",
+        "color": "gold",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "464e3f3416cf",
+          "90da4ae1fac4",
+          "c65fa3eae763"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "39f682807819",
+        "name": "周度状态Agent",
+        "version": "0.2.0-review.1",
+        "icon": "flag",
+        "color": "gold",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "0d95910c7f2f",
+          "4334030f8314"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "3bf780cd23be",
+        "name": "学习研究Agent",
+        "version": "0.2.0-review.1",
+        "icon": "search",
+        "color": "sky",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "0e847fc8685e",
+          "aef5bf07573f"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "54f102b6c1ee",
+        "name": "学习计划Agent",
+        "version": "0.2.0-review.1",
+        "icon": "search",
+        "color": "sky",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "4a8054f512e9",
+          "4bb1813c8335"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "57f6f828af9f",
+        "name": "研究设计评审Agent",
+        "version": "0.2.0-review.1",
+        "icon": "book",
+        "color": "emerald",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "2b7f7c8621d5",
+          "4ff31e1cab6f"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "5a5fe1598ed0",
+        "name": "练习反馈Agent",
+        "version": "0.2.0-review.1",
+        "icon": "search",
+        "color": "sky",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "0e847fc8685e",
+          "3def7f0eb34a"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "662cb1c1de2c",
+        "name": "项目风险扫描Agent",
+        "version": "0.2.0-review.1",
+        "icon": "flag",
+        "color": "gold",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "181e249741e9",
+          "9a2bc04da822"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "736cc1ac94b4",
+        "name": "客户Context Agent",
+        "version": "0.2.0-review.1",
+        "icon": "pen",
+        "color": "gold",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "058e3bb57bf5",
+          "c65fa3eae763"
+        ],
+        "embedded_skills": []
+      },
+      {
         "id": "78900d8758bc",
         "name": "DeepResearcher",
         "version": "1.0.6",
@@ -793,6 +1685,20 @@
           "9be6fda271a5",
           "e7f5c0e6f1be",
           "ee99fbb42964"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "78ef7f901e81",
+        "name": "招聘评估缺口Agent",
+        "version": "0.2.0-review.1",
+        "icon": "users",
+        "color": "rose",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "78967e9cfe10",
+          "98e6c144f229",
+          "d5041e397e79"
         ],
         "embedded_skills": []
       },
@@ -835,6 +1741,111 @@
         ]
       },
       {
+        "id": "7c3138523589",
+        "name": "竞品研究Agent",
+        "version": "0.2.0-review.1",
+        "icon": "target",
+        "color": "violet",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "afae324569e2"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "7ece3121592e",
+        "name": "集成验证Agent",
+        "version": "0.2.0-review.1",
+        "icon": "pen",
+        "color": "gold",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "058e3bb57bf5",
+          "90da4ae1fac4",
+          "e12403164f5f"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "876218dd6c3f",
+        "name": "代码质量评审Agent",
+        "version": "0.2.0-review.1",
+        "icon": "code",
+        "color": "sky",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "6ba6255ee930",
+          "991ac94fc4e1"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "8dcba242d360",
+        "name": "客户需求评估Agent",
+        "version": "0.2.0-review.1",
+        "icon": "target",
+        "color": "violet",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "5a131fa3f845",
+          "7432875f93bf",
+          "bc0be37d6755"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "9099ea65848a",
+        "name": "测试运行Agent",
+        "version": "0.2.0-review.1",
+        "icon": "code",
+        "color": "sky",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "991ac94fc4e1",
+          "a988c001dc65"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "9a26f9f2336d",
+        "name": "文档来源探索Agent",
+        "version": "0.2.0-review.1",
+        "icon": "doc",
+        "color": "emerald",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "13ac643c3ef9",
+          "c07c2cab295d"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "a0aaf36d3c37",
+        "name": "简历批量解析Agent",
+        "version": "0.2.0-review.1",
+        "icon": "users",
+        "color": "rose",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "8f090a1b0c27",
+          "e117a4a3afef"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "a37e8dbcc57e",
+        "name": "引文核验Agent",
+        "version": "0.2.0-review.1",
+        "icon": "book",
+        "color": "emerald",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "6c5609e76cf0",
+          "86cea925e282"
+        ],
+        "embedded_skills": []
+      },
+      {
         "id": "bcfcb4921dce",
         "name": "UIDesigner",
         "version": "1.3.1",
@@ -873,6 +1884,19 @@
         ]
       },
       {
+        "id": "c0e5a377b91c",
+        "name": "项目计划Agent",
+        "version": "0.2.0-review.1",
+        "icon": "flag",
+        "color": "gold",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "15af984d02a5",
+          "181e249741e9"
+        ],
+        "embedded_skills": []
+      },
+      {
         "id": "e064dca9e1bd",
         "name": "SeoGeoAgent",
         "version": "1.0.2",
@@ -903,14 +1927,173 @@
           "seo-schema",
           "seo-tech-audit"
         ]
+      },
+      {
+        "id": "fb836f8b51ca",
+        "name": "候选人对比Agent",
+        "version": "0.2.0-review.1",
+        "icon": "users",
+        "color": "rose",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "8f090a1b0c27",
+          "d5041e397e79",
+          "e117a4a3afef"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "fce0f5110ab2",
+        "name": "文档变更影响Agent",
+        "version": "0.2.0-review.1",
+        "icon": "doc",
+        "color": "emerald",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "13ac643c3ef9",
+          "ffaad9705891"
+        ],
+        "embedded_skills": []
       }
     ],
     "marketplace_skills": [
+      {
+        "id": "058e3bb57bf5",
+        "name": "integration-map",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "06d69ee5f1bc",
+        "name": "terminology",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "0d95910c7f2f",
+        "name": "meeting-actions",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "0e847fc8685e",
+        "name": "guided-learning",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "13ac643c3ef9",
+        "name": "source-extraction",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "15af984d02a5",
+        "name": "scope-wbs",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "17b2d5e85d87",
+        "name": "reproducibility",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "181e249741e9",
+        "name": "milestone-plan",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "2b7f7c8621d5",
+        "name": "question-refinement",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "3def7f0eb34a",
+        "name": "weekly-review",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "4334030f8314",
+        "name": "status-review",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "464e3f3416cf",
+        "name": "solution-design",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "4a8054f512e9",
+        "name": "daily-priority",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "4bb1813c8335",
+        "name": "term-map",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "4ff31e1cab6f",
+        "name": "design-review",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "577787fb975e",
+        "name": "prd-user-stories",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "5a131fa3f845",
+        "name": "requirement-evidence",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
       {
         "id": "6743aa0797a2",
         "name": "brand-research",
         "version": "1.0.1",
         "updated_at": "2026-07-04T00:00:00"
+      },
+      {
+        "id": "6ba6255ee930",
+        "name": "review",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "6c5609e76cf0",
+        "name": "literature-evidence",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "7432875f93bf",
+        "name": "acceptance-evaluation",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "78967e9cfe10",
+        "name": "feedback-summary",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "86cea925e282",
+        "name": "academic-writing",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
       },
       {
         "id": "8d2f4b7c9a10",
@@ -919,10 +2102,118 @@
         "updated_at": "2026-07-23T00:00:00"
       },
       {
+        "id": "8f090a1b0c27",
+        "name": "resume-evidence",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "90da4ae1fac4",
+        "name": "acceptance-evidence",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "93d7b28fb6b4",
+        "name": "implementation-plan",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "98e6c144f229",
+        "name": "interview-design",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "991ac94fc4e1",
+        "name": "testing",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "9a2bc04da822",
+        "name": "risk-dependency",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
         "id": "9be6fda271a5",
         "name": "material-organizer",
         "version": "1.0.1",
         "updated_at": "2026-07-04T00:00:00"
+      },
+      {
+        "id": "a827416958f6",
+        "name": "product-metrics",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "a988c001dc65",
+        "name": "debugging",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "aef5bf07573f",
+        "name": "reading-notes",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "afae324569e2",
+        "name": "competitor-market-research",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "bc0be37d6755",
+        "name": "feature-prioritization",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "c07c2cab295d",
+        "name": "information-architecture",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "c65fa3eae763",
+        "name": "context-clarification",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "d3d406dffdbc",
+        "name": "repo-exploration",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "d5041e397e79",
+        "name": "match-matrix",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "d5d2fb6337fb",
+        "name": "technical-writing",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "e117a4a3afef",
+        "name": "jd-intake",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "e12403164f5f",
+        "name": "delivery-risk",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
       },
       {
         "id": "e7f5c0e6f1be",
@@ -935,6 +2226,12 @@
         "name": "deep-research",
         "version": "1.0.3",
         "updated_at": "2026-07-04T00:00:00"
+      },
+      {
+        "id": "ffaad9705891",
+        "name": "version-diff",
+        "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
       }
     ]
   }

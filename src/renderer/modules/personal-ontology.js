@@ -318,6 +318,7 @@
         <div class="memory-group-field" data-mem-group-field="${escapeHtml(f.name)}">
           <div class="memory-group-field-name">
             <span class="memory-group-field-name-text">${escapeHtml(f.name)}</span>
+            ${f.isCustom ? `<span class="memory-group-field-custom-badge">${escapeHtml(_t('memory.group_field_custom_badge', '自定义'))}</span>` : ''}
           </div>
           <div class="memory-group-field-values">
             ${f.values && f.values.length
@@ -838,8 +839,14 @@
           if (fieldName === null) return;
           const trimmed = String(fieldName || '').trim();
           if (!trimmed) return;
-          if (await _pocGroupAction('personalOntology.groups.entries.promote', { groupId, entryText, fieldName: trimmed })) {
+          const res = await _pocInvoke('personalOntology.groups.entries.promote', { groupId, entryText, fieldName: trimmed });
+          if (res && res.ok !== false) {
+            if (res.isCustom && typeof uiToast === 'function') {
+              uiToast(_tv('memory.group_promote_custom_done', { name: trimmed }, `已创建自定义字段「${trimmed}」（不在模板字段清单内）`), { variant: 'info' });
+            }
             await _pocRefreshGroupData();
+          } else {
+            _pocNotifyFail(_t('personalOntology.op_failed', '操作失败'), new Error((res && res.error) || ''));
           }
           return;
         }

@@ -762,16 +762,21 @@ describe('builtin marketplace seed', () => {
 
   it('keeps a newer builtin agent uninstall tombstone respected', async () => {
     const agentId = '78900d8758bc';
+    // 相对日期而非固定日期：tombstone 保留期为 30 天（tombstone_retention.ts），
+    // 固定历史日期会随时间推移被 isExpiredMsTombstone 过滤，导致测试不稳定。
+    // 语义：deletedAt == reseed cutoff → 不 bypass → 尊重 tombstone。
+    const deletedAt = Date.now() - 2 * 24 * 60 * 60 * 1000; // 2 天前
+    const reseedCutoff = new Date(deletedAt).toISOString();
     writeBuiltinAgent(agentId, {
       version: '1.0.2',
       name: 'DeepResearcher',
       description: 'Research deeply',
       category: 'data',
       workflow: 'Research.',
-      updated_at: '2026-07-04T00:00:00Z',
+      updated_at: new Date(deletedAt - 24 * 60 * 60 * 1000).toISOString(),
     });
     writeBuiltinAgentMeta(agentId, {
-      reseed_if_deleted_before: '2026-07-05T00:00:00Z',
+      reseed_if_deleted_before: reseedCutoff,
     });
 
     const seed = await import('../../../src/main/features/builtin_marketplace');
@@ -782,7 +787,7 @@ describe('builtin marketplace seed', () => {
       agents: [],
       skills: [],
       _deleted_at: {
-        agents: { [agentId]: Date.parse('2026-07-05T00:00:00Z') },
+        agents: { [agentId]: deletedAt },
       },
     });
 
@@ -793,16 +798,19 @@ describe('builtin marketplace seed', () => {
 
     expect(fs.existsSync(path.join(paths.userMarketplaceAgentDir('u1', agentId), 'agent.json'))).toBe(false);
     const manifest = await installs.readInstalls('u1');
-    expect(manifest._deleted_at?.agents?.[agentId]).toEqual(Date.parse('2026-07-05T00:00:00Z'));
+    expect(manifest._deleted_at?.agents?.[agentId]).toEqual(deletedAt);
     expect(manifest.agents).toEqual([]);
   });
 
   it('keeps a newer builtin skill uninstall tombstone respected', async () => {
     const skillId = 'ee99fbb42964';
+    // 同上：相对日期保持 tombstone 在 30 天保留期内，deletedAt == cutoff 不 bypass。
+    const deletedAt = Date.now() - 2 * 24 * 60 * 60 * 1000;
+    const reseedCutoff = new Date(deletedAt).toISOString();
     writeBuiltinSkill(skillId, 'deep-research');
     writeBuiltinSkillMeta(skillId, {
       version: '1.0.1',
-      reseed_if_deleted_before: '2026-07-03T00:00:00Z',
+      reseed_if_deleted_before: reseedCutoff,
     });
 
     const seed = await import('../../../src/main/features/builtin_marketplace');
@@ -813,7 +821,7 @@ describe('builtin marketplace seed', () => {
       agents: [],
       skills: [],
       _deleted_at: {
-        skills: { [skillId]: Date.parse('2026-07-03T00:00:00Z') },
+        skills: { [skillId]: deletedAt },
       },
     });
 
@@ -824,7 +832,7 @@ describe('builtin marketplace seed', () => {
 
     expect(fs.existsSync(path.join(paths.userMarketplaceSkillDir('u1', skillId), 'SKILL.md'))).toBe(false);
     const manifest = await installs.readInstalls('u1');
-    expect(manifest._deleted_at?.skills?.[skillId]).toEqual(Date.parse('2026-07-03T00:00:00Z'));
+    expect(manifest._deleted_at?.skills?.[skillId]).toEqual(deletedAt);
     expect(manifest.skills).toEqual([]);
   });
 

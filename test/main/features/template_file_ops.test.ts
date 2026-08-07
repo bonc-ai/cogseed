@@ -57,10 +57,10 @@ describe('template_file_ops › installTemplateFile', () => {
 
     const fileText = readFile('student.md');
     expect(fileText).toContain('# 学生（模板）');
-    expect(fileText).toContain('> 模板: student@1.0.0');
+    expect(fileText).toContain('> 模板: student@0.2.0-review.1');
     // 全部分节 + 全部空坑落盘
-    for (const section of ['课程', '项目', '技能', '偏好']) expect(fileText).toContain(`## ${section}`);
-    for (const field of ['课程名称', '学校', '专业', '入学年份', '项目名称', '角色', '状态', '技能名', '熟练度', '沟通风格', '工具偏好']) {
+    for (const section of ['学习背景', '目标与节奏', '时间与约束', '掌握状态', '学术诚信', '学期与课程', '任务与期限', '材料与掌握', '计划与记录', '协作关系']) expect(fileText).toContain(`## ${section}`);
+    for (const field of ['教育阶段', '专业与学习方向', '学习目标', '学习风格', '学习节奏', '可用时间', '时间约束', '优势与薄弱领域', '学术诚信边界', '学期／学习周期', '课程清单', '教学要求', '作业', '考试', '截止时间', '获准学习材料', '知识掌握状态', '学习计划', '完成记录', '教师与同伴', '协作项目']) {
       expect(fileText).toContain(`### ${field}`);
     }
     expect(fileText).toContain('### 流水');
@@ -71,7 +71,7 @@ describe('template_file_ops › installTemplateFile', () => {
     expect(row).toBeDefined();
     expect(row!.title).toBe('学生');
     expect(row!.rel_path).toBe('.personal_ontology_groups/student.md');
-    expect(row!.template_version).toBe('1.0.0');
+    expect(row!.template_version).toBe('0.2.0-review.1');
   });
 
   it('is idempotent: second install → already_installed, no new file overwrite', async () => {
@@ -90,10 +90,10 @@ describe('template_file_ops › installTemplateFile', () => {
   it('reports name conflicts with plain groups (no template_id)', async () => {
     const m = await loadMod();
     const groups = await import('../../../src/main/features/personal_ontology_groups');
-    await groups.createGroup(UID, '课程');
+    await groups.createGroup(UID, '学习背景');
     const res = await m.installTemplateFile(UID, 'student');
     expect(res.ok).toBe(true);
-    expect(res.conflict_groups).toEqual([{ group_id: expect.any(String), title: '课程' }]);
+    expect(res.conflict_groups).toEqual([{ group_id: expect.any(String), title: '学习背景' }]);
   });
 
   it('unknown template → error', async () => {
@@ -112,17 +112,17 @@ describe('template_file_ops › readContentById (复合 id 分节读取)', () =>
     m = await loadMod();
     const inst = await m.installTemplateFile(UID, 'student');
     const row = m.readGroups(UID).find((g) => g.template_id === 'student')!;
-    ref = m.buildContentRef(row.group_id, '课程');
+    ref = m.buildContentRef(row.group_id, '学习背景');
   });
 
   it('composite ref returns the section markdown (with ## title, fields, flow)', async () => {
     const res = await m.readContentById(UID, ref);
     expect(res.ok).toBe(true);
-    expect(res.section).toBe('课程');
-    expect(res.content).toContain('## 课程');
-    expect(res.content).toContain('### 课程名称');
+    expect(res.section).toBe('学习背景');
+    expect(res.content).toContain('## 学习背景');
+    expect(res.content).toContain('### 教育阶段');
     expect(res.content).toContain('### 流水');
-    expect(res.content).not.toContain('## 项目'); // 不含其他分节
+    expect(res.content).not.toContain('## 目标与节奏'); // 不含其他分节
   });
 
   it('plain group id returns the whole file (backward compat)', async () => {
@@ -136,7 +136,7 @@ describe('template_file_ops › readContentById (复合 id 分节读取)', () =>
   });
 
   it('unknown section → error', async () => {
-    const badRef = ref.replace('::课程', '::不存在的分节');
+    const badRef = ref.replace('::学习背景', '::不存在的分节');
     const res = await m.readContentById(UID, badRef);
     expect(res.ok).toBe(false);
     expect(res.error).toContain('section not found');
@@ -151,23 +151,23 @@ describe('template_file_ops › appendFieldValueToRef (分节字段写入)', () 
     m = await loadMod();
     const inst = await m.installTemplateFile(UID, 'student');
     const row = m.readGroups(UID).find((g) => g.template_id === 'student')!;
-    ref = m.buildContentRef(row.group_id, '课程');
+    ref = m.buildContentRef(row.group_id, '学习背景');
   });
 
   it('writes a value into an empty pit with source marker', async () => {
-    const res = await m.appendFieldValueToRef(UID, ref, '专业', '计算机科学', '智能');
+    const res = await m.appendFieldValueToRef(UID, ref, '教育阶段', '硕士', '智能');
     expect(res.ok).toBe(true);
-    expect(readFile('student.md')).toContain('### 专业\n- 计算机科学 [智能]');
+    expect(readFile('student.md')).toContain('### 教育阶段\n- 硕士 [智能]');
   });
 
   it('dedupes exact same value+source, appends different values', async () => {
-    await m.appendFieldValueToRef(UID, ref, '课程名称', '高等数学', '智能');
-    const dup = await m.appendFieldValueToRef(UID, ref, '课程名称', '高等数学', '智能');
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '硕士', '智能');
+    const dup = await m.appendFieldValueToRef(UID, ref, '教育阶段', '硕士', '智能');
     expect(dup.ok).toBe(true);
     const fileText = readFile('student.md');
-    expect(fileText.match(/- 高等数学 \[智能\]/g)).toHaveLength(1); // 去重
-    await m.appendFieldValueToRef(UID, ref, '课程名称', '线性代数', '智能');
-    expect(readFile('student.md')).toContain('- 高等数学 [智能]\n- 线性代数 [智能]');
+    expect(fileText.match(/- 硕士 \[智能\]/g)).toHaveLength(1); // 去重
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '博士', '智能');
+    expect(readFile('student.md')).toContain('- 硕士 [智能]\n- 博士 [智能]');
   });
 
   it('creates a user-defined field section on the fly', async () => {
@@ -177,7 +177,7 @@ describe('template_file_ops › appendFieldValueToRef (分节字段写入)', () 
   });
 
   it('unknown section → error', async () => {
-    const res = await m.appendFieldValueToRef(UID, `${ref}::不存在`, '专业', 'x', '手动');
+    const res = await m.appendFieldValueToRef(UID, `${ref}::不存在`, '教育阶段', 'x', '手动');
     expect(res.ok).toBe(false);
     expect(res.error).toContain('section not found');
   });
@@ -200,7 +200,7 @@ describe('template_file_ops › appendFlowEntryToRef (分节流水) & promoteEnt
     m = await loadMod();
     await m.installTemplateFile(UID, 'student');
     const row = m.readGroups(UID).find((g) => g.template_id === 'student')!;
-    ref = m.buildContentRef(row.group_id, '课程');
+    ref = m.buildContentRef(row.group_id, '学习背景');
   });
 
   it('appends flow entry to the section flow (not file-level)', async () => {
@@ -211,16 +211,16 @@ describe('template_file_ops › appendFlowEntryToRef (分节流水) & promoteEnt
 
   it('promotes a section flow entry into the same section field (source 手动)', async () => {
     await m.appendFlowEntryToRef(UID, ref, '参加了数学建模竞赛');
-    const res = await m.promoteEntryToRef(UID, ref, '参加了数学建模竞赛', '课程名称');
+    const res = await m.promoteEntryToRef(UID, ref, '参加了数学建模竞赛', '教育阶段');
     expect(res.ok).toBe(true);
     const fileText = readFile('student.md');
-    expect(fileText).toContain('### 课程名称\n- 参加了数学建模竞赛 [手动]');
+    expect(fileText).toContain('### 教育阶段\n- 参加了数学建模竞赛 [手动]');
     expect(fileText).not.toContain('参加了数学建模竞赛\n'); // 流水条目已移除（流水区不再含）
     expect(fileText).toContain('### 流水'); // 空流水小节仍在
   });
 
   it('promote unknown entry → error', async () => {
-    const res = await m.promoteEntryToRef(UID, ref, '不存在的条目', '课程名称');
+    const res = await m.promoteEntryToRef(UID, ref, '不存在的条目', '教育阶段');
     expect(res.ok).toBe(false);
     expect(res.error).toContain('entry not found');
   });
@@ -231,14 +231,14 @@ describe('template_file_ops › listFieldsByRef (分节字段清单，含空坑)
     const m = await loadMod();
     await m.installTemplateFile(UID, 'student');
     const row = m.readGroups(UID).find((g) => g.template_id === 'student')!;
-    const ref = m.buildContentRef(row.group_id, '课程');
-    await m.appendFieldValueToRef(UID, ref, '课程名称', '高等数学', '智能');
+    const ref = m.buildContentRef(row.group_id, '学习背景');
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '硕士', '智能');
 
     const res = await m.listFieldsByRef(UID, ref);
     expect(res.ok).toBe(true);
     const names = res.fields!.map((f) => f.name);
-    expect(names).toEqual(['课程名称', '学校', '专业', '入学年份']);
-    expect(res.fields![0].values).toEqual([{ value: '高等数学', source: '智能' }]);
-    expect(res.fields![2].values).toEqual([]); // 空坑
+    expect(names).toEqual(['教育阶段', '专业与学习方向']);
+    expect(res.fields![0].values).toEqual([{ value: '硕士', source: '智能' }]);
+    expect(res.fields![1].values).toEqual([]); // 空坑
   });
 });

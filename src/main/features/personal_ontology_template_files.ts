@@ -57,8 +57,8 @@ const MAX_FILE_BYTES = 200 * 1024 * 1024;
 /** 复合 id 分隔符：`<group_id>::<分节名>`。普通组 id 不含此分隔符。 */
 export const SECTION_REF_SEP = '::';
 
-/** 模板元信息行：`> 模板: <template_id>@<semver> | 已安装: <ISO>` */
-const TEMPLATE_META_RE = /^>\s*模板:\s*([a-z0-9-]+)@(\d+\.\d+\.\d+)(?:\s*\|\s*已安装:\s*(.+))?$/;
+/** 模板元信息行：`> 模板: <template_id>@<semver> | 已安装: <ISO>`（版本支持 semver 预发布后缀） */
+const TEMPLATE_META_RE = /^>\s*模板:\s*([a-z0-9-]+)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\s*\|\s*已安装:\s*(.+))?$/;
 
 // ── 纯函数：模板文件 parse / serialize ─────────────────────────────────────
 
@@ -413,13 +413,15 @@ export async function appendFlowEntryToRef(
   });
 }
 
-/** 流水升格：复合 id → 同分节流水条目升格为该分节字段（来源 `手动`）。 */
+/** 流水升格：复合 id → 同分节流水条目升格为该分节字段（来源 `手动`）。
+ *  升格允许创建模板 T-box 之外的自定义字段（用户手动建坑回填的设计）；
+ *  返回 `isCustom` 标记供 UI 提示「将创建/已创建自定义字段」。 */
 export async function promoteEntryToRef(
   uid: string,
   ref: string,
   entryText: string,
   fieldName: string,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; isCustom?: boolean }> {
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
   const target = String(entryText ?? '').trim();
   const name = String(fieldName || '').trim();
@@ -427,12 +429,25 @@ export async function promoteEntryToRef(
   if (!name) return { ok: false, error: 'field name required' };
 
   const { groupId, section } = splitContentRef(ref);
-  if (!section) return promoteEntryToField(uid, groupId, target, name);
+  if (!section) {
+    const res = await promoteEntryToField(uid, groupId, target, name);
+    if (!res.ok) return res;
+    // 普通组：无模板 T-box 概念，一律按自定义处理（组实例字段本就自由）
+    return { ok: true, isCustom: true };
+  }
 
   const meta = findTemplateMeta(uid, groupId);
   if (!meta) return { ok: false, error: 'template group not found' };
 
-  return mutateTemplateFile(uid, groupId, meta.template_id, (content) => {
+  // 预判 isCustom：字段名不在该模板 T-box 清单内 → 自定义字段
+  let isCustom = true;
+  const template = getRoleTemplate(meta.template_id);
+  if (template) {
+    const tboxNames = new Set(template.preset_groups.flatMap((p) => p.fields.map((f) => f.name)));
+    isCustom = !tboxNames.has(name);
+  }
+
+  const outcome = await mutateTemplateFile(uid, groupId, meta.template_id, (content) => {
     const sec = findSection(content, section);
     if (!sec) return { ok: false, error: 'section not found' };
     const idx = sec.flowEntries.findIndex((e) => e === target);
@@ -442,6 +457,7 @@ export async function promoteEntryToRef(
     values.push({ value: target, source: '手动' });
     return { changed: true };
   });
+  return { ...outcome, ...(outcome.ok ? { isCustom } : {}) };
 }
 
 /** 字段值替换：复合 id → 分节字段按值匹配替换（保留来源标记）；普通组转发。 */
@@ -616,9 +632,16 @@ export async function listFieldsByRef(uid: string, ref: string): Promise<ListFie
   const content = parseTemplateContent(readTemplateFileText(uid, meta.template_id));
   const sec = findSection(content, section);
   if (!sec) return { ok: false, error: 'section not found' };
+  // 自定义字段标记：不在该模板 T-box 清单内的字段（用户升格/自建）
+  let tboxNames: Set<string> | null = null;
+  const template = getRoleTemplate(meta.template_id);
+  if (template) {
+    tboxNames = new Set(template.preset_groups.flatMap((p) => p.fields.map((f) => f.name)));
+  }
   const fields: GroupFieldInfo[] = Object.keys(sec.fields).map((name) => ({
     name,
     values: sec.fields[name] || [],
+    ...(tboxNames !== null ? { isCustom: !tboxNames.has(name) } : {}),
   }));
   return { ok: true, fields };
 }

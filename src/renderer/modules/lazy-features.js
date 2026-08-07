@@ -40,6 +40,9 @@ const _rendererFeatureManifest = Object.freeze({
   'personal-ontology': [
     { src: './modules/personal-ontology.js' },
   ],
+  spaces: [
+    { src: './modules/spaces.js' },
+  ],
 });
 
 const _rendererFeatureLoads = new Map();

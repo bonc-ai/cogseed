@@ -174,7 +174,7 @@ mapping_configs:
       target_property: templateId
       source_field: "文件首行 > 模板: <id>@<ver>"
       datatype: string
-      transform_hint: "student@1.0.0 格式；模板 = 预置分组 + 字段挖空清单"
+      transform_hint: "student@0.2.0-review.1 格式；模板 = 预置分组 + 字段挖空清单"
       mapping_status: confirmed
     property_mappings:
       - target_property: GroupField

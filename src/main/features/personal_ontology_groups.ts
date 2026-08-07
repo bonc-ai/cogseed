@@ -263,8 +263,9 @@ const GROUP_FIELD_LABELS: Record<string, string> = {
   '模板': 'template_ref',
 };
 
-/** 模板行合法格式：`<template_id>@<semver>`（id 只允许小写字母数字连字符）。 */
-const TEMPLATE_REF_RE = /^([a-z0-9-]+)@(\d+\.\d+\.\d+)$/;
+/** 模板行合法格式：`<template_id>@<semver>`（id 只允许小写字母数字连字符；
+ *  版本支持标准 semver 预发布后缀，如 `1.1.0` / `0.2.0-review.1`）。 */
+const TEMPLATE_REF_RE = /^([a-z0-9-]+)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
 
 export function parseGroupsMarkdown(text: string): GroupMeta[] {
   const blocks = text.split(/\n(?=###\s+\S)/).map((b) => b.trim()).filter((b) => b.startsWith('### '));
@@ -657,6 +658,8 @@ export interface GroupFieldInfo {
   isRelation?: boolean;
   description?: string;
   values: FieldValue[];
+  /** 模板组：字段不在模板 T-box 清单内（用户升格/自建的自定义字段）。 */
+  isCustom?: boolean;
 }
 
 export interface ListGroupFieldsResult {
@@ -665,11 +668,40 @@ export interface ListGroupFieldsResult {
   error?: string;
 }
 
+/** 模板文件元信息行：`> 模板: <template_id>@<semver>`（与 template_files.ts 同源，
+ *  这里做轻量识别，避免 groups ↔ template_files 循环依赖）。 */
+const TEMPLATE_FILE_META_RE = /^>\s*模板:\s*([a-z0-9-]+)@(\d+\.\d+\.\d+)/m;
+
+/** 模板文件（`## 分节` / `### 字段` 分节式）的轻量字段汇总：跨分节合并所有
+ *  `### <字段名>` 小节为字段清单（含空坑与值，文件顺序）。仅提取字段名+值；
+ *  isRelation/description 由调用方按模板 T-box 补充。 */
+export function collectTemplateFileFields(text: string): GroupFieldInfo[] {
+  const out: GroupFieldInfo[] = [];
+  const sections = String(text ?? '').split(/^##\s+(.+)$/m);
+  for (let i = 1; i < sections.length; i += 2) {
+    const body = sections[i + 1] || '';
+    const blocks = body.split(/^###\s+(.+)$/m);
+    for (let j = 1; j < blocks.length; j += 2) {
+      const name = blocks[j].trim();
+      if (!name || name === '流水') continue;
+      const values: FieldValue[] = [];
+      for (const line of blocks[j + 1].split('\n')) {
+        const pv = parseFieldValueLine(line);
+        if (pv) values.push(pv);
+      }
+      out.push({ name, values });
+    }
+  }
+  return out;
+}
+
 /**
  * 合并模板声明与实例值：模板组返回模板字段清单（含 isRelation/description）
  * + 各组实例值（可能为空坑）；非模板组返回实例字段（无模板声明）。
  * 模板字段按 preset_groups 中该组标题（title）匹配 —— 组改名后匹配不上时
  * 退化为只返回实例字段，不猜测。
+ * 模板文件（阶段 D，一模板一文件分节式）优先按模板文件解析：跨分节汇总
+ * 所有 `###` 字段小节（含自定义字段），避免双区解析器把分节式文件误当流水。
  */
 export async function listGroupFields(uid: string, groupId: string): Promise<ListGroupFieldsResult> {
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
@@ -680,7 +712,26 @@ export async function listGroupFields(uid: string, groupId: string): Promise<Lis
   let abs: string;
   try { abs = resolveGroupFileAbsPathFromMeta(uid, meta); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
-  const content = parseGroupContent(readTextSafe(abs));
+  const fileText = readTextSafe(abs);
+
+  // 模板文件（分节式）→ 跨分节字段汇总（这是模板组的唯一事实来源）
+  if (TEMPLATE_FILE_META_RE.test(fileText)) {
+    const fields = collectTemplateFileFields(fileText);
+    // 标注自定义字段：不在该模板 T-box 清单内的字段（用户升格/自建）
+    let tboxNames: Set<string> | null = null;
+    if (meta.template_id) {
+      const template = getRoleTemplate(meta.template_id);
+      if (template) {
+        tboxNames = new Set(template.preset_groups.flatMap((p) => p.fields.map((f) => f.name)));
+      }
+    }
+    if (tboxNames !== null) {
+      for (const f of fields) f.isCustom = !tboxNames.has(f.name);
+    }
+    return { ok: true, fields };
+  }
+
+  const content = parseGroupContent(fileText);
 
   // 实例字段（有值的），按文件出现顺序
   const instanceFields = Object.keys(content.fields).map((name) => ({

@@ -297,6 +297,7 @@ function _memRenderGroupFormView(ed) {
     <div class="memory-group-field" data-mem-group-field="${escapeHtml(f.name)}">
       <div class="memory-group-field-name">
         <span class="memory-group-field-name-text">${escapeHtml(f.name)}</span>
+        ${f.isCustom ? `<span class="memory-group-field-custom-badge">${escapeHtml(t('memory.group_field_custom_badge', { name: '' }))}</span>` : ''}
         ${f.isRelation ? `<span class="memory-group-field-rel" title="关系字段">A → B</span>` : ''}
         ${f.description ? `<span class="memory-group-field-desc muted">${escapeHtml(f.description)}</span>` : ''}
       </div>
@@ -575,7 +576,11 @@ async function _memGroupEntryPromote(groupId, entryText) {
     _memToast((res && res.error) || t('memory.error_generic'), 'error');
     return;
   }
-  _memToast(t('memory.groups_saved'), 'success');
+  if (res.isCustom) {
+    _memToast(t('memory.group_promote_custom_done', { name: trimmed }), 'info');
+  } else {
+    _memToast(t('memory.groups_saved'), 'success');
+  }
   await _memRefreshGroupEditorData(groupId);
 }
 

@@ -19,6 +19,7 @@ import { app, ipcMain, dialog, BrowserWindow, type WebContents } from 'electron'
 import * as users from '../features/users';
 import * as chats from '../features/chats';
 import * as projects from '../features/projects';
+import * as spaces from '../features/spaces';
 import * as projectFiles from '../features/project_files';
 import * as projectTasks from '../features/project_tasks';
 import * as projectLibraryIndexer from '../features/project_library_indexer';
@@ -36,6 +37,7 @@ import * as autoTasks from '../features/auto_tasks';
 import { isAgentEnabled } from '../features/component_enabled';
 import * as skills from '../features/skills';
 import * as marketplace from '../features/marketplace';
+import * as notificationPermissions from '../features/notification_permissions';
 import * as marketplaceBiz from '../features/marketplace_biz';
 import * as marketplaceCache from '../features/marketplace_cache';
 import * as marketplaceReconcile from '../features/marketplace_reconcile';
@@ -920,6 +922,90 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const project = await projects.getProject(ctx.userId, projectId);
     if (!project) throw new Error('not_found');
     return { project };
+  },
+
+  // ── Workspaces（工作空间一期：空间 = 主界面 + 资源作用域限制）────────────
+  'spaces.list': async (_payload, ctx) => {
+    return { spaces: await spaces.listSpaces(ctx.userId) };
+  },
+
+  'spaces.create': async ({ name, template_id, icon } = {}, ctx) => {
+    const result = await spaces.createSpace(ctx.userId, { name, template_id, icon });
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { space: result.space };
+  },
+
+  'spaces.get': async ({ spaceId }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    const space = await spaces.getSpace(ctx.userId, spaceId);
+    if (!space) throw new Error('not_found');
+    return { space };
+  },
+
+  'spaces.update': async ({ spaceId, name, icon, template_id } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    const result = await spaces.updateSpace(ctx.userId, spaceId, { name, icon, template_id });
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { space: result.space };
+  },
+
+  'spaces.delete': async ({ spaceId }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    const result = await spaces.deleteSpace(ctx.userId, spaceId);
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { unbound_projects: result.unbound_projects };
+  },
+
+  'spaces.resources.add': async ({ spaceId, kind, id } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (kind !== 'skill' && kind !== 'agent') throw new Error('invalid kind');
+    if (typeof id !== 'string' || !id) throw new Error('invalid id');
+    const result = await spaces.addSpaceResource(ctx.userId, spaceId, kind, id);
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return result.resources;
+  },
+
+  'spaces.resources.remove': async ({ spaceId, kind, id } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (kind !== 'skill' && kind !== 'agent') throw new Error('invalid kind');
+    if (typeof id !== 'string' || !id) throw new Error('invalid id');
+    const result = await spaces.removeSpaceResource(ctx.userId, spaceId, kind, id);
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return result.resources;
+  },
+
+  'spaces.resources.pruneInvalid': async ({ spaceId } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    const [sAgents, sSkills] = await Promise.all([
+      agents.listAgents().catch(() => []),
+      skills.listSkills().catch(() => []),
+    ]);
+    const result = await spaces.pruneInvalidSpaceResources(ctx.userId, spaceId, {
+      skills: new Set(sSkills.map((s) => s.id)),
+      agents: new Set(sAgents.map((a) => a.agent_id)),
+    });
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { removed: result.removed };
+  },
+
+  // 模板选择器数据源（含 bundle 静态预览；内置模板 v1.1.0）
+  'spaces.templates.list': async (_payload, _ctx) => {
+    const templates = await import('../features/role_templates').then((m) => m.listRoleTemplates());
+    return { templates };
+  },
+
+  // ── 项目 ↔ 空间绑定（工作空间一期）──────────────────────────────────────
+  'projects.bindSpace': async ({ projectId, spaceId } = {}, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (spaceId && !safeId(spaceId)) throw new Error('invalid spaceId');
+    const result = await projects.bindSpace(ctx.userId, projectId, spaceId || '');
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { ok: true };
+  },
+
+  'projects.getSpace': async ({ projectId }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid projectId');
+    return { space: await projects.getSpace(ctx.userId, projectId) };
   },
 
   // User-authored per-project instructions (ORKAS.md). User-owned: edited only
@@ -2109,6 +2195,40 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (typeof entryText !== 'string') throw new Error('missing entryText');
     if (!fieldName || typeof fieldName !== 'string') throw new Error('missing fieldName');
     return personalOntologyTemplateFiles.promoteEntryToRef(ctx.userId, groupId, entryText, fieldName);
+  },
+
+  // ── 桥接注册：renderer 引用但漏注册的通道（纯转发到现成能力，
+  //  零逻辑变更；功能等同 renderer 期望语义）。──
+  'agents.builtin.delete': async ({ agent_id }, ctx) => {
+    if (!agent_id || typeof agent_id !== 'string') throw new Error('missing agent_id');
+    return marketplace.uninstallMarketplaceAgent(agent_id);
+  },
+
+  'skills.builtin.delete': async ({ id }, ctx) => {
+    if (!id || typeof id !== 'string') throw new Error('missing id');
+    return marketplace.uninstallMarketplaceSkill(id);
+  },
+
+  'projects.files.officeHtml': async ({ projectId, name }, ctx) => {
+    if (!projectId || typeof projectId !== 'string') throw new Error('missing projectId');
+    if (!name || typeof name !== 'string') throw new Error('missing name');
+    return projectFiles.readProjectOfficeHtml(ctx.userId, projectId, name);
+  },
+
+  'prefs.getTaskNotifications': async () => ({
+    ok: true,
+    enabled: appConfig.getTaskNotificationsEnabled(),
+  }),
+
+  'prefs.setTaskNotifications': async ({ enabled }) => {
+    appConfig.setTaskNotificationsEnabled(enabled === true);
+    return { ok: true, enabled: appConfig.getTaskNotificationsEnabled() };
+  },
+
+  'prefs.openTaskNotificationSettings': async () => {
+    const url = notificationPermissions.systemNotificationSettingsUrl(process.platform, app.getName());
+    if (url) void shell.openExternal(url);
+    return { ok: true };
   },
 
   'skills.list': async ({ force } = {}) => {

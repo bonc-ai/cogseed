@@ -256,14 +256,14 @@ describe('personal_ontology_groups › groups.md template line', () => {
       '- 文件: .personal_ontology_groups/abc123.md',
       '- 创建时间: 2026-08-03T00:00:00',
       '- 更新时间: 2026-08-03T00:00:00',
-      '- 模板: student@1.0.0',
+      '- 模板: student@0.2.0-review.1',
       '',
     ].join('\n');
     const parsed = groups.parseGroupsMarkdown(text);
     expect(parsed).toHaveLength(1);
     expect(parsed[0].template_id).toBe('student');
-    expect(parsed[0].template_version).toBe('1.0.0');
-    expect(groups.serializeGroupsMarkdown(parsed)).toContain('- 模板: student@1.0.0');
+    expect(parsed[0].template_version).toBe('0.2.0-review.1');
+    expect(groups.serializeGroupsMarkdown(parsed)).toContain('- 模板: student@0.2.0-review.1');
   });
 
   it('illegal template_ref is tolerated as no-template', async () => {
@@ -292,13 +292,16 @@ describe('personal_ontology_groups › installRoleTemplate', () => {
     const res = await groups.installRoleTemplate(UID, 'student');
     expect(res.ok).toBe(true);
     expect(res.already_installed).toBeUndefined();
-    expect(res.created).toHaveLength(4);
-    expect(res.created!.map((g) => g.title)).toEqual(['课程', '项目', '技能', '偏好']);
+    expect(res.created).toHaveLength(10);
+    expect(res.created!.map((g) => g.title)).toEqual([
+      '学习背景', '目标与节奏', '时间与约束', '掌握状态', '学术诚信',
+      '学期与课程', '任务与期限', '材料与掌握', '计划与记录', '协作关系',
+    ]);
 
     const listed = await groups.listGroups(UID);
-    expect(listed).toHaveLength(4);
+    expect(listed).toHaveLength(10);
     expect(listed.every((g) => g.template_id === 'student')).toBe(true);
-    expect(listed.every((g) => g.template_version === '1.0.0')).toBe(true);
+    expect(listed.every((g) => g.template_version === '0.2.0-review.1')).toBe(true);
     // Content files exist (empty)
     for (const g of listed) {
       expect(fs.existsSync(path.join(groupsDir(), `${g.group_id}.md`))).toBe(true);
@@ -312,7 +315,7 @@ describe('personal_ontology_groups › installRoleTemplate', () => {
     expect(res.ok).toBe(true);
     expect(res.already_installed).toBe(true);
     expect(res.created).toBeUndefined();
-    expect(await groups.listGroups(UID)).toHaveLength(4);
+    expect(await groups.listGroups(UID)).toHaveLength(10);
   });
 
   it('unknown template → error', async () => {
@@ -327,7 +330,7 @@ describe('personal_ontology_groups › listRoleTemplateStatus', () => {
   it('reports not-installed for every template before install', async () => {
     const groups = await loadModule();
     const status = await groups.listRoleTemplateStatus(UID);
-    expect(status).toHaveLength(3);
+    expect(status).toHaveLength(8);
     for (const s of status) {
       expect(s.installed).toBe(false);
       expect(s.installed_version).toBeUndefined();
@@ -341,18 +344,18 @@ describe('personal_ontology_groups › listRoleTemplateStatus', () => {
     const status = await groups.listRoleTemplateStatus(UID);
     const student = status.find((s) => s.template_id === 'student')!;
     expect(student.installed).toBe(true);
-    expect(student.installed_version).toBe('1.0.0');
-    expect(student.gaps).toHaveLength(4); // 4 个组，每组全空
-    const courseGroup = student.gaps.find((g) => g.title === '课程')!;
-    expect(courseGroup.empty_fields).toEqual(['课程名称', '学校', '专业', '入学年份']);
+    expect(student.installed_version).toBe('0.2.0-review.1');
+    expect(student.gaps).toHaveLength(10); // 10 个组，每组全空
+    const courseGroup = student.gaps.find((g) => g.title === '学习背景')!;
+    expect(courseGroup.empty_fields).toEqual(['教育阶段', '专业与学习方向']);
 
     // 填一个字段后，该组 gap 缩小
     const listed = await groups.listGroups(UID);
-    const courseMeta = listed.find((g) => g.title === '课程')!;
-    await groups.appendFieldValue(UID, courseMeta.group_id, '课程名称', '《知识工程》', '手动');
+    const courseMeta = listed.find((g) => g.title === '学习背景')!;
+    await groups.appendFieldValue(UID, courseMeta.group_id, '教育阶段', '硕士', '手动');
     const status2 = await groups.listRoleTemplateStatus(UID);
-    const courseGap2 = status2.find((s) => s.template_id === 'student')!.gaps.find((g) => g.title === '课程')!;
-    expect(courseGap2.empty_fields).toEqual(['学校', '专业', '入学年份']);
+    const courseGap2 = status2.find((s) => s.template_id === 'student')!.gaps.find((g) => g.title === '学习背景')!;
+    expect(courseGap2.empty_fields).toEqual(['专业与学习方向']);
   });
 });
 
@@ -360,11 +363,11 @@ describe('personal_ontology_groups › installRoleTemplate name-conflict detecti
   it('reports conflict_groups when a plain group shares the template/preset name', async () => {
     const groups = await loadModule();
     await groups.createGroup(UID, '学生'); // 与模板名同名
-    await groups.createGroup(UID, '课程'); // 与预设组名同名
+    await groups.createGroup(UID, '学习背景'); // 与预设组名同名
     const res = await groups.installRoleTemplate(UID, 'student');
     expect(res.ok).toBe(true);
     expect(res.conflict_groups).toHaveLength(2);
-    expect(res.conflict_groups!.map((g) => g.title).sort()).toEqual(['学生', '课程']);
+    expect(res.conflict_groups!.map((g) => g.title).sort()).toEqual(['学习背景', '学生']);
   });
 
   it('no conflict when existing groups have unrelated titles', async () => {

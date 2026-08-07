@@ -19,10 +19,11 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { userLocalRoot } from '../paths';
+import { userLocalRoot, userOntologyGroupsDir } from '../paths';
 import { writeTextAtomicSync, safeId, nowIso, readJsonSync } from '../storage';
 import { addEntry as addMemoryEntry } from './memory';
 import { listGroups } from './personal_ontology_groups';
+import { getRoleTemplate } from './role_templates';
 import { routeCandidateToField } from './personal_ontology_router';
 import {
   listTemplateFileCatalog,
@@ -31,6 +32,9 @@ import {
   appendFlowEntryToRef,
   buildContentRef,
   splitContentRef,
+  isTemplateFileText,
+  parseTemplateContent,
+  type TemplateSection,
 } from './personal_ontology_template_files';
 import { createLogger } from '../logger';
 
@@ -334,6 +338,30 @@ export async function listCandidates(uid: string): Promise<CandidatesData> {
 }
 
 /**
+ * 判断 groupId 是否模板文件组（阶段 D：台账带 template_id 且文件携带
+ * `> 模板:` 元信息行）。是 → 返回 template_id + 解析出的分节（含字段与流水）；
+ * 否 → null。模板文件是模板组的唯一事实来源；候选路由必须按分节寻址，
+ * 双区解析器会把分节式文件误当纯文本流水（fields 恒空），导致“有坑填坑”判断失真。
+ */
+async function resolveTemplateGroupSections(
+  uid: string,
+  groupId: string,
+): Promise<{ template_id: string; sections: TemplateSection[] } | null> {
+  try {
+    const groups = await listGroups(uid);
+    const meta = groups.find((g) => g.group_id === groupId);
+    if (!meta || !meta.template_id) return null;
+    const rel = meta.rel_path || `.personal_ontology_groups/${meta.template_id}.md`;
+    const abs = path.join(userOntologyGroupsDir(uid), rel.replace(/^\.personal_ontology_groups\//, ''));
+    const text = fs.readFileSync(abs, 'utf8');
+    if (!isTemplateFileText(text)) return null;
+    return { template_id: meta.template_id, sections: parseTemplateContent(text).sections };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 把一条候选实际写入所有请求的去向（全局记忆 + 0..N 个记忆分组）。不改候选池，
  * 纯粹的“写”这一步 —— 池的增删由调用方（confirmCandidate/confirmCandidates）
  * 负责，方便批量场景复用同一份落地逻辑。
@@ -367,6 +395,50 @@ async function writeCandidateToDestinations(
 
   if (groupIds.length) {
     for (const groupId of groupIds) {
+      // 模板文件组：候选没有分节概念，跨分节路由 —— targetField 命中该模板
+      // 某分节的字段 → 写那个分节；未命中 / 无 targetField → 回退首个分节
+      // 流水区（模板文件没有整组流水区；数据不丢，可后续升格）。
+      const tpl = await resolveTemplateGroupSections(uid, groupId);
+      if (tpl && tpl.sections.length) {
+        // 候选自动通道的白名单：只填模板 T-box 声明过的字段（“有坑填坑”）；
+        // 自定义字段只能由用户手动升格创建，候选不得顺手建坑。
+        let tboxFields: Set<string> | null = null;
+        try {
+          const template = getRoleTemplate(tpl.template_id);
+          if (template) {
+            tboxFields = new Set(template.preset_groups.flatMap((p) => p.fields.map((f) => f.name)));
+          }
+        } catch {
+          tboxFields = null;
+        }
+        if (dest.targetField) {
+          if (!result.fieldWrites) result.fieldWrites = [];
+          const isTbox = tboxFields === null || tboxFields.has(dest.targetField);
+          const sec = isTbox
+            ? tpl.sections.find((s) => Object.prototype.hasOwnProperty.call(s.fields, dest.targetField as string))
+            : undefined;
+          if (sec) {
+            const res = await appendFieldValueToRef(uid, `${groupId}::${sec.title}`, dest.targetField, text, source);
+            result.fieldWrites.push({
+              groupId,
+              fieldName: dest.targetField as string,
+              ok: res.ok,
+              ...(res.error ? { error: res.error } : {}),
+            });
+            if (res.ok) anySucceeded = true;
+            else log.warn('candidate template field write failed', { uid, candidateId: candidate.candidate_id, groupId, error: res.error });
+            continue; // 已尝试填坑，不再写流水区
+          }
+          result.fieldWrites.push({ groupId, fieldName: dest.targetField, ok: false, error: 'field not found' });
+        }
+        const res = await appendFlowEntryToRef(uid, `${groupId}::${tpl.sections[0].title}`, text);
+        if (!result.groups) result.groups = [];
+        result.groups.push({ groupId, ok: res.ok, ...(res.error ? { error: res.error } : {}) });
+        if (res.ok) anySucceeded = true;
+        else log.warn('candidate template flow write failed', { uid, candidateId: candidate.candidate_id, groupId, error: res.error });
+        continue;
+      }
+
       // 阶段 B/D 路由：有 targetField → 先判该去向有没有这个“坑”（模板分节
       // 字段或普通组实例字段，见 listFieldsByRef），有 → appendFieldValueToRef
       // （多值追加+[候选]/[智能]来源）；没有 → 回退流水区 appendFlowEntryToRef。

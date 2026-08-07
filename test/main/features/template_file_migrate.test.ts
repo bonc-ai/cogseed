@@ -66,8 +66,8 @@ describe('migrateLegacyTemplateGroups', () => {
   it('merges legacy template groups into one <template_id>.md (values + sources + flow preserved)', async () => {
     const tmpl = await loadTmpl();
     const groups = await loadGroups();
-    const gid1 = await seedLegacyTemplate(groups, '课程', [['课程名称', '高等数学', '智能'], ['学校', '北京大学', '手动']], ['参加了数学建模竞赛']);
-    await seedLegacyTemplate(groups, '项目', [['项目名称', '课程问答系统', '智能']], []);
+    const gid1 = await seedLegacyTemplate(groups, '学习背景', [['教育阶段', '硕士', '智能'], ['专业与学习方向', '人工智能', '手动']], ['参加了数学建模竞赛']);
+    await seedLegacyTemplate(groups, '学期与课程', [['课程清单', '机器学习', '智能']], []);
 
     const res = await tmpl.migrateLegacyTemplateGroups(UID);
     expect(res.ok).toBe(true);
@@ -76,17 +76,17 @@ describe('migrateLegacyTemplateGroups', () => {
 
     const fileText = fs.readFileSync(path.join(groupsDir(), 'student.md'), 'utf8');
     expect(fileText).toContain('# 学生（模板）');
-    expect(fileText).toContain('> 模板: student@1.0.0');
-    expect(fileText).toContain('## 课程');
-    expect(fileText).toContain('### 课程名称\n- 高等数学 [智能]');
-    expect(fileText).toContain('### 学校\n- 北京大学 [手动]');
-    expect(fileText).toContain('## 项目');
-    expect(fileText).toContain('### 项目名称\n- 课程问答系统 [智能]');
+    expect(fileText).toContain('> 模板: student@0.2.0-review.1');
+    expect(fileText).toContain('## 学习背景');
+    expect(fileText).toContain('### 教育阶段\n- 硕士 [智能]');
+    expect(fileText).toContain('### 专业与学习方向\n- 人工智能 [手动]');
+    expect(fileText).toContain('## 学期与课程');
+    expect(fileText).toContain('### 课程清单\n- 机器学习 [智能]');
     // 流水 + 未填空坑（种子全量）
     expect(fileText).toContain('参加了数学建模竞赛');
-    expect(fileText).toContain('### 专业');
-    expect(fileText).toContain('### 入学年份');
-    expect(fileText).toContain('### 技能');
+    expect(fileText).toContain('### 学习目标');
+    expect(fileText).toContain('### 作业');
+    expect(fileText).toContain('### 教师与同伴');
   });
 
   it('keeps custom fields not declared in the seed, into the matching section', async () => {
