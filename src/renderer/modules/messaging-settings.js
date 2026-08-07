@@ -9,6 +9,7 @@
     selectedChannel: 'feishu',
     selectedInstanceId: '',
     openingChannel: '',
+    telegramCreatingNew: false,
     notice: '',
     noticeKind: '',
     loading: false,
@@ -37,7 +38,7 @@
       popup: null,
       starting: false,
       cancelling: false,
-      error: '',
+      revision: 0,
       timer: null,
     },
   };
@@ -205,6 +206,10 @@
 
   function qrStateLabel(statusState) {
     return labelFor(QR_STATE_KEYS[statusState] || QR_STATE_KEYS.starting, statusState || 'starting');
+  }
+
+  function wecomStatusLabel(statusState, errorCode) {
+    return labelFor(`messaging.wecom_qr.status_${statusState}`, errorCode || statusState);
   }
 
   function formatExpiry(value) {
@@ -515,9 +520,26 @@
       row.appendChild(unbind);
       row.addEventListener('click', () => {
         state.selectedInstanceId = instance.id;
+        state.telegramCreatingNew = false;
         renderCurrent();
       });
       list.appendChild(row);
+    }
+    if (channel.group === 'open' && channel.platform !== 'wecom') {
+      const add = el('button', 'btn messaging-secondary-button messaging-instance-add', labelFor('messaging.instance.add', ''));
+      add.type = 'button';
+      add.disabled = state.updating || qrIsPending();
+      add.appendChild(icon('plus', 'messaging-action-icon'));
+      add.addEventListener('click', () => {
+        if (channel.platform === 'telegram') {
+          state.telegramCreatingNew = true;
+          state.selectedInstanceId = '';
+          renderCurrent();
+        } else {
+          void startQrForChannel(channel);
+        }
+      });
+      list.appendChild(add);
     }
     section.appendChild(list);
     return section;
@@ -656,14 +678,16 @@
         if (!created || !created.instance || typeof created.instance.id !== 'string') {
           throw new Error(created?.error || labelFor('messaging.update_failed', ''));
         }
+        let enabled;
         try {
-          await invoke('messaging.set_enabled', { instanceId: created.instance.id, enabled: true });
+          enabled = await invoke('messaging.set_enabled', { instanceId: created.instance.id, enabled: true });
         } catch (error) {
           try { await invoke('messaging.delete', { instanceId: created.instance.id }); } catch (_) { /* rollback best effort */ }
           throw new Error(labelFor('messaging.telegram.enable_failed', ''));
         }
-        state.instances = [...state.instances, created.instance];
-        state.selectedInstanceId = created.instance.id;
+        state.instances = [...state.instances, enabled.instance || created.instance];
+        state.selectedInstanceId = (enabled.instance && enabled.instance.id) || created.instance.id;
+        state.telegramCreatingNew = false;
         setNotice(labelFor('messaging.link_success', ''), 'success');
       } else {
         const result = await invoke('messaging.update', {
@@ -689,7 +713,9 @@
     const wrapper = el('div', 'messaging-panel-body');
     wrapper.appendChild(renderInstanceList(channel));
     const instances = instancesForChannel(channel);
-    const instance = instances.find((item) => item.id === state.selectedInstanceId) || instances[0] || null;
+    const instance = state.telegramCreatingNew
+      ? null
+      : instances.find((item) => item.id === state.selectedInstanceId) || instances[0] || null;
     const config = card('messaging.telegram.token_label', '', 'messaging-telegram-card');
     const tokenInput = document.createElement('input');
     tokenInput.type = 'password';
@@ -714,6 +740,7 @@
       const deleteButton = el('button', 'btn btn-danger messaging-delete-button', labelFor('messaging.delete', ''));
       deleteButton.type = 'button';
       deleteButton.disabled = state.updating;
+      deleteButton.appendChild(icon('trash', 'messaging-action-icon'));
       deleteButton.addEventListener('click', () => void deleteInstance(instance, deleteButton));
       deletion.appendChild(deleteButton);
       wrapper.appendChild(deletion);
@@ -752,16 +779,22 @@
     if (typeof window.removeEventListener === 'function') {
       window.removeEventListener('message', handleWecomAuthMessage);
     }
-    if (flowId && state.wecom.state !== 'completed' && state.wecom.state !== 'cancelled') {
-      try { await invoke('messaging.wecom_qr.cancel', { flowId }); } catch (_) { /* best effort */ }
+    const revision = ++state.wecom.revision;
+    state.wecom.cancelling = true;
+    try {
+      if (flowId && state.wecom.state !== 'completed' && state.wecom.state !== 'cancelled') {
+        try { await invoke('messaging.wecom_qr.cancel', { flowId }); } catch (_) { /* best effort */ }
+      }
+    } finally {
+      if (state.wecom.revision === revision) {
+        state.wecom.flowId = '';
+        state.wecom.state = '';
+        state.wecom.authUrl = '';
+        state.wecom.starting = false;
+        state.wecom.cancelling = false;
+        if (opts.render !== false) renderCurrent();
+      }
     }
-    state.wecom.flowId = '';
-    state.wecom.state = '';
-    state.wecom.authUrl = '';
-    state.wecom.starting = false;
-    state.wecom.cancelling = false;
-    state.wecom.error = '';
-    if (opts.render !== false) renderCurrent();
   }
 
   function handleWecomAuthMessage(event) {
@@ -786,11 +819,14 @@
 
   async function pollWecomStatus(flowId) {
     if (!flowId || state.wecom.flowId !== flowId || state.wecom.cancelling) return;
+    const revision = state.wecom.revision;
     try {
       const result = await invoke('messaging.wecom_qr.status', { flowId });
+      if (state.wecom.revision !== revision) return;
       const registration = result && result.registration ? result.registration : result;
       const nextState = typeof registration.state === 'string' ? registration.state : 'failed';
       if (nextState === 'completed' && registration.instance && registration.instance.id) {
+        state.wecom.state = 'completed';
         state.instances = state.instances.some((candidate) => candidate.id === registration.instance.id)
           ? state.instances.map((candidate) => candidate.id === registration.instance.id ? registration.instance : candidate)
           : [...state.instances, registration.instance];
@@ -801,7 +837,7 @@
         return;
       }
       if (nextState === 'expired' || nextState === 'cancelled' || nextState === 'failed') {
-        setNotice(registration.errorCode || nextState, 'error');
+        setNotice(wecomStatusLabel(nextState, registration.errorCode), 'error');
         await cancelWecomFlow({ silent: true, render: false });
         renderCurrent();
         return;
@@ -813,10 +849,13 @@
   }
 
   async function completeWecomFlow(wecomBotId, wecomBotSecret) {
-    if (!state.wecom.flowId || state.wecom.state === 'completed' || state.wecom.cancelling) return;
+    if (!state.wecom.flowId || state.wecom.state === 'completed' || state.wecom.state === 'activating' || state.wecom.cancelling) return;
     const flowId = state.wecom.flowId;
+    const revision = state.wecom.revision;
+    state.wecom.state = 'activating';
     try {
       const result = await invoke('messaging.wecom_qr.complete', { flowId, wecomBotId, wecomBotSecret });
+      if (state.wecom.revision !== revision) return;
       const registration = result && result.registration ? result.registration : result;
       if (registration.state === 'completed' && registration.instance && registration.instance.id) {
         state.instances = state.instances.some((candidate) => candidate.id === registration.instance.id)
@@ -830,11 +869,12 @@
         return;
       }
       if (registration.state === 'failed' || registration.state === 'expired' || registration.state === 'denied') {
-        setNotice(registration.errorCode || registration.state, 'error');
+        setNotice(wecomStatusLabel(registration.state, registration.errorCode), 'error');
         await cancelWecomFlow({ silent: true, render: false });
         renderCurrent();
       }
     } catch (error) {
+      if (state.wecom.revision !== revision) return;
       setNotice(errorMessage(error, labelFor('messaging.wecom_qr.invalid_message', '')), 'error');
     }
   }
@@ -858,7 +898,9 @@
       state.wecom.starting = false;
       const popup = window.open(authUrl, 'wecom_auth', 'width=720,height=640,popup=yes');
       if (!popup) {
-        setNotice(labelFor('messaging.wecom_qr.invalid_message', ''), 'error');
+        setNotice(labelFor('messaging.wecom_qr.popup_blocked', ''), 'error');
+        await cancelWecomFlow({ silent: true, render: false });
+        renderCurrent();
         return;
       }
       state.wecom.popup = popup;
@@ -891,9 +933,6 @@
       else void startWecomFlow();
     });
     config.appendChild(scan);
-    if (state.wecom.error) {
-      config.appendChild(el('p', 'messaging-wecom-error', state.wecom.error));
-    }
     wrapper.appendChild(config);
     const instances = instancesForChannel(channel);
     if (instances.length) {
@@ -902,6 +941,7 @@
       const deleteButton = el('button', 'btn btn-danger messaging-delete-button', labelFor('messaging.delete', ''));
       deleteButton.type = 'button';
       deleteButton.disabled = state.updating;
+      deleteButton.appendChild(icon('trash', 'messaging-action-icon'));
       deleteButton.addEventListener('click', () => void deleteInstance(instance, deleteButton));
       deletion.appendChild(deleteButton);
       wrapper.appendChild(deletion);
@@ -985,6 +1025,7 @@
     await cancelWecomFlow({ silent: true, render: false });
     state.selectedChannel = key;
     state.selectedInstanceId = '';
+    state.telegramCreatingNew = false;
     setNotice('', '');
     renderCurrent();
   }
