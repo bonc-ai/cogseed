@@ -425,6 +425,14 @@ export const userExpenseWorkbenchComponentDataDir = (uid: string) =>
 export const userExpenseWorkbenchConfirmationsDir = (uid: string) =>
   path.join(userExpenseWorkbenchComponentDataDir(uid), 'host-confirmations');
 
+// Messaging gateway state is deliberately machine-private. Platform account ids,
+// conversation bindings, delivery receipts, and encrypted bot credentials must not
+// enter cloud sync or the user-visible conversation/session identifiers.
+export const userMessagingConfigFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging.json');
+export const userMessagingBindingsFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-bindings.json');
+export const userMessagingInboundLedgerFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-inbound.json');
+export const userMessagingDeliveryLedgerFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-delivery.json');
+
 // Local search index (derived data, self-healing via reconcile, never synced).
 // Only the main conversation + knowledge base get a persistent inverted
 // index; agents / skills themselves are searched in-memory via listAgents /

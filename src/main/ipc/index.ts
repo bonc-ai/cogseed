@@ -73,6 +73,7 @@ import {
 } from './expense_workbench';
 import { invokeHandlers as qualityHandlers } from './quality';
 import { invokeHandlers as connectorsHandlers } from './connectors';
+import { invokeHandlers as messagingHandlers } from './messaging';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as cognitionHandlers } from './cognition';
 import { safeId } from '../storage';
@@ -3416,6 +3417,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // Connectors (MCP-based). User-installed MCP servers expose tools to commander + selected
   // agents. No Server dependency, so kept in the open-source build.
   ...connectorsHandlers,
+
+  // Local two-way messaging gateway. Platform credentials never cross this
+  // handler table; the dedicated IPC module returns metadata-only DTOs.
+  ...messagingHandlers,
 
   // Cross-session memory UI — view/edit/import/export over features/memory.ts.
   ...memoryHandlers,

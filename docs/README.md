@@ -94,7 +94,7 @@
 - 张照航：协议层由记录型改造为控制器型。
 - 冯静雯：KSTAR Skill / MCP 统一到 Engine API，优化 DeltaR。
 - 牛保康：报销智能体本地 Agent。
-- 吴嘉宇：TaskAgent 接入 CogSeed。
+- 吴嘉宇：TaskAgent 接入 Mate Agent。
 
 已完成重大变更：KSTAR Engine 迁移（删 `kstar-runtime.ts` / `kstar-engine.ts`）；Engine 打包 extraResources；Hermes 版本探测 fallback；`paths.ts` 新增 `metaSkillEnginePackageDir()`。
 
@@ -213,3 +213,7 @@ npm run typecheck
 `docs/` 顶层还有若干独立工作文档（`P3394_Team2_RouteB_*`、`Mate Agent 开发实施说明.*`、
 `companion-repro-demo-runbook.md`、`research/`），不属于本次 `docs/superpowers/` 收敛范围，保持原样。
 后续如需扩展新功能，应优先更新本页索引，再补对应确定件，避免文稿再次分散。
+
+### 飞书消息通道后续要求
+
+飞书基础双向收发能力完成并通过定向验收后，须在认知沉淀流程成功落库后向对应飞书会话发送通知。通知只能作为沉淀成功的后置结果；沉淀失败、跳过或未产出可持久化认知时不得发送，以免把未完成状态误报为完成。

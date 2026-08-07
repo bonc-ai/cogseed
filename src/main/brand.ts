@@ -20,6 +20,7 @@ export const RUNTIME_VARIANTS = Object.freeze([
   'expense',
   'integration',
   'optimization',
+  'messaging',
 ] as const);
 
 export type RuntimeVariant = typeof RUNTIME_VARIANTS[number];
@@ -60,6 +61,11 @@ const SOURCE_IDENTITIES: Readonly<Record<RuntimeVariant, RuntimeIdentity>> = Obj
     variant: 'optimization',
     appName: `${APP_BRAND.appName} [Optimization]`,
     appId: `${APP_BRAND.appId}.source.optimization`,
+  }),
+  messaging: Object.freeze({
+    variant: 'messaging',
+    appName: `${APP_BRAND.appName} [Messaging]`,
+    appId: `${APP_BRAND.appId}.source.messaging`,
     protocolOwner: false,
   }),
 });
