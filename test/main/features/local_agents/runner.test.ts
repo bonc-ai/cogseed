@@ -433,11 +433,13 @@ describe('local_agents/runner', () => {
     try {
       mockDetect.mockResolvedValue({ type: 'claude', available: true, path: '/fake/claude', version: '2.0.0' });
       let onEventCb: ((e: any) => void) | null = null;
+      let backendLastEventAt: (() => number) | undefined;
       let resolveBackend!: () => void;
       let markBackendReady!: () => void;
       const backendReady = new Promise<void>((resolve) => { markBackendReady = resolve; });
-      mockBackendImpl = async ({ onEvent }) => {
+      mockBackendImpl = async ({ onEvent, lastEventAt }) => {
         onEventCb = onEvent;
+        backendLastEventAt = lastEventAt;
         onEvent({ type: 'process-info', pid: 42, cwd: '/x', cmd: 'claude', args: [] });
         markBackendReady();
         await new Promise<void>(resolve => { resolveBackend = resolve; });
@@ -455,21 +457,26 @@ describe('local_agents/runner', () => {
 
       await backendReady;
       expect(onEventCb).not.toBeNull();
+      expect(backendLastEventAt).toBeTypeOf('function');
+      const backendActivityAt = backendLastEventAt!();
 
       // Threshold=120ms, tick = max(50, 120/3=40) → 50ms. Wait ~250ms:
       // at least 2 idle pulses should fire after the 120ms quiet period.
       await vi.advanceTimersByTimeAsync(250);
       const idleCount1 = events.filter(e => e.type === 'idle').length;
       expect(idleCount1).toBeGreaterThanOrEqual(1);
+      expect(backendLastEventAt!()).toBe(backendActivityAt);
 
       // Continue waiting → steady drumbeat (more idle events).
       await vi.advanceTimersByTimeAsync(150);
       const idleCount2 = events.filter(e => e.type === 'idle').length;
       expect(idleCount2).toBeGreaterThan(idleCount1);
+      expect(backendLastEventAt!()).toBe(backendActivityAt);
 
       // Backend emits a real event — deadline should reset, so no new
       // idle pulse during the next sub-threshold window.
       onEventCb!({ type: 'text-delta', text: 'still here' });
+      expect(backendLastEventAt!()).toBeGreaterThan(backendActivityAt);
       const beforeReset = events.filter(e => e.type === 'idle').length;
       await vi.advanceTimersByTimeAsync(80);  // less than 120ms threshold
       const afterReset = events.filter(e => e.type === 'idle').length;

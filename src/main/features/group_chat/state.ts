@@ -30,6 +30,7 @@ import {
   genId12, nowIso, readJson, writeJson, safeId,
 } from '../../storage';
 import { createLogger } from '../../logger';
+import { logErrorRef, maskId } from '../../util/log-redact';
 
 const log = createLogger('group_chat.state');
 
@@ -80,6 +81,46 @@ export interface OrchestrationLedger {
   updated_at: string;
   interrupted_at?: string;
   interrupt_message?: string;
+}
+
+export type OrchestrationLedgerInput = Omit<
+  OrchestrationLedger,
+  'version' | 'id' | 'kind' | 'status' | 'created_at' | 'updated_at'
+> & Partial<
+  Pick<OrchestrationLedger, 'id' | 'status' | 'created_at'>
+>;
+
+export interface HandoffStateGuard {
+  signal?: AbortSignal;
+  isTerminating?: () => boolean;
+}
+
+export interface HandoffStateRollbackToken {
+  prior: {
+    active_recipient?: string;
+    orchestration_ledger?: OrchestrationLedger;
+  };
+  committed: {
+    active_recipient?: string;
+    ledger_id?: string;
+  };
+}
+
+export interface CommitHandoffStateInput {
+  recipient_id: string;
+  ledger?: OrchestrationLedgerInput;
+  guard?: HandoffStateGuard;
+}
+
+export interface CommitHandoffStateResult {
+  state: StateFile;
+  rollbackToken: HandoffStateRollbackToken;
+}
+
+export interface RollbackHandoffStateResult {
+  state: StateFile;
+  floor_restored: boolean;
+  ledger_restored: boolean;
 }
 
 export interface StateFile {
@@ -202,6 +243,81 @@ function _sanitizeOrchestrationLedger(v: unknown): OrchestrationLedger | undefin
   };
 }
 
+function _normalizeActiveRecipient(recipientId: string): string | undefined {
+  const normalized = String(recipientId || '').trim();
+  return normalized && normalized !== COMMANDER_ID && normalized !== USER_ID
+    ? normalized
+    : undefined;
+}
+
+function _buildOrchestrationLedger(
+  ledger: OrchestrationLedgerInput,
+  now = nowIso(),
+): OrchestrationLedger {
+  return {
+    version: 1,
+    id: ledger.id || genId12(),
+    kind: 'suspended_orchestration',
+    status: ledger.status || 'waiting_for_agent',
+    blocked_on: ledger.blocked_on,
+    ...(ledger.source_tool ? { source_tool: ledger.source_tool } : {}),
+    owner_agent_id: ledger.owner_agent_id,
+    ...(ledger.form_id ? { form_id: ledger.form_id } : {}),
+    ...(ledger.owner_agent_name ? { owner_agent_name: ledger.owner_agent_name } : {}),
+    user_goal: _cleanLedgerText(ledger.user_goal),
+    handoff_message: _cleanLedgerText(ledger.handoff_message),
+    resume_instruction: _cleanLedgerText(ledger.resume_instruction),
+    created_at: ledger.created_at || now,
+    updated_at: now,
+  };
+}
+
+function _copyLedger(
+  ledger: OrchestrationLedger | undefined,
+): OrchestrationLedger | undefined {
+  return ledger ? { ...ledger } : undefined;
+}
+
+function _handoffGuardCancelled(
+  state: StateFile | null,
+  guard: HandoffStateGuard | undefined,
+): boolean {
+  return !!(
+    guard?.signal?.aborted ||
+    guard?.isTerminating?.() ||
+    state?.status === 'aborted'
+  );
+}
+
+function _handoffStateError(
+  message:
+    | 'handoff state commit cancelled'
+    | 'handoff state commit invariant'
+    | 'handoff state commit rollback invariant',
+  rollbackToken?: HandoffStateRollbackToken,
+): Error {
+  return Object.assign(new Error(message), {
+    code:
+      message === 'handoff state commit cancelled'
+        ? 'E_HANDOFF_STATE_CANCELLED'
+        : message === 'handoff state commit invariant'
+          ? 'E_HANDOFF_STATE_COMMIT_INVARIANT'
+          : 'E_HANDOFF_STATE_ROLLBACK_INVARIANT',
+    ...(rollbackToken ? { rollbackToken } : {}),
+  });
+}
+
+type HandoffStateWriteBoundary = 'before_write' | 'after_write' | 'before_restore';
+let _handoffStateWriteBoundaryHookForTest:
+  | ((boundary: HandoffStateWriteBoundary) => void | Promise<void>)
+  | null = null;
+
+export function _setHandoffStateWriteBoundaryHookForTest(
+  hook: ((boundary: HandoffStateWriteBoundary) => void | Promise<void>) | null,
+): void {
+  _handoffStateWriteBoundaryHookForTest = hook;
+}
+
 // ── session_id builders ──────────────────────────────────────────────────
 // Format: `<kind>-<tail>` (CLAUDE.md §5). User scoping comes from the path root
 // (`<activeUid>/{cloud,local}/sessions/<sid>.jsonl`), not from the session_id.
@@ -255,8 +371,13 @@ export async function readMembers(
     if (data && typeof data === 'object' && Array.isArray(data.actors)) {
       return { version: 1, actors: data.actors as Actor[] };
     }
-  } catch (err) {
-    log.warn(`read members failed user=${uid} cid=${cid}: ${(err as Error).message}`);
+  } catch {
+    log.warn('members read failed', {
+      user_id: maskId(uid),
+      cid: maskId(cid),
+      failure_code: 'members_read_failed',
+      error: logErrorRef(new Error('Members read failed.')),
+    });
   }
   return { version: 1, actors: [] };
 }
@@ -293,7 +414,12 @@ export async function addMember(
     const next: Actor = { ...actor, joined_at: nowIso() };
     members.actors.push(next);
     await writeMembers(uid, cid, members, projectIdHint);
-    log.info(`member-joined user=${uid} cid=${cid} actor=${actor.id} kind=${actor.kind}${actor.name ? ` name=${actor.name}` : ''}`);
+    log.info('member joined', {
+      user_id: maskId(uid),
+      cid: maskId(cid),
+      actor_id: maskId(actor.id),
+      kind: actor.kind,
+    });
     return true;
   });
 }
@@ -351,8 +477,14 @@ export async function renameAgentInMembers(
         if (cid && safeId(cid)) cids.add(cid);
       }
     }
-  } catch (err) {
-    log.warn(`read conv index failed user=${uid}: ${(err as Error).message}`);
+  } catch {
+    log.warn('member rename index read failed', {
+      user_id: maskId(uid),
+      actor_id: maskId(agentId),
+      kind: 'agent',
+      failure_code: 'member_rename_index_read_failed',
+      error: logErrorRef(new Error('Member rename index read failed.')),
+    });
     return 0;
   }
   let touched = 0;
@@ -368,11 +500,25 @@ export async function renameAgentInMembers(
     try {
       await writeMembers(uid, cid, m);
       touched += 1;
-    } catch (err) {
-      log.warn(`write members failed user=${uid} cid=${cid}: ${(err as Error).message}`);
+    } catch {
+      log.warn('member rename write failed', {
+        user_id: maskId(uid),
+        cid: maskId(cid),
+        actor_id: maskId(agentId),
+        kind: 'agent',
+        failure_code: 'member_rename_write_failed',
+        error: logErrorRef(new Error('Member rename write failed.')),
+      });
     }
   }
-  if (touched > 0) log.info(`renamed agent=${agentId} → "${newName}" in ${touched} conv(s) user=${uid}`);
+  if (touched > 0) {
+    log.info('member rename completed', {
+      user_id: maskId(uid),
+      actor_id: maskId(agentId),
+      kind: 'agent',
+      count: touched,
+    });
+  }
   return touched;
 }
 
@@ -608,8 +754,7 @@ export async function transitionStatus(
 export async function setActiveRecipient(uid: string, cid: string, recipientId: string): Promise<StateFile> {
   return _stateLock(uid, cid).runExclusive(async () => {
     const s = await readState(uid, cid);
-    const next = (recipientId && recipientId !== COMMANDER_ID && recipientId !== USER_ID)
-      ? recipientId : '';
+    const next = _normalizeActiveRecipient(recipientId);
     if (next) s.active_recipient = next;
     else delete s.active_recipient;
     s.last_active_at = nowIso();
@@ -618,31 +763,130 @@ export async function setActiveRecipient(uid: string, cid: string, recipientId: 
   });
 }
 
+/** Atomically finalize the hand-off floor and, when supplied, its resume ledger.
+ * The rollback token is process-memory only and must never be logged or persisted. */
+export async function commitHandoffState(
+  userId: string,
+  cid: string,
+  input: CommitHandoffStateInput,
+): Promise<CommitHandoffStateResult> {
+  if (_handoffGuardCancelled(null, input.guard)) {
+    throw _handoffStateError('handoff state commit cancelled');
+  }
+  return _stateLock(userId, cid).runExclusive(async () => {
+    const state = await readState(userId, cid);
+    if (_handoffGuardCancelled(state, input.guard)) {
+      throw _handoffStateError('handoff state commit cancelled');
+    }
+    const snapshot: StateFile = {
+      ...state,
+      in_flight: [...state.in_flight],
+      orchestration_ledger: _copyLedger(state.orchestration_ledger),
+    };
+    const nextRecipient = _normalizeActiveRecipient(input.recipient_id);
+    const nextLedger = input.ledger
+      ? _buildOrchestrationLedger(input.ledger)
+      : undefined;
+    const rollbackToken: HandoffStateRollbackToken = {
+      prior: {
+        ...(snapshot.active_recipient
+          ? { active_recipient: snapshot.active_recipient }
+          : {}),
+        ...(snapshot.orchestration_ledger
+          ? { orchestration_ledger: snapshot.orchestration_ledger }
+          : {}),
+      },
+      committed: {
+        ...(nextRecipient ? { active_recipient: nextRecipient } : {}),
+        ...(nextLedger ? { ledger_id: nextLedger.id } : {}),
+      },
+    };
+    if (nextRecipient) state.active_recipient = nextRecipient;
+    else delete state.active_recipient;
+    if (nextLedger) state.orchestration_ledger = nextLedger;
+    state.last_active_at = nowIso();
+    if (_handoffGuardCancelled(state, input.guard)) {
+      throw _handoffStateError('handoff state commit cancelled');
+    }
+    await _handoffStateWriteBoundaryHookForTest?.('before_write');
+    try {
+      await writeStateRaw(userId, cid, state);
+    } catch {
+      throw _handoffStateError('handoff state commit invariant');
+    }
+    await _handoffStateWriteBoundaryHookForTest?.('after_write');
+    if (_handoffGuardCancelled(state, input.guard)) {
+      try {
+        await _handoffStateWriteBoundaryHookForTest?.('before_restore');
+        await writeStateRaw(userId, cid, snapshot);
+      } catch {
+        throw _handoffStateError(
+          'handoff state commit rollback invariant',
+          rollbackToken,
+        );
+      }
+      throw _handoffStateError('handoff state commit cancelled');
+    }
+    return { state, rollbackToken };
+  });
+}
+
+/** Compare-and-swap rollback for a previously committed hand-off. Each field is
+ * restored only while it still carries this hand-off's committed identity. */
+export async function rollbackHandoffState(
+  userId: string,
+  cid: string,
+  token: HandoffStateRollbackToken,
+): Promise<RollbackHandoffStateResult> {
+  return _stateLock(userId, cid).runExclusive(async () => {
+    const state = await readState(userId, cid);
+    const currentFloor = _normalizeActiveRecipient(state.active_recipient || '');
+    const floorMatches = currentFloor === token.committed.active_recipient;
+    const ledgerMatches = !!(
+      token.committed.ledger_id &&
+      state.orchestration_ledger?.id === token.committed.ledger_id
+    );
+    if (floorMatches) {
+      if (token.prior.active_recipient) {
+        state.active_recipient = token.prior.active_recipient;
+      } else {
+        delete state.active_recipient;
+      }
+    }
+    if (ledgerMatches) {
+      if (token.prior.orchestration_ledger) {
+        state.orchestration_ledger = _copyLedger(
+          token.prior.orchestration_ledger,
+        );
+      } else {
+        delete state.orchestration_ledger;
+      }
+    }
+    if (floorMatches || ledgerMatches) {
+      state.last_active_at = nowIso();
+      try {
+        await writeStateRaw(userId, cid, state);
+      } catch {
+        throw new Error('handoff state rollback invariant');
+      }
+    }
+    return {
+      state,
+      floor_restored: floorMatches,
+      ledger_restored: ledgerMatches,
+    };
+  });
+}
+
 export async function setOrchestrationLedger(
   uid: string,
   cid: string,
-  ledger: Omit<OrchestrationLedger, 'version' | 'id' | 'kind' | 'status' | 'created_at' | 'updated_at'>
-    & Partial<Pick<OrchestrationLedger, 'id' | 'status' | 'created_at'>>,
+  ledger: OrchestrationLedgerInput,
 ): Promise<StateFile> {
   return _stateLock(uid, cid).runExclusive(async () => {
     const s = await readState(uid, cid);
     const now = nowIso();
-    s.orchestration_ledger = {
-      version: 1,
-      id: ledger.id || genId12(),
-      kind: 'suspended_orchestration',
-      status: ledger.status || 'waiting_for_agent',
-      blocked_on: ledger.blocked_on,
-      ...(ledger.source_tool ? { source_tool: ledger.source_tool } : {}),
-      owner_agent_id: ledger.owner_agent_id,
-      ...(ledger.form_id ? { form_id: ledger.form_id } : {}),
-      ...(ledger.owner_agent_name ? { owner_agent_name: ledger.owner_agent_name } : {}),
-      user_goal: _cleanLedgerText(ledger.user_goal),
-      handoff_message: _cleanLedgerText(ledger.handoff_message),
-      resume_instruction: _cleanLedgerText(ledger.resume_instruction),
-      created_at: ledger.created_at || now,
-      updated_at: now,
-    };
+    s.orchestration_ledger = _buildOrchestrationLedger(ledger, now);
     s.last_active_at = now;
     await writeStateRaw(uid, cid, s);
     return s;

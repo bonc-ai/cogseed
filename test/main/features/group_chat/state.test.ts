@@ -3,6 +3,34 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+const loggerMocks = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock('../../../../src/main/logger', () => ({
+  createLogger: () => loggerMocks,
+}));
+
+const storageMocks = vi.hoisted(() => ({
+  readJson: vi.fn(),
+  writeJson: vi.fn(),
+}));
+
+vi.mock('../../../../src/main/storage', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../../../src/main/storage')>();
+  return {
+    ...actual,
+    readJson: (...args: Parameters<typeof actual.readJson>) =>
+      storageMocks.readJson(...args),
+    writeJson: (...args: Parameters<typeof actual.writeJson>) =>
+      storageMocks.writeJson(...args),
+  };
+});
+
 let tmpDir: string;
 let prevWs: string | undefined;
 const TEST_UID = 'u1';
@@ -13,6 +41,17 @@ beforeEach(async () => {
   prevWs = process.env.ORKAS_WORKSPACE_ROOT;
   process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
+  loggerMocks.debug.mockClear();
+  loggerMocks.info.mockClear();
+  loggerMocks.warn.mockClear();
+  loggerMocks.error.mockClear();
+  storageMocks.readJson.mockReset();
+  storageMocks.writeJson.mockReset();
+  const storage = await vi.importActual<
+    typeof import('../../../../src/main/storage')
+  >('../../../../src/main/storage');
+  storageMocks.readJson.mockImplementation(storage.readJson);
+  storageMocks.writeJson.mockImplementation(storage.writeJson);
   const users = await import('../../../../src/main/features/users');
   users.activateUser(TEST_UID);
 });
@@ -38,6 +77,215 @@ describe('group_chat state › sessionId builders', () => {
     expect(s.actorSessionId('cidA', { kind: 'agent', id: 'agentX', joined_at: 't' }))
       .toBe('gmember-cidA-agentX');
     expect(() => s.actorSessionId('cidA', { kind: 'user', id: 'user', joined_at: 't' })).toThrow();
+  });
+});
+
+function serializedLogs(): string {
+  return JSON.stringify([
+    loggerMocks.debug.mock.calls,
+    loggerMocks.info.mock.calls,
+    loggerMocks.warn.mock.calls,
+    loggerMocks.error.mock.calls,
+  ]);
+}
+
+function expectLogsExclude(...sentinels: string[]): void {
+  const logs = serializedLogs();
+  for (const sentinel of sentinels) expect(logs).not.toContain(sentinel);
+}
+
+describe('group_chat state › membership log privacy', () => {
+  const uid = 'privacy-user-raw-123456';
+  const cid = 'privacy-cid-raw-654321';
+  const actorId = 'privacy-agent-raw-abcdef';
+  const actorName = 'SECRET_AGENT_DISPLAY_NAME';
+  const secretError =
+    'SECRET_MEMBERSHIP_ERROR /Users/private/member-token.json token=raw';
+
+  async function activatePrivacyUser(): Promise<void> {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser(uid);
+  }
+
+  async function seedConv(actors: any[]): Promise<void> {
+    const paths = await import('../../../../src/main/paths');
+    const dir = path.join(paths.userChatsDir(uid), cid);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'members.json'),
+      JSON.stringify({ version: 1, actors }),
+    );
+  }
+
+  async function seedIndex(): Promise<void> {
+    const paths = await import('../../../../src/main/paths');
+    const dir = paths.userChatsDir(uid);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '_index.json'),
+      JSON.stringify({ items: [{ conversation_id: cid }] }),
+    );
+  }
+
+  it('logs member join with masked ids and kind only', async () => {
+    await activatePrivacyUser();
+    const s = await import('../../../../src/main/features/group_chat/state');
+    const { maskId } = await import('../../../../src/main/util/log-redact');
+
+    await s.addMember(uid, cid, {
+      kind: 'agent',
+      id: actorId,
+      name: actorName,
+    });
+
+    expectLogsExclude(uid, cid, actorId, actorName);
+    expect(loggerMocks.info).toHaveBeenCalledWith('member joined', {
+      user_id: maskId(uid),
+      cid: maskId(cid),
+      actor_id: maskId(actorId),
+      kind: 'agent',
+    });
+  });
+
+  it('redacts readMembers failures and emits a stable failure code', async () => {
+    await activatePrivacyUser();
+    await seedConv([]);
+    const s = await import('../../../../src/main/features/group_chat/state');
+    const { maskId } = await import('../../../../src/main/util/log-redact');
+    storageMocks.readJson.mockRejectedValueOnce(new Error(secretError));
+
+    await expect(s.readMembers(uid, cid)).resolves.toEqual({
+      version: 1,
+      actors: [],
+    });
+
+    expectLogsExclude(
+      uid,
+      cid,
+      actorId,
+      actorName,
+      secretError,
+      'SECRET_MEMBERSHIP_ERROR',
+      '/Users/private',
+      'token=raw',
+    );
+    expect(loggerMocks.warn).toHaveBeenCalledWith('members read failed', {
+      user_id: maskId(uid),
+      cid: maskId(cid),
+      failure_code: 'members_read_failed',
+      error: expect.objectContaining({ message: 'Members read failed.' }),
+    });
+  });
+
+  it('redacts rename index-read failures and emits a stable failure code', async () => {
+    await activatePrivacyUser();
+    await seedIndex();
+    const s = await import('../../../../src/main/features/group_chat/state');
+    const { maskId } = await import('../../../../src/main/util/log-redact');
+    storageMocks.readJson.mockRejectedValueOnce(new Error(secretError));
+
+    await expect(
+      s.renameAgentInMembers(uid, actorId, actorName),
+    ).resolves.toBe(0);
+
+    expectLogsExclude(
+      uid,
+      cid,
+      actorId,
+      actorName,
+      secretError,
+      'SECRET_MEMBERSHIP_ERROR',
+      '/Users/private',
+      'token=raw',
+    );
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      'member rename index read failed',
+      {
+        user_id: maskId(uid),
+        actor_id: maskId(actorId),
+        kind: 'agent',
+        failure_code: 'member_rename_index_read_failed',
+        error: expect.objectContaining({
+          message: 'Member rename index read failed.',
+        }),
+      },
+    );
+  });
+
+  it('redacts rename member-write failures and emits a stable failure code', async () => {
+    await activatePrivacyUser();
+    await seedConv([
+      {
+        kind: 'agent',
+        id: actorId,
+        name: 'Old private name',
+        joined_at: 't',
+      },
+    ]);
+    await seedIndex();
+    const s = await import('../../../../src/main/features/group_chat/state');
+    const { maskId } = await import('../../../../src/main/util/log-redact');
+    const paths = await import('../../../../src/main/paths');
+    const actualStorage = await vi.importActual<
+      typeof import('../../../../src/main/storage')
+    >('../../../../src/main/storage');
+    const membersFile = path.join(paths.userChatsDir(uid), cid, 'members.json');
+    storageMocks.writeJson.mockImplementation(async (file, value) => {
+      if (file === membersFile) throw new Error(secretError);
+      return actualStorage.writeJson(file, value);
+    });
+
+    await expect(
+      s.renameAgentInMembers(uid, actorId, actorName),
+    ).resolves.toBe(0);
+
+    expectLogsExclude(
+      uid,
+      cid,
+      actorId,
+      actorName,
+      secretError,
+      'SECRET_MEMBERSHIP_ERROR',
+      '/Users/private',
+      'token=raw',
+    );
+    expect(loggerMocks.warn).toHaveBeenCalledWith('member rename write failed', {
+      user_id: maskId(uid),
+      cid: maskId(cid),
+      actor_id: maskId(actorId),
+      kind: 'agent',
+      failure_code: 'member_rename_write_failed',
+      error: expect.objectContaining({
+        message: 'Member rename write failed.',
+      }),
+    });
+  });
+
+  it('logs rename success with masked ids, kind, and count only', async () => {
+    await activatePrivacyUser();
+    await seedConv([
+      {
+        kind: 'agent',
+        id: actorId,
+        name: 'Old private name',
+        joined_at: 't',
+      },
+    ]);
+    await seedIndex();
+    const s = await import('../../../../src/main/features/group_chat/state');
+    const { maskId } = await import('../../../../src/main/util/log-redact');
+
+    await expect(
+      s.renameAgentInMembers(uid, actorId, actorName),
+    ).resolves.toBe(1);
+
+    expectLogsExclude(uid, cid, actorId, actorName, 'Old private name');
+    expect(loggerMocks.info).toHaveBeenCalledWith('member rename completed', {
+      user_id: maskId(uid),
+      actor_id: maskId(actorId),
+      kind: 'agent',
+      count: 1,
+    });
   });
 });
 
@@ -264,5 +512,213 @@ describe('group_chat facade › runtimeStatus orphan recovery', () => {
     const healed = await s.readState(TEST_UID, TEST_CID);
     expect(healed.status).toBe('idle');
     expect(healed.in_flight).toEqual([]);
+  });
+});
+
+describe('group_chat state › atomic handoff finalization', () => {
+  const AGENT_A = 'agent-final-a';
+  const AGENT_B = 'agent-final-b';
+
+  function ledger(owner = AGENT_A, id = 'ledger-final-a') {
+    return {
+      id,
+      status: 'waiting_for_agent' as const,
+      blocked_on: 'agent_handoff' as const,
+      source_tool: 'hand_off_to' as const,
+      owner_agent_id: owner,
+      owner_agent_name: 'Private Agent Name',
+      user_goal: 'private goal',
+      handoff_message: 'private task',
+      resume_instruction: 'resume privately',
+    };
+  }
+
+  function requireApi<T extends (...args: any[]) => any>(
+    module: any,
+    name: string,
+  ): T {
+    expect(typeof module[name]).toBe('function');
+    return module[name] as T;
+  }
+
+  it('commits floor and optional ledger with one locked state write and returns a rollback token', async () => {
+    const s = await import('../../../../src/main/features/group_chat/state');
+    const commit = requireApi<any>(s, 'commitHandoffState');
+
+    const committed = await commit(TEST_UID, TEST_CID, {
+      recipient_id: AGENT_A,
+      ledger: ledger(),
+      guard: { isTerminating: () => false },
+    });
+
+    expect(storageMocks.writeJson).toHaveBeenCalledTimes(1);
+    expect(committed.state).toMatchObject({
+      active_recipient: AGENT_A,
+      orchestration_ledger: {
+        id: 'ledger-final-a',
+        owner_agent_id: AGENT_A,
+      },
+    });
+    expect(committed.rollbackToken).toMatchObject({
+      committed: {
+        active_recipient: AGENT_A,
+        ledger_id: 'ledger-final-a',
+      },
+    });
+    expect(JSON.stringify(committed.rollbackToken)).not.toContain('token=');
+  });
+
+  it('fails before writing when aborted or terminating', async () => {
+    const s = await import('../../../../src/main/features/group_chat/state');
+    const commit = requireApi<any>(s, 'commitHandoffState');
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(commit(TEST_UID, TEST_CID, {
+      recipient_id: AGENT_A,
+      guard: { signal: controller.signal, isTerminating: () => false },
+    })).rejects.toThrow('handoff state commit cancelled');
+    await expect(commit(TEST_UID, TEST_CID, {
+      recipient_id: AGENT_A,
+      guard: { isTerminating: () => true },
+    })).rejects.toThrow('handoff state commit cancelled');
+    await s.setStatus(TEST_UID, TEST_CID, 'aborted');
+    storageMocks.writeJson.mockClear();
+    await expect(commit(TEST_UID, TEST_CID, {
+      recipient_id: AGENT_A,
+      guard: { isTerminating: () => false },
+    })).rejects.toThrow('handoff state commit cancelled');
+    expect(storageMocks.writeJson).not.toHaveBeenCalled();
+  });
+
+  it('fails with a stable invariant and leaves the floor unchanged when the atomic write fails', async () => {
+    const s = await import('../../../../src/main/features/group_chat/state');
+    const commit = requireApi<any>(s, 'commitHandoffState');
+    storageMocks.writeJson.mockRejectedValueOnce(
+      new Error('RAW_FLOOR_WRITE /private/path token=secret'),
+    );
+
+    const error = await commit(TEST_UID, TEST_CID, {
+      recipient_id: AGENT_A,
+      ledger: ledger(),
+      guard: { isTerminating: () => false },
+    }).catch((caught: unknown) => caught as Error);
+
+    expect(error).toMatchObject({
+      name: 'Error',
+      message: 'handoff state commit invariant',
+    });
+    expect(String(error)).not.toContain('RAW_FLOOR_WRITE');
+    const persisted = await s.readState(TEST_UID, TEST_CID);
+    expect(persisted.active_recipient).toBeUndefined();
+    expect(persisted.orchestration_ledger).toBeUndefined();
+  });
+
+  it('restores the locked snapshot when abort arrives during the atomic write', async () => {
+    const s = await import('../../../../src/main/features/group_chat/state');
+    const commit = requireApi<any>(s, 'commitHandoffState');
+    const controller = new AbortController();
+    const actualStorage = await vi.importActual<
+      typeof import('../../../../src/main/storage')
+    >('../../../../src/main/storage');
+    let writes = 0;
+    storageMocks.writeJson.mockImplementation(async (file, value) => {
+      writes += 1;
+      await actualStorage.writeJson(file, value);
+      if (writes === 1) controller.abort();
+    });
+
+    await expect(commit(TEST_UID, TEST_CID, {
+      recipient_id: AGENT_A,
+      ledger: ledger(),
+      guard: { signal: controller.signal, isTerminating: () => false },
+    })).rejects.toThrow('handoff state commit cancelled');
+
+    expect(writes).toBe(2);
+    const persisted = await s.readState(TEST_UID, TEST_CID);
+    expect(persisted.active_recipient).toBeUndefined();
+    expect(persisted.orchestration_ledger).toBeUndefined();
+  });
+
+  it('CAS rollback restores only matching handoff fields and preserves concurrent floor and ledger', async () => {
+    const s = await import('../../../../src/main/features/group_chat/state');
+    const commit = requireApi<any>(s, 'commitHandoffState');
+    const rollback = requireApi<any>(s, 'rollbackHandoffState');
+    await s.setActiveRecipient(TEST_UID, TEST_CID, 'agent-prior');
+    await s.setOrchestrationLedger(TEST_UID, TEST_CID, ledger('agent-prior', 'ledger-prior'));
+    const { rollbackToken } = await commit(TEST_UID, TEST_CID, {
+      recipient_id: AGENT_A,
+      ledger: ledger(),
+      guard: { isTerminating: () => false },
+    });
+
+    await s.setActiveRecipient(TEST_UID, TEST_CID, AGENT_B);
+    await s.setOrchestrationLedger(TEST_UID, TEST_CID, ledger(AGENT_B, 'ledger-concurrent'));
+    const result = await rollback(TEST_UID, TEST_CID, rollbackToken);
+
+    expect(result).toMatchObject({ floor_restored: false, ledger_restored: false });
+    expect(result.state).toMatchObject({
+      active_recipient: AGENT_B,
+      orchestration_ledger: {
+        id: 'ledger-concurrent',
+        owner_agent_id: AGENT_B,
+      },
+    });
+  });
+
+  it('CAS rollback can restore a matching floor without clobbering a concurrent ledger', async () => {
+    const s = await import('../../../../src/main/features/group_chat/state');
+    const commit = requireApi<any>(s, 'commitHandoffState');
+    const rollback = requireApi<any>(s, 'rollbackHandoffState');
+    await s.setActiveRecipient(TEST_UID, TEST_CID, 'agent-prior');
+    await s.setOrchestrationLedger(TEST_UID, TEST_CID, ledger('agent-prior', 'ledger-prior'));
+    const { rollbackToken } = await commit(TEST_UID, TEST_CID, {
+      recipient_id: AGENT_A,
+      ledger: ledger(),
+      guard: { isTerminating: () => false },
+    });
+    await s.setOrchestrationLedger(TEST_UID, TEST_CID, ledger(AGENT_B, 'ledger-concurrent'));
+
+    const result = await rollback(TEST_UID, TEST_CID, rollbackToken);
+
+    expect(result).toMatchObject({ floor_restored: true, ledger_restored: false });
+    expect(result.state.active_recipient).toBe('agent-prior');
+    expect(result.state.orchestration_ledger).toMatchObject({
+      id: 'ledger-concurrent',
+      owner_agent_id: AGENT_B,
+    });
+  });
+
+  it('preserves unrelated ledger when committing floor without a ledger', async () => {
+    const s = await import('../../../../src/main/features/group_chat/state');
+    const commit = requireApi<any>(s, 'commitHandoffState');
+    await s.setOrchestrationLedger(TEST_UID, TEST_CID, ledger('agent-prior', 'ledger-prior'));
+
+    const committed = await commit(TEST_UID, TEST_CID, {
+      recipient_id: AGENT_A,
+      guard: { isTerminating: () => false },
+    });
+
+    expect(committed.state.active_recipient).toBe(AGENT_A);
+    expect(committed.state.orchestration_ledger).toMatchObject({ id: 'ledger-prior' });
+    expect(committed.rollbackToken.committed.ledger_id).toBeUndefined();
+  });
+
+  it('propagates a stable invariant when CAS rollback cleanup cannot persist', async () => {
+    const s = await import('../../../../src/main/features/group_chat/state');
+    const commit = requireApi<any>(s, 'commitHandoffState');
+    const rollback = requireApi<any>(s, 'rollbackHandoffState');
+    const { rollbackToken } = await commit(TEST_UID, TEST_CID, {
+      recipient_id: AGENT_A,
+      ledger: ledger(),
+      guard: { isTerminating: () => false },
+    });
+    storageMocks.writeJson.mockRejectedValueOnce(
+      new Error('RAW_ROLLBACK /private/path token=secret'),
+    );
+
+    await expect(
+      rollback(TEST_UID, TEST_CID, rollbackToken),
+    ).rejects.toThrow('handoff state rollback invariant');
   });
 });

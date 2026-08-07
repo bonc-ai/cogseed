@@ -11,16 +11,17 @@
  * in `features/` or `model/core-agent/` compute `[activeWorkspace,
  * attachmentDir(uid,cid)]` and pass the array to `isPathAllowed`.
  *
- * Symlink handling: uses `fs.realpathSync` on both sides so a symlink
- * planted inside an allowed root cannot exfiltrate to /etc/passwd. If the
- * candidate doesn't exist yet (write path — not our case today), falls
- * back to lexical resolve so the check still works.
+ * Symlink handling: canonicalization uses `fs.realpathSync` on both sides so
+ * a symlink planted inside an allowed root cannot exfiltrate to /etc/passwd.
+ * For prospective writes, the nearest existing ancestor is canonicalized and
+ * the missing tail is rejoined. This is path identity/containment logic, not a
+ * TOCTOU guarantee; file tools must still call `isPathAllowed` at execution.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-function realOrResolve(p: string): string {
+export function canonicalizePath(p: string): string {
   try { return fs.realpathSync(p); }
   catch {
     // Path doesn't exist — walk up until we hit an existing ancestor, realpath
@@ -42,6 +43,37 @@ function realOrResolve(p: string): string {
   }
 }
 
+
+/**
+ * Detect whether the filesystem containing an existing path resolves names
+ * case-sensitively. The probe only changes the case of an existing path
+ * component and asks the filesystem to resolve it; it never creates files.
+ */
+export function isFileSystemCaseSensitive(existingPath: string): boolean {
+  if (process.platform === 'win32') return false;
+  let current = canonicalizePath(existingPath);
+  while (current && current !== path.dirname(current)) {
+    const parent = path.dirname(current);
+    const base = path.basename(current);
+    const letterIndex = [...base].findIndex((character) => /[A-Za-z]/.test(character));
+    if (letterIndex >= 0) {
+      const characters = [...base];
+      const character = characters[letterIndex];
+      characters[letterIndex] = character === character.toLowerCase()
+        ? character.toUpperCase()
+        : character.toLowerCase();
+      const alternate = path.join(parent, characters.join(''));
+      try {
+        return canonicalizePath(alternate) !== canonicalizePath(current);
+      } catch {
+        return true;
+      }
+    }
+    current = parent;
+  }
+  return process.platform !== 'darwin';
+}
+
 /**
  * Is `candidate` inside any of `allowedRoots`?
  *
@@ -58,10 +90,10 @@ export function isPathAllowed(candidate: string, allowedRoots: readonly string[]
   if (!candidate || !allowedRoots.length) return false;
   if (!path.isAbsolute(candidate)) return false;
 
-  const realCand = realOrResolve(candidate);
+  const realCand = canonicalizePath(candidate);
   for (const root of allowedRoots) {
     if (!root || !path.isAbsolute(root)) continue;
-    const realRoot = realOrResolve(root);
+    const realRoot = canonicalizePath(root);
     if (realCand === realRoot) return true;
     if (realCand.startsWith(realRoot + path.sep)) return true;
   }

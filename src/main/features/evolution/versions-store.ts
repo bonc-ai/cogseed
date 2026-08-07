@@ -20,21 +20,46 @@ export interface SkillVersionRecord {
   at: string;
   note?: string;
   runId?: string;
+  content?: string;
+  canRollback: boolean;
+}
+
+function normalizeVersionRecord(row: unknown): SkillVersionRecord | null {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+  const item = row as Partial<SkillVersionRecord>;
+  if (typeof item.version !== 'string' || typeof item.at !== 'string') return null;
+  const content = typeof item.content === 'string' ? item.content : undefined;
+  return {
+    version: item.version,
+    at: item.at,
+    ...(typeof item.note === 'string' ? { note: item.note } : {}),
+    ...(typeof item.runId === 'string' ? { runId: item.runId } : {}),
+    ...(content !== undefined ? { content } : {}),
+    canRollback: content !== undefined,
+  };
 }
 
 export async function listSkillVersions(uid: string, skillId: string): Promise<SkillVersionRecord[]> {
   try {
     const raw = await fs.readFile(versionsPath(uid, skillId), 'utf-8');
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.map(normalizeVersionRecord).filter((item): item is SkillVersionRecord => !!item) : [];
   } catch { return []; }
 }
 
 export async function appendSkillVersion(
-  uid: string, skillId: string, entry: { version: string; note?: string; runId?: string },
+  uid: string, skillId: string, entry: { version: string; note?: string; runId?: string; content?: string },
 ): Promise<SkillVersionRecord[]> {
   const list = await listSkillVersions(uid, skillId);
-  list.unshift({ version: entry.version, at: new Date().toISOString(), note: entry.note, runId: entry.runId });
+  const content = typeof entry.content === 'string' ? entry.content : undefined;
+  list.unshift({
+    version: entry.version,
+    at: new Date().toISOString(),
+    ...(entry.note ? { note: entry.note } : {}),
+    ...(entry.runId ? { runId: entry.runId } : {}),
+    ...(content !== undefined ? { content } : {}),
+    canRollback: content !== undefined,
+  });
   const p = versionsPath(uid, skillId);
   await fs.mkdir(path.dirname(p), { recursive: true });
   await fs.writeFile(p, JSON.stringify(list, null, 2), 'utf-8');

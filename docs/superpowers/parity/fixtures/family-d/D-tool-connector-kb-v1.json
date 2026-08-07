@@ -1,0 +1,29 @@
+{
+  "source_revision": "dbe40f765de220829f24a93d947f76108f20c8ca",
+  "capture_command": "node_modules/.bin/tsx scripts/capture-orkas-parity-fixtures.ts --only D-tool-connector-kb-v1",
+  "inputs": {
+    "disabled_connectors": [
+      "connector-disabled"
+    ],
+    "enabled_connectors": [
+      "connector-enabled"
+    ],
+    "user_id": "u-parity-capture"
+  },
+  "canonicalization_notes": [
+    "timestamps are replaced with __TIMESTAMP__",
+    "generated ids are normalized by semantic prefix and encounter order",
+    "temporary workspace roots are replaced with __TMP_ROOT__",
+    "object keys are sorted; array order is preserved where it is observable"
+  ],
+  "expected": {
+    "exposed_connectors": [
+      "connector-enabled"
+    ],
+    "kb_scope": "user:u-parity-capture",
+    "user_scoped": true
+  },
+  "notes": [
+    "Connector/KB calls are represented by the enabled/user-scope boundary, not a live network call."
+  ]
+}

@@ -19,6 +19,7 @@ import type { AgentTool, HistoryResource } from '#core-agent';
 import {
   abortActiveSession as _abortActiveSession,
   abortActiveSessionsForConversation as _abortActiveSessionsForConversation,
+  hasActiveSession as _hasActiveSession,
   chatWithModel as _chatWithModel,
   streamChatWithModel as _streamChatWithModel,
 } from './core-agent/client';
@@ -252,4 +253,5 @@ export interface ChatOptions {
 export const chatWithModel = _chatWithModel;
 export const streamChatWithModel = _streamChatWithModel;
 export const abortActiveSession = _abortActiveSession;
+export const hasActiveSession = _hasActiveSession;
 export const abortActiveSessionsForConversation = _abortActiveSessionsForConversation;
