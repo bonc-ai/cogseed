@@ -6768,6 +6768,18 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
       _mountChatInputForm(formHost, msgDiv, message, opts);
     }
   }
+  if (role === 'assistant' && message.expense_setup && typeof window.mountExpenseSetupCard === 'function') {
+    const bubble = msgDiv.querySelector('.chat-bubble');
+    if (bubble && !bubble.querySelector('.expense-agent-setup-card')) {
+      window.mountExpenseSetupCard(bubble, message.expense_setup);
+    }
+  }
+  if (role === 'assistant' && message.expense_submit && typeof window.mountExpenseSubmitCard === 'function') {
+    const bubble = msgDiv.querySelector('.chat-bubble');
+    if (bubble && !bubble.querySelector('.expense-agent-submit-card')) {
+      window.mountExpenseSubmitCard(bubble, message.expense_submit, opts.cid || currentCid);
+    }
+  }
   // P3394 Wake Gate approval cards are rendered in the current composer
   // pending-action area, not inside historical chat bubbles. That keeps the
   // human approval affordance near the input instead of forcing users to scroll
@@ -11527,6 +11539,18 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
       _mountChatInputForm(host, ph, formMessage, { cid });
     }
   }
+  if (gm.expense_setup && typeof window.mountExpenseSetupCard === 'function') {
+    const bubble = ph.querySelector('.chat-bubble');
+    if (bubble && !bubble.querySelector('.expense-agent-setup-card')) {
+      window.mountExpenseSetupCard(bubble, gm.expense_setup);
+    }
+  }
+  if (gm.expense_submit && typeof window.mountExpenseSubmitCard === 'function') {
+    const bubble = ph.querySelector('.chat-bubble');
+    if (bubble && !bubble.querySelector('.expense-agent-submit-card')) {
+      window.mountExpenseSubmitCard(bubble, gm.expense_submit, cid);
+    }
+  }
 
   if (Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length) {
     const bubble = ph.querySelector('.chat-bubble');
@@ -12131,6 +12155,14 @@ function _stripAgentFormBlockForStream(buf) {
   return out;
 }
 
+function _stripExpenseCardBlockForStream(buf) {
+  if (!buf) return buf;
+  const placeholder = _streamPlaceholderHtml('expense_agent.card.streaming_placeholder');
+  return buf
+    .replace(/(?:^|\n)[ \t]*<expense-setup-form[ \t]*\/>[ \t]*(?=\n|$)/g, placeholder)
+    .replace(/(?:^|\n)[ \t]*<expense-submit-form[ \t]+case_id="[A-Za-z0-9_-]{1,128}"[ \t]*\/>[ \t]*(?=\n|$)/g, placeholder);
+}
+
 function _stripDashboardBlocksForStream(buf) {
   if (!buf || typeof _replaceUnclosedDashboardBlocks !== 'function') return buf;
   return _replaceUnclosedDashboardBlocks(
@@ -12175,8 +12207,10 @@ function _streamingAppendFinalDelta(msg, piece) {
       _stripAgentCreateBlocksForStream(
         _stripAutoTaskBlocksForStream(
           _stripAgentFormBlockForStream(
-            _stripDashboardBlocksForStream(
-              _stripSkillFileBlocksForStream(buf),
+            _stripExpenseCardBlockForStream(
+              _stripDashboardBlocksForStream(
+                _stripSkillFileBlocksForStream(buf),
+              ),
             ),
           ),
         ),

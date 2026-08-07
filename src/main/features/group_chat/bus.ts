@@ -29,6 +29,7 @@ import { appendJsonlAtomic, genId12, nowIso, safeId } from "../../storage";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import { isAgentChatDispatchable } from "../agents";
+import { assertCanonicalExpenseWorkbenchAgent } from "../expense_workbench/canonical-agent";
 
 import {
   Actor,
@@ -85,6 +86,7 @@ import {
   resolveRecipients,
   parseMentions,
   buildMention,
+  extractExpenseCardFromFinal,
   extractFormFromFinal,
   computeFormId,
   ChatFormPayload,
@@ -95,6 +97,8 @@ import {
   extractSkillContainers,
   decodeSubmission,
   type PlanInteractionStatus,
+  type ExpenseSetupCardPayload,
+  type ExpenseSubmitCardPayload,
 } from "./router";
 import * as skillsFeat from "../skills";
 import * as autoTasksFeat from "../auto_tasks";
@@ -1719,6 +1723,8 @@ export interface EnqueueParams {
   references?: ChatMessageReference[];
   produced?: string[];
   form?: ChatFormPayload;
+  expense_setup?: ExpenseSetupCardPayload;
+  expense_submit?: ExpenseSubmitCardPayload;
   created_agents?: Array<{
     agent_id: string;
     name: string;
@@ -2252,6 +2258,8 @@ async function _enqueueBody(
       ? { produced: params.produced }
       : {}),
     ...(params.form ? { form: params.form } : {}),
+    ...(params.expense_setup ? { expense_setup: params.expense_setup } : {}),
+    ...(params.expense_submit ? { expense_submit: params.expense_submit } : {}),
     ...(params.created_agents && params.created_agents.length
       ? { created_agents: params.created_agents }
       : {}),
@@ -4032,6 +4040,8 @@ async function runActorTurnBody(
   // text → structured-data parsing. Decisions (silent / done / blocked /
   // failed) live in plan_executor.onTurnFinished.
   let form: ChatFormPayload | undefined;
+  let expenseSetup: ExpenseSetupCardPayload | undefined;
+  let expenseSubmit: ExpenseSubmitCardPayload | undefined;
   let planInteraction: PlanInteractionStatus | undefined;
   let resumeAfterHandback: {
     ledger: NonNullable<StateFile["orchestration_ledger"]>;
@@ -4130,6 +4140,26 @@ async function runActorTurnBody(
         log.warn(
           `handback floor reset failed cid=${cid}: ${(err as Error).message}`,
         );
+      }
+    }
+    // Reimbursement cards grant access to host-owned credential and submission
+    // controls. Only the trusted canonical agent may turn its final-text tags
+    // into those controls; all other agents leave matching text untouched.
+    if (actor.kind === 'agent' && (workingText.includes('<expense-setup-form') || workingText.includes('<expense-submit-form'))) {
+      try {
+        await assertCanonicalExpenseWorkbenchAgent(actor.id);
+        const expenseCard = extractExpenseCardFromFinal(workingText, actor.id);
+        if (expenseCard.setup || expenseCard.submit) {
+          workingText = expenseCard.cleanText;
+          expenseSetup = expenseCard.setup;
+          expenseSubmit = expenseCard.submit;
+        }
+      } catch (error) {
+        // A non-canonical or disabled agent cannot mint a privileged card.
+        log.warn('reimbursement card rejected for untrusted agent', {
+          actor_id: actor.id,
+          error_code: error instanceof Error ? error.message : 'unknown',
+        });
       }
     }
     const r = extractFormFromFinal(workingText, actor.id);
@@ -4426,7 +4456,7 @@ async function runActorTurnBody(
   // published outputs are different: VideoStudio snapshot contact sheets are
   // review artifacts the user must see before approving the next stage.
   const isNonFinalStage =
-    item.outputDelivery === "process" || planInteraction === "open" || !!form;
+    item.outputDelivery === "process" || planInteraction === "open" || !!form || !!expenseSetup || !!expenseSubmit;
   const visibleProduced =
     isNonFinalStage && !outputsPublicationDeclared ? [] : produced;
 
@@ -4446,6 +4476,8 @@ async function runActorTurnBody(
       ...(turnFailureKind ? { failureKind: turnFailureKind } : {}),
       ...(turnFailureCode ? { failureCode: turnFailureCode } : {}),
       ...(form ? { form } : {}),
+      ...(expenseSetup ? { expenseSetup } : {}),
+      ...(expenseSubmit ? { expenseSubmit } : {}),
       ...(planInteraction ? { planInteraction } : {}),
       produced: visibleProduced,
       ...(createdAgents.length ? { createdAgents } : {}),
@@ -4465,6 +4497,8 @@ async function runActorTurnBody(
       terminalHandoffCompleted &&
       !workingText.trim() &&
       !form &&
+      !expenseSetup &&
+      !expenseSubmit &&
       visibleProduced.length === 0 &&
       createdAgents.length === 0 &&
       createdSkills.length === 0;
@@ -4474,6 +4508,8 @@ async function runActorTurnBody(
           kind: "persist",
           text: workingText || "(no reply)",
           ...(form ? { form } : {}),
+          ...(expenseSetup ? { expenseSetup } : {}),
+          ...(expenseSubmit ? { expenseSubmit } : {}),
           ...(visibleProduced.length ? { produced: visibleProduced } : {}),
           ...(createdAgents.length ? { createdAgents } : {}),
           ...(createdSkills.length ? { createdSkills } : {}),
@@ -4530,6 +4566,8 @@ async function runActorTurnBody(
     const tail = streamingText.slice(segState.segStart);
     const hasSide = !!(
       outcome.form ||
+      outcome.expenseSetup ||
+      outcome.expenseSubmit ||
       (outcome.produced && outcome.produced.length) ||
       (outcome.createdAgents && outcome.createdAgents.length) ||
       (outcome.createdSkills && outcome.createdSkills.length) ||
@@ -4621,6 +4659,8 @@ async function runActorTurnBody(
       ...(outcome.failureKind ? { failure_kind: outcome.failureKind } : {}),
       ...(outcome.failureCode ? { failure_code: outcome.failureCode } : {}),
       ...(outcome.form ? { form: outcome.form } : {}),
+      ...(outcome.expenseSetup ? { expense_setup: outcome.expenseSetup } : {}),
+      ...(outcome.expenseSubmit ? { expense_submit: outcome.expenseSubmit } : {}),
       ...(outcome.produced && outcome.produced.length
         ? { produced: outcome.produced }
         : {}),

@@ -57,7 +57,8 @@ describe('builtin marketplace › expense-reimbursement seed', () => {
     const spec = JSON.parse(fs.readFileSync(path.join(agentDir, 'agent.json'), 'utf8'));
     expect(spec.agent_id).toBe(EXPENSE_AGENT_ID);
     expect(spec.runtime).toEqual({ kind: 'in_process' });
-    expect(spec.output_format).toBe('artifact');
+    expect(spec.output_format).toBe('markdown');
+    expect(spec.interactive).toBe(true);
     expect(spec.management_surface).toBe('expense_workbench');
     expect(spec.skill_list).toEqual([]);
 
@@ -79,7 +80,6 @@ describe('builtin marketplace › expense-reimbursement seed', () => {
         seed_source: 'builtin',
         enabled: true,
         management_surface: 'expense_workbench',
-        interaction_mode: 'management_only',
         reimbursement_entry_role: 'canonical',
       });
   });

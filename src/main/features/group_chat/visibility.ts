@@ -134,6 +134,12 @@ export interface GroupMessage {
   /** Form widget payload — only on agent messages whose final text contained
    * a fenced agent-input-form block. */
   form?: import("./router").ChatFormPayload;
+  /** Host-owned reimbursement setup card. Its values are never persisted in
+   * the message: credentials travel directly from renderer to main IPC. */
+  expense_setup?: import("./router").ExpenseSetupCardPayload;
+  /** Host-owned reimbursement submission card for a current-conversation
+   * case. Main independently checks case readiness and shows confirmation. */
+  expense_submit?: import("./router").ExpenseSubmitCardPayload;
   /** Quick-created / quick-edited agent meta — populated when the commander's
    * final text contained one or more `<agent>` containers. One entry per
    * successfully applied container; failed applications are not recorded. */

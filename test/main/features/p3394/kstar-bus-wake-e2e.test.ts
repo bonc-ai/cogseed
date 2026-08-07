@@ -34,6 +34,7 @@ vi.mock('../../../../src/main/features/agents', () => ({
     name: 'Test Agent',
     interactive: false,
   })),
+  isAgentChatDispatchable: vi.fn(() => true),
 }));
 vi.mock('../../../../src/main/features/component_enabled', () => ({
   isAgentEnabled: vi.fn(() => true),

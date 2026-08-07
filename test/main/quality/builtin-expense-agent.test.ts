@@ -14,27 +14,28 @@ function readSpec(): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(path.join(AGENT_DIR, 'agent.json'), 'utf8')) as Record<string, unknown>;
 }
 
-describe('builtin marketplace > expense-reimbursement task agent', () => {
-  it('declares the Mate-managed expense workbench', () => {
+describe('builtin marketplace > reimbursement agent', () => {
+  it('declares the secure Feishu setup and current-chat reimbursement workflow', () => {
     const spec = readSpec();
     expect(spec.agent_id).toBe(AGENT_ID);
     expect(spec.management_surface).toBe('expense_workbench');
     expect(spec.reimbursement_entry_role).toBe('canonical');
-    expect(spec.interaction_mode).toBe('management_only');
-    expect(spec.workflow).toContain('embedded management workbench');
-    expect(spec.workflow).toContain('stdio process');
-    expect(spec.workflow).not.toMatch(/localhost|127\.0\.0\.1|task_agent\.py\s+(new|answer|status|report)/i);
+    expect(spec.interaction_mode).toBeUndefined();
+    expect(spec.workflow).toContain('expense_configuration_status');
+    expect(spec.workflow).toContain('<expense-setup-form />');
+    expect(spec.workflow).toContain('current conversation');
+    expect(spec.workflow).not.toMatch(/localhost|127\.0\.0\.1|task_agent\.py|stdio process|\.env|project directory/i);
     expect(spec.skill_list).toEqual([]);
   });
 
   it('runs in process and keeps human gates explicit', () => {
     const spec = readSpec();
     expect(spec.runtime).toEqual({ kind: 'in_process' });
-    expect(spec.output_format).toBe('artifact');
-    expect(spec.interactive).toBe(false);
-    expect(spec.workflow).toMatch(/human confirmation/i);
+    expect(spec.output_format).toBe('markdown');
+    expect(spec.interactive).toBe(true);
+    expect(spec.workflow).toMatch(/native confirmation/i);
     expect(spec.standards).toEqual(expect.arrayContaining([
-      expect.stringMatching(/never represents a draft/i),
+      expect.stringMatching(/never represents a case as submitted/i),
     ]));
   });
 

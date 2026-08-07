@@ -65,6 +65,7 @@ import { createChatHistoryTools } from './chat-history-tools';
 import { createImageGenTool } from './image-gen-tool';
 import { createVideoStudioTool } from './video-studio-tool';
 import { createResearchRerankTool } from './research-rerank-tool';
+import { createExpenseAgentTools } from './expense-agent-tools';
 import { isToolVisibleToAgent } from './tool-catalog';
 import { createWebSearchOverrideTool } from './search-tools';
 import {
@@ -391,8 +392,8 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
    *  Not injected into model context; reused for process-log labels. */
   agentDisplayNameById: Map<string, string>;
 }> {
+  const boundAgent = params.agentId ? await getAgent(params.agentId) : null;
   if (params.agentId) {
-    const boundAgent = await getAgent(params.agentId);
     if (boundAgent && !isAgentChatDispatchable(boundAgent)) {
       throw Object.assign(
         new Error('Management-only Agents can run only through their host-owned management surface.'),
@@ -752,6 +753,17 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     deepResearchTools.push(createResearchRerankTool());
   }
 
+  // The reimbursement capability is private to its canonical agent. Its
+  // feature layer further binds every case to the active user and cid, so a
+  // model-supplied id can never widen the data scope.
+  const expenseAgentTools: AgentTool[] = uid && agentId
+    && boundAgent?.source === 'marketplace'
+    && boundAgent.seed_source === 'builtin'
+    && boundAgent.management_surface === 'expense_workbench'
+    && boundAgent.reimbursement_entry_role === 'canonical'
+    ? createExpenseAgentTools({ userId: uid, ...(params.cid ? { cid: params.cid } : {}) })
+    : [];
+
   // Office document tools (bundled OfficeCLI engine). Permission-gated like
   // local-tools (writing a docx/xlsx/pptx is the same blast radius as
   // write_file). Skipped when uid is unknown — the factory needs the
@@ -828,6 +840,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ...imageGenTools,
     ...videoStudioTools,
     ...deepResearchTools,
+    ...expenseAgentTools,
     ...officeTools,
     ...searchOverrideTools,
     ...toolResultTools,

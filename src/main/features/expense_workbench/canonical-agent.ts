@@ -1,5 +1,6 @@
 import { getAgent, type Agent } from '../agents';
-import { EXPENSE_WORKBENCH_SURFACE } from './contracts';
+
+const EXPENSE_AGENT_MANAGEMENT_SURFACE = 'expense_workbench';
 
 /** Host-owned trust anchor for the built-in reimbursement management entry. */
 export const CANONICAL_EXPENSE_WORKBENCH_AGENT_ID = 'c045605cb916' as const;
@@ -9,8 +10,7 @@ export type CanonicalExpenseWorkbenchAgent = Agent & {
   source: 'marketplace';
   seed_source: 'builtin';
   enabled: true;
-  management_surface: typeof EXPENSE_WORKBENCH_SURFACE;
-  interaction_mode: 'management_only';
+  management_surface: typeof EXPENSE_AGENT_MANAGEMENT_SURFACE;
   reimbursement_entry_role: 'canonical';
 };
 
@@ -21,8 +21,7 @@ function isCanonicalExpenseWorkbenchAgent(
     && agent.source === 'marketplace'
     && agent.seed_source === 'builtin'
     && agent.enabled === true
-    && agent.management_surface === EXPENSE_WORKBENCH_SURFACE
-    && agent.interaction_mode === 'management_only'
+    && agent.management_surface === EXPENSE_AGENT_MANAGEMENT_SURFACE
     && agent.reimbursement_entry_role === 'canonical';
 }
 
