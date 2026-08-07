@@ -828,7 +828,7 @@
           row.appendChild(status);
         }
         if (group === 'open' && !row.disabled) row.addEventListener('click', () => selectChannel(channel.key));
-        aside.appendChild(row);
+        section.appendChild(row);
       }
       aside.appendChild(section);
     }
