@@ -116,6 +116,21 @@
     star: '<path d="M12 2.5l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 17.8 6.1 20.9l1.1-6.5L2.5 9.8l6.5-.9z"></path>',
   };
 
+  // Fill-style brand glyphs for the messaging platform menu. Brand marks are
+  // multi-color by nature, so they bypass the stroke-based ui-icon wrapper and
+  // carry their own class. Simplified marks; swap for official assets if the
+  // brand guidelines require exact artwork.
+  const BRAND_ICONS = {
+    feishu: '<svg class="is-feishu" viewBox="0 0 48 48" width="24" height="24" aria-hidden="true"><path fill="#00C2B8" d="M8 9h25l7 7-16 23H8z"/><path fill="#175CE6" d="M7 21l13 14c7 7 16 4 21-2l-7-7-8 5z"/><path fill="#0A3EAA" d="M7 21l13 14 14-9-12-11z"/></svg>',
+    lark: '<svg class="is-lark" viewBox="0 0 48 48" width="24" height="24" aria-hidden="true"><path fill="#00C2B8" d="M8 9h25l7 7-16 23H8z"/><path fill="#175CE6" d="M7 21l13 14c7 7 16 4 21-2l-7-7-8 5z"/><path fill="#0A3EAA" d="M7 21l13 14 14-9-12-11z"/></svg>',
+    wechat: '<svg class="is-wechat" viewBox="0 0 48 48" width="24" height="24" aria-hidden="true"><path fill="#07C160" d="M20 8c-8.3 0-15 5.4-15 12 0 3.8 2.1 7.2 5.4 9.5L9 34l5.2-2.6c1.8.6 3.7.9 5.8.9h.9a9.9 9.9 0 0 1-.3-2.4C20.6 23.5 26.8 18 34 18c.6 0 1.1 0 1.7.1A10.3 10.3 0 0 0 35 16c0-6.6-6.7-12-15-12z"/><path fill="#07C160" d="M46 30c0-5.2-5.4-9.5-12-9.5S22 24.8 22 30s5.4 9.5 12 9.5c1.5 0 2.9-.2 4.2-.7L41.5 41l-1-4.2A8.4 8.4 0 0 0 46 30z"/><circle fill="#fff" cx="27.5" cy="30" r="1.6"/><circle fill="#fff" cx="34.5" cy="30" r="1.6"/><circle fill="#fff" cx="19" cy="19" r="1.6"/><circle fill="#fff" cx="25" cy="19" r="1.6"/></svg>',
+    wecom: '<svg class="is-wecom" viewBox="0 0 48 48" width="24" height="24" aria-hidden="true"><path fill="#3D9BF8" d="M14 8c-5 0-9 3.4-9 7.6 0 2.4 1.3 4.5 3.4 6l-1.4 4 4.6-2.3c.8.2 1.6.3 2.4.3h.6A6.4 6.4 0 0 1 14 16c0-4.4 4.5-8 10-8H14z"/><path fill="#2F6FE4" d="M34 17c-6.1 0-11 4-11 9s4.9 9 11 9c1 0 2-.1 2.9-.4l4.7 2.4-1.5-4.2A7.4 7.4 0 0 0 45 26c0-5-4.9-9-11-9z"/><circle fill="#fff" cx="26" cy="26" r="1.5"/><circle fill="#fff" cx="34" cy="26" r="1.5"/><circle fill="#fff" cx="16" cy="16" r="1.5"/><circle fill="#fff" cx="22" cy="16" r="1.5"/></svg>',
+    telegram: '<svg class="is-telegram" viewBox="0 0 48 48" width="24" height="24" aria-hidden="true"><circle cx="24" cy="24" r="19" fill="#27A7E7"/><path fill="#fff" d="M13.5 22.8 33.5 14c1.2-.5 2.3.3 1.9 1.9l-3.7 17.3c-.3 1.3-1.1 1.6-2.2 1l-6.2-4.6-3 2.9c-.3.3-.6.6-1.3.6l.5-6.6 12-10.8c.5-.4-.1-.7-.8-.3L16.4 26.9l-6.4-2c-1.4-.4-1.4-1.4.3-2.1z"/></svg>',
+    qq: '<svg class="is-qq" viewBox="0 0 48 48" width="24" height="24" aria-hidden="true"><path fill="#1D9BF0" d="M24 6c4.5 0 8 3 8.6 7l2.6 1.2c.8.4 1.3 1.2 1.3 2.1l-.6 3.7c.7.6 1.1 1.5 1.1 2.4 0 .9-.4 1.7-1 2.3.6 1.8 1.2 4.6.8 6.9-2.6-.6-5-1.8-6.8-3.4-.6.6-1.4.9-2.3 1-2.5 1.4-5.6 2.2-8.7 2.2s-6.2-.8-8.7-2.2c-.9-.1-1.7-.4-2.3-1-1.8 1.6-4.2 2.8-6.8 3.4-.4-2.3.2-5.1.8-6.9a3.2 3.2 0 0 1-1-2.3c0-.9.4-1.8 1.1-2.4l-.6-3.7c0-.9.5-1.7 1.3-2.1L15.4 13c.6-4 4.1-7 8.6-7z"/><path fill="#fff" d="M18.5 20.5a1.9 1.9 0 1 1-3.8 0 1.9 1.9 0 0 1 3.8 0zm14.8 0a1.9 1.9 0 1 1-3.8 0 1.9 1.9 0 0 1 3.8 0z"/></svg>',
+    dingtalk: '<svg class="is-dingtalk" viewBox="0 0 48 48" width="24" height="24" aria-hidden="true"><rect x="6" y="6" width="36" height="36" rx="10" fill="#3B9DFF"/><path fill="#fff" d="M16 17l16 7-8 10-2-7z"/></svg>',
+    discord: '<svg class="is-discord" viewBox="0 0 48 48" width="24" height="24" aria-hidden="true"><path fill="#5865F2" d="M38.5 13.2A39 39 0 0 0 31.9 11l-.7 1.4a36 36 0 0 0-14.4 0L16.1 11a39 39 0 0 0-6.6 2.2C5.3 19.4 4.2 25.4 4.7 31.3A39.8 39.8 0 0 0 12.6 36l2.2-3.6c-1.2-.5-2.4-1.1-3.5-1.8l.9-.7c5.6 2.6 11.4 2.6 17 0l.9.7c-1.1.7-2.3 1.3-3.5 1.8L28.9 36a39.8 39.8 0 0 0 7.9-4.7c.6-6.9-1-12.8-3.3-18.1zM19 27.5c-1.6 0-2.9-1.5-2.9-3.3s1.3-3.3 2.9-3.3 2.9 1.5 2.9 3.3-1.3 3.3-2.9 3.3zm10 0c-1.6 0-2.9-1.5-2.9-3.3s1.3-3.3 2.9-3.3 2.9 1.5 2.9 3.3-1.3 3.3-2.9 3.3z"/></svg>',
+  };
+
   const FILE_ICONS = {
     image: wrapFileIcon('image', '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><circle cx="8.5" cy="9" r="1.6"></circle><path d="M5 17l4.4-4.4a1.5 1.5 0 0 1 2.1 0L14 15l2-2a1.5 1.5 0 0 1 2.1 0L20 14.9"></path>'),
     video: wrapFileIcon('video', '<rect x="3.5" y="5.5" width="17" height="13" rx="2.5"></rect><path d="M10 9.2v5.6l5-2.8-5-2.8z"></path>'),
@@ -161,6 +176,8 @@
 
   function uiIconHtml(name, className) {
     const key = String(name || 'info');
+    const brand = BRAND_ICONS[key];
+    if (brand) return brand;
     return wrapUiIcon(key, UI_ICONS[key] || UI_ICONS.info, className);
   }
 
