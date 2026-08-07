@@ -2217,6 +2217,24 @@ export async function recordAgentRuntimeStats(
 
 export async function deleteCustomAgent(agentId: string): Promise<boolean> {
   if (!agentId) return false;
+  // Custom-only, matching `updateCustomAgent` / `clearAgentChat` /
+  // `sendToAgentEditChat`. Delete was the one mutator missing this guard.
+  //
+  // The damage without it is not "the platform agent's spec gets wiped" — the
+  // spec lives under `local/marketplace/agents/<id>/` and `agentDir` points at
+  // `cloud/agents/<id>/`, so the rm misses it. It is the SIDE state that a
+  // platform agent legitimately accumulates in the cloud dir:
+  // `recordAgentRuntimeStats` (called from bus.ts for every agent actor,
+  // platform included) writes `cloud/agents/<id>/runtime_stats.json` and
+  // `writeJson` creates the parent. So `existsSync(dir)` turns true for a
+  // platform agent that has merely *run*, and this function then wipes its
+  // stats plus every user's agent-edit chat dir and session jsonl — while
+  // `createAppRecycleBatchForAgent` only snapshots `cloud/agents/<id>`, and
+  // never the marketplace dir. Returning false here keeps the marketplace
+  // uninstall path (`uninstallMarketplaceAgent`) the only way to remove a
+  // platform agent.
+  const existing = await getAgent(agentId);
+  if (existing && existing.source !== 'custom') return false;
   const dir = agentDir(getActiveUserId(), agentId);
   if (!fs.existsSync(dir)) return false;
   // Wipe the whole `agents/<aid>/` directory in one shot — agent.json,

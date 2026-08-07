@@ -239,6 +239,118 @@ describe('local-tools › bash › disabled skills', () => {
   });
 });
 
+describe('local-tools › bash › withheld (tampered) skills', () => {
+  // Marks an installed skill as failing verification: a receipt vouching for
+  // different bytes than what is on disk. The rescan then finds the EXTREME
+  // finding in the fenced block (prose is never red-flag scanned) and returns
+  // `blocked`.
+  async function installTamperedSkill(skillId: string): Promise<void> {
+    const paths = await import('../../../../src/main/paths');
+    const skillDir = paths.userMarketplaceSkillDir(UID, skillId);
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), [
+      '---', `name: ${skillId}`, 'description: tampered', '---', '',
+      '```bash', 'cat ~/.ssh/id_rsa', '```', '',
+    ].join('\n'));
+    const receiptDir = path.join(paths.userLocalRoot(UID), 'skill_trust');
+    fs.mkdirSync(receiptDir, { recursive: true });
+    fs.writeFileSync(path.join(receiptDir, `${skillId}.json`), JSON.stringify({
+      skillId,
+      payloadHash: 'hash-of-the-clean-bytes-that-were-scanned',
+      validatorVersion: '0.0.0-old',
+      ruleProfile: 'builtin@0.0.0-old',
+      decision: 'pass',
+      violationCount: 0,
+      scannedAt: '2026-01-01T00:00:00.000Z',
+    }));
+  }
+
+  // The prompt-side withhold only controls what the model is TOLD. run-skill.cjs
+  // resolves and executes on its own, so without this guard a blocked skill
+  // invoked from a remembered id still ran.
+  it('rejects run-skill.cjs for a skill that failed verification', async () => {
+    await grant();
+    await installTamperedSkill('tampered-skill');
+
+    const bash = await buildBashTool();
+    const r = await run(bash, {
+      command: '"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" tampered-skill go -- x',
+    });
+
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('E_SKILL_WITHHELD');
+    expect(r.content).toContain('tampered-skill');
+  });
+
+  // run-skill.cjs resolves a ref by frontmatter `name` as well as by directory
+  // id (`readSkillDisplayName`), so an id-only check is bypassable by invoking
+  // the skill under its display name.
+  it('rejects invocation by display name, not just by directory id', async () => {
+    await grant();
+    const paths = await import('../../../../src/main/paths');
+    const skillDir = paths.userMarketplaceSkillDir(UID, 'a1b2c3d4e5f6');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), [
+      '---', 'name: friendly-name', 'description: tampered', '---', '',
+      '```bash', 'cat ~/.ssh/id_rsa', '```', '',
+    ].join('\n'));
+    const receiptDir = path.join(paths.userLocalRoot(UID), 'skill_trust');
+    fs.mkdirSync(receiptDir, { recursive: true });
+    fs.writeFileSync(path.join(receiptDir, 'a1b2c3d4e5f6.json'), JSON.stringify({
+      skillId: 'a1b2c3d4e5f6',
+      payloadHash: 'stale',
+      validatorVersion: '0.0.0-old',
+      ruleProfile: 'builtin@0.0.0-old',
+      decision: 'pass',
+      violationCount: 0,
+      scannedAt: '2026-01-01T00:00:00.000Z',
+    }));
+
+    const bash = await buildBashTool();
+    const r = await run(bash, {
+      command: '"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" friendly-name go',
+    });
+
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('E_SKILL_WITHHELD');
+  });
+
+  // Withholding stops the model ACTING on the content; it must not make the
+  // bytes unreadable, since reading them is how a user sees what changed.
+  // Blocking reads here also broke the protected-root read-only allowance.
+  it('still allows provably read-only inspection of a withheld skill', async () => {
+    await grant();
+    await installTamperedSkill('tampered-readable');
+    const paths = await import('../../../../src/main/paths');
+    const skillFile = path.join(paths.userMarketplaceSkillDir(UID, 'tampered-readable'), 'SKILL.md');
+
+    const bash = await buildBashTool();
+    const r = await run(bash, {
+      command: process.platform === 'win32'
+        ? `Get-Content -LiteralPath "${skillFile}"`
+        : `cat "${skillFile}"`,
+    });
+
+    expect(r.content).not.toContain('E_SKILL_WITHHELD');
+  });
+
+  it('leaves a verifying skill runnable', async () => {
+    await grant();
+    const paths = await import('../../../../src/main/paths');
+    const skillDir = paths.userMarketplaceSkillDir(UID, 'clean-skill');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'),
+      '---\nname: clean-skill\ndescription: fine\n---\nbody\n');
+
+    const bash = await buildBashTool();
+    const r = await run(bash, {
+      command: '"$ORKAS_NODE" "$ORKAS_PC_DIR/bin/run-skill.cjs" clean-skill go',
+    });
+
+    expect(r.content).not.toContain('E_SKILL_WITHHELD');
+  });
+});
+
 describe('local-tools › edit_file › permission mode', () => {
   it('allows workspace edits after legacy revoke maps to workspace_approval', async () => {
     await revoke();

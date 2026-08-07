@@ -19,6 +19,14 @@ const cognitionMock = vi.hoisted(() => ({
   listCognitionAssets: vi.fn(async (_uid: string, filter: any) => ([{ id: 'asset-a', filter }])),
   getSkillCognitionSummary: vi.fn(async (_uid: string, skillId: string) => ({ skillId, pendingCandidateCount: 0, recentReceipts: [], versions: [], baselineStatus: 'unversioned' })),
   rollbackSkillCognitionVersion: vi.fn(async (_uid: string, skillId: string, version: string) => ({ ok: true, skillId, version })),
+  // The decide channel validates an optional semantic-review payload before
+  // forwarding it. Mirrors the real helper's contract: absent/malformed input
+  // yields undefined rather than throwing, so a bad payload degrades to
+  // "no review" instead of failing the decision.
+  parseSemanticReview: vi.fn((raw: unknown) => (raw && typeof raw === 'object' ? raw : undefined)),
+  deepReviewCognitionCandidate: vi.fn(async (_uid: string, source: string, candidateId: string) => ({
+    status: 'pass', findingCount: 0, semanticReviewed: false, source, candidateId,
+  })),
 }));
 
 vi.mock('electron', () => ({

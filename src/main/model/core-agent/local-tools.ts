@@ -1897,6 +1897,80 @@ function guardDisabledSkillBash(opts: LocalToolsOpts, command: string): string |
   return null;
 }
 
+/**
+ * Reject a command that would execute a skill withheld by the security-receipt
+ * check (post-install tampering, or a verdict reached under an older ruleset).
+ *
+ * Needed because the prompt-side withhold only controls what the model is
+ * *told* about. `bin/run-skill.cjs` resolves and executes on its own, so a
+ * blocked skill invoked from a remembered id, a stale transcript, or a listing
+ * that predates the tamper would still run. This is the execution-side half of
+ * the same control; the runner itself stays free of trust logic (it is CJS and
+ * would need a second copy of the cross-language tree hash).
+ *
+ * Matched by id AND by display name, because the runner resolves either
+ * (`readSkillDisplayName` in run-skill.cjs) — an id-only check would be
+ * bypassable by invoking the skill under its frontmatter `name`.
+ *
+ * Fails open on any error, matching the load path: a scanner hiccup must not
+ * make a working skill unrunnable.
+ */
+async function guardUntrustedSkillBash(opts: LocalToolsOpts, command: string): Promise<string | null> {
+  const uid = opts.userId;
+  if (!uid || !command) return null;
+
+  const refs = extractRunSkillRefs(command);
+  // A path mention only matters if the command could EXECUTE the skill.
+  // Reading a withheld skill's bytes is how a user inspects what changed, and
+  // the whole point of withholding is to stop the model acting on the content,
+  // not to make it unreadable. Reuse the same audited read-only classifier the
+  // protected-root guard uses rather than a second notion of "safe".
+  const pathMentionCouldExecute = !bashProtectedRootMentionIsProvablyReadOnly(command);
+  if (!refs.length && !pathMentionCouldExecute) return null;
+
+  let specs: Array<{ id: string; name?: string }>;
+  let blocked: Set<string>;
+  try {
+    const registry = await import('./skill-registry');
+    specs = await registry.listSkillSpecsForAgentMetadata(uid);
+    // `listSkillSpecsForAgentMetadata` is deliberately not trust-filtered (it
+    // backs spec writes), which makes it the right source here: we need the
+    // full id/name map to resolve what the command names, then ask about trust.
+    blocked = registry.blockedSkillIds(specs.map((s) => s.id));
+  } catch {
+    return null;
+  }
+  if (!blocked.size) return null;
+
+  const nameToId = new Map<string, string>();
+  for (const s of specs) {
+    if (s.name) nameToId.set(s.name, s.id);
+  }
+
+  const deny = (skillId: string): string => errText(
+    'E_SKILL_WITHHELD',
+    // Localized because this string is surfaced to the USER: the renderer shows
+    // a failed tool call's content as `result_preview` in the conversation
+    // stream. Same reasoning as `bash.error.*` above — the model reads the
+    // stable `E_*` code, the human reads the sentence after it.
+    bashMsg('skill_withheld', { skill: skillId }),
+  );
+
+  for (const ref of refs) {
+    if (blocked.has(ref)) return deny(ref);
+    const byName = nameToId.get(ref);
+    if (byName && blocked.has(byName)) return deny(byName);
+  }
+
+  for (const skillId of blocked) {
+    if (pathMentionCouldExecute && commandMentionsSkillRoot(command, uid, skillId)) {
+      return deny(skillId);
+    }
+  }
+
+  return null;
+}
+
 function commandStartsNoBrowserAuthLogin(command: string): boolean {
   const normalized = String(command || '').replace(/\s+/g, ' ').trim();
   if (!normalized) return false;
@@ -2229,6 +2303,14 @@ function createBashTool(opts: LocalToolsOpts): AgentTool {
         });
         return { content: disabledSkillErr, isError: true };
       }
+      const untrustedSkillErr = await guardUntrustedSkillBash(opts, command);
+      if (untrustedSkillErr) {
+        log.warn('bash withheld skill reject', {
+          user_id: maskId(opts.userId),
+          command_chars: command.length,
+        });
+        return { content: untrustedSkillErr, isError: true };
+      }
       const unsupportedAuthErr = guardUnsupportedAuthCodeFlow(command);
       if (unsupportedAuthErr) {
         log.warn('bash unsupported auth-code flow reject', {
@@ -2371,6 +2453,14 @@ async function gateInteractiveCliStart(
       command_chars: command.length,
     });
     return { content: disabledSkillErr, isError: true };
+  }
+  const untrustedSkillErr = await guardUntrustedSkillBash(opts, command);
+  if (untrustedSkillErr) {
+    log.warn('interactive_cli_start withheld skill reject', {
+      user_id: maskId(opts.userId),
+      command_chars: command.length,
+    });
+    return { content: untrustedSkillErr, isError: true };
   }
   if (localAccessRequiresSensitiveApproval(mode) && command.trim()) {
     const base = classifyBashCommand(command);

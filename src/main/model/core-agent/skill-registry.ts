@@ -54,6 +54,7 @@ import {
 import { enabledPackageSkillRoots, packageSkillRoots, readPackagesRegistry } from '../../features/packages';
 import { companionSkillsRootIfPopulated, companionPackageForDir } from '../../features/package_skills';
 import { getActiveUserId } from '../../features/users';
+import { partitionSkillsByTrust } from '../../features/skill_reverify';
 import { getLanguage, getGlobalSkillRootsEnabled } from '../../features/config';
 import { descriptionLang, getCurrentLang } from '../../i18n';
 // `pickDescription` is loaded lazily — see CLAUDE.md §3: any static import
@@ -650,6 +651,14 @@ export async function searchOpenTierSkills(
   // search returns ONLY global-folder skills (the still-lazy tier). The open
   // loader still loads both (cache shared with the prompt/bridge); we filter
   // external out of the results here.
+  //
+  // No trust withholding here, and that is not an oversight: the open tier is
+  // external packages plus the interop global roots (~/.claude, ~/.codex).
+  // Security receipts describe marketplace installs under
+  // `<uid>/local/marketplace/skills/`, and `trustedIds` below excludes every id
+  // the trusted loader knows about — so nothing reaching these rows has a
+  // receipt to check. Filtering would be a guaranteed no-op that reads as
+  // coverage.
   const externalSet = new Set(dirs.external.map((d) => path.resolve(d)));
   const trustedIds = new Set((await getLoader()).list().map((s) => s.id));
   const disabled = disabledIds ? new Set(disabledIds) : null;
@@ -767,9 +776,115 @@ export interface SystemPromptBlockOptions {
  * are appended. Rendering always goes through `renderSkillLines` so the
  * `Source` label is derived from the exact root path rather than basename.
  */
+/**
+ * Drop skills whose content no longer matches the verdict that admitted them.
+ *
+ * This is the enforcement half of the security-receipt mechanism. Without it,
+ * post-install tampering is detectable but not prevented: install something
+ * benign, rewrite its scripts, and the install gate has been bypassed. Because
+ * this filters the list the *agent* sees, it is independent of the user's
+ * enabled/disabled preference — a user must not be able to re-enable a skill
+ * whose content failed verification.
+ *
+ * Only `blocked` (an EXTREME finding on the current bytes) withholds. `risk`
+ * and `unknown` pass through: this runs on the prompt-build path, and
+ * withholding on a softer signal would let one scanner hiccup silently strip a
+ * user's working skills. A control that removes functionality unpredictably
+ * gets switched off by the people it is meant to protect.
+ *
+ * Results are cached against the marketplace directory mtime. Hashing the whole
+ * builtin corpus measures ~5 ms (47 skills / 134 files / 1.2 MB), and the cache
+ * keeps that off the common path entirely.
+ *
+ * The cache holds a PER-SKILL verdict map, not the blocked set derived from one
+ * caller's list. Several exported listings filter through here and they pass
+ * different subsets (the bridge drops `ownerAgent` specs, the prompt path may
+ * pass an allowlist). Caching a blocked set built from whichever list arrived
+ * first would let a later, larger list take a cache hit and skip verification
+ * for every id the first list happened not to contain.
+ */
+let _trustFilterCache: { uid: string; stamp: string; verdicts: Map<string, boolean> } | null = null;
+
+function _marketplaceStamp(uid: string): string {
+  const dir = userMarketplaceSkillsDir(uid);
+  try {
+    const top = fs.statSync(dir).mtimeMs;
+    // Include per-skill mtimes: editing a file inside a skill does not change
+    // the parent directory's mtime, and that edit is exactly what this guards.
+    let acc = `${top}`;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (!e.isDirectory() || e.name.startsWith('.')) continue;
+      try { acc += `|${e.name}:${fs.statSync(path.join(dir, e.name)).mtimeMs}`; }
+      catch { acc += `|${e.name}:0`; }
+    }
+    return acc;
+  } catch {
+    return '';
+  }
+}
+
+function _withholdUntrustedSpecs<T extends { id: string }>(specs: T[]): T[] {
+  let uid: string;
+  try { uid = getActiveUserId(); } catch { return specs; }
+  if (!uid) return specs;
+
+  const stamp = _marketplaceStamp(uid);
+  if (!_trustFilterCache || _trustFilterCache.uid !== uid || _trustFilterCache.stamp !== stamp) {
+    _trustFilterCache = { uid, stamp, verdicts: new Map() };
+  }
+  const verdicts = _trustFilterCache.verdicts;
+
+  // Only verify ids this cache generation has not seen. A hit costs nothing; a
+  // miss costs one tree hash. Both are far cheaper than re-verifying the whole
+  // corpus on every listing call.
+  const unknown = specs.map((s) => s.id).filter((id) => !verdicts.has(id));
+  if (unknown.length) {
+    try {
+      const { withheld } = partitionSkillsByTrust(uid, unknown);
+      const blockedNow = new Set(withheld.map((w) => w.skillId));
+      for (const id of unknown) verdicts.set(id, !blockedNow.has(id));
+    } catch {
+      // Verification failure is not evidence of tampering; the install-time
+      // gate already vetted this content. Fail open rather than stripping a
+      // user's working skills on a transient IO error. `partitionSkillsByTrust`
+      // logs the underlying cause, so nothing is lost by staying quiet here
+      // (this module intentionally carries no logger of its own). Nothing is
+      // memoized, so the next call retries rather than caching a fail-open.
+      return specs;
+    }
+  }
+
+  return specs.filter((s) => verdicts.get(s.id) !== false);
+}
+
+/**
+ * Blocked-skill ids among `skillIds`, for callers outside this module that gate
+ * on trust without holding spec objects (the bash-command guard, the Runtime
+ * worker's `run_skill`). Shares the cache above.
+ *
+ * Fails open — an empty set on error — for the same reason
+ * `_withholdUntrustedSpecs` does.
+ */
+export function blockedSkillIds(skillIds: readonly string[]): Set<string> {
+  if (!skillIds.length) return new Set();
+  const probe = skillIds.map((id) => ({ id }));
+  const allowed = new Set(_withholdUntrustedSpecs(probe).map((s) => s.id));
+  return new Set(skillIds.filter((id) => !allowed.has(id)));
+}
+
+/**
+ * Markdown block describing available skills — splice this into a
+ * system prompt so the LLM knows what's available. Empty string when
+ * no skills are found (core-agent treats `""` as "skip the section").
+ *
+ * When `opts.allowlist` is provided, trusted skills are restricted to that
+ * list, then the acting agent's private skills and user-forced open skills
+ * are appended. Rendering always goes through `renderSkillLines` so the
+ * `Source` label is derived from the exact root path rather than basename.
+ */
 export async function getSystemPromptBlock(opts: SystemPromptBlockOptions = {}): Promise<string> {
   const loader = await getLoader();
-  const specs = loader.list();
+  const specs = _withholdUntrustedSpecs(loader.list());
   const disabled = opts.disabledIds ? new Set(opts.disabledIds) : null;
   const filterDisabled = (list: typeof specs) =>
     disabled && disabled.size ? list.filter((s) => !disabled.has(s.id)) : list;
@@ -804,6 +919,16 @@ export async function getSystemPromptBlock(opts: SystemPromptBlockOptions = {}):
 
   const actorAgentId = (opts.agentId || '').trim();
   if (actorAgentId) {
+    // NOT trust-withheld yet, and passing these through
+    // `_withholdUntrustedSpecs` would be WRONG rather than merely incomplete:
+    // `reverifySkill` resolves a skill dir as `userMarketplaceSkillDir(uid, id)`,
+    // but these specs come from `userMarketplaceAgentSkillsDir(uid, agentId)` /
+    // `agentPrivateSkillsDir(uid, agentId)`. For a private skill id that also
+    // exists as a standalone install, the check would verify the wrong bytes;
+    // for one that does not, it resolves to a missing dir and fails open.
+    // Private skills need a receipt keyed by (agentId, skillId) — see
+    // `docs/skill-安全体系-第二期-实施方案.md` §5 step 3b, which also adds the
+    // install-time scan they currently lack.
     const existingIds = new Set(rendered.map((s) => s.id));
     let privateIndex = 0;
     for (const { root, specs: privateList } of await loadAgentPrivateSkillSpecs(uid, actorAgentId)) {
@@ -1016,7 +1141,10 @@ export async function listSkillsForBridge(uid: string): Promise<BridgeSkillRow[]
   const pick = await getPickDescription();
   // Agent-private skills never reach external CLI agents — the orkas-bridge
   // serves the CLI actor, never the in-process owning agent.
-  let specs: SkillSpec[] = loader.list().filter((s) => !s.ownerAgent);
+  // Trust-withheld before anything else: the CLI agent is as much a consumer of
+  // this listing as the in-process prompt is, so a tampered skill must not
+  // reach it either.
+  let specs: SkillSpec[] = _withholdUntrustedSpecs(loader.list().filter((s) => !s.ownerAgent));
   const rankByRoot = new Map<string, number>();
   const openDirs = _computeOpenTierDirs(uid);
   const openLoader = await getOpenLoader(openDirs);
@@ -1176,10 +1304,14 @@ export async function listAgentOwnedSkillIds(uid: string, agentId: string): Prom
  * another agent's private skill into its `skill_list` nor resolve it at
  * runtime — the owner keeps its own. With no agent context the full list is
  * returned (display-name normalization needs every name).
+ *
+ * Trust-withheld: `bus.ts::_runtimeSkillListForAgent` builds the runtime skill
+ * list from this, so a tampered skill left in would be handed to the agent by
+ * that route even though the prompt path withholds it.
  */
 export async function listSkillSpecs(opts: { forAgentId?: string } = {}): Promise<SkillSpec[]> {
   const loader = await getLoader();
-  let specs = loader.list();
+  let specs = _withholdUntrustedSpecs(loader.list());
   if (opts.forAgentId === undefined) return specs;
   const forAgentId = opts.forAgentId.trim();
   specs = specs.filter((s) => !s.ownerAgent || s.ownerAgent === forAgentId);
@@ -1203,6 +1335,17 @@ export async function listSkillSpecs(opts: { forAgentId?: string } = {}): Promis
  * `opts.forAgentId` applies the same agent-private owner gate as
  * `listSkillSpecs`: another agent's `ownerAgent` skill cannot be persisted in
  * this agent's metadata.
+ *
+ * Deliberately NOT trust-withheld, unlike the other listings here. This one
+ * gates a WRITE: `updateCustomAgent` resolves `skill_list` against it and drops
+ * every ref that does not appear, persisting the result. A withheld skill would
+ * therefore be silently and permanently deleted from the user's agent spec —
+ * turning a reversible load-time withhold into irreversible data loss, and on
+ * a fail-open control that can be wrong. Trust enforcement belongs on the paths
+ * that hand skills to a model, not on the path that records what the user
+ * chose. A blocked skill still cannot be loaded or executed; it merely stays
+ * listed in the spec, which is what makes recovery possible once it verifies
+ * again.
  */
 export async function listSkillSpecsForAgentMetadata(
   uid: string,

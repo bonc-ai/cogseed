@@ -3,6 +3,11 @@ import { spawn } from 'node:child_process';
 
 import { capToolResult, DEFAULT_INLINE_RESULT_TOKENS, type WrapOpts } from '../../../../util/tool-result-cap';
 import { mateRuntimeSessionToolResultsDir, userRoot } from '../../../../paths';
+// Imported from the feature module rather than `model/core-agent/skill-registry`
+// on purpose: this runs inside the isolated Runtime worker, and the registry's
+// module graph reaches `#core-agent`, which must stay dynamic-import-only
+// (PC/CLAUDE.md §Boundary). `skill_reverify` depends only on quality + paths.
+import { isSkillTrustedForLoad } from '../../../skill_reverify';
 import { normalizeRuntimePath } from './permissions';
 import type { RuntimeToolCallContext, RuntimeToolResult, RuntimeToolResultOptions } from './file-tools';
 
@@ -77,6 +82,25 @@ export async function runRuntimeSkillTool(
   try {
     const skillId = validateSkillToken(input.skill_id, 'skill_id');
     const script = validateSkillToken(input.script, 'script');
+    // Security-receipt check before spawning. The Runtime worker reaches
+    // `run-skill.cjs` directly, so without this a skill withheld from the
+    // prompt path would still execute here. Only `blocked` stops the run —
+    // `risk` / `unknown` proceed, and a thrown check proceeds too, matching the
+    // deliberately fail-open load path (a scanner hiccup must not make a
+    // working skill unrunnable).
+    //
+    // Takes `skill_id` verbatim: this tool's contract is an id, not a display
+    // name, so there is no name-resolution hole to close as there is for the
+    // free-form bash command path.
+    try {
+      const trust = isSkillTrustedForLoad(ctx.userId, skillId);
+      if (!trust.trusted) {
+        return formatError(
+          'E_RUNTIME_SKILL_WITHHELD',
+          `skill "${skillId}" failed security verification (its files changed since it was checked, or the rules were updated) and cannot run`,
+        );
+      }
+    } catch { /* verification error is not evidence of tampering — fail open */ }
     const cwd = typeof input.cwd === 'string' && input.cwd.trim()
       ? normalizeRuntimePath(input.cwd, ctx.allowedRoots)
       : (ctx.allowedRoots[0] || process.cwd());

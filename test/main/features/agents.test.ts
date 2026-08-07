@@ -1884,6 +1884,54 @@ describe('agents › deleteCustomAgent', () => {
     expect(await a.deleteCustomAgent('ghost')).toBe(false);
   });
 
+  // A platform agent's spec lives under local/marketplace/agents/<id>/, which
+  // `agentDir` does not point at — so the danger is not the spec but the side
+  // state a platform agent accumulates in cloud/agents/<id>/. `bus.ts` calls
+  // `recordAgentRuntimeStats` for every agent actor, platform included, and
+  // that write creates the cloud dir. Once it exists, an unguarded delete
+  // wipes stats + chat dirs + session jsonl for content the recycle bin never
+  // snapshots (createAppRecycleBatchForAgent covers cloud/agents/<id> only).
+  it('refuses to delete a platform agent that has accumulated cloud-side state', async () => {
+    writePlatformAgent('platform-victim');
+    const cloudDir = path.join(customAgentsDir(), 'platform-victim');
+    fs.mkdirSync(cloudDir, { recursive: true });
+    const statsFile = path.join(cloudDir, 'runtime_stats.json');
+    fs.writeFileSync(statsFile, JSON.stringify({ devices: {} }));
+
+    const a = await loadAgents();
+    expect(await a.deleteCustomAgent('platform-victim')).toBe(false);
+    // The run history survives, and so does the marketplace spec.
+    expect(fs.existsSync(statsFile)).toBe(true);
+    expect(fs.existsSync(path.join(builtinAgentsDir(), 'platform-victim', 'agent.json'))).toBe(true);
+  });
+
+  it('does not purge a platform agent per-user chat dir or session jsonl', async () => {
+    writePlatformAgent('platform-keep');
+    fs.mkdirSync(path.join(customAgentsDir(), 'platform-keep'), { recursive: true });
+    const chatDir = path.join(tmpDir, TEST_UID, 'cloud', 'chats', 'agent', 'platform-keep');
+    fs.mkdirSync(chatDir, { recursive: true });
+    fs.writeFileSync(path.join(chatDir, 'chat.jsonl'), '{"role":"user","content":"hi"}\n');
+    const sessionDir = path.join(tmpDir, TEST_UID, 'cloud', 'sessions');
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const sessionFile = path.join(sessionDir, 'agent-platform-keep.jsonl');
+    fs.writeFileSync(sessionFile, '{"role":"user","content":"old"}\n');
+
+    const a = await loadAgents();
+    expect(await a.deleteCustomAgent('platform-keep')).toBe(false);
+    expect(fs.existsSync(chatDir)).toBe(true);
+    expect(fs.existsSync(sessionFile)).toBe(true);
+  });
+
+  // The guard keys on the resolved agent's source, not on directory presence,
+  // so a custom agent that shadows nothing still deletes normally. Guarding on
+  // "cloud dir exists" instead would have been a no-op.
+  it('still deletes a custom agent whose id resolves to source=custom', async () => {
+    writeCustomAgent('custom-still-deletable');
+    const a = await loadAgents();
+    expect(await a.deleteCustomAgent('custom-still-deletable')).toBe(true);
+    expect(fs.existsSync(path.join(customAgentsDir(), 'custom-still-deletable'))).toBe(false);
+  });
+
   it('drops per-user agent chat dirs on delete', async () => {
     writeCustomAgent('victim');
     const chatDir = path.join(tmpDir, TEST_UID, 'cloud', 'chats', 'agent', 'victim');

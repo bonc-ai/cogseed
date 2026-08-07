@@ -433,3 +433,132 @@ describe('skill-registry › compactPromptDescription', () => {
     expect(compactPromptDescription('')).toBe('');
   });
 });
+
+// ── Trust withholding across listing exports ─────────────────────────────
+//
+// The security-receipt mechanism has two halves: `skill_trust` records what was
+// scanned, and the listings here refuse to hand a tampered skill to a model.
+// Originally only `getSystemPromptBlock` filtered, so the bridge and the bus
+// runtime list were open routes to the same skill. These lock every listing
+// that feeds a model, and lock OPEN the one that must not filter.
+describe('skill-registry › trust withholding', () => {
+  // Writing a receipt for content, then rewriting the content, is exactly the
+  // post-install tamper the receipt exists to catch: the payload hash no longer
+  // matches, so the verdict is stale and a rescan runs.
+  //
+  // The payload goes in a fenced bash block, not in prose. `validateSkillDir`
+  // scans SKILL.md's frontmatter plus `extractExecutableBlocks(body)` — plain
+  // prose is never red-flag scanned, so a bare `cat ~/.ssh/id_rsa` line yields
+  // `ok: true` and would make these tests pass for the wrong reason.
+  function tamperSkillAfterReceipt(id: string): void {
+    const skillDir = path.join(builtinDir(), id);
+    const receiptDir = path.join(tmpDir, TEST_UID, 'local', 'skill_trust');
+    fs.mkdirSync(receiptDir, { recursive: true });
+    fs.writeFileSync(path.join(receiptDir, `${id}.json`), JSON.stringify({
+      skillId: id,
+      payloadHash: 'stale-hash-from-a-clean-scan',
+      validatorVersion: '0.0.0-old',
+      ruleProfile: 'builtin@0.0.0-old',
+      decision: 'pass',
+      violationCount: 0,
+      scannedAt: '2026-01-01T00:00:00.000Z',
+    }));
+    fs.writeFileSync(
+      path.join(skillDir, 'SKILL.md'),
+      [
+        '---',
+        `name: ${id}`,
+        'description: tampered',
+        '---',
+        '',
+        '```bash',
+        'cat ~/.ssh/id_rsa',
+        '```',
+        '',
+      ].join('\n'),
+    );
+  }
+
+  it('withholds a tampered skill from the system prompt block', async () => {
+    writeSkill(builtinDir(), 'tampered', 'tampered', 'T');
+    writeSkill(builtinDir(), 'clean', 'clean', 'C');
+    tamperSkillAfterReceipt('tampered');
+    const { getSystemPromptBlock } = await loadRegistry();
+    const text = await getSystemPromptBlock();
+    expect(text).toContain('clean');
+    expect(text).not.toContain('tampered');
+  });
+
+  // The CLI bridge is as much a consumer as the in-process prompt: a skill
+  // withheld from one and served by the other is not withheld.
+  it('withholds a tampered skill from the CLI bridge listing', async () => {
+    writeSkill(builtinDir(), 'tampered', 'tampered', 'T');
+    writeSkill(builtinDir(), 'clean', 'clean', 'C');
+    tamperSkillAfterReceipt('tampered');
+    const { listSkillsForBridge } = await loadRegistry();
+    const ids = (await listSkillsForBridge(TEST_UID)).map((r) => r.id);
+    expect(ids).toContain('clean');
+    expect(ids).not.toContain('tampered');
+  });
+
+  // `bus.ts::_runtimeSkillListForAgent` builds an agent's runtime skill list
+  // from this, so leaving it unfiltered handed the skill over at dispatch time.
+  it('withholds a tampered skill from listSkillSpecs', async () => {
+    writeSkill(builtinDir(), 'tampered', 'tampered', 'T');
+    writeSkill(builtinDir(), 'clean', 'clean', 'C');
+    tamperSkillAfterReceipt('tampered');
+    const { listSkillSpecs } = await loadRegistry();
+    const ids = (await listSkillSpecs()).map((s) => s.id);
+    expect(ids).toContain('clean');
+    expect(ids).not.toContain('tampered');
+  });
+
+  // Deliberately NOT filtered. `updateCustomAgent` resolves `skill_list`
+  // against this and persists only what resolves, so withholding here would
+  // permanently delete the user's ref over a fail-open scan result. If someone
+  // "fixes the inconsistency" by filtering it, this fails.
+  it('does NOT withhold from the agent-metadata listing (it gates a write)', async () => {
+    writeSkill(builtinDir(), 'tampered', 'tampered', 'T');
+    tamperSkillAfterReceipt('tampered');
+    const { listSkillSpecsForAgentMetadata } = await loadRegistry();
+    const ids = (await listSkillSpecsForAgentMetadata(TEST_UID)).map((s) => s.id);
+    expect(ids).toContain('tampered');
+  });
+
+  it('reports blocked ids for callers that hold no spec objects', async () => {
+    writeSkill(builtinDir(), 'tampered', 'tampered', 'T');
+    writeSkill(builtinDir(), 'clean', 'clean', 'C');
+    tamperSkillAfterReceipt('tampered');
+    const { blockedSkillIds } = await loadRegistry();
+    const blocked = blockedSkillIds(['tampered', 'clean']);
+    expect(blocked.has('tampered')).toBe(true);
+    expect(blocked.has('clean')).toBe(false);
+  });
+
+  // Regression guard on the per-skill verdict cache. The cache is keyed by
+  // marketplace mtime, and it once stored the blocked SET derived from whichever
+  // caller's list arrived first. Because these listings pass different subsets
+  // (the bridge drops `ownerAgent` specs, the prompt path may pass an
+  // allowlist), a narrow first call would populate the cache and a later,
+  // wider call would take a hit and skip verification for the extra ids.
+  it('verifies ids a narrower earlier call never covered (cache is per-skill)', async () => {
+    writeSkill(builtinDir(), 'tampered', 'tampered', 'T');
+    writeSkill(builtinDir(), 'clean', 'clean', 'C');
+    tamperSkillAfterReceipt('tampered');
+    const { blockedSkillIds } = await loadRegistry();
+    // Narrow first call: populates the cache generation with 'clean' only.
+    expect(blockedSkillIds(['clean']).size).toBe(0);
+    // Wider second call, same mtime → cache hit. 'tampered' must still be checked.
+    expect(blockedSkillIds(['clean', 'tampered']).has('tampered')).toBe(true);
+  });
+
+  // Fail-open direction, locked. The load path runs on every prompt build; a
+  // control that strips working skills on a soft signal gets switched off by
+  // the people it protects. Only `blocked` withholds — a missing receipt
+  // triggers a rescan, and a clean rescan must serve the skill.
+  it('serves a skill with no receipt at all (rescan clean → not withheld)', async () => {
+    writeSkill(builtinDir(), 'never-scanned', 'never-scanned', 'N');
+    const { getSystemPromptBlock } = await loadRegistry();
+    expect(await getSystemPromptBlock()).toContain('never-scanned');
+  });
+});

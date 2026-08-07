@@ -5,7 +5,7 @@ import { refMatchesAsset, relationRef, titleFromText } from './normalize';
 import { listCognitionCandidates } from './candidates-adapter';
 import { listCognitionReuseReceipts } from './receipts-adapter';
 import type { CompatExperienceCandidate, CompatPatchCandidate } from '../p3394';
-import type { CognitionAssetSummary, CognitionAssetType } from './types';
+import type { CognitionAssetSummary, CognitionAssetType, CognitionSecurityView } from './types';
 
 export interface ListCognitionAssetsFilter {
   type?: CognitionAssetType;
@@ -165,5 +165,50 @@ async function enrichAssetCounts(userId: string, items: CognitionAssetSummary[])
     });
     item.reuseCount = matchingReceipts.length;
     item.lastReusedAt = matchingReceipts[0]?.completedAt || matchingReceipts[0]?.createdAt;
+  }
+  await enrichAssetSecurity(userId, items);
+}
+
+/**
+ * Populate the security axis from the validation record on disk.
+ *
+ * Only skill-backed assets have one: `runSkillValidation` persists per-skill
+ * verdicts, and the security axis must reflect a real scan rather than being
+ * inferred from maturity. Assets with no record stay `unknown` — reporting
+ * them as `pass` would claim a check that never ran.
+ */
+async function enrichAssetSecurity(userId: string, items: CognitionAssetSummary[]): Promise<void> {
+  const skillRefs = new Map<string, string>();
+  for (const item of items) {
+    const skillId = item.baselineSkillRef?.startsWith('skill:')
+      ? item.baselineSkillRef.slice('skill:'.length)
+      : undefined;
+    if (skillId) skillRefs.set(item.id, skillId);
+  }
+
+  const verdicts = new Map<string, CognitionSecurityView>();
+  await Promise.all([...new Set(skillRefs.values())].map(async (skillId) => {
+    try {
+      const run = await p3394.findLatestSkillValidation(userId, skillId);
+      if (!run) return;
+      verdicts.set(skillId, {
+        // `degraded` means the scanner could not complete — surfaced as
+        // `unknown` so it is never mistaken for a clean result.
+        status: run.status === 'pass' ? 'pass'
+          : run.status === 'risk' ? 'risk'
+            : run.status === 'blocked' ? 'blocked' : 'unknown',
+        findingCount: run.violations.length,
+        ...(run.violations[0]?.rule ? { topRule: run.violations[0].rule } : {}),
+        semanticReviewed: false,
+      });
+    } catch {
+      // Unreadable record: leave the asset `unknown` rather than guessing.
+    }
+  }));
+
+  for (const item of items) {
+    const skillId = skillRefs.get(item.id);
+    item.security = (skillId && verdicts.get(skillId))
+      || { status: 'unknown', findingCount: 0, semanticReviewed: false };
   }
 }

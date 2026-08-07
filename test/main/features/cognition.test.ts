@@ -187,7 +187,7 @@ describe('cognition feature aggregate layer', () => {
         type: 'skill_evolution',
         skillId: 'skill-a',
         targetAssetId: 'skill:skill-a',
-        actions: ['source', 'accept', 'reject'],
+        actions: ['source', 'deep_review', 'accept', 'reject'],
       }),
     ]));
 

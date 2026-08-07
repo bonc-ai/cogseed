@@ -26,7 +26,7 @@ export function relationRef(type: CognitionRelationRef['type'], id: string, titl
 
 export function actionsForCandidate(source: string, status: string): CognitionCandidateAction[] {
   if (source === 'personal_ontology') return ['open_personal_ontology', 'import_to_recall'];
-  if (status === 'pending') return ['source', 'accept', 'reject'];
+  if (status === 'pending') return ['source', 'deep_review', 'accept', 'reject'];
   return ['source'];
 }
 
