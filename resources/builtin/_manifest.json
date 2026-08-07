@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "3db2407a6c727aedcc47863f01a76476bff274ab3b3f006e7028491c5eee4a6c",
+  "content_tree_sha256": "be2ef6dd152e1fa3137b3879d942814c7718a369383eae08aabf6808406f67d0",
   "files": [
     {
       "path": "marketplace/agents/78900d8758bc/_meta.json",
@@ -274,8 +274,8 @@
     },
     {
       "path": "marketplace/agents/c045605cb916/agent.json",
-      "bytes": 5796,
-      "sha256": "c9d8ec1dbdaacad3e9b9a9d8630497f4e58c35154d8b002122b919ba53569050"
+      "bytes": 3591,
+      "sha256": "76fd84ca51193c0853f50a38676d18c2eb62add283b46d535139bcc2c6f6bd16"
     },
     {
       "path": "marketplace/agents/e064dca9e1bd/agent.json",
@@ -819,11 +819,11 @@
       },
       {
         "id": "c045605cb916",
-        "name": "本地报销准备助手",
-        "version": "0.2.1",
+        "name": "Reimbursement Agent",
+        "version": "0.2.0",
         "icon": "target",
         "color": "gold",
-        "updated_at": "2026-08-04T00:00:00",
+        "updated_at": "2026-08-02T00:00:00",
         "skill_list": [],
         "embedded_skills": []
       },

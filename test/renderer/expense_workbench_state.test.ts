@@ -1,54 +1,64 @@
 import { describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as vm from 'node:vm';
 
-import state from '../../src/renderer/modules/expense-workbench-state.js';
+interface FakeElement {
+  className: string;
+  hidden: boolean;
+  textContent: string;
+  style: Record<string, string>;
+  children: FakeElement[];
+  appendChild(child: FakeElement): FakeElement;
+  replaceChildren(...children: FakeElement[]): void;
+}
 
-describe('expense workbench pure state', () => {
-  it('normalizes state without retaining invalid pages or mutable collection references', () => {
-    const applications = [{ application_id: 'APP-1' }];
-    const value = state.createState({ page: 'not-a-page', applications });
-    applications.push({ application_id: 'APP-2' });
+function createElement(): FakeElement {
+  return {
+    className: '',
+    hidden: false,
+    textContent: '',
+    style: {},
+    children: [],
+    appendChild(child) { this.children.push(child); return child; },
+    replaceChildren(...children) { this.children = children; },
+  };
+}
 
-    expect(value.page).toBe('assistant');
-    expect(value.applications).toEqual([{ application_id: 'APP-1' }]);
-    expect(value.loading).toBe(false);
-    expect(value.busy).toEqual({});
-  });
+describe('reimbursement management setup view', () => {
+  it('renders the protected Feishu setup card when configuration is not ready', async () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/modules/expense-workbench.js'), 'utf8');
+    const host = createElement();
+    const detail = createElement();
+    const chat = createElement();
+    const mounted: Array<{ agent_id: string }> = [];
+    const elements: Record<string, FakeElement> = {
+      'agent-management-surface': host,
+      'agents-detail-content': detail,
+      'agents-chat-col': chat,
+    };
+    const windowLike: Record<string, unknown> = {
+      orkas: { invoke: async () => ({ ok: true, result: { configured: false, ready: false } }) },
+      mountExpenseSetupCard: (_target: FakeElement, payload: { agent_id: string }) => mounted.push(payload),
+      addEventListener: () => undefined,
+    };
+    const context = vm.createContext({
+      window: windowLike,
+      document: {
+        getElementById: (id: string) => elements[id] || null,
+        createElement: () => createElement(),
+      },
+      t: (key: string) => key,
+    });
+    vm.runInContext(source, context);
 
-  it('invalidates stale page results through a monotonic epoch', () => {
-    const value = state.createState();
-    const first = state.nextPageEpoch(value, 'applications');
-    const second = state.nextPageEpoch(value, 'audit');
+    const open = windowLike.openExpenseWorkbench as (agentId: string) => Promise<void>;
+    await open('c045605cb916');
 
-    expect(second).toBe(first + 1);
-    expect(state.isCurrentEpoch(value, first)).toBe(false);
-    expect(state.isCurrentEpoch(value, second)).toBe(true);
-    expect(value.loading).toBe(true);
-  });
-
-  it('rejects malformed drafts and accepts bounded positive expense items', () => {
-    expect(state.parseDraftText('{')).toMatchObject({ ok: false, code: 'draft_invalid_json' });
-    expect(state.validateDraftPayload({ expense_items: [] })).toMatchObject({ ok: false, code: 'draft_missing_items' });
-    expect(state.validateDraftPayload({ expense_items: [{ amount: 0 }] })).toMatchObject({ ok: false, code: 'draft_invalid_amount' });
-    expect(state.parseDraftText(JSON.stringify({ expense_items: [{ amount: 12.5 }] }))).toMatchObject({ ok: true });
-  });
-
-  it('records stale response conflicts and bounded recoverable errors', () => {
-    const value = state.createState();
-    expect(state.applyVersionGuard(value, 4, 3)).toBe(false);
-    expect(value.conflict).toMatchObject({ expectedVersion: 4, incomingVersion: 3, kind: 'stale_response' });
-
-    expect(state.normalizeError({ code: 'component_unavailable', message: 'offline', retryable: true }, 'fallback'))
-      .toEqual({ code: 'component_unavailable', message: 'offline', retryable: true });
-  });
-
-  it('tracks busy operations and clears transient state deterministically', () => {
-    const value = state.createState({ message: 'old', error: { code: 'x' } });
-    state.setBusy(value, 'save', true);
-    state.setProgress(value, 'save', 'Saving', 'running');
-    expect(state.isBusy(value, 'save')).toBe(true);
-    state.clearTransient(value);
-    state.setBusy(value, 'save', false);
-    expect(value).toMatchObject({ message: '', error: null, conflict: null, recovery: null, progress: null });
-    expect(state.isBusy(value, 'save')).toBe(false);
+    expect(host.hidden).toBe(false);
+    expect(detail.style.display).toBe('none');
+    expect(chat.style.display).toBe('none');
+    expect(host.children[0]?.className).toBe('expense-agent-management');
+    expect(mounted[mounted.length - 1]).toEqual({ agent_id: 'c045605cb916' });
   });
 });

@@ -1745,14 +1745,12 @@ function _renderAgentDetail(agent, editing) {
   const canEditDefinition = !isMock && isCustom;
   const canEdit = isCommander || canEditDefinition || _canEditAgentMemory(agent);
   if (useBtn) {
-    const managementOnly = agent.interaction_mode === 'management_only';
-    useBtn.style.display = editing || managementOnly ? 'none' : '';
-    useBtn.disabled = isMock || managementOnly || agent.enabled === false;
-    useBtn.setAttribute('aria-disabled', (isMock || managementOnly || agent.enabled === false) ? 'true' : 'false');
+    useBtn.style.display = editing ? 'none' : '';
+    useBtn.disabled = isMock || agent.enabled === false;
+    useBtn.setAttribute('aria-disabled', (isMock || agent.enabled === false) ? 'true' : 'false');
   }
   if (manageBtn) {
     const canManage = agent.management_surface === 'expense_workbench'
-      && agent.interaction_mode === 'management_only'
       && agent.reimbursement_entry_role === 'canonical';
     manageBtn.hidden = editing || !canManage;
     manageBtn.disabled = editing || !canManage || agent.enabled === false;
@@ -3473,9 +3471,7 @@ function _renderAgentPickerList(filterText) {
     listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
     return;
   }
-  let agents = (_agentsCache || []).filter((a) => (
-    a.enabled !== false && a.interaction_mode !== 'management_only'
-  ));
+  let agents = (_agentsCache || []).filter((a) => a.enabled !== false);
   // Project scope: only show agents bound to the active context's project.
   // Applied AFTER the enabled filter (per CLAUDE.md §6 outer-intersection
   // rule). `null` = no project scope, full listing.

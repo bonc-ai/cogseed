@@ -475,19 +475,19 @@ describe('agent and skill category tabs', () => {
     expect(html).not.toContain('Disabled Package');
   });
 
-  it('keeps management-only agents out of ordinary recipient pickers', () => {
+  it('keeps the reimbursement agent available in ordinary recipient pickers', () => {
     const { context, el } = loadCategoryRenderers();
     vm.runInContext(`
       _agentsCache = [
         { agent_id: 'chat-agent', name: 'Chat Agent', source: 'custom', enabled: true },
-        { agent_id: 'expense-agent', name: 'Expense Workbench', source: 'marketplace', enabled: true, interaction_mode: 'management_only' }
+        { agent_id: 'expense-agent', name: 'Reimbursement Agent', source: 'marketplace', enabled: true }
       ];
       _renderAgentPickerList('', 'new-chat-recipient-chip');
     `, context);
 
     const html = el('agent-picker-list').innerHTML;
     expect(html).toContain('Chat Agent');
-    expect(html).not.toContain('Expense Workbench');
+    expect(html).toContain('Reimbursement Agent');
   });
 
   it('prepares the expense capability before waiting for Agent-card detail fetch', async () => {
