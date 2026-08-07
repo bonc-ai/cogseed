@@ -157,4 +157,29 @@ export const invokeHandlers = {
   'memory.importParse': async (payload: any) => ({
     items: memory.parseImportText(String(payload?.text || '')),
   }),
+
+  // ── 桥接：renderer 旧通道（agents.memory.*）→ features/memory.ts（agent scope）。
+  //  主分支原版漏注册，功能等同 memory.* + agentId，纯转发零逻辑变更。──
+  'agents.memory.add': async (payload: any, ctx: any) => {
+    const agentId = String(payload?.agent_id || '').trim();
+    if (!agentId) throw new Error('agent_id required');
+    return memory.addEntry(ctx.userId, { agent: agentId }, String(payload?.content || ''));
+  },
+
+  'agents.memory.remove': async (payload: any, ctx: any) => {
+    const agentId = String(payload?.agent_id || '').trim();
+    if (!agentId) throw new Error('agent_id required');
+    return memory.removeEntry(ctx.userId, { agent: agentId }, String(payload?.old_text || ''));
+  },
+
+  'agents.memory.update': async (payload: any, ctx: any) => {
+    const agentId = String(payload?.agent_id || '').trim();
+    if (!agentId) throw new Error('agent_id required');
+    return memory.replaceEntry(
+      ctx.userId,
+      { agent: agentId },
+      String(payload?.old_text || ''),
+      String(payload?.content || ''),
+    );
+  },
 };

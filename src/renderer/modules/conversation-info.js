@@ -1361,8 +1361,14 @@ const ConversationInfo = (() => {
   }
 
   function _openFile(absPath) {
-    if (!absPath || typeof openChatFileViewer !== 'function') return;
-    openChatFileViewer(absPath, _baseName(absPath), _cid ? { cid: _cid } : undefined);
+    if (!absPath) return;
+    const name = _baseName(absPath);
+    const opts = _cid ? { cid: _cid } : undefined;
+    // Prefer the side pane for renderable kinds; `openSideBrowser` returning
+    // false is the signal that this kind belongs to the fullscreen viewer.
+    if (typeof openSideBrowser === 'function' && openSideBrowser(absPath, name, opts || {})) return;
+    if (typeof openChatFileViewer !== 'function') return;
+    openChatFileViewer(absPath, name, opts);
   }
 
   function _attachmentEntriesForPath(absPath, kind) {

@@ -20,13 +20,13 @@ export type MemoryTier = 'agent' | 'project' | 'shared' | 'user';
 
 /** Handler interface implemented by the features layer. */
 export interface MemoryToolHandler {
-  add(tier: MemoryTier, content: string): MemoryToolResult | Promise<MemoryToolResult>;
-  replace(tier: MemoryTier, oldText: string, content: string): MemoryToolResult | Promise<MemoryToolResult>;
-  remove(tier: MemoryTier, oldText: string): MemoryToolResult | Promise<MemoryToolResult>;
-  list(tier: MemoryTier): MemoryToolResult | Promise<MemoryToolResult>;
+  add(tier: MemoryTier, content: string): MemoryToolOperationResult | Promise<MemoryToolOperationResult>;
+  replace(tier: MemoryTier, oldText: string, content: string): MemoryToolOperationResult | Promise<MemoryToolOperationResult>;
+  remove(tier: MemoryTier, oldText: string): MemoryToolOperationResult | Promise<MemoryToolOperationResult>;
+  list(tier: MemoryTier): MemoryToolOperationResult | Promise<MemoryToolOperationResult>;
 }
 
-export interface MemoryToolResult {
+export interface MemoryToolOperationResult {
     ok: boolean; error?: string; entries: string[];
     usage: { current: number; limit: number };
 }

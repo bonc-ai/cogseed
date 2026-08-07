@@ -468,12 +468,71 @@ async function closeChatFileViewer(opts) {
 
 // ── Per-kind body builders ───────────────────────────────────────────────
 
+/**
+ * Sandbox flags for previewing local HTML.
+ *
+ * `allow-scripts` ONLY. `chat-media://` is a distinct origin from `file://`, so
+ * SOP already blocks `parent.*`; we additionally forbid `allow-same-origin`
+ * (no cookie / localStorage / sibling-fetch reach), `allow-popups`
+ * (no `window.open`) and `allow-top-navigation` (no top-frame redirects).
+ * Self-contained LLM-generated HTML still runs its inline scripts and styles.
+ *
+ * Single source of truth: the fullscreen viewer and the side browser pane both
+ * read this constant instead of each spelling the flags out, so the two
+ * surfaces cannot drift apart on security.
+ */
+const PREVIEW_HTML_SANDBOX = 'allow-scripts';
+
+/**
+ * Build the preview markup for a local file. Pure (inputs → HTML string), so
+ * both the fullscreen viewer and the side pane render identical frames and the
+ * result can be asserted directly in tests.
+ *
+ * Returns '' for kinds this builder does not own (image → lightbox,
+ * markdown / text → editor components, office → server-rendered HTML).
+ */
+function buildFilePreviewHtml(kind, url, displayName) {
+  const title = escapeHtml(displayName || '');
+  if (kind === 'html') {
+    return `<iframe class="chat-file-viewer-html" sandbox="${PREVIEW_HTML_SANDBOX}" src="${url}" title="${title}"></iframe>`;
+  }
+  if (kind === 'pdf') {
+    // `#toolbar=1&navpanes=0` are Chromium PDFium control hints (keep toolbar,
+    // hide left sidebar). Same pattern as the KB context PDF viewer.
+    return `<iframe class="chat-file-viewer-pdf" src="${url}#toolbar=1&navpanes=0" title="${title}"></iframe>`;
+  }
+  if (kind === 'image') {
+    return `<img class="chat-file-viewer-image" src="${url}" alt="${title}">`;
+  }
+  return '';
+}
+
+/** Kinds the side pane can render on its own. Pure — tested. */
+function isSidePreviewableKind(kind) {
+  return kind === 'html' || kind === 'pdf' || kind === 'image';
+}
+
+/**
+ * Render a local-file preview into an arbitrary container.
+ *
+ * Extracted so the side browser pane reuses the exact `chat-media://` URL
+ * construction and sandbox flags as the fullscreen viewer rather than copying
+ * the security-relevant parts.
+ */
+function renderFilePreviewInto(container, absPath, displayName, opts = {}) {
+  if (!container) return false;
+  const kind = opts.kind || _kindOf(displayName || absPath);
+  if (!isSidePreviewableKind(kind)) return false;
+  const url = _chatMediaLocalUrl(absPath);
+  const html = buildFilePreviewHtml(kind, url, displayName);
+  if (!html) return false;
+  container.innerHTML = html;
+  return true;
+}
+
 async function _renderPdfBody(absPath, displayName, cid, projectId) {
   if (!(await _openViewerShell(displayName, { kind: 'pdf', absPath, cid, projectId }))) return;
-  const url = _chatMediaLocalUrl(absPath);
-  // `#toolbar=1&navpanes=0` are Chromium PDFium control hints (keep toolbar,
-  // hide left sidebar). Same pattern as the KB context PDF viewer.
-  _viewerBody.innerHTML = `<iframe class="chat-file-viewer-pdf" src="${url}#toolbar=1&navpanes=0" title="${escapeHtml(displayName || '')}"></iframe>`;
+  _viewerBody.innerHTML = buildFilePreviewHtml('pdf', _chatMediaLocalUrl(absPath), displayName);
 }
 
 function _videoCompositionDimensions(html) {
@@ -511,13 +570,6 @@ async function _renderHtmlBody(absPath, displayName, cid, projectId) {
   const seq = await _openViewerShell(displayName, { kind: 'html', absPath, cid, projectId });
   if (!seq) return;
   const url = _chatMediaLocalUrl(absPath);
-  // sandbox: allow-scripts ONLY. chat-media:// is a distinct origin from
-  // file://, so SOP blocks parent.* access; we additionally forbid
-  // allow-same-origin (no cookie / localStorage / sibling-fetch reach),
-  // allow-popups (no window.open), and allow-top-navigation (no top-frame
-  // redirects). Self-contained LLM-generated HTML still runs its inline
-  // scripts and styles.
-  const sandbox = 'allow-scripts';
   let composition = null;
   try {
     // Ask main to scan for the small composition root tag without copying the
@@ -532,11 +584,11 @@ async function _renderHtmlBody(absPath, displayName, cid, projectId) {
     _viewerLog.warn('composition dimension probe failed', { path: absPath, error: String(err && err.message || err) });
   }
   if (!composition) {
-    _viewerBody.innerHTML = `<iframe class="chat-file-viewer-html" sandbox="${sandbox}" src="${url}" title="${escapeHtml(displayName || '')}"></iframe>`;
+    _viewerBody.innerHTML = buildFilePreviewHtml('html', url, displayName);
     return;
   }
   _viewerEl.classList.add('is-video-composition');
-  _viewerBody.innerHTML = `<div class="chat-file-viewer-composition-wrap" data-width="${composition.width}" data-height="${composition.height}"><iframe class="chat-file-viewer-html chat-file-viewer-composition-frame" sandbox="${sandbox}" src="${url}" title="${escapeHtml(displayName || '')}"></iframe></div>`;
+  _viewerBody.innerHTML = `<div class="chat-file-viewer-composition-wrap" data-width="${composition.width}" data-height="${composition.height}"><iframe class="chat-file-viewer-html chat-file-viewer-composition-frame" sandbox="${PREVIEW_HTML_SANDBOX}" src="${url}" title="${escapeHtml(displayName || '')}"></iframe></div>`;
   _viewerCompositionResizeHandler = () => _fitVideoCompositionFrame();
   window.addEventListener('resize', _viewerCompositionResizeHandler);
   requestAnimationFrame(_fitVideoCompositionFrame);
@@ -891,7 +943,16 @@ async function openChatFileViewer(absPath, displayName, opts) {
   return _showUnsupportedDialog(absPath, cid, projectId, {});
 }
 
+if (typeof window !== 'undefined') {
+  // Shared with chat-side-browser.js so the side pane reuses this module's
+  // URL construction and sandbox flags instead of restating them.
+  window.buildFilePreviewHtml = buildFilePreviewHtml;
+  window.isSidePreviewableKind = isSidePreviewableKind;
+  window.renderFilePreviewInto = renderFilePreviewInto;
+  window.previewKindOf = _kindOf;
+}
+
 // CJS bridge for vitest — pure functions only, per PC/CLAUDE.md §9.
 if (typeof module !== 'undefined' && typeof module.exports === 'object') {
-  module.exports = { _kindOf, _extOf, _chatMediaLocalUrl, _viewerAbsPathFromChatMediaLocalUrl, _viewerCanAddToLibrary, _viewerVideoPlaybackOptions, _viewerVideoSeekTarget, _videoCompositionDimensions };
+  module.exports = { _kindOf, _extOf, _chatMediaLocalUrl, _viewerAbsPathFromChatMediaLocalUrl, _viewerCanAddToLibrary, _viewerVideoPlaybackOptions, _viewerVideoSeekTarget, _videoCompositionDimensions, buildFilePreviewHtml, isSidePreviewableKind, PREVIEW_HTML_SANDBOX };
 }

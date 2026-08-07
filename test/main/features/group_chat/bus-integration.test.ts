@@ -46,6 +46,7 @@ const _recordedCalls = vi.hoisted(
     [] as Array<{
       sid: string;
       message: string;
+      sourceMessageText?: string;
     }>,
 );
 // Records the result each tool's execute() returned — lets a test assert that a
@@ -61,6 +62,7 @@ vi.mock("../../../../src/main/model/client", () => ({
     _recordedCalls.push({
       sid,
       message: String(opts.message || ""),
+      ...(opts.sourceMessageText ? { sourceMessageText: String(opts.sourceMessageText) } : {}),
     });
     // Ephemeral worker sessions have a random id (`gworker-<cid>-<rand>`); a
     // test can't pre-script them by id, so route any gworker turn to a fixed
@@ -70,6 +72,20 @@ vi.mock("../../../../src/main/model/client", () => ({
     const events = queue.shift() || [{ type: "final", text: "" }];
     _scripts.set(scriptKey, queue);
     for (const ev of events) {
+      if (ev?.type === "__emit_teaching_receipt__") {
+        await opts.onTeachingReceipt?.(ev.receipt);
+        continue;
+      }
+      if (ev?.type === "__capture_tool_definitions__") {
+        _recordedToolDefinitions.push(
+          ...(opts.extraTools || []).map((tool: any) => ({
+            name: String(tool.name || ""),
+            description: String(tool.description || ""),
+            inputSchema: tool.inputSchema || {},
+          })),
+        );
+        continue;
+      }
       // Tool-call execution: drives the REAL tool's execute() so the
       // staging → turn-end flush → spawn/dispatch paths actually run (the
       // plain text mock can't do this — hence the skipped @-chain tests).
@@ -254,6 +270,50 @@ async function waitForPendingKStarEvidence(
   }
   return null;
 }
+
+describe("group_chat bus integration › teaching receipts", () => {
+  it("persists a deduplicated teaching receipt on the visible commander reply", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const receipt = {
+      id: "teach-a",
+      summary: "以后所有结论都附来源。",
+      scope: "project",
+      status: "active",
+      candidateIds: ["cand-a"],
+    };
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "__emit_teaching_receipt__", receipt },
+      { type: "__emit_teaching_receipt__", receipt },
+      { type: "final", text: "已经记住。" },
+    ]);
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "请记住：以后所有结论都附来源。",
+    });
+    await waitForQuiescent(TEST_UID, cid, 3000);
+
+    const messages = await readConversationMessages(cid);
+    const reply = messages.find((message) =>
+      message.from === "commander" && Array.isArray(message.teaching_receipts));
+    expect(_recordedCalls.find((call) => call.sid === state.buildGconvSessionId(cid))?.sourceMessageText)
+      .toBe("请记住：以后所有结论都附来源。");
+    expect(reply).toMatchObject({
+      text: "已经记住。",
+      teaching_receipts: [{
+        id: "teach-a",
+        summary: "以后所有结论都附来源。",
+        scope: "project",
+        status: "active",
+        candidate_ids: ["cand-a"],
+      }],
+    });
+  });
+});
 
 describe("group_chat bus integration › disabled skills", () => {
   it("does not let commander substitute another skill when user explicitly requests a disabled one", async () => {
@@ -2540,7 +2600,7 @@ describe("group_chat bus integration › task terminal boundary", () => {
     _setScript(state.buildGconvSessionId(cid), [
       { type: "final", text: "done" },
     ]);
-    await bus.enqueue({
+    const triggerMessage = await bus.enqueue({
       uid: TEST_UID,
       cid,
       fromActorId: "user",
@@ -2555,7 +2615,10 @@ describe("group_chat bus integration › task terminal boundary", () => {
       user_id: TEST_UID,
       conversation_id: cid,
       status: "completed",
+      anchor_message_id: triggerMessage.id,
+      finished_message_id: expect.any(String),
     });
+    expect(terminals[0].finished_message_id).not.toBe(triggerMessage.id);
     expect(terminals[0].finished_at_ms).toBeGreaterThanOrEqual(
       terminals[0].started_at_ms,
     );
@@ -2617,6 +2680,35 @@ describe("group_chat bus integration › task terminal boundary", () => {
       cid,
       fromActorId: "user",
       text: `@${AGENT_NAME} start`,
+    });
+    await waitForQuiescent(TEST_UID, cid, 3000);
+    expect(await waitUntil(() => terminals.length === 1)).toBe(true);
+
+    expect(terminals[0].status).toBe("waiting_input");
+    unsubscribe();
+  }, 10_000);
+
+  it("classifies an explicit commander input request as waiting_input", async () => {
+    const cid = newCid();
+    const state =
+      await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const terminals: any[] = [];
+    const unsubscribe = bus.subscribeTaskTerminals((event) =>
+      terminals.push(event),
+    );
+
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "final",
+        text: '请选择论文类型和目标篇幅。\n<commander-result status="waiting_input" />',
+      },
+    ]);
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "帮我写一篇论文",
     });
     await waitForQuiescent(TEST_UID, cid, 3000);
     expect(await waitUntil(() => terminals.length === 1)).toBe(true);

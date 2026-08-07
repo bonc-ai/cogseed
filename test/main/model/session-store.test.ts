@@ -67,6 +67,15 @@ describe('session-store.sessionFileFor', () => {
     expect(toolResultsDirForSession(uid, id)).toBe(path.join(cloudDir, `${id}.tool-results`));
   });
 
+  it('routes aside → <uid>/local/sessions/ (throwaway explain transcript)', async () => {
+    // The user-visible aside thread is persisted separately by
+    // features/conversation_aside; the model transcript is disposable, so it
+    // must stay local and out of sync.
+    const { sessionFileFor, localDir } = await loadRouting();
+    const id = 'aside-abcdef123456';
+    expect(sessionFileFor(id)).toBe(path.join(localDir, `${id}.jsonl`));
+  });
+
   it('routes skill-edit → <uid>/cloud/sessions/', async () => {
     const { sessionFileFor, cloudDir } = await loadRouting();
     const id = 'skill-my_skill_id';
@@ -137,7 +146,7 @@ describe('session-store.sessionFileFor', () => {
 // Per-agent cross-session-memory eligibility (pure helpers — no workspace/IO).
 describe('memoryScopeForSession (per-agent memory eligibility)', () => {
   it('parses the session kind anchor', async () => {
-    const { sessionKindOf } = await import('../../../src/main/model/core-agent/session-store');
+    const { sessionKindOf, memoryScopeForSession } = await import('../../../src/main/model/core-agent/session-store');
     expect(sessionKindOf('gconv-abc')).toBe('gconv');
     expect(sessionKindOf('gmember-cid-video-studio')).toBe('gmember');
     expect(sessionKindOf('memory-extract-x')).toBe('memory-extract');
@@ -145,6 +154,9 @@ describe('memoryScopeForSession (per-agent memory eligibility)', () => {
     expect(sessionKindOf('agent-x')).toBe('agent');
     expect(sessionKindOf('skill-x')).toBe('skill');
     expect(sessionKindOf('cli-x')).toBe('cli');
+    expect(sessionKindOf('aside-x')).toBe('aside');
+    // An aside explains; it must neither read nor write cross-session memory.
+    expect(memoryScopeForSession('aside-cid01', 'agentX')).toBeNull();
     expect(sessionKindOf('nope-x')).toBeNull();
   });
 

@@ -397,7 +397,7 @@ export interface ExtractPlanInteractionResult {
   status?: PlanInteractionStatus;
 }
 
-export type ActorResultStatus = 'success' | 'failure';
+export type ActorResultStatus = 'success' | 'failure' | 'waiting_input';
 
 export interface ExtractActorResultResult {
   cleanText: string;
@@ -495,9 +495,8 @@ export function extractPlanInteractionFromFinal(text: string): ExtractPlanIntera
 const ACTOR_RESULT_RE =
   /<(?:agent|commander)-result\b([^>]*)\/>|<(?:agent|commander)-result\b([^>]*)>\s*<\/(?:agent|commander)-result>/gi;
 
-/** Strip the actor result marker used for runtime outcome accounting.
- *  Actors can self-report only success/failure; execution exceptions and
- *  aborts are classified by the bus as `error` independently. */
+/** Strip the actor result marker used for runtime and task outcome accounting.
+ *  Execution exceptions and aborts are classified by the bus independently. */
 export function extractActorResultFromFinal(text: string): ExtractActorResultResult {
   if (!text || typeof text !== 'string') return { cleanText: text || '' };
   if (!text.includes('<agent-result') && !text.includes('<commander-result')) return { cleanText: text };
@@ -505,7 +504,7 @@ export function extractActorResultFromFinal(text: string): ExtractActorResultRes
   let status: ActorResultStatus | undefined;
   const cleanText = text.replace(ACTOR_RESULT_RE, (_full, attrs1 = '', attrs2 = '') => {
     const attrs = String(attrs1 || attrs2 || '');
-    const m = /\bstatus\s*=\s*["'](success|failure)["']/i.exec(attrs);
+    const m = /\bstatus\s*=\s*["'](success|failure|waiting_input)["']/i.exec(attrs);
     if (m) status = m[1].toLowerCase() as ActorResultStatus;
     return '\n';
   }).replace(/\n{3,}/g, '\n\n').trim();

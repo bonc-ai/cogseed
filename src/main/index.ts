@@ -174,6 +174,7 @@ import * as clientConfigFeature from './features/client_config';
 import * as connectorsFeature from './features/connectors';
 import * as messagingFeature from './features/messaging';
 import * as taskNotifications from './features/task_notifications';
+import { recoverRecallCaptures, startRecallCaptureOrchestrator } from './features/recall/capture-service';
 import { startGroupKstarClosure } from './features/kstar/task-closure';
 import * as notificationPermissions from './features/notification_permissions';
 import {
@@ -1134,6 +1135,8 @@ if (!gotLock) {
       openConversation: openConversationFromTaskNotification,
     });
     app.once('before-quit', stopTaskNotifications);
+    const stopRecallCapture = startRecallCaptureOrchestrator();
+    app.once('before-quit', stopRecallCapture);
     const stopGroupKstarClosure = startGroupKstarClosure();
     app.once('before-quit', stopGroupKstarClosure);
     clientConfigFeature.clientConfig.subscribeAll((keys) => {
@@ -1248,6 +1251,10 @@ if (!gotLock) {
     }, 'serial', BOOT_POST_STARTUP_DELAY_MS);
     registerDeferred('builtin-marketplace:seed', () => seedBuiltinMarketplaceForCurrentUser('startup'));
     registerDeferred('auto-tasks:scheduler', () => autoTasks.startScheduler());
+    registerDeferred('recall:capture-recovery', async () => {
+      const uid = users.getActiveUserId();
+      if (uid) await recoverRecallCaptures(uid);
+    }, 'parallel', BOOT_HEAVY_DISK_DELAY_MS, { resourceClass: 'disk', preferIdle: true });
 
     // p3394 KSTAR boot health check: degraded-schema detection + pending
     // evidence replay. Runs after the heavy-disk cohort so the KB and

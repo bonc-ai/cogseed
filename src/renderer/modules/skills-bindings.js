@@ -61,7 +61,7 @@ function _initSkillsStaticBindings() {
 _initSkillsStaticBindings();
 
 function _initSkillsCognitionBindings() {
-  const panel = document.getElementById('panel-skills');
+  const panel = document.getElementById('panel-recall');
   if (!panel || panel.dataset.cognitionBindings === '1') return;
   panel.dataset.cognitionBindings = '1';
 
@@ -81,9 +81,211 @@ function _initSkillsCognitionBindings() {
   });
 
   panel.addEventListener('click', async (event) => {
+    const reload = event.target.closest('[data-cognition-reload]');
+    if (reload) {
+      if (reload.dataset.busy === '1') return;
+      reload.dataset.busy = '1'; reload.disabled = true;
+      try {
+        await loadSkillsCognitionSnapshot();
+      } finally {
+        reload.dataset.busy = '0'; reload.disabled = false;
+      }
+      return;
+    }
+
     const pageLink = event.target.closest('[data-cognition-page-link]');
     if (pageLink) {
       switchSkillsCognitionPage(pageLink.dataset.cognitionPageLink || 'overview');
+      return;
+    }
+
+    const sourceConversation = event.target.closest('[data-cognition-source-conversation]');
+    if (sourceConversation) {
+      const conversationId = sourceConversation.dataset.cognitionSourceConversation;
+      if (conversationId && typeof setView === 'function') setView('conversation', conversationId);
+      return;
+    }
+
+    if (event.target.closest('[data-cognition-open-connectors]')) {
+      _setViewFromSidebar('connectors');
+      return;
+    }
+
+    const contextSelect = event.target.closest('[data-recall-context-select]');
+    if (contextSelect) {
+      _skillsCognitionState.selectedContextKey = contextSelect.dataset.recallContextSelect || '';
+      renderSkillsCognitionContext();
+      return;
+    }
+
+    const ontologyGroup = event.target.closest('[data-recall-ontology-group]');
+    if (ontologyGroup) {
+      const groupId = ontologyGroup.dataset.recallOntologyGroup || '';
+      if (!groupId || ontologyGroup.dataset.busy === '1') return;
+      _skillsCognitionState.selectedOntologyGroupId = groupId;
+      ontologyGroup.dataset.busy = '1'; ontologyGroup.disabled = true;
+      try { await loadRecallOntologyGroup(groupId); }
+      catch (error) { if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error)); }
+      finally { ontologyGroup.dataset.busy = '0'; ontologyGroup.disabled = false; renderSkillsCognitionOntology(); }
+      return;
+    }
+
+    const openAsset = event.target.closest('[data-cognition-open-asset]');
+    if (openAsset) {
+      _skillsCognitionState.selectedAssetId = openAsset.dataset.cognitionOpenAsset || '';
+      switchSkillsCognitionPage('assets');
+      return;
+    }
+
+    const captureFilter = event.target.closest('[data-recall-capture-filter]');
+    if (captureFilter) {
+      const filter = captureFilter.dataset.recallCaptureFilter || 'all';
+      if (!_CAPTURE_FILTERS.includes(filter) || filter === _skillsCognitionState.captureFilter) return;
+      _skillsCognitionState.captureFilter = filter;
+      _skillsCognitionState.captureNextCursor = null;
+      _skillsCognitionState.selectedCaptureId = '';
+      try { await loadRecallCaptureTasks(); }
+      catch (error) { if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error)); }
+      return;
+    }
+
+    const captureSelect = event.target.closest('[data-recall-capture-select]');
+    if (captureSelect) {
+      const captureId = captureSelect.dataset.recallCaptureSelect || '';
+      _skillsCognitionState.selectedCaptureId = _skillsCognitionState.selectedCaptureId === captureId ? '' : captureId;
+      renderSkillsCognitionCaptures();
+      return;
+    }
+
+    const captureLoadMore = event.target.closest('[data-recall-capture-load-more]');
+    if (captureLoadMore) {
+      if (captureLoadMore.dataset.busy === '1') return;
+      captureLoadMore.dataset.busy = '1'; captureLoadMore.disabled = true;
+      try { await loadRecallCaptureTasks({ append: true }); }
+      catch (error) { if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error)); }
+      finally { captureLoadMore.dataset.busy = '0'; captureLoadMore.disabled = false; }
+      return;
+    }
+
+    const manualCreate = event.target.closest('[data-recall-manual-create]');
+    if (manualCreate) {
+      const conversationIds = Array.isArray(_skillsCognitionState.selectedHistoricalConversationIds)
+        ? [..._skillsCognitionState.selectedHistoricalConversationIds]
+        : [];
+      if (!conversationIds.length || manualCreate.dataset.busy === '1') return;
+      manualCreate.dataset.busy = '1'; manualCreate.disabled = true;
+      const created = [];
+      try {
+        for (const conversationId of conversationIds) {
+          const result = await window.orkas.invoke('recall.captures.manualCreate', { conversationId });
+          if (!result?.ok) throw new Error(result?.error || _cognitionText('cognition.capture_manual_history_create_failed', '加入沉淀任务失败'));
+          created.push(conversationId);
+        }
+        _skillsCognitionState.selectedHistoricalConversationIds = [];
+        _skillsCognitionState.captureFilter = 'all';
+        _skillsCognitionState.captureNextCursor = null;
+        _skillsCognitionState.selectedCaptureId = '';
+        await loadRecallCaptureTasks();
+      } catch (error) {
+        _skillsCognitionState.selectedHistoricalConversationIds = conversationIds.filter((id) => !created.includes(id));
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+        renderSkillsCognitionCaptures();
+      } finally {
+        manualCreate.dataset.busy = '0'; manualCreate.disabled = false;
+      }
+      return;
+    }
+
+    const capturePolicy = event.target.closest('[data-recall-capture-policy]');
+    if (capturePolicy) {
+      const executionPolicy = capturePolicy.dataset.recallCapturePolicy;
+      if (!['smart', 'nightly', 'manual'].includes(executionPolicy) || capturePolicy.dataset.busy === '1') return;
+      capturePolicy.dataset.busy = '1'; capturePolicy.disabled = true;
+      try { await updateRecallCaptureSettings({ executionPolicy }); }
+      catch (error) { if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error)); }
+      finally { capturePolicy.dataset.busy = '0'; capturePolicy.disabled = false; }
+      return;
+    }
+
+    const captureAction = event.target.closest('[data-recall-capture-action]');
+    if (captureAction) {
+      const captureId = captureAction.dataset.recallCaptureId;
+      const actionName = captureAction.dataset.recallCaptureAction;
+      if (!captureId || !actionName || captureAction.dataset.busy === '1') return;
+      if (actionName === 'open-conversation') {
+        const capture = (_skillsCognitionState.captures || []).find((item) => item.id === captureId);
+        if (capture?.conversationId && typeof setView === 'function') setView('conversation', capture.conversationId);
+        return;
+      }
+      if (actionName === 'view-candidates') {
+        switchSkillsCognitionPage('candidates');
+        return;
+      }
+      if (actionName === 'cancel' && typeof uiConfirm === 'function') {
+        const confirmed = await uiConfirm(_cognitionText('cognition.capture_cancel_confirm', '确认取消这个沉淀任务？'));
+        if (!confirmed) return;
+      }
+      const channels = {
+        pause: 'recall.captures.pause',
+        resume: 'recall.captures.resume',
+        cancel: 'recall.captures.cancel',
+        retry: 'recall.captures.retry',
+        'run-now': 'recall.captures.runNow',
+      };
+      const channel = channels[actionName];
+      if (!channel) return;
+      captureAction.dataset.busy = '1'; captureAction.disabled = true;
+      try {
+        const result = await window.orkas.invoke(channel, { captureId });
+        if (!result?.ok) throw new Error(result?.error || 'recall capture action failed');
+        await loadRecallCaptureTasks();
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        captureAction.dataset.busy = '0'; captureAction.disabled = false;
+      }
+      return;
+    }
+
+    const retryCapture = event.target.closest('[data-recall-capture-retry]');
+    if (retryCapture) {
+      const captureId = retryCapture.dataset.recallCaptureRetry;
+      if (!captureId || retryCapture.dataset.busy === '1') return;
+      retryCapture.dataset.busy = '1'; retryCapture.disabled = true;
+      try {
+        const result = await window.orkas.invoke('recall.captures.retry', { captureId });
+        if (!result?.ok) throw new Error(result?.error || 'recall capture retry failed');
+        await loadSkillsCognitionSnapshot();
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        retryCapture.dataset.busy = '0'; retryCapture.disabled = false;
+      }
+      return;
+    }
+
+    const revokeTeaching = event.target.closest('[data-recall-teaching-revoke]');
+    if (revokeTeaching) {
+      const signalId = revokeTeaching.dataset.recallTeachingRevoke;
+      if (!signalId || revokeTeaching.dataset.busy === '1') return;
+      revokeTeaching.dataset.busy = '1'; revokeTeaching.disabled = true;
+      try {
+        const result = await window.orkas.invoke('recall.teaching.revoke', { signalId });
+        if (!result?.ok) throw new Error(result?.error || 'teaching signal revoke failed');
+        await loadSkillsCognitionSnapshot();
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        revokeTeaching.dataset.busy = '0'; revokeTeaching.disabled = false;
+      }
+      return;
+    }
+
+    const configureCapture = event.target.closest('[data-recall-capture-settings]');
+    if (configureCapture) {
+      _setViewFromSidebar('settings');
+      if (typeof window.activateSettingsTab === 'function') window.activateSettingsTab('credentials');
+      setTimeout(() => document.getElementById('settings-model-authorizations')?.scrollIntoView({ block: 'start' }), 0);
       return;
     }
 
@@ -117,7 +319,7 @@ function _initSkillsCognitionBindings() {
 
     const openSkill = event.target.closest('[data-cognition-open-skill]');
     if (openSkill) {
-      switchSkillsCognitionPage('skills');
+      _setViewFromSidebar('skills');
       const skill = _skillsCache?.find((item) => item.id === openSkill.dataset.cognitionOpenSkill);
       if (skill) _showSkillsDetailView(skill.source, skill.id);
       return;
@@ -213,14 +415,55 @@ function _initSkillsCognitionBindings() {
     }
   });
 
+  panel.addEventListener('change', async (event) => {
+    const manualConversation = event.target.closest('[data-recall-manual-conversation]');
+    if (manualConversation) {
+      const conversationId = manualConversation.dataset.recallManualConversation;
+      const selected = new Set(Array.isArray(_skillsCognitionState.selectedHistoricalConversationIds)
+        ? _skillsCognitionState.selectedHistoricalConversationIds
+        : []);
+      if (conversationId) {
+        if (manualConversation.checked) selected.add(conversationId);
+        else selected.delete(conversationId);
+      }
+      _skillsCognitionState.selectedHistoricalConversationIds = Array.from(selected);
+      renderSkillsCognitionCaptures();
+      return;
+    }
+    const enabled = event.target.closest('[data-recall-capture-enabled]');
+    const catchUp = event.target.closest('[data-recall-capture-catch-up]');
+    const quietMinutes = event.target.closest('[data-recall-capture-quiet-minutes]');
+    const nightStart = event.target.closest('[data-recall-capture-night-start]');
+    const nightEnd = event.target.closest('[data-recall-capture-night-end]');
+    let patch = null;
+    if (enabled) patch = { enabled: !!enabled.checked };
+    else if (catchUp) patch = { catchUpMissed: !!catchUp.checked };
+    else if (quietMinutes) patch = { quietMinutes: Number(quietMinutes.value) };
+    else if (nightStart) patch = { nightlyStart: nightStart.value };
+    else if (nightEnd) patch = { nightlyEnd: nightEnd.value };
+    if (!patch || event.target.dataset.busy === '1') return;
+    event.target.dataset.busy = '1'; event.target.disabled = true;
+    try { await updateRecallCaptureSettings(patch); }
+    catch (error) {
+      if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      await loadSkillsCognitionSnapshot();
+    } finally {
+      event.target.dataset.busy = '0'; event.target.disabled = false;
+    }
+  });
+
   window.addEventListener('i18n-change', () => {
     renderSkillsCognitionOverview();
+    renderSkillsCognitionSources();
+    renderSkillsCognitionCaptures();
+    renderSkillsCognitionBrain();
+    renderSkillsCognitionContext();
+    renderSkillsCognitionOntology();
     renderSkillsCognitionCandidates();
     renderSkillsCognitionReceipts();
     renderSkillsCognitionAssets();
   });
 
-  initSkillsCognitionConsole();
 }
 
 _initSkillsCognitionBindings();

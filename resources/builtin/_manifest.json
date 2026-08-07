@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "be2ef6dd152e1fa3137b3879d942814c7718a369383eae08aabf6808406f67d0",
+  "content_tree_sha256": "d6f6ca0c2921d5894f1733b83c989bae7af57d53cd224d74853266f7a2bc3d2c",
   "files": [
     {
       "path": "marketplace/agents/78900d8758bc/_meta.json",
@@ -635,7 +635,7 @@
     {
       "path": "system/skills/_system.json",
       "bytes": 427,
-      "sha256": "e23e067565253b349946463b7679a98dcea8c73454c4a485677fc886048aec40"
+      "sha256": "ec755e73b455fa98e3d1579da44a5de6b382eadff7876faea1a919702638eaec"
     },
     {
       "path": "system/skills/agent-creator/SKILL.md",
@@ -658,6 +658,46 @@
       "sha256": "647e22ac279f7c5ad6267e7e4d8736b72a86734836e4ad7e81337db4e6f69865"
     },
     {
+      "path": "system/skills/personal-ontology-candidate-builder/agents/openai.yaml",
+      "bytes": 599,
+      "sha256": "51deb9ad552e195ccadb0efad2c1a8e90ca0d41d30cda9b68c78324235fc5689"
+    },
+    {
+      "path": "system/skills/personal-ontology-candidate-builder/evals/eval-cases.yaml",
+      "bytes": 3080,
+      "sha256": "dc197713d273e6c6898b2b6c5302e8cc8da6c8e9a07d2c35af926036fd179548"
+    },
+    {
+      "path": "system/skills/personal-ontology-candidate-builder/evals/evals.json",
+      "bytes": 3415,
+      "sha256": "89745e46cc4db278a592b9a88a40fcfcc308afe196353cf9e3e101b9ad268c4f"
+    },
+    {
+      "path": "system/skills/personal-ontology-candidate-builder/ontology/personal_ontology/scene_abox.yaml",
+      "bytes": 7814,
+      "sha256": "1deb69e9cbcc25bde8eb8d6b3e66d6218e10bf517743ba74f3c09b1d7d1e7739"
+    },
+    {
+      "path": "system/skills/personal-ontology-candidate-builder/ontology/personal_ontology/scene_mapping.yaml",
+      "bytes": 7718,
+      "sha256": "7f0c4bc5c7a60a38fa08151928f405823b3f2b31bed9c18f0ac91400bcd0a7dc"
+    },
+    {
+      "path": "system/skills/personal-ontology-candidate-builder/ontology/personal_ontology/scene_package.yaml",
+      "bytes": 4672,
+      "sha256": "ed97e673d5558e057293ba666fa3b900724d28e254dc5dc0d5b272ec341288b6"
+    },
+    {
+      "path": "system/skills/personal-ontology-candidate-builder/ontology/personal_ontology/scene_rbox.yaml",
+      "bytes": 10427,
+      "sha256": "3842602b80f007bc4cc9aab0f17b6956521cd38482b49c8117eb254dda47af40"
+    },
+    {
+      "path": "system/skills/personal-ontology-candidate-builder/ontology/personal_ontology/scene_tbox.yaml",
+      "bytes": 13552,
+      "sha256": "5280259759f092b61e16fa4e7fc01ebbde1fe5468fb63043c516e088cef342f3"
+    },
+    {
       "path": "system/skills/personal-ontology-candidate-builder/references/examples.md",
       "bytes": 2670,
       "sha256": "9cf234f9f49ec30d8e6166376c5f1b4fe93605d45a88e6deface0f51bb3158f3"
@@ -669,28 +709,48 @@
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/references/governance-boundaries.md",
-      "bytes": 1793,
-      "sha256": "e843017caa3f98e05427d62526252abefae32935083cedfc4f0c5037310ddae5"
+      "bytes": 2367,
+      "sha256": "e97b68818660ef212e38778c772d059af64aa90212c659e39f26047dc5102ed4"
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/references/input-contract.md",
-      "bytes": 1325,
-      "sha256": "1d0aa38578c243c7d6d5d13e7fe40fbcc98c5fa883ed3365852c1ab284155baa"
+      "bytes": 1599,
+      "sha256": "7a5b076cdeb387a45e4dea7ce43d0591a0f9ed47a71af0418423c1f8c6d71650"
+    },
+    {
+      "path": "system/skills/personal-ontology-candidate-builder/references/kstar-evolution.md",
+      "bytes": 2598,
+      "sha256": "1e854152121d41144c2e85713e3e8ea9a3097d01108dc2d5897f1dd1bf7842ad"
+    },
+    {
+      "path": "system/skills/personal-ontology-candidate-builder/references/ontology-mapping.md",
+      "bytes": 2357,
+      "sha256": "564ed84d150d97aee02b4c6fa88f39f13a9b65924d924c1ae40631c0fba4c986"
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/references/output-contract.md",
-      "bytes": 4432,
-      "sha256": "631d83ed54008d047b38aa6a7483ce2b84ddc95f512bbf094e229cdaf6d700a4"
+      "bytes": 4773,
+      "sha256": "ad01958fdf476ffa1b56f5bcd6c431214cd90455ba40c9d3485038eda5619a0d"
+    },
+    {
+      "path": "system/skills/personal-ontology-candidate-builder/references/skill-spec.yaml",
+      "bytes": 4949,
+      "sha256": "96a9bfb9e8ac20e8088ee62829b1acf8f1af88700ed73346f542414946a8047b"
+    },
+    {
+      "path": "system/skills/personal-ontology-candidate-builder/references/validation-contract.md",
+      "bytes": 2193,
+      "sha256": "4178836fa516760aa4e3ad3933c302c0b157349f2ac5c70042581d34ebe9d211"
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/schemas.json",
-      "bytes": 4083,
-      "sha256": "120a9e17b28690f2014b9251c5b5ad9d8fb697a052ef25ce48dcd9d9df085673"
+      "bytes": 4330,
+      "sha256": "2484d06bd735e92785af49e0418dc8f395d74d5c63dce06d48fc68bdca5a6955"
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/SKILL.md",
-      "bytes": 6128,
-      "sha256": "3c3cc1de31bb3fc38dad2b11c3a86654c51165f19f5be1c881d6748b282b770f"
+      "bytes": 10273,
+      "sha256": "8dd1f0344e384eb025c8d9cdd0aca8a261629f593b171b68aa63d9ec839d4f1b"
     },
     {
       "path": "system/skills/skill-creator/SKILL.md",
@@ -718,7 +778,7 @@
       },
       {
         "id": "personal-ontology-candidate-builder",
-        "update_at": 1785324240017
+        "update_at": 1785980806790
       },
       {
         "id": "skill-creator",

@@ -26,6 +26,13 @@ import {
   readInteractiveCliSession,
   sendInteractiveCliInput,
 } from '../model/core-agent/interactive-cli-sessions.js';
+import {
+  startTerminalSession,
+  writeTerminalInput,
+  resizeTerminal,
+  closeTerminalSession,
+  listTerminalSessions,
+} from '../features/terminal/pty-sessions.js';
 import { listModels } from '../features/local_agents/models.js';
 import { getActiveUserId } from '../features/users.js';
 import { userToolResultsDir } from '../paths.js';
@@ -175,6 +182,53 @@ export const invokeHandlers = {
   ) => {
     if (typeof payload?.session_id !== 'string' || !payload.session_id) throw new Error('invalid session_id');
     return { session: closeInteractiveCliSession(ctx.userId, payload.session_id) };
+  },
+
+  // ── Integrated terminal (real PTY via node-pty) ──────────────────────────
+  // The renderer opens/writes/resizes/closes a real shell session. Output is
+  // streamed back over the `terminal.stream` stream channel (see ipc/index.ts).
+  'terminal.create': async (
+    payload: { cwd?: unknown; cols?: unknown; rows?: unknown },
+    ctx: { userId: string },
+  ) => {
+    const session = startTerminalSession({
+      uid: ctx.userId,
+      cwd: typeof payload?.cwd === 'string' ? payload.cwd : undefined,
+      cols: typeof payload?.cols === 'number' ? payload.cols : undefined,
+      rows: typeof payload?.rows === 'number' ? payload.rows : undefined,
+    });
+    return { session };
+  },
+
+  'terminal.write': async (
+    payload: { session_id?: unknown; data?: unknown },
+    ctx: { userId: string },
+  ) => {
+    if (typeof payload?.session_id !== 'string' || !payload.session_id) throw new Error('invalid session_id');
+    writeTerminalInput(ctx.userId, payload.session_id, typeof payload.data === 'string' ? payload.data : '');
+    return { ok: true as const };
+  },
+
+  'terminal.resize': async (
+    payload: { session_id?: unknown; cols?: unknown; rows?: unknown },
+    ctx: { userId: string },
+  ) => {
+    if (typeof payload?.session_id !== 'string' || !payload.session_id) throw new Error('invalid session_id');
+    const cols = typeof payload.cols === 'number' ? payload.cols : 80;
+    const rows = typeof payload.rows === 'number' ? payload.rows : 24;
+    return { session: resizeTerminal(ctx.userId, payload.session_id, cols, rows) };
+  },
+
+  'terminal.close': async (
+    payload: { session_id?: unknown },
+    ctx: { userId: string },
+  ) => {
+    if (typeof payload?.session_id !== 'string' || !payload.session_id) throw new Error('invalid session_id');
+    return { session: closeTerminalSession(ctx.userId, payload.session_id) };
+  },
+
+  'terminal.list': async (_payload: unknown, ctx: { userId: string }) => {
+    return { sessions: listTerminalSessions(ctx.userId) };
   },
 
   'localAgents.readToolResult': async ({ path: filePath }: { path?: unknown }) => {
