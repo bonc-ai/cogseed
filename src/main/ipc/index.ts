@@ -2086,24 +2086,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'personalOntology.candidates.list': async (_payload, ctx) => {
     return personalOntologyCandidates.listCandidates(ctx.userId);
   },
-  'personalOntology.candidates.confirm': async ({ candidateId, toGlobalMemory, toGroupIds, targetField, routeWithLlm }, ctx) => {
+  'personalOntology.candidates.confirm': async ({ candidateId, toGlobalMemory, toGroupIds, targetField, projectId, routeWithLlm }, ctx) => {
     if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
-    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string } = {};
+    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string; projectId?: string } = {};
     if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
     if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
     if (typeof targetField === 'string' && targetField.trim()) dest.targetField = targetField.trim();
+    if (typeof projectId === 'string' && projectId.trim()) dest.projectId = projectId.trim();
     return personalOntologyCandidates.confirmCandidate(ctx.userId, candidateId, dest, { routeWithLlm: routeWithLlm === true });
   },
   'personalOntology.candidates.reject': async ({ candidateId, reason }, ctx) => {
     if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
     return personalOntologyCandidates.rejectCandidate(ctx.userId, candidateId, reason);
   },
-  'personalOntology.candidates.confirmBatch': async ({ candidateIds, toGlobalMemory, toGroupIds, targetField, routeWithLlm }, ctx) => {
+  'personalOntology.candidates.confirmBatch': async ({ candidateIds, toGlobalMemory, toGroupIds, targetField, projectId, routeWithLlm }, ctx) => {
     if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
-    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string } = {};
+    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string; projectId?: string } = {};
     if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
     if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
     if (typeof targetField === 'string' && targetField.trim()) dest.targetField = targetField.trim();
+    if (typeof projectId === 'string' && projectId.trim()) dest.projectId = projectId.trim();
     return personalOntologyCandidates.confirmCandidates(ctx.userId, candidateIds, dest, { routeWithLlm: routeWithLlm === true });
   },
   'personalOntology.candidates.rejectBatch': async ({ candidateIds, reason }, ctx) => {

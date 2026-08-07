@@ -354,8 +354,9 @@ export async function readContentById(uid: string, ref: string): Promise<ReadCon
 // ── 复合 id 统一入口：写入 ─────────────────────────────────────────────────
 
 /**
- * 字段写入：复合 id → 模板分节字段（多值追加 + 同值同源去重，空坑变有值）；
- * 普通组 id → 转发 appendFieldValue（双区格式，行为不变）。
+ * 字段写入：复合 id → 模板分节字段（多值追加 + 同值同源同项目去重，空坑变有值）；
+ * 普通组 id → 转发 appendFieldValue（双区格式，行为不变）。`project`（可选）=
+ * 来源项目 id，落盘 `@proj:<pid>`。
  */
 export async function appendFieldValueToRef(
   uid: string,
@@ -363,16 +364,18 @@ export async function appendFieldValueToRef(
   fieldName: string,
   value: string,
   source: string,
+  project?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
   const { groupId, section } = splitContentRef(ref);
-  if (!section) return appendFieldValue(uid, groupId, fieldName, value, source);
+  if (!section) return appendFieldValue(uid, groupId, fieldName, value, source, project);
 
   const name = String(fieldName || '').trim();
   const val = String(value ?? '').trim();
   if (!name) return { ok: false, error: 'field name required' };
   if (!val) return { ok: false, error: 'empty value' };
   const src = normalizeSource(source);
+  const proj = project ? String(project).trim() : undefined;
 
   const meta = findTemplateMeta(uid, groupId);
   if (!meta) return { ok: false, error: 'template group not found' };
@@ -381,10 +384,10 @@ export async function appendFieldValueToRef(
     const sec = findSection(content, section);
     if (!sec) return { ok: false, error: 'section not found' };
     const values = sec.fields[name] || (sec.fields[name] = []);
-    if (values.some((fv) => fv.value === val && fv.source === src)) {
-      return { changed: false }; // 同值同源去重
+    if (values.some((fv) => fv.value === val && fv.source === src && (fv.project ?? undefined) === proj)) {
+      return { changed: false }; // 同值同源同项目去重
     }
-    values.push({ value: val, source: src });
+    values.push({ value: val, source: src, ...(proj ? { project: proj } : {}) });
     return { changed: true };
   });
 }

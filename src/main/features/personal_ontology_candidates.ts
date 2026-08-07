@@ -48,6 +48,8 @@ export interface ConfirmDestinations {
   toGlobalMemory?: boolean;
   toGroupIds?: string[];
   targetField?: string;
+  /** 二期 D5：来源项目 id。确认落盘时附加到字段值（`@proj:<pid>`），展示层按项目过滤。 */
+  projectId?: string;
 }
 
 /** Per-destination outcome, so the UI can tell "全局记忆写入失败" apart from
@@ -92,6 +94,9 @@ export interface CandidateUpdate {
    *  用户可在下拉里改；目标分组无此字段时回退流水区。 */
   target_field?: string;
   source_memory_refs: string[];
+  /** 二期 D5：来源项目 id（候选进池时标记，`- 来源项目:` 行）。确认落盘附加
+   *  `@proj:<pid>`；dest.projectId 显式传入时覆盖（用户/UI 意图优先）。 */
+  project_id?: string;
 }
 
 export interface BlockedItem {
@@ -141,6 +146,7 @@ const CANDIDATE_FIELD_LABELS: Record<string, string> = {
   '差异': 'diff_summary',
   '建议字段': 'target_field',
   '来源': 'source_memory_refs',
+  '来源项目': 'project_id',
 };
 
 const VALID_KINDS: CandidateKind[] = ['preference', 'instance', 'property', 'relation', 'rule'];
@@ -185,6 +191,7 @@ export function parseCandidatesMarkdown(text: string): CandidateUpdate[] {
       ...(raw.registry_like_path ? { registry_like_path: raw.registry_like_path } : {}),
       ...(raw.diff_summary ? { diff_summary: raw.diff_summary } : {}),
       ...(raw.target_field ? { target_field: raw.target_field } : {}),
+      ...(raw.project_id ? { project_id: raw.project_id } : {}),
       source_memory_refs: raw.source_memory_refs
         ? raw.source_memory_refs.split(',').map(s => s.trim()).filter(Boolean)
         : [],
@@ -207,6 +214,7 @@ export function serializeCandidatesMarkdown(candidates: CandidateUpdate[]): stri
     if (c.registry_like_path) lines.push(`- 路径: ${c.registry_like_path}`);
     if (c.diff_summary) lines.push(`- 差异: ${c.diff_summary}`);
     if (c.target_field) lines.push(`- 建议字段: ${c.target_field}`);
+    if (c.project_id) lines.push(`- 来源项目: ${c.project_id}`);
     if (c.source_memory_refs?.length) lines.push(`- 来源: ${c.source_memory_refs.join(', ')}`);
     return lines.join('\n');
   });
@@ -418,7 +426,7 @@ async function writeCandidateToDestinations(
             ? tpl.sections.find((s) => Object.prototype.hasOwnProperty.call(s.fields, dest.targetField as string))
             : undefined;
           if (sec) {
-            const res = await appendFieldValueToRef(uid, `${groupId}::${sec.title}`, dest.targetField, text, source);
+            const res = await appendFieldValueToRef(uid, `${groupId}::${sec.title}`, dest.targetField, text, source, dest.projectId ?? candidate.project_id);
             result.fieldWrites.push({
               groupId,
               fieldName: dest.targetField as string,
@@ -455,7 +463,7 @@ async function writeCandidateToDestinations(
           fieldExists = false;
         }
         if (fieldExists) {
-          const res = await appendFieldValueToRef(uid, groupId, dest.targetField, text, source);
+          const res = await appendFieldValueToRef(uid, groupId, dest.targetField, text, source, dest.projectId ?? candidate.project_id);
           result.fieldWrites.push({
             groupId,
             fieldName: dest.targetField as string,

@@ -644,4 +644,199 @@ describe('personal_ontology_candidates › routeWithLlm integration (router mock
     const content = tmpl.readTemplateFileText(UID, 'student');
     expect(content).toContain('### 教师与同伴\n- 喜欢用大白话解释 [候选]');
   });
+
+  it('LLM route keeps projectId on the effective dest (D5: @proj:<pid> on routed field)', async () => {
+    const tmpl = await import('../../../src/main/features/personal_ontology_template_files');
+    await tmpl.installTemplateFile(UID, 'student');
+
+    const poc = await seedCandidate('cand-llm-3');
+    const res = await poc.confirmCandidate(UID, 'cand-llm-3', { toGlobalMemory: false, projectId: 'p_llm' }, { routeWithLlm: true });
+    expect(res.ok).toBe(true);
+    // router mock 命中 协作关系.协作项目 → LLM 自动 push 复合 id；projectId 随 dest 展开保留
+    const content = tmpl.readTemplateFileText(UID, 'student');
+    expect(content).toMatch(/### 协作项目\n- 喜欢用大白话解释 \[智能\] @proj:p_llm/);
+  });
+});
+
+// ── 二期 D5：确认链路来源项目标记（dest.projectId → @proj:<pid>）───────────
+
+describe('personal_ontology_candidates › project source marker via confirm', () => {
+  /** 写候选池（独立 tmpDir，id 可复用）。 */
+  async function seedCandidates(poc: Awaited<ReturnType<typeof loadModule>>, items: Array<{ id: string; text: string }>) {
+    const file = candidatesMdPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, poc.serializeCandidatesMarkdown(items.map((it) => ({
+      candidate_id: it.id,
+      kind: 'preference',
+      confidence: 'high',
+      summary: 's',
+      memory_scope: 'user',
+      memory_text: it.text,
+      source_memory_refs: [],
+    }))));
+  }
+
+  it('confirmCandidate with projectId marks the field value (plain group)', async () => {
+    const poc = await loadModule();
+    const groups = await loadGroups();
+    const created = await groups.createGroup(UID, '偏好');
+    const groupId = created.group!.group_id;
+    // 先建字段坑（有坑填坑路径），再确认候选
+    await groups.appendFieldValue(UID, groupId, '沟通风格', '种子值', '手动');
+    await seedCandidates(poc, [{ id: 'cand-pref-1', text: '喜欢用大白话解释' }]);
+
+    const res = await poc.confirmCandidate(UID, 'cand-pref-1', {
+      toGlobalMemory: false,
+      toGroupIds: [groupId],
+      targetField: '沟通风格',
+      projectId: 'p_abc',
+    });
+    expect(res.ok).toBe(true);
+
+    const file = path.join(tmpDir, UID, 'cloud', 'contexts', '.personal_ontology_groups', `${groupId}.md`);
+    const content = fs.readFileSync(file, 'utf8');
+    expect(content).toContain('- 喜欢用大白话解释 [候选] @proj:p_abc');
+  });
+
+  it('confirmCandidate with projectId marks template-section field values', async () => {
+    const poc = await loadModule();
+    const tmpl = await import('../../../src/main/features/personal_ontology_template_files');
+    await tmpl.installTemplateFile(UID, 'student');
+    const row = tmpl.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const sectionRef = tmpl.buildContentRef(row.group_id, '协作关系');
+    await seedCandidates(poc, [{ id: 'cand-pref-1', text: '喜欢用大白话解释' }]);
+
+    const res = await poc.confirmCandidate(UID, 'cand-pref-1', {
+      toGlobalMemory: false,
+      toGroupIds: [sectionRef],
+      targetField: '教师与同伴',
+      projectId: 'p_def',
+    });
+    expect(res.ok).toBe(true);
+    const content = tmpl.readTemplateFileText(UID, 'student');
+    expect(content).toContain('### 教师与同伴\n- 喜欢用大白话解释 [候选] @proj:p_def');
+  });
+
+  it('no projectId → legacy output without @ marker', async () => {
+    const poc = await loadModule();
+    const tmpl = await import('../../../src/main/features/personal_ontology_template_files');
+    await tmpl.installTemplateFile(UID, 'student');
+    const row = tmpl.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const sectionRef = tmpl.buildContentRef(row.group_id, '协作关系');
+    await seedCandidates(poc, [{ id: 'cand-pref-1', text: '喜欢用大白话解释' }]);
+
+    await poc.confirmCandidate(UID, 'cand-pref-1', {
+      toGlobalMemory: false,
+      toGroupIds: [sectionRef],
+      targetField: '教师与同伴',
+    });
+    const content = tmpl.readTemplateFileText(UID, 'student');
+    expect(content).toContain('### 教师与同伴\n- 喜欢用大白话解释 [候选]');
+    expect(content).not.toContain('@proj:');
+  });
+
+  it('confirmCandidates (batch) passes projectId through', async () => {
+    const poc = await loadModule();
+    const groups = await loadGroups();
+    const created = await groups.createGroup(UID, '偏好');
+    const groupId = created.group!.group_id;
+    await groups.appendFieldValue(UID, groupId, '沟通风格', '种子值', '手动');
+    await seedCandidates(poc, [
+      { id: 'cand-b1', text: '第一偏好' },
+      { id: 'cand-b2', text: '第二偏好' },
+    ]);
+
+    const res = await poc.confirmCandidates(UID, ['cand-b1', 'cand-b2'], {
+      toGlobalMemory: false,
+      toGroupIds: [groupId],
+      targetField: '沟通风格',
+      projectId: 'p_xyz',
+    });
+    expect(res.confirmedCount).toBe(2);
+
+    const groupFile = path.join(tmpDir, UID, 'cloud', 'contexts', '.personal_ontology_groups', `${groupId}.md`);
+    const content = fs.readFileSync(groupFile, 'utf8');
+    expect(content).toContain('- 第一偏好 [候选] @proj:p_xyz');
+    expect(content).toContain('- 第二偏好 [候选] @proj:p_xyz');
+  });
+
+  it('candidate pool format round-trips a `来源项目` line (D5 进池标记地基)', async () => {
+    const poc = await loadModule();
+    const cands = [{
+      candidate_id: 'cand-pj-1',
+      kind: 'preference' as const,
+      confidence: 'high' as const,
+      summary: '摘要',
+      memory_scope: 'user' as const,
+      memory_text: '记忆文本',
+      source_memory_refs: [] as string[],
+      project_id: 'p_from_pool',
+    }];
+    const text = poc.serializeCandidatesMarkdown(cands);
+    expect(text).toContain('- 来源项目: p_from_pool');
+    const parsed = poc.parseCandidatesMarkdown(text);
+    expect(parsed[0].project_id).toBe('p_from_pool');
+  });
+
+  it('candidate自带 project_id（dest 不传）→ 落盘 @proj:<pid>', async () => {
+    const poc = await loadModule();
+    const groups = await loadGroups();
+    const created = await groups.createGroup(UID, '偏好');
+    const groupId = created.group!.group_id;
+    await groups.appendFieldValue(UID, groupId, '沟通风格', '种子值', '手动');
+
+    const file = candidatesMdPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, poc.serializeCandidatesMarkdown([{
+      candidate_id: 'cand-pj-2',
+      kind: 'preference',
+      confidence: 'high',
+      summary: 's',
+      memory_scope: 'user',
+      memory_text: '自带项目标记的候选',
+      source_memory_refs: [],
+      project_id: 'p_pool_abc',
+    }]));
+
+    const res = await poc.confirmCandidate(UID, 'cand-pj-2', {
+      toGlobalMemory: false,
+      toGroupIds: [groupId],
+      targetField: '沟通风格',
+    });
+    expect(res.ok).toBe(true);
+    const groupFile = path.join(tmpDir, UID, 'cloud', 'contexts', '.personal_ontology_groups', `${groupId}.md`);
+    expect(fs.readFileSync(groupFile, 'utf8')).toContain('- 自带项目标记的候选 [候选] @proj:p_pool_abc');
+  });
+
+  it('dest.projectId 显式传 → 覆盖候选自带 project_id（用户/UI 意图优先）', async () => {
+    const poc = await loadModule();
+    const groups = await loadGroups();
+    const created = await groups.createGroup(UID, '偏好');
+    const groupId = created.group!.group_id;
+    await groups.appendFieldValue(UID, groupId, '沟通风格', '种子值', '手动');
+
+    const file = candidatesMdPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, poc.serializeCandidatesMarkdown([{
+      candidate_id: 'cand-pj-3',
+      kind: 'preference',
+      confidence: 'high',
+      summary: 's',
+      memory_scope: 'user',
+      memory_text: '覆盖标记测试',
+      source_memory_refs: [],
+      project_id: 'p_pool_old',
+    }]));
+
+    const res = await poc.confirmCandidate(UID, 'cand-pj-3', {
+      toGlobalMemory: false,
+      toGroupIds: [groupId],
+      targetField: '沟通风格',
+      projectId: 'p_override',
+    });
+    expect(res.ok).toBe(true);
+    const groupFile = path.join(tmpDir, UID, 'cloud', 'contexts', '.personal_ontology_groups', `${groupId}.md`);
+    expect(fs.readFileSync(groupFile, 'utf8')).toContain('- 覆盖标记测试 [候选] @proj:p_override');
+    expect(fs.readFileSync(groupFile, 'utf8')).not.toContain('p_pool_old');
+  });
 });
