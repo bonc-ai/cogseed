@@ -71,7 +71,7 @@ async function _dispatch(rawUrl: string): Promise<void> {
   }
 }
 
-/** Register callback handling only in the one runtime that owns the OS schemes. */
+/** Register callback handling only in the runtime that owns the OS schemes. */
 export function registerConnectorProtocol(options: Readonly<{ owner: boolean }>): boolean {
   if (options.owner) {
     for (const scheme of CONNECTOR_PROTOCOL_SCHEMES) {
@@ -104,7 +104,8 @@ export function registerConnectorProtocol(options: Readonly<{ owner: boolean }>)
   }
 
   // Window activation belongs to the single-instance contract, not protocol
-  // ownership. Every runtime must focus its existing window on a duplicate launch.
+  // ownership. Every runtime focuses its own existing window on a duplicate
+  // launch; only the owner may consume an OAuth callback from argv.
   app.on('second-instance', (_event, argv) => {
     const rawUrl = options.owner ? _extractConnectorCallback(argv) : null;
     if (rawUrl) void _dispatch(rawUrl);

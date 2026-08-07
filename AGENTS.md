@@ -12,6 +12,7 @@ Single-process Electron app. Main is a Node backend, renderer is vanilla HTML/CS
 - `src/main/preload.js` must remain `.js`; preload does not run the tsx hook.
 - LLM calls use the in-process `core-agent` loaded dynamically through `import('#core-agent')`.
 - Local CLI agents are the explicit child-process exception. `features/local_agents/runner.ts` is the only CLI dispatch spawn path.
+- Mate Agent Runtime worker is the backend-isolation child-process exception. The worker process itself is spawned only through `features/mate_agent_runtime/worker-process.ts` and speaks the Runtime JSONL protocol; no IPC handler/renderer code may spawn it directly. Inside that isolated worker, Runtime tool execution is limited to the dedicated `features/mate_agent_runtime/kernel/tools/` choke points: shell commands through `shell-tools.ts`, and skill scripts through `skill-tools.ts` → `bin/run-skill.cjs`.
 - MCP stdio connectors spawn only through `features/connectors/mcp-client.ts`.
 - User data is mostly JSON/JSONL for readability and sync friendliness; sqlite is reserved for the KB vector store.
 - macOS and Windows are primary. Platform branches need platform-specific verification.

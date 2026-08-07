@@ -53,7 +53,7 @@ export const globalSlots: SemaphoreInterface = new Semaphore(10);
  *  re-entrantly — no deadlock. Override with ORKAS_MAX_DISPATCH_CONCURRENCY. */
 const _dispatchCap = (() => {
   const n = Number.parseInt(process.env.ORKAS_MAX_DISPATCH_CONCURRENCY ?? '', 10);
-  return Number.isFinite(n) && n > 0 ? n : 4;
+  return Number.isFinite(n) && n > 0 ? n : 3;
 })();
 export const dispatchSlots: SemaphoreInterface = new Semaphore(_dispatchCap);
 

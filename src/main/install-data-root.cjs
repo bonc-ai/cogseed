@@ -39,8 +39,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const RUNTIME_VARIANTS = Object.freeze(['main', 'cognition', 'expense', 'integration', 'optimization', 'messaging']);
-const SOURCE_RUNTIME_VARIANTS = Object.freeze(['cognition', 'expense', 'integration', 'optimization', 'messaging']);
+const RUNTIME_VARIANTS = Object.freeze(['main', 'cognition', 'expense', 'integration', 'messaging', 'optimization']);
+const SOURCE_RUNTIME_VARIANTS = Object.freeze(['cognition', 'expense', 'integration', 'messaging', 'optimization']);
 
 // Early-boot diagnostics buffer. This file runs before logger.ts can be
 // loaded (logger imports paths.ts, which depends on the env var THIS file
@@ -78,7 +78,7 @@ function selectRuntimeVariant(options = {}) {
   for (const arg of argv) {
     if (typeof arg !== 'string') continue;
     if (arg === '--orkas-runtime-variant') {
-      throw new Error('--orkas-runtime-variant requires =main|cognition|expense|integration|optimization|messaging');
+      throw new Error('--orkas-runtime-variant requires =main|cognition|expense|integration|messaging|optimization');
     }
     if (arg.startsWith('--orkas-runtime-variant=')) {
       values.push(arg.slice('--orkas-runtime-variant='.length));

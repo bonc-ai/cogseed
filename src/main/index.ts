@@ -174,6 +174,7 @@ import * as clientConfigFeature from './features/client_config';
 import * as connectorsFeature from './features/connectors';
 import * as messagingFeature from './features/messaging';
 import * as taskNotifications from './features/task_notifications';
+import { startGroupKstarClosure } from './features/kstar/task-closure';
 import * as notificationPermissions from './features/notification_permissions';
 import {
   consumeColdLaunchConnectorCallback,
@@ -419,6 +420,10 @@ function registerIpc(): void {
         ? ['cmd.exe', ['/d', '/s', '/c', `"${script}"`]] as const
         : ['bash',    [script]]                            as const;
       const relaunchEnv = { ...process.env };
+      // bootstrap.cjs derives the data root from a clean process environment.
+      // Do not pass the current instance's resolved paths back into the
+      // launcher, otherwise the new process would either be rejected as an
+      // inherited-root launch or attach to the old runtime's data.
       delete relaunchEnv.ORKAS_WORKSPACE_ROOT;
       delete relaunchEnv.ORKAS_RUNTIME_CONTAINER;
       delete relaunchEnv.CORE_AGENT_AUTH_DIR;
@@ -1129,6 +1134,8 @@ if (!gotLock) {
       openConversation: openConversationFromTaskNotification,
     });
     app.once('before-quit', stopTaskNotifications);
+    const stopGroupKstarClosure = startGroupKstarClosure();
+    app.once('before-quit', stopGroupKstarClosure);
     clientConfigFeature.clientConfig.subscribeAll((keys) => {
       ipc.broadcastToRenderer('client-config:changed', { keys });
     });

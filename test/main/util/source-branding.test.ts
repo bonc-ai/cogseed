@@ -1,6 +1,6 @@
+import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { describe, expect, it } from 'vitest';
 
 const root = path.join(__dirname, '../../..');
 const read = (rel: string) => fs.readFileSync(path.join(root, rel), 'utf8');
