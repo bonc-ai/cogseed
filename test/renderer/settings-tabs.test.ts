@@ -237,6 +237,22 @@ describe('settings tabs module', () => {
     hooks.__test.resetQrState();
   });
 
+  it('validates telegram bot tokens with the IPC token shape', () => {
+    const { hooks } = loadMessagingSettingsTestHooks();
+    expect(hooks.__test.validateBotToken('123456:ABCdefGHIJKLMNOPQRSTuvwxyz_9')).toBe(true);
+    expect(hooks.__test.validateBotToken('nope')).toBe(false);
+    expect(hooks.__test.validateBotToken('123:short')).toBe(false);
+  });
+
+  it('saves telegram tokens through create + set_enabled with rollback', () => {
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    expect(source).toContain("invoke('messaging.create', {");
+    expect(source).toContain("platform: 'telegram',");
+    expect(source).toContain("invoke('messaging.set_enabled', { instanceId: created.instance.id, enabled: true })");
+    expect(source).toContain("invoke('messaging.delete', { instanceId: created.instance.id })");
+    expect(source).toContain("enabled: true }");
+  });
+
   it('provides every visible catalog and detail label in each renderer locale', () => {
     const keys = [
       'messaging.group.open',

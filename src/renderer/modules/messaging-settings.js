@@ -631,6 +631,96 @@
     }
   }
 
+  function validateBotToken(token) {
+    return typeof token === 'string' && /^\d+:[A-Za-z0-9_-]{20,}$/.test(token.trim());
+  }
+
+  async function saveTelegramToken(instance, tokenInput, button) {
+    if (button.disabled) return;
+    const token = String(tokenInput.value || '').trim();
+    if (!validateBotToken(token)) {
+      setNotice(labelFor('messaging.telegram.token_invalid', ''), 'error');
+      tokenInput.focus();
+      return;
+    }
+    button.disabled = true;
+    state.updating = true;
+    setNotice('', '');
+    try {
+      if (!instance) {
+        const created = await invoke('messaging.create', {
+          platform: 'telegram',
+          displayName: 'Telegram',
+          secret: { botToken: token },
+        });
+        if (!created || !created.instance || typeof created.instance.id !== 'string') {
+          throw new Error(created?.error || labelFor('messaging.update_failed', ''));
+        }
+        try {
+          await invoke('messaging.set_enabled', { instanceId: created.instance.id, enabled: true });
+        } catch (error) {
+          try { await invoke('messaging.delete', { instanceId: created.instance.id }); } catch (_) { /* rollback best effort */ }
+          throw new Error(labelFor('messaging.telegram.enable_failed', ''));
+        }
+        state.instances = [...state.instances, created.instance];
+        state.selectedInstanceId = created.instance.id;
+        setNotice(labelFor('messaging.link_success', ''), 'success');
+      } else {
+        const result = await invoke('messaging.update', {
+          instanceId: instance.id,
+          secret: { botToken: token },
+          enabled: true,
+        });
+        if (!result || !result.instance || typeof result.instance.id !== 'string') {
+          throw new Error(result?.error || labelFor('messaging.update_failed', ''));
+        }
+        state.instances = state.instances.map((candidate) => candidate.id === result.instance.id ? result.instance : candidate);
+        setNotice(labelFor('messaging.updated', ''), 'success');
+      }
+    } catch (error) {
+      setNotice(errorMessage(error, labelFor('messaging.update_failed', '')), 'error');
+    } finally {
+      state.updating = false;
+      renderCurrent();
+    }
+  }
+
+  function renderTelegramPanel(channel) {
+    const wrapper = el('div', 'messaging-panel-body');
+    wrapper.appendChild(renderInstanceList(channel));
+    const instances = instancesForChannel(channel);
+    const instance = instances.find((item) => item.id === state.selectedInstanceId) || instances[0] || null;
+    const config = card('messaging.telegram.token_label', '', 'messaging-telegram-card');
+    const tokenInput = document.createElement('input');
+    tokenInput.type = 'password';
+    tokenInput.className = 'form-input';
+    tokenInput.placeholder = labelFor('messaging.telegram.token_placeholder', '');
+    tokenInput.autocomplete = 'off';
+    tokenInput.spellcheck = false;
+    tokenInput.setAttribute('aria-label', labelFor('messaging.telegram.token_label', ''));
+    const save = el('button', 'btn messaging-scan-button', labelFor(
+      instance ? 'messaging.telegram.reconnect' : 'messaging.telegram.connect', '',
+    ));
+    save.type = 'button';
+    save.disabled = state.updating;
+    save.appendChild(icon('send', 'messaging-action-icon'));
+    save.addEventListener('click', () => void saveTelegramToken(instance, tokenInput, save));
+    const rows = el('div', 'messaging-manual-fields');
+    rows.append(tokenInput, save);
+    config.appendChild(rows);
+    wrapper.appendChild(config);
+    if (instance) {
+      const deletion = card('messaging.delete_title', 'messaging.delete_subtitle', 'messaging-delete-card');
+      const deleteButton = el('button', 'btn btn-danger messaging-delete-button', labelFor('messaging.delete', ''));
+      deleteButton.type = 'button';
+      deleteButton.disabled = state.updating;
+      deleteButton.addEventListener('click', () => void deleteInstance(instance, deleteButton));
+      deletion.appendChild(deleteButton);
+      wrapper.appendChild(deletion);
+    }
+    return wrapper;
+  }
+
   async function updateInstance(patch, control) {
     const instance = currentInstance();
     if (!instance || state.updating) return;
@@ -717,8 +807,9 @@
     panel.appendChild(renderPanelHeader(channel));
     if (channel.platform === 'feishu_lark') {
       panel.appendChild(renderFeishuPanel(channel));
+    } else if (channel.platform === 'telegram') {
+      panel.appendChild(renderTelegramPanel(channel));
     }
-    // Task 7 追加: else if (channel.platform === 'telegram') panel.appendChild(renderTelegramPanel(channel));
     // Task 8 追加: else if (channel.platform === 'wecom') panel.appendChild(renderWecomPanel(channel));
     appendNotice(panel);
     return panel;
@@ -843,7 +934,7 @@
       CHANNELS,
       normalizeFeishuQrStatus,
       channelForInstance,
-      __test: { state, applyFeishuQrStatus, qrIsVisibleFor, qrPollDelay, resetQrState, instancesForChannel },
+      __test: { state, applyFeishuQrStatus, qrIsVisibleFor, qrPollDelay, resetQrState, instancesForChannel, validateBotToken },
     };
   }
 })();
