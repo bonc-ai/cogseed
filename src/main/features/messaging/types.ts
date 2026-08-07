@@ -7,6 +7,9 @@ export type FeishuTenantBrand = (typeof FEISHU_TENANT_BRANDS)[number];
 // The official long-connection SDK silently declines malformed ids. Validate
 // them at configuration time so an enabled instance cannot wait forever.
 export const FEISHU_APP_ID_PATTERN = /^cli_[0-9a-fA-F]{16}$/;
+export const FEISHU_OPEN_ID_PATTERN = /^ou_[A-Za-z0-9_-]{1,157}$/;
+
+export type MessagingOwnerIdentitySource = 'qr' | 'manual' | 'auto';
 
 // WeCom assigns bot identifiers and secrets; unlike Feishu app IDs they do
 // not have a stable documented prefix. Keep validation structural and leave
@@ -16,6 +19,10 @@ export const WECOM_BOT_SECRET_PATTERN = /^[^\u0000-\u0020\u007f]{8,512}$/;
 
 export function isValidFeishuAppId(value: string): boolean {
   return FEISHU_APP_ID_PATTERN.test(value);
+}
+
+export function isValidFeishuOpenId(value: string): boolean {
+  return FEISHU_OPEN_ID_PATTERN.test(value);
 }
 
 export function isValidWecomBotId(value: string): boolean {
@@ -85,7 +92,14 @@ export interface MessagingSecret {
   wecomBotSecret?: string;
 }
 
-export interface MessagingInstanceDisk extends MessagingInstance {
+export interface MessagingInstanceInternal extends MessagingInstance {
+  /** Main-process-only recipient identity. Never include it in renderer DTOs. */
+  ownerExternalUserId?: string;
+  ownerExternalUserName?: string;
+  ownerIdentitySource?: MessagingOwnerIdentitySource;
+}
+
+export interface MessagingInstanceDisk extends MessagingInstanceInternal {
   secretsEnc?: string;
 }
 
@@ -178,7 +192,13 @@ export interface MessagingInboundLedgerFile {
 export interface DeliveryLedgerEntry {
   key: string;
   instanceId: string;
-  externalChatId: string;
+  /** The platform id the message is delivered to. Ordinary chat replies use
+   * the chat id; proactive self sends use the owner's open id. */
+  recipientId: string;
+  recipientIdType: 'chat_id' | 'open_id';
+  /** Chat context for ordinary replies and reaction reverse lookups. Kept
+   * optional because proactive sends never carry a chat id here. */
+  externalChatId?: string;
   sourceMessageId: string;
   textHash: string;
   /** Outbound text is kept in the machine-private ledger so a process restart
@@ -284,6 +304,9 @@ export interface MessagingSendContext {
   threadId?: string;
   replyInThread?: boolean;
   idempotencyKey?: string;
+  /** Trusted fresh-send recipient type, set only by the messaging service.
+   * Ordinary replies stay `chat_id`; proactive self sends use `open_id`. */
+  recipientIdType?: 'chat_id' | 'open_id';
 }
 
 export interface MessagingAdapterFactory {
@@ -300,6 +323,9 @@ export interface MessagingPlatformCatalogEntry {
 
 export interface MessagingInstanceClient extends MessagingInstance {
   hasCredentials: boolean;
+  ownerConfigured: boolean;
+  ownerLabel?: string;
+  ownerIdentitySource?: MessagingOwnerIdentitySource;
 }
 
 export interface MessagingInboundResult {

@@ -22,6 +22,26 @@ const EMPTY_DELIVERY: MessagingDeliveryLedgerFile = { version: 1, entries: {} };
 const MAX_DELIVERY_TEXT_LENGTH = 12_000;
 const MAX_DELIVERY_IDEMPOTENCY_KEY_LENGTH = 160;
 
+/** Terminal-state waiters keyed by `<uid>\0<delivery key>`. A waiter registers
+ * only after a first non-terminal read, then re-reads; state changes between
+ * the read and the registration are caught by that second read. */
+const deliveryWaiters = new Map<string, Set<() => void>>();
+
+function waiterKey(uid: string, key: string): string {
+  return `${uid}\u0000${key}`;
+}
+
+function isTerminalDeliveryStatus(status: DeliveryLedgerEntry['status']): boolean {
+  return status === 'sent' || status === 'failed' || status === 'cancelled';
+}
+
+function notifyDeliveryWaiters(uid: string, key: string): void {
+  const listeners = deliveryWaiters.get(waiterKey(uid, key));
+  if (!listeners) return;
+  deliveryWaiters.delete(waiterKey(uid, key));
+  for (const listener of listeners) listener();
+}
+
 function assertUserId(uid: string): void {
   if (!safeId(uid)) throw new Error('invalid user id');
 }
@@ -114,10 +134,15 @@ function normalizeDelivery(raw: Partial<MessagingDeliveryLedgerFile>): Messaging
     const status = (rawStatus === 'pending' || rawStatus === 'retry_pending') && !replayable
       ? 'failed'
       : rawStatus;
+    const externalChatId = String(candidate.externalChatId || '').slice(0, 512);
     entries[key] = {
       key,
       instanceId: String(candidate.instanceId || '').slice(0, 160),
-      externalChatId: String(candidate.externalChatId || '').slice(0, 512),
+      // Legacy ledgers kept only an untyped chat id; default those recipients
+      // to chat_id so restart recovery keeps the historical reply semantics.
+      recipientId: String(candidate.recipientId || candidate.externalChatId || '').slice(0, 512),
+      recipientIdType: candidate.recipientIdType === 'open_id' ? 'open_id' : 'chat_id',
+      ...(externalChatId ? { externalChatId } : {}),
       sourceMessageId: String(candidate.sourceMessageId || '').slice(0, 160),
       textHash: String(candidate.textHash || '').slice(0, 128),
       ...(text ? { text } : {}),
@@ -260,6 +285,13 @@ export async function beginDelivery(
   boundedKey(entry.key, 'delivery key');
   const text = typeof entry.text === 'string' ? entry.text.trim().slice(0, MAX_DELIVERY_TEXT_LENGTH) : '';
   if (!text) throw new Error('delivery text required for recovery');
+  const recipientId = typeof entry.recipientId === 'string' && entry.recipientId.trim()
+    ? entry.recipientId.trim().slice(0, 512)
+    : typeof entry.externalChatId === 'string'
+      ? entry.externalChatId.trim().slice(0, 512)
+      : '';
+  if (!recipientId) throw new Error('delivery recipient required for recovery');
+  const recipientIdType = entry.recipientIdType === 'open_id' ? 'open_id' : 'chat_id';
   return getLock(deliveryLocks, uid).runExclusive(async () => {
     const data = normalizeDelivery(await readJson<Partial<MessagingDeliveryLedgerFile>>(userMessagingDeliveryLedgerFile(uid)));
     const existing = data.entries[entry.key];
@@ -277,6 +309,8 @@ export async function beginDelivery(
     }
     const next: DeliveryLedgerEntry = {
       ...(existing || entry),
+      recipientId,
+      recipientIdType,
       text: existing?.text || text,
       idempotencyKey: existing?.idempotencyKey
         || (typeof entry.idempotencyKey === 'string' && entry.idempotencyKey.trim()
@@ -325,7 +359,101 @@ export async function finishDelivery(
     data.entries[key] = next;
     await writeJson(userMessagingDeliveryLedgerFile(uid), data);
     clearPending(pendingDeliveries, uid, key);
+    if (isTerminalDeliveryStatus(next.status)) notifyDeliveryWaiters(uid, key);
     return next;
+  });
+}
+
+/** Wait for a delivery to reach a terminal state (`sent`, `failed`, or
+ * `cancelled`). Resolves with the terminal ledger entry. The caller aborts
+ * (AbortSignal) or times out by cancelling the delivery through
+ * `cancelDelivery`; the wait itself never mutates the ledger. */
+export async function waitForDeliveryTerminal(
+  uid: string,
+  key: string,
+  opts: { signal?: AbortSignal | null; timeoutMs?: number } = {},
+): Promise<DeliveryLedgerEntry> {
+  assertUserId(uid);
+  boundedKey(key, 'delivery key');
+  const waitKey = waiterKey(uid, key);
+  return new Promise<DeliveryLedgerEntry>((resolve, reject) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | null = null;
+    const settle = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (opts.signal) opts.signal.removeEventListener('abort', onAbort as EventListener);
+      const listeners = deliveryWaiters.get(waitKey);
+      if (listeners) {
+        listeners.delete(listener);
+        if (!listeners.size) deliveryWaiters.delete(waitKey);
+      }
+      fn();
+    };
+    const onAbort = (): void => settle(() => reject(new Error('delivery wait aborted')));
+    const resolveTerminal = (entry: DeliveryLedgerEntry | null): void => {
+      if (settled) return;
+      if (!entry) {
+        settle(() => reject(new Error('delivery ledger entry not found')));
+        return;
+      }
+      if (isTerminalDeliveryStatus(entry.status)) settle(() => resolve(entry));
+    };
+    const listener = (): void => {
+      void getDelivery(uid, key).then(resolveTerminal, (error) => settle(() => reject(error)));
+    };
+    if (opts.signal) {
+      if (opts.signal.aborted) {
+        settle(() => reject(new Error('delivery wait aborted')));
+        return;
+      }
+      opts.signal.addEventListener('abort', onAbort, { once: true });
+    }
+    if (typeof opts.timeoutMs === 'number' && Number.isFinite(opts.timeoutMs)) {
+      timer = setTimeout(() => settle(() => reject(new Error('delivery wait timed out'))), Math.max(0, opts.timeoutMs));
+      if (typeof timer.unref === 'function') timer.unref();
+    }
+    void getDelivery(uid, key).then((entry) => {
+      if (settled) return;
+      if (!entry || isTerminalDeliveryStatus(entry.status)) {
+        resolveTerminal(entry);
+        return;
+      }
+      // Register after the first read, then re-read: a finish that happened
+      // between the read and the registration is caught by the second read.
+      let listeners = deliveryWaiters.get(waitKey);
+      if (!listeners) {
+        listeners = new Set();
+        deliveryWaiters.set(waitKey, listeners);
+      }
+      listeners.add(listener);
+      void getDelivery(uid, key).then(resolveTerminal, (error) => settle(() => reject(error)));
+    }, (error) => settle(() => reject(error)));
+  });
+}
+
+/** Cancel exactly one recoverable delivery. Terminal and unknown deliveries
+ * return false. Wakes any waiter on the same key. */
+export async function cancelDelivery(uid: string, key: string, reason: string): Promise<boolean> {
+  assertUserId(uid);
+  boundedKey(key, 'delivery key');
+  const boundedReason = reason.trim().slice(0, 500) || 'delivery cancelled';
+  return getLock(deliveryLocks, uid).runExclusive(async () => {
+    const data = normalizeDelivery(await readJson<Partial<MessagingDeliveryLedgerFile>>(userMessagingDeliveryLedgerFile(uid)));
+    const current = data.entries[key];
+    if (!current || (current.status !== 'pending' && current.status !== 'retry_pending')) return false;
+    current.status = 'cancelled';
+    current.error = boundedReason;
+    delete current.nextAttemptAt;
+    current.updatedAt = nowIso();
+    clearPending(pendingDeliveries, uid, key);
+    await writeJson(userMessagingDeliveryLedgerFile(uid), data);
+    notifyDeliveryWaiters(uid, key);
+    return true;
   });
 }
 
@@ -366,7 +494,7 @@ export async function cancelRecoverableDeliveriesForInstance(uid: string, instan
   const boundedReason = reason.trim().slice(0, 500) || 'delivery cancelled';
   return getLock(deliveryLocks, uid).runExclusive(async () => {
     const data = normalizeDelivery(await readJson<Partial<MessagingDeliveryLedgerFile>>(userMessagingDeliveryLedgerFile(uid)));
-    let cancelled = 0;
+    const cancelledKeys: string[] = [];
     for (const entry of Object.values(data.entries)) {
       if (entry.instanceId !== instanceId || (entry.status !== 'pending' && entry.status !== 'retry_pending')) continue;
       entry.status = 'cancelled';
@@ -374,10 +502,13 @@ export async function cancelRecoverableDeliveriesForInstance(uid: string, instan
       delete entry.nextAttemptAt;
       entry.updatedAt = nowIso();
       clearPending(pendingDeliveries, uid, entry.key);
-      cancelled += 1;
+      cancelledKeys.push(entry.key);
     }
-    if (cancelled) await writeJson(userMessagingDeliveryLedgerFile(uid), data);
-    return cancelled;
+    if (cancelledKeys.length) {
+      await writeJson(userMessagingDeliveryLedgerFile(uid), data);
+      for (const key of cancelledKeys) notifyDeliveryWaiters(uid, key);
+    }
+    return cancelledKeys.length;
   });
 }
 

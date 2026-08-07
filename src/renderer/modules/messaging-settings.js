@@ -79,6 +79,53 @@
     return window.orkas.invoke(channel, payload || {});
   }
 
+  // Commander-driven proactive send: main pushes a `messaging:send-confirm`
+  // request, the user must approve here before any Feishu message is sent.
+  // FIFO so concurrent sends don't stack dialogs (mirrors connectors.js).
+  const _sendConfirmQueue = [];
+  let _sendConfirmDialogOpen = false;
+
+  function _drainSendConfirmQueue() {
+    if (_sendConfirmDialogOpen) return;
+    _sendConfirmDialogOpen = true;
+    (async () => {
+      try {
+        while (_sendConfirmQueue.length) {
+          const info = _sendConfirmQueue.shift();
+          const message = labelFor('messaging.send_confirm.message', '')
+            .replace('{instance}', info.instance_name || '')
+            .replace('{owner}', info.owner_label || '本人')
+            .replace('{text}', info.text || '');
+          const ok = await uiConfirm({
+            message,
+            okLabel: labelFor('messaging.send_confirm.approve', 'Send'),
+            cancelLabel: labelFor('messaging.send_confirm.decline', 'Cancel'),
+          });
+          try {
+            await invoke('messaging.send_confirm_response', {
+              request_id: info.request_id,
+              approved: !!ok,
+            });
+          } catch (_err) {
+            /* stale dialog after timeout; harmless */
+          }
+        }
+      } finally {
+        _sendConfirmDialogOpen = false;
+      }
+    })();
+  }
+
+  if (window.orkas && typeof window.orkas.onPushEvent === 'function') {
+    try {
+      window.orkas.onPushEvent('messaging:send-confirm', (info) => {
+        if (!info || typeof info.request_id !== 'string') return;
+        _sendConfirmQueue.push(info);
+        _drainSendConfirmQueue();
+      });
+    } catch (_err) { /* event not supported; harmless */ }
+  }
+
   function labelFor(key, fallback) {
     try {
       if (typeof t === 'function') return t(key);
@@ -552,6 +599,7 @@
     const instance = instances.find((item) => item.id === state.selectedInstanceId) || instances[0] || null;
     if (instance) {
       wrapper.appendChild(associationCard(instance));
+      wrapper.appendChild(ownerIdentityCard(instance));
       const responseSelect = selectControl([
         { value: 'text', label: labelFor('messaging.response_text', '') },
         { value: 'streaming_card', label: labelFor('messaging.response_streaming_card', '') },
@@ -621,6 +669,11 @@
       state.selectedInstanceId = instance.id;
       state.openingChannel = '';
       renderCurrent();
+      // No-owner Feishu bot: guide the user to claim it by sending the first
+      // direct message — no manual open id needed (main opens a binding window).
+      if (instance.ownerConfigured === false && typeof uiAlert === 'function') {
+        uiAlert(labelFor('messaging.owner_bind_hint', ''));
+      }
       await startQr(instance);
     } catch (error) {
       if (state.operation !== operation) return;
@@ -963,6 +1016,12 @@
       }
       state.instances = state.instances.map((candidate) => candidate.id === result.instance.id ? result.instance : candidate);
       setNotice(labelFor('messaging.updated', ''), 'success');
+      // Enabling or linking a Feishu bot without an owner opens the auto-binding
+      // window in main; tell the user how to claim it without typing an id.
+      if ((patch.enabled === true || patch.secret !== undefined)
+        && result.instance.ownerConfigured === false && typeof uiAlert === 'function') {
+        uiAlert(labelFor('messaging.owner_bind_hint', ''));
+      }
     } catch (error) {
       if (control && previousValue !== undefined) control.value = previousValue;
       setNotice(errorMessage(error, labelFor('messaging.update_failed', '')), 'error');
@@ -970,6 +1029,75 @@
       state.updating = false;
       renderCurrent();
     }
+  }
+
+  function ownerIdentityCard(instance) {
+    const section = card('messaging.owner_title', 'messaging.owner_subtitle', 'messaging-owner-card');
+    if (instance.ownerConfigured === true) {
+      const status = el('div', 'messaging-manual-bound');
+      status.append(
+        icon('check-circle', 'messaging-status-icon'),
+        el('span', '', instance.ownerLabel || labelFor('messaging.owner_configured', '')),
+      );
+      section.appendChild(status);
+    } else if (instance.platform === 'feishu_lark') {
+      // Auto-binding window: the user just needs to send the bot a direct
+      // message — no id entry. Only shown while the window is actually open.
+      const pending = el('div', 'messaging-owner-pending');
+      pending.style.display = 'none';
+      pending.append(icon('clock', 'messaging-status-icon'), el('span', '', ''));
+      section.appendChild(pending);
+      void invoke('messaging.owner_binding_status', { instanceId: instance.id }).then((res) => {
+        if (res && res.binding) {
+          pending.style.display = '';
+          pending.querySelector('span').textContent = labelFor('messaging.owner_bind_pending', '');
+        }
+      }).catch(() => { /* window may have expired; leave the hint hidden */ });
+    }
+
+    const ownerIdInput = document.createElement('input');
+    ownerIdInput.type = 'text';
+    ownerIdInput.className = 'form-input';
+    ownerIdInput.placeholder = 'ou_xxxxxxxxxxxxxxxx';
+    ownerIdInput.autocomplete = 'off';
+    ownerIdInput.spellcheck = false;
+    ownerIdInput.setAttribute('aria-label', labelFor('messaging.owner_open_id', ''));
+
+    const ownerNameInput = document.createElement('input');
+    ownerNameInput.type = 'text';
+    ownerNameInput.className = 'form-input';
+    ownerNameInput.placeholder = labelFor('messaging.owner_name_placeholder', '');
+    ownerNameInput.autocomplete = 'off';
+    ownerNameInput.setAttribute('aria-label', labelFor('messaging.owner_name', ''));
+
+    const save = el('button', 'btn messaging-link-button', labelFor(
+      instance.ownerConfigured ? 'messaging.owner_update' : 'messaging.owner_save', '',
+    ));
+    save.type = 'button';
+    save.disabled = state.updating;
+    save.addEventListener('click', () => {
+      const ownerExternalUserId = String(ownerIdInput.value || '').trim();
+      const ownerExternalUserName = String(ownerNameInput.value || '').trim();
+      if (!/^ou_[A-Za-z0-9_-]{1,157}$/.test(ownerExternalUserId)) {
+        setNotice(labelFor('messaging.owner_open_id_invalid', ''), 'error');
+        ownerIdInput.focus();
+        renderCurrent();
+        return;
+      }
+      void updateInstance({ ownerExternalUserId, ownerExternalUserName }, save);
+    });
+
+    const fields = el('div', 'messaging-manual-fields');
+    fields.append(ownerIdInput, ownerNameInput, save);
+    if (instance.ownerConfigured === true) {
+      const clear = el('button', 'btn messaging-secondary-button', labelFor('messaging.owner_clear', ''));
+      clear.type = 'button';
+      clear.disabled = state.updating;
+      clear.addEventListener('click', () => void updateInstance({ clearOwner: true }, clear));
+      fields.appendChild(clear);
+    }
+    section.appendChild(fields);
+    return section;
   }
 
   function preferencesCard(responseControl, workspaceControl) {

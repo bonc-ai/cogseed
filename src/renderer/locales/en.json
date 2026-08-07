@@ -3146,5 +3146,20 @@
   "expense_agent.management.invalid": "The saved Feishu configuration needs attention. Update it below before using reimbursement.",
   "expense_agent.management.unconfigured": "Complete Feishu setup before using reimbursement. You can also start a main chat with this agent and configure it there.",
   "expense_agent.management.chat_hint": "After setup, use this agent in the main chat and attach the reimbursement materials there.",
-  "expense_agent.management.legacy_local_configuration": "A previous local reimbursement project was found but is no longer used. Complete the secure Feishu setup below."
+  "expense_agent.management.legacy_local_configuration": "A previous local reimbursement project was found but is no longer used. Complete the secure Feishu setup below.",
+  "messaging.send_confirm.message": "{instance} will send the following message to you ({owner}):\n\n{text}\n\nSend it?",
+  "messaging.send_confirm.approve": "Send",
+  "messaging.send_confirm.decline": "Cancel",
+  "messaging.owner_bind_hint": "The bot is ready. Send any message to it in Feishu/Lark (direct chat) and the sender will be bound as the recipient automatically — no ID entry needed.",
+  "messaging.owner_title": "Bot owner",
+  "messaging.owner_subtitle": "Configure who owns this bot's messages for proactive sending.",
+  "messaging.owner_configured": "Owner configured",
+  "messaging.owner_open_id": "Owner Open ID",
+  "messaging.owner_open_id_invalid": "Invalid owner Open ID; it should start with ou_.",
+  "messaging.owner_name": "Owner name",
+  "messaging.owner_name_placeholder": "Optional: owner name",
+  "messaging.owner_save": "Save owner",
+  "messaging.owner_update": "Update owner",
+  "messaging.owner_clear": "Clear owner",
+  "messaging.owner_bind_pending": "Awaiting binding: send any message to this bot in Feishu/Lark (direct chat) to bind the sender as the recipient"
 }

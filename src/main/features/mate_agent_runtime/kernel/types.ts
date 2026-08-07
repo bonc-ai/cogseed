@@ -28,6 +28,8 @@ export interface RuntimeKernelRequest {
   readOnlyRoots: string[];
   writableRoots: string[];
   toolPolicy: RuntimeToolPolicy;
+  /** Main-process-derived capability grants (see protocol.RuntimeRunRequest). */
+  capabilities: string[];
   agentId?: string;
   modelProfile?: string;
   workingDir?: string;

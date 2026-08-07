@@ -5,6 +5,7 @@ import * as wecomRegistration from '../features/messaging/wecom-registration';
 import * as registry from '../features/messaging/registry';
 import {
   isValidFeishuAppId,
+  isValidFeishuOpenId,
   isValidWecomBotId,
   isValidWecomBotSecret,
 } from '../features/messaging/types';
@@ -133,6 +134,22 @@ function registrationFlowId(value: unknown): string {
   return result;
 }
 
+function ownerIdentity(payload: Record<string, unknown>): {
+  ownerExternalUserId: string;
+  ownerExternalUserName?: string;
+  ownerIdentitySource: 'manual';
+} | undefined {
+  if (payload.ownerExternalUserId === undefined && payload.ownerExternalUserName === undefined) return undefined;
+  const ownerExternalUserId = text(payload.ownerExternalUserId, 'ownerExternalUserId', 160);
+  if (!isValidFeishuOpenId(ownerExternalUserId)) throw new Error('invalid owner open id');
+  const ownerExternalUserName = text(payload.ownerExternalUserName, 'ownerExternalUserName', 120, false);
+  return {
+    ownerExternalUserId,
+    ...(ownerExternalUserName ? { ownerExternalUserName } : {}),
+    ownerIdentitySource: 'manual',
+  };
+}
+
 function wecomRegistrationDraft(payload: Record<string, unknown>): wecomRegistration.WecomRegistrationDraft {
   return {
     displayName: text(payload?.displayName, 'displayName', 120),
@@ -150,17 +167,20 @@ export const invokeHandlers = {
 
   'messaging.feishu_draft.create': async (payload: Record<string, unknown>, ctx: MessagingContext) => {
     const brand = feishuTenantBrand(payload?.feishuTenantBrand) || 'feishu';
+    const owner = ownerIdentity(payload);
     const instance = await registry.createFeishuDraft(ctx.userId, {
       feishuTenantBrand: brand,
       displayName: text(payload?.displayName, 'displayName', 120),
       workspace: workspace(payload?.workspace),
       policy: policy(payload?.policy),
+      ...(owner || {}),
     });
     return { instance };
   },
 
   'messaging.create': async (payload: Record<string, unknown>, ctx: MessagingContext) => {
     const selectedPlatform = platform(payload?.platform);
+    const owner = ownerIdentity(payload);
     const instance = await messaging.createInstance(ctx.userId, {
       platform: selectedPlatform,
       feishuTenantBrand: feishuTenantBrand(payload?.feishuTenantBrand),
@@ -168,6 +188,7 @@ export const invokeHandlers = {
       workspace: workspace(payload?.workspace),
       policy: policy(payload?.policy),
       secret: secret(payload?.secret, selectedPlatform),
+      ...(owner || {}),
     });
     return { instance };
   },
@@ -176,6 +197,10 @@ export const invokeHandlers = {
     const selectedId = instanceId(payload?.instanceId);
     const existing = await registry.getInstance(ctx.userId, selectedId);
     if (!existing) throw new Error('messaging instance not found');
+    const owner = ownerIdentity(payload);
+    const clearOwner = payload?.clearOwner === undefined
+      ? undefined
+      : requiredBoolean(payload.clearOwner, 'clearOwner');
     const instance = await messaging.updateInstance(ctx.userId, selectedId, {
       ...(payload?.displayName !== undefined ? { displayName: text(payload.displayName, 'displayName', 120) } : {}),
       ...(payload?.feishuTenantBrand !== undefined
@@ -186,6 +211,8 @@ export const invokeHandlers = {
       ...(payload?.policy !== undefined ? { policy: policy(payload.policy) } : {}),
       ...(payload?.responseMode !== undefined ? { responseMode: responseMode(payload.responseMode) } : {}),
       ...(payload?.secret !== undefined ? { secret: secret(payload.secret, existing.platform) } : {}),
+      ...(owner || {}),
+      ...(clearOwner !== undefined ? { clearOwner } : {}),
     });
     return { instance };
   },
@@ -200,6 +227,10 @@ export const invokeHandlers = {
 
   'messaging.health': async (payload: Record<string, unknown>, ctx: MessagingContext) => ({
     status: await messaging.health(ctx.userId, instanceId(payload?.instanceId)),
+  }),
+
+  'messaging.owner_binding_status': async (payload: Record<string, unknown>, ctx: MessagingContext) => ({
+    binding: messaging.getOwnerBindingStatus(ctx.userId, instanceId(payload?.instanceId)),
   }),
 
   'messaging.delete': async (payload: Record<string, unknown>, ctx: MessagingContext) => ({
@@ -238,4 +269,15 @@ export const invokeHandlers = {
   'messaging.wecom_qr.cancel': async (payload: Record<string, unknown>, ctx: MessagingContext) => ({
     registration: wecomRegistration.cancelWecomQrRegistration(ctx.userId, registrationFlowId(payload?.flowId)),
   }),
+
+  /** Renderer answer to a `messaging:send-confirm` push (Commander proactive
+   *  send flow). Shape-only validation; verdict semantics live in
+   *  features/messaging/proactive-confirm.ts. */
+  'messaging.send_confirm_response': async (payload: { request_id?: unknown; approved?: unknown }) => {
+    if (typeof payload?.request_id !== 'string' || !payload.request_id) throw new Error('invalid request_id');
+    if (typeof payload?.approved !== 'boolean') throw new Error('invalid approved flag');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const proactiveConfirm = require('../features/messaging/proactive-confirm') as typeof import('../features/messaging/proactive-confirm');
+    return { handled: proactiveConfirm.respondSendConfirm(payload.request_id, payload.approved) };
+  },
 };

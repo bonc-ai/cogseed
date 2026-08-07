@@ -1071,7 +1071,10 @@ export class FeishuAdapter implements MessagingCardAdapter {
           },
         })
         : await this.client.im.v1.message.create({
-          params: { receive_id_type: 'chat_id' },
+          // Ordinary replies default to chat_id; the messaging service opts
+          // into open_id for proactive self sends. The type is trusted — it
+          // can only come from manager-provided delivery context.
+          params: { receive_id_type: context?.recipientIdType === 'open_id' ? 'open_id' : 'chat_id' },
           data: {
             receive_id: chatId,
             msg_type: msgType,

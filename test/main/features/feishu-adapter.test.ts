@@ -220,6 +220,36 @@ describe('Feishu official event adapter', () => {
     expect(plain).toEqual({ deliveryId: 'om_post_1' });
   });
 
+  it('sends a proactive self message with receive_id_type open_id', async () => {
+    const create = vi.fn(async () => ({ code: 0, data: { message_id: 'om_self_1' } }));
+    const dispatcher = { register: vi.fn(function register() { return dispatcher; }) };
+    const client = {
+      request: vi.fn(async () => ({ code: 0, data: { open_id: 'ou_bot' } })),
+      im: { v1: { message: { create, reply: vi.fn(), patch: vi.fn() } } },
+    };
+    vi.doMock('@larksuiteoapi/node-sdk', () => ({
+      AppType: { SelfBuild: 'SelfBuild' },
+      Client: vi.fn(function Client() { return client; }),
+      Domain: { Feishu: 'https://open.feishu.cn', Lark: 'https://open.larksuite.com' },
+      EventDispatcher: vi.fn(function EventDispatcher() { return dispatcher; }),
+      LoggerLevel: { error: 'error' },
+      WSClient: vi.fn(),
+    }));
+
+    const { FeishuAdapter } = await import('../../../src/main/features/messaging/adapters');
+    const adapter = new FeishuAdapter(feishuInstance(), {
+      appId: 'cli_1234567890abcdef',
+      appSecret: 'app-secret',
+    });
+
+    const sent = await adapter.sendMessage('ou_self_1', 'hello self', undefined, { recipientIdType: 'open_id' });
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      params: { receive_id_type: 'open_id' },
+      data: expect.objectContaining({ receive_id: 'ou_self_1', msg_type: 'text' }),
+    }));
+    expect(sent).toEqual({ deliveryId: 'om_self_1' });
+  });
+
   it('splits long replies into multiple messages with per-chunk uuids', async () => {
     const create = vi.fn(async () => ({ code: 0, data: { message_id: 'om_chunk' } }));
     const dispatcher = { register: vi.fn(function register() { return dispatcher; }) };

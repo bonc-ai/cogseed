@@ -67,6 +67,8 @@ export interface MateAgentRuntimeInput {
   agent_id?: string;
   model_profile?: string;
   working_dir?: string;
+  /** Main-process-derived capability grants (Commander-only tools). */
+  capabilities?: string[];
 }
 
 export interface RuntimeResultProjector {

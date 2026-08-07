@@ -2945,5 +2945,20 @@
   "expense_agent.management.invalid": "A configuração salva do Feishu precisa de atenção. Atualize-a abaixo antes de usar o reembolso.",
   "expense_agent.management.unconfigured": "Conclua a configuração do Feishu antes de usar o reembolso. Você também pode iniciar uma conversa principal com este agente e configurar por lá.",
   "expense_agent.management.chat_hint": "Depois da configuração, use este agente na conversa principal e anexe ali os materiais de reembolso.",
-  "expense_agent.management.legacy_local_configuration": "Um projeto de reembolso local anterior foi encontrado, mas não é mais usado. Conclua abaixo a configuração segura do Feishu."
+  "expense_agent.management.legacy_local_configuration": "Um projeto de reembolso local anterior foi encontrado, mas não é mais usado. Conclua abaixo a configuração segura do Feishu.",
+  "messaging.send_confirm.message": "{instance} enviará a seguinte mensagem para você ({owner}):\n\n{text}\n\nEnviar?",
+  "messaging.send_confirm.approve": "Enviar",
+  "messaging.send_confirm.decline": "Cancelar",
+  "messaging.owner_bind_hint": "O bot está pronto. Envie qualquer mensagem para ele no Feishu/Lark (chat direto) e o remetente será vinculado como destinatário automaticamente — sem precisar digitar o ID.",
+  "messaging.owner_title": "Proprietário do bot",
+  "messaging.owner_subtitle": "Configure o dono das mensagens do bot para envio proativo.",
+  "messaging.owner_configured": "Proprietário configurado",
+  "messaging.owner_open_id": "Open ID do proprietário",
+  "messaging.owner_open_id_invalid": "Open ID do proprietário inválido; deve começar com ou_.",
+  "messaging.owner_name": "Nome do proprietário",
+  "messaging.owner_name_placeholder": "Opcional: nome do proprietário",
+  "messaging.owner_save": "Salvar proprietário",
+  "messaging.owner_update": "Atualizar proprietário",
+  "messaging.owner_clear": "Limpar proprietário",
+  "messaging.owner_bind_pending": "Aguardando vínculo: envie qualquer mensagem para este bot no Feishu/Lark (chat direto) para vincular o remetente como destinatário"
 }

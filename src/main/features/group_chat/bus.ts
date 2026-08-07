@@ -7293,6 +7293,14 @@ export async function abort(uid: string, cid: string): Promise<void> {
   } catch {
     /* feature stripped / not loaded */
   }
+  // Abandon any pending proactive-messaging send confirmation for this
+  // conversation — the commander that requested it is being stopped.
+  try {
+    const proactiveConfirm = await import("../messaging/proactive-confirm");
+    proactiveConfirm.cancelForCid(cid);
+  } catch {
+    /* feature stripped / not loaded */
+  }
   // Abandon any pending bash risk-permission prompt for this conversation and
   // drop its run-scoped grants — the agent that requested it is being stopped.
   try {

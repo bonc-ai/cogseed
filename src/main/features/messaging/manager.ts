@@ -13,6 +13,7 @@ import * as registry from './registry';
 import * as bindings from './bindings';
 import * as ledger from './ledger';
 import { evaluateInboundPolicy, stripBotMention } from './policy';
+import { isValidFeishuOpenId } from './types';
 import { createAdapter } from './adapters';
 import type {
   AdapterCallbacks,
@@ -25,6 +26,7 @@ import type {
   MessagingInboundResult,
   MessagingInstance,
   MessagingInstanceClient,
+  MessagingInstanceInternal,
   MessagingInstanceStatus,
   MessagingBinding,
   MessagingPlatformCatalogEntry,
@@ -52,6 +54,78 @@ const TOOL_PREVIEW_MAX_LEN = 40;
 /** System confirmation for the `/new` session-reset command (mirrors Hermes'
  * `gateway.reset.header_default` banner). */
 const NEW_SESSION_CONFIRMATION = '已开始新的对话。请告诉我接下来要处理什么。';
+
+/** How long a freshly configured Feishu bot accepts the first direct message
+ * as its owner (no manual open id needed). The window is short so a bot that
+ * is not configured by its owner cannot be claimed by a random first sender. */
+export const OWNER_BINDING_WINDOW_MS = 5 * 60 * 1000;
+
+/** uid\u0000instanceId → window deadline for owner auto-binding. */
+const ownerBindingWindows = new Map<string, number>();
+
+function ownerBindingKey(uid: string, instanceId: string): string {
+  return `${uid}\u0000${instanceId}`;
+}
+
+/** Open (or refresh) the owner auto-binding window for a Feishu bot that has
+ * credentials but no configured owner. Called after credentials are written
+ * or the instance is enabled; the renderer shows the "send a message to bind"
+ * hint at the same time. */
+export function openOwnerBindingWindow(uid: string, instanceId: string): void {
+  assertUserId(uid);
+  assertInstanceId(instanceId);
+  ownerBindingWindows.set(ownerBindingKey(uid, instanceId), Date.now() + OWNER_BINDING_WINDOW_MS);
+}
+
+/** Live binding-window status for the settings UI. Returns null when no
+ * window is open (or it expired). */
+export function getOwnerBindingStatus(
+  uid: string,
+  instanceId: string,
+): { binding: true; expiresAt: string; remainingMs: number } | null {
+  assertUserId(uid);
+  assertInstanceId(instanceId);
+  const deadline = ownerBindingWindows.get(ownerBindingKey(uid, instanceId));
+  if (deadline === undefined) return null;
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) {
+    ownerBindingWindows.delete(ownerBindingKey(uid, instanceId));
+    return null;
+  }
+  return { binding: true, expiresAt: new Date(deadline).toISOString(), remainingMs };
+}
+
+/** Bind the sender of the first direct message as the instance owner while
+ * the binding window is open. Runs before inbound policy so a freshly
+ * configured bot (whose allowlist is still empty) can still be claimed.
+ * Returns true when an owner was written. */
+async function tryAutoBindOwner(
+  uid: string,
+  envelope: InboundEnvelope,
+  instanceId: string,
+  platform: MessagingPlatform,
+): Promise<boolean> {
+  if (platform !== 'feishu_lark' || envelope.isGroup) return false;
+  const key = ownerBindingKey(uid, instanceId);
+  const deadline = ownerBindingWindows.get(key);
+  if (deadline === undefined) return false;
+  if (deadline <= Date.now()) {
+    ownerBindingWindows.delete(key);
+    return false;
+  }
+  const current = await registry.getInstance(uid, instanceId);
+  if (!current || current.ownerExternalUserId) return false;
+  const openId = envelope.externalUserId?.trim() || '';
+  if (!openId || !isValidFeishuOpenId(openId)) return false;
+  await registry.updateInstance(uid, instanceId, {
+    ownerExternalUserId: openId,
+    ...(envelope.externalUserName?.trim() ? { ownerExternalUserName: envelope.externalUserName.trim().slice(0, 120) } : {}),
+    ownerIdentitySource: 'auto',
+  });
+  ownerBindingWindows.delete(key);
+  log.info('messaging owner auto-bound from direct message', { instanceId, source: 'auto' });
+  return true;
+}
 
 /** True when the inbound text is a session-reset slash command. */
 function isNewSessionCommand(text: string): boolean {
@@ -341,18 +415,19 @@ function messageFromEvent(event: Extract<GroupEvent, { type: 'message' }>): Outb
   };
 }
 
-function deliveryContext(entry: { replyToMessageId?: string; threadId?: string; replyInThread?: boolean; idempotencyKey?: string }) {
+function deliveryContext(entry: { replyToMessageId?: string; threadId?: string; replyInThread?: boolean; idempotencyKey?: string; recipientIdType?: 'chat_id' | 'open_id' }) {
   return {
     ...(entry.replyToMessageId ? { replyToMessageId: entry.replyToMessageId } : {}),
     ...(entry.threadId ? { threadId: entry.threadId } : {}),
     ...(entry.replyInThread ? { replyInThread: true } : {}),
     ...(entry.idempotencyKey ? { idempotencyKey: entry.idempotencyKey } : {}),
+    ...(entry.recipientIdType ? { recipientIdType: entry.recipientIdType } : {}),
   };
 }
 
 function beginDeliveryEntry(
   instanceId: string,
-  binding: { externalChatId: string; replyToMessageId?: string; threadId?: string; replyInThread?: boolean },
+  binding: { externalChatId?: string; recipientId?: string; recipientIdType?: 'chat_id' | 'open_id'; replyToMessageId?: string; threadId?: string; replyInThread?: boolean },
   message: OutboundMessage,
   text: string,
   idempotencyKey?: string,
@@ -361,7 +436,9 @@ function beginDeliveryEntry(
   return {
     key,
     instanceId,
-    externalChatId: binding.externalChatId,
+    recipientId: binding.recipientId || binding.externalChatId || '',
+    recipientIdType: binding.recipientIdType === 'open_id' ? 'open_id' as const : 'chat_id' as const,
+    ...(binding.externalChatId ? { externalChatId: binding.externalChatId } : {}),
     sourceMessageId: message.id as string,
     textHash: ledger.textHash(text),
     text,
@@ -381,7 +458,7 @@ async function attemptDelivery(
   if (!isCurrentRuntime(uid, runtime)) return;
   try {
     const receipt = await runtime.adapter.sendMessage(
-      entry.externalChatId,
+      entry.recipientId,
       entry.text || '',
       runtime.controller.signal,
       deliveryContext(entry),
@@ -458,6 +535,75 @@ async function recoverDeliveries(uid: string, runtime: RuntimeInstance): Promise
     await attemptDelivery(uid, runtime, entry.key, begun.entry);
   }
   await scheduleRetryTimer(uid, runtime);
+}
+
+/**
+ * Proactive (Commander-initiated) send to a fixed recipient — currently the
+ * configured Feishu/Lark owner open id. Uses the same ledger, idempotency key,
+ * retry, and recovery machinery as ordinary replies, keyed on a caller-owned
+ * stable source key so one tool call never sends twice. Waits for the
+ * terminal outcome (`sent` / `failed` / `cancelled`) instead of returning on
+ * the first `retry_pending`; an aborted signal cancels the delivery so no
+ * retry timer or restart recovery can fire it later.
+ */
+export async function sendProactive(
+  uid: string,
+  input: {
+    instanceId: string;
+    recipientId: string;
+    text: string;
+    sourceKey: string;
+    signal?: AbortSignal | null;
+  },
+): Promise<{ entry: DeliveryLedgerEntry }> {
+  assertUserId(uid);
+  const runtime = runtimes.get(uid)?.get(input.instanceId);
+  if (!runtime || !isCurrentRuntime(uid, runtime)) {
+    throw new Error('messaging instance is not running');
+  }
+  const text = typeof input.text === 'string' ? input.text.trim().slice(0, 12_000) : '';
+  if (!text) throw new Error('proactive message text required');
+  const sourceKey = typeof input.sourceKey === 'string' && input.sourceKey.trim()
+    ? input.sourceKey.trim().slice(0, 160)
+    : '';
+  if (!sourceKey) throw new Error('proactive source key required');
+  const recipientId = typeof input.recipientId === 'string' ? input.recipientId.trim() : '';
+  if (!recipientId || recipientId.length > 512) throw new Error('proactive recipient required');
+  const key = ledger.deliveryKey(input.instanceId, sourceKey);
+  const begun = await ledger.beginDelivery(uid, {
+    key,
+    instanceId: input.instanceId,
+    recipientId,
+    recipientIdType: 'open_id',
+    sourceMessageId: sourceKey,
+    textHash: ledger.textHash(text),
+    text,
+    idempotencyKey: `proactive-${ledger.textHash(sourceKey).slice(0, 24)}`,
+  });
+  if (!begun.duplicate) {
+    if (!isCurrentRuntime(uid, runtime) || runtime.controller.signal.aborted) {
+      await ledger.finishDelivery(uid, key, {
+        status: 'cancelled',
+        error: 'delivery cancelled because messaging instance stopped',
+      });
+    } else {
+      await attemptDelivery(uid, runtime, key, begun.entry);
+    }
+  }
+  try {
+    const terminal = await ledger.waitForDeliveryTerminal(uid, key, { signal: input.signal ?? null });
+    if (terminal.status === 'cancelled') {
+      throw new Error('proactive delivery cancelled');
+    }
+    return { entry: terminal };
+  } catch (error) {
+    if (input.signal?.aborted) {
+      // Stop the retry timer / restart recovery from ever firing this send.
+      await ledger.cancelDelivery(uid, key, 'proactive send aborted').catch(() => undefined);
+      throw Object.assign(new Error('proactive send aborted'), { name: 'AbortError' });
+    }
+    throw error;
+  }
 }
 
 /** Send the session-reset confirmation through the same ledger-backed path
@@ -1010,6 +1156,9 @@ async function handleInboundLocked(
     textLen: typeof envelope.text === 'string' ? envelope.text.length : 0,
     mentionPresent: envelope.mentionPresent,
   });
+  // A freshly configured bot can claim its owner from the first direct message
+  // (before policy — the default allowlist still denies everyone).
+  await tryAutoBindOwner(uid, envelope, instance.id, instance.platform);
   const decision = evaluateInboundPolicy(instance, envelope);
   if (!decision.allowed) {
     await ledger.completeInbound(uid, key, { status: 'rejected', reason: decision.reason || 'policy_rejected' });
@@ -1158,6 +1307,12 @@ async function startRuntime(uid: string, instanceId: string): Promise<void> {
   if (!loaded || !loaded.instance.enabled) {
     clearLiveStatus(uid, instanceId);
     return;
+  }
+  // An enabled bot without an owner re-opens its binding window on startup,
+  // so a legacy configuration can claim its owner by sending the first
+  // direct message without touching the settings UI.
+  if (loaded.instance.platform === 'feishu_lark' && !(loaded.instance as MessagingInstanceInternal).ownerExternalUserId) {
+    openOwnerBindingWindow(uid, instanceId);
   }
   let adapter: MessagingAdapter;
   try {
@@ -1356,6 +1511,13 @@ export async function updateInstance(
     if (workspaceChanged) await bindings.removeBindingsForInstance(uid, instanceId);
 
     const updated = await registry.updateInstance(uid, instanceId, input);
+    // A Feishu bot that just got credentials or was just enabled, without an
+    // owner yet, opens the auto-binding window: the first direct message
+    // claims the sender as the owner (renderer shows the hint).
+    if (updated.platform === 'feishu_lark' && !updated.ownerConfigured
+      && (input.secret !== undefined || (typeof input.enabled === 'boolean' && input.enabled))) {
+      openOwnerBindingWindow(uid, instanceId);
+    }
     if (!nextEnabled) {
       if (current.enabled) {
         await ledger.cancelRecoverableDeliveriesForInstance(uid, instanceId, 'messaging instance disabled');

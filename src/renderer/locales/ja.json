@@ -2945,5 +2945,20 @@
   "expense_agent.management.invalid": "保存済みの Feishu 設定に対応が必要です。経費精算を使う前に下で更新してください。",
   "expense_agent.management.unconfigured": "経費精算を使う前に Feishu の設定を完了してください。メイン会話でこのエージェントを使って設定することもできます。",
   "expense_agent.management.chat_hint": "設定後はメイン会話でこのエージェントを使い、そこで経費精算資料を添付してください。",
-  "expense_agent.management.legacy_local_configuration": "以前のローカル経費精算プロジェクトが見つかりましたが、現在は使用されません。下で安全な Feishu 設定を完了してください。"
+  "expense_agent.management.legacy_local_configuration": "以前のローカル経費精算プロジェクトが見つかりましたが、現在は使用されません。下で安全な Feishu 設定を完了してください。",
+  "messaging.send_confirm.message": "{instance} は本人（{owner}）に次のメッセージを送信します：\n\n{text}\n\n送信しますか？",
+  "messaging.send_confirm.approve": "送信",
+  "messaging.send_confirm.decline": "キャンセル",
+  "messaging.owner_bind_hint": "ボットの準備ができました。Feishu/Lark でこのボットに任意のメッセージを送信すると、送信者が受信者として自動的に登録されます（ID 入力は不要です）。",
+  "messaging.owner_title": "ボット所有者",
+  "messaging.owner_subtitle": "ボットメッセージの所有者を設定し、プロアクティブ送信に使用します。",
+  "messaging.owner_configured": "所有者設定済み",
+  "messaging.owner_open_id": "所有者のOpen ID",
+  "messaging.owner_open_id_invalid": "所有者のOpen IDが無効です。ou_ で始まる必要があります。",
+  "messaging.owner_name": "所有者名",
+  "messaging.owner_name_placeholder": "任意：所有者名",
+  "messaging.owner_save": "所有者を保存",
+  "messaging.owner_update": "所有者を更新",
+  "messaging.owner_clear": "所有者をクリア",
+  "messaging.owner_bind_pending": "バインド待機中：Feishu/Lark でこのボットに任意のメッセージを送信すると、送信者が受信者として自動登録されます"
 }
