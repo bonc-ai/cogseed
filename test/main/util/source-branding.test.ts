@@ -21,7 +21,7 @@ describe('Mate Agent source-run branding', () => {
 
   it('launches the prepared integration-specific macOS bundle', () => {
     const source = read('run.sh');
-    expect(source).toContain('Mate Agent [Integration].app');
+    expect(source).toContain('Mate Agent.app');
     expect(source).not.toContain('APP_BUNDLE="$APP_DIR/node_modules/electron/dist/Orkas.app"');
   });
 

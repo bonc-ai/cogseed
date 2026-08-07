@@ -21,7 +21,7 @@ describe('source runtime launchers', () => {
     expect(windows).toContain('prepare-source-runtime.cjs" --variant=!VARIANT!');
     expect(shell).toContain('locked to the integration runtime');
     expect(windows).toContain('locked to the integration runtime');
-    expect(shell).toContain('Mate Agent [Integration].app');
+    expect(shell).toContain('Mate Agent.app');
     expect(shell).not.toContain('Usage: ./run.sh [--variant');
     expect(windows).not.toContain('Usage: run.cmd [--variant');
     expect(packageMeta.orkasSourceRuntimeVariant).toBe('integration');

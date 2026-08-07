@@ -11,7 +11,7 @@ const LABELS = Object.freeze({
   main: 'Main',
   cognition: 'Cognition',
   expense: 'Expense',
-  integration: 'Integration',
+  integration: '',
   messaging: 'Messaging',
   optimization: 'Optimization',
 });
@@ -31,7 +31,7 @@ function sourceRuntimeIdentity(value) {
   }
   return Object.freeze({
     variant: value,
-    appName: `${brand.appName} [${LABELS[value]}]`,
+    appName: LABELS[value] ? `${brand.appName} [${LABELS[value]}]` : brand.appName,
     appId: `${brand.appId}.source.${value}`,
     protocolOwner: value === 'integration',
   });
@@ -74,7 +74,7 @@ function currentAppFromPathFile(distDir, pathFile) {
 }
 
 function findSourceApp(distDir, pathFile) {
-  for (const name of ['Electron.app', 'Orkas.app', `${brand.appName}.app`]) {
+  for (const name of ['Electron.app', 'Orkas.app', `${brand.appName}.app`, `${brand.appName} [Integration].app`]) {
     const candidate = path.join(distDir, name);
     if (fs.existsSync(candidate)) return candidate;
   }

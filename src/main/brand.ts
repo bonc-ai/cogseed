@@ -53,7 +53,7 @@ const SOURCE_IDENTITIES: Readonly<Record<RuntimeVariant, RuntimeIdentity>> = Obj
   }),
   integration: Object.freeze({
     variant: 'integration',
-    appName: `${APP_BRAND.appName} [Integration]`,
+    appName: APP_BRAND.appName,
     appId: `${APP_BRAND.appId}.source.integration`,
     protocolOwner: true,
   }),

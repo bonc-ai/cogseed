@@ -106,7 +106,7 @@ fi
 
 cd "$APP_DIR"
 if [ "$(uname -s)" = "Darwin" ]; then
-  APP_BUNDLE="$APP_DIR/node_modules/electron/dist/Mate Agent [Integration].app"
+  APP_BUNDLE="$APP_DIR/node_modules/electron/dist/Mate Agent.app"
   if [ -d "$APP_BUNDLE" ]; then
     ARGS=("$APP_DIR" "--orkas-runtime-variant=$VARIANT")
     if [ -n "${ORKAS_KSTAR_ENGINE_COMMAND:-}" ]; then
