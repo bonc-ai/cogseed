@@ -3110,7 +3110,7 @@
   "messaging.updated": "设置已更新",
   "messaging.update_failed": "设置更新失败",
   "messaging.open_failed": "无法打开机器人设置",
-  "messaging.link_success": "已关联应用凭据，打开开关即可启用机器人。",
+  "messaging.link_success": "机器人已保存并启用。",
   "messaging.unbind_success": "已解绑，可重新扫码或输入凭据关联。",
   "expense_agent.card.streaming_placeholder": "正在准备安全报销控件…",
   "expense_agent.card.setup_aria": "配置报销智能体",

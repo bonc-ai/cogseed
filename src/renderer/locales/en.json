@@ -3110,7 +3110,7 @@
   "messaging.updated": "Settings updated",
   "messaging.update_failed": "Could not update settings",
   "messaging.open_failed": "Could not open bot settings",
-  "messaging.link_success": "App credentials linked. Toggle the switch to enable the bot.",
+  "messaging.link_success": "Bot saved and enabled.",
   "messaging.unbind_success": "Unlinked. Scan again or enter credentials to link.",
   "expense_agent.card.streaming_placeholder": "Preparing secure reimbursement controls…",
   "expense_agent.card.setup_aria": "Configure reimbursement agent",

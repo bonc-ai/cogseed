@@ -2905,7 +2905,7 @@
   "messaging.updated": "Configurações atualizadas",
   "messaging.update_failed": "Não foi possível atualizar as configurações",
   "messaging.open_failed": "Não foi possível abrir as configurações do bot",
-  "messaging.link_success": "Credenciais do aplicativo vinculadas. Ative o bot com o interruptor.",
+  "messaging.link_success": "Bot salvo e habilitado.",
   "messaging.connection_bound": "Vinculado",
   "messaging.unbind": "Desvincular",
   "messaging.unbind_confirm": "Desvincular interrompe o recebimento de mensagens até que as credenciais sejam inseridas novamente. Continuar?",

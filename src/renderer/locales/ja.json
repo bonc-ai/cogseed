@@ -2905,7 +2905,7 @@
   "messaging.updated": "設定を更新しました",
   "messaging.update_failed": "設定を更新できませんでした",
   "messaging.open_failed": "ボット設定を開けませんでした",
-  "messaging.link_success": "アプリの認証情報を連携しました。スイッチをオンにするとボットを有効化できます。",
+  "messaging.link_success": "ボットを保存して有効化しました。",
   "messaging.connection_bound": "連携済み",
   "messaging.unbind": "連携解除",
   "messaging.unbind_confirm": "連携を解除すると、認証情報を再入力するまでメッセージを受信できません。続行しますか？",
