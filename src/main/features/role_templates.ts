@@ -806,6 +806,66 @@ const BUILTIN_TEMPLATES: RoleTemplate[] = [
       agent_ids: ["36cb9c97ac31", "876218dd6c3f", "9099ea65848a"],
     },
   },
+{
+    template_id: 'ecommerce_ops',
+    name: '电商运营',
+    description: '电商运营：店铺管理、选品、内容种草、销售复盘——把货卖出去的整套打法。',
+    version: '1.0.0',
+    preset_groups: [
+        {
+          title: "店铺与品类",
+          fields: [
+            { name: "店铺类型" },
+            { name: "主营类目" },
+            { name: "目标人群" },
+            { name: "价格带" },
+            { name: "平台" },
+          ],
+        },
+        {
+          title: "选品与商品",
+          fields: [
+            { name: "在售商品" },
+            { name: "选品标准" },
+            { name: "竞品名单" },
+            { name: "毛利目标" },
+            { name: "库存方式" },
+          ],
+        },
+        {
+          title: "内容与渠道",
+          fields: [
+            { name: "主推渠道" },
+            { name: "内容形式" },
+            { name: "发布节奏" },
+            { name: "账号定位" },
+            { name: "素材库" },
+          ],
+        },
+        {
+          title: "数据与目标",
+          fields: [
+            { name: "月销目标" },
+            { name: "核心指标" },
+            { name: "广告预算" },
+            { name: "复盘习惯" },
+          ],
+        },
+        {
+          title: "审美与品牌",
+          fields: [
+            { name: "品牌调性" },
+            { name: "视觉风格" },
+            { name: "禁忌元素" },
+            { name: "参考店铺" },
+          ],
+        }
+    ],
+        bundle: {
+          skill_ids: ["8ac59333bc31", "79943922f937", "a5c864d6b267", "02d958231673", "a31023dd51a0"],
+          agent_ids: ["1ce66a5d9875", "2a2d007ec7e2", "bc60fe682b5a"],
+        },
+  },
 ];
 
 /** 返回内置模板列表（防御性拷贝，调用方改动不影响注册表）。 */

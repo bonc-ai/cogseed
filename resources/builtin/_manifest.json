@@ -1,11 +1,21 @@
 {
   "schema": 1,
-  "content_tree_sha256": "dff05c39c0aed8a61e9bd1eb20aaaa915f02f21fc187c965b585adfc81995a0c",
+  "content_tree_sha256": "60c0811952bc2ac69cddd0c960b2184c8f955b71f15e6bc3e16ccc081f3f2137",
   "files": [
     {
       "path": "marketplace/agents/0fdb4da8a080/agent.json",
       "bytes": 1218,
       "sha256": "0920089986ca764588125fbf64159f52f4ceae04a46078d7b06c19cc5de9aaa5"
+    },
+    {
+      "path": "marketplace/agents/1ce66a5d9875/agent.json",
+      "bytes": 1183,
+      "sha256": "68aec52685b7c3271abdc2ddc971d6eea26a8598774b40de597db0b535622c7d"
+    },
+    {
+      "path": "marketplace/agents/2a2d007ec7e2/agent.json",
+      "bytes": 1199,
+      "sha256": "9c3a70324889097b6269a0991006a7b304a9e75c94246042b14ce52f6ddf6764"
     },
     {
       "path": "marketplace/agents/2ec891859db3/agent.json",
@@ -293,6 +303,11 @@
       "sha256": "ee266bb7ef2678d1e7d8856bc2457b2c7d63f227cfa08ee2bef7f159d1e1d9bd"
     },
     {
+      "path": "marketplace/agents/bc60fe682b5a/agent.json",
+      "bytes": 1138,
+      "sha256": "138b1ec3c1a4637b137c28a702fd6a9dc3a2f819b9bfbae4ac358a78c6638bec"
+    },
+    {
       "path": "marketplace/agents/bcfcb4921dce/agent.json",
       "bytes": 15578,
       "sha256": "67fd40e6799d1592e67a075498442542350bc07fb5f8a1d6abed7fc7f901bed2"
@@ -556,6 +571,16 @@
       "path": "marketplace/agents/fce0f5110ab2/agent.json",
       "bytes": 1160,
       "sha256": "2764ac4559ea4ad12f3679efdd2e5eaad6f611ebeb8581b3fced44edad9803f3"
+    },
+    {
+      "path": "marketplace/skills/02d958231673/_meta.json",
+      "bytes": 63,
+      "sha256": "6b788448358adf4869c0dd7f68248ff18c47b0fccae9875302a2c58e4e3db1f5"
+    },
+    {
+      "path": "marketplace/skills/02d958231673/SKILL.md",
+      "bytes": 922,
+      "sha256": "8b10dce49b1449d9b2ef47fb3f3af3c53e4341d00f015f4added153725344f8c"
     },
     {
       "path": "marketplace/skills/058e3bb57bf5/_meta.json",
@@ -888,6 +913,16 @@
       "sha256": "3e1b6f0a2c8de2424b5dfd799dc7f0e2de79259706f4a9c6454bc830202185a0"
     },
     {
+      "path": "marketplace/skills/79943922f937/_meta.json",
+      "bytes": 63,
+      "sha256": "6b788448358adf4869c0dd7f68248ff18c47b0fccae9875302a2c58e4e3db1f5"
+    },
+    {
+      "path": "marketplace/skills/79943922f937/SKILL.md",
+      "bytes": 907,
+      "sha256": "6ecaae9ac18bf03425ed52f2f25ae5d034a7b01945d7209e95d49f8d0c25ab7e"
+    },
+    {
       "path": "marketplace/skills/86cea925e282/_meta.json",
       "bytes": 72,
       "sha256": "b9dfa249abf6599e96b3f24290b2b2537ec7ff8dec47dd3972ad819a974a5a45"
@@ -901,6 +936,16 @@
       "path": "marketplace/skills/86cea925e282/SKILL.md",
       "bytes": 2138,
       "sha256": "19d93404eb03f296bb8993bb2ce1ebc7ec168307db330e82f2ed797bca150a34"
+    },
+    {
+      "path": "marketplace/skills/8ac59333bc31/_meta.json",
+      "bytes": 63,
+      "sha256": "6b788448358adf4869c0dd7f68248ff18c47b0fccae9875302a2c58e4e3db1f5"
+    },
+    {
+      "path": "marketplace/skills/8ac59333bc31/SKILL.md",
+      "bytes": 1020,
+      "sha256": "47f863e63d441aa1d9a6fc3b3d114169606d8db920a470323632c9cbcb44a41e"
     },
     {
       "path": "marketplace/skills/8d2f4b7c9a10/_meta.json",
@@ -1041,6 +1086,26 @@
       "path": "marketplace/skills/9be6fda271a5/SKILL.md",
       "bytes": 8664,
       "sha256": "e748cf1c5dadd8ec51ce2473dce6acac9767ba810e5a2367543aeefca408084f"
+    },
+    {
+      "path": "marketplace/skills/a31023dd51a0/_meta.json",
+      "bytes": 63,
+      "sha256": "6b788448358adf4869c0dd7f68248ff18c47b0fccae9875302a2c58e4e3db1f5"
+    },
+    {
+      "path": "marketplace/skills/a31023dd51a0/SKILL.md",
+      "bytes": 796,
+      "sha256": "a5640c6f2ab1f8e0ab92f437c7c5f8867e60ee6799caec1b9edb568401ce4bf0"
+    },
+    {
+      "path": "marketplace/skills/a5c864d6b267/_meta.json",
+      "bytes": 63,
+      "sha256": "6b788448358adf4869c0dd7f68248ff18c47b0fccae9875302a2c58e4e3db1f5"
+    },
+    {
+      "path": "marketplace/skills/a5c864d6b267/SKILL.md",
+      "bytes": 761,
+      "sha256": "9eeab9fa68cfe2b9d2839c8dcec6779b7b9ddefcc1f54dc177b0616782a477be"
     },
     {
       "path": "marketplace/skills/a827416958f6/_meta.json",
@@ -1530,6 +1595,32 @@
         "embedded_skills": []
       },
       {
+        "id": "1ce66a5d9875",
+        "name": "选品分析Agent",
+        "version": "1.0.0",
+        "icon": "search",
+        "color": "violet",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "79943922f937",
+          "a5c864d6b267"
+        ],
+        "embedded_skills": []
+      },
+      {
+        "id": "2a2d007ec7e2",
+        "name": "内容创作Agent",
+        "version": "1.0.0",
+        "icon": "pen",
+        "color": "violet",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "02d958231673",
+          "8ac59333bc31"
+        ],
+        "embedded_skills": []
+      },
+      {
         "id": "2ec891859db3",
         "name": "文档一致性检查Agent",
         "version": "0.2.0-review.1",
@@ -1846,6 +1937,18 @@
         "embedded_skills": []
       },
       {
+        "id": "bc60fe682b5a",
+        "name": "数据复盘Agent",
+        "version": "1.0.0",
+        "icon": "chart",
+        "color": "violet",
+        "updated_at": "2026-08-07T00:00:00",
+        "skill_list": [
+          "a31023dd51a0"
+        ],
+        "embedded_skills": []
+      },
+      {
         "id": "bcfcb4921dce",
         "name": "UIDesigner",
         "version": "1.3.1",
@@ -1957,6 +2060,12 @@
       }
     ],
     "marketplace_skills": [
+      {
+        "id": "02d958231673",
+        "name": "product-copywriting",
+        "version": "1.0.0",
+        "updated_at": "2026-08-07T00:00:00"
+      },
       {
         "id": "058e3bb57bf5",
         "name": "integration-map",
@@ -2090,9 +2199,21 @@
         "updated_at": "2026-08-07T00:00:00"
       },
       {
+        "id": "79943922f937",
+        "name": "store-teardown",
+        "version": "1.0.0",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
         "id": "86cea925e282",
         "name": "academic-writing",
         "version": "0.2.0-review.1",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "8ac59333bc31",
+        "name": "xhs-note-creator",
+        "version": "1.0.0",
         "updated_at": "2026-08-07T00:00:00"
       },
       {
@@ -2142,6 +2263,18 @@
         "name": "material-organizer",
         "version": "1.0.1",
         "updated_at": "2026-07-04T00:00:00"
+      },
+      {
+        "id": "a31023dd51a0",
+        "name": "sales-data-review",
+        "version": "1.0.0",
+        "updated_at": "2026-08-07T00:00:00"
+      },
+      {
+        "id": "a5c864d6b267",
+        "name": "ecommerce-price-research",
+        "version": "1.0.0",
+        "updated_at": "2026-08-07T00:00:00"
       },
       {
         "id": "a827416958f6",
