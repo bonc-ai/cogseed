@@ -167,6 +167,115 @@ describe('messaging registry and ledgers', () => {
     expect((await registry.getInstance('user-1', created.id))?.enabled).toBe(false);
   });
 
+  it('stores Feishu owner identity privately and supports manual replacement and clearing', async () => {
+    const registry = await import('../../../src/main/features/messaging/registry');
+    const created = await registry.createInstance('user-1', {
+      platform: 'feishu_lark',
+      displayName: 'Feishu bot',
+      secret: { appId: 'cli_1234567890abcdef', appSecret: 'secret-value' },
+      ownerExternalUserId: 'ou_owner_1',
+      ownerExternalUserName: 'Owner One',
+      ownerIdentitySource: 'manual',
+    });
+    expect(created).toMatchObject({
+      ownerConfigured: true,
+      ownerLabel: 'Owner One',
+      ownerIdentitySource: 'manual',
+    });
+    expect(created).not.toHaveProperty('ownerExternalUserId');
+    expect(JSON.stringify(created)).not.toContain('ou_owner_1');
+    expect(await registry.getInstance('user-1', created.id)).toMatchObject({
+      ownerExternalUserId: 'ou_owner_1',
+      ownerExternalUserName: 'Owner One',
+      ownerIdentitySource: 'manual',
+    });
+
+    const updated = await registry.updateInstance('user-1', created.id, {
+      ownerExternalUserId: 'ou_owner_2',
+      ownerExternalUserName: 'Owner Two',
+      ownerIdentitySource: 'manual',
+    });
+    expect(updated).toMatchObject({ ownerConfigured: true, ownerLabel: 'Owner Two' });
+    expect(JSON.stringify(updated)).not.toContain('ou_owner_2');
+
+    const cleared = await registry.updateInstance('user-1', created.id, { clearOwner: true });
+    expect(cleared).toMatchObject({ ownerConfigured: false });
+    expect(cleared).not.toHaveProperty('ownerLabel');
+    expect(await registry.getInstance('user-1', created.id)).not.toHaveProperty('ownerExternalUserId');
+  });
+
+  it('does not infer legacy owners from allowlists and removes QR owner during draft compensation', async () => {
+    const registry = await import('../../../src/main/features/messaging/registry');
+    const draft = await registry.createFeishuDraft('user-1', {
+      feishuTenantBrand: 'feishu',
+      displayName: 'Feishu draft',
+      policy: { allowUserIds: ['ou_legacy_allowed'] },
+    });
+    expect(draft).toMatchObject({ ownerConfigured: false });
+
+    const bound = await registry.bindFeishuDraft('user-1', draft.id, {
+      feishuTenantBrand: 'feishu',
+      secret: { appId: 'cli_1234567890abcdef', appSecret: 'secret-value' },
+      initialAllowUserId: 'ou_scanner',
+      ownerExternalUserId: 'ou_scanner',
+      ownerExternalUserName: 'Scanner',
+    });
+    expect(bound).toMatchObject({ ownerConfigured: true, ownerLabel: 'Scanner', ownerIdentitySource: 'qr' });
+    // The scanner id legitimately appears in policy.allowUserIds (the client
+    // DTO exposes that authorization list), so assert only that no dedicated
+    // owner field leaks into the renderer-facing object.
+    expect(bound).not.toHaveProperty('ownerExternalUserId');
+    expect(JSON.stringify(bound)).not.toContain('ownerExternalUserId');
+
+    await registry.revokeFeishuDraftCredentials('user-1', draft.id, {
+      appId: 'cli_1234567890abcdef',
+      appSecret: 'secret-value',
+    });
+    expect(await registry.listInstances('user-1')).toEqual([
+      expect.objectContaining({ id: draft.id, hasCredentials: false, ownerConfigured: false }),
+    ]);
+    expect(await registry.getInstance('user-1', draft.id)).not.toHaveProperty('ownerExternalUserId');
+  });
+
+  it('migrates legacy delivery recipients to chat_id and persists open_id recipients for proactive sends', async () => {
+    const ledger = await import('../../../src/main/features/messaging/ledger');
+    const { userMessagingDeliveryLedgerFile } = await import('../../../src/main/paths');
+    const file = userMessagingDeliveryLedgerFile('user-1');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({
+      version: 1,
+      entries: {
+        'bot-1:reply-1': {
+          key: 'bot-1:reply-1',
+          instanceId: 'bot-1',
+          externalChatId: 'oc_legacy_chat',
+          sourceMessageId: 'reply-1',
+          textHash: 'hash',
+          status: 'sent',
+          attempts: 1,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    }));
+    const migrated = await ledger.getDelivery('user-1', 'bot-1:reply-1');
+    expect(migrated).toMatchObject({ recipientId: 'oc_legacy_chat', recipientIdType: 'chat_id' });
+
+    const begun = await ledger.beginDelivery('user-1', {
+      key: ledger.deliveryKey('bot-1', 'proactive-1'),
+      instanceId: 'bot-1',
+      recipientId: 'ou_self_1',
+      recipientIdType: 'open_id',
+      sourceMessageId: 'proactive-1',
+      textHash: ledger.textHash('hello'),
+      text: 'hello',
+    });
+    expect(begun.duplicate).toBe(false);
+    expect(begun.entry).toMatchObject({ recipientId: 'ou_self_1', recipientIdType: 'open_id' });
+    expect(begun.entry.externalChatId).toBeUndefined();
+    const read = await ledger.getDelivery('user-1', begun.entry.key);
+    expect(read).toMatchObject({ recipientId: 'ou_self_1', recipientIdType: 'open_id' });
+  });
+
   it('deduplicates inbound and delivery records without re-sending sent output', async () => {
     const ledger = await import('../../../src/main/features/messaging/ledger');
     const first = await ledger.reserveInbound('user-1', ledger.inboundKey('bot-1', 'message-1'));
@@ -223,6 +332,112 @@ describe('messaging registry and ledgers', () => {
       text: 'do not resume',
     });
     expect(cancelledRepeat.duplicate).toBe(true);
+  });
+
+  it('waits for a terminal delivery state and resolves immediately when already terminal', async () => {
+    const ledger = await import('../../../src/main/features/messaging/ledger');
+    const begun = await ledger.beginDelivery('user-1', {
+      key: ledger.deliveryKey('bot-1', 'wait-t1'),
+      instanceId: 'bot-1',
+      recipientId: 'chat-1',
+      recipientIdType: 'chat_id',
+      sourceMessageId: 'wait-t1',
+      textHash: ledger.textHash('hi'),
+      text: 'hi',
+    });
+    await ledger.finishDelivery('user-1', begun.entry.key, { status: 'sent', externalDeliveryId: 'om_wait_1' });
+    const waited = await ledger.waitForDeliveryTerminal('user-1', begun.entry.key);
+    expect(waited).toMatchObject({ status: 'sent', externalDeliveryId: 'om_wait_1' });
+  });
+
+  it('wakes a registered waiter when the delivery finishes during the wait', async () => {
+    const ledger = await import('../../../src/main/features/messaging/ledger');
+    const begun = await ledger.beginDelivery('user-1', {
+      key: ledger.deliveryKey('bot-1', 'wait-t2'),
+      instanceId: 'bot-1',
+      recipientId: 'chat-1',
+      recipientIdType: 'chat_id',
+      sourceMessageId: 'wait-t2',
+      textHash: ledger.textHash('hi'),
+      text: 'hi',
+    });
+    const waiting = ledger.waitForDeliveryTerminal('user-1', begun.entry.key);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await ledger.finishDelivery('user-1', begun.entry.key, { status: 'sent' });
+    await expect(waiting).resolves.toMatchObject({ status: 'sent' });
+  });
+
+  it('does not resolve while retry_pending and resolves failed when retries are exhausted', async () => {
+    const ledger = await import('../../../src/main/features/messaging/ledger');
+    const begun = await ledger.beginDelivery('user-1', {
+      key: ledger.deliveryKey('bot-1', 'wait-t3'),
+      instanceId: 'bot-1',
+      recipientId: 'chat-1',
+      recipientIdType: 'chat_id',
+      sourceMessageId: 'wait-t3',
+      textHash: ledger.textHash('hi'),
+      text: 'hi',
+    });
+    const waiting = ledger.waitForDeliveryTerminal('user-1', begun.entry.key);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await ledger.finishDelivery('user-1', begun.entry.key, {
+      status: 'retry_pending',
+      nextAttemptAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    let settled = false;
+    void waiting.then(() => { settled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+    await ledger.finishDelivery('user-1', begun.entry.key, { status: 'failed', error: 'retries exhausted' });
+    await expect(waiting).resolves.toMatchObject({ status: 'failed', error: 'retries exhausted' });
+  });
+
+  it('cancels a single delivery precisely, wakes its waiter, and blocks recovery', async () => {
+    const ledger = await import('../../../src/main/features/messaging/ledger');
+    const begun = await ledger.beginDelivery('user-1', {
+      key: ledger.deliveryKey('bot-1', 'wait-t4'),
+      instanceId: 'bot-1',
+      recipientId: 'chat-1',
+      recipientIdType: 'chat_id',
+      sourceMessageId: 'wait-t4',
+      textHash: ledger.textHash('hi'),
+      text: 'hi',
+    });
+    const waiting = ledger.waitForDeliveryTerminal('user-1', begun.entry.key);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(await ledger.cancelDelivery('user-1', begun.entry.key, 'proactive abort')).toBe(true);
+    await expect(waiting).resolves.toMatchObject({ status: 'cancelled' });
+    expect(await ledger.listRecoverableDeliveries('user-1', 'bot-1')).toEqual([]);
+    expect(await ledger.cancelDelivery('user-1', begun.entry.key, 'again')).toBe(false);
+  });
+
+  it('aborts or times out a pending wait without leaving dangling promises', async () => {
+    const ledger = await import('../../../src/main/features/messaging/ledger');
+    const controller = new AbortController();
+    const begun = await ledger.beginDelivery('user-1', {
+      key: ledger.deliveryKey('bot-1', 'wait-t5'),
+      instanceId: 'bot-1',
+      recipientId: 'chat-1',
+      recipientIdType: 'chat_id',
+      sourceMessageId: 'wait-t5',
+      textHash: ledger.textHash('hi'),
+      text: 'hi',
+    });
+    const waiting = ledger.waitForDeliveryTerminal('user-1', begun.entry.key, { signal: controller.signal });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    controller.abort();
+    await expect(waiting).rejects.toThrow('delivery wait aborted');
+
+    const timed = await ledger.beginDelivery('user-1', {
+      key: ledger.deliveryKey('bot-1', 'wait-t6'),
+      instanceId: 'bot-1',
+      recipientId: 'chat-1',
+      recipientIdType: 'chat_id',
+      sourceMessageId: 'wait-t6',
+      textHash: ledger.textHash('hi'),
+      text: 'hi',
+    });
+    await expect(ledger.waitForDeliveryTerminal('user-1', timed.entry.key, { timeoutMs: 20 })).rejects.toThrow('delivery wait timed out');
   });
 
   it('keeps rejecting a redelivered inbound id already marked duplicate', async () => {
@@ -342,6 +557,23 @@ describe('messaging IPC validation', () => {
         instanceId: 'bot-1',
         workspace: { type: 'global' },
       }, { userId: 'user-1' })).rejects.toThrow('invalid workspace type');
+
+      await invokeHandlers['messaging.update']({
+        instanceId: 'bot-1',
+        ownerExternalUserId: 'ou_owner_1',
+        ownerExternalUserName: 'Owner One',
+      }, { userId: 'user-1' });
+      expect(updateInstance).toHaveBeenLastCalledWith('user-1', 'bot-1', {
+        ownerExternalUserId: 'ou_owner_1',
+        ownerExternalUserName: 'Owner One',
+        ownerIdentitySource: 'manual',
+      });
+
+      await invokeHandlers['messaging.update']({
+        instanceId: 'bot-1',
+        clearOwner: true,
+      }, { userId: 'user-1' });
+      expect(updateInstance).toHaveBeenLastCalledWith('user-1', 'bot-1', { clearOwner: true });
     } finally {
       vi.doUnmock('../../../src/main/features/messaging/registry');
       vi.doUnmock('../../../src/main/features/messaging/manager');
@@ -626,6 +858,84 @@ describe('messaging manager adapter flow', () => {
       );
     } finally {
       vi.doUnmock('../../../src/main/features/messaging/ledger');
+      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      vi.doUnmock('../../../src/main/features/group_chat');
+      vi.doUnmock('../../../src/main/features/group_chat/bus');
+      vi.resetModules();
+    }
+  });
+
+  it('delivers ordinary replies through the adapter with an explicit chat_id recipient type', async () => {
+    let busListener: ((event: unknown) => void) | undefined;
+    const groupSend = vi.fn(async () => ({ ok: true }));
+    const subscribe = vi.fn((_uid: string, _cid: string, listener: (event: unknown) => void) => {
+      busListener = listener;
+      return () => { busListener = undefined; };
+    });
+    const sendMessage = vi.fn(async () => ({}));
+    const adapter: MessagingAdapter = {
+      platform: 'feishu_lark',
+      async start(signal, callbacks) {
+        await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      async stop() {},
+      async checkHealth() {
+        return { kind: 'connected', checkedAt: new Date().toISOString() };
+      },
+      sendMessage,
+    };
+
+    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
+      createAdapter: vi.fn(() => adapter),
+    }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe }));
+
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const created = await registry.createInstance('user-1', {
+        platform: 'feishu_lark',
+        displayName: 'Reply bot',
+        policy: { allowUserIds: ['user-1'] },
+        secret: { appId: 'cli_1234567890abcdef', appSecret: 'app-secret' },
+      });
+      await manager.setEnabled('user-1', created.id, true);
+      await vi.waitFor(async () => {
+        const instances = await manager.listInstances('user-1');
+        expect(instances[0]?.status.kind).toBe('connected');
+      });
+      const inbound = await manager.ingestInbound('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'incoming-recipient-1',
+        externalChatId: 'chat-1',
+        externalUserId: 'user-1',
+        text: 'hi',
+        isGroup: false,
+        mentionPresent: false,
+        receivedAt: new Date().toISOString(),
+      });
+      expect(busListener).toBeTypeOf('function');
+      busListener?.({
+        type: 'message',
+        cid: inbound.cid,
+        turn_end: true,
+        turn_id: 'turn-1',
+        msg: { id: 'reply-1', from: 'agent', text: 'The answer.' },
+      });
+      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+      expect(sendMessage.mock.calls[0]?.[0]).toBe('chat-1');
+      expect(sendMessage.mock.calls[0]?.[3]).toMatchObject({ recipientIdType: 'chat_id' });
+      await manager.stopForUser('user-1');
+    } finally {
       vi.doUnmock('../../../src/main/features/messaging/adapters');
       vi.doUnmock('../../../src/main/features/group_chat');
       vi.doUnmock('../../../src/main/features/group_chat/bus');

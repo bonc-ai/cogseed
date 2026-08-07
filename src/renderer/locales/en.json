@@ -3147,5 +3147,9 @@
   "expense_agent.management.invalid": "The saved Feishu configuration needs attention. Update it below before using reimbursement.",
   "expense_agent.management.unconfigured": "Complete Feishu setup before using reimbursement. You can also start a main chat with this agent and configure it there.",
   "expense_agent.management.chat_hint": "After setup, use this agent in the main chat and attach the reimbursement materials there.",
-  "expense_agent.management.legacy_local_configuration": "A previous local reimbursement project was found but is no longer used. Complete the secure Feishu setup below."
+  "expense_agent.management.legacy_local_configuration": "A previous local reimbursement project was found but is no longer used. Complete the secure Feishu setup below.",
+  "messaging.send_confirm.message": "{instance} will send the following message to you ({owner}):\n\n{text}\n\nSend it?",
+  "messaging.send_confirm.approve": "Send",
+  "messaging.send_confirm.decline": "Cancel",
+  "messaging.owner_bind_hint": "The bot is ready. Send any message to it in Feishu/Lark (direct chat) and the sender will be bound as the recipient automatically — no ID entry needed."
 }

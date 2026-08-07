@@ -6,6 +6,12 @@ interface Deferred<T> {
   reject: (error: unknown) => void;
 }
 
+type RegistrationResult = {
+  client_id: string;
+  client_secret: string;
+  user_info?: { tenant_brand?: 'feishu' | 'lark'; open_id?: string; name?: string };
+};
+
 function deferred<T>(): Deferred<T> {
   let resolvePromise: ((value: T) => void) | undefined;
   let rejectPromise: ((error: unknown) => void) | undefined;
@@ -54,7 +60,7 @@ describe('Feishu QR registration', () => {
   });
 
   it('keeps the QR URL in main memory and stores a successful Lark registration without returning secrets', async () => {
-    const registration = deferred<{ client_id: string; client_secret: string; user_info: { tenant_brand: 'lark' } }>();
+    const registration = deferred<{ client_id: string; client_secret: string; user_info: { tenant_brand: 'lark'; open_id: string; name: string } }>();
     let qrReady: ((info: { url: string; expireIn: number }) => void) | undefined;
     let statusChanged: ((info: { status: 'polling' | 'slow_down' | 'domain_switched'; interval?: number }) => void) | undefined;
     const registerApp = vi.fn((options: {
@@ -115,7 +121,11 @@ describe('Feishu QR registration', () => {
       intervalSeconds: 12,
     });
 
-    registration.resolve({ client_id: 'cli_1234567890abcdef', client_secret: 'secret-value', user_info: { tenant_brand: 'lark' } });
+    registration.resolve({
+      client_id: 'cli_1234567890abcdef',
+      client_secret: 'secret-value',
+      user_info: { tenant_brand: 'lark', open_id: 'ou_owner_1', name: 'Owner One' },
+    });
     await vi.waitFor(() => expect(feature.getFeishuQrRegistrationStatus('user-1', started.flowId).state).toBe('completed'));
     expect(createInstance).toHaveBeenCalledTimes(1);
     const createdInput = createInstance.mock.calls[0]?.[1];
@@ -124,7 +134,11 @@ describe('Feishu QR registration', () => {
       feishuTenantBrand: 'lark',
       displayName: 'Team helper',
       secret: { appId: 'cli_1234567890abcdef', appSecret: 'secret-value' },
+      ownerExternalUserId: 'ou_owner_1',
+      ownerExternalUserName: 'Owner One',
+      ownerIdentitySource: 'qr',
     });
+    expect(createdInput).not.toHaveProperty('policy.allowUserIds');
     expect(JSON.stringify(feature.getFeishuQrRegistrationStatus('user-1', started.flowId))).not.toContain('secret-value');
     expect(feature.getFeishuQrRegistrationStatus('user-1', started.flowId)).toMatchObject({
       state: 'completed',
@@ -133,7 +147,7 @@ describe('Feishu QR registration', () => {
   });
 
   it('rejects untrusted QR hosts and never creates an instance', async () => {
-    const registration = deferred<{ client_id: string; client_secret: string }>();
+    const registration = deferred<RegistrationResult>();
     let qrReady: ((info: { url: string; expireIn: number }) => void) | undefined;
     const registerApp = vi.fn((options: { onQRCodeReady: (info: { url: string; expireIn: number }) => void }) => {
       qrReady = options.onQRCodeReady;
@@ -146,14 +160,18 @@ describe('Feishu QR registration', () => {
     const feature = await import('../../../src/main/features/messaging/feishu-registration');
     const started = await feature.startFeishuQrRegistration('user-1', { displayName: 'Helper' });
     qrReady?.({ url: 'https://attacker.example/steal?code=temporary', expireIn: 600 });
-    registration.resolve({ client_id: 'cli_1234567890abcdef', client_secret: 'secret-value' });
+    registration.resolve({
+      client_id: 'cli_1234567890abcdef',
+      client_secret: 'secret-value',
+      user_info: { open_id: 'ou_owner_1' },
+    });
     await vi.waitFor(() => expect(feature.getFeishuQrRegistrationStatus('user-1', started.flowId).state).toBe('failed'));
     expect(feature.getFeishuQrRegistrationStatus('user-1', started.flowId)).toMatchObject({ errorCode: 'invalid_response' });
     expect(createInstance).not.toHaveBeenCalled();
   });
 
   it('cancels a flow before a late registration result can create a robot', async () => {
-    const registration = deferred<{ client_id: string; client_secret: string }>();
+    const registration = deferred<RegistrationResult>();
     let qrReady: ((info: { url: string; expireIn: number }) => void) | undefined;
     const registerApp = vi.fn((options: { onQRCodeReady: (info: { url: string; expireIn: number }) => void }) => {
       qrReady = options.onQRCodeReady;
@@ -167,13 +185,17 @@ describe('Feishu QR registration', () => {
     const started = await feature.startFeishuQrRegistration('user-1', { displayName: 'Helper' });
     qrReady?.({ url: 'https://accounts.larksuite.com/oauth/authorize?code=temporary', expireIn: 600 });
     expect(feature.cancelFeishuQrRegistration('user-1', started.flowId)).toMatchObject({ state: 'cancelled' });
-    registration.resolve({ client_id: 'cli_1234567890abcdef', client_secret: 'secret-value' });
+    registration.resolve({
+      client_id: 'cli_1234567890abcdef',
+      client_secret: 'secret-value',
+      user_info: { open_id: 'ou_owner_1' },
+    });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(createInstance).not.toHaveBeenCalled();
   });
 
   it('retains an invalid QR failure when aborting the official flow rejects its promise', async () => {
-    const registration = deferred<{ client_id: string; client_secret: string }>();
+    const registration = deferred<RegistrationResult>();
     let qrReady: ((info: { url: string; expireIn: number }) => void) | undefined;
     const registerApp = vi.fn((options: { onQRCodeReady: (info: { url: string; expireIn: number }) => void }) => {
       qrReady = options.onQRCodeReady;
@@ -196,7 +218,7 @@ describe('Feishu QR registration', () => {
   });
 
   it('cancels an activation race, retries stale-instance cleanup, and never enables it', async () => {
-    const registration = deferred<{ client_id: string; client_secret: string }>();
+    const registration = deferred<RegistrationResult>();
     const creation = deferred<ReturnType<typeof clientInstance>>();
     let qrReady: ((info: { url: string; expireIn: number }) => void) | undefined;
     const registerApp = vi.fn((options: { onQRCodeReady: (info: { url: string; expireIn: number }) => void }) => {
@@ -218,7 +240,11 @@ describe('Feishu QR registration', () => {
     const feature = await import('../../../src/main/features/messaging/feishu-registration');
     const started = await feature.startFeishuQrRegistration('user-1', { displayName: 'Helper' });
     qrReady?.({ url: 'https://accounts.feishu.cn/oauth/authorize?code=temporary', expireIn: 600 });
-    registration.resolve({ client_id: 'cli_1234567890abcdef', client_secret: 'secret-value' });
+    registration.resolve({
+      client_id: 'cli_1234567890abcdef',
+      client_secret: 'secret-value',
+      user_info: { open_id: 'ou_owner_1' },
+    });
     await vi.waitFor(() => expect(createInstance).toHaveBeenCalledTimes(1));
 
     expect(feature.cancelFeishuQrRegistration('user-1', started.flowId)).toMatchObject({ state: 'cancelled' });
@@ -230,7 +256,7 @@ describe('Feishu QR registration', () => {
   });
 
   it('expires while instance creation is in flight and compensates before enabling', async () => {
-    const registration = deferred<{ client_id: string; client_secret: string }>();
+    const registration = deferred<RegistrationResult>();
     const creation = deferred<ReturnType<typeof clientInstance>>();
     let qrReady: ((info: { url: string; expireIn: number }) => void) | undefined;
     const registerApp = vi.fn((options: { onQRCodeReady: (info: { url: string; expireIn: number }) => void }) => {
@@ -252,7 +278,11 @@ describe('Feishu QR registration', () => {
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
     const started = await feature.startFeishuQrRegistration('user-1', { displayName: 'Helper' });
     qrReady?.({ url: 'https://accounts.feishu.cn/oauth/authorize?code=temporary', expireIn: 30 });
-    registration.resolve({ client_id: 'cli_1234567890abcdef', client_secret: 'secret-value' });
+    registration.resolve({
+      client_id: 'cli_1234567890abcdef',
+      client_secret: 'secret-value',
+      user_info: { open_id: 'ou_owner_1' },
+    });
     await vi.waitFor(() => expect(createInstance).toHaveBeenCalledTimes(1));
 
     nowSpy.mockReturnValue(now + 31_000);
@@ -267,7 +297,7 @@ describe('Feishu QR registration', () => {
   });
 
   it('expires while enabling is in flight and deletes the resulting instance', async () => {
-    const registration = deferred<{ client_id: string; client_secret: string }>();
+    const registration = deferred<RegistrationResult>();
     const enabling = deferred<ReturnType<typeof clientInstance>>();
     let qrReady: ((info: { url: string; expireIn: number }) => void) | undefined;
     const registerApp = vi.fn((options: { onQRCodeReady: (info: { url: string; expireIn: number }) => void }) => {
@@ -290,7 +320,11 @@ describe('Feishu QR registration', () => {
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
     const started = await feature.startFeishuQrRegistration('user-1', { displayName: 'Helper' });
     qrReady?.({ url: 'https://accounts.feishu.cn/oauth/authorize?code=temporary', expireIn: 30 });
-    registration.resolve({ client_id: 'cli_1234567890abcdef', client_secret: 'secret-value' });
+    registration.resolve({
+      client_id: 'cli_1234567890abcdef',
+      client_secret: 'secret-value',
+      user_info: { open_id: 'ou_owner_1' },
+    });
     await vi.waitFor(() => expect(setEnabled).toHaveBeenCalledWith('user-1', created.id, true));
 
     nowSpy.mockReturnValue(now + 31_000);
@@ -304,7 +338,7 @@ describe('Feishu QR registration', () => {
   });
 
   it('cancels while enabling is in flight and compensates after the await resolves', async () => {
-    const registration = deferred<{ client_id: string; client_secret: string }>();
+    const registration = deferred<RegistrationResult>();
     const enabling = deferred<ReturnType<typeof clientInstance>>();
     let qrReady: ((info: { url: string; expireIn: number }) => void) | undefined;
     const registerApp = vi.fn((options: { onQRCodeReady: (info: { url: string; expireIn: number }) => void }) => {
@@ -325,7 +359,11 @@ describe('Feishu QR registration', () => {
     const feature = await import('../../../src/main/features/messaging/feishu-registration');
     const started = await feature.startFeishuQrRegistration('user-1', { displayName: 'Helper' });
     qrReady?.({ url: 'https://accounts.feishu.cn/oauth/authorize?code=temporary', expireIn: 600 });
-    registration.resolve({ client_id: 'cli_1234567890abcdef', client_secret: 'secret-value' });
+    registration.resolve({
+      client_id: 'cli_1234567890abcdef',
+      client_secret: 'secret-value',
+      user_info: { open_id: 'ou_owner_1' },
+    });
     await vi.waitFor(() => expect(setEnabled).toHaveBeenCalledWith('user-1', created.id, true));
 
     expect(feature.cancelFeishuQrRegistration('user-1', started.flowId)).toMatchObject({ state: 'cancelled' });
@@ -336,7 +374,7 @@ describe('Feishu QR registration', () => {
   });
 
   it('surfaces a cleanup failure instead of hiding the residual local instance', async () => {
-    const registration = deferred<{ client_id: string; client_secret: string }>();
+    const registration = deferred<RegistrationResult>();
     const creation = deferred<ReturnType<typeof clientInstance>>();
     let qrReady: ((info: { url: string; expireIn: number }) => void) | undefined;
     const registerApp = vi.fn((options: { onQRCodeReady: (info: { url: string; expireIn: number }) => void }) => {
@@ -355,7 +393,11 @@ describe('Feishu QR registration', () => {
     const feature = await import('../../../src/main/features/messaging/feishu-registration');
     const started = await feature.startFeishuQrRegistration('user-1', { displayName: 'Helper' });
     qrReady?.({ url: 'https://accounts.feishu.cn/oauth/authorize?code=temporary', expireIn: 600 });
-    registration.resolve({ client_id: 'cli_1234567890abcdef', client_secret: 'secret-value' });
+    registration.resolve({
+      client_id: 'cli_1234567890abcdef',
+      client_secret: 'secret-value',
+      user_info: { open_id: 'ou_owner_1' },
+    });
     await vi.waitFor(() => expect(createInstance).toHaveBeenCalledTimes(1));
 
     feature.cancelFeishuQrRegistration('user-1', started.flowId);
@@ -371,8 +413,8 @@ describe('Feishu QR registration', () => {
   });
 
   it('retains a failed cleanup status when a newer flow supersedes the old one', async () => {
-    const firstRegistration = deferred<{ client_id: string; client_secret: string }>();
-    const secondRegistration = deferred<{ client_id: string; client_secret: string }>();
+    const firstRegistration = deferred<RegistrationResult>();
+    const secondRegistration = deferred<RegistrationResult>();
     const creation = deferred<ReturnType<typeof clientInstance>>();
     let invocation = 0;
     let firstQrReady: ((info: { url: string; expireIn: number }) => void) | undefined;
@@ -393,7 +435,11 @@ describe('Feishu QR registration', () => {
     const feature = await import('../../../src/main/features/messaging/feishu-registration');
     const first = await feature.startFeishuQrRegistration('user-1', { displayName: 'First helper' });
     firstQrReady?.({ url: 'https://accounts.feishu.cn/oauth/authorize?code=temporary', expireIn: 600 });
-    firstRegistration.resolve({ client_id: 'cli_1234567890abcdef', client_secret: 'secret-value' });
+    firstRegistration.resolve({
+      client_id: 'cli_1234567890abcdef',
+      client_secret: 'secret-value',
+      user_info: { open_id: 'ou_owner_1' },
+    });
     await vi.waitFor(() => expect(createInstance).toHaveBeenCalledTimes(1));
 
     const second = await feature.startFeishuQrRegistration('user-1', { displayName: 'Second helper' });
@@ -411,7 +457,7 @@ describe('Feishu QR registration', () => {
   });
 
   it('binds a successful scan to the exact draft and authorizes the scanner as the first user', async () => {
-    const registration = deferred<{ client_id: string; client_secret: string; user_info: { tenant_brand: 'feishu'; open_id: string } }>();
+    const registration = deferred<{ client_id: string; client_secret: string; user_info: { tenant_brand: 'feishu'; open_id: string; name: string } }>();
     let qrReady: ((info: { url: string; expireIn: number }) => void) | undefined;
     const registerApp = vi.fn((options: { onQRCodeReady: (info: { url: string; expireIn: number }) => void }) => {
       qrReady = options.onQRCodeReady;
@@ -442,20 +488,22 @@ describe('Feishu QR registration', () => {
     registration.resolve({
       client_id: 'cli_1234567890abcdef',
       client_secret: 'secret-value',
-      user_info: { tenant_brand: 'feishu', open_id: 'ou_scanner' },
+      user_info: { tenant_brand: 'feishu', open_id: 'ou_scanner', name: 'Scanner' },
     });
     await vi.waitFor(() => expect(feature.getFeishuQrRegistrationStatus('user-1', started.flowId).state).toBe('completed'));
     expect(bindFeishuDraft).toHaveBeenCalledWith('user-1', 'feishu-draft-1', {
       feishuTenantBrand: 'feishu',
       secret: { appId: 'cli_1234567890abcdef', appSecret: 'secret-value' },
       initialAllowUserId: 'ou_scanner',
+      ownerExternalUserId: 'ou_scanner',
+      ownerExternalUserName: 'Scanner',
     });
     expect(setEnabled).toHaveBeenCalledWith('user-1', 'feishu-draft-1', true);
     expect(JSON.stringify(feature.getFeishuQrRegistrationStatus('user-1', started.flowId))).not.toContain('secret-value');
   });
 
   it('revokes draft credentials when a bound scan is cancelled and keeps the draft', async () => {
-    const registration = deferred<{ client_id: string; client_secret: string; user_info: { tenant_brand: 'feishu'; open_id: string } }>();
+    const registration = deferred<{ client_id: string; client_secret: string; user_info: { tenant_brand: 'feishu'; open_id: string; name: string } }>();
     const binding = deferred<ReturnType<typeof clientInstance>>();
     let qrReady: ((info: { url: string; expireIn: number }) => void) | undefined;
     const registerApp = vi.fn((options: { onQRCodeReady: (info: { url: string; expireIn: number }) => void }) => {
@@ -484,7 +532,7 @@ describe('Feishu QR registration', () => {
     registration.resolve({
       client_id: 'cli_1234567890abcdef',
       client_secret: 'secret-value',
-      user_info: { tenant_brand: 'feishu', open_id: 'ou_scanner' },
+      user_info: { tenant_brand: 'feishu', open_id: 'ou_scanner', name: 'Scanner' },
     });
     await vi.waitFor(() => expect(bindFeishuDraft).toHaveBeenCalledTimes(1));
 

@@ -72,7 +72,7 @@ export interface FeishuRegistrationStatus {
 interface RegistrationResultLike {
   client_id: string;
   client_secret: string;
-  user_info?: { tenant_brand?: string; open_id?: string };
+  user_info?: { tenant_brand?: string; open_id?: string; name?: string };
 }
 
 interface RegistrationActivation {
@@ -298,6 +298,16 @@ function registrationDomain(brand: FeishuTenantBrand | undefined): FeishuTenantB
   return brand === 'lark' ? 'lark' : 'feishu';
 }
 
+function registrationOwner(result: RegistrationResultLike): { ownerExternalUserId: string; ownerExternalUserName?: string } {
+  const ownerExternalUserId = typeof result.user_info?.open_id === 'string' ? result.user_info.open_id.trim() : '';
+  if (!ownerExternalUserId) throw new Error('Feishu registration account identifier missing');
+  const ownerExternalUserName = typeof result.user_info?.name === 'string' ? result.user_info.name.trim() : '';
+  return {
+    ownerExternalUserId,
+    ...(ownerExternalUserName ? { ownerExternalUserName } : {}),
+  };
+}
+
 async function removeStaleInstance(uid: string, instanceId: string): Promise<void> {
   let lastError: unknown;
   for (const delay of STALE_INSTANCE_CLEANUP_DELAYS_MS) {
@@ -352,6 +362,7 @@ function newInstanceActivation(): RegistrationActivation {
   return {
     async apply(flow, result) {
       const tenantBrand = registrationDomain(result.user_info?.tenant_brand as FeishuTenantBrand | undefined);
+      const owner = registrationOwner(result);
       return manager.createInstance(flow.uid, {
         platform: 'feishu_lark',
         feishuTenantBrand: tenantBrand,
@@ -359,6 +370,8 @@ function newInstanceActivation(): RegistrationActivation {
         workspace: flow.draft.workspace,
         policy: flow.draft.policy,
         secret: { appId: result.client_id.trim(), appSecret: result.client_secret.trim() },
+        ...owner,
+        ownerIdentitySource: 'qr',
       });
     },
     async discard(flow, instance) {
@@ -374,13 +387,13 @@ function draftActivation(uid: string, instanceId: string): RegistrationActivatio
   return {
     async apply(_flow, result) {
       const tenantBrand = registrationDomain(result.user_info?.tenant_brand as FeishuTenantBrand | undefined);
-      const openId = typeof result.user_info?.open_id === 'string' ? result.user_info.open_id.trim() : '';
-      if (!openId) throw new Error('Feishu registration account identifier missing');
+      const owner = registrationOwner(result);
       const secret = { appId: result.client_id.trim(), appSecret: result.client_secret.trim() };
       const bound = await registry.bindFeishuDraft(uid, instanceId, {
         feishuTenantBrand: tenantBrand,
         secret,
-        initialAllowUserId: openId,
+        initialAllowUserId: owner.ownerExternalUserId,
+        ...owner,
       });
       boundSecret = secret;
       return bound;
@@ -440,6 +453,7 @@ async function runRegistration(flow: RegistrationFlow, activation: RegistrationA
     clearSensitiveFlowState(flow);
     let created: MessagingInstanceClient | undefined;
     try {
+      if (!canActivate(flow)) return;
       created = await activation.apply(flow, result as RegistrationResultLike);
       flow.instance = created;
       if (!canActivate(flow)) {

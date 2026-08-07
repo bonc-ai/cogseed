@@ -10,9 +10,10 @@ import * as localSecrets from '../../util/local-secret-store';
 import { createLogger } from '../../logger';
 import type {
   MessagingConfigFile,
-  MessagingInstance,
   MessagingInstanceClient,
   MessagingInstanceDisk,
+  MessagingInstanceInternal,
+  MessagingOwnerIdentitySource,
   MessagingPlatform,
   MessagingPolicy,
   MessagingSecret,
@@ -25,6 +26,7 @@ import {
   FEISHU_TENANT_BRANDS,
   INSTANCE_STATUS_KINDS,
   isValidFeishuAppId,
+  isValidFeishuOpenId,
   isValidWecomBotId,
   isValidWecomBotSecret,
   MESSAGING_PLATFORMS,
@@ -37,7 +39,13 @@ const SECRET_NAMESPACE = 'messaging.instance';
 const EMPTY_CONFIG: MessagingConfigFile = { version: 1, instances: {} };
 const locks = new Map<string, Mutex>();
 
-export interface CreateMessagingInstanceInput {
+interface OwnerIdentityInput {
+  ownerExternalUserId?: string;
+  ownerExternalUserName?: string;
+  ownerIdentitySource?: MessagingOwnerIdentitySource;
+}
+
+export interface CreateMessagingInstanceInput extends OwnerIdentityInput {
   platform: MessagingPlatform;
   feishuTenantBrand?: FeishuTenantBrand;
   displayName: string;
@@ -52,7 +60,7 @@ export interface CreateMessagingInstanceInput {
  * deliberately has no `secretsEnc` value, cannot be enabled, and exposes no
  * sensitive material to the renderer.
  */
-export interface CreateFeishuDraftInput {
+export interface CreateFeishuDraftInput extends OwnerIdentityInput {
   feishuTenantBrand: FeishuTenantBrand;
   displayName: string;
   responseMode?: MessagingResponseMode;
@@ -60,14 +68,14 @@ export interface CreateFeishuDraftInput {
   policy?: Partial<MessagingPolicy>;
 }
 
-export interface BindFeishuDraftInput {
+export interface BindFeishuDraftInput extends OwnerIdentityInput {
   feishuTenantBrand: FeishuTenantBrand;
   secret: Pick<MessagingSecret, 'appId' | 'appSecret'>;
   /** The successful QR account is always explicitly authorized first. */
   initialAllowUserId: string;
 }
 
-export interface UpdateMessagingInstanceInput {
+export interface UpdateMessagingInstanceInput extends OwnerIdentityInput {
   displayName?: string;
   feishuTenantBrand?: FeishuTenantBrand;
   responseMode?: MessagingResponseMode;
@@ -76,6 +84,7 @@ export interface UpdateMessagingInstanceInput {
   policy?: Partial<MessagingPolicy>;
   secret?: MessagingSecret;
   clearSecret?: boolean;
+  clearOwner?: boolean;
 }
 
 function assertUserId(uid: string): void {
@@ -111,6 +120,51 @@ function boundedText(value: string, field: string, max: number): string {
 function requiredSecretText(value: unknown, field: string, max: number): string {
   if (typeof value !== 'string') throw new Error(`${field} required`);
   return boundedText(value, field, max);
+}
+
+function normalizeOwnerIdentity(
+  platform: MessagingPlatform,
+  input: OwnerIdentityInput,
+  strict = false,
+): Pick<MessagingInstanceInternal, 'ownerExternalUserId' | 'ownerExternalUserName' | 'ownerIdentitySource'> {
+  const hasOwnerFields = input.ownerExternalUserId !== undefined
+    || input.ownerExternalUserName !== undefined
+    || input.ownerIdentitySource !== undefined;
+  if (platform !== 'feishu_lark') {
+    if (hasOwnerFields && strict) throw new Error('owner identity is only valid for Feishu/Lark');
+    return {};
+  }
+  if (typeof input.ownerExternalUserId !== 'string') {
+    if (hasOwnerFields && strict) throw new Error('owner open id required');
+    return {};
+  }
+  const ownerExternalUserId = input.ownerExternalUserId.trim();
+  if (!isValidFeishuOpenId(ownerExternalUserId)) {
+    if (strict) throw new Error('invalid owner open id');
+    return {};
+  }
+  let ownerExternalUserName: string | undefined;
+  if (input.ownerExternalUserName !== undefined) {
+    if (typeof input.ownerExternalUserName !== 'string') {
+      if (strict) throw new Error('invalid owner name');
+    } else {
+      const name = input.ownerExternalUserName.trim();
+      if (name.length > 120) {
+        if (strict) throw new Error('owner name too long');
+      } else if (name) {
+        ownerExternalUserName = name;
+      }
+    }
+  }
+  const source = input.ownerIdentitySource;
+  if (source !== undefined && source !== 'qr' && source !== 'manual' && source !== 'auto') {
+    if (strict) throw new Error('invalid owner identity source');
+  }
+  return {
+    ownerExternalUserId,
+    ...(ownerExternalUserName ? { ownerExternalUserName } : {}),
+    ownerIdentitySource: source === 'qr' ? 'qr' : source === 'auto' ? 'auto' : 'manual',
+  };
 }
 
 function normalizeIdList(value: unknown, field: string, strict: boolean): string[] {
@@ -223,6 +277,7 @@ function normalizeInstance(raw: MessagingInstanceDisk): MessagingInstanceDisk {
   assertInstanceId(raw.id);
   assertPlatform(raw.platform);
   const displayName = boundedText(String(raw.displayName || ''), 'display name', 120);
+  const ownerIdentity = normalizeOwnerIdentity(raw.platform, raw);
   const now = nowIso();
   return {
     id: raw.id,
@@ -234,6 +289,7 @@ function normalizeInstance(raw: MessagingInstanceDisk): MessagingInstanceDisk {
     workspace: normalizeWorkspace(raw.workspace),
     policy: normalizePolicy(raw.policy),
     status: normalizeStatus(raw.status),
+    ...ownerIdentity,
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : now,
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : now,
     ...(typeof raw.secretsEnc === 'string' && raw.secretsEnc ? { secretsEnc: raw.secretsEnc } : {}),
@@ -305,8 +361,21 @@ function decryptSecret(uid: string, instance: MessagingInstanceDisk): MessagingS
 }
 
 function toClient(instance: MessagingInstanceDisk, hasCredentials: boolean): MessagingInstanceClient {
-  const { secretsEnc: _secretsEnc, ...metadata } = instance;
-  return { ...metadata, hasCredentials };
+  const {
+    secretsEnc: _secretsEnc,
+    ownerExternalUserId,
+    ownerExternalUserName,
+    ownerIdentitySource,
+    ...metadata
+  } = instance;
+  const ownerConfigured = Boolean(ownerExternalUserId);
+  return {
+    ...metadata,
+    hasCredentials,
+    ownerConfigured,
+    ...(ownerConfigured && ownerExternalUserName ? { ownerLabel: ownerExternalUserName } : {}),
+    ...(ownerConfigured && ownerIdentitySource ? { ownerIdentitySource } : {}),
+  };
 }
 
 export function isValidInstanceId(id: string): boolean {
@@ -320,14 +389,14 @@ export async function listInstances(uid: string): Promise<MessagingInstanceClien
     .map((instance) => toClient(instance, !!decryptSecret(uid, instance)));
 }
 
-export async function getInstance(uid: string, instanceId: string): Promise<MessagingInstance | null> {
+export async function getInstance(uid: string, instanceId: string): Promise<MessagingInstanceInternal | null> {
   assertInstanceId(instanceId);
   const config = await readConfig(uid);
   const instance = config.instances[instanceId];
   return instance ? { ...instance } : null;
 }
 
-export async function getInstanceWithSecret(uid: string, instanceId: string): Promise<{ instance: MessagingInstance; secret: MessagingSecret } | null> {
+export async function getInstanceWithSecret(uid: string, instanceId: string): Promise<{ instance: MessagingInstanceInternal; secret: MessagingSecret } | null> {
   assertInstanceId(instanceId);
   const config = await readConfig(uid);
   const instance = config.instances[instanceId];
@@ -341,6 +410,7 @@ export async function createInstance(uid: string, input: CreateMessagingInstance
   assertPlatform(input.platform);
   const displayName = boundedText(input.displayName, 'display name', 120);
   const secret = validateSecret(input.platform, input.secret);
+  const ownerIdentity = normalizeOwnerIdentity(input.platform, input, true);
   return getLock(uid).runExclusive(async () => {
     const config = await readConfig(uid);
     const id = genId12();
@@ -355,6 +425,7 @@ export async function createInstance(uid: string, input: CreateMessagingInstance
       workspace: normalizeWorkspace(input.workspace),
       policy: normalizePolicy(input.policy, true),
       status: { kind: 'disconnected', checkedAt: now },
+      ...ownerIdentity,
       createdAt: now,
       updatedAt: now,
       secretsEnc: encryptSecret(uid, id, secret),
@@ -372,6 +443,7 @@ export async function createFeishuDraft(uid: string, input: CreateFeishuDraftInp
   if (!feishuTenantBrand) throw new Error('Feishu tenant brand required');
   const workspace = normalizeWorkspace(input.workspace);
   const policy = normalizePolicy(input.policy, true);
+  const ownerIdentity = normalizeOwnerIdentity('feishu_lark', input, true);
   return getLock(uid).runExclusive(async () => {
     const config = await readConfig(uid);
     const id = genId12();
@@ -386,6 +458,7 @@ export async function createFeishuDraft(uid: string, input: CreateFeishuDraftInp
       workspace,
       policy,
       status: { kind: 'disabled', checkedAt: now },
+      ...ownerIdentity,
       createdAt: now,
       updatedAt: now,
     };
@@ -417,6 +490,13 @@ export async function bindFeishuDraft(
   if (!feishuTenantBrand) throw new Error('Feishu tenant brand required');
   const secret = validateSecret('feishu_lark', input.secret);
   const initialAllowUserId = normalizeInitialAllowUserId(input.initialAllowUserId);
+  const ownerIdentity = normalizeOwnerIdentity('feishu_lark', {
+    ...input,
+    ownerIdentitySource: 'qr',
+  }, true);
+  if (ownerIdentity.ownerExternalUserId !== initialAllowUserId) {
+    throw new Error('owner open id must match initial allowed user id');
+  }
   return getLock(uid).runExclusive(async () => {
     const config = await readConfig(uid);
     const current = config.instances[instanceId];
@@ -432,6 +512,7 @@ export async function bindFeishuDraft(
       enabled: false,
       policy: normalizePolicy({ ...current.policy, allowUserIds }, true),
       status: { kind: 'disconnected', checkedAt: nowIso() },
+      ...ownerIdentity,
       secretsEnc: encryptSecret(uid, instanceId, secret),
       updatedAt: nowIso(),
     };
@@ -463,9 +544,21 @@ export async function revokeFeishuDraftCredentials(
     if (currentSecret?.appId !== normalizedSecret.appId || currentSecret.appSecret !== normalizedSecret.appSecret) {
       return { revoked: false, instance: toClient(current, !!currentSecret) };
     }
-    const { secretsEnc: _secretsEnc, ...withoutCredentials } = current;
+    const {
+      secretsEnc: _secretsEnc,
+      ownerExternalUserId,
+      ownerExternalUserName,
+      ownerIdentitySource,
+      ...withoutCredentialsAndOwner
+    } = current;
+    const preserveOwner = ownerIdentitySource !== 'qr';
     const next: MessagingInstanceDisk = {
-      ...withoutCredentials,
+      ...withoutCredentialsAndOwner,
+      ...(preserveOwner && ownerExternalUserId ? {
+        ownerExternalUserId,
+        ...(ownerExternalUserName ? { ownerExternalUserName } : {}),
+        ...(ownerIdentitySource ? { ownerIdentitySource } : {}),
+      } : {}),
       enabled: false,
       status: { kind: 'disabled', checkedAt: nowIso() },
       updatedAt: nowIso(),
@@ -480,10 +573,20 @@ export async function updateInstance(uid: string, instanceId: string, input: Upd
   assertUserId(uid);
   assertInstanceId(instanceId);
   if (input.clearSecret && input.secret) throw new Error('cannot replace and clear credentials in the same update');
+  const hasOwnerInput = input.ownerExternalUserId !== undefined
+    || input.ownerExternalUserName !== undefined
+    || input.ownerIdentitySource !== undefined;
+  if (input.clearOwner && hasOwnerInput) throw new Error('cannot replace and clear owner in the same update');
   return getLock(uid).runExclusive(async () => {
     const config = await readConfig(uid);
     const current = config.instances[instanceId];
     if (!current) throw new Error('messaging instance not found');
+    if ((hasOwnerInput || input.clearOwner) && current.platform !== 'feishu_lark') {
+      throw new Error('owner identity is only valid for Feishu/Lark');
+    }
+    const ownerPatch = hasOwnerInput
+      ? normalizeOwnerIdentity(current.platform, input, true)
+      : {};
     const next: MessagingInstanceDisk = {
       ...current,
       ...(typeof input.displayName === 'string' ? { displayName: boundedText(input.displayName, 'display name', 120) } : {}),
@@ -498,6 +601,12 @@ export async function updateInstance(uid: string, instanceId: string, input: Upd
       ...(input.policy ? { policy: normalizePolicy({ ...current.policy, ...input.policy }, true) } : {}),
       ...(input.secret ? { secretsEnc: encryptSecret(uid, instanceId, validateSecret(current.platform, input.secret)) } : {}),
       ...(input.clearSecret ? { secretsEnc: undefined } : {}),
+      ...ownerPatch,
+      ...(input.clearOwner ? {
+        ownerExternalUserId: undefined,
+        ownerExternalUserName: undefined,
+        ownerIdentitySource: undefined,
+      } : {}),
       updatedAt: nowIso(),
     };
     config.instances[instanceId] = next;
