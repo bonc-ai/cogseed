@@ -308,6 +308,19 @@ export function bundledNodeExecutable(): string | undefined {
 }
 
 /**
+ * Absolute path to the bundled Python interpreter, or undefined when no bundled
+ * payload is present (callers then fall back to a system `python3`).
+ *
+ * Exposed for the security scanner adapter, which runs skill-sentry as a child
+ * process. Prefer this over hardcoding `python3`: the bundled payload is the
+ * interpreter the app ships with, so it is version-stable across user machines,
+ * whereas a system `python3` may be absent or too old.
+ */
+export function bundledPythonExecutable(): string | undefined {
+  return resolvePythonExecutable();
+}
+
+/**
  * Absolute path to the bundled npm `npx-cli.js`, or undefined when not present.
  * Resolved relative to the bundled Node so callers can run it as
  * `node <npx-cli.js> ...` — robust cross-platform (no shebang / `.cmd` / shell

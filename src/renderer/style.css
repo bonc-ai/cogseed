@@ -13983,6 +13983,73 @@ body.model-not-configured .main-content { flex-direction: column; }
   border: 1px solid var(--border-strong);
   padding: 1px 7px;
 }
+/* Withheld-by-security chip — amber, deliberately louder than the neutral
+ * version/custom chips. It is the only chip that explains why a card is inert,
+ * and it must not read as just another metadata tag. Distinct from the red
+ * danger palette: the skill is held back pending re-verification, not deleted. */
+.skill-card-chip.is-withheld {
+  border-color: rgba(217, 119, 6, 0.35);
+  background: rgba(217, 119, 6, 0.08);
+  color: #b45309;
+  cursor: help;
+}
+/* Withheld cards dim like disabled ones, but the name keeps the amber tint so
+ * the state is distinguishable at a glance in a grid of disabled cards. The
+ * user cannot toggle this one back on. */
+.skill-card.is-withheld { opacity: 0.72; }
+.skill-card.is-withheld .skill-card-name { color: #b45309; }
+
+/* Security shield in the card header. Sits between the name and the ⋯ button,
+ * pushed right by the name's flex growth. Quiet by default — the healthy state
+ * must be legible without competing with the skill's own metadata, so it is a
+ * small dim glyph rather than a coloured badge. */
+.skill-card-shield {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1;
+  margin-right: 4px;
+  cursor: help;
+  opacity: 0.75;
+  filter: grayscale(1);
+}
+.skill-card-shield.is-verified { opacity: 0.6; }
+/* Risk/unchecked keep colour so they read as "look at me" without shouting. */
+.skill-card-shield.is-risk { filter: none; opacity: 0.95; }
+.skill-card-shield.is-unchecked { filter: grayscale(1); opacity: 0.45; }
+
+/* One-line rollup above the skill sections. Deliberately understated: it exists
+ * so the checks are visible when nothing is wrong, which means it must not look
+ * like a warning banner in the healthy case. */
+.skills-security-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  margin: 0 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 12px;
+  color: var(--muted);
+}
+/* Only when something is actually withheld does it take on the amber ring. */
+.skills-security-summary.needs-attention {
+  border-color: rgba(217, 119, 6, 0.35);
+  background: rgba(217, 119, 6, 0.06);
+  color: #b45309;
+}
+.skills-security-summary-text { flex: 1 1 auto; }
+.skills-security-recheck {
+  flex: 0 0 auto;
+  padding: 2px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.skills-security-recheck:hover { background: color-mix(in srgb, var(--primary) 8%, transparent); }
 
 /* Footer row: chips on the left flex-1, install/uninstall button hugged to the right via
    `flex-shrink:0` so it never collapses before the chips. Replaces the old vertically-stacked
@@ -17189,6 +17256,15 @@ body.model-not-configured .main-content { flex-direction: column; }
 .skills-cognition-list-card strong { font-size: 13px; color: var(--fg, #111827); }
 .skills-cognition-list-card span, .skills-cognition-meta { color: var(--muted-fg, #6b7280); font-size: 12px; }
 .skills-cognition-status { flex: none; border-radius: 999px; padding: 3px 8px; background: color-mix(in srgb, var(--primary, #2563eb) 10%, transparent); color: var(--primary, #2563eb); font-size: 11px; }
+/* Security axis chip. Colour-coded by verdict and kept visually distinct from
+   the maturity chip above, which is always primary-tinted — the two axes must
+   not read as one status. `unknown` is deliberately muted rather than green:
+   "not checked" must never look like "passed". */
+.skills-cognition-security { flex: none; border-radius: 999px; padding: 3px 8px; font-size: 11px; border: 1px solid transparent; }
+.skills-cognition-security[data-cognition-security="pass"] { background: color-mix(in srgb, var(--success, #16a34a) 10%, transparent); color: var(--success, #15803d); }
+.skills-cognition-security[data-cognition-security="risk"] { background: color-mix(in srgb, var(--warning, #d97706) 12%, transparent); color: var(--warning, #92400e); }
+.skills-cognition-security[data-cognition-security="blocked"] { background: color-mix(in srgb, var(--danger, #b91c1c) 12%, transparent); color: var(--danger, #b91c1c); }
+.skills-cognition-security[data-cognition-security="unknown"] { background: color-mix(in srgb, var(--muted-fg, #6b7280) 10%, transparent); color: var(--muted-fg, #6b7280); }
 .skills-cognition-card p { margin: 10px 0; color: var(--fg, #374151); font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
 .skills-cognition-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .skills-cognition-flow-band { margin-bottom: 12px; padding: 0 0 10px; border-bottom: 1px solid var(--border, #e5e7eb); }
