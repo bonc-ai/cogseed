@@ -534,6 +534,7 @@
         { value: 'text', label: labelFor('messaging.response_text', '') },
         { value: 'streaming_card', label: labelFor('messaging.response_streaming_card', '') },
       ], instance.responseMode || 'text', state.updating);
+      responseSelect.setAttribute('aria-label', labelFor('messaging.response_title', ''));
       responseSelect.addEventListener('change', () => {
         if (responseSelect.value !== (instance.responseMode || 'text')) {
           void updateInstance({ responseMode: responseSelect.value }, responseSelect);
@@ -542,6 +543,7 @@
       const workspaceSelect = selectControl([
         { value: 'all', label: labelFor('messaging.workspace_all', '') },
       ], 'all', state.updating);
+      workspaceSelect.setAttribute('aria-label', labelFor('messaging.workspace_title', ''));
       workspaceSelect.addEventListener('change', () => {
         void updateInstance({ workspace: { type: 'all' } }, workspaceSelect);
       });
@@ -550,6 +552,7 @@
       const deleteButton = el('button', 'btn btn-danger messaging-delete-button', labelFor('messaging.delete', ''));
       deleteButton.type = 'button';
       deleteButton.disabled = state.updating;
+      deleteButton.appendChild(icon('trash', 'messaging-action-icon'));
       deleteButton.addEventListener('click', () => void deleteInstance(instance, deleteButton));
       deletion.appendChild(deleteButton);
       wrapper.appendChild(deletion);
