@@ -116,12 +116,9 @@ describe('settings tabs module', () => {
     expect(lazyFeatures).toContain("{ src: './modules/messaging-settings.js' }");
     expect(indexHtml).toContain('id="messaging-page"');
     expect(indexHtml).not.toContain('id="messaging-catalog"');
-    expect(style).toContain('.messaging-channel-grid');
     expect(style).toContain('.messaging-preferences-card');
-    expect(style).not.toContain('.messaging-instance-rail');
-    expect(messagingSettings).toContain("view: 'catalog'");
-    expect(messagingSettings).toContain("state.view = 'detail';");
-    expect(messagingSettings).toContain('messaging.feishu_draft.create');
+    expect(messagingSettings).toContain("view: 'panel'");
+    expect(messagingSettings).not.toContain("view: 'catalog'");
     expect(messagingSettings).toContain("messaging.feishu_qr.start");
     expect(messagingSettings).toContain("messaging.feishu_qr.status");
     expect(messagingSettings).toContain("messaging.feishu_qr.cancel");
@@ -133,12 +130,16 @@ describe('settings tabs module', () => {
     expect(messagingSettings).not.toContain('messaging.feishu_app_secret');
     expect(messagingSettings).not.toContain('messaging.allow_users');
     expect(messagingSettings).not.toContain('messaging.allow_groups');
-    expect(messagingSettings).not.toContain('messaging.wecom_qr');
-    expect(messagingSettings).not.toContain('messaging.health');
     expect(indexHtml).not.toContain('Model Authorization');
     expect(indexHtml.indexOf(tabsScript)).toBeGreaterThanOrEqual(0);
     expect(indexHtml.indexOf(settingsScript)).toBe(-1);
     expect(lazyFeatures).toContain("{ src: './modules/settings.js' }");
+  });
+
+  it('cancels an in-flight feishu QR flow when switching channels', () => {
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    expect(source).toContain('cancelQr({ silent: true, render: false })');
+    expect(source).toContain('state.selectedChannel = key');
   });
 
   it('binds clicks and toggles the matching settings pane', () => {

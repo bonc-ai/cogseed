@@ -4,9 +4,10 @@
   'use strict';
 
   const state = {
-    view: 'catalog',
+    view: 'panel',
     instances: [],
-    selectedId: '',
+    selectedChannel: 'feishu',
+    selectedInstanceId: '',
     openingChannel: '',
     notice: '',
     noticeKind: '',
@@ -26,6 +27,16 @@
       qrUrl: '',
       expiresAt: null,
       intervalSeconds: 0,
+      error: '',
+      timer: null,
+    },
+    wecom: {
+      flowId: '',
+      state: '',
+      authUrl: '',
+      popup: null,
+      starting: false,
+      cancelling: false,
       error: '',
       timer: null,
     },
@@ -115,7 +126,7 @@
   }
 
   function currentInstance() {
-    return state.instances.find((instance) => instance.id === state.selectedId) || null;
+    return state.instances.find((instance) => instance.id === state.selectedInstanceId) || null;
   }
 
   function instanceForChannel(channel) {
@@ -273,12 +284,11 @@
     const instance = registration && registration.instance;
     if (instance && typeof instance.id === 'string' && instance.id) {
       state.instances = state.instances.map((candidate) => candidate.id === instance.id ? instance : candidate);
-      state.selectedId = instance.id;
+      state.selectedInstanceId = instance.id;
     } else {
       await loadInstances();
     }
     resetQrState();
-    state.view = 'detail';
     setNotice(labelFor('messaging.feishu_qr.completed', ''), 'success');
     renderCurrent();
   }
@@ -612,21 +622,6 @@
   function detailPage(instance) {
     const channel = channelForKey(channelForInstance(instance)) || channelForKey('feishu');
     const page = el('section', 'messaging-detail-page');
-    const nav = el('div', 'messaging-detail-nav');
-    const back = el('button', 'messaging-back-button');
-    back.type = 'button';
-    back.title = labelFor('messaging.catalog.back', '');
-    back.setAttribute('aria-label', labelFor('messaging.catalog.back', ''));
-    back.appendChild(icon('chevron-left', 'messaging-nav-icon'));
-    back.addEventListener('click', () => {
-      void cancelQr({ silent: true, render: false });
-      state.view = 'catalog';
-      state.selectedId = '';
-      setNotice('', '');
-      renderCurrent();
-    });
-    nav.appendChild(back);
-    page.appendChild(nav);
 
     const header = el('header', 'messaging-detail-header');
     const brand = el('div', `messaging-brand-icon is-${channel.key}`);
@@ -712,8 +707,7 @@
       const result = await invoke('messaging.delete', { instanceId: instance.id });
       if (result && result.deleted === false) throw new Error(result.error || labelFor('messaging.delete_failed', ''));
       state.instances = state.instances.filter((candidate) => candidate.id !== instance.id);
-      state.selectedId = '';
-      state.view = 'catalog';
+      state.selectedInstanceId = '';
       setNotice('', '');
     } catch (error) {
       setNotice(errorMessage(error, labelFor('messaging.delete_failed', '')), 'error');
@@ -723,88 +717,62 @@
     }
   }
 
-  function renderCatalogPage() {
-    const page = el('section', 'messaging-catalog-page');
-    page.appendChild(el('h1', '', labelFor('messaging.catalog.page_title', '')));
-    page.appendChild(el('p', 'messaging-catalog-lead', labelFor('messaging.catalog.page_subtitle', '')));
-    appendNotice(page);
-    const grid = el('div', 'messaging-channel-grid');
-    for (const channel of CHANNELS) {
-      const existing = instanceForChannel(channel);
-      const active = channel.available && (channel.platform === 'feishu_lark');
-      const opening = state.openingChannel === channel.key;
-      const row = el('button', `messaging-channel-card is-${channel.key}${active ? '' : ' is-disabled'}${opening ? ' is-loading' : ''}`);
-      row.type = 'button';
-      row.disabled = !active || Boolean(state.openingChannel);
-      row.dataset.channel = channel.key;
-      row.setAttribute('aria-disabled', String(!active));
-      row.setAttribute('aria-busy', String(opening));
-      const visual = el('span', 'messaging-channel-visual');
-      visual.appendChild(icon(opening ? 'loader' : channel.icon, `messaging-channel-icon${opening ? ' is-spinning' : ''}`));
-      row.appendChild(visual);
-      const copy = el('span', 'messaging-channel-copy');
-      const title = el('span', 'messaging-channel-title');
-      title.appendChild(el('strong', '', labelFor(`messaging.channel.${channel.key}.title`, '')));
-      if (channel.feishuTenantBrand) {
-        title.appendChild(el('span', 'messaging-channel-badge', labelFor(`messaging.channel.${channel.key}.badge`, '')));
-      }
-      copy.appendChild(title);
-      copy.appendChild(el('span', 'messaging-channel-description', labelFor(
-        active ? `messaging.channel.${channel.key}.description` : 'messaging.channel.coming_soon', '',
-      )));
-      row.appendChild(copy);
-      if (existing) row.classList.add('has-instance');
-      if (active) row.addEventListener('click', () => void openChannel(channel));
-      grid.appendChild(row);
-    }
-    page.appendChild(grid);
-    return page;
-  }
-
-  async function openChannel(channel) {
-    if (!channel || !channel.available || channel.platform !== 'feishu_lark' || state.openingChannel) return;
-    const operation = ++state.operation;
-    state.openingChannel = channel.key;
+  async function selectChannel(key) {
+    const channel = channelForKey(key);
+    if (!channel || channel.group !== 'open' || state.selectedChannel === key) return;
+    cancelQr({ silent: true, render: false });
+    // Task 8 追加: await cancelWecomFlow({ silent: true, render: false });
+    state.selectedChannel = key;
+    state.selectedInstanceId = '';
     setNotice('', '');
     renderCurrent();
-    try {
-      // Keep the loading frame visible even when an existing draft is reused.
-      await Promise.resolve();
-      let instance = instanceForChannel(channel);
-      if (!instance) {
-        const result = await invoke('messaging.feishu_draft.create', {
-          feishuTenantBrand: channel.feishuTenantBrand,
-          displayName: labelFor(`messaging.channel.${channel.key}.title`, channel.key === 'lark' ? 'Lark' : '飞书'),
-        });
-        instance = result && result.instance;
-      }
-      if (!instance || typeof instance.id !== 'string' || !instance.id) {
-        throw new Error(labelFor('messaging.open_failed', ''));
-      }
-      if (state.operation !== operation) return;
-      state.instances = state.instances.some((candidate) => candidate.id === instance.id)
-        ? state.instances.map((candidate) => candidate.id === instance.id ? instance : candidate)
-        : [...state.instances, instance];
-      state.selectedId = instance.id;
-      state.openingChannel = '';
-      state.view = 'detail';
-      renderCurrent();
-    } catch (error) {
-      if (state.operation !== operation) return;
-      state.openingChannel = '';
-      setNotice(errorMessage(error, labelFor('messaging.open_failed', '')), 'error');
-      state.view = 'catalog';
-      renderCurrent();
+  }
+
+  function renderPanelPage() {
+    const channel = channelForKey(state.selectedChannel) || channelForKey('feishu');
+    const panel = el('section', `messaging-panel is-${channel.key}`);
+    panel.appendChild(renderPanelHeader(channel));
+    // Task 8 追加: else if (channel.platform === 'wecom') panel.appendChild(renderWecomPanel(channel));
+    // Task 7 追加: else if (channel.platform === 'telegram') panel.appendChild(renderTelegramPanel(channel));
+    panel.appendChild(renderPanelPlaceholder(channel));
+    appendNotice(panel);
+    return panel;
+  }
+
+  function renderPanelPlaceholder(channel) {
+    const wrapper = el('div', 'messaging-panel-body');
+    wrapper.appendChild(card('messaging.association_title', 'messaging.association_sub'));
+    return wrapper;
+  }
+
+  function renderPanelHeader(channel) {
+    const header = el('header', 'messaging-detail-header');
+    const brand = el('div', `messaging-brand-icon is-${channel.key}`);
+    brand.appendChild(icon(channel.icon, 'messaging-brand-glyph'));
+    const titleWrap = el('div', 'messaging-detail-title-wrap');
+    const titleRow = el('div', 'messaging-detail-title-row');
+    titleRow.appendChild(el('h2', '', labelFor(`messaging.channel.${channel.key}.title`, channel.key)));
+    if (channel.feishuTenantBrand) {
+      titleRow.appendChild(el('span', 'messaging-channel-badge', labelFor(`messaging.channel.${channel.key}.badge`, '')));
     }
+    titleWrap.appendChild(titleRow);
+    const instances = instancesForChannel(channel);
+    const instance = instances.find((item) => item.id === state.selectedInstanceId) || instances[0] || null;
+    const status = instance ? statusForInstance(instance) : 'unbound';
+    const stateRow = el('div', `messaging-detail-state is-${status}`);
+    stateRow.append(icon(status === 'connected' ? 'check-circle' : 'clock', 'messaging-status-icon'));
+    stateRow.appendChild(el('span', '', statusLabel(status)));
+    titleWrap.appendChild(stateRow);
+    header.append(brand, titleWrap, instance ? switchControl(instance) : el('span', 'messaging-detail-switch-placeholder', ''));
+    return header;
   }
 
   async function loadInstances() {
     const result = await invoke('messaging.list');
     if (!result || !Array.isArray(result.instances)) throw new Error(result?.error || labelFor('messaging.load_failed', ''));
     state.instances = result.instances.filter((instance) => instance && typeof instance.id === 'string');
-    if (state.selectedId && !state.instances.some((instance) => instance.id === state.selectedId)) {
-      state.selectedId = '';
-      state.view = 'catalog';
+    if (state.selectedInstanceId && !state.instances.some((instance) => instance.id === state.selectedInstanceId)) {
+      state.selectedInstanceId = '';
     }
   }
 
@@ -813,9 +781,8 @@
     state.loading = true;
     try {
       await loadInstances();
-      if (state.selectedId && !state.instances.some((instance) => instance.id === state.selectedId)) {
-        state.selectedId = '';
-        state.view = 'catalog';
+      if (state.selectedInstanceId && !state.instances.some((instance) => instance.id === state.selectedInstanceId)) {
+        state.selectedInstanceId = '';
       }
       state.notice = '';
       state.noticeKind = '';
@@ -827,16 +794,52 @@
     }
   }
 
+  function renderLayoutPage() {
+    const layout = el('div', 'messaging-layout');
+    layout.append(renderMenuPage(), renderPanelPage());
+    return layout;
+  }
+
+  function renderMenuPage() {
+    const aside = el('aside', 'messaging-menu');
+    aside.appendChild(el('h1', 'messaging-menu-title', labelFor('messaging.catalog.page_title', '')));
+    for (const group of ['open', 'soon']) {
+      const section = el('div', `messaging-menu-group is-${group}`);
+      section.appendChild(el('div', 'messaging-menu-group-label', labelFor(
+        group === 'open' ? 'messaging.group.open' : 'messaging.group.soon', '',
+      )));
+      for (const channel of CHANNELS.filter((item) => item.group === group)) {
+        const active = state.selectedChannel === channel.key;
+        const bound = instancesForChannel(channel).length > 0;
+        const row = el('button', `messaging-menu-item is-${channel.key}${active ? ' is-active' : ''}${group === 'soon' ? ' is-disabled' : ''}`);
+        row.type = 'button';
+        row.disabled = group === 'soon';
+        row.dataset.channel = channel.key;
+        row.setAttribute('aria-disabled', String(group === 'soon'));
+        const visual = el('span', 'messaging-menu-item-icon');
+        visual.appendChild(icon(channel.icon, 'messaging-menu-item-glyph'));
+        row.appendChild(visual);
+        row.appendChild(el('span', 'messaging-menu-item-name', labelFor(`messaging.channel.${channel.key}.title`, channel.key)));
+        if (group === 'open') {
+          const status = el('span', `messaging-menu-item-status is-${bound ? 'bound' : 'empty'}`);
+          status.appendChild(el('span', '', labelFor(
+            bound ? 'messaging.status.bound' : 'messaging.status.unbound', '',
+          )));
+          row.appendChild(status);
+        }
+        if (group === 'open' && !row.disabled) row.addEventListener('click', () => selectChannel(channel.key));
+        aside.appendChild(row);
+      }
+      aside.appendChild(section);
+    }
+    return aside;
+  }
+
   function renderCurrent() {
     const root = rootNode();
     if (!root) return;
     root.replaceChildren();
-    const instance = currentInstance();
-    if (state.view === 'detail' && instance) root.appendChild(detailPage(instance));
-    else {
-      state.view = 'catalog';
-      root.appendChild(renderCatalogPage());
-    }
+    root.appendChild(renderLayoutPage());
     hydrate(root);
   }
 
@@ -852,7 +855,6 @@
     bind();
     if (!state.initialized) {
       state.initialized = true;
-      state.view = 'catalog';
     }
     await refresh();
   };
