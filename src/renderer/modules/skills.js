@@ -1866,9 +1866,15 @@ function _openSkillsSectionHtml() {
  * somewhere to go — a status display with no action invites reinstalling at
  * random to make the warning move.
  *
- * `skills.trust.reverify` is per-skill, so this fans out. Failures are
- * swallowed per skill: one unreadable directory must not abort the sweep, and
- * the reloaded list shows whatever did resolve.
+ * `skills.trust.reverify` is per-skill, so this fans out. Sequentially, not with
+ * `Promise.all`: that handler now runs the deep scanner, which spawns a Python
+ * subprocess per rescan, and this button's whole purpose is the case where every
+ * receipt is stale at once — parallel would launch one process per installed
+ * skill simultaneously. Sequential keeps a slow sweep slow instead of making it a
+ * thundering herd.
+ *
+ * Failures are swallowed per skill: one unreadable directory must not abort the
+ * sweep, and the reloaded list shows whatever did resolve.
  */
 function _wireSkillsSecurityRecheck(gridEl) {
   const btn = gridEl.querySelector('[data-skills-recheck]');
@@ -1883,9 +1889,11 @@ function _wireSkillsSecurityRecheck(gridEl) {
       const ids = (_skillsCache || [])
         .filter((s) => s && s.security && s.security.status)
         .map((s) => s.id);
-      await Promise.allSettled(
-        ids.map((id) => window.orkas.invoke('skills.trust.reverify', { skillId: id })),
-      );
+      for (const id of ids) {
+        try {
+          await window.orkas.invoke('skills.trust.reverify', { skillId: id });
+        } catch { /* one bad skill must not abort the sweep */ }
+      }
       await loadSkills(true);
     } catch {
       btn.textContent = original;
