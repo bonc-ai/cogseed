@@ -619,6 +619,38 @@ export async function resolveProjectScope(
   }
 }
 
+/** @ picker 作用域数据源：完整作用域（S∪B 决策树结果）+ 空间元数据。
+ *  scope = null → 全局可见（不过滤）；否则严格作用域 ids。
+ *  space = 绑定空间摘要（渲染层可显示空间名 / 折叠本体 tab 到该模板）。
+ *  任何失败（项目不存在/空间缺失/读错误）→ 降级 { scope: null, space: null }，绝不外抛。 */
+export interface ProjectScopeMeta {
+  scope: ProjectBindings | null;
+  space: { space_id: string; template_id?: string; name: string } | null;
+}
+
+export async function getProjectScopeMeta(
+  uid: string,
+  projectId: string | null | undefined,
+): Promise<ProjectScopeMeta> {
+  if (!projectId) return { scope: null, space: null };
+  try {
+    const scope = await resolveProjectScope(uid, projectId);
+    const project = await _readProject(uid, projectId);
+    if (!project?.space_id) return { scope, space: null };
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
+    const spaces = await import('./spaces');
+    const space = await spaces.getSpace(uid, project.space_id);
+    if (!space) return { scope, space: null };
+    return {
+      scope,
+      space: { space_id: space.space_id, name: space.name, ...(space.template_id ? { template_id: space.template_id } : {}) },
+    };
+  } catch (err) {
+    log.warn(`getProjectScopeMeta failed user=${uid} pid=${projectId}: ${(err as Error).message}`);
+    return { scope: null, space: null };
+  }
+}
+
 async function _mutateBindings(
   uid: string, projectId: string,
   fn: (b: ProjectBindings) => ProjectBindings,

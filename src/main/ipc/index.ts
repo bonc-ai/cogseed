@@ -1238,6 +1238,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
+  'projects.scope.resolve': async ({ projectId }, ctx) => {
+    if (projectId && !safeId(projectId)) throw new Error('invalid projectId');
+    const meta = await projects.getProjectScopeMeta(ctx.userId, projectId || null);
+    if (!meta.scope) return { ok: true, scope: null, space: meta.space };
+    const [agentList, skillList] = await Promise.all([
+      agents.listAgentSummaries(),
+      skills.listSkills(),
+    ]);
+    const agentById = new Map(agentList.map((a: any) => [a.agent_id, a]));
+    const skillById = new Map(skillList.map((s: any) => [s.id, s]));
+    return {
+      ok: true,
+      scope: {
+        agents: meta.scope.agents.map((id) => ({ id, name: (agentById.get(id) as any)?.name || id })),
+        skills: meta.scope.skills.map((id) => ({ id, name: (skillById.get(id) as any)?.name || id })),
+      },
+      space: meta.space,
+    };
+  },
+
   'projects.bindings.add': async ({ projectId, kind, id }, ctx) => {
     if (!safeId(projectId)) throw new Error('invalid projectId');
     if (typeof id !== 'string' || !id) throw new Error('invalid id');

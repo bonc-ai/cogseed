@@ -403,3 +403,46 @@ export async function resolveSpaceResourcesForUser(uid: string, space: Space): P
     agents: new Set(agents.map((a) => a.agent_id)),
   });
 }
+
+/**
+ * 二期「空间 = 角色」：空间内项目会话的角色画像自动注入。
+ * 项目绑空间 + 空间有模板 → 读模板文件（个人本体角色模板，唯一事实来源）的
+ * 有值字段，格式化为「当前角色画像」块，由 runner 注入 system prompt。
+ * 空坑不注入；任何失败（无项目/无空间/无模板/无值/读错误）→ ''（静默降级，
+ * 绝不外抛——注入失败 = 少一段上下文，不炸对话）。
+ */
+export async function formatRoleProfileForSystemPrompt(
+  uid: string,
+  projectId: string | null | undefined,
+): Promise<string> {
+  try {
+    if (!projectId) return '';
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
+    const projects = await import('./projects');
+    const meta = await projects.getProjectScopeMeta(uid, projectId);
+    const space = meta.space;
+    if (!space?.template_id) return '';
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
+    const tmpl = await import('./personal_ontology_template_files');
+    const text = tmpl.readTemplateFileText(uid, space.template_id);
+    if (!text) return '';
+    const content = tmpl.parseTemplateContent(text);
+    const lines: string[] = [];
+    for (const sec of content.sections) {
+      for (const [fieldName, values] of Object.entries(sec.fields)) {
+        if (!values.length) continue; // 空坑不注入
+        lines.push(`- ${sec.title} · ${fieldName}: ${values.map((v) => v.value).join('、')}`);
+      }
+    }
+    if (!lines.length) return ''; // 全空坑 → 不注入空画像
+    const tpl = getRoleTemplate(space.template_id);
+    const tplName = (tpl && tpl.name) || space.name || space.template_id;
+    return [
+      `## 当前角色画像（${tplName}）`,
+      `本空间绑定角色模板「${tplName}」；以下为该角色已记录的个人画像（来源：个人本体角色模板文件，随候选确认更新）：`,
+      ...lines,
+    ].join('\n');
+  } catch {
+    return ''; // 静默降级
+  }
+}
