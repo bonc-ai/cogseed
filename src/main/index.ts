@@ -209,7 +209,7 @@ function setTaskNotificationBadgeCount(count: number): void {
 }
 
 function createWindow(): BrowserWindow {
-  const dev = !app.isPackaged;
+  const dev = !app.isPackaged || !!process.env.ORKAS_ONBOARDING_ALWAYS; // Force dev mode when testing onboarding
   const restored = windowState.restoreWindowState();
   const win = new BrowserWindow({
     width: 1280,

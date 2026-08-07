@@ -1,0 +1,142 @@
+/**
+ * Claude Code session history reader.
+ *
+ * Reads `~/.claude/projects/<encoded-path>/*.jsonl` files to list
+ * past conversations for the onboarding "import sessions" step.
+ *
+ * **Constraints:**
+ *   - READ-ONLY. Never writes to Claude Code's native storage.
+ *   - Best-effort. If a file is malformed or inaccessible, skip it
+ *     rather than failing the whole scan.
+ *   - Privacy: only reads metadata (first user message, timestamp,
+ *     project path) for the session list; full transcript is NOT
+ *     read until the user explicitly selects a session to import.
+ *
+ * **Storage layout (Claude Code v2.x):**
+ *   `~/.claude/projects/<encoded-project-path>/<session-uuid>.jsonl`
+ *   Each line is a JSON object; relevant types:
+ *     - `type:"user"` → user message (`.message.content[0].text`)
+ *     - `type:"assistant"` → assistant reply
+ *     - `type:"queue-operation"` → internal event (ignored)
+ *   The `cwd` field (present on message lines) is the original project path.
+ */
+
+import * as os from 'node:os';
+import * as path from 'node:path';
+import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
+import { createLogger } from '../../logger';
+
+const log = createLogger('local-agents:claude-sessions');
+
+export interface ClaudeSessionSummary {
+  /** Session UUID (the jsonl filename stem). */
+  sessionId: string;
+  /** Decoded project path (from `cwd` field). */
+  projectPath: string;
+  /** First user message snippet (up to 100 chars). */
+  firstMessage: string;
+  /** ISO timestamp of the first user message. */
+  timestamp: string;
+  /** Full path to the jsonl file. */
+  filePath: string;
+}
+
+interface JsonlLine {
+  type?: string;
+  message?: { role?: string; content?: Array<{ type?: string; text?: string }> };
+  cwd?: string;
+  timestamp?: string;
+  sessionId?: string;
+  uuid?: string;
+}
+
+/** Scan `~/.claude/projects/` and return a list of session summaries.
+ *  Best-effort: directories/files that fail to read are logged and skipped. */
+export async function listClaudeSessions(): Promise<ClaudeSessionSummary[]> {
+  const projectsRoot = path.join(os.homedir(), '.claude', 'projects');
+  let projectDirs: string[] = [];
+
+  try {
+    const entries = await fsp.readdir(projectsRoot, { withFileTypes: true });
+    projectDirs = entries.filter(e => e.isDirectory()).map(e => path.join(projectsRoot, e.name));
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      log.info('~/.claude/projects not found — Claude Code not used or fresh install');
+      return [];
+    }
+    log.warn('failed to scan ~/.claude/projects', { error: String(err) });
+    return [];
+  }
+
+  const sessions: ClaudeSessionSummary[] = [];
+
+  for (const dir of projectDirs) {
+    let files: string[] = [];
+    try {
+      const entries = await fsp.readdir(dir, { withFileTypes: true });
+      files = entries.filter(e => e.isFile() && e.name.endsWith('.jsonl')).map(e => path.join(dir, e.name));
+    } catch (err) {
+      log.warn('failed to list jsonl files in project dir', { dir, error: String(err) });
+      continue;
+    }
+
+    for (const file of files) {
+      const summary = await _parseSessionSummary(file);
+      if (summary) sessions.push(summary);
+    }
+  }
+
+  // Sort newest first.
+  sessions.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  return sessions;
+}
+
+/** Parse the first user message from a jsonl file to build a summary.
+ *  Returns null if no valid user message is found or the file is malformed. */
+async function _parseSessionSummary(file: string): Promise<ClaudeSessionSummary | null> {
+  const sessionId = path.basename(file, '.jsonl');
+  let projectPath = '';
+  let firstMessage = '';
+  let timestamp = '';
+
+  try {
+    const content = await fsp.readFile(file, 'utf8');
+    const lines = content.split('\n').filter(l => l.trim());
+
+    for (const line of lines) {
+      let obj: JsonlLine;
+      try { obj = JSON.parse(line); }
+      catch { continue; }
+
+      if (obj.type === 'user' && obj.message?.role === 'user') {
+        let text: string | undefined;
+        const content = obj.message.content;
+
+        // New format (Claude Code 2.1.220+): content is a string
+        if (typeof content === 'string') {
+          text = content;
+        }
+        // Old format: content is an array of content blocks
+        else if (Array.isArray(content)) {
+          text = content.find(c => c.type === 'text')?.text;
+        }
+
+        if (text) {
+          firstMessage = text.slice(0, 100);
+          timestamp = obj.timestamp || '';
+          projectPath = obj.cwd || '';
+          break;
+        }
+      }
+    }
+  } catch (err) {
+    log.warn('failed to parse session file', { file, error: String(err) });
+    return null;
+  }
+
+  if (!firstMessage || !timestamp) return null;
+
+  return { sessionId, projectPath, firstMessage, timestamp, filePath: file };
+}
