@@ -503,3 +503,89 @@ describe('Feishu official event adapter', () => {
     expect(postAll).toMatchObject({ mentionPresent: true });
   });
 });
+
+describe('Feishu sender enrichment', () => {
+  it('fills user name and chat title once, then serves from cache', async () => {
+    const userGet = vi.fn(async () => ({ code: 0, data: { user: { name: 'Alice' } } }));
+    const chatGet = vi.fn(async () => ({ code: 0, data: { chat: { name: '项目群' } } }));
+    const client = {
+      request: vi.fn(async () => ({ code: 0, data: { open_id: 'ou_bot' } })),
+      contact: { v3: { user: { get: userGet } } },
+      im: { v1: { chat: { get: chatGet }, message: { create: vi.fn() } } },
+    };
+    const Client = vi.fn(function Client() { return client; });
+    const dispatcher = { register: vi.fn(function register() { return dispatcher; }) };
+    const EventDispatcher = vi.fn(function EventDispatcher() { return dispatcher; });
+    const WSClient = vi.fn(function WSClient() { return { start: vi.fn(async () => {}), close: vi.fn() }; });
+    vi.doMock('@larksuiteoapi/node-sdk', () => ({
+      AppType: { SelfBuild: 'SelfBuild' },
+      Client,
+      Domain: { Feishu: 'https://open.feishu.cn', Lark: 'https://open.larksuite.com' },
+      EventDispatcher,
+      LoggerLevel: { error: 'error' },
+      WSClient,
+    }));
+    const { FeishuAdapter } = await import('../../../src/main/features/messaging/adapters');
+    const adapter = new FeishuAdapter(feishuInstance(), {
+      appId: 'cli_1234567890abcdef',
+      appSecret: 'app-secret',
+    });
+    const base = {
+      platform: 'feishu_lark' as const,
+      instanceId: 'bot-1',
+      externalMessageId: 'm-1',
+      externalChatId: 'oc_1',
+      externalUserId: 'ou_1',
+      text: 'hello',
+      isGroup: true,
+      mentionPresent: true,
+      receivedAt: new Date().toISOString(),
+    };
+    const first = await (adapter as unknown as { enrichSenderInfo(envelope: unknown): Promise<unknown> }).enrichSenderInfo(base);
+    expect(first).toMatchObject({ externalUserName: 'Alice', externalChatTitle: '项目群' });
+    expect(userGet).toHaveBeenCalledTimes(1);
+    expect(chatGet).toHaveBeenCalledTimes(1);
+    const second = await (adapter as unknown as { enrichSenderInfo(envelope: unknown): Promise<unknown> }).enrichSenderInfo(base);
+    expect(userGet).toHaveBeenCalledTimes(1);
+    expect(chatGet).toHaveBeenCalledTimes(1);
+    expect(second).toMatchObject({ externalUserName: 'Alice', externalChatTitle: '项目群' });
+  });
+
+  it('degrades silently when identity lookups fail', async () => {
+    const client = {
+      request: vi.fn(async () => ({ code: 0, data: { open_id: 'ou_bot' } })),
+      contact: { v3: { user: { get: vi.fn(async () => { throw new Error('no permission'); }) } } },
+      im: { v1: { chat: { get: vi.fn(async () => { throw new Error('no permission'); }) }, message: { create: vi.fn() } } },
+    };
+    const Client = vi.fn(function Client() { return client; });
+    const dispatcher = { register: vi.fn(function register() { return dispatcher; }) };
+    const EventDispatcher = vi.fn(function EventDispatcher() { return dispatcher; });
+    const WSClient = vi.fn(function WSClient() { return { start: vi.fn(async () => {}), close: vi.fn() }; });
+    vi.doMock('@larksuiteoapi/node-sdk', () => ({
+      AppType: { SelfBuild: 'SelfBuild' },
+      Client,
+      Domain: { Feishu: 'https://open.feishu.cn', Lark: 'https://open.larksuite.com' },
+      EventDispatcher,
+      LoggerLevel: { error: 'error' },
+      WSClient,
+    }));
+    const { FeishuAdapter } = await import('../../../src/main/features/messaging/adapters');
+    const adapter = new FeishuAdapter(feishuInstance(), {
+      appId: 'cli_1234567890abcdef',
+      appSecret: 'app-secret',
+    });
+    const base = {
+      platform: 'feishu_lark' as const,
+      instanceId: 'bot-1',
+      externalMessageId: 'm-1',
+      externalChatId: 'oc_1',
+      externalUserId: 'ou_1',
+      text: 'hello',
+      isGroup: true,
+      mentionPresent: true,
+      receivedAt: new Date().toISOString(),
+    };
+    const result = await (adapter as unknown as { enrichSenderInfo(envelope: unknown): Promise<unknown> }).enrichSenderInfo(base);
+    expect(result).toMatchObject(base);
+  });
+});

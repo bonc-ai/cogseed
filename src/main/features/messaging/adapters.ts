@@ -628,6 +628,7 @@ export class FeishuAdapter implements MessagingCardAdapter {
   private processingReactions = new Map<string, string>();
   /** card click dedup: message + operator + action identity */
   private cardActionDedup = new Set<string>();
+  private readonly identityCache = new Map<string, { value: string; expiresAt: number }>();
 
   constructor(instance: MessagingInstance, secret: MessagingSecret) {
     if (!secret.appId || !secret.appSecret) throw new Error('Feishu app credentials missing');
@@ -678,7 +679,8 @@ export class FeishuAdapter implements MessagingCardAdapter {
           const delivery = await this.callbacks.resolveDelivery(reaction.messageId);
           if (!delivery) return {};
           const envelope = reactionEnvelope(this.instance, reaction, delivery);
-          void this.callbacks.onInbound(envelope).catch((error) => {
+          const enriched = await this.enrichSenderInfo(envelope);
+          void this.callbacks.onInbound(enriched).catch((error) => {
             log.warn('Feishu reaction dispatch failed', {
               instanceId: this.instance.id,
               error: logErrorSummary(error),
@@ -695,6 +697,71 @@ export class FeishuAdapter implements MessagingCardAdapter {
     });
   }
 
+  private readonly IDENTITY_CACHE_TTL_MS = 10 * 60 * 1000;
+  private readonly IDENTITY_CACHE_MAX = 512;
+
+  /** LRU-ish identity cache with a 10-minute TTL (mirrors Hermes'
+   * `_resolve_sender_name_from_api`). Failures are never cached. */
+  private cachedIdentity(key: string, load: () => Promise<string | null>): Promise<string | null> {
+    const now = Date.now();
+    const hit = this.identityCache.get(key);
+    if (hit && hit.expiresAt > now) return Promise.resolve(hit.value);
+    if (this.identityCache.size >= this.IDENTITY_CACHE_MAX) {
+      const oldest = this.identityCache.keys().next().value;
+      if (oldest !== undefined) this.identityCache.delete(oldest);
+    }
+    return load().then((value) => {
+      if (value !== null) {
+        this.identityCache.set(key, { value, expiresAt: Date.now() + this.IDENTITY_CACHE_TTL_MS });
+      }
+      return value;
+    });
+  }
+
+  private async resolveUserName(openId: string): Promise<string | null> {
+    return this.cachedIdentity(`user:${openId}`, async () => {
+      try {
+        const response = await this.client.contact?.v3?.user?.get?.({ path: { user_id: openId } }) as
+          | { code?: number; data?: { user?: { name?: string } } }
+          | undefined;
+        const name = response?.data?.user?.name;
+        return typeof name === 'string' && name.trim() ? name.trim() : null;
+      } catch {
+        return null;
+      }
+    });
+  }
+
+  private async resolveChatTitle(chatId: string): Promise<string | null> {
+    return this.cachedIdentity(`chat:${chatId}`, async () => {
+      try {
+        const response = await this.client.im?.v1?.chat?.get?.({ path: { chat_id: chatId } }) as
+          | { code?: number; data?: { chat?: { name?: string } } }
+          | undefined;
+        const name = response?.data?.chat?.name;
+        return typeof name === 'string' && name.trim() ? name.trim() : null;
+      } catch {
+        return null;
+      }
+    });
+  }
+
+  /** Fill readable sender/chat names onto an inbound envelope. Every lookup
+   * is optional and cached; failures keep the previous (id-only) state. */
+  private async enrichSenderInfo(envelope: InboundEnvelope): Promise<InboundEnvelope> {
+    if (envelope.platform !== 'feishu_lark') return envelope;
+    let next = envelope;
+    if (!next.externalUserName) {
+      const name = await this.resolveUserName(next.externalUserId);
+      if (name) next = { ...next, externalUserName: name };
+    }
+    if (next.isGroup && !next.externalChatTitle) {
+      const title = await this.resolveChatTitle(next.externalChatId);
+      if (title) next = { ...next, externalChatTitle: title };
+    }
+    return next;
+  }
+
   /** Processing indicator around inbound dispatch: add a reaction before the
    * agent runs, remove it when the message is rejected/duplicated or when the
    * reply for it is delivered. Rejection or dispatch failure adds a failure
@@ -705,8 +772,9 @@ export class FeishuAdapter implements MessagingCardAdapter {
     if (!callbacks) return;
     const messageId = envelope.externalMessageId;
     await this.addProcessingReaction(messageId);
+    const enriched = await this.enrichSenderInfo(envelope);
     try {
-      const result = await callbacks.onInbound(envelope);
+      const result = await callbacks.onInbound(enriched);
       if (!result.accepted) {
         await this.removeProcessingReaction(messageId);
         // Merged burst chunks are consumed, not failures: no failure marker.
