@@ -49,7 +49,7 @@ import {
 } from '../storage';
 import { invalidateSkills as invalidateCoreAgentSkills } from '../model/core-agent/skill-registry';
 import { readDisabledSets, setSkillEnabled } from './component_enabled';
-import { partitionSkillsByTrust } from './skill_reverify';
+import { partitionSkillsByTrustDeep } from './skill_reverify';
 import { listReceipts, type SecurityReceipt } from './skill_trust';
 import { scanSkillDir, type SentryScanResult } from './security/sentry-adapter';
 import { findOuterTagRanges } from '../util/markdown-prose-code';
@@ -845,7 +845,7 @@ function _overlaySkillEnabled(list: SkillListing[]): SkillListing[] {
  * entries come back unannotated — the same fail-open direction the load gate
  * uses, and one that cannot make a working skill look broken.
  */
-function _overlaySkillSecurity(list: SkillListing[]): SkillListing[] {
+async function _overlaySkillSecurity(list: SkillListing[]): Promise<SkillListing[]> {
   const marketplaceIds = list.filter((s) => s.source === 'marketplace').map((s) => s.id);
   if (!marketplaceIds.length) return list;
 
@@ -853,7 +853,7 @@ function _overlaySkillSecurity(list: SkillListing[]): SkillListing[] {
   let withheldById: Map<string, string>;
   let receiptById: Map<string, SecurityReceipt>;
   try {
-    const { withheld } = partitionSkillsByTrust(uid, marketplaceIds);
+    const { withheld } = await partitionSkillsByTrustDeep(uid, marketplaceIds);
     withheldById = new Map(withheld.map((w) => [w.skillId, w.reason || 'unknown']));
     receiptById = new Map(listReceipts(uid).map((r) => [r.skillId, r]));
   } catch {

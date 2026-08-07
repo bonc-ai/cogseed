@@ -1618,7 +1618,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
    */
   'skills.trust.reverify': async ({ skillId } = {}, ctx) => {
     if (!safeId(skillId)) throw new Error('invalid skill id');
-    return { ok: true, result: skillReverify.reverifySkill(ctx.userId, skillId) };
+    return { ok: true, result: await skillReverify.reverifySkillDeep(ctx.userId, skillId) };
   },
 
   /** Receipts on record, for a trust/audit surface. */

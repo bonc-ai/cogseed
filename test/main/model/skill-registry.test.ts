@@ -530,7 +530,7 @@ describe('skill-registry › trust withholding', () => {
     writeSkill(builtinDir(), 'clean', 'clean', 'C');
     tamperSkillAfterReceipt('tampered');
     const { blockedSkillIds } = await loadRegistry();
-    const blocked = blockedSkillIds(['tampered', 'clean']);
+    const blocked = await blockedSkillIds(['tampered', 'clean']);
     expect(blocked.has('tampered')).toBe(true);
     expect(blocked.has('clean')).toBe(false);
   });
@@ -547,9 +547,9 @@ describe('skill-registry › trust withholding', () => {
     tamperSkillAfterReceipt('tampered');
     const { blockedSkillIds } = await loadRegistry();
     // Narrow first call: populates the cache generation with 'clean' only.
-    expect(blockedSkillIds(['clean']).size).toBe(0);
+    expect((await blockedSkillIds(['clean'])).size).toBe(0);
     // Wider second call, same mtime → cache hit. 'tampered' must still be checked.
-    expect(blockedSkillIds(['clean', 'tampered']).has('tampered')).toBe(true);
+    expect((await blockedSkillIds(['clean', 'tampered'])).has('tampered')).toBe(true);
   });
 
   // Fail-open direction, locked. The load path runs on every prompt build; a

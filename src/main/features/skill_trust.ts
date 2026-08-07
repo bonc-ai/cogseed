@@ -67,6 +67,20 @@ export interface SecurityReceipt {
    * missing level is treated as "not notable" rather than assumed severe.
    */
   topLevel?: 'EXTREME' | 'MEDIUM' | 'LOW';
+  /**
+   * Which rule set produced this verdict.
+   *
+   * `deep` means the full skill-sentry ruleset ran; `local` means only the
+   * built-in regex subset did, because the scanner was unavailable. The two are
+   * not equivalent — a payload in `tests/` is blocked by the former and passes
+   * the latter — so a `local` receipt is weaker evidence and must be
+   * distinguishable rather than presented as an equally trustworthy pass.
+   *
+   * Optional: receipts written before this field existed lack it, and are
+   * treated as `local` (the conservative reading, since deep scanning at
+   * re-verification time did not exist when they were written).
+   */
+  scanner?: 'deep' | 'local';
   scannedAt: string;
   /**
    * 0-100 score from the deep scanner, when one ran.
@@ -158,6 +172,12 @@ export function readReceipt(uid: string, skillId: string): SecurityReceipt | nul
     ...(raw.topLevel === 'EXTREME' || raw.topLevel === 'MEDIUM' || raw.topLevel === 'LOW'
       ? { topLevel: raw.topLevel }
       : {}),
+    // Must be read back, not just written: the deep re-verification path decides
+    // whether to reuse a receipt by checking this field, so dropping it here
+    // would make every receipt look local-only and force a full rescan on every
+    // single check. Anything other than the literal 'deep' is treated as local —
+    // receipts predating this field then read as the weaker, conservative value.
+    ...(raw.scanner === 'deep' || raw.scanner === 'local' ? { scanner: raw.scanner } : {}),
     scannedAt: String(raw.scannedAt || ''),
   };
 }
@@ -171,6 +191,7 @@ export function writeReceipt(
     violationCount: number;
     topRule?: string;
     topLevel?: 'EXTREME' | 'MEDIUM' | 'LOW';
+    scanner?: 'deep' | 'local';
     securityScore?: number;
     scannerVersion?: string;
     rulesetVersion?: string;
@@ -188,6 +209,7 @@ export function writeReceipt(
     violationCount: input.violationCount,
     ...(input.topRule ? { topRule: input.topRule } : {}),
     ...(input.topLevel ? { topLevel: input.topLevel } : {}),
+    ...(input.scanner ? { scanner: input.scanner } : {}),
     ...(typeof input.securityScore === 'number' ? { securityScore: input.securityScore } : {}),
     ...(input.scannerVersion ? { scannerVersion: input.scannerVersion } : {}),
     ...(input.rulesetVersion ? { rulesetVersion: input.rulesetVersion } : {}),

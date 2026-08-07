@@ -7,7 +7,7 @@ import { mateRuntimeSessionToolResultsDir, userRoot } from '../../../../paths';
 // on purpose: this runs inside the isolated Runtime worker, and the registry's
 // module graph reaches `#core-agent`, which must stay dynamic-import-only
 // (PC/CLAUDE.md §Boundary). `skill_reverify` depends only on quality + paths.
-import { isSkillTrustedForLoad } from '../../../skill_reverify';
+import { isSkillTrustedForLoadDeep } from '../../../skill_reverify';
 import { normalizeRuntimePath } from './permissions';
 import type { RuntimeToolCallContext, RuntimeToolResult, RuntimeToolResultOptions } from './file-tools';
 
@@ -93,7 +93,7 @@ export async function runRuntimeSkillTool(
     // name, so there is no name-resolution hole to close as there is for the
     // free-form bash command path.
     try {
-      const trust = isSkillTrustedForLoad(ctx.userId, skillId);
+      const trust = await isSkillTrustedForLoadDeep(ctx.userId, skillId);
       if (!trust.trusted) {
         return formatError(
           'E_RUNTIME_SKILL_WITHHELD',

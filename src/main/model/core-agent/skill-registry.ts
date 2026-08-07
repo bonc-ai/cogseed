@@ -54,7 +54,7 @@ import {
 import { enabledPackageSkillRoots, packageSkillRoots, readPackagesRegistry } from '../../features/packages';
 import { companionSkillsRootIfPopulated, companionPackageForDir } from '../../features/package_skills';
 import { getActiveUserId } from '../../features/users';
-import { partitionSkillsByTrust } from '../../features/skill_reverify';
+import { partitionSkillsByTrustDeep } from '../../features/skill_reverify';
 import { getLanguage, getGlobalSkillRootsEnabled } from '../../features/config';
 import { descriptionLang, getCurrentLang } from '../../i18n';
 // `pickDescription` is loaded lazily — see CLAUDE.md §3: any static import
@@ -823,7 +823,7 @@ function _marketplaceStamp(uid: string): string {
   }
 }
 
-function _withholdUntrustedSpecs<T extends { id: string }>(specs: T[]): T[] {
+async function _withholdUntrustedSpecs<T extends { id: string }>(specs: T[]): Promise<T[]> {
   let uid: string;
   try { uid = getActiveUserId(); } catch { return specs; }
   if (!uid) return specs;
@@ -840,7 +840,7 @@ function _withholdUntrustedSpecs<T extends { id: string }>(specs: T[]): T[] {
   const unknown = specs.map((s) => s.id).filter((id) => !verdicts.has(id));
   if (unknown.length) {
     try {
-      const { withheld } = partitionSkillsByTrust(uid, unknown);
+      const { withheld } = await partitionSkillsByTrustDeep(uid, unknown);
       const blockedNow = new Set(withheld.map((w) => w.skillId));
       for (const id of unknown) verdicts.set(id, !blockedNow.has(id));
     } catch {
@@ -865,10 +865,10 @@ function _withholdUntrustedSpecs<T extends { id: string }>(specs: T[]): T[] {
  * Fails open — an empty set on error — for the same reason
  * `_withholdUntrustedSpecs` does.
  */
-export function blockedSkillIds(skillIds: readonly string[]): Set<string> {
+export async function blockedSkillIds(skillIds: readonly string[]): Promise<Set<string>> {
   if (!skillIds.length) return new Set();
   const probe = skillIds.map((id) => ({ id }));
-  const allowed = new Set(_withholdUntrustedSpecs(probe).map((s) => s.id));
+  const allowed = new Set((await _withholdUntrustedSpecs(probe)).map((s) => s.id));
   return new Set(skillIds.filter((id) => !allowed.has(id)));
 }
 
@@ -884,7 +884,7 @@ export function blockedSkillIds(skillIds: readonly string[]): Set<string> {
  */
 export async function getSystemPromptBlock(opts: SystemPromptBlockOptions = {}): Promise<string> {
   const loader = await getLoader();
-  const specs = _withholdUntrustedSpecs(loader.list());
+  const specs = await _withholdUntrustedSpecs(loader.list());
   const disabled = opts.disabledIds ? new Set(opts.disabledIds) : null;
   const filterDisabled = (list: typeof specs) =>
     disabled && disabled.size ? list.filter((s) => !disabled.has(s.id)) : list;
@@ -1144,7 +1144,7 @@ export async function listSkillsForBridge(uid: string): Promise<BridgeSkillRow[]
   // Trust-withheld before anything else: the CLI agent is as much a consumer of
   // this listing as the in-process prompt is, so a tampered skill must not
   // reach it either.
-  let specs: SkillSpec[] = _withholdUntrustedSpecs(loader.list().filter((s) => !s.ownerAgent));
+  let specs: SkillSpec[] = await _withholdUntrustedSpecs(loader.list().filter((s) => !s.ownerAgent));
   const rankByRoot = new Map<string, number>();
   const openDirs = _computeOpenTierDirs(uid);
   const openLoader = await getOpenLoader(openDirs);
@@ -1311,7 +1311,7 @@ export async function listAgentOwnedSkillIds(uid: string, agentId: string): Prom
  */
 export async function listSkillSpecs(opts: { forAgentId?: string } = {}): Promise<SkillSpec[]> {
   const loader = await getLoader();
-  let specs = _withholdUntrustedSpecs(loader.list());
+  let specs = await _withholdUntrustedSpecs(loader.list());
   if (opts.forAgentId === undefined) return specs;
   const forAgentId = opts.forAgentId.trim();
   specs = specs.filter((s) => !s.ownerAgent || s.ownerAgent === forAgentId);
