@@ -119,6 +119,7 @@ describe('settings tabs module', () => {
     expect(style).toContain('.messaging-preferences-card');
     expect(messagingSettings).toContain("view: 'panel'");
     expect(messagingSettings).not.toContain("view: 'catalog'");
+    expect(messagingSettings).toContain('messaging.feishu_draft.create');
     expect(messagingSettings).toContain("messaging.feishu_qr.start");
     expect(messagingSettings).toContain("messaging.feishu_qr.status");
     expect(messagingSettings).toContain("messaging.feishu_qr.cancel");
@@ -140,6 +141,16 @@ describe('settings tabs module', () => {
     const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
     expect(source).toContain('cancelQr({ silent: true, render: false })');
     expect(source).toContain('state.selectedChannel = key');
+  });
+
+  it('removes the manual App ID/Secret binding path from the Feishu panel', () => {
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    expect(source).not.toContain('manualLinkSection');
+    expect(source).not.toContain('linkWithCredentials');
+    expect(source).not.toContain('messaging.use_existing');
+    expect(source).not.toContain('renderPanelPlaceholder');
+    expect(source).toContain('renderFeishuPanel');
+    expect(source).toContain('renderInstanceList');
   });
 
   it('binds clicks and toggles the matching settings pane', () => {

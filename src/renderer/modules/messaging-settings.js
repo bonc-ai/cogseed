@@ -129,13 +129,6 @@
     return state.instances.find((instance) => instance.id === state.selectedInstanceId) || null;
   }
 
-  function instanceForChannel(channel) {
-    if (!channel) return null;
-    return state.instances
-      .filter((instance) => channelForInstance(instance) === channel.key)
-      .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))[0] || null;
-  }
-
   function instancesForChannel(channel) {
     if (!channel) return [];
     return state.instances
@@ -492,83 +485,122 @@
     row.appendChild(scan);
     section.appendChild(row);
     renderQrPanel(instance, section);
-    const manual = manualLinkSection(instance);
-    if (manual) section.appendChild(manual);
     return section;
   }
 
-  function manualLinkSection(instance) {
-    const qrActive = qrIsVisibleFor(instance) || qrIsPending();
-    if (instance.hasCredentials === true) {
-      const bound = el('div', 'messaging-manual-link');
-      const boundRow = el('div', 'messaging-manual-bound');
-      boundRow.append(icon('check-circle', 'messaging-status-icon'), el('span', '', labelFor('messaging.connection_bound', '')));
+  function renderInstanceList(channel) {
+    const section = el('section', 'messaging-config-card messaging-instance-card');
+    const heading = el('div', 'messaging-config-card-heading');
+    heading.appendChild(el('h3', '', labelFor('messaging.instance.title', '')));
+    section.appendChild(heading);
+    const instances = instancesForChannel(channel);
+    if (!instances.length) {
+      section.appendChild(el('p', 'messaging-instance-empty', labelFor('messaging.instance.empty', '')));
+      return section;
+    }
+    const list = el('div', 'messaging-instance-list');
+    for (const instance of instances) {
+      const row = el('div', `messaging-instance-row is-${statusForInstance(instance)}`);
+      const active = state.selectedInstanceId === instance.id;
+      if (active) row.classList.add('is-selected');
+      const copy = el('div', 'messaging-instance-copy');
+      copy.appendChild(el('strong', '', instance.displayName || instance.id));
+      copy.appendChild(el('span', 'messaging-instance-state', statusLabel(statusForInstance(instance))));
+      row.appendChild(copy);
+      row.appendChild(switchControl(instance));
       const unbind = el('button', 'btn messaging-secondary-button', labelFor('messaging.unbind', ''));
       unbind.type = 'button';
-      unbind.disabled = state.updating || qrActive;
+      unbind.disabled = state.updating;
       unbind.addEventListener('click', () => void unbindInstance(instance, unbind));
-      boundRow.appendChild(unbind);
-      bound.appendChild(boundRow);
-      return bound;
+      row.appendChild(unbind);
+      row.addEventListener('click', () => {
+        state.selectedInstanceId = instance.id;
+        renderCurrent();
+      });
+      list.appendChild(row);
     }
-    if (qrActive) return null;
-    const section = el('div', 'messaging-manual-link');
-    const heading = el('div', 'messaging-config-card-heading');
-    heading.appendChild(el('h4', '', labelFor('messaging.use_existing', '')));
-    heading.appendChild(el('p', '', labelFor('messaging.use_existing_sub', '')));
-    const appIdInput = document.createElement('input');
-    appIdInput.type = 'text';
-    appIdInput.className = 'form-input';
-    appIdInput.placeholder = 'cli_xxxxxxxxxxxxxxxx';
-    appIdInput.autocomplete = 'off';
-    appIdInput.spellcheck = false;
-    appIdInput.setAttribute('aria-label', labelFor('messaging.app_id', ''));
-    const appSecretInput = document.createElement('input');
-    appSecretInput.type = 'password';
-    appSecretInput.className = 'form-input';
-    appSecretInput.placeholder = '••••••••••••••••';
-    appSecretInput.autocomplete = 'off';
-    appSecretInput.spellcheck = false;
-    appSecretInput.setAttribute('aria-label', labelFor('messaging.app_secret', ''));
-    const link = el('button', 'btn messaging-link-button', labelFor('messaging.link', ''));
-    link.type = 'button';
-    link.disabled = state.updating;
-    link.addEventListener('click', () => void linkWithCredentials(instance, appIdInput, appSecretInput, link));
-    const rows = el('div', 'messaging-manual-fields');
-    rows.append(appIdInput, appSecretInput, link);
-    section.append(heading, rows);
+    section.appendChild(list);
     return section;
   }
 
-  async function linkWithCredentials(instance, appIdInput, appSecretInput, button) {
-    if (!instance || !instance.id || button.disabled) return;
-    const appId = String(appIdInput.value || '').trim();
-    const appSecret = String(appSecretInput.value || '').trim();
-    if (!/^cli_[0-9a-fA-F]{16}$/.test(appId)) {
-      setNotice(labelFor('messaging.app_id_invalid', ''), 'error');
-      appIdInput.focus();
-      return;
+  function renderFeishuPanel(channel) {
+    const wrapper = el('div', 'messaging-panel-body');
+    wrapper.appendChild(renderInstanceList(channel));
+    const instances = instancesForChannel(channel);
+    const instance = instances.find((item) => item.id === state.selectedInstanceId) || instances[0] || null;
+    if (instance) {
+      wrapper.appendChild(associationCard(instance));
+      const responseSelect = selectControl([
+        { value: 'text', label: labelFor('messaging.response_text', '') },
+        { value: 'streaming_card', label: labelFor('messaging.response_streaming_card', '') },
+      ], instance.responseMode || 'text', state.updating);
+      responseSelect.addEventListener('change', () => {
+        if (responseSelect.value !== (instance.responseMode || 'text')) {
+          void updateInstance({ responseMode: responseSelect.value }, responseSelect);
+        }
+      });
+      const workspaceSelect = selectControl([
+        { value: 'all', label: labelFor('messaging.workspace_all', '') },
+      ], 'all', state.updating);
+      workspaceSelect.addEventListener('change', () => {
+        void updateInstance({ workspace: { type: 'all' } }, workspaceSelect);
+      });
+      wrapper.appendChild(preferencesCard(responseSelect, workspaceSelect));
+      const deletion = card('messaging.delete_title', 'messaging.delete_subtitle', 'messaging-delete-card');
+      const deleteButton = el('button', 'btn btn-danger messaging-delete-button', labelFor('messaging.delete', ''));
+      deleteButton.type = 'button';
+      deleteButton.disabled = state.updating;
+      deleteButton.addEventListener('click', () => void deleteInstance(instance, deleteButton));
+      deletion.appendChild(deleteButton);
+      wrapper.appendChild(deletion);
+    } else {
+      const empty = el('div', 'messaging-config-card messaging-empty-card');
+      const scan = el('button', 'btn messaging-scan-button', labelFor('messaging.scan', ''));
+      scan.type = 'button';
+      scan.appendChild(icon('qr-code', 'messaging-action-icon'));
+      scan.addEventListener('click', () => void startQrForChannel(channel));
+      empty.appendChild(scan);
+      wrapper.appendChild(empty);
+      renderQrPanelForChannel(wrapper, channel);
     }
-    if (!appSecret) {
-      setNotice(labelFor('messaging.app_secret_required', ''), 'error');
-      appSecretInput.focus();
-      return;
-    }
-    button.disabled = true;
-    state.updating = true;
+    return wrapper;
+  }
+
+  function renderQrPanelForChannel(cardRoot, channel) {
+    const instance = instancesForChannel(channel)
+      .find((candidate) => candidate.id === state.qr.instanceId) || null;
+    if (!instance) return;
+    renderQrPanel(instance, cardRoot);
+  }
+
+  async function startQrForChannel(channel) {
+    if (!channel || state.openingChannel) return;
+    const operation = ++state.operation;
+    state.openingChannel = channel.key;
     setNotice('', '');
     renderCurrent();
     try {
-      const result = await invoke('messaging.update', { instanceId: instance.id, secret: { appId, appSecret } });
-      if (!result || !result.instance || typeof result.instance.id !== 'string') {
-        throw new Error(result?.error || labelFor('messaging.link_failed', ''));
+      let instance = instancesForChannel(channel)[0] || null;
+      if (!instance) {
+        const result = await invoke('messaging.feishu_draft.create', {
+          feishuTenantBrand: channel.feishuTenantBrand,
+          displayName: labelFor(`messaging.channel.${channel.key}.title`, channel.key === 'lark' ? 'Lark' : '飞书'),
+        });
+        instance = result && result.instance;
       }
-      state.instances = state.instances.map((candidate) => candidate.id === result.instance.id ? result.instance : candidate);
-      setNotice(labelFor('messaging.link_success', ''), 'success');
+      if (!instance || typeof instance.id !== 'string' || !instance.id) throw new Error(labelFor('messaging.open_failed', ''));
+      if (state.operation !== operation) return;
+      state.instances = state.instances.some((candidate) => candidate.id === instance.id)
+        ? state.instances.map((candidate) => candidate.id === instance.id ? instance : candidate)
+        : [...state.instances, instance];
+      state.selectedInstanceId = instance.id;
+      state.openingChannel = '';
+      renderCurrent();
+      await startQr(instance);
     } catch (error) {
-      setNotice(errorMessage(error, labelFor('messaging.link_failed', '')), 'error');
-    } finally {
-      state.updating = false;
+      if (state.operation !== operation) return;
+      state.openingChannel = '';
+      setNotice(errorMessage(error, labelFor('messaging.open_failed', '')), 'error');
       renderCurrent();
     }
   }
@@ -617,58 +649,6 @@
       state.updating = false;
       renderCurrent();
     }
-  }
-
-  function detailPage(instance) {
-    const channel = channelForKey(channelForInstance(instance)) || channelForKey('feishu');
-    const page = el('section', 'messaging-detail-page');
-
-    const header = el('header', 'messaging-detail-header');
-    const brand = el('div', `messaging-brand-icon is-${channel.key}`);
-    brand.appendChild(icon(channel.icon, 'messaging-brand-glyph'));
-    const titleWrap = el('div', 'messaging-detail-title-wrap');
-    titleWrap.appendChild(el('h2', '', instance.displayName || labelFor('messaging.new_title', '')));
-    const stateRow = el('div', `messaging-detail-state is-${statusForInstance(instance)}`);
-    stateRow.append(icon(statusForInstance(instance) === 'connected' ? 'check-circle' : 'clock', 'messaging-status-icon'));
-    stateRow.appendChild(el('span', '', statusLabel(statusForInstance(instance))));
-    titleWrap.appendChild(stateRow);
-    header.append(brand, titleWrap, switchControl(instance));
-    page.appendChild(header);
-
-    page.appendChild(associationCard(instance));
-
-    const responseMode = instance.responseMode || 'text';
-    const responseSelect = selectControl([
-      { value: 'text', label: labelFor('messaging.response_text', '') },
-      { value: 'streaming_card', label: labelFor('messaging.response_streaming_card', '') },
-    ], responseMode, state.updating);
-    responseSelect.setAttribute('aria-label', labelFor('messaging.response_title', ''));
-    responseSelect.addEventListener('change', () => {
-      if (responseSelect.value !== responseMode) {
-        void updateInstance({ responseMode: responseSelect.value }, responseSelect);
-      }
-    });
-
-    const workspaceSelect = selectControl([
-      { value: 'all', label: labelFor('messaging.workspace_all', '') },
-    ], 'all', state.updating);
-    workspaceSelect.setAttribute('aria-label', labelFor('messaging.workspace_title', ''));
-    workspaceSelect.addEventListener('change', () => {
-      void updateInstance({ workspace: { type: 'all' } }, workspaceSelect);
-    });
-    page.appendChild(preferencesCard(responseSelect, workspaceSelect));
-
-    const deletion = card('messaging.delete_title', 'messaging.delete_subtitle', 'messaging-delete-card');
-    const deleteButton = el('button', 'btn btn-danger messaging-delete-button', labelFor('messaging.delete', ''));
-    deleteButton.type = 'button';
-    deleteButton.disabled = state.updating;
-    deleteButton.appendChild(icon('trash', 'messaging-action-icon'));
-    deleteButton.addEventListener('click', () => void deleteInstance(instance, deleteButton));
-    deletion.appendChild(deleteButton);
-    page.appendChild(deletion);
-
-    appendNotice(page);
-    return page;
   }
 
   function preferencesCard(responseControl, workspaceControl) {
@@ -732,17 +712,13 @@
     const channel = channelForKey(state.selectedChannel) || channelForKey('feishu');
     const panel = el('section', `messaging-panel is-${channel.key}`);
     panel.appendChild(renderPanelHeader(channel));
-    // Task 8 追加: else if (channel.platform === 'wecom') panel.appendChild(renderWecomPanel(channel));
+    if (channel.platform === 'feishu_lark') {
+      panel.appendChild(renderFeishuPanel(channel));
+    }
     // Task 7 追加: else if (channel.platform === 'telegram') panel.appendChild(renderTelegramPanel(channel));
-    panel.appendChild(renderPanelPlaceholder(channel));
+    // Task 8 追加: else if (channel.platform === 'wecom') panel.appendChild(renderWecomPanel(channel));
     appendNotice(panel);
     return panel;
-  }
-
-  function renderPanelPlaceholder(channel) {
-    const wrapper = el('div', 'messaging-panel-body');
-    wrapper.appendChild(card('messaging.association_title', 'messaging.association_sub'));
-    return wrapper;
   }
 
   function renderPanelHeader(channel) {
