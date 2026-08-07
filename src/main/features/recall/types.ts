@@ -16,4 +16,12 @@ export type RecallJsonRecordUpdater = (
   current: RecallJsonRecord | undefined,
 ) => RecallJsonRecord | Promise<RecallJsonRecord>;
 
-export type { CognitionSourceInput, CognitionSourceKind, CognitionSourceRef } from './source-service';
+export type {
+  CognitionSourceInput,
+  CognitionSourceKind,
+  CognitionSourceRef,
+  CognitionSourceScope,
+  CognitionSourceSubtype,
+  CognitionSourceType,
+  LegacyCognitionSourceKind,
+} from './source-service';

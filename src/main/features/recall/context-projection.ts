@@ -1,9 +1,13 @@
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+
 import { genId12 } from '../../storage';
 import { listAbilityAssets, readAbilityAsset } from './asset-service';
+import { recallJsonRecordPath } from './paths';
 import { listWorkspaceAssetReferences } from './workspace-refs';
 import { readRecallJsonRecord, updateRecallJsonRecord, writeRecallJsonRecord } from './store';
 import type { RecallJsonRecord } from './types';
-import type { CognitionSourceRef } from './source-service';
+import { normalizeCognitionSourceRefs, type CognitionSourceRef } from './source-service';
 
 export type ProjectionAuthorization = 'user_confirmed' | 'workspace_policy' | 'not_required';
 export type ContextProjectionStatus = 'preview' | 'confirmed' | 'expired' | 'revoked';
@@ -35,6 +39,17 @@ export interface ProjectionInput {
   expiresAt?: string;
 }
 
+export interface ListContextProjectionsQuery {
+  workspaceId?: string;
+  status?: ContextProjectionStatus;
+  includeExpired?: boolean;
+  limit?: number;
+}
+
+function projectionsDirectory(userId: string): string {
+  return path.dirname(recallJsonRecordPath(userId, 'projections', 'placeholder'));
+}
+
 function normalizeTerm(value: unknown, field: string, max = 500): string {
   if (typeof value !== 'string') throw new Error(`invalid projection ${field}`);
   const text = value.replace(/\s+/g, ' ').trim();
@@ -49,7 +64,7 @@ function scopeIncludes(scope: string, purpose: string): boolean {
 
 function asProjection(value: RecallJsonRecord): ContextProjectionRecord {
   if (!Array.isArray(value.assetIds) || !Array.isArray(value.sourceRefs) || !Array.isArray(value.omittedRefs) || typeof value.taskRunId !== 'string' || typeof value.purpose !== 'string' || typeof value.authorization !== 'string' || typeof value.status !== 'string' || typeof value.createdAt !== 'string') throw new Error('malformed context projection');
-  return value as ContextProjectionRecord;
+  return { ...value, sourceRefs: normalizeCognitionSourceRefs(value.sourceRefs) } as ContextProjectionRecord;
 }
 
 export async function buildRecallView(userId: string, input: ProjectionInput): Promise<{ assetIds: string[]; sourceRefs: CognitionSourceRef[]; omittedRefs: OmittedAssetRef[] }> {
@@ -101,6 +116,37 @@ export async function readContextProjection(userId: string, projectionId: string
   const raw = await readRecallJsonRecord(userId, 'projections', projectionId);
   if (!raw) throw new Error('context projection not found');
   return asProjection(raw);
+}
+
+export async function listContextProjections(
+  userId: string,
+  query: ListContextProjectionsQuery = {},
+): Promise<ContextProjectionRecord[]> {
+  const limit = Math.max(1, Math.min(100, Math.floor(Number(query.limit) || 20)));
+  let names: string[];
+  try {
+    names = await fs.readdir(projectionsDirectory(userId));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  const records = await Promise.all(names
+    .filter((name) => name.endsWith('.json'))
+    .map((name) => readRecallJsonRecord(userId, 'projections', name.slice(0, -5))));
+  const now = Date.now();
+  return records
+    .filter((record): record is RecallJsonRecord => Boolean(record))
+    .map(asProjection)
+    .map((projection) => (
+      projection.status === 'preview' && projection.expiresAt && Date.parse(projection.expiresAt) <= now
+        ? { ...projection, status: 'expired' as const }
+        : projection
+    ))
+    .filter((projection) => query.workspaceId === undefined || projection.workspaceId === query.workspaceId)
+    .filter((projection) => query.status === undefined || projection.status === query.status)
+    .filter((projection) => query.includeExpired === true || projection.status !== 'expired')
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .slice(0, limit);
 }
 
 export async function confirmContextProjection(userId: string, projectionId: string): Promise<ContextProjectionRecord> {

@@ -553,6 +553,17 @@ describe('contexts › listContextsTree', () => {
     const sub = tree.find((n) => n.name === 'sub')!;
     expect((sub.children || []).map((n) => n.name)).toEqual(['b.pdf']);
   });
+
+  it('can list an explicit user without changing the active user', async () => {
+    const otherRoot = path.join(tmpDir, 'u2', 'cloud', 'contexts');
+    fs.mkdirSync(otherRoot, { recursive: true });
+    fs.writeFileSync(path.join(otherRoot, 'other.md'), '# other');
+    writeFile('active.md', '# active');
+    const c = await loadContexts();
+
+    expect(c.listContextsTreeForUser('u2').map((node) => node.name)).toEqual(['other.md']);
+    expect(c.listContextsTree().map((node) => node.name)).toEqual(['active.md']);
+  });
 });
 
 describe('contexts › frontmatter helpers', () => {

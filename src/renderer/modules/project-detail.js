@@ -264,6 +264,9 @@ function _bindProjectDetailTabs() {
         if (_projectDetailActiveTab === 'auto') {
           _ensureProjectAutoTabLoaded(_projectDetailPid);
         }
+        if (_projectDetailActiveTab === 'workbench' && typeof loadProjectWorkbench === 'function') {
+          loadProjectWorkbench(_projectDetailPid);
+        }
       });
       tab.addEventListener('keydown', (event) => {
         if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;

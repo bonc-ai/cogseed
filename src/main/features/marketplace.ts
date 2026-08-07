@@ -811,9 +811,10 @@ async function _installMarketplaceAgentLocked(
     await persistQualityReport({
       uid: getActiveUserId(), kind: 'agent', id: agentId, report: preReport,
     });
-    if (!preReport.ok && opts.force !== true) {
-      throw _qualityInstallError('agent', agentId, preReport);
-    }
+    // `report.ok === false` means an EXTREME violation, and EXTREME is not
+    // user-overridable (see `quality/README.md`) — `force` must not reach it.
+    // See `_assertQualityGatePassed` for why force is deliberately ignored here.
+    _assertQualityGatePassed('agent', agentId, preReport);
     // 4. Now materialize the agent: cache content → `<uid>/local/marketplace/agents/<id>/`.
     //    `_install.json` is a version pin read by `marketplace_reconcile.ts::_agentNeedsPull`
     //    on other devices to skip a re-pull when their local copy already matches the manifest's
@@ -935,9 +936,9 @@ async function _installMarketplaceSkillLocked(
     await persistQualityReport({
       uid: getActiveUserId(), kind: 'skill', id: skillId, report: skillReport,
     });
-    if (!skillReport.ok && opts.force !== true) {
+    if (!skillReport.ok) {
       await fsp.rm(target, { recursive: true, force: true });
-      throw _qualityInstallError('skill', skillId, skillReport);
+      _assertQualityGatePassed('skill', skillId, skillReport);
     }
 
     const skillContentSha = sha256OfFile(path.join(target, 'SKILL.md'));
@@ -1009,6 +1010,31 @@ function _qualityInstallError(
     violations: blockingViolations,
   };
   return e;
+}
+
+/**
+ * Throw if the validator found an EXTREME violation.
+ *
+ * Deliberately takes no `force` parameter. `ValidationReport.ok === false`
+ * means "at least one EXTREME violation", and EXTREME is defined as
+ * non-overridable in `quality/README.md`:
+ *
+ *   > There is intentionally NO override for EXTREME. If a real use case
+ *   > triggers a red flag, restructure the spec to remove the pattern.
+ *
+ * The install `force` flag remains meaningful for everything else it gates
+ * (dependency-install propagation, MEDIUM advisories that never blocked in
+ * the first place) — it just cannot buy past a red flag. Previously
+ * `opts.force === true` skipped this check, so the renderer's "Install
+ * anyway" button could install content the validator had rejected as
+ * explicitly malicious. Keep this as a single chokepoint so the invariant
+ * is enforced in one place rather than re-derived at each call site.
+ */
+function _assertQualityGatePassed(
+  kind: 'agent' | 'skill', id: string, report: QualityReport,
+): void {
+  if (report.ok) return;
+  throw _qualityInstallError(kind, id, report);
 }
 
 async function _copyDirSkippingCacheMeta(src: string, dst: string): Promise<void> {

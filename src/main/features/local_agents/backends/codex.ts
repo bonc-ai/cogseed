@@ -26,6 +26,7 @@
  * `thread/start` so the user's task still runs (matching multica).
  */
 
+import * as path from 'node:path';
 import { createLogger } from '../../../logger.js';
 import { logErrorSummary } from '../../../util/log-redact.js';
 import {
@@ -38,6 +39,7 @@ import {
   executionContextEnv,
   armKillWatchdog,
   LineSplitter,
+  FileChangeFallbackTracker,
 } from './base.js';
 
 /** codex notifications that are pure metadata noise — we keep them
@@ -95,6 +97,10 @@ export const codexBackend: LocalBackend = {
     const seenTurnIds = new Set<string>();
     let collectedText = '';
     let turnError: string | undefined;
+    // Fallback file-change detection for writes made via exec_command (or
+    // any tool) that codex's own `turn/diff/updated` never reports — see
+    // FileChangeFallbackTracker's doc comment in backends/base.ts.
+    const fileChangeFallback = new FileChangeFallbackTracker(opts.cwd);
     // Latest usage snapshot from `thread/tokenUsage/updated` —
     // each notification is a cumulative state (not an increment),
     // so we just overwrite. Threaded into the done event below.
@@ -300,7 +306,10 @@ export const codexBackend: LocalBackend = {
 
       if (method === 'turn/diff/updated') {
         const files = extractCodexDiffFiles(typeof params?.diff === 'string' ? params.diff : '');
-        if (files.length) opts.onEvent({ type: 'file-change', paths: files });
+        if (files.length) {
+          fileChangeFallback.noteReported(files.map(f => path.resolve(opts.cwd, f)));
+          opts.onEvent({ type: 'file-change', paths: files });
+        }
         opts.onEvent({
           type: 'log',
           level: 'debug',
@@ -385,6 +394,11 @@ export const codexBackend: LocalBackend = {
       if (turnCompleted) return;
       turnCompleted = true;
       if (aborted) turnAborted = true;
+      // Fallback file-change sweep: catches writes codex made via
+      // exec_command (or any tool) that never surfaced through
+      // `turn/diff/updated`. Best-effort — errors must never block turn
+      // shutdown (FileChangeFallbackTracker.sweep already swallows them).
+      if (!aborted) fileChangeFallback.sweep(e => opts.onEvent(e));
       // Close stdin so codex shuts down cleanly. The `close` handler
       // below resolves the outer promise once the process exits.
       try { child.stdin.end(); } catch { /* */ }

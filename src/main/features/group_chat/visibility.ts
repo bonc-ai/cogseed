@@ -162,6 +162,15 @@ export interface GroupMessage {
      * the source conversation rather than the conversation displaying it. */
     source_cid?: string;
   }>;
+  /** Durable receipt for an explicit user teaching interaction whose memory
+   * write succeeded. The linked candidate remains reviewable and revocable. */
+  teaching_receipts?: Array<{
+    id: string;
+    summary: string;
+    scope: 'personal' | 'project' | 'agent';
+    status: 'active' | 'revoked';
+    candidate_ids: string[];
+  }>;
   /** Commander-requested marketplace installs. The model can search the
    * official marketplace and request a user decision, but the install only
    * happens after the human clicks the rendered card. */

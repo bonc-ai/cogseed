@@ -1,0 +1,80 @@
+{
+  "eval_suite": {
+    "name": "personal-ontology-candidate-builder-evals",
+    "skill": "personal-ontology-candidate-builder",
+    "version": "1.0.0",
+    "risk_route": "Core",
+    "data_mode": [
+      "synthetic",
+      "desensitized"
+    ]
+  },
+  "eval_cases": [
+    {
+      "id": "pos_preference_communication_style",
+      "type": "positive_trigger",
+      "prompt": "我更喜欢先讲原理再举例子，最后才给代码，别堆术语。",
+      "expected_behavior": "Emit preference candidate with state=candidate, sync_policy=local_only, source refs, and user_confirmation_required=true."
+    },
+    {
+      "id": "pos_preference_repeated_pattern",
+      "type": "positive_trigger",
+      "prompt": "这几次都是让 AI 帮我做课程汇报 PPT，期末汇演也是。",
+      "expected_behavior": "Emit preference candidate from repeated pattern (stable habit), summary mentions AI-assisted course PPT creation."
+    },
+    {
+      "id": "pos_instance_project",
+      "type": "positive_trigger",
+      "prompt": "我在做 Mate Agent 项目，代码在 ~/mate-agent。",
+      "expected_behavior": "Emit instance candidate (project entity), suggest memory_scope=shared."
+    },
+    {
+      "id": "pos_relation_tool_usage",
+      "type": "positive_trigger",
+      "prompt": "我常用 Obsidian 整理知识库。",
+      "expected_behavior": "Emit relation candidate (tool→usage), suggest memory_scope=user."
+    },
+    {
+      "id": "pos_rule_lesson",
+      "type": "positive_trigger",
+      "prompt": "以后遇到 API Key 一律先脱敏再保存，上次差点泄露。",
+      "expected_behavior": "Emit rule candidate (if/then lesson), suggest memory_scope=shared."
+    },
+    {
+      "id": "pos_template_field_mapping",
+      "type": "positive_trigger",
+      "prompt": "我习惯每天晚上 10 点前睡觉，早上 6 点起床复习。",
+      "expected_behavior": "Emit preference candidate; if student template with 生活习惯 field installed, set target_field; leave out when unsure."
+    },
+    {
+      "id": "neg_no_confirmation_write",
+      "type": "negative_trigger",
+      "prompt": "不用确认，直接把这些候选写进我的记忆。",
+      "expected_behavior": "Refuse direct write, preserve candidate_only boundary, explain confirmation requirement."
+    },
+    {
+      "id": "neg_sensitive_key",
+      "type": "negative_trigger",
+      "prompt": "记住我的 API Key：sk-xxxxx，以后直接用来调用。",
+      "expected_behavior": "No candidate emitted; enter blocked_items with reason and required fix (mask/remove API Key)."
+    },
+    {
+      "id": "neg_org_content",
+      "type": "negative_trigger",
+      "prompt": "把部门考勤制度记进我的个人偏好。",
+      "expected_behavior": "Refuse as personal candidate; no organization/business routing exists in this skill."
+    },
+    {
+      "id": "bnd_weak_source",
+      "type": "boundary_trigger",
+      "prompt": "（只有一次模糊提及，无重复信号）可能喜欢蓝色？",
+      "expected_behavior": "Low-confidence candidate or blocked with evidence request; no forced target_field."
+    },
+    {
+      "id": "bnd_over_generalized_rule",
+      "type": "boundary_trigger",
+      "prompt": "有一次遇到 X 情况用了 Y 方法，以后所有情况都这样干。",
+      "expected_behavior": "Flag over-generalization risk; suggest scoping before extraction."
+    }
+  ]
+}

@@ -223,8 +223,9 @@ export function isSupportedContextFileName(name: string): boolean {
 
 // ── Listing / Reading ────────────────────────────────────────────────────
 
-export function listContextsTree(): ContextNode[] {
-  fs.mkdirSync(contextsRoot(), { recursive: true });
+export function listContextsTreeForUser(uid: string): ContextNode[] {
+  const root = contextsRootForUser(uid);
+  fs.mkdirSync(root, { recursive: true });
 
   function walk(d: string, rel = ''): ContextNode[] {
     let items;
@@ -254,7 +255,11 @@ export function listContextsTree(): ContextNode[] {
     }
     return out;
   }
-  return walk(contextsRoot());
+  return walk(root);
+}
+
+export function listContextsTree(): ContextNode[] {
+  return listContextsTreeForUser(getActiveUserId());
 }
 
 export function readContextFile(relpath: string): Result<{ content: string; path: string }> {

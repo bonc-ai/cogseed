@@ -36,4 +36,52 @@ describe('RecallView and ContextProjection', () => {
     const expired = await projection.previewContextProjection('user-a', { taskRunId: 'task-b', workspaceId: 'workspace-a', purpose: 'review', authorization: 'user_confirmed', expiresAt: '2000-01-01T00:00:00.000Z' });
     await expect(projection.confirmContextProjection('user-a', expired.id)).rejects.toThrow(/expired/i);
   });
+
+  it('preserves legacy source kinds when reading an existing projection', async () => {
+    const { projection } = await modules();
+    const store = await import('../../../../src/main/features/recall/store');
+    await store.writeRecallJsonRecord('user-a', 'projections', 'proj-legacy', {
+      schemaVersion: 1,
+      ownerId: 'user-a',
+      id: 'proj-legacy',
+      taskRunId: 'task-legacy',
+      purpose: 'review',
+      authorization: 'user_confirmed',
+      assetIds: [],
+      sourceRefs: [
+        { kind: 'message', id: 'msg-legacy' },
+        { kind: 'context', id: 'ctx-legacy' },
+        { kind: 'memory', id: 'mem-legacy' },
+      ],
+      omittedRefs: [],
+      status: 'preview',
+      createdAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    const read = await projection.readContextProjection('user-a', 'proj-legacy');
+    expect(read.sourceRefs).toEqual([
+      expect.objectContaining({ kind: 'message', subtype: 'message', id: 'msg-legacy', taxonomyVersion: 1 }),
+      expect.objectContaining({ kind: 'context', subtype: 'context_file', id: 'ctx-legacy', taxonomyVersion: 1 }),
+      expect.objectContaining({ kind: 'memory', subtype: 'teaching', id: 'mem-legacy', taxonomyVersion: 1, degraded: true, reason: 'legacy_memory_untraceable' }),
+    ]);
+  });
+
+  it('lists projections newest first and derives expired preview state without rewriting records', async () => {
+    const { projection } = await modules();
+    await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-old', purpose: 'review', expiresAt: '2000-01-01T00:00:00.000Z',
+    });
+    const current = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-current', workspaceId: 'workspace-a', purpose: 'review',
+    });
+
+    await expect(projection.listContextProjections('user-a')).resolves.toEqual([
+      expect.objectContaining({ id: current.id, status: 'preview' }),
+    ]);
+    await expect(projection.listContextProjections('user-a', { includeExpired: true })).resolves.toEqual([
+      expect.objectContaining({ id: current.id, status: 'preview' }),
+      expect.objectContaining({ taskRunId: 'task-old', status: 'expired' }),
+    ]);
+    await expect(projection.listContextProjections('user-a', { workspaceId: 'workspace-a' })).resolves.toHaveLength(1);
+  });
 });
