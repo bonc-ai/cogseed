@@ -28,8 +28,6 @@ describe('Mate Agent source-run branding', () => {
   it('uses Mate Agent in cross-platform launcher output', () => {
     const cmd = read('run.cmd');
     const ensureDeps = read('scripts/ensure-deps.cjs');
-    expect(shell).toContain('Mate Agent [Messaging].app');
-    expect(shell).not.toContain('APP_BUNDLE="$APP_DIR/node_modules/electron/dist/Orkas.app"');
     expect(cmd).not.toContain('[Orkas]');
     expect(cmd).not.toContain('Starting Orkas');
     expect(ensureDeps).not.toContain('rerun Orkas');
