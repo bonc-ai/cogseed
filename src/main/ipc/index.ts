@@ -80,6 +80,7 @@ import * as ttsAuth from '../features/tts_auth';
 import * as permissions from '../features/permissions';
 import * as appConfig from '../features/config';
 import * as onboardingState from '../features/onboarding_state';
+import * as journeyState from '../features/journey_state';
 import * as cognitionExtraction from '../features/cognition_extraction';
 import { detectAll } from '../features/local_agents/registry';
 import * as avatars from '../features/avatars';
@@ -2605,6 +2606,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
     return personalOntologyCandidates.rejectCandidates(ctx.userId, candidateIds, reason);
   },
+  // onboarding 第 4 步：把抽取出的候选批量入池（不确认，等勾选后走 confirm）。
+  // 只做忠实映射与写入，返回实际写入的 candidate_ids 供前端记账。
+  'personalOntology.candidates.addFromOnboarding': async ({ candidates } = {}, ctx) => {
+    if (!Array.isArray(candidates)) throw new Error('candidates must be array');
+    return personalOntologyCandidates.addCandidates(ctx.userId, candidates);
+  },
 
   // ── Personal Ontology Groups ("记忆分组") ──
   'personalOntology.groups.list': async (_payload, ctx) => {
@@ -3246,6 +3253,16 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   }),
   'prefs.setOnboarding': async ({ completed }: { completed?: unknown } = {}) => ({
     completed: onboardingState.setOnboardingCompleted(completed !== false),
+  }),
+
+  // 60-second journey marker (machine-local, NOT cloud-synced — stored
+  // under WS_ROOT/journey-state.json, shared across uids). The renderer's
+  // journey.js checks `completed` and only starts the journey when it is false.
+  'prefs.getJourney': async () => ({
+    completed: journeyState.getJourneyCompleted(),
+  }),
+  'prefs.setJourney': async ({ completed }: { completed?: unknown } = {}) => ({
+    completed: journeyState.setJourneyCompleted(completed !== false),
   }),
 
   // ── Cognition extraction from sessions (onboarding) ──

@@ -41,6 +41,10 @@ function _csEsc(s) {
 let _csObBuilt = false;
 let _csRolePicked = null;
 let _csToastTimer = 0;
+// 本轮抽取写入候选池后拿到的 candidate_id 列表（按渲染顺序对应卡片）。
+// 第 4 步完成时用它把「未勾选的」候选走 reject 从池里丢弃；勾选的原样留在
+// 候选池当待确认候选，之后在 Recall 候选审核页人工确认入库。
+let _csCandidateIds = [];
 
 function _csToast(msg) {
   const t = document.getElementById('cs-ob-toast');
@@ -471,7 +475,27 @@ async function _csExtractCognitions() {
       return;
     }
 
-    _csRenderCandidates(allCandidates);
+    // 抽取成功后，先把候选忠实写入候选池（不确认），拿回 candidate_ids。
+    // 第 4 步完成时：勾选的原样留在候选池当待确认候选，之后在 Recall 候选
+    // 审核页人工确认入库；未勾选的走 reject 从池里丢弃，不带进 App。
+    // 写池失败是真失败，按诚实状态直接报错，不伪装成「已提取」。
+    let candidateIds = [];
+    try {
+      const addRes = await window.orkas.invoke('personalOntology.candidates.addFromOnboarding', {
+        candidates: allCandidates,
+      });
+      candidateIds = (addRes && addRes.candidate_ids) || [];
+    } catch (err) {
+      const msg = (err && err.message) || String(err);
+      _obLog.warn('failed to add onboarding candidates to pool', { error: msg });
+      candList.innerHTML =
+        '<div class="cs-state err">候选写入待确认池失败：' + _csEsc(msg) +
+        '<br><br>已成功从会话中提取到候选，但保存到候选池这一步出错，请重试「开始提取」。</div>';
+      if (btn) btn.disabled = false;
+      return;
+    }
+
+    _csRenderCandidates(allCandidates, candidateIds);
   } catch (err) {
     const msg = (err && err.message) || String(err);
     _obLog.warn('cognition extraction failed', { error: msg });
@@ -481,9 +505,12 @@ async function _csExtractCognitions() {
   }
 }
 
-function _csRenderCandidates(candidates) {
+function _csRenderCandidates(candidates, candidateIds) {
   const candList = document.getElementById('cs-cand-list');
   if (!candList) return;
+
+  // 记住本轮写入池的 id（按渲染顺序对应），第 4 步完成时按勾选确认。
+  _csCandidateIds = Array.isArray(candidateIds) ? candidateIds : [];
 
   const typeLabels = {
     personal: '个人偏好',
@@ -496,8 +523,9 @@ function _csRenderCandidates(candidates) {
     const typeLabel = typeLabels[c.suggestedType] || c.suggestedType;
     const summary = c.summary ? `<b>${_csEsc(c.summary)}</b>` : `<b>候选认知 ${idx + 1}</b>`;
     const uncertainty = c.uncertainty ? `<div class="cs-meta">不确定性：${_csEsc(c.uncertainty)}</div>` : '';
+    const cid = _csCandidateIds[idx] || '';
     return `
-      <div class="cs-cand" data-cand-idx="${idx}">
+      <div class="cs-cand" data-cand-idx="${idx}" data-candidate-id="${_csEsc(cid)}">
         <input type="checkbox" />
         <div class="cs-cand-body">
           <div class="cs-cand-head">
@@ -545,6 +573,46 @@ function _csPickRole(role) {
 async function _csFinish() {
   const btn = document.getElementById('cs-ob-finish');
   if (btn) btn.disabled = true;
+
+  // 第 4 步落地：勾选的候选原样留在候选池里，成为「待确认候选」，之后在
+  // Recall 候选审核页人工确认入库；未勾选的从候选池里丢弃（reject），不带进
+  // App。两种动作都不自动落记忆——落记忆只在候选审核页确认时才发生。
+  // 全部候选此前已在抽取成功时写入了池（见 _csExtractCognitions 的
+  // addFromOnboarding），这里只需丢弃未勾选的、保留勾选的。
+  const allRows = Array.from(document.querySelectorAll('#cs-cand-list .cs-cand'));
+  const rejectIds = [];
+  for (const row of allRows) {
+    const cb = row.querySelector('input[type="checkbox"]');
+    if (cb && cb.checked) continue; // 勾选的留在池里，什么都不做
+    const candidateId = row.getAttribute('data-candidate-id') || '';
+    if (candidateId) rejectIds.push(candidateId);
+  }
+
+  let rejectedCount = 0;
+  if (rejectIds.length) {
+    try {
+      const res = await window.orkas.invoke('personalOntology.candidates.rejectBatch', {
+        candidateIds: rejectIds,
+        reason: 'onboarding: 用户未勾选，丢弃',
+      });
+      rejectedCount =
+        res && typeof res.rejectedCount === 'number' ? res.rejectedCount : rejectIds.length;
+      _obLog.info('onboarding unchecked candidates discarded', { rejected: rejectedCount });
+    } catch (err) {
+      // 丢弃失败——诚实告知，不静默略过。未丢弃的仍留在候选池，用户可在候选
+      // 审核页自行处理，不阻断收尾。
+      const msg = (err && err.message) || String(err);
+      _obLog.warn('failed to discard onboarding candidates', { error: msg });
+      _csToast('部分候选丢弃失败（仍留在候选池，可在 Recall 候选审核页处理）');
+    }
+  }
+
+  const keptCount = allRows.length - rejectIds.length;
+  if (keptCount > 0) {
+    _csToast('已保留 ' + keptCount + ' 条候选，可在 Recall 候选审核页确认');
+    _obLog.info('onboarding candidates kept as pending', { kept: keptCount });
+  }
+
   try {
     await window.orkas.invoke('prefs.setOnboarding', { completed: true });
     _obLog.info('onboarding completed and persisted');
@@ -557,6 +625,13 @@ async function _csFinish() {
   document.body.classList.remove('cs-onboarding-active');
   const shell = document.getElementById('cs-onboarding');
   if (shell) shell.style.display = 'none';
+
+  // Trigger 60-second journey after onboarding completes.
+  if (window.csJourney && typeof window.csJourney.start === 'function') {
+    setTimeout(() => {
+      void window.csJourney.start();
+    }, 800); // Small delay to let onboarding UI fade out.
+  }
 }
 
 function _csBuild() {
