@@ -2245,7 +2245,6 @@
   "settings.task_notifications.sub": "当 Mate Agent 不在前台时，在任务完成、失败或需要输入时发送系统通知。",
   "settings.task_notifications.title": "任务通知",
   "settings.task_notifications.toggle": "启用",
-  "settings.title": "设置",
   "settings.tts.active_tag": "当前生效",
   "settings.tts.add": "+ 添加语音合成 Key",
   "settings.tts.add_failed": "添加失败",

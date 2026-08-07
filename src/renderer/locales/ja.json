@@ -2107,7 +2107,6 @@
   "settings.task_notifications.sub": "Mate Agent がフォアグラウンドにないとき、タスクの完了、失敗、または入力が必要になった際にシステム通知を送信します。",
   "settings.task_notifications.title": "タスク通知",
   "settings.task_notifications.toggle": "有効にする",
-  "settings.title": "設定",
   "settings.tts.active_tag": "有効",
   "settings.tts.add": "+ 音声合成 Key を追加",
   "settings.tts.add_failed": "追加に失敗しました",

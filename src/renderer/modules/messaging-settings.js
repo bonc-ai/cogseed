@@ -1120,11 +1120,9 @@
         visual.appendChild(icon(channel.icon, 'messaging-menu-item-glyph'));
         row.appendChild(visual);
         row.appendChild(el('span', 'messaging-menu-item-name', labelFor(`messaging.channel.${channel.key}.title`, channel.key)));
-        if (group === 'open') {
-          const status = el('span', `messaging-menu-item-status is-${bound ? 'bound' : 'empty'}`);
-          status.appendChild(el('span', '', labelFor(
-            bound ? 'messaging.status.bound' : 'messaging.status.unbound', '',
-          )));
+        if (group === 'open' && bound) {
+          const status = el('span', 'messaging-menu-item-status is-bound');
+          status.appendChild(el('span', '', labelFor('messaging.status.bound', '')));
           row.appendChild(status);
         }
         if (group === 'open' && !row.disabled) row.addEventListener('click', () => selectChannel(channel.key));

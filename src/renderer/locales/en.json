@@ -2245,7 +2245,6 @@
   "settings.task_notifications.sub": "When Mate Agent isn't in the foreground, send a system notification when a task completes, fails, or needs your input.",
   "settings.task_notifications.title": "Task notifications",
   "settings.task_notifications.toggle": "Enable",
-  "settings.title": "Settings",
   "settings.tts.active_tag": "Active",
   "settings.tts.add": "+ Add speech key",
   "settings.tts.add_failed": "Add failed",

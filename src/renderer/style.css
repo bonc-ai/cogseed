@@ -12880,25 +12880,6 @@ body.model-not-configured .main-content { flex-direction: column; }
   line-height: 1.5;
 }
 /* P1 — Page header: bottom border + flex-end alignment. */
-.settings-header {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  padding-bottom: 16px;
-  margin-bottom: 16px;
-  border-bottom: 1px solid var(--border);
-}
-.settings-heading {
-  min-width: 0;
-}
-.settings-header h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  color: var(--text);
-}
 .settings-sub {
   color: var(--muted);
   font-size: 12.5px;

@@ -2107,7 +2107,6 @@
   "settings.task_notifications.sub": "Quando o Mate Agent não estiver em primeiro plano, envie uma notificação do sistema quando uma tarefa for concluída, falhar ou precisar da sua resposta.",
   "settings.task_notifications.title": "Notificações de tarefas",
   "settings.task_notifications.toggle": "Ativar",
-  "settings.title": "Configurações",
   "settings.tts.active_tag": "Ativo",
   "settings.tts.add": "+ Adicionar tecla de fala",
   "settings.tts.add_failed": "Falha ao adicionar",
