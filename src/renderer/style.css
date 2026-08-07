@@ -18671,3 +18671,12 @@ body.model-not-configured .main-content { flex-direction: column; }
   border-radius: 8px;
   background: rgba(37, 99, 235, 0.08);
 }
+
+/* ── 工作空间详情 · 本体 tab（二期 D5：角色画像按来源项目过滤）── */
+.spaces-onto-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 2px 0 12px; }
+.spaces-onto-field { margin: 0 0 10px; }
+.spaces-onto-field-name { font-weight: 600; font-size: 13px; margin-bottom: 4px; color: var(--text-1, #222); }
+.spaces-onto-value { font-size: 13px; line-height: 1.7; color: var(--text-2, #555); }
+.spaces-onto-value .spaces-onto-src { color: var(--muted, #999); font-size: 12px; margin-left: 4px; }
+.spaces-onto-value .spaces-onto-proj { color: var(--primary, #2563eb); font-size: 12px; margin-left: 4px; }
+.memory-group-field-project { color: var(--primary, #2563eb); font-size: 12px; margin-left: 4px; }

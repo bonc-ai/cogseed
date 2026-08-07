@@ -45,6 +45,8 @@
   let _detail = null;          // 当前详情 space_id | null（null = 广场）
   let _detailTab = 'projects'; // 'projects' | 'resources' | 'ontology'
   let _projects = [];          // 项目列表（详情页用）
+  let _ontoFilter = 'all';     // 本体 tab 按来源项目过滤：'all' | project_id
+  let _detailRenderSeq = 0;    // 详情页异步渲染并发防护
   let _loaded = false;
 
   // ── data ─────────────────────────────────────────────────────────────────
@@ -286,18 +288,47 @@
     );
   }
 
-  function _renderDetailOntology(tpl) {
+  async function _renderDetailOntology(tpl, space) {
     if (!tpl) {
       return _detailSection(_t('spaces.tab_ontology', '本体'), `<div class="agents-detail-desc is-empty">${_t('spaces.ontology_none', '未套模板：本空间记忆为自由文本，不受字段限制')}</div>`);
     }
-    const groups = (tpl.preset_groups || []).map((g) => `
-      <div class="spaces-onto-group">
-        <div class="spaces-onto-group-title">${escapeHtml(g.title)}</div>
-        <div class="spaces-onto-fields">${(g.fields || []).map((f) => `<span class="spaces-res-chip static">${escapeHtml(f.name)}${f.isRelation ? ' →' : ''}</span>`).join('') || '<span class="muted">—</span>'}</div>
-      </div>`).join('');
+    // 二期 D5：读模板文件真实字段值（含来源项目标记），按项目过滤
+    let fieldRows = [];
+    let projectIds = [];
+    try {
+      const groupsRes = await _invoke('personalOntology.groups.list');
+      const g = (groupsRes.groups || []).find((x) => x.template_id === space.template_id);
+      if (g) {
+        const fieldsRes = await _invoke('personalOntology.groups.fields.list', { groupId: g.group_id });
+        const fields = (fieldsRes && fieldsRes.ok !== false && Array.isArray(fieldsRes.fields)) ? fieldsRes.fields : [];
+        fieldRows = fields.filter((f) => (f.values || []).length);
+        const seen = new Set();
+        fieldRows.forEach((f) => (f.values || []).forEach((v) => { if (v && v.project) seen.add(v.project); }));
+        projectIds = Array.from(seen);
+      }
+    } catch (_) { /* 模板文件未安装/读取失败 → 降级静态字段名 */ }
+
+    const projName = (pid) => {
+      const p = _projects.find((x) => x.project_id === pid);
+      return p ? p.name : pid;
+    };
+    const chips = [
+      `<button type="button" class="marketplace-chip${_ontoFilter === 'all' ? ' is-active' : ''}" data-onto-filter="all">${_t('spaces.chip_all', '全部')}</button>`,
+      ...projectIds.map((pid) => `<button type="button" class="marketplace-chip${_ontoFilter === pid ? ' is-active' : ''}" data-onto-filter="${escapeHtml(pid)}">${escapeHtml(projName(pid))}</button>`),
+    ].join('');
+
+    const fieldsHtml = fieldRows.length
+      ? fieldRows.map((f) => {
+        const values = (f.values || []).filter((v) => _ontoFilter === 'all' || (v && v.project === _ontoFilter));
+        if (!values.length) return '';
+        const lines = values.map((v) => `<div class="spaces-onto-value"><span>${escapeHtml(v.value)}</span><span class="spaces-onto-src">[${escapeHtml(v.source)}]</span>${v.project ? `<span class="spaces-onto-proj">@${escapeHtml(projName(v.project))}</span>` : ''}</div>`).join('');
+        return `<div class="spaces-onto-field"><div class="spaces-onto-field-name">${escapeHtml(f.name)}</div>${lines}</div>`;
+      }).join('')
+      : `<div class="agents-detail-desc is-empty">${_t('spaces.ontology_empty', '模板字段还没有值：在空间项目里提炼并确认候选后，这里会按角色模板字段展示')}</div>`;
+
     return _detailSection(
-      _t('spaces.ontology_label', '本空间按角色模板记录（一期静态展示，候选路由二期接入）'),
-      `<div class="spaces-onto-groups">${groups}</div>`,
+      _t('spaces.ontology_label', '角色画像（来源项目可过滤）'),
+      `<div class="spaces-onto-chips">${chips}</div><div class="spaces-onto-groups">${fieldsHtml}</div>`,
     );
   }
 
@@ -328,13 +359,16 @@
     );
   }
 
-  function _renderDetail() {
+  async function _renderDetail() {
+    const seq = ++_detailRenderSeq;
     const view = document.getElementById('spaces-view');
     const space = _space();
     if (!space) { _detail = null; _renderGallery(); return; }
     const tpl = _templates.find((t) => t.template_id === space.template_id) || null;
     const tplName = tpl ? tpl.name : (space.template_name || _t('spaces.no_template', '未选模板'));
     const icon = escapeHtml(space.icon || '🧩');
+    const ontologyHtml = await _renderDetailOntology(tpl, space);
+    if (seq !== _detailRenderSeq) return; // 过期渲染丢弃（chips 快速切换时旧 fetch 不覆盖）
 
     view.innerHTML = `
       <div class="agents-grid-view">
@@ -356,7 +390,7 @@
           ${_renderDetailAgents(tpl)}
           ${_renderDetailResources(space)}
           ${_renderDetailProjects(space)}
-          ${_renderDetailOntology(tpl)}
+          ${ontologyHtml}
         </div>
       </div>`;
 
@@ -383,6 +417,13 @@
       el.addEventListener('click', () => _removeResource(space, el.dataset.kind, el.dataset.id));
     });
     document.getElementById('spaces-prune-btn')?.addEventListener('click', () => _pruneInvalid(space));
+    // 本体 tab 按来源项目过滤 chips
+    document.querySelectorAll('[data-onto-filter]').forEach((el) => {
+      el.addEventListener('click', () => {
+        _ontoFilter = el.dataset.ontoFilter || 'all';
+        _renderDetail();
+      });
+    });
   }
 
   // ── actions ──────────────────────────────────────────────────────────────
@@ -427,7 +468,7 @@
   async function _refreshDetail() {
     await _loadData();
     await _loadProjects();
-    _renderDetail();
+    await _renderDetail();
   }
 
   async function _createProjectInSpace(space) {
