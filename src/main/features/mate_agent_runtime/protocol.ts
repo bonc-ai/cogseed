@@ -49,6 +49,11 @@ export interface RuntimeRunRequest {
   working_dir?: string;
   read_only_roots?: string[];
   writable_roots?: string[];
+  /** Trusted capability grants derived by the main process from the persisted
+   *  Mate task/session (never self-declared by the worker or the model). The
+   *  tool runner filters its catalog by these; the host router re-validates
+   *  against the persisted session independently. */
+  capabilities?: string[];
 }
 
 export interface RuntimeCancelRequest {
@@ -68,10 +73,21 @@ export interface RuntimeHelloResponse {
   capabilities: string[];
 }
 
+/** Capability grants a Runtime run can carry. Only `messaging.proactive`
+ *  exists today; it enables the Commander-only Feishu/Lark send tools. */
+export const RUNTIME_CAPABILITIES = Object.freeze(['messaging.proactive'] as const);
+
+export type RuntimeCapability = (typeof RUNTIME_CAPABILITIES)[number];
+
+export function isRuntimeCapability(value: string): value is RuntimeCapability {
+  return (RUNTIME_CAPABILITIES as readonly string[]).includes(value);
+}
+
 export const RUNTIME_HOST_TOOL_NAMES = Object.freeze([
   'office_read', 'office_create', 'office_edit', 'office_render',
   'browser_open', 'browser_snapshot', 'browser_click', 'browser_type', 'browser_screenshot',
   'mate_delegate', 'mate_tasks', 'mate_cancel', 'mate_retry_step', 'mate_skip_step', 'mate_resume_workflow', 'mate_workflow',
+  'messaging_list_targets', 'messaging_send',
 ] as const);
 
 export type RuntimeHostToolName = typeof RUNTIME_HOST_TOOL_NAMES[number];
@@ -293,6 +309,13 @@ export function normalizeRuntimeRunRequest(uid: string, raw: unknown, opts: Runt
     const normalized = normalizeFilePath(uid, workingDir, opts.allowedRoots);
     if (normalized.ok === false) return { ok: false, code: normalized.code, error: normalized.error };
   }
+  const capabilities = (raw as any).capabilities;
+  if (capabilities !== undefined) {
+    if (!Array.isArray(capabilities) || capabilities.length > 8
+      || capabilities.some((item) => typeof item !== 'string' || !isRuntimeCapability(item))) {
+      return fail('E_RUNTIME_INVALID_REQUEST', 'runtime capabilities must be a bounded array of known capability names');
+    }
+  }
 
   const readOnlyRoots = Array.from(new Set([...context.roots, ...attachments.roots]));
   const request: RuntimeRunRequest = {
@@ -312,6 +335,7 @@ export function normalizeRuntimeRunRequest(uid: string, raw: unknown, opts: Runt
     request.writable_roots = [request.working_dir];
   }
   if (readOnlyRoots.length) request.read_only_roots = readOnlyRoots;
+  if (capabilities?.length) request.capabilities = [...capabilities] as string[];
   return { ok: true, request };
 }
 

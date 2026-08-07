@@ -6,6 +6,8 @@ import { mateBrowserAdapter } from './browser-adapter';
 import { createMateCoordinator, type MateCoordinator } from './coordinator';
 import { mateRuntimeController } from './runtime-controller';
 import { mateControlService } from './mate-control-service';
+import { resolveRuntimeCapabilities } from './messaging-capability-policy';
+import { runMessagingHostTool } from './messaging-host-adapter';
 
 interface HostAdapter { run(name: any, input: Record<string, unknown>, scope: MateHostToolScope, opts?: { signal?: AbortSignal | null }): Promise<MateHostToolResult> }
 export interface MateHostToolRouterDeps { office?: HostAdapter; browser?: HostAdapter; coordinator?: MateCoordinator }
@@ -39,6 +41,21 @@ export function createMateHostToolRouter(deps: MateHostToolRouterDeps = {}) {
       };
       if (call.name.startsWith('office_')) return cap(await office.run(call.name as any, call.input, scope, { signal: context.signal }));
       if (call.name.startsWith('browser_')) return cap(await browser.run(call.name as any, call.input, scope, { signal: context.signal }));
+      // Proactive messaging: the capability must be re-derived from the
+      // persisted task/session on every call — the worker's own capability
+      // claims are never trusted. Denied scopes are hard errors so the run
+      // cannot mistake a permission bypass for a delivery outcome.
+      if (call.name === 'messaging_list_targets' || call.name === 'messaging_send') {
+        const capabilities = await resolveRuntimeCapabilities(request.user_id, request.request_id, request.runtime_session_id);
+        if (!capabilities.includes('messaging.proactive')) {
+          return { content: '[E_RUNTIME_HOST_TOOL_FORBIDDEN] messaging tools require a Commander runtime scope', isError: true };
+        }
+        return cap(await runMessagingHostTool(call.name, call.input, {
+          userId: request.user_id,
+          sourceKey: `${request.request_id}:${call.call_id}`,
+          signal: context.signal,
+        }));
+      }
       try {
         if (call.name === 'mate_delegate') {
           const task = typeof call.input.task === 'string' ? call.input.task.trim() : '';
