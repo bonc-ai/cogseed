@@ -181,6 +181,16 @@
         ]
       },
       {
+        "from": "resources/guardrail",
+        "to": "guardrail",
+        "filter": [
+          "**/*",
+          "!**/.DS_Store",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      },
+      {
         "from": "packages/nseap-meta-skill-engine",
         "to": "packages/nseap-meta-skill-engine",
         "filter": [

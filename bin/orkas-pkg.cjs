@@ -447,6 +447,109 @@ function scanNativeBinEntries(pkgDir) {
   return entries;
 }
 
+/**
+ * Root of the packaged security guardrail (`resources/guardrail`).
+ *
+ * Resolved relative to this file so it works both from a source checkout
+ * (`<repo>/bin/orkas-pkg.cjs` → `<repo>/resources/guardrail`) and from a
+ * packaged app, where `bin/` lives inside the asar-unpacked app dir and the
+ * guardrail is an extraResources destination next to it
+ * (`.../Resources/app/bin` → `.../Resources/guardrail`).
+ *
+ * Returns null when neither layout matches; the caller treats an unresolvable
+ * engine as "check unavailable", never as "check passed".
+ */
+function guardrailRoot() {
+  const candidates = [
+    path.resolve(__dirname, '..', 'resources', 'guardrail'),
+    path.resolve(__dirname, '..', '..', 'guardrail'),
+    path.resolve(__dirname, '..', '..', '..', 'guardrail'),
+  ];
+  for (const dir of candidates) {
+    if (isFile(path.join(dir, 'scan_gate.py'))) return dir;
+  }
+  return null;
+}
+
+/**
+ * Interpreter used to run the security gate.
+ *
+ * Deliberately NOT `pythonCommand()`. That one honours `$ORKAS_PYTHON`, which
+ * exists so a caller can point dependency installs at a specific venv — a knob
+ * for *package* Python. Letting it also select the scanner's interpreter would
+ * make the security gate redirectable by the same environment variable the
+ * package being scanned might influence, and any stub that is not a real
+ * interpreter turns every install into a fail-closed refusal.
+ *
+ * `$ORKAS_GUARDRAIL_PYTHON` is a separate override so tests and unusual
+ * deployments can still point at a known-good interpreter explicitly.
+ */
+function guardrailPythonCommand() {
+  // Read the raw value rather than going through `commandFromEnv`, which maps an
+  // absolute path that does not exist to null — i.e. silently falls back to the
+  // system interpreter. That is right for dependency installs (a stale venv hint
+  // should not break an install) and wrong here: an operator who pinned the
+  // scanner's interpreter and got a typo must see a refusal, not a scan that
+  // quietly ran on some other Python.
+  const raw = (process.env.ORKAS_GUARDRAIL_PYTHON || '').trim();
+  if (raw) return { cmd: raw, args: [] };
+  return { cmd: process.platform === 'win32' ? 'python' : 'python3', args: [] };
+}
+
+/**
+ * Deep security scan of a staged package tree, before it is promoted.
+ *
+ * External package installs reach the machine through a model-issued
+ * `orkas-pkg install <git-url>` in bash — no human reviews the contents, and the
+ * tree becomes callable as soon as it is promoted. That made this the least
+ * supervised install path in the product while being the only one with no deep
+ * scan at all: local folder imports and marketplace installs were both gated,
+ * so a payload the marketplace refused could still be side-loaded from a git URL.
+ *
+ * The verdict comes from `resources/guardrail/scan_gate.py`, the same script the
+ * main-process adapter uses. Sharing one script is the point: the bug class this
+ * closes was a security threshold living in two places and drifting, and a
+ * drifting *security* rule drifts silently — the weaker copy keeps installing
+ * things and nothing looks broken.
+ *
+ * Returns a verdict object; never throws, never calls die(). Deciding what to do
+ * belongs to the caller.
+ */
+function securityScanStaging(stagingDir) {
+  const root = guardrailRoot();
+  if (!root) return { outcome: 'unknown', reason: 'guardrail_not_found', blocking_rules: [] };
+
+  const engine = path.join(root, 'skill-sentry');
+  const gate = path.join(root, 'scan_gate.py');
+  const py = guardrailPythonCommand();
+
+  // Deliberately spawnSync directly rather than run(): run() escalates a missing
+  // interpreter into die(76), which would abort the install with a confusing
+  // "command not found" instead of reporting that the check could not run.
+  const res = spawnSync(py.cmd, [...py.args, gate, engine, stagingDir], {
+    encoding: 'utf8',
+    timeout: 5 * 60 * 1000,
+    maxBuffer: 16 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+
+  if (res.error || typeof res.stdout !== 'string' || !res.stdout.trim()) {
+    const why = res.error ? `${res.error.code || res.error.message}` : 'no_output';
+    return { outcome: 'unknown', reason: `scanner_unavailable: ${why}`, blocking_rules: [] };
+  }
+  try {
+    const parsed = JSON.parse(res.stdout);
+    if (!parsed || typeof parsed.outcome !== 'string') {
+      return { outcome: 'unknown', reason: 'malformed_verdict', blocking_rules: [] };
+    }
+    if (!Array.isArray(parsed.blocking_rules)) parsed.blocking_rules = [];
+    return parsed;
+  } catch (e) {
+    return { outcome: 'unknown', reason: `unparsable_verdict: ${e.message}`, blocking_rules: [] };
+  }
+}
+
 function scanPackage(pkgDir) {
   const skillRoots = scanSkillRoots(pkgDir);
   const binEntries = [...scanNodeBinEntries(pkgDir), ...scanPythonBinEntries(pkgDir), ...scanNativeBinEntries(pkgDir)];
@@ -865,6 +968,41 @@ function cmdInstall(args) {
           { source });
       }
       const pkgMeta = { name, repo_url: source, commit };
+
+      // Deep security scan — before dependency install and before promote.
+      //
+      // Order matters twice over. `installDeps` runs `npm install` / `pip
+      // install` inside the staged tree, which executes package-authored install
+      // hooks: scanning after that would be scanning a machine that has already
+      // run the code. And promote is what makes the tree callable, so a verdict
+      // arriving afterwards is a verdict on something already live.
+      const security = securityScanStaging(staging);
+      if (security.outcome === 'blocked' || security.outcome === 'unknown') {
+        // The staging dir is reclaimed by the exit hook, so nothing is left on
+        // disk and the registry is untouched — a refused install is a no-op.
+        //
+        // `unknown` refuses too, unlike the local-import path which installs with
+        // a "could not verify" notice. The difference is who is watching: a local
+        // import is a human picking a folder they can inspect, while this runs
+        // unattended from a model-issued bash command against remote content
+        // nobody has read. With no verdict there is nothing to show a user, so the
+        // only safe default is to stop and say why.
+        die(77,
+          security.outcome === 'blocked'
+            ? 'security scan rejected this package — install cancelled'
+            : 'security scan could not run — install cancelled (fail-closed)',
+          {
+            source,
+            security_outcome: security.outcome,
+            // Rule ids only. Never the matched line: it can be the credential
+            // that the flagged code was exfiltrating.
+            ...(security.blocking_rules.length ? { blocking_rules: security.blocking_rules } : {}),
+            ...(security.reason ? { reason: security.reason } : {}),
+            ...(security.recommendation ? { recommendation: security.recommendation } : {}),
+            ...(typeof security.score === 'number' ? { security_score: security.score } : {}),
+          });
+      }
+
       const depCommands = describeDepCommands(staging, pkgMeta);
       let depsInstalled = [];
       if (depCommands.length && consentDeps) {
@@ -966,6 +1104,30 @@ function cmdUpdate(args) {
         if (before) run('git', ['-c', 'core.autocrlf=false', 'reset', '--hard', before], { cwd: pkgDir });
         die(1, 'refusing to update: upstream now contains a symbolic link (reverted to the prior revision)', { path: sl });
       }
+      // Deep scan the pulled revision, reverting on a bad verdict.
+      //
+      // An update is a fresh supply-chain event: the repo that passed at install
+      // time can ship a payload in any later commit, and this path is the one
+      // where the new code is already in the live tree, so the revert has to
+      // happen rather than merely declining to promote.
+      //
+      // Runs before `installDeps` below — dependency install executes
+      // package-authored hooks, so scanning after it would be scanning a machine
+      // that already ran the new code.
+      const pulledScan = securityScanStaging(pkgDir);
+      if (pulledScan.outcome === 'blocked' || pulledScan.outcome === 'unknown') {
+        if (before) run('git', ['-c', 'core.autocrlf=false', 'reset', '--hard', before], { cwd: pkgDir });
+        die(77,
+          pulledScan.outcome === 'blocked'
+            ? `security scan rejected the new revision of "${name}" — reverted to the prior revision`
+            : `security scan could not run for "${name}" — reverted to the prior revision (fail-closed)`,
+          {
+            security_outcome: pulledScan.outcome,
+            reverted: Boolean(before),
+            ...(pulledScan.blocking_rules.length ? { blocking_rules: pulledScan.blocking_rules } : {}),
+            ...(pulledScan.reason ? { reason: pulledScan.reason } : {}),
+          });
+      }
     } else {
       const cls = classifySource(entry.repo_url || '');
       if (cls.kind !== 'github') {
@@ -983,6 +1145,21 @@ function cmdUpdate(args) {
         assertNoSymlinks(staging, 'update');
         if (!scanPackage(staging).kind) {
           die(65, `after update, "${name}" no longer has a supported skill/CLI shape — keeping the current install`);
+        }
+        // Scan the fetched tree before it replaces the live one. Cheaper than the
+        // git-pull branch above: nothing has been swapped in yet, so refusing is
+        // just "keep the current install" with no revert needed.
+        const fetchedScan = securityScanStaging(staging);
+        if (fetchedScan.outcome === 'blocked' || fetchedScan.outcome === 'unknown') {
+          die(77,
+            fetchedScan.outcome === 'blocked'
+              ? `security scan rejected the new revision of "${name}" — keeping the current install`
+              : `security scan could not run for "${name}" — keeping the current install (fail-closed)`,
+            {
+              security_outcome: fetchedScan.outcome,
+              ...(fetchedScan.blocking_rules.length ? { blocking_rules: fetchedScan.blocking_rules } : {}),
+              ...(fetchedScan.reason ? { reason: fetchedScan.reason } : {}),
+            });
         }
         replaceDirAtomic(pkgDir, staging);
       } finally {
