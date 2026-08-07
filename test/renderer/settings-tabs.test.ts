@@ -210,16 +210,15 @@ describe('settings tabs module', () => {
 
   it('provides every visible catalog and detail label in each renderer locale', () => {
     const keys = [
-      'messaging.catalog.page_title',
-      'messaging.catalog.page_subtitle',
-      'messaging.catalog.back',
+      'messaging.group.open',
+      'messaging.group.soon',
+      'messaging.status.bound',
       'messaging.channel.coming_soon',
       'messaging.channel.feishu.title',
-      'messaging.channel.feishu.description',
       'messaging.channel.feishu.badge',
       'messaging.channel.lark.title',
-      'messaging.channel.lark.description',
       'messaging.channel.lark.badge',
+      'messaging.channel.qq.title',
       'messaging.association_title',
       'messaging.association_sub',
       'messaging.scan',
@@ -228,6 +227,19 @@ describe('settings tabs module', () => {
       'messaging.response_streaming_card',
       'messaging.workspace_all',
       'messaging.workspace_subtitle',
+      'messaging.instance.empty',
+      'messaging.instance.add',
+      'messaging.instance.title',
+      'messaging.wecom_qr.start',
+      'messaging.wecom_qr.open_hint',
+      'messaging.wecom_qr.cancel',
+      'messaging.wecom_qr.invalid_message',
+      'messaging.telegram.token_label',
+      'messaging.telegram.token_placeholder',
+      'messaging.telegram.connect',
+      'messaging.telegram.reconnect',
+      'messaging.telegram.token_invalid',
+      'messaging.telegram.enable_failed',
       'messaging.delete_subtitle',
       'messaging.updated',
       'messaging.update_failed',
@@ -236,6 +248,10 @@ describe('settings tabs module', () => {
     for (const locale of ['zh', 'en', 'ja', 'pt']) {
       const messages = JSON.parse(fs.readFileSync(path.join(root, `src/renderer/locales/${locale}.json`), 'utf8')) as Record<string, string>;
       for (const key of keys) expect(messages[key]).toEqual(expect.any(String));
+    }
+    for (const locale of ['zh', 'en']) {
+      const messages = JSON.parse(fs.readFileSync(path.join(root, `src/renderer/locales/${locale}.json`), 'utf8')) as Record<string, string>;
+      expect(messages['messaging.feishu_qr.subtitle']).not.toMatch(/已有应用|existing/i);
     }
   });
 });
