@@ -160,6 +160,7 @@ function requiredNativeVerificationEntries(platform, arch) {
     'canvas',
     'tokenizers',
     'better-sqlite3',
+    'node-pty',
     'onnxruntime-binding',
     'onnxruntime-core',
     ...(platform === 'darwin' ? ['fsevents'] : []),

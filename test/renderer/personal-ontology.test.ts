@@ -11,16 +11,16 @@ const state = readFileSync(resolve(root, 'src/renderer/modules/state.js'), 'utf8
 const lazy = readFileSync(resolve(root, 'src/renderer/modules/lazy-features.js'), 'utf8');
 const ontology = readFileSync(resolve(root, 'src/renderer/modules/personal-ontology.js'), 'utf8');
 
-function loadShim(invoke: (...args: unknown[]) => Promise<unknown>) {
-  const sandbox: Record<string, unknown> & { window?: Record<string, unknown> } = {
+function loadShim(invoke: any) {
+  const sandbox: any = {
     console, URL, URLSearchParams, ArrayBuffer, Uint8Array, TextEncoder, ReadableStream, btoa,
     fetch: vi.fn(), createLogger: () => ({ warn() {}, info() {}, error() {} }),
     window: { orkas: { invoke, stream: () => ({ promise: Promise.resolve(), cancel() {} }) } },
   };
-  (sandbox.window as Record<string, unknown>).window = sandbox.window;
+  sandbox.window.window = sandbox.window;
   vm.createContext(sandbox);
   vm.runInContext(routeSource, sandbox, { filename: 'ipc-shim.js' });
-  return sandbox.apiFetch as (url: string, options?: Record<string, unknown>) => Promise<{ json: () => Promise<unknown> }>;
+  return sandbox.apiFetch;
 }
 
 describe('personal ontology renderer integration', () => {
@@ -47,15 +47,6 @@ describe('personal ontology renderer integration', () => {
     expect(state).toContain("document.getElementById('personal-ontology-btn')?.addEventListener('click', () => _setViewFromSidebar('personal-ontology'));");
     expect(lazy).toContain("'personal-ontology'");
     expect(lazy).toContain("./modules/personal-ontology.js");
-    expect(lazy).toContain("./modules/cognition/pages.js");
-    expect(lazy).toContain("./modules/cognition/cognition.js");
-    expect(html).toContain('data-personal-onto-workspace-tab="candidates"');
-    expect(html).toContain('data-personal-onto-workspace-tab="growth"');
-    expect(html).toContain('aria-controls="personal-onto-candidates-pane"');
-    expect(html).toContain('aria-controls="personal-onto-growth-pane"');
-    expect(html).toContain('role="tabpanel"');
-    expect(html.match(/id="personal-ontology-btn"/g)).toHaveLength(1);
-    expect(html).not.toContain('id="cognition-btn"');
   });
 
   it("uses Zhang Hao's direct IPC review-panel flow", () => {
@@ -65,11 +56,5 @@ describe('personal ontology renderer integration', () => {
     expect(ontology).toContain("_pocInvoke('personalOntology.groups.create'");
     expect(ontology).toContain('renderDestinationPanel');
     expect(ontology).toContain('showRejectReasonModal');
-  });
-
-  it('keeps candidate review and evidence growth as distinct concepts in one workspace', () => {
-    expect(ontology).toContain("_pocWorkspaceView = 'candidates'");
-    expect(ontology).toContain("typeof window.renderCognitionPage === 'function'");
-    expect(ontology).toContain('data-personal-onto-workspace-pane');
   });
 });

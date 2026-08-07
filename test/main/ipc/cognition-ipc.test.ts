@@ -29,7 +29,7 @@ vi.mock('../../../src/main/logger', () => ({
 vi.mock('../../../src/main/features/cognition', () => ({
   DEFAULT_COGNITION_PAGE_SIZE: 50,
   MAX_COGNITION_PAGE_SIZE: 100,
-  listCognitionAssets: vi.fn(async () => ([{ id: 'cog_1', title: '认知', stage: 'seed' }])),
+  listCognitionStoreAssets: vi.fn(async () => ([{ id: 'cog_1', title: '认知', stage: 'seed' }])),
   listCognitionAssetPage: vi.fn(async (_uid: string, page: number, pageSize: number) => ({
     items: [{ id: 'cog_1', title: '认知', stage: 'seed', evidenceCount: 0, reuseCount: 0 }],
     page,

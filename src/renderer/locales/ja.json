@@ -2374,7 +2374,7 @@
   "cognition.brain_source_distribution": "ソース分布",
   "cognition.view_sources": "ソースを見る",
   "cognition.brain_nodes": "認知ノード",
-  "cognition.brain_nodes_hint": "Orkas の既存認知アセットとソース関連",
+  "cognition.brain_nodes_hint": "Mate Agent の既存認知アセットとソース関連",
   "cognition.view_assets": "正式アセットを見る",
   "cognition.context_select": "Context Pack を選択して参照を確認",
   "cognition.context_kind": "種類",

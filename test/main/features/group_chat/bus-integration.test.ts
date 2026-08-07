@@ -3655,3 +3655,11 @@ describe("group_chat bus integration › Task 5 actor-turn settlement wrapper", 
     },
   );
 });
+
+async function readConversationMessages(cid: string): Promise<any[]> {
+  const paths = await import("../../../../src/main/paths");
+  const storage = await import("../../../../src/main/storage");
+  return storage.readJsonl<any>(
+    path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`),
+  );
+}

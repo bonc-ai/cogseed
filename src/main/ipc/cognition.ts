@@ -90,7 +90,7 @@ export const invokeHandlers = {
   },
 
   'cognition.assets.list': async (_payload: Payload, ctx: IpcContext) => ({
-    assets: await cognition.listCognitionAssets(ctx.userId),
+    assets: await cognition.listCognitionStoreAssets(ctx.userId),
   }),
 
   'cognition.assets.page': async (payload: Payload, ctx: IpcContext) => ({

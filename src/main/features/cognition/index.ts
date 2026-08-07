@@ -985,11 +985,6 @@ function sortedAssets(store: CognitionStore): CognitionAsset[] {
     right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id));
 }
 
-export async function listCognitionAssets(userId: string): Promise<CognitionAsset[]> {
-  return withCognitionMemoryTransaction(userId, async (transaction) =>
-    sortedAssets(await reconciledStore(userId, transaction)).map((asset) => structuredClone(asset)));
-}
-
 export async function listActiveCognitionSourceIds(userId: string): Promise<ReadonlySet<string>> {
   return withCognitionMemoryTransaction(userId, async (transaction) => {
     const store = await reconciledStore(userId, transaction);
@@ -1216,3 +1211,16 @@ export async function recordCognitionReuse(
     appendTransition(asset, 'reused', { reuseEventId: event.id }, event.createdAt);
   });
 }
+
+export async function listCognitionStoreAssets(userId: string): Promise<CognitionAsset[]> {
+  return withCognitionMemoryTransaction(userId, async (transaction) =>
+    sortedAssets(await reconciledStore(userId, transaction)).map((asset) => structuredClone(asset)));
+}
+
+// ── develop 侧能力（candidates/receipts/dashboard/skill-summary 等）─────────
+export * from './types';
+export * from './candidates-adapter';
+export * from './receipts-adapter';
+export * from './assets-adapter';
+export * from './dashboard';
+export * from './skill-summary';

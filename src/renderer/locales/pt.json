@@ -2374,7 +2374,7 @@
   "cognition.brain_source_distribution": "Distribuição de fontes",
   "cognition.view_sources": "Ver fontes",
   "cognition.brain_nodes": "Nós cognitivos",
-  "cognition.brain_nodes_hint": "Ativos cognitivos existentes no Orkas e suas relações de origem",
+  "cognition.brain_nodes_hint": "Ativos cognitivos existentes no Mate Agent e suas relações de origem",
   "cognition.view_assets": "Ver ativos formais",
   "cognition.context_select": "Selecione um Context Pack para inspecionar suas referências",
   "cognition.context_kind": "Tipo",

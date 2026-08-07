@@ -31,7 +31,7 @@ import {
   invalidateCognitionMemorySources,
   listActiveCognitionSourceIds,
   listCognitionAssetPage,
-  listCognitionAssets,
+  listCognitionStoreAssets,
   recordCognitionReuse,
   _setSyncDirtyNotifierForTest,
   type CognitionEvidenceInput,
@@ -80,7 +80,7 @@ describe('cognition store', () => {
     expect(created.stage).toBe('seed');
     expect(created.reviewState).toBe('pending');
     expect(created.evidence).toHaveLength(0);
-    expect((await listCognitionAssets(uid)).map((item) => item.id)).toEqual([created.id]);
+    expect((await listCognitionStoreAssets(uid)).map((item) => item.id)).toEqual([created.id]);
   });
 
   it('每次云端认知写入都会通知同步引擎', async () => {
@@ -107,7 +107,7 @@ describe('cognition store', () => {
 
     created.title = '外部篡改';
 
-    const [stored] = await listCognitionAssets(uid);
+    const [stored] = await listCognitionStoreAssets(uid);
     expect(stored.title).toBe('不可外改');
   });
 
@@ -127,7 +127,7 @@ describe('cognition store', () => {
     };
     await fs.writeFile(cognitionFile, JSON.stringify(store), 'utf8');
 
-    await expect(listCognitionAssets(uid)).rejects.toThrow('inconsistent cognition stage');
+    await expect(listCognitionStoreAssets(uid)).rejects.toThrow('inconsistent cognition stage');
   });
 
   it('拒绝无证据或无确认时间的已确认持久化数据', async () => {
@@ -145,7 +145,7 @@ describe('cognition store', () => {
     };
     await fs.writeFile(cognitionFile, JSON.stringify(store), 'utf8');
 
-    await expect(listCognitionAssets(uid)).rejects.toThrow('needs evidence');
+    await expect(listCognitionStoreAssets(uid)).rejects.toThrow('needs evidence');
   });
 
   it('拒绝已暂缓但仍携带待确认意图的矛盾持久化数据', async () => {
@@ -165,7 +165,7 @@ describe('cognition store', () => {
     };
     await fs.writeFile(cognitionFile, JSON.stringify(store), 'utf8');
 
-    await expect(listCognitionAssets(uid)).rejects.toThrow('deferred cognition asset has pending confirmation');
+    await expect(listCognitionStoreAssets(uid)).rejects.toThrow('deferred cognition asset has pending confirmation');
   });
 
   it('拒绝缺失证据或复用覆盖的生命周期事件', async () => {
@@ -181,7 +181,7 @@ describe('cognition store', () => {
       .filter((transition) => transition.kind !== 'evidence_added');
     await fs.writeFile(cognitionFile, JSON.stringify(store), 'utf8');
 
-    await expect(listCognitionAssets(uid)).rejects.toThrow('evidence transition coverage is incomplete');
+    await expect(listCognitionStoreAssets(uid)).rejects.toThrow('evidence transition coverage is incomplete');
     expect(created.id).toBeTruthy();
   });
 
@@ -197,7 +197,7 @@ describe('cognition store', () => {
     store.assets[0].transitions[0].at = '2026-08-03T12:00:01';
     await fs.writeFile(cognitionFile, JSON.stringify(store), 'utf8');
 
-    await expect(listCognitionAssets(uid)).rejects.toThrow('matching created transition');
+    await expect(listCognitionStoreAssets(uid)).rejects.toThrow('matching created transition');
   });
 
   it('迁移 v1 已确认资产时，没有稳定来源 metadata 则保守失效并要求重新确认', async () => {
@@ -229,7 +229,7 @@ describe('cognition store', () => {
     await fs.mkdir(path.dirname(userMemoryFile(uid)), { recursive: true });
     await fs.writeFile(userMemoryFile(uid), legacySummary, 'utf8');
 
-    const [migrated] = await listCognitionAssets(uid);
+    const [migrated] = await listCognitionStoreAssets(uid);
 
     expect(migrated.reviewState).toBe('invalidated');
     expect(migrated.stage).toBe('sprout');
@@ -261,7 +261,7 @@ describe('cognition store', () => {
     await invalidateCognitionMemorySources(uid, removed.detachedCognitionSourceIds || [], 'removed');
     await confirmCognitionAsset(uid, candidate.id);
 
-    const [stored] = await listCognitionAssets(uid);
+    const [stored] = await listCognitionStoreAssets(uid);
     expect(stored.transitions.map((item) => item.kind)).toEqual([
       'created', 'evidence_added', 'confirmation_requested', 'confirmed',
       'reused', 'invalidated', 'confirmation_requested', 'reconfirmed',
@@ -294,7 +294,7 @@ describe('cognition store', () => {
   it('以 UTF-8 总字节数拒绝超限存储', async () => {
     await fs.mkdir(path.dirname(cognitionFile), { recursive: true });
     await fs.writeFile(cognitionFile, 'x'.repeat(COGNITION_STORE_BYTE_LIMIT + 1), 'utf8');
-    await expect(listCognitionAssets(uid)).rejects.toThrow('UTF-8 bytes');
+    await expect(listCognitionStoreAssets(uid)).rejects.toThrow('UTF-8 bytes');
   });
 
   it('按实际缩进后的 JSON 字节数拒绝写入，避免落盘后无法读回', async () => {
@@ -463,7 +463,7 @@ describe('cognition store', () => {
 
     await expect(confirmCognitionAsset(uid, candidate.id)).rejects.toThrow('char_limit_exceeded');
 
-    const [stored] = await listCognitionAssets(uid);
+    const [stored] = await listCognitionStoreAssets(uid);
     expect(stored.reviewState).toBe('pending');
     expect(stored.stage).toBe('sprout');
     expect(stored.confirmedAt).toBeUndefined();
@@ -522,7 +522,7 @@ describe('cognition store', () => {
     expect(await listActiveCognitionSourceIds(uid)).not.toContain(candidate.id);
     const memory = await import('../../../../src/main/features/memory');
     expect(memory.formatForSystemPrompt(uid)).not.toContain(candidate.summary);
-    const interrupted = await listCognitionAssets(uid);
+    const interrupted = await listCognitionStoreAssets(uid);
     expect(interrupted[0].reviewState).toBe('pending');
     expect(interrupted[0].confirmationRequestedAt).toBeTruthy();
 
@@ -594,7 +594,7 @@ describe('cognition store', () => {
 
     storageMocks.writeJson.mockReset();
     storageMocks.writeJson.mockImplementation(actualStorage.writeJson);
-    const [recovered] = await listCognitionAssets(uid);
+    const [recovered] = await listCognitionStoreAssets(uid);
     expect(recovered.reviewState).toBe('deferred');
     expect(recovered.transitions.map((item) => item.kind)).toEqual([
       'created', 'evidence_added', 'confirmation_requested', 'confirmed',
@@ -630,7 +630,7 @@ describe('cognition store', () => {
     await deferCognitionAsset(uid, first.id);
 
     expect(listMemoryEntries(uid, 'memory').entries).toEqual([summary]);
-    expect((await listCognitionAssets(uid)).find((asset) => asset.id === second.id)?.reviewState).toBe('confirmed');
+    expect((await listCognitionStoreAssets(uid)).find((asset) => asset.id === second.id)?.reviewState).toBe('confirmed');
   });
 
   it('记忆被删除后资产失效，禁止复用，但允许显式重新确认', async () => {
@@ -644,7 +644,7 @@ describe('cognition store', () => {
     const removed = memory.removeEntry(uid, 'memory', candidate.summary);
     await invalidateCognitionMemorySources(uid, removed.detachedCognitionSourceIds || [], 'removed');
 
-    const invalidated = (await listCognitionAssets(uid)).find((asset) => asset.id === candidate.id);
+    const invalidated = (await listCognitionStoreAssets(uid)).find((asset) => asset.id === candidate.id);
     expect(invalidated?.reviewState).toBe('invalidated');
     await expect(recordCognitionReuse(uid, candidate.id, { sourceLabel: '不允许的复用' }))
       .rejects.toThrow('only actively confirmed');
@@ -713,7 +713,7 @@ describe('cognition store', () => {
     await expect(memory.clearMemoryAndInvalidateCognition(uid, 'memory'))
       .resolves.toMatchObject({ ok: true, entries: [] });
 
-    const assets = await listCognitionAssets(uid);
+    const assets = await listCognitionStoreAssets(uid);
     expect(assets).toHaveLength(2);
     expect(assets.every((asset) => asset.reviewState === 'invalidated')).toBe(true);
     expect(assets.every((asset) => asset.invalidation?.reason === 'removed')).toBe(true);
@@ -1028,7 +1028,7 @@ describe('cognition store', () => {
 
     expect(memory.removeEntry(uid, 'memory', candidate.summary)).toMatchObject({ ok: true });
 
-    const [reconciled] = await listCognitionAssets(uid);
+    const [reconciled] = await listCognitionStoreAssets(uid);
     expect(reconciled.reviewState).toBe('invalidated');
     expect(reconciled.invalidation?.reason).toBe('metadata_missing');
   });
@@ -1044,7 +1044,7 @@ describe('cognition store', () => {
     const original = await fs.readFile(memoryFile, 'utf8');
     await fs.writeFile(memoryFile, original.replace(candidate.summary, '被外部改动的正文'), 'utf8');
 
-    const [invalidated] = await listCognitionAssets(uid);
+    const [invalidated] = await listCognitionStoreAssets(uid);
     expect(invalidated.reviewState).toBe('invalidated');
     expect(invalidated.invalidation?.reason).toBe('metadata_missing');
     const memory = await import('../../../../src/main/features/memory');
@@ -1075,7 +1075,7 @@ describe('cognition store', () => {
     await confirmCognitionAsset(uid, candidate.id);
     await fs.writeFile(userMemoryFile(uid), candidate.summary, 'utf8');
 
-    const [invalidated] = await listCognitionAssets(uid);
+    const [invalidated] = await listCognitionStoreAssets(uid);
     expect(invalidated.reviewState).toBe('invalidated');
     expect(invalidated.invalidation?.reason).toBe('metadata_missing');
     expect(listMemoryEntries(uid, 'memory').entries).toEqual([candidate.summary]);
@@ -1089,7 +1089,7 @@ describe('cognition store', () => {
     await addCognitionEvidence(uid, unsafe.id, evidence);
 
     await expect(confirmCognitionAsset(uid, unsafe.id)).rejects.toThrow('suspicious content');
-    const [stored] = await listCognitionAssets(uid);
+    const [stored] = await listCognitionStoreAssets(uid);
     expect(stored.reviewState).toBe('pending');
     expect(listMemoryEntries(uid, 'memory').entries).toEqual([]);
   });

@@ -1007,7 +1007,6 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     idleTimeout = 1800,
     streamIdleTimeout = 180,
     maxToolLoops,
-    disableTools,
     abortSignal = null,
     skillList,
     forceOpenSkillRefs,
