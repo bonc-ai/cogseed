@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+// Shared logger mock so the warn-once behavior of identity lookups is
+// observable (mirrors agents.test.ts, which swaps the real logger for fns).
+const mockLogger = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+vi.mock('../../../src/main/logger', () => ({
+  createLogger: () => mockLogger,
+}));
+
 function feishuInstance() {
   return {
     id: 'feishu-bot-1',
@@ -587,5 +594,60 @@ describe('Feishu sender enrichment', () => {
     };
     const result = await (adapter as unknown as { enrichSenderInfo(envelope: unknown): Promise<unknown> }).enrichSenderInfo(base);
     expect(result).toMatchObject(base);
+  });
+
+  it('warns once per failing identity key, not per lookup', async () => {
+    const userGet = vi.fn(async () => { throw new Error('no permission'); });
+    const chatGet = vi.fn(async () => { throw new Error('no permission'); });
+    const client = {
+      request: vi.fn(async () => ({ code: 0, data: { open_id: 'ou_bot' } })),
+      contact: { v3: { user: { get: userGet } } },
+      im: { v1: { chat: { get: chatGet }, message: { create: vi.fn() } } },
+    };
+    const Client = vi.fn(function Client() { return client; });
+    const dispatcher = { register: vi.fn(function register() { return dispatcher; }) };
+    const EventDispatcher = vi.fn(function EventDispatcher() { return dispatcher; });
+    const WSClient = vi.fn(function WSClient() { return { start: vi.fn(async () => {}), close: vi.fn() }; });
+    vi.doMock('@larksuiteoapi/node-sdk', () => ({
+      AppType: { SelfBuild: 'SelfBuild' },
+      Client,
+      Domain: { Feishu: 'https://open.feishu.cn', Lark: 'https://open.larksuite.com' },
+      EventDispatcher,
+      LoggerLevel: { error: 'error' },
+      WSClient,
+    }));
+    const { FeishuAdapter } = await import('../../../src/main/features/messaging/adapters');
+    const adapter = new FeishuAdapter(feishuInstance(), {
+      appId: 'cli_1234567890abcdef',
+      appSecret: 'app-secret',
+    });
+    const base = {
+      platform: 'feishu_lark' as const,
+      instanceId: 'bot-1',
+      externalMessageId: 'm-1',
+      externalChatId: 'oc_1',
+      externalUserId: 'ou_1',
+      text: 'hello',
+      isGroup: true,
+      mentionPresent: true,
+      receivedAt: new Date().toISOString(),
+    };
+    const castAdapter = adapter as unknown as { enrichSenderInfo(envelope: unknown): Promise<unknown> };
+    mockLogger.warn.mockClear();
+    // Failures are never cached, so the second call hits the API again — but
+    // the warn-once set keeps the log at exactly one record per key.
+    await castAdapter.enrichSenderInfo(base);
+    await castAdapter.enrichSenderInfo(base);
+    expect(userGet).toHaveBeenCalledTimes(2);
+    expect(chatGet).toHaveBeenCalledTimes(2);
+    expect(mockLogger.warn).toHaveBeenCalledTimes(2);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      'Feishu user name lookup failed',
+      expect.objectContaining({ instanceId: 'feishu-bot-1' }),
+    );
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      'Feishu chat title lookup failed',
+      expect.objectContaining({ instanceId: 'feishu-bot-1' }),
+    );
   });
 });

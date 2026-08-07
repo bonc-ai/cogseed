@@ -26,6 +26,11 @@ import type {
 } from './types';
 
 const log = createLogger('messaging:adapters');
+// Keys already warned about when an identity lookup fails (API error / missing
+// permission). Failures are never cached, so without this every message for
+// the same user/chat would re-warn. Keys are `user:<open_id>` / `chat:<id>`
+// strings — bounded in practice, so the set growing with the process is fine.
+const warnedIdentityKeys = new Set<string>();
 const sdkLogger = {
   // The SDK can include URLs, credentials, and event bodies in log arguments.
   // Drop them at the boundary instead of forwarding them to application logs.
@@ -560,7 +565,19 @@ export class TelegramAdapter implements MessagingAdapter {
           for (const update of updates) {
             if (typeof update.update_id === 'number') this.offset = Math.max(this.offset, update.update_id + 1);
             const envelope = this.normalize(update);
-            if (envelope) await callbacks.onInbound(envelope);
+            // Fire-and-forget: the manager's onInbound resolves only after the
+            // 600ms merge window flushes, so awaiting it here would serialize
+            // the poll on every message and prevent same-response messages
+            // from ever accumulating in the merge window. The offset is
+            // already advanced above, so dropping a failed dispatch is safe.
+            if (envelope) {
+              void callbacks.onInbound(envelope).catch((error) => {
+                log.warn('Telegram inbound dispatch failed', {
+                  instanceId: this.instance.id,
+                  error: logErrorSummary(error),
+                });
+              });
+            }
           }
         } catch (error) {
           if (merged.aborted) break;
@@ -726,7 +743,15 @@ export class FeishuAdapter implements MessagingCardAdapter {
           | undefined;
         const name = response?.data?.user?.name;
         return typeof name === 'string' && name.trim() ? name.trim() : null;
-      } catch {
+      } catch (error) {
+        const key = `user:${openId}`;
+        if (!warnedIdentityKeys.has(key)) {
+          warnedIdentityKeys.add(key);
+          log.warn('Feishu user name lookup failed', {
+            instanceId: this.instance.id,
+            error: logErrorSummary(error),
+          });
+        }
         return null;
       }
     });
@@ -740,7 +765,15 @@ export class FeishuAdapter implements MessagingCardAdapter {
           | undefined;
         const name = response?.data?.chat?.name;
         return typeof name === 'string' && name.trim() ? name.trim() : null;
-      } catch {
+      } catch (error) {
+        const key = `chat:${chatId}`;
+        if (!warnedIdentityKeys.has(key)) {
+          warnedIdentityKeys.add(key);
+          log.warn('Feishu chat title lookup failed', {
+            instanceId: this.instance.id,
+            error: logErrorSummary(error),
+          });
+        }
         return null;
       }
     });
