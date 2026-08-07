@@ -661,6 +661,19 @@
         el('span', '', instance.ownerLabel || labelFor('messaging.owner_configured', '')),
       );
       section.appendChild(status);
+    } else if (instance.platform === 'feishu_lark') {
+      // Auto-binding window: the user just needs to send the bot a direct
+      // message — no id entry. Only shown while the window is actually open.
+      const pending = el('div', 'messaging-owner-pending');
+      pending.style.display = 'none';
+      pending.append(icon('clock', 'messaging-status-icon'), el('span', '', ''));
+      section.appendChild(pending);
+      void invoke('messaging.owner_binding_status', { instanceId: instance.id }).then((res) => {
+        if (res && res.binding) {
+          pending.style.display = '';
+          pending.querySelector('span').textContent = labelFor('messaging.owner_bind_pending', '');
+        }
+      }).catch(() => { /* window may have expired; leave the hint hidden */ });
     }
 
     const ownerIdInput = document.createElement('input');

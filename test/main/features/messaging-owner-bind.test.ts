@@ -177,4 +177,18 @@ describe('messaging owner auto-bind from direct message', () => {
     await manager.stopForUser(uid);
     vi.useRealTimers();
   });
+
+  it('reports live binding-window status and clears it on expiry', async () => {
+    const uid = 'user-1';
+    const { manager, registry, instanceId } = await seededFeishu(uid, ['ou_sender_1']);
+    // seededFeishu enabled the instance, which opens the window automatically.
+    const live = manager.getOwnerBindingStatus(uid, instanceId);
+    expect(live).toMatchObject({ binding: true });
+    expect(live?.remainingMs).toBeGreaterThan(0);
+    expect(live?.remainingMs).toBeLessThanOrEqual(5 * 60 * 1000);
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1000);
+    expect(manager.getOwnerBindingStatus(uid, instanceId)).toBeNull();
+    await manager.stopForUser(uid);
+    vi.useRealTimers();
+  });
 });

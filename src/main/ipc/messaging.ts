@@ -221,6 +221,10 @@ export const invokeHandlers = {
     status: await messaging.health(ctx.userId, instanceId(payload?.instanceId)),
   }),
 
+  'messaging.owner_binding_status': async (payload: Record<string, unknown>, ctx: MessagingContext) => ({
+    binding: messaging.getOwnerBindingStatus(ctx.userId, instanceId(payload?.instanceId)),
+  }),
+
   'messaging.delete': async (payload: Record<string, unknown>, ctx: MessagingContext) => ({
     deleted: await messaging.deleteInstance(ctx.userId, instanceId(payload?.instanceId)),
   }),

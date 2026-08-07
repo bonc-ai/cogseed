@@ -3151,5 +3151,6 @@
   "messaging.send_confirm.message": "{instance} will send the following message to you ({owner}):\n\n{text}\n\nSend it?",
   "messaging.send_confirm.approve": "Send",
   "messaging.send_confirm.decline": "Cancel",
-  "messaging.owner_bind_hint": "The bot is ready. Send any message to it in Feishu/Lark (direct chat) and the sender will be bound as the recipient automatically — no ID entry needed."
+  "messaging.owner_bind_hint": "The bot is ready. Send any message to it in Feishu/Lark (direct chat) and the sender will be bound as the recipient automatically — no ID entry needed.",
+  "messaging.owner_bind_pending": "Awaiting binding: send any message to this bot in Feishu/Lark (direct chat) to bind the sender as the recipient"
 }

@@ -2947,5 +2947,6 @@
   "messaging.send_confirm.message": "{instance} enviará a seguinte mensagem para você ({owner}):\n\n{text}\n\nEnviar?",
   "messaging.send_confirm.approve": "Enviar",
   "messaging.send_confirm.decline": "Cancelar",
-  "messaging.owner_bind_hint": "O bot está pronto. Envie qualquer mensagem para ele no Feishu/Lark (chat direto) e o remetente será vinculado como destinatário automaticamente — sem precisar digitar o ID."
+  "messaging.owner_bind_hint": "O bot está pronto. Envie qualquer mensagem para ele no Feishu/Lark (chat direto) e o remetente será vinculado como destinatário automaticamente — sem precisar digitar o ID.",
+  "messaging.owner_bind_pending": "Aguardando vínculo: envie qualquer mensagem para este bot no Feishu/Lark (chat direto) para vincular o remetente como destinatário"
 }

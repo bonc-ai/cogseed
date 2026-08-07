@@ -77,6 +77,24 @@ export function openOwnerBindingWindow(uid: string, instanceId: string): void {
   ownerBindingWindows.set(ownerBindingKey(uid, instanceId), Date.now() + OWNER_BINDING_WINDOW_MS);
 }
 
+/** Live binding-window status for the settings UI. Returns null when no
+ * window is open (or it expired). */
+export function getOwnerBindingStatus(
+  uid: string,
+  instanceId: string,
+): { binding: true; expiresAt: string; remainingMs: number } | null {
+  assertUserId(uid);
+  assertInstanceId(instanceId);
+  const deadline = ownerBindingWindows.get(ownerBindingKey(uid, instanceId));
+  if (deadline === undefined) return null;
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) {
+    ownerBindingWindows.delete(ownerBindingKey(uid, instanceId));
+    return null;
+  }
+  return { binding: true, expiresAt: new Date(deadline).toISOString(), remainingMs };
+}
+
 /** Bind the sender of the first direct message as the instance owner while
  * the binding window is open. Runs before inbound policy so a freshly
  * configured bot (whose allowlist is still empty) can still be claimed.
