@@ -12,6 +12,7 @@ import type {
   FeishuTenantBrand,
   MessagingPlatform,
   MessagingPolicy,
+  MessagingResponseMode,
   MessagingSecret,
   WorkspaceScope,
 } from '../features/messaging/types';
@@ -114,6 +115,12 @@ function policy(value: unknown): Partial<MessagingPolicy> | undefined {
   };
 }
 
+function responseMode(value: unknown): MessagingResponseMode {
+  const result = text(value, 'responseMode', 40);
+  if (result !== 'text' && result !== 'streaming_card') throw new Error('invalid responseMode');
+  return result;
+}
+
 function instanceId(value: unknown): string {
   const result = text(value, 'instanceId', 160);
   if (!registry.isValidInstanceId(result)) throw new Error('invalid instanceId');
@@ -177,6 +184,7 @@ export const invokeHandlers = {
       ...(payload?.enabled !== undefined ? { enabled: requiredBoolean(payload.enabled, 'enabled') } : {}),
       ...(payload?.workspace !== undefined ? { workspace: workspace(payload.workspace) } : {}),
       ...(payload?.policy !== undefined ? { policy: policy(payload.policy) } : {}),
+      ...(payload?.responseMode !== undefined ? { responseMode: responseMode(payload.responseMode) } : {}),
       ...(payload?.secret !== undefined ? { secret: secret(payload.secret, existing.platform) } : {}),
     });
     return { instance };

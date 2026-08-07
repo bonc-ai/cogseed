@@ -348,6 +348,55 @@ describe('messaging IPC validation', () => {
       vi.resetModules();
     }
   });
+
+  it('forwards responseMode on update and rejects invalid values', async () => {
+    let instanceState: Record<string, unknown> = {};
+    const updateInstance = vi.fn(async (_userId: string, _instanceId: string, patch: Record<string, unknown>) => {
+      instanceState = { ...instanceState, ...patch };
+      return { id: 'bot-1', ...instanceState };
+    });
+    vi.doMock('../../../src/main/features/messaging/registry', () => ({
+      isValidInstanceId: vi.fn(() => true),
+      getInstance: vi.fn(async () => ({ id: 'bot-1', platform: 'feishu_lark' })),
+    }));
+    vi.doMock('../../../src/main/features/messaging/manager', () => ({
+      PLATFORM_CATALOG: [],
+      listInstances: vi.fn(),
+      createInstance: vi.fn(),
+      updateInstance,
+      setEnabled: vi.fn(),
+      unbindInstance: vi.fn(),
+      health: vi.fn(),
+      deleteInstance: vi.fn(),
+    }));
+    try {
+      const { invokeHandlers } = await import('../../../src/main/ipc/messaging');
+
+      const updated = await invokeHandlers['messaging.update']({
+        instanceId: 'bot-1',
+        responseMode: 'streaming_card',
+      }, { userId: 'user-1' });
+      expect(updated.instance.responseMode).toBe('streaming_card');
+      expect(updateInstance).toHaveBeenLastCalledWith('user-1', 'bot-1', expect.objectContaining({ responseMode: 'streaming_card' }));
+
+      const untouched = await invokeHandlers['messaging.update']({
+        instanceId: 'bot-1',
+        displayName: '不覆盖响应模式',
+      }, { userId: 'user-1' });
+      expect(untouched.instance.responseMode).toBe('streaming_card');
+      expect(updateInstance).toHaveBeenLastCalledWith('user-1', 'bot-1', { displayName: '不覆盖响应模式' });
+
+      await expect(invokeHandlers['messaging.update']({
+        instanceId: 'bot-1',
+        responseMode: 'bogus_mode',
+      }, { userId: 'user-1' })).rejects.toThrow('invalid responseMode');
+      expect(updateInstance).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.doUnmock('../../../src/main/features/messaging/registry');
+      vi.doUnmock('../../../src/main/features/messaging/manager');
+      vi.resetModules();
+    }
+  });
 });
 
 describe('messaging adapter cancellation', () => {
