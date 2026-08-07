@@ -721,6 +721,194 @@
     return wrapper;
   }
 
+  const WECOM_AUTH_ORIGIN = 'https://work.weixin.qq.com';
+
+  function parseWecomAuthMessage(event, popup) {
+    const data = event && typeof event.data === 'object' ? event.data : {};
+    const wecomBotId = typeof data.wecomBotId === 'string' ? data.wecomBotId.trim() : '';
+    const wecomBotSecret = typeof data.wecomBotSecret === 'string' ? data.wecomBotSecret.trim() : '';
+    if (!event || event.origin !== WECOM_AUTH_ORIGIN) return { ok: false, reason: 'origin' };
+    if (!popup || event.source !== popup) return { ok: false, reason: 'source' };
+    if (data.type !== 'AUTH_SUCCESS' || !wecomBotId || !wecomBotSecret) return { ok: false, reason: 'shape' };
+    return { ok: true, wecomBotId, wecomBotSecret };
+  }
+
+  function closeWecomPopup() {
+    const popup = state.wecom.popup;
+    if (popup && typeof popup.close === 'function') {
+      try { popup.close(); } catch (_) { /* already closed */ }
+    }
+    state.wecom.popup = null;
+  }
+
+  async function cancelWecomFlow(options) {
+    const opts = options || {};
+    const flowId = state.wecom.flowId;
+    if (state.wecom.timer !== null) {
+      clearTimeout(state.wecom.timer);
+      state.wecom.timer = null;
+    }
+    closeWecomPopup();
+    if (typeof window.removeEventListener === 'function') {
+      window.removeEventListener('message', handleWecomAuthMessage);
+    }
+    if (flowId && state.wecom.state !== 'completed' && state.wecom.state !== 'cancelled') {
+      try { await invoke('messaging.wecom_qr.cancel', { flowId }); } catch (_) { /* best effort */ }
+    }
+    state.wecom.flowId = '';
+    state.wecom.state = '';
+    state.wecom.authUrl = '';
+    state.wecom.starting = false;
+    state.wecom.cancelling = false;
+    state.wecom.error = '';
+    if (opts.render !== false) renderCurrent();
+  }
+
+  function handleWecomAuthMessage(event) {
+    if (!state.wecom.flowId) return;
+    const parsed = parseWecomAuthMessage(event, state.wecom.popup);
+    if (!parsed.ok) {
+      if (parsed.reason === 'origin' || parsed.reason === 'source') return;
+      setNotice(labelFor('messaging.wecom_qr.invalid_message', ''), 'error');
+      return;
+    }
+    void completeWecomFlow(parsed.wecomBotId, parsed.wecomBotSecret);
+  }
+
+  function scheduleWecomPoll(flowId) {
+    if (state.wecom.timer !== null) clearTimeout(state.wecom.timer);
+    if (!flowId || state.wecom.flowId !== flowId || state.wecom.state === 'completed') return;
+    state.wecom.timer = setTimeout(() => {
+      state.wecom.timer = null;
+      void pollWecomStatus(flowId);
+    }, 5000);
+  }
+
+  async function pollWecomStatus(flowId) {
+    if (!flowId || state.wecom.flowId !== flowId || state.wecom.cancelling) return;
+    try {
+      const result = await invoke('messaging.wecom_qr.status', { flowId });
+      const registration = result && result.registration ? result.registration : result;
+      const nextState = typeof registration.state === 'string' ? registration.state : 'failed';
+      if (nextState === 'completed' && registration.instance && registration.instance.id) {
+        state.instances = state.instances.some((candidate) => candidate.id === registration.instance.id)
+          ? state.instances.map((candidate) => candidate.id === registration.instance.id ? registration.instance : candidate)
+          : [...state.instances, registration.instance];
+        state.selectedInstanceId = registration.instance.id;
+        setNotice(labelFor('messaging.wecom_qr.completed', ''), 'success');
+        await cancelWecomFlow({ silent: true, render: false });
+        renderCurrent();
+        return;
+      }
+      if (nextState === 'expired' || nextState === 'cancelled' || nextState === 'failed') {
+        setNotice(registration.errorCode || nextState, 'error');
+        await cancelWecomFlow({ silent: true, render: false });
+        renderCurrent();
+        return;
+      }
+      scheduleWecomPoll(flowId);
+    } catch (_) {
+      scheduleWecomPoll(flowId);
+    }
+  }
+
+  async function completeWecomFlow(wecomBotId, wecomBotSecret) {
+    if (!state.wecom.flowId || state.wecom.state === 'completed' || state.wecom.cancelling) return;
+    const flowId = state.wecom.flowId;
+    try {
+      const result = await invoke('messaging.wecom_qr.complete', { flowId, wecomBotId, wecomBotSecret });
+      const registration = result && result.registration ? result.registration : result;
+      if (registration.state === 'completed' && registration.instance && registration.instance.id) {
+        state.instances = state.instances.some((candidate) => candidate.id === registration.instance.id)
+          ? state.instances.map((candidate) => candidate.id === registration.instance.id ? registration.instance : candidate)
+          : [...state.instances, registration.instance];
+        state.selectedInstanceId = registration.instance.id;
+        state.wecom.state = 'completed';
+        setNotice(labelFor('messaging.wecom_qr.completed', ''), 'success');
+        await cancelWecomFlow({ silent: true, render: false });
+        renderCurrent();
+        return;
+      }
+      if (registration.state === 'failed' || registration.state === 'expired' || registration.state === 'denied') {
+        setNotice(registration.errorCode || registration.state, 'error');
+        await cancelWecomFlow({ silent: true, render: false });
+        renderCurrent();
+      }
+    } catch (error) {
+      setNotice(errorMessage(error, labelFor('messaging.wecom_qr.invalid_message', '')), 'error');
+    }
+  }
+
+  async function startWecomFlow() {
+    if (state.wecom.starting || state.wecom.cancelling) return;
+    state.wecom.starting = true;
+    setNotice('', '');
+    renderCurrent();
+    try {
+      const result = await invoke('messaging.wecom_qr.start', {
+        displayName: labelFor('messaging.channel.wecom.title', '企业微信'),
+      });
+      const registration = result && result.registration ? result.registration : result;
+      const flowId = typeof registration.flowId === 'string' ? registration.flowId.trim() : '';
+      const authUrl = typeof registration.authUrl === 'string' ? registration.authUrl.trim() : '';
+      if (!flowId || !authUrl) throw new Error(registration.error || labelFor('messaging.wecom_qr.invalid_message', ''));
+      state.wecom.flowId = flowId;
+      state.wecom.authUrl = authUrl;
+      state.wecom.state = registration.state || 'awaiting_scan';
+      state.wecom.starting = false;
+      const popup = window.open(authUrl, 'wecom_auth', 'width=720,height=640,popup=yes');
+      if (!popup) {
+        setNotice(labelFor('messaging.wecom_qr.invalid_message', ''), 'error');
+        return;
+      }
+      state.wecom.popup = popup;
+      if (typeof window.addEventListener === 'function') {
+        window.addEventListener('message', handleWecomAuthMessage);
+      }
+      setNotice(labelFor('messaging.wecom_qr.open_hint', ''), 'info');
+      scheduleWecomPoll(flowId);
+      renderCurrent();
+    } catch (error) {
+      state.wecom.starting = false;
+      setNotice(errorMessage(error, labelFor('messaging.wecom_qr.invalid_message', '')), 'error');
+      renderCurrent();
+    }
+  }
+
+  function renderWecomPanel(channel) {
+    const wrapper = el('div', 'messaging-panel-body');
+    wrapper.appendChild(renderInstanceList(channel));
+    const config = card('messaging.association_title', 'messaging.association_sub', 'messaging-wecom-card');
+    const flowActive = Boolean(state.wecom.flowId && !['completed', 'cancelled', 'expired', 'failed'].includes(state.wecom.state));
+    const scan = el('button', 'btn messaging-scan-button', labelFor(
+      flowActive ? 'messaging.wecom_qr.cancel' : 'messaging.wecom_qr.start', '',
+    ));
+    scan.type = 'button';
+    scan.disabled = state.updating || state.wecom.starting || state.wecom.cancelling;
+    scan.appendChild(icon(flowActive ? 'x' : 'qr-code', 'messaging-action-icon'));
+    scan.addEventListener('click', () => {
+      if (flowActive) void cancelWecomFlow();
+      else void startWecomFlow();
+    });
+    config.appendChild(scan);
+    if (state.wecom.error) {
+      config.appendChild(el('p', 'messaging-wecom-error', state.wecom.error));
+    }
+    wrapper.appendChild(config);
+    const instances = instancesForChannel(channel);
+    if (instances.length) {
+      const deletion = card('messaging.delete_title', 'messaging.delete_subtitle', 'messaging-delete-card');
+      const instance = instances.find((item) => item.id === state.selectedInstanceId) || instances[0];
+      const deleteButton = el('button', 'btn btn-danger messaging-delete-button', labelFor('messaging.delete', ''));
+      deleteButton.type = 'button';
+      deleteButton.disabled = state.updating;
+      deleteButton.addEventListener('click', () => void deleteInstance(instance, deleteButton));
+      deletion.appendChild(deleteButton);
+      wrapper.appendChild(deletion);
+    }
+    return wrapper;
+  }
+
   async function updateInstance(patch, control) {
     const instance = currentInstance();
     if (!instance || state.updating) return;
@@ -794,7 +982,7 @@
     const channel = channelForKey(key);
     if (!channel || channel.group !== 'open' || state.selectedChannel === key) return;
     cancelQr({ silent: true, render: false });
-    // Task 8 追加: await cancelWecomFlow({ silent: true, render: false });
+    await cancelWecomFlow({ silent: true, render: false });
     state.selectedChannel = key;
     state.selectedInstanceId = '';
     setNotice('', '');
@@ -809,8 +997,9 @@
       panel.appendChild(renderFeishuPanel(channel));
     } else if (channel.platform === 'telegram') {
       panel.appendChild(renderTelegramPanel(channel));
+    } else if (channel.platform === 'wecom') {
+      panel.appendChild(renderWecomPanel(channel));
     }
-    // Task 8 追加: else if (channel.platform === 'wecom') panel.appendChild(renderWecomPanel(channel));
     appendNotice(panel);
     return panel;
   }
@@ -934,7 +1123,7 @@
       CHANNELS,
       normalizeFeishuQrStatus,
       channelForInstance,
-      __test: { state, applyFeishuQrStatus, qrIsVisibleFor, qrPollDelay, resetQrState, instancesForChannel, validateBotToken },
+      __test: { state, applyFeishuQrStatus, qrIsVisibleFor, qrPollDelay, resetQrState, instancesForChannel, validateBotToken, parseWecomAuthMessage },
     };
   }
 })();

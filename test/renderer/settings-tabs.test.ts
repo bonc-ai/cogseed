@@ -253,6 +253,35 @@ describe('settings tabs module', () => {
     expect(source).toContain("enabled: true }");
   });
 
+  it('accepts only verified wecom auth messages from the official popup', () => {
+    const { hooks } = loadMessagingSettingsTestHooks();
+    const origin = 'https://work.weixin.qq.com';
+    const popup = { closed: false };
+    const make = (overrides: any) => ({ origin, source: popup, data: { type: 'AUTH_SUCCESS', wecomBotId: 'wb_abc', wecomBotSecret: 'secret-value' }, ...overrides });
+
+    expect(hooks.__test.parseWecomAuthMessage(make({}), popup)).toMatchObject({
+      ok: true,
+      wecomBotId: 'wb_abc',
+      wecomBotSecret: 'secret-value',
+    });
+    expect(hooks.__test.parseWecomAuthMessage(make({ origin: 'https://evil.example' }), popup).ok).toBe(false);
+    expect(hooks.__test.parseWecomAuthMessage(make({ source: {} }), popup).ok).toBe(false);
+    expect(hooks.__test.parseWecomAuthMessage(make({ data: { type: 'AUTH_SUCCESS' } }), popup).ok).toBe(false);
+    expect(hooks.__test.parseWecomAuthMessage(make({ data: { type: 'AUTH_SUCCESS', wecomBotId: 'wb_abc', wecomBotSecret: '' } }), popup).ok).toBe(false);
+  });
+
+  it('wires the wecom panel to start/complete/cancel IPC and popup cleanup', () => {
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    expect(source).toContain('messaging.wecom_qr.start');
+    expect(source).toContain('messaging.wecom_qr.complete');
+    expect(source).toContain('messaging.wecom_qr.cancel');
+    expect(source).toContain('window.open');
+    expect(source).toContain('event.origin');
+    expect(source).toContain('event.source !== popup');
+    expect(source).toContain('closeWecomPopup');
+    expect(source).toContain('await cancelWecomFlow({ silent: true, render: false })');
+  });
+
   it('provides every visible catalog and detail label in each renderer locale', () => {
     const keys = [
       'messaging.group.open',
