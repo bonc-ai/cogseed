@@ -320,6 +320,19 @@ N1 的 `isRealBoundary()` 只认 `mode === 'real'`，会把它一并按降级处
 | B8 | 真机验证：启动+握手 ✅ / 跨重启 ❌ | 史雨萱（第 3 项） | S3 hydration 的生产路径仍未确认 | 🟡 |
 | B9 | **bus-integration 测试依赖「引擎未编译」** | 待指派 | 任何跑过 `run.sh` 的机器上 4 个用例必失败 | 🟠 |
 
+**每条阻塞的展开说明在 §5 对应责任人段落**，不要只读本表：
+
+| 阻塞 | 展开位置 |
+|---|---|
+| B1 | §5 陈万康 |
+| B2 · B3 · B4 · B7 | §5 张照航 |
+| B5 · B8 | §5 史雨萱 |
+| B6 | §5 张浩 |
+| B9 | 本节下方「B9 说明」，责任人待指派 |
+
+反向也一样：§5 里给某个人的要求，凡是对应阻塞项的都在本表里有一行。
+两处都要看——本表给的是影响和严重度，§5 给的是接口形状和具体做法。
+
 **B1 是决定性的**：它没解决之前，整条链路只能「读得出证据、聚得出 run」，
 但**不会自动产生任何候选**。N1 首次接线的验收标准因此是
 「聚合与映射正确 + 正确跳过」，不是「能造出候选」。
@@ -356,7 +369,7 @@ pending 日志为空，4 个用例失败。
 
 ## 5. 分工对接（按会议名单）
 
-### 陈万康 — 第 1、2 项：候选识别 + 候选确认
+### 陈万康 — 第 1、2 项：候选识别 + 候选确认（B1）
 
 **这是当前唯一的硬阻塞（B1）。** 证据流里不存在「能力主张」这个语义，
 没有识别器，整条链路只能读得出证据、聚得出 run，**不会自动产生任何候选**。
@@ -405,7 +418,7 @@ interface EvidenceRun {
 候选状态机（现有，不要改）：
 `pending → deferred → pending`、`pending → rejected`（终态）、`pending → promoted`（终态）。
 
-### 张照航 — 第 4 项：基于 KSTAR 的认知资产复用
+### 张照航 — 第 4 项：基于 KSTAR 的认知资产复用（B2 · B3 · B4 · B7）
 
 **你从能力册拿数据的方式（不需要我推送）：**
 
@@ -425,6 +438,19 @@ recordRecallUsage({ assetId, assetVersion, taskRunId, projectionId?, boundary, o
 
 `boundary` 如实填 `real` / `degraded` / `test-double`。
 详情页会把非 `real` 的记录**显式标注**，避免 mock 被当成真实复用证据。
+
+**证据发射端：degraded 时必须带 `reason`**（完整结构见 §3「boundary 完整结构」）
+
+你在 `kstar-bus-integration.ts` 发的
+`{ mode: 'degraded', provider: 'meta-skill-engine-mcp', reason: 'engine_unavailable' }`
+是正确的，这条只是把它**固化成契约**，别在后续改动里退化成只发 `mode`。
+
+原因是 N1 的 `buildCandidateInput()` 会读 `boundary.reason` 生成可观测的降级原因
+（`kstar-evidence-adapter.ts:293`），**读不到才回退为 `boundary_not_real`**。
+那个回退值只说明「不是 real」，说不出为什么降级，排查时等于没有信息。
+
+`provider` 同理：同样是 degraded，`meta-skill-engine-mcp`（引擎不可用）和
+`fixture`（测试替身）的处置方式完全不同，不能省。
 
 **另外归你的两项引擎侧问题：**
 
@@ -455,13 +481,13 @@ recordRecallUsage({ assetId, assetVersion, taskRunId, projectionId?, boundary, o
 **`id` 必须匹配 `[A-Za-z0-9_-]+`**，否则整条 ref 会被 `normalizeCognitionSourceRefs`
 **静默丢弃且不报错**（见 §3）。这是个真实陷阱，务必注意。
 
-### 刘婷婷 — 第 6 项：60秒旅程
+### 刘婷婷 — 第 6 项：60秒旅程（无阻塞项）
 
 与能力册无直接接口依赖。若旅程中要展示"系统学到了什么"，
 可读 `recall.assets.list`；未注册场景下资产列表为空是正常状态，
 展示层已有空态文案 `cognition.no_ability_assets`。
 
-### 史雨萱 — 第 3 项：本文档交付方
+### 史雨萱 — 第 3 项：本文档交付方（B5 已修 · B8 部分完成）
 
 已完成：S1–S8（见 §1）、B5（serverInfo 版本统一）、B8 的启动+握手部分。
 待办：B8 剩余的跨重启验证、N1 副作用入口（等 B8 通过后接）。
