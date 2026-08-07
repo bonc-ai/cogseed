@@ -58,6 +58,7 @@ import { createOfficeTools } from './office-tools';
 import { officeCliAvailable } from '../../features/office/office_engine';
 import { createKbTools } from './kb-tools';
 import { createChatHistoryTools } from './chat-history-tools';
+import { createMessagingTools } from './messaging-tools';
 import { createImageGenTool } from './image-gen-tool';
 import { createVideoStudioTool } from './video-studio-tool';
 import { createResearchRerankTool } from './research-rerank-tool';
@@ -780,6 +781,19 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ...(params.projectId ? { projectId: params.projectId } : {}),
   }) : [];
 
+  // Proactive Feishu/Lark messaging (Commander-only). The tools resolve the
+  // configured owner, ask the user for one-time confirmation, and send through
+  // the shared messaging service; workers / edit sessions / CLI / reflection
+  // never get them. A cid is required to route the confirmation dialog and
+  // derive the stable per-turn source key.
+  const messagingTools: AgentTool[] = uid && !params.disableTools && isCommander && params.cid
+    ? createMessagingTools({
+        userId: uid,
+        cid: params.cid,
+        ...(params.turnId ? { turnId: params.turnId } : {}),
+      })
+    : [];
+
   // Media generation. Shares the localExec access mode with
   // local-tools (writing image bytes is the same blast radius as write_file).
   // Skipped when uid is unknown — generators need the
@@ -893,6 +907,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ...fileTools,
     ...kbTools,
     ...chatHistoryTools,
+    ...messagingTools,
     ...imageGenTools,
     ...videoStudioTools,
     ...deepResearchTools,
