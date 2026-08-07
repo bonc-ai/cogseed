@@ -3188,11 +3188,11 @@ function _moveAgentPickerTab(delta) {
 function _agentPickerProjectExists(projectId) {
   const pid = String(projectId || '');
   if (!pid) return false;
-  try {
-    if (typeof _projectsCache !== 'undefined' && Array.isArray(_projectsCache)) {
-      return _projectsCache.some((p) => p && p.project_id === pid);
-    }
-  } catch (_) { /* no project cache in this renderer/test context */ }
+  // 工作空间一期修复：项目缓存（_projectsCache）在新建项目后不会即时刷新
+  // （实测：新建项目不在缓存里 → pid 被当无效 → 作用域静默丢失 → @ 显示全局）。
+  // 缓存不含 ≠ 项目不存在——放行交给主进程 scope.resolve 裁决：
+  // 项目不存在 → getProjectScopeMeta 降级 null → 全局可见（与删除项目回全局的
+  // 语义一致，安全）；项目存在 → 正常返回 S∪B 作用域。
   return true;
 }
 
@@ -3238,7 +3238,19 @@ function _resolveActiveProjectId(anchorId) {
 async function _refreshAgentPickerProjectContext(anchorId) {
   const refreshSeq = ++_pickerProjectContextSeq;
   _pickerBoundAgentIds = null;
+  _pickerBoundSkillIds = null;
   _pickerProjectId = _resolveActiveProjectId(anchorId) || '';
+  // 工作空间一期修复（第二层）：会话列表（conversations）条目不含 project_id，
+  // currentCid 也经常不在列表里（项目会话独立索引）——兜底直接按当前会话
+  // 查主进程 conv 记录（权威来源），否则作用域静默退化为全局全量。
+  if (!_pickerProjectId && anchorId === 'chat-recipient-chip'
+      && typeof currentCid !== 'undefined' && currentCid) {
+    try {
+      const convRes = await window.orkas.invoke('conversations.get', { cid: currentCid });
+      const pid = (convRes && convRes.conversation && convRes.conversation.project_id) || '';
+      if (refreshSeq === _pickerProjectContextSeq) _pickerProjectId = _agentPickerValidProjectId(pid);
+    } catch (_) { /* keep no-scope */ }
+  }
   _pickerProjectContextLoading = !!_pickerProjectId;
   _pickerLibraryRows = null;
   _pickerLibraryLoading = null;
@@ -3457,8 +3469,10 @@ function _renderSkillPickerList(listEl, filterText, anchorId) {
   // Global open-tier skills share the same picker surface as trusted skills.
   // External package internals stay package-scoped in user UI; the agent layer
   // can still see package-provided SKILL.md files when composing a task.
+  // 工作空间一期：global 技能同样受作用域过滤（否则空间外技能漏网显示）。
   const openRows = (typeof _openSkillsCache !== 'undefined' && Array.isArray(_openSkillsCache))
-    ? applyFilter(_openSkillsCache.filter((s) => s.source === 'global' && s.enabled !== false), openDesc)
+    ? applyFilter(_openSkillsCache.filter((s) => s.source === 'global' && s.enabled !== false
+      && (!_pickerBoundSkillIds || _pickerBoundSkillIds.has(s.id))), openDesc)
     : [];
 
   if (!trusted.length && !openRows.length) {
