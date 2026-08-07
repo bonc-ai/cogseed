@@ -167,6 +167,21 @@ export interface ChatOptions {
    *  part of its turn-scoped execution contract; file output now stays in the
    *  conversation workspace rather than a turn-specific subdirectory. */
   turnId?: string;
+  /** Stable persisted id of the visible source message that triggered this
+   * turn. Used only for provenance-bound teaching receipts. */
+  sourceMessageId?: string;
+  /** True only when sourceMessageId belongs to a visible user-authored row. */
+  sourceMessageFromUser?: boolean;
+  /** Exact visible user-authored text for provenance-bound teaching intent.
+   * This excludes model-only reference, attachment, and replay envelopes. */
+  sourceMessageText?: string;
+  onTeachingReceipt?: (receipt: {
+    id: string;
+    summary: string;
+    scope: 'personal' | 'project' | 'agent';
+    status: 'active' | 'revoked';
+    candidateIds: string[];
+  }) => void | Promise<void>;
   /** Project id of the conversation, when it belongs to one. Threaded
    *  through to local-tools / file-tools / image-gen-tool so workspace
    *  resolution picks up the project-scoped selection. Caller (group_chat

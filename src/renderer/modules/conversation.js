@@ -2630,6 +2630,25 @@ function _normalizeCreatedSkills(gm) {
   return null;
 }
 
+function _mergeTeachingReceiptStatuses(messages, signals) {
+  if (!Array.isArray(messages) || !messages.length || !Array.isArray(signals) || !signals.length) return messages || [];
+  const statusById = new Map(signals
+    .filter((signal) => signal && signal.id && (signal.status === 'active' || signal.status === 'revoked'))
+    .map((signal) => [signal.id, signal.status]));
+  if (!statusById.size) return messages;
+  return messages.map((message) => {
+    if (!Array.isArray(message?.teaching_receipts) || !message.teaching_receipts.length) return message;
+    let changed = false;
+    const teachingReceipts = message.teaching_receipts.map((receipt) => {
+      const status = statusById.get(receipt?.id);
+      if (!status || status === receipt.status) return receipt;
+      changed = true;
+      return { ...receipt, status };
+    });
+    return changed ? { ...message, teaching_receipts: teachingReceipts } : message;
+  });
+}
+
 function _groupMessageSystemKind(gm) {
   const explicit = String(gm?.system_kind || gm?._system_kind || '');
   if (explicit) return explicit;
@@ -2705,6 +2724,7 @@ function _groupMsgToLegacy(gm) {
     ...(_normalizeCreatedAgents(gm) ? { created_agents: _normalizeCreatedAgents(gm) } : {}),
     ...(_normalizeCreatedSkills(gm) ? { created_skills: _normalizeCreatedSkills(gm) } : {}),
     ...(Array.isArray(gm.artifacts) && gm.artifacts.length ? { artifacts: gm.artifacts } : {}),
+    ...(Array.isArray(gm.teaching_receipts) && gm.teaching_receipts.length ? { teaching_receipts: gm.teaching_receipts } : {}),
     ...(Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length ? { marketplace_requests: gm.marketplace_requests } : {}),
     ...(Array.isArray(gm.wake_requests) && gm.wake_requests.length ? { wake_requests: gm.wake_requests } : {}),
     ...(gm.kstar_review ? { kstar_review: gm.kstar_review } : {}),
@@ -3631,6 +3651,59 @@ function _renderMessageCreatedSkillHtml(list) {
     })
     .join('');
   return chips ? `<div class="chat-msg-created-agent">${chips}</div>` : '';
+}
+
+function _teachingReceiptScopeLabel(scope) {
+  const key = scope === 'project' ? 'chat.teaching.scope_project' : scope === 'agent' ? 'chat.teaching.scope_agent' : 'chat.teaching.scope_personal';
+  const fallback = scope === 'project' ? '项目' : scope === 'agent' ? '智能体' : '个人';
+  const value = typeof t === 'function' ? t(key) : key;
+  return value && value !== key ? value : fallback;
+}
+
+function _renderTeachingReceiptsHtml(receipts) {
+  if (!Array.isArray(receipts) || !receipts.length) return '';
+  return `<div class="chat-teaching-receipts">${receipts.map((receipt) => {
+    const revoked = receipt.status === 'revoked';
+    const statusKey = revoked ? 'chat.teaching.revoked' : 'chat.teaching.pending_review';
+    const statusFallback = revoked ? '已撤销' : '已记住 · 待审核';
+    const statusValue = typeof t === 'function' ? t(statusKey) : statusKey;
+    const status = statusValue && statusValue !== statusKey ? statusValue : statusFallback;
+    const revokeKey = 'chat.teaching.revoke';
+    const revokeValue = typeof t === 'function' ? t(revokeKey) : revokeKey;
+    const revoke = revokeValue && revokeValue !== revokeKey ? revokeValue : '撤销';
+    return `<section class="chat-teaching-receipt${revoked ? ' is-revoked' : ''}" data-teaching-receipt-id="${escapeHtml(receipt.id || '')}"><div><strong>${escapeHtml(receipt.summary || '')}</strong><span>${escapeHtml(_teachingReceiptScopeLabel(receipt.scope))} · ${escapeHtml(status)}</span></div>${revoked ? '' : `<button type="button" class="btn btn-xs" data-chat-teaching-revoke="${escapeHtml(receipt.id || '')}">${escapeHtml(revoke)}</button>`}</section>`;
+  }).join('')}</div>`;
+}
+
+function _hydrateTeachingReceipts(messageEl) {
+  messageEl?.querySelectorAll('[data-chat-teaching-revoke]').forEach((button) => {
+    if (button.dataset.bound === '1') return;
+    button.dataset.bound = '1';
+    button.addEventListener('click', async () => {
+      const signalId = button.dataset.chatTeachingRevoke;
+      if (!signalId || button.dataset.busy === '1') return;
+      button.dataset.busy = '1';
+      button.disabled = true;
+      try {
+        const result = await window.orkas.invoke('recall.teaching.revoke', { signalId });
+        if (!result?.ok) throw new Error(result?.error || 'teaching signal revoke failed');
+        const receipt = button.closest('[data-teaching-receipt-id]');
+        if (receipt) {
+          receipt.classList.add('is-revoked');
+          const status = receipt.querySelector('span');
+          const key = 'chat.teaching.revoked';
+          const value = typeof t === 'function' ? t(key) : key;
+          if (status) status.textContent = `${_teachingReceiptScopeLabel(result.signal?.scope)} · ${value && value !== key ? value : '已撤销'}`;
+        }
+        button.remove();
+      } catch (error) {
+        button.disabled = false;
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        button.dataset.busy = '0';
+      }
+    });
+  });
 }
 
 function _hydrateMessageCreatedSkillChip(msgDiv) {
@@ -5772,6 +5845,9 @@ async function loadConversationHistory(cid, opts = {}) {
       HISTORY_PAGE_SIZE,
       Number(opts.searchTarget?.msgIndex),
     ));
+    const teachingSignalsPromise = window.orkas?.invoke
+      ? window.orkas.invoke('recall.teaching.list', { conversationId: cid, limit: 100 }).catch(() => null)
+      : Promise.resolve(null);
     const membersStartedAt = performance.now();
     const membersPromise = _refreshGroupMembers(cid).then((actors) => {
       _convLog.info('conversation detail members ready', {
@@ -5831,7 +5907,11 @@ async function loadConversationHistory(cid, opts = {}) {
     // agent's visibility slice still carries dispatches so the agent has the
     // dispatch text in its own context.
     const renderStartedAt = performance.now();
-    const rawHistory = Array.isArray(data.history) ? data.history : [];
+    const teachingSignals = await teachingSignalsPromise;
+    const rawHistory = _mergeTeachingReceiptStatuses(
+      Array.isArray(data.history) ? data.history : [],
+      teachingSignals?.ok ? teachingSignals.signals : [],
+    );
     const responseIndexes = Array.isArray(data.history_indexes) ? data.history_indexes : [];
     const responsePageStart = Number(data.page_start);
     const indexedHistory = rawHistory.map((gm, offset) => {
@@ -6031,6 +6111,7 @@ function _messageRecordHasMountedSidecars(gm, el, opts = {}) {
   if (Array.isArray(gm.produced) && gm.produced.length && !el.querySelector('.chat-msg-produced')) return false;
   if ((_normalizeCreatedAgents(gm) || _normalizeCreatedSkills(gm)) && !el.querySelector('.chat-msg-created-agent-chip')) return false;
   if (Array.isArray(gm.artifacts) && gm.artifacts.length && !el.querySelector('.chat-artifact-host')) return false;
+  if (Array.isArray(gm.teaching_receipts) && gm.teaching_receipts.length && !el.querySelector('.chat-teaching-receipts')) return false;
   if (Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length && !el.querySelector('.chat-marketplace-request')) return false;
   if (_processItemsHaveRenderableLine(gm.process) && !el.querySelector('.stream-process')) return false;
   return true;
@@ -6728,6 +6809,9 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const createdSkillHtml = createdSkillsList
     ? _renderMessageCreatedSkillHtml(createdSkillsList)
     : '';
+  const teachingReceiptsHtml = role === 'assistant'
+    ? _renderTeachingReceiptsHtml(message.teaching_receipts)
+    : '';
   // Group-chat header sits **above** the bubble, outside it: sender name +
   // timestamp on one row. Same DOM strip for historical (loaded via
   // getMessages) and live-streamed messages so users always see "who said
@@ -6753,7 +6837,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   // action row remains for created-agent/skill links and message actions.
   msgDiv.innerHTML = `
     ${headerHtml}
-    <div class="chat-bubble">${planAnnHtml}${referencesHtml}${contentHtml}${attachmentsHtml}</div>
+    <div class="chat-bubble">${planAnnHtml}${referencesHtml}${contentHtml}${attachmentsHtml}${teachingReceiptsHtml}</div>
     <div class="chat-msg-actions" data-role="msg-actions">${createdAgentHtml}${createdSkillHtml}</div>
   `;
   if (typeof opts.msgIndex === 'number') msgDiv.dataset.msgIndex = String(opts.msgIndex);
@@ -6799,6 +6883,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   _hydrateActorHeaderLinks(msgDiv);
   if (createdAgentHtml) _hydrateMessageCreatedAgentChip(msgDiv);
   if (createdSkillHtml) _hydrateMessageCreatedSkillChip(msgDiv);
+  if (teachingReceiptsHtml) _hydrateTeachingReceipts(msgDiv);
   // Interactive input-form widget (assistant messages only). Appended inside
   // the bubble after markdown + chips so it reads as "reply text → confirm
   // this form". See chat-input-form.js for the widget implementation.
@@ -10224,6 +10309,7 @@ function _isRedundantRoutingOnlyCommanderRecord(gm) {
       || (Array.isArray(gm.produced) && gm.produced.length)
       || _normalizeCreatedAgents(gm) || _normalizeCreatedSkills(gm)
       || (Array.isArray(gm.artifacts) && gm.artifacts.length)
+      || (Array.isArray(gm.teaching_receipts) && gm.teaching_receipts.length)
       || (Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length)) {
     return false;
   }
@@ -11608,6 +11694,14 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
         _msg_id: gm.id,
       };
       _mountMarketplaceInstallRequests(bubble, ph, reqMessage, { cid });
+    }
+  }
+
+  if (Array.isArray(gm.teaching_receipts) && gm.teaching_receipts.length) {
+    const bubble = ph.querySelector('.chat-bubble');
+    if (bubble && !bubble.querySelector('.chat-teaching-receipts')) {
+      bubble.insertAdjacentHTML('beforeend', _renderTeachingReceiptsHtml(gm.teaching_receipts));
+      _hydrateTeachingReceipts(ph);
     }
   }
 

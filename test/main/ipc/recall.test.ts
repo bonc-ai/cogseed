@@ -15,6 +15,39 @@ const recallMock = vi.hoisted(() => ({
   rejectRecallCandidate: vi.fn(async (_uid: string, id: string, note?: string) => ({ id, note, status: 'rejected' })),
   promoteRecallCandidate: vi.fn(async (_uid: string, id: string) => ({ candidate: { id }, asset: { id: 'aa-a' } })),
 }));
+const sourceMock = vi.hoisted(() => ({
+  COGNITION_CATALOG_KINDS: ['conversation', 'artifact_file', 'execution_evaluation', 'user_teaching_signal', 'authorized_external_system'],
+  listCognitionSources: vi.fn(async () => [{ kind: 'conversation', status: 'empty', count: 0, items: [] }]),
+}));
+const captureMock = vi.hoisted(() => ({
+  listRecallCaptures: vi.fn(async () => []),
+  queryRecallCaptures: vi.fn(async () => ({ captures: [], nextCursor: null, counts: { waiting: 0, processing: 0, review: 0, failed: 0, completed: 0, cancelled: 0 } })),
+  readRecallCapture: vi.fn(async (_uid: string, id: string) => ({ id, status: 'queued' })),
+  retryRecallCapture: vi.fn(async (_uid: string, id: string) => ({ id, status: 'queued' })),
+  pauseRecallCapture: vi.fn(async (_uid: string, id: string) => ({ id, status: 'paused' })),
+  resumeRecallCapture: vi.fn(async (_uid: string, id: string) => ({ id, status: 'queued' })),
+  cancelRecallCapture: vi.fn(async (_uid: string, id: string) => ({ id, status: 'cancelled' })),
+  runRecallCaptureNow: vi.fn(async (_uid: string, id: string) => ({ id, status: 'queued' })),
+  queueManualRecallCaptureFromConversation: vi.fn(async (_uid: string, conversationId: string) => ({ id: 'rcap-manual', conversationId, status: 'waiting_manual' })),
+}));
+const captureSettingsMock = vi.hoisted(() => ({
+  readRecallCaptureSettings: vi.fn(async (uid: string) => ({ id: 'settings', ownerId: uid, enabled: true, executionPolicy: 'smart', quietMinutes: 10, nightlyStart: '02:00', nightlyEnd: '06:00', catchUpMissed: true })),
+  updateRecallCaptureSettings: vi.fn(async (uid: string, input: unknown) => ({ id: 'settings', ownerId: uid, ...input })),
+}));
+const viewMock = vi.hoisted(() => ({
+  listRecallViews: vi.fn(async () => []),
+  readRecallView: vi.fn(async (_uid: string, id: string) => ({ id })),
+}));
+const teachingMock = vi.hoisted(() => ({
+  listUserTeachingSignals: vi.fn(async () => []),
+  revokeUserTeachingSignal: vi.fn(async (_uid: string, id: string) => ({ id, status: 'revoked' })),
+}));
+const projectionMock = vi.hoisted(() => ({
+  listContextProjections: vi.fn(async () => []),
+  previewContextProjection: vi.fn(async (_uid: string, input: unknown) => ({ id: 'proj-a', ...input as object })),
+  confirmContextProjection: vi.fn(async (_uid: string, id: string) => ({ id, status: 'confirmed' })),
+  readContextProjection: vi.fn(async (_uid: string, id: string) => ({ id })),
+}));
 
 vi.mock('electron', () => ({
   ipcMain: { handle: (channel: string, fn: InvokeFn) => { if (channel === 'orkas.invoke') invokeHandler = fn; }, on: vi.fn() },
@@ -25,6 +58,12 @@ vi.mock('electron', () => ({
 }));
 vi.mock('../../../src/main/logger', () => ({ createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }), logFromRenderer: vi.fn() }));
 vi.mock('../../../src/main/features/recall/candidate-service', () => recallMock);
+vi.mock('../../../src/main/features/recall/source-catalog', () => sourceMock);
+vi.mock('../../../src/main/features/recall/capture-service', () => captureMock);
+vi.mock('../../../src/main/features/recall/capture-settings', () => captureSettingsMock);
+vi.mock('../../../src/main/features/recall/recall-view-service', () => viewMock);
+vi.mock('../../../src/main/features/recall/teaching-service', () => teachingMock);
+vi.mock('../../../src/main/features/recall/context-projection', () => projectionMock);
 
 beforeEach(async () => {
   process.env.ORKAS_WORKSPACE_ROOT = os.tmpdir();
@@ -50,5 +89,81 @@ describe('ipc › recall candidate governance', () => {
     await expect(call('recall.candidates.promote', { candidateId: '../bad' })).resolves.toMatchObject({ ok: false });
     await expect(call('recall.candidates.defer', { candidateId: 'cand-a', note: 'x'.repeat(1_001) })).resolves.toMatchObject({ ok: false });
     expect(recallMock.promoteRecallCandidate).not.toHaveBeenCalled();
+  });
+
+  it('routes validated source and capture requests through the active user boundary', async () => {
+    await expect(call('recall.sources.list', { kinds: ['conversation', 'artifact_file'], conversationId: 'conv-a', limit: 10 }))
+      .resolves.toMatchObject({ ok: true, sources: expect.any(Array) });
+    expect(sourceMock.listCognitionSources).toHaveBeenCalledWith(UID, {
+      kinds: ['conversation', 'artifact_file'],
+      conversationId: 'conv-a',
+      limit: 10,
+    });
+
+    await expect(call('recall.captures.list', { limit: 5 }))
+      .resolves.toMatchObject({ ok: true, captures: [] });
+    expect(captureMock.queryRecallCaptures).toHaveBeenCalledWith(UID, { limit: 5 });
+    await expect(call('recall.captures.list', { statuses: ['waiting_quiet', 'waiting_completion'], executionPolicy: 'smart' }))
+      .resolves.toMatchObject({ ok: true, captures: [] });
+
+    await expect(call('recall.captures.read', { captureId: 'rcap-a' }))
+      .resolves.toMatchObject({ ok: true, capture: { id: 'rcap-a' } });
+
+    await expect(call('recall.captures.retry', { captureId: 'rcap-a' }))
+      .resolves.toMatchObject({ ok: true, capture: { status: 'queued' } });
+    expect(captureMock.retryRecallCapture).toHaveBeenCalledWith(UID, 'rcap-a');
+
+    await expect(call('recall.captures.pause', { captureId: 'rcap-a' })).resolves.toMatchObject({ capture: { status: 'paused' } });
+    await expect(call('recall.captures.resume', { captureId: 'rcap-a' })).resolves.toMatchObject({ capture: { status: 'queued' } });
+    await expect(call('recall.captures.cancel', { captureId: 'rcap-a' })).resolves.toMatchObject({ capture: { status: 'cancelled' } });
+    await expect(call('recall.captures.runNow', { captureId: 'rcap-a' })).resolves.toMatchObject({ capture: { status: 'queued' } });
+    await expect(call('recall.captures.manualCreate', { conversationId: 'conv-a' }))
+      .resolves.toMatchObject({ capture: { conversationId: 'conv-a', status: 'waiting_manual' } });
+    expect(captureMock.queueManualRecallCaptureFromConversation).toHaveBeenCalledWith(UID, 'conv-a');
+
+    await expect(call('recall.captures.settings.update', { executionPolicy: 'nightly', nightlyStart: '02:00' }))
+      .resolves.toMatchObject({ ok: true, settings: { executionPolicy: 'nightly' } });
+    expect(captureSettingsMock.updateRecallCaptureSettings).toHaveBeenCalledWith(UID, { executionPolicy: 'nightly', nightlyStart: '02:00' });
+    await expect(call('recall.captures.settings.update', { executionPolicy: 'smart', quietMinutes: 30 }))
+      .resolves.toMatchObject({ ok: true, settings: { executionPolicy: 'smart', quietMinutes: 30 } });
+    await expect(call('recall.captures.settings.get'))
+      .resolves.toMatchObject({ ok: true, settings: { enabled: true }, model: { configured: expect.any(Boolean) } });
+    expect(captureSettingsMock.readRecallCaptureSettings).toHaveBeenCalledWith(UID);
+
+    await expect(call('recall.views.list', { purpose: 'conversation_capture', workspaceId: 'workspace-a', limit: 5 }))
+      .resolves.toMatchObject({ ok: true, views: [] });
+    expect(viewMock.listRecallViews).toHaveBeenCalledWith(UID, { purpose: 'conversation_capture', workspaceId: 'workspace-a', limit: 5 });
+    await expect(call('recall.views.read', { viewId: 'rv-a' })).resolves.toMatchObject({ ok: true, view: { id: 'rv-a' } });
+
+    await expect(call('recall.projections.list', { workspaceId: 'workspace-a', includeExpired: true, limit: 10 }))
+      .resolves.toMatchObject({ ok: true, projections: [] });
+    expect(projectionMock.listContextProjections).toHaveBeenCalledWith(UID, {
+      workspaceId: 'workspace-a', includeExpired: true, limit: 10,
+    });
+
+    await expect(call('recall.teaching.list', { conversationId: 'conv-a', status: 'active', limit: 5 }))
+      .resolves.toMatchObject({ ok: true, signals: [] });
+    await expect(call('recall.teaching.revoke', { signalId: 'teach-a' }))
+      .resolves.toMatchObject({ ok: true, signal: { status: 'revoked' } });
+    expect(teachingMock.revokeUserTeachingSignal).toHaveBeenCalledWith(UID, 'teach-a');
+  });
+
+  it('rejects malformed source and capture inputs before feature calls', async () => {
+    await expect(call('recall.sources.list', { kinds: ['p3394_patch'] }))
+      .resolves.toMatchObject({ ok: false });
+    await expect(call('recall.sources.list', { conversationId: '../bad' }))
+      .resolves.toMatchObject({ ok: false });
+    await expect(call('recall.captures.list', { limit: 101 }))
+      .resolves.toMatchObject({ ok: false });
+    await expect(call('recall.captures.list', { statuses: ['unknown'] }))
+      .resolves.toMatchObject({ ok: false });
+    await expect(call('recall.captures.list', { executionPolicy: 'weekly' }))
+      .resolves.toMatchObject({ ok: false });
+    await expect(call('recall.captures.retry', { captureId: '../bad' }))
+      .resolves.toMatchObject({ ok: false });
+    await expect(call('recall.captures.pause', { captureId: '../bad' }))
+      .resolves.toMatchObject({ ok: false });
+    await expect(call('recall.projections.list', { status: 'unknown' }))
+      .resolves.toMatchObject({ ok: false });
   });
 });

@@ -38,6 +38,11 @@ import * as recallProjection from '../features/recall/context-projection';
 import * as recallProofs from '../features/recall/proof-service';
 import * as recallTree from '../features/recall/tree-service';
 import * as recallUsage from '../features/recall/usage-service';
+import * as recallSources from '../features/recall/source-catalog';
+import * as recallCaptures from '../features/recall/capture-service';
+import * as recallCaptureSettings from '../features/recall/capture-settings';
+import * as recallViews from '../features/recall/recall-view-service';
+import * as recallTeaching from '../features/recall/teaching-service';
 import * as personalOntologyCandidates from '../features/personal_ontology_candidates';
 import * as personalOntologyGroups from '../features/personal_ontology_groups';
 import * as personalOntologyTemplateFiles from '../features/personal_ontology_template_files';
@@ -57,6 +62,7 @@ import * as contexts from '../features/contexts';
 import * as libraryTransfer from '../features/library_transfer';
 import * as kbVector from '../features/kb_vector';
 import * as kbIndexer from '../features/kb_indexer';
+import { terminalEvents } from '../features/terminal/pty-sessions';
 import * as chatAttachments from '../features/chat_attachments';
 import * as conversationCopyMerge from '../features/conversation_copy_merge';
 import * as chatArtifacts from '../features/chat_artifacts';
@@ -1825,6 +1831,149 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'recall.candidates.list': async (_args, ctx) => ({ ok: true, candidates: await recallCandidates.listRecallCandidates(ctx.userId) }),
 
+  'recall.sources.list': async ({ kinds, conversationId, limit } = {}, ctx) => {
+    if (kinds !== undefined && (
+      !Array.isArray(kinds)
+      || kinds.length > recallSources.COGNITION_CATALOG_KINDS.length
+      || kinds.some((kind) => !recallSources.COGNITION_CATALOG_KINDS.includes(kind))
+    )) throw new Error('invalid cognition source kinds');
+    if (conversationId !== undefined && !safeId(conversationId)) throw new Error('invalid conversation id');
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid source limit');
+    return {
+      ok: true,
+      sources: await recallSources.listCognitionSources(ctx.userId, {
+        ...(kinds !== undefined ? { kinds } : {}),
+        ...(conversationId !== undefined ? { conversationId } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      }),
+    };
+  },
+
+  'recall.views.list': async ({ purpose, workspaceId, includeExpired, limit } = {}, ctx) => {
+    if (purpose !== undefined && purpose !== 'conversation_capture' && purpose !== 'task_context') throw new Error('invalid recall view purpose');
+    if (workspaceId !== undefined && !safeId(workspaceId)) throw new Error('invalid workspace id');
+    if (includeExpired !== undefined && typeof includeExpired !== 'boolean') throw new Error('invalid include expired');
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid recall view limit');
+    return {
+      ok: true,
+      views: await recallViews.listRecallViews(ctx.userId, {
+        ...(purpose !== undefined ? { purpose } : {}),
+        ...(workspaceId !== undefined ? { workspaceId } : {}),
+        ...(includeExpired !== undefined ? { includeExpired } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      }),
+    };
+  },
+
+  'recall.views.read': async ({ viewId } = {}, ctx) => {
+    if (!safeId(viewId)) throw new Error('invalid recall view id');
+    return { ok: true, view: await recallViews.readRecallView(ctx.userId, viewId) };
+  },
+
+  'recall.teaching.list': async ({ conversationId, status, limit } = {}, ctx) => {
+    if (conversationId !== undefined && !safeId(conversationId)) throw new Error('invalid conversation id');
+    if (status !== undefined && status !== 'active' && status !== 'revoked') throw new Error('invalid teaching status');
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid teaching limit');
+    return {
+      ok: true,
+      signals: await recallTeaching.listUserTeachingSignals(ctx.userId, {
+        ...(conversationId !== undefined ? { conversationId } : {}),
+        ...(status !== undefined ? { status } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      }),
+    };
+  },
+
+  'recall.teaching.revoke': async ({ signalId } = {}, ctx) => {
+    if (!safeId(signalId)) throw new Error('invalid teaching signal id');
+    return { ok: true, signal: await recallTeaching.revokeUserTeachingSignal(ctx.userId, signalId) };
+  },
+
+  'recall.captures.list': async ({ limit, statuses, executionPolicy, cursor } = {}, ctx) => {
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid capture limit');
+    const validStatuses = new Set([
+      'waiting_quiet', 'waiting_completion', 'waiting_manual', 'scheduled', 'queued', 'extracting', 'paused',
+      'review_ready', 'no_candidate', 'configuration_required', 'failed', 'cancelled',
+    ]);
+    if (statuses !== undefined && (
+      !Array.isArray(statuses)
+      || statuses.length > validStatuses.size
+      || statuses.some((status) => typeof status !== 'string' || !validStatuses.has(status))
+    )) throw new Error('invalid recall capture statuses');
+    if (executionPolicy !== undefined && !['smart', 'immediate', 'nightly', 'manual'].includes(executionPolicy)) {
+      throw new Error('invalid recall capture execution policy');
+    }
+    if (cursor !== undefined && (typeof cursor !== 'string' || !cursor || cursor.length > 500)) {
+      throw new Error('invalid recall capture cursor');
+    }
+    const page = await recallCaptures.queryRecallCaptures(ctx.userId, {
+      ...(limit === undefined ? {} : { limit }),
+      ...(statuses === undefined ? {} : { statuses }),
+      ...(executionPolicy === undefined ? {} : { executionPolicy }),
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    return { ok: true, ...page };
+  },
+
+  'recall.captures.read': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, capture: await recallCaptures.readRecallCapture(ctx.userId, captureId) };
+  },
+
+  'recall.captures.retry': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, capture: await recallCaptures.retryRecallCapture(ctx.userId, captureId) };
+  },
+
+  'recall.captures.pause': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, capture: await recallCaptures.pauseRecallCapture(ctx.userId, captureId) };
+  },
+
+  'recall.captures.resume': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, capture: await recallCaptures.resumeRecallCapture(ctx.userId, captureId) };
+  },
+
+  'recall.captures.cancel': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, capture: await recallCaptures.cancelRecallCapture(ctx.userId, captureId) };
+  },
+
+  'recall.captures.runNow': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, capture: await recallCaptures.runRecallCaptureNow(ctx.userId, captureId) };
+  },
+
+  'recall.captures.manualCreate': async ({ conversationId } = {}, ctx) => {
+    if (!safeId(conversationId)) throw new Error('invalid conversation id');
+    return {
+      ok: true,
+      capture: await recallCaptures.queueManualRecallCaptureFromConversation(ctx.userId, conversationId),
+    };
+  },
+
+  'recall.captures.settings.get': async (_input, ctx) => {
+    const [settings, model] = await Promise.all([
+      recallCaptureSettings.readRecallCaptureSettings(ctx.userId),
+      auth.getConfig(),
+    ]);
+    return {
+      ok: true,
+      settings,
+      model: {
+        ...model,
+        configured: auth.hasConfiguredModel().configured,
+        authorizationRequired: Boolean(auth.getConfiguredModelOAuthExpiredMessage()),
+      },
+    };
+  },
+
+  'recall.captures.settings.update': async (input = {}, ctx) => {
+    const settings = await recallCaptureSettings.updateRecallCaptureSettings(ctx.userId, input);
+    return { ok: true, settings };
+  },
+
   'recall.candidates.importPersonalOntology': async ({ candidateId } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid personal ontology candidate id');
     return { ok: true, candidate: await recallCandidates.importPersonalOntologyCandidate(ctx.userId, candidateId) };
@@ -1884,6 +2033,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.workspaceRefs.remove': async ({ id } = {}, ctx) => { if (!safeId(id)) throw new Error('invalid workspace reference id'); await recallWorkspaceRefs.removeWorkspaceAssetReference(ctx.userId, id); return { ok: true }; },
 
   'recall.projections.preview': async ({ taskRunId, workspaceId, purpose, authorization, expiresAt } = {}, ctx) => { if (!safeId(taskRunId) || (workspaceId !== undefined && !safeId(workspaceId)) || typeof purpose !== 'string' || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid recall projection'); return { ok: true, projection: await recallProjection.previewContextProjection(ctx.userId, { taskRunId, ...(workspaceId !== undefined ? { workspaceId } : {}), purpose, ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }) }; },
+  'recall.projections.list': async ({ workspaceId, status, includeExpired, limit } = {}, ctx) => {
+    if (workspaceId !== undefined && !safeId(workspaceId)) throw new Error('invalid workspace id');
+    if (status !== undefined && !['preview', 'confirmed', 'expired', 'revoked'].includes(status)) throw new Error('invalid projection status');
+    if (includeExpired !== undefined && typeof includeExpired !== 'boolean') throw new Error('invalid include expired');
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid projection limit');
+    return {
+      ok: true,
+      projections: await recallProjection.listContextProjections(ctx.userId, {
+        ...(workspaceId !== undefined ? { workspaceId } : {}),
+        ...(status !== undefined ? { status } : {}),
+        ...(includeExpired !== undefined ? { includeExpired } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      }),
+    };
+  },
   'recall.projections.confirm': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.confirmContextProjection(ctx.userId, projectionId) }; },
   'recall.projections.read': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.readContextProjection(ctx.userId, projectionId) }; },
 
@@ -4195,6 +4359,56 @@ const streamHandlers: Record<string, StreamHandler> = {
       }
     } finally {
       kbIndexer.kbEvents.off('status', listener);
+    }
+  },
+
+  // Streams a single PTY terminal session's output to the renderer. Opened by
+  // terminal-panel.js after `terminal.create`. Filters to the owning user +
+  // session id. Raw bytes (ANSI intact) are forwarded for xterm.js to render.
+  'terminal.stream': async function* (
+    payload: { session_id?: unknown },
+    ctx,
+    signal,
+  ) {
+    const sessionId = typeof payload?.session_id === 'string' ? payload.session_id : '';
+    if (!sessionId) {
+      yield { type: 'error', error: 'invalid session_id' };
+      return;
+    }
+    const queue: Array<{ kind: 'output'; data: string } | { kind: 'exit'; exitCode: number | null }> = [];
+    let notify: (() => void) | null = null;
+    const onData = (ev: { userId: string; sessionId: string; chunk: string }) => {
+      if (ev.userId !== ctx.userId || ev.sessionId !== sessionId) return;
+      queue.push({ kind: 'output', data: ev.chunk });
+      notify?.();
+    };
+    const onExit = (ev: { userId: string; sessionId: string; exitCode: number | null }) => {
+      if (ev.userId !== ctx.userId || ev.sessionId !== sessionId) return;
+      queue.push({ kind: 'exit', exitCode: ev.exitCode });
+      notify?.();
+    };
+    terminalEvents.on('data', onData);
+    terminalEvents.on('exit', onExit);
+    const abortPromise = new Promise<void>((r) => {
+      if (signal.aborted) r();
+      else signal.addEventListener('abort', () => r(), { once: true });
+    });
+    try {
+      while (!signal.aborted) {
+        if (queue.length) {
+          const item = queue.shift()!;
+          if (item.kind === 'output') yield { type: 'output', data: item.data };
+          else yield { type: 'exit', exit_code: item.exitCode };
+          continue;
+        }
+        await Promise.race([
+          new Promise<void>((r) => { notify = () => { notify = null; r(); }; }),
+          abortPromise,
+        ]);
+      }
+    } finally {
+      terminalEvents.off('data', onData);
+      terminalEvents.off('exit', onExit);
     }
   },
 };

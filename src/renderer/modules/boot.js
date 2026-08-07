@@ -292,6 +292,7 @@ function _loadViewFeature(feature, view, run) {
 function _lazyFeaturePanel(view) {
   const panelId = view === 'memory' ? 'panel-memory'
     : view === 'skills' ? 'panel-skills'
+    : view === 'recall' ? 'panel-recall'
     : view === 'personal-ontology' ? 'panel-personal-ontology'
     : view === 'contexts' ? 'panel-contexts'
     : view === 'settings' ? 'panel-settings'
@@ -377,6 +378,7 @@ function setView(view, cid, opts = {}) {
                 : view === 'auto' ? 'panel-auto'
                 : view === 'agents' ? 'panel-agents'
                 : view === 'skills' ? 'panel-skills'
+                : view === 'recall' ? 'panel-recall'
                 : view === 'connectors' ? 'panel-connectors'
                 : view === 'contexts' ? 'panel-contexts'
                 : view === 'personal-ontology' ? 'panel-personal-ontology'
@@ -392,6 +394,7 @@ function setView(view, cid, opts = {}) {
   document.getElementById('auto-btn')?.classList.toggle('active', view === 'auto');
   document.getElementById('agents-btn').classList.toggle('active', view === 'agents');
   document.getElementById('skills-btn').classList.toggle('active', view === 'skills');
+  document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall');
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connectors');
   document.getElementById('contexts-btn')?.classList.toggle('active', view === 'contexts');
   document.getElementById('personal-ontology-btn')?.classList.toggle('active', view === 'personal-ontology');
@@ -504,6 +507,17 @@ function setView(view, cid, opts = {}) {
             return null;
           })
           .catch((e) => _bootLog.warn('skills refresh on tab entry failed', { error: (e && e.message) || String(e) }));
+      });
+    });
+  } else if (view === 'recall') {
+    currentCid = null;
+    _deferSidebarNavWork('recall-tab-refresh', () => {
+      _loadViewFeature('recall', 'recall', () => {
+        if (typeof initSkillsCognitionConsole === 'function') initSkillsCognitionConsole();
+        if (typeof loadSkillsCognitionSnapshot === 'function') {
+          Promise.resolve(loadSkillsCognitionSnapshot())
+            .catch((e) => _bootLog.warn('Recall refresh on tab entry failed', { error: (e && e.message) || String(e) }));
+        }
       });
     });
   } else if (view === 'connectors') {

@@ -35,6 +35,10 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/skills.js' },
     { src: './modules/skills-bindings.js' },
   ],
+  recall: [
+    { src: './modules/skills.js' },
+    { src: './modules/skills-bindings.js' },
+  ],
   'personal-ontology': [
     { src: './modules/personal-ontology.js' },
   ],

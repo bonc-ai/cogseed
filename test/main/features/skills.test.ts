@@ -1255,7 +1255,7 @@ describe('skills › createFromDir', () => {
     }
   });
 
-  it('blocks unsafe directory imports until force is requested', async () => {
+  it('blocks unsafe directory imports, and force cannot override a red flag', async () => {
     const srcParent = fs.mkdtempSync(path.join(process.cwd(), '.tmp-skill-import-'));
     try {
       const src = path.join(srcParent, 'unsafe-import');
@@ -1280,9 +1280,13 @@ describe('skills › createFromDir', () => {
       expect(fs.existsSync(path.join(customSkillsDir(), 'unsafe-import'))).toBe(false);
       expect(fs.existsSync(path.join(tmpDir, TEST_UID, 'cloud', 'chats', 'skill', 'unsafe-import'))).toBe(false);
 
+      // EXTREME is not user-overridable (`quality/README.md`): `force` must not
+      // buy past a red flag. It previously did, so "Install/Import anyway"
+      // could land content the validator rejected as explicitly malicious.
       const forced = await s.createFromDir(null, null, src, { force: true });
-      expect(forced.ok).toBe(true);
-      expect(fs.existsSync(path.join(customSkillsDir(), 'unsafe-import', 'scripts', 'run.py'))).toBe(true);
+      expect(forced.ok).toBe(false);
+      expect(forced.report?.violations.map((v: any) => v.rule)).toContain('no_credential_path_read');
+      expect(fs.existsSync(path.join(customSkillsDir(), 'unsafe-import'))).toBe(false);
     } finally {
       fs.rmSync(srcParent, { recursive: true, force: true });
     }
