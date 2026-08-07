@@ -259,6 +259,44 @@ describe('settings tabs module', () => {
     expect(source).toContain("enabled: true }");
   });
 
+  it('stores the enabled instance returned by set_enabled after telegram create', () => {
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    expect(source).toContain('state.instances = [...state.instances, enabled.instance || created.instance];');
+    expect(source).toContain('state.selectedInstanceId = (enabled.instance && enabled.instance.id) || created.instance.id;');
+    expect(source).toContain("await invoke('messaging.set_enabled', { instanceId: created.instance.id, enabled: true })");
+  });
+
+  it('maps wecom terminal states through localized labels instead of raw backend codes', () => {
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    expect(source).toContain('labelFor(`messaging.wecom_qr.status_${statusState}`, errorCode || statusState)');
+    expect(source).toContain('wecomStatusLabel(nextState, registration.errorCode)');
+    expect(source).toContain('wecomStatusLabel(registration.state, registration.errorCode)');
+    expect(source).not.toContain("setNotice(registration.errorCode || nextState, 'error')");
+    expect(source).not.toContain("setNotice(registration.errorCode || registration.state, 'error')");
+  });
+
+  it('guards in-flight wecom poll/complete responses against a concurrent cancel', () => {
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    expect(source).toContain('const revision = ++state.wecom.revision;');
+    expect(source).toContain('state.wecom.cancelling = true;');
+    expect(source).toContain('if (state.wecom.revision !== revision) return;');
+    expect(source).toContain("state.wecom.state === 'completed' || state.wecom.state === 'activating'");
+  });
+
+  it('clears the wecom flow when the auth popup is blocked', () => {
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    expect(source).toContain("labelFor('messaging.wecom_qr.popup_blocked', ''), 'error')");
+    expect(source).toContain(`setNotice(labelFor('messaging.wecom_qr.popup_blocked', ''), 'error');
+        await cancelWecomFlow({ silent: true, render: false });`);
+  });
+
+  it('keeps an add-binding entry for open channels after the first instance', () => {
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    expect(source).toContain("labelFor('messaging.instance.add', '')");
+    expect(source).toContain('state.telegramCreatingNew = true;');
+    expect(source).toContain('void startQrForChannel(channel)');
+  });
+
   it('accepts only verified wecom auth messages from the official popup', () => {
     const { hooks } = loadMessagingSettingsTestHooks();
     const origin = 'https://work.weixin.qq.com';
@@ -293,7 +331,6 @@ describe('settings tabs module', () => {
       'messaging.group.open',
       'messaging.group.soon',
       'messaging.status.bound',
-      'messaging.channel.coming_soon',
       'messaging.channel.feishu.title',
       'messaging.channel.feishu.badge',
       'messaging.channel.lark.title',
@@ -314,6 +351,11 @@ describe('settings tabs module', () => {
       'messaging.wecom_qr.open_hint',
       'messaging.wecom_qr.cancel',
       'messaging.wecom_qr.invalid_message',
+      'messaging.wecom_qr.popup_blocked',
+      'messaging.wecom_qr.status_expired',
+      'messaging.wecom_qr.status_cancelled',
+      'messaging.wecom_qr.status_failed',
+      'messaging.wecom_qr.status_denied',
       'messaging.telegram.token_label',
       'messaging.telegram.token_placeholder',
       'messaging.telegram.connect',
