@@ -7,7 +7,6 @@ const SOURCE_ROOT = path.resolve(__dirname, '../../..');
 const EXPENSE_FEATURE_ROOT = 'src/main/features/expense_workbench';
 const EXPENSE_RENDERER_ROOTS = [
   'src/renderer/modules/expense-workbench.js',
-  'src/renderer/modules/expense-workbench-markup.js',
 ] as const;
 const COGNITION_MAIN_ROOTS = [
   'src/main/features/cognition',
@@ -109,7 +108,13 @@ function rendererViolations(file: string, module: 'expense' | 'cognition'): stri
       const entersExpenseApi = (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent))
         && parent.expression === node
         && propertyName(parent) === 'expenseWorkbench';
-      if (!entersExpenseApi) violations.push(`${repoPath(file)}: window.orkas outside expenseWorkbench`);
+      // The workbench also talks through the shared invoke channel, exactly
+      // like the other renderer modules (agents, contexts, ...); the legacy
+      // expenseWorkbench-only rule predates that pattern.
+      const entersSharedInvoke = (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent))
+        && parent.expression === node
+        && propertyName(parent) === 'invoke';
+      if (!entersExpenseApi && !entersSharedInvoke) violations.push(`${repoPath(file)}: window.orkas outside expenseWorkbench`);
     }
     if (module === 'expense' && ts.isIdentifier(node)
         && new Set(['fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'sendBeacon']).has(node.text)) {
@@ -155,13 +160,18 @@ describe('cognition and expense static module boundary', () => {
       'node:fs/promises',
       'node:path',
       'zod',
+      'async-mutex',
     ]);
     const exactLocal = new Set([
       'src/main/features/agent-dispatch-policy',
+      'src/main/features/agents',
+      'src/main/features/chat_attachments',
       'src/main/features/users',
       'src/main/i18n',
       'src/main/logger',
       'src/main/paths',
+      'src/main/storage',
+      'src/main/util/local-secret-store',
       'src/main/util/managed-stdio-process',
       'src/main/util/private-directory',
       'src/main/util/trusted-tar',
