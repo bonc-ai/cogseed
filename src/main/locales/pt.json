@@ -11,6 +11,7 @@
   "bash.error.blocked": "Comando bloqueado pela política de sandbox: {reason}",
   "bash.error.exit_code": "Código de saída: {code}",
   "bash.error.start_failed": "Falha ao iniciar {command}: {error}",
+  "bash.error.skill_withheld": "A habilidade \"{skill}\" falhou na verificação de segurança: seus arquivos mudaram após a instalação, ou as regras foram atualizadas, então está pausada. Reinstale para restaurar.",
   "bash.error.timeout": "O comando expirou após {ms}ms",
   "chat.agent_load_failed": "⚠️ Falha ao carregar o agente “{name}” – seu arquivo de configuração pode estar corrompido ou removido. Visite a página dos agentes para inspecionar, reparar ou reconstruir.",
   "chat.default_title": "Nova conversa",
@@ -179,7 +180,6 @@
   "skills.import.default_desc_dir": "Habilidade importada com limpeza pendente",
   "skills.import.default_desc_url": "Habilidade importada com limpeza pendente",
   "skills.import.seed_dir": "Organize os arquivos de habilidades importados.",
-  "skills.import.seed_existing_meta": "Estas habilidades foram instaladas diretamente: {skills}.",
   "skills.import.seed_url": "Ajude-me a instalar esta habilidade: {url}",
   "skills.import_block.credentials_dir": "Diretório de credenciais do usuário",
   "skills.import_block.home_root": "Raiz do diretório inicial do usuário",
@@ -187,5 +187,7 @@
   "skills.import_block.system_dir": "Diretório do sistema",
   "skills.inline_text": "habilidade {skill}",
   "skills.use_prefix": "Use a habilidade {skill}: {content}",
-  "workspace.picker_title": "Escolha um diretório de espaço de trabalho"
+  "workspace.picker_title": "Escolha um diretório de espaço de trabalho",
+  "skills.errors.security_blocked": "A verificação de segurança não passou; importação cancelada",
+  "skills.errors.security_unavailable": "A verificação de segurança está indisponível; importação cancelada"
 }

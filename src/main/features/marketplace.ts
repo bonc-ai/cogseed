@@ -47,6 +47,50 @@ import * as path from 'node:path';
 
 import { sha256OfFile } from '../util/sha256';
 import { marketplaceContentTreeHash } from '../util/marketplace-tree-hash';
+import { writeReceipt } from './skill_trust';
+import { topViolationOf } from './skill_reverify';
+import { scanSkillDir, type SentryScanResult, type SkillSource } from './security/sentry-adapter';
+
+/**
+ * One-line, machine-readable reason for a security block.
+ *
+ * Reports attack-surface counts and rule ids only — never the matched source
+ * text. The spec requires a high-risk message to state the risk type and impact
+ * "without exposing the sensitive original text", since that text may itself be
+ * a leaked credential.
+ */
+function _securityBlockReason(scan: SentryScanResult): string {
+  if (scan.localRedLines?.length) return `red lines: ${scan.localRedLines.join(', ')}`;
+  if (scan.hardBlocked) return 'hard-block red line (suspected data exfiltration)';
+  const parts: string[] = [];
+  const s = scan.attackSurface;
+  if (s.egressPoints > 0) parts.push(`${s.egressPoints} network egress point(s)`);
+  if (s.dynamicExecPoints > 0) parts.push(`${s.dynamicExecPoints} dynamic execution point(s)`);
+  if (s.persistencePoints > 0) parts.push(`${s.persistencePoints} persistence point(s)`);
+  if (parts.length) return parts.join('; ');
+  return scan.riskClassification || scan.recommendation || 'security scan rejected';
+}
+
+/**
+ * Build the error thrown when the deep scan rejects an install.
+ *
+ * Carries the structured verdict on the error so the IPC layer and renderer can
+ * render the spec's risk card (§5.2) instead of only a message string. Mirrors
+ * `_qualityInstallError`'s shape so both gates surface the same way.
+ */
+function _securityInstallError(
+  skillId: string, name: string, scan: SentryScanResult,
+): Error {
+  const unavailable = scan.outcome === 'unknown';
+  const e = new Error(unavailable
+    ? `Security check unavailable for skill ${name || skillId} (${scan.unavailableReason || 'unknown'})`
+    : `Security scan rejected skill ${name || skillId} (${_securityBlockReason(scan)})`);
+  (e as { securityBlocked?: boolean }).securityBlocked = !unavailable;
+  (e as { securityUnavailable?: boolean }).securityUnavailable = unavailable;
+  (e as { securitySkillId?: string }).securitySkillId = skillId;
+  (e as { securityScan?: SentryScanResult }).securityScan = scan;
+  return e;
+}
 import { logPathRef } from '../util/log-redact';
 import { fetchWithRetry } from '../util/retry';
 import {
@@ -943,6 +987,69 @@ async function _installMarketplaceSkillLocked(
 
     const skillContentSha = sha256OfFile(path.join(target, 'SKILL.md'));
     const skillTreeHash = marketplaceContentTreeHash(target);
+
+    // Deep security scan (skill-sentry + our EXTREME red lines). Runs after the
+    // structural gate above because a skill that fails structurally is already
+    // rolled back; this one decides whether structurally-valid content is safe.
+    //
+    // Source tier drives the threshold: platform-published skills
+    // (`create_uid === '0'`) are only rejected on an outright DO_NOT_INSTALL,
+    // while community uploads are also held back at CAUTION. Unknown
+    // provenance falls to the stricter tier, never the looser one.
+    const sourceTier: SkillSource = String(detail.create_uid || '') === '0'
+      ? 'official'
+      : 'community';
+    const scan = await scanSkillDir(target, sourceTier);
+    if (scan.outcome === 'blocked' || scan.outcome === 'unknown') {
+      // Roll back before throwing so a rejected skill leaves nothing on disk —
+      // the spec requires "formal assets unchanged" after a high-risk block.
+      //
+      // `unknown` rolls back too (fail closed, spec §6.2: a new executable asset
+      // whose check could not run is not installed), but is flagged separately
+      // on the error so the UI can say "check unavailable" rather than
+      // "malicious" — conflating the two would train users to dismiss real
+      // blocks.
+      await fsp.rm(target, { recursive: true, force: true });
+      throw _securityInstallError(skillId, skillName, scan);
+    }
+
+    // Bind this verdict to the exact bytes and ruleset that produced it, so a
+    // later edit or a ruleset upgrade makes the verdict provably stale instead
+    // of silently standing forever. Reuses the report above rather than
+    // rescanning: the receipt must record the verdict that actually gated the
+    // install, not a second opinion.
+    if (skillTreeHash) {
+      try {
+        // Top finding computed by severity, not by position: the validator
+        // returns violations in scan order, so `violations[0]` is only
+        // incidentally the most severe one.
+        const top = topViolationOf(skillReport.violations);
+        writeReceipt(getActiveUserId(), skillId, {
+          payloadHash: skillTreeHash,
+          // Records the SCAN's verdict, not the structural report's. Reaching
+          // here means the scan returned pass or restricted — blocked and
+          // unknown both threw above. `restricted` is the spec's Medium state:
+          // installed, but the UI shows a risk card rather than a clean badge.
+          decision: scan.outcome === 'restricted' ? 'risk' : 'pass',
+          violationCount: skillReport.violations.length,
+          ...(top?.rule ? { topRule: top.rule } : {}),
+          ...(top?.level ? { topLevel: top.level } : {}),
+          // Scanner provenance travels with the verdict so the UI can disclose
+          // how it was produced — a non-isolated or fallback-rules scan must not
+          // be shown as a clean isolated pass.
+          ...(typeof scan.score === 'number' ? { securityScore: scan.score } : {}),
+          ...(scan.scannerVersion ? { scannerVersion: scan.scannerVersion } : {}),
+          ...(scan.rulesetVersion ? { rulesetVersion: scan.rulesetVersion } : {}),
+          isolated: scan.isolated,
+          ...(scan.rulesDegraded ? { rulesDegraded: true } : {}),
+        });
+      } catch (err) {
+        // A receipt is an audit/staleness aid, not part of the gate — the scan
+        // already ran and passed. Failing the install here would trade a real
+        // capability for a bookkeeping error.
+        log.warn('failed to write security receipt', { skillId, error: (err as Error).message });
+      }
+    }
     const installedAt = Date.now();
     await fsp.writeFile(path.join(target, '_install.json'),
       JSON.stringify({

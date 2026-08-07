@@ -31,6 +31,8 @@ import * as executionRecords from '../features/execution-records';
 import * as workbench from '../features/workbench';
 import * as evolution from '../features/evolution';
 import * as cognition from '../features/cognition';
+import * as skillTrust from '../features/skill_trust';
+import * as skillReverify from '../features/skill_reverify';
 import * as recallCandidates from '../features/recall/candidate-service';
 import * as recallAssets from '../features/recall/asset-service';
 import * as recallWorkspaceRefs from '../features/recall/workspace-refs';
@@ -1609,6 +1611,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, validation: await p3394.readSkillValidation(ctx.userId, validationId) };
   },
 
+  /**
+   * Re-verify an installed skill against its security receipt, rescanning when
+   * the content or the ruleset changed since the last scan. This is what makes
+   * a post-install edit detectable — the install-time verdict alone cannot.
+   */
+  'skills.trust.reverify': async ({ skillId } = {}, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skill id');
+    return { ok: true, result: skillReverify.reverifySkill(ctx.userId, skillId) };
+  },
+
+  /** Receipts on record, for a trust/audit surface. */
+  'skills.trust.list': async (_args, ctx) => {
+    return { ok: true, receipts: skillTrust.listReceipts(ctx.userId) };
+  },
+
   'p3394.execution.list': async (_args, ctx) => {
     return { ok: true, executions: await executionRecords.list(ctx.userId) };
   },
@@ -2078,20 +2095,50 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }) };
   },
 
-  'cognition.candidates.decide': async ({ source, candidateId, decision, reason, notes, toGlobalMemory, toGroupIds } = {}, ctx) => {
+  'cognition.candidates.decide': async ({ source, candidateId, decision, reason, notes, toGlobalMemory, toGroupIds, semanticReview, deepReview } = {}, ctx) => {
     if (source !== 'personal_ontology' && source !== 'p3394_experience' && source !== 'p3394_patch') throw new Error('invalid cognition candidate source');
     if (!safeId(candidateId)) throw new Error('invalid candidate id');
     if (decision !== 'accept' && decision !== 'reject') throw new Error('invalid cognition candidate decision');
     if (toGroupIds !== undefined && (!Array.isArray(toGroupIds) || toGroupIds.some((id) => !safeId(id)))) throw new Error('invalid group ids');
-    return { ok: true, result: await cognition.decideCognitionCandidate(ctx.userId, {
-      source,
-      candidateId,
-      decision,
-      ...(typeof reason === 'string' ? { reason } : {}),
-      ...(typeof notes === 'string' ? { notes } : {}),
-      ...(typeof toGlobalMemory === 'boolean' ? { toGlobalMemory } : {}),
-      ...(Array.isArray(toGroupIds) ? { toGroupIds } : {}),
-    }) };
+    // Two ways to get a semantic review, in order of preference:
+    //   `deepReview: true`  — main runs it itself (trustworthy origin);
+    //   `semanticReview`    — a caller forwards one it already ran.
+    // The forwarded form is safe despite coming from the renderer because
+    // `mergeSemanticReview` is monotonic: it can only escalate a verdict, never
+    // clear a deterministic finding. So a forged "all clear" cannot admit a
+    // blocked candidate.
+    const review = cognition.parseSemanticReview(semanticReview);
+    try {
+      return { ok: true, result: await cognition.decideCognitionCandidate(ctx.userId, {
+        source,
+        candidateId,
+        decision,
+        ...(typeof reason === 'string' ? { reason } : {}),
+        ...(typeof notes === 'string' ? { notes } : {}),
+        ...(typeof toGlobalMemory === 'boolean' ? { toGlobalMemory } : {}),
+        ...(Array.isArray(toGroupIds) ? { toGroupIds } : {}),
+        ...(review ? { semanticReview: review } : {}),
+        ...(deepReview === true && !review ? { runSemanticReview: true } : {}),
+      }) };
+    } catch (err) {
+      // A gate block is an expected outcome, not a crash: return the decision
+      // so the UI can explain what was found instead of showing a raw error.
+      const gate = (err as { gateDecision?: unknown }).gateDecision;
+      if (gate) {
+        return { ok: false, code: 'cognition_gate_blocked', error: (err as Error).message, gate };
+      }
+      throw err;
+    }
+  },
+
+  /**
+   * Standalone semantic review, for surfacing a deep-review result in the
+   * candidate detail view without committing an accept.
+   */
+  'cognition.candidates.deepReview': async ({ source, candidateId } = {}, ctx) => {
+    if (source !== 'personal_ontology' && source !== 'p3394_experience' && source !== 'p3394_patch') throw new Error('invalid cognition candidate source');
+    if (!safeId(candidateId)) throw new Error('invalid candidate id');
+    return { ok: true, review: await cognition.deepReviewCognitionCandidate(ctx.userId, source, candidateId) };
   },
 
   'cognition.receipts.list': async ({ status, agentId, conversationId, skillId, limit } = {}, ctx) => {
@@ -2778,7 +2825,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'skills.createFromDir': async ({ name, description, srcDir, force }) => {
     const r = await skills.createFromDir(name ?? null, description ?? null, String(srcDir || ''), { force: force === true });
     if (!r.ok) return r;
-    return { skill: r.skill, skills: r.skills, seedModelText: r.seedModelText, seedMessage: r.seedMessage };
+    return {
+      skill: r.skill,
+      skills: r.skills,
+      seedModelText: r.seedModelText,
+      seedMessage: r.seedMessage,
+      // Carried on success so the renderer can confirm the scan ran; a silent
+      // pass is indistinguishable from no check at all.
+      ...(r.securityPass ? { securityScan: r.securityPass } : {}),
+    };
   },
 
   'skills.discardImportDraft': async ({ id }) => {
@@ -4473,6 +4528,9 @@ export function register(): void {
         marketplaceMinAppVersion?: string;
         marketplaceCurrentAppVersion?: string;
         qualityReport?: unknown;
+        securityBlocked?: boolean;
+        securityUnavailable?: boolean;
+        securityScan?: unknown;
       } = {
         ok: false,
         error: normalized.error,
@@ -4480,6 +4538,21 @@ export function register(): void {
       };
       const qualityReport = (err as { qualityReport?: unknown }).qualityReport;
       if (qualityReport) out.qualityReport = qualityReport;
+      // Security-gate verdicts travel as structured data, not just a message,
+      // so the renderer can show the spec's risk card (risk type + impact,
+      // never the matched source text) instead of a raw error string. The two
+      // flags stay separate on purpose: "blocked" means the scanner rejected
+      // the content, "unavailable" means it could not run — telling a user
+      // their skill is malicious when the scanner merely crashed would teach
+      // them to ignore real blocks.
+      const secErr = err as {
+        securityBlocked?: boolean;
+        securityUnavailable?: boolean;
+        securityScan?: unknown;
+      };
+      if (secErr.securityBlocked) out.securityBlocked = true;
+      if (secErr.securityUnavailable) out.securityUnavailable = true;
+      if (secErr.securityScan) out.securityScan = secErr.securityScan;
       const installInfo = marketplace.getMarketplaceInstallErrorInfo(err);
       if (installInfo.kind) {
         out.marketplaceKind = installInfo.kind;

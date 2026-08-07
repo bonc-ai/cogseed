@@ -135,7 +135,10 @@ describe('skills renderer frontmatter parsing', () => {
       'after:imported:true:已直接安装这些技能：imported。:true',
       'busy:false',
     ]);
-    expect(msgEl.textContent).toBe('skills.saving');
+    // The folder import now announces the security scan rather than a bare
+    // "saving", because the deep scan runs inside this one request and the user
+    // would otherwise wait on it with no idea it was happening.
+    expect(msgEl.textContent).toBe('skills.security_import_scanning');
   });
 
   it('tracks URL skill creation success', async () => {

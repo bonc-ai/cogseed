@@ -11,6 +11,7 @@
   "bash.error.blocked": "Command blocked by sandbox policy: {reason}",
   "bash.error.exit_code": "Exit code: {code}",
   "bash.error.start_failed": "Failed to start {command}: {error}",
+  "bash.error.skill_withheld": "Skill \"{skill}\" failed its security check: its files changed after installation, or the rules were updated, so it is paused. Reinstall it to restore.",
   "bash.error.timeout": "Command timed out after {ms}ms",
   "chat.agent_load_failed": "⚠️ Agent “{name}” failed to load — its config file may be corrupt or removed. Visit the agents page to inspect, repair, or rebuild it.",
   "chat.default_title": "New conversation",
@@ -179,7 +180,6 @@
   "skills.import.default_desc_dir": "Imported skill pending cleanup",
   "skills.import.default_desc_url": "Imported skill pending cleanup",
   "skills.import.seed_dir": "Please organize the imported skill files.",
-  "skills.import.seed_existing_meta": "These skills were installed directly: {skills}.",
   "skills.import.seed_url": "Help me install this skill: {url}",
   "skills.import_block.credentials_dir": "User credentials directory",
   "skills.import_block.home_root": "User home directory root",
@@ -187,5 +187,7 @@
   "skills.import_block.system_dir": "System directory",
   "skills.inline_text": "{skill} skill",
   "skills.use_prefix": "Use {skill} skill: {content}",
-  "workspace.picker_title": "Pick a workspace directory"
+  "workspace.picker_title": "Pick a workspace directory",
+  "skills.errors.security_blocked": "The security check did not pass; import cancelled",
+  "skills.errors.security_unavailable": "The security check is unavailable; import cancelled"
 }

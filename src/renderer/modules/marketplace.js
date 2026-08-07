@@ -88,7 +88,71 @@ function _mpErrorFromResponse(res, fallbackMessage) {
     err.marketplaceCurrentAppVersion = res.marketplaceCurrentAppVersion || '';
   }
   if (res && res.qualityReport) err.qualityReport = res.qualityReport;
+  if (res && res.securityBlocked) err.securityBlocked = true;
+  if (res && res.securityUnavailable) err.securityUnavailable = true;
+  if (res && res.securityScan) err.securityScan = res.securityScan;
   return err;
+}
+
+/**
+ * Human-readable summary of why a security scan rejected an install.
+ *
+ * Reports counts and rule ids only. The spec requires a high-risk message to
+ * name the risk type and impact "without exposing the sensitive original text"
+ * — that text may itself be the credential that got leaked.
+ */
+function _mpSecurityReasonLines(scan) {
+  const lines = [];
+  if (!scan) return lines;
+  if (Array.isArray(scan.localRedLines) && scan.localRedLines.length) {
+    lines.push(t('marketplace.security_reason_red_line'));
+  }
+  if (scan.hardBlocked) lines.push(t('marketplace.security_reason_hard_block'));
+  const s = scan.attackSurface || {};
+  if (s.egressPoints > 0) {
+    lines.push(t('marketplace.security_reason_egress').replace('{n}', String(s.egressPoints)));
+  }
+  if (s.dynamicExecPoints > 0) {
+    lines.push(t('marketplace.security_reason_dynamic_exec').replace('{n}', String(s.dynamicExecPoints)));
+  }
+  if (s.persistencePoints > 0) {
+    lines.push(t('marketplace.security_reason_persistence').replace('{n}', String(s.persistencePoints)));
+  }
+  return lines;
+}
+
+/**
+ * Show the spec's risk card for a security-gate rejection.
+ *
+ * Deliberately offers no "install anyway": a high-risk verdict is not
+ * user-overridable, and rendering an escape hatch here would undo the gate that
+ * just ran in the main process.
+ *
+ * `unavailable` is a separate message, not a softer wording of the same one. The
+ * user needs to know whether their skill looked dangerous or whether we simply
+ * could not check — conflating the two teaches them to dismiss real blocks.
+ */
+async function _mpShowSecurityCard(name, err) {
+  const scan = err && err.securityScan;
+  const unavailable = !!(err && err.securityUnavailable);
+  if (unavailable) {
+    await uiAlert(
+      t('marketplace.security_unavailable_body').replace('{name}', name),
+      t('marketplace.security_unavailable_title'),
+    );
+    return;
+  }
+  const reasons = _mpSecurityReasonLines(scan);
+  const detail = reasons.length ? `\n\n${reasons.map((r) => `• ${r}`).join('\n')}` : '';
+  // Degraded-rules disclosure rides along on the block too: if coverage was
+  // weaker than normal the user should know the verdict came from fallback rules.
+  const degraded = scan && scan.rulesDegraded
+    ? `\n\n${t('marketplace.security_rules_degraded')}`
+    : '';
+  await uiAlert(
+    `${t('marketplace.security_blocked_body').replace('{name}', name)}${detail}${degraded}`,
+    t('marketplace.security_blocked_title'),
+  );
 }
 
 function _mpShowReviewStatusUi() {
@@ -1918,6 +1982,13 @@ async function _mpInstall(kind, id, itemOverride = null) {
   } catch (err) {
     const msg = (err && err.message) || String(err);
     _mpTrackInstallFailure(kind, item, err);
+    // Security gate first: a scan rejection and a structural rejection are
+    // different verdicts with different remedies, and the security one carries
+    // its own structured payload rather than a QualityReport.
+    if (err && (err.securityBlocked || err.securityUnavailable)) {
+      await _mpShowSecurityCard(err.marketplaceName || item.name || id, err);
+      return;
+    }
     // Quality validator rejection → show the structured violation list
     // instead of the generic install-failed alert. Falls back to alert if
     // the report can't be loaded.
