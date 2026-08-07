@@ -117,6 +117,12 @@ describe('settings tabs module', () => {
     expect(indexHtml).toContain('id="messaging-page"');
     expect(indexHtml).not.toContain('id="messaging-catalog"');
     expect(style).toContain('.messaging-preferences-card');
+    expect(style).toContain('.messaging-layout');
+    expect(style).toContain('.messaging-menu');
+    expect(style).toContain('.messaging-menu-group-label');
+    expect(style).toContain('.messaging-menu-item.is-disabled');
+    expect(style).toContain('.messaging-instance-row');
+    expect(style).toContain('.messaging-instance-row.is-selected');
     expect(messagingSettings).toContain("view: 'panel'");
     expect(messagingSettings).not.toContain("view: 'catalog'");
     expect(messagingSettings).toContain('messaging.feishu_draft.create');

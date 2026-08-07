@@ -12276,6 +12276,106 @@ body.model-not-configured .main-content { flex-direction: column; }
   overflow: auto;
   background: var(--surface);
 }
+/* Messaging settings: two-column workspace (channel menu | config panel). */
+.messaging-layout {
+  display: grid;
+  grid-template-columns: 224px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.messaging-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.messaging-menu-title {
+  margin: 0 6px 12px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.messaging-menu-group { display: contents; }
+
+.messaging-menu-group-label {
+  margin: 10px 6px 4px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .5px;
+  color: var(--text-2);
+}
+
+.messaging-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 46px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.messaging-menu-item:hover:not(:disabled) { background: var(--surface-2); }
+.messaging-menu-item:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.messaging-menu-item.is-active { background: var(--primary-soft); color: var(--primary); }
+.messaging-menu-item.is-disabled { color: var(--text-2); opacity: .55; cursor: default; filter: saturate(.42); }
+
+.messaging-menu-item-icon { display: inline-flex; flex: 0 0 auto; }
+.messaging-menu-item-glyph { width: 24px; height: 24px; }
+
+.messaging-menu-item-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.messaging-menu-item-status { margin-left: auto; font-size: 10px; color: var(--text-2); white-space: nowrap; }
+.messaging-menu-item-status.is-bound { color: var(--success); }
+
+.messaging-panel { min-width: 0; }
+.messaging-panel-body { display: flex; flex-direction: column; gap: 16px; }
+.messaging-detail-title-row { display: flex; align-items: center; gap: 8px; }
+.messaging-detail-switch-placeholder { width: 40px; }
+
+.messaging-instance-card { display: flex; flex-direction: column; gap: 12px; }
+.messaging-instance-empty { margin: 0; color: var(--text-2); font-size: 13px; }
+.messaging-instance-list { display: flex; flex-direction: column; gap: 8px; }
+
+.messaging-instance-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.messaging-instance-row:hover { border-color: var(--border-strong); }
+.messaging-instance-row.is-selected { border-color: var(--primary); background: var(--primary-soft); }
+.messaging-instance-copy { display: grid; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.messaging-instance-copy strong { font-size: 13px; color: var(--text); }
+.messaging-instance-state { font-size: 11px; color: var(--text-2); }
+.messaging-instance-row.is-connected .messaging-instance-state { color: var(--success); }
+.messaging-instance-row.is-error .messaging-instance-state { color: var(--danger); }
+
+.messaging-wecom-card, .messaging-telegram-card, .messaging-empty-card { display: flex; flex-direction: column; gap: 12px; }
+.messaging-wecom-error { margin: 0; color: var(--danger); font-size: 12px; }
 .messaging-catalog-page,
 .messaging-detail-page {
   width: min(1120px, 100%);
