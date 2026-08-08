@@ -99,7 +99,7 @@ function _termTheme() {
     foreground: fg,
     cursor: fg,
     cursorAccent: bg,
-    selectionBackground: 'rgba(28,45,89,0.18)',
+    selectionBackground: 'rgba(24,84,60,0.18)',
   };
 }
 

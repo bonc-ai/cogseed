@@ -88,7 +88,6 @@ import * as ttsAuth from '../features/tts_auth';
 import * as permissions from '../features/permissions';
 import * as appConfig from '../features/config';
 import * as onboardingState from '../features/onboarding_state';
-import * as journeyState from '../features/journey_state';
 import * as cognitionExtraction from '../features/cognition_extraction';
 import { detectAll } from '../features/local_agents/registry';
 import * as avatars from '../features/avatars';
@@ -3302,16 +3301,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   }),
   'prefs.setOnboarding': async ({ completed }: { completed?: unknown } = {}) => ({
     completed: onboardingState.setOnboardingCompleted(completed !== false),
-  }),
-
-  // 60-second journey marker (machine-local, NOT cloud-synced — stored
-  // under WS_ROOT/journey-state.json, shared across uids). The renderer's
-  // journey.js checks `completed` and only starts the journey when it is false.
-  'prefs.getJourney': async () => ({
-    completed: journeyState.getJourneyCompleted(),
-  }),
-  'prefs.setJourney': async ({ completed }: { completed?: unknown } = {}) => ({
-    completed: journeyState.setJourneyCompleted(completed !== false),
   }),
 
   // ── Cognition extraction from sessions (onboarding) ──

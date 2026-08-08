@@ -625,13 +625,6 @@ async function _csFinish() {
   document.body.classList.remove('cs-onboarding-active');
   const shell = document.getElementById('cs-onboarding');
   if (shell) shell.style.display = 'none';
-
-  // Trigger 60-second journey after onboarding completes.
-  if (window.csJourney && typeof window.csJourney.start === 'function') {
-    setTimeout(() => {
-      void window.csJourney.start();
-    }, 800); // Small delay to let onboarding UI fade out.
-  }
 }
 
 function _csBuild() {
