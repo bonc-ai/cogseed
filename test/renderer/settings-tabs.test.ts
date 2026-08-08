@@ -143,6 +143,18 @@ describe('settings tabs module', () => {
     expect(lazyFeatures).toContain("{ src: './modules/settings.js' }");
   });
 
+  it('defines a dense theme-compatible messaging layout with a narrow menu and mobile fallback', () => {
+    const style = fs.readFileSync(path.join(root, 'src/renderer/style.css'), 'utf8');
+
+    expect(style).toMatch(/\.messaging-layout\s*\{[^{}]*grid-template-columns:\s*minmax\(220px,\s*224px\)\s+minmax\(0,\s*1fr\);/);
+    expect(style).toMatch(/\.messaging-panel-body\s*\{[^{}]*display:\s*grid;[^{}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/);
+    expect(style).toMatch(/\.messaging-panel-body\s*>\s*\.messaging-instance-card,[^{}]*\{[^{}]*grid-column:\s*1\s*\/\s*-1;/);
+    expect(style).toMatch(/\.messaging-settings-shell\s*\{[^{}]*background:\s*var\(--bg\);/);
+    expect(style).toMatch(/\.messaging-config-card\s*\{[^{}]*background:\s*color-mix\(in srgb,\s*var\(--surface-2\)\s+62%,\s*var\(--bg\)\);/);
+    expect(style).toMatch(/\.messaging-page\s*\{[^{}]*overflow:\s*auto;/);
+    expect(style).toMatch(/@media\s*\(max-width:\s*760px\)[\s\S]*?\.messaging-panel-body\s*\{[^{}]*grid-template-columns:\s*1fr;/);
+  });
+
   it('cancels an in-flight feishu QR flow when switching channels', () => {
     const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
     expect(source).toContain('cancelQr({ silent: true, render: false })');
