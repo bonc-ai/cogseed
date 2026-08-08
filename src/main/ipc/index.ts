@@ -79,6 +79,10 @@ import * as videoAuth from '../features/video_auth';
 import * as ttsAuth from '../features/tts_auth';
 import * as permissions from '../features/permissions';
 import * as appConfig from '../features/config';
+import * as onboardingState from '../features/onboarding_state';
+import * as journeyState from '../features/journey_state';
+import * as cognitionExtraction from '../features/cognition_extraction';
+import { detectAll } from '../features/local_agents/registry';
 import * as avatars from '../features/avatars';
 import * as commanderProfile from '../features/commander_profile';
 import * as commanderRuntimeStats from '../features/commander_runtime_stats';
@@ -2535,6 +2539,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
     return personalOntologyCandidates.rejectCandidates(ctx.userId, candidateIds, reason);
   },
+  // onboarding 第 4 步：把抽取出的候选批量入池（不确认，等勾选后走 confirm）。
+  // 只做忠实映射与写入，返回实际写入的 candidate_ids 供前端记账。
+  'personalOntology.candidates.addFromOnboarding': async ({ candidates } = {}, ctx) => {
+    if (!Array.isArray(candidates)) throw new Error('candidates must be array');
+    return personalOntologyCandidates.addCandidates(ctx.userId, candidates);
+  },
 
   // ── Personal Ontology Groups ("记忆分组") ──
   'personalOntology.groups.list': async (_payload, ctx) => {
@@ -3164,6 +3174,48 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   }),
   'prefs.setMetacognition': async ({ enabled }) => {
     return { enabled: appConfig.setMetacognitionEnabled(!!enabled) };
+  },
+
+  // First-run onboarding marker (machine-local, NOT cloud-synced — stored
+  // under WS_ROOT/onboarding-state.json, shared across uids). The renderer's
+  // boot.js checks `completed` after restoring the last view and lifts the
+  // four-step walkthrough overlay only when it is false; the last step calls
+  // setOnboarding to persist true so it never re-appears on this device.
+  'prefs.getOnboarding': async () => ({
+    completed: onboardingState.getOnboardingCompleted(),
+  }),
+  'prefs.setOnboarding': async ({ completed }: { completed?: unknown } = {}) => ({
+    completed: onboardingState.setOnboardingCompleted(completed !== false),
+  }),
+
+  // 60-second journey marker (machine-local, NOT cloud-synced — stored
+  // under WS_ROOT/journey-state.json, shared across uids). The renderer's
+  // journey.js checks `completed` and only starts the journey when it is false.
+  'prefs.getJourney': async () => ({
+    completed: journeyState.getJourneyCompleted(),
+  }),
+  'prefs.setJourney': async ({ completed }: { completed?: unknown } = {}) => ({
+    completed: journeyState.setJourneyCompleted(completed !== false),
+  }),
+
+  // ── Cognition extraction from sessions (onboarding) ──
+  // Runs through a locally-detected CLI Agent (already authenticated on
+  // the user's machine), so onboarding needs no API key. We prefer
+  // `claude` when available, else fall back to the first available CLI.
+  'cognition.extractFromSession': async ({ sessionFilePath }: { sessionFilePath?: unknown } = {}, ctx) => {
+    if (typeof sessionFilePath !== 'string') throw new Error('session file path is required');
+    const entries = await detectAll();
+    const available = entries.filter(e => e.available);
+    const chosen = available.find(e => e.type === 'claude') ?? available[0];
+    if (!chosen) {
+      throw new Error('未检测到可用的本地 CLI Agent。请先安装并登录 Claude Code 等 Agent 后重试。');
+    }
+    const { candidates, diagnostic } = await cognitionExtraction.extractCognitionsFromSession({
+      sessionFilePath,
+      uid: ctx.userId,
+      cli: chosen.type,
+    });
+    return { ok: true, candidates, diagnostic, cli: chosen.type };
   },
 
   // ── Auth / model config (settings page) ──

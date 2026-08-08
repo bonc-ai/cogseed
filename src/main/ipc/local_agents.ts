@@ -37,6 +37,8 @@ import { listModels } from '../features/local_agents/models.js';
 import { getActiveUserId } from '../features/users.js';
 import { userToolResultsDir } from '../paths.js';
 import { createLogger } from '../logger.js';
+import { listClaudeSessions } from '../features/local_agents/claude_sessions.js';
+import { listAgentTypes, listSessions as listAcpSessions } from '../features/local_agents/acp_sessions.js';
 
 const log = createLogger('ipc:local_agents');
 
@@ -103,6 +105,36 @@ export const invokeHandlers = {
   'localAgents.listModels': async ({ type }: { type?: unknown }) => {
     if (!isLocalCliType(type)) throw new Error('invalid CLI type');
     return { models: listModels(type) };
+  },
+
+  /**
+   * List Claude Code session history from `~/.claude/projects/`.
+   * Returns summaries (first message, timestamp, project path) for
+   * the onboarding "import sessions" step. Best-effort: missing dir
+   * or malformed files return empty array rather than failing.
+   */
+  'localAgents.listClaudeSessions': async () => {
+    const sessions = await listClaudeSessions();
+    return { sessions };
+  },
+
+  /**
+   * List ACP transcript sessions from `~/.cogseed/acp-transcripts/`.
+   * Returns agent types and sessions for each type. Used in onboarding
+   * to detect sessions from ACP-speaking agents (Hermes, Claude Desktop, etc).
+   */
+  'localAgents.listAcpSessions': async () => {
+    try {
+      const agentTypes = await listAgentTypes();
+      const sessionsByType: Record<string, any[]> = {};
+      for (const agentType of agentTypes) {
+        sessionsByType[agentType] = await listAcpSessions(agentType);
+      }
+      return { ok: true, agentTypes, sessionsByType };
+    } catch (err) {
+      log.warn('failed to list ACP sessions', { error: String(err) });
+      return { ok: false, agentTypes: [], sessionsByType: {} };
+    }
   },
 
   /**

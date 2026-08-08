@@ -130,6 +130,15 @@ async function bootApp() {
   // chat render finds the commander avatar warm; one cheap IPC, worth
   // it to avoid a default-avatar flash on the first frame.
   _restoreLastView();
+  // First-run walkthrough: fire-and-forget so it never blocks first paint.
+  // It reads the machine-local onboarding marker and only lifts the overlay
+  // on a device that hasn't completed it yet. Runs after the last view is
+  // restored so the app is fully painted underneath the overlay.
+  if (window.csOnboarding && typeof window.csOnboarding.maybeStart === 'function') {
+    Promise.resolve(window.csOnboarding.maybeStart()).catch((err) => {
+      _bootLog.warn('onboarding maybeStart failed', { error: (err && err.message) || String(err) });
+    });
+  }
   if (typeof _consumePendingTaskNotificationConversation === 'function') {
     _consumePendingTaskNotificationConversation();
   }

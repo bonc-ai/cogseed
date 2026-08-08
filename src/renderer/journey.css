@@ -1,0 +1,243 @@
+/* ═══════════════ 认知闭环旅程 · 引导式交互 ═══════════════
+ * Post-onboarding guided tour. Journey bar tracks progress,
+ * coach marks (spotlight UI) point to real features, timer shows elapsed time.
+ * Scoped under #cs-journey so it never collides with onboarding or app styles.
+ */
+#cs-journey {
+  --jb-forest: #0E9F6E;
+  --jb-forest-deep: #0A7A55;
+  --jb-forest-weak: #E2F5EC;
+  --jb-ink: #14281E;
+  --jb-ink-soft: #3E5A4C;
+  --jb-muted: #6E8578;
+  --jb-line: #E3EAE6;
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2500;
+}
+
+/* ── journey bar (top center, nodes + timer) ── */
+.journey-bar {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-20px);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 18px;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid var(--jb-line);
+  border-radius: 999px;
+  box-shadow: 0 8px 28px rgba(16, 65, 46, 0.12);
+  font-size: 12px;
+  opacity: 0;
+  pointer-events: auto;
+  transition: all 0.3s ease;
+}
+.journey-bar.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.jb-node {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  color: var(--jb-muted);
+  font-weight: 600;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.jb-node .n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--jb-line);
+  color: var(--jb-muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+.jb-node.active {
+  background: var(--jb-forest-weak);
+  color: var(--jb-forest-deep);
+}
+.jb-node.active .n {
+  background: var(--jb-forest);
+  color: #fff;
+}
+.jb-node.done {
+  color: var(--jb-forest-deep);
+}
+.jb-node.done .n {
+  background: var(--jb-forest);
+  color: #fff;
+}
+
+.jb-line {
+  width: 16px;
+  height: 1px;
+  background: var(--jb-line);
+}
+
+.jb-timer {
+  margin-left: 8px;
+  padding-left: 12px;
+  border-left: 1px solid var(--jb-line);
+  font-family: 'SF Mono', ui-monospace, 'Menlo', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--jb-forest-deep);
+}
+
+/* ── journey tip (transient notification below journey bar) ── */
+.journey-tip {
+  position: fixed;
+  top: 76px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-12px);
+  padding: 12px 18px;
+  background: rgba(20, 53, 40, 0.96);
+  color: #EAF6F0;
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  box-shadow: 0 10px 32px rgba(16, 65, 46, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.25s ease;
+  text-align: center;
+  max-width: 400px;
+}
+.journey-tip.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+.journey-tip b {
+  display: block;
+  margin-bottom: 3px;
+}
+
+/* ── coach marks (spotlight + floating card) ── */
+.coach-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+  z-index: 2500;
+}
+.coach-mask.show {
+  opacity: 1;
+  /* 点击穿透:遮罩只是视觉变暗,不能拦截用户去点真实界面元素
+     (比如「全部确认」按钮)。coach-card 自己有 pointer-events:auto。 */
+  pointer-events: none;
+}
+/* Spotlight effect: punch a hole in the mask around the target element */
+.coach-mask.show:not(.no-target) {
+  background:
+    radial-gradient(
+      ellipse var(--spotlight-w, 200px) var(--spotlight-h, 100px) at var(--spotlight-x, 50%) var(--spotlight-y, 50%),
+      transparent 0%,
+      rgba(0, 0, 0, 0.75) 100%
+    );
+}
+
+.coach-card {
+  position: fixed;
+  width: 360px;
+  padding: 20px;
+  background: #fff;
+  border: 1px solid var(--jb-line);
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(16, 65, 46, 0.2);
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.25s ease;
+  z-index: 2501;
+  transform: translateY(8px);
+}
+.coach-card.show {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+.coach-card.centered {
+  top: 50% !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%);
+}
+.coach-card.show.centered {
+  transform: translate(-50%, -50%);
+}
+
+.coach-card h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  color: var(--jb-ink);
+}
+.coach-card p {
+  margin: 0 0 16px;
+  color: var(--jb-ink-soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.coach-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.coach-btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 620;
+  cursor: pointer;
+  transition: all 0.15s;
+  background: var(--jb-forest);
+  color: #EAF7EF;
+}
+.coach-btn:hover {
+  background: var(--jb-forest-deep);
+}
+.coach-btn.ghost {
+  background: none;
+  border: 1px solid var(--jb-line);
+  color: var(--jb-ink-soft);
+}
+.coach-btn.ghost:hover {
+  border-color: var(--jb-forest);
+  color: var(--jb-forest);
+  background: none;
+}
+
+/* ── pulse highlight for the real action button (journey focus helper) ── */
+.jb-pulse {
+  animation: jb-pulse-ring 0.8s ease 2;
+  border-radius: 8px;
+}
+@keyframes jb-pulse-ring {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(14, 159, 110, 0.75); }
+  50% { box-shadow: 0 0 0 10px rgba(14, 159, 110, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .journey-bar,
+  .journey-tip,
+  .coach-mask,
+  .coach-card,
+  .jb-node,
+  .coach-btn {
+    animation: none !important;
+    transition: none !important;
+  }
+}

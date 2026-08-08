@@ -336,6 +336,90 @@ export async function listCandidates(uid: string): Promise<CandidatesData> {
   };
 }
 
+/** onboarding 抽取产物 → 候选池的最小映射。抽取层用的是 `ExtractionCandidate`
+ *  （judgment/summary/suggestedType/suggestedScope/uncertainty），候选池用的是
+ *  `CandidateUpdate`。这里做一次忠实转换，不臆造任何字段：
+ *  - suggestedType → kind + memory_scope：
+ *      personal     → preference / user   （个人偏好进 USER.md）
+ *      rule         → rule       / shared （通用规则进 MEMORY.md）
+ *      template     → instance   / user   （实例化信息，个人画像）
+ *      skill_method → rule       / shared （可复用做法，当规则记）
+ *  - judgment → memory_text（确认后真正写进记忆的文本）；summary 回退用 judgment
+ *  - confidence 一律 'low'：onboarding 首轮抽取未经用户核对，进池等确认，不冒充高置信
+ *  - source_memory_refs 置空：onboarding 没有可回指的既有记忆条目 */
+type OnboardingCandidate = {
+  judgment: string;
+  summary?: string;
+  suggestedType: 'personal' | 'rule' | 'template' | 'skill_method';
+  suggestedScope?: string;
+  uncertainty?: string;
+};
+
+function mapOnboardingType(
+  t: OnboardingCandidate['suggestedType'],
+): { kind: CandidateKind; scope: MemoryTargetScope } {
+  switch (t) {
+    case 'personal':
+      return { kind: 'preference', scope: 'user' };
+    case 'rule':
+      return { kind: 'rule', scope: 'shared' };
+    case 'template':
+      return { kind: 'instance', scope: 'user' };
+    case 'skill_method':
+      return { kind: 'rule', scope: 'shared' };
+    default:
+      return { kind: 'instance', scope: 'user' };
+  }
+}
+
+/**
+ * 把 onboarding 抽取出的候选批量写入候选池（不确认、不落记忆——只是进池等
+ * 用户在第 4 步勾选后再走 `confirmCandidate`）。返回实际写入的 candidate_id 列表，
+ * 供前端记录「哪些进了池」，勾选确认时按 id 调 `confirmCandidate`。
+ *
+ * 忠实约束：judgment 为空的条目直接跳过（不编造摘要）；candidate_id 不含空白
+ * （解析器用 `### <id>` 且 id 匹配 `\S+`），用时间戳+序号+随机后缀保证唯一。
+ */
+export async function addCandidates(
+  uid: string,
+  candidates: OnboardingCandidate[],
+): Promise<{ candidate_ids: string[] }> {
+  if (!safeId(uid)) throw new Error('invalid uid');
+  const incoming = Array.isArray(candidates) ? candidates : [];
+  if (!incoming.length) return { candidate_ids: [] };
+
+  const existing = readCandidates(uid);
+  const written: string[] = [];
+  const stamp = Date.now();
+  let seq = 0;
+
+  for (const c of incoming) {
+    const judgment = typeof c?.judgment === 'string' ? c.judgment.trim() : '';
+    if (!judgment) continue; // 无正文不入池，绝不编造
+    const { kind, scope } = mapOnboardingType(c.suggestedType);
+    const summary = (typeof c.summary === 'string' && c.summary.trim()) || judgment;
+    const rand = Math.random().toString(36).slice(2, 8);
+    const candidateId = `ob-${stamp}-${seq++}-${rand}`;
+    existing.push({
+      candidate_id: candidateId,
+      kind,
+      confidence: 'low',
+      summary,
+      memory_scope: scope,
+      memory_text: judgment,
+      ...(typeof c.uncertainty === 'string' && c.uncertainty.trim()
+        ? { diff_summary: c.uncertainty.trim() }
+        : {}),
+      source_memory_refs: [],
+    });
+    written.push(candidateId);
+  }
+
+  if (written.length) writeCandidates(uid, existing);
+  log.info('onboarding candidates added to pool', { uid, added: written.length });
+  return { candidate_ids: written };
+}
+
 /**
  * 判断 groupId 是否模板文件组（阶段 D：台账带 template_id 且文件携带
  * `> 模板:` 元信息行）。是 → 返回 template_id + 解析出的分节（含字段与流水）；

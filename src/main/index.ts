@@ -205,7 +205,7 @@ function setTaskNotificationBadgeCount(count: number): void {
 }
 
 function createWindow(): BrowserWindow {
-  const dev = !app.isPackaged;
+  const dev = !app.isPackaged || !!process.env.ORKAS_ONBOARDING_ALWAYS; // Force dev mode when testing onboarding
   const restored = windowState.restoreWindowState();
   // This is deliberately not a `persist:` partition. The official remote
   // creator gets a memory-only browser session, separate from the app UI.
