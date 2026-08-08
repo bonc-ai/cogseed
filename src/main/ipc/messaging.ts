@@ -1,6 +1,7 @@
 import { safeId } from '../storage';
 import * as messaging from '../features/messaging/manager';
 import * as feishuRegistration from '../features/messaging/feishu-registration';
+import * as wechatRegistration from '../features/messaging/wechat-registration';
 import * as wecomRegistration from '../features/messaging/wecom-registration';
 import * as registry from '../features/messaging/registry';
 import {
@@ -268,6 +269,18 @@ export const invokeHandlers = {
 
   'messaging.wecom_qr.cancel': async (payload: Record<string, unknown>, ctx: MessagingContext) => ({
     registration: wecomRegistration.cancelWecomQrRegistration(ctx.userId, registrationFlowId(payload?.flowId)),
+  }),
+
+  'messaging.wechat_qr.start': async (_payload: Record<string, unknown>, ctx: MessagingContext) => ({
+    registration: await wechatRegistration.startWechatQrRegistration(ctx.userId),
+  }),
+
+  'messaging.wechat_qr.status': async (payload: Record<string, unknown>, ctx: MessagingContext) => ({
+    registration: wechatRegistration.getWechatQrRegistrationStatus(ctx.userId, registrationFlowId(payload?.flowId)),
+  }),
+
+  'messaging.wechat_qr.cancel': async (payload: Record<string, unknown>, ctx: MessagingContext) => ({
+    registration: wechatRegistration.cancelWechatQrRegistration(ctx.userId, registrationFlowId(payload?.flowId)),
   }),
 
   /** Renderer answer to a `messaging:send-confirm` push (Commander proactive

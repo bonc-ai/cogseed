@@ -203,15 +203,15 @@ describe('settings tabs module', () => {
     ]);
     const open = hooks.CHANNELS.filter((channel: any) => channel.group === 'open').map((channel: any) => channel.key);
     const soon = hooks.CHANNELS.filter((channel: any) => channel.group === 'soon').map((channel: any) => channel.key);
-    expect(open).toEqual(['feishu', 'lark', 'wecom', 'telegram']);
-    expect(soon).toEqual(['wechat', 'qq', 'dingtalk', 'discord']);
+    expect(open).toEqual(['feishu', 'lark', 'wecom', 'telegram', 'wechat']);
+    expect(soon).toEqual(['qq', 'dingtalk', 'discord']);
     for (const channel of hooks.CHANNELS) expect(typeof channel.icon).toBe('string');
 
     expect(hooks.channelForInstance({ id: 'a', platform: 'wecom' })).toBe('wecom');
     expect(hooks.channelForInstance({ id: 'b', platform: 'telegram' })).toBe('telegram');
     expect(hooks.channelForInstance({ id: 'c', platform: 'feishu_lark', feishuTenantBrand: 'lark' })).toBe('lark');
     expect(hooks.channelForInstance({ id: 'd', platform: 'feishu_lark', feishuTenantBrand: 'feishu' })).toBe('feishu');
-    expect(hooks.channelForInstance({ id: 'e', platform: 'wechat_personal' })).toBeNull();
+    expect(hooks.channelForInstance({ id: 'e', platform: 'wechat_personal' })).toBe('wechat');
   });
 
   it('lists every instance of a channel instead of hiding older ones', () => {
@@ -326,6 +326,58 @@ describe('settings tabs module', () => {
     expect(source).toContain('await cancelWecomFlow({ silent: true, render: false })');
   });
 
+  it('wires the wechat channel to start/status/cancel IPC without an instance draft', () => {
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    expect(source).toContain("invoke('messaging.wechat_qr.start', {})");
+    expect(source).toContain("invoke('messaging.wechat_qr.status', { flowId })");
+    expect(source).toContain("invoke('messaging.wechat_qr.cancel', { flowId })");
+    expect(source).toContain('renderWechatPanel');
+    expect(source).toContain("channel.platform === 'wechat_personal'");
+    expect(source).toContain('wechatFlowActive()');
+  });
+
+  it('renders the wechat QR from qrUrl with qrCode fallback and localizes through wechat_qr keys', () => {
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    expect(source).toContain("state.wechat.qrSource = registration.qrUrl.trim()");
+    expect(source).toContain("state.wechat.qrSource = registration.qrCode.trim()");
+    expect(source).toContain("renderQrCode(host, state.wechat.qrSource, 'messaging.wechat_qr')");
+    expect(source).toContain("labelFor(`messaging.wechat_qr.status_${statusState}`, errorCode || statusState)");
+    expect(source).toContain("labelFor('messaging.wechat_qr.completed', '')");
+    expect(source).not.toContain('messaging.wechat_qr.status_scanned_confirm');
+  });
+
+  it('treats wechat blocked/expired/failed as terminal and cancels the server flow', () => {
+    const { hooks } = loadMessagingSettingsTestHooks();
+    const wechat = hooks.__test.state.wechat;
+
+    hooks.__test.resetWechatFlow();
+    expect(hooks.__test.wechatFlowActive()).toBe(false);
+    wechat.flowId = 'flow-1';
+    wechat.state = 'awaiting_scan';
+    expect(hooks.__test.wechatFlowActive()).toBe(true);
+    for (const terminal of ['completed', 'cancelled', 'expired', 'blocked', 'failed']) {
+      wechat.state = terminal;
+      expect(hooks.__test.wechatFlowActive()).toBe(false);
+    }
+    hooks.__test.resetWechatFlow();
+
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    expect(source).toContain("await cancelWechatFlow({ silent: true, render: false })");
+    expect(source).toContain("WECHAT_TERMINAL_STATES.has(nextState)");
+  });
+
+  it('cancels an in-flight wechat QR flow when switching channels', () => {
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    expect(source).toContain('await cancelWechatFlow({ silent: true, render: false })');
+    expect(source).toContain('state.selectedChannel = key');
+  });
+
+  it('keeps the add-binding entry for wechat and starts the QR flow directly', () => {
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    expect(source).toContain("else if (channel.platform === 'wechat_personal')");
+    expect(source).toContain('void startWechatFlow()');
+  });
+
   it('provides every visible catalog and detail label in each renderer locale', () => {
     const keys = [
       'messaging.group.open',
@@ -356,6 +408,25 @@ describe('settings tabs module', () => {
       'messaging.wecom_qr.status_cancelled',
       'messaging.wecom_qr.status_failed',
       'messaging.wecom_qr.status_denied',
+      'messaging.channel.wechat.title',
+      'messaging.channel.wechat.description',
+      'messaging.wechat_qr.start',
+      'messaging.wechat_qr.retry',
+      'messaging.wechat_qr.cancel',
+      'messaging.wechat_qr.cancel_failed',
+      'messaging.wechat_qr.start_failed',
+      'messaging.wechat_qr.poll_failed',
+      'messaging.wechat_qr.completed',
+      'messaging.wechat_qr.status_starting',
+      'messaging.wechat_qr.status_awaiting_scan',
+      'messaging.wechat_qr.status_scanned',
+      'messaging.wechat_qr.status_redirecting',
+      'messaging.wechat_qr.status_verification_required',
+      'messaging.wechat_qr.status_completed',
+      'messaging.wechat_qr.status_expired',
+      'messaging.wechat_qr.status_blocked',
+      'messaging.wechat_qr.status_cancelled',
+      'messaging.wechat_qr.status_failed',
       'messaging.telegram.token_label',
       'messaging.telegram.token_placeholder',
       'messaging.telegram.connect',
