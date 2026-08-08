@@ -139,6 +139,115 @@ describe('session_import › extractor', () => {
   });
 });
 
+describe('session_import › asset-router (cognitions → Recall candidate pool)', () => {
+  it('routes the three buckets to matching suggestedType candidates', async () => {
+    const { routeCognitions } = await import('../../../src/main/features/session_import/asset-router');
+    const recall = await import('../../../src/main/features/recall/candidate-service');
+
+    // A conversation id must be a safeId; use one materialize would produce.
+    const cid = 'imp-claude-abc123';
+    const counts = await routeCognitions(TEST_UID, 'claude', 'sess-1', cid, {
+      personal: [{ text: '偏好 TypeScript' }],
+      rules: [{ text: '提交前必须过 lint', note: '用户强调过两次' }],
+      templates: [{ text: 'PR 描述用三段式' }],
+    });
+    expect(counts).toEqual({ personal: 1, rule: 1, template: 1 });
+
+    const candidates = await recall.listRecallCandidates(TEST_UID);
+    const byType = (t: string) => candidates.filter((c: any) => c.suggestedType === t);
+    expect(byType('personal')[0].judgment).toBe('偏好 TypeScript');
+    expect(byType('rule')[0].judgment).toBe('提交前必须过 lint');
+    expect(byType('rule')[0].summary).toBe('用户强调过两次');
+    expect(byType('template')[0].judgment).toBe('PR 描述用三段式');
+    // Evidence points at the materialized conversation.
+    expect(byType('personal')[0].sourceRefs[0].id).toBe(cid);
+    expect(byType('personal')[0].sourceRefs[0].kind).toBe('conversation');
+  });
+
+  it('is idempotent — same cognition from same session dedupes via captureKey', async () => {
+    const { routeCognitions } = await import('../../../src/main/features/session_import/asset-router');
+    const recall = await import('../../../src/main/features/recall/candidate-service');
+    const cid = 'imp-claude-dedup1';
+
+    await routeCognitions(TEST_UID, 'claude', 'sess-dup', cid, {
+      personal: [{ text: '偏好深色主题' }], rules: [], templates: [],
+    });
+    await routeCognitions(TEST_UID, 'claude', 'sess-dup', cid, {
+      personal: [{ text: '偏好深色主题' }], rules: [], templates: [],
+    });
+
+    const personal = (await recall.listRecallCandidates(TEST_UID))
+      .filter((c: any) => c.suggestedType === 'personal' && c.judgment === '偏好深色主题');
+    expect(personal.length).toBe(1);
+  });
+});
+
+describe('session_import › full pipeline (importClaudeSession)', () => {
+  it('reads → extracts → materializes → routes, end to end', async () => {
+    // Stage the fake Claude transcript file the reader will read.
+    const projectsRoot = path.join(os.homedir(), '.claude', 'projects', 'enc-proj');
+    fs.mkdirSync(projectsRoot, { recursive: true });
+    const filePath = path.join(projectsRoot, 'pipe-1.jsonl');
+    fs.writeFileSync(filePath, [
+      JSON.stringify({ type: 'user', message: { role: 'user', content: '帮我修 CI' }, cwd: '/proj', timestamp: '2026-01-01T00:00:00Z' }),
+      JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '已修复缓存 key' }] } }),
+    ].join('\n'));
+
+    __nextChat = () => ({
+      ok: true,
+      text: JSON.stringify({
+        summary: 'CI 缓存 key 已修复，剩下并发任务待验证。',
+        personal: [], rules: [{ text: 'CI 必须绿灯才能合' }], templates: [],
+      }),
+    });
+
+    const { importClaudeSession } = await import('../../../src/main/features/session_import/asset-router');
+    const chats = await import('../../../src/main/features/chats');
+    const recall = await import('../../../src/main/features/recall/candidate-service');
+
+    const res = await importClaudeSession({ userId: TEST_UID, filePath });
+    expect(res.ok).toBe(true);
+    expect(res.degraded).toBe(false);
+    expect(res.cognitions.rule).toBe(1);
+
+    // Conversation exists and is seeded.
+    const msgs = await chats.getMessages(TEST_UID, res.conversationId!);
+    expect(msgs[0].text).toContain('CI 缓存 key');
+
+    // Cognition landed in the candidate pool as a rule.
+    const rules = (await recall.listRecallCandidates(TEST_UID))
+      .filter((c: any) => c.suggestedType === 'rule');
+    expect(rules.some((c: any) => c.judgment === 'CI 必须绿灯才能合')).toBe(true);
+
+    // Cleanup staged file.
+    fs.rmSync(filePath, { force: true });
+  });
+
+  it('degraded extraction still materializes but routes no cognitions', async () => {
+    const projectsRoot = path.join(os.homedir(), '.claude', 'projects', 'enc-proj2');
+    fs.mkdirSync(projectsRoot, { recursive: true });
+    const filePath = path.join(projectsRoot, 'pipe-deg.jsonl');
+    fs.writeFileSync(filePath,
+      JSON.stringify({ type: 'user', message: { role: 'user', content: '随便问问' }, timestamp: '2026-01-01T00:00:00Z' }));
+
+    __nextChat = () => ({ ok: true, text: 'not json at all' });
+
+    const { importClaudeSession } = await import('../../../src/main/features/session_import/asset-router');
+    const chats = await import('../../../src/main/features/chats');
+
+    const res = await importClaudeSession({ userId: TEST_UID, filePath });
+    expect(res.ok).toBe(false);
+    expect(res.degraded).toBe(true);
+    expect(res.cognitions).toEqual({ personal: 0, rule: 0, template: 0 });
+
+    // Still importable: conversation exists with the honest degraded banner.
+    const msgs = await chats.getMessages(TEST_UID, res.conversationId!);
+    expect(msgs[0].text).toContain('未能自动提炼');
+
+    fs.rmSync(filePath, { force: true });
+  });
+});
+
 describe('session_import › materialize', () => {
   it('creates a continuable conversation seeded with the summary', async () => {
     const { materializeSession } = await import('../../../src/main/features/session_import/materialize');
