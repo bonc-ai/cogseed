@@ -2284,3 +2284,58 @@ describe('wechat_personal platform types', () => {
     expect(file).not.toContain('cloud');
   });
 });
+
+describe('wechat_personal registry', () => {
+  const validSecret = {
+    ilinkBotToken: 'a'.repeat(64),
+    ilinkBaseUrl: 'https://ilinkai.weixin.qq.com',
+    ilinkBotId: 'bot-12345',
+  };
+
+  it('validates iLink secrets and rejects untrusted base urls', async () => {
+    const { _registryTestHooks } = await import('../../../src/main/features/messaging/registry');
+    expect(_registryTestHooks.validateSecret('wechat_personal', validSecret)).toEqual(validSecret);
+    const badUrls = [
+      'http://ilinkai.weixin.qq.com',              // 非 HTTPS
+      'https://evil.example.com',                  // 非白名单 host
+      'https://user:pass@ilinkai.weixin.qq.com',   // 带用户信息
+      'https://ilinkai.weixin.qq.com:8443',        // 非标准端口
+      'not a url',
+    ];
+    for (const url of badUrls) {
+      expect(() => _registryTestHooks.validateSecret('wechat_personal', { ...validSecret, ilinkBaseUrl: url }))
+        .toThrow();
+    }
+    expect(() => _registryTestHooks.validateSecret('wechat_personal', { ...validSecret, ilinkBotToken: 'x' }))
+      .toThrow();
+  });
+
+  it('creates a wechat instance with owner and allowlist in one atomic write', async () => {
+    const registry = await import('../../../src/main/features/messaging/registry');
+    const created = await registry.createWechatInstance('uid-1', {
+      displayName: '我的微信',
+      ...validSecret,
+      ownerExternalUserId: 'wxid-owner',
+    });
+    expect(created.platform).toBe('wechat_personal');
+    expect(created.ownerConfigured).toBe(true);
+    expect(created.ownerLabel).toBeUndefined();
+    expect(created.ownerIdentitySource).toBe('qr');
+    const client = await registry.listInstances('uid-1');
+    expect(client).toHaveLength(1);
+    expect(client[0].policy.allowUserIds).toEqual(['wxid-owner']);
+    // 无中间态：直接读盘也同时具备 owner 与 allowlist
+    const internal = await registry.getInstance('uid-1', created.id);
+    expect(internal?.ownerExternalUserId).toBe('wxid-owner');
+    expect(internal?.policy.allowUserIds).toEqual(['wxid-owner']);
+  });
+
+  it('fails closed when owner id is missing', async () => {
+    const registry = await import('../../../src/main/features/messaging/registry');
+    await expect(registry.createWechatInstance('uid-1', {
+      displayName: '我的微信',
+      ...validSecret,
+      ownerExternalUserId: '',
+    })).rejects.toThrow();
+  });
+});

@@ -39,6 +39,24 @@ const SECRET_NAMESPACE = 'messaging.instance';
 const EMPTY_CONFIG: MessagingConfigFile = { version: 1, instances: {} };
 const locks = new Map<string, Mutex>();
 
+/** iLink is a Tencent-controlled relay; the confirmed base URL and any QR
+ * redirect host must stay inside this static whitelist. Never extend it from
+ * server-supplied values. */
+export const TRUSTED_ILINK_HOSTS = new Set(['ilinkai.weixin.qq.com']);
+
+export function isTrustedIlinkBaseUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'https:') return false;
+  if (url.username || url.password) return false;
+  if (url.port && url.port !== '443') return false;
+  return TRUSTED_ILINK_HOSTS.has(url.hostname);
+}
+
 interface OwnerIdentityInput {
   ownerExternalUserId?: string;
   ownerExternalUserName?: string;
@@ -273,11 +291,32 @@ function normalizeStatus(status: MessagingInstanceStatus | undefined): Messaging
   };
 }
 
+/**
+ * WeChat owner identity is bound at registration time from the confirmed
+ * `ilink_user_id` and must survive disk read-back. Unlike Feishu/Lark there
+ * is no open-id format, so the read path only re-validates the bounded text
+ * written by `createWechatInstance`.
+ */
+function normalizeWechatOwnerIdentity(input: OwnerIdentityInput): Pick<
+  MessagingInstanceInternal, 'ownerExternalUserId' | 'ownerExternalUserName' | 'ownerIdentitySource'
+> {
+  if (typeof input.ownerExternalUserId !== 'string' || !input.ownerExternalUserId.trim()) return {};
+  const ownerExternalUserId = input.ownerExternalUserId.trim();
+  if (ownerExternalUserId.length > 160) return {};
+  const source = input.ownerIdentitySource;
+  return {
+    ownerExternalUserId,
+    ownerIdentitySource: source === 'qr' ? 'qr' : source === 'auto' ? 'auto' : 'manual',
+  };
+}
+
 function normalizeInstance(raw: MessagingInstanceDisk): MessagingInstanceDisk {
   assertInstanceId(raw.id);
   assertPlatform(raw.platform);
   const displayName = boundedText(String(raw.displayName || ''), 'display name', 120);
-  const ownerIdentity = normalizeOwnerIdentity(raw.platform, raw);
+  const ownerIdentity = raw.platform === 'wechat_personal'
+    ? normalizeWechatOwnerIdentity(raw)
+    : normalizeOwnerIdentity(raw.platform, raw);
   const now = nowIso();
   return {
     id: raw.id,
@@ -336,6 +375,14 @@ function validateSecret(platform: MessagingPlatform, secret: MessagingSecret): M
       ? secret.tenantAccessToken.trim().slice(0, 2048)
       : undefined;
     return { appId, appSecret, ...(tenantAccessToken ? { tenantAccessToken } : {}) };
+  }
+  if (platform === 'wechat_personal') {
+    const ilinkBotToken = requiredSecretText(secret.ilinkBotToken, 'ilink bot token', 512);
+    if (!/^[A-Za-z0-9._~-]{16,512}$/.test(ilinkBotToken)) throw new Error('invalid iLink bot token');
+    const ilinkBaseUrl = requiredSecretText(secret.ilinkBaseUrl, 'ilink base url', 512);
+    if (!isTrustedIlinkBaseUrl(ilinkBaseUrl)) throw new Error('untrusted iLink base url');
+    const ilinkBotId = requiredSecretText(secret.ilinkBotId, 'ilink bot id', 128);
+    return { ilinkBotToken, ilinkBaseUrl, ilinkBotId };
   }
   const wecomBotId = requiredSecretText(secret.wecomBotId, 'WeCom bot id', 128);
   const wecomBotSecret = requiredSecretText(secret.wecomBotSecret, 'WeCom bot secret', 512);
@@ -642,6 +689,58 @@ export async function deleteInstance(uid: string, instanceId: string): Promise<b
 
 export function removeConfigFileForTest(uid: string): void {
   try { fs.rmSync(path.resolve(userMessagingConfigFile(uid)), { force: true }); } catch { /* test cleanup only */ }
+}
+
+export interface CreateWechatInstanceInput {
+  displayName: string;
+  ilinkBotToken: string;
+  ilinkBaseUrl: string;
+  ilinkBotId: string;
+  /** The confirmed `ilink_user_id`; must be present or the instance is not created. */
+  ownerExternalUserId: string;
+  workspace?: WorkspaceScope;
+  policy?: Partial<MessagingPolicy>;
+  responseMode?: MessagingResponseMode;
+}
+
+/**
+ * Wechat owner identity is bound at registration time from the confirmed
+ * `ilink_user_id`. Owner and allowlist land in the same per-user lock so
+ * there is never an unowned-but-enabled window and no first-message claim.
+ */
+export async function createWechatInstance(uid: string, input: CreateWechatInstanceInput): Promise<MessagingInstanceClient> {
+  assertUserId(uid);
+  const displayName = boundedText(input.displayName, 'display name', 120);
+  const secret = validateSecret('wechat_personal', {
+    ilinkBotToken: input.ilinkBotToken,
+    ilinkBaseUrl: input.ilinkBaseUrl,
+    ilinkBotId: input.ilinkBotId,
+  });
+  const ownerExternalUserId = boundedText(input.ownerExternalUserId, 'owner user id', 160);
+  const allowUserIds = Array.from(new Set([...(input.policy?.allowUserIds ?? []), ownerExternalUserId]));
+  return getLock(uid).runExclusive(async () => {
+    const config = await readConfig(uid);
+    const id = genId12();
+    const now = nowIso();
+    const instance: MessagingInstanceDisk = {
+      id,
+      platform: 'wechat_personal',
+      displayName,
+      enabled: false,
+      responseMode: normalizeResponseMode('wechat_personal', input.responseMode, true),
+      workspace: normalizeWorkspace(input.workspace),
+      policy: normalizePolicy({ ...input.policy, allowUserIds }, true),
+      status: { kind: 'disabled', checkedAt: now },
+      ownerExternalUserId,
+      ownerIdentitySource: 'qr',
+      createdAt: now,
+      updatedAt: now,
+      secretsEnc: encryptSecret(uid, id, secret),
+    };
+    config.instances[id] = instance;
+    await writeConfig(uid, config);
+    return toClient(instance, true);
+  });
 }
 
 export const _registryTestHooks = {
