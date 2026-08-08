@@ -353,11 +353,6 @@ afterEach(() => {
 });
 
 describe('wechat state store', () => {
-  const fp = (bot = 'bot-1', owner = 'owner-1') => {
-    const { wechatCredentialFingerprint } = require('../../../src/main/features/messaging/wechat-state-store');
-    return wechatCredentialFingerprint(bot, owner);
-  };
-
   it('round-trips cursor and peer tokens, encrypted on disk', async () => {
     const store = await import('../../../src/main/features/messaging/wechat-state-store');
     const fingerprint = store.wechatCredentialFingerprint('bot-1', 'owner-1');
@@ -586,7 +581,10 @@ export async function saveWechatPeerToken(
   if (!peerId || peerId.length > PEER_ID_MAX || !contextToken || contextToken.length > TOKEN_MAX) {
     throw new Error('invalid wechat peer token entry');
   }
-  const tokenRef = randomUUID();
+  // tokenRef encodes the peer id so a delivery retry after restart can map
+  // back to the peer; the token read back is the peer's current token, which
+  // only changes on inbound (the token that triggered the reply round).
+  const tokenRef = `${peerId}::${randomUUID()}`;
   await saveState(uid, instanceId, fingerprint, (state) => {
     if (state.peers[peerId] === undefined && Object.keys(state.peers).length >= PEER_MAX) {
       // Only the owner is expected; bounded growth is a hard safety net.
@@ -604,18 +602,16 @@ export async function readWechatPeerToken(
   instanceId: string,
   tokenRef: string,
 ): Promise<{ token: string; peerId: string } | null> {
-  // tokenRef points at the peer entry, not a separate snapshot: a delivery
-  // retry after restart reads the same peer's current token, which is the
-  // token that triggered the reply round (tokens only change on inbound).
+  const separator = tokenRef.indexOf('::');
+  const peerId = separator > 0 ? tokenRef.slice(0, separator) : '';
+  if (!peerId) return null;
   const file = await readFile(uid);
   const entry = file.instances[instanceId];
   if (!entry?.stateEnc) return null;
   const state = decryptState(uid, instanceId, entry.stateEnc);
-  if (!state) return null;
-  for (const [peerId, peer] of Object.entries(state.peers)) {
-    if (tokenRef.includes(peerId)) return { token: peer.contextToken, peerId };
-  }
-  return null;
+  const peer = state?.peers[peerId];
+  if (!state || !peer || typeof peer.contextToken !== 'string' || !peer.contextToken) return null;
+  return { token: peer.contextToken, peerId };
 }
 
 export async function clearWechatInstanceState(uid: string, instanceId: string): Promise<void> {
@@ -629,11 +625,7 @@ export async function clearWechatInstanceState(uid: string, instanceId: string):
 export async function deleteWechatInstanceState(uid: string, instanceId: string): Promise<void> {
   await clearWechatInstanceState(uid, instanceId);
 }
-
-export function _wechatStateTestHooks = undefined;
 ```
-
-说明：`readWechatPeerToken` 用 `tokenRef.includes(peerId)` 从加密状态内反查 peer（tokenRef 本身不落盘，是内存内的 UUID；重启后 delivery retry 时 ledger 里的 tokenRef 已不可用——因此 retry 读取的是该 peer 当前 token，即触发轮回复的原 token）。若要求更严格的快照语义，可将 tokenRef 一并存入 peers 条目，读取时精确匹配；实现以 `includes` 反查 + 注释说明取舍。
 
 - [ ] **Step 4: 跑测试确认通过**
 
@@ -657,7 +649,7 @@ git commit -m "feat(messaging): wechat-state-store 加密持久化 cursor/contex
 
 **Interfaces:**
 - Consumes: Task 1 类型、Task 2 `TRUSTED_ILINK_HOSTS/isTrustedIlinkBaseUrl`、Task 3 state store
-- Produces: `WechatPersonalAdapter implements MessagingAdapter`（本任务完成 `start/stop/checkHealth` 与 wire client，`sendMessage` 骨架留到 Task 5）；导出 `_wechatTestHooks`（`buildHeaders`、`normalizeInbound`、`classifyError`）
+- Produces: `WechatPersonalAdapter implements MessagingAdapter`，构造签名 `(instance, secret, uid: string)`（uid 必填，manager 创建时传入；owner 从 instance 读取）；本任务完成 `start/stop/checkHealth`、wire client、长轮询骨架（`getUpdates`/`handleBatch` 最小版：读 state 取 cursor、请求、空批次直接返回，**不写 state、不提交 cursor、不做 owner 过滤**——Task 5 升级为完整版）；导出 `_wechatTestHooks`（`buildHeaders`、`classifyError`、`statusOf`）
 
 - [ ] **Step 1: 写失败测试（wire client + 生命周期）**
 
@@ -745,7 +737,7 @@ describe('wechat personal adapter wire contract', () => {
       });
     vi.stubGlobal('fetch', fetchMock);
 
-    const adapter = new WechatPersonalAdapter(instance, secret);
+    const adapter = new WechatPersonalAdapter(instance, secret, 'uid-1');
     const controller = new AbortController();
     const startPromise = adapter.start(controller.signal, { onInbound, onStatus } as never);
     // 等两轮请求完成
@@ -774,7 +766,7 @@ describe('wechat personal adapter wire contract', () => {
       throw new Error('aborted');
     }));
     const onStatus = vi.fn().mockResolvedValue(undefined);
-    const adapter = new WechatPersonalAdapter(instance, secret);
+    const adapter = new WechatPersonalAdapter(instance, secret, 'uid-1');
     const controller = new AbortController();
     const startPromise = adapter.start(controller.signal, { onInbound: vi.fn(), onStatus } as never);
     setTimeout(() => controller.abort(), 20);
@@ -848,15 +840,18 @@ export class WechatPersonalAdapter implements MessagingAdapter {
   private lastPollAt = 0;
   private lastStatus: MessagingInstanceStatus = statusOf('disconnected');
 
-  constructor(instance: MessagingInstance, secret: MessagingSecret) {
+  constructor(instance: MessagingInstance, secret: MessagingSecret, uid: string) {
     if (!secret.ilinkBotToken || !secret.ilinkBaseUrl || !secret.ilinkBotId) {
       throw new Error('iLink credentials missing');
     }
     if (!isTrustedIlinkBaseUrl(secret.ilinkBaseUrl)) throw new Error('untrusted iLink base url');
     this.instance = instance;
+    this.uid = uid;
     this.ilinkBotToken = secret.ilinkBotToken;
     this.ilinkBaseUrl = secret.ilinkBaseUrl.replace(/\/+$/, '');
     this.ilinkBotId = secret.ilinkBotId;
+    this.ownerExternalUserId = (instance as MessagingInstanceInternal).ownerExternalUserId || '';
+    this.fingerprint = wechatCredentialFingerprint(this.ilinkBotId, this.ownerExternalUserId);
   }
 
   private async request(
@@ -929,7 +924,7 @@ export class WechatPersonalAdapter implements MessagingAdapter {
     return this.statusOf('disconnected');
   }
 
-  /** Implemented in Task 5. */
+  /** Task 5 completes inbound/outbound handling. */
   sendMessage(
     _chatId: string,
     _text: string,
@@ -941,126 +936,62 @@ export class WechatPersonalAdapter implements MessagingAdapter {
 }
 ```
 
-Task 5 再补 `getUpdates`（读 state 取 cursor、提交 cursor）、`handleBatch`（并发 dispatch + 终态后提交）、`normalizeInbound`、`sendMessage` 与 `abortableWait`/`statusOf` 辅助函数。本任务末尾先将 `statusOf`、`abortableWait` 与 `getUpdates`/`handleBatch` 的最小骨架补上以便测试通过（见 Task 5 步骤 3 的完整实现，本任务内可先实现 `getUpdates` 直接空 cursor 调用，`handleBatch` 空实现）。
-
-- [ ] **Step 4: 跑测试确认通过**
-
-Run: `npm test -- test/main/features/messaging-wechat-personal.test.ts`
-Expected: PASS
-
-- [ ] **Step 5: 提交**
-
-```bash
-git add src/main/features/messaging/wechat-personal.ts test/main/features/messaging-wechat-personal.test.ts
-git commit -m "feat(messaging): WechatPersonalAdapter wire client 与长轮询生命周期（generation/终态/退避）"
-```
-
----
-
-### Task 5: WechatPersonalAdapter——入站与出站处理
-
-**Files:**
-- Modify: `src/main/features/messaging/wechat-personal.ts`
-- Test: `test/main/features/messaging-wechat-personal.test.ts`（追加）
-
-**Interfaces:**
-- Consumes: Task 3 state store（`loadWechatState/saveWechatCursor/saveWechatPeerToken/readWechatPeerToken`）、Task 1 类型
-- Produces: `_wechatTestHooks.normalizeInbound(instance, raw): InboundEnvelope | null`；`sendMessage(peerId, text, signal, context)` 完整实现（tokenRef 取 token）
-
-- [ ] **Step 1: 写失败测试（入站/出站）**
+类字段与辅助函数（本任务需要的最小集，Task 5 补齐其余）：
 
 ```ts
-describe('wechat personal adapter inbound/outbound', () => {
-  // instance/secret 复用上文定义；增加一个 owner 实例
-  const ownerInstance = {
-    ...instance,
-    ownerExternalUserId: 'owner-1',
-  };
+  private readonly uid: string;
+  private readonly ownerExternalUserId: string;
+  private readonly fingerprint: string;
 
-  it('normalizes a direct text message with a contextTokenRef', async () => {
-    const { _wechatTestHooks } = await import('../../../src/main/features/messaging/wechat-personal');
-    const envelope = _wechatTestHooks.normalizeInbound(ownerInstance, {
-      msg_id: 'm-1',
-      from_user_id: 'owner-1',
-      item_list: [{ type: 'text_item', text_item: { text: '你好' } }],
-      context_token: 'ctx-1',
-      create_time: 1700000000000,
-    });
-    expect(envelope).not.toBeNull();
-    expect(envelope!.externalMessageId).toBe('m-1');
-    expect(envelope!.externalUserId).toBe('owner-1');
-    expect(envelope!.text).toBe('你好');
-    expect(envelope!.isGroup).toBe(false);
-    expect(envelope!.contextTokenRef).toBeTruthy();
-  });
+  private async getUpdates(
+    generation: number,
+    signal: AbortSignal,
+  ): Promise<{ get_updates_buf?: string; messages?: RawWechatMessage[] }> {
+    const stateStore = await import('./wechat-state-store');
+    const state = await stateStore.loadWechatState(this.uid, this.instance.id, this.fingerprint);
+    const cursor = state?.getUpdatesBuf || '';
+    const body = await this.request('/ilink/bot/getupdates', {
+      get_updates_buf: cursor,
+      long_polling: true,
+    }, signal);
+    if (generation !== this.generation) throw new Error('generation changed');
+    this.lastPollAt = Date.now();
+    this.lastStatus = statusOf('connected');
+    void this.callbacks?.onStatus(this.lastStatus);
+    return body;
+  }
 
-  it('rejects group messages and messages missing required fields', async () => {
-    const { _wechatTestHooks } = await import('../../../src/main/features/messaging/wechat-personal');
-    expect(_wechatTestHooks.normalizeInbound(ownerInstance, {
-      msg_id: 'm-2', group_id: 'g-1', from_user_id: 'owner-1',
-      item_list: [{ type: 'text_item', text_item: { text: 'hi' } }], context_token: 'ctx-2',
-    })).toBeNull();
-    expect(_wechatTestHooks.normalizeInbound(ownerInstance, {
-      from_user_id: 'owner-1',
-      item_list: [{ type: 'text_item', text_item: { text: 'hi' } }], context_token: 'ctx-3',
-    })).toBeNull(); // 缺 msg_id
-    expect(_wechatTestHooks.normalizeInbound(ownerInstance, {
-      msg_id: 'm-4', from_user_id: 'owner-1',
-      item_list: [], context_token: 'ctx-4',
-    })).toBeNull(); // 无文本 item
-    expect(_wechatTestHooks.normalizeInbound(ownerInstance, {
-      msg_id: 'm-5', from_user_id: 'owner-1',
-      item_list: [{ type: 'text_item', text_item: { text: 'hi' } }],
-    })).toBeNull(); // 缺 context_token
-  });
+  /** Task 4 最小版：空批次直接返回；有消息时并发 dispatch 并等待终态后提交 cursor。
+   * Task 5 补充 owner 过滤、tokenRef 注入与 state 写入。 */
+  private async handleBatch(
+    generation: number,
+    body: { get_updates_buf?: string; messages?: RawWechatMessage[] },
+    signal: AbortSignal,
+  ): Promise<void> {
+    const messages = Array.isArray(body.messages) ? body.messages : [];
+    if (messages.length === 0) return;
+    const stateStore = await import('./wechat-state-store');
+    const tasks: Array<Promise<unknown>> = [];
+    for (const raw of messages) {
+      if (generation !== this.generation || signal.aborted) return;
+      const envelope = normalizeInbound(this.instance, this.ownerExternalUserId, raw);
+      if (!envelope) continue;
+      const dispatch = (this.callbacks?.onInbound(envelope) || Promise.resolve({ accepted: false, duplicate: false }))
+        .catch((error: unknown) => {
+          log.warn('wechat inbound dispatch failed', { instanceId: this.instance.id, error: logErrorSummary(error) });
+          throw error;
+        });
+      tasks.push(dispatch);
+    }
+    if (tasks.length === 0) return;
+    const settled = await Promise.allSettled(tasks);
+    if (generation !== this.generation || signal.aborted) return;
+    const allTerminal = settled.every((result) => result.status === 'fulfilled');
+    if (allTerminal && typeof body.get_updates_buf === 'string' && body.get_updates_buf) {
+      await stateStore.saveWechatCursor(this.uid, this.instance.id, this.fingerprint, body.get_updates_buf);
+    }
+  }
 
-  it('persists the peer token before dispatching, and sends with the bound tokenRef', async () => {
-    const { WechatPersonalAdapter, _wechatTestHooks } = await import('../../../src/main/features/messaging/wechat-personal');
-    const stateStore = await import('../../../src/main/features/messaging/wechat-state-store');
-    const fingerprint = stateStore.wechatCredentialFingerprint('bot-1', 'owner-1');
-    // 先落盘 peer token（模拟入站时序）
-    await stateStore.saveWechatPeerToken('uid-1', 'inst-1', fingerprint, 'owner-1', 'ctx-bound', 1_700_000_000_000);
-
-    const sent: Array<{ url: string; body: Record<string, unknown> }> = [];
-    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string, init: RequestInit) => {
-      sent.push({ url: String(url), body: JSON.parse(String(init.body)) });
-      return new Response(JSON.stringify({ ret: 0 }), { status: 200 });
-    }));
-
-    const adapter = new WechatPersonalAdapter(ownerInstance, secret);
-    const result = await adapter.sendMessage('owner-1', '回复内容', undefined, {
-      contextTokenRef: 'ref-1',
-    });
-    expect(result).toEqual({});
-    expect(sent).toHaveLength(1);
-    const msg = sent[0].body.msg as Record<string, unknown>;
-    expect(msg.to_user_id).toBe('owner-1');
-    expect(msg.context_token).toBe('ctx-bound');
-    expect((msg.item_list as Array<{ text_item: { text: string } }>)[0].text_item.text).toBe('回复内容');
-  });
-
-  it('refuses to send when no token is available', async () => {
-    const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
-    const adapter = new WechatPersonalAdapter(ownerInstance, secret);
-    await expect(adapter.sendMessage('owner-1', 'hi', undefined, { contextTokenRef: 'missing-ref' }))
-      .rejects.toThrow(/context/);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-});
-```
-
-- [ ] **Step 2: 跑测试确认失败**
-
-Run: `npm test -- test/main/features/messaging-wechat-personal.test.ts`
-Expected: FAIL——`normalizeInbound` 未导出、`sendMessage` 抛 "not implemented"
-
-- [ ] **Step 3: 实现（补全 wechat-personal.ts）**
-
-在 `WechatPersonalAdapter` 类内补全以下方法与模块级辅助函数：
-
-```ts
 function statusOf(kind: MessagingInstanceStatus['kind'], message?: string): MessagingInstanceStatus {
   return {
     kind,
@@ -1084,7 +1015,7 @@ function abortableWait(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-/** Raw iLink inbound item shape. */
+/** Raw iLink inbound message shape (fields are optional in the protocol). */
 interface RawWechatItem {
   type?: string;
   text_item?: { text?: string };
@@ -1129,33 +1060,191 @@ export function normalizeInbound(
 }
 ```
 
-类内方法：
+模块导入补充（文件头部）：
 
 ```ts
-  private async getUpdates(
-    generation: number,
-    signal: AbortSignal,
-  ): Promise<{ get_updates_buf?: string; messages?: RawWechatMessage[] }> {
-    const state = await this.loadState();
-    const cursor = state?.getUpdatesBuf || '';
-    const body = await this.request('/ilink/bot/getupdates', {
-      get_updates_buf: cursor,
-      long_polling: true,
-    }, signal);
-    if (generation !== this.generation) throw new Error('generation changed');
-    this.lastPollAt = Date.now();
-    this.lastStatus = statusOf('connected');
-    void this.callbacks?.onStatus(this.lastStatus);
-    return body;
-  }
-
-  private async loadState(): Promise<WechatInstanceState | null> {
-    const stateStore = await import('./wechat-state-store');
-    return stateStore.loadWechatState(this.uidPlaceholder, this.instance.id, this.fingerprint);
-  }
+import { isTrustedIlinkBaseUrl } from './registry';
+import { wechatCredentialFingerprint } from './wechat-state-store';
+import type { MessagingInstanceInternal } from './types';
 ```
 
-**uid 来源**：adapter 由 manager 创建，manager 持有 uid；`WechatPersonalAdapter` 构造时 manager 传入 uid（`createAdapter` 签名不变，但在 manager 的 runtime 创建处将 uid 透传给 adapter —— 见 Task 6 修改点）。本任务实现 `constructor(instance, secret, uid)` 第三参 `uid: string`，并在 `createAdapter` 分支中由 manager 传入。
+注意：`normalizeInbound` 是纯函数，**不设置 `contextTokenRef`**——ref 由 `handleBatch` 在 dispatch 前注入（Task 5 完整版）。
+
+- [ ] **Step 4: 跑测试确认通过**
+
+Run: `npm test -- test/main/features/messaging-wechat-personal.test.ts`
+Expected: PASS
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add src/main/features/messaging/wechat-personal.ts test/main/features/messaging-wechat-personal.test.ts
+git commit -m "feat(messaging): WechatPersonalAdapter wire client 与长轮询生命周期（generation/终态/退避）"
+```
+
+---
+
+### Task 5: WechatPersonalAdapter——入站 owner 过滤/tokenRef 与出站发送
+
+**Files:**
+- Modify: `src/main/features/messaging/wechat-personal.ts`
+- Test: `test/main/features/messaging-wechat-personal.test.ts`（追加）
+
+**Interfaces:**
+- Consumes: Task 3 state store（`saveWechatPeerToken/readWechatPeerToken/loadWechatState`）、Task 4 的 `normalizeInbound`/`handleBatch` 最小版
+- Produces: `handleBatch` 完整版（owner 前置过滤：非 owner 不写 state 仍 dispatch；owner 写 token 落盘并注入 `contextTokenRef`）；`sendMessage(chatId, text, signal, context)` 完整实现（有 tokenRef 按 ref 取 token，无 ref 且 chatId===owner 用 owner 最新 token，均缺失抛 `wechat_context_missing`）
+
+- [ ] **Step 1: 写失败测试（入站/出站）**
+
+```ts
+describe('wechat personal adapter inbound/outbound', () => {
+  // instance/secret 复用上文定义；增加一个 owner 实例
+  const ownerInstance = {
+    ...instance,
+    ownerExternalUserId: 'owner-1',
+  };
+
+  it('normalizes a direct text message without leaking the raw token', async () => {
+    const { _wechatTestHooks } = await import('../../../src/main/features/messaging/wechat-personal');
+    const envelope = _wechatTestHooks.normalizeInbound(ownerInstance, {
+      msg_id: 'm-1',
+      from_user_id: 'owner-1',
+      item_list: [{ type: 'text_item', text_item: { text: '你好' } }],
+      context_token: 'ctx-1',
+      create_time: 1700000000000,
+    });
+    expect(envelope).not.toBeNull();
+    expect(envelope!.externalMessageId).toBe('m-1');
+    expect(envelope!.externalUserId).toBe('owner-1');
+    expect(envelope!.text).toBe('你好');
+    expect(envelope!.isGroup).toBe(false);
+    // 纯函数不携带明文 token；tokenRef 由 handleBatch 在 dispatch 前注入
+    expect(envelope!.contextTokenRef).toBeUndefined();
+  });
+
+  it('rejects group messages and messages missing required fields', async () => {
+    const { _wechatTestHooks } = await import('../../../src/main/features/messaging/wechat-personal');
+    expect(_wechatTestHooks.normalizeInbound(ownerInstance, {
+      msg_id: 'm-2', group_id: 'g-1', from_user_id: 'owner-1',
+      item_list: [{ type: 'text_item', text_item: { text: 'hi' } }], context_token: 'ctx-2',
+    })).toBeNull();
+    expect(_wechatTestHooks.normalizeInbound(ownerInstance, {
+      from_user_id: 'owner-1',
+      item_list: [{ type: 'text_item', text_item: { text: 'hi' } }], context_token: 'ctx-3',
+    })).toBeNull(); // 缺 msg_id
+    expect(_wechatTestHooks.normalizeInbound(ownerInstance, {
+      msg_id: 'm-4', from_user_id: 'owner-1',
+      item_list: [], context_token: 'ctx-4',
+    })).toBeNull(); // 无文本 item
+    expect(_wechatTestHooks.normalizeInbound(ownerInstance, {
+      msg_id: 'm-5', from_user_id: 'owner-1',
+      item_list: [{ type: 'text_item', text_item: { text: 'hi' } }],
+    })).toBeNull(); // 缺 context_token
+  });
+
+  it('injects a tokenRef for the owner and sends with the bound token', async () => {
+    const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
+    const stateStore = await import('../../../src/main/features/messaging/wechat-state-store');
+    const fingerprint = stateStore.wechatCredentialFingerprint('bot-1', 'owner-1');
+    // 模拟入站时序：先落盘 peer token，拿到真实 tokenRef
+    const tokenRef = await stateStore.saveWechatPeerToken(
+      'uid-1', 'inst-1', fingerprint, 'owner-1', 'ctx-bound', 1_700_000_000_000,
+    );
+
+    const sent: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string, init: RequestInit) => {
+      sent.push({ url: String(url), body: JSON.parse(String(init.body)) });
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 });
+    }));
+
+    const adapter = new WechatPersonalAdapter(ownerInstance, secret, 'uid-1');
+    const result = await adapter.sendMessage('owner-1', '回复内容', undefined, {
+      contextTokenRef: tokenRef,
+    });
+    expect(result).toEqual({});
+    expect(sent).toHaveLength(1);
+    const msg = sent[0].body.msg as Record<string, unknown>;
+    expect(msg.to_user_id).toBe('owner-1');
+    expect(msg.context_token).toBe('ctx-bound');
+    expect((msg.item_list as Array<{ text_item: { text: string } }>)[0].text_item.text).toBe('回复内容');
+  });
+
+  it('injects a tokenRef into the envelope before dispatch and persists the token', async () => {
+    const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
+    const stateStore = await import('../../../src/main/features/messaging/wechat-state-store');
+    const fingerprint = stateStore.wechatCredentialFingerprint('bot-1', 'owner-1');
+    const onInbound = vi.fn().mockResolvedValue({ accepted: true, duplicate: false });
+    vi.stubGlobal('fetch', vi.fn()
+      .mockImplementationOnce(async () => new Response(JSON.stringify({
+        ret: 0,
+        get_updates_buf: 'cursor-1',
+        messages: [{
+          msg_id: 'm-1', from_user_id: 'owner-1',
+          item_list: [{ type: 'text_item', text_item: { text: '你好' } }],
+          context_token: 'ctx-live',
+        }],
+      }), { status: 200 })));
+    const adapter = new WechatPersonalAdapter(ownerInstance, secret, 'uid-1');
+    const controller = new AbortController();
+    const startPromise = adapter.start(controller.signal, { onInbound, onStatus: vi.fn().mockResolvedValue(undefined) } as never);
+    await vi.waitFor(() => expect(onInbound).toHaveBeenCalled());
+    controller.abort();
+    await startPromise;
+    const envelope = onInbound.mock.calls[0][0] as { contextTokenRef?: string };
+    expect(envelope.contextTokenRef).toBeTruthy();
+    const state = await stateStore.loadWechatState('uid-1', 'inst-1', fingerprint);
+    expect(state?.peers['owner-1']?.contextToken).toBe('ctx-live');
+    expect(state?.getUpdatesBuf).toBe('cursor-1');
+  });
+
+  it('does not persist peer state for a non-owner sender', async () => {
+    const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
+    const stateStore = await import('../../../src/main/features/messaging/wechat-state-store');
+    const fingerprint = stateStore.wechatCredentialFingerprint('bot-1', 'owner-1');
+    const onInbound = vi.fn().mockResolvedValue({ accepted: false, duplicate: false });
+    vi.stubGlobal('fetch', vi.fn()
+      .mockImplementationOnce(async () => new Response(JSON.stringify({
+        ret: 0,
+        get_updates_buf: 'cursor-2',
+        messages: [{
+          msg_id: 'm-2', from_user_id: 'stranger-1',
+          item_list: [{ type: 'text_item', text_item: { text: 'hack' } }],
+          context_token: 'ctx-stranger',
+        }],
+      }), { status: 200 })));
+    const adapter = new WechatPersonalAdapter(ownerInstance, secret, 'uid-1');
+    const controller = new AbortController();
+    const startPromise = adapter.start(controller.signal, { onInbound, onStatus: vi.fn().mockResolvedValue(undefined) } as never);
+    await vi.waitFor(() => expect(onInbound).toHaveBeenCalled());
+    controller.abort();
+    await startPromise;
+    const envelope = onInbound.mock.calls[0][0] as { contextTokenRef?: string; externalUserId: string };
+    expect(envelope.externalUserId).toBe('stranger-1');
+    expect(envelope.contextTokenRef).toBeUndefined();
+    const state = await stateStore.loadWechatState('uid-1', 'inst-1', fingerprint);
+    expect(state?.peers['stranger-1']).toBeUndefined();
+  });
+
+  it('refuses to send when no token is available', async () => {
+    const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const adapter = new WechatPersonalAdapter(ownerInstance, secret, 'uid-1');
+    await expect(adapter.sendMessage('owner-1', 'hi', undefined, { contextTokenRef: 'owner-1::no-such-uuid' }))
+      .rejects.toThrow(/context/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+```
+
+- [ ] **Step 2: 跑测试确认失败**
+
+Run: `npm test -- test/main/features/messaging-wechat-personal.test.ts`
+Expected: FAIL——`handleBatch` 未注入 tokenRef、`sendMessage` 抛 "not implemented"
+
+- [ ] **Step 3: 实现（升级 handleBatch + sendMessage）**
+
+将 Task 4 的 `handleBatch` 最小版替换为完整版（owner 过滤 + tokenRef 注入 + state 写入）：
 
 ```ts
   private async handleBatch(
@@ -1171,14 +1260,16 @@ export function normalizeInbound(
       if (generation !== this.generation || signal.aborted) return;
       const envelope = normalizeInbound(this.instance, this.ownerExternalUserId, raw);
       if (!envelope) continue;
-      // 仅 owner 写 peer state；非 owner 仍进 manager 产生 ledger 拒绝记录
+      // 仅 owner 写 peer state；非 owner 仍 dispatch 进 manager 产生 ledger 拒绝记录
       if (envelope.externalUserId === this.ownerExternalUserId) {
         const contextToken = typeof raw.context_token === 'string' ? raw.context_token.trim() : '';
-        const tokenRef = await stateStore.saveWechatPeerToken(
-          this.uid, this.instance.id, this.fingerprint,
-          envelope.externalUserId, contextToken, Date.now(),
-        );
-        envelope.contextTokenRef = tokenRef;
+        if (contextToken) {
+          const tokenRef = await stateStore.saveWechatPeerToken(
+            this.uid, this.instance.id, this.fingerprint,
+            envelope.externalUserId, contextToken, Date.now(),
+          );
+          envelope.contextTokenRef = tokenRef;
+        }
       }
       const dispatch = (this.callbacks?.onInbound(envelope) || Promise.resolve({ accepted: false, duplicate: false }))
         .catch((error: unknown) => {
@@ -1195,7 +1286,11 @@ export function normalizeInbound(
       await stateStore.saveWechatCursor(this.uid, this.instance.id, this.fingerprint, body.get_updates_buf);
     }
   }
+```
 
+实现 `sendMessage`（替换 Task 4 的抛错骨架）：
+
+```ts
   async sendMessage(
     chatId: string,
     text: string,
@@ -1204,12 +1299,16 @@ export function normalizeInbound(
   ): Promise<{ deliveryId?: string }> {
     const stateStore = await import('./wechat-state-store');
     const tokenRef = typeof context?.contextTokenRef === 'string' ? context.contextTokenRef : '';
-    const peer = tokenRef
-      ? await stateStore.readWechatPeerToken(this.uid, this.instance.id, tokenRef)
-      : null;
-    const token = peer?.token || (this.ownerExternalUserId === chatId
-      ? await stateStore.readWechatPeerToken(this.uid, this.instance.id, `owner-${chatId}`).then((p) => p?.token || '')
-      : '');
+    let token = '';
+    if (tokenRef) {
+      // 回复场景：必须使用触发该轮的 token（tokenRef 编码 peerId）
+      const peer = await stateStore.readWechatPeerToken(this.uid, this.instance.id, tokenRef);
+      token = peer?.token || '';
+    } else if (chatId === this.ownerExternalUserId) {
+      // 主动消息场景（无入站触发的 ref）：仅允许发给 owner 本人
+      const state = await stateStore.loadWechatState(this.uid, this.instance.id, this.fingerprint);
+      token = state?.peers[chatId]?.contextToken || '';
+    }
     if (!token || !chatId) throw new Error('wechat_context_missing');
     const body = await this.request('/ilink/bot/sendmessage', {
       msg: {
@@ -1222,15 +1321,7 @@ export function normalizeInbound(
   }
 ```
 
-类字段补充：
-
-```ts
-  private readonly uid: string;
-  private readonly ownerExternalUserId: string;
-  private readonly fingerprint: string;
-```
-
-构造函数签名改为 `constructor(instance, secret, uid)`（uid 必填，`ownerExternalUserId` 从 instance 读——`instance` 传入时即含 owner 字段；manager 传 `MessagingInstanceInternal`）。`_wechatTestHooks` 导出：
+`_wechatTestHooks` 更新：
 
 ```ts
 export const _wechatTestHooks = { buildHeaders, classifyError, normalizeInbound, statusOf };
@@ -1627,7 +1718,7 @@ describe('wechat_personal end-to-end', () => {
     const stateStore = await import('../../../src/main/features/messaging/wechat-state-store');
     const manager = await import('../../../src/main/features/messaging/manager');
     const registry = await import('../../../src/main/features/messaging/registry');
-    // 注册态实例（owner 已绑定）
+    // 注册态实例（owner 已绑定）并启用
     const instance = await registry.createWechatInstance('uid-1', {
       displayName: '我的微信',
       ilinkBotToken: 't'.repeat(64),
@@ -1635,6 +1726,7 @@ describe('wechat_personal end-to-end', () => {
       ilinkBotId: 'bot-1',
       ownerExternalUserId: 'owner-1',
     });
+    await registry.updateInstance('uid-1', instance.id, { enabled: true });
     // 直接走 manager 的 ingestInbound（adapter 之外的管线）
     const result = await manager.ingestInbound('uid-1', {
       platform: 'wechat_personal',
@@ -1863,4 +1955,4 @@ git commit -m "fix(messaging): 真实环境校准 iLink wire contract"
 - **规格覆盖**：规格第 3 节组件 → Task 1/2/3/4/5/6；3.5 主动消息 → Task 7；3.6 Renderer/IPC → Task 8；第 4 节数据流 → Task 5/7 测试；第 5 节错误处理 → Task 4（终态/退避/分类）+ Task 5（字段校验）；第 6 节测试 → 各任务测试步骤；第 7 节风险 → Task 9。规格 3.1 的 wire contract/redirect/generation 全部落 Task 4；tokenRef 绑定与 retry 恢复落 Task 5；重绑清理/指纹/损坏落 Task 3 + Task 6。
 - **占位符扫描**：无 TBD/TODO；Task 7 中 delivery 透传的行号以 grep 为准（给出搜索命令），属显式定位指引而非占位。
 - **类型一致性**：`contextTokenRef` 在 Task 1 定义、Task 5 生成、Task 7 透传、Task 4/5 消费，签名一致；`WechatPersonalAdapter` 构造函数 `(instance, secret, uid)` 在 Task 5 定义、Task 7 调用，一致；`wechatCredentialFingerprint` 在 Task 3 定义、Task 7 proactive 消费，一致。
-- **已知取舍**：`readWechatPeerToken` 以 tokenRef 反查 peer 当前 token（token 仅随入站变化，等价于绑定轮 token）；指纹取 `(ilinkBotId, ownerId)`，重绑清空由注册 flow 的 `clearWechatInstanceState` 保证（Task 6 每次 confirmed 必执行）。
+- **已知取舍**：`readWechatPeerToken` 的 tokenRef 编码 peerId（`${peerId}::${uuid}`），读取时解析前缀取该 peer 当前 token（token 仅随入站变化，等价于绑定轮 token；peerId 本就在 delivery ledger 的 `externalChatId` 中明文，无新增泄露）；指纹取 `(ilinkBotId, ownerId)`，重绑清空由注册 flow 的 `clearWechatInstanceState` 保证（Task 6 每次 confirmed 必执行）。
