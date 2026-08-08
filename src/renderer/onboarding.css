@@ -174,4 +174,14 @@ body.cs-onboarding-active .app-container{display:none !important}
   font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif}
 #cs-ob-toast.show{opacity:1;transform:translate(-50%,0)}
 
+/* Session import action bar (step 2) */
+#cs-onboarding .cs-import-bar{display:flex;flex-direction:column;gap:10px;padding:14px 16px;border-top:1px solid var(--cs-line)}
+#cs-onboarding .cs-import-btn{align-self:flex-start;display:inline-flex;align-items:center;gap:7px;
+  padding:9px 18px;border-radius:var(--cs-radius);background:var(--cs-grad);color:#fff;font-weight:650;font-size:12.5px}
+#cs-onboarding .cs-import-btn:hover{background:var(--cs-forest-deep)}
+#cs-onboarding .cs-import-btn:disabled{opacity:.5;cursor:not-allowed}
+#cs-onboarding .cs-import-result{font-size:12px;color:var(--cs-muted);line-height:1.6}
+#cs-onboarding .cs-import-lines{margin-top:8px;display:flex;flex-direction:column;gap:4px}
+#cs-onboarding .cs-import-lines>div{padding:6px 10px;border-radius:var(--cs-radius);background:var(--cs-line-soft);font-size:11.5px;color:var(--cs-ink-soft)}
+
 @media (prefers-reduced-motion:reduce){#cs-onboarding *,#cs-ob-toast{animation:none !important;transition:none !important}}

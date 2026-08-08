@@ -31,13 +31,20 @@ vi.mock('../../../src/main/model/client', () => ({
 }));
 
 let tmpDir: string;
+let homeDir: string;
 let prevWs: string | undefined;
+let prevHome: string | undefined;
 const TEST_UID = 'u1';
 
 beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-simport-'));
   prevWs = process.env.ORKAS_WORKSPACE_ROOT;
   process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  // Isolate HOME so os.homedir() (used by the Claude session + skill readers)
+  // points at a clean per-test dir — never the real ~/.claude.
+  homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-home-'));
+  prevHome = process.env.HOME;
+  process.env.HOME = homeDir;
   __nextChat = () => ({ ok: true, text: '' });
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
@@ -47,7 +54,9 @@ beforeEach(async () => {
 afterEach(async () => {
   await drainMainRuntimeForTest();
   process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  process.env.HOME = prevHome;
   fs.rmSync(tmpDir, { recursive: true, force: true });
+  fs.rmSync(homeDir, { recursive: true, force: true });
 });
 
 describe('session_import › transcript-normalize', () => {
@@ -179,6 +188,87 @@ describe('session_import › asset-router (cognitions → Recall candidate pool)
     const personal = (await recall.listRecallCandidates(TEST_UID))
       .filter((c: any) => c.suggestedType === 'personal' && c.judgment === '偏好深色主题');
     expect(personal.length).toBe(1);
+  });
+});
+
+describe('session_import › skill-import (Claude skills → skill library)', () => {
+  function stageClaudeSkill(dirName: string, md: string, helpers: Record<string, string> = {}) {
+    const dir = path.join(os.homedir(), '.claude', 'skills', dirName);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), md);
+    for (const [rel, content] of Object.entries(helpers)) {
+      const p = path.join(dir, rel);
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, content);
+    }
+    return dir;
+  }
+
+  it('lists Claude skills (metadata only) and returns [] when none', async () => {
+    const mod = await import('../../../src/main/features/session_import/skill-import');
+    // Fresh home in this test has no ~/.claude/skills yet.
+    expect(await mod.listClaudeSkills()).toEqual([]);
+
+    stageClaudeSkill('git-flow', '---\nname: git-flow\ndescription: git 工作流\n---\n# body\n步骤...');
+    const list = await mod.listClaudeSkills();
+    expect(list.length).toBe(1);
+    expect(list[0].name).toBe('git-flow');
+    expect(list[0].description).toBe('git 工作流');
+  });
+
+  it('imports a skill with its body and helper files', async () => {
+    const mod = await import('../../../src/main/features/session_import/skill-import');
+    const skills = await import('../../../src/main/features/skills');
+
+    stageClaudeSkill(
+      'pdf-report',
+      '---\nname: pdf-report\ndescription: 生成 PDF 报告\n---\n# 用法\n运行脚本生成报告。',
+      { 'scripts/gen.py': 'print("hi")', 'ref/notes.md': '# notes' },
+    );
+
+    const res = await mod.importClaudeSkill('pdf-report');
+    expect(res.ok).toBe(true);
+    expect(res.skillId).toBeTruthy();
+
+    // Skill is now in our library.
+    const custom = await skills.getCustomSkill('pdf-report');
+    expect(custom).toBeTruthy();
+
+    // Body was written (SKILL.md contains the imported body text).
+    const body = await skills.readSkillFile('custom', res.skillId!, 'SKILL.md');
+    expect(body.ok && body.content).toContain('运行脚本生成报告');
+
+    // Helper files were copied.
+    const gen = await skills.readSkillFile('custom', res.skillId!, 'scripts/gen.py');
+    expect(gen.ok && gen.content).toContain('print("hi")');
+  });
+
+  it('is idempotent — re-importing a same-named skill reports already_exists', async () => {
+    const mod = await import('../../../src/main/features/session_import/skill-import');
+    stageClaudeSkill('dup-skill', '---\nname: dup-skill\ndescription: d\n---\nbody');
+
+    const first = await mod.importClaudeSkill('dup-skill');
+    expect(first.ok).toBe(true);
+    const second = await mod.importClaudeSkill('dup-skill');
+    expect(second.ok).toBe(true);
+    expect(second.reason).toBe('already_exists');
+  });
+
+  it('rejects a dirName that escapes the skills root', async () => {
+    const mod = await import('../../../src/main/features/session_import/skill-import');
+    const res = await mod.importClaudeSkill('../../etc/passwd');
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe('out_of_bounds');
+  });
+
+  it('batch import reports ok/fail counts', async () => {
+    const mod = await import('../../../src/main/features/session_import/skill-import');
+    stageClaudeSkill('batch-a', '---\nname: batch-a\ndescription: a\n---\nA');
+    stageClaudeSkill('batch-b', '---\nname: batch-b\ndescription: b\n---\nB');
+
+    const res = await mod.importClaudeSkills(['batch-a', 'batch-b', 'does-not-exist']);
+    expect(res.okCount).toBe(2);
+    expect(res.failCount).toBe(1);
   });
 });
 

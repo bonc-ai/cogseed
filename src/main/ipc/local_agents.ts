@@ -39,6 +39,8 @@ import { userToolResultsDir } from '../paths.js';
 import { createLogger } from '../logger.js';
 import { listClaudeSessions } from '../features/local_agents/claude_sessions.js';
 import { listAgentTypes, listSessions as listAcpSessions } from '../features/local_agents/acp_sessions.js';
+import { importClaudeSession } from '../features/session_import/asset-router.js';
+import { listClaudeSkills, importClaudeSkills } from '../features/session_import/skill-import.js';
 
 const log = createLogger('ipc:local_agents');
 
@@ -135,6 +137,53 @@ export const invokeHandlers = {
       log.warn('failed to list ACP sessions', { error: String(err) });
       return { ok: false, agentTypes: [], sessionsByType: {} };
     }
+  },
+
+  /**
+   * Import one Claude Code session for the active user: read the transcript,
+   * compress it into a summary seed, materialize a continuable conversation
+   * (appears in the sidebar), and route extracted cognitions into the Recall
+   * candidate pool. `filePath` must be one returned by `listClaudeSessions`;
+   * the reader re-validates containment under `~/.claude/projects`.
+   *
+   * Returns `{ ok, conversationId, cognitions, degraded, reason }`. `degraded`
+   * means the model couldn't produce usable structured output — the session
+   * is still materialized (honestly labeled), just with no cognitions routed.
+   */
+  'sessionImport.importClaudeSession': async (
+    { filePath, titleHint }: { filePath?: unknown; titleHint?: unknown } = {},
+  ) => {
+    if (typeof filePath !== 'string' || !filePath) throw new Error('filePath required');
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importClaudeSession({
+      userId,
+      filePath,
+      titleHint: typeof titleHint === 'string' ? titleHint : undefined,
+    });
+  },
+
+  /**
+   * List importable Claude Code skills from `~/.claude/skills/` (metadata
+   * only). Empty array = Claude unused or no skills. Read-only.
+   */
+  'sessionImport.listClaudeSkills': async () => {
+    const skills = await listClaudeSkills();
+    return { skills };
+  },
+
+  /**
+   * Import a batch of Claude Code skills (by directory name) into the user's
+   * skill library. Each `dirName` must be one returned by
+   * `listClaudeSkills`. Best-effort per skill; already-present skills report
+   * `already_exists` rather than duplicating. Returns per-skill results plus
+   * ok/fail counts.
+   */
+  'sessionImport.importClaudeSkills': async ({ dirNames }: { dirNames?: unknown } = {}) => {
+    if (!Array.isArray(dirNames) || dirNames.some((d) => typeof d !== 'string')) {
+      throw new Error('dirNames must be a string array');
+    }
+    return importClaudeSkills(dirNames as string[]);
   },
 
   /**

@@ -288,7 +288,14 @@ async function _csLoadClaudeSessions(agentType) {
         </div>`;
     }).join('');
 
-    container.innerHTML = sessionRows;
+    // Import action bar: materializes each selected session into a continuable
+    // conversation (compressed summary seed) and routes extracted cognitions
+    // into the Recall candidate pool. This is the real "导入会话" backend.
+    container.innerHTML = sessionRows +
+      `<div class="cs-import-bar">
+         <button type="button" class="cs-import-btn" data-agent="${_csEsc(agentType)}">导入所选会话</button>
+         <div class="cs-import-result" data-agent="${_csEsc(agentType)}"></div>
+       </div>`;
 
     // Wire up checkbox interactions.
     container.querySelectorAll('.cs-src').forEach((row) => {
@@ -303,12 +310,88 @@ async function _csLoadClaudeSessions(agentType) {
       });
     });
 
+    const importBtn = container.querySelector('.cs-import-btn');
+    if (importBtn) {
+      importBtn.addEventListener('click', () => void _csImportSelectedSessions(container));
+    }
+
     _obLog.info('loaded Claude sessions', { count: sessions.length });
   } catch (err) {
     const msg = (err && err.message) || String(err);
     _obLog.warn('failed to load Claude sessions', { error: msg });
     container.innerHTML = `<div class="cs-state err">读取 Claude Code 会话失败：${_csEsc(msg)}</div>`;
   }
+}
+
+// Import each selected Claude session through the real pipeline:
+// read → compress → materialize (shows up in the sidebar) → route cognitions
+// into the Recall candidate pool. Honest per-session status; a degraded
+// extraction still imports the conversation, just with no cognitions.
+async function _csImportSelectedSessions(container) {
+  const btn = container.querySelector('.cs-import-btn');
+  const resultBox = container.querySelector('.cs-import-result');
+  if (!resultBox) return;
+
+  const selected = [];
+  container.querySelectorAll('.cs-src input[type="checkbox"]:checked').forEach((cb) => {
+    const row = cb.closest('.cs-src');
+    const filePath = row ? row.dataset.sessionId : null;
+    const title = row ? (row.querySelector('strong')?.textContent || '') : '';
+    if (filePath) selected.push({ filePath, title });
+  });
+
+  if (!selected.length) {
+    resultBox.innerHTML = '<div class="cs-state">请先勾选要导入的会话。</div>';
+    return;
+  }
+
+  if (btn) btn.disabled = true;
+  resultBox.innerHTML = `<div class="cs-extract-progress">正在导入 ${selected.length} 个会话…</div>`;
+
+  let okCount = 0;
+  let degradedCount = 0;
+  let failCount = 0;
+  let cogTotal = 0;
+  const lines = [];
+
+  for (const item of selected) {
+    try {
+      const res = await window.orkas.invoke('sessionImport.importClaudeSession', {
+        filePath: item.filePath,
+        titleHint: item.title,
+      });
+      if (res && res.conversationId) {
+        const c = res.cognitions || { personal: 0, rule: 0, template: 0 };
+        const cog = (c.personal || 0) + (c.rule || 0) + (c.template || 0);
+        cogTotal += cog;
+        if (res.degraded) {
+          degradedCount += 1;
+          lines.push(`⚠ ${_csEsc(item.title || '会话')}：已导入（未能自动提炼，按原始开头保留）`);
+        } else {
+          okCount += 1;
+          lines.push(`✓ ${_csEsc(item.title || '会话')}：已提炼并导入${cog ? `，提取候选认知 ${cog} 条` : ''}`);
+        }
+      } else {
+        failCount += 1;
+        lines.push(`✗ ${_csEsc(item.title || '会话')}：导入失败（${_csEsc((res && res.reason) || '未知原因')}）`);
+      }
+    } catch (err) {
+      failCount += 1;
+      const msg = (err && err.message) || String(err);
+      lines.push(`✗ ${_csEsc(item.title || '会话')}：${_csEsc(msg)}`);
+    }
+  }
+
+  const summary =
+    `<div class="cs-state">导入完成：成功 ${okCount} 个` +
+    (degradedCount ? `，未提炼 ${degradedCount} 个` : '') +
+    (failCount ? `，失败 ${failCount} 个` : '') +
+    (cogTotal ? `；共提取候选认知 ${cogTotal} 条，可在「回忆/候选审核」中确认` : '') +
+    `。导入的会话已出现在左侧会话列表，点进去即可继续对话。</div>`;
+  resultBox.innerHTML = summary + `<div class="cs-import-lines">${lines.map((l) => `<div>${l}</div>`).join('')}</div>`;
+
+  if (btn) btn.disabled = false;
+  _obLog.info('session import finished', { okCount, degradedCount, failCount, cogTotal });
 }
 
 async function _csLoadAcpSessions() {
