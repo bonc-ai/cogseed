@@ -294,7 +294,17 @@ export class WechatPersonalAdapter implements MessagingAdapter {
     signal: AbortSignal,
   ): Promise<void> {
     const messages = Array.isArray(body.msgs) ? body.msgs : [];
-    if (messages.length === 0) return;
+    // 空批次（心跳）：没有消息可丢失，立即推进游标——游标内含服务器位置
+    // 标记，必须逐轮单调推进；否则下一轮用空游标会让服务器从错误位置拉取
+    // （Hermes 同款：每次响应都保存 get_updates_buf）。
+    if (messages.length === 0) {
+      if (generation === this.generation && !signal.aborted
+        && typeof body.get_updates_buf === 'string' && body.get_updates_buf) {
+        const stateStore = await import('./wechat-state-store');
+        await stateStore.saveWechatCursor(this.uid, this.instance.id, this.fingerprint, body.get_updates_buf);
+      }
+      return;
+    }
     const stateStore = await import('./wechat-state-store');
     const tasks: Array<Promise<unknown>> = [];
     for (const raw of messages) {
@@ -322,7 +332,6 @@ export class WechatPersonalAdapter implements MessagingAdapter {
         });
       tasks.push(dispatch);
     }
-    if (tasks.length === 0) return;
     const settled = await Promise.allSettled(tasks);
     if (generation !== this.generation || signal.aborted) return;
     const allTerminal = settled.every((result) => result.status === 'fulfilled');

@@ -445,6 +445,29 @@ describe('wechat personal adapter wire contract', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
+    it('advances the cursor on empty heartbeat batches so the server position stays monotonic', async () => {
+      const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
+      const stateStore = await import('../../../src/main/features/messaging/wechat-state-store');
+      const fingerprint = stateStore.wechatCredentialFingerprint('bot-1', 'owner-1');
+      const onInbound = vi.fn().mockResolvedValue({ accepted: true, duplicate: false });
+      vi.stubGlobal('fetch', vi.fn()
+        .mockImplementationOnce(async () => new Response(JSON.stringify({
+          ret: 0,
+          get_updates_buf: 'cursor-heartbeat-1',
+          msgs: [],
+        }), { status: 200 })));
+      const adapter = new WechatPersonalAdapter(ownerInstance, secret, 'uid-1');
+      const controller = new AbortController();
+      const startPromise = adapter.start(controller.signal, { onInbound, onStatus: vi.fn().mockResolvedValue(undefined) } as never);
+      await vi.waitFor(async () => {
+        const state = await stateStore.loadWechatState('uid-1', 'inst-1', fingerprint);
+        expect(state?.getUpdatesBuf).toBe('cursor-heartbeat-1');
+      });
+      controller.abort();
+      await startPromise;
+      expect(onInbound).not.toHaveBeenCalled();
+    });
+
     it('injects a tokenRef into the envelope before dispatch and persists the token', async () => {
       const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
       const stateStore = await import('../../../src/main/features/messaging/wechat-state-store');
