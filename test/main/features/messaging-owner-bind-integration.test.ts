@@ -159,7 +159,7 @@ describe('wechat_personal end-to-end', () => {
 
   it('carries the inbound contextTokenRef into the ledger entry and the send context', async () => {
     let busListener: ((event: unknown) => void) | undefined;
-    const groupSend = vi.fn(async () => ({ ok: true }));
+    const groupSend = vi.fn(async () => ({ ok: true, msg: { id: 'user-msg-1', from: 'user', text: '' } }));
     const sendMessage = vi.fn(async () => ({ deliveryId: 'remote-reply-1' }));
     const adapter: import('../../../src/main/features/messaging/types').MessagingAdapter = {
       platform: 'wechat_personal',
@@ -225,6 +225,7 @@ describe('wechat_personal end-to-end', () => {
       busListener?.({
         type: 'message',
         turn_end: true,
+        source_msg_id: 'user-msg-1',
         msg: { id: 'reply-1', from: 'commander', text: '回复' },
       });
       await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
@@ -238,6 +239,7 @@ describe('wechat_personal end-to-end', () => {
 
       // A follow-up inbound without a token reference clears it: the next
       // reply must not reuse a stale token.
+      groupSend.mockResolvedValueOnce({ ok: true, msg: { id: 'user-msg-2', from: 'user', text: '' } });
       const second = await manager.ingestInbound('uid-1', {
         ...envelope,
         externalMessageId: 'in-2',
@@ -248,11 +250,131 @@ describe('wechat_personal end-to-end', () => {
       busListener?.({
         type: 'message',
         turn_end: true,
+        source_msg_id: 'user-msg-2',
         msg: { id: 'reply-2', from: 'commander', text: '第二回复' },
       });
       await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2));
       expect(sendMessage.mock.calls[1][3]).not.toHaveProperty('contextTokenRef');
       expect(await ledger.getDelivery('uid-1', ledger.deliveryKey(created.id, 'reply-2'))).not.toHaveProperty('contextTokenRef');
+
+      await manager.stopForUser('uid-1');
+    } finally {
+      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      vi.doUnmock('../../../src/main/features/group_chat');
+      vi.doUnmock('../../../src/main/features/group_chat/bus');
+      vi.resetModules();
+    }
+  });
+
+  it('keeps each reply on the token of its own inbound when turns interleave', async () => {
+    let busListener: ((event: unknown) => void) | undefined;
+    const groupSend = vi.fn(async () => ({ ok: true, msg: { id: 'user-msg-1', from: 'user', text: '' } }));
+    const sendMessage = vi.fn(async () => ({ deliveryId: 'remote-reply-1' }));
+    const adapter: import('../../../src/main/features/messaging/types').MessagingAdapter = {
+      platform: 'wechat_personal',
+      async start(signal, callbacks) {
+        await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      async stop() {},
+      async checkHealth() {
+        return { kind: 'connected', checkedAt: new Date().toISOString() };
+      },
+      sendMessage,
+    };
+    const subscribe = vi.fn((_uid: string, _cid: string, listener: (event: unknown) => void) => {
+      busListener = listener;
+      return () => { busListener = undefined; };
+    });
+    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
+      createAdapter: vi.fn(() => adapter),
+    }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe }));
+
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const ledger = await import('../../../src/main/features/messaging/ledger');
+      const created = await registry.createWechatInstance('uid-1', {
+        displayName: '我的微信',
+        ilinkBotToken: 't'.repeat(64),
+        ilinkBaseUrl: 'https://ilinkai.weixin.qq.com',
+        ilinkBotId: 'bot-1',
+        ownerExternalUserId: 'owner-1',
+      });
+      await manager.setEnabled('uid-1', created.id, true);
+      await vi.waitFor(async () => {
+        const instances = await manager.listInstances('uid-1');
+        expect(instances[0]?.status.kind).toBe('connected');
+      });
+
+      const envelope = {
+        platform: 'wechat_personal' as const,
+        instanceId: created.id,
+        externalChatId: 'owner-1',
+        externalUserId: 'owner-1',
+        text: '你好',
+        isGroup: false,
+        mentionPresent: false,
+        receivedAt: new Date().toISOString(),
+      };
+
+      // Inbound 1 (ref-1) starts its turn; inbound 2 (ref-2) arrives while
+      // turn 1 is still in flight — the shared binding now holds ref-2.
+      const first = await manager.ingestInbound('uid-1', { ...envelope, externalMessageId: 'in-1', contextTokenRef: 'ref-1' });
+      expect(first.accepted).toBe(true);
+      await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(1));
+      groupSend.mockResolvedValueOnce({ ok: true, msg: { id: 'user-msg-2', from: 'user', text: '' } });
+      const second = await manager.ingestInbound('uid-1', { ...envelope, externalMessageId: 'in-2', contextTokenRef: 'ref-2' });
+      expect(second.accepted).toBe(true);
+      await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(2));
+
+      // Turn 1 completes after inbound 2 was processed: its reply must still
+      // use ref-1, never the newer ref-2.
+      busListener?.({
+        type: 'message',
+        turn_end: true,
+        source_msg_id: 'user-msg-1',
+        msg: { id: 'reply-1', from: 'commander', text: '第一回复' },
+      });
+      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+      expect(sendMessage.mock.calls[0][3]).toMatchObject({ contextTokenRef: 'ref-1' });
+      expect(await ledger.getDelivery('uid-1', ledger.deliveryKey(created.id, 'reply-1'))).toMatchObject({
+        contextTokenRef: 'ref-1',
+      });
+
+      // A ref-less inbound between turns must not strip the still-pending
+      // turn-2 ref (binding fallback is cleared, the per-turn capture is not).
+      groupSend.mockResolvedValueOnce({ ok: true, msg: { id: 'user-msg-3', from: 'user', text: '' } });
+      const third = await manager.ingestInbound('uid-1', { ...envelope, externalMessageId: 'in-3', contextTokenRef: undefined });
+      expect(third.accepted).toBe(true);
+      await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(3));
+
+      busListener?.({
+        type: 'message',
+        turn_end: true,
+        source_msg_id: 'user-msg-2',
+        msg: { id: 'reply-2', from: 'commander', text: '第二回复' },
+      });
+      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2));
+      expect(sendMessage.mock.calls[1][3]).toMatchObject({ contextTokenRef: 'ref-2' });
+
+      // The ref-less inbound's own turn resolves no ref at all.
+      busListener?.({
+        type: 'message',
+        turn_end: true,
+        source_msg_id: 'user-msg-3',
+        msg: { id: 'reply-3', from: 'commander', text: '第三回复' },
+      });
+      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(3));
+      expect(sendMessage.mock.calls[2][3]).not.toHaveProperty('contextTokenRef');
 
       await manager.stopForUser('uid-1');
     } finally {
