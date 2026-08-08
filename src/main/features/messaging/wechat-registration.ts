@@ -4,7 +4,7 @@ import { createLogger } from '../../logger';
 import { nowIso, safeId } from '../../storage';
 import { logErrorSummary } from '../../util/log-redact';
 import * as manager from './manager';
-import { createWechatInstance, deleteInstance, disableOtherWechatPersonalInstances, isTrustedIlinkBaseUrl } from './registry';
+import { createWechatInstance, deleteInstance, disableOtherWechatPersonalInstances, isTrustedIlinkBaseUrl, isTrustedIlinkScanUrl } from './registry';
 import type { MessagingInstanceClient } from './types';
 import { clearWechatInstanceState } from './wechat-state-store';
 
@@ -193,10 +193,12 @@ async function refreshQrCode(flow: WechatRegistrationFlow): Promise<void> {
     }
     // qrcode 只是轮询用的 hex token；qrcode_img_content 才是用户要扫的
     // 完整 liteapp URL（Hermes：WeChat needs to scan the full URL, not the
-    // raw hex string）。qrcode_img_content 必须通过既有白名单校验才落库。
+    // raw hex string）。该 URL 只用于渲染成二维码、绝不作为 fetch 目标，
+    // 因此走独立的扫码白名单（TRUSTED_ILINK_SCAN_HOSTS），而不是 API
+    // base-URL 白名单——后者保持严格。
     flow.qrCode = typeof parsed.qrcode === 'string' ? parsed.qrcode : '';
     if (typeof parsed.qrcode_img_content === 'string' && parsed.qrcode_img_content
-      && isTrustedIlinkBaseUrl(parsed.qrcode_img_content)) {
+      && isTrustedIlinkScanUrl(parsed.qrcode_img_content)) {
       flow.qrUrl = parsed.qrcode_img_content;
     }
     flow.updatedAt = nowIso();

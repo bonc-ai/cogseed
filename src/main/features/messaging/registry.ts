@@ -44,6 +44,13 @@ const locks = new Map<string, Mutex>();
  * server-supplied values. */
 export const TRUSTED_ILINK_HOSTS = new Set(['ilinkai.weixin.qq.com']);
 
+/** Scannable QR URLs from `get_bot_qrcode.qrcode_img_content` live on the
+ * liteapp host. They are render-only — the renderer encodes them into a QR
+ * image and they are never used as fetch targets — so they get their own
+ * whitelist instead of widening TRUSTED_ILINK_HOSTS, which stays strict for
+ * API base URLs. Never extend this from server-supplied values. */
+export const TRUSTED_ILINK_SCAN_HOSTS = new Set(['liteapp.weixin.qq.com']);
+
 export function isTrustedIlinkBaseUrl(value: string): boolean {
   let url: URL;
   try {
@@ -55,6 +62,19 @@ export function isTrustedIlinkBaseUrl(value: string): boolean {
   if (url.username || url.password) return false;
   if (url.port && url.port !== '443') return false;
   return TRUSTED_ILINK_HOSTS.has(url.hostname);
+}
+
+export function isTrustedIlinkScanUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'https:') return false;
+  if (url.username || url.password) return false;
+  if (url.port && url.port !== '443') return false;
+  return TRUSTED_ILINK_SCAN_HOSTS.has(url.hostname);
 }
 
 interface OwnerIdentityInput {

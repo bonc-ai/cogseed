@@ -119,20 +119,36 @@ describe('wechat registration flow', () => {
     }, { timeout: 8_000, interval: 100 });
   });
 
-  it('parses qrcode (hex poll token) and qrcode_img_content (scannable URL) from the QR response', async () => {
+  it('parses qrcode (hex poll token) and qrcode_img_content (scannable liteapp URL) from the QR response', async () => {
     const { startWechatQrRegistration, cancelWechatQrRegistration } =
       await import('../../../src/main/features/messaging/wechat-registration');
     vi.stubGlobal('fetch', vi.fn()
       .mockImplementationOnce(async () => new Response(JSON.stringify({
         ret: 0,
         qrcode: 'a1b2c3',
-        qrcode_img_content: 'https://ilinkai.weixin.qq.com/cgi-bin/liteapp?token=abc',
+        qrcode_img_content: 'https://liteapp.weixin.qq.com/q/abc?qrcode=a1b2c3&bot_type=3',
       }), { status: 200 }))
       .mockImplementation(async () => new Response(JSON.stringify({ ret: 0, status: 'wait' }), { status: 200 })));
     const started = await startWechatQrRegistration('uid-1');
     // qrcode 是轮询用的 hex token；qrcode_img_content 才是用户要扫的完整 URL
     expect(started.qrCode).toBe('a1b2c3');
-    expect(started.qrUrl).toBe('https://ilinkai.weixin.qq.com/cgi-bin/liteapp?token=abc');
+    expect(started.qrUrl).toBe('https://liteapp.weixin.qq.com/q/abc?qrcode=a1b2c3&bot_type=3');
+    cancelWechatQrRegistration('uid-1', started.flowId);
+  });
+
+  it('never stores an API-host qrcode_img_content as qrUrl (scan whitelist is separate)', async () => {
+    const { startWechatQrRegistration, cancelWechatQrRegistration } =
+      await import('../../../src/main/features/messaging/wechat-registration');
+    vi.stubGlobal('fetch', vi.fn()
+      .mockImplementationOnce(async () => new Response(JSON.stringify({
+        ret: 0,
+        qrcode: 'hex-api-host',
+        qrcode_img_content: 'https://ilinkai.weixin.qq.com/cgi-bin/liteapp?token=abc',
+      }), { status: 200 }))
+      .mockImplementation(async () => new Response(JSON.stringify({ ret: 0, status: 'wait' }), { status: 200 })));
+    const started = await startWechatQrRegistration('uid-1');
+    expect(started.qrCode).toBe('hex-api-host');
+    expect(started.qrUrl).toBeUndefined();
     cancelWechatQrRegistration('uid-1', started.flowId);
   });
 

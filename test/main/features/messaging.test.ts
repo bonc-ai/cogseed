@@ -2355,3 +2355,31 @@ describe('wechat_personal registry', () => {
     })).rejects.toThrow();
   });
 });
+
+describe('iLink URL trust split (API base vs scan URL)', () => {
+  it('accepts a liteapp scan URL via isTrustedIlinkScanUrl', async () => {
+    const { isTrustedIlinkScanUrl } = await import('../../../src/main/features/messaging/registry');
+    expect(isTrustedIlinkScanUrl('https://liteapp.weixin.qq.com/q/abc?qrcode=x&bot_type=3')).toBe(true);
+  });
+
+  it('rejects non-https, evil hosts, userinfo and non-standard ports for scan URLs', async () => {
+    const { isTrustedIlinkScanUrl } = await import('../../../src/main/features/messaging/registry');
+    const badUrls = [
+      'http://liteapp.weixin.qq.com/q/abc?qrcode=x&bot_type=3', // 非 HTTPS
+      'https://evil.example.com/q/abc?qrcode=x',                // 非白名单 host
+      'https://user:pass@liteapp.weixin.qq.com/q/abc',          // 带用户信息
+      'https://liteapp.weixin.qq.com:8443/q/abc',               // 非标准端口
+      'not a url',
+    ];
+    for (const url of badUrls) {
+      expect(isTrustedIlinkScanUrl(url)).toBe(false);
+    }
+  });
+
+  it('keeps liteapp out of the API base-URL whitelist', async () => {
+    const { isTrustedIlinkBaseUrl } = await import('../../../src/main/features/messaging/registry');
+    // 扫码 URL 仅渲染给用户扫，绝不作为 fetch 目标；API 白名单保持严格
+    expect(isTrustedIlinkBaseUrl('https://liteapp.weixin.qq.com/q/abc?qrcode=x&bot_type=3')).toBe(false);
+    expect(isTrustedIlinkBaseUrl('https://ilinkai.weixin.qq.com')).toBe(true);
+  });
+});
