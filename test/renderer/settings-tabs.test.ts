@@ -148,11 +148,13 @@ describe('settings tabs module', () => {
 
     expect(style).toMatch(/\.messaging-layout\s*\{[^{}]*grid-template-columns:\s*minmax\(220px,\s*224px\)\s+minmax\(0,\s*1fr\);/);
     expect(style).toMatch(/\.messaging-panel-body\s*\{[^{}]*display:\s*grid;[^{}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/);
-    expect(style).toMatch(/\.messaging-panel-body\s*>\s*\.messaging-instance-card,[^{}]*\{[^{}]*grid-column:\s*1\s*\/\s*-1;/);
+    expect(style).toMatch(/\.messaging-panel-body\s*>\s*\.messaging-instance-card,[^{}]*\.messaging-preferences-card,[^{}]*\.messaging-delete-card,[^{}]*\.messaging-telegram-card,[^{}]*\.messaging-wecom-card,[^{}]*\.messaging-empty-card\s*\{[^{}]*grid-column:\s*1\s*\/\s*-1;/);
     expect(style).toMatch(/\.messaging-settings-shell\s*\{[^{}]*background:\s*var\(--bg\);/);
     expect(style).toMatch(/\.messaging-config-card\s*\{[^{}]*background:\s*color-mix\(in srgb,\s*var\(--surface-2\)\s+62%,\s*var\(--bg\)\);/);
     expect(style).toMatch(/\.messaging-page\s*\{[^{}]*overflow:\s*auto;/);
+    expect(style).toMatch(/@media\s*\(max-width:\s*760px\)[\s\S]*?\.messaging-layout\s*\{[^{}]*grid-template-columns:\s*1fr;/);
     expect(style).toMatch(/@media\s*\(max-width:\s*760px\)[\s\S]*?\.messaging-panel-body\s*\{[^{}]*grid-template-columns:\s*1fr;/);
+    expect(style).toMatch(/@media\s*\(max-width:\s*760px\)[\s\S]*?\.messaging-brand-icon\s*\{[^{}]*width:\s*36px;[^{}]*height:\s*36px;/);
   });
 
   it('cancels an in-flight feishu QR flow when switching channels', () => {

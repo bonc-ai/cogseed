@@ -12629,9 +12629,9 @@ body.model-not-configured .main-content { flex-direction: column; }
   .messaging-owner-card {
     height: auto;
   }
-  .messaging-detail-header { grid-template-columns: 56px minmax(0, 1fr) auto; gap: 14px; }
-  .messaging-brand-icon { width: 56px; height: 56px; border-radius: 14px; }
-  .messaging-brand-glyph { width: 29px; height: 29px; }
+  .messaging-detail-header { grid-template-columns: 36px minmax(0, 1fr) auto; gap: 10px; }
+  .messaging-brand-icon { width: 36px; height: 36px; border-radius: 9px; }
+  .messaging-brand-glyph { width: 20px; height: 20px; }
 }
 @media (max-width: 560px) {
   .messaging-detail-header { grid-template-columns: 48px minmax(0, 1fr); align-items: start; }
