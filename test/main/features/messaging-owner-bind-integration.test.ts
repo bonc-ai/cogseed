@@ -481,3 +481,47 @@ describe('wechat_personal end-to-end', () => {
     }
   });
 });
+
+describe('instance status broadcast to the renderer', () => {
+  it('pushes only on kind changes (connecting/connected), not on repeated heartbeats', async () => {
+    const manager = await import('../../../src/main/features/messaging/manager');
+    const registry = await import('../../../src/main/features/messaging/registry');
+    const broadcasts: Array<{ channel: string; status: { kind: string } }> = [];
+    manager._managerTestHooks.setBroadcastOverride((channel, payload) => {
+      broadcasts.push({ channel, status: payload.status });
+    });
+    // 真实 WechatPersonalAdapter 轮询：mock fetch 返回心跳（空批次）
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      ret: 0,
+      get_updates_buf: 'cursor-hb',
+      msgs: [],
+    }), { status: 200 })));
+    try {
+      const instance = await registry.createWechatInstance('uid-1', {
+        displayName: '我的微信',
+        ilinkBotToken: 't'.repeat(64),
+        ilinkBaseUrl: 'https://ilinkai.weixin.qq.com',
+        ilinkBotId: 'bot-1',
+        ownerExternalUserId: 'owner-1',
+      });
+      await registry.updateInstance('uid-1', instance.id, { enabled: true });
+      await manager.startForUser('uid-1');
+      // 等待 connected 广播（connecting → connected 两次 kind 变化）
+      await vi.waitFor(() => {
+        expect(broadcasts.map((b) => b.status.kind)).toContain('connected');
+      });
+      // 心跳重复 connected 不广播：记录当前次数，等待两个心跳周期后不变
+      const settled = broadcasts.length;
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(broadcasts.length).toBe(settled);
+      // 广播序列恰好是 connecting → connected
+      expect(broadcasts.map((b) => b.status.kind)).toEqual(['connecting', 'connected']);
+      expect(broadcasts.every((b) => b.channel === 'messaging:instance-status')).toBe(true);
+      await manager.stopForUser('uid-1');
+    } finally {
+      manager._managerTestHooks.setBroadcastOverride(null);
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  });
+});

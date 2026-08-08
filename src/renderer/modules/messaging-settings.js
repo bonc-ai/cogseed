@@ -603,7 +603,7 @@
         } else if (channel.platform === 'wechat_personal') {
           void startWechatFlow();
         } else {
-          void startQrForChannel(channel);
+          void startQrForChannel(channel, { createNew: true });
         }
       });
       list.appendChild(add);
@@ -666,14 +666,15 @@
     renderQrPanel(instance, cardRoot);
   }
 
-  async function startQrForChannel(channel) {
+  async function startQrForChannel(channel, options) {
     if (!channel || state.openingChannel) return;
+    const createNew = options?.createNew === true;
     const operation = ++state.operation;
     state.openingChannel = channel.key;
     setNotice('', '');
     renderCurrent();
     try {
-      let instance = instancesForChannel(channel)[0] || null;
+      let instance = createNew ? null : instancesForChannel(channel)[0] || null;
       if (!instance) {
         const result = await invoke('messaging.feishu_draft.create', {
           feishuTenantBrand: channel.feishuTenantBrand,
@@ -1522,6 +1523,15 @@
     state.bound = true;
     window.addEventListener('i18n-change', () => {
       if (document.getElementById('panel-settings')?.classList.contains('is-active')) renderCurrent();
+    });
+    // 实例状态实时推送：主进程在状态 kind 变化时广播（心跳重复 connected
+    // 不推送）。收到后更新本地实例并重渲染，让"连接中→已连接"即时可见。
+    window.orkas.onPushEvent('messaging:instance-status', (payload) => {
+      if (!payload || typeof payload.instanceId !== 'string' || !payload.status) return;
+      const instance = state.instances.find((item) => item.id === payload.instanceId);
+      if (!instance) return;
+      instance.status = payload.status;
+      renderCurrent();
     });
   }
 

@@ -394,7 +394,12 @@ function withLiveStatus(uid: string, instance: MessagingInstanceClient): Messagi
 function queueRuntimeStatus(uid: string, runtime: RuntimeInstance, nextStatus: MessagingInstanceStatus): void {
   if (!isCurrentRuntime(uid, runtime)) return;
   const snapshot = cloneStatus(nextStatus);
+  const previous = liveStatuses.get(uid)?.get(runtime.instanceId);
   setLiveStatus(uid, runtime.instanceId, snapshot);
+  // 状态 kind 变化才推送渲染层：心跳重复 connected 不刷屏，避免高频重渲染。
+  if (!previous || previous.kind !== snapshot.kind) {
+    broadcastMessagingStatus(runtime.instanceId, snapshot);
+  }
   runtime.statusWrite = runtime.statusWrite
     .then(async () => {
       if (!isCurrentRuntime(uid, runtime)) return;
@@ -406,6 +411,24 @@ function queueRuntimeStatus(uid: string, runtime: RuntimeInstance, nextStatus: M
         error: (error as Error).message,
       });
     });
+}
+
+/** 实例状态变化广播给渲染层（kind 变化时）。channel 在 preload 的
+ * `messaging:` 推送前缀白名单内。推送是尽力而为，失败不影响状态机。 */
+let broadcastOverride: ((channel: string, payload: unknown) => void) | null = null;
+
+function broadcastMessagingStatus(instanceId: string, status: MessagingInstanceStatus): void {
+  if (broadcastOverride) {
+    broadcastOverride('messaging:instance-status', { instanceId, status: cloneStatus(status) });
+    return;
+  }
+  try {
+    const ipc = require('../../ipc') as { broadcastToRenderer?: (channel: string, payload: unknown) => void };
+    if (typeof ipc.broadcastToRenderer !== 'function') return;
+    ipc.broadcastToRenderer('messaging:instance-status', { instanceId, status: cloneStatus(status) });
+  } catch {
+    /* push is best-effort */
+  }
 }
 
 function isMessageEvent(event: GroupEvent): event is Extract<GroupEvent, { type: 'message' }> {
@@ -1722,4 +1745,7 @@ export const _managerTestHooks = {
   renderToolLine,
   toolLinesFromProcessEvent,
   enqueueInbound,
+  setBroadcastOverride: (fn: ((channel: string, payload: unknown) => void) | null): void => {
+    broadcastOverride = fn;
+  },
 };
