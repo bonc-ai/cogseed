@@ -1,4 +1,4 @@
-export const MESSAGING_PLATFORMS = ['telegram', 'feishu_lark', 'wecom'] as const;
+export const MESSAGING_PLATFORMS = ['telegram', 'feishu_lark', 'wecom', 'wechat_personal'] as const;
 export type MessagingPlatform = (typeof MESSAGING_PLATFORMS)[number];
 
 export const FEISHU_TENANT_BRANDS = ['feishu', 'lark'] as const;
@@ -90,6 +90,11 @@ export interface MessagingSecret {
   tenantAccessToken?: string;
   wecomBotId?: string;
   wecomBotSecret?: string;
+  /** iLink (personal WeChat) credentials. `ilinkBaseUrl` is the confirmed
+   * base URL, validated against the static host whitelist before storage. */
+  ilinkBotToken?: string;
+  ilinkBaseUrl?: string;
+  ilinkBotId?: string;
 }
 
 export interface MessagingInstanceInternal extends MessagingInstance {
@@ -163,6 +168,10 @@ export interface InboundEnvelope {
   threadId?: string;
   /** Preserve a platform thread/topic when replying to the inbound message. */
   replyInThread?: boolean;
+  /** Wechat-personal only: reference to the encrypted context_token snapshot
+   * in the wechat state store. The reply for this message must use exactly
+   * this token; it is never the peer's latest token. */
+  contextTokenRef?: string;
   receivedAt: string;
   /** Synthetic feedback event (a reaction on one of our messages), not a
    * real user text message. Skips burst merging and carries the interaction
@@ -207,6 +216,10 @@ export interface DeliveryLedgerEntry {
   replyToMessageId?: string;
   threadId?: string;
   replyInThread?: boolean;
+  /** Wechat-personal only: reference to the encrypted context_token snapshot
+   * in the wechat state store. The reply for this message must use exactly
+   * this token; it is never the peer's latest token. */
+  contextTokenRef?: string;
   /** Feishu uses this as the API uuid; keeping it stable makes timeout retries
    * idempotent. Other adapters may ignore it. */
   idempotencyKey?: string;
@@ -303,6 +316,10 @@ export interface MessagingSendContext {
   replyToMessageId?: string;
   threadId?: string;
   replyInThread?: boolean;
+  /** Wechat-personal only: reference to the encrypted context_token snapshot
+   * in the wechat state store. The reply for this message must use exactly
+   * this token; it is never the peer's latest token. */
+  contextTokenRef?: string;
   idempotencyKey?: string;
   /** Trusted fresh-send recipient type, set only by the messaging service.
    * Ordinary replies stay `chat_id`; proactive self sends use `open_id`. */

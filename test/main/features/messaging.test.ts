@@ -2269,3 +2269,18 @@ describe('messaging burst merge on inbound', () => {
     vi.useRealTimers();
   });
 });
+
+describe('wechat_personal platform types', () => {
+  it('includes wechat_personal in the platform union and registry validation', async () => {
+    const { MESSAGING_PLATFORMS } = await import('../../../src/main/features/messaging/types');
+    expect(MESSAGING_PLATFORMS).toContain('wechat_personal');
+  });
+
+  it('exposes the wechat state file under the local config dir', async () => {
+    const { userMessagingWeChatStateFile } = await import('../../../src/main/paths');
+    const file = userMessagingWeChatStateFile('uid-1');
+    expect(file).toContain('config');
+    expect(file).toContain('messaging-wechat-state.json');
+    expect(file).not.toContain('cloud');
+  });
+});
