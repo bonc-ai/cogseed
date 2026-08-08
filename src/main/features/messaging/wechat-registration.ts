@@ -3,13 +3,15 @@ import { randomUUID } from 'node:crypto';
 import { createLogger } from '../../logger';
 import { nowIso, safeId } from '../../storage';
 import { logErrorSummary } from '../../util/log-redact';
-import { createWechatInstance, isTrustedIlinkBaseUrl } from './registry';
+import { createWechatInstance, deleteInstance, isTrustedIlinkBaseUrl } from './registry';
+import type { MessagingInstanceClient } from './types';
 import { clearWechatInstanceState } from './wechat-state-store';
 
 const log = createLogger('messaging:wechat-registration');
 const FLOW_RETENTION_MS = 10 * 60 * 1000;
 const POLL_INTERVAL_MS = 1_000;
 const QR_REFRESH_MAX = 3;
+const POLL_REQUEST_TIMEOUT_MS = 15_000;
 
 export type WechatRegistrationState =
   | 'starting'
@@ -41,8 +43,10 @@ interface WechatRegistrationFlow {
   qrCode?: string;
   baseUrl: string;
   qrRefreshCount: number;
+  controller: AbortController;
   errorCode?: string;
   instanceId?: string;
+  finishedAt?: number;
   updatedAt: string;
 }
 
@@ -50,6 +54,22 @@ const flows = new Map<string, WechatRegistrationFlow>();
 
 function assertUserId(uid: string): void {
   if (!safeId(uid)) throw new Error('invalid user id');
+}
+
+/** Cancel wins over any in-flight poll result: the poller re-checks the flow
+ * after every await, so a `confirmed` response arriving after cancel can
+ * never create an instance. */
+function isCancelled(flow: WechatRegistrationFlow): boolean {
+  return flow.state === 'cancelled';
+}
+
+/** Finished flows stay queryable for the retention window, then are pruned;
+ * after that a flow is no longer queryable/cancellable. */
+function pruneFinishedFlows(): void {
+  const cutoff = Date.now() - FLOW_RETENTION_MS;
+  for (const [flowId, flow] of flows) {
+    if (flow.finishedAt !== undefined && flow.finishedAt < cutoff) flows.delete(flowId);
+  }
 }
 
 function publicStatus(flow: WechatRegistrationFlow): WechatRegistrationStatus {
@@ -67,11 +87,16 @@ function publicStatus(flow: WechatRegistrationFlow): WechatRegistrationStatus {
 function finish(flow: WechatRegistrationFlow, state: WechatRegistrationState, errorCode?: string): void {
   flow.state = state;
   flow.updatedAt = nowIso();
+  flow.finishedAt = Date.now();
   if (errorCode) flow.errorCode = errorCode;
 }
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function pollSignal(flow: WechatRegistrationFlow): AbortSignal {
+  return AbortSignal.any([flow.controller.signal, AbortSignal.timeout(POLL_REQUEST_TIMEOUT_MS)]);
 }
 
 function mapQrStatus(raw: string, flow: WechatRegistrationFlow): WechatRegistrationState | null {
@@ -91,15 +116,15 @@ function mapQrStatus(raw: string, flow: WechatRegistrationFlow): WechatRegistrat
 async function pollQrStatus(flow: WechatRegistrationFlow): Promise<void> {
   const baseUrl = flow.baseUrl.replace(/\/+$/, '');
   while (flow.state === 'starting' || flow.state === 'awaiting_scan' || flow.state === 'scanned' || flow.state === 'redirecting') {
-    if (flow.state === 'cancelled' || flow.state === 'failed' || flow.state === 'completed') return;
     let response: Response;
     try {
       response = await fetch(`${baseUrl}/ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(flow.qrCode || '')}`, {
         method: 'GET',
         redirect: 'error',
-        signal: AbortSignal.timeout(15_000),
+        signal: pollSignal(flow),
       });
     } catch (error) {
+      // 取消（AbortError）或瞬时网络错误都只重试；循环条件在下一轮退出
       log.warn('wechat qr status poll failed', { flowId: flow.flowId, error: logErrorSummary(error) });
       await wait(POLL_INTERVAL_MS);
       continue;
@@ -111,6 +136,8 @@ async function pollQrStatus(flow: WechatRegistrationFlow): Promise<void> {
       await wait(POLL_INTERVAL_MS);
       continue;
     }
+    // 取消竞态：响应在途期间被取消 → 不应用任何状态、不创建实例
+    if (isCancelled(flow)) return;
     if (typeof parsed.ret === 'number' && parsed.ret !== 0) {
       finish(flow, 'failed', `qr_ret_${parsed.ret}`);
       return;
@@ -144,9 +171,10 @@ async function refreshQrCode(flow: WechatRegistrationFlow): Promise<void> {
     const response = await fetch(`${flow.baseUrl.replace(/\/+$/, '')}/ilink/bot/get_bot_qrcode?bot_type=3`, {
       method: 'GET',
       redirect: 'error',
-      signal: AbortSignal.timeout(15_000),
+      signal: pollSignal(flow),
     });
     const parsed = await response.json() as { ret?: number; qrcode?: string; url?: string };
+    if (isCancelled(flow)) return;
     if (typeof parsed.ret === 'number' && parsed.ret !== 0) {
       finish(flow, 'failed', `qr_ret_${parsed.ret}`);
       return;
@@ -159,6 +187,16 @@ async function refreshQrCode(flow: WechatRegistrationFlow): Promise<void> {
     flow.updatedAt = nowIso();
   } catch (error) {
     log.warn('wechat qr refresh failed', { flowId: flow.flowId, error: logErrorSummary(error) });
+  }
+}
+
+/** Cancel raced past instance creation: drop the just-created instance so a
+ * cancelled flow never leaves an owner-bound orphan behind. */
+async function cleanupCancelledInstance(flow: WechatRegistrationFlow, instanceId: string): Promise<void> {
+  try {
+    await deleteInstance(flow.uid, instanceId);
+  } catch (error) {
+    log.warn('wechat cancelled instance cleanup failed', { flowId: flow.flowId, instanceId, error: logErrorSummary(error) });
   }
 }
 
@@ -175,30 +213,48 @@ async function completeConfirmed(
     finish(flow, 'failed', 'confirmed_payload_invalid');
     return;
   }
+  let instance: MessagingInstanceClient;
   try {
-    const instance = await createWechatInstance(flow.uid, {
+    instance = await createWechatInstance(flow.uid, {
       displayName: '个人微信',
       ilinkBotToken: botToken,
       ilinkBaseUrl: baseUrl,
       ilinkBotId: botId,
       ownerExternalUserId: ownerId,
     });
-    // 重绑语义：无论本 flow 之前是否存在旧状态，confirmed 后一律清空
-    await clearWechatInstanceState(flow.uid, instance.id);
-    flow.instanceId = instance.id;
-    finish(flow, 'completed');
   } catch (error) {
     log.warn('wechat instance creation failed', { flowId: flow.flowId, error: logErrorSummary(error) });
     finish(flow, 'failed', 'instance_create_failed');
+    return;
   }
+  if (isCancelled(flow)) {
+    await cleanupCancelledInstance(flow, instance.id);
+    return;
+  }
+  try {
+    // 重绑语义：无论本 flow 之前是否存在旧状态，confirmed 后一律清空
+    await clearWechatInstanceState(flow.uid, instance.id);
+  } catch (error) {
+    log.warn('wechat instance creation failed', { flowId: flow.flowId, error: logErrorSummary(error) });
+    finish(flow, 'failed', 'instance_create_failed');
+    return;
+  }
+  if (isCancelled(flow)) {
+    await cleanupCancelledInstance(flow, instance.id);
+    return;
+  }
+  flow.instanceId = instance.id;
+  finish(flow, 'completed');
 }
 
 export async function startWechatQrRegistration(uid: string): Promise<WechatRegistrationStatus> {
   assertUserId(uid);
+  pruneFinishedFlows();
   const flow: WechatRegistrationFlow = {
     uid,
     flowId: randomUUID(),
     state: 'starting',
+    controller: new AbortController(),
     baseUrl: 'https://ilinkai.weixin.qq.com',
     qrRefreshCount: 0,
     updatedAt: nowIso(),
@@ -214,15 +270,18 @@ export async function startWechatQrRegistration(uid: string): Promise<WechatRegi
 
 export function getWechatQrRegistrationStatus(uid: string, flowId: string): WechatRegistrationStatus {
   assertUserId(uid);
+  pruneFinishedFlows();
   const flow = flows.get(flowId);
-  if (!flow) throw new Error('wechat registration flow not found');
+  if (!flow || flow.uid !== uid) throw new Error('wechat registration flow not found');
   return publicStatus(flow);
 }
 
 export function cancelWechatQrRegistration(uid: string, flowId: string): WechatRegistrationStatus {
   assertUserId(uid);
+  pruneFinishedFlows();
   const flow = flows.get(flowId);
-  if (!flow) throw new Error('wechat registration flow not found');
+  if (!flow || flow.uid !== uid) throw new Error('wechat registration flow not found');
   finish(flow, 'cancelled');
+  flow.controller.abort();
   return publicStatus(flow);
 }
