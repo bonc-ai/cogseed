@@ -391,7 +391,9 @@ interface RawWechatItem {
 }
 
 interface RawWechatMessage {
-  message_id?: string;
+  /** 真实协议里 message_id 是数字（如 7491873521689278600）；字符串形态保留
+   * 以兼容历史/夹具。 */
+  message_id?: string | number;
   from_user_id?: string;
   group_id?: string;
   item_list?: RawWechatItem[];
@@ -408,7 +410,11 @@ export function normalizeInbound(
   // Task 5 owner pre-filter; context_token snapshotting (contextTokenRef) is
   // also Task 5 — this function must not set it.
   if (typeof raw.group_id === 'string' && raw.group_id) return null;
-  const messageId = typeof raw.message_id === 'string' ? raw.message_id.trim() : '';
+  const messageId = typeof raw.message_id === 'string'
+    ? raw.message_id.trim()
+    : typeof raw.message_id === 'number' && Number.isFinite(raw.message_id)
+      ? String(raw.message_id)
+      : '';
   const userId = typeof raw.from_user_id === 'string' ? raw.from_user_id.trim() : '';
   const contextToken = typeof raw.context_token === 'string' ? raw.context_token.trim() : '';
   if (!messageId || !userId || !contextToken) return null;
