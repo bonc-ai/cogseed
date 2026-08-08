@@ -12222,7 +12222,7 @@ body.model-not-configured .main-content { flex-direction: column; }
   min-width: 0;
   min-height: 0;
   width: 100%;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg);
   overflow: hidden;
@@ -12232,32 +12232,29 @@ body.model-not-configured .main-content { flex-direction: column; }
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: 10px;
   background: var(--bg);
 }
 /* Messaging settings: two-column workspace (channel menu | config panel). */
 .messaging-layout {
   display: grid;
-  grid-template-columns: minmax(220px, 224px) minmax(0, 1fr);
-  gap: 10px;
-  align-items: stretch;
-  min-height: 100%;
+  grid-template-columns: 232px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
 }
 
 .messaging-menu {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  align-self: stretch;
-  padding: 10px 6px;
+  gap: 4px;
+  padding: 12px 8px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--surface-2) 76%, var(--bg));
+  border-radius: 10px;
+  background: var(--surface);
 }
 
 .messaging-menu-title {
-  margin: 0 6px 6px;
-  font-size: 14px;
+  margin: 0 6px 10px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--text);
 }
@@ -12265,22 +12262,22 @@ body.model-not-configured .main-content { flex-direction: column; }
 .messaging-menu-group { display: contents; }
 
 .messaging-menu-group-label {
-  margin: 6px 6px 3px;
-  font-size: 10px;
+  margin: 8px 6px 4px;
+  font-size: 11px;
   font-weight: 650;
-  letter-spacing: .45px;
+  letter-spacing: .5px;
   color: var(--text-2);
 }
 
 .messaging-menu-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
-  min-height: 34px;
-  padding: 4px 6px;
+  min-height: 40px;
+  padding: 5px 8px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
   color: var(--text);
   text-align: left;
@@ -12293,7 +12290,7 @@ body.model-not-configured .main-content { flex-direction: column; }
 .messaging-menu-item.is-disabled { color: var(--text-2); opacity: .55; cursor: default; filter: saturate(.42); }
 
 .messaging-menu-item-icon { display: inline-flex; flex: 0 0 auto; }
-.messaging-menu-item-glyph { width: 20px; height: 20px; }
+.messaging-menu-item-glyph { width: 22px; height: 22px; }
 
 .messaging-menu-item-name {
   min-width: 0;
@@ -12307,28 +12304,8 @@ body.model-not-configured .main-content { flex-direction: column; }
 .messaging-menu-item-status { margin-left: auto; font-size: 10px; color: var(--text-2); white-space: nowrap; }
 .messaging-menu-item-status.is-bound { color: var(--success); }
 
-.messaging-panel {
-  min-width: 0;
-  min-height: 100%;
-}
-.messaging-panel-body {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  align-items: stretch;
-}
-.messaging-panel-body > .messaging-instance-card,
-.messaging-panel-body > .messaging-preferences-card,
-.messaging-panel-body > .messaging-delete-card,
-.messaging-panel-body > .messaging-telegram-card,
-.messaging-panel-body > .messaging-wecom-card,
-.messaging-panel-body > .messaging-empty-card {
-  grid-column: 1 / -1;
-}
-.messaging-association-card,
-.messaging-owner-card {
-  height: 100%;
-}
+.messaging-panel { min-width: 0; }
+.messaging-panel-body { display: flex; flex-direction: column; gap: 8px; }
 .messaging-detail-title-row { display: flex; align-items: center; gap: 8px; }
 .messaging-detail-switch-placeholder { width: 40px; }
 
@@ -12340,10 +12317,10 @@ body.model-not-configured .main-content { flex-direction: column; }
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 8px;
+  padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--surface-2) 46%, var(--bg));
+  background: var(--surface);
   cursor: pointer;
 }
 
@@ -12374,27 +12351,27 @@ body.model-not-configured .main-content { flex-direction: column; }
   display: grid;
   grid-template-columns: 48px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
-  padding: 4px 0 10px;
+  gap: 14px;
+  padding: 8px 4px 12px;
   border-bottom: 1px solid var(--border);
 }
 .messaging-brand-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
   background: #e5f3ff;
   color: #0969da;
 }
 .messaging-brand-icon.is-lark { background: #e4f8f3; color: #008b75; }
-.messaging-brand-glyph { width: 22px; height: 22px; }
+.messaging-brand-glyph { width: 26px; height: 26px; }
 .messaging-detail-title-wrap { min-width: 0; }
 .messaging-detail-title-wrap h2 {
   margin: 0;
   color: var(--text);
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 700;
   line-height: 1.25;
   overflow-wrap: anywhere;
@@ -12442,11 +12419,11 @@ body.model-not-configured .main-content { flex-direction: column; }
 .messaging-switch input:disabled + .messaging-switch-track { opacity: .5; }
 .messaging-switch input:focus-visible + .messaging-switch-track { outline: 2px solid var(--primary); outline-offset: 2px; }
 .messaging-config-card {
-  margin-top: 6px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-strong);
+  margin-top: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--surface-2) 62%, var(--bg));
+  background: var(--surface);
 }
 .messaging-config-card-heading { min-width: 0; }
 .messaging-config-card-heading h3 {
@@ -12459,10 +12436,10 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 .messaging-config-card-heading p {
   max-width: 720px;
-  margin: 2px 0 0;
+  margin: 3px 0 0;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 1.35;
+  font-size: 12.5px;
+  line-height: 1.5;
   overflow-wrap: anywhere;
 }
 .messaging-association-row,
@@ -12470,7 +12447,7 @@ body.model-not-configured .main-content { flex-direction: column; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 16px;
 }
 .messaging-association-row {
   min-width: 0;
@@ -12488,17 +12465,17 @@ body.model-not-configured .main-content { flex-direction: column; }
   border-radius: 6px;
   font-size: 13px;
 }
-.messaging-scan-button { border-color: var(--border-strong); background: color-mix(in srgb, var(--surface-2) 52%, var(--bg)); color: var(--text); }
-.messaging-scan-button:hover:not(:disabled) { border-color: var(--text); background: color-mix(in srgb, var(--surface-3) 68%, var(--bg)); }
+.messaging-scan-button { border-color: var(--border-strong); background: var(--surface); color: var(--text); }
+.messaging-scan-button:hover:not(:disabled) { border-color: var(--text); background: var(--surface-2); }
 .messaging-association-bound { flex: 0 0 auto; font-size: 12px; color: var(--success); white-space: nowrap; }
-.messaging-secondary-button { border-color: var(--border); background: color-mix(in srgb, var(--surface-2) 52%, var(--bg)); color: var(--text-2); }
-.messaging-secondary-button:hover:not(:disabled) { background: color-mix(in srgb, var(--surface-3) 68%, var(--bg)); }
+.messaging-secondary-button { border-color: var(--border); background: var(--surface); color: var(--text-2); }
+.messaging-secondary-button:hover:not(:disabled) { background: var(--surface-2); }
 .messaging-action-icon { width: 15px; height: 15px; }
 .messaging-owner-bound-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 16px;
 }
 .messaging-manual-bound {
   display: flex;
@@ -12519,16 +12496,13 @@ body.model-not-configured .main-content { flex-direction: column; }
   flex: 1 1 220px;
   min-height: 32px;
 }
-.messaging-page .form-input,
 .messaging-detail-select {
-  background: color-mix(in srgb, var(--surface-2) 42%, var(--bg));
-}
-.messaging-detail-select {
-  width: min(280px, 46%);
-  min-height: 32px;
-  padding: 5px 30px 5px 10px;
+  width: min(360px, 100%);
+  min-height: 34px;
+  padding: 6px 32px 6px 12px;
   border: 1px solid var(--border-strong);
   border-radius: 6px;
+  background: var(--surface);
   color: var(--text);
   font: inherit;
   font-size: 13px;
@@ -12540,9 +12514,9 @@ body.model-not-configured .main-content { flex-direction: column; }
   display: grid;
   grid-template-columns: minmax(140px, 180px) minmax(0, 1fr);
   align-items: center;
-  gap: 12px;
-  margin-top: 10px;
-  padding-top: 10px;
+  gap: 16px;
+  margin-top: 14px;
+  padding-top: 14px;
   border-top: 1px solid var(--border);
 }
 .messaging-qr-code {
@@ -12583,14 +12557,14 @@ body.model-not-configured .main-content { flex-direction: column; }
   overflow: hidden;
 }
 .messaging-preference-row {
-  min-height: 58px;
-  padding: 9px 12px;
+  min-height: 72px;
+  padding: 12px 14px;
 }
 .messaging-preference-row + .messaging-preference-row {
   border-top: 1px solid var(--border);
 }
 .messaging-preference-row .messaging-config-card-heading {
-  flex: 1 1 auto;
+  flex: 1;
 }
 .messaging-delete-card {
   display: flex;
@@ -12611,27 +12585,9 @@ body.model-not-configured .main-content { flex-direction: column; }
 .messaging-notice.is-success { color: var(--success); }
 .messaging-notice.is-error { color: var(--danger); }
 @media (max-width: 760px) {
-  .messaging-layout {
-    grid-template-columns: 1fr;
-  }
-  .messaging-panel-body {
-    grid-template-columns: 1fr;
-  }
-  .messaging-panel-body > .messaging-instance-card,
-  .messaging-panel-body > .messaging-preferences-card,
-  .messaging-panel-body > .messaging-delete-card,
-  .messaging-panel-body > .messaging-telegram-card,
-  .messaging-panel-body > .messaging-wecom-card,
-  .messaging-panel-body > .messaging-empty-card {
-    grid-column: auto;
-  }
-  .messaging-association-card,
-  .messaging-owner-card {
-    height: auto;
-  }
-  .messaging-detail-header { grid-template-columns: 36px minmax(0, 1fr) auto; gap: 10px; }
-  .messaging-brand-icon { width: 36px; height: 36px; border-radius: 9px; }
-  .messaging-brand-glyph { width: 20px; height: 20px; }
+  .messaging-detail-header { grid-template-columns: 56px minmax(0, 1fr) auto; gap: 14px; }
+  .messaging-brand-icon { width: 56px; height: 56px; border-radius: 14px; }
+  .messaging-brand-glyph { width: 29px; height: 29px; }
 }
 @media (max-width: 560px) {
   .messaging-detail-header { grid-template-columns: 48px minmax(0, 1fr); align-items: start; }
@@ -12650,7 +12606,6 @@ body.model-not-configured .main-content { flex-direction: column; }
   .messaging-delete-card { align-items: stretch; flex-direction: column; }
   .messaging-delete-button { width: 100%; }
 }
-
 .settings-recycle-body {
   display: flex;
   flex-direction: column;
