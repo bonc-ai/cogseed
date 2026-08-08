@@ -95,6 +95,7 @@ function normalizeBinding(key: string, value: unknown): MessagingBinding | null 
     ...(boundedOptionalText(item.replyToMessageId, 512) ? { replyToMessageId: boundedOptionalText(item.replyToMessageId, 512) } : {}),
     ...(boundedOptionalText(item.threadId, 512) ? { threadId: boundedOptionalText(item.threadId, 512) } : {}),
     ...(item.replyInThread === true ? { replyInThread: true } : {}),
+    ...(boundedOptionalText(item.contextTokenRef, 512) ? { contextTokenRef: boundedOptionalText(item.contextTokenRef, 512) } : {}),
     createdAt: typeof item.createdAt === 'string' ? item.createdAt : nowIso(),
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : nowIso(),
   };
@@ -117,13 +118,15 @@ async function writeBindings(uid: string, data: MessagingBindingsFile): Promise<
   await writeJson(userMessagingBindingsFile(uid), data);
 }
 
-function replyContextFromEnvelope(envelope: InboundEnvelope): Pick<MessagingBinding, 'replyToMessageId' | 'threadId' | 'replyInThread'> {
+function replyContextFromEnvelope(envelope: InboundEnvelope): Pick<MessagingBinding, 'replyToMessageId' | 'threadId' | 'replyInThread' | 'contextTokenRef'> {
   const replyToMessageId = boundedOptionalText(envelope.replyToMessageId, 512);
   const threadId = boundedOptionalText(envelope.threadId, 512);
+  const contextTokenRef = boundedOptionalText(envelope.contextTokenRef, 512);
   return {
     ...(replyToMessageId ? { replyToMessageId } : {}),
     ...(threadId ? { threadId } : {}),
     ...(envelope.replyInThread === true ? { replyInThread: true } : {}),
+    ...(contextTokenRef ? { contextTokenRef } : {}),
   };
 }
 
@@ -139,6 +142,7 @@ function refreshBinding(binding: MessagingBinding, envelope: InboundEnvelope): M
   if (!envelope.replyToMessageId) delete next.replyToMessageId;
   if (!envelope.threadId) delete next.threadId;
   if (envelope.replyInThread !== true) delete next.replyInThread;
+  if (!envelope.contextTokenRef) delete next.contextTokenRef;
   return next;
 }
 

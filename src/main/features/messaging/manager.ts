@@ -29,6 +29,7 @@ import type {
   MessagingInstanceInternal,
   MessagingInstanceStatus,
   MessagingBinding,
+  MessagingPlatform,
   MessagingPlatformCatalogEntry,
   WorkspaceScope,
 } from './types';
@@ -300,9 +301,9 @@ export const PLATFORM_CATALOG: readonly MessagingPlatformCatalogEntry[] = [
   {
     platform: 'wechat_personal',
     displayName: '个人微信',
-    description: '官方双向机器人能力不可用，暂不提供登录或扫码。',
-    available: false,
-    twoWay: false,
+    description: '微信官方 iLink 通道，扫码绑定后长轮询双向对话。',
+    available: true,
+    twoWay: true,
   },
   {
     platform: 'wecom',
@@ -415,19 +416,20 @@ function messageFromEvent(event: Extract<GroupEvent, { type: 'message' }>): Outb
   };
 }
 
-function deliveryContext(entry: { replyToMessageId?: string; threadId?: string; replyInThread?: boolean; idempotencyKey?: string; recipientIdType?: 'chat_id' | 'open_id' }) {
+function deliveryContext(entry: { replyToMessageId?: string; threadId?: string; replyInThread?: boolean; idempotencyKey?: string; recipientIdType?: 'chat_id' | 'open_id'; contextTokenRef?: string }) {
   return {
     ...(entry.replyToMessageId ? { replyToMessageId: entry.replyToMessageId } : {}),
     ...(entry.threadId ? { threadId: entry.threadId } : {}),
     ...(entry.replyInThread ? { replyInThread: true } : {}),
     ...(entry.idempotencyKey ? { idempotencyKey: entry.idempotencyKey } : {}),
     ...(entry.recipientIdType ? { recipientIdType: entry.recipientIdType } : {}),
+    ...(entry.contextTokenRef ? { contextTokenRef: entry.contextTokenRef } : {}),
   };
 }
 
 function beginDeliveryEntry(
   instanceId: string,
-  binding: { externalChatId?: string; recipientId?: string; recipientIdType?: 'chat_id' | 'open_id'; replyToMessageId?: string; threadId?: string; replyInThread?: boolean },
+  binding: { externalChatId?: string; recipientId?: string; recipientIdType?: 'chat_id' | 'open_id'; replyToMessageId?: string; threadId?: string; replyInThread?: boolean; contextTokenRef?: string },
   message: OutboundMessage,
   text: string,
   idempotencyKey?: string,
@@ -445,6 +447,7 @@ function beginDeliveryEntry(
     ...(binding.replyToMessageId ? { replyToMessageId: binding.replyToMessageId } : {}),
     ...(binding.threadId ? { threadId: binding.threadId } : {}),
     ...(binding.replyInThread ? { replyInThread: true } : {}),
+    ...(binding.contextTokenRef ? { contextTokenRef: binding.contextTokenRef } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
   };
 }
@@ -539,7 +542,8 @@ async function recoverDeliveries(uid: string, runtime: RuntimeInstance): Promise
 
 /**
  * Proactive (Commander-initiated) send to a fixed recipient — currently the
- * configured Feishu/Lark owner open id. Uses the same ledger, idempotency key,
+ * configured Feishu/Lark owner open id or the WeChat owner user id. Uses the
+ * same ledger, idempotency key,
  * retry, and recovery machinery as ordinary replies, keyed on a caller-owned
  * stable source key so one tool call never sends twice. Waits for the
  * terminal outcome (`sent` / `failed` / `cancelled`) instead of returning on
@@ -1316,7 +1320,7 @@ async function startRuntime(uid: string, instanceId: string): Promise<void> {
   }
   let adapter: MessagingAdapter;
   try {
-    adapter = createAdapter(loaded.instance, loaded.secret);
+    adapter = createAdapter(loaded.instance, loaded.secret, uid);
   } catch (error) {
     const message = (error as Error).message || 'messaging adapter initialization failed';
     await registry.updateStatus(uid, instanceId, { kind: 'error', message, checkedAt: new Date().toISOString() });
@@ -1604,7 +1608,7 @@ export async function health(uid: string, instanceId: string): Promise<Messaging
     const runtime = runtimes.get(uid)?.get(instanceId);
     const result = runtime && isCurrentRuntime(uid, runtime)
       ? await runtime.adapter.checkHealth()
-      : await createAdapter(loaded.instance, loaded.secret).checkHealth();
+      : await createAdapter(loaded.instance, loaded.secret, uid).checkHealth();
     if (runtime && isCurrentRuntime(uid, runtime)) {
       queueRuntimeStatus(uid, runtime, result);
       await runtime.statusWrite;

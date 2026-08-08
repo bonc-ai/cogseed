@@ -131,6 +131,13 @@ export interface MessagingBinding {
   replyToMessageId?: string;
   threadId?: string;
   replyInThread?: boolean;
+  /** Wechat-personal only: reference to the encrypted context_token snapshot
+   * in the wechat state store (carried over from the latest inbound envelope
+   * that touched this conversation, mirroring replyToMessageId). The reply
+   * for that message must use exactly this token. The reference itself is a
+   * random id, never the token; both binding and ledger files are
+   * machine-private and are never rendered to the renderer. */
+  contextTokenRef?: string;
   createdAt: string;
   updatedAt: string;
 }

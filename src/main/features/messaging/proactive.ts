@@ -27,7 +27,7 @@ export type ProactiveTargetStatus = 'available' | 'not_connected' | 'owner_missi
 export interface ProactiveTargetView {
   instance_id: string;
   display_name: string;
-  platform: 'feishu_lark';
+  platform: 'feishu_lark' | 'wechat_personal';
   tenant_brand?: string;
   status: ProactiveTargetStatus;
   target: 'self';
@@ -73,18 +73,54 @@ function targetStatus(instance: MessagingInstanceClient): ProactiveTargetStatus 
   return 'available';
 }
 
-/** List every Feishu/Lark instance of the user with sanitized diagnostics. */
+/** iLink context tokens expire server-side; proactive sends to the owner are
+ * only possible while the account has seen an inbound within this window. */
+const WECHAT_PROACTIVE_TOKEN_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** Wechat-personal extra availability gate. Returns null when the target
+ * passes; otherwise the status that explains why it is not sendable:
+ * `not_connected` (no live owner peer in the state store) or `owner_missing`
+ * (bound owner missing, or the last inbound is older than the 24h token
+ * window). The base instance status is computed first and this gate only
+ * downgrades it. */
+async function wechatTargetGate(uid: string, instance: MessagingInstanceClient): Promise<ProactiveTargetStatus | null> {
+  if (instance.platform !== 'wechat_personal') return null;
+  // Registration binds the owner, but re-check through the internal view: the
+  // gate must never send to an account without a bound owner identity.
+  const loaded = await registry.getInstanceWithSecret(uid, instance.id);
+  if (!loaded) return 'not_connected';
+  const ownerExternalUserId = loaded.instance.ownerExternalUserId || '';
+  const ilinkBotId = loaded.secret.ilinkBotId || '';
+  if (!ownerExternalUserId) return 'owner_missing';
+  if (!ilinkBotId) return 'not_connected';
+  const stateStore = await import('./wechat-state-store');
+  const fingerprint = stateStore.wechatCredentialFingerprint(ilinkBotId, ownerExternalUserId);
+  const state = await stateStore.loadWechatState(uid, instance.id, fingerprint);
+  const ownerPeer = state?.peers[ownerExternalUserId];
+  if (!ownerPeer) return 'not_connected';
+  if (Date.now() - ownerPeer.lastInboundAt > WECHAT_PROACTIVE_TOKEN_WINDOW_MS) return 'owner_missing';
+  return null;
+}
+
+/** List every Feishu/Lark or WeChat instance of the user with sanitized
+ * diagnostics. */
 export async function listTargets(uid: string): Promise<ProactiveListResult> {
   const instances = await manager.listInstances(uid);
   const targets: ProactiveTargetView[] = [];
   for (const instance of instances) {
-    if (instance.platform !== 'feishu_lark') continue;
+    if (instance.platform !== 'feishu_lark' && instance.platform !== 'wechat_personal') continue;
+    const baseStatus = targetStatus(instance);
+    // The wechat gate only downgrades an otherwise-available target: disabled
+    // or not-connected instances keep their more specific base status.
+    const status = baseStatus === 'available'
+      ? (await wechatTargetGate(uid, instance)) ?? 'available'
+      : baseStatus;
     targets.push({
       instance_id: instance.id,
       display_name: instance.displayName,
-      platform: 'feishu_lark',
+      platform: instance.platform,
       ...(instance.feishuTenantBrand ? { tenant_brand: instance.feishuTenantBrand } : {}),
-      status: targetStatus(instance),
+      status,
       target: 'self',
       ...(instance.ownerLabel ? { owner_label: instance.ownerLabel } : {}),
     });
@@ -99,7 +135,8 @@ function error(code: ProactiveErrorCode, message: string, candidates?: string[])
   return { status: 'error', code, message, ...(candidates ? { candidates } : {}) };
 }
 
-/** Confirm and send `text` to the configured owner of one Feishu instance. */
+/** Confirm and send `text` to the configured owner of one Feishu or WeChat
+ * instance. */
 export async function sendToSelf(
   uid: string,
   input: { instance_id?: string; target: string; text: string },
@@ -128,7 +165,7 @@ export async function sendToSelf(
   } else {
     if (!availableIds.length) {
       if (!targets.length) {
-        return error('E_MESSAGING_TARGET_UNAVAILABLE', 'no Feishu/Lark bot is configured');
+        return error('E_MESSAGING_TARGET_UNAVAILABLE', 'no Feishu/Lark or WeChat bot is configured');
       }
       if (targets.some((target) => target.status === 'owner_missing')) {
         return error('E_MESSAGING_OWNER_MISSING', 'no configured bot has an owner identity');
