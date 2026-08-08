@@ -138,7 +138,7 @@ export function createCrossSessionMemoryTool(handler: MemoryToolHandler, opts: C
         return { content: JSON.stringify({ ok: false, error: 'project memory is read-only for you; only the commander can add/replace/remove project entries' }), isError: true };
       }
 
-      let result: MemoryToolResult;
+      let result: MemoryToolOperationResult;
 
       switch (action) {
         case 'add':

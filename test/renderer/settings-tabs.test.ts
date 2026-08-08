@@ -297,6 +297,14 @@ describe('settings tabs module', () => {
     expect(source).toContain('void startQrForChannel(channel)');
   });
 
+  it('creates a fresh Feishu draft when adding a second instance', () => {
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    expect(source).toContain('void startQrForChannel(channel, { createNew: true })');
+    expect(source).toContain('function startQrForChannel(channel, options)');
+    expect(source).toContain('const createNew = options?.createNew === true;');
+    expect(source).toContain('let instance = createNew ? null : instancesForChannel(channel)[0] || null;');
+  });
+
   it('accepts only verified wecom auth messages from the official popup', () => {
     const { hooks } = loadMessagingSettingsTestHooks();
     const origin = 'https://work.weixin.qq.com';

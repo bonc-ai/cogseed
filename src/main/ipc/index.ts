@@ -2070,6 +2070,80 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.tree.rebuild': async (_args, ctx) => ({ ok: true, tree: await recallTree.rebuildCognitionTree(ctx.userId) }),
   'recall.usage.list': async ({ assetId } = {}, ctx) => { if (assetId !== undefined && !safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, usage: await recallUsage.listRecallUsage(ctx.userId, assetId) }; },
 
+  'cognition.dashboard.read': async (_args, ctx) => {
+    return { ok: true, dashboard: await cognition.buildCognitionDashboard(ctx.userId) };
+  },
+
+  'cognition.candidates.list': async ({ status, type, conversationId, skillId, limit } = {}, ctx) => {
+    if (status !== undefined && status !== 'pending' && status !== 'accepted' && status !== 'rejected') throw new Error('invalid cognition candidate status');
+    if (type !== undefined && type !== 'preference' && type !== 'ontology' && type !== 'rule' && type !== 'experience' && type !== 'skill_evolution') throw new Error('invalid cognition candidate type');
+    if (conversationId !== undefined && !safeId(conversationId)) throw new Error('invalid conversation id');
+    if (skillId !== undefined && !safeId(skillId)) throw new Error('invalid skill id');
+    const n = limit === undefined ? undefined : Number(limit);
+    return { ok: true, candidates: await cognition.listCognitionCandidates(ctx.userId, {
+      ...(status !== undefined ? { status } : {}),
+      ...(type !== undefined ? { type } : {}),
+      ...(conversationId !== undefined ? { conversationId } : {}),
+      ...(skillId !== undefined ? { skillId } : {}),
+      ...(Number.isFinite(n) && n > 0 ? { limit: Math.min(n, 200) } : {}),
+    }) };
+  },
+
+  'cognition.candidates.decide': async ({ source, candidateId, decision, reason, notes, toGlobalMemory, toGroupIds } = {}, ctx) => {
+    if (source !== 'personal_ontology' && source !== 'p3394_experience' && source !== 'p3394_patch') throw new Error('invalid cognition candidate source');
+    if (!safeId(candidateId)) throw new Error('invalid candidate id');
+    if (decision !== 'accept' && decision !== 'reject') throw new Error('invalid cognition candidate decision');
+    if (toGroupIds !== undefined && (!Array.isArray(toGroupIds) || toGroupIds.some((id) => !safeId(id)))) throw new Error('invalid group ids');
+    return { ok: true, result: await cognition.decideCognitionCandidate(ctx.userId, {
+      source,
+      candidateId,
+      decision,
+      ...(typeof reason === 'string' ? { reason } : {}),
+      ...(typeof notes === 'string' ? { notes } : {}),
+      ...(typeof toGlobalMemory === 'boolean' ? { toGlobalMemory } : {}),
+      ...(Array.isArray(toGroupIds) ? { toGroupIds } : {}),
+    }) };
+  },
+
+  'cognition.receipts.list': async ({ status, agentId, conversationId, skillId, limit } = {}, ctx) => {
+    if (status !== undefined && status !== 'prepared' && status !== 'succeeded' && status !== 'degraded' && status !== 'rejected') throw new Error('invalid cognition receipt status');
+    if (agentId !== undefined && !safeId(agentId)) throw new Error('invalid agent id');
+    if (conversationId !== undefined && !safeId(conversationId)) throw new Error('invalid conversation id');
+    if (skillId !== undefined && !safeId(skillId)) throw new Error('invalid skill id');
+    const n = limit === undefined ? undefined : Number(limit);
+    return { ok: true, receipts: await cognition.listCognitionReuseReceipts(ctx.userId, {
+      ...(status !== undefined ? { status } : {}),
+      ...(agentId !== undefined ? { agentId } : {}),
+      ...(conversationId !== undefined ? { conversationId } : {}),
+      ...(skillId !== undefined ? { skillId } : {}),
+      ...(Number.isFinite(n) && n > 0 ? { limit: Math.min(n, 200) } : {}),
+    }) };
+  },
+
+  'cognition.receipts.read': async ({ executionId } = {}, ctx) => {
+    if (!safeId(executionId)) throw new Error('invalid execution id');
+    return { ok: true, receipt: await cognition.readCognitionReuseReceipt(ctx.userId, executionId) };
+  },
+
+  'cognition.assets.list': async ({ type, limit } = {}, ctx) => {
+    if (type !== undefined && type !== 'skill' && type !== 'knowledge' && type !== 'ontology' && type !== 'evaluation') throw new Error('invalid cognition asset type');
+    const n = limit === undefined ? undefined : Number(limit);
+    return { ok: true, assets: await cognition.listCognitionAssets(ctx.userId, {
+      ...(type !== undefined ? { type } : {}),
+      ...(Number.isFinite(n) && n > 0 ? { limit: Math.min(n, 500) } : {}),
+    }) };
+  },
+
+  'cognition.skills.summary': async ({ skillId } = {}, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skill id');
+    return { ok: true, summary: await cognition.getSkillCognitionSummary(ctx.userId, skillId) };
+  },
+
+  'cognition.skills.rollback': async ({ skillId, version } = {}, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skill id');
+    if (typeof version !== 'string' || !version.trim() || !/^[0-9]+(?:\.[0-9]+){0,3}$/.test(version.trim())) throw new Error('invalid skill version');
+    return { ok: true, result: await cognition.rollbackSkillCognitionVersion(ctx.userId, skillId, version.trim()) };
+  },
 
   'groupChat.abort': async ({ cid }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
@@ -3978,7 +4052,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // Evidence-backed cognition assets. Confirmation reuses the canonical
   // memory write path; these handlers own only longitudinal evidence, review,
   // reuse, and growth state.
-  ...cognitionHandlers,
+  //
+  // `cognition.assets.list` is registered above (ability-asset semantics from
+  // the recall surface); the legacy store-asset handler of the same name in
+  // ipc/cognition.ts must not shadow it, so it is excluded from the spread.
+  ...(({ 'cognition.assets.list': _legacyCognitionAssetsList, ...rest }) => rest)(cognitionHandlers),
 };
 
 // ── Stream handlers ──────────────────────────────────────────────────────

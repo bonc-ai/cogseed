@@ -388,7 +388,7 @@ export async function addCandidates(
   const incoming = Array.isArray(candidates) ? candidates : [];
   if (!incoming.length) return { candidate_ids: [] };
 
-  const existing = readCandidates(uid);
+  const existing = await readCandidates(uid);
   const written: string[] = [];
   const stamp = Date.now();
   let seq = 0;

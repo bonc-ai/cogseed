@@ -6,9 +6,8 @@ const root = resolve(__dirname, '../..');
 const boot = readFileSync(resolve(root, 'src/renderer/modules/boot.js'), 'utf8');
 
 describe('renderer build identity', () => {
-  it('uses the main-provided version label and build tooltip', () => {
-    expect(boot).toContain('env.versionLabel');
-    expect(boot).toContain('env.buildCommit');
-    expect(boot).toContain('_setRendererVersionLabel');
+  it('stamps dev mode from the main-provided env', () => {
+    expect(boot).toContain('env.isDev');
+    expect(boot).toContain("document.body.classList.add('is-dev')");
   });
 });

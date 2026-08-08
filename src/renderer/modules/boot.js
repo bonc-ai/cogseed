@@ -28,8 +28,6 @@ async function initAuth() {
 const _BOOT_STAGE_WARN_MS = 1500;
 const _BOOT_TOTAL_WARN_MS = 3000;
 const _SIDEBAR_NAV_BOOT_WARM_MS = 3500;
-let _sidebarVersionBaseLabel = '';
-let _sidebarVersionBuildTitle = '';
 let _sidebarNavWarmUntil = 0;
 const _sidebarNavTimers = new Map();
 const _sidebarNavTokens = new Map();
@@ -175,53 +173,17 @@ async function bootApp() {
   }, 2500);
 }
 
+// Stamps body.is-dev so renderer modules can branch on dev mode synchronously
+// via `document.body.classList.contains('is-dev')`. Used by skills / agents
+// grids to expose builtin ⋯ menu (edit / delete) and the "promote to builtin"
+// item on custom cards.
 async function _stampSettingsVersion() {
-  _bindSidebarVersionUpdate();
   if (!window.orkas || typeof window.orkas.env !== 'function') return;
   try {
     const env = await window.orkas.env();
-    if (env && env.version) {
-      const buildTooltip = t('sidebar.build_title', {
-        channel: env.buildChannel || 'unknown',
-        commit: env.buildCommit || 'unknown',
-        dirty: env.buildDirty === true ? t('sidebar.build_dirty') : t('sidebar.build_clean'),
-        time: env.buildTime || 'unknown',
-      });
-      _setRendererVersionLabel(env.versionLabel || env.version, buildTooltip);
-    }
-    // Stamp body so renderer modules can branch on dev mode synchronously
-    // via `document.body.classList.contains('is-dev')`. Used by skills /
-    // agents grids to expose builtin ⋯ menu (edit / delete) and the
-    // "promote to builtin" item on custom cards.
     if (env && env.isDev) document.body.classList.add('is-dev');
   } catch (_) { /* ignore — non-critical */ }
 }
-
-function _formatRendererVersionLabel(version) {
-  const raw = String(version || '').trim();
-  if (!raw) return '';
-  return raw.toLowerCase().startsWith('v') ? raw : `v${raw}`;
-}
-
-function _setRendererVersionLabel(version, buildTitle = '') {
-  const label = _formatRendererVersionLabel(version);
-  if (!label) return;
-  _sidebarVersionBaseLabel = label;
-  _sidebarVersionBuildTitle = String(buildTitle || '');
-  _renderSidebarVersionUpdate();
-}
-
-function _renderSidebarVersionUpdate() {
-  const el = document.getElementById('sidebar-version');
-  if (!el) return;
-  el.textContent = _sidebarVersionBaseLabel || '';
-  el.title = _sidebarVersionBuildTitle || (_sidebarVersionBaseLabel ? t('sidebar.version_title', { version: _sidebarVersionBaseLabel }) : '');
-  el.setAttribute('aria-label', el.title || el.textContent || 'Version');
-  el.disabled = true;
-  el.classList.remove('is-actionable', 'is-progress');
-}
-
-function _bindSidebarVersionUpdate() {}
 
 // One-shot rename of legacy brand-prefixed localStorage keys
 // (`orkas_*` / `orkas.*`). Rationale lives in

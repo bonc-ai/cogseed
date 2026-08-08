@@ -4,6 +4,37 @@ import * as path from 'node:path';
 
 const html = fs.readFileSync(path.join(__dirname, '../../src/renderer/index.html'), 'utf-8');
 
+function cssBraceDepthAt(source: string, offset: number): number {
+  let depth = 0;
+  let quote = '';
+  let inComment = false;
+  for (let i = 0; i < offset; i += 1) {
+    const char = source[i];
+    const next = source[i + 1];
+    if (inComment) {
+      if (char === '*' && next === '/') {
+        inComment = false;
+        i += 1;
+      }
+      continue;
+    }
+    if (!quote && char === '/' && next === '*') {
+      inComment = true;
+      i += 1;
+      continue;
+    }
+    if (quote) {
+      if (char === '\\') i += 1;
+      else if (char === quote) quote = '';
+      continue;
+    }
+    if (char === '"' || char === "'") quote = char;
+    else if (char === '{') depth += 1;
+    else if (char === '}') depth -= 1;
+  }
+  return depth;
+}
+
 describe('Recall cognition workspace layout', () => {
   it('exposes the complete Recall workspace without KSTAR, Evolution, or Capability pages', () => {
     for (const page of ['overview', 'sources', 'captures', 'brain', 'context', 'ontology', 'candidates', 'assets', 'receipts']) {
@@ -73,6 +104,13 @@ describe('Recall cognition workspace layout', () => {
     expect(css).toMatch(/@media \(max-width: 1100px\)[\s\S]*?\.skills-cognition-surface \.skills-cognition-tab \.ui-icon\s*\{[^}]*display:\s*none;/);
   });
 
+
+  it('keeps the Recall workspace rules outside narrow-screen media queries', () => {
+    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf-8');
+    const recallRules = css.indexOf('/* Recall cognition console. */');
+    expect(recallRules).toBeGreaterThan(0);
+    expect(cssBraceDepthAt(css, recallRules)).toBe(0);
+  });
 
   it('uses PRD page semantics for cognition candidates and ability assets', () => {
     expect(html).toContain('data-i18n="cognition.candidate_review"');
