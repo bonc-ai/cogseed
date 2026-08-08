@@ -521,8 +521,18 @@
     const row = el('div', 'messaging-association-row');
     const copy = el('div', 'messaging-config-card-heading');
     copy.appendChild(el('h3', '', labelFor('messaging.association_title', '')));
-    copy.appendChild(el('p', '', labelFor('messaging.association_sub', '')));
+    copy.appendChild(el('p', '', labelFor(
+      instance.hasCredentials ? 'messaging.connection_bound_sub' : 'messaging.association_sub', '',
+    )));
     row.appendChild(copy);
+    if (instance.hasCredentials) {
+      // Already bound: scanning would try to overwrite the configured
+      // credentials, which main refuses. Show the state instead.
+      row.appendChild(el('span', 'messaging-association-bound', labelFor('messaging.connection_bound', '')));
+      section.appendChild(row);
+      renderQrPanel(instance, section);
+      return section;
+    }
     const scanning = qrIsVisibleFor(instance);
     const scan = el('button', 'btn messaging-scan-button', labelFor(
       scanning ? 'messaging.feishu_qr.retry' : 'messaging.scan', '',
@@ -653,14 +663,14 @@
     setNotice('', '');
     renderCurrent();
     try {
-      let instance = instancesForChannel(channel)[0] || null;
-      if (!instance) {
-        const result = await invoke('messaging.feishu_draft.create', {
-          feishuTenantBrand: channel.feishuTenantBrand,
-          displayName: labelFor(`messaging.channel.${channel.key}.title`, channel.key === 'lark' ? 'Lark' : '飞书'),
-        });
-        instance = result && result.instance;
-      }
+      // Always mint a fresh draft: the "add binding" path must create a new
+      // instance instead of re-running QR against an already-bound bot (main
+      // refuses to overwrite existing credentials).
+      const result = await invoke('messaging.feishu_draft.create', {
+        feishuTenantBrand: channel.feishuTenantBrand,
+        displayName: labelFor(`messaging.channel.${channel.key}.title`, channel.key === 'lark' ? 'Lark' : '飞书'),
+      });
+      const instance = result && result.instance;
       if (!instance || typeof instance.id !== 'string' || !instance.id) throw new Error(labelFor('messaging.open_failed', ''));
       if (state.operation !== operation) return;
       state.instances = state.instances.some((candidate) => candidate.id === instance.id)
@@ -1034,13 +1044,25 @@
   function ownerIdentityCard(instance) {
     const section = card('messaging.owner_title', 'messaging.owner_subtitle', 'messaging-owner-card');
     if (instance.ownerConfigured === true) {
+      // Owner already bound: show who it is and offer clearing only. The
+      // manual id entry reappears in the unbound state for rebinding.
+      const row = el('div', 'messaging-owner-bound-row');
       const status = el('div', 'messaging-manual-bound');
       status.append(
         icon('check-circle', 'messaging-status-icon'),
         el('span', '', instance.ownerLabel || labelFor('messaging.owner_configured', '')),
       );
-      section.appendChild(status);
-    } else if (instance.platform === 'feishu_lark') {
+      row.appendChild(status);
+      const clear = el('button', 'btn messaging-secondary-button', labelFor('messaging.owner_clear', ''));
+      clear.type = 'button';
+      clear.disabled = state.updating;
+      clear.addEventListener('click', () => void updateInstance({ clearOwner: true }, clear));
+      row.appendChild(clear);
+      section.appendChild(row);
+      return section;
+    }
+
+    if (instance.platform === 'feishu_lark') {
       // Auto-binding window: the user just needs to send the bot a direct
       // message — no id entry. Only shown while the window is actually open.
       const pending = el('div', 'messaging-owner-pending');
@@ -1070,9 +1092,7 @@
     ownerNameInput.autocomplete = 'off';
     ownerNameInput.setAttribute('aria-label', labelFor('messaging.owner_name', ''));
 
-    const save = el('button', 'btn messaging-link-button', labelFor(
-      instance.ownerConfigured ? 'messaging.owner_update' : 'messaging.owner_save', '',
-    ));
+    const save = el('button', 'btn messaging-link-button', labelFor('messaging.owner_save', ''));
     save.type = 'button';
     save.disabled = state.updating;
     save.addEventListener('click', () => {
@@ -1089,13 +1109,6 @@
 
     const fields = el('div', 'messaging-manual-fields');
     fields.append(ownerIdInput, ownerNameInput, save);
-    if (instance.ownerConfigured === true) {
-      const clear = el('button', 'btn messaging-secondary-button', labelFor('messaging.owner_clear', ''));
-      clear.type = 'button';
-      clear.disabled = state.updating;
-      clear.addEventListener('click', () => void updateInstance({ clearOwner: true }, clear));
-      fields.appendChild(clear);
-    }
     section.appendChild(fields);
     return section;
   }

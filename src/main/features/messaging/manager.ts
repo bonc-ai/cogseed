@@ -29,6 +29,7 @@ import type {
   MessagingInstanceInternal,
   MessagingInstanceStatus,
   MessagingBinding,
+  MessagingPlatform,
   MessagingPlatformCatalogEntry,
   WorkspaceScope,
 } from './types';

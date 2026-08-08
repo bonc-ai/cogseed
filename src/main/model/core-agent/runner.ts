@@ -183,8 +183,6 @@ function _intersectRenderAllowlist(
 
 export interface BuildRunnerParams {
   sessionId: string;
-  /** Disable all SDK and host tools for text-only utility calls. */
-  disableTools?: boolean;
   systemPrompt?: string;
   userId?: string;
   /** Use an in-memory Session so utility model calls leave no resumable transcript. */
@@ -567,7 +565,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     const recordTeaching = async (
       tier: 'agent' | 'project' | 'shared' | 'user',
       content: string,
-      result: ReturnType<typeof addEntry>,
+      result: Awaited<ReturnType<typeof addEntryTransactional>>,
     ) => {
       if (
         !result.ok
