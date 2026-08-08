@@ -279,15 +279,6 @@ export class WechatPersonalAdapter implements MessagingAdapter {
     }
     if (generation !== this.generation) throw new Error('generation changed');
     this.consecutiveFailures = 0;
-    // 诊断日志：每次 getupdates 响应（临时排查用，合入前移除）
-    log.info('wechat getupdates response', {
-      instanceId: this.instance.id,
-      ret: body.ret,
-      msgsCount: Array.isArray(body.msgs) ? body.msgs.length : 0,
-      bufLen: typeof body.get_updates_buf === 'string' ? body.get_updates_buf.length : 0,
-      firstMsgId: Array.isArray(body.msgs) && body.msgs.length ? body.msgs[0].message_id : undefined,
-      firstFrom: Array.isArray(body.msgs) && body.msgs.length ? body.msgs[0].from_user_id : undefined,
-    });
     this.lastPollAt = Date.now();
     this.lastStatus = statusOf('connected');
     void this.emitStatus(this.lastStatus);
@@ -322,18 +313,7 @@ export class WechatPersonalAdapter implements MessagingAdapter {
       // 绝不能回灌 dispatch 循环造成死循环（Hermes 同样跳过）。
       if (typeof raw.from_user_id === 'string' && raw.from_user_id === this.ilinkBotId) continue;
       const envelope = normalizeInbound(this.instance, this.ownerExternalUserId, raw);
-      if (!envelope) {
-        // 诊断日志：消息到达但归一化失败（临时排查用，合入前移除）
-        log.warn('wechat inbound dropped by normalize', {
-          instanceId: this.instance.id,
-          messageId: typeof raw.message_id === 'string' ? raw.message_id : undefined,
-          from: typeof raw.from_user_id === 'string' ? raw.from_user_id : undefined,
-          hasToken: typeof raw.context_token === 'string' && !!raw.context_token,
-          itemTypes: (raw.item_list || []).map((item) => item?.type),
-          hasGroup: typeof raw.group_id === 'string' && !!raw.group_id,
-        });
-        continue;
-      }
+      if (!envelope) continue;
       // 仅 owner 写 peer state；非 owner 仍 dispatch 进 manager 产生 ledger 拒绝记录
       if (envelope.externalUserId === this.ownerExternalUserId) {
         const contextToken = typeof raw.context_token === 'string' ? raw.context_token.trim() : '';
