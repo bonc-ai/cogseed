@@ -22,7 +22,7 @@ const sourceRuntime = require('../../../scripts/prepare-source-runtime.cjs') as 
   ): boolean;
   copyRuntimeBundle(source: string, destination: string): void;
   parseVariant(argv: readonly string[]): string;
-  parseIntegrationWorktreeVariant(argv: readonly string[]): string;
+  parseMateWorktreeVariant(argv: readonly string[]): string;
 };
 
 const temporaryRoots: string[] = [];
@@ -40,7 +40,7 @@ function createCurrentBundleFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-source-bundle-'));
   temporaryRoots.push(root);
   const destination = path.join(root, 'Mate Agent.app');
-  const identity = sourceRuntime.sourceRuntimeBundleSpec('integration');
+  const identity = sourceRuntime.sourceRuntimeBundleSpec('mate');
 
   for (const relative of REQUIRED_RUNTIME_EXECUTABLES) {
     const executable = path.join(destination, relative);
@@ -87,7 +87,7 @@ afterEach(() => {
 
 describe('macOS source runtime bundle contract', () => {
   it('assigns unique bundle names and identifiers to every source variant', () => {
-    const variants = ['main', 'cognition', 'expense', 'integration', 'optimization'];
+    const variants = ['main', 'cognition', 'expense', 'mate', 'optimization'];
     const specs = variants.map((variant) => sourceRuntime.sourceRuntimeBundleSpec(variant));
 
     expect(new Set(specs.map((spec) => spec.appName)).size).toBe(variants.length);
@@ -96,16 +96,16 @@ describe('macOS source runtime bundle contract', () => {
       'com.mateagent.desktop.source.main',
       'com.mateagent.desktop.source.cognition',
       'com.mateagent.desktop.source.expense',
-      'com.mateagent.desktop.source.integration',
+      'com.mateagent.desktop.source.mate',
       'com.mateagent.desktop.source.optimization',
     ]);
   });
 
-  it('declares connector schemes only for integration', () => {
+  it('declares connector schemes only for mate', () => {
     for (const variant of ['main', 'cognition', 'expense', 'optimization']) {
       expect(sourceRuntime.sourceRuntimeBundleSpec(variant).protocolSchemes).toEqual([]);
     }
-    expect(sourceRuntime.sourceRuntimeBundleSpec('integration').protocolSchemes)
+    expect(sourceRuntime.sourceRuntimeBundleSpec('mate').protocolSchemes)
       .toEqual(['mateagent', 'orkas']);
   });
 
@@ -192,19 +192,19 @@ describe('macOS source runtime bundle contract', () => {
   });
 
   it('requires exactly one canonical, case-sensitive preparation variant', () => {
-    expect(sourceRuntime.parseVariant(['--variant=integration'])).toBe('integration');
+    expect(sourceRuntime.parseVariant(['--variant=mate'])).toBe('mate');
     expect(sourceRuntime.parseVariant(['--variant', 'cognition'])).toBe('cognition');
     expect(() => sourceRuntime.parseVariant([])).toThrow('exactly one');
-    expect(() => sourceRuntime.parseVariant(['--variant=Integration'])).toThrow('invalid');
-    expect(() => sourceRuntime.parseVariant(['--variant=main', '--variant=integration']))
+    expect(() => sourceRuntime.parseVariant(['--variant=Mate'])).toThrow('invalid');
+    expect(() => sourceRuntime.parseVariant(['--variant=main', '--variant=mate']))
       .toThrow('exactly one');
   });
 
-  it('locks the executable bundle-preparation entry to integration', () => {
-    expect(sourceRuntime.parseIntegrationWorktreeVariant(['--variant=integration']))
-      .toBe('integration');
-    expect(() => sourceRuntime.parseIntegrationWorktreeVariant(['--variant=cognition']))
-      .toThrow('locked to the integration runtime');
+  it('locks the executable bundle-preparation entry to mate', () => {
+    expect(sourceRuntime.parseMateWorktreeVariant(['--variant=mate']))
+      .toBe('mate');
+    expect(() => sourceRuntime.parseMateWorktreeVariant(['--variant=cognition']))
+      .toThrow('locked to the mate runtime');
   });
 
   it('rejects a missing path file rather than guessing outside Electron dist', () => {

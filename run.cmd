@@ -3,7 +3,7 @@ REM Mate Agent source launcher with isolated runtime variants.
 setlocal EnableExtensions EnableDelayedExpansion
 set "APP_DIR=%~dp0"
 if "%APP_DIR:~-1%"=="\" set "APP_DIR=%APP_DIR:~0,-1%"
-set "VARIANT=integration"
+set "VARIANT=mate"
 
 :parse_args
 if "%~1"=="" goto args_done
@@ -14,15 +14,15 @@ echo [Mate Agent] Unknown argument: !ARG! 1>&2
 goto usage_error
 
 :args_done
-if defined ORKAS_RUNTIME_VARIANT if not "%ORKAS_RUNTIME_VARIANT%"=="integration" (
-  echo [Mate Agent] This worktree is locked to the integration runtime; ORKAS_RUNTIME_VARIANT=%ORKAS_RUNTIME_VARIANT% is not allowed. 1>&2
+if defined ORKAS_RUNTIME_VARIANT if not "%ORKAS_RUNTIME_VARIANT%"=="mate" (
+  echo [Mate Agent] This worktree is locked to the mate runtime; ORKAS_RUNTIME_VARIANT=%ORKAS_RUNTIME_VARIANT% is not allowed. 1>&2
   exit /b 2
 )
 if defined ORKAS_WORKSPACE_ROOT (
-  echo [Mate Agent] This worktree manages its own integration data root; inherited ORKAS_WORKSPACE_ROOT is not allowed. 1>&2
+  echo [Mate Agent] This worktree manages its own mate data root; inherited ORKAS_WORKSPACE_ROOT is not allowed. 1>&2
   exit /b 2
 )
-set "ORKAS_RUNTIME_VARIANT=integration"
+set "ORKAS_RUNTIME_VARIANT=mate"
 
 if not exist "%APP_DIR%\package.json" (
   echo [Mate Agent] %APP_DIR%\package.json not found; check the project directory layout. 1>&2
@@ -86,5 +86,5 @@ exit /b 2
 
 :usage_ok
 echo Usage: run.cmd
-echo This worktree is locked to the integration runtime identity.
+echo This worktree is locked to the mate runtime identity.
 exit /b 0

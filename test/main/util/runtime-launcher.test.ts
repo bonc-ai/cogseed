@@ -7,30 +7,30 @@ const root = path.join(__dirname, '../../..');
 const read = (name: string) => fs.readFileSync(path.join(root, name), 'utf8');
 
 describe('source runtime launchers', () => {
-  it('locks this worktree to integration and passes that identity to Electron', () => {
+  it('locks this worktree to mate and passes that identity to Electron', () => {
     const shell = read('run.sh');
     const windows = read('run.cmd');
     const bootstrap = read('bootstrap.cjs');
     const packageMeta = JSON.parse(read('package.json')) as { orkasSourceRuntimeVariant?: string };
 
-    expect(shell).toContain('VARIANT="integration"');
-    expect(windows).toContain('set "VARIANT=integration"');
+    expect(shell).toContain('VARIANT="mate"');
+    expect(windows).toContain('set "VARIANT=mate"');
     expect(shell).toContain('--orkas-runtime-variant=$VARIANT');
     expect(windows).toContain('--orkas-runtime-variant=!VARIANT!');
     expect(shell).toContain('prepare-source-runtime.cjs" --variant="$VARIANT"');
     expect(windows).toContain('prepare-source-runtime.cjs" --variant=!VARIANT!');
-    expect(shell).toContain('locked to the integration runtime');
-    expect(windows).toContain('locked to the integration runtime');
+    expect(shell).toContain('locked to the mate runtime');
+    expect(windows).toContain('locked to the mate runtime');
     expect(shell).toContain('Mate Agent.app');
     expect(shell).not.toContain('Usage: ./run.sh [--variant');
     expect(windows).not.toContain('Usage: run.cmd [--variant');
-    expect(packageMeta.orkasSourceRuntimeVariant).toBe('integration');
+    expect(packageMeta.orkasSourceRuntimeVariant).toBe('mate');
     expect(bootstrap).toContain('sourceVariant: packageMeta.orkasSourceRuntimeVariant');
     expect(bootstrap).toContain('allowWorkspaceOverride: isPackagedDev');
   });
 
-  it('rejects every shell argument or environment attempt to override integration', () => {
-    for (const variant of ['main', 'cognition', 'expense', 'integration', 'optimization']) {
+  it('rejects every shell argument or environment attempt to override mate', () => {
+    for (const variant of ['main', 'cognition', 'expense', 'mate', 'optimization']) {
       const result = spawnSync('bash', [path.join(root, 'run.sh'), `--variant=${variant}`], {
         encoding: 'utf8',
         env: { ...process.env, ORKAS_RUNTIME_VARIANT: '' },
@@ -52,7 +52,7 @@ describe('source runtime launchers', () => {
       encoding: 'utf8',
       env: {
         ...process.env,
-        ORKAS_RUNTIME_VARIANT: 'integration',
+        ORKAS_RUNTIME_VARIANT: 'mate',
         ORKAS_WORKSPACE_ROOT: path.join(root, 'shared-data-that-must-not-be-used'),
       },
     });
@@ -80,15 +80,15 @@ describe('source runtime launchers', () => {
     expect(main).toContain('env: relaunchEnv');
   });
 
-  it('keeps protocol ownership in the prepared integration bundle, not launcher code', () => {
+  it('keeps protocol ownership in the prepared mate bundle, not launcher code', () => {
     const sources = `${read('run.sh')}\n${read('run.cmd')}`;
     expect(sources).not.toContain('prepare-source-protocol.cjs');
     expect(sources).not.toContain('setAsDefaultProtocolClient');
   });
 
-  it('locks the case-sensitive Windows environment value to integration', () => {
+  it('locks the case-sensitive Windows environment value to mate', () => {
     const windows = read('run.cmd');
-    expect(windows).toContain('if not "%ORKAS_RUNTIME_VARIANT%"=="integration"');
+    expect(windows).toContain('if not "%ORKAS_RUNTIME_VARIANT%"=="mate"');
     expect(windows).not.toMatch(/if \/I not "%ORKAS_RUNTIME_VARIANT%"/);
     expect(windows).toContain('if defined ORKAS_WORKSPACE_ROOT');
   });

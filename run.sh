@@ -4,13 +4,13 @@
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
-VARIANT="integration"
+VARIANT="mate"
 
 usage() {
   cat <<'EOF'
 Usage: ./run.sh
 
-This worktree is locked to the integration runtime identity. Run cognition,
+This worktree is locked to the Mate Agent runtime identity. Run cognition,
 expense, or optimization module development from their dedicated worktrees.
 EOF
 }
@@ -30,15 +30,15 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-if [ -n "${ORKAS_RUNTIME_VARIANT:-}" ] && [ "$ORKAS_RUNTIME_VARIANT" != "integration" ]; then
-  echo "[Mate Agent] This worktree is locked to the integration runtime; ORKAS_RUNTIME_VARIANT=$ORKAS_RUNTIME_VARIANT is not allowed." >&2
+if [ -n "${ORKAS_RUNTIME_VARIANT:-}" ] && [ "$ORKAS_RUNTIME_VARIANT" != "mate" ]; then
+  echo "[Mate Agent] This worktree is locked to the mate runtime; ORKAS_RUNTIME_VARIANT=$ORKAS_RUNTIME_VARIANT is not allowed." >&2
   exit 2
 fi
 if [ -n "${ORKAS_WORKSPACE_ROOT:-}" ]; then
-  echo "[Mate Agent] This worktree manages its own integration data root; inherited ORKAS_WORKSPACE_ROOT is not allowed." >&2
+  echo "[Mate Agent] This worktree manages its own mate data root; inherited ORKAS_WORKSPACE_ROOT is not allowed." >&2
   exit 2
 fi
-export ORKAS_RUNTIME_VARIANT="integration"
+export ORKAS_RUNTIME_VARIANT="mate"
 
 if [ ! -f "$APP_DIR/package.json" ]; then
   echo "[Mate Agent] $APP_DIR/package.json not found; check the project directory layout." >&2

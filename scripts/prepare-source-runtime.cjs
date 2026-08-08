@@ -6,12 +6,12 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const brand = require('../src/resources/brand.json');
 
-const RUNTIME_VARIANTS = Object.freeze(['main', 'cognition', 'expense', 'integration', 'messaging', 'optimization']);
+const RUNTIME_VARIANTS = Object.freeze(['main', 'cognition', 'expense', 'mate', 'messaging', 'optimization']);
 const LABELS = Object.freeze({
   main: 'Main',
   cognition: 'Cognition',
   expense: 'Expense',
-  integration: '',
+  mate: '',
   messaging: 'Messaging',
   optimization: 'Optimization',
 });
@@ -33,7 +33,7 @@ function sourceRuntimeIdentity(value) {
     variant: value,
     appName: LABELS[value] ? `${brand.appName} [${LABELS[value]}]` : brand.appName,
     appId: `${brand.appId}.source.${value}`,
-    protocolOwner: value === 'integration',
+    protocolOwner: value === 'mate',
   });
 }
 
@@ -74,7 +74,7 @@ function currentAppFromPathFile(distDir, pathFile) {
 }
 
 function findSourceApp(distDir, pathFile) {
-  for (const name of ['Electron.app', 'Orkas.app', `${brand.appName}.app`, `${brand.appName} [Integration].app`]) {
+  for (const name of ['Electron.app', 'Orkas.app', `${brand.appName}.app`, `${brand.appName} [Mate].app`]) {
     const candidate = path.join(distDir, name);
     if (fs.existsSync(candidate)) return candidate;
   }
@@ -255,17 +255,17 @@ function parseVariant(argv) {
   return sourceRuntimeIdentity(values[0]).variant;
 }
 
-function parseIntegrationWorktreeVariant(argv) {
+function parseMateWorktreeVariant(argv) {
   const variant = parseVariant(argv);
-  if (variant !== 'integration') {
-    throw new Error('this source worktree is locked to the integration runtime variant');
+  if (variant !== 'mate') {
+    throw new Error('this source worktree is locked to the mate runtime variant');
   }
   return variant;
 }
 
 function main() {
   try {
-    const result = prepareSourceRuntimeBundle({ variant: parseIntegrationWorktreeVariant(process.argv.slice(2)) });
+    const result = prepareSourceRuntimeBundle({ variant: parseMateWorktreeVariant(process.argv.slice(2)) });
     if (result.appBundle) console.log(`[Mate Agent] Prepared source runtime bundle: ${result.appName}`);
   } catch (error) {
     console.error(`[Mate Agent] ${error instanceof Error ? error.message : String(error)}`);
@@ -283,6 +283,6 @@ module.exports = {
   bundleIsCurrent,
   copyRuntimeBundle,
   parseVariant,
-  parseIntegrationWorktreeVariant,
+  parseMateWorktreeVariant,
   prepareSourceRuntimeBundle,
 };
