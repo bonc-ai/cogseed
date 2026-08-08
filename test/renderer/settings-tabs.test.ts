@@ -366,6 +366,23 @@ describe('settings tabs module', () => {
     expect(source).toContain("WECHAT_TERMINAL_STATES.has(nextState)");
   });
 
+  it('renders the wechat card with iLink copy and toggles the scan button to cancel while active', () => {
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    expect(source).toContain("labelFor('messaging.wechat_qr.title', '')");
+    expect(source).toContain("labelFor('messaging.wechat_qr.subtitle', '')");
+    expect(source).toContain("flowActive ? 'messaging.wechat_qr.cancel' : 'messaging.wechat_qr.start'");
+    expect(source).toContain('if (flowActive) void cancelWechatFlow();');
+    expect(source).toContain("void startWechatFlow();\n    });\n    row.appendChild(scan);");
+  });
+
+  it('routes an immediate-terminal start response through notice + cancel + reset', () => {
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    expect(source).toContain("await completeWechatFlow(registration, flowId, revision);");
+    expect(source).toContain("setNotice(wechatStatusLabel(state.wechat.state, state.wechat.errorCode), 'error');");
+    expect(source).toContain("await cancelWechatFlow({ silent: true, render: false });");
+    expect(source).toContain('scheduleWechatPoll(flowId);');
+  });
+
   it('cancels an in-flight wechat QR flow when switching channels', () => {
     const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
     expect(source).toContain('await cancelWechatFlow({ silent: true, render: false })');

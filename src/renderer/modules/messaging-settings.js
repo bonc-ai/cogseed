@@ -1112,13 +1112,22 @@
       state.wechat.flowId = flowId;
       state.wechat.state = typeof registration.state === 'string' ? registration.state : 'awaiting_scan';
       state.wechat.starting = false;
+      state.wechat.errorCode = typeof registration.errorCode === 'string' ? registration.errorCode : '';
       if (typeof registration.qrUrl === 'string' && registration.qrUrl.trim()) {
         state.wechat.qrSource = registration.qrUrl.trim();
       } else if (typeof registration.qrCode === 'string' && registration.qrCode.trim()) {
         state.wechat.qrSource = registration.qrCode.trim();
       }
       renderCurrent();
-      if (!WECHAT_TERMINAL_STATES.has(state.wechat.state)) scheduleWechatPoll(flowId);
+      if (state.wechat.state === 'completed') {
+        await completeWechatFlow(registration, flowId, revision);
+      } else if (WECHAT_TERMINAL_STATES.has(state.wechat.state)) {
+        setNotice(wechatStatusLabel(state.wechat.state, state.wechat.errorCode), 'error');
+        await cancelWechatFlow({ silent: true, render: false });
+        renderCurrent();
+      } else {
+        scheduleWechatPoll(flowId);
+      }
     } catch (error) {
       if (state.wechat.revision !== revision) return;
       state.wechat.starting = false;
@@ -1142,16 +1151,6 @@
     const statusRow = el('div', `messaging-qr-status is-${state.wechat.state || 'starting'}`);
     statusRow.append(icon('loader', 'messaging-qr-status-icon'), el('span', '', status));
     info.appendChild(statusRow);
-    const actions = el('div', 'messaging-qr-actions');
-    if (wechatFlowActive()) {
-      const cancel = el('button', 'btn messaging-secondary-button', labelFor('messaging.wechat_qr.cancel', ''));
-      cancel.type = 'button';
-      cancel.disabled = state.wechat.cancelling;
-      cancel.appendChild(icon('x', 'messaging-action-icon'));
-      cancel.addEventListener('click', () => void cancelWechatFlow());
-      actions.appendChild(cancel);
-    }
-    info.appendChild(actions);
     panel.append(host, info);
     cardRoot.appendChild(panel);
   }
@@ -1160,17 +1159,20 @@
     const section = el('section', 'messaging-config-card messaging-association-card');
     const row = el('div', 'messaging-association-row');
     const copy = el('div', 'messaging-config-card-heading');
-    copy.appendChild(el('h3', '', labelFor('messaging.association_title', '')));
-    copy.appendChild(el('p', '', labelFor('messaging.association_sub', '')));
+    copy.appendChild(el('h3', '', labelFor('messaging.wechat_qr.title', '')));
+    copy.appendChild(el('p', '', labelFor('messaging.wechat_qr.subtitle', '')));
     row.appendChild(copy);
     const flowActive = wechatFlowActive();
     const scan = el('button', 'btn messaging-scan-button', labelFor(
-      flowActive ? 'messaging.wechat_qr.retry' : 'messaging.wechat_qr.start', '',
+      flowActive ? 'messaging.wechat_qr.cancel' : 'messaging.wechat_qr.start', '',
     ));
     scan.type = 'button';
     scan.disabled = state.updating || state.wechat.starting || state.wechat.cancelling;
-    scan.appendChild(icon(flowActive ? 'refresh' : 'qr-code', 'messaging-action-icon'));
-    scan.addEventListener('click', () => void startWechatFlow());
+    scan.appendChild(icon(flowActive ? 'x' : 'qr-code', 'messaging-action-icon'));
+    scan.addEventListener('click', () => {
+      if (flowActive) void cancelWechatFlow();
+      else void startWechatFlow();
+    });
     row.appendChild(scan);
     section.appendChild(row);
     renderWechatQrPanel(section);
