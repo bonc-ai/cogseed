@@ -311,9 +311,10 @@ describe('settings tabs module', () => {
   it('creates a fresh Feishu draft when adding a second instance', () => {
     const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
     expect(source).toContain('void startQrForChannel(channel, { createNew: true })');
-    expect(source).toContain('function startQrForChannel(channel, options)');
-    expect(source).toContain('const createNew = options?.createNew === true;');
-    expect(source).toContain('let instance = createNew ? null : instancesForChannel(channel)[0] || null;');
+    expect(source).toContain('async function startQrForChannel(channel)');
+    // Always mint a fresh draft: re-running QR against an already-bound bot is
+    // refused by main (it would overwrite existing credentials).
+    expect(source).not.toContain('instancesForChannel(channel)[0] || null');
   });
 
   it('accepts only verified wecom auth messages from the official popup', () => {
