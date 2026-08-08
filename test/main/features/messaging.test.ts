@@ -2310,6 +2310,22 @@ describe('wechat_personal registry', () => {
       .toThrow();
   });
 
+  it('accepts opaque iLink tokens of any printable-ASCII shape (base64 style)', async () => {
+    const { _registryTestHooks } = await import('../../../src/main/features/messaging/registry');
+    // 标准 base64 含 +/=；token 是不透明串，只做长度与字符边界校验
+    const base64Token = 'A'.repeat(40) + '+/=';
+    expect(_registryTestHooks.validateSecret('wechat_personal', { ...validSecret, ilinkBotToken: base64Token }))
+      .toEqual({ ...validSecret, ilinkBotToken: base64Token });
+    // 空白/控制字符仍拒绝：内部空格（trim 后仍在）→ throw
+    expect(() => _registryTestHooks.validateSecret('wechat_personal', { ...validSecret, ilinkBotToken: `ab${'c'.repeat(13)} d` }))
+      .toThrow();
+    // 长度边界不变：15 位仍拒绝，16 位通过
+    expect(() => _registryTestHooks.validateSecret('wechat_personal', { ...validSecret, ilinkBotToken: 'x'.repeat(15) }))
+      .toThrow();
+    expect(_registryTestHooks.validateSecret('wechat_personal', { ...validSecret, ilinkBotToken: 'x'.repeat(16) }))
+      .toEqual({ ...validSecret, ilinkBotToken: 'x'.repeat(16) });
+  });
+
   it('creates a wechat instance with owner and allowlist in one atomic write', async () => {
     const registry = await import('../../../src/main/features/messaging/registry');
     const created = await registry.createWechatInstance('uid-1', {

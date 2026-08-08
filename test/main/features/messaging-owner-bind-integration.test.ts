@@ -266,6 +266,102 @@ describe('wechat_personal end-to-end', () => {
     }
   });
 
+  it('merged burst replies use the LAST inbound tokenRef, not the first (spec §3.1)', async () => {
+    let busListener: ((event: unknown) => void) | undefined;
+    const groupSend = vi.fn(async () => ({ ok: true, msg: { id: 'user-msg-1', from: 'user', text: '' } }));
+    const sendMessage = vi.fn(async () => ({ deliveryId: 'remote-reply-1' }));
+    const adapter: import('../../../src/main/features/messaging/types').MessagingAdapter = {
+      platform: 'wechat_personal',
+      async start(signal, callbacks) {
+        await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      async stop() {},
+      async checkHealth() {
+        return { kind: 'connected', checkedAt: new Date().toISOString() };
+      },
+      sendMessage,
+    };
+    const subscribe = vi.fn((_uid: string, _cid: string, listener: (event: unknown) => void) => {
+      busListener = listener;
+      return () => { busListener = undefined; };
+    });
+    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
+      createAdapter: vi.fn(() => adapter),
+    }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe }));
+
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const ledger = await import('../../../src/main/features/messaging/ledger');
+      const created = await registry.createWechatInstance('uid-1', {
+        displayName: '我的微信',
+        ilinkBotToken: 't'.repeat(64),
+        ilinkBaseUrl: 'https://ilinkai.weixin.qq.com',
+        ilinkBotId: 'bot-1',
+        ownerExternalUserId: 'owner-1',
+      });
+      await manager.setEnabled('uid-1', created.id, true);
+      await vi.waitFor(async () => {
+        const instances = await manager.listInstances('uid-1');
+        expect(instances[0]?.status.kind).toBe('connected');
+      });
+
+      const envelope = {
+        platform: 'wechat_personal' as const,
+        instanceId: created.id,
+        externalChatId: 'owner-1',
+        externalUserId: 'owner-1',
+        text: '',
+        isGroup: false,
+        mentionPresent: false,
+        receivedAt: new Date().toISOString(),
+      };
+      // 同一 getupdates 批次的两条消息落入同一个 merge 窗口：第一条带
+      // 旧 ref，第二条带新 ref。
+      const first = manager.enqueueInbound('uid-1', {
+        ...envelope, externalMessageId: 'in-1', text: '第一句', contextTokenRef: 'ref-old',
+      });
+      const second = manager.enqueueInbound('uid-1', {
+        ...envelope, externalMessageId: 'in-2', text: '第二句', contextTokenRef: 'ref-new',
+      });
+      const results = await Promise.all([first, second]);
+      expect(results[0].accepted).toBe(true);
+      expect(results[1]).toMatchObject({ accepted: false, duplicate: true, reason: 'merged' });
+      // 合并为单一入站轮次
+      await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(1));
+
+      busListener?.({
+        type: 'message',
+        turn_end: true,
+        source_msg_id: 'user-msg-1',
+        msg: { id: 'reply-1', from: 'commander', text: '合并回复' },
+      });
+      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+      // 回复必须绑定批次中最后一条消息的 tokenRef，而不是第一条
+      expect(sendMessage.mock.calls[0][3]).toMatchObject({ contextTokenRef: 'ref-new' });
+      expect(await ledger.getDelivery('uid-1', ledger.deliveryKey(created.id, 'reply-1'))).toMatchObject({
+        status: 'sent',
+        contextTokenRef: 'ref-new',
+      });
+
+      await manager.stopForUser('uid-1');
+    } finally {
+      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      vi.doUnmock('../../../src/main/features/group_chat');
+      vi.doUnmock('../../../src/main/features/group_chat/bus');
+      vi.resetModules();
+    }
+  });
+
   it('keeps each reply on the token of its own inbound when turns interleave', async () => {
     let busListener: ((event: unknown) => void) | undefined;
     const groupSend = vi.fn(async () => ({ ok: true, msg: { id: 'user-msg-1', from: 'user', text: '' } }));

@@ -1143,7 +1143,19 @@ async function flushBurstBatch(uid: string, batch: BurstBatch<{ envelope: Inboun
         // Trailing ids are best-effort dedup markers; a bad id must not fail the batch.
       }
     }
-    const envelope: InboundEnvelope = { ...first, externalMessageId: batch.ids[0], text: batch.text };
+    // 合并批次携带最后一条有效消息的 tokenRef：getupdates 多消息批次里
+    // 靠前的 context_token 可能已陈旧（spec §3.1），回复必须绑定该轮
+    // 最新的一条，而不是第一条。
+    let lastTokenRef: string | undefined;
+    for (const item of batch.payloads) {
+      if (item.envelope.contextTokenRef) lastTokenRef = item.envelope.contextTokenRef;
+    }
+    const envelope: InboundEnvelope = {
+      ...first,
+      externalMessageId: batch.ids[0],
+      text: batch.text,
+      ...(lastTokenRef !== undefined ? { contextTokenRef: lastTokenRef } : {}),
+    };
     const result = await handleInbound(uid, envelope);
     firstResolve(result);
     for (const item of batch.payloads.slice(1)) {
@@ -1483,7 +1495,7 @@ async function startInstance(uid: string, instanceId: string): Promise<void> {
   await withLifecycle(uid, instanceId, () => startRuntime(uid, instanceId));
 }
 
-async function stopInstance(uid: string, instanceId: string): Promise<void> {
+export async function stopInstance(uid: string, instanceId: string): Promise<void> {
   await withLifecycle(uid, instanceId, () => stopRuntime(uid, instanceId));
 }
 

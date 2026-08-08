@@ -335,6 +335,60 @@ describe('wechat personal adapter wire contract', () => {
       expect((msg.item_list as Array<{ text_item: { text: string } }>)[0].text_item.text).toBe('回复内容');
     });
 
+    it('chunkText splits long replies at 4000 units without breaking surrogate pairs', async () => {
+      const { _wechatTestHooks } = await import('../../../src/main/features/messaging/wechat-personal');
+      const long = 'x'.repeat(9_500);
+      const chunks = _wechatTestHooks.chunkText(long, 4_000);
+      expect(chunks.map((c) => c.length)).toEqual([4_000, 4_000, 1_500]);
+      expect(chunks.join('')).toBe(long);
+      // 代理对（emoji）不被拆开：每块长度保持偶数（完整代理对）
+      const emoji = '😀'.repeat(3_000);
+      const emojiChunks = _wechatTestHooks.chunkText(emoji, 4_000);
+      expect(emojiChunks.map((c) => c.length)).toEqual([4_000, 2_000]);
+      expect(emojiChunks.join('')).toBe(emoji);
+      // 短文本不切分
+      expect(_wechatTestHooks.chunkText('short', 4_000)).toEqual(['short']);
+    });
+
+    it('sends long replies as multiple text_item chunks in one send, arriving complete', async () => {
+      const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
+      const stateStore = await import('../../../src/main/features/messaging/wechat-state-store');
+      const fingerprint = stateStore.wechatCredentialFingerprint('bot-1', 'owner-1');
+      const tokenRef = await stateStore.saveWechatPeerToken(
+        'uid-1', 'inst-1', fingerprint, 'owner-1', 'ctx-bound', 1_700_000_000_000,
+      );
+      const sent: Array<{ body: Record<string, unknown> }> = [];
+      vi.stubGlobal('fetch', vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+        sent.push({ body: JSON.parse(String(init.body)) });
+        return new Response(JSON.stringify({ ret: 0 }), { status: 200 });
+      }));
+      const adapter = new WechatPersonalAdapter(ownerInstance, secret, 'uid-1');
+      const longText = '段'.repeat(4_500);
+      await adapter.sendMessage('owner-1', longText, undefined, { contextTokenRef: tokenRef });
+      expect(sent).toHaveLength(1);
+      const items = (sent[0].body.msg as { item_list: Array<{ type: string; text_item: { text: string } }> }).item_list;
+      expect(items).toHaveLength(2);
+      expect(items.every((item) => item.type === 'text_item')).toBe(true);
+      expect(items.map((item) => item.text_item.text.length)).toEqual([4_000, 500]);
+      expect(items.map((item) => item.text_item.text).join('')).toBe(longText);
+    });
+
+    it('refuses to send when the tokenRef peer does not match the reply target', async () => {
+      const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
+      const stateStore = await import('../../../src/main/features/messaging/wechat-state-store');
+      const fingerprint = stateStore.wechatCredentialFingerprint('bot-1', 'owner-1');
+      const tokenRef = await stateStore.saveWechatPeerToken(
+        'uid-1', 'inst-1', fingerprint, 'owner-1', 'ctx-bound', 1_700_000_000_000,
+      );
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+      const adapter = new WechatPersonalAdapter(ownerInstance, secret, 'uid-1');
+      // tokenRef 编码 owner-1，但回复目标是另一位 peer → wechat_context_missing
+      await expect(adapter.sendMessage('stranger-1', 'hi', undefined, { contextTokenRef: tokenRef }))
+        .rejects.toThrow('wechat_context_missing');
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
     it('injects a tokenRef into the envelope before dispatch and persists the token', async () => {
       const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
       const stateStore = await import('../../../src/main/features/messaging/wechat-state-store');

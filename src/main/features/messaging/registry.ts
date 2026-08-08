@@ -378,7 +378,10 @@ function validateSecret(platform: MessagingPlatform, secret: MessagingSecret): M
   }
   if (platform === 'wechat_personal') {
     const ilinkBotToken = requiredSecretText(secret.ilinkBotToken, 'ilink bot token', 512);
-    if (!/^[A-Za-z0-9._~-]{16,512}$/.test(ilinkBotToken)) throw new Error('invalid iLink bot token');
+    // iLink token 是不透明串，规范未公开格式：只做长度与字符边界校验
+    // （可打印 ASCII、无空白/控制符、16-512 位），不猜测格式——标准
+    // base64 含 +/= 也必须通过。
+    if (!/^[\x21-\x7e]{16,512}$/.test(ilinkBotToken)) throw new Error('invalid iLink bot token');
     const ilinkBaseUrl = requiredSecretText(secret.ilinkBaseUrl, 'ilink base url', 512);
     if (!isTrustedIlinkBaseUrl(ilinkBaseUrl)) throw new Error('untrusted iLink base url');
     const ilinkBotId = requiredSecretText(secret.ilinkBotId, 'ilink bot id', 128);
@@ -672,6 +675,32 @@ export async function updateStatus(uid: string, instanceId: string, status: Mess
     current.status = normalizeStatus(status);
     current.updatedAt = nowIso();
     await writeConfig(uid, config);
+  });
+}
+
+/**
+ * Atomically disable every other wechat_personal instance of this user in a
+ * single per-user lock write, leaving only `exceptInstanceId` untouched.
+ * The wechat rebind flow uses this so a fresh registration never leaves a
+ * previous instance enabled — two bots would otherwise poll the same
+ * owner's messages and double-reply. Returns the ids that were flipped.
+ * Callers must also stop the affected instances' runtimes afterwards; the
+ * flag flip itself already stops new inbound dispatch.
+ */
+export async function disableOtherWechatPersonalInstances(uid: string, exceptInstanceId: string): Promise<string[]> {
+  assertUserId(uid);
+  assertInstanceId(exceptInstanceId);
+  return getLock(uid).runExclusive(async () => {
+    const config = await readConfig(uid);
+    const disabled: string[] = [];
+    for (const [id, instance] of Object.entries(config.instances)) {
+      if (id === exceptInstanceId || instance.platform !== 'wechat_personal' || !instance.enabled) continue;
+      instance.enabled = false;
+      instance.updatedAt = nowIso();
+      disabled.push(id);
+    }
+    if (disabled.length) await writeConfig(uid, config);
+    return disabled;
   });
 }
 

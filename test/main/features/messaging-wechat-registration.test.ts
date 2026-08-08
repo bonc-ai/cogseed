@@ -171,6 +171,46 @@ describe('wechat registration flow', () => {
     expect(await registry.listInstances('uid-1')).toHaveLength(0);
   });
 
+  it('disables a previously enabled wechat instance when a rebind completes', async () => {
+    const registry = await import('../../../src/main/features/messaging/registry');
+    const oldInstance = await registry.createWechatInstance('uid-1', {
+      displayName: '旧微信',
+      ilinkBotToken: 't'.repeat(64),
+      ilinkBaseUrl: 'https://ilinkai.weixin.qq.com',
+      ilinkBotId: 'bot-old',
+      ownerExternalUserId: 'owner-1',
+    });
+    await registry.updateInstance('uid-1', oldInstance.id, { enabled: true });
+    expect((await registry.getInstance('uid-1', oldInstance.id))?.enabled).toBe(true);
+
+    const { startWechatQrRegistration, getWechatQrRegistrationStatus } =
+      await import('../../../src/main/features/messaging/wechat-registration');
+    vi.stubGlobal('fetch', vi.fn()
+      .mockImplementationOnce(async () => new Response(JSON.stringify({ ret: 0, qrcode: 'qr-rebind' }), { status: 200 }))
+      .mockImplementationOnce(async () => new Response(JSON.stringify({
+        ret: 0,
+        status: 'confirmed',
+        bot_token: 'n'.repeat(64),
+        baseurl: 'https://ilinkai.weixin.qq.com',
+        ilink_bot_id: 'bot-new',
+        ilink_user_id: 'owner-1',
+      }), { status: 200 })));
+    const started = await startWechatQrRegistration('uid-1');
+    await vi.waitFor(() => {
+      expect(getWechatQrRegistrationStatus('uid-1', started.flowId).state).toBe('completed');
+    }, { timeout: 8_000, interval: 100 });
+
+    const instances = await registry.listInstances('uid-1');
+    expect(instances).toHaveLength(2);
+    // 旧实例被禁用，不再轮询/处理 owner 消息
+    const oldNow = instances.find((i) => i.id === oldInstance.id);
+    expect(oldNow?.enabled).toBe(false);
+    // 新实例存在且默认 disabled（由 UI 启用）
+    const fresh = instances.find((i) => i.id !== oldInstance.id);
+    expect(fresh?.enabled).toBe(false);
+    expect(fresh?.ownerConfigured).toBe(true);
+  });
+
   it('rejects status access and cancel for a flow owned by another uid', async () => {
     const { startWechatQrRegistration, getWechatQrRegistrationStatus, cancelWechatQrRegistration } =
       await import('../../../src/main/features/messaging/wechat-registration');

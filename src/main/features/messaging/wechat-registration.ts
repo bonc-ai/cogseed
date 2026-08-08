@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { createLogger } from '../../logger';
 import { nowIso, safeId } from '../../storage';
 import { logErrorSummary } from '../../util/log-redact';
-import { createWechatInstance, deleteInstance, isTrustedIlinkBaseUrl } from './registry';
+import * as manager from './manager';
+import { createWechatInstance, deleteInstance, disableOtherWechatPersonalInstances, isTrustedIlinkBaseUrl } from './registry';
 import type { MessagingInstanceClient } from './types';
 import { clearWechatInstanceState } from './wechat-state-store';
 
@@ -238,6 +239,28 @@ async function completeConfirmed(
     log.warn('wechat instance creation failed', { flowId: flow.flowId, error: logErrorSummary(error) });
     finish(flow, 'failed', 'instance_create_failed');
     return;
+  }
+  if (isCancelled(flow)) {
+    await cleanupCancelledInstance(flow, instance.id);
+    return;
+  }
+  // 重绑语义：同一 uid 只能有一个在跑的 wechat_personal 实例。新实例已
+  // 创建（默认 disabled），这里先原子性禁用其他 wechat 实例（单次
+  // per-user 锁写入，enabled=false 即拒绝其新入站），再逐个停掉它们的
+  // runtime——顺序固定，保证任一时刻最多一个 bot 轮询，旧凭据不会继续
+  // 消费 owner 消息造成重复回复。逐实例停跑是 best-effort：某个实例停
+  // 失败不阻断本次重绑（flag 已翻转为禁用）。
+  const disabledIds = await disableOtherWechatPersonalInstances(flow.uid, instance.id);
+  for (const otherId of disabledIds) {
+    try {
+      await manager.stopInstance(flow.uid, otherId);
+    } catch (error) {
+      log.warn('wechat rebind stop previous instance failed', {
+        flowId: flow.flowId,
+        instanceId: otherId,
+        error: logErrorSummary(error),
+      });
+    }
   }
   if (isCancelled(flow)) {
     await cleanupCancelledInstance(flow, instance.id);

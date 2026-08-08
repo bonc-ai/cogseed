@@ -215,18 +215,24 @@ export class WechatPersonalAdapter implements MessagingAdapter {
     if (tokenRef) {
       // 回复场景：必须使用触发该轮的 token（tokenRef 编码 peerId）
       const peer = await stateStore.readWechatPeerToken(this.uid, this.instance.id, tokenRef);
-      token = peer?.token || '';
+      // 防御性校验：tokenRef 编码的 peerId 必须与回复目标一致，否则视为
+      // 上下文缺失，绝不把某位 peer 的 token 发给另一位 peer。
+      if (!peer || peer.peerId !== chatId) throw new Error('wechat_context_missing');
+      token = peer.token;
     } else if (chatId === this.ownerExternalUserId) {
       // 主动消息场景（无入站触发的 ref）：仅允许发给 owner 本人
       const state = await stateStore.loadWechatState(this.uid, this.instance.id, this.fingerprint);
       token = state?.peers[chatId]?.contextToken || '';
     }
     if (!token || !chatId) throw new Error('wechat_context_missing');
+    // 长回复按 4000 字符分块为多个 text_item，一次 send 完整送达，不做
+    // 静默截断。
+    const chunks = chunkText(text, 4_000);
     const body = await this.request<{ msg_id?: string }>('/ilink/bot/sendmessage', {
       msg: {
         to_user_id: chatId,
         context_token: token,
-        item_list: [{ type: 'text_item', text_item: { text: text.slice(0, 4_000) } }],
+        item_list: chunks.map((chunk) => ({ type: 'text_item', text_item: { text: chunk } })),
       },
     }, lifecycleSignal || new AbortController().signal);
     return body && typeof body.msg_id === 'string' ? { deliveryId: String(body.msg_id) } : {};
@@ -375,9 +381,32 @@ export function normalizeInbound(
   };
 }
 
+/** Split a reply into ≤ `max` UTF-16 units per chunk without splitting
+ * surrogate pairs (emoji stay intact). The iLink protocol's `item_list` is
+ * an array, so a long reply is sent as several `text_item` chunks in one
+ * send and arrives complete instead of being silently truncated. */
+export function chunkText(text: string, max: number): string[] {
+  if (text.length <= max) return [text];
+  const chunks: string[] = [];
+  let current = '';
+  let units = 0;
+  for (const ch of text) {
+    if (units + ch.length > max && current) {
+      chunks.push(current);
+      current = '';
+      units = 0;
+    }
+    current += ch;
+    units += ch.length;
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
 export const _wechatTestHooks = {
   buildHeaders,
   classifyError,
   normalizeInbound,
   statusOf,
+  chunkText,
 };
