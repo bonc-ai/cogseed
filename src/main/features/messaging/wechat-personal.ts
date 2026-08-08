@@ -19,16 +19,25 @@ import type {
 const log = createLogger('messaging:wechat-personal');
 
 const CLIENT_VERSION = 'pc-1.0.0';
-// Task 5 wires these into the wire client: REQUEST_TIMEOUT_MS bounds a single
-// HTTP call and LONG_POLL_TIMEOUT_MS is the poll deadline that falls back to
-// a fresh poll without an error status. Declared here so the wire contract
-// stays documented; unused until then.
+// Wire-client bounds: REQUEST_TIMEOUT_MS caps a single HTTP call, and
+// LONG_POLL_TIMEOUT_MS is the getupdates poll deadline — when the server
+// holds the connection past it, the poll falls back to a fresh poll without
+// an error status or backoff (see WechatPollDeadlineError).
 const LONG_POLL_TIMEOUT_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 35_000;
 const RETRY_BASE_MS = 2_000;
 const RETRY_MAX_MS = 30_000;
 /** checkHealth: last successful long poll within this window counts as connected. */
 const HEALTH_STALE_MS = 90_000;
+
+/** Long-poll deadline: the server held the connection without new messages.
+ * Normal control flow — start() falls back to a fresh poll immediately, with
+ * no error status and no failure-counter bump. */
+class WechatPollDeadlineError extends Error {
+  constructor() {
+    super('wechat long poll deadline');
+  }
+}
 
 export type WechatErrorClass = 'network' | 'reauth_required' | 'delivery_rejected';
 
@@ -89,12 +98,16 @@ export class WechatPersonalAdapter implements MessagingAdapter {
     body: Record<string, unknown>,
     signal: AbortSignal,
   ): Promise<T & { ret: number; errmsg?: string }> {
+    // REQUEST_TIMEOUT_MS bounds a single HTTP call. The timeout signal's
+    // timer is unref'd by the runtime, so a settled request never keeps the
+    // process alive.
+    const deadline = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
     const response = await fetch(`${this.ilinkBaseUrl}${pathname}`, {
       method: 'POST',
       headers: buildHeaders(this.ilinkBotId, this.ilinkBotToken),
       body: JSON.stringify({ base_info: {}, ...body }),
       redirect: 'error',
-      signal,
+      signal: AbortSignal.any([signal, deadline]),
     });
     if (response.status === 401) throw new Error('HTTP 401');
     const text = await response.text();
@@ -115,6 +128,7 @@ export class WechatPersonalAdapter implements MessagingAdapter {
     if (this.callbacks) throw new Error('Wechat adapter already started');
     this.callbacks = callbacks;
     this.terminalError = null;
+    this.consecutiveFailures = 0;
     this.generation += 1;
     const generation = this.generation;
     // A broken status callback must not wedge the adapter: clear callbacks so
@@ -134,6 +148,10 @@ export class WechatPersonalAdapter implements MessagingAdapter {
           await this.handleBatch(generation, body, signal);
         } catch (error) {
           if (generation !== this.generation || signal.aborted) return;
+          // The long-poll deadline is normal control flow: the server held
+          // the connection without new messages. Fall back to a fresh poll
+          // immediately — no backoff, no error status, no failure bump.
+          if (error instanceof WechatPollDeadlineError) continue;
           const cls = classifyError(error);
           if (cls === 'reauth_required') {
             this.terminalError = new Error('Wechat needs re-scan');
@@ -185,14 +203,33 @@ export class WechatPersonalAdapter implements MessagingAdapter {
     return statusOf('disconnected');
   }
 
-  /** Task 5 completes inbound/outbound handling. */
-  sendMessage(
-    _chatId: string,
-    _text: string,
-    _signal?: AbortSignal,
-    _context?: MessagingSendContext,
+  async sendMessage(
+    chatId: string,
+    text: string,
+    lifecycleSignal?: AbortSignal,
+    context?: MessagingSendContext,
   ): Promise<{ deliveryId?: string }> {
-    throw new Error('not implemented');
+    const stateStore = await import('./wechat-state-store');
+    const tokenRef = typeof context?.contextTokenRef === 'string' ? context.contextTokenRef : '';
+    let token = '';
+    if (tokenRef) {
+      // 回复场景：必须使用触发该轮的 token（tokenRef 编码 peerId）
+      const peer = await stateStore.readWechatPeerToken(this.uid, this.instance.id, tokenRef);
+      token = peer?.token || '';
+    } else if (chatId === this.ownerExternalUserId) {
+      // 主动消息场景（无入站触发的 ref）：仅允许发给 owner 本人
+      const state = await stateStore.loadWechatState(this.uid, this.instance.id, this.fingerprint);
+      token = state?.peers[chatId]?.contextToken || '';
+    }
+    if (!token || !chatId) throw new Error('wechat_context_missing');
+    const body = await this.request<{ msg_id?: string }>('/ilink/bot/sendmessage', {
+      msg: {
+        to_user_id: chatId,
+        context_token: token,
+        item_list: [{ type: 'text_item', text_item: { text: text.slice(0, 4_000) } }],
+      },
+    }, lifecycleSignal || new AbortController().signal);
+    return body && typeof body.msg_id === 'string' ? { deliveryId: String(body.msg_id) } : {};
   }
 
   private async getUpdates(
@@ -202,10 +239,20 @@ export class WechatPersonalAdapter implements MessagingAdapter {
     const stateStore = await import('./wechat-state-store');
     const state = await stateStore.loadWechatState(this.uid, this.instance.id, this.fingerprint);
     const cursor = state?.getUpdatesBuf || '';
-    const body = await this.request<{ get_updates_buf?: string; messages?: RawWechatMessage[] }>('/ilink/bot/getupdates', {
-      get_updates_buf: cursor,
-      long_polling: true,
-    }, signal);
+    // LONG_POLL_TIMEOUT_MS is the poll deadline: a server that holds the
+    // connection without new messages must not wedge the poll loop, and the
+    // deadline is normal flow (WechatPollDeadlineError), never an error.
+    const deadline = AbortSignal.timeout(LONG_POLL_TIMEOUT_MS);
+    let body: { get_updates_buf?: string; messages?: RawWechatMessage[] } & { ret: number; errmsg?: string };
+    try {
+      body = await this.request<{ get_updates_buf?: string; messages?: RawWechatMessage[] }>('/ilink/bot/getupdates', {
+        get_updates_buf: cursor,
+        long_polling: true,
+      }, AbortSignal.any([signal, deadline]));
+    } catch (error) {
+      if (deadline.aborted && !signal.aborted) throw new WechatPollDeadlineError();
+      throw error;
+    }
     if (generation !== this.generation) throw new Error('generation changed');
     this.consecutiveFailures = 0;
     this.lastPollAt = Date.now();
@@ -214,8 +261,9 @@ export class WechatPersonalAdapter implements MessagingAdapter {
     return body;
   }
 
-  /** Task 4 最小版：空批次直接返回；有消息时并发 dispatch 并等待终态后提交 cursor。
-   * Task 5 补充 owner 过滤、tokenRef 注入与 state 写入。 */
+  /** 入站批处理：owner 前置过滤（仅 owner 写 peer state 并注入
+   * contextTokenRef），非 owner 仍 dispatch 进 manager 产生 ledger 拒绝记录；
+   * 全部 dispatch 终态后提交 cursor。 */
   private async handleBatch(
     generation: number,
     body: { get_updates_buf?: string; messages?: RawWechatMessage[] },
@@ -229,6 +277,17 @@ export class WechatPersonalAdapter implements MessagingAdapter {
       if (generation !== this.generation || signal.aborted) return;
       const envelope = normalizeInbound(this.instance, this.ownerExternalUserId, raw);
       if (!envelope) continue;
+      // 仅 owner 写 peer state；非 owner 仍 dispatch 进 manager 产生 ledger 拒绝记录
+      if (envelope.externalUserId === this.ownerExternalUserId) {
+        const contextToken = typeof raw.context_token === 'string' ? raw.context_token.trim() : '';
+        if (contextToken) {
+          const tokenRef = await stateStore.saveWechatPeerToken(
+            this.uid, this.instance.id, this.fingerprint,
+            envelope.externalUserId, contextToken, Date.now(),
+          );
+          envelope.contextTokenRef = tokenRef;
+        }
+      }
       const dispatch = (this.callbacks?.onInbound(envelope) || Promise.resolve({ accepted: false, duplicate: false }))
         .catch((error: unknown) => {
           log.warn('wechat inbound dispatch failed', { instanceId: this.instance.id, error: logErrorSummary(error) });
@@ -319,5 +378,6 @@ export function normalizeInbound(
 export const _wechatTestHooks = {
   buildHeaders,
   classifyError,
+  normalizeInbound,
   statusOf,
 };

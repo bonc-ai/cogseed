@@ -262,4 +262,143 @@ describe('wechat personal adapter wire contract', () => {
     expect(health.kind).toBe('error');
     expect(health.message).toContain('re-scan');
   });
+
+  describe('wechat personal adapter inbound/outbound', () => {
+    // instance/secret 复用上文定义；增加一个 owner 实例
+    const ownerInstance = {
+      ...instance,
+      ownerExternalUserId: 'owner-1',
+    };
+
+    it('normalizes a direct text message without leaking the raw token', async () => {
+      const { _wechatTestHooks } = await import('../../../src/main/features/messaging/wechat-personal');
+      const envelope = _wechatTestHooks.normalizeInbound(ownerInstance, 'owner-1', {
+        msg_id: 'm-1',
+        from_user_id: 'owner-1',
+        item_list: [{ type: 'text_item', text_item: { text: '你好' } }],
+        context_token: 'ctx-1',
+        create_time: 1700000000000,
+      });
+      expect(envelope).not.toBeNull();
+      expect(envelope!.externalMessageId).toBe('m-1');
+      expect(envelope!.externalUserId).toBe('owner-1');
+      expect(envelope!.text).toBe('你好');
+      expect(envelope!.isGroup).toBe(false);
+      // 纯函数不携带明文 token；tokenRef 由 handleBatch 在 dispatch 前注入
+      expect(envelope!.contextTokenRef).toBeUndefined();
+    });
+
+    it('rejects group messages and messages missing required fields', async () => {
+      const { _wechatTestHooks } = await import('../../../src/main/features/messaging/wechat-personal');
+      expect(_wechatTestHooks.normalizeInbound(ownerInstance, 'owner-1', {
+        msg_id: 'm-2', group_id: 'g-1', from_user_id: 'owner-1',
+        item_list: [{ type: 'text_item', text_item: { text: 'hi' } }], context_token: 'ctx-2',
+      })).toBeNull();
+      expect(_wechatTestHooks.normalizeInbound(ownerInstance, 'owner-1', {
+        from_user_id: 'owner-1',
+        item_list: [{ type: 'text_item', text_item: { text: 'hi' } }], context_token: 'ctx-3',
+      })).toBeNull(); // 缺 msg_id
+      expect(_wechatTestHooks.normalizeInbound(ownerInstance, 'owner-1', {
+        msg_id: 'm-4', from_user_id: 'owner-1',
+        item_list: [], context_token: 'ctx-4',
+      })).toBeNull(); // 无文本 item
+      expect(_wechatTestHooks.normalizeInbound(ownerInstance, 'owner-1', {
+        msg_id: 'm-5', from_user_id: 'owner-1',
+        item_list: [{ type: 'text_item', text_item: { text: 'hi' } }],
+      })).toBeNull(); // 缺 context_token
+    });
+
+    it('injects a tokenRef for the owner and sends with the bound token', async () => {
+      const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
+      const stateStore = await import('../../../src/main/features/messaging/wechat-state-store');
+      const fingerprint = stateStore.wechatCredentialFingerprint('bot-1', 'owner-1');
+      // 模拟入站时序：先落盘 peer token，拿到真实 tokenRef
+      const tokenRef = await stateStore.saveWechatPeerToken(
+        'uid-1', 'inst-1', fingerprint, 'owner-1', 'ctx-bound', 1_700_000_000_000,
+      );
+
+      const sent: Array<{ url: string; body: Record<string, unknown> }> = [];
+      vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string, init: RequestInit) => {
+        sent.push({ url: String(url), body: JSON.parse(String(init.body)) });
+        return new Response(JSON.stringify({ ret: 0 }), { status: 200 });
+      }));
+
+      const adapter = new WechatPersonalAdapter(ownerInstance, secret, 'uid-1');
+      const result = await adapter.sendMessage('owner-1', '回复内容', undefined, {
+        contextTokenRef: tokenRef,
+      });
+      expect(result).toEqual({});
+      expect(sent).toHaveLength(1);
+      const msg = sent[0].body.msg as Record<string, unknown>;
+      expect(msg.to_user_id).toBe('owner-1');
+      expect(msg.context_token).toBe('ctx-bound');
+      expect((msg.item_list as Array<{ text_item: { text: string } }>)[0].text_item.text).toBe('回复内容');
+    });
+
+    it('injects a tokenRef into the envelope before dispatch and persists the token', async () => {
+      const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
+      const stateStore = await import('../../../src/main/features/messaging/wechat-state-store');
+      const fingerprint = stateStore.wechatCredentialFingerprint('bot-1', 'owner-1');
+      const onInbound = vi.fn().mockResolvedValue({ accepted: true, duplicate: false });
+      vi.stubGlobal('fetch', vi.fn()
+        .mockImplementationOnce(async () => new Response(JSON.stringify({
+          ret: 0,
+          get_updates_buf: 'cursor-1',
+          messages: [{
+            msg_id: 'm-1', from_user_id: 'owner-1',
+            item_list: [{ type: 'text_item', text_item: { text: '你好' } }],
+            context_token: 'ctx-live',
+          }],
+        }), { status: 200 })));
+      const adapter = new WechatPersonalAdapter(ownerInstance, secret, 'uid-1');
+      const controller = new AbortController();
+      const startPromise = adapter.start(controller.signal, { onInbound, onStatus: vi.fn().mockResolvedValue(undefined) } as never);
+      await vi.waitFor(() => expect(onInbound).toHaveBeenCalled());
+      controller.abort();
+      await startPromise;
+      const envelope = onInbound.mock.calls[0][0] as { contextTokenRef?: string };
+      expect(envelope.contextTokenRef).toBeTruthy();
+      const state = await stateStore.loadWechatState('uid-1', 'inst-1', fingerprint);
+      expect(state?.peers['owner-1']?.contextToken).toBe('ctx-live');
+      expect(state?.getUpdatesBuf).toBe('cursor-1');
+    });
+
+    it('does not persist peer state for a non-owner sender', async () => {
+      const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
+      const stateStore = await import('../../../src/main/features/messaging/wechat-state-store');
+      const fingerprint = stateStore.wechatCredentialFingerprint('bot-1', 'owner-1');
+      const onInbound = vi.fn().mockResolvedValue({ accepted: false, duplicate: false });
+      vi.stubGlobal('fetch', vi.fn()
+        .mockImplementationOnce(async () => new Response(JSON.stringify({
+          ret: 0,
+          get_updates_buf: 'cursor-2',
+          messages: [{
+            msg_id: 'm-2', from_user_id: 'stranger-1',
+            item_list: [{ type: 'text_item', text_item: { text: 'hack' } }],
+            context_token: 'ctx-stranger',
+          }],
+        }), { status: 200 })));
+      const adapter = new WechatPersonalAdapter(ownerInstance, secret, 'uid-1');
+      const controller = new AbortController();
+      const startPromise = adapter.start(controller.signal, { onInbound, onStatus: vi.fn().mockResolvedValue(undefined) } as never);
+      await vi.waitFor(() => expect(onInbound).toHaveBeenCalled());
+      controller.abort();
+      await startPromise;
+      const envelope = onInbound.mock.calls[0][0] as { contextTokenRef?: string; externalUserId: string };
+      expect(envelope.externalUserId).toBe('stranger-1');
+      expect(envelope.contextTokenRef).toBeUndefined();
+      const state = await stateStore.loadWechatState('uid-1', 'inst-1', fingerprint);
+      expect(state?.peers['stranger-1']).toBeUndefined();
+    });
+
+    it('refuses to send when no token is available', async () => {
+      const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+      const adapter = new WechatPersonalAdapter(ownerInstance, secret, 'uid-1');
+      await expect(adapter.sendMessage('owner-1', 'hi', undefined, { contextTokenRef: 'owner-1::no-such-uuid' }))
+        .rejects.toThrow(/context/);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
 });
