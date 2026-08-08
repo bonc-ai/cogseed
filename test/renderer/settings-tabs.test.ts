@@ -346,6 +346,16 @@ describe('settings tabs module', () => {
     expect(source).not.toContain('messaging.wechat_qr.status_scanned_confirm');
   });
 
+  it('treats a start response without qrUrl/qrCode as start-failed and renders the error in the QR area', () => {
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    // 启动响应既无 qrUrl 也无 qrCode → 按启动失败处理，绝不展示空二维码区域
+    expect(source).toContain("if (!state.wechat.qrSource && !WECHAT_TERMINAL_STATES.has(state.wechat.state))");
+    expect(source).toContain("state.wechat.error = labelFor('messaging.wechat_qr.start_failed', '')");
+    // 终态错误时在二维码区域渲染错误文案，而不是 qr_pending 空占位
+    expect(source).toContain("host.appendChild(el('span', 'messaging-qr-pending', status))");
+    expect(source).toContain("} else {\n      renderQrCode(host, state.wechat.qrSource, 'messaging.wechat_qr');\n    }");
+  });
+
   it('treats wechat blocked/expired/failed as terminal and cancels the server flow', () => {
     const { hooks } = loadMessagingSettingsTestHooks();
     const wechat = hooks.__test.state.wechat;

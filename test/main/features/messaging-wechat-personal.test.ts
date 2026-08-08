@@ -54,14 +54,15 @@ describe('wechat personal adapter wire contract', () => {
     }
   };
 
-  it('builds the full header set with a random X-WECHAT-UIN per call', async () => {
+  it('builds the Hermes header set with fixed iLink app id/version and a random X-WECHAT-UIN per call', async () => {
     const { _wechatTestHooks } = await import('../../../src/main/features/messaging/wechat-personal');
-    const a = _wechatTestHooks.buildHeaders('bot-1', 't'.repeat(64));
-    const b = _wechatTestHooks.buildHeaders('bot-1', 't'.repeat(64));
+    const a = _wechatTestHooks.buildHeaders('t'.repeat(64));
+    const b = _wechatTestHooks.buildHeaders('t'.repeat(64));
     expect(a['AuthorizationType']).toBe('ilink_bot_token');
     expect(a['Authorization']).toBe(`Bearer ${'t'.repeat(64)}`);
-    expect(a['iLink-App-Id']).toBe('bot-1');
-    expect(a['iLink-App-ClientVersion']).toBeTruthy();
+    // Hermes constants: ILINK_APP_ID='bot', ILINK_APP_CLIENT_VERSION=(2<<16)|(2<<8)|0 = 131584
+    expect(a['iLink-App-Id']).toBe('bot');
+    expect(a['iLink-App-ClientVersion']).toBe('131584');
     expect(a['Content-Type']).toBe('application/json');
     expect(a['X-WECHAT-UIN']).not.toBe(b['X-WECHAT-UIN']);
   });
@@ -92,7 +93,7 @@ describe('wechat personal adapter wire contract', () => {
     const fetchMock = vi.fn()
       .mockImplementationOnce(async (_url: string, init: RequestInit) => {
         calls.push({ url: String(_url), init });
-        fetches.push(Promise.resolve(makeResponse({ ret: 0, get_updates_buf: 'cursor-1', messages: [] })));
+        fetches.push(Promise.resolve(makeResponse({ ret: 0, get_updates_buf: 'cursor-1', msgs: [] })));
         return fetches[fetches.length - 1];
       })
       .mockImplementationOnce(async (_url: string, init: RequestInit) => {
@@ -114,13 +115,17 @@ describe('wechat personal adapter wire contract', () => {
     });
     controller.abort();
     await startPromise;
-    // 所有请求都带 redirect: error 与完整 headers
+    // 所有请求都带 redirect: error、完整 headers 与 base_info
     for (const call of calls) {
       const headers = call.init.headers as Record<string, string>;
       expect(headers['AuthorizationType']).toBe('ilink_bot_token');
       expect(headers['Authorization']).toContain('Bearer ');
+      expect(headers['iLink-App-Id']).toBe('bot');
+      expect(headers['iLink-App-ClientVersion']).toBe('131584');
       expect((call.init as { redirect?: string }).redirect).toBe('error');
       expect(call.url).toContain('/ilink/bot/getupdates');
+      const body = JSON.parse(String(call.init.body)) as { base_info?: { channel_version?: string } };
+      expect(body.base_info).toEqual({ channel_version: '2.2.0' });
     }
   });
 
@@ -147,7 +152,7 @@ describe('wechat personal adapter wire contract', () => {
     await expect(adapter.start(c1.signal, { onInbound: vi.fn(), onStatus } as never)).rejects.toThrow('status boom');
     // The first start failed loudly but must not wedge the adapter: the
     // already-started guard would otherwise block every later start().
-    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => makeResponse({ ret: 0, get_updates_buf: 'c1', messages: [] })));
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => makeResponse({ ret: 0, get_updates_buf: 'c1', msgs: [] })));
     const c2 = new AbortController();
     const startPromise = adapter.start(c2.signal, { onInbound: vi.fn(), onStatus } as never);
     await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith(expect.objectContaining({ kind: 'connected' })));
@@ -169,7 +174,7 @@ describe('wechat personal adapter wire contract', () => {
     // discarded and start() exits through the finally with a disconnected emit.
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     await adapter.stop();
-    resolveFetch(makeResponse({ ret: 0, get_updates_buf: 'c1', messages: [] }));
+    resolveFetch(makeResponse({ ret: 0, get_updates_buf: 'c1', msgs: [] }));
     await expect(startPromise).resolves.toBeUndefined();
     expect(onStatus).toHaveBeenCalledWith(expect.objectContaining({ kind: 'disconnected' }));
   });
@@ -186,7 +191,7 @@ describe('wechat personal adapter wire contract', () => {
     let fail = true;
     const fetchMock = vi.fn().mockImplementation(async () => {
       if (fail) throw new Error('socket hang up');
-      return makeResponse({ ret: 0, get_updates_buf: 'c1', messages: [] });
+      return makeResponse({ ret: 0, get_updates_buf: 'c1', msgs: [] });
     });
     vi.stubGlobal('fetch', fetchMock);
     const onStatus = vi.fn().mockResolvedValue(undefined);
@@ -228,7 +233,7 @@ describe('wechat personal adapter wire contract', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
     const onStatus = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => makeResponse({ ret: 0, get_updates_buf: 'c1', messages: [] })));
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => makeResponse({ ret: 0, get_updates_buf: 'c1', msgs: [] })));
     const adapter = new WechatPersonalAdapter(instance, secret, 'uid-1');
     try {
       // Never polled -> disconnected.
@@ -273,9 +278,9 @@ describe('wechat personal adapter wire contract', () => {
     it('normalizes a direct text message without leaking the raw token', async () => {
       const { _wechatTestHooks } = await import('../../../src/main/features/messaging/wechat-personal');
       const envelope = _wechatTestHooks.normalizeInbound(ownerInstance, 'owner-1', {
-        msg_id: 'm-1',
+        message_id: 'm-1',
         from_user_id: 'owner-1',
-        item_list: [{ type: 'text_item', text_item: { text: '你好' } }],
+        item_list: [{ type: 1, text_item: { text: '你好' } }],
         context_token: 'ctx-1',
         create_time: 1700000000000,
       });
@@ -291,20 +296,20 @@ describe('wechat personal adapter wire contract', () => {
     it('rejects group messages and messages missing required fields', async () => {
       const { _wechatTestHooks } = await import('../../../src/main/features/messaging/wechat-personal');
       expect(_wechatTestHooks.normalizeInbound(ownerInstance, 'owner-1', {
-        msg_id: 'm-2', group_id: 'g-1', from_user_id: 'owner-1',
-        item_list: [{ type: 'text_item', text_item: { text: 'hi' } }], context_token: 'ctx-2',
+        message_id: 'm-2', group_id: 'g-1', from_user_id: 'owner-1',
+        item_list: [{ type: 1, text_item: { text: 'hi' } }], context_token: 'ctx-2',
       })).toBeNull();
       expect(_wechatTestHooks.normalizeInbound(ownerInstance, 'owner-1', {
         from_user_id: 'owner-1',
-        item_list: [{ type: 'text_item', text_item: { text: 'hi' } }], context_token: 'ctx-3',
+        item_list: [{ type: 1, text_item: { text: 'hi' } }], context_token: 'ctx-3',
       })).toBeNull(); // 缺 msg_id
       expect(_wechatTestHooks.normalizeInbound(ownerInstance, 'owner-1', {
-        msg_id: 'm-4', from_user_id: 'owner-1',
+        message_id: 'm-4', from_user_id: 'owner-1',
         item_list: [], context_token: 'ctx-4',
       })).toBeNull(); // 无文本 item
       expect(_wechatTestHooks.normalizeInbound(ownerInstance, 'owner-1', {
-        msg_id: 'm-5', from_user_id: 'owner-1',
-        item_list: [{ type: 'text_item', text_item: { text: 'hi' } }],
+        message_id: 'm-5', from_user_id: 'owner-1',
+        item_list: [{ type: 1, text_item: { text: 'hi' } }],
       })).toBeNull(); // 缺 context_token
     });
 
@@ -330,9 +335,60 @@ describe('wechat personal adapter wire contract', () => {
       expect(result).toEqual({});
       expect(sent).toHaveLength(1);
       const msg = sent[0].body.msg as Record<string, unknown>;
+      // Hermes sendmessage 全形状：from_user_id 为空、message_type=2、
+      // message_state=2、每块 item 为 { type: 1, text_item: { text } }
+      expect(msg.from_user_id).toBe('');
       expect(msg.to_user_id).toBe('owner-1');
+      expect(msg.message_type).toBe(2);
+      expect(msg.message_state).toBe(2);
+      expect(typeof msg.client_id).toBe('string');
+      expect((msg.client_id as string).length).toBeGreaterThan(0);
       expect(msg.context_token).toBe('ctx-bound');
-      expect((msg.item_list as Array<{ text_item: { text: string } }>)[0].text_item.text).toBe('回复内容');
+      expect(msg.item_list).toEqual([{ type: 1, text_item: { text: '回复内容' } }]);
+    });
+
+    it('reuses the context idempotency key as the sendmessage client_id when present', async () => {
+      const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
+      const stateStore = await import('../../../src/main/features/messaging/wechat-state-store');
+      const fingerprint = stateStore.wechatCredentialFingerprint('bot-1', 'owner-1');
+      const tokenRef = await stateStore.saveWechatPeerToken(
+        'uid-1', 'inst-1', fingerprint, 'owner-1', 'ctx-bound', 1_700_000_000_000,
+      );
+      const sent: Array<{ body: Record<string, unknown> }> = [];
+      vi.stubGlobal('fetch', vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+        sent.push({ body: JSON.parse(String(init.body)) });
+        return new Response(JSON.stringify({ ret: 0 }), { status: 200 });
+      }));
+      const adapter = new WechatPersonalAdapter(ownerInstance, secret, 'uid-1');
+      await adapter.sendMessage('owner-1', 'hi', undefined, {
+        contextTokenRef: tokenRef,
+        idempotencyKey: 'idem-42',
+      });
+      expect(sent).toHaveLength(1);
+      expect((sent[0].body.msg as { client_id: string }).client_id).toBe('idem-42');
+    });
+
+    it('skips the bot\u2019s own echo messages from ilinkBotId so they never loop back', async () => {
+      const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
+      const onInbound = vi.fn().mockResolvedValue({ accepted: true, duplicate: false });
+      vi.stubGlobal('fetch', vi.fn()
+        .mockImplementationOnce(async () => new Response(JSON.stringify({
+          ret: 0,
+          get_updates_buf: 'cursor-echo',
+          msgs: [
+            { message_id: 'm-echo', from_user_id: 'bot-1', item_list: [{ type: 1, text_item: { text: '回声' } }], context_token: 'ctx-echo' },
+            { message_id: 'm-real', from_user_id: 'owner-1', item_list: [{ type: 1, text_item: { text: '真消息' } }], context_token: 'ctx-real' },
+          ],
+        }), { status: 200 })));
+      const adapter = new WechatPersonalAdapter(ownerInstance, secret, 'uid-1');
+      const controller = new AbortController();
+      const startPromise = adapter.start(controller.signal, { onInbound, onStatus: vi.fn().mockResolvedValue(undefined) } as never);
+      await vi.waitFor(() => expect(onInbound).toHaveBeenCalledTimes(1));
+      controller.abort();
+      await startPromise;
+      const envelope = onInbound.mock.calls[0][0] as { externalMessageId: string; text: string };
+      expect(envelope.externalMessageId).toBe('m-real');
+      expect(envelope.text).toBe('真消息');
     });
 
     it('chunkText splits long replies at 4000 units without breaking surrogate pairs', async () => {
@@ -368,7 +424,7 @@ describe('wechat personal adapter wire contract', () => {
       expect(sent).toHaveLength(1);
       const items = (sent[0].body.msg as { item_list: Array<{ type: string; text_item: { text: string } }> }).item_list;
       expect(items).toHaveLength(2);
-      expect(items.every((item) => item.type === 'text_item')).toBe(true);
+      expect(items.every((item) => item.type === 1)).toBe(true);
       expect(items.map((item) => item.text_item.text.length)).toEqual([4_000, 500]);
       expect(items.map((item) => item.text_item.text).join('')).toBe(longText);
     });
@@ -398,9 +454,9 @@ describe('wechat personal adapter wire contract', () => {
         .mockImplementationOnce(async () => new Response(JSON.stringify({
           ret: 0,
           get_updates_buf: 'cursor-1',
-          messages: [{
-            msg_id: 'm-1', from_user_id: 'owner-1',
-            item_list: [{ type: 'text_item', text_item: { text: '你好' } }],
+          msgs: [{
+            message_id: 'm-1', from_user_id: 'owner-1',
+            item_list: [{ type: 1, text_item: { text: '你好' } }],
             context_token: 'ctx-live',
           }],
         }), { status: 200 })));
@@ -426,9 +482,9 @@ describe('wechat personal adapter wire contract', () => {
         .mockImplementationOnce(async () => new Response(JSON.stringify({
           ret: 0,
           get_updates_buf: 'cursor-2',
-          messages: [{
-            msg_id: 'm-2', from_user_id: 'stranger-1',
-            item_list: [{ type: 'text_item', text_item: { text: 'hack' } }],
+          msgs: [{
+            message_id: 'm-2', from_user_id: 'stranger-1',
+            item_list: [{ type: 1, text_item: { text: 'hack' } }],
             context_token: 'ctx-stranger',
           }],
         }), { status: 200 })));

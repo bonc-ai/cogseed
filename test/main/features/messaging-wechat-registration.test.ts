@@ -29,7 +29,11 @@ describe('wechat registration flow', () => {
       .mockImplementationOnce(async (url: string) => {
         expect(String(url)).toContain('/ilink/bot/get_bot_qrcode');
         expect(String(url)).toContain('bot_type=3');
-        return new Response(JSON.stringify({ ret: 0, qrcode: 'qr-abc', url: 'https://ilinkai.weixin.qq.com/qr' }), { status: 200 });
+        return new Response(JSON.stringify({
+          ret: 0,
+          qrcode: 'qr-abc',
+          qrcode_img_content: 'https://ilinkai.weixin.qq.com/cgi-bin/liteapp?token=qr-abc',
+        }), { status: 200 });
       })
       .mockImplementationOnce(async () => new Response(JSON.stringify({ ret: 0, status: 'wait' }), { status: 200 }))
       .mockImplementationOnce(async () => new Response(JSON.stringify({ ret: 0, status: 'scaned' }), { status: 200 }))
@@ -113,6 +117,82 @@ describe('wechat registration flow', () => {
       expect(s.state).toBe('expired');
       expect(s.errorCode).toBe('qr_refresh_exhausted');
     }, { timeout: 8_000, interval: 100 });
+  });
+
+  it('parses qrcode (hex poll token) and qrcode_img_content (scannable URL) from the QR response', async () => {
+    const { startWechatQrRegistration, cancelWechatQrRegistration } =
+      await import('../../../src/main/features/messaging/wechat-registration');
+    vi.stubGlobal('fetch', vi.fn()
+      .mockImplementationOnce(async () => new Response(JSON.stringify({
+        ret: 0,
+        qrcode: 'a1b2c3',
+        qrcode_img_content: 'https://ilinkai.weixin.qq.com/cgi-bin/liteapp?token=abc',
+      }), { status: 200 }))
+      .mockImplementation(async () => new Response(JSON.stringify({ ret: 0, status: 'wait' }), { status: 200 })));
+    const started = await startWechatQrRegistration('uid-1');
+    // qrcode 是轮询用的 hex token；qrcode_img_content 才是用户要扫的完整 URL
+    expect(started.qrCode).toBe('a1b2c3');
+    expect(started.qrUrl).toBe('https://ilinkai.weixin.qq.com/cgi-bin/liteapp?token=abc');
+    cancelWechatQrRegistration('uid-1', started.flowId);
+  });
+
+  it('never stores a qrcode_img_content URL outside the trusted iLink hosts', async () => {
+    const { startWechatQrRegistration, cancelWechatQrRegistration } =
+      await import('../../../src/main/features/messaging/wechat-registration');
+    vi.stubGlobal('fetch', vi.fn()
+      .mockImplementationOnce(async () => new Response(JSON.stringify({
+        ret: 0,
+        qrcode: 'hex-evil',
+        qrcode_img_content: 'https://evil.example.com/qr',
+      }), { status: 200 }))
+      .mockImplementation(async () => new Response(JSON.stringify({ ret: 0, status: 'wait' }), { status: 200 })));
+    const started = await startWechatQrRegistration('uid-1');
+    expect(started.qrCode).toBe('hex-evil');
+    expect(started.qrUrl).toBeUndefined();
+    cancelWechatQrRegistration('uid-1', started.flowId);
+  });
+
+  it('sends the Hermes iLink-App-Id/iLink-App-ClientVersion headers on every QR request', async () => {
+    const { startWechatQrRegistration, cancelWechatQrRegistration } =
+      await import('../../../src/main/features/messaging/wechat-registration');
+    const requests: Array<{ url: string; headers: Record<string, string> }> = [];
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string, init: RequestInit) => {
+      requests.push({ url: String(url), headers: (init.headers || {}) as Record<string, string> });
+      if (String(url).includes('get_bot_qrcode')) {
+        return new Response(JSON.stringify({
+          ret: 0,
+          qrcode: 'hex-h',
+          qrcode_img_content: 'https://ilinkai.weixin.qq.com/cgi-bin/liteapp?token=hex-h',
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ret: 0, status: 'wait' }), { status: 200 });
+    }));
+    const started = await startWechatQrRegistration('uid-1');
+    await vi.waitFor(() => {
+      expect(requests.some((r) => r.url.includes('get_qrcode_status'))).toBe(true);
+    }, { timeout: 8_000, interval: 100 });
+    cancelWechatQrRegistration('uid-1', started.flowId);
+    expect(requests.some((r) => r.url.includes('get_bot_qrcode'))).toBe(true);
+    for (const request of requests) {
+      expect(request.headers['iLink-App-Id']).toBe('bot');
+      expect(request.headers['iLink-App-ClientVersion']).toBe('131584');
+    }
+  });
+
+  it('long-polls QR status with a 35s request timeout (Hermes QR_TIMEOUT_MS)', async () => {
+    const { startWechatQrRegistration, cancelWechatQrRegistration } =
+      await import('../../../src/main/features/messaging/wechat-registration');
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    try {
+      vi.stubGlobal('fetch', vi.fn()
+        .mockImplementationOnce(async () => new Response(JSON.stringify({ ret: 0, qrcode: 'hex-t' }), { status: 200 }))
+        .mockImplementation(async () => new Response(JSON.stringify({ ret: 0, status: 'wait' }), { status: 200 })));
+      const started = await startWechatQrRegistration('uid-1');
+      expect(timeoutSpy).toHaveBeenCalledWith(35_000);
+      cancelWechatQrRegistration('uid-1', started.flowId);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it('fails with unknown_qr_status for an unmapped raw status', async () => {

@@ -12,7 +12,16 @@ const log = createLogger('messaging:wechat-registration');
 const FLOW_RETENTION_MS = 10 * 60 * 1000;
 const POLL_INTERVAL_MS = 1_000;
 const QR_REFRESH_MAX = 3;
-const POLL_REQUEST_TIMEOUT_MS = 15_000;
+/** Hermes constants: QR requests are plain GETs identified by these two
+ * headers (ILINK_APP_ID='bot', ILINK_APP_CLIENT_VERSION=(2<<16)|(2<<8)|0).
+ * The status request long-polls, so its deadline is QR_TIMEOUT_MS=35s. */
+const ILINK_APP_ID = 'bot';
+const ILINK_APP_CLIENT_VERSION = String((2 << 16) | (2 << 8) | 0);
+const POLL_REQUEST_TIMEOUT_MS = 35_000;
+const QR_GET_HEADERS = Object.freeze({
+  'iLink-App-Id': ILINK_APP_ID,
+  'iLink-App-ClientVersion': ILINK_APP_CLIENT_VERSION,
+});
 
 export type WechatRegistrationState =
   | 'starting'
@@ -122,6 +131,7 @@ async function pollQrStatus(flow: WechatRegistrationFlow): Promise<void> {
       response = await fetch(`${baseUrl}/ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(flow.qrCode || '')}`, {
         method: 'GET',
         redirect: 'error',
+        headers: QR_GET_HEADERS,
         signal: pollSignal(flow),
       });
     } catch (error) {
@@ -172,18 +182,22 @@ async function refreshQrCode(flow: WechatRegistrationFlow): Promise<void> {
     const response = await fetch(`${flow.baseUrl.replace(/\/+$/, '')}/ilink/bot/get_bot_qrcode?bot_type=3`, {
       method: 'GET',
       redirect: 'error',
+      headers: QR_GET_HEADERS,
       signal: pollSignal(flow),
     });
-    const parsed = await response.json() as { ret?: number; qrcode?: string; url?: string };
+    const parsed = await response.json() as { ret?: number; qrcode?: string; qrcode_img_content?: string };
     if (isCancelled(flow)) return;
     if (typeof parsed.ret === 'number' && parsed.ret !== 0) {
       finish(flow, 'failed', `qr_ret_${parsed.ret}`);
       return;
     }
+    // qrcode 只是轮询用的 hex token；qrcode_img_content 才是用户要扫的
+    // 完整 liteapp URL（Hermes：WeChat needs to scan the full URL, not the
+    // raw hex string）。qrcode_img_content 必须通过既有白名单校验才落库。
     flow.qrCode = typeof parsed.qrcode === 'string' ? parsed.qrcode : '';
-    if (typeof parsed.url === 'string' && parsed.url) {
-      const url = new URL(parsed.url);
-      if (isTrustedIlinkBaseUrl(url.origin)) flow.qrUrl = parsed.url;
+    if (typeof parsed.qrcode_img_content === 'string' && parsed.qrcode_img_content
+      && isTrustedIlinkBaseUrl(parsed.qrcode_img_content)) {
+      flow.qrUrl = parsed.qrcode_img_content;
     }
     flow.updatedAt = nowIso();
   } catch (error) {

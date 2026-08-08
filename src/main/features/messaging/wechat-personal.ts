@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 
 import { createLogger } from '../../logger';
 import { logErrorSummary } from '../../util/log-redact';
@@ -18,7 +18,18 @@ import type {
 
 const log = createLogger('messaging:wechat-personal');
 
-const CLIENT_VERSION = 'pc-1.0.0';
+// Hermes wire constants (gateway/platforms/weixin.py): the app id is the
+// literal "bot" for every request — never the account's ilink_bot_id — and
+// the client version is (2<<16)|(2<<8)|0 = 131584. base_info merges
+// channel_version into every POST body.
+const ILINK_APP_ID = 'bot';
+const ILINK_APP_CLIENT_VERSION = String((2 << 16) | (2 << 8) | 0);
+const CHANNEL_VERSION = '2.2.0';
+// Message enum values (Hermes): item types and message/state codes are
+// numbers on the wire, not strings.
+const ITEM_TEXT = 1;
+const MSG_TYPE_BOT = 2;
+const MSG_STATE_FINISH = 2;
 // Wire-client bounds: REQUEST_TIMEOUT_MS caps a single HTTP call, and
 // LONG_POLL_TIMEOUT_MS is the getupdates poll deadline — when the server
 // holds the connection past it, the poll falls back to a fresh poll without
@@ -41,13 +52,13 @@ class WechatPollDeadlineError extends Error {
 
 export type WechatErrorClass = 'network' | 'reauth_required' | 'delivery_rejected';
 
-export function buildHeaders(ilinkBotId: string, ilinkBotToken: string): Record<string, string> {
+export function buildHeaders(ilinkBotToken: string): Record<string, string> {
   return {
     'AuthorizationType': 'ilink_bot_token',
     'Authorization': `Bearer ${ilinkBotToken}`,
     'X-WECHAT-UIN': Buffer.from(String(randomBytes(4).readUInt32LE(0))).toString('base64'),
-    'iLink-App-Id': ilinkBotId,
-    'iLink-App-ClientVersion': CLIENT_VERSION,
+    'iLink-App-Id': ILINK_APP_ID,
+    'iLink-App-ClientVersion': ILINK_APP_CLIENT_VERSION,
     'Content-Type': 'application/json',
   };
 }
@@ -104,8 +115,8 @@ export class WechatPersonalAdapter implements MessagingAdapter {
     const deadline = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
     const response = await fetch(`${this.ilinkBaseUrl}${pathname}`, {
       method: 'POST',
-      headers: buildHeaders(this.ilinkBotId, this.ilinkBotToken),
-      body: JSON.stringify({ base_info: {}, ...body }),
+      headers: buildHeaders(this.ilinkBotToken),
+      body: JSON.stringify({ base_info: { channel_version: CHANNEL_VERSION }, ...body }),
       redirect: 'error',
       signal: AbortSignal.any([signal, deadline]),
     });
@@ -228,11 +239,18 @@ export class WechatPersonalAdapter implements MessagingAdapter {
     // 长回复按 4000 字符分块为多个 text_item，一次 send 完整送达，不做
     // 静默截断。
     const chunks = chunkText(text, 4_000);
+    const clientId = typeof context?.idempotencyKey === 'string' && context.idempotencyKey
+      ? context.idempotencyKey
+      : randomUUID();
     const body = await this.request<{ msg_id?: string }>('/ilink/bot/sendmessage', {
       msg: {
+        from_user_id: '',
         to_user_id: chatId,
+        client_id: clientId,
+        message_type: MSG_TYPE_BOT,
+        message_state: MSG_STATE_FINISH,
+        item_list: chunks.map((chunk) => ({ type: ITEM_TEXT, text_item: { text: chunk } })),
         context_token: token,
-        item_list: chunks.map((chunk) => ({ type: 'text_item', text_item: { text: chunk } })),
       },
     }, lifecycleSignal || new AbortController().signal);
     return body && typeof body.msg_id === 'string' ? { deliveryId: String(body.msg_id) } : {};
@@ -241,7 +259,7 @@ export class WechatPersonalAdapter implements MessagingAdapter {
   private async getUpdates(
     generation: number,
     signal: AbortSignal,
-  ): Promise<{ get_updates_buf?: string; messages?: RawWechatMessage[] }> {
+  ): Promise<{ get_updates_buf?: string; msgs?: RawWechatMessage[] }> {
     const stateStore = await import('./wechat-state-store');
     const state = await stateStore.loadWechatState(this.uid, this.instance.id, this.fingerprint);
     const cursor = state?.getUpdatesBuf || '';
@@ -249,9 +267,9 @@ export class WechatPersonalAdapter implements MessagingAdapter {
     // connection without new messages must not wedge the poll loop, and the
     // deadline is normal flow (WechatPollDeadlineError), never an error.
     const deadline = AbortSignal.timeout(LONG_POLL_TIMEOUT_MS);
-    let body: { get_updates_buf?: string; messages?: RawWechatMessage[] } & { ret: number; errmsg?: string };
+    let body: { get_updates_buf?: string; msgs?: RawWechatMessage[] } & { ret: number; errmsg?: string };
     try {
-      body = await this.request<{ get_updates_buf?: string; messages?: RawWechatMessage[] }>('/ilink/bot/getupdates', {
+      body = await this.request<{ get_updates_buf?: string; msgs?: RawWechatMessage[] }>('/ilink/bot/getupdates', {
         get_updates_buf: cursor,
         long_polling: true,
       }, AbortSignal.any([signal, deadline]));
@@ -272,15 +290,18 @@ export class WechatPersonalAdapter implements MessagingAdapter {
    * 全部 dispatch 终态后提交 cursor。 */
   private async handleBatch(
     generation: number,
-    body: { get_updates_buf?: string; messages?: RawWechatMessage[] },
+    body: { get_updates_buf?: string; msgs?: RawWechatMessage[] },
     signal: AbortSignal,
   ): Promise<void> {
-    const messages = Array.isArray(body.messages) ? body.messages : [];
+    const messages = Array.isArray(body.msgs) ? body.msgs : [];
     if (messages.length === 0) return;
     const stateStore = await import('./wechat-state-store');
     const tasks: Array<Promise<unknown>> = [];
     for (const raw of messages) {
       if (generation !== this.generation || signal.aborted) return;
+      // 回声过滤：bot 自己的消息（发送回执等 from_user_id == ilinkBotId）
+      // 绝不能回灌 dispatch 循环造成死循环（Hermes 同样跳过）。
+      if (typeof raw.from_user_id === 'string' && raw.from_user_id === this.ilinkBotId) continue;
       const envelope = normalizeInbound(this.instance, this.ownerExternalUserId, raw);
       if (!envelope) continue;
       // 仅 owner 写 peer state；非 owner 仍 dispatch 进 manager 产生 ledger 拒绝记录
@@ -336,12 +357,12 @@ function abortableWait(ms: number, signal: AbortSignal): Promise<void> {
 
 /** Raw iLink inbound message shape (fields are optional in the protocol). */
 interface RawWechatItem {
-  type?: string;
+  type?: number;
   text_item?: { text?: string };
 }
 
 interface RawWechatMessage {
-  msg_id?: string;
+  message_id?: string;
   from_user_id?: string;
   group_id?: string;
   item_list?: RawWechatItem[];
@@ -358,12 +379,13 @@ export function normalizeInbound(
   // Task 5 owner pre-filter; context_token snapshotting (contextTokenRef) is
   // also Task 5 — this function must not set it.
   if (typeof raw.group_id === 'string' && raw.group_id) return null;
-  const messageId = typeof raw.msg_id === 'string' ? raw.msg_id.trim() : '';
+  const messageId = typeof raw.message_id === 'string' ? raw.message_id.trim() : '';
   const userId = typeof raw.from_user_id === 'string' ? raw.from_user_id.trim() : '';
   const contextToken = typeof raw.context_token === 'string' ? raw.context_token.trim() : '';
   if (!messageId || !userId || !contextToken) return null;
+  // Hermes ITEM_TEXT=1：item type 是数字 1，不是字符串 'text_item'
   const text = (raw.item_list || [])
-    .filter((item) => item?.type === 'text_item')
+    .filter((item) => item?.type === 1)
     .map((item) => item.text_item?.text?.trim() || '')
     .filter(Boolean)
     .join('\n');

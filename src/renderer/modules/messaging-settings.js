@@ -1118,6 +1118,17 @@
       } else if (typeof registration.qrCode === 'string' && registration.qrCode.trim()) {
         state.wechat.qrSource = registration.qrCode.trim();
       }
+      if (!state.wechat.qrSource && !WECHAT_TERMINAL_STATES.has(state.wechat.state)) {
+        // 启动成功但响应里既没有 qrUrl 也没有 qrCode（如二维码响应字段
+        // 缺失或被白名单拒绝）→ 按启动失败渲染，绝不展示空二维码区域；
+        // 服务端 flow 一并静默取消。
+        try { await invoke('messaging.wechat_qr.cancel', { flowId }); } catch (_) { /* best effort */ }
+        state.wechat.state = 'failed';
+        state.wechat.error = labelFor('messaging.wechat_qr.start_failed', '');
+        setNotice(state.wechat.error, 'error');
+        renderCurrent();
+        return;
+      }
       renderCurrent();
       if (state.wechat.state === 'completed') {
         await completeWechatFlow(registration, flowId, revision);
@@ -1143,11 +1154,17 @@
     const panel = el('div', 'messaging-qr-panel');
     const host = el('div', 'messaging-qr-code');
     host.setAttribute('aria-live', 'polite');
-    renderQrCode(host, state.wechat.qrSource, 'messaging.wechat_qr');
-    const info = el('div', 'messaging-qr-info');
     const status = state.wechat.error && WECHAT_TERMINAL_STATES.has(state.wechat.state)
       ? state.wechat.error
       : wechatStatusLabel(state.wechat.state || 'starting', state.wechat.errorCode);
+    if (state.wechat.error && WECHAT_TERMINAL_STATES.has(state.wechat.state)) {
+      // 终态错误（如启动后无二维码来源）：在二维码区域渲染错误文案，
+      // 而不是空二维码占位
+      host.appendChild(el('span', 'messaging-qr-pending', status));
+    } else {
+      renderQrCode(host, state.wechat.qrSource, 'messaging.wechat_qr');
+    }
+    const info = el('div', 'messaging-qr-info');
     const statusRow = el('div', `messaging-qr-status is-${state.wechat.state || 'starting'}`);
     statusRow.append(icon('loader', 'messaging-qr-status-icon'), el('span', '', status));
     info.appendChild(statusRow);
