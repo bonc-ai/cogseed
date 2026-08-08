@@ -153,6 +153,9 @@ function normalizeDelivery(raw: Partial<MessagingDeliveryLedgerFile>): Messaging
         ? { threadId: candidate.threadId.trim().slice(0, 512) }
         : {}),
       ...(candidate.replyInThread === true ? { replyInThread: true } : {}),
+      ...(typeof candidate.contextTokenRef === 'string' && candidate.contextTokenRef.trim()
+        ? { contextTokenRef: candidate.contextTokenRef.trim().slice(0, 512) }
+        : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
       status,
       ...(typeof candidate.externalDeliveryId === 'string' ? { externalDeliveryId: candidate.externalDeliveryId.slice(0, 512) } : {}),

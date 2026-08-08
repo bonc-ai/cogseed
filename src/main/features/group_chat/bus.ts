@@ -1099,6 +1099,10 @@ export type GroupEvent =
       msg: GroupMessage;
       turn_end?: boolean;
       turn_id?: string;
+      /** Id of the message that triggered the completing turn (the queue
+       * item's msgId). Live-event only, never persisted. Lets consumers
+       * pair a turn-end message with the inbound that started the turn. */
+      source_msg_id?: string;
       seg?: number;
     }
   | {
@@ -1150,6 +1154,10 @@ export type GroupEvent =
       cid: string;
       actor: string;
       turn_id?: string;
+      /** Id of the message that triggered the silent turn (the queue item's
+       * msgId). Live-event only; lets consumers release per-turn state for
+       * turns that end without a message. */
+      source_msg_id?: string;
       reason?: "terminal_handoff";
     };
 
@@ -1775,6 +1783,12 @@ export interface EnqueueParams {
    * end-of-turn message. Renderer uses it to finalize the exact placeholder
    * that collected this turn's process / delta events. */
   turn_id?: string;
+  /** QueueItem.msgId for the actor execution that produced this message —
+   * the id of the (user/commander) message that triggered the turn. Carried
+   * on live bus events only (never persisted) so consumers such as the
+   * messaging manager can pair a completing turn with the inbound that
+   * started it. */
+  source_msg_id?: string;
   /** Mark this message as an internal plan-step dispatch (commander →
    * agent, fired by plan_executor). Persists for the agent's slice but the
    * renderer hides it from the user view — the plan announcement already
@@ -2374,6 +2388,7 @@ async function _enqueueBody(
     msg,
     ...(params.turn_end ? { turn_end: true } : {}),
     ...(params.turn_id ? { turn_id: params.turn_id } : {}),
+    ...(params.source_msg_id ? { source_msg_id: params.source_msg_id } : {}),
     ...(params.seg !== undefined ? { seg: params.seg } : {}),
   });
   log.info(
@@ -2834,6 +2849,7 @@ async function runWorkerLoop(state: CidState, w: WorkerState): Promise<void> {
           cid: w.cid,
           actor: it.actor.id,
           turn_id: it.turnId,
+          source_msg_id: it.msgId,
         });
       }
       try {
@@ -2896,6 +2912,7 @@ async function runWorkerLoop(state: CidState, w: WorkerState): Promise<void> {
           cid: w.cid,
           actor: item.actor.id,
           turn_id: item.turnId,
+          source_msg_id: item.msgId,
         });
       } catch (emitErr) {
         log.warn(
@@ -3118,6 +3135,7 @@ async function runActorTurnBody(
         forceTo: [USER_ID],
         turn_end: true,
         turn_id: item.turnId,
+        source_msg_id: item.msgId,
       });
       await markInFlight(uid, cid, actor.id, false);
       await emitStateChanged(state);
@@ -3337,6 +3355,7 @@ async function runActorTurnBody(
         forceTo: [USER_ID],
         turn_end: true,
         turn_id: item.turnId,
+        source_msg_id: item.msgId,
       });
       await _syncStateStatus(state);
       log.info(
@@ -3437,6 +3456,7 @@ async function runActorTurnBody(
         forceTo: [USER_ID],
         turn_end: true,
         turn_id: item.turnId,
+        source_msg_id: item.msgId,
       });
       await markInFlight(uid, cid, actor.id, false);
       await emitStateChanged(state);
@@ -3461,6 +3481,7 @@ async function runActorTurnBody(
         forceTo: [USER_ID],
         turn_end: true,
         turn_id: item.turnId,
+        source_msg_id: item.msgId,
         process: processItems,
       });
       await markInFlight(uid, cid, actor.id, false);
@@ -4779,6 +4800,7 @@ async function runActorTurnBody(
       // dispatch) would also wrongly consume the placeholder.
       turn_end: true,
       turn_id: item.turnId,
+      source_msg_id: item.msgId,
       ...(item.kstarDecision?.required
         ? { kstarDecision: item.kstarDecision }
         : {}),
@@ -4803,6 +4825,7 @@ async function runActorTurnBody(
       cid,
       actor: actor.id,
       turn_id: item.turnId,
+      source_msg_id: item.msgId,
       ...(terminalHandoffCompleted
         ? { reason: "terminal_handoff" as const }
         : {}),

@@ -2269,3 +2269,117 @@ describe('messaging burst merge on inbound', () => {
     vi.useRealTimers();
   });
 });
+
+describe('wechat_personal platform types', () => {
+  it('includes wechat_personal in the platform union and registry validation', async () => {
+    const { MESSAGING_PLATFORMS } = await import('../../../src/main/features/messaging/types');
+    expect(MESSAGING_PLATFORMS).toContain('wechat_personal');
+  });
+
+  it('exposes the wechat state file under the local config dir', async () => {
+    const { userMessagingWeChatStateFile } = await import('../../../src/main/paths');
+    const file = userMessagingWeChatStateFile('uid-1');
+    expect(file).toContain('config');
+    expect(file).toContain('messaging-wechat-state.json');
+    expect(file).not.toContain('cloud');
+  });
+});
+
+describe('wechat_personal registry', () => {
+  const validSecret = {
+    ilinkBotToken: 'a'.repeat(64),
+    ilinkBaseUrl: 'https://ilinkai.weixin.qq.com',
+    ilinkBotId: 'bot-12345',
+  };
+
+  it('validates iLink secrets and rejects untrusted base urls', async () => {
+    const { _registryTestHooks } = await import('../../../src/main/features/messaging/registry');
+    expect(_registryTestHooks.validateSecret('wechat_personal', validSecret)).toEqual(validSecret);
+    const badUrls = [
+      'http://ilinkai.weixin.qq.com',              // 非 HTTPS
+      'https://evil.example.com',                  // 非白名单 host
+      'https://user:pass@ilinkai.weixin.qq.com',   // 带用户信息
+      'https://ilinkai.weixin.qq.com:8443',        // 非标准端口
+      'not a url',
+    ];
+    for (const url of badUrls) {
+      expect(() => _registryTestHooks.validateSecret('wechat_personal', { ...validSecret, ilinkBaseUrl: url }))
+        .toThrow();
+    }
+    expect(() => _registryTestHooks.validateSecret('wechat_personal', { ...validSecret, ilinkBotToken: 'x' }))
+      .toThrow();
+  });
+
+  it('accepts opaque iLink tokens of any printable-ASCII shape (base64 style)', async () => {
+    const { _registryTestHooks } = await import('../../../src/main/features/messaging/registry');
+    // 标准 base64 含 +/=；token 是不透明串，只做长度与字符边界校验
+    const base64Token = 'A'.repeat(40) + '+/=';
+    expect(_registryTestHooks.validateSecret('wechat_personal', { ...validSecret, ilinkBotToken: base64Token }))
+      .toEqual({ ...validSecret, ilinkBotToken: base64Token });
+    // 空白/控制字符仍拒绝：内部空格（trim 后仍在）→ throw
+    expect(() => _registryTestHooks.validateSecret('wechat_personal', { ...validSecret, ilinkBotToken: `ab${'c'.repeat(13)} d` }))
+      .toThrow();
+    // 长度边界不变：15 位仍拒绝，16 位通过
+    expect(() => _registryTestHooks.validateSecret('wechat_personal', { ...validSecret, ilinkBotToken: 'x'.repeat(15) }))
+      .toThrow();
+    expect(_registryTestHooks.validateSecret('wechat_personal', { ...validSecret, ilinkBotToken: 'x'.repeat(16) }))
+      .toEqual({ ...validSecret, ilinkBotToken: 'x'.repeat(16) });
+  });
+
+  it('creates a wechat instance with owner and allowlist in one atomic write', async () => {
+    const registry = await import('../../../src/main/features/messaging/registry');
+    const created = await registry.createWechatInstance('uid-1', {
+      displayName: '我的微信',
+      ...validSecret,
+      ownerExternalUserId: 'wxid-owner',
+    });
+    expect(created.platform).toBe('wechat_personal');
+    expect(created.ownerConfigured).toBe(true);
+    expect(created.ownerLabel).toBeUndefined();
+    expect(created.ownerIdentitySource).toBe('qr');
+    const client = await registry.listInstances('uid-1');
+    expect(client).toHaveLength(1);
+    expect(client[0].policy.allowUserIds).toEqual(['wxid-owner']);
+    // 无中间态：直接读盘也同时具备 owner 与 allowlist
+    const internal = await registry.getInstance('uid-1', created.id);
+    expect(internal?.ownerExternalUserId).toBe('wxid-owner');
+    expect(internal?.policy.allowUserIds).toEqual(['wxid-owner']);
+  });
+
+  it('fails closed when owner id is missing', async () => {
+    const registry = await import('../../../src/main/features/messaging/registry');
+    await expect(registry.createWechatInstance('uid-1', {
+      displayName: '我的微信',
+      ...validSecret,
+      ownerExternalUserId: '',
+    })).rejects.toThrow();
+  });
+});
+
+describe('iLink URL trust split (API base vs scan URL)', () => {
+  it('accepts a liteapp scan URL via isTrustedIlinkScanUrl', async () => {
+    const { isTrustedIlinkScanUrl } = await import('../../../src/main/features/messaging/registry');
+    expect(isTrustedIlinkScanUrl('https://liteapp.weixin.qq.com/q/abc?qrcode=x&bot_type=3')).toBe(true);
+  });
+
+  it('rejects non-https, evil hosts, userinfo and non-standard ports for scan URLs', async () => {
+    const { isTrustedIlinkScanUrl } = await import('../../../src/main/features/messaging/registry');
+    const badUrls = [
+      'http://liteapp.weixin.qq.com/q/abc?qrcode=x&bot_type=3', // 非 HTTPS
+      'https://evil.example.com/q/abc?qrcode=x',                // 非白名单 host
+      'https://user:pass@liteapp.weixin.qq.com/q/abc',          // 带用户信息
+      'https://liteapp.weixin.qq.com:8443/q/abc',               // 非标准端口
+      'not a url',
+    ];
+    for (const url of badUrls) {
+      expect(isTrustedIlinkScanUrl(url)).toBe(false);
+    }
+  });
+
+  it('keeps liteapp out of the API base-URL whitelist', async () => {
+    const { isTrustedIlinkBaseUrl } = await import('../../../src/main/features/messaging/registry');
+    // 扫码 URL 仅渲染给用户扫，绝不作为 fetch 目标；API 白名单保持严格
+    expect(isTrustedIlinkBaseUrl('https://liteapp.weixin.qq.com/q/abc?qrcode=x&bot_type=3')).toBe(false);
+    expect(isTrustedIlinkBaseUrl('https://ilinkai.weixin.qq.com')).toBe(true);
+  });
+});

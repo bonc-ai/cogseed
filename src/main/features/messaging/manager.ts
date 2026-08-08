@@ -270,6 +270,12 @@ interface RuntimeInstance {
   /** Rendered tool-call chrome lines keyed by turn_id, for both card and
    * plain-text reply paths. */
   toolLinesByTurn: Map<string, string[]>;
+  /** Wechat-personal only: `contextTokenRef` captured per inbound at
+   * processing time, keyed by the group-chat user message id the inbound
+   * produced. The turn-end handler consumes the entry for the completing
+   * turn (via the event's `source_msg_id`) so an interleaved later inbound
+   * can never supply the token for an earlier turn's reply. */
+  turnSourceRefs: Map<string, string>;
 }
 
 interface OutboundMessage {
@@ -301,9 +307,9 @@ export const PLATFORM_CATALOG: readonly MessagingPlatformCatalogEntry[] = [
   {
     platform: 'wechat_personal',
     displayName: '个人微信',
-    description: '官方双向机器人能力不可用，暂不提供登录或扫码。',
-    available: false,
-    twoWay: false,
+    description: '微信官方 iLink 通道，扫码绑定后长轮询双向对话。',
+    available: true,
+    twoWay: true,
   },
   {
     platform: 'wecom',
@@ -388,7 +394,12 @@ function withLiveStatus(uid: string, instance: MessagingInstanceClient): Messagi
 function queueRuntimeStatus(uid: string, runtime: RuntimeInstance, nextStatus: MessagingInstanceStatus): void {
   if (!isCurrentRuntime(uid, runtime)) return;
   const snapshot = cloneStatus(nextStatus);
+  const previous = liveStatuses.get(uid)?.get(runtime.instanceId);
   setLiveStatus(uid, runtime.instanceId, snapshot);
+  // 状态 kind 变化才推送渲染层：心跳重复 connected 不刷屏，避免高频重渲染。
+  if (!previous || previous.kind !== snapshot.kind) {
+    broadcastMessagingStatus(runtime.instanceId, snapshot);
+  }
   runtime.statusWrite = runtime.statusWrite
     .then(async () => {
       if (!isCurrentRuntime(uid, runtime)) return;
@@ -400,6 +411,24 @@ function queueRuntimeStatus(uid: string, runtime: RuntimeInstance, nextStatus: M
         error: (error as Error).message,
       });
     });
+}
+
+/** 实例状态变化广播给渲染层（kind 变化时）。channel 在 preload 的
+ * `messaging:` 推送前缀白名单内。推送是尽力而为，失败不影响状态机。 */
+let broadcastOverride: ((channel: string, payload: unknown) => void) | null = null;
+
+function broadcastMessagingStatus(instanceId: string, status: MessagingInstanceStatus): void {
+  if (broadcastOverride) {
+    broadcastOverride('messaging:instance-status', { instanceId, status: cloneStatus(status) });
+    return;
+  }
+  try {
+    const ipc = require('../../ipc') as { broadcastToRenderer?: (channel: string, payload: unknown) => void };
+    if (typeof ipc.broadcastToRenderer !== 'function') return;
+    ipc.broadcastToRenderer('messaging:instance-status', { instanceId, status: cloneStatus(status) });
+  } catch {
+    /* push is best-effort */
+  }
 }
 
 function isMessageEvent(event: GroupEvent): event is Extract<GroupEvent, { type: 'message' }> {
@@ -416,13 +445,14 @@ function messageFromEvent(event: Extract<GroupEvent, { type: 'message' }>): Outb
   };
 }
 
-function deliveryContext(entry: { replyToMessageId?: string; threadId?: string; replyInThread?: boolean; idempotencyKey?: string; recipientIdType?: 'chat_id' | 'open_id' }) {
+function deliveryContext(entry: { replyToMessageId?: string; threadId?: string; replyInThread?: boolean; idempotencyKey?: string; recipientIdType?: 'chat_id' | 'open_id'; contextTokenRef?: string }) {
   return {
     ...(entry.replyToMessageId ? { replyToMessageId: entry.replyToMessageId } : {}),
     ...(entry.threadId ? { threadId: entry.threadId } : {}),
     ...(entry.replyInThread ? { replyInThread: true } : {}),
     ...(entry.idempotencyKey ? { idempotencyKey: entry.idempotencyKey } : {}),
     ...(entry.recipientIdType ? { recipientIdType: entry.recipientIdType } : {}),
+    ...(entry.contextTokenRef ? { contextTokenRef: entry.contextTokenRef } : {}),
   };
 }
 
@@ -432,6 +462,7 @@ function beginDeliveryEntry(
   message: OutboundMessage,
   text: string,
   idempotencyKey?: string,
+  contextTokenRef?: string,
 ) {
   const key = ledger.deliveryKey(instanceId, message.id as string);
   return {
@@ -446,6 +477,7 @@ function beginDeliveryEntry(
     ...(binding.replyToMessageId ? { replyToMessageId: binding.replyToMessageId } : {}),
     ...(binding.threadId ? { threadId: binding.threadId } : {}),
     ...(binding.replyInThread ? { replyInThread: true } : {}),
+    ...(contextTokenRef ? { contextTokenRef } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
   };
 }
@@ -531,7 +563,7 @@ async function recoverDeliveries(uid: string, runtime: RuntimeInstance): Promise
   const due = await ledger.listRecoverableDeliveries(uid, runtime.instanceId);
   for (const entry of due) {
     if (!isCurrentRuntime(uid, runtime)) return;
-    const begun = await ledger.beginDelivery(uid, beginDeliveryEntry(runtime.instanceId, entry, { id: entry.sourceMessageId, text: entry.text || '' }, entry.text || '', entry.idempotencyKey));
+    const begun = await ledger.beginDelivery(uid, beginDeliveryEntry(runtime.instanceId, entry, { id: entry.sourceMessageId, text: entry.text || '' }, entry.text || '', entry.idempotencyKey, entry.contextTokenRef));
     if (begun.duplicate) continue;
     await attemptDelivery(uid, runtime, entry.key, begun.entry);
   }
@@ -540,7 +572,8 @@ async function recoverDeliveries(uid: string, runtime: RuntimeInstance): Promise
 
 /**
  * Proactive (Commander-initiated) send to a fixed recipient — currently the
- * configured Feishu/Lark owner open id. Uses the same ledger, idempotency key,
+ * configured Feishu/Lark owner open id or the WeChat owner user id. Uses the
+ * same ledger, idempotency key,
  * retry, and recovery machinery as ordinary replies, keyed on a caller-owned
  * stable source key so one tool call never sends twice. Waits for the
  * terminal outcome (`sent` / `failed` / `cancelled`) instead of returning on
@@ -607,6 +640,25 @@ export async function sendProactive(
   }
 }
 
+/** Resolve the context token reference for one completing turn. The per-turn
+ * capture (keyed by the user message id that triggered the turn) is
+ * authoritative and is consumed on use; the binding's latest-inbound ref is
+ * only a fallback for turns the manager cannot trace to an inbound (e.g.
+ * nested agent turns carry their own synthetic source ids) and can never
+ * override the per-turn capture. */
+function resolveTurnContextTokenRef(
+  runtime: RuntimeInstance,
+  turnSourceMsgId: string | undefined,
+  binding: MessagingBinding,
+): string | undefined {
+  if (turnSourceMsgId) {
+    const perTurn = runtime.turnSourceRefs.get(turnSourceMsgId);
+    runtime.turnSourceRefs.delete(turnSourceMsgId);
+    if (perTurn) return perTurn;
+  }
+  return binding.contextTokenRef;
+}
+
 /** Send the session-reset confirmation through the same ledger-backed path
  * as ordinary replies, keyed on the inbound command message. */
 async function deliverConfirmationMessage(
@@ -620,7 +672,7 @@ async function deliverConfirmationMessage(
   const key = ledger.deliveryKey(instance.id, envelope.externalMessageId);
   const begun = await ledger.beginDelivery(
     uid,
-    beginDeliveryEntry(instance.id, binding, { id: envelope.externalMessageId, text }, text),
+    beginDeliveryEntry(instance.id, binding, { id: envelope.externalMessageId, text }, text, undefined, envelope.contextTokenRef),
   );
   if (begun.duplicate) return;
   await attemptDelivery(uid, runtime, key, begun.entry);
@@ -632,13 +684,17 @@ async function deliverGroupMessage(
   instance: MessagingInstance,
   binding: MessagingBinding,
   message: OutboundMessage,
+  turnSourceMsgId?: string,
 ): Promise<void> {
   if (!isCurrentRuntime(uid, runtime)) return;
   const sourceMessageId = typeof message.id === 'string' && message.id ? message.id : '';
   const text = typeof message.text === 'string' ? message.text.trim().slice(0, 12_000) : '';
   if (!sourceMessageId || !text || message.dispatch || message.from === 'user') return;
   const key = ledger.deliveryKey(instance.id, sourceMessageId);
-  const begun = await ledger.beginDelivery(uid, beginDeliveryEntry(instance.id, binding, message, text));
+  const begun = await ledger.beginDelivery(
+    uid,
+    beginDeliveryEntry(instance.id, binding, message, text, undefined, resolveTurnContextTokenRef(runtime, turnSourceMsgId, binding)),
+  );
   if (begun.duplicate) return;
   if (!isCurrentRuntime(uid, runtime) || runtime.controller.signal.aborted) {
     await ledger.finishDelivery(uid, key, {
@@ -656,8 +712,9 @@ function trackOutboundDelivery(
   instance: MessagingInstance,
   binding: MessagingBinding,
   message: OutboundMessage,
+  turnSourceMsgId?: string,
 ): void {
-  const delivery = deliverGroupMessage(uid, runtime, instance, binding, message);
+  const delivery = deliverGroupMessage(uid, runtime, instance, binding, message, turnSourceMsgId);
   runtime.outboundDeliveries.add(delivery);
   void delivery.then(
     () => {
@@ -725,6 +782,9 @@ async function attachBindingListener(
       return;
     }
     if (event.type === 'turn_silent') {
+      // A silent turn produced no reply: release its captured context token
+      // reference so it can never leak into a later delivery.
+      if (event.source_msg_id) runtime.turnSourceRefs.delete(event.source_msg_id);
       if (streamingEnabled) handleCardTurnSilent(runtime, currentBinding, event);
       return;
     }
@@ -1011,7 +1071,7 @@ async function handleTurnEndMessage(
   if (toolLines.length && typeof message.text === 'string') {
     message.text = `${toolLines.map((line) => `\`${line}\``).join('\n')}\n\n---\n\n${message.text}`;
   }
-  trackOutboundDelivery(uid, runtime, instance, binding, message);
+  trackOutboundDelivery(uid, runtime, instance, binding, message, event.source_msg_id);
   if (turnId) clearToolLinesForTurn(runtime, turnId);
 }
 
@@ -1106,7 +1166,19 @@ async function flushBurstBatch(uid: string, batch: BurstBatch<{ envelope: Inboun
         // Trailing ids are best-effort dedup markers; a bad id must not fail the batch.
       }
     }
-    const envelope: InboundEnvelope = { ...first, externalMessageId: batch.ids[0], text: batch.text };
+    // 合并批次携带最后一条有效消息的 tokenRef：getupdates 多消息批次里
+    // 靠前的 context_token 可能已陈旧（spec §3.1），回复必须绑定该轮
+    // 最新的一条，而不是第一条。
+    let lastTokenRef: string | undefined;
+    for (const item of batch.payloads) {
+      if (item.envelope.contextTokenRef) lastTokenRef = item.envelope.contextTokenRef;
+    }
+    const envelope: InboundEnvelope = {
+      ...first,
+      externalMessageId: batch.ids[0],
+      text: batch.text,
+      ...(lastTokenRef !== undefined ? { contextTokenRef: lastTokenRef } : {}),
+    };
     const result = await handleInbound(uid, envelope);
     firstResolve(result);
     for (const item of batch.payloads.slice(1)) {
@@ -1217,6 +1289,12 @@ async function handleInboundLocked(
     }
     const result = await groupChat.send({ userId: uid, cid: binding.cid, text });
     if (!result.ok) throw new Error(result.error || 'group chat enqueue failed');
+    // Capture the inbound's context token reference keyed by the user message
+    // this turn starts from, so the completing turn's reply resolves its own
+    // ref even when a later inbound arrives while the turn is still in flight.
+    if (runtime && result.msg?.id && envelope.contextTokenRef) {
+      runtime.turnSourceRefs.set(result.msg.id, envelope.contextTokenRef);
+    }
     await ledger.completeInbound(uid, key, { status: 'accepted', cid: binding.cid });
     return { accepted: true, duplicate: false, cid: binding.cid };
   } catch (error) {
@@ -1317,7 +1395,7 @@ async function startRuntime(uid: string, instanceId: string): Promise<void> {
   }
   let adapter: MessagingAdapter;
   try {
-    adapter = createAdapter(loaded.instance, loaded.secret);
+    adapter = createAdapter(loaded.instance, loaded.secret, uid);
   } catch (error) {
     const message = (error as Error).message || 'messaging adapter initialization failed';
     await registry.updateStatus(uid, instanceId, { kind: 'error', message, checkedAt: new Date().toISOString() });
@@ -1340,6 +1418,7 @@ async function startRuntime(uid: string, instanceId: string): Promise<void> {
     retryScheduledAt: null,
     cardStates: new Map(),
     toolLinesByTurn: new Map(),
+    turnSourceRefs: new Map(),
   };
   const callbacks: AdapterCallbacks = {
     onInbound: async (envelope) => {
@@ -1404,6 +1483,7 @@ async function stopRuntime(uid: string, instanceId: string): Promise<void> {
   for (const state of runtime.cardStates.values()) clearCardTimer(state);
   runtime.cardStates.clear();
   runtime.toolLinesByTurn.clear();
+  runtime.turnSourceRefs.clear();
 
   let stopFailure: Error | null = null;
   try {
@@ -1438,7 +1518,7 @@ async function startInstance(uid: string, instanceId: string): Promise<void> {
   await withLifecycle(uid, instanceId, () => startRuntime(uid, instanceId));
 }
 
-async function stopInstance(uid: string, instanceId: string): Promise<void> {
+export async function stopInstance(uid: string, instanceId: string): Promise<void> {
   await withLifecycle(uid, instanceId, () => stopRuntime(uid, instanceId));
 }
 
@@ -1605,7 +1685,7 @@ export async function health(uid: string, instanceId: string): Promise<Messaging
     const runtime = runtimes.get(uid)?.get(instanceId);
     const result = runtime && isCurrentRuntime(uid, runtime)
       ? await runtime.adapter.checkHealth()
-      : await createAdapter(loaded.instance, loaded.secret).checkHealth();
+      : await createAdapter(loaded.instance, loaded.secret, uid).checkHealth();
     if (runtime && isCurrentRuntime(uid, runtime)) {
       queueRuntimeStatus(uid, runtime, result);
       await runtime.statusWrite;
@@ -1665,4 +1745,7 @@ export const _managerTestHooks = {
   renderToolLine,
   toolLinesFromProcessEvent,
   enqueueInbound,
+  setBroadcastOverride: (fn: ((channel: string, payload: unknown) => void) | null): void => {
+    broadcastOverride = fn;
+  },
 };

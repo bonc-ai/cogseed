@@ -41,6 +41,17 @@
       revision: 0,
       timer: null,
     },
+    wechat: {
+      flowId: '',
+      state: '',
+      qrSource: '',
+      error: '',
+      errorCode: '',
+      starting: false,
+      cancelling: false,
+      revision: 0,
+      timer: null,
+    },
   };
 
   // The messaging channel catalog is product content: `open` channels get a
@@ -51,13 +62,14 @@
     { key: 'lark', platform: 'feishu_lark', feishuTenantBrand: 'lark', icon: 'lark', group: 'open' },
     { key: 'wecom', platform: 'wecom', icon: 'wecom', group: 'open' },
     { key: 'telegram', platform: 'telegram', icon: 'telegram', group: 'open' },
-    { key: 'wechat', platform: 'wechat_personal', icon: 'wechat', group: 'soon' },
+    { key: 'wechat', platform: 'wechat_personal', icon: 'wechat', group: 'open' },
     { key: 'qq', platform: 'qq', icon: 'qq', group: 'soon' },
     { key: 'dingtalk', platform: 'dingtalk', icon: 'dingtalk', group: 'soon' },
     { key: 'discord', platform: 'discord', icon: 'discord', group: 'soon' },
   ]);
 
   const QR_TERMINAL_STATES = new Set(['completed', 'cancelled', 'expired', 'denied', 'failed']);
+  const WECHAT_TERMINAL_STATES = new Set(['completed', 'cancelled', 'expired', 'blocked', 'failed']);
   const QR_STATE_KEYS = Object.freeze({
     starting: 'messaging.feishu_qr.status_starting',
     awaiting_scan: 'messaging.feishu_qr.status_awaiting_scan',
@@ -168,6 +180,7 @@
 
   function channelForInstance(instance) {
     if (!instance) return null;
+    if (instance.platform === 'wechat_personal') return 'wechat';
     if (instance.platform === 'wecom' || instance.platform === 'telegram') return instance.platform;
     if (instance.platform === 'feishu_lark') return instance.feishuTenantBrand === 'lark' ? 'lark' : 'feishu';
     return null;
@@ -259,6 +272,10 @@
     return labelFor(`messaging.wecom_qr.status_${statusState}`, errorCode || statusState);
   }
 
+  function wechatStatusLabel(statusState, errorCode) {
+    return labelFor(`messaging.wechat_qr.status_${statusState}`, errorCode || statusState);
+  }
+
   function formatExpiry(value) {
     if (!value) return '';
     const numeric = typeof value === 'number' ? value : Date.parse(String(value));
@@ -272,14 +289,15 @@
     }
   }
 
-  function renderQrCode(host, url) {
+  function renderQrCode(host, url, labelPrefix) {
+    const prefix = labelPrefix || 'messaging.feishu_qr';
     host.replaceChildren();
     if (!url) {
-      host.appendChild(el('span', 'messaging-qr-pending', labelFor('messaging.feishu_qr.qr_pending', '')));
+      host.appendChild(el('span', 'messaging-qr-pending', labelFor(`${prefix}.qr_pending`, '')));
       return;
     }
     if (typeof qrcode !== 'function') {
-      host.appendChild(el('span', 'messaging-qr-pending', labelFor('messaging.feishu_qr.qr_unavailable', '')));
+      host.appendChild(el('span', 'messaging-qr-pending', labelFor(`${prefix}.qr_unavailable`, '')));
       return;
     }
     try {
@@ -290,10 +308,10 @@
       const svg = host.querySelector('svg');
       if (svg) {
         svg.setAttribute('role', 'img');
-        svg.setAttribute('aria-label', labelFor('messaging.feishu_qr.qr_alt', ''));
+        svg.setAttribute('aria-label', labelFor(`${prefix}.qr_alt`, ''));
       }
     } catch (error) {
-      host.appendChild(el('span', 'messaging-qr-pending', errorMessage(error, labelFor('messaging.feishu_qr.qr_unavailable', ''))));
+      host.appendChild(el('span', 'messaging-qr-pending', errorMessage(error, labelFor(`${prefix}.qr_unavailable`, ''))));
     }
   }
 
@@ -592,8 +610,10 @@
           state.telegramCreatingNew = true;
           state.selectedInstanceId = '';
           renderCurrent();
+        } else if (channel.platform === 'wechat_personal') {
+          void startWechatFlow();
         } else {
-          void startQrForChannel(channel);
+          void startQrForChannel(channel, { createNew: true });
         }
       });
       list.appendChild(add);
@@ -656,8 +676,9 @@
     renderQrPanel(instance, cardRoot);
   }
 
-  async function startQrForChannel(channel) {
+  async function startQrForChannel(channel, options) {
     if (!channel || state.openingChannel) return;
+    const createNew = options?.createNew === true;
     const operation = ++state.operation;
     state.openingChannel = channel.key;
     setNotice('', '');
@@ -980,6 +1001,231 @@
     }
   }
 
+  function wechatFlowActive() {
+    return Boolean(state.wechat.flowId && !WECHAT_TERMINAL_STATES.has(state.wechat.state));
+  }
+
+  function resetWechatFlow() {
+    if (state.wechat.timer !== null) {
+      clearTimeout(state.wechat.timer);
+      state.wechat.timer = null;
+    }
+    state.wechat.revision += 1;
+    state.wechat.flowId = '';
+    state.wechat.state = '';
+    state.wechat.qrSource = '';
+    state.wechat.error = '';
+    state.wechat.errorCode = '';
+    state.wechat.starting = false;
+    state.wechat.cancelling = false;
+  }
+
+  async function cancelWechatFlow(options) {
+    const opts = options || {};
+    const flowId = state.wechat.flowId;
+    if (state.wechat.timer !== null) {
+      clearTimeout(state.wechat.timer);
+      state.wechat.timer = null;
+    }
+    const revision = ++state.wechat.revision;
+    state.wechat.cancelling = true;
+    if (opts.render !== false) renderCurrent();
+    try {
+      if (flowId && state.wechat.state !== 'completed' && state.wechat.state !== 'cancelled') {
+        try { await invoke('messaging.wechat_qr.cancel', { flowId }); } catch (_) { /* best effort */ }
+      }
+    } finally {
+      if (state.wechat.revision === revision) {
+        resetWechatFlow();
+        if (opts.render !== false) renderCurrent();
+      }
+    }
+  }
+
+  function scheduleWechatPoll(flowId) {
+    if (state.wechat.timer !== null) clearTimeout(state.wechat.timer);
+    if (!flowId || state.wechat.flowId !== flowId || WECHAT_TERMINAL_STATES.has(state.wechat.state)) return;
+    state.wechat.timer = setTimeout(() => {
+      state.wechat.timer = null;
+      void pollWechatStatus(flowId);
+    }, state.wechat.state === 'starting' ? 750 : 1500);
+  }
+
+  async function completeWechatFlow(registration, flowId, revision) {
+    if (state.wechat.revision !== revision || state.wechat.flowId !== flowId) return;
+    try {
+      await loadInstances();
+    } catch (error) {
+      if (state.wechat.revision !== revision) return;
+      setNotice(errorMessage(error, labelFor('messaging.load_failed', '')), 'error');
+      resetWechatFlow();
+      renderCurrent();
+      return;
+    }
+    if (state.wechat.revision !== revision) return;
+    if (typeof registration.instanceId === 'string' && registration.instanceId) {
+      state.selectedInstanceId = registration.instanceId;
+    }
+    setNotice(labelFor('messaging.wechat_qr.completed', ''), 'success');
+    resetWechatFlow();
+    renderCurrent();
+  }
+
+  async function pollWechatStatus(flowId) {
+    if (!flowId || state.wechat.flowId !== flowId || state.wechat.cancelling) return;
+    const revision = state.wechat.revision;
+    try {
+      const result = await invoke('messaging.wechat_qr.status', { flowId });
+      if (state.wechat.revision !== revision) return;
+      const registration = unwrapRegistrationResult(result);
+      const nextState = typeof registration.state === 'string' ? registration.state : 'failed';
+      if (nextState === 'completed') {
+        await completeWechatFlow(registration, flowId, revision);
+        return;
+      }
+      if (WECHAT_TERMINAL_STATES.has(nextState)) {
+        setNotice(wechatStatusLabel(nextState, registration.errorCode), 'error');
+        await cancelWechatFlow({ silent: true, render: false });
+        renderCurrent();
+        return;
+      }
+      state.wechat.state = nextState;
+      state.wechat.errorCode = typeof registration.errorCode === 'string' ? registration.errorCode : '';
+      if (typeof registration.qrUrl === 'string' && registration.qrUrl.trim()) {
+        state.wechat.qrSource = registration.qrUrl.trim();
+      } else if (typeof registration.qrCode === 'string' && registration.qrCode.trim()) {
+        state.wechat.qrSource = registration.qrCode.trim();
+      }
+      renderCurrent();
+      scheduleWechatPoll(flowId);
+    } catch (_) {
+      scheduleWechatPoll(flowId);
+    }
+  }
+
+  async function startWechatFlow() {
+    if (state.wechat.starting || state.wechat.cancelling || wechatFlowActive()) return;
+    resetWechatFlow();
+    const revision = state.wechat.revision;
+    state.wechat.starting = true;
+    state.wechat.state = 'starting';
+    setNotice('', '');
+    renderCurrent();
+    try {
+      const result = await invoke('messaging.wechat_qr.start', {});
+      const registration = unwrapRegistrationResult(result);
+      const flowId = typeof registration.flowId === 'string' ? registration.flowId.trim() : '';
+      if (!flowId) throw new Error(registration.error || result?.error || labelFor('messaging.wechat_qr.start_failed', ''));
+      if (state.wechat.revision !== revision) {
+        try { await invoke('messaging.wechat_qr.cancel', { flowId }); } catch (_) { /* stale flow */ }
+        return;
+      }
+      state.wechat.flowId = flowId;
+      state.wechat.state = typeof registration.state === 'string' ? registration.state : 'awaiting_scan';
+      state.wechat.starting = false;
+      state.wechat.errorCode = typeof registration.errorCode === 'string' ? registration.errorCode : '';
+      if (typeof registration.qrUrl === 'string' && registration.qrUrl.trim()) {
+        state.wechat.qrSource = registration.qrUrl.trim();
+      } else if (typeof registration.qrCode === 'string' && registration.qrCode.trim()) {
+        state.wechat.qrSource = registration.qrCode.trim();
+      }
+      if (!state.wechat.qrSource && !WECHAT_TERMINAL_STATES.has(state.wechat.state)) {
+        // 启动成功但响应里既没有 qrUrl 也没有 qrCode（如二维码响应字段
+        // 缺失或被白名单拒绝）→ 按启动失败渲染，绝不展示空二维码区域；
+        // 服务端 flow 一并静默取消。
+        try { await invoke('messaging.wechat_qr.cancel', { flowId }); } catch (_) { /* best effort */ }
+        state.wechat.state = 'failed';
+        state.wechat.error = labelFor('messaging.wechat_qr.start_failed', '');
+        setNotice(state.wechat.error, 'error');
+        renderCurrent();
+        return;
+      }
+      renderCurrent();
+      if (state.wechat.state === 'completed') {
+        await completeWechatFlow(registration, flowId, revision);
+      } else if (WECHAT_TERMINAL_STATES.has(state.wechat.state)) {
+        setNotice(wechatStatusLabel(state.wechat.state, state.wechat.errorCode), 'error');
+        await cancelWechatFlow({ silent: true, render: false });
+        renderCurrent();
+      } else {
+        scheduleWechatPoll(flowId);
+      }
+    } catch (error) {
+      if (state.wechat.revision !== revision) return;
+      state.wechat.starting = false;
+      state.wechat.state = 'failed';
+      state.wechat.error = errorMessage(error, labelFor('messaging.wechat_qr.start_failed', ''));
+      setNotice(state.wechat.error, 'error');
+      renderCurrent();
+    }
+  }
+
+  function renderWechatQrPanel(cardRoot) {
+    if (!state.wechat.starting && !state.wechat.flowId) return;
+    const panel = el('div', 'messaging-qr-panel');
+    const host = el('div', 'messaging-qr-code');
+    host.setAttribute('aria-live', 'polite');
+    const status = state.wechat.error && WECHAT_TERMINAL_STATES.has(state.wechat.state)
+      ? state.wechat.error
+      : wechatStatusLabel(state.wechat.state || 'starting', state.wechat.errorCode);
+    if (state.wechat.error && WECHAT_TERMINAL_STATES.has(state.wechat.state)) {
+      // 终态错误（如启动后无二维码来源）：在二维码区域渲染错误文案，
+      // 而不是空二维码占位
+      host.appendChild(el('span', 'messaging-qr-pending', status));
+    } else {
+      renderQrCode(host, state.wechat.qrSource, 'messaging.wechat_qr');
+    }
+    const info = el('div', 'messaging-qr-info');
+    const statusRow = el('div', `messaging-qr-status is-${state.wechat.state || 'starting'}`);
+    statusRow.append(icon('loader', 'messaging-qr-status-icon'), el('span', '', status));
+    info.appendChild(statusRow);
+    panel.append(host, info);
+    cardRoot.appendChild(panel);
+  }
+
+  function wechatAssociationCard() {
+    const section = el('section', 'messaging-config-card messaging-association-card');
+    const row = el('div', 'messaging-association-row');
+    const copy = el('div', 'messaging-config-card-heading');
+    copy.appendChild(el('h3', '', labelFor('messaging.wechat_qr.title', '')));
+    copy.appendChild(el('p', '', labelFor('messaging.wechat_qr.subtitle', '')));
+    row.appendChild(copy);
+    const flowActive = wechatFlowActive();
+    const scan = el('button', 'btn messaging-scan-button', labelFor(
+      flowActive ? 'messaging.wechat_qr.cancel' : 'messaging.wechat_qr.start', '',
+    ));
+    scan.type = 'button';
+    scan.disabled = state.updating || state.wechat.starting || state.wechat.cancelling;
+    scan.appendChild(icon(flowActive ? 'x' : 'qr-code', 'messaging-action-icon'));
+    scan.addEventListener('click', () => {
+      if (flowActive) void cancelWechatFlow();
+      else void startWechatFlow();
+    });
+    row.appendChild(scan);
+    section.appendChild(row);
+    renderWechatQrPanel(section);
+    return section;
+  }
+
+  function renderWechatPanel(channel) {
+    const wrapper = el('div', 'messaging-panel-body');
+    wrapper.appendChild(renderInstanceList(channel));
+    wrapper.appendChild(wechatAssociationCard());
+    const instances = instancesForChannel(channel);
+    if (instances.length) {
+      const deletion = card('messaging.delete_title', 'messaging.delete_subtitle', 'messaging-delete-card');
+      const instance = instances.find((item) => item.id === state.selectedInstanceId) || instances[0];
+      const deleteButton = el('button', 'btn btn-danger messaging-delete-button', labelFor('messaging.delete', ''));
+      deleteButton.type = 'button';
+      deleteButton.disabled = state.updating;
+      deleteButton.appendChild(icon('trash', 'messaging-action-icon'));
+      deleteButton.addEventListener('click', () => void deleteInstance(instance, deleteButton));
+      deletion.appendChild(deleteButton);
+      wrapper.appendChild(deletion);
+    }
+    return wrapper;
+  }
+
   function renderWecomPanel(channel) {
     const wrapper = el('div', 'messaging-panel-body');
     wrapper.appendChild(renderInstanceList(channel));
@@ -1164,6 +1410,7 @@
     if (!channel || channel.group !== 'open' || state.selectedChannel === key) return;
     cancelQr({ silent: true, render: false });
     await cancelWecomFlow({ silent: true, render: false });
+    await cancelWechatFlow({ silent: true, render: false });
     state.selectedChannel = key;
     state.selectedInstanceId = '';
     state.telegramCreatingNew = false;
@@ -1181,6 +1428,8 @@
       panel.appendChild(renderTelegramPanel(channel));
     } else if (channel.platform === 'wecom') {
       panel.appendChild(renderWecomPanel(channel));
+    } else if (channel.platform === 'wechat_personal') {
+      panel.appendChild(renderWechatPanel(channel));
     }
     appendNotice(panel);
     return panel;
@@ -1288,6 +1537,15 @@
     window.addEventListener('i18n-change', () => {
       if (document.getElementById('panel-settings')?.classList.contains('is-active')) renderCurrent();
     });
+    // 实例状态实时推送：主进程在状态 kind 变化时广播（心跳重复 connected
+    // 不推送）。收到后更新本地实例并重渲染，让"连接中→已连接"即时可见。
+    window.orkas.onPushEvent('messaging:instance-status', (payload) => {
+      if (!payload || typeof payload.instanceId !== 'string' || !payload.status) return;
+      const instance = state.instances.find((item) => item.id === payload.instanceId);
+      if (!instance) return;
+      instance.status = payload.status;
+      renderCurrent();
+    });
   }
 
   window.initMessagingSettings = async function initMessagingSettings() {
@@ -1303,7 +1561,18 @@
       CHANNELS,
       normalizeFeishuQrStatus,
       channelForInstance,
-      __test: { state, applyFeishuQrStatus, qrIsVisibleFor, qrPollDelay, resetQrState, instancesForChannel, validateBotToken, parseWecomAuthMessage },
+      __test: {
+        state,
+        applyFeishuQrStatus,
+        qrIsVisibleFor,
+        qrPollDelay,
+        resetQrState,
+        instancesForChannel,
+        validateBotToken,
+        parseWecomAuthMessage,
+        wechatFlowActive,
+        resetWechatFlow,
+      },
     };
   }
 })();

@@ -9,6 +9,7 @@ import {
   isMarkdown,
   stripMarkdownToPlainText,
 } from './feishu-post';
+import { WechatPersonalAdapter } from './wechat-personal';
 import type {
   AdapterCallbacks,
   CardActionEnvelope,
@@ -1457,9 +1458,13 @@ export class WecomAdapter implements MessagingAdapter {
   }
 }
 
-export function createAdapter(instance: MessagingInstance, secret: MessagingSecret): MessagingAdapter {
+export function createAdapter(instance: MessagingInstance, secret: MessagingSecret, uid?: string): MessagingAdapter {
   if (instance.platform === 'telegram') return new TelegramAdapter(instance, secret);
   if (instance.platform === 'wecom') return new WecomAdapter(instance, secret);
+  if (instance.platform === 'wechat_personal') {
+    if (!uid) throw new Error('wechat adapter requires uid');
+    return new WechatPersonalAdapter(instance, secret, uid);
+  }
   return new FeishuAdapter(instance, secret);
 }
 
