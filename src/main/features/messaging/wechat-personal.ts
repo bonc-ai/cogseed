@@ -19,6 +19,10 @@ import type {
 const log = createLogger('messaging:wechat-personal');
 
 const CLIENT_VERSION = 'pc-1.0.0';
+// Task 5 wires these into the wire client: REQUEST_TIMEOUT_MS bounds a single
+// HTTP call and LONG_POLL_TIMEOUT_MS is the poll deadline that falls back to
+// a fresh poll without an error status. Declared here so the wire contract
+// stays documented; unused until then.
 const LONG_POLL_TIMEOUT_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 35_000;
 const RETRY_BASE_MS = 2_000;
@@ -41,7 +45,10 @@ export function buildHeaders(ilinkBotId: string, ilinkBotToken: string): Record<
 
 export function classifyError(error: unknown): WechatErrorClass {
   const message = error instanceof Error ? error.message : String(error);
-  if (/HTTP 401|401|ret=-14|ret":\s*-14|-14/.test(message)) return 'reauth_required';
+  // Terminal reauth is signaled two ways: HTTP 401 (status check in request)
+  // and ret=-14 in the JSON payload. Both are anchored so look-alikes such as
+  // ret=-140 or an errmsg merely mentioning -14 stay transient network errors.
+  if (message.startsWith('HTTP 401') || /ret\s*=\s*-14(\s|$)/.test(message)) return 'reauth_required';
   return 'network';
 }
 
@@ -59,6 +66,9 @@ export class WechatPersonalAdapter implements MessagingAdapter {
   private terminalError: Error | null = null;
   private lastPollAt = 0;
   private lastStatus: MessagingInstanceStatus = statusOf('disconnected');
+  /** Consecutive network failures; drives the exponential backoff and is
+   * reset by every successful poll. */
+  private consecutiveFailures = 0;
 
   constructor(instance: MessagingInstance, secret: MessagingSecret, uid: string) {
     if (!secret.ilinkBotToken || !secret.ilinkBaseUrl || !secret.ilinkBotId) {
@@ -107,7 +117,15 @@ export class WechatPersonalAdapter implements MessagingAdapter {
     this.terminalError = null;
     this.generation += 1;
     const generation = this.generation;
-    await callbacks.onStatus(statusOf('connecting'));
+    // A broken status callback must not wedge the adapter: clear callbacks so
+    // a later start() is not blocked by the already-started guard, then
+    // surface the failure to the caller.
+    try {
+      await callbacks.onStatus(statusOf('connecting'));
+    } catch (error) {
+      if (this.callbacks === callbacks) this.callbacks = null;
+      throw error;
+    }
     try {
       while (!signal.aborted && !this.terminalError) {
         try {
@@ -119,7 +137,7 @@ export class WechatPersonalAdapter implements MessagingAdapter {
           const cls = classifyError(error);
           if (cls === 'reauth_required') {
             this.terminalError = new Error('Wechat needs re-scan');
-            await callbacks.onStatus(statusOf('error', '需要重新扫码'));
+            await this.emitStatus(statusOf('error', '需要重新扫码'));
             return;
           }
           // Network-class failures: back off BEFORE surfacing the error
@@ -127,15 +145,33 @@ export class WechatPersonalAdapter implements MessagingAdapter {
           // settles during the wait, and the re-check below then exits
           // silently — an external abort or long-poll timeout is normal
           // control flow and must never be reported as an error status.
-          await abortableWait(RETRY_BASE_MS, signal);
+          // The wait grows exponentially from 2s (capped) per consecutive
+          // failure; any successful poll resets the counter.
+          const delay = Math.min(RETRY_BASE_MS * 2 ** this.consecutiveFailures, RETRY_MAX_MS);
+          this.consecutiveFailures += 1;
+          await abortableWait(delay, signal);
           if (generation !== this.generation || signal.aborted) return;
-          await callbacks.onStatus(statusOf('error', 'Wechat connection error'));
-          await callbacks.onStatus(statusOf('connecting'));
+          await this.emitStatus(statusOf('error', 'Wechat connection error'));
+          await this.emitStatus(statusOf('connecting'));
         }
       }
     } finally {
+      // Emit before clearing callbacks: the disconnected push must reach this
+      // start()'s callbacks, and emitStatus keeps a rejecting callback from
+      // escaping start().
+      if (!signal.aborted && !this.terminalError) await this.emitStatus(statusOf('disconnected'));
       if (this.callbacks === callbacks) this.callbacks = null;
-      if (!signal.aborted && !this.terminalError) await callbacks.onStatus(statusOf('disconnected'));
+    }
+  }
+
+  /** Status pushes are notifications: a rejecting onStatus callback must
+   * never abort the poll loop or escape start()/finally. The initial
+   * connecting emit is the one exception — see start(). */
+  private async emitStatus(status: MessagingInstanceStatus): Promise<void> {
+    try {
+      await this.callbacks?.onStatus(status);
+    } catch (error) {
+      log.warn('wechat status callback failed', { instanceId: this.instance.id, error: logErrorSummary(error) });
     }
   }
 
@@ -171,9 +207,10 @@ export class WechatPersonalAdapter implements MessagingAdapter {
       long_polling: true,
     }, signal);
     if (generation !== this.generation) throw new Error('generation changed');
+    this.consecutiveFailures = 0;
     this.lastPollAt = Date.now();
     this.lastStatus = statusOf('connected');
-    void this.callbacks?.onStatus(this.lastStatus);
+    void this.emitStatus(this.lastStatus);
     return body;
   }
 
@@ -252,6 +289,9 @@ export function normalizeInbound(
   ownerExternalUserId: string,
   raw: RawWechatMessage,
 ): InboundEnvelope | null {
+  // Pure envelope shaping only. ownerExternalUserId is reserved for the
+  // Task 5 owner pre-filter; context_token snapshotting (contextTokenRef) is
+  // also Task 5 — this function must not set it.
   if (typeof raw.group_id === 'string' && raw.group_id) return null;
   const messageId = typeof raw.msg_id === 'string' ? raw.msg_id.trim() : '';
   const userId = typeof raw.from_user_id === 'string' ? raw.from_user_id.trim() : '';

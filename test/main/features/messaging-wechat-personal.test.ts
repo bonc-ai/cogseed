@@ -14,6 +14,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
   else process.env.ORKAS_WORKSPACE_ROOT = previousRoot;
@@ -38,6 +40,19 @@ describe('wechat personal adapter wire contract', () => {
     ilinkBaseUrl: 'https://ilinkai.weixin.qq.com',
     ilinkBotId: 'bot-1',
   };
+  const makeResponse = (body: unknown): Response => new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
+  /** Yield real event-loop turns (setImmediate is not faked by the tests'
+   * limited fake-timer config) until a condition holds, so async chains that
+   * mix real I/O (dynamic imports, fs reads) with faked timers settle. */
+  const pumpUntil = async (cond: () => boolean, rounds = 500): Promise<void> => {
+    for (let i = 0; i < rounds; i++) {
+      if (cond()) return;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  };
 
   it('builds the full header set with a random X-WECHAT-UIN per call', async () => {
     const { _wechatTestHooks } = await import('../../../src/main/features/messaging/wechat-personal');
@@ -55,7 +70,12 @@ describe('wechat personal adapter wire contract', () => {
     const { _wechatTestHooks } = await import('../../../src/main/features/messaging/wechat-personal');
     expect(_wechatTestHooks.classifyError(new Error('HTTP 401'))).toBe('reauth_required');
     expect(_wechatTestHooks.classifyError(new Error('ret=-14'))).toBe('reauth_required');
+    expect(_wechatTestHooks.classifyError(new Error('ret=-14 token invalid'))).toBe('reauth_required');
     expect(_wechatTestHooks.classifyError(new Error('socket hang up'))).toBe('network');
+    // Anchored matching: look-alike substrings must stay transient network errors.
+    expect(_wechatTestHooks.classifyError(new Error('ret=-140'))).toBe('network');
+    expect(_wechatTestHooks.classifyError(new Error('ret=100 timeout at -14:00'))).toBe('network');
+    expect(_wechatTestHooks.classifyError(new Error('HTTP 1401'))).toBe('network');
   });
 
   it('long-polls getupdates, commits the opaque cursor after the batch settles, and stops on 401', async () => {
@@ -117,5 +137,129 @@ describe('wechat personal adapter wire contract', () => {
     await startPromise;
     const errorCalls = onStatus.mock.calls.filter(([s]) => s.kind === 'error');
     expect(errorCalls).toHaveLength(0);
+  });
+
+  it('cleans up callbacks when the initial connecting status callback rejects, so a later start() works', async () => {
+    const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
+    const onStatus = vi.fn().mockRejectedValueOnce(new Error('status boom')).mockResolvedValue(undefined);
+    const adapter = new WechatPersonalAdapter(instance, secret, 'uid-1');
+    const c1 = new AbortController();
+    await expect(adapter.start(c1.signal, { onInbound: vi.fn(), onStatus } as never)).rejects.toThrow('status boom');
+    // The first start failed loudly but must not wedge the adapter: the
+    // already-started guard would otherwise block every later start().
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => makeResponse({ ret: 0, get_updates_buf: 'c1', messages: [] })));
+    const c2 = new AbortController();
+    const startPromise = adapter.start(c2.signal, { onInbound: vi.fn(), onStatus } as never);
+    await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith(expect.objectContaining({ kind: 'connected' })));
+    c2.abort();
+    await startPromise;
+  });
+
+  it('does not let a rejecting disconnected status callback escape start()', async () => {
+    const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
+    let resolveFetch: (value: Response) => void = () => {};
+    const fetchMock = vi.fn().mockImplementation(() => new Promise<Response>((resolve) => { resolveFetch = resolve; }));
+    vi.stubGlobal('fetch', fetchMock);
+    const onStatus = vi.fn().mockImplementation(async (status: { kind: string }) => {
+      if (status.kind === 'disconnected') throw new Error('disco boom');
+    });
+    const adapter = new WechatPersonalAdapter(instance, secret, 'uid-1');
+    const startPromise = adapter.start(new AbortController().signal, { onInbound: vi.fn(), onStatus } as never);
+    // First poll hangs; bump the generation via stop() so the poll result is
+    // discarded and start() exits through the finally with a disconnected emit.
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await adapter.stop();
+    resolveFetch(makeResponse({ ret: 0, get_updates_buf: 'c1', messages: [] }));
+    await expect(startPromise).resolves.toBeUndefined();
+    expect(onStatus).toHaveBeenCalledWith(expect.objectContaining({ kind: 'disconnected' }));
+  });
+
+  it('backs off exponentially on consecutive failures (2s, 4s, 8s) and resets after a successful poll', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
+    const delays: number[] = [];
+    const realSetTimeout = globalThis.setTimeout;
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation((fn: () => void, ms?: number, ...args: unknown[]) => {
+      if (typeof ms === 'number' && ms >= 1_000) delays.push(ms);
+      return realSetTimeout(fn, ms, ...args);
+    });
+    let fail = true;
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      if (fail) throw new Error('socket hang up');
+      return makeResponse({ ret: 0, get_updates_buf: 'c1', messages: [] });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const onStatus = vi.fn().mockResolvedValue(undefined);
+    const adapter = new WechatPersonalAdapter(instance, secret, 'uid-1');
+    const controller = new AbortController();
+    const startPromise = adapter.start(controller.signal, { onInbound: vi.fn(), onStatus } as never);
+    try {
+      // Consecutive failures must wait 2s, then 4s, then 8s (exponential).
+      const expected = [2_000, 4_000, 8_000];
+      for (let i = 0; i < expected.length; i++) {
+        await pumpUntil(() => delays.length > i);
+        expect(delays[i]).toBe(expected[i]);
+        await vi.advanceTimersByTimeAsync(expected[i]);
+      }
+      // A successful poll resets the counter: the next failure must wait the
+      // base 2s again. Failures may already have queued further waits while
+      // the fake clock advanced (real I/O can settle inside an advance), so
+      // fire every pending backoff wait until a poll succeeds.
+      fail = false;
+      let sawConnected = false;
+      for (let i = 0; i < 8 && !sawConnected; i++) {
+        await vi.advanceTimersByTimeAsync(60_000);
+        await pumpUntil(() => onStatus.mock.calls.some(([s]) => s.kind === 'connected'));
+        sawConnected = onStatus.mock.calls.some(([s]) => s.kind === 'connected');
+      }
+      expect(sawConnected).toBe(true);
+      fail = true;
+      const waitsBefore = delays.length;
+      await pumpUntil(() => delays.length > waitsBefore);
+      expect(delays[waitsBefore]).toBe(2_000);
+    } finally {
+      controller.abort();
+      await startPromise;
+      vi.useRealTimers();
+    }
+  });
+
+  it('checkHealth: fresh poll is connected, 90s staleness flips to disconnected, terminal error reports error', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
+    const onStatus = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => makeResponse({ ret: 0, get_updates_buf: 'c1', messages: [] })));
+    const adapter = new WechatPersonalAdapter(instance, secret, 'uid-1');
+    try {
+      // Never polled -> disconnected.
+      expect((await adapter.checkHealth()).kind).toBe('disconnected');
+      const controller = new AbortController();
+      const startPromise = adapter.start(controller.signal, { onInbound: vi.fn(), onStatus } as never);
+      await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith(expect.objectContaining({ kind: 'connected' })));
+      controller.abort();
+      await startPromise;
+      // Fresh poll -> connected.
+      expect((await adapter.checkHealth()).kind).toBe('connected');
+      // Past the 90s staleness window -> disconnected.
+      vi.advanceTimersByTime(91_000);
+      expect((await adapter.checkHealth()).kind).toBe('disconnected');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('checkHealth: reports error once a terminal reauth error ended the adapter', async () => {
+    const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
+    const onStatus = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => makeResponse({ ret: -14, errmsg: 'token invalid' })));
+    const adapter = new WechatPersonalAdapter(instance, secret, 'uid-1');
+    const controller = new AbortController();
+    const startPromise = adapter.start(controller.signal, { onInbound: vi.fn(), onStatus } as never);
+    await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' })));
+    controller.abort();
+    await startPromise;
+    const health = await adapter.checkHealth();
+    expect(health.kind).toBe('error');
+    expect(health.message).toContain('re-scan');
   });
 });
