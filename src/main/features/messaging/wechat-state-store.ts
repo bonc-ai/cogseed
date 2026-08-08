@@ -30,7 +30,12 @@ interface WechatStateFile {
   instances: Record<string, { stateEnc?: string }>;
 }
 
-const EMPTY_FILE: WechatStateFile = { version: 1, instances: {} };
+/** Fresh object per call. A shared constant would alias its `instances` map
+ * into every missing-file read path: a save through that path would then
+ * mutate module state and resurrect stale entries after the file disappears. */
+function emptyFile(): WechatStateFile {
+  return { version: 1, instances: {} };
+}
 const PEER_MAX = 8;
 const PEER_ID_MAX = 160;
 const TOKEN_MAX = 2048;
@@ -76,7 +81,7 @@ async function readFile(uid: string): Promise<WechatStateFile> {
   try {
     raw = await fs.promises.readFile(filePath, 'utf8');
   } catch {
-    return { ...EMPTY_FILE };
+    return emptyFile();
   }
   let parsed: unknown;
   try {
@@ -86,11 +91,11 @@ async function readFile(uid: string): Promise<WechatStateFile> {
     // look like a missing file, so the corrupt file would never be isolated.
     log.error('wechat state file corrupt (bad json), isolating');
     await isolateCorrupt(uid);
-    return { ...EMPTY_FILE };
+    return emptyFile();
   }
   const rawFile = parsed as Partial<WechatStateFile>;
   if (rawFile.version !== 1 || !rawFile.instances || typeof rawFile.instances !== 'object') {
-    return { ...EMPTY_FILE };
+    return emptyFile();
   }
   return { version: 1, instances: rawFile.instances as WechatStateFile['instances'] };
 }

@@ -72,4 +72,16 @@ describe('wechat state store', () => {
     await store.deleteWechatInstanceState('uid-1', 'inst-2');
     expect(await store.loadWechatState('uid-1', 'inst-2', fingerprint)).toBeNull();
   });
+
+  it('does not resurrect stale state after the state file disappears in-process', async () => {
+    const store = await import('../../../src/main/features/messaging/wechat-state-store');
+    const { userMessagingWeChatStateFile } = await import('../../../src/main/paths');
+    const fingerprint = store.wechatCredentialFingerprint('bot-1', 'owner-1');
+    // 首次保存走"文件不存在"路径：readFile 若返回共享常量对象，instances 会被直接改写。
+    await store.saveWechatPeerToken('uid-1', 'inst-1', fingerprint, 'peer-1', 'tok-x', 1);
+    // 进程内文件消失（外部删除/损坏隔离后）：load 必须回到 null，
+    // 而不是从共享常量解出上一次的 stateEnc 返回陈旧状态。
+    fs.rmSync(userMessagingWeChatStateFile('uid-1'));
+    expect(await store.loadWechatState('uid-1', 'inst-1', fingerprint)).toBeNull();
+  });
 });
