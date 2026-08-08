@@ -310,7 +310,6 @@ describe('settings tabs module', () => {
 
   it('creates a fresh Feishu draft when adding a second instance', () => {
     const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
-    expect(source).toContain('void startQrForChannel(channel, { createNew: true })');
     expect(source).toContain('async function startQrForChannel(channel)');
     // Always mint a fresh draft: re-running QR against an already-bound bot is
     // refused by main (it would overwrite existing credentials).

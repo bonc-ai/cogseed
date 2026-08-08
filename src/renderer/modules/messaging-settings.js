@@ -613,7 +613,7 @@
         } else if (channel.platform === 'wechat_personal') {
           void startWechatFlow();
         } else {
-          void startQrForChannel(channel, { createNew: true });
+          void startQrForChannel(channel);
         }
       });
       list.appendChild(add);
@@ -676,9 +676,8 @@
     renderQrPanel(instance, cardRoot);
   }
 
-  async function startQrForChannel(channel, options) {
+  async function startQrForChannel(channel) {
     if (!channel || state.openingChannel) return;
-    const createNew = options?.createNew === true;
     const operation = ++state.operation;
     state.openingChannel = channel.key;
     setNotice('', '');
