@@ -51,13 +51,19 @@ export const PC_ROOT       = path.resolve(__dirname, '..', '..');      // PC
 export const APP_ROOT      = PC_ROOT;
 export const PROJECT_ROOT  = path.resolve(PC_ROOT, '..');              // Orkas
 
+export function packagedResourcesRoot(): string | null {
+  const resourcesPath = (process as unknown as { resourcesPath?: string }).resourcesPath;
+  return resourcesPath && !resourcesPath.includes(`${path.sep}node_modules${path.sep}electron${path.sep}`)
+    ? resourcesPath
+    : null;
+}
+
 function packagedResourceDir(name: string): string {
-  if (name === 'builtin' && process.env.ORKAS_BUILTIN_ROOT) {
+  if (name === 'builtin' && process.env.ORKAS_BUILTIN_ROOT && !packagedResourcesRoot()) {
     return path.resolve(process.env.ORKAS_BUILTIN_ROOT);
   }
-  const rp = (process as unknown as { resourcesPath?: string }).resourcesPath;
-  const looksPackaged = rp && !rp.includes(`${path.sep}node_modules${path.sep}electron${path.sep}`);
-  return looksPackaged ? path.join(rp, name) : path.join(PC_ROOT, 'resources', name);
+  const resourcesRoot = packagedResourcesRoot();
+  return resourcesRoot ? path.join(resourcesRoot, name) : path.join(PC_ROOT, 'resources', name);
 }
 
 // ── Data root ────────────────────────────────────────────────────────────
@@ -81,6 +87,15 @@ export const WS_ROOT = path.resolve(process.env.ORKAS_WORKSPACE_ROOT);
 // active profile pointer in the shared install-container users.json.
 export const USERS_FILE        = path.join(WS_ROOT, 'users.json');
 export const WINDOW_STATE_FILE = path.join(WS_ROOT, 'window-state.json');
+// Machine-local first-run onboarding marker (shared across uids, NOT
+// cloud-synced). Lives next to window-state.json so the first-launch
+// walkthrough fires once per device and never re-appears — switching
+// account or machine restarts the flow, by product decision.
+export const ONBOARDING_STATE_FILE = path.join(WS_ROOT, 'onboarding-state.json');
+// Machine-local 60-second journey marker (shared across uids, NOT
+// cloud-synced). Lives next to onboarding-state.json so the post-onboarding
+// journey fires once per device after onboarding completes.
+export const JOURNEY_STATE_FILE = path.join(WS_ROOT, 'journey-state.json');
 // Machine-local logs (daily rolling, single global file shared across uids).
 export const LOGS_DIR          = path.join(WS_ROOT, 'logs');
 // Machine-local dependency environments shared across Orkas accounts on this
@@ -226,6 +241,12 @@ export const userKbConfigPath    = (uid: string) => path.join(userKbDir(uid), 'c
 export const userMemoryDir   = (uid: string) => path.join(userCloudRoot(uid), 'memory');
 export const userMemoryFile  = (uid: string) => path.join(userMemoryDir(uid), 'MEMORY.md'); // shared/project tier
 export const userProfileFile = (uid: string) => path.join(userMemoryDir(uid), 'USER.md');
+
+// Evidence-backed reusable working patterns. This is separate from the terse
+// USER.md/MEMORY.md stores and from personal-ontology groups: cognition owns
+// review state, evidence, reuse history, and its derived growth stage.
+export const userCognitionDir  = (uid: string) => path.join(userCloudRoot(uid), 'cognition');
+export const userCognitionFile = (uid: string) => path.join(userCognitionDir(uid), 'assets.json');
 
 /** Guard an agent id used as a single path segment for agent-scoped memory.
  *  The id is bound by the runner to the calling agent (never model-supplied),
@@ -441,6 +462,30 @@ export const userRemoteConfigFile = (uid: string) => path.join(userLocalConfigDi
 // Machine-local defaults for external coding agents. Values are absolute
 // project directories, so they must not sync across devices.
 export const userAgentRuntimeConfigFile = (uid: string) => path.join(userLocalConfigDir(uid), 'agent-runtime.json');
+// Feishu credentials are machine-private and never enter cloud-synced chat data.
+export const userExpenseAgentConfigFile = (uid: string) =>
+  path.join(userLocalConfigDir(uid), 'expense-agent.json');
+// Read-only migration marker for the retired local-project workbench. The
+// application never reads or reuses its contents; the marker only lets the
+// setup UI explain why a previous local configuration no longer applies.
+export const userLegacyExpenseWorkbenchConfigFile = (uid: string) =>
+  path.join(userLocalConfigDir(uid), 'expense-workbench.json');
+// Reimbursement credentials are machine-private. Cases contain user-authored
+// reimbursement data and material references, so they stay in cloud state.
+export const userExpenseAgentCasesDir = (uid: string) => path.join(userCloudRoot(uid), 'expense_cases');
+export const userExpenseAgentCaseFile = (uid: string, caseId: string) =>
+  path.join(userExpenseAgentCasesDir(uid), `${assertProjectSegment(caseId)}.json`);
+
+// Messaging gateway state is deliberately machine-private. Platform account ids,
+// conversation bindings, delivery receipts, and encrypted bot credentials must not
+// enter cloud sync or the user-visible conversation/session identifiers.
+export const userMessagingConfigFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging.json');
+export const userMessagingBindingsFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-bindings.json');
+export const userMessagingInboundLedgerFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-inbound.json');
+export const userMessagingDeliveryLedgerFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-delivery.json');
+// Wechat iLink dynamic state (cursor + context tokens) is machine-private
+// and encrypted in place; never synced.
+export const userMessagingWeChatStateFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-wechat-state.json');
 
 // Local search index (derived data, self-healing via reconcile, never synced).
 // Only the main conversation + knowledge base get a persistent inverted
@@ -803,6 +848,7 @@ export function ensureUserLayout(uid: string): void {
     userContextsDir(uid),
     userKbDir(uid),
     userMemoryDir(uid),
+    userCognitionDir(uid),
     userAgentsDir(uid),
     userSkillsDir(uid),
     userProjectsDir(uid),

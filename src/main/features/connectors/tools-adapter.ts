@@ -102,7 +102,7 @@ async function _enabledInstancesForActor(
   allInstances: ConnectorInstance[],
 ): Promise<ConnectorInstance[]> {
   if (!agentId) return allInstances;
-  const agent = await agents.getAgent(agentId);
+  const agent = await agents.getAgentForChatDispatch(uid, agentId);
   const allowed = agent?.enabled_connectors;
   if (!Array.isArray(allowed) || allowed.length === 0) return [];
   const allowSet = new Set(allowed);

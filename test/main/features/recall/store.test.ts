@@ -31,7 +31,7 @@ describe('Recall store foundation', () => {
   it('exposes the recall API through the barrel without ambiguous exports', async () => {
     const recall = await import('../../../../src/main/features/recall');
 
-    expect(recall.RECALL_SCHEMA_VERSION).toBe(1);
+    expect(recall.RECALL_SCHEMA_VERSION).toBe(2);
     expect(recall.readRecallJsonRecord).toBeTypeOf('function');
     expect(recall.recallJsonRecordPath).toBeTypeOf('function');
   });

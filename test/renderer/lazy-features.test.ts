@@ -43,6 +43,8 @@ describe('renderer lazy feature loader', () => {
     expect(appended.map((script) => script.src)).toEqual([
       './modules/model-authorization.js',
       './modules/settings.js',
+      './vendor/qrcode-generator/qrcode.js',
+      './modules/messaging-settings.js',
       './modules/memory.js',
     ]);
     expect(appended.every((script) => script.async === false)).toBe(true);

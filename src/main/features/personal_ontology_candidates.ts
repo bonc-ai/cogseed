@@ -21,8 +21,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { userLocalRoot, userOntologyGroupsDir } from '../paths';
 import { writeTextAtomicSync, safeId, nowIso, readJsonSync } from '../storage';
-import { addEntry as addMemoryEntry } from './memory';
-import { listGroups } from './personal_ontology_groups';
+import { addEntryTransactional as addMemoryEntry } from './memory';
+import { appendToGroup, listGroups } from './personal_ontology_groups';
 import { getRoleTemplate } from './role_templates';
 import { routeCandidateToField } from './personal_ontology_router';
 import {
@@ -35,8 +35,7 @@ import {
   isTemplateFileText,
   parseTemplateContent,
   type TemplateSection,
-} from './personal_ontology_template_files';
-import { createLogger } from '../logger';
+} from './personal_ontology_template_files';import { createLogger } from '../logger';
 
 const log = createLogger('personal-ontology-candidates');
 
@@ -263,7 +262,7 @@ function legacySummaryFor(c: LegacyCandidate): string {
   try { return JSON.stringify(c.payload).slice(0, 200); } catch { return c.candidate_id; }
 }
 
-function migrateLegacyJsonIfPresent(uid: string): void {
+async function migrateLegacyJsonIfPresent(uid: string): Promise<void> {
   const mdPath = candidatesMdPath(uid);
   const jsonPath = legacyCandidatesJsonPath(uid);
   if (fs.existsSync(mdPath) || !fs.existsSync(jsonPath)) return;
@@ -283,7 +282,7 @@ function migrateLegacyJsonIfPresent(uid: string): void {
 
       if (c.status === 'confirmed') {
         // 历史欠账：之前「确认」只打了状态戳，从未真正写入记忆。这里补写。
-        const res = addMemoryEntry(uid, scope === 'user' ? 'user' : 'memory', summary);
+        const res = await addMemoryEntry(uid, scope === 'user' ? 'user' : 'memory', summary);
         if (res.ok) migratedToMemory++;
         else log.warn('legacy confirmed candidate migration write failed', { uid, candidateId: c.candidate_id, error: res.error });
         continue;
@@ -313,8 +312,8 @@ function migrateLegacyJsonIfPresent(uid: string): void {
 
 // ── 读写 ─────────────────────────────────────────────────────────────────
 
-function readCandidates(uid: string): CandidateUpdate[] {
-  migrateLegacyJsonIfPresent(uid);
+async function readCandidates(uid: string): Promise<CandidateUpdate[]> {
+  await migrateLegacyJsonIfPresent(uid);
   return parseCandidatesMarkdown(readTextSafe(candidatesMdPath(uid)));
 }
 
@@ -332,9 +331,93 @@ function readBlockedItems(uid: string): BlockedItem[] {
 export async function listCandidates(uid: string): Promise<CandidatesData> {
   if (!safeId(uid)) throw new Error('invalid uid');
   return {
-    candidate_updates: readCandidates(uid),
+    candidate_updates: await readCandidates(uid),
     blocked_items: readBlockedItems(uid),
   };
+}
+
+/** onboarding 抽取产物 → 候选池的最小映射。抽取层用的是 `ExtractionCandidate`
+ *  （judgment/summary/suggestedType/suggestedScope/uncertainty），候选池用的是
+ *  `CandidateUpdate`。这里做一次忠实转换，不臆造任何字段：
+ *  - suggestedType → kind + memory_scope：
+ *      personal     → preference / user   （个人偏好进 USER.md）
+ *      rule         → rule       / shared （通用规则进 MEMORY.md）
+ *      template     → instance   / user   （实例化信息，个人画像）
+ *      skill_method → rule       / shared （可复用做法，当规则记）
+ *  - judgment → memory_text（确认后真正写进记忆的文本）；summary 回退用 judgment
+ *  - confidence 一律 'low'：onboarding 首轮抽取未经用户核对，进池等确认，不冒充高置信
+ *  - source_memory_refs 置空：onboarding 没有可回指的既有记忆条目 */
+type OnboardingCandidate = {
+  judgment: string;
+  summary?: string;
+  suggestedType: 'personal' | 'rule' | 'template' | 'skill_method';
+  suggestedScope?: string;
+  uncertainty?: string;
+};
+
+function mapOnboardingType(
+  t: OnboardingCandidate['suggestedType'],
+): { kind: CandidateKind; scope: MemoryTargetScope } {
+  switch (t) {
+    case 'personal':
+      return { kind: 'preference', scope: 'user' };
+    case 'rule':
+      return { kind: 'rule', scope: 'shared' };
+    case 'template':
+      return { kind: 'instance', scope: 'user' };
+    case 'skill_method':
+      return { kind: 'rule', scope: 'shared' };
+    default:
+      return { kind: 'instance', scope: 'user' };
+  }
+}
+
+/**
+ * 把 onboarding 抽取出的候选批量写入候选池（不确认、不落记忆——只是进池等
+ * 用户在第 4 步勾选后再走 `confirmCandidate`）。返回实际写入的 candidate_id 列表，
+ * 供前端记录「哪些进了池」，勾选确认时按 id 调 `confirmCandidate`。
+ *
+ * 忠实约束：judgment 为空的条目直接跳过（不编造摘要）；candidate_id 不含空白
+ * （解析器用 `### <id>` 且 id 匹配 `\S+`），用时间戳+序号+随机后缀保证唯一。
+ */
+export async function addCandidates(
+  uid: string,
+  candidates: OnboardingCandidate[],
+): Promise<{ candidate_ids: string[] }> {
+  if (!safeId(uid)) throw new Error('invalid uid');
+  const incoming = Array.isArray(candidates) ? candidates : [];
+  if (!incoming.length) return { candidate_ids: [] };
+
+  const existing = await readCandidates(uid);
+  const written: string[] = [];
+  const stamp = Date.now();
+  let seq = 0;
+
+  for (const c of incoming) {
+    const judgment = typeof c?.judgment === 'string' ? c.judgment.trim() : '';
+    if (!judgment) continue; // 无正文不入池，绝不编造
+    const { kind, scope } = mapOnboardingType(c.suggestedType);
+    const summary = (typeof c.summary === 'string' && c.summary.trim()) || judgment;
+    const rand = Math.random().toString(36).slice(2, 8);
+    const candidateId = `ob-${stamp}-${seq++}-${rand}`;
+    existing.push({
+      candidate_id: candidateId,
+      kind,
+      confidence: 'low',
+      summary,
+      memory_scope: scope,
+      memory_text: judgment,
+      ...(typeof c.uncertainty === 'string' && c.uncertainty.trim()
+        ? { diff_summary: c.uncertainty.trim() }
+        : {}),
+      source_memory_refs: [],
+    });
+    written.push(candidateId);
+  }
+
+  if (written.length) writeCandidates(uid, existing);
+  log.info('onboarding candidates added to pool', { uid, added: written.length });
+  return { candidate_ids: written };
 }
 
 /**
@@ -387,7 +470,7 @@ async function writeCandidateToDestinations(
 
   if (wantsGlobal) {
     const target = candidate.memory_scope === 'shared' ? 'memory' : 'user';
-    const res = addMemoryEntry(uid, target, text);
+    const res = await addMemoryEntry(uid, target, text);
     result.globalMemory = { ok: res.ok, ...(res.error ? { error: res.error } : {}) };
     if (res.ok) anySucceeded = true;
     else log.warn('candidate global-memory write blocked', { uid, candidateId: candidate.candidate_id, error: res.error });
@@ -560,7 +643,7 @@ export async function confirmCandidate(
 ): Promise<ConfirmCandidateResult> {
   if (!safeId(uid) || !candidateId) throw new Error('invalid uid or candidateId');
 
-  const candidates = readCandidates(uid);
+  const candidates = await readCandidates(uid);
   const idx = candidates.findIndex(c => c.candidate_id === candidateId);
   if (idx === -1) {
     log.warn('confirmCandidate: candidate not found', { uid, candidateId });
@@ -590,7 +673,7 @@ export async function confirmCandidate(
 export async function rejectCandidate(uid: string, candidateId: string, reason?: string): Promise<{ ok: boolean }> {
   if (!safeId(uid) || !candidateId) throw new Error('invalid uid or candidateId');
 
-  const candidates = readCandidates(uid);
+  const candidates = await readCandidates(uid);
   const idx = candidates.findIndex(c => c.candidate_id === candidateId);
   if (idx === -1) {
     log.warn('rejectCandidate: candidate not found', { uid, candidateId });
@@ -634,7 +717,7 @@ export async function confirmCandidates(
     return { ok: true, confirmedCount: 0, failedIds: [], results: {}, summary: { toFields: [], toEntries: 0 } };
   }
 
-  const candidates = readCandidates(uid);
+  const candidates = await readCandidates(uid);
   const idSet = new Set(candidateIds);
   const remaining: CandidateUpdate[] = [];
   const failedIds: string[] = [];
@@ -682,7 +765,7 @@ export async function rejectCandidates(uid: string, candidateIds: string[], reas
   if (!safeId(uid)) throw new Error('invalid uid');
   if (!Array.isArray(candidateIds) || !candidateIds.length) return { ok: true, rejectedCount: 0 };
 
-  const candidates = readCandidates(uid);
+  const candidates = await readCandidates(uid);
   const idSet = new Set(candidateIds);
   const remaining = candidates.filter(c => !idSet.has(c.candidate_id));
   const rejectedCount = candidates.length - remaining.length;

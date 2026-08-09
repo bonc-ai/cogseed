@@ -6,18 +6,19 @@ import { recallJsonRecordPath } from './paths';
 import { normalizeCognitionSourceRefs } from './source-service';
 import { appendRecallJsonlRecord, listRecallJsonlRecords, readRecallJsonRecord, updateRecallJsonRecord } from './store';
 import type { RecallJsonRecord } from './types';
+import { normalizeAbilityAssetOntologyRefs, type AbilityAssetOntologyRef } from './ontology-refs';
 import type { RecallAbilityAssetRecord } from './candidate-service';
 
 export interface AbilityAssetVersionRecord extends RecallJsonRecord {
   assetId: string;
   version: string;
   at: string;
-  snapshot: Pick<RecallAbilityAssetRecord, 'title' | 'statement' | 'type' | 'scope' | 'evidenceRefs' | 'status' | 'maturity' | 'version'>;
+  snapshot: Pick<RecallAbilityAssetRecord, 'title' | 'statement' | 'type' | 'scope' | 'evidenceRefs' | 'status' | 'maturity' | 'version' | 'learningSignal' | 'ontologyRefs'>;
 }
 
 export interface AbilityAssetAuditRecord extends RecallJsonRecord {
   assetId: string;
-  action: 'created' | 'updated' | 'paused' | 'revoked';
+  action: 'created' | 'updated' | 'paused' | 'resumed' | 'revoked';
   at: string;
   note?: string;
 }
@@ -28,6 +29,7 @@ export interface UpdateAbilityAssetInput {
   scope?: string;
   type?: RecallAbilityAssetRecord['type'];
   evidenceRefs?: RecallAbilityAssetRecord['evidenceRefs'];
+  ontologyRefs?: RecallAbilityAssetRecord['ontologyRefs'];
   id?: never;
   ownerId?: never;
 }
@@ -45,7 +47,8 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   ) throw new Error('malformed recall ability asset');
   const evidenceRefs = normalizeCognitionSourceRefs(value.evidenceRefs);
   if (!evidenceRefs.length) throw new Error('malformed recall ability asset evidence');
-  return { ...value, evidenceRefs } as RecallAbilityAssetRecord;
+  const ontologyRefs = value.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(value.ontologyRefs);
+  return { ...value, evidenceRefs, ...(ontologyRefs ? { ontologyRefs } : {}) } as RecallAbilityAssetRecord;
 }
 
 function bounded(value: unknown, field: string, max: number): string {
@@ -68,6 +71,8 @@ function snapshot(asset: RecallAbilityAssetRecord): AbilityAssetVersionRecord['s
     type: asset.type,
     scope: asset.scope,
     evidenceRefs: asset.evidenceRefs,
+    ...(asset.learningSignal ? { learningSignal: asset.learningSignal } : {}),
+    ...(asset.ontologyRefs ? { ontologyRefs: asset.ontologyRefs } : {}),
     status: asset.status,
     maturity: asset.maturity,
     version: asset.version,
@@ -149,6 +154,9 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
     ? undefined
     : normalizeCognitionSourceRefs(input.evidenceRefs);
   if (evidenceRefs && !evidenceRefs.length) throw new Error('ability asset evidence is required');
+  const ontologyRefs = input.ontologyRefs === undefined
+    ? undefined
+    : normalizeAbilityAssetOntologyRefs(input.ontologyRefs);
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
@@ -159,6 +167,7 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
       ...(input.scope !== undefined ? { scope: bounded(input.scope, 'scope', 500) } : {}),
       ...(input.type !== undefined ? { type: input.type } : {}),
       ...(evidenceRefs !== undefined ? { evidenceRefs } : {}),
+      ...(ontologyRefs !== undefined ? { ontologyRefs } : {}),
       version: nextVersion(current.version),
       updatedAt: new Date().toISOString(),
     };
@@ -178,7 +187,7 @@ async function setStatus(userId: string, assetId: string, status: RecallAbilityA
     return { ...current, status, updatedAt: new Date().toISOString() };
   });
   const asset = asAsset(updated);
-  await appendAudit(userId, asset.id, status === 'paused' ? 'paused' : 'revoked', normalizedNote);
+  await appendAudit(userId, asset.id, status === 'paused' ? 'paused' : status === 'active' ? 'resumed' : 'revoked', normalizedNote);
   return asset;
 }
 
@@ -188,6 +197,10 @@ export function pauseAbilityAsset(userId: string, assetId: string, note?: string
 
 export function revokeAbilityAsset(userId: string, assetId: string, note?: string): Promise<RecallAbilityAssetRecord> {
   return setStatus(userId, assetId, 'revoked', note);
+}
+
+export function resumeAbilityAsset(userId: string, assetId: string, note?: string): Promise<RecallAbilityAssetRecord> {
+  return setStatus(userId, assetId, 'active', note);
 }
 
 export async function listAbilityAssetVersions(userId: string, assetId: string): Promise<AbilityAssetVersionRecord[]> {

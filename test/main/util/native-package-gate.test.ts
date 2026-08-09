@@ -56,6 +56,7 @@ function windowsFixture(): string {
     '@napi-rs/canvas/node_modules/@napi-rs/canvas-win32-x64-msvc/skia.win32-x64-msvc.node',
     '@anush008/tokenizers/node_modules/@anush008/tokenizers-win32-x64-msvc/tokenizers.win32-x64-msvc.node',
     'better-sqlite3/build/Release/better_sqlite3.node',
+    'node-pty/build/Release/pty.node',
     'fastembed/node_modules/onnxruntime-node/bin/napi-v3/win32/x64/onnxruntime_binding.node',
     'fastembed/node_modules/onnxruntime-node/bin/napi-v3/win32/x64/onnxruntime.dll',
   ]) {

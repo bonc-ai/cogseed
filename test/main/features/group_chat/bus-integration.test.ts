@@ -329,6 +329,21 @@ async function waitForQuiescent(uid: string, cid: string, timeoutMs = 2000) {
   throw new Error(`bus did not quiesce within ${timeoutMs}ms`);
 }
 
+async function confirmKstarWakeForTest(cid: string, requestId: string): Promise<void> {
+  const store = await import('../../../../src/main/features/kstar/requirement-store');
+  const state = await store.readConversationTaskState(TEST_UID, cid);
+  if (!state?.currentRequirementId) throw new Error(`missing KSTAR requirement for ${cid}`);
+  const requirement = await store.readKstarRequirement(TEST_UID, state.currentRequirementId);
+  if (!requirement?.projectionId) throw new Error(`missing KSTAR projection for ${cid}`);
+  const projection = await import('../../../../src/main/features/recall/context-projection');
+  const result = await projection.confirmAndApproveWake(TEST_UID, {
+    cid,
+    projectionId: requirement.projectionId,
+    wakeRequestId: requestId,
+  });
+  if (!result.ok) throw new Error(result.error);
+}
+
 async function waitUntil(
   fn: () => boolean,
   timeoutMs = 2000,
@@ -3564,6 +3579,15 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     });
     await waitForQuiescent(TEST_UID, cid, 4000);
 
+    const agentCall = _recordedCalls.find(
+      (call) => call.sid === state.buildGmemberSessionId(cid, AGENT_ID),
+    );
+    expect(agentCall?.message).toContain("<agent-task-introduction>");
+    expect(agentCall?.message).toContain("根据研究报告写论文初稿");
+    expect(agentCall?.message).toContain("得到可审阅论文初稿");
+    expect(agentCall?.message).toContain("生成论文初稿文件并说明结构");
+    expect(agentCall?.message).toContain("先用自然语言说明你理解的任务、预期结果和执行计划");
+
     const lines = await storage.readJsonl<any>(
       path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`),
     );
@@ -5778,7 +5802,144 @@ describe("group_chat bus integration › Task 5 anonymous resume", () => {
   });
 });
 
+describe("group_chat bus integration › Commander KSTAR dispatch narration", () => {
+  it("declares task, plan, and expected result only after wake authorization", async () => {
+    process.env.ORKAS_P3394_WAKE_GATE = "1";
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const paths = await import("../../../../src/main/paths");
+    const wakeController = await import("../../../../src/main/features/p3394/wake-controller");
+    const wakeService = await import("../../../../src/main/features/p3394/wake-service");
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: {
+          to: AGENT_NAME,
+          message: "调研 Codex Work Buddy 前端 UI 并写优化需求文档",
+          kstar: "required",
+          kstar_reason: "这是面向后续设计的正式调研交付物",
+          kstar_expectation: {
+            task: "调研 Codex Work Buddy 前端 UI 并写优化需求文档",
+          },
+        },
+      },
+      { type: "final", text: "等待 Agent 唤醒授权。" },
+    ]);
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "让 Hermes 调研 Codex Work Buddy 前端 UI。",
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const readLines = () => fs
+      .readFileSync(path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`), "utf-8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    expect(readLines().some((message: any) => message.kstar_dispatch_narration)).toBe(false);
+
+    const [request] = await wakeService.listWakeRequests(TEST_UID, cid);
+    expect(request).toMatchObject({ status: "pending", agent_id: AGENT_ID });
+    await confirmKstarWakeForTest(cid, request!.id);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "HERMES-RESULT" },
+    ]);
+    await expect(wakeController.decideWakeRequest(TEST_UID, { requestId: request!.id, decision: "approve" })).resolves.toMatchObject({ ok: true, dispatched: true });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const lines = readLines();
+    const narrationIndex = lines.findIndex((message: any) => message.kstar_dispatch_narration);
+    const dispatchIndex = lines.findIndex((message: any) => message.from === "commander" && message.to?.includes(AGENT_ID) && String(message.text || "").includes("调研 Codex Work Buddy"));
+    expect(narrationIndex).toBeGreaterThanOrEqual(0);
+    expect(dispatchIndex).toBeGreaterThan(narrationIndex);
+    const narration = lines[narrationIndex];
+    expect(narration.from).toBe("commander");
+    expect(narration.text).toContain("调研 Codex Work Buddy 前端 UI 并写优化需求文档");
+    expect(narration.text).toContain("执行计划");
+    expect(narration.text).toContain("预期结果");
+    expect(narration.kstar_dispatch_narration).toMatchObject({ target_agent_id: AGENT_ID });
+  }, 12_000);
+});
+
 describe("group_chat bus integration › wake-gated dispatch continuation", () => {
+  it("emits KSTAR provenance on the terminal event for an approved dispatch_to Agent", async () => {
+    process.env.ORKAS_P3394_WAKE_GATE = "1";
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const wakeController = await import("../../../../src/main/features/p3394/wake-controller");
+    const wakeService = await import("../../../../src/main/features/p3394/wake-service");
+    const lifecycle = await import("../../../../src/main/features/kstar/lifecycle-adapter");
+
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: {
+          to: AGENT_NAME,
+          message: "Audit the paper",
+          kstar: "required",
+          kstar_reason: "The audit contributes evidence to the collaboration.",
+          kstar_expectation: {
+            task: "Audit the paper",
+            action_hat: "Produce an audit result",
+            result_hat: "Reviewable audit evidence",
+          },
+        },
+      },
+      { type: "final", text: "Waiting for Agent approval." },
+    ]);
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "Audit this paper, then have Codex review the result.",
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const [request] = await wakeService.listWakeRequests(TEST_UID, cid);
+    expect(request).toMatchObject({
+      source: "dispatch_to",
+      status: "pending",
+      workflow_step_id: expect.stringMatching(/^wstep-/),
+    });
+    await confirmKstarWakeForTest(cid, request!.id);
+    const lifecycleSnapshot = await lifecycle.readKstarTaskLifecycle(TEST_UID, cid);
+    const terminals: any[] = [];
+    const unsubscribe = bus.subscribeTaskTerminals((event) => terminals.push(event));
+
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "HERMES-AUDIT-RESULT" },
+    ]);
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "final", text: "CODEX-REVIEW-RESULT" },
+    ]);
+
+    const approved = await wakeController.decideWakeRequest(TEST_UID, {
+      requestId: request!.id,
+      decision: "approve",
+    });
+    expect(approved).toMatchObject({ ok: true, dispatched: true });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    expect(await waitUntil(() => terminals.length === 1)).toBe(true);
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]).toMatchObject({
+      status: "completed",
+      projection_id: lifecycleSnapshot.projection?.id,
+      wake_request_id: request!.id,
+      logical_run_id: lifecycleSnapshot.task?.id,
+      execution_id: request!.id,
+    });
+    unsubscribe();
+  }, 12_000);
+
   it("resumes Commander after an approved dispatch_to Agent completes without an explicit resume", async () => {
     process.env.ORKAS_P3394_WAKE_GATE = "1";
     const cid = newCid();
@@ -5821,6 +5982,7 @@ describe("group_chat bus integration › wake-gated dispatch continuation", () =
       workflow_step_id: expect.stringMatching(/^wstep-/),
     });
     expect(await readPendingKStarEvidence(TEST_UID)).toHaveLength(0);
+    await confirmKstarWakeForTest(cid, request!.id);
 
     _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
       { type: "final", text: "HERMES-AUDIT-RESULT" },

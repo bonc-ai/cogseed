@@ -9,13 +9,28 @@ import type {
 } from './types';
 
 export interface SaveKstarReviewInput {
+  expectedResult?: string;
+  actualResult?: string;
   deltaR: number | 'unknown';
   deltaA: number | 'unknown';
   outcome: KstarOutcome;
   attribution: KstarAttribution;
   reason: string;
   confidence: number;
+  reviewState?: KstarReviewRecord['reviewState'];
+  inferenceMethod?: KstarReviewRecord['inferenceMethod'];
+  needsConfirmation?: boolean;
+  confirmedAt?: string;
   evidenceRefs: unknown[];
+}
+
+function optionalReviewText(value: unknown, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new Error(`invalid ${field}`);
+  const text = value.replace(/\s+/g, ' ').trim();
+  if (!text) return undefined;
+  if (text.length > 4_000) throw new Error(`${field} is too long`);
+  return text;
 }
 
 function boundedReason(value: unknown): string {
@@ -81,12 +96,18 @@ export async function saveKstarReview(
     ownerId: userId,
     id: `ksr-${episode.id}`,
     episodeId: episode.id,
+    ...(optionalReviewText(input.expectedResult, 'expected result') ? { expectedResult: optionalReviewText(input.expectedResult, 'expected result') } : {}),
+    ...(optionalReviewText(input.actualResult, 'actual result') ? { actualResult: optionalReviewText(input.actualResult, 'actual result') } : {}),
     deltaR: reviewNumber(input.deltaR, 'deltaR'),
     deltaA: reviewNumber(input.deltaA, 'deltaA'),
     outcome: input.outcome,
     attribution: input.attribution,
     reason: boundedReason(input.reason),
     confidence: validateConfidence(input.confidence),
+    ...(input.reviewState ? { reviewState: input.reviewState } : {}),
+    ...(input.inferenceMethod ? { inferenceMethod: input.inferenceMethod } : {}),
+    ...(input.needsConfirmation !== undefined ? { needsConfirmation: input.needsConfirmation } : {}),
+    ...(input.confirmedAt ? { confirmedAt: input.confirmedAt } : {}),
     evidenceRefs: normalizeCognitionSourceRefs(input.evidenceRefs),
     createdAt: now,
     updatedAt: now,
@@ -98,11 +119,17 @@ export async function saveKstarReview(
 function validateStoredReview(userId: string, episodeId: string, raw: Record<string, unknown>): KstarReviewRecord {
   if (
     raw.ownerId !== userId || raw.id !== `ksr-${episodeId}` || raw.episodeId !== episodeId ||
+    (raw.expectedResult !== undefined && typeof raw.expectedResult !== 'string') ||
+    (raw.actualResult !== undefined && typeof raw.actualResult !== 'string') ||
     (raw.deltaR !== 'unknown' && (typeof raw.deltaR !== 'number' || !Number.isFinite(raw.deltaR))) ||
     (raw.deltaA !== 'unknown' && (typeof raw.deltaA !== 'number' || !Number.isFinite(raw.deltaA))) ||
     !['better_than_expected', 'met_expected', 'worse_than_expected', 'unclear'].includes(String(raw.outcome)) ||
     !['knowledge_gap', 'rule_gap', 'template_gap', 'skill_gap', 'execution_gap', 'unclear'].includes(String(raw.attribution)) ||
     typeof raw.reason !== 'string' || typeof raw.confidence !== 'number' ||
+    (raw.reviewState !== undefined && !['inferred', 'needs_confirmation', 'confirmed', 'unknown'].includes(String(raw.reviewState))) ||
+    (raw.inferenceMethod !== undefined && !['deterministic', 'model', 'user', 'unknown'].includes(String(raw.inferenceMethod))) ||
+    (raw.needsConfirmation !== undefined && typeof raw.needsConfirmation !== 'boolean') ||
+    (raw.confirmedAt !== undefined && typeof raw.confirmedAt !== 'string') ||
     !Number.isFinite(raw.confidence) || raw.confidence < 0 || raw.confidence > 1 ||
     !Array.isArray(raw.evidenceRefs) || typeof raw.createdAt !== 'string' || typeof raw.updatedAt !== 'string'
   ) throw new Error('malformed kstar review');

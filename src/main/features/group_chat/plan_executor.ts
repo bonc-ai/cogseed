@@ -18,7 +18,11 @@
  */
 
 import { t } from '../../i18n';
-import type { ChatFormPayload } from './router';
+import type {
+  ChatFormPayload,
+  ExpenseSetupCardPayload,
+  ExpenseSubmitCardPayload,
+} from './router';
 import type { GroupMessageFailureKind } from './visibility';
 
 // ── Public API ───────────────────────────────────────────────────────────
@@ -36,6 +40,10 @@ export interface TurnFinishedEvent {
   failureCode?: string;
   /** Form extracted by the bus's post-stream parser (agents only). */
   form?: ChatFormPayload;
+  /** Host-rendered reimbursement setup card. It never carries credentials. */
+  expenseSetup?: ExpenseSetupCardPayload;
+  /** Host-rendered reimbursement submission card. */
+  expenseSubmit?: ExpenseSubmitCardPayload;
   /** Lightweight multi-turn marker extracted from agent final text. */
   planInteraction?: 'open' | 'closed';
   /** Files written via local-exec tools during this turn. */
@@ -68,6 +76,8 @@ export type TurnOutcome = (
       kind: 'persist';
       text: string;
       form?: ChatFormPayload;
+      expenseSetup?: ExpenseSetupCardPayload;
+      expenseSubmit?: ExpenseSubmitCardPayload;
       produced?: string[];
       createdAgents?: Array<{ agent_id: string; name: string; kind: 'created' | 'updated' }>;
       createdSkills?: Array<{ skill_id: string; name: string; kind: 'created' | 'updated' }>;
@@ -111,7 +121,7 @@ function outcomeForDirectTurn(evt: TurnFinishedEvent): TurnOutcome {
   // agent emits ONLY an `agent-input-form` block — bus's form extraction
   // strips it, leaving finalText empty; without this check we'd fall to the
   // "agent empty" branch and replace the form with "(no reply)".
-  const hasSideEffect = !!evt.form || (!!evt.createdAgents && evt.createdAgents.length > 0) || (!!evt.createdSkills && evt.createdSkills.length > 0) || (evt.produced && evt.produced.length > 0);
+  const hasSideEffect = !!evt.form || !!evt.expenseSetup || !!evt.expenseSubmit || (!!evt.createdAgents && evt.createdAgents.length > 0) || (!!evt.createdSkills && evt.createdSkills.length > 0) || (evt.produced && evt.produced.length > 0);
   if ((evt.finalText && evt.finalText.trim()) || hasSideEffect) {
     // When the stream errored mid-turn but partial text / side effects
     // already landed, append the error pill instead of dropping the partial.
@@ -124,6 +134,8 @@ function outcomeForDirectTurn(evt: TurnFinishedEvent): TurnOutcome {
       text: body,
       ...failureFields(evt, !!evt.errText),
       ...(evt.form ? { form: evt.form } : {}),
+      ...(evt.expenseSetup ? { expenseSetup: evt.expenseSetup } : {}),
+      ...(evt.expenseSubmit ? { expenseSubmit: evt.expenseSubmit } : {}),
       ...(evt.produced.length ? { produced: evt.produced } : {}),
       ...(evt.createdAgents && evt.createdAgents.length ? { createdAgents: evt.createdAgents } : {}),
       ...(evt.createdSkills && evt.createdSkills.length ? { createdSkills: evt.createdSkills } : {}),
@@ -149,12 +161,14 @@ function outcomeForDirectTurn(evt: TurnFinishedEvent): TurnOutcome {
  * silent (renderer cleans the placeholder). */
 function abortOutcome(evt: TurnFinishedEvent): TurnOutcome {
   const partial = (evt.finalText || '').trim();
-  const hasSideEffect = !!evt.form || (!!evt.createdAgents && evt.createdAgents.length > 0) || (!!evt.createdSkills && evt.createdSkills.length > 0) || (evt.produced && evt.produced.length > 0);
+  const hasSideEffect = !!evt.form || !!evt.expenseSetup || !!evt.expenseSubmit || (!!evt.createdAgents && evt.createdAgents.length > 0) || (!!evt.createdSkills && evt.createdSkills.length > 0) || (evt.produced && evt.produced.length > 0);
   if (!partial && !hasSideEffect) return { kind: 'silent' };
   return {
     kind: 'persist',
     text: evt.finalText || '',
     ...(evt.form ? { form: evt.form } : {}),
+    ...(evt.expenseSetup ? { expenseSetup: evt.expenseSetup } : {}),
+    ...(evt.expenseSubmit ? { expenseSubmit: evt.expenseSubmit } : {}),
     ...(evt.produced && evt.produced.length ? { produced: evt.produced } : {}),
     ...(evt.createdAgents && evt.createdAgents.length ? { createdAgents: evt.createdAgents } : {}),
     ...(evt.createdSkills && evt.createdSkills.length ? { createdSkills: evt.createdSkills } : {}),

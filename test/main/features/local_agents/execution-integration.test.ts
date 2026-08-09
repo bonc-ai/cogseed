@@ -33,6 +33,11 @@ beforeEach(async () => {
   vi.resetModules();
   const users = await import('../../../../src/main/features/users');
   users.activateUser(UID);
+  for (const agentId of ['agent-1', 'agent-2']) {
+    const file = path.join(root, UID, 'cloud', 'agents', agentId, 'agent.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ agent_id: agentId }));
+  }
   mockDetect.mockReset();
   codexImpl = null;
   openclawImpl = null;

@@ -67,8 +67,50 @@ describe('Mate Agent Runtime tool runtime MVP', () => {
       'office_read', 'office_create', 'office_edit', 'office_render',
       'browser_open', 'browser_snapshot', 'browser_click', 'browser_type', 'browser_screenshot',
       'mate_delegate', 'mate_tasks', 'mate_cancel', 'mate_retry_step', 'mate_skip_step', 'mate_resume_workflow', 'mate_workflow',
+      'messaging_list_targets', 'messaging_send',
     ]);
     expect(JSON.stringify(getRuntimeToolCatalog())).not.toMatch(/group|chat|memory/i);
+  });
+
+  it('hides capability-gated messaging tools without the grant and rejects direct calls', async () => {
+    const root = makeRoot();
+    const denied = createRuntimeToolRunner({
+      userId: UID,
+      runtimeSessionId: SESSION,
+      allowedRoots: [root],
+      toolPolicy: DEFAULT_RUNTIME_TOOL_POLICY,
+      hostToolClient: { call: async () => ({ content: 'should not be called' }) } as never,
+    });
+    expect(denied.catalog.map((tool) => tool.name)).not.toContain('messaging_send');
+    const result = await denied.run('messaging_send', { target: 'self', text: 'hello' });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('E_RUNTIME_UNKNOWN_TOOL');
+  });
+
+  it('exposes messaging tools only when the Commander capability is granted', async () => {
+    const root = makeRoot();
+    const hostToolClient = {
+      call: async (call: { name: string; input: Record<string, unknown> }) => ({
+        content: JSON.stringify({ name: call.name, input: call.input }),
+      }),
+    };
+    const granted = createRuntimeToolRunner({
+      userId: UID,
+      runtimeSessionId: SESSION,
+      allowedRoots: [root],
+      toolPolicy: DEFAULT_RUNTIME_TOOL_POLICY,
+      capabilities: ['messaging.proactive'],
+      hostToolClient: hostToolClient as never,
+    });
+    const names = granted.catalog.map((tool) => tool.name);
+    expect(names).toContain('messaging_list_targets');
+    expect(names).toContain('messaging_send');
+    const listed = await granted.run('messaging_list_targets', {});
+    expect(listed.isError).toBeFalsy();
+    expect(listed.content).toContain('messaging_list_targets');
+    const sent = await granted.run('messaging_send', { target: 'self', text: 'hello' });
+    expect(sent.isError).toBeFalsy();
+    expect(sent.content).toContain('messaging_send');
   });
 
   it('stats, reads, searches, and greps files under explicit roots', async () => {

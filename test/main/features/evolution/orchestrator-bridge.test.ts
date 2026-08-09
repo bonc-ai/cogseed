@@ -6,6 +6,14 @@ import {
   startEvolutionRun, stepEvolutionRun, readEvolutionRun,
 } from '../../../../src/main/features/evolution/orchestrator-bridge';
 
+const bridgeMocks = vi.hoisted(() => ({
+  assertAgentChatDispatchable: vi.fn(async () => undefined),
+  loadEngine: vi.fn(),
+}));
+
+vi.mock('../../../../src/main/features/agent-dispatch-policy', () => ({
+  assertAgentChatDispatchable: bridgeMocks.assertAgentChatDispatchable,
+}));
 vi.mock('../../../../src/main/features/evolution/llm-bridge', () => ({
   buildLlmComplete: () => async (p: string) => ({ text: p.includes('改进') ? '改进正文' : '{"passed":true}', degraded: false }),
 }));
@@ -29,19 +37,40 @@ vi.mock('../../../../src/main/features/evolution/engine-loader', () => {
     }
     abort(id: string) { const r = this.runs.get(id); r.status = 'aborted'; return r; }
   }
-  return { loadEngine: async () => ({ EvolutionOrchestrator: FakeOrch }) };
+  bridgeMocks.loadEngine.mockImplementation(async () => ({ EvolutionOrchestrator: FakeOrch }));
+  return { loadEngine: bridgeMocks.loadEngine };
 });
 
 let dir: string;
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'evo-'));
   process.env.ORKAS_WORKSPACE_ROOT = dir;
+  bridgeMocks.assertAgentChatDispatchable.mockReset().mockResolvedValue(undefined);
+  bridgeMocks.loadEngine.mockClear();
 });
 afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }); delete process.env.ORKAS_WORKSPACE_ROOT; });
 
 const episode = { episode_id: 'ep', situation: 's', task: 't', action_hat: '', result_hat: '', actual_action: '', actual_result: '', delta_r: 0.8, delta_a: 0 };
 
 describe('orchestrator-bridge', () => {
+  it('rejects a management-only Agent before loading the engine or writing a run', async () => {
+    bridgeMocks.assertAgentChatDispatchable.mockRejectedValueOnce(Object.assign(
+      new Error('Management-only Agents cannot run Evolution.'),
+      { code: 'E_AGENT_MANAGEMENT_ONLY' },
+    ));
+
+    await expect(startEvolutionRun('u1', {
+      skillId: 'sk1',
+      episode,
+      currentContent: '原文',
+      agentId: 'expense-agent',
+    })).rejects.toMatchObject({ code: 'E_AGENT_MANAGEMENT_ONLY' });
+    expect(bridgeMocks.assertAgentChatDispatchable).toHaveBeenCalledWith('u1', 'expense-agent');
+    expect(bridgeMocks.loadEngine).not.toHaveBeenCalled();
+    await expect(fs.stat(path.join(dir, 'u1', 'local', 'kstar', 'evolution')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('startEvolutionRun 落盘初始状态机', async () => {
     const run = await startEvolutionRun('u1', { skillId: 'sk1', episode, currentContent: '原文' });
     const disk = await readEvolutionRun('u1', run.runId);

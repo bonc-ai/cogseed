@@ -35,13 +35,14 @@ import { t } from '../../i18n';
 // future targeted use; runtime no longer renders the prompt block from it.
 import { getSession, memoryScopeForSession, sessionKindOf, toolResultsDirForSession } from './session-store';
 import {
-  addEntry,
-  replaceEntry,
-  removeEntry,
+  addEntryTransactional,
+  replaceEntryTransactional,
+  removeEntryTransactional,
   listEntries,
   formatForSystemPrompt as formatMemoryForSystemPrompt,
   type MemoryScope,
 } from '../../features/memory';
+import { listActiveCognitionSourceIds } from '../../features/cognition';
 import {
   formatProjectContextPolicyForSystemPrompt,
   formatProjectInstructionsForSystemPrompt,
@@ -49,13 +50,15 @@ import {
 } from '../../features/projects';
 import * as projectTasks from '../../features/project_tasks';
 import * as metacognition from '../../features/metacognition';
-import { appendAgentSkill, listAgents } from '../../features/agents';
+import { assertAgentChatDispatchable } from '../../features/agent-dispatch-policy';
+import { appendAgentSkill, listAgentSummaries } from '../../features/agents';
 const log = createLogger('model/runner');
 import { createLocalTools, createFileTools } from './local-tools';
 import { createOfficeTools } from './office-tools';
 import { officeCliAvailable } from '../../features/office/office_engine';
 import { createKbTools } from './kb-tools';
 import { createChatHistoryTools } from './chat-history-tools';
+import { createMessagingTools } from './messaging-tools';
 import { createImageGenTool } from './image-gen-tool';
 import { createVideoStudioTool } from './video-studio-tool';
 import { createResearchRerankTool } from './research-rerank-tool';
@@ -412,6 +415,11 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
    *  Not injected into model context; reused for process-log labels. */
   agentDisplayNameById: Map<string, string>;
 }> {
+  if (params.agentId) await assertAgentChatDispatchable(
+    params.userId || _safeActiveUserId() || '',
+    params.agentId,
+  );
+
   // Auth gate first — if no group has any usable candidate, fail before
   // loading core-agent / scanning skills / opening a session file. Gives
   // a clear user message instead of the Anthropic SDK's "Could not
@@ -494,7 +502,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   const agentDisplayNameById = new Map<string, string>();
   if (uid) {
     try {
-      for (const agent of await listAgents()) {
+      for (const agent of await listAgentSummaries()) {
         if (agent?.agent_id) agentDisplayNameById.set(agent.agent_id, agent.name || agent.agent_id);
       }
     } catch (err) {
@@ -557,7 +565,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     const recordTeaching = async (
       tier: 'agent' | 'project' | 'shared' | 'user',
       content: string,
-      result: ReturnType<typeof addEntry>,
+      result: Awaited<ReturnType<typeof addEntryTransactional>>,
     ) => {
       if (
         !result.ok
@@ -595,10 +603,9 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
       return result;
     };
     const memoryHandler: MemoryToolHandler = {
-      add: async (tier, content) => recordTeaching(tier, content, addEntry(uid, toScope(tier), content)),
-      replace: async (tier, oldText, content) => recordTeaching(tier, content, replaceEntry(uid, toScope(tier), oldText, content)),
-      remove: (tier, oldText) => removeEntry(uid, toScope(tier), oldText),
-      list: (tier) => listEntries(uid, toScope(tier)),
+      add: async (tier, content) => recordTeaching(tier, content, await addEntryTransactional(uid, toScope(tier), content)),
+      replace: async (tier, oldText, content) => recordTeaching(tier, content, await replaceEntryTransactional(uid, toScope(tier), oldText, content)),
+      remove: async (tier, oldText) => removeEntryTransactional(uid, toScope(tier), oldText),      list: (tier) => listEntries(uid, toScope(tier)),
     };
     const { createCrossSessionMemoryTool } = await import('../../../core-agent/src/tools/memory-tool');
     // Project memory: commander read+write, sub-agents read-only (list only).
@@ -772,6 +779,19 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ...(params.projectId ? { projectId: params.projectId } : {}),
   }) : [];
 
+  // Proactive Feishu/Lark messaging (Commander-only). The tools resolve the
+  // configured owner, ask the user for one-time confirmation, and send through
+  // the shared messaging service; workers / edit sessions / CLI / reflection
+  // never get them. A cid is required to route the confirmation dialog and
+  // derive the stable per-turn source key.
+  const messagingTools: AgentTool[] = uid && !params.disableTools && isCommander && params.cid
+    ? createMessagingTools({
+        userId: uid,
+        cid: params.cid,
+        ...(params.turnId ? { turnId: params.turnId } : {}),
+      })
+    : [];
+
   // Media generation. Shares the localExec access mode with
   // local-tools (writing image bytes is the same blast radius as write_file).
   // Skipped when uid is unknown — generators need the
@@ -885,6 +905,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ...fileTools,
     ...kbTools,
     ...chatHistoryTools,
+    ...messagingTools,
     ...imageGenTools,
     ...videoStudioTools,
     ...deepResearchTools,
@@ -1008,7 +1029,22 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // Empty string when nothing is stored (no tokens for new users).
   // Re-read each turn — a mid-conversation write shows up next turn.
   // Project sessions additionally render the project's own notes section.
-  const memoryBlock = (uid && memoryAgentScope) ? formatMemoryForSystemPrompt(uid, memoryAgentScope, params.projectId) : '';
+  let activeCognitionSourceIds: ReadonlySet<string> = new Set();
+  if (uid && memoryAgentScope) {
+    try {
+      activeCognitionSourceIds = await listActiveCognitionSourceIds(uid);
+    } catch (err) {
+      // Fail closed for machine-owned cognition records while leaving the
+      // user's independent USER/MEMORY entries available to the model.
+      log.warn('active cognition memory scan failed', {
+        user_id: maskId(uid),
+        error: logErrorSummary(err),
+      });
+    }
+  }
+  const memoryBlock = (uid && memoryAgentScope)
+    ? formatMemoryForSystemPrompt(uid, memoryAgentScope, params.projectId, activeCognitionSourceIds)
+    : '';
   if (memoryBlock) parts.push(memoryBlock);
   const resolvedSystemPrompt = parts.join('\n\n');
   // P2: the truly per-turn-volatile blocks — the orchestration ledger (~7-9K
@@ -1145,8 +1181,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     providers,
     session,
     ...(params.disableTools ? { disableTools: true } : {}),
-    ...(visibleTools.length ? { tools: visibleTools } : {}),
-    ...(transformToolResult ? { transformToolResult } : {}),
+    ...(visibleTools.length ? { tools: visibleTools } : {}),    ...(transformToolResult ? { transformToolResult } : {}),
     ...(toolResultsDir ? { toolContextState: { toolResultSpoolDir: toolResultsDir } } : {}),
     ...(params.skillList !== undefined ? { skillAllowlist: params.skillList } : {}),
     ...(onSkillCreated ? { onSkillCreated } : {}),

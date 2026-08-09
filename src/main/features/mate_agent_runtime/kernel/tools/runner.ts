@@ -1,6 +1,6 @@
 import { capToolResult, DEFAULT_INLINE_RESULT_TOKENS } from '../../../../util/tool-result-cap';
 import type { RuntimeToolPolicy } from '../types';
-import { TOOL_CATALOG, type RuntimeToolCatalogEntry, type RuntimeToolName, getRuntimeToolCatalog } from './catalog';
+import { TOOL_CATALOG, type RuntimeToolCatalogEntry, type RuntimeToolName, getRuntimeToolCatalog, filterRuntimeToolCatalogByCapabilities } from './catalog';
 import { RUNTIME_FILE_TOOLS, runRuntimeFileTool, type RuntimeToolCallContext, type RuntimeToolResult } from './file-tools';
 import { normalizeRuntimeRoots } from './permissions';
 import { runRuntimeBashTool } from './shell-tools';
@@ -19,6 +19,8 @@ export interface RuntimeToolRunnerOptions {
   writableRoots?: readonly string[];
   pcDir?: string;
   toolPolicy: RuntimeToolPolicy;
+  /** Main-process-derived capability grants; gates Commander-only tools. */
+  capabilities?: readonly string[];
   maxInlineToolResultTokens?: number;
   connectorManager?: MateConnectorManager;
   kbManager?: MateKbManager;
@@ -35,7 +37,7 @@ function isRuntimeFileTool(name: string): name is RuntimeToolName {
 }
 
 export function createRuntimeToolRunner(options: RuntimeToolRunnerOptions): RuntimeToolRunner {
-  const catalog = getRuntimeToolCatalog();
+  const catalog = filterRuntimeToolCatalogByCapabilities(getRuntimeToolCatalog(), options.capabilities);
   const allowedRoots = normalizeRuntimeRoots(options.allowedRoots);
   const writableRoots = normalizeRuntimeRoots(options.writableRoots ?? []);
   const callContext: RuntimeToolCallContext = {

@@ -11,6 +11,8 @@ export const hermesBackend = makeAcpBackend({
   logName: 'local-agents:hermes',
   argv: ['acp'],
   clientName: 'orkas',
+  agentType: 'hermes',
+  recordTranscript: true,
   extraEnv: {
     // Without this Hermes drops to interactive permission prompts on
     // any tool call and the run just hangs waiting on stdin we never

@@ -42,7 +42,13 @@ afterEach(async () => {
   await removeFixtureTree(tmpDir);
 });
 
-const RUNTIME_SIZES: Record<'python' | 'uv' | 'node', number> = { python: 101, uv: 202, node: 303 };
+const PYTHON_ARCHIVE = Buffer.alloc(101, 0x50);
+const PYTHON_ARCHIVE_SHA256 = crypto.createHash('sha256').update(PYTHON_ARCHIVE).digest('hex');
+const RUNTIME_SIZES: Record<'python' | 'uv' | 'node', number> = {
+  python: PYTHON_ARCHIVE.length,
+  uv: 202,
+  node: 303,
+};
 
 function writeEntrypointPayload(): string {
   const require = createRequire(import.meta.url);
@@ -177,6 +183,9 @@ function writeRuntime(kind: 'python' | 'uv' | 'node', key: string, executable: s
     for (const name of ['pip', 'pip3', 'pip3.12']) {
       fs.writeFileSync(path.join(scriptsDir, `${name}.cmd`), '@echo off\r\n');
     }
+    const archiveDir = path.join(dir, 'archive');
+    fs.mkdirSync(archiveDir);
+    fs.writeFileSync(path.join(archiveDir, 'python.zip'), PYTHON_ARCHIVE);
   } else if (kind === 'uv') {
     fs.writeFileSync(path.join(path.dirname(exe), 'uvx.exe'), windowsPe());
   } else if (kind === 'node') {
@@ -192,7 +201,7 @@ function writeRuntime(kind: 'python' | 'uv' | 'node', key: string, executable: s
     source: 'test',
     release: 'test',
     asset: `${kind}.zip`,
-    sha256: `${kind}-sha`,
+    sha256: kind === 'python' ? PYTHON_ARCHIVE_SHA256 : `${kind}-sha`,
     size: RUNTIME_SIZES[kind],
   }, null, 2));
 }
@@ -210,7 +219,7 @@ function writeManifest(key: string): void {
         [key]: {
           name: 'python.zip',
           url: 'https://example.invalid/python.zip',
-          sha256: 'python-sha',
+          sha256: PYTHON_ARCHIVE_SHA256,
           size: 101,
           archive: 'zip',
           executable: 'python/python.exe',

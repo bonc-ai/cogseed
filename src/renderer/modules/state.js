@@ -316,7 +316,9 @@ function bindStaticHandlers() {
   document.getElementById('skills-btn').addEventListener('click', () => _setViewFromSidebar('skills'));
   document.getElementById('recall-btn')?.addEventListener('click', () => _setViewFromSidebar('recall'));
   document.getElementById('connectors-btn')?.addEventListener('click', () => _setViewFromSidebar('connectors'));
+  document.getElementById('evolution-btn')?.addEventListener('click', () => _setViewFromSidebar('evolution'));
   document.getElementById('personal-ontology-btn')?.addEventListener('click', () => _setViewFromSidebar('personal-ontology'));
+  document.getElementById('topbar-evolution-toggle')?.addEventListener('click', () => _setViewFromSidebar('evolution'));
   document.getElementById('contexts-btn').addEventListener('click', () => _setViewFromSidebar('contexts'));
   document.getElementById('settings-btn')?.addEventListener('click', () => _setViewFromSidebar('settings'));
 
@@ -395,6 +397,14 @@ function bindStaticHandlers() {
   document.getElementById('agent-use-btn')?.addEventListener('click', () => {
     if (_selectedAgent && !_agentsCache?.some((a) => a.agent_id === _selectedAgent.id && a.enabled === false)) {
       useAgent(_selectedAgent.id);
+    }
+  });
+  document.getElementById('agent-manage-btn')?.addEventListener('click', () => {
+    if (_selectedAgent && typeof openExpenseWorkbench === 'function') {
+      void openExpenseWorkbench(_selectedAgent.id, 'agent_detail').catch(async (error) => {
+        const reason = error instanceof Error ? error.message : String(error || '未知错误');
+        await uiAlert(t('agents.launch_failed', { reason }));
+      });
     }
   });
   document.getElementById('agent-edit-btn')?.addEventListener('click', toggleAgentEditMode);

@@ -500,6 +500,79 @@ describe('agent and skill category tabs', () => {
     expect(html).not.toContain('Disabled Package');
   });
 
+  it('keeps the reimbursement agent available in ordinary recipient pickers', () => {
+    const { context, el } = loadCategoryRenderers();
+    vm.runInContext(`
+      _agentsCache = [
+        { agent_id: 'chat-agent', name: 'Chat Agent', source: 'custom', enabled: true },
+        { agent_id: 'expense-agent', name: 'Reimbursement Agent', source: 'marketplace', enabled: true }
+      ];
+      _renderAgentPickerList('', 'new-chat-recipient-chip');
+    `, context);
+
+    const html = el('agent-picker-list').innerHTML;
+    expect(html).toContain('Chat Agent');
+    expect(html).toContain('Reimbursement Agent');
+  });
+
+  it('prepares the expense capability before waiting for Agent-card detail fetch', async () => {
+    const { context } = loadCategoryRenderers();
+    const order: string[] = [];
+    let resolveFetch!: (response: unknown) => void;
+    const fetchResponse = new Promise((resolve) => { resolveFetch = resolve; });
+    let resolvePreparation!: () => void;
+    const preparation = new Promise<void>((resolve) => { resolvePreparation = resolve; });
+    context.window.orkas.expenseWorkbench = {
+      prepareOpen: () => {
+        order.push('prepare');
+        return preparation;
+      },
+      close: async () => ({ ok: true }),
+    };
+    context.apiFetch = () => {
+      order.push('fetch');
+      return fetchResponse;
+    };
+    context.openExpenseWorkbench = async (_agentId: string, _gesture: string, prepared: boolean) => {
+      order.push(`open:${String(prepared)}`);
+    };
+    vm.runInContext(`
+      _agentsCache = [{
+        agent_id: 'expense-agent',
+        name: 'Expense Workbench',
+        source: 'marketplace',
+        enabled: true,
+        interaction_mode: 'management_only',
+        management_surface: 'expense_workbench',
+        reimbursement_entry_role: 'canonical'
+      }];
+      _renderAgentDetail = () => {};
+      _resetAgentDetailScroll = () => {};
+    `, context);
+
+    const opening = context.useAgent('expense-agent', 'agent_card');
+    expect(order).toEqual(['prepare', 'fetch']);
+    resolveFetch({
+      json: async () => ({
+        ok: true,
+        agent: {
+          agent_id: 'expense-agent',
+          name: 'Expense Workbench',
+          source: 'marketplace',
+          enabled: true,
+          interaction_mode: 'management_only',
+          management_surface: 'expense_workbench',
+          reimbursement_entry_role: 'canonical',
+        },
+      }),
+    });
+    await Promise.resolve();
+    resolvePreparation();
+    await opening;
+
+    expect(order).toEqual(['prepare', 'fetch', 'open:true']);
+  });
+
   it('keeps external package recipes out of the picker while preserving global open-tier selection', async () => {
     const { context } = loadCategoryRenderers();
     context.pickedSkillCalls = [];

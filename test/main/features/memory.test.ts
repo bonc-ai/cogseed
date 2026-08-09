@@ -68,6 +68,56 @@ describe('memory › loadEntries', () => {
     fs.writeFileSync(f, 'just one entry');
     expect(mem.loadEntries(f)).toEqual([{ text: 'just one entry' }]);
   });
+
+  it('隔离损坏的机器 metadata，不把隐藏头注入模型上下文', async () => {
+    const mem = await loadMemory();
+    const f = path.join(tmpDir, 'corrupt.md');
+    fs.writeFileSync(f, '<!-- mate-agent-memory:v1 {broken} -->\nshould not load');
+
+    expect(mem.loadEntries(f)).toEqual([]);
+  });
+
+  it('隔离未知版本和嵌入正文的 metadata 命名空间', async () => {
+    const mem = await loadMemory();
+    const unknownVersion = path.join(tmpDir, 'unknown-version.md');
+    const embeddedMarker = path.join(tmpDir, 'embedded-marker.md');
+    fs.writeFileSync(unknownVersion, '<!-- mate-agent-memory:v2 {} -->\nshould not load');
+    fs.writeFileSync(embeddedMarker, 'ordinary text\n<!-- mate-agent-memory:future {} -->');
+
+    expect(mem.loadEntries(unknownVersion)).toEqual([]);
+    expect(mem.loadEntries(embeddedMarker)).toEqual([]);
+  });
+
+  it('非 ENOENT 读取错误必须向上抛出，不能伪装成空记忆', async () => {
+    const mem = await loadMemory();
+    const directory = path.join(tmpDir, 'memory-as-directory.md');
+    fs.mkdirSync(directory);
+
+    expect(() => mem.loadEntries(directory)).toThrow(/failed to read memory records/);
+    expect(fs.statSync(directory).isDirectory()).toBe(true);
+  });
+
+  it.skipIf(process.platform === 'win32')('EACCES 读取错误保留原因并且不改写原文件', async () => {
+    const mem = await loadMemory();
+    const memoryFile = path.join(tmpDir, 'unreadable-memory.md');
+    fs.writeFileSync(memoryFile, 'must remain unchanged');
+    const before = fs.readFileSync(memoryFile);
+    fs.chmodSync(memoryFile, 0o000);
+
+    try {
+      let thrown: Error | undefined;
+      try {
+        mem.loadEntries(memoryFile);
+      } catch (error) {
+        thrown = error as Error;
+      }
+      expect(thrown?.message).toContain('failed to read memory records');
+      expect((thrown?.cause as NodeJS.ErrnoException | undefined)?.code).toBe('EACCES');
+    } finally {
+      fs.chmodSync(memoryFile, 0o600);
+    }
+    expect(fs.readFileSync(memoryFile)).toEqual(before);
+  });
 });
 
 // ── saveEntries ────────────────────────────────────────────────────
@@ -106,6 +156,16 @@ describe('memory › saveEntries', () => {
     const f = path.join(tmpDir, 'deep', 'nested', 'file.md');
     mem.saveEntries(f, [{ text: 'ok' }], 1000);
     expect(fs.existsSync(f)).toBe(true);
+  });
+
+  it('拒绝保留分隔符和机器 metadata marker', async () => {
+    const mem = await loadMemory();
+    const f = path.join(tmpDir, 'reserved.md');
+    expect(() => mem.saveEntries(f, [{ text: 'A§B' }], 1000)).toThrow('reserved_separator');
+    expect(() => mem.saveEntries(f, [{ text: '<!-- mate-agent-memory:v1 {} -->' }], 1000))
+      .toThrow('reserved_metadata_marker');
+    expect(() => mem.saveEntries(f, [{ text: '<!-- mate-agent-memory:v2 {} -->' }], 1000))
+      .toThrow('reserved_metadata_marker');
   });
 });
 
@@ -187,6 +247,18 @@ describe('memory › addEntry', () => {
     expect(result.ok).toBe(true);
     expect(result.nearLimit).toBeFalsy();
   });
+
+  it('所有入口都拒绝保留分隔符与 metadata marker', async () => {
+    const mem = await loadMemory();
+    expect(mem.addEntry('u1', 'memory', 'A§B')).toMatchObject({ ok: false, error: 'reserved_separator' });
+    expect(mem.addEntry('u1', { agent: 'agent-1' }, '<!-- mate-agent-memory:v1 x'))
+      .toMatchObject({ ok: false, error: 'reserved_metadata_marker' });
+    expect(mem.addEntry('u1', 'memory', '<!-- mate-agent-memory:future x'))
+      .toMatchObject({ ok: false, error: 'reserved_metadata_marker' });
+    mem.addEntry('u1', { agent: 'agent-1' }, 'safe');
+    expect(mem.replaceAgentEntry('u1', 'agent-1', 'safe', 'A§B'))
+      .toMatchObject({ ok: false, error: 'reserved_separator' });
+  });
 });
 
 // ── replaceEntry ────────────────────────────────────────────────
@@ -224,6 +296,19 @@ describe('memory › replaceEntry', () => {
     expect(result.ok).toBe(false);
     expect(result.error).toBe('char_limit_exceeded');
     expect(mem.listEntries('u1', 'memory').entries).toEqual(['short']);
+  });
+
+  it('拒绝把一条记忆替换成已有的独立正文，且文件字节不变', async () => {
+    const mem = await loadMemory();
+    mem.addEntry('u1', 'memory', '待替换的记忆');
+    mem.addEntry('u1', 'memory', '已有的记忆');
+    const memoryFile = path.join(tmpDir, 'u1', 'cloud', 'memory', 'MEMORY.md');
+    const before = fs.readFileSync(memoryFile);
+
+    expect(mem.replaceEntry('u1', 'memory', '待替换', '已有的记忆'))
+      .toMatchObject({ ok: false, error: 'content already exists' });
+    expect(fs.readFileSync(memoryFile)).toEqual(before);
+    expect(mem.listEntries('u1', 'memory').entries).toEqual(['待替换的记忆', '已有的记忆']);
   });
 });
 
@@ -269,6 +354,18 @@ describe('memory › clearMemory', () => {
     mem.clearMemory('u1', 'memory');
     const result = mem.listEntries('u1', 'memory');
     expect(result.entries).toEqual([]);
+  });
+
+  it('清空共享记忆时返回所有被解除的认知来源', async () => {
+    const mem = await loadMemory();
+    expect(mem.ensureCognitionMemoryEntry('u1', 'cog_first', '第一条认知').ok).toBe(true);
+    expect(mem.ensureCognitionMemoryEntry('u1', 'cog_second', '第二条认知').ok).toBe(true);
+
+    await expect(mem.clearMemoryAndInvalidateCognition('u1', 'memory')).resolves.toMatchObject({
+      ok: true,
+      entries: [],
+      detachedCognitionSourceIds: ['cog_first', 'cog_second'],
+    });
   });
 });
 

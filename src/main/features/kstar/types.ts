@@ -34,6 +34,11 @@ export interface KstarEpisodeRecord extends KstarJsonRecord {
   taskRunId?: string;
   requestId?: string;
   runtimeSessionId?: string;
+  /** Provenance hints for group-chat captures when a terminal event can be tied to a wake request. */
+  logicalRunId?: string;
+  executionId?: string;
+  projectionId?: string;
+  wakeRequestId?: string;
   k: {
     memoryRefs: string[];
     contextRefs: string[];
@@ -70,18 +75,37 @@ export interface KstarEpisodeRecord extends KstarJsonRecord {
   updatedAt: string;
 }
 
+export type KstarReviewState = 'inferred' | 'needs_confirmation' | 'confirmed' | 'unknown';
+export type KstarReviewInferenceMethod = 'deterministic' | 'model' | 'user' | 'unknown';
+
 export interface KstarReviewRecord extends KstarJsonRecord {
   schemaVersion: 1;
   episodeId: string;
+  expectedResult?: string;
+  actualResult?: string;
   deltaR: number | 'unknown';
   deltaA: number | 'unknown';
   outcome: KstarOutcome;
   attribution: KstarAttribution;
   reason: string;
   confidence: number;
+  reviewState?: KstarReviewState;
+  inferenceMethod?: KstarReviewInferenceMethod;
+  needsConfirmation?: boolean;
+  confirmedAt?: string;
   evidenceRefs: CognitionSourceRef[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface KstarLearningSignal {
+  expectedResult?: string;
+  actualResult?: string;
+  deltaR: number | 'unknown';
+  deltaA: number | 'unknown';
+  outcome: KstarOutcome;
+  confidence: number;
+  source: 'review';
 }
 
 export interface KstarCandidateProposal {
@@ -91,6 +115,7 @@ export interface KstarCandidateProposal {
   suggestedType: AbilityAssetType;
   suggestedScope: string;
   sourceRefs: CognitionSourceRef[];
+  learningSignal?: KstarLearningSignal;
 }
 
 export interface KstarExtractionRunRecord extends KstarJsonRecord {

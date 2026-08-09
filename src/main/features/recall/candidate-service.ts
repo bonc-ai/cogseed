@@ -11,6 +11,8 @@ import {
   writeRecallJsonRecord,
 } from './store';
 import type { RecallJsonRecord } from './types';
+import type { KstarLearningSignal } from '../kstar/types';
+import { normalizeAbilityAssetOntologyRefs, type AbilityAssetOntologyRef } from './ontology-refs';
 import { initializeAbilityAsset } from './asset-service';
 import {
   cognitionSourceRefKey,
@@ -22,6 +24,7 @@ import {
 export type RecallCandidateStatus = 'pending' | 'deferred' | 'rejected' | 'promoted';
 export type AbilityAssetType = 'personal' | 'rule' | 'template' | 'skill_method';
 
+
 export interface RecallCandidateRecord extends RecallJsonRecord {
   id: string;
   taxonomyVersion: 2;
@@ -32,6 +35,7 @@ export interface RecallCandidateRecord extends RecallJsonRecord {
   suggestedType: AbilityAssetType;
   suggestedScope: string;
   sourceRefs: CognitionSourceRef[];
+  learningSignal?: KstarLearningSignal;
   captureKey?: string;
   promotedAssetId?: string;
   decisionNote?: string;
@@ -46,6 +50,8 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   title: string;
   statement: string;
   evidenceRefs: CognitionSourceRef[];
+  learningSignal?: KstarLearningSignal;
+  ontologyRefs?: AbilityAssetOntologyRef[];
   scope: string;
   status: 'active' | 'paused' | 'revoked';
   maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated';
@@ -61,6 +67,7 @@ export interface SaveRecallCandidateInput {
   suggestedType: AbilityAssetType;
   suggestedScope: string;
   sourceRefs: unknown[];
+  learningSignal?: KstarLearningSignal;
   captureKey?: string;
 }
 
@@ -83,6 +90,23 @@ function requireAssetType(value: unknown): AbilityAssetType {
   throw new Error('invalid suggested type');
 }
 
+
+function normalizeLearningSignal(value: unknown): KstarLearningSignal | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed candidate learning signal');
+  const signal = value as Record<string, unknown>;
+  if (
+    (signal.expectedResult !== undefined && typeof signal.expectedResult !== 'string') ||
+    (signal.actualResult !== undefined && typeof signal.actualResult !== 'string') ||
+    (signal.deltaR !== 'unknown' && (typeof signal.deltaR !== 'number' || !Number.isFinite(signal.deltaR))) ||
+    (signal.deltaA !== 'unknown' && (typeof signal.deltaA !== 'number' || !Number.isFinite(signal.deltaA))) ||
+    !['better_than_expected', 'met_expected', 'worse_than_expected', 'unclear'].includes(String(signal.outcome)) ||
+    typeof signal.confidence !== 'number' || !Number.isFinite(signal.confidence) || signal.confidence < 0 || signal.confidence > 1 ||
+    signal.source !== 'review'
+  ) throw new Error('malformed candidate learning signal');
+  return signal as unknown as KstarLearningSignal;
+}
+
 function asCandidate(value: RecallJsonRecord): RecallCandidateRecord {
   if (
     (value.status !== 'pending' && value.status !== 'deferred' && value.status !== 'rejected' && value.status !== 'promoted') ||
@@ -95,7 +119,8 @@ function asCandidate(value: RecallJsonRecord): RecallCandidateRecord {
   ) throw new Error('malformed recall candidate');
   const sourceRefs = normalizeCognitionSourceRefs(value.sourceRefs);
   if (!sourceRefs.length) throw new Error('malformed recall candidate evidence');
-  return { ...value, taxonomyVersion: 2, sourceRefs } as RecallCandidateRecord;
+  const learningSignal = normalizeLearningSignal(value.learningSignal);
+  return { ...value, taxonomyVersion: 2, sourceRefs, ...(learningSignal ? { learningSignal } : {}) } as RecallCandidateRecord;
 }
 
 function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
@@ -106,7 +131,9 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   ) throw new Error('malformed recall ability asset');
   const evidenceRefs = normalizeCognitionSourceRefs(value.evidenceRefs);
   if (!evidenceRefs.length) throw new Error('malformed recall ability asset evidence');
-  return { ...value, evidenceRefs } as RecallAbilityAssetRecord;
+  const learningSignal = normalizeLearningSignal(value.learningSignal);
+  const ontologyRefs = value.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(value.ontologyRefs);
+  return { ...value, evidenceRefs, ...(learningSignal ? { learningSignal } : {}), ...(ontologyRefs ? { ontologyRefs } : {}) } as RecallAbilityAssetRecord;
 }
 
 function candidateDirectory(userId: string): string {
@@ -163,6 +190,7 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
   const suggestedScope = boundedText(input.suggestedScope, 'suggested scope', 500, true)!;
   const sourceRefs = normalizeCognitionSourceRefsForWrite(input.sourceRefs);
   if (!sourceRefs.length) throw new Error('candidate evidence is required');
+  const learningSignal = normalizeLearningSignal(input.learningSignal);
   const captureKey = input.captureKey === undefined
     ? undefined
     : boundedText(input.captureKey, 'capture key', 160, true);
@@ -188,6 +216,7 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
     suggestedType: requireAssetType(input.suggestedType),
     suggestedScope,
     sourceRefs,
+    ...(learningSignal ? { learningSignal } : {}),
     ...(captureKey ? { captureKey } : {}),
     createdAt: now,
     updatedAt: now,
@@ -234,6 +263,7 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
   const suggestedType = requireAssetType(input.suggestedType);
   const sourceRefs = normalizeCognitionSourceRefsForWrite(input.sourceRefs);
   if (!sourceRefs.length) throw new Error('candidate evidence is required');
+  const learningSignal = normalizeLearningSignal(input.learningSignal);
   const duplicates = await listRecallCandidates(userId);
   const nextFingerprint = fingerprint({ judgment, sourceRefs });
   if (duplicates.some((candidate) => candidate.id !== candidateId && fingerprint(candidate) === nextFingerprint)) throw new Error('duplicate recall candidate');
@@ -241,7 +271,7 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
     if (!raw) throw new Error('recall candidate not found');
     const current = asCandidate(raw);
     if (current.status === 'rejected' || current.status === 'promoted') throw new Error('recall candidate is terminal');
-    return { ...current, judgment, ...(summary ? { summary } : {}), ...(uncertainty ? { uncertainty } : {}), suggestedType, suggestedScope, sourceRefs, updatedAt: new Date().toISOString() };
+    return { ...current, judgment, ...(summary ? { summary } : {}), ...(uncertainty ? { uncertainty } : {}), suggestedType, suggestedScope, sourceRefs, ...(learningSignal ? { learningSignal } : current.learningSignal ? { learningSignal: current.learningSignal } : {}), updatedAt: new Date().toISOString() };
   });
   return asCandidate(updated);
 }
@@ -261,6 +291,7 @@ export function rejectRecallCandidate(userId: string, candidateId: string, note?
 export async function promoteRecallCandidate(
   userId: string,
   candidateId: string,
+  options: { ontologyRefs?: AbilityAssetOntologyRef[] } = {},
 ): Promise<{ candidate: RecallCandidateRecord; asset: RecallAbilityAssetRecord }> {
   const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, async (current) => {
     if (!current) throw new Error('recall candidate not found');
@@ -277,6 +308,8 @@ export async function promoteRecallCandidate(
       title: candidate.summary || candidate.judgment.slice(0, 120),
       statement: candidate.judgment,
       evidenceRefs: candidate.sourceRefs,
+      ...(candidate.learningSignal ? { learningSignal: candidate.learningSignal } : {}),
+      ...(options.ontologyRefs?.length ? { ontologyRefs: options.ontologyRefs } : {}),
       scope: candidate.suggestedScope,
       status: 'active',
       maturity: 'seed',

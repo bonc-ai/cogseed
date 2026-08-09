@@ -33,6 +33,12 @@ let tmpDir: string;
 let prevWs: string | undefined;
 const TEST_UID = 'u1';
 
+function writeOrdinaryAgent(agentId: string): void {
+  const file = path.join(tmpDir, TEST_UID, 'cloud', 'agents', agentId, 'agent.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ agent_id: agentId }));
+}
+
 beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-runner-'));
   prevWs = process.env.ORKAS_WORKSPACE_ROOT;
@@ -40,6 +46,7 @@ beforeEach(async () => {
   vi.resetModules();
   const users = await import('../../../../src/main/features/users');
   users.activateUser(TEST_UID);
+  for (const agentId of ['a', 'agent-x']) writeOrdinaryAgent(agentId);
   mockDetect.mockReset();
   mockBackendImpl = null;
   mockOpenclawBackendImpl = null;
@@ -55,6 +62,39 @@ async function loadRunner() {
 }
 
 describe('local_agents/runner', () => {
+  it('rejects management-only Agents before CLI detection, persistence, or backend execution', async () => {
+    const file = path.join(tmpDir, TEST_UID, 'cloud', 'agents', 'expense-agent', 'agent.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({
+      agent_id: 'expense-agent',
+      interaction_mode: 'management_only',
+    }));
+    mockDetect.mockResolvedValue({
+      type: 'claude', available: true, path: '/fake/claude', version: '2.0.0',
+    });
+    const backend = vi.fn(async () => undefined);
+    mockBackendImpl = backend;
+    const events: any[] = [];
+    const runner = await loadRunner();
+
+    await expect(runner.run({
+      uid: TEST_UID,
+      cid: 'c',
+      agentId: 'expense-agent',
+      cli: 'claude',
+      prompt: 'must not execute',
+      cwd: tmpDir,
+      signal: new AbortController().signal,
+      onEvent: (event) => events.push(event),
+      ...({ dispatchPolicyVerified: true } as Record<string, unknown>),
+    })).rejects.toMatchObject({ code: 'E_AGENT_MANAGEMENT_ONLY' });
+
+    expect(mockDetect).not.toHaveBeenCalled();
+    expect(backend).not.toHaveBeenCalled();
+    expect(events).toEqual([]);
+    expect(fs.existsSync(path.join(tmpDir, TEST_UID, 'local', 'file_cache', 'local-agent-runs'))).toBe(false);
+  });
+
   it('builds local agent log context without raw prompts, args, resume ids, or paths', async () => {
     const runner = await loadRunner();
     const ctx = runner.localAgentRunContextForLog({

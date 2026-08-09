@@ -1,6 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { buildLlmComplete } from '../../../../src/main/features/evolution/llm-bridge';
 
+const assertDispatchableMock = vi.hoisted(() => vi.fn(async () => undefined));
+
+vi.mock('../../../../src/main/features/agent-dispatch-policy', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../src/main/features/agent-dispatch-policy')>();
+  return { ...actual, assertAgentChatDispatchable: assertDispatchableMock };
+});
+
 // 降级路径复用引擎 ruleFallbackComplete，mock engine-loader 避免依赖 dist 细节。
 vi.mock('../../../../src/main/features/evolution/engine-loader', () => ({
   loadEngine: async () => ({ ruleFallbackComplete: async () => ({ text: '[规则降级]占位', degraded: true }) }),
@@ -41,5 +48,17 @@ describe('buildLlmComplete', () => {
     expect(seen).toHaveLength(2);
     expect(seen[0]).not.toBe(seen[1]);
     expect(seen.every(s => s.startsWith('evolution-'))).toBe(true);
+  });
+
+  it('拒绝 management-only Agent，不允许规则降级绕过边界', async () => {
+    assertDispatchableMock.mockRejectedValueOnce(Object.assign(
+      new Error('management-only'),
+      { code: 'E_AGENT_MANAGEMENT_ONLY' },
+    ));
+    const fakeBuild = vi.fn();
+    const llm = buildLlmComplete({ userId: 'u1', agentId: 'expense-agent', buildRunnerFn: fakeBuild });
+    await expect(llm('提示')).rejects.toMatchObject({ code: 'E_AGENT_MANAGEMENT_ONLY' });
+    expect(assertDispatchableMock).toHaveBeenCalledWith('u1', 'expense-agent');
+    expect(fakeBuild).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,4 @@
-import type { WebPreferences } from 'electron';
+import type { BrowserWindowConstructorOptions, Session, WebPreferences } from 'electron';
 
 /**
  * Security baseline for every BrowserWindow we create. Callers may add
@@ -26,6 +26,28 @@ export function safeExternalHttpUrl(raw: unknown): string | null {
     return url.toString();
   } catch {
     return null;
+  }
+}
+
+const WECOM_QUICK_CREATE_ORIGIN = 'https://work.weixin.qq.com';
+const WECOM_QUICK_CREATE_PATH = '/ai/qc/gen';
+
+/**
+ * The Enterprise WeCom quick-create page is the sole remote page permitted
+ * to open inside Electron. It has its own no-bridge preload and communicates
+ * back only through a browser postMessage checked by the renderer.
+ */
+export function isOfficialWecomQuickCreateUrl(raw: unknown): boolean {
+  const normalized = safeExternalHttpUrl(raw);
+  if (!normalized || normalized.length > SAFE_EXTERNAL_LINK_MAX_LENGTH) return false;
+  try {
+    const url = new URL(normalized);
+    return url.origin === WECOM_QUICK_CREATE_ORIGIN
+      && url.pathname === WECOM_QUICK_CREATE_PATH
+      && !url.search
+      && !url.hash;
+  } catch {
+    return false;
   }
 }
 
@@ -109,9 +131,28 @@ interface NavigationEvent {
   preventDefault(): void;
 }
 
+type WindowOpenResult =
+  | { action: 'deny' }
+  | { action: 'allow'; overrideBrowserWindowOptions?: BrowserWindowConstructorOptions };
+
 interface GuardedWebContents {
+  setWindowOpenHandler(handler: (details: { url: string }) => WindowOpenResult): void;
+  on(event: 'will-navigate', handler: (event: NavigationEvent, url: string) => void): void;
+}
+
+interface WecomQuickCreatePopupWebContents {
   setWindowOpenHandler(handler: (details: { url: string }) => { action: 'deny' }): void;
   on(event: 'will-navigate', handler: (event: NavigationEvent, url: string) => void): void;
+  on(event: 'will-redirect', handler: (event: NavigationEvent, url: string) => void): void;
+}
+
+interface ExternalNavigationGuardOptions {
+  /**
+   * A deliberately tiny exception for a remote authorization page which must
+   * retain a browser opener in order to return an official postMessage.
+   */
+  allowWindowOpen?: (url: string) => boolean;
+  allowedWindowOpenOptions?: BrowserWindowConstructorOptions;
 }
 
 /**
@@ -125,6 +166,7 @@ export function installExternalNavigationGuard(
   webContents: GuardedWebContents,
   openExternal: (url: string) => Promise<unknown>,
   warn: (error: unknown) => void = () => {},
+  options: ExternalNavigationGuardOptions = {},
 ): void {
   const open = (raw: unknown): void => {
     const url = safeExternalHttpUrl(raw);
@@ -135,6 +177,12 @@ export function installExternalNavigationGuard(
   };
 
   webContents.setWindowOpenHandler(({ url }) => {
+    if (options.allowWindowOpen?.(url)) {
+      return {
+        action: 'allow',
+        ...(options.allowedWindowOpenOptions ? { overrideBrowserWindowOptions: options.allowedWindowOpenOptions } : {}),
+      };
+    }
     open(url);
     return { action: 'deny' };
   });
@@ -142,5 +190,34 @@ export function installExternalNavigationGuard(
   webContents.on('will-navigate', (event, url) => {
     event.preventDefault();
     open(url);
+  });
+}
+
+/**
+ * The official quick-create document must retain its opener to return the
+ * documented postMessage, but it is otherwise treated as untrusted remote
+ * content. In particular, a server-side redirect is cancellable separately
+ * from `will-navigate` and must not turn this window into a general browser.
+ */
+export function installWecomQuickCreatePopupGuard(webContents: WecomQuickCreatePopupWebContents): void {
+  webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  const blockUnexpectedNavigation = (event: NavigationEvent, url: string): void => {
+    if (!isOfficialWecomQuickCreateUrl(url)) event.preventDefault();
+  };
+  webContents.on('will-navigate', blockUnexpectedNavigation);
+  webContents.on('will-redirect', blockUnexpectedNavigation);
+}
+
+/**
+ * A remote authorization page never needs an Electron permission. It runs in
+ * an isolated, non-persistent session so its permission decisions cannot
+ * inherit the main renderer's copy/paste grants.
+ */
+export function installDenyAllRemotePermissionGate(
+  remoteSession: Pick<Session, 'setPermissionCheckHandler' | 'setPermissionRequestHandler'>,
+): void {
+  remoteSession.setPermissionCheckHandler(() => false);
+  remoteSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
+    callback(false);
   });
 }

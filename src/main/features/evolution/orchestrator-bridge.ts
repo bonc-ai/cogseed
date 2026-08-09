@@ -4,6 +4,7 @@ import { loadEngine } from './engine-loader';
 import { buildLlmComplete } from './llm-bridge';
 import { evolutionDir, evolutionRunPath } from './paths';
 import { createLogger } from '../../logger';
+import { assertAgentChatDispatchable } from '../agent-dispatch-policy';
 
 const log = createLogger('evolution:orchestrator');
 
@@ -34,6 +35,7 @@ async function persist(uid: string, run: EvolutionRun): Promise<void> {
 }
 
 export async function startEvolutionRun(uid: string, input: StartInput): Promise<EvolutionRun> {
+  if (input.agentId) await assertAgentChatDispatchable(uid, input.agentId);
   const llm = buildLlmComplete({ userId: uid, agentId: input.agentId ?? '' });
   const engine = await loadEngine();
   const Ctor = engine.EvolutionOrchestrator as new (deps: { llm?: unknown }) => OrchestratorInstance;

@@ -197,6 +197,7 @@ import { P3394Controller } from "../p3394/controller";
 import { authoritativeSessionSource } from "../p3394/session-source";
 import { EpochStore } from "../p3394/epoch-store";
 import { SenderEpochStore } from "../p3394/sender-epoch-store";
+import { buildConfirmedProjectionPromptBlock } from "../recall/prompt-injection";
 
 const log = createLogger("group_chat.bus");
 
@@ -291,10 +292,16 @@ function normalizeDispatchKStar(
         : "Commander skipped KSTAR for this delegated task."),
     expectation: {
       k_snapshot_ref: read("k_snapshot_ref", 512) || `conversation:${cid}`,
-      situation: read("situation"),
+      situation:
+        read("situation") ||
+        "当前任务由 Commander 协调，目标 Agent 尚未开始执行。",
       task: read("task") || fallbackTask,
-      action_hat: read("action_hat"),
-      result_hat: read("result_hat"),
+      action_hat:
+        read("action_hat") ||
+        "由目标 Agent 执行任务并收集可复核证据，完成后交回 Commander 复核。",
+      result_hat:
+        read("result_hat") ||
+        "获得一份可复核的任务结果，并明确产物、完成情况与剩余差距。",
     },
   };
 }
@@ -1192,6 +1199,7 @@ export type GroupEvent =
       msg: GroupMessage;
       turn_end?: boolean;
       turn_id?: string;
+      source_msg_id?: string;
       seg?: number;
     }
   | {
@@ -1243,6 +1251,7 @@ export type GroupEvent =
       cid: string;
       actor: string;
       turn_id?: string;
+      source_msg_id?: string;
       reason?: "terminal_handoff";
     };
 
@@ -1410,6 +1419,10 @@ interface CidState {
     status: TaskTerminalStatus | null;
     anchorMessageId?: string;
     lastMessageId?: string;
+    logicalRunId?: string;
+    executionId?: string;
+    projectionId?: string;
+    wakeRequestId?: string;
   };
 }
 
@@ -1427,6 +1440,11 @@ export interface TaskTerminalEvent {
   anchor_message_id?: string;
   /** Last persisted message owned by this run when it became quiescent. */
   finished_message_id?: string;
+  /** Optional execution identity used by terminal proof adapters. */
+  logical_run_id?: string;
+  execution_id?: string;
+  projection_id?: string;
+  wake_request_id?: string;
 }
 
 export type TaskTerminalListener = (event: TaskTerminalEvent) => void;
@@ -1587,23 +1605,43 @@ function _emitTaskRunTerminalIfQuiescent(
       : waitingForUser
         ? "waiting_input"
         : run.status || "failed";
-  const event: TaskTerminalEvent = {
-    run_id: run.runId,
-    user_id: state.uid,
-    conversation_id: state.cid,
-    status,
-    started_at_ms: run.startedAtMs,
-    finished_at_ms: Date.now(),
-    ...(run.anchorMessageId ? { anchor_message_id: run.anchorMessageId } : {}),
-    ...(run.lastMessageId ? { finished_message_id: run.lastMessageId } : {}),
-  };
-  for (const listener of _taskTerminalListeners) {
-    try {
-      listener(event);
-    } catch (err) {
-      log.warn(`task terminal listener threw: ${(err as Error).message}`);
+  const listeners = [..._taskTerminalListeners];
+  void (async () => {
+    const event: TaskTerminalEvent = {
+      run_id: run.runId,
+      user_id: state.uid,
+      conversation_id: state.cid,
+      status,
+      started_at_ms: run.startedAtMs,
+      finished_at_ms: Date.now(),
+      ...(run.anchorMessageId ? { anchor_message_id: run.anchorMessageId } : {}),
+      ...(run.lastMessageId ? { finished_message_id: run.lastMessageId } : {}),
+      ...(run.logicalRunId ? { logical_run_id: run.logicalRunId } : {}),
+      ...(run.executionId ? { execution_id: run.executionId } : {}),
+      ...(run.projectionId ? { projection_id: run.projectionId } : {}),
+      ...(run.wakeRequestId ? { wake_request_id: run.wakeRequestId } : {}),
+    };
+    if (!event.projection_id || !event.logical_run_id || !event.wake_request_id) {
+      try {
+        const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
+        const lifecycle = await readKstarTaskLifecycle(state.uid, state.cid);
+        if (!event.logical_run_id && lifecycle.task?.id) event.logical_run_id = lifecycle.task.id;
+        if (!event.projection_id && lifecycle.projection?.id) event.projection_id = lifecycle.projection.id;
+        if (!event.wake_request_id && lifecycle.wakeRequest?.id) event.wake_request_id = lifecycle.wakeRequest.id;
+      } catch (err) {
+        log.warn(`task terminal provenance lookup failed cid=${state.cid}: ${(err as Error).message}`);
+      }
     }
-  }
+    if (!event.logical_run_id) event.logical_run_id = run.runId;
+    if (!event.execution_id) event.execution_id = run.runId;
+    for (const listener of listeners) {
+      try {
+        listener(event);
+      } catch (err) {
+        log.warn(`task terminal listener threw: ${(err as Error).message}`);
+      }
+    }
+  })();
 }
 
 function scheduleCommanderKStarValidation(
@@ -1838,6 +1876,8 @@ export interface EnqueueParams {
   attachments?: string[];
   use_selections?: ChatUseSelection[];
   references?: ChatMessageReference[];
+  recall_projection_card?: { projectionId: string };
+  kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
   produced?: string[];
   form?: ChatFormPayload;
   created_agents?: Array<{
@@ -1875,6 +1915,12 @@ export interface EnqueueParams {
    * end-of-turn message. Renderer uses it to finalize the exact placeholder
    * that collected this turn's process / delta events. */
   turn_id?: string;
+  /** QueueItem.msgId for the actor execution that produced this message —
+   * the id of the (user/commander) message that triggered the turn. Carried
+   * on live bus events only (never persisted) so consumers such as the
+   * messaging manager can pair a completing turn with the inbound that
+   * started it. */
+  source_msg_id?: string;
   /** Mark this message as an internal plan-step dispatch (commander →
    * agent, fired by plan_executor). Persists for the agent's slice but the
    * renderer hides it from the user view — the plan announcement already
@@ -1894,6 +1940,15 @@ export interface EnqueueParams {
   process?: GroupMessage["process"];
   /** Internal first-stage KSTAR gate metadata; persisted as P3394 runtime state, not raw message schema. */
   kstarDecision?: KStarDecisionRecord;
+  /** Internal KSTAR terminal provenance used to enrich bus terminal events. */
+  kstarTerminalProvenance?: {
+    logicalRunId?: string;
+    executionId?: string;
+    projectionId?: string;
+    wakeRequestId?: string;
+  };
+  /** Marker for the Commander-visible task/plan/expected-result declaration. */
+  kstar_dispatch_narration?: { target_agent_id: string; workflow_step_id?: string };
   /** Compact tool-cycle summaries captured during this agent turn for KSTAR attribution. */
   kstarToolSummaries?: string[];
   /** Terminal outcome recorded with an Agent contribution for Commander validation. */
@@ -1922,8 +1977,17 @@ export async function enqueue(params: EnqueueParams): Promise<GroupMessage> {
       code: "E_CONVERSATION_TERMINATING",
     });
   }
-  if (fromActorId === USER_ID && !state.taskRun) {
-    state.taskRun = { runId: genId12(), startedAtMs: Date.now(), status: null };
+  if (!state.taskRun && (fromActorId === USER_ID || params.kstarTerminalProvenance)) {
+    const provenance = params.kstarTerminalProvenance;
+    state.taskRun = {
+      runId: genId12(),
+      startedAtMs: Date.now(),
+      status: null,
+      ...(provenance?.logicalRunId ? { logicalRunId: provenance.logicalRunId } : {}),
+      ...(provenance?.executionId ? { executionId: provenance.executionId } : {}),
+      ...(provenance?.projectionId ? { projectionId: provenance.projectionId } : {}),
+      ...(provenance?.wakeRequestId ? { wakeRequestId: provenance.wakeRequestId } : {}),
+    };
   }
   // Mark in-flight enqueue. `isQuiescent` returns false while >0 so
   // callers waiting for "everything done" don't hit the gap between
@@ -2350,6 +2414,8 @@ async function _enqueueBody(
     ...(params.references && params.references.length
       ? { references: params.references }
       : {}),
+    ...(params.recall_projection_card ? { recall_projection_card: params.recall_projection_card } : {}),
+    ...(params.kstar_review_card ? { kstar_review_card: params.kstar_review_card } : {}),
     ...(params.produced && params.produced.length
       ? { produced: params.produced }
       : {}),
@@ -2369,6 +2435,9 @@ async function _enqueueBody(
     ...(params.marketplace_requests && params.marketplace_requests.length
       ? { marketplace_requests: params.marketplace_requests }
       : {}),
+    ...(params.kstar_dispatch_narration
+      ? { kstar_dispatch_narration: params.kstar_dispatch_narration }
+      : {}),
     ...(params.plan_announcement ? { plan_announcement: true } : {}),
     ...(params.dispatch ? { dispatch: true } : {}),
     ...(params.seg !== undefined ? { seg: params.seg } : {}),
@@ -2377,6 +2446,49 @@ async function _enqueueBody(
       : {}),
     ...(params.turn_id ? { turn_id: params.turn_id } : {}),
   };
+
+  if (fromActorId === USER_ID) {
+    void (async () => {
+      try {
+        const { routeKstarUserMessage } = await import('../kstar/requirement-state');
+        const routed = await routeKstarUserMessage(uid, { conversationId: cid, messageId: msg.id, text: String(text || '') });
+        if (routed.projectionPreviewCreated?.projectionId) {
+          const { postProjectionCardMessage } = await import('../recall/projection-message');
+          await postProjectionCardMessage(uid, {
+            cid,
+            projectionId: routed.projectionPreviewCreated.projectionId,
+          }, {
+            send: async (payload) => {
+              const posted = await enqueue({
+                uid,
+                cid: payload.cid,
+                fromActorId: COMMANDER_ID,
+                forceTo: [USER_ID],
+                text: String(payload.text || ''),
+                recall_projection_card: { projectionId: payload.card.projectionId },
+              });
+              return { id: posted.id };
+            },
+          });
+        }
+        const { drainKstarTaskState } = await import('../kstar/task-aggregate');
+        await drainKstarTaskState(uid, cid);
+      } catch (err) {
+        log.warn(`KSTAR requirement routing failed cid=${cid}: ${(err as Error).message}`);
+      }
+    })();
+  }
+
+  if (state.taskRun && params.kstarTerminalProvenance) {
+    const provenance = params.kstarTerminalProvenance;
+    state.taskRun = {
+      ...state.taskRun,
+      ...(provenance.logicalRunId ? { logicalRunId: provenance.logicalRunId } : {}),
+      ...(provenance.executionId ? { executionId: provenance.executionId } : {}),
+      ...(provenance.projectionId ? { projectionId: provenance.projectionId } : {}),
+      ...(provenance.wakeRequestId ? { wakeRequestId: provenance.wakeRequestId } : {}),
+    };
+  }
 
   const guardedKStarDecision =
     fromKind === "agent" && params.turn_end && params.turn_id
@@ -2448,6 +2560,7 @@ async function _enqueueBody(
     msg,
     ...(params.turn_end ? { turn_end: true } : {}),
     ...(params.turn_id ? { turn_id: params.turn_id } : {}),
+    ...(params.source_msg_id ? { source_msg_id: params.source_msg_id } : {}),
     ...(params.seg !== undefined ? { seg: params.seg } : {}),
   });
   log.info(
@@ -2632,6 +2745,22 @@ function _referenceContextForModel(
     "</referenced-messages>",
     "",
   ].join("\n");
+}
+
+function buildKstarExpectationPreface(kstarDecision: KStarDecisionRecord | undefined): string {
+  if (!kstarDecision?.required) return "";
+  const exp = kstarDecision.expectation;
+  if (!exp) return "";
+  return [
+    "<agent-task-introduction>",
+    "在使用工具或开始执行前，先用自然语言说明你理解的任务、预期结果和执行计划。不要等待用户确认，也不要使用固定 K/S/T/AAR 模板；说明后直接继续执行。",
+    exp.situation ? `当前情境：${exp.situation}` : "",
+    exp.task ? `任务：${exp.task}` : "",
+    exp.result_hat ? `预期结果：${exp.result_hat}` : "",
+    exp.action_hat ? `执行计划：${exp.action_hat}` : "",
+    "</agent-task-introduction>",
+    "",
+  ].filter(Boolean).join("\n");
 }
 
 function composeLlmTurnPayload(
@@ -2910,6 +3039,7 @@ async function runWorkerLoop(state: CidState, w: WorkerState): Promise<void> {
           cid: w.cid,
           actor: it.actor.id,
           turn_id: it.turnId,
+          source_msg_id: it.msgId,
         });
       }
       try {
@@ -2972,6 +3102,7 @@ async function runWorkerLoop(state: CidState, w: WorkerState): Promise<void> {
           cid: w.cid,
           actor: item.actor.id,
           turn_id: item.turnId,
+          source_msg_id: item.msgId,
         });
       } catch (emitErr) {
         log.warn(
@@ -3344,6 +3475,7 @@ async function runActorTurnBody(
   // so the agent / commander has context. After the first turn, the
   // session file accumulates and we don't re-replay.
   let messageText = item.llmPayload;
+  const kstarExpectationPreface = buildKstarExpectationPreface(item.kstarDecision);
   let replayReferences: ChatMessageReference[] = [];
   try {
     const sessionFile = (
@@ -3464,6 +3596,8 @@ async function runActorTurnBody(
       `conversation attachment index build failed cid=${cid} actor=${actor.id}: ${(err as Error).message}`,
     );
   }
+
+  if (kstarExpectationPreface) messageText = `${kstarExpectationPreface}${messageText}`;
 
   if (isCommander && item.fromActorId === USER_ID) {
     const disabledSkill = await _findDisabledSkillUseRequest(
@@ -3648,6 +3782,16 @@ async function runActorTurnBody(
       );
       extraTools = [buildSkillSearchTool(uid)];
     }
+  }
+
+  // Confirmed Recall ability assets are host-owned context. They are read
+  // after the role prompt is assembled so user-confirmed projections enter the
+  // real model call without becoming editable task prose.
+  try {
+    const confirmedAbilityAssets = await buildConfirmedProjectionPromptBlock(uid, cid);
+    if (confirmedAbilityAssets) systemPrompt = `${systemPrompt}\n\n${confirmedAbilityAssets}`;
+  } catch (error) {
+    log.warn(`confirmed ability asset prompt injection failed cid=${cid}: ${(error as Error).message}`);
   }
 
   // Streaming.

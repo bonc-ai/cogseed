@@ -37,9 +37,17 @@ import * as recallCandidates from '../features/recall/candidate-service';
 import * as recallAssets from '../features/recall/asset-service';
 import * as recallWorkspaceRefs from '../features/recall/workspace-refs';
 import * as recallProjection from '../features/recall/context-projection';
+import * as recallProjectionCard from '../features/recall/projection-card';
+import * as recallProjectionMessage from '../features/recall/projection-message';
+import * as recallTimeline from '../features/recall/timeline-service';
+import * as kstarKnowledgeRoute from '../features/kstar/knowledge-route-service';
+import { readKstarTaskLifecycle } from '../features/kstar/lifecycle-adapter';
+import * as kstarTaskClosure from '../features/kstar/task-closure';
+import * as kstarReviewService from '../features/kstar/review-service';
 import * as recallProofs from '../features/recall/proof-service';
 import * as recallTree from '../features/recall/tree-service';
 import * as recallUsage from '../features/recall/usage-service';
+import * as effectivenessFeedback from '../features/recall/effectiveness-feedback';
 import * as recallSources from '../features/recall/source-catalog';
 import * as recallCaptures from '../features/recall/capture-service';
 import * as recallCaptureSettings from '../features/recall/capture-settings';
@@ -81,6 +89,10 @@ import * as videoAuth from '../features/video_auth';
 import * as ttsAuth from '../features/tts_auth';
 import * as permissions from '../features/permissions';
 import * as appConfig from '../features/config';
+import * as onboardingState from '../features/onboarding_state';
+import * as journeyState from '../features/journey_state';
+import * as cognitionExtraction from '../features/cognition_extraction';
+import { detectAll } from '../features/local_agents/registry';
 import * as avatars from '../features/avatars';
 import * as commanderProfile from '../features/commander_profile';
 import * as commanderRuntimeStats from '../features/commander_runtime_stats';
@@ -90,9 +102,15 @@ import { getRendererTables, isLang, t } from '../i18n';
 import { isPathAllowed } from '../util/path-sandbox';
 import * as userWorkspace from '../features/user_workspace';
 import { invokeHandlers as localAgentsHandlers } from './local_agents';
+import {
+  invokeHandlers as expenseWorkbenchHandlers,
+
+} from './expense_workbench';
 import { invokeHandlers as qualityHandlers } from './quality';
 import { invokeHandlers as connectorsHandlers } from './connectors';
+import { invokeHandlers as messagingHandlers } from './messaging';
 import { invokeHandlers as memoryHandlers } from './memory';
+import { invokeHandlers as cognitionHandlers } from './cognition';
 import { safeId } from '../storage';
 import { createLogger, logFromRenderer } from '../logger';
 import {
@@ -794,6 +812,26 @@ function _resolveWorkbenchSkillDir(userId: string, skillId: string): string | nu
   return null;
 }
 
+async function ensureKstarWakeProjectionConfirmed(
+  userId: string,
+  cid: string,
+  requestId: string,
+  decision: unknown,
+  request: { kstar_decision?: { required?: unknown }; asset_confirmation_snapshot?: { projection_id?: unknown } },
+): Promise<{ ok: false; error: string } | null> {
+  if (decision !== 'approve') return null;
+  if (request.kstar_decision?.required !== true) return null;
+  if (typeof request.asset_confirmation_snapshot?.projection_id === 'string') return null;
+  const lifecycle = await readKstarTaskLifecycle(userId, cid);
+  const projectionId = lifecycle.requirement?.projectionId || lifecycle.projection?.id;
+  if (!projectionId || !safeId(projectionId)) {
+    return { ok: false, error: 'kstar wake request has no confirmed projection' };
+  }
+  const confirmed = await recallProjection.confirmAndApproveWake(userId, { cid, projectionId, wakeRequestId: requestId });
+  if (confirmed.ok !== true) return { ok: false, error: confirmed.error || 'projection wake confirmation failed' };
+  return null;
+}
+
 const invokeHandlers: Record<string, InvokeHandler> = {
   'mate_agent.task.start': async (payload, ctx) => mateAgentBackend.mateIpcService.start(ctx.userId, payload),
   'mate_agent.task.read': async (payload, ctx) => mateAgentBackend.mateIpcService.read(ctx.userId, payload),
@@ -1265,10 +1303,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       agents.listAgentSummaries(),
       skills.listSkills(),
     ]);
-    const agentById = new Map(agentList.map((a: any) => [a.agent_id, a]));
+    const dispatchableAgents = agentList.filter((agent) => agents.isAgentChatDispatchable(agent));
+    const agentById = new Map(dispatchableAgents.map((agent) => [agent.agent_id, agent]));
     const skillById = new Map(skillList.map((s: any) => [s.id, s]));
     const pruned = await projects.pruneBindings(ctx.userId, projectId, {
-      agents: new Set(agentList.map((a: any) => a.agent_id)),
+      agents: new Set(dispatchableAgents.map((agent) => agent.agent_id)),
       skills: new Set(skillList.map((s: any) => s.id)),
     });
     if (!pruned.ok) throw new Error((pruned as { error: string }).error);
@@ -1291,7 +1330,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (kind === 'agent') {
       if (!agents.isValidAgentId(id)) throw new Error('invalid id');
       const agent = await agents.getAgent(id);
-      if (!agent || agent.enabled === false) throw new Error('agent_disabled');
+      if (!agents.isAgentChatDispatchable(agent)) throw new Error('agent_disabled');
       result = await projects.addAgentBinding(ctx.userId, projectId, id);
     } else if (kind === 'skill') {
       result = await projects.addSkillBinding(ctx.userId, projectId, id);
@@ -1331,7 +1370,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       skills.listSkills(),
     ]);
     return {
-      agents: agentList.filter((a: any) => a.enabled !== false && !boundAgents.has(a.agent_id)),
+      agents: agentList.filter((agent) => agents.isAgentChatDispatchable(agent) && !boundAgents.has(agent.agent_id)),
       skills: skillList.filter((s: any) => !boundSkills.has(s.id)),
     };
   },
@@ -1766,6 +1805,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (decision !== 'approve' && decision !== 'reject') throw new Error('invalid decision');
     const request = await p3394.getWakeRequest(ctx.userId, requestId);
     if (!request || request.conversation_id !== cid) throw new Error('wake request not found');
+    const kstarProjectionError = await ensureKstarWakeProjectionConfirmed(ctx.userId, cid, requestId, decision, request);
+    if (kstarProjectionError) return kstarProjectionError;
     return p3394.decideWakeRequest(ctx.userId, {
       requestId,
       decision,
@@ -2049,10 +2090,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.workspaceRefs.update': async ({ id, scope, enabled } = {}, ctx) => { if (!safeId(id) || (scope !== undefined && typeof scope !== 'string') || (enabled !== undefined && typeof enabled !== 'boolean')) throw new Error('invalid workspace reference'); return { ok: true, reference: await recallWorkspaceRefs.updateWorkspaceAssetReference(ctx.userId, id, { ...(scope !== undefined ? { scope } : {}), ...(enabled !== undefined ? { enabled } : {}) }) }; },
   'recall.workspaceRefs.remove': async ({ id } = {}, ctx) => { if (!safeId(id)) throw new Error('invalid workspace reference id'); await recallWorkspaceRefs.removeWorkspaceAssetReference(ctx.userId, id); return { ok: true }; },
 
-  'recall.projections.preview': async ({ taskRunId, workspaceId, purpose, authorization, expiresAt } = {}, ctx) => { if (!safeId(taskRunId) || (workspaceId !== undefined && !safeId(workspaceId)) || typeof purpose !== 'string' || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid recall projection'); return { ok: true, projection: await recallProjection.previewContextProjection(ctx.userId, { taskRunId, ...(workspaceId !== undefined ? { workspaceId } : {}), purpose, ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }) }; },
+  'recall.projections.preview': async ({ taskRunId, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(taskRunId) || (workspaceId !== undefined && !safeId(workspaceId)) || typeof purpose !== 'string' || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid recall projection'); return { ok: true, projection: await recallProjection.previewContextProjection(ctx.userId, { taskRunId, ...(workspaceId !== undefined ? { workspaceId } : {}), purpose, ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }) }; },
   'recall.projections.list': async ({ workspaceId, status, includeExpired, limit } = {}, ctx) => {
     if (workspaceId !== undefined && !safeId(workspaceId)) throw new Error('invalid workspace id');
-    if (status !== undefined && !['preview', 'confirmed', 'expired', 'revoked'].includes(status)) throw new Error('invalid projection status');
+    if (status !== undefined && !['preview', 'confirmed', 'deferred', 'rejected', 'expired', 'revoked'].includes(status)) throw new Error('invalid projection status');
     if (includeExpired !== undefined && typeof includeExpired !== 'boolean') throw new Error('invalid include expired');
     if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid projection limit');
     return {
@@ -2066,12 +2107,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
   'recall.projections.confirm': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.confirmContextProjection(ctx.userId, projectionId) }; },
+  'recall.projections.revise': async ({ projectionId, purpose, addAssetIds, removeAssetIds, decisionNote } = {}, ctx) => { if (!safeId(projectionId) || (purpose !== undefined && typeof purpose !== 'string') || (addAssetIds !== undefined && (!Array.isArray(addAssetIds) || addAssetIds.length > 100 || addAssetIds.some((id) => !safeId(id)))) || (removeAssetIds !== undefined && (!Array.isArray(removeAssetIds) || removeAssetIds.length > 100 || removeAssetIds.some((id) => !safeId(id)))) || (decisionNote !== undefined && typeof decisionNote !== 'string')) throw new Error('invalid projection revision'); return { ok: true, projection: await recallProjection.reviseContextProjection(ctx.userId, projectionId, { ...(purpose !== undefined ? { purpose } : {}), ...(addAssetIds !== undefined ? { addAssetIds } : {}), ...(removeAssetIds !== undefined ? { removeAssetIds } : {}), ...(decisionNote !== undefined ? { decisionNote } : {}) }) }; },
+  'recall.projections.availableAssets': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, assets: await recallProjection.listAvailableProjectionAssets(ctx.userId, projectionId) }; },
+  'recall.projections.confirmAndApproveWake': async ({ cid, projectionId, wakeRequestId } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId) || !safeId(wakeRequestId)) throw new Error('invalid projection wake confirmation'); return recallProjection.confirmAndApproveWake(ctx.userId, { cid, projectionId, wakeRequestId }); },
+  'recall.projections.defer': async ({ projectionId, note } = {}, ctx) => { if (!safeId(projectionId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.deferContextProjection(ctx.userId, projectionId, note) }; },
+  'recall.projections.reject': async ({ projectionId, note } = {}, ctx) => { if (!safeId(projectionId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.rejectContextProjection(ctx.userId, projectionId, note) }; },
+  'recall.projections.card': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, card: await recallProjectionCard.buildProjectionCard(ctx.userId, projectionId) }; },
+  'recall.projections.postCard': async ({ cid, projectionId } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId)) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.postProjectionCardMessage(ctx.userId, { cid, projectionId }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), ...(payload.card ? { recall_projection_card: { projectionId: payload.card.projectionId } } : {}) })).msg?.id || '' }) })) }; },
+  'recall.projections.previewAndPostCard': async ({ cid, taskRunId, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(cid) || !safeId(taskRunId) || (workspaceId !== undefined && !safeId(workspaceId)) || typeof purpose !== 'string' || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.previewAndPostProjectionCard(ctx.userId, { cid, taskRunId, ...(workspaceId !== undefined ? { workspaceId } : {}), purpose, ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId } })).msg?.id || '' }) })) }; },
+  'recall.projections.previewAndPostForNextTask': async ({ cid, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(cid) || (workspaceId !== undefined && !safeId(workspaceId)) || (purpose !== undefined && typeof purpose !== 'string') || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.previewAndPostProjectionCardForNextTask(ctx.userId, { cid, ...(workspaceId !== undefined ? { workspaceId } : {}), ...(purpose !== undefined ? { purpose } : {}), ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId } })).msg?.id || '' }) })), }; },
+  'recall.projections.reviseAndPostCard': async ({ cid, projectionId, purpose, addAssetIds, removeAssetIds, decisionNote } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId) || (purpose !== undefined && typeof purpose !== 'string') || (addAssetIds !== undefined && (!Array.isArray(addAssetIds) || addAssetIds.length > 100 || addAssetIds.some((id) => !safeId(id)))) || (removeAssetIds !== undefined && (!Array.isArray(removeAssetIds) || removeAssetIds.length > 100 || removeAssetIds.some((id) => !safeId(id)))) || (decisionNote !== undefined && typeof decisionNote !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.reviseAndPostProjectionCard(ctx.userId, { cid, projectionId, ...(purpose !== undefined ? { purpose } : {}), ...(addAssetIds !== undefined ? { addAssetIds } : {}), ...(removeAssetIds !== undefined ? { removeAssetIds } : {}), ...(decisionNote !== undefined ? { decisionNote } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId } })).msg?.id || '' }) })) }; },
   'recall.projections.read': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.readContextProjection(ctx.userId, projectionId) }; },
 
   'recall.proofs.transfer.prepare': async ({ projectionId, executionId, expectedResultSnapshot } = {}, ctx) => { if (!safeId(projectionId) || !safeId(executionId) || typeof expectedResultSnapshot !== 'string' || expectedResultSnapshot.length > 4_000) throw new Error('invalid transfer proof'); return { ok: true, proof: await recallProofs.prepareTransferProof(ctx.userId, { projectionId, executionId, expectedResultSnapshot }) }; },
   'recall.proofs.transfer.complete': async ({ proofId, status, receiptId, observedTransfer } = {}, ctx) => { if (!safeId(proofId) || (status !== 'succeeded' && status !== 'degraded' && status !== 'rejected') || (receiptId !== undefined && !safeId(receiptId)) || typeof observedTransfer !== 'string' || observedTransfer.length > 4_000) throw new Error('invalid transfer completion'); return { ok: true, proof: await recallProofs.completeTransferProof(ctx.userId, proofId, { status, ...(receiptId !== undefined ? { receiptId } : {}), observedTransfer }) }; },
   'recall.proofs.effectiveness.evaluate': async ({ transferProofId, outcome, observedResult, evidenceRefs } = {}, ctx) => { if (!safeId(transferProofId) || !['better','no_improvement','worse','insufficient_evidence','invalid','rework'].includes(outcome) || typeof observedResult !== 'string' || observedResult.length > 4_000 || !Array.isArray(evidenceRefs) || evidenceRefs.length > 100) throw new Error('invalid effectiveness proof'); return { ok: true, proof: await recallProofs.evaluateEffectivenessProof(ctx.userId, { transferProofId, outcome, observedResult, evidenceRefs }) }; },
 
+  'recall.proofs.effectiveness.feedback': async ({ transferProofId, feedback, note, evidenceRefs } = {}, ctx) => { if (!safeId(transferProofId) || !['positive', 'neutral', 'negative', 'invalid', 'rework'].includes(feedback) || (note !== undefined && typeof note !== 'string') || (evidenceRefs !== undefined && !Array.isArray(evidenceRefs))) throw new Error('invalid effectiveness feedback'); return { ok: true, proof: await effectivenessFeedback.recordEffectivenessFeedback(ctx.userId, { transferProofId, feedback, ...(note !== undefined ? { note } : {}), ...(evidenceRefs !== undefined ? { evidenceRefs } : {}) }) }; },
+  'recall.proofs.effectiveness.feedbackForTask': async ({ taskRunId, feedback, note, evidenceRefs } = {}, ctx) => { if (!safeId(taskRunId) || !['positive', 'neutral', 'negative', 'invalid', 'rework'].includes(feedback) || (note !== undefined && typeof note !== 'string') || (evidenceRefs !== undefined && !Array.isArray(evidenceRefs))) throw new Error('invalid effectiveness feedback'); return { ok: true, ...(await effectivenessFeedback.recordTaskEffectivenessFeedback(ctx.userId, { taskRunId, feedback, ...(note !== undefined ? { note } : {}), ...(evidenceRefs !== undefined ? { evidenceRefs } : {}) })) }; },
   'recall.tree.read': async (_args, ctx) => ({ ok: true, tree: await recallTree.readCognitionTree(ctx.userId) }),
   'recall.tree.rebuild': async (_args, ctx) => ({ ok: true, tree: await recallTree.rebuildCognitionTree(ctx.userId) }),
   'recall.usage.list': async ({ assetId } = {}, ctx) => { if (assetId !== undefined && !safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, usage: await recallUsage.listRecallUsage(ctx.userId, assetId) }; },
@@ -2648,6 +2701,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'personalOntology.candidates.rejectBatch': async ({ candidateIds, reason }, ctx) => {
     if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
     return personalOntologyCandidates.rejectCandidates(ctx.userId, candidateIds, reason);
+  },
+  // onboarding 第 4 步：把抽取出的候选批量入池（不确认，等勾选后走 confirm）。
+  // 只做忠实映射与写入，返回实际写入的 candidate_ids 供前端记账。
+  'personalOntology.candidates.addFromOnboarding': async ({ candidates } = {}, ctx) => {
+    if (!Array.isArray(candidates)) throw new Error('candidates must be array');
+    return personalOntologyCandidates.addCandidates(ctx.userId, candidates);
   },
 
   // ── Personal Ontology Groups ("记忆分组") ──
@@ -3286,6 +3345,48 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   }),
   'prefs.setMetacognition': async ({ enabled }) => {
     return { enabled: appConfig.setMetacognitionEnabled(!!enabled) };
+  },
+
+  // First-run onboarding marker (machine-local, NOT cloud-synced — stored
+  // under WS_ROOT/onboarding-state.json, shared across uids). The renderer's
+  // boot.js checks `completed` after restoring the last view and lifts the
+  // four-step walkthrough overlay only when it is false; the last step calls
+  // setOnboarding to persist true so it never re-appears on this device.
+  'prefs.getOnboarding': async () => ({
+    completed: onboardingState.getOnboardingCompleted(),
+  }),
+  'prefs.setOnboarding': async ({ completed }: { completed?: unknown } = {}) => ({
+    completed: onboardingState.setOnboardingCompleted(completed !== false),
+  }),
+
+  // 60-second journey marker (machine-local, NOT cloud-synced — stored
+  // under WS_ROOT/journey-state.json, shared across uids). The renderer's
+  // journey.js checks `completed` and only starts the journey when it is false.
+  'prefs.getJourney': async () => ({
+    completed: journeyState.getJourneyCompleted(),
+  }),
+  'prefs.setJourney': async ({ completed }: { completed?: unknown } = {}) => ({
+    completed: journeyState.setJourneyCompleted(completed !== false),
+  }),
+
+  // ── Cognition extraction from sessions (onboarding) ──
+  // Runs through a locally-detected CLI Agent (already authenticated on
+  // the user's machine), so onboarding needs no API key. We prefer
+  // `claude` when available, else fall back to the first available CLI.
+  'cognition.extractFromSession': async ({ sessionFilePath }: { sessionFilePath?: unknown } = {}, ctx) => {
+    if (typeof sessionFilePath !== 'string') throw new Error('session file path is required');
+    const entries = await detectAll();
+    const available = entries.filter(e => e.available);
+    const chosen = available.find(e => e.type === 'claude') ?? available[0];
+    if (!chosen) {
+      throw new Error('未检测到可用的本地 CLI Agent。请先安装并登录 Claude Code 等 Agent 后重试。');
+    }
+    const { candidates, diagnostic } = await cognitionExtraction.extractCognitionsFromSession({
+      sessionFilePath,
+      uid: ctx.userId,
+      cli: chosen.type,
+    });
+    return { ok: true, candidates, diagnostic, cli: chosen.type };
   },
 
   // ── Auth / model config (settings page) ──
@@ -4027,6 +4128,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // build; the renderer's External Agent picker depends on localAgents.list.
   ...localAgentsHandlers,
 
+  // Canonical reimbursement management surface. Its feature layer validates
+  // the active user, trusted Agent identity and bounded stdio protocol.
+  ...expenseWorkbenchHandlers,
+
   // Quality validator — renderer reads persisted ValidationReports to display
   // why a spec write / marketplace install was rejected.
   ...qualityHandlers,
@@ -4034,8 +4139,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // agents. No Server dependency, so kept in the open-source build.
   ...connectorsHandlers,
 
+  // Local two-way messaging gateway. Platform credentials never cross this
+  // handler table; the dedicated IPC module returns metadata-only DTOs.
+  ...messagingHandlers,
+
   // Cross-session memory UI — view/edit/import/export over features/memory.ts.
   ...memoryHandlers,
+
+  // Evidence-backed cognition assets. Confirmation reuses the canonical
+  // memory write path; these handlers own only longitudinal evidence, review,
+  // reuse, and growth state.
+  //
+  // `cognition.assets.list` is registered above (ability-asset semantics from
+  // the recall surface); the legacy store-asset handler of the same name in
+  // ipc/cognition.ts must not shadow it, so it is excluded from the spread.
+  ...(({ 'cognition.assets.list': _legacyCognitionAssetsList, ...rest }) => rest)(cognitionHandlers),
 };
 
 // ── Stream handlers ──────────────────────────────────────────────────────
@@ -4099,7 +4217,7 @@ const streamHandlers: Record<string, StreamHandler> = {
     yield* mateAgentBackend.mateIpcService.streamEvents(ctx.userId, payload, signal);
   },
 
-  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, retry_message_id }, ctx, signal) {
+  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, retry_message_id, edit_message_id }, ctx, signal) {
     if (!safeId(cid)) {
       yield { type: 'error', text: 'invalid cid' };
       return;
@@ -4151,19 +4269,30 @@ const streamHandlers: Record<string, StreamHandler> = {
     const sendPromise = (async () => {
       try {
         const retryMessageId = typeof retry_message_id === 'string' ? retry_message_id.trim() : '';
-        sendRes = retryMessageId
-          ? await groupChat.retryFailedTurn({
+        const editMessageId = typeof edit_message_id === 'string' ? edit_message_id.trim() : '';
+        if (retryMessageId && editMessageId) {
+          throw new Error('message retry and edit cannot be combined');
+        }
+        sendRes = editMessageId
+          ? await groupChat.replaceUserMessage({
+              userId: ctx.userId,
+              cid,
+              messageId: editMessageId,
+              text,
+            })
+          : retryMessageId
+            ? await groupChat.retryFailedTurn({
               userId: ctx.userId,
               cid,
               failedMessageId: retryMessageId,
               visibleText: text,
             })
-          : await groupChat.send({
-              userId: ctx.userId, cid, text,
-              ...(atts.length ? { attachments: atts } : {}),
-              ...(useSelections.length ? { use_selections: useSelections } : {}),
-              ...(refs.length ? { references: refs } : {}),
-            });
+            : await groupChat.send({
+                userId: ctx.userId, cid, text,
+                ...(atts.length ? { attachments: atts } : {}),
+                ...(useSelections.length ? { use_selections: useSelections } : {}),
+                ...(refs.length ? { references: refs } : {}),
+              });
       } catch (err) {
         sendErr = err;
       } finally {

@@ -1,5 +1,7 @@
 # Mate Agent 第三版 · 文稿总目录（收敛版）
 
+> **2026-08-03 现行开发口径**：`origin/develop` 是唯一功能开发与集成基线，`origin/master` 是稳定发布线，`origin/main` 已彻底停用，不作为开发、集成、发布、历史恢复或代码回迁入口；旧事件只按具体提交审计。认知树、报销管理工作台与集成验收分别在职责隔离的 worktree 中进行。本页 §3–§5 保留 2026-07-27 的阶段证据，不再作为分支操作说明；现行模块边界与验证方式以工作区根目录的 `docs/04-模块协作与隔离契约.md` 和 `docs/02-运行手册.md` 为准。
+
 > 适用目录：`~/Documents/Mate Agent/`
 >
 > 本页是第三版 Mate Agent / Mate 智伴 的**唯一总体文档**。
@@ -31,18 +33,18 @@
 | P3394 协议层（Wake / Protocol） | 记录型已交付，控制器型在建 | `features/p3394/{protocol,wake-service,wake-controller}.ts` | §4.2、§4.3 |
 | KSTAR 学习闭环 | 单核心迁移已落地，工具契约对齐在建 | `features/p3394/kstar-*.ts`、`packages/nseap-meta-skill-engine/` | §4.1 迁移设计 + §4.2 一致性审计 |
 | Agent 活动面板 / 协作抽屉 | 已交付（UI） | `renderer/modules/conversation-info.js`、`conversation.js` | 见 Git 历史过程稿 |
-| 报销智能体 / TaskAgent 接入 | 未开始（Sprint 2 承诺范围待共同确认） | `features/local_agents/`、`features/agents.ts` | §4.3 交接要点 |
+| 报销智能体 / TaskAgent 接入 | 固定内置管理 Agent 与隔离工作台已完成，正在集成验收 | `features/expense_workbench/`、`ipc/expense_workbench.ts` | 工作区模块协作与隔离契约 |
+| 认知树 | 带来源候选、人工确认、复用成长与共享记忆绑定已完成，正在集成验收 | `features/cognition/`、`ipc/cognition.ts` | 工作区模块协作与隔离契约 |
 
-> 说明：迁移到"控制器型协议"、KSTAR 工具契约对齐、报销 / TaskAgent 接入均属 **Sprint 2 在建 / 待确认**，
-> 最终承诺范围由 PO、Tech Lead 与本助手在核验后共同确认。
+> 说明：迁移到“控制器型协议”和 KSTAR 工具契约对齐仍需按现行代码核验；报销工作台与认知树的状态以上表和当前集成测试为准，不能再沿用 2026-07-27 的“未开始”判断。
 
 ---
 
 ## 3. 当前能力边界（Evidence 基线）
 
-以 [周末增量能力基线 Evidence](./superpowers/reports/2026-07-27-weekend-increment-capability-baseline-evidence.md) 为准，分三层：
+以下是 [周末增量能力基线 Evidence](./superpowers/reports/2026-07-27-weekend-increment-capability-baseline-evidence.md) 在 **2026-07-27 当日** 的三层记录：
 
-- **A 层 — 已进 main**：治理归属已收敛，回归测试全量重跑通过。此层是当前可信基线。
+- **A 层 — 当时已进 main**：治理归属已收敛，回归测试全量重跑通过；这只是历史标签，不表示今天仍从 `main` 开发。
 - **B 层 — 分支未推送**：`codex/meta-skill-engine-single-core`（Meta Skill Engine 单核心）尚未推送 / 集成，
   是当前最大差距（Evidence 中标记为 R-07），需 Tech Lead 推送并集成。
 - **C 层 — 未跟踪 / stash**：未纳入基线计数，不作为交付依据。
@@ -56,7 +58,7 @@
 本轮只在工作区保留 1 份签字确定件；其余 3 份确定件的要点已内化到 §4.1–§4.3，原文可从 Git 历史检出。
 
 - 保留（唯一签字件）：[周末增量能力基线 Evidence（Sprint 2 输入）](./superpowers/reports/2026-07-27-weekend-increment-capability-baseline-evidence.md)
-  — 三层能力边界（A 已进 main / B 分支未推送 / C 未跟踪）、三方签字表、复现命令附录。
+  — 三层历史能力边界（A 当时已进 main / B 分支未推送 / C 未跟踪）、三方签字表、复现命令附录。
 - 仓库级依据另见 [`../README.md`](../README.md)（产品概述）与 [`../CLAUDE.md`](../CLAUDE.md)（设计约束与工作规则）。
 
 ### 4.1 Meta Skill Engine 单核迁移（要点内化）
@@ -92,7 +94,7 @@
 - 张照航：协议层由记录型改造为控制器型。
 - 冯静雯：KSTAR Skill / MCP 统一到 Engine API，优化 DeltaR。
 - 牛保康：报销智能体本地 Agent。
-- 吴嘉宇：TaskAgent 接入 CogSeed。
+- 吴嘉宇：TaskAgent 接入 Mate Agent。
 
 已完成重大变更：KSTAR Engine 迁移（删 `kstar-runtime.ts` / `kstar-engine.ts`）；Engine 打包 extraResources；Hermes 版本探测 fallback；`paths.ts` 新增 `metaSkillEnginePackageDir()`。
 
@@ -108,7 +110,7 @@
 
 ### 5.1 可追溯 Commit / Tag（本地）
 
-- 集成分支：`integration/abc-meta-skill-engine`（基于 `origin/main`）。
+- 历史集成分支：`integration/abc-meta-skill-engine`（当时基于现已停用的 `origin/main`，不得作为新分支基线）。
 - 打包提交：本节所在的这次提交即打包提交；随后在其上打本地附注标签 `p3394-meta-skill-engine-20260727`。
 - 本地核验：
 
@@ -117,7 +119,7 @@ git tag -l p3394-meta-skill-engine-20260727
 git show --stat p3394-meta-skill-engine-20260727
 ```
 
-> 说明：标签与提交仅落在本地集成分支，不推送、不合并。集成进 main 由本人操作。
+> 历史说明：标签与提交当时仅落在本地集成分支，没有推送或合并。今天的集成目标是 `develop`，不再合入已停用的 `main`。
 
 ### 5.2 可运行包与启动说明
 
@@ -211,3 +213,7 @@ npm run typecheck
 `docs/` 顶层还有若干独立工作文档（`P3394_Team2_RouteB_*`、`Mate Agent 开发实施说明.*`、
 `companion-repro-demo-runbook.md`、`research/`），不属于本次 `docs/superpowers/` 收敛范围，保持原样。
 后续如需扩展新功能，应优先更新本页索引，再补对应确定件，避免文稿再次分散。
+
+### 飞书消息通道后续要求
+
+飞书基础双向收发能力完成并通过定向验收后，须在认知沉淀流程成功落库后向对应飞书会话发送通知。通知只能作为沉淀成功的后置结果；沉淀失败、跳过或未产出可持久化认知时不得发送，以免把未完成状态误报为完成。

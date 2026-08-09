@@ -5827,6 +5827,7 @@ function _ensureCreateAgentInlineObserver() {
 async function loadConversationHistory(cid, opts = {}) {
   const perfStartedAt = performance.now();
   const container = document.getElementById('chat-history');
+  _cancelActiveUserMessageEdit({ focus: false });
   const preserveScroll = opts && opts.preserveScroll === true;
   const scrollSnapshot = preserveScroll ? _captureHistoryReloadScroll(container) : null;
   container.classList.remove('has-scroll-offset');
@@ -6113,6 +6114,8 @@ function _messageRecordHasMountedSidecars(gm, el, opts = {}) {
   if (Array.isArray(gm.artifacts) && gm.artifacts.length && !el.querySelector('.chat-artifact-host')) return false;
   if (Array.isArray(gm.teaching_receipts) && gm.teaching_receipts.length && !el.querySelector('.chat-teaching-receipts')) return false;
   if (Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length && !el.querySelector('.chat-marketplace-request')) return false;
+  if (gm.kstar_review_card && !el.querySelector('.chat-kstar-result-review')) return false;
+  if (gm.recall_projection_card && !el.querySelector('.chat-recall-projection-card')) return false;
   if (_processItemsHaveRenderableLine(gm.process) && !el.querySelector('.stream-process')) return false;
   return true;
 }
@@ -6850,6 +6853,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   msgDiv.dataset.ts = String(_msTs(message.time));
   if (role === 'user') {
     msgDiv.dataset.retryContent = String(rawContent || '');
+    msgDiv.dataset.messageEditContent = String(rawContent || '');
     if (Array.isArray(message.attachments) && message.attachments.length) {
       msgDiv.dataset.retryAttachments = JSON.stringify(message.attachments);
     }
@@ -6895,6 +6899,18 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
       _mountChatInputForm(formHost, msgDiv, message, opts);
     }
   }
+  if (role === 'assistant' && message.expense_setup && typeof window.mountExpenseSetupCard === 'function') {
+    const bubble = msgDiv.querySelector('.chat-bubble');
+    if (bubble && !bubble.querySelector('.expense-agent-setup-card')) {
+      window.mountExpenseSetupCard(bubble, message.expense_setup);
+    }
+  }
+  if (role === 'assistant' && message.expense_submit && typeof window.mountExpenseSubmitCard === 'function') {
+    const bubble = msgDiv.querySelector('.chat-bubble');
+    if (bubble && !bubble.querySelector('.expense-agent-submit-card')) {
+      window.mountExpenseSubmitCard(bubble, message.expense_submit, opts.cid || currentCid);
+    }
+  }
   // P3394 Wake Gate approval cards are rendered in the current composer
   // pending-action area, not inside historical chat bubbles. That keeps the
   // human approval affordance near the input instead of forcing users to scroll
@@ -6909,6 +6925,15 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   if (role === 'assistant' && message.kstar_review) {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble) _mountKStarReviewCard(bubble, message.kstar_review, opts.cid || currentCid);
+  }
+
+  if (message.recall_projection_card && typeof window.mountRecallProjectionCard === 'function') {
+    const bubble = msgDiv.querySelector('.chat-bubble');
+    if (bubble && !bubble.querySelector('.chat-recall-projection-card')) {
+      const recallProjectionHost = document.createElement('div');
+      bubble.appendChild(recallProjectionHost);
+      window.mountRecallProjectionCard(recallProjectionHost, message.recall_projection_card, { cid: opts.cid || currentCid });
+    }
   }
 
   // Interactive web-app artifacts (assistant messages only) — sandboxed
@@ -6935,6 +6960,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
         '.chat-reference-bundle, .chat-msg-attachments, .chat-input-form, .chat-artifacts, iframe',
       ) || String(displayContent || '')
     ), { archive: false });
+    if (message._msg_id) _attachUserMessageEditAction(msgDiv);
   }
   // Persisted-process trail is independent of body type — it must render
   // for HTML-stub bodies too (e.g. CLI warning spans),
@@ -7186,6 +7212,60 @@ function _renderMarketplaceInstallCard(card, req, cid, msgId) {
     });
   }
   _hydrateMarketplaceRequestMeta(card, { ...req, kind }, cid, msgId);
+}
+
+function _renderKstarResultReviewCard(card, review) {
+  if (!card || !review) return;
+  card.dataset.busy = '';
+  card.dataset.status = String(review.status || 'pending');
+  card.className = `chat-kstar-review chat-kstar-result-review is-${card.dataset.status}`;
+  card.dataset.kstarReviewId = String(review.reviewId || '');
+  const expected = review.expectedResult
+    ? `<div class="chat-kstar-status"><strong>${escapeHtml(t('kstar.review.expected'))}</strong> ${escapeHtml(review.expectedResult)}</div>` : '';
+  const actual = review.actualResult
+    ? `<div class="chat-kstar-status"><strong>${escapeHtml(t('kstar.review.actual'))}</strong> ${escapeHtml(review.actualResult)}</div>` : '';
+  const evaluation = `<div class="chat-kstar-status"><strong>${escapeHtml(t('kstar.review.agent_eval', 'Agent 评估'))}</strong> ${escapeHtml(t('kstar.review.agent_eval_hint', '系统已根据预期与实际自动判定差异；你只需确认事实是否准确。'))}</div>`;
+  const actions = card.dataset.status === 'pending'
+    ? `<div class="chat-kstar-actions">
+        <button type="button" class="btn btn-primary btn-sm" data-kstar-result-action="confirm">${escapeHtml(t('kstar.review.confirm'))}</button>
+        <button type="button" class="btn btn-sm" data-kstar-result-action="correct">${escapeHtml(t('kstar.review.correct'))}</button>
+      </div>`
+    : `<div class="chat-kstar-status">${escapeHtml(t('kstar.review.confirmed'))}</div>`;
+  card.innerHTML = `<div class="chat-kstar-title">${escapeHtml(t('kstar.review.card_title'))}</div>${evaluation}${expected}${actual}${actions}`;
+  for (const button of card.querySelectorAll('[data-kstar-result-action]')) {
+    button.addEventListener('click', () => _resolveKstarResultReview(card, review, button.dataset.kstarResultAction));
+  }
+}
+
+async function _resolveKstarResultReview(card, review, action) {
+  if (!card || card.dataset.busy === '1') return;
+  card.dataset.busy = '1';
+  card.querySelectorAll('button').forEach((button) => { button.disabled = true; });
+  try {
+    const verdict = action === 'correct' ? 'skip' : 'met';
+    const result = await window.orkas.invoke('kstar.review.confirm', { episodeId: review.episodeId, verdict });
+    if (!result?.ok) throw new Error(result?.error || 'kstar review confirmation failed');
+    _renderKstarResultReviewCard(card, { ...review, status: 'confirmed' });
+  } catch (error) {
+    card.dataset.busy = '';
+    card.querySelectorAll('button').forEach((button) => { button.disabled = false; });
+    if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+  }
+}
+
+function _mountKstarResultReviewCard(host, review) {
+  if (!host || !review?.reviewId || !review?.episodeId) return;
+  const selector = `.chat-kstar-result-review[data-kstar-review-id="${CSS.escape(String(review.reviewId))}"]`;
+  if (host.querySelector(selector)) return;
+  const card = document.createElement('div');
+  host.appendChild(card);
+  _renderKstarResultReviewCard(card, review);
+  window.orkas.invoke('kstar.review.read', { episodeId: review.episodeId }).then((result) => {
+    const state = result?.review?.reviewState;
+    if (state === 'confirmed' || state === 'unknown') {
+      _renderKstarResultReviewCard(card, { ...review, status: 'confirmed' });
+    }
+  }).catch(() => {});
 }
 
 function _renderKStarReviewCard(card, review, cid, candidate = null) {
@@ -8018,6 +8098,7 @@ function _failedAssistantErrorText(msgDiv) {
 
 let _bubbleActionMenuListenersBound = false;
 let _openBubbleActionMenu = null;
+let _activeUserMessageEdit = null;
 
 function _closeBubbleActionMenus() {
   const menu = _openBubbleActionMenu;
@@ -8073,6 +8154,188 @@ function _attachBubbleRetryBtn(actions, msgDiv) {
     await _retryFailedAssistantMessage(msgDiv, retryBtn);
   });
   actions.appendChild(retryBtn);
+}
+
+function _messageEditDatasetArray(msgDiv, key) {
+  try {
+    const parsed = JSON.parse(msgDiv?.dataset?.[key] || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function _cancelActiveUserMessageEdit(opts = {}) {
+  const state = _activeUserMessageEdit;
+  if (!state) return false;
+  _activeUserMessageEdit = null;
+  state.msgDiv.classList.remove('is-message-editing');
+  state.hiddenChildren.forEach(({ element, hidden }) => {
+    if (element?.isConnected) element.hidden = hidden;
+  });
+  state.composer.remove();
+  state.editButton.disabled = false;
+  if (opts.focus !== false && state.editButton.isConnected) state.editButton.focus();
+  return true;
+}
+
+function _removeRenderedHistoryFrom(msgDiv) {
+  const container = msgDiv?.parentElement;
+  if (!container) return;
+  let node = msgDiv;
+  while (node) {
+    const next = node.nextElementSibling;
+    node.remove();
+    node = next;
+  }
+  for (const key of Array.from(_groupPlaceholders.keys())) {
+    if (key.startsWith(`${currentCid}:`)) _groupPlaceholders.delete(key);
+  }
+}
+
+async function _confirmUserMessageEdit() {
+  const message = t('chat.message_edit_confirm');
+  if (typeof uiConfirm === 'function') {
+    return uiConfirm({
+      message,
+      okLabel: t('chat.message_edit_submit'),
+      cancelLabel: t('common.cancel'),
+    });
+  }
+  return typeof window.confirm === 'function' ? window.confirm(message) : false;
+}
+
+async function _submitUserMessageEdit(state) {
+  if (!state || state.submitting || _activeUserMessageEdit !== state) return;
+  const text = String(state.textarea.value || '').trim();
+  if (!text) {
+    await uiAlert(t('chat.message_edit_empty'));
+    state.textarea.focus();
+    return;
+  }
+  if (isConvPending(state.cid)) {
+    await uiAlert(t('chat.message_edit_running'));
+    return;
+  }
+  if (!(await _confirmUserMessageEdit())) return;
+
+  state.submitting = true;
+  state.textarea.disabled = true;
+  state.submitButton.disabled = true;
+  const attachments = _messageEditDatasetArray(state.msgDiv, 'attachments');
+  const references = _messageEditDatasetArray(state.msgDiv, 'references');
+  const extra = {
+    edit_message_id: state.messageId,
+    ...(attachments.length ? { attachments } : {}),
+    ...(references.length ? { references } : {}),
+  };
+  _activeUserMessageEdit = null;
+  _removeRenderedHistoryFrom(state.msgDiv);
+
+  let failed = false;
+  try {
+    const result = await sendInConversation(state.cid, text, extra);
+    failed = !!result?.errored || result?.started === false;
+  } catch (error) {
+    failed = true;
+    _convLog.error('user message edit send failed', { cid: state.cid, error });
+  }
+
+  if (state.cid === currentCid) {
+    await loadConversationHistory(state.cid, { preserveScroll: true });
+    if (failed) await uiAlert(t('chat.message_edit_failed'));
+  }
+}
+
+function _beginUserMessageEdit(msgDiv, editButton) {
+  const cid = currentCid;
+  const messageId = String(msgDiv?.dataset?.msgId || '').trim();
+  if (!cid || !messageId || !msgDiv?.isConnected) return;
+  if (isConvPending(cid)) {
+    void uiAlert(t('chat.message_edit_running'));
+    return;
+  }
+  if (_activeUserMessageEdit?.msgDiv === msgDiv) {
+    _activeUserMessageEdit.textarea.focus();
+    return;
+  }
+  _cancelActiveUserMessageEdit({ focus: false });
+
+  const bubble = msgDiv.querySelector('.chat-bubble');
+  if (!bubble) return;
+  const originalText = String(msgDiv.dataset.messageEditContent || msgDiv.dataset.retryContent || '');
+  const hiddenChildren = Array.from(bubble.children).map((element) => ({
+    element,
+    hidden: element.hidden,
+  }));
+  hiddenChildren.forEach(({ element }) => { element.hidden = true; });
+
+  const composer = document.createElement('form');
+  composer.className = 'chat-message-edit-composer';
+  composer.innerHTML = `
+    <textarea class="chat-message-edit-input" aria-label="${escapeHtml(t('chat.message_edit_title'))}"></textarea>
+    <div class="chat-message-edit-actions">
+      <button type="button" class="btn btn-sm chat-message-edit-cancel">${escapeHtml(t('common.cancel'))}</button>
+      <button type="submit" class="btn btn-primary btn-sm chat-message-edit-submit">${escapeHtml(t('chat.message_edit_submit'))}</button>
+    </div>
+  `;
+  const textarea = composer.querySelector('.chat-message-edit-input');
+  const cancelButton = composer.querySelector('.chat-message-edit-cancel');
+  const submitButton = composer.querySelector('.chat-message-edit-submit');
+  textarea.value = originalText;
+  bubble.appendChild(composer);
+  msgDiv.classList.add('is-message-editing');
+  editButton.disabled = true;
+
+  const state = {
+    cid,
+    messageId,
+    msgDiv,
+    editButton,
+    composer,
+    textarea,
+    submitButton,
+    hiddenChildren,
+    submitting: false,
+  };
+  _activeUserMessageEdit = state;
+  cancelButton.addEventListener('click', () => _cancelActiveUserMessageEdit());
+  composer.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void _submitUserMessageEdit(state);
+  });
+  textarea.addEventListener('input', () => autoGrow(textarea, 260));
+  textarea.addEventListener('keydown', (event) => {
+    if (event.isComposing || event.keyCode === 229) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      _cancelActiveUserMessageEdit();
+      return;
+    }
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      composer.requestSubmit();
+    }
+  });
+  autoGrow(textarea, 260);
+  textarea.focus();
+  textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+}
+
+function _attachUserMessageEditAction(msgDiv) {
+  const header = msgDiv?.querySelector('.chat-msg-header-user');
+  if (!header || header.querySelector('.chat-message-edit-btn')) return;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'chat-message-edit-btn';
+  button.title = t('chat.message_edit_title');
+  button.setAttribute('aria-label', t('chat.message_edit_title'));
+  button.innerHTML = _uiIconHtml('edit-pencil', 'ui-icon');
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    _beginUserMessageEdit(msgDiv, button);
+  });
+  header.appendChild(button);
 }
 
 function _attachFailedAssistantActions(msgDiv, getContent) {
@@ -8385,6 +8648,40 @@ function _syncBubbleReferenceActionState(msgDiv) {
 // Attach small action buttons below the bubble. Kept outside the bubble so
 // they never overlap content. `getContent` is a callback so it can return the
 // latest text after streaming completes.
+async function _openCognitionCaptureFromBubble(msgDiv, getContent, cognitionBtn) {
+  const text = typeof getContent === 'function' ? String(getContent() || '') : '';
+  const messageId = String(msgDiv?.dataset?.msgId || '').trim();
+  if (!cognitionBtn || !text.trim() || !messageId || cognitionBtn.disabled) return false;
+
+  // The feature can load after the user has navigated elsewhere. Preserve the
+  // source task at click time so the evidence is never attributed to that
+  // later task.
+  const sourceCid = currentCid;
+  const loader = typeof loadRendererFeature === 'function'
+    ? loadRendererFeature
+    : window.loadRendererFeature;
+  if (typeof window.openCognitionCapture !== 'function' && typeof loader === 'function') {
+    cognitionBtn.disabled = true;
+    try {
+      await loader('personal-ontology');
+    } catch (error) {
+      _convLog.warn('cognition capture feature load failed', { error: error?.message || String(error) });
+    } finally {
+      cognitionBtn.disabled = false;
+    }
+  }
+  if (typeof window.openCognitionCapture !== 'function') return false;
+  try {
+    return window.openCognitionCapture({
+      conversationId: sourceCid,
+      messageId,
+    }) !== false;
+  } catch (error) {
+    _convLog.warn('cognition capture open failed', { error: error?.message || String(error) });
+    return false;
+  }
+}
+
 function _attachBubbleActions(msgDiv, getContent, opts = {}) {
   const includeArchive = opts.archive !== false;
   const includeRetry = opts.retry === true;
@@ -8414,6 +8711,7 @@ function _attachBubbleActions(msgDiv, getContent, opts = {}) {
   const overflowItems = `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-copy-btn" title="${escapeHtml(t('chat.copy_btn_title'))}">${escapeHtml(t('chat.copy_btn'))}</button>
     <button type="button" role="menuitem" class="chat-bubble-menu-item bubble-aside-btn" title="${escapeHtml(t('aside.ask_btn_title'))}">${escapeHtml(t('aside.ask_btn'))}</button>
     <button type="button" role="menuitem" class="chat-bubble-menu-item bubble-select-btn" title="${escapeHtml(t('chat.message_select_title'))}">${escapeHtml(t('chat.message_select'))}</button>
+    ${includeArchive && !includeRetry ? `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-cognition-btn" title="${escapeHtml(t('cognition.capture.menu_title'))}">${escapeHtml(t('cognition.capture.menu'))}</button>` : ''}
     ${includeArchive ? `<button type="button" role="menuitem" class="chat-bubble-menu-item bubble-archive-btn" title="${escapeHtml(t('chat.archive_btn_title'))}">${escapeHtml(t('chat.archive_btn'))}</button>` : ''}`;
   actions.innerHTML = `
     <span class="chat-bubble-direct-actions">${quoteButton}</span>
@@ -8427,6 +8725,7 @@ function _attachBubbleActions(msgDiv, getContent, opts = {}) {
   const copyBtn = actions.querySelector('.bubble-copy-btn');
   const quoteBtn = actions.querySelector('.bubble-quote-btn');
   const selectBtn = actions.querySelector('.bubble-select-btn');
+  const cognitionBtn = actions.querySelector('.bubble-cognition-btn');
   const asideBtn = actions.querySelector('.bubble-aside-btn');
   if (includeRetry) _attachBubbleRetryBtn(directActions, msgDiv);
   _wireBubbleActionMenu(actions);
@@ -8504,6 +8803,10 @@ function _attachBubbleActions(msgDiv, getContent, opts = {}) {
     e.stopPropagation();
     if (selectBtn.disabled) return;
     _enterMessageSelection(msgDiv);
+  });
+  cognitionBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    void _openCognitionCaptureFromBubble(msgDiv, getContent, cognitionBtn);
   });
   copyBtn?.addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -9297,6 +9600,12 @@ async function sendInConversation(cid, content, extra, options = {}) {
   let taskStarted = false;
   const attachmentCount = Array.isArray(extra && extra.attachments) ? extra.attachments.length : 0;
   if (isConvPending(cid)) {
+    // Historical replacement is a destructive linear-history operation. It
+    // must never enter the ordinary FIFO queue after a race with a new turn;
+    // the main side will reject it while the conversation is running.
+    if (extra && typeof extra.edit_message_id === 'string' && extra.edit_message_id.trim()) {
+      return { started: false, queued: false, aborted: false, errored: true, result: 'failure' };
+    }
     // Queued input starts a new execution stream after the current one ends,
     // so it must not be merged into the active task-turn sample.
     enqueueMessage(cid, content, '', { direct: true, extra });
@@ -11684,6 +11993,18 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
       _mountChatInputForm(host, ph, formMessage, { cid });
     }
   }
+  if (gm.expense_setup && typeof window.mountExpenseSetupCard === 'function') {
+    const bubble = ph.querySelector('.chat-bubble');
+    if (bubble && !bubble.querySelector('.expense-agent-setup-card')) {
+      window.mountExpenseSetupCard(bubble, gm.expense_setup);
+    }
+  }
+  if (gm.expense_submit && typeof window.mountExpenseSubmitCard === 'function') {
+    const bubble = ph.querySelector('.chat-bubble');
+    if (bubble && !bubble.querySelector('.expense-agent-submit-card')) {
+      window.mountExpenseSubmitCard(bubble, gm.expense_submit, cid);
+    }
+  }
 
   if (Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length) {
     const bubble = ph.querySelector('.chat-bubble');
@@ -12296,6 +12617,14 @@ function _stripAgentFormBlockForStream(buf) {
   return out;
 }
 
+function _stripExpenseCardBlockForStream(buf) {
+  if (!buf) return buf;
+  const placeholder = _streamPlaceholderHtml('expense_agent.card.streaming_placeholder');
+  return buf
+    .replace(/(?:^|\n)[ \t]*<expense-setup-form[ \t]*\/>[ \t]*(?=\n|$)/g, placeholder)
+    .replace(/(?:^|\n)[ \t]*<expense-submit-form[ \t]+case_id="[A-Za-z0-9_-]{1,128}"[ \t]*\/>[ \t]*(?=\n|$)/g, placeholder);
+}
+
 function _stripDashboardBlocksForStream(buf) {
   if (!buf || typeof _replaceUnclosedDashboardBlocks !== 'function') return buf;
   return _replaceUnclosedDashboardBlocks(
@@ -12340,8 +12669,10 @@ function _streamingAppendFinalDelta(msg, piece) {
       _stripAgentCreateBlocksForStream(
         _stripAutoTaskBlocksForStream(
           _stripAgentFormBlockForStream(
-            _stripDashboardBlocksForStream(
-              _stripSkillFileBlocksForStream(buf),
+            _stripExpenseCardBlockForStream(
+              _stripDashboardBlocksForStream(
+                _stripSkillFileBlocksForStream(buf),
+              ),
             ),
           ),
         ),
