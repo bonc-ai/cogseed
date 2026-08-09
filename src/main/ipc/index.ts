@@ -1052,6 +1052,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { deleted };
   },
 
+  'conversations.batchUpdateProject': async ({ conversationIds, projectId }, ctx) => {
+    if (!Array.isArray(conversationIds)) throw new Error('conversationIds must be an array');
+    if (typeof projectId !== 'string' || !safeId(projectId)) throw new Error('invalid projectId');
+    const result = await chats.batchUpdateConversationProject(ctx.userId, conversationIds, projectId);
+    return result;
+  },
+
   // ── Projects (logical groups of conversations + scoped workspace) ──
   'projects.list': async (_payload, ctx) => {
     return { projects: await projects.listProjects(ctx.userId) };

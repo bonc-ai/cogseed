@@ -5824,6 +5824,25 @@ function _ensureCreateAgentInlineObserver() {
   _ensureConvCreateAgentInline();
 }
 
+/**
+ * Insert a welcome message for an imported conversation.
+ * Called when user opens an imported conversation for the first time.
+ */
+async function _insertImportedConversationWelcome(cid) {
+  if (!window.orkas?.invoke) return;
+  try {
+    const result = await window.orkas.invoke('chats.insertWelcomeMessage', { conversationId: cid });
+    if (result?.ok) {
+      // Reload the conversation to show the new welcome message
+      if (cid === currentCid) {
+        await loadConversationHistory(cid, { preserveScroll: false });
+      }
+    }
+  } catch (err) {
+    _convLog.error('welcome message insertion failed', { cid, error: err });
+  }
+}
+
 async function loadConversationHistory(cid, opts = {}) {
   const perfStartedAt = performance.now();
   const container = document.getElementById('chat-history');
@@ -6079,6 +6098,13 @@ async function loadConversationHistory(cid, opts = {}) {
     void _hydratePatchCandidates(cid);
 
     _mountConversationResultCard(cid);
+
+    // Check if this is an imported conversation that needs a welcome message
+    if (convMeta.needs_welcome === true) {
+      _insertImportedConversationWelcome(cid).catch((err) => {
+        _convLog.warn('failed to insert welcome message', { cid, error: err });
+      });
+    }
 
     // Re-add the inline "create agent" entry BEFORE scrolling so it's part of
     // scrollHeight when we jump to the bottom — otherwise the MutationObserver
@@ -9984,6 +10010,9 @@ window.ConversationRuntime = {
   observePlanRecoveryRun: _observeConversationRunFromPlanAction,
   recoverPolledMessages: _recoverPolledVisibleMessages,
 };
+
+// Export conversation list invalidation for onboarding/import flows
+window._markConversationListLocallyChanged = _markConversationListLocallyChanged;
 
 const _chatScrollOffsetObservers = new WeakMap();
 

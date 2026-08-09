@@ -470,3 +470,261 @@ describe('session_import › memory-import (CLAUDE.md → shared memory tier)', 
     expect(res.added).toBe(1); // the clean fact still lands
   });
 });
+
+describe('session_import › memory-import multi-source (rules / auto / history)', () => {
+  function writeFile(rel: string, body: string) {
+    const full = path.join(homeDir, '.claude', rel);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, body, 'utf8');
+  }
+
+  it('previews all seven sources; absent ones report a reason, present ones list entries', async () => {
+    // Stage 5 global sources + 2 workspace sources
+    writeFile('rules/style.md', '- 先给结论\n- 不要寒暄\n');
+    writeFile('MEMORY.md', '# 用户级全局记忆\n- 我喜欢简洁的代码\n- 总是用 TypeScript\n');
+    writeFile('projects/-Users-x-repo/memory/MEMORY.md', '# index\n- 构建用 vite\n');
+    writeFile('projects/-Users-x-repo/memory/api.md', '- REST 用 camelCase\n');
+    writeFile('history.jsonl', [
+      JSON.stringify({ display: '你好' }),          // noise → dropped
+      JSON.stringify({ display: '我喜欢鲜花' }),     // kept
+      JSON.stringify({ display: '我是一个学生' }),   // kept
+      JSON.stringify({ display: 'a/b/c.html' }),    // path → dropped
+    ].join('\n'));
+
+    // Stage workspace files (simulate a workspace with CLAUDE.md and CLAUDE.local.md)
+    const workspaceDir = path.join(homeDir, 'workspace-test');
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    fs.writeFileSync(path.join(workspaceDir, 'CLAUDE.md'), '# 项目指令\n- 使用 pnpm 安装依赖\n- 测试优先开发\n');
+    fs.writeFileSync(path.join(workspaceDir, 'CLAUDE.local.md'), '# 本地配置\n- 我的开发环境在 macOS\n');
+
+    const { readClaudeMemories } = await import('../../../src/main/features/session_import/memory-import');
+    const res = await readClaudeMemories(homeDir, workspaceDir);
+    const by = Object.fromEntries(res.sources.map((s) => [s.key, s]));
+
+    // Global sources (5)
+    expect(by.instructions.present).toBe(false);
+    expect(by.instructions.reason).toBe('not_found');
+
+    expect(by.rules.present).toBe(true);
+    expect(by.rules.entryCount).toBe(2);
+
+    expect(by.automem.present).toBe(true);
+    expect(by.automem.entryCount).toBe(2); // headings dropped, 2 facts kept
+    expect(by.automem.sample).toContain('我喜欢简洁的代码');
+
+    expect(by['project-mem'].present).toBe(true);
+    expect(by['project-mem'].entryCount).toBe(2); // MEMORY.md + api.md, headings dropped
+    expect(by['project-mem'].sample).toContain('构建用 vite');
+
+    expect(by.history.present).toBe(true);
+    expect(by.history.entryCount).toBe(2); // noise + path filtered out
+    expect(by.history.sample).toContain('我喜欢鲜花');
+
+    // Workspace sources (2)
+    expect(by['workspace-project'].present).toBe(true);
+    expect(by['workspace-project'].entryCount).toBe(2);
+    expect(by['workspace-project'].sample).toContain('使用 pnpm 安装依赖');
+
+    expect(by['workspace-local'].present).toBe(true);
+    expect(by['workspace-local'].entryCount).toBe(1);
+    expect(by['workspace-local'].sample).toContain('我的开发环境在 macOS');
+
+    expect(res.totalEntries).toBe(11); // 2 + 2 + 2 + 2 + 2 + 1
+  });
+
+  it('imports only selected sources into the shared tier', async () => {
+    writeFile('rules/style.md', '- 规则甲\n');
+    writeFile('history.jsonl', JSON.stringify({ display: '我在做 java 项目' }) + '\n');
+
+    const { importClaudeMemories } = await import('../../../src/main/features/session_import/memory-import');
+    const res = await importClaudeMemories(TEST_UID, ['rules'], homeDir, undefined);
+    expect(res.ok).toBe(true);
+    expect(res.added).toBe(1);
+    expect(res.perSource.rules).toBe(1);
+    expect(res.perSource.history).toBeUndefined(); // history not selected
+  });
+
+  it('scans project-level auto memory across multiple projects', async () => {
+    writeFile('projects/-Users-a-one/memory/MEMORY.md', '- 项目一学习点\n');
+    writeFile('projects/-Users-a-two/memory/MEMORY.md', '- 项目二学习点\n');
+
+    const { readClaudeMemories } = await import('../../../src/main/features/session_import/memory-import');
+    const res = await readClaudeMemories(homeDir, undefined);
+    const projectMem = res.sources.find((s) => s.key === 'project-mem');
+    expect(projectMem?.entryCount).toBe(2);
+  });
+
+  it('imports workspace sources when workspaceDir is provided', async () => {
+    const workspaceDir = path.join(homeDir, 'workspace-import-test');
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    fs.writeFileSync(path.join(workspaceDir, 'CLAUDE.md'), '- 团队规范：代码审查必须通过\n');
+    fs.writeFileSync(path.join(workspaceDir, 'CLAUDE.local.md'), '- 我的本地 API key 在环境变量\n');
+
+    const { importClaudeMemories } = await import('../../../src/main/features/session_import/memory-import');
+    const res = await importClaudeMemories(TEST_UID, ['workspace-project', 'workspace-local'], homeDir, workspaceDir);
+
+    expect(res.ok).toBe(true);
+    expect(res.added).toBe(2);
+    expect(res.perSource['workspace-project']).toBe(1);
+    expect(res.perSource['workspace-local']).toBe(1);
+  });
+});
+
+describe('session_import › Codex import', () => {
+  let homeDir: string;
+  let codexDir: string;
+
+  beforeEach(() => {
+    homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-codex-'));
+    codexDir = path.join(homeDir, '.codex');
+    fs.mkdirSync(codexDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+
+  function writeCodexSession(date: string, content: string) {
+    const [year, month, day] = date.split('-');
+    const sessionDir = path.join(codexDir, 'sessions', year, month, day);
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const filename = `rollout-${date}T12-00-00-test-session-id.jsonl`;
+    fs.writeFileSync(path.join(sessionDir, filename), content);
+  }
+
+  it('lists Codex sessions from ~/.codex/sessions/', async () => {
+    writeCodexSession('2026-08-09', [
+      JSON.stringify({ type: 'session_meta', timestamp: '2026-08-09T12:00:00Z', payload: { cwd: '/test/dir' } }),
+      JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'text', text: '帮我重构这个函数' }] } }),
+    ].join('\n'));
+
+    writeCodexSession('2026-08-08', [
+      JSON.stringify({ type: 'session_meta', timestamp: '2026-08-08T10:00:00Z', payload: {} }),
+      JSON.stringify({ type: 'response_item', payload: { role: 'user', content: '写一个测试' } }),
+    ].join('\n'));
+
+    const { listCodexSessions } = await import('../../../src/main/features/session_import/codex-import');
+    const sessions = await listCodexSessions(homeDir);
+
+    expect(sessions.length).toBe(2);
+    // Newest first
+    expect(sessions[0].title).toContain('帮我重构这个函数');
+    expect(sessions[0].cwd).toBe('/test/dir');
+    expect(sessions[1].title).toContain('写一个测试');
+  });
+
+  it('extracts facts from config.toml', async () => {
+    const configContent = `
+model_provider = "custom"
+model = "deepseek-v4-flash"
+model_reasoning_effort = "high"
+
+[model_providers.custom]
+name = "deepseek"
+
+[projects."/Users/test/project"]
+trust_level = "trusted"
+`;
+    fs.writeFileSync(path.join(codexDir, 'config.toml'), configContent);
+
+    const { readCodexMemory } = await import('../../../src/main/features/session_import/codex-import');
+    const preview = await readCodexMemory(homeDir);
+
+    expect(preview.present).toBe(true);
+    expect(preview.entries.length).toBeGreaterThan(0);
+    expect(preview.entries.some(e => e.includes('deepseek-v4-flash'))).toBe(true);
+    expect(preview.entries.some(e => e.includes('high'))).toBe(true);
+    expect(preview.entries.some(e => e.includes('/Users/test/project'))).toBe(true);
+  });
+
+  it('imports config.toml facts into shared memory', async () => {
+    const configContent = `
+model = "claude-sonnet-4"
+model_reasoning_effort = "medium"
+`;
+    fs.writeFileSync(path.join(codexDir, 'config.toml'), configContent);
+
+    const { importCodexMemory } = await import('../../../src/main/features/session_import/codex-import');
+    const res = await importCodexMemory(TEST_UID, homeDir);
+
+    expect(res.ok).toBe(true);
+    expect(res.added).toBeGreaterThan(0);
+  });
+
+  it('returns empty when config.toml is missing', async () => {
+    const { readCodexMemory } = await import('../../../src/main/features/session_import/codex-import');
+    const preview = await readCodexMemory(homeDir);
+
+    expect(preview.present).toBe(false);
+    expect(preview.reason).toBe('not_found');
+  });
+
+  it('parses codex RRULE into the four in-app schedule shapes', async () => {
+    const { parseCodexRrule } = await import('../../../src/main/features/session_import/codex-import');
+
+    expect(parseCodexRrule('FREQ=DAILY;BYHOUR=9;BYMINUTE=30', null))
+      .toEqual({ type: 'daily', hour: 9, minute: 30 });
+    expect(parseCodexRrule('FREQ=WEEKLY;BYDAY=MO;BYHOUR=10;BYMINUTE=0', null))
+      .toEqual({ type: 'weekly', weekday: 1, hour: 10, minute: 0 });
+    expect(parseCodexRrule('FREQ=WEEKLY;BYDAY=SU;BYHOUR=8', null))
+      .toEqual({ type: 'weekly', weekday: 0, hour: 8, minute: 0 });
+    expect(parseCodexRrule('FREQ=MONTHLY;BYMONTHDAY=15;BYHOUR=12;BYMINUTE=5', null))
+      .toEqual({ type: 'monthly', day: 15, hour: 12, minute: 5 });
+    // Missing FREQ + known next run = one-shot; missing both = unmappable.
+    expect(parseCodexRrule('', 1700000000000))
+      .toEqual({ type: 'one_time', at: new Date(1700000000000).toISOString() });
+    expect(parseCodexRrule('', null)).toBeNull();
+    // Frequencies the in-app scheduler cannot represent are honestly rejected.
+    expect(parseCodexRrule('FREQ=HOURLY;INTERVAL=4', null)).toBeNull();
+    expect(parseCodexRrule('FREQ=MINUTELY;INTERVAL=30', null)).toBeNull();
+    expect(parseCodexRrule('FREQ=YEARLY;BYMONTH=1', null)).toBeNull();
+    // No BYHOUR/BYMINUTE falls back to the next run's wall-clock time (local tz).
+    expect(parseCodexRrule('FREQ=DAILY', new Date(2026, 7, 6, 14, 20).getTime()))
+      .toEqual({ type: 'daily', hour: 14, minute: 20 });
+  });
+
+  it('imports codex scheduled tasks into the auto-task module, skipping dupes and unmappable', async () => {
+    const { importCodexTasks } = await import('../../../src/main/features/session_import/codex-import');
+    const { listTasks } = await import('../../../src/main/features/auto_tasks');
+
+    // Fabricate a codex automations DB with one importable task + one unmappable.
+    const dbDir = path.join(homeDir, '.codex', 'sqlite');
+    fs.mkdirSync(dbDir, { recursive: true });
+    const { default: Database } = await import('better-sqlite3');
+    const db = new Database(path.join(dbDir, 'codex-dev.db'));
+    db.exec(`CREATE TABLE automations (
+      id TEXT PRIMARY KEY, name TEXT, prompt TEXT, status TEXT,
+      rrule TEXT, next_run_at INTEGER, last_run_at INTEGER
+    )`);
+    db.prepare(`INSERT INTO automations (id, name, prompt, status, rrule, next_run_at, last_run_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+      'auto-1', 'daily report', '生成每日报告', 'ACTIVE',
+      'FREQ=DAILY;BYHOUR=9;BYMINUTE=0', Date.UTC(2026, 7, 7, 9, 0), null,
+    );
+    db.prepare(`INSERT INTO automations (id, name, prompt, status, rrule, next_run_at, last_run_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+      'auto-2', 'hourly sweep', '每小时清理', 'ACTIVE',
+      'FREQ=HOURLY;INTERVAL=1', Date.now(), null,
+    );
+    db.close();
+
+    const res = await importCodexTasks(TEST_UID, undefined, homeDir);
+    expect(res.imported).toBe(1);
+    expect(res.unsupported).toBe(1);
+    expect(res.failed).toBe(0);
+
+    const tasks = await listTasks(TEST_UID);
+    const imported = tasks.find((t) => t.title === 'daily report');
+    expect(imported).toBeDefined();
+    expect(imported!.content).toBe('生成每日报告');
+    expect(imported!.enabled).toBe(true);
+    expect(imported!.schedule).toEqual({ type: 'daily', hour: 9, minute: 0 });
+
+    // Re-import is idempotent — the existing pair is skipped, not duplicated.
+    const again = await importCodexTasks(TEST_UID, undefined, homeDir);
+    expect(again.imported).toBe(0);
+    expect(again.skipped).toBe(1);
+    const tasksAfter = await listTasks(TEST_UID);
+    expect(tasksAfter.filter((t) => t.title === 'daily report')).toHaveLength(1);
+  });
+});

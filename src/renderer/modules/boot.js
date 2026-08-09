@@ -132,10 +132,15 @@ async function bootApp() {
   // It reads the machine-local onboarding marker and only lifts the overlay
   // on a device that hasn't completed it yet. Runs after the last view is
   // restored so the app is fully painted underneath the overlay.
+  console.log('[BOOT DEBUG] Checking window.csOnboarding:', window.csOnboarding);
   if (window.csOnboarding && typeof window.csOnboarding.maybeStart === 'function') {
+    console.log('[BOOT DEBUG] Calling window.csOnboarding.maybeStart()');
     Promise.resolve(window.csOnboarding.maybeStart()).catch((err) => {
+      console.log('[BOOT DEBUG] onboarding maybeStart failed:', err);
       _bootLog.warn('onboarding maybeStart failed', { error: (err && err.message) || String(err) });
     });
+  } else {
+    console.log('[BOOT DEBUG] window.csOnboarding not available or maybeStart not a function');
   }
   if (typeof _consumePendingTaskNotificationConversation === 'function') {
     _consumePendingTaskNotificationConversation();

@@ -234,3 +234,135 @@ export async function importClaudeSkills(
   const okCount = imported.filter((r) => r.ok).length;
   return { imported, okCount, failCount: imported.length - okCount };
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// Codex skill import
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface CodexSkillSummary {
+  /** Directory name under ~/.codex/skills/.system */
+  dirName: string;
+  /** Frontmatter name, falling back to dirName. */
+  name: string;
+  /** Frontmatter description, or ''. */
+  description: string;
+  /** Absolute path to the skill directory. */
+  dirPath: string;
+}
+
+function codexSkillsRoot(home = os.homedir()): string {
+  return path.join(home, '.codex', 'skills', '.system');
+}
+
+/**
+ * List importable Codex skills (metadata only, READ-ONLY).
+ * Returns [] when `~/.codex/skills/.system` is absent.
+ */
+export async function listCodexSkills(): Promise<CodexSkillSummary[]> {
+  const root = codexSkillsRoot();
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = await fsp.readdir(root, { withFileTypes: true });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      log.info('~/.codex/skills/.system not found — no Codex skills to import');
+      return [];
+    }
+    log.warn('failed to scan ~/.codex/skills/.system', { error: String(err) });
+    return [];
+  }
+
+  const skills: CodexSkillSummary[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    // Skip hidden marker files
+    if (entry.name.startsWith('.')) continue;
+
+    const dirPath = path.join(root, entry.name);
+    let text: string;
+    try {
+      text = await fsp.readFile(path.join(dirPath, 'SKILL.md'), 'utf8');
+    } catch {
+      continue; // no SKILL.md — not a valid skill dir, skip
+    }
+    const { meta } = splitFrontmatter(text);
+    skills.push({
+      dirName: entry.name,
+      name: (typeof meta.name === 'string' && meta.name.trim()) || entry.name,
+      description: (typeof meta.description === 'string' && meta.description.trim()) || '',
+      dirPath,
+    });
+  }
+  skills.sort((a, b) => a.name.localeCompare(b.name));
+  return skills;
+}
+
+/**
+ * Import one Codex skill (by directory name) into our skill library.
+ */
+export async function importCodexSkill(dirName: string): Promise<ImportSkillResult> {
+  const root = codexSkillsRoot();
+  const dirPath = path.resolve(root, dirName);
+  const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
+  if (!dirPath.startsWith(rootWithSep)) {
+    return { ok: false, name: dirName, reason: 'out_of_bounds' };
+  }
+
+  let text: string;
+  try {
+    text = await fsp.readFile(path.join(dirPath, 'SKILL.md'), 'utf8');
+  } catch {
+    return { ok: false, name: dirName, reason: 'no_skill_md' };
+  }
+
+  const { meta } = splitFrontmatter(text);
+  const name = (typeof meta.name === 'string' && meta.name.trim()) || dirName;
+  const description = (typeof meta.description === 'string' && meta.description.trim()) || '';
+
+  // Idempotency check
+  const existing = await getCustomSkill(name);
+  if (existing) {
+    return { ok: true, skillId: existing.id, name, reason: 'already_exists' };
+  }
+
+  let skillId: string;
+  try {
+    const created = await createCustomSkill(name, description, '');
+    if (!created) return { ok: false, name, reason: 'create_returned_null' };
+    skillId = created.id;
+  } catch (err) {
+    log.warn('failed to create skill skeleton', { name, error: String(err) });
+    return { ok: false, name, reason: 'create_failed' };
+  }
+
+  // Overwrite with imported content
+  const wroteMd = await writeSkillFileForEdit(skillId, 'SKILL.md', text);
+  if (!wroteMd) {
+    log.warn('failed to write imported SKILL.md body', { skillId, name });
+    return { ok: false, skillId, name, reason: 'write_body_failed' };
+  }
+
+  // Copy helper files
+  const files = await collectHelperFiles(dirPath);
+  let helperFails = 0;
+  for (const f of files) {
+    const ok = await writeSkillFileForEdit(skillId, f.path, f.content);
+    if (!ok) helperFails += 1;
+  }
+
+  log.info(`imported codex skill "${name}" as ${skillId} (files=${files.length}, helperFails=${helperFails})`);
+  return { ok: true, skillId, name };
+}
+
+/** Import a batch of Codex skills by dir name. Best-effort per skill. */
+export async function importCodexSkills(
+  dirNames: string[],
+): Promise<{ imported: ImportSkillResult[]; okCount: number; failCount: number }> {
+  const imported: ImportSkillResult[] = [];
+  for (const dirName of dirNames) {
+    imported.push(await importCodexSkill(dirName));
+  }
+  const okCount = imported.filter((r) => r.ok).length;
+  return { imported, okCount, failCount: imported.length - okCount };
+}

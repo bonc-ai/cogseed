@@ -43,10 +43,8 @@ function _csEsc(s) {
 let _csObBuilt = false;
 let _csRolePicked = null;
 let _csToastTimer = 0;
-// 本轮抽取写入候选池后拿到的 candidate_id 列表（按渲染顺序对应卡片）。
-// 第 4 步完成时用它把「未勾选的」候选走 reject 从池里丢弃；勾选的原样留在
-// 候选池当待确认候选，之后在 Recall 候选审核页人工确认入库。
-let _csCandidateIds = [];
+// 本轮导入的所有会话 ID（Claude + Codex），用于完成时批量绑定到角色工作空间。
+let _csImportedConversationIds = [];
 
 function _csToast(msg) {
   const t = document.getElementById('cs-ob-toast');
@@ -76,7 +74,6 @@ function _csObShellHtml() {
         <button class="cs-step" data-csstep="1"><span>2</span><span><strong>连接 AI 团队</strong><small>接入你的 Agent 模型</small></span></button>
         <button class="cs-step" data-csstep="2"><span>3</span><span><strong>导入最近会话</strong><small>检测本地 Agent</small></span></button>
         <button class="cs-step" data-csstep="3"><span>4</span><span><strong>选择角色起点</strong><small>可选 · 可跳过</small></span></button>
-        <button class="cs-step" data-csstep="4"><span>5</span><span><strong>确认候选认知</strong><small>预览并决定保留</small></span></button>
       </div>
       <div class="cs-privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg><span>认知资产与模型 Key 都留在本机。导入 AI 团队的 Key 是你自己的凭证，仅在本机使用，不上传。</span></div>
     </aside>
@@ -156,22 +153,7 @@ function _csObShellHtml() {
         <div class="cs-actions">
           <button class="cs-btn ghost" data-csnext="2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
           <button class="cs-btn ghost" id="cs-role-skip">跳过角色</button>
-          <button class="cs-btn" data-csnext="4"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>下一步 · 确认候选认知</button>
-        </div>
-      </section>
-
-      <section class="cs-panel" data-cspanel="4">
-        <div class="cs-kicker">系统提出 · 用户决定</div>
-        <h1>确认候选认知</h1>
-        <p class="cs-lead">从你选中的会话中提取候选认知。每条认知都需要你手动确认后才会保存到认知资产中。</p>
-        <div class="cs-cands" id="cs-cand-list">
-          <div class="cs-state">点击下方「开始提取」按钮，从检测到的会话中分析并提取候选认知。</div>
-        </div>
-        <div class="cs-actions">
-          <button class="cs-btn ghost" data-csnext="3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
-          <button class="cs-btn ghost" id="cs-extract-start">开始提取</button>
-          <button class="cs-btn" id="cs-ob-finish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>完成 · 进入首页</button>
-          <small>完成后不会自动写入任何正式资产。</small>
+          <button class="cs-btn" id="cs-ob-finish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 13l4 4L19 7"/></svg>完成设置</button>
         </div>
       </section>
 
@@ -180,7 +162,7 @@ function _csObShellHtml() {
 }
 
 function _csGoStep(n) {
-  const step = Math.max(0, Math.min(4, n));
+  const step = Math.max(0, Math.min(3, n));
   const shell = document.getElementById('cs-onboarding');
   if (!shell) return;
   shell.querySelectorAll('.cs-panel').forEach((p) => {
@@ -197,9 +179,9 @@ function _csGoStep(n) {
   if (step === 2) _csLoadAgents(false);
 }
 
-// Renders the REAL detection result. For Claude Code, fetches real session
-// history from ~/.claude/projects/. For other agents, shows honest "not yet
-// implemented" state.
+// Renders the REAL detection result, LEFT-RIGHT layout:
+// Left: Agent list (Claude, Codex, etc.)
+// Right: 4 asset types for the selected agent, each showing max 3 items with "show more" button
 function _csRenderAgents(entries) {
   const box = document.getElementById('cs-agent-list');
   if (!box) return;
@@ -211,96 +193,180 @@ function _csRenderAgents(entries) {
     return;
   }
 
-  const groupsHtml = [];
-  for (const e of available) {
+  // Store detected agents for later use
+  window._csDetectedAgents = available;
+
+  // Build LEFT-RIGHT layout
+  const leftAgents = available.map((e, idx) => {
     const label = CS_AGENT_LABELS[e.type] || e.type;
-    const ver = e.version ? `v${_csEsc(e.version)}` : '版本未知';
-    const p = e.path ? `<span class="g-path" title="${_csEsc(e.path)}">${_csEsc(e.path)}</span>` : '';
-
-    groupsHtml.push(`
-      <div class="cs-group-head" data-group="${_csEsc(e.type)}">
-        <span class="g-name">${CS_TERMINAL_SVG}${_csEsc(label)} · ${ver}</span>
-        ${p}
-        <span class="g-status">已检测到</span>
-        <svg class="g-toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+    const ver = e.version ? `v${_csEsc(e.version)}` : '';
+    const isFirst = idx === 0;
+    return `
+      <div class="cs-agent-item${isFirst ? ' active' : ''}" data-agent="${_csEsc(e.type)}" onclick="_csSelectAgent('${_csEsc(e.type)}')">
+        <div class="ai-icon">${CS_TERMINAL_SVG}</div>
+        <div class="ai-info">
+          <div class="ai-name">${_csEsc(label)}</div>
+          <div class="ai-version">${ver}</div>
+        </div>
       </div>
-      <div class="cs-sessions-container" data-agent="${_csEsc(e.type)}">
-        ${_csAssetSectionsHtml(e.type)}
-      </div>`);
+    `;
+  }).join('');
+
+  const html = `
+    <div class="cs-import-layout">
+      <div class="cs-import-header">
+        <span>检测到 ${available.length} 个 Agent，点击查看可导入内容</span>
+      </div>
+      <div class="cs-import-body">
+        <div class="cs-agent-sidebar">
+          ${leftAgents}
+        </div>
+        <div class="cs-asset-content">
+          <div class="cs-asset-panel" data-agent="loading">
+            <div class="cs-state loading">正在加载...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  box.innerHTML = html;
+
+  // Load first agent's assets
+  if (available.length > 0) {
+    _csLoadAgentAssets(available[0].type);
   }
-  box.innerHTML = groupsHtml.join('');
-
-  // Collapse/expand at the AGENT level (whole agent block).
-  box.querySelectorAll('.cs-group-head').forEach((head) => {
-    head.addEventListener('click', () => {
-      const group = head.dataset.group;
-      const container = box.querySelector(`.cs-sessions-container[data-agent="${group}"]`);
-      if (container) {
-        const isCollapsed = head.classList.toggle('collapsed');
-        container.classList.toggle('collapsed', isCollapsed);
-      }
-    });
-  });
-
-  // Collapse/expand at the ASSET-SECTION level (会话/技能/记忆/定时任务).
-  box.querySelectorAll('.cs-asset-head').forEach((head) => {
-    head.addEventListener('click', () => {
-      const body = head.nextElementSibling;
-      if (body && body.classList.contains('cs-asset-body')) {
-        const collapsed = head.classList.toggle('collapsed');
-        body.classList.toggle('collapsed', collapsed);
-      }
-    });
-  });
-
-  // Load each asset type per detected agent. Claude is fully wired; others get
-  // honest "not yet implemented" states inside each section.
-  for (const e of available) {
-    if (e.type === 'claude') {
-      void _csLoadClaudeSessions(e.type);
-      void _csLoadClaudeSkills(e.type);
-      void _csLoadClaudeMemory(e.type);
-      _csRenderNoTasks(e.type); // Claude Code has no native scheduled tasks
-    } else {
-      const label = CS_AGENT_LABELS[e.type] || e.type;
-      _csFillAsset(e.type, 'sessions', `<div class="cs-state">${_csEsc(label)} 的会话读取暂未接入。</div>`);
-      _csFillAsset(e.type, 'skills', `<div class="cs-state">${_csEsc(label)} 的技能读取暂未接入。</div>`);
-      _csFillAsset(e.type, 'memory', `<div class="cs-state">${_csEsc(label)} 的记忆读取暂未接入。</div>`);
-      _csFillAsset(e.type, 'tasks', `<div class="cs-state">${_csEsc(label)} 的定时任务读取暂未接入。</div>`);
-    }
-  }
-
-  // Load ACP transcript sessions (from ~/.cogseed/acp-transcripts/)
-  void _csLoadAcpSessions();
 }
 
-// The four asset sub-sections shown under each agent. Each is independently
-// collapsible; 会话 starts collapsed (it can be long), the rest start open.
-function _csAssetSectionsHtml(agentType) {
-  const t = _csEsc(agentType);
-  const sec = (asset, title, collapsed) => `
-    <div class="cs-asset">
-      <div class="cs-asset-head${collapsed ? ' collapsed' : ''}" data-agent="${t}" data-asset="${asset}">
-        <span class="a-title">${title}</span>
-        <svg class="a-toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+// Switch to a different agent in the left sidebar
+window._csSelectAgent = function(agentType) {
+  const box = document.getElementById('cs-agent-list');
+  if (!box) return;
+
+  // Update active state in sidebar
+  box.querySelectorAll('.cs-agent-item').forEach(item => {
+    item.classList.toggle('active', item.dataset.agent === agentType);
+  });
+
+  // Load this agent's assets
+  _csLoadAgentAssets(agentType);
+};
+
+// Load and render all 4 asset types for one agent
+function _csLoadAgentAssets(agentType) {
+  const box = document.getElementById('cs-agent-list');
+  if (!box) return;
+
+  const contentArea = box.querySelector('.cs-asset-content');
+  if (!contentArea) return;
+
+  const label = CS_AGENT_LABELS[agentType] || agentType;
+
+  // Build asset panel: left vertical tabs + right content pane.
+  // The first tab (sessions) is active by default.
+  const ag = _csEsc(agentType);
+  contentArea.innerHTML = `
+    <div class="cs-asset-panel" data-agent="${ag}">
+      <div class="cs-asset-tabs">
+        <button type="button" class="cs-asset-tab active" data-asset="sessions" data-agent="${ag}" onclick="_csSelectAssetTab(this)">
+          <span class="ash-icon">💬</span>
+          <span class="ash-title">会话</span>
+          <span class="ash-count" id="cs-count-${ag}-sessions"></span>
+        </button>
+        <button type="button" class="cs-asset-tab" data-asset="skills" data-agent="${ag}" onclick="_csSelectAssetTab(this)">
+          <span class="ash-icon">🔧</span>
+          <span class="ash-title">技能</span>
+          <span class="ash-count" id="cs-count-${ag}-skills"></span>
+        </button>
+        <button type="button" class="cs-asset-tab" data-asset="memory" data-agent="${ag}" onclick="_csSelectAssetTab(this)">
+          <span class="ash-icon">🧠</span>
+          <span class="ash-title">记忆</span>
+          <span class="ash-count" id="cs-count-${ag}-memory"></span>
+        </button>
+        <button type="button" class="cs-asset-tab" data-asset="tasks" data-agent="${ag}" onclick="_csSelectAssetTab(this)">
+          <span class="ash-icon">⏰</span>
+          <span class="ash-title">定时任务</span>
+          <span class="ash-count" id="cs-count-${ag}-tasks"></span>
+        </button>
       </div>
-      <div class="cs-asset-body${collapsed ? ' collapsed' : ''}" data-agent="${t}" data-asset="${asset}">
-        <div class="cs-state loading">正在读取…</div>
+      <div class="cs-asset-panes">
+        <div class="cs-asset-section-body active" data-agent="${ag}" data-asset="sessions">
+          <div class="cs-state loading">正在读取会话...</div>
+        </div>
+        <div class="cs-asset-section-body" data-agent="${ag}" data-asset="skills">
+          <div class="cs-state loading">正在读取技能...</div>
+        </div>
+        <div class="cs-asset-section-body" data-agent="${ag}" data-asset="memory">
+          <div class="cs-state loading">正在读取记忆...</div>
+        </div>
+        <div class="cs-asset-section-body" data-agent="${ag}" data-asset="tasks">
+          <div class="cs-state loading">正在读取...</div>
+        </div>
       </div>
-    </div>`;
-  return (
-    sec('sessions', '会话', true) +
-    sec('skills', '技能', false) +
-    sec('memory', '记忆', false) +
-    sec('tasks', '定时任务', false)
-  );
+    </div>
+  `;
+
+  // Load data for this agent
+  if (agentType === 'claude') {
+    void _csLoadClaudeSessions(agentType);
+    void _csLoadClaudeSkills(agentType);
+    void _csLoadClaudeMemory(agentType);
+    _csRenderNoTasks(agentType);
+  } else if (agentType === 'codex') {
+    void _csLoadCodexSessions(agentType);
+    void _csLoadCodexSkills(agentType);
+    void _csLoadCodexMemory(agentType);
+    void _csLoadCodexTasks(agentType);
+  } else {
+    _csFillAssetSection(agentType, 'sessions', `<div class="cs-state">${_csEsc(label)} 的会话读取暂未接入。</div>`);
+    _csFillAssetSection(agentType, 'skills', `<div class="cs-state">${_csEsc(label)} 的技能读取暂未接入。</div>`);
+    _csFillAssetSection(agentType, 'memory', `<div class="cs-state">${_csEsc(label)} 的记忆读取暂未接入。</div>`);
+    _csFillAssetSection(agentType, 'tasks', `<div class="cs-state">${_csEsc(label)} 的定时任务读取暂未接入。</div>`);
+  }
 }
 
-// Fill one asset sub-section's body for an agent.
-function _csFillAsset(agentType, asset, html) {
+// Toggle asset section (collapse/expand the body)
+// Select an asset tab: highlight the tab and show its matching pane, hiding
+// the sibling panes. Tabs and panes are paired by data-agent + data-asset.
+window._csSelectAssetTab = function(tab) {
+  const agent = tab.dataset.agent;
+  const asset = tab.dataset.asset;
+  const panel = tab.closest('.cs-asset-panel');
+  if (!panel) return;
+
+  panel.querySelectorAll('.cs-asset-tab').forEach((t) => {
+    t.classList.toggle('active', t === tab);
+  });
+  panel.querySelectorAll('.cs-asset-section-body').forEach((body) => {
+    body.classList.toggle('active', body.dataset.asset === asset && body.dataset.agent === agent);
+  });
+};
+
+// Toggle "show more" button for lists (sessions/skills)
+window._csToggleShowMore = function(btn, total) {
+  const container = btn.parentElement;
+  if (!container) return;
+  const items = container.querySelectorAll('.cs-collapsible-item');
+  const allVisible = Array.from(items).every((el) => el.style.display !== 'none');
+  items.forEach((el, idx) => {
+    if (idx >= 3) el.style.display = allVisible ? 'none' : '';
+  });
+  btn.textContent = allVisible ? `+ 还有 ${total - 3} 个` : '收起';
+};
+
+// Update asset count badge
+function _csUpdateAssetCount(agentType, asset, count) {
+  const badge = document.getElementById(`cs-count-${agentType}-${asset}`);
+  if (badge && count > 0) {
+    badge.textContent = `(${count})`;
+  }
+}
+
+// Fill one agent's asset section body in the right panel.
+function _csFillAssetSection(agentType, asset, html) {
   const box = document.getElementById('cs-agent-list');
   if (!box) return null;
-  const body = box.querySelector(`.cs-asset-body[data-agent="${agentType}"][data-asset="${asset}"]`);
+  const body = box.querySelector(`.cs-asset-section-body[data-agent="${agentType}"][data-asset="${asset}"]`);
   if (body) body.innerHTML = html;
   return body;
 }
@@ -496,9 +562,7 @@ async function _csLoadAgents(force) {
 }
 
 async function _csLoadClaudeSessions(agentType) {
-  const box = document.getElementById('cs-agent-list');
-  if (!box) return;
-  const container = box.querySelector(`.cs-asset-body[data-agent="${agentType}"][data-asset="sessions"]`);
+  const container = _csFillAssetSection(agentType, 'sessions', '<div class="cs-state loading">正在扫描 Claude Code 会话…</div>');
   if (!container) return;
 
   try {
@@ -507,17 +571,21 @@ async function _csLoadClaudeSessions(agentType) {
 
     if (!sessions.length) {
       container.innerHTML = '<div class="cs-state">未找到 Claude Code 历史会话。如果你使用过 Claude Code，会话文件可能在 ~/.claude/projects/ 目录下。</div>';
+      _csUpdateAssetCount(agentType, 'sessions', 0);
       return;
     }
 
-    // Render sessions with checkboxes.
-    const sessionRows = sessions.map((s) => {
+    _csUpdateAssetCount(agentType, 'sessions', sessions.length);
+
+    // Render sessions with checkboxes. Default: show first 3, collapse the rest.
+    const sessionRows = sessions.map((s, idx) => {
       const time = s.timestamp ? new Date(s.timestamp).toLocaleString('zh-CN', {
         month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'
       }) : '';
       const projectLabel = s.projectPath ? `<small>${_csEsc(s.projectPath)}</small>` : '';
+      const hidden = idx >= 3 ? ' style="display:none"' : '';
       return `
-        <div class="cs-src" data-session-id="${_csEsc(s.filePath)}">
+        <div class="cs-src cs-collapsible-item"${hidden} data-session-id="${_csEsc(s.filePath)}">
           <input type="checkbox" />
           <div class="s-ico">${CS_TERMINAL_SVG}</div>
           <div>
@@ -528,20 +596,22 @@ async function _csLoadClaudeSessions(agentType) {
         </div>`;
     }).join('');
 
-    // Import action bar: materializes each selected session into a continuable
-    // conversation (compressed summary seed) and routes extracted cognitions
-    // into the Recall candidate pool. This is the real "导入会话" backend.
-    container.innerHTML = sessionRows +
+    const toggleBtn = sessions.length > 3
+      ? `<button type="button" class="cs-show-more" onclick="_csToggleShowMore(this, ${sessions.length})">+ 还有 ${sessions.length - 3} 个</button>`
+      : '';
+
+    // Import action bar
+    container.innerHTML = sessionRows + toggleBtn +
       `<div class="cs-import-bar">
-         <button type="button" class="cs-import-btn" data-agent="${_csEsc(agentType)}">导入所选会话</button>
-         <div class="cs-import-result" data-agent="${_csEsc(agentType)}"></div>
+         <button type="button" class="cs-import-btn" onclick="_csImportClaudeSessions('${_csEsc(agentType)}')">导入所选会话</button>
+         <div class="cs-import-result" id="cs-import-result-${_csEsc(agentType)}-sessions"></div>
        </div>`;
 
-    // Wire up checkbox interactions.
+    // Wire up checkbox interactions
     container.querySelectorAll('.cs-src').forEach((row) => {
       const checkbox = row.querySelector('input[type="checkbox"]');
       row.addEventListener('click', (ev) => {
-        if (ev.target === checkbox) return; // Let native checkbox handle it.
+        if (ev.target === checkbox) return;
         checkbox.checked = !checkbox.checked;
         row.classList.toggle('selected', checkbox.checked);
       });
@@ -550,37 +620,216 @@ async function _csLoadClaudeSessions(agentType) {
       });
     });
 
-    const importBtn = container.querySelector('.cs-import-btn');
-    if (importBtn) {
-      importBtn.addEventListener('click', () => void _csImportSelectedSessions(container));
-    }
-
-    _obLog.info('loaded Claude sessions', { count: sessions.length });
   } catch (err) {
     const msg = (err && err.message) || String(err);
-    _obLog.warn('failed to load Claude sessions', { error: msg });
+    _obLog.warn('failed to list Claude sessions', { error: msg });
     container.innerHTML = `<div class="cs-state err">读取 Claude Code 会话失败：${_csEsc(msg)}</div>`;
   }
 }
 
-// ── Skills: scan ~/.claude/skills and import selected into the skill library ──
-async function _csLoadClaudeSkills(agentType) {
-  const container = _csFillAsset(agentType, 'skills', '<div class="cs-state loading">正在扫描本机技能…</div>');
+// ── Codex sessions: scan ~/.codex/sessions and import selected ──
+async function _csLoadCodexSessions(agentType) {
+  const container = _csFillAssetSection(agentType, 'sessions', '<div class="cs-state loading">正在扫描 Codex 会话…</div>');
   if (!container) return;
 
   try {
-    const res = await window.orkas.invoke('sessionImport.listClaudeSkills');
-    const skills = (res && res.skills) || [];
+    const res = await window.orkas.invoke('sessionImport.listCodexSessions');
+    const sessions = (res && res.sessions) || [];
 
-    if (!skills.length) {
-      container.innerHTML = '<div class="cs-state">未在本机找到 Claude Code 技能（~/.claude/skills 为空或不存在）。</div>';
+    if (!sessions.length) {
+      container.innerHTML = '<div class="cs-state">未找到 Codex 历史会话。如果你使用过 Codex，会话文件应在 ~/.codex/sessions/ 目录下。</div>';
+      _csUpdateAssetCount(agentType, 'sessions', 0);
       return;
     }
 
-    const rows = skills.map((s) => {
-      const desc = s.description ? `<small>${_csEsc(s.description)}</small>` : '';
+    _csUpdateAssetCount(agentType, 'sessions', sessions.length);
+
+    // Render sessions with checkboxes. Default: show first 3, collapse the rest.
+    const sessionRows = sessions.map((s, idx) => {
+      const time = s.createdAt ? new Date(s.createdAt).toLocaleString('zh-CN', {
+        month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'
+      }) : '';
+      const cwdLabel = s.cwd ? `<small>${_csEsc(s.cwd)}</small>` : '';
+      const hidden = idx >= 3 ? ' style="display:none"' : '';
       return `
-        <div class="cs-src" data-skill-dir="${_csEsc(s.dirName)}">
+        <div class="cs-src cs-collapsible-item"${hidden} data-session-id="${_csEsc(s.filePath)}">
+          <input type="checkbox" disabled />
+          <div class="s-ico">${CS_TERMINAL_SVG}</div>
+          <div>
+            <strong>${_csEsc(s.title)}</strong>
+            ${cwdLabel}
+          </div>
+          <small style="color:var(--cs-muted);white-space:nowrap;">${_csEsc(time)}</small>
+        </div>`;
+    }).join('');
+
+    const toggleBtn = sessions.length > 3
+      ? `<button type="button" class="cs-show-more" onclick="_csToggleShowMore(this, ${sessions.length})">+ 还有 ${sessions.length - 3} 个</button>`
+      : '';
+
+    container.innerHTML = sessionRows + toggleBtn +
+      `<div class="cs-import-bar">
+         <button type="button" class="cs-import-btn" onclick="_csImportCodexSessions('${_csEsc(agentType)}')">导入所选会话</button>
+         <div class="cs-import-result" id="cs-import-result-${_csEsc(agentType)}-sessions"></div>
+       </div>`;
+
+    // Wire up checkbox interactions
+    container.querySelectorAll('.cs-src').forEach((row) => {
+      const checkbox = row.querySelector('input[type="checkbox"]');
+      if (!checkbox) return;
+      checkbox.disabled = false; // Enable checkboxes
+      row.addEventListener('click', (ev) => {
+        if (ev.target === checkbox) return;
+        checkbox.checked = !checkbox.checked;
+        row.classList.toggle('selected', checkbox.checked);
+      });
+      checkbox.addEventListener('change', () => {
+        row.classList.toggle('selected', checkbox.checked);
+      });
+    });
+
+    _obLog.info('loaded Codex sessions', { count: sessions.length });
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    _obLog.warn('failed to load Codex sessions', { error: msg });
+    container.innerHTML = `<div class="cs-state err">读取 Codex 会话失败：${_csEsc(msg)}</div>`;
+  }
+}
+
+// Import the user-selected Claude Code sessions into real conversations.
+// Honest results: per-session ok/fail shown in the import result bar; the
+// count of extracted cognitions is reported when the model produced them.
+async function _csImportClaudeSessions(agentType) {
+  const container = _csFillAssetSection(agentType, 'sessions');
+  if (!container) return;
+  const rows = [...container.querySelectorAll('.cs-src[data-session-id]')];
+  const selected = rows.filter((r) => r.querySelector('input[type="checkbox"]')?.checked);
+  const bar = container.querySelector('.cs-import-bar');
+  const btn = bar ? bar.querySelector('.cs-import-btn') : null;
+  const result = bar ? bar.querySelector('.cs-import-result') : null;
+  if (!selected.length) {
+    if (result) result.textContent = '请先勾选要导入的会话';
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = '导入中…'; }
+  let ok = 0, failed = 0, cognitions = 0;
+  for (const row of selected) {
+    const filePath = row.dataset.sessionId;
+    try {
+      const res = await window.orkas.invoke('sessionImport.importClaudeSession', { filePath });
+      if (res && res.ok && res.conversationId) {
+        ok++;
+        _csImportedConversationIds.push(res.conversationId);
+        cognitions += (res.cognitions && res.cognitions.length) ? res.cognitions.length : 0;
+        const cb = row.querySelector('input[type="checkbox"]');
+        if (cb) cb.checked = false;
+        row.classList.add('done');
+      } else {
+        failed++;
+      }
+    } catch (err) {
+      failed++;
+      _obLog.warn('import claude session failed', { filePath, error: (err && err.message) || String(err) });
+    }
+  }
+  if (btn) { btn.disabled = false; btn.textContent = '导入所选会话'; }
+  if (result) {
+    result.textContent = `导入完成：成功 ${ok} 个${failed ? `，失败 ${failed} 个` : ''}${cognitions ? `，提取 ${cognitions} 条候选认知` : ''}`;
+  }
+  // Trigger conversation list refresh so imported sessions appear in sidebar
+  if (ok > 0) {
+    if (window._markConversationListLocallyChanged) {
+      window._markConversationListLocallyChanged();
+    }
+    if (typeof loadConversations === 'function') {
+      loadConversations().catch((err) => _obLog.warn('failed to reload conversations', err));
+    }
+  }
+  _obLog.info('claude sessions import finished', { ok, failed, cognitions });
+}
+
+// Import the user-selected Codex sessions into real conversations.
+// Simpler than Claude: no cognition extraction, just materialize the conversation.
+async function _csImportCodexSessions(agentType) {
+  const container = _csFillAssetSection(agentType, 'sessions');
+  if (!container) return;
+  const rows = [...container.querySelectorAll('.cs-src[data-session-id]')];
+  const selected = rows.filter((r) => r.querySelector('input[type="checkbox"]')?.checked);
+  const bar = container.querySelector('.cs-import-bar');
+  const btn = bar ? bar.querySelector('.cs-import-btn') : null;
+  const result = bar ? bar.querySelector('.cs-import-result') : null;
+  if (!selected.length) {
+    if (result) result.textContent = '请先勾选要导入的会话';
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = '导入中…'; }
+  let ok = 0, failed = 0;
+  for (const row of selected) {
+    const filePath = row.dataset.sessionId;
+    const title = row.querySelector('strong')?.textContent || '';
+    try {
+      const res = await window.orkas.invoke('sessionImport.importCodexSession', {
+        filePath,
+        titleHint: title,
+      });
+      if (res && res.ok && res.conversationId) {
+        ok++;
+        _csImportedConversationIds.push(res.conversationId);
+        const cb = row.querySelector('input[type="checkbox"]');
+        if (cb) cb.checked = false;
+        row.classList.add('done');
+      } else {
+        failed++;
+      }
+    } catch (err) {
+      failed++;
+      _obLog.warn('import codex session failed', { filePath, error: (err && err.message) || String(err) });
+    }
+  }
+  if (btn) { btn.disabled = false; btn.textContent = '导入所选会话'; }
+  if (result) {
+    result.textContent = `导入完成：成功 ${ok} 个${failed ? `，失败 ${failed} 个` : ''}`;
+  }
+  // Trigger conversation list refresh so imported sessions appear in sidebar
+  if (ok > 0) {
+    if (window._markConversationListLocallyChanged) {
+      window._markConversationListLocallyChanged();
+    }
+    if (typeof loadConversations === 'function') {
+      loadConversations().catch((err) => _obLog.warn('failed to reload conversations', err));
+    }
+  }
+  _obLog.info('codex sessions import finished', { ok, failed });
+}
+
+// ── Skills: scan ~/.claude/skills and import selected into the skill library ──
+async function _csLoadClaudeSkills(agentType) {
+  console.log('[CLAUDE SKILLS] _csLoadClaudeSkills called for agentType:', agentType);
+  const container = _csFillAssetSection(agentType, 'skills', '<div class="cs-state loading">正在扫描本机技能…</div>');
+  if (!container) {
+    console.log('[CLAUDE SKILLS] No container found, aborting');
+    return;
+  }
+
+  try {
+    console.log('[CLAUDE SKILLS] Invoking sessionImport.listClaudeSkills...');
+    const res = await window.orkas.invoke('sessionImport.listClaudeSkills');
+    console.log('[CLAUDE SKILLS] IPC result:', res);
+    const skills = (res && res.skills) || [];
+    console.log('[CLAUDE SKILLS] Parsed skills array:', skills.length, 'items');
+
+    if (!skills.length) {
+      console.log('[CLAUDE SKILLS] No skills found, showing empty state');
+      container.innerHTML = '<div class="cs-state">未在本机找到 Claude Code 技能（~/.claude/skills 为空或不存在）。</div>';
+      return;
+    }
+    console.log('[CLAUDE SKILLS] Rendering', skills.length, 'skills');
+
+    const rows = skills.map((s, idx) => {
+      const desc = s.description ? `<small>${_csEsc(s.description)}</small>` : '';
+      const hidden = idx >= 3 ? ' style="display:none"' : '';
+      return `
+        <div class="cs-src cs-collapsible-item"${hidden} data-skill-dir="${_csEsc(s.dirName)}">
           <input type="checkbox" checked />
           <div class="s-ico">${CS_TERMINAL_SVG}</div>
           <div>
@@ -590,11 +839,28 @@ async function _csLoadClaudeSkills(agentType) {
         </div>`;
     }).join('');
 
-    container.innerHTML = rows +
+    const toggleBtn = skills.length > 3
+      ? `<button type="button" class="cs-toggle-more" data-target="skills-${_csEsc(agentType)}">显示全部 ${skills.length} 个技能</button>`
+      : '';
+
+    container.innerHTML = rows + toggleBtn +
       `<div class="cs-import-bar">
          <button type="button" class="cs-skill-import-btn" data-agent="${_csEsc(agentType)}">导入所选技能</button>
          <div class="cs-import-result cs-skill-result" data-agent="${_csEsc(agentType)}"></div>
        </div>`;
+
+    // Wire up show-more toggle.
+    const moreBtn = container.querySelector('.cs-toggle-more');
+    if (moreBtn) {
+      moreBtn.addEventListener('click', () => {
+        const items = container.querySelectorAll('.cs-collapsible-item');
+        const allVisible = Array.from(items).every((el) => el.style.display !== 'none');
+        items.forEach((el, idx) => {
+          if (idx >= 3) el.style.display = allVisible ? 'none' : '';
+        });
+        moreBtn.textContent = allVisible ? `显示全部 ${skills.length} 个技能` : '收起';
+      });
+    }
 
     container.querySelectorAll('.cs-src[data-skill-dir]').forEach((row) => {
       const checkbox = row.querySelector('input[type="checkbox"]');
@@ -610,9 +876,15 @@ async function _csLoadClaudeSkills(agentType) {
     const btn = container.querySelector('.cs-skill-import-btn');
     if (btn) btn.addEventListener('click', () => void _csImportSelectedSkills(container));
 
+    // Update count badge
+    const badge = document.getElementById(`cs-count-${agentType}-skills`);
+    if (badge) badge.textContent = `(${skills.length})`;
+
+    console.log('[CLAUDE SKILLS] Successfully rendered all skills');
     _obLog.info('loaded Claude skills', { count: skills.length });
   } catch (err) {
     const msg = (err && err.message) || String(err);
+    console.error('[CLAUDE SKILLS] Error loading skills:', err);
     _obLog.warn('failed to load Claude skills', { error: msg });
     container.innerHTML = `<div class="cs-state err">扫描本机技能失败：${_csEsc(msg)}</div>`;
   }
@@ -637,8 +909,12 @@ async function _csImportSelectedSkills(container) {
   if (btn) btn.disabled = true;
   resultBox.innerHTML = `<div class="cs-extract-progress">正在导入 ${dirNames.length} 个技能…</div>`;
 
+  // Determine which agent type this is (Claude or Codex) based on the button's data-agent attribute
+  const agentType = btn.dataset.agent;
+  const ipcMethod = agentType === 'codex' ? 'sessionImport.importCodexSkills' : 'sessionImport.importClaudeSkills';
+
   try {
-    const res = await window.orkas.invoke('sessionImport.importClaudeSkills', { dirNames });
+    const res = await window.orkas.invoke(ipcMethod, { dirNames });
     const okCount = (res && res.okCount) || 0;
     const failCount = (res && res.failCount) || 0;
     const imported = (res && res.imported) || [];
@@ -652,50 +928,167 @@ async function _csImportSelectedSkills(container) {
       (failCount ? `，失败 ${failCount} 个` : '') +
       '。导入的技能已进入你的技能库。</div>';
     resultBox.innerHTML = summary + `<div class="cs-import-lines">${lines.map((l) => `<div>${l}</div>`).join('')}</div>`;
-    _obLog.info('skill import finished', { okCount, failCount });
+    _obLog.info('skill import finished', { agentType, okCount, failCount });
   } catch (err) {
     const msg = (err && err.message) || String(err);
-    _obLog.warn('skill import failed', { error: msg });
+    _obLog.warn('skill import failed', { agentType, error: msg });
     resultBox.innerHTML = `<div class="cs-state err">导入技能失败：${_csEsc(msg)}</div>`;
   } finally {
     if (btn) btn.disabled = false;
   }
 }
 
-// ── Memory: preview ~/.claude/CLAUDE.md and import into the shared knowledge tier ──
+// ── Codex Skills ────────────────────────────────────────────────────────────
+async function _csLoadCodexSkills(agentType) {
+  console.log('[CODEX SKILLS] _csLoadCodexSkills called for agentType:', agentType);
+  const container = _csFillAssetSection(agentType, 'skills', '<div class="cs-state loading">正在扫描 Codex 技能…</div>');
+  if (!container) {
+    console.log('[CODEX SKILLS] No container found, aborting');
+    return;
+  }
+
+  try {
+    console.log('[CODEX SKILLS] Invoking sessionImport.listCodexSkills...');
+    const res = await window.orkas.invoke('sessionImport.listCodexSkills');
+    console.log('[CODEX SKILLS] IPC result:', res);
+    const skills = (res && res.skills) || [];
+    console.log('[CODEX SKILLS] Parsed skills array:', skills.length, 'items');
+
+    if (!skills.length) {
+      console.log('[CODEX SKILLS] No skills found, showing empty state');
+      container.innerHTML = '<div class="cs-state">未在本机找到 Codex 技能（~/.codex/skills/.system 为空或不存在）。</div>';
+      return;
+    }
+    console.log('[CODEX SKILLS] Rendering', skills.length, 'skills');
+
+    const rows = skills.map((s, idx) => {
+      const desc = s.description ? `<small>${_csEsc(s.description)}</small>` : '';
+      const hidden = idx >= 3 ? ' style="display:none"' : '';
+      return `
+        <div class="cs-src cs-collapsible-item"${hidden} data-skill-dir="${_csEsc(s.dirName)}">
+          <input type="checkbox" checked />
+          <div class="s-ico">${CS_TERMINAL_SVG}</div>
+          <div>
+            <strong>${_csEsc(s.name)}</strong>
+            ${desc}
+          </div>
+        </div>`;
+    }).join('');
+
+    const toggleBtn = skills.length > 3
+      ? `<button type="button" class="cs-toggle-more" data-target="skills-${_csEsc(agentType)}">显示全部 ${skills.length} 个技能</button>`
+      : '';
+
+    container.innerHTML = rows + toggleBtn +
+      `<div class="cs-import-bar">
+         <button type="button" class="cs-skill-import-btn" data-agent="${_csEsc(agentType)}">导入所选技能</button>
+         <div class="cs-import-result cs-skill-result" data-agent="${_csEsc(agentType)}"></div>
+       </div>`;
+
+    // Wire up show-more toggle.
+    const moreBtn = container.querySelector('.cs-toggle-more');
+    if (moreBtn) {
+      moreBtn.addEventListener('click', () => {
+        const items = container.querySelectorAll('.cs-collapsible-item');
+        const allVisible = Array.from(items).every((el) => el.style.display !== 'none');
+        items.forEach((el, idx) => {
+          if (idx >= 3) el.style.display = allVisible ? 'none' : '';
+        });
+        moreBtn.textContent = allVisible ? `显示全部 ${skills.length} 个技能` : '收起';
+      });
+    }
+
+    container.querySelectorAll('.cs-src[data-skill-dir]').forEach((row) => {
+      const checkbox = row.querySelector('input[type="checkbox"]');
+      row.classList.toggle('selected', checkbox.checked);
+      row.addEventListener('click', (ev) => {
+        if (ev.target === checkbox) return;
+        checkbox.checked = !checkbox.checked;
+        row.classList.toggle('selected', checkbox.checked);
+      });
+      checkbox.addEventListener('change', () => row.classList.toggle('selected', checkbox.checked));
+    });
+
+    const btn = container.querySelector('.cs-skill-import-btn');
+    if (btn) btn.addEventListener('click', () => void _csImportSelectedSkills(container));
+
+    // Update count badge
+    const badge = document.getElementById(`cs-count-${agentType}-skills`);
+    if (badge) badge.textContent = `(${skills.length})`;
+
+    console.log('[CODEX SKILLS] Successfully rendered all skills');
+    _obLog.info('loaded Codex skills', { count: skills.length });
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    console.error('[CODEX SKILLS] Error loading skills:', err);
+    _obLog.warn('failed to load Codex skills', { error: msg });
+    container.innerHTML = `<div class="cs-state err">扫描 Codex 技能失败：${_csEsc(msg)}</div>`;
+  }
+}
+
+// ── Memory: Claude Code keeps memory in FOUR places under ~/.claude. We
+//    preview each source separately (instructions / rules / auto / history),
+//    let the user pick which to import, and route everything into the shared
+//    knowledge tier. Absent sources show an honest empty state, not a hidden gap.
+const _CS_MEM_REASONS = {
+  not_found: '未找到',
+  unreadable: '无法读取',
+  too_large: '文件过大，已跳过',
+  empty: '存在但没有可导入条目',
+};
+
 async function _csLoadClaudeMemory(agentType) {
-  const container = _csFillAsset(agentType, 'memory', '<div class="cs-state loading">正在读取记忆…</div>');
+  const container = _csFillAssetSection(agentType, 'memory', '<div class="cs-state loading">正在读取记忆…</div>');
   if (!container) return;
 
   try {
-    const res = await window.orkas.invoke('sessionImport.readClaudeMemory');
-    if (!res || !res.present) {
-      const reason = res && res.reason === 'too_large' ? '（文件过大，暂不导入）' : '';
-      container.innerHTML =
-        `<div class="cs-state">未找到 Claude Code 记忆文件 ~/.claude/CLAUDE.md${reason}。用过 CLAUDE.md 后，这里会列出可导入的记忆条目。</div>`;
-      return;
-    }
-    if (!res.entryCount) {
-      container.innerHTML = '<div class="cs-state">CLAUDE.md 存在，但没有可导入的记忆条目。</div>';
+    const res = await window.orkas.invoke('sessionImport.readClaudeMemories');
+    const sources = (res && res.sources) || [];
+    const total = (res && res.totalEntries) || 0;
+
+    if (!sources.length) {
+      container.innerHTML = '<div class="cs-state">未检测到任何 Claude Code 记忆来源。</div>';
       return;
     }
 
-    const sample = (res.sample || []).map((s) => `<div>${_csEsc(s)}</div>`).join('');
+    // One block per source: checkbox + label + count + sample. Present sources
+    // are checked by default; absent ones show the honest reason and disable.
+    const blocks = sources.map((s) => {
+      const present = !!s.present;
+      const reason = !present ? (_CS_MEM_REASONS[s.reason] || '不可用') : '';
+      const detail = s.detail ? `（${_csEsc(s.detail)}）` : '';
+      const sample = present && (s.sample || []).length
+        ? `<div class="cs-import-lines">${(s.sample || []).map((x) => `<div>${_csEsc(x)}</div>`).join('')}${s.entryCount > (s.sample || []).length ? '<div>…</div>' : ''}</div>`
+        : '';
+      const meta = present
+        ? `${s.entryCount} 条${detail}`
+        : `<span class="cs-mem-absent">${_csEsc(reason)}</span>`;
+      return `<div class="cs-mem-source ${present ? '' : 'absent'}">
+          <label class="cs-mem-src-head">
+            <input type="checkbox" class="cs-mem-src" data-key="${_csEsc(s.key)}" ${present ? 'checked' : 'disabled'}>
+            <span class="cs-mem-src-label">${_csEsc(s.label)}</span>
+            <span class="cs-mem-src-meta">${meta}</span>
+          </label>
+          ${sample}
+        </div>`;
+    }).join('');
+
+    const canImport = total > 0;
     container.innerHTML =
-      `<div class="cs-state">检测到 ${res.entryCount} 条记忆（来自 ~/.claude/CLAUDE.md）。导入后进入共享知识库，供各 Agent 使用。</div>` +
-      (sample ? `<div class="cs-import-lines">${sample}${res.entryCount > (res.sample || []).length ? '<div>…</div>' : ''}</div>` : '') +
+      `<div class="cs-state">Claude Code 的记忆分布在七个来源，共检测到 ${total} 条可导入条目。选择要导入的来源，导入后进入共享知识库，供各 Agent 使用。</div>` +
+      `<div class="cs-mem-sources">${blocks}</div>` +
       `<div class="cs-import-bar">
-         <button type="button" class="cs-mem-import-btn" data-agent="${_csEsc(agentType)}">导入全部记忆</button>
+         <button type="button" class="cs-mem-import-btn" data-agent="${_csEsc(agentType)}" ${canImport ? '' : 'disabled'}>导入所选记忆</button>
          <div class="cs-import-result cs-mem-result" data-agent="${_csEsc(agentType)}"></div>
        </div>`;
 
     const btn = container.querySelector('.cs-mem-import-btn');
     if (btn) btn.addEventListener('click', () => void _csImportClaudeMemory(container));
 
-    _obLog.info('previewed Claude memory', { entryCount: res.entryCount });
+    _obLog.info('previewed Claude memory sources', { total, sources: sources.map((s) => `${s.key}:${s.entryCount}`) });
   } catch (err) {
     const msg = (err && err.message) || String(err);
-    _obLog.warn('failed to read Claude memory', { error: msg });
+    _obLog.warn('failed to read Claude memory sources', { error: msg });
     container.innerHTML = `<div class="cs-state err">读取记忆失败：${_csEsc(msg)}</div>`;
   }
 }
@@ -705,11 +1098,19 @@ async function _csImportClaudeMemory(container) {
   const resultBox = container.querySelector('.cs-mem-result');
   if (!resultBox) return;
 
+  const sourceKeys = Array.from(container.querySelectorAll('.cs-mem-src:checked'))
+    .map((el) => el.getAttribute('data-key'))
+    .filter(Boolean);
+  if (!sourceKeys.length) {
+    resultBox.innerHTML = '<div class="cs-state">请至少勾选一个记忆来源。</div>';
+    return;
+  }
+
   if (btn) btn.disabled = true;
   resultBox.innerHTML = '<div class="cs-extract-progress">正在导入记忆…</div>';
 
   try {
-    const res = await window.orkas.invoke('sessionImport.importClaudeMemory');
+    const res = await window.orkas.invoke('sessionImport.importClaudeMemories', { sourceKeys });
     if (!res || !res.ok) {
       const reason = (res && res.reason) || '未知原因';
       resultBox.innerHTML = `<div class="cs-state err">导入记忆失败：${_csEsc(reason)}</div>`;
@@ -725,7 +1126,7 @@ async function _csImportClaudeMemory(container) {
       (rejected ? `，被安全校验拦截 ${rejected} 条` : '') +
       '。已进入共享知识库。</div>';
     _csToast(`已导入 ${added} 条记忆到知识库`);
-    _obLog.info('memory import finished', { added, skipped, rejected });
+    _obLog.info('memory import finished', { added, skipped, rejected, perSource: res.perSource });
   } catch (err) {
     const msg = (err && err.message) || String(err);
     _obLog.warn('memory import failed', { error: msg });
@@ -735,12 +1136,239 @@ async function _csImportClaudeMemory(container) {
   }
 }
 
+// ── Codex memory: read config.toml preferences and import into shared memory ──
+async function _csLoadCodexMemory(agentType) {
+  const container = _csFillAssetSection(agentType, 'memory', '<div class="cs-state loading">正在读取 Codex 配置…</div>');
+  if (!container) return;
+
+  try {
+    const res = await window.orkas.invoke('sessionImport.readCodexMemory');
+    const present = res && res.present;
+    const entries = (res && res.entries) || [];
+
+    if (!present || !entries.length) {
+      const reason = res.reason === 'not_found' ? '未找到 config.toml' : '配置文件为空';
+      container.innerHTML = `<div class="cs-state">Codex 配置记忆（~/.codex/config.toml）${reason}。</div>`;
+      return;
+    }
+
+    const sample = entries.slice(0, 5).map((e) => `<div>${_csEsc(e)}</div>`).join('');
+    const more = entries.length > 5 ? '<div>…</div>' : '';
+
+    container.innerHTML =
+      `<div class="cs-state">从 Codex config.toml 检测到 ${entries.length} 条配置偏好。导入后进入共享知识库。</div>` +
+      `<div class="cs-import-lines">${sample}${more}</div>` +
+      `<div class="cs-import-bar">
+         <button type="button" class="cs-codex-mem-import-btn" data-agent="${_csEsc(agentType)}">导入 Codex 配置</button>
+         <div class="cs-import-result cs-codex-mem-result" data-agent="${_csEsc(agentType)}"></div>
+       </div>`;
+
+    const btn = container.querySelector('.cs-codex-mem-import-btn');
+    if (btn) btn.addEventListener('click', () => void _csImportCodexMemory(container));
+
+    _obLog.info('previewed Codex memory', { count: entries.length });
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    _obLog.warn('failed to read Codex memory', { error: msg });
+    container.innerHTML = `<div class="cs-state err">读取 Codex 配置失败：${_csEsc(msg)}</div>`;
+  }
+}
+
+async function _csImportCodexMemory(container) {
+  const btn = container.querySelector('.cs-codex-mem-import-btn');
+  const resultBox = container.querySelector('.cs-codex-mem-result');
+  if (!resultBox) return;
+
+  if (btn) btn.disabled = true;
+  resultBox.innerHTML = '<div class="cs-extract-progress">正在导入 Codex 配置…</div>';
+
+  try {
+    const res = await window.orkas.invoke('sessionImport.importCodexMemory');
+    if (!res || !res.ok) {
+      const reason = (res && res.reason) || '未知原因';
+      resultBox.innerHTML = `<div class="cs-state err">导入失败：${_csEsc(reason)}</div>`;
+      if (btn) btn.disabled = false;
+      return;
+    }
+    const added = res.added || 0;
+    const skipped = res.skipped || 0;
+    const rejected = res.rejected || 0;
+    resultBox.innerHTML =
+      `<div style="color:var(--cs-forest-deep);font-size:12px;margin-top:8px;">` +
+      `✓ 成功导入 ${added} 条配置偏好` +
+      (skipped ? `，跳过 ${skipped} 条已存在` : '') +
+      (rejected ? `，拒绝 ${rejected} 条无效条目` : '') +
+      `</div>`;
+    _obLog.info('imported Codex memory', { added, skipped, rejected });
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    _obLog.warn('failed to import Codex memory', { error: msg });
+    resultBox.innerHTML = `<div class="cs-state err">导入失败：${_csEsc(msg)}</div>`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 // ── Scheduled tasks: Claude Code has no native on-disk scheduled-task store. ──
 // We show an honest "no native source" state rather than misreading its
 // per-session TODO files (~/.claude/tasks/) as scheduled tasks.
 function _csRenderNoTasks(agentType) {
-  _csFillAsset(agentType, 'tasks',
+  _csFillAssetSection(agentType, 'tasks',
     '<div class="cs-state">Claude Code 没有原生的定时任务存储，暂无可导入的定时任务。你可以在本应用的「定时任务」模块里直接新建。</div>');
+}
+
+// Format an epoch-ms timestamp as a short local datetime, or a dash when null.
+function _csFmtTaskTime(ms) {
+  if (typeof ms !== 'number' || !isFinite(ms) || ms <= 0) return '—';
+  try {
+    const d = new Date(ms);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  } catch { return '—'; }
+}
+
+// Turn a subset of iCal RRULE into a human-readable Chinese cadence. Falls back
+// to the raw rule for shapes we don't specially handle.
+function _csFmtRRule(rrule) {
+  if (!rrule) return '';
+  const parts = {};
+  rrule.split(';').forEach((seg) => {
+    const [k, v] = seg.split('=');
+    if (k && v) parts[k.trim().toUpperCase()] = v.trim();
+  });
+  const freq = parts.FREQ;
+  const interval = parseInt(parts.INTERVAL || '1', 10) || 1;
+  const freqZh = { HOURLY: '小时', DAILY: '天', WEEKLY: '周', MONTHLY: '月', MINUTELY: '分钟' }[freq];
+  if (!freqZh) return rrule;
+  return interval > 1 ? `每 ${interval} ${freqZh}` : `每${freqZh}`;
+}
+
+// ── Codex scheduled tasks: read from ~/.codex/sqlite/codex-dev.db automations.
+async function _csLoadCodexTasks(agentType) {
+  const container = _csFillAssetSection(agentType, 'tasks', '<div class="cs-state loading">正在读取 Codex 定时任务…</div>');
+  if (!container) return;
+
+  try {
+    const res = await window.orkas.invoke('sessionImport.listCodexTasks');
+    const tasks = (res && res.tasks) || [];
+
+    if (!tasks.length) {
+      container.innerHTML =
+        '<div class="cs-state">暂无本地定时任务。ChatGPT 的定时任务保存在云端账号里，本应用只读取本地数据、不接入云端账号，因此这里只显示通过 codex 命令行在本机创建的自动化任务。</div>';
+      return;
+    }
+
+    const rows = tasks.map((t, idx) => {
+      const hidden = idx >= 3 ? ' style="display:none"' : '';
+      const cadence = _csFmtRRule(t.rrule);
+      const statusZh = t.status === 'ACTIVE' ? '启用' : (t.status === 'PAUSED' ? '暂停' : _csEsc(t.status || ''));
+      const meta = [
+        cadence ? `⏱ ${_csEsc(cadence)}` : '',
+        `状态：${statusZh}`,
+        t.nextRunAt ? `下次：${_csFmtTaskTime(t.nextRunAt)}` : '',
+      ].filter(Boolean).join(' · ');
+      const promptLine = t.prompt ? `<small>${_csEsc(t.prompt)}</small>` : '';
+      return `
+        <div class="cs-src cs-collapsible-item"${hidden} data-task-id="${_csEsc(t.id)}">
+          <input type="checkbox" />
+          <div class="s-ico">${CS_TERMINAL_SVG}</div>
+          <div>
+            <strong>${_csEsc(t.name)}</strong>
+            <small>${meta}</small>
+            ${promptLine}
+          </div>
+        </div>`;
+    }).join('');
+
+    const toggleBtn = tasks.length > 3
+      ? `<button type="button" class="cs-toggle-more">显示全部 ${tasks.length} 个任务</button>`
+      : '';
+
+    container.innerHTML =
+      `<div class="cs-state">检测到 ${tasks.length} 个 Codex 定时任务，勾选后导入到本应用的任务中心。</div>` +
+      rows + toggleBtn +
+      `<div class="cs-import-bar">
+         <button type="button" class="cs-import-btn" onclick="_csImportCodexTasks('${_csEsc(agentType)}')">导入所选任务</button>
+         <div class="cs-import-result"></div>
+       </div>`;
+
+    // Wire up checkbox interactions
+    container.querySelectorAll('.cs-src input[type="checkbox"]').forEach((cb) => {
+      const row = cb.closest('.cs-src');
+      cb.addEventListener('change', () => row.classList.toggle('selected', cb.checked));
+      row.addEventListener('click', (ev) => {
+        if (ev.target === cb) return;
+        cb.checked = !cb.checked;
+        row.classList.toggle('selected', cb.checked);
+      });
+    });
+
+    const moreBtn = container.querySelector('.cs-toggle-more');
+    if (moreBtn) {
+      moreBtn.addEventListener('click', () => {
+        const items = container.querySelectorAll('.cs-collapsible-item');
+        const allVisible = Array.from(items).every((el) => el.style.display !== 'none');
+        items.forEach((el, idx) => {
+          if (idx >= 3) el.style.display = allVisible ? 'none' : '';
+        });
+        moreBtn.textContent = allVisible ? `显示全部 ${tasks.length} 个任务` : '收起';
+      });
+    }
+
+    const badge = document.getElementById(`cs-count-${agentType}-tasks`);
+    if (badge) badge.textContent = `(${tasks.length})`;
+
+    _obLog.info('loaded Codex tasks', { count: tasks.length });
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    _obLog.warn('failed to load Codex tasks', { error: msg });
+    container.innerHTML = `<div class="cs-state err">读取 Codex 定时任务失败：${_csEsc(msg)}</div>`;
+  }
+}
+
+// Import the user-selected Codex scheduled tasks into the in-app task center.
+// Unmappable recurrences are reported per-task by the backend — never coerced.
+async function _csImportCodexTasks(agentType) {
+  const container = _csFillAssetSection(agentType, 'tasks');
+  if (!container) return;
+  const rows = [...container.querySelectorAll('.cs-src[data-task-id]')];
+  const selected = rows
+    .filter((r) => r.querySelector('input[type="checkbox"]')?.checked)
+    .map((r) => r.dataset.taskId)
+    .filter(Boolean);
+  const bar = container.querySelector('.cs-import-bar');
+  const btn = bar ? bar.querySelector('.cs-import-btn') : null;
+  const resultBox = bar ? bar.querySelector('.cs-import-result') : null;
+  if (!selected.length) {
+    if (resultBox) resultBox.innerHTML = '<div class="cs-state">请先勾选要导入的任务。</div>';
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = '导入中…'; }
+  if (resultBox) resultBox.innerHTML = '<div class="cs-state loading">正在导入所选任务…</div>';
+  try {
+    const res = await window.orkas.invoke('sessionImport.importCodexTasks', { taskIds: selected });
+    const r = res || {};
+    const parts = [`成功 ${r.imported || 0} 个`];
+    if (r.skipped) parts.push(`跳过 ${r.skipped} 个`);
+    if (r.unsupported) parts.push(`不支持 ${r.unsupported} 个`);
+    if (r.failed) parts.push(`失败 ${r.failed} 个`);
+    const reasons = (r.items || [])
+      .filter((i) => i.status !== 'imported' && i.reason)
+      .map((i) => `${_csEsc(i.name)}：${_csEsc(i.reason)}`)
+      .join('；');
+    resultBox.innerHTML = `<div class="cs-state">导入完成：${parts.join('，')}。${reasons ? `<br>${reasons}` : ''}已导入的任务可在「任务」模块中查看与管理。</div>`;
+    selected.forEach((id) => {
+      const row = container.querySelector(`.cs-src[data-task-id="${id}"]`);
+      if (row) { row.classList.add('done'); row.querySelector('input[type="checkbox"]').checked = false; }
+    });
+    _obLog.info('codex tasks import finished', { selected: selected.length, result: r });
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    _obLog.warn('codex tasks import failed', { error: msg });
+    if (resultBox) resultBox.innerHTML = `<div class="cs-state err">导入定时任务失败：${_csEsc(msg)}</div>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '导入所选任务'; }
+  }
 }
 
 // Import each selected Claude session through the real pipeline:
@@ -809,6 +1437,16 @@ async function _csImportSelectedSessions(container) {
     (cogTotal ? `；共提取候选认知 ${cogTotal} 条，可在「回忆/候选审核」中确认` : '') +
     `。导入的会话已出现在左侧会话列表，点进去即可继续对话。</div>`;
   resultBox.innerHTML = summary + `<div class="cs-import-lines">${lines.map((l) => `<div>${l}</div>`).join('')}</div>`;
+
+  // Trigger conversation list refresh so imported sessions appear in sidebar
+  if (okCount > 0) {
+    if (window._markConversationListLocallyChanged) {
+      window._markConversationListLocallyChanged();
+    }
+    if (typeof loadConversations === 'function') {
+      loadConversations().catch((err) => _obLog.warn('failed to reload conversations', err));
+    }
+  }
 
   if (btn) btn.disabled = false;
   _obLog.info('session import finished', { okCount, degradedCount, failCount, cogTotal });
@@ -901,162 +1539,6 @@ async function _csLoadAcpSessions() {
   }
 }
 
-async function _csExtractCognitions() {
-  const btn = document.getElementById('cs-extract-start');
-  const candList = document.getElementById('cs-cand-list');
-  if (!candList) return;
-  if (btn) btn.disabled = true;
-
-  candList.innerHTML = '<div class="cs-extract-progress">正在分析会话并提取候选认知…</div>';
-
-  try {
-    const agentBox = document.getElementById('cs-agent-list');
-    const selectedSessions = [];
-    if (agentBox) {
-      agentBox.querySelectorAll('.cs-src input[type="checkbox"]:checked').forEach((cb) => {
-        const row = cb.closest('.cs-src');
-        const sessionId = row ? row.dataset.sessionId : null;
-        if (sessionId) selectedSessions.push(sessionId);
-      });
-    }
-
-    if (selectedSessions.length === 0) {
-      candList.innerHTML = '<div class="cs-state">请先在第二步勾选要分析的会话。</div>';
-      if (btn) btn.disabled = false;
-      return;
-    }
-
-    const allCandidates = [];
-    const errors = [];
-    const diagnostics = [];
-    for (const sessionId of selectedSessions) {
-      try {
-        const res = await window.orkas.invoke('cognition.extractFromSession', { sessionFilePath: sessionId });
-        const candidates = (res && res.candidates) || [];
-        allCandidates.push(...candidates);
-        if (res && res.diagnostic) diagnostics.push(res.diagnostic);
-      } catch (err) {
-        const msg = (err && err.message) || String(err);
-        _obLog.warn('extraction failed for session', { sessionId, error: msg });
-        errors.push(msg);
-      }
-    }
-
-    if (allCandidates.length === 0) {
-      // Honest state: a real backend failure and a genuinely empty
-      // result are different outcomes. Masking every failure as
-      // "nothing found" is exactly the fake status the product owner
-      // forbade — surface the real error so the user knows what broke.
-      if (errors.length) {
-        const uniq = [...new Set(errors)];
-        candList.innerHTML =
-          '<div class="cs-state err">提取失败：' + _csEsc(uniq.join('；')) +
-          '<br><br>常见原因：本机未检测到可用的 CLI Agent、Agent 调用超时，或模型未按要求返回可解析的结果。修复后可点「开始提取」重试。</div>';
-      } else {
-        // Analysis succeeded but produced no cognitions. Surface the real
-        // diagnostics so a genuinely-empty result is distinguishable from
-        // "the CLI returned something we couldn't turn into candidates".
-        const d = diagnostics.reduce((a, x) => ({
-          messageCount: a.messageCount + (x.messageCount || 0),
-          rawOutputChars: a.rawOutputChars + (x.rawOutputChars || 0),
-          parsedRawCount: a.parsedRawCount + (x.parsedRawCount || 0),
-          rawOutputPreview: a.rawOutputPreview || x.rawOutputPreview || '',
-          transcriptPreview: a.transcriptPreview || x.transcriptPreview || '',
-        }), { messageCount: 0, rawOutputChars: 0, parsedRawCount: 0, rawOutputPreview: '', transcriptPreview: '' });
-        const preview = d.rawOutputPreview
-          ? '<br>模型返回预览：<code style="font-family:var(--cs-mono);font-size:11px;word-break:break-all">' + _csEsc(d.rawOutputPreview) + '</code>'
-          : '';
-        const inputPreview = d.transcriptPreview
-          ? '<br>送入模型的会话预览：<code style="font-family:var(--cs-mono);font-size:11px;word-break:break-all">' + _csEsc(d.transcriptPreview) + '</code>'
-          : '';
-        candList.innerHTML =
-          '<div class="cs-state">已分析所选会话，但未发现明确的候选认知。' +
-          '<br><br>诊断：解析出会话消息 ' + d.messageCount + ' 条，模型返回 ' + d.rawOutputChars +
-          ' 字符，其中数组项 ' + d.parsedRawCount + ' 个（均未通过校验或为空）。' + inputPreview + preview + '</div>';
-      }
-      if (btn) btn.disabled = false;
-      return;
-    }
-
-    // 抽取成功后，先把候选忠实写入候选池（不确认），拿回 candidate_ids。
-    // 第 4 步完成时：勾选的原样留在候选池当待确认候选，之后在 Recall 候选
-    // 审核页人工确认入库；未勾选的走 reject 从池里丢弃，不带进 App。
-    // 写池失败是真失败，按诚实状态直接报错，不伪装成「已提取」。
-    let candidateIds = [];
-    try {
-      const addRes = await window.orkas.invoke('personalOntology.candidates.addFromOnboarding', {
-        candidates: allCandidates,
-      });
-      candidateIds = (addRes && addRes.candidate_ids) || [];
-    } catch (err) {
-      const msg = (err && err.message) || String(err);
-      _obLog.warn('failed to add onboarding candidates to pool', { error: msg });
-      candList.innerHTML =
-        '<div class="cs-state err">候选写入待确认池失败：' + _csEsc(msg) +
-        '<br><br>已成功从会话中提取到候选，但保存到候选池这一步出错，请重试「开始提取」。</div>';
-      if (btn) btn.disabled = false;
-      return;
-    }
-
-    _csRenderCandidates(allCandidates, candidateIds);
-  } catch (err) {
-    const msg = (err && err.message) || String(err);
-    _obLog.warn('cognition extraction failed', { error: msg });
-    candList.innerHTML = `<div class="cs-state err">提取候选认知失败：${_csEsc(msg)}</div>`;
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-}
-
-function _csRenderCandidates(candidates, candidateIds) {
-  const candList = document.getElementById('cs-cand-list');
-  if (!candList) return;
-
-  // 记住本轮写入池的 id（按渲染顺序对应），第 4 步完成时按勾选确认。
-  _csCandidateIds = Array.isArray(candidateIds) ? candidateIds : [];
-
-  const typeLabels = {
-    personal: '个人偏好',
-    rule: '工作规则',
-    skill_method: '技能方法',
-    template: '模板',
-  };
-
-  const rows = candidates.map((c, idx) => {
-    const typeLabel = typeLabels[c.suggestedType] || c.suggestedType;
-    const summary = c.summary ? `<b>${_csEsc(c.summary)}</b>` : `<b>候选认知 ${idx + 1}</b>`;
-    const uncertainty = c.uncertainty ? `<div class="cs-meta">不确定性：${_csEsc(c.uncertainty)}</div>` : '';
-    const cid = _csCandidateIds[idx] || '';
-    return `
-      <div class="cs-cand" data-cand-idx="${idx}" data-candidate-id="${_csEsc(cid)}">
-        <input type="checkbox" />
-        <div class="cs-cand-body">
-          <div class="cs-cand-head">
-            ${summary}
-            <span class="cs-type">${_csEsc(typeLabel)}</span>
-          </div>
-          <div class="cs-meta">${_csEsc(c.judgment)}</div>
-          ${uncertainty}
-          <div class="cs-src-line">范围：${_csEsc(c.suggestedScope)}</div>
-        </div>
-      </div>`;
-  }).join('');
-
-  candList.innerHTML = rows;
-
-  candList.querySelectorAll('.cs-cand').forEach((row) => {
-    const checkbox = row.querySelector('input[type="checkbox"]');
-    row.addEventListener('click', (ev) => {
-      if (ev.target === checkbox) return;
-      checkbox.checked = !checkbox.checked;
-      row.classList.toggle('selected', checkbox.checked);
-    });
-    checkbox.addEventListener('change', () => {
-      row.classList.toggle('selected', checkbox.checked);
-    });
-  });
-}
-
 function _csPickRole(role) {
   const shell = document.getElementById('cs-onboarding');
   if (!shell) return;
@@ -1077,43 +1559,38 @@ async function _csFinish() {
   const btn = document.getElementById('cs-ob-finish');
   if (btn) btn.disabled = true;
 
-  // 第 4 步落地：勾选的候选原样留在候选池里，成为「待确认候选」，之后在
-  // Recall 候选审核页人工确认入库；未勾选的从候选池里丢弃（reject），不带进
-  // App。两种动作都不自动落记忆——落记忆只在候选审核页确认时才发生。
-  // 全部候选此前已在抽取成功时写入了池（见 _csExtractCognitions 的
-  // addFromOnboarding），这里只需丢弃未勾选的、保留勾选的。
-  const allRows = Array.from(document.querySelectorAll('#cs-cand-list .cs-cand'));
-  const rejectIds = [];
-  for (const row of allRows) {
-    const cb = row.querySelector('input[type="checkbox"]');
-    if (cb && cb.checked) continue; // 勾选的留在池里，什么都不做
-    const candidateId = row.getAttribute('data-candidate-id') || '';
-    if (candidateId) rejectIds.push(candidateId);
-  }
+  // 候选认知已在导入时后台提取并存入候选池，留待用户首次打开导入会话时由
+  // agent 主动呈现和确认，此处不再处理候选认知的 UI 确认和 reject/keep 逻辑。
 
-  let rejectedCount = 0;
-  if (rejectIds.length) {
+  // 如果用户选择了角色模板，创建以角色命名的工作空间，并将所有导入的会话绑定到该工作空间
+  if (_csRolePicked && _csImportedConversationIds.length > 0) {
+    const roleName = _csRolePicked === 'product' ? '产品负责人' : 'AI 研究员';
     try {
-      const res = await window.orkas.invoke('personalOntology.candidates.rejectBatch', {
-        candidateIds: rejectIds,
-        reason: 'onboarding: 用户未勾选，丢弃',
-      });
-      rejectedCount =
-        res && typeof res.rejectedCount === 'number' ? res.rejectedCount : rejectIds.length;
-      _obLog.info('onboarding unchecked candidates discarded', { rejected: rejectedCount });
-    } catch (err) {
-      // 丢弃失败——诚实告知，不静默略过。未丢弃的仍留在候选池，用户可在候选
-      // 审核页自行处理，不阻断收尾。
-      const msg = (err && err.message) || String(err);
-      _obLog.warn('failed to discard onboarding candidates', { error: msg });
-      _csToast('部分候选丢弃失败（仍留在候选池，可在 Recall 候选审核页处理）');
-    }
-  }
+      const createRes = await window.orkas.invoke('projects.create', { name: roleName });
+      if (createRes && createRes.project && createRes.project.project_id) {
+        const projectId = createRes.project.project_id;
+        _obLog.info('created role workspace', { role: _csRolePicked, projectId, name: roleName });
 
-  const keptCount = allRows.length - rejectIds.length;
-  if (keptCount > 0) {
-    _csToast('已保留 ' + keptCount + ' 条候选，可在 Recall 候选审核页确认');
-    _obLog.info('onboarding candidates kept as pending', { kept: keptCount });
+        // 批量更新所有导入的会话，绑定到这个工作空间
+        const updateRes = await window.orkas.invoke('conversations.batchUpdateProject', {
+          conversationIds: _csImportedConversationIds,
+          projectId: projectId,
+        });
+        if (updateRes && updateRes.ok) {
+          _obLog.info('bound imported sessions to role workspace', {
+            role: _csRolePicked,
+            projectId,
+            updated: updateRes.updated,
+            total: _csImportedConversationIds.length,
+          });
+          _csToast(`已将 ${updateRes.updated} 个导入的会话归入「${roleName}」工作空间`);
+        }
+      }
+    } catch (err) {
+      const msg = (err && err.message) || String(err);
+      _obLog.warn('failed to create role workspace or bind sessions', { error: msg });
+      _csToast('创建角色工作空间失败，导入的会话已添加到普通对话列表');
+    }
   }
 
   try {
@@ -1161,10 +1638,8 @@ function _csBuild() {
   });
   shell.querySelector('#cs-role-skip')?.addEventListener('click', () => {
     _csRolePicked = null;
-    _csGoStep(4);
+    void _csFinish();
   });
-
-  shell.querySelector('#cs-extract-start')?.addEventListener('click', () => { void _csExtractCognitions(); });
 
   shell.querySelector('#cs-ob-finish')?.addEventListener('click', () => { void _csFinish(); });
 
@@ -1175,9 +1650,26 @@ function _csBuild() {
 // never block first paint. Only lifts the overlay when the machine-local
 // marker says the walkthrough has not been completed here yet.
 async function maybeStartOnboarding() {
+  _obLog.info('maybeStartOnboarding called');
+  console.log('[ONBOARDING DEBUG] maybeStartOnboarding called - FORCE SHOW MODE');
+
+  // TEMPORARY: Force show onboarding for testing new layout
+  console.log('[ONBOARDING DEBUG] FORCING onboarding to show (bypassing all checks)');
+  _csBuild();
+  document.body.classList.add('cs-onboarding-active');
+  _csGoStep(0);
+  _obLog.info('onboarding walkthrough FORCED (testing mode)');
+  return;
+
+  /* Original logic - commented out for testing
   try {
     const res = await window.orkas.invoke('prefs.getOnboarding');
-    if (res && res.completed === true) return;
+    console.log('[ONBOARDING DEBUG] prefs.getOnboarding result:', res);
+    if (res && res.completed === true) {
+      console.log('[ONBOARDING DEBUG] Onboarding already completed, skipping');
+      return;
+    }
+    console.log('[ONBOARDING DEBUG] Onboarding not completed, showing walkthrough');
   } catch (err) {
     // If we can't read the marker, err on the side of NOT trapping the user
     // behind a walkthrough that might loop; log and skip.
@@ -1188,6 +1680,7 @@ async function maybeStartOnboarding() {
   document.body.classList.add('cs-onboarding-active');
   _csGoStep(0);
   _obLog.info('onboarding walkthrough shown (first run on this machine)');
+  */
 }
 
 // Expose for boot.js. Kept on window so classic-script load order doesn't matter.

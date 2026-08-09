@@ -39,7 +39,7 @@ const log = createLogger('session-import:materialize');
 
 export interface MaterializeInput {
   userId: string;
-  source: 'claude';
+  source: 'claude' | 'codex';
   sourceId: string;
   /** Original project path, used only to enrich the title. */
   projectPath?: string;
@@ -98,6 +98,8 @@ export async function materializeSession(input: MaterializeInput): Promise<Mater
     kind: 'normal',
     conversationId: cid,
     title: buildTitle(input),
+    imported: true,
+    needs_welcome: true,
   });
 
   // If the conversation already had content (a prior import), don't re-seed.

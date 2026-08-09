@@ -40,8 +40,22 @@ import { createLogger } from '../logger.js';
 import { listClaudeSessions } from '../features/local_agents/claude_sessions.js';
 import { listAgentTypes, listSessions as listAcpSessions } from '../features/local_agents/acp_sessions.js';
 import { importClaudeSession } from '../features/session_import/asset-router.js';
-import { listClaudeSkills, importClaudeSkills } from '../features/session_import/skill-import.js';
-import { readClaudeMemory, importClaudeMemory } from '../features/session_import/memory-import.js';
+import { listClaudeSkills, importClaudeSkills, listCodexSkills, importCodexSkills } from '../features/session_import/skill-import.js';
+import {
+  readClaudeMemory,
+  importClaudeMemory,
+  readClaudeMemories,
+  importClaudeMemories,
+  type MemorySourceKey,
+} from '../features/session_import/memory-import.js';
+import {
+  listCodexSessions,
+  readCodexMemory,
+  importCodexMemory,
+  listCodexTasks,
+  importCodexTasks,
+  importCodexSession,
+} from '../features/session_import/codex-import.js';
 
 const log = createLogger('ipc:local_agents');
 
@@ -188,6 +202,29 @@ export const invokeHandlers = {
   },
 
   /**
+   * List Codex skills (READ-ONLY).
+   * Returns [] when `~/.codex/skills/.system` is absent.
+   */
+  'sessionImport.listCodexSkills': async () => {
+    const skills = await listCodexSkills();
+    return { skills };
+  },
+
+  /**
+   * Import a batch of Codex skills (by directory name) into the user's
+   * skill library. Each `dirName` must be one returned by
+   * `listCodexSkills`. Best-effort per skill; already-present skills report
+   * `already_exists` rather than duplicating. Returns per-skill results plus
+   * ok/fail counts.
+   */
+  'sessionImport.importCodexSkills': async ({ dirNames }: { dirNames?: unknown } = {}) => {
+    if (!Array.isArray(dirNames) || dirNames.some((d) => typeof d !== 'string')) {
+      throw new Error('dirNames must be a string array');
+    }
+    return importCodexSkills(dirNames as string[]);
+  },
+
+  /**
    * Preview the user-level Claude memory (`~/.claude/CLAUDE.md`), READ-ONLY.
    * Returns an honest `present:false` state when there is no CLAUDE.md.
    */
@@ -204,6 +241,129 @@ export const invokeHandlers = {
     const userId = getActiveUserId();
     if (!userId) throw new Error('no active user');
     return importClaudeMemory(userId);
+  },
+
+  /**
+   * Preview ALL Claude Code memory sources (READ-ONLY):
+   *   - instructions (`~/.claude/CLAUDE.md`)
+   *   - rules        (`~/.claude/rules/*.md`)
+   *   - automem      (`~/.claude/MEMORY.md`)
+   *   - project-mem  (`~/.claude/projects/<project>/memory/*.md`)
+   *   - history      (`~/.claude/history.jsonl`, best-effort personal facts)
+   *   - workspace-project (`<workspace>/CLAUDE.md` or `<workspace>/.claude/CLAUDE.md`)
+   *   - workspace-local   (`<workspace>/CLAUDE.local.md`)
+   * Absent sources come back with present:false + a reason, never omitted.
+   */
+  'sessionImport.readClaudeMemories': async () => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const { getWorkspacePath } = await import('../features/user_workspace');
+    const workspaceDir = getWorkspacePath(userId);
+    return readClaudeMemories(undefined, workspaceDir);
+  },
+
+  /**
+   * Import selected Claude Code memory sources into the shared memory tier
+   * (MEMORY.md). Per-entry idempotent; every write runs the injection scan and
+   * char-limit guard. `sourceKeys` defaults to all seven when omitted.
+   */
+  'sessionImport.importClaudeMemories': async (
+    { sourceKeys }: { sourceKeys?: MemorySourceKey[] } = {},
+  ) => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const { getWorkspacePath } = await import('../features/user_workspace');
+    const workspaceDir = getWorkspacePath(userId);
+    return importClaudeMemories(userId, sourceKeys, undefined, workspaceDir);
+  },
+
+  /**
+   * List Codex sessions from `~/.codex/sessions/`. Returns metadata only
+   * (first message, timestamp, cwd). Best-effort: missing dir returns [].
+   */
+  'sessionImport.listCodexSessions': async () => {
+    const sessions = await listCodexSessions();
+    return { sessions };
+  },
+
+  /**
+   * Preview Codex config.toml for importable preferences (READ-ONLY).
+   * Returns structured facts about model provider, default model, reasoning
+   * effort, and trusted projects.
+   */
+  'sessionImport.readCodexMemory': async () => {
+    return readCodexMemory();
+  },
+
+  /**
+   * List Codex scheduled tasks from the `automations` table (READ-ONLY).
+   * Empty array = no tasks defined yet (a valid state, not an error).
+   */
+  'sessionImport.listCodexTasks': async () => {
+    const tasks = await listCodexTasks();
+    return { tasks };
+  },
+
+  /**
+   * Import selected Codex scheduled tasks into the in-app auto-task module.
+   * `taskIds` omitted = import all listed tasks. Idempotent (existing
+   * title+content pairs are skipped); unmappable recurrences are reported,
+   * never silently coerced. Returns per-task results with counts.
+   */
+  'sessionImport.importCodexTasks': async ({ taskIds }: { taskIds?: unknown } = {}) => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const ids = Array.isArray(taskIds)
+      ? taskIds.filter((x): x is string => typeof x === 'string')
+      : undefined;
+    return importCodexTasks(userId, ids);
+  },
+
+  /**
+   * Import Codex config.toml preferences into the shared memory tier
+   * (MEMORY.md). Per-entry idempotent; every write goes through the memory
+   * injection scan and char-limit guard.
+   */
+  'sessionImport.importCodexMemory': async () => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importCodexMemory(userId);
+  },
+
+  /**
+   * Import a single Codex session into a Mate Agent conversation.
+   * Simpler than Claude import: no extraction/cognition routing, just
+   * materialize the conversation. `filePath` must be a valid JSONL path
+   * from `listCodexSessions`. Returns `{ ok, conversationId, reason }`.
+   */
+  'sessionImport.importCodexSession': async (
+    { filePath, titleHint }: { filePath?: unknown; titleHint?: unknown } = {},
+  ) => {
+    if (typeof filePath !== 'string' || !filePath) throw new Error('filePath required');
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importCodexSession(
+      userId,
+      filePath,
+      typeof titleHint === 'string' ? titleHint : undefined,
+    );
+  },
+
+  /**
+   * Insert a welcome message into an imported conversation. Called by the
+   * renderer when the user opens an imported conversation for the first time.
+   * Returns `{ ok, error? }`.
+   */
+  'chats.insertWelcomeMessage': async (
+    { conversationId }: { conversationId?: unknown } = {},
+  ) => {
+    if (typeof conversationId !== 'string' || !conversationId) {
+      throw new Error('conversationId required');
+    }
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const { insertWelcomeMessage } = await import('../features/chats');
+    return insertWelcomeMessage(userId, conversationId);
   },
 
   /**
