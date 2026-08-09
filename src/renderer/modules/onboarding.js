@@ -717,10 +717,13 @@ async function _csImportClaudeSessions(agentType) {
     const filePath = row.dataset.sessionId;
     try {
       const res = await window.orkas.invoke('sessionImport.importClaudeSession', { filePath });
-      if (res && res.ok && res.conversationId) {
+      // Success = conversation was materialized, even if cognition extraction degraded
+      if (res && res.conversationId) {
         ok++;
         _csImportedConversationIds.push(res.conversationId);
-        cognitions += (res.cognitions && res.cognitions.length) ? res.cognitions.length : 0;
+        if (res.cognitions) {
+          cognitions += (res.cognitions.personal || 0) + (res.cognitions.rule || 0) + (res.cognitions.template || 0);
+        }
         const cb = row.querySelector('input[type="checkbox"]');
         if (cb) cb.checked = false;
         row.classList.add('done');
@@ -772,7 +775,8 @@ async function _csImportCodexSessions(agentType) {
         filePath,
         titleHint: title,
       });
-      if (res && res.ok && res.conversationId) {
+      // Success = conversation was materialized
+      if (res && res.conversationId) {
         ok++;
         _csImportedConversationIds.push(res.conversationId);
         const cb = row.querySelector('input[type="checkbox"]');
@@ -1605,6 +1609,21 @@ async function _csFinish() {
   document.body.classList.remove('cs-onboarding-active');
   const shell = document.getElementById('cs-onboarding');
   if (shell) shell.style.display = 'none';
+
+  // Imported sessions were materialized while the onboarding overlay hid the
+  // main UI. Refresh the sidebar list now so they show up immediately (and,
+  // when a role workspace was chosen, re-render the projects section that
+  // hosts the bound conversations).
+  try {
+    if (typeof window._markConversationListLocallyChanged === 'function') {
+      window._markConversationListLocallyChanged();
+    }
+    if (typeof loadConversations === 'function') {
+      await loadConversations();
+    }
+  } catch (err) {
+    _obLog.warn('failed to refresh conversations after onboarding', { error: (err && err.message) || String(err) });
+  }
 }
 
 function _csBuild() {

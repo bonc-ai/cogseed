@@ -1477,6 +1477,82 @@ function _initEmptyStateScenarios() {
       try { input.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
     });
   });
+  _initContinueWorkChip();
+}
+
+// ── Continue-previous-work picker ─────────────────────────────────────────
+// The chip next to the scenario row opens a small panel listing conversations
+// imported from other agents (flagged `imported:true` in the list cache).
+// Clicking an item opens that conversation — the imported conversation shows
+// the Commander welcome message that summarizes the four ability assets and
+// offers to continue the work.
+function _initContinueWorkChip() {
+  const chip = document.getElementById('continue-work-chip');
+  const panel = document.getElementById('continue-work-panel');
+  if (!chip || !panel || chip.dataset.bound === '1') return;
+  chip.dataset.bound = '1';
+
+  function closePanel() {
+    panel.hidden = true;
+  }
+
+  chip.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!panel.hidden) { closePanel(); return; }
+    const imported = (Array.isArray(conversations) ? conversations : [])
+      .filter((c) => c && c.imported === true)
+      .sort((a, b) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')));
+    const emptyMsg = t('new_chat.quick.continue_work_empty');
+    if (!imported.length) {
+      panel.innerHTML = `
+        <div class="continue-work-panel-head">
+          <span data-ui-icon="play-triangle" data-ui-icon-class="continue-work-panel-icon"></span>
+          <span class="continue-work-panel-title">${escapeHtml(t('new_chat.quick.continue_work_panel'))}</span>
+          <button type="button" class="continue-work-panel-close" data-ui-icon="x" data-ui-icon-class="continue-work-panel-close-icon" aria-label="Close"></button>
+        </div>
+        <div class="continue-work-empty">${escapeHtml(emptyMsg)}</div>`;
+      panel.hidden = false;
+      const closeBtn = panel.querySelector('.continue-work-panel-close');
+      if (closeBtn) closeBtn.addEventListener('click', closePanel);
+      return;
+    }
+    const title = t('new_chat.quick.continue_work_panel');
+    panel.innerHTML = `
+      <div class="continue-work-panel-head">
+        <span data-ui-icon="play-triangle" data-ui-icon-class="continue-work-panel-icon"></span>
+        <span class="continue-work-panel-title">${escapeHtml(title !== 'new_chat.quick.continue_work_panel' ? title : 'Continue previous work')}</span>
+        <button type="button" class="continue-work-panel-close" data-ui-icon="x" data-ui-icon-class="continue-work-panel-close-icon" aria-label="Close"></button>
+      </div>
+      <div class="continue-work-list">
+        ${imported.map((c) => `
+          <button type="button" class="continue-work-item" data-cid="${escapeHtml(c.conversation_id)}">
+            <span class="continue-work-item-dot"></span>
+            <span class="continue-work-item-title">${escapeHtml(c.title || t('chat.new_conv_title'))}</span>
+            <span class="continue-work-item-go" data-ui-icon="chevron-right" data-ui-icon-class="continue-work-item-go-icon"></span>
+          </button>`).join('')}
+      </div>`;
+    panel.hidden = false;
+    const closeBtn = panel.querySelector('.continue-work-panel-close');
+    if (closeBtn) closeBtn.addEventListener('click', closePanel);
+    panel.querySelectorAll('.continue-work-item').forEach((item) => {
+      item.addEventListener('click', () => {
+        const cid = item.dataset.cid;
+        closePanel();
+        if (cid) setView('conversation', cid);
+      });
+    });
+  });
+
+  // Close on outside click or Escape.
+  document.addEventListener('click', (e) => {
+    if (panel.hidden) return;
+    if (!panel.contains(e.target) && e.target !== chip && !chip.contains(e.target)) {
+      closePanel();
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !panel.hidden) closePanel();
+  });
 }
 function onEnterConversationView() {
   if (_messageSelectionState && _messageSelectionState.cid !== currentCid) _exitMessageSelection();
@@ -10011,8 +10087,9 @@ window.ConversationRuntime = {
   recoverPolledMessages: _recoverPolledVisibleMessages,
 };
 
-// Export conversation list invalidation for onboarding/import flows
+// Export conversation list invalidation and refresh for onboarding/import flows
 window._markConversationListLocallyChanged = _markConversationListLocallyChanged;
+window.loadConversations = loadConversations;
 
 const _chatScrollOffsetObservers = new WeakMap();
 
