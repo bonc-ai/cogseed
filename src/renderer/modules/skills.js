@@ -1222,6 +1222,13 @@ function _skillSecurityBadgeHtml(s) {
   // may never open.
   if (sec.rulesDegraded) lines.push(t('skills.security_rules_degraded'));
   if (sec.isolated === false) lines.push(t('skills.security_not_isolated'));
+  // Which rule set stood behind the verdict. Stated because a `local` pass and a
+  // `deep` pass are not equivalent — the local subset is regex-only and passes
+  // payloads the full scanner blocks — so a badge that looked identical for both
+  // would overstate the weaker one. Absent on older receipts, which record no
+  // depth; those simply omit the line rather than claiming either.
+  if (sec.scanner === 'deep') lines.push(t('skills.security_scanner_deep'));
+  else if (sec.scanner === 'local') lines.push(t('skills.security_scanner_local'));
   if (sec.rulesetVersion) {
     lines.push(t('skills.security_ruleset', { version: sec.rulesetVersion }));
   } else if (sec.validatorVersion) {
@@ -1229,8 +1236,12 @@ function _skillSecurityBadgeHtml(s) {
   }
   // A degraded-rules pass gets the risk styling rather than the clean one: the
   // colour is the only part most users read, so it must not say "fine" when the
-  // check behind it was weakened.
-  const tone = sec.rulesDegraded && status === 'verified' ? 'risk' : status;
+  // check behind it was weakened. A `local`-only pass is the same situation by a
+  // different route — the deep scanner never ran, and that subset clears content
+  // the full ruleset blocks — so it is toned down too. `deep` and older receipts
+  // with no recorded depth keep the plain verdict colour.
+  const weakened = sec.rulesDegraded || sec.scanner === 'local';
+  const tone = weakened && status === 'verified' ? 'risk' : status;
   return `<span class="skill-card-shield is-${escapeHtml(tone)}" title="${escapeHtml(lines.join(' · '))}" aria-label="${escapeHtml(lines.join(' · '))}">🛡</span>`;
 }
 

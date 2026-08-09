@@ -193,10 +193,36 @@ export async function reverifySkillDeep(uid: string, skillId: string): Promise<R
   let scanner: 'deep' | 'local' = 'local';
   let topRule = top?.rule;
   let topLevel = top?.level;
+  // Evidence about *how well* the check was done, as opposed to what it
+  // concluded. Recorded so the badge can disclose a weak pass instead of letting
+  // it read as a strong one. Before this, a deep rescan discarded all of it and
+  // the receipt was indistinguishable from a local-only one apart from
+  // `scanner`, so the panel could never show a score, a ruleset version, or the
+  // "not isolated" caveat — the disclosure code existed but had no data.
+  let deepEvidence: {
+    securityScore?: number;
+    scannerVersion?: string;
+    rulesetVersion?: string;
+    isolated?: boolean;
+    rulesDegraded?: boolean;
+  } = {};
 
   try {
     const { scanSkillDir } = await import('./security/sentry-adapter');
     const scan = await scanSkillDir(skillDir, 'thirdparty');
+    // Captured for any completed outcome, including `blocked` and `restricted`:
+    // the disclosure matters most when the verdict is not a clean pass.
+    if (scan.outcome !== 'unknown') {
+      deepEvidence = {
+        ...(typeof scan.score === 'number' ? { securityScore: scan.score } : {}),
+        ...(scan.scannerVersion ? { scannerVersion: scan.scannerVersion } : {}),
+        ...(scan.rulesetVersion ? { rulesetVersion: scan.rulesetVersion } : {}),
+        isolated: scan.isolated,
+        // `rulesSource` naming a builtin fallback means the versioned ruleset did
+        // not load, which materially narrows coverage — the badge must say so.
+        ...(scan.rulesDegraded ? { rulesDegraded: true } : {}),
+      };
+    }
     if (scan.outcome === 'blocked') {
       decision = 'blocked';
       scanner = 'deep';
@@ -227,6 +253,7 @@ export async function reverifySkillDeep(uid: string, skillId: string): Promise<R
     decision,
     violationCount: report.violations.length,
     scanner,
+    ...deepEvidence,
     ...(topRule ? { topRule } : {}),
     ...(topLevel ? { topLevel } : {}),
   });

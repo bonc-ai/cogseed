@@ -347,6 +347,30 @@ describe('skill trust › deep re-verification', () => {
     expect(deep.receipt?.scanner).toBe('deep');
   }, 200_000);
 
+  // The panel's disclosure lines (score, ruleset, isolation, depth) only work if
+  // the deep scan's own evidence both gets written AND read back. Both halves
+  // were broken independently: the rescan discarded the scan result's fields, and
+  // `readReceipt` rebuilds from an allowlist that omitted them — so the badge
+  // rendered a bare verdict no matter what the scanner reported.
+  it('persists the deep scan evidence and reads it back', async () => {
+    mkSkill('discloses', CLEAN);
+
+    const deep = await reverifySkillDeep(UID, 'discloses');
+
+    // Written by the rescan.
+    expect(deep.receipt?.scanner).toBe('deep');
+    expect(typeof deep.receipt?.securityScore).toBe('number');
+    expect(deep.receipt?.rulesetVersion).toBeTruthy();
+    expect(typeof deep.receipt?.isolated).toBe('boolean');
+
+    // And survives the read path the panel actually goes through.
+    const back = readReceipt(UID, 'discloses');
+    expect(back?.securityScore).toBe(deep.receipt?.securityScore);
+    expect(back?.rulesetVersion).toBe(deep.receipt?.rulesetVersion);
+    expect(back?.scannerVersion).toBe(deep.receipt?.scannerVersion);
+    expect(back?.isolated).toBe(deep.receipt?.isolated);
+  }, 200_000);
+
   // The receipt has to actually be reused, or every prompt build re-spawns a
   // Python process per skill. `scanner` must therefore survive a write/read
   // round-trip — it once did not, because `readReceipt` rebuilds the object from

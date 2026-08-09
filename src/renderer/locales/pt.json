@@ -2541,6 +2541,8 @@
   "skills.security_score": "Pontuação {n}/100",
   "skills.security_ruleset": "Conjunto de regras {version}",
   "skills.security_rules_degraded": "Regras não carregadas por completo; cobertura menor",
+  "skills.security_scanner_deep": "Verificação profunda (conjunto completo)",
+  "skills.security_scanner_local": "Apenas regras locais — cobertura menor",
   "skills.security_not_isolated": "Verificação não isolada; menor confiança",
   "marketplace.security_blocked_title": "Instalação bloqueada",
   "marketplace.security_blocked_body": "A verificação de segurança não passou, portanto \"{name}\" não foi instalado. Suas skills atuais não foram alteradas.",

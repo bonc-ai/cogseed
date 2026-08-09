@@ -2541,6 +2541,8 @@
   "skills.security_score": "スコア {n}/100",
   "skills.security_ruleset": "ルールセット {version}",
   "skills.security_rules_degraded": "ルールセットが完全に読み込まれず、検出範囲が狭い状態です",
+  "skills.security_scanner_deep": "ディープスキャン（完全ルールセット）",
+  "skills.security_scanner_local": "ローカルルールのみ — カバレッジは弱め",
   "skills.security_not_isolated": "非隔離スキャンのため信頼度は低めです",
   "marketplace.security_blocked_title": "インストールを中止しました",
   "marketplace.security_blocked_body": "セキュリティ検査に合格しなかったため、「{name}」はインストールされていません。既存のスキルは変更されていません。",

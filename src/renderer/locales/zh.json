@@ -2686,6 +2686,8 @@
   "skills.security_score": "评分 {n}/100",
   "skills.security_ruleset": "规则包 {version}",
   "skills.security_rules_degraded": "规则库未完整加载，检测覆盖较弱",
+  "skills.security_scanner_deep": "深度扫描（完整规则集）",
+  "skills.security_scanner_local": "仅本地规则，覆盖较弱",
   "skills.security_not_isolated": "非隔离扫描，可信度较低",
   "marketplace.security_blocked_title": "已阻止安装",
   "marketplace.security_blocked_body": "安全检查未通过，「{name}」未被安装。你的现有技能未发生变化。",

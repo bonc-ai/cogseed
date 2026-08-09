@@ -2686,6 +2686,8 @@
   "skills.security_score": "Score {n}/100",
   "skills.security_ruleset": "Ruleset {version}",
   "skills.security_rules_degraded": "Ruleset not fully loaded; weaker coverage",
+  "skills.security_scanner_deep": "Deep scan (full ruleset)",
+  "skills.security_scanner_local": "Local rules only — weaker coverage",
   "skills.security_not_isolated": "Not isolated; lower confidence",
   "marketplace.security_blocked_title": "Installation blocked",
   "marketplace.security_blocked_body": "The security check did not pass, so \"{name}\" was not installed. Your existing skills are unchanged.",

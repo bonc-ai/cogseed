@@ -185,6 +185,16 @@ export interface SkillListing {
      * placeholder the spec forbids.
      */
     rulesDegraded?: boolean;
+    /**
+     * Which rule set produced the verdict: `deep` is the full scanner, `local`
+     * the regex-only subset that still runs when the deep scanner is
+     * unavailable.
+     *
+     * Surfaced because the two are not interchangeable — the local subset passes
+     * payloads the deep scanner blocks — and a badge that reads the same for both
+     * would tell the user a `local` pass is as strong as a `deep` one.
+     */
+    scanner?: 'deep' | 'local';
   };
 }
 
@@ -878,6 +888,11 @@ async function _overlaySkillSecurity(list: SkillListing[]): Promise<SkillListing
         ...(receipt.rulesetVersion ? { rulesetVersion: receipt.rulesetVersion } : {}),
         ...(typeof receipt.isolated === 'boolean' ? { isolated: receipt.isolated } : {}),
         ...(receipt.rulesDegraded ? { rulesDegraded: true } : {}),
+        // Only forwarded when the receipt actually records it. A missing value
+        // must stay missing rather than defaulting to `local`: an old receipt is
+        // of unknown depth, and guessing the weaker value would put a "coverage
+        // is weaker" caveat on skills that may well have had a full scan.
+        ...(receipt.scanner ? { scanner: receipt.scanner } : {}),
       }
       : {};
     if (reason) {

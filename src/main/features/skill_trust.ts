@@ -178,6 +178,21 @@ export function readReceipt(uid: string, skillId: string): SecurityReceipt | nul
     // single check. Anything other than the literal 'deep' is treated as local —
     // receipts predating this field then read as the weaker, conservative value.
     ...(raw.scanner === 'deep' || raw.scanner === 'local' ? { scanner: raw.scanner } : {}),
+    // Deep-scan disclosures. Same reason: this function rebuilds the object from
+    // an allowlist, so a field absent here is invisible to every caller no matter
+    // what was written. The skills panel reads all five to state how strong the
+    // check was — a score, which ruleset ran, and whether the run was isolated —
+    // and omitting them silently downgraded every badge to a bare verdict.
+    ...(typeof raw.securityScore === 'number' && Number.isFinite(raw.securityScore)
+      ? { securityScore: raw.securityScore } : {}),
+    ...(typeof raw.scannerVersion === 'string' && raw.scannerVersion
+      ? { scannerVersion: raw.scannerVersion } : {}),
+    ...(typeof raw.rulesetVersion === 'string' && raw.rulesetVersion
+      ? { rulesetVersion: raw.rulesetVersion } : {}),
+    ...(typeof raw.isolated === 'boolean' ? { isolated: raw.isolated } : {}),
+    // Only `true` is carried: absent and false both mean "rules were fine", and
+    // a malformed value must not read as a degradation that did not happen.
+    ...(raw.rulesDegraded === true ? { rulesDegraded: true } : {}),
     scannedAt: String(raw.scannedAt || ''),
   };
 }
