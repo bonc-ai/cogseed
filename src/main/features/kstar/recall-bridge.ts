@@ -18,6 +18,7 @@ export async function saveKstarCandidateProposals(
       suggestedType: proposal.suggestedType,
       suggestedScope: proposal.suggestedScope,
       sourceRefs: proposal.sourceRefs,
+      ...(proposal.learningSignal ? { learningSignal: proposal.learningSignal } : {}),
     }));
   }
   return candidates;

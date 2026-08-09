@@ -905,7 +905,9 @@ const ConversationInfo = (() => {
     const stepLabel = stepCount
       ? _label('conversation_info.collaboration.step_count', '{count} steps', { count: stepCount })
       : '';
-    return `<section class="conversation-info-collaboration-section conversation-info-collaboration-task-overview"><div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.collaboration.section_task_overview', 'Task Overview'))}</div><div class="conversation-info-collaboration-objective">${escapeHtml(objective)}</div><div class="conversation-info-collaboration-meta">${escapeHtml(_label(`conversation_info.collaboration.status.${status}`, fallbackStatus))}${phase ? ` · ${escapeHtml(phase)}` : ''}${stepLabel ? ` · ${escapeHtml(stepLabel)}` : ''}</div></section>`;
+    const lifecycleStatus = runtime && runtime.kstarLifecycle && runtime.kstarLifecycle.status ? String(runtime.kstarLifecycle.status) : '';
+    const hasKstarPreload = lifecycleStatus === 'preload_preview' || lifecycleStatus === 'authorized';
+    return `<section class="conversation-info-collaboration-section conversation-info-collaboration-task-overview"><div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.collaboration.section_task_overview', 'Task Overview'))}</div><div class="conversation-info-collaboration-objective">${escapeHtml(objective)}</div><div class="conversation-info-collaboration-meta">${escapeHtml(_label(`conversation_info.collaboration.status.${status}`, fallbackStatus))}${phase ? ` · ${escapeHtml(phase)}` : ''}${stepLabel ? ` · ${escapeHtml(stepLabel)}` : ''}${hasKstarPreload ? ` · ${escapeHtml(_label('conversation_info.collaboration.task_preview_label', 'Preloaded, not active yet'))}` : ''}</div></section>`;
   }
 
   function _renderCollaborationAgentActivitySection() {

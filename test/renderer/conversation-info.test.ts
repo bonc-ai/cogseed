@@ -216,6 +216,51 @@ describe('ConversationInfo Collaboration tab shell', () => {
     expect(result.html).toContain('Running');
   });
 
+  it('renders preload state from the KSTAR lifecycle snapshot rather than history heuristics', async () => {
+    const result = await renderFilesResult({
+      activeTab: 'collaboration',
+      history: [{
+        from: 'commander',
+        kstarDecision: {
+          required: true,
+          expectation: {
+            task: '审查 OAuth 登录实现',
+            action_hat: '检查 callback 与 token exchange',
+            result_hat: '输出带文件行号的风险清单',
+          },
+        },
+      }],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      attachments: [],
+      actors: [],
+      runtime: { processing: false, kstarLifecycle: { status: 'preload_preview' } },
+      collaboration: { objective: 'Audit OAuth', status: 'running', phase: 'review', steps: [] },
+    });
+
+    expect(result.html).toContain('Audit OAuth');
+    expect(result.html).not.toContain('conversation-info-collaboration-prediction');
+    expect(result.html).not.toContain('预测 R̂');
+    expect(result.html).toContain('Preloaded, not active yet');
+    expect(result.html).not.toContain('输出带文件行号的风险清单');
+  });
+
+  it('does not infer KSTAR preload from history when lifecycle is absent', async () => {
+    const result = await renderFilesResult({
+      activeTab: 'collaboration',
+      history: [{
+        from: 'commander',
+        kstarDecision: { required: true, expectation: { task: '审查 OAuth 登录实现', result_hat: '输出风险清单' } },
+      }],
+      files: { root: '/tmp/workspace', rootExists: true, truncated: false, count: 0, items: [] },
+      attachments: [],
+      actors: [],
+      runtime: { processing: false },
+      collaboration: { objective: 'Audit OAuth', status: 'running', phase: 'review', steps: [] },
+    });
+
+    expect(result.html).not.toContain('Preloaded, not active yet');
+  });
+
   it('renders Agent Activity as a section inside the collaboration drawer', async () => {
     const result = await renderFilesResult({
       activeTab: 'collaboration',

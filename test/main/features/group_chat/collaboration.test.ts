@@ -3503,6 +3503,31 @@ describe("group_chat collaboration › runtime snapshot", () => {
 });
 
 describe("group_chat collaboration › runtime facade", () => {
+  it("includes the KSTAR lifecycle snapshot in runtimeStatus", async () => {
+    const groupChat = await import("../../../../src/main/features/group_chat");
+    const store = await import("../../../../src/main/features/kstar/requirement-store");
+    const task = store.createKstarTaskRecord(TEST_UID, { conversationId: TEST_CID, title: "Runtime KSTAR lifecycle" });
+    const requirement = store.createKstarRequirementRecord(TEST_UID, {
+      taskId: task.id,
+      conversationId: TEST_CID,
+      userMessageIds: ["msg-kstar"],
+      title: "Runtime KSTAR lifecycle",
+      goalText: "Expose KSTAR lifecycle through runtime status",
+    });
+    await store.replaceKstarTask(TEST_UID, { ...task, requirementIds: [requirement.id], currentRequirementId: requirement.id });
+    await store.replaceKstarRequirement(TEST_UID, requirement);
+    const state = store.createInitialConversationTaskState(TEST_UID, TEST_CID);
+    await store.writeConversationTaskState(TEST_UID, { ...state, currentTaskId: task.id, currentRequirementId: requirement.id });
+
+    const runtime = await groupChat.runtimeStatus(TEST_UID, TEST_CID);
+
+    expect(runtime.kstarLifecycle).toMatchObject({
+      status: "draft",
+      task: { id: task.id },
+      requirement: { id: requirement.id },
+    });
+  });
+
   it("includes the active collaboration snapshot in runtimeStatus", async () => {
     const c =
       await import("../../../../src/main/features/group_chat/collaboration");

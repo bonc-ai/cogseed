@@ -8336,9 +8336,9 @@ body.model-not-configured .main-content { flex-direction: column; }
 .chat-reference-bundle {
   margin: 0 0 8px;
   padding: 7px 10px 8px;
-  border-left: 3px solid rgba(14, 159, 110, 0.45);
+  border-left: 3px solid rgba(37, 99, 235, 0.45);
   border-radius: 4px;
-  background: rgba(14, 159, 110, 0.04);
+  background: rgba(37, 99, 235, 0.04);
   overflow: hidden;
 }
 .chat-reference-title {

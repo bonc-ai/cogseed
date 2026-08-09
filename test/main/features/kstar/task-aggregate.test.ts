@@ -1,0 +1,187 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import type { RecallCandidateRecord } from '../../../../src/main/features/recall/candidate-service';
+
+let tmpDir: string;
+let previousWorkspaceRoot: string | undefined;
+
+beforeEach(() => {
+  vi.resetModules();
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-kstar-task-aggregate-'));
+  previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
+  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+});
+
+afterEach(() => {
+  if (previousWorkspaceRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
+  else process.env.ORKAS_WORKSPACE_ROOT = previousWorkspaceRoot;
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+async function seedClosedTask() {
+  const store = await import('../../../../src/main/features/kstar/requirement-store');
+  const closure = await import('../../../../src/main/features/kstar/requirement-closure');
+  const task = store.createKstarTaskRecord('user-a', { conversationId: 'cid-a', title: 'OAuth review task' });
+  const requirement = store.createKstarRequirementRecord('user-a', {
+    taskId: task.id, conversationId: 'cid-a', userMessageIds: ['msg-a'],
+    title: 'OAuth callback review', goalText: 'Review OAuth callback and refresh token',
+  });
+  await store.replaceKstarTask('user-a', { ...task, requirementIds: [requirement.id], currentRequirementId: requirement.id, status: 'closing', closeReason: 'user_complete' });
+  await store.replaceKstarRequirement('user-a', { ...requirement, status: 'waiting_review' });
+  const closed = await closure.closeKstarRequirement('user-a', {
+    requirementId: requirement.id,
+    userFeedback: { verdict: 'partial', text: '下次必须覆盖 refresh token 的跨账号复用检查' },
+  });
+  const state = store.createInitialConversationTaskState('user-a', 'cid-a');
+  const readyState = {
+    ...state,
+    currentTaskId: task.id,
+    currentRequirementId: requirement.id,
+    requirementJustClosed: requirement.id,
+    taskComplete: true,
+  };
+  await store.writeConversationTaskState('user-a', readyState);
+  return { store, task, requirement: closed, state: readyState };
+}
+
+async function writeCompletedEpisode(store: Awaited<ReturnType<typeof import('../../../../src/main/features/kstar/requirement-store')>>, episodeId: string) {
+  const episodes = await import('../../../../src/main/features/kstar/episode-store');
+  await episodes.writeKstarEpisode('user-a', {
+    schemaVersion: 1,
+    ownerId: 'user-a',
+    id: episodeId,
+    sessionId: 'gconv-cid-auto-signal',
+    taskRunId: 'task-auto-signal',
+    k: { memoryRefs: [], contextRefs: [], abilityAssetRefs: [] },
+    s: {},
+    t: { userGoal: 'Produce the requested deliverable', constraints: [] },
+    a: { toolCalls: [{ name: 'write_file', status: 'ok' }], agentActions: [] },
+    r: { status: 'completed', finalText: 'Produced the requested deliverable.', producedFiles: ['deliverable.md'] },
+    evidenceRefs: [{ kind: 'execution', id: 'task-auto-signal' }],
+    createdAt: '2026-08-09T00:00:00.000Z',
+    updatedAt: '2026-08-09T00:01:00.000Z',
+  });
+}
+
+const fakeCandidate = (id: string): RecallCandidateRecord => ({
+  schemaVersion: 2, ownerId: 'user-a', id, taxonomyVersion: 2, status: 'pending',
+  judgment: 'candidate', suggestedType: 'personal', suggestedScope: 'general', sourceRefs: [],
+  createdAt: '2026-08-08T00:00:00.000Z', updatedAt: '2026-08-08T00:00:00.000Z',
+});
+
+describe('KSTAR task aggregation', () => {
+  it('consumes requirementJustClosed before aggregating and bridges one deduped candidate', async () => {
+    const { store, task, requirement } = await seedClosedTask();
+    const aggregate = await import('../../../../src/main/features/kstar/task-aggregate');
+    let bridgeCalls = 0;
+    const result = await aggregate.drainKstarTaskState('user-a', 'cid-a', {
+      candidateBridge: async (_userId, proposals) => {
+        bridgeCalls += 1;
+        expect(proposals).toHaveLength(1);
+        return [fakeCandidate('cand-a')];
+      },
+    });
+
+    expect(result).toMatchObject({ task: { id: task.id, status: 'closed' }, candidates: [fakeCandidate('cand-a')] });
+    expect(result?.closedRequirements[0]).toMatchObject({ id: requirement.id, status: 'closed' });
+    expect(bridgeCalls).toBe(1);
+    const cleared = await store.readConversationTaskState('user-a', 'cid-a');
+    expect(cleared?.taskComplete).toBe(false);
+    expect(cleared?.requirementJustClosed).toBeUndefined();
+    expect(cleared?.currentTaskId).toBeUndefined();
+    expect(cleared?.currentRequirementId).toBeUndefined();
+    await expect(store.readKstarTask('user-a', task.id)).resolves.toMatchObject({ status: 'closed', candidateRunId: `kstc-${task.id}` });
+
+    await expect(aggregate.drainKstarTaskState('user-a', 'cid-a', { candidateBridge: async () => [fakeCandidate('unexpected')] })).resolves.toBeNull();
+    expect(bridgeCalls).toBe(1);
+  });
+
+
+
+  it('keeps the task lifecycle attached to the existing umbrella records rather than a separate lifecycle tree', async () => {
+    const { store, task, requirement } = await seedClosedTask();
+    const state = await store.readConversationTaskState('user-a', 'cid-a');
+    expect(state).toMatchObject({ currentTaskId: task.id, currentRequirementId: requirement.id, taskComplete: true });
+    expect(await store.readKstarTask('user-a', task.id)).toMatchObject({ id: task.id, requirementIds: [requirement.id], currentRequirementId: requirement.id, status: 'closing' });
+    expect(await store.readKstarRequirement('user-a', requirement.id)).toMatchObject({ id: requirement.id, taskId: task.id, status: 'closed' });
+  });
+
+
+
+  it('bridges a provisional candidate when completion evidence exists without user feedback', async () => {
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    const aggregate = await import('../../../../src/main/features/kstar/task-aggregate');
+    const task = store.createKstarTaskRecord('user-a', { conversationId: 'cid-auto-signal', title: 'Auto signal task' });
+    const requirement = store.createKstarRequirementRecord('user-a', {
+      taskId: task.id, conversationId: 'cid-auto-signal', userMessageIds: ['msg-auto'], title: 'Auto signal task', goalText: 'Produce the requested deliverable',
+    });
+    requirement.episodeIds = ['kse-auto-signal'];
+    await writeCompletedEpisode(store, 'kse-auto-signal');
+    await store.replaceKstarTask('user-a', { ...task, requirementIds: [requirement.id], currentRequirementId: requirement.id, status: 'closing', closeReason: 'user_complete' });
+    await store.replaceKstarRequirement('user-a', { ...requirement, status: 'waiting_review' });
+    const state = store.createInitialConversationTaskState('user-a', 'cid-auto-signal');
+    await store.writeConversationTaskState('user-a', { ...state, currentTaskId: task.id, currentRequirementId: requirement.id, requirementJustClosed: requirement.id, taskComplete: true });
+
+    const result = await aggregate.drainKstarTaskState('user-a', 'cid-auto-signal', {
+      candidateBridge: async (_userId, proposals) => {
+        expect(proposals).toHaveLength(1);
+        expect(proposals[0].learningSignal?.deltaR).toBe(0);
+        return [fakeCandidate('cand-auto-signal')];
+      },
+    });
+
+    expect(result?.proposals).toHaveLength(1);
+    expect(result?.candidates).toEqual([fakeCandidate('cand-auto-signal')]);
+  });
+
+  it('does not bridge requirement candidates when closed review has no learning signal', async () => {
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    const closure = await import('../../../../src/main/features/kstar/requirement-closure');
+    const aggregate = await import('../../../../src/main/features/kstar/task-aggregate');
+    const task = store.createKstarTaskRecord('user-a', { conversationId: 'cid-nosignal', title: 'Check wording' });
+    const requirement = store.createKstarRequirementRecord('user-a', {
+      taskId: task.id, conversationId: 'cid-nosignal', userMessageIds: ['msg-a'], title: 'Check wording', goalText: 'Check wording',
+    });
+    await store.replaceKstarTask('user-a', { ...task, requirementIds: [requirement.id], currentRequirementId: requirement.id, status: 'closing', closeReason: 'user_complete' });
+    await store.replaceKstarRequirement('user-a', { ...requirement, status: 'waiting_review' });
+    const closed = await closure.closeKstarRequirement('user-a', { requirementId: requirement.id, userFeedback: { verdict: 'skip', text: 'No reusable lesson.' } });
+    const state = store.createInitialConversationTaskState('user-a', 'cid-nosignal');
+    await store.writeConversationTaskState('user-a', { ...state, currentTaskId: task.id, currentRequirementId: requirement.id, requirementJustClosed: requirement.id, taskComplete: true });
+
+    let bridgeCalls = 0;
+    const result = await aggregate.drainKstarTaskState('user-a', 'cid-nosignal', { candidateBridge: async () => { bridgeCalls += 1; return [fakeCandidate('unexpected')]; } });
+
+    expect(closed.aar?.candidateSeed).toBeUndefined();
+    expect(result?.proposals).toEqual([]);
+    expect(result?.candidates).toEqual([]);
+    expect(bridgeCalls).toBe(0);
+  });
+
+  it('creates the next task and requirement after closing a topic switch', async () => {
+    const { store, task, requirement, state } = await seedClosedTask();
+    await store.replaceConversationTaskState('user-a', {
+      ...state,
+      pendingTaskStart: { userMessageId: 'msg-switch', text: '设计发票导出', reason: 'topic_switch' },
+    });
+    vi.resetModules();
+    const aggregate = await import('../../../../src/main/features/kstar/task-aggregate');
+    const resumedStore = await import('../../../../src/main/features/kstar/requirement-store');
+
+    const result = await aggregate.drainKstarTaskState('user-a', 'cid-a', { candidateBridge: async () => [] });
+    const nextState = await resumedStore.readConversationTaskState('user-a', 'cid-a');
+
+    expect(result?.task).toMatchObject({ id: task.id, status: 'closed' });
+    expect(await resumedStore.readKstarTask('user-a', task.id)).toMatchObject({ status: 'closed', closeReason: 'user_complete' });
+    expect(await resumedStore.readKstarRequirement('user-a', requirement.id)).toMatchObject({ status: 'closed' });
+    expect(nextState?.taskComplete).toBe(false);
+    expect(nextState?.pendingTaskStart).toBeUndefined();
+    expect(nextState?.currentTaskId).toMatch(/^kst-/);
+    expect(nextState?.currentRequirementId).toMatch(/^ksreq-/);
+    expect(nextState?.currentTaskId).not.toBe(task.id);
+    expect(await resumedStore.readKstarRequirement('user-a', nextState!.currentRequirementId!)).toMatchObject({
+      taskId: nextState!.currentTaskId, goalText: '设计发票导出', userMessageIds: ['msg-switch'], status: 'open',
+    });
+  });
+});

@@ -176,6 +176,7 @@ import * as messagingFeature from './features/messaging';
 import * as taskNotifications from './features/task_notifications';
 import { recoverRecallCaptures, startRecallCaptureOrchestrator } from './features/recall/capture-service';
 import { startGroupKstarClosure } from './features/kstar/task-closure';
+import { startGroupChatRecallTerminalProofs } from './features/group_chat/recall-terminal-proof';
 import * as notificationPermissions from './features/notification_permissions';
 import {
   consumeColdLaunchConnectorCallback,
@@ -1139,6 +1140,8 @@ if (!gotLock) {
     app.once('before-quit', stopRecallCapture);
     const stopGroupKstarClosure = startGroupKstarClosure();
     app.once('before-quit', stopGroupKstarClosure);
+    const stopGroupChatRecallTerminalProofs = startGroupChatRecallTerminalProofs();
+    app.once('before-quit', stopGroupChatRecallTerminalProofs);
     clientConfigFeature.clientConfig.subscribeAll((keys) => {
       ipc.broadcastToRenderer('client-config:changed', { keys });
     });

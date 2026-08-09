@@ -1,9 +1,9 @@
 #!/bin/bash
-# Restart the messaging Mate Agent runtime bound to this worktree.
+# Restart the Mate Agent runtime bound to this worktree.
 #
-# The messaging worktree is locked to ORKAS_RUNTIME_VARIANT=messaging and is
+# This worktree is locked to ORKAS_RUNTIME_VARIANT=mate and is
 # launched with `./run.sh` (macOS: `open -W -n` on the variant app bundle).
-# This script stops only processes of THIS worktree's messaging runtime (other
+# This script stops only processes of THIS worktree's mate runtime (other
 # variants such as expense/cognition are untouched), then relaunches via
 # ./run.sh in the background so the caller's shell is not blocked.
 #
@@ -11,12 +11,12 @@
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-VARIANT="messaging"
+VARIANT="mate"
 RUN_LOG="/tmp/mate-agent-${VARIANT}-run.log"
 DATA_LOGS="$HOME/.orkas/runtime-variants/${VARIANT}/data/logs"
 
 # The main process and the `open -W -n` wrapper both carry
-# `orkas-runtime-variant=messaging`; helper processes only carry the app path.
+# `orkas-runtime-variant=mate`; helper processes only carry the app path.
 variant_pids() {
   pgrep -f "orkas-runtime-variant=${VARIANT}" 2>/dev/null || true
 }

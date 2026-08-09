@@ -23,6 +23,9 @@ import type { KstarAdapter } from '../../../../src/main/features/p3394/kstar-ada
 import type { EvaluateWakeInput } from '../../../../src/main/features/p3394/types';
 
 vi.mock('../../../../src/main/features/p3394/kstar-factory');
+vi.mock('../../../../src/main/features/kstar/requirement-state', () => ({
+  bindKstarRequirementWakeRequest: vi.fn(async () => ({ id: 'requirement-e2e' })),
+}));
 vi.mock('../../../../src/main/features/group_chat/bus', () => ({
   enqueue: vi.fn(async (params: unknown) => ({
     to: [(params as { forceTo?: string[] }).forceTo?.[0] || 'agent'],
@@ -40,6 +43,19 @@ vi.mock('../../../../src/main/features/agents', () => ({
 vi.mock('../../../../src/main/features/component_enabled', () => ({
   isAgentEnabled: vi.fn(() => true),
 }));
+
+function confirmationSnapshot(wakeRequestId: string, conversationId = 'test-conv-e2e') {
+  return {
+    projection_id: 'projection-e2e',
+    wake_request_id: wakeRequestId,
+    projection_status: 'confirmed' as const,
+    confirmed_at: '2026-08-09T00:00:00.000Z',
+    asset_ids: [],
+    asset_versions: {},
+    task_run_id: 'task-e2e',
+    conversation_id: conversationId,
+  };
+}
 
 describe('kstar-bus-wake-e2e', () => {
   const userId = 'test-user-e2e';
@@ -112,6 +128,7 @@ describe('kstar-bus-wake-e2e', () => {
       const decisionResult = await decideWakeRequest(userId, {
         requestId: wakerequest.id,
         decision: 'approve',
+        assetConfirmationSnapshot: confirmationSnapshot(wakerequest.id),
       });
 
       expect(decisionResult.ok).toBe(true);
@@ -248,6 +265,7 @@ describe('kstar-bus-wake-e2e', () => {
       const decisionResult = await decideWakeRequest(userId, {
         requestId: wakeResult.request.id,
         decision: 'approve',
+        assetConfirmationSnapshot: confirmationSnapshot(wakeResult.request.id),
       });
 
       expect(decisionResult.ok).toBe(true);
@@ -310,6 +328,7 @@ describe('kstar-bus-wake-e2e', () => {
       await decideWakeRequest(userId, {
         requestId: wakeResult.request.id,
         decision: 'approve',
+        assetConfirmationSnapshot: confirmationSnapshot(wakeResult.request.id),
       });
 
       // Record contribution evidence

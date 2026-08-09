@@ -1,4 +1,4 @@
-export const RECALL_SCHEMA_VERSION = 1;
+export const RECALL_SCHEMA_VERSION = 2;
 
 export interface RecallJsonRecord {
   schemaVersion: number;

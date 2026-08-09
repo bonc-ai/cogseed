@@ -2983,5 +2983,14 @@
   "messaging.owner_save": "Salvar proprietário",
   "messaging.owner_update": "Atualizar proprietário",
   "messaging.owner_clear": "Limpar proprietário",
-  "messaging.owner_bind_pending": "Aguardando vínculo: envie qualquer mensagem para este bot no Feishu/Lark (chat direto) para vincular o remetente como destinatário"
+  "messaging.owner_bind_pending": "Aguardando vínculo: envie qualquer mensagem para este bot no Feishu/Lark (chat direto) para vincular o remetente como destinatário",
+  "kstar.review.card_title": "Verificação do resultado",
+  "kstar.review.expected": "Esperado",
+  "kstar.review.actual": "Real",
+  "kstar.review.met": "Atendeu totalmente",
+  "kstar.review.partial": "Atendeu parcialmente",
+  "kstar.review.not_met": "Não atendeu",
+  "kstar.review.skip": "Pular",
+  "kstar.review.confirmed": "Feedback registrado",
+  "recall.projection.confirm_assets": "Confirmar ativos pré-carregados"
 }

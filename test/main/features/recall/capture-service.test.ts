@@ -919,6 +919,8 @@ describe('Recall conversation capture', () => {
   });
 
   it('moves a missed nightly task to the next window when catch-up is disabled', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-01T10:00:00.000Z'));
     const settings = await import('../../../../src/main/features/recall/capture-settings');
     await settings.updateRecallCaptureSettings('capture-user', {
       executionPolicy: 'nightly',

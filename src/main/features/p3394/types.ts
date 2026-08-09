@@ -12,6 +12,16 @@ export type WakeSource =
 export type WakeRequestStatus =
   "pending" | "approved" | "rejected" | "executed" | "expired";
 export type WakeApprovalStatus = "active" | "revoked" | "expired";
+export interface WakeAssetConfirmationSnapshot {
+  projection_id: string;
+  wake_request_id: string;
+  projection_status: 'confirmed';
+  confirmed_at: string;
+  asset_ids: string[];
+  asset_versions: Record<string, string>;
+  task_run_id: string;
+  conversation_id: string;
+}
 
 export interface WakeDispatchPayload {
   text: string;
@@ -50,6 +60,7 @@ export interface AgentWakeRequest {
   workflow_resume_token?: string;
   pending_cleanup_step_ids?: string[];
   workflow_transition?: "rejecting" | "approving";
+  asset_confirmation_snapshot?: WakeAssetConfirmationSnapshot;
   /** Commander-selected KSTAR evidence contract restored after approval. */
   kstar_decision?: KStarDecisionRecord;
 }
@@ -68,6 +79,7 @@ export interface WakeApproval {
   created_at: string;
   updated_at: string;
   expires_at?: string;
+  asset_confirmation_snapshot?: WakeAssetConfirmationSnapshot;
 }
 
 export interface WakeState {

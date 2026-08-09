@@ -23,17 +23,16 @@
 import type { AgentTool, HistoryResource } from "#core-agent";
 
 import { createLogger } from "../../logger";
-import { logErrorRef, logPathRef } from "../../util/log-redact";
+import { logErrorRef, logPathRef, maskId } from "../../util/log-redact";
 import { dispatchSlots } from "../../util/locks";
+import {
+  canonicalizePath,
+  isFileSystemCaseSensitive,
+  isPathAllowed,
+} from "../../util/path-sandbox";
 import { appendJsonlAtomic, genId12, nowIso, safeId } from "../../storage";
 import * as path from "node:path";
 import * as fs from "node:fs";
-import {
-  assertAgentChatDispatchable,
-  getAgentDispatchPolicy,
-  isAgentChatDispatchable,
-} from "../agents";
-import { assertCanonicalExpenseWorkbenchAgent } from "../expense_workbench/canonical-agent";
 
 import {
   Actor,
@@ -54,12 +53,18 @@ import {
   touchActivity,
   setActiveRecipient,
   setOrchestrationLedger,
+  commitHandoffState,
+  rollbackHandoffState,
   markOrchestrationInterrupted,
   takeOrchestrationLedgerForAgent,
   takeOrchestrationLedgerForForm,
   clearOrchestrationLedger,
 } from "./state";
-import type { StateFile } from "./state";
+import type {
+  HandoffStateRollbackToken,
+  OrchestrationLedgerInput,
+  StateFile,
+} from "./state";
 import { maxToolLoopsForActorKind } from "./actor-budgets";
 import {
   GroupMessage,
@@ -77,20 +82,30 @@ import {
   buildSharedContextSummaryFromContext,
   extractContextPatchBlocks,
   readActiveCollaborationState,
+  readActiveWorkflowRun,
   readCollaborationSnapshot,
   updateActiveContextConflictStatusForActor,
   resolveActiveContextConflictForActor,
   prepareNestedDispatchStep,
+  prepareWorkflowStepForRetry,
+  checkPreparedNestedDispatchStepDependencies,
+  beginWorkflowStepAttempt,
+  finishWorkflowStepAttempt,
   startPreparedNestedDispatchStep,
   finishNestedDispatchStep,
+  settleNestedDispatchAbort,
+  settleNestedDispatchInfrastructureFailure,
+  settleHandoffFinalizationFailure,
   type PreparedNestedDispatchStep,
+  type WorkflowAttemptFailureCode,
+  type WorkflowStep,
+  type FinishWorkflowStepAttemptInput,
   type ContextConflictType,
 } from "./collaboration";
 import {
   resolveRecipients,
   parseMentions,
   buildMention,
-  extractExpenseCardFromFinal,
   extractFormFromFinal,
   computeFormId,
   ChatFormPayload,
@@ -101,8 +116,6 @@ import {
   extractSkillContainers,
   decodeSubmission,
   type PlanInteractionStatus,
-  type ExpenseSetupCardPayload,
-  type ExpenseSubmitCardPayload,
 } from "./router";
 import * as skillsFeat from "../skills";
 import * as autoTasksFeat from "../auto_tasks";
@@ -120,6 +133,23 @@ import {
 import * as agentsFeat from "../agents";
 import * as commanderRuntimeStats from "../commander_runtime_stats";
 import type { AgentRunStatus } from "../agent_runtime_stats";
+import {
+  activityFromLocalEvent,
+  activityFromProcessEvent,
+  probeProcessLiveness,
+  startTurnLeaseMonitor,
+  type TurnLeaseMonitor,
+} from "./coordinator_runtime";
+import type { CoordinatorActivityEvent } from "./coordinator_activity";
+import {
+  nextRecoveryAction,
+  selectFallbackAgent,
+} from "./coordinator_recovery";
+import {
+  CoordinatorAccessAdmission,
+  type CoordinatorAccessRequest,
+} from "./coordinator_admission";
+import { buildRetryResumeModelText } from "./retry_resume";
 import { isAgentEnabled, readDisabledSets } from "../component_enabled";
 import { finalizeProducedFile } from "../produced_output_hooks";
 import { selectVisibleProducedFiles } from "../produced_files";
@@ -167,6 +197,7 @@ import { P3394Controller } from "../p3394/controller";
 import { authoritativeSessionSource } from "../p3394/session-source";
 import { EpochStore } from "../p3394/epoch-store";
 import { SenderEpochStore } from "../p3394/sender-epoch-store";
+import { buildConfirmedProjectionPromptBlock } from "../recall/prompt-injection";
 
 const log = createLogger("group_chat.bus");
 
@@ -261,10 +292,16 @@ function normalizeDispatchKStar(
         : "Commander skipped KSTAR for this delegated task."),
     expectation: {
       k_snapshot_ref: read("k_snapshot_ref", 512) || `conversation:${cid}`,
-      situation: read("situation"),
+      situation:
+        read("situation") ||
+        "当前任务由 Commander 协调，目标 Agent 尚未开始执行。",
       task: read("task") || fallbackTask,
-      action_hat: read("action_hat"),
-      result_hat: read("result_hat"),
+      action_hat:
+        read("action_hat") ||
+        "由目标 Agent 执行任务并收集可复核证据，完成后交回 Commander 复核。",
+      result_hat:
+        read("result_hat") ||
+        "获得一份可复核的任务结果，并明确产物、完成情况与剩余差距。",
     },
   };
 }
@@ -647,6 +684,26 @@ function processEventForPersistence(raw: unknown): ProcessEvent | null {
   return { stream: event.stream, data: event.data };
 }
 
+type CoordinatorDiagnosticPhase = "probe" | "terminating";
+
+function coordinatorDiagnosticPhase(
+  item: ProcessItem,
+): CoordinatorDiagnosticPhase | null {
+  const event = item.event;
+  if (event?.stream !== "coordinator") return null;
+  const data = event.data;
+  if (!data || typeof data !== "object") return null;
+  const phase = (data as { phase?: unknown }).phase;
+  return phase === "probe" || phase === "terminating" ? phase : null;
+}
+
+function lastOrdinaryProcessItemIndex(items: ProcessItem[]): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (!coordinatorDiagnosticPhase(items[index])) return index;
+  }
+  return -1;
+}
+
 function appendProcessItem(
   items: ProcessItem[],
   item: ProcessItem,
@@ -655,7 +712,50 @@ function appendProcessItem(
   if (items.length < MAX_PROCESS_ITEMS_PER_TURN) {
     items.push(item);
   } else if (opts.forceLast && items.length > 0) {
-    items[items.length - 1] = item;
+    const replaceIndex = lastOrdinaryProcessItemIndex(items);
+    if (replaceIndex >= 0) {
+      items.splice(replaceIndex, 1);
+      items.push(item);
+    }
+  }
+}
+
+function appendCoordinatorProcessItem(
+  items: ProcessItem[],
+  event: ProcessEvent,
+): void {
+  const item: ProcessItem = { type: "event", event };
+  const phase = coordinatorDiagnosticPhase(item);
+  if (!phase) {
+    appendProcessItem(items, item);
+    return;
+  }
+  const existingIndex = items.findIndex(
+    (existing) => coordinatorDiagnosticPhase(existing) === phase,
+  );
+  if (existingIndex >= 0) {
+    items.splice(existingIndex, 1);
+    items.push(item);
+    return;
+  }
+  if (items.length < MAX_PROCESS_ITEMS_PER_TURN) {
+    items.push(item);
+    return;
+  }
+  const replaceIndex = lastOrdinaryProcessItemIndex(items);
+  if (replaceIndex >= 0) {
+    items.splice(replaceIndex, 1);
+    items.push(item);
+    return;
+  }
+  if (phase === "terminating") {
+    const probeIndex = items.findIndex(
+      (existing) => coordinatorDiagnosticPhase(existing) === "probe",
+    );
+    if (probeIndex >= 0) {
+      items.splice(probeIndex, 1);
+      items.push(item);
+    }
   }
 }
 
@@ -1099,9 +1199,6 @@ export type GroupEvent =
       msg: GroupMessage;
       turn_end?: boolean;
       turn_id?: string;
-      /** Id of the message that triggered the completing turn (the queue
-       * item's msgId). Live-event only, never persisted. Lets consumers
-       * pair a turn-end message with the inbound that started the turn. */
       source_msg_id?: string;
       seg?: number;
     }
@@ -1154,9 +1251,6 @@ export type GroupEvent =
       cid: string;
       actor: string;
       turn_id?: string;
-      /** Id of the message that triggered the silent turn (the queue item's
-       * msgId). Live-event only; lets consumers release per-turn state for
-       * turns that end without a message. */
       source_msg_id?: string;
       reason?: "terminal_handoff";
     };
@@ -1230,6 +1324,11 @@ interface QueueItem {
   incomingEpoch?: number;
 }
 
+type TurnAbortSource =
+  | { kind: "group_abort" }
+  | { kind: "parent_abort" }
+  | { kind: "coordinator"; reason: "tool_idle" | "agent_idle" };
+
 interface WorkerState {
   uid: string;
   cid: string;
@@ -1239,6 +1338,7 @@ interface WorkerState {
   /** Pending wake promise — resolved on enqueue to break the await. */
   wake: (() => void) | null;
   abortController: AbortController | null;
+  abortSource: TurnAbortSource | null;
   /** QueueItem.turnId currently owned by this worker, while `running=true`. */
   currentTurnId: string | null;
   /** GroupMessage id that triggered the currently running turn. */
@@ -1298,6 +1398,8 @@ interface CidState {
    *  between the commander's narration and the agent's first token. Anonymous
    *  workers (kind:'worker') are NOT mirrored: their stream is suppressed. */
   nestedTurns: Map<string, ActiveTurn & { order: number }>;
+  /** Abortable, timeout-free logical read/write admission for this cid. */
+  accessAdmission: CoordinatorAccessAdmission;
   /** Absolute paths written by any actor in THIS conversation since the
    *  bus was loaded. Feeds the write-tools' uniquify `isMine` predicate
    *  so refining a file across turns overwrites in place — the LLM's
@@ -1317,6 +1419,10 @@ interface CidState {
     status: TaskTerminalStatus | null;
     anchorMessageId?: string;
     lastMessageId?: string;
+    logicalRunId?: string;
+    executionId?: string;
+    projectionId?: string;
+    wakeRequestId?: string;
   };
 }
 
@@ -1334,6 +1440,11 @@ export interface TaskTerminalEvent {
   anchor_message_id?: string;
   /** Last persisted message owned by this run when it became quiescent. */
   finished_message_id?: string;
+  /** Optional execution identity used by terminal proof adapters. */
+  logical_run_id?: string;
+  execution_id?: string;
+  projection_id?: string;
+  wake_request_id?: string;
 }
 
 export type TaskTerminalListener = (event: TaskTerminalEvent) => void;
@@ -1414,6 +1525,7 @@ function getOrInitCid(uid: string, cid: string): CidState {
       backgroundWrites: new Set(),
       nextTurnOrder: 0,
       nestedTurns: new Map(),
+      accessAdmission: new CoordinatorAccessAdmission(),
       producedPaths: new Set(),
     };
     _cids.set(k, s);
@@ -1493,23 +1605,43 @@ function _emitTaskRunTerminalIfQuiescent(
       : waitingForUser
         ? "waiting_input"
         : run.status || "failed";
-  const event: TaskTerminalEvent = {
-    run_id: run.runId,
-    user_id: state.uid,
-    conversation_id: state.cid,
-    status,
-    started_at_ms: run.startedAtMs,
-    finished_at_ms: Date.now(),
-    ...(run.anchorMessageId ? { anchor_message_id: run.anchorMessageId } : {}),
-    ...(run.lastMessageId ? { finished_message_id: run.lastMessageId } : {}),
-  };
-  for (const listener of _taskTerminalListeners) {
-    try {
-      listener(event);
-    } catch (err) {
-      log.warn(`task terminal listener threw: ${(err as Error).message}`);
+  const listeners = [..._taskTerminalListeners];
+  void (async () => {
+    const event: TaskTerminalEvent = {
+      run_id: run.runId,
+      user_id: state.uid,
+      conversation_id: state.cid,
+      status,
+      started_at_ms: run.startedAtMs,
+      finished_at_ms: Date.now(),
+      ...(run.anchorMessageId ? { anchor_message_id: run.anchorMessageId } : {}),
+      ...(run.lastMessageId ? { finished_message_id: run.lastMessageId } : {}),
+      ...(run.logicalRunId ? { logical_run_id: run.logicalRunId } : {}),
+      ...(run.executionId ? { execution_id: run.executionId } : {}),
+      ...(run.projectionId ? { projection_id: run.projectionId } : {}),
+      ...(run.wakeRequestId ? { wake_request_id: run.wakeRequestId } : {}),
+    };
+    if (!event.projection_id || !event.logical_run_id || !event.wake_request_id) {
+      try {
+        const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
+        const lifecycle = await readKstarTaskLifecycle(state.uid, state.cid);
+        if (!event.logical_run_id && lifecycle.task?.id) event.logical_run_id = lifecycle.task.id;
+        if (!event.projection_id && lifecycle.projection?.id) event.projection_id = lifecycle.projection.id;
+        if (!event.wake_request_id && lifecycle.wakeRequest?.id) event.wake_request_id = lifecycle.wakeRequest.id;
+      } catch (err) {
+        log.warn(`task terminal provenance lookup failed cid=${state.cid}: ${(err as Error).message}`);
+      }
     }
-  }
+    if (!event.logical_run_id) event.logical_run_id = run.runId;
+    if (!event.execution_id) event.execution_id = run.runId;
+    for (const listener of listeners) {
+      try {
+        listener(event);
+      } catch (err) {
+        log.warn(`task terminal listener threw: ${(err as Error).message}`);
+      }
+    }
+  })();
 }
 
 function scheduleCommanderKStarValidation(
@@ -1744,10 +1876,10 @@ export interface EnqueueParams {
   attachments?: string[];
   use_selections?: ChatUseSelection[];
   references?: ChatMessageReference[];
+  recall_projection_card?: { projectionId: string };
+  kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
   produced?: string[];
   form?: ChatFormPayload;
-  expense_setup?: ExpenseSetupCardPayload;
-  expense_submit?: ExpenseSubmitCardPayload;
   created_agents?: Array<{
     agent_id: string;
     name: string;
@@ -1808,6 +1940,15 @@ export interface EnqueueParams {
   process?: GroupMessage["process"];
   /** Internal first-stage KSTAR gate metadata; persisted as P3394 runtime state, not raw message schema. */
   kstarDecision?: KStarDecisionRecord;
+  /** Internal KSTAR terminal provenance used to enrich bus terminal events. */
+  kstarTerminalProvenance?: {
+    logicalRunId?: string;
+    executionId?: string;
+    projectionId?: string;
+    wakeRequestId?: string;
+  };
+  /** Marker for the Commander-visible task/plan/expected-result declaration. */
+  kstar_dispatch_narration?: { target_agent_id: string; workflow_step_id?: string };
   /** Compact tool-cycle summaries captured during this agent turn for KSTAR attribution. */
   kstarToolSummaries?: string[];
   /** Terminal outcome recorded with an Agent contribution for Commander validation. */
@@ -1836,8 +1977,17 @@ export async function enqueue(params: EnqueueParams): Promise<GroupMessage> {
       code: "E_CONVERSATION_TERMINATING",
     });
   }
-  if (fromActorId === USER_ID && !state.taskRun) {
-    state.taskRun = { runId: genId12(), startedAtMs: Date.now(), status: null };
+  if (!state.taskRun && (fromActorId === USER_ID || params.kstarTerminalProvenance)) {
+    const provenance = params.kstarTerminalProvenance;
+    state.taskRun = {
+      runId: genId12(),
+      startedAtMs: Date.now(),
+      status: null,
+      ...(provenance?.logicalRunId ? { logicalRunId: provenance.logicalRunId } : {}),
+      ...(provenance?.executionId ? { executionId: provenance.executionId } : {}),
+      ...(provenance?.projectionId ? { projectionId: provenance.projectionId } : {}),
+      ...(provenance?.wakeRequestId ? { wakeRequestId: provenance.wakeRequestId } : {}),
+    };
   }
   // Mark in-flight enqueue. `isQuiescent` returns false while >0 so
   // callers waiting for "everything done" don't hit the gap between
@@ -1934,9 +2084,9 @@ async function _enqueueBody(
     // doc on `ResolveOpts` in router.ts.
     const agentDisplayNames: string[] = [];
     try {
-      const all = await agentsFeat.listAgentSearchListings();
+      const all = await agentsFeat.listAgents();
       for (const a of all) {
-        if (!isAgentChatDispatchable(a)) continue;
+        if (a.enabled === false) continue;
         if (a.name) {
           const key = a.name.toLowerCase().replace(/\s+/g, "");
           agentNameToId.set(key, a.agent_id);
@@ -1973,9 +2123,8 @@ async function _enqueueBody(
   for (const token of unknown.slice()) {
     if (!safeId(token)) continue;
     try {
-      if (!isAgentChatDispatchable(await getAgentDispatchPolicy(uid, token))) continue;
-      const ag = await agentsFeat.getAgentForChatDispatch(uid, token);
-      if (isAgentChatDispatchable(ag) && isAgentEnabled(uid, ag.agent_id)) {
+      const ag = await agentsFeat.getAgent(token);
+      if (ag && isAgentEnabled(uid, ag.agent_id)) {
         to.push(ag.agent_id);
         unknown = unknown.filter((u) => u !== token);
       }
@@ -1984,27 +2133,6 @@ async function _enqueueBody(
     }
   }
   to = Array.from(new Set(to));
-
-  // `forceTo`, stale rosters, project plans and wake approvals all converge
-  // here. Re-resolve every non-reserved recipient so no caller can bypass the
-  // management-only policy by supplying a raw id.
-  const dispatchableRecipients: string[] = [];
-  for (const recipientId of to) {
-    if (RESERVED_IDS.has(recipientId)) {
-      dispatchableRecipients.push(recipientId);
-      continue;
-    }
-    try {
-      if (!isAgentChatDispatchable(await getAgentDispatchPolicy(uid, recipientId))) continue;
-      const agent = await agentsFeat.getAgentForChatDispatch(uid, recipientId);
-      if (isAgentChatDispatchable(agent) && isAgentEnabled(uid, recipientId)) {
-        dispatchableRecipients.push(recipientId);
-      }
-    } catch (err) {
-      log.warn(`dispatch policy lookup failed cid=${cid} agent=${recipientId}: ${(err as Error).message}`);
-    }
-  }
-  to = dispatchableRecipients;
 
   // Project scope at dispatch time: if the conversation belongs to a
   // project, drop any recipient agent_id that isn't bound to the project
@@ -2058,9 +2186,8 @@ async function _enqueueBody(
         continue;
       }
       try {
-        if (!isAgentChatDispatchable(await getAgentDispatchPolicy(uid, recipientId))) continue;
-        const agent = await agentsFeat.getAgentForChatDispatch(uid, recipientId);
-        if (!isAgentChatDispatchable(agent) || !isAgentEnabled(uid, recipientId)) continue;
+        const agent = await agentsFeat.getAgent(recipientId);
+        if (!agent || !isAgentEnabled(uid, recipientId)) continue;
         const decision = await evaluateWake(uid, {
           conversationId: cid,
           agentId: recipientId,
@@ -2161,9 +2288,8 @@ async function _enqueueBody(
   for (const recipientId of to) {
     if (RESERVED_IDS.has(recipientId)) continue;
     try {
-      if (!isAgentChatDispatchable(await getAgentDispatchPolicy(uid, recipientId))) continue;
-      const ag = await agentsFeat.getAgentForChatDispatch(uid, recipientId);
-      if (!isAgentChatDispatchable(ag) || !isAgentEnabled(uid, ag.agent_id)) continue;
+      const ag = await agentsFeat.getAgent(recipientId);
+      if (!ag || !isAgentEnabled(uid, ag.agent_id)) continue;
       if (ag.name) idToName.set(ag.agent_id, ag.name);
       const added = await ensureAgentMember(uid, cid, ag.agent_id, ag.name);
       if (added) {
@@ -2288,12 +2414,12 @@ async function _enqueueBody(
     ...(params.references && params.references.length
       ? { references: params.references }
       : {}),
+    ...(params.recall_projection_card ? { recall_projection_card: params.recall_projection_card } : {}),
+    ...(params.kstar_review_card ? { kstar_review_card: params.kstar_review_card } : {}),
     ...(params.produced && params.produced.length
       ? { produced: params.produced }
       : {}),
     ...(params.form ? { form: params.form } : {}),
-    ...(params.expense_setup ? { expense_setup: params.expense_setup } : {}),
-    ...(params.expense_submit ? { expense_submit: params.expense_submit } : {}),
     ...(params.created_agents && params.created_agents.length
       ? { created_agents: params.created_agents }
       : {}),
@@ -2309,6 +2435,9 @@ async function _enqueueBody(
     ...(params.marketplace_requests && params.marketplace_requests.length
       ? { marketplace_requests: params.marketplace_requests }
       : {}),
+    ...(params.kstar_dispatch_narration
+      ? { kstar_dispatch_narration: params.kstar_dispatch_narration }
+      : {}),
     ...(params.plan_announcement ? { plan_announcement: true } : {}),
     ...(params.dispatch ? { dispatch: true } : {}),
     ...(params.seg !== undefined ? { seg: params.seg } : {}),
@@ -2317,6 +2446,49 @@ async function _enqueueBody(
       : {}),
     ...(params.turn_id ? { turn_id: params.turn_id } : {}),
   };
+
+  if (fromActorId === USER_ID) {
+    void (async () => {
+      try {
+        const { routeKstarUserMessage } = await import('../kstar/requirement-state');
+        const routed = await routeKstarUserMessage(uid, { conversationId: cid, messageId: msg.id, text: String(text || '') });
+        if (routed.projectionPreviewCreated?.projectionId) {
+          const { postProjectionCardMessage } = await import('../recall/projection-message');
+          await postProjectionCardMessage(uid, {
+            cid,
+            projectionId: routed.projectionPreviewCreated.projectionId,
+          }, {
+            send: async (payload) => {
+              const posted = await enqueue({
+                uid,
+                cid: payload.cid,
+                fromActorId: COMMANDER_ID,
+                forceTo: [USER_ID],
+                text: String(payload.text || ''),
+                recall_projection_card: { projectionId: payload.card.projectionId },
+              });
+              return { id: posted.id };
+            },
+          });
+        }
+        const { drainKstarTaskState } = await import('../kstar/task-aggregate');
+        await drainKstarTaskState(uid, cid);
+      } catch (err) {
+        log.warn(`KSTAR requirement routing failed cid=${cid}: ${(err as Error).message}`);
+      }
+    })();
+  }
+
+  if (state.taskRun && params.kstarTerminalProvenance) {
+    const provenance = params.kstarTerminalProvenance;
+    state.taskRun = {
+      ...state.taskRun,
+      ...(provenance.logicalRunId ? { logicalRunId: provenance.logicalRunId } : {}),
+      ...(provenance.executionId ? { executionId: provenance.executionId } : {}),
+      ...(provenance.projectionId ? { projectionId: provenance.projectionId } : {}),
+      ...(provenance.wakeRequestId ? { wakeRequestId: provenance.wakeRequestId } : {}),
+    };
+  }
 
   const guardedKStarDecision =
     fromKind === "agent" && params.turn_end && params.turn_id
@@ -2575,6 +2747,22 @@ function _referenceContextForModel(
   ].join("\n");
 }
 
+function buildKstarExpectationPreface(kstarDecision: KStarDecisionRecord | undefined): string {
+  if (!kstarDecision?.required) return "";
+  const exp = kstarDecision.expectation;
+  if (!exp) return "";
+  return [
+    "<agent-task-introduction>",
+    "在使用工具或开始执行前，先用自然语言说明你理解的任务、预期结果和执行计划。不要等待用户确认，也不要使用固定 K/S/T/AAR 模板；说明后直接继续执行。",
+    exp.situation ? `当前情境：${exp.situation}` : "",
+    exp.task ? `任务：${exp.task}` : "",
+    exp.result_hat ? `预期结果：${exp.result_hat}` : "",
+    exp.action_hat ? `执行计划：${exp.action_hat}` : "",
+    "</agent-task-introduction>",
+    "",
+  ].filter(Boolean).join("\n");
+}
+
 function composeLlmTurnPayload(
   uid: string,
   fromActorId: string,
@@ -2679,11 +2867,12 @@ async function _setFormWaitLedgerFromWorkerResult(params: {
   agentTask: string;
   resume?: string;
   sourceTool: "dispatch_to" | "run_worker" | "hand_off_to";
+  setLedger?: typeof setOrchestrationLedger;
 }): Promise<boolean> {
   const blockedForm = extractBlockedFormFromWorkerResult(params.result);
   if (!blockedForm || blockedForm.agent_id !== params.ownerAgentId)
     return false;
-  await setOrchestrationLedger(params.uid, params.cid, {
+  await (params.setLedger || setOrchestrationLedger)(params.uid, params.cid, {
     status: "waiting_for_form",
     blocked_on: "agent_form",
     source_tool: params.sourceTool,
@@ -2798,6 +2987,7 @@ function ensureRuntime(state: CidState): WorkerState {
     running: false,
     wake: null,
     abortController: null,
+    abortSource: null,
     currentTurnId: null,
     currentMsgId: null,
     currentTurnOrder: null,
@@ -2996,6 +3186,7 @@ async function runTurn(
   // loop reads only its privacy-safe terminal classification; G8d's nested
   // dispatch path additionally reads back text/produced for its caller.
   w.running = true;
+  w.abortSource = null;
   w.abortController = new AbortController();
   await _syncStateStatus(state, /*forceRunning*/ true);
   await markInFlight(uid, cid, actor.id, true);
@@ -3018,7 +3209,13 @@ async function runTurn(
  *  `produced` to hand back to its caller; the top-level loop uses only its
  *  terminal status. */
 type ActorTurnResult =
-  | { kind: "early" }
+  | {
+      kind: "early";
+      failureCode?: string;
+      text?: string;
+      produced?: string[];
+      infrastructureFailure?: boolean;
+    }
   | {
       kind: "completed";
       text: string;
@@ -3027,8 +3224,16 @@ type ActorTurnResult =
       persistedMsg: GroupMessage | null;
       errText?: string;
       aborted?: boolean;
+      infrastructureFailure?: boolean;
       terminalStatus: TaskTerminalStatus;
     };
+
+type CoordinatorTurnContext = {
+  processItems: ProcessItem[];
+  lease: TurnLeaseMonitor | null;
+  setCliProcessPid(pid: number): void;
+  setInProcessSessionIsActive(check: () => boolean): void;
+};
 
 // One actor turn: per-role prompt/tools, model (or CLI agent) stream,
 // structured-output parsing, visible-bubble persistence, and (still, until
@@ -3040,6 +3245,61 @@ async function runActorTurn(
   turnStartedAt: number,
 ): Promise<ActorTurnResult> {
   const stepId = item.workflow_step_id;
+  const processItems: ProcessItem[] = [];
+  let cliProcessPid: number | undefined;
+  let inProcessSessionIsActive = () => false;
+  const appendCoordinatorEvent = (event: ProcessEvent): void => {
+    // Preserve the bounded turn trail before applying the anonymous-worker
+    // live-emission gate below.
+    appendCoordinatorProcessItem(processItems, event);
+    if (w.actor.kind !== "worker") {
+      emit(state, {
+        type: "process",
+        cid: state.cid,
+        actor: w.actor.id,
+        turn_id: item.turnId,
+        data: { type: "event", event },
+      });
+    }
+  };
+  const coordinatorLease =
+    item.nested && stepId
+      ? _coordinatorLeaseFactory({
+          startedAt: turnStartedAt,
+          onProbe(idleMs) {
+            const alive =
+              cliProcessPid !== undefined
+                ? probeProcessLiveness(cliProcessPid)
+                : inProcessSessionIsActive();
+            appendCoordinatorEvent({
+              stream: "coordinator",
+              data: {
+                phase: "probe",
+                reason: "agent_idle",
+                idle_ms: idleMs,
+                alive,
+              },
+            });
+          },
+          onAbort(reason, idleMs) {
+            if (!abortWorkerTurn(w, { kind: "coordinator", reason })) return;
+            appendCoordinatorEvent({
+              stream: "coordinator",
+              data: { phase: "terminating", reason, idle_ms: idleMs },
+            });
+          },
+        })
+      : null;
+  const coordinatorContext: CoordinatorTurnContext = {
+    processItems,
+    lease: coordinatorLease,
+    setCliProcessPid(pid) {
+      cliProcessPid = pid;
+    },
+    setInProcessSessionIsActive(check) {
+      inProcessSessionIsActive = check;
+    },
+  };
   let settled = false;
   let settlementAttempts = 0;
   const settle = async (input: {
@@ -3070,7 +3330,13 @@ async function runActorTurn(
       await startPreparedNestedDispatchStep(state.uid, state.cid, stepId);
     if (_actorTurnPreBodyHookForTest)
       await _actorTurnPreBodyHookForTest(state, w.actor, item);
-    const result = await runActorTurnBody(state, w, item, turnStartedAt);
+    const result = await runActorTurnBody(
+      state,
+      w,
+      item,
+      turnStartedAt,
+      coordinatorContext,
+    );
     if (result.kind === "completed") {
       await settle({
         result: result.text,
@@ -3082,30 +3348,51 @@ async function runActorTurn(
     }
     return result;
   } catch (err) {
-    const message = (err as Error).message || String(err);
-    const aborted = !!w.abortController?.signal.aborted;
+    const coordinatorAbort =
+      w.abortSource?.kind === "coordinator" ? w.abortSource : null;
+    const message = coordinatorAbort
+      ? t(`coordinator.${coordinatorAbort.reason}`)
+      : "Actor turn failed unexpectedly.";
+    const aborted =
+      !!w.abortController?.signal.aborted && coordinatorAbort === null;
     try {
       await settle({ error: message, ...(aborted ? { aborted: true } : {}) });
     } catch (settleErr) {
-      log.warn(
-        `nested workflow step settlement failed cid=${state.cid} step=${stepId || "none"}: ${(settleErr as Error).message}`,
-      );
+      log.warn("nested workflow step settlement failed", {
+        cid: maskId(state.cid),
+        step_id: maskId(stepId || "none"),
+        error: logErrorRef(
+          new Error("Nested workflow step settlement failed."),
+        ),
+      });
     }
     if (stepId && !settled) {
       throw new Error(`Workflow settlement failed for ${stepId}: ${message}`);
     }
     throw err;
   } finally {
+    coordinatorLease?.stop();
+    w.abortController = null;
     if (stepId && !settled) {
       try {
+        const coordinatorAbort =
+          w.abortSource?.kind === "coordinator" ? w.abortSource : null;
         await settle({
-          error: "Actor turn ended without a terminal result.",
-          ...(w.abortController?.signal.aborted ? { aborted: true } : {}),
+          error: coordinatorAbort
+            ? t(`coordinator.${coordinatorAbort.reason}`)
+            : "Actor turn ended without a terminal result.",
+          ...(w.abortController?.signal.aborted && !coordinatorAbort
+            ? { aborted: true }
+            : {}),
         });
       } catch (settleErr) {
-        log.warn(
-          `nested workflow step final settlement failed cid=${state.cid} step=${stepId}: ${(settleErr as Error).message}`,
-        );
+        log.warn("nested workflow step final settlement failed", {
+          cid: maskId(state.cid),
+          step_id: maskId(stepId),
+          error: logErrorRef(
+            new Error("Nested workflow step final settlement failed."),
+          ),
+        });
       }
     }
   }
@@ -3116,32 +3403,10 @@ async function runActorTurnBody(
   w: WorkerState,
   item: QueueItem,
   turnStartedAt: number,
+  coordinator: CoordinatorTurnContext,
 ): Promise<ActorTurnResult> {
   const { uid, cid, actor } = w;
-  if (actor.kind === "agent") {
-    try {
-      await assertAgentChatDispatchable(uid, actor.id);
-    } catch {
-      log.warn(`agent ${actor.id} is unavailable for ordinary chat dispatch`);
-      const name = actor.name || actor.id;
-      const errBubble = `<span style="color:var(--danger)">${escapeHtmlForBubble(t("chat.agent_load_failed", { name }))}</span>`;
-      await enqueue({
-        uid,
-        cid,
-        fromActorId: actor.id,
-        text: errBubble,
-        failure_kind: "dependency",
-        failure_code: "agent_unavailable",
-        forceTo: [USER_ID],
-        turn_end: true,
-        turn_id: item.turnId,
-        source_msg_id: item.msgId,
-      });
-      await markInFlight(uid, cid, actor.id, false);
-      await emitStateChanged(state);
-      return { kind: "early" };
-    }
-  }
+  const { processItems, lease: coordinatorLease } = coordinator;
   const sessionId = actorSessionId(cid, actor);
   const isCommander = actor.kind === "commander";
   // Per-conv subdir under the user's root workspace — keeps repeat
@@ -3210,6 +3475,7 @@ async function runActorTurnBody(
   // so the agent / commander has context. After the first turn, the
   // session file accumulates and we don't re-replay.
   let messageText = item.llmPayload;
+  const kstarExpectationPreface = buildKstarExpectationPreface(item.kstarDecision);
   let replayReferences: ChatMessageReference[] = [];
   try {
     const sessionFile = (
@@ -3255,7 +3521,6 @@ async function runActorTurnBody(
   // history reload can rerender the rail (renderer accumulates it live, but
   // without persistence it vanishes on refresh). Cap the array so a runaway
   // tool storm can't bloat the jsonl. Skip `delta` and `assistant` events.
-  const processItems: ProcessItem[] = [];
   const kstarToolArgumentShapes = new Map<string, Record<string, unknown>>();
   const kstarToolSummaries: string[] = [];
   if (item.attachments && item.attachments.length) {
@@ -3332,6 +3597,8 @@ async function runActorTurnBody(
     );
   }
 
+  if (kstarExpectationPreface) messageText = `${kstarExpectationPreface}${messageText}`;
+
   if (isCommander && item.fromActorId === USER_ID) {
     const disabledSkill = await _findDisabledSkillUseRequest(
       uid,
@@ -3342,7 +3609,6 @@ async function runActorTurnBody(
       log.info(
         `blocked disabled skill request cid=${cid} skill=${disabledSkill.id}`,
       );
-      w.abortController = null;
       await markInFlight(uid, cid, actor.id, false);
       await emitStateChanged(state);
       await enqueue({
@@ -3355,7 +3621,6 @@ async function runActorTurnBody(
         forceTo: [USER_ID],
         turn_end: true,
         turn_id: item.turnId,
-        source_msg_id: item.msgId,
       });
       await _syncStateStatus(state);
       log.info(
@@ -3412,6 +3677,7 @@ async function runActorTurnBody(
       () => segState.flush(),
       () => {
         terminalHandoffCompleted = true;
+        _terminalHandoffObserverForTest?.();
       },
     );
     // skillList stays undefined for commander — every skill is globally
@@ -3434,8 +3700,8 @@ async function runActorTurnBody(
       workingDir,
     );
   } else {
-    const agent = await agentsFeat.getAgentForChatDispatch(uid, actor.id);
-    if (!agent || !isAgentChatDispatchable(agent)) {
+    const agent = await agentsFeat.getAgent(actor.id);
+    if (!agent) {
       log.warn(`agent ${actor.id} disappeared mid-turn`);
       // User-visible signal — without this the user's @-dispatch hangs
       // forever with no feedback (in-flight cleared, no bubble surfaces).
@@ -3456,13 +3722,17 @@ async function runActorTurnBody(
         forceTo: [USER_ID],
         turn_end: true,
         turn_id: item.turnId,
-        source_msg_id: item.msgId,
       });
       await markInFlight(uid, cid, actor.id, false);
       await emitStateChanged(state);
       // Note: runWorkerLoop owns w.running — its finally clears the flag
       // when this returns. We DON'T touch it here.
-      return { kind: "early" };
+      return {
+        kind: "early",
+        failureCode: "agent_unavailable",
+        text: "",
+        produced: [],
+      };
     }
     actorInteractive = agent.interactive === true;
     const p3394Admission = await p3394ProtocolProcessItem({ uid, cid, actor, item, agent });
@@ -3470,7 +3740,6 @@ async function runActorTurnBody(
     if (!p3394Admission.admitted) {
       const reasonCode = p3394Admission.reasonCode || "rejected";
       const reply = `<span style="color:var(--danger)">${escapeHtmlForBubble(t("p3394.admission_blocked"))}</span>`;
-      w.abortController = null;
       await enqueue({
         uid,
         cid,
@@ -3481,7 +3750,6 @@ async function runActorTurnBody(
         forceTo: [USER_ID],
         turn_end: true,
         turn_id: item.turnId,
-        source_msg_id: item.msgId,
         process: processItems,
       });
       await markInFlight(uid, cid, actor.id, false);
@@ -3516,8 +3784,19 @@ async function runActorTurnBody(
     }
   }
 
+  // Confirmed Recall ability assets are host-owned context. They are read
+  // after the role prompt is assembled so user-confirmed projections enter the
+  // real model call without becoming editable task prose.
+  try {
+    const confirmedAbilityAssets = await buildConfirmedProjectionPromptBlock(uid, cid);
+    if (confirmedAbilityAssets) systemPrompt = `${systemPrompt}\n\n${confirmedAbilityAssets}`;
+  } catch (error) {
+    log.warn(`confirmed ability asset prompt injection failed cid=${cid}: ${(error as Error).message}`);
+  }
+
   // Streaming.
-  const { streamChatWithModel } = await import("../../model/client");
+  const modelClient = await import("../../model/client");
+  const { streamChatWithModel } = modelClient;
   // Per-turn skill-attribution buffer. Records skill_advertised at runner
   // build time (System A via skill-registry, System B via SkillStore) and
   // skill_invoked at each successful `read_file` of a SKILL.md. Drained
@@ -3619,6 +3898,7 @@ async function runActorTurnBody(
   let streamingText = "";
   let errText: string | null = null;
   let aborted = false;
+  let turnInfrastructureFailure = false;
   let turnFailureKind: GroupMessageFailureKind | undefined;
   let turnFailureCode = "";
   const markTurnFailure = (kind: GroupMessageFailureKind, code: string) => {
@@ -3785,6 +4065,8 @@ async function runActorTurnBody(
         workingDir: cliWorkingDir,
         ...(turnProjectId ? { projectId: turnProjectId } : {}),
         signal: w.abortController.signal,
+        onCoordinatorActivity: (event) => coordinatorLease?.observe(event),
+        onProcessInfo: (pid) => coordinator.setCliProcessPid(pid),
         onProcess: (data) => {
           // Mirror the LLM path: count every event for activity, but
           // persist only `progress` and `event` shapes into processItems
@@ -3829,23 +4111,37 @@ async function runActorTurnBody(
       streamingText = cliOut.text;
       if (cliOut.error) {
         errText = cliOut.error;
+        turnInfrastructureFailure ||= !!cliOut.infrastructureFailure;
         markTurnFailure(
           cliOut.failureKind || "runtime",
           cliOut.failureCode || "cli_failed",
         );
       }
       if (cliOut.aborted) aborted = true;
-    } catch (err) {
-      errText = (err as Error).message || String(err);
+    } catch {
+      errText = "CLI agent failed unexpectedly.";
       aborted = !!w.abortController?.signal.aborted;
+      turnInfrastructureFailure = !aborted;
       if (!aborted) markTurnFailure("runtime", "cli_exception");
-      log.warn(`cli stream threw cid=${cid} actor=${actor.id}: ${errText}`);
+      log.warn("cli stream failed unexpectedly", {
+        cid: maskId(cid),
+        actor_id: maskId(actor.id),
+      });
     } finally {
-      w.abortController = null;
       await markInFlight(uid, cid, actor.id, false);
       await emitStateChanged(state);
     }
   } else {
+    coordinator.setInProcessSessionIsActive(() =>
+      modelClient.hasActiveSession(sessionId),
+    );
+    let coordinatorLeaseTerminalized = false;
+    const terminalizeCoordinatorLease = (): void => {
+      if (coordinatorLeaseTerminalized) return;
+      coordinatorLeaseTerminalized = true;
+      coordinatorLease?.observe({ kind: "terminal" });
+      coordinatorLease?.stop();
+    };
     try {
       const actorMaxToolLoops = maxToolLoopsForActorKind(actor.kind);
       const { createLifecycleSink } = await import("../execution-records");
@@ -3922,6 +4218,32 @@ async function runActorTurnBody(
         // Skills are NOT project-scoped this round; agent skillList still
         // gates in-process agents' rendered skills and SkillStore.
       })) {
+        // A model terminal event ends the monitored lease synchronously, before
+        // any post-stream persistence or workflow settlement can yield. The
+        // outer turn finally repeats stop() as an idempotent cleanup backstop.
+        if (
+          ev.type === "final" ||
+          ev.type === "error" ||
+          ev.type === "done"
+        ) {
+          terminalizeCoordinatorLease();
+        } else if (ev.type === "delta") {
+          coordinatorLease?.observe({ kind: "activity" });
+        } else if (ev.type === "progress" || ev.type === "event") {
+          const event = processEventForPersistence(
+            (ev as { event?: unknown }).event,
+          );
+          coordinatorLease?.observe(
+            event
+              ? activityFromProcessEvent({
+                  stream: event.stream,
+                  ...(event.data && typeof event.data === "object"
+                    ? { data: event.data as Record<string, unknown> }
+                    : {}),
+                })
+              : { kind: "activity" },
+          );
+        }
         // Stream events → process channel.
         if (ev.type === "final") {
           finalText = ev.text || "";
@@ -4079,11 +4401,16 @@ async function runActorTurnBody(
           }
         }
       }
-    } catch (err) {
-      errText = (err as Error).message || String(err);
+    } catch {
+      terminalizeCoordinatorLease();
+      errText = "Model stream failed unexpectedly.";
       aborted = !!w.abortController?.signal.aborted;
+      turnInfrastructureFailure = !aborted;
       if (!aborted) markTurnFailure("model", "model_stream_exception");
-      log.warn(`stream threw cid=${cid} actor=${actor.id}: ${errText}`);
+      log.warn("model stream failed unexpectedly", {
+        cid: maskId(cid),
+        actor_id: maskId(actor.id),
+      });
     } finally {
       // Salvage partial reply on abort — the event-mapper emits `error` (no
       // `final`) when the user hits stop, so `finalText` is empty even though
@@ -4093,7 +4420,6 @@ async function runActorTurnBody(
       if (!finalText && streamingText) {
         finalText = streamingText;
       }
-      w.abortController = null;
       // NOTE: `w.running` is owned by `runWorkerLoop` — it stays `true`
       // through the post-turn enqueue below so `isQuiescent` doesn't
       // briefly report quiescent in the sync window between this finally
@@ -4106,6 +4432,15 @@ async function runActorTurnBody(
       await emitStateChanged(state);
     }
   } // end LLM branch (paired with `if (cliAgent) { ... } else {` above)
+
+  const coordinatorAbort =
+    w.abortSource?.kind === "coordinator" ? w.abortSource : null;
+  if (coordinatorAbort) {
+    aborted = false;
+    errText = t(`coordinator.${coordinatorAbort.reason}`);
+    turnFailureKind = "runtime";
+    turnFailureCode = `coordinator_${coordinatorAbort.reason}`;
+  }
 
   let workingText = finalText || "";
   if (
@@ -4128,8 +4463,6 @@ async function runActorTurnBody(
   // text → structured-data parsing. Decisions (silent / done / blocked /
   // failed) live in plan_executor.onTurnFinished.
   let form: ChatFormPayload | undefined;
-  let expenseSetup: ExpenseSetupCardPayload | undefined;
-  let expenseSubmit: ExpenseSubmitCardPayload | undefined;
   let planInteraction: PlanInteractionStatus | undefined;
   let resumeAfterHandback: {
     ledger: NonNullable<StateFile["orchestration_ledger"]>;
@@ -4236,26 +4569,6 @@ async function runActorTurnBody(
         log.warn(
           `handback floor reset failed cid=${cid}: ${(err as Error).message}`,
         );
-      }
-    }
-    // Reimbursement cards grant access to host-owned credential and submission
-    // controls. Only the trusted canonical agent may turn its final-text tags
-    // into those controls; all other agents leave matching text untouched.
-    if (actor.kind === 'agent' && (workingText.includes('<expense-setup-form') || workingText.includes('<expense-submit-form'))) {
-      try {
-        await assertCanonicalExpenseWorkbenchAgent(actor.id);
-        const expenseCard = extractExpenseCardFromFinal(workingText, actor.id);
-        if (expenseCard.setup || expenseCard.submit) {
-          workingText = expenseCard.cleanText;
-          expenseSetup = expenseCard.setup;
-          expenseSubmit = expenseCard.submit;
-        }
-      } catch (error) {
-        // A non-canonical or disabled agent cannot mint a privileged card.
-        log.warn('reimbursement card rejected for untrusted agent', {
-          actor_id: actor.id,
-          error_code: error instanceof Error ? error.message : 'unknown',
-        });
       }
     }
     const r = extractFormFromFinal(workingText, actor.id);
@@ -4552,7 +4865,7 @@ async function runActorTurnBody(
   // published outputs are different: VideoStudio snapshot contact sheets are
   // review artifacts the user must see before approving the next stage.
   const isNonFinalStage =
-    item.outputDelivery === "process" || planInteraction === "open" || !!form || !!expenseSetup || !!expenseSubmit;
+    item.outputDelivery === "process" || planInteraction === "open" || !!form;
   const visibleProduced =
     isNonFinalStage && !outputsPublicationDeclared ? [] : produced;
 
@@ -4572,8 +4885,6 @@ async function runActorTurnBody(
       ...(turnFailureKind ? { failureKind: turnFailureKind } : {}),
       ...(turnFailureCode ? { failureCode: turnFailureCode } : {}),
       ...(form ? { form } : {}),
-      ...(expenseSetup ? { expenseSetup } : {}),
-      ...(expenseSubmit ? { expenseSubmit } : {}),
       ...(planInteraction ? { planInteraction } : {}),
       produced: visibleProduced,
       ...(createdAgents.length ? { createdAgents } : {}),
@@ -4593,8 +4904,6 @@ async function runActorTurnBody(
       terminalHandoffCompleted &&
       !workingText.trim() &&
       !form &&
-      !expenseSetup &&
-      !expenseSubmit &&
       visibleProduced.length === 0 &&
       createdAgents.length === 0 &&
       createdSkills.length === 0;
@@ -4604,8 +4913,6 @@ async function runActorTurnBody(
           kind: "persist",
           text: workingText || "(no reply)",
           ...(form ? { form } : {}),
-          ...(expenseSetup ? { expenseSetup } : {}),
-          ...(expenseSubmit ? { expenseSubmit } : {}),
           ...(visibleProduced.length ? { produced: visibleProduced } : {}),
           ...(createdAgents.length ? { createdAgents } : {}),
           ...(createdSkills.length ? { createdSkills } : {}),
@@ -4665,8 +4972,6 @@ async function runActorTurnBody(
     const tail = streamingText.slice(segState.segStart);
     const hasSide = !!(
       outcome.form ||
-      outcome.expenseSetup ||
-      outcome.expenseSubmit ||
       (outcome.produced && outcome.produced.length) ||
       (outcome.createdAgents && outcome.createdAgents.length) ||
       (outcome.createdSkills && outcome.createdSkills.length) ||
@@ -4759,8 +5064,6 @@ async function runActorTurnBody(
       ...(outcome.failureKind ? { failure_kind: outcome.failureKind } : {}),
       ...(outcome.failureCode ? { failure_code: outcome.failureCode } : {}),
       ...(outcome.form ? { form: outcome.form } : {}),
-      ...(outcome.expenseSetup ? { expense_setup: outcome.expenseSetup } : {}),
-      ...(outcome.expenseSubmit ? { expense_submit: outcome.expenseSubmit } : {}),
       ...(outcome.produced && outcome.produced.length
         ? { produced: outcome.produced }
         : {}),
@@ -4800,7 +5103,6 @@ async function runActorTurnBody(
       // dispatch) would also wrongly consume the placeholder.
       turn_end: true,
       turn_id: item.turnId,
-      source_msg_id: item.msgId,
       ...(item.kstarDecision?.required
         ? { kstarDecision: item.kstarDecision }
         : {}),
@@ -4825,7 +5127,6 @@ async function runActorTurnBody(
       cid,
       actor: actor.id,
       turn_id: item.turnId,
-      source_msg_id: item.msgId,
       ...(terminalHandoffCompleted
         ? { reason: "terminal_handoff" as const }
         : {}),
@@ -5002,6 +5303,7 @@ async function runActorTurnBody(
     persistedMsg,
     errText: errText || undefined,
     aborted,
+    ...(turnInfrastructureFailure ? { infrastructureFailure: true } : {}),
     terminalStatus,
   };
 }
@@ -5247,8 +5549,8 @@ async function buildAgentsIndexBlock(
       allowedIds === null || allowedIds === undefined
         ? null
         : new Set(allowedIds);
-    const list = (await agentsFeat.listAgentDispatchSpecs())
-      .filter((a) => isAgentChatDispatchable(a))
+    const list = (await agentsFeat.listAgents())
+      .filter((a: any) => a.enabled !== false)
       .filter((a: any) => (allow ? allow.has(a.agent_id) : true));
     if (!list.length) return `${header}(no agents)`;
     const entries = list
@@ -5504,7 +5806,6 @@ function _toolJson(data: unknown): { content: string } {
  * Shared by `dispatch_to` and `run_worker` so both honour the same name-map
  * rules the router uses. */
 async function resolveDispatchTarget(
-  uid: string,
   cid: string,
   toRaw: string,
 ): Promise<string | null> {
@@ -5512,9 +5813,9 @@ async function resolveDispatchTarget(
   if (key === "commander" || key === "指挥官") return COMMANDER_ID;
   if (key === "user" || key === "用户") return USER_ID;
   try {
-    const all = await agentsFeat.listAgentDispatchSpecs();
+    const all = await agentsFeat.listAgents();
     const matches = all
-      .filter((a) => isAgentChatDispatchable(a))
+      .filter((a) => a.enabled !== false)
       .filter(
         (a) => !!a.name && a.name.toLowerCase().replace(/\s+/g, "") === key,
       )
@@ -5531,16 +5832,120 @@ async function resolveDispatchTarget(
   }
   if (safeId(toRaw)) {
     try {
-      if (!isAgentChatDispatchable(await getAgentDispatchPolicy(uid, toRaw))) {
-        return null;
-      }
-      const ag = await agentsFeat.getAgentForChatDispatch(uid, toRaw);
-      if (isAgentChatDispatchable(ag)) return toRaw;
+      const ag = await agentsFeat.getAgent(toRaw);
+      if (ag && (ag as any).enabled !== false) return toRaw;
     } catch {
       /* ignore */
     }
   }
   return null;
+}
+
+interface CoordinatorDispatchContract {
+  dependsOn: string[];
+  requiredCapabilities: string[];
+  accessMode: "read" | "write";
+  writeScopes: string[];
+  accessRequest: CoordinatorAccessRequest;
+}
+
+const MAX_COORDINATOR_CONTRACT_ITEMS = 256;
+const MAX_COORDINATOR_CONTRACT_STRING_LENGTH = 16_384;
+
+function normalizeDeclaredToolStringArray(
+  value: unknown,
+  field: "depends_on" | "required_capabilities",
+): string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
+  if (value.length > MAX_COORDINATOR_CONTRACT_ITEMS)
+    throw new Error(`${field} has too many entries`);
+  const normalized = value.map((item) => {
+    if (typeof item !== "string")
+      throw new Error(`${field} must contain strings`);
+    const text = item.trim();
+    if (text.length > MAX_COORDINATOR_CONTRACT_STRING_LENGTH)
+      throw new Error(`${field} entry is too long`);
+    return text;
+  });
+  return Array.from(new Set(normalized.filter(Boolean)));
+}
+
+function normalizeDeclaredWriteScopes(value: unknown): string[] {
+  const invalid = () =>
+    new Error("write_scopes must be an array of non-empty strings");
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_COORDINATOR_CONTRACT_ITEMS)
+    throw invalid();
+  const normalized = value.map((item) => {
+    if (typeof item !== "string") throw invalid();
+    const scope = item.trim();
+    if (
+      !scope ||
+      scope.length > MAX_COORDINATOR_CONTRACT_STRING_LENGTH
+    ) {
+      throw invalid();
+    }
+    return scope;
+  });
+  return Array.from(new Set(normalized));
+}
+
+function resolveCoordinatorAccess(
+  workingDir: string,
+  modeRaw: unknown,
+  scopesRaw: unknown,
+): CoordinatorAccessRequest {
+  const mode = modeRaw === "read" ? "read" : "write";
+  const declared = normalizeDeclaredWriteScopes(scopesRaw);
+  const workspace = path.resolve(workingDir);
+  const resolved = declared.map((scope) => path.resolve(workspace, scope));
+  if (resolved.some((scope) => !isPathAllowed(scope, [workspace]))) {
+    throw new Error(
+      "write_scopes must stay inside the conversation workspace",
+    );
+  }
+  const canonicalWorkspace = canonicalizePath(workspace);
+  const caseSensitive = isFileSystemCaseSensitive(canonicalWorkspace);
+  const admissionKey = (scope: string) => {
+    const canonical = canonicalizePath(scope);
+    return caseSensitive ? canonical : canonical.toLowerCase();
+  };
+  return {
+    mode,
+    // These are logical coordination keys. File tools still perform the
+    // authoritative sandbox check at execution; admission is not a TOCTOU guard.
+    scopes: resolved.length
+      ? [...new Set(resolved.map(admissionKey))].sort()
+      : [admissionKey(canonicalWorkspace)],
+  };
+}
+
+function coordinatorDispatchContract(
+  workingDir: string,
+  input: Record<string, unknown> | null | undefined,
+): CoordinatorDispatchContract {
+  const dependsOn = normalizeDeclaredToolStringArray(
+    input?.depends_on,
+    "depends_on",
+  );
+  const requiredCapabilities = normalizeDeclaredToolStringArray(
+    input?.required_capabilities,
+    "required_capabilities",
+  );
+  const writeScopes = normalizeDeclaredWriteScopes(input?.write_scopes);
+  const accessMode = input?.access_mode === "read" ? "read" : "write";
+  return {
+    dependsOn,
+    requiredCapabilities,
+    accessMode,
+    writeScopes,
+    accessRequest: resolveCoordinatorAccess(
+      workingDir,
+      accessMode,
+      writeScopes,
+    ),
+  };
 }
 
 async function prepareNestedDispatchForTool(
@@ -5549,6 +5954,7 @@ async function prepareNestedDispatchForTool(
   source: "dispatch_to" | "hand_off_to" | "run_worker",
   objective: string,
   task: string,
+  contract: CoordinatorDispatchContract,
   contextDependencies?: string[],
   resumeStepId?: string,
   resumeToken?: string,
@@ -5560,6 +5966,10 @@ async function prepareNestedDispatchForTool(
     actor_kind: actor.kind === "worker" ? "anonymous_worker" : "agent",
     source_tool: source,
     task,
+    depends_on: contract.dependsOn,
+    required_capabilities: contract.requiredCapabilities,
+    access_mode: contract.accessMode,
+    write_scopes: contract.writeScopes,
     ...(contextDependencies?.length
       ? { context_dependencies: contextDependencies }
       : {}),
@@ -5580,6 +5990,159 @@ function blockedNestedDispatchToolResult(prepared: PreparedNestedDispatchStep) {
         "Resolve the active context conflict, then retry with resume_step_id equal to workflow_step_id.",
     }),
   };
+}
+
+function blockedNestedDispatchDependencyResult(
+  prepared: PreparedNestedDispatchStep,
+  error: unknown,
+): { content: string } | null {
+  const message = error instanceof Error ? error.message : "";
+  const prefix = "workflow step dependencies incomplete: ";
+  if (!message.startsWith(prefix)) return null;
+  const missingDependencies = message
+    .slice(prefix.length)
+    .split(",")
+    .map((dependency) => dependency.trim())
+    .filter((dependency) => safeId(dependency));
+  if (!missingDependencies.length) return null;
+  return {
+    content: JSON.stringify({
+      ok: false,
+      status: "dispatch_blocked_by_dependencies",
+      workflow_step_id: prepared.step.id,
+      resume_token: prepared.step.resume_token,
+      missing_dependencies: missingDependencies,
+    }),
+  };
+}
+
+async function dependencyResultFromLockedOperation(
+  prepared: PreparedNestedDispatchStep,
+  operation: () => Promise<unknown>,
+): Promise<{ content: string } | null> {
+  try {
+    await operation();
+    return null;
+  } catch (error) {
+    const blocked = blockedNestedDispatchDependencyResult(prepared, error);
+    if (blocked) return blocked;
+    throw error;
+  }
+}
+
+async function checkPreparedNestedDispatchDependenciesForTool(
+  state: CidState,
+  prepared: PreparedNestedDispatchStep,
+): Promise<{ content: string } | null> {
+  return dependencyResultFromLockedOperation(prepared, () =>
+    checkPreparedNestedDispatchStepDependencies(
+      state.uid,
+      state.cid,
+      prepared.step.id,
+    ),
+  );
+}
+
+async function startPreparedNestedDispatchForTool(
+  state: CidState,
+  prepared: PreparedNestedDispatchStep,
+): Promise<{ content: string } | null> {
+  await _beforeNestedDispatchStartForTest?.();
+  return dependencyResultFromLockedOperation(prepared, () =>
+    startPreparedNestedDispatchStep(
+      state.uid,
+      state.cid,
+      prepared.step.id,
+    ),
+  );
+}
+
+interface PreparedDispatchAccessResult<T> {
+  kind: "completed" | "blocked";
+  value?: T;
+  blocked?: { content: string };
+}
+
+function abortError(): Error {
+  return Object.assign(new Error("Aborted"), { name: "AbortError" });
+}
+
+async function cancelQueuedPreparedDispatch(
+  state: CidState,
+  prepared: PreparedNestedDispatchStep,
+): Promise<void> {
+  try {
+    await (
+      _nestedDispatchAttemptHooksForTest?.settleAbort ||
+      settleNestedDispatchAbort
+    )(
+      state.uid,
+      state.cid,
+      prepared.step.id,
+      "Nested dispatch cancelled before access admission.",
+    );
+  } catch {
+    log.warn("queued nested dispatch cancellation settlement invariant", {
+      cid: maskId(state.cid),
+      step_id: maskId(prepared.step.id),
+    });
+    throw new Error(
+      "queued nested dispatch cancellation settlement failed",
+    );
+  }
+}
+
+async function withPreparedNestedDispatchAccess<T>(input: {
+  state: CidState;
+  prepared: PreparedNestedDispatchStep;
+  request: CoordinatorAccessRequest;
+  signal?: AbortSignal;
+  execute: () => Promise<T>;
+}): Promise<PreparedDispatchAccessResult<T>> {
+  let release: (() => void) | null = null;
+  try {
+    if (input.signal?.aborted) {
+      release = input.state.accessAdmission.tryAcquire(input.request);
+      if (!release) throw abortError();
+    } else {
+      release = await input.state.accessAdmission.acquire(
+        input.request,
+        input.signal,
+      );
+    }
+  } catch (error) {
+    if ((error as Error)?.name === "AbortError")
+      await cancelQueuedPreparedDispatch(input.state, input.prepared);
+    throw error;
+  }
+
+  try {
+    const blocked = await startPreparedNestedDispatchForTool(
+      input.state,
+      input.prepared,
+    );
+    if (blocked) return { kind: "blocked", blocked };
+    return { kind: "completed", value: await input.execute() };
+  } catch (error) {
+    if ((error as Error)?.message === HANDOFF_SETTLEMENT_INVARIANT) {
+      throw error;
+    }
+    try {
+      await (
+        _nestedDispatchAttemptHooksForTest?.settleInfrastructure ||
+        settleNestedDispatchInfrastructureFailure
+      )(input.state.uid, input.state.cid, input.prepared.step.id);
+    } catch {
+      log.warn("nested dispatch infrastructure settlement invariant", {
+        cid: maskId(input.state.cid),
+        step_id: maskId(input.prepared.step.id),
+      });
+      throw new Error("nested dispatch infrastructure settlement failed");
+    }
+    throw new Error("nested dispatch infrastructure failed");
+  } finally {
+    release();
+  }
 }
 
 async function gateNestedAgentWake(
@@ -5687,22 +6250,163 @@ export function _redactDispatchToolResult(inner: unknown): void {
  * commander reads back. Single source for both the async handback wake and the
  * G8d in-process nested dispatch, so the format the commander parses never
  * drifts between the two. */
+export type NestedDispatchOutcome =
+  | {
+      ok: true;
+      actor: Actor;
+      workflowStepId?: string;
+      text: string;
+      produced: string[];
+      form?: ChatFormPayload;
+      payload: string;
+    }
+  | {
+      ok: false;
+      actor: Actor;
+      workflowStepId?: string;
+      text: string;
+      produced: string[];
+      failureCode: string;
+      retryable: boolean;
+      abortSource?: TurnAbortSource["kind"];
+      infrastructureFailure?: boolean;
+      payload: string;
+    };
+
+type CoordinatorLeaseFactory = typeof startTurnLeaseMonitor;
+
+let _coordinatorLeaseFactory: CoordinatorLeaseFactory = startTurnLeaseMonitor;
+let _nestedDispatchOutcomeObserverForTest:
+  | ((outcome: NestedDispatchOutcome) => void)
+  | null = null;
+
+type NestedDispatchAttemptHooksForTest = {
+  begin?: typeof beginWorkflowStepAttempt;
+  execute?: () => Promise<NestedDispatchOutcome>;
+  finish?: typeof finishWorkflowStepAttempt;
+  beforeRetry?: () => void | Promise<void>;
+  afterRetryPreparation?: () => void | Promise<void>;
+  settleAbort?: typeof settleNestedDispatchAbort;
+  settleInfrastructure?: typeof settleNestedDispatchInfrastructureFailure;
+  ensureMember?: typeof ensureAgentMember;
+  readMembers?: typeof readMembers;
+};
+
+let _nestedDispatchAttemptHooksForTest: NestedDispatchAttemptHooksForTest | null =
+  null;
+
+let _beforeNestedDispatchStartForTest: (() => void | Promise<void>) | null =
+  null;
+
+let _beforeVisibleDispatchForTest: (() => void | Promise<void>) | null = null;
+
+let _terminalHandoffObserverForTest: (() => void) | null = null;
+
+type HandoffStateHooksForTest = {
+  commitHandoffState?: typeof commitHandoffState;
+  rollbackHandoffState?: typeof rollbackHandoffState;
+};
+
+let _handoffStateHooksForTest: HandoffStateHooksForTest | null = null;
+let _beforeHandoffStateCommitForTest: (() => void | Promise<void>) | null = null;
+let _afterHandoffStateCommitForTest: (() => void | Promise<void>) | null = null;
+let _beforeHandoffResumeEnqueueForTest: (() => void | Promise<void>) | null = null;
+
+export function _setCoordinatorLeaseFactoryForTest(
+  factory?: CoordinatorLeaseFactory,
+): void {
+  _coordinatorLeaseFactory = factory || startTurnLeaseMonitor;
+}
+
+export function _setNestedDispatchOutcomeObserverForTest(
+  observer: ((outcome: NestedDispatchOutcome) => void) | null,
+): void {
+  _nestedDispatchOutcomeObserverForTest = observer;
+}
+
+/** Main-process test seam for nested lifecycle and member-preparation faults. */
+export function _setNestedDispatchAttemptHooksForTest(
+  hooks: NestedDispatchAttemptHooksForTest | null,
+): void {
+  _nestedDispatchAttemptHooksForTest = hooks;
+}
+
+export function _setBeforeNestedDispatchStartForTest(
+  hook: (() => void | Promise<void>) | null,
+): void {
+  _beforeNestedDispatchStartForTest = hook;
+}
+
+export function _setBeforeVisibleDispatchForTest(
+  hook: (() => void | Promise<void>) | null,
+): void {
+  _beforeVisibleDispatchForTest = hook;
+}
+
+export function _setTerminalHandoffObserverForTest(
+  observer: (() => void) | null,
+): void {
+  _terminalHandoffObserverForTest = observer;
+}
+
+export function _setHandoffStateHooksForTest(
+  hooks: HandoffStateHooksForTest | null,
+): void {
+  _handoffStateHooksForTest = hooks;
+}
+
+export function _setBeforeHandoffStateCommitForTest(
+  hook: (() => void | Promise<void>) | null,
+): void {
+  _beforeHandoffStateCommitForTest = hook;
+}
+
+export function _setAfterHandoffStateCommitForTest(
+  hook: (() => void | Promise<void>) | null,
+): void {
+  _afterHandoffStateCommitForTest = hook;
+}
+
+export function _setBeforeHandoffResumeEnqueueForTest(
+  hook: (() => void | Promise<void>) | null,
+): void {
+  _beforeHandoffResumeEnqueueForTest = hook;
+}
+
+function completeNestedDispatchOutcome(
+  outcome: NestedDispatchOutcome,
+): NestedDispatchOutcome {
+  _nestedDispatchOutcomeObserverForTest?.(outcome);
+  return outcome;
+}
+
 function buildWorkerResultPayload(
   workerName: string,
   text: string,
   produced?: string[],
   form?: ChatFormPayload,
+  workflowStepId?: string,
 ): string {
+  const attrs = [
+    `from="${escapeXmlAttr(workerName)}"`,
+    workflowStepId
+      ? `workflow_step_id="${escapeXmlAttr(workflowStepId)}"`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   const files =
     produced && produced.length
-      ? `\n<files>\n${produced.join("\n")}\n</files>`
+      ? `\n<files>\n${produced.map((file) => escapeXmlText(file)).join("\n")}\n</files>`
       : "";
   const blocked = form
     ? `\n<blocked-on-form form_id="${escapeXmlAttr(form.form_id)}" agent_id="${escapeXmlAttr(form.agent_id)}" />`
     : "";
+  const resultText =
+    text && text.trim() ? escapeXmlText(text) : "(no textual reply)";
   return [
-    `<worker-result from="${escapeXmlAttr(workerName)}">`,
-    text && text.trim() ? text : "(no textual reply)",
+    `<worker-result ${attrs}>`,
+    resultText,
     `${blocked}${files}</worker-result>`,
   ].join("\n");
 }
@@ -5710,27 +6414,154 @@ function buildWorkerResultPayload(
 function buildWorkerErrorPayload(
   workerName: string,
   errorText: string,
-  opts?: { aborted?: boolean },
+  opts?: {
+    workflowStepId?: string;
+    aborted?: boolean;
+    failureCode?: string;
+    retryable?: boolean;
+    produced?: string[];
+  },
 ): string {
   const message =
     String(errorText || "").trim() || "Worker failed without an error message.";
-  const abortedAttr = opts?.aborted ? " aborted=\"true\"" : "";
+  const attrs = [
+    `from="${escapeXmlAttr(workerName)}"`,
+    opts?.workflowStepId
+      ? `workflow_step_id="${escapeXmlAttr(opts.workflowStepId)}"`
+      : "",
+    typeof opts?.aborted === "boolean"
+      ? `aborted="${opts.aborted ? "true" : "false"}"`
+      : "",
+    opts?.failureCode
+      ? `failure_code="${escapeXmlAttr(opts.failureCode)}"`
+      : "",
+    typeof opts?.retryable === "boolean"
+      ? `retryable="${opts.retryable ? "true" : "false"}"`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const files =
+    opts?.produced && opts.produced.length
+      ? `\n<files>\n${opts.produced.map((file) => escapeXmlText(file)).join("\n")}\n</files>`
+      : "";
   return [
-    `<worker-error from="${escapeXmlAttr(workerName)}"${abortedAttr}>`,
-    escapeXmlText(message),
+    `<worker-error ${attrs}>`,
+    `${escapeXmlText(message)}${files}`,
     `</worker-error>`,
   ].join("\n");
 }
 
-function buildWorkerAbortPayload(
-  workerName: string,
-  partialText?: string,
+export function _buildWorkerResultPayloadForTest(input: {
+  workerName: string;
+  text: string;
+  produced?: string[];
+  form?: ChatFormPayload;
+  workflowStepId?: string;
+}): string {
+  return buildWorkerResultPayload(
+    input.workerName,
+    input.text,
+    input.produced,
+    input.form,
+    input.workflowStepId,
+  );
+}
+
+export function _buildWorkerErrorPayloadForTest(input: {
+  workerName: string;
+  errorText: string;
+  workflowStepId?: string;
+  aborted?: boolean;
+  failureCode?: string;
+  retryable?: boolean;
+  produced?: string[];
+}): string {
+  return buildWorkerErrorPayload(input.workerName, input.errorText, input);
+}
+
+function abortSourceFromSignal(signal: AbortSignal): TurnAbortSource | null {
+  const reason = signal.reason;
+  if (!reason || typeof reason !== "object") return null;
+  const kind = (reason as { kind?: unknown }).kind;
+  if (kind === "group_abort") return { kind };
+  if (kind === "parent_abort") return { kind };
+  if (kind === "coordinator") {
+    const coordinatorReason = (reason as { reason?: unknown }).reason;
+    if (coordinatorReason === "tool_idle" || coordinatorReason === "agent_idle")
+      return { kind, reason: coordinatorReason };
+  }
+  return null;
+}
+
+function abortWorkerTurn(
+  w: WorkerState,
+  source: TurnAbortSource,
+): boolean {
+  const controller = w.abortController;
+  if (controller?.signal.aborted) {
+    w.abortSource ||= abortSourceFromSignal(controller.signal);
+    return false;
+  }
+  if (w.abortSource) return false;
+  w.abortSource = source;
+  controller?.abort(source);
+  return true;
+}
+
+function nestedAbortMessage(
+  source: TurnAbortSource,
+  partialText: string,
 ): string {
   const partial = String(partialText || "").trim();
-  const message = partial
-    ? `Task was stopped by the user.\n\nPartial result:\n${partial}`
-    : "Task was stopped by the user.";
-  return buildWorkerErrorPayload(workerName, message, { aborted: true });
+  const lead =
+    source.kind === "group_abort"
+      ? "Task was stopped by the user."
+      : source.kind === "parent_abort"
+        ? "The parent turn stopped before the delegated task completed."
+        : `The coordinator stopped the delegated task after ${source.reason.replace("_", " ")}.`;
+  return partial ? `${lead}\n\nPartial result:\n${partial}` : lead;
+}
+
+function buildNestedAbortOutcome(input: {
+  actor: Actor;
+  workflowStepId?: string;
+  source: TurnAbortSource;
+  text?: string;
+  produced?: string[];
+}): NestedDispatchOutcome {
+  const text = input.text || "";
+  const produced = input.produced || [];
+  const failureCode =
+    input.source.kind === "coordinator"
+      ? `coordinator_${input.source.reason}`
+      : input.source.kind;
+  const retryable = input.source.kind === "coordinator";
+  const payload = buildWorkerErrorPayload(
+    input.actor.name || input.actor.id,
+    nestedAbortMessage(input.source, text),
+    {
+      ...(input.workflowStepId
+        ? { workflowStepId: input.workflowStepId }
+        : {}),
+      aborted: input.source.kind !== "coordinator",
+      failureCode,
+      retryable,
+    },
+  );
+  return {
+    ok: false,
+    actor: input.actor,
+    ...(input.workflowStepId
+      ? { workflowStepId: input.workflowStepId }
+      : {}),
+    text,
+    produced,
+    failureCode,
+    retryable,
+    abortSource: input.source.kind,
+    payload,
+  };
 }
 
 function extractBlockedFormFromWorkerResult(
@@ -5764,51 +6595,56 @@ async function runNestedDispatch(
   outputDelivery: "final" | "process" = "process",
   kstarDecision?: KStarDecisionRecord,
   workflowStepId?: string,
-): Promise<string> {
-  if (actor.kind === "agent") {
-    if (!isAgentChatDispatchable(await getAgentDispatchPolicy(state.uid, actor.id))) {
-      return buildWorkerErrorPayload(
-        actor.name || actor.id,
-        "This Agent is available only through its management surface.",
-      );
-    }
-    const dispatchAgent = await agentsFeat.getAgentForChatDispatch(state.uid, actor.id);
-    if (!isAgentChatDispatchable(dispatchAgent) || !isAgentEnabled(state.uid, actor.id)) {
-      return buildWorkerErrorPayload(
-        actor.name || actor.id,
-        "This Agent is available only through its management surface.",
-      );
-    }
-  }
+): Promise<NestedDispatchOutcome> {
   // A named agent must be a roster member so its handed-back bubble renders with
   // proper attribution. The old async dispatch path seeded this via enqueue's
   // `to` resolution; the in-process path seeds it here. Anonymous workers
   // (kind:'worker') are intentionally never roster members.
   if (actor.kind === "agent") {
     try {
-      const added = await ensureAgentMember(
+      const ensureMember =
+        _nestedDispatchAttemptHooksForTest?.ensureMember || ensureAgentMember;
+      const readCurrentMembers =
+        _nestedDispatchAttemptHooksForTest?.readMembers || readMembers;
+      const added = await ensureMember(
         state.uid,
         state.cid,
         actor.id,
         actor.name,
       );
       if (added) {
-        const refreshed = await readMembers(state.uid, state.cid);
+        const refreshed = await readCurrentMembers(state.uid, state.cid);
         const m = refreshed.actors.find((a) => a.id === actor.id);
         if (m) emit(state, { type: "member_joined", cid: state.cid, actor: m });
       }
-    } catch (err) {
-      log.warn(
-        `nested-dispatch member seed failed cid=${state.cid} agent=${actor.id}: ${(err as Error).message}`,
-      );
+    } catch {
+      const failureCode = "nested_member_storage_failed";
+      const message = "Named Agent membership could not be prepared safely.";
+      log.warn("nested dispatch member preparation failed", {
+        cid: maskId(state.cid),
+        actor_id: maskId(actor.id),
+        phase: "member_prepare",
+        failure_code: failureCode,
+      });
+      return completeNestedDispatchOutcome({
+        ok: false,
+        actor,
+        ...(workflowStepId ? { workflowStepId } : {}),
+        text: "",
+        produced: [],
+        failureCode,
+        retryable: false,
+        infrastructureFailure: true,
+        payload: buildWorkerErrorPayload(actor.name || actor.id, message, {
+          ...(workflowStepId ? { workflowStepId } : {}),
+          aborted: false,
+          failureCode,
+          retryable: false,
+        }),
+      });
     }
   }
   const ac = new AbortController();
-  if (parentSignal) {
-    if (parentSignal.aborted) ac.abort();
-    else
-      parentSignal.addEventListener("abort", () => ac.abort(), { once: true });
-  }
   // Synthetic, throwaway WorkerState — runActorTurn only reads uid/cid/actor +
   // abortController off it on the worker path; it is never added to
   // state.workers, so quiescence / abort enumeration / the scheduler ignore it.
@@ -5820,6 +6656,7 @@ async function runNestedDispatch(
     running: true,
     wake: null,
     abortController: ac,
+    abortSource: null,
     currentTurnId: null,
     currentMsgId: null,
     currentTurnOrder: null,
@@ -5828,6 +6665,18 @@ async function runNestedDispatch(
     terminated: false,
     loopDone: null,
   };
+  const abortFromParent = () => {
+    abortWorkerTurn(
+      w,
+      parentSignal
+        ? abortSourceFromSignal(parentSignal) || { kind: "parent_abort" }
+        : { kind: "parent_abort" },
+    );
+  };
+  if (parentSignal) {
+    if (parentSignal.aborted) abortFromParent();
+    else parentSignal.addEventListener("abort", abortFromParent, { once: true });
+  }
   const payload = composeLlmTurnPayload(state.uid, COMMANDER_ID, {
     id: genId12(),
     ts: nowIso(),
@@ -5877,49 +6726,185 @@ async function runNestedDispatch(
     });
     await emitStateChanged(state);
   }
+  const nestedAbortSource = () =>
+    abortSourceFromSignal(ac.signal) || w.abortSource;
   try {
     let r: ActorTurnResult;
     try {
       r = await runActorTurn(state, w, item, nestedTurnStartedAtMs);
-    } catch (err) {
-      const message = (err as Error).message || String(err);
-      log.warn(
-        `nested-dispatch threw cid=${state.cid} worker=${actor.id}: ${message}`,
-      );
-      if (ac.signal.aborted || parentSignal?.aborted) {
-        return buildWorkerAbortPayload(actor.name || actor.id);
+    } catch {
+      const message = "Nested dispatch failed unexpectedly.";
+      log.warn("nested dispatch failed unexpectedly", {
+        cid: maskId(state.cid),
+        actor_id: maskId(actor.id),
+        actor_kind: actor.kind,
+      });
+      const abortSource = nestedAbortSource();
+      if (abortSource) {
+        return completeNestedDispatchOutcome(
+          buildNestedAbortOutcome({
+            actor,
+            ...(workflowStepId ? { workflowStepId } : {}),
+            source: abortSource,
+          }),
+        );
       }
-      return buildWorkerErrorPayload(actor.name || actor.id, message);
+      const payload = buildWorkerErrorPayload(actor.name || actor.id, message, {
+        ...(workflowStepId ? { workflowStepId } : {}),
+        aborted: false,
+        failureCode: "nested_dispatch_error",
+        retryable: false,
+      });
+      return completeNestedDispatchOutcome({
+        ok: false,
+        actor,
+        ...(workflowStepId ? { workflowStepId } : {}),
+        text: "",
+        produced: [],
+        failureCode: "nested_dispatch_error",
+        retryable: false,
+        infrastructureFailure: true,
+        payload,
+      });
     }
     if (r.kind === "completed" && r.aborted) {
-      return buildWorkerAbortPayload(actor.name || actor.id, r.text);
+      const abortSource = nestedAbortSource();
+      if (abortSource) {
+        return completeNestedDispatchOutcome(
+          buildNestedAbortOutcome({
+            actor,
+            ...(workflowStepId ? { workflowStepId } : {}),
+            source: abortSource,
+            text: r.text,
+            produced: r.produced,
+          }),
+        );
+      }
+      const text = r.text || "";
+      const message = text
+        ? `Worker turn was aborted.\n\nPartial result:\n${text}`
+        : "Worker turn was aborted.";
+      const payload = buildWorkerErrorPayload(
+        actor.name || actor.id,
+        message,
+        {
+          ...(workflowStepId ? { workflowStepId } : {}),
+          aborted: true,
+          failureCode: "nested_abort",
+          retryable: false,
+        },
+      );
+      return completeNestedDispatchOutcome({
+        ok: false,
+        actor,
+        ...(workflowStepId ? { workflowStepId } : {}),
+        text,
+        produced: r.produced,
+        failureCode: "nested_abort",
+        retryable: false,
+        payload,
+      });
     }
     if (r.kind !== "completed") {
-      if (ac.signal.aborted || parentSignal?.aborted) {
-        return buildWorkerAbortPayload(actor.name || actor.id);
+      const abortSource = nestedAbortSource();
+      if (abortSource) {
+        return completeNestedDispatchOutcome(
+          buildNestedAbortOutcome({
+            actor,
+            ...(workflowStepId ? { workflowStepId } : {}),
+            source: abortSource,
+          }),
+        );
       }
-      return buildWorkerErrorPayload(
+      const failureCode = r.failureCode || "nested_dispatch_incomplete";
+      const message =
+        failureCode === "agent_unavailable"
+          ? "The requested Agent is unavailable."
+          : "Worker turn ended before producing a result.";
+      const payload = buildWorkerErrorPayload(
         actor.name || actor.id,
-        "Worker turn ended before producing a result.",
+        message,
+        {
+          ...(workflowStepId ? { workflowStepId } : {}),
+          aborted: false,
+          failureCode,
+          retryable: false,
+        },
+      );
+      return completeNestedDispatchOutcome({
+        ok: false,
+        actor,
+        ...(workflowStepId ? { workflowStepId } : {}),
+        text: r.text || "",
+        produced: r.produced || [],
+        failureCode,
+        retryable: false,
+        ...(r.infrastructureFailure ? { infrastructureFailure: true } : {}),
+        payload,
+      });
+    }
+    const completedAbortSource = nestedAbortSource();
+    if (completedAbortSource?.kind === "coordinator") {
+      return completeNestedDispatchOutcome(
+        buildNestedAbortOutcome({
+          actor,
+          ...(workflowStepId ? { workflowStepId } : {}),
+          source: completedAbortSource,
+          text: r.text,
+          produced: r.produced,
+        }),
       );
     }
     if (r.errText) {
+      const failureCode = r.persistedMsg?.failure_code || "nested_worker_error";
       const partial =
         r.text && r.text.trim()
           ? `${r.errText}\n\nPartial result:\n${r.text}`
           : r.errText;
-      return buildWorkerErrorPayload(actor.name || actor.id, partial);
+      const payload = buildWorkerErrorPayload(
+        actor.name || actor.id,
+        partial,
+        {
+          ...(workflowStepId ? { workflowStepId } : {}),
+          aborted: false,
+          failureCode,
+          retryable: false,
+        },
+      );
+      return completeNestedDispatchOutcome({
+        ok: false,
+        actor,
+        ...(workflowStepId ? { workflowStepId } : {}),
+        text: r.text || "",
+        produced: r.produced,
+        failureCode,
+        retryable: false,
+        ...(r.infrastructureFailure ? { infrastructureFailure: true } : {}),
+        payload,
+      });
     }
     const text = r.text || "";
     const produced = r.produced;
     const form = r.outcome.kind === "persist" ? r.outcome.form : undefined;
-    return buildWorkerResultPayload(
+    const payload = buildWorkerResultPayload(
       actor.name || actor.id,
       text,
       produced,
       form,
+      workflowStepId,
     );
+    return completeNestedDispatchOutcome({
+      ok: true,
+      actor,
+      ...(workflowStepId ? { workflowStepId } : {}),
+      text,
+      produced,
+      ...(form ? { form } : {}),
+      payload,
+    });
   } finally {
+    if (parentSignal)
+      parentSignal.removeEventListener("abort", abortFromParent);
     if (surfaced) {
       // Turn ended (its bubble was already emitted + consumed the placeholder
       // inside runActorTurn). Drop the mirror and re-emit so the commander
@@ -5930,6 +6915,715 @@ async function runNestedDispatch(
     }
     releaseDispatch();
   }
+}
+
+function workflowAttemptFailureCode(
+  outcome: Extract<NestedDispatchOutcome, { ok: false }>,
+): WorkflowAttemptFailureCode {
+  if (
+    outcome.failureCode === "coordinator_tool_idle" ||
+    outcome.failureCode === "coordinator_agent_idle"
+  ) {
+    return outcome.failureCode;
+  }
+  if (
+    outcome.failureCode === "missing_cli" ||
+    outcome.failureCode === "agent_unavailable"
+  ) {
+    return "dependency_failed";
+  }
+  return "runtime_failed";
+}
+
+function currentCommanderTurn(state: CidState): WorkerState | null {
+  for (const worker of state.workers.values()) {
+    if (
+      worker.actor.kind === "commander" &&
+      worker.running &&
+      worker.currentTurnId
+    ) {
+      return worker;
+    }
+  }
+  return null;
+}
+
+function emitCoordinatorTransition(
+  state: CidState,
+  prepared: PreparedNestedDispatchStep,
+  event: ProcessEvent,
+  logData: {
+    actorId?: string | null;
+    phase: "retry" | "fallback" | "anonymous" | "returned";
+    attempt?: number;
+    reason: string;
+    fallbackKind: "same_agent" | "named_agent" | "anonymous_worker" | "commander";
+  },
+): void {
+  const commander = currentCommanderTurn(state);
+  if (commander?.currentTurnId) {
+    emit(state, {
+      type: "process",
+      cid: state.cid,
+      actor: commander.actor.id,
+      turn_id: commander.currentTurnId,
+      data: { type: "event", event },
+    });
+  }
+  log.info("coordinator transition", {
+    cid: maskId(state.cid),
+    step_id: maskId(prepared.step.id),
+    actor_id: maskId(
+      logData.actorId === null ? "anonymous" : logData.actorId || "",
+    ),
+    phase: logData.phase,
+    attempt: logData.attempt,
+    reason: logData.reason,
+    fallback_kind: logData.fallbackKind,
+  });
+}
+
+function unexpectedNestedDispatchOutcome(
+  actor: Actor,
+  workflowStepId: string,
+): NestedDispatchOutcome {
+  const message = "Nested dispatch failed unexpectedly.";
+  return {
+    ok: false,
+    actor,
+    workflowStepId,
+    text: "",
+    produced: [],
+    failureCode: "nested_dispatch_error",
+    retryable: false,
+    payload: buildWorkerErrorPayload(actor.name || actor.id, message, {
+      workflowStepId,
+      aborted: false,
+      failureCode: "nested_dispatch_error",
+      retryable: false,
+    }),
+  };
+}
+
+function exhaustedNestedDispatchOutcome(input: {
+  prepared: PreparedNestedDispatchStep;
+  lastOutcome: Extract<NestedDispatchOutcome, { ok: false }>;
+  produced: string[];
+}): NestedDispatchOutcome {
+  const partial = String(input.lastOutcome.text || "").trim();
+  const message = partial
+    ? `Coordinator exhausted recovery attempts.\n\nPartial result:\n${partial}`
+    : "Coordinator exhausted recovery attempts.";
+  return completeNestedDispatchOutcome({
+    ok: false,
+    actor: input.lastOutcome.actor,
+    workflowStepId: input.prepared.step.id,
+    text: input.lastOutcome.text,
+    produced: input.produced,
+    failureCode: "coordinator_exhausted",
+    retryable: false,
+    payload: buildWorkerErrorPayload(
+      input.lastOutcome.actor.name || input.lastOutcome.actor.id,
+      message,
+      {
+        workflowStepId: input.prepared.step.id,
+        aborted: false,
+        failureCode: "coordinator_exhausted",
+        retryable: false,
+        produced: input.produced,
+      },
+    ),
+  });
+}
+
+function nestedDispatchLifecycleFailureOutcome(
+  actor: Actor,
+  workflowStepId: string,
+): NestedDispatchOutcome {
+  const message = "Nested dispatch lifecycle failed.";
+  return {
+    ok: false,
+    actor,
+    workflowStepId,
+    text: "",
+    produced: [],
+    failureCode: "runtime_failed",
+    retryable: false,
+    payload: buildWorkerErrorPayload(actor.name || actor.id, message, {
+      workflowStepId,
+      aborted: false,
+      failureCode: "runtime_failed",
+      retryable: false,
+    }),
+  };
+}
+
+function workflowAttemptInputForActor(actor: Actor) {
+  return actor.kind === "worker"
+    ? {
+        actor_id: null,
+        actor_kind: "anonymous_worker" as const,
+        actor_name: actor.name,
+      }
+    : {
+        actor_id: actor.id,
+        actor_kind: "agent" as const,
+        actor_name: actor.name,
+      };
+}
+
+function workflowAttemptFinishForOutcome(
+  outcome: NestedDispatchOutcome,
+): FinishWorkflowStepAttemptInput {
+  if (outcome.ok === true) return { status: "completed" };
+  const failedOutcome: Extract<NestedDispatchOutcome, { ok: false }> = outcome;
+  const cancelled =
+    failedOutcome.abortSource === "group_abort" ||
+    failedOutcome.abortSource === "parent_abort";
+  return cancelled
+    ? { status: "cancelled" }
+    : {
+        status: "failed",
+        failure_code: workflowAttemptFailureCode(failedOutcome),
+      };
+}
+
+function latestWorkflowAttemptStep(
+  run: Awaited<ReturnType<typeof readActiveWorkflowRun>>,
+  stepId: string,
+): WorkflowStep | null {
+  return run?.steps.find((candidate) => candidate.id === stepId) || null;
+}
+
+function workflowAttemptMatchesActor(
+  step: WorkflowStep | null,
+  actor: Actor,
+  attemptNumber?: number,
+): boolean {
+  const attempts = step?.attempts || [];
+  const latest = attempts[attempts.length - 1];
+  if (!latest || (attemptNumber && latest.attempt !== attemptNumber)) return false;
+  return actor.kind === "worker"
+    ? latest.actor_kind === "anonymous_worker" && latest.actor_id === null
+    : latest.actor_kind === "agent" && latest.actor_id === actor.id;
+}
+
+function terminalWorkflowAttemptInput(
+  step: WorkflowStep,
+): FinishWorkflowStepAttemptInput | null {
+  const attempts = step.attempts || [];
+  const latest = attempts[attempts.length - 1];
+  if (!latest || latest.status === "running") return null;
+  return {
+    status: latest.status,
+    ...(latest.failure_code ? { failure_code: latest.failure_code } : {}),
+  };
+}
+
+async function readLifecycleAttemptStep(
+  uid: string,
+  cid: string,
+  stepId: string,
+): Promise<WorkflowStep | null> {
+  return latestWorkflowAttemptStep(await readActiveWorkflowRun(uid, cid), stepId);
+}
+
+async function reconcileNestedDispatchAttempt(input: {
+  uid: string;
+  cid: string;
+  stepId: string;
+  actor: Actor;
+  finish: FinishWorkflowStepAttemptInput;
+  repairStart: boolean;
+  attemptNumber?: number;
+}): Promise<WorkflowStep | null> {
+  let step: WorkflowStep | null = null;
+  try {
+    step = await readLifecycleAttemptStep(input.uid, input.cid, input.stepId);
+  } catch {
+    return null;
+  }
+  if (!workflowAttemptMatchesActor(step, input.actor, input.attemptNumber)) {
+    return null;
+  }
+  let terminal = step && terminalWorkflowAttemptInput(step);
+  if (terminal) {
+    try {
+      await finishWorkflowStepAttempt(
+        input.uid,
+        input.cid,
+        input.stepId,
+        terminal,
+      );
+    } catch {
+      // The durable terminal row is authoritative; this call only repairs audit.
+    }
+  } else {
+    if (input.repairStart) {
+      try {
+        await beginWorkflowStepAttempt(
+          input.uid,
+          input.cid,
+          input.stepId,
+          workflowAttemptInputForActor(input.actor),
+        );
+      } catch {
+        // An existing start audit makes begin reject; the running row still proves it.
+      }
+    }
+    try {
+      await finishWorkflowStepAttempt(
+        input.uid,
+        input.cid,
+        input.stepId,
+        input.finish,
+      );
+    } catch {
+      // Re-read below: finish may have committed before its audit append failed.
+    }
+  }
+  try {
+    step = await readLifecycleAttemptStep(input.uid, input.cid, input.stepId);
+  } catch {
+    return null;
+  }
+  if (!workflowAttemptMatchesActor(step, input.actor, input.attemptNumber)) {
+    return null;
+  }
+  terminal = step && terminalWorkflowAttemptInput(step);
+  return terminal ? step : null;
+}
+
+interface NestedDispatchAttemptLifecycleResult {
+  outcome: NestedDispatchOutcome;
+  finishedStep: WorkflowStep | null;
+  settlement:
+    | "terminal_confirmed"
+    | "infrastructure_failure"
+    | "unrecoverable";
+}
+
+async function runNestedDispatchAttemptLifecycle(input: {
+  state: CidState;
+  actor: Actor;
+  stepId: string;
+  parentSignal?: AbortSignal;
+  execute: () => Promise<NestedDispatchOutcome>;
+}): Promise<NestedDispatchAttemptLifecycleResult> {
+  const runtimeFailure = () =>
+    nestedDispatchLifecycleFailureOutcome(input.actor, input.stepId);
+  let begunStep: WorkflowStep;
+  try {
+    begunStep = await (
+      _nestedDispatchAttemptHooksForTest?.begin || beginWorkflowStepAttempt
+    )(
+      input.state.uid,
+      input.state.cid,
+      input.stepId,
+      workflowAttemptInputForActor(input.actor),
+    );
+  } catch {
+    const reconciled = await reconcileNestedDispatchAttempt({
+      uid: input.state.uid,
+      cid: input.state.cid,
+      stepId: input.stepId,
+      actor: input.actor,
+      finish: { status: "failed", failure_code: "runtime_failed" },
+      repairStart: true,
+    });
+    if (!reconciled) {
+      log.warn("nested dispatch attempt lifecycle invariant", {
+        cid: maskId(input.state.cid),
+        step_id: maskId(input.stepId),
+        actor_id: maskId(input.actor.kind === "worker" ? "anonymous" : input.actor.id),
+        phase: "begin",
+      });
+    }
+    return {
+      outcome: runtimeFailure(),
+      finishedStep: reconciled,
+      settlement: reconciled ? "infrastructure_failure" : "unrecoverable",
+    };
+  }
+
+  const attempts = begunStep.attempts || [];
+  const attemptNumber = attempts[attempts.length - 1]?.attempt;
+  let outcome: NestedDispatchOutcome;
+  let infrastructureFailure = false;
+  const signalled = input.parentSignal?.aborted
+    ? abortSourceFromSignal(input.parentSignal) || ({ kind: "parent_abort" } as const)
+    : null;
+  if (signalled && signalled.kind !== "coordinator") {
+    outcome = completeNestedDispatchOutcome(
+      buildNestedAbortOutcome({
+        actor: input.actor,
+        workflowStepId: input.stepId,
+        source: signalled,
+      }),
+    );
+    try {
+      const settledStep = await (
+        _nestedDispatchAttemptHooksForTest?.settleAbort ||
+        settleNestedDispatchAbort
+      )(
+        input.state.uid,
+        input.state.cid,
+        input.stepId,
+        nestedAbortMessage(signalled, ""),
+      );
+      return {
+        outcome,
+        finishedStep: settledStep,
+        settlement: "terminal_confirmed",
+      };
+    } catch {
+      log.warn("nested abort settlement failed", {
+        cid: maskId(input.state.cid),
+        step_id: maskId(input.stepId),
+        phase: "after_durable_begin",
+        failure_code: "abort_settlement_failed",
+        error: logErrorRef(new Error("Nested abort settlement failed.")),
+      });
+      return { outcome, finishedStep: null, settlement: "unrecoverable" };
+    }
+  } else {
+    try {
+      outcome = await (_nestedDispatchAttemptHooksForTest?.execute || input.execute)();
+    } catch {
+      outcome = runtimeFailure();
+      infrastructureFailure = true;
+    }
+  }
+  infrastructureFailure ||=
+    outcome.ok === false && outcome.infrastructureFailure === true;
+  const finish = workflowAttemptFinishForOutcome(outcome);
+  let finishedStep: WorkflowStep | null = null;
+  try {
+    finishedStep = await (
+      _nestedDispatchAttemptHooksForTest?.finish || finishWorkflowStepAttempt
+    )(input.state.uid, input.state.cid, input.stepId, finish);
+  } catch {
+    infrastructureFailure = true;
+    finishedStep = await reconcileNestedDispatchAttempt({
+      uid: input.state.uid,
+      cid: input.state.cid,
+      stepId: input.stepId,
+      actor: input.actor,
+      finish,
+      repairStart: false,
+      attemptNumber,
+    });
+  }
+  if (!finishedStep) {
+    outcome = runtimeFailure();
+    log.warn("nested dispatch attempt lifecycle invariant", {
+      cid: maskId(input.state.cid),
+      step_id: maskId(input.stepId),
+      actor_id: maskId(input.actor.kind === "worker" ? "anonymous" : input.actor.id),
+      phase: "finish",
+    });
+    return {
+      outcome,
+      finishedStep: null,
+      settlement: "unrecoverable",
+    };
+  }
+  return {
+    outcome,
+    finishedStep,
+    settlement: infrastructureFailure
+      ? "infrastructure_failure"
+      : "terminal_confirmed",
+  };
+}
+
+interface CoordinatedNestedDispatchInput {
+  state: CidState;
+  parentSignal?: AbortSignal;
+  initialActor: Actor;
+  task: string;
+  attachments?: string[];
+  outputDelivery: "final" | "process";
+  kstarDecision?: KStarDecisionRecord;
+  prepared: PreparedNestedDispatchStep;
+  requiredCapabilities: string[];
+}
+
+async function runCoordinatedNestedDispatch(
+  input: CoordinatedNestedDispatchInput,
+): Promise<NestedDispatchOutcome> {
+  return runCoordinatedNestedDispatchAdmitted(input);
+}
+
+async function runCoordinatedNestedDispatchAdmitted(
+  input: CoordinatedNestedDispatchInput,
+): Promise<NestedDispatchOutcome> {
+  let actor = input.initialActor;
+  let task = input.task;
+  let transition:
+    | {
+        phase: "retry" | "fallback" | "anonymous";
+        reason: string;
+        fallbackKind: "same_agent" | "named_agent" | "anonymous_worker";
+      }
+    | null = null;
+  const failedActorIds = new Set<string>();
+  const produced = new Set<string>();
+  let lastFailure: Extract<NestedDispatchOutcome, { ok: false }> | null = null;
+  const lateAbortOutcome = async (
+    phase:
+      | "before_preparation"
+      | "after_retry_hook"
+      | "after_retry_preparation"
+      | "before_transition"
+      | "before_attempt",
+  ): Promise<NestedDispatchOutcome | null> => {
+    if (!input.parentSignal?.aborted) return null;
+    const signalled = abortSourceFromSignal(input.parentSignal);
+    const source = signalled || ({ kind: "parent_abort" } as const);
+    if (source.kind === "coordinator") return null;
+    const outcome = completeNestedDispatchOutcome(
+      buildNestedAbortOutcome({
+        actor,
+        workflowStepId: input.prepared.step.id,
+        source,
+        text: lastFailure?.text || "",
+        produced: [...produced],
+      }),
+    );
+    try {
+      await (
+        _nestedDispatchAttemptHooksForTest?.settleAbort ||
+        settleNestedDispatchAbort
+      )(
+        input.state.uid,
+        input.state.cid,
+        input.prepared.step.id,
+        nestedAbortMessage(source, ""),
+      );
+    } catch {
+      log.warn("nested abort settlement failed", {
+        cid: maskId(input.state.cid),
+        step_id: maskId(input.prepared.step.id),
+        phase,
+        failure_code: "abort_settlement_failed",
+        error: logErrorRef(new Error("Nested abort settlement failed.")),
+      });
+    }
+    return outcome;
+  };
+  const returnAfterInfrastructureFailure = (): NestedDispatchOutcome =>
+    lastFailure ||
+    nestedDispatchLifecycleFailureOutcome(actor, input.prepared.step.id);
+
+  for (let loopAttempt = 1; loopAttempt <= 4; loopAttempt += 1) {
+    const beforePreparationAbort = await lateAbortOutcome("before_preparation");
+    if (beforePreparationAbort) return beforePreparationAbort;
+    if (loopAttempt > 1) {
+      try {
+        await _nestedDispatchAttemptHooksForTest?.beforeRetry?.();
+      } catch {
+        return returnAfterInfrastructureFailure();
+      }
+      const afterRetryHookAbort = await lateAbortOutcome("after_retry_hook");
+      if (afterRetryHookAbort) return afterRetryHookAbort;
+      try {
+        await prepareWorkflowStepForRetry(
+          input.state.uid,
+          input.state.cid,
+          input.prepared.step.id,
+        );
+      } catch {
+        log.warn("nested retry preparation lifecycle invariant", {
+          cid: maskId(input.state.cid),
+          step_id: maskId(input.prepared.step.id),
+        });
+        return returnAfterInfrastructureFailure();
+      }
+      try {
+        await _nestedDispatchAttemptHooksForTest?.afterRetryPreparation?.();
+      } catch {
+        return returnAfterInfrastructureFailure();
+      }
+      const afterPreparationAbort = await lateAbortOutcome(
+        "after_retry_preparation",
+      );
+      if (afterPreparationAbort) return afterPreparationAbort;
+    }
+    if (transition) {
+      const beforeTransitionAbort = await lateAbortOutcome("before_transition");
+      if (beforeTransitionAbort) return beforeTransitionAbort;
+      const attempt = loopAttempt;
+      const event: ProcessEvent =
+        transition.phase === "retry"
+          ? {
+              stream: "coordinator",
+              data: { phase: "retry", attempt, actor_id: actor.id },
+            }
+          : transition.phase === "fallback"
+            ? {
+                stream: "coordinator",
+                data: {
+                  phase: "fallback",
+                  attempt,
+                  actor_id: actor.id,
+                  actor_name: actor.name || actor.id,
+                },
+              }
+            : {
+                stream: "coordinator",
+                data: { phase: "anonymous", attempt },
+              };
+      emitCoordinatorTransition(input.state, input.prepared, event, {
+        actorId: actor.kind === "worker" ? null : actor.id,
+        phase: transition.phase,
+        attempt,
+        reason: transition.reason,
+        fallbackKind: transition.fallbackKind,
+      });
+    }
+
+    const beforeAttemptAbort = await lateAbortOutcome("before_attempt");
+    if (beforeAttemptAbort) return beforeAttemptAbort;
+    const lifecycle = await runNestedDispatchAttemptLifecycle({
+      state: input.state,
+      actor,
+      stepId: input.prepared.step.id,
+      ...(input.parentSignal ? { parentSignal: input.parentSignal } : {}),
+      execute: () =>
+        runNestedDispatch(
+          input.state,
+          input.parentSignal,
+          actor,
+          task,
+          input.attachments,
+          input.outputDelivery,
+          input.kstarDecision,
+          input.prepared.step.id,
+        ),
+    });
+    const { outcome, finishedStep } = lifecycle;
+    for (const file of outcome.produced) produced.add(file);
+
+    if (lifecycle.settlement !== "terminal_confirmed" || outcome.ok === true) {
+      return outcome;
+    }
+
+    const failedOutcome: Extract<NestedDispatchOutcome, { ok: false }> = outcome;
+    const cancelled =
+      failedOutcome.abortSource === "group_abort" ||
+      failedOutcome.abortSource === "parent_abort";
+    if (!finishedStep) return outcome;
+    lastFailure = failedOutcome;
+    if (actor.kind === "agent") failedActorIds.add(actor.id);
+    if (cancelled) return outcome;
+
+    const action = nextRecoveryAction({
+      attempts: finishedStep.attempts || [],
+      ...(failedOutcome.abortSource
+        ? { abortSource: failedOutcome.abortSource }
+        : {}),
+    });
+    if (action.kind === "stop") return outcome;
+    if (action.kind === "return_commander" || loopAttempt >= 4) break;
+
+    if (action.kind === "retry_same") {
+      actor = input.initialActor;
+      task = buildRetryResumeModelText({
+        originalRequest: input.task,
+        uncertainToolState:
+          failedOutcome.failureCode === "coordinator_tool_idle",
+        failureCode: failedOutcome.failureCode,
+      });
+      transition = {
+        phase: "retry",
+        reason: failedOutcome.failureCode,
+        fallbackKind: "same_agent",
+      };
+      continue;
+    }
+
+    if (action.kind === "select_fallback") {
+      const members = await readMembers(input.state.uid, input.state.cid);
+      const agents = await agentsFeat.listAgents().catch(() => []);
+      const busyActorIds = new Set(
+        [...input.state.nestedTurns.values()].map((turn) => turn.actor),
+      );
+      const fallback = selectFallbackAgent({
+        task: input.task,
+        requiredCapabilities: input.requiredCapabilities,
+        members: members.actors,
+        agents,
+        failedActorIds,
+        busyActorIds,
+      });
+      if (fallback) {
+        actor = {
+          ...fallback.actor,
+          kind: "agent",
+          name: fallback.agent.name || fallback.actor.name,
+        };
+        transition = {
+          phase: "fallback",
+          reason: failedOutcome.failureCode,
+          fallbackKind: "named_agent",
+        };
+      } else {
+        actor = {
+          kind: "worker",
+          id: genId12(),
+          name: "Worker",
+          joined_at: nowIso(),
+        };
+        transition = {
+          phase: "anonymous",
+          reason: failedOutcome.failureCode,
+          fallbackKind: "anonymous_worker",
+        };
+      }
+      task = input.task;
+      continue;
+    }
+
+    actor = {
+      kind: "worker",
+      id: genId12(),
+      name: "Worker",
+      joined_at: nowIso(),
+    };
+    task = input.task;
+    transition = {
+      phase: "anonymous",
+      reason: failedOutcome.failureCode,
+      fallbackKind: "anonymous_worker",
+    };
+  }
+
+  if (!lastFailure) {
+    lastFailure = unexpectedNestedDispatchOutcome(
+      actor,
+      input.prepared.step.id,
+    ) as Extract<NestedDispatchOutcome, { ok: false }>;
+  }
+  emitCoordinatorTransition(
+    input.state,
+    input.prepared,
+    {
+      stream: "coordinator",
+      data: { phase: "returned", failure_code: "coordinator_exhausted" },
+    },
+    {
+      actorId: lastFailure.actor.kind === "worker" ? null : lastFailure.actor.id,
+      phase: "returned",
+      reason: "coordinator_exhausted",
+      fallbackKind: "commander",
+    },
+  );
+  return exhaustedNestedDispatchOutcome({
+    prepared: input.prepared,
+    lastOutcome: lastFailure,
+    produced: [...produced],
+  });
 }
 
 /** Generic role guidance for an ephemeral anonymous worker — fed as the
@@ -5947,6 +7641,85 @@ const WORKER_WORKFLOW = [
 
 function _toolError(error: string): { content: string; isError: true } {
   return { content: JSON.stringify({ ok: false, error }), isError: true };
+}
+
+const HANDOFF_FINAL_ACTOR_ERROR =
+  "Handoff final delivery requires a named Agent.";
+const HANDOFF_STATE_ERROR = "Handoff state could not be finalized safely.";
+const HANDOFF_CANCELLED_ERROR = "Handoff finalization was cancelled.";
+const HANDOFF_SETTLEMENT_INVARIANT =
+  "handoff finalization settlement invariant";
+
+function _handoffFinalizationCancelled(
+  state: CidState,
+  signal?: AbortSignal,
+): boolean {
+  return !!(signal?.aborted || state.terminating);
+}
+
+async function _commitHandoffState(
+  ...args: Parameters<typeof commitHandoffState>
+): ReturnType<typeof commitHandoffState> {
+  return (
+    _handoffStateHooksForTest?.commitHandoffState || commitHandoffState
+  )(...args);
+}
+
+async function _rollbackHandoffState(
+  ...args: Parameters<typeof rollbackHandoffState>
+): ReturnType<typeof rollbackHandoffState> {
+  return (
+    _handoffStateHooksForTest?.rollbackHandoffState || rollbackHandoffState
+  )(...args);
+}
+
+function _rollbackTokenFromError(
+  error: unknown,
+): HandoffStateRollbackToken | undefined {
+  const token = (error as { rollbackToken?: unknown })?.rollbackToken;
+  if (!token || typeof token !== "object") return undefined;
+  return token as HandoffStateRollbackToken;
+}
+
+async function _settleHandoffFinalizationFailure(input: {
+  state: CidState;
+  prepared: PreparedNestedDispatchStep;
+  actorId: string;
+  rollbackToken?: HandoffStateRollbackToken;
+}): Promise<void> {
+  if (input.rollbackToken) {
+    try {
+      await _rollbackHandoffState(
+        input.state.uid,
+        input.state.cid,
+        input.rollbackToken,
+      );
+    } catch {
+      log.warn("handoff finalization rollback failed", {
+        cid: maskId(input.state.cid),
+        actor_id: maskId(input.actorId),
+        step_id: maskId(input.prepared.step.id),
+        error: logErrorRef(new Error("Handoff state rollback failed.")),
+      });
+    }
+  }
+  try {
+    await settleHandoffFinalizationFailure(
+      input.state.uid,
+      input.state.cid,
+      input.prepared.step.id,
+    );
+  } catch {
+    log.warn("handoff finalization workflow settlement failed", {
+      cid: maskId(input.state.cid),
+      actor_id: maskId(input.actorId),
+      step_id: maskId(input.prepared.step.id),
+      error: logErrorRef(
+        new Error("Handoff workflow settlement failed."),
+      ),
+    });
+    throw new Error(HANDOFF_SETTLEMENT_INVARIANT);
+  }
 }
 
 function _clampLimit(
@@ -6150,6 +7923,8 @@ async function buildCommanderExtraTools(
   onTerminalHandoff?: () => void,
 ): Promise<AgentTool[]> {
   const { uid, cid } = w;
+  const { getConversationWorkspacePath } = await import("./conv_workspace");
+  const coordinatorWorkingDir = await getConversationWorkspacePath(uid, cid);
   const tools: AgentTool[] = [];
   tools.push({
     name: "auto_tasks_list",
@@ -6582,6 +8357,7 @@ async function buildCommanderExtraTools(
       "`message` is the task text, sent verbatim to the agent.",
       "**Note**: `@<X>` written in prose is decoration, not a dispatch signal — call this tool to dispatch.",
       "For every delegated task, set `kstar` to `required` or `skip`. Use `required` for durable deliverables, reports, long writing, code changes, reviews, or decision-impacting work, and include `kstar_reason` plus `kstar_expectation`.",
+      "Declare `access_mode: read` only when the task will not modify workspace state; use `write` for file, code, or configuration mutations. `write_scopes` are workspace-relative paths. Omitted `access_mode` defaults to `write` and locks the whole conversation workspace. `depends_on` values are workflow step ids returned on prior `<worker-result>` or `<worker-error>` tool results.",
     ].join(" "),
     inputSchema: {
       type: "object",
@@ -6601,6 +8377,10 @@ async function buildCommanderExtraTools(
             "Optional. What the commander should do after this agent blocks on a form, receives the user input, and completes.",
         },
         context_dependencies: { type: "array", items: { type: "string" } },
+        depends_on: { type: "array", items: { type: "string" } },
+        required_capabilities: { type: "array", items: { type: "string" } },
+        access_mode: { type: "string", enum: ["read", "write"] },
+        write_scopes: { type: "array", items: { type: "string" } },
         resume_step_id: { type: "string" },
         resume_token: { type: "string" },
         kstar: {
@@ -6644,6 +8424,15 @@ async function buildCommanderExtraTools(
       const resumeStepId = String(input?.resume_step_id || "").trim();
       const resumeToken = String(input?.resume_token || "").trim();
       const kstar = normalizeDispatchKStar(input, message, cid);
+      let dispatchContract: CoordinatorDispatchContract;
+      try {
+        dispatchContract = coordinatorDispatchContract(
+          coordinatorWorkingDir,
+          input as Record<string, unknown>,
+        );
+      } catch (error) {
+        return _toolError((error as Error).message);
+      }
       if (!toRaw) {
         return {
           content: JSON.stringify({ ok: false, error: "`to` is required" }),
@@ -6662,7 +8451,7 @@ async function buildCommanderExtraTools(
       const blocked = await blockedByCollaborationGateToolResult(uid, cid);
       if (blocked) return blocked;
       // Resolve `to` → actor id via the shared name-map resolver.
-      const resolvedId = await resolveDispatchTarget(uid, cid, toRaw);
+      const resolvedId = await resolveDispatchTarget(cid, toRaw);
       if (!resolvedId) {
         return {
           content: JSON.stringify({
@@ -6680,7 +8469,7 @@ async function buildCommanderExtraTools(
       // Run the agent's turn in-process and hand its FULL result back as this
       // tool's result; the agent also persists its own visible bubble and the
       // commander then synthesises (Option B). The commander stays in the loop.
-      const dispatchAgent = await agentsFeat.getAgentForChatDispatch(uid, resolvedId);
+      const dispatchAgent = await agentsFeat.getAgent(resolvedId);
       const dispatchActor: Actor = {
         kind: "agent",
         id: resolvedId,
@@ -6693,11 +8482,15 @@ async function buildCommanderExtraTools(
         "dispatch_to",
         _unwrapLlmTurnPayload(currentTurnPayload) || currentTurnPayload,
         message,
+        dispatchContract,
         contextDependencies,
         resumeStepId,
         resumeToken,
       );
       if (prepared.blocked) return blockedNestedDispatchToolResult(prepared);
+      const dependencyBlocked =
+        await checkPreparedNestedDispatchDependenciesForTool(state, prepared);
+      if (dependencyBlocked) return dependencyBlocked;
       const pendingWake = await gateNestedAgentWake(
         state,
         dispatchActor,
@@ -6709,27 +8502,44 @@ async function buildCommanderExtraTools(
         kstarDecisionRecord(kstar),
       );
       if (pendingWake) return pendingWakeToolResult(pendingWake);
-      // Flush the commander's pre-dispatch reasoning as its own bubble first, so
-      // this visible agent's reply lands AFTER it and the synthesis opens a fresh
-      // bubble (commander loop bubbles).
-      await onVisibleDispatch?.();
-      const dispatchResult = await runNestedDispatch(
+      const dispatchExecution = await withPreparedNestedDispatchAccess({
         state,
-        ctx?.signal,
-        dispatchActor,
-        message,
-        currentTurnAttachments,
-        "process",
-        kstarDecisionRecord(kstar),
-        prepared.step.id,
-      );
+        prepared,
+        request: dispatchContract.accessRequest,
+        signal: ctx?.signal,
+        execute: async () => {
+          // Flush only after admission and authoritative start succeed.
+          await _beforeVisibleDispatchForTest?.();
+          await onVisibleDispatch?.();
+          return runCoordinatedNestedDispatch({
+            state,
+            parentSignal: ctx?.signal,
+            initialActor: dispatchActor,
+            task: message,
+            attachments: currentTurnAttachments,
+            outputDelivery: "process",
+            kstarDecision: kstarDecisionRecord(kstar),
+            prepared,
+            requiredCapabilities: dispatchContract.requiredCapabilities,
+          });
+        },
+      });
+      if (dispatchExecution.kind === "blocked")
+        return dispatchExecution.blocked!;
+      const dispatchResult = dispatchExecution.value!;
       try {
         await _setFormWaitLedgerFromWorkerResult({
           uid,
           cid,
-          result: dispatchResult,
-          ownerAgentId: resolvedId,
-          ownerAgentName: dispatchAgent?.name || resolvedId,
+          result: dispatchResult.payload,
+          ownerAgentId:
+            dispatchResult.actor.kind === "agent"
+              ? dispatchResult.actor.id
+              : resolvedId,
+          ownerAgentName:
+            dispatchResult.actor.kind === "agent"
+              ? dispatchResult.actor.name || dispatchResult.actor.id
+              : dispatchAgent?.name || resolvedId,
           userGoal:
             _unwrapLlmTurnPayload(currentTurnPayload) || currentTurnPayload,
           agentTask: message,
@@ -6741,7 +8551,7 @@ async function buildCommanderExtraTools(
           `dispatch_to form ledger set failed cid=${cid}: ${(err as Error).message}`,
         );
       }
-      return { content: dispatchResult };
+      return { content: dispatchResult.payload };
     },
   });
 
@@ -6759,6 +8569,7 @@ async function buildCommanderExtraTools(
       "Contrast with `dispatch_to`, which you use ONLY when you can name a concrete next action you will run on the result this same turn (you stay in the loop).",
       "`to` is the agent name or agent_id (not `commander` / `user`); `message` is the task text, sent verbatim.",
       "For every delegated task, set `kstar` to `required` or `skip`; include `kstar_reason` and `kstar_expectation` when required.",
+      "Declare `access_mode: read` only when the task will not modify workspace state; use `write` for file, code, or configuration mutations. `write_scopes` are workspace-relative paths. Omitted `access_mode` defaults to `write` and locks the whole conversation workspace. `depends_on` values are workflow step ids returned on prior `<worker-result>` or `<worker-error>` tool results.",
     ].join(" "),
     inputSchema: {
       type: "object",
@@ -6778,6 +8589,10 @@ async function buildCommanderExtraTools(
             "Optional. Use only when this hand-off blocks a broader commander-owned task; say what the commander should do after this agent completes or finishes collecting user input.",
         },
         context_dependencies: { type: "array", items: { type: "string" } },
+        depends_on: { type: "array", items: { type: "string" } },
+        required_capabilities: { type: "array", items: { type: "string" } },
+        access_mode: { type: "string", enum: ["read", "write"] },
+        write_scopes: { type: "array", items: { type: "string" } },
         resume_step_id: { type: "string" },
         resume_token: { type: "string" },
         kstar: {
@@ -6821,11 +8636,20 @@ async function buildCommanderExtraTools(
       const resumeStepId = String(input?.resume_step_id || "").trim();
       const resumeToken = String(input?.resume_token || "").trim();
       const kstar = normalizeDispatchKStar(input, message, cid);
+      let dispatchContract: CoordinatorDispatchContract;
+      try {
+        dispatchContract = coordinatorDispatchContract(
+          coordinatorWorkingDir,
+          input as Record<string, unknown>,
+        );
+      } catch (error) {
+        return _toolError((error as Error).message);
+      }
       if (!toRaw) return _toolError("`to` is required");
       if (!message) return _toolError("`message` is required");
       const blocked = await blockedByCollaborationGateToolResult(uid, cid);
       if (blocked) return blocked;
-      const resolvedId = await resolveDispatchTarget(uid, cid, toRaw);
+      const resolvedId = await resolveDispatchTarget(cid, toRaw);
       if (!resolvedId)
         return _toolError(t("errors.unknown_actor", { name: toRaw }));
       if (resolvedId === COMMANDER_ID || resolvedId === USER_ID) {
@@ -6833,7 +8657,7 @@ async function buildCommanderExtraTools(
           "hand_off_to target must be an agent (not commander / user)",
         );
       }
-      const handoffAgent = await agentsFeat.getAgentForChatDispatch(uid, resolvedId);
+      const handoffAgent = await agentsFeat.getAgent(resolvedId);
       const handoffActor: Actor = {
         kind: "agent",
         id: resolvedId,
@@ -6846,11 +8670,15 @@ async function buildCommanderExtraTools(
         "hand_off_to",
         _unwrapLlmTurnPayload(currentTurnPayload) || currentTurnPayload,
         message,
+        dispatchContract,
         contextDependencies,
         resumeStepId,
         resumeToken,
       );
       if (prepared.blocked) return blockedNestedDispatchToolResult(prepared);
+      const dependencyBlocked =
+        await checkPreparedNestedDispatchDependenciesForTool(state, prepared);
+      if (dependencyBlocked) return dependencyBlocked;
       const pendingWake = await gateNestedAgentWake(
         state,
         handoffActor,
@@ -6862,111 +8690,200 @@ async function buildCommanderExtraTools(
         kstarDecisionRecord(kstar),
       );
       if (pendingWake) return pendingWakeToolResult(pendingWake);
-      // Flush the commander's pre-hand-off narration as its own bubble first.
-      await onVisibleDispatch?.();
-      // Move the floor to an interactive agent BEFORE running it, so the
-      // state_changed events emitted during its run already carry the floor —
-      // the renderer then suppresses an empty commander placeholder for the rest
-      // of this turn (no flicker). A one-shot (non-interactive) agent answers and
-      // is done, so the floor stays with the commander.
-      if (handoffAgent?.interactive === true) {
-        try {
-          await setActiveRecipient(uid, cid, resolvedId);
-        } catch (err) {
-          log.warn(
-            `hand_off floor set failed cid=${cid}: ${(err as Error).message}`,
+      const handoffExecution = await withPreparedNestedDispatchAccess({
+        state,
+        prepared,
+        request: dispatchContract.accessRequest,
+        signal: ctx?.signal,
+        execute: async () => {
+          await _beforeVisibleDispatchForTest?.();
+          await onVisibleDispatch?.();
+          const outcome = await runCoordinatedNestedDispatch({
+            state,
+            parentSignal: ctx?.signal,
+            initialActor: handoffActor,
+            task: message,
+            attachments: currentTurnAttachments,
+            outputDelivery: "final",
+            kstarDecision: kstarDecisionRecord(kstar),
+            prepared,
+            requiredCapabilities: dispatchContract.requiredCapabilities,
+          });
+          if (!outcome.ok) return { content: outcome.payload };
+
+          const finalActor = outcome.actor;
+          const finalAgent =
+            finalActor.kind === "agent"
+              ? await agentsFeat.getAgent(finalActor.id).catch(() => null)
+              : null;
+          const finalActorId =
+            finalActor.kind === "agent" ? finalActor.id : "anonymous";
+          const guard = {
+            ...(ctx?.signal ? { signal: ctx.signal } : {}),
+            isTerminating: () => state.terminating,
+          };
+          let rollbackToken: HandoffStateRollbackToken | undefined;
+          const failCancelled = async () => {
+            await _settleHandoffFinalizationFailure({
+              state,
+              prepared,
+              actorId: finalActorId,
+              ...(rollbackToken ? { rollbackToken } : {}),
+            });
+            return _toolError(HANDOFF_CANCELLED_ERROR);
+          };
+
+          if (_handoffFinalizationCancelled(state, ctx?.signal)) {
+            return failCancelled();
+          }
+          await _beforeHandoffStateCommitForTest?.();
+          if (_handoffFinalizationCancelled(state, ctx?.signal)) {
+            return failCancelled();
+          }
+
+          if (!finalAgent) {
+            try {
+              const committed = await _commitHandoffState(uid, cid, {
+                recipient_id: COMMANDER_ID,
+                guard,
+              });
+              rollbackToken = committed.rollbackToken;
+              await _afterHandoffStateCommitForTest?.();
+              if (_handoffFinalizationCancelled(state, ctx?.signal)) {
+                return failCancelled();
+              }
+            } catch (error) {
+              rollbackToken ||= _rollbackTokenFromError(error);
+              log.warn("handoff finalization state commit failed", {
+                cid: maskId(cid),
+                actor_id: maskId(finalActorId),
+                step_id: maskId(prepared.step.id),
+                error: logErrorRef(
+                  new Error("Handoff state persistence failed."),
+                ),
+              });
+              await _settleHandoffFinalizationFailure({
+                state,
+                prepared,
+                actorId: finalActorId,
+                ...(rollbackToken ? { rollbackToken } : {}),
+              });
+              return _toolError(HANDOFF_STATE_ERROR);
+            }
+            await _settleHandoffFinalizationFailure({
+              state,
+              prepared,
+              actorId: finalActorId,
+            });
+            return _toolError(HANDOFF_FINAL_ACTOR_ERROR);
+          }
+
+          const finalAgentId = finalActor.id;
+          const finalAgentName =
+            finalAgent.name || finalActor.name || finalAgentId;
+          const userGoal = _clipForOrchestration(
+            _unwrapLlmTurnPayload(currentTurnPayload) || currentTurnPayload,
           );
-        }
-        if (resume) {
-          try {
-            await setOrchestrationLedger(uid, cid, {
+          const handoffMessage = _clipForOrchestration(message);
+          const resumeInstruction = _clipForOrchestration(resume);
+          let ledger: OrchestrationLedgerInput | undefined;
+          if (outcome.form && resumeInstruction) {
+            ledger = {
+              status: "waiting_for_form",
+              blocked_on: "agent_form",
+              source_tool: "hand_off_to",
+              owner_agent_id: finalAgentId,
+              owner_agent_name: finalAgentName,
+              form_id: outcome.form.form_id,
+              user_goal: userGoal,
+              handoff_message: handoffMessage,
+              resume_instruction: resumeInstruction,
+            };
+          } else if (finalAgent.interactive === true && resumeInstruction) {
+            ledger = {
               status: "waiting_for_agent",
               blocked_on: "agent_handoff",
               source_tool: "hand_off_to",
-              owner_agent_id: resolvedId,
-              ...(handoffAgent?.name
-                ? { owner_agent_name: handoffAgent.name }
-                : {}),
-              user_goal: _clipForOrchestration(
-                _unwrapLlmTurnPayload(currentTurnPayload) || currentTurnPayload,
+              owner_agent_id: finalAgentId,
+              owner_agent_name: finalAgentName,
+              user_goal: userGoal,
+              handoff_message: handoffMessage,
+              resume_instruction: resumeInstruction,
+            };
+          }
+
+          try {
+            const committed = await _commitHandoffState(uid, cid, {
+              recipient_id:
+                outcome.form || finalAgent.interactive === true
+                  ? finalAgentId
+                  : COMMANDER_ID,
+              ...(ledger ? { ledger } : {}),
+              guard,
+            });
+            rollbackToken = committed.rollbackToken;
+            await _afterHandoffStateCommitForTest?.();
+            if (_handoffFinalizationCancelled(state, ctx?.signal)) {
+              return failCancelled();
+            }
+
+            if (outcome.form) {
+              return { content: outcome.payload };
+            }
+
+            if (finalAgent.interactive !== true && resumeInstruction) {
+              await _beforeHandoffResumeEnqueueForTest?.();
+              await _enqueueOrchestrationResumeFromAgent({
+                state,
+                fromActorId: finalAgentId,
+                fromActorName: finalAgentName,
+                ledger: {
+                  version: 1,
+                  id: genId12(),
+                  kind: "suspended_orchestration",
+                  status: "waiting_for_agent",
+                  blocked_on: "agent_handoff",
+                  source_tool: "hand_off_to",
+                  owner_agent_id: finalAgentId,
+                  owner_agent_name: finalAgentName,
+                  user_goal: userGoal,
+                  handoff_message: handoffMessage,
+                  resume_instruction: resumeInstruction,
+                  created_at: nowIso(),
+                  updated_at: nowIso(),
+                },
+                agentResult: outcome.payload,
+              });
+            }
+            if (_handoffFinalizationCancelled(state, ctx?.signal)) {
+              return failCancelled();
+            }
+          } catch (error) {
+            rollbackToken ||= _rollbackTokenFromError(error);
+            log.warn("handoff finalization state commit failed", {
+              cid: maskId(cid),
+              actor_id: maskId(finalAgentId),
+              step_id: maskId(prepared.step.id),
+              error: logErrorRef(
+                new Error("Handoff durable finalization failed."),
               ),
-              handoff_message: message,
-              resume_instruction: resume,
             });
-          } catch (err) {
-            log.warn(
-              `hand_off ledger set failed cid=${cid}: ${(err as Error).message}`,
-            );
-          }
-        }
-      }
-      // Run the agent's turn — it posts its reply straight to the user (same path
-      // as dispatch, but we do NOT read the result back to synthesize).
-      const handoffResult = await runNestedDispatch(
-        state,
-        ctx?.signal,
-        handoffActor,
-        message,
-        currentTurnAttachments,
-        "final",
-        kstarDecisionRecord(kstar),
-        prepared.step.id,
-      );
-      if (resume && handoffAgent?.interactive !== true) {
-        try {
-          const blocked = await _setFormWaitLedgerFromWorkerResult({
-            uid,
-            cid,
-            result: handoffResult,
-            ownerAgentId: resolvedId,
-            ownerAgentName: handoffAgent?.name || resolvedId,
-            userGoal:
-              _unwrapLlmTurnPayload(currentTurnPayload) || currentTurnPayload,
-            agentTask: message,
-            resume,
-            sourceTool: "hand_off_to",
-          });
-          if (!blocked) {
-            await _enqueueOrchestrationResumeFromAgent({
+            await _settleHandoffFinalizationFailure({
               state,
-              fromActorId: resolvedId,
-              fromActorName: handoffAgent?.name || resolvedId,
-              ledger: {
-                version: 1,
-                id: genId12(),
-                kind: "suspended_orchestration",
-                status: "waiting_for_agent",
-                blocked_on: "agent_handoff",
-                source_tool: "hand_off_to",
-                owner_agent_id: resolvedId,
-                ...(handoffAgent?.name
-                  ? { owner_agent_name: handoffAgent.name }
-                  : {}),
-                user_goal: _clipForOrchestration(
-                  _unwrapLlmTurnPayload(currentTurnPayload) ||
-                    currentTurnPayload,
-                ),
-                handoff_message: message,
-                resume_instruction: resume,
-                created_at: nowIso(),
-                updated_at: nowIso(),
-              },
-              agentResult: handoffResult,
+              prepared,
+              actorId: finalAgentId,
+              ...(rollbackToken ? { rollbackToken } : {}),
             });
+            return _toolError(HANDOFF_STATE_ERROR);
           }
-        } catch (err) {
-          log.warn(
-            `hand_off resume handling failed cid=${cid}: ${(err as Error).message}`,
-          );
-        }
-      }
-      // endTurn: end the commander's turn with no synthesis inference. The
-      // agent's reply is the user-facing deliverable.
-      onTerminalHandoff?.();
-      return {
-        content: JSON.stringify({ ok: true, handed_off_to: resolvedId }),
-        endTurn: true,
-      };
+
+          onTerminalHandoff?.();
+          return { content: outcome.payload, endTurn: true };
+        },
+      });
+      if (handoffExecution.kind === "blocked")
+        return handoffExecution.blocked!;
+      return handoffExecution.value!;
     },
   });
 
@@ -6982,6 +8899,7 @@ async function buildCommanderExtraTools(
       "For a named agent, if the agent may ask the user for missing information with a form and this is part of a broader commander-owned task, include `resume` so the system can resume you after the form is submitted and the agent completes.",
       "The worker runs and returns its result here (with any file pointers) — there is no separate later turn. `task` is the instruction, sent verbatim.",
       "For every delegated task, set `kstar` to `required` or `skip`; include `kstar_reason` and `kstar_expectation` when required.",
+      "Declare `access_mode: read` only when the task will not modify workspace state; use `write` for file, code, or configuration mutations. `write_scopes` are workspace-relative paths. Omitted `access_mode` defaults to `write` and locks the whole conversation workspace. `depends_on` values are workflow step ids returned on prior `<worker-result>` or `<worker-error>` tool results.",
     ].join(" "),
     inputSchema: {
       type: "object",
@@ -7002,6 +8920,10 @@ async function buildCommanderExtraTools(
             "Optional for named agents. What the commander should do after this agent blocks on a form, receives the user input, and completes.",
         },
         context_dependencies: { type: "array", items: { type: "string" } },
+        depends_on: { type: "array", items: { type: "string" } },
+        required_capabilities: { type: "array", items: { type: "string" } },
+        access_mode: { type: "string", enum: ["read", "write"] },
+        write_scopes: { type: "array", items: { type: "string" } },
         resume_step_id: { type: "string" },
         resume_token: { type: "string" },
         kstar: {
@@ -7045,6 +8967,15 @@ async function buildCommanderExtraTools(
       const resumeStepId = String(input?.resume_step_id || "").trim();
       const resumeToken = String(input?.resume_token || "").trim();
       const kstar = normalizeDispatchKStar(input, task, cid);
+      let dispatchContract: CoordinatorDispatchContract;
+      try {
+        dispatchContract = coordinatorDispatchContract(
+          coordinatorWorkingDir,
+          input as Record<string, unknown>,
+        );
+      } catch (error) {
+        return _toolError((error as Error).message);
+      }
       if (!task) return _toolError("`task` is required");
       const blocked = await blockedByCollaborationGateToolResult(uid, cid);
       if (blocked) return blocked;
@@ -7065,24 +8996,41 @@ async function buildCommanderExtraTools(
           "run_worker",
           _unwrapLlmTurnPayload(currentTurnPayload) || currentTurnPayload,
           task,
+          dispatchContract,
           contextDependencies,
           resumeStepId,
           resumeToken,
         );
         if (prepared.blocked) return blockedNestedDispatchToolResult(prepared);
-        const result = await runNestedDispatch(
+        const workerExecution = await withPreparedNestedDispatchAccess({
           state,
-          ctx?.signal,
-          workerActor,
-          task,
-          currentTurnAttachments,
-          "process",
-          kstarDecisionRecord(kstar),
-          prepared.step.id,
-        );
-        return { content: result };
+          prepared,
+          request: dispatchContract.accessRequest,
+          signal: ctx?.signal,
+          execute: () =>
+            runNestedDispatchAttemptLifecycle({
+              state,
+              actor: workerActor,
+              stepId: prepared.step.id,
+              ...(ctx?.signal ? { parentSignal: ctx.signal } : {}),
+              execute: () =>
+                runNestedDispatch(
+                  state,
+                  ctx?.signal,
+                  workerActor,
+                  task,
+                  currentTurnAttachments,
+                  "process",
+                  kstarDecisionRecord(kstar),
+                  prepared.step.id,
+                ),
+            }),
+        });
+        if (workerExecution.kind === "blocked")
+          return workerExecution.blocked!;
+        return { content: workerExecution.value!.outcome.payload };
       }
-      const resolvedId = await resolveDispatchTarget(uid, cid, toRaw);
+      const resolvedId = await resolveDispatchTarget(cid, toRaw);
       if (!resolvedId) {
         return _toolError(t("errors.unknown_actor", { name: toRaw }));
       }
@@ -7095,7 +9043,7 @@ async function buildCommanderExtraTools(
       // back as this tool's result (same single-layer dispatch as the anonymous
       // branch). The agent also persists its own visible bubble; the commander
       // then synthesises (Option B).
-      const namedAgent = await agentsFeat.getAgentForChatDispatch(uid, resolvedId);
+      const namedAgent = await agentsFeat.getAgent(resolvedId);
       const namedActor: Actor = {
         kind: "agent",
         id: resolvedId,
@@ -7108,11 +9056,15 @@ async function buildCommanderExtraTools(
         "run_worker",
         _unwrapLlmTurnPayload(currentTurnPayload) || currentTurnPayload,
         task,
+        dispatchContract,
         contextDependencies,
         resumeStepId,
         resumeToken,
       );
       if (prepared.blocked) return blockedNestedDispatchToolResult(prepared);
+      const dependencyBlocked =
+        await checkPreparedNestedDispatchDependenciesForTool(state, prepared);
+      if (dependencyBlocked) return dependencyBlocked;
       const pendingWake = await gateNestedAgentWake(
         state,
         namedActor,
@@ -7124,26 +9076,42 @@ async function buildCommanderExtraTools(
         kstarDecisionRecord(kstar),
       );
       if (pendingWake) return pendingWakeToolResult(pendingWake);
-      // Named run_worker is also a visible agent bubble — flush the commander's
-      // pre-dispatch reasoning first (commander loop bubbles).
-      await onVisibleDispatch?.();
-      const namedResult = await runNestedDispatch(
+      const namedExecution = await withPreparedNestedDispatchAccess({
         state,
-        ctx?.signal,
-        namedActor,
-        task,
-        currentTurnAttachments,
-        "process",
-        kstarDecisionRecord(kstar),
-        prepared.step.id,
-      );
+        prepared,
+        request: dispatchContract.accessRequest,
+        signal: ctx?.signal,
+        execute: async () => {
+          await _beforeVisibleDispatchForTest?.();
+          await onVisibleDispatch?.();
+          return runCoordinatedNestedDispatch({
+            state,
+            parentSignal: ctx?.signal,
+            initialActor: namedActor,
+            task,
+            attachments: currentTurnAttachments,
+            outputDelivery: "process",
+            kstarDecision: kstarDecisionRecord(kstar),
+            prepared,
+            requiredCapabilities: dispatchContract.requiredCapabilities,
+          });
+        },
+      });
+      if (namedExecution.kind === "blocked") return namedExecution.blocked!;
+      const namedResult = namedExecution.value!;
       try {
         await _setFormWaitLedgerFromWorkerResult({
           uid,
           cid,
-          result: namedResult,
-          ownerAgentId: resolvedId,
-          ownerAgentName: namedAgent?.name || resolvedId,
+          result: namedResult.payload,
+          ownerAgentId:
+            namedResult.actor.kind === "agent"
+              ? namedResult.actor.id
+              : resolvedId,
+          ownerAgentName:
+            namedResult.actor.kind === "agent"
+              ? namedResult.actor.name || namedResult.actor.id
+              : namedAgent?.name || resolvedId,
           userGoal:
             _unwrapLlmTurnPayload(currentTurnPayload) || currentTurnPayload,
           agentTask: task,
@@ -7155,7 +9123,7 @@ async function buildCommanderExtraTools(
           `run_worker form ledger set failed cid=${cid}: ${(err as Error).message}`,
         );
       }
-      return { content: namedResult };
+      return { content: namedResult.payload };
     },
   });
 
@@ -7282,7 +9250,7 @@ export async function abort(uid: string, cid: string): Promise<void> {
       w.queue.length = 0;
       w.turnsThisActivation = 0;
       try {
-        w.abortController?.abort();
+        abortWorkerTurn(w, { kind: "group_abort" });
       } catch {
         /* ignore */
       }
@@ -7313,14 +9281,6 @@ export async function abort(uid: string, cid: string): Promise<void> {
   try {
     const installConfirm = await import("../connectors/install_confirm");
     installConfirm.cancelForCid(cid);
-  } catch {
-    /* feature stripped / not loaded */
-  }
-  // Abandon any pending proactive-messaging send confirmation for this
-  // conversation — the commander that requested it is being stopped.
-  try {
-    const proactiveConfirm = await import("../messaging/proactive-confirm");
-    proactiveConfirm.cancelForCid(cid);
   } catch {
     /* feature stripped / not loaded */
   }
@@ -7374,6 +9334,7 @@ export async function dropConv(uid: string, cid: string): Promise<void> {
   const state = _cids.get(k);
   if (!state) return;
   state.terminating = true;
+  state.accessAdmission.abortWaiters();
   if (state.pendingEnqueues > 0) {
     await new Promise<void>((resolve) =>
       state.pendingEnqueueWaiters.add(resolve),
@@ -7386,7 +9347,7 @@ export async function dropConv(uid: string, cid: string): Promise<void> {
     // after we drop it from `_cids`.
     w.terminated = true;
     try {
-      w.abortController?.abort();
+      abortWorkerTurn(w, { kind: "group_abort" });
     } catch {
       /* ignore */
     }
@@ -7505,6 +9466,8 @@ async function _runCliAgentTurn(opts: {
   projectId?: string;
   workingDir: string;
   signal: AbortSignal;
+  onCoordinatorActivity?: (event: CoordinatorActivityEvent) => void;
+  onProcessInfo?: (pid: number) => void;
   onProcess: (data: Record<string, unknown>) => void;
 }): Promise<{
   text: string;
@@ -7513,6 +9476,7 @@ async function _runCliAgentTurn(opts: {
   produced?: string[];
   failureKind?: GroupMessageFailureKind;
   failureCode?: string;
+  infrastructureFailure?: boolean;
 }> {
   const runtime = opts.agent.runtime as Extract<
     NonNullable<import("../agents").AgentRuntime>,
@@ -7605,6 +9569,7 @@ async function _runCliAgentTurn(opts: {
     cwd: opts.workingDir,
     signal: opts.signal,
     onEvent: (e) => {
+      opts.onCoordinatorActivity?.(activityFromLocalEvent(e));
       // Translate each LocalEvent into the `process` event shape the
       // renderer's group-chat listener expects so output streams live
       // into the placeholder bubble (text-delta) and the process rail
@@ -7668,7 +9633,21 @@ async function _runCliAgentTurn(opts: {
             },
           });
           break;
-        case "process-info":
+        case "process-info": {
+          const rawPid = (e as { pid?: unknown }).pid;
+          if (
+            typeof rawPid === "number" &&
+            Number.isInteger(rawPid) &&
+            rawPid > 0
+          ) {
+            opts.onProcessInfo?.(rawPid);
+          }
+          opts.onProcess({
+            type: "event",
+            event: { stream: "cli", data: { type: "process-info" } },
+          });
+          break;
+        }
         case "status":
           opts.onProcess({
             type: "event",
@@ -7711,45 +9690,55 @@ async function _runCliAgentTurn(opts: {
     },
   });
 
-  // Drop the stale resume binding before returning so a user-initiated
-  // retry starts a fresh CLI session instead of looping on the same
-  // expired id. Done unconditionally on rejection — even if the CLI
-  // somehow finished successfully, the resume id we sent is gone, and
-  // the binding is at best useless / at worst will fail again.
+  // Session ordering is part of retry correctness: a same-Agent retry must
+  // not read the old binding while the failed attempt's newest backend id is
+  // still being written. The sessions module owns persistence-error logging;
+  // this layer verifies the authoritative value without logging session ids.
+  let sessionPersistenceFailed = false;
   if (resumeRejected) {
-    log.warn(
-      `cli session expired cid=${opts.cid} agent=${opts.agent.agent_id} cli=${runtime.cli} — clearing resume binding`,
-    );
-    cliSessions
-      .clearForAgent(opts.uid, opts.cid, opts.agent.agent_id)
-      .catch(() => {
-        /* logged inside sessions.ts */
-      });
+    log.warn("cli session expired; clearing resume binding", {
+      cid: maskId(opts.cid),
+      agent_id: maskId(opts.agent.agent_id),
+      cli: runtime.cli,
+    });
+    await cliSessions.clearForAgent(opts.uid, opts.cid, opts.agent.agent_id);
   }
-
-  // Persist the (possibly new) session id for EVERY terminal status that
-  // reported one — not just success. Claude reports its session id at
-  // turn start (system/init), so a watchdog-killed or failed turn still
-  // has its partial conversation in the CLI's own session store —
-  // persisting the id lets the plan-step transient retry (and any manual
-  // resend) `--resume` that context instead of replaying from the
-  // pre-kill session. If a `--resume` landed on an expired session, the
-  // CLI silently allocates a new one and reports it — we save what's
-  // freshest (the stale binding was already cleared above on
-  // resumeRejected). The write is fire-and-forget — failures only affect
-  // the next turn's optimisation, not correctness.
   if (backendSessionId) {
-    cliSessions
-      .setSessionId(
-        opts.uid,
-        opts.cid,
-        opts.agent.agent_id,
-        runtime.cli,
-        backendSessionId,
-      )
-      .catch(() => {
-        /* logged inside sessions.ts */
-      });
+    await cliSessions.setSessionId(
+      opts.uid,
+      opts.cid,
+      opts.agent.agent_id,
+      runtime.cli,
+      backendSessionId,
+    );
+    const persisted = await cliSessions.getSessionId(
+      opts.uid,
+      opts.cid,
+      opts.agent.agent_id,
+      runtime.cli,
+    );
+    sessionPersistenceFailed = persisted !== backendSessionId;
+  } else if (resumeRejected) {
+    const persisted = await cliSessions.getSessionId(
+      opts.uid,
+      opts.cid,
+      opts.agent.agent_id,
+      runtime.cli,
+    );
+    sessionPersistenceFailed = persisted !== null;
+  }
+  if (sessionPersistenceFailed && result.status !== "cancelled") {
+    return {
+      text: resultText || accText,
+      error: t("cli_agent.run_failed_detail", {
+        name: opts.agent.name || runtime.cli,
+        cli: runtime.cli,
+      }),
+      produced: Array.from(produced),
+      failureKind: "runtime",
+      failureCode: "cli_session_persistence_failed",
+      infrastructureFailure: true,
+    };
   }
   if (result.status === "missing_cli") {
     const vars = {

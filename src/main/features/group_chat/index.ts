@@ -41,6 +41,7 @@ import {
   type ResolveContextConflictSelectionInput,
 } from './collaboration';
 import { buildRetryResumeModelText } from './retry_resume';
+import type { KstarTaskLifecycleSnapshot } from '../kstar/lifecycle-adapter';
 
 /** Re-export so the IPC layer can poll the bus's true quiescent state on
  *  every state_changed event — the on-disk state.json briefly shows 'idle'
@@ -55,6 +56,7 @@ export interface GroupChatRuntimeStatus {
   active_turns: Array<{ actor: string; turn_id: string; msg_id?: string; started_at_ms: number }>;
   active_recipient?: string;
   collaboration?: CollaborationSnapshot;
+  kstarLifecycle?: KstarTaskLifecycleSnapshot;
 }
 
 export async function reviewCollaborationGate(
@@ -147,6 +149,13 @@ export async function runtimeStatus(
       return null;
     });
     const collaborationPart = collaboration ? { collaboration } : {};
+    const kstarLifecycle = await import('../kstar/lifecycle-adapter')
+      .then((module) => module.readKstarTaskLifecycle(userId, cid))
+      .catch((err) => {
+        log.warn(`kstar lifecycle snapshot unavailable user=${userId} cid=${cid}: ${(err as Error).message}`);
+        return null;
+      });
+    const kstarLifecyclePart = kstarLifecycle && kstarLifecycle.status !== 'none' ? { kstarLifecycle } : {};
     // The conversation floor — included so a renderer reload / recovery poll
     // restores the composer target (the agent the commander handed off to)
     // instead of dropping back to the commander until the next state_changed.
@@ -154,7 +163,7 @@ export async function runtimeStatus(
     if ((state.status === 'running' || diskInFlight.length > 0) && !runtime.processing) {
       log.warn(`healing orphan running state user=${userId} cid=${cid} status=${state.status} in_flight=${diskInFlight.join(',')}`);
       await setStatus(userId, cid, 'idle');
-      return { processing: false, processing_since: null, in_flight: [], active_turns: [], ...collaborationPart, ...floor };
+      return { processing: false, processing_since: null, in_flight: [], active_turns: [], ...collaborationPart, ...kstarLifecyclePart, ...floor };
     }
     const inFlight = Array.from(new Set([
       ...diskInFlight,
@@ -167,6 +176,7 @@ export async function runtimeStatus(
       in_flight: inFlight,
       active_turns: runtime.activeTurns,
       ...collaborationPart,
+      ...kstarLifecyclePart,
       ...floor,
     };
   } catch {
@@ -354,6 +364,30 @@ async function _retitleAfterFirstUserMessageEdit(
 
 // ── Send (from human) ────────────────────────────────────────────────────
 
+
+export async function sendCommanderMessage(
+  input: { userId: string; cid: string; text: string; recall_projection_card?: { projectionId: string } },
+): Promise<{ ok: boolean; msg?: GroupMessage; error?: string }> {
+  const { userId, cid, text, recall_projection_card } = input;
+  if (!safeId(cid)) return { ok: false, error: 'invalid cid' };
+  if (!text || !text.trim()) return { ok: false, error: 'empty message' };
+  await seedReservedActors(userId, cid);
+  try {
+    const msg = await enqueue({
+      uid: userId,
+      cid,
+      fromActorId: COMMANDER_ID,
+      forceTo: [USER_ID],
+      text,
+      ...(recall_projection_card ? { recall_projection_card } : {}),
+    });
+    return { ok: true, msg };
+  } catch (err) {
+    log.error(`commander send failed user=${userId} cid=${cid}: ${(err as Error).message}`);
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
 export interface SendInput {
   userId: string;
   cid: string;
@@ -362,6 +396,8 @@ export interface SendInput {
   attachments?: string[];
   use_selections?: ChatUseSelection[];
   references?: Array<{ source_cid: string; source_msg_id: string }>;
+  recall_projection_card?: { projectionId: string };
+  kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
 }
 
 async function _resolveMessageReferences(
@@ -488,7 +524,7 @@ async function _resolveMessageReferences(
 export async function send(
   input: SendInput,
 ): Promise<{ ok: boolean; msg?: GroupMessage; error?: string }> {
-  const { userId, cid, text, model_text, attachments, use_selections, references } = input;
+  const { userId, cid, text, model_text, attachments, use_selections, references, recall_projection_card, kstar_review_card } = input;
   if (!safeId(cid)) return { ok: false, error: 'invalid cid' };
   if (!text || !text.trim()) return { ok: false, error: 'empty message' };
   await seedReservedActors(userId, cid);
@@ -519,6 +555,8 @@ export async function send(
       ...(attachments && attachments.length ? { attachments: [...attachments] } : {}),
       ...(use_selections && use_selections.length ? { use_selections } : {}),
       ...(resolvedReferences.length ? { references: resolvedReferences } : {}),
+      ...(recall_projection_card ? { recall_projection_card } : {}),
+      ...(kstar_review_card ? { kstar_review_card } : {}),
     });
     return { ok: true, msg };
   } catch (err) {

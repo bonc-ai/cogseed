@@ -8,6 +8,7 @@ import {
 import type {
   AgentWakeRequest,
   EvaluateWakeInput,
+  WakeAssetConfirmationSnapshot,
   WakeApproval,
   WakeEvaluation,
   WakeState,
@@ -408,6 +409,7 @@ export async function getWakeRequest(
 export async function approveWakeRequest(
   userId: string,
   requestId: string,
+  options: { assetConfirmationSnapshot?: WakeAssetConfirmationSnapshot } = {},
 ): Promise<{ request: AgentWakeRequest; approval: WakeApproval }> {
   requireId(requestId, "wake request id");
   await reconcileWakeTransitions(userId);
@@ -422,6 +424,9 @@ export async function approveWakeRequest(
     request.workflow_transition = "approving";
     request.updated_at = now;
     request.decided_at = request.decided_at || now;
+    if (options.assetConfirmationSnapshot) {
+      request.asset_confirmation_snapshot = options.assetConfirmationSnapshot;
+    }
     let approval = state.approvals.find(
       (item) => item.request_id === request.id,
     );
@@ -439,11 +444,15 @@ export async function approveWakeRequest(
         status: "active",
         created_at: now,
         updated_at: now,
+        ...(options.assetConfirmationSnapshot ? { asset_confirmation_snapshot: options.assetConfirmationSnapshot } : {}),
       };
       state.approvals.push(approval);
     } else {
       approval.status = "active";
       approval.updated_at = now;
+      if (options.assetConfirmationSnapshot) {
+        approval.asset_confirmation_snapshot = options.assetConfirmationSnapshot;
+      }
     }
     log.info(
       `wake-request-approved user=${userId} request=${requestId} agent=${request.agent_id}`,

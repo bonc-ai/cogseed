@@ -244,6 +244,39 @@ describe("P3394 wake controller workflow binding", () => {
     expect(mocks.markWakeRequestExecuted).not.toHaveBeenCalled();
   });
 
+  it("resets approval when the dispatcher rejects a KSTAR binding", async () => {
+    const request = {
+      id: "wake-kstar-binding-fail",
+      conversation_id: "cid-1",
+      agent_id: "agent-1",
+      source: "dispatch_to",
+      source_actor_id: "commander",
+      objective: "Prepare report",
+      context_scope: ["conversation:cid-1"],
+      behavior_scope: ["dispatch_to"],
+      dispatch_payload: { text: "Prepare report" },
+      status: "pending",
+      created_at: "t",
+      updated_at: "t",
+    } as any;
+    mocks.getWakeRequest.mockResolvedValue(request);
+    mocks.approveWakeRequest.mockResolvedValue({ request: { ...request, status: "approved" }, approval: {} });
+    mocks.resetWakeApproval.mockResolvedValue({ ...request, status: "pending" });
+
+    const controller = await import("../../../../src/main/features/p3394/wake-controller");
+    const dispatcher = { dispatch: vi.fn().mockRejectedValue(new Error("KSTAR requirement binding failed")) };
+    const result = await controller.decideWakeRequest("user-1", {
+      requestId: request.id,
+      decision: "approve",
+    }, { dispatcher });
+
+    expect(result).toMatchObject({ ok: false, error: "KSTAR requirement binding failed" });
+    expect(mocks.resetWakeApproval).toHaveBeenCalledWith(
+      "user-1", request.id, expect.stringContaining("KSTAR requirement binding failed"),
+    );
+    expect(mocks.markWakeRequestExecuted).not.toHaveBeenCalled();
+  });
+
   it("resets approval when enqueue returns a message not addressed to the target", async () => {
     const request = {
       id: "wake-wrong-target",

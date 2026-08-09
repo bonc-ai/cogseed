@@ -95,6 +95,10 @@ export interface GroupMessage {
   wake_requests?: WakeRequestSummary[];
   /** Legacy/per-message P3394 review metadata. New collaboration validation is Commander-owned and stored in KSTAR runtime state. */
   kstar_review?: KStarReviewSummary;
+  /** Recall projection card metadata used to recover confirmed assets for prompt injection. */
+  recall_projection_card?: { projectionId: string };
+  /** KSTAR lightweight review confirmation card; raw evidence stays in main storage. */
+  kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
   /** Plain `@token` list (raw text mentions). */
   mentions?: string[];
   /** Host-owned P3394 delivery metadata. Epochs are scoped to the persisted
@@ -183,6 +187,8 @@ export interface GroupMessage {
   marketplace_requests?: MarketplaceInstallRequest[];
   /** Marks this message as a plan announcement (rendered with a folded
    * plan card in UI). Set by `plan_set` first-time emission. */
+  /** Commander-visible KSTAR declaration emitted before a delegated Agent wake/dispatch. */
+  kstar_dispatch_narration?: { target_agent_id: string; workflow_step_id?: string };
   plan_announcement?: boolean;
   /** Internal plan-step dispatch from commander → agent. Persisted (so the
    * agent's visibility slice has it for context) but hidden from the user

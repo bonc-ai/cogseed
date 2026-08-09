@@ -16,6 +16,26 @@ function gapType(review: KstarReviewRecord): KstarCandidateProposal['suggestedTy
   return null;
 }
 
+function hasLearningSignal(review: KstarReviewRecord): boolean {
+  return review.deltaR !== 'unknown'
+    || review.deltaA !== 'unknown'
+    || review.outcome === 'better_than_expected'
+    || review.outcome === 'worse_than_expected'
+    || (review.confidence >= 0.7 && review.attribution !== 'unclear' && !!review.reason.trim());
+}
+
+function learningSignal(review: KstarReviewRecord): KstarCandidateProposal['learningSignal'] {
+  return {
+    ...(review.expectedResult ? { expectedResult: review.expectedResult } : {}),
+    ...(review.actualResult ? { actualResult: review.actualResult } : {}),
+    deltaR: review.deltaR,
+    deltaA: review.deltaA,
+    outcome: review.outcome,
+    confidence: review.confidence,
+    source: 'review',
+  };
+}
+
 export function proposeKstarCandidates(
   episode: KstarEpisodeRecord,
   review: KstarReviewRecord,
@@ -30,14 +50,16 @@ export function proposeKstarCandidates(
     distinctTools.length >= 2 &&
     episode.a.toolCalls.every((call) => call.status === 'ok');
 
-  if (verifiedWorkflow) {
+  const signalAvailable = hasLearningSignal(review);
+  if (verifiedWorkflow && signalAvailable) {
     proposals.push({
       judgment: `For tasks like "${episode.t.userGoal}", use the verified workflow: ${distinctTools.join(' → ')}.`,
       summary: 'Verified multi-tool workflow',
-      uncertainty: 'Generated from one successful episode; confirm before treating it as a durable method.',
+      uncertainty: 'Generated from a verified workflow with an explicit learning signal; confirm before treating it as durable.',
       suggestedType: 'skill_method',
       suggestedScope: scopeForTask(episode.t.userGoal),
       sourceRefs,
+      learningSignal: learningSignal(review),
     });
   }
 
@@ -50,8 +72,57 @@ export function proposeKstarCandidates(
       suggestedType: type,
       suggestedScope: scopeForTask(episode.t.userGoal),
       sourceRefs,
+      learningSignal: learningSignal(review),
     });
   }
 
   return proposals.slice(0, 3);
+}
+
+
+export interface KstarDetectionHints {
+  /** Natural-language hints for the LLM extraction prompt. */
+  hints: string[];
+  /** Whether a verified multi-tool workflow was detected. */
+  hasVerifiedWorkflow: boolean;
+  /** Whether the verified workflow has an explicit expected/actual learning signal. */
+  hasWorkflowLearningSignal: boolean;
+  /** Whether a review gap with high confidence was detected. */
+  hasReviewGap: boolean;
+}
+
+export function buildKstarDetectionHints(
+  episode: KstarEpisodeRecord,
+  review: KstarReviewRecord,
+): KstarDetectionHints {
+  const hints: string[] = [];
+  const distinctTools = [...new Set(episode.a.toolCalls.map((call) => call.name).filter(Boolean))];
+  const verifiedWorkflow = episode.r.status === 'completed' &&
+    distinctTools.length >= 2 &&
+    episode.a.toolCalls.every((call) => call.status === 'ok');
+
+  const workflowLearningSignal = hasLearningSignal(review);
+  if (verifiedWorkflow && workflowLearningSignal) {
+    hints.push(
+      `DETECTED WORKFLOW: The assistant completed task "${
+        episode.t.userGoal.slice(0, 120)
+      }" using tools ${distinctTools.join(' → ')} (all successful), and review recorded an expected-versus-actual learning signal. ` +
+      'Transform this into a reusable "skill_method" candidate describing the verified approach.',
+    );
+  }
+
+  if (review.confidence >= 0.7 && review.reason) {
+    const gapLabel = review.attribution.replace(/_/g, ' ');
+    hints.push(
+      `DETECTED GAP: Review found a ${gapLabel} — ${review.reason.slice(0, 200)}. ` +
+      'Transform this into a candidate addressing what was missing.',
+    );
+  }
+
+  return {
+    hints,
+    hasVerifiedWorkflow: verifiedWorkflow,
+    hasWorkflowLearningSignal: workflowLearningSignal,
+    hasReviewGap: review.confidence >= 0.7 && !!review.reason,
+  };
 }

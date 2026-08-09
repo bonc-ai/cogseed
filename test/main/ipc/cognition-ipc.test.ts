@@ -30,6 +30,7 @@ vi.mock('../../../src/main/features/cognition', () => ({
   DEFAULT_COGNITION_PAGE_SIZE: 50,
   MAX_COGNITION_PAGE_SIZE: 100,
   listCognitionStoreAssets: vi.fn(async () => ([{ id: 'cog_1', title: '认知', stage: 'seed' }])),
+  listCognitionAssets: vi.fn(async () => ([{ id: 'asset_1', title: '能力资产', type: 'knowledge' }])),
   listCognitionAssetPage: vi.fn(async (_uid: string, page: number, pageSize: number) => ({
     items: [{ id: 'cog_1', title: '认知', stage: 'seed', evidenceCount: 0, reuseCount: 0 }],
     page,
@@ -96,7 +97,7 @@ describe('ipc cognition channels', () => {
 
   it('列表与创建使用当前用户，并校验必填文本', async () => {
     expect((await call('cognition.assets.list')).assets).toEqual([
-      expect.objectContaining({ id: 'cog_1' }),
+      expect.objectContaining({ id: 'asset_1' }),
     ]);
     expect((await call('cognition.assets.create', { title: '认知' })).ok).toBe(false);
     const created = await call('cognition.assets.create', { title: '认知', summary: '工作方式' });
@@ -104,7 +105,7 @@ describe('ipc cognition channels', () => {
     expect((created.asset as { id: string }).id).toBe('cog_new');
   });
 
-  it('分页摘要校验边界并保留旧列表 channel', async () => {
+  it('分页摘要校验边界并保留资产列表 channel', async () => {
     const result = await call('cognition.assets.page', { page: '2', pageSize: '20' });
     expect(result.ok).toBe(true);
     expect(result.page).toEqual(expect.objectContaining({ page: 2, pageSize: 20 }));

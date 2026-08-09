@@ -6114,6 +6114,8 @@ function _messageRecordHasMountedSidecars(gm, el, opts = {}) {
   if (Array.isArray(gm.artifacts) && gm.artifacts.length && !el.querySelector('.chat-artifact-host')) return false;
   if (Array.isArray(gm.teaching_receipts) && gm.teaching_receipts.length && !el.querySelector('.chat-teaching-receipts')) return false;
   if (Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length && !el.querySelector('.chat-marketplace-request')) return false;
+  if (gm.kstar_review_card && !el.querySelector('.chat-kstar-result-review')) return false;
+  if (gm.recall_projection_card && !el.querySelector('.chat-recall-projection-card')) return false;
   if (_processItemsHaveRenderableLine(gm.process) && !el.querySelector('.stream-process')) return false;
   return true;
 }
@@ -6925,6 +6927,15 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     if (bubble) _mountKStarReviewCard(bubble, message.kstar_review, opts.cid || currentCid);
   }
 
+  if (message.recall_projection_card && typeof window.mountRecallProjectionCard === 'function') {
+    const bubble = msgDiv.querySelector('.chat-bubble');
+    if (bubble && !bubble.querySelector('.chat-recall-projection-card')) {
+      const recallProjectionHost = document.createElement('div');
+      bubble.appendChild(recallProjectionHost);
+      window.mountRecallProjectionCard(recallProjectionHost, message.recall_projection_card, { cid: opts.cid || currentCid });
+    }
+  }
+
   // Interactive web-app artifacts (assistant messages only) — sandboxed
   // `<iframe>` over the `chat-app://` protocol, appended after the form so it
   // reads as "reply text → embedded app". See chat-artifact.js.
@@ -7201,6 +7212,60 @@ function _renderMarketplaceInstallCard(card, req, cid, msgId) {
     });
   }
   _hydrateMarketplaceRequestMeta(card, { ...req, kind }, cid, msgId);
+}
+
+function _renderKstarResultReviewCard(card, review) {
+  if (!card || !review) return;
+  card.dataset.busy = '';
+  card.dataset.status = String(review.status || 'pending');
+  card.className = `chat-kstar-review chat-kstar-result-review is-${card.dataset.status}`;
+  card.dataset.kstarReviewId = String(review.reviewId || '');
+  const expected = review.expectedResult
+    ? `<div class="chat-kstar-status"><strong>${escapeHtml(t('kstar.review.expected'))}</strong> ${escapeHtml(review.expectedResult)}</div>` : '';
+  const actual = review.actualResult
+    ? `<div class="chat-kstar-status"><strong>${escapeHtml(t('kstar.review.actual'))}</strong> ${escapeHtml(review.actualResult)}</div>` : '';
+  const evaluation = `<div class="chat-kstar-status"><strong>${escapeHtml(t('kstar.review.agent_eval', 'Agent 评估'))}</strong> ${escapeHtml(t('kstar.review.agent_eval_hint', '系统已根据预期与实际自动判定差异；你只需确认事实是否准确。'))}</div>`;
+  const actions = card.dataset.status === 'pending'
+    ? `<div class="chat-kstar-actions">
+        <button type="button" class="btn btn-primary btn-sm" data-kstar-result-action="confirm">${escapeHtml(t('kstar.review.confirm'))}</button>
+        <button type="button" class="btn btn-sm" data-kstar-result-action="correct">${escapeHtml(t('kstar.review.correct'))}</button>
+      </div>`
+    : `<div class="chat-kstar-status">${escapeHtml(t('kstar.review.confirmed'))}</div>`;
+  card.innerHTML = `<div class="chat-kstar-title">${escapeHtml(t('kstar.review.card_title'))}</div>${evaluation}${expected}${actual}${actions}`;
+  for (const button of card.querySelectorAll('[data-kstar-result-action]')) {
+    button.addEventListener('click', () => _resolveKstarResultReview(card, review, button.dataset.kstarResultAction));
+  }
+}
+
+async function _resolveKstarResultReview(card, review, action) {
+  if (!card || card.dataset.busy === '1') return;
+  card.dataset.busy = '1';
+  card.querySelectorAll('button').forEach((button) => { button.disabled = true; });
+  try {
+    const verdict = action === 'correct' ? 'skip' : 'met';
+    const result = await window.orkas.invoke('kstar.review.confirm', { episodeId: review.episodeId, verdict });
+    if (!result?.ok) throw new Error(result?.error || 'kstar review confirmation failed');
+    _renderKstarResultReviewCard(card, { ...review, status: 'confirmed' });
+  } catch (error) {
+    card.dataset.busy = '';
+    card.querySelectorAll('button').forEach((button) => { button.disabled = false; });
+    if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+  }
+}
+
+function _mountKstarResultReviewCard(host, review) {
+  if (!host || !review?.reviewId || !review?.episodeId) return;
+  const selector = `.chat-kstar-result-review[data-kstar-review-id="${CSS.escape(String(review.reviewId))}"]`;
+  if (host.querySelector(selector)) return;
+  const card = document.createElement('div');
+  host.appendChild(card);
+  _renderKstarResultReviewCard(card, review);
+  window.orkas.invoke('kstar.review.read', { episodeId: review.episodeId }).then((result) => {
+    const state = result?.review?.reviewState;
+    if (state === 'confirmed' || state === 'unknown') {
+      _renderKstarResultReviewCard(card, { ...review, status: 'confirmed' });
+    }
+  }).catch(() => {});
 }
 
 function _renderKStarReviewCard(card, review, cid, candidate = null) {

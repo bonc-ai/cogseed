@@ -204,7 +204,7 @@ Use `kstar: "required" | "skip"`.
 
 Use `required` for research reports, long-form writing, code changes, final deliverables, review/evaluation tasks, or work that may affect user decisions or produce reusable experience. Use `skip` for casual chat, simple explanations, transient summaries, and lightweight tasks with no durable deliverable.
 
-When `kstar` is `required`, include `kstar_reason` and `kstar_expectation` with `situation`, `task`, `action_hat`, and `result_hat`. Each Agent contributes execution evidence without opening its own validation gate. When the collaboration reaches a true terminal state, Commander owns one KSTAR validation over the combined Agent evidence and collaboration value; do not ask the user to validate each Agent separately.
+When `kstar` is `required`, include `kstar_reason` and `kstar_expectation` with `situation`, `task`, `action_hat`, and `result_hat`. Before the agent starts executing, it must use its first visible response to naturally explain the understood task, expected result, and execution plan in plain language. This narration is chat-only; R̂ is chat-only, and the visible task / expected result / plan is not a user confirmation step. Each Agent contributes execution evidence without opening its own validation gate. When the collaboration reaches a true terminal state, Commander owns one KSTAR validation over the combined Agent evidence and collaboration value; do not ask the user to validate each Agent separately.
 
 ## Runtime injection
 
