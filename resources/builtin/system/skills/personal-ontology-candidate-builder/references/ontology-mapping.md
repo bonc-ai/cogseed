@@ -14,7 +14,7 @@ Skill: `personal-ontology-candidate-builder`  ·  Level: `L3`  ·  Owner: `Mate 
 
 | 层 | 文件 | 内容 |
 |---|---|---|
-| TBox | `scene_tbox.yaml` | 概念层：候选五类（偏好/实例/属性/关系/规则）、角色模板（学生/学者/FDE）、来源四值（候选/手动/导入/智能）、去向（user/shared/字段区/流水区）、脱敏状态、17 个类 |
+| TBox | `scene_tbox.yaml` | 概念层：候选五类（偏好/实例/属性/关系/规则）、角色模板（内置角色模板：学生/学者/FDE/产品经理/项目经理/技术写作/招聘专员/软件工程师）、来源四值（候选/手动/导入/智能）、去向（user/shared/字段区/流水区）、脱敏状态、17 个类 |
 | RBox | `scene_rbox.yaml` | 规则层：14 条规则（确认制/高置信不自动生效/本地存储/敏感拦截/不做企业路由/来源必带/追加不覆盖/人读 markdown 输出/环境变量拼路径） |
 | ABox | `scene_abox.yaml` | 实例层：9 个 fewshot 示例（学生 PPT 偏好、沟通风格、项目实例、工具关系、踩坑规则、模板对号入座、3 个阻断负例） |
 | Package | `scene_package.yaml` | 包清单：assets 引用（tbox/rbox/abox/mapping 各带 file）、metadata、依赖、治理 |
@@ -28,4 +28,4 @@ Skill: `personal-ontology-candidate-builder`  ·  Level: `L3`  ·  Owner: `Mate 
 ## 与平台的关系
 
 - 本技能的个人本体候选构建本体描述**个人记忆提炼领域**，是企业组织本体/业务本体的对立面——本技能只服务用户个人。
-- 面向大众用户（学生/学者/FDE/普通用户），不含企业角色（如 业务一线/业务专家/运维工程师）的三层路由。
+- 面向大众用户（内置角色模板 + 普通用户），不含企业角色（如 业务一线/业务专家/运维工程师）的三层路由。

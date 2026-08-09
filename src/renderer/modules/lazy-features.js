@@ -50,6 +50,9 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/cognition/cognition.js' },
     { src: './modules/personal-ontology.js' },
   ],
+  spaces: [
+    { src: './modules/spaces.js' },
+  ],
 });
 
 const _rendererFeatureLoads = new Map();

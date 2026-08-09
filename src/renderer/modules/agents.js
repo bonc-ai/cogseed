@@ -3173,8 +3173,13 @@ let _pickerLibraryRenderSeq = 0;
 // _pickerLibraryRows above, but scoped to personalOntology.groups.list (no
 // project-scoped variant, per §3.7's "only the hidden groups sub-dir" bound).
 let _pickerOntologyGroups = null;
+let _pickerOntologyTemplates = null;
 let _pickerOntologyLoading = null;
+// 本体 tab：被用户收起的模板（template_id 集合）—— 模板标题行可折叠子组
+let _pickerOntologyCollapsed = new Set();
 let _pickerOntologyRenderSeq = 0;
+// 最近一次渲染的搜索词（模板分节过滤用）
+let _pickerOntologyLastQuery = '';
 let _agentPickerTab = 'agents';
 let _agentPickerOpenSeq = 0;
 let _agentPickerLoadedTabs = new Set();
@@ -3376,6 +3381,7 @@ async function _refreshAgentPickerProjectContext(anchorId) {
   // a group created/deleted via the management page since the last open is
   // reflected without requiring a manual refresh.
   _pickerOntologyGroups = null;
+  _pickerOntologyTemplates = null;
   _pickerOntologyLoading = null;
   _pickerOntologyRenderSeq += 1;
   if (_pickerProjectId) {
@@ -3793,8 +3799,14 @@ function _renderLibraryPickerList(listEl, filterText, anchorId) {
 
 async function _loadOntologyPickerGroups() {
   try {
-    const res = await window.orkas.invoke('personalOntology.groups.list', {});
-    return (res && res.ok !== false && Array.isArray(res.groups)) ? res.groups : [];
+    const [gRes, tRes] = await Promise.all([
+      window.orkas.invoke('personalOntology.groups.list', {}),
+      window.orkas.invoke('personalOntology.templates.list', {}),
+    ]);
+    const groups = (gRes && gRes.ok !== false && Array.isArray(gRes.groups)) ? gRes.groups : [];
+    const templates = (tRes && tRes.ok !== false && Array.isArray(tRes.templates)) ? tRes.templates : [];
+    _pickerOntologyTemplates = templates;
+    return groups;
   } catch (err) {
     _agentsLog.warn('ontology group picker load failed', err);
     return [];
@@ -3803,13 +3815,60 @@ async function _loadOntologyPickerGroups() {
 
 function _ontologyPickerRowHtml(group, checked) {
   return `
-    <div class="skill-picker-item is-checkable${checked ? ' is-checked' : ''}" data-kind="ontology_group"
+    <div class="skill-picker-item is-checkable${checked ? ' is-checked' : ''}${group.template_id ? ' is-template-child' : ''}" data-kind="ontology_group"
          data-id="${escapeHtml(group.group_id)}" data-name="${escapeHtml(group.title || '')}">
       <span class="skill-picker-item-checkbox" aria-hidden="true"></span>
       <div class="skill-picker-item-meta">
         <div class="skill-picker-item-name">${escapeHtml(group.title || '')}</div>
       </div>
     </div>`;
+}
+
+// 本体 tab 层级渲染：非模板组平铺；模板文件收纳在模板标题行（可折叠）下，
+// 每行 = 一个分节（data-id = 复合 id `groupId::分节`，chat-use 原样透传，
+// 发送时主进程 groups.read 解析分节内容）。
+// 标题行不带 data-id —— 不参与键盘导航（_setAgentPickerActive 只遍历 [data-id]）
+// 也不参与点击选中（_bindAgentPickerListItems 只绑 [data-id]），多选逻辑零改动。
+// 标题行点击折叠/展开子组（data-ontology-template-toggle 单独绑定）。
+function _ontologyPickerSectionsHtml(groups, templates, selectedIds) {
+  const plain = [];
+  for (const g of groups) {
+    if (!g.template_id) plain.push(g);
+  }
+  const q = _pickerOntologyLastQuery || '';
+  const rows = [];
+  for (const g of plain) {
+    rows.push(_ontologyPickerRowHtml(g, selectedIds.has(g.group_id)));
+  }
+  for (const t of templates || []) {
+    if (!t.installed || !t.sections || !t.sections.length) continue;
+    // 搜索过滤：模板名或分节名命中才显示
+    if (q && !_matchPickerItem(q, t.name, '', '') && !t.sections.some((s) => _matchPickerItem(q, s.title, '', ''))) continue;
+    const collapsed = _pickerOntologyCollapsed.has(t.template_id);
+    rows.push(`<button type="button" class="skill-picker-template-header" data-ontology-template-toggle="${escapeHtml(t.template_id)}">
+      <span class="skill-picker-template-caret">${collapsed ? '▶' : '▼'}</span>${escapeHtml(t.name)}</button>`);
+    if (!collapsed) {
+      rows.push(`<div class="skill-picker-template-groups">${t.sections.map((s) => {
+        const ref = `${t.group_id}::${s.title}`;
+        return _ontologyPickerRowHtml({ group_id: ref, title: s.title, template_id: t.template_id }, selectedIds.has(ref));
+      }).join('')}</div>`);
+    }
+  }
+  return rows.join('');
+}
+
+function _bindAgentPickerTemplateToggles(listEl) {
+  for (const btn of listEl.querySelectorAll('[data-ontology-template-toggle]')) {
+    btn.addEventListener('click', () => {
+      const tid = btn.dataset.ontologyTemplateToggle;
+      if (!tid) return;
+      if (_pickerOntologyCollapsed.has(tid)) _pickerOntologyCollapsed.delete(tid);
+      else _pickerOntologyCollapsed.add(tid);
+      const picker = document.getElementById('agent-picker');
+      const search = document.getElementById('agent-picker-search');
+      _renderOntologyPickerList(listEl, search ? search.value : '', picker ? picker.dataset.anchorId || '' : '');
+    });
+  }
 }
 
 function _renderOntologyPickerList(listEl, filterText, anchorId) {
@@ -3839,10 +3898,17 @@ function _renderOntologyPickerList(listEl, filterText, anchorId) {
   }
 
   const allGroups = _pickerOntologyGroups || [];
+  // 搜索匹配组标题/模板名：模板名命中时保留该模板全部预置组
   const filtered = q
-    ? allGroups
-        .filter((g) => _matchPickerItem(q, g.title, '', g.group_id))
-        .sort((a, b) => _pickerMatchScore(q, a.title || a.group_id) - _pickerMatchScore(q, b.title || b.group_id))
+    ? (() => {
+        const templateIds = new Set(
+          allGroups.filter((g) => g.template_name && _matchPickerItem(q, g.template_name, '', ''))
+            .map((g) => g.template_id),
+        );
+        return allGroups
+          .filter((g) => _matchPickerItem(q, g.title, '', g.group_id) || (g.template_id && templateIds.has(g.template_id)))
+          .sort((a, b) => _pickerMatchScore(q, a.title || a.group_id) - _pickerMatchScore(q, b.title || b.group_id));
+      })()
     : allGroups;
 
   if (!filtered.length) {
@@ -3856,7 +3922,9 @@ function _renderOntologyPickerList(listEl, filterText, anchorId) {
     (typeof getChatUseOntologyGroups === 'function' ? getChatUseOntologyGroups(target) : [])
       .map((sel) => sel.id),
   );
-  listEl.innerHTML = filtered.map((g) => _ontologyPickerRowHtml(g, selectedIds.has(g.group_id))).join('');
+  _pickerOntologyLastQuery = q;
+  listEl.innerHTML = _ontologyPickerSectionsHtml(filtered, _pickerOntologyTemplates, selectedIds);
+  _bindAgentPickerTemplateToggles(listEl);
   _bindAgentPickerListItems(listEl, anchorId);
 }
 

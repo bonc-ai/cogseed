@@ -271,6 +271,7 @@ function _lazyFeaturePanel(view) {
     : view === 'evolution' ? 'panel-evolution'
     : view === 'recall' ? 'panel-recall'
     : view === 'personal-ontology' ? 'panel-personal-ontology'
+    : view === 'spaces' ? 'panel-spaces'
     : view === 'contexts' ? 'panel-contexts'
     : view === 'settings' ? 'panel-settings'
     : view === 'project' ? 'panel-project'
@@ -362,6 +363,7 @@ function setView(view, cid, opts = {}) {
                 : view === 'contexts' ? 'panel-contexts'
                 : view === 'evolution' ? 'panel-evolution'
                 : view === 'personal-ontology' ? 'panel-personal-ontology'
+                : view === 'spaces' ? 'panel-spaces'
                 : view === 'settings' ? 'panel-settings'
                 : view === 'memory' ? 'panel-memory'
                 : view === 'devtools' ? 'panel-devtools'
@@ -379,6 +381,7 @@ function setView(view, cid, opts = {}) {
   document.getElementById('contexts-btn')?.classList.toggle('active', view === 'contexts');
   document.getElementById('evolution-btn')?.classList.toggle('active', view === 'evolution');
   document.getElementById('personal-ontology-btn')?.classList.toggle('active', view === 'personal-ontology');
+  document.getElementById('spaces-btn')?.classList.toggle('active', view === 'spaces');
   document.getElementById('settings-btn')?.classList.toggle('active', view === 'settings');
   document.getElementById('devtools-btn')?.classList.toggle('active', view === 'devtools');
   document.querySelectorAll('.conv-item').forEach(it => {
@@ -542,6 +545,13 @@ function setView(view, cid, opts = {}) {
     _deferSidebarNavWork('personal-ontology-tab-load', () => {
       _loadViewFeature('personal-ontology', 'personal-ontology', () => {
         if (typeof renderPersonalOntology === 'function') renderPersonalOntology();
+      });
+    });
+  } else if (view === 'spaces') {
+    currentCid = null;
+    _deferSidebarNavWork('spaces-tab-load', () => {
+      _loadViewFeature('spaces', 'spaces', () => {
+        if (typeof renderSpaces === 'function') renderSpaces();
       });
     });
   } else if (view === 'settings') {
