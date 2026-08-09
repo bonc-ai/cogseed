@@ -10,7 +10,21 @@ import { validateSkillDir, validateSkillFile, type ValidationReport } from '../.
 
 export type ValidationStatus = 'pass' | 'risk' | 'blocked' | 'degraded';
 export type ValidationTarget = 'working-tree' | 'installed-skill' | 'patch-candidate';
-export type ValidationBoundary = 'real' | 'degraded' | 'test-double';
+/**
+ * How the verdict was obtained.
+ *
+ * `static` means the validator read the skill's files without executing it —
+ * which is what every path in this module actually does. `real` is reserved for
+ * evidence produced by genuinely running the skill; nothing writes it yet, and it
+ * must not be claimed until something does.
+ *
+ * The distinction exists because PRD §8.2 admits a formal Baseline only after
+ * "Skill Validator, Security Scanner, and a minimal real run", and callers here
+ * previously passed `boundary: 'real'` for a static check — a record that reads
+ * as run evidence while no run happened. `degraded` still means the validator
+ * itself was unavailable, and `test-double` a stand-in.
+ */
+export type ValidationBoundary = 'static' | 'real' | 'degraded' | 'test-double';
 export interface SkillValidationRun {
   validationId: string;
   skillId: string;
@@ -81,6 +95,15 @@ export async function runSkillValidation(uid: string, input: {
 }): Promise<SkillValidationRun> {
   requireId(input.skillId, 'skill id');
   if (!isPathAllowed(input.skillDir, input.allowedRoots)) throw new Error('skill directory is outside allowed roots');
+  // Refuse to record a run-evidence claim this function cannot substantiate: it
+  // calls the static validator and never executes the skill. Rejecting is better
+  // than silently downgrading, because a caller asking for `real` believes it is
+  // getting run evidence and would carry that belief into an admission decision.
+  // Delete this guard only together with an implementation that actually runs the
+  // skill and derives the verdict from that run.
+  if (input.boundary === 'real') {
+    throw new Error('runSkillValidation performs a static scan and cannot produce `real` run evidence');
+  }
   try {
     const [report, scannedFiles] = await Promise.all([
       Promise.resolve((input.validateFn || validateSkillDir)(input.skillDir)),
@@ -98,7 +121,7 @@ export async function runSkillValidation(uid: string, input: {
 }
 
 export async function validatePatchCandidateContent(
-  uid: string, skillId: string, content: string, boundary: ValidationBoundary = 'real',
+  uid: string, skillId: string, content: string, boundary: ValidationBoundary = 'static',
 ): Promise<SkillValidationRun> {
   const report = validateSkillFile({ relpath: 'SKILL.md', content });
   return persist(uid, normalizeValidationReport(skillId, 'patch-candidate', report, 1, boundary));

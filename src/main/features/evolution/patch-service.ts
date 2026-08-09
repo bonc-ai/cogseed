@@ -38,7 +38,10 @@ export async function applyPatchToSkill(
   const write = input.writeFn ?? ((id, file, content) => writeSkillFileForEdit(id, file, content));
   const appendVersion = input.appendVersionFn ?? appendSkillVersion;
   const { content, newVersion } = withBumpedVersion(input.newContent);
-  const validation = await validatePatchCandidateContent(uid, input.skillId, content, input.validationBoundary || 'real');
+  // `static`: this validates the patched SKILL.md text and never runs the skill,
+  // so it cannot stand in for PRD §8.2's minimal real run. The default said
+  // `real` before, which made every patch look like it carried run evidence.
+  const validation = await validatePatchCandidateContent(uid, input.skillId, content, input.validationBoundary || 'static');
   if (validation.status === 'blocked') {
     return { ok: false, newVersion, validationId: validation.validationId, validationStatus: validation.status };
   }

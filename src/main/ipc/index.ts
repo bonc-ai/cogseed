@@ -1640,8 +1640,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(skillId)) throw new Error('invalid skill id');
     if (target !== 'installed-skill') throw new Error('unsupported validation target');
     const skillDir = userMarketplaceSkillDir(ctx.userId, skillId);
+    // `static`, not `real`: this channel scans the installed files and never
+    // executes the skill (the channel name says scan for the same reason).
+    // Labelling it `real` produced records that read as run evidence for a run
+    // that never happened — PRD §8.2 treats the minimal real run as a separate,
+    // still-unimplemented admission requirement.
     return { ok: true, validation: await p3394.runSkillValidation(ctx.userId, {
-      skillId, target, skillDir, allowedRoots: [skillDir], boundary: 'real',
+      skillId, target, skillDir, allowedRoots: [skillDir], boundary: 'static',
     }) };
   },
 
