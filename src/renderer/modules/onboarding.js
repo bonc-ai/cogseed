@@ -225,12 +225,12 @@ function _csRenderAgents(entries) {
         <svg class="g-toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
       </div>
       <div class="cs-sessions-container" data-agent="${_csEsc(e.type)}">
-        <div class="cs-state loading">正在读取会话历史…</div>
+        ${_csAssetSectionsHtml(e.type)}
       </div>`);
   }
   box.innerHTML = groupsHtml.join('');
 
-  // Wire up collapse/expand
+  // Collapse/expand at the AGENT level (whole agent block).
   box.querySelectorAll('.cs-group-head').forEach((head) => {
     head.addEventListener('click', () => {
       const group = head.dataset.group;
@@ -242,22 +242,67 @@ function _csRenderAgents(entries) {
     });
   });
 
-  // Fetch real sessions for each detected agent.
+  // Collapse/expand at the ASSET-SECTION level (会话/技能/记忆/定时任务).
+  box.querySelectorAll('.cs-asset-head').forEach((head) => {
+    head.addEventListener('click', () => {
+      const body = head.nextElementSibling;
+      if (body && body.classList.contains('cs-asset-body')) {
+        const collapsed = head.classList.toggle('collapsed');
+        body.classList.toggle('collapsed', collapsed);
+      }
+    });
+  });
+
+  // Load each asset type per detected agent. Claude is fully wired; others get
+  // honest "not yet implemented" states inside each section.
   for (const e of available) {
     if (e.type === 'claude') {
       void _csLoadClaudeSessions(e.type);
+      void _csLoadClaudeSkills(e.type);
+      void _csLoadClaudeMemory(e.type);
+      _csRenderNoTasks(e.type); // Claude Code has no native scheduled tasks
     } else {
-      // Other agents: honest "not yet implemented" state.
-      const container = box.querySelector(`.cs-sessions-container[data-agent="${e.type}"]`);
-      if (container) {
-        const label = CS_AGENT_LABELS[e.type] || e.type;
-        container.innerHTML = `<div class="cs-state">会话历史的真实读取暂未接入，此 Agent 下暂无可导入的会话。接入后，这里会列出你在 ${_csEsc(label)} 里的真实历史会话供你选择。</div>`;
-      }
+      const label = CS_AGENT_LABELS[e.type] || e.type;
+      _csFillAsset(e.type, 'sessions', `<div class="cs-state">${_csEsc(label)} 的会话读取暂未接入。</div>`);
+      _csFillAsset(e.type, 'skills', `<div class="cs-state">${_csEsc(label)} 的技能读取暂未接入。</div>`);
+      _csFillAsset(e.type, 'memory', `<div class="cs-state">${_csEsc(label)} 的记忆读取暂未接入。</div>`);
+      _csFillAsset(e.type, 'tasks', `<div class="cs-state">${_csEsc(label)} 的定时任务读取暂未接入。</div>`);
     }
   }
 
   // Load ACP transcript sessions (from ~/.cogseed/acp-transcripts/)
   void _csLoadAcpSessions();
+}
+
+// The four asset sub-sections shown under each agent. Each is independently
+// collapsible; 会话 starts collapsed (it can be long), the rest start open.
+function _csAssetSectionsHtml(agentType) {
+  const t = _csEsc(agentType);
+  const sec = (asset, title, collapsed) => `
+    <div class="cs-asset">
+      <div class="cs-asset-head${collapsed ? ' collapsed' : ''}" data-agent="${t}" data-asset="${asset}">
+        <span class="a-title">${title}</span>
+        <svg class="a-toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="cs-asset-body${collapsed ? ' collapsed' : ''}" data-agent="${t}" data-asset="${asset}">
+        <div class="cs-state loading">正在读取…</div>
+      </div>
+    </div>`;
+  return (
+    sec('sessions', '会话', true) +
+    sec('skills', '技能', false) +
+    sec('memory', '记忆', false) +
+    sec('tasks', '定时任务', false)
+  );
+}
+
+// Fill one asset sub-section's body for an agent.
+function _csFillAsset(agentType, asset, html) {
+  const box = document.getElementById('cs-agent-list');
+  if (!box) return null;
+  const body = box.querySelector(`.cs-asset-body[data-agent="${agentType}"][data-asset="${asset}"]`);
+  if (body) body.innerHTML = html;
+  return body;
 }
 
 // ── Step 1a: connect AI team ────────────────────────────────────────────────
@@ -453,7 +498,7 @@ async function _csLoadAgents(force) {
 async function _csLoadClaudeSessions(agentType) {
   const box = document.getElementById('cs-agent-list');
   if (!box) return;
-  const container = box.querySelector(`.cs-sessions-container[data-agent="${agentType}"]`);
+  const container = box.querySelector(`.cs-asset-body[data-agent="${agentType}"][data-asset="sessions"]`);
   if (!container) return;
 
   try {
@@ -516,6 +561,186 @@ async function _csLoadClaudeSessions(agentType) {
     _obLog.warn('failed to load Claude sessions', { error: msg });
     container.innerHTML = `<div class="cs-state err">读取 Claude Code 会话失败：${_csEsc(msg)}</div>`;
   }
+}
+
+// ── Skills: scan ~/.claude/skills and import selected into the skill library ──
+async function _csLoadClaudeSkills(agentType) {
+  const container = _csFillAsset(agentType, 'skills', '<div class="cs-state loading">正在扫描本机技能…</div>');
+  if (!container) return;
+
+  try {
+    const res = await window.orkas.invoke('sessionImport.listClaudeSkills');
+    const skills = (res && res.skills) || [];
+
+    if (!skills.length) {
+      container.innerHTML = '<div class="cs-state">未在本机找到 Claude Code 技能（~/.claude/skills 为空或不存在）。</div>';
+      return;
+    }
+
+    const rows = skills.map((s) => {
+      const desc = s.description ? `<small>${_csEsc(s.description)}</small>` : '';
+      return `
+        <div class="cs-src" data-skill-dir="${_csEsc(s.dirName)}">
+          <input type="checkbox" checked />
+          <div class="s-ico">${CS_TERMINAL_SVG}</div>
+          <div>
+            <strong>${_csEsc(s.name)}</strong>
+            ${desc}
+          </div>
+        </div>`;
+    }).join('');
+
+    container.innerHTML = rows +
+      `<div class="cs-import-bar">
+         <button type="button" class="cs-skill-import-btn" data-agent="${_csEsc(agentType)}">导入所选技能</button>
+         <div class="cs-import-result cs-skill-result" data-agent="${_csEsc(agentType)}"></div>
+       </div>`;
+
+    container.querySelectorAll('.cs-src[data-skill-dir]').forEach((row) => {
+      const checkbox = row.querySelector('input[type="checkbox"]');
+      row.classList.toggle('selected', checkbox.checked);
+      row.addEventListener('click', (ev) => {
+        if (ev.target === checkbox) return;
+        checkbox.checked = !checkbox.checked;
+        row.classList.toggle('selected', checkbox.checked);
+      });
+      checkbox.addEventListener('change', () => row.classList.toggle('selected', checkbox.checked));
+    });
+
+    const btn = container.querySelector('.cs-skill-import-btn');
+    if (btn) btn.addEventListener('click', () => void _csImportSelectedSkills(container));
+
+    _obLog.info('loaded Claude skills', { count: skills.length });
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    _obLog.warn('failed to load Claude skills', { error: msg });
+    container.innerHTML = `<div class="cs-state err">扫描本机技能失败：${_csEsc(msg)}</div>`;
+  }
+}
+
+async function _csImportSelectedSkills(container) {
+  const btn = container.querySelector('.cs-skill-import-btn');
+  const resultBox = container.querySelector('.cs-skill-result');
+  if (!resultBox) return;
+
+  const dirNames = [];
+  container.querySelectorAll('.cs-src[data-skill-dir] input[type="checkbox"]:checked').forEach((cb) => {
+    const row = cb.closest('.cs-src');
+    if (row && row.dataset.skillDir) dirNames.push(row.dataset.skillDir);
+  });
+
+  if (!dirNames.length) {
+    resultBox.innerHTML = '<div class="cs-state">请先勾选要导入的技能。</div>';
+    return;
+  }
+
+  if (btn) btn.disabled = true;
+  resultBox.innerHTML = `<div class="cs-extract-progress">正在导入 ${dirNames.length} 个技能…</div>`;
+
+  try {
+    const res = await window.orkas.invoke('sessionImport.importClaudeSkills', { dirNames });
+    const okCount = (res && res.okCount) || 0;
+    const failCount = (res && res.failCount) || 0;
+    const imported = (res && res.imported) || [];
+    const lines = imported.map((r) => {
+      if (r.ok) return `✓ ${_csEsc(r.name)}：已导入`;
+      if (r.reason === 'already_exists') return `• ${_csEsc(r.name)}：已存在，跳过`;
+      return `✗ ${_csEsc(r.name)}：导入失败（${_csEsc(r.reason || '未知原因')}）`;
+    });
+    const summary =
+      `<div class="cs-state">技能导入完成：成功 ${okCount} 个` +
+      (failCount ? `，失败 ${failCount} 个` : '') +
+      '。导入的技能已进入你的技能库。</div>';
+    resultBox.innerHTML = summary + `<div class="cs-import-lines">${lines.map((l) => `<div>${l}</div>`).join('')}</div>`;
+    _obLog.info('skill import finished', { okCount, failCount });
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    _obLog.warn('skill import failed', { error: msg });
+    resultBox.innerHTML = `<div class="cs-state err">导入技能失败：${_csEsc(msg)}</div>`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ── Memory: preview ~/.claude/CLAUDE.md and import into the shared knowledge tier ──
+async function _csLoadClaudeMemory(agentType) {
+  const container = _csFillAsset(agentType, 'memory', '<div class="cs-state loading">正在读取记忆…</div>');
+  if (!container) return;
+
+  try {
+    const res = await window.orkas.invoke('sessionImport.readClaudeMemory');
+    if (!res || !res.present) {
+      const reason = res && res.reason === 'too_large' ? '（文件过大，暂不导入）' : '';
+      container.innerHTML =
+        `<div class="cs-state">未找到 Claude Code 记忆文件 ~/.claude/CLAUDE.md${reason}。用过 CLAUDE.md 后，这里会列出可导入的记忆条目。</div>`;
+      return;
+    }
+    if (!res.entryCount) {
+      container.innerHTML = '<div class="cs-state">CLAUDE.md 存在，但没有可导入的记忆条目。</div>';
+      return;
+    }
+
+    const sample = (res.sample || []).map((s) => `<div>${_csEsc(s)}</div>`).join('');
+    container.innerHTML =
+      `<div class="cs-state">检测到 ${res.entryCount} 条记忆（来自 ~/.claude/CLAUDE.md）。导入后进入共享知识库，供各 Agent 使用。</div>` +
+      (sample ? `<div class="cs-import-lines">${sample}${res.entryCount > (res.sample || []).length ? '<div>…</div>' : ''}</div>` : '') +
+      `<div class="cs-import-bar">
+         <button type="button" class="cs-mem-import-btn" data-agent="${_csEsc(agentType)}">导入全部记忆</button>
+         <div class="cs-import-result cs-mem-result" data-agent="${_csEsc(agentType)}"></div>
+       </div>`;
+
+    const btn = container.querySelector('.cs-mem-import-btn');
+    if (btn) btn.addEventListener('click', () => void _csImportClaudeMemory(container));
+
+    _obLog.info('previewed Claude memory', { entryCount: res.entryCount });
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    _obLog.warn('failed to read Claude memory', { error: msg });
+    container.innerHTML = `<div class="cs-state err">读取记忆失败：${_csEsc(msg)}</div>`;
+  }
+}
+
+async function _csImportClaudeMemory(container) {
+  const btn = container.querySelector('.cs-mem-import-btn');
+  const resultBox = container.querySelector('.cs-mem-result');
+  if (!resultBox) return;
+
+  if (btn) btn.disabled = true;
+  resultBox.innerHTML = '<div class="cs-extract-progress">正在导入记忆…</div>';
+
+  try {
+    const res = await window.orkas.invoke('sessionImport.importClaudeMemory');
+    if (!res || !res.ok) {
+      const reason = (res && res.reason) || '未知原因';
+      resultBox.innerHTML = `<div class="cs-state err">导入记忆失败：${_csEsc(reason)}</div>`;
+      if (btn) btn.disabled = false;
+      return;
+    }
+    const added = res.added || 0;
+    const skipped = res.skipped || 0;
+    const rejected = res.rejected || 0;
+    resultBox.innerHTML =
+      `<div class="cs-state">记忆导入完成：新增 ${added} 条` +
+      (skipped ? `，已存在跳过 ${skipped} 条` : '') +
+      (rejected ? `，被安全校验拦截 ${rejected} 条` : '') +
+      '。已进入共享知识库。</div>';
+    _csToast(`已导入 ${added} 条记忆到知识库`);
+    _obLog.info('memory import finished', { added, skipped, rejected });
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    _obLog.warn('memory import failed', { error: msg });
+    resultBox.innerHTML = `<div class="cs-state err">导入记忆失败：${_csEsc(msg)}</div>`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ── Scheduled tasks: Claude Code has no native on-disk scheduled-task store. ──
+// We show an honest "no native source" state rather than misreading its
+// per-session TODO files (~/.claude/tasks/) as scheduled tasks.
+function _csRenderNoTasks(agentType) {
+  _csFillAsset(agentType, 'tasks',
+    '<div class="cs-state">Claude Code 没有原生的定时任务存储，暂无可导入的定时任务。你可以在本应用的「定时任务」模块里直接新建。</div>');
 }
 
 // Import each selected Claude session through the real pipeline:

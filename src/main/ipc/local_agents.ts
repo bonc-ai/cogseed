@@ -41,6 +41,7 @@ import { listClaudeSessions } from '../features/local_agents/claude_sessions.js'
 import { listAgentTypes, listSessions as listAcpSessions } from '../features/local_agents/acp_sessions.js';
 import { importClaudeSession } from '../features/session_import/asset-router.js';
 import { listClaudeSkills, importClaudeSkills } from '../features/session_import/skill-import.js';
+import { readClaudeMemory, importClaudeMemory } from '../features/session_import/memory-import.js';
 
 const log = createLogger('ipc:local_agents');
 
@@ -184,6 +185,25 @@ export const invokeHandlers = {
       throw new Error('dirNames must be a string array');
     }
     return importClaudeSkills(dirNames as string[]);
+  },
+
+  /**
+   * Preview the user-level Claude memory (`~/.claude/CLAUDE.md`), READ-ONLY.
+   * Returns an honest `present:false` state when there is no CLAUDE.md.
+   */
+  'sessionImport.readClaudeMemory': async () => {
+    return readClaudeMemory();
+  },
+
+  /**
+   * Import the user-level CLAUDE.md into the shared memory tier (MEMORY.md).
+   * Per-entry idempotent; every write goes through the memory injection scan
+   * and char-limit guard.
+   */
+  'sessionImport.importClaudeMemory': async () => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importClaudeMemory(userId);
   },
 
   /**
