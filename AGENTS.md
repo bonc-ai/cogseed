@@ -193,7 +193,7 @@ Dev-mode marketplace editing/upload/delete is hosted/private tooling. Runtime ga
 
 ## Tests And Dev Workflow
 
-- Start PC with `cd PC && ./run.sh`.
+- Start PC with `./run.sh`.
 - Run tests with `npm test`, not `npx vitest`; the test script manages sqlite ABI swapping and rollback.
 - If sqlite ABI is broken, run `npm run rebuild:sqlite:electron`.
 - Tests should cover business invariants, recovery paths, concurrency, cross-layer contracts, and text-processing traps.
@@ -201,6 +201,12 @@ Dev-mode marketplace editing/upload/delete is hosted/private tooling. Runtime ga
 - LLM-output parsers/sanitizers need fixture sets for both accepted real shapes and rejected look-alikes.
 - Pure renderer functions may expose a guarded CommonJS bridge for tests; DOM/i18n/IPC code should not.
 - After completing changes to this messaging worktree, restart the running app for verification instead of asking the user to do it manually: run `scripts/restart-mate.sh` (stops only this worktree's `messaging` runtime and relaunches via `./run.sh` in the background; other variants are untouched). Confirm startup via `~/.orkas/runtime-variants/messaging/data/logs/<date>.log` and the launcher log `/tmp/mate-agent-messaging-run.log`, then run the real-environment verification.
+
+## Git Collaboration Flow
+
+- All work lands in `develop` via GitLab MR from a `dev/*` branch; `develop` is protected — never push it directly (overwrite accidents happened before).
+- Keep your branch fresh with the mainline before merging: `git pull origin develop` (or fetch + merge).
+- Push explicitly to your own branch: `git push origin dev/<branch>` — avoid bare `git push` when your branch tracks `origin/develop`.
 
 ## Do Not
 
