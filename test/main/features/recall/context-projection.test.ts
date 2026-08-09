@@ -8,6 +8,27 @@ afterEach(() => { if (previous === undefined) delete process.env.ORKAS_WORKSPACE
 async function modules() { const [candidates, assets, refs, projection] = await Promise.all([import('../../../../src/main/features/recall/candidate-service'), import('../../../../src/main/features/recall/asset-service'), import('../../../../src/main/features/recall/workspace-refs'), import('../../../../src/main/features/recall/context-projection')]); return { candidates, assets, refs, projection }; }
 async function createAsset() { const { candidates } = await modules(); const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Preserve source evidence in reviews.', suggestedType: 'rule', suggestedScope: 'review,project', sourceRefs: [{ kind: 'execution', id: 'exec-a' }, { kind: 'memory', id: 'mem-a' }] }); return candidates.promoteRecallCandidate('user-a', candidate.id); }
 
+async function createAssetWith(input: { judgment: string; summary: string; scope?: string; sourceId: string }) {
+  const { candidates } = await modules();
+  const candidate = await candidates.saveRecallCandidate('user-a', {
+    judgment: input.judgment,
+    summary: input.summary,
+    suggestedType: 'rule',
+    suggestedScope: input.scope || 'review',
+    sourceRefs: [{ kind: 'execution', id: input.sourceId }],
+  });
+  return candidates.promoteRecallCandidate('user-a', candidate.id);
+}
+
+const fakeSemanticOptions = {
+  embedTexts: async (texts: string[]) => texts.map((text) => {
+    const lower = text.toLowerCase();
+    if (lower.includes('oauth')) return [1, 0];
+    if (lower.includes('database')) return [0, 1];
+    return [0.2, 0.2];
+  }),
+};
+
 describe('RecallView and ContextProjection', () => {
   it('previews workspace-scoped active assets and explains omitted assets', async () => {
     const { asset } = await createAsset();
@@ -22,6 +43,107 @@ describe('RecallView and ContextProjection', () => {
     expect(preview.assetIds).toEqual([asset.id]);
     expect(preview.sourceRefs.map((ref) => ref.id)).toEqual(['exec-a', 'mem-a']);
     expect(preview.omittedRefs).toEqual(expect.arrayContaining([expect.objectContaining({ assetId: other.asset.id, reason: 'asset_paused' })]));
+  });
+
+
+  it('semantic-ranks only assets already allowed by workspace and exact scope', async () => {
+    const oauth = await createAssetWith({ judgment: 'Review OAuth callback and token exchange security.', summary: 'OAuth review workflow', scope: 'review', sourceId: 'exec-oauth' });
+    const database = await createAssetWith({ judgment: 'Plan database migrations with rollback windows.', summary: 'Database migration rule', scope: 'review', sourceId: 'exec-db' });
+    const scopeMismatch = await createAssetWith({ judgment: 'OAuth client secret rotation checklist.', summary: 'OAuth secret rotation', scope: 'security', sourceId: 'exec-oauth-scope' });
+    const { refs, projection } = await modules();
+    for (const asset of [oauth.asset, database.asset, scopeMismatch.asset]) {
+      await refs.addWorkspaceAssetReference('user-a', { assetId: asset.id, workspaceId: 'workspace-a', scope: asset.scope });
+    }
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-semantic', workspaceId: 'workspace-a', purpose: 'review', taskText: 'Audit OAuth login callback handling', authorization: 'user_confirmed',
+    }, fakeSemanticOptions);
+
+    expect(preview.assetIds).toEqual([oauth.asset.id, database.asset.id]);
+    expect(preview.assetMatches).toEqual([
+      expect.objectContaining({ assetId: oauth.asset.id, matchMethod: 'semantic', matchScore: expect.any(Number) }),
+      expect.objectContaining({ assetId: database.asset.id, matchMethod: 'semantic', matchScore: expect.any(Number) }),
+    ]);
+    expect(preview.assetIds).not.toContain(scopeMismatch.asset.id);
+  });
+
+  it('deduplicates manual edits and rejects invalid revision combinations', async () => {
+    const first = await createAssetWith({ judgment: 'First review rule.', summary: 'First', scope: 'review', sourceId: 'exec-first' });
+    const second = await createAssetWith({ judgment: 'Second review rule.', summary: 'Second', scope: 'review', sourceId: 'exec-second' });
+    const { refs, projection } = await modules();
+    await refs.addWorkspaceAssetReference('user-a', { assetId: first.asset.id, workspaceId: 'workspace-a', scope: 'review' });
+    await refs.addWorkspaceAssetReference('user-a', { assetId: second.asset.id, workspaceId: 'workspace-a', scope: 'review' });
+    const preview = await projection.previewContextProjection('user-a', { taskRunId: 'task-dedupe', workspaceId: 'workspace-a', purpose: 'review' });
+
+    const revised = await projection.reviseContextProjection('user-a', preview.id, {
+      addAssetIds: [second.asset.id, second.asset.id],
+      removeAssetIds: [first.asset.id, first.asset.id],
+    });
+    expect(revised.assetIds).toEqual([second.asset.id]);
+
+    await expect(projection.reviseContextProjection('user-a', preview.id, { addAssetIds: ['../bad'] }))
+      .rejects.toThrow(/invalid projection asset/i);
+    await expect(projection.reviseContextProjection('user-a', preview.id, { addAssetIds: [second.asset.id], removeAssetIds: [second.asset.id] }))
+      .rejects.toThrow(/both add and remove/i);
+  });
+
+  it('rejects unknown inactive and workspace-ineligible manual additions', async () => {
+    const first = await createAssetWith({ judgment: 'First review rule.', summary: 'First', scope: 'review', sourceId: 'exec-first' });
+    const inactive = await createAssetWith({ judgment: 'Paused review rule.', summary: 'Paused', scope: 'review', sourceId: 'exec-paused' });
+    const scopeMismatch = await createAssetWith({ judgment: 'Security-only rule.', summary: 'Security', scope: 'security', sourceId: 'exec-security' });
+    const { refs, assets, projection } = await modules();
+    await refs.addWorkspaceAssetReference('user-a', { assetId: first.asset.id, workspaceId: 'workspace-a', scope: 'review' });
+    await refs.addWorkspaceAssetReference('user-a', { assetId: inactive.asset.id, workspaceId: 'workspace-a', scope: 'review' });
+    await refs.addWorkspaceAssetReference('user-a', { assetId: scopeMismatch.asset.id, workspaceId: 'workspace-a', scope: 'security' });
+    await assets.pauseAbilityAsset('user-a', inactive.asset.id, 'not ready');
+    const preview = await projection.previewContextProjection('user-a', { taskRunId: 'task-invalid-add', workspaceId: 'workspace-a', purpose: 'review' });
+
+    await expect(projection.reviseContextProjection('user-a', preview.id, { addAssetIds: ['asset-missing'] }))
+      .rejects.toThrow(/not found/i);
+    await expect(projection.reviseContextProjection('user-a', preview.id, { addAssetIds: [inactive.asset.id] }))
+      .rejects.toThrow(/not active/i);
+    await expect(projection.reviseContextProjection('user-a', preview.id, { addAssetIds: [scopeMismatch.asset.id] }))
+      .rejects.toThrow(/not eligible/i);
+  });
+
+  it('allows removing every task asset without deleting formal assets', async () => {
+    const first = await createAssetWith({ judgment: 'First review rule.', summary: 'First', scope: 'review', sourceId: 'exec-first' });
+    const { refs, projection } = await modules();
+    await refs.addWorkspaceAssetReference('user-a', { assetId: first.asset.id, workspaceId: 'workspace-a', scope: 'review' });
+    const preview = await projection.previewContextProjection('user-a', { taskRunId: 'task-empty', workspaceId: 'workspace-a', purpose: 'review' });
+
+    const revised = await projection.reviseContextProjection('user-a', preview.id, { removeAssetIds: [first.asset.id] });
+
+    expect(revised.assetIds).toEqual([]);
+    expect(revised.assetVersions).toEqual({});
+    expect(revised.sourceRefs).toEqual([]);
+    await expect((await modules()).assets.readAbilityAsset('user-a', first.asset.id))
+      .resolves.toMatchObject({ id: first.asset.id, status: 'active' });
+  });
+
+  it('rejects edits to confirmed deferred rejected and expired projections', async () => {
+    const { asset } = await createAsset();
+    const { projection } = await modules();
+    const confirmedPreview = await projection.previewContextProjection('user-a', { taskRunId: 'task-lock', purpose: 'review' });
+    await projection.confirmContextProjection('user-a', confirmedPreview.id);
+    await expect(projection.reviseContextProjection('user-a', confirmedPreview.id, { removeAssetIds: [asset.id] }))
+      .rejects.toThrow(/cannot be revised/i);
+
+    const deferred = await projection.previewContextProjection('user-a', { taskRunId: 'task-deferred', purpose: 'review' });
+    await projection.deferContextProjection('user-a', deferred.id, 'later');
+    await expect(projection.reviseContextProjection('user-a', deferred.id, { removeAssetIds: [asset.id] }))
+      .rejects.toThrow(/cannot be revised/i);
+
+    const rejected = await projection.previewContextProjection('user-a', { taskRunId: 'task-rejected', purpose: 'review' });
+    await projection.rejectContextProjection('user-a', rejected.id, 'no');
+    await expect(projection.reviseContextProjection('user-a', rejected.id, { removeAssetIds: [asset.id] }))
+      .rejects.toThrow(/cannot be revised/i);
+
+    const expired = await projection.previewContextProjection('user-a', { taskRunId: 'task-expired', purpose: 'review', expiresAt: '2000-01-01T00:00:00.000Z' });
+    await expect(projection.reviseContextProjection('user-a', expired.id, { removeAssetIds: [asset.id] }))
+      .rejects.toThrow(/expired/i);
+    await expect((await modules()).assets.readAbilityAsset('user-a', asset.id))
+      .resolves.toMatchObject({ id: asset.id, status: 'active' });
   });
 
   it('confirms a non-expired projection once and rejects expired projections', async () => {

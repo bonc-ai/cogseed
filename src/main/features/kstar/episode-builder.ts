@@ -30,6 +30,8 @@ export interface GroupKstarMessageInput {
   created_agents?: Array<{ agent_id: string; name?: string }>;
   created_skills?: Array<{ skill_id: string; name?: string }>;
   plan_announcement?: boolean;
+  dispatch?: boolean;
+  kstar_dispatch_narration?: { target_agent_id: string; workflow_step_id?: string };
 }
 
 export interface GroupKstarEpisodeInput {
@@ -40,6 +42,10 @@ export interface GroupKstarEpisodeInput {
   startedAtMs: number;
   finishedAtMs: number;
   messages: GroupKstarMessageInput[];
+  projectionId?: string;
+  wakeRequestId?: string;
+  logicalRunId?: string;
+  executionId?: string;
   createdAt?: string;
 }
 
@@ -185,7 +191,8 @@ export function buildGroupKstarEpisode(input: GroupKstarEpisodeInput): KstarEpis
   const messages = messagesInRun(input);
   const userMessages = messages.filter((message) => message.from === 'user');
   const actionMessages = messages.filter((message) => message.from !== 'user' && !message.system_kind);
-  const finalMessage = [...actionMessages].reverse().find((message) => compactText(message.text));
+  const resultMessages = actionMessages.filter((message) => !message.dispatch && !message.plan_announcement && !message.kstar_dispatch_narration);
+  const finalMessage = [...resultMessages].reverse().find((message) => compactText(message.text)) || [...actionMessages].reverse().find((message) => compactText(message.text));
   const userGoal = compactText(userMessages[0]?.text, MAX_TEXT) || `Conversation ${input.conversationId}`;
   const producedFiles = [...new Set(messages.flatMap((message) => message.produced || []).filter((value) => typeof value === 'string').map((file) => path.basename(file)))];
   const evidenceRefs = normalizeCognitionSourceRefs([
@@ -194,7 +201,7 @@ export function buildGroupKstarEpisode(input: GroupKstarEpisodeInput): KstarEpis
     ...producedFiles.slice(0, 50).map((file, index) => ({ kind: 'artifact' as const, id: `artifact-${index}`, title: path.basename(file) })),
     ...messages.flatMap((message) => (message.artifacts || []).slice(0, 10).map((artifact) => ({ kind: 'artifact' as const, id: artifact.id, title: artifact.title }))),
   ]);
-  const summary = actionMessages
+  const summary = resultMessages
     .map((message) => `${message.from}: ${compactText(message.text, 180) || ''}`)
     .filter(Boolean)
     .slice(-5)
@@ -207,12 +214,16 @@ export function buildGroupKstarEpisode(input: GroupKstarEpisodeInput): KstarEpis
     sessionId: `gconv-${input.conversationId}`,
     sessionKind: 'group_chat',
     taskRunId: input.runId,
+    ...(input.logicalRunId ? { logicalRunId: input.logicalRunId } : {}),
+    ...(input.executionId ? { executionId: input.executionId } : {}),
+    ...(input.projectionId ? { projectionId: input.projectionId } : {}),
+    ...(input.wakeRequestId ? { wakeRequestId: input.wakeRequestId } : {}),
     k: { memoryRefs: [], contextRefs: [], abilityAssetRefs: [] },
     s: { conversationSummary: compactText(summary, MAX_SUMMARY) },
     t: { userGoal, normalizedTask: compactText(userGoal, MAX_SUMMARY), constraints: [] },
     a: {
       toolCalls: [],
-      agentActions: actionMessages.slice(0, 100).flatMap((message) => {
+      agentActions: resultMessages.slice(0, 100).flatMap((message) => {
         const actions: KstarAgentAction[] = [{
           actor: message.from,
           action: compactText(message.text, MAX_SUMMARY) || 'completed action',

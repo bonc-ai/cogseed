@@ -58,7 +58,7 @@ describe('KSTAR review and Recall bridge', () => {
     expect(proposeKstarCandidates(current, createInitialKstarReview(current))).toEqual([]);
   });
 
-  it('extracts one bounded skill-method proposal from a verified multi-tool workflow', async () => {
+  it('does not extract a skill-method proposal from a successful multi-tool workflow without a learning signal', async () => {
     const [{ createInitialKstarReview }, { proposeKstarCandidates }] = await Promise.all([
       import('../../../../src/main/features/kstar/review-service'),
       import('../../../../src/main/features/kstar/extraction-service'),
@@ -68,12 +68,93 @@ describe('KSTAR review and Recall bridge', () => {
       { name: 'write_file', status: 'ok' },
     ]);
     const proposals = proposeKstarCandidates(current, createInitialKstarReview(current));
+    expect(proposals).toEqual([]);
+  });
+
+  it('extracts a skill-method proposal only when review evidence compares expected and actual results', async () => {
+    const [{ saveKstarReview }, { proposeKstarCandidates }] = await Promise.all([
+      import('../../../../src/main/features/kstar/review-service'),
+      import('../../../../src/main/features/kstar/extraction-service'),
+    ]);
+    const current = episode([
+      { name: 'read_file', status: 'ok' },
+      { name: 'write_file', status: 'ok' },
+    ]);
+    const review = await saveKstarReview('review-user', current, {
+      expectedResult: 'The report includes evidence and a verification summary.',
+      actualResult: 'The report includes evidence and a verification summary.',
+      deltaR: 0.4,
+      deltaA: 0.2,
+      outcome: 'better_than_expected',
+      attribution: 'unclear',
+      reason: 'The verified workflow produced the expected report and verification summary.',
+      confidence: 0.9,
+      evidenceRefs: current.evidenceRefs,
+    });
+    const proposals = proposeKstarCandidates(current, review);
     expect(proposals).toHaveLength(1);
     expect(proposals[0]).toMatchObject({
       suggestedType: 'skill_method',
       suggestedScope: 'report',
+      learningSignal: {
+        expectedResult: 'The report includes evidence and a verification summary.',
+        actualResult: 'The report includes evidence and a verification summary.',
+        deltaR: 0.4,
+        deltaA: 0.2,
+        outcome: 'better_than_expected',
+      },
       sourceRefs: [expect.objectContaining({ kind: 'execution', id: current.id })],
     });
+  });
+
+  it('does not send a workflow extraction hint without an expected-versus-actual result comparison', async () => {
+    const [{ createInitialKstarReview }, { buildKstarDetectionHints }] = await Promise.all([
+      import('../../../../src/main/features/kstar/review-service'),
+      import('../../../../src/main/features/kstar/extraction-service'),
+    ]);
+    const current = episode([
+      { name: 'read_file', status: 'ok' },
+      { name: 'write_file', status: 'ok' },
+    ]);
+
+    const hints = buildKstarDetectionHints(current, createInitialKstarReview(current));
+
+    expect(hints.hasVerifiedWorkflow).toBe(true);
+    expect(hints.hasWorkflowLearningSignal).toBe(false);
+    expect(hints.hints.some((hint) => hint.includes('DETECTED WORKFLOW'))).toBe(false);
+  });
+
+  it('builds KSTAR detection hints for verified workflows and reviewed gaps', async () => {
+    const { buildKstarDetectionHints } = await import('../../../../src/main/features/kstar/extraction-service');
+    const current = episode([
+      { name: 'read_file', status: 'ok' },
+      { name: 'write_file', status: 'ok' },
+    ]);
+    const review = {
+      id: 'ksr-kse-run-review',
+      episodeId: current.id,
+      createdAt: '2026-08-05T00:00:00.000Z',
+      updatedAt: '2026-08-05T00:00:00.000Z',
+      expectedResult: 'The report satisfies all acceptance criteria.',
+      actualResult: 'The report omitted one required acceptance check.',
+      deltaR: -0.8,
+      deltaA: 0.2,
+      outcome: 'worse_than_expected' as const,
+      attribution: 'rule_gap' as const,
+      reason: 'Check the report acceptance criteria before writing the final file.',
+      confidence: 0.9,
+      evidenceRefs: current.evidenceRefs,
+      goal: current.t.userGoal,
+    };
+
+    const hints = buildKstarDetectionHints(current, review);
+    expect(hints.hasVerifiedWorkflow).toBe(true);
+    expect(hints.hasWorkflowLearningSignal).toBe(true);
+    expect(hints.hasReviewGap).toBe(true);
+    expect(hints.hints).toEqual(expect.arrayContaining([
+      expect.stringContaining('DETECTED WORKFLOW'),
+      expect.stringContaining('DETECTED GAP'),
+    ]));
   });
 
   it('bridges an explicitly reviewed gap into a pending Recall candidate only', async () => {
@@ -96,7 +177,25 @@ describe('KSTAR review and Recall bridge', () => {
     const candidates = await saveKstarCandidateProposals('review-user', proposals);
 
     expect(candidates).toHaveLength(1);
-    expect(candidates[0]).toMatchObject({ status: 'pending', suggestedType: 'rule' });
-    expect(fs.existsSync(path.join(tmpDir, 'review-user', 'cloud', 'recall', 'records', 'ability-assets'))).toBe(false);
+    expect(candidates[0]).toMatchObject({
+      status: 'pending',
+      suggestedType: 'rule',
+      learningSignal: {
+        deltaR: -0.8,
+        deltaA: 0.2,
+        outcome: 'worse_than_expected',
+        confidence: 0.9,
+        source: 'review',
+      },
+    });
+    const promoted = await (await import('../../../../src/main/features/recall/candidate-service'))
+      .promoteRecallCandidate('review-user', candidates[0].id);
+    expect(promoted.asset.learningSignal).toMatchObject({
+      deltaR: -0.8,
+      deltaA: 0.2,
+      outcome: 'worse_than_expected',
+      confidence: 0.9,
+      source: 'review',
+    });
   });
 });

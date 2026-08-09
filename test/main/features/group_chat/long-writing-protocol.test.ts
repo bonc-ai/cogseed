@@ -30,8 +30,12 @@ describe('group chat long writing protocol', () => {
     expect(prompt).toContain('KSTAR decision for delegated work');
     expect(prompt).toContain('kstar: "required" | "skip"');
     expect(prompt).toContain('kstar_expectation');
+    expect(prompt).toContain('understood task, expected result, and execution plan');
+    expect(prompt).toContain('task / expected result / plan');
+    expect(prompt).toContain('not a user confirmation step');
     expect(prompt).toContain('action_hat');
     expect(prompt).toContain('result_hat');
+    expect(prompt).toContain('R̂ is chat-only');
   });
 
 });

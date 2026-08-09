@@ -44,7 +44,7 @@ function validateRecallRecord(
   if (value.schemaVersion > RECALL_SCHEMA_VERSION) {
     throw new Error(`future schema ${context}: ${value.schemaVersion}`);
   }
-  if (value.schemaVersion !== RECALL_SCHEMA_VERSION) {
+  if (value.schemaVersion < 1) {
     throw new Error(`malformed ${context}: unsupported schemaVersion ${value.schemaVersion}`);
   }
   if (typeof value.ownerId !== 'string') {

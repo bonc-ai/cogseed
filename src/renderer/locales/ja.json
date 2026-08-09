@@ -2983,5 +2983,14 @@
   "messaging.owner_save": "所有者を保存",
   "messaging.owner_update": "所有者を更新",
   "messaging.owner_clear": "所有者をクリア",
-  "messaging.owner_bind_pending": "バインド待機中：Feishu/Lark でこのボットに任意のメッセージを送信すると、送信者が受信者として自動登録されます"
+  "messaging.owner_bind_pending": "バインド待機中：Feishu/Lark でこのボットに任意のメッセージを送信すると、送信者が受信者として自動登録されます",
+  "kstar.review.card_title": "タスク結果の確認",
+  "kstar.review.expected": "期待",
+  "kstar.review.actual": "実際",
+  "kstar.review.met": "完全に達成",
+  "kstar.review.partial": "一部達成",
+  "kstar.review.not_met": "未達成",
+  "kstar.review.skip": "評価しない",
+  "kstar.review.confirmed": "フィードバックを記録しました",
+  "recall.projection.confirm_assets": "プリロード済みアセットを確認"
 }
