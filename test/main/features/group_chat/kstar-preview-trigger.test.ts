@@ -1,0 +1,120 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+const projectionMock = vi.hoisted(() => ({
+  previewContextProjection: vi.fn(async (_uid: string, input: unknown) => ({ id: 'proj-a', status: 'preview', assetIds: ['asset-a'], ...(input as Record<string, unknown>) })),
+}));
+const projectionMessageMock = vi.hoisted(() => ({
+  postProjectionCardMessage: vi.fn(async (userId: string, input: { cid: string; projectionId: string }, port: { send: (payload: unknown) => Promise<{ id: string }> }) => {
+    const card = { kind: 'recall_projection_card', projectionId: input.projectionId, taskRunId: 'kst-a', purpose: 'review', status: 'preview' };
+    const msg = await port.send({ userId, cid: input.cid, text: 'Found 0 reusable ability assets for this task; omitted 0.', card });
+    return { ok: true, msg, card };
+  }),
+}));
+
+vi.mock('../../../../src/main/logger', () => ({
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
+vi.mock('../../../../src/main/features/recall/context-projection', () => projectionMock);
+vi.mock('../../../../src/main/features/recall/projection-message', () => projectionMessageMock);
+vi.mock('../../../../src/main/model/client', () => ({
+  async *streamChatWithModel() { yield { type: 'final', text: '' }; yield { type: 'done' }; },
+  async chatWithModel() { return { ok: true, text: '', error: '', aborted: false }; },
+  abortActiveSessionsForConversation: vi.fn(() => 0),
+}));
+
+let tmpDir: string;
+let prevWs: string | undefined;
+
+beforeEach(() => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-kstar-preview-trigger-'));
+  prevWs = process.env.ORKAS_WORKSPACE_ROOT;
+  process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  vi.resetModules();
+  projectionMock.previewContextProjection.mockClear();
+  projectionMessageMock.postProjectionCardMessage.mockClear();
+});
+
+afterEach(() => {
+  if (prevWs === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
+  else process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+  vi.resetModules();
+});
+
+
+async function waitForMessages(loader: () => Promise<unknown[]>): Promise<unknown[]> {
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline) {
+    const messages = await loader();
+    if (messages.length >= 2) return messages;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('messages not posted');
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('condition not met');
+}
+
+describe('KSTAR requirement preview trigger', () => {
+  it('requests a task-scoped preview without workspace id when the user message has none', async () => {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser('user-a');
+    const state = await import('../../../../src/main/features/kstar/requirement-state');
+
+    const result = await state.routeKstarUserMessage('user-a', {
+      conversationId: 'cid-a',
+      messageId: 'msg-a',
+      text: '修复 OAuth callback',
+    }, {
+      routerOptions: {
+        classify: async () => ({
+          intent: 'new',
+          confidence: 1,
+          reason: 'fake route',
+          requirementText: '修复 OAuth callback',
+        }),
+      },
+    });
+
+    expect(projectionMock.previewContextProjection).toHaveBeenCalledWith('user-a', expect.objectContaining({
+      taskRunId: expect.stringMatching(/^kst-/),
+      purpose: '修复 OAuth callback',
+      taskText: '修复 OAuth callback',
+    }));
+    expect(projectionMock.previewContextProjection.mock.calls[0][1]).not.toHaveProperty('workspaceId');
+    expect(result.projectionPreviewCreated).toEqual({ projectionId: 'proj-a' });
+  });
+
+  it('posts a visible Recall projection card when a normal user message creates a KSTAR task', async () => {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser('user-a');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const groupChat = await import('../../../../src/main/features/group_chat');
+
+    await bus.enqueue({ uid: 'user-a', cid: 'cid-post', fromActorId: 'user', text: '修复 OAuth callback' });
+
+    await waitFor(() => projectionMessageMock.postProjectionCardMessage.mock.calls.length > 0);
+    expect(projectionMessageMock.postProjectionCardMessage).toHaveBeenCalledWith(
+      'user-a',
+      { cid: 'cid-post', projectionId: 'proj-a' },
+      expect.objectContaining({ send: expect.any(Function) }),
+    );
+    const messages = await waitForMessages(() => groupChat.readMessages('user-a', 'cid-post'));
+    expect(messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        from: 'commander',
+        to: ['user'],
+        recall_projection_card: { projectionId: 'proj-a' },
+      }),
+    ]));
+  });
+});

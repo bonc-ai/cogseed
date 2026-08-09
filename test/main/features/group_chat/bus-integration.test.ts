@@ -3,14 +3,17 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { drainMainRuntimeForTest } from "../../../helpers/drain-main-runtime";
+import { TurnActivityTracker } from "../../../../src/main/features/group_chat/coordinator_activity";
+
+const loggerMocks = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
 
 vi.mock("../../../../src/main/logger", () => ({
-  createLogger: () => ({
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  }),
+  createLogger: () => loggerMocks,
 }));
 
 /**
@@ -38,6 +41,12 @@ function _resetScripts() {
 }
 
 const modelAbortMock = vi.hoisted(() => vi.fn(() => 0));
+const modelSessionActiveMock = vi.hoisted(() => vi.fn(() => true));
+const localRunnerScripts = vi.hoisted(() => [] as Array<any[]>);
+const localRunnerCalls = vi.hoisted(() => [] as Array<any>);
+const abortRaceProbe = vi.hoisted(() => ({
+  parentController: null as AbortController | null,
+}));
 // Records every model turn the bus drives, so tests can assert WHAT a given
 // session actually received as its turn input (`opts.message`) — e.g. that a
 // G8b handback turn carried the worker's full reply, not a summary.
@@ -46,14 +55,34 @@ const _recordedCalls = vi.hoisted(
     [] as Array<{
       sid: string;
       message: string;
+      sourceMessageText?: string;
     }>,
 );
 // Records the result each tool's execute() returned — lets a test assert that a
 // G8d in-process dispatch tool (run_worker) handed its sub-run's full reply back
 // synchronously as the tool result, not via an async re-wake.
 const _recordedToolResults = vi.hoisted(
-  () => [] as Array<{ name: string; content: string; executionMode?: string }>,
+  () =>
+    [] as Array<{
+      name: string;
+      content: string;
+      executionMode?: string;
+      endTurn?: boolean;
+      isError?: boolean;
+    }>,
 );
+const _recordedToolErrors = vi.hoisted(
+  () => [] as Array<{ name: string; nameOfError: string; message: string }>,
+);
+const _recordedToolDefinitions = vi.hoisted(
+  () =>
+    [] as Array<{
+      name: string;
+      description: string;
+      inputSchema: Record<string, any>;
+    }>,
+);
+const _recordedNestedOutcomes: any[] = [];
 
 vi.mock("../../../../src/main/model/client", () => ({
   async *streamChatWithModel(opts: any) {
@@ -61,6 +90,7 @@ vi.mock("../../../../src/main/model/client", () => ({
     _recordedCalls.push({
       sid,
       message: String(opts.message || ""),
+      ...(opts.sourceMessageText ? { sourceMessageText: String(opts.sourceMessageText) } : {}),
     });
     // Ephemeral worker sessions have a random id (`gworker-<cid>-<rand>`); a
     // test can't pre-script them by id, so route any gworker turn to a fixed
@@ -70,11 +100,27 @@ vi.mock("../../../../src/main/model/client", () => ({
     const events = queue.shift() || [{ type: "final", text: "" }];
     _scripts.set(scriptKey, queue);
     for (const ev of events) {
+      if (ev?.type === "__emit_teaching_receipt__") {
+        await opts.onTeachingReceipt?.(ev.receipt);
+        continue;
+      }
+      if (ev?.type === "__capture_tool_definitions__") {
+        _recordedToolDefinitions.push(
+          ...(opts.extraTools || []).map((tool: any) => ({
+            name: String(tool.name || ""),
+            description: String(tool.description || ""),
+            inputSchema: tool.inputSchema || {},
+          })),
+        );
+        continue;
+      }
       // Tool-call execution: drives the REAL tool's execute() so the
       // staging → turn-end flush → spawn/dispatch paths actually run (the
       // plain text mock can't do this — hence the skipped @-chain tests).
       const toolCalls =
-        ev?.type === "__call_tool__"
+        ev?.type === "__call_tool__" ||
+        ev?.type === "__call_tool_parent_abort__" ||
+        ev?.type === "__call_tool_parent_abort_controlled__"
           ? [{ name: ev.name, input: ev.input || {} }]
           : ev?.type === "__call_tools_parallel__"
             ? (ev.calls || []).map((call: any) => ({
@@ -90,17 +136,32 @@ vi.mock("../../../../src/main/model/client", () => ({
             );
             if (!tool) return;
             try {
+              const parentAbort =
+                ev?.type === "__call_tool_parent_abort__" ||
+                ev?.type === "__call_tool_parent_abort_controlled__"
+                  ? new AbortController()
+                  : null;
+              if (ev?.type === "__call_tool_parent_abort__" && parentAbort)
+                setTimeout(() => parentAbort.abort(), 0);
+              if (ev?.type === "__call_tool_parent_abort_controlled__")
+                abortRaceProbe.parentController = parentAbort;
               const res = await tool.execute(call.input, {
-                signal: opts.abortSignal,
+                signal: parentAbort?.signal || opts.abortSignal,
                 state: {},
               });
               _recordedToolResults.push({
                 name: call.name,
                 content: String(res?.content || ""),
                 executionMode: tool.executionMode,
+                ...(res?.endTurn === true ? { endTurn: true } : {}),
+                ...(res?.isError === true ? { isError: true } : {}),
               });
-            } catch {
-              /* surfaced as tool error in real flow */
+            } catch (error) {
+              _recordedToolErrors.push({
+                name: call.name,
+                nameOfError: (error as Error)?.name || "Error",
+                message: (error as Error)?.message || "",
+              });
             }
           }),
         );
@@ -117,10 +178,12 @@ vi.mock("../../../../src/main/model/client", () => ({
             });
           });
         }
+        if (typeof ev.afterAbort === "function") await ev.afterAbort();
         yield { type: "error", text: "aborted", aborted: true };
         continue;
       }
       yield ev;
+      if (typeof ev?.afterYield === "function") await ev.afterYield();
     }
     yield { type: "done" };
   },
@@ -128,6 +191,28 @@ vi.mock("../../../../src/main/model/client", () => ({
     return { ok: true, text: "", error: "", aborted: false };
   },
   abortActiveSessionsForConversation: modelAbortMock,
+  hasActiveSession: modelSessionActiveMock,
+}));
+
+vi.mock("../../../../src/main/features/local_agents/runner", () => ({
+  async run(opts: any) {
+    localRunnerCalls.push(opts);
+    const events = localRunnerScripts.shift() || [];
+    const terminal = events.find((event) => event?.type === "__return__");
+    for (const event of events) {
+      if (event?.type !== "__return__") opts.onEvent(event);
+    }
+    if (events.length > 0 && !terminal && !opts.signal?.aborted) {
+      await new Promise<void>((resolve) => {
+        opts.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+    }
+    return {
+      runId: "mock-local-run",
+      status: terminal?.status || (opts.signal?.aborted ? "cancelled" : "completed"),
+      output: terminal?.output || "",
+    };
+  },
 }));
 
 let tmpDir: string;
@@ -153,8 +238,20 @@ beforeEach(async () => {
   _resetScripts();
   _recordedCalls.length = 0;
   _recordedToolResults.length = 0;
+  _recordedToolErrors.length = 0;
+  _recordedToolDefinitions.length = 0;
+  _recordedNestedOutcomes.length = 0;
+  localRunnerScripts.length = 0;
+  localRunnerCalls.length = 0;
+  loggerMocks.debug.mockClear();
+  loggerMocks.info.mockClear();
+  loggerMocks.warn.mockClear();
+  loggerMocks.error.mockClear();
+  abortRaceProbe.parentController = null;
   modelAbortMock.mockClear();
   modelAbortMock.mockReturnValue(0);
+  modelSessionActiveMock.mockClear();
+  modelSessionActiveMock.mockReturnValue(true);
   cidsToDrop.clear();
   vi.resetModules();
   const users = await import("../../../../src/main/features/users");
@@ -183,6 +280,22 @@ afterEach(async () => {
   // ENOENT log noise.
   try {
     const bus = await import("../../../../src/main/features/group_chat/bus");
+    (bus as any)._setCoordinatorLeaseFactoryForTest?.();
+    (bus as any)._setNestedDispatchOutcomeObserverForTest?.(null);
+    (bus as any)._setNestedDispatchAttemptHooksForTest?.(null);
+    (bus as any)._setBeforeNestedDispatchStartForTest?.(null);
+    (bus as any)._setBeforeVisibleDispatchForTest?.(null);
+    (bus as any)._setTerminalHandoffObserverForTest?.(null);
+    (bus as any)._setHandoffStateHooksForTest?.(null);
+    (bus as any)._setBeforeHandoffStateCommitForTest?.(null);
+    (bus as any)._setAfterHandoffStateCommitForTest?.(null);
+    (bus as any)._setBeforeHandoffResumeEnqueueForTest?.(null);
+    const state = await import("../../../../src/main/features/group_chat/state");
+    (state as any)._setHandoffStateWriteBoundaryHookForTest?.(null);
+    const collaboration =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    (collaboration as any)._setWorkflowAttemptAuditBeforeAppendForTest?.(null);
+    (collaboration as any)._setRetryPreparationBoundaryHookForTest?.(null);
     // Drop all known cids — the bus state map is module-internal but
     // _cidStateForTest exposes per-cid; iterate via `_cids` indirectly
     // by scanning the chats dir.
@@ -216,6 +329,21 @@ async function waitForQuiescent(uid: string, cid: string, timeoutMs = 2000) {
   throw new Error(`bus did not quiesce within ${timeoutMs}ms`);
 }
 
+async function confirmKstarWakeForTest(cid: string, requestId: string): Promise<void> {
+  const store = await import('../../../../src/main/features/kstar/requirement-store');
+  const state = await store.readConversationTaskState(TEST_UID, cid);
+  if (!state?.currentRequirementId) throw new Error(`missing KSTAR requirement for ${cid}`);
+  const requirement = await store.readKstarRequirement(TEST_UID, state.currentRequirementId);
+  if (!requirement?.projectionId) throw new Error(`missing KSTAR projection for ${cid}`);
+  const projection = await import('../../../../src/main/features/recall/context-projection');
+  const result = await projection.confirmAndApproveWake(TEST_UID, {
+    cid,
+    projectionId: requirement.projectionId,
+    wakeRequestId: requestId,
+  });
+  if (!result.ok) throw new Error(result.error);
+}
+
 async function waitUntil(
   fn: () => boolean,
   timeoutMs = 2000,
@@ -226,6 +354,135 @@ async function waitUntil(
     await new Promise((r) => setTimeout(r, 20));
   }
   return false;
+}
+
+function installLeaseDecisionHarness(
+  bus: any,
+  trigger: (event: any) => boolean,
+): { stops: number[] } {
+  const stops: number[] = [];
+  bus._setCoordinatorLeaseFactoryForTest((input: any) => {
+    const tracker = new TurnActivityTracker(input.startedAt);
+    let now = input.startedAt;
+    let fired = false;
+    const monitor = {
+      tracker,
+      observe(event: any) {
+        now += 1;
+        this.tracker.observe(event, now);
+        if (fired || !trigger(event)) return;
+        fired = true;
+        const snapshot = this.tracker.snapshot();
+        if (snapshot.phase === "agent_idle") {
+          const probe = this.tracker.evaluate(now + 5 * 60_000);
+          expect(probe).toMatchObject({ kind: "probe", reason: "agent_idle" });
+          if (probe.kind === "probe") input.onProbe(probe.idleMs);
+          const abort = this.tracker.evaluate(now + 8 * 60_000);
+          expect(abort).toMatchObject({ kind: "abort", reason: "agent_idle" });
+          if (abort.kind === "abort") input.onAbort(abort.reason, abort.idleMs);
+        } else {
+          const abort = this.tracker.evaluate(now + 120_000);
+          expect(abort).toMatchObject({ kind: "abort", reason: "tool_idle" });
+          if (abort.kind === "abort") input.onAbort(abort.reason, abort.idleMs);
+        }
+      },
+      stop() {
+        stops.push(1);
+      },
+    };
+    return monitor;
+  });
+  return { stops };
+}
+
+function coordinatorProcessEvents(events: any[]): any[] {
+  return events
+    .filter(
+      (event) =>
+        event?.type === "process" &&
+        event?.data?.type === "event" &&
+        event?.data?.event?.stream === "coordinator",
+    )
+    .map((event) => event.data.event);
+}
+
+async function readConversationMessages(cid: string): Promise<any[]> {
+  const paths = await import("../../../../src/main/paths");
+  const storage = await import("../../../../src/main/storage");
+  return storage.readJsonl<any>(
+    path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`),
+  );
+}
+
+async function expectNoLifecycleSecretLeak(
+  cid: string,
+  secret: string,
+): Promise<void> {
+  expect(JSON.stringify(_recordedToolResults)).not.toContain(secret);
+  expect(JSON.stringify(await readConversationMessages(cid))).not.toContain(
+    secret,
+  );
+  expect(
+    JSON.stringify([
+      loggerMocks.debug.mock.calls,
+      loggerMocks.info.mock.calls,
+      loggerMocks.warn.mock.calls,
+      loggerMocks.error.mock.calls,
+    ]),
+  ).not.toContain(secret);
+}
+
+async function seedAgent(input: {
+  id: string;
+  name: string;
+  description?: string;
+  workflow?: string;
+  runtime?: Record<string, unknown>;
+}): Promise<void> {
+  const paths = await import("../../../../src/main/paths");
+  const dir = paths.agentDir(TEST_UID, input.id);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "agent.json"),
+    JSON.stringify({
+      agent_id: input.id,
+      name: input.name,
+      description: input.description || "",
+      workflow: input.workflow || "",
+      ...(input.runtime ? { runtime: input.runtime } : {}),
+      created_at: "t",
+      updated_at: "t",
+    }),
+  );
+}
+
+async function addAgentMember(
+  cid: string,
+  id: string,
+  name: string,
+): Promise<void> {
+  const state = await import("../../../../src/main/features/group_chat/state");
+  await state.addMember(TEST_UID, cid, { kind: "agent", id, name });
+}
+
+function installFirstAttemptCoordinatorAbort(bus: any, reason: "tool_idle" | "agent_idle" = "agent_idle") {
+  let monitorCount = 0;
+  bus._setCoordinatorLeaseFactoryForTest((input: any) => {
+    monitorCount += 1;
+    if (monitorCount === 1) {
+      queueMicrotask(() => input.onAbort(reason, reason === "tool_idle" ? 120_000 : 480_000));
+    }
+    return { observe() {}, stop() {} };
+  });
+  return () => monitorCount;
+}
+
+async function makeSeedAgentCli(): Promise<void> {
+  const paths = await import("../../../../src/main/paths");
+  const file = path.join(paths.agentDir(TEST_UID, AGENT_ID), "agent.json");
+  const agent = JSON.parse(fs.readFileSync(file, "utf8"));
+  agent.runtime = { kind: "cli", cli: "hermes" };
+  fs.writeFileSync(file, JSON.stringify(agent));
 }
 
 async function readPendingKStarEvidence(uid: string): Promise<any[]> {
@@ -254,6 +511,50 @@ async function waitForPendingKStarEvidence(
   }
   return null;
 }
+
+describe("group_chat bus integration › teaching receipts", () => {
+  it("persists a deduplicated teaching receipt on the visible commander reply", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const receipt = {
+      id: "teach-a",
+      summary: "以后所有结论都附来源。",
+      scope: "project",
+      status: "active",
+      candidateIds: ["cand-a"],
+    };
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "__emit_teaching_receipt__", receipt },
+      { type: "__emit_teaching_receipt__", receipt },
+      { type: "final", text: "已经记住。" },
+    ]);
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "请记住：以后所有结论都附来源。",
+    });
+    await waitForQuiescent(TEST_UID, cid, 3000);
+
+    const messages = await readConversationMessages(cid);
+    const reply = messages.find((message) =>
+      message.from === "commander" && Array.isArray(message.teaching_receipts));
+    expect(_recordedCalls.find((call) => call.sid === state.buildGconvSessionId(cid))?.sourceMessageText)
+      .toBe("请记住：以后所有结论都附来源。");
+    expect(reply).toMatchObject({
+      text: "已经记住。",
+      teaching_receipts: [{
+        id: "teach-a",
+        summary: "以后所有结论都附来源。",
+        scope: "project",
+        status: "active",
+        candidate_ids: ["cand-a"],
+      }],
+    });
+  });
+});
 
 describe("group_chat bus integration › disabled skills", () => {
   it("does not let commander substitute another skill when user explicitly requests a disabled one", async () => {
@@ -608,6 +909,47 @@ describe("group_chat bus integration › conversation delete cascade", () => {
   }, 10_000);
 });
 
+
+describe("group_chat state logging privacy", () => {
+  it("logs successful membership with masked ids and no user-defined name", async () => {
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const uid = "privacy-user-raw-123456";
+    const cid = "privacy-cid-raw-654321";
+    const actorId = "privacy-actor-raw-abcdef";
+    const actorName = "SECRET USER DEFINED MEMBER NAME";
+    loggerMocks.debug.mockClear();
+    loggerMocks.info.mockClear();
+    loggerMocks.warn.mockClear();
+    loggerMocks.error.mockClear();
+
+    await state.addMember(uid, cid, {
+      id: actorId,
+      kind: "agent",
+      name: actorName,
+    });
+
+    const allLogs = JSON.stringify([
+      loggerMocks.debug.mock.calls,
+      loggerMocks.info.mock.calls,
+      loggerMocks.warn.mock.calls,
+      loggerMocks.error.mock.calls,
+    ]);
+    expect(allLogs).not.toContain(uid);
+    expect(allLogs).not.toContain(cid);
+    expect(allLogs).not.toContain(actorId);
+    expect(allLogs).not.toContain(actorName);
+    const memberLogs = loggerMocks.info.mock.calls.filter(
+      ([message]) => message === "member joined",
+    );
+    expect(memberLogs).toHaveLength(1);
+    expect(memberLogs[0]?.[1]).toMatchObject({ kind: "agent" });
+    expect(memberLogs[0]?.[1]?.user_id).not.toBe(uid);
+    expect(memberLogs[0]?.[1]?.cid).not.toBe(cid);
+    expect(memberLogs[0]?.[1]?.actor_id).not.toBe(actorId);
+    expect(memberLogs[0]?.[1]).not.toHaveProperty("name");
+  });
+});
+
 describe("group_chat bus integration › G8d in-process dispatch (run_worker / dispatch_to)", () => {
   // G8d step 3: dispatch tools run their target's turn in-process and hand the
   // result back as the tool result — no staging, no turn-end flush, no re-wake.
@@ -620,6 +962,9 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const paths = await import("../../../../src/main/paths");
+    (bus as any)._setNestedDispatchOutcomeObserverForTest((outcome: any) => {
+      _recordedNestedOutcomes.push(outcome);
+    });
 
     const WORKER_RESULT =
       "WORKER-INTERNAL-OUTPUT-7c1d: scanned 42 files, here is the full structured summary the commander needs.";
@@ -666,6 +1011,18 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     ).toBeTruthy();
     expect(toolResult!.content).toContain("<worker-result");
     expect(toolResult!.content).toContain(WORKER_RESULT);
+    expect(_recordedNestedOutcomes).toHaveLength(1);
+    const successOutcome = _recordedNestedOutcomes[0];
+    expect(successOutcome).toMatchObject({
+      ok: true,
+      text: WORKER_RESULT,
+      produced: [],
+      payload: toolResult!.content,
+      workflowStepId: expect.stringMatching(/^wstep-/),
+    });
+    expect(toolResult!.content).toContain(
+      `workflow_step_id="${successOutcome.workflowStepId}"`,
+    );
     // G4 wiring (step 3b-tail): run_worker is parallel-safe so independent
     // fan-out in one turn runs concurrently (bounded by dispatchSlots).
     expect(
@@ -750,11 +1107,14 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     expect(toolResult!.content).not.toContain("(no textual reply)");
   }, 12_000);
 
-  it("run_worker marks a nested user abort as non-retryable worker-error", async () => {
+  it("run_worker classifies a group abort as a non-retryable nested outcome", async () => {
     const cid = newCid();
     const state =
       await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
+    (bus as any)._setNestedDispatchOutcomeObserverForTest((outcome: any) => {
+      _recordedNestedOutcomes.push(outcome);
+    });
     const collaboration =
       await import("../../../../src/main/features/group_chat/collaboration");
 
@@ -795,14 +1155,2292 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     ).toBeTruthy();
     expect(toolResult!.content).toContain("<worker-error");
     expect(toolResult!.content).toContain("aborted=\"true\"");
+    expect(toolResult!.content).toContain("failure_code=\"group_abort\"");
+    expect(toolResult!.content).toContain("retryable=\"false\"");
     expect(toolResult!.content).toContain("Task was stopped by the user.");
     expect(toolResult!.content).not.toContain("<worker-result");
+    expect(_recordedNestedOutcomes).toHaveLength(1);
+    expect(_recordedNestedOutcomes[0]).toMatchObject({
+      ok: false,
+      failureCode: "group_abort",
+      retryable: false,
+      abortSource: "group_abort",
+      workflowStepId: expect.stringMatching(/^wstep-/),
+      payload: toolResult!.content,
+    });
+    expect(toolResult!.content).toContain(
+      `workflow_step_id="${_recordedNestedOutcomes[0].workflowStepId}"`,
+    );
     const workflowRun = await collaboration.readActiveWorkflowRun(
       TEST_UID,
       cid,
     );
     expect(workflowRun?.steps[0]?.status).toBe("skipped");
   }, 12_000);
+
+  it("run_worker classifies a parent-only abort as non-retryable", async () => {
+    const cid = newCid();
+    const state =
+      await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    (bus as any)._setNestedDispatchOutcomeObserverForTest((outcome: any) => {
+      _recordedNestedOutcomes.push(outcome);
+    });
+
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool_parent_abort__",
+        name: "run_worker",
+        input: { task: "wait for parent cancellation" },
+      },
+      { type: "final", text: "parent recovered" },
+    ]);
+    _setScript("gworker-*", [{ type: "__wait_for_abort__" }]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "cancel only the nested call",
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const toolResult = _recordedToolResults.find((r) => r.name === "run_worker");
+    expect(toolResult).toBeTruthy();
+    expect(toolResult!.content).toContain('failure_code="parent_abort"');
+    expect(toolResult!.content).toContain('retryable="false"');
+    expect(_recordedNestedOutcomes).toHaveLength(1);
+    expect(_recordedNestedOutcomes[0]).toMatchObject({
+      ok: false,
+      failureCode: "parent_abort",
+      retryable: false,
+      abortSource: "parent_abort",
+      payload: toolResult!.content,
+    });
+  });
+
+  it.each(["agent_idle", "tool_idle"] as const)(
+    "run_worker classifies coordinator %s aborts as retryable without claiming a user stop",
+    async (reason) => {
+      const cid = newCid();
+      const state =
+        await import("../../../../src/main/features/group_chat/state");
+      const bus = await import("../../../../src/main/features/group_chat/bus");
+      let fireAbort:
+        | ((reason: "tool_idle" | "agent_idle", idleMs: number) => void)
+        | undefined;
+      (bus as any)._setCoordinatorLeaseFactoryForTest((input: any) => {
+        fireAbort = input.onAbort;
+        return { observe() {}, stop() {} };
+      });
+      (bus as any)._setNestedDispatchOutcomeObserverForTest((outcome: any) => {
+        _recordedNestedOutcomes.push(outcome);
+      });
+
+      _setScript(state.buildGconvSessionId(cid), [
+        {
+          type: "__call_tool__",
+          name: "run_worker",
+          input: { task: `stall at ${reason}` },
+        },
+        { type: "final", text: "coordinator recovered" },
+      ]);
+      _setScript("gworker-*", [
+        { type: "delta", text: "partial <work>" },
+        { type: "__wait_for_abort__" },
+      ]);
+
+      bus.subscribe(TEST_UID, cid, () => {});
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: "user",
+        text: `exercise ${reason}`,
+      });
+      expect(
+        await waitUntil(() => typeof fireAbort === "function", 2000),
+        "nested dispatch should install the coordinator abort seam",
+      ).toBe(true);
+      fireAbort!(reason, 480_000);
+      await waitForQuiescent(TEST_UID, cid, 4000);
+
+      const toolResult = _recordedToolResults.find((r) => r.name === "run_worker");
+      expect(toolResult).toBeTruthy();
+      expect(_recordedNestedOutcomes).toHaveLength(1);
+      expect(_recordedNestedOutcomes[0]).toMatchObject({
+        ok: false,
+        text: "partial <work>",
+        produced: [],
+        failureCode: `coordinator_${reason}`,
+        retryable: true,
+        abortSource: "coordinator",
+        workflowStepId: expect.stringMatching(/^wstep-/),
+        payload: toolResult!.content,
+      });
+      expect(toolResult!.content).toContain(
+        `failure_code="coordinator_${reason}"`,
+      );
+      expect(toolResult!.content).toContain('retryable="true"');
+      expect(toolResult!.content).toContain('aborted="false"');
+      expect(toolResult!.content).not.toContain('aborted="true"');
+      expect(toolResult!.content).toContain("partial &lt;work&gt;");
+      expect(toolResult!.content).not.toContain("stopped by the user");
+    },
+  );
+
+  it("CLI completed tool becomes coordinator_agent_idle and coordinator events never expose PID", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    await makeSeedAgentCli();
+    const emitted: any[] = [];
+    const harness = installLeaseDecisionHarness(
+      bus,
+      (event) => event?.kind === "tool_result",
+    );
+    (bus as any)._setNestedDispatchOutcomeObserverForTest((outcome: any) => {
+      _recordedNestedOutcomes.push(outcome);
+    });
+    localRunnerScripts.push([
+      { type: "process-info", pid: process.pid, cwd: tmpDir, cmd: "mock-cli" },
+      { type: "tool-event", tool: "exec_command", callId: "c1", phase: "use" },
+      {
+        type: "tool-event",
+        tool: "exec_command",
+        callId: "c1",
+        phase: "result",
+        output: "ok",
+      },
+    ]);
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: { to: AGENT_NAME, message: "run the CLI tool" },
+      },
+      { type: "final", text: "handled" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, (event: any) => emitted.push(event));
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "exercise completed CLI tool stall",
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    expect(_recordedNestedOutcomes.length).toBeGreaterThanOrEqual(2);
+    expect(_recordedNestedOutcomes.at(-1)).toMatchObject({ ok: true });
+    expect(_recordedNestedOutcomes[0]).toMatchObject({
+      ok: false,
+      failureCode: "coordinator_agent_idle",
+      retryable: true,
+      abortSource: "coordinator",
+    });
+    expect(_recordedNestedOutcomes[0].payload).not.toContain("stopped by the user");
+    const persisted = (await readConversationMessages(cid)).find(
+      (message) =>
+        message.from === AGENT_ID &&
+        message.failure_code === "coordinator_agent_idle",
+    );
+    expect(persisted).toMatchObject({
+      failure_kind: "runtime",
+      failure_code: "coordinator_agent_idle",
+    });
+    expect(String(persisted?.text || "")).not.toContain("stopped by the user");
+    expect(JSON.stringify(persisted?.process || [])).not.toMatch(/"pid"/i);
+    expect(modelSessionActiveMock).not.toHaveBeenCalled();
+    expect(harness.stops.length).toBeGreaterThanOrEqual(1);
+
+    const coordinatorEvents = coordinatorProcessEvents(emitted);
+    expect(coordinatorEvents).toContainEqual({
+      stream: "coordinator",
+      data: {
+        phase: "probe",
+        reason: "agent_idle",
+        idle_ms: 300_000,
+        alive: true,
+      },
+    });
+    expect(coordinatorEvents).toContainEqual({
+      stream: "coordinator",
+      data: {
+        phase: "terminating",
+        reason: "agent_idle",
+        idle_ms: 480_000,
+      },
+    });
+    expect(JSON.stringify(coordinatorEvents)).not.toMatch(/pid/i);
+  });
+
+  it("CLI process-info accepts only a positive integer number as the in-memory PID", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    await makeSeedAgentCli();
+    const emitted: any[] = [];
+    let probeIndex = 0;
+    bus._setCoordinatorLeaseFactoryForTest((input: any) => ({
+      observe(event: any) {
+        if (event?.kind === "activity") {
+          input.onProbe(++probeIndex);
+        } else if (event?.kind === "tool_start") {
+          input.onProbe(++probeIndex);
+          input.onAbort("agent_idle", 480_000);
+        }
+      },
+      stop() {},
+    }));
+    (bus as any)._setNestedDispatchOutcomeObserverForTest((outcome: any) => {
+      _recordedNestedOutcomes.push(outcome);
+    });
+    localRunnerScripts.push([
+      { type: "process-info", pid: "123", cwd: tmpDir },
+      { type: "process-info", pid: true, cwd: tmpDir },
+      { type: "process-info", pid: [123], cwd: tmpDir },
+      { type: "process-info", pid: 0, cwd: tmpDir },
+      { type: "process-info", pid: -1, cwd: tmpDir },
+      { type: "process-info", pid: 1.5, cwd: tmpDir },
+      { type: "process-info", pid: process.pid, cwd: tmpDir },
+      { type: "tool-event", tool: "exec_command", callId: "c1", phase: "use" },
+    ]);
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: { to: AGENT_NAME, message: "validate process PID metadata" },
+      },
+      { type: "final", text: "handled" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, (event: any) => emitted.push(event));
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "exercise strict CLI PID validation",
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    expect(_recordedNestedOutcomes.length).toBeGreaterThanOrEqual(2);
+    expect(_recordedNestedOutcomes.at(-1)).toMatchObject({ ok: true });
+    expect(_recordedNestedOutcomes[0]).toMatchObject({
+      ok: false,
+      failureCode: "coordinator_agent_idle",
+      abortSource: "coordinator",
+    });
+    const probes = coordinatorProcessEvents(emitted).filter(
+      (event) => event.data?.phase === "probe",
+    );
+    expect(probes.map((event) => event.data.alive)).toEqual([
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+    ]);
+    expect(probes.map((event) => event.data.idle_ms)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8,
+    ]);
+    expect(modelSessionActiveMock).not.toHaveBeenCalled();
+    expect(JSON.stringify(emitted)).not.toMatch(/"pid"/i);
+
+    const persisted = (await readConversationMessages(cid)).find(
+      (message) => message.failure_code === "coordinator_agent_idle",
+    );
+    expect(persisted).toBeTruthy();
+    expect(JSON.stringify(persisted?.process || [])).not.toMatch(/"pid"/i);
+  });
+
+  it("CLI process-info emits and persists only coarse allowlisted metadata", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    await makeSeedAgentCli();
+    const emitted: any[] = [];
+    const sentinels = [
+      "SECRET_PROCESS_PROMPT_41f9",
+      "SECRET_CUSTOM_ARG_72ac",
+      "SECRET_COMMAND_b37d",
+      "SECRET_CWD_981e",
+      "SECRET_SESSION_55ad",
+      "SECRET_ENV_18f0",
+      "SECRET_TOKEN_64c2",
+      "SECRET_BACKEND_b803",
+    ];
+    bus._setCoordinatorLeaseFactoryForTest((input: any) => ({
+      observe(event: any) {
+        if (event?.kind === "tool_start") {
+          input.onAbort("agent_idle", 480_000);
+        }
+      },
+      stop() {},
+    }));
+    localRunnerScripts.push([
+      {
+        type: "process-info",
+        pid: process.pid,
+        prompt: sentinels[0],
+        args: ["--prompt", sentinels[0], "--secret", sentinels[1]],
+        custom_args: [sentinels[1]],
+        cmd: `opencode ${sentinels[2]}`,
+        cwd: `/tmp/${sentinels[3]}`,
+        sessionId: sentinels[4],
+        environment: { API_TOKEN: sentinels[5] },
+        token: sentinels[6],
+        backendId: sentinels[7],
+      },
+      { type: "tool-event", tool: "exec_command", callId: "c1", phase: "use" },
+    ]);
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: { to: AGENT_NAME, message: "validate process-info privacy" },
+      },
+      { type: "final", text: "handled" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, (event: any) => emitted.push(event));
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "exercise CLI process-info privacy",
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const liveProcessInfo = emitted
+      .filter(
+        (event) =>
+          event?.type === "process" &&
+          event?.data?.event?.stream === "cli" &&
+          event?.data?.event?.data?.type === "process-info",
+      )
+      .map((event) => event.data.event);
+    expect(liveProcessInfo).toEqual([
+      { stream: "cli", data: { type: "process-info" } },
+    ]);
+    const persisted = (await readConversationMessages(cid)).find(
+      (message) => message.failure_code === "coordinator_agent_idle",
+    );
+    expect(persisted).toBeTruthy();
+    const persistedProcessInfo = (persisted.process || [])
+      .filter(
+        (item: any) =>
+          item?.event?.stream === "cli" &&
+          item?.event?.data?.type === "process-info",
+      )
+      .map((item: any) => item.event);
+    expect(persistedProcessInfo).toEqual([
+      { stream: "cli", data: { type: "process-info" } },
+    ]);
+    const serialized = JSON.stringify({ emitted, persisted });
+    for (const sentinel of sentinels) expect(serialized).not.toContain(sentinel);
+    expect(serialized).not.toMatch(/"pid"/i);
+  });
+
+  it("CLI open tool becomes coordinator_tool_idle", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    await makeSeedAgentCli();
+    installLeaseDecisionHarness(bus, (event) => event?.kind === "tool_start");
+    (bus as any)._setNestedDispatchOutcomeObserverForTest((outcome: any) => {
+      _recordedNestedOutcomes.push(outcome);
+    });
+    localRunnerScripts.push([
+      { type: "tool-event", tool: "exec_command", callId: "c1", phase: "use" },
+    ]);
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: { to: AGENT_NAME, message: "leave the CLI tool open" },
+      },
+      { type: "final", text: "handled" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "exercise open CLI tool stall",
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    expect(_recordedNestedOutcomes.length).toBeGreaterThanOrEqual(2);
+    expect(_recordedNestedOutcomes.at(-1)).toMatchObject({ ok: true });
+    expect(_recordedNestedOutcomes[0]).toMatchObject({
+      ok: false,
+      failureCode: "coordinator_tool_idle",
+      retryable: true,
+      abortSource: "coordinator",
+    });
+    expect(_recordedNestedOutcomes[0].payload).not.toContain("stopped by the user");
+  });
+
+  it("in-process completed tool becomes coordinator_agent_idle with model-session liveness", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const emitted: any[] = [];
+    const harness = installLeaseDecisionHarness(
+      bus,
+      (event) => event?.kind === "tool_result",
+    );
+    (bus as any)._setNestedDispatchOutcomeObserverForTest((outcome: any) => {
+      _recordedNestedOutcomes.push(outcome);
+    });
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: { to: AGENT_NAME, message: "run an in-process tool" },
+      },
+      { type: "final", text: "handled" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      {
+        type: "event",
+        event: {
+          stream: "tool",
+          data: { phase: "start", id: "c1", name: "exec_command" },
+        },
+      },
+      {
+        type: "event",
+        event: {
+          stream: "tool",
+          data: { phase: "end", id: "c1", name: "exec_command" },
+        },
+      },
+      { type: "__wait_for_abort__" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, (event: any) => emitted.push(event));
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "exercise completed in-process tool stall",
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    expect(_recordedNestedOutcomes.length).toBeGreaterThanOrEqual(2);
+    expect(_recordedNestedOutcomes.at(-1)).toMatchObject({ ok: true });
+    expect(_recordedNestedOutcomes[0]).toMatchObject({
+      ok: false,
+      failureCode: "coordinator_agent_idle",
+      retryable: true,
+      abortSource: "coordinator",
+    });
+    expect(_recordedNestedOutcomes[0].payload).not.toContain("stopped by the user");
+    const persisted = (await readConversationMessages(cid)).find(
+      (message) =>
+        message.from === AGENT_ID &&
+        message.failure_code === "coordinator_agent_idle",
+    );
+    expect(persisted).toMatchObject({
+      failure_kind: "runtime",
+      failure_code: "coordinator_agent_idle",
+    });
+    expect(String(persisted?.text || "")).not.toContain("stopped by the user");
+    expect(JSON.stringify(persisted?.process || [])).not.toMatch(/"pid"/i);
+    expect(modelSessionActiveMock).toHaveBeenCalledWith(
+      state.buildGmemberSessionId(cid, AGENT_ID),
+    );
+    expect(harness.stops.length).toBeGreaterThanOrEqual(1);
+
+    const coordinatorEvents = coordinatorProcessEvents(emitted);
+    expect(coordinatorEvents).toContainEqual({
+      stream: "coordinator",
+      data: {
+        phase: "probe",
+        reason: "agent_idle",
+        idle_ms: 300_000,
+        alive: true,
+      },
+    });
+    expect(coordinatorEvents).toContainEqual({
+      stream: "coordinator",
+      data: {
+        phase: "terminating",
+        reason: "agent_idle",
+        idle_ms: 480_000,
+      },
+    });
+    expect(JSON.stringify(coordinatorEvents)).not.toMatch(/pid/i);
+  });
+
+  it("terminalizes the in-process lease before post-stream async work can race an abort", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const emitted: any[] = [];
+    let abortAttempts = 0;
+    let stopCalls = 0;
+    bus._setCoordinatorLeaseFactoryForTest((input: any) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      return {
+        observe(event: any) {
+          if (event?.kind === "activity" && timer === undefined) {
+            timer = setTimeout(() => {
+              abortAttempts += 1;
+              input.onAbort("agent_idle", 480_000);
+            }, 0);
+          }
+        },
+        stop() {
+          stopCalls += 1;
+          if (timer !== undefined) clearTimeout(timer);
+        },
+      };
+    });
+    (bus as any)._setNestedDispatchOutcomeObserverForTest((outcome: any) => {
+      _recordedNestedOutcomes.push(outcome);
+    });
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: { to: AGENT_NAME, message: "finish before lease threshold" },
+      },
+      { type: "final", text: "handled" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "delta", text: "completed result" },
+      {
+        type: "final",
+        text: "completed result",
+        afterYield: () => new Promise((resolve) => setTimeout(resolve, 10)),
+      },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, (event: any) => emitted.push(event));
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "exercise terminal lease race",
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    expect(abortAttempts).toBe(0);
+    expect(stopCalls).toBeGreaterThanOrEqual(1);
+    expect(_recordedNestedOutcomes).toHaveLength(1);
+    expect(_recordedNestedOutcomes[0]).toMatchObject({
+      ok: true,
+      text: "completed result",
+    });
+    expect(
+      coordinatorProcessEvents(emitted).some(
+        (event) => event.data?.phase === "terminating",
+      ),
+    ).toBe(false);
+    const persisted = (await readConversationMessages(cid)).find(
+      (message) => message.from === AGENT_ID,
+    );
+    expect(persisted).toMatchObject({ text: "completed result" });
+    expect(persisted?.failure_kind).toBeUndefined();
+    expect(persisted?.failure_code).toBeUndefined();
+  });
+
+  it("terminalizes the in-process lease before async cleanup after a direct stream throw", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const emitted: any[] = [];
+    let abortAttempts = 0;
+    let stopCalls = 0;
+    bus._setCoordinatorLeaseFactoryForTest((input: any) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      return {
+        observe(event: any) {
+          if (event?.kind === "activity" && timer === undefined) {
+            timer = setTimeout(() => {
+              abortAttempts += 1;
+              input.onAbort("agent_idle", 480_000);
+            }, 0);
+          }
+        },
+        stop() {
+          stopCalls += 1;
+          if (timer !== undefined) clearTimeout(timer);
+        },
+      };
+    });
+    (bus as any)._setNestedDispatchOutcomeObserverForTest((outcome: any) => {
+      _recordedNestedOutcomes.push(outcome);
+    });
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: { to: AGENT_NAME, message: "throw without terminal event" },
+      },
+      { type: "final", text: "handled" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "delta", text: "partial before direct throw" },
+      { type: "__throw__", message: "forced direct stream rejection" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, (event: any) => emitted.push(event));
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "exercise direct stream throw race",
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    expect(abortAttempts).toBe(0);
+    expect(stopCalls).toBeGreaterThanOrEqual(1);
+    expect(_recordedNestedOutcomes).toHaveLength(1);
+    expect(_recordedNestedOutcomes[0]).toMatchObject({
+      ok: false,
+      failureCode: "model_stream_exception",
+    });
+    expect(_recordedNestedOutcomes[0].abortSource).toBeUndefined();
+    expect(
+      coordinatorProcessEvents(emitted).some(
+        (event) => event.data?.phase === "terminating",
+      ),
+    ).toBe(false);
+    const persisted = (await readConversationMessages(cid)).find(
+      (message) => message.from === AGENT_ID,
+    );
+    expect(persisted).toMatchObject({
+      failure_kind: "model",
+      failure_code: "model_stream_exception",
+    });
+    expect(String(persisted?.text || "")).toContain(
+      "Model stream failed unexpectedly.",
+    );
+    expect(String(persisted?.text || "")).not.toContain(
+      "forced direct stream rejection",
+    );
+    expect(String(persisted?.failure_code || "")).not.toMatch(/^coordinator_/);
+  });
+
+  it("preserves coordinator probe and terminating diagnostics within a saturated process-item cap", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    bus._setCoordinatorLeaseFactoryForTest((input: any) => ({
+      observe(event: any) {
+        if (event?.kind === "tool_start") {
+          input.onProbe(300_000);
+          input.onAbort("agent_idle", 480_000);
+        }
+      },
+      stop() {},
+    }));
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: { to: AGENT_NAME, message: "saturate process diagnostics" },
+      },
+      { type: "final", text: "handled" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      ...Array.from({ length: 310 }, (_, index) => ({
+        type: "progress",
+        text: `ordinary-process-${index}`,
+      })),
+      {
+        type: "event",
+        event: {
+          stream: "tool",
+          data: { phase: "start", id: "cap-tool", name: "exec_command" },
+        },
+      },
+      { type: "__wait_for_abort__" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "exercise saturated coordinator diagnostics",
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const persisted = (await readConversationMessages(cid)).find(
+      (message) => message.failure_code === "coordinator_agent_idle",
+    );
+    expect(persisted).toBeTruthy();
+    expect(persisted.process.length).toBeLessThanOrEqual(300);
+    const coordinatorPhases = persisted.process
+      .filter((item: any) => item?.event?.stream === "coordinator")
+      .map((item: any) => item.event.data?.phase);
+    expect(coordinatorPhases).toEqual(["probe", "terminating"]);
+  });
+
+  it.each([
+    { first: "coordinator", second: "group", expected: "coordinator" },
+    { first: "coordinator", second: "parent", expected: "coordinator" },
+    { first: "group", second: "coordinator", expected: "group_abort" },
+    { first: "parent", second: "coordinator", expected: "parent_abort" },
+  ] as const)(
+    "keeps the first nested abort source when $first abort races before $second",
+    async ({ first, second, expected }) => {
+      const cid = newCid();
+      const state =
+        await import("../../../../src/main/features/group_chat/state");
+      const bus = await import("../../../../src/main/features/group_chat/bus");
+      let fireCoordinatorAbort:
+        | ((reason: "tool_idle" | "agent_idle", idleMs: number) => void)
+        | undefined;
+      let groupAbortPromise: Promise<void> | undefined;
+      (bus as any)._setCoordinatorLeaseFactoryForTest((input: any) => {
+        fireCoordinatorAbort = input.onAbort;
+        return { observe() {}, stop() {} };
+      });
+      (bus as any)._setNestedDispatchOutcomeObserverForTest((outcome: any) => {
+        _recordedNestedOutcomes.push(outcome);
+      });
+
+      const usesParent = first === "parent" || second === "parent";
+      _setScript(state.buildGconvSessionId(cid), [
+        {
+          type: usesParent
+            ? "__call_tool_parent_abort_controlled__"
+            : "__call_tool__",
+          name: "run_worker",
+          input: { task: `${first} then ${second}` },
+        },
+        { type: "final", text: "race complete" },
+      ]);
+      _setScript("gworker-*", [
+        {
+          type: "__wait_for_abort__",
+          afterAbort() {
+            if (second === "coordinator") {
+              fireCoordinatorAbort!("agent_idle", 480_000);
+            } else if (second === "parent") {
+              abortRaceProbe.parentController!.abort();
+            } else {
+              groupAbortPromise = bus.abort(TEST_UID, cid);
+            }
+          },
+        },
+      ]);
+
+      bus.subscribe(TEST_UID, cid, () => {});
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: "user",
+        text: "exercise abort source ordering",
+      });
+      expect(
+        await waitUntil(
+          () =>
+            typeof fireCoordinatorAbort === "function" &&
+            (!usesParent || abortRaceProbe.parentController !== null),
+          2000,
+        ),
+        "nested dispatch should expose both competing abort controls",
+      ).toBe(true);
+
+      if (first === "coordinator") {
+        fireCoordinatorAbort!("agent_idle", 480_000);
+      } else if (first === "parent") {
+        abortRaceProbe.parentController!.abort();
+      } else {
+        groupAbortPromise = bus.abort(TEST_UID, cid);
+      }
+
+      await waitForQuiescent(TEST_UID, cid, 4000);
+      await groupAbortPromise;
+
+      expect(_recordedNestedOutcomes).toHaveLength(1);
+      const outcome = _recordedNestedOutcomes[0];
+      if (expected === "coordinator") {
+        expect(outcome).toMatchObject({
+          ok: false,
+          failureCode: "coordinator_agent_idle",
+          retryable: true,
+          abortSource: "coordinator",
+        });
+        expect(outcome.payload).not.toContain("stopped by the user");
+      } else {
+        expect(outcome).toMatchObject({
+          ok: false,
+          failureCode: expected,
+          retryable: false,
+          abortSource: expected,
+        });
+      }
+    },
+  );
+
+  it("retries the same named Agent once with canonical resume text and succeeds", async () => {
+    const cid = newCid();
+    const originalUserMessage = "please coordinate the requested work";
+    const originalTask = "draft the architecture review";
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const collaboration =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const emitted: any[] = [];
+    installFirstAttemptCoordinatorAbort(bus);
+    (bus as any)._setNestedDispatchOutcomeObserverForTest((outcome: any) => {
+      _recordedNestedOutcomes.push(outcome);
+    });
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "run_worker",
+        input: { to: AGENT_NAME, task: originalTask },
+      },
+      { type: "final", text: "commander completed" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "__wait_for_abort__" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "recovered result" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, (event) => emitted.push(event));
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: originalUserMessage,
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const agentCalls = _recordedCalls.filter(
+      (call) => call.sid === state.buildGmemberSessionId(cid, AGENT_ID),
+    );
+    expect(agentCalls).toHaveLength(2);
+    expect(agentCalls[1].message).toContain('<task-retry mode="resume">');
+    expect(agentCalls[1].message).toContain(originalTask);
+    expect(agentCalls[1].message).not.toBe(originalUserMessage);
+    expect(_recordedNestedOutcomes.map((outcome) => outcome.actor.id)).toEqual([
+      AGENT_ID,
+      AGENT_ID,
+    ]);
+    expect(_recordedNestedOutcomes[1]).toMatchObject({
+      ok: true,
+      text: "recovered result",
+    });
+    const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    expect(run?.steps[0]?.attempts).toMatchObject([
+      { attempt: 1, actor_id: AGENT_ID, status: "failed", failure_code: "coordinator_agent_idle" },
+      { attempt: 2, actor_id: AGENT_ID, status: "completed" },
+    ]);
+    expect(coordinatorProcessEvents(emitted)).toContainEqual({
+      stream: "coordinator",
+      data: { phase: "retry", attempt: 2, actor_id: AGENT_ID },
+    });
+  });
+
+  it("tells a same-Agent tool-idle retry to verify current state before repeating work", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    installFirstAttemptCoordinatorAbort(bus, "tool_idle");
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: { to: AGENT_NAME, message: "publish the reviewed release" },
+      },
+      { type: "final", text: "done" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "__wait_for_abort__" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "verified and completed" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "ship it" });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const retryCall = _recordedCalls.filter(
+      (call) => call.sid === state.buildGmemberSessionId(cid, AGENT_ID),
+    )[1];
+    expect(retryCall?.message).toContain('<task-retry mode="resume">');
+    expect(retryCall?.message).toContain("Verify its current state before deciding whether to run it again");
+  });
+
+  it("passes the existing CLI resume session id to the same Agent retry", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const cliSessions =
+      await import("../../../../src/main/features/local_agents/sessions");
+    await makeSeedAgentCli();
+    await cliSessions.setSessionId(TEST_UID, cid, AGENT_ID, "hermes", "resume-existing-42");
+    installFirstAttemptCoordinatorAbort(bus);
+    localRunnerScripts.push([]);
+    localRunnerScripts.push([
+      { type: "done", output: "cli recovered", sessionId: "resume-existing-42", status: "completed" },
+      { type: "__return__", status: "completed", output: "cli recovered" },
+    ]);
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "run_worker",
+        input: { to: AGENT_NAME, task: "repair the CLI project" },
+      },
+      { type: "final", text: "done" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "repair it" });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    expect(localRunnerCalls).toHaveLength(2);
+    expect(localRunnerCalls[1].resumeSessionId).toBe("resume-existing-42");
+  });
+
+
+  it("awaits the newest CLI session write before a same-Agent retry starts", async () => {
+    const cid = newCid();
+    const cliSessions =
+      await import("../../../../src/main/features/local_agents/sessions");
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    await makeSeedAgentCli();
+    installFirstAttemptCoordinatorAbort(bus);
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    let writeStarted = false;
+    let writeResolved = false;
+    const actualSetSessionId = cliSessions.setSessionId;
+    const setSessionSpy = vi
+      .spyOn(cliSessions, "setSessionId")
+      .mockImplementation(async (...args) => {
+        writeStarted = true;
+        await writeGate;
+        await actualSetSessionId(...args);
+        writeResolved = true;
+      });
+    localRunnerScripts.push([
+      {
+        type: "done",
+        output: "first failed attempt",
+        sessionId: "fresh-session-from-attempt-one",
+        status: "failed",
+      },
+      {
+        type: "__return__",
+        status: "failed",
+        output: "first failed attempt",
+      },
+    ]);
+    localRunnerScripts.push([
+      {
+        type: "done",
+        output: "cli retry recovered",
+        sessionId: "fresh-session-from-attempt-one",
+        status: "completed",
+      },
+      {
+        type: "__return__",
+        status: "completed",
+        output: "cli retry recovered",
+      },
+    ]);
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "run_worker",
+        input: { to: AGENT_NAME, task: "resume newest CLI session" },
+      },
+      { type: "final", text: "done" },
+    ]);
+
+    try {
+      bus.subscribe(TEST_UID, cid, () => {});
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: "user",
+        text: "resume safely",
+      });
+      expect(await waitUntil(() => writeStarted, 2000)).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(writeResolved).toBe(false);
+      expect(localRunnerCalls).toHaveLength(1);
+      releaseWrite();
+      await waitForQuiescent(TEST_UID, cid, 5000);
+
+      expect(writeResolved).toBe(true);
+      expect(localRunnerCalls).toHaveLength(2);
+      expect(localRunnerCalls[1].resumeSessionId).toBe(
+        "fresh-session-from-attempt-one",
+      );
+    } finally {
+      releaseWrite();
+      setSessionSpy.mockRestore();
+    }
+  });
+
+  it("stops safely when the newest CLI session id cannot be persisted", async () => {
+    const cid = newCid();
+    const cliSessions =
+      await import("../../../../src/main/features/local_agents/sessions");
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const collaboration =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    await makeSeedAgentCli();
+    const setSessionSpy = vi
+      .spyOn(cliSessions, "setSessionId")
+      .mockImplementation(async () => {});
+    localRunnerScripts.push([
+      {
+        type: "done",
+        output: "failed with a fresh session",
+        sessionId: "unpersisted-session-id",
+        status: "failed",
+      },
+      {
+        type: "__return__",
+        status: "failed",
+        output: "failed with a fresh session",
+      },
+    ]);
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "run_worker",
+        input: { to: AGENT_NAME, task: "persist newest CLI session" },
+      },
+      { type: "final", text: "handled infrastructure failure" },
+    ]);
+
+    try {
+      bus.subscribe(TEST_UID, cid, () => {});
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: "user",
+        text: "persist safely",
+      });
+      await waitForQuiescent(TEST_UID, cid, 5000);
+
+      expect(localRunnerCalls).toHaveLength(1);
+      const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+      expect(run?.steps[0]?.attempts).toHaveLength(1);
+      expect(run?.steps[0]?.attempts?.[0].status).toBe("failed");
+      const toolResult = _recordedToolResults.find(
+        (result) => result.name === "run_worker",
+      );
+      expect(toolResult?.content).toContain(
+        'failure_code="cli_session_persistence_failed"',
+      );
+      expect(toolResult?.content).not.toContain("unpersisted-session-id");
+    } finally {
+      setSessionSpy.mockRestore();
+    }
+  });
+
+  it("uses the highest-scoring idle member, then one anonymous worker, and returns coordinator_exhausted", async () => {
+    const cid = newCid();
+    const reviewerId = "c1c1c1c1c1c1";
+    const reviewerName = "Reviewer";
+    const lowId = "d2d2d2d2d2d2";
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const collaboration =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    await seedAgent({
+      id: reviewerId,
+      name: reviewerName,
+      description: "architecture security review implementation",
+      workflow: "review architecture security implementation",
+    });
+    await seedAgent({
+      id: lowId,
+      name: "Translator",
+      description: "translate prose",
+      workflow: "translate prose",
+    });
+    await addAgentMember(cid, reviewerId, reviewerName);
+    await addAgentMember(cid, lowId, "Translator");
+    installFirstAttemptCoordinatorAbort(bus);
+    (bus as any)._setNestedDispatchOutcomeObserverForTest((outcome: any) => {
+      _recordedNestedOutcomes.push(outcome);
+    });
+    const emitted: any[] = [];
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "run_worker",
+        input: { to: AGENT_NAME, task: "review architecture security implementation" },
+      },
+      { type: "final", text: "handled exhaustion" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "__wait_for_abort__" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "error", text: "original retry failed" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, reviewerId), [
+      { type: "error", text: "fallback failed" },
+    ]);
+    _setScript("gworker-*", [
+      { type: "delta", text: "safe partial output" },
+      { type: "error", text: "anonymous failed <raw>" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, (event) => emitted.push(event));
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "coordinate review" });
+    await waitForQuiescent(TEST_UID, cid, 5000);
+
+    const attemptOutcomes = _recordedNestedOutcomes.filter(
+      (outcome) => outcome.failureCode !== "coordinator_exhausted",
+    );
+    expect(attemptOutcomes.map((outcome) => outcome.actor.kind === "worker" ? null : outcome.actor.id)).toEqual([
+      AGENT_ID,
+      AGENT_ID,
+      reviewerId,
+      null,
+    ]);
+    const finalOutcome = _recordedNestedOutcomes.at(-1);
+    expect(finalOutcome).toMatchObject({
+      ok: false,
+      failureCode: "coordinator_exhausted",
+      retryable: false,
+      text: "safe partial output",
+    });
+    expect(finalOutcome.payload).toContain('failure_code="coordinator_exhausted"');
+    expect(finalOutcome.payload).toContain("safe partial output");
+    expect(finalOutcome.payload).not.toContain("anonymous failed");
+    expect(finalOutcome.payload).not.toContain("&lt;raw&gt;");
+    const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    expect(run?.steps[0]?.attempts).toHaveLength(4);
+    expect(run?.steps[0]?.attempts?.map((attempt) => attempt.actor_id)).toEqual([
+      AGENT_ID,
+      AGENT_ID,
+      reviewerId,
+      null,
+    ]);
+    expect(run?.steps[0]?.attempts?.every((attempt) => attempt.status !== "running")).toBe(true);
+    expect(coordinatorProcessEvents(emitted)).toEqual(expect.arrayContaining([
+      { stream: "coordinator", data: { phase: "retry", attempt: 2, actor_id: AGENT_ID } },
+      { stream: "coordinator", data: { phase: "fallback", attempt: 3, actor_id: reviewerId, actor_name: reviewerName } },
+      { stream: "coordinator", data: { phase: "anonymous", attempt: 4 } },
+      { stream: "coordinator", data: { phase: "returned", failure_code: "coordinator_exhausted" } },
+    ]));
+    const transitionLogs = loggerMocks.info.mock.calls
+      .filter(([message]) => message === "coordinator transition")
+      .map(([, data]) => data);
+    expect(transitionLogs).toHaveLength(4);
+    expect(JSON.stringify(transitionLogs)).not.toMatch(/review architecture|safe partial|anonymous failed|pid|write_scope|prompt|output/i);
+  });
+
+  it("runs one anonymous fallback when no named member is eligible", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const collaboration =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    installFirstAttemptCoordinatorAbort(bus);
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "run_worker",
+        input: { to: AGENT_NAME, task: "perform isolated recovery" },
+      },
+      { type: "final", text: "done" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "__wait_for_abort__" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "error", text: "retry failed" },
+    ]);
+    _setScript("gworker-*", [{ type: "final", text: "anonymous recovered" }]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "recover" });
+    await waitForQuiescent(TEST_UID, cid, 5000);
+
+    expect(_recordedCalls.filter((call) => call.sid.startsWith("gworker-"))).toHaveLength(1);
+    const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    expect(run?.steps[0]?.attempts?.map((attempt) => attempt.actor_id)).toEqual([
+      AGENT_ID,
+      AGENT_ID,
+      null,
+    ]);
+    expect(run?.steps[0]?.attempts?.at(-1)).toMatchObject({
+      actor_kind: "anonymous_worker",
+      status: "completed",
+    });
+  });
+
+
+  it("returns to Commander when retry preparation fails before its run write", async () => {
+    const cid = newCid();
+    const secret = "SECRET_RETRY_PREPARE_PREWRITE";
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const collaboration =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    let injected = false;
+    (collaboration as any)._setRetryPreparationBoundaryHookForTest?.(
+      async (boundary: string) => {
+        if (!injected && boundary === "run") {
+          injected = true;
+          throw new Error(secret);
+        }
+      },
+    );
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "run_worker",
+        input: { to: AGENT_NAME, task: "structured failure before retry" },
+      },
+      { type: "final", text: "returned to Commander" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "error", text: "structured first failure" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "exercise retry preparation failure",
+    });
+    await waitForQuiescent(TEST_UID, cid, 5000);
+
+    expect(injected).toBe(true);
+    expect(
+      _recordedCalls.filter(
+        (call) => call.sid === state.buildGmemberSessionId(cid, AGENT_ID),
+      ),
+    ).toHaveLength(1);
+    expect(
+      _recordedCalls.filter((call) => call.sid.startsWith("gworker-")),
+    ).toHaveLength(0);
+    const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    expect(run?.steps[0]?.attempts).toHaveLength(1);
+    expect(run?.steps[0]?.attempts?.[0].status).toBe("failed");
+    expect(run?.steps[0]?.status).toBe("failed");
+    const toolResult = _recordedToolResults.find(
+      (result) => result.name === "run_worker",
+    );
+    expect(toolResult?.content).toContain("structured first failure");
+    await expectNoLifecycleSecretLeak(cid, secret);
+  });
+
+  it.each([
+    { source: "group", toolEvent: "__call_tool__" },
+    { source: "parent", toolEvent: "__call_tool_parent_abort_controlled__" },
+  ] as const)(
+    "stops before retry preparation when a late $source abort follows a coordinator outcome",
+    async ({ source, toolEvent }) => {
+      const cid = newCid();
+      const state = await import("../../../../src/main/features/group_chat/state");
+      const bus = await import("../../../../src/main/features/group_chat/bus");
+      const collaboration =
+        await import("../../../../src/main/features/group_chat/collaboration");
+      installFirstAttemptCoordinatorAbort(bus);
+      let gateRan = false;
+      let groupAbortPromise: Promise<void> | undefined;
+      (bus as any)._setNestedDispatchAttemptHooksForTest({
+        beforeRetry: async () => {
+          gateRan = true;
+          if (source === "group") {
+            groupAbortPromise = bus.abort(TEST_UID, cid);
+          } else {
+            abortRaceProbe.parentController?.abort({ kind: "parent_abort" });
+          }
+        },
+      });
+      const emitted: any[] = [];
+      _setScript(state.buildGconvSessionId(cid), [
+        {
+          type: toolEvent,
+          name: "run_worker",
+          input: { to: AGENT_NAME, task: "late abort race" },
+        },
+        { type: "final", text: "handled late abort" },
+      ]);
+      _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+        { type: "__wait_for_abort__" },
+      ]);
+
+      bus.subscribe(TEST_UID, cid, (event) => emitted.push(event));
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: "user",
+        text: "exercise late abort",
+      });
+      await waitForQuiescent(TEST_UID, cid, 5000);
+      await groupAbortPromise;
+
+      expect(gateRan).toBe(true);
+      expect(
+        _recordedCalls.filter(
+          (call) => call.sid === state.buildGmemberSessionId(cid, AGENT_ID),
+        ),
+      ).toHaveLength(1);
+      expect(
+        _recordedCalls.filter((call) => call.sid.startsWith("gworker-")),
+      ).toHaveLength(0);
+      const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+      expect(run?.steps[0]?.attempts).toHaveLength(1);
+      expect(run?.steps[0]?.attempts?.[0]).toMatchObject({
+        status: "failed",
+        failure_code: "coordinator_agent_idle",
+      });
+      expect(
+        coordinatorProcessEvents(emitted).filter(
+          (event) =>
+            event.data?.phase === "retry" ||
+            event.data?.phase === "fallback" ||
+            event.data?.phase === "anonymous",
+        ),
+      ).toHaveLength(0);
+    },
+  );
+
+
+  it.each([
+    { source: "group", toolEvent: "__call_tool__" },
+    { source: "parent", toolEvent: "__call_tool_parent_abort_controlled__" },
+  ] as const)(
+    "terminalizes the prepared step when $source abort arrives after retry preparation",
+    async ({ source, toolEvent }) => {
+      const cid = newCid();
+      const state = await import("../../../../src/main/features/group_chat/state");
+      const bus = await import("../../../../src/main/features/group_chat/bus");
+      const collaboration =
+        await import("../../../../src/main/features/group_chat/collaboration");
+      installFirstAttemptCoordinatorAbort(bus);
+      let hookRan = false;
+      let groupAbortPromise: Promise<void> | undefined;
+      (bus as any)._setNestedDispatchAttemptHooksForTest({
+        afterRetryPreparation: async () => {
+          hookRan = true;
+          if (source === "group") {
+            groupAbortPromise = bus.abort(TEST_UID, cid);
+          } else {
+            abortRaceProbe.parentController?.abort({ kind: "parent_abort" });
+          }
+        },
+      });
+      const emitted: any[] = [];
+      _setScript(state.buildGconvSessionId(cid), [
+        {
+          type: toolEvent,
+          name: "run_worker",
+          input: { to: AGENT_NAME, task: "abort after retry preparation" },
+        },
+        { type: "final", text: "returned after late abort" },
+      ]);
+      _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+        { type: "__wait_for_abort__" },
+      ]);
+      _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+        { type: "final", text: "must not retry" },
+      ]);
+
+      bus.subscribe(TEST_UID, cid, (event) => emitted.push(event));
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: "user",
+        text: "exercise post-preparation abort",
+      });
+      await waitForQuiescent(TEST_UID, cid, 5000);
+      await groupAbortPromise;
+
+      expect(hookRan).toBe(true);
+      expect(
+        _recordedCalls.filter(
+          (call) => call.sid === state.buildGmemberSessionId(cid, AGENT_ID),
+        ),
+      ).toHaveLength(1);
+      expect(
+        _recordedCalls.filter((call) => call.sid.startsWith("gworker-")),
+      ).toHaveLength(0);
+      const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+      const step = run?.steps[0];
+      expect(step?.attempts).toHaveLength(1);
+      expect(step?.attempts?.[0]).toMatchObject({
+        status: "failed",
+        failure_code: "coordinator_agent_idle",
+      });
+      expect(step?.status).toBe("skipped");
+      expect(step?.completed_at).toBeTruthy();
+      const events = await collaboration.readCollaborationEvents(
+        TEST_UID,
+        cid,
+        0,
+      );
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "step_completed" && event.step_id === step?.id,
+        ),
+      ).toHaveLength(1);
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "gate_recorded" && event.step_id === step?.id,
+        ),
+      ).toHaveLength(1);
+      await expect(
+        collaboration.prepareNestedDispatchStep(TEST_UID, cid, {
+          objective: "resume must stay closed",
+          actor_id: AGENT_ID,
+          actor_name: AGENT_NAME,
+          actor_kind: "agent",
+          source_tool: "run_worker",
+          task: "abort after retry preparation",
+          resume_step_id: step?.id,
+          resume_token: step?.resume_token,
+        }),
+      ).rejects.toThrow(/cannot be reused/);
+      expect(
+        coordinatorProcessEvents(emitted).filter(
+          (event) =>
+            event.data?.phase === "retry" ||
+            event.data?.phase === "fallback" ||
+            event.data?.phase === "anonymous",
+        ),
+      ).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    { source: "group", toolEvent: "__call_tool__" },
+    { source: "parent", toolEvent: "__call_tool_parent_abort_controlled__" },
+  ] as const)("stops recovery immediately on $source abort without starting fallback", async ({ source, toolEvent }) => {
+    const cid = newCid();
+    const fallbackId = "e3e3e3e3e3e3";
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const collaboration =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    await seedAgent({
+      id: fallbackId,
+      name: "Fallback",
+      description: "recover review architecture implementation",
+      workflow: "recover review architecture implementation",
+    });
+    await addAgentMember(cid, fallbackId, "Fallback");
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: toolEvent,
+        name: "run_worker",
+        input: { to: AGENT_NAME, task: "recover review architecture implementation" },
+      },
+      { type: "final", text: "aborted" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "__wait_for_abort__" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    const enqueuePromise = bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "stop recovery" });
+    expect(await waitUntil(() => _recordedCalls.some(
+      (call) => call.sid === state.buildGmemberSessionId(cid, AGENT_ID),
+    ), 2000)).toBe(true);
+    if (source === "group") await bus.abort(TEST_UID, cid);
+    else abortRaceProbe.parentController!.abort();
+    await enqueuePromise;
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    expect(_recordedCalls.filter((call) => call.sid === state.buildGmemberSessionId(cid, fallbackId))).toHaveLength(0);
+    expect(_recordedCalls.filter((call) => call.sid.startsWith("gworker-"))).toHaveLength(0);
+    const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    expect(run?.steps[0]?.attempts).toHaveLength(1);
+    expect(run?.steps[0]?.attempts?.[0]).toMatchObject({ status: "cancelled" });
+    expect(run?.steps[0]?.attempts?.[0]).not.toHaveProperty("failure_code");
+  });
+
+  it("treats an initial anonymous run_worker as the final tier and settles unexpected throws", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const collaboration =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "__call_tool__", name: "run_worker", input: { task: "anonymous final tier" } },
+      { type: "final", text: "handled" },
+    ]);
+    _setScript("gworker-*", [
+      { type: "__throw__", message: "unexpected anonymous throw" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "delegate once" });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    expect(_recordedCalls.filter((call) => call.sid.startsWith("gworker-"))).toHaveLength(1);
+    const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    expect(run?.steps[0]?.attempts).toHaveLength(1);
+    expect(run?.steps[0]?.attempts?.[0]).toMatchObject({
+      actor_id: null,
+      actor_kind: "anonymous_worker",
+      status: "failed",
+      failure_code: "runtime_failed",
+    });
+    expect(run?.steps[0]?.attempts?.[0].status).not.toBe("running");
+  });
+
+  it.each(["named", "anonymous"] as const)(
+    "reconciles a durable running $s attempt when begin audit append throws",
+    async (pathKind) => {
+      const cid = newCid();
+      const secret = "SECRET_BEGIN_AUDIT_FAILURE";
+      const state = await import("../../../../src/main/features/group_chat/state");
+      const bus = await import("../../../../src/main/features/group_chat/bus");
+      const collaboration =
+        await import("../../../../src/main/features/group_chat/collaboration");
+      let failed = false;
+      (collaboration as any)._setWorkflowAttemptAuditBeforeAppendForTest(
+        async (type: string) => {
+          if (!failed && type === "step_attempt_started") {
+            failed = true;
+            throw new Error(secret);
+          }
+        },
+      );
+      _setScript(state.buildGconvSessionId(cid), [
+        {
+          type: "__call_tool__",
+          name: "run_worker",
+          input:
+            pathKind === "named"
+              ? { to: AGENT_NAME, task: "begin lifecycle fault" }
+              : { task: "begin lifecycle fault" },
+        },
+        { type: "final", text: "handled lifecycle failure" },
+      ]);
+      bus.subscribe(TEST_UID, cid, () => {});
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: "user",
+        text: "exercise begin lifecycle failure",
+      });
+      await waitForQuiescent(TEST_UID, cid, 4000);
+
+      expect(failed).toBe(true);
+      expect(
+        _recordedCalls.filter(
+          (call) =>
+            call.sid === state.buildGmemberSessionId(cid, AGENT_ID),
+        ),
+      ).toHaveLength(0);
+      expect(
+        _recordedCalls.filter((call) => call.sid.startsWith("gworker-")),
+      ).toHaveLength(0);
+      const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+      const attempts = run?.steps[0]?.attempts || [];
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0]).toMatchObject({
+        actor_id: pathKind === "named" ? AGENT_ID : null,
+        actor_kind: pathKind === "named" ? "agent" : "anonymous_worker",
+        status: "failed",
+        failure_code: "runtime_failed",
+      });
+      expect(attempts.every((attempt) => attempt.status !== "running")).toBe(
+        true,
+      );
+      const auditEvents = await collaboration.readCollaborationEvents(
+        TEST_UID,
+        cid,
+        0,
+      );
+      expect(
+        auditEvents.filter((event) => event.type === "step_attempt_started"),
+      ).toHaveLength(attempts.length);
+      expect(
+        auditEvents.filter((event) => event.type === "step_attempt_finished"),
+      ).toHaveLength(attempts.length);
+      const toolResult = _recordedToolResults.find(
+        (result) => result.name === "run_worker",
+      );
+      expect(toolResult?.content).toContain('failure_code="runtime_failed"');
+      await expectNoLifecycleSecretLeak(cid, secret);
+    },
+  );
+
+  it("does not invent an attempt when begin fails before durability", async () => {
+    const cid = newCid();
+    const secret = "SECRET_BEGIN_BEFORE_DURABILITY";
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const collaboration =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    let injected = false;
+    (bus as any)._setNestedDispatchAttemptHooksForTest({
+      begin: async () => {
+        injected = true;
+        throw new Error(secret);
+      },
+    });
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "run_worker",
+        input: { to: AGENT_NAME, task: "unrecoverable begin fault" },
+      },
+      { type: "final", text: "handled lifecycle failure" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "exercise unrecoverable begin failure",
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    expect(injected).toBe(true);
+    expect(
+      _recordedCalls.filter(
+        (call) => call.sid !== state.buildGconvSessionId(cid),
+      ),
+    ).toHaveLength(0);
+    const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    expect(run?.steps[0]?.attempts || []).toHaveLength(0);
+    const auditEvents = await collaboration.readCollaborationEvents(
+      TEST_UID,
+      cid,
+      0,
+    );
+    expect(
+      auditEvents.filter(
+        (event) =>
+          event.type === "step_attempt_started" ||
+          event.type === "step_attempt_finished",
+      ),
+    ).toHaveLength(0);
+    const toolResult = _recordedToolResults.find(
+      (result) => result.name === "run_worker",
+    );
+    expect(toolResult?.content).toContain('failure_code="runtime_failed"');
+    expect(toolResult?.content).toContain("Nested dispatch lifecycle failed.");
+    await expectNoLifecycleSecretLeak(cid, secret);
+  });
+
+
+  it.each([
+    { pathKind: "named", source: "group" },
+    { pathKind: "anonymous", source: "group" },
+    { pathKind: "named", source: "parent" },
+    { pathKind: "anonymous", source: "parent" },
+  ] as const)(
+    "cancels the durable $pathKind attempt when $source abort arrives during begin",
+    async ({ pathKind, source }) => {
+      const cid = newCid();
+      const state = await import("../../../../src/main/features/group_chat/state");
+      const bus = await import("../../../../src/main/features/group_chat/bus");
+      const collaboration =
+        await import("../../../../src/main/features/group_chat/collaboration");
+      const emitted: any[] = [];
+      let beginCompleted = false;
+      let groupAbortPromise: Promise<void> | undefined;
+      (bus as any)._setNestedDispatchAttemptHooksForTest({
+        begin: async (
+          ...args: Parameters<
+            typeof collaboration.beginWorkflowStepAttempt
+          >
+        ) => {
+          const row = await collaboration.beginWorkflowStepAttempt(...args);
+          beginCompleted = true;
+          if (source === "group") {
+            groupAbortPromise = bus.abort(TEST_UID, cid);
+          } else {
+            abortRaceProbe.parentController?.abort({ kind: "parent_abort" });
+          }
+          return row;
+        },
+      });
+      _setScript(state.buildGconvSessionId(cid), [
+        {
+          type:
+            source === "parent"
+              ? "__call_tool_parent_abort_controlled__"
+              : "__call_tool__",
+          name: "run_worker",
+          input:
+            pathKind === "named"
+              ? { to: AGENT_NAME, task: "abort after durable begin" }
+              : { task: "abort after durable begin" },
+        },
+        { type: "final", text: "handled post-begin abort" },
+      ]);
+
+      bus.subscribe(TEST_UID, cid, (event) => emitted.push(event));
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: "user",
+        text: "exercise post-begin abort",
+      });
+      await waitForQuiescent(TEST_UID, cid, 5000);
+      await groupAbortPromise;
+
+      expect(beginCompleted).toBe(true);
+      expect(
+        _recordedCalls.filter(
+          (call) =>
+            call.sid === state.buildGmemberSessionId(cid, AGENT_ID),
+        ),
+      ).toHaveLength(0);
+      expect(
+        _recordedCalls.filter((call) => call.sid.startsWith("gworker-")),
+      ).toHaveLength(0);
+      const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+      const step = run?.steps[0];
+      expect(step?.attempts).toHaveLength(1);
+      expect(step?.attempts?.[0]).toMatchObject({
+        actor_id: pathKind === "named" ? AGENT_ID : null,
+        actor_kind: pathKind === "named" ? "agent" : "anonymous_worker",
+        status: "cancelled",
+      });
+      expect(step?.attempts?.[0]).not.toHaveProperty("failure_code");
+      expect(step?.status).toBe("skipped");
+      expect(step?.completed_at).toBeTruthy();
+      const auditEvents = await collaboration.readCollaborationEvents(
+        TEST_UID,
+        cid,
+        0,
+      );
+      expect(
+        auditEvents.filter((event) => event.type === "step_attempt_started"),
+      ).toHaveLength(1);
+      expect(
+        auditEvents.filter((event) => event.type === "step_attempt_finished"),
+      ).toHaveLength(1);
+      expect(
+        auditEvents.filter(
+          (event) =>
+            event.type === "step_completed" && event.step_id === step?.id,
+        ),
+      ).toHaveLength(1);
+      expect(
+        auditEvents.filter(
+          (event) =>
+            event.type === "gate_recorded" && event.step_id === step?.id,
+        ),
+      ).toHaveLength(1);
+      await expect(
+        collaboration.prepareNestedDispatchStep(TEST_UID, cid, {
+          objective: "resume must stay closed",
+          actor_id: pathKind === "named" ? AGENT_ID : null,
+          actor_name: pathKind === "named" ? AGENT_NAME : "Worker",
+          actor_kind: pathKind === "named" ? "agent" : "anonymous_worker",
+          source_tool: "run_worker",
+          task: "abort after durable begin",
+          resume_step_id: step?.id,
+          resume_token: step?.resume_token,
+        }),
+      ).rejects.toThrow(/cannot be reused/);
+      expect(
+        coordinatorProcessEvents(emitted).filter(
+          (event) =>
+            event.data?.phase === "retry" ||
+            event.data?.phase === "fallback" ||
+            event.data?.phase === "anonymous",
+        ),
+      ).toHaveLength(0);
+      const toolResult = _recordedToolResults.find(
+        (result) => result.name === "run_worker",
+      );
+      expect(toolResult?.content).toContain(
+        `failure_code="${source === "group" ? "group_abort" : "parent_abort"}"`,
+      );
+      expect(toolResult?.content).toContain('retryable="false"');
+    },
+  );
+
+  it("redacts raw abort-settlement errors after durable begin", async () => {
+    const cid = newCid();
+    const secret =
+      "SECRET_POST_BEGIN_SETTLEMENT /Users/private/abort-token.json token=raw";
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const collaboration =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    (bus as any)._setNestedDispatchAttemptHooksForTest({
+      begin: async (
+        ...args: Parameters<typeof collaboration.beginWorkflowStepAttempt>
+      ) => {
+        const row = await collaboration.beginWorkflowStepAttempt(...args);
+        abortRaceProbe.parentController?.abort({ kind: "parent_abort" });
+        return row;
+      },
+      settleAbort: async () => {
+        throw new Error(secret);
+      },
+    });
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool_parent_abort_controlled__",
+        name: "run_worker",
+        input: { task: "force post-begin settlement failure" },
+      },
+      { type: "final", text: "handled settlement failure" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "exercise post-begin settlement privacy",
+    });
+    await waitForQuiescent(TEST_UID, cid, 5000);
+
+    const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    const stepId = run?.steps[0]?.id || "";
+    const logs = JSON.stringify([
+      loggerMocks.debug.mock.calls,
+      loggerMocks.info.mock.calls,
+      loggerMocks.warn.mock.calls,
+      loggerMocks.error.mock.calls,
+    ]);
+    expect(logs).not.toContain(secret);
+    expect(logs).not.toContain("SECRET_POST_BEGIN_SETTLEMENT");
+    expect(logs).not.toContain("/Users/private/abort-token.json");
+    expect(logs).not.toContain("token=raw");
+    const warnings = loggerMocks.warn.mock.calls.filter(
+      ([message]) => message === "nested abort settlement failed",
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.[1]).toMatchObject({
+      phase: "after_durable_begin",
+      failure_code: "abort_settlement_failed",
+      error: expect.objectContaining({
+        message: "Nested abort settlement failed.",
+      }),
+    });
+    expect(warnings[0]?.[1]?.cid).not.toBe(cid);
+    expect(warnings[0]?.[1]?.step_id).not.toBe(stepId);
+  });
+
+  it("redacts raw abort-settlement errors after retry preparation", async () => {
+    const cid = newCid();
+    const secret =
+      "SECRET_POST_PREPARATION_SETTLEMENT /Users/private/retry-token.json token=raw";
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const collaboration =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    installFirstAttemptCoordinatorAbort(bus);
+    (bus as any)._setNestedDispatchAttemptHooksForTest({
+      afterRetryPreparation: async () => {
+        abortRaceProbe.parentController?.abort({ kind: "parent_abort" });
+      },
+      settleAbort: async () => {
+        throw new Error(secret);
+      },
+    });
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool_parent_abort_controlled__",
+        name: "run_worker",
+        input: { to: AGENT_NAME, task: "force retry settlement failure" },
+      },
+      { type: "final", text: "handled retry settlement failure" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "__wait_for_abort__" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "exercise post-preparation settlement privacy",
+    });
+    await waitForQuiescent(TEST_UID, cid, 5000);
+
+    const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    const stepId = run?.steps[0]?.id || "";
+    const logs = JSON.stringify([
+      loggerMocks.debug.mock.calls,
+      loggerMocks.info.mock.calls,
+      loggerMocks.warn.mock.calls,
+      loggerMocks.error.mock.calls,
+    ]);
+    expect(logs).not.toContain(secret);
+    expect(logs).not.toContain("SECRET_POST_PREPARATION_SETTLEMENT");
+    expect(logs).not.toContain("/Users/private/retry-token.json");
+    expect(logs).not.toContain("token=raw");
+    const warnings = loggerMocks.warn.mock.calls.filter(
+      ([message]) => message === "nested abort settlement failed",
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.[1]).toMatchObject({
+      phase: "after_retry_preparation",
+      failure_code: "abort_settlement_failed",
+      error: expect.objectContaining({
+        message: "Nested abort settlement failed.",
+      }),
+    });
+    expect(warnings[0]?.[1]?.cid).not.toBe(cid);
+    expect(warnings[0]?.[1]?.step_id).not.toBe(stepId);
+  });
+
+  it("sanitizes named-member storage failure and stops before model dispatch", async () => {
+    const cid = newCid();
+    const secret =
+      "SECRET_MEMBER_STORAGE /Users/private/member-token.json token=raw";
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const collaboration =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const emitted: any[] = [];
+    (bus as any)._setNestedDispatchAttemptHooksForTest({
+      ensureMember: async () => {
+        throw new Error(secret);
+      },
+    });
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "run_worker",
+        input: { to: AGENT_NAME, task: "prepare named member" },
+      },
+      { type: "final", text: "handled member infrastructure failure" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "must not run" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, (event) => emitted.push(event));
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "exercise member storage failure",
+    });
+    await waitForQuiescent(TEST_UID, cid, 5000);
+
+    expect(
+      _recordedCalls.filter(
+        (call) => call.sid === state.buildGmemberSessionId(cid, AGENT_ID),
+      ),
+    ).toHaveLength(0);
+    expect(
+      _recordedCalls.filter((call) => call.sid.startsWith("gworker-")),
+    ).toHaveLength(0);
+    const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    expect(run?.steps[0]?.attempts).toHaveLength(1);
+    expect(run?.steps[0]?.attempts?.[0]).toMatchObject({
+      actor_id: AGENT_ID,
+      actor_kind: "agent",
+      status: "failed",
+      failure_code: "runtime_failed",
+    });
+    const toolResult = _recordedToolResults.find(
+      (result) => result.name === "run_worker",
+    );
+    expect(toolResult?.content).toContain(
+      'failure_code="nested_member_storage_failed"',
+    );
+    expect(toolResult?.content).toContain(
+      "Named Agent membership could not be prepared safely.",
+    );
+    expect(JSON.stringify(emitted)).not.toContain(secret);
+    const memberFailureLogs = loggerMocks.warn.mock.calls.filter(
+      ([message]) => message === "nested dispatch member preparation failed",
+    );
+    expect(memberFailureLogs).toHaveLength(1);
+    expect(memberFailureLogs[0]?.[1]).toMatchObject({
+      phase: "member_prepare",
+      failure_code: "nested_member_storage_failed",
+    });
+    expect(memberFailureLogs[0]?.[1]?.cid).not.toBe(cid);
+    expect(memberFailureLogs[0]?.[1]?.actor_id).not.toBe(AGENT_ID);
+    await expectNoLifecycleSecretLeak(cid, secret);
+  });
+
+  it.each(["named", "anonymous"] as const)(
+    "settles a $s attempt when runNestedDispatch throws after begin",
+    async (pathKind) => {
+      const cid = newCid();
+      const secret = "SECRET_EXECUTE_THROW";
+      const state = await import("../../../../src/main/features/group_chat/state");
+      const bus = await import("../../../../src/main/features/group_chat/bus");
+      const collaboration =
+        await import("../../../../src/main/features/group_chat/collaboration");
+      let injected = false;
+      (bus as any)._setNestedDispatchAttemptHooksForTest({
+        execute: async () => {
+          injected = true;
+          throw new Error(secret);
+        },
+      });
+      _setScript(state.buildGconvSessionId(cid), [
+        {
+          type: "__call_tool__",
+          name: "run_worker",
+          input:
+            pathKind === "named"
+              ? { to: AGENT_NAME, task: "execute lifecycle fault" }
+              : { task: "execute lifecycle fault" },
+        },
+        { type: "final", text: "handled lifecycle failure" },
+      ]);
+      bus.subscribe(TEST_UID, cid, () => {});
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: "user",
+        text: "exercise execute lifecycle failure",
+      });
+      await waitForQuiescent(TEST_UID, cid, 4000);
+
+      expect(injected).toBe(true);
+      expect(
+        _recordedCalls.filter(
+          (call) =>
+            call.sid === state.buildGmemberSessionId(cid, AGENT_ID),
+        ),
+      ).toHaveLength(0);
+      expect(
+        _recordedCalls.filter((call) => call.sid.startsWith("gworker-")),
+      ).toHaveLength(0);
+      const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+      const attempts = run?.steps[0]?.attempts || [];
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0]).toMatchObject({
+        actor_id: pathKind === "named" ? AGENT_ID : null,
+        actor_kind: pathKind === "named" ? "agent" : "anonymous_worker",
+        status: "failed",
+        failure_code: "runtime_failed",
+      });
+      expect(attempts.every((attempt) => attempt.status !== "running")).toBe(
+        true,
+      );
+      const auditEvents = await collaboration.readCollaborationEvents(
+        TEST_UID,
+        cid,
+        0,
+      );
+      expect(
+        auditEvents.filter((event) => event.type === "step_attempt_started"),
+      ).toHaveLength(attempts.length);
+      expect(
+        auditEvents.filter((event) => event.type === "step_attempt_finished"),
+      ).toHaveLength(attempts.length);
+      const toolResult = _recordedToolResults.find(
+        (result) => result.name === "run_worker",
+      );
+      expect(toolResult?.content).toContain('failure_code="runtime_failed"');
+      await expectNoLifecycleSecretLeak(cid, secret);
+    },
+  );
+
+  it.each([
+    { pathKind: "named", terminal: "completed" },
+    { pathKind: "anonymous", terminal: "completed" },
+    { pathKind: "named", terminal: "failed" },
+    { pathKind: "anonymous", terminal: "failed" },
+  ] as const)(
+    "does not duplicate or overwrite a durable $terminal $pathKind attempt when finish throws",
+    async ({ pathKind, terminal }) => {
+      const cid = newCid();
+      const secret = `SECRET_FINISH_${terminal.toUpperCase()}_THROW`;
+      const state = await import("../../../../src/main/features/group_chat/state");
+      const bus = await import("../../../../src/main/features/group_chat/bus");
+      const collaboration =
+        await import("../../../../src/main/features/group_chat/collaboration");
+      let injected = false;
+      (bus as any)._setNestedDispatchAttemptHooksForTest({
+        finish: async (
+          ...args: Parameters<
+            typeof collaboration.finishWorkflowStepAttempt
+          >
+        ) => {
+          const row = await collaboration.finishWorkflowStepAttempt(...args);
+          if (!injected) {
+            injected = true;
+            throw new Error(secret);
+          }
+          return row;
+        },
+      });
+      _setScript(state.buildGconvSessionId(cid), [
+        {
+          type: "__call_tool__",
+          name: "run_worker",
+          input:
+            pathKind === "named"
+              ? { to: AGENT_NAME, task: "finish lifecycle fault" }
+              : { task: "finish lifecycle fault" },
+        },
+        { type: "final", text: "handled lifecycle failure" },
+      ]);
+      const nestedEvents =
+        terminal === "completed"
+          ? [{ type: "final", text: "durable success" }]
+          : [{ type: "error", text: "expected nested failure" }];
+      if (pathKind === "named") {
+        _setScript(
+          state.buildGmemberSessionId(cid, AGENT_ID),
+          nestedEvents,
+        );
+      } else {
+        _setScript("gworker-*", nestedEvents);
+      }
+
+      bus.subscribe(TEST_UID, cid, () => {});
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: "user",
+        text: "exercise finish lifecycle failure",
+      });
+      await waitForQuiescent(TEST_UID, cid, 4000);
+
+      expect(injected).toBe(true);
+      expect(
+        _recordedCalls.filter(
+          (call) =>
+            call.sid === state.buildGmemberSessionId(cid, AGENT_ID),
+        ),
+      ).toHaveLength(pathKind === "named" ? 1 : 0);
+      expect(
+        _recordedCalls.filter((call) => call.sid.startsWith("gworker-")),
+      ).toHaveLength(pathKind === "anonymous" ? 1 : 0);
+      const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+      const attempts = run?.steps[0]?.attempts || [];
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0]).toMatchObject({
+        attempt: 1,
+        actor_id: pathKind === "named" ? AGENT_ID : null,
+        actor_kind: pathKind === "named" ? "agent" : "anonymous_worker",
+        status: terminal,
+        ...(terminal === "failed"
+          ? { failure_code: "runtime_failed" }
+          : {}),
+      });
+      expect(attempts.every((attempt) => attempt.status !== "running")).toBe(
+        true,
+      );
+      const auditEvents = await collaboration.readCollaborationEvents(
+        TEST_UID,
+        cid,
+        0,
+      );
+      expect(
+        auditEvents.filter((event) => event.type === "step_attempt_started"),
+      ).toHaveLength(attempts.length);
+      expect(
+        auditEvents.filter((event) => event.type === "step_attempt_finished"),
+      ).toHaveLength(attempts.length);
+      const toolResult = _recordedToolResults.find(
+        (result) => result.name === "run_worker",
+      );
+      if (terminal === "completed") {
+        expect(toolResult?.content).toContain("durable success");
+        expect(toolResult?.content).not.toContain(
+          'failure_code="runtime_failed"',
+        );
+      } else {
+        expect(toolResult?.content).toContain("expected nested failure");
+        expect(toolResult?.content).toContain(
+          `failure_code="${
+            pathKind === "named"
+              ? "model_stream_error"
+              : "nested_worker_error"
+          }"`,
+        );
+      }
+      await expectNoLifecycleSecretLeak(cid, secret);
+    },
+  );
+
+
+  it("sanitizes an unclassified nested exception and does not recover it", async () => {
+    const cid = newCid();
+    const secret =
+      "SECRET_NESTED_THROW /Users/private/token.txt api_token=raw-secret";
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const collaboration =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    const emitted: any[] = [];
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "run_worker",
+        input: { to: AGENT_NAME, task: "throw before nested body" },
+      },
+      { type: "final", text: "handled sanitized failure" },
+    ]);
+    bus._setActorTurnPreBodyHookForTest(async (_runtime, actor) => {
+      if (actor.id === AGENT_ID) throw new Error(secret);
+    });
+
+    try {
+      bus.subscribe(TEST_UID, cid, (event) => emitted.push(event));
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: "user",
+        text: "exercise nested exception privacy",
+      });
+      await waitForQuiescent(TEST_UID, cid, 5000);
+    } finally {
+      bus._setActorTurnPreBodyHookForTest(null);
+    }
+
+    expect(
+      _recordedCalls.filter(
+        (call) => call.sid === state.buildGmemberSessionId(cid, AGENT_ID),
+      ),
+    ).toHaveLength(0);
+    expect(
+      _recordedCalls.filter((call) => call.sid.startsWith("gworker-")),
+    ).toHaveLength(0);
+    const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    expect(run?.steps[0]?.attempts).toHaveLength(1);
+    expect(run?.steps[0]?.attempts?.[0]).toMatchObject({
+      status: "failed",
+      failure_code: "runtime_failed",
+    });
+    const toolResult = _recordedToolResults.find(
+      (result) => result.name === "run_worker",
+    );
+    expect(toolResult?.content).toContain(
+      'failure_code="nested_dispatch_error"',
+    );
+    expect(toolResult?.content).toContain(
+      "Nested dispatch failed unexpectedly.",
+    );
+    expect(JSON.stringify(emitted)).not.toContain(secret);
+    await expectNoLifecycleSecretLeak(cid, secret);
+  });
 
   it("dispatch_to (named) runs the agent IN-PROCESS, keeps the agent's visible bubble, and the commander synthesises (Option B) — no re-wake", async () => {
     const cid = newCid();
@@ -940,6 +3578,15 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       text: "写论文初稿",
     });
     await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const agentCall = _recordedCalls.find(
+      (call) => call.sid === state.buildGmemberSessionId(cid, AGENT_ID),
+    );
+    expect(agentCall?.message).toContain("<agent-task-introduction>");
+    expect(agentCall?.message).toContain("根据研究报告写论文初稿");
+    expect(agentCall?.message).toContain("得到可审阅论文初稿");
+    expect(agentCall?.message).toContain("生成论文初稿文件并说明结构");
+    expect(agentCall?.message).toContain("先用自然语言说明你理解的任务、预期结果和执行计划");
 
     const lines = await storage.readJsonl<any>(
       path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`),
@@ -1212,11 +3859,11 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
         calls: [
           {
             name: "dispatch_to",
-            input: { to: AGENT_NAME, message: "draft the copy" },
+            input: { to: AGENT_NAME, message: "draft the copy", access_mode: "read" },
           },
           {
             name: "dispatch_to",
-            input: { to: otherName, message: "review the copy" },
+            input: { to: otherName, message: "review the copy", access_mode: "read" },
           },
         ],
       },
@@ -1260,8 +3907,12 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       dispatchResults,
       "both dispatch_to calls should synchronously return worker results",
     ).toHaveLength(2);
-    expect(dispatchResults[0].content).toContain(WRITER_REPLY);
-    expect(dispatchResults[1].content).toContain(REVIEWER_REPLY);
+    expect(dispatchResults.map((result) => result.content)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(WRITER_REPLY),
+        expect.stringContaining(REVIEWER_REPLY),
+      ]),
+    );
     expect(
       dispatchResults.every((r) => r.executionMode === "parallel"),
       "dispatch_to must stay parallel-safe",
@@ -2540,7 +5191,7 @@ describe("group_chat bus integration › task terminal boundary", () => {
     _setScript(state.buildGconvSessionId(cid), [
       { type: "final", text: "done" },
     ]);
-    await bus.enqueue({
+    const triggerMessage = await bus.enqueue({
       uid: TEST_UID,
       cid,
       fromActorId: "user",
@@ -2555,7 +5206,10 @@ describe("group_chat bus integration › task terminal boundary", () => {
       user_id: TEST_UID,
       conversation_id: cid,
       status: "completed",
+      anchor_message_id: triggerMessage.id,
+      finished_message_id: expect.any(String),
     });
+    expect(terminals[0].finished_message_id).not.toBe(triggerMessage.id);
     expect(terminals[0].finished_at_ms).toBeGreaterThanOrEqual(
       terminals[0].started_at_ms,
     );
@@ -2617,6 +5271,35 @@ describe("group_chat bus integration › task terminal boundary", () => {
       cid,
       fromActorId: "user",
       text: `@${AGENT_NAME} start`,
+    });
+    await waitForQuiescent(TEST_UID, cid, 3000);
+    expect(await waitUntil(() => terminals.length === 1)).toBe(true);
+
+    expect(terminals[0].status).toBe("waiting_input");
+    unsubscribe();
+  }, 10_000);
+
+  it("classifies an explicit commander input request as waiting_input", async () => {
+    const cid = newCid();
+    const state =
+      await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const terminals: any[] = [];
+    const unsubscribe = bus.subscribeTaskTerminals((event) =>
+      terminals.push(event),
+    );
+
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "final",
+        text: '请选择论文类型和目标篇幅。\n<commander-result status="waiting_input" />',
+      },
+    ]);
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "帮我写一篇论文",
     });
     await waitForQuiescent(TEST_UID, cid, 3000);
     expect(await waitUntil(() => terminals.length === 1)).toBe(true);
@@ -3119,7 +5802,144 @@ describe("group_chat bus integration › Task 5 anonymous resume", () => {
   });
 });
 
+describe("group_chat bus integration › Commander KSTAR dispatch narration", () => {
+  it("declares task, plan, and expected result only after wake authorization", async () => {
+    process.env.ORKAS_P3394_WAKE_GATE = "1";
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const paths = await import("../../../../src/main/paths");
+    const wakeController = await import("../../../../src/main/features/p3394/wake-controller");
+    const wakeService = await import("../../../../src/main/features/p3394/wake-service");
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: {
+          to: AGENT_NAME,
+          message: "调研 Codex Work Buddy 前端 UI 并写优化需求文档",
+          kstar: "required",
+          kstar_reason: "这是面向后续设计的正式调研交付物",
+          kstar_expectation: {
+            task: "调研 Codex Work Buddy 前端 UI 并写优化需求文档",
+          },
+        },
+      },
+      { type: "final", text: "等待 Agent 唤醒授权。" },
+    ]);
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "让 Hermes 调研 Codex Work Buddy 前端 UI。",
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const readLines = () => fs
+      .readFileSync(path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`), "utf-8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    expect(readLines().some((message: any) => message.kstar_dispatch_narration)).toBe(false);
+
+    const [request] = await wakeService.listWakeRequests(TEST_UID, cid);
+    expect(request).toMatchObject({ status: "pending", agent_id: AGENT_ID });
+    await confirmKstarWakeForTest(cid, request!.id);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "HERMES-RESULT" },
+    ]);
+    await expect(wakeController.decideWakeRequest(TEST_UID, { requestId: request!.id, decision: "approve" })).resolves.toMatchObject({ ok: true, dispatched: true });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const lines = readLines();
+    const narrationIndex = lines.findIndex((message: any) => message.kstar_dispatch_narration);
+    const dispatchIndex = lines.findIndex((message: any) => message.from === "commander" && message.to?.includes(AGENT_ID) && String(message.text || "").includes("调研 Codex Work Buddy"));
+    expect(narrationIndex).toBeGreaterThanOrEqual(0);
+    expect(dispatchIndex).toBeGreaterThan(narrationIndex);
+    const narration = lines[narrationIndex];
+    expect(narration.from).toBe("commander");
+    expect(narration.text).toContain("调研 Codex Work Buddy 前端 UI 并写优化需求文档");
+    expect(narration.text).toContain("执行计划");
+    expect(narration.text).toContain("预期结果");
+    expect(narration.kstar_dispatch_narration).toMatchObject({ target_agent_id: AGENT_ID });
+  }, 12_000);
+});
+
 describe("group_chat bus integration › wake-gated dispatch continuation", () => {
+  it("emits KSTAR provenance on the terminal event for an approved dispatch_to Agent", async () => {
+    process.env.ORKAS_P3394_WAKE_GATE = "1";
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const wakeController = await import("../../../../src/main/features/p3394/wake-controller");
+    const wakeService = await import("../../../../src/main/features/p3394/wake-service");
+    const lifecycle = await import("../../../../src/main/features/kstar/lifecycle-adapter");
+
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: {
+          to: AGENT_NAME,
+          message: "Audit the paper",
+          kstar: "required",
+          kstar_reason: "The audit contributes evidence to the collaboration.",
+          kstar_expectation: {
+            task: "Audit the paper",
+            action_hat: "Produce an audit result",
+            result_hat: "Reviewable audit evidence",
+          },
+        },
+      },
+      { type: "final", text: "Waiting for Agent approval." },
+    ]);
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "Audit this paper, then have Codex review the result.",
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const [request] = await wakeService.listWakeRequests(TEST_UID, cid);
+    expect(request).toMatchObject({
+      source: "dispatch_to",
+      status: "pending",
+      workflow_step_id: expect.stringMatching(/^wstep-/),
+    });
+    await confirmKstarWakeForTest(cid, request!.id);
+    const lifecycleSnapshot = await lifecycle.readKstarTaskLifecycle(TEST_UID, cid);
+    const terminals: any[] = [];
+    const unsubscribe = bus.subscribeTaskTerminals((event) => terminals.push(event));
+
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "HERMES-AUDIT-RESULT" },
+    ]);
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "final", text: "CODEX-REVIEW-RESULT" },
+    ]);
+
+    const approved = await wakeController.decideWakeRequest(TEST_UID, {
+      requestId: request!.id,
+      decision: "approve",
+    });
+    expect(approved).toMatchObject({ ok: true, dispatched: true });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    expect(await waitUntil(() => terminals.length === 1)).toBe(true);
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]).toMatchObject({
+      status: "completed",
+      projection_id: lifecycleSnapshot.projection?.id,
+      wake_request_id: request!.id,
+      logical_run_id: lifecycleSnapshot.task?.id,
+      execution_id: request!.id,
+    });
+    unsubscribe();
+  }, 12_000);
+
   it("resumes Commander after an approved dispatch_to Agent completes without an explicit resume", async () => {
     process.env.ORKAS_P3394_WAKE_GATE = "1";
     const cid = newCid();
@@ -3162,6 +5982,7 @@ describe("group_chat bus integration › wake-gated dispatch continuation", () =
       workflow_step_id: expect.stringMatching(/^wstep-/),
     });
     expect(await readPendingKStarEvidence(TEST_UID)).toHaveLength(0);
+    await confirmKstarWakeForTest(cid, request!.id);
 
     _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
       { type: "final", text: "HERMES-AUDIT-RESULT" },
@@ -3411,7 +6232,21 @@ describe("group_chat bus integration › Task 5 actor-turn settlement wrapper", 
       bus._setActorTurnPreBodyHookForTest(null);
     }
     const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
-    expect(run?.steps[0]?.status).toBe("failed");
+    expect(run?.steps[0]?.status).toBe("completed");
+    expect(run?.steps[0]?.attempts).toMatchObject([
+      {
+        attempt: 1,
+        actor_id: AGENT_ID,
+        status: "failed",
+        failure_code: "dependency_failed",
+      },
+      {
+        attempt: 2,
+        actor_id: null,
+        actor_kind: "anonymous_worker",
+        status: "completed",
+      },
+    ]);
     const events = await collaboration.readCollaborationEvents(
       TEST_UID,
       cid,
@@ -3500,6 +6335,68 @@ describe("group_chat bus integration › Task 5 actor-turn settlement wrapper", 
     ).toHaveLength(1);
   });
 
+
+  it("redacts nested settlement and final-settlement failures", async () => {
+    const cid = newCid();
+    const settlementSecret =
+      "SECRET_SETTLEMENT /Users/private/workflow-token.json token=raw";
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const collaboration =
+      await import("../../../../src/main/features/group_chat/collaboration");
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "run_worker",
+        input: { task: "force settlement logging" },
+      },
+      { type: "final", text: "handled settlement failure" },
+    ]);
+    bus._setActorTurnPreBodyHookForTest(async (_runtime, actor) => {
+      if (actor.kind === "worker") throw new Error("pre-body infrastructure");
+    });
+    bus._setFinishNestedDispatchStepForTest(async () => {
+      throw new Error(settlementSecret);
+    });
+
+    try {
+      bus.subscribe(TEST_UID, cid, () => {});
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: "user",
+        text: "exercise settlement log privacy",
+      });
+      await waitForQuiescent(TEST_UID, cid, 5000);
+    } finally {
+      bus._setActorTurnPreBodyHookForTest(null);
+      bus._setFinishNestedDispatchStepForTest(null);
+    }
+
+    const allLogs = JSON.stringify([
+      loggerMocks.debug.mock.calls,
+      loggerMocks.info.mock.calls,
+      loggerMocks.warn.mock.calls,
+      loggerMocks.error.mock.calls,
+    ]);
+    expect(allLogs).not.toContain(settlementSecret);
+    const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    const stepId = run?.steps[0]?.id || "";
+    const settlementLogs = loggerMocks.warn.mock.calls.filter(([message]) =>
+      [
+        "nested workflow step settlement failed",
+        "nested workflow step final settlement failed",
+      ].includes(String(message)),
+    );
+    expect(settlementLogs).toHaveLength(2);
+    for (const [, data] of settlementLogs) {
+      expect(data?.cid).not.toBe(cid);
+      expect(data?.step_id).not.toBe(stepId);
+      expect(data?.error).toBeTruthy();
+      expect(JSON.stringify(data)).not.toContain(settlementSecret);
+    }
+  });
+
   it.each([1, 2])(
     "repairs the actor turn after %i forced finish persistence failure(s)",
     async (failures) => {
@@ -3562,4 +6459,1309 @@ describe("group_chat bus integration › Task 5 actor-turn settlement wrapper", 
       ).toHaveLength(1);
     },
   );
+});
+
+describe("group_chat bus integration › coordinator access admission", () => {
+  function installHeldWorker(
+    state: typeof import("../../../../src/main/features/group_chat/state"),
+    label: string,
+    probe: {
+      active: number;
+      maxActive: number;
+      starts: string[];
+      releases: Array<() => void>;
+    },
+  ): void {
+    _setScript("gworker-*", [
+      {
+        type: "delta",
+        text: `${label}-started`,
+        afterYield: () =>
+          new Promise<void>((resolve) => {
+            probe.active += 1;
+            probe.maxActive = Math.max(probe.maxActive, probe.active);
+            probe.starts.push(label);
+            let released = false;
+            probe.releases.push(() => {
+              if (released) return;
+              released = true;
+              probe.active -= 1;
+              resolve();
+            });
+          }),
+      },
+      { type: "final", text: `${label}-done` },
+    ]);
+  }
+
+  it("exposes dependency, capability, and access fields on every dispatch schema", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "__capture_tool_definitions__" },
+      { type: "final", text: "captured" },
+    ]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "inspect tools" });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+    for (const name of ["dispatch_to", "hand_off_to", "run_worker"]) {
+      const tool = _recordedToolDefinitions.find((candidate) => candidate.name === name);
+      expect(tool).toBeTruthy();
+      expect(tool?.inputSchema.properties).toMatchObject({
+        depends_on: { type: "array", items: { type: "string" } },
+        required_capabilities: { type: "array", items: { type: "string" } },
+        access_mode: { type: "string", enum: ["read", "write"] },
+        write_scopes: { type: "array", items: { type: "string" } },
+      });
+      expect(tool?.description).toContain("access_mode: read");
+      expect(tool?.description).toContain("workspace-relative paths");
+      expect(tool?.description).toContain("defaults to `write`");
+      expect(tool?.description).toContain("workflow step ids returned");
+    }
+  });
+
+  it("runs three explicit reads concurrently and makes a fourth wait for dispatchSlots", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const probe = { active: 0, maxActive: 0, starts: [] as string[], releases: [] as Array<() => void> };
+    for (const label of ["read-1", "read-2", "read-3", "read-4"])
+      installHeldWorker(state, label, probe);
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tools_parallel__",
+        calls: ["read-1", "read-2", "read-3", "read-4"].map((task) => ({
+          name: "run_worker",
+          input: { task, access_mode: "read" },
+        })),
+      },
+      { type: "final", text: "reads complete" },
+    ]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "read four things" });
+    expect(await waitUntil(() => probe.starts.length >= 3, 3000)).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const initialStarts = [...probe.starts];
+    const initialMax = probe.maxActive;
+    probe.releases.shift()?.();
+    expect(await waitUntil(() => probe.starts.length === 4, 3000)).toBe(true);
+    while (probe.releases.length) probe.releases.shift()?.();
+    await waitForQuiescent(TEST_UID, cid, 4000);
+    expect(initialMax).toBe(3);
+    expect(initialStarts).toEqual(["read-1", "read-2", "read-3"]);
+    expect(probe.maxActive).toBe(3);
+  }, 12_000);
+
+  it("serializes overlapping writes", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const probe = { active: 0, maxActive: 0, starts: [] as string[], releases: [] as Array<() => void> };
+    installHeldWorker(state, "write-1", probe);
+    installHeldWorker(state, "write-2", probe);
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tools_parallel__",
+        calls: ["write-1", "write-2"].map((task) => ({
+          name: "run_worker",
+          input: { task, access_mode: "write", write_scopes: ["shared"] },
+        })),
+      },
+      { type: "final", text: "writes complete" },
+    ]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "write shared state" });
+    expect(await waitUntil(() => probe.starts.length >= 1, 3000)).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const initialStarts = probe.starts.length;
+    probe.releases.shift()?.();
+    expect(await waitUntil(() => probe.starts.length === 2, 3000)).toBe(true);
+    while (probe.releases.length) probe.releases.shift()?.();
+    await waitForQuiescent(TEST_UID, cid, 4000);
+    expect(initialStarts).toBe(1);
+    expect(probe.maxActive).toBe(1);
+  }, 12_000);
+
+  it("allows disjoint writes to overlap", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const probe = { active: 0, maxActive: 0, starts: [] as string[], releases: [] as Array<() => void> };
+    installHeldWorker(state, "left", probe);
+    installHeldWorker(state, "right", probe);
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tools_parallel__",
+        calls: [
+          { name: "run_worker", input: { task: "left", access_mode: "write", write_scopes: ["left"] } },
+          { name: "run_worker", input: { task: "right", access_mode: "write", write_scopes: ["right"] } },
+        ],
+      },
+      { type: "final", text: "disjoint writes complete" },
+    ]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "write disjoint state" });
+    expect(await waitUntil(() => probe.starts.length === 2, 3000)).toBe(true);
+    expect(probe.maxActive).toBe(2);
+    while (probe.releases.length) probe.releases.shift()?.();
+    await waitForQuiescent(TEST_UID, cid, 4000);
+  }, 12_000);
+
+  it("serializes symlink aliases including prospective children", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const { getConversationWorkspacePath } = await import("../../../../src/main/features/group_chat/conv_workspace");
+    const workingDir = await getConversationWorkspacePath(TEST_UID, cid);
+    const target = path.join(workingDir, "scope-target");
+    const alias = path.join(workingDir, "scope-alias");
+    fs.mkdirSync(target, { recursive: true });
+    try { fs.symlinkSync(target, alias, "dir"); }
+    catch { return; }
+    const probe = { active: 0, maxActive: 0, starts: [] as string[], releases: [] as Array<() => void> };
+    installHeldWorker(state, "canonical-target", probe);
+    installHeldWorker(state, "canonical-alias", probe);
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tools_parallel__",
+        calls: [
+          {
+            name: "run_worker",
+            input: {
+              task: "canonical-target",
+              access_mode: "write",
+              write_scopes: ["scope-target/future"],
+            },
+          },
+          {
+            name: "run_worker",
+            input: {
+              task: "canonical-alias",
+              access_mode: "write",
+              write_scopes: ["scope-alias/future/child"],
+            },
+          },
+        ],
+      },
+      { type: "final", text: "aliases complete" },
+    ]);
+
+    try {
+      await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "write aliases" });
+      expect(await waitUntil(() => probe.starts.length >= 1, 3000)).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      const initialStarts = probe.starts.length;
+      probe.releases.shift()?.();
+      expect(await waitUntil(() => probe.starts.length === 2, 3000)).toBe(true);
+      while (probe.releases.length) probe.releases.shift()?.();
+      await waitForQuiescent(TEST_UID, cid, 4000);
+      expect(initialStarts).toBe(1);
+      expect(probe.maxActive).toBe(1);
+    } finally {
+      while (probe.releases.length) probe.releases.shift()?.();
+      fs.rmSync(alias, { force: true });
+      fs.rmSync(target, { recursive: true, force: true });
+    }
+  }, 12_000);
+
+  it("keeps a queued group-aborted step pending until terminal cancellation", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const collaboration = await import("../../../../src/main/features/group_chat/collaboration");
+    const { getConversationWorkspacePath } = await import("../../../../src/main/features/group_chat/conv_workspace");
+    const workingDir = await getConversationWorkspacePath(TEST_UID, cid);
+    const { canonicalizePath } = await import("../../../../src/main/util/path-sandbox");
+    const admissionRoot = path.parse(canonicalizePath(workingDir)).root;
+    bus.subscribe(TEST_UID, cid, () => {});
+    const admission = (bus._cidStateForTest(TEST_UID, cid) as any).accessAdmission;
+    const releaseActive = await admission.acquire({ mode: "write", scopes: [admissionRoot] });
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "run_worker",
+        input: { task: "queued-only", access_mode: "write" },
+      },
+    ]);
+    _setScript("gworker-*", [{ type: "final", text: "MUST NOT EXECUTE" }]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "queue then abort" });
+    expect(await waitUntil(() => admission.waiters.length === 1, 3000)).toBe(true);
+    const queuedRun = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    const queuedStep = queuedRun?.steps.find((step) => step.dispatch_intent === "queued-only");
+    const statusWhileQueued = queuedStep?.status;
+    await bus.abort(TEST_UID, cid);
+    releaseActive();
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const settledRun = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    const settled = settledRun?.steps.find((step) => step.id === queuedStep?.id);
+    expect(statusWhileQueued).toBe("pending");
+    expect(settled).toMatchObject({ status: "skipped" });
+    expect(settled?.attempts || []).toHaveLength(0);
+    expect(_recordedCalls.filter((call) => call.sid.startsWith("gworker-"))).toHaveLength(0);
+    expect(loggerMocks.info.mock.calls.filter(([message]) => message === "coordinator transition")).toHaveLength(0);
+    const stateFile = await state.readState(TEST_UID, cid);
+    expect(stateFile.active_recipient).toBeUndefined();
+    expect(stateFile.orchestration_ledger).toBeUndefined();
+  }, 12_000);
+
+  it("terminally settles an onVisible infrastructure throw after start", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const collaboration = await import("../../../../src/main/features/group_chat/collaboration");
+    const sentinel = "RAW_VISIBLE_SENTINEL /private/path token=secret";
+    (bus as any)._setBeforeVisibleDispatchForTest?.(() => {
+      throw new Error(sentinel);
+    });
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: {
+          to: AGENT_NAME,
+          message: "visible-infrastructure-failure",
+          access_mode: "read",
+        },
+      },
+      { type: "final", text: "commander recovered" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "MUST NOT EXECUTE" },
+    ]);
+
+    try {
+      await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "visible failure" });
+      await waitForQuiescent(TEST_UID, cid, 4000);
+    } finally {
+      (bus as any)._setBeforeVisibleDispatchForTest?.(null);
+    }
+
+    expect(_recordedToolErrors).toContainEqual({
+      name: "dispatch_to",
+      nameOfError: "Error",
+      message: "nested dispatch infrastructure failed",
+    });
+    expect(JSON.stringify(_recordedToolErrors)).not.toContain(sentinel);
+    expect(
+      _recordedCalls.filter(
+        (call) => call.sid === state.buildGmemberSessionId(cid, AGENT_ID),
+      ),
+    ).toHaveLength(0);
+    const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    const step = run?.steps.find(
+      (candidate) =>
+        candidate.dispatch_intent === "visible-infrastructure-failure",
+    );
+    expect(step).toMatchObject({
+      status: "failed",
+      result_summary: "Nested dispatch infrastructure failed.",
+    });
+    expect(step?.attempts || []).toHaveLength(0);
+    const context = await collaboration.readActiveSharedTaskContext(TEST_UID, cid);
+    expect(context?.gates.filter((gate) => gate.step_id === step?.id)).toHaveLength(1);
+    const events = await collaboration.readCollaborationEvents(TEST_UID, cid, 0);
+    for (const type of ["step_started", "step_completed", "gate_recorded"]) {
+      expect(
+        events.filter(
+          (event) => event.type === type && event.step_id === step?.id,
+        ),
+      ).toHaveLength(1);
+    }
+    expect((bus._cidStateForTest(TEST_UID, cid) as any)?.accessAdmission?.active).toHaveLength(0);
+    expect(loggerMocks.info.mock.calls.filter(([message]) => message === "coordinator transition")).toHaveLength(0);
+    expect((await state.readState(TEST_UID, cid)).active_recipient).toBeUndefined();
+  }, 12_000);
+
+  it("propagates a stable invariant when post-start infrastructure settlement fails", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const sentinel = "RAW_POST_START_SETTLEMENT_SENTINEL /private/path";
+    (bus as any)._setBeforeVisibleDispatchForTest?.(() => {
+      throw new Error("RAW_VISIBLE_TRIGGER");
+    });
+    (bus as any)._setNestedDispatchAttemptHooksForTest({
+      settleInfrastructure: async () => {
+        throw new Error(sentinel);
+      },
+    });
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: { to: AGENT_NAME, message: "persistent-post-start", access_mode: "read" },
+      },
+      { type: "final", text: "commander observed failure" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "MUST NOT EXECUTE" },
+    ]);
+
+    try {
+      await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "persistent post-start" });
+      await waitForQuiescent(TEST_UID, cid, 4000);
+    } finally {
+      (bus as any)._setBeforeVisibleDispatchForTest?.(null);
+      (bus as any)._setNestedDispatchAttemptHooksForTest(null);
+    }
+
+    expect(_recordedToolErrors).toContainEqual({
+      name: "dispatch_to",
+      nameOfError: "Error",
+      message: "nested dispatch infrastructure settlement failed",
+    });
+    expect(JSON.stringify(_recordedToolErrors)).not.toContain(sentinel);
+    expect(
+      _recordedCalls.filter(
+        (call) => call.sid === state.buildGmemberSessionId(cid, AGENT_ID),
+      ),
+    ).toHaveLength(0);
+    const logs = JSON.stringify(loggerMocks.warn.mock.calls);
+    expect(logs).toContain("nested dispatch infrastructure settlement invariant");
+    expect(logs).not.toContain(sentinel);
+  }, 12_000);
+
+  it("propagates a stable failure when queued abort settlement cannot be established", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const collaboration = await import("../../../../src/main/features/group_chat/collaboration");
+    const { getConversationWorkspacePath } = await import("../../../../src/main/features/group_chat/conv_workspace");
+    const { canonicalizePath } = await import("../../../../src/main/util/path-sandbox");
+    const workingDir = await getConversationWorkspacePath(TEST_UID, cid);
+    const admissionRoot = path.parse(canonicalizePath(workingDir)).root;
+    const sentinel = "RAW_CANCEL_SENTINEL /private/path token=secret";
+    bus.subscribe(TEST_UID, cid, () => {});
+    const admission = (bus._cidStateForTest(TEST_UID, cid) as any).accessAdmission;
+    const releaseActive = await admission.acquire({ mode: "write", scopes: [admissionRoot] });
+    (bus as any)._setNestedDispatchAttemptHooksForTest({
+      settleAbort: async () => {
+        throw new Error(sentinel);
+      },
+    });
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "run_worker",
+        input: { task: "persistent-cancel-failure", access_mode: "write" },
+      },
+    ]);
+    _setScript("gworker-*", [{ type: "final", text: "MUST NOT EXECUTE" }]);
+
+    try {
+      await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "abort with failed settlement" });
+      expect(await waitUntil(() => admission.waiters.length === 1, 3000)).toBe(true);
+      await bus.abort(TEST_UID, cid);
+      releaseActive();
+      await waitForQuiescent(TEST_UID, cid, 4000);
+    } finally {
+      (bus as any)._setNestedDispatchAttemptHooksForTest(null);
+    }
+
+    expect(_recordedToolErrors).toContainEqual({
+      name: "run_worker",
+      nameOfError: "Error",
+      message: "queued nested dispatch cancellation settlement failed",
+    });
+    expect(JSON.stringify(_recordedToolErrors)).not.toContain(sentinel);
+    expect(_recordedCalls.filter((call) => call.sid.startsWith("gworker-"))).toHaveLength(0);
+    const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    const step = run?.steps.find((candidate) => candidate.dispatch_intent === "persistent-cancel-failure");
+    expect(step).toMatchObject({ status: "pending" });
+    expect(step?.attempts || []).toHaveLength(0);
+    const allLogs = JSON.stringify(loggerMocks.warn.mock.calls);
+    expect(allLogs).toContain("queued nested dispatch cancellation settlement invariant");
+    expect(allLogs).not.toContain(sentinel);
+  }, 12_000);
+
+  it("aborts a queued conflicting request without executing it", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tools_parallel__",
+        calls: [
+          { name: "run_worker", input: { task: "active write", access_mode: "write", write_scopes: ["shared"] } },
+          { name: "run_worker", input: { task: "queued write", access_mode: "write", write_scopes: ["shared"] } },
+        ],
+      },
+    ]);
+    _setScript("gworker-*", [{ type: "__wait_for_abort__" }]);
+    _setScript("gworker-*", [{ type: "final", text: "MUST NOT EXECUTE" }]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "abort queued write" });
+    expect(
+      await waitUntil(
+        () => _recordedCalls.some((call) => call.sid.startsWith("gworker-")),
+        3000,
+      ),
+    ).toBe(true);
+    await bus.abort(TEST_UID, cid);
+    await waitForQuiescent(TEST_UID, cid, 4000);
+    expect(_recordedCalls.filter((call) => call.sid.startsWith("gworker-"))).toHaveLength(1);
+    expect(JSON.stringify(_recordedCalls)).not.toContain("MUST NOT EXECUTE");
+    expect((bus._cidStateForTest(TEST_UID, cid) as any)?.accessAdmission?.waiters).toHaveLength(0);
+  }, 12_000);
+
+  it("returns a privacy-safe blocked result for incomplete dependencies without executing", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "run_worker",
+        input: {
+          task: "SECRET task text",
+          depends_on: ["wstep-missing"],
+          access_mode: "read",
+        },
+      },
+      { type: "final", text: "blocked" },
+    ]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "dependency gate" });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+    const result = JSON.parse(_recordedToolResults.find((entry) => entry.name === "run_worker")!.content);
+    expect(result).toEqual({
+      ok: false,
+      status: "dispatch_blocked_by_dependencies",
+      workflow_step_id: expect.stringMatching(/^wstep-/),
+      resume_token: expect.stringMatching(/^wcap-/),
+      missing_dependencies: ["wstep-missing"],
+    });
+    expect(JSON.stringify(result)).not.toContain("SECRET");
+    expect(_recordedCalls.filter((call) => call.sid.startsWith("gworker-"))).toHaveLength(0);
+  });
+
+  it("rejects every malformed write scope declaration without admission or dispatch", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const malformed = [
+      "src",
+      "",
+      "   ",
+      1,
+      true,
+      {},
+      null,
+      [1],
+      [true],
+      [{}],
+      [null],
+      [""],
+      ["   "],
+      ["src", null],
+    ];
+    _setScript(state.buildGconvSessionId(cid), [
+      ...malformed.map((writeScopes, index) => ({
+        type: "__call_tool__",
+        name: "run_worker",
+        input: {
+          task: `malformed-${index}`,
+          access_mode: "write",
+          write_scopes: writeScopes,
+        },
+      })),
+      { type: "final", text: "rejected" },
+    ]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "invalid scopes" });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+    const results = _recordedToolResults
+      .filter((entry) => entry.name === "run_worker")
+      .map((entry) => JSON.parse(entry.content));
+    expect(results).toHaveLength(malformed.length);
+    expect(results.map((result) => result.error)).toEqual(
+      malformed.map(() => "write_scopes must be an array of non-empty strings"),
+    );
+    expect(_recordedCalls.filter((call) => call.sid.startsWith("gworker-"))).toHaveLength(0);
+    const admission = (bus._cidStateForTest(TEST_UID, cid) as any)?.accessAdmission;
+    expect(admission?.active).toHaveLength(0);
+    expect(admission?.waiters).toHaveLength(0);
+  });
+
+  it("rejects an escaping scope without widening to the workspace", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "run_worker",
+        input: {
+          task: "escape",
+          access_mode: "write",
+          write_scopes: ["../outside"],
+        },
+      },
+      { type: "final", text: "rejected" },
+    ]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "escaping scope" });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+    const result = JSON.parse(
+      _recordedToolResults.find((entry) => entry.name === "run_worker")!.content,
+    );
+    expect(result.error).toBe(
+      "write_scopes must stay inside the conversation workspace",
+    );
+    expect(_recordedCalls.filter((call) => call.sid.startsWith("gworker-"))).toHaveLength(0);
+  });
+
+  it("uses the locked start boundary when a dependency changes after prepare", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const collaboration = await import("../../../../src/main/features/group_chat/collaboration");
+    const storage = await import("../../../../src/main/storage");
+    const dependency = await collaboration.prepareNestedDispatchStep(TEST_UID, cid, {
+      objective: "Dependency race",
+      actor_id: "agent-dependency",
+      source_tool: "dispatch_to",
+      task: "Dependency",
+    });
+    await collaboration.startPreparedNestedDispatchStep(TEST_UID, cid, dependency.step.id);
+    await collaboration.finishNestedDispatchStep(TEST_UID, cid, dependency.step.id, {
+      result: "complete before prepare",
+    });
+    let raced = false;
+    (bus as any)._setBeforeNestedDispatchStartForTest?.(async () => {
+      if (raced) return;
+      raced = true;
+      const runFile = collaboration
+        .collaborationPaths(TEST_UID, cid)
+        .runFile(dependency.run.id);
+      const run = await storage.readJson<any>(runFile);
+      const storedDependency = run.steps.find(
+        (step: any) => step.id === dependency.step.id,
+      );
+      storedDependency.status = "pending";
+      delete storedDependency.completed_at;
+      await storage.writeJson(runFile, run);
+    });
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "run_worker",
+        input: {
+          task: "must be blocked by the actual start",
+          depends_on: [dependency.step.id],
+          access_mode: "read",
+        },
+      },
+      { type: "final", text: "blocked" },
+    ]);
+    _setScript("gworker-*", [{ type: "final", text: "MUST NOT EXECUTE" }]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "race dependency" });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+    expect(raced).toBe(true);
+    const result = JSON.parse(
+      _recordedToolResults.find((entry) => entry.name === "run_worker")!.content,
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      status: "dispatch_blocked_by_dependencies",
+      missing_dependencies: [dependency.step.id],
+    });
+    expect(_recordedCalls.filter((call) => call.sid.startsWith("gworker-"))).toHaveLength(0);
+    const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    const dependent = run?.steps.find((step) => step.id === result.workflow_step_id);
+    expect(dependent).toMatchObject({ status: "pending" });
+    expect(dependent?.attempts || []).toHaveLength(0);
+  });
+
+  it("does not move handoff floor or ledger before queued admission", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const collaboration = await import("../../../../src/main/features/group_chat/collaboration");
+    const paths = await import("../../../../src/main/paths");
+    const { getConversationWorkspacePath } = await import("../../../../src/main/features/group_chat/conv_workspace");
+    const agentFile = path.join(paths.agentDir(TEST_UID, AGENT_ID), "agent.json");
+    const agent = JSON.parse(fs.readFileSync(agentFile, "utf8"));
+    fs.writeFileSync(agentFile, JSON.stringify({ ...agent, interactive: true }), "utf8");
+    const workingDir = await getConversationWorkspacePath(TEST_UID, cid);
+    const { canonicalizePath } = await import("../../../../src/main/util/path-sandbox");
+    const admissionRoot = path.parse(canonicalizePath(workingDir)).root;
+    bus.subscribe(TEST_UID, cid, () => {});
+    const admission = (bus._cidStateForTest(TEST_UID, cid) as any).accessAdmission;
+    const releaseActive = await admission.acquire({ mode: "write", scopes: [admissionRoot] });
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "hand_off_to",
+        input: {
+          to: AGENT_NAME,
+          message: "queued-handoff",
+          resume: "continue after handoff",
+          access_mode: "write",
+        },
+      },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "MUST NOT EXECUTE" },
+    ]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "queue handoff" });
+    expect(await waitUntil(() => admission.waiters.length === 1, 3000)).toBe(true);
+    const queuedState = await state.readState(TEST_UID, cid);
+    const queuedRun = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    const queuedStep = queuedRun?.steps.find((step) => step.dispatch_intent === "queued-handoff");
+    await bus.abort(TEST_UID, cid);
+    releaseActive();
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const settledRun = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    const settled = settledRun?.steps.find((step) => step.id === queuedStep?.id);
+    expect(queuedStep?.status).toBe("pending");
+    expect(queuedState.active_recipient).toBeUndefined();
+    expect(queuedState.orchestration_ledger).toBeUndefined();
+    expect(settled).toMatchObject({ status: "skipped" });
+    expect(settled?.attempts || []).toHaveLength(0);
+    expect(_recordedCalls.filter((call) => call.sid === state.buildGmemberSessionId(cid, AGENT_ID))).toHaveLength(0);
+  }, 12_000);
+
+  it("dropConv terminally cancels a queued dispatch and a recreated cid admits normally", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const collaboration = await import("../../../../src/main/features/group_chat/collaboration");
+    const { getConversationWorkspacePath } = await import("../../../../src/main/features/group_chat/conv_workspace");
+    const workingDir = await getConversationWorkspacePath(TEST_UID, cid);
+    const { canonicalizePath } = await import("../../../../src/main/util/path-sandbox");
+    const admissionRoot = path.parse(canonicalizePath(workingDir)).root;
+    bus.subscribe(TEST_UID, cid, () => {});
+    const oldState = bus._cidStateForTest(TEST_UID, cid) as any;
+    const admission = oldState.accessAdmission;
+    const releaseActive = await admission.acquire({ mode: "write", scopes: [admissionRoot] });
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "run_worker",
+        input: { task: "drop-queued", access_mode: "write" },
+      },
+    ]);
+    _setScript("gworker-*", [{ type: "final", text: "MUST NOT EXECUTE" }]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "queue then drop" });
+    expect(await waitUntil(() => admission.waiters.length === 1, 3000)).toBe(true);
+    const queuedRun = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    const queuedStep = queuedRun?.steps.find((step) => step.dispatch_intent === "drop-queued");
+    const statusWhileQueued = queuedStep?.status;
+    await bus.dropConv(TEST_UID, cid);
+    releaseActive();
+
+    const settledRun = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    const settled = settledRun?.steps.find((step) => step.id === queuedStep?.id);
+    expect(statusWhileQueued).toBe("pending");
+    expect(settled).toMatchObject({ status: "skipped" });
+    expect(settled?.attempts || []).toHaveLength(0);
+    expect(_recordedCalls.filter((call) => call.sid.startsWith("gworker-"))).toHaveLength(0);
+    expect(admission.waiters).toHaveLength(0);
+    expect(bus._cidStateForTest(TEST_UID, cid)).toBeNull();
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    const recreated = bus._cidStateForTest(TEST_UID, cid) as any;
+    expect(recreated.accessAdmission).not.toBe(admission);
+    const releaseRecreated = await recreated.accessAdmission.acquire({
+      mode: "write",
+      scopes: [workingDir],
+    });
+    releaseRecreated();
+    expect(recreated.accessAdmission.active).toHaveLength(0);
+  }, 12_000);
+});
+
+describe("group_chat bus integration › Task 10 transactional handoff finalization", () => {
+  async function setAgentInteractive(agentId: string, interactive: boolean): Promise<void> {
+    const paths = await import("../../../../src/main/paths");
+    const file = path.join(paths.agentDir(TEST_UID, agentId), "agent.json");
+    const agent = JSON.parse(fs.readFileSync(file, "utf8"));
+    fs.writeFileSync(file, JSON.stringify({ ...agent, interactive }), "utf8");
+  }
+
+  async function installFallback(input: {
+    cid: string;
+    id: string;
+    name: string;
+    interactive?: boolean;
+  }): Promise<void> {
+    await seedAgent({
+      id: input.id,
+      name: input.name,
+      description: "final delivery recovery specialist",
+      workflow: "recover final delivery",
+    });
+    if (input.interactive) await setAgentInteractive(input.id, true);
+    await addAgentMember(input.cid, input.id, input.name);
+  }
+
+  function handoffResult() {
+    return _recordedToolResults.find((result) => result.name === "hand_off_to");
+  }
+
+  it("commits the recovered interactive fallback as the floor and waiting-ledger owner", async () => {
+    const cid = newCid();
+    const fallbackId = "a101a101a101";
+    const fallbackName = "RecoveryGuide";
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    await setAgentInteractive(AGENT_ID, true);
+    await installFallback({ cid, id: fallbackId, name: fallbackName, interactive: true });
+    installFirstAttemptCoordinatorAbort(bus);
+    _setScript(state.buildGconvSessionId(cid), [{
+      type: "__call_tool__",
+      name: "hand_off_to",
+      input: {
+        to: AGENT_NAME,
+        message: "recover final delivery",
+        resume: "Continue the original goal after the guide hands back.",
+        required_capabilities: ["recovery"],
+      },
+    }]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [{ type: "__wait_for_abort__" }]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [{ type: "error", text: "retry failed" }]);
+    _setScript(state.buildGmemberSessionId(cid, fallbackId), [{ type: "final", text: "fallback delivered" }]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "deliver with recovery" });
+    await waitForQuiescent(TEST_UID, cid, 5000);
+
+    const persisted = await state.readState(TEST_UID, cid);
+    expect(persisted.active_recipient).toBe(fallbackId);
+    expect(persisted.orchestration_ledger).toMatchObject({
+      status: "waiting_for_agent",
+      owner_agent_id: fallbackId,
+      owner_agent_name: fallbackName,
+      handoff_message: "recover final delivery",
+      resume_instruction: "Continue the original goal after the guide hands back.",
+    });
+    expect(handoffResult()?.endTurn).toBe(true);
+    expect(handoffResult()?.isError).toBeUndefined();
+  });
+
+  it("leaves Commander with no waiting ledger or terminal delivery when recovery exhausts", async () => {
+    const cid = newCid();
+    const fallbackId = "a202a202a202";
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    await setAgentInteractive(AGENT_ID, true);
+    await installFallback({ cid, id: fallbackId, name: "FailedFallback", interactive: true });
+    installFirstAttemptCoordinatorAbort(bus);
+    let terminalCalls = 0;
+    (bus as any)._setTerminalHandoffObserverForTest?.(() => { terminalCalls += 1; });
+    _setScript(state.buildGconvSessionId(cid), [{
+      type: "__call_tool__",
+      name: "hand_off_to",
+      input: { to: AGENT_NAME, message: "exhaust handoff", resume: "resume later" },
+    }, { type: "final", text: "Commander retained control" }]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [{ type: "__wait_for_abort__" }]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [{ type: "error", text: "retry failed" }]);
+    _setScript(state.buildGmemberSessionId(cid, fallbackId), [{ type: "error", text: "fallback failed" }]);
+    _setScript("gworker-*", [{ type: "error", text: "anonymous failed" }]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "exhaust all attempts" });
+    await waitForQuiescent(TEST_UID, cid, 5000);
+
+    const persisted = await state.readState(TEST_UID, cid);
+    expect(persisted.active_recipient).toBeUndefined();
+    expect(persisted.orchestration_ledger).toBeUndefined();
+    expect(terminalCalls).toBe(0);
+    expect(handoffResult()?.endTurn).toBeUndefined();
+    expect(handoffResult()?.isError).toBeUndefined();
+    expect(handoffResult()?.content).toContain('failure_code="coordinator_exhausted"');
+  });
+
+  it("signals terminal handoff exactly once and only after final state is durable", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const { conversationLayout } = await import("../../../../src/main/util/project-layout");
+    await setAgentInteractive(AGENT_ID, true);
+    const committedSnapshots: any[] = [];
+    (bus as any)._setTerminalHandoffObserverForTest?.(() => {
+      committedSnapshots.push(JSON.parse(fs.readFileSync(conversationLayout(TEST_UID, cid).stateFile, "utf8")));
+    });
+    _setScript(state.buildGconvSessionId(cid), [{
+      type: "__call_tool__",
+      name: "hand_off_to",
+      input: { to: AGENT_NAME, message: "durable terminal", resume: "resume after reply" },
+    }]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [{ type: "final", text: "durable reply" }]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "commit before terminal" });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    expect(committedSnapshots).toHaveLength(1);
+    expect(committedSnapshots[0]).toMatchObject({
+      active_recipient: AGENT_ID,
+      orchestration_ledger: { owner_agent_id: AGENT_ID, status: "waiting_for_agent" },
+    });
+    expect(handoffResult()?.endTurn).toBe(true);
+  });
+
+  it("pauses on a recovered fallback form with the actual actor owning floor and form ledger", async () => {
+    const cid = newCid();
+    const fallbackId = "a303a303a303";
+    const fallbackName = "FormRecovery";
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    await setAgentInteractive(AGENT_ID, true);
+    await installFallback({ cid, id: fallbackId, name: fallbackName });
+    installFirstAttemptCoordinatorAbort(bus);
+    let terminalCalls = 0;
+    (bus as any)._setTerminalHandoffObserverForTest?.(() => { terminalCalls += 1; });
+    const formPayload = {
+      fields: [{ id: "topic", label: "Topic", type: "text", required: true }],
+    };
+    _setScript(state.buildGconvSessionId(cid), [{
+      type: "__call_tool__",
+      name: "hand_off_to",
+      input: {
+        to: AGENT_NAME,
+        message: "recover and collect input",
+        resume: "finish after form",
+        required_capabilities: ["recovery"],
+      },
+    }, { type: "final", text: "paused for form" }]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [{ type: "__wait_for_abort__" }]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [{ type: "error", text: "retry failed" }]);
+    _setScript(state.buildGmemberSessionId(cid, fallbackId), [{
+      type: "final",
+      text: `Need input.\n<agent-input-form>\n${JSON.stringify(formPayload)}\n</agent-input-form>`,
+    }]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "recover to a form" });
+    await waitForQuiescent(TEST_UID, cid, 5000);
+
+    const persisted = await state.readState(TEST_UID, cid);
+    expect(persisted.active_recipient).toBe(fallbackId);
+    expect(persisted.orchestration_ledger).toMatchObject({
+      status: "waiting_for_form",
+      blocked_on: "agent_form",
+      owner_agent_id: fallbackId,
+      owner_agent_name: fallbackName,
+    });
+    expect(handoffResult()?.content).toContain(`<blocked-on-form form_id="${persisted.orchestration_ledger?.form_id}" agent_id="${fallbackId}" />`);
+    expect(handoffResult()?.endTurn).toBeUndefined();
+    expect(terminalCalls).toBe(0);
+    expect(
+      _recordedCalls.filter((call) => call.sid.startsWith("gworker-")),
+    ).toHaveLength(0);
+  });
+
+  it("restores Commander after successful final delivery by a noninteractive named Agent", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    (bus as any)._setBeforeVisibleDispatchForTest(async () => {
+      await state.setActiveRecipient(TEST_UID, cid, AGENT_ID);
+    });
+    _setScript(state.buildGconvSessionId(cid), [{
+      type: "__call_tool__",
+      name: "hand_off_to",
+      input: { to: AGENT_NAME, message: "one-shot final" },
+    }]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [{ type: "final", text: "one-shot delivered" }]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "force commander final",
+      forceTo: ["commander"],
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    expect((await state.readState(TEST_UID, cid)).active_recipient).toBeUndefined();
+    expect(handoffResult()?.endTurn).toBe(true);
+  });
+
+  it("rejects a successful anonymous final outcome without assigning it the floor", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    installFirstAttemptCoordinatorAbort(bus);
+    let terminalCalls = 0;
+    (bus as any)._setTerminalHandoffObserverForTest?.(() => { terminalCalls += 1; });
+    _setScript(state.buildGconvSessionId(cid), [{
+      type: "__call_tool__",
+      name: "hand_off_to",
+      input: { to: AGENT_NAME, message: "anonymous cannot own final" },
+    }, { type: "final", text: "Commander handles invalid final actor" }]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [{ type: "__wait_for_abort__" }]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [{ type: "error", text: "retry failed" }]);
+    _setScript("gworker-*", [{ type: "final", text: "anonymous success" }]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "do not hand floor to anonymous" });
+    await waitForQuiescent(TEST_UID, cid, 5000);
+
+    expect((await state.readState(TEST_UID, cid)).active_recipient).toBeUndefined();
+    expect(handoffResult()).toMatchObject({
+      content: JSON.stringify({ ok: false, error: "Handoff final delivery requires a named Agent." }),
+      isError: true,
+    });
+    expect(handoffResult()?.endTurn).toBeUndefined();
+    expect(terminalCalls).toBe(0);
+  });
+
+  it("rolls back a failed post-reply state commit and logs restoration failures without private data", async () => {
+    const cid = newCid();
+    const secret = "SECRET task /private/path RecoveryGuide raw error";
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    await setAgentInteractive(AGENT_ID, true);
+    let terminalCalls = 0;
+    (bus as any)._setTerminalHandoffObserverForTest?.(() => { terminalCalls += 1; });
+    (bus as any)._setHandoffStateHooksForTest?.({
+      commitHandoffState: async (...args: Parameters<typeof state.commitHandoffState>) => {
+        const committed = await state.commitHandoffState(...args);
+        throw Object.assign(new Error(secret), {
+          rollbackToken: committed.rollbackToken,
+        });
+      },
+      rollbackHandoffState: async (...args: Parameters<typeof state.rollbackHandoffState>) => {
+        await state.rollbackHandoffState(...args);
+        throw new Error(secret);
+      },
+    });
+    _setScript(state.buildGconvSessionId(cid), [{
+      type: "__call_tool__",
+      name: "hand_off_to",
+      input: { to: AGENT_NAME, message: secret, resume: "private resume" },
+    }, { type: "final", text: "Commander recovered state failure" }]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [{ type: "final", text: "successful Agent reply" }]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "state transaction" });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const persisted = await state.readState(TEST_UID, cid);
+    expect(persisted.active_recipient).toBeUndefined();
+    expect(persisted.orchestration_ledger).toBeUndefined();
+    expect(handoffResult()).toMatchObject({
+      content: JSON.stringify({ ok: false, error: "Handoff state could not be finalized safely." }),
+      isError: true,
+    });
+    expect(handoffResult()?.endTurn).toBeUndefined();
+    expect(terminalCalls).toBe(0);
+    const handoffWarnings = loggerMocks.warn.mock.calls.filter(
+      ([message]) => String(message).startsWith("handoff finalization"),
+    );
+    expect(handoffWarnings.map(([message]) => message)).toEqual([
+      "handoff finalization state commit failed",
+      "handoff finalization rollback failed",
+    ]);
+    expect(handoffWarnings[0]?.[1]).toMatchObject({
+      cid: `${cid.slice(0, 4)}...${cid.slice(-4)}`,
+      actor_id: `${AGENT_ID.slice(0, 4)}...${AGENT_ID.slice(-4)}`,
+      error: {
+        name: "Error",
+        message: "Handoff durable finalization failed.",
+      },
+    });
+    expect(handoffWarnings[1]?.[1]).toMatchObject({
+      error: {
+        name: "Error",
+        message: "Handoff state rollback failed.",
+      },
+    });
+    const warningText = JSON.stringify(handoffWarnings);
+    expect(warningText).not.toContain(secret);
+    expect(warningText).not.toContain("private resume");
+    expect(warningText).not.toContain(AGENT_NAME);
+    expect(warningText).not.toContain(AGENT_ID);
+    expect(warningText).not.toContain(cid);
+  });
+});
+
+describe("group_chat bus integration › Task 10 handoff finalization races", () => {
+  async function makeInteractive(): Promise<void> {
+    const paths = await import("../../../../src/main/paths");
+    const file = path.join(paths.agentDir(TEST_UID, AGENT_ID), "agent.json");
+    const agent = JSON.parse(fs.readFileSync(file, "utf8"));
+    fs.writeFileSync(file, JSON.stringify({ ...agent, interactive: true }), "utf8");
+  }
+
+  function resultForHandoff() {
+    return _recordedToolResults.find((result) => result.name === "hand_off_to");
+  }
+
+  async function expectFailedFinalization(cid: string) {
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const collaboration = await import("../../../../src/main/features/group_chat/collaboration");
+    const persisted = await state.readState(TEST_UID, cid);
+    expect(persisted.active_recipient).toBeUndefined();
+    expect(persisted.orchestration_ledger).toBeUndefined();
+    const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+    const handoff = run?.steps.find((step) => step.source_tool === "hand_off_to");
+    expect(handoff).toMatchObject({
+      status: "failed",
+      result_summary: "Handoff finalization failed.",
+      attempts: [expect.objectContaining({ status: "completed" })],
+    });
+    expect(resultForHandoff()?.endTurn).toBeUndefined();
+  }
+
+  it.each(["before_commit", "during_write", "after_commit"] as const)(
+    "rolls back and fails workflow when parent abort arrives $s",
+    async (phase) => {
+      const cid = newCid();
+      const state = await import("../../../../src/main/features/group_chat/state");
+      const bus = await import("../../../../src/main/features/group_chat/bus");
+      await makeInteractive();
+      let hookRan = false;
+      let terminalCalls = 0;
+      (bus as any)._setTerminalHandoffObserverForTest?.(() => {
+        terminalCalls += 1;
+      });
+      const abortParent = () => {
+        hookRan = true;
+        abortRaceProbe.parentController?.abort({ kind: "parent_abort" });
+      };
+      if (phase === "before_commit") {
+        (bus as any)._setBeforeHandoffStateCommitForTest?.(abortParent);
+      } else if (phase === "during_write") {
+        (state as any)._setHandoffStateWriteBoundaryHookForTest?.(
+          async (boundary: string) => {
+            if (boundary === "after_write") abortParent();
+          },
+        );
+      } else {
+        (bus as any)._setAfterHandoffStateCommitForTest?.(abortParent);
+      }
+      _setScript(state.buildGconvSessionId(cid), [
+        {
+          type: "__call_tool_parent_abort_controlled__",
+          name: "hand_off_to",
+          input: {
+            to: AGENT_NAME,
+            message: "finish before abort",
+            resume: "resume after final Agent",
+          },
+        },
+        { type: "final", text: "Commander retained control" },
+      ]);
+      _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+        { type: "final", text: "successful Agent result" },
+      ]);
+
+      bus.subscribe(TEST_UID, cid, () => {});
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: "user",
+        text: "race finalization",
+      });
+      await waitForQuiescent(TEST_UID, cid, 5000);
+
+      expect(hookRan).toBe(true);
+      expect(terminalCalls).toBe(0);
+      await expectFailedFinalization(cid);
+    },
+  );
+
+  it("rolls back after drop begins between commit and terminal callback", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    await makeInteractive();
+    let hookRan = false;
+    let terminalCalls = 0;
+    let dropPromise: Promise<void> | undefined;
+    (bus as any)._setTerminalHandoffObserverForTest?.(() => {
+      terminalCalls += 1;
+    });
+    (bus as any)._setAfterHandoffStateCommitForTest?.(async () => {
+      hookRan = true;
+      dropPromise = bus.dropConv(TEST_UID, cid);
+      expect(
+        await waitUntil(
+          () => (bus._cidStateForTest(TEST_UID, cid) as any)?.terminating === true,
+          2000,
+        ),
+      ).toBe(true);
+    });
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "hand_off_to",
+        input: {
+          to: AGENT_NAME,
+          message: "finish before drop",
+          resume: "resume after final Agent",
+        },
+      },
+      { type: "final", text: "must not claim terminal delivery" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "successful Agent result" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "drop race",
+    });
+    expect(await waitUntil(() => hookRan, 5000)).toBe(true);
+    await dropPromise;
+
+    expect(hookRan).toBe(true);
+    expect(terminalCalls).toBe(0);
+    await expectFailedFinalization(cid);
+  });
+
+  it("keeps a form owner without inventing a Commander resume ledger when resume is omitted", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    let terminalCalls = 0;
+    (bus as any)._setTerminalHandoffObserverForTest?.(() => {
+      terminalCalls += 1;
+    });
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "hand_off_to",
+        input: { to: AGENT_NAME, message: "collect direct form input" },
+      },
+      { type: "final", text: "paused" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      {
+        type: "final",
+        text: `Need input.\n<agent-input-form>\n${JSON.stringify({
+          fields: [
+            { id: "topic", label: "Topic", type: "text", required: true },
+          ],
+        })}\n</agent-input-form>`,
+      },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "ask directly",
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const persisted = await state.readState(TEST_UID, cid);
+    expect(persisted.active_recipient).toBe(AGENT_ID);
+    expect(persisted.orchestration_ledger).toBeUndefined();
+    expect(resultForHandoff()?.content).toContain("<blocked-on-form");
+    expect(resultForHandoff()?.endTurn).toBeUndefined();
+    expect(terminalCalls).toBe(0);
+  });
+
+  it("rolls back an atomic commit and fails workflow when resume enqueue fails", async () => {
+    const cid = newCid();
+    const secret = "RAW_ENQUEUE_FAILURE /private/path token=secret";
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    let terminalCalls = 0;
+    (bus as any)._setTerminalHandoffObserverForTest?.(() => {
+      terminalCalls += 1;
+    });
+    (bus as any)._setBeforeHandoffResumeEnqueueForTest?.(() => {
+      throw new Error(secret);
+    });
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "hand_off_to",
+        input: {
+          to: AGENT_NAME,
+          message: "noninteractive final",
+          resume: "continue Commander work",
+        },
+      },
+      { type: "final", text: "Commander reports finalization failure" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "successful Agent result" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "enqueue failure",
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    expect(terminalCalls).toBe(0);
+    await expectFailedFinalization(cid);
+    expect(JSON.stringify(loggerMocks.warn.mock.calls)).not.toContain(secret);
+  });
+
+  it("settles workflow failure even when CAS rollback cleanup fails", async () => {
+    const cid = newCid();
+    const secret = "RAW_ROLLBACK_FAILURE /private/path token=secret";
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    (bus as any)._setHandoffStateHooksForTest?.({
+      commitHandoffState: state.commitHandoffState,
+      rollbackHandoffState: async () => {
+        throw new Error(secret);
+      },
+    });
+    (bus as any)._setBeforeHandoffResumeEnqueueForTest?.(() => {
+      throw new Error("stable enqueue failure");
+    });
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "hand_off_to",
+        input: {
+          to: AGENT_NAME,
+          message: "rollback cleanup",
+          resume: "continue Commander work",
+        },
+      },
+      { type: "final", text: "Commander reports cleanup failure" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "successful Agent result" },
+    ]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "rollback cleanup failure",
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const run = await (
+      await import("../../../../src/main/features/group_chat/collaboration")
+    ).readActiveWorkflowRun(TEST_UID, cid);
+    expect(
+      run?.steps.find((step) => step.source_tool === "hand_off_to"),
+    ).toMatchObject({ status: "failed" });
+    const handoffLogs = loggerMocks.warn.mock.calls.filter(([message]) =>
+      String(message).startsWith("handoff finalization"),
+    );
+    expect(handoffLogs.map(([message]) => message)).toContain(
+      "handoff finalization rollback failed",
+    );
+    expect(JSON.stringify(handoffLogs)).not.toContain(secret);
+  });
 });

@@ -16,6 +16,7 @@ const streamProbe = vi.hoisted(() => ({
   readOnlyRoots: [] as string[][],
   dispatchResults: [] as string[],
   maxToolLoops: [] as Array<number | undefined>,
+  lifecycleSeen: [] as boolean[],
 }));
 
 // Mock the model client so `runTurn` doesn't try to do a real LLM call.
@@ -29,6 +30,7 @@ vi.mock('../../../../src/main/model/client', () => ({
     streamProbe.messages.push(String(_opts?.message || ''));
     streamProbe.readOnlyRoots.push(Array.isArray(_opts?.readOnlyExtraRoots) ? [..._opts.readOnlyExtraRoots] : []);
     streamProbe.maxToolLoops.push(typeof _opts?.maxToolLoops === 'number' ? _opts.maxToolLoops : undefined);
+    streamProbe.lifecycleSeen.push(!!_opts?.executionLifecycle);
     if (String(_opts?.message || '').includes('ARTIFACT_EVENT_TEST')) {
       _opts?.onArtifactCreated?.({ id: 'art-live-1', title: 'Live App' });
     }
@@ -161,6 +163,29 @@ vi.mock('../../../../src/main/model/client', () => ({
       yield { type: 'done' };
       return;
     }
+    if (String(_opts?.message || '').includes('EXECUTION_LIFECYCLE_TEST')) {
+      await _opts?.executionLifecycle?.queued?.({
+        kind: 'core-agent',
+        sessionId: _opts.sessionId,
+        conversationId: _opts.cid,
+        ...(_opts.agentId ? { agentId: _opts.agentId } : {}),
+      });
+      await _opts?.executionLifecycle?.started?.({
+        kind: 'core-agent',
+        sessionId: _opts.sessionId,
+        conversationId: _opts.cid,
+        ...(_opts.agentId ? { agentId: _opts.agentId } : {}),
+      });
+      await _opts?.executionLifecycle?.event?.('output', { output: 'mock lifecycle output' });
+      await _opts?.executionLifecycle?.terminal?.({
+        status: 'completed',
+        sessionId: _opts.sessionId,
+        output: 'mock lifecycle output',
+      });
+      yield { type: 'final', text: 'execution lifecycle recorded' };
+      yield { type: 'done' };
+      return;
+    }
     yield { type: 'final', text: '' };
     yield { type: 'done' };
   },
@@ -212,6 +237,7 @@ beforeEach(async () => {
   streamProbe.readOnlyRoots.length = 0;
   streamProbe.dispatchResults.length = 0;
   streamProbe.maxToolLoops.length = 0;
+  streamProbe.lifecycleSeen.length = 0;
   streamGate.releaseActiveTurn = null;
   cidsToDrop.clear();
   const users = await import('../../../../src/main/features/users');
@@ -284,6 +310,48 @@ describe('group_chat bus › enqueue routing + persistence', () => {
 
     // listener saw message event for the user msg
     expect(events.find((e) => e.type === 'message' && e.msg.id === msg.id)).toBeTruthy();
+  });
+
+  it('persists a recipient epoch and passes the same value to P3394 admission', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const observed: any[] = [];
+    bus._setP3394ControllerForTest({
+      async admitMessage(input: any) {
+        observed.push(input);
+        return {
+          ok: true,
+          message: {
+            message_type: 'agent.request',
+            correlation_id: input.conversationId,
+            canonical_session_id: input.sessionId,
+            metadata: {
+              relationship: input.relationship,
+              session_epoch: input.incomingEpoch || 0,
+            },
+          },
+        } as any;
+      },
+    } as any);
+
+    try {
+      const msg = await bus.enqueue({
+        uid: TEST_UID,
+        cid: TEST_CID,
+        fromActorId: 'user',
+        text: `@${AGENT_NAME} EPOCH_PROPAGATION_TEST`,
+      });
+      await waitForQuiescent(TEST_UID, TEST_CID);
+
+      const persistedEpoch = msg.p3394?.recipient_epochs[AGENT_ID];
+      expect(persistedEpoch).toBe(1);
+      expect(observed).toHaveLength(1);
+      expect(observed[0]).toMatchObject({
+        sender: 'user',
+        incomingEpoch: persistedEpoch,
+      });
+    } finally {
+      bus._setP3394ControllerForTest(null);
+    }
   });
 
   it('persists short visible text while sending model_text to the worker', async () => {
@@ -546,6 +614,37 @@ describe('group_chat bus › enqueue routing + persistence', () => {
       other_ms: 3,
       failure_phase: 'tool',
     });
+  });
+
+  it('passes a P3394 execution lifecycle sink to real core-agent group turns', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const records = await import('../../../../src/main/features/execution-records');
+    const cid = 'cid-execution-lifecycle';
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'user', text: 'EXECUTION_LIFECYCLE_TEST',
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    expect(streamProbe.lifecycleSeen).toContain(true);
+    const executionRecords = await records.list(TEST_UID);
+    const record = executionRecords.find((candidate) => candidate.conversationId === cid);
+    expect(record).toMatchObject({
+      kind: 'core-agent',
+      sessionId: `gconv-${cid}`,
+      conversationId: cid,
+      status: 'completed',
+      boundary: 'real',
+      permissionMode: 'all_files_approval',
+      artifactIds: [],
+    });
+    expect(record?.executionId).toMatch(/^turn-/);
+    const events = await records.readEvents(TEST_UID, record!.executionId);
+    expect(events.map((event) => event.type)).toEqual(expect.arrayContaining([
+      'queued',
+      'started',
+      'output',
+      'terminal',
+    ]));
   });
 
   it('P3394 Wake Gate keeps an unapproved mentioned agent out of the roster and runtime', async () => {
@@ -1448,6 +1547,94 @@ describe('group_chat bus › enqueue routing + persistence', () => {
       correlation_id: cid,
       canonical_session_id: cid,
     });
+  });
+
+  it('stops an in-process Agent turn when P3394 rejects admission', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    const cid = 'cid-p3394-block-model';
+    bus._setP3394ControllerForTest({
+      async admitMessage(input: any) {
+        return {
+          ok: false,
+          error: {
+            correlation_id: input.conversationId,
+            canonical_session_id: input.sessionId,
+            body: { reason_code: 'replay_detected', detail: 'duplicate epoch' },
+          },
+        } as any;
+      },
+    } as any);
+
+    try {
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: 'user',
+        text: `@${AGENT_NAME} P3394_BLOCK_MODEL_TEST`,
+      });
+      await waitForQuiescent(TEST_UID, cid);
+
+      expect(streamProbe.messages.some((message) => message.includes('P3394_BLOCK_MODEL_TEST'))).toBe(false);
+      const rows = fs.readFileSync(path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`), 'utf8')
+        .trim().split('\n').map((line) => JSON.parse(line));
+      expect(rows).toContainEqual(expect.objectContaining({
+        from: AGENT_ID,
+        failure_kind: 'validation',
+        failure_code: 'p3394_replay_detected',
+        turn_id: expect.any(String),
+      }));
+    } finally {
+      bus._setP3394ControllerForTest(null);
+    }
+  });
+
+  it('does not start Codex when P3394 rejects admission', async () => {
+    const paths = await import('../../../../src/main/paths');
+    const agentFile = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
+    const spec = JSON.parse(fs.readFileSync(agentFile, 'utf8'));
+    spec.runtime = { kind: 'cli', cli: 'codex' };
+    fs.writeFileSync(agentFile, JSON.stringify(spec));
+    const projectDir = path.join(tmpDir, 'p3394-codex-project');
+    fs.mkdirSync(projectDir);
+    const agents = await import('../../../../src/main/features/agents');
+    await agents.setAgentCliProjectDir(TEST_UID, AGENT_ID, projectDir);
+
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const cid = 'cid-p3394-block-codex';
+    bus._setP3394ControllerForTest({
+      async admitMessage(input: any) {
+        return {
+          ok: false,
+          error: {
+            correlation_id: input.conversationId,
+            canonical_session_id: input.sessionId,
+            body: { reason_code: 'context_scope_violation', detail: 'wrong context' },
+          },
+        } as any;
+      },
+    } as any);
+
+    try {
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: 'user',
+        text: `@${AGENT_NAME} P3394_BLOCK_CODEX_TEST`,
+      });
+      await waitForQuiescent(TEST_UID, cid);
+
+      expect(cliRunMock.calls).toHaveLength(0);
+      const rows = fs.readFileSync(path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`), 'utf8')
+        .trim().split('\n').map((line) => JSON.parse(line));
+      expect(rows).toContainEqual(expect.objectContaining({
+        from: AGENT_ID,
+        failure_kind: 'validation',
+        failure_code: 'p3394_context_scope_violation',
+      }));
+    } finally {
+      bus._setP3394ControllerForTest(null);
+    }
   });
 
   it('asks for a project directory instead of silently falling back when a custom coding cwd vanished', async () => {

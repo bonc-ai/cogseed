@@ -2,15 +2,13 @@
  * Orkas — Electron main entry.
  *
  * Boot sequence:
- *   1. Side-effect import of `./install-data-root` resolves the install
+ *   1. `bootstrap.cjs` resolves the install
  *      container (`~/.orkas` on macOS/Linux; on Windows a drive recorded
  *      in `%LOCALAPPDATA%\Orkas\install-pin.json`), runs the one-shot
  *      `PC/data` → `<container>/data` migration, and sets
- *      `ORKAS_WORKSPACE_ROOT`. Both dev and packaged go through this
- *      single path — the old dev/prod data-root split is gone. The side
- *      effect lives at module load (not in body code) because esbuild's
- *      CJS transformer hoists imports — `paths.ts` would otherwise load
- *      with an unset env var. See install-data-root.cjs header.
+ *      `ORKAS_WORKSPACE_ROOT` before tsx loads this module. Source variants
+ *      use separate containers; packaged builds use the stable main path.
+ *      See install-data-root.cjs for the pre-TypeScript boot contract.
  *   2. Pin CORE_AGENT_AUTH_DIR to <WS_ROOT>/config/ so core-agent's
  *      credential store lives under data/ (local-only, never synced).
  *      The env var name is core-agent's public API — kept as
@@ -28,20 +26,20 @@
 
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { app, BrowserWindow, Menu, Notification, ipcMain, nativeImage, net, protocol, session, shell } from 'electron';
-// Side-effect import: at module-load time this resolves the install
-// container, runs the one-shot PC/data → <container>/data migration, and
-// sets process.env.ORKAS_WORKSPACE_ROOT. Must be the FIRST project import
-// — any module loaded before this would not see the env var. See
-// install-data-root.cjs header for why the side effect lives at load time
-// rather than in index.ts body (esbuild CJS hoists imports → body runs
-// after paths.ts loads, which is too late to set the env var).
-import './install-data-root.cjs';
-import { APP_BRAND } from './brand';
+import { resolveRuntimeIdentity } from './brand';
 import { desktopPlatform, osVersion } from './system_info';
-import { hardenedWebPreferences, installExternalNavigationGuard } from './util/window-security';
+import {
+  hardenedWebPreferences,
+  installDenyAllRemotePermissionGate,
+  installExternalNavigationGuard,
+  installWecomQuickCreatePopupGuard,
+  isOfficialWecomQuickCreateUrl,
+} from './util/window-security';
+import { formatBuildIdentityLabel, resolveBuildIdentity } from './util/build-identity';
 import { resolveContainedProtocolFile } from './util/protocol-path';
 
 const WINDOWS_TASK_BADGE_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAPklEQVR4nGNgoAX4jwNQpJkoQ2CK3ru4YMV4DSGkGa8hxGrGacioAVQwgOJopEpCQjcEF8CrmZAhRGkmFQAAcdLnkJb3ml4AAAAASUVORK5CYII=';
@@ -53,16 +51,14 @@ const MARKETPLACE_DEFAULTS_REFRESH_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const MARKETPLACE_SERVER_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const MARKETPLACE_DEFAULTS_RETRY_DELAYS_MS = [3_000, 3_000, 3_000] as const;
 
-// Source and packaged builds share one app identity and one server
-// environment: global prod. This keeps local data paths and OS app grouping
-// stable across run modes.
-app.setName(APP_BRAND.appName);
-try {
-  if (IS_PACKAGED_LAUNCH_SMOKE) {
-    app.setPath('userData', path.join(path.dirname(PACKAGED_LAUNCH_SMOKE_FILE), 'user-data'));
-  }
-} catch {
-  /* userData may be unavailable in unusual test hosts; the default is fine. */
+const RUNTIME_IDENTITY = resolveRuntimeIdentity(app.isPackaged);
+app.setName(RUNTIME_IDENTITY.appName);
+if (IS_PACKAGED_LAUNCH_SMOKE) {
+  app.setPath('userData', path.join(path.dirname(PACKAGED_LAUNCH_SMOKE_FILE), 'user-data'));
+} else if (!app.isPackaged) {
+  const container = String(process.env.ORKAS_RUNTIME_CONTAINER || '').trim();
+  if (!container) throw new Error('ORKAS_RUNTIME_CONTAINER was not initialized');
+  app.setPath('userData', path.join(container, 'electron-user-data'));
 }
 
 // Register the KB file protocol BEFORE `app.whenReady()` — privileged
@@ -176,7 +172,11 @@ import * as chatAttachments from './features/chat_attachments';
 import * as chatArtifacts from './features/chat_artifacts';
 import * as clientConfigFeature from './features/client_config';
 import * as connectorsFeature from './features/connectors';
+import * as messagingFeature from './features/messaging';
 import * as taskNotifications from './features/task_notifications';
+import { recoverRecallCaptures, startRecallCaptureOrchestrator } from './features/recall/capture-service';
+import { startGroupKstarClosure } from './features/kstar/task-closure';
+import { startGroupChatRecallTerminalProofs } from './features/group_chat/recall-terminal-proof';
 import * as notificationPermissions from './features/notification_permissions';
 import {
   consumeColdLaunchConnectorCallback,
@@ -206,8 +206,12 @@ function setTaskNotificationBadgeCount(count: number): void {
 }
 
 function createWindow(): BrowserWindow {
-  const dev = !app.isPackaged;
+  const dev = !app.isPackaged || !!process.env.ORKAS_ONBOARDING_ALWAYS; // Force dev mode when testing onboarding
   const restored = windowState.restoreWindowState();
+  // This is deliberately not a `persist:` partition. The official remote
+  // creator gets a memory-only browser session, separate from the app UI.
+  const wecomPopupPartition = `wecom-quick-create-${randomUUID()}`;
+  installDenyAllRemotePermissionGate(session.fromPartition(wecomPopupPartition));
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -249,7 +253,36 @@ function createWindow(): BrowserWindow {
     win.webContents,
     (url) => shell.openExternal(url),
     (err) => log.warn('openExternal failed', { error: (err as Error)?.message || String(err) }),
+    {
+      allowWindowOpen: isOfficialWecomQuickCreateUrl,
+      allowedWindowOpenOptions: {
+        width: 520,
+        height: 650,
+        resizable: false,
+        maximizable: false,
+        minimizable: true,
+        title: 'WeCom',
+        webPreferences: hardenedWebPreferences({
+          // Remote auth content deliberately gets an empty preload rather
+          // than the renderer bridge used by the application window.
+          preload: path.join(__dirname, 'wecom-popup-preload.js'),
+          partition: wecomPopupPartition,
+        }),
+      },
+    },
   );
+
+  // An allowed popup is intentionally limited to the official quick-create
+  // URL. It has no bridge API, cannot spawn further windows, and cannot turn
+  // into an arbitrary in-app browser if the remote page redirects.
+  win.webContents.on('did-create-window', (popup, details) => {
+    if (!isOfficialWecomQuickCreateUrl(details.url)) {
+      popup.close();
+      return;
+    }
+    popup.setMenuBarVisibility(false);
+    installWecomQuickCreatePopupGuard(popup.webContents);
+  });
 
   // Hijack Cmd/Ctrl+R / F5 uniformly:
   //   - Packaged: refresh disabled (the App doesn't need reload).
@@ -354,11 +387,21 @@ function registerIpc(): void {
   ipcMain.handle('orkas.env', () => {
     const systemVersion = osVersion();
     const platform = desktopPlatform();
+    const buildIdentity = resolveBuildIdentity({
+      env: process.env,
+      packagedInfoPath: path.join(app.getAppPath(), '.build', 'build-info.json'),
+    });
+    const version = app.getVersion();
     return {
       ok: true,
       isDev: !app.isPackaged,
       isPackaged: app.isPackaged,
-      version: app.getVersion(),
+      version,
+      versionLabel: formatBuildIdentityLabel(version, buildIdentity),
+      buildChannel: buildIdentity.channel,
+      buildCommit: buildIdentity.commit,
+      buildDirty: buildIdentity.dirty,
+      buildTime: buildIdentity.builtAt,
       platform,
       osVersion: systemVersion,
       arch: process.arch,
@@ -369,20 +412,29 @@ function registerIpc(): void {
     // The relaunch button shells out to run.sh / run.cmd instead of using
     // `app.relaunch()` so we can reuse `scripts/ensure-deps.cjs` for
     // dependency self-healing — otherwise pulling new code + relaunching
-    // crashes immediately due to missing packages. The shell script handles
-    // ensure-deps + killing the old electron + npm start; here we just
-    // detach-spawn it and call `app.exit(0)`.
+    // crashes immediately due to missing packages. The worktree-locked
+    // launcher owns runtime selection and bundle preparation; here we only
+    // detach-spawn it and exit so the instance lock can be released.
     ipcMain.handle('orkas.relaunch', () => {
       const isWin = process.platform === 'win32';
       const script = path.join(paths.PC_ROOT, isWin ? 'run.cmd' : 'run.sh');
       const [cmd, args] = isWin
-        ? ['cmd.exe', ['/c', script]] as const
-        : ['bash',    [script]]       as const;
+        ? ['cmd.exe', ['/d', '/s', '/c', `"${script}"`]] as const
+        : ['bash',    [script]]                            as const;
+      const relaunchEnv = { ...process.env };
+      // bootstrap.cjs derives the data root from a clean process environment.
+      // Do not pass the current instance's resolved paths back into the
+      // launcher, otherwise the new process would either be rejected as an
+      // inherited-root launch or attach to the old runtime's data.
+      delete relaunchEnv.ORKAS_WORKSPACE_ROOT;
+      delete relaunchEnv.ORKAS_RUNTIME_CONTAINER;
+      delete relaunchEnv.CORE_AGENT_AUTH_DIR;
       const child = spawn(cmd, args, {
         cwd: paths.PC_ROOT,
         detached: true,
         stdio: 'ignore',
         windowsHide: true,
+        env: relaunchEnv,
       });
       child.unref();
       log.info('relaunch via shell script', { script });
@@ -1020,14 +1072,13 @@ function registerChatAppProtocol(): void {
 
 // Single-instance lock prevents double-launch from duplicating the backend.
 const gotLock = IS_PACKAGED_LAUNCH_SMOKE
-  || process.env.ORKAS_ALLOW_MULTI_INSTANCE === '1'
   || app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
   // Account login is stripped, but connector OAuth still returns through the OS protocol. Keep
   // this connector-only receiver outside the removed account protocol module.
-  registerConnectorProtocol();
+  registerConnectorProtocol({ owner: RUNTIME_IDENTITY.protocolOwner });
   app.whenReady().then(async () => {
     await runBootSelfCheck();
     // Source-run macOS uses Electron.app's own Info.plist, so set the dock
@@ -1038,7 +1089,7 @@ if (!gotLock) {
       if (!img.isEmpty()) app.dock.setIcon(img);
     }
     if (process.platform === 'win32') {
-      app.setAppUserModelId(APP_BRAND.appId);
+      app.setAppUserModelId(RUNTIME_IDENTITY.appId);
     }
     if (process.platform === 'darwin') {
       Menu.setApplicationMenu(Menu.buildFromTemplate([
@@ -1085,6 +1136,12 @@ if (!gotLock) {
       openConversation: openConversationFromTaskNotification,
     });
     app.once('before-quit', stopTaskNotifications);
+    const stopRecallCapture = startRecallCaptureOrchestrator();
+    app.once('before-quit', stopRecallCapture);
+    const stopGroupKstarClosure = startGroupKstarClosure();
+    app.once('before-quit', stopGroupKstarClosure);
+    const stopGroupChatRecallTerminalProofs = startGroupChatRecallTerminalProofs();
+    app.once('before-quit', stopGroupChatRecallTerminalProofs);
     clientConfigFeature.clientConfig.subscribeAll((keys) => {
       ipc.broadcastToRenderer('client-config:changed', { keys });
     });
@@ -1111,6 +1168,11 @@ if (!gotLock) {
       });
     }, CONNECTORS_BOOTSTRAP_DELAY_MS);
     connectorsTimer.unref?.();
+    registerDeferred('messaging:start', () => messagingFeature.startForUser(users.getActiveUserId()), 'serial', CONNECTORS_BOOTSTRAP_DELAY_MS, {
+      resourceClass: 'network',
+      preferIdle: true,
+      maxSliceMs: 20_000,
+    });
     createWindow();
     await consumeColdLaunchConnectorCallback();
 
@@ -1192,6 +1254,10 @@ if (!gotLock) {
     }, 'serial', BOOT_POST_STARTUP_DELAY_MS);
     registerDeferred('builtin-marketplace:seed', () => seedBuiltinMarketplaceForCurrentUser('startup'));
     registerDeferred('auto-tasks:scheduler', () => autoTasks.startScheduler());
+    registerDeferred('recall:capture-recovery', async () => {
+      const uid = users.getActiveUserId();
+      if (uid) await recoverRecallCaptures(uid);
+    }, 'parallel', BOOT_HEAVY_DISK_DELAY_MS, { resourceClass: 'disk', preferIdle: true });
 
     // p3394 KSTAR boot health check: degraded-schema detection + pending
     // evidence replay. Runs after the heavy-disk cohort so the KB and

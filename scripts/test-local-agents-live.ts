@@ -155,8 +155,9 @@ async function main(): Promise<void> {
     }
     if (args.installOnly) return;
 
-    const [{ activateUser }, { run }] = await Promise.all([
+    const [{ activateUser }, { agentDefinitionFile }, { run }] = await Promise.all([
       import('../src/main/features/users.js'),
+      import('../src/main/paths.js'),
       import('../src/main/features/local_agents/runner.js'),
     ]);
     const uid = 'u-local-agent-live';
@@ -164,6 +165,14 @@ async function main(): Promise<void> {
     const failures: string[] = [];
 
     for (const entry of entries) {
+      const agentId = `a-live-${entry.type}`;
+      const definitionFile = agentDefinitionFile(uid, agentId);
+      fs.mkdirSync(path.dirname(definitionFile), { recursive: true });
+      fs.writeFileSync(definitionFile, JSON.stringify({
+        agent_id: agentId,
+        name: `Live ${entry.type} probe`,
+        runtime: { kind: 'cli', cli: entry.type },
+      }));
       const cwd = path.join(testDataRoot, `work-${entry.type}`);
       fs.mkdirSync(cwd, { recursive: true });
       const eventCounts: Record<string, number> = {};
@@ -172,7 +181,7 @@ async function main(): Promise<void> {
       const result = await run({
         uid,
         cid: `c-live-${entry.type}`,
-        agentId: `a-live-${entry.type}`,
+        agentId,
         agentName: `Live ${entry.type} probe`,
         cli: entry.type,
         prompt: 'Do not call tools or access or modify files. Reply with exactly ORKAS_AGENT_OK and nothing else.',

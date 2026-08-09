@@ -747,6 +747,91 @@ function _openAutoRowMenu(anchorBtn, task, opts) {
   menu.style.left = left + 'px';
 }
 
+// ─── Empty-state templates ────────────────────────────────────────
+//
+// When the global tab has zero tasks, the plain "no tasks" line is
+// replaced by a starter grid. Each template pre-fills the create form
+// (seed text + schedule + optional title); the user still confirms and
+// saves, so nothing is written until they submit. Schedule shapes are
+// limited to the four supported `Schedule` types — "workday" style
+// cadences fall back to `daily` (fires on weekends too), and the card
+// label is rendered from the real schedule via `_autoFormatSummary` so
+// it never overstates the cadence. Text lives in i18n; icons come from
+// the shared `icons.js` catalog.
+const _AUTO_TEMPLATES = [
+  { id: 'tech_news',     icon: 'globe',          schedule: { type: 'daily',   hour: 8,  minute: 30 } },
+  { id: 'daily_wrapup',  icon: 'clipboard-list', schedule: { type: 'daily',   hour: 18, minute: 0  } },
+  { id: 'meeting_prep',  icon: 'presentation',   schedule: { type: 'daily',   hour: 8,  minute: 45 } },
+  { id: 'weekly_report', icon: 'file-text',      schedule: { type: 'weekly',  weekday: 5, hour: 17, minute: 30 } },
+  { id: 'project_health',icon: 'zap',            schedule: { type: 'daily',   hour: 10, minute: 0  } },
+  { id: 'monthly_admin', icon: 'star',           schedule: { type: 'monthly', day: 25, hour: 10, minute: 0  } },
+  { id: 'blank',         icon: 'plus',           schedule: null },
+];
+
+/** Open the create dialog and pre-fill it from a starter template.
+ *  Always stays in create mode (never touches `_autoEditingTaskId`), so
+ *  the eventual submit creates a brand-new task rather than editing one. */
+function _autoApplyTemplate(tplId) {
+  const tpl = _AUTO_TEMPLATES.find((x) => x && x.id === tplId) || null;
+  // Blank (and any unknown id) → plain create form, no pre-fill.
+  openAutoTaskDialog({});
+  if (!tpl || tpl.id === 'blank' || !tpl.schedule) return;
+
+  _autoSetComposerValue(t('auto.tpl.' + tpl.id + '.seed'));
+  const titleInput = document.getElementById('auto-title-input');
+  if (titleInput) {
+    titleInput.value = t('auto.tpl.' + tpl.id + '.title');
+    if (typeof window.enforceNameLimitOnControl === 'function') window.enforceNameLimitOnControl(titleInput);
+  }
+  const s = tpl.schedule;
+  if (_autoFreqSel) _autoFreqSel.setValue(s.type);
+  _autoSyncFreqRows(s.type);
+  if (_autoHourSel) _autoHourSel.setValue(String(s.hour));
+  if (_autoMinuteSel) _autoMinuteSel.setValue(String(s.minute));
+  if (s.type === 'weekly' && _autoWeekdaySel) _autoWeekdaySel.setValue(String(s.weekday));
+  if (s.type === 'monthly' && _autoMonthlyDaySel) _autoMonthlyDaySel.setValue(String(s.day));
+  _autoTrackClick('auto_template_pick', { template_id: tpl.id });
+}
+
+/** Render the starter-template grid into `container`.
+ *  `compact` (tasks already exist) drops the big centered hero for a small
+ *  "add from template" heading, so the grid can live under the task list and
+ *  stay reachable instead of vanishing after the first task. The empty state
+ *  keeps the full hero. Rebuilt on each render; cheap and keeps i18n fresh. */
+function _autoRenderTemplates(container, opts = {}) {
+  if (!container) return;
+  const compact = !!opts.compact;
+  const iconHtml = (name, cls) => (typeof uiIconHtml === 'function' ? uiIconHtml(name, cls) : '');
+  const cards = _AUTO_TEMPLATES.map((tpl) => {
+    const isBlank = tpl.id === 'blank';
+    const name = escapeHtml(t('auto.tpl.' + tpl.id + '.name'));
+    const desc = escapeHtml(t('auto.tpl.' + tpl.id + '.desc'));
+    const meta = (!isBlank && tpl.schedule)
+      ? `<span class="auto-tpl-card-meta">${escapeHtml(_autoFormatSummary({ schedule: tpl.schedule }))}</span>`
+      : '';
+    return `<button type="button" class="auto-tpl-card${isBlank ? ' is-blank' : ''}" data-auto-tpl="${escapeHtml(tpl.id)}">`
+      + `<span class="auto-tpl-card-ico">${iconHtml(tpl.icon, 'auto-tpl-ico')}</span>`
+      + `<span class="auto-tpl-card-body">`
+      + `<span class="auto-tpl-card-name">${name}</span>`
+      + `<span class="auto-tpl-card-desc">${desc}</span>`
+      + meta
+      + `</span></button>`;
+  }).join('');
+  const head = compact
+    ? `<div class="auto-tpl-subhead">${escapeHtml(t('auto.templates_more'))}</div>`
+    : `<div class="auto-tpl-hero">`
+      + `<span class="auto-tpl-hero-ico">${iconHtml('clock', 'auto-tpl-hero-clock')}</span>`
+      + `<div class="auto-tpl-hero-title">${escapeHtml(t('auto.empty_title'))}</div>`
+      + `<div class="auto-tpl-hero-sub">${escapeHtml(t('auto.empty_subtitle'))}</div>`
+      + `</div>`;
+  container.classList.toggle('is-compact', compact);
+  container.innerHTML = head + `<div class="auto-tpl-grid">${cards}</div>`;
+  if (typeof hydrateUiIcons === 'function') hydrateUiIcons(container);
+  container.querySelectorAll('[data-auto-tpl]').forEach((btn) => {
+    btn.addEventListener('click', () => _autoApplyTemplate(btn.getAttribute('data-auto-tpl')));
+  });
+}
+
 // ─── Global auto tab — list rendering + form wiring ────────────────
 
 async function loadAutoList(force) {
@@ -772,11 +857,17 @@ async function loadAutoList(force) {
   const headerCount = document.getElementById('auto-header-count');
   const n = _autoTasks.length;
   if (headerCount) headerCount.textContent = n > 0 ? String(n) : '';
+  const tplEl = document.getElementById('auto-templates');
+  // Templates stay reachable at all times: full hero when empty, compact
+  // "add from template" strip under the list once tasks exist.
+  if (emptyEl) emptyEl.style.display = 'none';
   if (!_autoTasks.length) {
-    if (emptyEl) emptyEl.style.display = '';
+    if (tplEl) {
+      _autoRenderTemplates(tplEl, { compact: false });
+      tplEl.hidden = false;
+    }
     return;
   }
-  if (emptyEl) emptyEl.style.display = 'none';
   const onEdit = (task) => openAutoTaskDialog({ task });
   const afterChange = () => loadAutoList(true);
   for (const task of _autoTasks) {
@@ -785,6 +876,10 @@ async function loadAutoList(force) {
       onEdit,
       afterChange,
     }));
+  }
+  if (tplEl) {
+    _autoRenderTemplates(tplEl, { compact: true });
+    tplEl.hidden = false;
   }
 }
 
@@ -2042,5 +2137,6 @@ if (typeof module !== 'undefined' && typeof module.exports === 'object') {
     _autoRunDeviceOptions,
     _autoTaskMessagePreviewHtml,
     _autoComposerValueForTask,
+    _AUTO_TEMPLATES,
   };
 }

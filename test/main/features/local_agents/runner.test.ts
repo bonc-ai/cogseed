@@ -33,6 +33,12 @@ let tmpDir: string;
 let prevWs: string | undefined;
 const TEST_UID = 'u1';
 
+function writeOrdinaryAgent(agentId: string): void {
+  const file = path.join(tmpDir, TEST_UID, 'cloud', 'agents', agentId, 'agent.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ agent_id: agentId }));
+}
+
 beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-runner-'));
   prevWs = process.env.ORKAS_WORKSPACE_ROOT;
@@ -40,6 +46,7 @@ beforeEach(async () => {
   vi.resetModules();
   const users = await import('../../../../src/main/features/users');
   users.activateUser(TEST_UID);
+  for (const agentId of ['a', 'agent-x']) writeOrdinaryAgent(agentId);
   mockDetect.mockReset();
   mockBackendImpl = null;
   mockOpenclawBackendImpl = null;
@@ -55,6 +62,39 @@ async function loadRunner() {
 }
 
 describe('local_agents/runner', () => {
+  it('rejects management-only Agents before CLI detection, persistence, or backend execution', async () => {
+    const file = path.join(tmpDir, TEST_UID, 'cloud', 'agents', 'expense-agent', 'agent.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({
+      agent_id: 'expense-agent',
+      interaction_mode: 'management_only',
+    }));
+    mockDetect.mockResolvedValue({
+      type: 'claude', available: true, path: '/fake/claude', version: '2.0.0',
+    });
+    const backend = vi.fn(async () => undefined);
+    mockBackendImpl = backend;
+    const events: any[] = [];
+    const runner = await loadRunner();
+
+    await expect(runner.run({
+      uid: TEST_UID,
+      cid: 'c',
+      agentId: 'expense-agent',
+      cli: 'claude',
+      prompt: 'must not execute',
+      cwd: tmpDir,
+      signal: new AbortController().signal,
+      onEvent: (event) => events.push(event),
+      ...({ dispatchPolicyVerified: true } as Record<string, unknown>),
+    })).rejects.toMatchObject({ code: 'E_AGENT_MANAGEMENT_ONLY' });
+
+    expect(mockDetect).not.toHaveBeenCalled();
+    expect(backend).not.toHaveBeenCalled();
+    expect(events).toEqual([]);
+    expect(fs.existsSync(path.join(tmpDir, TEST_UID, 'local', 'file_cache', 'local-agent-runs'))).toBe(false);
+  });
+
   it('builds local agent log context without raw prompts, args, resume ids, or paths', async () => {
     const runner = await loadRunner();
     const ctx = runner.localAgentRunContextForLog({
@@ -393,11 +433,13 @@ describe('local_agents/runner', () => {
     try {
       mockDetect.mockResolvedValue({ type: 'claude', available: true, path: '/fake/claude', version: '2.0.0' });
       let onEventCb: ((e: any) => void) | null = null;
+      let backendLastEventAt: (() => number) | undefined;
       let resolveBackend!: () => void;
       let markBackendReady!: () => void;
       const backendReady = new Promise<void>((resolve) => { markBackendReady = resolve; });
-      mockBackendImpl = async ({ onEvent }) => {
+      mockBackendImpl = async ({ onEvent, lastEventAt }) => {
         onEventCb = onEvent;
+        backendLastEventAt = lastEventAt;
         onEvent({ type: 'process-info', pid: 42, cwd: '/x', cmd: 'claude', args: [] });
         markBackendReady();
         await new Promise<void>(resolve => { resolveBackend = resolve; });
@@ -415,21 +457,26 @@ describe('local_agents/runner', () => {
 
       await backendReady;
       expect(onEventCb).not.toBeNull();
+      expect(backendLastEventAt).toBeTypeOf('function');
+      const backendActivityAt = backendLastEventAt!();
 
       // Threshold=120ms, tick = max(50, 120/3=40) → 50ms. Wait ~250ms:
       // at least 2 idle pulses should fire after the 120ms quiet period.
       await vi.advanceTimersByTimeAsync(250);
       const idleCount1 = events.filter(e => e.type === 'idle').length;
       expect(idleCount1).toBeGreaterThanOrEqual(1);
+      expect(backendLastEventAt!()).toBe(backendActivityAt);
 
       // Continue waiting → steady drumbeat (more idle events).
       await vi.advanceTimersByTimeAsync(150);
       const idleCount2 = events.filter(e => e.type === 'idle').length;
       expect(idleCount2).toBeGreaterThan(idleCount1);
+      expect(backendLastEventAt!()).toBe(backendActivityAt);
 
       // Backend emits a real event — deadline should reset, so no new
       // idle pulse during the next sub-threshold window.
       onEventCb!({ type: 'text-delta', text: 'still here' });
+      expect(backendLastEventAt!()).toBeGreaterThan(backendActivityAt);
       const beforeReset = events.filter(e => e.type === 'idle').length;
       await vi.advanceTimersByTimeAsync(80);  // less than 120ms threshold
       const afterReset = events.filter(e => e.type === 'idle').length;

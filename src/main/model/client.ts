@@ -19,6 +19,7 @@ import type { AgentTool, HistoryResource } from '#core-agent';
 import {
   abortActiveSession as _abortActiveSession,
   abortActiveSessionsForConversation as _abortActiveSessionsForConversation,
+  hasActiveSession as _hasActiveSession,
   chatWithModel as _chatWithModel,
   streamChatWithModel as _streamChatWithModel,
 } from './core-agent/client';
@@ -52,6 +53,30 @@ export interface ChatResult {
 export interface ChatAttachmentMetadata {
   hasAttachments: boolean;
   attachmentTypes: string[];
+}
+
+/** Optional host-owned lifecycle sink for shared execution records. The model
+ * layer emits only bounded callback data and never imports execution storage. */
+export interface ChatExecutionLifecycle {
+  queued(input: {
+    kind?: 'core-agent';
+    sessionId?: string;
+    conversationId?: string;
+    agentId?: string;
+  }): void | Promise<void>;
+  started(input: {
+    kind?: 'core-agent';
+    sessionId?: string;
+    conversationId?: string;
+    agentId?: string;
+  }): void | Promise<void>;
+  event(type: string, metadata?: Record<string, unknown>, at?: string): void | Promise<void>;
+  artifact(input: { cid: string; artifactId: string; title: string }): void | Promise<void>;
+  terminal(input: {
+    status: 'completed' | 'failed' | 'cancelled' | 'timed_out';
+    sessionId?: string;
+    output?: string;
+  }): void | Promise<unknown>;
 }
 
 export interface ChatOptions {
@@ -96,6 +121,16 @@ export interface ChatOptions {
    *  which legitimately run long multi-step builds (e.g. VideoStudio draft/render,
    *  DeepResearcher gathering); loop_detection still guards true runaway loops. */
   maxToolLoops?: number;
+  /**
+   * Hard opt-out of every tool for this turn: no local tools, no file tools,
+   * no MCP, no extras. For explain-only callers such as
+   * `features/conversation_aside`.
+   *
+   * Note `maxToolLoops: 0` does NOT do this — falsy values are dropped by the
+   * option spreads on the way to the runner, so the turn keeps the default loop
+   * budget and the full tool set.
+   */
+  disableTools?: boolean;
   abortSignal?: AbortSignal | null;
   /** Legacy openclaw CLI timeout — ignored, retained for signature parity. */
   timeout?: number;
@@ -132,6 +167,21 @@ export interface ChatOptions {
    *  part of its turn-scoped execution contract; file output now stays in the
    *  conversation workspace rather than a turn-specific subdirectory. */
   turnId?: string;
+  /** Stable persisted id of the visible source message that triggered this
+   * turn. Used only for provenance-bound teaching receipts. */
+  sourceMessageId?: string;
+  /** True only when sourceMessageId belongs to a visible user-authored row. */
+  sourceMessageFromUser?: boolean;
+  /** Exact visible user-authored text for provenance-bound teaching intent.
+   * This excludes model-only reference, attachment, and replay envelopes. */
+  sourceMessageText?: string;
+  onTeachingReceipt?: (receipt: {
+    id: string;
+    summary: string;
+    scope: 'personal' | 'project' | 'agent';
+    status: 'active' | 'revoked';
+    candidateIds: string[];
+  }) => void | Promise<void>;
   /** Project id of the conversation, when it belongs to one. Threaded
    *  through to local-tools / file-tools / image-gen-tool so workspace
    *  resolution picks up the project-scoped selection. Caller (group_chat
@@ -178,6 +228,9 @@ export interface ChatOptions {
    *  and attaches a `artifacts[]` list to the assistant message so the
    *  renderer embeds each interactive web-app artifact in the bubble. */
   onArtifactCreated?: (a: { id: string; title: string }) => void;
+  /** Shared execution lifecycle callback. Feature/main callers own the sink;
+   * core-agent emits process/tool/output/artifact/terminal observations only. */
+  executionLifecycle?: ChatExecutionLifecycle;
   /** Fired at turn start with each skill id that entered the system-prompt
    *  index, split by source system (`A.custom` / `A.platform` / `B`).
    *  `features/group_chat` buffers per turn and emits `skill_advertised`
@@ -222,4 +275,5 @@ export interface ChatOptions {
 export const chatWithModel = _chatWithModel;
 export const streamChatWithModel = _streamChatWithModel;
 export const abortActiveSession = _abortActiveSession;
+export const hasActiveSession = _hasActiveSession;
 export const abortActiveSessionsForConversation = _abortActiveSessionsForConversation;

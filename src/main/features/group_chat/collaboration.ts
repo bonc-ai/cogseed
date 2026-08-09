@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import * as fsp from "node:fs/promises";
 import { Mutex } from "async-mutex";
 import { conversationLayout } from "../../util/project-layout";
 import {
@@ -11,77 +12,77 @@ import {
   writeJson,
 } from "../../storage";
 
-export type WorkflowRunKind =
-  "discussion" | "implementation" | "review" | "custom";
-export type WorkflowRunStatus =
-  "created" | "running" | "blocked" | "failed" | "completed" | "cancelled";
-export type WorkflowStepType =
-  | "prompt"
-  | "discussion_round"
-  | "implementation"
-  | "test"
-  | "review"
-  | "gate"
-  | "summary"
-  | "dispatch";
-export type WorkflowStepStatus =
-  "pending" | "running" | "blocked" | "failed" | "completed" | "skipped";
-export type GateStatus = "passed" | "failed" | "needs_review";
-export type ContextItemSource =
-  "user" | "agent" | "code" | "artifact" | "system" | "spec";
-export type ContextConfidence = "low" | "medium" | "high";
-export type ContextProposalKind = "fact" | "decision" | "recommendation";
-export type ContextProposalStatus =
-  "pending" | "accepted" | "rejected" | "superseded";
-export type ContextConflictType =
-  | "fact"
-  | "recommendation"
-  | "implementation"
-  | "quality"
-  | "preference"
-  | "safety";
-export type ContextConflictStatus =
-  | "detected"
-  | "gathering_evidence"
-  | "under_review"
-  | "awaiting_user"
-  | "resolved"
-  | "dismissed";
-
-export interface ContextProposal {
-  id: string;
-  conflict_key: string;
-  kind: ContextProposalKind;
-  text: string;
-  reason?: string;
-  evidence_refs: string[];
-  confidence: ContextConfidence;
-  proposed_by: string;
-  status: ContextProposalStatus;
-  created_at: string;
-  resolved_at?: string;
-}
-
-export interface ContextConflictResolution {
-  decision: "accept" | "reject" | "merge";
-  selected_proposal_ids: string[];
-  text: string;
-  reason?: string;
-  resolved_by: string;
-  resolved_at: string;
-}
-
-export interface ContextConflict {
-  id: string;
-  conflict_key: string;
-  type: ContextConflictType;
-  status: ContextConflictStatus;
-  proposal_ids: string[];
-  affected_step_ids: string[];
-  resolution?: ContextConflictResolution;
-  created_at: string;
-  updated_at: string;
-}
+import { reconcileStepBlockers as reconcileControlPlaneStepBlockers } from '../collaboration_control/dependency-reconciler';
+import type {
+  WorkflowRunKind,
+  WorkflowRunStatus,
+  WorkflowStepType,
+  WorkflowStepStatus,
+  WorkflowAttemptStatus,
+  WorkflowAttemptFailureCode,
+  WorkflowAttemptActorKind,
+  WorkflowAttempt,
+  GateStatus,
+  ContextItemSource,
+  ContextConfidence,
+  ContextProposalKind,
+  ContextProposalStatus,
+  ContextConflictType,
+  ContextConflictStatus,
+  ContextProposal,
+  ContextConflictResolution,
+  ContextConflict,
+  OutputContract,
+  WorkflowStep,
+  WorkflowRun,
+  ActiveWorkflowFile,
+  ContextItem,
+  DecisionItem,
+  RiskItem,
+  ArtifactRef,
+  AgentOutputSummary,
+  GateCheck,
+  GateReviewDecision,
+  GateResult,
+  SharedTaskContext,
+  CollaborationEventType,
+  CollaborationEvent,
+} from '../collaboration_control/types';
+export type {
+  WorkflowRunKind,
+  WorkflowRunStatus,
+  WorkflowStepType,
+  WorkflowStepStatus,
+  WorkflowAttemptStatus,
+  WorkflowAttemptFailureCode,
+  WorkflowAttemptActorKind,
+  WorkflowAttempt,
+  GateStatus,
+  ContextItemSource,
+  ContextConfidence,
+  ContextProposalKind,
+  ContextProposalStatus,
+  ContextConflictType,
+  ContextConflictStatus,
+  ContextProposal,
+  ContextConflictResolution,
+  ContextConflict,
+  OutputContract,
+  WorkflowStep,
+  WorkflowRun,
+  ActiveWorkflowFile,
+  ContextItem,
+  DecisionItem,
+  RiskItem,
+  ArtifactRef,
+  AgentOutputSummary,
+  GateCheck,
+  GateReviewDecision,
+  GateResult,
+  SharedTaskContext,
+  CollaborationEventType,
+  CollaborationEvent,
+} from '../collaboration_control/types';
 
 export interface CollaborationPaths {
   rootDir: string;
@@ -91,181 +92,6 @@ export interface CollaborationPaths {
   eventsFile: string;
   runFile(runId: string): string;
   contextFile(contextId: string): string;
-}
-
-export interface OutputContract {
-  kind:
-    | "analysis"
-    | "plan"
-    | "implementation_result"
-    | "test_result"
-    | "review_result"
-    | "discussion_opinion"
-    | "dispatch_result";
-  required_fields: string[];
-  optional_fields?: string[];
-  artifact_required?: boolean;
-}
-
-export interface WorkflowStep {
-  id: string;
-  run_id: string;
-  title: string;
-  actor_id: string | null;
-  type: WorkflowStepType;
-  status: WorkflowStepStatus;
-  depends_on: string[];
-  context_dependencies?: string[];
-  blocked_by_conflict_ids?: string[];
-  expected_output?: OutputContract;
-  result_ref?: string;
-  result_summary?: string;
-  gate_result_id?: string;
-  source_tool?: "dispatch_to" | "hand_off_to" | "run_worker";
-  /** Exact nested-dispatch intent used to validate Wake/resume reuse. */
-  dispatch_intent?: string;
-  objective?: string;
-  actor_name?: string;
-  actor_kind?: "agent" | "anonymous_worker";
-  resume_token?: string;
-  started_at?: string;
-  completed_at?: string;
-}
-
-export interface WorkflowRun {
-  version: 1;
-  id: string;
-  cid: string;
-  objective: string;
-  kind: WorkflowRunKind;
-  status: WorkflowRunStatus;
-  phase: string;
-  steps: WorkflowStep[];
-  context_id: string;
-  created_by: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface ActiveWorkflowFile {
-  version: 1;
-  run_id: string;
-  context_id: string;
-  updated_at: string;
-}
-
-export interface ContextItem {
-  id: string;
-  text: string;
-  source: ContextItemSource;
-  source_ref?: string;
-  confidence: ContextConfidence;
-  added_by: string;
-  created_at: string;
-}
-
-export interface DecisionItem extends ContextItem {
-  reason?: string;
-}
-
-export interface RiskItem extends ContextItem {
-  severity: "low" | "medium" | "high";
-}
-
-export interface ArtifactRef {
-  id: string;
-  type: string;
-  path?: string;
-  summary?: string;
-  added_by: string;
-  created_at: string;
-}
-
-export interface AgentOutputSummary {
-  actor_id: string;
-  step_id: string;
-  summary: string;
-  created_at: string;
-}
-
-export interface GateCheck {
-  name: string;
-  status: GateStatus;
-  reason?: string;
-}
-
-export type GateReviewDecision = "approved" | "rejected";
-
-export interface GateResult {
-  id: string;
-  run_id: string;
-  step_id: string;
-  name: string;
-  status: GateStatus;
-  checks: GateCheck[];
-  reason?: string;
-  blocks_workflow?: boolean;
-  review_decision?: GateReviewDecision;
-  reviewed_by?: string;
-  reviewed_at?: string;
-  review_reason?: string;
-  created_at: string;
-}
-
-export interface SharedTaskContext {
-  version: 1;
-  id: string;
-  cid: string;
-  run_id: string;
-  objective: string;
-  phase: string;
-  revision: number;
-  constraints: ContextItem[];
-  facts: ContextItem[];
-  decisions: DecisionItem[];
-  open_questions: ContextItem[];
-  risks: RiskItem[];
-  artifacts: ArtifactRef[];
-  agent_outputs: Record<string, AgentOutputSummary>;
-  gates: GateResult[];
-  proposals: ContextProposal[];
-  conflicts: ContextConflict[];
-  updated_at: string;
-}
-
-export type CollaborationEventType =
-  | "workflow_created"
-  | "workflow_planned"
-  | "workflow_resumed"
-  | "workflow_aborted"
-  | "step_retried"
-  | "step_skipped"
-  | "step_started"
-  | "step_completed"
-  | "gate_recorded"
-  | "gate_reviewed"
-  | "context_patch_applied"
-  | "proposal_recorded"
-  | "conflict_detected"
-  | "conflict_status_updated"
-  | "context_revision_mismatch"
-  | "conflict_resolved"
-  | "events_replayed"
-  | "discussion_recorded";
-
-export interface CollaborationEvent {
-  version: 1;
-  id: string;
-  cid: string;
-  run_id: string;
-  context_id?: string;
-  type: CollaborationEventType;
-  actor_id?: string | null;
-  step_id?: string;
-  gate_id?: string;
-  summary?: string;
-  payload?: Record<string, unknown>;
-  created_at: string;
 }
 
 async function appendCollaborationEvent(
@@ -319,8 +145,9 @@ function conversationLock(uid: string, cid: string): Mutex {
 export function collaborationPaths(
   uid: string,
   cid: string,
+  projectIdHint?: string | null,
 ): CollaborationPaths {
-  const groupDir = conversationLayout(uid, cid).groupDir;
+  const groupDir = conversationLayout(uid, cid, projectIdHint).groupDir;
   const rootDir = path.join(groupDir, "collaboration");
   const runsDir = path.join(rootDir, "workflow_runs");
   const contextsDir = path.join(rootDir, "workflow_contexts");
@@ -357,25 +184,191 @@ function validRun(value: unknown): value is WorkflowRun {
   );
 }
 
+function normalizeWorkflowActorId(
+  value: unknown,
+): string | null | undefined {
+  if (value === null) return null;
+  if (typeof value !== "string") return undefined;
+  const actorId = value.trim();
+  return safeId(actorId) ? actorId : undefined;
+}
+
+function normalizeWorkflowActorName(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const actorName = value
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return actorName || undefined;
+}
+
+function normalizeWorkflowAttemptStatus(
+  value: unknown,
+): WorkflowAttemptStatus | undefined {
+  return value === "running" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "cancelled"
+    ? value
+    : undefined;
+}
+
+function normalizeWorkflowAttemptFailureCode(
+  value: unknown,
+): WorkflowAttemptFailureCode | undefined {
+  return value === "coordinator_tool_idle" ||
+    value === "coordinator_agent_idle" ||
+    value === "runtime_failed" ||
+    value === "dependency_failed"
+    ? value
+    : undefined;
+}
+
+function normalizeWorkflowAttemptActorKind(
+  value: unknown,
+): WorkflowAttemptActorKind | undefined {
+  return value === "agent" || value === "anonymous_worker"
+    ? value
+    : undefined;
+}
+
+function normalizeIsoTimestamp(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const timestamp = value.trim();
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})?$/.test(
+      timestamp,
+    )
+  ) {
+    return undefined;
+  }
+  return Number.isFinite(Date.parse(timestamp)) ? timestamp : undefined;
+}
+
+function normalizeWorkflowAttempt(value: unknown): WorkflowAttempt | null {
+  if (!isPlainRecord(value)) return null;
+  const attempt = value.attempt;
+  if (
+    typeof attempt !== "number" ||
+    !Number.isSafeInteger(attempt) ||
+    attempt < 1 ||
+    attempt > 4
+  ) {
+    return null;
+  }
+  const actorId = normalizeWorkflowActorId(value.actor_id);
+  const actorKind = normalizeWorkflowAttemptActorKind(value.actor_kind);
+  const status = normalizeWorkflowAttemptStatus(value.status);
+  const startedAt = normalizeIsoTimestamp(value.started_at);
+  if (
+    actorId === undefined ||
+    !actorKind ||
+    !status ||
+    !startedAt ||
+    (actorKind === "agent" && actorId === null) ||
+    (actorKind === "anonymous_worker" && actorId !== null)
+  ) {
+    return null;
+  }
+  const actorName = normalizeWorkflowActorName(value.actor_name);
+  if (status === "running") {
+    return {
+      attempt,
+      actor_id: actorId,
+      actor_kind: actorKind,
+      ...(actorName ? { actor_name: actorName } : {}),
+      status,
+      started_at: startedAt,
+    };
+  }
+  const completedAt = normalizeIsoTimestamp(value.completed_at);
+  if (!completedAt) return null;
+  const failureCode = normalizeWorkflowAttemptFailureCode(value.failure_code);
+  return {
+    attempt,
+    actor_id: actorId,
+    actor_kind: actorKind,
+    ...(actorName ? { actor_name: actorName } : {}),
+    status,
+    ...(failureCode ? { failure_code: failureCode } : {}),
+    started_at: startedAt,
+    completed_at: completedAt,
+  };
+}
+
+function normalizeWorkflowAttempts(value: unknown): WorkflowAttempt[] {
+  if (!Array.isArray(value)) return [];
+  const valid = value
+    .map(normalizeWorkflowAttempt)
+    .filter((attempt): attempt is WorkflowAttempt => !!attempt);
+  const terminal = valid.filter((attempt) => attempt.status !== "running");
+  const last = valid[valid.length - 1];
+  const canonical = [
+    ...terminal,
+    ...(last?.status === "running" ? [last] : []),
+  ].slice(-4);
+  return canonical.map((attempt, index) => ({
+    ...attempt,
+    attempt: index + 1,
+  }));
+}
+
 function normalizeWorkflowRun(value: unknown): WorkflowRun | null {
   if (!validRun(value)) return null;
   const run = value as WorkflowRun;
   if (run.steps.some((step) => !isPlainRecord(step))) return null;
+  if (
+    run.steps.some(
+      (step) =>
+        hasInvalidWorkflowDependencyIds(step.depends_on) ||
+        hasInvalidStoredAccessMetadata(step),
+    )
+  ) {
+    return null;
+  }
   return {
     ...run,
     steps: run.steps.map((step) => {
       const normalized = { ...step };
+      const workflowDependencies = normalizeWorkflowDependencyIds(
+        step.depends_on,
+      );
       const contextDependencies = normalizeContextDependencies(
         step.context_dependencies,
       );
       const conflictIds = normalizeConflictIdArray(
         step.blocked_by_conflict_ids,
       );
+      const originalActorId = normalizeWorkflowActorId(
+        step.original_actor_id,
+      );
+      const currentActorId = normalizeWorkflowActorId(step.current_actor_id);
+      const requiredCapabilities = step.required_capabilities;
+      const writeScopes = step.write_scopes;
+      const attempts = normalizeWorkflowAttempts(step.attempts);
+      normalized.depends_on = workflowDependencies;
       if (contextDependencies.length)
         normalized.context_dependencies = contextDependencies;
       else delete normalized.context_dependencies;
       if (conflictIds.length) normalized.blocked_by_conflict_ids = conflictIds;
       else delete normalized.blocked_by_conflict_ids;
+      if (originalActorId !== undefined)
+        normalized.original_actor_id = originalActorId;
+      else delete normalized.original_actor_id;
+      if (currentActorId !== undefined)
+        normalized.current_actor_id = currentActorId;
+      else delete normalized.current_actor_id;
+      if (requiredCapabilities !== undefined)
+        normalized.required_capabilities = [...requiredCapabilities];
+      else delete normalized.required_capabilities;
+      if (step.access_mode !== undefined)
+        normalized.access_mode = step.access_mode;
+      else delete normalized.access_mode;
+      if (writeScopes !== undefined)
+        normalized.write_scopes = [...writeScopes];
+      else delete normalized.write_scopes;
+      if (attempts.length) normalized.attempts = attempts;
+      else delete normalized.attempts;
       return normalized;
     }),
   };
@@ -410,10 +403,11 @@ export async function readWorkflowRun(
   uid: string,
   cid: string,
   runId: string,
+  projectIdHint?: string | null,
 ): Promise<WorkflowRun | null> {
   if (!safeId(runId)) return null;
   const raw = await readJson<unknown>(
-    collaborationPaths(uid, cid).runFile(runId),
+    collaborationPaths(uid, cid, projectIdHint).runFile(runId),
   );
   return normalizeWorkflowRun(raw);
 }
@@ -422,10 +416,11 @@ export async function readSharedTaskContext(
   uid: string,
   cid: string,
   contextId: string,
+  projectIdHint?: string | null,
 ): Promise<SharedTaskContext | null> {
   if (!safeId(contextId)) return null;
   const raw = await readJson<unknown>(
-    collaborationPaths(uid, cid).contextFile(contextId),
+    collaborationPaths(uid, cid, projectIdHint).contextFile(contextId),
   );
   return normalizeSharedTaskContext(raw);
 }
@@ -469,14 +464,15 @@ export async function readActiveSharedTaskContext(
 async function readActiveWorkflowStateUnlocked(
   uid: string,
   cid: string,
+  projectIdHint?: string | null,
 ): Promise<{ run: WorkflowRun; context: SharedTaskContext } | null> {
   const active = await readJson<unknown>(
-    collaborationPaths(uid, cid).activeFile,
+    collaborationPaths(uid, cid, projectIdHint).activeFile,
   );
   if (!validActiveFile(active)) return null;
-  const run = await readWorkflowRun(uid, cid, active.run_id);
+  const run = await readWorkflowRun(uid, cid, active.run_id, projectIdHint);
   if (!run || run.context_id !== active.context_id) return null;
-  const context = await readSharedTaskContext(uid, cid, active.context_id);
+  const context = await readSharedTaskContext(uid, cid, active.context_id, projectIdHint);
   if (!context || context.run_id !== run.id) return null;
   return { run, context };
 }
@@ -633,6 +629,9 @@ export interface PlanWorkflowStepInput {
   blocked_by_conflict_ids?: string[];
   expected_output?: OutputContract;
   source_tool?: "dispatch_to" | "hand_off_to" | "run_worker";
+  required_capabilities?: string[];
+  access_mode?: "read" | "write";
+  write_scopes?: string[];
 }
 
 async function planWorkflowStepsUnlocked(
@@ -654,6 +653,12 @@ async function planWorkflowStepsUnlocked(
       input.context_dependencies,
     );
     const conflictIds = normalizeConflictIdArray(input.blocked_by_conflict_ids);
+    const dependsOn = normalizeWorkflowDependencyInput(input.depends_on);
+    const requiredCapabilities = normalizeBoundedStringArray(
+      input.required_capabilities,
+    );
+    const accessMode = normalizeWorkflowAccessMode(input.access_mode);
+    const writeScopes = normalizeBoundedStringArray(input.write_scopes);
     planned.push({
       id: `wstep-${genId12()}`,
       run_id: run.id,
@@ -661,13 +666,18 @@ async function planWorkflowStepsUnlocked(
       actor_id: input.actor_id || null,
       type: input.type || "dispatch",
       status: "pending",
-      depends_on: input.depends_on || [],
+      depends_on: dependsOn,
       ...(contextDependencies.length
         ? { context_dependencies: contextDependencies }
         : {}),
       ...(conflictIds.length ? { blocked_by_conflict_ids: conflictIds } : {}),
       expected_output: input.expected_output,
       source_tool: input.source_tool,
+      ...(requiredCapabilities.length
+        ? { required_capabilities: requiredCapabilities }
+        : {}),
+      access_mode: accessMode,
+      ...(writeScopes.length ? { write_scopes: writeScopes } : {}),
     });
   }
   if (!planned.length) return run;
@@ -694,6 +704,34 @@ async function planWorkflowStepsUnlocked(
     },
   });
   return run;
+}
+
+function incompleteWorkflowStepDependencies(
+  run: WorkflowRun,
+  step: WorkflowStep,
+): string[] {
+  const terminal = new Set(
+    run.steps
+      .filter(
+        (candidate) =>
+          candidate.status === "completed" || candidate.status === "skipped",
+      )
+      .map((candidate) => candidate.id),
+  );
+  return (step.depends_on || []).filter(
+    (dependency) => !terminal.has(dependency),
+  );
+}
+
+function assertWorkflowStepDependenciesComplete(
+  run: WorkflowRun,
+  step: WorkflowStep,
+): void {
+  const missing = incompleteWorkflowStepDependencies(run, step);
+  if (!missing.length) return;
+  throw new Error(
+    `workflow step dependencies incomplete: ${missing.join(", ")}`,
+  );
 }
 
 async function startPlannedWorkflowStepUnlocked(
@@ -740,26 +778,11 @@ async function startPlannedWorkflowStepUnlocked(
     await persistReconciliation();
     throw new Error(`workflow step is not pending: ${step.status}`);
   }
-  const completed = new Set(
-    run.steps
-      .filter(
-        (item) => item.status === "completed" || item.status === "skipped",
-      )
-      .map((item) => item.id),
-  );
-  const passedGateSteps = new Set(
-    (context?.gates || [])
-      .filter((gate) => gate.status === "passed")
-      .map((gate) => gate.step_id),
-  );
-  const missing = (step.depends_on || []).filter(
-    (id) => !completed.has(id) && !passedGateSteps.has(id),
-  );
-  if (missing.length) {
+  try {
+    assertWorkflowStepDependenciesComplete(run, step);
+  } catch (error) {
     await persistReconciliation();
-    throw new Error(
-      `workflow step dependencies are not completed: ${missing.join(",")}`,
-    );
+    throw error;
   }
   const now = nowIso();
   step.status = "running";
@@ -902,6 +925,322 @@ async function completeWorkflowStepUnlocked(
   return step;
 }
 
+function workflowAttemptEvent(
+  events: CollaborationEvent[],
+  type: "step_attempt_started" | "step_attempt_finished",
+  runId: string,
+  stepId: string,
+  attemptNumber: number,
+): CollaborationEvent | undefined {
+  return events.find(
+    (event) =>
+      event.type === type &&
+      event.run_id === runId &&
+      event.step_id === stepId &&
+      event.payload?.attempt === attemptNumber,
+  );
+}
+
+type WorkflowAttemptAuditType =
+  | "step_attempt_started"
+  | "step_attempt_finished";
+
+type WorkflowAttemptAuditBeforeAppendForTest = (
+  type: WorkflowAttemptAuditType,
+) => void | Promise<void>;
+
+let _workflowAttemptAuditBeforeAppendForTest:
+  | WorkflowAttemptAuditBeforeAppendForTest
+  | null = null;
+
+/** Main-process test seam for simulating an audit append failure after durability. */
+export function _setWorkflowAttemptAuditBeforeAppendForTest(
+  hook: WorkflowAttemptAuditBeforeAppendForTest | null,
+): void {
+  _workflowAttemptAuditBeforeAppendForTest = hook;
+}
+
+async function beforeWorkflowAttemptAuditAppendForTest(
+  type: WorkflowAttemptAuditType,
+): Promise<void> {
+  await _workflowAttemptAuditBeforeAppendForTest?.(type);
+}
+
+async function appendWorkflowAttemptStartedEventIfMissing(
+  uid: string,
+  cid: string,
+  run: WorkflowRun,
+  contextId: string,
+  step: WorkflowStep,
+  attempt: WorkflowAttempt,
+): Promise<boolean> {
+  const existing = workflowAttemptEvent(
+    await readCollaborationEvents(uid, cid, 0),
+    "step_attempt_started",
+    run.id,
+    step.id,
+    attempt.attempt,
+  );
+  if (existing) {
+    if (
+      existing.actor_id !== attempt.actor_id ||
+      existing.payload?.actor_kind !== attempt.actor_kind
+    ) {
+      throw new Error("workflow step attempt start event conflict");
+    }
+    return true;
+  }
+  await beforeWorkflowAttemptAuditAppendForTest("step_attempt_started");
+  await appendCollaborationEvent(uid, cid, {
+    type: "step_attempt_started",
+    run_id: run.id,
+    context_id: contextId,
+    actor_id: attempt.actor_id,
+    step_id: step.id,
+    payload: { attempt: attempt.attempt, actor_kind: attempt.actor_kind },
+  });
+  return false;
+}
+
+async function appendWorkflowAttemptFinishedEventIfMissing(
+  uid: string,
+  cid: string,
+  run: WorkflowRun,
+  contextId: string,
+  step: WorkflowStep,
+  attempt: WorkflowAttempt,
+): Promise<void> {
+  const existing = workflowAttemptEvent(
+    await readCollaborationEvents(uid, cid, 0),
+    "step_attempt_finished",
+    run.id,
+    step.id,
+    attempt.attempt,
+  );
+  if (existing) {
+    if (
+      existing.actor_id !== attempt.actor_id ||
+      existing.payload?.status !== attempt.status ||
+      existing.payload?.failure_code !== attempt.failure_code
+    ) {
+      throw new Error("workflow step attempt finish event conflict");
+    }
+    return;
+  }
+  await beforeWorkflowAttemptAuditAppendForTest("step_attempt_finished");
+  await appendCollaborationEvent(uid, cid, {
+    type: "step_attempt_finished",
+    run_id: run.id,
+    context_id: contextId,
+    actor_id: attempt.actor_id,
+    step_id: step.id,
+    payload: {
+      attempt: attempt.attempt,
+      status: attempt.status,
+      ...(attempt.failure_code
+        ? { failure_code: attempt.failure_code }
+        : {}),
+    },
+  });
+}
+
+export type BeginWorkflowStepAttemptInput =
+  | {
+      actor_id: string;
+      actor_kind: "agent";
+      actor_name?: string;
+    }
+  | {
+      actor_id: null;
+      actor_kind: "anonymous_worker";
+      actor_name?: string;
+    };
+
+async function beginWorkflowStepAttemptUnlocked(
+  uid: string,
+  cid: string,
+  stepId: string,
+  input: BeginWorkflowStepAttemptInput,
+): Promise<WorkflowStep> {
+  if (!safeId(stepId)) throw new Error("invalid workflow step id");
+  const actorKind = normalizeWorkflowAttemptActorKind(input.actor_kind);
+  if (!actorKind) throw new Error("invalid workflow step attempt actor kind");
+  if (
+    (actorKind === "agent" && input.actor_id === null) ||
+    (actorKind === "anonymous_worker" && input.actor_id !== null)
+  ) {
+    throw new Error("workflow step attempt actor kind/id mismatch");
+  }
+  const actorId = normalizeWorkflowActorId(input.actor_id);
+  if (actorId === undefined)
+    throw new Error("invalid workflow step attempt actor id");
+  const actorName = normalizeWorkflowActorName(input.actor_name);
+  const active = await readActiveWorkflowStateUnlocked(uid, cid);
+  if (!active) throw new Error("active workflow context not found");
+  const step = active.run.steps.find((candidate) => candidate.id === stepId);
+  if (!step) throw new Error("workflow step not found");
+  const attempts = step.attempts || [];
+  const latest = attempts[attempts.length - 1];
+  if (latest?.status === "running") {
+    if (latest.actor_id !== actorId || latest.actor_kind !== actorKind) {
+      throw new Error("workflow step already has a running attempt");
+    }
+    const eventAlreadyExists =
+      await appendWorkflowAttemptStartedEventIfMissing(
+        uid,
+        cid,
+        active.run,
+        active.context.id,
+        step,
+        latest,
+      );
+    if (eventAlreadyExists) {
+      throw new Error("workflow step attempt already started");
+    }
+    return step;
+  }
+  if (attempts.length >= 4)
+    throw new Error("workflow step attempt limit reached");
+  const now = nowIso();
+  if (step.original_actor_id === undefined)
+    step.original_actor_id = normalizeWorkflowActorId(step.actor_id) ?? null;
+  step.current_actor_id = actorId;
+  step.actor_id = actorId;
+  step.actor_kind = actorKind;
+  if (actorName) step.actor_name = actorName;
+  else delete step.actor_name;
+  const attempt: WorkflowAttempt = {
+    attempt: attempts.length + 1,
+    actor_id: actorId,
+    actor_kind: actorKind,
+    ...(actorName ? { actor_name: actorName } : {}),
+    status: "running",
+    started_at: now,
+  };
+  step.attempts = [...attempts, attempt];
+  active.run.updated_at = now;
+  await writeRun(uid, cid, active.run);
+  await appendWorkflowAttemptStartedEventIfMissing(
+    uid,
+    cid,
+    active.run,
+    active.context.id,
+    step,
+    attempt,
+  );
+  return step;
+}
+
+export interface FinishWorkflowStepAttemptInput {
+  status: Exclude<WorkflowAttemptStatus, "running">;
+  failure_code?: WorkflowAttemptFailureCode;
+}
+
+async function finishWorkflowStepAttemptUnlocked(
+  uid: string,
+  cid: string,
+  stepId: string,
+  input: FinishWorkflowStepAttemptInput,
+): Promise<WorkflowStep> {
+  if (!safeId(stepId)) throw new Error("invalid workflow step id");
+  const status = normalizeWorkflowAttemptStatus(input.status);
+  if (!status || status === "running")
+    throw new Error("invalid workflow step attempt status");
+  const failureCode = normalizeWorkflowAttemptFailureCode(input.failure_code);
+  if (input.failure_code !== undefined && !failureCode) {
+    throw new Error("invalid workflow step attempt failure code");
+  }
+  const active = await readActiveWorkflowStateUnlocked(uid, cid);
+  if (!active) throw new Error("active workflow context not found");
+  const step = active.run.steps.find((candidate) => candidate.id === stepId);
+  if (!step) throw new Error("workflow step not found");
+  const attempts = step.attempts || [];
+  const latest = attempts[attempts.length - 1];
+  if (!latest) throw new Error("workflow step has no running attempt");
+  if (latest.status !== "running") {
+    if (latest.status !== status || latest.failure_code !== failureCode) {
+      throw new Error(`workflow step attempt already finished as ${latest.status}`);
+    }
+    await appendWorkflowAttemptFinishedEventIfMissing(
+      uid,
+      cid,
+      active.run,
+      active.context.id,
+      step,
+      latest,
+    );
+    return step;
+  }
+  const now = nowIso();
+  latest.status = status;
+  latest.completed_at = now;
+  if (failureCode) latest.failure_code = failureCode;
+  else delete latest.failure_code;
+  active.run.updated_at = now;
+  await writeRun(uid, cid, active.run);
+  await appendWorkflowAttemptFinishedEventIfMissing(
+    uid,
+    cid,
+    active.run,
+    active.context.id,
+    step,
+    latest,
+  );
+  return step;
+}
+
+type RetryPreparationBoundary = "run" | "context" | "audit";
+type RetryPreparationBoundaryHookForTest = (
+  boundary: RetryPreparationBoundary,
+) => void | Promise<void>;
+
+let _retryPreparationBoundaryHookForTest:
+  | RetryPreparationBoundaryHookForTest
+  | null = null;
+
+/** Main-process test seam for partial retry-preparation durability. */
+export function _setRetryPreparationBoundaryHookForTest(
+  hook: RetryPreparationBoundaryHookForTest | null,
+): void {
+  _retryPreparationBoundaryHookForTest = hook;
+}
+
+async function beforeRetryPreparationBoundaryForTest(
+  boundary: RetryPreparationBoundary,
+): Promise<void> {
+  await _retryPreparationBoundaryHookForTest?.(boundary);
+}
+
+function retryEventAttempt(step: WorkflowStep): number {
+  return (step.attempts || []).length + 1;
+}
+
+async function appendStepRetriedEventIfMissing(
+  uid: string,
+  cid: string,
+  run: WorkflowRun,
+  step: WorkflowStep,
+): Promise<void> {
+  const attempt = retryEventAttempt(step);
+  const existing = (await readCollaborationEvents(uid, cid, 0)).find(
+    (event) =>
+      event.type === "step_retried" &&
+      event.run_id === run.id &&
+      event.step_id === step.id &&
+      event.payload?.attempt === attempt,
+  );
+  if (existing) return;
+  await appendCollaborationEvent(uid, cid, {
+    type: "step_retried",
+    run_id: run.id,
+    context_id: run.context_id,
+    actor_id: step.actor_id,
+    step_id: step.id,
+    summary: step.title,
+    payload: { attempt },
+  });
+}
+
 async function retryWorkflowStepUnlocked(
   uid: string,
   cid: string,
@@ -937,16 +1276,14 @@ async function retryWorkflowStepUnlocked(
     context.phase = run.phase;
     context.updated_at = now;
   }
+  await beforeRetryPreparationBoundaryForTest("run");
   await writeRun(uid, cid, run);
-  if (context) await writeContext(uid, cid, context);
-  await appendCollaborationEvent(uid, cid, {
-    type: "step_retried",
-    run_id: run.id,
-    context_id: run.context_id,
-    actor_id: step.actor_id,
-    step_id: step.id,
-    summary: step.title,
-  });
+  if (context) {
+    await beforeRetryPreparationBoundaryForTest("context");
+    await writeContext(uid, cid, context);
+  }
+  await beforeRetryPreparationBoundaryForTest("audit");
+  await appendStepRetriedEventIfMissing(uid, cid, run, step);
   return step;
 }
 
@@ -1231,6 +1568,28 @@ export async function completeWorkflowStep(
   );
 }
 
+export async function beginWorkflowStepAttempt(
+  uid: string,
+  cid: string,
+  stepId: string,
+  input: BeginWorkflowStepAttemptInput,
+): Promise<WorkflowStep> {
+  return conversationLock(uid, cid).runExclusive(() =>
+    beginWorkflowStepAttemptUnlocked(uid, cid, stepId, input),
+  );
+}
+
+export async function finishWorkflowStepAttempt(
+  uid: string,
+  cid: string,
+  stepId: string,
+  input: FinishWorkflowStepAttemptInput,
+): Promise<WorkflowStep> {
+  return conversationLock(uid, cid).runExclusive(() =>
+    finishWorkflowStepAttemptUnlocked(uid, cid, stepId, input),
+  );
+}
+
 export async function retryWorkflowStep(
   uid: string,
   cid: string,
@@ -1240,6 +1599,97 @@ export async function retryWorkflowStep(
   return conversationLock(uid, cid).runExclusive(() =>
     retryWorkflowStepUnlocked(uid, cid, runId, stepId),
   );
+}
+
+export async function prepareWorkflowStepForRetry(
+  uid: string,
+  cid: string,
+  stepId: string,
+): Promise<WorkflowStep> {
+  return conversationLock(uid, cid).runExclusive(async () => {
+    const invariant = () =>
+      new Error("workflow step retry lifecycle invariant");
+    const active = await readActiveWorkflowRunUnlocked(uid, cid);
+    const run = active
+      ? await readWorkflowRun(uid, cid, active.id)
+      : null;
+    const step = run?.steps.find((candidate) => candidate.id === stepId);
+    if (!run || !step) throw invariant();
+    if (
+      step.status === "failed" ||
+      step.status === "blocked" ||
+      step.status === "skipped"
+    ) {
+      try {
+        await retryWorkflowStepUnlocked(uid, cid, run.id, step.id);
+      } catch {
+        // Reconcile from disk below. The run write may already be durable even
+        // when the following context or audit boundary threw.
+      }
+    }
+
+    try {
+      const authoritative = await readWorkflowRun(uid, cid, run.id);
+      const pending = authoritative?.steps.find(
+        (candidate) => candidate.id === step.id,
+      );
+      if (!authoritative || !pending || pending.status !== "pending") {
+        throw invariant();
+      }
+      const context = await readSharedTaskContext(
+        uid,
+        cid,
+        authoritative.context_id,
+      );
+      if (!context) throw invariant();
+      const reconciliation = reconcileWorkflowStepBlockers(
+        authoritative,
+        context,
+      );
+      if (reconciliation.runChanged || pending.status !== "pending") {
+        throw invariant();
+      }
+      const contextPhaseChanged = context.phase !== authoritative.phase;
+      if (contextPhaseChanged) context.phase = authoritative.phase;
+      if (reconciliation.contextChanged || contextPhaseChanged) {
+        context.updated_at = authoritative.updated_at;
+        await writeContext(uid, cid, context);
+      }
+      await appendStepRetriedEventIfMissing(
+        uid,
+        cid,
+        authoritative,
+        pending,
+      );
+      const confirmed = await readWorkflowRun(uid, cid, authoritative.id);
+      const confirmedStep = confirmed?.steps.find(
+        (candidate) => candidate.id === pending.id,
+      );
+      const confirmedContext = await readSharedTaskContext(
+        uid,
+        cid,
+        authoritative.context_id,
+      );
+      const retryEvent = (await readCollaborationEvents(uid, cid, 0)).find(
+        (event) =>
+          event.type === "step_retried" &&
+          event.run_id === authoritative.id &&
+          event.step_id === pending.id &&
+          event.payload?.attempt === retryEventAttempt(pending),
+      );
+      if (
+        !confirmedStep ||
+        confirmedStep.status !== "pending" ||
+        confirmedContext?.phase !== authoritative.phase ||
+        !retryEvent
+      ) {
+        throw invariant();
+      }
+      return confirmedStep;
+    } catch {
+      throw invariant();
+    }
+  });
 }
 
 export async function skipWorkflowStep(
@@ -1912,15 +2362,106 @@ function normalizeConflictType(value: unknown): ContextConflictType {
     : "recommendation";
 }
 
-function normalizeStringArray(value: unknown): string[] {
+const MAX_WORKFLOW_METADATA_ITEMS = 256;
+const MAX_WORKFLOW_METADATA_STRING_LENGTH = 16_384;
+const MAX_WORKFLOW_ID_LENGTH = 512;
+
+function isCanonicalStoredStringArray(value: unknown): value is string[] {
+  if (!Array.isArray(value) || value.length > MAX_WORKFLOW_METADATA_ITEMS)
+    return false;
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (
+      typeof item !== "string" ||
+      !item ||
+      item !== item.trim() ||
+      item.length > MAX_WORKFLOW_METADATA_STRING_LENGTH ||
+      seen.has(item)
+    ) {
+      return false;
+    }
+    seen.add(item);
+  }
+  return true;
+}
+
+function hasInvalidStoredAccessMetadata(step: WorkflowStep): boolean {
+  if (
+    step.required_capabilities !== undefined &&
+    !isCanonicalStoredStringArray(step.required_capabilities)
+  ) {
+    return true;
+  }
+  if (
+    step.write_scopes !== undefined &&
+    !isCanonicalStoredStringArray(step.write_scopes)
+  ) {
+    return true;
+  }
+  return (
+    step.access_mode !== undefined &&
+    step.access_mode !== "read" &&
+    step.access_mode !== "write"
+  );
+}
+
+function normalizeBoundedStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return Array.from(
     new Set(
       value
-        .map((item) => (typeof item === "string" ? item.trim() : ""))
+        .slice(0, MAX_WORKFLOW_METADATA_ITEMS)
+        .map((item) =>
+          typeof item === "string"
+            ? item.trim().slice(0, MAX_WORKFLOW_METADATA_STRING_LENGTH)
+            : "",
+        )
         .filter(Boolean),
     ),
   );
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  return normalizeBoundedStringArray(value);
+}
+
+function normalizedWorkflowDependencyId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const dependency = value.trim();
+  return dependency.length <= MAX_WORKFLOW_ID_LENGTH && safeId(dependency)
+    ? dependency
+    : null;
+}
+
+function hasInvalidWorkflowDependencyIds(value: unknown): boolean {
+  return (
+    value !== undefined &&
+    (!Array.isArray(value) ||
+      value.length > MAX_WORKFLOW_METADATA_ITEMS ||
+      value.some((item) => normalizedWorkflowDependencyId(item) === null))
+  );
+}
+
+function normalizeWorkflowDependencyIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value
+        .slice(0, MAX_WORKFLOW_METADATA_ITEMS)
+        .map(normalizedWorkflowDependencyId)
+        .filter((item): item is string => item !== null),
+    ),
+  );
+}
+
+function normalizeWorkflowDependencyInput(value: unknown): string[] {
+  if (hasInvalidWorkflowDependencyIds(value))
+    throw new Error("invalid workflow step dependency id");
+  return normalizeWorkflowDependencyIds(value);
+}
+
+function normalizeWorkflowAccessMode(value: unknown): "read" | "write" {
+  return value === "read" ? "read" : "write";
 }
 
 function normalizeContextDependencies(value: unknown): string[] {
@@ -1959,138 +2500,25 @@ function reconcileWorkflowStepBlockers(
   run: WorkflowRun,
   context: SharedTaskContext,
 ): WorkflowStepBlockerReconciliation {
-  let runChanged = false;
-  let contextChanged = false;
-  const blockingGate = context.gates.find((gate) => {
-    return (
-      gate.blocks_workflow !== false &&
-      (gate.status === "needs_review" || gate.status === "failed")
-    );
-  });
-  const gatePhase =
-    blockingGate?.status === "needs_review"
-      ? "gate_needs_review"
-      : "gate_failed";
-  const wasGateBlocked =
-    run.phase === "gate_needs_review" ||
-    run.phase === "gate_failed" ||
-    run.phase === "gate_rejected";
-  if (blockingGate) {
-    if (run.status !== "blocked") {
-      run.status = "blocked";
-      runChanged = true;
+  const reconciled = reconcileControlPlaneStepBlockers(run, context);
+  run.status = reconciled.run.status;
+  run.phase = reconciled.run.phase;
+  for (const nextStep of reconciled.run.steps) {
+    const currentStep = run.steps.find((step) => step.id === nextStep.id);
+    if (!currentStep) continue;
+    for (const key of Object.keys(currentStep) as Array<keyof WorkflowStep>) {
+      if (!(key in nextStep)) delete (currentStep as any)[key];
     }
-    if (!wasGateBlocked && gatePhase && run.phase !== gatePhase) {
-      run.phase = gatePhase;
-      runChanged = true;
-    }
-  } else if (run.status === "blocked" && wasGateBlocked) {
-    run.status = "running";
-    run.phase = "gate_approved";
-    runChanged = true;
+    Object.assign(currentStep, nextStep);
   }
-  const knownConflicts = context.conflicts.filter((conflict) =>
-    safeId(conflict.id),
-  );
-  const activeConflicts = knownConflicts.filter((conflict) => {
-    return (
-      !!normalizeConflictKey(conflict.conflict_key) &&
-      isActiveConflict(conflict)
-    );
-  });
-  const activeGateStepIds = new Set(
-    context.gates
-      .filter(
-        (gate) =>
-          gate.blocks_workflow !== false &&
-          (gate.status === "needs_review" || gate.status === "failed"),
-      )
-      .map((gate) => gate.step_id),
-  );
-  const passedGateStepIds = new Set(
-    context.gates
-      .filter((gate) => gate.status === "passed")
-      .map((gate) => gate.step_id),
-  );
-  const stepById = new Map(run.steps.map((step) => [step.id, step]));
-
-  for (const step of run.steps) {
-    const contextDependencies = normalizeContextDependencies(
-      step.context_dependencies,
-    );
-    const previousConflictIds = normalizeConflictIdArray(
-      step.blocked_by_conflict_ids,
-    );
-    const desiredConflictIds = activeConflicts
-      .filter((conflict) =>
-        contextDependencies.includes(
-          normalizeConflictKey(conflict.conflict_key) || "",
-        ),
-      )
-      .map((conflict) => conflict.id);
-    const gateBlocked = (step.depends_on || []).some((dependencyId) =>
-      activeGateStepIds.has(dependencyId),
-    );
-    const dependenciesReady = (step.depends_on || []).every((dependencyId) => {
-      const dependency = stepById.get(dependencyId);
-      return (
-        dependency?.status === "completed" ||
-        dependency?.status === "skipped" ||
-        passedGateStepIds.has(dependencyId)
-      );
-    });
-
-    if (
-      !sameStringArray(contextDependencies, step.context_dependencies || [])
-    ) {
-      if (contextDependencies.length)
-        step.context_dependencies = contextDependencies;
-      else delete step.context_dependencies;
-      runChanged = true;
-    }
-
-    if (
-      step.status === "pending" &&
-      (desiredConflictIds.length > 0 || gateBlocked)
-    ) {
-      step.status = "blocked";
-      runChanged = true;
-    } else if (
-      step.status === "blocked" &&
-      desiredConflictIds.length === 0 &&
-      !gateBlocked
-    ) {
-      const hadConflictBlocker = previousConflictIds.length > 0;
-      const canRestoreDependency =
-        (step.depends_on || []).length > 0 && dependenciesReady;
-      if (dependenciesReady && (hadConflictBlocker || canRestoreDependency)) {
-        step.status = "pending";
-        runChanged = true;
-      }
-    }
-
-    const nextConflictIds = step.status === "blocked" ? desiredConflictIds : [];
-    if (!sameStringArray(previousConflictIds, nextConflictIds)) {
-      if (nextConflictIds.length)
-        step.blocked_by_conflict_ids = nextConflictIds;
-      else delete step.blocked_by_conflict_ids;
-      runChanged = true;
-    }
+  for (const nextConflict of reconciled.context.conflicts) {
+    const currentConflict = context.conflicts.find((conflict) => conflict.id === nextConflict.id);
+    if (currentConflict) Object.assign(currentConflict, nextConflict);
   }
-
-  for (const conflict of knownConflicts) {
-    const affectedStepIds = run.steps
-      .filter((step) =>
-        (step.blocked_by_conflict_ids || []).includes(conflict.id),
-      )
-      .map((step) => step.id);
-    if (!sameStringArray(conflict.affected_step_ids || [], affectedStepIds)) {
-      conflict.affected_step_ids = affectedStepIds;
-      contextChanged = true;
-    }
-  }
-
-  return { runChanged, contextChanged };
+  return {
+    runChanged: reconciled.runChanged,
+    contextChanged: reconciled.contextChanged,
+  };
 }
 
 function pendingLifecycleProposals(
@@ -2715,8 +3143,9 @@ export interface ActiveCollaborationState {
 async function readActiveCollaborationStateUnlocked(
   uid: string,
   cid: string,
+  projectIdHint?: string | null,
 ): Promise<ActiveCollaborationState | null> {
-  const active = await readActiveWorkflowStateUnlocked(uid, cid);
+  const active = await readActiveWorkflowStateUnlocked(uid, cid, projectIdHint);
   if (!active) return null;
   return {
     ...active,
@@ -2732,37 +3161,59 @@ async function readActiveCollaborationStateUnlocked(
 export async function readActiveCollaborationState(
   uid: string,
   cid: string,
+  projectIdHint?: string | null,
 ): Promise<ActiveCollaborationState | null> {
   return conversationLock(uid, cid).runExclusive(() =>
-    readActiveCollaborationStateUnlocked(uid, cid),
+    readActiveCollaborationStateUnlocked(uid, cid, projectIdHint),
   );
 }
 
 async function readActiveCollaborationSnapshotUnlocked(
   uid: string,
   cid: string,
+  projectIdHint?: string | null,
 ): Promise<CollaborationSnapshot | null> {
   return (
-    (await readActiveCollaborationStateUnlocked(uid, cid))?.snapshot || null
+    (await readActiveCollaborationStateUnlocked(uid, cid, projectIdHint))?.snapshot || null
   );
 }
 
 export async function readCollaborationSnapshot(
   uid: string,
   cid: string,
+  projectIdHint?: string | null,
 ): Promise<CollaborationSnapshot | null> {
   return conversationLock(uid, cid).runExclusive(() =>
-    readActiveCollaborationSnapshotUnlocked(uid, cid),
+    readActiveCollaborationSnapshotUnlocked(uid, cid, projectIdHint),
   );
 }
 
 export async function readActiveCollaborationSnapshot(
   uid: string,
   cid: string,
+  projectIdHint?: string | null,
 ): Promise<CollaborationSnapshot | null> {
   return conversationLock(uid, cid).runExclusive(() =>
-    readActiveCollaborationSnapshotUnlocked(uid, cid),
+    readActiveCollaborationSnapshotUnlocked(uid, cid, projectIdHint),
   );
+}
+
+/** Remove only the active pointer when a message edit invalidates the current
+ * workflow. Historical run/context files remain available for audit, while
+ * subsequent turns cannot inherit an obsolete shared-task context. */
+export async function clearActiveCollaborationState(
+  uid: string,
+  cid: string,
+  projectIdHint?: string | null,
+): Promise<void> {
+  await conversationLock(uid, cid).runExclusive(async () => {
+    const activeFile = collaborationPaths(uid, cid, projectIdHint).activeFile;
+    try {
+      await fsp.unlink(activeFile);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+  });
 }
 
 function bulletList(items: Array<{ text: string }>, limit = 8): string[] {
@@ -2931,7 +3382,11 @@ export interface PrepareNestedDispatchStepInput {
   actor_kind?: "agent" | "anonymous_worker";
   source_tool: "dispatch_to" | "hand_off_to" | "run_worker";
   task: string;
+  depends_on?: string[];
   context_dependencies?: string[];
+  required_capabilities?: string[];
+  access_mode?: "read" | "write";
+  write_scopes?: string[];
   resume_step_id?: string;
   resume_token?: string;
 }
@@ -2978,6 +3433,12 @@ async function prepareNestedDispatchStepUnlocked(
   const task = normalizeDispatchIntent(input.task);
   if (!task) throw new Error("nested dispatch task is required");
   const dependencies = normalizeContextDependencies(input.context_dependencies);
+  const workflowDependencies = normalizeWorkflowDependencyInput(input.depends_on);
+  const requiredCapabilities = normalizeBoundedStringArray(
+    input.required_capabilities,
+  );
+  const accessMode = normalizeWorkflowAccessMode(input.access_mode);
+  const writeScopes = normalizeBoundedStringArray(input.write_scopes);
   const active = await ensureActiveWorkflowRunUnlocked(uid, cid, {
     objective,
     kind: "custom",
@@ -3021,6 +3482,19 @@ async function prepareNestedDispatchStepUnlocked(
     ) {
       throw new Error("resume workflow step context dependencies mismatch");
     }
+    const contractMatches =
+      sameStringArray(
+        normalizeWorkflowDependencyIds(step.depends_on),
+        workflowDependencies,
+      ) &&
+      sameStringArray(
+        step.required_capabilities || [],
+        requiredCapabilities,
+      ) &&
+      (step.access_mode || "write") === accessMode &&
+      sameStringArray(step.write_scopes || [], writeScopes);
+    if (!contractMatches)
+      throw new Error("resume workflow step access contract mismatch");
     if (step.status !== "pending" && step.status !== "blocked") {
       throw new Error(
         `resume workflow step cannot be reused from ${step.status}`,
@@ -3039,11 +3513,16 @@ async function prepareNestedDispatchStepUnlocked(
       resume_token: `wcap-${genId12()}`,
       type: "dispatch",
       status: "pending",
-      depends_on: [],
+      depends_on: workflowDependencies,
       ...(dependencies.length ? { context_dependencies: dependencies } : {}),
       source_tool: input.source_tool,
       dispatch_intent: task,
       objective,
+      ...(requiredCapabilities.length
+        ? { required_capabilities: requiredCapabilities }
+        : {}),
+      access_mode: accessMode,
+      ...(writeScopes.length ? { write_scopes: writeScopes } : {}),
     };
     run.steps.push(step);
     run.phase = "planned";
@@ -3073,6 +3552,55 @@ export async function prepareNestedDispatchStep(
   );
 }
 
+async function checkPreparedNestedDispatchStepDependenciesUnlocked(
+  uid: string,
+  cid: string,
+  stepId: string,
+): Promise<WorkflowStep> {
+  if (!safeId(stepId)) throw new Error("invalid workflow step id");
+  const active = await readActiveWorkflowStateUnlocked(uid, cid);
+  if (!active) throw new Error("active workflow context not found");
+  const step = active.run.steps.find((candidate) => candidate.id === stepId);
+  if (!step) throw new Error("workflow step not found");
+  assertWorkflowStepDependenciesComplete(active.run, step);
+  return step;
+}
+
+export async function checkPreparedNestedDispatchStepDependencies(
+  uid: string,
+  cid: string,
+  stepId: string,
+): Promise<WorkflowStep> {
+  return conversationLock(uid, cid).runExclusive(() =>
+    checkPreparedNestedDispatchStepDependenciesUnlocked(uid, cid, stepId),
+  );
+}
+
+async function appendPreparedNestedStepStartedEventIfMissing(
+  uid: string,
+  cid: string,
+  run: WorkflowRun,
+  step: WorkflowStep,
+): Promise<void> {
+  const existing = (await readCollaborationEvents(uid, cid, 0)).some(
+    (event) => event.type === "step_started" && event.step_id === step.id,
+  );
+  if (existing) return;
+  await appendCollaborationEvent(uid, cid, {
+    type: "step_started",
+    run_id: run.id,
+    context_id: run.context_id,
+    actor_id: step.actor_id,
+    step_id: step.id,
+    summary: step.title,
+    payload: {
+      step_type: step.type,
+      source_tool: step.source_tool,
+      prepared: true,
+    },
+  });
+}
+
 async function startPreparedNestedDispatchStepUnlocked(
   uid: string,
   cid: string,
@@ -3084,9 +3612,13 @@ async function startPreparedNestedDispatchStepUnlocked(
   const { run, context } = active;
   const step = run.steps.find((candidate) => candidate.id === stepId);
   if (!step) throw new Error("workflow step not found");
-  if (step.status === "running") return step;
+  if (step.status === "running") {
+    await appendPreparedNestedStepStartedEventIfMissing(uid, cid, run, step);
+    return step;
+  }
   if (step.status !== "pending")
     throw new Error(`workflow step cannot start from ${step.status}`);
+  assertWorkflowStepDependenciesComplete(run, step);
   const reconciliation = reconcileWorkflowStepBlockers(run, context);
   if (reconciliation.runChanged || reconciliation.contextChanged) {
     run.updated_at = nowIso();
@@ -3106,19 +3638,7 @@ async function startPreparedNestedDispatchStepUnlocked(
   context.updated_at = now;
   await writeRun(uid, cid, run);
   await writeContext(uid, cid, context);
-  await appendCollaborationEvent(uid, cid, {
-    type: "step_started",
-    run_id: run.id,
-    context_id: run.context_id,
-    actor_id: step.actor_id,
-    step_id: step.id,
-    summary: step.title,
-    payload: {
-      step_type: step.type,
-      source_tool: step.source_tool,
-      prepared: true,
-    },
-  });
+  await appendPreparedNestedStepStartedEventIfMissing(uid, cid, run, step);
   return step;
 }
 
@@ -3277,6 +3797,365 @@ export async function finishNestedDispatchStep(
   );
 }
 
+const NESTED_INFRASTRUCTURE_FAILURE_REASON =
+  "Nested dispatch infrastructure failed.";
+
+async function settleNestedDispatchInfrastructureFailureUnlocked(
+  uid: string,
+  cid: string,
+  stepId: string,
+): Promise<WorkflowStep> {
+  const invariant = () =>
+    new Error("nested dispatch infrastructure settlement invariant");
+  if (!safeId(stepId)) throw invariant();
+
+  for (let repair = 0; repair < 3; repair += 1) {
+    let active = await readActiveWorkflowStateUnlocked(uid, cid);
+    let step = active?.run.steps.find((candidate) => candidate.id === stepId);
+    if (!active || !step) throw invariant();
+
+    const latest = (step.attempts || []).at(-1);
+    if (latest?.status === "running" || latest?.status === "failed") {
+      try {
+        await finishWorkflowStepAttemptUnlocked(uid, cid, stepId, {
+          status: "failed",
+          failure_code: latest.failure_code || "runtime_failed",
+        });
+      } catch {
+        // Re-read and repair below; the attempt row or audit may be durable.
+      }
+    }
+
+    active = await readActiveWorkflowStateUnlocked(uid, cid);
+    step = active?.run.steps.find((candidate) => candidate.id === stepId);
+    if (!active || !step) throw invariant();
+    try {
+      if (step.started_at) {
+        await appendPreparedNestedStepStartedEventIfMissing(
+          uid,
+          cid,
+          active.run,
+          step,
+        );
+      }
+      if (step.status === "completed") {
+        await finishNestedDispatchStepUnlocked(uid, cid, stepId, {
+          result: step.result_summary,
+        });
+      } else {
+        await finishNestedDispatchStepUnlocked(uid, cid, stepId, {
+          error:
+            step.status === "failed"
+              ? step.result_summary || NESTED_INFRASTRUCTURE_FAILURE_REASON
+              : NESTED_INFRASTRUCTURE_FAILURE_REASON,
+        });
+      }
+    } catch {
+      // Re-read and retry: run/context/events may have partially committed.
+    }
+
+    active = await readActiveWorkflowStateUnlocked(uid, cid);
+    step = active?.run.steps.find((candidate) => candidate.id === stepId);
+    if (!active || !step) throw invariant();
+    const events = await readCollaborationEvents(uid, cid, 0);
+    const gate = active.context.gates.find(
+      (candidate) => candidate.id === nestedDispatchGateId(stepId),
+    );
+    const startedEvent = events.find(
+      (event) => event.type === "step_started" && event.step_id === stepId,
+    );
+    const completionEvent = events.find(
+      (event) => event.type === "step_completed" && event.step_id === stepId,
+    );
+    const gateEvent = events.find(
+      (event) => event.type === "gate_recorded" && event.step_id === stepId,
+    );
+    const repairedAttempt = (step.attempts || []).at(-1);
+    const attemptEvent = repairedAttempt
+      ? workflowAttemptEvent(
+          events,
+          "step_attempt_finished",
+          active.run.id,
+          stepId,
+          repairedAttempt.attempt,
+        )
+      : undefined;
+    const attemptTerminal =
+      !repairedAttempt ||
+      (repairedAttempt.status !== "running" &&
+        (repairedAttempt.status !== "failed" || !!attemptEvent));
+    if (
+      (step.status === "failed" || step.status === "completed") &&
+      !!step.completed_at &&
+      !!gate &&
+      !!completionEvent &&
+      !!gateEvent &&
+      (!step.started_at || !!startedEvent) &&
+      attemptTerminal
+    ) {
+      return step;
+    }
+  }
+  throw invariant();
+}
+
+export async function settleNestedDispatchInfrastructureFailure(
+  userId: string,
+  cid: string,
+  stepId: string,
+): Promise<WorkflowStep> {
+  return conversationLock(userId, cid).runExclusive(() =>
+    settleNestedDispatchInfrastructureFailureUnlocked(userId, cid, stepId),
+  );
+}
+
+const HANDOFF_FINALIZATION_FAILURE_REASON = "Handoff finalization failed.";
+
+async function appendHandoffFinalizationFailedEventIfMissing(
+  uid: string,
+  cid: string,
+  run: WorkflowRun,
+  step: WorkflowStep,
+): Promise<void> {
+  const events = await readCollaborationEvents(uid, cid, 0);
+  if (
+    events.some(
+      (event) =>
+        event.type === "handoff_finalization_failed" &&
+        event.step_id === step.id,
+    )
+  ) {
+    return;
+  }
+  await appendCollaborationEvent(uid, cid, {
+    type: "handoff_finalization_failed",
+    run_id: run.id,
+    context_id: run.context_id,
+    actor_id: step.actor_id,
+    step_id: step.id,
+    summary: HANDOFF_FINALIZATION_FAILURE_REASON,
+    payload: { failure_code: "handoff_finalization_failed" },
+  });
+}
+
+async function settleHandoffFinalizationFailureUnlocked(
+  uid: string,
+  cid: string,
+  stepId: string,
+): Promise<WorkflowStep> {
+  const invariant = () =>
+    new Error("handoff finalization settlement invariant");
+  if (!safeId(stepId)) throw invariant();
+
+  for (let repair = 0; repair < 3; repair += 1) {
+    let active = await readActiveWorkflowStateUnlocked(uid, cid);
+    let step = active?.run.steps.find((candidate) => candidate.id === stepId);
+    if (!active || !step || step.source_tool !== "hand_off_to") {
+      throw invariant();
+    }
+    if (
+      step.status !== "completed" &&
+      !(
+        step.status === "failed" &&
+        step.result_summary === HANDOFF_FINALIZATION_FAILURE_REASON
+      )
+    ) {
+      throw invariant();
+    }
+
+    const now = nowIso();
+    step.status = "failed";
+    step.result_summary = HANDOFF_FINALIZATION_FAILURE_REASON;
+    step.completed_at = step.completed_at || now;
+    delete step.result_ref;
+    active.run.status = "failed";
+    active.run.phase = "handoff_finalization_failed";
+    active.run.updated_at = now;
+    delete active.context.agent_outputs[step.id];
+    const gateId = step.gate_result_id || nestedDispatchGateId(step.id);
+    step.gate_result_id = gateId;
+    const existingGate = active.context.gates.find(
+      (candidate) => candidate.id === gateId,
+    );
+    const gate: GateResult = {
+      id: gateId,
+      run_id: active.run.id,
+      step_id: step.id,
+      name: existingGate?.name || "dispatch_result_present",
+      status: "failed",
+      checks: [
+        {
+          name: "handoff_finalization_committed",
+          status: "failed",
+          reason: HANDOFF_FINALIZATION_FAILURE_REASON,
+        },
+      ],
+      reason: HANDOFF_FINALIZATION_FAILURE_REASON,
+      blocks_workflow: false,
+      created_at: existingGate?.created_at || step.completed_at,
+    };
+    const gateIndex = active.context.gates.findIndex(
+      (candidate) => candidate.id === gateId,
+    );
+    if (gateIndex >= 0) active.context.gates[gateIndex] = gate;
+    else active.context.gates.push(gate);
+    active.context.phase = "handoff_finalization_failed";
+    active.context.updated_at = now;
+
+    try {
+      await writeRun(uid, cid, active.run);
+      await writeContext(uid, cid, active.context);
+      await appendHandoffFinalizationFailedEventIfMissing(
+        uid,
+        cid,
+        active.run,
+        step,
+      );
+    } catch {
+      // Re-read and converge run/context/audit after any partial write.
+    }
+
+    active = await readActiveWorkflowStateUnlocked(uid, cid);
+    step = active?.run.steps.find((candidate) => candidate.id === stepId);
+    if (!active || !step) throw invariant();
+    const repairedGate = active.context.gates.find(
+      (candidate) => candidate.id === step?.gate_result_id,
+    );
+    const events = await readCollaborationEvents(uid, cid, 0);
+    const audit = events.find(
+      (event) =>
+        event.type === "handoff_finalization_failed" &&
+        event.step_id === stepId,
+    );
+    if (
+      step.status === "failed" &&
+      step.result_summary === HANDOFF_FINALIZATION_FAILURE_REASON &&
+      active.run.status === "failed" &&
+      active.run.phase === "handoff_finalization_failed" &&
+      active.context.phase === "handoff_finalization_failed" &&
+      !active.context.agent_outputs[stepId] &&
+      repairedGate?.status === "failed" &&
+      repairedGate.reason === HANDOFF_FINALIZATION_FAILURE_REASON &&
+      !!audit
+    ) {
+      return step;
+    }
+  }
+  throw invariant();
+}
+
+/** Invalidate a successful Agent attempt whose user-facing hand-off state could
+ * not be finalized. The attempt remains completed; the step/output does not. */
+export async function settleHandoffFinalizationFailure(
+  userId: string,
+  cid: string,
+  stepId: string,
+): Promise<WorkflowStep> {
+  return conversationLock(userId, cid).runExclusive(() =>
+    settleHandoffFinalizationFailureUnlocked(userId, cid, stepId),
+  );
+}
+
+async function settleNestedDispatchAbortUnlocked(
+  uid: string,
+  cid: string,
+  stepId: string,
+  reason: string,
+): Promise<WorkflowStep> {
+  const invariant = () =>
+    new Error("nested dispatch abort settlement invariant");
+  if (!safeId(stepId)) throw invariant();
+  let active = await readActiveWorkflowStateUnlocked(uid, cid);
+  let step = active?.run.steps.find((candidate) => candidate.id === stepId);
+  if (!active || !step) throw invariant();
+
+  const latest = (step.attempts || []).at(-1);
+  if (latest?.status === "running" || latest?.status === "cancelled") {
+    let attemptConfirmed = false;
+    for (let repair = 0; repair < 2 && !attemptConfirmed; repair += 1) {
+      try {
+        await finishWorkflowStepAttemptUnlocked(uid, cid, stepId, {
+          status: "cancelled",
+        });
+      } catch {
+        // Re-read below: the attempt row or audit append may already be durable.
+      }
+      active = await readActiveWorkflowStateUnlocked(uid, cid);
+      step = active?.run.steps.find((candidate) => candidate.id === stepId);
+      const repairedAttempt = (step?.attempts || []).at(-1);
+      const finishedEvent = active
+        ? workflowAttemptEvent(
+            await readCollaborationEvents(uid, cid, 0),
+            "step_attempt_finished",
+            active.run.id,
+            stepId,
+            repairedAttempt?.attempt || 0,
+          )
+        : undefined;
+      attemptConfirmed =
+        repairedAttempt?.status === "cancelled" && !!finishedEvent;
+    }
+    if (!attemptConfirmed) throw invariant();
+  }
+
+  active = await readActiveWorkflowStateUnlocked(uid, cid);
+  step = active?.run.steps.find((candidate) => candidate.id === stepId);
+  if (!active || !step) throw invariant();
+  if (step.status === "completed" || step.status === "failed") return step;
+
+  const stableReason = String(
+    step.status === "skipped"
+      ? step.result_summary || "Nested dispatch aborted."
+      : reason || "Nested dispatch aborted.",
+  ).trim();
+  for (let repair = 0; repair < 2; repair += 1) {
+    try {
+      await finishNestedDispatchStepUnlocked(uid, cid, stepId, {
+        aborted: true,
+        error: stableReason,
+      });
+    } catch {
+      // Re-read and retry: run/context/events may have partially committed.
+    }
+    active = await readActiveWorkflowStateUnlocked(uid, cid);
+    step = active?.run.steps.find((candidate) => candidate.id === stepId);
+    const events = active
+      ? await readCollaborationEvents(uid, cid, 0)
+      : [];
+    const contextGate = active?.context.gates.find(
+      (candidate) => candidate.id === nestedDispatchGateId(stepId),
+    );
+    const completionEvent = events.find(
+      (event) => event.type === "step_completed" && event.step_id === stepId,
+    );
+    const gateEvent = events.find(
+      (event) => event.type === "gate_recorded" && event.step_id === stepId,
+    );
+    if (
+      step?.status === "skipped" &&
+      !!step.completed_at &&
+      !!contextGate &&
+      !!completionEvent &&
+      !!gateEvent
+    ) {
+      return step;
+    }
+  }
+  throw invariant();
+}
+
+/** Settle an abort between preparation/begin and nested model execution. */
+export async function settleNestedDispatchAbort(
+  userId: string,
+  cid: string,
+  stepId: string,
+  reason = "Nested dispatch aborted.",
+): Promise<WorkflowStep> {
+  return conversationLock(userId, cid).runExclusive(() =>
+    settleNestedDispatchAbortUnlocked(userId, cid, stepId, reason),
+  );
+}
+
 async function cancelPreparedNestedDispatchStepUnlocked(
   uid: string,
   cid: string,
@@ -3289,12 +4168,14 @@ async function cancelPreparedNestedDispatchStepUnlocked(
   const step = active.run.steps.find((candidate) => candidate.id === stepId);
   if (!step) throw new Error("workflow step not found");
   if (
-    step.status === "running" ||
     step.status === "completed" ||
-    step.status === "failed"
+    step.status === "failed" ||
+    step.status === "skipped"
   ) {
-    throw new Error(`workflow step cannot be cancelled from ${step.status}`);
+    return step;
   }
+  if (step.status === "running")
+    throw new Error(`workflow step cannot be cancelled from ${step.status}`);
   return finishNestedDispatchStepUnlocked(uid, cid, stepId, {
     aborted: true,
     error: String(reason || "Nested dispatch cancelled before start.").trim(),

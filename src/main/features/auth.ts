@@ -62,6 +62,7 @@ import * as path from 'node:path';
 import { shell } from 'electron';
 
 import { userAuthProfilesFile, userLocalConfigDir } from '../paths';
+import { safeId } from '../storage';
 import * as localSecrets from '../util/local-secret-store';
 import { safeExternalUserActionUrl } from '../util/window-security';
 import { getActiveUserId } from './users';
@@ -151,8 +152,13 @@ export async function warmup(): Promise<void> {
 }
 
 // ── File paths ───────────────────────────────────────────────────────────
-function profilesFile(): string { return userAuthProfilesFile(getActiveUserId()); }
-function authDir(): string { return userLocalConfigDir(getActiveUserId()); }
+function assertAuthUserId(userId: string): string {
+  if (!safeId(userId)) throw new Error('invalid user id');
+  return userId;
+}
+
+function profilesFile(userId = getActiveUserId()): string { return userAuthProfilesFile(assertAuthUserId(userId)); }
+function authDir(userId = getActiveUserId()): string { return userLocalConfigDir(assertAuthUserId(userId)); }
 
 // Legacy compat for tests/callers that expect this shape.
 export const FEATURED_PROVIDERS: readonly string[] =
@@ -263,8 +269,26 @@ export interface TtsProfile {
   createdAt: number;
 }
 
+export interface CustomProvider {
+  id: string;
+  name: string;
+  protocol: 'anthropic' | 'openai' | 'gemini';
+  baseUrl: string;
+  apiKey: string;
+  notes?: string;
+  websiteUrl?: string;
+  needsKey?: boolean;
+  needsModelMapping?: boolean;
+  models?: string[];
+  source: 'manual' | 'ccswitch';
+  externalId?: string;
+  createdAt: number;
+  updatedAt?: number;
+}
+
 interface ProfilesFile {
-  /** v3 = chat profiles only. v4 adds BYO search / image / video / speech profiles. */
+  /** v3 = chat profiles only. v4 adds media profiles. v5 adds custom providers.
+   *  v6 adds bounded unified-authorization request receipts. */
   version: number;
   profiles: Record<string, StoredProfile>;
   entries: Entry[];
@@ -272,9 +296,17 @@ interface ProfilesFile {
   imageProfiles?: ImageProfile[];
   videoProfiles?: VideoProfile[];
   ttsProfiles?: TtsProfile[];
+  customProviders?: CustomProvider[];
+  authorizationRequests?: AuthorizationRequestReceipt[];
 }
 
-const PROFILES_FILE_VERSION = 4;
+interface AuthorizationRequestReceipt {
+  requestId: string;
+  authorizationId: string;
+  createdAt: number;
+}
+
+const PROFILES_FILE_VERSION = 6;
 const AUTH_SECRET_NAMESPACE = 'auth.profiles';
 const AUTH_SECRET_RECORD_ID = 'auth-profiles.json';
 
@@ -298,13 +330,15 @@ function emptyProfilesStore(): ProfilesFile {
     imageProfiles: [],
     videoProfiles: [],
     ttsProfiles: [],
+    customProviders: [],
+    authorizationRequests: [],
   };
 }
 
 // ── Profiles store IO ────────────────────────────────────────────────────
 
-function ensureAuthDir(): void {
-  const d = authDir();
+function ensureAuthDir(userId = getActiveUserId()): void {
+  const d = authDir(userId);
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 }
 
@@ -362,12 +396,12 @@ function decryptProfilesPayload(raw: string, localId: string): { json: string; n
   throw new Error('auth-profiles decrypt failed');
 }
 
-function loadProfiles(): ProfilesFile {
+export function loadProfilesForUser(userId: string): ProfilesFile {
+  const uid = assertAuthUserId(userId);
   try {
-    const raw = fs.readFileSync(profilesFile(), 'utf-8');
+    const raw = fs.readFileSync(profilesFile(uid), 'utf-8');
     // Decrypt current Hosted/Open fallback payloads, or the previous crypto-vault whole-file
     // format. Plain JSON is also accepted as a one-shot migration input.
-    const uid = getActiveUserId();
     const { json, needsRewrite } = decryptProfilesPayload(raw, uid);
     const data = JSON.parse(json) as Partial<ProfilesFile>;
     if (data && typeof data === 'object' && data.profiles && typeof data.profiles === 'object') {
@@ -399,8 +433,10 @@ function loadProfiles(): ProfilesFile {
       const imageProfiles = parseImageProfilesArray((data as any).imageProfiles);
       const videoProfiles = parseVideoProfilesArray((data as any).videoProfiles);
       const ttsProfiles = parseTtsProfilesArray((data as any).ttsProfiles);
-      const store = { version: PROFILES_FILE_VERSION, profiles, entries, searchProfiles, imageProfiles, videoProfiles, ttsProfiles };
-      if (needsRewrite) saveProfiles(store);
+      const customProviders = parseCustomProvidersArray((data as any).customProviders);
+      const authorizationRequests = parseAuthorizationRequestReceipts((data as any).authorizationRequests);
+      const store = { version: PROFILES_FILE_VERSION, profiles, entries, searchProfiles, imageProfiles, videoProfiles, ttsProfiles, customProviders, authorizationRequests };
+      if (needsRewrite) saveProfilesForUser(uid, store);
       return store;
     }
   } catch (err) {
@@ -409,6 +445,19 @@ function loadProfiles(): ProfilesFile {
     }
   }
   return emptyProfilesStore();
+}
+
+function loadProfiles(): ProfilesFile {
+  return loadProfilesForUser(getActiveUserId());
+}
+
+function loadProfilesForActiveUserOrEmpty(): ProfilesFile {
+  try { return loadProfiles(); }
+  catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/no active user/i.test(message)) return emptyProfilesStore();
+    throw error;
+  }
 }
 
 export function getProfilesStoreStatus(): ProfilesStoreStatus {
@@ -547,6 +596,47 @@ function parseTtsProfilesArray(arr: unknown): TtsProfile[] {
   return out;
 }
 
+function parseCustomProvidersArray(arr: unknown): CustomProvider[] {
+  if (!Array.isArray(arr)) return [];
+  const protocols = new Set<CustomProvider['protocol']>(['anthropic', 'openai', 'gemini']);
+  const out: CustomProvider[] = [];
+  for (const raw of arr) {
+    const p = raw as any;
+    if (!p || typeof p !== 'object' || !p.id || !p.name || !p.baseUrl) continue;
+    const protocol = protocols.has(p.protocol) ? p.protocol as CustomProvider['protocol'] : 'anthropic';
+    out.push({
+      id: String(p.id),
+      name: String(p.name),
+      protocol,
+      baseUrl: String(p.baseUrl),
+      apiKey: typeof p.apiKey === 'string' ? p.apiKey : '',
+      ...(p.notes ? { notes: String(p.notes) } : {}),
+      ...(p.websiteUrl ? { websiteUrl: String(p.websiteUrl) } : {}),
+      ...(p.needsKey ? { needsKey: true } : {}),
+      ...(p.needsModelMapping ? { needsModelMapping: true } : {}),
+      ...(Array.isArray(p.models) ? { models: p.models.map(String).filter(Boolean).slice(0, 100) } : {}),
+      source: p.source === 'ccswitch' ? 'ccswitch' : 'manual',
+      ...(p.externalId ? { externalId: String(p.externalId) } : {}),
+      createdAt: typeof p.createdAt === 'number' ? p.createdAt : Date.now(),
+      ...(typeof p.updatedAt === 'number' ? { updatedAt: p.updatedAt } : {}),
+    });
+  }
+  return out;
+}
+
+function parseAuthorizationRequestReceipts(arr: unknown): AuthorizationRequestReceipt[] {
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .filter((row: any) => row && typeof row === 'object' && row.requestId && row.authorizationId)
+    .map((row: any) => ({
+      requestId: String(row.requestId).trim().slice(0, 120),
+      authorizationId: String(row.authorizationId).trim().slice(0, 180),
+      createdAt: typeof row.createdAt === 'number' ? row.createdAt : Date.now(),
+    }))
+    .filter((row) => row.requestId && row.authorizationId)
+    .slice(-100);
+}
+
 // ── Search / Image / Video / TTS profiles store IO (low-level) ────────────
 //
 // These helpers expose the new top-level fields so feature modules
@@ -595,13 +685,66 @@ export function saveTtsProfiles(list: TtsProfile[]): void {
   saveProfiles(store);
 }
 
-function saveProfiles(store: ProfilesFile): void {
-  ensureAuthDir();
+function assertActiveUser(userId: string): void {
+  if (getActiveUserId() !== userId) throw new Error('user scope mismatch');
+}
+
+export function loadCustomProviders(userId: string): CustomProvider[] {
+  assertActiveUser(userId);
+  return loadProfiles().customProviders || [];
+}
+
+export function saveCustomProviders(userId: string, list: CustomProvider[]): void {
+  assertActiveUser(userId);
+  const store = loadProfiles();
+  store.customProviders = [...list];
+  saveProfiles(store);
+  invalidateCoreAgentRunner();
+}
+
+export function removeEntriesForProvider(userId: string, providerId: string): number {
+  assertActiveUser(userId);
+  const store = loadProfiles();
+  const before = store.entries.length;
+  store.entries = store.entries.filter((entry) => entry.provider !== providerId);
+  if (store.entries.length !== before) saveProfiles(store);
+  invalidateCoreAgentRunner();
+  return before - store.entries.length;
+}
+
+let authorizationStoreSaveForTests: ((store: ProfilesFile) => void) | undefined;
+
+export function __setAuthorizationStoreSaveForTests(
+  save: ((store: ProfilesFile) => void) | undefined,
+): void {
+  if (process.env.NODE_ENV !== 'test') throw new Error('test-only authorization save hook');
+  authorizationStoreSaveForTests = save;
+}
+
+export function saveProfilesForUser(userId: string, store: ProfilesFile): void {
+  const uid = assertAuthUserId(userId);
+  if (authorizationStoreSaveForTests) {
+    authorizationStoreSaveForTests(store);
+    return;
+  }
+  ensureAuthDir(uid);
   const json = JSON.stringify(store, null, 2);
-  const localId = getActiveUserId();
+  const localId = uid;
   const ownerId = authSecretOwner(localId);
   const out = ownerId ? localSecrets.encryptLocalSecret(authSecretContext(ownerId), json) : json;
-  fs.writeFileSync(profilesFile(), out, { encoding: 'utf-8', mode: 0o600 });
+  const target = profilesFile(uid);
+  const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    fs.writeFileSync(temp, out, { encoding: 'utf-8', mode: 0o600 });
+    fs.renameSync(temp, target);
+  } catch (error) {
+    try { fs.unlinkSync(temp); } catch { /* missing/locked temporary */ }
+    throw error;
+  }
+}
+
+function saveProfiles(store: ProfilesFile): void {
+  saveProfilesForUser(getActiveUserId(), store);
 }
 
 function isStoredProfileBlocked(profile: StoredProfile | undefined): boolean {
@@ -612,7 +755,25 @@ function isStoredProfileAllowed(profile: StoredProfile | undefined): profile is 
   return !!profile && !isStoredProfileBlocked(profile);
 }
 
+export function isCustomProviderId(providerId: string): boolean {
+  return String(providerId || '').startsWith('cp:');
+}
+
+function customProviderForId(store: ProfilesFile, providerId: string): CustomProvider | undefined {
+  if (!isCustomProviderId(providerId)) return undefined;
+  const id = providerId.slice(3);
+  return (store.customProviders || []).find((provider) => provider.id === id);
+}
+
+function isCustomProviderModelAllowed(provider: CustomProvider, model: string): boolean {
+  const normalized = String(model || '').trim();
+  if (!normalized) return false;
+  return !provider.models?.length || provider.models.includes(normalized);
+}
+
 function isEntryAllowed(store: ProfilesFile, entry: Entry): boolean {
+  const custom = customProviderForId(store, entry.provider);
+  if (custom) return !!custom.apiKey && isCustomProviderModelAllowed(custom, entry.model);
   const prof = store.profiles[entry.profileId];
   return isModelProviderAllowed(entry.provider, entry.model)
     && !isStoredProfileBlocked(prof);
@@ -656,7 +817,7 @@ export interface AuthConfig { provider: string; model: string }
  * pending setup" and redirect the user to the settings page.
  */
 export function hasConfiguredModel(): { configured: boolean } {
-  const store = loadProfiles();
+  const store = loadProfilesForActiveUserOrEmpty();
   if (store.entries.some((e) => isEntryAllowed(store, e))) return { configured: true };
   if (process.env.ANTHROPIC_API_KEY) return { configured: true };
   return { configured: false };
@@ -668,11 +829,10 @@ export function getConfiguredModelCooldown(): {
   kind: KeyFailureKind;
   reason: string;
 } | null {
-  const store = loadProfiles();
+  const store = loadProfilesForActiveUserOrEmpty();
   let best: { profileId: string; cooledUntil: number; kind: KeyFailureKind; reason: string } | null = null;
   for (const entry of store.entries) {
     if (!isEntryAllowed(store, entry)) continue;
-    if (!store.profiles[entry.profileId]) continue;
     const cooldown = getCooldown(entry.profileId);
     if (!cooldown) continue;
     const current = { profileId: entry.profileId, ...cooldown };
@@ -689,7 +849,7 @@ export async function getConfig(): Promise<AuthConfig> {
   // Default (provider, model) pair is `entries[0]` — the top of the priority
   // list. Credentials + model selection share one source of truth
   // (auth-profiles.json); there's no longer a fallback config.json.
-  const store = loadProfiles();
+  const store = loadProfilesForActiveUserOrEmpty();
   const first = store.entries.find((e) => isEntryAllowed(store, e));
   if (first) return { provider: first.provider, model: first.model };
   return { provider: '', model: '' };
@@ -866,6 +1026,27 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
     };
   });
 
+  for (const custom of store.customProviders || []) {
+    providers.push({
+      id: `cp:${custom.id}`,
+      label: custom.name,
+      featured: false,
+      supportsApiKey: true,
+      supportsOAuth: false,
+      manualModel: !custom.models?.length,
+      profiles: [{
+        profileId: `cp:${custom.id}`,
+        provider: `cp:${custom.id}`,
+        label: custom.name,
+        type: 'api_key',
+        masked: maskKey(custom.apiKey),
+        baseUrl: custom.baseUrl,
+        createdAt: custom.createdAt,
+        lastUsed: 0,
+      }],
+    });
+  }
+
   return { providers };
 }
 
@@ -882,6 +1063,10 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
 export async function listModels(providerId: string): Promise<{ models: { id: string; name: string }[] }> {
   const id = String(providerId || '').trim();
   if (!id) return { models: [] };
+  if (isCustomProviderId(id)) {
+    const custom = customProviderForId(loadProfiles(), id);
+    return { models: (custom?.models || []).map((model) => ({ id: model, name: model })) };
+  }
   if (!isModelProviderAllowed(id)) return { models: [] };
   const allowed = (models: { id: string; name: string }[]) =>
     models.filter((m) => isModelProviderAllowed(id, m.id));
@@ -1026,6 +1211,22 @@ export interface EntryView {
 }
 
 function entryToView(e: Entry, store: ProfilesFile, modelNameLookup: (p: string, m: string) => string): EntryView {
+  const custom = customProviderForId(store, e.provider);
+  if (custom) {
+    return {
+      entryId: e.entryId,
+      provider: e.provider,
+      providerLabel: custom.name,
+      model: e.model,
+      modelName: e.model,
+      profileId: e.profileId,
+      profileLabel: custom.name,
+      profileType: 'api_key',
+      profileMasked: maskKey(custom.apiKey),
+      createdAt: e.createdAt,
+      lastUsed: e.lastUsed,
+    };
+  }
   const prof = store.profiles[e.profileId];
   const base = {
     entryId: e.entryId,
@@ -1086,10 +1287,16 @@ export async function addEntry({
   const m = String(model || '').trim();
   const pid = String(profileId || '').trim();
   if (!p || !m || !pid) throw new Error('provider / model / profileId required');
-  assertModelProviderAllowed(p, m);
   const store = loadProfiles();
-  if (!store.profiles[pid]) throw new Error('profile not found');
-  if (store.profiles[pid].provider !== p) throw new Error('profile does not belong to provider');
+  const custom = customProviderForId(store, p);
+  if (custom) {
+    if (pid !== p) throw new Error('custom provider profile mismatch');
+    if (!isCustomProviderModelAllowed(custom, m)) throw new Error('custom provider model not found');
+  } else {
+    assertModelProviderAllowed(p, m);
+    if (!store.profiles[pid]) throw new Error('profile not found');
+    if (store.profiles[pid].provider !== p) throw new Error('profile does not belong to provider');
+  }
 
   // Deduplicate: if an entry with the same (provider, model, profileId)
   // already exists, don't create a second one. Returning the existing id
@@ -1119,7 +1326,12 @@ export async function updateEntryModel(entryId: string, model: string): Promise<
   const store = loadProfiles();
   const target = store.entries.find((e) => e.entryId === id);
   if (!target) throw new Error('entry not found');
-  assertModelProviderAllowed(target.provider, m);
+  const custom = customProviderForId(store, target.provider);
+  if (custom) {
+    if (!isCustomProviderModelAllowed(custom, m)) throw new Error('custom provider model not found');
+  } else {
+    assertModelProviderAllowed(target.provider, m);
+  }
   // Deduplicate: if another entry with the same (provider, model, profileId)
   // already exists, removing the target makes the priority list cleaner.
   const collision = store.entries.find(
@@ -1166,6 +1378,420 @@ export async function reorderEntries(orderedIds: string[]): Promise<{ entries: E
       .filter((e) => isEntryAllowed(store, e))
       .map((e) => entryToView(e, store, lookup)),
   };
+}
+
+// ── Unified model authorizations ────────────────────────────────────────
+
+export interface AuthorizationModelSummary {
+  entryId: string;
+  model: string;
+}
+
+export type AuthorizationWarningCode = 'orphan_entry' | 'missing_custom_provider' | 'unbound_authorization';
+
+export interface AuthorizationWarning {
+  code: AuthorizationWarningCode;
+  entryId?: string;
+  authorizationId?: string;
+}
+
+export interface AuthorizationSummary {
+  authorizationId: string;
+  authType: 'api_key' | 'oauth';
+  source: 'manual' | 'ccswitch';
+  providerId: string;
+  profileId: string;
+  label: string;
+  protocol?: CustomProvider['protocol'];
+  baseUrl?: string;
+  masked?: string;
+  oauthExpired?: boolean;
+  models: AuthorizationModelSummary[];
+  enabledModels: string[];
+  defaultModel: string;
+  unbound: boolean;
+  warningCode?: AuthorizationWarningCode;
+}
+
+interface AuthorizationCompletionBase {
+  requestId: string;
+  selectedModels: string[];
+  defaultModel: string;
+}
+
+export interface BuiltinApiKeyCompletion extends AuthorizationCompletionBase {
+  authType: 'api_key';
+  source: 'manual';
+  providerKind: 'builtin';
+  providerId: string;
+  label?: string;
+  apiKey: string;
+  baseUrl?: string;
+}
+
+export interface BuiltinOAuthCompletion extends AuthorizationCompletionBase {
+  authType: 'oauth';
+  source: 'manual';
+  providerKind: 'builtin';
+  providerId: string;
+  profileId: string;
+}
+
+export interface CustomApiKeyCompletion extends AuthorizationCompletionBase {
+  authType: 'api_key';
+  source: 'manual' | 'ccswitch';
+  providerKind: 'custom';
+  customProvider: {
+    id?: string;
+    name: string;
+    protocol: CustomProvider['protocol'];
+    baseUrl: string;
+    apiKey: string;
+    externalId?: string;
+    notes?: string;
+    websiteUrl?: string;
+  };
+}
+
+export type CompleteAuthorizationInput =
+  | BuiltinApiKeyCompletion
+  | BuiltinOAuthCompletion
+  | CustomApiKeyCompletion;
+
+const authorizationMutationTails = new Map<string, Promise<void>>();
+let _authorizationCustomProviderCounter = 0;
+
+function cloneProfilesStore(store: ProfilesFile): ProfilesFile {
+  return JSON.parse(JSON.stringify(store)) as ProfilesFile;
+}
+
+async function withAuthorizationMutation<T>(
+  userId: string,
+  run: (store: ProfilesFile) => T | Promise<T>,
+): Promise<T> {
+  assertActiveUser(userId);
+  const previous = authorizationMutationTails.get(userId) || Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const tail = previous.catch(() => undefined).then(() => gate);
+  authorizationMutationTails.set(userId, tail);
+  await previous.catch(() => undefined);
+  try {
+    const working = cloneProfilesStore(loadProfiles());
+    const result = await run(working);
+    saveProfiles(working);
+    invalidateCoreAgentRunner();
+    return result;
+  } finally {
+    release();
+    void tail.finally(() => {
+      if (authorizationMutationTails.get(userId) === tail) authorizationMutationTails.delete(userId);
+    });
+  }
+}
+
+function normalizeAuthorizationModels(models: unknown): string[] {
+  if (!Array.isArray(models)) throw new Error('selectedModels must be an array');
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of models.slice(0, 100)) {
+    const model = String(raw || '').trim().slice(0, 200);
+    if (!model || seen.has(model)) continue;
+    seen.add(model);
+    out.push(model);
+  }
+  if (!out.length) throw new Error('selectedModels must contain at least one model');
+  return out;
+}
+
+function orderedAuthorizationModels(selected: string[], defaultModel: unknown): string[] {
+  const fallback = String(defaultModel || '').trim();
+  if (!selected.includes(fallback)) throw new Error('defaultModel must belong to selectedModels');
+  return [fallback, ...selected.filter((model) => model !== fallback)];
+}
+
+function normalizeAuthorizationBaseUrl(raw: unknown): string {
+  const value = String(raw || '').trim().replace(/\/+$/, '');
+  if (!value) throw new Error('baseUrl required');
+  let parsed: URL;
+  try { parsed = new URL(value); }
+  catch { throw new Error('baseUrl must be a valid http(s) URL'); }
+  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || parsed.username || parsed.password) {
+    throw new Error('baseUrl must be a valid http(s) URL without credentials');
+  }
+  return value;
+}
+
+function nextAuthorizationCustomProviderId(store: ProfilesFile): string {
+  const used = new Set((store.customProviders || []).map((provider) => provider.id));
+  for (let attempt = 0; attempt < 1000; attempt++) {
+    _authorizationCustomProviderCounter = (_authorizationCustomProviderCounter + 1) % 100000;
+    const id = `cp-${Date.now().toString(36)}-${_authorizationCustomProviderCounter}`;
+    if (!used.has(id)) return id;
+  }
+  throw new Error('could not allocate custom provider id');
+}
+
+function entriesForProfile(store: ProfilesFile, profileId: string): Entry[] {
+  return store.entries.filter((entry) => entry.profileId === profileId && entry.provider === store.profiles[profileId]?.provider);
+}
+
+function entriesForCustomProvider(store: ProfilesFile, customId: string): Entry[] {
+  const synthetic = `cp:${customId}`;
+  return store.entries.filter((entry) => entry.provider === synthetic && entry.profileId === synthetic);
+}
+
+function profileAuthorizationSummary(
+  store: ProfilesFile,
+  profileId: string,
+  profile: StoredProfile,
+): AuthorizationSummary {
+  const entries = entriesForProfile(store, profileId);
+  return {
+    authorizationId: `profile:${profileId}`,
+    authType: profile.type,
+    source: 'manual',
+    providerId: profile.provider,
+    profileId,
+    label: profile.label,
+    ...(profile.type === 'api_key' && profile.baseUrl ? { baseUrl: profile.baseUrl } : {}),
+    ...(profile.type === 'api_key' ? { masked: maskKey(profile.key) } : { oauthExpired: Date.now() >= profile.expires }),
+    models: entries.map((entry) => ({ entryId: entry.entryId, model: entry.model })),
+    enabledModels: entries.map((entry) => entry.model),
+    defaultModel: entries[0]?.model || '',
+    unbound: entries.length === 0,
+    ...(entries.length === 0 ? { warningCode: 'unbound_authorization' as const } : {}),
+  };
+}
+
+function customAuthorizationSummary(store: ProfilesFile, provider: CustomProvider): AuthorizationSummary {
+  const synthetic = `cp:${provider.id}`;
+  const entries = entriesForCustomProvider(store, provider.id);
+  return {
+    authorizationId: `custom:${provider.id}`,
+    authType: 'api_key',
+    source: provider.source || 'manual',
+    providerId: synthetic,
+    profileId: synthetic,
+    label: provider.name,
+    protocol: provider.protocol,
+    baseUrl: provider.baseUrl,
+    masked: maskKey(provider.apiKey),
+    models: entries.map((entry) => ({ entryId: entry.entryId, model: entry.model })),
+    enabledModels: entries.map((entry) => entry.model),
+    defaultModel: entries[0]?.model || '',
+    unbound: entries.length === 0,
+    ...(entries.length === 0 ? { warningCode: 'unbound_authorization' as const } : {}),
+  };
+}
+
+function authorizationSummaryById(store: ProfilesFile, authorizationId: string): AuthorizationSummary | undefined {
+  if (authorizationId.startsWith('profile:')) {
+    const profileId = authorizationId.slice('profile:'.length);
+    const profile = store.profiles[profileId];
+    return profile ? profileAuthorizationSummary(store, profileId, profile) : undefined;
+  }
+  if (authorizationId.startsWith('custom:')) {
+    const customId = authorizationId.slice('custom:'.length);
+    const provider = (store.customProviders || []).find((row) => row.id === customId);
+    return provider ? customAuthorizationSummary(store, provider) : undefined;
+  }
+  return undefined;
+}
+
+function authorizationStoreWarnings(store: ProfilesFile): AuthorizationWarning[] {
+  const warnings: AuthorizationWarning[] = [];
+  const customIds = new Set((store.customProviders || []).map((provider) => provider.id));
+  const pushUnique = (warning: AuthorizationWarning) => {
+    if (!warnings.some((row) => row.code === warning.code && row.entryId === warning.entryId && row.authorizationId === warning.authorizationId)) {
+      warnings.push(warning);
+    }
+  };
+  for (const entry of store.entries || []) {
+    if (entry.provider.startsWith('cp:') || entry.profileId.startsWith('cp:')) {
+      const customId = (entry.provider.startsWith('cp:') ? entry.provider : entry.profileId).slice('cp:'.length);
+      if (!customIds.has(customId)) pushUnique({ code: 'missing_custom_provider', entryId: entry.entryId });
+      continue;
+    }
+    const profile = store.profiles[entry.profileId];
+    if (!profile || profile.provider !== entry.provider) pushUnique({ code: 'orphan_entry', entryId: entry.entryId });
+  }
+  for (const [profileId, profile] of Object.entries(store.profiles)) {
+    if (entriesForProfile(store, profileId).length === 0) pushUnique({ code: 'unbound_authorization', authorizationId: `profile:${profileId}` });
+    void profile;
+  }
+  for (const provider of store.customProviders || []) {
+    if (entriesForCustomProvider(store, provider.id).length === 0) pushUnique({ code: 'unbound_authorization', authorizationId: `custom:${provider.id}` });
+  }
+  return warnings.slice(0, 100);
+}
+
+export function listAuthorizationSummaries(userId: string): { authorizations: AuthorizationSummary[]; warnings: AuthorizationWarning[] } {
+  assertActiveUser(userId);
+  const store = loadProfiles();
+  return {
+    authorizations: [
+      ...Object.entries(store.profiles).map(([profileId, profile]) => profileAuthorizationSummary(store, profileId, profile)),
+      ...(store.customProviders || []).map((provider) => customAuthorizationSummary(store, provider)),
+    ],
+    warnings: authorizationStoreWarnings(store),
+  };
+}
+
+function replaceAuthorizationEntries(
+  store: ProfilesFile,
+  providerId: string,
+  profileId: string,
+  orderedModels: string[],
+): void {
+  const belongs = (entry: Entry) => entry.provider === providerId && entry.profileId === profileId;
+  const existing = new Map(store.entries.filter(belongs).map((entry) => [entry.model, entry]));
+  const now = Date.now();
+  const selected = orderedModels.map((model) => existing.get(model) || {
+    entryId: nextEntryId(), provider: providerId, profileId, model, createdAt: now, lastUsed: 0,
+  });
+  store.entries = [...selected, ...store.entries.filter((entry) => !belongs(entry))];
+}
+
+function rememberAuthorizationRequest(store: ProfilesFile, requestId: string, authorizationId: string): void {
+  const previous = (store.authorizationRequests || []).filter((receipt) => receipt.requestId !== requestId);
+  store.authorizationRequests = [...previous, { requestId, authorizationId, createdAt: Date.now() }].slice(-100);
+}
+
+export async function completeAuthorization(
+  userId: string,
+  input: CompleteAuthorizationInput,
+): Promise<{ ok: true; authorization: AuthorizationSummary }> {
+  const requestId = String(input?.requestId || '').trim().slice(0, 120);
+  if (!requestId) throw new Error('requestId required');
+  const selected = normalizeAuthorizationModels(input.selectedModels);
+  const orderedModels = orderedAuthorizationModels(selected, input.defaultModel);
+
+  return withAuthorizationMutation(userId, (store) => {
+    const receipt = (store.authorizationRequests || []).find((row) => row.requestId === requestId);
+    if (receipt) {
+      const existing = authorizationSummaryById(store, receipt.authorizationId);
+      if (existing) return { ok: true as const, authorization: existing };
+      store.authorizationRequests = (store.authorizationRequests || []).filter((row) => row.requestId !== requestId);
+    }
+
+    let authorizationId = '';
+    if (input.providerKind === 'builtin') {
+      const providerId = String(input.providerId || '').trim();
+      if (!providerId) throw new Error('providerId required');
+      for (const model of orderedModels) assertModelProviderAllowed(providerId, model);
+
+      let profileId = '';
+      if (input.authType === 'oauth') {
+        profileId = String(input.profileId || '').trim();
+        const profile = store.profiles[profileId];
+        if (!profile || profile.type !== 'oauth' || profile.provider !== providerId) {
+          throw new Error('OAuth profile not found');
+        }
+      } else {
+        const apiKey = String(input.apiKey || '').trim();
+        if (!apiKey) throw new Error('apiKey required');
+        const label = input.label ? sanitizeLabel(input.label) : autoLabel(store, providerId);
+        profileId = makeProfileId(providerId, label);
+        if (store.profiles[profileId]) throw new Error('profile label already exists');
+        const baseUrl = normalizeCustomBaseUrl(providerId, input.baseUrl);
+        store.profiles[profileId] = {
+          type: 'api_key', provider: providerId, label, key: apiKey,
+          ...(baseUrl ? { baseUrl } : {}),
+          createdAt: Date.now(), lastUsed: 0,
+        };
+      }
+      replaceAuthorizationEntries(store, providerId, profileId, orderedModels);
+      authorizationId = `profile:${profileId}`;
+    } else {
+      const draft = input.customProvider;
+      const name = String(draft?.name || '').trim().slice(0, 60);
+      const apiKey = String(draft?.apiKey || '').trim();
+      const protocol = draft?.protocol;
+      if (!name) throw new Error('custom provider name required');
+      if (!apiKey) throw new Error('apiKey required');
+      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') {
+        throw new Error('unsupported custom provider protocol');
+      }
+      const baseUrl = normalizeAuthorizationBaseUrl(draft.baseUrl);
+      const list = store.customProviders || [];
+      const requestedId = String(draft.id || '').trim();
+      let provider = requestedId ? list.find((row) => row.id === requestedId) : undefined;
+      if (!provider && input.source === 'ccswitch' && draft.externalId) {
+        provider = list.find((row) => row.source === 'ccswitch' && row.externalId === draft.externalId);
+      }
+      if (provider) {
+        Object.assign(provider, {
+          name, protocol, baseUrl, apiKey, models: orderedModels, source: input.source,
+          ...(draft.externalId ? { externalId: String(draft.externalId).slice(0, 160) } : {}),
+          ...(draft.notes ? { notes: String(draft.notes).trim().slice(0, 200) } : {}),
+          ...(draft.websiteUrl ? { websiteUrl: String(draft.websiteUrl).trim().slice(0, 500) } : {}),
+          needsKey: false,
+          updatedAt: Date.now(),
+        });
+      } else {
+        provider = {
+          id: nextAuthorizationCustomProviderId(store), name, protocol, baseUrl, apiKey,
+          models: orderedModels, source: input.source,
+          ...(draft.externalId ? { externalId: String(draft.externalId).slice(0, 160) } : {}),
+          ...(draft.notes ? { notes: String(draft.notes).trim().slice(0, 200) } : {}),
+          ...(draft.websiteUrl ? { websiteUrl: String(draft.websiteUrl).trim().slice(0, 500) } : {}),
+          createdAt: Date.now(),
+        };
+        list.unshift(provider);
+        store.customProviders = list;
+      }
+      const synthetic = `cp:${provider.id}`;
+      replaceAuthorizationEntries(store, synthetic, synthetic, orderedModels);
+      authorizationId = `custom:${provider.id}`;
+    }
+
+    rememberAuthorizationRequest(store, requestId, authorizationId);
+    const authorization = authorizationSummaryById(store, authorizationId);
+    if (!authorization) throw new Error('authorization summary unavailable');
+    return { ok: true as const, authorization };
+  });
+}
+
+export async function removeAuthorizationModel(
+  userId: string,
+  authorizationId: string,
+  entryId: string,
+): Promise<{ removed: boolean; authorization?: AuthorizationSummary }> {
+  const authId = String(authorizationId || '').trim();
+  const targetEntryId = String(entryId || '').trim();
+  return withAuthorizationMutation(userId, (store) => {
+    const current = authorizationSummaryById(store, authId);
+    if (!current || !current.models.some((model) => model.entryId === targetEntryId)) return { removed: false };
+    store.entries = store.entries.filter((entry) => entry.entryId !== targetEntryId);
+    return { removed: true, authorization: authorizationSummaryById(store, authId) };
+  });
+}
+
+export async function removeAuthorization(
+  userId: string,
+  authorizationId: string,
+): Promise<{ removed: boolean }> {
+  const authId = String(authorizationId || '').trim();
+  return withAuthorizationMutation(userId, (store) => {
+    if (authId.startsWith('profile:')) {
+      const profileId = authId.slice('profile:'.length);
+      if (!store.profiles[profileId]) return { removed: false };
+      delete store.profiles[profileId];
+      store.entries = store.entries.filter((entry) => entry.profileId !== profileId);
+    } else if (authId.startsWith('custom:')) {
+      const customId = authId.slice('custom:'.length);
+      const before = (store.customProviders || []).length;
+      store.customProviders = (store.customProviders || []).filter((provider) => provider.id !== customId);
+      if ((store.customProviders || []).length === before) return { removed: false };
+      const synthetic = `cp:${customId}`;
+      store.entries = store.entries.filter((entry) => entry.provider !== synthetic && entry.profileId !== synthetic);
+    } else {
+      return { removed: false };
+    }
+    store.authorizationRequests = (store.authorizationRequests || []).filter((receipt) => receipt.authorizationId !== authId);
+    return { removed: true };
+  });
 }
 
 // ── OAuth flow orchestration ─────────────────────────────────────────────
@@ -1448,6 +2074,37 @@ export interface ChatEntryChoice {
   maxOutputTokens?: number;
 }
 
+/** Resolve one API-key chat entry for an explicit user. This is intentionally
+ * independent from active-user state, OAuth refresh, and Core Agent rotation. */
+export function pickApiKeyChatEntryForUser(
+  userId: string,
+  profileId?: string,
+): ChatEntryChoice | null {
+  const uid = assertAuthUserId(userId);
+  const wantedProfileId = profileId === undefined ? undefined : String(profileId).trim();
+  if (profileId !== undefined && !wantedProfileId) throw new Error('invalid profile id');
+
+  const store = loadProfilesForUser(uid);
+  for (const entry of store.entries) {
+    if (wantedProfileId && entry.profileId !== wantedProfileId) continue;
+    if (!isEntryAllowed(store, entry)) continue;
+    const profile = store.profiles[entry.profileId];
+    if (!profile || profile.type !== 'api_key') continue;
+    return {
+      entryId: entry.entryId,
+      profileId: entry.profileId,
+      provider: entry.provider,
+      model: entry.model,
+      apiKey: profile.key,
+      ...(profile.baseUrl ? { baseUrl: profile.baseUrl } : {}),
+      ...(isOpenAICompatibleProvider(entry.provider)
+        ? { maxOutputTokens: normalizeOpenAICompatibleMaxOutputTokens(entry.provider, profile.maxOutputTokens) }
+        : {}),
+    };
+  }
+  return null;
+}
+
 /**
  * Group consecutive entries by `(provider, model)`. Dropped into a helper
  * so `pickChatEntry` (single winner) and `pickChatEntryGroup` (whole
@@ -1477,6 +2134,8 @@ function groupEntries(entries: Entry[]): Entry[][] {
  * profile is gone, the OAuth token expired and refresh fails, etc.).
  */
 async function resolveEntryApiKey(store: ProfilesFile, entry: Entry): Promise<string | undefined> {
+  const custom = customProviderForId(store, entry.provider);
+  if (custom) return custom.apiKey || undefined;
   const prof = store.profiles[entry.profileId];
   if (!prof || !isStoredProfileAllowed(prof)) return undefined;
   if (prof.type === 'api_key') return prof.key;
@@ -1570,7 +2229,7 @@ export function bumpEntryLastUsed(entryId: string): void {
  * bumps the winning candidate via `onSuccess`).
  */
 export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
-  const store = loadProfiles();
+  const store = loadProfilesForActiveUserOrEmpty();
   if (store.entries.length === 0) return [];
 
   // Flatten: preserve entries[] order across groups, but within a
@@ -1596,12 +2255,14 @@ export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
     if (!apiKey) continue;
     const prof = store.profiles[entry.profileId];
     const apiProfile = prof?.type === 'api_key' ? prof as ApiKeyProfile : undefined;
+    const custom = customProviderForId(store, entry.provider);
     choices.push({
       entryId: entry.entryId,
       profileId: entry.profileId,
       provider: entry.provider,
       model: entry.model,
       apiKey,
+      ...(custom?.baseUrl ? { baseUrl: custom.baseUrl } : {}),
       ...(apiProfile?.baseUrl ? { baseUrl: apiProfile.baseUrl } : {}),
       ...(apiProfile && isOpenAICompatibleProvider(entry.provider)
         ? { maxOutputTokens: normalizeOpenAICompatibleMaxOutputTokens(entry.provider, apiProfile.maxOutputTokens) }
@@ -1709,6 +2370,94 @@ export interface TestConnectionResult {
   durationMs?: number;
   model?: string;
   profileId?: string;
+}
+
+export type AuthorizationDraftTestInput =
+  | { kind: 'oauth'; providerId: string; profileId: string; model: string }
+  | { kind: 'builtin_api_key'; providerId: string; apiKey: string; baseUrl?: string; model: string }
+  | { kind: 'custom_api_key'; protocol: CustomProvider['protocol']; apiKey: string; baseUrl: string; model: string };
+
+async function completeConnectivityProbe(provider: any, model: string): Promise<{ model?: string }> {
+  return provider.complete({
+    model,
+    systemPrompt: 'You are a connectivity probe; reply with a single word.',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
+    maxTokens: 1,
+  });
+}
+
+/** Test a credential before the unified authorization flow persists it. */
+export async function testAuthorizationDraft(
+  userId: string,
+  input: AuthorizationDraftTestInput,
+): Promise<TestConnectionResult> {
+  assertActiveUser(userId);
+  const model = String(input?.model || '').trim();
+  if (!model) return { ok: false, error: 'model required' };
+  if (input.kind === 'oauth') {
+    return testConnection(String(input.providerId || '').trim(), model, String(input.profileId || '').trim());
+  }
+  const apiKey = String(input.apiKey || '').trim();
+  if (!apiKey) return { ok: false, error: 'apiKey required' };
+  const t0 = Date.now();
+  try {
+    let provider: any;
+    if (input.kind === 'custom_api_key') {
+      const baseUrl = normalizeAuthorizationBaseUrl(input.baseUrl);
+      const runtime = await import('../model/core-agent/custom_provider_runtime');
+      const mod = await ca();
+      const draftProvider: CustomProvider = {
+        id: 'authorization-draft',
+        name: 'Authorization draft',
+        protocol: input.protocol,
+        baseUrl,
+        apiKey,
+        models: [model],
+        source: 'manual',
+        createdAt: Date.now(),
+      };
+      provider = mod.createPiProvider({
+        provider: 'cp:authorization-draft',
+        apiKey,
+        customModel: runtime.buildCustomProviderModel(draftProvider, model),
+      });
+    } else {
+      const providerId = String(input.providerId || '').trim();
+      if (!providerId) return { ok: false, error: 'provider required' };
+      if (!isModelProviderAllowed(providerId, model)) return { ok: false, error: 'provider/model disabled' };
+      if (EXTERNAL_API_PROVIDERS.includes(providerId)) {
+        const ext = await import('../model/core-agent/external-providers');
+        if (providerId === 'moonshot') provider = await ext.createMoonshotProvider({ apiKey, modelId: model });
+        else if (providerId === 'deepseek') provider = await ext.createDeepSeekProvider({ apiKey, modelId: model });
+        else if (providerId === 'doubao') provider = await ext.createDoubaoProvider({ apiKey, modelId: model });
+        else if (providerId === 'openai-compatible') {
+          provider = await ext.createOpenAICompatibleProvider({ apiKey, baseUrl: input.baseUrl || '', modelId: model });
+        } else return { ok: false, error: `provider "${providerId}" has no draft probe` };
+      } else {
+        const mod = await ca();
+        const resolvedModel = resolveConfiguredPiModel(mod, providerId, model);
+        provider = mod.createPiProvider({
+          provider: providerId,
+          ...(resolvedModel?.needsCustomModel ? { customModel: resolvedModel.model } : { model }),
+          apiKey,
+        });
+      }
+    }
+    const message = await completeConnectivityProbe(provider, model);
+    return { ok: true, durationMs: Date.now() - t0, model: message.model || model };
+  } catch (error) {
+    const rawError = (error as Error)?.message || String(error);
+    const safeError = rawError
+      .split(apiKey).join('[redacted]')
+      .replace(/https?:\/\/[^\s"']+/gi, '[endpoint]')
+      .slice(0, 500);
+    log.warn('authorization draft connection failed', {
+      kind: input.kind,
+      durationMs: Date.now() - t0,
+      error_chars: safeError.length,
+    });
+    return { ok: false, error: safeError, durationMs: Date.now() - t0 };
+  }
 }
 
 export async function testConnection(

@@ -16,6 +16,8 @@ let _hasConfiguredModel = true;   // optimistic — flipped to false after refre
 let _guardBannerEl = null;
 let _guardChecked = false;
 let _modelConfigSnapshotSignature = '';
+let _guardRefreshInFlight = null;
+let _lastGuardRefreshAt = 0;
 
 function _ensureGuardBanner() {
   if (_guardBannerEl) return _guardBannerEl;
@@ -61,6 +63,8 @@ function _applyGuardVisuals() {
 }
 
 async function refreshModelGuard() {
+  if (_guardRefreshInFlight) return _guardRefreshInFlight;
+  _guardRefreshInFlight = (async () => {
   try {
     const res = await window.orkas.invoke('auth.hasConfiguredModel');
     // Only flip the flag when the IPC returned a definitive answer. A
@@ -78,8 +82,24 @@ async function refreshModelGuard() {
   } catch (e) {
     _guardLog.warn('refresh failed', { error: (e && e.message) || String(e) });
   }
+  _lastGuardRefreshAt = Date.now();
   _applyGuardVisuals();
   return _hasConfiguredModel;
+  })();
+  try {
+    return await _guardRefreshInFlight;
+  } finally {
+    _guardRefreshInFlight = null;
+  }
+}
+
+function refreshModelGuardSoon() {
+  refreshModelGuard().catch(() => {});
+}
+
+function refreshModelGuardIfStale(maxAgeMs = 2000) {
+  if (Date.now() - _lastGuardRefreshAt < maxAgeMs || _guardRefreshInFlight) return;
+  refreshModelGuardSoon();
 }
 
 async function refreshModelConfigSnapshot() {
@@ -150,6 +170,11 @@ function isModelConfigured() {
  */
 function ensureModelConfigured(opts = {}) {
   if (_hasConfiguredModel) return true;
+  // The backend is authoritative. If the user configured credentials in a
+  // different window or while this renderer was stale, kick a fresh probe so
+  // the banner/action gate unlocks on the next interaction instead of staying
+  // permanently stuck until a full app restart.
+  refreshModelGuardIfStale(500);
   if (!opts.silent) {
     const msg = opts.message || t('model_guard.modal');
     try {
@@ -161,3 +186,10 @@ function ensureModelConfigured(opts = {}) {
   }
   return false;
 }
+
+
+window.addEventListener('focus', () => refreshModelGuardIfStale(1000));
+window.addEventListener('pageshow', refreshModelGuardSoon);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') refreshModelGuardIfStale(1000);
+});

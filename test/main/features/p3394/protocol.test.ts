@@ -230,4 +230,80 @@ describe('P3394 protocol MVP', () => {
       delete process.env.ORKAS_WORKSPACE_ROOT;
     }
   });
+
+  it('rejects a delegation chain that escalates the relationship (privilege escalation)', async () => {
+    const protocol = await import('../../../../src/main/features/p3394/protocol');
+    const result = protocol.normalizeP3394AgentMessage({
+      agent: baseAgent() as any,
+      conversationId: 'gconv-demo',
+      turnId: 'turn-escalate',
+      sender: 'commander',
+      senderPrincipal: { person: 'user-local', org: 'local', role: 'client' },
+      relationship: 'client',
+      speechAct: 'request',
+      capability: 'handle_message',
+      body: { task: 'do something' },
+      delegation: {
+        original_principal: { person: 'user-local', org: 'local', role: 'client' },
+        original_relationship: 'client',
+        delegation_chain: [{ delegator: 'x', delegate: 'y', inherited_relationship: 'owner' }],
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('should have been rejected');
+    expect(result.error.body.reason_code).toBe('speech_act_denied');
+    expect(result.error.body.detail).toMatch(/escalat/i);
+  });
+
+  it('rejects a delegation chain with a cycle', async () => {
+    const protocol = await import('../../../../src/main/features/p3394/protocol');
+    const result = protocol.normalizeP3394AgentMessage({
+      agent: baseAgent() as any,
+      conversationId: 'gconv-demo',
+      turnId: 'turn-cycle',
+      sender: 'commander',
+      senderPrincipal: { person: 'user-local', org: 'local', role: 'owner' },
+      relationship: 'peer',
+      speechAct: 'delegate',
+      capability: 'handle_message',
+      body: { task: 'loop' },
+      delegation: {
+        original_principal: { person: 'user-local', org: 'local', role: 'owner' },
+        original_relationship: 'owner',
+        delegation_chain: [
+          { delegator: 'A', delegate: 'B', inherited_relationship: 'peer' },
+          { delegator: 'B', delegate: 'A', inherited_relationship: 'peer' },
+        ],
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('should have been rejected');
+    expect(result.error.body.detail).toMatch(/cycle/i);
+  });
+
+  it('rejects a delegation chain that exceeds the max hop count', async () => {
+    const protocol = await import('../../../../src/main/features/p3394/protocol');
+    const chain = Array.from({ length: 6 }, (_, i) => ({
+      delegator: `d${i}`, delegate: `d${i + 1}`, inherited_relationship: 'peer' as const,
+    }));
+    const result = protocol.normalizeP3394AgentMessage({
+      agent: baseAgent() as any,
+      conversationId: 'gconv-demo',
+      turnId: 'turn-toolong',
+      sender: 'commander',
+      senderPrincipal: { person: 'user-local', org: 'local', role: 'owner' },
+      relationship: 'peer',
+      speechAct: 'delegate',
+      capability: 'handle_message',
+      body: { task: 'long chain' },
+      delegation: {
+        original_principal: { person: 'user-local', org: 'local', role: 'owner' },
+        original_relationship: 'owner',
+        delegation_chain: chain,
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('should have been rejected');
+    expect(result.error.body.detail).toMatch(/too long|chain/i);
+  });
 });

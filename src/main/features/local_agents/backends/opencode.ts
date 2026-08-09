@@ -28,6 +28,7 @@ import {
   bindAbort,
   armKillWatchdog,
   LineSplitter,
+  FileChangeFallbackTracker,
 } from './base.js';
 
 const log = createLogger('local-agents:opencode');
@@ -39,6 +40,11 @@ export const opencodeBackend: LocalBackend = {
     const detachAbort = bindAbort(child, opts.signal);
     const tail = new StderrTail();
     const startedAt = Date.now();
+    // Fallback file-change detection: catches writes opencode makes via
+    // shell/bash-style tools that group_chat/bus.ts's tool-name pattern
+    // match won't recognize. See FileChangeFallbackTracker's doc comment
+    // in backends/base.ts.
+    const fileChangeFallback = new FileChangeFallbackTracker(opts.cwd);
 
     let exited = false;
     let textOut = '';
@@ -114,6 +120,9 @@ export const opencodeBackend: LocalBackend = {
         exited = true;
         watchdog.disarm();
         detachAbort();
+        // Best-effort — swallowed internally, never blocks the terminal
+        // `done` event below.
+        if (status === 'completed') fileChangeFallback.sweep(e => opts.onEvent(e));
         opts.onEvent({
           type: 'done', status,
           durationMs: Date.now() - startedAt,
@@ -141,8 +150,16 @@ export const opencodeBackend: LocalBackend = {
   },
 };
 
-export function buildOpencodeArgs(opts: Pick<BackendRunOptions, 'model' | 'resumeSessionId' | 'customArgs' | 'prompt'>): string[] {
+export function buildOpencodeArgs(opts: Pick<BackendRunOptions, 'model' | 'resumeSessionId' | 'customArgs' | 'prompt' | 'cwd'>): string[] {
   const args = ['run', '--format', 'json', '--dangerously-skip-permissions'];
+  // opencode 1.18.x does not inherit the spawned process's cwd for its
+  // project/file-tool root — it needs an explicit --dir, otherwise file
+  // tools (read/write/glob) resolve against wherever the *opencode binary
+  // itself* considers its default directory to be (observed: the Mate
+  // Agent app's own cwd), not the working directory we passed to
+  // child_process.spawn. Discovered via T2-07 Evidence collection: a
+  // probe-file readback silently failed until --dir was added.
+  if (opts.cwd) args.push('--dir', opts.cwd);
   if (opts.model) args.push('--model', opts.model);
   if (opts.resumeSessionId) args.push('--session', opts.resumeSessionId);
   if (opts.customArgs && opts.customArgs.length) args.push(...opts.customArgs);

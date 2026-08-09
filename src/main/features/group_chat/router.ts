@@ -325,6 +325,71 @@ export interface ExtractFormResult {
   form?: { agent_id: string; fields: AgentInput[] };
 }
 
+/** Host-rendered reimbursement setup card. It intentionally carries no
+ * credential fields: the renderer sends those directly over IPC and never
+ * serializes them into a chat message. */
+export interface ExpenseSetupCardPayload {
+  agent_id: string;
+}
+
+/** Host-rendered reimbursement submission card. Feishu submission still
+ * requires the native main-process confirmation after this card is clicked. */
+export interface ExpenseSubmitCardPayload {
+  agent_id: string;
+  case_id: string;
+}
+
+export interface ExtractExpenseCardResult {
+  cleanText: string;
+  setup?: ExpenseSetupCardPayload;
+  submit?: ExpenseSubmitCardPayload;
+}
+
+const EXPENSE_SETUP_FORM_RE = /(?:^|\n)[ \t]*<expense-setup-form[ \t]*\/>[ \t]*(?=\n|$)/g;
+const EXPENSE_SUBMIT_FORM_RE = /(?:^|\n)[ \t]*<expense-submit-form[ \t]+case_id="([A-Za-z0-9_-]{1,128})"[ \t]*\/>[ \t]*(?=\n|$)/g;
+
+function isInsideMarkdownFence(text: string, index: number): boolean {
+  return (text.slice(0, index).match(/^\s*```/gm) || []).length % 2 === 1;
+}
+
+/** Extract exactly one host-owned reimbursement card from an agent reply.
+ * Tags in code/prose, malformed attributes, duplicate tags, and tags from an
+ * unknown emitter stay visible as ordinary text instead of producing a
+ * privileged UI control. */
+export function extractExpenseCardFromFinal(
+  text: string,
+  defaultAgentId?: string,
+): ExtractExpenseCardResult {
+  if (!text || typeof text !== 'string') return { cleanText: text || '' };
+  if (!defaultAgentId || !safeId(defaultAgentId)) return { cleanText: text };
+  if (!text.includes('<expense-setup-form') && !text.includes('<expense-submit-form')) {
+    return { cleanText: text };
+  }
+
+  const setupMatches = Array.from(text.matchAll(EXPENSE_SETUP_FORM_RE))
+    .filter((match) => !isInsideMarkdownFence(text, match.index || 0));
+  const submitMatches = Array.from(text.matchAll(EXPENSE_SUBMIT_FORM_RE))
+    .filter((match) => !isInsideMarkdownFence(text, match.index || 0));
+  if (setupMatches.length + submitMatches.length !== 1) {
+    log.warn('expense card tag rejected: expected exactly one valid tag');
+    return { cleanText: text };
+  }
+
+  if (setupMatches.length === 1) {
+    return {
+      cleanText: text.replace(EXPENSE_SETUP_FORM_RE, '\n').replace(/\n{3,}/g, '\n\n').trim(),
+      setup: { agent_id: defaultAgentId },
+    };
+  }
+
+  const caseId = submitMatches[0]?.[1] || '';
+  if (!safeId(caseId)) return { cleanText: text };
+  return {
+    cleanText: text.replace(EXPENSE_SUBMIT_FORM_RE, '\n').replace(/\n{3,}/g, '\n\n').trim(),
+    submit: { agent_id: defaultAgentId, case_id: caseId },
+  };
+}
+
 export type PlanInteractionStatus = 'open' | 'closed';
 
 export interface ExtractPlanInteractionResult {
@@ -332,7 +397,7 @@ export interface ExtractPlanInteractionResult {
   status?: PlanInteractionStatus;
 }
 
-export type ActorResultStatus = 'success' | 'failure';
+export type ActorResultStatus = 'success' | 'failure' | 'waiting_input';
 
 export interface ExtractActorResultResult {
   cleanText: string;
@@ -430,9 +495,8 @@ export function extractPlanInteractionFromFinal(text: string): ExtractPlanIntera
 const ACTOR_RESULT_RE =
   /<(?:agent|commander)-result\b([^>]*)\/>|<(?:agent|commander)-result\b([^>]*)>\s*<\/(?:agent|commander)-result>/gi;
 
-/** Strip the actor result marker used for runtime outcome accounting.
- *  Actors can self-report only success/failure; execution exceptions and
- *  aborts are classified by the bus as `error` independently. */
+/** Strip the actor result marker used for runtime and task outcome accounting.
+ *  Execution exceptions and aborts are classified by the bus independently. */
 export function extractActorResultFromFinal(text: string): ExtractActorResultResult {
   if (!text || typeof text !== 'string') return { cleanText: text || '' };
   if (!text.includes('<agent-result') && !text.includes('<commander-result')) return { cleanText: text };
@@ -440,7 +504,7 @@ export function extractActorResultFromFinal(text: string): ExtractActorResultRes
   let status: ActorResultStatus | undefined;
   const cleanText = text.replace(ACTOR_RESULT_RE, (_full, attrs1 = '', attrs2 = '') => {
     const attrs = String(attrs1 || attrs2 || '');
-    const m = /\bstatus\s*=\s*["'](success|failure)["']/i.exec(attrs);
+    const m = /\bstatus\s*=\s*["'](success|failure|waiting_input)["']/i.exec(attrs);
     if (m) status = m[1].toLowerCase() as ActorResultStatus;
     return '\n';
   }).replace(/\n{3,}/g, '\n\n').trim();

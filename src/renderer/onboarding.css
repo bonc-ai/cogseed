@@ -1,0 +1,177 @@
+/* ═══════════════ CogSeed 首次启动 · 四步引导 ═══════════════
+ * Ported from the static prototype (60秒用户旅程.html). Scoped under
+ * #cs-onboarding so it never collides with the app's style.css. The
+ * overlay covers the whole window and hides the app shell while active.
+ * Local CSS vars are declared on the root node so this file is
+ * self-contained regardless of the host theme.
+ */
+#cs-onboarding{
+  --cs-ink:#14281E; --cs-ink-soft:#3E5A4C; --cs-muted:#6E8578; --cs-faint:#A3B8AC;
+  --cs-line:#E3EAE6; --cs-line-soft:#EDF3EF; --cs-line-strong:#C8D5CE;
+  --cs-forest:#0E9F6E; --cs-forest-deep:#0A7A55; --cs-forest-weak:#E2F5EC;
+  --cs-bud:#E09B2D; --cs-bud-weak:#FBF1DC;
+  --cs-clay:#DE5B45; --cs-clay-weak:#FBE9E5;
+  --cs-grad:linear-gradient(135deg,#0E9F6E,#0A7A55);
+  --cs-mono:'SF Mono',ui-monospace,'Menlo',monospace;
+  --cs-radius:6px;
+  position:fixed; inset:0; z-index:2000;
+  display:none;
+  grid-template-rows:54px minmax(0,1fr);
+  color:var(--cs-ink);
+  font-size:14px; line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+  background:
+    linear-gradient(rgba(14,159,110,.045) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(14,159,110,.045) 1px,transparent 1px),
+    #FBFDFC;
+  background-size:32px 32px;
+}
+body.cs-onboarding-active #cs-onboarding{display:grid}
+/* Hide the running app while the walkthrough is up. */
+body.cs-onboarding-active .app-container{display:none !important}
+
+#cs-onboarding *{box-sizing:border-box}
+#cs-onboarding button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+#cs-onboarding h1,#cs-onboarding h2,#cs-onboarding h3,#cs-onboarding h4,#cs-onboarding p{margin:0}
+
+/* ── top bar ── */
+#cs-onboarding .cs-topbar{display:grid;grid-template-columns:270px minmax(0,1fr) auto;align-items:center;
+  border-bottom:1px solid var(--cs-line);background:rgba(255,255,255,.96)}
+#cs-onboarding .cs-brand{height:54px;display:flex;align-items:center;gap:11px;padding:0 22px}
+#cs-onboarding .cs-brand .logo{width:30px;height:30px;border-radius:8px;background:var(--cs-grad);display:grid;place-items:center;
+  box-shadow:0 4px 12px rgba(14,159,110,.35)}
+#cs-onboarding .cs-brand .logo svg{width:16px;height:16px;color:#fff}
+#cs-onboarding .cs-brand b{font-size:16px;letter-spacing:.14em;color:var(--cs-ink)}
+#cs-onboarding .cs-title{justify-self:center;color:var(--cs-muted);font-weight:650;font-size:13px}
+
+/* ── two-column body ── */
+#cs-onboarding .cs-main{min-height:0;display:grid;grid-template-columns:262px minmax(0,1fr)}
+#cs-onboarding .cs-rail{min-height:0;display:flex;flex-direction:column;padding:36px 22px 24px;border-right:1px solid var(--cs-line);
+  background:rgba(236,247,241,.6)}
+#cs-onboarding .cs-rail h2{margin:0 0 6px;font-size:16px;color:var(--cs-ink)}
+#cs-onboarding .cs-rail>p{margin:0 0 26px;color:var(--cs-muted);font-size:12px;line-height:1.55}
+#cs-onboarding .cs-steps{display:grid;gap:8px}
+#cs-onboarding .cs-step{min-height:64px;display:grid;grid-template-columns:30px minmax(0,1fr);gap:11px;align-items:center;
+  padding:10px 12px;border-radius:10px;color:var(--cs-muted);text-align:left;cursor:pointer;
+  transition:all .2s;border:1px solid transparent;background:none}
+#cs-onboarding .cs-step>span:first-child{width:30px;height:30px;display:grid;place-items:center;border:1px solid var(--cs-line-strong);
+  border-radius:50%;color:var(--cs-muted);background:#fff;font-size:12px;font-weight:700}
+#cs-onboarding .cs-step strong,#cs-onboarding .cs-step small{display:block}
+#cs-onboarding .cs-step strong{font-size:13px}
+#cs-onboarding .cs-step small{margin-top:3px;font-size:11px;line-height:1.45}
+#cs-onboarding .cs-step.active{color:var(--cs-ink);background:#fff;box-shadow:0 6px 20px rgba(16,65,46,.08);border-color:var(--cs-line)}
+#cs-onboarding .cs-step.active>span:first-child{border-color:var(--cs-forest);color:#fff;background:var(--cs-forest)}
+#cs-onboarding .cs-step.done{color:var(--cs-forest)}
+#cs-onboarding .cs-step.done>span:first-child{border-color:var(--cs-forest);background:var(--cs-forest-weak);color:var(--cs-forest-deep)}
+#cs-onboarding .cs-step:disabled{opacity:.5;cursor:not-allowed}
+#cs-onboarding .cs-privacy{margin-top:auto;display:flex;gap:9px;align-items:flex-start;padding-top:18px;border-top:1px solid var(--cs-line);
+  color:var(--cs-muted);font-size:11px;line-height:1.55}
+#cs-onboarding .cs-privacy svg{width:14px;height:14px;flex-shrink:0;color:var(--cs-forest);margin-top:1px}
+
+/* ── content panels ── */
+#cs-onboarding .cs-content{min-width:0;min-height:0;overflow:auto;padding:52px clamp(28px,6vw,96px) 80px}
+#cs-onboarding .cs-panel{width:min(820px,100%);display:none;margin:0 auto}
+#cs-onboarding .cs-panel.active{display:block;animation:cs-fade .3s ease}
+@keyframes cs-fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+#cs-onboarding .cs-kicker{display:flex;gap:7px;align-items:center;font-family:var(--cs-mono);font-size:10px;letter-spacing:.2em;
+  color:var(--cs-forest);font-weight:700;text-transform:uppercase}
+#cs-onboarding .cs-panel h1{max-width:780px;margin:14px 0 12px;font-size:38px;line-height:1.16;letter-spacing:-.03em}
+#cs-onboarding .cs-lead{max-width:720px;margin:0 0 30px;color:var(--cs-ink-soft);font-size:15px;line-height:1.75}
+#cs-onboarding .cs-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid var(--cs-line);
+  border-radius:12px;background:rgba(255,255,255,.9);overflow:hidden}
+#cs-onboarding .cs-fact{padding:20px 18px;border-right:1px solid var(--cs-line)}
+#cs-onboarding .cs-fact:last-child{border-right:0}
+#cs-onboarding .cs-fact svg{width:20px;height:20px;color:var(--cs-forest)}
+#cs-onboarding .cs-fact strong{display:block;margin:12px 0 5px;font-size:13.5px}
+#cs-onboarding .cs-fact span{color:var(--cs-muted);font-size:12px;line-height:1.6;display:block}
+
+/* ── action bar / buttons ── */
+#cs-onboarding .cs-actions{display:flex;gap:10px;align-items:center;margin-top:30px;flex-wrap:wrap}
+#cs-onboarding .cs-btn{display:inline-flex;align-items:center;gap:7px;padding:11px 20px;border-radius:var(--cs-radius);
+  font-weight:620;font-size:13px;transition:all .14s;letter-spacing:.02em;background:var(--cs-forest);color:#EAF7EF}
+#cs-onboarding .cs-btn:hover{background:var(--cs-forest-deep)}
+#cs-onboarding .cs-btn svg{width:14px;height:14px}
+#cs-onboarding .cs-btn.ghost{background:none;border:1px solid var(--cs-line);color:var(--cs-ink-soft)}
+#cs-onboarding .cs-btn.ghost:hover{border-color:var(--cs-forest);color:var(--cs-forest);background:none}
+#cs-onboarding .cs-btn:disabled{opacity:.5;cursor:not-allowed}
+#cs-onboarding .cs-actions small{color:var(--cs-faint)}
+
+/* ── step 2: detected agents + sessions ── */
+#cs-onboarding .cs-list{border:1px solid var(--cs-line);border-radius:12px;background:rgba(255,255,255,.92);overflow:hidden}
+#cs-onboarding .cs-group-head{display:flex;align-items:center;gap:8px;padding:11px 16px 7px;font-size:12px;font-weight:700;
+  color:var(--cs-ink);background:#F6FBF8;border-bottom:1px solid var(--cs-line);cursor:pointer;user-select:none}
+#cs-onboarding .cs-group-head svg{width:14px;height:14px;color:var(--cs-forest)}
+#cs-onboarding .cs-group-head .g-name{display:flex;align-items:center;gap:6px}
+#cs-onboarding .cs-group-head .g-toggle{width:16px;height:16px;margin-left:auto;transition:transform .2s;color:var(--cs-muted)}
+#cs-onboarding .cs-group-head.collapsed .g-toggle{transform:rotate(-90deg)}
+#cs-onboarding .cs-group-head:hover{background:#EDF6F0}
+#cs-onboarding .cs-group-head .g-path{font-family:var(--cs-mono);font-size:10px;color:var(--cs-faint);font-weight:400;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px}
+#cs-onboarding .cs-group-head .g-status{margin-left:auto;font-size:10px;font-weight:650;color:var(--cs-forest-deep);
+  background:var(--cs-forest-weak);border-radius:20px;padding:2px 9px;white-space:nowrap}
+#cs-onboarding .cs-group-head .g-status.off{color:var(--cs-muted);background:var(--cs-line-soft)}
+#cs-onboarding .cs-group-head .g-status.err{color:#8A3A2C;background:var(--cs-clay-weak)}
+#cs-onboarding .cs-sessions-container{transition:max-height .25s ease,opacity .2s ease}
+#cs-onboarding .cs-sessions-container.collapsed{max-height:0;opacity:0;overflow:hidden}
+#cs-onboarding .cs-src{display:grid;grid-template-columns:22px 42px minmax(0,1fr) auto;gap:12px;align-items:center;
+  padding:14px 16px;border-bottom:1px solid var(--cs-line);cursor:pointer;transition:background .15s}
+#cs-onboarding .cs-src:last-child{border-bottom:0}
+#cs-onboarding .cs-src:hover{background:#F7FBF9}
+#cs-onboarding .cs-src.selected{background:#F1F9F5}
+#cs-onboarding .cs-src input{width:17px;height:17px;accent-color:var(--cs-forest)}
+#cs-onboarding .cs-src .s-ico{width:42px;height:42px;border-radius:9px;background:var(--cs-forest-weak);display:grid;place-items:center}
+#cs-onboarding .cs-src .s-ico svg{width:20px;height:20px;color:var(--cs-forest)}
+#cs-onboarding .cs-src strong{display:block;font-size:13.5px}
+#cs-onboarding .cs-src small{display:block;margin-top:3px;color:var(--cs-muted);font-size:11.5px;line-height:1.5}
+/* honest empty / failure states — no fabricated data */
+#cs-onboarding .cs-state{padding:16px;font-size:12.5px;color:var(--cs-muted);line-height:1.6;background:#fff;
+  border-bottom:1px solid var(--cs-line)}
+#cs-onboarding .cs-state:last-child{border-bottom:0}
+#cs-onboarding .cs-state.err{color:#8A3A2C;background:var(--cs-clay-weak)}
+#cs-onboarding .cs-state.loading{color:var(--cs-forest-deep)}
+#cs-onboarding .cs-mode{margin-top:14px;display:flex;align-items:center;justify-content:space-between;gap:14px;
+  padding:12px 16px;border:1px solid var(--cs-line);border-radius:10px;background:#fff;font-size:12.5px;color:var(--cs-ink-soft)}
+
+/* ── step 3: role cards ── */
+#cs-onboarding .cs-role-cards{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+#cs-onboarding .cs-role-card{border:1px solid var(--cs-line);border-radius:14px;padding:18px;cursor:pointer;transition:all .15s;
+  text-align:left;background:#fff}
+#cs-onboarding .cs-role-card:hover{border-color:var(--cs-forest);box-shadow:0 6px 18px rgba(12,62,47,.07)}
+#cs-onboarding .cs-role-card.selected{border-color:var(--cs-forest);box-shadow:inset 0 0 0 1px var(--cs-forest);background:#F6FBF8}
+#cs-onboarding .cs-role-card .r-ico{width:38px;height:38px;border-radius:10px;background:var(--cs-forest-weak);display:grid;place-items:center;margin-bottom:10px}
+#cs-onboarding .cs-role-card .r-ico svg{width:18px;height:18px;color:var(--cs-forest)}
+#cs-onboarding .cs-role-card .r-ico.amber{background:var(--cs-bud-weak)}
+#cs-onboarding .cs-role-card .r-ico.amber svg{color:var(--cs-bud)}
+#cs-onboarding .cs-role-card h3{font-size:14px;margin:0 0 5px}
+#cs-onboarding .cs-role-card p{color:var(--cs-muted);font-size:12px;line-height:1.55;margin:0 0 9px}
+#cs-onboarding .cs-role-card .r-tags{display:flex;gap:6px;flex-wrap:wrap}
+#cs-onboarding .cs-role-card .r-tag{font-size:10.5px;font-weight:650;color:var(--cs-forest-deep);background:var(--cs-forest-weak);
+  border-radius:20px;padding:3px 9px}
+#cs-onboarding .cs-role-result{margin-top:16px;border:1px solid #B9E3C8;border-radius:12px;background:#F0F9F4;padding:14px 16px;display:none}
+#cs-onboarding .cs-role-result.show{display:block;animation:cs-fade .25s ease}
+#cs-onboarding .cs-role-result h4{font-size:13px;color:var(--cs-forest-deep);margin:0 0 8px}
+
+/* ── step 4: candidate cognitions ── */
+#cs-onboarding .cs-cands{display:grid;gap:10px}
+#cs-onboarding .cs-cand{display:grid;grid-template-columns:22px minmax(0,1fr);gap:12px;padding:15px 16px;
+  border:1px solid var(--cs-line);border-radius:12px;background:#fff;cursor:pointer;transition:all .15s}
+#cs-onboarding .cs-cand:hover{border-color:#B9E3C8}
+#cs-onboarding .cs-cand.selected{border-color:var(--cs-forest);box-shadow:inset 0 0 0 1px var(--cs-forest);background:#F6FBF8}
+#cs-onboarding .cs-cand input{width:17px;height:17px;margin-top:2px;accent-color:var(--cs-forest)}
+#cs-onboarding .cs-cand-body{min-width:0}
+#cs-onboarding .cs-cand-head{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+#cs-onboarding .cs-cand-head b{font-size:13.5px}
+#cs-onboarding .cs-cand .cs-type{font-family:var(--cs-mono);font-size:9.5px;font-weight:700;letter-spacing:.08em;color:var(--cs-forest-deep);
+  background:var(--cs-forest-weak);border-radius:5px;padding:2px 8px}
+#cs-onboarding .cs-cand .cs-meta{margin-top:5px;color:var(--cs-muted);font-size:11.5px;line-height:1.6}
+#cs-onboarding .cs-cand .cs-src-line{margin-top:6px;font-family:var(--cs-mono);font-size:10px;color:var(--cs-faint)}
+#cs-onboarding .cs-extract-progress{padding:16px;text-align:center;color:var(--cs-forest-deep);font-size:12.5px}
+
+/* ── toast ── */
+#cs-ob-toast{position:fixed;left:50%;bottom:30px;z-index:2100;transform:translate(-50%,16px);
+  padding:10px 16px;border-radius:10px;background:#143528;color:#EAF6F0;font-size:12.5px;
+  box-shadow:0 10px 28px rgba(16,65,46,.3);opacity:0;pointer-events:none;transition:all .2s;
+  font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif}
+#cs-ob-toast.show{opacity:1;transform:translate(-50%,0)}
+
+@media (prefers-reduced-motion:reduce){#cs-onboarding *,#cs-ob-toast{animation:none !important;transition:none !important}}

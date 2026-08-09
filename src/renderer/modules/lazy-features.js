@@ -7,7 +7,10 @@
 
 const _rendererFeatureManifest = Object.freeze({
   settings: [
+    { src: './modules/model-authorization.js' },
     { src: './modules/settings.js' },
+    { src: './vendor/qrcode-generator/qrcode.js' },
+    { src: './modules/messaging-settings.js' },
     { src: './modules/memory.js' },
   ],
   marketplace: [
@@ -16,6 +19,7 @@ const _rendererFeatureManifest = Object.freeze({
   agents: [],
   project: [
     { src: './modules/library-transfer.js' },
+    { src: './modules/project-workbench.js' },
     { src: './modules/project-detail.js' },
   ],
   auto: [
@@ -37,7 +41,13 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/evolution/pages.js' },
     { src: './modules/evolution/console.js' },
   ],
+  recall: [
+    { src: './modules/skills.js' },
+    { src: './modules/skills-bindings.js' },
+  ],
   'personal-ontology': [
+    { src: './modules/cognition/pages.js' },
+    { src: './modules/cognition/cognition.js' },
     { src: './modules/personal-ontology.js' },
   ],
   spaces: [

@@ -46,31 +46,39 @@ production_release_allowed: false
 
 ## Architecture
 
-### 9 模块
+### 10 模块（`src/modules/`）
 
 | # | 模块 | 职责 |
 |---|------|------|
-| 1 | Evidence & KSTAR Center | 交互 → KSTAR Episode |
-| 2 | Meaning & Ontology Binding | 本体切片绑定 |
-| 3 | Attribution Lab | DeltaR/DeltaA 归因 |
-| 4 | Skill Optimization Lab | Patch 生成 |
-| 5 | Eval/Replay Center | 回放验证 |
-| 6 | Patch Proposal Manager | 8 种 Patch 标准化 |
-| 7 | Promotion & Governance Board | 三闸治理 |
-| 8 | Case & Rejected Patch Library | 案例 + 拒绝补丁库 |
-| 9 | Integration Adapter Layer | 跨框架适配 |
+| 1 | ontology-reader | 本体读取（TBox/RBox/ABox/实例） |
+| 2 | ontology-writer | 本体写入（Patch 落地） |
+| 3 | evidence-collector | 证据采集 + KSTAR Episode |
+| 4 | attribution-engine | DeltaR/DeltaA 归因 + 聚合 + 路由 |
+| 5 | evolution-orchestrator | KSTAR 进化编排 |
+| 6 | patch-generator | Patch 生成（有界编辑） |
+| 7 | governance-gates | 三闸治理 |
+| 8 | skill-creator | Skill-Creator（双通道 + 评估迭代） |
+| 9 | registry-manager | 注册表管理 |
+| 10 | llm-port | LLM 端口（回退 + 类型） |
 
-### 对外接口（MCP Tools）
+### 对外接口（26 个 MCP Tools）
 
-| 工具 | 用途 |
+| 类别 | 工具 |
 |------|------|
-| `read_ontology` | 读取本体 TBox/RBox/ABox |
-| `capture_interaction` | 采集交互 → KSTAR Episode |
-| `analyze_attribution` | 归因分析 |
-| `propose_patch` | 生成 Patch 提案 |
-| `run_governance` | 运行三闸治理 |
-| `create_skill` | 创建新 SkillPackage |
-| `register_skill` | 注册技能到注册表 |
+| **引擎** | get_engine_info |
+| **本体** | read_ontology, list_ontologies, extract_ontology_slice |
+| **证据** | capture_interaction, query_episodes |
+| **归因** | analyze_attribution, analyze_no_match, route_recommendation |
+| **补丁** | propose_patch, run_governance, human_review |
+| **创建** | create_skill, create_skill_auto, capture_intent |
+| **评估** | generate_eval_cases, run_eval, grade_eval, grade_eval_llm, benchmark_skill, improve_skill, generate_eval_viewer, optimize_description |
+| **注册表** | register_skill, list_registry |
+| **配置** | get_engine_config |
+
+### 双入口加载路径
+
+- `dist/index.js` — MCP stdio 服务器入口，宿主作为子进程拉起。
+- `dist/engine.js` — 纯库入口，宿主进程内 `loadEngine` 加载，不启服务器。
 
 ## KSTAR Evolution Discipline (7 Rules)
 

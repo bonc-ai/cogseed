@@ -17,6 +17,7 @@ const ConversationInfo = (() => {
   let _activitySeq = 0;
   let _fileSeq = 0;
   let _attachmentSeq = 0;
+  let _mateProjectionSeq = 0;
   const _locallyDeletedPaths = new Set();
   let _loading = false;
   let _loadingSource = '';
@@ -37,6 +38,7 @@ const ConversationInfo = (() => {
     runtime: null,
     actors: [],
     collaboration: null,
+    mate: { session: null, collaboration: null, sessions: [], loading: false, error: '' },
     wakeRequests: [],
     kstarRuns: [],
     patchCandidates: [],
@@ -315,6 +317,111 @@ const ConversationInfo = (() => {
       actors: membersRes && Array.isArray(membersRes.actors) ? membersRes.actors : [],
       runtime: runtimeRes || {},
     };
+  }
+
+  function _setMateProjectionState(next, seq) {
+    if (seq !== _mateProjectionSeq || (_cid && next && next.sessionId && next.sessionId !== _cid)) return;
+    const mate = next || { session: null, collaboration: null, sessions: [], loading: false, error: '' };
+    _snapshot = {
+      ..._snapshot,
+      mate: {
+        session: mate.session || null,
+        collaboration: mate.collaboration || null,
+        sessions: Array.isArray(mate.sessions) ? mate.sessions : _snapshot.mate.sessions,
+        loading: !!mate.loading,
+        error: mate.error ? String(mate.error) : '',
+      },
+      collaboration: mate.collaboration || _snapshot.collaboration,
+    };
+    if (_activeTab === 'collaboration') _renderBody();
+  }
+
+  function _renderMateProjectionError(message) {
+    return `<div class="conversation-info-empty is-small is-error">${escapeHtml(_label('conversation_info.mate.load_failed', 'Could not load Mate overview: {reason}', { reason: message }))}</div>`;
+  }
+
+  function _renderMateActions(task, actions) {
+    if (!task) return '';
+    const buttons = [];
+    if (actions && actions.retry) buttons.push(`<button type="button" class="conversation-info-mate-action" data-mate-action="retry" data-mate-task-id="${escapeHtml(task.taskId)}" data-mate-request-id="${escapeHtml(task.requestId)}">${escapeHtml(_label('common.retry', 'Retry'))}</button>`);
+    if (actions && actions.resume) buttons.push(`<button type="button" class="conversation-info-mate-action" data-mate-action="resume" data-mate-task-id="${escapeHtml(task.taskId)}" data-mate-request-id="${escapeHtml(task.requestId)}">${escapeHtml(_label('common.resume', 'Resume'))}</button>`);
+    if (actions && actions.abort) buttons.push(`<button type="button" class="conversation-info-mate-action is-danger" data-mate-action="abort" data-mate-task-id="${escapeHtml(task.taskId)}">${escapeHtml(_label('common.abort', 'Abort'))}</button>`);
+    return buttons.length ? `<div class="conversation-info-mate-actions">${buttons.join('')}</div>` : '';
+  }
+
+  function _renderMateOverview() {
+    const mate = _snapshot.mate || {};
+    const session = mate.session || null;
+    if (!session) {
+      if (mate.loading) return `<div class="conversation-info-empty">${escapeHtml(_label('common.loading', 'Loading…'))}</div>`;
+      if (mate.error) return _renderMateProjectionError(mate.error);
+      return `<div class="conversation-info-empty">${escapeHtml(_label('conversation_info.mate.empty', 'No Mate collaboration snapshot yet.'))}</div>`;
+    }
+    const collaboration = session.collaboration || mate.collaboration || null;
+    const task = collaboration && collaboration.task ? collaboration.task : null;
+    const actors = collaboration && Array.isArray(collaboration.actors) ? collaboration.actors : [];
+    const timeline = collaboration && Array.isArray(collaboration.timeline) ? collaboration.timeline : [];
+    const workflow = collaboration && collaboration.workflow ? collaboration.workflow : { childTaskIds: [], steps: [] };
+    const actionSummary = task && task.actions ? _renderMateActions(task, task.actions) : '';
+    const stepRows = Array.isArray(workflow.steps) && workflow.steps.length
+      ? `<div class="conversation-info-mate-steps">${workflow.steps.map((step) => `<div class="conversation-info-mate-step"><div class="conversation-info-mate-step-title">${escapeHtml(step.title || step.stepId || '')}</div><div class="conversation-info-mate-step-meta">${escapeHtml(step.status || '')}${step.actorId ? ` · ${escapeHtml(step.actorId)}` : ''}${Array.isArray(step.dependsOn) && step.dependsOn.length ? ` · ${escapeHtml(step.dependsOn.join(', '))}` : ''}</div>${step.resultSummary ? `<div class="conversation-info-mate-step-summary">${escapeHtml(step.resultSummary)}</div>` : ''}</div>`).join('')}</div>`
+      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.mate.no_steps', 'No workflow steps yet.'))}</div>`;
+    const actorRows = actors.length
+      ? `<div class="conversation-info-mate-actors">${actors.map((actor) => `<div class="conversation-info-mate-actor"><div class="conversation-info-mate-actor-role">${escapeHtml(actor.role || '')}</div><div class="conversation-info-mate-actor-meta">${escapeHtml(actor.actorId || '')}${actor.taskId ? ` · ${escapeHtml(actor.taskId)}` : ''}${actor.status ? ` · ${escapeHtml(actor.status)}` : ''}</div></div>`).join('')}</div>`
+      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.mate.no_actors', 'No actors yet.'))}</div>`;
+    const timelineRows = timeline.length
+      ? `<div class="conversation-info-mate-timeline">${timeline.slice(-8).map((event) => `<div class="conversation-info-mate-timeline-item"><div class="conversation-info-mate-timeline-head">${escapeHtml(event.type || '')} · ${escapeHtml(event.createdAt || '')}</div><div class="conversation-info-mate-timeline-body">${escapeHtml(event.summary || '')}</div></div>`).join('')}</div>`
+      : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.mate.no_timeline', 'No recovery timeline yet.'))}</div>`;
+    const childIds = Array.isArray(workflow.childTaskIds) && workflow.childTaskIds.length
+      ? `<div class="conversation-info-mate-child-tree">${workflow.childTaskIds.map((id) => `<span class="conversation-info-mate-child-chip">${escapeHtml(id)}</span>`).join('')}</div>`
+      : '';
+    return `<section class="conversation-info-collaboration-section conversation-info-mate-overview">
+      <div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.mate.section_title', 'Mate Collaboration Overview'))}</div>
+      <div class="conversation-info-mate-meta">${escapeHtml(session.sessionId)} · ${escapeHtml(session.latestStatus || 'idle')} · ${escapeHtml(_label('conversation_info.mate.task_count', '{count} tasks', { count: session.taskCount || 0 }))}</div>
+      <div class="conversation-info-mate-task-title">${escapeHtml(task && task.title ? task.title : _label('conversation_info.mate.no_task', 'No active task.'))}</div>
+      ${actionSummary}
+      ${childIds}
+      <div class="conversation-info-mate-grid">
+        <div class="conversation-info-mate-card"><div class="conversation-info-mate-card-title">${escapeHtml(_label('conversation_info.mate.actors', 'Actors'))}</div>${actorRows}</div>
+        <div class="conversation-info-mate-card"><div class="conversation-info-mate-card-title">${escapeHtml(_label('conversation_info.mate.steps', 'Workflow'))}</div>${stepRows}</div>
+        <div class="conversation-info-mate-card"><div class="conversation-info-mate-card-title">${escapeHtml(_label('conversation_info.mate.timeline', 'Recovery Timeline'))}</div>${timelineRows}</div>
+      </div>
+    </section>`;
+  }
+
+  async function _primeMateProjection(cid, opts = {}) {
+    if (!cid || !window.mateAgentProjection || typeof window.mateAgentProjection.session !== 'function') return null;
+    const seq = ++_mateProjectionSeq;
+    const entry = window.mateAgentProjection.session(cid, {
+      onUpdate: (value) => {
+        if (seq !== _mateProjectionSeq || cid !== _cid) return;
+        const next = value || null;
+        _snapshot = {
+          ..._snapshot,
+          mate: {
+            session: next,
+            collaboration: next && next.collaboration ? next.collaboration : null,
+            sessions: _snapshot.mate.sessions,
+            loading: false,
+            error: '',
+          },
+          collaboration: next && next.collaboration ? next.collaboration : _snapshot.collaboration,
+        };
+        if (_activeTab === 'collaboration' || opts.render === true) _renderBody();
+      },
+    });
+    if (entry && entry.snapshot) {
+      _setMateProjectionState({ session: entry.snapshot, collaboration: entry.snapshot && entry.snapshot.collaboration ? entry.snapshot.collaboration : null, sessions: _snapshot.mate.sessions, loading: true, error: '' }, seq);
+    } else {
+      _setMateProjectionState({ session: null, collaboration: null, sessions: _snapshot.mate.sessions, loading: true, error: '' }, seq);
+    }
+    try {
+      await entry.refresh;
+    } catch (err) {
+      if (seq !== _mateProjectionSeq || cid !== _cid) return null;
+      _setMateProjectionState({ session: null, collaboration: null, sessions: _snapshot.mate.sessions, loading: false, error: (err && err.message) || String(err) }, seq);
+    }
+    return entry;
   }
 
   async function refreshAgentActivity(cid, opts = {}) {
@@ -798,7 +905,9 @@ const ConversationInfo = (() => {
     const stepLabel = stepCount
       ? _label('conversation_info.collaboration.step_count', '{count} steps', { count: stepCount })
       : '';
-    return `<section class="conversation-info-collaboration-section conversation-info-collaboration-task-overview"><div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.collaboration.section_task_overview', 'Task Overview'))}</div><div class="conversation-info-collaboration-objective">${escapeHtml(objective)}</div><div class="conversation-info-collaboration-meta">${escapeHtml(_label(`conversation_info.collaboration.status.${status}`, fallbackStatus))}${phase ? ` · ${escapeHtml(phase)}` : ''}${stepLabel ? ` · ${escapeHtml(stepLabel)}` : ''}</div></section>`;
+    const lifecycleStatus = runtime && runtime.kstarLifecycle && runtime.kstarLifecycle.status ? String(runtime.kstarLifecycle.status) : '';
+    const hasKstarPreload = lifecycleStatus === 'preload_preview' || lifecycleStatus === 'authorized';
+    return `<section class="conversation-info-collaboration-section conversation-info-collaboration-task-overview"><div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.collaboration.section_task_overview', 'Task Overview'))}</div><div class="conversation-info-collaboration-objective">${escapeHtml(objective)}</div><div class="conversation-info-collaboration-meta">${escapeHtml(_label(`conversation_info.collaboration.status.${status}`, fallbackStatus))}${phase ? ` · ${escapeHtml(phase)}` : ''}${stepLabel ? ` · ${escapeHtml(stepLabel)}` : ''}${hasKstarPreload ? ` · ${escapeHtml(_label('conversation_info.collaboration.task_preview_label', 'Preloaded, not active yet'))}` : ''}</div></section>`;
   }
 
   function _renderCollaborationAgentActivitySection() {
@@ -917,13 +1026,17 @@ const ConversationInfo = (() => {
   }
 
   function _renderCollaborationOverview() {
-    if (!_snapshot.collaboration && !_deriveAgentActivityRows(_snapshot).length && !_collectCollaborationAttentionItems().length) {
+    const mateState = _snapshot.mate || {};
+    if (!_snapshot.collaboration && !mateState.session && !mateState.loading && !mateState.error && !_deriveAgentActivityRows(_snapshot).length && !_collectCollaborationAttentionItems().length) {
       return `<div class="conversation-info-empty">${escapeHtml(_label('conversation_info.collaboration.empty', 'No active collaboration yet.'))}</div>`;
     }
     const collaboration = _snapshot.collaboration || null;
     const runtime = _snapshot.runtime || {};
     const attentionItems = _collectCollaborationAttentionItems();
-    return `<div class="conversation-info-collaboration"><div class="conversation-info-collaboration-header"><div class="conversation-info-collaboration-heading">${escapeHtml(_label('conversation_info.collaboration.title', 'Collaboration'))}</div><div class="conversation-info-collaboration-subtitle">${escapeHtml(_label('conversation_info.collaboration.subtitle', 'How this conversation is progressing'))}</div></div>${_safeSection(() => _renderCollaborationTaskOverview(collaboration, runtime), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAgentActivitySection(), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAttentionSection(attentionItems), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderKStarHistorySection(), '')}</div>`;
+    const mateHtml = (mateState.session || mateState.loading || mateState.error)
+      ? _safeSection(() => _renderMateOverview(), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)
+      : '';
+    return `<div class="conversation-info-collaboration"><div class="conversation-info-collaboration-header"><div class="conversation-info-collaboration-heading">${escapeHtml(_label('conversation_info.collaboration.title', 'Collaboration'))}</div><div class="conversation-info-collaboration-subtitle">${escapeHtml(_label('conversation_info.collaboration.subtitle', 'How this conversation is progressing'))}</div></div>${mateHtml}${_safeSection(() => _renderCollaborationTaskOverview(collaboration, runtime), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAgentActivitySection(), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAttentionSection(attentionItems), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderKStarHistorySection(), '')}</div>`;
   }
 
   function _protocolEventData(event) {
@@ -1155,8 +1268,9 @@ const ConversationInfo = (() => {
     try {
       const snapshot = await _load(target);
       if (seq !== _seq || target !== _cid) return;
-      _snapshot = snapshot;
+      _snapshot = { ...snapshot, mate: _snapshot.mate || { session: null, collaboration: null, sessions: [], loading: false, error: '' } };
       _error = '';
+      void _primeMateProjection(target, { render: silent }).catch(() => {});
     } catch (err) {
       if (seq !== _seq || target !== _cid) return;
       _error = (err && err.message) || String(err);
@@ -1229,7 +1343,7 @@ const ConversationInfo = (() => {
   function bind(cid) {
     _cid = cid || null;
     _open = false;
-    _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [], runtime: null, actors: [], collaboration: null, wakeRequests: [], kstarRuns: [], patchCandidates: [], protocolEvents: [], protocolError: '', migrationStatus: null, archives: [] };
+    _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [], runtime: null, actors: [], collaboration: null, mate: { session: null, collaboration: null, sessions: [], loading: false, error: '' }, wakeRequests: [], kstarRuns: [], patchCandidates: [], protocolEvents: [], protocolError: '', migrationStatus: null, archives: [] };
     _protocolFilters.agent = '';
     _protocolFilters.role = '';
     _protocolFilters.result = '';
@@ -1249,8 +1363,14 @@ const ConversationInfo = (() => {
   }
 
   function _openFile(absPath) {
-    if (!absPath || typeof openChatFileViewer !== 'function') return;
-    openChatFileViewer(absPath, _baseName(absPath), _cid ? { cid: _cid } : undefined);
+    if (!absPath) return;
+    const name = _baseName(absPath);
+    const opts = _cid ? { cid: _cid } : undefined;
+    // Prefer the side pane for renderable kinds; `openSideBrowser` returning
+    // false is the signal that this kind belongs to the fullscreen viewer.
+    if (typeof openSideBrowser === 'function' && openSideBrowser(absPath, name, opts || {})) return;
+    if (typeof openChatFileViewer !== 'function') return;
+    openChatFileViewer(absPath, name, opts);
   }
 
   function _attachmentEntriesForPath(absPath, kind) {
@@ -1588,6 +1708,22 @@ const ConversationInfo = (() => {
           ev.preventDefault();
           ev.stopPropagation();
           void refresh(_cid);
+          return;
+        }
+        const mateAction = ev.target.closest('[data-mate-action]');
+        if (mateAction && _snapshot.mate && _snapshot.mate.session) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const action = mateAction.dataset.mateAction;
+          const taskId = mateAction.dataset.mateTaskId || '';
+          const requestId = mateAction.dataset.mateRequestId || '';
+          if (action === 'abort' && taskId) {
+            void window.orkas.invoke('mate_agent.task.abort', { taskId }).then(() => refresh(_cid));
+          } else if (action === 'retry' && taskId && requestId) {
+            void window.orkas.invoke('mate_agent.task.retry', { taskId, requestId }).then(() => refresh(_cid));
+          } else if (action === 'resume' && taskId && requestId) {
+            void window.orkas.invoke('mate_agent.task.resume', { taskId, requestId, continuation: (_snapshot.mate.session && _snapshot.mate.session.collaboration && _snapshot.mate.session.collaboration.task && _snapshot.mate.session.collaboration.task.title) || 'Resume task.' }).then(() => refresh(_cid));
+          }
           return;
         }
         const ciAttach = ev.target.closest('.ci-attach-row[data-attachment-name]');

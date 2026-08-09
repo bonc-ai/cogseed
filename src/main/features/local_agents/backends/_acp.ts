@@ -25,7 +25,9 @@ import {
   armKillWatchdog,
   LineSplitter,
   levelOrInfo,
+  FileChangeFallbackTracker,
 } from './base.js';
+import * as transcript from '../acp_transcript.js';
 
 export interface AcpBackendDef {
   /** Logger name. */
@@ -36,6 +38,10 @@ export interface AcpBackendDef {
   clientName: string;
   /** Extra env vars to merge with `process.env` when spawning. */
   extraEnv?: Record<string, string>;
+  /** Agent type identifier for transcript recording (e.g., 'hermes', 'claude-desktop'). */
+  agentType?: string;
+  /** Enable transcript recording (default: true). */
+  recordTranscript?: boolean;
 }
 
 
@@ -59,6 +65,9 @@ export function buildAcpMcpServersForSession(bridge?: BackendBridgeConfig): Arra
 
 export function makeAcpBackend(def: AcpBackendDef): LocalBackend {
   const log = createLogger(def.logName);
+  const shouldRecord = def.recordTranscript !== false;
+  const agentType = def.agentType || def.logName.replace('local-agents:', '');
+
   return {
     async run(opts: BackendRunOptions): Promise<void> {
       const env = def.extraEnv ? { ...process.env, ...def.extraEnv } : process.env;
@@ -79,6 +88,14 @@ export function makeAcpBackend(def: AcpBackendDef): LocalBackend {
       // failed turn look successful. We sniff stderr for these and
       // promote them to the run-level error if no text streamed.
       let stderrErrorHint: string | undefined;
+      let promptContent: Array<{ type: string; text?: string }> | undefined;
+
+      // Fallback file-change detection: ACP session/update never reports
+      // touched file paths in a structured way we can rely on (tool
+      // names/args vary per server), so we snapshot the working directory
+      // and diff on prompt completion. See FileChangeFallbackTracker's
+      // doc comment in backends/base.ts.
+      const fileChangeFallback = new FileChangeFallbackTracker(opts.cwd);
 
       const PROMPT_REQ_ID = 100;
 
@@ -140,6 +157,10 @@ export function makeAcpBackend(def: AcpBackendDef): LocalBackend {
           handleAcpMessage(env, {
             onSessionNew: id => {
               sessionId = id;
+              // Record transcript header
+              if (shouldRecord) {
+                void transcript.writeHeader(agentType, id, opts.cwd);
+              }
               opts.onEvent({ type: 'status', status: 'session_ready', sessionId });
               // Optional model selection. We swallow errors here:
               // some CLIs reject unknown ids; we still try the prompt
@@ -147,13 +168,18 @@ export function makeAcpBackend(def: AcpBackendDef): LocalBackend {
               if (opts.model) {
                 send({ jsonrpc: '2.0', id: 3, method: 'session/set_model', params: { sessionId: id, modelId: opts.model } });
               }
+              promptContent = [{ type: 'text', text: [opts.bridge?.appendSystemPrompt, opts.prompt].filter(Boolean).join('\n\n') }];
               send({
                 jsonrpc: '2.0', id: PROMPT_REQ_ID, method: 'session/prompt',
                 params: {
                   sessionId: id,
-                  prompt: [{ type: 'text', text: [opts.bridge?.appendSystemPrompt, opts.prompt].filter(Boolean).join('\n\n') }],
+                  prompt: promptContent,
                 },
               });
+              // Record the prompt
+              if (shouldRecord && promptContent) {
+                void transcript.writePrompt(agentType, id, promptContent);
+              }
             },
             onTextDelta: text => {
               resultText += text;
@@ -166,6 +192,13 @@ export function makeAcpBackend(def: AcpBackendDef): LocalBackend {
               resultStatus = r.ok ? 'completed' : 'failed';
               if (r.ok && r.text) resultText = r.text;
               if (!r.ok) resultError = r.error;
+              // Best-effort — must never block the stdin-close shutdown
+              // path below even if the sweep itself throws.
+              if (r.ok) fileChangeFallback.sweep(e => opts.onEvent(e));
+              // Record turn end
+              if (shouldRecord && sessionId) {
+                void transcript.writeTurnEnd(agentType, sessionId, r.ok ? 'end_turn' : r.error, Date.now() - startedAt, opts.model);
+              }
               // ACP servers (hermes / kimi / kiro) keep stdin open
               // ready for the next prompt — they're long-running.
               // We're a one-shot dispatcher; closing stdin signals
@@ -187,6 +220,12 @@ export function makeAcpBackend(def: AcpBackendDef): LocalBackend {
                 message: `acp: ${summary}`,
                 source: 'acp',
               });
+            },
+            onUpdate: upd => {
+              // Record raw ACP update for transcript
+              if (shouldRecord && sessionId) {
+                void transcript.writeUpdate(agentType, sessionId, upd);
+              }
             },
           });
         });
@@ -286,6 +325,7 @@ interface AcpHandlers {
   onToolResult(tool: { name: string; callId: string; output: string }): void;
   onPromptResult(r: { ok: boolean; text?: string; error?: string }): void;
   onUnknown(raw: any): void;
+  onUpdate?(update: any): void;
 }
 
 /**
@@ -306,6 +346,8 @@ export function handleAcpMessage(env: any, h: AcpHandlers): void {
   if (env.method === 'session/update') {
     const upd = env.params?.update;
     if (!upd || typeof upd !== 'object') return;
+    // Call onUpdate for transcript recording if provided
+    if (h.onUpdate) h.onUpdate(upd);
     const kind: string = (typeof upd.sessionUpdate === 'string' && upd.sessionUpdate)
       || (typeof upd.kind === 'string' && upd.kind)
       || '';

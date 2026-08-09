@@ -95,8 +95,15 @@ export interface GroupMessage {
   wake_requests?: WakeRequestSummary[];
   /** Legacy/per-message P3394 review metadata. New collaboration validation is Commander-owned and stored in KSTAR runtime state. */
   kstar_review?: KStarReviewSummary;
+  /** Recall projection card metadata used to recover confirmed assets for prompt injection. */
+  recall_projection_card?: { projectionId: string };
+  /** KSTAR lightweight review confirmation card; raw evidence stays in main storage. */
+  kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
   /** Plain `@token` list (raw text mentions). */
   mentions?: string[];
+  /** Host-owned P3394 delivery metadata. Epochs are scoped to the persisted
+   * message and recipient so a replay/re-dispatch reuses the original value. */
+  p3394?: { recipient_epochs: Record<string, number> };
   /** Stable actor-execution id that produced this record. Live process,
    * terminal bus events, persisted history and renderer placeholders all use
    * this value to refer to the same reply. Older records may omit it. */
@@ -131,6 +138,12 @@ export interface GroupMessage {
   /** Form widget payload — only on agent messages whose final text contained
    * a fenced agent-input-form block. */
   form?: import("./router").ChatFormPayload;
+  /** Host-owned reimbursement setup card. Its values are never persisted in
+   * the message: credentials travel directly from renderer to main IPC. */
+  expense_setup?: import("./router").ExpenseSetupCardPayload;
+  /** Host-owned reimbursement submission card for a current-conversation
+   * case. Main independently checks case readiness and shows confirmation. */
+  expense_submit?: import("./router").ExpenseSubmitCardPayload;
   /** Quick-created / quick-edited agent meta — populated when the commander's
    * final text contained one or more `<agent>` containers. One entry per
    * successfully applied container; failed applications are not recorded. */
@@ -151,13 +164,31 @@ export interface GroupMessage {
    * (`'commander'` or an agent id) — the renderer routes a user→artifact
    * interaction result back to it. Rendered as a sandboxed `<iframe>`
    * (`chat-app://`) at the bottom of the bubble. */
-  artifacts?: Array<{ id: string; title: string; agent_id: string }>;
+  artifacts?: Array<{
+    id: string;
+    title: string;
+    agent_id: string;
+    /** Historical clone locator. When present, the iframe resolves against
+     * the source conversation rather than the conversation displaying it. */
+    source_cid?: string;
+  }>;
+  /** Durable receipt for an explicit user teaching interaction whose memory
+   * write succeeded. The linked candidate remains reviewable and revocable. */
+  teaching_receipts?: Array<{
+    id: string;
+    summary: string;
+    scope: 'personal' | 'project' | 'agent';
+    status: 'active' | 'revoked';
+    candidate_ids: string[];
+  }>;
   /** Commander-requested marketplace installs. The model can search the
    * official marketplace and request a user decision, but the install only
    * happens after the human clicks the rendered card. */
   marketplace_requests?: MarketplaceInstallRequest[];
   /** Marks this message as a plan announcement (rendered with a folded
    * plan card in UI). Set by `plan_set` first-time emission. */
+  /** Commander-visible KSTAR declaration emitted before a delegated Agent wake/dispatch. */
+  kstar_dispatch_narration?: { target_agent_id: string; workflow_step_id?: string };
   plan_announcement?: boolean;
   /** Internal plan-step dispatch from commander → agent. Persisted (so the
    * agent's visibility slice has it for context) but hidden from the user
@@ -231,8 +262,9 @@ export async function appendVisible(
   cid: string,
   msg: GroupMessage,
   actorIds: string[],
+  projectIdHint?: string | null,
 ): Promise<void> {
-  const layout = conversationLayout(uid, cid);
+  const layout = conversationLayout(uid, cid, projectIdHint);
   fs.mkdirSync(layout.visibilityDir, { recursive: true });
   for (const actorId of actorIds) {
     if (actorId === USER_ID) continue; // user reads main jsonl
@@ -253,8 +285,9 @@ export async function readSlice(
   cid: string,
   actorId: string,
   limit = 10_000,
+  projectIdHint?: string | null,
 ): Promise<GroupMessage[]> {
-  const file = conversationLayout(uid, cid).visibilityFile(actorId);
+  const file = conversationLayout(uid, cid, projectIdHint).visibilityFile(actorId);
   if (!fs.existsSync(file)) return [];
   return (await readJsonl<GroupMessage>(file, limit)).filter(
     (msg) => !msg.deleted_at,

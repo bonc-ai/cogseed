@@ -20,6 +20,7 @@ import { createMetacognitionTool } from '../../../../src/core-agent/src/tools/me
 import { createLocalTools, createFileTools } from '../../../../src/main/model/core-agent/local-tools';
 import { createKbTools } from '../../../../src/main/model/core-agent/kb-tools';
 import { createChatHistoryTools } from '../../../../src/main/model/core-agent/chat-history-tools';
+import { createMessagingTools } from '../../../../src/main/model/core-agent/messaging-tools';
 import { createImageGenTool } from '../../../../src/main/model/core-agent/image-gen-tool';
 import { createOfficeTools } from '../../../../src/main/model/core-agent/office-tools';
 
@@ -105,6 +106,7 @@ function enumerateAllInjectedTools(): AgentTool[] {
   tools.push(...createFileTools({ userId: 'testuid', cid: 'testcid' }));
   tools.push(...createKbTools({ userId: 'testuid' }));
   tools.push(...createChatHistoryTools({ userId: 'testuid' }));
+  tools.push(...createMessagingTools({ userId: 'testuid', cid: 'testcid' }));
   tools.push(createImageGenTool({ userId: 'testuid', cid: 'testcid' }));
   tools.push(...createOfficeTools({ userId: 'testuid', cid: 'testcid' }));
 

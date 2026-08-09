@@ -24,6 +24,8 @@ plan.md
 /.docx_render_*/
 /.pdf_render_*/
 /.superpowers/
+/.codex-workflow/
+/.zcode/
 __pycache__/
 *.py[cod]
 
@@ -37,3 +39,7 @@ packages/*/dist
 
 # stray sidecar edits
 package.json.new
+
+# local build identity and development package output
+/.build
+/dist-dev

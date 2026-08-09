@@ -100,20 +100,30 @@ export const invokeHandlers = {
   },
 
   'memory.add': async (payload: any, ctx: any) => {
-    return memory.addEntry(ctx.userId, await resolveScope(ctx.userId, payload), String(payload?.content || ''));
+    return memory.addEntryTransactional(
+      ctx.userId,
+      await resolveScope(ctx.userId, payload),
+      String(payload?.content || ''),
+    );
   },
 
   'memory.replace': async (payload: any, ctx: any) => {
-    return memory.replaceEntry(
+    const scope = await resolveScope(ctx.userId, payload);
+    return memory.replaceEntryTransactional(
       ctx.userId,
-      await resolveScope(ctx.userId, payload),
+      scope,
       String(payload?.oldText || ''),
       String(payload?.content || ''),
     );
   },
 
   'memory.remove': async (payload: any, ctx: any) => {
-    return memory.removeEntry(ctx.userId, await resolveScope(ctx.userId, payload), String(payload?.oldText || ''));
+    const scope = await resolveScope(ctx.userId, payload);
+    return memory.removeEntryTransactional(
+      ctx.userId,
+      scope,
+      String(payload?.oldText || ''),
+    );
   },
 
   'memory.exportInfo': async (_payload: any, ctx: any) => ({

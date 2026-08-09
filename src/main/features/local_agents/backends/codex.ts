@@ -26,6 +26,7 @@
  * `thread/start` so the user's task still runs (matching multica).
  */
 
+import * as path from 'node:path';
 import { createLogger } from '../../../logger.js';
 import { logErrorSummary } from '../../../util/log-redact.js';
 import {
@@ -35,8 +36,10 @@ import {
   StderrTail,
   spawnCli,
   bindAbort,
+  executionContextEnv,
   armKillWatchdog,
   LineSplitter,
+  FileChangeFallbackTracker,
 } from './base.js';
 
 /** codex notifications that are pure metadata noise — we keep them
@@ -61,7 +64,7 @@ export const codexBackend: LocalBackend = {
   async run(opts: BackendRunOptions): Promise<void> {
     const args = buildCodexArgs(opts);
     const childEnv = opts.bridge?.server.env ? { ...process.env, ...opts.bridge.server.env } : process.env;
-    const child = spawnCli(opts.binPath, args, opts.cwd, childEnv);
+    const child = spawnCli(opts.binPath, args, opts.cwd, childEnv, { ...opts.providerEnv, ...executionContextEnv(opts.executionContext) });
     const detachAbort = bindAbort(child, opts.signal);
     const tail = new StderrTail();
     const startedAt = Date.now();
@@ -94,6 +97,10 @@ export const codexBackend: LocalBackend = {
     const seenTurnIds = new Set<string>();
     let collectedText = '';
     let turnError: string | undefined;
+    // Fallback file-change detection for writes made via exec_command (or
+    // any tool) that codex's own `turn/diff/updated` never reports — see
+    // FileChangeFallbackTracker's doc comment in backends/base.ts.
+    const fileChangeFallback = new FileChangeFallbackTracker(opts.cwd);
     // Latest usage snapshot from `thread/tokenUsage/updated` —
     // each notification is a cumulative state (not an increment),
     // so we just overwrite. Threaded into the done event below.
@@ -299,7 +306,10 @@ export const codexBackend: LocalBackend = {
 
       if (method === 'turn/diff/updated') {
         const files = extractCodexDiffFiles(typeof params?.diff === 'string' ? params.diff : '');
-        if (files.length) opts.onEvent({ type: 'file-change', paths: files });
+        if (files.length) {
+          fileChangeFallback.noteReported(files.map(f => path.resolve(opts.cwd, f)));
+          opts.onEvent({ type: 'file-change', paths: files });
+        }
         opts.onEvent({
           type: 'log',
           level: 'debug',
@@ -384,6 +394,11 @@ export const codexBackend: LocalBackend = {
       if (turnCompleted) return;
       turnCompleted = true;
       if (aborted) turnAborted = true;
+      // Fallback file-change sweep: catches writes codex made via
+      // exec_command (or any tool) that never surfaced through
+      // `turn/diff/updated`. Best-effort — errors must never block turn
+      // shutdown (FileChangeFallbackTracker.sweep already swallows them).
+      if (!aborted) fileChangeFallback.sweep(e => opts.onEvent(e));
       // Close stdin so codex shuts down cleanly. The `close` handler
       // below resolves the outer promise once the process exits.
       try { child.stdin.end(); } catch { /* */ }
@@ -442,7 +457,7 @@ export const codexBackend: LocalBackend = {
         await rpc('turn/start', {
           threadId,
           input: [{ type: 'text', text: opts.prompt }],
-          ...buildCodexTurnPermissionOverrides(opts.cwd),
+          ...buildCodexTurnPermissionOverrides(opts.cwd, opts.executionContext),
         });
         // After turn/start succeeds we wait passively — turn end is
         // driven by `turn/completed` / `task_complete` notifications,
@@ -557,16 +572,12 @@ export function buildCodexThreadPermissionOverrides(): { approvalPolicy: string;
   };
 }
 
-export function buildCodexTurnPermissionOverrides(cwd: string): {
-  cwd: string;
-  approvalPolicy: string;
-  sandboxPolicy: { type: string };
+export function buildCodexTurnPermissionOverrides(cwd: string, context?: BackendRunOptions['executionContext']): {
+  cwd: string; approvalPolicy: string; sandboxPolicy: Record<string, unknown>;
 } {
-  return {
-    cwd,
-    approvalPolicy: TRUSTED_LOCAL_APPROVAL_POLICY,
-    sandboxPolicy: { ...TRUSTED_LOCAL_SANDBOX_POLICY },
-  };
+  if (context?.permissionMode === 'read-only') return { cwd, approvalPolicy: TRUSTED_LOCAL_APPROVAL_POLICY, sandboxPolicy: { type: 'readOnly' } };
+  if (context) return { cwd, approvalPolicy: TRUSTED_LOCAL_APPROVAL_POLICY, sandboxPolicy: { type: 'workspaceWrite', writableRoots: context.writableRoots, networkAccess: true } };
+  return { cwd, approvalPolicy: TRUSTED_LOCAL_APPROVAL_POLICY, sandboxPolicy: { ...TRUSTED_LOCAL_SANDBOX_POLICY } };
 }
 
 export function extractCodexDiffFiles(diff: string): string[] {

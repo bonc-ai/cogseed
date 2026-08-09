@@ -1,0 +1,19 @@
+{
+  "source_revision": "dbe40f765de220829f24a93d947f76108f20c8ca",
+  "capture_command": "node_modules/.bin/tsx scripts/capture-orkas-parity-fixtures.ts --only H-no-forbidden-import-v1",
+  "inputs": {
+    "scanned": "src/main/features/mate_agent_runtime/**/*.ts"
+  },
+  "canonicalization_notes": [
+    "timestamps are replaced with __TIMESTAMP__",
+    "generated ids are normalized by semantic prefix and encounter order",
+    "temporary workspace roots are replaced with __TMP_ROOT__",
+    "object keys are sorted; array order is preserved where it is observable"
+  ],
+  "expected": {
+    "forbidden_import_matches": []
+  },
+  "notes": [
+    "The runtime boundary scan is checked in as evidence; only adapter/choke-point imports are allowed."
+  ]
+}

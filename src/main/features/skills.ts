@@ -1562,8 +1562,26 @@ async function _markSourceSkillMetadataSession(firstSkillId: string, targetSkill
   });
 }
 
-function _hasNonOverrideableAuthoringViolation(report: QualityReport): boolean {
-  return report.violations.some((violation) => violation.rule === 'skill_script_requires_runner');
+/**
+ * Every EXTREME violation blocks the import, regardless of `force`.
+ *
+ * `quality/README.md` defines EXTREME as non-overridable ("There is
+ * intentionally NO override for EXTREME"). All nine red-flag rules
+ * (`rules/red-flags.ts`) and the runner contract are EXTREME, so
+ * `report.ok === false` is already the correct block condition and `force`
+ * must not weaken it.
+ *
+ * This previously only hard-blocked `skill_script_requires_runner` — an
+ * authoring-convention rule — while letting `force` bypass the genuine
+ * malice patterns (credential reads, download-then-execute, obfuscated
+ * payloads, …). That was inverted: the convention rule was unskippable
+ * while the security rules were skippable.
+ *
+ * `force` remains meaningful for MEDIUM/LOW advisories, which never blocked
+ * the write to begin with.
+ */
+function _isQualityBlockedImport(report: QualityReport): boolean {
+  return !report.ok;
 }
 
 async function _installSourceSkillRoots(
@@ -1573,7 +1591,6 @@ async function _installSourceSkillRoots(
   files: { src: string; rel: string; size: number }[],
   sourceRoots: string[],
   totalBytes: number,
-  opts: { force?: boolean } = {},
 ): Promise<ImportResult> {
   const reserved = new Set<string>();
   const createdIds: string[] = [];
@@ -1630,7 +1647,7 @@ async function _installSourceSkillRoots(
       firstReportSkillId = skill.id;
     }
   }
-  if (firstReport && (opts.force !== true || _hasNonOverrideableAuthoringViolation(firstReport))) {
+  if (firstReport && _isQualityBlockedImport(firstReport)) {
     for (const id of createdIds) {
       try { await deleteCustomSkill(id); } catch { /* best-effort rollback */ }
     }
@@ -1665,7 +1682,6 @@ async function _createEditableDraftFromImportDir(
   realSrc: string,
   files: { src: string; rel: string; size: number }[],
   totalBytes: number,
-  opts: { force?: boolean } = {},
 ): Promise<ImportResult> {
   const effectiveName = (name || '').trim() || _defaultSkillNameFromDir(realSrc);
   const effectiveDesc = (description || '').trim() || t('skills.import.default_desc_dir');
@@ -1689,7 +1705,7 @@ async function _createEditableDraftFromImportDir(
   void persistQualityReport({
     uid: getActiveUserId(), kind: 'skill', id: created.id, report,
   });
-  if (!report.ok && (opts.force !== true || _hasNonOverrideableAuthoringViolation(report))) {
+  if (_isQualityBlockedImport(report)) {
     try { await deleteCustomSkill(created.id); } catch { /* best-effort rollback */ }
     return {
       ok: false,
@@ -1808,7 +1824,10 @@ export async function createFromDir(
   name: string | null,
   description: string | null,
   srcDir: string,
-  opts: { force?: boolean } = {},
+  // `force` is accepted for IPC/renderer compatibility but no longer weakens
+  // the quality gate: EXTREME violations are non-overridable. See
+  // `_isQualityBlockedImport`.
+  _opts: { force?: boolean } = {},
 ): Promise<ImportResult> {
   if (!srcDir || !path.isAbsolute(srcDir)) {
     return { ok: false, error: t('skills.errors.path_not_absolute') };
@@ -1838,12 +1857,12 @@ export async function createFromDir(
   const sourceRoots = _findSourceSkillRoots(realSrc, files);
   if (sourceRoots.length > 0) {
     return _installSourceSkillRoots(
-      name, description, realSrc, files, sourceRoots, totalBytes, { force: opts.force },
+      name, description, realSrc, files, sourceRoots, totalBytes,
     );
   }
 
   return _createEditableDraftFromImportDir(
-    name, description, realSrc, files, totalBytes, { force: opts.force },
+    name, description, realSrc, files, totalBytes,
   );
 }
 

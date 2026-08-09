@@ -382,7 +382,12 @@ describe('PC core regression unit coverage', () => {
 
   it('[PC-AUTO-001][PC-AUTO-002][PC-AUTO-003][PC-AUTO-004] persists automation CRUD, attachments, project scope, and disabled state', async () => {
     const auto = await import('../../src/main/features/auto_tasks');
+    const paths = await import('../../src/main/paths');
     const taskId = auto.allocateDraftTaskId();
+
+    const agentSpec = paths.agentDefinitionFile(TEST_UID, 'agent_a');
+    fs.mkdirSync(path.dirname(agentSpec), { recursive: true });
+    fs.writeFileSync(agentSpec, JSON.stringify({ agent_id: 'agent_a' }));
 
     expect((await auto.uploadAttachment(TEST_UID, taskId, 'seed.md', Buffer.from('# seed'))).ok).toBe(true);
     expect(await auto.listAttachments(TEST_UID, taskId)).toEqual(['seed.md']);

@@ -112,6 +112,7 @@ function nativePackageContract(nodeModules, platform, arch) {
       ],
     },
     { id: 'better-sqlite3', candidates: ['better-sqlite3/build/Release/better_sqlite3.node'] },
+    { id: 'node-pty', candidates: ['node-pty/build/Release/pty.node'] },
     { id: 'onnxruntime-binding', candidates: [joinRelative(onnxBase, 'onnxruntime_binding.node')] },
     {
       id: 'onnxruntime-core',
@@ -159,6 +160,7 @@ function requiredNativeVerificationEntries(platform, arch) {
     'canvas',
     'tokenizers',
     'better-sqlite3',
+    'node-pty',
     'onnxruntime-binding',
     'onnxruntime-core',
     ...(platform === 'darwin' ? ['fsevents'] : []),

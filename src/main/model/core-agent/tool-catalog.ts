@@ -40,6 +40,8 @@ export type ToolGroup =
   | 'video'      // video generation
   | 'web'        // web access
   | 'connector'  // third-party services via MCP umbrella tools
+  | 'expense'    // reimbursement flow, scoped to the canonical expense agent
+  | 'messaging'  // proactive Feishu/Lark sends (Commander-only)
   | 'meta';      // cross-session state
 
 export interface ToolCatalogEntry {
@@ -145,6 +147,17 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
   { name: 'call_connector_tool',  group: 'connector', summary: 'Invoke an action on a connector; call list_connector_tools first to learn the action name and schema.' },
   { name: 'add_custom_connector', group: 'connector', summary: 'Commander-only: add a user-described custom MCP server (requires a user confirmation dialog before install).' },
 
+  // Reimbursement (owner-scoped: configuration is private and submission is human-gated)
+  { name: 'expense_configuration_status', group: 'expense', summary: 'Read redacted reimbursement/Feishu setup readiness for the current user.' },
+  { name: 'expense_precheck_case', group: 'expense', summary: 'Bind current-chat materials to a reimbursement case and run deterministic precheck.' },
+  { name: 'expense_case_status', group: 'expense', summary: 'Read a current-conversation reimbursement case before presenting the host submit confirmation.' },
+
+  // Proactive messaging (Commander-only — injected by runner.ts for gconv
+  // sessions with a resolved uid + cid; the model can never reach arbitrary
+  // recipients, credentials, chat ids, or open ids)
+  { name: 'messaging_list_targets', group: 'messaging', summary: 'List configured Feishu/Lark bots and which can proactively message the configured owner (self); read-only diagnostics.' },
+  { name: 'messaging_send', group: 'messaging', summary: 'Send a text message to the configured owner (self) through one Feishu/Lark bot, after the user approves a confirmation dialog.' },
+
   // Task-local and cross-session state
   { name: 'manage_execution_plan', group: 'meta', summary: 'Manage the durable current-task objective and milestone statuses for long/tool-heavy work; session-local and independent of context summaries.' },
   { name: 'cross_session_memory', group: 'meta', summary: 'Read/write user profile, shared facts, and agent memory that persist across sessions.' },
@@ -170,6 +183,8 @@ const GROUP_ORDER: ReadonlyArray<{ group: ToolGroup; title: string }> = [
   { group: 'video', title: 'Video' },
   { group: 'web',       title: 'Web' },
   { group: 'connector', title: 'Connectors (third-party services)' },
+  { group: 'expense', title: 'Reimbursement' },
+  { group: 'messaging', title: 'Messaging' },
   { group: 'meta',      title: 'Task / cross-session state' },
 ];
 

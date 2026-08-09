@@ -1,0 +1,7 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import * as fs from 'node:fs'; import * as os from 'node:os'; import * as path from 'node:path';
+const enabled = process.env.ORKAS_RUN_REAL_OPENCLAW === '1';
+let root='';
+beforeAll(async()=>{root=fs.mkdtempSync(path.join(os.tmpdir(),'real-openclaw-'));process.env.ORKAS_WORKSPACE_ROOT=root;process.env.ORKAS_BRIDGE_DISABLED='1';const users=await import('../../../../src/main/features/users');const paths=await import('../../../../src/main/paths');users.activateUser('real-openclaw-smoke');const file=paths.agentDefinitionFile('real-openclaw-smoke','agent-smoke');fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,JSON.stringify({agent_id:'agent-smoke',runtime:{kind:'cli',cli:'openclaw'}}));});
+afterAll(()=>{delete process.env.ORKAS_WORKSPACE_ROOT;delete process.env.ORKAS_BRIDGE_DISABLED;fs.rmSync(root,{recursive:true,force:true});});
+describe.skipIf(!enabled)('real OpenClaw execution (set ORKAS_RUN_REAL_OPENCLAW=1)',()=>{it('returns a real session id and terminal result',async()=>{const runner=await import('../../../../src/main/features/local_agents/runner');const events:any[]=[];const result=await runner.run({uid:'real-openclaw-smoke',cid:'conversation-smoke',agentId:'agent-smoke',cli:'openclaw',prompt:'Reply with exactly: ORKAS_OPENCLAW_OK',cwd:root,signal:new AbortController().signal,onEvent:e=>events.push(e)});expect(result.status).toBe('completed');expect(result.sessionId).toEqual(expect.any(String));expect(events.some(e=>e.type==='done')).toBe(true);},120000);});

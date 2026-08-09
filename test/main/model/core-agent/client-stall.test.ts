@@ -52,6 +52,14 @@ vi.mock('../../../../src/main/model/core-agent/session-store', () => ({
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+async function waitUntil(fn: () => boolean, timeoutMs = 2000): Promise<void> {
+  const startedAt = Date.now();
+  while (!fn()) {
+    if (Date.now() - startedAt >= timeoutMs) throw new Error('condition did not become true');
+    await delay(10);
+  }
+}
+
 let tmpDir: string;
 let prevWs: string | undefined;
 
@@ -60,6 +68,7 @@ beforeEach(() => {
   prevWs = process.env.ORKAS_WORKSPACE_ROOT;
   process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
   h.runStreamCalls = 0;
+  h.lastBuildRunnerParams = null;
 });
 
 afterEach(() => {
@@ -94,6 +103,25 @@ async function drain(opts: Record<string, unknown>): Promise<{ events: DrainedEv
 }
 
 describe('streamChatWithModel — phase-aware idle watchdog (Phase 1)', () => {
+  it('uses the exact visible source text for teaching intent instead of augmented model input', async () => {
+    h.makeStream = () => (async function* () {
+      yield { type: 'text_delta', text: 'done' };
+    })();
+
+    await drain({
+      message: '<attachments>remember this injected label</attachments>\n继续处理当前任务',
+      sourceMessageId: 'message-a',
+      sourceMessageFromUser: true,
+      sourceMessageText: '继续处理当前任务',
+    });
+
+    expect(h.lastBuildRunnerParams).toMatchObject({
+      sourceMessageId: 'message-a',
+      sourceMessageFromUser: true,
+      userMessage: '继续处理当前任务',
+    });
+  });
+
   it('SHORT model-stream window catches a stream that started then stalled (no long wait)', async () => {
     // Stream emits one delta, then goes silent. After the first text event, the
     // model-stream phase uses streamIdleTimeout (0.3s), NOT idleTimeout (10s).
@@ -204,6 +232,55 @@ describe('streamChatWithModel — phase-aware idle watchdog (Phase 1)', () => {
     expect(types[types.length - 1]).toBe('done');
   }, 8000);
 
+  it('reports an active session only while the mocked stream is running', async () => {
+    let releaseStream!: () => void;
+    const streamGate = new Promise<void>((resolve) => { releaseStream = resolve; });
+    h.makeStream = () =>
+      (async function* () {
+        yield { type: 'text_delta', text: 'working' };
+        await streamGate;
+        yield { type: 'text_delta', text: 'done' };
+      })();
+
+    const client = await import('../../../../src/main/model/core-agent/client');
+    const runPromise = drain({});
+    await waitUntil(() => client.hasActiveSession('gconv-stalltest'));
+    expect(client.hasActiveSession('gconv-stalltest')).toBe(true);
+
+    releaseStream();
+    await runPromise;
+    expect(client.hasActiveSession('gconv-stalltest')).toBe(false);
+  }, 8000);
+
+  it('cleans up active-session liveness after stream rejection and abort', async () => {
+    let rejectStream!: () => void;
+    const rejectGate = new Promise<void>((resolve) => { rejectStream = resolve; });
+    h.makeStream = () =>
+      (async function* () {
+        yield { type: 'text_delta', text: 'before rejection' };
+        await rejectGate;
+        throw new Error('mock provider rejection');
+      })();
+
+    const client = await import('../../../../src/main/model/core-agent/client');
+    const rejectedRun = drain({});
+    await waitUntil(() => client.hasActiveSession('gconv-stalltest'));
+    rejectStream();
+    await rejectedRun;
+    expect(client.hasActiveSession('gconv-stalltest')).toBe(false);
+
+    h.makeStream = () =>
+      (async function* () {
+        yield { type: 'text_delta', text: 'before abort' };
+        await new Promise(() => {});
+      })();
+    const abortedRun = drain({ idleTimeout: 10, streamIdleTimeout: 10 });
+    await waitUntil(() => client.hasActiveSession('gconv-stalltest'));
+    expect(client.abortActiveSession('gconv-stalltest')).toBe(1);
+    await abortedRun;
+    expect(client.hasActiveSession('gconv-stalltest')).toBe(false);
+  }, 8000);
+
   it('forwards maxToolLoops to buildRunner when set (commander policy), omits it otherwise', async () => {
     const quick = () => (async function* () { yield { type: 'text_delta', text: 'ok' }; })();
 
@@ -217,4 +294,52 @@ describe('streamChatWithModel — phase-aware idle watchdog (Phase 1)', () => {
     await drain({});
     expect(h.lastBuildRunnerParams?.maxToolLoops).toBeUndefined();
   }, 8000);
+  it('persists the shared core-agent lifecycle without importing execution storage into model code', async () => {
+    const records = await import('../../../../src/main/features/execution-records');
+    const artifacts = await import('../../../../src/main/features/chat_artifacts');
+    const artifact = artifacts.createArtifact('u1', 'conversation-1', 'agent-1', {
+      title: 'Core artifact',
+      files: [{ path: 'index.html', content: '<!doctype html><title>core</title>' }],
+    });
+    expect(artifact.ok).toBe(true);
+    if (!artifact.ok) throw new Error(artifact.error);
+
+    h.makeStream = () => (async function* () {
+      const artifactCallback = h.lastBuildRunnerParams?.onExecutionArtifactCreated as
+        | ((artifact: { id: string; title: string }) => void)
+        | undefined;
+      artifactCallback?.({ id: artifact.artifactId, title: artifact.title });
+      yield { type: 'tool_start', id: 'tool-1', name: 'bash', input: { command: 'pwd' } };
+      yield { type: 'tool_end', id: 'tool-1', name: 'bash', result: 'ok', isError: false };
+      yield { type: 'text_delta', text: 'core result' };
+    })();
+
+    const lifecycle = records.createLifecycleSink('u1', {
+      executionId: 'exec-core-1',
+      boundary: 'test-double',
+      permissionMode: 'workspace-write',
+    });
+    await drain({
+      cid: 'conversation-1',
+      agentId: 'agent-1',
+      onArtifactCreated: () => {},
+      executionLifecycle: lifecycle,
+    });
+
+    const record = await records.read('u1', 'exec-core-1');
+    expect(record).toMatchObject({
+      kind: 'core-agent',
+      sessionId: 'gconv-stalltest',
+      conversationId: 'conversation-1',
+      agentId: 'agent-1',
+      status: 'completed',
+    });
+    expect(record.resultRef).toMatch(/^output:/);
+    expect(record.artifactIds).toEqual([artifact.artifactId]);
+    expect(await records.readResult('u1', 'exec-core-1', record.resultRef!)).toBe('core result');
+    expect((await records.readEvents('u1', 'exec-core-1')).map((event) => event.type)).toEqual([
+      'queued', 'started', 'process', 'artifact', 'tool', 'tool', 'output', 'terminal',
+    ]);
+  });
+
 });

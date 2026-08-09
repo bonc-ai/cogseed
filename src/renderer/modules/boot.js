@@ -28,7 +28,6 @@ async function initAuth() {
 const _BOOT_STAGE_WARN_MS = 1500;
 const _BOOT_TOTAL_WARN_MS = 3000;
 const _SIDEBAR_NAV_BOOT_WARM_MS = 3500;
-let _sidebarVersionBaseLabel = '';
 let _sidebarNavWarmUntil = 0;
 const _sidebarNavTimers = new Map();
 const _sidebarNavTokens = new Map();
@@ -129,6 +128,15 @@ async function bootApp() {
   // chat render finds the commander avatar warm; one cheap IPC, worth
   // it to avoid a default-avatar flash on the first frame.
   _restoreLastView();
+  // First-run walkthrough: fire-and-forget so it never blocks first paint.
+  // It reads the machine-local onboarding marker and only lifts the overlay
+  // on a device that hasn't completed it yet. Runs after the last view is
+  // restored so the app is fully painted underneath the overlay.
+  if (window.csOnboarding && typeof window.csOnboarding.maybeStart === 'function') {
+    Promise.resolve(window.csOnboarding.maybeStart()).catch((err) => {
+      _bootLog.warn('onboarding maybeStart failed', { error: (err && err.message) || String(err) });
+    });
+  }
   if (typeof _consumePendingTaskNotificationConversation === 'function') {
     _consumePendingTaskNotificationConversation();
   }
@@ -165,46 +173,17 @@ async function bootApp() {
   }, 2500);
 }
 
+// Stamps body.is-dev so renderer modules can branch on dev mode synchronously
+// via `document.body.classList.contains('is-dev')`. Used by skills / agents
+// grids to expose builtin ⋯ menu (edit / delete) and the "promote to builtin"
+// item on custom cards.
 async function _stampSettingsVersion() {
-  _bindSidebarVersionUpdate();
   if (!window.orkas || typeof window.orkas.env !== 'function') return;
   try {
     const env = await window.orkas.env();
-    if (env && env.version) {
-      _setRendererVersionLabel(env.version);
-    }
-    // Stamp body so renderer modules can branch on dev mode synchronously
-    // via `document.body.classList.contains('is-dev')`. Used by skills /
-    // agents grids to expose builtin ⋯ menu (edit / delete) and the
-    // "promote to builtin" item on custom cards.
     if (env && env.isDev) document.body.classList.add('is-dev');
   } catch (_) { /* ignore — non-critical */ }
 }
-
-function _formatRendererVersionLabel(version) {
-  const raw = String(version || '').trim();
-  if (!raw) return '';
-  return raw.toLowerCase().startsWith('v') ? raw : `v${raw}`;
-}
-
-function _setRendererVersionLabel(version) {
-  const label = _formatRendererVersionLabel(version);
-  if (!label) return;
-  _sidebarVersionBaseLabel = label;
-  _renderSidebarVersionUpdate();
-}
-
-function _renderSidebarVersionUpdate() {
-  const el = document.getElementById('sidebar-version');
-  if (!el) return;
-  el.textContent = _sidebarVersionBaseLabel || '';
-  el.title = _sidebarVersionBaseLabel ? t('sidebar.version_title', { version: _sidebarVersionBaseLabel }) : '';
-  el.setAttribute('aria-label', el.title || el.textContent || 'Version');
-  el.disabled = true;
-  el.classList.remove('is-actionable', 'is-progress');
-}
-
-function _bindSidebarVersionUpdate() {}
 
 // One-shot rename of legacy brand-prefixed localStorage keys
 // (`orkas_*` / `orkas.*`). Rationale lives in
@@ -285,6 +264,7 @@ function _lazyFeaturePanel(view) {
   const panelId = view === 'memory' ? 'panel-memory'
     : view === 'skills' ? 'panel-skills'
     : view === 'evolution' ? 'panel-evolution'
+    : view === 'recall' ? 'panel-recall'
     : view === 'personal-ontology' ? 'panel-personal-ontology'
     : view === 'spaces' ? 'panel-spaces'
     : view === 'contexts' ? 'panel-contexts'
@@ -364,12 +344,16 @@ function setView(view, cid, opts = {}) {
     _bootLog.info('view change', { view, cid: cid || undefined });
   }
   currentView = view;
+  if (view !== 'agents' && typeof closeExpenseWorkbench === 'function') {
+    closeExpenseWorkbench();
+  }
   _saveLastView(view, cid);
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   const panelId = view === 'new-chat' ? 'panel-new-chat'
                 : view === 'auto' ? 'panel-auto'
                 : view === 'agents' ? 'panel-agents'
                 : view === 'skills' ? 'panel-skills'
+                : view === 'recall' ? 'panel-recall'
                 : view === 'connectors' ? 'panel-connectors'
                 : view === 'contexts' ? 'panel-contexts'
                 : view === 'evolution' ? 'panel-evolution'
@@ -387,6 +371,7 @@ function setView(view, cid, opts = {}) {
   document.getElementById('auto-btn')?.classList.toggle('active', view === 'auto');
   document.getElementById('agents-btn').classList.toggle('active', view === 'agents');
   document.getElementById('skills-btn').classList.toggle('active', view === 'skills');
+  document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall');
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connectors');
   document.getElementById('contexts-btn')?.classList.toggle('active', view === 'contexts');
   document.getElementById('evolution-btn')?.classList.toggle('active', view === 'evolution');
@@ -501,6 +486,17 @@ function setView(view, cid, opts = {}) {
             return null;
           })
           .catch((e) => _bootLog.warn('skills refresh on tab entry failed', { error: (e && e.message) || String(e) }));
+      });
+    });
+  } else if (view === 'recall') {
+    currentCid = null;
+    _deferSidebarNavWork('recall-tab-refresh', () => {
+      _loadViewFeature('recall', 'recall', () => {
+        if (typeof initSkillsCognitionConsole === 'function') initSkillsCognitionConsole();
+        if (typeof loadSkillsCognitionSnapshot === 'function') {
+          Promise.resolve(loadSkillsCognitionSnapshot())
+            .catch((e) => _bootLog.warn('Recall refresh on tab entry failed', { error: (e && e.message) || String(e) }));
+        }
       });
     });
   } else if (view === 'connectors') {

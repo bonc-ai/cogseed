@@ -1,4 +1,4 @@
-const _shimLog = createLogger('ipc-shim');
+const _shimLog = typeof createLogger === 'function' ? createLogger('ipc-shim') : { warn() {}, info() {}, error() {} };
 // ─── HTTP → IPC shim ─────────────────────────────────────────────────
 // The original app was served over HTTP; every network call went through
 // `apiFetch(url, options)` which wrapped `fetch`. In Electron we route the
@@ -19,9 +19,18 @@ const _shimLog = createLogger('ipc-shim');
 const _IPC_ROUTES = [
   // Exact routes
   ['GET',    '/api/auth/status',              { fake: { ok: true, authenticated: true } }],
+  ['GET',    '/api/model-authorizations',     'modelAuthorizations.list'],
+  ['POST',   '/api/model-authorizations/ccswitch/prepare', 'modelAuthorizations.prepareCcSwitch'],
+  ['POST',   '/api/model-authorizations/discover', 'modelAuthorizations.discover'],
+  ['POST',   '/api/model-authorizations/test', 'modelAuthorizations.testDraft'],
+  ['POST',   '/api/model-authorizations/complete', 'modelAuthorizations.complete'],
+  ['POST',   '/api/model-authorizations/remove-model', 'modelAuthorizations.removeModel'],
+  ['POST',   '/api/model-authorizations/remove', 'modelAuthorizations.remove'],
   ['GET',    '/api/user/init',                'user.init'],
   ['GET',    '/api/conversations/list',       'conversations.list'],
   ['POST',   '/api/conversations/create',     'conversations.create'],
+  ['POST',   '/api/conversations/merge',      'conversations.merge'],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/clone$/, 'conversations.clone', ['cid']],
   ['GET',    '/api/agents/list',              'agents.list'],
   ['POST',   '/api/agents/create',            'agents.create'],
   ['GET',    '/api/skills/list',              'skills.list'],
@@ -51,6 +60,36 @@ const _IPC_ROUTES = [
   ['POST',   /^\/api\/evolution\/ontology\/([^/]+)\/bind$/, 'evolution.ontology.bind', ['skillId']],
   ['POST',   /^\/api\/evolution\/ontology\/([^/]+)\/unbind$/, 'evolution.ontology.unbind', ['skillId']],
   ['POST',   '/api/evolution/patches/apply',  'evolution.patches.apply'],
+  ['POST',   '/api/p3394/validations/scan', 'p3394.validation.scan'],
+  ['GET',    /^\/api\/p3394\/validations\/([^/]+)$/, 'p3394.validation.read', ['validationId']],
+  ['GET',    '/api/p3394/executions', 'p3394.execution.list'],
+  ['GET',    /^\/api\/p3394\/executions\/([^/]+)$/, 'p3394.execution.read', ['executionId']],
+  ['GET',    /^\/api\/p3394\/executions\/([^/]+)\/context-reuse-receipt$/, 'p3394.contextReuseReceipt.read', ['executionId']],
+  ['POST',   '/api/p3394/behavior-contrasts', 'p3394.behaviorContrast.start'],
+  ['GET',    /^\/api\/p3394\/behavior-contrasts\/([^/]+)$/, 'p3394.behaviorContrast.read', ['contrastId']],
+  ['GET',    /^\/api\/conversations\/([^/]+)\/aside$/, 'aside.list', ['cid']],
+  ['DELETE', /^\/api\/conversations\/([^/]+)\/aside$/, 'aside.clear', ['cid']],
+  ['POST',   '/api/workbench/baselines', 'workbench.baseline.freeze'],
+  ['GET',    '/api/workbench/baselines', 'workbench.baseline.list'],
+  ['GET',    /^\/api\/workbench\/baselines\/([^/]+)\/verify$/, 'workbench.baseline.verify', ['baselineId']],
+  ['POST',   '/api/workbench/gate', 'workbench.gate.evaluate'],
+  ['GET',    /^\/api\/workbench\/projects\/([^/]+)\/action-plan$/, 'workbench.actionPlan.read', ['projectId']],
+  ['GET',    /^\/api\/workbench\/projects\/([^/]+)\/tasks\/([^/]+)\/runs$/, 'workbench.taskRuns.list', ['projectId', 'taskId']],
+  ['POST',   /^\/api\/workbench\/projects\/([^/]+)\/tasks\/([^/]+)\/runs$/, 'workbench.taskRun.start', ['projectId', 'taskId']],
+  ['GET',    '/api/personalOntology/candidates',              'personalOntology.candidates.list'],
+  ['POST',   '/api/personalOntology/candidates/confirm',      'personalOntology.candidates.confirm'],
+  ['POST',   '/api/personalOntology/candidates/reject',       'personalOntology.candidates.reject'],
+  ['POST',   '/api/personalOntology/candidates/confirmBatch', 'personalOntology.candidates.confirmBatch'],
+  ['POST',   '/api/personalOntology/candidates/rejectBatch',  'personalOntology.candidates.rejectBatch'],
+  ['GET',    '/api/cognition/assets/page',    'cognition.assets.page'],
+  ['GET',    '/api/cognition/assets',         'cognition.assets.list'],
+  ['POST',   '/api/cognition/assets',         'cognition.assets.create'],
+  ['POST',   '/api/cognition/assets/capture', 'cognition.assets.capture'],
+  ['GET',    /^\/api\/cognition\/assets\/([^/]+)$/, 'cognition.assets.get', ['assetId']],
+  ['POST',   /^\/api\/cognition\/assets\/([^/]+)\/evidence$/, 'cognition.assets.evidence.add', ['assetId']],
+  ['POST',   /^\/api\/cognition\/assets\/([^/]+)\/confirm$/, 'cognition.assets.confirm', ['assetId']],
+  ['POST',   /^\/api\/cognition\/assets\/([^/]+)\/defer$/, 'cognition.assets.defer', ['assetId']],
+  ['POST',   /^\/api\/cognition\/assets\/([^/]+)\/reuse$/, 'cognition.assets.reuse', ['assetId']],
   ['POST',   '/api/skills/pick-import-dir',   'skills.pickImportDir'],
   ['POST',   '/api/skills/create-from-url',   'skills.createFromUrl'],
   ['POST',   '/api/skills/create-from-dir',   'skills.createFromDir'],
@@ -201,6 +240,67 @@ function _hasOrkasInvoke() {
 function _hasOrkasStream() {
   return !!(window.orkas && typeof window.orkas.stream === 'function');
 }
+
+const _mateProjectionCache = new Map();
+const _mateProjectionInflight = new Map();
+let _mateProjectionInvokeOverride = null;
+
+function _mateProjectionInvoke(channel, payload) {
+  if (_mateProjectionInvokeOverride) return _mateProjectionInvokeOverride(channel, payload);
+  if (!_hasOrkasInvoke()) return Promise.reject(new Error('ipc bridge unavailable'));
+  return window.orkas.invoke(channel, payload);
+}
+
+function _mateProjectionEntry(key, loader, onUpdate) {
+  const snapshot = _mateProjectionCache.has(key) ? _mateProjectionCache.get(key) : null;
+  let refresh = _mateProjectionInflight.get(key);
+  if (!refresh) {
+    refresh = Promise.resolve().then(async () => {
+      const next = await loader();
+      _mateProjectionCache.set(key, next);
+      return next;
+    }).finally(() => {
+      _mateProjectionInflight.delete(key);
+    });
+    _mateProjectionInflight.set(key, refresh);
+  }
+  if (typeof onUpdate === 'function') {
+    refresh.then((next) => { try { onUpdate(next); } catch (_) {} }).catch(() => {});
+  }
+  return { snapshot, refresh };
+}
+
+function _mateProjectionSessionList(options) {
+  return _mateProjectionEntry('mate:sessions', async () => {
+    const result = await _mateProjectionInvoke('mate_agent.session.list', {});
+    if (!result || result.ok === false) throw new Error((result && result.error) || 'load failed');
+    return Array.isArray(result.sessions) ? result.sessions : (Array.isArray(result) ? result : []);
+  }, options && options.onUpdate);
+}
+
+function _mateProjectionSessionReference(sessionId) {
+  const id = String(sessionId || '').trim();
+  if (!id) return id;
+  if (/^(?:mate-session-|gconv-|gmember-)/.test(id)) return id;
+  return `gconv-${id}`;
+}
+
+function _mateProjectionSession(sessionId, options) {
+  const reference = _mateProjectionSessionReference(sessionId);
+  const key = `mate:session:${reference}`;
+  return _mateProjectionEntry(key, async () => {
+    const result = await _mateProjectionInvoke('mate_agent.session.read', { sessionId: reference });
+    if (!result || result.ok === false) throw new Error((result && result.error) || 'load failed');
+    return result;
+  }, options && options.onUpdate);
+}
+
+window.mateAgentProjection = window.mateAgentProjection || {
+  setInvoker(fn) { _mateProjectionInvokeOverride = typeof fn === 'function' ? fn : null; },
+  sessions(options) { return _mateProjectionSessionList(options || {}); },
+  session(sessionId, options) { return _mateProjectionSession(sessionId, options || {}); },
+  collaboration(sessionId, options) { return _mateProjectionSession(sessionId, options || {}); },
+};
 
 function _isStreamCancel(err) {
   const msg = err && err.message ? String(err.message) : String(err || '');

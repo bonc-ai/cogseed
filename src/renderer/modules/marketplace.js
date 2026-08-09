@@ -1894,14 +1894,13 @@ async function _mpInstall(kind, id, itemOverride = null) {
   if (_mpState.installing.has(key)) return;
   _mpState.installing.add(key);
   _mpRender();
-  const invokeInstall = async (force) => {
+  const invokeInstall = async () => {
     const channel = kind === 'agent' ? 'marketplace.installAgent' : 'marketplace.installSkill';
     const r = await window.orkas.invoke(channel, {
       id, name: item.name || '',
       version: item.version,
       published_at: item.published_at, updated_at: item.updated_at,
       min_app_version: _mpMinAppVersion(item),
-      ...(force ? { force: true } : {}),
     });
     if (!r || r.ok === false) throw _mpInstallErrorFromResponse(r);
   };
@@ -1912,7 +1911,7 @@ async function _mpInstall(kind, id, itemOverride = null) {
     if (typeof loadSkills === 'function' && kind === 'skill') await loadSkills(true);
   };
   try {
-    await invokeInstall(false);
+    await invokeInstall();
     await markInstalled();
     // Success: no toast — the button flips to "Installed" + state set above is the signal.
     // (Failure still alerts because the user otherwise has no way to know why nothing happened.)
@@ -1929,19 +1928,11 @@ async function _mpInstall(kind, id, itemOverride = null) {
       const report = err?.qualityReport || await readQualityReport(rejectedKind, rejectedId);
       if (report) {
         const title = t('quality.install_rejected_title').replace('{name}', rejectedName);
-        const forceLabel = (() => {
-          const v = t('quality.force_install');
-          return v === 'quality.force_install' ? 'Install anyway' : v;
-        })();
-        const action = await showValidationReport({ title, report, forceLabel });
-        if (action === 'force') {
-          try {
-            await invokeInstall(true);
-            await markInstalled();
-          } catch (forceErr) {
-            uiAlert(_mpInstallFailedText(kind, item, forceErr));
-          }
-        }
+        // Report-only: an EXTREME violation is not user-overridable, so no
+        // force action is offered. Passing a forceLabel here previously let
+        // the user re-invoke install with `force: true`, which bypassed the
+        // main-process red-flag gate entirely.
+        await showValidationReport({ title, report });
       } else {
         uiAlert(_mpInstallFailedText(kind, item, err));
       }

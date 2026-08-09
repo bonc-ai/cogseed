@@ -35,13 +35,14 @@ import { t } from '../../i18n';
 // future targeted use; runtime no longer renders the prompt block from it.
 import { getSession, memoryScopeForSession, sessionKindOf, toolResultsDirForSession } from './session-store';
 import {
-  addEntry,
-  replaceEntry,
-  removeEntry,
+  addEntryTransactional,
+  replaceEntryTransactional,
+  removeEntryTransactional,
   listEntries,
   formatForSystemPrompt as formatMemoryForSystemPrompt,
   type MemoryScope,
 } from '../../features/memory';
+import { listActiveCognitionSourceIds } from '../../features/cognition';
 import {
   formatProjectContextPolicyForSystemPrompt,
   formatProjectInstructionsForSystemPrompt,
@@ -49,13 +50,15 @@ import {
 } from '../../features/projects';
 import * as projectTasks from '../../features/project_tasks';
 import * as metacognition from '../../features/metacognition';
-import { appendAgentSkill, listAgents } from '../../features/agents';
+import { assertAgentChatDispatchable } from '../../features/agent-dispatch-policy';
+import { appendAgentSkill, listAgentSummaries } from '../../features/agents';
 const log = createLogger('model/runner');
 import { createLocalTools, createFileTools } from './local-tools';
 import { createOfficeTools } from './office-tools';
 import { officeCliAvailable } from '../../features/office/office_engine';
 import { createKbTools } from './kb-tools';
 import { createChatHistoryTools } from './chat-history-tools';
+import { createMessagingTools } from './messaging-tools';
 import { createImageGenTool } from './image-gen-tool';
 import { createVideoStudioTool } from './video-studio-tool';
 import { createResearchRerankTool } from './research-rerank-tool';
@@ -84,6 +87,12 @@ import {
 } from './external-providers';
 import { createRotatingProvider, type RotatingCandidate } from './rotating-provider';
 import { clearCooldown } from './profile-cooldown';
+import {
+  buildCustomProviderModelMeta,
+  createCustomProvider,
+  findCustomProvider,
+  isCustomProviderId,
+} from './custom_provider_runtime';
 import { EXTERNAL_API_PROVIDERS, resolveConfiguredPiModel } from '../provider_catalog';
 import { readDisabledSets } from '../../features/component_enabled';
 import { nativeSearchToolForApi, nativeSearchToolName } from './native-search-tools';
@@ -93,6 +102,11 @@ import { createLogger } from '../../logger';
 import { logErrorSummary, maskId } from '../../util/log-redact';
 import type { MemoryToolHandler } from '../../../core-agent/src/tools/memory-tool';
 import type { MetacognitionToolHandler } from '../../../core-agent/src/tools/metacognition-tool';
+import {
+  recordTeachingSignalAfterMemoryWrite,
+  teachingMemoryRef,
+  type UserTeachingScope,
+} from '../../features/recall/teaching-service';
 
 const runnerLog = createLogger('runner');
 
@@ -100,7 +114,11 @@ function isNativeSearchEnabled(): boolean {
   return true;
 }
 
-function buildExternalProviderModel(providerId: string, modelId: string, maxOutputTokens?: number): { contextWindow?: number; maxTokens?: number } | null {
+function buildExternalProviderModel(userId: string | null, providerId: string, modelId: string, maxOutputTokens?: number): { contextWindow?: number; maxTokens?: number } | null {
+  if (isCustomProviderId(providerId)) {
+    const provider = userId ? findCustomProvider(userId, providerId) : undefined;
+    return provider ? buildCustomProviderModelMeta(provider) : null;
+  }
   switch (providerId) {
     case 'moonshot':
       return buildMoonshotModel(modelId);
@@ -167,6 +185,8 @@ export interface BuildRunnerParams {
   sessionId: string;
   systemPrompt?: string;
   userId?: string;
+  /** Use an in-memory Session so utility model calls leave no resumable transcript. */
+  ephemeralSession?: boolean;
   /** Conversation id. Used by file-tools to scope read_file / search_file
    *  / process_file_full calls whose path targets the attachment dir of the
    *  current conv. */
@@ -177,6 +197,15 @@ export interface BuildRunnerParams {
   /** Current real user text, used by tools that must bind an approval action
    * to explicit user intent rather than merely to the existence of a turn. */
   userMessage?: string;
+  sourceMessageId?: string;
+  sourceMessageFromUser?: boolean;
+  onTeachingReceipt?: (receipt: {
+    id: string;
+    summary: string;
+    scope: UserTeachingScope;
+    status: 'active' | 'revoked';
+    candidateIds: string[];
+  }) => void | Promise<void>;
   /** Project id of the conversation, when it belongs to one. Threaded
    *  through to local-tools / file-tools / image-gen-tool so workspace
    *  resolution picks up the project-scoped selection. Resolved once at
@@ -189,6 +218,17 @@ export interface BuildRunnerParams {
   /** Max tool-call rounds per turn before force-end. Undefined → core-agent
    *  default (50). Group chat raises it for the commander's long builds. */
   maxToolLoops?: number;
+  /**
+   * Hard opt-out of every tool for this turn: no local tools, no file tools,
+   * no MCP, no extras. For explain-only callers (see
+   * `features/conversation_aside`) that must not be able to touch the
+   * filesystem or run commands.
+   *
+   * `maxToolLoops: 0` does NOT achieve this — it is filtered out as falsy by
+   * the option spreads on the way down, so the turn silently keeps the default
+   * loop budget and the full tool set.
+   */
+  disableTools?: boolean;
   /** Provider stream deadline before its first usable text/tool event. This
    * boundary is safe for fallback because no visible output has committed. */
   providerFirstEventTimeoutMs?: number;
@@ -239,6 +279,9 @@ export interface BuildRunnerParams {
   /** Fires after each successful `create_artifact` call. See `model/client.ts`
    *  `ChatOptions.onArtifactCreated`. */
   onArtifactCreated?: (a: { id: string; title: string }) => void;
+  /** Secondary host callback used only to mirror a validated artifact into an
+   * execution record. It never enables create_artifact by itself. */
+  onExecutionArtifactCreated?: (a: { id: string; title: string }) => void;
   /** Fires once per skill id rendered into the system-prompt skills index,
    *  with its source system. Called at runner build time (before the LLM
    *  sees the prompt). Bus collects per turn for `skill_advertised`. */
@@ -372,6 +415,11 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
    *  Not injected into model context; reused for process-log labels. */
   agentDisplayNameById: Map<string, string>;
 }> {
+  if (params.agentId) await assertAgentChatDispatchable(
+    params.userId || _safeActiveUserId() || '',
+    params.agentId,
+  );
+
   // Auth gate first — if no group has any usable candidate, fail before
   // loading core-agent / scanning skills / opening a session file. Gives
   // a clear user message instead of the Anthropic SDK's "Could not
@@ -412,9 +460,13 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   const skillDisplayNameById = new Map<string, string>();
   const systemSkillsVisible = systemSkillsExposureFromSessionId(params.sessionId);
   const openSkillSourcesVisible = openSkillSourcesExposureFromSessionId(params.sessionId);
+  const modPromise = ca();
+  const sessionPromise = params.ephemeralSession
+    ? modPromise.then((loaded) => new loaded.Session())
+    : getSession(params.sessionId);
   const [mod, session, systemSkillsBlock, skillsBlock] = await Promise.all([
-    ca(),
-    getSession(params.sessionId),
+    modPromise,
+    sessionPromise,
     systemSkillsVisible ? getSystemSkillsPromptBlock(earlyUid || undefined) : Promise.resolve(''),
     getSystemPromptBlock({
       ...(renderAllowlist === undefined ? {} : { allowlist: [...renderAllowlist] }),
@@ -450,7 +502,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   const agentDisplayNameById = new Map<string, string>();
   if (uid) {
     try {
-      for (const agent of await listAgents()) {
+      for (const agent of await listAgentSummaries()) {
         if (agent?.agent_id) agentDisplayNameById.set(agent.agent_id, agent.name || agent.agent_id);
       }
     } catch (err) {
@@ -476,6 +528,13 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
         try {
           params.onArtifactCreated!(a);
         } finally {
+          try { params.onExecutionArtifactCreated?.(a); }
+          catch (err) {
+            log.warn('execution artifact callback failed', {
+              artifact_id: maskId(a.id),
+              error: logErrorSummary(err),
+            });
+          }
           if (uid && params.cid) {
             recordHistoryResource({
               kind: 'final_output',
@@ -500,11 +559,53 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
       tier === 'agent' ? { agent: scopeId }
       : tier === 'project' ? { project: projectScopeId }
       : tier === 'shared' ? 'memory' : 'user';
+    const teachingScope = (tier: 'agent' | 'project' | 'shared' | 'user'): UserTeachingScope => (
+      tier === 'agent' ? 'agent' : tier === 'project' ? 'project' : 'personal'
+    );
+    const recordTeaching = async (
+      tier: 'agent' | 'project' | 'shared' | 'user',
+      content: string,
+      result: Awaited<ReturnType<typeof addEntryTransactional>>,
+    ) => {
+      if (
+        !result.ok
+        || !isCommander
+        || !params.cid
+        || !params.sourceMessageId
+        || !params.sourceMessageFromUser
+        || !params.userMessage
+      ) return result;
+      try {
+        const scope = teachingScope(tier);
+        const signal = await recordTeachingSignalAfterMemoryWrite(uid, {
+          conversationId: params.cid,
+          messageId: params.sourceMessageId,
+          userMessage: params.userMessage,
+          memoryContent: content,
+          memoryScope: scope,
+          memoryRef: teachingMemoryRef(scope, content),
+        });
+        if (signal) {
+          await params.onTeachingReceipt?.({
+            id: signal.id,
+            summary: signal.summary,
+            scope: signal.scope,
+            status: signal.status,
+            candidateIds: signal.candidateIds,
+          });
+        }
+      } catch (error) {
+        log.warn('teaching signal persistence failed after memory write', {
+          conversation_id: maskId(params.cid),
+          error: logErrorSummary(error),
+        });
+      }
+      return result;
+    };
     const memoryHandler: MemoryToolHandler = {
-      add: (tier, content) => addEntry(uid, toScope(tier), content),
-      replace: (tier, oldText, content) => replaceEntry(uid, toScope(tier), oldText, content),
-      remove: (tier, oldText) => removeEntry(uid, toScope(tier), oldText),
-      list: (tier) => listEntries(uid, toScope(tier)),
+      add: async (tier, content) => recordTeaching(tier, content, await addEntryTransactional(uid, toScope(tier), content)),
+      replace: async (tier, oldText, content) => recordTeaching(tier, content, await replaceEntryTransactional(uid, toScope(tier), oldText, content)),
+      remove: async (tier, oldText) => removeEntryTransactional(uid, toScope(tier), oldText),      list: (tier) => listEntries(uid, toScope(tier)),
     };
     const { createCrossSessionMemoryTool } = await import('../../../core-agent/src/tools/memory-tool');
     // Project memory: commander read+write, sub-agents read-only (list only).
@@ -603,13 +704,15 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ...systemSkillReadRoots,
     ...agentPrivateSkillReadRoots,
   ];
-  const toolResultsDir = uid ? toolResultsDirForSession(uid, params.sessionId) : '';
+  const toolResultsDir = uid && !params.disableTools
+    ? toolResultsDirForSession(uid, params.sessionId)
+    : '';
   const localReadOnlyDenyRoots = [
     ...fileReadOnlyExtraRoots,
     ...(toolResultsDir ? [toolResultsDir] : []),
   ];
 
-  const localTools = createLocalTools({
+  const localTools = params.disableTools ? [] : createLocalTools({
     ...(uid ? { userId: uid } : {}),
     ...(params.cid ? { cid: params.cid } : {}),
     ...(params.turnId ? { turnId: params.turnId } : {}),
@@ -634,7 +737,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // `readOnlyExtraRoots` is threaded here for the read scope (workspace +
   // attachment + extraRoots + readOnlyExtraRoots all visible). Local write
   // and delete tools never receive those roots.
-  const fileTools = uid
+  const fileTools = uid && !params.disableTools
     ? createFileTools({
         userId: uid,
         ...(params.cid ? { cid: params.cid } : {}),
@@ -660,7 +763,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // / skill-edit sessions also get them (the LLM may want to preview KB
   // content when building workflows). Skipped when uid is unknown
   // (matches file-tools).
-  const kbTools = uid ? createKbTools({
+  const kbTools = uid && !params.disableTools ? createKbTools({
     userId: uid,
     ...(params.projectId ? { projectId: params.projectId } : {}),
   }) : [];
@@ -676,11 +779,24 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ...(params.projectId ? { projectId: params.projectId } : {}),
   }) : [];
 
+  // Proactive Feishu/Lark messaging (Commander-only). The tools resolve the
+  // configured owner, ask the user for one-time confirmation, and send through
+  // the shared messaging service; workers / edit sessions / CLI / reflection
+  // never get them. A cid is required to route the confirmation dialog and
+  // derive the stable per-turn source key.
+  const messagingTools: AgentTool[] = uid && !params.disableTools && isCommander && params.cid
+    ? createMessagingTools({
+        userId: uid,
+        cid: params.cid,
+        ...(params.turnId ? { turnId: params.turnId } : {}),
+      })
+    : [];
+
   // Media generation. Shares the localExec access mode with
   // local-tools (writing image bytes is the same blast radius as write_file).
   // Skipped when uid is unknown — generators need the
   // workspace + attachment scope to validate paths.
-  const imageGenTools: AgentTool[] = uid
+  const imageGenTools: AgentTool[] = uid && !params.disableTools
     ? [createImageGenTool({
         userId: uid,
         ...(params.cid ? { cid: params.cid } : {}),
@@ -692,7 +808,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
         ...(params.hasProducedPath ? { hasProducedPath: params.hasProducedPath } : {}),
       })]
     : [];
-  const videoStudioTools: AgentTool[] = uid
+  const videoStudioTools: AgentTool[] = uid && !params.disableTools
     ? [createVideoStudioTool({
         userId: uid,
         ...(params.cid ? { cid: params.cid } : {}),
@@ -712,7 +828,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // + ranking), so no uid / workspace scope and no Tool Execution Access needed;
   // hidden from the commander and every other actor via isToolVisibleToAgent.
   const deepResearchTools: AgentTool[] = [];
-  if (isToolVisibleToAgent('research_rerank', agentId)) {
+  if (!params.disableTools && isToolVisibleToAgent('research_rerank', agentId)) {
     deepResearchTools.push(createResearchRerankTool());
   }
 
@@ -720,7 +836,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // local-tools (writing a docx/xlsx/pptx is the same blast radius as
   // write_file). Skipped when uid is unknown — the factory needs the
   // workspace + attachment scope to sandbox output paths.
-  const officeTools: AgentTool[] = uid && officeCliAvailable()
+  const officeTools: AgentTool[] = uid && !params.disableTools && officeCliAvailable()
     ? createOfficeTools({
         userId: uid,
         ...(params.cid ? { cid: params.cid } : {}),
@@ -737,7 +853,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // built-in Brave/Bing scraper. See `model/core-agent/search-tools.ts`.
   // Async because the factory pulls `defineTool` / `runBuiltinWebSearch`
   // off the ESM core-agent dynamic import.
-  const searchOverrideTools: AgentTool[] = [await createWebSearchOverrideTool()];
+  const searchOverrideTools: AgentTool[] = params.disableTools ? [] : [await createWebSearchOverrideTool()];
 
   // Connector meta-tools + system-prompt block (MCP-based, umbrella pattern). When ≥1
   // connector is visible to this actor we inject the two meta-tools (`list_connector_tools` /
@@ -767,7 +883,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // Group-chat agents intentionally share the commander's connector visibility:
   // do not pass agentId here. Agent-edit also bypasses `agent.enabled_connectors`
   // so the editor LLM can inspect every installed connector while authoring.
-  const exposure = uid ? connectorExposureFromSessionId(params.sessionId) : 'none';
+  const exposure = uid && !params.disableTools ? connectorExposureFromSessionId(params.sessionId) : 'none';
   const blockAgentId = undefined;
   const connectorBlock = exposure !== 'none' && uid
     ? await getConnectorPromptBlock(uid, blockAgentId)
@@ -789,6 +905,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ...fileTools,
     ...kbTools,
     ...chatHistoryTools,
+    ...messagingTools,
     ...imageGenTools,
     ...videoStudioTools,
     ...deepResearchTools,
@@ -805,9 +922,11 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // never reach another actor's tools[] regardless of which injection path
   // produced it. Caller-supplied extraTools / core-agent builtins aren't in the
   // catalog, so `isToolVisibleToAgent` returns true for them (unaffected).
-  const visibleTools = allTools.filter((tool) => isToolVisibleToAgent(tool.name, agentId));
+  const visibleTools = params.disableTools
+    ? []
+    : allTools.filter((tool) => isToolVisibleToAgent(tool.name, agentId));
   const visibleToolNameSet = new Set(visibleTools.map((tool) => tool.name));
-  const builtinTools = mod.getBuiltinTools();
+  const builtinTools = params.disableTools ? [] : mod.getBuiltinTools();
 
   // Apply one simple 8K per-result policy at AgentRunner's FINAL result
   // boundary. Keeping this as a result transformer (instead of pre-wrapping
@@ -910,7 +1029,22 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // Empty string when nothing is stored (no tokens for new users).
   // Re-read each turn — a mid-conversation write shows up next turn.
   // Project sessions additionally render the project's own notes section.
-  const memoryBlock = (uid && memoryAgentScope) ? formatMemoryForSystemPrompt(uid, memoryAgentScope, params.projectId) : '';
+  let activeCognitionSourceIds: ReadonlySet<string> = new Set();
+  if (uid && memoryAgentScope) {
+    try {
+      activeCognitionSourceIds = await listActiveCognitionSourceIds(uid);
+    } catch (err) {
+      // Fail closed for machine-owned cognition records while leaving the
+      // user's independent USER/MEMORY entries available to the model.
+      log.warn('active cognition memory scan failed', {
+        user_id: maskId(uid),
+        error: logErrorSummary(err),
+      });
+    }
+  }
+  const memoryBlock = (uid && memoryAgentScope)
+    ? formatMemoryForSystemPrompt(uid, memoryAgentScope, params.projectId, activeCognitionSourceIds)
+    : '';
   if (memoryBlock) parts.push(memoryBlock);
   const resolvedSystemPrompt = parts.join('\n\n');
   // P2: the truly per-turn-volatile blocks — the orchestration ledger (~7-9K
@@ -966,8 +1100,8 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   const modelCatalog: Record<string, { provider: string; model: string; contextWindow?: number; maxOutputTokens?: number }> = {};
   for (const choice of group) {
     if (modelCatalog[choice.model]) continue;
-    const model = EXTERNAL_API_PROVIDERS.includes(choice.provider)
-      ? buildExternalProviderModel(choice.provider, choice.model, choice.maxOutputTokens)
+    const model = (EXTERNAL_API_PROVIDERS.includes(choice.provider) || isCustomProviderId(choice.provider))
+      ? buildExternalProviderModel(uid, choice.provider, choice.model, choice.maxOutputTokens)
       : resolveConfiguredPiModel(mod, choice.provider, choice.model)?.model;
     const entry = modelCatalogEntryFromModel(model);
     if (entry) modelCatalog[choice.model] = { provider: choice.provider, model: choice.model, ...entry };
@@ -1002,6 +1136,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     // pass-through) and keeps the code path uniform.
     const rotating = await buildRotatingProvider(
       mod,
+      uid,
       providerId,
       group,
       params.onNativeSearchInjected,
@@ -1045,8 +1180,8 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     config,
     providers,
     session,
-    ...(visibleTools.length ? { tools: visibleTools } : {}),
-    ...(transformToolResult ? { transformToolResult } : {}),
+    ...(params.disableTools ? { disableTools: true } : {}),
+    ...(visibleTools.length ? { tools: visibleTools } : {}),    ...(transformToolResult ? { transformToolResult } : {}),
     ...(toolResultsDir ? { toolContextState: { toolResultSpoolDir: toolResultsDir } } : {}),
     ...(params.skillList !== undefined ? { skillAllowlist: params.skillList } : {}),
     ...(onSkillCreated ? { onSkillCreated } : {}),
@@ -1122,7 +1257,11 @@ export function openSkillSourcesExposureFromSessionId(sessionId: string): boolea
  * Extend the switch when a new id is added to `EXTERNAL_API_PROVIDERS`.
  * Async because the underlying factories await core-agent dynamic import.
  */
-async function buildExternalProvider(providerId: string, apiKey: string, modelId: string, baseUrl?: string, maxOutputTokens?: number): Promise<LLMProvider> {
+async function buildExternalProvider(userId: string | null, providerId: string, apiKey: string, modelId: string, baseUrl?: string, maxOutputTokens?: number): Promise<LLMProvider> {
+  if (isCustomProviderId(providerId)) {
+    if (!userId) throw new Error('custom provider requires an active user');
+    return createCustomProvider(userId, providerId, apiKey, modelId);
+  }
   switch (providerId) {
     case 'moonshot':
       return await createMoonshotProvider({ apiKey, modelId });
@@ -1159,6 +1298,7 @@ async function buildExternalProvider(providerId: string, apiKey: string, modelId
  */
 async function buildRotatingProvider(
   mod: CA,
+  userId: string | null,
   providerId: string,
   group: ChatEntryChoice[],
   onNativeSearchInjected?: (info: NativeSearchInjectedInfo) => void,
@@ -1168,14 +1308,14 @@ async function buildRotatingProvider(
   const candidates: RotatingCandidate[] = group.map((choice) => {
     const candProviderId = choice.provider;
     const candModelId = choice.model;
-    const isExternal = EXTERNAL_API_PROVIDERS.includes(candProviderId);
+    const isExternal = EXTERNAL_API_PROVIDERS.includes(candProviderId) || isCustomProviderId(candProviderId);
     return {
       profileId: choice.profileId,
       providerId: candProviderId,
       modelId: candModelId,
       build: async () => {
         if (isExternal) {
-          return buildExternalProvider(candProviderId, choice.apiKey, candModelId, choice.baseUrl, choice.maxOutputTokens);
+          return buildExternalProvider(userId, candProviderId, choice.apiKey, candModelId, choice.baseUrl, choice.maxOutputTokens);
         }
         const resolvedModel = resolveConfiguredPiModel(mod, candProviderId, candModelId);
         if (resolvedModel?.isConfiguredFallback) {

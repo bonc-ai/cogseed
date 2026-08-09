@@ -9,9 +9,1084 @@ let _skillsCache = null;
 let _openSkillsCache = [];
 let _packagesCache = [];
 let _skillsLoadInFlight = null;
+let _skillsCognitionRefreshTimer = null;
 let _selectedSkill = null;    // { source, id }
 let _expandedGlobalSkillGroups = new Set();
 const _GLOBAL_SKILL_GROUP_MIN = 2;
+
+
+const _skillsCognitionState = {
+  page: 'overview',
+  candidates: [],
+  recallCandidates: [],
+  sources: [],
+  recallViews: [],
+  contextProjections: [],
+  ontologyGroups: [],
+  ontologyGroupContent: {},
+  selectedOntologyGroupId: '',
+  selectedContextKey: '',
+  teachingSignals: [],
+  captures: [],
+  recentCaptures: [],
+  captureCounts: { waiting: 0, processing: 0, review: 0, failed: 0, completed: 0, cancelled: 0 },
+  captureNextCursor: null,
+  captureFilter: 'all',
+  captureSettings: null,
+  captureModel: null,
+  selectedCaptureId: '',
+  selectedHistoricalConversationIds: [],
+  loadErrors: [],
+  editingRecallCandidateId: '',
+  receipts: [],
+  assets: [],
+  assetView: 'list',
+  selectedAssetId: '',
+  assetCategoryFilter: '',
+  dashboard: null,
+  selectedReceiptId: '',
+  receiptDetails: {},
+  loadedAt: 0,
+  loading: false,
+};
+
+function _cognitionText(key, fallback) {
+  const value = typeof t === 'function' ? t(key) : key;
+  return value && value !== key ? value : fallback;
+}
+
+function _cognitionTypeLabel(type) {
+  const labels = {
+    preference: _cognitionText('cognition.type_preference', '偏好'),
+    ontology: _cognitionText('cognition.type_ontology', '本体'),
+    rule: _cognitionText('cognition.type_rule', '规则'),
+    experience: _cognitionText('cognition.type_experience', '经验'),
+    skill_evolution: _cognitionText('cognition.type_skill_evolution', '技能进化'),
+  };
+  return labels[type] || type || _cognitionText('cognition.unknown', '未知');
+}
+
+function _cognitionStatusLabel(status) {
+  const labels = {
+    prepared: _cognitionText('cognition.status_prepared', '准备中'),
+    succeeded: _cognitionText('cognition.status_success', '成功'),
+    degraded: _cognitionText('cognition.status_degraded', '降级'),
+    rejected: _cognitionText('cognition.status_rejected', '拒绝'),
+    pending: _cognitionText('cognition.status_pending', '待确认'),
+    accepted: _cognitionText('cognition.status_accepted', '已确认'),
+    preview: _cognitionText('cognition.status_preview', '预览'),
+    confirmed: _cognitionText('cognition.status_confirmed', '已确认'),
+    expired: _cognitionText('cognition.status_expired', '已失效'),
+    revoked: _cognitionText('cognition.status_revoked', '已撤销'),
+    ready: _cognitionText('cognition.source_ready', '可用'),
+    empty: _cognitionText('cognition.source_empty', '暂无数据'),
+    waiting_quiet: _cognitionText('cognition.capture_waiting_quiet', '等待会话静默'),
+    waiting_completion: _cognitionText('cognition.capture_waiting_completion', '等待会话完成'),
+    waiting_manual: _cognitionText('cognition.capture_waiting_manual', '等待手动执行'),
+    scheduled: _cognitionText('cognition.capture_scheduled', '等待计划时间'),
+    queued: _cognitionText('cognition.capture_queued', '等待提炼'),
+    extracting: _cognitionText('cognition.capture_extracting', '正在整理'),
+    paused: _cognitionText('cognition.capture_paused', '已暂停'),
+    review_ready: _cognitionText('cognition.capture_review_ready', '等待审核'),
+    no_candidate: _cognitionText('cognition.capture_no_candidate', '无需沉淀'),
+    configuration_required: _cognitionText('cognition.capture_configuration_required', '需要配置模型'),
+    failed: _cognitionText('cognition.capture_failed', '提炼失败'),
+    cancelled: _cognitionText('cognition.capture_cancelled', '已取消'),
+  };
+  return labels[status] || status || _cognitionText('cognition.unknown', '未知');
+}
+
+function _cognitionDate(value) {
+  if (!value) return '';
+  try { return new Date(value).toLocaleString(); } catch (_) { return String(value); }
+}
+
+function _cognitionSetPageVisibility(page) {
+  document.querySelectorAll('[data-cognition-page-body]').forEach((el) => {
+    el.hidden = el.dataset.cognitionPageBody !== page;
+  });
+  document.querySelectorAll('[data-cognition-page]').forEach((el) => {
+    const active = el.dataset.cognitionPage === page;
+    el.classList.toggle('is-active', active);
+    el.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+}
+
+function switchSkillsCognitionPage(page) {
+  const allowed = new Set(['overview', 'sources', 'captures', 'brain', 'context', 'ontology', 'candidates', 'receipts', 'assets']);
+  const next = allowed.has(page) ? page : 'overview';
+  _skillsCognitionState.page = next;
+  _cognitionSetPageVisibility(next);
+  if (next === 'overview') renderSkillsCognitionOverview();
+  if (next === 'sources') renderSkillsCognitionSources();
+  if (next === 'captures') renderSkillsCognitionCaptures();
+  if (next === 'brain') renderSkillsCognitionBrain();
+  if (next === 'context') renderSkillsCognitionContext();
+  if (next === 'ontology') renderSkillsCognitionOntology();
+  if (next === 'candidates') renderSkillsCognitionCandidates();
+  if (next === 'receipts') renderSkillsCognitionReceipts();
+  if (next === 'assets') renderSkillsCognitionAssets();
+}
+
+function _renderCognitionLoading(host) {
+  if (host) host.innerHTML = `<div class="skills-cognition-loading">${escapeHtml(_cognitionText('cognition.loading', '加载中…'))}</div>`;
+}
+
+function _renderCognitionError(host) {
+  if (host) host.innerHTML = `<div class="skills-cognition-error">${escapeHtml(_cognitionText('cognition.load_failed', '认知资产数据加载失败'))}</div>`;
+}
+
+function _renderCognitionEmpty(text) {
+  return `<div class="skills-cognition-empty">${escapeHtml(text)}</div>`;
+}
+
+function _cognitionRefText(ref) {
+  if (ref && typeof ref === 'object') {
+    const title = ref.title || ref.name || '';
+    const id = ref.id || ref.ref || '';
+    const type = ref.type || '';
+    if (title && id) return `${title} (${type ? `${type}:` : ''}${id})`;
+    if (title) return title;
+    if (id) return type ? `${type}:${id}` : String(id);
+  }
+  return String(ref || '');
+}
+
+function _renderCognitionInlineRefs(refs) {
+  const items = Array.isArray(refs) ? refs.map(_cognitionRefText).filter(Boolean) : [];
+  return items.length ? items.map((item) => `<span>${escapeHtml(item)}</span>`).join('') : `<span>${escapeHtml(_cognitionText('cognition.no_refs', '未记录引用'))}</span>`;
+}
+
+
+function _abilityAssetCategoryLabel(category) {
+  const labels = {
+    personal: _cognitionText('cognition.asset_category_personal', '关于我'),
+    rule: _cognitionText('cognition.asset_category_rule', '规则与判断'),
+    template: _cognitionText('cognition.asset_category_template', '模板与范例'),
+    skill_method: _cognitionText('cognition.asset_category_skill_method', '技能与方法'),
+  };
+  return labels[category] || category || _cognitionText('cognition.unknown', '未知');
+}
+
+function _abilityAssetMaturityLabel(maturity, status) {
+  if (maturity === 'bud' || status === 'candidate') return _cognitionText('cognition.maturity_bud', '芽点');
+  if (maturity === 'effectiveness_validated') return _cognitionText('cognition.maturity_deep_leaf', '深叶');
+  if (maturity === 'transfer_validated') return 'Transfer Validated';
+  if (maturity === 'seed') return _cognitionText('cognition.maturity_seed', '种子');
+  return maturity || status || _cognitionText('cognition.unknown', '未知');
+}
+
+function _abilityAssetSummary(items, category) {
+  return items.filter((item) => (item.category || item.type) === category).length;
+}
+
+function _cognitionSourceLabel(kind) {
+  return _cognitionText(`cognition.source_${kind}`, kind || _cognitionText('cognition.unknown', '未知'));
+}
+
+function _cognitionSourceItemLabel(item) {
+  if (!item) return _cognitionText('cognition.unknown', '未知');
+  if (item.title) return item.title;
+  const subtype = _cognitionText(`cognition.source_subtype_${item.subtype}`, item.subtype || 'source');
+  const id = String(item.id || '');
+  return id ? `${subtype} · ${id.slice(0, 18)}` : subtype;
+}
+
+function _cognitionLoadFailed(section) {
+  return Array.isArray(_skillsCognitionState.loadErrors) && _skillsCognitionState.loadErrors.includes(section);
+}
+
+function _renderCognitionSourceStatus() {
+  const sources = Array.isArray(_skillsCognitionState.sources) ? _skillsCognitionState.sources : [];
+  const body = sources.length
+    ? sources.map((source) => `<span class="skills-cognition-source-state is-${escapeHtml(source.status || 'empty')}"><b>${escapeHtml(_cognitionSourceLabel(source.kind))}</b><em>${escapeHtml(String(source.count || 0))} · ${escapeHtml(_cognitionStatusLabel(source.status))}</em></span>`).join('')
+    : `<span class="skills-cognition-muted">${escapeHtml(_cognitionText('cognition.sources_empty', '尚未发现可接入的数据来源'))}</span>`;
+  return `<section class="skills-cognition-flow-band"><div class="skills-cognition-band-head"><h2>${escapeHtml(_cognitionText('cognition.source_status', '数据来源'))}</h2><span>${escapeHtml(_cognitionText('cognition.source_status_hint', '当前可用于形成认知候选的来源'))}</span></div><div class="skills-cognition-source-row">${body}</div></section>`;
+}
+
+function renderSkillsCognitionSources() {
+  const host = document.getElementById('skills-cognition-sources-body');
+  if (!host) return;
+  if (_cognitionLoadFailed('sources')) {
+    host.innerHTML = `<div class="skills-cognition-warning"><span>${escapeHtml(_cognitionText('cognition.sources_load_failed', '数据来源读取失败'))}</span><button class="btn btn-sm" data-cognition-reload>${escapeHtml(_cognitionText('common.retry', '重试'))}</button></div>`;
+    return;
+  }
+  const groups = Array.isArray(_skillsCognitionState.sources) ? _skillsCognitionState.sources : [];
+  const total = groups.reduce((sum, group) => sum + Number(group.count || 0), 0);
+  const ready = groups.filter((group) => group.status === 'ready').length;
+  const degraded = groups.filter((group) => group.status === 'degraded').length;
+  const summary = [
+    ['cognition.source_visible_items', '当前可见', total],
+    ['cognition.source_ready_groups', '可用来源', ready],
+    ['cognition.source_degraded_groups', '需关注', degraded],
+  ].map(([key, fallback, value]) => `<div><strong>${escapeHtml(String(value))}</strong><span>${escapeHtml(_cognitionText(key, fallback))}</span></div>`).join('');
+  const body = groups.length ? groups.map((group) => {
+    const items = Array.isArray(group.items) ? group.items : [];
+    const rows = items.length ? items.map((item) => {
+      const openConversation = group.kind === 'conversation' && item.subtype === 'session'
+        ? `<button type="button" class="btn btn-sm" data-cognition-source-conversation="${escapeHtml(item.id)}">${escapeHtml(_cognitionText('cognition.open_conversation', '打开会话'))}</button>` : '';
+      const manageConnector = group.kind === 'authorized_external_system'
+        ? `<button type="button" class="btn btn-sm" data-cognition-open-connectors>${escapeHtml(_cognitionText('cognition.manage_connectors', '管理连接器'))}</button>` : '';
+      return `<article class="recall-source-item">
+        <div class="recall-source-item-main"><strong>${escapeHtml(_cognitionSourceItemLabel(item))}</strong><span>${escapeHtml(_cognitionText(`cognition.source_subtype_${item.subtype}`, item.subtype || 'source'))} · ${escapeHtml(item.scope || '')}${item.sourceVersion ? ` · ${escapeHtml(_cognitionDate(item.sourceVersion))}` : ''}</span></div>
+        ${item.degraded ? `<span class="skills-cognition-status is-degraded">${escapeHtml(_cognitionStatusLabel('degraded'))}</span>` : ''}
+        ${openConversation || manageConnector ? `<div class="recall-source-item-actions">${openConversation}${manageConnector}</div>` : ''}
+      </article>`;
+    }).join('') : `<div class="recall-workbench-empty">${escapeHtml(_cognitionText('cognition.source_no_items', '当前没有可显示的数据'))}</div>`;
+    return `<section class="recall-source-group">
+      <div class="recall-workbench-section-head"><div><h2>${escapeHtml(_cognitionSourceLabel(group.kind))}</h2><p>${escapeHtml(_cognitionText(`cognition.source_hint_${group.kind}`, ''))}</p></div><span class="skills-cognition-status is-${escapeHtml(group.status || 'empty')}">${escapeHtml(String(group.count || 0))} · ${escapeHtml(_cognitionStatusLabel(group.status))}</span></div>
+      <div class="recall-source-items">${rows}</div>
+    </section>`;
+  }).join('') : _renderCognitionEmpty(_cognitionText('cognition.sources_empty', '尚未发现可接入的数据来源'));
+  host.innerHTML = `<div class="recall-workbench-page-head"><div><h2>${escapeHtml(_cognitionText('cognition.sources', '数据来源'))}</h2><p>${escapeHtml(_cognitionText('cognition.sources_page_hint', '会话、文件、执行、教学信号与已授权系统'))}</p></div></div><div class="recall-workbench-summary">${summary}</div><div class="recall-source-groups">${body}</div>`;
+}
+
+function renderSkillsCognitionBrain() {
+  const host = document.getElementById('skills-cognition-brain-body');
+  if (!host) return;
+  const sourceGroups = Array.isArray(_skillsCognitionState.sources) ? _skillsCognitionState.sources : [];
+  const sourceCount = sourceGroups.reduce((sum, group) => sum + Number(group.count || 0), 0);
+  const legacyCandidates = Array.isArray(_skillsCognitionState.candidates) ? _skillsCognitionState.candidates : [];
+  const recallCandidates = Array.isArray(_skillsCognitionState.recallCandidates) ? _skillsCognitionState.recallCandidates : [];
+  const candidateCount = legacyCandidates.length + recallCandidates.length;
+  const assets = Array.isArray(_skillsCognitionState.assets) ? _skillsCognitionState.assets : [];
+  const receipts = Array.isArray(_skillsCognitionState.receipts) ? _skillsCognitionState.receipts : [];
+  const stages = [
+    ['cognition.brain_sources', '来源', sourceCount],
+    ['cognition.brain_candidates', '候选', candidateCount],
+    ['cognition.brain_assets', '正式资产', assets.length],
+    ['cognition.brain_reuse', '复用记录', receipts.length],
+  ].map(([key, fallback, count], index) => `<div class="recall-brain-stage"><span>${escapeHtml(_cognitionText(key, fallback))}</span><strong>${escapeHtml(String(count))}</strong></div>${index < 3 ? '<span class="recall-brain-arrow" aria-hidden="true">→</span>' : ''}`).join('');
+  const recent = assets.length ? assets.slice(0, 20).map((asset) => {
+    const refs = Array.isArray(asset.relationRefs) ? asset.relationRefs : [];
+    return `<button type="button" class="recall-brain-asset" data-cognition-open-asset="${escapeHtml(asset.id)}">
+      <span class="recall-brain-asset-main"><strong>${escapeHtml(asset.title || asset.id)}</strong><small>${escapeHtml(_abilityAssetCategoryLabel(asset.category || asset.type))} · ${escapeHtml(asset.source || '')}</small></span>
+      <span class="recall-brain-asset-links">${escapeHtml(_cognitionText('cognition.brain_relations', '{count} 条关联').replace('{count}', String(refs.length)))}</span>
+      <span class="skills-cognition-status">${escapeHtml(_abilityAssetMaturityLabel(asset.maturity, asset.status))}</span>
+    </button>`;
+  }).join('') : `<div class="recall-workbench-empty">${escapeHtml(_cognitionText('cognition.brain_empty', '尚无可展示的认知节点'))}</div>`;
+  const sourceRows = sourceGroups.map((group) => `<span class="skills-cognition-source-state is-${escapeHtml(group.status || 'empty')}"><b>${escapeHtml(_cognitionSourceLabel(group.kind))}</b><em>${escapeHtml(String(group.count || 0))}</em></span>`).join('');
+  host.innerHTML = `<div class="recall-workbench-page-head"><div><h2>Brain</h2><p>${escapeHtml(_cognitionText('cognition.brain_page_hint', '从来源证据到正式资产的可追溯认知结构'))}</p></div></div>
+    <section class="recall-brain-flow" aria-label="Brain flow">${stages}</section>
+    <section class="recall-workbench-section"><div class="recall-workbench-section-head"><div><h2>${escapeHtml(_cognitionText('cognition.brain_source_distribution', '来源分布'))}</h2></div><button type="button" class="btn btn-sm" data-cognition-page-link="sources">${escapeHtml(_cognitionText('cognition.view_sources', '查看来源'))}</button></div><div class="skills-cognition-source-row">${sourceRows || _renderCognitionEmpty(_cognitionText('cognition.sources_empty', '尚无来源'))}</div></section>
+    <section class="recall-workbench-section"><div class="recall-workbench-section-head"><div><h2>${escapeHtml(_cognitionText('cognition.brain_nodes', '认知节点'))}</h2><p>${escapeHtml(_cognitionText('cognition.brain_nodes_hint', '显示 Orkas 现有认知资产及其来源关联'))}</p></div><button type="button" class="btn btn-sm" data-cognition-page-link="assets">${escapeHtml(_cognitionText('cognition.view_assets', '查看正式资产'))}</button></div><div class="recall-brain-assets">${recent}</div></section>`;
+}
+
+function _contextRecordKey(kind, id) {
+  return `${kind}:${id}`;
+}
+
+function _contextPackRecords() {
+  const views = (Array.isArray(_skillsCognitionState.recallViews) ? _skillsCognitionState.recallViews : []).map((view) => ({ ...view, recordKind: 'view', recordKey: _contextRecordKey('view', view.id) }));
+  const projections = (Array.isArray(_skillsCognitionState.contextProjections) ? _skillsCognitionState.contextProjections : []).map((projection) => ({ ...projection, recordKind: 'projection', recordKey: _contextRecordKey('projection', projection.id) }));
+  return [...views, ...projections].sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')));
+}
+
+function _renderContextPackDetail(record) {
+  if (!record) return `<div class="recall-workbench-empty">${escapeHtml(_cognitionText('cognition.context_select', '选择一个 Context Pack 查看引用'))}</div>`;
+  const sourceRefs = Array.isArray(record.sourceRefs) ? record.sourceRefs : [];
+  const assetRefs = Array.isArray(record.assetRefs) ? record.assetRefs : Array.isArray(record.assetIds) ? record.assetIds : [];
+  const omitted = Array.isArray(record.degradedRefs) ? record.degradedRefs : Array.isArray(record.omittedRefs) ? record.omittedRefs : [];
+  const meta = [
+    [_cognitionText('cognition.context_kind', '类型'), record.recordKind === 'projection' ? _cognitionText('cognition.context_projection', '任务投影') : 'RecallView'],
+    [_cognitionText('cognition.context_purpose', '用途'), record.purpose || '—'],
+    [_cognitionText('cognition.context_workspace', 'Workspace'), record.workspaceId || '—'],
+    [_cognitionText('cognition.context_created', '创建时间'), _cognitionDate(record.createdAt) || '—'],
+    [_cognitionText('cognition.context_expires', '失效时间'), _cognitionDate(record.expiresAt) || '—'],
+  ].map(([label, value]) => `<div><small>${escapeHtml(label)}</small><strong>${escapeHtml(String(value))}</strong></div>`).join('');
+  const refs = sourceRefs.length ? sourceRefs.map((ref) => `<span>${escapeHtml(_cognitionRefText(ref))}</span>`).join('') : `<span>${escapeHtml(_cognitionText('cognition.no_refs', '未记录引用'))}</span>`;
+  const assets = assetRefs.length ? assetRefs.map((ref) => `<span>${escapeHtml(_cognitionRefText(ref))}</span>`).join('') : `<span>${escapeHtml(_cognitionText('cognition.no_assets_in_context', '未带入正式资产'))}</span>`;
+  const omittedRefs = omitted.length ? omitted.map((ref) => `<span class="is-warning">${escapeHtml(_cognitionRefText(ref))}</span>`).join('') : `<span>${escapeHtml(_cognitionText('cognition.no_omitted_refs', '没有降级或省略引用'))}</span>`;
+  return `<div class="recall-context-detail-head"><div><h2>${escapeHtml(record.id)}</h2><span>${escapeHtml(record.status ? _cognitionStatusLabel(record.status) : record.purpose || '')}</span></div></div><div class="recall-context-meta">${meta}</div><div class="recall-context-ref-section"><strong>${escapeHtml(_cognitionText('cognition.context_source_refs', '来源引用'))}</strong><div>${refs}</div></div><div class="recall-context-ref-section"><strong>${escapeHtml(_cognitionText('cognition.context_asset_refs', '资产引用'))}</strong><div>${assets}</div></div><div class="recall-context-ref-section"><strong>${escapeHtml(_cognitionText('cognition.context_omitted_refs', '降级与省略'))}</strong><div>${omittedRefs}</div></div>`;
+}
+
+function renderSkillsCognitionContext() {
+  const host = document.getElementById('skills-cognition-context-body');
+  if (!host) return;
+  const records = _contextPackRecords();
+  if (!_skillsCognitionState.selectedContextKey && records[0]) _skillsCognitionState.selectedContextKey = records[0].recordKey;
+  const selected = records.find((record) => record.recordKey === _skillsCognitionState.selectedContextKey) || records[0];
+  const rows = records.length ? records.map((record) => {
+    const refs = Array.isArray(record.sourceRefs) ? record.sourceRefs.length : 0;
+    const assets = Array.isArray(record.assetRefs) ? record.assetRefs.length : Array.isArray(record.assetIds) ? record.assetIds.length : 0;
+    return `<button type="button" class="recall-context-row${selected?.recordKey === record.recordKey ? ' is-selected' : ''}" data-recall-context-select="${escapeHtml(record.recordKey)}"><span><strong>${escapeHtml(record.recordKind === 'projection' ? record.taskRunId || record.id : record.id)}</strong><small>${escapeHtml(record.recordKind === 'projection' ? _cognitionText('cognition.context_projection', '任务投影') : 'RecallView')} · ${escapeHtml(record.purpose || '')}</small></span><em>${escapeHtml(_cognitionText('cognition.context_ref_count', '{sources} 来源 · {assets} 资产').replace('{sources}', String(refs)).replace('{assets}', String(assets)))}</em></button>`;
+  }).join('') : `<div class="recall-workbench-empty">${escapeHtml(_cognitionText('cognition.context_empty', '尚无 Context Pack'))}</div>`;
+  host.innerHTML = `<div class="recall-workbench-page-head"><div><h2>Context Pack</h2><p>${escapeHtml(_cognitionText('cognition.context_page_hint', '会话捕获与任务执行实际使用的有界引用包'))}</p></div></div><div class="recall-context-workbench"><section class="recall-context-list">${rows}</section><section class="recall-context-detail">${_renderContextPackDetail(selected)}</section></div>`;
+}
+
+async function loadRecallOntologyGroup(groupId) {
+  const id = String(groupId || '');
+  if (!id || Object.prototype.hasOwnProperty.call(_skillsCognitionState.ontologyGroupContent, id)) return;
+  const result = await window.orkas.invoke('personalOntology.groups.read', { groupId: id });
+  _skillsCognitionState.ontologyGroupContent[id] = result?.ok === false ? '' : String(result?.content || '');
+}
+
+function renderSkillsCognitionOntology() {
+  const host = document.getElementById('skills-cognition-ontology-body');
+  if (!host) return;
+  const groups = Array.isArray(_skillsCognitionState.ontologyGroups) ? _skillsCognitionState.ontologyGroups : [];
+  if (!_skillsCognitionState.selectedOntologyGroupId && groups[0]) _skillsCognitionState.selectedOntologyGroupId = groups[0].group_id;
+  const selected = groups.find((group) => group.group_id === _skillsCognitionState.selectedOntologyGroupId) || groups[0];
+  const ontologyCandidates = (Array.isArray(_skillsCognitionState.candidates) ? _skillsCognitionState.candidates : []).filter((candidate) => candidate.source === 'personal_ontology' || candidate.type === 'ontology');
+  const rows = groups.length ? groups.map((group) => `<button type="button" class="recall-ontology-row${selected?.group_id === group.group_id ? ' is-selected' : ''}" data-recall-ontology-group="${escapeHtml(group.group_id)}"><span><strong>${escapeHtml(group.title || group.group_id)}</strong><small>${escapeHtml(group.rel_path || group.group_id)}</small></span><em>${escapeHtml(_cognitionDate(group.updated_at))}</em></button>`).join('') : `<div class="recall-workbench-empty">${escapeHtml(_cognitionText('cognition.ontology_empty', '尚无个人本体分组'))}</div>`;
+  const content = selected ? _skillsCognitionState.ontologyGroupContent[selected.group_id] : '';
+  const detail = selected ? `<div class="recall-ontology-detail-head"><div><h2>${escapeHtml(selected.title || selected.group_id)}</h2><span>${escapeHtml(selected.rel_path || '')}</span></div><button type="button" class="btn btn-sm" data-cognition-open-personal-ontology>${escapeHtml(_cognitionText('cognition.manage_ontology', '管理个人本体'))}</button></div><pre class="recall-ontology-content">${escapeHtml(content || _cognitionText('cognition.ontology_content_empty', '该分组暂无内容'))}</pre>` : `<div class="recall-workbench-empty"><button type="button" class="btn btn-sm" data-cognition-open-personal-ontology>${escapeHtml(_cognitionText('cognition.create_ontology_group', '创建个人本体分组'))}</button></div>`;
+  host.innerHTML = `<div class="recall-workbench-page-head"><div><h2>Ontology</h2><p>${escapeHtml(_cognitionText('cognition.ontology_page_hint', '个人本体分组、候选与正式认知资产'))}</p></div><div class="recall-page-metrics"><span><strong>${escapeHtml(String(groups.length))}</strong>${escapeHtml(_cognitionText('cognition.ontology_groups', '分组'))}</span><span><strong>${escapeHtml(String(ontologyCandidates.length))}</strong>${escapeHtml(_cognitionText('cognition.ontology_candidates', '待审候选'))}</span></div></div><div class="recall-ontology-workbench"><section class="recall-ontology-list">${rows}</section><section class="recall-ontology-detail">${detail}</section></div>`;
+}
+
+function _renderCognitionCaptureStatus() {
+  const captures = Array.isArray(_skillsCognitionState.recentCaptures) ? _skillsCognitionState.recentCaptures : [];
+  const counts = _skillsCognitionState.captureCounts || {};
+  const conversationTitles = new Map((Array.isArray(_skillsCognitionState.sources) ? _skillsCognitionState.sources : [])
+    .filter((source) => source.kind === 'conversation')
+    .flatMap((source) => source.items || [])
+    .map((item) => [item.id, item.title || item.id]));
+  const rows = captures.length
+    ? captures.slice(0, 5).map((capture) => {
+      const title = conversationTitles.get(capture.conversationId) || capture.conversationId;
+      const action = capture.status === 'review_ready'
+        ? `<button class="btn btn-sm" data-cognition-page-link="candidates">${escapeHtml(_cognitionText('cognition.capture_review_action', '审核候选'))}</button>`
+        : capture.status === 'failed'
+          ? `<button class="btn btn-sm" data-recall-capture-retry="${escapeHtml(capture.id)}">${escapeHtml(_cognitionText('common.retry', '重试'))}</button>`
+          : capture.status === 'configuration_required'
+            ? `<button class="btn btn-sm" data-recall-capture-settings>${escapeHtml(_cognitionText('cognition.capture_configure_action', '配置模型'))}</button>`
+            : '';
+      const stageDetail = capture.status === 'review_ready'
+        ? _cognitionText('cognition.capture_candidates_ready', '{count} 个候选待审核').replace('{count}', String((capture.candidateIds || []).length))
+        : capture.status === 'no_candidate'
+          ? _cognitionText('cognition.capture_no_candidate_detail', '本轮没有需要长期保留的内容')
+          : _cognitionStatusLabel(capture.status);
+      const detail = capture.recoveredAt && (capture.status === 'queued' || capture.status === 'extracting')
+        ? `${_cognitionText('cognition.capture_recovered', '已恢复处理')} · ${stageDetail}`
+        : stageDetail;
+      return `<div class="skills-cognition-capture-row"><div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)} · ${escapeHtml(_cognitionDate(capture.updatedAt))}</span></div><span class="skills-cognition-status is-${escapeHtml(capture.status || '')}">${escapeHtml(_cognitionStatusLabel(capture.status))}</span>${action}</div>`;
+    }).join('')
+    : _renderCognitionEmpty(_cognitionText('cognition.captures_empty', '完成一轮会话后，沉淀状态会显示在这里'));
+  const summary = [
+    ['waiting', 'cognition.capture_filter_waiting', '待处理'],
+    ['processing', 'cognition.capture_filter_processing', '处理中'],
+    ['review', 'cognition.capture_filter_review', '待审核'],
+    ['failed', 'cognition.capture_filter_failed', '失败'],
+  ].map(([key, labelKey, fallback]) => `<span><b>${escapeHtml(String(counts[key] || 0))}</b>${escapeHtml(_cognitionText(labelKey, fallback))}</span>`).join('');
+  return `<section class="skills-cognition-flow-band"><div class="skills-cognition-band-head"><h2>${escapeHtml(_cognitionText('cognition.capture_status', '会话沉淀'))}</h2><span>${escapeHtml(_cognitionText('cognition.capture_status_hint', '查看当前进度和下一步操作'))}</span><button class="btn btn-sm" data-cognition-page-link="captures">${escapeHtml(_cognitionText('cognition.capture_view_all_tasks', '查看全部任务'))}</button></div><div class="recall-capture-overview-counts">${summary}</div><div class="skills-cognition-capture-list">${rows}</div></section>`;
+}
+
+const _CAPTURE_FILTERS = ['all', 'waiting', 'processing', 'review', 'failed', 'completed', 'cancelled'];
+
+function _captureStatusesForFilter(filter) {
+  const groups = {
+    waiting: ['waiting_quiet', 'waiting_completion', 'waiting_manual', 'scheduled', 'queued', 'paused', 'configuration_required'],
+    processing: ['extracting'],
+    review: ['review_ready'],
+    failed: ['failed'],
+    completed: ['no_candidate'],
+    cancelled: ['cancelled'],
+  };
+  return groups[filter] || [];
+}
+
+function _captureFilterLabel(filter) {
+  const labels = {
+    all: _cognitionText('cognition.capture_filter_all', '全部'),
+    waiting: _cognitionText('cognition.capture_filter_waiting', '待处理'),
+    processing: _cognitionText('cognition.capture_filter_processing', '处理中'),
+    review: _cognitionText('cognition.capture_filter_review', '待审核'),
+    failed: _cognitionText('cognition.capture_filter_failed', '失败'),
+    completed: _cognitionText('cognition.capture_filter_completed', '已完成'),
+    cancelled: _cognitionText('cognition.capture_filter_cancelled', '已取消'),
+  };
+  return labels[filter] || filter;
+}
+
+function _capturePolicyLabel(policy) {
+  const labels = {
+    smart: _cognitionText('cognition.capture_policy_smart', '智能静默'),
+    immediate: _cognitionText('cognition.capture_policy_immediate', '立即'),
+    nightly: _cognitionText('cognition.capture_policy_nightly', '夜间'),
+    manual: _cognitionText('cognition.capture_policy_manual', '手动'),
+  };
+  return labels[policy] || policy || labels.smart;
+}
+
+function _captureStageLabel(stage) {
+  const labels = {
+    model_check: _cognitionText('cognition.capture_stage_model_check', '检查模型'),
+    recall_view: _cognitionText('cognition.capture_stage_recall_view', '构建 RecallView'),
+    model_extraction: _cognitionText('cognition.capture_stage_model_extraction', '提取内容'),
+    candidate_save: _cognitionText('cognition.capture_stage_candidate_save', '保存 Candidate'),
+  };
+  return labels[stage] || '';
+}
+
+function _captureErrorLabel(code) {
+  const labels = {
+    model_not_configured: _cognitionText('cognition.capture_error_model_not_configured', '尚未配置可用模型'),
+    model_auth_required: _cognitionText('cognition.capture_error_model_auth_required', '模型授权已失效，请重新授权'),
+    source_unavailable: _cognitionText('cognition.capture_error_source_unavailable', '原会话内容暂时无法读取'),
+    recall_view_failed: _cognitionText('cognition.capture_error_recall_view_failed', 'RecallView 构建失败'),
+    model_failed: _cognitionText('cognition.capture_error_model_failed', '模型提取未成功完成'),
+    invalid_model_output: _cognitionText('cognition.capture_error_invalid_model_output', '模型返回内容无法解析'),
+    candidate_save_failed: _cognitionText('cognition.capture_error_candidate_save_failed', 'Candidate 保存失败'),
+    conversation_failed: _cognitionText('cognition.capture_error_conversation_failed', '会话未成功完成，请手动决定是否沉淀'),
+    conversation_cancelled: _cognitionText('cognition.capture_error_conversation_cancelled', '会话已取消，请手动决定是否沉淀'),
+    capture_failed: _cognitionText('cognition.capture_error_unknown', '沉淀任务发生未知错误'),
+  };
+  return labels[code] || labels.capture_failed;
+}
+
+function _captureDuration(value) {
+  const ms = Number(value);
+  if (!Number.isFinite(ms) || ms < 0) return '—';
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  if (ms < 60_000) return `${Math.round(ms / 1000)} s`;
+  return `${Math.floor(ms / 60_000)} min ${Math.round((ms % 60_000) / 1000)} s`;
+}
+
+function _captureActionButton(capture, action, key, fallback, primary = false, danger = false) {
+  const cls = danger ? 'btn-danger' : primary ? 'btn-primary' : '';
+  return `<button type="button" class="btn btn-sm ${cls}" data-recall-capture-action="${escapeHtml(action)}" data-recall-capture-id="${escapeHtml(capture.id)}">${escapeHtml(_cognitionText(key, fallback))}</button>`;
+}
+
+function _captureTaskActions(capture) {
+  const actions = [];
+  const finalizing = capture.status === 'extracting' && capture.stage === 'candidate_save';
+  if (['waiting_quiet', 'waiting_completion', 'waiting_manual', 'scheduled', 'paused'].includes(capture.status)) {
+    actions.push(_captureActionButton(capture, 'run-now', 'cognition.capture_run_now', '立即执行', true));
+  }
+  if (['waiting_quiet', 'waiting_completion', 'waiting_manual', 'scheduled', 'queued', 'extracting'].includes(capture.status) && !finalizing) {
+    actions.push(_captureActionButton(capture, 'pause', 'cognition.capture_pause', '暂停'));
+  }
+  if (capture.status === 'paused') {
+    actions.push(_captureActionButton(capture, 'resume', 'cognition.capture_resume', '继续', true));
+  }
+  if (capture.status === 'failed' || capture.status === 'configuration_required') {
+    actions.push(_captureActionButton(capture, 'retry', 'common.retry', '重试', true));
+  }
+  if (!['review_ready', 'no_candidate', 'cancelled'].includes(capture.status) && !finalizing) {
+    actions.push(_captureActionButton(capture, 'cancel', 'cognition.capture_cancel', '取消', false, true));
+  }
+  actions.push(_captureActionButton(capture, 'open-conversation', 'cognition.capture_open_conversation', '打开会话'));
+  if ((capture.candidateIds || []).length) {
+    actions.push(_captureActionButton(capture, 'view-candidates', 'cognition.capture_view_candidates', '查看 Candidate'));
+  }
+  return actions.join('');
+}
+
+function _captureTaskDetail(capture) {
+  if (_skillsCognitionState.selectedCaptureId !== capture.id) return '';
+  const usage = capture.modelUsage || {};
+  const usageText = Number.isFinite(usage.totalTokens)
+    ? String(usage.totalTokens)
+    : [usage.inputTokens, usage.outputTokens].some(Number.isFinite)
+      ? `${Number(usage.inputTokens) || 0} / ${Number(usage.outputTokens) || 0}`
+      : '—';
+  const timeline = [
+    [_cognitionText('cognition.capture_created_at', '创建'), capture.createdAt],
+    [_cognitionText('cognition.capture_last_activity_at', '最后活动'), capture.lastActivityAt],
+    [_cognitionText('cognition.capture_scheduled_for', '计划执行'), capture.scheduledFor],
+    [_cognitionText('cognition.capture_started_at', '开始'), capture.startedAt],
+    [_cognitionText('cognition.capture_finished_at', '结束'), capture.finishedAt],
+  ].filter((item) => item[1]).map(([label, value]) => `<span><b>${escapeHtml(label)}</b>${escapeHtml(_cognitionDate(value))}</span>`).join('');
+  const error = capture.errorCode
+    ? `<div class="recall-capture-task-error"><b>${escapeHtml(_cognitionText('cognition.capture_error', '失败原因'))}</b><span>${escapeHtml(_captureErrorLabel(capture.errorCode))}</span></div>`
+    : '';
+  return `<div class="recall-capture-task-detail">
+    <div class="recall-capture-task-metrics">
+      <span><b>${escapeHtml(_cognitionText('cognition.capture_policy', '执行策略'))}</b>${escapeHtml(_capturePolicyLabel(capture.executionPolicy))}</span>
+      <span><b>${escapeHtml(_cognitionText('cognition.capture_attempt', '尝试次数'))}</b>${escapeHtml(String(capture.attempt || 1))}</span>
+      <span><b>${escapeHtml(_cognitionText('cognition.capture_duration', '耗时'))}</b>${escapeHtml(_captureDuration(capture.durationMs))}</span>
+      <span><b>${escapeHtml(_cognitionText('cognition.capture_token_usage', 'Token'))}</b>${escapeHtml(usageText)}</span>
+      <span><b>Candidate</b>${escapeHtml(String((capture.candidateIds || []).length))}</span>
+      <span><b>RecallView</b>${escapeHtml(capture.recallViewId || '—')}</span>
+    </div>
+    <div class="recall-capture-task-timeline">${timeline}</div>
+    ${error}
+    <div class="skills-cognition-actions">${_captureTaskActions(capture)}</div>
+  </div>`;
+}
+
+function _renderCaptureSettings() {
+  const settings = _skillsCognitionState.captureSettings || {
+    enabled: true, executionPolicy: 'smart', quietMinutes: 10, nightlyStart: '02:00', nightlyEnd: '06:00', catchUpMissed: true,
+  };
+  const model = _skillsCognitionState.captureModel || {};
+  const modelReady = !!model.configured && !model.authorizationRequired;
+  const modelName = [model.provider, model.model].filter(Boolean).join(' · ')
+    || (model.configured
+      ? _cognitionText('cognition.capture_model_default', '默认模型')
+      : _cognitionText('cognition.capture_model_unconfigured', '尚未配置模型'));
+  const policies = ['smart', 'nightly', 'manual'].map((policy) => `<button type="button" class="recall-capture-policy${settings.executionPolicy === policy ? ' is-active' : ''}" data-recall-capture-policy="${policy}" aria-pressed="${settings.executionPolicy === policy ? 'true' : 'false'}" ${settings.enabled ? '' : 'disabled'}>${escapeHtml(_capturePolicyLabel(policy))}</button>`).join('');
+  const quietMinutes = Number.isInteger(settings.quietMinutes) ? settings.quietMinutes : 10;
+  const quietOptions = [...new Set([5, 10, 30, quietMinutes])].sort((left, right) => left - right)
+    .map((minutes) => `<option value="${minutes}" ${quietMinutes === minutes ? 'selected' : ''}>${escapeHtml(_cognitionText('cognition.capture_quiet_minutes_option', '{count} 分钟').replace('{count}', String(minutes)))}</option>`).join('');
+  return `<section class="recall-capture-control-panel">
+    <div class="recall-capture-control-head">
+      <div><h2>${escapeHtml(_cognitionText('cognition.capture_control_title', '沉淀控制'))}</h2><span>${escapeHtml(_cognitionText('cognition.capture_trigger_fixed', '会话完成后先等待静默；继续对话会自动顺延'))}</span></div>
+      <label class="recall-capture-master"><input type="checkbox" data-recall-capture-enabled ${settings.enabled ? 'checked' : ''}><span>${escapeHtml(settings.enabled ? _cognitionText('common.enabled', '已开启') : _cognitionText('common.disabled', '已关闭'))}</span></label>
+    </div>
+    <div class="recall-capture-control-grid">
+      <div class="recall-capture-control-field"><label>${escapeHtml(_cognitionText('cognition.capture_execution_policy', '执行时机'))}</label><div class="recall-capture-policy-group" role="group">${policies}</div></div>
+      <div class="recall-capture-control-field recall-capture-quiet-window" ${settings.executionPolicy === 'manual' ? 'hidden' : ''}><label>${escapeHtml(_cognitionText('cognition.capture_quiet_period', '静默等待'))}</label><select data-recall-capture-quiet-minutes ${settings.enabled ? '' : 'disabled'}>${quietOptions}</select><span>${escapeHtml(_cognitionText('cognition.capture_quiet_hint', '期间继续对话会重新计时'))}</span></div>
+      <div class="recall-capture-control-field recall-capture-night-window" ${settings.executionPolicy === 'nightly' ? '' : 'hidden'}><label>${escapeHtml(_cognitionText('cognition.capture_nightly_window', '夜间窗口'))}</label><div><input type="time" data-recall-capture-night-start value="${escapeHtml(settings.nightlyStart)}" ${settings.enabled ? '' : 'disabled'}><span>–</span><input type="time" data-recall-capture-night-end value="${escapeHtml(settings.nightlyEnd)}" ${settings.enabled ? '' : 'disabled'}></div><label class="recall-capture-check"><input type="checkbox" data-recall-capture-catch-up ${settings.catchUpMissed ? 'checked' : ''} ${settings.enabled ? '' : 'disabled'}>${escapeHtml(_cognitionText('cognition.capture_catch_up', '错过后空闲补跑'))}</label></div>
+      <div class="recall-capture-model-state"><div><label>${escapeHtml(_cognitionText('cognition.capture_model', '沉淀模型'))}</label><strong>${escapeHtml(modelName)}</strong><span class="skills-cognition-status is-${modelReady ? 'ready' : 'configuration_required'}">${escapeHtml(modelReady ? _cognitionText('cognition.capture_model_ready', '可用') : _cognitionText('cognition.capture_configuration_required', '需要配置模型'))}</span></div><button type="button" class="btn btn-sm" data-recall-capture-settings>${escapeHtml(_cognitionText('cognition.capture_configure_action', '配置模型'))}</button></div>
+    </div>
+  </section>`;
+}
+
+function _renderManualConversationPicker() {
+  const settings = _skillsCognitionState.captureSettings || {};
+  if (settings.executionPolicy !== 'manual') return '';
+
+  const conversations = (Array.isArray(_skillsCognitionState.sources) ? _skillsCognitionState.sources : [])
+    .filter((source) => source.kind === 'conversation')
+    .flatMap((source) => source.items || [])
+    .filter((item) => item.subtype === 'session')
+    .sort((left, right) => String(right.sourceVersion || '').localeCompare(String(left.sourceVersion || '')));
+  const selected = new Set(Array.isArray(_skillsCognitionState.selectedHistoricalConversationIds)
+    ? _skillsCognitionState.selectedHistoricalConversationIds
+    : []);
+  const queued = new Set((Array.isArray(_skillsCognitionState.captures) ? _skillsCognitionState.captures : [])
+    .filter((capture) => capture.status !== 'cancelled')
+    .map((capture) => capture.conversationId));
+  const rows = conversations.length ? conversations.map((conversation) => {
+    const added = queued.has(conversation.id);
+    const checked = selected.has(conversation.id) && !added;
+    const state = added
+      ? `<span class="skills-cognition-status is-waiting_manual">${escapeHtml(_cognitionText('cognition.capture_manual_history_added', '已加入任务'))}</span>`
+      : '';
+    return `<label class="recall-manual-conversation${added ? ' is-added' : ''}">
+      <input type="checkbox" data-recall-manual-conversation="${escapeHtml(conversation.id)}" ${checked ? 'checked' : ''} ${added || !settings.enabled ? 'disabled' : ''}>
+      <span class="recall-manual-conversation-main"><strong>${escapeHtml(conversation.title || conversation.id)}</strong><small>${escapeHtml(_cognitionDate(conversation.sourceVersion))}</small></span>
+      ${state}
+    </label>`;
+  }).join('') : _renderCognitionEmpty(_cognitionText('cognition.capture_manual_history_empty', '暂无可选择的历史会话'));
+  const count = conversations.reduce((total, conversation) => total + (!queued.has(conversation.id) && selected.has(conversation.id) ? 1 : 0), 0);
+  const actionLabel = _cognitionText('cognition.capture_manual_history_create', '加入沉淀任务');
+  return `<section class="recall-manual-history">
+    <div class="recall-manual-history-head">
+      <div><h2>${escapeHtml(_cognitionText('cognition.capture_manual_history_title', '选择历史会话'))}</h2><p>${escapeHtml(_cognitionText('cognition.capture_manual_history_hint', '选择已完成的会话，加入待处理沉淀任务'))}</p></div>
+      <button type="button" class="btn btn-sm btn-primary" data-recall-manual-create ${count && settings.enabled ? '' : 'disabled'}>${escapeHtml(actionLabel)}${count ? ` (${escapeHtml(String(count))})` : ''}</button>
+    </div>
+    <div class="recall-manual-history-source">${escapeHtml(_cognitionText('cognition.capture_manual_history_source', 'Orkas 历史会话'))}</div>
+    <div class="recall-manual-conversation-list">${rows}</div>
+  </section>`;
+}
+
+function renderSkillsCognitionCaptures() {
+  const host = document.getElementById('skills-cognition-captures-body');
+  if (!host) return;
+  const captures = Array.isArray(_skillsCognitionState.captures) ? _skillsCognitionState.captures : [];
+  const conversationTitles = new Map((Array.isArray(_skillsCognitionState.sources) ? _skillsCognitionState.sources : [])
+    .filter((source) => source.kind === 'conversation')
+    .flatMap((source) => source.items || [])
+    .map((item) => [item.id, item.title || item.id]));
+  const counts = _skillsCognitionState.captureCounts || {};
+  const countValues = { all: Object.values(counts).reduce((sum, value) => sum + Number(value || 0), 0), ...counts };
+  const filters = _CAPTURE_FILTERS.map((filter) => `<button type="button" class="recall-capture-filter${_skillsCognitionState.captureFilter === filter ? ' is-active' : ''}" data-recall-capture-filter="${filter}"><span>${escapeHtml(_captureFilterLabel(filter))}</span><b>${escapeHtml(String(countValues[filter] || 0))}</b></button>`).join('');
+  const rows = captures.length ? captures.map((capture) => {
+    const title = capture.conversationTitle || conversationTitles.get(capture.conversationId) || capture.conversationId;
+    const stage = capture.stage ? ` · ${_captureStageLabel(capture.stage)}` : '';
+    const schedule = ['waiting_quiet', 'scheduled'].includes(capture.status) && capture.scheduledFor
+      ? ` · ${capture.status === 'waiting_quiet' ? _cognitionText('cognition.capture_quiet_until', '静默至') : _cognitionText('cognition.capture_scheduled_for', '计划执行')} ${_cognitionDate(capture.scheduledFor)}`
+      : '';
+    const selected = _skillsCognitionState.selectedCaptureId === capture.id ? ' is-selected' : '';
+    return `<article class="recall-capture-task${selected}" data-recall-capture-task="${escapeHtml(capture.id)}">
+      <button type="button" class="recall-capture-task-summary" data-recall-capture-select="${escapeHtml(capture.id)}" aria-expanded="${selected ? 'true' : 'false'}">
+        <span class="recall-capture-task-main"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(_capturePolicyLabel(capture.executionPolicy))}${escapeHtml(stage)}${escapeHtml(schedule)}</small></span>
+        <span class="recall-capture-task-result"><b>${escapeHtml(String((capture.candidateIds || []).length))}</b><small>Candidate</small></span>
+        <span class="skills-cognition-status is-${escapeHtml(capture.status || '')}">${escapeHtml(_cognitionStatusLabel(capture.status))}</span>
+        <span class="recall-capture-task-time">${escapeHtml(_cognitionDate(capture.updatedAt))}</span>
+      </button>${_captureTaskDetail(capture)}
+    </article>`;
+  }).join('') : _renderCognitionEmpty(_cognitionText('cognition.capture_tasks_empty', '暂无沉淀任务'));
+  const more = _skillsCognitionState.captureNextCursor
+    ? `<button type="button" class="btn btn-sm recall-capture-load-more" data-recall-capture-load-more>${escapeHtml(_cognitionText('common.load_more', '加载更多'))}</button>`
+    : '';
+  host.innerHTML = `${_renderCaptureSettings()}${_renderManualConversationPicker()}<section class="recall-capture-task-workbench"><div class="recall-capture-filter-bar">${filters}</div><div class="recall-capture-task-list">${rows}</div>${more}</section>`;
+}
+
+async function loadRecallCaptureTasks(options = {}) {
+  const append = options.append === true;
+  const filter = _skillsCognitionState.captureFilter || 'all';
+  const statuses = _captureStatusesForFilter(filter);
+  const payload = { limit: 25 };
+  if (statuses.length) payload.statuses = statuses;
+  if (append && _skillsCognitionState.captureNextCursor) payload.cursor = _skillsCognitionState.captureNextCursor;
+  const result = await window.orkas.invoke('recall.captures.list', payload);
+  if (!result?.ok) throw new Error(result?.error || 'recall capture list failed');
+  if (append) {
+    const byId = new Map((_skillsCognitionState.captures || []).map((capture) => [capture.id, capture]));
+    for (const capture of result.captures || []) byId.set(capture.id, capture);
+    _skillsCognitionState.captures = Array.from(byId.values());
+  } else {
+    _skillsCognitionState.captures = result.captures || [];
+  }
+  _skillsCognitionState.captureCounts = result.counts || _skillsCognitionState.captureCounts;
+  _skillsCognitionState.captureNextCursor = result.nextCursor || null;
+  renderSkillsCognitionCaptures();
+}
+
+async function updateRecallCaptureSettings(patch) {
+  const result = await window.orkas.invoke('recall.captures.settings.update', patch);
+  if (!result?.ok) throw new Error(result?.error || 'recall capture settings update failed');
+  _skillsCognitionState.captureSettings = result.settings;
+  renderSkillsCognitionCaptures();
+}
+
+function _renderCognitionPipelineStatus() {
+  const sources = Array.isArray(_skillsCognitionState.sources) ? _skillsCognitionState.sources : [];
+  const views = Array.isArray(_skillsCognitionState.recallViews) ? _skillsCognitionState.recallViews : [];
+  const captures = Array.isArray(_skillsCognitionState.recentCaptures) ? _skillsCognitionState.recentCaptures : [];
+  const pendingCandidates = (Array.isArray(_skillsCognitionState.recallCandidates) ? _skillsCognitionState.recallCandidates : [])
+    .filter((candidate) => candidate.status === 'pending' || candidate.status === 'deferred');
+  const latestCapture = captures[0];
+  let next = _cognitionText('cognition.pipeline_next_conversation', '下一步：完成一轮会话，系统会自动整理 RecallView');
+  let action = '';
+  if (latestCapture?.status === 'configuration_required') {
+    next = _cognitionText('cognition.pipeline_next_configure', '下一步：配置模型后重试本轮沉淀');
+    action = `<button class="btn btn-sm" data-recall-capture-settings>${escapeHtml(_cognitionText('cognition.capture_configure_action', '配置模型'))}</button>`;
+  } else if (latestCapture?.status === 'failed') {
+    next = _cognitionText('cognition.pipeline_next_retry', '下一步：重试失败的会话沉淀');
+    action = `<button class="btn btn-sm" data-recall-capture-retry="${escapeHtml(latestCapture.id)}">${escapeHtml(_cognitionText('common.retry', '重试'))}</button>`;
+  } else if (latestCapture?.status === 'waiting_completion') {
+    next = _cognitionText('cognition.pipeline_next_completion', '下一步：先完成当前会话，完成后将重新计时');
+  } else if (latestCapture?.status === 'waiting_quiet') {
+    next = _cognitionText('cognition.pipeline_next_quiet', '下一步：等待静默期结束，继续对话会顺延沉淀');
+  } else if (latestCapture?.status === 'waiting_manual' || latestCapture?.status === 'scheduled' || latestCapture?.status === 'queued' || latestCapture?.status === 'extracting' || latestCapture?.status === 'paused') {
+    next = _cognitionText('cognition.pipeline_next_wait', '下一步：等待模型完成提炼');
+  } else if (pendingCandidates.length || latestCapture?.status === 'review_ready') {
+    next = _cognitionText('cognition.pipeline_next_review', '下一步：审核候选，确认后才会进入正式资产');
+    action = `<button class="btn btn-sm" data-cognition-page-link="candidates">${escapeHtml(_cognitionText('cognition.capture_review_action', '审核候选'))}</button>`;
+  }
+  const stages = [
+    [_cognitionText('cognition.pipeline_sources', '认知来源'), sources.reduce((sum, source) => sum + Number(source.count || 0), 0)],
+    ['RecallView', views.length],
+    [_cognitionText('cognition.pipeline_candidates', '待审 Candidate'), pendingCandidates.length],
+  ].map(([label, count], index) => `<span class="skills-cognition-source-state"><b>${escapeHtml(label)}</b><em>${escapeHtml(String(count))}</em>${index < 2 ? '<i aria-hidden="true">→</i>' : ''}</span>`).join('');
+  return `<section class="skills-cognition-flow-band"><div class="skills-cognition-band-head"><h2>${escapeHtml(_cognitionText('cognition.pipeline_title', '数据沉淀链路'))}</h2><span>${escapeHtml(next)}</span>${action}</div><div class="skills-cognition-source-row cognition-pipeline-row">${stages}</div></section>`;
+}
+
+function _renderTeachingSignalStatus() {
+  const signals = Array.isArray(_skillsCognitionState.teachingSignals) ? _skillsCognitionState.teachingSignals : [];
+  const rows = signals.length ? signals.slice(0, 5).map((signal) => {
+    const status = signal.status === 'revoked'
+      ? _cognitionText('cognition.teaching_revoked', '已撤销')
+      : _cognitionText('cognition.teaching_pending', '已记住 · Candidate 待审');
+    const action = signal.status === 'active'
+      ? `<button class="btn btn-sm" data-recall-teaching-revoke="${escapeHtml(signal.id)}">${escapeHtml(_cognitionText('cognition.teaching_revoke', '撤销'))}</button>`
+      : '';
+    return `<div class="skills-cognition-capture-row"><div><strong>${escapeHtml(signal.summary || signal.id)}</strong><span>${escapeHtml(signal.scope || '')} · ${escapeHtml(_cognitionDate(signal.createdAt))}</span></div><span class="skills-cognition-status is-${escapeHtml(signal.status || '')}">${escapeHtml(status)}</span>${action}</div>`;
+  }).join('') : _renderCognitionEmpty(_cognitionText('cognition.teaching_empty', '明确的记住、偏好、避免或纠正会在这里留下可撤销回执'));
+  return `<section class="skills-cognition-flow-band"><div class="skills-cognition-band-head"><h2>${escapeHtml(_cognitionText('cognition.teaching_title', '教学信号'))}</h2><span>${escapeHtml(_cognitionText('cognition.teaching_hint', 'Memory 即时生效，Candidate 仍需审核'))}</span></div><div class="skills-cognition-capture-list">${rows}</div></section>`;
+}
+
+function renderSkillsCognitionOverview() {
+  const host = document.getElementById('skills-cognition-overview-body');
+  if (!host) return;
+  const d = _skillsCognitionState.dashboard || {};
+  const counts = d.counts || {};
+  const candidates = Array.isArray(d.pendingCandidates) ? d.pendingCandidates : _skillsCognitionState.candidates;
+  const receipts = Array.isArray(d.recentReceipts) ? d.recentReceipts : _skillsCognitionState.receipts;
+  const warnings = Array.isArray(d.warnings) ? d.warnings : [];
+  const loadErrors = Array.isArray(_skillsCognitionState.loadErrors) ? _skillsCognitionState.loadErrors : [];
+  const cards = [
+    ['cognition.skill_count', '技能', counts.skills || 0],
+    ['cognition.pending_candidates', '待审候选', counts.pendingCandidates || 0],
+    ['cognition.reuse_receipts', '复用证明', counts.receipts || 0],
+    ['cognition.assets_count', '资产', counts.assets || 0],
+  ].map(([key, fallback, value]) => `<div class="skills-cognition-stat"><strong>${escapeHtml(String(value))}</strong><span>${escapeHtml(_cognitionText(key, fallback))}</span></div>`).join('');
+  const warningHtml = warnings.length
+    ? `<div class="skills-cognition-warning">${escapeHtml(_cognitionText('cognition.warning_prefix', '需要关注'))}：${warnings.map((w) => `${escapeHtml(w.code)} (${escapeHtml(String(w.count))})`).join('、')}</div>`
+    : '';
+  const loadFailureHtml = loadErrors.length
+    ? `<div class="skills-cognition-warning"><span>${escapeHtml(_cognitionText('cognition.load_failed', '认知资产数据加载失败'))}</span><button class="btn btn-sm" data-cognition-reload>${escapeHtml(_cognitionText('common.retry', '重试'))}</button></div>`
+    : '';
+  const recentHtml = receipts.length
+    ? receipts.slice(0, 5).map((r) => `<button type="button" class="skills-cognition-list-card" data-cognition-open-receipt="${escapeHtml(r.executionId)}"><strong>${escapeHtml(r.agentId || r.targetSessionId || r.executionId)}</strong><span>${escapeHtml(_cognitionStatusLabel(r.status))} · ${escapeHtml(_cognitionDate(r.createdAt))}</span></button>`).join('')
+    : _renderCognitionEmpty(_cognitionText('cognition.no_receipts', '暂无复用证明'));
+  const pendingHtml = candidates.length
+    ? candidates.slice(0, 5).map((c) => `<button type="button" class="skills-cognition-list-card" data-cognition-open-candidate="${escapeHtml(c.id)}"><strong>${escapeHtml(c.title || c.summary)}</strong><span>${escapeHtml(_cognitionTypeLabel(c.type))} · ${escapeHtml(c.source)}</span></button>`).join('')
+    : _renderCognitionEmpty(_cognitionText('cognition.no_candidates', '暂无待确认候选'));
+  host.innerHTML = `
+    ${d.degraded ? `<div class="skills-cognition-warning">${escapeHtml(_cognitionText('cognition.degraded', '部分认知数据处于降级状态'))}</div>` : ''}
+    ${loadFailureHtml}
+    ${warningHtml}
+    ${_renderCognitionPipelineStatus()}
+    ${_renderCognitionSourceStatus()}
+    ${_renderCognitionCaptureStatus()}
+    ${_renderTeachingSignalStatus()}
+    <div class="skills-cognition-stat-grid">${cards}</div>
+    <div class="skills-cognition-columns">
+      <section class="skills-cognition-card"><h2>${escapeHtml(_cognitionText('cognition.recent_reuse', '最近复用'))}</h2>${recentHtml}</section>
+      <section class="skills-cognition-card"><h2>${escapeHtml(_cognitionText('cognition.pending_review', '待确认认知候选'))}</h2>${pendingHtml}</section>
+    </div>`;
+}
+
+function renderSkillsCognitionCandidates() {
+  const host = document.getElementById('skills-cognition-candidates-body');
+  if (!host) return;
+  const items = _skillsCognitionState.candidates;
+  const recallItems = Array.isArray(_skillsCognitionState.recallCandidates) ? _skillsCognitionState.recallCandidates : [];
+  if (!items.length && !recallItems.length) { host.innerHTML = _renderCognitionEmpty(_cognitionText('cognition.no_candidates', '暂无待确认候选')); return; }
+  host.innerHTML = `<div class="skills-cognition-record-list">${items.map((c) => {
+    const fallbackActions = c.source === 'personal_ontology' ? ['open_personal_ontology'] : ['source', 'accept', 'reject'];
+    const actions = Array.isArray(c.actions) && c.actions.length ? c.actions : fallbackActions;
+    const actionHtml = actions.map((action) => {
+      if (action === 'open_personal_ontology') {
+        return `<button class="btn btn-sm btn-primary" data-cognition-candidate-action="open-personal-ontology" data-cognition-candidate-id="${escapeHtml(c.sourceId)}">${escapeHtml(_cognitionText('cognition.open_personal_ontology', '去个人本体处理'))}</button>`;
+      }
+      if (action === 'source') {
+        return `<button class="btn btn-sm" data-cognition-candidate-action="source" data-cognition-candidate-source="${escapeHtml(c.source)}" data-cognition-candidate-id="${escapeHtml(c.sourceId)}">${escapeHtml(_cognitionText('cognition.view_source', '查看来源'))}</button>`;
+      }
+      if (action === 'import_to_recall') {
+        return `<button class="btn btn-sm btn-primary" data-cognition-candidate-action="import-to-recall" data-cognition-candidate-id="${escapeHtml(c.sourceId)}">${escapeHtml(_cognitionText('cognition.import_to_recall', '进入正式审查'))}</button>`;
+      }
+      if (action === 'accept') {
+        return `<button class="btn btn-sm btn-primary" data-cognition-candidate-action="accept" data-cognition-candidate-source="${escapeHtml(c.source)}" data-cognition-candidate-id="${escapeHtml(c.sourceId)}">${escapeHtml(_cognitionText('cognition.accept', '保存'))}</button>`;
+      }
+      if (action === 'reject') {
+        return `<button class="btn btn-sm btn-danger" data-cognition-candidate-action="reject" data-cognition-candidate-source="${escapeHtml(c.source)}" data-cognition-candidate-id="${escapeHtml(c.sourceId)}">${escapeHtml(_cognitionText('cognition.reject', '拒绝'))}</button>`;
+      }
+      return '';
+    }).join('');
+    const target = c.targetAssetId ? `<div class="skills-cognition-detail-block"><strong>${escapeHtml(_cognitionText('cognition.target_asset', '目标资产'))}</strong><div class="skills-cognition-ref-row"><span>${escapeHtml(c.targetAssetTitle || c.targetAssetId)}</span>${c.targetAssetTitle ? `<span>${escapeHtml(c.targetAssetId)}</span>` : ''}</div></div>` : '';
+    const sourceRefs = `<div class="skills-cognition-detail-block"><strong>${escapeHtml(_cognitionText('cognition.source_refs', '来源引用'))}</strong><div class="skills-cognition-ref-row">${_renderCognitionInlineRefs(c.sourceRefs)}</div></div>`;
+    const evidenceRefs = `<div class="skills-cognition-detail-block"><strong>${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}</strong><div class="skills-cognition-ref-row">${_renderCognitionInlineRefs(c.evidenceRefs)}</div></div>`;
+    const diff = `<span class="skills-cognition-diff" data-cognition-diff-available="${c.diffAvailable ? 'true' : 'false'}">${escapeHtml(c.diffAvailable ? _cognitionText('cognition.diff_available', '有变更预览') : _cognitionText('cognition.no_diff', '无变更预览'))}</span>`;
+    return `
+    <article class="skills-cognition-record cognition-candidate-row" data-cognition-candidate-id="${escapeHtml(c.id)}">
+      <div class="skills-cognition-record-head"><h2>${escapeHtml(c.title || c.id)}</h2><span class="skills-cognition-status">${escapeHtml(_cognitionTypeLabel(c.type))}</span></div>
+      <p>${escapeHtml(c.summary || '')}</p>
+      <div class="skills-cognition-meta">${escapeHtml(c.source)}${c.scope ? ` · ${escapeHtml(c.scope)}` : ''}${c.confidence ? ` · ${escapeHtml(c.confidence)}` : ''} · ${diff}</div>
+      ${target}${sourceRefs}${evidenceRefs}
+      <div class="skills-cognition-actions">${actionHtml}</div>
+    </article>`;
+  }).join('')}</div>${recallItems.length ? `<section class="skills-cognition-record-list recall-candidate-list"><h2>${escapeHtml(_cognitionText('cognition.recall_candidates', '正式认知候选'))}</h2>${recallItems.map((candidate) => {
+    const refs = Array.isArray(candidate.sourceRefs) ? candidate.sourceRefs.map((ref) => `${ref.kind}:${ref.id}`) : [];
+    const actions = candidate.status === 'pending' ? ['edit', 'defer', 'reject', 'promote'] : candidate.status === 'deferred' ? ['edit', 'resume', 'reject', 'promote'] : [];
+    const editing = _skillsCognitionState.editingRecallCandidateId === candidate.id;
+    const editForm = editing ? `<div class="skills-cognition-detail-block recall-candidate-editor"><label>${escapeHtml(_cognitionText('cognition.judgment', '我的判断'))}<textarea data-recall-edit-judgment>${escapeHtml(candidate.judgment || '')}</textarea></label><label>${escapeHtml(_cognitionText('cognition.summary', '摘要'))}<input data-recall-edit-summary value="${escapeHtml(candidate.summary || '')}"></label><label>${escapeHtml(_cognitionText('cognition.scope', '作用域'))}<input data-recall-edit-scope value="${escapeHtml(candidate.suggestedScope || '')}"></label><label>${escapeHtml(_cognitionText('cognition.type', '类型'))}<select data-recall-edit-type>${['personal','rule','template','skill_method'].map((type) => `<option value="${type}" ${candidate.suggestedType === type ? 'selected' : ''}>${escapeHtml(_abilityAssetCategoryLabel(type))}</option>`).join('')}</select></label><label>${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}<textarea data-recall-edit-evidence>${escapeHtml((candidate.sourceRefs || []).map((ref) => `${ref.kind}:${ref.id}`).join('\n'))}</textarea></label><div class="skills-cognition-actions"><button class="btn btn-sm btn-primary" data-recall-candidate-action="save-edit" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('common.save', '保存'))}</button><button class="btn btn-sm" data-recall-candidate-action="cancel-edit" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('common.cancel', '取消'))}</button></div></div>` : '';
+    return `<article class="skills-cognition-record cognition-candidate-row" data-recall-candidate-id="${escapeHtml(candidate.id)}"><div class="skills-cognition-record-head"><h2>${escapeHtml(candidate.summary || candidate.judgment || candidate.id)}</h2><span class="skills-cognition-status">${escapeHtml(candidate.status || '')}</span></div><p>${escapeHtml(candidate.judgment || '')}</p><div class="skills-cognition-meta">${escapeHtml(candidate.suggestedType || '')} · ${escapeHtml(candidate.suggestedScope || '')}</div><div class="skills-cognition-detail-block"><strong>${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}</strong><div class="skills-cognition-ref-row">${_renderCognitionInlineRefs(refs)}</div></div>${editForm}<div class="skills-cognition-actions">${actions.map((action) => `<button class="btn btn-sm ${action === 'promote' ? 'btn-primary' : action === 'reject' ? 'btn-danger' : ''}" data-recall-candidate-action="${escapeHtml(action)}" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(action === 'edit' ? _cognitionText('skills.edit', '编辑') : _cognitionText(`cognition.${action}`, action))}</button>`).join('')}</div></article>`;
+  }).join('')}</section>` : ''}`
+}
+
+function _renderCognitionRefs(titleKey, titleFallback, refs) {
+  const items = Array.isArray(refs) ? refs : [];
+  const body = items.length
+    ? `<ul>${items.map((ref) => `<li>${escapeHtml(ref)}</li>`).join('')}</ul>`
+    : `<div class="skills-cognition-muted">${escapeHtml(_cognitionText('cognition.no_refs', '未记录引用'))}</div>`;
+  return `<div class="skills-cognition-detail-block"><strong>${escapeHtml(_cognitionText(titleKey, titleFallback))}</strong>${body}</div>`;
+}
+
+function _renderCognitionReceiptDetail(receipt) {
+  if (!receipt) return '';
+  const meta = [
+    ['cognition.receipt_id', '证明 ID', receipt.receiptId],
+    ['cognition.execution_id', '执行 ID', receipt.executionId],
+    ['cognition.source_session', '来源会话', receipt.sourceSessionId],
+    ['cognition.target_session', '目标会话', receipt.targetSessionId],
+    ['cognition.permission_mode', '权限模式', receipt.permissionMode],
+    ['cognition.boundary', '边界', receipt.boundary],
+    ['cognition.execution_kind', '执行类型', receipt.executionKind],
+    ['cognition.agent', 'Agent', receipt.agentId],
+    ['cognition.conversation', '会话', receipt.conversationId],
+    ['cognition.completed_at', '完成时间', _cognitionDate(receipt.completedAt)],
+  ].filter((item) => item[2]).map(([key, label, value]) => `<span><b>${escapeHtml(_cognitionText(key, label))}</b>${escapeHtml(String(value))}</span>`).join('');
+  return `<section class="skills-cognition-detail" data-cognition-receipt-detail="${escapeHtml(receipt.executionId || '')}">
+    <div class="skills-cognition-detail-meta">${meta}</div>
+    ${_renderCognitionRefs('cognition.reused_refs', '复用引用', receipt.reusedRefs)}
+    ${_renderCognitionRefs('cognition.omitted_refs', '省略引用', receipt.omittedRefs)}
+    ${_renderCognitionRefs('cognition.allowed_scopes', '允许范围', receipt.allowedScopes)}
+  </section>`;
+}
+
+async function openSkillsCognitionReceiptDetail(executionId) {
+  const id = String(executionId || '').trim();
+  if (!id) return;
+  _skillsCognitionState.selectedReceiptId = id;
+  if (!_skillsCognitionState.receiptDetails[id]) {
+    try {
+      const result = await window.orkas.invoke('cognition.receipts.read', { executionId: id });
+      if (!result?.ok) throw new Error(result?.error || 'receipt unavailable');
+      _skillsCognitionState.receiptDetails[id] = result.receipt || null;
+    } catch (error) {
+      _skillsCognitionState.receiptDetails[id] = { executionId: id, receiptId: id, status: 'degraded', targetSessionId: id, reusedRefs: [], omittedRefs: [], allowedScopes: [], permissionMode: '', boundary: 'degraded', error: (error && error.message) || String(error) };
+    }
+  }
+  switchSkillsCognitionPage('receipts');
+  renderSkillsCognitionReceipts();
+}
+
+function renderSkillsCognitionReceipts() {
+  const host = document.getElementById('skills-cognition-receipts-body');
+  if (!host) return;
+  const items = _skillsCognitionState.receipts;
+  if (!items.length) { host.innerHTML = _renderCognitionEmpty(_cognitionText('cognition.no_receipts', '暂无复用证明')); return; }
+  host.innerHTML = `<div class="skills-cognition-record-list">${items.map((r) => {
+    const selected = _skillsCognitionState.selectedReceiptId === r.executionId;
+    const detail = selected ? _renderCognitionReceiptDetail(_skillsCognitionState.receiptDetails[r.executionId] || r) : '';
+    return `
+    <article class="skills-cognition-record cognition-receipt-row">
+      <div class="skills-cognition-record-head"><h2>${escapeHtml(r.agentId || r.targetSessionId || r.executionId)}</h2><span class="skills-cognition-status">${escapeHtml(_cognitionStatusLabel(r.status))}</span></div>
+      <p>${escapeHtml(r.reusedRefs?.slice(0, 4).join('、') || _cognitionText('cognition.no_refs', '未记录引用'))}</p>
+      <div class="skills-cognition-meta">${escapeHtml(r.targetSessionId)} · ${escapeHtml(_cognitionDate(r.createdAt))}</div>
+      <div class="skills-cognition-actions"><button class="btn btn-sm" data-cognition-open-receipt="${escapeHtml(r.executionId)}">${escapeHtml(_cognitionText('cognition.view_details', '查看详情'))}</button></div>
+      ${detail}
+    </article>`;
+  }).join('')}</div>`;
+}
+
+function renderSkillsCognitionAssets() {
+  const host = document.getElementById('skills-cognition-assets-body');
+  if (!host) return;
+  const items = _skillsCognitionState.assets;
+  const view = _skillsCognitionState.assetView === 'tree' ? 'tree' : 'list';
+  if (view === 'tree') {
+    const buds = items.filter((item) => item.maturity === 'bud' || item.status === 'candidate').length;
+    const lightLeaves = items.filter((item) => item.maturity === 'transfer_validated').length;
+    const deepLeaves = items.filter((item) => item.maturity === 'effectiveness_validated').length;
+    host.innerHTML = `<div class="ability-assets-tree-page">
+      <section class="ability-tree-stage">
+        <div class="ability-tree-branch ability-tree-personal">${escapeHtml(_abilityAssetCategoryLabel('personal'))}</div>
+        <div class="ability-tree-branch ability-tree-rule">${escapeHtml(_abilityAssetCategoryLabel('rule'))}</div>
+        <div class="ability-tree-branch ability-tree-template">${escapeHtml(_abilityAssetCategoryLabel('template'))}</div>
+        <div class="ability-tree-branch ability-tree-skill">${escapeHtml(_abilityAssetCategoryLabel('skill_method'))}</div>
+        <div class="ability-tree-node seed">${escapeHtml(_cognitionText('cognition.maturity_seed', '种子'))}</div>
+        <div class="ability-tree-node bud">${escapeHtml(String(buds))}</div>
+        <div class="ability-tree-node leaf">${escapeHtml(String(lightLeaves))}</div>
+        <div class="ability-tree-node deep-leaf">${escapeHtml(String(deepLeaves))}</div>
+      </section>
+      <aside class="ability-tree-inspector">
+        <h2>${escapeHtml(_cognitionText('cognition.cognition_tree', '认知树'))}</h2>
+        <p>${escapeHtml(_cognitionText('cognition.tree_semantics', '芽点代表候选；浅叶代表Transfer Validated；深叶代表Effectiveness Proof。'))}</p>
+        <dl>
+          <div><dt>${escapeHtml(_cognitionText('cognition.maturity_bud', '芽点'))}</dt><dd>${escapeHtml(String(buds))}</dd></div>
+          <div><dt>Transfer Validated</dt><dd>${escapeHtml(String(lightLeaves))}</dd></div>
+          <div><dt>${escapeHtml(_cognitionText('cognition.maturity_deep_leaf', '深叶'))}</dt><dd>${escapeHtml(String(deepLeaves))}</dd></div>
+        </dl>
+      </aside>
+    </div>`;
+    return;
+  }
+  const categories = [
+    ['personal', 'cognition.asset_category_personal', '关于我', 'cognition.asset_category_personal_desc', '长期角色与个人边界'],
+    ['rule', 'cognition.asset_category_rule', '规则与判断', 'cognition.asset_category_rule_desc', '可复用的决策约束'],
+    ['template', 'cognition.asset_category_template', '模板与范例', 'cognition.asset_category_template_desc', '结构与参考样例'],
+    ['skill_method', 'cognition.asset_category_skill_method', '技能与方法', 'cognition.asset_category_skill_method_desc', '流程、工具与评价方法'],
+  ];
+  const summary = categories.map(([category, key, fallback, descKey, descFallback]) => {
+    const active = _skillsCognitionState.assetCategoryFilter === category ? ' is-active' : '';
+    return `
+    <button type="button" class="ability-asset-summary-card${active}" data-ability-asset-category="${escapeHtml(category)}"><span>${escapeHtml(_cognitionText(key, fallback))}</span><strong>${escapeHtml(String(_abilityAssetSummary(items, category)))}</strong><small>${escapeHtml(_cognitionText(descKey, descFallback))}</small></button>
+  `;
+  }).join('');
+  const filteredItems = _skillsCognitionState.assetCategoryFilter
+    ? items.filter((item) => (item.category || item.type) === _skillsCognitionState.assetCategoryFilter)
+    : items;
+  if (!items.length) {
+    host.innerHTML = `<div class="ability-assets-workbench">
+      <div class="ability-asset-summary-grid">${summary}</div>
+      <div class="ability-assets-empty">${escapeHtml(_cognitionText('cognition.no_ability_assets', '尚无正式资产。完成复用证明、确认带入正确并保存后，资产才会出现在这里。'))}</div>
+    </div>`;
+    return;
+  }
+  if (!filteredItems.length) {
+    const selectedCategory = _abilityAssetCategoryLabel(_skillsCognitionState.assetCategoryFilter);
+    host.innerHTML = `<div class="ability-assets-workbench">
+      <div class="ability-asset-summary-grid">${summary}</div>
+      <div class="ability-assets-management">
+        <section class="ability-asset-list"><div class="ability-asset-list-head"><input class="asset-search" placeholder="${escapeHtml(_cognitionText('cognition.search_ability_assets', '搜索名称、来源或Asset ID'))}" aria-label="${escapeHtml(_cognitionText('cognition.search_ability_assets', '搜索名称、来源或Asset ID'))}"></div><div class="ability-assets-empty">${escapeHtml(_cognitionText('cognition.empty_asset_category', '该分类暂无能力资产'))}</div></section>
+        <section class="ability-asset-detail"><div class="ability-assets-empty"><strong>${escapeHtml(selectedCategory)}</strong><br>${escapeHtml(_cognitionText('cognition.empty_asset_category_hint', '当候选被确认并保存为正式资产后，会出现在这里。'))}</div></section>
+      </div>
+    </div>`;
+    return;
+  }
+  const selected = filteredItems.find((item) => item.id === _skillsCognitionState.selectedAssetId) || filteredItems.find((item) => item.status === 'active') || filteredItems[0];
+  _skillsCognitionState.selectedAssetId = selected.id;
+  const rows = filteredItems.map((a) => {
+    const category = a.category || a.type;
+    const selectedClass = a.id === selected.id ? ' is-selected' : '';
+    return `<button type="button" class="skills-cognition-record cognition-asset-row ability-asset-list-row${selectedClass}" data-ability-asset-id="${escapeHtml(a.id)}">
+      <span class="ability-asset-row-main"><strong>${escapeHtml(a.title || a.id)}</strong><small>${escapeHtml(_abilityAssetCategoryLabel(category))}${a.version ? ` · ${escapeHtml(a.version)}` : ''}${a.scope ? ` · ${escapeHtml(a.scope)}` : ''}</small></span>
+      <span class="skills-cognition-status">${escapeHtml(_abilityAssetMaturityLabel(a.maturity, a.status))}</span>
+    </button>`;
+  }).join('');
+  const selectedCategory = selected.category || selected.type;
+  const detailGrid = [
+    ['Asset ID', selected.id],
+    [_cognitionText('cognition.version', '版本'), selected.version || '—'],
+    ['Owner', selected.owner || 'local_user'],
+    [_cognitionText('cognition.source', '来源'), selected.source || '—'],
+    [_cognitionText('cognition.scope', '作用域'), selected.scope || '—'],
+    [_cognitionText('cognition.maturity', '成熟度'), _abilityAssetMaturityLabel(selected.maturity, selected.status)],
+  ].map(([label, value]) => `<div><small>${escapeHtml(label)}</small><strong>${escapeHtml(String(value))}</strong></div>`).join('');
+  const workspace = selected.workspaceRefs?.length ? selected.workspaceRefs.join('、') : _cognitionText('cognition.no_workspace_refs', '当前没有Workspace引用；正式资产仍保存在个人能力资产中心。');
+  const relationRefs = Array.isArray(selected.relationRefs) ? selected.relationRefs : [];
+  const relationText = relationRefs.length ? relationRefs.map(_cognitionRefText).join('、') : _cognitionText('cognition.no_refs', '未记录引用');
+  const injection = selected.candidateRefs?.length
+    ? _cognitionText('cognition.asset_candidate_preview', '这是待确认芽点；保存后才会获得稳定版本和默认注入资格。')
+    : _cognitionText('cognition.asset_injection_preview', '下一次任务将建议使用已确认资产；使用前仍需确认范围。');
+  host.innerHTML = `<div class="ability-assets-workbench">
+    <div class="ability-asset-summary-grid">${summary}</div>
+    <div class="ability-assets-management">
+      <section class="ability-asset-list">
+        <div class="ability-asset-list-head"><input class="asset-search" placeholder="${escapeHtml(_cognitionText('cognition.search_ability_assets', '搜索名称、来源或Asset ID'))}" aria-label="${escapeHtml(_cognitionText('cognition.search_ability_assets', '搜索名称、来源或Asset ID'))}"></div>
+        <div class="skills-cognition-record-list ability-asset-list-body">${rows}</div>
+      </section>
+      <section class="ability-asset-detail">
+        <div class="asset-detail-head"><div><h2>${escapeHtml(selected.title || selected.id)}</h2><p>${escapeHtml(_abilityAssetCategoryLabel(selectedCategory))} · ${escapeHtml(selected.source || '')}</p></div><span class="skills-cognition-status">${escapeHtml(_abilityAssetMaturityLabel(selected.maturity, selected.status))}</span></div>
+        <div class="asset-detail-body">
+          <div class="asset-detail-grid">${detailGrid}</div>
+          <div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.relation_refs', '关联引用'))}</strong><p>${escapeHtml(relationText)}</p></div>
+          <div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.workspace_refs', 'Workspace引用'))}</strong><p>${escapeHtml(workspace)}</p></div>
+          <div class="injection-preview"><strong>${escapeHtml(_cognitionText('cognition.next_injection_preview', '下一次任务认知注入预览'))}</strong><p>${escapeHtml(injection)}</p></div>
+          <div class="asset-controls"><button class="btn btn-sm" data-cognition-page-link="receipts">${escapeHtml(_cognitionText('cognition.view_reuse', '查看复用证明'))}</button><button class="btn btn-sm" data-cognition-page-link="candidates">${escapeHtml(_cognitionText('cognition.view_candidates', '查看候选'))}</button></div>
+        </div>
+      </section>
+    </div>
+  </div>`;
+}
+
+async function loadSkillsCognitionSnapshot() {
+  if (_skillsCognitionState.loading) return;
+  _skillsCognitionState.loading = true;
+  const capturePayload = { limit: 25 };
+  const captureStatuses = _captureStatusesForFilter(_skillsCognitionState.captureFilter);
+  if (captureStatuses.length) capturePayload.statuses = captureStatuses;
+  const [dashboard, candidates, recallCandidates, receipts, assets, sources, captures, recentCaptures, recallViews, contextProjections, ontologyGroups, teachingSignals, captureSettings] = await Promise.allSettled([
+    window.orkas.invoke('cognition.dashboard.read'),
+    window.orkas.invoke('cognition.candidates.list', { status: 'pending', limit: 200 }),
+    window.orkas.invoke('recall.candidates.list'),
+    window.orkas.invoke('cognition.receipts.list', { limit: 100 }),
+    window.orkas.invoke('cognition.assets.list', { limit: 500 }),
+    window.orkas.invoke('recall.sources.list', { limit: 100 }),
+    window.orkas.invoke('recall.captures.list', capturePayload),
+    window.orkas.invoke('recall.captures.list', { limit: 5 }),
+    window.orkas.invoke('recall.views.list', { includeExpired: true, limit: 100 }),
+    window.orkas.invoke('recall.projections.list', { includeExpired: true, limit: 100 }),
+    window.orkas.invoke('personalOntology.groups.list'),
+    window.orkas.invoke('recall.teaching.list', { limit: 20 }),
+    window.orkas.invoke('recall.captures.settings.get'),
+  ]);
+  _skillsCognitionState.dashboard = dashboard.status === 'fulfilled' && dashboard.value?.ok ? dashboard.value.dashboard : null;
+  _skillsCognitionState.candidates = candidates.status === 'fulfilled' && candidates.value?.ok ? (candidates.value.candidates || []) : [];
+  _skillsCognitionState.recallCandidates = recallCandidates.status === 'fulfilled' && recallCandidates.value?.ok ? (recallCandidates.value.candidates || []) : [];
+  _skillsCognitionState.receipts = receipts.status === 'fulfilled' && receipts.value?.ok ? (receipts.value.receipts || []) : [];
+  _skillsCognitionState.assets = assets.status === 'fulfilled' && assets.value?.ok ? (assets.value.assets || []) : [];
+  _skillsCognitionState.sources = sources.status === 'fulfilled' && sources.value?.ok ? (sources.value.sources || []) : [];
+  _skillsCognitionState.captures = captures.status === 'fulfilled' && captures.value?.ok ? (captures.value.captures || []) : [];
+  _skillsCognitionState.recentCaptures = recentCaptures.status === 'fulfilled' && recentCaptures.value?.ok ? (recentCaptures.value.captures || []) : [];
+  _skillsCognitionState.captureCounts = captures.status === 'fulfilled' && captures.value?.ok ? (captures.value.counts || _skillsCognitionState.captureCounts) : _skillsCognitionState.captureCounts;
+  _skillsCognitionState.captureNextCursor = captures.status === 'fulfilled' && captures.value?.ok ? (captures.value.nextCursor || null) : null;
+  _skillsCognitionState.recallViews = recallViews.status === 'fulfilled' && recallViews.value?.ok ? (recallViews.value.views || []) : [];
+  _skillsCognitionState.contextProjections = contextProjections.status === 'fulfilled' && contextProjections.value?.ok ? (contextProjections.value.projections || []) : [];
+  _skillsCognitionState.ontologyGroups = ontologyGroups.status === 'fulfilled' && Array.isArray(ontologyGroups.value?.groups) ? ontologyGroups.value.groups : [];
+  if (_skillsCognitionState.ontologyGroups.length) {
+    const selectedExists = _skillsCognitionState.ontologyGroups.some((group) => group.group_id === _skillsCognitionState.selectedOntologyGroupId);
+    if (!selectedExists) _skillsCognitionState.selectedOntologyGroupId = _skillsCognitionState.ontologyGroups[0].group_id;
+    try { await loadRecallOntologyGroup(_skillsCognitionState.selectedOntologyGroupId); } catch (_) {}
+  } else {
+    _skillsCognitionState.selectedOntologyGroupId = '';
+  }
+  _skillsCognitionState.teachingSignals = teachingSignals.status === 'fulfilled' && teachingSignals.value?.ok ? (teachingSignals.value.signals || []) : [];
+  _skillsCognitionState.captureSettings = captureSettings.status === 'fulfilled' && captureSettings.value?.ok ? captureSettings.value.settings : _skillsCognitionState.captureSettings;
+  _skillsCognitionState.captureModel = captureSettings.status === 'fulfilled' && captureSettings.value?.ok ? captureSettings.value.model : _skillsCognitionState.captureModel;
+  _skillsCognitionState.loadErrors = [
+    ['dashboard', dashboard],
+    ['candidates', candidates],
+    ['recallCandidates', recallCandidates],
+    ['receipts', receipts],
+    ['assets', assets],
+    ['sources', sources],
+    ['captures', captures],
+    ['recentCaptures', recentCaptures],
+    ['recallViews', recallViews],
+    ['contextProjections', contextProjections],
+    ['teachingSignals', teachingSignals],
+    ['captureSettings', captureSettings],
+  ].filter(([, result]) => result.status !== 'fulfilled' || !result.value?.ok).map(([name]) => name);
+  if (ontologyGroups.status !== 'fulfilled' || !Array.isArray(ontologyGroups.value?.groups)) _skillsCognitionState.loadErrors.push('ontologyGroups');
+  _skillsCognitionState.loadedAt = Date.now();
+  _skillsCognitionState.loading = false;
+  renderSkillsCognitionOverview();
+  if (_skillsCognitionState.page === 'sources') renderSkillsCognitionSources();
+  if (_skillsCognitionState.page === 'captures') renderSkillsCognitionCaptures();
+  if (_skillsCognitionState.page === 'brain') renderSkillsCognitionBrain();
+  if (_skillsCognitionState.page === 'context') renderSkillsCognitionContext();
+  if (_skillsCognitionState.page === 'ontology') renderSkillsCognitionOntology();
+  if (_skillsCognitionState.page === 'candidates') renderSkillsCognitionCandidates();
+  if (_skillsCognitionState.page === 'receipts') renderSkillsCognitionReceipts();
+  if (_skillsCognitionState.page === 'assets') renderSkillsCognitionAssets();
+  if (_skillsCognitionRefreshTimer) clearTimeout(_skillsCognitionRefreshTimer);
+  const visibleCaptures = [...(_skillsCognitionState.captures || []), ...(_skillsCognitionState.recentCaptures || [])];
+  const captureInProgress = Number(_skillsCognitionState.captureCounts?.processing || 0) > 0
+    || visibleCaptures.some((capture) => capture.status === 'queued' || capture.status === 'extracting');
+  if (captureInProgress) {
+    _skillsCognitionRefreshTimer = setTimeout(() => {
+      _skillsCognitionRefreshTimer = null;
+      if (typeof currentView !== 'undefined' && currentView === 'recall') {
+        loadSkillsCognitionSnapshot().catch(() => {});
+      }
+    }, 3000);
+  }
+}
+
+function _renderSkillCognitionVersions(skillId, versions) {
+  const items = Array.isArray(versions) ? versions : [];
+  if (!items.length) return '';
+  return `<div class="skills-cognition-version-list"><h4>${escapeHtml(_cognitionText('cognition.version_history', '版本历史'))}</h4>${items.map((v) => {
+    const rollback = v.canRollback
+      ? `<button class="btn btn-xs" data-cognition-rollback-skill="${escapeHtml(skillId)}" data-cognition-version="${escapeHtml(v.version)}">${escapeHtml(_cognitionText('cognition.rollback', '回滚'))}</button>`
+      : `<span class="skills-cognition-muted">${escapeHtml(_cognitionText('cognition.not_rollbackable', '不可回滚'))}</span>`;
+    return `<div class="skills-cognition-version-row"><span><strong>${escapeHtml(v.version || '')}</strong>${v.note ? ` · ${escapeHtml(v.note)}` : ''}${v.at ? ` · ${escapeHtml(_cognitionDate(v.at))}` : ''}</span>${rollback}</div>`;
+  }).join('')}</div>`;
+}
+
+async function rollbackSkillCognitionVersionFromDetail(skillId, version) {
+  const sid = String(skillId || '').trim();
+  const ver = String(version || '').trim();
+  if (!sid || !ver) return;
+  const message = _cognitionText('cognition.rollback_confirm', `确认回滚到版本 ${ver}？`).replace('{version}', ver);
+  if (typeof uiConfirm === 'function' && !(await uiConfirm(message))) return;
+  const result = await window.orkas.invoke('cognition.skills.rollback', { skillId: sid, version: ver });
+  if (!result?.ok) throw new Error(result?.error || 'rollback failed');
+  await refreshSkillCognitionSummary(sid);
+  if (_selectedSkill?.id === sid && typeof selectSkillFile === 'function') await selectSkillFile(_selectedSkill.filepath || 'SKILL.md');
+}
+
+async function refreshSkillCognitionSummary(skillId) {
+  const section = document.getElementById('skills-section-cognition');
+  const host = document.getElementById('skills-cognition-summary');
+  if (!section || !host || !skillId) return;
+  section.style.display = '';
+  host.innerHTML = `<div class="skills-cognition-loading">${escapeHtml(_cognitionText('cognition.loading', '加载中…'))}</div>`;
+  try {
+    const result = await window.orkas.invoke('cognition.skills.summary', { skillId });
+    if (!result?.ok) throw new Error(result?.error || 'summary unavailable');
+    const s = result.summary || {};
+    host.innerHTML = `
+      <div class="skills-cognition-inline-grid">
+        <span><strong>${escapeHtml(s.version || '—')}</strong>${escapeHtml(_cognitionText('cognition.current_version', '当前版本'))}</span>
+        <span><strong>${escapeHtml(String(s.pendingCandidateCount || 0))}</strong>${escapeHtml(_cognitionText('cognition.pending_candidates', '待审候选'))}</span>
+        <span><strong>${escapeHtml(String((s.recentReceipts || []).length))}</strong>${escapeHtml(_cognitionText('cognition.reuse_receipts', '复用证明'))}</span>
+      </div>
+      <div class="skills-cognition-inline-actions">
+        <button class="btn btn-sm" data-cognition-page-link="receipts">${escapeHtml(_cognitionText('cognition.view_reuse', '查看复用证明'))}</button>
+        <button class="btn btn-sm" data-cognition-page-link="candidates">${escapeHtml(_cognitionText('cognition.view_candidates', '查看候选'))}</button>
+      </div>
+      ${_renderSkillCognitionVersions(skillId, s.versions || [])}`;
+  } catch (_) {
+    section.style.display = 'none';
+  }
+}
+
+function initSkillsCognitionConsole() {
+  const panel = document.getElementById('panel-recall');
+  if (!panel || panel.dataset.cognitionInitialized === '1') return;
+  panel.dataset.cognitionInitialized = '1';
+  _cognitionSetPageVisibility('overview');
+  loadSkillsCognitionSnapshot().catch(() => {});
+}
 
 function _skillSource(source) {
   return (typeof normalizeCatalogSource === 'function')
@@ -1387,6 +2462,7 @@ async function selectSkillFile(source, id, filepath, nodeEl) {
   // Capture this BEFORE _selectedSkill is overwritten.
   const sameSkill = _selectedSkill?.id === id && _selectedSkill?.source === source;
   _selectedSkill = { source, id, filepath, name: skill?.name || id };
+  Promise.resolve().then(() => refreshSkillCognitionSummary(id)).catch(() => {});
   // Clear previous active state across all tree nodes (in source-wrap)
   document.querySelectorAll('.skill-tree-node').forEach(n => n.classList.remove('active'));
   if (nodeEl) nodeEl.classList.add('active');
@@ -2686,11 +3762,6 @@ async function _saveSkillFromDir({ msgEl }) {
   });
 }
 
-function _qualityForceImportLabel() {
-  const v = t('quality.force_import');
-  return v === 'quality.force_import' ? 'Import anyway' : v;
-}
-
 function _qualityImportRejectedTitle(name) {
   const tmpl = t('quality.import_rejected_title');
   const fallback = `Import rejected by quality validator: ${name}`;
@@ -2714,16 +3785,16 @@ async function _saveSkillFromDirWithQuality({ msgEl, srcDir, force, tracking }) 
     const data = await res.json();
     if (!data.ok) {
       _setSkillModalBusy(false);
-      if (!force && data.report && typeof showValidationReport === 'function') {
+      if (data.report && typeof showValidationReport === 'function') {
         const titleName = data.skillId || srcDir.split(/[\\/]/).filter(Boolean).pop() || srcDir;
-        const action = await showValidationReport({
+        // Report-only: an EXTREME violation is not overridable, so no force
+        // action is offered. Previously a "force import" button re-invoked
+        // this with force:true, which skipped the main-process red-flag gate
+        // for everything except the runner-convention rule.
+        await showValidationReport({
           title: _qualityImportRejectedTitle(titleName),
           report: data.report,
-          forceLabel: _qualityForceImportLabel(),
         });
-        if (action === 'force') {
-          return await _saveSkillFromDirWithQuality({ msgEl, srcDir, force: true, tracking });
-        }
         _skillCreateTrackResult(tracking, 'blocked', {
           forced: false,
           error_code: data.code || 'quality_validation',

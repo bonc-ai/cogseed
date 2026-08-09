@@ -251,6 +251,32 @@ function runtimeCompanionFiles(kind, executable, targetPlatform, spec) {
   return [];
 }
 
+function runtimeSourceArchivePath(dir, asset) {
+  const name = String(asset && asset.name || '');
+  if (!name || path.basename(name) !== name || !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,255}$/.test(name)) {
+    throw new Error(`[native-deps-gate] invalid runtime source archive name: ${name || '(missing)'}`);
+  }
+  return path.join(dir, 'archive', name);
+}
+
+function verifyRuntimeSourceArchive(dir, asset) {
+  const archive = runtimeSourceArchivePath(dir, asset);
+  let stat;
+  try {
+    stat = fs.lstatSync(archive);
+  } catch (err) {
+    throw new Error(`[native-deps-gate] missing python runtime source archive: ${archive}: ${err.message}`);
+  }
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error(`[native-deps-gate] python runtime source archive is not a direct regular file: ${archive}`);
+  }
+  if (!Number.isSafeInteger(asset.size) || asset.size < 1 || stat.size !== asset.size
+      || !/^[0-9a-f]{64}$/.test(String(asset.sha256 || '')) || sha256File(archive) !== asset.sha256) {
+    throw new Error(`[native-deps-gate] python runtime source archive hash/size mismatch: ${archive}`);
+  }
+  return archive;
+}
+
 function requireOnlyRuntimeDirs(runtimeRoot, kind, allowedKeys) {
   const kindDir = path.join(runtimeRoot, kind);
   if (!fs.existsSync(kindDir) || !fs.statSync(kindDir).isDirectory()) {
@@ -341,6 +367,7 @@ function verifyRuntimeDir(kind, dir, key, spec, asset, targetPlatform, targetArc
   for (const companion of runtimeCompanionFiles(kind, executable, targetPlatform, spec)) {
     requiredFile(`${kind} runtime companion`, companion);
   }
+  if (kind === 'python') verifyRuntimeSourceArchive(dir, asset);
   if (options.checkArch !== false && targetPlatform === 'darwin') {
     assertDarwinExecutableArch(executable, targetArch);
   }
@@ -794,6 +821,7 @@ module.exports = {
   requiredWindowsVcAppLocalVerificationEntries,
   runtimeKey,
   runtimeKeysForTarget,
+  runtimeSourceArchivePath,
   verifyFfmpegRuntimeDir,
   verifyWhisperRuntimeDir,
   verifyWindowsVcAppLocalFiles,
@@ -802,4 +830,5 @@ module.exports = {
   verifyWindowsVcRuntimeDir,
   verifyRuntimeDir,
   verifyRuntimeRoot,
+  verifyRuntimeSourceArchive,
 };

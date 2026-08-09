@@ -173,6 +173,28 @@ describe('reflection-orchestrator › runOneCycle', () => {
     expect(state.lastReflectedAt[mod.DEFAULT_AGENT_ID]).toBe(new Date(NOW).toISOString());
   });
 
+  it('does not schedule management-only Agents for reflection', async () => {
+    const paths = await import('../../../src/main/paths');
+    const agentId = 'c045605cb916';
+    const dir = paths.agentDir(TEST_UID, agentId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'agent.json'), JSON.stringify({
+      agent_id: agentId,
+      name: 'Expense Workbench',
+      workflow: 'management only',
+      interaction_mode: 'management_only',
+    }));
+    const mod = await loadModule();
+    const reflected: string[] = [];
+    await mod.runOneCycle(TEST_UID, {
+      now: () => NOW,
+      reflect: async (_uid, id) => { reflected.push(id); },
+      isDirty: async () => true,
+    });
+    expect(reflected).toContain(mod.DEFAULT_AGENT_ID);
+    expect(reflected).not.toContain(agentId);
+  });
+
   it('skips with debug log when feature flag is off', async () => {
     process.env.ORKAS_METACOGNITION = '0';
     try {

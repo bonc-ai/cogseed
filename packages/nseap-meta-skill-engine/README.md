@@ -43,23 +43,35 @@ npm run dev
 ```
 meta-skill-engine/
 ├── src/
-│   ├── index.ts                      # MCP Server 入口（23 个工具）
+│   ├── index.ts                      # MCP stdio 服务器入口（26 个工具）
+│   ├── engine.ts                     # 纯库入口（进程内 loadEngine 加载，不启服务器）
 │   ├── config/engine-config.ts       # 引擎配置（身份合约 + 护栏）
-│   ├── types/index.ts                # 核心类型定义
+│   ├── types/
+│   │   ├── index.ts                  # 核心类型定义
+│   │   ├── evolution.ts              # KSTAR 进化类型（步骤/评估/运行）
+│   │   └── snapshot.ts               # 快照类型
 │   ├── utils/ids.ts                  # ID/哈希生成
-│   └── modules/
-│       ├── ontology-reader.ts        # ① 本体读取（TBox/RBox/ABox/实例）
-│       ├── evidence-collector.ts     # ② 证据采集 + KSTAR Episode
-│       ├── attribution-engine.ts     # ③ 归因 + 聚合 + 路由
-│       ├── patch-generator.ts        # ④ Patch 生成（有界编辑）
-│       ├── governance-gates.ts       # ⑤ 三闸治理
-│       ├── skill-creator.ts          # ⑥ Skill-Creator（双通道 + 评估迭代）
-│       └── registry-manager.ts       # ⑦ 注册表管理
+│   ├── modules/                      # 10 个业务模块
+│   │   ├── ontology-reader.ts        # ① 本体读取（TBox/RBox/ABox/实例）
+│   │   ├── ontology-writer.ts        # ② 本体写入（Patch 落地）
+│   │   ├── evidence-collector.ts     # ③ 证据采集 + KSTAR Episode
+│   │   ├── attribution-engine.ts     # ④ 归因 + 聚合 + 路由
+│   │   ├── evolution-orchestrator.ts # ⑤ KSTAR 进化编排
+│   │   ├── patch-generator.ts        # ⑥ Patch 生成（有界编辑）
+│   │   ├── governance-gates.ts       # ⑦ 三闸治理
+│   │   ├── skill-creator.ts          # ⑧ Skill-Creator（双通道 + 评估迭代）
+│   │   ├── registry-manager.ts       # ⑨ 注册表管理
+│   │   └── llm-port.ts               # ⑩ LLM 端口（回退 + 类型）
+│   ├── migration/
+│   │   ├── legacy-pc-import.ts       # 旧 PC 数据导入
+│   │   └── snapshot-migrations.ts    # 快照迁移
+│   └── persistence/
+│       ├── canonical-json.ts         # 规范化 JSON
+│       ├── snapshot-state.ts         # 快照状态
+│       └── tool-catalog.ts           # 工具目录
 ├── agents/
 │   ├── grader.md                     # 评分 Agent 指令
 │   └── analyzer.md                   # 分析 Agent 指令
-├── eval-viewer/
-│   └── viewer.html                   # 评估审查 HTML 模板
 ├── ontologies/
 │   └── university_paper_writing/     # 示例本体（大学生写论文）
 │       ├── scene_tbox.yaml           # 概念层 — 41 类
@@ -72,14 +84,16 @@ meta-skill-engine/
 │   ├── kstar-evolution.md
 │   └── governance-boundaries.md
 ├── scripts/check-engine.ts           # 自检脚本
+├── test/                             # Vitest 测试
 ├── SKILL.md                          # 自身 SkillPackage（同构原则）
 └── package.json
 ```
 
-## 23 个 MCP 工具
+## 26 个 MCP 工具
 
 | 类别 | 工具 |
 |------|------|
+| **引擎** | get_engine_info |
 | **本体** | read_ontology, list_ontologies, extract_ontology_slice |
 | **证据** | capture_interaction, query_episodes |
 | **归因** | analyze_attribution, analyze_no_match, route_recommendation |
@@ -88,6 +102,11 @@ meta-skill-engine/
 | **评估** | generate_eval_cases, run_eval, grade_eval, grade_eval_llm, benchmark_skill, improve_skill, generate_eval_viewer, optimize_description |
 | **注册表** | register_skill, list_registry |
 | **配置** | get_engine_config |
+
+## 双入口加载路径
+
+- `dist/index.js` — MCP stdio 服务器入口，由宿主（Mate Agent / MCP Client）作为子进程拉起。
+- `dist/engine.js` — 纯库入口，宿主进程内 `loadEngine` 直接加载，绝不启动 stdio 服务器；与子进程入口互不干扰。
 
 ## 全流程
 

@@ -34,4 +34,14 @@ describe('versions-store', () => {
     const raw = JSON.parse(await fs.readFile(p, 'utf-8'));
     expect(raw[0].version).toBe('0.1.1');
   });
+
+  it('stores optional version content snapshots and exposes rollback availability', async () => {
+    await appendSkillVersion('u1', 'sk1', { version: '0.1.1', note: 'with snapshot', content: 'snapshot body' });
+    await appendSkillVersion('u1', 'sk1', { version: '0.1.0', note: 'legacy metadata only' });
+    const versions = await listSkillVersions('u1', 'sk1');
+    expect(versions[0]).toMatchObject({ version: '0.1.0', canRollback: false });
+    expect(versions[0]).not.toHaveProperty('content');
+    expect(versions[1]).toMatchObject({ version: '0.1.1', canRollback: true, content: 'snapshot body' });
+  });
+
 });

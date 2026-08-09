@@ -18,6 +18,8 @@ import { app, ipcMain, dialog, BrowserWindow, type WebContents } from 'electron'
 
 import * as users from '../features/users';
 import * as chats from '../features/chats';
+import * as conversationAside from '../features/conversation_aside';
+import * as modelClient from '../model/client';
 import * as projects from '../features/projects';
 import * as spaces from '../features/spaces';
 import * as projectFiles from '../features/project_files';
@@ -26,7 +28,30 @@ import * as projectLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
 import * as companionRepro from '../features/companion_repro';
 import * as p3394 from '../features/p3394';
+import * as executionRecords from '../features/execution-records';
+import * as workbench from '../features/workbench';
 import * as evolution from '../features/evolution';
+import * as cognition from '../features/cognition';
+import * as recallCandidates from '../features/recall/candidate-service';
+import * as recallAssets from '../features/recall/asset-service';
+import * as recallWorkspaceRefs from '../features/recall/workspace-refs';
+import * as recallProjection from '../features/recall/context-projection';
+import * as recallProjectionCard from '../features/recall/projection-card';
+import * as recallProjectionMessage from '../features/recall/projection-message';
+import * as recallTimeline from '../features/recall/timeline-service';
+import * as kstarKnowledgeRoute from '../features/kstar/knowledge-route-service';
+import { readKstarTaskLifecycle } from '../features/kstar/lifecycle-adapter';
+import * as kstarTaskClosure from '../features/kstar/task-closure';
+import * as kstarReviewService from '../features/kstar/review-service';
+import * as recallProofs from '../features/recall/proof-service';
+import * as recallTree from '../features/recall/tree-service';
+import * as recallUsage from '../features/recall/usage-service';
+import * as effectivenessFeedback from '../features/recall/effectiveness-feedback';
+import * as recallSources from '../features/recall/source-catalog';
+import * as recallCaptures from '../features/recall/capture-service';
+import * as recallCaptureSettings from '../features/recall/capture-settings';
+import * as recallViews from '../features/recall/recall-view-service';
+import * as recallTeaching from '../features/recall/teaching-service';
 import * as personalOntologyCandidates from '../features/personal_ontology_candidates';
 import * as personalOntologyGroups from '../features/personal_ontology_groups';
 import * as personalOntologyTemplateFiles from '../features/personal_ontology_template_files';
@@ -46,29 +71,45 @@ import * as contexts from '../features/contexts';
 import * as libraryTransfer from '../features/library_transfer';
 import * as kbVector from '../features/kb_vector';
 import * as kbIndexer from '../features/kb_indexer';
+import { terminalEvents } from '../features/terminal/pty-sessions';
 import * as chatAttachments from '../features/chat_attachments';
+import * as conversationCopyMerge from '../features/conversation_copy_merge';
 import * as chatArtifacts from '../features/chat_artifacts';
 import * as conversationFiles from '../features/conversation_files';
 import * as recycleBin from '../features/recycle_bin';
 import * as search from '../features/search';
 import * as auth from '../features/auth';
+import * as customProviders from '../features/custom_providers';
+import * as modelAuthorizationDiscovery from '../features/model_authorization_discovery';
+import { probeCcSwitch } from '../features/ccswitch_import';
 import * as imageAuth from '../features/image_auth';
 import * as searchAuth from '../features/search_auth';
 import * as videoAuth from '../features/video_auth';
 import * as ttsAuth from '../features/tts_auth';
 import * as permissions from '../features/permissions';
 import * as appConfig from '../features/config';
+import * as onboardingState from '../features/onboarding_state';
+import * as journeyState from '../features/journey_state';
+import * as cognitionExtraction from '../features/cognition_extraction';
+import { detectAll } from '../features/local_agents/registry';
 import * as avatars from '../features/avatars';
 import * as commanderProfile from '../features/commander_profile';
 import * as commanderRuntimeStats from '../features/commander_runtime_stats';
 import * as commanderBackend from '../features/commander_backend';
+import * as mateAgentBackend from '../features/mate_agent_backend';
 import { getRendererTables, isLang, t } from '../i18n';
 import { isPathAllowed } from '../util/path-sandbox';
 import * as userWorkspace from '../features/user_workspace';
 import { invokeHandlers as localAgentsHandlers } from './local_agents';
+import {
+  invokeHandlers as expenseWorkbenchHandlers,
+
+} from './expense_workbench';
 import { invokeHandlers as qualityHandlers } from './quality';
 import { invokeHandlers as connectorsHandlers } from './connectors';
+import { invokeHandlers as messagingHandlers } from './messaging';
 import { invokeHandlers as memoryHandlers } from './memory';
+import { invokeHandlers as cognitionHandlers } from './cognition';
 import { safeId } from '../storage';
 import { createLogger, logFromRenderer } from '../logger';
 import {
@@ -78,7 +119,7 @@ import {
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { shell } from 'electron';
-import { DEFAULT_USER_WORKSPACE, WS_ROOT, projectFilesDir } from '../paths';
+import { DEFAULT_USER_WORKSPACE, WS_ROOT, projectFilesDir, userMarketplaceSkillDir, userSkillsDir } from '../paths';
 import {
   chatAttachmentDirForConversation,
   chatAttachmentRelPath,
@@ -104,8 +145,8 @@ function markPreferencesDirty(): void {}
 function conversationProjectHint(args: Record<string, any>): string | null | undefined {
   if (!Object.prototype.hasOwnProperty.call(args, 'project_id')) return undefined;
   const raw = args.project_id;
-  if (raw === '') return null;
-  if (!safeId(raw)) throw new Error('invalid project id');
+  if (raw === '' || raw === null) return null;
+  if (typeof raw !== 'string' || !safeId(raw)) throw new Error('invalid project id');
   return raw;
 }
 
@@ -116,6 +157,18 @@ interface IpcContext {
 }
 
 type InvokeHandler = (payload: any, ctx: IpcContext) => Promise<any>;
+
+function boundedText(value: unknown, field: string, max: number, required = true): string {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (required && !text) throw new Error(`${field} required`);
+  if (text.length > max) throw new Error(`${field} too long`);
+  return text;
+}
+
+function boundedModelIds(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new Error('selectedModels must be array');
+  return value.slice(0, 100).map((model) => boundedText(model, 'model', 200)).filter(Boolean);
+}
 type StreamHandler = (
   payload: any,
   ctx: IpcContext,
@@ -739,7 +792,66 @@ async function _afterRecycleRestore(ctx: IpcContext, paths: string[]): Promise<v
 // Contract: `(payload, { userId, sender }) => result` where result is
 // merged into a `{ ok: true, ...result }` response. Throw to signal error.
 
+/**
+ * Resolve an installed skill's content directory for the workbench handlers.
+ *
+ * Checks the same roots in the same precedence order as
+ * `skills.getSkillForEdit` (marketplace before custom) so a baseline pins the
+ * tree the runtime would actually load. Returns null when the skill is absent,
+ * letting callers report a readable refusal instead of hashing a missing path.
+ */
+function _resolveWorkbenchSkillDir(userId: string, skillId: string): string | null {
+  const candidates = [
+    userMarketplaceSkillDir(userId, skillId),
+    path.join(userSkillsDir(userId), skillId),
+  ];
+  for (const dir of candidates) {
+    if (fs.existsSync(path.join(dir, 'SKILL.md'))) return dir;
+  }
+  return null;
+}
+
+async function ensureKstarWakeProjectionConfirmed(
+  userId: string,
+  cid: string,
+  requestId: string,
+  decision: unknown,
+  request: { kstar_decision?: { required?: unknown }; asset_confirmation_snapshot?: { projection_id?: unknown } },
+): Promise<{ ok: false; error: string } | null> {
+  if (decision !== 'approve') return null;
+  if (request.kstar_decision?.required !== true) return null;
+  if (typeof request.asset_confirmation_snapshot?.projection_id === 'string') return null;
+  const lifecycle = await readKstarTaskLifecycle(userId, cid);
+  const projectionId = lifecycle.requirement?.projectionId || lifecycle.projection?.id;
+  if (!projectionId || !safeId(projectionId)) {
+    return { ok: false, error: 'kstar wake request has no confirmed projection' };
+  }
+  const confirmed = await recallProjection.confirmAndApproveWake(userId, { cid, projectionId, wakeRequestId: requestId });
+  if (confirmed.ok !== true) return { ok: false, error: confirmed.error || 'projection wake confirmation failed' };
+  return null;
+}
+
 const invokeHandlers: Record<string, InvokeHandler> = {
+  'mate_agent.task.start': async (payload, ctx) => mateAgentBackend.mateIpcService.start(ctx.userId, payload),
+  'mate_agent.task.read': async (payload, ctx) => mateAgentBackend.mateIpcService.read(ctx.userId, payload),
+  'mate_agent.task.cancel': async (payload, ctx) => mateAgentBackend.mateIpcService.cancel(ctx.userId, payload),
+  'mate_agent.task.abort': async (payload, ctx) => mateAgentBackend.mateIpcService.abort(ctx.userId, payload),
+  'mate_agent.task.retry': async (payload, ctx) => mateAgentBackend.mateIpcService.retry(ctx.userId, payload),
+  'mate_agent.task.resume': async (payload, ctx) => mateAgentBackend.mateIpcService.resume(ctx.userId, payload),
+  'mate_agent.task.action': async (payload, ctx) => mateAgentBackend.mateIpcService.action(ctx.userId, payload),
+  'mate_agent.task.events': async (payload, ctx) => mateAgentBackend.mateIpcService.events(ctx.userId, payload),
+  'mate_agent.connector.list': async (_payload, ctx) => mateAgentBackend.mateIpcService.connectors(ctx.userId),
+  'mate_agent.kb.index': async (payload, ctx) => mateAgentBackend.mateIpcService.kbIndex(ctx.userId, payload),
+  'mate_agent.kb.search': async (payload, ctx) => mateAgentBackend.mateIpcService.kbSearch(ctx.userId, payload),
+  'mate_agent.kb.read': async (payload, ctx) => mateAgentBackend.mateIpcService.kbRead(ctx.userId, payload),
+  'mate_agent.kb.sources': async (_payload, ctx) => mateAgentBackend.mateIpcService.kbSources(ctx.userId),
+  'mate_agent.connector.tools': async (payload, ctx) => mateAgentBackend.mateIpcService.connectorTools(ctx.userId, payload),
+  'mate_agent.session.list': async (_payload, ctx) => ({ sessions: await mateAgentBackend.mateIpcService.sessions(ctx.userId) }),
+  'mate_agent.session.read': async (payload, ctx) => mateAgentBackend.mateIpcService.session(ctx.userId, payload),
+  'mate_agent.runtime.status': async (_payload, ctx) => mateAgentBackend.mateIpcService.runtimeStatus(ctx.userId),
+  'mate_agent.runtime.restart': async (_payload, ctx) => mateAgentBackend.mateIpcService.restartRuntime(ctx.userId),
+  'mate_agent.runtime.recover': async (_payload, ctx) => mateAgentBackend.mateIpcService.recover(ctx.userId),
+
   'user.init': async () => {
     const user = await users.getOrCreateSelfUser();
     return user;
@@ -821,6 +933,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
+  // ── Conversation aside: read-only side thread (see features/conversation_aside) ──
+  // Never touches the main transcript or the group-chat bus. Business logic
+  // stays in the feature; these handlers only validate and delegate.
+
+  'aside.list': async ({ cid, project_id }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    return {
+      ok: true,
+      turns: await conversationAside.listAsideTurns(ctx.userId, cid, project_id ?? null),
+    };
+  },
+
+  'aside.clear': async ({ cid, project_id }, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    await conversationAside.clearAsideTurns(ctx.userId, cid, project_id ?? null);
+    return { ok: true };
+  },
+
   'conversations.files.list': async ({ cid }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
     const projectId = await userWorkspace.resolveProjectIdForCid(ctx.userId, cid);
@@ -830,6 +960,43 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ? path.join(workspaceRoot, state.workspace_dir)
       : workspaceRoot;
     return conversationFiles.listWorkspaceFiles(root);
+  },
+
+  'conversations.clone': async (args, ctx) => {
+    const { cid } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const projectIdHint = conversationProjectHint(args);
+    const result = await conversationCopyMerge.cloneConversation(
+      ctx.userId,
+      cid,
+      Object.prototype.hasOwnProperty.call(args, 'project_id') ? { projectIdHint } : {},
+    );
+    return { conversation: result.newConversation };
+  },
+
+  'conversations.merge': async (args, ctx) => {
+    const { cids, title } = args;
+    if (!Array.isArray(cids) || cids.some((cid) => !safeId(cid))) {
+      throw new Error('invalid cids');
+    }
+    if (new Set(cids).size < 2) {
+      throw new Error('at least two source conversations are required');
+    }
+    if (typeof title !== 'string') throw new Error('invalid title');
+    const projectIdHint = conversationProjectHint(args);
+    const result = await conversationCopyMerge.mergeConversations(
+      ctx.userId,
+      cids,
+      {
+        title,
+        ...(Object.prototype.hasOwnProperty.call(args, 'project_id') ? { projectIdHint } : {}),
+      },
+    );
+    return {
+      conversation: result.newConversation,
+      summary: result.summaryMessage,
+      agent_summaries: result.agentSummaries,
+    };
   },
 
   'conversations.create': async ({ title = '', projectId = '' } = {}, ctx) => {
@@ -1219,10 +1386,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       agents.listAgentSummaries(),
       skills.listSkills(),
     ]);
-    const agentById = new Map(agentList.map((a: any) => [a.agent_id, a]));
+    const dispatchableAgents = agentList.filter((agent) => agents.isAgentChatDispatchable(agent));
+    const agentById = new Map(dispatchableAgents.map((agent) => [agent.agent_id, agent]));
     const skillById = new Map(skillList.map((s: any) => [s.id, s]));
     const pruned = await projects.pruneBindings(ctx.userId, projectId, {
-      agents: new Set(agentList.map((a: any) => a.agent_id)),
+      agents: new Set(dispatchableAgents.map((agent) => agent.agent_id)),
       skills: new Set(skillList.map((s: any) => s.id)),
     });
     if (!pruned.ok) throw new Error((pruned as { error: string }).error);
@@ -1245,7 +1413,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (kind === 'agent') {
       if (!agents.isValidAgentId(id)) throw new Error('invalid id');
       const agent = await agents.getAgent(id);
-      if (!agent || agent.enabled === false) throw new Error('agent_disabled');
+      if (!agents.isAgentChatDispatchable(agent)) throw new Error('agent_disabled');
       result = await projects.addAgentBinding(ctx.userId, projectId, id);
     } else if (kind === 'skill') {
       result = await projects.addSkillBinding(ctx.userId, projectId, id);
@@ -1285,7 +1453,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       skills.listSkills(),
     ]);
     return {
-      agents: agentList.filter((a: any) => a.enabled !== false && !boundAgents.has(a.agent_id)),
+      agents: agentList.filter((agent) => agents.isAgentChatDispatchable(agent) && !boundAgents.has(agent.agent_id)),
       skills: skillList.filter((s: any) => !boundSkills.has(s.id)),
     };
   },
@@ -1551,6 +1719,149 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, events: await companionRepro.readEvidence(ctx.userId, cid, Number(limit) || 50) };
   },
 
+  'p3394.validation.scan': async ({ skillId, target }, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skill id');
+    if (target !== 'installed-skill') throw new Error('unsupported validation target');
+    const skillDir = userMarketplaceSkillDir(ctx.userId, skillId);
+    return { ok: true, validation: await p3394.runSkillValidation(ctx.userId, {
+      skillId, target, skillDir, allowedRoots: [skillDir], boundary: 'real',
+    }) };
+  },
+
+  'p3394.validation.read': async ({ validationId }, ctx) => {
+    if (!safeId(validationId)) throw new Error('invalid validation id');
+    return { ok: true, validation: await p3394.readSkillValidation(ctx.userId, validationId) };
+  },
+
+  'p3394.execution.list': async (_args, ctx) => {
+    return { ok: true, executions: await executionRecords.list(ctx.userId) };
+  },
+
+  'p3394.execution.read': async ({ executionId }, ctx) => {
+    if (!safeId(executionId)) throw new Error('invalid execution id');
+    return { ok: true, execution: await executionRecords.read(ctx.userId, executionId) };
+  },
+
+  'p3394.contextReuseReceipt.read': async ({ executionId }, ctx) => {
+    if (!safeId(executionId)) throw new Error('invalid execution id');
+    return { ok: true, receipt: await p3394.readReceipt(ctx.userId, executionId) };
+  },
+
+  // ── Workbench: complex-delivery Workspace (US-20) ─────────────────────
+  // The gate decides whether the renderer may paint the Workspace body at
+  // all ("未达Gate不得展示空Workspace"). The skill tree is resolved here from
+  // the installed skill roots rather than accepted from the renderer, so a
+  // caller cannot point a baseline check at an arbitrary directory.
+
+  'workbench.baseline.freeze': async ({ assetId, version, source, evaluationContractRef }, ctx) => {
+    if (!safeId(assetId)) throw new Error('invalid asset id');
+    const skillDir = _resolveWorkbenchSkillDir(ctx.userId, assetId);
+    if (!skillDir) throw new Error('skill not found');
+    return {
+      ok: true,
+      baseline: await workbench.freezeBaseline(ctx.userId, {
+        assetId,
+        version: String(version || ''),
+        skillDir,
+        allowedRoots: [skillDir],
+        source,
+        ...(evaluationContractRef ? { evaluationContractRef: String(evaluationContractRef) } : {}),
+      }),
+    };
+  },
+
+  'workbench.baseline.list': async (_args, ctx) => {
+    return { ok: true, baselines: await workbench.listBaselines(ctx.userId) };
+  },
+
+  'workbench.baseline.verify': async ({ baselineId }, ctx) => {
+    if (!safeId(baselineId)) throw new Error('invalid baseline id');
+    const baseline = await workbench.readBaseline(ctx.userId, baselineId);
+    const skillDir = _resolveWorkbenchSkillDir(ctx.userId, baseline.skill_ref.asset_id);
+    if (!skillDir) return { ok: true, result: { ok: false, reason: 'unreadable' } };
+    return {
+      ok: true,
+      result: await workbench.verifyBaseline(ctx.userId, baselineId, skillDir, [skillDir]),
+    };
+  },
+
+  'workbench.gate.evaluate': async ({ baselineId, receiptExecutionId }, ctx) => {
+    if (!safeId(baselineId)) throw new Error('invalid baseline id');
+    if (!safeId(receiptExecutionId)) throw new Error('invalid execution id');
+    const baseline = await workbench.readBaseline(ctx.userId, baselineId);
+    const skillDir = _resolveWorkbenchSkillDir(ctx.userId, baseline.skill_ref.asset_id)
+      || userMarketplaceSkillDir(ctx.userId, baseline.skill_ref.asset_id);
+    return {
+      ok: true,
+      decision: await workbench.evaluateWorkspaceGate(ctx.userId, {
+        baselineId,
+        skillDir,
+        allowedRoots: [skillDir],
+        receiptExecutionId,
+      }),
+    };
+  },
+
+  'workbench.actionPlan.read': async ({ projectId }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid project id');
+    return { ok: true, plan: await workbench.projectActionPlan(ctx.userId, projectId) };
+  },
+
+  'workbench.taskRuns.list': async ({ projectId, taskId }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid project id');
+    if (!safeId(taskId)) throw new Error('invalid task id');
+    return { ok: true, runs: await workbench.listTaskRuns(ctx.userId, projectId, taskId) };
+  },
+
+  'workbench.taskRun.start': async ({ projectId, taskId, baselineId, role }, ctx) => {
+    if (!safeId(projectId)) throw new Error('invalid project id');
+    if (!safeId(taskId)) throw new Error('invalid task id');
+    if (!safeId(baselineId)) throw new Error('invalid baseline id');
+    const baseline = await workbench.readBaseline(ctx.userId, baselineId);
+    const skillDir = _resolveWorkbenchSkillDir(ctx.userId, baseline.skill_ref.asset_id);
+    if (!skillDir) return { ok: false, refusal: 'baseline_unreadable' };
+    const started = await workbench.startTaskRun(ctx.userId, {
+      projectId,
+      taskId,
+      baselineId,
+      skillDir,
+      allowedRoots: [skillDir],
+      role: role === 'agent-a' ? 'agent-a' : 'agent-b',
+      // The Workspace surface starts an in-process run; CLI-backed dispatch
+      // keeps flowing through the local-agents runner, which owns its own
+      // adapter identity.
+      kind: 'core-agent',
+      boundary: 'real',
+      permissionMode: 'ask',
+    });
+    // A refusal is a normal outcome (a drifted or absent baseline must block),
+    // so it is reported rather than thrown.
+    if (started.ok !== true) return { ok: false, refusal: started.reason };
+    return { ok: true, executionId: started.executionId, role: started.role };
+  },
+
+  'p3394.behaviorContrast.start': async ({ contrastId, receiptExecutionId, task, attachmentIds, conversationId, agentId, executionKind }, ctx) => {
+    if (contrastId !== undefined && !safeId(contrastId)) throw new Error('invalid contrast id');
+    if (!safeId(receiptExecutionId) || !safeId(conversationId)) throw new Error('invalid behavior contrast scope');
+    if (agentId !== undefined && !safeId(agentId)) throw new Error('invalid agent id');
+    if (!Array.isArray(attachmentIds)) throw new Error('invalid attachment ids');
+    const contrast = await p3394.runConfiguredBehaviorContrast(ctx.userId, {
+      ...(contrastId ? { contrastId } : {}),
+      receiptExecutionId,
+      task: boundedText(task, 'task', 100_000),
+      attachmentIds,
+      conversationId,
+      ...(agentId ? { agentId } : {}),
+      executionKind,
+    });
+    return { ok: true, contrast };
+  },
+
+  'p3394.behaviorContrast.read': async ({ contrastId }, ctx) => {
+    if (!safeId(contrastId)) throw new Error('invalid contrast id');
+    return { ok: true, contrast: await p3394.readBehaviorContrast(ctx.userId, contrastId) };
+  },
+
   'p3394.listWakeRequests': async ({ cid }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
     return { ok: true, requests: await p3394.listWakeRequests(ctx.userId, cid) };
@@ -1562,6 +1873,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (decision !== 'approve' && decision !== 'reject') throw new Error('invalid decision');
     const request = await p3394.getWakeRequest(ctx.userId, requestId);
     if (!request || request.conversation_id !== cid) throw new Error('wake request not found');
+    const kstarProjectionError = await ensureKstarWakeProjectionConfirmed(ctx.userId, cid, requestId, decision, request);
+    if (kstarProjectionError) return kstarProjectionError;
     return p3394.decideWakeRequest(ctx.userId, {
       requestId,
       decision,
@@ -1640,6 +1953,323 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'p3394.checkMigrationStatus': async (_args, ctx) => {
     return { ok: true, ...(await p3394.checkMigrationStatus(ctx.userId)) };
+  },
+
+  'recall.candidates.list': async (_args, ctx) => ({ ok: true, candidates: await recallCandidates.listRecallCandidates(ctx.userId) }),
+
+  'recall.sources.list': async ({ kinds, conversationId, limit } = {}, ctx) => {
+    if (kinds !== undefined && (
+      !Array.isArray(kinds)
+      || kinds.length > recallSources.COGNITION_CATALOG_KINDS.length
+      || kinds.some((kind) => !recallSources.COGNITION_CATALOG_KINDS.includes(kind))
+    )) throw new Error('invalid cognition source kinds');
+    if (conversationId !== undefined && !safeId(conversationId)) throw new Error('invalid conversation id');
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid source limit');
+    return {
+      ok: true,
+      sources: await recallSources.listCognitionSources(ctx.userId, {
+        ...(kinds !== undefined ? { kinds } : {}),
+        ...(conversationId !== undefined ? { conversationId } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      }),
+    };
+  },
+
+  'recall.views.list': async ({ purpose, workspaceId, includeExpired, limit } = {}, ctx) => {
+    if (purpose !== undefined && purpose !== 'conversation_capture' && purpose !== 'task_context') throw new Error('invalid recall view purpose');
+    if (workspaceId !== undefined && !safeId(workspaceId)) throw new Error('invalid workspace id');
+    if (includeExpired !== undefined && typeof includeExpired !== 'boolean') throw new Error('invalid include expired');
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid recall view limit');
+    return {
+      ok: true,
+      views: await recallViews.listRecallViews(ctx.userId, {
+        ...(purpose !== undefined ? { purpose } : {}),
+        ...(workspaceId !== undefined ? { workspaceId } : {}),
+        ...(includeExpired !== undefined ? { includeExpired } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      }),
+    };
+  },
+
+  'recall.views.read': async ({ viewId } = {}, ctx) => {
+    if (!safeId(viewId)) throw new Error('invalid recall view id');
+    return { ok: true, view: await recallViews.readRecallView(ctx.userId, viewId) };
+  },
+
+  'recall.teaching.list': async ({ conversationId, status, limit } = {}, ctx) => {
+    if (conversationId !== undefined && !safeId(conversationId)) throw new Error('invalid conversation id');
+    if (status !== undefined && status !== 'active' && status !== 'revoked') throw new Error('invalid teaching status');
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid teaching limit');
+    return {
+      ok: true,
+      signals: await recallTeaching.listUserTeachingSignals(ctx.userId, {
+        ...(conversationId !== undefined ? { conversationId } : {}),
+        ...(status !== undefined ? { status } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      }),
+    };
+  },
+
+  'recall.teaching.revoke': async ({ signalId } = {}, ctx) => {
+    if (!safeId(signalId)) throw new Error('invalid teaching signal id');
+    return { ok: true, signal: await recallTeaching.revokeUserTeachingSignal(ctx.userId, signalId) };
+  },
+
+  'recall.captures.list': async ({ limit, statuses, executionPolicy, cursor } = {}, ctx) => {
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid capture limit');
+    const validStatuses = new Set([
+      'waiting_quiet', 'waiting_completion', 'waiting_manual', 'scheduled', 'queued', 'extracting', 'paused',
+      'review_ready', 'no_candidate', 'configuration_required', 'failed', 'cancelled',
+    ]);
+    if (statuses !== undefined && (
+      !Array.isArray(statuses)
+      || statuses.length > validStatuses.size
+      || statuses.some((status) => typeof status !== 'string' || !validStatuses.has(status))
+    )) throw new Error('invalid recall capture statuses');
+    if (executionPolicy !== undefined && !['smart', 'immediate', 'nightly', 'manual'].includes(executionPolicy)) {
+      throw new Error('invalid recall capture execution policy');
+    }
+    if (cursor !== undefined && (typeof cursor !== 'string' || !cursor || cursor.length > 500)) {
+      throw new Error('invalid recall capture cursor');
+    }
+    const page = await recallCaptures.queryRecallCaptures(ctx.userId, {
+      ...(limit === undefined ? {} : { limit }),
+      ...(statuses === undefined ? {} : { statuses }),
+      ...(executionPolicy === undefined ? {} : { executionPolicy }),
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    return { ok: true, ...page };
+  },
+
+  'recall.captures.read': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, capture: await recallCaptures.readRecallCapture(ctx.userId, captureId) };
+  },
+
+  'recall.captures.retry': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, capture: await recallCaptures.retryRecallCapture(ctx.userId, captureId) };
+  },
+
+  'recall.captures.pause': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, capture: await recallCaptures.pauseRecallCapture(ctx.userId, captureId) };
+  },
+
+  'recall.captures.resume': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, capture: await recallCaptures.resumeRecallCapture(ctx.userId, captureId) };
+  },
+
+  'recall.captures.cancel': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, capture: await recallCaptures.cancelRecallCapture(ctx.userId, captureId) };
+  },
+
+  'recall.captures.runNow': async ({ captureId } = {}, ctx) => {
+    if (!safeId(captureId)) throw new Error('invalid recall capture id');
+    return { ok: true, capture: await recallCaptures.runRecallCaptureNow(ctx.userId, captureId) };
+  },
+
+  'recall.captures.manualCreate': async ({ conversationId } = {}, ctx) => {
+    if (!safeId(conversationId)) throw new Error('invalid conversation id');
+    return {
+      ok: true,
+      capture: await recallCaptures.queueManualRecallCaptureFromConversation(ctx.userId, conversationId),
+    };
+  },
+
+  'recall.captures.settings.get': async (_input, ctx) => {
+    const [settings, model] = await Promise.all([
+      recallCaptureSettings.readRecallCaptureSettings(ctx.userId),
+      auth.getConfig(),
+    ]);
+    return {
+      ok: true,
+      settings,
+      model: {
+        ...model,
+        configured: auth.hasConfiguredModel().configured,
+        authorizationRequired: Boolean(auth.getConfiguredModelOAuthExpiredMessage()),
+      },
+    };
+  },
+
+  'recall.captures.settings.update': async (input = {}, ctx) => {
+    const settings = await recallCaptureSettings.updateRecallCaptureSettings(ctx.userId, input);
+    return { ok: true, settings };
+  },
+
+  'recall.candidates.importPersonalOntology': async ({ candidateId } = {}, ctx) => {
+    if (!safeId(candidateId)) throw new Error('invalid personal ontology candidate id');
+    return { ok: true, candidate: await recallCandidates.importPersonalOntologyCandidate(ctx.userId, candidateId) };
+  },
+
+  'recall.candidates.read': async ({ candidateId } = {}, ctx) => {
+    if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
+    return { ok: true, candidate: await recallCandidates.readRecallCandidate(ctx.userId, candidateId) };
+  },
+
+  'recall.candidates.save': async ({ judgment, summary, uncertainty, suggestedType, suggestedScope, sourceRefs } = {}, ctx) => {
+    if (typeof judgment !== 'string' || judgment.length > 4_000) throw new Error('invalid recall candidate judgment');
+    if (summary !== undefined && (typeof summary !== 'string' || summary.length > 1_000)) throw new Error('invalid recall candidate summary');
+    if (uncertainty !== undefined && (typeof uncertainty !== 'string' || uncertainty.length > 1_000)) throw new Error('invalid recall candidate uncertainty');
+    if (suggestedType !== 'personal' && suggestedType !== 'rule' && suggestedType !== 'template' && suggestedType !== 'skill_method') throw new Error('invalid recall candidate type');
+    if (typeof suggestedScope !== 'string' || suggestedScope.length > 500) throw new Error('invalid recall candidate scope');
+    if (!Array.isArray(sourceRefs) || sourceRefs.length > 100) throw new Error('invalid recall candidate source refs');
+    return { ok: true, candidate: await recallCandidates.saveRecallCandidate(ctx.userId, { judgment, ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, sourceRefs }) };
+  },
+
+  'recall.candidates.update': async ({ candidateId, judgment, summary, uncertainty, suggestedType, suggestedScope, sourceRefs } = {}, ctx) => {
+    if (!safeId(candidateId) || typeof judgment !== 'string' || judgment.length > 4_000 || (summary !== undefined && (typeof summary !== 'string' || summary.length > 1_000)) || (uncertainty !== undefined && (typeof uncertainty !== 'string' || uncertainty.length > 1_000)) || (suggestedType !== 'personal' && suggestedType !== 'rule' && suggestedType !== 'template' && suggestedType !== 'skill_method') || typeof suggestedScope !== 'string' || suggestedScope.length > 500 || !Array.isArray(sourceRefs) || sourceRefs.length > 100) throw new Error('invalid recall candidate update');
+    return { ok: true, candidate: await recallCandidates.updateRecallCandidate(ctx.userId, candidateId, { judgment, ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, sourceRefs }) };
+  },
+
+  'recall.candidates.defer': async ({ candidateId, note } = {}, ctx) => {
+    if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
+    if (note !== undefined && (typeof note !== 'string' || note.length > 1_000)) throw new Error('invalid recall candidate note');
+    return { ok: true, candidate: await recallCandidates.deferRecallCandidate(ctx.userId, candidateId, note) };
+  },
+
+  'recall.candidates.resume': async ({ candidateId } = {}, ctx) => {
+    if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
+    return { ok: true, candidate: await recallCandidates.resumeRecallCandidate(ctx.userId, candidateId) };
+  },
+
+  'recall.candidates.reject': async ({ candidateId, note } = {}, ctx) => {
+    if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
+    if (note !== undefined && (typeof note !== 'string' || note.length > 1_000)) throw new Error('invalid recall candidate note');
+    return { ok: true, candidate: await recallCandidates.rejectRecallCandidate(ctx.userId, candidateId, note) };
+  },
+
+  'recall.candidates.promote': async ({ candidateId } = {}, ctx) => {
+    if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
+    return { ok: true, ...(await recallCandidates.promoteRecallCandidate(ctx.userId, candidateId)) };
+  },
+
+  'recall.assets.list': async (_args, ctx) => ({ ok: true, assets: await recallAssets.listAbilityAssets(ctx.userId) }),
+  'recall.assets.read': async ({ assetId } = {}, ctx) => { if (!safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, asset: await recallAssets.readAbilityAsset(ctx.userId, assetId) }; },
+  'recall.assets.pause': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid recall asset pause'); return { ok: true, asset: await recallAssets.pauseAbilityAsset(ctx.userId, assetId, note) }; },
+  'recall.assets.revoke': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid recall asset revoke'); return { ok: true, asset: await recallAssets.revokeAbilityAsset(ctx.userId, assetId, note) }; },
+  'recall.assets.versions': async ({ assetId } = {}, ctx) => { if (!safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, versions: await recallAssets.listAbilityAssetVersions(ctx.userId, assetId), audit: await recallAssets.listAbilityAssetAudit(ctx.userId, assetId) }; },
+
+  'recall.workspaceRefs.list': async ({ assetId } = {}, ctx) => { if (assetId !== undefined && !safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, references: await recallWorkspaceRefs.listWorkspaceAssetReferences(ctx.userId, assetId) }; },
+  'recall.workspaceRefs.add': async ({ assetId, workspaceId, scope, enabled } = {}, ctx) => { if (!safeId(assetId) || !safeId(workspaceId) || typeof scope !== 'string' || (enabled !== undefined && typeof enabled !== 'boolean')) throw new Error('invalid workspace reference'); return { ok: true, reference: await recallWorkspaceRefs.addWorkspaceAssetReference(ctx.userId, { assetId, workspaceId, scope, ...(enabled !== undefined ? { enabled } : {}) }) }; },
+  'recall.workspaceRefs.update': async ({ id, scope, enabled } = {}, ctx) => { if (!safeId(id) || (scope !== undefined && typeof scope !== 'string') || (enabled !== undefined && typeof enabled !== 'boolean')) throw new Error('invalid workspace reference'); return { ok: true, reference: await recallWorkspaceRefs.updateWorkspaceAssetReference(ctx.userId, id, { ...(scope !== undefined ? { scope } : {}), ...(enabled !== undefined ? { enabled } : {}) }) }; },
+  'recall.workspaceRefs.remove': async ({ id } = {}, ctx) => { if (!safeId(id)) throw new Error('invalid workspace reference id'); await recallWorkspaceRefs.removeWorkspaceAssetReference(ctx.userId, id); return { ok: true }; },
+
+  'recall.projections.preview': async ({ taskRunId, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(taskRunId) || (workspaceId !== undefined && !safeId(workspaceId)) || typeof purpose !== 'string' || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid recall projection'); return { ok: true, projection: await recallProjection.previewContextProjection(ctx.userId, { taskRunId, ...(workspaceId !== undefined ? { workspaceId } : {}), purpose, ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }) }; },
+  'recall.projections.list': async ({ workspaceId, status, includeExpired, limit } = {}, ctx) => {
+    if (workspaceId !== undefined && !safeId(workspaceId)) throw new Error('invalid workspace id');
+    if (status !== undefined && !['preview', 'confirmed', 'deferred', 'rejected', 'expired', 'revoked'].includes(status)) throw new Error('invalid projection status');
+    if (includeExpired !== undefined && typeof includeExpired !== 'boolean') throw new Error('invalid include expired');
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid projection limit');
+    return {
+      ok: true,
+      projections: await recallProjection.listContextProjections(ctx.userId, {
+        ...(workspaceId !== undefined ? { workspaceId } : {}),
+        ...(status !== undefined ? { status } : {}),
+        ...(includeExpired !== undefined ? { includeExpired } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      }),
+    };
+  },
+  'recall.projections.confirm': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.confirmContextProjection(ctx.userId, projectionId) }; },
+  'recall.projections.revise': async ({ projectionId, purpose, addAssetIds, removeAssetIds, decisionNote } = {}, ctx) => { if (!safeId(projectionId) || (purpose !== undefined && typeof purpose !== 'string') || (addAssetIds !== undefined && (!Array.isArray(addAssetIds) || addAssetIds.length > 100 || addAssetIds.some((id) => !safeId(id)))) || (removeAssetIds !== undefined && (!Array.isArray(removeAssetIds) || removeAssetIds.length > 100 || removeAssetIds.some((id) => !safeId(id)))) || (decisionNote !== undefined && typeof decisionNote !== 'string')) throw new Error('invalid projection revision'); return { ok: true, projection: await recallProjection.reviseContextProjection(ctx.userId, projectionId, { ...(purpose !== undefined ? { purpose } : {}), ...(addAssetIds !== undefined ? { addAssetIds } : {}), ...(removeAssetIds !== undefined ? { removeAssetIds } : {}), ...(decisionNote !== undefined ? { decisionNote } : {}) }) }; },
+  'recall.projections.availableAssets': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, assets: await recallProjection.listAvailableProjectionAssets(ctx.userId, projectionId) }; },
+  'recall.projections.confirmAndApproveWake': async ({ cid, projectionId, wakeRequestId } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId) || !safeId(wakeRequestId)) throw new Error('invalid projection wake confirmation'); return recallProjection.confirmAndApproveWake(ctx.userId, { cid, projectionId, wakeRequestId }); },
+  'recall.projections.defer': async ({ projectionId, note } = {}, ctx) => { if (!safeId(projectionId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.deferContextProjection(ctx.userId, projectionId, note) }; },
+  'recall.projections.reject': async ({ projectionId, note } = {}, ctx) => { if (!safeId(projectionId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.rejectContextProjection(ctx.userId, projectionId, note) }; },
+  'recall.projections.card': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, card: await recallProjectionCard.buildProjectionCard(ctx.userId, projectionId) }; },
+  'recall.projections.postCard': async ({ cid, projectionId } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId)) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.postProjectionCardMessage(ctx.userId, { cid, projectionId }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), ...(payload.card ? { recall_projection_card: { projectionId: payload.card.projectionId } } : {}) })).msg?.id || '' }) })) }; },
+  'recall.projections.previewAndPostCard': async ({ cid, taskRunId, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(cid) || !safeId(taskRunId) || (workspaceId !== undefined && !safeId(workspaceId)) || typeof purpose !== 'string' || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.previewAndPostProjectionCard(ctx.userId, { cid, taskRunId, ...(workspaceId !== undefined ? { workspaceId } : {}), purpose, ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId } })).msg?.id || '' }) })) }; },
+  'recall.projections.previewAndPostForNextTask': async ({ cid, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(cid) || (workspaceId !== undefined && !safeId(workspaceId)) || (purpose !== undefined && typeof purpose !== 'string') || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.previewAndPostProjectionCardForNextTask(ctx.userId, { cid, ...(workspaceId !== undefined ? { workspaceId } : {}), ...(purpose !== undefined ? { purpose } : {}), ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId } })).msg?.id || '' }) })), }; },
+  'recall.projections.reviseAndPostCard': async ({ cid, projectionId, purpose, addAssetIds, removeAssetIds, decisionNote } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId) || (purpose !== undefined && typeof purpose !== 'string') || (addAssetIds !== undefined && (!Array.isArray(addAssetIds) || addAssetIds.length > 100 || addAssetIds.some((id) => !safeId(id)))) || (removeAssetIds !== undefined && (!Array.isArray(removeAssetIds) || removeAssetIds.length > 100 || removeAssetIds.some((id) => !safeId(id)))) || (decisionNote !== undefined && typeof decisionNote !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.reviseAndPostProjectionCard(ctx.userId, { cid, projectionId, ...(purpose !== undefined ? { purpose } : {}), ...(addAssetIds !== undefined ? { addAssetIds } : {}), ...(removeAssetIds !== undefined ? { removeAssetIds } : {}), ...(decisionNote !== undefined ? { decisionNote } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId } })).msg?.id || '' }) })) }; },
+  'recall.projections.read': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.readContextProjection(ctx.userId, projectionId) }; },
+
+  'recall.proofs.transfer.prepare': async ({ projectionId, executionId, expectedResultSnapshot } = {}, ctx) => { if (!safeId(projectionId) || !safeId(executionId) || typeof expectedResultSnapshot !== 'string' || expectedResultSnapshot.length > 4_000) throw new Error('invalid transfer proof'); return { ok: true, proof: await recallProofs.prepareTransferProof(ctx.userId, { projectionId, executionId, expectedResultSnapshot }) }; },
+  'recall.proofs.transfer.complete': async ({ proofId, status, receiptId, observedTransfer } = {}, ctx) => { if (!safeId(proofId) || (status !== 'succeeded' && status !== 'degraded' && status !== 'rejected') || (receiptId !== undefined && !safeId(receiptId)) || typeof observedTransfer !== 'string' || observedTransfer.length > 4_000) throw new Error('invalid transfer completion'); return { ok: true, proof: await recallProofs.completeTransferProof(ctx.userId, proofId, { status, ...(receiptId !== undefined ? { receiptId } : {}), observedTransfer }) }; },
+  'recall.proofs.effectiveness.evaluate': async ({ transferProofId, outcome, observedResult, evidenceRefs } = {}, ctx) => { if (!safeId(transferProofId) || !['better','no_improvement','worse','insufficient_evidence','invalid','rework'].includes(outcome) || typeof observedResult !== 'string' || observedResult.length > 4_000 || !Array.isArray(evidenceRefs) || evidenceRefs.length > 100) throw new Error('invalid effectiveness proof'); return { ok: true, proof: await recallProofs.evaluateEffectivenessProof(ctx.userId, { transferProofId, outcome, observedResult, evidenceRefs }) }; },
+
+  'recall.proofs.effectiveness.feedback': async ({ transferProofId, feedback, note, evidenceRefs } = {}, ctx) => { if (!safeId(transferProofId) || !['positive', 'neutral', 'negative', 'invalid', 'rework'].includes(feedback) || (note !== undefined && typeof note !== 'string') || (evidenceRefs !== undefined && !Array.isArray(evidenceRefs))) throw new Error('invalid effectiveness feedback'); return { ok: true, proof: await effectivenessFeedback.recordEffectivenessFeedback(ctx.userId, { transferProofId, feedback, ...(note !== undefined ? { note } : {}), ...(evidenceRefs !== undefined ? { evidenceRefs } : {}) }) }; },
+  'recall.proofs.effectiveness.feedbackForTask': async ({ taskRunId, feedback, note, evidenceRefs } = {}, ctx) => { if (!safeId(taskRunId) || !['positive', 'neutral', 'negative', 'invalid', 'rework'].includes(feedback) || (note !== undefined && typeof note !== 'string') || (evidenceRefs !== undefined && !Array.isArray(evidenceRefs))) throw new Error('invalid effectiveness feedback'); return { ok: true, ...(await effectivenessFeedback.recordTaskEffectivenessFeedback(ctx.userId, { taskRunId, feedback, ...(note !== undefined ? { note } : {}), ...(evidenceRefs !== undefined ? { evidenceRefs } : {}) })) }; },
+  'recall.tree.read': async (_args, ctx) => ({ ok: true, tree: await recallTree.readCognitionTree(ctx.userId) }),
+  'recall.tree.rebuild': async (_args, ctx) => ({ ok: true, tree: await recallTree.rebuildCognitionTree(ctx.userId) }),
+  'recall.usage.list': async ({ assetId } = {}, ctx) => { if (assetId !== undefined && !safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, usage: await recallUsage.listRecallUsage(ctx.userId, assetId) }; },
+
+  'cognition.dashboard.read': async (_args, ctx) => {
+    return { ok: true, dashboard: await cognition.buildCognitionDashboard(ctx.userId) };
+  },
+
+  'cognition.candidates.list': async ({ status, type, conversationId, skillId, limit } = {}, ctx) => {
+    if (status !== undefined && status !== 'pending' && status !== 'accepted' && status !== 'rejected') throw new Error('invalid cognition candidate status');
+    if (type !== undefined && type !== 'preference' && type !== 'ontology' && type !== 'rule' && type !== 'experience' && type !== 'skill_evolution') throw new Error('invalid cognition candidate type');
+    if (conversationId !== undefined && !safeId(conversationId)) throw new Error('invalid conversation id');
+    if (skillId !== undefined && !safeId(skillId)) throw new Error('invalid skill id');
+    const n = limit === undefined ? undefined : Number(limit);
+    return { ok: true, candidates: await cognition.listCognitionCandidates(ctx.userId, {
+      ...(status !== undefined ? { status } : {}),
+      ...(type !== undefined ? { type } : {}),
+      ...(conversationId !== undefined ? { conversationId } : {}),
+      ...(skillId !== undefined ? { skillId } : {}),
+      ...(Number.isFinite(n) && n > 0 ? { limit: Math.min(n, 200) } : {}),
+    }) };
+  },
+
+  'cognition.candidates.decide': async ({ source, candidateId, decision, reason, notes, toGlobalMemory, toGroupIds } = {}, ctx) => {
+    if (source !== 'personal_ontology' && source !== 'p3394_experience' && source !== 'p3394_patch') throw new Error('invalid cognition candidate source');
+    if (!safeId(candidateId)) throw new Error('invalid candidate id');
+    if (decision !== 'accept' && decision !== 'reject') throw new Error('invalid cognition candidate decision');
+    if (toGroupIds !== undefined && (!Array.isArray(toGroupIds) || toGroupIds.some((id) => !safeId(id)))) throw new Error('invalid group ids');
+    return { ok: true, result: await cognition.decideCognitionCandidate(ctx.userId, {
+      source,
+      candidateId,
+      decision,
+      ...(typeof reason === 'string' ? { reason } : {}),
+      ...(typeof notes === 'string' ? { notes } : {}),
+      ...(typeof toGlobalMemory === 'boolean' ? { toGlobalMemory } : {}),
+      ...(Array.isArray(toGroupIds) ? { toGroupIds } : {}),
+    }) };
+  },
+
+  'cognition.receipts.list': async ({ status, agentId, conversationId, skillId, limit } = {}, ctx) => {
+    if (status !== undefined && status !== 'prepared' && status !== 'succeeded' && status !== 'degraded' && status !== 'rejected') throw new Error('invalid cognition receipt status');
+    if (agentId !== undefined && !safeId(agentId)) throw new Error('invalid agent id');
+    if (conversationId !== undefined && !safeId(conversationId)) throw new Error('invalid conversation id');
+    if (skillId !== undefined && !safeId(skillId)) throw new Error('invalid skill id');
+    const n = limit === undefined ? undefined : Number(limit);
+    return { ok: true, receipts: await cognition.listCognitionReuseReceipts(ctx.userId, {
+      ...(status !== undefined ? { status } : {}),
+      ...(agentId !== undefined ? { agentId } : {}),
+      ...(conversationId !== undefined ? { conversationId } : {}),
+      ...(skillId !== undefined ? { skillId } : {}),
+      ...(Number.isFinite(n) && n > 0 ? { limit: Math.min(n, 200) } : {}),
+    }) };
+  },
+
+  'cognition.receipts.read': async ({ executionId } = {}, ctx) => {
+    if (!safeId(executionId)) throw new Error('invalid execution id');
+    return { ok: true, receipt: await cognition.readCognitionReuseReceipt(ctx.userId, executionId) };
+  },
+
+  'cognition.assets.list': async ({ type, limit } = {}, ctx) => {
+    if (type !== undefined && type !== 'skill' && type !== 'knowledge' && type !== 'ontology' && type !== 'evaluation') throw new Error('invalid cognition asset type');
+    const n = limit === undefined ? undefined : Number(limit);
+    return { ok: true, assets: await cognition.listCognitionAssets(ctx.userId, {
+      ...(type !== undefined ? { type } : {}),
+      ...(Number.isFinite(n) && n > 0 ? { limit: Math.min(n, 500) } : {}),
+    }) };
+  },
+
+  'cognition.skills.summary': async ({ skillId } = {}, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skill id');
+    return { ok: true, summary: await cognition.getSkillCognitionSummary(ctx.userId, skillId) };
+  },
+
+  'cognition.skills.rollback': async ({ skillId, version } = {}, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skill id');
+    if (typeof version !== 'string' || !version.trim() || !/^[0-9]+(?:\.[0-9]+){0,3}$/.test(version.trim())) throw new Error('invalid skill version');
+    return { ok: true, result: await cognition.rollbackSkillCognitionVersion(ctx.userId, skillId, version.trim()) };
   },
 
   'groupChat.abort': async ({ cid }, ctx) => {
@@ -2109,6 +2739,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'personalOntology.candidates.rejectBatch': async ({ candidateIds, reason }, ctx) => {
     if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
     return personalOntologyCandidates.rejectCandidates(ctx.userId, candidateIds, reason);
+  },
+  // onboarding 第 4 步：把抽取出的候选批量入池（不确认，等勾选后走 confirm）。
+  // 只做忠实映射与写入，返回实际写入的 candidate_ids 供前端记账。
+  'personalOntology.candidates.addFromOnboarding': async ({ candidates } = {}, ctx) => {
+    if (!Array.isArray(candidates)) throw new Error('candidates must be array');
+    return personalOntologyCandidates.addCandidates(ctx.userId, candidates);
   },
 
   // ── Personal Ontology Groups ("记忆分组") ──
@@ -2741,6 +3377,48 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { enabled: appConfig.setMetacognitionEnabled(!!enabled) };
   },
 
+  // First-run onboarding marker (machine-local, NOT cloud-synced — stored
+  // under WS_ROOT/onboarding-state.json, shared across uids). The renderer's
+  // boot.js checks `completed` after restoring the last view and lifts the
+  // four-step walkthrough overlay only when it is false; the last step calls
+  // setOnboarding to persist true so it never re-appears on this device.
+  'prefs.getOnboarding': async () => ({
+    completed: onboardingState.getOnboardingCompleted(),
+  }),
+  'prefs.setOnboarding': async ({ completed }: { completed?: unknown } = {}) => ({
+    completed: onboardingState.setOnboardingCompleted(completed !== false),
+  }),
+
+  // 60-second journey marker (machine-local, NOT cloud-synced — stored
+  // under WS_ROOT/journey-state.json, shared across uids). The renderer's
+  // journey.js checks `completed` and only starts the journey when it is false.
+  'prefs.getJourney': async () => ({
+    completed: journeyState.getJourneyCompleted(),
+  }),
+  'prefs.setJourney': async ({ completed }: { completed?: unknown } = {}) => ({
+    completed: journeyState.setJourneyCompleted(completed !== false),
+  }),
+
+  // ── Cognition extraction from sessions (onboarding) ──
+  // Runs through a locally-detected CLI Agent (already authenticated on
+  // the user's machine), so onboarding needs no API key. We prefer
+  // `claude` when available, else fall back to the first available CLI.
+  'cognition.extractFromSession': async ({ sessionFilePath }: { sessionFilePath?: unknown } = {}, ctx) => {
+    if (typeof sessionFilePath !== 'string') throw new Error('session file path is required');
+    const entries = await detectAll();
+    const available = entries.filter(e => e.available);
+    const chosen = available.find(e => e.type === 'claude') ?? available[0];
+    if (!chosen) {
+      throw new Error('未检测到可用的本地 CLI Agent。请先安装并登录 Claude Code 等 Agent 后重试。');
+    }
+    const { candidates, diagnostic } = await cognitionExtraction.extractCognitionsFromSession({
+      sessionFilePath,
+      uid: ctx.userId,
+      cli: chosen.type,
+    });
+    return { ok: true, candidates, diagnostic, cli: chosen.type };
+  },
+
   // ── Auth / model config (settings page) ──
   'auth.listProviders': async () => auth.listProviders(),
   'auth.listModels': async ({ provider }) => auth.listModels(provider),
@@ -2769,6 +3447,197 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'auth.removeEntry':     async ({ entryId }) => auth.removeEntry(entryId),
   'auth.reorderEntries':  async ({ orderedIds }) => auth.reorderEntries(orderedIds || []),
   'auth.updateEntryModel':async ({ entryId, model }) => auth.updateEntryModel(entryId, model),
+
+  // ── Unified model authorization workflow ──
+  'modelAuthorizations.list': async (_args, ctx) =>
+    auth.listAuthorizationSummaries(ctx.userId),
+  'modelAuthorizations.prepareCcSwitch': async ({ externalId }, ctx) =>
+    modelAuthorizationDiscovery.prepareCcSwitchAuthorization(
+      ctx.userId,
+      boundedText(externalId, 'externalId', 160),
+    ),
+  'modelAuthorizations.discover': async (args, ctx) => {
+    const kind = boundedText(args?.kind, 'kind', 40);
+    if (kind === 'builtin') {
+      return modelAuthorizationDiscovery.discoverAuthorizationModels(ctx.userId, {
+        kind,
+        providerId: boundedText(args.providerId, 'providerId', 120),
+      });
+    }
+    if (kind === 'ccswitch_draft') {
+      return modelAuthorizationDiscovery.discoverAuthorizationModels(ctx.userId, {
+        kind,
+        draftId: boundedText(args.draftId, 'draftId', 120),
+      });
+    }
+    if (kind === 'custom_api_key') {
+      const protocol = boundedText(args.protocol, 'protocol', 20);
+      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
+      return modelAuthorizationDiscovery.discoverAuthorizationModels(ctx.userId, {
+        kind,
+        protocol,
+        baseUrl: boundedText(args.baseUrl, 'baseUrl', 500),
+        apiKey: boundedText(args.apiKey, 'apiKey', 20_000),
+      });
+    }
+    throw new Error('invalid discovery kind');
+  },
+  'modelAuthorizations.testDraft': async (args, ctx) => {
+    const kind = boundedText(args?.kind, 'kind', 40);
+    const model = boundedText(args?.model, 'model', 200);
+    if (kind === 'ccswitch_draft') {
+      return modelAuthorizationDiscovery.testPreparedAuthorizationDraft(ctx.userId, {
+        kind,
+        draftId: boundedText(args.draftId, 'draftId', 120),
+        model,
+      });
+    }
+    if (kind === 'oauth') {
+      return modelAuthorizationDiscovery.testPreparedAuthorizationDraft(ctx.userId, {
+        kind,
+        providerId: boundedText(args.providerId, 'providerId', 120),
+        profileId: boundedText(args.profileId, 'profileId', 180),
+        model,
+      });
+    }
+    if (kind === 'builtin_api_key') {
+      return modelAuthorizationDiscovery.testPreparedAuthorizationDraft(ctx.userId, {
+        kind,
+        providerId: boundedText(args.providerId, 'providerId', 120),
+        apiKey: boundedText(args.apiKey, 'apiKey', 20_000),
+        baseUrl: boundedText(args.baseUrl, 'baseUrl', 500, false) || undefined,
+        model,
+      });
+    }
+    if (kind === 'custom_api_key') {
+      const protocol = boundedText(args.protocol, 'protocol', 20);
+      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
+      return modelAuthorizationDiscovery.testPreparedAuthorizationDraft(ctx.userId, {
+        kind,
+        protocol,
+        baseUrl: boundedText(args.baseUrl, 'baseUrl', 500),
+        apiKey: boundedText(args.apiKey, 'apiKey', 20_000),
+        model,
+      });
+    }
+    throw new Error('invalid test draft kind');
+  },
+  'modelAuthorizations.complete': async (args, ctx) => {
+    const selectedModels = boundedModelIds(args?.selectedModels);
+    const defaultModel = boundedText(args?.defaultModel, 'defaultModel', 200);
+    const requestId = boundedText(args?.requestId, 'requestId', 120);
+    if (args?.source === 'ccswitch') {
+      return modelAuthorizationDiscovery.completePreparedCcSwitchAuthorization(ctx.userId, {
+        draftId: boundedText(args.draftId, 'draftId', 120), requestId, selectedModels, defaultModel,
+      });
+    }
+    if (args?.providerKind === 'builtin' && args?.authType === 'oauth') {
+      return auth.completeAuthorization(ctx.userId, {
+        requestId, selectedModels, defaultModel,
+        authType: 'oauth', source: 'manual', providerKind: 'builtin',
+        providerId: boundedText(args.providerId, 'providerId', 120),
+        profileId: boundedText(args.profileId, 'profileId', 180),
+      });
+    }
+    if (args?.providerKind === 'builtin' && args?.authType === 'api_key') {
+      return auth.completeAuthorization(ctx.userId, {
+        requestId, selectedModels, defaultModel,
+        authType: 'api_key', source: 'manual', providerKind: 'builtin',
+        providerId: boundedText(args.providerId, 'providerId', 120),
+        label: boundedText(args.label, 'label', 40, false) || undefined,
+        apiKey: boundedText(args.apiKey, 'apiKey', 20_000),
+        baseUrl: boundedText(args.baseUrl, 'baseUrl', 500, false) || undefined,
+      });
+    }
+    if (args?.providerKind === 'custom' && args?.authType === 'api_key') {
+      const protocol = boundedText(args?.customProvider?.protocol, 'protocol', 20);
+      if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') throw new Error('invalid protocol');
+      return auth.completeAuthorization(ctx.userId, {
+        requestId, selectedModels, defaultModel,
+        authType: 'api_key', source: 'manual', providerKind: 'custom',
+        customProvider: {
+          id: boundedText(args.customProvider.id, 'id', 120, false) || undefined,
+          name: boundedText(args.customProvider.name, 'name', 60),
+          protocol,
+          baseUrl: boundedText(args.customProvider.baseUrl, 'baseUrl', 500),
+          apiKey: boundedText(args.customProvider.apiKey, 'apiKey', 20_000),
+        },
+      });
+    }
+    throw new Error('invalid authorization completion');
+  },
+  'modelAuthorizations.removeModel': async ({ authorizationId, entryId }, ctx) =>
+    auth.removeAuthorizationModel(
+      ctx.userId,
+      boundedText(authorizationId, 'authorizationId', 180),
+      boundedText(entryId, 'entryId', 180),
+    ),
+  'modelAuthorizations.remove': async ({ authorizationId }, ctx) =>
+    auth.removeAuthorization(ctx.userId, boundedText(authorizationId, 'authorizationId', 180)),
+
+  // ── Unified custom model providers ──
+  'customProviders.list': async (_args, ctx) => ({
+    protocols: customProviders.listCustomProviderProtocols(),
+    providers: customProviders.listCustomProviders(ctx.userId).map((provider) => ({
+      id: provider.id,
+      name: provider.name,
+      protocol: provider.protocol,
+      baseUrl: provider.baseUrl,
+      notes: provider.notes,
+      websiteUrl: provider.websiteUrl,
+      needsKey: !!provider.needsKey,
+      needsModelMapping: !!provider.needsModelMapping,
+      models: provider.models || [],
+      source: provider.source,
+      externalId: provider.externalId,
+      createdAt: provider.createdAt,
+      updatedAt: provider.updatedAt,
+      apiKeyMasked: auth.maskKey(provider.apiKey),
+    })),
+  }),
+  'customProviders.add': async (args, ctx) => customProviders.addCustomProvider(ctx.userId, args || {}),
+  'customProviders.update': async ({ id, ...updates }, ctx) => {
+    if (typeof id !== 'string' || !id) throw new Error('invalid id');
+    return customProviders.updateCustomProvider(ctx.userId, id, updates);
+  },
+  'customProviders.remove': async ({ id }, ctx) => {
+    if (typeof id !== 'string' || !id) throw new Error('invalid id');
+    return customProviders.removeCustomProvider(ctx.userId, id);
+  },
+  'customProviders.ccswitch.probe': async () => {
+    const probe = probeCcSwitch();
+    return { available: probe.available, reason: probe.reason };
+  },
+  'customProviders.ccswitch.preview': async (_args, ctx) => {
+    const preview = customProviders.previewCcSwitchImport(ctx.userId);
+    if (!preview.ok) return preview;
+    return {
+      ok: true,
+      items: preview.items.map((item) => ({
+        externalId: item.externalId,
+        name: item.name,
+        protocol: item.protocol,
+        baseUrl: item.baseUrl,
+        notes: item.notes,
+        websiteUrl: item.websiteUrl,
+        models: item.models || [],
+        needsKey: !!item.needsKey,
+        apiKeyMasked: auth.maskKey(item.apiKey),
+      })),
+      unsupported: preview.skipped.filter((item) => item.reason !== 'official').map((item) => ({
+        externalId: item.externalId,
+        name: item.name,
+        appType: item.appType,
+        reason: item.reason,
+      })),
+    };
+  },
+  'customProviders.ccswitch.sync': async ({ externalIds } = {}, ctx) => {
+    const selected = Array.isArray(externalIds)
+      ? externalIds.filter((id): id is string => typeof id === 'string' && !!id)
+      : undefined;
+    return customProviders.syncFromCcSwitch(ctx.userId, selected);
+  },
 
   // ── Commander backend binding (settings page) ──
   'settings.getCommanderBackend': async () => commanderBackend.getCommanderBackendView(),
@@ -3289,6 +4158,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // build; the renderer's External Agent picker depends on localAgents.list.
   ...localAgentsHandlers,
 
+  // Canonical reimbursement management surface. Its feature layer validates
+  // the active user, trusted Agent identity and bounded stdio protocol.
+  ...expenseWorkbenchHandlers,
+
   // Quality validator — renderer reads persisted ValidationReports to display
   // why a spec write / marketplace install was rejected.
   ...qualityHandlers,
@@ -3296,8 +4169,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // agents. No Server dependency, so kept in the open-source build.
   ...connectorsHandlers,
 
+  // Local two-way messaging gateway. Platform credentials never cross this
+  // handler table; the dedicated IPC module returns metadata-only DTOs.
+  ...messagingHandlers,
+
   // Cross-session memory UI — view/edit/import/export over features/memory.ts.
   ...memoryHandlers,
+
+  // Evidence-backed cognition assets. Confirmation reuses the canonical
+  // memory write path; these handlers own only longitudinal evidence, review,
+  // reuse, and growth state.
+  //
+  // `cognition.assets.list` is registered above (ability-asset semantics from
+  // the recall surface); the legacy store-asset handler of the same name in
+  // ipc/cognition.ts must not shadow it, so it is excluded from the spread.
+  ...(({ 'cognition.assets.list': _legacyCognitionAssetsList, ...rest }) => rest)(cognitionHandlers),
 };
 
 // ── Stream handlers ──────────────────────────────────────────────────────
@@ -3306,7 +4192,62 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 // unexpected throws.
 
 const streamHandlers: Record<string, StreamHandler> = {
-  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, retry_message_id }, ctx, signal) {
+  /**
+   * Read-only aside answer. Deliberately NOT routed through groupChat.send /
+   * bus.enqueue: doing so would append to the main transcript and add a second
+   * dispatch path. The model is called directly with no tools, so the
+   * read-only property is structural rather than enforced.
+   */
+  'aside.askStream': async function* ({ cid, anchor_index, anchor_msg_id, question, project_id }, ctx, signal) {
+    if (!safeId(cid)) {
+      yield { type: 'error', text: 'invalid cid' };
+      return;
+    }
+    const conv = await chats.getConversation(ctx.userId, cid, project_id ?? null);
+    if (!conv) {
+      yield { type: 'error', text: 'conversation not found' };
+      return;
+    }
+    try {
+      const events = conversationAside.askAside(ctx.userId, {
+        cid,
+        // Prefer the message id: a normally-opened conversation's bubbles carry
+        // no global index, only an id.
+        ...(anchor_msg_id ? { anchorMsgId: String(anchor_msg_id) } : { anchorIndex: Number(anchor_index) }),
+        question: String(question ?? ''),
+        projectHint: conv.project_id ?? null,
+        boundAgentId: conv.agent_id || null,
+      }, {
+        getAgent: (id: string) => agents.getAgent(id) as any,
+        isAgentEnabled: (id: string) => isAgentEnabled(ctx.userId, id),
+        stream: (opts) => modelClient.streamChatWithModel({
+          userId: opts.userId,
+          message: opts.message,
+          systemPrompt: opts.systemPrompt,
+          sessionId: opts.sessionId,
+          ...(opts.agentName ? { agentName: opts.agentName } : {}),
+          // Explain-only: no skills in the prompt and NO tools at all. The
+          // `disableTools` flag is what actually enforces this — `maxToolLoops: 0`
+          // would be dropped as falsy and leave the full tool set attached.
+          skillList: [],
+          disableTools: true,
+          abortSignal: signal,
+        }) as AsyncIterable<{ type: string; text?: string }>,
+      });
+      for await (const event of events) {
+        if (signal.aborted) return;
+        yield event as { type: string; text?: string };
+      }
+    } catch (err) {
+      yield { type: 'error', text: (err as Error).message };
+    }
+  },
+
+  'mate_agent.task.events': async function* (payload, ctx, signal) {
+    yield* mateAgentBackend.mateIpcService.streamEvents(ctx.userId, payload, signal);
+  },
+
+  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, retry_message_id, edit_message_id }, ctx, signal) {
     if (!safeId(cid)) {
       yield { type: 'error', text: 'invalid cid' };
       return;
@@ -3358,19 +4299,30 @@ const streamHandlers: Record<string, StreamHandler> = {
     const sendPromise = (async () => {
       try {
         const retryMessageId = typeof retry_message_id === 'string' ? retry_message_id.trim() : '';
-        sendRes = retryMessageId
-          ? await groupChat.retryFailedTurn({
+        const editMessageId = typeof edit_message_id === 'string' ? edit_message_id.trim() : '';
+        if (retryMessageId && editMessageId) {
+          throw new Error('message retry and edit cannot be combined');
+        }
+        sendRes = editMessageId
+          ? await groupChat.replaceUserMessage({
+              userId: ctx.userId,
+              cid,
+              messageId: editMessageId,
+              text,
+            })
+          : retryMessageId
+            ? await groupChat.retryFailedTurn({
               userId: ctx.userId,
               cid,
               failedMessageId: retryMessageId,
               visibleText: text,
             })
-          : await groupChat.send({
-              userId: ctx.userId, cid, text,
-              ...(atts.length ? { attachments: atts } : {}),
-              ...(useSelections.length ? { use_selections: useSelections } : {}),
-              ...(refs.length ? { references: refs } : {}),
-            });
+            : await groupChat.send({
+                userId: ctx.userId, cid, text,
+                ...(atts.length ? { attachments: atts } : {}),
+                ...(useSelections.length ? { use_selections: useSelections } : {}),
+                ...(refs.length ? { references: refs } : {}),
+              });
       } catch (err) {
         sendErr = err;
       } finally {
@@ -3621,6 +4573,56 @@ const streamHandlers: Record<string, StreamHandler> = {
       }
     } finally {
       kbIndexer.kbEvents.off('status', listener);
+    }
+  },
+
+  // Streams a single PTY terminal session's output to the renderer. Opened by
+  // terminal-panel.js after `terminal.create`. Filters to the owning user +
+  // session id. Raw bytes (ANSI intact) are forwarded for xterm.js to render.
+  'terminal.stream': async function* (
+    payload: { session_id?: unknown },
+    ctx,
+    signal,
+  ) {
+    const sessionId = typeof payload?.session_id === 'string' ? payload.session_id : '';
+    if (!sessionId) {
+      yield { type: 'error', error: 'invalid session_id' };
+      return;
+    }
+    const queue: Array<{ kind: 'output'; data: string } | { kind: 'exit'; exitCode: number | null }> = [];
+    let notify: (() => void) | null = null;
+    const onData = (ev: { userId: string; sessionId: string; chunk: string }) => {
+      if (ev.userId !== ctx.userId || ev.sessionId !== sessionId) return;
+      queue.push({ kind: 'output', data: ev.chunk });
+      notify?.();
+    };
+    const onExit = (ev: { userId: string; sessionId: string; exitCode: number | null }) => {
+      if (ev.userId !== ctx.userId || ev.sessionId !== sessionId) return;
+      queue.push({ kind: 'exit', exitCode: ev.exitCode });
+      notify?.();
+    };
+    terminalEvents.on('data', onData);
+    terminalEvents.on('exit', onExit);
+    const abortPromise = new Promise<void>((r) => {
+      if (signal.aborted) r();
+      else signal.addEventListener('abort', () => r(), { once: true });
+    });
+    try {
+      while (!signal.aborted) {
+        if (queue.length) {
+          const item = queue.shift()!;
+          if (item.kind === 'output') yield { type: 'output', data: item.data };
+          else yield { type: 'exit', exit_code: item.exitCode };
+          continue;
+        }
+        await Promise.race([
+          new Promise<void>((r) => { notify = () => { notify = null; r(); }; }),
+          abortPromise,
+        ]);
+      }
+    } finally {
+      terminalEvents.off('data', onData);
+      terminalEvents.off('exit', onExit);
     }
   },
 };

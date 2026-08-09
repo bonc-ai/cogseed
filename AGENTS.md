@@ -12,6 +12,7 @@ Single-process Electron app. Main is a Node backend, renderer is vanilla HTML/CS
 - `src/main/preload.js` must remain `.js`; preload does not run the tsx hook.
 - LLM calls use the in-process `core-agent` loaded dynamically through `import('#core-agent')`.
 - Local CLI agents are the explicit child-process exception. `features/local_agents/runner.ts` is the only CLI dispatch spawn path.
+- Mate Agent Runtime worker is the backend-isolation child-process exception. The worker process itself is spawned only through `features/mate_agent_runtime/worker-process.ts` and speaks the Runtime JSONL protocol; no IPC handler/renderer code may spawn it directly. Inside that isolated worker, Runtime tool execution is limited to the dedicated `features/mate_agent_runtime/kernel/tools/` choke points: shell commands through `shell-tools.ts`, and skill scripts through `skill-tools.ts` → `bin/run-skill.cjs`.
 - MCP stdio connectors spawn only through `features/connectors/mcp-client.ts`.
 - User data is mostly JSON/JSONL for readability and sync friendliness; sqlite is reserved for the KB vector store.
 - macOS and Windows are primary. Platform branches need platform-specific verification.
@@ -81,11 +82,11 @@ All user-scoped data lives under `<container>/data/<uid>/{cloud,local}/`.
 
 ## Release Relay
 
-This release branch uses the pre-main relay shape:
+The current `develop` release line uses the event-based relay shape described below:
 
 - iOS is a remote control. PC runs all agent work and delivers relayed commands through normal group-chat send/bus flow.
 - `features/relay/commands.ts` long-polls Server and must not add a fixed inter-poll delay; Server controls cadence.
-- `features/relay/sync.ts` mirrors relay-enabled conversations through bus events: messages, plan, state, and batched process events. Do not replace this with main's bounded conversation-list snapshot unless the matching Server/iOS code lands here.
+- `features/relay/sync.ts` mirrors relay-enabled conversations through bus events: messages, plan, state, and batched process events. Do not replace this with a bounded conversation-list snapshot unless the matching Server/iOS code lands here.
 - PC pushes agent/skill account-index snapshots for iOS pickers. This release does not push project/workspace state to iOS.
 - No server-side agent execution and no cloud worker path. The iOS cloud option remains disabled until product/backend support exists.
 - Keep PC sidebar updates for iOS-triggered activity on the normal conversation list path; do not add a parallel display path.
@@ -192,13 +193,20 @@ Dev-mode marketplace editing/upload/delete is hosted/private tooling. Runtime ga
 
 ## Tests And Dev Workflow
 
-- Start PC with `cd PC && ./run.sh`.
+- Start PC with `./run.sh`.
 - Run tests with `npm test`, not `npx vitest`; the test script manages sqlite ABI swapping and rollback.
 - If sqlite ABI is broken, run `npm run rebuild:sqlite:electron`.
 - Tests should cover business invariants, recovery paths, concurrency, cross-layer contracts, and text-processing traps.
 - Do not test typing-only wrappers, trivial getters, happy-path-only cases, or implementation internals.
 - LLM-output parsers/sanitizers need fixture sets for both accepted real shapes and rejected look-alikes.
 - Pure renderer functions may expose a guarded CommonJS bridge for tests; DOM/i18n/IPC code should not.
+- After completing changes to this messaging worktree, restart the running app for verification instead of asking the user to do it manually: run `scripts/restart-mate.sh` (stops only this worktree's `messaging` runtime and relaunches via `./run.sh` in the background; other variants are untouched). Confirm startup via `~/.orkas/runtime-variants/messaging/data/logs/<date>.log` and the launcher log `/tmp/mate-agent-messaging-run.log`, then run the real-environment verification.
+
+## Git Collaboration Flow
+
+- All work lands in `develop` via GitLab MR from a `dev/*` branch; `develop` is protected — never push it directly (overwrite accidents happened before).
+- Keep your branch fresh with the mainline before merging: `git pull origin develop` (or fetch + merge).
+- Push explicitly to your own branch: `git push origin dev/<branch>` — avoid bare `git push` when your branch tracks `origin/develop`.
 
 ## Do Not
 

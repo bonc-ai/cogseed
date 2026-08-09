@@ -72,6 +72,86 @@ function _isAgentProfileMock() {
   return false;
 }
 
+
+// CLI custom-provider bindings are intentionally renderer-only here: the
+// provider list is masked by main IPC and the selected `cp:<id>` is stored
+// with the CLI runtime. Claude accepts Anthropic providers; Codex accepts
+// OpenAI providers. Other CLI runtimes keep their CLI-owned configuration.
+function _cliProviderProtocol(cli) {
+  if (cli === 'claude') return 'anthropic';
+  if (cli === 'codex') return 'openai';
+  return '';
+}
+
+function filterCliProviders(cli, providers) {
+  const protocol = _cliProviderProtocol(cli);
+  if (!protocol || !Array.isArray(providers)) return [];
+  return providers.filter((provider) => provider && provider.protocol === protocol);
+}
+
+function normalizeCliProviderSelection(cli, selectedId, providers) {
+  if (!selectedId) return '';
+  const match = String(selectedId).match(/^cp:(.+)$/);
+  if (!match) return '';
+  return filterCliProviders(cli, providers).some((provider) => String(provider.id) === match[1])
+    ? selectedId
+    : '';
+}
+
+function withCliProviderSelection(runtime, selectedId) {
+  const next = { ...(runtime || {}) };
+  delete next.cli_provider_id;
+  if (selectedId) next.cli_provider_id = selectedId;
+  return next;
+}
+
+let _externalCliProviders = [];
+let _externalCliProviderSelect = null;
+
+async function _loadExternalCliProviders() {
+  const res = await window.orkas.invoke('customProviders.list');
+  _externalCliProviders = (res && res.ok && Array.isArray(res.providers)) ? res.providers : [];
+  return _externalCliProviders;
+}
+
+function _renderExternalCliProviderSelect(cli, selectedId = '') {
+  const row = document.getElementById('agent-ext-provider-row');
+  const mount = document.getElementById('agent-modal-ext-provider-select');
+  if (!row || !mount) return;
+  const providers = filterCliProviders(cli, _externalCliProviders);
+  const compatibleSelected = normalizeCliProviderSelection(cli, selectedId, _externalCliProviders);
+  row.hidden = !(cli === 'claude' || cli === 'codex');
+  if (row.hidden) {
+    _externalCliProviderSelect?.setValue('');
+    return;
+  }
+  const options = [
+    { value: '', label: t('agent_modal.ext_provider_none') },
+    ...providers.map((provider) => ({
+      value: `cp:${provider.id}`,
+      label: provider.name || provider.id,
+      hint: provider.apiKeyMasked || provider.baseUrl || '',
+    })),
+  ];
+  if (!_externalCliProviderSelect) {
+    _externalCliProviderSelect = _aiSelectMount(mount, {
+      options, value: compatibleSelected,
+      placeholder: t('agent_modal.ext_provider_none'),
+    });
+  } else {
+    _externalCliProviderSelect.setOptions(options, { value: compatibleSelected });
+  }
+}
+
+function _getExternalCliProviderValue(cli) {
+  const selected = _externalCliProviderSelect?.getValue() || '';
+  return normalizeCliProviderSelection(cli, selected, _externalCliProviders);
+}
+
+window.filterCliProviders = filterCliProviders;
+window.normalizeCliProviderSelection = normalizeCliProviderSelection;
+window.withCliProviderSelection = withCliProviderSelection;
+
 function _isAgentPlatformSource(source) {
   return (typeof isMarketplaceCatalogSource === 'function')
     ? isMarketplaceCatalogSource(source)
@@ -786,7 +866,7 @@ function renderAgentsGrid(agents) {
     card.addEventListener('click', (e) => {
       if (e.target.closest('[data-agent-use]')) {
         e.stopPropagation();
-        if (!card.classList.contains('is-disabled')) useAgent(id);
+        if (!card.classList.contains('is-disabled')) useAgent(id, 'agent_card');
         return;
       }
       if (e.target.closest('[data-agent-more]')) {
@@ -826,6 +906,7 @@ async function _flipAgentEnabled(agentId, nextEnabled) {
 // ─── View switching: grid ↔ detail ─────────────────────────────────────
 
 function _showAgentsGridView() {
+  if (typeof closeExpenseWorkbench === 'function') closeExpenseWorkbench();
   const grid = document.getElementById('agents-grid-view');
   const detail = document.getElementById('agents-detail-view');
   if (_agentEditing) {
@@ -1043,6 +1124,7 @@ async function selectAgent(agentId) {
     return;
   }
   try {
+    if (typeof closeExpenseWorkbench === 'function') closeExpenseWorkbench();
     const res = await apiFetch(`/api/agents/${encodeURIComponent(agentId)}`);
     const data = await res.json();
     if (!data.ok || !data.agent) return;
@@ -1654,6 +1736,7 @@ function _renderAgentDetail(agent, editing) {
   // Edit mode hides everything except the "done" button (the relabeled
   // "edit" button).
   const useBtn = document.getElementById('agent-use-btn');
+  const manageBtn = document.getElementById('agent-manage-btn');
   const enableBtn = document.getElementById('agent-enabled-btn');
   const uploadBtn = document.getElementById('agent-upload-marketplace-btn');
   const delBtn = document.getElementById('agent-delete-btn');
@@ -1665,6 +1748,15 @@ function _renderAgentDetail(agent, editing) {
     useBtn.style.display = editing ? 'none' : '';
     useBtn.disabled = isMock || agent.enabled === false;
     useBtn.setAttribute('aria-disabled', (isMock || agent.enabled === false) ? 'true' : 'false');
+  }
+  if (manageBtn) {
+    const canManage = agent.management_surface === 'expense_workbench'
+      && agent.reimbursement_entry_role === 'canonical';
+    manageBtn.hidden = editing || !canManage;
+    manageBtn.disabled = editing || !canManage || agent.enabled === false;
+    manageBtn.setAttribute('aria-hidden', (!canManage || editing) ? 'true' : 'false');
+    if (canManage && agent.agent_id) manageBtn.setAttribute('data-expense-agent-id', agent.agent_id);
+    else manageBtn.removeAttribute('data-expense-agent-id');
   }
   if (enableBtn && isCommander) {
     enableBtn.style.display = 'none';
@@ -2444,8 +2536,13 @@ function openAgentModal(options = {}) {
 
   // Refresh the External-tab CLI selector. Re-mount each open so newly-
   // installed CLIs surface without an app restart.
+  _externalCliProviderSelect?.setValue('');
+  const providerLoad = _loadExternalCliProviders().catch(() => []);
   if (typeof mountExternalCliSelect === 'function') {
-    mountExternalCliSelect((cli) => _applyExternalCliDefaults(cli)).catch(() => {});
+    mountExternalCliSelect((cli) => {
+      _applyExternalCliDefaults(cli);
+      providerLoad.then(() => _renderExternalCliProviderSelect(cli, _getExternalCliProviderValue(cli)));
+    }).catch(() => {});
   }
 
   modal.classList.add('open');
@@ -2616,7 +2713,7 @@ async function _saveExternalAgent({ msgEl }) {
       // CLI-backed agents do not run the LLM authoring pass, so use the
       // stable role-specific coding avatar instead of a random pair.
       icon: 'code', color: 'sage',
-      runtime: { kind: 'cli', cli },
+      runtime: withCliProviderSelection({ kind: 'cli', cli }, _getExternalCliProviderValue(cli)),
       category: 'general',
     };
     const res = await apiFetch('/api/agents/create', {
@@ -2881,7 +2978,7 @@ async function clearAgentChat() {
 /**
  * Select an agent in the Commander tab and wait for the user's next message.
  */
-async function useAgent(agentId) {
+async function useAgent(agentId, managementOpenGesture) {
   if (_isAgentProfileMock(agentId)) return;
   if (_isCommanderAgent(agentId)) {
     _agentsLog.info('use commander');
@@ -2896,13 +2993,52 @@ async function useAgent(agentId) {
     }, 50);
     return;
   }
-  if (_agentsCache?.some((a) => a.agent_id === agentId && a.enabled === false)) return;
+  const cachedAgent = _agentsCache?.find((a) => a.agent_id === agentId);
+  if (cachedAgent?.enabled === false) return;
+  const cachedCanonicalExpenseAgent = cachedAgent
+    && cachedAgent.interaction_mode === 'management_only'
+    && cachedAgent.management_surface === 'expense_workbench'
+    && cachedAgent.reimbursement_entry_role === 'canonical';
+  const preparedManagementOpen = cachedCanonicalExpenseAgent
+    && managementOpenGesture === 'agent_card'
+    && window.orkas?.expenseWorkbench?.prepareOpen
+    ? window.orkas.expenseWorkbench.prepareOpen(agentId, managementOpenGesture).then(
+      () => ({ ok: true }),
+      (error) => ({
+        ok: false,
+        error: error instanceof Error ? error : new Error(String(error || '报销工作台打开授权失败')),
+      }),
+    )
+    : null;
+  let preparedManagementOpenConsumed = false;
   try {
     const aRes = await apiFetch(`/api/agents/${encodeURIComponent(agentId)}`);
     const aData = await aRes.json();
     if (!aData.ok || !aData.agent) throw new Error(aData.error || t('agents.agent_not_found'));
     const agent = aData.agent;
     if (agent.enabled === false) return;
+    if (agent.interaction_mode === 'management_only') {
+      if (agent.management_surface === 'expense_workbench'
+          && agent.reimbursement_entry_role === 'canonical'
+          && typeof openExpenseWorkbench === 'function') {
+        const prepared = preparedManagementOpen ? await preparedManagementOpen : null;
+        if (prepared && !prepared.ok) throw prepared.error;
+        if (managementOpenGesture === 'agent_card') {
+          if (!prepared) throw new Error('管理 Agent 信息已更新，请从详情页重新打开');
+          const grid = document.getElementById('agents-grid-view');
+          const detail = document.getElementById('agents-detail-view');
+          if (grid) grid.style.display = 'none';
+          if (detail) detail.style.display = 'flex';
+          agent.source = _agentSource(agent.source);
+          _selectedAgent = { id: agent.agent_id, name: agent.name, source: agent.source };
+          _renderAgentDetail(agent, false);
+          _resetAgentDetailScroll();
+        }
+        preparedManagementOpenConsumed = !!prepared;
+        await openExpenseWorkbench(agent.agent_id, managementOpenGesture, !!prepared);
+      }
+      return;
+    }
 
     _agentsLog.info('use agent', { agent_id: agentId });
     _agentsTrackClick('agent_use', {
@@ -2920,7 +3056,13 @@ async function useAgent(agentId) {
       document.getElementById('new-chat-input')?.focus();
     }, 50);
   } catch (e) {
-    await uiAlert(t('agents.launch_failed', { reason: e.message || e }));
+    const reason = e instanceof Error ? e.message : String(e || '未知错误');
+    await uiAlert(t('agents.launch_failed', { reason }));
+  } finally {
+    if (preparedManagementOpen && !preparedManagementOpenConsumed) {
+      await preparedManagementOpen;
+      await window.orkas.expenseWorkbench.close().catch(() => {});
+    }
   }
 }
 

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "dff05c39c0aed8a61e9bd1eb20aaaa915f02f21fc187c965b585adfc81995a0c",
+  "content_tree_sha256": "b8213719c6123085c990f17e91a3e5e59f8f5d0c215e7a727a45ebf92cd4fb3f",
   "files": [
     {
       "path": "marketplace/agents/0fdb4da8a080/agent.json",
@@ -376,6 +376,11 @@
       "path": "marketplace/agents/bcfcb4921dce/skills/ui-taste/SKILL.md",
       "bytes": 6387,
       "sha256": "3e60b232f5f28128e8f04a93cec6fdc6895e3c9a93b0607a9b11ae5d5bb723e6"
+    },
+    {
+      "path": "marketplace/agents/c045605cb916/agent.json",
+      "bytes": 3591,
+      "sha256": "76fd84ca51193c0853f50a38676d18c2eb62add283b46d535139bcc2c6f6bd16"
     },
     {
       "path": "marketplace/agents/c0e5a377b91c/agent.json",
@@ -1882,6 +1887,16 @@
           "ui-reference-packs",
           "ui-taste"
         ]
+      },
+      {
+        "id": "c045605cb916",
+        "name": "Reimbursement Agent",
+        "version": "0.2.0",
+        "icon": "target",
+        "color": "gold",
+        "updated_at": "2026-08-02T00:00:00",
+        "skill_list": [],
+        "embedded_skills": []
       },
       {
         "id": "c0e5a377b91c",

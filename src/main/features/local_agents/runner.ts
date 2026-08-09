@@ -17,6 +17,7 @@
  *     channel so the caller has a single completion contract.
  */
 
+import * as path from 'node:path';
 import { createLogger } from '../../logger.js';
 import { logErrorRef, logErrorSummary, logPathRef, maskId } from '../../util/log-redact.js';
 import { detectOne, type LocalCliEntry, type LocalCliType } from './registry.js';
@@ -26,11 +27,21 @@ import { openclawBackend } from './backends/openclaw.js';
 import { opencodeBackend } from './backends/opencode.js';
 import { hermesBackend } from './backends/hermes.js';
 import { type LocalBackend, type LocalEvent } from './backends/base.js';
+import { resolveCliProviderEnv } from './provider_env.js';
 import * as persist from './persist.js';
 import { sessionToolResultsDir } from '../../paths.js';
-import { maybeSpillToolResult } from '../../util/tool-result-cap.js';
+import { maybeSpillToolResult, toolResultRefForPath } from '../../util/tool-result-cap.js';
+import type { ExecutionKind, ExecutionLifecycleSink } from '../execution-records.js';
+import type { PreparedExecutionContext } from '../p3394/execution-context.js';
+import { isPathAllowed } from '../../util/path-sandbox.js';
+import { assertAgentChatDispatchable } from '../agent-dispatch-policy.js';
 
 const log = createLogger('local-agents:runner');
+export {
+  startManagedStdioProcess,
+  type ManagedStdioProcess,
+  type ManagedStdioProcessOptions,
+} from '../../util/managed-stdio-process.js';
 
 /** Hard wall-clock cap for a single CLI dispatch — zombie insurance
  *  only. The hang detector is the idle-kill below, so this can be
@@ -138,6 +149,30 @@ const BACKENDS: Partial<Record<LocalCliType, LocalBackend>> = {
   opencode: opencodeBackend,
   hermes: hermesBackend,
 };
+
+function executionKindForCli(cli: LocalCliType): ExecutionKind {
+  if (cli === 'codex') return 'codex';
+  if (cli === 'openclaw') return 'openclaw';
+  return 'local-agent';
+}
+
+function executionStatusForLocalStatus(
+  status: RunCliAgentResult['status'],
+): 'completed' | 'failed' | 'cancelled' | 'timed_out' {
+  if (status === 'completed') return 'completed';
+  if (status === 'cancelled') return 'cancelled';
+  if (status === 'timeout') return 'timed_out';
+  return 'failed';
+}
+
+function localEventMetadata(e: LocalEvent): Record<string, unknown> {
+  const { type: _type, ...metadata } = e;
+  if (typeof metadata.outputPath === 'string') {
+    metadata.resultRef = `tool-result:${toolResultRefForPath(metadata.outputPath)}`;
+    delete metadata.outputPath;
+  }
+  return metadata;
+}
 
 /** CLIs with a supported MCP-config injection path (claude:
  *  `--mcp-config`; codex: `-c mcp_servers.…`). Others run without the
@@ -545,6 +580,8 @@ export interface RunCliAgentOpts {
   cli: LocalCliType;
   model?: string;
   customArgs?: string[];
+  /** Optional synthetic custom-provider id bound to this CLI Agent. */
+  cliProviderId?: string;
   /** If set, the dispatch resumes a CLI-side session (claude
    *  `--resume <id>`) and the caller has already trimmed the prompt
    *  to "just the new turn" content — the CLI provides the prior
@@ -556,6 +593,10 @@ export interface RunCliAgentOpts {
   signal: AbortSignal;
   /** Optional host orchestration tools exposed through orkas-bridge. */
   bridgeOrchestration?: import('./bridge').BridgeOrchestrationTools;
+  /** Optional shared execution recorder. Absent keeps legacy behavior. */
+  executionLifecycle?: ExecutionLifecycleSink;
+  /** Prepared receipt-bound prompt/root/permission context. */
+  preparedContext?: PreparedExecutionContext;
   /** Forwarded each backend event verbatim, after persistence. */
   onEvent: (e: LocalEvent) => void;
 }
@@ -568,9 +609,20 @@ export interface RunCliAgentResult {
   cliError?: LocalCliEntry['error'];
   cliPath?: string;
   cliVersion?: string;
+  /** Real external CLI session/thread id returned by the backend. */
+  sessionId?: string;
 }
 
 export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
+  await assertAgentChatDispatchable(opts.uid, opts.agentId);
+  if (opts.preparedContext) {
+    const roots = opts.preparedContext.permissionMode === 'read-only' ? opts.preparedContext.readOnlyRoots : [...opts.preparedContext.writableRoots, ...opts.preparedContext.readOnlyRoots];
+    if (opts.prompt !== opts.preparedContext.prompt || !isPathAllowed(opts.cwd, roots)) {
+      const error = 'prepared execution context denied prompt or working directory';
+      opts.onEvent({ type: 'done', status: 'failed', error, blocked: true });
+      return { runId: '', status: 'failed', error };
+    }
+  }
   const backend = BACKENDS[opts.cli];
   let runLogContext = localAgentRunContextForLog({
     uid: opts.uid,
@@ -585,10 +637,40 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
     cwd: opts.cwd,
     bridgeSupported: _bridgeSupported(opts.cli),
   });
+  let lifecycleTail = Promise.resolve();
+  const queueLifecycle = (label: string, task: (() => Promise<unknown>) | undefined): void => {
+    if (!task) return;
+    lifecycleTail = lifecycleTail
+      .then(() => task())
+      .then(() => undefined)
+      .catch((err) => {
+        log.warn('execution lifecycle callback failed', {
+          ...runLogContext,
+          phase: label,
+          error: logErrorRef(err),
+        });
+      });
+  };
+  const flushLifecycle = (): Promise<void> => lifecycleTail;
+  const lifecycleStart = {
+    kind: executionKindForCli(opts.cli),
+    ...(opts.resumeSessionId ? { sessionId: opts.resumeSessionId } : {}),
+    conversationId: opts.cid,
+    agentId: opts.agentId,
+    cli: opts.cli,
+  };
+  queueLifecycle('queued', opts.executionLifecycle
+    ? () => opts.executionLifecycle!.queued(lifecycleStart)
+    : undefined);
+
   if (!backend) {
     log.warn('local agent backend missing', runLogContext);
     const err = `local CLI backend not implemented: ${opts.cli}`;
     opts.onEvent({ type: 'done', status: 'failed', error: err });
+    queueLifecycle('terminal', opts.executionLifecycle
+      ? () => opts.executionLifecycle!.terminal({ status: 'failed' })
+      : undefined);
+    await flushLifecycle();
     return { runId: '', status: 'failed', error: err };
   }
 
@@ -596,7 +678,12 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
   // the CLI between create-time detection and now.
   const entry = await detectOne(opts.cli);
   if (!entry.available || !entry.path) {
-    return _missing(opts, entry);
+    const result = await _missing(opts, entry);
+    queueLifecycle('terminal', opts.executionLifecycle
+      ? () => opts.executionLifecycle!.terminal({ status: 'failed' })
+      : undefined);
+    await flushLifecycle();
+    return result;
   }
 
   const timeoutMs = resolveTimeoutMs(opts.cli);
@@ -634,6 +721,9 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
     idleMs: idleThresholdMs,
   });
   log.info('local agent run start', runLogContext);
+  queueLifecycle('started', opts.executionLifecycle
+    ? () => opts.executionLifecycle!.started(lifecycleStart)
+    : undefined);
 
   // Wrapper writes events to disk before forwarding upstream so that
   // a renderer crash mid-run still leaves a complete jsonl trail.
@@ -682,6 +772,42 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
         error: typeof e.error === 'string' ? e.error : undefined,
         sessionId: typeof e.sessionId === 'string' ? e.sessionId : undefined,
       };
+    } else if (e.type === 'artifact') {
+      const artifact = e as LocalEvent & { cid?: unknown; artifactId?: unknown; title?: unknown };
+      if (
+        typeof artifact.cid === 'string' &&
+        typeof artifact.artifactId === 'string' &&
+        typeof artifact.title === 'string'
+      ) {
+        queueLifecycle('artifact', opts.executionLifecycle
+          ? () => opts.executionLifecycle!.artifact({
+            cid: artifact.cid as string,
+            artifactId: artifact.artifactId as string,
+            title: artifact.title as string,
+          })
+          : undefined);
+      }
+    } else if (e.type === 'process-info') {
+      queueLifecycle('process', opts.executionLifecycle
+        ? () => opts.executionLifecycle!.event('process', localEventMetadata(e))
+        : undefined);
+    } else if (e.type === 'tool-event') {
+      queueLifecycle('tool', opts.executionLifecycle
+        ? () => opts.executionLifecycle!.event('tool', localEventMetadata(e))
+        : undefined);
+    } else if (e.type === 'text-delta') {
+      queueLifecycle('output', opts.executionLifecycle
+        ? () => opts.executionLifecycle!.event('output', {
+          output: typeof e.text === 'string' ? e.text : '',
+        })
+        : undefined);
+    } else {
+      queueLifecycle('event', opts.executionLifecycle
+        ? () => opts.executionLifecycle!.event('event', {
+          eventType: e.type,
+          ...localEventMetadata(e),
+        })
+        : undefined);
     }
     opts.onEvent(e);
   };
@@ -734,6 +860,14 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
   }
 
   try {
+    const providerEnv = resolveCliProviderEnv(opts.uid, opts.cli, opts.cliProviderId);
+    if (providerEnv) {
+      log.info('local agent provider env injected', {
+        ...runLogContext,
+        cli_provider: maskId(opts.cliProviderId || ''),
+        env_keys: Object.keys(providerEnv).join(','),
+      });
+    }
     await backend.run({
       binPath: entry.path,
       prompt: opts.prompt,
@@ -745,6 +879,8 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
       onEvent,
       timeoutMs,
       idleKillMs,
+      ...(providerEnv ? { providerEnv } : {}),
+      ...(opts.preparedContext ? { executionContext: { sessionId: opts.preparedContext.sessionId, ...(opts.preparedContext.contextId ? { contextId: opts.preparedContext.contextId } : {}), readOnlyRoots: [...opts.preparedContext.readOnlyRoots], writableRoots: [...opts.preparedContext.writableRoots], permissionMode: opts.preparedContext.permissionMode, receiptId: opts.preparedContext.receiptId } } : {}),
       // Activity clock for the backend's idle-kill watchdog. Reads the
       // same `lastEventAt` the idle heartbeat uses (self-emitted idle
       // pulses excluded), so heartbeat rows always precede a kill.
@@ -802,7 +938,21 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
     duration_ms: endedAtMs - startedAtMs,
     diagnostics: summarizeLocalAgentRunForLog(runDiagnostics, endedAtMs),
   });
-  return { runId: handle.runId, status: terminal.status, output: finalOutput, error: terminal.error };
+  queueLifecycle('terminal', opts.executionLifecycle
+    ? () => opts.executionLifecycle!.terminal({
+      status: executionStatusForLocalStatus(terminal!.status),
+      ...(terminal!.sessionId ? { sessionId: terminal!.sessionId } : {}),
+      ...(finalOutput !== undefined ? { output: finalOutput } : {}),
+    })
+    : undefined);
+  await flushLifecycle();
+  return {
+    runId: handle.runId,
+    status: terminal.status,
+    output: finalOutput,
+    error: terminal.error,
+    ...(terminal.sessionId ? { sessionId: terminal.sessionId } : {}),
+  };
 }
 
 async function _missing(opts: RunCliAgentOpts, entry: LocalCliEntry): Promise<RunCliAgentResult> {
