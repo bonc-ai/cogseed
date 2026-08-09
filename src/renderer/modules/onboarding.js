@@ -75,7 +75,7 @@ function _csObShellHtml() {
         <button class="cs-step" data-csstep="2"><span>3</span><span><strong>选择角色起点</strong><small>可选 · 可跳过</small></span></button>
         <button class="cs-step" data-csstep="3"><span>4</span><span><strong>确认候选认知</strong><small>预览并决定保留</small></span></button>
       </div>
-      <div class="cs-privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg><span>认知资产默认留在本机。CogSeed 不接收任何 Agent 的账号凭证。</span></div>
+      <div class="cs-privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg><span>认知资产与模型 Key 都留在本机。导入 AI 团队的 Key 是你自己的凭证，仅在本机使用，不上传。</span></div>
     </aside>
     <main class="cs-content">
 
@@ -86,7 +86,7 @@ function _csObShellHtml() {
         <div class="cs-facts">
           <div class="cs-fact"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="12" r="4"/></svg><strong>无需注册账号</strong><span>创建本机个人空间，不需要手机号、邮箱或企业身份。</span></div>
           <div class="cs-fact"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 13v5M12 9v9M17 5v13"/></svg><strong>认知留在本机</strong><span>项目、会话与认知资产不会因为启动应用而自动上传。</span></div>
-          <div class="cs-fact"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><strong>凭证由 Agent 管理</strong><span>Codex、Claude Code 等保持自己的登录与权限，CogSeed 不接收凭证。</span></div>
+          <div class="cs-fact"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><strong>Key 是你自己的</strong><span>可一键把已有 Agent 的模型 Key 导入 AI 团队，仅在本机使用；也可跳过，之后手动配置。</span></div>
         </div>
         <div class="cs-actions">
           <button class="cs-btn" data-csnext="1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>继续 · 检测本地 Agent</button>
@@ -95,9 +95,15 @@ function _csObShellHtml() {
       </section>
 
       <section class="cs-panel" data-cspanel="1">
-        <div class="cs-kicker">来源检测 · 跨 Agent · 只读</div>
-        <h1>从你在其他 Agent 里的对话开始</h1>
-        <p class="cs-lead">CogSeed 会检测你本机安装的 Agent 命令行工具。候选认知的提取会直接借助你本机已有的 Agent 能力完成，无需配置任何 API 或粘贴密钥。</p>
+        <div class="cs-kicker">连接 AI 团队 · 导入会话 · 只读</div>
+        <h1>先连上模型，再从你的旧对话继续</h1>
+        <p class="cs-lead">第一步把你在其他 Agent 里已有的模型 Key 一键接入「AI 团队」——都是你自己的凭证，只留本机。连上之后，导入的旧会话就能用这些模型自动压缩、提炼，接着往下干。</p>
+
+        <h3 style="margin:28px 0 12px;font-size:15px;font-weight:650">连接 AI 团队</h3>
+        <div class="cs-list" id="cs-team-list">
+          <div class="cs-state loading">正在检测可导入的模型服务…</div>
+        </div>
+        <div class="cs-mode"><span>这些 Key 来自你本机的 CC Switch 等配置，导入后仅在本机使用、不上传。OAuth 登录类（如订阅登录）无法迁移 Key，需你在设置里另行登录或粘贴。</span></div>
 
         <h3 style="margin:28px 0 12px;font-size:15px;font-weight:650">检测到的 Agent</h3>
         <div class="cs-list" id="cs-agent-list">
@@ -174,6 +180,7 @@ function _csGoStep(n) {
   });
   shell.querySelector('.cs-content')?.scrollTo?.(0, 0);
   if (step === 1) {
+    _csLoadTeam(false);
     _csLoadAgents(false);
   }
 }
@@ -239,6 +246,159 @@ function _csRenderAgents(entries) {
 
   // Load ACP transcript sessions (from ~/.cogseed/acp-transcripts/)
   void _csLoadAcpSessions();
+}
+
+// ── Step 1a: connect AI team ────────────────────────────────────────────────
+// Detect importable model providers (via CC Switch aggregation), let the user
+// pick which to one-click connect into the "AI team" (custom providers), then
+// sync the selected keys. Keys stay local; OAuth-only sources are surfaced as
+// non-migratable rather than silently dropped.
+async function _csLoadTeam(force) {
+  const box = document.getElementById('cs-team-list');
+  if (!box) return;
+  if (force) box.innerHTML = '<div class="cs-state loading">正在检测可导入的模型服务…</div>';
+
+  // Probe first so we can give an honest "no CC Switch found" state instead of
+  // an empty list that looks like a bug.
+  let probe = null;
+  try {
+    probe = await window.orkas.invoke('customProviders.ccswitch.probe');
+  } catch (err) {
+    _obLog.warn('ccswitch probe failed', { error: (err && err.message) || String(err) });
+  }
+  if (probe && probe.available === false) {
+    box.innerHTML =
+      '<div class="cs-state">未检测到可自动导入的模型 Key（没有找到 CC Switch 配置）。' +
+      '你仍可继续导入会话——会话提炼会用你在设置里配置的模型；也可稍后在设置的「AI 团队」里手动添加模型。</div>';
+    return;
+  }
+
+  try {
+    const res = await window.orkas.invoke('customProviders.ccswitch.preview');
+    if (!res || res.ok !== true) {
+      const reason = (res && res.reason) || 'unknown';
+      box.innerHTML = `<div class="cs-state">暂时无法读取可导入的模型服务（${_csEsc(reason)}）。可稍后在设置的「AI 团队」里手动添加。</div>`;
+      return;
+    }
+    _csRenderTeam(res.items || [], res.unsupported || []);
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    _obLog.warn('ccswitch preview failed', { error: msg });
+    box.innerHTML = `<div class="cs-state err">读取可导入模型服务失败：${_csEsc(msg)}。可稍后在设置里手动添加。</div>`;
+  }
+}
+
+function _csRenderTeam(items, unsupported) {
+  const box = document.getElementById('cs-team-list');
+  if (!box) return;
+
+  if (!items.length && !unsupported.length) {
+    box.innerHTML =
+      '<div class="cs-state">没有可一键导入的模型服务。可在设置的「AI 团队」里手动添加模型后再回来导入会话。</div>';
+    return;
+  }
+
+  // Importable rows: pre-checked when a real key is present; rows that need a
+  // key are still selectable (they get imported as needs-key placeholders the
+  // user finishes in settings) but flagged honestly.
+  const rows = items.map((it) => {
+    const proto = it.protocol ? `<span class="cs-team-tag">${_csEsc(it.protocol)}</span>` : '';
+    const keyState = it.needsKey
+      ? '<span class="cs-team-tag warn">需补充 Key</span>'
+      : `<span class="cs-team-tag ok">Key ${_csEsc(it.apiKeyMasked || '••••')}</span>`;
+    const base = it.baseUrl ? `<small>${_csEsc(it.baseUrl)}</small>` : '';
+    return `
+      <div class="cs-src" data-external-id="${_csEsc(it.externalId)}">
+        <input type="checkbox" ${it.needsKey ? '' : 'checked'} />
+        <div class="s-ico">${CS_TERMINAL_SVG}</div>
+        <div>
+          <strong>${_csEsc(it.name || it.externalId)}</strong>
+          ${base}
+          <div class="cs-team-tags">${proto}${keyState}</div>
+        </div>
+      </div>`;
+  }).join('');
+
+  // Honest surfacing of what can't be migrated (OAuth-only / official logins).
+  const unsupportedHtml = unsupported.length
+    ? `<div class="cs-state">${unsupported.length} 个来源无法迁移 Key（如订阅/OAuth 登录）：` +
+      unsupported.map((u) => _csEsc(u.name || u.externalId)).join('、') +
+      '。这类需要你在设置里另行登录，无法一键导入。</div>'
+    : '';
+
+  box.innerHTML = rows +
+    unsupportedHtml +
+    `<div class="cs-import-bar">
+       <button type="button" class="cs-import-btn" id="cs-team-connect">连接所选到 AI 团队</button>
+       <div class="cs-import-result" id="cs-team-result"></div>
+     </div>`;
+
+  box.querySelectorAll('.cs-src[data-external-id]').forEach((row) => {
+    const checkbox = row.querySelector('input[type="checkbox"]');
+    row.classList.toggle('selected', checkbox.checked);
+    row.addEventListener('click', (ev) => {
+      if (ev.target === checkbox) return;
+      checkbox.checked = !checkbox.checked;
+      row.classList.toggle('selected', checkbox.checked);
+    });
+    checkbox.addEventListener('change', () => {
+      row.classList.toggle('selected', checkbox.checked);
+    });
+  });
+
+  const connectBtn = box.querySelector('#cs-team-connect');
+  if (connectBtn) connectBtn.addEventListener('click', () => void _csConnectTeam(box));
+}
+
+// Sync the checked providers into custom providers ("AI 团队"). Honest result:
+// added / updated counts, and a clear note when some rows still need a key.
+async function _csConnectTeam(box) {
+  const btn = box.querySelector('#cs-team-connect');
+  const resultBox = box.querySelector('#cs-team-result');
+  if (!resultBox) return;
+
+  const externalIds = [];
+  let needsKeySelected = 0;
+  box.querySelectorAll('.cs-src[data-external-id] input[type="checkbox"]:checked').forEach((cb) => {
+    const row = cb.closest('.cs-src');
+    const id = row ? row.dataset.externalId : null;
+    if (id) externalIds.push(id);
+    if (row && row.querySelector('.cs-team-tag.warn')) needsKeySelected += 1;
+  });
+
+  if (!externalIds.length) {
+    resultBox.innerHTML = '<div class="cs-state">请先勾选要连接的模型服务。</div>';
+    return;
+  }
+
+  if (btn) btn.disabled = true;
+  resultBox.innerHTML = `<div class="cs-extract-progress">正在连接 ${externalIds.length} 个模型服务…</div>`;
+
+  try {
+    const res = await window.orkas.invoke('customProviders.ccswitch.sync', { externalIds });
+    if (!res || res.ok !== true) {
+      const reason = (res && res.reason) || '未知原因';
+      resultBox.innerHTML = `<div class="cs-state err">连接失败：${_csEsc(reason)}</div>`;
+      if (btn) btn.disabled = false;
+      return;
+    }
+    const added = res.added || 0;
+    const updated = res.updated || 0;
+    const summary =
+      `<div class="cs-state">已连接到 AI 团队：新增 ${added} 个` +
+      (updated ? `，更新 ${updated} 个` : '') +
+      (needsKeySelected ? `。其中 ${needsKeySelected} 个尚缺 Key，已作为占位导入，请到设置的「AI 团队」补齐后即可使用` : '') +
+      '。这些模型现在可用于会话导入时的自动压缩提炼，也可在群聊里直接调用。</div>';
+    resultBox.innerHTML = summary;
+    _csToast(`已连接 ${added + updated} 个模型服务到 AI 团队`);
+    _obLog.info('team connect finished', { added, updated, needsKeySelected });
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    _obLog.warn('team connect failed', { error: msg });
+    resultBox.innerHTML = `<div class="cs-state err">连接失败：${_csEsc(msg)}</div>`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function _csLoadAgents(force) {
