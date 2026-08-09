@@ -37,6 +37,7 @@
         <button class="sidebar-btn" id="contexts-btn"><span data-ui-icon="database" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.contexts">Library</span></button>
         <button class="sidebar-btn" id="evolution-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.evolution">进化控制台</span></button>
         <button class="sidebar-btn" id="personal-ontology-btn"><span data-ui-icon="sparkles" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.personal_ontology">我的认知</span></button>
+        <button class="sidebar-btn" id="spaces-btn"><span data-ui-icon="layout-grid" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.spaces">工作空间</span></button>
       </div>
       <div class="sidebar-conversation-nav">
         <div class="sidebar-section sidebar-projects-section">
@@ -1155,6 +1156,33 @@
             <div class="personal-onto-modal-footer">
               <button class="btn btn-sm" id="personal-onto-modal-cancel" data-i18n="common.cancel">取消</button>
               <button class="btn btn-sm btn-primary" id="personal-onto-modal-ok" data-i18n="personalOntology.reject_btn">驳回</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Workspaces（工作空间一期：空间 = 主界面 + 资源作用域限制） -->
+      <section class="panel" id="panel-spaces">
+        <div class="spaces-view" id="spaces-view"></div>
+        <!-- 新建空间弹窗 -->
+        <div class="spaces-modal-overlay" id="spaces-modal" style="display:none">
+          <div class="spaces-modal">
+            <div class="spaces-modal-header">
+              <span data-i18n="spaces.create_title">新建空间</span>
+            </div>
+            <div class="spaces-modal-body">
+              <div class="spaces-form-row">
+                <label data-i18n="spaces.name_label">空间名称</label>
+                <input type="text" id="spaces-modal-name" placeholder="例如：毕业论文" maxlength="60" autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="spaces-form-row">
+                <label data-i18n="spaces.template_label">角色模板（可选）</label>
+                <div class="spaces-template-grid" id="spaces-modal-templates"></div>
+              </div>
+            </div>
+            <div class="spaces-modal-footer">
+              <button class="btn btn-sm" id="spaces-modal-cancel" data-i18n="common.cancel">取消</button>
+              <button class="btn btn-sm btn-primary" id="spaces-modal-create" data-i18n="spaces.create_btn">创建</button>
             </div>
           </div>
         </div>

@@ -72,7 +72,7 @@ skill_spec:
   # ── 情景卡（SituationCard） ──
   situation_card:
     situation_id: personal-memory-to-ontology-candidate
-    actor: 用户（学生/学者/FDE/普通用户）
+    actor: 用户（内置角色模板 + 普通用户）
     business_situation: >-
       用户希望把对话和记忆中的个人经验变成结构化个人本体候选，
       确认后写入长期记忆（USER.md/MEMORY.md 或记忆分组）。
