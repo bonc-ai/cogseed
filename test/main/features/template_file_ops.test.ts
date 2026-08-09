@@ -242,3 +242,50 @@ describe('template_file_ops › listFieldsByRef (分节字段清单，含空坑)
     expect(res.fields![1].values).toEqual([]); // 空坑
   });
 });
+
+// ── 二期 D5：模板分节字段来源项目标记（@proj:<pid>）────────────────────────
+
+describe('template_file_ops › project source marker on template sections', () => {
+  it('appendFieldValueToRef with project persists @proj:<pid> into the section file', async () => {
+    const m = await loadMod();
+    await m.installTemplateFile(UID, 'student');
+    const row = m.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const ref = m.buildContentRef(row.group_id, '学习背景');
+    const r = await m.appendFieldValueToRef(UID, ref, '教育阶段', '硕士', '智能', 'p_abc');
+    expect(r.ok).toBe(true);
+    expect(readFile('student.md')).toContain('- 硕士 [智能] @proj:p_abc');
+  });
+
+  it('listFieldsByRef returns the project field on values', async () => {
+    const m = await loadMod();
+    await m.installTemplateFile(UID, 'student');
+    const row = m.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const ref = m.buildContentRef(row.group_id, '学习背景');
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '硕士', '智能', 'p_abc');
+
+    const res = await m.listFieldsByRef(UID, ref);
+    expect(res.ok).toBe(true);
+    expect(res.fields![0].values).toEqual([{ value: '硕士', source: '智能', project: 'p_abc' }]);
+  });
+
+  it('same value+source+project dedupes on template sections too', async () => {
+    const m = await loadMod();
+    await m.installTemplateFile(UID, 'student');
+    const row = m.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const ref = m.buildContentRef(row.group_id, '学习背景');
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '硕士', '智能', 'p_abc');
+    const r2 = await m.appendFieldValueToRef(UID, ref, '教育阶段', '硕士', '智能', 'p_abc');
+    expect(r2.ok).toBe(true);
+    const res = await m.listFieldsByRef(UID, ref);
+    expect(res.fields![0].values).toHaveLength(1);
+  });
+
+  it('round-trips a section value with project through serialize/parse', async () => {
+    const m = await loadMod();
+    const groups = await import('../../../src/main/features/personal_ontology_groups');
+    const fv = { value: '机器学习', source: '智能', project: 'p_abc' };
+    const line = groups.serializeFieldValueLine(fv);
+    expect(line).toBe('- 机器学习 [智能] @proj:p_abc');
+    expect(groups.parseFieldValueLine(line)).toEqual(fv);
+  });
+});

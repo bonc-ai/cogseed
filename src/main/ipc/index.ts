@@ -1091,13 +1091,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { project };
   },
 
-  // ── Workspaces（工作空间一期：空间 = 主界面 + 资源作用域限制）────────────
+  // ── 情境空间（原"工作空间"：空间 = 主界面 + 资源作用域限制）────────────
   'spaces.list': async (_payload, ctx) => {
     return { spaces: await spaces.listSpaces(ctx.userId) };
   },
 
-  'spaces.create': async ({ name, template_id, icon } = {}, ctx) => {
-    const result = await spaces.createSpace(ctx.userId, { name, template_id, icon });
+  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon } = {}, ctx) => {
+    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
   },
@@ -1161,7 +1161,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { templates };
   },
 
-  // ── 项目 ↔ 空间绑定（工作空间一期）──────────────────────────────────────
+  // 情境入口场景列表（教育/写作/职场+自定义，M2）
+  'spaces.scenarios.list': async (_payload, _ctx) => {
+    const scenarios = await import('../features/role_templates').then((m) => m.listScenarios());
+    return { scenarios };
+  },
+
+  // ── 项目 ↔ 空间绑定（情境空间一期）──────────────────────────────────────
   'projects.bindSpace': async ({ projectId, spaceId } = {}, ctx) => {
     if (!safeId(projectId)) throw new Error('invalid projectId');
     if (spaceId && !safeId(spaceId)) throw new Error('invalid spaceId');
@@ -1403,6 +1409,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       skillDetails: bindings.skills
         .map((id) => skillById.get(id))
         .filter(Boolean),
+    };
+  },
+
+  'projects.scope.resolve': async ({ projectId }, ctx) => {
+    if (projectId && !safeId(projectId)) throw new Error('invalid projectId');
+    const meta = await projects.getProjectScopeMeta(ctx.userId, projectId || null);
+    if (!meta.scope) return { ok: true, scope: null, space: meta.space };
+    const [agentList, skillList] = await Promise.all([
+      agents.listAgentSummaries(),
+      skills.listSkills(),
+    ]);
+    const agentById = new Map(agentList.map((a: any) => [a.agent_id, a]));
+    const skillById = new Map(skillList.map((s: any) => [s.id, s]));
+    return {
+      ok: true,
+      scope: {
+        agents: meta.scope.agents.map((id) => ({ id, name: (agentById.get(id) as any)?.name || id })),
+        skills: meta.scope.skills.map((id) => ({ id, name: (skillById.get(id) as any)?.name || id })),
+      },
+      space: meta.space,
     };
   },
 
@@ -2716,24 +2742,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'personalOntology.candidates.list': async (_payload, ctx) => {
     return personalOntologyCandidates.listCandidates(ctx.userId);
   },
-  'personalOntology.candidates.confirm': async ({ candidateId, toGlobalMemory, toGroupIds, targetField, routeWithLlm }, ctx) => {
+  'personalOntology.candidates.confirm': async ({ candidateId, toGlobalMemory, toGroupIds, targetField, projectId, routeWithLlm }, ctx) => {
     if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
-    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string } = {};
+    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string; projectId?: string } = {};
     if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
     if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
     if (typeof targetField === 'string' && targetField.trim()) dest.targetField = targetField.trim();
+    if (typeof projectId === 'string' && projectId.trim()) dest.projectId = projectId.trim();
     return personalOntologyCandidates.confirmCandidate(ctx.userId, candidateId, dest, { routeWithLlm: routeWithLlm === true });
   },
   'personalOntology.candidates.reject': async ({ candidateId, reason }, ctx) => {
     if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
     return personalOntologyCandidates.rejectCandidate(ctx.userId, candidateId, reason);
   },
-  'personalOntology.candidates.confirmBatch': async ({ candidateIds, toGlobalMemory, toGroupIds, targetField, routeWithLlm }, ctx) => {
+  'personalOntology.candidates.confirmBatch': async ({ candidateIds, toGlobalMemory, toGroupIds, targetField, projectId, routeWithLlm }, ctx) => {
     if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
-    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string } = {};
+    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string; projectId?: string } = {};
     if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
     if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
     if (typeof targetField === 'string' && targetField.trim()) dest.targetField = targetField.trim();
+    if (typeof projectId === 'string' && projectId.trim()) dest.projectId = projectId.trim();
     return personalOntologyCandidates.confirmCandidates(ctx.userId, candidateIds, dest, { routeWithLlm: routeWithLlm === true });
   },
   'personalOntology.candidates.rejectBatch': async ({ candidateIds, reason }, ctx) => {

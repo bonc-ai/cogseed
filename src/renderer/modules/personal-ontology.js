@@ -33,6 +33,7 @@
   let _pocTemplatesLoaded = false;
   let _pocCandidates = [];
   let _pocBlocked = [];
+  let _pocProjectNames = null; // Map(pid → name)，二期 D5 字段值 @项目 显示用（懒加载）
   // 右栏选中：{kind:'candidates'} | {kind:'candidate',id} | {kind:'group',id}
   let _pocSelected = { kind: 'candidates' };
   // 每张候选卡片的去向选择状态：candidate_id -> { toGlobalMemory, groupIds, field }
@@ -326,6 +327,7 @@
                 <div class="memory-group-field-value">
                   <span class="memory-group-field-value-text">${escapeHtml(v.value)}</span>
                   <span class="memory-group-field-source muted">${escapeHtml(_tv('memory.group_field_value_source', { value: '', source: v.source }))}</span>
+                  ${v.project ? `<span class="memory-group-field-project">@${escapeHtml(_pocProjectNames ? (_pocProjectNames.get(v.project) || v.project) : v.project)}</span>` : ''}
                   <button type="button" class="memory-icon-btn" data-poc-group-action="field-edit-value"
                     data-poc-ref="${escapeHtml(ref)}" data-poc-field="${escapeHtml(f.name)}" data-poc-value="${escapeHtml(v.value)}"
                     title="${escapeHtml(_t('memory.edit', '编辑'))}">✎</button>
@@ -380,6 +382,7 @@
               <div class="memory-group-field-value">
                 <span class="memory-group-field-value-text">${escapeHtml(v.value)}</span>
                 <span class="memory-group-field-source muted">${escapeHtml(_tv('memory.group_field_value_source', { value: '', source: v.source }))}</span>
+                ${v.project ? `<span class="memory-group-field-project">@${escapeHtml(_pocProjectNames ? (_pocProjectNames.get(v.project) || v.project) : v.project)}</span>` : ''}
                 <button type="button" class="memory-icon-btn" data-poc-group-action="field-edit-value"
                   data-poc-field="${escapeHtml(f.name)}" data-poc-value="${escapeHtml(v.value)}"
                   title="${escapeHtml(_t('memory.edit', '编辑'))}">✎</button>
@@ -474,6 +477,18 @@
     </div>`;
   }
 
+  async function _pocEnsureProjectNames() {
+    if (_pocProjectNames) return _pocProjectNames;
+    try {
+      const res = await window.orkas.invoke('projects.list');
+      const projects = (res && Array.isArray(res.projects)) ? res.projects : [];
+      _pocProjectNames = new Map(projects.map((p) => [p.project_id, p.name || p.project_id]));
+    } catch (_) {
+      _pocProjectNames = new Map();
+    }
+    return _pocProjectNames;
+  }
+
   async function _pocOpenGroup(groupId) {
     _pocSelected = { kind: 'group', id: groupId };
     const group = _pocGroups.find((g) => g.group_id === groupId);
@@ -489,6 +504,7 @@
       entriesBySection: null,
       view: isTemplate ? 'form' : 'raw',
     };
+    await _pocEnsureProjectNames(); // 二期 D5：字段值 @项目 显示需要项目名映射
     renderPersonalOntology();
     const res = await _pocInvoke('personalOntology.groups.read', { groupId });
     if (!_pocGroupEditor || _pocGroupEditor.groupId !== groupId) return;
@@ -878,6 +894,9 @@
     const state = _pocDestFor(candidateId);
     const payload = { toGlobalMemory: !!state.toGlobalMemory, toGroupIds: Array.from(state.groupIds) };
     if (state.field && state.field !== 'flow') payload.targetField = state.field;
+    // 二期 D5：候选自带来源项目标记 → 透传（主进程 dest.projectId 优先于候选）
+    const cand = _pocCandidates.find((x) => x.candidate_id === candidateId);
+    if (cand && cand.project_id) payload.projectId = cand.project_id;
     return payload;
   }
 
@@ -956,6 +975,8 @@
         const state = _pocDestState.get(c.candidate_id);
         const field = state && state.field ? state.field : (c.target_field || 'flow');
         if (field && field !== 'flow') dest.targetField = field;
+        // 二期 D5：候选自带来源项目标记 → 透传
+        if (c.project_id) dest.projectId = c.project_id;
         const res = await window.orkas.invoke('personalOntology.candidates.confirm', { candidateId: c.candidate_id, ...dest, routeWithLlm: true });
         if (res && res.ok) {
           okCount++;

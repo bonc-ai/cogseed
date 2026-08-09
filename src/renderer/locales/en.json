@@ -3275,5 +3275,8 @@
   "spaces.tab_resources": "Resources",
   "spaces.template_label": "Role template (optional)",
   "spaces.tpl_builtin": "Template built-ins (from role template, read-only)",
-  "spaces.tpl_bundle": "includes"
+  "spaces.tpl_bundle": "includes",
+  "spaces.chip_scenarios": "Scenarios",
+  "spaces.ontology_empty": "No values yet: after candidates are extracted and confirmed in a space project, they will appear here by role-template field",
+  "spaces.scenario_tag": "Scenario"
 }

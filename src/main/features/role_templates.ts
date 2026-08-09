@@ -30,7 +30,7 @@ export interface PresetGroup {
 }
 
 /**
- * 角色模板自带的技能/智能体捆绑（工作空间一期）。
+ * 角色模板自带的技能/智能体捆绑（情境空间）。
  * id 引用当前用户可见资源：技能 = `listSkills()` 的 id（custom + marketplace），
  * 智能体 = `listAgents()` 的 id。派生时按有效集合过滤失效引用（见 spaces.ts）。
  */
@@ -806,7 +806,150 @@ const BUILTIN_TEMPLATES: RoleTemplate[] = [
       agent_ids: ["36cb9c97ac31", "876218dd6c3f", "9099ea65848a"],
     },
   },
+{
+    template_id: 'ecommerce_ops',
+    name: '电商运营',
+    description: '电商运营：店铺管理、选品、内容种草、销售复盘——把货卖出去的整套打法。',
+    version: '1.0.0',
+    preset_groups: [
+        {
+          title: "店铺与品类",
+          fields: [
+            { name: "店铺类型" },
+            { name: "主营类目" },
+            { name: "目标人群" },
+            { name: "价格带" },
+            { name: "平台" },
+          ],
+        },
+        {
+          title: "选品与商品",
+          fields: [
+            { name: "在售商品" },
+            { name: "选品标准" },
+            { name: "竞品名单" },
+            { name: "毛利目标" },
+            { name: "库存方式" },
+          ],
+        },
+        {
+          title: "内容与渠道",
+          fields: [
+            { name: "主推渠道" },
+            { name: "内容形式" },
+            { name: "发布节奏" },
+            { name: "账号定位" },
+            { name: "素材库" },
+          ],
+        },
+        {
+          title: "数据与目标",
+          fields: [
+            { name: "月销目标" },
+            { name: "核心指标" },
+            { name: "广告预算" },
+            { name: "复盘习惯" },
+          ],
+        },
+        {
+          title: "审美与品牌",
+          fields: [
+            { name: "品牌调性" },
+            { name: "视觉风格" },
+            { name: "禁忌元素" },
+            { name: "参考店铺" },
+          ],
+        }
+    ],
+        bundle: {
+          skill_ids: ["8ac59333bc31", "79943922f937", "a5c864d6b267", "02d958231673", "a31023dd51a0"],
+          agent_ids: ["1ce66a5d9875", "2a2d007ec7e2", "bc60fe682b5a"],
+        },
+  },
 ];
+
+// ── 情境空间场景（Scenario）—— 建空间的 UX 入口，推荐角色模板组合 ──────────
+
+/**
+ * 场景 = 情境空间创建时的语义入口（教育/写作/职场+自定义）。
+ * 场景推荐主+副角色模板组合 + 建议额外资源（基线之上再追加）。
+ * 渲染层显示场景卡，点击后进入创建流程（模板预填）。
+ *
+ * 注意：场景是纯 UX 概念，不落盘；空间仍只存 primary/secondary/extra。
+ */
+export interface Scenario {
+  scenario_id: string;
+  /** 场景显示名（中文；UI 通过 i18n 覆盖可本地化）。 */
+  name: string;
+  description: string;
+  /** emoji 图标 */
+  icon: string;
+  /** 建议主角色模板 id；无 = 自定义场景，由用户自选。 */
+  suggested_primary_template_id?: string;
+  /** 建议副角色模板 id 列表。 */
+  suggested_secondary_template_ids: string[];
+  /** 建议额外技能 id（模板 bundle 之外再追加）；空 = 不推荐。 */
+  suggested_extra_skills: string[];
+  /** 建议额外智能体 id（模板 bundle 之外再追加）；空 = 不推荐。 */
+  suggested_extra_agents: string[];
+}
+
+const SCENARIOS: Scenario[] = [
+  {
+    scenario_id: 'education',
+    name: '教育',
+    description: '学生与学者的学习研究空间：课程管理、论文写作、知识体系构建',
+    icon: '🎓',
+    suggested_primary_template_id: 'student',
+    suggested_secondary_template_ids: ['scholar'],
+    suggested_extra_skills: [],
+    suggested_extra_agents: [],
+  },
+  {
+    scenario_id: 'writing',
+    name: '写作',
+    description: '技术写作与知识管理空间：文档体系、术语治理、内容发布',
+    icon: '📝',
+    suggested_primary_template_id: 'technical_writer',
+    suggested_secondary_template_ids: [],
+    suggested_extra_skills: [],
+    suggested_extra_agents: [],
+  },
+  {
+    scenario_id: 'workplace',
+    name: '职场',
+    description: '产品、项目与交付的专业协作空间：需求管理、进度追踪、方案交付',
+    icon: '💼',
+    suggested_primary_template_id: 'product_manager',
+    suggested_secondary_template_ids: ['project_manager', 'fde'],
+    suggested_extra_skills: [],
+    suggested_extra_agents: [],
+  },
+  {
+    scenario_id: 'custom',
+    name: '自定义',
+    description: '自由拼装：不预设模板，自行选择角色与资源组合',
+    icon: '🧩',
+    // 无 suggested_primary → 用户自选
+    suggested_primary_template_id: undefined,
+    suggested_secondary_template_ids: [],
+    suggested_extra_skills: [],
+    suggested_extra_agents: [],
+  },
+];
+
+/** 返回场景列表（防御性拷贝）。 */
+export function listScenarios(): Scenario[] {
+  return SCENARIOS.map((s) => ({ ...s, suggested_secondary_template_ids: [...s.suggested_secondary_template_ids], suggested_extra_skills: [...s.suggested_extra_skills], suggested_extra_agents: [...s.suggested_extra_agents] }));
+}
+
+/** 按 scenario_id 查找场景；未命中返回 undefined。 */
+export function getScenario(scenarioId: string): Scenario | undefined {
+  const found = SCENARIOS.find((s) => s.scenario_id === scenarioId);
+  return found ? { ...found, suggested_secondary_template_ids: [...found.suggested_secondary_template_ids], suggested_extra_skills: [...found.suggested_extra_skills], suggested_extra_agents: [...found.suggested_extra_agents] } : undefined;
+}
+
+// ── 模板查询 API ───────────────────────────────────────────────────────────
 
 /** 返回内置模板列表（防御性拷贝，调用方改动不影响注册表）。 */
 export function listRoleTemplates(): RoleTemplate[] {

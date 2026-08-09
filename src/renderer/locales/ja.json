@@ -3055,5 +3055,8 @@
   "spaces.tab_resources": "リソース",
   "spaces.template_label": "ロールテンプレート（任意）",
   "spaces.tpl_builtin": "テンプレート標準装備（ロールテンプレート由来・読み取り専用）",
-  "spaces.tpl_bundle": "標準装備"
+  "spaces.tpl_bundle": "標準装備",
+  "spaces.chip_scenarios": "シナリオ",
+  "spaces.ontology_empty": "まだ値がありません：スペースプロジェクトで候補を抽出・確認すると、ここにロールテンプレートのフィールドごとに表示されます",
+  "spaces.scenario_tag": "シナリオ"
 }

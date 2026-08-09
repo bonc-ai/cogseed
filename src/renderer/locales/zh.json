@@ -3275,5 +3275,8 @@
   "spaces.tab_resources": "资源",
   "spaces.template_label": "角色模板（可选）",
   "spaces.tpl_builtin": "模板标配（来自角色模板，只读）",
-  "spaces.tpl_bundle": "自带"
+  "spaces.tpl_bundle": "自带",
+  "spaces.chip_scenarios": "场景",
+  "spaces.ontology_empty": "模板字段还没有值：在空间项目里提炼并确认候选后，这里会按角色模板字段展示",
+  "spaces.scenario_tag": "场景"
 }

@@ -90,10 +90,12 @@ export interface GroupContentResult {
   error?: string;
 }
 
-/** 单条字段值：`- <值> [<来源>]`。 */
+/** 单条字段值：`- <值> [<来源>]`，可选来源项目标记 `@proj:<pid>`（二期 D5）。 */
 export interface FieldValue {
   value: string;
   source: string;
+  /** 可选：来源项目 id（落盘 `@proj:<pid>`，展示层映射项目名）。缺省 = 全局/手动。 */
+  project?: string;
 }
 
 /** 组内容文件的结构化视图：字段区（多值）+ 流水区（条目数组）。 */
@@ -156,20 +158,30 @@ export function splitFlowEntries(text: string): string[] {
     .filter(Boolean);
 }
 
-/** 匹配 `- <值> [<来源>]`；值内的 `\[` 转义在此还原为 `[`。
- *  无 `[来源]` 后缀的裸值行也解析（来源默认 `手动`，任务书 §2.1）。 */
-export function parseFieldValueLine(line: string): { value: string; source: string } | null {
+/** 匹配 `- <值> [<来源>]`（可选 `@proj:<pid>` 来源项目标记）；值内的 `\\[` 转义在此还原为 `[`。
+ *  无 `[来源]` 后缀的裸值行也解析（来源默认 `手动`，任务书 §2.1）。
+ *  `@` 标记以 `proj:` 前缀剥离存 pid；其他形态（理论无）宽容保留原样。 */
+export function parseFieldValueLine(line: string): { value: string; source: string; project?: string } | null {
   if (typeof line !== 'string') return null;
-  const withSource = line.match(/^- (.+) \[(\S+)\]$/);
-  if (withSource) return { value: withSource[1].replace(/\\\[/g, '['), source: withSource[2] };
+  const withSource = line.match(/^- (.+) \[(\S+)\](?: @([^\s]+))?$/);
+  if (withSource) {
+    const out: { value: string; source: string; project?: string } = {
+      value: withSource[1].replace(/\\\[/g, '['),
+      source: withSource[2],
+    };
+    const marker = withSource[3];
+    if (marker) out.project = marker.startsWith('proj:') ? marker.slice('proj:'.length) : marker;
+    return out;
+  }
   const bare = line.match(/^- (.+)$/);
   if (!bare) return null;
   return { value: bare[1].replace(/\\\[/g, '['), source: '手动' };
 }
 
-/** 序列化单条值行：值内 `[` 转义为 `\[`，避免与来源标记冲突。 */
+/** 序列化单条值行：值内 `[` 转义为 `\\[`，避免与来源标记冲突；带项目则追加 `@proj:<pid>`。 */
 export function serializeFieldValueLine(fv: FieldValue): string {
-  return `- ${String(fv.value).replace(/\[/g, '\\[')} [${fv.source}]`;
+  const base = `- ${String(fv.value).replace(/\[/g, '\\[')} [${fv.source}]`;
+  return fv.project ? `${base} @proj:${fv.project}` : base;
 }
 
 /** 解析字段区文本（`## 字段区` 与 `## 流水区` 之间的部分）为字段表。 */
@@ -263,9 +275,9 @@ const GROUP_FIELD_LABELS: Record<string, string> = {
   '模板': 'template_ref',
 };
 
-/** 模板行合法格式：`<template_id>@<semver>`（id 只允许小写字母数字连字符；
+/** 模板行合法格式：`<template_id>@<semver>`（id 只允许小写字母数字连字符下划线；
  *  版本支持标准 semver 预发布后缀，如 `1.1.0` / `0.2.0-review.1`）。 */
-const TEMPLATE_REF_RE = /^([a-z0-9-]+)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
+const TEMPLATE_REF_RE = /^([a-z0-9_-]+)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
 
 export function parseGroupsMarkdown(text: string): GroupMeta[] {
   const blocks = text.split(/\n(?=###\s+\S)/).map((b) => b.trim()).filter((b) => b.startsWith('### '));
@@ -526,8 +538,8 @@ export async function appendToGroup(uid: string, groupId: string, text: string):
 }
 
 /**
- * 字段区：往 `### <fieldName>` 小节追加一条 `- <值> [<来源>]`。
- * 完全匹配（同值同来源）去重跳过；多值追加不覆盖。字段小节不存在则创建；
+ * 字段区：往 `### <fieldName>` 小节追加一条 `- <值> [<来源>]`（可选 `@proj:<pid>`）。
+ * 完全匹配（同值同源同项目）去重跳过；多值追加不覆盖。字段小节不存在则创建；
  * 首次写字段会把旧纯文本文件升级为双区格式（内容无损）。
  */
 export async function appendFieldValue(
@@ -536,6 +548,7 @@ export async function appendFieldValue(
   fieldName: string,
   value: string,
   source: string,
+  project?: string,
 ): Promise<SimpleResult> {
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
   const name = String(fieldName || '').trim();
@@ -543,13 +556,14 @@ export async function appendFieldValue(
   if (!name) return { ok: false, error: 'field name required' };
   if (!val) return { ok: false, error: 'empty value' };
   const src = normalizeSource(source);
+  const proj = project ? String(project).trim() : undefined;
 
   return mutateGroupContent(uid, groupId, (content) => {
     const values = content.fields[name] || (content.fields[name] = []);
-    if (values.some((fv) => fv.value === val && fv.source === src)) {
+    if (values.some((fv) => fv.value === val && fv.source === src && (fv.project ?? undefined) === proj)) {
       return { changed: false }; // 完全匹配去重
     }
-    values.push({ value: val, source: src });
+    values.push({ value: val, source: src, ...(proj ? { project: proj } : {}) });
     return { changed: true };
   });
 }
@@ -670,7 +684,7 @@ export interface ListGroupFieldsResult {
 
 /** 模板文件元信息行：`> 模板: <template_id>@<semver>`（与 template_files.ts 同源，
  *  这里做轻量识别，避免 groups ↔ template_files 循环依赖）。 */
-const TEMPLATE_FILE_META_RE = /^>\s*模板:\s*([a-z0-9-]+)@(\d+\.\d+\.\d+)/m;
+const TEMPLATE_FILE_META_RE = /^>\s*模板:\s*([a-z0-9_-]+)@(\d+\.\d+\.\d+)/m;
 
 /** 模板文件（`## 分节` / `### 字段` 分节式）的轻量字段汇总：跨分节合并所有
  *  `### <字段名>` 小节为字段清单（含空坑与值，文件顺序）。仅提取字段名+值；
