@@ -3519,6 +3519,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ok: true,
       items: preview.items.map((item) => ({
         externalId: item.externalId,
+        // Agent this credential belongs to — the CC Switch externalId is
+        // `${appType}:${id}`, so the prefix (up to the first ':') is the
+        // originating agent. appType values contain no ':', so this is exact.
+        appType: item.externalId.slice(0, item.externalId.indexOf(':')) || item.externalId,
         name: item.name,
         protocol: item.protocol,
         baseUrl: item.baseUrl,

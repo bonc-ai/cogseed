@@ -190,5 +190,7 @@ body.cs-onboarding-active .app-container{display:none !important}
   background:var(--cs-line-soft);color:var(--cs-muted);white-space:nowrap;font-family:var(--cs-mono)}
 #cs-onboarding .cs-team-tag.ok{color:var(--cs-forest-deep);background:var(--cs-forest-weak)}
 #cs-onboarding .cs-team-tag.warn{color:#8A5A18;background:var(--cs-bud-weak)}
+#cs-onboarding .cs-team-group{border-bottom:1px solid var(--cs-line)}
+#cs-onboarding .cs-team-group:last-child{border-bottom:none}
 
 @media (prefers-reduced-motion:reduce){#cs-onboarding *,#cs-ob-toast{animation:none !important;transition:none !important}}

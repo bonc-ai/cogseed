@@ -22,7 +22,9 @@ const _obLog = typeof createLogger === 'function' ? createLogger('onboarding') :
 
 const CS_AGENT_LABELS = {
   claude: 'Claude Code',
+  'claude-desktop': 'Claude Desktop',
   codex: 'Codex',
+  gemini: 'Gemini CLI',
   openclaw: 'OpenClaw',
   opencode: 'OpenCode',
   hermes: 'Hermes',
@@ -288,51 +290,93 @@ async function _csLoadTeam(force) {
   }
 }
 
+// Friendly agent label from a CC Switch appType (externalId prefix). Reuses
+// the shared CS_AGENT_LABELS map defined at the top of the module.
+function _csAgentLabel(appType) {
+  return CS_AGENT_LABELS[appType] || appType || '其他 Agent';
+}
+
+// Render the importable model services GROUPED BY AGENT (Claude Code, Codex …).
+// Each agent is its own group with its own "connect" button, so the user
+// connects an agent's models as a unit rather than picking from a flat list.
 function _csRenderTeam(items, unsupported) {
   const box = document.getElementById('cs-team-list');
   if (!box) return;
 
   if (!items.length && !unsupported.length) {
     box.innerHTML =
-      '<div class="cs-state">没有可一键导入的模型服务。可在设置的「AI 团队」里手动添加模型后再回来导入会话。</div>';
+      '<div class="cs-state">没有可一键连接的 Agent 模型。可在设置的「AI 团队」里手动添加模型后再回来导入会话。</div>';
     return;
   }
 
-  // Importable rows: pre-checked when a real key is present; rows that need a
-  // key are still selectable (they get imported as needs-key placeholders the
-  // user finishes in settings) but flagged honestly.
-  const rows = items.map((it) => {
-    const proto = it.protocol ? `<span class="cs-team-tag">${_csEsc(it.protocol)}</span>` : '';
-    const keyState = it.needsKey
-      ? '<span class="cs-team-tag warn">需补充 Key</span>'
-      : `<span class="cs-team-tag ok">Key ${_csEsc(it.apiKeyMasked || '••••')}</span>`;
-    const base = it.baseUrl ? `<small>${_csEsc(it.baseUrl)}</small>` : '';
+  // Bucket both importable and unsupported rows by their originating agent.
+  const groups = new Map(); // appType → { items: [], unsupported: [] }
+  const bucket = (appType) => {
+    if (!groups.has(appType)) groups.set(appType, { items: [], unsupported: [] });
+    return groups.get(appType);
+  };
+  items.forEach((it) => bucket(it.appType || 'other').items.push(it));
+  unsupported.forEach((u) => bucket(u.appType || 'other').unsupported.push(u));
+
+  // Stable, friendly ordering: known agents first, then any others.
+  const order = ['claude', 'claude-desktop', 'codex', 'gemini'];
+  const appTypes = Array.from(groups.keys()).sort((a, b) => {
+    const ia = order.indexOf(a); const ib = order.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  });
+
+  const groupHtml = appTypes.map((appType) => {
+    const g = groups.get(appType);
+    const label = _csAgentLabel(appType);
+    const connectable = g.items.length;
+
+    const rows = g.items.map((it) => {
+      const proto = it.protocol ? `<span class="cs-team-tag">${_csEsc(it.protocol)}</span>` : '';
+      const keyState = it.needsKey
+        ? '<span class="cs-team-tag warn">需补充 Key</span>'
+        : `<span class="cs-team-tag ok">Key ${_csEsc(it.apiKeyMasked || '••••')}</span>`;
+      const base = it.baseUrl ? `<small>${_csEsc(it.baseUrl)}</small>` : '';
+      return `
+        <div class="cs-src" data-external-id="${_csEsc(it.externalId)}" data-app-type="${_csEsc(appType)}">
+          <input type="checkbox" ${it.needsKey ? '' : 'checked'} />
+          <div class="s-ico">${CS_TERMINAL_SVG}</div>
+          <div>
+            <strong>${_csEsc(it.name || it.externalId)}</strong>
+            ${base}
+            <div class="cs-team-tags">${proto}${keyState}</div>
+          </div>
+        </div>`;
+    }).join('');
+
+    // Honest per-agent note about credentials that can't be migrated.
+    const unsupportedHtml = g.unsupported.length
+      ? `<div class="cs-state">${g.unsupported.length} 项无法迁移 Key（如订阅/OAuth 登录）：` +
+        g.unsupported.map((u) => _csEsc(u.name || u.externalId)).join('、') +
+        '。这类需在设置里另行登录，无法一键连接。</div>'
+      : '';
+
+    const bar = connectable
+      ? `<div class="cs-import-bar">
+           <button type="button" class="cs-import-btn cs-team-connect" data-app-type="${_csEsc(appType)}">连接 ${_csEsc(label)} 到 AI 团队</button>
+           <div class="cs-import-result cs-team-result" data-app-type="${_csEsc(appType)}"></div>
+         </div>`
+      : (g.unsupported.length
+          ? '<div class="cs-import-bar"><div class="cs-import-result">该 Agent 暂无可一键迁移的 Key。</div></div>'
+          : '');
+
     return `
-      <div class="cs-src" data-external-id="${_csEsc(it.externalId)}">
-        <input type="checkbox" ${it.needsKey ? '' : 'checked'} />
-        <div class="s-ico">${CS_TERMINAL_SVG}</div>
-        <div>
-          <strong>${_csEsc(it.name || it.externalId)}</strong>
-          ${base}
-          <div class="cs-team-tags">${proto}${keyState}</div>
-        </div>
+      <div class="cs-group-head" data-team-group="${_csEsc(appType)}">
+        <span class="g-name">${CS_TERMINAL_SVG}${_csEsc(label)}</span>
+        <span class="g-status">${connectable ? `${connectable} 个模型可连接` : '无可迁移 Key'}</span>
+      </div>
+      <div class="cs-team-group" data-app-type="${_csEsc(appType)}">
+        ${rows}${unsupportedHtml}${bar}
       </div>`;
   }).join('');
 
-  // Honest surfacing of what can't be migrated (OAuth-only / official logins).
-  const unsupportedHtml = unsupported.length
-    ? `<div class="cs-state">${unsupported.length} 个来源无法迁移 Key（如订阅/OAuth 登录）：` +
-      unsupported.map((u) => _csEsc(u.name || u.externalId)).join('、') +
-      '。这类需要你在设置里另行登录，无法一键导入。</div>'
-    : '';
+  box.innerHTML = groupHtml;
 
-  box.innerHTML = rows +
-    unsupportedHtml +
-    `<div class="cs-import-bar">
-       <button type="button" class="cs-import-btn" id="cs-team-connect">连接所选到 AI 团队</button>
-       <div class="cs-import-result" id="cs-team-result"></div>
-     </div>`;
-
+  // Row selection interactions.
   box.querySelectorAll('.cs-src[data-external-id]').forEach((row) => {
     const checkbox = row.querySelector('input[type="checkbox"]');
     row.classList.toggle('selected', checkbox.checked);
@@ -346,20 +390,25 @@ function _csRenderTeam(items, unsupported) {
     });
   });
 
-  const connectBtn = box.querySelector('#cs-team-connect');
-  if (connectBtn) connectBtn.addEventListener('click', () => void _csConnectTeam(box));
+  // Per-agent connect buttons.
+  box.querySelectorAll('.cs-team-connect').forEach((btn) => {
+    btn.addEventListener('click', () => void _csConnectTeam(box, btn.dataset.appType));
+  });
 }
 
-// Sync the checked providers into custom providers ("AI 团队"). Honest result:
+// Sync the checked providers of ONE agent into custom providers ("AI 团队").
+// Scoped by appType so each agent connects independently. Honest result:
 // added / updated counts, and a clear note when some rows still need a key.
-async function _csConnectTeam(box) {
-  const btn = box.querySelector('#cs-team-connect');
-  const resultBox = box.querySelector('#cs-team-result');
+async function _csConnectTeam(box, appType) {
+  const group = box.querySelector(`.cs-team-group[data-app-type="${appType}"]`);
+  if (!group) return;
+  const btn = group.querySelector('.cs-team-connect');
+  const resultBox = group.querySelector('.cs-team-result');
   if (!resultBox) return;
 
   const externalIds = [];
   let needsKeySelected = 0;
-  box.querySelectorAll('.cs-src[data-external-id] input[type="checkbox"]:checked').forEach((cb) => {
+  group.querySelectorAll('.cs-src[data-external-id] input[type="checkbox"]:checked').forEach((cb) => {
     const row = cb.closest('.cs-src');
     const id = row ? row.dataset.externalId : null;
     if (id) externalIds.push(id);
@@ -367,12 +416,12 @@ async function _csConnectTeam(box) {
   });
 
   if (!externalIds.length) {
-    resultBox.innerHTML = '<div class="cs-state">请先勾选要连接的模型服务。</div>';
+    resultBox.innerHTML = '<div class="cs-state">请先勾选该 Agent 下要连接的模型。</div>';
     return;
   }
 
   if (btn) btn.disabled = true;
-  resultBox.innerHTML = `<div class="cs-extract-progress">正在连接 ${externalIds.length} 个模型服务…</div>`;
+  resultBox.innerHTML = `<div class="cs-extract-progress">正在连接 ${externalIds.length} 个模型…</div>`;
 
   try {
     const res = await window.orkas.invoke('customProviders.ccswitch.sync', { externalIds });
@@ -384,17 +433,18 @@ async function _csConnectTeam(box) {
     }
     const added = res.added || 0;
     const updated = res.updated || 0;
+    const label = _csAgentLabel(appType);
     const summary =
-      `<div class="cs-state">已连接到 AI 团队：新增 ${added} 个` +
+      `<div class="cs-state">已把「${_csEsc(label)}」连接到 AI 团队：新增 ${added} 个` +
       (updated ? `，更新 ${updated} 个` : '') +
       (needsKeySelected ? `。其中 ${needsKeySelected} 个尚缺 Key，已作为占位导入，请到设置的「AI 团队」补齐后即可使用` : '') +
       '。这些模型现在可用于会话导入时的自动压缩提炼，也可在群聊里直接调用。</div>';
     resultBox.innerHTML = summary;
-    _csToast(`已连接 ${added + updated} 个模型服务到 AI 团队`);
-    _obLog.info('team connect finished', { added, updated, needsKeySelected });
+    _csToast(`已连接「${label}」的 ${added + updated} 个模型到 AI 团队`);
+    _obLog.info('team connect finished', { appType, added, updated, needsKeySelected });
   } catch (err) {
     const msg = (err && err.message) || String(err);
-    _obLog.warn('team connect failed', { error: msg });
+    _obLog.warn('team connect failed', { appType, error: msg });
     resultBox.innerHTML = `<div class="cs-state err">连接失败：${_csEsc(msg)}</div>`;
   } finally {
     if (btn) btn.disabled = false;
