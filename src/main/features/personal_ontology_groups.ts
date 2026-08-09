@@ -275,9 +275,9 @@ const GROUP_FIELD_LABELS: Record<string, string> = {
   '模板': 'template_ref',
 };
 
-/** 模板行合法格式：`<template_id>@<semver>`（id 只允许小写字母数字连字符；
+/** 模板行合法格式：`<template_id>@<semver>`（id 只允许小写字母数字连字符下划线；
  *  版本支持标准 semver 预发布后缀，如 `1.1.0` / `0.2.0-review.1`）。 */
-const TEMPLATE_REF_RE = /^([a-z0-9-]+)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
+const TEMPLATE_REF_RE = /^([a-z0-9_-]+)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
 
 export function parseGroupsMarkdown(text: string): GroupMeta[] {
   const blocks = text.split(/\n(?=###\s+\S)/).map((b) => b.trim()).filter((b) => b.startsWith('### '));
@@ -684,7 +684,7 @@ export interface ListGroupFieldsResult {
 
 /** 模板文件元信息行：`> 模板: <template_id>@<semver>`（与 template_files.ts 同源，
  *  这里做轻量识别，避免 groups ↔ template_files 循环依赖）。 */
-const TEMPLATE_FILE_META_RE = /^>\s*模板:\s*([a-z0-9-]+)@(\d+\.\d+\.\d+)/m;
+const TEMPLATE_FILE_META_RE = /^>\s*模板:\s*([a-z0-9_-]+)@(\d+\.\d+\.\d+)/m;
 
 /** 模板文件（`## 分节` / `### 字段` 分节式）的轻量字段汇总：跨分节合并所有
  *  `### <字段名>` 小节为字段清单（含空坑与值，文件顺序）。仅提取字段名+值；

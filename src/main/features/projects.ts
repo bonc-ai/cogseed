@@ -64,7 +64,7 @@ export interface Project {
   owner_uid: string;
   created_at: string;
   updated_at: string;
-  /** 工作空间一期：引用的空间 id（`cloud/spaces/<sid>.json`）。缺失 = 不引用 =
+  /** 情境空间（原"工作空间"）：引用的空间 id（`cloud/spaces/<sid>.json`）。缺失 = 不引用 =
    *  现有行为逐字节不变。空间是纯配置实体，不存会话/文件/记忆。 */
   space_id?: string;
 }
@@ -570,7 +570,7 @@ export async function pruneBindings(
  *  - stale projectId (project deleted but conv lingers) → returns null so
  *    the LLM falls back to global visibility instead of "zero scope".
  *
- *  工作空间一期（两级资源模型，决策树 S1/S2/S3）：
+ *  情境空间一期（两级资源模型，决策树 S1/S2/S3）：
  *    - 项目绑空间 → 空间派生集 S = 模板 bundle ∪ 空间 extra（过滤失效）；
  *      B = 项目 bindings（私有追加）。S∪B 全空 → null（全局可见，裁决 S1）；
  *      否则 → S∪B 并集（严格作用域，裁决 S2）。
@@ -625,7 +625,7 @@ export async function resolveProjectScope(
  *  任何失败（项目不存在/空间缺失/读错误）→ 降级 { scope: null, space: null }，绝不外抛。 */
 export interface ProjectScopeMeta {
   scope: ProjectBindings | null;
-  space: { space_id: string; template_id?: string; name: string } | null;
+  space: { space_id: string; template_id?: string; primary_template_id?: string; secondary_template_ids?: string[]; name: string } | null;
 }
 
 export async function getProjectScopeMeta(
@@ -643,7 +643,13 @@ export async function getProjectScopeMeta(
     if (!space) return { scope, space: null };
     return {
       scope,
-      space: { space_id: space.space_id, name: space.name, ...(space.template_id ? { template_id: space.template_id } : {}) },
+      space: {
+        space_id: space.space_id,
+        name: space.name,
+        ...(space.template_id ? { template_id: space.template_id } : {}),
+        ...(space.primary_template_id ? { primary_template_id: space.primary_template_id } : {}),
+        ...(space.secondary_template_ids?.length ? { secondary_template_ids: space.secondary_template_ids } : {}),
+      },
     };
   } catch (err) {
     log.warn(`getProjectScopeMeta failed user=${uid} pid=${projectId}: ${(err as Error).message}`);
@@ -700,7 +706,7 @@ export async function removeSkillBinding(
   ));
 }
 
-// ── Workspace binding（工作空间一期：项目 ↔ 空间）───────────────────────────
+// ── 情境空间绑定（原"工作空间"绑定：项目 ↔ 空间）───────────────────────────
 
 /** 绑定/解绑空间（空 spaceId = 解绑）。空间是纯配置实体，绑定只写
  *  project.json.space_id，不迁移任何会话/记忆。 */

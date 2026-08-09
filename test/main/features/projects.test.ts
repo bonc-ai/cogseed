@@ -859,7 +859,7 @@ describe('projects › getProjectScopeMeta（作用域 + 空间元数据，供 @
     if (!created.ok) throw new Error('create space failed');
     await projects.bindSpace(TEST_UID, p.project.project_id, created.space.space_id);
     const meta = await projects.getProjectScopeMeta(TEST_UID, p.project.project_id);
-    expect(meta.space).toEqual({ space_id: created.space.space_id, name: '学生', template_id: 'student' });
+    expect(meta.space).toEqual({ space_id: created.space.space_id, name: '学生', template_id: 'student', primary_template_id: 'student' });
   });
 
   it('项目不存在 → scope null + space null（降级不炸）', async () => {

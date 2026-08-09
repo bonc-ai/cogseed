@@ -924,13 +924,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { project };
   },
 
-  // ── Workspaces（工作空间一期：空间 = 主界面 + 资源作用域限制）────────────
+  // ── 情境空间（原"工作空间"：空间 = 主界面 + 资源作用域限制）────────────
   'spaces.list': async (_payload, ctx) => {
     return { spaces: await spaces.listSpaces(ctx.userId) };
   },
 
-  'spaces.create': async ({ name, template_id, icon } = {}, ctx) => {
-    const result = await spaces.createSpace(ctx.userId, { name, template_id, icon });
+  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon } = {}, ctx) => {
+    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
   },
@@ -994,7 +994,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { templates };
   },
 
-  // ── 项目 ↔ 空间绑定（工作空间一期）──────────────────────────────────────
+  // 情境入口场景列表（教育/写作/职场+自定义，M2）
+  'spaces.scenarios.list': async (_payload, _ctx) => {
+    const scenarios = await import('../features/role_templates').then((m) => m.listScenarios());
+    return { scenarios };
+  },
+
+  // ── 项目 ↔ 空间绑定（情境空间一期）──────────────────────────────────────
   'projects.bindSpace': async ({ projectId, spaceId } = {}, ctx) => {
     if (!safeId(projectId)) throw new Error('invalid projectId');
     if (spaceId && !safeId(spaceId)) throw new Error('invalid spaceId');

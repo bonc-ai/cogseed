@@ -241,7 +241,7 @@ export const userProjectsDir       = (uid: string) => path.join(userCloudRoot(ui
 export const projectDir            = (uid: string, pid: string) => path.join(userProjectsDir(uid), pid);
 export const projectMetaFile       = (uid: string, pid: string) => path.join(projectDir(uid, pid), 'project.json');
 export const projectBindingsFile   = (uid: string, pid: string) => path.join(projectDir(uid, pid), 'bindings.json');
-// Workspaces (工作空间一期): per-space JSON under `<uid>/cloud/spaces/`.
+// 情境空间（原"工作空间"）：per-space JSON under `<uid>/cloud/spaces/`.
 // No aggregate `_index.json` — listing scans `spaces/*.json` (same
 // no-aggregate rationale as projects).
 export const userSpacesDir         = (uid: string) => path.join(userCloudRoot(uid), 'spaces');

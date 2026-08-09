@@ -658,6 +658,91 @@ describe('personal_ontology_candidates › routeWithLlm integration (router mock
   });
 });
 
+// ── M3：治理元数据字段（sensitivity / write_actor / recorded_time）─────────────
+
+describe('personal_ontology_candidates › M3 governance metadata round-trip', () => {
+  it('round-trips all three new fields through serialize → parse', async () => {
+    const poc = await loadModule();
+    const candidates = [{
+      candidate_id: 'cand-m3-1',
+      kind: 'preference' as const,
+      confidence: 'high' as const,
+      summary: '喜欢大白话',
+      memory_scope: 'user' as const,
+      memory_text: '沟通风格：喜欢直接说人话',
+      source_memory_refs: ['conv-1'],
+      sensitivity: 'restricted' as const,
+      write_actor: 'user' as const,
+      recorded_time: '2026-08-09T10:30:00.000Z',
+    }];
+    const md = poc.serializeCandidatesMarkdown(candidates);
+    // 非默认值才会序列化
+    expect(md).toContain('- 敏感度: restricted');
+    expect(md).toContain('- 写入者: user');
+    expect(md).toContain('- 记录时间: 2026-08-09T10:30:00.000Z');
+
+    const parsed = poc.parseCandidatesMarkdown(md);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].sensitivity).toBe('restricted');
+    expect(parsed[0].write_actor).toBe('user');
+    expect(parsed[0].recorded_time).toBe('2026-08-09T10:30:00.000Z');
+  });
+
+  it('omits sensitivity/write_actor when they are default values (standard/llm)', async () => {
+    const poc = await loadModule();
+    const candidates = [{
+      candidate_id: 'cand-m3-2',
+      kind: 'preference' as const,
+      confidence: 'medium' as const,
+      summary: '摘要',
+      memory_scope: 'user' as const,
+      memory_text: '文本',
+      source_memory_refs: [],
+      sensitivity: 'standard' as const,
+      write_actor: 'llm' as const,
+    }];
+    const md = poc.serializeCandidatesMarkdown(candidates);
+    // 默认值不入 markdown（保持文件清爽）
+    expect(md).not.toContain('敏感度');
+    expect(md).not.toContain('写入者');
+
+    const parsed = poc.parseCandidatesMarkdown(md);
+    expect(parsed[0].sensitivity).toBe('standard');
+    expect(parsed[0].write_actor).toBe('llm');
+  });
+
+  it('old format without M3 fields parses with safe defaults', async () => {
+    const poc = await loadModule();
+    // 模拟 M2 版本的 candidates.md（无敏感度/写入者/记录时间行）
+    const oldMd = '### cand-old\n- 类型: preference\n- 置信度: high\n- 摘要: 旧候选\n- 记忆去向: user\n- 记忆文本: 旧文本\n- 来源: conv-1\n';
+    const parsed = poc.parseCandidatesMarkdown(oldMd);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].sensitivity).toBe('standard');
+    expect(parsed[0].write_actor).toBe('llm');
+    expect(parsed[0].recorded_time).toBe('');
+  });
+
+  it('coerces invalid sensitivity/write_actor values to safe defaults', async () => {
+    const poc = await loadModule();
+    const badMd = '### cand-bad\n- 类型: preference\n- 置信度: high\n- 摘要: x\n- 记忆去向: user\n- 敏感度: top-secret\n- 写入者: hacker\n- 记录时间: not-a-date\n- 来源: conv-1\n';
+    const parsed = poc.parseCandidatesMarkdown(badMd);
+    expect(parsed[0].sensitivity).toBe('standard'); // 非法值 → standard
+    expect(parsed[0].write_actor).toBe('llm');       // 非法值 → llm
+    expect(parsed[0].recorded_time).toBe('not-a-date'); // 字符串照收（parser 不校验 ISO）
+  });
+
+  it('sensitivity=standard and write_actor=llm re-serialize without those lines (no noise)', async () => {
+    const poc = await loadModule();
+    // parse → serialize 往返：默认值不产生额外行
+    const oldMd = '### cand-clean\n- 类型: preference\n- 置信度: high\n- 摘要: x\n- 记忆去向: user\n- 来源: conv-1\n';
+    const parsed = poc.parseCandidatesMarkdown(oldMd);
+    const reSerialized = poc.serializeCandidatesMarkdown(parsed);
+    expect(reSerialized).not.toContain('敏感度');
+    expect(reSerialized).not.toContain('写入者');
+    expect(reSerialized).not.toContain('记录时间');
+  });
+});
+
 // ── 二期 D5：确认链路来源项目标记（dest.projectId → @proj:<pid>）───────────
 
 describe('personal_ontology_candidates › project source marker via confirm', () => {

@@ -76,6 +76,13 @@ export type CandidateKind = 'preference' | 'instance' | 'property' | 'relation' 
  *  `shared` → MEMORY.md （更泛化的事实/规则，跨项目跨 agent，容量稍大） */
 export type MemoryTargetScope = 'user' | 'shared';
 
+/** 敏感度级别：standard = 常规注入 prompt，restricted = 存但不注入 LLM，
+ *  sensitive = 加密/额外保护（本版仅占位，暂与 restricted 行为一致）。 */
+export type SensitivityLevel = 'standard' | 'restricted' | 'sensitive';
+
+/** 写入者身份：标识候选由谁产出（用户手动/LLM 提取/技能生成）。 */
+export type WriteActor = 'user' | 'llm' | 'skill';
+
 export interface CandidateUpdate {
   candidate_id: string;
   kind: CandidateKind;
@@ -97,6 +104,12 @@ export interface CandidateUpdate {
   /** 二期 D5：来源项目 id（候选进池时标记，`- 来源项目:` 行）。确认落盘附加
    *  `@proj:<pid>`；dest.projectId 显式传入时覆盖（用户/UI 意图优先）。 */
   project_id?: string;
+  /** M3：敏感度级别。缺省 `standard`（兼容旧数据）。 */
+  sensitivity?: SensitivityLevel;
+  /** M3：写入者身份。缺省 `llm`（候选多由技能/LLM 产出）。 */
+  write_actor?: WriteActor;
+  /** M3：候选记录时间（ISO 8601）。缺省空字符串（旧数据无此字段）。 */
+  recorded_time?: string;
 }
 
 export interface BlockedItem {
@@ -147,10 +160,15 @@ const CANDIDATE_FIELD_LABELS: Record<string, string> = {
   '建议字段': 'target_field',
   '来源': 'source_memory_refs',
   '来源项目': 'project_id',
+  '敏感度': 'sensitivity',
+  '写入者': 'write_actor',
+  '记录时间': 'recorded_time',
 };
 
 const VALID_KINDS: CandidateKind[] = ['preference', 'instance', 'property', 'relation', 'rule'];
 const VALID_CONFIDENCE = ['low', 'medium', 'high'];
+const VALID_SENSITIVITY: SensitivityLevel[] = ['standard', 'restricted', 'sensitive'];
+const VALID_WRITE_ACTORS: WriteActor[] = ['user', 'llm', 'skill'];
 
 function coerceKind(v: unknown): CandidateKind {
   return (VALID_KINDS as string[]).includes(String(v)) ? (v as CandidateKind) : 'instance';
@@ -158,6 +176,14 @@ function coerceKind(v: unknown): CandidateKind {
 
 function coerceConfidence(v: unknown): 'low' | 'medium' | 'high' {
   return (VALID_CONFIDENCE.includes(String(v)) ? v : 'medium') as 'low' | 'medium' | 'high';
+}
+
+function coerceSensitivity(v: unknown): SensitivityLevel {
+  return (VALID_SENSITIVITY as string[]).includes(String(v)) ? (v as SensitivityLevel) : 'standard';
+}
+
+function coerceWriteActor(v: unknown): WriteActor {
+  return (VALID_WRITE_ACTORS as string[]).includes(String(v)) ? (v as WriteActor) : 'llm';
 }
 
 function coerceMemoryScope(v: unknown): MemoryTargetScope {
@@ -188,6 +214,9 @@ export function parseCandidatesMarkdown(text: string): CandidateUpdate[] {
       summary: raw.summary || '',
       memory_scope: coerceMemoryScope(raw.memory_scope),
       memory_text: raw.memory_text || raw.summary || '',
+      sensitivity: coerceSensitivity(raw.sensitivity),
+      write_actor: coerceWriteActor(raw.write_actor),
+      recorded_time: raw.recorded_time || '',
       ...(raw.registry_like_path ? { registry_like_path: raw.registry_like_path } : {}),
       ...(raw.diff_summary ? { diff_summary: raw.diff_summary } : {}),
       ...(raw.target_field ? { target_field: raw.target_field } : {}),
@@ -215,6 +244,9 @@ export function serializeCandidatesMarkdown(candidates: CandidateUpdate[]): stri
     if (c.diff_summary) lines.push(`- 差异: ${c.diff_summary}`);
     if (c.target_field) lines.push(`- 建议字段: ${c.target_field}`);
     if (c.project_id) lines.push(`- 来源项目: ${c.project_id}`);
+    if (c.sensitivity && c.sensitivity !== 'standard') lines.push(`- 敏感度: ${c.sensitivity}`);
+    if (c.write_actor && c.write_actor !== 'llm') lines.push(`- 写入者: ${c.write_actor}`);
+    if (c.recorded_time) lines.push(`- 记录时间: ${c.recorded_time}`);
     if (c.source_memory_refs?.length) lines.push(`- 来源: ${c.source_memory_refs.join(', ')}`);
     return lines.join('\n');
   });

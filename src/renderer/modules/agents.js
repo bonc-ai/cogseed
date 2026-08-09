@@ -3023,9 +3023,9 @@ if (typeof window !== 'undefined') {
 // Set on every `_openAgentPicker`; consumed by `_renderAgentPickerList` and
 // the search-input change handler so live filtering stays scoped.
 let _pickerBoundAgentIds = null;
-let _pickerBoundSkillIds = null; // 工作空间一期：同 scope.resolve 的 skills 作用域
+let _pickerBoundSkillIds = null; // 情境空间一期：同 scope.resolve 的 skills 作用域
 let _pickerProjectId = '';
-let _pickerScopeSpace = null; // 工作空间一期：当前项目绑定空间摘要（{space_id, name, template_id?}），供提示/本体 tab 折叠
+let _pickerScopeSpace = null; // 情境空间一期：当前项目绑定空间摘要
 let _pickerLibraryRows = null;
 let _pickerLibraryLoading = null;
 let _pickerLibraryRenderSeq = 0;
@@ -3188,7 +3188,7 @@ function _moveAgentPickerTab(delta) {
 function _agentPickerProjectExists(projectId) {
   const pid = String(projectId || '');
   if (!pid) return false;
-  // 工作空间一期修复：项目缓存（_projectsCache）在新建项目后不会即时刷新
+  // 情境空间一期修复：项目缓存（_projectsCache）在新建项目后不会即时刷新
   // （实测：新建项目不在缓存里 → pid 被当无效 → 作用域静默丢失 → @ 显示全局）。
   // 缓存不含 ≠ 项目不存在——放行交给主进程 scope.resolve 裁决：
   // 项目不存在 → getProjectScopeMeta 降级 null → 全局可见（与删除项目回全局的
@@ -3217,7 +3217,7 @@ function _resolveActiveProjectId(anchorId) {
       const conv = conversations.find((c) => c && c.conversation_id === currentCid);
       const fromList = _agentPickerValidProjectId((conv && conv.project_id) || '');
       if (fromList) return fromList;
-      // 工作空间一期修复：会话列表条目缺失 project_id / currentCid 不在列表
+      // 情境空间一期修复：会话列表条目缺失 project_id / currentCid 不在列表
       // （新会话未入列表等）时，回退项目详情页上下文，避免作用域静默退化为全局全量。
       if (typeof _projectDetailPid !== 'undefined' && _projectDetailPid) {
         return _agentPickerValidProjectId(_projectDetailPid);
@@ -3240,7 +3240,7 @@ async function _refreshAgentPickerProjectContext(anchorId) {
   _pickerBoundAgentIds = null;
   _pickerBoundSkillIds = null;
   _pickerProjectId = _resolveActiveProjectId(anchorId) || '';
-  // 工作空间一期修复（第二层）：会话列表（conversations）条目不含 project_id，
+  // 情境空间一期修复（第二层）：会话列表（conversations）条目不含 project_id，
   // currentCid 也经常不在列表里（项目会话独立索引）——兜底直接按当前会话
   // 查主进程 conv 记录（权威来源），否则作用域静默退化为全局全量。
   if (!_pickerProjectId && anchorId === 'chat-recipient-chip'
@@ -3264,7 +3264,7 @@ async function _refreshAgentPickerProjectContext(anchorId) {
   _pickerOntologyRenderSeq += 1;
   if (_pickerProjectId) {
     try {
-      // 工作空间一期修复：作用域 = resolveProjectScope（S∪B 决策树，含空间派生集），
+      // 情境空间一期修复：作用域 = resolveProjectScope（S∪B 决策树，含空间派生集），
       // 不是只读项目 bindings（B）。null = 全局可见（不过滤）；空数组 = 严格空作用域。
       const res = await window.orkas.invoke('projects.scope.resolve', { projectId: _pickerProjectId });
       if (refreshSeq === _pickerProjectContextSeq && res?.ok) {
@@ -3464,12 +3464,12 @@ function _renderSkillPickerList(listEl, filterText, anchorId) {
 
   const trusted = applyFilter((_skillsCache || [])
     .filter((s) => s.enabled !== false)
-    // 工作空间一期：项目/空间作用域下只显示作用域内技能（null = 全局不过滤）
+    // 情境空间一期：项目/空间作用域下只显示作用域内技能（null = 全局不过滤）
     .filter((s) => !_pickerBoundSkillIds || _pickerBoundSkillIds.has(s.id)), trustedDesc);
   // Global open-tier skills share the same picker surface as trusted skills.
   // External package internals stay package-scoped in user UI; the agent layer
   // can still see package-provided SKILL.md files when composing a task.
-  // 工作空间一期：global 技能同样受作用域过滤（否则空间外技能漏网显示）。
+  // 情境空间一期：global 技能同样受作用域过滤（否则空间外技能漏网显示）。
   const openRows = (typeof _openSkillsCache !== 'undefined' && Array.isArray(_openSkillsCache))
     ? applyFilter(_openSkillsCache.filter((s) => s.source === 'global' && s.enabled !== false
       && (!_pickerBoundSkillIds || _pickerBoundSkillIds.has(s.id))), openDesc)

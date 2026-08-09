@@ -18091,7 +18091,7 @@ body.model-not-configured .main-content { flex-direction: column; }
   border-top: 1px solid var(--personal-onto-border, #e2e8f0);
 }
 
-/* ─── Workspaces（工作空间一期：空间 = 主界面 + 资源作用域限制）─── */
+/* ─── 情境空间（原"工作空间"：空间 = 主界面 + 资源作用域限制）─── */
 /* 布局镜像 AI 团队页（agents）：固定顶栏 + chips 条 + 独立滚动卡片网格 */
 
 .spaces-view {
@@ -18672,7 +18672,7 @@ body.model-not-configured .main-content { flex-direction: column; }
   background: rgba(37, 99, 235, 0.08);
 }
 
-/* ── 工作空间详情 · 本体 tab（二期 D5：角色画像按来源项目过滤）── */
+/* ── 情境空间详情 · 本体 tab（二期 D5：角色画像按来源项目过滤）── */
 .spaces-onto-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 2px 0 12px; }
 .spaces-onto-field { margin: 0 0 10px; }
 .spaces-onto-field-name { font-weight: 600; font-size: 13px; margin-bottom: 4px; color: var(--text-1, #222); }

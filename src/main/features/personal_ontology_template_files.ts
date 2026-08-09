@@ -58,7 +58,7 @@ const MAX_FILE_BYTES = 200 * 1024 * 1024;
 export const SECTION_REF_SEP = '::';
 
 /** 模板元信息行：`> 模板: <template_id>@<semver> | 已安装: <ISO>`（版本支持 semver 预发布后缀） */
-const TEMPLATE_META_RE = /^>\s*模板:\s*([a-z0-9-]+)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\s*\|\s*已安装:\s*(.+))?$/;
+const TEMPLATE_META_RE = /^>\s*模板:\s*([a-z0-9_-]+)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\s*\|\s*已安装:\s*(.+))?$/;
 
 // ── 纯函数：模板文件 parse / serialize ─────────────────────────────────────
 
