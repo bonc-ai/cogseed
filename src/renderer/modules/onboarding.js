@@ -73,9 +73,10 @@ function _csObShellHtml() {
       <p>完成必要设置后进入首页；以后可在设置中调整。</p>
       <div class="cs-steps">
         <button class="cs-step active" data-csstep="0"><span>1</span><span><strong>认识 CogSeed</strong><small>它不是又一个 Agent</small></span></button>
-        <button class="cs-step" data-csstep="1"><span>2</span><span><strong>导入最近会话</strong><small>检测本地 Agent</small></span></button>
-        <button class="cs-step" data-csstep="2"><span>3</span><span><strong>选择角色起点</strong><small>可选 · 可跳过</small></span></button>
-        <button class="cs-step" data-csstep="3"><span>4</span><span><strong>确认候选认知</strong><small>预览并决定保留</small></span></button>
+        <button class="cs-step" data-csstep="1"><span>2</span><span><strong>连接 AI 团队</strong><small>接入你的 Agent 模型</small></span></button>
+        <button class="cs-step" data-csstep="2"><span>3</span><span><strong>导入最近会话</strong><small>检测本地 Agent</small></span></button>
+        <button class="cs-step" data-csstep="3"><span>4</span><span><strong>选择角色起点</strong><small>可选 · 可跳过</small></span></button>
+        <button class="cs-step" data-csstep="4"><span>5</span><span><strong>确认候选认知</strong><small>预览并决定保留</small></span></button>
       </div>
       <div class="cs-privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg><span>认知资产与模型 Key 都留在本机。导入 AI 团队的 Key 是你自己的凭证，仅在本机使用，不上传。</span></div>
     </aside>
@@ -91,21 +92,32 @@ function _csObShellHtml() {
           <div class="cs-fact"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><strong>Key 是你自己的</strong><span>可一键把已有 Agent 的模型 Key 导入 AI 团队，仅在本机使用；也可跳过，之后手动配置。</span></div>
         </div>
         <div class="cs-actions">
-          <button class="cs-btn" data-csnext="1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>继续 · 检测本地 Agent</button>
+          <button class="cs-btn" data-csnext="1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>继续 · 连接 AI 团队</button>
           <small>继续不代表同意上传任何内容。</small>
         </div>
       </section>
 
       <section class="cs-panel" data-cspanel="1">
-        <div class="cs-kicker">连接 AI 团队 · 导入会话 · 只读</div>
-        <h1>先连上模型，再从你的旧对话继续</h1>
-        <p class="cs-lead">第一步把你在其他 Agent 里已有的模型 Key 一键接入「AI 团队」——都是你自己的凭证，只留本机。连上之后，导入的旧会话就能用这些模型自动压缩、提炼，接着往下干。</p>
+        <div class="cs-kicker">连接 AI 团队 · 你的 Agent 模型</div>
+        <h1>把你的 Agent 连进 AI 团队</h1>
+        <p class="cs-lead">检测到的 Agent 可以一键接入「AI 团队」，之后就能在这里直接使用它们的模型。凭证都是你自己的、只留本机。连上之后，下一步导入的旧会话就能用这些模型自动压缩、提炼。</p>
 
-        <h3 style="margin:28px 0 12px;font-size:15px;font-weight:650">连接 AI 团队</h3>
         <div class="cs-list" id="cs-team-list">
-          <div class="cs-state loading">正在检测可导入的模型服务…</div>
+          <div class="cs-state loading">正在检测可连接的 Agent…</div>
         </div>
-        <div class="cs-mode"><span>这些 Key 来自你本机的 CC Switch 等配置，导入后仅在本机使用、不上传。OAuth 登录类（如订阅登录）无法迁移 Key，需你在设置里另行登录或粘贴。</span></div>
+        <div class="cs-mode"><span>一键连接即可，无需粘贴任何密钥。凭证只在本机使用、不上传。用订阅/OAuth 登录的 Agent 无法一键连接，需你在设置里另行登录。</span></div>
+
+        <div class="cs-actions">
+          <button class="cs-btn ghost" data-csnext="0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
+          <button class="cs-btn ghost" id="cs-team-refresh">重新检测</button>
+          <button class="cs-btn" data-csnext="2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>下一步 · 导入会话</button>
+        </div>
+      </section>
+
+      <section class="cs-panel" data-cspanel="2">
+        <div class="cs-kicker">来源检测 · 跨 Agent · 只读</div>
+        <h1>从你在其他 Agent 里的对话继续</h1>
+        <p class="cs-lead">检测你本机安装的 Agent 命令行工具，列出可导入的历史会话。导入的会话会用上一步连接的模型自动压缩提炼，并出现在左侧会话列表，点进去即可继续对话。</p>
 
         <h3 style="margin:28px 0 12px;font-size:15px;font-weight:650">检测到的 Agent</h3>
         <div class="cs-list" id="cs-agent-list">
@@ -114,13 +126,13 @@ function _csObShellHtml() {
         <div class="cs-mode"><span>读取方式：只读导入，不写入任何 Agent，也不自动修改认知资产。认知从任何 Agent 来，带去任何 Agent。</span></div>
 
         <div class="cs-actions">
-          <button class="cs-btn ghost" data-csnext="0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
+          <button class="cs-btn ghost" data-csnext="1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
           <button class="cs-btn ghost" id="cs-agent-refresh">重新检测 Agent</button>
-          <button class="cs-btn" data-csnext="2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>下一步 · 选择角色</button>
+          <button class="cs-btn" data-csnext="3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>下一步 · 选择角色</button>
         </div>
       </section>
 
-      <section class="cs-panel" data-cspanel="2">
+      <section class="cs-panel" data-cspanel="3">
         <div class="cs-kicker">可选 · 非阻断 · 可跳过</div>
         <h1>你主要在做哪类工作？</h1>
         <p class="cs-lead">角色模板只提供结构建议（本体结构、能力建议、Main Skill），<b>不会自动生成关于你的任何事实</b>。现在选择或跳过都可以，之后随时可更换、叠加。</p>
@@ -142,13 +154,13 @@ function _csObShellHtml() {
           <h4>角色模板已应用 · 不自动生成个人事实</h4>
         </div>
         <div class="cs-actions">
-          <button class="cs-btn ghost" data-csnext="1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
+          <button class="cs-btn ghost" data-csnext="2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
           <button class="cs-btn ghost" id="cs-role-skip">跳过角色</button>
-          <button class="cs-btn" data-csnext="3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>下一步 · 确认候选认知</button>
+          <button class="cs-btn" data-csnext="4"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>下一步 · 确认候选认知</button>
         </div>
       </section>
 
-      <section class="cs-panel" data-cspanel="3">
+      <section class="cs-panel" data-cspanel="4">
         <div class="cs-kicker">系统提出 · 用户决定</div>
         <h1>确认候选认知</h1>
         <p class="cs-lead">从你选中的会话中提取候选认知。每条认知都需要你手动确认后才会保存到认知资产中。</p>
@@ -156,7 +168,7 @@ function _csObShellHtml() {
           <div class="cs-state">点击下方「开始提取」按钮，从检测到的会话中分析并提取候选认知。</div>
         </div>
         <div class="cs-actions">
-          <button class="cs-btn ghost" data-csnext="2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
+          <button class="cs-btn ghost" data-csnext="3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
           <button class="cs-btn ghost" id="cs-extract-start">开始提取</button>
           <button class="cs-btn" id="cs-ob-finish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>完成 · 进入首页</button>
           <small>完成后不会自动写入任何正式资产。</small>
@@ -168,7 +180,7 @@ function _csObShellHtml() {
 }
 
 function _csGoStep(n) {
-  const step = Math.max(0, Math.min(3, n));
+  const step = Math.max(0, Math.min(4, n));
   const shell = document.getElementById('cs-onboarding');
   if (!shell) return;
   shell.querySelectorAll('.cs-panel').forEach((p) => {
@@ -181,10 +193,8 @@ function _csGoStep(n) {
     b.disabled = i > step;
   });
   shell.querySelector('.cs-content')?.scrollTo?.(0, 0);
-  if (step === 1) {
-    _csLoadTeam(false);
-    _csLoadAgents(false);
-  }
+  if (step === 1) _csLoadTeam(false);
+  if (step === 2) _csLoadAgents(false);
 }
 
 // Renders the REAL detection result. For Claude Code, fetches real session
@@ -258,7 +268,7 @@ function _csRenderAgents(entries) {
 async function _csLoadTeam(force) {
   const box = document.getElementById('cs-team-list');
   if (!box) return;
-  if (force) box.innerHTML = '<div class="cs-state loading">正在检测可导入的模型服务…</div>';
+  if (force) box.innerHTML = '<div class="cs-state loading">正在检测可连接的 Agent…</div>';
 
   // Probe first so we can give an honest "no CC Switch found" state instead of
   // an empty list that looks like a bug.
@@ -270,8 +280,8 @@ async function _csLoadTeam(force) {
   }
   if (probe && probe.available === false) {
     box.innerHTML =
-      '<div class="cs-state">未检测到可自动导入的模型 Key（没有找到 CC Switch 配置）。' +
-      '你仍可继续导入会话——会话提炼会用你在设置里配置的模型；也可稍后在设置的「AI 团队」里手动添加模型。</div>';
+      '<div class="cs-state">未检测到可一键连接的 Agent。' +
+      '你仍可继续——之后可在设置的「AI 团队」里手动添加模型，导入会话时也会用你已配置的模型。</div>';
     return;
   }
 
@@ -279,14 +289,14 @@ async function _csLoadTeam(force) {
     const res = await window.orkas.invoke('customProviders.ccswitch.preview');
     if (!res || res.ok !== true) {
       const reason = (res && res.reason) || 'unknown';
-      box.innerHTML = `<div class="cs-state">暂时无法读取可导入的模型服务（${_csEsc(reason)}）。可稍后在设置的「AI 团队」里手动添加。</div>`;
+      box.innerHTML = `<div class="cs-state">暂时无法读取可连接的 Agent（${_csEsc(reason)}）。可稍后在设置的「AI 团队」里手动添加。</div>`;
       return;
     }
     _csRenderTeam(res.items || [], res.unsupported || []);
   } catch (err) {
     const msg = (err && err.message) || String(err);
     _obLog.warn('ccswitch preview failed', { error: msg });
-    box.innerHTML = `<div class="cs-state err">读取可导入模型服务失败：${_csEsc(msg)}。可稍后在设置里手动添加。</div>`;
+    box.innerHTML = `<div class="cs-state err">检测可连接的 Agent 失败：${_csEsc(msg)}。可稍后在设置里手动添加。</div>`;
   }
 }
 
@@ -299,24 +309,40 @@ function _csAgentLabel(appType) {
 // Render the importable model services GROUPED BY AGENT (Claude Code, Codex …).
 // Each agent is its own group with its own "connect" button, so the user
 // connects an agent's models as a unit rather than picking from a flat list.
+// Per-agent connectable externalIds, filled by _csRenderTeam and consumed by
+// _csConnectTeam. Keeps the CC Switch key/provider details out of the DOM —
+// the user only sees "this agent can connect", not the underlying keys.
+let _csTeamByAgent = {};
+
+// Render one card PER AGENT (Claude Code, Codex …) — no key details, no
+// provider list, no checkboxes. Each agent shows a status line and a single
+// "connect" button that syncs all of that agent's importable providers.
 function _csRenderTeam(items, unsupported) {
   const box = document.getElementById('cs-team-list');
   if (!box) return;
 
   if (!items.length && !unsupported.length) {
     box.innerHTML =
-      '<div class="cs-state">没有可一键连接的 Agent 模型。可在设置的「AI 团队」里手动添加模型后再回来导入会话。</div>';
+      '<div class="cs-state">未检测到可一键连接的 Agent。可在设置的「AI 团队」里手动添加模型后再回来。</div>';
     return;
   }
 
   // Bucket both importable and unsupported rows by their originating agent.
-  const groups = new Map(); // appType → { items: [], unsupported: [] }
+  const groups = new Map(); // appType → { ids: [], needsKey: n, unsupported: n }
   const bucket = (appType) => {
-    if (!groups.has(appType)) groups.set(appType, { items: [], unsupported: [] });
+    if (!groups.has(appType)) groups.set(appType, { ids: [], needsKey: 0, unsupported: 0 });
     return groups.get(appType);
   };
-  items.forEach((it) => bucket(it.appType || 'other').items.push(it));
-  unsupported.forEach((u) => bucket(u.appType || 'other').unsupported.push(u));
+  items.forEach((it) => {
+    const g = bucket(it.appType || 'other');
+    g.ids.push(it.externalId);
+    if (it.needsKey) g.needsKey += 1;
+  });
+  unsupported.forEach((u) => { bucket(u.appType || 'other').unsupported += 1; });
+
+  // Stash ids for the connect handler; DOM never carries key material.
+  _csTeamByAgent = {};
+  groups.forEach((g, appType) => { _csTeamByAgent[appType] = g.ids.slice(); });
 
   // Stable, friendly ordering: known agents first, then any others.
   const order = ['claude', 'claude-desktop', 'codex', 'gemini'];
@@ -325,129 +351,88 @@ function _csRenderTeam(items, unsupported) {
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
   });
 
-  const groupHtml = appTypes.map((appType) => {
+  const rows = appTypes.map((appType) => {
     const g = groups.get(appType);
     const label = _csAgentLabel(appType);
-    const connectable = g.items.length;
+    const connectable = g.ids.length;
 
-    const rows = g.items.map((it) => {
-      const proto = it.protocol ? `<span class="cs-team-tag">${_csEsc(it.protocol)}</span>` : '';
-      const keyState = it.needsKey
-        ? '<span class="cs-team-tag warn">需补充 Key</span>'
-        : `<span class="cs-team-tag ok">Key ${_csEsc(it.apiKeyMasked || '••••')}</span>`;
-      const base = it.baseUrl ? `<small>${_csEsc(it.baseUrl)}</small>` : '';
-      return `
-        <div class="cs-src" data-external-id="${_csEsc(it.externalId)}" data-app-type="${_csEsc(appType)}">
-          <input type="checkbox" ${it.needsKey ? '' : 'checked'} />
-          <div class="s-ico">${CS_TERMINAL_SVG}</div>
-          <div>
-            <strong>${_csEsc(it.name || it.externalId)}</strong>
-            ${base}
-            <div class="cs-team-tags">${proto}${keyState}</div>
-          </div>
-        </div>`;
-    }).join('');
+    // Status line: connectable count, plus honest hints for needs-key /
+    // non-migratable credentials — without exposing any key values.
+    let status;
+    if (connectable) {
+      status = `<span class="g-status">可连接</span>`;
+    } else if (g.unsupported) {
+      status = `<span class="g-status off">需登录连接</span>`;
+    } else {
+      status = `<span class="g-status off">暂不可连接</span>`;
+    }
 
-    // Honest per-agent note about credentials that can't be migrated.
-    const unsupportedHtml = g.unsupported.length
-      ? `<div class="cs-state">${g.unsupported.length} 项无法迁移 Key（如订阅/OAuth 登录）：` +
-        g.unsupported.map((u) => _csEsc(u.name || u.externalId)).join('、') +
-        '。这类需在设置里另行登录，无法一键连接。</div>'
+    const hints = [];
+    if (g.needsKey) hints.push(`${g.needsKey} 项需连接后到设置补充 Key`);
+    if (g.unsupported) hints.push(`${g.unsupported} 项为订阅/OAuth 登录，需在设置里登录`);
+    const hintHtml = hints.length ? `<small>${_csEsc(hints.join(' · '))}</small>` : '';
+
+    const action = connectable
+      ? `<button type="button" class="cs-team-connect cs-btn" data-app-type="${_csEsc(appType)}">连接</button>`
       : '';
 
-    const bar = connectable
-      ? `<div class="cs-import-bar">
-           <button type="button" class="cs-import-btn cs-team-connect" data-app-type="${_csEsc(appType)}">连接 ${_csEsc(label)} 到 AI 团队</button>
-           <div class="cs-import-result cs-team-result" data-app-type="${_csEsc(appType)}"></div>
-         </div>`
-      : (g.unsupported.length
-          ? '<div class="cs-import-bar"><div class="cs-import-result">该 Agent 暂无可一键迁移的 Key。</div></div>'
-          : '');
-
     return `
-      <div class="cs-group-head" data-team-group="${_csEsc(appType)}">
-        <span class="g-name">${CS_TERMINAL_SVG}${_csEsc(label)}</span>
-        <span class="g-status">${connectable ? `${connectable} 个模型可连接` : '无可迁移 Key'}</span>
-      </div>
-      <div class="cs-team-group" data-app-type="${_csEsc(appType)}">
-        ${rows}${unsupportedHtml}${bar}
+      <div class="cs-src cs-team-row" data-app-type="${_csEsc(appType)}">
+        <div class="s-ico">${CS_TERMINAL_SVG}</div>
+        <div>
+          <strong>${_csEsc(label)}</strong>
+          ${hintHtml}
+        </div>
+        <div class="cs-team-right">${status}${action}</div>
       </div>`;
   }).join('');
 
-  box.innerHTML = groupHtml;
+  box.innerHTML = rows;
 
-  // Row selection interactions.
-  box.querySelectorAll('.cs-src[data-external-id]').forEach((row) => {
-    const checkbox = row.querySelector('input[type="checkbox"]');
-    row.classList.toggle('selected', checkbox.checked);
-    row.addEventListener('click', (ev) => {
-      if (ev.target === checkbox) return;
-      checkbox.checked = !checkbox.checked;
-      row.classList.toggle('selected', checkbox.checked);
-    });
-    checkbox.addEventListener('change', () => {
-      row.classList.toggle('selected', checkbox.checked);
-    });
-  });
-
-  // Per-agent connect buttons.
   box.querySelectorAll('.cs-team-connect').forEach((btn) => {
     btn.addEventListener('click', () => void _csConnectTeam(box, btn.dataset.appType));
   });
 }
 
-// Sync the checked providers of ONE agent into custom providers ("AI 团队").
-// Scoped by appType so each agent connects independently. Honest result:
-// added / updated counts, and a clear note when some rows still need a key.
+// Connect ONE agent's models into custom providers ("AI 团队"): sync all of
+// that agent's importable externalIds at once. Honest result — added/updated
+// counts, and a note when some still need a key.
 async function _csConnectTeam(box, appType) {
-  const group = box.querySelector(`.cs-team-group[data-app-type="${appType}"]`);
-  if (!group) return;
-  const btn = group.querySelector('.cs-team-connect');
-  const resultBox = group.querySelector('.cs-team-result');
-  if (!resultBox) return;
-
-  const externalIds = [];
-  let needsKeySelected = 0;
-  group.querySelectorAll('.cs-src[data-external-id] input[type="checkbox"]:checked').forEach((cb) => {
-    const row = cb.closest('.cs-src');
-    const id = row ? row.dataset.externalId : null;
-    if (id) externalIds.push(id);
-    if (row && row.querySelector('.cs-team-tag.warn')) needsKeySelected += 1;
-  });
+  const row = box.querySelector(`.cs-team-row[data-app-type="${appType}"]`);
+  const btn = row ? row.querySelector('.cs-team-connect') : null;
+  const externalIds = (_csTeamByAgent[appType] || []).slice();
+  const label = _csAgentLabel(appType);
 
   if (!externalIds.length) {
-    resultBox.innerHTML = '<div class="cs-state">请先勾选该 Agent 下要连接的模型。</div>';
+    _csToast(`「${label}」暂无可一键连接的模型`);
     return;
   }
 
-  if (btn) btn.disabled = true;
-  resultBox.innerHTML = `<div class="cs-extract-progress">正在连接 ${externalIds.length} 个模型…</div>`;
+  if (btn) { btn.disabled = true; btn.textContent = '连接中…'; }
 
   try {
     const res = await window.orkas.invoke('customProviders.ccswitch.sync', { externalIds });
     if (!res || res.ok !== true) {
       const reason = (res && res.reason) || '未知原因';
-      resultBox.innerHTML = `<div class="cs-state err">连接失败：${_csEsc(reason)}</div>`;
-      if (btn) btn.disabled = false;
+      _csToast(`连接「${label}」失败：${reason}`);
+      if (btn) { btn.disabled = false; btn.textContent = '连接'; }
       return;
     }
     const added = res.added || 0;
     const updated = res.updated || 0;
-    const label = _csAgentLabel(appType);
-    const summary =
-      `<div class="cs-state">已把「${_csEsc(label)}」连接到 AI 团队：新增 ${added} 个` +
-      (updated ? `，更新 ${updated} 个` : '') +
-      (needsKeySelected ? `。其中 ${needsKeySelected} 个尚缺 Key，已作为占位导入，请到设置的「AI 团队」补齐后即可使用` : '') +
-      '。这些模型现在可用于会话导入时的自动压缩提炼，也可在群聊里直接调用。</div>';
-    resultBox.innerHTML = summary;
-    _csToast(`已连接「${label}」的 ${added + updated} 个模型到 AI 团队`);
-    _obLog.info('team connect finished', { appType, added, updated, needsKeySelected });
+    // Reflect the connected state on the row itself; keep it non-technical.
+    if (row) {
+      const statusEl = row.querySelector('.g-status');
+      if (statusEl) { statusEl.textContent = '已连接'; statusEl.classList.remove('off'); }
+      if (btn) { btn.textContent = '已连接'; btn.disabled = true; btn.classList.add('done'); }
+    }
+    _csToast(`已把「${label}」连接到 AI 团队（${added + updated} 个模型）`);
+    _obLog.info('team connect finished', { appType, added, updated });
   } catch (err) {
     const msg = (err && err.message) || String(err);
     _obLog.warn('team connect failed', { appType, error: msg });
-    resultBox.innerHTML = `<div class="cs-state err">连接失败：${_csEsc(msg)}</div>`;
-  } finally {
-    if (btn) btn.disabled = false;
+    _csToast(`连接「${label}」失败：${msg}`);
+    if (btn) { btn.disabled = false; btn.textContent = '连接'; }
   }
 }
 
@@ -943,6 +928,7 @@ function _csBuild() {
     b.addEventListener('click', () => _csGoStep(Number(b.dataset.csnext)));
   });
 
+  shell.querySelector('#cs-team-refresh')?.addEventListener('click', () => _csLoadTeam(true));
   shell.querySelector('#cs-agent-refresh')?.addEventListener('click', () => _csLoadAgents(true));
 
   shell.querySelectorAll('.cs-role-card').forEach((c) => {
@@ -950,7 +936,7 @@ function _csBuild() {
   });
   shell.querySelector('#cs-role-skip')?.addEventListener('click', () => {
     _csRolePicked = null;
-    _csGoStep(3);
+    _csGoStep(4);
   });
 
   shell.querySelector('#cs-extract-start')?.addEventListener('click', () => { void _csExtractCognitions(); });
