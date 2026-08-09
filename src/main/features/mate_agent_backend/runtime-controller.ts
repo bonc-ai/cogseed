@@ -10,6 +10,7 @@ import { logErrorRef } from '../../util/log-redact';
 import { appendMateTaskEvent } from './event-store';
 import { markMateTaskRecoverable, retryMateTask as retryStoredMateTask, transitionMateTask } from './lifecycle';
 import { createMateTask, readMateTask, updateMateTask } from './task-store';
+import { resolveRuntimeCapabilities } from './messaging-capability-policy';
 import type { MateTaskRecord } from './types';
 
 const log = createLogger('mate-backend:runtime-controller');
@@ -25,6 +26,10 @@ export interface StartMateTaskInput {
   coordinationId?: string;
   parentTaskId?: string;
   coordinationDepth?: number;
+  /** Trusted host capabilities derived from the persisted task/session (e.g.
+   * `messaging.proactive`). Set by the controller from
+   * `resolveRuntimeCapabilities`; never accepted from external callers. */
+  capabilities?: string[];
 }
 
 export interface ResumeMateTaskInput {
@@ -59,7 +64,7 @@ export interface MateRuntimeControllerOptions {
   cancelChildrenForParent?: (userId: string, parentTaskId: string) => Promise<void>;
 }
 
-function asRuntimeInput(input: StartMateTaskInput & { runtimeSessionId?: string }): MateAgentRuntimeInput {
+function asRuntimeInput(input: StartMateTaskInput & { runtimeSessionId?: string; capabilities?: string[] }): MateAgentRuntimeInput {
   return {
     task: input.task,
     request_id: input.requestId,
@@ -68,6 +73,7 @@ function asRuntimeInput(input: StartMateTaskInput & { runtimeSessionId?: string 
     ...(input.attachments ? { attachments: input.attachments } : {}),
     ...(input.profileId ? { model_profile: input.profileId } : {}),
     ...(input.workingDir ? { working_dir: input.workingDir } : {}),
+    ...(input.capabilities?.length ? { capabilities: input.capabilities } : {}),
   };
 }
 
@@ -150,16 +156,19 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
     async startMateTask(userId, input) {
       const created = await createMateTask(userId, input);
       if (!created.created) return created.task;
-      return launchTask(userId, created.task, input);
+      const capabilities = await resolveRuntimeCapabilities(userId, created.task.requestId, created.task.runtimeSessionId);
+      return launchTask(userId, created.task, { ...input, capabilities });
     },
 
     async retryMateTask(userId, taskId, requestId) {
       const retried = await retryStoredMateTask(userId, taskId, requestId);
       if (retried.status !== 'created') return retried;
+      const capabilities = await resolveRuntimeCapabilities(userId, retried.requestId, retried.runtimeSessionId);
       return launchTask(userId, retried, {
         requestId,
         task: retried.task,
         ...(retried.profileId ? { profileId: retried.profileId } : {}),
+        capabilities,
       });
     },
 
@@ -186,6 +195,7 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
           ...(input.context ? { context: input.context } : {}),
           ...(input.attachments ? { attachments: input.attachments } : {}),
           ...(input.workingDir ? { workingDir: input.workingDir } : {}),
+          capabilities: await resolveRuntimeCapabilities(userId, input.requestId, reserved.runtimeSessionId),
         });
       } catch (error) {
         resumeClaims.delete(taskId);

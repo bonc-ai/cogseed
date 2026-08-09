@@ -17,14 +17,14 @@ import {
   conversationMessageFile,
   conversationMessageReadFile,
 } from '../../util/project-layout';
-import { readJsonl, rewriteJsonlLine, nowIso, safeId } from '../../storage';
+import { readJsonl, rewriteJsonlLine, rewriteJsonlRecords, nowIso, safeId } from '../../storage';
 import { createLogger } from '../../logger';
 import { t } from '../../i18n';
 import { logErrorRef } from '../../util/log-redact';
 
 import {
   COMMANDER_ID, USER_ID, readMembers, readState, seedReservedActors, purgeGroupDir,
-  setCodingProjectDir, setStatus, actorSessionId,
+  setCodingProjectDir, setStatus, actorSessionId, resetConversationRoutingState,
 } from './state';
 import { isPlaceholderTitle } from './conv_title';
 import {
@@ -34,6 +34,7 @@ import {
 import {
   readActiveCollaborationSnapshot,
   readCollaborationSnapshot,
+  clearActiveCollaborationState,
   resolveActiveContextConflictForActor,
   reviewCollaborationGate as reviewGateFeature,
   type CollaborationSnapshot,
@@ -190,6 +191,165 @@ const log = createLogger('group_chat.facade');
 
 function mainJsonlFile(uid: string, cid: string): string {
   return conversationMessageFile(uid, cid);
+}
+
+interface TombstoneRevision {
+  file: string;
+  deletedAt: string;
+  originals: Map<string, GroupMessage>;
+}
+
+type TombstoneResult =
+  | { ok: true; changed: number; revisions: TombstoneRevision[] }
+  | { ok: false; error: string };
+
+function _deletedMessageRevision(message: GroupMessage, deletedAt: string): GroupMessage {
+  return {
+    id: message.id,
+    ts: message.ts,
+    from: message.from,
+    to: Array.isArray(message.to) ? message.to : [],
+    text: '',
+    deleted_at: deletedAt,
+    deleted_by_user: true,
+    _v: Math.max(0, Number(message._v) || 0) + 1,
+  };
+}
+
+/** Tombstone all selected records in one file rewrite. A conversation message
+ * id is stable across the main log and actor slices, so the same id set can be
+ * applied to every representation without reinterpreting message content. */
+async function _tombstoneMessagesInFile(
+  file: string,
+  ids: ReadonlySet<string>,
+  deletedAt: string,
+): Promise<TombstoneResult> {
+  if (!fs.existsSync(file)) return { ok: true, changed: 0, revisions: [] };
+  let changed = 0;
+  const originals = new Map<string, GroupMessage>();
+  const rewritten = await rewriteJsonlRecords<GroupMessage>(file, (records) => records.map((record) => {
+    if (!record || !ids.has(record.id) || record.deleted_at) return record;
+    originals.set(record.id, record);
+    changed += 1;
+    return _deletedMessageRevision(record, deletedAt);
+  }));
+  if (rewritten.ok === false) return { ok: false, error: rewritten.error };
+  return {
+    ok: true,
+    changed,
+    revisions: changed > 0 ? [{ file, deletedAt, originals }] : [],
+  };
+}
+
+async function _restoreTombstoneRevision(revision: TombstoneRevision): Promise<void> {
+  if (!revision.originals.size || !fs.existsSync(revision.file)) return;
+  const restored = await rewriteJsonlRecords<GroupMessage>(revision.file, (records) => records.map((record) => {
+    const original = revision.originals.get(record.id);
+    if (!original || record.deleted_at !== revision.deletedAt || record.deleted_by_user !== true) return record;
+    return original;
+  }));
+  if (restored.ok === false) throw new Error(restored.error);
+}
+
+async function _rollbackTombstones(revisions: readonly TombstoneRevision[]): Promise<void> {
+  for (const revision of [...revisions].reverse()) await _restoreTombstoneRevision(revision);
+}
+
+/** Promote a legacy top-level message log into the canonical project/cloud
+ * location before a mutating operation. Readers intentionally support both
+ * paths, but writers must never create a new canonical file that contains only
+ * the replacement and silently hides the legacy transcript. */
+async function _ensureWritableConversationMessageFile(userId: string, cid: string): Promise<string> {
+  const source = conversationMessageReadFile(userId, cid);
+  const target = mainJsonlFile(userId, cid);
+  if (source === target || !fs.existsSync(source)) return target;
+  await fsp.mkdir(path.dirname(target), { recursive: true });
+  try {
+    await fsp.copyFile(source, target, fs.constants.COPYFILE_EXCL);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+  }
+  return target;
+}
+
+/** Apply a message tombstone set to the authoritative log and every actor
+ * slice. The caller validates the target against the main log before calling
+ * this function, so a missing slice is simply a legacy/unused projection. */
+async function _tombstoneMessagesEverywhere(
+  userId: string,
+  cid: string,
+  ids: ReadonlySet<string>,
+  deletedAt: string,
+  mainFile = mainJsonlFile(userId, cid),
+): Promise<TombstoneResult> {
+  const main = await _tombstoneMessagesInFile(mainFile, ids, deletedAt);
+  if (main.ok === false) return main;
+  let changed = main.changed;
+  const revisions = [...main.revisions];
+  const layout = conversationLayout(userId, cid);
+  try {
+    const entries = await fsp.readdir(layout.visibilityDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
+      const slice = await _tombstoneMessagesInFile(path.join(layout.visibilityDir, entry.name), ids, deletedAt);
+      if (slice.ok === false) {
+        try { await _rollbackTombstones(revisions); }
+        catch (rollbackError) {
+          return { ok: false, error: `visibility rewrite failed and rollback failed: ${(rollbackError as Error).message}` };
+        }
+        return slice;
+      }
+      changed += slice.changed;
+      revisions.push(...slice.revisions);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      try { await _rollbackTombstones(revisions); }
+      catch (rollbackError) {
+        return { ok: false, error: `visibility rewrite failed and rollback failed: ${(rollbackError as Error).message}` };
+      }
+      return { ok: false, error: `visibility rewrite failed: ${(err as Error).message}` };
+    }
+  }
+  return { ok: true, changed, revisions };
+}
+
+/** Clear every model session that could contain invalidated conversation
+ * history. Session-file deletion is intentionally delegated to the existing
+ * facade, which also evicts the in-memory cache and its tool-result spill. */
+async function _resetConversationModelSessions(userId: string, cid: string): Promise<void> {
+  const members = await readMembers(userId, cid);
+  const sessions = await import('../../model/core-agent/session-store');
+  for (const actor of members.actors) {
+    if (actor.kind !== 'commander' && actor.kind !== 'agent') continue;
+    const sid = actorSessionId(cid, actor);
+    sessions.evictSession(sid);
+    sessions.deleteSessionFileForUser(userId, sid);
+  }
+  const cliSessions = await import('../local_agents/sessions');
+  await cliSessions.clearForConversation(userId, cid);
+}
+
+async function _retitleAfterFirstUserMessageEdit(
+  userId: string,
+  cid: string,
+  rows: readonly GroupMessage[],
+  targetIndex: number,
+  text: string,
+): Promise<void> {
+  const hasEarlierUserMessage = rows.slice(0, targetIndex).some((row) => (
+    !row.deleted_at && !row.dispatch && row.from === USER_ID && String(row.text || '').trim()
+  ));
+  if (hasEarlierUserMessage) return;
+  try {
+    const chats = await import('../chats');
+    const conv = await chats.getConversation(userId, cid);
+    if (conv && !conv.title_manually_set) {
+      await chats.updateConversation(userId, cid, { title: chats.autoTitle(text) }, conv.project_id || null);
+    }
+  } catch (err) {
+    log.warn('message edit auto-title failed', { cid, error: logErrorRef(err) });
+  }
 }
 
 // ── Send (from human) ────────────────────────────────────────────────────
@@ -364,6 +524,105 @@ export async function send(
   } catch (err) {
     log.error(`send failed user=${userId} cid=${cid}: ${(err as Error).message}`);
     return { ok: false, error: (err as Error).message };
+  }
+}
+
+export interface ReplaceUserMessageInput {
+  userId: string;
+  cid: string;
+  messageId: string;
+  text: string;
+}
+
+/**
+ * Replace one persisted user message and discard its downstream conversation
+ * branch. This application has a linear transcript, not branch storage: the
+ * selected record and all later records become tombstones, then the edited
+ * text enters the ordinary bus pipeline as a fresh user message.
+ *
+ * Attachments, explicit skill/connector selections, and resolved reference
+ * snapshots belong to the original user request and are retained. The edited
+ * text is deliberately the new model text; host-only `model_text` from a
+ * form replay must never survive a manual user rewrite.
+ */
+export async function replaceUserMessage(
+  input: ReplaceUserMessageInput,
+): Promise<{ ok: boolean; msg?: GroupMessage; error?: string }> {
+  const { userId, cid, messageId } = input;
+  const text = String(input.text || '').trim();
+  if (!safeId(cid) || !safeId(messageId) || !text) {
+    return { ok: false, error: t('errors.message_edit_invalid_target') };
+  }
+
+  const runtime = await runtimeStatus(userId, cid);
+  if (runtime.processing) return { ok: false, error: t('errors.message_edit_running') };
+
+  let file: string;
+  try {
+    file = await _ensureWritableConversationMessageFile(userId, cid);
+  } catch (err) {
+    log.warn('message edit legacy history promotion failed', { cid, error: logErrorRef(err) });
+    return { ok: false, error: t('errors.message_edit_sync_failed') };
+  }
+  const rows = await readJsonl<GroupMessage>(file, 100_000);
+  const targetIndex = rows.findIndex((row) => row.id === messageId && !row.deleted_at);
+  if (targetIndex < 0) return { ok: false, error: t('errors.message_edit_invalid_target') };
+  const target = rows[targetIndex];
+  if (target.from !== USER_ID || target.dispatch) {
+    return { ok: false, error: t('errors.message_edit_invalid_target') };
+  }
+
+  const tailIds = new Set(rows.slice(targetIndex)
+    .filter((row) => !row.deleted_at && safeId(row.id))
+    .map((row) => row.id));
+  if (!tailIds.has(messageId)) return { ok: false, error: t('errors.message_edit_invalid_target') };
+
+  try {
+    await seedReservedActors(userId, cid);
+  } catch (err) {
+    log.warn('message edit preparation failed', { cid, error: logErrorRef(err) });
+    return { ok: false, error: t('errors.message_edit_prepare_failed') };
+  }
+
+  const tombstoned = await _tombstoneMessagesEverywhere(userId, cid, tailIds, nowIso(), file);
+  if (tombstoned.ok === false) {
+    log.error('message edit history rewrite failed', { cid, error: tombstoned.error });
+    return { ok: false, error: t('errors.message_edit_sync_failed') };
+  }
+
+  try {
+    await _resetConversationModelSessions(userId, cid);
+    await resetConversationRoutingState(userId, cid);
+    await clearActiveCollaborationState(userId, cid);
+  } catch (err) {
+    try { await _rollbackTombstones(tombstoned.revisions); }
+    catch (rollbackError) {
+      log.error('message edit preparation rollback failed', { cid, error: logErrorRef(rollbackError) });
+    }
+    log.warn('message edit preparation failed', { cid, error: logErrorRef(err) });
+    return { ok: false, error: t('errors.message_edit_prepare_failed') };
+  }
+
+  try {
+    const msg = await enqueue({
+      uid: userId,
+      cid,
+      fromActorId: USER_ID,
+      text,
+      ...(target.attachments?.length ? { attachments: target.attachments.slice() } : {}),
+      ...(target.use_selections?.length ? { use_selections: target.use_selections.slice() } : {}),
+      ...(target.references?.length ? { references: target.references.slice() } : {}),
+    });
+    await _retitleAfterFirstUserMessageEdit(userId, cid, rows, targetIndex, text);
+    log.info(`message-edited cid=${cid} invalidated=${tailIds.size} rewritten=${tombstoned.changed}`);
+    return { ok: true, msg };
+  } catch (err) {
+    try { await _rollbackTombstones(tombstoned.revisions); }
+    catch (rollbackError) {
+      log.error('message edit enqueue rollback failed', { cid, error: logErrorRef(rollbackError) });
+    }
+    log.error('message edit replacement enqueue failed', { cid, error: logErrorRef(err) });
+    return { ok: false, error: t('errors.message_edit_enqueue_failed') };
   }
 }
 
@@ -562,13 +821,14 @@ export async function listMembers(
   const enriched = await Promise.all(m.actors.map(async (a) => {
     if (a.kind !== 'agent') return a;
     try {
-      const ag = await agentsFeat.getAgent(a.id);
+      const ag = await agentsFeat.getAgentForChatDispatch(userId, a.id);
+      if (!agentsFeat.isAgentChatDispatchable(ag)) return null;
       return ag && ag.interactive === true ? { ...a, interactive: true } : a;
     } catch {
-      return a;
+      return null;
     }
   }));
-  return { ok: true, actors: enriched };
+  return { ok: true, actors: enriched.filter((actor): actor is NonNullable<typeof actor> => actor !== null) };
 }
 
 // ── Streaming events ─────────────────────────────────────────────────────
@@ -705,7 +965,7 @@ export async function markFormSubmittedAndDispatch(
       : '';
     if (projDir) {
       const agentsFeat = await import('../agents');
-      const ag = await agentsFeat.getAgent(agentId);
+      const ag = await agentsFeat.getAgentForChatDispatch(userId, agentId);
       const cli = ag?.runtime?.kind === 'cli' ? ag.runtime.cli : '';
       if (agentsFeat.cliIsCodingAgent(cli)) {
         const prev = await readState(userId, cid);
@@ -755,7 +1015,7 @@ export async function markFormSubmittedAndDispatch(
   if (agentId !== USER_ID) {
     try {
       const agentsFeat = await import('../agents');
-      const ag = await agentsFeat.getAgent(agentId);
+      const ag = await agentsFeat.getAgentForChatDispatch(userId, agentId);
       if (ag && ag.name) mention = buildMention(ag.name);
     } catch (err) {
       log.warn(`form-submit name lookup failed agent=${agentId}: ${(err as Error).message}`);
@@ -1030,35 +1290,6 @@ export async function readMessages(userId: string, cid: string, limit = 500): Pr
     .filter((msg) => !msg.deleted_at);
 }
 
-function _deletedMessageRevision(message: GroupMessage, deletedAt: string): GroupMessage {
-  return {
-    id: message.id,
-    ts: message.ts,
-    from: message.from,
-    to: Array.isArray(message.to) ? message.to : [],
-    text: '',
-    deleted_at: deletedAt,
-    deleted_by_user: true,
-    _v: Math.max(0, Number(message._v) || 0) + 1,
-  };
-}
-
-async function _tombstoneMessagesInFile(file: string, ids: ReadonlySet<string>, deletedAt: string): Promise<number> {
-  if (!fs.existsSync(file)) return 0;
-  const rows = await readJsonl<GroupMessage>(file, 100_000);
-  let changed = 0;
-  for (let index = 0; index < rows.length; index += 1) {
-    const row = rows[index];
-    if (!row || !ids.has(row.id) || row.deleted_at) continue;
-    const rewritten = await rewriteJsonlLine<GroupMessage>(file, index, (current) => {
-      if (!current || current.id !== row.id || current.deleted_at) return null;
-      return _deletedMessageRevision(current, deletedAt);
-    });
-    if (rewritten.ok) changed += 1;
-  }
-  return changed;
-}
-
 /** Delete visible messages as versioned tombstones in the main log and all
  * actor slices. Persistent model sessions are purged so the next turn is
  * rebuilt from the filtered slices rather than retaining deleted context. */
@@ -1074,45 +1305,29 @@ export async function deleteMessages(
   const runtime = await runtimeStatus(userId, cid);
   if (runtime.processing) return { ok: false, deleted: [], error: 'conversation is running' };
 
-  const mainFile = conversationMessageReadFile(userId, cid);
+  let mainFile: string;
+  try {
+    mainFile = await _ensureWritableConversationMessageFile(userId, cid);
+  } catch (err) {
+    log.warn('message delete legacy history promotion failed', { cid, error: logErrorRef(err) });
+    return { ok: false, deleted: [], error: 'message history promotion failed' };
+  }
   const mainRows = await readJsonl<GroupMessage>(mainFile, 100_000);
   const existing = new Set(mainRows
     .filter((msg) => ids.includes(msg.id) && !msg.deleted_at && !msg.dispatch)
     .map((msg) => msg.id));
   if (!existing.size) return { ok: false, deleted: [], error: 'messages not found' };
 
-  const deletedAt = nowIso();
-  await _tombstoneMessagesInFile(mainFile, existing, deletedAt);
-  const layout = conversationLayout(userId, cid);
-  try {
-    const entries = await fsp.readdir(layout.visibilityDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
-      await _tombstoneMessagesInFile(path.join(layout.visibilityDir, entry.name), existing, deletedAt);
-    }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      log.warn('message delete slice rewrite failed', { userId, cid, error: logErrorRef(err) });
-    }
+  const tombstoned = await _tombstoneMessagesEverywhere(userId, cid, existing, nowIso(), mainFile);
+  if (tombstoned.ok === false) {
+    log.error('message delete history rewrite failed', { cid, error: tombstoned.error });
+    return { ok: false, deleted: [], error: 'message rewrite failed' };
   }
 
   try {
-    const members = await readMembers(userId, cid);
-    const sessions = await import('../../model/core-agent/session-store');
-    for (const actor of members.actors) {
-      if (actor.kind !== 'commander' && actor.kind !== 'agent') continue;
-      const sid = actorSessionId(cid, actor);
-      sessions.evictSession(sid);
-      sessions.deleteSessionFileForUser(userId, sid);
-    }
+    await _resetConversationModelSessions(userId, cid);
   } catch (err) {
-    log.warn('message delete session reset failed', { userId, cid, error: logErrorRef(err) });
-  }
-  try {
-    const cliSessions = await import('../local_agents/sessions');
-    await cliSessions.clearForConversation(userId, cid);
-  } catch (err) {
-    log.warn('message delete cli session reset failed', { userId, cid, error: logErrorRef(err) });
+    log.warn('message delete session reset failed', { cid, error: logErrorRef(err) });
   }
 
   log.info(`messages-deleted user=${userId} cid=${cid} count=${existing.size}`);

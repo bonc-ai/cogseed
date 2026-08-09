@@ -282,6 +282,7 @@
     ccswitchUnsupported: [],
     discoverySeq: 0,
     busy: false,
+    removingAuthorizationId: '',
   };
 
   function tr(key, vars) {
@@ -303,6 +304,13 @@
     if (!status) return;
     status.textContent = message || '';
     status.className = `form-msg${klass ? ` ${klass}` : ''}`;
+  }
+
+  function setAuthorizationStatus(message, klass) {
+    const status = el('settings-model-authorization-status');
+    if (!status) return;
+    status.textContent = message || '';
+    status.className = `settings-status${klass ? ` ${klass}` : ''}`;
   }
 
   async function invoke(channel, payload) {
@@ -558,6 +566,25 @@
     if (typeof refreshModelGuard === 'function') await refreshModelGuard();
   }
 
+  async function removeAuthorization(authorizationId) {
+    const id = normalizeModelId(authorizationId);
+    if (!id || controller.removingAuthorizationId) return;
+    if (typeof uiConfirm !== 'function' || !(await uiConfirm(tr('settings.model_authorization.confirm_remove_authorization')))) return;
+    controller.removingAuthorizationId = id;
+    setAuthorizationStatus('', '');
+    try {
+      const res = await invoke('modelAuthorizations.remove', { authorizationId: id });
+      if (!res || !res.ok || !res.removed) {
+        setAuthorizationStatus((res && res.error) || tr('settings.entries.delete_failed'), 'error');
+        return;
+      }
+      await refreshModelAuthorizationSettings();
+      if (typeof refreshModelGuard === 'function') await refreshModelGuard();
+    } finally {
+      controller.removingAuthorizationId = '';
+    }
+  }
+
   async function handleAction(dataset) {
     const action = dataset && dataset.modelAuthAction;
     if (!action) return;
@@ -573,6 +600,7 @@
     if (action === 'default-model') { controller.draft = setDefaultModel(controller.draft, dataset.modelId); render(); return; }
     if (action === 'add-manual-model') { const input = el('model-authorization-manual-model'); controller.draft = addManualModel(controller.draft, input && input.value); render(); return; }
     if (action === 'complete') return completeDraft();
+    if (action === 'remove-authorization') return removeAuthorization(dataset.authorizationId);
   }
 
   function bindDelegates() {
@@ -588,6 +616,11 @@
         if (controller.draft.step === 'credentials' || controller.draft.step === 'credential_ready') continueCredentials();
       });
     }
+    const authorizationList = el('settings-model-authorization-list');
+    if (authorizationList && !authorizationList.dataset.modelAuthorizationBound) {
+      authorizationList.dataset.modelAuthorizationBound = '1';
+      authorizationList.addEventListener('click', (event) => handleAction(event && event.target && event.target.dataset));
+    }
   }
 
   function renderAuthorizationCards() {
@@ -600,11 +633,15 @@
     list.innerHTML = controller.authorizations.map((auth) => {
       const models = Array.isArray(auth.models) ? auth.models : [];
       const defaultModel = (models.find((model) => model.default) || models[0] || {}).model || auth.defaultModel || '';
+      const warning = auth.unbound || auth.warningCode === 'unbound_authorization'
+        ? tr('settings.model_authorization.unbound_title')
+        : '';
       return `<div class="model-authorization-card" data-authorization-id="${esc(auth.authorizationId || auth.id)}">
         <div class="model-authorization-card-head"><div><div class="model-authorization-card-title">${esc(auth.label || auth.providerLabel || auth.authorizationId || auth.id)}</div><div class="model-authorization-card-meta">${esc(auth.authType || '')} · ${esc(auth.source || '')}</div></div></div>
-        ${auth.warningCode ? `<div class="model-authorization-warning">${esc(auth.warningCode)}</div>` : ''}
+        ${warning ? `<div class="model-authorization-warning">${esc(warning)}</div>` : ''}
         <div>${esc(models.map((model) => model.model || model.id).filter(Boolean).join(', '))}</div>
         <div class="model-authorization-card-meta">${esc(tr('settings.model_authorization.default_label'))}: ${esc(defaultModel)}</div>
+        <div class="model-authorization-card-actions"><button type="button" class="btn btn-sm btn-danger" data-model-auth-action="remove-authorization" data-authorization-id="${esc(auth.authorizationId || auth.id)}">${esc(tr('settings.model_authorization.remove_authorization'))}</button></div>
       </div>`;
     }).join('');
   }

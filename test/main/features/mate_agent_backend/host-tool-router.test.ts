@@ -1,8 +1,25 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMateHostToolRouter } from '../../../../src/main/features/mate_agent_backend/host-tool-router';
 
+const { resolveRuntimeCapabilities, runMessagingHostTool } = vi.hoisted(() => ({
+  resolveRuntimeCapabilities: vi.fn(),
+  runMessagingHostTool: vi.fn(),
+}));
+
+vi.mock('../../../../src/main/features/mate_agent_backend/messaging-capability-policy', () => ({
+  resolveRuntimeCapabilities,
+}));
+vi.mock('../../../../src/main/features/mate_agent_backend/messaging-host-adapter', () => ({
+  runMessagingHostTool,
+}));
+
 const context: any = { request: { user_id: 'router-user', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', read_only_roots: ['/tmp'], writable_roots: ['/tmp'], working_dir: '/tmp' }, signal: new AbortController().signal };
+
+beforeEach(() => {
+  resolveRuntimeCapabilities.mockReset();
+  runMessagingHostTool.mockReset();
+});
 
 describe('Mate host tool router', () => {
   it('routes allowlisted capabilities with request scope and caps results', async () => {
@@ -27,5 +44,33 @@ describe('Mate host tool router', () => {
     const prefixSpoof = await router.handle({ type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', call_id: 'host-call-2', name: 'office_delete' as any, input: {} }, context);
     expect(prefixSpoof).toMatchObject({ isError: true, content: expect.stringContaining('E_RUNTIME_HOST_TOOL_UNKNOWN') });
     expect(office.run).not.toHaveBeenCalledWith('office_delete', expect.anything(), expect.anything(), expect.anything());
+  });
+
+  it('denies messaging host tools when no Commander capability is derived', async () => {
+    resolveRuntimeCapabilities.mockResolvedValue([]);
+    const router = createMateHostToolRouter({});
+    const denied = await router.handle({
+      type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', call_id: 'host-m1',
+      name: 'messaging_send', input: { target: 'self', text: 'hi' },
+    }, context);
+    expect(denied).toMatchObject({ isError: true, content: expect.stringContaining('E_RUNTIME_HOST_TOOL_FORBIDDEN') });
+    expect(runMessagingHostTool).not.toHaveBeenCalled();
+    expect(resolveRuntimeCapabilities).toHaveBeenCalledWith('router-user', 'req-parent', 'mruntime-parent');
+  });
+
+  it('routes messaging host tools only for a derived Commander capability', async () => {
+    resolveRuntimeCapabilities.mockResolvedValue(['messaging.proactive']);
+    runMessagingHostTool.mockResolvedValue({ content: JSON.stringify({ status: 'sent', instance_id: 'bot-1' }) });
+    const router = createMateHostToolRouter({});
+    const result = await router.handle({
+      type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', call_id: 'host-m2',
+      name: 'messaging_send', input: { target: 'self', text: 'hello' },
+    }, context);
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('"status":"sent"');
+    expect(runMessagingHostTool).toHaveBeenCalledWith('messaging_send', { target: 'self', text: 'hello' }, expect.objectContaining({
+      userId: 'router-user',
+      sourceKey: 'req-parent:host-m2',
+    }));
   });
 });

@@ -38,3 +38,23 @@ describe('icons.js', () => {
     expect(fileKindIconHtml('launch.pptx')).toContain('is-presentation');
   });
 });
+
+describe('brand channel icons', () => {
+  it('renders a fill-style brand svg for every messaging channel', () => {
+    const { uiIconHtml } = loadIcons();
+    for (const name of ['feishu', 'lark', 'wechat', 'wecom', 'telegram', 'qq', 'dingtalk', 'discord']) {
+      const html = uiIconHtml(name, 'messaging-brand-glyph');
+      expect(html).toContain(`is-${name}`);
+      expect(html).toContain('<svg');
+      expect(html).toContain('fill=');
+      expect(html).not.toContain('stroke="currentColor"');
+    }
+  });
+
+  it('keeps generic icons routing through the ui-icon wrapper', () => {
+    const { uiIconHtml } = loadIcons();
+    const html = uiIconHtml('qr-code', 'messaging-icon');
+    expect(html).toContain('stroke="currentColor"');
+    expect(html).toContain('is-qr-code');
+  });
+});

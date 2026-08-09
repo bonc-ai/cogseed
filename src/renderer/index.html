@@ -19,7 +19,6 @@
       <div class="sidebar-logo">
         <img class="logo-icon" src="../resources/icons/logo.png" alt="" draggable="false" />
         <div class="logo-text" data-i18n="brand.name">Mate Agent</div>
-        <button class="sidebar-logo-version" id="sidebar-version" type="button"></button>
       </div>
       <button class="sidebar-search-btn" id="sidebar-search-btn" data-i18n-title="sidebar.search_title" title="Global search (Cmd/Ctrl+K)">
         <span data-ui-icon="search" data-ui-icon-class="sidebar-search-icon"></span>
@@ -36,7 +35,8 @@
         <button class="sidebar-btn" id="recall-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.recall">Recall</span></button>
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connectors">Connectors</span></button>
         <button class="sidebar-btn" id="contexts-btn"><span data-ui-icon="database" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.contexts">Library</span></button>
-        <button class="sidebar-btn" id="personal-ontology-btn"><span data-ui-icon="database" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.personal_ontology">个人本体</span></button>
+        <button class="sidebar-btn" id="evolution-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.evolution">进化控制台</span></button>
+        <button class="sidebar-btn" id="personal-ontology-btn"><span data-ui-icon="sparkles" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.personal_ontology">我的认知</span></button>
       </div>
       <div class="sidebar-conversation-nav">
         <div class="sidebar-section sidebar-projects-section">
@@ -193,6 +193,11 @@
                 <div class="chat-header-meta" id="chat-header-meta"></div>
               </div>
               <div class="chat-header-actions">
+                <button type="button" class="chat-header-details-btn" id="topbar-evolution-toggle"
+                        data-i18n-title="evolution.enter_title"
+                        data-i18n-aria-label="evolution.enter_title"
+                        title="进化控制台" aria-label="进化控制台">
+                  <span data-ui-icon="git-branch" data-ui-icon-class="chat-header-details-icon"></span>
                 <button type="button" class="chat-header-details-btn" id="chat-terminal-toggle"
                         data-i18n-title="terminal_panel.toggle_title"
                         data-i18n-aria-label="terminal_panel.toggle_title"
@@ -547,11 +552,6 @@
                 <div class="skills-doc-section-body" id="skills-detail-extra"></div>
               </section>
 
-              <section class="skills-doc-section" id="skills-section-cognition" style="display:none">
-                <h3 class="skills-doc-section-label" data-i18n="cognition.skill_summary">认知资产摘要</h3>
-                <div class="skills-doc-section-body" id="skills-cognition-summary"></div>
-              </section>
-
               <section class="skills-doc-section skills-usage-section">
                 <h3 class="skills-doc-section-label skills-usage-label">
                   <span data-i18n="skills.label_usage">Usage</span>
@@ -643,6 +643,7 @@
                   <span class="agents-detail-source" id="agents-detail-source"></span>
                   <div class="detail-actions" id="agents-detail-actions">
                     <button type="button" class="agent-card-use agent-dialog-btn" id="agent-use-btn" data-i18n="agents.use" data-i18n-title="agents.use_tooltip" data-i18n-aria-label="agents.use_tooltip" aria-label="Use this agent">Use</button>
+                    <button type="button" class="btn btn-sm" id="agent-manage-btn" data-i18n="agents.manage" data-i18n-title="agents.manage_tooltip" data-i18n-aria-label="agents.manage_tooltip" aria-label="Manage this agent" hidden>Manage</button>
                     <button class="btn btn-sm" id="agent-edit-btn" data-i18n="agents.edit_btn_edit">Edit</button>
                     <button class="btn btn-sm" id="agent-enabled-btn" data-i18n="component.disable">Disable</button>
                     <button class="btn btn-sm" id="agent-upload-marketplace-btn" style="display:none" data-i18n="marketplace.upload">Upload to marketplace (dev)</button>
@@ -703,6 +704,7 @@
                 </div>
               </div>
             </div>
+            <div id="agent-management-surface" class="agent-management-surface" hidden></div>
           </div>
           <!-- Inline chat for agent editing -->
           <div class="agents-chat-col" id="agents-chat-col" style="display:none">
@@ -1113,6 +1115,17 @@
       </section>
 
 
+      <!-- Evolution Console -->
+      <section class="panel" id="panel-evolution">
+        <div class="evo-console">
+          <aside class="evo-console-sidebar">
+            <div class="evo-console-title" data-i18n="evolution.title">进化控制台</div>
+            <nav class="evo-console-nav" id="evo-console-nav"></nav>
+          </aside>
+          <div class="evo-console-content" id="evo-console-body"></div>
+        </div>
+      </section>
+
       <!-- Personal Ontology Candidates -->
       <section class="panel" id="panel-personal-ontology">
         <div class="personal-onto-layout">
@@ -1150,14 +1163,10 @@
       <!-- Settings -->
       <section class="panel" id="panel-settings">
         <div class="settings-container">
-          <div class="settings-header">
-            <div class="settings-heading">
-              <h2 data-i18n="settings.title">Settings</h2>
-            </div>
-          </div>
           <div class="settings-tabs" role="tablist">
             <button class="settings-tab is-active" data-settings-tab="data" data-i18n="settings.tab.data">数据</button>
             <button class="settings-tab" data-settings-tab="credentials" data-i18n="settings.tab.credentials">Model Providers</button>
+            <button class="settings-tab" data-settings-tab="messaging" data-i18n="settings.tab.messaging">消息平台</button>
             <button class="settings-tab" data-settings-tab="general" data-i18n="settings.tab.general">通用</button>
           </div>
 
@@ -1453,6 +1462,13 @@
                 </div>
               </div>
 
+            </div>
+
+            <!-- ─────────────────────── 消息平台 ─────────────────────── -->
+            <div class="settings-tab-pane" data-settings-pane="messaging" hidden>
+              <div class="messaging-settings-shell" id="messaging-settings-shell" aria-live="polite">
+                <div class="messaging-page" id="messaging-page"></div>
+              </div>
             </div>
 
           </div>
@@ -1905,6 +1921,8 @@
   <script src="./vendor/dompurify/purify.min.js"></script>
   <script src="./modules/pinyin-firstletter.js"></script>
   <script src="./modules/agents.js"></script>
+  <script src="./modules/expense-workbench.js"></script>
+  <script src="./modules/expense-agent-cards.js"></script>
   <script src="./modules/auto-title.js"></script>
   <script src="./modules/auto-events.js"></script>
   <script src="./modules/utils.js"></script>

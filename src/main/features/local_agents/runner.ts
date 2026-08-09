@@ -17,6 +17,7 @@
  *     channel so the caller has a single completion contract.
  */
 
+import * as path from 'node:path';
 import { createLogger } from '../../logger.js';
 import { logErrorRef, logErrorSummary, logPathRef, maskId } from '../../util/log-redact.js';
 import { detectOne, type LocalCliEntry, type LocalCliType } from './registry.js';
@@ -33,8 +34,14 @@ import { maybeSpillToolResult, toolResultRefForPath } from '../../util/tool-resu
 import type { ExecutionKind, ExecutionLifecycleSink } from '../execution-records.js';
 import type { PreparedExecutionContext } from '../p3394/execution-context.js';
 import { isPathAllowed } from '../../util/path-sandbox.js';
+import { assertAgentChatDispatchable } from '../agent-dispatch-policy.js';
 
 const log = createLogger('local-agents:runner');
+export {
+  startManagedStdioProcess,
+  type ManagedStdioProcess,
+  type ManagedStdioProcessOptions,
+} from '../../util/managed-stdio-process.js';
 
 /** Hard wall-clock cap for a single CLI dispatch — zombie insurance
  *  only. The hang detector is the idle-kill below, so this can be
@@ -607,6 +614,7 @@ export interface RunCliAgentResult {
 }
 
 export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
+  await assertAgentChatDispatchable(opts.uid, opts.agentId);
   if (opts.preparedContext) {
     const roots = opts.preparedContext.permissionMode === 'read-only' ? opts.preparedContext.readOnlyRoots : [...opts.preparedContext.writableRoots, ...opts.preparedContext.readOnlyRoots];
     if (opts.prompt !== opts.preparedContext.prompt || !isPathAllowed(opts.cwd, roots)) {

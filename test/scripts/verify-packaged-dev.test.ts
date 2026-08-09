@@ -30,7 +30,8 @@ describe('packaged-dev verifier', () => {
     const appPath = fakeBundle();
     const result = verifyPackagedDevBundle(appPath, {
       listAsar: () => [
-        '/package.json', '/bootstrap.cjs', '/.build/build-info.json',
+        '/package.json', '/bootstrap.cjs', '/src/main/install-data-root.cjs',
+        '/src/main/util/migrate-source-data-root.cjs', '/.build/build-info.json',
         '/src/main/index.ts', '/src/renderer/modules/agents.js',
       ],
       readAsarFile: () => Buffer.from(JSON.stringify({ channel: 'packaged-dev', commit: 'abc123', dirty: false })),

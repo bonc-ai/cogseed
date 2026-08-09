@@ -1,0 +1,119 @@
+{
+  "version": "1.0",
+  "name": "cognition-development",
+  "goal": "在不破坏现有 Electron 分层和数据边界的前提下，把已确认的认知生命周期目标推进为经过测试的生产级能力。",
+  "acceptance_criteria": [
+    "每轮开发都有明确的纵向切片、变更边界和验收条件。",
+    "实现遵循现有 features、IPC、renderer、storage 和测试约定。",
+    "每个失败路径、恢复路径和人工确认边界都有测试覆盖。",
+    "类型检查和认知相关回归测试通过。",
+    "审查结论可追溯到代码、测试和 Graph 节点结果。"
+  ],
+  "start": "inspect_baseline",
+  "terminals": ["slice_accepted", "slice_rejected", "blocked"],
+  "budgets": {
+    "max_steps": 18,
+    "max_retries_per_node": 2,
+    "max_wall_seconds": 3600,
+    "max_cost_usd": 0
+  },
+  "state": {
+    "schema_version": 1,
+    "fields": {
+      "request": {"type": "string", "owner": "orchestrator"},
+      "baseline": {"type": "object", "owner": "inspect_baseline"},
+      "slice": {"type": "object", "owner": "define_slice"},
+      "patch": {"type": "object", "owner": "implement_slice"},
+      "tests": {"type": "object", "owner": "verify_slice"},
+      "review": {"type": "object", "owner": "review_slice"},
+      "attempt": {"type": "integer", "owner": "orchestrator"}
+    }
+  },
+  "nodes": [
+    {
+      "id": "inspect_baseline",
+      "kind": "deterministic",
+      "purpose": "读取仓库约束、现有认知实现、测试和工作区状态，形成事实基线。",
+      "reads": ["request"],
+      "writes": ["baseline"],
+      "timeout_seconds": 120,
+      "side_effects": "none",
+      "idempotency": "replayable"
+    },
+    {
+      "id": "define_slice",
+      "kind": "agent",
+      "purpose": "从目标和基线中选择一个可独立验收的纵向切片，明确不做事项和风险。",
+      "reads": ["request", "baseline"],
+      "writes": ["slice"],
+      "timeout_seconds": 180,
+      "side_effects": "none",
+      "idempotency": "replayable"
+    },
+    {
+      "id": "implement_slice",
+      "kind": "agent",
+      "purpose": "按切片契约修改源代码、测试和必要文档。",
+      "reads": ["request", "baseline", "slice", "review"],
+      "writes": ["patch"],
+      "timeout_seconds": 1200,
+      "side_effects": "workspace write",
+      "idempotency": "checkpoint before retry; preserve unrelated user changes"
+    },
+    {
+      "id": "verify_slice",
+      "kind": "deterministic",
+      "purpose": "运行类型检查、认知相关测试和必要的全局回归，记录失败上下文。",
+      "reads": ["patch", "slice"],
+      "writes": ["tests"],
+      "timeout_seconds": 900,
+      "side_effects": "test artifacts",
+      "idempotency": "replayable"
+    },
+    {
+      "id": "review_slice",
+      "kind": "agent",
+      "purpose": "独立检查正确性、边界条件、分层、安全、恢复语义和测试充分性。",
+      "reads": ["request", "baseline", "slice", "patch", "tests"],
+      "writes": ["review"],
+      "timeout_seconds": 300,
+      "side_effects": "none",
+      "idempotency": "replayable"
+    }
+  ],
+  "edges": [
+    {"from": "inspect_baseline", "to": "define_slice", "when": "baseline.complete == true"},
+    {"from": "inspect_baseline", "to": "blocked", "when": "baseline.complete != true"},
+    {"from": "define_slice", "to": "implement_slice", "when": "slice.accepted == true"},
+    {"from": "define_slice", "to": "blocked", "when": "slice.accepted != true"},
+    {"from": "implement_slice", "to": "verify_slice", "when": "patch.complete == true"},
+    {"from": "implement_slice", "to": "blocked", "when": "patch.complete != true"},
+    {"from": "verify_slice", "to": "review_slice", "when": "tests.completed == true"},
+    {
+      "from": "review_slice",
+      "to": "implement_slice",
+      "when": "review.verdict == 'revise' && attempt < 3",
+      "state_updates": {"attempt": "attempt + 1"}
+    },
+    {"from": "review_slice", "to": "slice_accepted", "when": "review.verdict == 'accept'"},
+    {"from": "review_slice", "to": "slice_rejected", "when": "review.verdict == 'reject'"},
+    {"from": "review_slice", "to": "blocked", "when": "review.verdict == 'revise' && attempt >= 3"}
+  ],
+  "checkpoints": [
+    "after:inspect_baseline",
+    "before:implement_slice",
+    "after:verify_slice",
+    "before:slice_accepted"
+  ],
+  "human_gates": [],
+  "observability": {
+    "trace_fields": ["run_id", "node", "attempt", "route", "duration_ms", "error"],
+    "metrics": ["slice_acceptance_rate", "test_pass_rate", "revision_rate", "steps_per_slice", "time_to_accept"]
+  },
+  "evaluations": [
+    {
+      "name": "existing-cognition-baseline",
+      "compare": ["correctness", "recovery", "test-coverage", "scope-discipline", "regression-risk"]
+    }
+  ]
+}

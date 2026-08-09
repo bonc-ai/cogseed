@@ -24,6 +24,17 @@ const gate = require('../../../bin/builtin-resource-gate.cjs') as {
   verifyBuiltinExtraResourcesConfig(extraResources: unknown): boolean;
   verifyBuiltinRoot(root: string, options?: { allowIgnoredJunk?: boolean }): string;
 };
+const contentManifest = require('../../../src/main/util/builtin-content-manifest.js') as {
+  collectBuiltinFiles(root: string, options?: { allowIgnoredJunk?: boolean }): Array<{
+    path: string;
+    bytes: number;
+    sha256: string;
+  }>;
+  contentTreeSha256(files: unknown): string;
+  verifyBuiltinContentManifest(root: string, options?: { allowIgnoredJunk?: boolean }): {
+    files: Array<{ path: string; bytes: number; sha256: string }>;
+  };
+};
 
 let tmpDir: string;
 
@@ -48,9 +59,9 @@ describe('builtin-resource-gate', () => {
 
     expect(gate.verifyBuiltinRoot(root, { allowIgnoredJunk: true }))
       .toBe('resource:builtin:manifest-v1');
-    expect(manifest.files).toHaveLength(150);
+    expect(manifest.files).toHaveLength(151);
     expect(manifest.inventory.system_skills).toHaveLength(6);
-    expect(manifest.inventory.marketplace_agents).toHaveLength(4);
+    expect(manifest.inventory.marketplace_agents).toHaveLength(5);
     expect(manifest.inventory.marketplace_skills).toHaveLength(5);
     expect(manifest.inventory.marketplace_skills)
       .toContainEqual(expect.objectContaining({ id: '8d2f4b7c9a10', name: 'paper-repro' }));
@@ -165,5 +176,34 @@ describe('builtin-resource-gate', () => {
 
     expect(() => gate.verifyBuiltinExtraResourcesConfig(packageJson.build.extraResources))
       .toThrow(/missing filter !\*\*\/\*\.pyc/);
+  });
+
+  it('rejects forged manifest rows even when their declared tree hash is regenerated', () => {
+    const root = copyBuiltin();
+    const manifestFile = path.join(root, '_manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+    const canonical = manifest.files.find((row: { path?: string }) => (
+      row.path === 'marketplace/agents/c045605cb916/agent.json'
+    ));
+    canonical.bytes += 1;
+    manifest.content_tree_sha256 = contentManifest.contentTreeSha256(manifest.files);
+    fs.writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => contentManifest.verifyBuiltinContentManifest(root, { allowIgnoredJunk: true }))
+      .toThrow(/builtin content tree mismatch/);
+  });
+
+  it('rejects duplicate or unsorted paths before hashing manifest data', () => {
+    const files = contentManifest.collectBuiltinFiles(
+      path.join(process.cwd(), 'resources', 'builtin'),
+      { allowIgnoredJunk: true },
+    );
+    const duplicate = [{ ...files[0] }, { ...files[0] }];
+    const unsorted = [{ ...files[1] }, { ...files[0] }];
+
+    expect(() => contentManifest.contentTreeSha256(duplicate))
+      .toThrow(/paths must be unique and sorted/);
+    expect(() => contentManifest.contentTreeSha256(unsorted))
+      .toThrow(/paths must be unique and sorted/);
   });
 });

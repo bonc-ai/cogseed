@@ -21,8 +21,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { userLocalRoot, userOntologyGroupsDir } from '../paths';
 import { writeTextAtomicSync, safeId, nowIso, readJsonSync } from '../storage';
-import { addEntry as addMemoryEntry } from './memory';
-import { listGroups } from './personal_ontology_groups';
+import { addEntryTransactional as addMemoryEntry } from './memory';
+import { appendToGroup, listGroups } from './personal_ontology_groups';
 import { getRoleTemplate } from './role_templates';
 import { routeCandidateToField } from './personal_ontology_router';
 import {
@@ -35,8 +35,7 @@ import {
   isTemplateFileText,
   parseTemplateContent,
   type TemplateSection,
-} from './personal_ontology_template_files';
-import { createLogger } from '../logger';
+} from './personal_ontology_template_files';import { createLogger } from '../logger';
 
 const log = createLogger('personal-ontology-candidates');
 
@@ -263,7 +262,7 @@ function legacySummaryFor(c: LegacyCandidate): string {
   try { return JSON.stringify(c.payload).slice(0, 200); } catch { return c.candidate_id; }
 }
 
-function migrateLegacyJsonIfPresent(uid: string): void {
+async function migrateLegacyJsonIfPresent(uid: string): Promise<void> {
   const mdPath = candidatesMdPath(uid);
   const jsonPath = legacyCandidatesJsonPath(uid);
   if (fs.existsSync(mdPath) || !fs.existsSync(jsonPath)) return;
@@ -283,7 +282,7 @@ function migrateLegacyJsonIfPresent(uid: string): void {
 
       if (c.status === 'confirmed') {
         // 历史欠账：之前「确认」只打了状态戳，从未真正写入记忆。这里补写。
-        const res = addMemoryEntry(uid, scope === 'user' ? 'user' : 'memory', summary);
+        const res = await addMemoryEntry(uid, scope === 'user' ? 'user' : 'memory', summary);
         if (res.ok) migratedToMemory++;
         else log.warn('legacy confirmed candidate migration write failed', { uid, candidateId: c.candidate_id, error: res.error });
         continue;
@@ -313,8 +312,8 @@ function migrateLegacyJsonIfPresent(uid: string): void {
 
 // ── 读写 ─────────────────────────────────────────────────────────────────
 
-function readCandidates(uid: string): CandidateUpdate[] {
-  migrateLegacyJsonIfPresent(uid);
+async function readCandidates(uid: string): Promise<CandidateUpdate[]> {
+  await migrateLegacyJsonIfPresent(uid);
   return parseCandidatesMarkdown(readTextSafe(candidatesMdPath(uid)));
 }
 
@@ -332,7 +331,7 @@ function readBlockedItems(uid: string): BlockedItem[] {
 export async function listCandidates(uid: string): Promise<CandidatesData> {
   if (!safeId(uid)) throw new Error('invalid uid');
   return {
-    candidate_updates: readCandidates(uid),
+    candidate_updates: await readCandidates(uid),
     blocked_items: readBlockedItems(uid),
   };
 }
@@ -389,7 +388,7 @@ export async function addCandidates(
   const incoming = Array.isArray(candidates) ? candidates : [];
   if (!incoming.length) return { candidate_ids: [] };
 
-  const existing = readCandidates(uid);
+  const existing = await readCandidates(uid);
   const written: string[] = [];
   const stamp = Date.now();
   let seq = 0;
@@ -471,7 +470,7 @@ async function writeCandidateToDestinations(
 
   if (wantsGlobal) {
     const target = candidate.memory_scope === 'shared' ? 'memory' : 'user';
-    const res = addMemoryEntry(uid, target, text);
+    const res = await addMemoryEntry(uid, target, text);
     result.globalMemory = { ok: res.ok, ...(res.error ? { error: res.error } : {}) };
     if (res.ok) anySucceeded = true;
     else log.warn('candidate global-memory write blocked', { uid, candidateId: candidate.candidate_id, error: res.error });
@@ -644,7 +643,7 @@ export async function confirmCandidate(
 ): Promise<ConfirmCandidateResult> {
   if (!safeId(uid) || !candidateId) throw new Error('invalid uid or candidateId');
 
-  const candidates = readCandidates(uid);
+  const candidates = await readCandidates(uid);
   const idx = candidates.findIndex(c => c.candidate_id === candidateId);
   if (idx === -1) {
     log.warn('confirmCandidate: candidate not found', { uid, candidateId });
@@ -674,7 +673,7 @@ export async function confirmCandidate(
 export async function rejectCandidate(uid: string, candidateId: string, reason?: string): Promise<{ ok: boolean }> {
   if (!safeId(uid) || !candidateId) throw new Error('invalid uid or candidateId');
 
-  const candidates = readCandidates(uid);
+  const candidates = await readCandidates(uid);
   const idx = candidates.findIndex(c => c.candidate_id === candidateId);
   if (idx === -1) {
     log.warn('rejectCandidate: candidate not found', { uid, candidateId });
@@ -718,7 +717,7 @@ export async function confirmCandidates(
     return { ok: true, confirmedCount: 0, failedIds: [], results: {}, summary: { toFields: [], toEntries: 0 } };
   }
 
-  const candidates = readCandidates(uid);
+  const candidates = await readCandidates(uid);
   const idSet = new Set(candidateIds);
   const remaining: CandidateUpdate[] = [];
   const failedIds: string[] = [];
@@ -766,7 +765,7 @@ export async function rejectCandidates(uid: string, candidateIds: string[], reas
   if (!safeId(uid)) throw new Error('invalid uid');
   if (!Array.isArray(candidateIds) || !candidateIds.length) return { ok: true, rejectedCount: 0 };
 
-  const candidates = readCandidates(uid);
+  const candidates = await readCandidates(uid);
   const idSet = new Set(candidateIds);
   const remaining = candidates.filter(c => !idSet.has(c.candidate_id));
   const rejectedCount = candidates.length - remaining.length;

@@ -58,6 +58,33 @@ describe('Mate Agent Runtime protocol normalization', () => {
     expect(result.code).toBe('E_RUNTIME_FORBIDDEN_FIELD');
   });
 
+  it('passes known capability grants through and rejects unknown ones', () => {
+    const root = tmpRoot();
+    const ok = normalizeRuntimeRunRequest('runtime-protocol-user', {
+      task: 'Run with grants.',
+      capabilities: ['messaging.proactive'],
+    }, { allowedRoots: [root] });
+    expect(ok.ok).toBe(true);
+    if (!ok.ok) throw new Error(ok.error);
+    expect(ok.request.capabilities).toEqual(['messaging.proactive']);
+
+    const bad = normalizeRuntimeRunRequest('runtime-protocol-user', {
+      task: 'Fabricate grants.',
+      capabilities: ['messaging.proactive', 'sudo.everything'],
+    }, { allowedRoots: [root] });
+    expect(bad.ok).toBe(false);
+    if (bad.ok) throw new Error('expected rejection');
+    expect(bad.code).toBe('E_RUNTIME_INVALID_REQUEST');
+
+    const bounded = normalizeRuntimeRunRequest('runtime-protocol-user', {
+      task: 'Overflow grants.',
+      capabilities: Array.from({ length: 9 }, () => 'messaging.proactive'),
+    }, { allowedRoots: [root] });
+    expect(bounded.ok).toBe(false);
+    if (bounded.ok) throw new Error('expected rejection');
+    expect(bounded.code).toBe('E_RUNTIME_INVALID_REQUEST');
+  });
+
   it('rejects cloud chat and session transcript paths even when the caller passes a broad root', () => {
     const uid = 'runtime-protocol-transcript';
     const chatFile = path.join(paths.userChatsDir(uid), 'gconv-secret.jsonl');

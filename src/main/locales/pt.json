@@ -187,5 +187,18 @@
   "skills.import_block.system_dir": "Diretório do sistema",
   "skills.inline_text": "habilidade {skill}",
   "skills.use_prefix": "Use a habilidade {skill}: {content}",
-  "workspace.picker_title": "Escolha um diretório de espaço de trabalho"
+  "workspace.picker_title": "Escolha um diretório de espaço de trabalho",
+  "errors.message_edit_invalid_target": "Esta mensagem do usuário não está mais disponível para edição.",
+  "errors.message_edit_running": "Aguarde a resposta atual terminar antes de editar uma mensagem.",
+  "errors.message_edit_prepare_failed": "Não foi possível preparar a conversa para edição. O histórico salvo não foi alterado.",
+  "errors.message_edit_sync_failed": "Não foi possível atualizar o histórico da conversa de forma consistente. Recarregue a conversa e tente novamente.",
+  "errors.message_edit_enqueue_failed": "Não foi possível enviar a mensagem editada. Recarregue a conversa e tente novamente.",
+  "expense_agent.submit.target": "aprovação do Feishu",
+  "expense_agent.submit.cancel": "Cancelar",
+  "expense_agent.submit.confirm": "Enviar para aprovação",
+  "expense_agent.submit.title": "Confirmar envio do reembolso",
+  "expense_agent.submit.message": "Enviar este reembolso para {target}?",
+  "expense_agent.submit.detail": "Caso: {case}\\nImpressão dos materiais: {hash}\\n\\nIsso cria uma solicitação de aprovação no Feishu. Não aprova o pagamento; os aprovadores designados revisam no Feishu.",
+  "expense_agent.submit.unavailable": "Não foi possível mostrar a confirmação; nada foi enviado.",
+  "expense_agent.submit.cancelled": "O envio foi cancelado; nenhum dado foi enviado ao Feishu."
 }

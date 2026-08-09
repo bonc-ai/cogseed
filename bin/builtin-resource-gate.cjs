@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 'use strict';
 
-const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-
-const BUILTIN_MANIFEST_NAME = '_manifest.json';
-const BUILTIN_MANIFEST_SCHEMA = 1;
+const {
+  BUILTIN_MANIFEST_NAME,
+  BUILTIN_MANIFEST_SCHEMA,
+  collectBuiltinFiles,
+  contentTreeSha256,
+  verifyBuiltinContentManifest,
+} = require('../src/main/util/builtin-content-manifest.js');
 const BUILTIN_EXTRA_RESOURCE_FILTERS = Object.freeze([
   '!**/.DS_Store',
   '!**/__pycache__/**',
@@ -28,6 +31,7 @@ const REQUIRED_BUILTIN_INVENTORY = Object.freeze({
     '79df9cc89f5f',
     'bcfcb4921dce',
     'e064dca9e1bd',
+    'c045605cb916',
   ]),
   marketplace_skills: Object.freeze([
     '6743aa0797a2',
@@ -40,12 +44,6 @@ const REQUIRED_BUILTIN_INVENTORY = Object.freeze({
 
 function slash(value) {
   return value.split(path.sep).join('/');
-}
-
-function isIgnoredJunk(relativePath) {
-  const parts = slash(relativePath).split('/');
-  const name = parts.at(-1) || '';
-  return name === '.DS_Store' || name.endsWith('.pyc') || parts.includes('__pycache__');
 }
 
 function requiredDirectory(label, dir) {
@@ -67,50 +65,6 @@ function readJson(label, file) {
   } catch (err) {
     throw new Error(`[builtin-resource-gate] invalid ${label}: ${file}: ${err.message}`);
   }
-}
-
-function sha256(bytes) {
-  return crypto.createHash('sha256').update(bytes).digest('hex');
-}
-
-function collectBuiltinFiles(root, options = {}) {
-  root = path.resolve(root);
-  requiredDirectory('builtin root', root);
-  const records = [];
-  function visit(dir) {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-      const absolute = path.join(dir, entry.name);
-      const relativePath = slash(path.relative(root, absolute));
-      if (relativePath === BUILTIN_MANIFEST_NAME) continue;
-      if (options.allowIgnoredJunk && isIgnoredJunk(relativePath)) continue;
-      if (entry.isSymbolicLink()) {
-        throw new Error(`[builtin-resource-gate] symbolic links are not allowed: ${absolute}`);
-      }
-      if (entry.isDirectory()) {
-        visit(absolute);
-      } else if (entry.isFile()) {
-        const bytes = fs.readFileSync(absolute);
-        records.push({ path: relativePath, bytes: bytes.length, sha256: sha256(bytes) });
-      } else {
-        throw new Error(`[builtin-resource-gate] unsupported filesystem entry: ${absolute}`);
-      }
-    }
-  }
-  visit(root);
-  return records.sort((a, b) => a.path.localeCompare(b.path));
-}
-
-function contentTreeSha256(files) {
-  const hash = crypto.createHash('sha256');
-  for (const file of files) {
-    hash.update(file.path);
-    hash.update('\0');
-    hash.update(String(file.bytes));
-    hash.update('\0');
-    hash.update(file.sha256);
-    hash.update('\n');
-  }
-  return hash.digest('hex');
 }
 
 function parseFrontmatterScalar(raw) {
@@ -345,12 +299,8 @@ function createBuiltinManifest(root, options = {}) {
 
 function verifyBuiltinRoot(root, options = {}) {
   root = path.resolve(root);
-  const manifestFile = path.join(root, BUILTIN_MANIFEST_NAME);
-  const actual = readJson('builtin content manifest', manifestFile);
-  if (actual.schema !== BUILTIN_MANIFEST_SCHEMA) {
-    throw new Error(`[builtin-resource-gate] unsupported builtin manifest schema: ${actual.schema}`);
-  }
   const expected = createBuiltinManifest(root, options);
+  const actual = verifyBuiltinContentManifest(root, options);
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     if (actual.content_tree_sha256 !== expected.content_tree_sha256) {
       throw new Error(

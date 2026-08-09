@@ -187,5 +187,18 @@
   "skills.import_block.system_dir": "系统目录",
   "skills.inline_text": "{skill} 技能",
   "skills.use_prefix": "使用 {skill} 技能：{content}",
-  "workspace.picker_title": "选择工作区目录"
+  "workspace.picker_title": "选择工作区目录",
+  "errors.message_edit_invalid_target": "这条用户消息已无法编辑。",
+  "errors.message_edit_running": "请等当前回复完成后再编辑消息。",
+  "errors.message_edit_prepare_failed": "无法为消息编辑准备会话，已保存的历史记录未改变。",
+  "errors.message_edit_sync_failed": "无法一致地更新会话历史，请重新加载会话后重试。",
+  "errors.message_edit_enqueue_failed": "编辑后的消息未能发送，请重新加载会话后重试。",
+  "expense_agent.submit.target": "飞书审批",
+  "expense_agent.submit.cancel": "取消",
+  "expense_agent.submit.confirm": "提交审批",
+  "expense_agent.submit.title": "确认提交报销",
+  "expense_agent.submit.message": "确认将这笔报销提交到{target}？",
+  "expense_agent.submit.detail": "案例：{case}\\n材料指纹：{hash}\\n\\n此操作会在飞书创建审批请求，不代表付款已获批准；指定的人工审批人仍需在飞书中审核。",
+  "expense_agent.submit.unavailable": "无法显示提交确认，本次未提交。",
+  "expense_agent.submit.cancelled": "已取消提交，未向飞书发送数据。"
 }

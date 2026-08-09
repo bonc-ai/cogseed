@@ -901,6 +901,7 @@ function agentRunResultEventForTelemetry(input: {
 
 export function modelTurnContextForLog(input: {
   userId?: string;
+  disableTools?: boolean;
   sessionId?: string;
   cid?: string;
   agentId?: string;
@@ -942,6 +943,7 @@ export function modelTurnContextForLog(input: {
   }, {});
   return {
     user_id: maskId(input.userId),
+    disable_tools: input.disableTools === true,
     session_id: maskId(input.sessionId),
     session_kind: sessionKindForLog(input.sessionId),
     cid: maskId(input.cid),
@@ -993,6 +995,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
   const liveRunTimings = createLiveRunTimings(runStartedAt);
   const {
     userId, message,
+    disableTools = false,
     sessionId = `anon-${genConversationId().slice(0, 8)}`,
     resumeActiveTurn = false,
     systemPrompt,
@@ -1004,7 +1007,6 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     idleTimeout = 1800,
     streamIdleTimeout = 180,
     maxToolLoops,
-    disableTools,
     abortSignal = null,
     skillList,
     forceOpenSkillRefs,
@@ -1037,6 +1039,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
   const diagnostics = createModelRunLogDiagnostics();
   let turnLogContext = modelTurnContextForLog({
     userId,
+    disableTools,
     sessionId,
     cid,
     agentId,
@@ -1247,6 +1250,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       sessionId,
       systemPrompt,
       userId,
+      ...(disableTools ? { disableTools: true } : {}),
       agentId,
       ...(agentName ? { agentName } : {}),
       ...(maxToolLoops ? { maxToolLoops } : {}),
@@ -1304,6 +1308,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     activeToolCount = toolDefs.length;
     turnLogContext = modelTurnContextForLog({
       userId,
+      disableTools,
       sessionId,
       cid,
       agentId,

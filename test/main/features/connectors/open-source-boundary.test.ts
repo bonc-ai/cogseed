@@ -49,12 +49,12 @@ describe('public connector boundary', () => {
     const pkg = JSON.parse(read('package.json'));
     const sourceLauncher = read('run.sh');
 
-    expect(main).toContain('registerConnectorProtocol();');
+    expect(main).toContain('registerConnectorProtocol({ owner: RUNTIME_IDENTITY.protocolOwner });');
     expect(main).toContain('await consumeColdLaunchConnectorCallback();');
     expect(pkg.build.protocols).toEqual(expect.arrayContaining([
       expect.objectContaining({ schemes: ['mateagent', 'orkas'] }),
     ]));
-    expect(sourceLauncher).toContain('scripts/prepare-source-protocol.cjs');
+    expect(sourceLauncher).not.toContain('scripts/prepare-source-protocol.cjs');
   });
 
   it('keeps MCP DCR credentials local and excludes account-scoped DCR grant hosting', () => {

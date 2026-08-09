@@ -1,6 +1,6 @@
 import type { RuntimeModelToolDefinition } from '../model-adapter';
 
-export type RuntimeToolName = 'stat_file' | 'read_file' | 'search_files' | 'grep_files' | 'write_file' | 'edit_file' | 'bash' | 'run_skill' | 'list_connector_tools' | 'call_connector_tool' | 'search_mate_kb' | 'read_mate_kb' | 'office_read' | 'office_create' | 'office_edit' | 'office_render' | 'browser_open' | 'browser_snapshot' | 'browser_click' | 'browser_type' | 'browser_screenshot' | 'mate_delegate' | 'mate_tasks' | 'mate_cancel' | 'mate_retry_step' | 'mate_skip_step' | 'mate_resume_workflow' | 'mate_workflow';
+export type RuntimeToolName = 'stat_file' | 'read_file' | 'search_files' | 'grep_files' | 'write_file' | 'edit_file' | 'bash' | 'run_skill' | 'list_connector_tools' | 'call_connector_tool' | 'search_mate_kb' | 'read_mate_kb' | 'office_read' | 'office_create' | 'office_edit' | 'office_render' | 'browser_open' | 'browser_snapshot' | 'browser_click' | 'browser_type' | 'browser_screenshot' | 'mate_delegate' | 'mate_tasks' | 'mate_cancel' | 'mate_retry_step' | 'mate_skip_step' | 'mate_resume_workflow' | 'mate_workflow' | 'messaging_list_targets' | 'messaging_send';
 
 export interface RuntimeToolCatalogEntry {
   name: RuntimeToolName;
@@ -130,10 +130,36 @@ export const TOOL_CATALOG = Object.freeze<readonly RuntimeToolCatalogEntry[]>([
   { name: 'mate_skip_step', summary: 'Skip one unfinished Mate workflow step with an auditable reason.', kind: 'host', parameters: { type: 'object', properties: { step_id: { type: 'string' }, reason: { type: 'string' } }, required: ['step_id'], additionalProperties: false } },
   { name: 'mate_resume_workflow', summary: 'Resume a blocked or failed Mate workflow and reconcile blockers.', kind: 'host', parameters: { type: 'object', properties: { reason: { type: 'string' } }, additionalProperties: false } },
   { name: 'mate_workflow', summary: 'Read the current Mate workflow run and step statuses.', kind: 'host', parameters: { type: 'object', properties: {}, additionalProperties: false } },
+  { name: 'messaging_list_targets', summary: 'List configured Feishu/Lark bots and which can proactively message the configured owner (self); read-only sanitized diagnostics.', kind: 'host', parameters: { type: 'object', properties: {}, additionalProperties: false } },
+  { name: 'messaging_send', summary: 'Send a text message to the configured owner (self) through one Feishu/Lark bot, after the user approves a confirmation dialog.', kind: 'host', parameters: { type: 'object', properties: { instance_id: { type: 'string' }, target: { type: 'string', const: 'self' }, text: { type: 'string', minLength: 1, maxLength: 12000 } }, required: ['target', 'text'], additionalProperties: false } },
 ]);
 
 export function getRuntimeToolCatalog(): readonly RuntimeToolCatalogEntry[] {
   return TOOL_CATALOG;
+}
+
+/** Capability that unlocks the Commander-only proactive messaging tools. */
+export const MESSAGING_PROACTIVE_CAPABILITY = 'messaging.proactive';
+
+const CAPABILITY_GATED_TOOLS: ReadonlySet<RuntimeToolName> = new Set([
+  'messaging_list_targets',
+  'messaging_send',
+]);
+
+/**
+ * Per-run catalog slice. Tools gated by a capability are visible only when the
+ * main-process-derived capability list grants them; everything else stays
+ * unconditional. The model never sees gated tools without the grant, and the
+ * runner rejects direct calls to them by the same filter.
+ */
+export function filterRuntimeToolCatalogByCapabilities(
+  catalog: readonly RuntimeToolCatalogEntry[],
+  capabilities: readonly string[] | undefined,
+): readonly RuntimeToolCatalogEntry[] {
+  const granted = new Set(capabilities ?? []);
+  return catalog.filter((entry) => (
+    !CAPABILITY_GATED_TOOLS.has(entry.name) || granted.has(MESSAGING_PROACTIVE_CAPABILITY)
+  ));
 }
 
 export function isRuntimeToolName(name: string): name is RuntimeToolName {

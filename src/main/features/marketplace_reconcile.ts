@@ -446,8 +446,15 @@ export async function reconcileInstalls(
   }
   // Filter pull-needed up front so the banner's total is meaningful (it counts work the user
   // will actually see, not entries that short-circuit).
-  const agentsNeedingPull = manifest.agents.filter((r) => _isInstallRowAppCompatible(r, 'agent') && _agentNeedsPull(uid, r));
-  const skillsNeedingPull = manifest.skills.filter((r) => _isInstallRowAppCompatible(r, 'skill') && _skillNeedsPull(uid, r));
+  // Builtin installs are materialized from packaged resources and intentionally have no
+  // server download URL. Exclude them before creating pull tasks so fetch never receives an
+  // empty URL and the reconcile result cannot report a spurious failed pull.
+  const agentsNeedingPull = manifest.agents.filter(
+    (r) => _isInstallRowAppCompatible(r, 'agent') && !!r.agent_json_url && _agentNeedsPull(uid, r),
+  );
+  const skillsNeedingPull = manifest.skills.filter(
+    (r) => _isInstallRowAppCompatible(r, 'skill') && !!r.bundle_url && _skillNeedsPull(uid, r),
+  );
   const agentPullIds = new Set(agentsNeedingPull.map((r) => r.id));
   const skillPullIds = new Set(skillsNeedingPull.map((r) => r.id));
   let metadataPatches: MetadataPatchCounts;

@@ -63,7 +63,9 @@ if (probeElectronAbi({ quiet: true })) {
 const electronVersion = JSON.parse(readFileSync(electronPackage, 'utf8')).version;
 let rebuildBin;
 try {
-  rebuildBin = require_.resolve('@electron/rebuild/lib/cli.js');
+  // @electron/rebuild >= 4 restricts exports to ./lib/main.js, so resolve the
+  // package entry and take the sibling cli.js instead of the subpath.
+  rebuildBin = resolve(dirname(require_.resolve('@electron/rebuild')), 'cli.js');
 } catch {
   try {
     rebuildBin = require_.resolve('electron-rebuild/lib/cli.js');

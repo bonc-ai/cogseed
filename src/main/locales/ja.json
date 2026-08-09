@@ -187,5 +187,18 @@
   "skills.import_block.system_dir": "システムディレクトリ",
   "skills.inline_text": "{skill} スキル",
   "skills.use_prefix": "{skill} スキルを使用: {content}",
-  "workspace.picker_title": "ワークスペースディレクトリを選択"
+  "workspace.picker_title": "ワークスペースディレクトリを選択",
+  "errors.message_edit_invalid_target": "このユーザーメッセージは編集できません。",
+  "errors.message_edit_running": "現在の返信が完了してからメッセージを編集してください。",
+  "errors.message_edit_prepare_failed": "メッセージ編集の準備ができませんでした。保存済みの履歴は変更されていません。",
+  "errors.message_edit_sync_failed": "会話履歴を整合性を保ったまま更新できませんでした。会話を再読み込みして再試行してください。",
+  "errors.message_edit_enqueue_failed": "編集したメッセージを送信できませんでした。会話を再読み込みして再試行してください。",
+  "expense_agent.submit.target": "Feishu 承認",
+  "expense_agent.submit.cancel": "キャンセル",
+  "expense_agent.submit.confirm": "承認に送信",
+  "expense_agent.submit.title": "経費申請の送信確認",
+  "expense_agent.submit.message": "この経費を {target} に送信しますか？",
+  "expense_agent.submit.detail": "ケース: {case}\\n資料指紋: {hash}\\n\\nFeishu の承認申請を作成します。支払い承認ではなく、指定された承認者が Feishu で確認します。",
+  "expense_agent.submit.unavailable": "送信確認を表示できません。何も送信されていません。",
+  "expense_agent.submit.cancelled": "送信をキャンセルしました。Feishu にデータは送信されていません。"
 }

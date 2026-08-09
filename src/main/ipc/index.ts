@@ -92,9 +92,15 @@ import { getRendererTables, isLang, t } from '../i18n';
 import { isPathAllowed } from '../util/path-sandbox';
 import * as userWorkspace from '../features/user_workspace';
 import { invokeHandlers as localAgentsHandlers } from './local_agents';
+import {
+  invokeHandlers as expenseWorkbenchHandlers,
+
+} from './expense_workbench';
 import { invokeHandlers as qualityHandlers } from './quality';
 import { invokeHandlers as connectorsHandlers } from './connectors';
+import { invokeHandlers as messagingHandlers } from './messaging';
 import { invokeHandlers as memoryHandlers } from './memory';
+import { invokeHandlers as cognitionHandlers } from './cognition';
 import { safeId } from '../storage';
 import { createLogger, logFromRenderer } from '../logger';
 import {
@@ -1267,10 +1273,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       agents.listAgentSummaries(),
       skills.listSkills(),
     ]);
-    const agentById = new Map(agentList.map((a: any) => [a.agent_id, a]));
+    const dispatchableAgents = agentList.filter((agent) => agents.isAgentChatDispatchable(agent));
+    const agentById = new Map(dispatchableAgents.map((agent) => [agent.agent_id, agent]));
     const skillById = new Map(skillList.map((s: any) => [s.id, s]));
     const pruned = await projects.pruneBindings(ctx.userId, projectId, {
-      agents: new Set(agentList.map((a: any) => a.agent_id)),
+      agents: new Set(dispatchableAgents.map((agent) => agent.agent_id)),
       skills: new Set(skillList.map((s: any) => s.id)),
     });
     if (!pruned.ok) throw new Error((pruned as { error: string }).error);
@@ -1293,7 +1300,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (kind === 'agent') {
       if (!agents.isValidAgentId(id)) throw new Error('invalid id');
       const agent = await agents.getAgent(id);
-      if (!agent || agent.enabled === false) throw new Error('agent_disabled');
+      if (!agents.isAgentChatDispatchable(agent)) throw new Error('agent_disabled');
       result = await projects.addAgentBinding(ctx.userId, projectId, id);
     } else if (kind === 'skill') {
       result = await projects.addSkillBinding(ctx.userId, projectId, id);
@@ -1333,7 +1340,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       skills.listSkills(),
     ]);
     return {
-      agents: agentList.filter((a: any) => a.enabled !== false && !boundAgents.has(a.agent_id)),
+      agents: agentList.filter((agent) => agents.isAgentChatDispatchable(agent) && !boundAgents.has(agent.agent_id)),
       skills: skillList.filter((s: any) => !boundSkills.has(s.id)),
     };
   },
@@ -4024,6 +4031,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // build; the renderer's External Agent picker depends on localAgents.list.
   ...localAgentsHandlers,
 
+  // Canonical reimbursement management surface. Its feature layer validates
+  // the active user, trusted Agent identity and bounded stdio protocol.
+  ...expenseWorkbenchHandlers,
+
   // Quality validator — renderer reads persisted ValidationReports to display
   // why a spec write / marketplace install was rejected.
   ...qualityHandlers,
@@ -4031,8 +4042,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // agents. No Server dependency, so kept in the open-source build.
   ...connectorsHandlers,
 
+  // Local two-way messaging gateway. Platform credentials never cross this
+  // handler table; the dedicated IPC module returns metadata-only DTOs.
+  ...messagingHandlers,
+
   // Cross-session memory UI — view/edit/import/export over features/memory.ts.
   ...memoryHandlers,
+
+  // Evidence-backed cognition assets. Confirmation reuses the canonical
+  // memory write path; these handlers own only longitudinal evidence, review,
+  // reuse, and growth state.
+  //
+  // `cognition.assets.list` is registered above (ability-asset semantics from
+  // the recall surface); the legacy store-asset handler of the same name in
+  // ipc/cognition.ts must not shadow it, so it is excluded from the spread.
+  ...(({ 'cognition.assets.list': _legacyCognitionAssetsList, ...rest }) => rest)(cognitionHandlers),
 };
 
 // ── Stream handlers ──────────────────────────────────────────────────────
@@ -4096,7 +4120,7 @@ const streamHandlers: Record<string, StreamHandler> = {
     yield* mateAgentBackend.mateIpcService.streamEvents(ctx.userId, payload, signal);
   },
 
-  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, retry_message_id }, ctx, signal) {
+  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, retry_message_id, edit_message_id }, ctx, signal) {
     if (!safeId(cid)) {
       yield { type: 'error', text: 'invalid cid' };
       return;
@@ -4148,19 +4172,30 @@ const streamHandlers: Record<string, StreamHandler> = {
     const sendPromise = (async () => {
       try {
         const retryMessageId = typeof retry_message_id === 'string' ? retry_message_id.trim() : '';
-        sendRes = retryMessageId
-          ? await groupChat.retryFailedTurn({
+        const editMessageId = typeof edit_message_id === 'string' ? edit_message_id.trim() : '';
+        if (retryMessageId && editMessageId) {
+          throw new Error('message retry and edit cannot be combined');
+        }
+        sendRes = editMessageId
+          ? await groupChat.replaceUserMessage({
+              userId: ctx.userId,
+              cid,
+              messageId: editMessageId,
+              text,
+            })
+          : retryMessageId
+            ? await groupChat.retryFailedTurn({
               userId: ctx.userId,
               cid,
               failedMessageId: retryMessageId,
               visibleText: text,
             })
-          : await groupChat.send({
-              userId: ctx.userId, cid, text,
-              ...(atts.length ? { attachments: atts } : {}),
-              ...(useSelections.length ? { use_selections: useSelections } : {}),
-              ...(refs.length ? { references: refs } : {}),
-            });
+            : await groupChat.send({
+                userId: ctx.userId, cid, text,
+                ...(atts.length ? { attachments: atts } : {}),
+                ...(useSelections.length ? { use_selections: useSelections } : {}),
+                ...(refs.length ? { references: refs } : {}),
+              });
       } catch (err) {
         sendErr = err;
       } finally {

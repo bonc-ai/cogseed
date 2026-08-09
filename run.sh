@@ -1,17 +1,47 @@
 #!/bin/bash
-# Mate Agent PC launcher. Lives under PC/; the script's own directory is the PC root.
-# Behavior: kills any prior instance, then starts a new one in the foreground.
-#
-# Usage:
-#   ./run.sh
-#
-# Mate Agent source builds use exactly one server environment: global prod.
-set -e
+# Mate Agent source launcher. Each runtime variant owns its data, Electron
+# userData, application identity, and single-instance lock.
+set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
+VARIANT="mate"
+
+usage() {
+  cat <<'EOF'
+Usage: ./run.sh
+
+This worktree is locked to the Mate Agent runtime identity. Run cognition,
+expense, or optimization module development from their dedicated worktrees.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "[Mate Agent] Unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+if [ -n "${ORKAS_RUNTIME_VARIANT:-}" ] && [ "$ORKAS_RUNTIME_VARIANT" != "mate" ]; then
+  echo "[Mate Agent] This worktree is locked to the mate runtime; ORKAS_RUNTIME_VARIANT=$ORKAS_RUNTIME_VARIANT is not allowed." >&2
+  exit 2
+fi
+if [ -n "${ORKAS_WORKSPACE_ROOT:-}" ]; then
+  echo "[Mate Agent] This worktree manages its own mate data root; inherited ORKAS_WORKSPACE_ROOT is not allowed." >&2
+  exit 2
+fi
+export ORKAS_RUNTIME_VARIANT="mate"
 
 if [ ! -f "$APP_DIR/package.json" ]; then
-  echo "[Mate Agent] $APP_DIR/package.json not found; check the PC/ directory layout." >&2
+  echo "[Mate Agent] $APP_DIR/package.json not found; check the project directory layout." >&2
   exit 1
 fi
 
@@ -26,7 +56,7 @@ if is_wsl; then
     WIN_APP_DIR="$(wslpath -w "$APP_DIR")"
     cat >&2 <<EOF
 [Mate Agent] WSL/WSLg detected.
-[Mate Agent] Launching the Windows-native Mate Agent via run.cmd so Windows IME works normally.
+[Mate Agent] Launching the Windows-native $VARIANT runtime via run.cmd.
 EOF
     exec cmd.exe /d /s /c "pushd \"$WIN_APP_DIR\" && run.cmd"
   fi
@@ -37,7 +67,7 @@ EOF
   exit 1
 fi
 
-echo "[Mate Agent] Starting Mate Agent (global prod)"
+echo "[Mate Agent] Starting source runtime: $VARIANT"
 if command -v git >/dev/null 2>&1; then
   export ORKAS_BUILD_COMMIT="${ORKAS_BUILD_COMMIT:-$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || true)}"
   if [ -z "${ORKAS_BUILD_DIRTY:-}" ]; then
@@ -48,14 +78,11 @@ export ORKAS_BUILD_CHANNEL="${ORKAS_BUILD_CHANNEL:-dev}"
 export ORKAS_BUILD_TIME="${ORKAS_BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 echo "[Mate Agent] Build identity: ${ORKAS_BUILD_CHANNEL} ${ORKAS_BUILD_COMMIT:-unknown} dirty=${ORKAS_BUILD_DIRTY:-unknown}"
 
-
 node "$APP_DIR/scripts/ensure-deps.cjs"
 node "$APP_DIR/scripts/ensure-dev-dependencies.cjs"
-# macOS source runs need the same connector callback declaration that electron-builder adds to
-# packaged apps. This never starts a local server; it only registers the `mateagent://` primary protocol and `orkas://` OAuth compatibility protocol.
-node "$APP_DIR/scripts/prepare-source-protocol.cjs" || true
+node "$APP_DIR/scripts/prepare-source-runtime.cjs" --variant="$VARIANT"
 
-# Build meta-skill engine if present
+# Build meta-skill engine if present.
 KSTAR_ENGINE_DIR="$APP_DIR/packages/nseap-meta-skill-engine"
 if [ -d "$KSTAR_ENGINE_DIR" ]; then
   echo "[Mate Agent] Building meta-skill engine..."
@@ -64,7 +91,6 @@ if [ -d "$KSTAR_ENGINE_DIR" ]; then
   }
 fi
 
-# Configure KSTAR engine from fixed repository package path
 KSTAR_ENGINE_ENTRY="$KSTAR_ENGINE_DIR/dist/index.js"
 if [ -f "$KSTAR_ENGINE_ENTRY" ]; then
   export ORKAS_KSTAR_ENGINE_COMMAND="${ORKAS_KSTAR_ENGINE_COMMAND:-node}"
@@ -79,27 +105,19 @@ else
 fi
 
 cd "$APP_DIR"
-pkill -9 -f "$APP_DIR/node_modules/electron/dist" >/dev/null 2>&1 || true
-sleep 0.3
-
 if [ "$(uname -s)" = "Darwin" ]; then
   APP_BUNDLE="$APP_DIR/node_modules/electron/dist/Mate Agent.app"
   if [ -d "$APP_BUNDLE" ]; then
-    ARGS=("$APP_DIR")
+    ARGS=("$APP_DIR" "--orkas-runtime-variant=$VARIANT")
     if [ -n "${ORKAS_KSTAR_ENGINE_COMMAND:-}" ]; then
       ARGS+=("--orkas-kstar-engine-command=$ORKAS_KSTAR_ENGINE_COMMAND")
       ARGS+=("--orkas-kstar-engine-args=$ORKAS_KSTAR_ENGINE_ARGS")
       ARGS+=("--orkas-kstar-engine-cwd=$ORKAS_KSTAR_ENGINE_CWD")
       ARGS+=("--orkas-kstar-engine-ontology-dir=$ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR")
     fi
-    # Launch through LaunchServices so the patched app name/icon are used in source runs.
     exec open -W -n "$APP_BUNDLE" --args "${ARGS[@]}"
   fi
 fi
 
-# Chromium's GPU process can repeatedly print
-# `EGL Driver message (Error) eglQueryDeviceAttribEXT: Bad attribute` on macOS.
-# This is ANGLE fallback noise when probing driver attributes and has no
-# functional impact. Filter only that stderr line; pass through everything else.
-# If `unbuffer` is unavailable, default line buffering is fine (macOS bash built-in).
-exec npm run start:electron 2> >(grep -v --line-buffered "EGL Driver message" >&2)
+exec npm run start:electron -- --orkas-runtime-variant="$VARIANT" \
+  2> >(grep -v --line-buffered "EGL Driver message" >&2)

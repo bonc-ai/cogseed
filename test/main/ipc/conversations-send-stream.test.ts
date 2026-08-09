@@ -26,6 +26,7 @@ const groupChatMock = vi.hoisted(() => ({
   sendFinished: Promise.resolve(),
   sendCalls: [] as unknown[],
   retryCalls: [] as unknown[],
+  editCalls: [] as unknown[],
 }));
 
 vi.mock('electron', () => ({
@@ -60,6 +61,13 @@ vi.mock('../../../src/main/features/group_chat', () => ({
     groupChatMock.resolveSendFinished?.();
     return { ok: true, mode: 'resume' };
   }),
+  replaceUserMessage: vi.fn(async (input: unknown) => {
+    groupChatMock.editCalls.push(input);
+    groupChatMock.resolveSendStarted?.();
+    await new Promise<void>((resolve) => { groupChatMock.releaseSend = resolve; });
+    groupChatMock.resolveSendFinished?.();
+    return { ok: true, msg: { id: 'replacement-msg', text: 'edited' } };
+  }),
   busIsQuiescent: vi.fn(() => groupChatMock.quiescent),
   streamEvents: vi.fn(async function* () {}),
 }));
@@ -79,6 +87,7 @@ beforeEach(async () => {
   groupChatMock.releaseSend = null;
   groupChatMock.sendCalls.length = 0;
   groupChatMock.retryCalls.length = 0;
+  groupChatMock.editCalls.length = 0;
   groupChatMock.sendStarted = new Promise<void>((resolve) => { groupChatMock.resolveSendStarted = resolve; });
   groupChatMock.sendFinished = new Promise<void>((resolve) => { groupChatMock.resolveSendFinished = resolve; });
   vi.resetModules();
@@ -129,6 +138,37 @@ describe('ipc › conversations.sendStream', () => {
     }]);
     expect(groupChatMock.sendCalls).toEqual([]);
 
+    groupChatMock.quiescent = true;
+    groupChatMock.releaseSend?.();
+    await run;
+  });
+
+  it('routes edit_message_id to user-message replacement and keeps retry mutually exclusive', async () => {
+    if (!streamStartHandler) throw new Error('stream handler not registered');
+    const sender = trustedIpcSender({ isDestroyed: () => false, send: vi.fn() });
+    const run = streamStartHandler(
+      { sender },
+      {
+        requestId: 'edit-request',
+        channel: 'conversations.sendStream',
+        payload: {
+          cid: 'c123abc',
+          content: 'edited content',
+          edit_message_id: 'user-message-1',
+          attachments: ['ignored-by-backend'],
+        },
+      },
+    );
+
+    await groupChatMock.sendStarted;
+    expect(groupChatMock.editCalls).toEqual([{
+      userId: TEST_UID,
+      cid: 'c123abc',
+      messageId: 'user-message-1',
+      text: 'edited content',
+    }]);
+    expect(groupChatMock.sendCalls).toEqual([]);
+    expect(groupChatMock.retryCalls).toEqual([]);
     groupChatMock.quiescent = true;
     groupChatMock.releaseSend?.();
     await run;

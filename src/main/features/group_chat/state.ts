@@ -903,6 +903,23 @@ export async function clearOrchestrationLedger(uid: string, cid: string): Promis
   });
 }
 
+/** Reset routing state after a historical user-message replacement. The
+ * workspace and coding-project bindings deliberately remain: they are
+ * conversation-owned resources, not model-derived turn state. */
+export async function resetConversationRoutingState(uid: string, cid: string): Promise<StateFile> {
+  return _stateLock(uid, cid).runExclusive(async () => {
+    const s = await readState(uid, cid);
+    const previousStatus = s.status;
+    s.status = 'idle';
+    s.in_flight = [];
+    delete s.active_recipient;
+    delete s.orchestration_ledger;
+    s.last_active_at = nowIso();
+    await _writeStatusTransition(uid, cid, previousStatus, 'idle', s);
+    return s;
+  });
+}
+
 export async function markOrchestrationInterrupted(
   uid: string,
   cid: string,
