@@ -573,6 +573,44 @@ describe('Recall cognition renderer flow', () => {
     expect(button.disabled).toBe(false);
   });
 
+
+  it('opens an asset reuse proof through the receipt detail route', async () => {
+    let clickHandler: ((event: any) => Promise<void>) | undefined;
+    const calls: string[] = [];
+    const panel: any = {
+      dataset: {},
+      addEventListener: (type: string, handler: (event: any) => Promise<void>) => {
+        if (type === 'click') clickHandler = handler;
+      },
+    };
+    const button: any = { dataset: { cognitionOpenReuse: 'asset-a' } };
+    const target = {
+      closest: (selector: string) => selector === '[data-cognition-open-reuse]' ? button : null,
+    };
+    const context: any = {
+      document: {
+        getElementById: (id: string) => id === 'panel-recall' ? panel : null,
+        querySelectorAll: () => [],
+      },
+      window: { addEventListener() {} },
+      _skillsCognitionState: {
+        assets: [{ id: 'asset-a', receiptRefs: ['exec-a'] }],
+        receipts: [{ executionId: 'exec-a', reusedRefs: ['asset-a'] }],
+      },
+      initSkillsCognitionConsole() {},
+      renderSkillsCognitionAssets() { calls.push('render-assets'); },
+      openSkillsCognitionReceiptDetail: async (receiptId: string) => { calls.push(`open-receipt:${receiptId}`); },
+      openRecallTarget() {},
+      setTimeout,
+    };
+    vm.createContext(context);
+    vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
+
+    await clickHandler!({ target });
+
+    expect(calls).toEqual(['open-receipt:exec-a']);
+  });
+
   it('queues selected historical conversations for manual capture and refreshes all tasks', async () => {
     let clickHandler: ((event: any) => Promise<void>) | undefined;
     const calls: Array<[string, unknown]> = [];
