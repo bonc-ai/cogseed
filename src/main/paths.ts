@@ -473,6 +473,7 @@ export const userMessagingConfigFile = (uid: string) => path.join(userLocalConfi
 export const userMessagingBindingsFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-bindings.json');
 export const userMessagingInboundLedgerFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-inbound.json');
 export const userMessagingDeliveryLedgerFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-delivery.json');
+export const userTouchpointLedgerFile = (uid: string) => path.join(userLocalConfigDir(uid), 'touchpoints-ledger.json');
 // Wechat iLink dynamic state (cursor + context tokens) is machine-private
 // and encrypted in place; never synced.
 export const userMessagingWeChatStateFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-wechat-state.json');
