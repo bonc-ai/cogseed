@@ -204,6 +204,39 @@ describe('messaging registry and ledgers', () => {
     expect(await registry.getInstance('user-1', created.id)).not.toHaveProperty('ownerExternalUserId');
   });
 
+  it('masks the owner open id in the client DTO when no name is set', async () => {
+    const { _registryTestHooks } = await import('../../../src/main/features/messaging/registry');
+    const instance = {
+      id: 'bot-1',
+      platform: 'feishu_lark' as const,
+      feishuTenantBrand: 'feishu' as const,
+      displayName: 'Feishu bot',
+      enabled: true,
+      workspace: { type: 'default' as const },
+      policy: {
+        replyMode: 'every_message' as const,
+        allowUserIds: ['ou_abcd1234efgh5678ijkl'],
+        allowGroupIds: [],
+        requireMentionInGroups: true,
+      },
+      status: { kind: 'disconnected' as const, checkedAt: new Date().toISOString() },
+      ownerExternalUserId: 'ou_abcd1234efgh5678ijkl',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const client = _registryTestHooks.toClient(instance, true);
+    expect(client.ownerConfigured).toBe(true);
+    expect(client.ownerMaskedId).toBe('ou_abcd…ijkl');
+    // No dedicated owner field leaks into the renderer-facing DTO (the full id
+    // only legitimately appears in policy.allowUserIds, the authorization list).
+    expect(client).not.toHaveProperty('ownerExternalUserId');
+    expect(JSON.stringify(client)).not.toContain('ownerExternalUserId');
+    // A named owner keeps the label and gets no masked id.
+    const named = _registryTestHooks.toClient({ ...instance, ownerExternalUserName: 'Owner One' }, true);
+    expect(named.ownerMaskedId).toBeUndefined();
+    expect(named.ownerLabel).toBe('Owner One');
+  });
+
   it('does not infer legacy owners from allowlists and removes QR owner during draft compensation', async () => {
     const registry = await import('../../../src/main/features/messaging/registry');
     const draft = await registry.createFeishuDraft('user-1', {

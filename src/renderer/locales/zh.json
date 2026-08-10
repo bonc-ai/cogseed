@@ -3184,6 +3184,7 @@
   "messaging.send_confirm.message": "{instance} 将向本人（{owner}）发送以下消息：\n\n{text}\n\n确认发送吗？",
   "messaging.send_confirm.approve": "发送",
   "messaging.send_confirm.decline": "取消",
+  "messaging.owner_bind_guide": "在飞书/Lark 中向该机器人发送任意一条私聊消息即可自动绑定归属人；或手动填写下方 Open ID。",
   "messaging.owner_bind_hint": "机器人已就绪。请在飞书/Lark 中向该机器人发送任意一条消息（私聊），系统将自动把发送者绑定为接收人，无需手动填写 ID。",
   "messaging.owner_title": "机器人归属",
   "messaging.owner_subtitle": "配置机器人消息的归属人，用于主动发送消息。",

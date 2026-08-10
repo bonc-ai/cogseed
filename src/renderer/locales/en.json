@@ -3184,6 +3184,7 @@
   "messaging.send_confirm.message": "{instance} will send the following message to you ({owner}):\n\n{text}\n\nSend it?",
   "messaging.send_confirm.approve": "Send",
   "messaging.send_confirm.decline": "Cancel",
+  "messaging.owner_bind_guide": "Send any direct message to this bot in Feishu/Lark to bind the sender as the owner automatically; or enter the Open ID manually below.",
   "messaging.owner_bind_hint": "The bot is ready. Send any message to it in Feishu/Lark (direct chat) and the sender will be bound as the recipient automatically — no ID entry needed.",
   "messaging.owner_title": "Bot owner",
   "messaging.owner_subtitle": "Configure who owns this bot's messages for proactive sending.",

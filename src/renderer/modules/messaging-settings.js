@@ -1344,7 +1344,7 @@
       const status = el('div', 'messaging-manual-bound');
       status.append(
         icon('check-circle', 'messaging-status-icon'),
-        el('span', '', instance.ownerLabel || labelFor('messaging.owner_configured', '')),
+        el('span', '', instance.ownerLabel || instance.ownerMaskedId || labelFor('messaging.owner_configured', '')),
       );
       row.appendChild(status);
       const clear = el('button', 'btn messaging-secondary-button', labelFor('messaging.owner_clear', ''));
@@ -1370,6 +1370,11 @@
         }
       }).catch(() => { /* window may have expired; leave the hint hidden */ });
     }
+
+    // Standing guide for the unbound state: the auto-bind path is primary,
+    // manual id entry is the fallback (persists even after the window closes).
+    const guide = el('p', 'messaging-owner-guide', labelFor('messaging.owner_bind_guide', ''));
+    section.appendChild(guide);
 
     const ownerIdInput = document.createElement('input');
     ownerIdInput.type = 'text';

@@ -12537,6 +12537,12 @@ body.model-not-configured .main-content { flex-direction: column; }
   min-width: 0;
   font-size: 13px;
 }
+.messaging-owner-guide {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
 .messaging-manual-fields {
   display: flex;
   align-items: center;
