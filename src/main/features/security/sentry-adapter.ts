@@ -48,8 +48,66 @@ const SCAN_TIMEOUT_MS = 60_000;
  */
 export type SkillSource = 'official' | 'community' | 'thirdparty';
 
-/** Spec §5.2 outcomes. Ordered by severity for comparison. */
-export type ScanOutcome = 'pass' | 'restricted' | 'blocked' | 'unknown';
+/**
+ * Whether a scan verdict must stop an install.
+ *
+ * One predicate instead of the `outcome === 'blocked' || outcome === 'unknown'`
+ * comparison that was repeated at eight call sites. With a fifth outcome now in
+ * the union, those comparisons would each silently admit `scanner_absent` by
+ * simply not matching it — the intended behaviour, but arrived at by accident,
+ * and the next outcome added would be admitted the same way. Naming the rule
+ * makes admitting a verdict a decision rather than an omission.
+ *
+ * `scanner_absent` is admitted deliberately: a build without the deep scanner
+ * must still be able to install skills, and local red lines have already run and
+ * would have returned `blocked` on a known-malicious payload.
+ */
+export function scanVerdictBlocksInstall(outcome: ScanOutcome): boolean {
+  switch (outcome) {
+    case 'blocked':
+    // The scan should have run and did not. Refusing is the conservative
+    // reading, and it is what every call site did before this predicate existed.
+    case 'unknown':
+      return true;
+    case 'pass':
+    case 'restricted':
+    case 'scanner_absent':
+      return false;
+    default: {
+      // Unreachable while the union is exhausted, but a new outcome added later
+      // must fail closed rather than inherit "allowed" by falling through.
+      const _exhaustive: never = outcome;
+      void _exhaustive;
+      return true;
+    }
+  }
+}
+
+/**
+ * Spec §5.2 outcomes, plus one local tier. Ordered by severity for comparison.
+ *
+ * `scanner_absent` is NOT one of the spec's outcomes and is deliberately
+ * distinct from `unknown`. `unknown` means "the scan should have run and did
+ * not" — a failure, which install admission treats like `blocked`. Builds that
+ * ship without the closed-source scanner need a different statement: nothing
+ * malfunctioned, this build simply never had that component. Collapsing the two
+ * would either reject every install on such a build (because `unknown` blocks)
+ * or mask real scanner failures as a normal product shape.
+ *
+ * Local red lines still run and can still return `blocked` on such a build, so
+ * `scanner_absent` means "reduced coverage", never "unchecked".
+ */
+export type ScanOutcome = 'pass' | 'restricted' | 'blocked' | 'unknown' | 'scanner_absent';
+
+/**
+ * Whether the deep scanner is on disk, and if not, whether that is expected.
+ *
+ * `broken` and `absent_by_build` both used to surface as `engine_missing`, which
+ * meant a genuinely broken install was indistinguishable from an open-source
+ * build that never bundled the scanner. Only the latter is a supported shape;
+ * treating a failure as normal is how a scanner outage goes unnoticed.
+ */
+export type ScannerAvailability = 'present' | 'absent_by_build' | 'broken';
 
 export interface SentryScanResult {
   outcome: ScanOutcome;
@@ -166,8 +224,49 @@ function localRedLines(skillDir: string): string[] {
   }
 }
 
+/**
+ * Root of the guardrail bundle.
+ *
+ * `ORKAS_GUARDRAIL_DIR` lets a private deployment keep the closed-source scanner
+ * outside the repository tree — that is the whole point of the override, so an
+ * open-source checkout can omit the component while a private build points at
+ * it. Falls back to the packaged location, which is what every current build
+ * uses.
+ */
+function guardrailRoot(): string {
+  const override = (process.env.ORKAS_GUARDRAIL_DIR || '').trim();
+  return override || packagedGuardrailDir();
+}
+
 function enginePath(): string {
-  return path.join(packagedGuardrailDir(), 'skill-sentry');
+  return path.join(guardrailRoot(), 'skill-sentry');
+}
+
+/**
+ * Marker declaring that this build intentionally ships without the deep scanner.
+ *
+ * A file rather than a compile-time flag: the packaging step decides what goes
+ * into `resources/`, and it can drop this marker in the same place it omits the
+ * scanner. A build-time constant would have to be kept in sync with packaging by
+ * hand, and the failure mode of getting that wrong is silent.
+ */
+function absentMarkerPath(): string {
+  return path.join(guardrailRoot(), 'SCANNER_ABSENT');
+}
+
+/**
+ * Decide whether the scanner is available, and whose fault it is if not.
+ *
+ * Order matters: the marker is only consulted once the engine is known to be
+ * missing. A build that ships both the scanner and a stale marker should use the
+ * scanner — the artifact on disk is stronger evidence than a leftover claim
+ * about it.
+ */
+export function scannerAvailability(): ScannerAvailability {
+  const hasEngine = fs.existsSync(path.join(enginePath(), 'sandbox', 'agent_gate.py'));
+  const hasGate = fs.existsSync(gateScript());
+  if (hasEngine && hasGate) return 'present';
+  return fs.existsSync(absentMarkerPath()) ? 'absent_by_build' : 'broken';
 }
 
 /**
@@ -180,7 +279,7 @@ function enginePath(): string {
  * broken. That is exactly the failure this session started with.
  */
 function gateScript(): string {
-  return path.join(packagedGuardrailDir(), 'scan_gate.py');
+  return path.join(guardrailRoot(), 'scan_gate.py');
 }
 
 /** Map the shared script's outcome string onto our enum, defaulting to unknown. */
@@ -209,6 +308,22 @@ function unknown(reason: string, extra?: Partial<SentryScanResult>): SentryScanR
     rulesetVersion: '',
     unavailableReason: reason,
     ...extra,
+  };
+}
+
+/**
+ * Result for a build that intentionally ships without the deep scanner.
+ *
+ * Shaped like `unknown` — no score, empty versions, zeroed attack surface —
+ * because none of it was measured. Reporting a zeroed surface as if it were a
+ * finding would state that nothing was found when in fact nothing was looked
+ * for; callers must key off the outcome, and the UI already renders a
+ * "local rules only, weaker coverage" caveat for this case.
+ */
+function scannerAbsent(): SentryScanResult {
+  return {
+    ...unknown('scanner_absent_by_build'),
+    outcome: 'scanner_absent',
   };
 }
 
@@ -329,11 +444,21 @@ export async function scanSkillDir(
     redLines.length ? { ...r, outcome: 'blocked' as const, localRedLines: redLines } : r
   );
 
-  if (!fs.existsSync(path.join(root, 'sandbox', 'agent_gate.py'))) {
-    return withRedLines(unknown('engine_missing'));
-  }
-  if (!fs.existsSync(gateScript())) {
-    return withRedLines(unknown('gate_script_missing'));
+  if (!fs.existsSync(path.join(root, 'sandbox', 'agent_gate.py'))
+    || !fs.existsSync(gateScript())) {
+    // A build that deliberately omits the closed-source scanner reports
+    // `scanner_absent`, not `unknown`: install admission treats `unknown` like
+    // `blocked`, so reusing it here would make such a build unable to install
+    // anything at all. `broken` keeps the old `unknown` verdict, because a
+    // scanner that should be here and is not IS a failure.
+    //
+    // Either way the red lines above have already run, so a known-malicious
+    // payload is still blocked — reduced coverage, never unchecked.
+    return withRedLines(
+      scannerAvailability() === 'absent_by_build'
+        ? scannerAbsent()
+        : unknown('engine_missing'),
+    );
   }
 
   const python = resolvePython();

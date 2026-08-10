@@ -49,7 +49,7 @@ import { sha256OfFile } from '../util/sha256';
 import { marketplaceContentTreeHash } from '../util/marketplace-tree-hash';
 import { writeInstallReceipt } from './skill_trust';
 import { topViolationOf } from './skill_reverify';
-import { scanSkillDir, type SentryScanResult, type SkillSource } from './security/sentry-adapter';
+import { scanSkillDir, scanVerdictBlocksInstall, type SentryScanResult, type SkillSource } from './security/sentry-adapter';
 
 /**
  * One-line, machine-readable reason for a security block.
@@ -1000,7 +1000,7 @@ async function _installMarketplaceSkillLocked(
       ? 'official'
       : 'community';
     const scan = await scanSkillDir(target, sourceTier);
-    if (scan.outcome === 'blocked' || scan.outcome === 'unknown') {
+    if (scanVerdictBlocksInstall(scan.outcome)) {
       // Roll back before throwing so a rejected skill leaves nothing on disk —
       // the spec requires "formal assets unchanged" after a high-risk block.
       //

@@ -51,6 +51,7 @@ import { invalidateSkills as invalidateCoreAgentSkills } from '../model/core-age
 import { readDisabledSets, setSkillEnabled } from './component_enabled';
 import { partitionSkillsByTrustDeep, topViolationOf } from './skill_reverify';
 import { listReceipts, skillPayloadHash, writeInstallReceipt, type SecurityReceipt } from './skill_trust';
+import { scanVerdictBlocksInstall } from './security/sentry-adapter';
 import { scanSkillDir, type SentryScanResult } from './security/sentry-adapter';
 import { findOuterTagRanges } from '../util/markdown-prose-code';
 import {
@@ -1946,7 +1947,7 @@ async function _installSourceSkillRoots(
   let worstScan: SentryScanResult | undefined;
   for (const skill of createdSkills) {
     const scan = await _scanImportedSkill(customSkillDir(skill.id));
-    if (scan.outcome === 'blocked' || scan.outcome === 'unknown') {
+    if (scanVerdictBlocksInstall(scan.outcome)) {
       return _rejectImportForSecurity(scan, createdIds);
     }
     // Recorded per skill, after the reject check: only verdicts that actually
@@ -2022,7 +2023,7 @@ async function _createEditableDraftFromImportDir(
   // the agent reads these files into a model context, so anything known-bad must
   // be rejected while it is still just bytes on disk.
   const scan = await _scanImportedSkill(skillDir);
-  if (scan.outcome === 'blocked' || scan.outcome === 'unknown') {
+  if (scanVerdictBlocksInstall(scan.outcome)) {
     return _rejectImportForSecurity(scan, [created.id]);
   }
   await _recordImportReceipt(created.id, skillDir, scan);

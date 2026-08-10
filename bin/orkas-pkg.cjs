@@ -460,7 +460,8 @@ function scanNativeBinEntries(pkgDir) {
  * engine as "check unavailable", never as "check passed".
  */
 function guardrailRoot() {
-  const candidates = [
+  const override = (process.env.ORKAS_GUARDRAIL_DIR || '').trim();
+  const candidates = override ? [override] : [
     path.resolve(__dirname, '..', 'resources', 'guardrail'),
     path.resolve(__dirname, '..', '..', 'guardrail'),
     path.resolve(__dirname, '..', '..', '..', 'guardrail'),
@@ -469,6 +470,25 @@ function guardrailRoot() {
     if (isFile(path.join(dir, 'scan_gate.py'))) return dir;
   }
   return null;
+}
+
+/**
+ * Whether a build deliberately ships without the deep scanner.
+ *
+ * Mirrors `scannerAvailability()` in sentry-adapter.ts. This process cannot
+ * import that module, and the alternative — treating every missing scanner as a
+ * failure — would make package installs impossible on an open-source build. The
+ * marker lookup walks the same candidate roots as `guardrailRoot()`, which
+ * returns null when `scan_gate.py` itself is gone.
+ */
+function scannerAbsentByBuild() {
+  const override = (process.env.ORKAS_GUARDRAIL_DIR || '').trim();
+  const candidates = override ? [override] : [
+    path.resolve(__dirname, '..', 'resources', 'guardrail'),
+    path.resolve(__dirname, '..', '..', 'guardrail'),
+    path.resolve(__dirname, '..', '..', '..', 'guardrail'),
+  ];
+  return candidates.some((dir) => isFile(path.join(dir, 'SCANNER_ABSENT')));
 }
 
 /**
@@ -515,9 +535,28 @@ function guardrailPythonCommand() {
  * Returns a verdict object; never throws, never calls die(). Deciding what to do
  * belongs to the caller.
  */
+/**
+ * Whether a scan verdict must stop an install. Mirrors
+ * `scanVerdictBlocksInstall` in sentry-adapter.ts.
+ *
+ * Written as an allow-list of admitted verdicts rather than a deny-list: an
+ * outcome string this build does not recognise must refuse, not sail through by
+ * failing to match a deny comparison.
+ */
+function scanVerdictBlocksInstall(outcome) {
+  return !['pass', 'restricted', 'scanner_absent'].includes(outcome);
+}
+
 function securityScanStaging(stagingDir) {
   const root = guardrailRoot();
-  if (!root) return { outcome: 'unknown', reason: 'guardrail_not_found', blocking_rules: [] };
+  if (!root) {
+    // A build that intentionally omits the closed-source scanner reports
+    // `scanner_absent`, which does not refuse the install. `unknown` still means
+    // "the check should have run and did not", and still refuses.
+    return scannerAbsentByBuild()
+      ? { outcome: 'scanner_absent', reason: 'scanner_absent_by_build', blocking_rules: [] }
+      : { outcome: 'unknown', reason: 'guardrail_not_found', blocking_rules: [] };
+  }
 
   const engine = path.join(root, 'skill-sentry');
   const gate = path.join(root, 'scan_gate.py');
@@ -977,7 +1016,7 @@ function cmdInstall(args) {
       // run the code. And promote is what makes the tree callable, so a verdict
       // arriving afterwards is a verdict on something already live.
       const security = securityScanStaging(staging);
-      if (security.outcome === 'blocked' || security.outcome === 'unknown') {
+      if (scanVerdictBlocksInstall(security.outcome)) {
         // The staging dir is reclaimed by the exit hook, so nothing is left on
         // disk and the registry is untouched — a refused install is a no-op.
         //
@@ -1115,7 +1154,7 @@ function cmdUpdate(args) {
       // package-authored hooks, so scanning after it would be scanning a machine
       // that already ran the new code.
       const pulledScan = securityScanStaging(pkgDir);
-      if (pulledScan.outcome === 'blocked' || pulledScan.outcome === 'unknown') {
+      if (scanVerdictBlocksInstall(pulledScan.outcome)) {
         if (before) run('git', ['-c', 'core.autocrlf=false', 'reset', '--hard', before], { cwd: pkgDir });
         die(77,
           pulledScan.outcome === 'blocked'
@@ -1150,7 +1189,7 @@ function cmdUpdate(args) {
         // git-pull branch above: nothing has been swapped in yet, so refusing is
         // just "keep the current install" with no revert needed.
         const fetchedScan = securityScanStaging(staging);
-        if (fetchedScan.outcome === 'blocked' || fetchedScan.outcome === 'unknown') {
+        if (scanVerdictBlocksInstall(fetchedScan.outcome)) {
           die(77,
             fetchedScan.outcome === 'blocked'
               ? `security scan rejected the new revision of "${name}" — keeping the current install`
