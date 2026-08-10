@@ -11,7 +11,6 @@
   <link rel="stylesheet" href="./vendor/xterm/xterm.css" />
   <link rel="stylesheet" href="./style.css" />
   <link rel="stylesheet" href="./onboarding.css" />
-  <link rel="stylesheet" href="./journey.css" />
 </head>
 <body>
   <div class="app-container">
@@ -129,6 +128,10 @@
                the caret to the first [...] placeholder. Wired by
                _initEmptyStateScenarios() in conversation.js. -->
           <div class="new-chat-scenarios" id="new-chat-scenarios">
+            <button type="button" class="new-chat-scenario-chip" id="continue-work-chip">
+              <span data-ui-icon="play-triangle" data-ui-icon-class="new-chat-scenario-icon"></span>
+              <span class="new-chat-scenario-label" data-i18n="new_chat.quick.continue_work">Continue previous work</span>
+            </button>
             <button type="button" class="new-chat-scenario-chip" data-scenario="data">
               <span data-ui-icon="search" data-ui-icon-class="new-chat-scenario-icon"></span>
               <span class="new-chat-scenario-label" data-i18n="new_chat.quick.data">Research</span>
@@ -154,6 +157,11 @@
               <span class="new-chat-scenario-label" data-i18n="new_chat.quick.rnd">Build app</span>
             </button>
           </div>
+          <!-- Continue-previous-work picker. Lists conversations imported from
+               other agents (Claude Code / Codex) during onboarding; clicking one
+               opens it so the user picks up where they left off. Wired by
+               conversation.js::_initContinueWorkChip(). -->
+          <div class="continue-work-panel" id="continue-work-panel" hidden></div>
           <!-- Open-source-driven「还能帮你做这些」capability strip. Task cards are
                rendered + wired by modules/oss.js::initOssEntry() (data from the
                curated marketplace projects catalog). Cards only show the task +
@@ -424,68 +432,42 @@
           <div class="skills-cognition-surface">
           <header class="skills-cognition-header">
             <div>
-              <h1 data-i18n="cognition.title">Recall 认知工作台</h1>
-              <p data-i18n="cognition.subtitle">数据来源、会话沉淀、认知结构与正式资产</p>
+              <h1 data-i18n="cognition.product_title">CogSeed</h1>
+              <p data-i18n="cognition.product_subtitle">跨 Agent 的个人能力资产层</p>
             </div>
             <button type="button" class="btn btn-sm cognition-refresh-btn" data-cognition-reload data-i18n-title="common.refresh" data-i18n-aria-label="common.refresh" title="刷新" aria-label="刷新">
               <span data-ui-icon="refresh"></span>
             </button>
           </header>
           <div class="skills-cognition-workspace">
-          <nav class="skills-cognition-tabs" id="skills-cognition-tabs" aria-label="Recall 导航">
-            <div class="skills-cognition-tab-group">
-              <span class="skills-cognition-tab-group-label" data-i18n="cognition.nav_flow">认知流</span>
-              <button type="button" class="skills-cognition-tab is-active" data-cognition-page="overview"><span data-ui-icon="layout-grid"></span><span data-i18n="cognition.overview">总览</span></button>
-              <button type="button" class="skills-cognition-tab" data-cognition-page="sources"><span data-ui-icon="folder-open"></span><span data-i18n="cognition.sources">数据来源</span></button>
-              <button type="button" class="skills-cognition-tab" data-cognition-page="captures"><span data-ui-icon="clock"></span><span data-i18n="cognition.capture_tasks">沉淀任务</span></button>
-            </div>
-            <div class="skills-cognition-tab-group">
-              <span class="skills-cognition-tab-group-label" data-i18n="cognition.nav_structure">认知结构</span>
-              <button type="button" class="skills-cognition-tab" data-cognition-page="brain"><span data-ui-icon="git-branch"></span><span data-i18n="cognition.brain">Brain</span></button>
-              <button type="button" class="skills-cognition-tab" data-cognition-page="context"><span data-ui-icon="box"></span><span data-i18n="cognition.context_pack">Context Pack</span></button>
-              <button type="button" class="skills-cognition-tab" data-cognition-page="ontology"><span data-ui-icon="database"></span><span data-i18n="cognition.ontology">Ontology</span></button>
-            </div>
-            <div class="skills-cognition-tab-group">
-              <span class="skills-cognition-tab-group-label" data-i18n="cognition.nav_governance">治理与复用</span>
-              <button type="button" class="skills-cognition-tab" data-cognition-page="candidates"><span data-ui-icon="clipboard-list"></span><span data-i18n="cognition.candidate_review">候选审核</span></button>
-              <button type="button" class="skills-cognition-tab" data-cognition-page="assets"><span data-ui-icon="archive"></span><span data-i18n="cognition.formal_assets">正式资产</span></button>
-              <button type="button" class="skills-cognition-tab" data-cognition-page="receipts"><span data-ui-icon="check-circle"></span><span data-i18n="cognition.receipts">复用证明</span></button>
-            </div>
+          <nav class="skills-cognition-tabs" id="skills-cognition-tabs" aria-label="Recall 导航" role="tablist">
+            <button type="button" class="skills-cognition-tab is-active" data-cognition-page="overview" role="tab" aria-selected="true">
+              <span data-ui-icon="layout-grid"></span><span data-i18n="cognition.overview">总览</span>
+            </button>
+            <button type="button" class="skills-cognition-tab" data-cognition-page="deposition" role="tab" aria-selected="false">
+              <span data-ui-icon="sparkles"></span><span data-i18n="cognition.deposition">认知沉淀</span><span class="cognition-nav-count" data-cognition-count="pending"></span>
+            </button>
+            <button type="button" class="skills-cognition-tab" data-cognition-page="assets" role="tab" aria-selected="false">
+              <span data-ui-icon="archive"></span><span data-i18n="cognition.ability_assets">能力资产</span><span class="cognition-nav-count" data-cognition-count="assets"></span>
+            </button>
           </nav>
           <main class="skills-cognition-main">
-          <section class="skills-cognition-page" id="skills-cognition-overview" data-cognition-page-body="overview">
-            <div id="skills-cognition-overview-body"></div>
-          </section>
-          <section class="skills-cognition-page" id="skills-cognition-sources" data-cognition-page-body="sources" hidden>
-            <div id="skills-cognition-sources-body"></div>
-          </section>
-          <section class="skills-cognition-page" id="skills-cognition-captures" data-cognition-page-body="captures" hidden>
-            <div id="skills-cognition-captures-body"></div>
-          </section>
-          <section class="skills-cognition-page" id="skills-cognition-brain" data-cognition-page-body="brain" hidden>
-            <div id="skills-cognition-brain-body"></div>
-          </section>
-          <section class="skills-cognition-page" id="skills-cognition-context" data-cognition-page-body="context" hidden>
-            <div id="skills-cognition-context-body"></div>
-          </section>
-          <section class="skills-cognition-page" id="skills-cognition-ontology" data-cognition-page-body="ontology" hidden>
-            <div id="skills-cognition-ontology-body"></div>
-          </section>
-          <section class="skills-cognition-page" id="skills-cognition-candidates" data-cognition-page-body="candidates" hidden>
-            <div id="skills-cognition-candidates-body"></div>
-          </section>
-          <section class="skills-cognition-page" id="skills-cognition-receipts" data-cognition-page-body="receipts" hidden>
-            <div id="skills-cognition-receipts-body"></div>
-          </section>
-          <section class="skills-cognition-page" id="skills-cognition-assets" data-cognition-page-body="assets" hidden>
-            <div class="ability-assets-tabs" id="ability-assets-tabs" role="tablist" aria-label="能力资产视图">
-              <button type="button" class="ability-assets-tab is-active" data-ability-assets-view="list" data-i18n="cognition.asset_list">资产列表</button>
-              <button type="button" class="ability-assets-tab" data-ability-assets-view="tree" data-i18n="cognition.cognition_tree">认知树</button>
-            </div>
-            <div id="skills-cognition-assets-body"></div>
-            <div class="ability-assets-view-panel" data-ability-assets-view-panel="list" hidden></div>
-            <div class="ability-assets-view-panel" data-ability-assets-view-panel="tree" hidden></div>
-          </section>
+            <section class="skills-cognition-page" id="skills-cognition-overview" data-cognition-page-body="overview">
+              <div id="skills-cognition-overview-body"></div>
+            </section>
+            <section class="skills-cognition-page" id="skills-cognition-deposition" data-cognition-page-body="deposition" hidden>
+              <div class="recall-subtabs" id="skills-cognition-deposition-tabs" role="tablist">
+                <button type="button" class="recall-subtab is-active" data-cognition-deposition-view="candidates" role="tab" aria-selected="true"><span data-i18n="cognition.pending_knowledge">待确认认知</span></button>
+                <button type="button" class="recall-subtab" data-cognition-deposition-view="captures" role="tab" aria-selected="false"><span data-i18n="cognition.organize_tasks">整理任务</span></button>
+                <button type="button" class="recall-subtab" data-cognition-deposition-view="sources" role="tab" aria-selected="false"><span data-i18n="cognition.sources">认知来源</span></button>
+              </div>
+              <section data-cognition-deposition-body="candidates"><div id="skills-cognition-candidates-body"></div></section>
+              <section data-cognition-deposition-body="captures" hidden><div id="skills-cognition-captures-body"></div></section>
+              <section data-cognition-deposition-body="sources" hidden><div id="skills-cognition-sources-body"></div></section>
+            </section>
+            <section class="skills-cognition-page" id="skills-cognition-assets" data-cognition-page-body="assets" hidden>
+              <div id="skills-cognition-assets-body"></div>
+            </section>
           </main>
           </div>
           </div>
@@ -1898,9 +1880,8 @@
   <script src="./modules/user-error.js"></script>
   <script src="./modules/model-guard.js"></script>
   <script src="./modules/delete-file-confirm.js"></script>
-  <script src="./modules/boot.js"></script>
   <script src="./modules/onboarding.js"></script>
-  <script src="./modules/journey.js"></script>
+  <script src="./modules/boot.js"></script>
   <script src="./modules/avatar.js"></script>
   <script src="./modules/avatar-picker.js"></script>
   <script src="./modules/chat-input-form.js"></script>

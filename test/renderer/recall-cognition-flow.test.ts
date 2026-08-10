@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { normalizeRecallLocation } from '../../src/renderer/modules/recall-information-architecture';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
@@ -54,6 +55,161 @@ function loadSkillsRenderer() {
 }
 
 describe('Recall cognition renderer flow', () => {
+
+  it('normalizes legacy Recall page links into new page and nested state', () => {
+    expect(normalizeRecallLocation('candidates')).toEqual({ page: 'deposition', subview: 'candidates' });
+    expect(normalizeRecallLocation('receipts')).toEqual({ page: 'assets', subview: 'reuse' });
+    expect(skillsSource).toContain('depositionView');
+    expect(skillsSource).toContain('candidateCategoryFilter');
+
+    const context = loadSkillsRenderer();
+    const pageBodies = [
+      { dataset: { cognitionPageBody: 'overview' }, hidden: false },
+      { dataset: { cognitionPageBody: 'deposition' }, hidden: true },
+      { dataset: { cognitionPageBody: 'assets' }, hidden: true },
+    ];
+    const pageTabs = [
+      { dataset: { cognitionPage: 'overview' }, classList: { toggle() {} }, setAttribute() {} },
+      { dataset: { cognitionPage: 'deposition' }, classList: { toggle() {} }, setAttribute() {} },
+      { dataset: { cognitionPage: 'assets' }, classList: { toggle() {} }, setAttribute() {} },
+    ];
+    let rendered = '';
+    context.window.RecallInformationArchitecture = {
+      normalizeRecallLocation,
+    };
+    context.document = {
+      querySelectorAll: (selector: string) => {
+        if (selector === '[data-cognition-page-body]') return pageBodies;
+        if (selector === '[data-cognition-page]') return pageTabs;
+        return [];
+      },
+      getElementById: () => ({ innerHTML: '' }),
+    };
+    vm.runInContext(`
+      renderSkillsCognitionOverview = function () { rendered = 'overview'; };
+      renderSkillsCognitionDeposition = function () { rendered = 'deposition:' + _skillsCognitionState.depositionView; };
+      renderSkillsCognitionAssets = function () { rendered = 'assets:' + _skillsCognitionState.assetSubview; };
+    `, context);
+
+    context.switchSkillsCognitionPage('candidates');
+    expect(vm.runInContext('_skillsCognitionState.page', context)).toBe('deposition');
+    expect(vm.runInContext('_skillsCognitionState.depositionView', context)).toBe('candidates');
+    expect(vm.runInContext('rendered', context)).toBe('deposition:candidates');
+    expect(pageBodies.find((body) => body.dataset.cognitionPageBody === 'deposition')?.hidden).toBe(false);
+
+    context.switchSkillsCognitionPage('receipts');
+    expect(vm.runInContext('_skillsCognitionState.page', context)).toBe('assets');
+    expect(vm.runInContext('_skillsCognitionState.assetSubview', context)).toBe('reuse');
+    expect(vm.runInContext('rendered', context)).toBe('assets:reuse');
+  });
+
+
+  it('keeps every legacy Recall route normalized to the three-page model', () => {
+    const legacy = ['overview', 'sources', 'captures', 'candidates', 'brain', 'context', 'ontology', 'receipts', 'assets'];
+    for (const page of legacy) {
+      const location = normalizeRecallLocation(page);
+      expect(['overview', 'deposition', 'assets']).toContain(location.page);
+    }
+    expect(normalizeRecallLocation('ontology')).toEqual({ page: 'assets', subview: 'list', category: 'personal' });
+    expect(normalizeRecallLocation('receipts')).toEqual({ page: 'assets', subview: 'reuse' });
+    expect(skillsSource).toContain('function openRecallTarget');
+  });
+
+  it('routes legacy links through openRecallTarget without persisting removed page ids', () => {
+    const context = loadSkillsRenderer();
+    const pageBodies = ['overview', 'deposition', 'assets'].map((page) => ({ dataset: { cognitionPageBody: page }, hidden: false }));
+    const pageTabs = ['overview', 'deposition', 'assets'].map((page) => ({ dataset: { cognitionPage: page }, classList: { toggle() {} }, setAttribute() {} }));
+    context.window.RecallInformationArchitecture = { normalizeRecallLocation };
+    context.document = {
+      querySelectorAll: (selector: string) => {
+        if (selector === '[data-cognition-page-body]') return pageBodies;
+        if (selector === '[data-cognition-page]') return pageTabs;
+        return [];
+      },
+      getElementById: () => ({ innerHTML: '' }),
+    };
+    vm.runInContext(`
+      renderSkillsCognitionOverview = function () {};
+      renderSkillsCognitionDeposition = function () {};
+      renderSkillsCognitionAssets = function () {};
+    `, context);
+
+    context.openRecallTarget('ontology');
+    expect(vm.runInContext('_skillsCognitionState.page', context)).toBe('assets');
+    expect(vm.runInContext('_skillsCognitionState.assetCategoryFilter', context)).toBe('personal');
+    expect(vm.runInContext('_skillsCognitionState.assetSubview', context)).toBe('list');
+
+    context.openRecallTarget('receipts');
+    expect(vm.runInContext('_skillsCognitionState.page', context)).toBe('assets');
+    expect(vm.runInContext('_skillsCognitionState.assetSubview', context)).toBe('reuse');
+
+    context.openRecallTarget('deposition', { depositionView: 'candidates' });
+    expect(vm.runInContext('_skillsCognitionState.page', context)).toBe('deposition');
+    expect(vm.runInContext('_skillsCognitionState.depositionView', context)).toBe('candidates');
+  });
+
+  it('renders Recall candidates with the shared four-category filters', () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.window.RecallInformationArchitecture = {
+      CATEGORY_ORDER: ['personal', 'rule', 'template', 'skill_method'],
+      normalizeAbilityCategory: (value: string) => value === 'template' ? 'template' : '',
+    };
+    context.document = {
+      getElementById: (id: string) => id === 'skills-cognition-candidates-body' ? host : null,
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      recallCandidates: [{
+        id: 'cand-template',
+        suggestedType: 'template',
+        judgment: 'Use a stable review template',
+        summary: 'Review structure',
+        status: 'pending',
+        suggestedScope: 'project',
+        uncertainty: 'low',
+      }],
+      candidates: [],
+    })})`, context);
+
+    context.renderSkillsCognitionCandidates();
+
+    expect(host.innerHTML).toContain('data-cognition-candidate-category="template"');
+    expect(host.innerHTML).toContain('模板与范例');
+    expect(host.innerHTML).toContain('Use a stable review template');
+  });
+
+  it('shows exactly one cognition deposition nested body for the active view', () => {
+    const context = loadSkillsRenderer();
+    const bodies = ['candidates', 'captures', 'sources'].map((view) => ({
+      dataset: { cognitionDepositionBody: view },
+      hidden: false,
+    }));
+    const tabs = ['candidates', 'captures', 'sources'].map((view) => ({
+      dataset: { cognitionDepositionView: view },
+      classList: { toggle() {} },
+      setAttribute() {},
+    }));
+    const hosts: Record<string, { innerHTML: string }> = {
+      'skills-cognition-candidates-body': { innerHTML: '' },
+      'skills-cognition-captures-body': { innerHTML: '' },
+      'skills-cognition-sources-body': { innerHTML: '' },
+    };
+    context.document = {
+      querySelectorAll: (selector: string) => {
+        if (selector === '[data-cognition-deposition-body]') return bodies;
+        if (selector === '[data-cognition-deposition-view]') return tabs;
+        return [];
+      },
+      getElementById: (id: string) => hosts[id] || null,
+    };
+
+    for (const view of ['sources', 'captures', 'candidates']) {
+      vm.runInContext(`_skillsCognitionState.depositionView = '${view}'`, context);
+      context.renderSkillsCognitionDeposition();
+      expect(bodies.filter((body) => !body.hidden).map((body) => body.dataset.cognitionDepositionBody)).toEqual([view]);
+    }
+  });
+
   it('renders capture controls, grouped filters, task detail, and safe task actions', () => {
     const context = loadSkillsRenderer();
     const host = { innerHTML: '' };
@@ -233,12 +389,15 @@ describe('Recall cognition renderer flow', () => {
     for (const label of ['会话', 'Artifact 与文件', '执行与评价', '用户教学信号', '授权外部系统']) {
       expect(overview.innerHTML).toContain(label);
     }
-    expect(overview.innerHTML).toContain('RecallView');
-    expect(overview.innerHTML).toContain('待审 Candidate');
+    for (const label of ['下一步', '认知沉淀', '关于我', '规则与判断', '模板与范例', '技能与方法']) {
+      expect(overview.innerHTML).toContain(label);
+    }
+    expect(overview.innerHTML).not.toContain('RecallView');
+    expect(overview.innerHTML).not.toContain('待审 Candidate');
     expect(overview.innerHTML).toContain('以后保持决策可追溯');
     expect(overview.innerHTML).toContain('已恢复处理');
     expect(overview.innerHTML).toContain('data-recall-teaching-revoke="teach-a"');
-    expect(overview.innerHTML).toContain('data-cognition-page-link="candidates"');
+    expect(overview.innerHTML).toContain('data-cognition-page-link="deposition"');
   });
 
   it('renders existing Orkas data across sources, Brain, Context Pack, and Ontology', () => {
@@ -412,6 +571,86 @@ describe('Recall cognition renderer flow', () => {
     expect(calls).toEqual([['recall.captures.pause', { captureId: 'rcap-a' }]]);
     expect(refreshes).toBe(1);
     expect(button.disabled).toBe(false);
+  });
+
+
+  it('opens an asset reuse proof through the receipt detail route', async () => {
+    let clickHandler: ((event: any) => Promise<void>) | undefined;
+    const calls: string[] = [];
+    const panel: any = {
+      dataset: {},
+      addEventListener: (type: string, handler: (event: any) => Promise<void>) => {
+        if (type === 'click') clickHandler = handler;
+      },
+    };
+    const button: any = { dataset: { cognitionOpenReuse: 'asset-a' } };
+    const target = {
+      closest: (selector: string) => selector === '[data-cognition-open-reuse]' ? button : null,
+    };
+    const context: any = {
+      document: {
+        getElementById: (id: string) => id === 'panel-recall' ? panel : null,
+        querySelectorAll: () => [],
+      },
+      window: { addEventListener() {} },
+      _skillsCognitionState: {
+        assets: [{ id: 'asset-a', receiptRefs: ['exec-a'] }],
+        receipts: [{ executionId: 'exec-a', reusedRefs: ['asset-a'] }],
+      },
+      initSkillsCognitionConsole() {},
+      renderSkillsCognitionAssets() { calls.push('render-assets'); },
+      openSkillsCognitionReceiptDetail: async (receiptId: string) => { calls.push(`open-receipt:${receiptId}`); },
+      openRecallTarget() {},
+      setTimeout,
+    };
+    vm.createContext(context);
+    vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
+
+    await clickHandler!({ target });
+
+    expect(calls).toEqual(['open-receipt:exec-a']);
+  });
+
+
+  it('focuses the inline reuse proof when an asset has no matching receipt', async () => {
+    let clickHandler: ((event: any) => Promise<void>) | undefined;
+    const calls: string[] = [];
+    const panel: any = {
+      dataset: {},
+      addEventListener: (type: string, handler: (event: any) => Promise<void>) => {
+        if (type === 'click') clickHandler = handler;
+      },
+    };
+    const button: any = { dataset: { cognitionOpenReuse: 'asset-a' } };
+    const target = {
+      closest: (selector: string) => selector === '[data-cognition-open-reuse]' ? button : null,
+    };
+    const reuseSummary = {
+      scrollIntoView: (options: ScrollIntoViewOptions) => calls.push(`scroll-reuse:${options.block}`),
+    };
+    const context: any = {
+      document: {
+        getElementById: (id: string) => id === 'panel-recall' ? panel : null,
+        querySelectorAll: () => [],
+        querySelector: (selector: string) => selector === '.ability-asset-reuse-summary' ? reuseSummary : null,
+      },
+      window: { addEventListener() {} },
+      _skillsCognitionState: {
+        assets: [{ id: 'asset-a', receiptRefs: [] }],
+        receipts: [],
+      },
+      initSkillsCognitionConsole() {},
+      renderSkillsCognitionAssets() { calls.push('render-assets'); },
+      openSkillsCognitionReceiptDetail: async () => {},
+      openRecallTarget() {},
+      setTimeout: (callback: () => void) => callback(),
+    };
+    vm.createContext(context);
+    vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
+
+    await clickHandler!({ target });
+
+    expect(calls).toEqual(['render-assets', 'scroll-reuse:start']);
   });
 
   it('queues selected historical conversations for manual capture and refreshes all tasks', async () => {
