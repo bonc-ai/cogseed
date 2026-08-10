@@ -123,6 +123,10 @@
     const pre = el('div', 'pc-briefing-preview');
     pre.textContent = preview.text || '';
     section.append(pre);
+    const actions = el('div', 'pc-inline-actions');
+    actions.append(button(tr('personal_context_center.briefing_test_delivery', '测试投递到飞书'), 'briefing.test_delivery', true));
+    actions.append(button(tr('personal_context_center.briefing_schedule', '设置每日 08:00 投递'), 'briefing.schedule', false));
+    section.append(actions);
     if (preview.degraded) section.append(el('p', 'pc-center-warning', tr('personal_context_center.briefing_degraded', '部分数据暂不可用，简报已明确标记缺失来源。')));
     return section;
   }

@@ -3170,5 +3170,9 @@
   "personal_context_center.reject": "Reject",
   "personal_context_center.briefing_title": "Daily briefing",
   "personal_context_center.briefing_empty": "Sync and approve facts before generating a traceable briefing.",
-  "personal_context_center.briefing_degraded": "Some sources are unavailable and are explicitly marked."
+  "personal_context_center.briefing_degraded": "Some sources are unavailable and are explicitly marked.",
+  "personal_context_center.briefing_test_delivery": "Test delivery to Feishu",
+  "personal_context_center.briefing_schedule": "Schedule daily 08:00 delivery",
+  "personal_context_center.briefing_delivery_ok": "Briefing delivered to Feishu home",
+  "personal_context_center.briefing_schedule_ok": "Daily briefing scheduled"
 }

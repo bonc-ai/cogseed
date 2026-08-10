@@ -139,6 +139,22 @@
         const result = await invoke('personal_context.briefing.preview', {});
         state.dashboard = result.dashboard;
         state.preview = result.preview;
+        return;
+      }
+      if (actionName === 'briefing.test_delivery') {
+        const result = await invoke('personal_context.briefing.test_delivery', {});
+        state.dashboard = result.dashboard;
+        state.notice = result.result && result.result.ok
+          ? { kind: 'info', text: typeof t === 'function' ? t('personal_context_center.briefing_delivery_ok') : '简报已投递' }
+          : { kind: 'error', text: result.result && result.result.error ? result.result.error : '简报投递失败' };
+        return;
+      }
+      if (actionName === 'briefing.schedule') {
+        const result = await invoke('personal_context.briefing.schedule', { hour: 8, minute: 0 });
+        state.dashboard = result.dashboard;
+        state.notice = result.taskId
+          ? { kind: 'info', text: typeof t === 'function' ? t('personal_context_center.briefing_schedule_ok') : '每日简报已设置' }
+          : { kind: 'error', text: result.error || '每日简报设置失败' };
       }
     });
   }

@@ -3390,5 +3390,9 @@
   "personal_context_center.reject": "拒绝",
   "personal_context_center.briefing_title": "今日简报",
   "personal_context_center.briefing_empty": "先同步并确认信息，然后生成一份可追溯的简报。",
-  "personal_context_center.briefing_degraded": "部分数据暂不可用，简报已明确标记缺失来源。"
+  "personal_context_center.briefing_degraded": "部分数据暂不可用，简报已明确标记缺失来源。",
+  "personal_context_center.briefing_test_delivery": "测试投递到飞书",
+  "personal_context_center.briefing_schedule": "设置每日 08:00 投递",
+  "personal_context_center.briefing_delivery_ok": "简报已投递到飞书主页",
+  "personal_context_center.briefing_schedule_ok": "每日简报已设置"
 }

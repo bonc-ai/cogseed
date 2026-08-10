@@ -185,3 +185,17 @@ invokeHandlers['personal_context.review.reject'] = async (payload, ctx) => ({
 
 invokeHandlers['personal_context.briefing.preview'] = async (_payload, ctx) =>
   personalContextApplication.previewBriefing(ctx.userId);
+
+invokeHandlers['personal_context.briefing.test_delivery'] = async (payload, ctx) =>
+  personalContextApplication.testBriefingDelivery(ctx.userId, instanceId(payload?.instanceId));
+
+invokeHandlers['personal_context.briefing.schedule'] = async (payload, ctx) => {
+  const hour = payload?.hour;
+  const minute = payload?.minute;
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) throw new Error('briefing schedule requires integer hour and minute');
+  return personalContextApplication.scheduleBriefing(ctx.userId, {
+    instanceId: instanceId(payload?.instanceId),
+    hour: hour as number,
+    minute: minute as number,
+  });
+};

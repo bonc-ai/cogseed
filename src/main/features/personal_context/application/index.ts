@@ -1,4 +1,5 @@
 import * as messagingRegistry from '../../messaging/registry';
+import * as autoTasks from '../../auto_tasks';
 import {
   confirmCandidate,
   listCandidates,
@@ -6,7 +7,7 @@ import {
   type CandidateUpdate,
 } from '../../personal_ontology_candidates';
 import { buildDailyBriefing, type BriefingOutput } from '../briefing';
-import { assembleBriefingInput } from '../feishu-dispatch';
+import { assembleBriefingInput, dispatchToFeishuHome } from '../feishu-dispatch';
 import * as manager from '../manager';
 import { PersonalContextRegistry } from '../registry';
 import { ScopeManifestStore } from '../scope-manifest';
@@ -218,6 +219,39 @@ export async function rejectReviewItem(userId: string, candidateId: string): Pro
   if (dashboard.mode === 'demo') return dashboard;
   await rejectCandidate(userId, candidateId, 'rejected in personal context review');
   return getDashboard(userId);
+}
+
+
+export async function testBriefingDelivery(userId: string, instanceId?: string): Promise<{ dashboard: PersonalContextDashboard; result: { ok: boolean; code?: string; error?: string } }> {
+  const { dashboard, preview } = await previewBriefing(userId);
+  if (dashboard.mode === 'demo') return { dashboard, result: { ok: true, code: 'demo_delivery' } };
+  const instances = await messagingRegistry.listInstances(userId);
+  const target = instanceId || instances.find((instance) => instance.platform === 'feishu_lark' && instance.enabled)?.id;
+  if (!target) return { dashboard, result: { ok: false, code: 'instance_unknown', error: '没有可用的飞书消息实例' } };
+  const result = await dispatchToFeishuHome(userId, { instanceId: target, text: preview.text, sourceKey: `briefing:test:${new Date().toISOString().slice(0, 10)}` });
+  if ('code' in result) return { dashboard: await getDashboard(userId), result: { ok: false, code: result.code, error: result.error } };
+  return { dashboard: await getDashboard(userId), result: { ok: true } };
+}
+
+export async function scheduleBriefing(userId: string, input: { instanceId?: string; hour: number; minute: number }): Promise<{ dashboard: PersonalContextDashboard; taskId?: string; error?: string }> {
+  const dashboard = await getDashboard(userId);
+  if (dashboard.mode === 'demo') return { dashboard, taskId: 'demo-briefing' };
+  if (!Number.isInteger(input.hour) || input.hour < 0 || input.hour > 23 || !Number.isInteger(input.minute) || input.minute < 0 || input.minute > 59) {
+    return { dashboard, error: '简报时间必须是有效的小时和分钟' };
+  }
+  const instances = await messagingRegistry.listInstances(userId);
+  const target = input.instanceId || instances.find((instance) => instance.platform === 'feishu_lark' && instance.enabled)?.id;
+  if (!target) return { dashboard, error: '没有可用的飞书消息实例' };
+  const created = await autoTasks.createTask(userId, {
+    title: '每日飞书简报',
+    content: '生成并投递今日个人简报',
+    briefing: true,
+    enabled: true,
+    recipient: { kind: 'messaging', instanceId: target, recipient: 'owner' },
+    schedule: { type: 'daily', hour: input.hour, minute: input.minute },
+  });
+  if ('error' in created) return { dashboard, error: created.error };
+  return { dashboard: await getDashboard(userId), taskId: created.task.id };
 }
 
 export function resetPersonalContextApplicationServiceForTest(): void {
