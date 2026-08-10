@@ -36,16 +36,59 @@ function cssBraceDepthAt(source: string, offset: number): number {
 }
 
 describe('Recall cognition workspace layout', () => {
-  it('exposes the complete Recall workspace without KSTAR, Evolution, or Capability pages', () => {
-    for (const page of ['overview', 'sources', 'captures', 'brain', 'context', 'ontology', 'candidates', 'assets', 'receipts']) {
-      expect(html).toContain(`data-cognition-page="${page}"`);
-      expect(html).toContain(`data-cognition-page-body="${page}"`);
+  it('exposes exactly three Recall pages with cognition work nested under deposition', () => {
+    const surfaceStart = html.indexOf('class="skills-cognition-surface"');
+    const surfaceEnd = html.indexOf('<!-- Skills -->');
+    const surfaceHtml = html.slice(surfaceStart, surfaceEnd);
+
+    expect([...surfaceHtml.matchAll(/data-cognition-page="([^"]+)"/g)].map((match) => match[1])).toEqual([
+      'overview',
+      'deposition',
+      'assets',
+    ]);
+    expect([...surfaceHtml.matchAll(/data-cognition-page-body="([^"]+)"/g)].map((match) => match[1])).toEqual([
+      'overview',
+      'deposition',
+      'assets',
+    ]);
+
+    for (const view of ['candidates', 'captures', 'sources']) {
+      expect(surfaceHtml).toContain(`data-cognition-deposition-view="${view}"`);
+      expect(surfaceHtml).toContain(`data-cognition-deposition-body="${view}"`);
     }
-    for (const excluded of ['kstar', 'evolution', 'capability']) {
-      expect(html).not.toContain(`data-cognition-page="${excluded}"`);
+    for (const technicalPage of ['brain', 'context', 'ontology', 'receipts']) {
+      expect(surfaceHtml).not.toContain(`data-cognition-page="${technicalPage}"`);
+      expect(surfaceHtml).not.toContain(`data-cognition-page-body="${technicalPage}"`);
     }
-    for (const group of ['cognition.nav_flow', 'cognition.nav_structure', 'cognition.nav_governance']) {
-      expect(html).toContain(`data-i18n="${group}"`);
+  });
+
+
+  it('uses CogSeed naming and accessible Recall navigation controls', () => {
+    const surfaceStart = html.indexOf('class="skills-cognition-surface"');
+    const surfaceEnd = html.indexOf('<!-- Skills -->');
+    const surfaceHtml = html.slice(surfaceStart, surfaceEnd);
+    expect(surfaceHtml).toContain('data-i18n="cognition.product_title"');
+    expect(surfaceHtml).toContain('data-i18n="cognition.product_subtitle"');
+    expect(surfaceHtml).toContain('role="tablist"');
+    expect(surfaceHtml).toContain('role="tab"');
+    expect(surfaceHtml).toContain('aria-selected="true"');
+    expect(surfaceHtml).toContain('class="recall-subtab is-active"');
+
+    for (const locale of ['en', 'zh', 'ja', 'pt']) {
+      const messages = JSON.parse(fs.readFileSync(path.join(__dirname, `../../src/renderer/locales/${locale}.json`), 'utf-8'));
+      for (const key of [
+        'cognition.product_title',
+        'cognition.product_subtitle',
+        'cognition.asset_category_personal',
+        'cognition.asset_category_rule',
+        'cognition.asset_category_template',
+        'cognition.asset_category_skill_method',
+        'cognition.cognition_tree',
+        'cognition.minimum_capability_pack',
+        'cognition.reuse_proof',
+      ]) {
+        expect(messages[key]).toBeTruthy();
+      }
     }
   });
 
@@ -76,7 +119,19 @@ describe('Recall cognition workspace layout', () => {
     expect(boot).toContain("view === 'skills' ? 'panel-skills'");
     expect(boot).toContain("view === 'recall' ? 'panel-recall'");
     expect(boot).toContain("_loadViewFeature('recall', 'recall'");
-    expect(lazy).toMatch(/recall:\s*\[\s*\{ src: '\.\/modules\/skills\.js' \}/);
+    for (const bundle of ['skills', 'recall']) {
+      const bundleStart = lazy.indexOf(`  ${bundle}: [`);
+      const bundleEnd = lazy.indexOf('\n  ],', bundleStart);
+      expect(bundleStart).toBeGreaterThanOrEqual(0);
+      expect(bundleEnd).toBeGreaterThan(bundleStart);
+      const bundleSource = lazy.slice(bundleStart, bundleEnd);
+      const architectureIndex = bundleSource.indexOf('./modules/recall-information-architecture.js');
+      const skillsIndex = bundleSource.indexOf('./modules/skills.js');
+      const bindingsIndex = bundleSource.indexOf('./modules/skills-bindings.js');
+      expect(architectureIndex).toBeGreaterThanOrEqual(0);
+      expect(architectureIndex).toBeLessThan(skillsIndex);
+      expect(skillsIndex).toBeLessThan(bindingsIndex);
+    }
   });
 
   it('wraps the top navigation and pages in one integrated workspace', () => {
@@ -112,17 +167,42 @@ describe('Recall cognition workspace layout', () => {
     expect(cssBraceDepthAt(css, recallRules)).toBe(0);
   });
 
-  it('uses PRD page semantics for cognition candidates and ability assets', () => {
-    expect(html).toContain('data-i18n="cognition.candidate_review"');
-    expect(html).toContain('data-i18n="cognition.formal_assets"');
-    expect(html).toContain('data-ability-assets-view="list"');
-    expect(html).toContain('data-ability-assets-view="tree"');
-    expect(html).not.toContain('data-ability-assets-view="evidence"');
-    expect(html).toContain('data-ability-assets-view-panel="list"');
-    expect(html).toContain('data-ability-assets-view-panel="tree"');
-    expect(html).not.toContain('data-ability-assets-view-panel="evidence"');
+  it('uses PRD page semantics for deposition and a single ability asset host', () => {
+    expect(html).toContain('data-i18n="cognition.pending_knowledge"');
+    expect(html).toContain('data-i18n="cognition.organize_tasks"');
+    expect(html).toContain('data-i18n="cognition.sources"');
+    expect(html).toContain('data-i18n="cognition.ability_assets"');
+    expect(html.match(/id="skills-cognition-assets-body"/g)).toHaveLength(1);
+    expect(html).not.toContain('data-ability-assets-view=');
+    expect(html).not.toContain('data-ability-assets-view-panel=');
   });
 
+
+
+  it('keeps Recall pages scrollable and nested controls styled in the primary Recall CSS block', () => {
+    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf-8');
+    const appMainRule = css.match(/\.main-content\s*\{[^}]+\}/)?.[0] || '';
+    const consoleRule = css.match(/\.skills-cognition-console\s*\{[^}]+\}/)?.[0] || '';
+    const surfaceRuleStart = css.indexOf('.skills-cognition-surface {');
+    const surfaceRule = css.match(/\.skills-cognition-surface\s*\{[^}]+\}/)?.[0] || '';
+    const mainRule = css.match(/\.skills-cognition-main\s*\{[^}]+\}/)?.[0] || '';
+    const pageRule = css.match(/\.skills-cognition-page\s*\{[^}]+\}/)?.[0] || '';
+    expect(appMainRule).toContain('min-height: 0');
+    expect(consoleRule).toContain('flex: 1 1 auto');
+    expect(surfaceRuleStart).toBeGreaterThan(0);
+    expect(cssBraceDepthAt(css, surfaceRuleStart)).toBe(0);
+    expect(surfaceRule).toContain('flex: 1 1 auto');
+    expect(mainRule).toContain('overflow-y: auto');
+    expect(mainRule).toContain('overscroll-behavior: contain');
+    expect(pageRule).toContain('overflow: visible');
+    expect(pageRule).not.toContain('position: absolute');
+
+    const recallStart = css.indexOf('/* Recall cognition console. */');
+    const terminalStart = css.indexOf('/* Terminal body / screen */');
+    const recallCss = css.slice(recallStart, terminalStart);
+    expect(recallCss).toContain('.recall-subtabs [data-cognition-deposition-view]');
+    expect(recallCss).toContain('.recall-category-chips [data-cognition-candidate-category]');
+  });
 
   it('keeps ability asset status chips compact inside list rows', () => {
     const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf-8');
@@ -140,7 +220,7 @@ describe('Recall cognition workspace layout', () => {
     expect(skills).toContain("window.orkas.invoke('recall.captures.list'");
     expect(skills).toContain('skills-cognition-source-row');
     expect(skills).toContain('skills-cognition-capture-row');
-    expect(skills).toContain('data-cognition-page-link="candidates"');
+    expect(skills).toContain('data-cognition-page-link="deposition"');
     expect(skills).toContain('data-recall-capture-retry');
     expect(skills).toContain('data-recall-capture-settings');
     expect(bindings).toContain("window.orkas.invoke('recall.captures.retry'");
