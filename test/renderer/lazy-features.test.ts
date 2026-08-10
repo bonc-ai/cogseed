@@ -70,6 +70,7 @@ describe('renderer lazy feature loader', () => {
     const skills = loadFeatureLoader();
     await skills.context.loadRendererFeature('skills');
     expect(skills.appended.map((script) => script.src)).toEqual([
+      './modules/recall-information-architecture.js',
       './modules/skills.js',
       './modules/skills-bindings.js',
     ]);
