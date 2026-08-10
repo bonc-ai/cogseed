@@ -6,18 +6,18 @@
 // artifact is a self-contained web app the LLM produced via `create_artifact`.
 //
 // Round-trip: the artifact talks to the chat by posting to its parent —
-//   parent.postMessage({ __orkasArtifact: true, type: 'submit'|'resize'|'open-external', ... }, '*')
+//   parent.postMessage({ __cogseedArtifact: true, type: 'submit'|'resize'|'open-external', ... }, '*')
 // A single global `message` listener (registered once) validates that
 // `event.source` is one of our live artifact iframes (the iframe is
 // cross-origin — `chat-app://cid` ≠ `file://` — so origin-string checks are
 // brittle; identity of the contentWindow is the robust check) and that
-// `event.data.__orkasArtifact === true`, then:
+// `event.data.__cogseedArtifact === true`, then:
 //   - `submit` / `sendToChat` → compose a user message (readable summary +
 //     `<artifact-result>` machine tag, `@`-routed to the creating actor) and
 //     fire it through the normal send pipeline.
 //   - `resize` → set the iframe's height (cross-origin, so the parent can't
 //     measure the content itself; the artifact reports it, optionally via the
-//     `__orkas/bridge.js` helper).
+//     `__cogseed/bridge.js` helper).
 //   - `open-external` → open an http(s) URL outside the artifact iframe.
 // We never expose `window.cogseed` or any privileged handle into the iframe.
 //
@@ -30,7 +30,7 @@
   const DEFAULT_FRAME_HEIGHT = 420;   // px, until the artifact reports its own
   const MAX_FRAME_HEIGHT = 640;       // px, clamp; the iframe scrolls past this
   const MIN_FRAME_HEIGHT = 80;        // px
-  const artifactSecurity = window.OrkasArtifactSecurity;
+  const artifactSecurity = window.CogSeedArtifactSecurity;
   if (!artifactSecurity) throw new Error('artifact-security.js must load before chat-artifact.js');
   const SANDBOX = artifactSecurity.SANDBOX;
   // `allow-same-origin` is safe: the artifact's origin (`chat-app://cid`) is

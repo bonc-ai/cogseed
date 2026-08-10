@@ -4593,13 +4593,13 @@ export function register(): void {
       }
       return out;
     }
-  });
+  };
 
   // File objects cannot cross the regular JSON invoke envelope without being
   // copied into base64. Preload resolves only genuine user-selected DOM File
   // objects through Electron `webUtils.getPathForFile` and sends their paths
   // on this private channel; the renderer never receives a raw local path.
-  ipcMain.handle('cogseed.importLocalFiles', async (event, request: unknown) => {
+  const handleImportLocalFiles = async (event, request: unknown) => {
     if (!isTrustedIpcSender(event.sender)) {
       log.warn('rejected local file import from untrusted renderer');
       return { ok: false, error: 'untrusted ipc sender', code: 'E_IPC_SENDER' };

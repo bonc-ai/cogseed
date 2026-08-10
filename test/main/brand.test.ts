@@ -90,7 +90,7 @@ describe('CogSeed brand contract', () => {
   it('keeps approved internal compatibility symbols', () => {
     expect(read('src/main/preload.js')).toContain("contextBridge.exposeInMainWorld('orkas'");
     expect(read('src/renderer/modules/ipc-shim.js')).toContain('window.cogseed');
-    expect(read('src/renderer/modules/artifact-security.js')).toContain('OrkasArtifactSecurity');
+    expect(read('src/renderer/modules/artifact-security.js')).toContain('CogSeedArtifactSecurity');
   });
 
 });
