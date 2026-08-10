@@ -107,6 +107,7 @@ import {
 import { invokeHandlers as qualityHandlers } from './quality';
 import { invokeHandlers as connectorsHandlers } from './connectors';
 import { invokeHandlers as messagingHandlers } from './messaging';
+import { invokeHandlers as personalContextHandlers } from './personal-context';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as cognitionHandlers } from './cognition';
 import { safeId } from '../storage';
@@ -4172,6 +4173,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // Local two-way messaging gateway. Platform credentials never cross this
   // handler table; the dedicated IPC module returns metadata-only DTOs.
   ...messagingHandlers,
+
+  // Personal context connector (Feishu user OAuth + resource sync). Credential
+  // material never crosses this table; status DTOs only.
+  ...personalContextHandlers,
 
   // Cross-session memory UI — view/edit/import/export over features/memory.ts.
   ...memoryHandlers,

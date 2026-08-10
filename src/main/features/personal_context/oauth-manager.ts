@@ -277,6 +277,26 @@ export class OAuthManager {
     }
   }
 
+  /**
+   * 取消进行中的授权：清 pendingState、收敛 connecting → disconnected。
+   * 用户放弃授权/回调超时后调用，避免状态悬挂在 connecting。
+   */
+  async cancelAuthorize(uid: string, providerId: string): Promise<OAuthConnectionStatus> {
+    const release = await lockFor(uid, providerId).acquire();
+    try {
+      const store = await readStore(uid, providerId);
+      if (store.pendingState || store.status.kind === 'connecting') {
+        store.pendingState = undefined;
+        store.status = status('disconnected');
+        store.lastErrorCode = undefined;
+        await writeStore(uid, providerId, store);
+      }
+      return toConnectionStatus(store);
+    } finally {
+      release();
+    }
+  }
+
   /** 健康检查：令牌有效 → connected；无效（401/invalid_grant）→ error + needsReauth；网络错误保留原状态 */
   async healthCheck(uid: string, providerId: string): Promise<OAuthConnectionStatus> {
     const release = await lockFor(uid, providerId).acquire();

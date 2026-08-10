@@ -90,6 +90,7 @@ async function loadSettings() {
     _settingsSafeCall('settings custom providers refresh', _settingsRefreshCustomProviders),
     _settingsSafeCall('settings ccswitch status refresh', _settingsRefreshCcswitchStatus),
     _settingsSafeCall('settings messaging refresh', () => window.initMessagingSettings && window.initMessagingSettings()),
+    _settingsSafeCall('settings personal context refresh', () => window.initPersonalContextSettings && window.initPersonalContextSettings()),
   ]);
   await _settingsSafeCall('settings model authorization init', () => window.initModelAuthorizationSettings && window.initModelAuthorizationSettings());
   await _settingsSafeCall('settings local execution render', _settingsRenderLocalExec);
