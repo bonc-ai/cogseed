@@ -203,5 +203,18 @@
   "expense_agent.submit.message": "この経費を {target} に送信しますか？",
   "expense_agent.submit.detail": "ケース: {case}\\n資料指紋: {hash}\\n\\nFeishu の承認申請を作成します。支払い承認ではなく、指定された承認者が Feishu で確認します。",
   "expense_agent.submit.unavailable": "送信確認を表示できません。何も送信されていません。",
-  "expense_agent.submit.cancelled": "送信をキャンセルしました。Feishu にデータは送信されていません。"
+  "expense_agent.submit.cancelled": "送信をキャンセルしました。Feishu にデータは送信されていません。",
+  "messaging.new_session_confirmation": "新しい会話を開始しました。次に何を処理しますか？",
+  "messaging.approval.approve": "許可済み",
+  "messaging.approval.approve_once": "1回だけ許可済み",
+  "messaging.approval.approve_session": "このセッションでは許可済み",
+  "messaging.approval.approve_always": "常に許可済み",
+  "messaging.approval.deny": "拒否済み",
+  "messaging.approval.button.approve_once": "✅ 1回許可",
+  "messaging.approval.button.approve_session": "✅ このセッション",
+  "messaging.approval.button.approve_always": "✅ 常に許可",
+  "messaging.approval.button.deny": "❌ 拒否",
+  "messaging.owner_label_self": "本人",
+  "messaging.wechat.rescan_required": "再スキャンが必要です",
+  "messaging.approval.title_needed": "承認が必要です：{agent}"
 }

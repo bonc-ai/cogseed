@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 
 import { createLogger } from '../../logger';
 import { logErrorSummary } from '../../util/log-redact';
+import { t } from '../../i18n';
 import { isTrustedIlinkBaseUrl } from './registry';
 import { wechatCredentialFingerprint } from './wechat-state-store';
 import type {
@@ -165,8 +166,8 @@ export class WechatPersonalAdapter implements MessagingAdapter {
           if (error instanceof WechatPollDeadlineError) continue;
           const cls = classifyError(error);
           if (cls === 'reauth_required') {
-            this.terminalError = new Error('Wechat needs re-scan');
-            await this.emitStatus(statusOf('error', '需要重新扫码'));
+            this.terminalError = new Error(t('messaging.wechat.rescan_required'));
+            await this.emitStatus(statusOf('error', this.terminalError.message));
             return;
           }
           // Network-class failures: back off BEFORE surfacing the error

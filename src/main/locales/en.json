@@ -203,5 +203,18 @@
   "expense_agent.submit.message": "Submit this reimbursement to {target}?",
   "expense_agent.submit.detail": "Case: {case}\\nMaterial fingerprint: {hash}\\n\\nThis creates a Feishu approval request. It does not approve payment; designated human approvers review it in Feishu.",
   "expense_agent.submit.unavailable": "Unable to show submission confirmation; nothing was submitted.",
-  "expense_agent.submit.cancelled": "Submission was cancelled; no data was sent to Feishu."
+  "expense_agent.submit.cancelled": "Submission was cancelled; no data was sent to Feishu.",
+  "messaging.new_session_confirmation": "Started a new conversation. What would you like to handle next?",
+  "messaging.approval.approve": "Approved",
+  "messaging.approval.approve_once": "Approved once",
+  "messaging.approval.approve_session": "Approved for this session",
+  "messaging.approval.approve_always": "Always allowed",
+  "messaging.approval.deny": "Denied",
+  "messaging.approval.button.approve_once": "✅ Allow once",
+  "messaging.approval.button.approve_session": "✅ This session",
+  "messaging.approval.button.approve_always": "✅ Always allow",
+  "messaging.approval.button.deny": "❌ Deny",
+  "messaging.owner_label_self": "Me",
+  "messaging.wechat.rescan_required": "Re-scan required",
+  "messaging.approval.title_needed": "Your approval is needed: {agent}"
 }
