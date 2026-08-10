@@ -34,6 +34,7 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/kb-picker.js' },
   ],
   skills: [
+    { src: './modules/recall-information-architecture.js' },
     { src: './modules/skills.js' },
     { src: './modules/skills-bindings.js' },
   ],
@@ -42,6 +43,7 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/evolution/console.js' },
   ],
   recall: [
+    { src: './modules/recall-information-architecture.js' },
     { src: './modules/skills.js' },
     { src: './modules/skills-bindings.js' },
   ],
@@ -49,6 +51,9 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/cognition/pages.js' },
     { src: './modules/cognition/cognition.js' },
     { src: './modules/personal-ontology.js' },
+  ],
+  spaces: [
+    { src: './modules/spaces.js' },
   ],
 });
 

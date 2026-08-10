@@ -68,14 +68,21 @@ function _initSkillsCognitionBindings() {
   document.getElementById('skills-cognition-tabs')?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-cognition-page]');
     if (!button) return;
-    switchSkillsCognitionPage(button.dataset.cognitionPage || 'overview');
+    openRecallTarget(button.dataset.cognitionPage || 'overview');
+  });
+
+  document.getElementById('skills-cognition-deposition-tabs')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-cognition-deposition-view]');
+    if (!button) return;
+    _skillsCognitionState.depositionView = button.dataset.cognitionDepositionView || 'candidates';
+    renderSkillsCognitionDeposition();
   });
 
   document.getElementById('ability-assets-tabs')?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-ability-assets-view]');
     if (!button) return;
     const view = button.dataset.abilityAssetsView === 'tree' ? 'tree' : 'list';
-    _skillsCognitionState.assetView = view;
+    _skillsCognitionState.assetSubview = view;
     document.querySelectorAll('[data-ability-assets-view]').forEach((el) => el.classList.toggle('is-active', el === button));
     renderSkillsCognitionAssets();
   });
@@ -95,7 +102,18 @@ function _initSkillsCognitionBindings() {
 
     const pageLink = event.target.closest('[data-cognition-page-link]');
     if (pageLink) {
-      switchSkillsCognitionPage(pageLink.dataset.cognitionPageLink || 'overview');
+      openRecallTarget(pageLink.dataset.cognitionPageLink || 'overview', {
+        depositionView: pageLink.dataset.cognitionDepositionTarget,
+        assetSubview: pageLink.dataset.cognitionAssetSubview,
+        category: pageLink.dataset.cognitionAssetCategory,
+      });
+      return;
+    }
+
+    const category = event.target.closest('[data-cognition-candidate-category]');
+    if (category) {
+      _skillsCognitionState.candidateCategoryFilter = category.dataset.cognitionCandidateCategory || '';
+      renderSkillsCognitionCandidates();
       return;
     }
 
@@ -133,7 +151,7 @@ function _initSkillsCognitionBindings() {
     const openAsset = event.target.closest('[data-cognition-open-asset]');
     if (openAsset) {
       _skillsCognitionState.selectedAssetId = openAsset.dataset.cognitionOpenAsset || '';
-      switchSkillsCognitionPage('assets');
+      openRecallTarget('assets');
       return;
     }
 
@@ -218,7 +236,7 @@ function _initSkillsCognitionBindings() {
         return;
       }
       if (actionName === 'view-candidates') {
-        switchSkillsCognitionPage('candidates');
+        openRecallTarget('candidates');
         return;
       }
       if (actionName === 'cancel' && typeof uiConfirm === 'function') {
@@ -295,9 +313,22 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
+    const openReuse = event.target.closest('[data-cognition-open-reuse]');
+    if (openReuse) {
+      const assetId = openReuse.dataset.cognitionOpenReuse || '';
+      const asset = (_skillsCognitionState.assets || []).find((item) => item.id === assetId);
+      const receiptIds = new Set(Array.isArray(asset?.receiptRefs) ? asset.receiptRefs : []);
+      const receipt = (_skillsCognitionState.receipts || []).find((item) => receiptIds.has(item.executionId) || receiptIds.has(item.receiptId) || (Array.isArray(item.reusedRefs) && item.reusedRefs.includes(assetId)));
+      const receiptId = receipt?.executionId || receipt?.receiptId || '';
+      if (receiptId) await openSkillsCognitionReceiptDetail(receiptId);
+      else renderSkillsCognitionAssets();
+      setTimeout(() => document.querySelector?.('.ability-asset-reuse-summary')?.scrollIntoView({ block: 'start' }), 0);
+      return;
+    }
+
     const openCandidate = event.target.closest('[data-cognition-open-candidate]');
     if (openCandidate) {
-      switchSkillsCognitionPage('candidates');
+      openRecallTarget('candidates');
       return;
     }
 
@@ -489,12 +520,10 @@ function _initSkillsCognitionBindings() {
 
   window.addEventListener('i18n-change', () => {
     renderSkillsCognitionOverview();
-    renderSkillsCognitionSources();
-    renderSkillsCognitionCaptures();
+    renderSkillsCognitionDeposition();
     renderSkillsCognitionBrain();
     renderSkillsCognitionContext();
     renderSkillsCognitionOntology();
-    renderSkillsCognitionCandidates();
     renderSkillsCognitionReceipts();
     renderSkillsCognitionAssets();
   });

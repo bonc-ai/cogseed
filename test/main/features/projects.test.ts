@@ -449,12 +449,15 @@ describe('projects › resolveProjectScope', () => {
     expect(await projects.resolveProjectScope(TEST_UID, 'p_deleted0')).toBeNull();
   });
 
-  it('returns empty bindings when project exists but no bindings have been added', async () => {
+  it('returns null for fresh project without bindings file (unconfigured = global scope, 裁决 S1 修正)', async () => {
+    // 语义变更（工作空间一期）：bindings.json 缺失 = 未配置 = null（全局可见/全资源）。
+    // 显式配置（含空数组文件）才是严格作用域/刻意零资源。原断言 {agents:[],skills:[]}
+    // 对应"缺失 = 零资源"旧语义，被工作空间拍板 #9/#10（不套模板/解绑 = 全资源）取代。
     const projects = await loadProjects();
     const p = await projects.createProject(TEST_UID, 'Fresh');
     if (!p.ok) throw new Error('precondition');
     const scope = await projects.resolveProjectScope(TEST_UID, p.project.project_id);
-    expect(scope).toEqual({ agents: [], skills: [] });
+    expect(scope).toBeNull();
   });
 
   it('returns the bindings as written', async () => {
@@ -644,5 +647,181 @@ describe('projects › instructions', () => {
     fs.writeFileSync(file, 'y'.repeat(projects.PROJECT_INSTRUCTIONS_CHAR_LIMIT * 3));
     const block = projects.formatProjectInstructionsForSystemPrompt(TEST_UID, pid);
     expect(block.length).toBeLessThan(projects.PROJECT_INSTRUCTIONS_CHAR_LIMIT + 300); // content capped + header
+  });
+});
+
+// ── 工作空间绑定与作用域派生（一期，决策树 S1/S2/S3）────────────────────────
+
+function writeCustomSkill(id: string): void {
+  const d = path.join(tmpDir, TEST_UID, 'cloud', 'skills', id);
+  fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(d, 'SKILL.md'), `---\nname: "${id}"\ndescription: "test"\n---\n\n# body`, 'utf-8');
+}
+
+function writeAgent(id: string): void {
+  const d = path.join(tmpDir, TEST_UID, 'cloud', 'agents', id);
+  fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(
+    path.join(d, 'agent.json'),
+    JSON.stringify({
+      agent_id: id, name: id, description: 'test', workflow: [],
+      created_at: '2026-08-06T00:00:00', updated_at: '2026-08-06T00:00:00',
+    }),
+    'utf-8',
+  );
+}
+
+async function makeSpace(name: string, extra: { skills?: string[]; agents?: string[] } = {}) {
+  const spaces = await import('../../../src/main/features/spaces');
+  const created = await spaces.createSpace(TEST_UID, { name });
+  if (!created.ok) throw new Error(`create space failed: ${created.error}`);
+  for (const s of extra.skills ?? []) await spaces.addSpaceResource(TEST_UID, created.space.space_id, 'skill', s);
+  for (const a of extra.agents ?? []) await spaces.addSpaceResource(TEST_UID, created.space.space_id, 'agent', a);
+  return created.space;
+}
+
+describe('projects › 工作空间绑定与作用域派生', () => {
+  it('bindSpace 写入 space_id；getSpace 读回；再次绑定可换空间', async () => {
+    const projects = await loadProjects();
+    const p = await projects.createProject(TEST_UID, 'P');
+    if (!p.ok) throw new Error('create failed');
+    const s1 = await makeSpace('S1');
+    const s2 = await makeSpace('S2');
+
+    const b1 = await projects.bindSpace(TEST_UID, p.project.project_id, s1.space_id);
+    expect(b1.ok).toBe(true);
+    const got1 = await projects.getSpace(TEST_UID, p.project.project_id);
+    expect(got1?.space_id).toBe(s1.space_id);
+
+    const b2 = await projects.bindSpace(TEST_UID, p.project.project_id, s2.space_id);
+    expect(b2.ok).toBe(true);
+    const got2 = await projects.getSpace(TEST_UID, p.project.project_id);
+    expect(got2?.space_id).toBe(s2.space_id);
+
+    const ub = await projects.bindSpace(TEST_UID, p.project.project_id, '');
+    expect(ub.ok).toBe(true);
+    expect(await projects.getSpace(TEST_UID, p.project.project_id)).toBeNull();
+  });
+
+  it('bindSpace 拒绝不存在空间/不存在项目', async () => {
+    const projects = await loadProjects();
+    const p = await projects.createProject(TEST_UID, 'P');
+    if (!p.ok) throw new Error('create failed');
+    const bad = await projects.bindSpace(TEST_UID, p.project.project_id, 'sp_nope');
+    expect(bad.ok).toBe(false);
+    const badP = await projects.bindSpace(TEST_UID, 'p_nope', 'sp_whatever');
+    expect(badP.ok).toBe(false);
+  });
+
+  it('unbindProjectsBySpace 解绑引用项目并返回受影响列表', async () => {
+    const projects = await loadProjects();
+    const p1 = await projects.createProject(TEST_UID, 'P1');
+    const p2 = await projects.createProject(TEST_UID, 'P2');
+    if (!p1.ok || !p2.ok) throw new Error('create failed');
+    const s = await makeSpace('S');
+    await projects.bindSpace(TEST_UID, p1.project.project_id, s.space_id);
+    await projects.bindSpace(TEST_UID, p2.project.project_id, s.space_id);
+
+    const unbound = await projects.unbindProjectsBySpace(TEST_UID, s.space_id);
+    expect(unbound.sort()).toEqual([p1.project.project_id, p2.project.project_id].sort());
+    expect(await projects.getSpace(TEST_UID, p1.project.project_id)).toBeNull();
+    expect(await projects.getSpace(TEST_UID, p2.project.project_id)).toBeNull();
+    // 幂等：再次执行无项目受影响
+    expect(await projects.unbindProjectsBySpace(TEST_UID, s.space_id)).toEqual([]);
+  });
+
+  it('决策树：绑空间 S空B空 → null（全局可见，裁决 S1）', async () => {
+    const projects = await loadProjects();
+    const p = await projects.createProject(TEST_UID, 'P');
+    if (!p.ok) throw new Error('create failed');
+    const s = await makeSpace('S'); // 无模板无 extra
+    await projects.bindSpace(TEST_UID, p.project.project_id, s.space_id);
+    const scope = await projects.resolveProjectScope(TEST_UID, p.project.project_id);
+    expect(scope).toBeNull();
+  });
+
+  it('决策树：S空B非空 → B（项目 bindings 原样）', async () => {
+    const projects = await loadProjects();
+    const p = await projects.createProject(TEST_UID, 'P');
+    if (!p.ok) throw new Error('create failed');
+    const s = await makeSpace('S'); // 空空间
+    await projects.bindSpace(TEST_UID, p.project.project_id, s.space_id);
+    writeCustomSkill('sk-a');
+    writeAgent('ag-1');
+    await projects.addSkillBinding(TEST_UID, p.project.project_id, 'sk-a');
+    await projects.addAgentBinding(TEST_UID, p.project.project_id, 'ag-1');
+    const scope = await projects.resolveProjectScope(TEST_UID, p.project.project_id);
+    expect(scope).toEqual({ skills: ['sk-a'], agents: ['ag-1'] });
+  });
+
+  it('决策树：S非空B空 → S（空间派生集）', async () => {
+    const projects = await loadProjects();
+    const p = await projects.createProject(TEST_UID, 'P');
+    if (!p.ok) throw new Error('create failed');
+    writeCustomSkill('sk-a');
+    writeAgent('ag-1');
+    const s = await makeSpace('S', { skills: ['sk-a'], agents: ['ag-1'] });
+    await projects.bindSpace(TEST_UID, p.project.project_id, s.space_id);
+    const scope = await projects.resolveProjectScope(TEST_UID, p.project.project_id);
+    expect(scope).toEqual({ skills: ['sk-a'], agents: ['ag-1'] });
+  });
+
+  it('决策树：S非空B非空 → S∪B（并集，裁决 S2）', async () => {
+    const projects = await loadProjects();
+    const p = await projects.createProject(TEST_UID, 'P');
+    if (!p.ok) throw new Error('create failed');
+    writeCustomSkill('sk-a');
+    writeCustomSkill('sk-b');
+    writeAgent('ag-1');
+    writeAgent('ag-2');
+    const s = await makeSpace('S', { skills: ['sk-a'], agents: ['ag-1'] });
+    await projects.bindSpace(TEST_UID, p.project.project_id, s.space_id);
+    await projects.addSkillBinding(TEST_UID, p.project.project_id, 'sk-b');
+    await projects.addAgentBinding(TEST_UID, p.project.project_id, 'ag-2');
+    const scope = await projects.resolveProjectScope(TEST_UID, p.project.project_id);
+    expect(scope).toEqual({ skills: ['sk-a', 'sk-b'], agents: ['ag-1', 'ag-2'] });
+  });
+
+  it('决策树：空间 extra 与项目 bindings 重复 id 去重', async () => {
+    const projects = await loadProjects();
+    const p = await projects.createProject(TEST_UID, 'P');
+    if (!p.ok) throw new Error('create failed');
+    writeCustomSkill('sk-a');
+    const s = await makeSpace('S', { skills: ['sk-a'] });
+    await projects.bindSpace(TEST_UID, p.project.project_id, s.space_id);
+    await projects.addSkillBinding(TEST_UID, p.project.project_id, 'sk-a');
+    const scope = await projects.resolveProjectScope(TEST_UID, p.project.project_id);
+    expect(scope).toEqual({ skills: ['sk-a'], agents: [] });
+  });
+
+  it('降级：空间文件损坏 → 按 B 处理（B空 → null），不抛错', async () => {
+    const projects = await loadProjects();
+    const p = await projects.createProject(TEST_UID, 'P');
+    if (!p.ok) throw new Error('create failed');
+    const s = await makeSpace('S', { skills: ['sk-a'] });
+    await projects.bindSpace(TEST_UID, p.project.project_id, s.space_id);
+    const meta = path.join(tmpDir, TEST_UID, 'cloud', 'spaces', `${s.space_id}.json`);
+    fs.writeFileSync(meta, '{ broken', 'utf-8');
+    const scope = await projects.resolveProjectScope(TEST_UID, p.project.project_id);
+    expect(scope).toBeNull(); // B 空 → null（全局），不因空间损坏把项目打成零资源
+  });
+
+  it('兼容：老项目无 space_id 且无 bindings 文件 → null（未配置 = 全资源，裁决 S1 修正）', async () => {
+    const projects = await loadProjects();
+    const p = await projects.createProject(TEST_UID, 'P');
+    if (!p.ok) throw new Error('create failed');
+    const scope = await projects.resolveProjectScope(TEST_UID, p.project.project_id);
+    expect(scope).toBeNull();
+  });
+
+  it('兼容：有 bindings 文件但为空数组 → 空数组（显式清空 = 刻意零资源，opt-out 保留）', async () => {
+    const projects = await loadProjects();
+    const p = await projects.createProject(TEST_UID, 'P');
+    if (!p.ok) throw new Error('create failed');
+    // 触发一次写 bindings（add 再 remove → 文件保留为空数组）
+    await projects.addSkillBinding(TEST_UID, p.project.project_id, 'sk-x');
+    await projects.removeSkillBinding(TEST_UID, p.project.project_id, 'sk-x');
+    const scope = await projects.resolveProjectScope(TEST_UID, p.project.project_id);
+    expect(scope).toEqual({ agents: [], skills: [] });
   });
 });

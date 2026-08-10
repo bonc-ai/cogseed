@@ -263,8 +263,9 @@ const GROUP_FIELD_LABELS: Record<string, string> = {
   '模板': 'template_ref',
 };
 
-/** 模板行合法格式：`<template_id>@<semver>`（id 只允许小写字母数字连字符）。 */
-const TEMPLATE_REF_RE = /^([a-z0-9-]+)@(\d+\.\d+\.\d+)$/;
+/** 模板行合法格式：`<template_id>@<semver>`（id 只允许小写字母数字连字符；
+ *  版本支持标准 semver 预发布后缀，如 `1.1.0` / `0.2.0-review.1`）。 */
+const TEMPLATE_REF_RE = /^([a-z0-9-]+)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
 
 export function parseGroupsMarkdown(text: string): GroupMeta[] {
   const blocks = text.split(/\n(?=###\s+\S)/).map((b) => b.trim()).filter((b) => b.startsWith('### '));

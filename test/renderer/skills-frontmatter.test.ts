@@ -437,10 +437,66 @@ describe('skills renderer frontmatter parsing', () => {
     expect(host.innerHTML).toContain('0.2.0');
     expect(host.innerHTML).toContain('2');
     expect(host.innerHTML).toContain('data-cognition-page-link="receipts"');
-    expect(host.innerHTML).toContain('data-cognition-page-link="candidates"');
+    expect(host.innerHTML).toContain('data-cognition-page-link="deposition"');
   });
 
 
+
+
+  it('renders capability asset categories with inline tree pack and reuse sections', () => {
+    const context = loadSkillRendererHelpers();
+    const body = { innerHTML: '' };
+    context.window.RecallInformationArchitecture = {
+      CATEGORY_ORDER: ['personal', 'rule', 'template', 'skill_method'],
+      normalizeAbilityCategory: (value: string) => {
+        if (value === 'personal' || value === 'preference' || value === 'ontology') return 'personal';
+        if (value === 'rule') return 'rule';
+        if (value === 'template') return 'template';
+        if (value === 'skill_method' || value === 'skill_evolution' || value === 'experience') return 'skill_method';
+        return '';
+      },
+    };
+    context.document = {
+      getElementById: (id: string) => id === 'skills-cognition-assets-body' ? body : null,
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      assets: [{
+        id: 'CA-RULE-P3394-001',
+        type: 'rule',
+        category: 'rule',
+        title: 'P3394产品决策治理规则',
+        source: 'Codex S-P3394-0731',
+        version: 'v1.1',
+        status: 'active',
+        maturity: 'transfer_validated',
+        owner: '本机用户 ZL',
+        scope: '当前P3394项目',
+        workspaceRefs: ['产品工作 Workspace'],
+        receiptRefs: ['exec-a'],
+        candidateRefs: ['cand-a'],
+        relationRefs: [{ type: 'ontology', id: 'group-a', title: '产品偏好' }],
+      }],
+      receipts: [{ executionId: 'exec-a', status: 'succeeded', targetSessionId: 'agent-a', reusedRefs: ['CA-RULE-P3394-001'] }],
+      contextProjections: [{ projectionId: 'proj-a', taskId: 'task-a', selectedAssetIds: ['CA-RULE-P3394-001'] }],
+      ontologyGroups: [{ group_id: 'group-a', title: '产品偏好' }],
+      ontologyGroupContent: { 'group-a': '偏好可追溯的产品决策。' },
+      selectedAssetId: 'CA-RULE-P3394-001',
+    })})`, context);
+
+    context.renderSkillsCognitionAssets();
+
+    for (const label of ['关于我', '规则与判断', '模板与范例', '技能与方法']) {
+      expect(body.innerHTML).toContain(label);
+    }
+    expect(body.innerHTML).not.toContain('data-cognition-page-link="brain"');
+    expect(body.innerHTML).not.toContain('data-cognition-page-link="ontology"');
+    expect(body.innerHTML).not.toContain('data-cognition-page-link="receipts"');
+    expect(body.innerHTML).toContain('认知树');
+    expect(body.innerHTML).toContain('最小能力包');
+    expect(body.innerHTML).toContain('复用证明');
+    expect(body.innerHTML).toContain('偏好可追溯的产品决策。');
+    expect(body.innerHTML).toContain('data-cognition-open-reuse="CA-RULE-P3394-001"');
+  });
 
   it('renders ability assets with PRD categories and without marketplace skill promotion', () => {
     const context = loadSkillRendererHelpers();
@@ -584,24 +640,29 @@ describe('skills renderer frontmatter parsing', () => {
   });
 
 
-  it('renders selected reuse receipt details inline', () => {
+  it('renders selected reuse receipt details inline inside ability assets', () => {
     const context = loadSkillRendererHelpers();
     const body = { innerHTML: '' };
     context.document = {
-      getElementById: (id: string) => id === 'skills-cognition-receipts-body' ? body : null,
+      getElementById: (id: string) => id === 'skills-cognition-assets-body' ? body : null,
     };
     vm.runInContext(`
-      _skillsCognitionState.receipts = [${JSON.stringify({
-        executionId: 'exec-a', receiptId: 'receipt-a', status: 'succeeded', targetSessionId: 'gconv-a', reusedRefs: ['skill:writer'], omittedRefs: [], permissionMode: 'explicit', allowedScopes: ['skills'], boundary: 'real', createdAt: '2026-08-04T00:00:00.000Z'
+      _skillsCognitionState.assets = [${JSON.stringify({
+        id: 'asset-a', type: 'rule', category: 'rule', title: 'Reusable Rule', source: 'source-a', status: 'active', maturity: 'transfer_validated', receiptRefs: ['exec-a'], workspaceRefs: [], candidateRefs: [], relationRefs: []
       })}];
+      _skillsCognitionState.receipts = [${JSON.stringify({
+        executionId: 'exec-a', receiptId: 'receipt-a', status: 'succeeded', targetSessionId: 'gconv-a', reusedRefs: ['asset-a'], omittedRefs: [], permissionMode: 'explicit', allowedScopes: ['skills'], boundary: 'real', createdAt: '2026-08-04T00:00:00.000Z'
+      })}];
+      _skillsCognitionState.selectedAssetId = 'asset-a';
       _skillsCognitionState.selectedReceiptId = 'exec-a';
       _skillsCognitionState.receiptDetails = { 'exec-a': ${JSON.stringify({
-        executionId: 'exec-a', receiptId: 'receipt-a', status: 'succeeded', sourceSessionId: 'gconv-source', targetSessionId: 'gconv-a', reusedRefs: ['skill:writer'], omittedRefs: ['memory:private'], permissionMode: 'explicit', allowedScopes: ['skills', 'memory'], boundary: 'real', executionKind: 'core-agent', agentId: 'writer', conversationId: 'gconv-a', createdAt: '2026-08-04T00:00:00.000Z', completedAt: '2026-08-04T00:01:00.000Z'
+        executionId: 'exec-a', receiptId: 'receipt-a', status: 'succeeded', sourceSessionId: 'gconv-source', targetSessionId: 'gconv-a', reusedRefs: ['asset-a'], omittedRefs: ['memory:private'], permissionMode: 'explicit', allowedScopes: ['skills', 'memory'], boundary: 'real', executionKind: 'core-agent', agentId: 'writer', conversationId: 'gconv-a', createdAt: '2026-08-04T00:00:00.000Z', completedAt: '2026-08-04T00:01:00.000Z'
       })} };
     `, context);
 
-    context.renderSkillsCognitionReceipts();
+    context.renderSkillsCognitionAssets();
 
+    expect(body.innerHTML).toContain('ability-asset-reuse-summary');
     expect(body.innerHTML).toContain('skills-cognition-detail');
     expect(body.innerHTML).toContain('gconv-source');
     expect(body.innerHTML).toContain('memory:private');

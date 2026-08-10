@@ -64,6 +64,9 @@ export interface Project {
   owner_uid: string;
   created_at: string;
   updated_at: string;
+  /** 工作空间一期：引用的空间 id（`cloud/spaces/<sid>.json`）。缺失 = 不引用 =
+   *  现有行为逐字节不变。空间是纯配置实体，不存会话/文件/记忆。 */
+  space_id?: string;
 }
 
 /** UI-extended project record: metadata + derived counts. */
@@ -173,6 +176,7 @@ function _normaliseProject(raw: any, uid: string, pid: string): Project {
     owner_uid: typeof raw.owner_uid === 'string' && raw.owner_uid ? raw.owner_uid : uid,
     created_at: typeof raw.created_at === 'string' ? raw.created_at : now,
     updated_at: typeof raw.updated_at === 'string' ? raw.updated_at : now,
+    space_id: typeof raw.space_id === 'string' && raw.space_id ? raw.space_id : undefined,
   };
 }
 
@@ -564,7 +568,17 @@ export async function pruneBindings(
  *    global-visibility behavior.
  *  - present project → returns its bindings (possibly empty arrays).
  *  - stale projectId (project deleted but conv lingers) → returns null so
- *    the LLM falls back to global visibility instead of "zero scope". */
+ *    the LLM falls back to global visibility instead of "zero scope".
+ *
+ *  工作空间一期（两级资源模型，决策树 S1/S2/S3）：
+ *    - 项目绑空间 → 空间派生集 S = 模板 bundle ∪ 空间 extra（过滤失效）；
+ *      B = 项目 bindings（私有追加）。S∪B 全空 → null（全局可见，裁决 S1）；
+ *      否则 → S∪B 并集（严格作用域，裁决 S2）。
+ *    - 空间文件损坏/缺失 → 按 B 处理（B 空 → null），绝不因空间异常把项目
+ *      打成零资源（降级）。
+ *    - 未绑空间 → bindings 原逻辑；**bindings.json 缺失 = 未配置 = null（全局
+ *      可见，裁决 S1 修正：不套模板/解绑空间 = 全资源可用）；bindings.json
+ *      存在（含空数组）= 严格作用域（显式清空 = 刻意零资源，opt-out 保留）**。 */
 export async function resolveProjectScope(
   uid: string,
   projectId: string | null | undefined,
@@ -572,7 +586,37 @@ export async function resolveProjectScope(
   if (!projectId) return null;
   await _ensurePromoted(uid);
   if (!fs.existsSync(projectMetaFile(uid, projectId))) return null;
-  return _readBindings(uid, projectId);
+  const bindingsMissing = !fs.existsSync(projectBindingsFile(uid, projectId));
+  const bindings = bindingsMissing ? { agents: [], skills: [] } : await _readBindings(uid, projectId);
+
+  const project = await _readProject(uid, projectId);
+  if (!project?.space_id) {
+    // 未绑空间：未配置过 bindings → 全局可见（全资源）；配过 → 严格作用域
+    return bindingsMissing ? null : bindings;
+  }
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
+    const spaces = await import('./spaces');
+    const space = await spaces.getSpace(uid, project.space_id);
+    if (!space) {
+      // 空间缺失（被删/损坏）→ 降级按 B 处理；B 空 → null（全局可见）
+      return bindings.agents.length || bindings.skills.length ? bindings : null;
+    }
+    const res = await spaces.resolveSpaceResourcesForUser(uid, space);
+    const sSkills = res.effective_skills;
+    const sAgents = res.effective_agents;
+    if (sSkills.length === 0 && sAgents.length === 0 && bindings.skills.length === 0 && bindings.agents.length === 0) {
+      return null; // S 空且 B 空 → 全局可见（裁决 S1）
+    }
+    return {
+      skills: [...new Set([...sSkills, ...bindings.skills])],
+      agents: [...new Set([...sAgents, ...bindings.agents])],
+    };
+  } catch (err) {
+    log.warn(`resolve space scope user=${uid} pid=${projectId} sid=${project.space_id}: ${(err as Error).message}`);
+    return bindings.agents.length || bindings.skills.length ? bindings : null;
+  }
 }
 
 async function _mutateBindings(
@@ -622,4 +666,52 @@ export async function removeSkillBinding(
   return _mutateBindings(uid, projectId, (b) => (
     { ...b, skills: b.skills.filter((id) => id !== skillId) }
   ));
+}
+
+// ── Workspace binding（工作空间一期：项目 ↔ 空间）───────────────────────────
+
+/** 绑定/解绑空间（空 spaceId = 解绑）。空间是纯配置实体，绑定只写
+ *  project.json.space_id，不迁移任何会话/记忆。 */
+export async function bindSpace(
+  uid: string,
+  projectId: string,
+  spaceId: string,
+): Promise<{ ok: true } | { ok: false; error: ProjectError }> {
+  await _ensurePromoted(uid);
+  const cur = await _readProject(uid, projectId);
+  if (!cur) return { ok: false, error: 'not_found' };
+  if (spaceId) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
+    const spaces = await import('./spaces');
+    const space = await spaces.getSpace(uid, spaceId);
+    if (!space) return { ok: false, error: 'not_found' };
+  }
+  const next = { ...cur, space_id: spaceId || undefined, updated_at: nowIso() };
+  await _writeProject(uid, next);
+  return { ok: true };
+}
+
+/** 项目当前绑定空间；未绑定/项目不存在 → null。 */
+export async function getSpace(uid: string, projectId: string): Promise<{ space_id: string } | null> {
+  const p = await _readProject(uid, projectId);
+  if (!p?.space_id) return null;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
+  const spaces = await import('./spaces');
+  const space = await spaces.getSpace(uid, p.space_id);
+  return space ? { space_id: space.space_id } : null;
+}
+
+/** 解绑所有引用指定空间的项目（删除空间时调用，spaces.deleteSpace 负责触发）。
+ *  幂等；返回受影响的 pid 列表。 */
+export async function unbindProjectsBySpace(uid: string, spaceId: string): Promise<string[]> {
+  const ids = await _listProjectIds(uid);
+  const affected: string[] = [];
+  for (const pid of ids) {
+    const p = await _readProject(uid, pid);
+    if (!p?.space_id || p.space_id !== spaceId) continue;
+    await _writeProject(uid, { ...p, space_id: undefined, updated_at: nowIso() });
+    affected.push(pid);
+  }
+  if (affected.length) log.info(`unbound projects user=${uid} sid=${spaceId} count=${affected.length}`);
+  return affected;
 }

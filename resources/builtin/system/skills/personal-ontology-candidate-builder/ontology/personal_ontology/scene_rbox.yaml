@@ -109,7 +109,7 @@ rbox:
     - id: R_BOUNDARY_03
       type: mandatory
       name: 不做企业级组织路由
-      description: 本技能只服务用户个人，不存在"组织本体""业务本体"这类第三方层级；支持个人角色模板（学生/学者/FDE）的字段建议
+      description: 本技能只服务用户个人，不存在"组织本体""业务本体"这类第三方层级；支持个人角色模板（内置角色模板：学生/学者/FDE/产品经理/项目经理/技术写作/招聘专员/软件工程师）的字段建议
       applies_to:
         classes: [RoleTemplate]
       condition:

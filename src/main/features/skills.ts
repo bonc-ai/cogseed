@@ -897,6 +897,12 @@ async function _overlaySkillSecurity(list: SkillListing[]): Promise<SkillListing
 
   return list.map((s) => {
     if (s.source !== 'marketplace' && s.source !== 'custom') return s;
+    // External skills (Claude Code / Codex, `category: 'external'`) live outside
+    // our skill trees: no receipt is ever written for them and no scan will run.
+    // They carry `source: 'custom'`, so without this they fell through as
+    // `unchecked` — which promises "a scan will run on next load" and would never
+    // come true. Left unannotated instead: no claim rather than a false one.
+    if (s.category === 'external') return s;
     const reason = withheldById.get(s.id);
     const receipt = receiptById.get(s.id);
     const common = receipt
@@ -947,13 +953,89 @@ async function _overlaySkillSecurity(list: SkillListing[]): Promise<SkillListing
   });
 }
 
-/** User-facing skill list — custom + marketplace, EXCLUDING agent-private
- *  (`ownerAgent`) skills (those belong to one agent's internal pipeline and
- *  must not appear in the panel; see PC CLAUDE.md §Skills). */
+/** User-facing skill list — custom + marketplace + external (Claude Code, Codex),
+ *  EXCLUDING agent-private (`ownerAgent`) skills (those belong to one agent's
+ *  internal pipeline and must not appear in the panel; see PC CLAUDE.md §Skills). */
 export async function listSkills(): Promise<SkillListing[]> {
-  return _overlaySkillSecurity(
-    _overlaySkillEnabled((await _allSkillListingsCached()).filter((s) => !s.ownerAgent)),
-  );
+  const internal = _overlaySkillEnabled((await _allSkillListingsCached()).filter((s) => !s.ownerAgent));
+
+  // Auto-detect external skills from Claude Code and Codex
+  const external: SkillListing[] = [];
+
+  // Claude Code skills from ~/.claude/skills/
+  try {
+    const claudeSkillsRoot = path.join(os.homedir(), '.claude', 'skills');
+    if (fs.existsSync(claudeSkillsRoot)) {
+      const entries = fs.readdirSync(claudeSkillsRoot, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+        const skillDir = path.join(claudeSkillsRoot, entry.name);
+        const skillMdPath = path.join(skillDir, 'SKILL.md');
+        if (!fs.existsSync(skillMdPath)) continue;
+
+        try {
+          const content = fs.readFileSync(skillMdPath, 'utf8');
+          const meta = parseSkillFrontmatter(content);
+          const displayName = (typeof meta.name === 'string' && meta.name.trim()) || entry.name;
+          const description = (typeof meta.description === 'string' && meta.description.trim()) || '';
+
+          external.push({
+            id: `claude:${entry.name}`,
+            name: `[Claude] ${displayName}`,
+            source: 'custom',
+            description_en: description,
+            description_zh: description,
+            category: 'external',
+            enabled: true,
+          });
+        } catch (err) {
+          log.warn(`failed to read Claude skill ${entry.name}:`, err);
+        }
+      }
+    }
+  } catch (err) {
+    log.warn('failed to scan Claude Code skills:', err);
+  }
+
+  // Codex skills from ~/.codex/skills/.system/
+  try {
+    const codexSkillsRoot = path.join(os.homedir(), '.codex', 'skills', '.system');
+    if (fs.existsSync(codexSkillsRoot)) {
+      const entries = fs.readdirSync(codexSkillsRoot, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+        const skillDir = path.join(codexSkillsRoot, entry.name);
+        const skillMdPath = path.join(skillDir, 'SKILL.md');
+        if (!fs.existsSync(skillMdPath)) continue;
+
+        try {
+          const content = fs.readFileSync(skillMdPath, 'utf8');
+          const meta = parseSkillFrontmatter(content);
+          const displayName = (typeof meta.name === 'string' && meta.name.trim()) || entry.name;
+          const description = (typeof meta.description === 'string' && meta.description.trim()) || '';
+
+          external.push({
+            id: `codex:${entry.name}`,
+            name: `[Codex] ${displayName}`,
+            source: 'custom',
+            description_en: description,
+            description_zh: description,
+            category: 'external',
+            enabled: true,
+          });
+        } catch (err) {
+          log.warn(`failed to read Codex skill ${entry.name}:`, err);
+        }
+      }
+    }
+  } catch (err) {
+    log.warn('failed to scan Codex skills:', err);
+  }
+
+  // External skills carry no receipt, and neither do custom ones — the overlay
+  // leaves unannotated what it cannot vouch for rather than labelling it
+  // `unchecked`, which would read as "scanned, nothing found".
+  return _overlaySkillSecurity([...internal, ...external]);
 }
 
 /** Dev-only: the agent-private (`ownerAgent`) skills hidden from `listSkills`.

@@ -60,19 +60,19 @@ function seedTemplateGroup() {
   fs.writeFileSync(path.join(dir, 'student.md'), [
     '# 学生（模板）',
     '',
-    '> 模板: student@1.0.0 | 已安装: 2026-08-04T00:00:00',
+    '> 模板: student@0.2.0-review.1 | 已安装: 2026-08-04T00:00:00',
     '',
-    '## 课程',
+    '## 学习背景',
     '',
-    '### 课程名称',
+    '### 教育阶段',
     '',
-    '### 学校',
+    '### 专业与学习方向',
     '',
     '### 流水',
     '',
-    '## 技能',
+    '## 目标与节奏',
     '',
-    '### 技能名',
+    '### 学习目标',
     '',
     '### 个人信息',
     '- 张浩，大三学生 [手动]',
@@ -112,16 +112,16 @@ describe('personal ontology template group routing', () => {
     const res = await groups.listGroupFields(UID, GROUP_ID);
     expect(res.ok).toBe(true);
     const names = (res.fields || []).map((f) => f.name);
-    // 跨分节：课程 + 技能 的字段都在，流水小节不进字段清单
-    expect(names).toContain('课程名称');
-    expect(names).toContain('学校');
-    expect(names).toContain('技能名');
+    // 跨分节：学习背景 + 目标与节奏 的字段都在，流水小节不进字段清单
+    expect(names).toContain('教育阶段');
+    expect(names).toContain('专业与学习方向');
+    expect(names).toContain('学习目标');
     expect(names).toContain('个人信息');
     expect(names).not.toContain('流水');
     // T-box 字段 isCustom=false，升格出来的「个人信息」isCustom=true
     const byName = Object.fromEntries((res.fields || []).map((f) => [f.name, f]));
-    expect(byName['课程名称'].isCustom).toBe(false);
-    expect(byName['技能名'].isCustom).toBe(false);
+    expect(byName['教育阶段'].isCustom).toBe(false);
+    expect(byName['学习目标'].isCustom).toBe(false);
     expect(byName['个人信息'].isCustom).toBe(true);
     // 值保留（含来源标记）
     expect(byName['个人信息'].values).toEqual([{ value: '张浩，大三学生', source: '手动' }]);
@@ -134,16 +134,16 @@ describe('personal ontology template group routing', () => {
     const res = await poc.confirmCandidate(UID, 'cand-tbox-1', {
       toGlobalMemory: false,
       toGroupIds: [GROUP_ID],
-      targetField: '课程名称',
+      targetField: '教育阶段',
     });
     expect(res.ok).toBe(true);
     expect(res.fieldWrites).toEqual([
-      expect.objectContaining({ groupId: GROUP_ID, fieldName: '课程名称', ok: true }),
+      expect.objectContaining({ groupId: GROUP_ID, fieldName: '教育阶段', ok: true }),
     ]);
-    // 值写入「课程」分节的「课程名称」小节，来源=候选
+    // 值写入「学习背景」分节的「教育阶段」小节，来源=候选
     const text = fs.readFileSync(path.join(groupsDir(), 'student.md'), 'utf8');
-    // 注意：split 分隔符必须带换行锚点，避免误匹配 `### 课程名称` 字段标题里的子串
-    const courseSection = text.split('\n## 课程\n')[1].split('\n## 技能\n')[0];
+    // 注意：split 分隔符必须带换行锚点，避免误匹配 `### 教育阶段` 字段标题里的子串
+    const courseSection = text.split('\n## 学习背景\n')[1].split('\n## 目标与节奏\n')[0];
     expect(courseSection).toContain('- 本学期修财务管理课程 [候选]');
     // 未污染其他分节/流水
     expect(courseSection).not.toContain('### 个人信息');
@@ -167,10 +167,10 @@ describe('personal ontology template group routing', () => {
     ]);
     const text = fs.readFileSync(path.join(groupsDir(), 'student.md'), 'utf8');
     // 自定义字段「个人信息」未被候选追加新值（仍是原来的 1 条）
-    const skillSection = text.split('\n## 技能\n')[1];
+    const skillSection = text.split('\n## 目标与节奏\n')[1];
     expect(skillSection.match(/- .+ \[手动\]/g) || []).toHaveLength(1);
-    // 回退到首个分节（课程）流水区
-    const courseSection = text.split('\n## 课程\n')[1].split('\n## 技能\n')[0];
+    // 回退到首个分节（学习背景）流水区
+    const courseSection = text.split('\n## 学习背景\n')[1].split('\n## 目标与节奏\n')[0];
     expect(courseSection.split('### 流水')[1]).toContain('自定义字段拦截测试');
   });
 
@@ -184,7 +184,7 @@ describe('personal ontology template group routing', () => {
     });
     expect(res.ok).toBe(true);
     const text = fs.readFileSync(path.join(groupsDir(), 'student.md'), 'utf8');
-    const courseSection = text.split('\n## 课程\n')[1].split('\n## 技能\n')[0];
+    const courseSection = text.split('\n## 学习背景\n')[1].split('\n## 目标与节奏\n')[0];
     expect(courseSection.split('### 流水')[1]).toContain('无字段建议的候选');
     // 普通组路径不受影响：字段区不应出现
     expect(text).not.toContain('## 字段区');
