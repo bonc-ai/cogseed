@@ -7,6 +7,7 @@
  */
 import { safeId } from '../storage';
 import * as personalContext from '../features/personal_context/manager';
+import * as personalContextApplication from '../features/personal_context/application';
 import { parseResourceKey, RESOURCE_TYPES } from '../features/personal_context/contract';
 import { PersonalContextRegistry } from '../features/personal_context/registry';
 import { ScopeManifestStore } from '../features/personal_context/scope-manifest';
@@ -128,3 +129,59 @@ export const invokeHandlers: Record<string, (payload: Record<string, unknown>, c
 };
 
 export { PROVIDER_ID };
+
+/** Aggregate dashboard surface. Low-level compatibility handlers above remain until renderer migration. */
+function dashboardMode(value: unknown): 'real' | 'demo' {
+  if (value !== 'real' && value !== 'demo') throw new Error('invalid personal context mode');
+  return value;
+}
+
+function candidateId(value: unknown): string {
+  if (typeof value !== 'string' || !safeId(value)) throw new Error('invalid candidate id');
+  return value;
+}
+
+invokeHandlers['personal_context.dashboard.get'] = async (_payload, ctx) => ({
+  dashboard: await personalContextApplication.getDashboard(ctx.userId),
+});
+
+invokeHandlers['personal_context.mode.set'] = async (payload, ctx) => ({
+  dashboard: await personalContextApplication.setMode(ctx.userId, dashboardMode(payload?.mode)),
+});
+
+invokeHandlers['personal_context.authorize.begin'] = async (payload, ctx) => ({
+  dashboard: await personalContextApplication.beginAuthorization(ctx.userId, instanceId(payload?.instanceId)),
+});
+
+invokeHandlers['personal_context.authorize.cancel'] = async (_payload, ctx) => ({
+  dashboard: await personalContextApplication.cancelAuthorization(ctx.userId),
+});
+
+invokeHandlers['personal_context.authorize.revoke'] = async (_payload, ctx) => ({
+  dashboard: await personalContextApplication.revokeAuthorization(ctx.userId),
+});
+
+invokeHandlers['personal_context.resources.discover'] = async (_payload, ctx) =>
+  personalContextApplication.discoverResources(ctx.userId);
+
+invokeHandlers['personal_context.resources.select'] = async (payload, ctx) => ({
+  dashboard: await personalContextApplication.selectResources(ctx.userId, scopeResources(payload?.resources)),
+});
+
+invokeHandlers['personal_context.sync.start'] = async (_payload, ctx) => ({
+  dashboard: await personalContextApplication.startSync(ctx.userId),
+});
+
+invokeHandlers['personal_context.review.list'] = async (_payload, ctx) =>
+  personalContextApplication.listReviewItems(ctx.userId);
+
+invokeHandlers['personal_context.review.approve'] = async (payload, ctx) => ({
+  dashboard: await personalContextApplication.approveReviewItem(ctx.userId, candidateId(payload?.candidateId)),
+});
+
+invokeHandlers['personal_context.review.reject'] = async (payload, ctx) => ({
+  dashboard: await personalContextApplication.rejectReviewItem(ctx.userId, candidateId(payload?.candidateId)),
+});
+
+invokeHandlers['personal_context.briefing.preview'] = async (_payload, ctx) =>
+  personalContextApplication.previewBriefing(ctx.userId);
