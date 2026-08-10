@@ -6,7 +6,7 @@
   const CATEGORY_ORDER = Object.freeze(['personal', 'rule', 'template', 'skill_method']);
 
   function normalizeRecallLocation(page) {
-    const value = String(page || '').trim();
+    const value = typeof page === 'string' ? page.trim() : '';
     if (value === 'sources' || value === 'captures' || value === 'candidates') {
       return { page: 'deposition', subview: value };
     }
@@ -19,7 +19,7 @@
   }
 
   function normalizeAbilityCategory(value) {
-    const category = String(value || '').trim();
+    const category = typeof value === 'string' ? value.trim() : '';
     if (category === 'personal' || category === 'preference' || category === 'ontology') return 'personal';
     if (category === 'rule') return 'rule';
     if (category === 'template') return 'template';
