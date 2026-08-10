@@ -3055,5 +3055,17 @@
   "spaces.tab_resources": "リソース",
   "spaces.template_label": "ロールテンプレート（任意）",
   "spaces.tpl_builtin": "テンプレート標準装備（ロールテンプレート由来・読み取り専用）",
-  "spaces.tpl_bundle": "標準装備"
+  "spaces.tpl_bundle": "標準装備",
+  "cognition.product_title": "CogSeed",
+  "cognition.product_subtitle": "エージェント横断の個人能力アセット層",
+  "cognition.deposition": "認知の蓄積",
+  "cognition.ability_assets": "能力アセット",
+  "cognition.pending_knowledge": "確認待ちの認知",
+  "cognition.organize_tasks": "整理タスク",
+  "cognition.pipeline_tasks": "整理タスク",
+  "cognition.pipeline_pending": "確認待ちの認知",
+  "cognition.review_next": "レビューを開始",
+  "cognition.open_deposition": "認知の蓄積を見る",
+  "cognition.organize_recent": "最近の作業を整理",
+  "cognition.next_action": "次のステップ"
 }

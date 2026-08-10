@@ -164,7 +164,7 @@ describe('Recall cognition workspace layout', () => {
     expect(skills).toContain("window.orkas.invoke('recall.captures.list'");
     expect(skills).toContain('skills-cognition-source-row');
     expect(skills).toContain('skills-cognition-capture-row');
-    expect(skills).toContain('data-cognition-page-link="candidates"');
+    expect(skills).toContain('data-cognition-page-link="deposition"');
     expect(skills).toContain('data-recall-capture-retry');
     expect(skills).toContain('data-recall-capture-settings');
     expect(bindings).toContain("window.orkas.invoke('recall.captures.retry'");

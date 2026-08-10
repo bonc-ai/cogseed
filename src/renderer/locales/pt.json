@@ -3055,5 +3055,17 @@
   "spaces.tab_resources": "Recursos",
   "spaces.template_label": "Modelo de função (opcional)",
   "spaces.tpl_builtin": "Padrões do modelo (do modelo de função, somente leitura)",
-  "spaces.tpl_bundle": "inclui"
+  "spaces.tpl_bundle": "inclui",
+  "cognition.product_title": "CogSeed",
+  "cognition.product_subtitle": "Camada de ativos de capacidade pessoal entre agentes",
+  "cognition.deposition": "Deposição cognitiva",
+  "cognition.ability_assets": "Ativos de capacidade",
+  "cognition.pending_knowledge": "Conhecimento a confirmar",
+  "cognition.organize_tasks": "Tarefas de organização",
+  "cognition.pipeline_tasks": "Tarefas de organização",
+  "cognition.pipeline_pending": "Conhecimento a confirmar",
+  "cognition.review_next": "Iniciar revisão",
+  "cognition.open_deposition": "Ver deposição cognitiva",
+  "cognition.organize_recent": "Organizar trabalho recente",
+  "cognition.next_action": "Próximo passo"
 }

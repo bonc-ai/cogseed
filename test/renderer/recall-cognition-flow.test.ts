@@ -281,12 +281,15 @@ describe('Recall cognition renderer flow', () => {
     for (const label of ['会话', 'Artifact 与文件', '执行与评价', '用户教学信号', '授权外部系统']) {
       expect(overview.innerHTML).toContain(label);
     }
-    expect(overview.innerHTML).toContain('RecallView');
-    expect(overview.innerHTML).toContain('待审 Candidate');
+    for (const label of ['下一步', '认知沉淀', '关于我', '规则与判断', '模板与范例', '技能与方法']) {
+      expect(overview.innerHTML).toContain(label);
+    }
+    expect(overview.innerHTML).not.toContain('RecallView');
+    expect(overview.innerHTML).not.toContain('待审 Candidate');
     expect(overview.innerHTML).toContain('以后保持决策可追溯');
     expect(overview.innerHTML).toContain('已恢复处理');
     expect(overview.innerHTML).toContain('data-recall-teaching-revoke="teach-a"');
-    expect(overview.innerHTML).toContain('data-cognition-page-link="candidates"');
+    expect(overview.innerHTML).toContain('data-cognition-page-link="deposition"');
   });
 
   it('renders existing Orkas data across sources, Brain, Context Pack, and Ontology', () => {

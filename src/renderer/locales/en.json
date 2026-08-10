@@ -3275,5 +3275,17 @@
   "spaces.tab_resources": "Resources",
   "spaces.template_label": "Role template (optional)",
   "spaces.tpl_builtin": "Template built-ins (from role template, read-only)",
-  "spaces.tpl_bundle": "includes"
+  "spaces.tpl_bundle": "includes",
+  "cognition.product_title": "CogSeed",
+  "cognition.product_subtitle": "Personal capability asset layer across agents",
+  "cognition.deposition": "Cognition deposition",
+  "cognition.ability_assets": "Capability assets",
+  "cognition.pending_knowledge": "Knowledge to confirm",
+  "cognition.organize_tasks": "Organization tasks",
+  "cognition.pipeline_tasks": "Organization tasks",
+  "cognition.pipeline_pending": "Knowledge to confirm",
+  "cognition.review_next": "Start review",
+  "cognition.open_deposition": "View cognition deposition",
+  "cognition.organize_recent": "Organize recent work",
+  "cognition.next_action": "Next step"
 }
