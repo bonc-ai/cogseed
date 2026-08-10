@@ -443,7 +443,7 @@ export const codexBackend: LocalBackend = {
     (async () => {
       try {
         await rpc('initialize', {
-          clientInfo: { name: 'orkas', title: 'Orkas', version: '0.1.0' },
+          clientInfo: { name: 'cogseed', title: 'CogSeed', version: '0.1.0' },
           capabilities: { experimentalApi: true },
         });
         notify('initialized');
@@ -510,12 +510,12 @@ export const codexBackend: LocalBackend = {
 };
 
 /**
- * orkas-bridge context for codex (plan §D3): the prompt that tells the
- * agent it runs inside Orkas and which `orkas` MCP tools exist. Passed as
+ * cogseed-bridge context for codex (plan §D3): the prompt that tells the
+ * agent it runs inside CogSeed and which `cogseed` MCP tools exist. Passed as
  * codex's `developerInstructions` — the protocol-level slot for this —
  * preferred over writing an AGENTS.md into cwd (no file pollution, no
  * cleanup-on-crash, never clobbers the user's own AGENTS.md). The bridge
- * config injection (`-c mcp_servers.orkas.*`) already connects the server;
+ * config injection (`-c mcp_servers.cogseed.*`) already connects the server;
  * this makes the agent reach for it. Returns null when no bridge is live.
  * Exported for tests.
  */
@@ -527,11 +527,11 @@ function buildCodexArgs(opts: BackendRunOptions): string[] {
   // Per multica: `codex app-server --listen stdio://` is the entry
   // point for the JSON-RPC protocol. customArgs trail.
   const args = ['app-server', '--listen', 'stdio://'];
-  // orkas-bridge: codex takes config-layer overrides (`-c key=value`,
+  // cogseed-bridge: codex takes config-layer overrides (`-c key=value`,
   // TOML-parsed) instead of a config file. Codex spawns stdio MCP servers
   // with a sanitized env (PATH/HOME only) — it does NOT inherit this Codex
   // process's env — so the non-secret bridge env must be injected via `-c
-  // mcp_servers.orkas.env.*`. The token/socket are NOT here; they live in
+  // mcp_servers.cogseed.env.*`. The token/socket are NOT here; they live in
   // the 0600 file that ORKAS_BRIDGE_ENV_FILE points at, so they never hit argv.
   if (opts.bridge) args.push(...buildCodexBridgeOverrides(opts.bridge.server));
   if (opts.customArgs && opts.customArgs.length) args.push(...opts.customArgs);
@@ -539,28 +539,28 @@ function buildCodexArgs(opts: BackendRunOptions): string[] {
 }
 
 /** Secret-bearing bridge env keys that must never be serialized into argv.
- *  They reach orkas-bridge.cjs through the 0600 file referenced by
+ *  They reach cogseed-bridge.cjs through the 0600 file referenced by
  *  ORKAS_BRIDGE_ENV_FILE, which IS injected (it is just a path). */
 const CODEX_BRIDGE_SECRET_ENV_KEYS = new Set(['ORKAS_BRIDGE_TOKEN', 'ORKAS_BRIDGE_SOCKET']);
 
-/** `-c mcp_servers.orkas.*` override args from the bridge server entry.
+/** `-c mcp_servers.cogseed.*` override args from the bridge server entry.
  *  Values are TOML: strings quoted, args as an inline array. The non-secret
- *  env is injected as `mcp_servers.orkas.env.<KEY>` because Codex spawns MCP
+ *  env is injected as `mcp_servers.cogseed.env.<KEY>` because Codex spawns MCP
  *  servers with a sanitized env and does NOT inherit this process's env —
- *  without it orkas-bridge.cjs exits "env required" and the agent gets no
- *  orkas_* tools (skills/connectors/KB). Token/socket are filtered out so
+ *  without it cogseed-bridge.cjs exits "env required" and the agent gets no
+ *  cogseed_* tools (skills/connectors/KB). Token/socket are filtered out so
  *  they never land in argv/events.
  *  Exported for tests. */
 export function buildCodexBridgeOverrides(server: { command: string; args: string[]; env?: Record<string, string> }): string[] {
   const tomlStr = (s: string) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
   const argsToml = `[${server.args.map(tomlStr).join(', ')}]`;
   const overrides = [
-    '-c', `mcp_servers.orkas.command=${tomlStr(server.command)}`,
-    '-c', `mcp_servers.orkas.args=${argsToml}`,
+    '-c', `mcp_servers.cogseed.command=${tomlStr(server.command)}`,
+    '-c', `mcp_servers.cogseed.args=${argsToml}`,
   ];
   for (const [key, value] of Object.entries(server.env || {})) {
     if (value == null || CODEX_BRIDGE_SECRET_ENV_KEYS.has(key)) continue;
-    overrides.push('-c', `mcp_servers.orkas.env.${key}=${tomlStr(value)}`);
+    overrides.push('-c', `mcp_servers.cogseed.env.${key}=${tomlStr(value)}`);
   }
   return overrides;
 }
