@@ -86,12 +86,13 @@
     "tar": "7.5.20"
   },
   "build": {
-    "appId": "com.mateagent.desktop",
+    "appId": "com.cogseed.desktop",
     "productName": "CogSeed",
     "protocols": [
       {
         "name": "CogSeed Connector Callback",
         "schemes": [
+          "cogseed",
           "mateagent",
           "orkas"
         ],

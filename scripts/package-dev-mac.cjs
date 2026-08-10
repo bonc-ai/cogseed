@@ -14,7 +14,7 @@ function clone(value) {
 
 function createDevBuilderConfig(baseConfig = {}, identity = {}, options = {}) {
   const config = clone(baseConfig) || {};
-  config.appId = 'com.mateagent.desktop.dev';
+  config.appId = 'com.cogseed.desktop.dev';
   config.productName = 'CogSeed Dev';
   if (options.electronDist) config.electronDist = options.electronDist;
   delete config.protocols;

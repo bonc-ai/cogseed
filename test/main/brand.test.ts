@@ -12,9 +12,9 @@ describe('CogSeed brand contract', () => {
     expect(brand).toEqual({
       appName: 'CogSeed',
       zhName: 'CogSeed',
-      appId: 'com.mateagent.desktop',
-      protocolScheme: 'mateagent',
-      legacyConnectorScheme: 'orkas',
+      appId: 'com.cogseed.desktop',
+      protocolScheme: 'cogseed',
+      legacyConnectorSchemes: ['mateagent', 'orkas'],
       taglineZh: '跨 Agent 的个人能力资产层',
     });
   });
@@ -29,7 +29,7 @@ describe('CogSeed brand contract', () => {
     expect(pkg.build.protocols).toEqual([
       expect.objectContaining({
         name: 'CogSeed Connector Callback',
-        schemes: [brand.protocolScheme, brand.legacyConnectorScheme],
+        schemes: [brand.protocolScheme, ...brand.legacyConnectorSchemes],
       }),
     ]);
     expect(pkg.build.files).toContain('src/resources/brand.json');

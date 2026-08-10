@@ -12,9 +12,9 @@ const {
 describe('isolated mac development packaging', () => {
   it('derives a packaged-dev builder config without mutating production config', () => {
     const base = {
-      appId: 'com.mateagent.desktop',
+      appId: 'com.cogseed.desktop',
       productName: 'CogSeed',
-      protocols: [{ schemes: ['mateagent', 'orkas'] }],
+      protocols: [{ schemes: ['cogseed', 'mateagent', 'orkas'] }],
       directories: { output: 'dist' },
       files: ['bootstrap.cjs'],
       extraMetadata: { retained: true },
@@ -25,7 +25,7 @@ describe('isolated mac development packaging', () => {
 
     expect(base).toEqual(snapshot);
     expect(config).toMatchObject({
-      appId: 'com.mateagent.desktop.dev',
+      appId: 'com.cogseed.desktop.dev',
       productName: 'CogSeed Dev',
       electronDist: '/cache/electron.zip',
       directories: { output: 'dist-dev' },

@@ -5,14 +5,32 @@ export const APP_BRAND = Object.freeze({
   zhName: brand.zhName,
   appId: brand.appId,
   protocolScheme: brand.protocolScheme,
-  legacyConnectorScheme: brand.legacyConnectorScheme,
+  legacyConnectorSchemes: brand.legacyConnectorSchemes,
   taglineZh: brand.taglineZh,
 });
 
 export const CONNECTOR_PROTOCOL_SCHEMES = Object.freeze([
   APP_BRAND.protocolScheme,
-  APP_BRAND.legacyConnectorScheme,
+  ...APP_BRAND.legacyConnectorSchemes,
 ] as const);
+
+
+export type NormalizedDeepLink = Readonly<{ scheme: string; href: string; url: URL }>;
+
+export function normalizeDeepLink(rawUrl: string): NormalizedDeepLink | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  const scheme = parsed.protocol.replace(/:$/, '');
+  if (!(CONNECTOR_PROTOCOL_SCHEMES as readonly string[]).includes(scheme)) return null;
+  if (scheme !== APP_BRAND.protocolScheme) {
+    parsed = new URL(rawUrl.replace(/^[^:]+:/, `${APP_BRAND.protocolScheme}:`));
+  }
+  return Object.freeze({ scheme: APP_BRAND.protocolScheme, href: parsed.href, url: parsed });
+}
 
 export const RUNTIME_VARIANTS = Object.freeze([
   'main',

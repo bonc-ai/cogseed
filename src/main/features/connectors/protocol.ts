@@ -12,7 +12,7 @@
 import * as path from 'node:path';
 import { app, BrowserWindow } from 'electron';
 
-import { CONNECTOR_PROTOCOL_SCHEMES } from '../../brand';
+import { CONNECTOR_PROTOCOL_SCHEMES, normalizeDeepLink } from '../../brand';
 import { createLogger } from '../../logger';
 import { safeUrlAction } from '../../util/log-redact';
 import { handleCallbackUrl, handleDcrCallbackUrl } from './index';
@@ -24,11 +24,9 @@ const DCR_CALLBACK_PATH = '/oauth/dcr-callback';
 let _pending: string | null = null;
 
 function _connectorCallbackKind(rawUrl: string): 'server' | 'dcr' | null {
-  let parsed: URL;
-  try { parsed = new URL(rawUrl); }
-  catch { return null; }
-  const scheme = parsed.protocol.replace(/:$/, '');
-  if (!CONNECTOR_PROTOCOL_SCHEMES.includes(scheme as typeof CONNECTOR_PROTOCOL_SCHEMES[number])) return null;
+  const normalized = normalizeDeepLink(rawUrl);
+  if (!normalized) return null;
+  const parsed = normalized.url;
   if (parsed.host.toLowerCase() !== 'connectors') return null;
   const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
   if (pathname === SERVER_CALLBACK_PATH) return 'server';
@@ -52,7 +50,8 @@ function _focusMainWindow(): void {
 }
 
 async function _dispatch(rawUrl: string): Promise<void> {
-  const kind = _connectorCallbackKind(rawUrl);
+  const normalized = normalizeDeepLink(rawUrl);
+  const kind = normalized ? _connectorCallbackKind(normalized.href) : null;
   if (!kind) {
     log.warn('ignored non-connector deep link', { action: safeUrlAction(rawUrl) });
     return;
@@ -64,8 +63,8 @@ async function _dispatch(rawUrl: string): Promise<void> {
   log.info('connector deep link received', { action: safeUrlAction(rawUrl), kind });
   _focusMainWindow();
   try {
-    if (kind === 'dcr') await handleDcrCallbackUrl(rawUrl);
-    else await handleCallbackUrl(rawUrl);
+    if (kind === 'dcr') await handleDcrCallbackUrl(normalized?.href || rawUrl);
+    else await handleCallbackUrl(normalized?.href || rawUrl);
   } catch (err) {
     log.warn('connector deep link handling failed', { error: (err as Error).message, kind });
   }
@@ -92,7 +91,8 @@ export function registerConnectorProtocol(options: Readonly<{ owner: boolean }>)
     }
 
     app.on('open-url', (event, rawUrl) => {
-      if (!_connectorCallbackKind(rawUrl)) return;
+      const normalized = normalizeDeepLink(rawUrl);
+      if (!normalized || !_connectorCallbackKind(normalized.href)) return;
       event.preventDefault();
       void _dispatch(rawUrl);
     });

@@ -42,7 +42,7 @@ function sourceRuntimeBundleSpec(value) {
   return Object.freeze({
     ...identity,
     protocolSchemes: identity.protocolOwner
-      ? Object.freeze([brand.protocolScheme, brand.legacyConnectorScheme])
+      ? Object.freeze([brand.protocolScheme, ...(brand.legacyConnectorSchemes || [brand.legacyConnectorScheme]).filter(Boolean)])
       : Object.freeze([]),
   });
 }
