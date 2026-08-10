@@ -103,6 +103,51 @@ describe('Recall cognition renderer flow', () => {
     expect(vm.runInContext('rendered', context)).toBe('assets:reuse');
   });
 
+
+  it('keeps every legacy Recall route normalized to the three-page model', () => {
+    const legacy = ['overview', 'sources', 'captures', 'candidates', 'brain', 'context', 'ontology', 'receipts', 'assets'];
+    for (const page of legacy) {
+      const location = normalizeRecallLocation(page);
+      expect(['overview', 'deposition', 'assets']).toContain(location.page);
+    }
+    expect(normalizeRecallLocation('ontology')).toEqual({ page: 'assets', subview: 'list', category: 'personal' });
+    expect(normalizeRecallLocation('receipts')).toEqual({ page: 'assets', subview: 'reuse' });
+    expect(skillsSource).toContain('function openRecallTarget');
+  });
+
+  it('routes legacy links through openRecallTarget without persisting removed page ids', () => {
+    const context = loadSkillsRenderer();
+    const pageBodies = ['overview', 'deposition', 'assets'].map((page) => ({ dataset: { cognitionPageBody: page }, hidden: false }));
+    const pageTabs = ['overview', 'deposition', 'assets'].map((page) => ({ dataset: { cognitionPage: page }, classList: { toggle() {} }, setAttribute() {} }));
+    context.window.RecallInformationArchitecture = { normalizeRecallLocation };
+    context.document = {
+      querySelectorAll: (selector: string) => {
+        if (selector === '[data-cognition-page-body]') return pageBodies;
+        if (selector === '[data-cognition-page]') return pageTabs;
+        return [];
+      },
+      getElementById: () => ({ innerHTML: '' }),
+    };
+    vm.runInContext(`
+      renderSkillsCognitionOverview = function () {};
+      renderSkillsCognitionDeposition = function () {};
+      renderSkillsCognitionAssets = function () {};
+    `, context);
+
+    context.openRecallTarget('ontology');
+    expect(vm.runInContext('_skillsCognitionState.page', context)).toBe('assets');
+    expect(vm.runInContext('_skillsCognitionState.assetCategoryFilter', context)).toBe('personal');
+    expect(vm.runInContext('_skillsCognitionState.assetSubview', context)).toBe('list');
+
+    context.openRecallTarget('receipts');
+    expect(vm.runInContext('_skillsCognitionState.page', context)).toBe('assets');
+    expect(vm.runInContext('_skillsCognitionState.assetSubview', context)).toBe('reuse');
+
+    context.openRecallTarget('deposition', { depositionView: 'candidates' });
+    expect(vm.runInContext('_skillsCognitionState.page', context)).toBe('deposition');
+    expect(vm.runInContext('_skillsCognitionState.depositionView', context)).toBe('candidates');
+  });
+
   it('renders Recall candidates with the shared four-category filters', () => {
     const context = loadSkillsRenderer();
     const host = { innerHTML: '' };

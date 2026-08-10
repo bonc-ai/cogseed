@@ -132,16 +132,22 @@ function _renderCognitionPage(page) {
   else if (page === 'assets') renderSkillsCognitionAssets();
 }
 
-function switchSkillsCognitionPage(page) {
+function openRecallTarget(page, options = {}) {
   const location = _normalizeRecallLocation(page);
   _skillsCognitionState.page = location.page;
-  if (location.page === 'deposition') _skillsCognitionState.depositionView = location.subview || 'candidates';
-  if (location.page === 'assets') {
-    _skillsCognitionState.assetSubview = location.subview || 'list';
-    if (location.category) _skillsCognitionState.assetCategoryFilter = location.category;
+  if (location.page === 'deposition') {
+    _skillsCognitionState.depositionView = options.depositionView || location.subview || _skillsCognitionState.depositionView || 'candidates';
   }
-  _cognitionSetPageVisibility(location.page);
-  _renderCognitionPage(location.page);
+  if (location.page === 'assets') {
+    _skillsCognitionState.assetSubview = options.assetSubview || location.subview || _skillsCognitionState.assetSubview || 'list';
+    if (options.category || location.category) _skillsCognitionState.assetCategoryFilter = options.category || location.category;
+  }
+  _cognitionSetPageVisibility(_skillsCognitionState.page);
+  _renderCognitionPage(_skillsCognitionState.page);
+}
+
+function switchSkillsCognitionPage(page) {
+  openRecallTarget(page);
 }
 
 function _renderCognitionLoading(host) {
@@ -899,8 +905,7 @@ async function openSkillsCognitionReceiptDetail(executionId) {
       _skillsCognitionState.receiptDetails[id] = { executionId: id, receiptId: id, status: 'degraded', targetSessionId: id, reusedRefs: [], omittedRefs: [], allowedScopes: [], permissionMode: '', boundary: 'degraded', error: (error && error.message) || String(error) };
     }
   }
-  switchSkillsCognitionPage('receipts');
-  renderSkillsCognitionReceipts();
+  openRecallTarget('receipts');
 }
 
 function renderSkillsCognitionReceipts() {

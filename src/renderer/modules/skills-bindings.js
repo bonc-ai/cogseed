@@ -68,7 +68,7 @@ function _initSkillsCognitionBindings() {
   document.getElementById('skills-cognition-tabs')?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-cognition-page]');
     if (!button) return;
-    switchSkillsCognitionPage(button.dataset.cognitionPage || 'overview');
+    openRecallTarget(button.dataset.cognitionPage || 'overview');
   });
 
   document.getElementById('skills-cognition-deposition-tabs')?.addEventListener('click', (event) => {
@@ -102,9 +102,11 @@ function _initSkillsCognitionBindings() {
 
     const pageLink = event.target.closest('[data-cognition-page-link]');
     if (pageLink) {
-      const targetView = pageLink.dataset.cognitionDepositionTarget;
-      if (targetView) _skillsCognitionState.depositionView = targetView;
-      switchSkillsCognitionPage(pageLink.dataset.cognitionPageLink || 'overview');
+      openRecallTarget(pageLink.dataset.cognitionPageLink || 'overview', {
+        depositionView: pageLink.dataset.cognitionDepositionTarget,
+        assetSubview: pageLink.dataset.cognitionAssetSubview,
+        category: pageLink.dataset.cognitionAssetCategory,
+      });
       return;
     }
 
@@ -149,7 +151,7 @@ function _initSkillsCognitionBindings() {
     const openAsset = event.target.closest('[data-cognition-open-asset]');
     if (openAsset) {
       _skillsCognitionState.selectedAssetId = openAsset.dataset.cognitionOpenAsset || '';
-      switchSkillsCognitionPage('assets');
+      openRecallTarget('assets');
       return;
     }
 
@@ -234,7 +236,7 @@ function _initSkillsCognitionBindings() {
         return;
       }
       if (actionName === 'view-candidates') {
-        switchSkillsCognitionPage('candidates');
+        openRecallTarget('candidates');
         return;
       }
       if (actionName === 'cancel' && typeof uiConfirm === 'function') {
@@ -324,7 +326,7 @@ function _initSkillsCognitionBindings() {
 
     const openCandidate = event.target.closest('[data-cognition-open-candidate]');
     if (openCandidate) {
-      switchSkillsCognitionPage('candidates');
+      openRecallTarget('candidates');
       return;
     }
 
