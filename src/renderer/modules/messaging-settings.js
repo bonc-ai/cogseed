@@ -486,19 +486,44 @@
     return labelFor(keys[status] || keys.disconnected, status);
   }
 
+  function switchActionForInstance(instance) {
+    if (instance && instance.hasCredentials === true) return 'toggle';
+    if (instance && instance.platform === 'feishu_lark') return 'bind';
+    return 'unavailable';
+  }
+
   function switchControl(instance) {
+    const action = switchActionForInstance(instance);
     const label = el('label', 'messaging-switch');
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.checked = instance.enabled === true;
-    input.disabled = state.updating || instance.hasCredentials !== true;
-    input.setAttribute('aria-label', labelFor('messaging.enabled', ''));
+    input.disabled = state.updating || action === 'unavailable' || (action === 'bind' && qrIsPending());
+    input.setAttribute('aria-label', labelFor(action === 'bind' ? 'messaging.scan' : 'messaging.enabled', ''));
     input.addEventListener('change', () => {
+      if (action === 'bind') {
+        // An unbound Feishu/Lark draft cannot be enabled yet. Treat the switch
+        // as the missing association affordance: start QR binding and keep the
+        // persisted enabled state off until activation succeeds atomically.
+        input.checked = false;
+        void startQr(instance);
+        return;
+      }
       const enabled = input.checked;
       void updateInstance({ enabled }, input);
     });
     const track = el('span', 'messaging-switch-track');
     track.setAttribute('aria-hidden', 'true');
+    track.addEventListener('click', (event) => {
+      if (action !== 'bind' || input.disabled) return;
+      // The visual track is the actual hit target; invoke the binding flow
+      // explicitly instead of relying on implicit label activation for the
+      // hidden checkbox, which is not reliable in Electron accessibility/UI
+      // automation and custom chrome combinations.
+      event.preventDefault();
+      input.checked = false;
+      void startQr(instance);
+    });
     label.append(input, track);
     return label;
   }
@@ -520,6 +545,9 @@
       statusRow.appendChild(el('span', 'messaging-qr-expiry', labelFor('messaging.feishu_qr.expires_at', '').replace('{time}', expiry)));
     }
     info.appendChild(statusRow);
+    if (instance.feishuTenantBrand === 'lark') {
+      info.appendChild(el('p', 'messaging-qr-lark-hint', labelFor('messaging.feishu_qr.lark_sign_in_hint', '')));
+    }
     const actions = el('div', 'messaging-qr-actions');
     if (state.qr.flowId && !QR_TERMINAL_STATES.has(state.qr.state)) {
       const cancel = el('button', 'btn messaging-secondary-button', labelFor('messaging.feishu_qr.cancel', ''));
@@ -1569,6 +1597,7 @@
         instancesForChannel,
         validateBotToken,
         parseWecomAuthMessage,
+        switchActionForInstance,
         wechatFlowActive,
         resetWechatFlow,
       },

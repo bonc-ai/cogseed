@@ -3002,6 +3002,7 @@
   "messaging.feishu_qr.status_expired": "The QR code expired; scan again",
   "messaging.feishu_qr.status_denied": "Authorization was denied",
   "messaging.feishu_qr.status_failed": "Feishu QR setup failed",
+  "messaging.feishu_qr.lark_sign_in_hint": "Lark (global) users: if the Feishu sign-in page appears after scanning, click “Switch to Lark sign-in” to authorize.",
   "messaging.wecom_bot_id": "WeCom Bot ID",
   "messaging.wecom_bot_id_placeholder": "WeCom bot ID",
   "messaging.wecom_bot_secret": "WeCom Bot Secret",

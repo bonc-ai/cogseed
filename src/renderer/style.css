@@ -12604,6 +12604,7 @@ body.model-not-configured .main-content { flex-direction: column; }
 .messaging-qr-status.is-completed { color: var(--success); }
 .messaging-qr-status-icon { width: 16px; height: 16px; }
 .messaging-qr-expiry { color: var(--muted); font-size: 12px; }
+.messaging-qr-lark-hint { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 6px; }
 .messaging-qr-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .messaging-preferences-card {
   padding: 0;

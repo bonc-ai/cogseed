@@ -463,7 +463,12 @@ describe('Feishu QR registration', () => {
       qrReady = options.onQRCodeReady;
       return registration.promise;
     });
-    const draft = clientInstance({ id: 'feishu-draft-1', enabled: false, hasCredentials: false });
+    const draft = clientInstance({
+      id: 'feishu-draft-1',
+      feishuTenantBrand: 'feishu',
+      enabled: false,
+      hasCredentials: false,
+    });
     const bound = clientInstance({ id: 'feishu-draft-1', enabled: false, hasCredentials: true });
     const bindFeishuDraft = vi.fn(async () => bound);
     const setEnabled = vi.fn(async () => clientInstance({ id: 'feishu-draft-1', enabled: true }));
@@ -502,6 +507,95 @@ describe('Feishu QR registration', () => {
     expect(JSON.stringify(feature.getFeishuQrRegistrationStatus('user-1', started.flowId))).not.toContain('secret-value');
   });
 
+  it('starts an existing Lark draft through the shared accounts domain and preserves its tenant brand', async () => {
+    const registration = deferred<{ client_id: string; client_secret: string; user_info: { tenant_brand: 'lark'; open_id: string } }>();
+    const registerApp = vi.fn(() => registration.promise);
+    const draft = clientInstance({
+      id: 'lark-draft-1',
+      feishuTenantBrand: 'lark',
+      enabled: false,
+      hasCredentials: false,
+    });
+    const bindFeishuDraft = vi.fn(async () => clientInstance({ id: 'lark-draft-1', enabled: false }));
+    vi.doMock('@larksuiteoapi/node-sdk', () => ({ registerApp }));
+    vi.doMock('../../../src/main/features/messaging/manager', () => ({
+      setEnabled: vi.fn(async () => clientInstance({ id: 'lark-draft-1', enabled: true })),
+      deleteInstance: vi.fn(async () => true),
+    }));
+    vi.doMock('../../../src/main/features/messaging/registry', () => ({
+      isValidInstanceId: vi.fn(() => true),
+      getInstance: vi.fn(async () => draft),
+      getInstanceWithSecret: vi.fn(async () => null),
+      bindFeishuDraft,
+      revokeFeishuDraftCredentials: vi.fn(async () => ({ revoked: false, instance: null })),
+    }));
+
+    const feature = await import('../../../src/main/features/messaging/feishu-registration');
+    const started = await feature.startFeishuQrRegistrationForInstance('user-1', 'lark-draft-1');
+
+    expect(started.state).toBe('starting');
+    // Lark codes are only recognized by the launcher when issued from the
+    // shared accounts.feishu.cn domain, so the SDK must stay on its default
+    // domain for every brand; the brand is applied at activation time.
+    expect(registerApp).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'desktop-messaging',
+      appPreset: expect.objectContaining({ name: 'Team helper' }),
+    }));
+    expect(registerApp.mock.calls[0][0]).not.toHaveProperty('domain');
+    expect(registerApp.mock.calls[0][0]).not.toHaveProperty('larkDomain');
+
+    registration.resolve({
+      client_id: 'cli_1234567890abcdef',
+      client_secret: 'secret-value',
+      user_info: { tenant_brand: 'lark', open_id: 'ou_lark_owner' },
+    });
+    await vi.waitFor(() => expect(feature.getFeishuQrRegistrationStatus('user-1', started.flowId).state).toBe('completed'));
+    expect(bindFeishuDraft).toHaveBeenCalledWith('user-1', 'lark-draft-1', expect.objectContaining({
+      feishuTenantBrand: 'lark',
+      initialAllowUserId: 'ou_lark_owner',
+    }));
+  });
+
+  it('rejects a scan result whose tenant brand does not match the selected draft channel', async () => {
+    const registration = deferred<{ client_id: string; client_secret: string; user_info: { tenant_brand: 'feishu'; open_id: string } }>();
+    const registerApp = vi.fn(() => registration.promise);
+    const draft = clientInstance({
+      id: 'lark-draft-1',
+      feishuTenantBrand: 'lark',
+      enabled: false,
+      hasCredentials: false,
+    });
+    const bindFeishuDraft = vi.fn();
+    const setEnabled = vi.fn();
+    vi.doMock('@larksuiteoapi/node-sdk', () => ({ registerApp }));
+    vi.doMock('../../../src/main/features/messaging/manager', () => ({
+      setEnabled,
+      deleteInstance: vi.fn(async () => true),
+    }));
+    vi.doMock('../../../src/main/features/messaging/registry', () => ({
+      isValidInstanceId: vi.fn(() => true),
+      getInstance: vi.fn(async () => draft),
+      getInstanceWithSecret: vi.fn(async () => null),
+      bindFeishuDraft,
+      revokeFeishuDraftCredentials: vi.fn(async () => ({ revoked: false, instance: null })),
+    }));
+
+    const feature = await import('../../../src/main/features/messaging/feishu-registration');
+    const started = await feature.startFeishuQrRegistrationForInstance('user-1', 'lark-draft-1');
+    registration.resolve({
+      client_id: 'cli_1234567890abcdef',
+      client_secret: 'secret-value',
+      user_info: { tenant_brand: 'feishu', open_id: 'ou_wrong_brand' },
+    });
+
+    await vi.waitFor(() => expect(feature.getFeishuQrRegistrationStatus('user-1', started.flowId)).toMatchObject({
+      state: 'failed',
+      errorCode: 'activation_failed',
+    }));
+    expect(bindFeishuDraft).not.toHaveBeenCalled();
+    expect(setEnabled).not.toHaveBeenCalled();
+  });
+
   it('revokes draft credentials when a bound scan is cancelled and keeps the draft', async () => {
     const registration = deferred<{ client_id: string; client_secret: string; user_info: { tenant_brand: 'feishu'; open_id: string; name: string } }>();
     const binding = deferred<ReturnType<typeof clientInstance>>();
@@ -510,7 +604,12 @@ describe('Feishu QR registration', () => {
       qrReady = options.onQRCodeReady;
       return registration.promise;
     });
-    const draft = clientInstance({ id: 'feishu-draft-1', enabled: false, hasCredentials: false });
+    const draft = clientInstance({
+      id: 'feishu-draft-1',
+      feishuTenantBrand: 'feishu',
+      enabled: false,
+      hasCredentials: false,
+    });
     const bindFeishuDraft = vi.fn(() => binding.promise);
     const revokeFeishuDraftCredentials = vi.fn(async () => ({ revoked: true, instance: draft }));
     vi.doMock('@larksuiteoapi/node-sdk', () => ({ registerApp }));

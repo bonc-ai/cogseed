@@ -2821,6 +2821,7 @@
   "messaging.feishu_qr.status_expired": "QR コードの有効期限が切れました。再度スキャンしてください",
   "messaging.feishu_qr.status_denied": "認証が拒否されました",
   "messaging.feishu_qr.status_failed": "Feishu QR 設定に失敗しました",
+  "messaging.feishu_qr.lark_sign_in_hint": "Lark（グローバル版）アカウントでスキャン後、Feishu のログインページが表示されたら「Lark に切り替えてログイン」をクリックして認証してください。",
   "messaging.wecom_bot_id": "WeCom ボット ID",
   "messaging.wecom_bot_id_placeholder": "WeCom ボット ID",
   "messaging.wecom_bot_secret": "WeCom ボットシークレット",

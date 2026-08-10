@@ -89,6 +89,9 @@ interface RegistrationFlow {
   readonly flowId: string;
   readonly draft: FeishuRegistrationDraft;
   readonly controller: AbortController;
+  /** Tenant selected by the settings channel. Draft-bound registration must
+   * stay on this brand instead of silently moving between Feishu and Lark. */
+  readonly tenantBrand: FeishuTenantBrand;
   /** Draft-bound flows register against an existing unbound instance. */
   readonly instanceId?: string;
   state: FeishuRegistrationState;
@@ -294,8 +297,17 @@ function publicStatus(flow: RegistrationFlow): FeishuRegistrationStatus {
   };
 }
 
-function registrationDomain(brand: FeishuTenantBrand | undefined): FeishuTenantBrand {
+function registrationBrand(brand: FeishuTenantBrand | undefined): FeishuTenantBrand {
   return brand === 'lark' ? 'lark' : 'feishu';
+}
+
+function activatedBrand(flow: RegistrationFlow, result: RegistrationResultLike): FeishuTenantBrand {
+  const reported = result.user_info?.tenant_brand;
+  const brand = reported === 'feishu' || reported === 'lark' ? reported : flow.tenantBrand;
+  if (flow.instanceId && brand !== flow.tenantBrand) {
+    throw new Error(`registration tenant brand mismatch: expected ${flow.tenantBrand}, received ${brand}`);
+  }
+  return brand;
 }
 
 function registrationOwner(result: RegistrationResultLike): { ownerExternalUserId: string; ownerExternalUserName?: string } {
@@ -361,7 +373,7 @@ async function discardCreatedInstance(
 function newInstanceActivation(): RegistrationActivation {
   return {
     async apply(flow, result) {
-      const tenantBrand = registrationDomain(result.user_info?.tenant_brand as FeishuTenantBrand | undefined);
+      const tenantBrand = activatedBrand(flow, result);
       const owner = registrationOwner(result);
       return manager.createInstance(flow.uid, {
         platform: 'feishu_lark',
@@ -385,8 +397,8 @@ function newInstanceActivation(): RegistrationActivation {
 function draftActivation(uid: string, instanceId: string): RegistrationActivation {
   let boundSecret: { appId: string; appSecret: string } | null = null;
   return {
-    async apply(_flow, result) {
-      const tenantBrand = registrationDomain(result.user_info?.tenant_brand as FeishuTenantBrand | undefined);
+    async apply(flow, result) {
+      const tenantBrand = activatedBrand(flow, result);
       const owner = registrationOwner(result);
       const secret = { appId: result.client_id.trim(), appSecret: result.client_secret.trim() };
       const bound = await registry.bindFeishuDraft(uid, instanceId, {
@@ -515,6 +527,7 @@ export async function startFeishuQrRegistration(
     flowId: randomUUID(),
     draft: normalizedDraft,
     controller: new AbortController(),
+    tenantBrand: 'feishu',
     state: 'starting',
   };
   flows.set(uid, flow);
@@ -555,6 +568,7 @@ export async function startFeishuQrRegistrationForInstance(
       policy: draftInstance.policy,
     },
     controller: new AbortController(),
+    tenantBrand: registrationBrand(draftInstance.feishuTenantBrand),
     state: 'starting',
     instanceId,
   };

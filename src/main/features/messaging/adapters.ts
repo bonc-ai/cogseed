@@ -668,6 +668,14 @@ export class FeishuAdapter implements MessagingCardAdapter {
       loggerLevel: lark.LoggerLevel.error,
     }).register({
       'im.message.receive_v1': async (event: FeishuEventData) => {
+        // TEMP-DIAG: 诊断 Lark 实例事件是否推送（只记粗信息，不含消息内容）
+        log.info('Feishu WS event received', {
+          instanceId: this.instance.id,
+          brand: this.tenantBrand,
+          messageId: event.message?.message_id,
+          chatType: event.message?.chat_type,
+          senderType: event.sender?.sender_type,
+        });
         const envelope = this.normalize(event);
         if (!envelope || !this.callbacks) return {};
         void this.handleInboundWithReaction(envelope);

@@ -3002,6 +3002,7 @@
   "messaging.feishu_qr.status_expired": "二维码已过期，请重新扫码",
   "messaging.feishu_qr.status_denied": "授权已拒绝",
   "messaging.feishu_qr.status_failed": "扫码创建失败",
+  "messaging.feishu_qr.lark_sign_in_hint": "Lark（全球版）账号扫码后如显示飞书登录页，请点击“切换至Lark登录”完成授权。",
   "messaging.wecom_bot_id": "企业微信 Bot ID",
   "messaging.wecom_bot_id_placeholder": "企业微信机器人 Bot ID",
   "messaging.wecom_bot_secret": "企业微信 Bot Secret",
