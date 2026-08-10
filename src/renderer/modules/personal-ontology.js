@@ -46,7 +46,7 @@
 
   async function _pocInvoke(channel, payload) {
     try {
-      const res = await window.orkas.invoke(channel, payload || {});
+      const res = await window.cogseed.invoke(channel, payload || {});
       return res || { ok: false, error: 'no response' };
     } catch (err) {
       return { ok: false, error: (err && err.message) || String(err) };
@@ -118,7 +118,7 @@
   async function _pocFieldsForGroup(groupId) {
     if (_pocFieldCache.has(groupId)) return _pocFieldCache.get(groupId);
     try {
-      const res = await window.orkas.invoke('personalOntology.groups.fields.list', { groupId });
+      const res = await window.cogseed.invoke('personalOntology.groups.fields.list', { groupId });
       const fields = (res && res.ok !== false && Array.isArray(res.fields)) ? res.fields : [];
       _pocFieldCache.set(groupId, fields);
       return fields;
@@ -902,7 +902,7 @@
     if (!candidateId) return;
     try {
       // routeWithLlm: true —— 确认时经 LLM 对号入座（用户指定字段时 LLM 不覆盖）
-      const res = await window.orkas.invoke('personalOntology.candidates.confirm', {
+      const res = await window.cogseed.invoke('personalOntology.candidates.confirm', {
         candidateId,
         ...(_destPayloadFor(candidateId)),
         routeWithLlm: true,
@@ -956,7 +956,7 @@
         const state = _pocDestState.get(c.candidate_id);
         const field = state && state.field ? state.field : (c.target_field || 'flow');
         if (field && field !== 'flow') dest.targetField = field;
-        const res = await window.orkas.invoke('personalOntology.candidates.confirm', { candidateId: c.candidate_id, ...dest, routeWithLlm: true });
+        const res = await window.cogseed.invoke('personalOntology.candidates.confirm', { candidateId: c.candidate_id, ...dest, routeWithLlm: true });
         if (res && res.ok) {
           okCount++;
           for (const fw of (res.fieldWrites || [])) if (fw.ok) fieldCounts[fw.fieldName] = (fieldCounts[fw.fieldName] || 0) + 1;

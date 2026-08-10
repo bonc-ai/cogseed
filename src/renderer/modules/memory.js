@@ -49,12 +49,12 @@ function _memTrackError(action, data) {
 }
 
 async function _memInvoke(channel, payload) {
-  if (!window.orkas || typeof window.orkas.invoke !== 'function') {
+  if (!window.cogseed || typeof window.cogseed.invoke !== 'function') {
     return { ok: false, error: 'ipc bridge unavailable' };
   }
 
   try {
-    const res = await window.orkas.invoke(channel, payload || {});
+    const res = await window.cogseed.invoke(channel, payload || {});
     if (res && res.ok === false) _memTrackError('memory_ipc_result', { channel, error_message: res.error || 'failed' });
     return res || { ok: false, error: 'no response' };
   } catch (err) {
@@ -917,7 +917,7 @@ function _memOpenImport(mode) {
 
 async function _memPickImportFile(ta, updateStat) {
   try {
-    const res = await window.orkas.invoke('common.pickFiles', {
+    const res = await window.cogseed.invoke('common.pickFiles', {
       title: t('memory.import_file'),
       extensions: ['md', 'txt', 'json'],
       multiple: false,

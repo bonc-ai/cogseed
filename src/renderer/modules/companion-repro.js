@@ -150,7 +150,7 @@
     const refresh = async () => {
       let state = null;
       try {
-        const res = await window.orkas.invoke('companionRepro.getState', { cid });
+        const res = await window.cogseed.invoke('companionRepro.getState', { cid });
         state = res && res.state;
       } catch (_) { state = null; }
       host.innerHTML = renderState(state);
@@ -164,22 +164,22 @@
       const action = btn.dataset.companionReproAction;
       try {
         if (action === ACTIONS.save) {
-          await window.orkas.invoke('companionRepro.saveDraft', { cid, draft: _readDraft(host) });
+          await window.cogseed.invoke('companionRepro.saveDraft', { cid, draft: _readDraft(host) });
         } else if (action === ACTIONS.projectContext) {
-          await window.orkas.invoke('companionRepro.generateProjectContext', { cid });
+          await window.cogseed.invoke('companionRepro.generateProjectContext', { cid });
         } else if (action === ACTIONS.revise) {
-          await window.orkas.invoke('companionRepro.applyProjectContextRevision', {
+          await window.cogseed.invoke('companionRepro.applyProjectContextRevision', {
             cid,
             before: host.querySelector('[data-companion-repro-revision="before"]')?.value || '',
             after: host.querySelector('[data-companion-repro-revision="after"]')?.value || '',
             reason: host.querySelector('[data-companion-repro-revision="reason"]')?.value || '',
           });
         } else if (action === ACTIONS.taskContract) {
-          await window.orkas.invoke('companionRepro.generateTaskContract', { cid });
+          await window.cogseed.invoke('companionRepro.generateTaskContract', { cid });
         } else if (action === ACTIONS.confirm) {
-          await window.orkas.invoke('companionRepro.confirmTaskContract', { cid });
+          await window.cogseed.invoke('companionRepro.confirmTaskContract', { cid });
         } else if (action === ACTIONS.start) {
-          const res = await window.orkas.invoke('companionRepro.startExecution', { cid });
+          const res = await window.cogseed.invoke('companionRepro.startExecution', { cid });
           if (!res || !res.ok) throw new Error(res?.error || 'start failed');
         }
         await refresh();
@@ -193,7 +193,7 @@
     if (!cid || !shouldHandleChatMessage(text)) return false;
     const append = typeof opts.append === 'function' ? opts.append : null;
     if (append) append('user', text);
-    const res = await window.orkas.invoke('companionRepro.submitGuideMessage', { cid, text });
+    const res = await window.cogseed.invoke('companionRepro.submitGuideMessage', { cid, text });
     const messages = Array.isArray(res?.state?.guide_messages) ? res.state.guide_messages : [];
     const last = messages[messages.length - 1];
     if (append && last?.role === 'assistant') append('assistant', last.text || '');

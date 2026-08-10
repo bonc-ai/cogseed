@@ -104,8 +104,8 @@ function _kbPickerNormalizeTree(nodes) {
 
 async function _kbPickerLoadTree(scope = { type: 'global' }) {
   try {
-    if (scope && scope.type === 'project' && scope.projectId && window.orkas?.invoke) {
-      const data = await window.orkas.invoke('projects.files.tree', { projectId: scope.projectId });
+    if (scope && scope.type === 'project' && scope.projectId && window.cogseed?.invoke) {
+      const data = await window.cogseed.invoke('projects.files.tree', { projectId: scope.projectId });
       _kbPickerTree = data?.ok ? _kbPickerNormalizeTree(data.tree || []) : [];
       return;
     }

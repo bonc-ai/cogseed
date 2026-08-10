@@ -195,7 +195,7 @@ function _initSkillsCognitionBindings() {
       const created = [];
       try {
         for (const conversationId of conversationIds) {
-          const result = await window.orkas.invoke('recall.captures.manualCreate', { conversationId });
+          const result = await window.cogseed.invoke('recall.captures.manualCreate', { conversationId });
           if (!result?.ok) throw new Error(result?.error || _cognitionText('cognition.capture_manual_history_create_failed', '加入沉淀任务失败'));
           created.push(conversationId);
         }
@@ -254,7 +254,7 @@ function _initSkillsCognitionBindings() {
       if (!channel) return;
       captureAction.dataset.busy = '1'; captureAction.disabled = true;
       try {
-        const result = await window.orkas.invoke(channel, { captureId });
+        const result = await window.cogseed.invoke(channel, { captureId });
         if (!result?.ok) throw new Error(result?.error || 'recall capture action failed');
         await loadRecallCaptureTasks();
       } catch (error) {
@@ -271,7 +271,7 @@ function _initSkillsCognitionBindings() {
       if (!captureId || retryCapture.dataset.busy === '1') return;
       retryCapture.dataset.busy = '1'; retryCapture.disabled = true;
       try {
-        const result = await window.orkas.invoke('recall.captures.retry', { captureId });
+        const result = await window.cogseed.invoke('recall.captures.retry', { captureId });
         if (!result?.ok) throw new Error(result?.error || 'recall capture retry failed');
         await loadSkillsCognitionSnapshot();
       } catch (error) {
@@ -288,7 +288,7 @@ function _initSkillsCognitionBindings() {
       if (!signalId || revokeTeaching.dataset.busy === '1') return;
       revokeTeaching.dataset.busy = '1'; revokeTeaching.disabled = true;
       try {
-        const result = await window.orkas.invoke('recall.teaching.revoke', { signalId });
+        const result = await window.cogseed.invoke('recall.teaching.revoke', { signalId });
         if (!result?.ok) throw new Error(result?.error || 'teaching signal revoke failed');
         await loadSkillsCognitionSnapshot();
       } catch (error) {
@@ -396,7 +396,7 @@ function _initSkillsCognitionBindings() {
           payload = { candidateId, judgment: card.querySelector('[data-recall-edit-judgment]')?.value || '', summary: card.querySelector('[data-recall-edit-summary]')?.value || '', suggestedScope: card.querySelector('[data-recall-edit-scope]')?.value || '', suggestedType: card.querySelector('[data-recall-edit-type]')?.value || '', sourceRefs };
         }
         if (!channel) return;
-        const result = await window.orkas.invoke(channel, payload);
+        const result = await window.cogseed.invoke(channel, payload);
         if (!result?.ok) throw new Error(result?.error || 'recall candidate action failed');
         _skillsCognitionState.editingRecallCandidateId = '';
         await loadSkillsCognitionSnapshot();
@@ -417,7 +417,7 @@ function _initSkillsCognitionBindings() {
       if (!candidateId || action.dataset.busy === '1') return;
       action.dataset.busy = '1'; action.disabled = true;
       try {
-        const result = await window.orkas.invoke('recall.candidates.importPersonalOntology', { candidateId });
+        const result = await window.cogseed.invoke('recall.candidates.importPersonalOntology', { candidateId });
         if (!result?.ok) throw new Error(result?.error || 'personal ontology import failed');
         await loadSkillsCognitionSnapshot();
       } catch (error) { if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error)); }
@@ -431,7 +431,7 @@ function _initSkillsCognitionBindings() {
     action.disabled = true;
     try {
       const decision = action.dataset.cognitionCandidateAction === 'accept' ? 'accept' : 'reject';
-      const result = await window.orkas.invoke('cognition.candidates.decide', {
+      const result = await window.cogseed.invoke('cognition.candidates.decide', {
         source,
         candidateId,
         decision,

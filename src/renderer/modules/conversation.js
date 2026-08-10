@@ -1087,7 +1087,7 @@ async function validateRecipientAgainstProject(target, pid) {
   if (!cur || cur.kind !== 'agent') return;
   if (!pid) return;
   try {
-    const res = await window.orkas.invoke('projects.bindings.list', { projectId: pid });
+    const res = await window.cogseed.invoke('projects.bindings.list', { projectId: pid });
     if (!res || !res.ok) return;
     const bound = new Set((res.bindings && res.bindings.agents) || []);
     if (!bound.has(cur.id)) {
@@ -2457,7 +2457,7 @@ function _commanderAvatar() {
 async function _ensureCommanderAvatarLoaded() {
   if (_commanderAvatarCache) return _commanderAvatarCache;
   try {
-    const res = await window.orkas.invoke('prefs.getCommanderAvatar');
+    const res = await window.cogseed.invoke('prefs.getCommanderAvatar');
     if (res?.ok && res.avatar) {
       _commanderAvatarCache = _normalizeCommanderAvatar(res.avatar);
     }
@@ -3266,7 +3266,7 @@ async function _chatAttachPickAndUpload(cid, source = 'picker') {
   _convTrackClick('chat_attachment_upload', basePayload);
   let data;
   try {
-    data = await window.orkas.invoke('conversations.attachments.pickAndUpload', { cid });
+    data = await window.cogseed.invoke('conversations.attachments.pickAndUpload', { cid });
   } catch (err) {
     _convLog.warn('native attachment picker failed', err);
     _convTrackEvent('chat_attachment_upload_result', {
@@ -3455,7 +3455,7 @@ function _chatVideoFloatingTitle() {
 // and adopts the draft attachments.
 window.COMMANDER_DRAFT_CID = DRAFT_CID;
 window.attachKbFileToDraft = async function attachKbFileToDraft(channel, payload, draftCid, afterNavigate) {
-  const data = await window.orkas.invoke(channel, { ...(payload || {}), cid: draftCid });
+  const data = await window.cogseed.invoke(channel, { ...(payload || {}), cid: draftCid });
   if (!data || !data.ok) throw new Error((data && data.error) || 'failed');
   if (typeof afterNavigate === 'function') afterNavigate();
   _addReadyDraftAttachment(draftCid, data.info);
@@ -3761,7 +3761,7 @@ function _hydrateTeachingReceipts(messageEl) {
       button.dataset.busy = '1';
       button.disabled = true;
       try {
-        const result = await window.orkas.invoke('recall.teaching.revoke', { signalId });
+        const result = await window.cogseed.invoke('recall.teaching.revoke', { signalId });
         if (!result?.ok) throw new Error(result?.error || 'teaching signal revoke failed');
         const receipt = button.closest('[data-teaching-receipt-id]');
         if (receipt) {
@@ -3916,7 +3916,7 @@ function _hydrateMessageAttachmentThumbs(msgDiv, cid) {
         try { if (video && typeof video.pause === 'function') video.pause(); } catch (_) {}
         try { if (window.Monitor) (() => {})('chat_attachment_video_floating_open'); } catch (_) {}
         try {
-          const res = await window.orkas.invoke('attachments.absPath', { cid: chipCid, name });
+          const res = await window.cogseed.invoke('attachments.absPath', { cid: chipCid, name });
           if (!res || !res.ok || !res.path) {
             _convLog.warn('attachments.absPath video failed', { cid: chipCid, name, error: res && res.error });
             _showFileMissingToast(name);
@@ -3942,7 +3942,7 @@ function _hydrateMessageAttachmentThumbs(msgDiv, cid) {
           let opts;
           if (name && chipCid) {
             try {
-              const res = await window.orkas.invoke('attachments.absPath', { cid: chipCid, name });
+              const res = await window.cogseed.invoke('attachments.absPath', { cid: chipCid, name });
               if (res && res.ok && res.path) opts = { absPath: res.path, cid: chipCid };
               else {
                 _convLog.warn('attachments.absPath image failed', { cid: chipCid, name, error: res && res.error });
@@ -3973,7 +3973,7 @@ function _hydrateMessageAttachmentThumbs(msgDiv, cid) {
       e.stopPropagation();
       if (typeof openChatFileViewer !== 'function') return;
       try {
-        const res = await window.orkas.invoke('attachments.absPath', { cid: chipCid, name });
+        const res = await window.cogseed.invoke('attachments.absPath', { cid: chipCid, name });
         if (!res || !res.ok || !res.path) {
           _convLog.warn('attachments.absPath failed', { cid: chipCid, name, error: res && res.error });
           _showFileMissingToast(name);
@@ -5905,9 +5905,9 @@ function _ensureCreateAgentInlineObserver() {
  * Called when user opens an imported conversation for the first time.
  */
 async function _insertImportedConversationWelcome(cid) {
-  if (!window.orkas?.invoke) return;
+  if (!window.cogseed?.invoke) return;
   try {
-    const result = await window.orkas.invoke('chats.insertWelcomeMessage', { conversationId: cid });
+    const result = await window.cogseed.invoke('chats.insertWelcomeMessage', { conversationId: cid });
     if (result?.ok) {
       // Reload the conversation to show the new welcome message
       if (cid === currentCid) {
@@ -5941,8 +5941,8 @@ async function loadConversationHistory(cid, opts = {}) {
       HISTORY_PAGE_SIZE,
       Number(opts.searchTarget?.msgIndex),
     ));
-    const teachingSignalsPromise = window.orkas?.invoke
-      ? window.orkas.invoke('recall.teaching.list', { conversationId: cid, limit: 100 }).catch(() => null)
+    const teachingSignalsPromise = window.cogseed?.invoke
+      ? window.cogseed.invoke('recall.teaching.list', { conversationId: cid, limit: 100 }).catch(() => null)
       : Promise.resolve(null);
     const membersStartedAt = performance.now();
     const membersPromise = _refreshGroupMembers(cid).then((actors) => {
@@ -7233,7 +7233,7 @@ async function _hydrateMarketplaceRequestMeta(card, req, cid, msgId) {
   try {
     const q = req.name || req.id || '';
     const channel = req.kind === 'skill' ? 'marketplace.listSkills' : 'marketplace.listAgents';
-    const res = await window.orkas.invoke(channel, { q, size: 20 });
+    const res = await window.cogseed.invoke(channel, { q, size: 20 });
     const row = (res?.list || []).find((x) => x && x.id === req.id);
     if (!row) return;
     req.icon = row.icon || '';
@@ -7345,7 +7345,7 @@ async function _resolveKstarResultReview(card, review, action) {
   card.querySelectorAll('button').forEach((button) => { button.disabled = true; });
   try {
     const verdict = action === 'correct' ? 'skip' : 'met';
-    const result = await window.orkas.invoke('kstar.review.confirm', { episodeId: review.episodeId, verdict });
+    const result = await window.cogseed.invoke('kstar.review.confirm', { episodeId: review.episodeId, verdict });
     if (!result?.ok) throw new Error(result?.error || 'kstar review confirmation failed');
     _renderKstarResultReviewCard(card, { ...review, status: 'confirmed' });
   } catch (error) {
@@ -7362,7 +7362,7 @@ function _mountKstarResultReviewCard(host, review) {
   const card = document.createElement('div');
   host.appendChild(card);
   _renderKstarResultReviewCard(card, review);
-  window.orkas.invoke('kstar.review.read', { episodeId: review.episodeId }).then((result) => {
+  window.cogseed.invoke('kstar.review.read', { episodeId: review.episodeId }).then((result) => {
     const state = result?.review?.reviewState;
     if (state === 'confirmed' || state === 'unknown') {
       _renderKstarResultReviewCard(card, { ...review, status: 'confirmed' });
@@ -7999,7 +7999,7 @@ function _hydrateMessageReferenceFiles(msgDiv) {
       const cid = chip.dataset.attachCid || '';
       if (!name || !cid || typeof openChatFileViewer !== 'function') return;
       try {
-        const result = await window.orkas.invoke('attachments.absPath', { cid, name });
+        const result = await window.cogseed.invoke('attachments.absPath', { cid, name });
         if (!result?.ok || !result.path) {
           _showFileMissingToast(name);
           return;
@@ -8959,7 +8959,7 @@ function _attachBubbleActions(msgDiv, getContent, opts = {}) {
     btn.disabled = true;
     const orig = btn.innerHTML;
     try {
-      const data = await window.orkas.invoke('library.writeText', {
+      const data = await window.cogseed.invoke('library.writeText', {
         cid: currentCid,
         targetScope,
         targetPath: pick.path,
@@ -13199,9 +13199,9 @@ async function _onToolResultRowClick(ev) {
   pre.className = 'stream-process-line-full';
 
   if (path) {
-    // window.orkas.invoke is the canonical IPC entry (matches every
+    // window.cogseed.invoke is the canonical IPC entry (matches every
     // other feature's pattern — saved-apps / chat-artifact / workspace).
-    const inv = window.orkas && window.orkas.invoke;
+    const inv = window.cogseed && window.cogseed.invoke;
     if (typeof inv !== 'function') return;
     let res;
     try {

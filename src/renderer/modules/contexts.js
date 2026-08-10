@@ -1382,8 +1382,8 @@ async function handleCtxUpload(fileList, targetDir = '') {
       const target = targetDir ? `${targetDir}/${file.name}` : file.name;
       _kbStatusByPath[target] = { status: 'pending' };
       let data = null;
-      if (window.orkas && typeof window.orkas.importLocalFiles === 'function') {
-        const imported = await window.orkas.importLocalFiles('contexts', [file], { targetDir });
+      if (window.cogseed && typeof window.cogseed.importLocalFiles === 'function') {
+        const imported = await window.cogseed.importLocalFiles('contexts', [file], { targetDir });
         if (imported && imported.ok === false) {
           data = imported;
         } else if (Array.isArray(imported && imported.files) && imported.files.length) {
@@ -1480,7 +1480,7 @@ async function handleCtxNativeUpload(targetDir = '') {
   }
   let data;
   try {
-    data = await window.orkas.invoke('contexts.pickAndUpload', { targetDir });
+    data = await window.cogseed.invoke('contexts.pickAndUpload', { targetDir });
     await loadContexts();
   } catch (err) {
     _contextsLog.warn('native upload failed', err);

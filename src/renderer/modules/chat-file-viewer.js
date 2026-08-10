@@ -335,7 +335,7 @@ async function _onRevealClick() {
     const payload = { path: p };
     if (_viewerCurrentCid) payload.cid = _viewerCurrentCid;
     if (_viewerCurrentProjectId) payload.projectId = _viewerCurrentProjectId;
-    const res = await window.orkas.invoke('workspace.revealPath', payload);
+    const res = await window.cogseed.invoke('workspace.revealPath', payload);
     if (!res || !res.ok) {
       _viewerTrackError('file_preview_reveal', { kind: _kindOf(p), error_message: res && res.error || 'failed' });
       _viewerLog.warn('reveal failed', { path: p, error: res && res.error });
@@ -359,7 +359,7 @@ async function _onAddLibraryClick() {
     const payload = { path: p };
     if (_viewerCurrentCid) payload.cid = _viewerCurrentCid;
     if (_viewerCurrentProjectId) payload.projectId = _viewerCurrentProjectId;
-    const res = await window.orkas.invoke('library.importProduced', payload);
+    const res = await window.cogseed.invoke('library.importProduced', payload);
     if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
     _viewerTrackEvent('file_preview_add_library_result', { result: 'success', kind: _kindOf(p), scope: res.scope || '' });
     _viewerAddLibraryBtn.innerHTML = _viewerAddLibraryButtonHtml(doneLabel, 'check');
@@ -577,7 +577,7 @@ async function _renderHtmlBody(absPath, displayName, cid, projectId) {
     const payload = { path: absPath, compositionRootOnly: true };
     if (cid) payload.cid = cid;
     if (projectId) payload.projectId = projectId;
-    const res = await window.orkas.invoke('produced.readText', payload);
+    const res = await window.cogseed.invoke('produced.readText', payload);
     if (seq !== _viewerRenderSeq || !_isViewerOpen()) return;
     if (res && res.ok) composition = _videoCompositionDimensions(String(res.text || ''));
   } catch (err) {
@@ -602,7 +602,7 @@ async function _renderOfficeBody(absPath, displayName, cid, projectId) {
     const payload = { path: absPath };
     if (cid) payload.cid = cid;
     if (projectId) payload.projectId = projectId;
-    const res = await window.orkas.invoke('produced.officePreviewHtml', payload);
+    const res = await window.cogseed.invoke('produced.officePreviewHtml', payload);
     if (seq !== _viewerRenderSeq || !_isViewerOpen()) return;
     if (!res || !res.ok) {
       const err = (res && res.error) || 'unknown';
@@ -813,7 +813,7 @@ async function _readTextFile(absPath, cid, projectId, seq) {
     const payload = { path: absPath };
     if (cid) payload.cid = cid;
     if (projectId) payload.projectId = projectId;
-    const res = await window.orkas.invoke('produced.readText', payload);
+    const res = await window.cogseed.invoke('produced.readText', payload);
     if (seq && seq !== _viewerRenderSeq) return null;
     if (res && res.ok) return String(res.text || '');
     // Specifically distinguish too_large so the user sees "file is X MB,
@@ -881,7 +881,7 @@ async function _showUnsupportedDialog(absPath, cid, projectId, opts) {
     const payload = { path: absPath };
     if (cid) payload.cid = cid;
     if (projectId) payload.projectId = projectId;
-    const res = await window.orkas.invoke('workspace.revealPath', payload);
+    const res = await window.cogseed.invoke('workspace.revealPath', payload);
     if (!res || !res.ok) _viewerLog.warn('fallback reveal failed', { path: absPath, error: res && res.error });
   } catch (err) {
     _viewerLog.warn('fallback reveal threw', { path: absPath, error: String(err && err.message || err) });
@@ -889,12 +889,12 @@ async function _showUnsupportedDialog(absPath, cid, projectId, opts) {
 }
 
 async function _ensureViewerFileExists(absPath, cid, projectId) {
-  if (!window.orkas || typeof window.orkas.invoke !== 'function') return true;
+  if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return true;
   try {
     const payload = { path: absPath };
     if (cid) payload.cid = cid;
     if (projectId) payload.projectId = projectId;
-    const res = await window.orkas.invoke('workspace.statPath', payload);
+    const res = await window.cogseed.invoke('workspace.statPath', payload);
     if (res && res.ok && res.exists && res.isFile !== false) return true;
     if (res && res.ok && res.exists && res.isFile === false) return true;
     const name = String(absPath || '').split(/[\\/]/).pop() || String(absPath || '');

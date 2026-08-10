@@ -1530,14 +1530,14 @@ if (typeof document !== 'undefined') document.addEventListener('click', (e) => {
     return;
   }
   if (!_SAFE_EXTERNAL_LINK_RE.test(href)) { e.preventDefault(); return; }
-  if (!window.orkas || typeof window.orkas.invoke !== 'function') {
+  if (!window.cogseed || typeof window.cogseed.invoke !== 'function') {
     // The main navigation guard can still route HTTP(S). Never let a custom
     // OS-handler scheme fall through without the stricter IPC validation.
     if (!/^https?:\/\//i.test(href)) e.preventDefault();
     return;
   }
   e.preventDefault();
-  window.orkas.invoke('auth.openExternal', { url: href }).catch(() => {});
+  window.cogseed.invoke('auth.openExternal', { url: href }).catch(() => {});
 });
 
 /** Renderer-side mirror of `storage.ts::nowIso()` — local-time ISO8601

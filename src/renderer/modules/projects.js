@@ -98,8 +98,8 @@ async function loadProjects(forceRefresh) {
   // never made a workspace); that's fine, we just render ungrouped.
   try {
     const [projRes, spaceRes] = await Promise.all([
-      window.orkas.invoke('projects.list', {}),
-      window.orkas.invoke('spaces.list', {}).catch(() => null),
+      window.cogseed.invoke('projects.list', {}),
+      window.cogseed.invoke('spaces.list', {}).catch(() => null),
     ]);
     _projectsCache = (projRes && projRes.ok && Array.isArray(projRes.projects)) ? projRes.projects : [];
     const spaceList = (spaceRes && Array.isArray(spaceRes.spaces)) ? spaceRes.spaces : [];
@@ -452,7 +452,7 @@ function _bindInlineCreateInput(input) {
     const startedAt = performance.now();
     _projectsTrackClick('project_create_submit', { name_length: name.length });
     try {
-      const res = await window.orkas.invoke('projects.create', { name });
+      const res = await window.cogseed.invoke('projects.create', { name });
       if (!res || !res.ok) {
         _projectsTrackEvent('project_create_result', {
           result: 'failure',
@@ -545,7 +545,7 @@ function _bindInlineRenameInput(input) {
       name_length: next.length,
     });
     try {
-      const res = await window.orkas.invoke('projects.rename', { projectId: pid, name: next });
+      const res = await window.cogseed.invoke('projects.rename', { projectId: pid, name: next });
       if (!res || !res.ok) {
         _projectsTrackEvent('project_rename_result', {
           project_id: pid,
@@ -747,7 +747,7 @@ async function _confirmDeleteProject(pid) {
   // cascade in `projects.deleteProject` still cleans them up either way.
   let autoCount = 0;
   try {
-    const r = await window.orkas.invoke('autoTasks.list', { projectId: pid });
+    const r = await window.cogseed.invoke('autoTasks.list', { projectId: pid });
     if (r && Array.isArray(r.tasks)) autoCount = r.tasks.length;
   } catch (_) { /* ignore — fall through with autoCount = 0 */ }
   // Build the confirm dialog. When N > 0 we surface the destructive scope on
@@ -780,7 +780,7 @@ async function _confirmDeleteProject(pid) {
     auto_count: autoCount,
   });
   try {
-    const res = await window.orkas.invoke('projects.delete', { projectId: pid });
+    const res = await window.cogseed.invoke('projects.delete', { projectId: pid });
     if (!res || !res.ok) {
       _projectsTrackEvent('project_delete_result', {
         project_id: pid,

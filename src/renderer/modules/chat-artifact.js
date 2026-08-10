@@ -19,7 +19,7 @@
 //     measure the content itself; the artifact reports it, optionally via the
 //     `__orkas/bridge.js` helper).
 //   - `open-external` → open an http(s) URL outside the artifact iframe.
-// We never expose `window.orkas` or any privileged handle into the iframe.
+// We never expose `window.cogseed` or any privileged handle into the iframe.
 //
 // Classic script — no import/export; globals `renderChatArtifact`,
 // `encodeArtifactResult` are exposed via `window.*` (matching `chat-input-form.js`).
@@ -339,11 +339,11 @@
 
   async function _checkArtifactAvailability(frame, ctx) {
     if (!frame || !ctx || !ctx.cid || !ctx.artifactId) return;
-    if (!window.orkas || typeof window.orkas.invoke !== 'function') return;
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
     const expectedCid = String(ctx.cid);
     const expectedArtifactId = String(ctx.artifactId);
     try {
-      const r = await window.orkas.invoke('conversations.artifacts.inspect', {
+      const r = await window.cogseed.invoke('conversations.artifacts.inspect', {
         cid: expectedCid,
         artifactId: expectedArtifactId,
       });
