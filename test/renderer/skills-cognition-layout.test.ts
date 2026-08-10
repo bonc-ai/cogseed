@@ -188,6 +188,23 @@ describe('Recall cognition workspace layout', () => {
   });
 
 
+
+  it('keeps Recall pages scrollable and nested controls styled in the primary Recall CSS block', () => {
+    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf-8');
+    const mainRule = css.match(/\.skills-cognition-main\s*\{[^}]+\}/)?.[0] || '';
+    const pageRule = css.match(/\.skills-cognition-page\s*\{[^}]+\}/)?.[0] || '';
+    expect(mainRule).toContain('overflow-y: auto');
+    expect(mainRule).toContain('overscroll-behavior: contain');
+    expect(pageRule).toContain('overflow: visible');
+    expect(pageRule).not.toContain('overflow: auto');
+
+    const recallStart = css.indexOf('/* Recall cognition console. */');
+    const terminalStart = css.indexOf('/* Terminal body / screen */');
+    const recallCss = css.slice(recallStart, terminalStart);
+    expect(recallCss).toContain('.recall-subtabs [data-cognition-deposition-view]');
+    expect(recallCss).toContain('.recall-category-chips [data-cognition-candidate-category]');
+  });
+
   it('keeps ability asset status chips compact inside list rows', () => {
     const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf-8');
     expect(css).toContain('.ability-asset-list-row .skills-cognition-status');
