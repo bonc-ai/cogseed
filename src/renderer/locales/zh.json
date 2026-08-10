@@ -3431,5 +3431,6 @@
   "mate_workbench.state.ready": "待投递",
   "mate_workbench.state.sending": "投递中",
   "mate_workbench.state.sent": "已送达",
-  "mate_workbench.state.retry_pending": "等待重试"
+  "mate_workbench.state.retry_pending": "等待重试",
+  "mate_workbench.load_failed_detail": "检查桌面端连接后重试。"
 }

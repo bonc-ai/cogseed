@@ -3431,5 +3431,6 @@
   "mate_workbench.state.ready": "Ready",
   "mate_workbench.state.sending": "Sending",
   "mate_workbench.state.sent": "Delivered",
-  "mate_workbench.state.retry_pending": "Retry pending"
+  "mate_workbench.state.retry_pending": "Retry pending",
+  "mate_workbench.load_failed_detail": "Check the desktop connection and try again."
 }

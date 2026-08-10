@@ -3174,5 +3174,6 @@
   "personal_context_center.briefing_test_delivery": "Test delivery to Feishu",
   "personal_context_center.briefing_schedule": "Schedule daily 08:00 delivery",
   "personal_context_center.briefing_delivery_ok": "Briefing delivered to Feishu home",
-  "personal_context_center.briefing_schedule_ok": "Daily briefing scheduled"
+  "personal_context_center.briefing_schedule_ok": "Daily briefing scheduled",
+  "mate_workbench.load_failed_detail": "Verifique a conexão do desktop e tente novamente."
 }
