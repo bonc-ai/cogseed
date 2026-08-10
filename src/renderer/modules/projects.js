@@ -38,10 +38,23 @@ function _projectUiIconHtml(name, className) {
 // `_skillsCache` patterns. `null` = not yet fetched.
 let _projectsCache = null;
 
+// Space (工作空间/角色) metadata, keyed by space_id → { name, icon }. Projects
+// carry a `space_id`; we group them under their space header in the sidebar so
+// the "角色 → 工作空间 → 会话" hierarchy the user picks in onboarding is
+// actually visible, not flattened into a bare project list. `null` = unfetched.
+let _spacesCache = null;
+
 // Per-project expand/collapse state, persisted across sessions so the user's
 // layout sticks. Default: collapsed.
 const _PROJECTS_EXPANDED_KEY = 'sidebar.projectExpanded';
 let _projectsExpanded = {};
+
+// Per-space expand/collapse for the sidebar group headers. Default: expanded,
+// so a freshly-created role workspace shows its conversations right away
+// instead of hiding them behind a collapsed header (which would look like the
+// import "disappeared").
+const _SPACES_EXPANDED_KEY = 'sidebar.spaceExpanded';
+let _spacesExpanded = {};
 
 function _loadProjectsExpanded() {
   try {
@@ -52,7 +65,21 @@ function _loadProjectsExpanded() {
 function _saveProjectsExpanded() {
   try { localStorage.setItem(_PROJECTS_EXPANDED_KEY, JSON.stringify(_projectsExpanded)); } catch (_) {}
 }
+function _loadSpacesExpanded() {
+  try {
+    const raw = localStorage.getItem(_SPACES_EXPANDED_KEY);
+    if (raw) _spacesExpanded = JSON.parse(raw) || {};
+  } catch (_) { _spacesExpanded = {}; }
+}
+function _saveSpacesExpanded() {
+  try { localStorage.setItem(_SPACES_EXPANDED_KEY, JSON.stringify(_spacesExpanded)); } catch (_) {}
+}
+// A space header defaults to expanded unless the user explicitly collapsed it.
+function _isSpaceExpanded(sid) {
+  return _spacesExpanded[sid] !== false;
+}
 _loadProjectsExpanded();
+_loadSpacesExpanded();
 
 // In-flight inline-create / inline-rename state. Only one editing row at a
 // time across the whole sidebar.
@@ -66,12 +93,24 @@ async function loadProjects(forceRefresh) {
     renderProjectsSection();
     return _projectsCache;
   }
+  // Projects and spaces load together — the sidebar groups projects under
+  // their space, so it needs both. `spaces.list` may fail or be empty (user
+  // never made a workspace); that's fine, we just render ungrouped.
   try {
-    const res = await window.orkas.invoke('projects.list', {});
-    _projectsCache = (res && res.ok && Array.isArray(res.projects)) ? res.projects : [];
+    const [projRes, spaceRes] = await Promise.all([
+      window.orkas.invoke('projects.list', {}),
+      window.orkas.invoke('spaces.list', {}).catch(() => null),
+    ]);
+    _projectsCache = (projRes && projRes.ok && Array.isArray(projRes.projects)) ? projRes.projects : [];
+    const spaceList = (spaceRes && Array.isArray(spaceRes.spaces)) ? spaceRes.spaces : [];
+    _spacesCache = {};
+    spaceList.forEach((s) => {
+      if (s && s.space_id) _spacesCache[s.space_id] = { name: s.name || '', icon: s.icon || '' };
+    });
   } catch (err) {
     _projectsLog.warn('load projects failed', err);
     _projectsCache = [];
+    _spacesCache = {};
   }
   renderProjectsSection();
   return _projectsCache;
@@ -137,7 +176,32 @@ function renderProjectsSection() {
   if (_projectsInlineCreate) {
     rows.push(_renderInlineCreateRow());
   }
+
+  // Group projects by their space. Projects that belong to a known space are
+  // nested under a collapsible space header (角色/工作空间); projects with no
+  // space (or a dangling space_id) render flat as before. This surfaces the
+  // "角色 → 工作空间 → 会话" hierarchy the user sets up in onboarding.
+  const spaces = _spacesCache || {};
+  const grouped = new Map(); // space_id → project[]
+  const ungrouped = [];
   for (const p of projects) {
+    const sid = p && p.space_id;
+    if (sid && spaces[sid]) {
+      if (!grouped.has(sid)) grouped.set(sid, []);
+      grouped.get(sid).push(p);
+    } else {
+      ungrouped.push(p);
+    }
+  }
+
+  // Space groups first (stable by space name), then any ungrouped projects.
+  const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+  const spaceIds = Array.from(grouped.keys()).sort((a, b) =>
+    collator.compare(spaces[a].name || '', spaces[b].name || '') || a.localeCompare(b));
+  for (const sid of spaceIds) {
+    rows.push(_renderSpaceGroup(sid, spaces[sid], grouped.get(sid), byPid));
+  }
+  for (const p of ungrouped) {
     rows.push(_renderProjectRow(p, byPid.get(p.project_id) || []));
   }
   container.innerHTML = rows.join('');
@@ -159,6 +223,34 @@ function _renderInlineCreateRow() {
              placeholder="${placeholder}" autocomplete="off" spellcheck="false" />
     </div>
   `;
+}
+
+// A collapsible space (角色/工作空间) header with its projects nested inside.
+// The header is a sibling of top-level project rows; its children reuse the
+// exact same _renderProjectRow markup so project behavior (open, expand,
+// rename, menu) is unchanged — only the visual grouping is added.
+function _renderSpaceGroup(sid, meta, projs, byPid) {
+  const expanded = _isSpaceExpanded(sid);
+  const safeName = escapeHtml(meta.name || '');
+  const safeSid = escapeHtml(sid);
+  const icon = meta.icon
+    ? `<span class="space-emoji">${escapeHtml(meta.icon)}</span>`
+    : _projectUiIconHtml(expanded ? 'folder-open' : 'folder', 'space-folder-icon');
+  const caret = expanded ? '▾' : '▸';
+  let html = `
+    <div class="space-group-row${expanded ? ' is-expanded' : ''}" data-space-id="${safeSid}">
+      <span class="space-caret">${caret}</span>
+      <span class="space-icon">${icon}</span>
+      <span class="space-name" title="${safeName}">${safeName}</span>
+    </div>`;
+  if (expanded) {
+    html += `<div class="space-group-children" data-space-children="${safeSid}">`;
+    for (const p of projs) {
+      html += _renderProjectRow(p, byPid.get(p.project_id) || []);
+    }
+    html += '</div>';
+  }
+  return html;
 }
 
 function _renderProjectRow(p, convs) {
@@ -233,6 +325,18 @@ function _bindProjectsHandlers(container) {
   // Inline-create input.
   const createInput = container.querySelector('#project-create-input');
   if (createInput) _bindInlineCreateInput(createInput);
+
+  // Space group headers: click toggles the whole workspace open/closed.
+  container.querySelectorAll('.space-group-row[data-space-id]').forEach((row) => {
+    row.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const sid = row.dataset.spaceId;
+      if (!sid) return;
+      _spacesExpanded[sid] = !_isSpaceExpanded(sid);
+      _saveSpacesExpanded();
+      renderProjectsSection();
+    });
+  });
 
   // Inline-rename inputs (at most one).
   container.querySelectorAll('input.project-rename-input[data-rename-pid]').forEach((input) => {

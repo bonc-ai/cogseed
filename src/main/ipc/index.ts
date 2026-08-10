@@ -89,7 +89,6 @@ import * as ttsAuth from '../features/tts_auth';
 import * as permissions from '../features/permissions';
 import * as appConfig from '../features/config';
 import * as onboardingState from '../features/onboarding_state';
-import * as journeyState from '../features/journey_state';
 import * as cognitionExtraction from '../features/cognition_extraction';
 import { detectAll } from '../features/local_agents/registry';
 import * as avatars from '../features/avatars';
@@ -1052,6 +1051,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     );
     const deleted = await chats.deleteAllConversations(ctx.userId);
     return { deleted };
+  },
+
+  'conversations.batchUpdateProject': async ({ conversationIds, projectId }, ctx) => {
+    if (!Array.isArray(conversationIds)) throw new Error('conversationIds must be an array');
+    if (typeof projectId !== 'string' || !safeId(projectId)) throw new Error('invalid projectId');
+    const result = await chats.batchUpdateConversationProject(ctx.userId, conversationIds, projectId);
+    return result;
   },
 
   // ── Projects (logical groups of conversations + scoped workspace) ──
@@ -3389,16 +3395,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     completed: onboardingState.setOnboardingCompleted(completed !== false),
   }),
 
-  // 60-second journey marker (machine-local, NOT cloud-synced — stored
-  // under WS_ROOT/journey-state.json, shared across uids). The renderer's
-  // journey.js checks `completed` and only starts the journey when it is false.
-  'prefs.getJourney': async () => ({
-    completed: journeyState.getJourneyCompleted(),
-  }),
-  'prefs.setJourney': async ({ completed }: { completed?: unknown } = {}) => ({
-    completed: journeyState.setJourneyCompleted(completed !== false),
-  }),
-
   // ── Cognition extraction from sessions (onboarding) ──
   // Runs through a locally-detected CLI Agent (already authenticated on
   // the user's machine), so onboarding needs no API key. We prefer
@@ -3615,6 +3611,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ok: true,
       items: preview.items.map((item) => ({
         externalId: item.externalId,
+        // Agent this credential belongs to — the CC Switch externalId is
+        // `${appType}:${id}`, so the prefix (up to the first ':') is the
+        // originating agent. appType values contain no ':', so this is exact.
+        appType: item.externalId.slice(0, item.externalId.indexOf(':')) || item.externalId,
         name: item.name,
         protocol: item.protocol,
         baseUrl: item.baseUrl,
