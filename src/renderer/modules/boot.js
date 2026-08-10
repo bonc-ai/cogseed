@@ -270,7 +270,8 @@ function _lazyFeaturePanel(view) {
     : view === 'skills' ? 'panel-skills'
     : view === 'evolution' ? 'panel-evolution'
     : view === 'recall' ? 'panel-recall'
-    : view === 'personal-ontology' ? 'panel-personal-ontology'
+    : view === 'mate-workbench' ? 'panel-mate-workbench'
+                : view === 'personal-ontology' ? 'panel-personal-ontology'
     : view === 'spaces' ? 'panel-spaces'
     : view === 'contexts' ? 'panel-contexts'
     : view === 'settings' ? 'panel-settings'
@@ -323,7 +324,7 @@ function _restoreLastView() {
     setView('conversation', cid);
     return;
   }
-  setView('new-chat');
+  setView('mate-workbench');
 }
 
 async function initUser() {
@@ -362,7 +363,8 @@ function setView(view, cid, opts = {}) {
                 : view === 'connectors' ? 'panel-connectors'
                 : view === 'contexts' ? 'panel-contexts'
                 : view === 'evolution' ? 'panel-evolution'
-                : view === 'personal-ontology' ? 'panel-personal-ontology'
+                : view === 'mate-workbench' ? 'panel-mate-workbench'
+    : view === 'personal-ontology' ? 'panel-personal-ontology'
                 : view === 'spaces' ? 'panel-spaces'
                 : view === 'settings' ? 'panel-settings'
                 : view === 'memory' ? 'panel-memory'
@@ -373,6 +375,7 @@ function setView(view, cid, opts = {}) {
   document.getElementById(panelId).classList.add('active');
 
   document.getElementById('new-chat-btn').classList.toggle('active', view === 'new-chat');
+  document.getElementById('mate-workbench-btn')?.classList.toggle('active', view === 'mate-workbench');
   document.getElementById('auto-btn')?.classList.toggle('active', view === 'auto');
   document.getElementById('agents-btn').classList.toggle('active', view === 'agents');
   document.getElementById('skills-btn').classList.toggle('active', view === 'skills');
@@ -390,6 +393,9 @@ function setView(view, cid, opts = {}) {
 
   // Memory lives in the Settings feature bundle. Reached only from Settings,
   // so loading it here keeps its 32 KB parser/evaluator cost off chat first paint.
+  if (view === 'mate-workbench' && typeof initMateWorkbench === 'function') {
+    void initMateWorkbench();
+  }
   if (view === 'memory') {
     _loadViewFeature('settings', 'memory', () => {
       if (typeof renderMemoryPage === 'function') renderMemoryPage();

@@ -28,6 +28,7 @@
       </button>
       <div class="sidebar-actions">
         <button class="sidebar-btn primary" id="new-chat-btn"><span data-ui-icon="message-square" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.new_chat">Commander</span><span class="sidebar-btn-running-chip" id="commander-running-chip" hidden></span></button>
+        <button class="sidebar-btn" id="mate-workbench-btn"><span data-ui-icon="sparkles" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.mate_today">今日</span></button>
         <button class="sidebar-btn" id="auto-btn"><span data-ui-icon="clock" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.auto">Auto</span></button>
         <button class="sidebar-btn" id="agents-btn"><span data-ui-icon="users" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.agents">Agents</span></button>
         <button class="sidebar-btn" id="skills-btn"><span data-ui-icon="sparkles" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.skills">Skills</span></button>
@@ -1143,6 +1144,11 @@
         </div>
       </section>
 
+      <!-- Mate 今日：桌面端主体工作台 -->
+      <section class="panel" id="panel-mate-workbench">
+        <div class="mate-workbench" id="mate-workbench" aria-live="polite"></div>
+      </section>
+
       <!-- Workspaces（工作空间一期：空间 = 主界面 + 资源作用域限制） -->
       <section class="panel" id="panel-spaces">
         <div class="spaces-view" id="spaces-view"></div>
@@ -1887,6 +1893,7 @@
   <script src="./modules/ipc-shim.js"></script>
   <script src="./modules/lazy-features.js"></script>
   <script src="./modules/i18n.js"></script>
+  <script src="./modules/mate-workbench.js"></script>
   <script src="./modules/chat-use.js"></script>
   <script src="./modules/user-error.js"></script>
   <script src="./modules/model-guard.js"></script>

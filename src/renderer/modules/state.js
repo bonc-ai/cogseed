@@ -311,6 +311,7 @@ function bindStaticHandlers() {
 
   // Sidebar nav
   document.getElementById('new-chat-btn').addEventListener('click', () => _setViewFromSidebar('new-chat'));
+  document.getElementById('mate-workbench-btn')?.addEventListener('click', () => _setViewFromSidebar('mate-workbench'));
   document.getElementById('auto-btn')?.addEventListener('click', () => _setViewFromSidebar('auto'));
   document.getElementById('agents-btn').addEventListener('click', () => _setViewFromSidebar('agents'));
   document.getElementById('skills-btn').addEventListener('click', () => _setViewFromSidebar('skills'));

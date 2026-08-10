@@ -108,6 +108,7 @@ import { invokeHandlers as qualityHandlers } from './quality';
 import { invokeHandlers as connectorsHandlers } from './connectors';
 import { invokeHandlers as messagingHandlers } from './messaging';
 import { invokeHandlers as personalContextHandlers } from './personal-context';
+import { invokeHandlers as desktopWorkbenchHandlers } from './desktop-workbench';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as cognitionHandlers } from './cognition';
 import { safeId } from '../storage';
@@ -4177,6 +4178,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // Personal context connector (Feishu user OAuth + resource sync). Credential
   // material never crosses this table; status DTOs only.
   ...personalContextHandlers,
+  ...desktopWorkbenchHandlers,
 
   // Cross-session memory UI — view/edit/import/export over features/memory.ts.
   ...memoryHandlers,
