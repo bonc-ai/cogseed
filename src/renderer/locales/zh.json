@@ -3314,5 +3314,6 @@
   "cognition.organize_recent": "整理最近工作",
   "cognition.next_action": "下一步",
   "cognition.minimum_capability_pack": "最小能力包",
-  "cognition.reuse_proof": "复用证明"
+  "cognition.reuse_proof": "复用证明",
+  "personal_context.callback_guide": "首次连接前，请先在飞书开发者后台为应用配置重定向 URL（安全设置 → 重定向 URL）：{url}"
 }

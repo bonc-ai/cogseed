@@ -2,7 +2,8 @@
  * OAuth 回调接收服务器（AGENTS.md「无 HTTP server、无端口占用」的受控例外）。
  *
  * 仅当用户发起飞书授权时存在：
- * - 监听 127.0.0.1 上 OS 分配的随机端口（绝不监听非回环地址）；
+ * - 监听 127.0.0.1（默认 OS 随机端口，授权可传固定端口——飞书要求
+ *   redirect_uri 与后台配置精确一致，真实授权必须固定；绝不监听非回环地址）；
  * - 只接受一次 `GET <path>?code=&state=` 回调，收到后立即关闭；
  * - 默认 5 分钟超时，超时自动关闭并 reject；
  * - 除目标路径外一律 404，非 GET 一律 405——不做任何其他路由。
@@ -37,6 +38,9 @@ export interface StartOAuthCallbackServerOptions {
   path?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** 监听端口；默认 0 = OS 动态分配。飞书 OAuth 要求 redirect_uri 与开发者
+   *  后台配置精确一致，真实授权必须传固定端口；测试保持 0 避免冲突。 */
+  port?: number;
 }
 
 function extractQuery(url: string): URLSearchParams {
@@ -97,7 +101,7 @@ export async function startOAuthCallbackServer(
 
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(0, HOST, () => {
+    server.listen(opts.port ?? 0, HOST, () => {
       server.removeListener('error', reject);
       resolve();
     });

@@ -159,6 +159,7 @@
     section.appendChild(el('h3', '', labelFor('personal_context.title', '')));
     section.appendChild(el('p', '', labelFor('personal_context.subtitle', '')));
     section.appendChild(statusLine());
+    section.appendChild(el('p', 'messaging-owner-guide', labelFor('personal_context.callback_guide', '').replace('{url}', state.status.redirectUri || '')));
     section.appendChild(actions());
     target.appendChild(section);
   }

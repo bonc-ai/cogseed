@@ -3094,5 +3094,6 @@
   "cognition.organize_recent": "Organizar trabalho recente",
   "cognition.next_action": "Próximo passo",
   "cognition.minimum_capability_pack": "Pacote mínimo de capacidade",
-  "cognition.reuse_proof": "Prova de reutilização"
+  "cognition.reuse_proof": "Prova de reutilização",
+  "personal_context.callback_guide": "Antes da primeira conexão, adicione a URL de redirecionamento ao aplicativo no console do desenvolvedor Feishu (Configurações de Segurança → URLs de Redirecionamento): {url}"
 }

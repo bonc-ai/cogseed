@@ -27,6 +27,20 @@ describe('personal context oauth callback server', () => {
     await expect(waiting).resolves.toEqual({ code: 'abc123', state: 'pc_feishu_xyz' });
   });
 
+  it('binds a fixed port when requested and surfaces it in redirectUri', async () => {
+    // 真实授权必须固定端口（飞书要求 redirect_uri 与后台配置精确一致）；
+    // 选一个高位端口避免与常见开发端口冲突。
+    const fixed = await startOAuthCallbackServer({ port: 36415 });
+    handles.push(fixed);
+    expect(fixed.redirectUri).toBe('http://127.0.0.1:36415/oauth/feishu/callback');
+  });
+
+  it('rejects with a clear error when the fixed port is already taken', async () => {
+    const first = await startOAuthCallbackServer({ port: 36416 });
+    handles.push(first);
+    await expect(startOAuthCallbackServer({ port: 36416 })).rejects.toThrow(/EADDRINUSE|address already in use/);
+  });
+
   it('answers 404 for any path outside the callback route', async () => {
     const handle = await startOAuthCallbackServer();
     handles.push(handle);

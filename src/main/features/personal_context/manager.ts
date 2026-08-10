@@ -24,6 +24,14 @@ const PROVIDER_ID = 'feishu';
 /** 仅 exchangeCode 会用到真实 redirectUri；其余端点调用以占位即可 */
 const PLACEHOLDER_REDIRECT = 'http://127.0.0.1/oauth/feishu/callback';
 
+/**
+ * OAuth 回调固定端口（实测验证点：飞书要求 redirect_uri 与开发者后台配置
+ * 精确一致，动态端口报 20029）。修改端口必须同步更新开发者后台的
+ * 重定向 URL 配置：http://127.0.0.1:36415/oauth/feishu/callback
+ */
+export const FEISHU_OAUTH_CALLBACK_PORT = 36415;
+const FEISHU_OAUTH_CALLBACK_PATH = '/oauth/feishu/callback';
+
 interface AuthorizeFlow {
   providerId: string;
   handle: OAuthCallbackServerHandle;
@@ -95,7 +103,15 @@ export async function beginAuthorize(
     flows.delete(flowKey(uid, PROVIDER_ID));
   }
   const { appId, appSecret } = await resolveFeishuApp(uid, opts.instanceId);
-  const handle = await startOAuthCallbackServer();
+  let handle: OAuthCallbackServerHandle;
+  try {
+    handle = await startOAuthCallbackServer({ port: FEISHU_OAUTH_CALLBACK_PORT });
+  } catch (error) {
+    throw new Error(
+      `回调端口 ${FEISHU_OAUTH_CALLBACK_PORT} 启动失败：${(error as Error).message}。` +
+      `请关闭占用该端口的程序后重试（飞书要求回调地址固定，无法自动换端口）。`,
+    );
+  }
   const oauth = createManager(appId, appSecret);
   try {
     const request = await oauth.beginAuthorize(uid, PROVIDER_ID, [...FEISHU_READ_SCOPES], (state) =>
@@ -125,12 +141,14 @@ export async function beginAuthorize(
 }
 
 /** 当前连接状态；授权窗口进行中时附 authorizing 标记 */
-export async function getStatus(uid: string, providerId: string): Promise<OAuthConnectionStatus & { authorizing?: boolean }> {
+export async function getStatus(uid: string, providerId: string): Promise<OAuthConnectionStatus & { authorizing?: boolean; redirectUri?: string }> {
   const { appId, appSecret } = await resolveFeishuApp(uid);
   const oauth = createManager(appId, appSecret);
   const status = await oauth.getStatus(uid, providerId);
   const active = flows.has(flowKey(uid, providerId));
-  return active ? { ...status, authorizing: true } : status;
+  const withAuthorizing = active ? { ...status, authorizing: true } : status;
+  // 回调地址固定（飞书要求与开发者后台配置精确一致），供 UI 引导用户配置。
+  return { ...withAuthorizing, redirectUri: `http://127.0.0.1:${FEISHU_OAUTH_CALLBACK_PORT}${FEISHU_OAUTH_CALLBACK_PATH}` };
 }
 
 /** 取消进行中的授权（关闭回调服务器、收敛状态） */

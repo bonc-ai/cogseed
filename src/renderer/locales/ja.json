@@ -3094,5 +3094,6 @@
   "cognition.organize_recent": "最近の作業を整理",
   "cognition.next_action": "次のステップ",
   "cognition.minimum_capability_pack": "最小能力パック",
-  "cognition.reuse_proof": "再利用証明"
+  "cognition.reuse_proof": "再利用証明",
+  "personal_context.callback_guide": "初回接続前に、Feishu 開発者コンソールのアプリ設定でリダイレクト URL を登録してください（セキュリティ設定 → リダイレクト URL）：{url}"
 }
