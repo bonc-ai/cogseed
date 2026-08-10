@@ -18143,7 +18143,7 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 
 /* Recall cognition console. */
-.skills-cognition-console { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 0; padding: 0; box-sizing: border-box; background: var(--card, #fff); }
+.skills-cognition-console { display: flex; flex: 1 1 auto; flex-direction: column; height: 100%; min-height: 0; gap: 0; padding: 0; box-sizing: border-box; background: var(--card, #fff); }
 .skills-cognition-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--border, #e5e7eb); }
 .skills-cognition-header h1 { margin: 0; font-size: 20px; line-height: 1.25; }
 .skills-cognition-header p { margin: 4px 0 0; color: var(--muted-fg, #6b7280); font-size: 12px; }
@@ -18364,6 +18364,7 @@ body.model-not-configured .main-content { flex-direction: column; }
 
 .skills-cognition-surface {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   height: 100%;
   min-height: 0;

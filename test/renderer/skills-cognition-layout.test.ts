@@ -192,9 +192,13 @@ describe('Recall cognition workspace layout', () => {
   it('keeps Recall pages scrollable and nested controls styled in the primary Recall CSS block', () => {
     const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf-8');
     const appMainRule = css.match(/\.main-content\s*\{[^}]+\}/)?.[0] || '';
+    const consoleRule = css.match(/\.skills-cognition-console\s*\{[^}]+\}/)?.[0] || '';
+    const surfaceRule = css.match(/\.skills-cognition-surface\s*\{[^}]+\}/)?.[0] || '';
     const mainRule = css.match(/\.skills-cognition-main\s*\{[^}]+\}/)?.[0] || '';
     const pageRule = css.match(/\.skills-cognition-page\s*\{[^}]+\}/)?.[0] || '';
     expect(appMainRule).toContain('min-height: 0');
+    expect(consoleRule).toContain('flex: 1 1 auto');
+    expect(surfaceRule).toContain('flex: 1 1 auto');
     expect(mainRule).toContain('overflow-y: auto');
     expect(mainRule).toContain('overscroll-behavior: contain');
     expect(pageRule).toContain('overflow: visible');
