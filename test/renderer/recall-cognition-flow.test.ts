@@ -102,6 +102,69 @@ describe('Recall cognition renderer flow', () => {
     expect(vm.runInContext('_skillsCognitionState.assetSubview', context)).toBe('reuse');
     expect(vm.runInContext('rendered', context)).toBe('assets:reuse');
   });
+
+  it('renders Recall candidates with the shared four-category filters', () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.window.RecallInformationArchitecture = {
+      CATEGORY_ORDER: ['personal', 'rule', 'template', 'skill_method'],
+      normalizeAbilityCategory: (value: string) => value === 'template' ? 'template' : '',
+    };
+    context.document = {
+      getElementById: (id: string) => id === 'skills-cognition-candidates-body' ? host : null,
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      recallCandidates: [{
+        id: 'cand-template',
+        suggestedType: 'template',
+        judgment: 'Use a stable review template',
+        summary: 'Review structure',
+        status: 'pending',
+        suggestedScope: 'project',
+        uncertainty: 'low',
+      }],
+      candidates: [],
+    })})`, context);
+
+    context.renderSkillsCognitionCandidates();
+
+    expect(host.innerHTML).toContain('data-cognition-candidate-category="template"');
+    expect(host.innerHTML).toContain('模板与范例');
+    expect(host.innerHTML).toContain('Use a stable review template');
+  });
+
+  it('shows exactly one cognition deposition nested body for the active view', () => {
+    const context = loadSkillsRenderer();
+    const bodies = ['candidates', 'captures', 'sources'].map((view) => ({
+      dataset: { cognitionDepositionBody: view },
+      hidden: false,
+    }));
+    const tabs = ['candidates', 'captures', 'sources'].map((view) => ({
+      dataset: { cognitionDepositionView: view },
+      classList: { toggle() {} },
+      setAttribute() {},
+    }));
+    const hosts: Record<string, { innerHTML: string }> = {
+      'skills-cognition-candidates-body': { innerHTML: '' },
+      'skills-cognition-captures-body': { innerHTML: '' },
+      'skills-cognition-sources-body': { innerHTML: '' },
+    };
+    context.document = {
+      querySelectorAll: (selector: string) => {
+        if (selector === '[data-cognition-deposition-body]') return bodies;
+        if (selector === '[data-cognition-deposition-view]') return tabs;
+        return [];
+      },
+      getElementById: (id: string) => hosts[id] || null,
+    };
+
+    for (const view of ['sources', 'captures', 'candidates']) {
+      vm.runInContext(`_skillsCognitionState.depositionView = '${view}'`, context);
+      context.renderSkillsCognitionDeposition();
+      expect(bodies.filter((body) => !body.hidden).map((body) => body.dataset.cognitionDepositionBody)).toEqual([view]);
+    }
+  });
+
   it('renders capture controls, grouped filters, task detail, and safe task actions', () => {
     const context = loadSkillsRenderer();
     const host = { innerHTML: '' };

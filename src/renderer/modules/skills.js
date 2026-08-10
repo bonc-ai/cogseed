@@ -82,14 +82,14 @@ function _cognitionStatusLabel(status) {
     revoked: _cognitionText('cognition.status_revoked', '已撤销'),
     ready: _cognitionText('cognition.source_ready', '可用'),
     empty: _cognitionText('cognition.source_empty', '暂无数据'),
-    waiting_quiet: _cognitionText('cognition.capture_waiting_quiet', '等待会话静默'),
+    waiting_quiet: _cognitionText('cognition.capture_waiting_quiet', '等待静默'),
     waiting_completion: _cognitionText('cognition.capture_waiting_completion', '等待会话完成'),
     waiting_manual: _cognitionText('cognition.capture_waiting_manual', '等待手动执行'),
     scheduled: _cognitionText('cognition.capture_scheduled', '等待计划时间'),
-    queued: _cognitionText('cognition.capture_queued', '等待提炼'),
+    queued: _cognitionText('cognition.capture_queued', '正在整理'),
     extracting: _cognitionText('cognition.capture_extracting', '正在整理'),
     paused: _cognitionText('cognition.capture_paused', '已暂停'),
-    review_ready: _cognitionText('cognition.capture_review_ready', '等待审核'),
+    review_ready: _cognitionText('cognition.capture_review_ready', '等待确认'),
     no_candidate: _cognitionText('cognition.capture_no_candidate', '无需沉淀'),
     configuration_required: _cognitionText('cognition.capture_configuration_required', '需要配置模型'),
     failed: _cognitionText('cognition.capture_failed', '提炼失败'),
@@ -781,10 +781,28 @@ function renderSkillsCognitionDeposition() {
 function renderSkillsCognitionCandidates() {
   const host = document.getElementById('skills-cognition-candidates-body');
   if (!host) return;
-  const items = _skillsCognitionState.candidates;
-  const recallItems = Array.isArray(_skillsCognitionState.recallCandidates) ? _skillsCognitionState.recallCandidates : [];
-  if (!items.length && !recallItems.length) { host.innerHTML = _renderCognitionEmpty(_cognitionText('cognition.no_candidates', '暂无待确认候选')); return; }
-  host.innerHTML = `<div class="skills-cognition-record-list">${items.map((c) => {
+  const ia = window.RecallInformationArchitecture;
+  const categoryOrder = ia?.CATEGORY_ORDER || ['personal', 'rule', 'template', 'skill_method'];
+  const normalizeCategory = ia?.normalizeAbilityCategory || ((value) => {
+    if (value === 'personal' || value === 'preference' || value === 'ontology') return 'personal';
+    if (value === 'rule') return 'rule';
+    if (value === 'template') return 'template';
+    if (value === 'skill_method' || value === 'skill_evolution' || value === 'experience') return 'skill_method';
+    return '';
+  });
+  const filter = _skillsCognitionState.candidateCategoryFilter || '';
+  const candidateCategory = (candidate) => normalizeCategory(candidate?.suggestedType || candidate?.type || candidate?.category);
+  const items = (Array.isArray(_skillsCognitionState.candidates) ? _skillsCognitionState.candidates : [])
+    .filter((candidate) => !filter || candidateCategory(candidate) === filter);
+  const recallItems = (Array.isArray(_skillsCognitionState.recallCandidates) ? _skillsCognitionState.recallCandidates : [])
+    .filter((candidate) => !filter || candidateCategory(candidate) === filter);
+  const categoryChips = `<div class="recall-category-chips" role="toolbar">${['', ...categoryOrder].map((category) => {
+    const active = filter === category;
+    const label = category ? _abilityAssetCategoryLabel(category) : _cognitionText('common.all', '全部');
+    return `<button type="button" class="recall-category-chip ${active ? 'is-active' : ''}" data-cognition-candidate-category="${escapeHtml(category)}" aria-pressed="${active ? 'true' : 'false'}">${escapeHtml(label)}</button>`;
+  }).join('')}</div>`;
+  if (!items.length && !recallItems.length) { host.innerHTML = `${categoryChips}${_renderCognitionEmpty(_cognitionText('cognition.no_candidates', '暂无待确认认知'))}`; return; }
+  host.innerHTML = `${categoryChips}<div class="skills-cognition-record-list">${items.map((c) => {
     const fallbackActions = c.source === 'personal_ontology' ? ['open_personal_ontology'] : ['source', 'accept', 'reject'];
     const actions = Array.isArray(c.actions) && c.actions.length ? c.actions : fallbackActions;
     const actionHtml = actions.map((action) => {
@@ -811,7 +829,7 @@ function renderSkillsCognitionCandidates() {
     const diff = `<span class="skills-cognition-diff" data-cognition-diff-available="${c.diffAvailable ? 'true' : 'false'}">${escapeHtml(c.diffAvailable ? _cognitionText('cognition.diff_available', '有变更预览') : _cognitionText('cognition.no_diff', '无变更预览'))}</span>`;
     return `
     <article class="skills-cognition-record cognition-candidate-row" data-cognition-candidate-id="${escapeHtml(c.id)}">
-      <div class="skills-cognition-record-head"><h2>${escapeHtml(c.title || c.id)}</h2><span class="skills-cognition-status">${escapeHtml(_cognitionTypeLabel(c.type))}</span></div>
+      <div class="skills-cognition-record-head"><h2>${escapeHtml(c.title || c.id)}</h2><span class="skills-cognition-status">${escapeHtml(_abilityAssetCategoryLabel(candidateCategory(c)) || _cognitionTypeLabel(c.type))}</span></div>
       <p>${escapeHtml(c.summary || '')}</p>
       <div class="skills-cognition-meta">${escapeHtml(c.source)}${c.scope ? ` · ${escapeHtml(c.scope)}` : ''}${c.confidence ? ` · ${escapeHtml(c.confidence)}` : ''} · ${diff}</div>
       ${target}${sourceRefs}${evidenceRefs}
@@ -822,7 +840,7 @@ function renderSkillsCognitionCandidates() {
     const actions = candidate.status === 'pending' ? ['edit', 'defer', 'reject', 'promote'] : candidate.status === 'deferred' ? ['edit', 'resume', 'reject', 'promote'] : [];
     const editing = _skillsCognitionState.editingRecallCandidateId === candidate.id;
     const editForm = editing ? `<div class="skills-cognition-detail-block recall-candidate-editor"><label>${escapeHtml(_cognitionText('cognition.judgment', '我的判断'))}<textarea data-recall-edit-judgment>${escapeHtml(candidate.judgment || '')}</textarea></label><label>${escapeHtml(_cognitionText('cognition.summary', '摘要'))}<input data-recall-edit-summary value="${escapeHtml(candidate.summary || '')}"></label><label>${escapeHtml(_cognitionText('cognition.scope', '作用域'))}<input data-recall-edit-scope value="${escapeHtml(candidate.suggestedScope || '')}"></label><label>${escapeHtml(_cognitionText('cognition.type', '类型'))}<select data-recall-edit-type>${['personal','rule','template','skill_method'].map((type) => `<option value="${type}" ${candidate.suggestedType === type ? 'selected' : ''}>${escapeHtml(_abilityAssetCategoryLabel(type))}</option>`).join('')}</select></label><label>${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}<textarea data-recall-edit-evidence>${escapeHtml((candidate.sourceRefs || []).map((ref) => `${ref.kind}:${ref.id}`).join('\n'))}</textarea></label><div class="skills-cognition-actions"><button class="btn btn-sm btn-primary" data-recall-candidate-action="save-edit" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('common.save', '保存'))}</button><button class="btn btn-sm" data-recall-candidate-action="cancel-edit" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('common.cancel', '取消'))}</button></div></div>` : '';
-    return `<article class="skills-cognition-record cognition-candidate-row" data-recall-candidate-id="${escapeHtml(candidate.id)}"><div class="skills-cognition-record-head"><h2>${escapeHtml(candidate.summary || candidate.judgment || candidate.id)}</h2><span class="skills-cognition-status">${escapeHtml(candidate.status || '')}</span></div><p>${escapeHtml(candidate.judgment || '')}</p><div class="skills-cognition-meta">${escapeHtml(candidate.suggestedType || '')} · ${escapeHtml(candidate.suggestedScope || '')}</div><div class="skills-cognition-detail-block"><strong>${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}</strong><div class="skills-cognition-ref-row">${_renderCognitionInlineRefs(refs)}</div></div>${editForm}<div class="skills-cognition-actions">${actions.map((action) => `<button class="btn btn-sm ${action === 'promote' ? 'btn-primary' : action === 'reject' ? 'btn-danger' : ''}" data-recall-candidate-action="${escapeHtml(action)}" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(action === 'edit' ? _cognitionText('skills.edit', '编辑') : _cognitionText(`cognition.${action}`, action))}</button>`).join('')}</div></article>`;
+    return `<article class="skills-cognition-record cognition-candidate-row" data-recall-candidate-id="${escapeHtml(candidate.id)}"><div class="skills-cognition-record-head"><h2>${escapeHtml(candidate.summary || candidate.judgment || candidate.id)}</h2><span class="skills-cognition-status">${escapeHtml(_abilityAssetCategoryLabel(candidateCategory(candidate)))}</span></div><p>${escapeHtml(candidate.judgment || '')}</p><div class="skills-cognition-meta">${escapeHtml(candidate.status || '')} · ${escapeHtml(candidate.suggestedScope || '')}${candidate.uncertainty ? ` · ${escapeHtml(candidate.uncertainty)}` : ''}</div><div class="skills-cognition-detail-block"><strong>${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}</strong><div class="skills-cognition-ref-row">${_renderCognitionInlineRefs(refs)}</div></div>${editForm}<div class="skills-cognition-actions">${actions.map((action) => `<button class="btn btn-sm ${action === 'promote' ? 'btn-primary' : action === 'reject' ? 'btn-danger' : ''}" data-recall-candidate-action="${escapeHtml(action)}" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(action === 'edit' ? _cognitionText('skills.edit', '编辑') : _cognitionText(`cognition.${action}`, action))}</button>`).join('')}</div></article>`;
   }).join('')}</section>` : ''}`
 }
 
@@ -896,7 +914,7 @@ function renderSkillsCognitionAssets() {
   const host = document.getElementById('skills-cognition-assets-body');
   if (!host) return;
   const items = _skillsCognitionState.assets;
-  const view = _skillsCognitionState.assetSubview === 'tree' ? 'tree' : 'list';
+  const view = (_skillsCognitionState.assetSubview === 'tree' || _skillsCognitionState.assetView === 'tree') ? 'tree' : 'list';
   if (view === 'tree') {
     const buds = items.filter((item) => item.maturity === 'bud' || item.status === 'candidate').length;
     const lightLeaves = items.filter((item) => item.maturity === 'transfer_validated').length;

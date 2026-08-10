@@ -434,7 +434,7 @@ describe('skills renderer frontmatter parsing', () => {
     expect(host.innerHTML).toContain('0.2.0');
     expect(host.innerHTML).toContain('2');
     expect(host.innerHTML).toContain('data-cognition-page-link="receipts"');
-    expect(host.innerHTML).toContain('data-cognition-page-link="candidates"');
+    expect(host.innerHTML).toContain('data-cognition-page-link="deposition"');
   });
 
 
