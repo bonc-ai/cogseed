@@ -65,6 +65,13 @@ export const invokeHandlers: Record<string, (payload: Record<string, unknown>, c
       status: await personalContext.healthCheck(ctx.userId, provider),
     };
   },
+
+  /** 配置向导数据：凭据就绪状态 + 回调地址 + 开发者后台 appId */
+  'personal_context.get_setup_guide': async (_payload: Record<string, unknown>, ctx: PersonalContextContext) => {
+    return {
+      guide: await personalContext.getSetupGuide(ctx.userId),
+    };
+  },
 };
 
 export { PROVIDER_ID };

@@ -3315,5 +3315,22 @@
   "cognition.next_action": "下一步",
   "cognition.minimum_capability_pack": "最小能力包",
   "cognition.reuse_proof": "复用证明",
-  "personal_context.callback_guide": "首次连接前，请先在飞书开发者后台为应用配置重定向 URL（安全设置 → 重定向 URL）：{url}"
+  "personal_context.setup_toggle": "首次使用需配置飞书应用（点此打开向导）",
+  "personal_context.setup.step0_title": "第 1 步 · 应用凭据",
+  "personal_context.setup.step0_ready": "✓ 已检测到飞书机器人凭据",
+  "personal_context.setup.step0_missing": "未检测到飞书机器人凭据：请先在上方「消息平台」中创建飞书机器人并扫码绑定。",
+  "personal_context.setup.step1_title": "第 2 步 · 配置回调地址",
+  "personal_context.setup.step1_desc": "打开开发者后台，在「安全设置 → 重定向 URL」中粘贴下面的地址并保存：",
+  "personal_context.setup.step2_title": "第 3 步 · 开通只读权限",
+  "personal_context.setup.step2_desc": "在开发者后台「权限管理」中搜索并开通以下权限，然后保存：",
+  "personal_context.setup.permissions": "日历：获取日历、日程及忙闲信息；云空间：查看云空间文件；云文档：查看云文档内容；知识库：查看知识库内容",
+  "personal_context.setup.step3_title": "第 4 步 · 发布版本",
+  "personal_context.setup.step3_desc": "在「版本管理与发布」中创建版本并发布，权限才会对用户生效。",
+  "personal_context.setup.step4_title": "配置完成",
+  "personal_context.setup.step4_desc": "现在可以连接飞书了：点下方「连接我的飞书」，在授权页勾选只读权限并同意即可。",
+  "personal_context.setup.done": "我已完成",
+  "personal_context.setup.copy": "复制地址",
+  "personal_context.setup.copied": "已复制",
+  "personal_context.setup.open_console": "打开开发者后台",
+  "personal_context.setup.finish": "完成"
 }

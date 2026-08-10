@@ -12544,6 +12544,47 @@ body.model-not-configured .main-content { flex-direction: column; }
   line-height: 1.5;
   color: var(--text-2);
 }
+.personal-context-guide-toggle {
+  display: block;
+  margin: 10px 0 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 12px;
+  color: var(--accent, #3370ff);
+  cursor: pointer;
+  text-align: left;
+}
+.personal-context-guide-box {
+  margin-top: 10px;
+}
+.personal-context-guide-box h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+.personal-context-guide-box p {
+  margin: 6px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.personal-context-redirect {
+  display: block;
+  margin: 6px 0;
+  padding: 6px 8px;
+  font-family: var(--mono-font, ui-monospace, monospace);
+  font-size: 12px;
+  word-break: break-all;
+  background: var(--bg-2, rgba(0, 0, 0, 0.04));
+  border-radius: 4px;
+}
+.personal-context-guide-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
 .messaging-manual-fields {
   display: flex;
   align-items: center;

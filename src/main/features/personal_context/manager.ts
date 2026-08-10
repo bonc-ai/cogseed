@@ -151,6 +151,36 @@ export async function getStatus(uid: string, providerId: string): Promise<OAuthC
   return { ...withAuthorizing, redirectUri: `http://127.0.0.1:${FEISHU_OAUTH_CALLBACK_PORT}${FEISHU_OAUTH_CALLBACK_PATH}` };
 }
 
+export interface SetupGuide {
+  /** messaging 是否已配置飞书机器人凭据（向导第 0 步） */
+  credentialReady: boolean;
+  /** 应用 appId（拼开发者后台 URL 用，非机密标识） */
+  appId?: string;
+  /** 回调地址（必须在开发者后台精确配置） */
+  redirectUri: string;
+}
+
+/**
+ * 配置向导数据：能自动检测的（凭据）自动检测；回调地址/权限无法检测
+ * （飞书不提供修改应用配置的 API），由 UI 按步骤引导用户完成。
+ */
+export async function getSetupGuide(uid: string): Promise<SetupGuide> {
+  let appId: string | undefined;
+  let credentialReady = false;
+  try {
+    const app = await resolveFeishuApp(uid);
+    appId = app.appId;
+    credentialReady = true;
+  } catch {
+    // 未配置凭据：向导第 0 步引导去消息平台绑定。
+  }
+  return {
+    credentialReady,
+    ...(appId ? { appId } : {}),
+    redirectUri: `http://127.0.0.1:${FEISHU_OAUTH_CALLBACK_PORT}${FEISHU_OAUTH_CALLBACK_PATH}`,
+  };
+}
+
 /** 取消进行中的授权（关闭回调服务器、收敛状态） */
 export async function cancelAuthorize(uid: string, providerId: string): Promise<OAuthConnectionStatus> {
   const flow = flows.get(flowKey(uid, providerId));

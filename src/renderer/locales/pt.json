@@ -3095,5 +3095,22 @@
   "cognition.next_action": "Próximo passo",
   "cognition.minimum_capability_pack": "Pacote mínimo de capacidade",
   "cognition.reuse_proof": "Prova de reutilização",
-  "personal_context.callback_guide": "Antes da primeira conexão, adicione a URL de redirecionamento ao aplicativo no console do desenvolvedor Feishu (Configurações de Segurança → URLs de Redirecionamento): {url}"
+  "personal_context.setup_toggle": "A primeira configuração exige ajustar o app Feishu (abrir o assistente)",
+  "personal_context.setup.step0_title": "Etapa 1 · Credenciais do app",
+  "personal_context.setup.step0_ready": "✓ Credenciais do bot Feishu detectadas",
+  "personal_context.setup.step0_missing": "Nenhuma credencial de bot Feishu encontrada: crie um bot Feishu em \"Plataforma de Mensagens\" acima e vincule por QR code primeiro.",
+  "personal_context.setup.step1_title": "Etapa 2 · URL de redirecionamento",
+  "personal_context.setup.step1_desc": "Abra o console do desenvolvedor e cole a URL abaixo em \"Configurações de Segurança → URLs de Redirecionamento\", depois salve:",
+  "personal_context.setup.step2_title": "Etapa 3 · Conceder permissões somente leitura",
+  "personal_context.setup.step2_desc": "No console do desenvolvedor, em \"Permissões\", pesquise e ative as seguintes permissões somente leitura, depois salve:",
+  "personal_context.setup.permissions": "Calendário: ver calendários, eventos e disponibilidade; Drive: ver arquivos na nuvem; Documentos: ver conteúdo de documentos; Wiki: ver conteúdo do wiki",
+  "personal_context.setup.step3_title": "Etapa 4 · Publicar uma versão",
+  "personal_context.setup.step3_desc": "Crie e publique uma versão em \"Gerenciamento e Lançamento de Versões\" — as permissões só valem após a publicação.",
+  "personal_context.setup.step4_title": "Configuração concluída",
+  "personal_context.setup.step4_desc": "Agora conecte o Feishu: clique em \"Conectar meu Feishu\" abaixo, marque as permissões somente leitura na página de consentimento e aprove.",
+  "personal_context.setup.done": "Concluído",
+  "personal_context.setup.copy": "Copiar URL",
+  "personal_context.setup.copied": "Copiado",
+  "personal_context.setup.open_console": "Abrir console do desenvolvedor",
+  "personal_context.setup.finish": "Concluir"
 }

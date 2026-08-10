@@ -15,6 +15,10 @@
     authorizing: false,
     busy: false,
     pollTimer: null,
+    // 首次使用配置向导：折叠式，平时只显示一行开关
+    setupOpen: false,
+    setupStep: 0,
+    guide: null,
   };
 
   function page() {
@@ -69,11 +73,20 @@
 
   async function refresh() {
     try {
-      await refreshStatus();
+      await Promise.all([refreshStatus(), refreshGuide()]);
       renderCurrent();
     } catch (error) {
       state.status = { kind: 'error', checkedAt: new Date().toISOString(), error: errorMessage(error) };
       renderCurrent();
+    }
+  }
+
+  async function refreshGuide() {
+    try {
+      const result = await invoke('personal_context.get_setup_guide', {});
+      state.guide = result && result.guide ? result.guide : null;
+    } catch (_) {
+      state.guide = null; // 向导数据缺失不阻塞状态展示
     }
   }
 
@@ -151,6 +164,119 @@
     return row;
   }
 
+  // ---- 首次使用配置向导（折叠式步骤引导）----
+
+  function setupButton(labelKey, onClick) {
+    const btn = el('button', 'btn', labelFor(labelKey, ''));
+    btn.type = 'button';
+    btn.addEventListener('click', () => onClick(btn));
+    return btn;
+  }
+
+  function openConsole(btn) {
+    const appId = state.guide && state.guide.appId;
+    const url = 'https://open.feishu.cn/app' + (appId ? '/' + encodeURIComponent(appId) : '');
+    void invoke('auth.openExternal', { url }).catch(() => undefined);
+  }
+
+  function copyRedirect(btn) {
+    const url = state.guide && state.guide.redirectUri;
+    if (!url) return;
+    navigator.clipboard.writeText(url).then(() => {
+      if (btn) btn.textContent = labelFor('personal_context.setup.copied', '');
+    }).catch(() => undefined);
+  }
+
+  function advanceSetup() {
+    const steps = setupGuideSteps();
+    if (state.setupStep < steps.length - 1) {
+      state.setupStep += 1;
+    } else {
+      state.setupOpen = false; // 最后一步「完成」收起向导
+    }
+    renderCurrent();
+  }
+
+  function toggleSetup() {
+    state.setupOpen = !state.setupOpen;
+    if (state.setupOpen && !state.guide) void refreshGuide().then(() => renderCurrent());
+    renderCurrent();
+  }
+
+  function setupGuideSteps() {
+    const guide = state.guide || {};
+    return [
+      {
+        titleKey: 'personal_context.setup.step0_title',
+        body() {
+          if (guide.credentialReady) {
+            return el('p', '', labelFor('personal_context.setup.step0_ready', ''));
+          }
+          return el('p', '', labelFor('personal_context.setup.step0_missing', ''));
+        },
+        canNext: () => Boolean(guide.credentialReady),
+      },
+      {
+        titleKey: 'personal_context.setup.step1_title',
+        body() {
+          const wrap = el('div', '');
+          wrap.appendChild(el('p', '', labelFor('personal_context.setup.step1_desc', '')));
+          wrap.appendChild(el('code', 'personal-context-redirect', guide.redirectUri || ''));
+          const row = el('div', 'personal-context-guide-actions');
+          row.appendChild(setupButton('personal_context.setup.copy', copyRedirect));
+          row.appendChild(setupButton('personal_context.setup.open_console', openConsole));
+          wrap.appendChild(row);
+          return wrap;
+        },
+        canNext: () => true,
+      },
+      {
+        titleKey: 'personal_context.setup.step2_title',
+        body() {
+          const wrap = el('div', '');
+          wrap.appendChild(el('p', '', labelFor('personal_context.setup.step2_desc', '')));
+          wrap.appendChild(el('p', '', labelFor('personal_context.setup.permissions', '')));
+          const row = el('div', 'personal-context-guide-actions');
+          row.appendChild(setupButton('personal_context.setup.open_console', openConsole));
+          wrap.appendChild(row);
+          return wrap;
+        },
+        canNext: () => true,
+      },
+      {
+        titleKey: 'personal_context.setup.step3_title',
+        body() {
+          return el('p', '', labelFor('personal_context.setup.step3_desc', ''));
+        },
+        canNext: () => true,
+      },
+      {
+        titleKey: 'personal_context.setup.step4_title',
+        body() {
+          return el('p', '', labelFor('personal_context.setup.step4_desc', ''));
+        },
+        canNext: () => true,
+      },
+    ];
+  }
+
+  function renderSetupGuide() {
+    const steps = setupGuideSteps();
+    const index = Math.min(state.setupStep, steps.length - 1);
+    const step = steps[index];
+    const box = el('div', 'messaging-config-card personal-context-guide-box');
+    box.appendChild(el('h4', '', labelFor(step.titleKey, '')));
+    box.appendChild(step.body());
+    if (step.canNext()) {
+      const finish = index >= steps.length - 1;
+      const btn = el('button', 'btn btn-primary', labelFor(finish ? 'personal_context.setup.finish' : 'personal_context.setup.done', ''));
+      btn.type = 'button';
+      btn.addEventListener('click', () => advanceSetup());
+      box.appendChild(btn);
+    }
+    return box;
+  }
+
   function renderCurrent() {
     const target = page();
     if (!target) return;
@@ -159,7 +285,11 @@
     section.appendChild(el('h3', '', labelFor('personal_context.title', '')));
     section.appendChild(el('p', '', labelFor('personal_context.subtitle', '')));
     section.appendChild(statusLine());
-    section.appendChild(el('p', 'messaging-owner-guide', labelFor('personal_context.callback_guide', '').replace('{url}', state.status.redirectUri || '')));
+    const toggle = el('button', 'personal-context-guide-toggle', labelFor('personal_context.setup_toggle', ''));
+    toggle.type = 'button';
+    toggle.addEventListener('click', () => toggleSetup());
+    section.appendChild(toggle);
+    if (state.setupOpen) section.appendChild(renderSetupGuide());
     section.appendChild(actions());
     target.appendChild(section);
   }
@@ -243,6 +373,11 @@
         renderCurrent,
         refreshStatus,
         stopPolling,
+        refreshGuide,
+        toggleSetup,
+        advanceSetup,
+        renderSetupGuide,
+        setupGuideSteps,
       },
     };
   }

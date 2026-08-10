@@ -3315,5 +3315,22 @@
   "cognition.next_action": "Next step",
   "cognition.minimum_capability_pack": "Minimum capability pack",
   "cognition.reuse_proof": "Reuse proof",
-  "personal_context.callback_guide": "Before the first connection, add the redirect URL to the app in the Feishu developer console (Security Settings → Redirect URLs): {url}"
+  "personal_context.setup_toggle": "First-time setup requires configuring the Feishu app (open the wizard)",
+  "personal_context.setup.step0_title": "Step 1 · App credentials",
+  "personal_context.setup.step0_ready": "✓ Feishu bot credentials detected",
+  "personal_context.setup.step0_missing": "No Feishu bot credentials found: create a Feishu bot in \"Messaging Platform\" above and bind it by QR code first.",
+  "personal_context.setup.step1_title": "Step 2 · Redirect URL",
+  "personal_context.setup.step1_desc": "Open the developer console and paste the URL below into \"Security Settings → Redirect URLs\", then save:",
+  "personal_context.setup.step2_title": "Step 3 · Grant read-only scopes",
+  "personal_context.setup.step2_desc": "In the developer console \"Permissions\", search for and enable the following read-only scopes, then save:",
+  "personal_context.setup.permissions": "Calendar: view calendars, events and free/busy info; Drive: view cloud files; Docs: view document content; Wiki: view wiki content",
+  "personal_context.setup.step3_title": "Step 4 · Publish a version",
+  "personal_context.setup.step3_desc": "Create and publish a version under \"Version Management and Release\" — scopes only take effect after publishing.",
+  "personal_context.setup.step4_title": "Setup complete",
+  "personal_context.setup.step4_desc": "Now connect Feishu: click \"Connect my Feishu\" below, check the read-only scopes on the consent page and approve.",
+  "personal_context.setup.done": "Done",
+  "personal_context.setup.copy": "Copy URL",
+  "personal_context.setup.copied": "Copied",
+  "personal_context.setup.open_console": "Open developer console",
+  "personal_context.setup.finish": "Finish"
 }

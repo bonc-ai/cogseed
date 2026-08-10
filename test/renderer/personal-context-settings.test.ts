@@ -22,6 +22,21 @@ const ZH_LABELS: Record<string, string> = {
   'personal_context.revoke_confirm': '确定撤销飞书连接？数据同步将停止。',
   'personal_context.connect_failed': '发起授权失败：{error}',
   'personal_context.revoke_failed': '撤销失败：{error}',
+  'personal_context.setup_toggle': '首次使用需配置飞书应用（点此打开向导）',
+  'personal_context.setup.step0_title': '第 1 步 · 应用凭据',
+  'personal_context.setup.step0_ready': '✓ 已检测到飞书机器人凭据',
+  'personal_context.setup.step0_missing': '未检测到飞书机器人凭据：请先在上方「消息平台」中创建飞书机器人并扫码绑定。',
+  'personal_context.setup.step1_title': '第 2 步 · 配置回调地址',
+  'personal_context.setup.step1_desc': '打开开发者后台，在「安全设置 → 重定向 URL」中粘贴下面的地址并保存：',
+  'personal_context.setup.step2_title': '第 3 步 · 开通只读权限',
+  'personal_context.setup.step2_desc': '在开发者后台「权限管理」中搜索并开通以下权限，然后保存：',
+  'personal_context.setup.step3_title': '第 4 步 · 发布版本',
+  'personal_context.setup.step4_title': '配置完成',
+  'personal_context.setup.done': '我已完成',
+  'personal_context.setup.copy': '复制地址',
+  'personal_context.setup.copied': '已复制',
+  'personal_context.setup.open_console': '打开开发者后台',
+  'personal_context.setup.finish': '完成',
 };
 
 class ElementMock {
@@ -85,14 +100,21 @@ class ElementMock {
 
 interface LoadedModule {
   state: {
-    status: { kind: string; error?: string; needsReauth?: boolean } | null;
+    status: { kind: string; error?: string; needsReauth?: boolean; redirectUri?: string } | null;
     authorizing: boolean;
+    setupOpen: boolean;
+    setupStep: number;
+    guide: { credentialReady: boolean; redirectUri?: string; appId?: string } | null;
   };
   statusLine(): ElementMock;
   actions(): ElementMock;
   renderCurrent(): void;
   refreshStatus(): Promise<void>;
   stopPolling(): void;
+  refreshGuide(): Promise<void>;
+  toggleSetup(): void;
+  advanceSetup(): void;
+  renderSetupGuide(): ElementMock;
 }
 
 function loadModule(overrides: { invokeResult?: unknown } = {}): { module: LoadedModule; page: ElementMock } {
@@ -132,6 +154,13 @@ function loadModule(overrides: { invokeResult?: unknown } = {}): { module: Loade
 
 function buttonsOf(container: ElementMock): ElementMock[] {
   return container.children.filter((child) => child.tagName === 'button');
+}
+
+/** 递归收集：向导 body 里的按钮嵌套在子容器中 */
+function buttonsDeep(node: ElementMock): ElementMock[] {
+  return node.children.flatMap((child) =>
+    child.tagName === 'button' ? [child, ...buttonsDeep(child)] : buttonsDeep(child),
+  );
 }
 
 describe('personal context settings UI', () => {
@@ -194,5 +223,59 @@ describe('personal context settings UI', () => {
     expect(page.children.length).toBeGreaterThan(0);
     const section = page.children[0];
     expect(section.className).toContain('messaging-config-card');
+  });
+
+  it('wizard step 0 shows ready state and can advance when credentials exist', () => {
+    const { module } = loadModule();
+    module.state.guide = { credentialReady: true, redirectUri: 'http://127.0.0.1:36415/oauth/feishu/callback' };
+    const box = module.renderSetupGuide();
+    expect(box.textContent).toContain('已检测到飞书机器人凭据');
+    const buttons = buttonsOf(box);
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]?.textContent).toBe('我已完成');
+    module.advanceSetup();
+    expect(module.state.setupStep).toBe(1);
+  });
+
+  it('wizard step 0 blocks advancing without credentials', () => {
+    const { module } = loadModule();
+    module.state.guide = { credentialReady: false };
+    const box = module.renderSetupGuide();
+    expect(box.textContent).toContain('未检测到飞书机器人凭据');
+    expect(buttonsOf(box)).toHaveLength(0);
+  });
+
+  it('wizard step 1 shows the redirect url with copy and console actions', () => {
+    const { module } = loadModule();
+    module.state.guide = {
+      credentialReady: true,
+      redirectUri: 'http://127.0.0.1:36415/oauth/feishu/callback',
+      appId: 'cli_1111111111111111',
+    };
+    module.state.setupStep = 1;
+    const box = module.renderSetupGuide();
+    expect(box.textContent).toContain('配置回调地址');
+    expect(box.textContent).toContain('http://127.0.0.1:36415/oauth/feishu/callback');
+    const buttons = buttonsDeep(box);
+    expect(buttons.map((b) => b.textContent)).toContain('复制地址');
+    expect(buttons.map((b) => b.textContent)).toContain('打开开发者后台');
+  });
+
+  it('advancing past the final wizard step collapses the guide', () => {
+    const { module } = loadModule();
+    module.state.guide = { credentialReady: true };
+    module.state.setupStep = 4;
+    module.state.setupOpen = true;
+    module.advanceSetup();
+    expect(module.state.setupOpen).toBe(false);
+  });
+
+  it('toggleSetup opens and closes the guide panel', () => {
+    const { module } = loadModule();
+    expect(module.state.setupOpen).toBe(false);
+    module.toggleSetup();
+    expect(module.state.setupOpen).toBe(true);
+    module.toggleSetup();
+    expect(module.state.setupOpen).toBe(false);
   });
 });

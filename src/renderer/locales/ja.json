@@ -3095,5 +3095,22 @@
   "cognition.next_action": "次のステップ",
   "cognition.minimum_capability_pack": "最小能力パック",
   "cognition.reuse_proof": "再利用証明",
-  "personal_context.callback_guide": "初回接続前に、Feishu 開発者コンソールのアプリ設定でリダイレクト URL を登録してください（セキュリティ設定 → リダイレクト URL）：{url}"
+  "personal_context.setup_toggle": "初回使用には Feishu アプリの設定が必要です（ウィザードを開く）",
+  "personal_context.setup.step0_title": "ステップ 1 · アプリ資格情報",
+  "personal_context.setup.step0_ready": "✓ Feishu ボットの資格情報を検出しました",
+  "personal_context.setup.step0_missing": "Feishu ボットの資格情報が見つかりません。上記「メッセージプラットフォーム」で Feishu ボットを作成し、QR コードでバインドしてください。",
+  "personal_context.setup.step1_title": "ステップ 2 · リダイレクト URL",
+  "personal_context.setup.step1_desc": "開発者コンソールを開き、「セキュリティ設定 → リダイレクト URL」に以下の URL を貼り付けて保存してください：",
+  "personal_context.setup.step2_title": "ステップ 3 · 読み取り専用権限の付与",
+  "personal_context.setup.step2_desc": "開発者コンソールの「権限管理」で以下の読み取り専用権限を検索して有効にし、保存してください：",
+  "personal_context.setup.permissions": "カレンダー：カレンダー・予定・空き時間の閲覧；クラウドスペース：クラウドファイルの閲覧；ドキュメント：ドキュメント内容の閲覧；Wiki：Wiki 内容の閲覧",
+  "personal_context.setup.step3_title": "ステップ 4 · バージョンの公開",
+  "personal_context.setup.step3_desc": "「バージョン管理と公開」でバージョンを作成して公開してください。権限は公開後に有効になります。",
+  "personal_context.setup.step4_title": "設定完了",
+  "personal_context.setup.step4_desc": "これで Feishu に接続できます：「私の Feishu に接続」をクリックし、承認ページで読み取り専用権限にチェックして同意してください。",
+  "personal_context.setup.done": "完了しました",
+  "personal_context.setup.copy": "URL をコピー",
+  "personal_context.setup.copied": "コピー済み",
+  "personal_context.setup.open_console": "開発者コンソールを開く",
+  "personal_context.setup.finish": "完了"
 }

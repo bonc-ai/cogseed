@@ -37,6 +37,15 @@ describe('personal context ipc validation', () => {
       ),
     ).rejects.toThrow('invalid messaging instance id');
   });
+
+  it('get_setup_guide returns credential readiness and the fixed redirect uri', async () => {
+    const { invokeHandlers } = await import('../../../src/main/ipc/personal-context');
+    const result = await invokeHandlers['personal_context.get_setup_guide']({}, { userId: 'user-1' }) as {
+      guide: { credentialReady: boolean; redirectUri: string };
+    };
+    expect(result.guide.redirectUri).toBe('http://127.0.0.1:36415/oauth/feishu/callback');
+    expect(typeof result.guide.credentialReady).toBe('boolean');
+  });
 });
 
 describe('pickFeishuInstance', () => {
