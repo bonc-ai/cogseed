@@ -84,6 +84,17 @@
     failed: 'messaging.feishu_qr.status_failed',
   });
 
+  /** Plain-language hints per main-process registration error code. */
+  const FEISHU_QR_ERROR_HINTS = Object.freeze({
+    network_error: 'messaging.feishu_qr.error_network_error',
+    network_unreachable: 'messaging.feishu_qr.error_network_unreachable',
+    network_timeout: 'messaging.feishu_qr.error_network_timeout',
+    network_tls: 'messaging.feishu_qr.error_network_tls',
+    registration_failed: 'messaging.feishu_qr.error_registration_failed',
+    invalid_response: 'messaging.feishu_qr.error_invalid_response',
+    activation_failed: 'messaging.feishu_qr.error_activation_failed',
+  });
+
   function invoke(channel, payload) {
     if (!window.orkas || typeof window.orkas.invoke !== 'function') {
       return Promise.reject(new Error('IPC unavailable'));
@@ -244,6 +255,7 @@
         ? { intervalSeconds: value.intervalSeconds }
         : {}),
       ...(typeof value.error === 'string' && value.error.trim() ? { error: value.error.trim() } : {}),
+      ...(typeof value.errorCode === 'string' && value.errorCode.trim() ? { errorCode: value.errorCode.trim() } : {}),
       ...(value.instance && typeof value.instance === 'object' ? { instance: value.instance } : {}),
     };
   }
@@ -260,7 +272,16 @@
       if (next.expiresAt !== undefined) state.qr.expiresAt = next.expiresAt;
       if (next.intervalSeconds !== undefined) state.qr.intervalSeconds = next.intervalSeconds;
     }
-    if (next.error) state.qr.error = next.error;
+    if (next.errorCode) {
+      // Map the main-process error code to a plain-language hint so a network
+      // hiccup is not mistaken for a product failure.
+      const hintKey = FEISHU_QR_ERROR_HINTS[next.errorCode];
+      state.qr.error = hintKey
+        ? labelFor(hintKey, qrStateLabel('failed'))
+        : next.error || '';
+    } else if (next.error) {
+      state.qr.error = next.error;
+    }
     return next;
   }
 

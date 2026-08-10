@@ -61,13 +61,19 @@ function installProtocol(
     qrUrl?: string;
     expiresInSeconds?: number;
     polls?: Array<PollMock | Error>;
+    /** Throw from the begin call to exercise the failure classification. */
+    beginError?: Error;
     onFormPost?: (body: Record<string, string>) => void;
   } = {},
 ) {
   const pollQueue = [...(opts.polls ?? [])];
   const formPost = vi.fn(async (_flow: unknown, _baseUrl: string, body: Record<string, string>) => {
     opts.onFormPost?.(body);
+    if (body.action === 'init') {
+      return { supported_auth_methods: ['client_secret'] };
+    }
     if (body.action === 'begin') {
+      if (opts.beginError) throw opts.beginError;
       return {
         device_code: 'device-1',
         verification_uri_complete: opts.qrUrl ?? 'https://accounts.feishu.cn/oauth/authorize?code=temporary',
@@ -145,10 +151,11 @@ describe('Feishu QR registration', () => {
     }, { timeout: 3000 });
     const waiting = feature.getFeishuQrRegistrationStatus('user-1', started.flowId);
     expect(waiting.qrUrl).toContain('accounts.feishu.cn/oauth/authorize');
-    expect(waiting.qrUrl).toContain('from=mateagent');
-    expect(waiting.qrUrl).toContain('tp=mateagent');
-    expect(waiting.qrUrl).toContain('addons=');
-    expect(waiting.qrUrl).toContain('name=');
+    // The QR is tagged exactly like hermes-agent: from=hermes&tp=hermes, no
+    // addons preset — the platform creates a fully configured bot from it.
+    expect(waiting.qrUrl).toContain('from=hermes');
+    expect(waiting.qrUrl).toContain('tp=hermes');
+    expect(waiting.qrUrl).not.toContain('addons=');
 
     await vi.waitFor(() => expect(feature.getFeishuQrRegistrationStatus('user-1', started.flowId).state).toBe('completed'), { timeout: 5000 });
     expect(createInstance).toHaveBeenCalledTimes(1);
@@ -171,8 +178,9 @@ describe('Feishu QR registration', () => {
 
     // The poll must carry tp=ob_app so the platform creates a fully
     // configured bot (event subscription included) — mirrors hermes-agent.
-    expect(formBodies).toContainEqual(expect.objectContaining({ action: 'begin' }));
-    expect(formBodies).toContainEqual(expect.objectContaining({ action: 'poll', tp: 'ob_app' }));
+    expect(formBodies.some((body) => body.action === 'init')).toBe(true);
+    const pollBody = formBodies.find((body) => body.action === 'poll');
+    expect(pollBody).toMatchObject({ action: 'poll', tp: 'ob_app' });
   });
 
   it('polls through authorization_pending and slow_down until the scan succeeds', async () => {
@@ -199,8 +207,8 @@ describe('Feishu QR registration', () => {
 
     const started = await feature.startFeishuQrRegistration('user-1', { displayName: 'Helper' });
     await vi.waitFor(() => expect(feature.getFeishuQrRegistrationStatus('user-1', started.flowId).state).toBe('completed'), { timeout: 8000 });
-    // 1 begin + 3 polls
-    expect(formPost).toHaveBeenCalledTimes(4);
+    // 1 init + 1 begin + 3 polls
+    expect(formPost).toHaveBeenCalledTimes(5);
     const pollBodies = formPost.mock.calls.map(([, , body]) => body).filter((body) => body.action === 'poll');
     expect(pollBodies).toHaveLength(3);
   });
@@ -567,6 +575,7 @@ describe('Feishu QR registration', () => {
     // launcher only recognizes codes issued there); the brand is applied at
     // activation time from the scan result.
     await vi.waitFor(() => expect(formBodies.some((body) => body.action === 'begin')).toBe(true));
+    expect(formBodies.some((body) => body.action === 'init')).toBe(true);
     expect(formBodies).not.toContainEqual(expect.objectContaining({ domain: 'accounts.larksuite.com' }));
     // The poll must carry tp=ob_app so the platform configures the event
     // subscription on creation — mirrors hermes-agent.
@@ -670,5 +679,32 @@ describe('Feishu QR registration', () => {
     expect(qrUrl('https://open.larksuite.com/page/launcher?user_code=AB12-CD34&from=sdk')).toContain('open.larksuite.com');
     expect(qrUrl('https://accounts.feishu.cn/oauth/authorize?code=temporary')).toContain('accounts.feishu.cn');
     expect(() => qrUrl('https://evil.example/steal?code=x')).toThrow('untrusted QR URL');
+  });
+
+  it.each([
+    ['network_unreachable', new TypeError('fetch failed', { cause: { code: 'ENOTFOUND' } })],
+    ['network_unreachable', new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } })],
+    ['network_unreachable', new TypeError('fetch failed', { cause: { code: 'UND_ERR_SOCKET' } })],
+    ['network_timeout', new TypeError('fetch failed', { cause: { code: 'UND_ERR_CONNECT_TIMEOUT' } })],
+    ['network_timeout', new TypeError('fetch failed', { cause: { code: 'ETIMEDOUT' } })],
+    ['network_tls', new TypeError('fetch failed', { cause: { code: 'CERT_HAS_EXPIRED' } })],
+    ['network_tls', new TypeError('fetch failed', { cause: new Error('unable to verify the first certificate', { cause: { code: 'DEPTH_ZERO_SELF_SIGNED_CERT' } }) })],
+    ['network_timeout', new TypeError('fetch failed', { cause: { code: 'UND_ERR_HEADERS_TIMEOUT' } })],
+    ['network_error', new TypeError('fetch failed')],
+    ['network_error', new TypeError('fetch failed', { cause: { code: 'UND_ERR_BAD_REQUEST' } })],
+  ])('classifies a begin fetch failure as %s (%#)', async (expected, error) => {
+    vi.doMock('../../../src/main/features/messaging/manager', () => ({
+      createInstance: vi.fn(),
+      deleteInstance: vi.fn(),
+    }));
+
+    const feature = await import('../../../src/main/features/messaging/feishu-registration');
+    installProtocol(feature, { beginError: error });
+
+    const started = await feature.startFeishuQrRegistration('user-1', { displayName: 'Helper' });
+    await vi.waitFor(() => expect(feature.getFeishuQrRegistrationStatus('user-1', started.flowId)).toMatchObject({
+      state: 'failed',
+      errorCode: expected,
+    }), { timeout: 3000 });
   });
 });
