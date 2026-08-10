@@ -15,13 +15,19 @@ const TOKEN_ENDPOINT = 'https://open.feishu.cn/open-apis/authen/v2/oauth/token';
 const REVOKE_ENDPOINT = 'https://open.feishu.cn/open-apis/authen/v1/oidc/revoke';
 const USER_INFO_ENDPOINT = 'https://open.feishu.cn/open-apis/authen/v1/user_info';
 
-/** MVP 只读权限（设计稿 §1.3）：日历 + 云空间 + 文档/知识库 */
+/** MVP 只读权限（设计稿 §1.3）：日历 + 云空间 + 文档/知识库。
+ * ⚠️ 权限点名称必须与开放平台「权限管理」中开通并发布的完全一致（含
+ * :readonly 后缀）。飞书授权页按此校验，不存在的权限点直接报 20043
+ * （实测：`calendar:calendar.event`、`drive:file` 均为无效名称）。
+ * 开通依据：日历事件 API 文档列 `calendar:calendar:readonly`（获取日历、
+ * 日程及忙闲信息）；云空间 `drive:drive:readonly`；云文档 `docx:document:readonly`；
+ * 知识库 `wiki:wiki:readonly`（若开放平台显示为 `wiki:wiki.readonly`，以
+ * 平台「权限管理」搜索结果为准并同步改这里）。 */
 export const FEISHU_READ_SCOPES = [
-  'calendar:calendar',
-  'calendar:calendar.event',
-  'drive:drive',
-  'drive:file',
-  'wiki:wiki',
+  'calendar:calendar:readonly',
+  'drive:drive:readonly',
+  'docx:document:readonly',
+  'wiki:wiki:readonly',
 ] as const;
 
 export interface FeishuOAuthApp {
