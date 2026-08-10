@@ -191,7 +191,7 @@ export interface ExternalResource {
 ### 5.4 数据布局
 
 ```
-<uid>/local/personal-context/           ← 机器私有（OAuth 凭据、加密）
+<uid>/local/config/personal-context/    ← 机器私有（OAuth 凭据、加密，与 messaging.json 同级）
   feishu.json
 <uid>/cloud/context/                    ← 云同步（资源注册表、游标、候选）
   registry.json                         ← ExternalResource 索引（幂等键 → 资源）
@@ -201,7 +201,7 @@ export interface ExternalResource {
 
 候选实体池不新增存储：直接复用 `personal_ontology_candidates` 的既有数据文件，连接器只负责写入候选与来源引用。
 
-> 复用现有路径工具（`src/main/paths.ts:118-123`）：`userLocalRoot(uid)`（机器私有）、`userCloudRoot(uid)`（云同步），数据落 `<uid>/local/personal-context/`、`<uid>/cloud/context/`。不新建全局常量。
+> 复用现有路径工具（`src/main/paths.ts`）：凭据存 `userLocalConfigDir(uid)/personal-context/<provider>.json`（即 `<uid>/local/config/personal-context/`，机器私有，与 messaging.json 同级）；资源注册表、游标、候选存 `userCloudRoot(uid)/context/`（云同步）。不新建全局常量。
 > ⚠️ 落地前核对 `personal_ontology_candidates` 的既有数据文件位置，`cloud/context/` 与其保持一致或明确差异，避免语义重叠目录。
 
 ### 5.5 资源 → 本体管线
