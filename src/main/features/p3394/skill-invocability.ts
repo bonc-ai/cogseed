@@ -74,7 +74,26 @@ export interface InvocabilityRun {
   /** Scripts examined. Zero is normal — most skills are instructional text. */
   scriptCount: number;
   createdAt: string;
+  /**
+   * Monotonic tiebreaker for records written in the same millisecond.
+   *
+   * `createdAt` is an ISO string, so its resolution is 1ms — and two scans of the
+   * same skill routinely land inside one. Ordering by timestamp alone then
+   * depends on `readdir` order, which made "the latest record" a coin flip: the
+   * caller could act on a stale verdict while a newer one sat on disk.
+   */
+  seq: number;
 }
+
+/**
+ * Process-local counter making write order recoverable at millisecond ties.
+ *
+ * Not persisted: it only has to order records this process wrote, and records
+ * from different processes are already separated by more than a millisecond in
+ * every realistic case. Reset on restart, which is why `createdAt` remains the
+ * primary key and this is only the tiebreaker.
+ */
+let _seq = 0;
 
 const MAX_ID = 160;
 const PARSE_TIMEOUT_MS = 10_000;
@@ -275,6 +294,7 @@ function build(skillId: string, checks: InvocabilityCheck[], scriptCount: number
     checks,
     scriptCount,
     createdAt: new Date().toISOString(),
+    seq: ++_seq,
   };
 }
 
@@ -300,7 +320,11 @@ export async function listSkillInvocability(uid: string): Promise<InvocabilityRu
   const dir = path.join(userLocalRoot(uid), 'kstar', 'executions', 'invocability');
   let names: string[];
   try {
-    names = await fs.readdir(dir);
+    // Sorted so the input order is defined before sorting rather than inherited
+    // from the filesystem. `readdir` order is unspecified, and the comparator
+    // below is only a partial order — records tying on both keys would otherwise
+    // come back in whatever sequence the platform happened to yield.
+    names = (await fs.readdir(dir)).sort();
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw err;
@@ -311,7 +335,10 @@ export async function listSkillInvocability(uid: string): Promise<InvocabilityRu
       rows.push(JSON.parse(await fs.readFile(path.join(dir, name), 'utf8')) as InvocabilityRun);
     } catch { /* malformed record ignored, same as the validation store */ }
   }
-  return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  // Timestamp first, then the monotonic tiebreaker: same-millisecond records
+  // would otherwise be ordered by `readdir`, making "latest" nondeterministic.
+  return rows.sort((a, b) =>
+    b.createdAt.localeCompare(a.createdAt) || (b.seq || 0) - (a.seq || 0));
 }
 
 export async function findLatestSkillInvocability(uid: string, skillId: string): Promise<InvocabilityRun | null> {

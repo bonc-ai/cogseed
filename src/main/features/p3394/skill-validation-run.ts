@@ -35,7 +35,25 @@ export interface SkillValidationRun {
   scannedFiles: number;
   boundary: ValidationBoundary;
   createdAt: string;
+  /**
+   * Monotonic tiebreaker for records written in the same millisecond.
+   *
+   * `createdAt` resolves to 1ms, and two validations of one skill routinely land
+   * inside one. Ordering by timestamp alone then falls back to `readdir` order,
+   * so `findLatestSkillValidation` could return a stale verdict while a newer one
+   * sat on disk — and the workspace gate acts on that verdict.
+   */
+  seq: number;
 }
+
+/**
+ * Process-local counter making write order recoverable at millisecond ties.
+ *
+ * Not persisted: it only orders records this process wrote, and cross-process
+ * records are separated by far more than a millisecond in practice. `createdAt`
+ * stays the primary key; this only breaks exact ties.
+ */
+let _seq = 0;
 
 const MAX_ID = 160;
 function requireId(value: unknown, field: string): string {
@@ -66,7 +84,7 @@ export function normalizeValidationReport(
       ...(v.field ? { path: v.field } : {}),
       message: v.suggested_fix || v.rule,
     })),
-    scannedFiles: Math.max(0, Math.floor(scannedFiles)), boundary, createdAt: new Date().toISOString(),
+    scannedFiles: Math.max(0, Math.floor(scannedFiles)), boundary, createdAt: new Date().toISOString(), seq: ++_seq,
   };
 }
 
@@ -115,7 +133,7 @@ export async function runSkillValidation(uid: string, input: {
       validationId: `validation-${randomUUID()}`, skillId: input.skillId, target: input.target,
       status: 'degraded', validatorVersion: 'unavailable',
       violations: [{ level: 'EXTREME', rule: 'scanner_unavailable', message: 'Validator or target content is unavailable.' }],
-      scannedFiles: 0, boundary: 'degraded', createdAt: new Date().toISOString(),
+      scannedFiles: 0, boundary: 'degraded', createdAt: new Date().toISOString(), seq: ++_seq,
     });
   }
 }
@@ -135,12 +153,18 @@ export async function readSkillValidation(uid: string, validationId: string): Pr
 export async function listSkillValidations(uid: string): Promise<SkillValidationRun[]> {
   const dir = path.join(userLocalRoot(uid), 'kstar', 'executions', 'validations');
   let names: string[];
-  try { names = await fs.readdir(dir); } catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []; throw err; }
+  // Sorted so the input order is defined before sorting rather than inherited
+  // from the filesystem: `readdir` order is unspecified, and the comparator below
+  // is only a partial order.
+  try { names = (await fs.readdir(dir)).sort(); } catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []; throw err; }
   const rows: SkillValidationRun[] = [];
   for (const name of names.filter((n) => n.endsWith('.json'))) {
     try { rows.push(JSON.parse(await fs.readFile(path.join(dir, name), 'utf8')) as SkillValidationRun); } catch { /* malformed ignored */ }
   }
-  return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  // Timestamp first, then the monotonic tiebreaker: same-millisecond records
+  // would otherwise be ordered by `readdir`, making "latest" nondeterministic.
+  return rows.sort((a, b) =>
+    b.createdAt.localeCompare(a.createdAt) || (b.seq || 0) - (a.seq || 0));
 }
 
 export async function findLatestSkillValidation(uid: string, skillId: string): Promise<SkillValidationRun | null> {

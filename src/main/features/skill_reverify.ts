@@ -14,6 +14,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { userMarketplaceSkillDir, userSkillsDir } from '../paths';
+import { isScannerSkill, scannerTrustedForLoad } from './scanner_trust';
 import { validateSkillDir } from '../quality';
 import { createLogger } from '../logger';
 import {
@@ -103,6 +104,32 @@ function _resolveSkillDir(uid: string, skillId: string): string | null {
   return null;
 }
 
+/**
+ * Verdict for the security scanner itself, which cannot be content-scanned.
+ *
+ * The scanner's rule files contain the very patterns it detects, so scanning it
+ * returns `blocked` with a wall of red lines — measured, not assumed. Integrity
+ * is checked against a pinned tree hash instead, so tampering is still caught
+ * while the false positive goes away.
+ *
+ * Returns `null` for every other skill, so this cannot become a general bypass.
+ */
+function _scannerVerdict(uid: string, skillId: string, skillDir: string): ReverifyResult | null {
+  if (!isScannerSkill(skillId)) return null;
+
+  const { trusted, integrity } = scannerTrustedForLoad(skillDir);
+  return {
+    skillId,
+    // `risk` rather than `pass` when the pin is missing or unreadable: the tree
+    // was not shown to be intact, and saying `pass` would claim a check that did
+    // not happen. `blocked` is reserved for an actual hash mismatch.
+    decision: trusted ? (integrity === 'verified' ? 'pass' : 'risk') : 'blocked',
+    rescanned: false,
+    staleReason: integrity === 'verified' ? undefined : `scanner_${integrity}`,
+    receipt: readReceipt(uid, skillId),
+  };
+}
+
 export function reverifySkill(uid: string, skillId: string): ReverifyResult {
   const skillDir = _resolveSkillDir(uid, skillId);
   if (!skillDir) {
@@ -111,6 +138,9 @@ export function reverifySkill(uid: string, skillId: string): ReverifyResult {
       staleReason: 'payload_unreadable', receipt: null,
     };
   }
+
+  const scannerExempt = _scannerVerdict(uid, skillId, skillDir);
+  if (scannerExempt) return scannerExempt;
 
   const { stale, reason } = isReceiptStale(uid, skillId, skillDir);
   if (!stale) {
@@ -185,6 +215,9 @@ export async function reverifySkillDeep(uid: string, skillId: string): Promise<R
       staleReason: 'payload_unreadable', receipt: null,
     };
   }
+
+  const scannerExempt = _scannerVerdict(uid, skillId, skillDir);
+  if (scannerExempt) return scannerExempt;
 
   const { stale, reason } = isReceiptStale(uid, skillId, skillDir);
   const cached = stale ? null : readReceipt(uid, skillId);

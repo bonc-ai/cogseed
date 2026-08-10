@@ -137,7 +137,14 @@ export type StaleReason =
   | 'payload_changed'
   | 'validator_upgraded'
   | 'ruleset_changed'
-  | 'payload_unreadable';
+  | 'payload_unreadable'
+  // The security scanner is verified by pinned tree hash rather than by content
+  // scanning (see features/scanner_trust). These record which of those checks
+  // applied, so a scanner admitted without a pin is distinguishable in an audit
+  // from one whose hash actually matched.
+  | 'scanner_unpinned'
+  | 'scanner_tampered'
+  | 'scanner_unreadable';
 
 export interface StaleVerdict {
   stale: boolean;
@@ -344,11 +351,12 @@ export function writeInstallReceipt(
       violationCount: violations.violationCount,
       ...(violations.topRule ? { topRule: violations.topRule } : {}),
       ...(violations.topLevel ? { topLevel: violations.topLevel } : {}),
-      // Both install paths run the full scanner, so the verdict is `deep`. Absent
-      // before, which made a fresh install indistinguishable from a local-only
-      // check and put a "weaker coverage" caveat on a skill that had just had a
-      // full scan.
-      scanner: 'deep',
+      // `deep` only when a deep scan actually ran. `scanner_absent` means the
+      // build ships without the deep scanner and only local red lines were
+      // applied, so recording `deep` there would put a "full scan" badge on a
+      // skill that never had one — the receipt is what the badge and the audit
+      // trail read, so this is the one place that claim must be true.
+      scanner: scan.outcome === 'scanner_absent' ? 'local' : 'deep',
       ...(typeof scan.score === 'number' ? { securityScore: scan.score } : {}),
       ...(scan.scannerVersion ? { scannerVersion: scan.scannerVersion } : {}),
       ...(scan.rulesetVersion ? { rulesetVersion: scan.rulesetVersion } : {}),

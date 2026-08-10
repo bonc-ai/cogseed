@@ -33,6 +33,7 @@ import * as path from 'node:path';
 import { bundledPythonExecutable } from '../../util/bundled-runtime';
 import { createLogger } from '../../logger';
 import { packagedGuardrailDir } from '../../paths';
+import { resolveExternalScanner } from './scan-orchestrator';
 import { validateSkillDir } from '../../quality';
 
 const log = createLogger('security/sentry');
@@ -132,8 +133,16 @@ export interface SentryScanResult {
    * Attack-surface counts only — never file contents or matched strings. Spec
    * §5.2 requires that a high-risk message explain the risk "without exposing
    * the sensitive original text".
+   *
+   * Absent when no scan produced counts (`unknown`, `scanner_absent`). Optional
+   * rather than zero-filled on purpose: consumers test `n > 0` to decide whether
+   * anything was found, so a zeroed surface reads as "scanned, nothing found"
+   * and the security panel rendered "no notable attack surface" for a skill that
+   * was never scanned. Omitting the field makes "not measured" unrepresentable
+   * as a clean result instead of relying on every caller to check the outcome
+   * first.
    */
-  attackSurface: {
+  attackSurface?: {
     egressPoints: number;
     dynamicExecPoints: number;
     persistencePoints: number;
@@ -301,7 +310,8 @@ function unknown(reason: string, extra?: Partial<SentryScanResult>): SentryScanR
     isolated: false,
     scanMode: '',
     hardBlocked: false,
-    attackSurface: { egressPoints: 0, dynamicExecPoints: 0, persistencePoints: 0, hasBinaries: false },
+    // No attackSurface: nothing was measured. See the field's doc comment —
+    // a zeroed surface is indistinguishable from a clean scan downstream.
     requiredMitigations: [],
     vulnerabilityCount: 0,
     scannerVersion: '',
@@ -446,6 +456,17 @@ export async function scanSkillDir(
 
   if (!fs.existsSync(path.join(root, 'sandbox', 'agent_gate.py'))
     || !fs.existsSync(gateScript())) {
+    // Before declaring the scanner absent, look for one installed separately as
+    // a skill package. That is how a build without the bundled closed-source
+    // component still performs a full deep scan rather than degrading to local
+    // rules only.
+    const external = resolveExternalScanner(gateScript());
+    if (external) {
+      return withRedLines(
+        await runGate(external.gateScript, external.engineRoot, skillDir, source, redLines),
+      );
+    }
+
     // A build that deliberately omits the closed-source scanner reports
     // `scanner_absent`, not `unknown`: install admission treats `unknown` like
     // `blocked`, so reusing it here would make such a build unable to install
@@ -461,12 +482,37 @@ export async function scanSkillDir(
     );
   }
 
+  return withRedLines(await runGate(gateScript(), root, skillDir, source, redLines));
+}
+
+/**
+ * Run one gate script against one engine root and interpret its JSON.
+ *
+ * Extracted so a bundled scanner and a separately installed one go through the
+ * same parsing, the same failure taxonomy and the same threshold. A second copy
+ * for the external path is how a *security* threshold drifts: the weaker copy
+ * keeps admitting things and nothing looks broken.
+ *
+ * `redLines` is passed in rather than recomputed: it is already known by the
+ * caller, and it overrides a clean scanner verdict below.
+ *
+ * Returns `unknown` for every failure mode rather than throwing, and never
+ * returns `pass` for output it could not parse.
+ */
+async function runGate(
+  gate: string,
+  engineRoot: string,
+  skillDir: string,
+  source: SkillSource,
+  redLines: string[],
+): Promise<SentryScanResult> {
+  const thru = <T extends SentryScanResult>(r: T): T => r;
   const python = resolvePython();
   let raw: string;
   try {
     raw = await new Promise<string>((resolve, reject) => {
-      const child = spawn(python, [gateScript(), root, skillDir], {
-        cwd: root,
+      const child = spawn(python, [gate, engineRoot, skillDir], {
+        cwd: engineRoot,
         stdio: ['ignore', 'pipe', 'pipe'],
         // PYTHONIOENCODING guards against a non-UTF8 default on Windows
         // mangling the scanner's Chinese-language messages.
@@ -490,18 +536,18 @@ export async function scanSkillDir(
   } catch (err) {
     const msg = (err as Error).message || 'spawn_failed';
     log.warn('sentry scan could not run', { skillDir, error: msg });
-    return withRedLines(unknown(msg === 'timeout' ? 'timeout' : 'spawn_failed'));
+    return thru(unknown(msg === 'timeout' ? 'timeout' : 'spawn_failed'));
   }
 
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(raw) as Record<string, unknown>;
   } catch {
-    return withRedLines(unknown('unparseable_output'));
+    return thru(unknown('unparseable_output'));
   }
   if (typeof parsed.__adapter_error__ === 'string') {
     log.warn('sentry engine raised', { skillDir, error: parsed.__adapter_error__ });
-    return withRedLines(unknown('engine_error'));
+    return thru(unknown('engine_error'));
   }
 
   const scanMode = String(parsed.scan_mode || '');
@@ -510,13 +556,13 @@ export async function scanSkillDir(
   // scan is not a risk finding — it is an unavailable check, and must not be
   // shown to the user as though the skill looked suspicious.
   if (scanMode === 'sandbox-error' || scanMode === 'degraded-error') {
-    return withRedLines(unknown(scanMode, { scanMode, warning: String(parsed.warning || '') }));
+    return thru(unknown(scanMode, { scanMode, warning: String(parsed.warning || '') }));
   }
   // `error` is set when the engine rejected the artifact outright (e.g. path not
   // found). It pairs that with DO_NOT_INSTALL + score 0, so trusting the
   // recommendation alone would mark every unreadable skill as malicious.
   if (typeof parsed.error === 'string' && parsed.error) {
-    return withRedLines(unknown('engine_error', { scanMode }));
+    return thru(unknown('engine_error', { scanMode }));
   }
 
   const surface = (parsed.attack_surface || {}) as Record<string, unknown>;

@@ -155,11 +155,45 @@ describe('skill invocability › PRD §8.2 third admission check', () => {
     expect(run.checks.some((c) => c.status === 'fail')).toBe(false);
   }, 60_000);
 
-  it('returns the most recent record for a skill', async () => {
+  // The tie itself, made deterministic by freezing the clock. Without `seq` the
+  // two records are indistinguishable by timestamp and "latest" falls through to
+  // `readdir` order — and the workspace gate acts on whichever one wins.
+  it('orders records written at an identical timestamp', async () => {
+    mkSkill('tied', { 'SKILL.md': OK_MD });
+
+    // Freeze only the formatting call, not the Date constructor: mocking the
+    // constructor breaks unrelated callers such as randomUUID.
+    const spy = vi.spyOn(Date.prototype, 'toISOString')
+      .mockReturnValue('2026-08-10T12:00:00.000Z');
+    let first; let second;
+    try {
+      first = await verifySkillInvocability(UID, 'tied');
+      second = await verifySkillInvocability(UID, 'tied');
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(second.createdAt).toBe(first.createdAt);
+    expect((await findLatestSkillInvocability(UID, 'tied'))?.invocabilityId)
+      .toBe(second.invocabilityId);
+  }, 60_000);
+
+  // Both writes land in the same millisecond for a script-free skill, so ordering
+  // by the ISO timestamp alone fell through to `readdir` order and "latest" was a
+  // coin flip. The workspace gate acts on this record, so a stale verdict winning
+  // is a real consequence, not a test artifact.
+  it('returns the most recent record even when both land in the same millisecond', async () => {
     mkSkill('twice', { 'SKILL.md': OK_MD });
 
-    await verifySkillInvocability(UID, 'twice');
+    const first = await verifySkillInvocability(UID, 'twice');
     const second = await verifySkillInvocability(UID, 'twice');
+
+    // `seq` is what makes the order recoverable. Asserting it directly keeps this
+    // test deterministic: asserting the two timestamps are EQUAL would make the
+    // test itself depend on whether the writes happen to straddle a millisecond
+    // boundary, which is exactly the nondeterminism being fixed.
+    expect(second.seq).toBeGreaterThan(first.seq);
+    expect(second.createdAt >= first.createdAt).toBe(true);
 
     expect((await findLatestSkillInvocability(UID, 'twice'))?.invocabilityId)
       .toBe(second.invocabilityId);

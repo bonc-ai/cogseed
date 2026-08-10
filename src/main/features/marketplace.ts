@@ -63,10 +63,13 @@ function _securityBlockReason(scan: SentryScanResult): string {
   if (scan.localRedLines?.length) return `red lines: ${scan.localRedLines.join(', ')}`;
   if (scan.hardBlocked) return 'hard-block red line (suspected data exfiltration)';
   const parts: string[] = [];
+  // Absent when nothing was measured (`unknown` / `scanner_absent`), so this is
+  // guarded rather than zero-filled upstream: a zeroed surface would read as
+  // "scanned, nothing found" and explain a rejection with counts of zero.
   const s = scan.attackSurface;
-  if (s.egressPoints > 0) parts.push(`${s.egressPoints} network egress point(s)`);
-  if (s.dynamicExecPoints > 0) parts.push(`${s.dynamicExecPoints} dynamic execution point(s)`);
-  if (s.persistencePoints > 0) parts.push(`${s.persistencePoints} persistence point(s)`);
+  if (s && s.egressPoints > 0) parts.push(`${s.egressPoints} network egress point(s)`);
+  if (s && s.dynamicExecPoints > 0) parts.push(`${s.dynamicExecPoints} dynamic execution point(s)`);
+  if (s && s.persistencePoints > 0) parts.push(`${s.persistencePoints} persistence point(s)`);
   if (parts.length) return parts.join('; ');
   return scan.riskClassification || scan.recommendation || 'security scan rejected';
 }
