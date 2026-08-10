@@ -3,7 +3,7 @@
 **日期：** 2026-08-10
 **状态：** 设计草案（待组会同步）
 **参考输入：**
-- `docs/Cogseed-Hermes-飞书MVP实施计划.md`（Hermes Agent 分支上的 Cogseed 学生伴侣规划，借鉴其产品理念与实施节奏）
+- `docs/Cogseed-Hermes-飞书-MVP实施计划.md`（Hermes Agent 分支上的 Cogseed 学生伴侣规划，借鉴其产品理念与实施节奏）
 - 2026-08-10 讨论例会纪要（赵丽霞 / 牛保康）：定位"面向学生个人的伴侣智能体"，旅程对齐为"身份授权 → 资源选择 → 本体确认 → 执行汇报"，默认只读、写入需确认
 - mate-agent 现有代码盘点（本文档第 3 节）
 
@@ -65,7 +65,7 @@
 
 - **每日简报（自动）**：早 8 点（可配置），机器人向主页会话推送"今日简报"：
   - 今日课程 / 会议（来自已授权日历）；
-  - 近期截止日期（来自课程文件夹 / 文档）；
+  - 近期截止日期（**仅来自本体已确认事实**——未确认候选只提示"有 N 条待确认"，不展示内容）；
   - 建议学习时段（基于空档与截止推算）。
   简报只读展示，无需学生确认；数据缺失时降级为通用简报。
 - **随时提问（被动）**：学生在私聊或获准群聊中提问，例如"下周三之前有什么要交的？"
@@ -90,7 +90,7 @@
 | 记忆写入审批 | `kstar` review-card + requirement 闭环 | ✅ 已有 |
 | 长期记忆 | `memory.ts` + `cognition/` | ✅ 已有 |
 | 有边界任务 Agent | `features/p3394/`（wake-dispatcher、execution-boundary、protocol）+ Commander worker | ✅ 已有 |
-| 定时/主动推送 | `auto_tasks.ts`（daily/weekly）+ `proactive.ts` + `task_notifications.ts` | 🟡 机制已有，数据源未接 |
+| 定时/主动推送 | `auto_tasks.ts`（daily/weekly，bus 单派发）+ `proactive.ts` + `task_notifications.ts` | 🟡 机制已有；数据源与**飞书推送出口**均未接（auto_tasks 与 messaging 目前零引用） |
 | **用户 OAuth（双飞书身份）** | 无（只有应用/机器人令牌） | ❌ 最大缺口 |
 | **飞书上下文连接器（日历/云空间/文档同步）** | 无 | ❌ 最大缺口 |
 
@@ -135,7 +135,7 @@ export interface ConnectorProvider {
   readonly kind: 'oauth';                  // MVP 只支持 OAuth 型
   /** 授权状态与健康检查 */
   status(ctx: ConnectorContext): Promise<ConnectorStatus>;
-  /** 发现可接入的资源类型与候选资源（不读全文） */
+  /** 发现可接入的资源类型与顶层容器（日历/文件夹/知识库节点列表，不展开内容），条目由 sync 拉取 */
   discoverResources(ctx: ConnectorContext): Promise<ExternalResource[]>;
   /** 用户选择后的增量同步；返回新资源与变更 */
   sync(ctx: ConnectorContext, cursor?: SyncCursor): Promise<SyncResult>;
@@ -148,13 +148,14 @@ export interface ExternalResource {
   resourceType: string;     // calendar | document | file | folder | chat | contact
   sourceVersion?: string;   // 版本/事件 ID，用于幂等
   title: string;
-  ownerRef?: string;        // feishu:union_id:on_xxx
+  ownerRef?: string;        // feishu:union_id:ou_xxx（union_id 前缀 ou_）
   containerRef?: string;    // 父容器（文件夹/日历组）
   sourceUrl?: string;
   observedAt: string;
   contentHash?: string;
   accessLabel: 'personal' | 'shared' | 'public';
-  retentionPolicy: string;  // source-linked | fixed
+  retentionPolicy: string;  // source-linked=跟随来源生命周期（来源删除/撤销授权即失效）
+                            // fixed=独立保留，仅按范围遗忘或用户手动删除时移除
   /** 是否已读全文（按需读取标记，避免大文件全文入库） */
   bodyLoaded?: boolean;
 }
@@ -163,16 +164,24 @@ export interface ExternalResource {
 ### 5.2 统一 OAuth 管理器（`features/personal_context/oauth-manager.ts`）
 
 - 通用授权码流程：`authorize(providerId, scopes) → 浏览器授权页 → 回调 → 兑换 token`。
+- **回调机制（关键决策）**：飞书 OAuth 重定向 URL 必须是 http(s)，无法直接回跳 `orkas://` 自定义协议（现有 `connectors/protocol.ts` 的 Server 中转模式是 hosted 依赖，开源版不可用）。采用**授权时临时监听本地回环端口**：发起授权时绑定 `http://127.0.0.1:<临时端口>/oauth/feishu/callback`（OS 分配空闲端口），兑换完成立即关闭监听。这是 AGENTS.md「无 HTTP server、无端口占用」的**受控例外**——仅授权瞬间存在、仅回环地址、不常驻，配合随机 `state` 校验（+ PKCE，若飞书支持）防 CSRF/中间人。阶段 1 需验证飞书对重定向 URL 的校验规则（是否允许 http://127.0.0.1、是否允许动态端口）。
 - 凭据加密存 `userLocalConfigDir(uid)/personal-context/<provider>.json`（机器私有，复用现有 secret 存储模式）。
 - 刷新/撤销/健康检查统一入口；失败时连接器状态置 `error` 并在 UI 明确显示（参考 messaging 实例状态机 `disconnected/connecting/connected/error`）。
 - 令牌写入规则（借鉴 Hermes 文档 9.2）：**令牌绝不进入** xAPI/情节账本、本体事实、日志、任务工作空间或提示词。
 
 ### 5.3 飞书 provider（`features/personal_context/feishu/`）
 
+**应用形态决策（阶段 1 第一验证点）**——飞书官方约束（open.feishu.cn 应用类型与能力）：
+- 企业自建应用：**仅限同一企业内发布和使用**，企业外学生无法授权/使用；
+- 商店应用：第三方 ISV 上架，**所有企业 + 飞书个人版用户**可用；但**无 user_id（仅 open_id/union_id）**——正好支持本设计的 union_id 稳定键；
+- 对外共享（外部群/外部用户单聊）：**仅自建应用可开启**，需企业/团队认证或**个人实名认证**；开启后消息/群组 API 存在权限限制。
+
+决策：MVP 用「自建应用 + 开启对外共享（个人实名认证）」快速验证外部学生授权链路与单聊可行性；商店应用（或合作方租户）作为正式发行形态，阶段 1 并行评估两条路径的成本与限制后定稿。
+
 - `oauth.ts`：飞书授权码 + `user_access_token` 管理（接入现有飞书注册体系，但身份与机器人应用令牌严格分离）。
 - `discovery.ts`：列出可选日历、文件夹、知识库节点、聊天话题（只读元数据）。
 - `sync.ts`：
-  - 事件驱动：复用 messaging 适配器已收的机器人消息/表情/评论事件；
+  - 事件驱动（二期）：日历/文档变更属应用事件订阅（calendar.changed 等），是独立通道，不复用 messaging 消息事件；MVP 以定时增量轮询为主；
   - 定时增量：游标 + `updated_at` 水位同步日历/文件夹元数据/文档版本/联系人；
   - 按需取全文：仅当前任务需要时读取（`bodyLoaded` 标记）；
   - 有限回填：入门时近 30 天事件、未来 90 天日历。
@@ -192,7 +201,8 @@ export interface ExternalResource {
 
 候选实体池不新增存储：直接复用 `personal_ontology_candidates` 的既有数据文件，连接器只负责写入候选与来源引用。
 
-> 复用现有路径工具：`userLocalConfigDir(uid)`（机器私有）、`userCloudRoot(uid)`（云同步）。不新建全局常量。
+> 复用现有路径工具（`src/main/paths.ts:118-123`）：`userLocalRoot(uid)`（机器私有）、`userCloudRoot(uid)`（云同步），数据落 `<uid>/local/personal-context/`、`<uid>/cloud/context/`。不新建全局常量。
+> ⚠️ 落地前核对 `personal_ontology_candidates` 的既有数据文件位置，`cloud/context/` 与其保持一致或明确差异，避免语义重叠目录。
 
 ### 5.5 资源 → 本体管线
 
@@ -204,13 +214,15 @@ export interface ExternalResource {
 ### 5.6 场景层：今日简报（MVP 场景一）
 
 - 配置：`auto_tasks` 新建 `daily` 任务（时间可配，默认 8:00），绑定飞书主页会话 + 归属人。
+  - ⚠️ 集成验证点：现有 auto_tasks 消息经 bus 单派发（`auto_tasks.ts:13`），需确认派发目标能否指定外部消息平台会话（飞书主页会话）；不支持则扩展派发目标模型（阶段 3 第一集成验证点）。
 - 数据：本体已确认事实（课程/截止日期/项目）+ 授权日历近 24h 事件 + 未来 7 天截止。
 - 输出：文本/流式卡片推送到主页会话；不要求用户在场确认（只读展示，无写入）。
 - 失败处理：同步失败/无数据时降级为不含资源数据的通用简报，不阻塞。
 
 ### 5.7 身份绑定补齐
 
-- 稳定键：飞书事件优先用 `tenant + union_id` 解析伴侣身份，`open_id` 作为范围受限后备（`messaging/types.ts` 注释已预留该方向）。
+- 稳定键：飞书事件优先用 `tenant + union_id` 解析伴侣身份，`open_id` 作为范围受限后备（`messaging/types.ts:158` 注释已预留该方向）。
+- **授权一致性校验**：OAuth 回调兑换 token 后，必须校验 token 对应用户的 `union_id` 与绑定关系一致，不一致拒绝（防止"绑定的身份 A 授权了身份 B 的数据"错位）。
 - 双向绑定：机器人侧发起（私聊打招呼）+ 桌面端主动连接（录入 open_id 或扫码）。
 - 组织场景（二期）："申请-审批"绑定企业组织，管理员审批兜底权限边界（会议纪要）。
 
@@ -279,6 +291,6 @@ export interface ExternalResource {
 
 ## 参考资料
 
-- `docs/Cogseed-Hermes-飞书MVP实施计划.md`（理念与节奏来源）
+- `docs/Cogseed-Hermes-飞书-MVP实施计划.md`（理念与节奏来源）
 - 2026-08-10 讨论例会纪要（产品定位与旅程对齐）
 - `src/main/features/messaging/types.ts`、`adapters.ts`、`personal_ontology_candidates.ts`、`auto_tasks.ts`、`features/p3394/`
