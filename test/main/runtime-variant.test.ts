@@ -78,7 +78,7 @@ describe('runtime variant isolation', () => {
     try {
       process.env.ORKAS_WORKSPACE_ROOT = injectedRoot;
       expect(() => installRoot.initializeInstallDataRoot(SOURCE_VARIANT))
-        .toThrow(/inherited ORKAS_WORKSPACE_ROOT is not allowed/);
+        .toThrow(/inherited (?:COGSEED|ORKAS)_WORKSPACE_ROOT is not allowed/);
       expect(installRoot.initializeInstallDataRoot(SOURCE_VARIANT, {
         allowWorkspaceOverride: true,
       })).toMatchObject({

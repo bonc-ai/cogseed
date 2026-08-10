@@ -114,6 +114,7 @@
       "src/main/native/build/*.node",
       "src/renderer/**/*",
       "src/resources/brand.json",
+      "src/resources/identity.json",
       "src/resources/icons/**/*",
       "tsconfig.json",
       "node_modules/tsx/**/*",
