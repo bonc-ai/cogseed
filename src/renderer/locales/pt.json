@@ -617,7 +617,7 @@
   "cognition.boundary": "Limite",
   "cognition.candidate_count": "Candidatos",
   "cognition.candidates": "Cognition Candidates",
-  "cognition.cognition_tree": "Cognition Tree",
+  "cognition.cognition_tree": "Árvore cognitiva",
   "cognition.completed_at": "Concluído em",
   "cognition.conversation": "Conversa",
   "cognition.current_version": "Versão atual",
@@ -2335,7 +2335,7 @@
   "cognition.nav_structure": "Estrutura cognitiva",
   "cognition.nav_governance": "Governança e reutilização",
   "cognition.nav_ability": "Capacidades",
-  "cognition.sources": "Fontes de dados",
+  "cognition.sources": "Fontes cognitivas",
   "cognition.brain": "Brain",
   "cognition.context_pack": "Context Pack",
   "cognition.ontology": "Ontology",
@@ -3067,5 +3067,7 @@
   "cognition.review_next": "Iniciar revisão",
   "cognition.open_deposition": "Ver deposição cognitiva",
   "cognition.organize_recent": "Organizar trabalho recente",
-  "cognition.next_action": "Próximo passo"
+  "cognition.next_action": "Próximo passo",
+  "cognition.minimum_capability_pack": "Pacote mínimo de capacidade",
+  "cognition.reuse_proof": "Prova de reutilização"
 }

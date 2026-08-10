@@ -2473,7 +2473,7 @@
   "cognition.nav_structure": "认知结构",
   "cognition.nav_governance": "治理与复用",
   "cognition.nav_ability": "能力",
-  "cognition.sources": "数据来源",
+  "cognition.sources": "认知来源",
   "cognition.brain": "Brain",
   "cognition.context_pack": "Context Pack",
   "cognition.ontology": "Ontology",
@@ -3287,5 +3287,7 @@
   "cognition.review_next": "开始审查",
   "cognition.open_deposition": "查看认知沉淀",
   "cognition.organize_recent": "整理最近工作",
-  "cognition.next_action": "下一步"
+  "cognition.next_action": "下一步",
+  "cognition.minimum_capability_pack": "最小能力包",
+  "cognition.reuse_proof": "复用证明"
 }

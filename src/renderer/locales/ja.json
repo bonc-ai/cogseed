@@ -617,7 +617,7 @@
   "cognition.boundary": "境界",
   "cognition.candidate_count": "候補",
   "cognition.candidates": "Cognition Candidates",
-  "cognition.cognition_tree": "Cognition Tree",
+  "cognition.cognition_tree": "認知ツリー",
   "cognition.completed_at": "完了時刻",
   "cognition.conversation": "会話",
   "cognition.current_version": "現在のバージョン",
@@ -2335,7 +2335,7 @@
   "cognition.nav_structure": "認知構造",
   "cognition.nav_governance": "ガバナンスと再利用",
   "cognition.nav_ability": "能力",
-  "cognition.sources": "データソース",
+  "cognition.sources": "認知ソース",
   "cognition.brain": "Brain",
   "cognition.context_pack": "Context Pack",
   "cognition.ontology": "Ontology",
@@ -3067,5 +3067,7 @@
   "cognition.review_next": "レビューを開始",
   "cognition.open_deposition": "認知の蓄積を見る",
   "cognition.organize_recent": "最近の作業を整理",
-  "cognition.next_action": "次のステップ"
+  "cognition.next_action": "次のステップ",
+  "cognition.minimum_capability_pack": "最小能力パック",
+  "cognition.reuse_proof": "再利用証明"
 }

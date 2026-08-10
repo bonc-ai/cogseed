@@ -62,6 +62,46 @@ describe('Recall cognition workspace layout', () => {
     }
   });
 
+
+  it('uses CogSeed naming and accessible Recall navigation controls', () => {
+    const surfaceStart = html.indexOf('class="skills-cognition-surface"');
+    const surfaceEnd = html.indexOf('<!-- Skills -->');
+    const surfaceHtml = html.slice(surfaceStart, surfaceEnd);
+    expect(surfaceHtml).toContain('data-i18n="cognition.product_title"');
+    expect(surfaceHtml).toContain('data-i18n="cognition.product_subtitle"');
+    expect(surfaceHtml).toContain('role="tablist"');
+    expect(surfaceHtml).toContain('role="tab"');
+    expect(surfaceHtml).toContain('aria-selected="true"');
+    expect(surfaceHtml).toContain('class="recall-subtab is-active"');
+
+    for (const locale of ['en', 'zh', 'ja', 'pt']) {
+      const messages = JSON.parse(fs.readFileSync(path.join(__dirname, `../../src/renderer/locales/${locale}.json`), 'utf-8'));
+      for (const key of [
+        'cognition.product_title',
+        'cognition.product_subtitle',
+        'cognition.asset_category_personal',
+        'cognition.asset_category_rule',
+        'cognition.asset_category_template',
+        'cognition.asset_category_skill_method',
+        'cognition.cognition_tree',
+        'cognition.minimum_capability_pack',
+        'cognition.reuse_proof',
+      ]) {
+        expect(messages[key]).toBeTruthy();
+      }
+    }
+  });
+
+  it('normalizes Recall journey links away from removed technical pages', () => {
+    const journey = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/journey.js'), 'utf-8');
+    expect(journey).not.toContain("subPage: 'brain'");
+    expect(journey).not.toContain("subPage: 'ontology'");
+    expect(journey).not.toContain("subPage: 'receipts'");
+    expect(journey).toContain("assetSubview: 'tree'");
+    expect(journey).toContain("category: 'personal'");
+    expect(journey).toContain('normalizeRecallLocation');
+  });
+
   it('keeps the original skill library as a sibling panel to Recall', () => {
     expect(html).toContain('id="recall-btn"');
     expect(html).toContain('id="panel-recall"');

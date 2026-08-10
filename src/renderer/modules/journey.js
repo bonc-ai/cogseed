@@ -52,7 +52,8 @@ const JOURNEY_NODES = [
     actionSelectors: ['[data-cognition-source-conversation]'],
     actionType: 'click-any',
     view: 'recall',
-    subPage: 'sources',
+    subPage: 'deposition',
+    depositionView: 'sources',
     title: '认知的原料,你早就有了',
     content: '认知来自你已经在做的事:本地 Agent 的会话、项目文件、执行记录。点开一个会话看看——这就是认知的原料。',
     nextLabel: '去打开',
@@ -69,7 +70,8 @@ const JOURNEY_NODES = [
       return !!(cb && cb.checked);
     },
     view: 'recall',
-    subPage: 'captures',
+    subPage: 'deposition',
+    depositionView: 'captures',
     title: '不用每次手动提炼',
     content: '把沉淀开关打开:会话安静后,它会自动分析新对话、提炼候选认知。(如果开关已经是开的,直接点下一步。)',
     nextLabel: '去开启',
@@ -83,7 +85,8 @@ const JOURNEY_NODES = [
     actionSelectors: ['[data-cognition-candidate-action]', '[data-recall-candidate-action]'],
     actionType: 'click-any',
     view: 'recall',
-    subPage: 'candidates',
+    subPage: 'deposition',
+    depositionView: 'candidates',
     title: '候选:每条都经你之手',
     content: '对任意一条候选执行一个操作(确认、驳回或去个人本体处理)——系统提议,你来决定。',
     nextLabel: '去操作',
@@ -119,11 +122,13 @@ const JOURNEY_NODES = [
     id: 6,
     label: '本体模板',
     desc: '角色模板与记忆分组',
-    targetSelector: '.recall-ontology-workbench',
-    actionSelectors: ['.recall-ontology-row'],
+    targetSelector: '.ability-asset-ontology-summary',
+    actionSelectors: ['[data-ability-asset-category="personal"]', '.ability-asset-ontology-summary .skills-cognition-record'],
     actionType: 'click-any',
     view: 'recall',
-    subPage: 'ontology',
+    subPage: 'assets',
+    assetSubview: 'list',
+    category: 'personal',
     title: '认知住进结构里',
     content: '点开一个分组或模板:引导中你选择的角色(如产品负责人)已经为认知提供了结构落点,资产会自动归位。',
     nextLabel: '去查看',
@@ -133,11 +138,12 @@ const JOURNEY_NODES = [
     id: 7,
     label: '复用证明',
     desc: '认知被使用的记录',
-    targetSelector: '#skills-cognition-receipts-body',
-    actionSelectors: ['[data-cognition-open-receipt]'],
+    targetSelector: '.ability-asset-reuse-summary',
+    actionSelectors: ['[data-cognition-open-receipt]', '[data-cognition-open-reuse]'],
     actionType: 'click-any',
     view: 'recall',
-    subPage: 'receipts',
+    subPage: 'assets',
+    assetSubview: 'reuse',
     title: '每次使用都有证明',
     content: '有记录的话,点开一条证明看看它复用了哪些认知;没有就点下一步——去使用你的 Agent,证明会逐渐积累起来。',
     nextLabel: '去查看',
@@ -147,11 +153,12 @@ const JOURNEY_NODES = [
     id: 8,
     label: '认知闭环',
     desc: '从来源到复用的流水线',
-    targetSelector: '.recall-brain-flow',
+    targetSelector: '.ability-asset-inline-tree',
     actionSelectors: ['.recall-brain-asset', '[data-cognition-page-link="assets"]'],
     actionType: 'click-any',
     view: 'recall',
-    subPage: 'brain',
+    subPage: 'assets',
+    assetSubview: 'tree',
     title: '这就是你的认知闭环',
     content: '点击流水线下方的一个资产节点(或「查看正式资产」)。来源 → 候选 → 资产 → 复用:你刚刚亲手走完了这四步。',
     nextLabel: '去查看',
@@ -415,7 +422,7 @@ function _jShowNode(nodeId) {
     // If this is a Recall sub-page, switch to it after the main view loads
     if (node.subPage) {
       setTimeout(() => {
-        _jSwitchRecallPage(node.subPage);
+        _jSwitchRecallPage(node.subPage, node);
         // For nodes with a target, poll briefly to show coach as soon as target appears
         if (node.targetSelector) {
           _jPollAndShowCoach(node, 800); // Max wait 800ms after subpage switch
@@ -449,24 +456,52 @@ function _jShowNode(nodeId) {
 // Recall sub-page switcher: prefers the app's real switcher (which renders
 // the page body from loaded state) and only falls back to a visibility toggle
 // when skills.js hasn't loaded yet.
-function _jSwitchRecallPage(page) {
+function _jNormalizeRecallLocation(page) {
+  const ia = window.RecallInformationArchitecture;
+  if (ia && typeof ia.normalizeRecallLocation === 'function') return ia.normalizeRecallLocation(page);
+  if (page === 'deposition' || page === 'sources' || page === 'captures' || page === 'candidates') return { page: 'deposition', subview: page === 'deposition' ? 'candidates' : page };
+  if (page === 'assets') return { page: 'assets', subview: 'list' };
+  return { page: 'overview', subview: '' };
+}
+
+function _jApplyRecallNestedLocation(location, options = {}) {
+  if (typeof _skillsCognitionState !== 'object') return;
+  if (location.page === 'deposition') _skillsCognitionState.depositionView = options.depositionView || location.subview || _skillsCognitionState.depositionView;
+  if (location.page === 'assets') {
+    _skillsCognitionState.assetSubview = options.assetSubview || location.subview || _skillsCognitionState.assetSubview;
+    if (options.category || location.category) _skillsCognitionState.assetCategoryFilter = options.category || location.category;
+  }
+}
+
+function _jSwitchRecallPage(page, options = {}) {
+  const location = _jNormalizeRecallLocation(page);
   if (typeof switchSkillsCognitionPage === 'function') {
-    switchSkillsCognitionPage(page);
-    _jLog.info('switched to recall page (real switcher)', { page });
+    switchSkillsCognitionPage(location.page);
+    _jApplyRecallNestedLocation(location, options);
+    if (location.page === 'deposition' && typeof renderSkillsCognitionDeposition === 'function') renderSkillsCognitionDeposition();
+    if (location.page === 'assets' && typeof renderSkillsCognitionAssets === 'function') renderSkillsCognitionAssets();
+    _jLog.info('switched to recall page (real switcher)', { page: location.page, subview: options.depositionView || options.assetSubview || location.subview });
     return;
   }
 
-  const allowed = new Set(['overview', 'sources', 'captures', 'brain', 'context', 'ontology', 'candidates', 'receipts', 'assets']);
-  const targetPage = allowed.has(page) ? page : 'overview';
+  _jApplyRecallNestedLocation(location, options);
+  const targetPage = location.page || 'overview';
 
-  // Hide all page bodies
   document.querySelectorAll('[data-cognition-page-body]').forEach((el) => {
     el.hidden = el.dataset.cognitionPageBody !== targetPage;
   });
 
-  // Update tab active states
   document.querySelectorAll('[data-cognition-page]').forEach((el) => {
     const active = el.dataset.cognitionPage === targetPage;
+    el.classList.toggle('is-active', active);
+    el.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+
+  document.querySelectorAll('[data-cognition-deposition-body]').forEach((el) => {
+    el.hidden = el.dataset.cognitionDepositionBody !== (options.depositionView || location.subview || 'candidates');
+  });
+  document.querySelectorAll('[data-cognition-deposition-view]').forEach((el) => {
+    const active = el.dataset.cognitionDepositionView === (options.depositionView || location.subview || 'candidates');
     el.classList.toggle('is-active', active);
     el.setAttribute('aria-selected', active ? 'true' : 'false');
   });
