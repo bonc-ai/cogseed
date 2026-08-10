@@ -48,6 +48,14 @@ export interface ResourceCapability {
   unsupportedReason?: string;
 }
 
+export interface CalendarEventResourceDetail {
+  startAt: string;
+  endAt?: string;
+  allDay?: boolean;
+  location?: string;
+  description?: string;
+}
+
 /**
  * 来源事实引用（非语义事实）：本体只存治理后的语义事实，这里只存引用与版本。
  * resourceId 是幂等键：`<provider>:<tenant>:<type>:<stableId>`，同键同版本重复写入必须幂等。
@@ -73,6 +81,7 @@ export interface ExternalResource {
   capability?: ResourceCapability;
   contentStatus?: ResourceContentStatus;
   sourceValidity?: ResourceSourceValidity;
+  calendarEvent?: CalendarEventResourceDetail;
 }
 
 // ── 同步游标 ──────────────────────────────────────────────────────────────

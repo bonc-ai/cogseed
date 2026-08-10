@@ -91,7 +91,11 @@ describe('normalize 标准化与幂等键', () => {
     expect(r.sourceVersion).toBe('2026-08-01T08:00:00.000Z');
     expect(r.ownerRef).toBe('feishu:union_id:on_me');
     expect(r.accessLabel).toBe('personal');
-    expect(r.bodyLoaded).toBe(false);
+    expect(r.bodyLoaded).toBe(true);
+    expect(r.calendarEvent).toEqual({
+      startAt: new Date(event1.start_time!).toISOString(),
+      endAt: new Date(event1.end_time!).toISOString(),
+    });
   });
 
   it('visibility → accessLabel 映射：private→personal、public→public、default→shared', async () => {

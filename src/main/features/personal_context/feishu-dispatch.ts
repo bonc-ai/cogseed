@@ -115,32 +115,24 @@ export interface BriefingDataSources {
   loadFacts?: (uid: string) => Promise<BriefingFact[]>;
 }
 
-/** 从注册表读已接入的日历事件。TODO(数据缺口)：normalize 未落盘事件
- *  时间（start_time/end_time 在同步时被丢弃），无 startAt 的事件跳过——
- *  当前注册表条目全部无时间，今日安排为空、简报走降级路径（符合设计稿
- *  §5.6）；A 线在 ExternalResource 补齐事件时间字段后，此函数自动产出
- *  真实今日安排。 */
+/** 从注册表读取已接入且包含时间信息的日历事件。
+ * 时间由 Feishu normalize 阶段写入 ExternalResource.calendarEvent，简报层
+ * 不重新访问 provider，也不展示缺失时间的伪日程。 */
 export async function loadCalendarEvents(uid: string): Promise<BriefingCalendarEvent[]> {
   const entries = await registryStore.list(uid, { types: ['calendar_event'] });
-  const out: BriefingCalendarEvent[] = [];
-  for (const entry of entries) {
-    const startAt = eventStartAtOf(entry.resource);
-    if (!startAt) continue; // 时间不可用 → 跳过，避免向用户展示伪造时间
-    out.push({
+  return entries.flatMap((entry) => {
+    const detail = entry.resource.calendarEvent;
+    if (!detail?.startAt) return [];
+    return [{
       id: entry.resource.resourceId,
       title: entry.resource.title,
-      startAt,
-    });
-  }
-  return out;
-}
-
-/** 从 ExternalResource 提取事件开始时间（ISO）。当前契约无时间字段 → null；
- *  A 线补齐（如 sourceVersion 存 updated_at 之外新增 startAt 字段）后实现。 */
-function eventStartAtOf(resource: ExternalResource): string | null {
-  // TODO(数据缺口)：ExternalResource 尚无事件时间字段（见文件头注释）。
-  void resource;
-  return null;
+      startAt: detail.startAt,
+      ...(detail.endAt ? { endAt: detail.endAt } : {}),
+      ...(detail.allDay !== undefined ? { allDay: detail.allDay } : {}),
+      ...(detail.location ? { location: detail.location } : {}),
+      sourceRef: entry.resource.sourceUrl || entry.resource.resourceId,
+    }];
+  });
 }
 
 /** 组装简报输入。facts/events 数据源可注入（测试或本体管线就位后替换）。 */

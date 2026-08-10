@@ -95,7 +95,12 @@ export function normalizeCalendarEvent(tenant: string, unionId: string, raw: Fei
     observedAt: opts.observedAt ?? nowIso(),
     accessLabel: accessLabelFromVisibility(raw.visibility),
     retentionPolicy: 'source-linked',
-    bodyLoaded: false,
+    bodyLoaded: raw.start_time !== undefined,
+    calendarEvent: raw.start_time !== undefined ? {
+      startAt: new Date(raw.start_time).toISOString(),
+      ...(raw.end_time !== undefined ? { endAt: new Date(raw.end_time).toISOString() } : {}),
+      ...(raw.description ? { description: raw.description } : {}),
+    } : undefined,
   };
 }
 
