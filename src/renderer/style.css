@@ -911,6 +911,59 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   visibility: visible;
 }
 
+/* Space (工作空间/角色) group header — the top level of the sidebar
+   hierarchy. Projects that belong to a space nest under it; conversations
+   nest under those projects. Slightly heavier than a project row so the
+   grouping reads at a glance. */
+.space-group-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  transition: background 0.12s;
+  margin-top: 4px;
+}
+.space-group-row:hover { background: var(--surface-2); }
+.space-caret {
+  flex-shrink: 0;
+  width: 12px;
+  font-size: 10px;
+  color: var(--muted);
+  text-align: center;
+}
+.space-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  color: var(--muted);
+}
+.space-icon svg { pointer-events: none; }
+.space-emoji { font-size: 14px; line-height: 1; }
+.space-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Projects inside a space indent one step so the tree reads space → project
+   → conversation. The nested project's own conv list indents further via the
+   existing .project-conv-list rule. */
+.space-group-children {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 14px;
+}
+
 /* Nested conv items inside a project — slight indent so the hierarchy reads. */
 .project-conv-list {
   display: flex;

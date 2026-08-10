@@ -274,6 +274,8 @@ function _normaliseConversation(raw: any, fallbackCid = ''): Conversation | null
   if (typeof raw.participant_summary_updated_at === 'string' && raw.participant_summary_updated_at) {
     out.participant_summary_updated_at = raw.participant_summary_updated_at;
   }
+  if (raw.imported === true) out.imported = true;
+  if (raw.needs_welcome === true) out.needs_welcome = true;
   const syncRev = Number(raw[RECORD_SYNC_REV_FIELD]) || 0;
   if (Number.isFinite(syncRev) && syncRev > 0) out._sync_rev = Math.floor(syncRev);
   if (typeof raw[RECORD_SYNC_DEVICE_FIELD] === 'string' && raw[RECORD_SYNC_DEVICE_FIELD]) {

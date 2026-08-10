@@ -182,6 +182,12 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .cs-src:last-child{border-bottom:0}
 #cs-onboarding .cs-src:hover{background:#F7FBF9}
 #cs-onboarding .cs-src.selected{background:#F1F9F5}
+/* Row being imported right now — distillation runs several model turns and can
+   take a while, so give the row a live "working" pulse instead of looking
+   frozen. Cleared to .done on success. */
+#cs-onboarding .cs-src.importing{background:#FFF8E6;animation:cs-import-pulse 1.2s ease-in-out infinite}
+#cs-onboarding .cs-src.done{background:#F1F9F5;opacity:.72}
+@keyframes cs-import-pulse{0%,100%{background:#FFF8E6}50%{background:#FFEFC7}}
 #cs-onboarding .cs-src input{width:17px;height:17px;accent-color:var(--cs-forest)}
 #cs-onboarding .cs-src .s-ico{width:38px;height:38px;border-radius:9px;background:var(--cs-forest-weak);display:grid;place-items:center}
 #cs-onboarding .cs-src .s-ico svg{width:19px;height:19px;color:var(--cs-forest)}
@@ -270,7 +276,12 @@ body.cs-onboarding-active .app-container{display:none !important}
 
 /* Step 1a: AI team connect — provider tags */
 /* Step 1: connect AI team — one row per agent */
-#cs-onboarding .cs-team-row .cs-team-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+/* Team rows reuse .cs-src but have NO checkbox (3 children: icon / name /
+   right-actions), so the 4-column .cs-src grid would shove the name into the
+   42px icon slot and truncate it to "Cla…". Override with a matching 3-column
+   template: icon / flexible-name / auto actions. */
+#cs-onboarding .cs-team-row{grid-template-columns:42px minmax(0,1fr) auto}
+#cs-onboarding .cs-team-row .cs-team-right{display:flex;align-items:center;gap:10px}
 #cs-onboarding .cs-team-connect{padding:7px 16px;font-size:12px}
 #cs-onboarding .cs-team-connect.done{background:var(--cs-forest-weak);color:var(--cs-forest-deep);cursor:default}
 #cs-onboarding .cs-team-connect.done:hover{background:var(--cs-forest-weak)}

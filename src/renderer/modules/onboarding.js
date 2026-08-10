@@ -34,6 +34,40 @@ const CS_AGENT_LABELS = {
 // marks in this build and a real logo set can land later.
 const CS_TERMINAL_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg>';
 
+// How many sessions import concurrently. The backend gates all model work
+// behind a 5-slot global semaphore, so we keep this modest to speed up a batch
+// without saturating that pool (a single big session may itself fan out to a
+// few chunk passes). Anything beyond the slots simply queues — never errors.
+const CS_IMPORT_CONCURRENCY = 3;
+
+// Run `task` over `items` with at most `limit` in flight. Best-effort: each
+// task must swallow its own errors (these import tasks do), so one failure
+// never rejects the batch. Resolves once every item has settled.
+async function _csMapWithConcurrency(items, limit, task) {
+  let next = 0;
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  const runWorker = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      await task(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: workerCount }, runWorker));
+}
+
+// Track total import count for the indicator
+let _csTotalImportCount = 0;
+
+function _csUpdateImportCount(delta) {
+  _csTotalImportCount += delta;
+  const indicator = document.getElementById('cs-import-count');
+  if (indicator) {
+    indicator.textContent = String(_csTotalImportCount);
+    indicator.style.color = _csTotalImportCount > 0 ? '#C4612F' : '#8B8B8B';
+  }
+}
+
 function _csEsc(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -114,7 +148,20 @@ function _csObShellHtml() {
       <section class="cs-panel" data-cspanel="2">
         <div class="cs-kicker">来源检测 · 跨 Agent · 只读</div>
         <h1>从你在其他 Agent 里的对话继续</h1>
-        <p class="cs-lead">检测你本机安装的 Agent 命令行工具，列出可导入的历史会话。导入的会话会用上一步连接的模型自动压缩提炼，并出现在左侧会话列表，点进去即可继续对话。</p>
+        <p class="cs-lead">检测你本机安装的 Agent 命令行工具，列出可导入的历史会话。<b>点击左侧 Agent，勾选想导入的会话，然后点击"导入所选会话"按钮</b>。导入的会话会用上一步连接的模型自动压缩提炼，并出现在左侧会话列表，点进去即可继续对话。</p>
+
+        <div style="margin:20px 0;padding:14px 18px;background:#FFF8E6;border-left:3px solid #FFB020;border-radius:6px;font-size:14px;color:#5C635D">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <span style="font-size:18px">💡</span>
+            <b style="color:#1F2421">操作提示</b>
+          </div>
+          <div>1. 点击左侧列表中的 Agent（如 Claude、Codex）</div>
+          <div>2. 在右侧勾选你想导入的会话</div>
+          <div>3. 点击"导入所选会话"按钮完成导入</div>
+          <div style="margin-top:8px;font-size:13px;color:#8B8B8B">
+            已导入会话数：<span id="cs-import-count" style="font-weight:600;color:#C4612F">0</span>
+          </div>
+        </div>
 
         <h3 style="margin:28px 0 12px;font-size:15px;font-weight:650">检测到的 Agent</h3>
         <div class="cs-list" id="cs-agent-list">
@@ -132,20 +179,9 @@ function _csObShellHtml() {
       <section class="cs-panel" data-cspanel="3">
         <div class="cs-kicker">可选 · 非阻断 · 可跳过</div>
         <h1>你主要在做哪类工作？</h1>
-        <p class="cs-lead">角色模板只提供结构建议（本体结构、能力建议、Main Skill），<b>不会自动生成关于你的任何事实</b>。现在选择或跳过都可以，之后随时可更换、叠加。</p>
-        <div class="cs-role-cards">
-          <button class="cs-role-card" data-csrole="product">
-            <span class="r-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="12" r="4"/></svg></span>
-            <h3>产品负责人</h3>
-            <p>适合持续维护 PRD、管理产品边界与交付验收的工作方式。</p>
-            <span class="r-tags"><span class="r-tag">产品工作 Workspace</span><span class="r-tag">PRD 回写 Skill</span></span>
-          </button>
-          <button class="cs-role-card" data-csrole="researcher">
-            <span class="r-ico amber"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20Z"/></svg></span>
-            <h3>AI 研究员</h3>
-            <p>适合复现论文、分析开源项目与沉淀研究方法。</p>
-            <span class="r-tags"><span class="r-tag">AI 项目交付 Workspace</span><span class="r-tag">论文复现</span></span>
-          </button>
+        <p class="cs-lead">角色模板提供结构建议（本体字段、技能、智能体），<b>不会自动生成关于你的任何事实</b>。选择后会创建工作空间，之后随时可更换、叠加。</p>
+        <div class="cs-role-cards" id="cs-role-cards">
+          <div class="cs-state loading">正在加载角色模板...</div>
         </div>
         <div class="cs-role-result" id="cs-role-result" style="max-width:560px">
           <h4>角色模板已应用 · 不自动生成个人事实</h4>
@@ -177,6 +213,7 @@ function _csGoStep(n) {
   shell.querySelector('.cs-content')?.scrollTo?.(0, 0);
   if (step === 1) _csLoadTeam(false);
   if (step === 2) _csLoadAgents(false);
+  if (step === 3) _csLoadRoleTemplates();
 }
 
 // Renders the REAL detection result, LEFT-RIGHT layout:
@@ -232,9 +269,18 @@ function _csRenderAgents(entries) {
 
   box.innerHTML = html;
 
-  // Load first agent's assets
+  // Auto-expand first agent and load its assets
   if (available.length > 0) {
-    _csLoadAgentAssets(available[0].type);
+    const firstAgent = available[0];
+    _csLoadAgentAssets(firstAgent.type);
+
+    // Auto-select the first agent in sidebar
+    setTimeout(() => {
+      const firstItem = box.querySelector('.cs-agent-item');
+      if (firstItem) {
+        firstItem.classList.add('active');
+      }
+    }, 50);
   }
 }
 
@@ -251,6 +297,10 @@ window._csSelectAgent = function(agentType) {
   // Load this agent's assets
   _csLoadAgentAssets(agentType);
 };
+
+// Expose import functions to global scope for onclick handlers
+window._csImportClaudeSessions = _csImportClaudeSessions;
+window._csImportCodexSessions = _csImportCodexSessions;
 
 // Load and render all 4 asset types for one agent
 function _csLoadAgentAssets(agentType) {
@@ -367,7 +417,11 @@ function _csFillAssetSection(agentType, asset, html) {
   const box = document.getElementById('cs-agent-list');
   if (!box) return null;
   const body = box.querySelector(`.cs-asset-section-body[data-agent="${agentType}"][data-asset="${asset}"]`);
-  if (body) body.innerHTML = html;
+  // Only rewrite the section body when caller passed HTML. The import handlers
+  // call this with just (agentType, asset) to GET the container reference —
+  // writing `undefined` there would wipe the checked session rows before we
+  // read them, silently zeroing the selection and killing the import.
+  if (body && html !== undefined) body.innerHTML = html;
   return body;
 }
 
@@ -397,13 +451,26 @@ async function _csLoadTeam(force) {
   }
 
   try {
-    const res = await window.orkas.invoke('customProviders.ccswitch.preview');
+    // CC Switch model preview and local CLI detection are independent sources —
+    // fetch both in parallel. CC Switch gives model providers to sync; local
+    // detection gives coding CLIs (Claude/Codex) we can add as team agents.
+    // The team should show a CLI even when CC Switch has no card for it.
+    const [res, localClis] = await Promise.all([
+      window.orkas.invoke('customProviders.ccswitch.preview'),
+      _csDetectCodingClis(),
+    ]);
     if (!res || res.ok !== true) {
       const reason = (res && res.reason) || 'unknown';
+      // CC Switch unavailable is fine if we still detected a local CLI — render
+      // the CLI-only team rather than an error state.
+      if (localClis.size) {
+        _csRenderTeam([], [], localClis);
+        return;
+      }
       box.innerHTML = `<div class="cs-state">暂时无法读取可连接的 Agent（${_csEsc(reason)}）。可稍后在设置的「AI 团队」里手动添加。</div>`;
       return;
     }
-    _csRenderTeam(res.items || [], res.unsupported || []);
+    _csRenderTeam(res.items || [], res.unsupported || [], localClis);
   } catch (err) {
     const msg = (err && err.message) || String(err);
     _obLog.warn('ccswitch preview failed', { error: msg });
@@ -425,23 +492,99 @@ function _csAgentLabel(appType) {
 // the user only sees "this agent can connect", not the underlying keys.
 let _csTeamByAgent = {};
 
+// Per-appType local coding-CLI availability, filled by _csRenderTeam and read
+// by _csConnectTeam. When an appType maps to a detected local CLI (Claude /
+// Codex), "connect" also creates a CLI-backed agent so it shows up as a real
+// member of the AI team — not just a synced model provider.
+let _csCliByAgent = {};
+
+// appType (CC Switch prefix / local CLI type) → coding-CLI runtime name.
+// Only claude & codex are coding CLIs the team can drive as agents; other
+// appTypes stay model-provider-only (CC Switch sync path).
+function _csCodingCliForAppType(appType) {
+  if (appType === 'claude' || appType === 'claude-desktop') return 'claude';
+  if (appType === 'codex') return 'codex';
+  return '';
+}
+
+// No-whitespace agent name for a coding CLI (the create form rejects spaces via
+// _NAME_TOKEN_RE), so "Claude Code" can't be a name — use the compact brand.
+function _csAgentNameForCli(cli) {
+  if (cli === 'claude') return 'Claude';
+  if (cli === 'codex') return 'Codex';
+  return cli;
+}
+
+// Detect local coding CLIs once per connect pass. Returns a Set of cli names
+// ('claude' / 'codex') that are installed & version-OK on this machine.
+async function _csDetectCodingClis() {
+  const found = new Set();
+  try {
+    const res = await window.orkas.invoke('localAgents.list', { force: false });
+    const entries = (res && res.entries) || [];
+    entries.forEach((e) => {
+      if (!e || !e.available) return;
+      const cli = _csCodingCliForAppType(e.type);
+      if (cli) found.add(cli);
+    });
+  } catch (err) {
+    _obLog.warn('team CLI detect failed', { error: (err && err.message) || String(err) });
+  }
+  return found;
+}
+
+// Create a CLI-backed team agent for `cli` if one doesn't already exist.
+// Idempotent: skips when any agent already runs this CLI runtime (the user may
+// have made one by hand, or we ran earlier). Returns 'created' | 'exists' |
+// 'error'. Never throws — team connect must survive a create failure.
+async function _csEnsureCliAgent(cli, existingAgents) {
+  try {
+    const already = (existingAgents || []).some((a) => {
+      const rt = a && a.runtime;
+      return rt && rt.kind === 'cli' && rt.cli === cli;
+    });
+    if (already) return 'exists';
+    const res = await window.orkas.invoke('agents.create', {
+      name: _csAgentNameForCli(cli),
+      description: cli === 'claude'
+        ? '本机 Claude Code 命令行，作为 AI 团队成员执行编码任务'
+        : '本机 Codex 命令行，作为 AI 团队成员执行编码任务',
+      icon: 'code',
+      color: 'sage',
+      runtime: { kind: 'cli', cli },
+      category: 'general',
+    });
+    if (res && res.agent) {
+      _obLog.info('team CLI agent created', { cli, agentId: res.agent.agent_id });
+      return 'created';
+    }
+    _obLog.warn('team CLI agent create returned no agent', { cli });
+    return 'error';
+  } catch (err) {
+    _obLog.warn('team CLI agent create failed', { cli, error: (err && err.message) || String(err) });
+    return 'error';
+  }
+}
+
 // Render one card PER AGENT (Claude Code, Codex …) — no key details, no
 // provider list, no checkboxes. Each agent shows a status line and a single
 // "connect" button that syncs all of that agent's importable providers.
-function _csRenderTeam(items, unsupported) {
+function _csRenderTeam(items, unsupported, localClis) {
   const box = document.getElementById('cs-team-list');
   if (!box) return;
 
-  if (!items.length && !unsupported.length) {
+  const clis = localClis instanceof Set ? localClis : new Set();
+
+  if (!items.length && !unsupported.length && !clis.size) {
     box.innerHTML =
       '<div class="cs-state">未检测到可一键连接的 Agent。可在设置的「AI 团队」里手动添加模型后再回来。</div>';
     return;
   }
 
   // Bucket both importable and unsupported rows by their originating agent.
-  const groups = new Map(); // appType → { ids: [], needsKey: n, unsupported: n }
+  const groups = new Map(); // appType → { ids: [], needsKey: n, unsupported: n, hasCli: bool }
   const bucket = (appType) => {
-    if (!groups.has(appType)) groups.set(appType, { ids: [], needsKey: 0, unsupported: 0 });
+    if (!groups.has(appType)) groups.set(appType, { ids: [], needsKey: 0, unsupported: 0, hasCli: false });
     return groups.get(appType);
   };
   items.forEach((it) => {
@@ -451,9 +594,22 @@ function _csRenderTeam(items, unsupported) {
   });
   unsupported.forEach((u) => { bucket(u.appType || 'other').unsupported += 1; });
 
-  // Stash ids for the connect handler; DOM never carries key material.
+  // Fold detected local coding CLIs into the same buckets. A CLI maps to a
+  // canonical appType so it either enriches an existing CC Switch card or
+  // stands up its own card when CC Switch had nothing for it.
+  const cliAppType = { claude: 'claude', codex: 'codex' };
+  clis.forEach((cli) => {
+    const appType = cliAppType[cli] || cli;
+    bucket(appType).hasCli = true;
+  });
+
+  // Stash ids + CLI presence for the connect handler; DOM never carries key material.
   _csTeamByAgent = {};
-  groups.forEach((g, appType) => { _csTeamByAgent[appType] = g.ids.slice(); });
+  _csCliByAgent = {};
+  groups.forEach((g, appType) => {
+    _csTeamByAgent[appType] = g.ids.slice();
+    if (g.hasCli) _csCliByAgent[appType] = _csCodingCliForAppType(appType);
+  });
 
   // Stable, friendly ordering: known agents first, then any others.
   const order = ['claude', 'claude-desktop', 'codex', 'gemini'];
@@ -465,7 +621,8 @@ function _csRenderTeam(items, unsupported) {
   const rows = appTypes.map((appType) => {
     const g = groups.get(appType);
     const label = _csAgentLabel(appType);
-    const connectable = g.ids.length;
+    // Connectable if there are models to sync OR a local CLI to add as an agent.
+    const connectable = g.ids.length > 0 || g.hasCli;
 
     // Status line: connectable count, plus honest hints for needs-key /
     // non-migratable credentials — without exposing any key values.
@@ -479,6 +636,7 @@ function _csRenderTeam(items, unsupported) {
     }
 
     const hints = [];
+    if (g.hasCli) hints.push('检测到本机命令行，可加入团队直接干活');
     if (g.needsKey) hints.push(`${g.needsKey} 项需连接后到设置补充 Key`);
     if (g.unsupported) hints.push(`${g.unsupported} 项为订阅/OAuth 登录，需在设置里登录`);
     const hintHtml = hints.length ? `<small>${_csEsc(hints.join(' · '))}</small>` : '';
@@ -512,9 +670,10 @@ async function _csConnectTeam(box, appType) {
   const row = box.querySelector(`.cs-team-row[data-app-type="${appType}"]`);
   const btn = row ? row.querySelector('.cs-team-connect') : null;
   const externalIds = (_csTeamByAgent[appType] || []).slice();
+  const cli = _csCliByAgent[appType] || '';
   const label = _csAgentLabel(appType);
 
-  if (!externalIds.length) {
+  if (!externalIds.length && !cli) {
     _csToast(`「${label}」暂无可一键连接的模型`);
     return;
   }
@@ -522,23 +681,55 @@ async function _csConnectTeam(box, appType) {
   if (btn) { btn.disabled = true; btn.textContent = '连接中…'; }
 
   try {
-    const res = await window.orkas.invoke('customProviders.ccswitch.sync', { externalIds });
-    if (!res || res.ok !== true) {
-      const reason = (res && res.reason) || '未知原因';
-      _csToast(`连接「${label}」失败：${reason}`);
-      if (btn) { btn.disabled = false; btn.textContent = '连接'; }
-      return;
+    // 1) Sync CC Switch model providers (if any) into "AI 团队".
+    let added = 0;
+    let updated = 0;
+    if (externalIds.length) {
+      const res = await window.orkas.invoke('customProviders.ccswitch.sync', { externalIds });
+      if (!res || res.ok !== true) {
+        const reason = (res && res.reason) || '未知原因';
+        _csToast(`连接「${label}」失败：${reason}`);
+        if (btn) { btn.disabled = false; btn.textContent = '连接'; }
+        return;
+      }
+      added = res.added || 0;
+      updated = res.updated || 0;
     }
-    const added = res.added || 0;
-    const updated = res.updated || 0;
+
+    // 2) If this agent has a local coding CLI, add it as a real team member.
+    // Best-effort: a create failure is reported but does not undo the model
+    // sync above. Load existing agents once so we don't duplicate.
+    let cliResult = '';
+    if (cli) {
+      let existing = [];
+      try {
+        const listRes = await window.orkas.invoke('agents.list', {});
+        existing = (listRes && listRes.agents) || [];
+      } catch (err) {
+        _obLog.warn('team connect: agents.list failed', { error: (err && err.message) || String(err) });
+      }
+      cliResult = await _csEnsureCliAgent(cli, existing);
+    }
+
     // Reflect the connected state on the row itself; keep it non-technical.
     if (row) {
       const statusEl = row.querySelector('.g-status');
       if (statusEl) { statusEl.textContent = '已连接'; statusEl.classList.remove('off'); }
       if (btn) { btn.textContent = '已连接'; btn.disabled = true; btn.classList.add('done'); }
     }
-    _csToast(`已把「${label}」连接到 AI 团队（${added + updated} 个模型）`);
-    _obLog.info('team connect finished', { appType, added, updated });
+
+    // Honest, combined summary of what actually happened.
+    const parts = [];
+    const models = added + updated;
+    if (models) parts.push(`${models} 个模型`);
+    if (cliResult === 'created') parts.push('新增 1 位 CLI 成员');
+    else if (cliResult === 'exists') parts.push('CLI 成员已在团队');
+    if (cliResult === 'error') {
+      _csToast(`「${label}」模型已连接，但加入 CLI 成员失败，可稍后在「AI 团队」里手动新建`);
+    } else {
+      _csToast(parts.length ? `已把「${label}」连接到 AI 团队（${parts.join('，')}）` : `已连接「${label}」`);
+    }
+    _obLog.info('team connect finished', { appType, added, updated, cli, cliResult });
   } catch (err) {
     const msg = (err && err.message) || String(err);
     _obLog.warn('team connect failed', { appType, error: msg });
@@ -711,9 +902,22 @@ async function _csImportClaudeSessions(agentType) {
     if (result) result.textContent = '请先勾选要导入的会话';
     return;
   }
-  if (btn) { btn.disabled = true; btn.textContent = '导入中…'; }
-  let ok = 0, failed = 0, cognitions = 0;
-  for (const row of selected) {
+  if (btn) { btn.disabled = true; }
+  // Each session runs one or more model turns to distill cognitions, each
+  // gated by the backend's 5-slot global semaphore. Import several sessions
+  // CONCURRENTLY instead of one-at-a-time so a multi-session batch finishes in
+  // roughly batch/CS_IMPORT_CONCURRENCY the wall time. Progress is a live
+  // completed-counter (order of completion is non-deterministic under
+  // concurrency, so "n/total done" is the honest framing).
+  const total = selected.length;
+  let ok = 0, failed = 0, cognitions = 0, done = 0;
+  const paint = () => {
+    if (btn) btn.textContent = `导入中… ${done}/${total}`;
+    if (result) result.textContent = `正在导入并提炼认知（${done}/${total} 完成）· 大会话需要一点时间，请稍候…`;
+  };
+  paint();
+  selected.forEach((r) => r.classList.add('importing'));
+  await _csMapWithConcurrency(selected, CS_IMPORT_CONCURRENCY, async (row) => {
     const filePath = row.dataset.sessionId;
     try {
       const res = await window.orkas.invoke('sessionImport.importClaudeSession', { filePath });
@@ -726,29 +930,50 @@ async function _csImportClaudeSessions(agentType) {
         }
         const cb = row.querySelector('input[type="checkbox"]');
         if (cb) cb.checked = false;
+        row.classList.remove('importing');
         row.classList.add('done');
       } else {
         failed++;
+        row.classList.remove('importing');
       }
     } catch (err) {
       failed++;
+      row.classList.remove('importing');
       _obLog.warn('import claude session failed', { filePath, error: (err && err.message) || String(err) });
+    } finally {
+      done++;
+      paint();
     }
-  }
+  });
   if (btn) { btn.disabled = false; btn.textContent = '导入所选会话'; }
   if (result) {
     result.textContent = `导入完成：成功 ${ok} 个${failed ? `，失败 ${failed} 个` : ''}${cognitions ? `，提取 ${cognitions} 条候选认知` : ''}`;
   }
   // Trigger conversation list refresh so imported sessions appear in sidebar
   if (ok > 0) {
-    if (window._markConversationListLocallyChanged) {
+    _csUpdateImportCount(ok);
+    await _csRefreshConversationList();
+  }
+  _obLog.info('claude sessions import finished', { ok, failed, cognitions });
+}
+
+// Refresh the sidebar conversation list after imported sessions land.
+// A single loadConversations() can be swallowed by the renderer's in-flight
+// merging when an import loop bumped the local generation mid-flight — drain
+// the in-flight request first, then issue a fresh one so the imported
+// conversations actually appear.
+async function _csRefreshConversationList() {
+  try {
+    if (typeof window._markConversationListLocallyChanged === 'function') {
       window._markConversationListLocallyChanged();
     }
     if (typeof loadConversations === 'function') {
-      loadConversations().catch((err) => _obLog.warn('failed to reload conversations', err));
+      await loadConversations();
+      await loadConversations();
     }
+  } catch (err) {
+    _obLog.warn('failed to reload conversations', err);
   }
-  _obLog.info('claude sessions import finished', { ok, failed, cognitions });
 }
 
 // Import the user-selected Codex sessions into real conversations.
@@ -765,9 +990,16 @@ async function _csImportCodexSessions(agentType) {
     if (result) result.textContent = '请先勾选要导入的会话';
     return;
   }
-  if (btn) { btn.disabled = true; btn.textContent = '导入中…'; }
-  let ok = 0, failed = 0;
-  for (const row of selected) {
+  if (btn) { btn.disabled = true; }
+  const total = selected.length;
+  let ok = 0, failed = 0, done = 0;
+  const paint = () => {
+    if (btn) btn.textContent = `导入中… ${done}/${total}`;
+    if (result) result.textContent = `正在导入（${done}/${total} 完成），请稍候…`;
+  };
+  paint();
+  selected.forEach((r) => r.classList.add('importing'));
+  await _csMapWithConcurrency(selected, CS_IMPORT_CONCURRENCY, async (row) => {
     const filePath = row.dataset.sessionId;
     const title = row.querySelector('strong')?.textContent || '';
     try {
@@ -781,27 +1013,29 @@ async function _csImportCodexSessions(agentType) {
         _csImportedConversationIds.push(res.conversationId);
         const cb = row.querySelector('input[type="checkbox"]');
         if (cb) cb.checked = false;
+        row.classList.remove('importing');
         row.classList.add('done');
       } else {
         failed++;
+        row.classList.remove('importing');
       }
     } catch (err) {
       failed++;
+      row.classList.remove('importing');
       _obLog.warn('import codex session failed', { filePath, error: (err && err.message) || String(err) });
+    } finally {
+      done++;
+      paint();
     }
-  }
+  });
   if (btn) { btn.disabled = false; btn.textContent = '导入所选会话'; }
   if (result) {
     result.textContent = `导入完成：成功 ${ok} 个${failed ? `，失败 ${failed} 个` : ''}`;
   }
   // Trigger conversation list refresh so imported sessions appear in sidebar
   if (ok > 0) {
-    if (window._markConversationListLocallyChanged) {
-      window._markConversationListLocallyChanged();
-    }
-    if (typeof loadConversations === 'function') {
-      loadConversations().catch((err) => _obLog.warn('failed to reload conversations', err));
-    }
+    _csUpdateImportCount(ok);
+    await _csRefreshConversationList();
   }
   _obLog.info('codex sessions import finished', { ok, failed });
 }
@@ -1543,14 +1777,93 @@ async function _csLoadAcpSessions() {
   }
 }
 
-function _csPickRole(role) {
+// Load role templates from backend (张浩的角色模板系统)
+async function _csLoadRoleTemplates() {
+  const box = document.getElementById('cs-role-cards');
+  if (!box) return;
+
+  box.innerHTML = '<div class="cs-state loading">正在加载角色模板...</div>';
+
+  try {
+    const res = await window.orkas.invoke('spaces.templates.list');
+    if (!res || !res.templates || !Array.isArray(res.templates)) {
+      box.innerHTML = '<div class="cs-state">角色模板加载失败</div>';
+      return;
+    }
+
+    const templates = res.templates;
+    if (templates.length === 0) {
+      box.innerHTML = '<div class="cs-state">没有可用的角色模板</div>';
+      return;
+    }
+
+    // 按优先级筛选主要角色（产品、工程、研究、学习方向）
+    const priority = ['product_manager', 'software_engineer', 'scholar', 'student', 'fde', 'project_manager', 'technical_writer', 'recruiter'];
+    const prioritySet = new Set(priority);
+    const priorityTemplates = templates.filter(t => prioritySet.has(t.template_id));
+    const otherTemplates = templates.filter(t => !prioritySet.has(t.template_id));
+
+    // 优先级排序
+    priorityTemplates.sort((a, b) => priority.indexOf(a.template_id) - priority.indexOf(b.template_id));
+
+    // 显示前6个（4个优先 + 2个其他）
+    const display = [...priorityTemplates.slice(0, 4), ...otherTemplates.slice(0, 2)];
+
+    // 图标映射
+    const icons = {
+      'product_manager': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+      'software_engineer': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg>',
+      'scholar': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20Z"/></svg>',
+      'student': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>',
+      'fde': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>',
+      'project_manager': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M3 9h18M3 15h18"/></svg>',
+      'technical_writer': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>',
+      'recruiter': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+    };
+
+    const html = display.map(t => {
+      const icon = icons[t.template_id] || icons['product_manager'];
+      const bundleInfo = [];
+      if (t.bundle) {
+        const skillCount = (t.bundle.skill_ids || []).length;
+        const agentCount = (t.bundle.agent_ids || []).length;
+        if (skillCount > 0) bundleInfo.push(`${skillCount} 个技能`);
+        if (agentCount > 0) bundleInfo.push(`${agentCount} 个智能体`);
+      }
+      const tags = bundleInfo.length > 0
+        ? `<span class="r-tags">${bundleInfo.map(info => `<span class="r-tag">${_csEsc(info)}</span>`).join('')}</span>`
+        : '';
+
+      return `
+        <button class="cs-role-card" data-template-id="${_csEsc(t.template_id)}">
+          <span class="r-ico">${icon}</span>
+          <h3>${_csEsc(t.name)}</h3>
+          <p>${_csEsc(t.description)}</p>
+          ${tags}
+        </button>
+      `;
+    }).join('');
+
+    box.innerHTML = html;
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    _obLog.warn('failed to load role templates', { error: msg });
+    box.innerHTML = '<div class="cs-state">角色模板加载失败</div>';
+  }
+}
+
+function _csPickRole(templateId) {
   const shell = document.getElementById('cs-onboarding');
   if (!shell) return;
   shell.querySelectorAll('.cs-role-card').forEach((c) => {
-    c.classList.toggle('selected', c.dataset.csrole === role);
+    c.classList.toggle('selected', c.dataset.templateId === templateId);
   });
-  _csRolePicked = role;
-  const name = role === 'product' ? '产品负责人' : 'AI 研究员';
+  _csRolePicked = templateId;
+
+  // 获取选中模板的名称
+  const selectedCard = shell.querySelector(`.cs-role-card[data-template-id="${templateId}"]`);
+  const name = selectedCard ? selectedCard.querySelector('h3').textContent : templateId;
+
   const result = document.getElementById('cs-role-result');
   if (result) {
     result.querySelector('h4').textContent = `角色模板已应用：「${name}」 · 不自动生成个人事实`;
@@ -1566,28 +1879,123 @@ async function _csFinish() {
   // 候选认知已在导入时后台提取并存入候选池，留待用户首次打开导入会话时由
   // agent 主动呈现和确认，此处不再处理候选认知的 UI 确认和 reject/keep 逻辑。
 
-  // 如果用户选择了角色模板，创建以角色命名的工作空间，并将所有导入的会话绑定到该工作空间
+  // 如果用户选择了角色模板，创建工作空间并应用模板，然后将所有导入的会话绑定到该工作空间
   if (_csRolePicked && _csImportedConversationIds.length > 0) {
-    const roleName = _csRolePicked === 'product' ? '产品负责人' : 'AI 研究员';
-    try {
-      const createRes = await window.orkas.invoke('projects.create', { name: roleName });
-      if (createRes && createRes.project && createRes.project.project_id) {
-        const projectId = createRes.project.project_id;
-        _obLog.info('created role workspace', { role: _csRolePicked, projectId, name: roleName });
+    // 获取模板信息
+    const shell = document.getElementById('cs-onboarding');
+    const selectedCard = shell ? shell.querySelector(`.cs-role-card[data-template-id="${_csRolePicked}"]`) : null;
+    const spaceName = selectedCard ? selectedCard.querySelector('h3').textContent : _csRolePicked;
 
-        // 批量更新所有导入的会话，绑定到这个工作空间
-        const updateRes = await window.orkas.invoke('conversations.batchUpdateProject', {
-          conversationIds: _csImportedConversationIds,
-          projectId: projectId,
+    try {
+      // Reuse an existing space for this template instead of stacking up empty
+      // duplicates. Re-running onboarding (or picking the same role twice)
+      // should land in the SAME workspace, not create "学生"/"学生"/"学生".
+      let spaceId = '';
+      try {
+        const listRes = await window.orkas.invoke('spaces.list', {});
+        const existing = (listRes && listRes.spaces || []).find((s) => s && s.template_id === _csRolePicked);
+        if (existing && existing.space_id) {
+          spaceId = existing.space_id;
+          _obLog.info('reusing existing role workspace', { templateId: _csRolePicked, spaceId });
+        }
+      } catch (listErr) {
+        _obLog.warn('spaces.list failed before create', { error: (listErr && listErr.message) || String(listErr) });
+      }
+
+      // Only create when no space for this template exists yet.
+      if (!spaceId) {
+        const createRes = await window.orkas.invoke('spaces.create', {
+          name: spaceName,
+          template_id: _csRolePicked,
         });
-        if (updateRes && updateRes.ok) {
-          _obLog.info('bound imported sessions to role workspace', {
-            role: _csRolePicked,
-            projectId,
-            updated: updateRes.updated,
-            total: _csImportedConversationIds.length,
+        if (createRes && createRes.space && createRes.space.space_id) {
+          spaceId = createRes.space.space_id;
+          _obLog.info('created role workspace', { templateId: _csRolePicked, spaceId, name: spaceName });
+        }
+      }
+
+      if (spaceId) {
+
+        // Reuse an existing project already bound to this space, so re-running
+        // onboarding doesn't stack duplicate "导入的会话" folders under the same
+        // role. Only create a new one when the space has no project yet. The
+        // project is named after the role template so the sidebar shows it as
+        // the role's workspace, not a generic "导入的会话" bucket.
+        let projectId = '';
+        try {
+          const projList = await window.orkas.invoke('projects.list', {});
+          const bound = (projList && projList.projects || []).find((p) => p && p.space_id === spaceId);
+          if (bound && bound.project_id) {
+            projectId = bound.project_id;
+            _obLog.info('reusing existing project under role workspace', { spaceId, projectId });
+          }
+        } catch (projListErr) {
+          _obLog.warn('projects.list failed before create', { error: (projListErr && projListErr.message) || String(projListErr) });
+        }
+
+        if (!projectId) {
+          // Project name is the neutral purpose "导入的会话", NOT the role name:
+          // the role/space name is already shown by the sidebar space-group
+          // header above it. Naming the project after the role too would read as
+          // a redundant "产品经理 > 产品经理". So: space = 产品经理, project = 导入的会话.
+          const projectRes = await window.orkas.invoke('projects.create', { name: '导入的会话' });
+          if (projectRes && projectRes.project && projectRes.project.project_id) {
+            projectId = projectRes.project.project_id;
+            // 把项目挂到工作空间下（项目创建接口本身不接收 spaceId）。
+            try {
+              await window.orkas.invoke('projects.bindSpace', { projectId, spaceId });
+            } catch (bindErr) {
+              _obLog.warn('failed to bind role project to workspace', {
+                projectId,
+                spaceId,
+                error: (bindErr && bindErr.message) || String(bindErr),
+              });
+            }
+          }
+        }
+
+        if (projectId) {
+
+          // 批量更新所有导入的会话，绑定到这个项目
+          const updateRes = await window.orkas.invoke('conversations.batchUpdateProject', {
+            conversationIds: _csImportedConversationIds,
+            projectId: projectId,
           });
-          _csToast(`已将 ${updateRes.updated} 个导入的会话归入「${roleName}」工作空间`);
+
+          if (updateRes && updateRes.ok) {
+            _obLog.info('bound imported sessions to role workspace project', {
+              templateId: _csRolePicked,
+              spaceId,
+              projectId,
+              updated: updateRes.updated,
+              total: _csImportedConversationIds.length,
+            });
+            _csToast(`已将 ${updateRes.updated} 个导入的会话归入「${spaceName}」角色分组`);
+          }
+
+          // 新项目不在 boot 时的项目缓存里，且默认未展开；先刷新项目缓存并
+          // 展开/加载该项目，否则导入的会话既不在普通会话列表、也不显示在
+          // 项目区（看起来就像导入后丢失了）。
+          try {
+            if (typeof _projectsExpanded === 'object' && _projectsExpanded) {
+              _projectsExpanded[projectId] = true;
+            }
+            if (typeof _saveProjectsExpanded === 'function') _saveProjectsExpanded();
+            if (typeof loadProjects === 'function') await loadProjects(true);
+            if (typeof loadConversationProject === 'function') await loadConversationProject(projectId);
+          } catch (revealErr) {
+            _obLog.warn('failed to reveal imported-session project in sidebar', {
+              projectId,
+              error: (revealErr && revealErr.message) || String(revealErr),
+            });
+          }
+        } else {
+          // 工作空间创建成功，但项目创建失败 - 导入的会话保留在未分组状态
+          _obLog.info('workspace created but project creation failed, imported sessions remain ungrouped', {
+            spaceId,
+            conversationCount: _csImportedConversationIds.length,
+          });
+          _csToast(`已创建「${spaceName}」工作空间，导入的会话已添加到普通对话列表`);
         }
       }
     } catch (err) {
@@ -1614,16 +2022,7 @@ async function _csFinish() {
   // main UI. Refresh the sidebar list now so they show up immediately (and,
   // when a role workspace was chosen, re-render the projects section that
   // hosts the bound conversations).
-  try {
-    if (typeof window._markConversationListLocallyChanged === 'function') {
-      window._markConversationListLocallyChanged();
-    }
-    if (typeof loadConversations === 'function') {
-      await loadConversations();
-    }
-  } catch (err) {
-    _obLog.warn('failed to refresh conversations after onboarding', { error: (err && err.message) || String(err) });
-  }
+  await _csRefreshConversationList();
 }
 
 function _csBuild() {
@@ -1652,8 +2051,12 @@ function _csBuild() {
   shell.querySelector('#cs-team-refresh')?.addEventListener('click', () => _csLoadTeam(true));
   shell.querySelector('#cs-agent-refresh')?.addEventListener('click', () => _csLoadAgents(true));
 
-  shell.querySelectorAll('.cs-role-card').forEach((c) => {
-    c.addEventListener('click', () => _csPickRole(c.dataset.csrole));
+  // 使用事件委托处理角色卡片点击（因为卡片是动态加载的）
+  shell.querySelector('#cs-role-cards')?.addEventListener('click', (e) => {
+    const card = e.target.closest('.cs-role-card');
+    if (card && card.dataset.templateId) {
+      _csPickRole(card.dataset.templateId);
+    }
   });
   shell.querySelector('#cs-role-skip')?.addEventListener('click', () => {
     _csRolePicked = null;

@@ -41,9 +41,40 @@ import { EXTRACT_SYSTEM_PROMPT, REDUCE_SYSTEM_PROMPT } from '../../prompts/sessi
 const log = createLogger('session-import:extractor');
 
 /** Max transcript tokens fed to the model in a single pass. Transcripts above
- *  this are chunked and map-reduced. Conservative to stay well inside any
- *  provider's context window during onboarding. */
-const CHUNK_TOKEN_BUDGET = 6000;
+ *  this are chunked and map-reduced. Raised from the original 6000 — modern
+ *  providers comfortably handle this, and fewer/larger chunks means fewer
+ *  serial-ish round trips, which is the dominant import cost. */
+const CHUNK_TOKEN_BUDGET = 14000;
+
+/** How many chunk passes run at once. The model client guards everything with
+ *  a 5-slot global semaphore, so we stay under that to leave headroom for any
+ *  other in-flight model work (and avoid starving the whole app during a big
+ *  import). Each extractor pass uses its own anon session, so there's no
+ *  per-session mutex contention between them. */
+const MAP_CONCURRENCY = 3;
+
+/** Run `task` over `items` with at most `limit` in flight at once, preserving
+ *  input order in the returned results. A rejected task rejects the whole
+ *  batch — callers that want best-effort should have tasks resolve to a
+ *  sentinel instead of throwing. */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  task: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  const workers = Array.from({ length: workerCount }, async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await task(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
 
 export interface CognitionItem {
   /** One-line human-readable statement. */
@@ -206,14 +237,15 @@ export async function extractSession(
     };
   }
 
-  // Map: summarise each chunk to a partial extraction.
-  const partials: RawExtraction[] = [];
-  for (const chunk of chunks) {
+  // Map: summarise each chunk to a partial extraction, up to MAP_CONCURRENCY
+  // passes in flight at once. Each pass is best-effort — a failed/unparseable
+  // pass yields null and is dropped, never aborting the batch.
+  const mapped = await mapWithConcurrency(chunks, MAP_CONCURRENCY, async (chunk) => {
     const out = await runPass(userId, EXTRACT_SYSTEM_PROMPT, renderTranscript(chunk));
-    if (!out) continue;
-    const parsed = parseExtraction(out);
-    if (parsed) partials.push(parsed);
-  }
+    if (!out) return null;
+    return parseExtraction(out);
+  });
+  const partials: RawExtraction[] = mapped.filter((p): p is RawExtraction => p != null);
 
   if (!partials.length) return fallback(transcript, 'all_passes_failed');
 
