@@ -36,16 +36,29 @@ function cssBraceDepthAt(source: string, offset: number): number {
 }
 
 describe('Recall cognition workspace layout', () => {
-  it('exposes the complete Recall workspace without KSTAR, Evolution, or Capability pages', () => {
-    for (const page of ['overview', 'sources', 'captures', 'brain', 'context', 'ontology', 'candidates', 'assets', 'receipts']) {
-      expect(html).toContain(`data-cognition-page="${page}"`);
-      expect(html).toContain(`data-cognition-page-body="${page}"`);
+  it('exposes exactly three Recall pages with cognition work nested under deposition', () => {
+    const surfaceStart = html.indexOf('class="skills-cognition-surface"');
+    const surfaceEnd = html.indexOf('<!-- Skills -->');
+    const surfaceHtml = html.slice(surfaceStart, surfaceEnd);
+
+    expect([...surfaceHtml.matchAll(/data-cognition-page="([^"]+)"/g)].map((match) => match[1])).toEqual([
+      'overview',
+      'deposition',
+      'assets',
+    ]);
+    expect([...surfaceHtml.matchAll(/data-cognition-page-body="([^"]+)"/g)].map((match) => match[1])).toEqual([
+      'overview',
+      'deposition',
+      'assets',
+    ]);
+
+    for (const view of ['candidates', 'captures', 'sources']) {
+      expect(surfaceHtml).toContain(`data-cognition-deposition-view="${view}"`);
+      expect(surfaceHtml).toContain(`data-cognition-deposition-body="${view}"`);
     }
-    for (const excluded of ['kstar', 'evolution', 'capability']) {
-      expect(html).not.toContain(`data-cognition-page="${excluded}"`);
-    }
-    for (const group of ['cognition.nav_flow', 'cognition.nav_structure', 'cognition.nav_governance']) {
-      expect(html).toContain(`data-i18n="${group}"`);
+    for (const technicalPage of ['brain', 'context', 'ontology', 'receipts']) {
+      expect(surfaceHtml).not.toContain(`data-cognition-page="${technicalPage}"`);
+      expect(surfaceHtml).not.toContain(`data-cognition-page-body="${technicalPage}"`);
     }
   });
 
@@ -76,7 +89,19 @@ describe('Recall cognition workspace layout', () => {
     expect(boot).toContain("view === 'skills' ? 'panel-skills'");
     expect(boot).toContain("view === 'recall' ? 'panel-recall'");
     expect(boot).toContain("_loadViewFeature('recall', 'recall'");
-    expect(lazy).toMatch(/recall:\s*\[\s*\{ src: '\.\/modules\/skills\.js' \}/);
+    for (const bundle of ['skills', 'recall']) {
+      const bundleStart = lazy.indexOf(`  ${bundle}: [`);
+      const bundleEnd = lazy.indexOf('\n  ],', bundleStart);
+      expect(bundleStart).toBeGreaterThanOrEqual(0);
+      expect(bundleEnd).toBeGreaterThan(bundleStart);
+      const bundleSource = lazy.slice(bundleStart, bundleEnd);
+      const architectureIndex = bundleSource.indexOf('./modules/recall-information-architecture.js');
+      const skillsIndex = bundleSource.indexOf('./modules/skills.js');
+      const bindingsIndex = bundleSource.indexOf('./modules/skills-bindings.js');
+      expect(architectureIndex).toBeGreaterThanOrEqual(0);
+      expect(architectureIndex).toBeLessThan(skillsIndex);
+      expect(skillsIndex).toBeLessThan(bindingsIndex);
+    }
   });
 
   it('wraps the top navigation and pages in one integrated workspace', () => {
@@ -112,15 +137,14 @@ describe('Recall cognition workspace layout', () => {
     expect(cssBraceDepthAt(css, recallRules)).toBe(0);
   });
 
-  it('uses PRD page semantics for cognition candidates and ability assets', () => {
-    expect(html).toContain('data-i18n="cognition.candidate_review"');
-    expect(html).toContain('data-i18n="cognition.formal_assets"');
-    expect(html).toContain('data-ability-assets-view="list"');
-    expect(html).toContain('data-ability-assets-view="tree"');
-    expect(html).not.toContain('data-ability-assets-view="evidence"');
-    expect(html).toContain('data-ability-assets-view-panel="list"');
-    expect(html).toContain('data-ability-assets-view-panel="tree"');
-    expect(html).not.toContain('data-ability-assets-view-panel="evidence"');
+  it('uses PRD page semantics for deposition and a single ability asset host', () => {
+    expect(html).toContain('data-i18n="cognition.pending_knowledge"');
+    expect(html).toContain('data-i18n="cognition.organize_tasks"');
+    expect(html).toContain('data-i18n="cognition.sources"');
+    expect(html).toContain('data-i18n="cognition.ability_assets"');
+    expect(html.match(/id="skills-cognition-assets-body"/g)).toHaveLength(1);
+    expect(html).not.toContain('data-ability-assets-view=');
+    expect(html).not.toContain('data-ability-assets-view-panel=');
   });
 
 
