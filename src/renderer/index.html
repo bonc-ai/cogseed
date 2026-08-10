@@ -1482,11 +1482,14 @@
 
             <!-- ─────────────────────── 消息平台 ─────────────────────── -->
             <div class="settings-tab-pane" data-settings-pane="messaging" hidden>
-              <div class="messaging-settings-shell" id="messaging-settings-shell" aria-live="polite">
-                <div class="messaging-page" id="messaging-page"></div>
-              </div>
-              <div class="personal-context-shell" id="personal-context-shell" aria-live="polite">
-                <div class="messaging-page" id="personal-context-page"></div>
+              <div class="touchpoint-settings-shell" aria-live="polite">
+                <div id="touchpoint-settings-page"></div>
+                <details class="touchpoint-advanced" id="touchpoint-advanced">
+                  <summary><span data-i18n="touchpoint_settings.advanced.title">高级连接管理</span><small data-i18n="touchpoint_settings.advanced.detail">机器人实例、扫码绑定与消息行为</small></summary>
+                  <div class="messaging-settings-shell" id="messaging-settings-shell">
+                    <div class="messaging-page" id="messaging-page"></div>
+                  </div>
+                </details>
               </div>
             </div>
 

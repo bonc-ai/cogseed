@@ -11,10 +11,8 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/settings.js' },
     { src: './vendor/qrcode-generator/qrcode.js' },
     { src: './modules/messaging-settings.js' },
-    { src: './modules/personal-context-center-view.js' },
-    { src: './modules/personal-context-review.js' },
-    { src: './modules/briefing-center.js' },
-    { src: './modules/personal-context-center.js' },
+    { src: './modules/touchpoint-settings-model.js' },
+    { src: './modules/touchpoint-settings.js' },
     { src: './modules/memory.js' },
   ],
   marketplace: [
