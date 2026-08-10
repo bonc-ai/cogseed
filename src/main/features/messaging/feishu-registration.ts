@@ -111,6 +111,18 @@ interface SdkErrorLike {
   code?: string;
 }
 
+/** Protocol-level failure (non-JSON response, unexpected payload) that must
+ * surface as `invalid_response` instead of being misread as a network error
+ * by the generic classification below. */
+class RegistrationProtocolError extends Error {
+  readonly code: FeishuRegistrationErrorCode = 'invalid_response';
+
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'RegistrationProtocolError';
+  }
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Registration protocol (mirrors hermes-agent plugins/platforms/feishu/
 // adapter.py _begin_registration/_poll_registration).
@@ -158,8 +170,20 @@ async function registrationFormPost(
     signal: flow.controller.signal,
   });
   // The registration endpoint returns JSON even on 4xx (authorization_pending
-  // comes back as HTTP 400).
-  return (await response.json()) as Record<string, unknown>;
+  // comes back as HTTP 400), but a 5xx gateway/error page does not. Parse the
+  // body explicitly so a non-JSON response surfaces as invalid_response
+  // instead of a SyntaxError being misread as a network failure.
+  const raw = await response.text();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new RegistrationProtocolError('Feishu registration returned a non-JSON response', { cause: error });
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new RegistrationProtocolError('Feishu registration returned an unexpected payload');
+  }
+  return parsed as Record<string, unknown>;
 }
 
 /** Verify the environment supports client_secret auth (mirrors hermes-agent
@@ -365,8 +389,17 @@ function lifetimeSeconds(value: number): number {
 
 function sdkErrorCode(error: unknown): FeishuRegistrationErrorCode {
   let code = '';
-  if (error instanceof Error) code = error.name === 'AbortError' ? 'abort' : classifyNetworkError(error) || '';
-  else if (typeof error === 'object' && error !== null && 'code' in error) {
+  if (error instanceof Error) {
+    if (error.name === 'AbortError') code = 'abort';
+    else if (error instanceof RegistrationProtocolError) code = error.code;
+    else {
+      // A bare `TypeError: fetch failed` (cause lost through a wrapper) is
+      // still a connectivity symptom; any other plain error is a
+      // local/protocol failure, not a network one.
+      code = classifyNetworkError(error)
+        || (error.name === 'TypeError' && /fetch failed/.test(error.message) ? 'network_error' : 'registration_failed');
+    }
+  } else if (typeof error === 'object' && error !== null && 'code' in error) {
     const candidate = (error as SdkErrorLike).code;
     if (typeof candidate === 'string') code = candidate;
   }
@@ -375,7 +408,9 @@ function sdkErrorCode(error: unknown): FeishuRegistrationErrorCode {
   if (code === 'network_error' || code === 'network_unreachable' || code === 'network_timeout' || code === 'network_tls') {
     return code;
   }
-  return code ? 'registration_failed' : 'network_error';
+  // Unknown or missing SDK code: a generic registration failure. The network
+  // buckets are only reachable through explicit classification above.
+  return 'registration_failed';
 }
 
 /** Classify undici/node network failures from the cause chain into a
@@ -481,14 +516,11 @@ async function discardCreatedInstance(
       current: isCurrent(flow),
       error: logErrorSummary(error),
     });
-    if (isCurrent(flow)) {
-      flow.instance = instance;
-      finish(flow, 'failed', 'activation_failed');
-    } else {
-      flow.instance = instance;
-      finish(flow, 'failed', 'activation_failed');
-      retainFlow(flow);
-    }
+    flow.instance = instance;
+    finish(flow, 'failed', 'activation_failed');
+    // A superseded flow still keeps its terminal state queryable, so the
+    // renderer can surface the cleanup failure after a newer flow took over.
+    if (!isCurrent(flow)) retainFlow(flow);
     return false;
   }
 }

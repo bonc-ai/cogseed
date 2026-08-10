@@ -279,7 +279,10 @@ interface RuntimeInstance {
 }
 
 interface OutboundMessage {
-  id?: string;
+  /** Stable per-message id used as the delivery idempotency key. All inbound
+   * platforms normalize their native ids (Feishu `om_*`, iLink numeric ids)
+   * to strings before this point, so the id is always present. */
+  id: string;
   from?: string;
   text?: string;
   dispatch?: boolean;
@@ -464,7 +467,11 @@ function beginDeliveryEntry(
   idempotencyKey?: string,
   contextTokenRef?: string,
 ) {
-  const key = ledger.deliveryKey(instanceId, message.id as string);
+  // Defense in depth: every current call site (bus reply, confirmation, ledger
+  // recovery) guarantees a non-empty id upstream; a missing one would silently
+  // stringify into an "undefined" idempotency key and corrupt dedupe.
+  if (!message.id) throw new Error('delivery requires a message id');
+  const key = ledger.deliveryKey(instanceId, message.id);
   return {
     key,
     instanceId,
@@ -687,7 +694,7 @@ async function deliverGroupMessage(
   turnSourceMsgId?: string,
 ): Promise<void> {
   if (!isCurrentRuntime(uid, runtime)) return;
-  const sourceMessageId = typeof message.id === 'string' && message.id ? message.id : '';
+  const sourceMessageId = message.id;
   const text = typeof message.text === 'string' ? message.text.trim().slice(0, 12_000) : '';
   if (!sourceMessageId || !text || message.dispatch || message.from === 'user') return;
   const key = ledger.deliveryKey(instance.id, sourceMessageId);

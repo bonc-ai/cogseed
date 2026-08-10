@@ -105,6 +105,7 @@ describe('Feishu QR registration', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     vi.useRealTimers();
     vi.doUnmock('../../../src/main/features/messaging/manager');
     vi.doUnmock('../../../src/main/features/messaging/registry');
@@ -692,6 +693,8 @@ describe('Feishu QR registration', () => {
     ['network_timeout', new TypeError('fetch failed', { cause: { code: 'UND_ERR_HEADERS_TIMEOUT' } })],
     ['network_error', new TypeError('fetch failed')],
     ['network_error', new TypeError('fetch failed', { cause: { code: 'UND_ERR_BAD_REQUEST' } })],
+    ['registration_failed', new Error('unexpected local failure')],
+    ['registration_failed', new TypeError('not a network error')],
   ])('classifies a begin fetch failure as %s (%#)', async (expected, error) => {
     vi.doMock('../../../src/main/features/messaging/manager', () => ({
       createInstance: vi.fn(),
@@ -705,6 +708,27 @@ describe('Feishu QR registration', () => {
     await vi.waitFor(() => expect(feature.getFeishuQrRegistrationStatus('user-1', started.flowId)).toMatchObject({
       state: 'failed',
       errorCode: expected,
+    }), { timeout: 3000 });
+  });
+
+  it('classifies a non-JSON registration response as invalid_response, not a network error', async () => {
+    vi.doMock('../../../src/main/features/messaging/manager', () => ({
+      createInstance: vi.fn(),
+      deleteInstance: vi.fn(),
+    }));
+    // A 5xx gateway page is not JSON; the protocol parser must report
+    // invalid_response instead of letting the parse failure fall through as
+    // a network error.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<html>502 Bad Gateway</html>', {
+      status: 502,
+      headers: { 'content-type': 'text/html' },
+    })));
+
+    const feature = await import('../../../src/main/features/messaging/feishu-registration');
+    const started = await feature.startFeishuQrRegistration('user-1', { displayName: 'Helper' });
+    await vi.waitFor(() => expect(feature.getFeishuQrRegistrationStatus('user-1', started.flowId)).toMatchObject({
+      state: 'failed',
+      errorCode: 'invalid_response',
     }), { timeout: 3000 });
   });
 });

@@ -1204,6 +1204,87 @@ describe('messaging manager adapter flow', () => {
       vi.resetModules();
     }
   });
+
+  it('drops an outbound reply without a message id before any delivery attempt', async () => {
+    let busListener: ((event: unknown) => void) | undefined;
+    const groupSend = vi.fn(async () => ({ ok: true }));
+    const subscribe = vi.fn((_uid: string, _cid: string, listener: (event: unknown) => void) => {
+      busListener = listener;
+      return () => { busListener = undefined; };
+    });
+    const sendMessage = vi.fn(async () => ({ deliveryId: 'remote-reply-1' }));
+    const adapter: MessagingAdapter = {
+      platform: 'feishu_lark',
+      async start(signal, callbacks) {
+        await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      async stop() {},
+      async checkHealth() {
+        return { kind: 'connected', checkedAt: new Date().toISOString() };
+      },
+      sendMessage,
+    };
+
+    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
+      createAdapter: vi.fn(() => adapter),
+    }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe }));
+
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const ledger = await import('../../../src/main/features/messaging/ledger');
+      const created = await registry.createInstance('user-1', {
+        platform: 'feishu_lark',
+        displayName: 'Test Feishu',
+        policy: { allowUserIds: ['user-1'] },
+        secret: { appId: 'cli_1234567890abcdef', appSecret: 'secret' },
+      });
+      await manager.setEnabled('user-1', created.id, true);
+      await vi.waitFor(async () => {
+        const instances = await manager.listInstances('user-1');
+        expect(instances[0]?.status.kind).toBe('connected');
+      });
+      await manager.ingestInbound('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'incoming-1',
+        externalChatId: 'chat-1',
+        externalUserId: 'user-1',
+        text: 'hello agent',
+        isGroup: false,
+        mentionPresent: false,
+        receivedAt: new Date().toISOString(),
+      });
+      expect(busListener).toBeTypeOf('function');
+
+      // A reply event without a stable message id must never reach the
+      // adapter: the delivery idempotency key would silently stringify to
+      // "undefined" and corrupt dedupe.
+      busListener?.({
+        type: 'message',
+        turn_end: true,
+        msg: { from: 'commander', text: 'reply without id' },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(await ledger.getDelivery('user-1', ledger.deliveryKey(created.id, 'undefined'))).toBeNull();
+      await manager.stopForUser('user-1');
+    } finally {
+      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      vi.doUnmock('../../../src/main/features/group_chat');
+      vi.doUnmock('../../../src/main/features/group_chat/bus');
+      vi.resetModules();
+    }
+  });
 });
 
 describe('feishu message media degradation', () => {
