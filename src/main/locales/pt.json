@@ -223,5 +223,9 @@
   "messaging.candidate_card.rejected_detail": "❌ Removido do pool de candidatos",
   "personal_context.candidate.title": "Pendente: candidato da ontologia pessoal",
   "personal_context.candidate.approve": "✅ Confirmar",
-  "personal_context.candidate.reject": "❌ Rejeitar"
+  "personal_context.candidate.reject": "❌ Rejeitar",
+  "touchpoints.feishu.open_mate": "Abra o Mate para ver o resultado completo",
+  "touchpoints.feishu.review_mate": "Abra o Mate para revisar e tratar este item",
+  "touchpoints.feishu.approve_mate": "Aprove no cartão ou abra o Mate para ajustar a tarefa",
+  "touchpoints.feishu.briefing_mate": "Abra o Mate para ajustar o plano de hoje"
 }

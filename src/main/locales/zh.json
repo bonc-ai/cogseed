@@ -223,5 +223,9 @@
   "messaging.candidate_card.rejected_detail": "❌ 已从候选池移除",
   "personal_context.candidate.title": "待确认：个人本体候选",
   "personal_context.candidate.approve": "✅ 确认",
-  "personal_context.candidate.reject": "❌ 拒绝"
+  "personal_context.candidate.reject": "❌ 拒绝",
+  "touchpoints.feishu.open_mate": "回到 Mate 查看完整结果",
+  "touchpoints.feishu.review_mate": "回到 Mate 查看并处理",
+  "touchpoints.feishu.approve_mate": "请在卡片中审批，或回到 Mate 调整任务",
+  "touchpoints.feishu.briefing_mate": "回到 Mate 调整今日计划"
 }

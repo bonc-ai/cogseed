@@ -223,5 +223,9 @@
   "messaging.candidate_card.rejected_detail": "❌ 候補プールから削除",
   "personal_context.candidate.title": "確認待ち：パーソナルオントロジー候補",
   "personal_context.candidate.approve": "✅ 確認",
-  "personal_context.candidate.reject": "❌ 拒否"
+  "personal_context.candidate.reject": "❌ 拒否",
+  "touchpoints.feishu.open_mate": "Mate で完全な結果を確認",
+  "touchpoints.feishu.review_mate": "Mate で確認して処理",
+  "touchpoints.feishu.approve_mate": "カードで承認するか、Mate でタスクを調整してください",
+  "touchpoints.feishu.briefing_mate": "Mate で今日の予定を調整"
 }

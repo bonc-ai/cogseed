@@ -223,5 +223,9 @@
   "messaging.candidate_card.rejected_detail": "❌ Removed from candidate pool",
   "personal_context.candidate.title": "Pending: personal ontology candidate",
   "personal_context.candidate.approve": "✅ Confirm",
-  "personal_context.candidate.reject": "❌ Reject"
+  "personal_context.candidate.reject": "❌ Reject",
+  "touchpoints.feishu.open_mate": "Open Mate to view the complete result",
+  "touchpoints.feishu.review_mate": "Open Mate to review and handle this item",
+  "touchpoints.feishu.approve_mate": "Approve in the card or open Mate to adjust the task",
+  "touchpoints.feishu.briefing_mate": "Open Mate to adjust today’s plan"
 }

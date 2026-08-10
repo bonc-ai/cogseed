@@ -56,7 +56,9 @@ function normalizeIntent(raw: unknown): TouchpointIntent | null {
   if (!raw || typeof raw !== 'object') return null;
   const candidate = raw as Partial<TouchpointIntent>;
   if (candidate.version !== 1 || typeof candidate.intentId !== 'string' || typeof candidate.userId !== 'string'
-    || typeof candidate.eventId !== 'string' || typeof candidate.channel !== 'string' || typeof candidate.template !== 'string'
+    || typeof candidate.eventId !== 'string' || !candidate.subject || typeof candidate.subject.type !== 'string'
+    || typeof candidate.subject.id !== 'string' || !candidate.content || typeof candidate.content.title !== 'string'
+    || typeof candidate.channel !== 'string' || typeof candidate.template !== 'string'
     || typeof candidate.priority !== 'string' || typeof candidate.availableFrom !== 'string' || typeof candidate.expiresAt !== 'string'
     || typeof candidate.dedupeKey !== 'string' || typeof candidate.status !== 'string'
     || typeof candidate.createdAt !== 'string' || typeof candidate.updatedAt !== 'string') return null;
@@ -75,6 +77,9 @@ function normalizeIntent(raw: unknown): TouchpointIntent | null {
     intentId: candidate.intentId,
     userId: candidate.userId,
     eventId: candidate.eventId,
+    subject: { type: candidate.subject.type, id: candidate.subject.id },
+    content: { title: candidate.content.title, ...(candidate.content.body ? { body: candidate.content.body } : {}) },
+    ...(typeof candidate.contextRef === 'string' ? { contextRef: candidate.contextRef } : {}),
     channel: candidate.channel as TouchpointIntent['channel'],
     template: candidate.template as TouchpointIntent['template'],
     priority: candidate.priority as TouchpointIntent['priority'],

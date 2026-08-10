@@ -99,6 +99,9 @@ export interface TouchpointIntent {
   intentId: string;
   userId: string;
   eventId: string;
+  subject: TouchpointSubject;
+  content: TouchpointEventSummary;
+  contextRef?: string;
   channel: TouchpointChannel;
   template: TouchpointTemplate;
   priority: TouchpointPriority;
