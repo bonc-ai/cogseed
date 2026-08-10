@@ -43,7 +43,7 @@ export interface ExternalResource {
   /** 版本/事件 ID，用于幂等比较；同 resourceId 下变化则视为内容更新 */
   sourceVersion?: string;
   title: string;
-  /** `feishu:union_id:on_xxx` 形式的所有者引用 */
+  /** `feishu:union_id:ou_xxx` 形式的所有者引用（union_id 前缀 ou_） */
   ownerRef?: string;
   /** 父容器（文件夹/日历组），可为资源自身 id 或外部引用 */
   containerRef?: string;
