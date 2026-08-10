@@ -73,6 +73,7 @@ async function loadSettings() {
   _settingsBindLanguageOnce();
   _settingsBindTaskNotificationsOnce();
   _settingsBindClientConfigOnce();
+  _settingsBindContextsEntryOnce();
   _settingsSyncLanguageRadio();
   await Promise.all([
     _settingsSafeCall('settings providers refresh', _settingsRefreshProviders),
@@ -357,6 +358,15 @@ async function _settingsRefreshDataRoot() {
   } catch (_) {
     _settingsState.dataRoot = '';
   }
+}
+
+function _settingsBindContextsEntryOnce() {
+  const btn = document.getElementById('settings-contexts-open-btn');
+  if (!btn || btn.dataset.bound) return;
+  btn.addEventListener('click', () => {
+    if (typeof setView === 'function') setView('contexts');
+  });
+  btn.dataset.bound = '1';
 }
 
 function _settingsRenderDataRoot() {

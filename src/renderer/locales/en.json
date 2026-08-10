@@ -1217,15 +1217,6 @@
   "driver.cli": "CLI",
   "driver.install": "Install",
   "driver.mcp": "MCP",
-  "evolution.dashboard": "Dashboard",
-  "evolution.degraded_hint": "This view is a rule-based fallback (no model)",
-  "evolution.enter_title": "Open Evolution Console",
-  "evolution.evals": "Eval",
-  "evolution.evolution": "Evolution",
-  "evolution.ontology": "Ontology",
-  "evolution.patches": "Patch",
-  "evolution.skills": "Skills",
-  "evolution.title": "Evolution Console",
   "force_update.close_app": "Close app",
   "force_update.message": "Current version {current} is below the minimum version {minimum}. Please update the software before using it.",
   "force_update.status_available": "Version {version} is available. Click Update to download it.",
@@ -2311,7 +2302,6 @@
   "sidebar.conversations": "Tasks",
   "sidebar.devtools": "Devtools",
   "sidebar.devtools_title": "Visible in dev mode only",
-  "sidebar.evolution": "Evolution",
   "sidebar.load_more_conversations": "Load more",
   "sidebar.new_chat": "Commander",
   "sidebar.personal_ontology": "Personal Ontology",
@@ -3275,5 +3265,8 @@
   "spaces.tab_resources": "Resources",
   "spaces.template_label": "Role template (optional)",
   "spaces.tpl_builtin": "Template built-ins (from role template, read-only)",
-  "spaces.tpl_bundle": "includes"
+  "spaces.tpl_bundle": "includes",
+  "settings.contexts.title": "Library",
+  "settings.contexts.sub": "Manage Library content that models can reference.",
+  "settings.contexts.open": "Open Library"
 }

@@ -37,12 +37,9 @@
     "builtin:manifest:check": "node scripts/update-builtin-manifest.cjs --check",
     "rebuild:sqlite:electron": "node scripts/ensure-sqlite-electron-abi.mjs",
     "rebuild:pty:electron": "node scripts/ensure-node-pty-electron-abi.mjs",
-    "postinstall": "node scripts/ensure-sqlite-electron-abi.mjs && node scripts/ensure-node-pty-electron-abi.mjs && node scripts/fetch-embedding-model.mjs && npm run engine:build",
+    "postinstall": "node scripts/ensure-sqlite-electron-abi.mjs && node scripts/ensure-node-pty-electron-abi.mjs && node scripts/fetch-embedding-model.mjs",
     "prepare": "node scripts/install-git-hooks.mjs",
     "prepack": "node scripts/ensure-dev-dependencies.cjs",
-    "engine:build": "npm run build --workspace=nseap-meta-skill-engine",
-    "engine:test": "npm run test --workspace=nseap-meta-skill-engine",
-    "engine:check": "npm run check --workspace=nseap-meta-skill-engine",
     "test:resources:setup": "node scripts/setup-python-test-env.mjs",
     "audit:workspace": "node scripts/audit-local-workspace.mjs",
     "package:dev:mac": "node scripts/package-dev-mac.cjs",
@@ -191,17 +188,6 @@
         ]
       },
       {
-        "from": "packages/nseap-meta-skill-engine",
-        "to": "packages/nseap-meta-skill-engine",
-        "filter": [
-          "dist/**/*",
-          "ontologies/**/*",
-          "package.json",
-          "README.md",
-          "!**/.DS_Store"
-        ]
-      },
-      {
         "from": "resources/mac-locales",
         "to": ".",
         "filter": [
@@ -267,8 +253,5 @@
     },
     "artifactName": "Mate-Agent-${version}-${os}-${arch}.${ext}"
   },
-  "license": "MIT",
-  "workspaces": [
-    "packages/*"
-  ]
+  "license": "MIT"
 }

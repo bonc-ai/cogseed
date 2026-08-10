@@ -82,34 +82,12 @@ node "$APP_DIR/scripts/ensure-deps.cjs"
 node "$APP_DIR/scripts/ensure-dev-dependencies.cjs"
 node "$APP_DIR/scripts/prepare-source-runtime.cjs" --variant="$VARIANT"
 
-# Build meta-skill engine if present.
-KSTAR_ENGINE_DIR="$APP_DIR/packages/nseap-meta-skill-engine"
-if [ -d "$KSTAR_ENGINE_DIR" ]; then
-  echo "[Mate Agent] Building meta-skill engine..."
-  (cd "$KSTAR_ENGINE_DIR" && npm run build) || {
-    echo "[Mate Agent] Meta-skill engine build failed; continuing without it." >&2
-  }
-fi
-
-KSTAR_ENGINE_ENTRY="$KSTAR_ENGINE_DIR/dist/index.js"
-if [ -f "$KSTAR_ENGINE_ENTRY" ]; then
-  export ORKAS_KSTAR_ENGINE_COMMAND="${ORKAS_KSTAR_ENGINE_COMMAND:-node}"
-  if [ -z "${ORKAS_KSTAR_ENGINE_ARGS:-}" ]; then
-    export ORKAS_KSTAR_ENGINE_ARGS="[\"$KSTAR_ENGINE_ENTRY\",\"--stdio\"]"
-  fi
-  export ORKAS_KSTAR_ENGINE_CWD="${ORKAS_KSTAR_ENGINE_CWD:-$KSTAR_ENGINE_DIR}"
-  export ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR="${ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR:-$KSTAR_ENGINE_DIR/ontologies}"
-  echo "[Mate Agent] KSTAR engine configured: $KSTAR_ENGINE_ENTRY"
-else
-  echo "[Mate Agent] KSTAR engine not found at $KSTAR_ENGINE_ENTRY; continuing without external KSTAR engine."
-fi
-
 cd "$APP_DIR"
 if [ "$(uname -s)" = "Darwin" ]; then
   APP_BUNDLE="$APP_DIR/node_modules/electron/dist/Mate Agent.app"
   if [ -d "$APP_BUNDLE" ]; then
     ARGS=("$APP_DIR" "--orkas-runtime-variant=$VARIANT")
-    if [ -n "${ORKAS_KSTAR_ENGINE_COMMAND:-}" ]; then
+    if [ -n "${ORKAS_KSTAR_ENGINE_COMMAND:-}" ] && [ -n "${ORKAS_KSTAR_ENGINE_ARGS:-}" ]; then
       ARGS+=("--orkas-kstar-engine-command=$ORKAS_KSTAR_ENGINE_COMMAND")
       ARGS+=("--orkas-kstar-engine-args=$ORKAS_KSTAR_ENGINE_ARGS")
       ARGS+=("--orkas-kstar-engine-cwd=$ORKAS_KSTAR_ENGINE_CWD")

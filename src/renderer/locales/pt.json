@@ -3055,5 +3055,8 @@
   "spaces.tab_resources": "Recursos",
   "spaces.template_label": "Modelo de função (opcional)",
   "spaces.tpl_builtin": "Padrões do modelo (do modelo de função, somente leitura)",
-  "spaces.tpl_bundle": "inclui"
+  "spaces.tpl_bundle": "inclui",
+  "settings.contexts.title": "Biblioteca",
+  "settings.contexts.sub": "Gerencie o conteúdo da Biblioteca que os modelos podem consultar.",
+  "settings.contexts.open": "Abrir Biblioteca"
 }

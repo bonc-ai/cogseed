@@ -10,7 +10,6 @@ Mate Agent 源码包
 - 资源: resources/ (builtin 技能/Agent、app-ui、mac-locales)
 - 测试: test/
 - 文档: docs/、AGENTS.md、CLAUDE.md、README.md
-- 包工作区: packages/nseap-meta-skill-engine (不含构建产物)
 
 已排除(体积大且可重建,不属于源码)
 ---------------------------------
@@ -19,7 +18,6 @@ Mate Agent 源码包
 - resources/runtime/ (427M, Python 运行时, 需 npm run runtime:ensure 下载)
 - resources/embedding-model/ (91M, 嵌入模型, postinstall 自动下载)
 - resources/officecli/ (32M, office 预览工具链)
-- packages/*/dist (构建产物)
 
 启动方式
 --------

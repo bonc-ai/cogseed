@@ -3055,5 +3055,8 @@
   "spaces.tab_resources": "リソース",
   "spaces.template_label": "ロールテンプレート（任意）",
   "spaces.tpl_builtin": "テンプレート標準装備（ロールテンプレート由来・読み取り専用）",
-  "spaces.tpl_bundle": "標準装備"
+  "spaces.tpl_bundle": "標準装備",
+  "settings.contexts.title": "ライブラリ",
+  "settings.contexts.sub": "モデルが参照できるライブラリ内容を管理します。",
+  "settings.contexts.open": "ライブラリを開く"
 }

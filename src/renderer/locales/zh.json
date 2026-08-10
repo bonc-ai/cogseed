@@ -1217,15 +1217,6 @@
   "driver.cli": "CLI 驱动",
   "driver.install": "安装驱动",
   "driver.mcp": "MCP 驱动",
-  "evolution.dashboard": "总览",
-  "evolution.degraded_hint": "本视图为规则降级结果（未接入模型）",
-  "evolution.enter_title": "打开进化控制台",
-  "evolution.evals": "评估",
-  "evolution.evolution": "进化",
-  "evolution.ontology": "本体",
-  "evolution.patches": "补丁",
-  "evolution.skills": "技能",
-  "evolution.title": "进化控制台",
   "force_update.close_app": "关闭应用",
   "force_update.message": "当前版本 {current}，低于最低版本 {minimum}，请更新软件后再使用。",
   "force_update.status_available": "已找到新版本 {version}，点击更新后开始下载。",
@@ -2311,7 +2302,6 @@
   "sidebar.conversations": "任务",
   "sidebar.devtools": "调试",
   "sidebar.devtools_title": "仅开发环境可见",
-  "sidebar.evolution": "进化控制台",
   "sidebar.load_more_conversations": "加载更多",
   "sidebar.new_chat": "指挥官",
   "sidebar.personal_ontology": "个人本体",
@@ -3275,5 +3265,8 @@
   "spaces.tab_resources": "资源",
   "spaces.template_label": "角色模板（可选）",
   "spaces.tpl_builtin": "模板标配（来自角色模板，只读）",
-  "spaces.tpl_bundle": "自带"
+  "spaces.tpl_bundle": "自带",
+  "settings.contexts.title": "资料库",
+  "settings.contexts.sub": "管理可供模型引用的资料库内容。",
+  "settings.contexts.open": "打开资料库"
 }

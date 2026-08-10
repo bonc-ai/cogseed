@@ -15,12 +15,10 @@ function fakeBundle() {
   fs.mkdirSync(path.join(resources, 'builtin'), { recursive: true });
   fs.mkdirSync(path.join(resources, 'runtime'), { recursive: true });
   fs.mkdirSync(path.join(resources, 'officecli'), { recursive: true });
-  fs.mkdirSync(path.join(resources, 'packages', 'nseap-meta-skill-engine', 'dist'), { recursive: true });
   fs.writeFileSync(path.join(resources, 'app.asar'), 'fake');
   fs.writeFileSync(path.join(resources, 'builtin', '_manifest.json'), '{}');
   fs.writeFileSync(path.join(resources, 'runtime', 'manifest.json'), '{}');
   fs.writeFileSync(path.join(resources, 'officecli', 'officecli-mac-arm64'), '');
-  fs.writeFileSync(path.join(resources, 'packages', 'nseap-meta-skill-engine', 'dist', 'index.js'), '');
   return appPath;
 }
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });

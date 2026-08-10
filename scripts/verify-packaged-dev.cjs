@@ -22,7 +22,6 @@ const RESOURCE_REQUIRED = Object.freeze([
   ['builtin', '_manifest.json'],
   ['runtime', 'manifest.json'],
   ['officecli', 'officecli-mac-arm64'],
-  ['packages', 'nseap-meta-skill-engine', 'dist', 'index.js'],
 ]);
 
 function normalizeAsarEntry(entry) {
