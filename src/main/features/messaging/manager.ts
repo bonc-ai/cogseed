@@ -14,6 +14,7 @@ import * as registry from './registry';
 import * as bindings from './bindings';
 import * as ledger from './ledger';
 import { evaluateInboundPolicy, stripBotMention } from './policy';
+import { matchInboundCommand, dispatchInboundCommand } from './commands';
 import { isValidFeishuOpenId } from './types';
 import { createAdapter } from './adapters';
 import { RuntimeInstance } from './runtime';
@@ -544,6 +545,27 @@ async function handleInboundLocked(
       const message = (error as Error).message || 'messaging new-session dispatch failed';
       await ledger.completeInbound(uid, key, { status: 'failed', reason: message });
       throw new Error(`messaging new-session dispatch failed: ${message}`);
+    }
+  }
+  // Personal-context slash commands（/权限 /遗忘）：consumed by registered
+  // handlers; the reply goes through the same ledger-backed delivery as the
+  // session-reset confirmation and never consumes an agent turn.
+  const inboundCommand = matchInboundCommand(text);
+  if (inboundCommand) {
+    const outcome = await dispatchInboundCommand({ uid, instance, envelope, command: inboundCommand });
+    if (outcome.consumed) {
+      const binding = await bindings.resolveOrCreateBinding(uid, instance, envelope);
+      const runtime = runtimes.get(uid)?.get(instance.id);
+      if (outcome.replyText && runtime) {
+        await runtime.deliverText(binding, envelope, outcome.replyText);
+      } else if (outcome.replyText) {
+        log.warn('messaging command reply skipped: runtime not present', {
+          instanceId: instance.id,
+          command: inboundCommand.name,
+        });
+      }
+      await ledger.completeInbound(uid, key, { status: 'accepted', cid: binding.cid });
+      return { accepted: true, duplicate: false, cid: binding.cid };
     }
   }
   try {

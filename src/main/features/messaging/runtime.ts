@@ -297,11 +297,19 @@ export class RuntimeInstance {
    * as ordinary replies, keyed on the inbound command message. */
   async deliverConfirmationMessage(binding: MessagingBinding, envelope: InboundEnvelope): Promise<void> {
     // Mirrors Hermes' `gateway.reset.header_default` banner.
-    const text = t('messaging.new_session_confirmation');
+    await this.deliverText(binding, envelope, t('messaging.new_session_confirmation'));
+  }
+
+  /** Ledger-backed text reply to an inbound message (slash-command replies,
+   *  banners, system notices). Idempotent on the inbound message id: a
+   *  redelivery of the same inbound message never sends twice. */
+  async deliverText(binding: MessagingBinding, envelope: InboundEnvelope, text: string): Promise<void> {
+    const trimmed = typeof text === 'string' ? text.trim() : '';
+    if (!trimmed) return;
     const key = ledger.deliveryKey(this.instanceId, envelope.externalMessageId);
     const begun = await ledger.beginDelivery(
       this.uid,
-      beginDeliveryEntry(this.instanceId, binding, { id: envelope.externalMessageId, text }, text, undefined, envelope.contextTokenRef),
+      beginDeliveryEntry(this.instanceId, binding, { id: envelope.externalMessageId, text: trimmed }, trimmed, undefined, envelope.contextTokenRef),
     );
     if (begun.duplicate) return;
     await this.attemptDelivery(key, begun.entry);
