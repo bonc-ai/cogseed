@@ -20272,6 +20272,7 @@ body.model-not-configured .main-content { flex-direction: column; }
   font-size: 18px;
   border-radius: 8px;
   background: rgba(14, 159, 110, 0.08);
+}
 
 /* ─── Ask-aside drawer ───────────────────────────────────────────────────
    Read-only side thread for asking about the main conversation. Styled to
