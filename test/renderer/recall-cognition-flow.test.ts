@@ -611,6 +611,48 @@ describe('Recall cognition renderer flow', () => {
     expect(calls).toEqual(['open-receipt:exec-a']);
   });
 
+
+  it('focuses the inline reuse proof when an asset has no matching receipt', async () => {
+    let clickHandler: ((event: any) => Promise<void>) | undefined;
+    const calls: string[] = [];
+    const panel: any = {
+      dataset: {},
+      addEventListener: (type: string, handler: (event: any) => Promise<void>) => {
+        if (type === 'click') clickHandler = handler;
+      },
+    };
+    const button: any = { dataset: { cognitionOpenReuse: 'asset-a' } };
+    const target = {
+      closest: (selector: string) => selector === '[data-cognition-open-reuse]' ? button : null,
+    };
+    const reuseSummary = {
+      scrollIntoView: (options: ScrollIntoViewOptions) => calls.push(`scroll-reuse:${options.block}`),
+    };
+    const context: any = {
+      document: {
+        getElementById: (id: string) => id === 'panel-recall' ? panel : null,
+        querySelectorAll: () => [],
+        querySelector: (selector: string) => selector === '.ability-asset-reuse-summary' ? reuseSummary : null,
+      },
+      window: { addEventListener() {} },
+      _skillsCognitionState: {
+        assets: [{ id: 'asset-a', receiptRefs: [] }],
+        receipts: [],
+      },
+      initSkillsCognitionConsole() {},
+      renderSkillsCognitionAssets() { calls.push('render-assets'); },
+      openSkillsCognitionReceiptDetail: async () => {},
+      openRecallTarget() {},
+      setTimeout: (callback: () => void) => callback(),
+    };
+    vm.createContext(context);
+    vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
+
+    await clickHandler!({ target });
+
+    expect(calls).toEqual(['render-assets', 'scroll-reuse:start']);
+  });
+
   it('queues selected historical conversations for manual capture and refreshes all tasks', async () => {
     let clickHandler: ((event: any) => Promise<void>) | undefined;
     const calls: Array<[string, unknown]> = [];

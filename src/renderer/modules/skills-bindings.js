@@ -322,6 +322,7 @@ function _initSkillsCognitionBindings() {
       const receiptId = receipt?.executionId || receipt?.receiptId || '';
       if (receiptId) await openSkillsCognitionReceiptDetail(receiptId);
       else renderSkillsCognitionAssets();
+      setTimeout(() => document.querySelector?.('.ability-asset-reuse-summary')?.scrollIntoView({ block: 'start' }), 0);
       return;
     }
 

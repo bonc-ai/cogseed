@@ -18357,10 +18357,6 @@ body.model-not-configured .main-content { flex-direction: column; }
   overflow: hidden;
   background: var(--app-bg, #f6f7fb);
 }
-  overflow: hidden;
-  background: var(--app-bg, #f6f7fb);
-}
-
 
 .skills-cognition-surface {
   display: flex;
