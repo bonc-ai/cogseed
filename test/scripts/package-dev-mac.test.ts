@@ -13,7 +13,7 @@ describe('isolated mac development packaging', () => {
   it('derives a packaged-dev builder config without mutating production config', () => {
     const base = {
       appId: 'com.mateagent.desktop',
-      productName: 'Mate Agent',
+      productName: 'CogSeed',
       protocols: [{ schemes: ['mateagent', 'orkas'] }],
       directories: { output: 'dist' },
       files: ['bootstrap.cjs'],
@@ -26,7 +26,7 @@ describe('isolated mac development packaging', () => {
     expect(base).toEqual(snapshot);
     expect(config).toMatchObject({
       appId: 'com.mateagent.desktop.dev',
-      productName: 'Mate Agent Dev',
+      productName: 'CogSeed Dev',
       electronDist: '/cache/electron.zip',
       directories: { output: 'dist-dev' },
       extraMetadata: { retained: true, orkasBuildChannel: 'packaged-dev' },
@@ -42,7 +42,7 @@ describe('isolated mac development packaging', () => {
   });
 
   it('computes the isolated app bundle path', () => {
-    expect(expectedDevAppPath('/repo')).toBe(path.join('/repo', 'dist-dev', 'mac-arm64', 'Mate Agent Dev.app'));
+    expect(expectedDevAppPath('/repo')).toBe(path.join('/repo', 'dist-dev', 'mac-arm64', 'CogSeed Dev.app'));
   });
 
   it('uses a cached Electron zip and rejects a renamed source bundle', () => {

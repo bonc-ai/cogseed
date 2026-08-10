@@ -1,9 +1,33 @@
 {
   "categories": [
-    { "code": "anim", "name_zh": "动画 / 视频", "name_en": "Animation / Video", "name_ja": "アニメ / 動画", "sort_order": 10 },
-    { "code": "browser", "name_zh": "浏览器", "name_en": "Browser", "name_ja": "ブラウザ", "sort_order": 30 },
-    { "code": "office", "name_zh": "办公", "name_en": "Office", "name_ja": "オフィス", "sort_order": 60 },
-    { "code": "slides", "name_zh": "演示 / PPT", "name_en": "Slides / PPT", "name_ja": "スライド / PPT", "sort_order": 70 }
+    {
+      "code": "anim",
+      "name_zh": "动画 / 视频",
+      "name_en": "Animation / Video",
+      "name_ja": "アニメ / 動画",
+      "sort_order": 10
+    },
+    {
+      "code": "browser",
+      "name_zh": "浏览器",
+      "name_en": "Browser",
+      "name_ja": "ブラウザ",
+      "sort_order": 30
+    },
+    {
+      "code": "office",
+      "name_zh": "办公",
+      "name_en": "Office",
+      "name_ja": "オフィス",
+      "sort_order": 60
+    },
+    {
+      "code": "slides",
+      "name_zh": "演示 / PPT",
+      "name_en": "Slides / PPT",
+      "name_ja": "スライド / PPT",
+      "sort_order": 70
+    }
   ],
   "projects": [
     {
@@ -16,8 +40,8 @@
       "color": "#8b5cf6",
       "by": "HyperFrames",
       "home": true,
-      "description_zh": "生成开场动画和短视频, 装好后 Mate Agent 会自动调用。",
-      "description_en": "Generate intro animations and short videos; Mate Agent uses it automatically once installed.",
+      "description_zh": "生成开场动画和短视频, 装好后 CogSeed 会自动调用。",
+      "description_en": "Generate intro animations and short videos; CogSeed uses it automatically once installed.",
       "task_zh": "帮我做一段产品开场动画",
       "task_en": "Make a product intro animation for me"
     },
@@ -91,8 +115,8 @@
       "color": "#14b8a6",
       "by": "Crawl4AI",
       "home": true,
-      "description_zh": "抓取网页正文并整理成干净的文档或结构化数据, 装好后 Mate Agent 会自动调用。",
-      "description_en": "Extract a web page's main content into a clean document or structured data; Mate Agent uses it automatically once installed.",
+      "description_zh": "抓取网页正文并整理成干净的文档或结构化数据, 装好后 CogSeed 会自动调用。",
+      "description_en": "Extract a web page's main content into a clean document or structured data; CogSeed uses it automatically once installed.",
       "task_zh": "抓取这个网页的内容整理成文档",
       "task_en": "Pull this web page into a clean document"
     }

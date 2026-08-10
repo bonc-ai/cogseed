@@ -47,7 +47,7 @@
 - Workspaces/Workspace Start 的完整产品流程；Recall 只先实现 asset reference 和 projection contract。
 - Nightly Digest、主动整理、完整 User Teaching Signal UI；Teaching Signal 的数据入口属于 Recall source adapter，页面属于后续产品层。
 - marketplace 管理、Agent/Skill creator、Skill Library 的原有创建/编辑/启停/删除流程。
-- 独立 evolution console 前端；应保持已完成的移除，但保留 evolution 后端。
+- 独立 evolution console 前端和旧 evolution 后端已归档；当前工作树只保留轻量 Skills/Cognition 版本与回滚服务。
 
 ---
 
@@ -200,7 +200,7 @@ Required invariants:
 **Files:**
 - Create: `src/main/features/recall/asset-service.ts`
 - Create: `src/main/features/recall/usage-service.ts`
-- Modify: `src/main/features/evolution/versions-store.ts` only for shared version snapshot compatibility; keep Skill rollback behavior unchanged.
+- Modify: `src/main/features/skills/version-store.ts` only for shared version snapshot compatibility; keep Skill rollback behavior unchanged.
 - Modify: `src/main/features/cognition/assets-adapter.ts` to read formal AbilityAssets first and retain legacy adapter rows only as explicitly labeled migration views.
 - Test: `test/main/features/recall/asset-service.test.ts`
 

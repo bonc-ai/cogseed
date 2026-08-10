@@ -30,7 +30,6 @@ import * as companionRepro from '../features/companion_repro';
 import * as p3394 from '../features/p3394';
 import * as executionRecords from '../features/execution-records';
 import * as workbench from '../features/workbench';
-import * as evolution from '../features/evolution';
 import * as cognition from '../features/cognition';
 import * as recallCandidates from '../features/recall/candidate-service';
 import * as recallAssets from '../features/recall/asset-service';
@@ -2616,108 +2615,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   // ── Skills ──
-  'evolution.dashboard': async (_payload, ctx) => {
-    return evolution.buildDashboard(ctx.userId);
-  },
-  'evolution.evolve.start': async ({ skillId, episode, currentContent, agentId }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    if (!episode || typeof currentContent !== 'string') throw new Error('missing episode/currentContent');
-    return evolution.startEvolutionRun(ctx.userId, { skillId, episode, currentContent, agentId });
-  },
-  'evolution.evolve.step': async ({ runId }, ctx) => {
-    if (!safeId(runId)) throw new Error('invalid runId');
-    return evolution.stepEvolutionRun(ctx.userId, runId);
-  },
-  'evolution.evolve.abort': async ({ runId }, ctx) => {
-    if (!safeId(runId)) throw new Error('invalid runId');
-    return evolution.abortEvolutionRun(ctx.userId, runId);
-  },
-  'evolution.evolve.get': async ({ runId }, ctx) => {
-    if (!safeId(runId)) throw new Error('invalid runId');
-    return { run: await evolution.readEvolutionRun(ctx.userId, runId) };
-  },
-  'evolution.evolve.list': async (_payload, ctx) => {
-    return { runs: await evolution.listEvolutionRuns(ctx.userId) };
-  },
-  'evolution.evolve.recommend': async ({ skillId }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    return evolution.recommendForSkill(ctx.userId, skillId);
-  },
-  'evolution.evals.get': async ({ skillId }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    return evolution.readEvalRecord(ctx.userId, skillId);
-  },
-  'evolution.evals.saveCase': async ({ skillId, evalCase }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    if (!evalCase || typeof evalCase.id !== 'number') throw new Error('invalid evalCase');
-    return evolution.upsertEvalCase(ctx.userId, skillId, evalCase);
-  },
-  'evolution.evals.standard.get': async ({ skillId }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    return evolution.readEvalStandard(ctx.userId, skillId);
-  },
-  'evolution.evals.standard.save': async ({ skillId, assertions, cases }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    return evolution.saveEvalStandard(ctx.userId, skillId, {
-      assertions: Array.isArray(assertions) ? assertions : [],
-      cases: Array.isArray(cases) ? cases : [],
-    });
-  },
-  'evolution.ontology.list': async ({ skillId }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    return { ontologies: await evolution.listSkillOntologies(ctx.userId, skillId) };
-  },
-  'evolution.ontology.extract': async ({ skillId, text, agentId }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    if (typeof text !== 'string' || !text.trim()) throw new Error('missing text');
-    return evolution.extractAndSaveOntology(ctx.userId, skillId, text, agentId ?? '');
-  },
-  'evolution.patches.apply': async ({ skillId, newContent }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    if (typeof newContent !== 'string' || !newContent.trim()) throw new Error('missing newContent');
-    return evolution.applyPatchToSkill(ctx.userId, { skillId, newContent });
-  },
-  'evolution.skills.versions': async ({ skillId }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    return { versions: await evolution.listSkillVersions(ctx.userId, skillId) };
-  },
-  'evolution.skills.export': async ({ skillId, version }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    return evolution.exportSkillZip(ctx.userId, skillId, typeof version === 'string' ? version : '0.0.0');
-  },
-  'evolution.skills.captureIntent': async ({ name, purpose, trigger_contexts, output_format, edge_cases, dependencies, examples }, ctx) => {
-    if (typeof name !== 'string' || !name.trim()) throw new Error('missing name');
-    if (typeof purpose !== 'string' || !purpose.trim()) throw new Error('missing purpose');
-    return evolution.captureSkillIntent(ctx.userId, {
-      name, purpose,
-      trigger_contexts: Array.isArray(trigger_contexts) ? trigger_contexts : [],
-      output_format: typeof output_format === 'string' ? output_format : 'structured_analysis',
-      edge_cases: Array.isArray(edge_cases) ? edge_cases : [],
-      dependencies: Array.isArray(dependencies) ? dependencies : [],
-      examples: Array.isArray(examples) ? examples : [],
-    });
-  },
-  'evolution.skills.createDraft': async ({ name, description, category }, ctx) => {
-    if (typeof name !== 'string' || !name.trim()) throw new Error('missing name');
-    return evolution.createSkillFromDraft(ctx.userId, {
-      name, description: typeof description === 'string' ? description : '', category: typeof category === 'string' ? category : '',
-    });
-  },
-  'evolution.ontology.bindings': async ({ skillId }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    return { refs: await evolution.listOntologyBindings(ctx.userId, skillId) };
-  },
-  'evolution.ontology.bind': async ({ skillId, ontologyId }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    if (!ontologyId || typeof ontologyId !== 'string') throw new Error('missing ontologyId');
-    return { refs: await evolution.bindOntology(ctx.userId, skillId, ontologyId) };
-  },
-  'evolution.ontology.unbind': async ({ skillId, ontologyId }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    if (!ontologyId || typeof ontologyId !== 'string') throw new Error('missing ontologyId');
-    return { refs: await evolution.unbindOntology(ctx.userId, skillId, ontologyId) };
-  },
-
   // ── Personal Ontology Candidates ──
   'personalOntology.candidates.list': async (_payload, ctx) => {
     return personalOntologyCandidates.listCandidates(ctx.userId);
@@ -4476,18 +4373,6 @@ const streamHandlers: Record<string, StreamHandler> = {
       ...(atts.length ? { attachments: atts } : {}),
       ...(modelText ? { modelText } : {}),
     });
-  },
-
-  'evolution.evals.run': async function* ({ skillId, cases, outputs, agentId }, ctx) {
-    if (!safeId(skillId)) {
-      yield { type: 'error', text: 'invalid skillId' };
-      return;
-    }
-    if (!Array.isArray(cases)) {
-      yield { type: 'error', text: 'invalid cases' };
-      return;
-    }
-    yield* evolution.runEvalStream(ctx.userId, skillId, { cases, outputs: outputs ?? {}, agentId });
   },
 
   'agents.chat.sendStream': async function* ({ id, content, model_text, attachments }, ctx, signal) {

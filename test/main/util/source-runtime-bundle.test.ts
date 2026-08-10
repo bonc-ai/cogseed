@@ -39,7 +39,7 @@ const REQUIRED_RUNTIME_EXECUTABLES = [
 function createCurrentBundleFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-source-bundle-'));
   temporaryRoots.push(root);
-  const destination = path.join(root, 'Mate Agent.app');
+  const destination = path.join(root, 'CogSeed.app');
   const identity = sourceRuntime.sourceRuntimeBundleSpec('mate');
 
   for (const relative of REQUIRED_RUNTIME_EXECUTABLES) {
@@ -114,7 +114,7 @@ describe('macOS source runtime bundle contract', () => {
     temporaryRoots.push(root);
     const distDir = path.join(root, 'dist');
     const source = path.join(distDir, 'Electron.app');
-    const destination = path.join(distDir, 'Mate Agent.app');
+    const destination = path.join(distDir, 'CogSeed.app');
     const frameworkVersions = path.join(
       source,
       'Contents',
@@ -154,7 +154,7 @@ describe('macOS source runtime bundle contract', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-source-copy-failure-'));
     temporaryRoots.push(root);
     const source = path.join(root, 'missing.app');
-    const destination = path.join(root, 'Mate Agent.app');
+    const destination = path.join(root, 'CogSeed.app');
     fs.mkdirSync(destination);
     fs.writeFileSync(path.join(destination, 'partial'), 'stale', 'utf8');
 
@@ -166,7 +166,7 @@ describe('macOS source runtime bundle contract', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-source-copy-cleanup-failure-'));
     temporaryRoots.push(root);
     const source = path.join(root, 'missing.app');
-    const destination = path.join(root, 'Mate Agent.app');
+    const destination = path.join(root, 'CogSeed.app');
     fs.mkdirSync(destination);
     const cleanupError = new Error('simulated cleanup failure');
     const realRmSync = mutableFs.rmSync.bind(mutableFs);

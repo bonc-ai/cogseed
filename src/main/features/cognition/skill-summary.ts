@@ -1,5 +1,5 @@
-import { listSkillVersions } from '../evolution/versions-store';
-import { rollbackSkillToVersion } from '../evolution/patch-service';
+import { listSkillVersions } from '../skills/version-store';
+import { rollbackSkillToVersion } from '../skills/rollback-service';
 import { listCognitionCandidates } from './candidates-adapter';
 import { listCognitionReuseReceipts } from './receipts-adapter';
 import type { SkillCognitionSummary } from './types';

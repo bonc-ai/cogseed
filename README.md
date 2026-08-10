@@ -1,4 +1,4 @@
-# Mate Agent · Mate 智伴
+# CogSeed · CogSeed
 
 **你的协作型智能体工作台**
 
@@ -6,7 +6,7 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue)](https://github.com)
 [![Node](https://img.shields.io/badge/Node-20%2B-brightgreen)](https://nodejs.org)
 
-Mate Agent 是一个本地优先的 AI 协作工作台。一位**指挥官（Commander）**理解你的目标，拆解任务，调度多个**专业 Agent** 协同完成复杂工作。不写编排代码，不托管数据——对话、文件、API 密钥全部留在你的机器上。
+CogSeed 是一个本地优先的 AI 协作工作台。一位**指挥官（Commander）**理解你的目标，拆解任务，调度多个**专业 Agent** 协同完成复杂工作。不写编排代码，不托管数据——对话、文件、API 密钥全部留在你的机器上。
 
 ---
 
@@ -23,10 +23,10 @@ Mate Agent 是一个本地优先的 AI 协作工作台。一位**指挥官（Com
 
 ## 项目背景
 
-Mate Agent 基于 [Orkas](https://github.com/Orkas-AI/Orkas) 开源基座构建，在保留其 Conversation / Agent Runtime 核心能力的基础上：
+CogSeed 基于 [Orkas](https://github.com/Orkas-AI/Orkas) 开源基座构建，在保留其 Conversation / Agent Runtime 核心能力的基础上：
 
 - 引入 P3394 的 Wake、KSTAR、Experience 治理链路
-- 独立品牌身份（Mate Agent / Mate 智伴）
+- 独立品牌身份（CogSeed / CogSeed）
 - 指挥官后端可配置切换
 - 保持现有会话、配置、Agent、Skill 数据兼容
 
@@ -80,8 +80,8 @@ run.cmd
 
 | 项目 | 值 |
 |---|---|
-| 英文名 | Mate Agent |
-| 中文名 | Mate 智伴 |
+| 英文名 | CogSeed |
+| 中文名 | CogSeed |
 | 定位语 | 你的协作型智能体工作台 |
 | 应用 ID | `com.mateagent.desktop` |
 | 协议 | `mateagent://` |

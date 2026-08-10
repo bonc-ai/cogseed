@@ -73,6 +73,7 @@ async function loadSettings() {
   _settingsBindLanguageOnce();
   _settingsBindTaskNotificationsOnce();
   _settingsBindClientConfigOnce();
+  _settingsBindContextsEntryOnce();
   _settingsSyncLanguageRadio();
   await Promise.all([
     _settingsSafeCall('settings providers refresh', _settingsRefreshProviders),
@@ -357,6 +358,15 @@ async function _settingsRefreshDataRoot() {
   } catch (_) {
     _settingsState.dataRoot = '';
   }
+}
+
+function _settingsBindContextsEntryOnce() {
+  const btn = document.getElementById('settings-contexts-open-btn');
+  if (!btn || btn.dataset.bound) return;
+  btn.addEventListener('click', () => {
+    if (typeof setView === 'function') setView('contexts');
+  });
+  btn.dataset.bound = '1';
 }
 
 function _settingsRenderDataRoot() {
@@ -1450,7 +1460,7 @@ function _settingsRenderEntryRow(entry, idx) {
     badge.textContent = entry.oauthExpired ? t('settings.entries.oauth_expired') : t('settings.entries.oauth_badge');
   } else if (entry.profileType === 'managed') {
     badge.className = 'account-type-badge';
-    badge.textContent = 'Mate Agent';
+    badge.textContent = 'CogSeed';
   } else {
     badge.className = 'account-type-badge';
     badge.textContent = 'API Key';

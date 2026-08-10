@@ -43,7 +43,7 @@ try {
     allowWorkspaceOverride: isPackagedDev,
   });
 } catch (err) {
-  process.stderr.write(`[Mate Agent] ${err instanceof Error ? err.message : String(err)}\n`);
+  process.stderr.write(`[CogSeed] ${err instanceof Error ? err.message : String(err)}\n`);
   process.exitCode = 2;
   throw err;
 }

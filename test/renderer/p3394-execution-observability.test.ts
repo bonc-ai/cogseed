@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const P = require('../../src/renderer/modules/evolution/pages.js');
+const P = require('../../src/renderer/modules/p3394-observability.js');
 
 describe('P3394 execution observability renderer', () => {
   it('renders baseline/treatment, receipt scope, counts, and boundary without raw output', () => {

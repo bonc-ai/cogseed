@@ -130,7 +130,7 @@ function npmInstallInvocation() {
         label: `corepack npm install (${packageManager})`,
       };
     }
-    console.warn(`[Mate Agent] corepack unavailable (${corepackProbe.error.message}); falling back to npm install.`);
+    console.warn(`[CogSeed] corepack unavailable (${corepackProbe.error.message}); falling back to npm install.`);
     return {
       cmd: process.platform === 'win32' ? 'npm.cmd' : 'npm',
       args: ['install'],
@@ -149,14 +149,14 @@ function npmInstallInvocation() {
 
 function runNpmInstall() {
   const invocation = npmInstallInvocation();
-  console.log(`[Mate Agent] Installing dependencies with ${invocation.label}...`);
+  console.log(`[CogSeed] Installing dependencies with ${invocation.label}...`);
   const res = spawnSync(invocation.cmd, invocation.args, {
     cwd: PC_DIR,
     stdio: 'inherit',
     shell: invocation.shell,
   });
   if (res.error) {
-    console.error(`[Mate Agent] ${invocation.label} failed to start:`, res.error.message);
+    console.error(`[CogSeed] ${invocation.label} failed to start:`, res.error.message);
     process.exit(1);
   }
   if (res.status !== 0) {
@@ -183,7 +183,7 @@ function runModelFetch() {
     shell: false,
   });
   if (res.error) {
-    console.error('[Mate Agent] 模型下载启动失败：', res.error.message);
+    console.error('[CogSeed] 模型下载启动失败：', res.error.message);
     process.exit(1);
   }
   if (res.status !== 0) {
@@ -274,19 +274,19 @@ function electronReady() {
 
 function runElectronInstall(reason) {
   if (!fs.existsSync(ELECTRON_INSTALL)) {
-    console.error('[Mate Agent] Electron package is incomplete: node_modules/electron/install.js is missing.');
-    console.error('[Mate Agent] Run `npm install` in PC/ or remove PC/node_modules and start again.');
+    console.error('[CogSeed] Electron package is incomplete: node_modules/electron/install.js is missing.');
+    console.error('[CogSeed] Run `npm install` in PC/ or remove PC/node_modules and start again.');
     process.exit(1);
   }
 
-  console.log(`[Mate Agent] Electron binary is not ready (${reason}); repairing Electron install...`);
+  console.log(`[CogSeed] Electron binary is not ready (${reason}); repairing Electron install...`);
   const res = spawnSync(process.execPath, [ELECTRON_INSTALL], {
     cwd: PC_DIR,
     stdio: 'inherit',
     shell: false,
   });
   if (res.error) {
-    console.error('[Mate Agent] Electron install script failed to start:', res.error.message);
+    console.error('[CogSeed] Electron install script failed to start:', res.error.message);
     process.exit(1);
   }
   if (res.status !== 0) {
@@ -341,12 +341,12 @@ function repairWindowsElectronFromCache() {
 
   const actualSha = sha256File(archive);
   if (actualSha !== expectedSha) {
-    console.warn(`[Mate Agent] Ignoring Electron cache with a checksum mismatch: ${archiveName}`);
+    console.warn(`[CogSeed] Ignoring Electron cache with a checksum mismatch: ${archiveName}`);
     return false;
   }
 
   const distDir = path.join(ELECTRON_DIR, 'dist');
-  console.log('[Mate Agent] Electron npm extraction was incomplete; repairing from the verified download cache...');
+  console.log('[CogSeed] Electron npm extraction was incomplete; repairing from the verified download cache...');
   fs.rmSync(distDir, { recursive: true, force: true });
   const command = `Expand-Archive -LiteralPath ${powershellQuote(archive)} -DestinationPath ${powershellQuote(distDir)} -Force`;
   const result = spawnSync('powershell.exe', [
@@ -361,7 +361,7 @@ function repairWindowsElectronFromCache() {
     timeout: 10 * 60 * 1000,
   });
   if (result.error || result.status !== 0) {
-    console.warn('[Mate Agent] Verified Electron cache extraction failed:', result.error?.message || `exit ${result.status}`);
+    console.warn('[CogSeed] Verified Electron cache extraction failed:', result.error?.message || `exit ${result.status}`);
     return false;
   }
   fs.writeFileSync(ELECTRON_PATH_TXT, 'electron.exe', 'utf8');
@@ -376,15 +376,15 @@ function ensureElectronReady(reason = 'missing binary') {
   if (repairWindowsElectronFromCache()) return;
 
   const bin = electronBinaryPath() || '<missing path.txt>';
-  console.error('[Mate Agent] Electron is still incomplete after repair.');
-  console.error(`[Mate Agent] Expected Electron binary: ${bin}`);
-  console.error('[Mate Agent] Check network access to the Electron download host, then rerun Mate Agent.');
+  console.error('[CogSeed] Electron is still incomplete after repair.');
+  console.error(`[CogSeed] Expected Electron binary: ${bin}`);
+  console.error('[CogSeed] Check network access to the Electron download host, then rerun CogSeed.');
   process.exit(1);
 }
 
 function main() {
   if (!fs.existsSync(PKG)) {
-    console.error('[Mate Agent] 找不到 package.json：', PKG);
+    console.error('[CogSeed] 找不到 package.json：', PKG);
     process.exit(1);
   }
 
@@ -402,7 +402,7 @@ function main() {
   if (!installReason) {
     // 依赖已同步；但模型文件可能被误删，单独校验一次。
     if (!modelReady()) {
-      console.log('[Mate Agent] 知识库 embedding 模型缺失，补下载（约 90MB）...');
+      console.log('[CogSeed] 知识库 embedding 模型缺失，补下载（约 90MB）...');
       runModelFetch();
     }
     ensureElectronReady('dependency stamp is current but Electron files are incomplete');
@@ -410,17 +410,17 @@ function main() {
   }
 
   if (installReason === 'node_modules_missing') {
-    console.log('[Mate Agent] 首次运行：安装依赖 + 下载嵌入模型（约 5～10 分钟）...');
+    console.log('[CogSeed] 首次运行：安装依赖 + 下载嵌入模型（约 5～10 分钟）...');
   } else if (installReason === 'packages_incomplete') {
-    console.log(`[Mate Agent] Installed npm packages are incomplete (${summarizePackages(missingPackages)}); repairing...`);
+    console.log(`[CogSeed] Installed npm packages are incomplete (${summarizePackages(missingPackages)}); repairing...`);
   } else {
-    console.log('[Mate Agent] 依赖与 package.json / lockfile 不一致，执行 npm install...');
+    console.log('[CogSeed] 依赖与 package.json / lockfile 不一致，执行 npm install...');
   }
 
   runNpmInstall();
   const missingAfterInstall = missingDeclaredDependencyPackages();
   if (missingAfterInstall.length > 0) {
-    console.error(`[Mate Agent] npm install completed but required packages are still incomplete: ${summarizePackages(missingAfterInstall)}`);
+    console.error(`[CogSeed] npm install completed but required packages are still incomplete: ${summarizePackages(missingAfterInstall)}`);
     process.exit(1);
   }
   ensureElectronReady('npm install finished without a complete Electron binary');
@@ -428,7 +428,7 @@ function main() {
   // 双保险：npm install 的 postinstall 已跑 fetch-embedding-model，若因 npm
   // 的 postinstall 被 --ignore-scripts / CI 配置跳过，这里再兜底补一次。
   if (!modelReady()) {
-    console.log('[Mate Agent] 嵌入模型尚未就绪，补下载...');
+    console.log('[CogSeed] 嵌入模型尚未就绪，补下载...');
     runModelFetch();
   }
 
@@ -437,7 +437,7 @@ function main() {
   try {
     writeStamp(finalHash);
   } catch (err) {
-    console.warn('[Mate Agent] 警告：写入依赖 stamp 失败（不影响启动）：', err.message);
+    console.warn('[CogSeed] 警告：写入依赖 stamp 失败（不影响启动）：', err.message);
   }
 }
 
