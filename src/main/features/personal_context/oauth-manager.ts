@@ -54,8 +54,14 @@ export interface TokenEndpoint {
   exchangeCode(code: string, redirectUri: string): Promise<OAuthCredential>;
   refreshToken(refreshToken: string, scopes: string[]): Promise<OAuthCredential>;
   revokeToken(refreshToken: string): Promise<void>;
-  /** 用当前 access token 做轻量健康检查（如 user_info）；ok=false 时附原因 */
-  healthCheck(accessToken: string): Promise<{ ok: boolean; error?: string; code?: TokenEndpointErrorCode }>;
+  /** 用当前 access token 做轻量健康检查（如 user_info）；ok=false 时附原因。
+   *  identity 为可选的用户身份解析（unionId/tenantKey），供 provider 构建使用 */
+  healthCheck(accessToken: string): Promise<{
+    ok: boolean;
+    error?: string;
+    code?: TokenEndpointErrorCode;
+    identity?: { unionId?: string; tenantKey?: string };
+  }>;
 }
 
 // ── 落盘结构 ──────────────────────────────────────────────────────────────

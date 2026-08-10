@@ -1,13 +1,24 @@
 // 个人上下文连接器设置（设置 → 消息平台 → 个人上下文连接器）。
 // 经典脚本 IIFE：渲染飞书连接状态（未连接/授权中/已连接/异常），
-// 提供连接/取消/撤销/健康检查动作；通过 window.orkas.invoke 走
-// personal_context.* IPC 通道。状态轮询本地文件，不主动触发网络。
+// 提供连接/取消/撤销/健康检查动作；已连接时展示发现到的可接入资源
+// （日历/文件夹/文档等，只读元数据）并支持勾选保存接入范围。
+// 通过 window.orkas.invoke 走 personal_context.* IPC 通道。
 (function () {
   'use strict';
 
   const PROVIDER_ID = 'feishu';
   const POLL_MS = 2000;
   const AUTHORIZING_KINDS = new Set(['connecting']);
+
+  const RESOURCE_TYPE_KEYS = {
+    calendar: 'personal_context.resources.type.calendar',
+    calendar_event: 'personal_context.resources.type.calendar_event',
+    document: 'personal_context.resources.type.document',
+    file: 'personal_context.resources.type.file',
+    folder: 'personal_context.resources.type.folder',
+    chat: 'personal_context.resources.type.chat',
+    contact: 'personal_context.resources.type.contact',
+  };
 
   const state = {
     initialized: false,
@@ -19,6 +30,13 @@
     setupOpen: false,
     setupStep: 0,
     guide: null,
+    // 资源选择区状态（仅 connected 时有效）
+    resources: [],
+    scopeIds: new Set(),
+    resourcesLoaded: false,
+    loadingResources: false,
+    savingScope: false,
+    resourceError: '',
   };
 
   function page() {
@@ -74,7 +92,17 @@
   async function refresh() {
     try {
       await Promise.all([refreshStatus(), refreshGuide()]);
+      // 非已连接状态：清除资源选择区缓存，下次连接时重新发现
+      if (kind() !== 'connected') {
+        state.resources = [];
+        state.scopeIds = new Set();
+        state.resourcesLoaded = false;
+        state.resourceError = '';
+      }
       renderCurrent();
+      if (kind() === 'connected' && !state.resourcesLoaded && !state.loadingResources) {
+        void loadResources();
+      }
     } catch (error) {
       state.status = { kind: 'error', checkedAt: new Date().toISOString(), error: errorMessage(error) };
       renderCurrent();
@@ -291,7 +319,127 @@
     section.appendChild(toggle);
     if (state.setupOpen) section.appendChild(renderSetupGuide());
     section.appendChild(actions());
+    if (kind() === 'connected') {
+      section.appendChild(resourcesCard());
+    }
     target.appendChild(section);
+  }
+
+  // ── 资源选择区（仅已连接）───────────────────────────────────────────────
+
+  function resourceTypeLabel(type) {
+    const key = RESOURCE_TYPE_KEYS[type];
+    return key ? labelFor(key, type) : type;
+  }
+
+  function resourcesCard() {
+    const card = el('section', 'messaging-config-card');
+    const head = el('div', 'messaging-config-card-heading');
+    head.appendChild(el('h3', '', labelFor('personal_context.resources.title', '')));
+    head.appendChild(el('p', '', labelFor('personal_context.resources.subtitle', '')));
+    card.appendChild(head);
+
+    const list = el('div', '');
+    list.id = 'pc-resource-list';
+    card.appendChild(list);
+
+    const buttons = el('div', 'messaging-manual-fields');
+    const refresh = el('button', 'btn messaging-secondary-button', labelFor('personal_context.resources.refresh', ''));
+    refresh.type = 'button';
+    refresh.addEventListener('click', () => void refreshResources(refresh));
+    const save = el('button', 'btn btn-primary', labelFor('personal_context.resources.save', ''));
+    save.type = 'button';
+    save.addEventListener('click', () => void saveScope(save));
+    buttons.append(refresh, save);
+    card.appendChild(buttons);
+    return card;
+  }
+
+  /** 拉取发现资源 + 当前接入范围，合并勾选状态 */
+  async function loadResources() {
+    if (state.loadingResources) return;
+    state.loadingResources = true;
+    renderResourceList();
+    try {
+      const [discovered, scope] = await Promise.all([
+        invoke('personal_context.discover_resources', { providerId: PROVIDER_ID }),
+        invoke('personal_context.get_scope', { providerId: PROVIDER_ID }),
+      ]);
+      state.resources = (discovered && discovered.resources) || [];
+      state.scopeIds = new Set(((scope && scope.scope && scope.scope.entries) || []).map((entry) => entry.resourceId));
+      state.resourcesLoaded = true;
+      state.resourceError = '';
+    } catch (error) {
+      state.resourceError = errorMessage(error);
+    } finally {
+      state.loadingResources = false;
+      renderResourceList();
+    }
+  }
+
+  function renderResourceList() {
+    const list = document.getElementById('pc-resource-list');
+    if (!list) return;
+    list.replaceChildren();
+    if (state.loadingResources && state.resources.length === 0) {
+      list.appendChild(el('p', 'messaging-owner-guide', labelFor('personal_context.resources.loading', '')));
+      return;
+    }
+    if (state.resourceError) {
+      list.appendChild(el('p', 'messaging-owner-guide', labelFor('personal_context.resources.load_failed', '').replace('{error}', state.resourceError)));
+      return;
+    }
+    if (state.resources.length === 0) {
+      list.appendChild(el('p', 'messaging-owner-guide', labelFor('personal_context.resources.empty', '')));
+      return;
+    }
+    for (const resource of state.resources) {
+      const row = el('label', 'messaging-owner-bound-row');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = state.scopeIds.has(resource.resourceId);
+      box.addEventListener('change', (event) => {
+        const checked = Boolean(event.target && event.target.checked);
+        if (checked) state.scopeIds.add(resource.resourceId);
+        else state.scopeIds.delete(resource.resourceId);
+      });
+      const title = el('span', '', resource.title || resource.resourceId);
+      const typeLabel = el('span', '', resourceTypeLabel(resource.resourceType));
+      typeLabel.style.color = 'var(--muted)';
+      typeLabel.style.fontSize = '12px';
+      row.append(box, title, typeLabel);
+      list.appendChild(row);
+    }
+  }
+
+  function refreshResources(button) {
+    if (state.loadingResources) return;
+    button.disabled = true;
+    state.resourcesLoaded = false;
+    state.resources = [];
+    loadResources().finally(() => {
+      button.disabled = false;
+    });
+  }
+
+  /** 保存勾选的接入范围（整体替换） */
+  async function saveScope(button) {
+    if (state.savingScope) return;
+    state.savingScope = true;
+    button.disabled = true;
+    try {
+      const resources = state.resources.filter((resource) => state.scopeIds.has(resource.resourceId));
+      const result = await invoke('personal_context.set_scope', { providerId: PROVIDER_ID, resources });
+      setNotice(labelFor(
+        result && result.changed ? 'personal_context.resources.saved' : 'personal_context.resources.saved_unchanged',
+        '',
+      ), 'info');
+    } catch (error) {
+      setNotice(labelFor('personal_context.resources.save_failed', '').replace('{error}', errorMessage(error)), 'error');
+    } finally {
+      state.savingScope = false;
+      button.disabled = false;
+    }
   }
 
   async function connectFeishu(button) {
@@ -378,6 +526,8 @@
         advanceSetup,
         renderSetupGuide,
         setupGuideSteps,
+        resourceTypeLabel,
+        renderResourceList,
       },
     };
   }
