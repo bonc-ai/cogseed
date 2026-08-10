@@ -47,17 +47,28 @@ function createManager(appId: string, appSecret: string): OAuthManager {
 }
 
 /**
+ * 从候选飞书实例中挑一个用于 OAuth 授权。
+ * 优先级：feishu（中国版）品牌 > 已连接实例 > 第一个已配置实例。
+ * 授权页域名固定 open.feishu.cn（MVP 只做中国版飞书），Lark 实例的
+ * appId 在飞书域无法授权，必须优先 brand=feishu，避免用户同时配了
+ * 飞书 + Lark 应用时自动选到 Lark。
+ */
+export function pickFeishuInstance(candidates: Array<{ id: string; feishuTenantBrand?: string; status: { kind: string } }>): string | undefined {
+  return (
+    candidates.find((item) => item.feishuTenantBrand === 'feishu')?.id
+    ?? candidates.find((item) => item.status.kind === 'connected')?.id
+    ?? candidates[0]?.id
+  );
+}
+
+/**
  * 从 messaging 配置中解析飞书应用凭据。优先显式 instanceId；
- * 未指定时取第一个 connected 的飞书实例，其次任意已配置实例。
+ * 未指定时用 pickFeishuInstance 选择（飞书品牌优先，其次 connected，再任意）。
  */
 async function resolveFeishuApp(uid: string, instanceId?: string): Promise<{ appId: string; appSecret: string }> {
   const instances = await messagingRegistry.listInstances(uid);
   const candidates = instances.filter((item) => item.platform === 'feishu_lark');
-  let chosenId = instanceId;
-  if (!chosenId) {
-    const connected = candidates.find((item) => item.status.kind === 'connected');
-    chosenId = connected?.id ?? candidates[0]?.id;
-  }
+  const chosenId = instanceId ?? pickFeishuInstance(candidates);
   if (!chosenId) {
     throw new Error('未配置飞书机器人：请先在「设置 → 消息平台」完成飞书绑定');
   }
