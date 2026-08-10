@@ -216,5 +216,12 @@
   "messaging.approval.button.deny": "❌ 拒绝",
   "messaging.owner_label_self": "本人",
   "messaging.wechat.rescan_required": "需要重新扫码",
-  "messaging.approval.title_needed": "需要你的审批：{agent}"
+  "messaging.approval.title_needed": "需要你的审批：{agent}",
+  "messaging.candidate_card.confirmed": "✅ 已确认",
+  "messaging.candidate_card.confirmed_detail": "✅ 已加入个人本体",
+  "messaging.candidate_card.rejected": "❌ 已拒绝",
+  "messaging.candidate_card.rejected_detail": "❌ 已从候选池移除",
+  "personal_context.candidate.title": "待确认：个人本体候选",
+  "personal_context.candidate.approve": "✅ 确认",
+  "personal_context.candidate.reject": "❌ 拒绝"
 }

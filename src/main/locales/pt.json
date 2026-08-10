@@ -216,5 +216,12 @@
   "messaging.approval.button.deny": "❌ Negar",
   "messaging.owner_label_self": "Eu",
   "messaging.wechat.rescan_required": "É necessário escanear novamente",
-  "messaging.approval.title_needed": "Sua aprovação é necessária: {agent}"
+  "messaging.approval.title_needed": "Sua aprovação é necessária: {agent}",
+  "messaging.candidate_card.confirmed": "✅ Confirmado",
+  "messaging.candidate_card.confirmed_detail": "✅ Adicionado à ontologia pessoal",
+  "messaging.candidate_card.rejected": "❌ Rejeitado",
+  "messaging.candidate_card.rejected_detail": "❌ Removido do pool de candidatos",
+  "personal_context.candidate.title": "Pendente: candidato da ontologia pessoal",
+  "personal_context.candidate.approve": "✅ Confirmar",
+  "personal_context.candidate.reject": "❌ Rejeitar"
 }

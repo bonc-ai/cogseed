@@ -1244,6 +1244,106 @@ describe('messaging manager adapter flow', () => {
     }
   });
 
+  it('resolves a personal-ontology candidate card through card action', async () => {
+    const adapter: MessagingCardAdapter = {
+      platform: 'feishu_lark',
+      async start(signal, callbacks) {
+        await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      async stop() {},
+      async checkHealth() {
+        return { kind: 'connected', checkedAt: new Date().toISOString() };
+      },
+      sendMessage: vi.fn(async () => ({})),
+      sendCard: vi.fn(async () => ({})),
+      updateCard: vi.fn(async () => ({})),
+      sendApprovalCard: vi.fn(async () => ({})),
+    };
+    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
+      createAdapter: vi.fn(() => adapter),
+    }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: vi.fn(async () => ({ ok: true })) }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe: vi.fn(() => () => undefined) }));
+
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const ontology = await import('../../../src/main/features/personal_ontology_candidates');
+      const created = await registry.createInstance('user-1', {
+        platform: 'feishu_lark',
+        displayName: 'Candidate bot',
+        policy: { allowUserIds: ['user-1'] },
+        secret: { appId: 'cli_1234567890abcdef', appSecret: 'secret' },
+      });
+      await manager.setEnabled('user-1', created.id, true);
+      await vi.waitFor(async () => {
+        const instances = await manager.listInstances('user-1');
+        expect(instances[0]?.status.kind).toBe('connected');
+      });
+
+      // 批准路径：候选离开池、卡片更新为终态。
+      const { candidate_ids } = await ontology.addCandidates('user-1', [
+        { judgment: '日程：测试课', suggestedType: 'template' },
+      ]);
+      expect(candidate_ids).toHaveLength(1);
+      const candidateId = candidate_ids[0];
+      await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'candidate-card-1',
+        externalChatId: 'oc_candidate',
+        externalUserId: 'user-1',
+        action: 'candidate_approve',
+        payload: { candidate_id: candidateId },
+        receivedAt: new Date().toISOString(),
+      });
+      const pool = await ontology.listCandidates('user-1');
+      expect(pool.candidate_updates.find((c) => c.candidate_id === candidateId)).toBeUndefined();
+      await vi.waitFor(() => expect(adapter.updateCard).toHaveBeenCalledTimes(1));
+
+      // 拒绝路径：候选直接移除。
+      const { candidate_ids: ids2 } = await ontology.addCandidates('user-1', [
+        { judgment: '日程：另一课', suggestedType: 'template' },
+      ]);
+      await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'candidate-card-2',
+        externalChatId: 'oc_candidate',
+        externalUserId: 'user-1',
+        action: 'candidate_reject',
+        payload: { candidate_id: ids2[0] },
+        receivedAt: new Date().toISOString(),
+      });
+      const pool2 = await ontology.listCandidates('user-1');
+      expect(pool2.candidate_updates.find((c) => c.candidate_id === ids2[0])).toBeUndefined();
+
+      // 缺 candidate_id 的卡片动作被拒绝。
+      const rejected = await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'candidate-card-3',
+        externalChatId: 'oc_candidate',
+        externalUserId: 'user-1',
+        action: 'candidate_approve',
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
+      expect(rejected).toMatchObject({ accepted: false, reason: 'invalid_card_action' });
+    } finally {
+      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      vi.doUnmock('../../../src/main/features/group_chat');
+      vi.doUnmock('../../../src/main/features/group_chat/bus');
+    }
+  });
+
   it('drops an outbound reply without a message id before any delivery attempt', async () => {
     let busListener: ((event: unknown) => void) | undefined;
     const groupSend = vi.fn(async () => ({ ok: true }));

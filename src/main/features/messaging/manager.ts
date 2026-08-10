@@ -9,6 +9,7 @@ import { safeId } from '../../storage';
 import * as groupChat from '../group_chat';
 import * as projects from '../projects';
 import * as wakeService from '../p3394/wake-service';
+import * as ontologyCandidates from '../personal_ontology_candidates';
 import * as registry from './registry';
 import * as bindings from './bindings';
 import * as ledger from './ledger';
@@ -595,6 +596,21 @@ async function handleCardAction(uid: string, action: CardActionEnvelope): Promis
   if (!instance.policy.allowUserIds.includes(action.externalUserId)) {
     return { accepted: false, duplicate: false, reason: 'user_not_allowed' };
   }
+  // 候选确认卡片（personal_context 管线产出）：按钮 value 携带 candidate_id，
+  // 确认/拒绝直接落 personal_ontology 候选池，无 wake_id。
+  if (action.action === 'candidate_approve' || action.action === 'candidate_reject') {
+    const candidateId = typeof action.payload.candidate_id === 'string' ? action.payload.candidate_id.trim() : '';
+    if (!candidateId) return { accepted: false, duplicate: false, reason: 'invalid_card_action' };
+    if (action.action === 'candidate_approve') {
+      const result = await ontologyCandidates.confirmCandidate(uid, candidateId);
+      if (!result.ok) return { accepted: false, duplicate: false, reason: 'candidate_confirm_failed' };
+    } else {
+      await ontologyCandidates.rejectCandidate(uid, candidateId);
+    }
+    void finalizeCandidateCard(uid, action);
+    return { accepted: true, duplicate: false };
+  }
+
   const wakeId = typeof action.payload.wake_id === 'string' && action.payload.wake_id.trim()
     ? action.payload.wake_id.trim()
     : '';
@@ -645,6 +661,42 @@ async function finalizeApprovalCard(uid: string, action: CardActionEnvelope): Pr
     await adapter.updateCard(action.externalMessageId, buildResolvedApprovalCard(action.action));
   } catch (error) {
     log.warn('messaging approval card finalize failed', {
+      instanceId: action.instanceId,
+      error: (error as Error).message,
+    });
+  }
+}
+
+/** Terminal card for a resolved personal-ontology candidate, so the same
+ * buttons cannot be clicked twice (mirrors approval card finalize). */
+function buildResolvedCandidateCard(approved: boolean): Record<string, JsonCompatibleValue> {
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      title: {
+        content: approved ? t('messaging.candidate_card.confirmed') : t('messaging.candidate_card.rejected'),
+        tag: 'plain_text',
+      },
+      template: approved ? 'green' : 'red',
+    },
+    elements: [
+      {
+        tag: 'markdown',
+        content: approved ? t('messaging.candidate_card.confirmed_detail') : t('messaging.candidate_card.rejected_detail'),
+      },
+    ],
+  };
+}
+
+async function finalizeCandidateCard(uid: string, action: CardActionEnvelope): Promise<void> {
+  const runtime = runtimes.get(uid)?.get(action.instanceId);
+  if (!runtime || !isCurrentRuntime(uid, runtime)) return;
+  const adapter = runtime.adapter;
+  if (!isCardAdapter(adapter)) return;
+  try {
+    await adapter.updateCard(action.externalMessageId, buildResolvedCandidateCard(action.action === 'candidate_approve'));
+  } catch (error) {
+    log.warn('messaging candidate card finalize failed', {
       instanceId: action.instanceId,
       error: (error as Error).message,
     });
@@ -991,6 +1043,29 @@ export async function sendApprovalCard(
     throw new Error('approval cards are not supported by this instance');
   }
   return runtime.adapter.sendApprovalCard(chatId, approval, runtime.controller.signal);
+}
+
+/**
+ * 通用交互卡片投递（候选确认等 personal_context 场景）。
+ * 只接受结构化 card 对象 + chatId；调用方均为主进程内部模块，
+ * 卡片内容由构造方（features/personal_context）负责，不接收用户直通内容。
+ */
+export async function sendInteractiveCard(
+  uid: string,
+  instanceId: string,
+  chatId: string,
+  card: Record<string, JsonCompatibleValue>,
+): Promise<{ deliveryId?: string }> {
+  assertUserId(uid);
+  assertInstanceId(instanceId);
+  if (typeof chatId !== 'string' || !chatId.trim() || chatId.length > 512) throw new Error('invalid chat id');
+  if (!card || typeof card !== 'object' || Array.isArray(card)) throw new Error('invalid card payload');
+  const runtime = runtimes.get(uid)?.get(instanceId);
+  if (!runtime || !isCurrentRuntime(uid, runtime)) throw new Error('messaging instance is not running');
+  if (!isCardAdapter(runtime.adapter) || !runtime.adapter.sendCard) {
+    throw new Error('interactive cards are not supported by this instance');
+  }
+  return runtime.adapter.sendCard(chatId, card, runtime.controller.signal);
 }
 
 export const _managerTestHooks = {
