@@ -6,29 +6,29 @@ const root = path.join(__dirname, '../..');
 const readJson = (rel: string) => JSON.parse(fs.readFileSync(path.join(root, rel), 'utf8'));
 const read = (rel: string) => fs.readFileSync(path.join(root, rel), 'utf8');
 
-describe('Mate Agent brand contract', () => {
+describe('CogSeed brand contract', () => {
   it('defines the approved public identity', () => {
     const brand = readJson('src/resources/brand.json');
     expect(brand).toEqual({
-      appName: 'Mate Agent',
-      zhName: 'Mate 智伴',
+      appName: 'CogSeed',
+      zhName: 'CogSeed',
       appId: 'com.mateagent.desktop',
       protocolScheme: 'mateagent',
       legacyConnectorScheme: 'orkas',
-      taglineZh: '你的协作型智能体工作台',
+      taglineZh: '跨 Agent 的个人能力资产层',
     });
   });
 
   it('keeps electron-builder identity aligned with the contract', () => {
     const brand = readJson('src/resources/brand.json');
     const pkg = readJson('package.json');
-    expect(pkg.description).toContain('Mate Agent');
+    expect(pkg.description).toContain('CogSeed');
     expect(pkg.build.productName).toBe(brand.appName);
     expect(pkg.build.appId).toBe(brand.appId);
-    expect(pkg.build.artifactName).toBe('Mate-Agent-${version}-${os}-${arch}.${ext}');
+    expect(pkg.build.artifactName).toBe('CogSeed-${version}-${os}-${arch}.${ext}');
     expect(pkg.build.protocols).toEqual([
       expect.objectContaining({
-        name: 'Mate Agent Connector Callback',
+        name: 'CogSeed Connector Callback',
         schemes: [brand.protocolScheme, brand.legacyConnectorScheme],
       }),
     ]);
@@ -69,6 +69,22 @@ describe('Mate Agent brand contract', () => {
       expect(read(file), file).not.toContain('Orkas');
     }
     expect(read('src/renderer/modules/settings.js')).not.toContain("badge.textContent = 'Orkas'");
+  });
+
+  it('removes the retired Mate Agent name from current public surfaces', () => {
+    const publicFiles = [
+      'src/renderer/index.html',
+      'src/renderer/locales/zh.json',
+      'src/renderer/locales/en.json',
+      'src/renderer/locales/ja.json',
+      'src/renderer/locales/pt.json',
+      'src/main/data/commander.json',
+      'src/main/data/oss-projects.json',
+    ];
+    for (const file of publicFiles) {
+      expect(read(file), file).not.toContain('Mate Agent');
+      expect(read(file), file).not.toContain('Mate 智伴');
+    }
   });
 
   it('keeps approved internal compatibility symbols', () => {

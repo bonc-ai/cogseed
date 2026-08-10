@@ -87,7 +87,7 @@ export function resolveRuntimeIdentity(
 ): RuntimeIdentity {
   if (isPackaged) {
     if (value && value !== 'main') {
-      throw new Error('packaged Mate Agent only supports the main runtime variant');
+      throw new Error('packaged CogSeed only supports the main runtime variant');
     }
     return Object.freeze({
       variant: 'main',

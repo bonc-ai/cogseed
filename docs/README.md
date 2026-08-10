@@ -1,6 +1,6 @@
-# Mate Agent 文档总览
+# CogSeed 文档总览
 
-> 2026-08-10 更新：仓库内置的 Meta Skill Engine / 独立进化控制台线已从当前工作树移除。完整实现已保留在分支 `dev/archive-meta-skill-evolution-console`，worktree：`/Users/sudai/.config/codex/worktrees/Mate Agent/meta-skill-evolution-preserve`。当前工作树不再携带 bundled KSTAR engine；P3394 仅在显式配置外部 engine 时连接：`ORKAS_KSTAR_ENGINE_COMMAND` + `ORKAS_KSTAR_ENGINE_ARGS`。
+> 2026-08-10 更新：仓库内置的 Meta Skill Engine / 独立进化控制台线已从当前工作树移除。完整实现已保留在分支 `dev/archive-meta-skill-evolution-console`，worktree：`/Users/sudai/.config/codex/worktrees/CogSeed/meta-skill-evolution-preserve`。当前工作树不再携带 bundled KSTAR engine；P3394 仅在显式配置外部 engine 时连接：`ORKAS_KSTAR_ENGINE_COMMAND` + `ORKAS_KSTAR_ENGINE_ARGS`。
 
 ## 当前开发口径
 

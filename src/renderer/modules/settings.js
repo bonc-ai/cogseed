@@ -1460,7 +1460,7 @@ function _settingsRenderEntryRow(entry, idx) {
     badge.textContent = entry.oauthExpired ? t('settings.entries.oauth_expired') : t('settings.entries.oauth_badge');
   } else if (entry.profileType === 'managed') {
     badge.className = 'account-type-badge';
-    badge.textContent = 'Mate Agent';
+    badge.textContent = 'CogSeed';
   } else {
     badge.className = 'account-type-badge';
     badge.textContent = 'API Key';

@@ -10,7 +10,7 @@ const roots: string[] = [];
 function fakeBundle() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mate-agent-dev-bundle-'));
   roots.push(root);
-  const appPath = path.join(root, 'Mate Agent Dev.app');
+  const appPath = path.join(root, 'CogSeed Dev.app');
   const resources = path.join(appPath, 'Contents', 'Resources');
   fs.mkdirSync(path.join(resources, 'builtin'), { recursive: true });
   fs.mkdirSync(path.join(resources, 'runtime'), { recursive: true });

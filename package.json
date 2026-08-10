@@ -2,7 +2,7 @@
   "name": "orkas",
   "version": "2026.7.21",
   "private": true,
-  "description": "Mate Agent desktop — collaborative agent workspace",
+  "description": "CogSeed desktop — personal cognition asset workspace",
   "main": "bootstrap.cjs",
   "type": "commonjs",
   "packageManager": "npm@11.11.0",
@@ -87,10 +87,10 @@
   },
   "build": {
     "appId": "com.mateagent.desktop",
-    "productName": "Mate Agent",
+    "productName": "CogSeed",
     "protocols": [
       {
-        "name": "Mate Agent Connector Callback",
+        "name": "CogSeed Connector Callback",
         "schemes": [
           "mateagent",
           "orkas"
@@ -251,7 +251,7 @@
       "target": "AppImage",
       "category": "Utility"
     },
-    "artifactName": "Mate-Agent-${version}-${os}-${arch}.${ext}"
+    "artifactName": "CogSeed-${version}-${os}-${arch}.${ext}"
   },
   "license": "MIT"
 }

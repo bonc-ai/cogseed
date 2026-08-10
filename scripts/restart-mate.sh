@@ -1,5 +1,5 @@
 #!/bin/bash
-# Restart the Mate Agent runtime bound to this worktree.
+# Restart the CogSeed runtime bound to this worktree.
 #
 # This worktree is locked to ORKAS_RUNTIME_VARIANT=mate and is
 # launched with `./run.sh` (macOS: `open -W -n` on the variant app bundle).

@@ -97,7 +97,7 @@ describe('synced PC surface regressions', () => {
     expect(ipc).toContain(commanderProfileImport);
     expect(ipc).toContain("'commander.getProfile'");
     expect(ipc).toContain("'commander.runtimeStats.get'");
-    expect(profile).toContain('Mate Agent 的协作调度者');
+    expect(profile).toContain('CogSeed 的协作调度者');
     expect(parsed.knowhow.zh.length).toBeGreaterThan(0);
     expect(parsed.standards.zh.length).toBeGreaterThan(0);
     expect(parsed.workflow.zh.length).toBeGreaterThan(0);

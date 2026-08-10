@@ -74,7 +74,7 @@ function currentAppFromPathFile(distDir, pathFile) {
 }
 
 function findSourceApp(distDir, pathFile) {
-  for (const name of ['Electron.app', 'Orkas.app', `${brand.appName}.app`, `${brand.appName} [Mate].app`]) {
+  for (const name of ['Electron.app', 'Orkas.app', 'Mate Agent.app', `${brand.appName}.app`, `${brand.appName} [Mate].app`]) {
     const candidate = path.join(distDir, name);
     if (fs.existsSync(candidate)) return candidate;
   }
@@ -266,9 +266,9 @@ function parseMateWorktreeVariant(argv) {
 function main() {
   try {
     const result = prepareSourceRuntimeBundle({ variant: parseMateWorktreeVariant(process.argv.slice(2)) });
-    if (result.appBundle) console.log(`[Mate Agent] Prepared source runtime bundle: ${result.appName}`);
+    if (result.appBundle) console.log(`[CogSeed] Prepared source runtime bundle: ${result.appName}`);
   } catch (error) {
-    console.error(`[Mate Agent] ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`[CogSeed] ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 2;
   }
 }
