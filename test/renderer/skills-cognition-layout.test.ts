@@ -199,12 +199,10 @@ describe('Recall cognition workspace layout', () => {
     expect(appMainRule).toContain('min-height: 0');
     expect(consoleRule).toContain('flex: 1 1 auto');
     expect(surfaceRule).toContain('flex: 1 1 auto');
-    expect(mainRule).toContain('position: relative');
-    expect(mainRule).toContain('overflow: hidden');
-    expect(pageRule).toContain('position: absolute');
-    expect(pageRule).toContain('inset: 0');
-    expect(pageRule).toContain('overflow-y: auto');
-    expect(pageRule).toContain('overscroll-behavior: contain');
+    expect(mainRule).toContain('overflow-y: auto');
+    expect(mainRule).toContain('overscroll-behavior: contain');
+    expect(pageRule).toContain('overflow: visible');
+    expect(pageRule).not.toContain('position: absolute');
 
     const recallStart = css.indexOf('/* Recall cognition console. */');
     const terminalStart = css.indexOf('/* Terminal body / screen */');
