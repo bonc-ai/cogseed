@@ -92,16 +92,6 @@ describe('Recall cognition workspace layout', () => {
     }
   });
 
-  it('normalizes Recall journey links away from removed technical pages', () => {
-    const journey = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/journey.js'), 'utf-8');
-    expect(journey).not.toContain("subPage: 'brain'");
-    expect(journey).not.toContain("subPage: 'ontology'");
-    expect(journey).not.toContain("subPage: 'receipts'");
-    expect(journey).toContain("assetSubview: 'tree'");
-    expect(journey).toContain("category: 'personal'");
-    expect(journey).toContain('normalizeRecallLocation');
-  });
-
   it('keeps the original skill library as a sibling panel to Recall', () => {
     expect(html).toContain('id="recall-btn"');
     expect(html).toContain('id="panel-recall"');

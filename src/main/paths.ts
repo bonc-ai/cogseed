@@ -92,10 +92,6 @@ export const WINDOW_STATE_FILE = path.join(WS_ROOT, 'window-state.json');
 // walkthrough fires once per device and never re-appears — switching
 // account or machine restarts the flow, by product decision.
 export const ONBOARDING_STATE_FILE = path.join(WS_ROOT, 'onboarding-state.json');
-// Machine-local 60-second journey marker (shared across uids, NOT
-// cloud-synced). Lives next to onboarding-state.json so the post-onboarding
-// journey fires once per device after onboarding completes.
-export const JOURNEY_STATE_FILE = path.join(WS_ROOT, 'journey-state.json');
 // Machine-local logs (daily rolling, single global file shared across uids).
 export const LOGS_DIR          = path.join(WS_ROOT, 'logs');
 // Machine-local dependency environments shared across Orkas accounts on this

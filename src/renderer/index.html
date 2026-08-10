@@ -11,7 +11,6 @@
   <link rel="stylesheet" href="./vendor/xterm/xterm.css" />
   <link rel="stylesheet" href="./style.css" />
   <link rel="stylesheet" href="./onboarding.css" />
-  <link rel="stylesheet" href="./journey.css" />
 </head>
 <body>
   <div class="app-container">
@@ -131,6 +130,10 @@
                the caret to the first [...] placeholder. Wired by
                _initEmptyStateScenarios() in conversation.js. -->
           <div class="new-chat-scenarios" id="new-chat-scenarios">
+            <button type="button" class="new-chat-scenario-chip" id="continue-work-chip">
+              <span data-ui-icon="play-triangle" data-ui-icon-class="new-chat-scenario-icon"></span>
+              <span class="new-chat-scenario-label" data-i18n="new_chat.quick.continue_work">Continue previous work</span>
+            </button>
             <button type="button" class="new-chat-scenario-chip" data-scenario="data">
               <span data-ui-icon="search" data-ui-icon-class="new-chat-scenario-icon"></span>
               <span class="new-chat-scenario-label" data-i18n="new_chat.quick.data">Research</span>
@@ -156,6 +159,11 @@
               <span class="new-chat-scenario-label" data-i18n="new_chat.quick.rnd">Build app</span>
             </button>
           </div>
+          <!-- Continue-previous-work picker. Lists conversations imported from
+               other agents (Claude Code / Codex) during onboarding; clicking one
+               opens it so the user picks up where they left off. Wired by
+               conversation.js::_initContinueWorkChip(). -->
+          <div class="continue-work-panel" id="continue-work-panel" hidden></div>
           <!-- Open-source-driven「还能帮你做这些」capability strip. Task cards are
                rendered + wired by modules/oss.js::initOssEntry() (data from the
                curated marketplace projects catalog). Cards only show the task +
@@ -1880,9 +1888,8 @@
   <script src="./modules/user-error.js"></script>
   <script src="./modules/model-guard.js"></script>
   <script src="./modules/delete-file-confirm.js"></script>
-  <script src="./modules/boot.js"></script>
   <script src="./modules/onboarding.js"></script>
-  <script src="./modules/journey.js"></script>
+  <script src="./modules/boot.js"></script>
   <script src="./modules/avatar.js"></script>
   <script src="./modules/avatar-picker.js"></script>
   <script src="./modules/chat-input-form.js"></script>

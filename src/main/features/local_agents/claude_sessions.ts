@@ -140,3 +140,36 @@ async function _parseSessionSummary(file: string): Promise<ClaudeSessionSummary 
 
   return { sessionId, projectPath, firstMessage, timestamp, filePath: file };
 }
+
+/**
+ * Read a single Claude Code session transcript in full (READ-ONLY).
+ *
+ * Unlike `listClaudeSessions` (which reads only the first user message for the
+ * picker), this reads the whole jsonl so the session-import extractor can
+ * summarise it. Still best-effort: a malformed / unreadable file yields an
+ * empty body rather than throwing, and the caller decides how to surface that.
+ *
+ * `filePath` MUST be a path returned by `listClaudeSessions` (i.e. already
+ * inside `~/.claude/projects`). We re-assert containment here as a
+ * path-traversal backstop so a hostile IPC payload can't read arbitrary files.
+ */
+export async function readClaudeSessionTranscript(
+  filePath: string,
+): Promise<{ ok: boolean; body: string; sessionId: string; reason?: string }> {
+  const sessionId = path.basename(filePath, '.jsonl');
+  const projectsRoot = path.join(os.homedir(), '.claude', 'projects');
+  const resolved = path.resolve(filePath);
+  const rootWithSep = projectsRoot.endsWith(path.sep) ? projectsRoot : projectsRoot + path.sep;
+  if (!resolved.startsWith(rootWithSep) || !resolved.endsWith('.jsonl')) {
+    log.warn('rejected transcript read outside projects root', { filePath });
+    return { ok: false, body: '', sessionId, reason: 'out_of_bounds' };
+  }
+
+  try {
+    const body = await fsp.readFile(resolved, 'utf8');
+    return { ok: true, body, sessionId };
+  } catch (err) {
+    log.warn('failed to read session transcript', { filePath, error: String(err) });
+    return { ok: false, body: '', sessionId, reason: 'unreadable' };
+  }
+}

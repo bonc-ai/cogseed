@@ -35,8 +35,20 @@ export interface OnboardingState {
  * testing aid — it is off by default, so shipped behavior stays "show once".
  */
 export function getOnboardingCompleted(): boolean {
-  if (process.env.ORKAS_ONBOARDING_ALWAYS === '1') return false;
-  return readJsonSync<OnboardingState>(ONBOARDING_STATE_FILE).completed === true;
+  console.log('[ONBOARDING STATE] getOnboardingCompleted called');
+  console.log('[ONBOARDING STATE] ORKAS_ONBOARDING_ALWAYS =', process.env.ORKAS_ONBOARDING_ALWAYS);
+  console.log('[ONBOARDING STATE] ONBOARDING_STATE_FILE =', ONBOARDING_STATE_FILE);
+
+  if (process.env.ORKAS_ONBOARDING_ALWAYS === '1') {
+    console.log('[ONBOARDING STATE] Returning false due to ORKAS_ONBOARDING_ALWAYS=1');
+    return false;
+  }
+
+  const state = readJsonSync<OnboardingState>(ONBOARDING_STATE_FILE);
+  console.log('[ONBOARDING STATE] Read state:', JSON.stringify(state));
+  const completed = state.completed === true;
+  console.log('[ONBOARDING STATE] Returning completed =', completed);
+  return completed;
 }
 
 /** Persist the completion flag. Idempotent — writing true twice is a no-op
