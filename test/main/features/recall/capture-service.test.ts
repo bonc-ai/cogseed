@@ -31,6 +31,9 @@ vi.mock('../../../../src/main/features/recall/candidate-service', () => ({
 }));
 vi.mock('../../../../src/main/util/boot_init', () => ({
   scheduleBootBackground: mocks.scheduleBootBackground,
+  // personal_ontology_template_files 顶层调用 registerDeferred 注册模板部署；
+  // 本测试不关心该流程，stub 为空实现避免 mock 缺 export 导致模块加载失败。
+  registerDeferred: () => {},
 }));
 
 let tmpDir: string;
