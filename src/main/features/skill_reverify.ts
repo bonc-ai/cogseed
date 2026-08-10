@@ -205,6 +205,12 @@ export async function reverifySkillDeep(uid: string, skillId: string): Promise<R
     rulesetVersion?: string;
     isolated?: boolean;
     rulesDegraded?: boolean;
+    attackSurface?: {
+      egressPoints: number;
+      dynamicExecPoints: number;
+      persistencePoints: number;
+      hasBinaries: boolean;
+    };
   } = {};
 
   try {
@@ -221,6 +227,11 @@ export async function reverifySkillDeep(uid: string, skillId: string): Promise<R
         // `rulesSource` naming a builtin fallback means the versioned ruleset did
         // not load, which materially narrows coverage — the badge must say so.
         ...(scan.rulesDegraded ? { rulesDegraded: true } : {}),
+        // Counts only — never the matched text, which may be the credential the
+        // rule fired on. Recorded for passing scans too: the panel explains what
+        // the scanner saw, and "one persistence point, no egress" is exactly the
+        // kind of thing a user should be able to check on a skill that passed.
+        ...(scan.attackSurface ? { attackSurface: { ...scan.attackSurface } } : {}),
       };
     }
     if (scan.outcome === 'blocked') {

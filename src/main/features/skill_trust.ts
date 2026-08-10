@@ -110,6 +110,25 @@ export interface SecurityReceipt {
    * spec forbids showing a degraded check as a clean pass.
    */
   rulesDegraded?: boolean;
+  /**
+   * Attack-surface counts from the deep scan.
+   *
+   * Counts and categories only — never the matched source text, which may itself
+   * be the credential that was about to leak (the same rule the import-time
+   * reason lines follow).
+   *
+   * Persisted so the panel can explain a *passing* verdict, not just a rejected
+   * one. Before this, a blocked import listed its egress and dynamic-exec points
+   * while an installed skill showed nothing: the product explained itself when
+   * refusing the user and went silent when protecting them. A clean scan that
+   * found one persistence point is still worth showing.
+   */
+  attackSurface?: {
+    egressPoints: number;
+    dynamicExecPoints: number;
+    persistencePoints: number;
+    hasBinaries: boolean;
+  };
 }
 
 /** Why a receipt no longer applies. `null` when it still does. */
@@ -155,6 +174,28 @@ export function skillPayloadHash(skillDir: string): string {
   }
 }
 
+/**
+ * Validate a persisted attack surface, or return nothing.
+ *
+ * All-or-nothing on purpose: a surface with one unreadable count would otherwise
+ * render that count as 0, and "0 egress points" claims a clean result where the
+ * truth is "we could not read it".
+ */
+function _readAttackSurface(raw: unknown): { attackSurface?: SecurityReceipt['attackSurface'] } {
+  if (!raw || typeof raw !== 'object') return {};
+  const s = raw as Record<string, unknown>;
+  const count = (v: unknown): number | null =>
+    typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 1e6 ? v : null;
+  const egressPoints = count(s.egressPoints);
+  const dynamicExecPoints = count(s.dynamicExecPoints);
+  const persistencePoints = count(s.persistencePoints);
+  if (egressPoints === null || dynamicExecPoints === null || persistencePoints === null) return {};
+  if (typeof s.hasBinaries !== 'boolean') return {};
+  return {
+    attackSurface: { egressPoints, dynamicExecPoints, persistencePoints, hasBinaries: s.hasBinaries },
+  };
+}
+
 export function readReceipt(uid: string, skillId: string): SecurityReceipt | null {
   if (!safeId(uid) || !safeId(skillId)) return null;
   const raw = readJsonSync<Partial<SecurityReceipt>>(_receiptFile(uid, skillId));
@@ -193,10 +234,33 @@ export function readReceipt(uid: string, skillId: string): SecurityReceipt | nul
     // Only `true` is carried: absent and false both mean "rules were fine", and
     // a malformed value must not read as a degradation that did not happen.
     ...(raw.rulesDegraded === true ? { rulesDegraded: true } : {}),
+    // Every count is validated individually and the whole object dropped if any
+    // is unusable: a partially-read surface would render as "0 egress points",
+    // which reads as a stronger result than "unknown".
+    ...(_readAttackSurface(raw.attackSurface)),
     scannedAt: String(raw.scannedAt || ''),
   };
 }
 
+/**
+ * Persist a verdict.
+ *
+ * NOTE for anyone adding a field: a receipt field has to be declared in FOUR
+ * independent allowlists before a user can see it, and skipping any one of them
+ * fails silently — no type error, the value simply vanishes.
+ *
+ *   1. `SecurityReceipt` (the shape)
+ *   2. this function's `input` type and its spread below (write)
+ *   3. `readReceipt`'s rebuild (read — it reconstructs from an allowlist and
+ *      drops anything unlisted)
+ *   4. the `security` view in `features/skills.ts` (forward to the renderer)
+ *
+ * Every field added during this work — `scanner`, then the four disclosure
+ * fields, then `attackSurface` — was initially lost at one of these layers and
+ * only found by asserting the value in the UI rather than at the write site. Add
+ * a round-trip test with each new field; a write-side assertion alone will pass
+ * while the panel still shows nothing.
+ */
 export function writeReceipt(
   uid: string,
   skillId: string,
@@ -212,6 +276,7 @@ export function writeReceipt(
     rulesetVersion?: string;
     isolated?: boolean;
     rulesDegraded?: boolean;
+    attackSurface?: SecurityReceipt['attackSurface'];
   },
 ): SecurityReceipt {
   if (!safeId(uid)) throw new Error('invalid uid');
@@ -230,6 +295,7 @@ export function writeReceipt(
     ...(input.rulesetVersion ? { rulesetVersion: input.rulesetVersion } : {}),
     ...(typeof input.isolated === 'boolean' ? { isolated: input.isolated } : {}),
     ...(input.rulesDegraded ? { rulesDegraded: true } : {}),
+    ...(input.attackSurface ? { attackSurface: { ...input.attackSurface } } : {}),
     scannedAt: nowIso(),
   };
   const file = _receiptFile(uid, skillId);

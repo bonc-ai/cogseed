@@ -195,6 +195,19 @@ export interface SkillListing {
      * would tell the user a `local` pass is as strong as a `deep` one.
      */
     scanner?: 'deep' | 'local';
+    /**
+     * Attack-surface counts from the scan. Counts only, never matched text.
+     *
+     * Forwarded so the detail panel can explain a passing verdict — a clean scan
+     * that still found a persistence point is worth showing, and the equivalent
+     * breakdown is already shown when an import is refused.
+     */
+    attackSurface?: {
+      egressPoints: number;
+      dynamicExecPoints: number;
+      persistencePoints: number;
+      hasBinaries: boolean;
+    };
   };
 }
 
@@ -893,6 +906,7 @@ async function _overlaySkillSecurity(list: SkillListing[]): Promise<SkillListing
         // of unknown depth, and guessing the weaker value would put a "coverage
         // is weaker" caveat on skills that may well have had a full scan.
         ...(receipt.scanner ? { scanner: receipt.scanner } : {}),
+        ...(receipt.attackSurface ? { attackSurface: { ...receipt.attackSurface } } : {}),
       }
       : {};
     if (reason) {

@@ -84,6 +84,26 @@ function loadCategoryRenderers() {
       'skills.security_findings': '{n} 项提示',
       'skills.security_validator': '校验器 {version}',
       'skills.security_score': '评分 {n}/100',
+      'skills.security_scanner_deep': '深度扫描（完整规则集）',
+      'skills.security_scanner_local': '仅本地规则，覆盖较弱',
+      'skills.secpanel_title': '安全检查',
+      'skills.secpanel_score': '评分',
+      'skills.secpanel_method': '检查方式',
+      'skills.secpanel_ruleset': '规则包',
+      'skills.secpanel_scanner': '扫描器',
+      'skills.secpanel_isolation': '隔离环境',
+      'skills.secpanel_isolated_yes': '沙箱隔离',
+      'skills.secpanel_isolated_no': '非隔离，可信度较低',
+      'skills.secpanel_checked_at': '检查时间',
+      'skills.secpanel_surface': '攻击面',
+      'skills.secpanel_egress': '外发点',
+      'skills.secpanel_dynexec': '动态执行',
+      'skills.secpanel_persist': '持久化',
+      'skills.secpanel_binaries': '二进制文件',
+      'skills.secpanel_surface_clean': '未发现值得注意的攻击面',
+      'skills.secpanel_surface_note': '按类别计数，不展示匹配到的原文',
+      'skills.secpanel_surface_floor': '计数为下限（每类最多统计 20 项）',
+      'skills.secpanel_no_record': '尚无检查记录。点击下方按钮开始检查。',
       'skills.security_ruleset': '规则包 {version}',
       'skills.security_rules_degraded': '规则库未完整加载，检测覆盖较弱',
       'skills.security_not_isolated': '非隔离扫描，可信度较低',
@@ -783,6 +803,37 @@ describe('skills grid › security badge and summary', () => {
     // A healthy skill stays fully usable and unmarked otherwise.
     expect(html).not.toContain('未通过安检');
     expect(html).not.toContain('disabled aria-disabled="true"');
+  });
+
+  // The shield is a <button>: the tooltip carries the same summary, but hover is
+  // unreachable by keyboard and by touch, and the attack-surface breakdown does
+  // not fit in a title attribute.
+  it('makes the shield an activatable control carrying the skill id', () => {
+    const { context, el } = loadCategoryRenderers();
+    context.renderSkillsGrid([
+      { id: 'ok', name: 'Verified Skill', source: 'marketplace', category: '', enabled: true,
+        security: { status: 'verified', scannedAt: new Date().toISOString(), scanner: 'deep' } },
+    ]);
+
+    // Asserted on markup, not via querySelector: this suite renders into a
+    // FakeElement whose querySelector always returns null.
+    const html = el('skills-grid').innerHTML;
+    expect(html).toContain('<button type="button" class="skill-card-shield');
+    expect(html).toContain('data-skill-security="ok"');
+  });
+
+  // A local-only pass is toned down like a degraded one: the regex subset clears
+  // payloads the full ruleset blocks, so it must not wear the clean colour.
+  it('tones down a pass that only the local rules produced', () => {
+    const { context, el } = loadCategoryRenderers();
+    context.renderSkillsGrid([
+      { id: 'loc', name: 'Local Only', source: 'marketplace', category: '', enabled: true,
+        security: { status: 'verified', scannedAt: new Date().toISOString(), scanner: 'local' } },
+    ]);
+
+    const html = el('skills-grid').innerHTML;
+    expect(html).toContain('skill-card-shield is-risk');
+    expect(html).toContain('仅本地规则，覆盖较弱');
   });
 
   it('does not double-mark a withheld skill with a shield', () => {

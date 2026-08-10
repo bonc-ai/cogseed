@@ -184,13 +184,32 @@ def evaluate(engine_dir: str, target: str) -> dict[str, Any]:
     vulnerabilities = 0
     isolated = bool(full.get("isolated"))
     for r in reports:
+        # The engine emits `attack_surface` with per-category LISTS of findings;
+        # `attack_surface_summary` (with pre-counted scalars) comes from
+        # sandbox/agent_gate.py, a different producer. Reading only the latter
+        # made every count silently 0 — a skill with obvious egress and eval
+        # calls still reported a clean surface. Accept both shapes: summary form
+        # when present, else count the engine's lists.
         s = r.get("attack_surface_summary") or {}
+        raw = r.get("attack_surface") or {}
+        engine_lists = {
+            "egress_points": raw.get("network_egress_points"),
+            "dynamic_exec_points": raw.get("dynamic_execution_points"),
+            "persistence_points": raw.get("persistence_points"),
+        }
         for key in ("egress_points", "dynamic_exec_points", "persistence_points"):
             try:
-                surface[key] += int(s.get(key) or 0)
+                if s.get(key) is not None:
+                    surface[key] += int(s.get(key) or 0)
+                else:
+                    value = engine_lists.get(key)
+                    # Lists are truncated to 20 by the engine, so this is a
+                    # floor, not an exact count — it is presented as a category
+                    # signal, never as a total.
+                    surface[key] += len(value) if isinstance(value, list) else 0
             except (TypeError, ValueError):
                 pass
-        if s.get("has_binaries"):
+        if s.get("has_binaries") or raw.get("has_binaries"):
             surface["has_binaries"] = True
         try:
             vulnerabilities += int(r.get("vulnerability_count") or 0)

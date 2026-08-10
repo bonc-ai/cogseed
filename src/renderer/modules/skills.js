@@ -1242,7 +1242,85 @@ function _skillSecurityBadgeHtml(s) {
   // with no recorded depth keep the plain verdict colour.
   const weakened = sec.rulesDegraded || sec.scanner === 'local';
   const tone = weakened && status === 'verified' ? 'risk' : status;
-  return `<span class="skill-card-shield is-${escapeHtml(tone)}" title="${escapeHtml(lines.join(' · '))}" aria-label="${escapeHtml(lines.join(' · '))}">🛡</span>`;
+  // A button, not a decorative span: the same disclosures are available on hover
+  // as a tooltip, but hover is unreachable by keyboard and by touch, and the
+  // attack-surface breakdown is too long for a title attribute. Clicking opens
+  // the full panel.
+  return `<button type="button" class="skill-card-shield is-${escapeHtml(tone)}"`
+    + ` data-skill-security="${escapeHtml(String(s.id || ''))}"`
+    + ` title="${escapeHtml(lines.join(' · '))}" aria-label="${escapeHtml(lines.join(' · '))}">🛡</button>`;
+}
+
+/**
+ * Compose the security detail panel for one skill.
+ *
+ * Text rather than markup: it goes through `uiAlert`, which escapes its input —
+ * so this inherits the existing modal's focus trap, Escape handling and IME
+ * guard instead of hand-rolling another dialog.
+ *
+ * Every line is omitted when its datum is absent. A panel that printed
+ * "score —" or "egress 0" for a receipt that never recorded either would assert
+ * a measurement that was not taken; absent and zero are different claims.
+ */
+function _skillSecurityPanelText(s) {
+  const sec = (s && s.security) || {};
+  const L = [];
+
+  const verdict = sec.status === 'withheld' ? t('skills.security_withheld')
+    : sec.status === 'risk' ? t('skills.security_risk')
+      : sec.status === 'verified' ? t('skills.security_verified')
+        : t('skills.security_unchecked');
+  L.push(verdict);
+  if (typeof sec.securityScore === 'number') {
+    L.push(`${t('skills.secpanel_score')}: ${sec.securityScore}/100`);
+  }
+  // Why a previously-good verdict stopped applying, e.g. the payload changed
+  // after install. Only withheld receipts carry it.
+  if (sec.status === 'withheld') L.push(t('skills.security_withheld_hint'));
+  L.push('');
+
+  if (sec.scanner === 'deep') L.push(`${t('skills.secpanel_method')}: ${t('skills.security_scanner_deep')}`);
+  else if (sec.scanner === 'local') L.push(`${t('skills.secpanel_method')}: ${t('skills.security_scanner_local')}`);
+  if (sec.rulesDegraded) L.push(t('skills.security_rules_degraded'));
+  if (sec.rulesetVersion) L.push(`${t('skills.secpanel_ruleset')}: ${sec.rulesetVersion}`);
+  if (sec.scannerVersion) L.push(`${t('skills.secpanel_scanner')}: ${sec.scannerVersion}`);
+  else if (sec.validatorVersion) L.push(`${t('skills.secpanel_scanner')}: ${sec.validatorVersion}`);
+  if (typeof sec.isolated === 'boolean') {
+    L.push(`${t('skills.secpanel_isolation')}: `
+      + (sec.isolated ? t('skills.secpanel_isolated_yes') : t('skills.secpanel_isolated_no')));
+  }
+  const ago = _formatScannedAgo(sec.scannedAt);
+  if (ago) L.push(`${t('skills.secpanel_checked_at')}: ${ago}`);
+
+  const surf = sec.attackSurface;
+  if (surf) {
+    L.push('');
+    L.push(t('skills.secpanel_surface'));
+    const rows = [
+      [t('skills.secpanel_egress'), surf.egressPoints],
+      [t('skills.secpanel_dynexec'), surf.dynamicExecPoints],
+      [t('skills.secpanel_persist'), surf.persistencePoints],
+    ];
+    const anyFound = rows.some(([, n]) => n > 0) || surf.hasBinaries;
+    if (!anyFound) {
+      L.push(`  ${t('skills.secpanel_surface_clean')}`);
+    } else {
+      for (const [label, n] of rows) L.push(`  ${label}: ${n}`);
+      // Boolean upstream, so it is listed as a present/absent fact rather than a
+      // count — printing "1" would invent a number the scanner did not report.
+      if (surf.hasBinaries) L.push(`  ${t('skills.secpanel_binaries')}`);
+      // The engine truncates each category at 20, so a displayed count can
+      // understate reality. Say so rather than presenting it as exact.
+      L.push(`  ${t('skills.secpanel_surface_floor')}`);
+    }
+    L.push(`  ${t('skills.secpanel_surface_note')}`);
+  }
+
+  if (!sec.status || sec.status === 'unchecked') {
+    L.push('');
+    L.push(t('skills.secpanel_no_record'));
+  }
+  return L.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 /**
@@ -1605,6 +1683,7 @@ function renderSkillsGrid(skills) {
     + _openSkillsSectionHtml();
   _wireOpenSkillCards(gridEl);
   _wireSkillsSecurityRecheck(gridEl);
+  _wireSkillSecurityPanels(gridEl);
 
   // Wire card / ▶ / ⋯ click handlers. (Enable/disable lives in the ⋯ menu now.)
   // Scope to editable-tier cards (`data-id`): open-tier cards (`data-open-id`,
@@ -1912,6 +1991,29 @@ function _wireSkillsSecurityRecheck(gridEl) {
       btn.dataset.busy = '';
     }
   });
+}
+
+/**
+ * Open the security detail panel when a shield is clicked.
+ *
+ * `stopPropagation` because the shield sits inside the card, and a bare click on
+ * the card opens the skill itself — without it, inspecting the badge would
+ * navigate away from the list.
+ */
+function _wireSkillSecurityPanels(gridEl) {
+  for (const btn of gridEl.querySelectorAll('[data-skill-security]')) {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const id = btn.dataset.skillSecurity || '';
+      const skill = (_skillsCache || []).find((s) => s && String(s.id) === id);
+      if (!skill) return;
+      // `uiAlert` takes only a message, so the heading is the first line of the
+      // body rather than a dialog title.
+      const heading = `${skill.name || id} · ${t('skills.secpanel_title')}`;
+      await uiAlert(`${heading}\n\n${_skillSecurityPanelText(skill)}`);
+    });
+  }
 }
 
 function _wireOpenSkillCards(gridEl) {
