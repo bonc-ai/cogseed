@@ -906,6 +906,7 @@ async function openSkillsCognitionReceiptDetail(executionId) {
     }
   }
   openRecallTarget('receipts');
+  renderSkillsCognitionAssets();
 }
 
 function renderSkillsCognitionReceipts() {
@@ -963,8 +964,16 @@ function _renderSelectedReuseSummary(asset) {
   const receiptIds = new Set(Array.isArray(asset?.receiptRefs) ? asset.receiptRefs : []);
   const receipts = (Array.isArray(_skillsCognitionState.receipts) ? _skillsCognitionState.receipts : [])
     .filter((receipt) => receiptIds.has(receipt.executionId) || receiptIds.has(receipt.receiptId) || (Array.isArray(receipt.reusedRefs) && receipt.reusedRefs.includes(asset?.id)));
-  const rows = receipts.map((receipt) => `<button type="button" class="skills-cognition-list-card" data-cognition-open-receipt="${escapeHtml(receipt.executionId || receipt.receiptId || '')}"><strong>${escapeHtml(receipt.agentId || receipt.targetSessionId || receipt.executionId || receipt.receiptId || '')}</strong><span>${escapeHtml(_cognitionStatusLabel(receipt.status))} · ${escapeHtml(_cognitionDate(receipt.createdAt || receipt.completedAt))}</span></button>`).join('');
-  return `<section class="skills-cognition-card ability-asset-reuse-summary"><h2>${escapeHtml(_cognitionText('cognition.view_reuse', '复用证明'))}</h2>${rows || _renderCognitionEmpty(_cognitionText('cognition.no_receipts', '暂无复用证明'))}</section>`;
+  const selectedReceipt = receipts.find((receipt) => _skillsCognitionState.selectedReceiptId === receipt.executionId || _skillsCognitionState.selectedReceiptId === receipt.receiptId);
+  const rows = receipts.map((receipt) => {
+    const receiptId = receipt.executionId || receipt.receiptId || '';
+    const active = selectedReceipt && (selectedReceipt.executionId === receipt.executionId || selectedReceipt.receiptId === receipt.receiptId);
+    return `<button type="button" class="skills-cognition-list-card ${active ? 'is-active' : ''}" data-cognition-open-receipt="${escapeHtml(receiptId)}"><strong>${escapeHtml(receipt.agentId || receipt.targetSessionId || receipt.executionId || receipt.receiptId || '')}</strong><span>${escapeHtml(_cognitionStatusLabel(receipt.status))} · ${escapeHtml(_cognitionDate(receipt.createdAt || receipt.completedAt))}</span></button>`;
+  }).join('');
+  const detail = selectedReceipt
+    ? _renderCognitionReceiptDetail(_skillsCognitionState.receiptDetails[selectedReceipt.executionId || selectedReceipt.receiptId] || selectedReceipt)
+    : '';
+  return `<section class="skills-cognition-card ability-asset-reuse-summary"><h2>${escapeHtml(_cognitionText('cognition.view_reuse', '复用证明'))}</h2>${rows || _renderCognitionEmpty(_cognitionText('cognition.no_receipts', '暂无复用证明'))}${detail}</section>`;
 }
 
 function renderSkillsCognitionAssets() {
