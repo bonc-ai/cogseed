@@ -1650,6 +1650,19 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }) };
   },
 
+  // PRD §8.2's third admission check. Named `invocability`, not `run`: it
+  // resolves the skill and parse-checks its scripts without executing them, so
+  // the channel must not imply a real run happened.
+  'p3394.invocability.check': async ({ skillId }, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skill id');
+    return { ok: true, invocability: await p3394.verifySkillInvocability(ctx.userId, skillId) };
+  },
+
+  'p3394.invocability.read': async ({ invocabilityId }, ctx) => {
+    if (!safeId(invocabilityId)) throw new Error('invalid invocability id');
+    return { ok: true, invocability: await p3394.readSkillInvocability(ctx.userId, invocabilityId) };
+  },
+
   'p3394.validation.read': async ({ validationId }, ctx) => {
     if (!safeId(validationId)) throw new Error('invalid validation id');
     return { ok: true, validation: await p3394.readSkillValidation(ctx.userId, validationId) };
