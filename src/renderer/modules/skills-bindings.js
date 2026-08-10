@@ -311,6 +311,17 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
+    const openReuse = event.target.closest('[data-cognition-open-reuse]');
+    if (openReuse) {
+      const assetId = openReuse.dataset.cognitionOpenReuse || '';
+      const asset = (_skillsCognitionState.assets || []).find((item) => item.id === assetId);
+      const receiptIds = new Set(Array.isArray(asset?.receiptRefs) ? asset.receiptRefs : []);
+      const receipt = (_skillsCognitionState.receipts || []).find((item) => receiptIds.has(item.executionId) || receiptIds.has(item.receiptId) || (Array.isArray(item.reusedRefs) && item.reusedRefs.includes(assetId)));
+      _skillsCognitionState.selectedReceiptId = receipt?.executionId || receipt?.receiptId || '';
+      renderSkillsCognitionAssets();
+      return;
+    }
+
     const openCandidate = event.target.closest('[data-cognition-open-candidate]');
     if (openCandidate) {
       switchSkillsCognitionPage('candidates');

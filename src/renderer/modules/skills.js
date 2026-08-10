@@ -174,14 +174,26 @@ function _renderCognitionInlineRefs(refs) {
 }
 
 
+function _abilityAssetCategory(asset) {
+  const ia = window.RecallInformationArchitecture;
+  if (ia && typeof ia.normalizeAbilityCategory === 'function') return ia.normalizeAbilityCategory(asset?.category || asset?.type);
+  const value = asset?.category || asset?.type || '';
+  if (value === 'personal' || value === 'preference' || value === 'ontology') return 'personal';
+  if (value === 'rule') return 'rule';
+  if (value === 'template') return 'template';
+  if (value === 'skill_method' || value === 'skill_evolution' || value === 'experience') return 'skill_method';
+  return value;
+}
+
 function _abilityAssetCategoryLabel(category) {
+  const normalized = _abilityAssetCategory({ category });
   const labels = {
     personal: _cognitionText('cognition.asset_category_personal', '关于我'),
     rule: _cognitionText('cognition.asset_category_rule', '规则与判断'),
     template: _cognitionText('cognition.asset_category_template', '模板与范例'),
     skill_method: _cognitionText('cognition.asset_category_skill_method', '技能与方法'),
   };
-  return labels[category] || category || _cognitionText('cognition.unknown', '未知');
+  return labels[normalized] || _cognitionText('cognition.unknown', '未知');
 }
 
 function _abilityAssetMaturityLabel(maturity, status) {
@@ -193,7 +205,7 @@ function _abilityAssetMaturityLabel(maturity, status) {
 }
 
 function _abilityAssetSummary(items, category) {
-  return items.filter((item) => (item.category || item.type) === category).length;
+  return items.filter((item) => _abilityAssetCategory(item) === category).length;
 }
 
 function _cognitionSourceLabel(kind) {
@@ -910,6 +922,46 @@ function renderSkillsCognitionReceipts() {
   }).join('')}</div>`;
 }
 
+function _renderAbilityAssetTreeSummary(items) {
+  const categories = ['personal', 'rule', 'template', 'skill_method'];
+  const branches = categories.map((category) => {
+    const categoryItems = items.filter((item) => _abilityAssetCategory(item) === category);
+    const buds = categoryItems.filter((item) => item.maturity === 'bud' || item.status === 'candidate').length;
+    const validated = categoryItems.filter((item) => item.maturity === 'transfer_validated' || item.maturity === 'effectiveness_validated').length;
+    return `<span class="skills-cognition-source-state"><b>${escapeHtml(_abilityAssetCategoryLabel(category))}</b><em>${escapeHtml(String(categoryItems.length))} · ${escapeHtml(_cognitionText('cognition.maturity_bud', '芽点'))} ${escapeHtml(String(buds))} · Transfer ${escapeHtml(String(validated))}</em></span>`;
+  }).join('');
+  return `<section class="skills-cognition-card ability-asset-inline-tree"><h2>${escapeHtml(_cognitionText('cognition.cognition_tree', '认知树'))}</h2><div class="skills-cognition-source-row">${branches}</div></section>`;
+}
+
+function _renderSelectedOntologySummary(asset) {
+  const refs = Array.isArray(asset?.relationRefs) ? asset.relationRefs : [];
+  const ontologyRefs = refs.filter((ref) => ref && (ref.type === 'ontology' || ref.kind === 'ontology'));
+  const groups = Array.isArray(_skillsCognitionState.ontologyGroups) ? _skillsCognitionState.ontologyGroups : [];
+  const content = ontologyRefs.map((ref) => {
+    const id = ref.id || ref.group_id || ref.ref;
+    const group = groups.find((item) => item.group_id === id || item.id === id) || {};
+    const title = ref.title || group.title || id;
+    const body = _skillsCognitionState.ontologyGroupContent?.[id] || '';
+    return `<article class="skills-cognition-record"><div class="skills-cognition-record-head"><h3>${escapeHtml(title || _cognitionText('cognition.asset_category_personal', '关于我'))}</h3></div><p>${escapeHtml(body || _cognitionText('cognition.no_refs', '未记录引用'))}</p></article>`;
+  }).join('');
+  return `<section class="skills-cognition-card ability-asset-ontology-summary"><h2>${escapeHtml(_cognitionText('cognition.asset_category_personal', '关于我'))}</h2>${content || _renderCognitionEmpty(_cognitionText('cognition.no_refs', '未记录引用'))}</section>`;
+}
+
+function _renderSelectedContextPackSummary(asset) {
+  const projections = (Array.isArray(_skillsCognitionState.contextProjections) ? _skillsCognitionState.contextProjections : [])
+    .filter((projection) => Array.isArray(projection.selectedAssetIds) && projection.selectedAssetIds.includes(asset?.id));
+  const rows = projections.map((projection) => `<div class="skills-cognition-capture-row"><div><strong>${escapeHtml(projection.taskId || projection.projectionId || '')}</strong><span>${escapeHtml(projection.projectionId || '')}</span></div><span class="skills-cognition-status">${escapeHtml(projection.status || _cognitionText('cognition.status_confirmed', '已确认'))}</span></div>`).join('');
+  return `<section class="skills-cognition-card ability-asset-context-pack"><h2>${escapeHtml(_cognitionText('cognition.minimal_context_pack', '最小能力包'))}</h2>${rows || _renderCognitionEmpty(_cognitionText('cognition.no_refs', '未记录引用'))}</section>`;
+}
+
+function _renderSelectedReuseSummary(asset) {
+  const receiptIds = new Set(Array.isArray(asset?.receiptRefs) ? asset.receiptRefs : []);
+  const receipts = (Array.isArray(_skillsCognitionState.receipts) ? _skillsCognitionState.receipts : [])
+    .filter((receipt) => receiptIds.has(receipt.executionId) || receiptIds.has(receipt.receiptId) || (Array.isArray(receipt.reusedRefs) && receipt.reusedRefs.includes(asset?.id)));
+  const rows = receipts.map((receipt) => `<button type="button" class="skills-cognition-list-card" data-cognition-open-receipt="${escapeHtml(receipt.executionId || receipt.receiptId || '')}"><strong>${escapeHtml(receipt.agentId || receipt.targetSessionId || receipt.executionId || receipt.receiptId || '')}</strong><span>${escapeHtml(_cognitionStatusLabel(receipt.status))} · ${escapeHtml(_cognitionDate(receipt.createdAt || receipt.completedAt))}</span></button>`).join('');
+  return `<section class="skills-cognition-card ability-asset-reuse-summary"><h2>${escapeHtml(_cognitionText('cognition.view_reuse', '复用证明'))}</h2>${rows || _renderCognitionEmpty(_cognitionText('cognition.no_receipts', '暂无复用证明'))}</section>`;
+}
+
 function renderSkillsCognitionAssets() {
   const host = document.getElementById('skills-cognition-assets-body');
   if (!host) return;
@@ -955,7 +1007,7 @@ function renderSkillsCognitionAssets() {
   `;
   }).join('');
   const filteredItems = _skillsCognitionState.assetCategoryFilter
-    ? items.filter((item) => (item.category || item.type) === _skillsCognitionState.assetCategoryFilter)
+    ? items.filter((item) => _abilityAssetCategory(item) === _skillsCognitionState.assetCategoryFilter)
     : items;
   if (!items.length) {
     host.innerHTML = `<div class="ability-assets-workbench">
@@ -978,14 +1030,14 @@ function renderSkillsCognitionAssets() {
   const selected = filteredItems.find((item) => item.id === _skillsCognitionState.selectedAssetId) || filteredItems.find((item) => item.status === 'active') || filteredItems[0];
   _skillsCognitionState.selectedAssetId = selected.id;
   const rows = filteredItems.map((a) => {
-    const category = a.category || a.type;
+    const category = _abilityAssetCategory(a);
     const selectedClass = a.id === selected.id ? ' is-selected' : '';
     return `<button type="button" class="skills-cognition-record cognition-asset-row ability-asset-list-row${selectedClass}" data-ability-asset-id="${escapeHtml(a.id)}">
       <span class="ability-asset-row-main"><strong>${escapeHtml(a.title || a.id)}</strong><small>${escapeHtml(_abilityAssetCategoryLabel(category))}${a.version ? ` · ${escapeHtml(a.version)}` : ''}${a.scope ? ` · ${escapeHtml(a.scope)}` : ''}</small></span>
       <span class="skills-cognition-status">${escapeHtml(_abilityAssetMaturityLabel(a.maturity, a.status))}</span>
     </button>`;
   }).join('');
-  const selectedCategory = selected.category || selected.type;
+  const selectedCategory = _abilityAssetCategory(selected);
   const detailGrid = [
     ['Asset ID', selected.id],
     [_cognitionText('cognition.version', '版本'), selected.version || '—'],
@@ -1014,10 +1066,14 @@ function renderSkillsCognitionAssets() {
           <div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.relation_refs', '关联引用'))}</strong><p>${escapeHtml(relationText)}</p></div>
           <div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.workspace_refs', 'Workspace引用'))}</strong><p>${escapeHtml(workspace)}</p></div>
           <div class="injection-preview"><strong>${escapeHtml(_cognitionText('cognition.next_injection_preview', '下一次任务认知注入预览'))}</strong><p>${escapeHtml(injection)}</p></div>
-          <div class="asset-controls"><button class="btn btn-sm" data-cognition-page-link="receipts">${escapeHtml(_cognitionText('cognition.view_reuse', '查看复用证明'))}</button><button class="btn btn-sm" data-cognition-page-link="deposition" data-cognition-deposition-target="candidates">${escapeHtml(_cognitionText('cognition.view_candidates', '查看候选'))}</button></div>
+          <div class="asset-controls"><button class="btn btn-sm" data-cognition-open-reuse="${escapeHtml(selected.id)}">${escapeHtml(_cognitionText('cognition.view_reuse', '查看复用证明'))}</button><button class="btn btn-sm" data-cognition-page-link="deposition" data-cognition-deposition-target="candidates">${escapeHtml(_cognitionText('cognition.view_candidates', '查看候选'))}</button></div>
         </div>
       </section>
     </div>
+    ${_renderAbilityAssetTreeSummary(items)}
+    ${_renderSelectedOntologySummary(selected)}
+    ${_renderSelectedContextPackSummary(selected)}
+    ${_renderSelectedReuseSummary(selected)}
   </div>`;
 }
 
