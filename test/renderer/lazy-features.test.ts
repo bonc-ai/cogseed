@@ -45,6 +45,7 @@ describe('renderer lazy feature loader', () => {
       './modules/settings.js',
       './vendor/qrcode-generator/qrcode.js',
       './modules/messaging-settings.js',
+      './modules/personal-context-settings.js',
       './modules/memory.js',
     ]);
     expect(appended.every((script) => script.async === false)).toBe(true);

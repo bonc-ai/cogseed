@@ -7,5 +7,7 @@
 export * from './contract';
 export * from './oauth-manager';
 export * from './registry';
+export * from './scope-manifest';
+export * from './sync-scheduler';
 
 export * as feishu from './feishu';

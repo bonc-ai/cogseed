@@ -166,7 +166,7 @@ export function createFeishuTokenEndpoint(opts: FeishuTokenEndpointOptions): Tok
       try {
         const body = (await transport.getJson(USER_INFO_ENDPOINT, {
           Authorization: `Bearer ${accessToken}`,
-        })) as { code?: unknown; msg?: unknown };
+        })) as { code?: unknown; msg?: unknown; data?: { union_id?: string; tenant_key?: string } };
         if (typeof body.code === 'number' && body.code !== 0) {
           const invalid = body.code === 10003 || body.code === 10642 || body.code === 99991672;
           return {
@@ -175,7 +175,15 @@ export function createFeishuTokenEndpoint(opts: FeishuTokenEndpointOptions): Tok
             code: invalid ? 'invalid_grant' : 'provider_error',
           };
         }
-        return { ok: true };
+        return {
+          ok: true,
+          // 身份稳定键（设计稿 §5.7）：provider 构建需要 tenant + union_id，
+          // 与幂等键/ownerRef 绑定；user_info 为只读轻量端点，顺带解析不增加调用
+          identity: {
+            unionId: body.data?.union_id,
+            tenantKey: body.data?.tenant_key,
+          },
+        };
       } catch (err) {
         return {
           ok: false,
