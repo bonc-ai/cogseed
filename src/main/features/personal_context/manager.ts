@@ -14,6 +14,7 @@ import { shell } from 'electron';
 import { createLogger } from '../../logger';
 import * as messagingRegistry from '../messaging/registry';
 import { OAuthManager, OAuthConnectionStatus } from './oauth-manager';
+import { PersonalContextRegistry } from './registry';
 import { buildFeishuAuthorizeUrl, createFeishuTokenEndpoint, FEISHU_READ_SCOPES } from './feishu/oauth';
 import { startOAuthCallbackServer, type OAuthCallbackServerHandle } from './callback-server';
 
@@ -75,6 +76,13 @@ export async function beginAuthorize(
   uid: string,
   opts: { instanceId?: string } = {},
 ): Promise<BeginAuthorizeResult> {
+  // 已有进行中的授权流：先关闭旧回调服务器（端口释放 + wait reject），
+  // 防止用户连点「连接」导致回调服务器泄漏与状态混乱。
+  const existing = flows.get(flowKey(uid, PROVIDER_ID));
+  if (existing) {
+    await existing.handle.close().catch(() => undefined);
+    flows.delete(flowKey(uid, PROVIDER_ID));
+  }
   const { appId, appSecret } = await resolveFeishuApp(uid, opts.instanceId);
   const handle = await startOAuthCallbackServer();
   const oauth = createManager(appId, appSecret);
@@ -125,10 +133,18 @@ export async function cancelAuthorize(uid: string, providerId: string): Promise<
   return createManager(appId, appSecret).cancelAuthorize(uid, providerId);
 }
 
-/** 撤销授权：远端 revoke + 本地凭据清除（用户意图优先，远端失败也清本地） */
+/** 撤销授权：远端 revoke + 本地凭据清除（用户意图优先，远端失败也清本地），
+ *  资源注册表级联失效（来源失效、资源保留——设计稿 §6）。 */
 export async function revoke(uid: string, providerId: string): Promise<OAuthConnectionStatus> {
   const { appId, appSecret } = await resolveFeishuApp(uid);
-  return createManager(appId, appSecret).revoke(uid, providerId);
+  const status = await createManager(appId, appSecret).revoke(uid, providerId);
+  try {
+    const registry = new PersonalContextRegistry();
+    await registry.invalidateProvider(uid, providerId, 'oauth revoked');
+  } catch (error) {
+    log.warn('personal context registry invalidation failed', { error: (error as Error).message });
+  }
+  return status;
 }
 
 /** 健康检查：令牌失效时置 needsReauth（UI 引导重新授权） */

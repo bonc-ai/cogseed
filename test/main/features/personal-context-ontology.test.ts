@@ -71,6 +71,18 @@ describe('personal context ontology pipeline', () => {
     expect(pool.candidate_updates[0].summary).toContain('线性代数');
   });
 
+  it('deduplicates repeated submissions of the same resource', async () => {
+    const { submitCandidatesForResource } = await import('../../../src/main/features/personal_context/ontology-pipeline');
+    const first = await submitCandidatesForResource('user-1', eventResource, { start: '2026-08-12 10:00' });
+    expect(first).toHaveLength(1);
+    // 重复同步/重复事件投递：同 judgment 不再入池。
+    const second = await submitCandidatesForResource('user-1', eventResource, { start: '2026-08-12 10:00' });
+    expect(second).toHaveLength(0);
+    const ontology = await import('../../../src/main/features/personal_ontology_candidates');
+    const pool = await ontology.listCandidates('user-1');
+    expect(pool.candidate_updates).toHaveLength(1);
+  });
+
   it('builds a confirm card whose buttons carry the candidate id', async () => {
     const { setCurrentLang } = await import('../../../src/main/i18n');
     setCurrentLang('zh');

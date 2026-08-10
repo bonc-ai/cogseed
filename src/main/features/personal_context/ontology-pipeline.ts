@@ -62,7 +62,8 @@ export function resourceToCandidates(
   }];
 }
 
-/** 把资源的候选写入候选池（不确认、不落记忆），返回 candidate_id 列表。 */
+/** 把资源的候选写入候选池（不确认、不落记忆），返回新写入的 candidate_id 列表。
+ * 按 judgment 去重：重复同步/重复事件投递产生相同候选时跳过，不污染候选池。 */
 export async function submitCandidatesForResource(
   uid: string,
   resource: ExternalResource,
@@ -70,8 +71,12 @@ export async function submitCandidatesForResource(
 ): Promise<string[]> {
   const incoming = resourceToCandidates(resource, detail);
   if (!incoming.length) return [];
-  const { candidate_ids } = await ontology.addCandidates(uid, incoming);
-  log.info('personal context candidates submitted', { uid, resourceType: resource.resourceType, added: candidate_ids.length });
+  const pool = await ontology.listCandidates(uid);
+  const existing = new Set(pool.candidate_updates.map((c) => c.memory_text || c.summary).filter(Boolean));
+  const fresh = incoming.filter((c) => !existing.has(c.judgment));
+  if (!fresh.length) return [];
+  const { candidate_ids } = await ontology.addCandidates(uid, fresh);
+  log.info('personal context candidates submitted', { uid, resourceType: resource.resourceType, added: candidate_ids.length, skipped: incoming.length - fresh.length });
   return candidate_ids;
 }
 
