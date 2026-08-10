@@ -33,6 +33,21 @@ export type AccessLabel = (typeof ACCESS_LABELS)[number];
 export const RETENTION_POLICIES = ['source-linked', 'fixed'] as const;
 export type RetentionPolicy = (typeof RETENTION_POLICIES)[number];
 
+export const RESOURCE_CONTENT_STATUSES = ['not_loaded', 'loaded', 'failed', 'unsupported'] as const;
+export type ResourceContentStatus = (typeof RESOURCE_CONTENT_STATUSES)[number];
+
+export const RESOURCE_SOURCE_VALIDITIES = ['active', 'invalidated', 'deleted'] as const;
+export type ResourceSourceValidity = (typeof RESOURCE_SOURCE_VALIDITIES)[number];
+
+export interface ResourceCapability {
+  canList: boolean;
+  canReadMetadata: boolean;
+  canReadContent: boolean;
+  canSyncIncrementally: boolean;
+  canGenerateCandidates: boolean;
+  unsupportedReason?: string;
+}
+
 /**
  * 来源事实引用（非语义事实）：本体只存治理后的语义事实，这里只存引用与版本。
  * resourceId 是幂等键：`<provider>:<tenant>:<type>:<stableId>`，同键同版本重复写入必须幂等。
@@ -54,6 +69,10 @@ export interface ExternalResource {
   retentionPolicy: RetentionPolicy;
   /** 是否已读全文（按需读取标记，避免大文件全文入库） */
   bodyLoaded?: boolean;
+  /** 能力字段对旧 registry 记录可选；新发现资源必须写入。 */
+  capability?: ResourceCapability;
+  contentStatus?: ResourceContentStatus;
+  sourceValidity?: ResourceSourceValidity;
 }
 
 // ── 同步游标 ──────────────────────────────────────────────────────────────
