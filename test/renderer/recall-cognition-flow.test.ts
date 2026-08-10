@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { normalizeRecallLocation } from '../../src/renderer/modules/recall-information-architecture';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
@@ -54,6 +55,53 @@ function loadSkillsRenderer() {
 }
 
 describe('Recall cognition renderer flow', () => {
+
+  it('normalizes legacy Recall page links into new page and nested state', () => {
+    expect(normalizeRecallLocation('candidates')).toEqual({ page: 'deposition', subview: 'candidates' });
+    expect(normalizeRecallLocation('receipts')).toEqual({ page: 'assets', subview: 'reuse' });
+    expect(skillsSource).toContain('depositionView');
+    expect(skillsSource).toContain('candidateCategoryFilter');
+
+    const context = loadSkillsRenderer();
+    const pageBodies = [
+      { dataset: { cognitionPageBody: 'overview' }, hidden: false },
+      { dataset: { cognitionPageBody: 'deposition' }, hidden: true },
+      { dataset: { cognitionPageBody: 'assets' }, hidden: true },
+    ];
+    const pageTabs = [
+      { dataset: { cognitionPage: 'overview' }, classList: { toggle() {} }, setAttribute() {} },
+      { dataset: { cognitionPage: 'deposition' }, classList: { toggle() {} }, setAttribute() {} },
+      { dataset: { cognitionPage: 'assets' }, classList: { toggle() {} }, setAttribute() {} },
+    ];
+    let rendered = '';
+    context.window.RecallInformationArchitecture = {
+      normalizeRecallLocation,
+    };
+    context.document = {
+      querySelectorAll: (selector: string) => {
+        if (selector === '[data-cognition-page-body]') return pageBodies;
+        if (selector === '[data-cognition-page]') return pageTabs;
+        return [];
+      },
+      getElementById: () => ({ innerHTML: '' }),
+    };
+    vm.runInContext(`
+      renderSkillsCognitionOverview = function () { rendered = 'overview'; };
+      renderSkillsCognitionDeposition = function () { rendered = 'deposition:' + _skillsCognitionState.depositionView; };
+      renderSkillsCognitionAssets = function () { rendered = 'assets:' + _skillsCognitionState.assetSubview; };
+    `, context);
+
+    context.switchSkillsCognitionPage('candidates');
+    expect(vm.runInContext('_skillsCognitionState.page', context)).toBe('deposition');
+    expect(vm.runInContext('_skillsCognitionState.depositionView', context)).toBe('candidates');
+    expect(vm.runInContext('rendered', context)).toBe('deposition:candidates');
+    expect(pageBodies.find((body) => body.dataset.cognitionPageBody === 'deposition')?.hidden).toBe(false);
+
+    context.switchSkillsCognitionPage('receipts');
+    expect(vm.runInContext('_skillsCognitionState.page', context)).toBe('assets');
+    expect(vm.runInContext('_skillsCognitionState.assetSubview', context)).toBe('reuse');
+    expect(vm.runInContext('rendered', context)).toBe('assets:reuse');
+  });
   it('renders capture controls, grouped filters, task detail, and safe task actions', () => {
     const context = loadSkillsRenderer();
     const host = { innerHTML: '' };

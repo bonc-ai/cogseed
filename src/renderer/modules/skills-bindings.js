@@ -71,11 +71,18 @@ function _initSkillsCognitionBindings() {
     switchSkillsCognitionPage(button.dataset.cognitionPage || 'overview');
   });
 
+  document.getElementById('skills-cognition-deposition-tabs')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-cognition-deposition-view]');
+    if (!button) return;
+    _skillsCognitionState.depositionView = button.dataset.cognitionDepositionView || 'candidates';
+    renderSkillsCognitionDeposition();
+  });
+
   document.getElementById('ability-assets-tabs')?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-ability-assets-view]');
     if (!button) return;
     const view = button.dataset.abilityAssetsView === 'tree' ? 'tree' : 'list';
-    _skillsCognitionState.assetView = view;
+    _skillsCognitionState.assetSubview = view;
     document.querySelectorAll('[data-ability-assets-view]').forEach((el) => el.classList.toggle('is-active', el === button));
     renderSkillsCognitionAssets();
   });
@@ -95,7 +102,16 @@ function _initSkillsCognitionBindings() {
 
     const pageLink = event.target.closest('[data-cognition-page-link]');
     if (pageLink) {
+      const targetView = pageLink.dataset.cognitionDepositionTarget;
+      if (targetView) _skillsCognitionState.depositionView = targetView;
       switchSkillsCognitionPage(pageLink.dataset.cognitionPageLink || 'overview');
+      return;
+    }
+
+    const category = event.target.closest('[data-cognition-candidate-category]');
+    if (category) {
+      _skillsCognitionState.candidateCategoryFilter = category.dataset.cognitionCandidateCategory || '';
+      renderSkillsCognitionCandidates();
       return;
     }
 
@@ -454,12 +470,10 @@ function _initSkillsCognitionBindings() {
 
   window.addEventListener('i18n-change', () => {
     renderSkillsCognitionOverview();
-    renderSkillsCognitionSources();
-    renderSkillsCognitionCaptures();
+    renderSkillsCognitionDeposition();
     renderSkillsCognitionBrain();
     renderSkillsCognitionContext();
     renderSkillsCognitionOntology();
-    renderSkillsCognitionCandidates();
     renderSkillsCognitionReceipts();
     renderSkillsCognitionAssets();
   });

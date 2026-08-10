@@ -17,6 +17,9 @@ const _GLOBAL_SKILL_GROUP_MIN = 2;
 
 const _skillsCognitionState = {
   page: 'overview',
+  depositionView: 'candidates',
+  candidateCategoryFilter: '',
+  assetSubview: 'list',
   candidates: [],
   recallCandidates: [],
   sources: [],
@@ -40,7 +43,6 @@ const _skillsCognitionState = {
   editingRecallCandidateId: '',
   receipts: [],
   assets: [],
-  assetView: 'list',
   selectedAssetId: '',
   assetCategoryFilter: '',
   dashboard: null,
@@ -112,20 +114,34 @@ function _cognitionSetPageVisibility(page) {
   });
 }
 
+function _normalizeRecallLocation(page) {
+  const ia = window.RecallInformationArchitecture;
+  if (ia && typeof ia.normalizeRecallLocation === 'function') return ia.normalizeRecallLocation(page);
+  if (page === 'sources' || page === 'captures' || page === 'candidates') return { page: 'deposition', subview: page };
+  if (page === 'brain') return { page: 'assets', subview: 'tree' };
+  if (page === 'context' || page === 'receipts') return { page: 'assets', subview: 'reuse' };
+  if (page === 'ontology') return { page: 'assets', subview: 'list', category: 'personal' };
+  if (page === 'assets') return { page: 'assets', subview: 'list' };
+  if (page === 'deposition') return { page: 'deposition', subview: 'candidates' };
+  return { page: 'overview', subview: '' };
+}
+
+function _renderCognitionPage(page) {
+  if (page === 'overview') renderSkillsCognitionOverview();
+  else if (page === 'deposition') renderSkillsCognitionDeposition();
+  else if (page === 'assets') renderSkillsCognitionAssets();
+}
+
 function switchSkillsCognitionPage(page) {
-  const allowed = new Set(['overview', 'sources', 'captures', 'brain', 'context', 'ontology', 'candidates', 'receipts', 'assets']);
-  const next = allowed.has(page) ? page : 'overview';
-  _skillsCognitionState.page = next;
-  _cognitionSetPageVisibility(next);
-  if (next === 'overview') renderSkillsCognitionOverview();
-  if (next === 'sources') renderSkillsCognitionSources();
-  if (next === 'captures') renderSkillsCognitionCaptures();
-  if (next === 'brain') renderSkillsCognitionBrain();
-  if (next === 'context') renderSkillsCognitionContext();
-  if (next === 'ontology') renderSkillsCognitionOntology();
-  if (next === 'candidates') renderSkillsCognitionCandidates();
-  if (next === 'receipts') renderSkillsCognitionReceipts();
-  if (next === 'assets') renderSkillsCognitionAssets();
+  const location = _normalizeRecallLocation(page);
+  _skillsCognitionState.page = location.page;
+  if (location.page === 'deposition') _skillsCognitionState.depositionView = location.subview || 'candidates';
+  if (location.page === 'assets') {
+    _skillsCognitionState.assetSubview = location.subview || 'list';
+    if (location.category) _skillsCognitionState.assetCategoryFilter = location.category;
+  }
+  _cognitionSetPageVisibility(location.page);
+  _renderCognitionPage(location.page);
 }
 
 function _renderCognitionLoading(host) {
@@ -722,6 +738,22 @@ function renderSkillsCognitionOverview() {
     </div>`;
 }
 
+function renderSkillsCognitionDeposition() {
+  const view = _skillsCognitionState.depositionView || 'candidates';
+  document.querySelectorAll('[data-cognition-deposition-body]').forEach((el) => {
+    const active = el.dataset.cognitionDepositionBody === view;
+    el.hidden = !active;
+  });
+  document.querySelectorAll('[data-cognition-deposition-view]').forEach((el) => {
+    const active = el.dataset.cognitionDepositionView === view;
+    el.classList.toggle('is-active', active);
+    el.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  if (view === 'sources') renderSkillsCognitionSources();
+  else if (view === 'captures') renderSkillsCognitionCaptures();
+  else renderSkillsCognitionCandidates();
+}
+
 function renderSkillsCognitionCandidates() {
   const host = document.getElementById('skills-cognition-candidates-body');
   if (!host) return;
@@ -840,7 +872,7 @@ function renderSkillsCognitionAssets() {
   const host = document.getElementById('skills-cognition-assets-body');
   if (!host) return;
   const items = _skillsCognitionState.assets;
-  const view = _skillsCognitionState.assetView === 'tree' ? 'tree' : 'list';
+  const view = _skillsCognitionState.assetSubview === 'tree' ? 'tree' : 'list';
   if (view === 'tree') {
     const buds = items.filter((item) => item.maturity === 'bud' || item.status === 'candidate').length;
     const lightLeaves = items.filter((item) => item.maturity === 'transfer_validated').length;
@@ -1009,14 +1041,7 @@ async function loadSkillsCognitionSnapshot() {
   _skillsCognitionState.loadedAt = Date.now();
   _skillsCognitionState.loading = false;
   renderSkillsCognitionOverview();
-  if (_skillsCognitionState.page === 'sources') renderSkillsCognitionSources();
-  if (_skillsCognitionState.page === 'captures') renderSkillsCognitionCaptures();
-  if (_skillsCognitionState.page === 'brain') renderSkillsCognitionBrain();
-  if (_skillsCognitionState.page === 'context') renderSkillsCognitionContext();
-  if (_skillsCognitionState.page === 'ontology') renderSkillsCognitionOntology();
-  if (_skillsCognitionState.page === 'candidates') renderSkillsCognitionCandidates();
-  if (_skillsCognitionState.page === 'receipts') renderSkillsCognitionReceipts();
-  if (_skillsCognitionState.page === 'assets') renderSkillsCognitionAssets();
+  if (_skillsCognitionState.page !== 'overview') _renderCognitionPage(_skillsCognitionState.page);
   if (_skillsCognitionRefreshTimer) clearTimeout(_skillsCognitionRefreshTimer);
   const visibleCaptures = [...(_skillsCognitionState.captures || []), ...(_skillsCognitionState.recentCaptures || [])];
   const captureInProgress = Number(_skillsCognitionState.captureCounts?.processing || 0) > 0
