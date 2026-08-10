@@ -4,6 +4,7 @@
   let projection = null;
   let busy = false;
   let bound = false;
+  let loadError = '';
 
   function host() { return document.getElementById('mate-workbench'); }
   function text(key, fallback, vars) {
@@ -57,7 +58,7 @@
       return;
     }
     if (!projection) {
-      root.innerHTML = renderEmpty(text('mate_workbench.no_projection', '还没有工作台状态。'), text('mate_workbench.no_projection_detail', '刷新后重试。'));
+      root.innerHTML = renderEmpty(loadError || text('mate_workbench.no_projection', '还没有工作台状态。'), loadError ? text('mate_workbench.load_failed_detail', '检查桌面端连接后重试。') : text('mate_workbench.no_projection_detail', '刷新后重试。'));(text('mate_workbench.no_projection', '还没有工作台状态。'), text('mate_workbench.no_projection_detail', '刷新后重试。'));
       return;
     }
     const touchpoint = projection.touchpoints[0];
@@ -69,11 +70,14 @@
   }
 
   async function refresh() {
-    busy = true; render();
+    busy = true; loadError = ''; render();
     try {
       const result = await invoke('desktop_workbench.get', {});
       if (!result || !result.projection) throw new Error(text('mate_workbench.load_failed', '无法读取 Mate 工作台状态。'));
       projection = result.projection;
+    } catch (error) {
+      projection = null;
+      loadError = error && error.message ? error.message : text('mate_workbench.load_failed', '无法读取 Mate 工作台状态。');
     } finally {
       busy = false; render();
     }
@@ -90,7 +94,11 @@
       const action = button.dataset.mwAction;
       if (action === 'refresh') void refresh();
       else if (action === 'cognition.review') window._setViewFromSidebar ? window._setViewFromSidebar('personal-ontology') : setView('personal-ontology');
-      else if (action === 'briefing.preview' || action === 'touchpoint.feishu.connect') setView('settings');
+      else if (action === 'cognition.sync') { invoke('personal_context.sync.start', {}).then(() => refresh()).catch((error) => { loadError = error.message || String(error); render(); }); }
+      else if (action === 'briefing.preview' || action === 'touchpoint.feishu.connect' || action === 'cognition.authorize') {
+        setView('settings');
+        if (typeof activateSettingsTab === 'function') activateSettingsTab('messaging');
+      }
     });
     window.addEventListener('i18n-change', render);
   }
