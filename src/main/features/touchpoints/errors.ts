@@ -19,7 +19,11 @@ export type TouchpointContractErrorCode =
   | 'intent_not_actionable'
   | 'invalid_status_transition'
   | 'ledger_corrupt'
-  | 'action_duplicate';
+  | 'action_duplicate'
+  | 'invalid_policy'
+  | 'intent_not_dispatchable'
+  | 'intent_not_available'
+  | 'channel_mismatch';
 
 export class TouchpointContractError extends Error {
   readonly code: TouchpointContractErrorCode;

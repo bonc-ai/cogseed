@@ -162,3 +162,30 @@ export interface TouchpointLedgerFile {
   intents: Record<string, TouchpointIntent>;
   actions: Record<string, TouchpointActionRecord>;
 }
+
+
+export interface TouchpointQuietHours {
+  start: string;
+  end: string;
+  timeZone: string;
+}
+
+export interface TouchpointPolicyConfig {
+  enabled: boolean;
+  quietHours?: TouchpointQuietHours;
+}
+
+export interface TouchpointPolicyDecision {
+  decision: 'deliver' | 'delay' | 'suppress';
+  reason?: 'quiet_hours' | 'touchpoint_disabled';
+  availableFrom?: string;
+}
+
+export interface TouchpointDeliveryResult {
+  externalDeliveryId: string;
+}
+
+export interface TouchpointChannelAdapter {
+  readonly channel: TouchpointChannel;
+  send(userId: string, intent: TouchpointIntent): Promise<TouchpointDeliveryResult>;
+}
