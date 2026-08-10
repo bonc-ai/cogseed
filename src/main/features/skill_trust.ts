@@ -305,6 +305,66 @@ export function writeReceipt(
 }
 
 /**
+ * Persist an install-time scan verdict as a receipt.
+ *
+ * Shared by both install paths so they cannot drift. Marketplace installs wrote
+ * this inline and custom-skill imports wrote nothing at all: the import DID deep
+ * scan (and rolls the whole batch back on `blocked`), but discarded the result,
+ * so an imported skill had no baseline hash. Without one, tamper detection has
+ * nothing to compare against and post-import edits go unnoticed — the scan was
+ * a one-time toast rather than a durable fact.
+ *
+ * Returns `null` on failure instead of throwing: a receipt is an audit and
+ * staleness aid, not part of the gate. The scan already ran and passed by the
+ * time this is called, so a bookkeeping error must not fail a real install.
+ */
+export function writeInstallReceipt(
+  uid: string,
+  skillId: string,
+  payloadHash: string,
+  scan: {
+    outcome: string;
+    score?: number;
+    scannerVersion?: string;
+    rulesetVersion?: string;
+    isolated?: boolean;
+    rulesDegraded?: boolean;
+    attackSurface?: SecurityReceipt['attackSurface'];
+  },
+  violations: { violationCount: number; topRule?: string; topLevel?: 'EXTREME' | 'MEDIUM' | 'LOW' },
+): SecurityReceipt | null {
+  try {
+    return writeReceipt(uid, skillId, {
+      payloadHash,
+      // The SCAN's verdict, not the structural report's. Callers only reach here
+      // on `pass` or `restricted` — `blocked` and `unknown` are refused upstream.
+      // `restricted` is the spec's Medium state: installed, but shown as a risk
+      // card rather than a clean badge.
+      decision: scan.outcome === 'restricted' ? 'risk' : 'pass',
+      violationCount: violations.violationCount,
+      ...(violations.topRule ? { topRule: violations.topRule } : {}),
+      ...(violations.topLevel ? { topLevel: violations.topLevel } : {}),
+      // Both install paths run the full scanner, so the verdict is `deep`. Absent
+      // before, which made a fresh install indistinguishable from a local-only
+      // check and put a "weaker coverage" caveat on a skill that had just had a
+      // full scan.
+      scanner: 'deep',
+      ...(typeof scan.score === 'number' ? { securityScore: scan.score } : {}),
+      ...(scan.scannerVersion ? { scannerVersion: scan.scannerVersion } : {}),
+      ...(scan.rulesetVersion ? { rulesetVersion: scan.rulesetVersion } : {}),
+      ...(typeof scan.isolated === 'boolean' ? { isolated: scan.isolated } : {}),
+      ...(scan.rulesDegraded ? { rulesDegraded: true } : {}),
+      ...(scan.attackSurface ? { attackSurface: { ...scan.attackSurface } } : {}),
+    });
+  } catch (err) {
+    log.warn('failed to write install security receipt', {
+      skillId, error: (err as Error).message,
+    });
+    return null;
+  }
+}
+
+/**
  * Decide whether a stored verdict still applies to what is on disk now.
  *
  * Fails toward rescanning: an unreadable payload or a missing receipt is

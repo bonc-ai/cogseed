@@ -731,9 +731,14 @@ describe('skills › listSkills', () => {
     writeCustomSkill('alpha', 'name: "Alpha"\ndescription: "The first"');
     const s = await loadSkills();
     const list = await s.listSkills();
-    expect(list).toEqual([
-      { id: 'alpha', name: 'Alpha', source: 'custom', description_zh: '', description_en: 'The first', category: '', create_uid: undefined, enabled: true },
-    ]);
+    // `toMatchObject`, not `toEqual`: custom skills now carry a `security` axis
+    // (they are scanned like marketplace installs), and this test is about
+    // frontmatter parsing, not about pinning every field on the listing.
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({
+      id: 'alpha', name: 'Alpha', source: 'custom',
+      description_zh: '', description_en: 'The first', category: '', enabled: true,
+    });
   });
 
   it('keeps disabled state when the list is served from cache', async () => {
@@ -882,11 +887,19 @@ describe('skills › listSkills', () => {
     // Receipts describe marketplace installs only (reverifySkill resolves
     // userMarketplaceSkillDir), so custom skills must not be probed for a
     // receipt that never exists and reported as unverified.
-    it('never annotates custom skills', async () => {
+    // Custom skills ARE annotated now. They were skipped while `reverifySkill`
+    // resolved only the marketplace tree — a custom id was never found there, so
+    // the verdict was `unknown` and annotating it would have said "unchecked"
+    // about content that simply had no code path to check it. Now the same
+    // scanner covers both trees, so the badge reports a real verdict; the custom
+    // tree is also what `skills.writeFile` and the self-evolution patch path
+    // write to, so its bytes are not necessarily hand-authored.
+    it('annotates custom skills, which are scanned like marketplace ones', async () => {
       writeCustomSkill('mine', 'name: "Mine"\ndescription: "local"');
       const s = await loadSkills();
       const found = (await s.listSkills()).find((x) => x.id === 'mine');
-      expect(found?.security).toBeUndefined();
+      expect(found?.security).toBeDefined();
+      expect(found?.security?.status).toBeTruthy();
     });
   });
 

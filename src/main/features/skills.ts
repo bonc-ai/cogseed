@@ -49,8 +49,8 @@ import {
 } from '../storage';
 import { invalidateSkills as invalidateCoreAgentSkills } from '../model/core-agent/skill-registry';
 import { readDisabledSets, setSkillEnabled } from './component_enabled';
-import { partitionSkillsByTrustDeep } from './skill_reverify';
-import { listReceipts, type SecurityReceipt } from './skill_trust';
+import { partitionSkillsByTrustDeep, topViolationOf } from './skill_reverify';
+import { listReceipts, skillPayloadHash, writeInstallReceipt, type SecurityReceipt } from './skill_trust';
 import { scanSkillDir, type SentryScanResult } from './security/sentry-adapter';
 import { findOuterTagRanges } from '../util/markdown-prose-code';
 import {
@@ -869,14 +869,25 @@ function _overlaySkillEnabled(list: SkillListing[]): SkillListing[] {
  * uses, and one that cannot make a working skill look broken.
  */
 async function _overlaySkillSecurity(list: SkillListing[]): Promise<SkillListing[]> {
-  const marketplaceIds = list.filter((s) => s.source === 'marketplace').map((s) => s.id);
-  if (!marketplaceIds.length) return list;
+  // Custom skills are included now that `reverifySkill` resolves their directory
+  // too. They were excluded while it looked only in the marketplace tree, where
+  // a custom id never exists — so they came back `unknown` and were left
+  // unannotated rather than mislabelled. Both kinds are scanned by the same
+  // rules: `skills.writeFile` and the self-evolution patch path both write into
+  // the custom tree, so its bytes are not necessarily hand-authored.
+  //
+  // Agent-private skills stay out: `listSkills` already excludes them, so
+  // nothing here can see one.
+  const scannableIds = list
+    .filter((s) => s.source === 'marketplace' || s.source === 'custom')
+    .map((s) => s.id);
+  if (!scannableIds.length) return list;
 
   const uid = getActiveUserId();
   let withheldById: Map<string, string>;
   let receiptById: Map<string, SecurityReceipt>;
   try {
-    const { withheld } = await partitionSkillsByTrustDeep(uid, marketplaceIds);
+    const { withheld } = await partitionSkillsByTrustDeep(uid, scannableIds);
     withheldById = new Map(withheld.map((w) => [w.skillId, w.reason || 'unknown']));
     receiptById = new Map(listReceipts(uid).map((r) => [r.skillId, r]));
   } catch {
@@ -884,7 +895,7 @@ async function _overlaySkillSecurity(list: SkillListing[]): Promise<SkillListing
   }
 
   return list.map((s) => {
-    if (s.source !== 'marketplace') return s;
+    if (s.source !== 'marketplace' && s.source !== 'custom') return s;
     const reason = withheldById.get(s.id);
     const receipt = receiptById.get(s.id);
     const common = receipt
@@ -1570,6 +1581,37 @@ async function _scanImportedSkill(skillDir: string): Promise<SentryScanResult> {
 }
 
 /**
+ * Record a passing import scan as a receipt.
+ *
+ * The import already deep-scans and rolls the batch back on `blocked`, but the
+ * result used to be discarded — so an imported skill had no baseline hash, and
+ * every later defence that compares against one was inert for it: tamper
+ * detection had nothing to diff, and load-time re-verification resolved only the
+ * marketplace tree and returned `unknown`. Measured, a credential-exfiltration
+ * payload hidden in `tests/` inside a custom skill was neither blocked nor
+ * withheld before this.
+ *
+ * Best-effort by design: the scan has already passed and the skill is installed,
+ * so a failed write must not undo that. It only means the first re-verification
+ * rescans instead of reusing a receipt.
+ */
+async function _recordImportReceipt(skillId: string, skillDir: string, scan: SentryScanResult): Promise<void> {
+  try {
+    const hash = skillPayloadHash(skillDir);
+    if (!hash) return;
+    const report = validateSkillDir(skillDir, { enforceSkillRunner: false });
+    const top = topViolationOf(report.violations);
+    writeInstallReceipt(getActiveUserId(), skillId, hash, scan, {
+      violationCount: report.violations.length,
+      ...(top?.rule ? { topRule: top.rule } : {}),
+      ...(top?.level ? { topLevel: top.level } : {}),
+    });
+  } catch (err) {
+    log.warn('failed to record import receipt', { skillId, error: (err as Error).message });
+  }
+}
+
+/**
  * Turn a rejecting scan verdict into an `ImportResult`, rolling back first.
  *
  * `blocked` and `unavailable` are reported separately rather than collapsed into
@@ -1907,6 +1949,9 @@ async function _installSourceSkillRoots(
     if (scan.outcome === 'blocked' || scan.outcome === 'unknown') {
       return _rejectImportForSecurity(scan, createdIds);
     }
+    // Recorded per skill, after the reject check: only verdicts that actually
+    // admitted the skill become receipts.
+    await _recordImportReceipt(skill.id, customSkillDir(skill.id), scan);
     if (!worstScan || (scan.outcome === 'restricted' && worstScan.outcome !== 'restricted')) {
       worstScan = scan;
     }
@@ -1980,6 +2025,7 @@ async function _createEditableDraftFromImportDir(
   if (scan.outcome === 'blocked' || scan.outcome === 'unknown') {
     return _rejectImportForSecurity(scan, [created.id]);
   }
+  await _recordImportReceipt(created.id, skillDir, scan);
 
   const fresh = await getCustomSkill(created.id) || created;
   log.info('created-from-dir import draft', {

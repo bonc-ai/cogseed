@@ -11,8 +11,9 @@
  * answer is no — or unknown — the scan runs again.
  */
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 
-import { userMarketplaceSkillDir } from '../paths';
+import { userMarketplaceSkillDir, userSkillsDir } from '../paths';
 import { validateSkillDir } from '../quality';
 import { createLogger } from '../logger';
 import {
@@ -79,9 +80,32 @@ const _topViolation = topViolationOf;
  * nothing was verified, and reporting it as clean would be the one failure mode
  * this whole mechanism exists to prevent.
  */
+/**
+ * Locate a skill's payload directory, marketplace first, then user-custom.
+ *
+ * Previously this path resolved only `userMarketplaceSkillDir`, so every custom
+ * skill fell into the `!existsSync` branch and returned `unknown` — never
+ * scanned, and (because the panel only annotates what has a receipt) never
+ * showing so much as a badge. That was defensible when custom skills meant
+ * "content the user typed themselves", but they are also the write target of
+ * `skills.writeFile` and of the self-evolution patch path, so their bytes are
+ * not necessarily hand-authored.
+ *
+ * Order matches `_resolveWorkbenchSkillDir` in ipc/index.ts: marketplace wins on
+ * an id collision, so a baseline pins the tree the runtime would actually load.
+ * Presence is keyed on `SKILL.md` rather than the directory, because an empty
+ * leftover directory is not a skill and must not shadow a real one.
+ */
+function _resolveSkillDir(uid: string, skillId: string): string | null {
+  for (const dir of [userMarketplaceSkillDir(uid, skillId), path.join(userSkillsDir(uid), skillId)]) {
+    if (fs.existsSync(path.join(dir, 'SKILL.md'))) return dir;
+  }
+  return null;
+}
+
 export function reverifySkill(uid: string, skillId: string): ReverifyResult {
-  const skillDir = userMarketplaceSkillDir(uid, skillId);
-  if (!fs.existsSync(skillDir)) {
+  const skillDir = _resolveSkillDir(uid, skillId);
+  if (!skillDir) {
     return {
       skillId, decision: 'unknown', rescanned: false,
       staleReason: 'payload_unreadable', receipt: null,
@@ -154,8 +178,8 @@ export function reverifySkill(uid: string, skillId: string): ReverifyResult {
  * blind spot one layer down.
  */
 export async function reverifySkillDeep(uid: string, skillId: string): Promise<ReverifyResult> {
-  const skillDir = userMarketplaceSkillDir(uid, skillId);
-  if (!fs.existsSync(skillDir)) {
+  const skillDir = _resolveSkillDir(uid, skillId);
+  if (!skillDir) {
     return {
       skillId, decision: 'unknown', rescanned: false,
       staleReason: 'payload_unreadable', receipt: null,

@@ -47,7 +47,7 @@ import * as path from 'node:path';
 
 import { sha256OfFile } from '../util/sha256';
 import { marketplaceContentTreeHash } from '../util/marketplace-tree-hash';
-import { writeReceipt } from './skill_trust';
+import { writeInstallReceipt } from './skill_trust';
 import { topViolationOf } from './skill_reverify';
 import { scanSkillDir, type SentryScanResult, type SkillSource } from './security/sentry-adapter';
 
@@ -1019,36 +1019,18 @@ async function _installMarketplaceSkillLocked(
     // rescanning: the receipt must record the verdict that actually gated the
     // install, not a second opinion.
     if (skillTreeHash) {
-      try {
-        // Top finding computed by severity, not by position: the validator
-        // returns violations in scan order, so `violations[0]` is only
-        // incidentally the most severe one.
-        const top = topViolationOf(skillReport.violations);
-        writeReceipt(getActiveUserId(), skillId, {
-          payloadHash: skillTreeHash,
-          // Records the SCAN's verdict, not the structural report's. Reaching
-          // here means the scan returned pass or restricted — blocked and
-          // unknown both threw above. `restricted` is the spec's Medium state:
-          // installed, but the UI shows a risk card rather than a clean badge.
-          decision: scan.outcome === 'restricted' ? 'risk' : 'pass',
-          violationCount: skillReport.violations.length,
-          ...(top?.rule ? { topRule: top.rule } : {}),
-          ...(top?.level ? { topLevel: top.level } : {}),
-          // Scanner provenance travels with the verdict so the UI can disclose
-          // how it was produced — a non-isolated or fallback-rules scan must not
-          // be shown as a clean isolated pass.
-          ...(typeof scan.score === 'number' ? { securityScore: scan.score } : {}),
-          ...(scan.scannerVersion ? { scannerVersion: scan.scannerVersion } : {}),
-          ...(scan.rulesetVersion ? { rulesetVersion: scan.rulesetVersion } : {}),
-          isolated: scan.isolated,
-          ...(scan.rulesDegraded ? { rulesDegraded: true } : {}),
-        });
-      } catch (err) {
-        // A receipt is an audit/staleness aid, not part of the gate — the scan
-        // already ran and passed. Failing the install here would trade a real
-        // capability for a bookkeeping error.
-        log.warn('failed to write security receipt', { skillId, error: (err as Error).message });
-      }
+      // Top finding computed by severity, not by position: the validator
+      // returns violations in scan order, so `violations[0]` is only
+      // incidentally the most severe one.
+      const top = topViolationOf(skillReport.violations);
+      // Shared with the custom-import path so the two cannot drift; it swallows
+      // its own failures, since a receipt is an audit aid and not part of the
+      // gate the install already passed.
+      writeInstallReceipt(getActiveUserId(), skillId, skillTreeHash, scan, {
+        violationCount: skillReport.violations.length,
+        ...(top?.rule ? { topRule: top.rule } : {}),
+        ...(top?.level ? { topLevel: top.level } : {}),
+      });
     }
     const installedAt = Date.now();
     await fsp.writeFile(path.join(target, '_install.json'),
