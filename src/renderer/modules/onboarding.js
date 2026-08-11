@@ -79,6 +79,8 @@ let _csRolePicked = null;
 let _csToastTimer = 0;
 // 本轮导入的所有会话 ID（Claude + Codex），用于完成时批量绑定到角色工作空间。
 let _csImportedConversationIds = [];
+// 标记是否从"继续之前的工作"按钮进入（standalone模式）
+let _csStandaloneMode = false;
 
 function _csToast(msg) {
   const t = document.getElementById('cs-ob-toast');
@@ -170,9 +172,10 @@ function _csObShellHtml() {
         <div class="cs-mode"><span>读取方式：只读导入，不写入任何 Agent，也不自动修改认知资产。认知从任何 Agent 来，带去任何 Agent。</span></div>
 
         <div class="cs-actions">
-          <button class="cs-btn ghost" data-csnext="1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
+          <button class="cs-btn ghost cs-step2-back" data-csnext="1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
           <button class="cs-btn ghost" id="cs-agent-refresh">重新检测 Agent</button>
-          <button class="cs-btn" data-csnext="3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>下一步 · 选择角色</button>
+          <button class="cs-btn cs-step2-next" data-csnext="3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>下一步 · 选择角色</button>
+          <button class="cs-btn cs-step2-finish" id="cs-step2-finish" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>完成导入</button>
         </div>
       </section>
 
@@ -198,9 +201,15 @@ function _csObShellHtml() {
 }
 
 function _csGoStep(n) {
+  console.log('[ONBOARDING DEBUG] _csGoStep called with n =', n);
   const step = Math.max(0, Math.min(3, n));
   const shell = document.getElementById('cs-onboarding');
-  if (!shell) return;
+  console.log('[ONBOARDING DEBUG] _csGoStep shell found:', !!shell);
+  if (!shell) {
+    console.error('[ONBOARDING DEBUG] _csGoStep: shell not found!');
+    return;
+  }
+  console.log('[ONBOARDING DEBUG] Setting step to', step);
   shell.querySelectorAll('.cs-panel').forEach((p) => {
     p.classList.toggle('active', Number(p.dataset.cspanel) === step);
   });
@@ -211,9 +220,11 @@ function _csGoStep(n) {
     b.disabled = i > step;
   });
   shell.querySelector('.cs-content')?.scrollTo?.(0, 0);
+  console.log('[ONBOARDING DEBUG] _csGoStep: loading data for step', step);
   if (step === 1) _csLoadTeam(false);
   if (step === 2) _csLoadAgents(false);
   if (step === 3) _csLoadRoleTemplates();
+  console.log('[ONBOARDING DEBUG] _csGoStep complete');
 }
 
 // Renders the REAL detection result, LEFT-RIGHT layout:
@@ -301,6 +312,9 @@ window._csSelectAgent = function(agentType) {
 // Expose import functions to global scope for onclick handlers
 window._csImportClaudeSessions = _csImportClaudeSessions;
 window._csImportCodexSessions = _csImportCodexSessions;
+window._csImportCodexTasks = _csImportCodexTasks;
+// Kept global so other flows can reuse the walkthrough's asset-panel loader.
+window._csLoadAgents = _csLoadAgents;
 
 // Load and render all 4 asset types for one agent
 function _csLoadAgentAssets(agentType) {
@@ -758,25 +772,27 @@ async function _csLoadClaudeSessions(agentType) {
 
   try {
     const res = await window.cogseed.invoke('localAgents.listClaudeSessions');
-    const sessions = (res && res.sessions) || [];
+    const recentSessions = (res && res.sessions) || [];
 
-    if (!sessions.length) {
+    console.log('[ONBOARDING] Claude sessions - total count:', recentSessions.length);
+    console.log('[ONBOARDING] Claude sessions - first 3:', recentSessions.slice(0, 3));
+
+    if (!recentSessions.length) {
       container.innerHTML = '<div class="cs-state">未找到 Claude Code 历史会话。如果你使用过 Claude Code，会话文件可能在 ~/.claude/projects/ 目录下。</div>';
       _csUpdateAssetCount(agentType, 'sessions', 0);
       return;
     }
 
-    _csUpdateAssetCount(agentType, 'sessions', sessions.length);
+    _csUpdateAssetCount(agentType, 'sessions', recentSessions.length);
 
-    // Render sessions with checkboxes. Default: show first 3, collapse the rest.
-    const sessionRows = sessions.map((s, idx) => {
+    // Render sessions with checkboxes. Show all sessions (no collapse), scrollable container.
+    const sessionRows = recentSessions.map((s, idx) => {
       const time = s.timestamp ? new Date(s.timestamp).toLocaleString('zh-CN', {
         month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'
       }) : '';
       const projectLabel = s.projectPath ? `<small>${_csEsc(s.projectPath)}</small>` : '';
-      const hidden = idx >= 3 ? ' style="display:none"' : '';
       return `
-        <div class="cs-src cs-collapsible-item"${hidden} data-session-id="${_csEsc(s.filePath)}">
+        <div class="cs-src" data-session-id="${_csEsc(s.filePath)}">
           <input type="checkbox" />
           <div class="s-ico">${CS_TERMINAL_SVG}</div>
           <div>
@@ -787,14 +803,10 @@ async function _csLoadClaudeSessions(agentType) {
         </div>`;
     }).join('');
 
-    const toggleBtn = sessions.length > 3
-      ? `<button type="button" class="cs-show-more" onclick="_csToggleShowMore(this, ${sessions.length})">+ 还有 ${sessions.length - 3} 个</button>`
-      : '';
-
-    // Import action bar
-    container.innerHTML = sessionRows + toggleBtn +
+    // Import action bar (no toggle button, all sessions visible in scrollable container)
+    container.innerHTML = `<div class="cs-session-scroll">${sessionRows}</div>` +
       `<div class="cs-import-bar">
-         <button type="button" class="cs-import-btn" onclick="_csImportClaudeSessions('${_csEsc(agentType)}')">导入所选会话</button>
+         <button type="button" class="cs-import-btn" onclick="_csImportClaudeSessions('${_csEsc(agentType)}')">导入所选会话（最多 3 条）</button>
          <div class="cs-import-result" id="cs-import-result-${_csEsc(agentType)}-sessions"></div>
        </div>`;
 
@@ -825,25 +837,27 @@ async function _csLoadCodexSessions(agentType) {
 
   try {
     const res = await window.cogseed.invoke('sessionImport.listCodexSessions');
-    const sessions = (res && res.sessions) || [];
+    const recentSessions = (res && res.sessions) || [];
 
-    if (!sessions.length) {
+    console.log('[ONBOARDING] Codex sessions - total count:', recentSessions.length);
+    console.log('[ONBOARDING] Codex sessions - first 3:', recentSessions.slice(0, 3));
+
+    if (!recentSessions.length) {
       container.innerHTML = '<div class="cs-state">未找到 Codex 历史会话。如果你使用过 Codex，会话文件应在 ~/.codex/sessions/ 目录下。</div>';
       _csUpdateAssetCount(agentType, 'sessions', 0);
       return;
     }
 
-    _csUpdateAssetCount(agentType, 'sessions', sessions.length);
+    _csUpdateAssetCount(agentType, 'sessions', recentSessions.length);
 
-    // Render sessions with checkboxes. Default: show first 3, collapse the rest.
-    const sessionRows = sessions.map((s, idx) => {
+    // Render sessions with checkboxes. Show all sessions (no collapse), scrollable container.
+    const sessionRows = recentSessions.map((s, idx) => {
       const time = s.createdAt ? new Date(s.createdAt).toLocaleString('zh-CN', {
         month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'
       }) : '';
       const cwdLabel = s.cwd ? `<small>${_csEsc(s.cwd)}</small>` : '';
-      const hidden = idx >= 3 ? ' style="display:none"' : '';
       return `
-        <div class="cs-src cs-collapsible-item"${hidden} data-session-id="${_csEsc(s.filePath)}">
+        <div class="cs-src" data-session-id="${_csEsc(s.filePath)}">
           <input type="checkbox" disabled />
           <div class="s-ico">${CS_TERMINAL_SVG}</div>
           <div>
@@ -854,13 +868,10 @@ async function _csLoadCodexSessions(agentType) {
         </div>`;
     }).join('');
 
-    const toggleBtn = sessions.length > 3
-      ? `<button type="button" class="cs-show-more" onclick="_csToggleShowMore(this, ${sessions.length})">+ 还有 ${sessions.length - 3} 个</button>`
-      : '';
-
-    container.innerHTML = sessionRows + toggleBtn +
+    // Import action bar (no toggle button, all sessions visible in scrollable container)
+    container.innerHTML = `<div class="cs-session-scroll">${sessionRows}</div>` +
       `<div class="cs-import-bar">
-         <button type="button" class="cs-import-btn" onclick="_csImportCodexSessions('${_csEsc(agentType)}')">导入所选会话</button>
+         <button type="button" class="cs-import-btn" onclick="_csImportCodexSessions('${_csEsc(agentType)}')">导入所选会话（最多 3 条）</button>
          <div class="cs-import-result" id="cs-import-result-${_csEsc(agentType)}-sessions"></div>
        </div>`;
 
@@ -879,7 +890,7 @@ async function _csLoadCodexSessions(agentType) {
       });
     });
 
-    _obLog.info('loaded Codex sessions', { count: sessions.length });
+    _obLog.info('loaded Codex sessions', { count: recentSessions.length });
   } catch (err) {
     const msg = (err && err.message) || String(err);
     _obLog.warn('failed to load Codex sessions', { error: msg });
@@ -900,6 +911,11 @@ async function _csImportClaudeSessions(agentType) {
   const result = bar ? bar.querySelector('.cs-import-result') : null;
   if (!selected.length) {
     if (result) result.textContent = '请先勾选要导入的会话';
+    return;
+  }
+  // Enforce 3-session limit.
+  if (selected.length > 3) {
+    if (result) result.textContent = '一次最多只能导入 3 条会话，请减少勾选数量';
     return;
   }
   if (btn) { btn.disabled = true; }
@@ -925,6 +941,11 @@ async function _csImportClaudeSessions(agentType) {
       if (res && res.conversationId) {
         ok++;
         _csImportedConversationIds.push(res.conversationId);
+        _obLog.info('session imported successfully', {
+          conversationId: res.conversationId,
+          totalImported: _csImportedConversationIds.length,
+          allIds: _csImportedConversationIds
+        });
         if (res.cognitions) {
           cognitions += (res.cognitions.personal || 0) + (res.cognitions.rule || 0) + (res.cognitions.template || 0);
         }
@@ -945,7 +966,7 @@ async function _csImportClaudeSessions(agentType) {
       paint();
     }
   });
-  if (btn) { btn.disabled = false; btn.textContent = '导入所选会话'; }
+  if (btn) { btn.disabled = false; btn.textContent = '导入所选会话（最多 3 条）'; }
   if (result) {
     result.textContent = `导入完成：成功 ${ok} 个${failed ? `，失败 ${failed} 个` : ''}${cognitions ? `，提取 ${cognitions} 条候选认知` : ''}`;
   }
@@ -990,6 +1011,11 @@ async function _csImportCodexSessions(agentType) {
     if (result) result.textContent = '请先勾选要导入的会话';
     return;
   }
+  // Enforce 3-session limit.
+  if (selected.length > 3) {
+    if (result) result.textContent = '一次最多只能导入 3 条会话，请减少勾选数量';
+    return;
+  }
   if (btn) { btn.disabled = true; }
   const total = selected.length;
   let ok = 0, failed = 0, done = 0;
@@ -1028,7 +1054,7 @@ async function _csImportCodexSessions(agentType) {
       paint();
     }
   });
-  if (btn) { btn.disabled = false; btn.textContent = '导入所选会话'; }
+  if (btn) { btn.disabled = false; btn.textContent = '导入所选会话（最多 3 条）'; }
   if (result) {
     result.textContent = `导入完成：成功 ${ok} 个${failed ? `，失败 ${failed} 个` : ''}`;
   }
@@ -1631,6 +1657,12 @@ async function _csImportSelectedSessions(container) {
     return;
   }
 
+  // Limit: maximum 3 sessions per import
+  if (selected.length > 3) {
+    resultBox.innerHTML = '<div class="cs-state error">一次最多只能导入 3 个会话，请取消勾选多余的会话。</div>';
+    return;
+  }
+
   if (btn) btn.disabled = true;
   resultBox.innerHTML = `<div class="cs-extract-progress">正在导入 ${selected.length} 个会话…</div>`;
 
@@ -1876,6 +1908,12 @@ async function _csFinish() {
   const btn = document.getElementById('cs-ob-finish');
   if (btn) btn.disabled = true;
 
+  _obLog.info('_csFinish called', {
+    rolePicked: _csRolePicked,
+    importedCount: _csImportedConversationIds.length,
+    importedIds: _csImportedConversationIds
+  });
+
   // 候选认知已在导入时后台提取并存入候选池，留待用户首次打开导入会话时由
   // agent 主动呈现和确认，此处不再处理候选认知的 UI 确认和 reject/keep 逻辑。
 
@@ -2016,21 +2054,48 @@ async function _csFinish() {
   }
   document.body.classList.remove('cs-onboarding-active');
   const shell = document.getElementById('cs-onboarding');
-  if (shell) shell.style.display = 'none';
+  // Remove the shell entirely (not just hide it): the import modal reuses the
+  // shared `#cs-agent-list` container id, and a hidden shell would shadow it
+  // for getElementById. `_csObBuilt` resets so a re-triggered walkthrough
+  // rebuilds fresh.
+  if (shell) {
+    shell.remove();
+    _csObBuilt = false;
+  }
 
   // Imported sessions were materialized while the onboarding overlay hid the
   // main UI. Refresh the sidebar list now so they show up immediately (and,
   // when a role workspace was chosen, re-render the projects section that
   // hosts the bound conversations).
   await _csRefreshConversationList();
+
+  // After onboarding completes, start the interactive tour
+  // (for now, triggers on every launch; later will be gated per account)
+  if (typeof window.interactiveTour !== 'undefined' && window.interactiveTour.start) {
+    _obLog.info('starting interactive tour after onboarding');
+    // Small delay to let the conversation list render
+    setTimeout(() => {
+      window.interactiveTour.start();
+    }, 500);
+  }
 }
 
 function _csBuild() {
-  if (_csObBuilt) return;
+  console.log('[ONBOARDING DEBUG] _csBuild called, _csObBuilt =', _csObBuilt);
+  if (_csObBuilt) {
+    console.log('[ONBOARDING DEBUG] Already built, returning early');
+    return;
+  }
+  console.log('[ONBOARDING DEBUG] Building onboarding shell');
   const shell = document.createElement('div');
   shell.id = 'cs-onboarding';
+  console.log('[ONBOARDING DEBUG] Shell element created:', shell);
   shell.innerHTML = _csObShellHtml();
+  console.log('[ONBOARDING DEBUG] Shell innerHTML set, length:', shell.innerHTML.length);
+  console.log('[ONBOARDING DEBUG] Appending shell to body');
   document.body.appendChild(shell);
+  console.log('[ONBOARDING DEBUG] Shell appended. Checking if in DOM...');
+  console.log('[ONBOARDING DEBUG] getElementById result:', document.getElementById('cs-onboarding'));
 
   const toast = document.createElement('div');
   toast.id = 'cs-ob-toast';
@@ -2065,6 +2130,18 @@ function _csBuild() {
 
   shell.querySelector('#cs-ob-finish')?.addEventListener('click', () => { void _csFinish(); });
 
+  // Standalone mode: close import flow after importing sessions
+  shell.querySelector('#cs-step2-finish')?.addEventListener('click', () => {
+    _obLog.info('standalone import flow finished');
+    document.body.classList.remove('cs-onboarding-active');
+    if (shell) shell.style.display = 'none';
+    // Reset standalone mode
+    _csStandaloneMode = false;
+    // Refresh sidebar to show imported sessions
+    void _csRefreshConversationList();
+    _csToast('导入完成');
+  });
+
   _csObBuilt = true;
 }
 
@@ -2072,26 +2149,45 @@ function _csBuild() {
 // never block first paint. Only lifts the overlay when the machine-local
 // marker says the walkthrough has not been completed here yet.
 async function maybeStartOnboarding() {
+  console.log('[ONBOARDING DEBUG] maybeStartOnboarding called');
   _obLog.info('maybeStartOnboarding called');
-  console.log('[ONBOARDING DEBUG] maybeStartOnboarding called - FORCE SHOW MODE');
 
-  // TEMPORARY: Force show onboarding for testing new layout
-  console.log('[ONBOARDING DEBUG] FORCING onboarding to show (bypassing all checks)');
+  // TEMPORARY: Force show onboarding for testing new features (30-day filter, 3-session limit, space project creation)
+  console.log('[ONBOARDING DEBUG] Force showing onboarding');
+  // Reset standalone mode for full onboarding flow
+  _csStandaloneMode = false;
   _csBuild();
+  // Ensure normal flow buttons are visible
+  const shell = document.getElementById('cs-onboarding');
+  if (shell) {
+    const backBtn = shell.querySelector('.cs-step2-back');
+    const nextBtn = shell.querySelector('.cs-step2-next');
+    const finishBtn = shell.querySelector('.cs-step2-finish');
+    if (backBtn) backBtn.style.display = 'inline-flex';
+    if (nextBtn) nextBtn.style.display = 'inline-flex';
+    if (finishBtn) finishBtn.style.display = 'none';
+  }
+  console.log('[ONBOARDING DEBUG] Adding cs-onboarding-active class to body');
   document.body.classList.add('cs-onboarding-active');
+  console.log('[ONBOARDING DEBUG] Body classes:', document.body.className);
+  console.log('[ONBOARDING DEBUG] #cs-onboarding exists:', !!document.getElementById('cs-onboarding'));
+  console.log('[ONBOARDING DEBUG] #cs-onboarding computed display:',
+    document.getElementById('cs-onboarding') ? window.getComputedStyle(document.getElementById('cs-onboarding')).display : 'N/A');
+  console.log('[ONBOARDING DEBUG] Going to step 0');
   _csGoStep(0);
   _obLog.info('onboarding walkthrough FORCED (testing mode)');
+  console.log('[ONBOARDING DEBUG] Onboarding should now be visible');
   return;
 
-  /* Original logic - commented out for testing
+  // Original logic - commented out for testing
+  /*
   try {
     const res = await window.cogseed.invoke('prefs.getOnboarding');
     console.log('[ONBOARDING DEBUG] prefs.getOnboarding result:', res);
     if (res && res.completed === true) {
-      console.log('[ONBOARDING DEBUG] Onboarding already completed, skipping');
+      _obLog.info('onboarding already completed, skipping');
       return;
     }
-    console.log('[ONBOARDING DEBUG] Onboarding not completed, showing walkthrough');
   } catch (err) {
     // If we can't read the marker, err on the side of NOT trapping the user
     // behind a walkthrough that might loop; log and skip.
@@ -2101,9 +2197,11 @@ async function maybeStartOnboarding() {
   _csBuild();
   document.body.classList.add('cs-onboarding-active');
   _csGoStep(0);
-  _obLog.info('onboarding walkthrough shown (first run on this machine)');
+  _obLog.info('onboarding walkthrough started');
   */
 }
 
 // Expose for boot.js. Kept on window so classic-script load order doesn't matter.
-window.csOnboarding = { maybeStart: maybeStartOnboarding };
+window.csOnboarding = {
+  maybeStart: maybeStartOnboarding,
+};

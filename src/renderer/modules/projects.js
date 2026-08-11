@@ -85,6 +85,7 @@ _loadSpacesExpanded();
 // time across the whole sidebar.
 let _projectsInlineCreate = false;
 let _projectsInlineRenamePid = null;
+let _spaceInlineCreateSid = null;  // space_id when creating a project under a space
 
 // ── Public API: cache + render ──────────────────────────────────────────
 
@@ -225,6 +226,21 @@ function _renderInlineCreateRow() {
   `;
 }
 
+// Inline-create row for a project under a specific space. Visually nested
+// inside the space-group-children, same style as _renderInlineCreateRow but
+// with a data-space-create attribute so the handler knows which space to bind.
+function _renderSpaceInlineCreateRow(sid) {
+  const placeholder = escapeHtml(t('sidebar.project_create_placeholder'));
+  const safeSid = escapeHtml(sid);
+  return `
+    <div class="project-row project-row-create" data-space-create="${safeSid}">
+      <span class="project-icon">${_projectUiIconHtml('folder', 'project-folder-icon')}</span>
+      <input type="text" class="project-rename-input" id="space-project-create-input"
+             placeholder="${placeholder}" autocomplete="off" spellcheck="false" />
+    </div>
+  `;
+}
+
 // A collapsible space (角色/工作空间) header with its projects nested inside.
 // The header is a sibling of top-level project rows; its children reuse the
 // exact same _renderProjectRow markup so project behavior (open, expand,
@@ -237,20 +253,40 @@ function _renderSpaceGroup(sid, meta, projs, byPid) {
     ? `<span class="space-emoji">${escapeHtml(meta.icon)}</span>`
     : _projectUiIconHtml(expanded ? 'folder-open' : 'folder', 'space-folder-icon');
   const caret = expanded ? '▾' : '▸';
+  // "+" button only when expanded, to keep collapsed row compact and avoid
+  // accidental clicks on the space name (which toggles expand/collapse).
+  const addBtn = expanded
+    ? `<button type="button" class="space-add-project-btn" data-space-add="${safeSid}" title="${escapeHtml(t('spaces.new_project_btn', '新建项目'))}" aria-label="${escapeHtml(t('spaces.new_project_btn', '新建项目'))}">+</button>`
+    : '';
   let html = `
     <div class="space-group-row${expanded ? ' is-expanded' : ''}" data-space-id="${safeSid}">
       <span class="space-caret">${caret}</span>
       <span class="space-icon">${icon}</span>
       <span class="space-name" title="${safeName}">${safeName}</span>
+      ${addBtn}
     </div>`;
   if (expanded) {
     html += `<div class="space-group-children" data-space-children="${safeSid}">`;
+    // Inline-create row for this space (if active).
+    if (_spaceInlineCreateSid === sid) {
+      html += _renderSpaceInlineCreateRow(sid);
+    }
     for (const p of projs) {
       html += _renderProjectRow(p, byPid.get(p.project_id) || []);
     }
     html += '</div>';
   }
   return html;
+}
+
+function _renderSpaceInlineCreateRow(sid) {
+  const placeholder = escapeHtml(t('spaces.new_project_placeholder', '输入项目名称'));
+  return `
+    <div class="project-row project-create-row" data-space-create="${escapeHtml(sid)}">
+      <span class="project-icon">${_projectUiIconHtml('folder', 'project-folder-icon')}</span>
+      <input type="text" id="space-project-create-input" class="project-create-input"
+             placeholder="${placeholder}" autocomplete="off" spellcheck="false" />
+    </div>`;
 }
 
 function _renderProjectRow(p, convs) {
@@ -326,10 +362,26 @@ function _bindProjectsHandlers(container) {
   const createInput = container.querySelector('#project-create-input');
   if (createInput) _bindInlineCreateInput(createInput);
 
+  // Space inline-create input (nested under a space).
+  const spaceCreateInput = container.querySelector('#space-project-create-input');
+  if (spaceCreateInput) _bindSpaceInlineCreateInput(spaceCreateInput);
+
+  // Space "+" buttons: start inline-create flow for that space.
+  container.querySelectorAll('[data-space-add]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation(); // don't trigger space-group-row toggle
+      const sid = btn.dataset.spaceAdd;
+      if (!sid) return;
+      _startSpaceInlineCreate(sid);
+    });
+  });
+
   // Space group headers: click toggles the whole workspace open/closed.
   container.querySelectorAll('.space-group-row[data-space-id]').forEach((row) => {
     row.addEventListener('click', (e) => {
       e.stopPropagation();
+      // If clicking the "+" button, the button handler above already ran; don't toggle.
+      if (e.target.closest('[data-space-add]')) return;
       const sid = row.dataset.spaceId;
       if (!sid) return;
       _spacesExpanded[sid] = !_isSpaceExpanded(sid);
@@ -487,6 +539,114 @@ function _bindInlineCreateInput(input) {
         duration_ms: Math.round(performance.now() - startedAt),
       });
       _projectsTrackError('project_create', {
+        error_type: 'exception',
+      });
+      committed = false;
+      _showProjectInlineError(input, err && err.message);
+    }
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+  });
+  input.addEventListener('blur', () => commit(true));
+  input.addEventListener('input', () => {
+    _clearProjectInlineError(input);
+  });
+}
+
+// ── Space inline create ─────────────────────────────────────────────────
+
+function _startSpaceInlineCreate(sid) {
+  if (_spaceInlineCreateSid) return;
+  _projectsTrackClick('space_project_create_open', { space_id: sid });
+  _projectsInlineCreate = false;
+  _projectsInlineRenamePid = null;
+  _spaceInlineCreateSid = sid;
+  renderProjectsSection();
+  setTimeout(() => {
+    const input = document.getElementById('space-project-create-input');
+    if (input) input.focus();
+  }, 0);
+}
+
+function _cancelSpaceInlineCreate() {
+  if (!_spaceInlineCreateSid) return;
+  _spaceInlineCreateSid = null;
+  renderProjectsSection();
+}
+
+function _bindSpaceInlineCreateInput(input) {
+  input.addEventListener('click', (e) => e.stopPropagation());
+  if (typeof window.bindNameLimitControl === 'function') window.bindNameLimitControl(input);
+  const row = input.closest('[data-space-create]');
+  const sid = row && row.dataset.spaceCreate;
+  if (!sid) return;
+  let committed = false;
+  const commit = async (accept) => {
+    if (committed) return;
+    committed = true;
+    const name = _normaliseProjectNameFinal(input.value);
+    if (!accept || !name) {
+      _cancelSpaceInlineCreate();
+      return;
+    }
+    const startedAt = performance.now();
+    _projectsTrackClick('space_project_create_submit', { space_id: sid, name_length: name.length });
+    try {
+      // Create project, then bind it to the space.
+      const createRes = await window.orkas.invoke('projects.create', { name });
+      if (!createRes || !createRes.ok) {
+        _projectsTrackEvent('space_project_create_result', {
+          result: 'failure',
+          space_id: sid,
+          duration_ms: Math.round(performance.now() - startedAt),
+        });
+        committed = false;
+        _showProjectInlineError(input, createRes && createRes.error);
+        return;
+      }
+      const pid = createRes.project && createRes.project.project_id;
+      if (!pid) {
+        committed = false;
+        _showProjectInlineError(input, 'no project_id returned');
+        return;
+      }
+      const bindRes = await window.orkas.invoke('projects.bindSpace', { projectId: pid, spaceId: sid });
+      if (!bindRes || !bindRes.ok) {
+        _projectsTrackEvent('space_project_create_result', {
+          result: 'bind_failure',
+          space_id: sid,
+          project_id: pid,
+          duration_ms: Math.round(performance.now() - startedAt),
+        });
+        committed = false;
+        _showProjectInlineError(input, bindRes && bindRes.error);
+        return;
+      }
+      _projectsTrackEvent('space_project_create_result', {
+        result: 'success',
+        space_id: sid,
+        project_id: pid,
+        duration_ms: Math.round(performance.now() - startedAt),
+      });
+      // Auto-expand the new project and open its detail panel.
+      _projectsExpanded[pid] = true;
+      _saveProjectsExpanded();
+      _spaceInlineCreateSid = null;
+      await loadProjects(true);
+      if (typeof setView === 'function') {
+        setView('project', pid, { entryPoint: 'space_project_create' });
+      }
+    } catch (err) {
+      _projectsTrackEvent('space_project_create_result', {
+        result: 'failure',
+        space_id: sid,
+        duration_ms: Math.round(performance.now() - startedAt),
+      });
+      _projectsTrackError('space_project_create', {
+        space_id: sid,
         error_type: 'exception',
       });
       committed = false;

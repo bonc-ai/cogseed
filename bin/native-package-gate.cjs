@@ -183,6 +183,25 @@ function verifyNativePackagePayload(nodeModules, platform, arch, options = {}) {
     verified.push(`native:${spec.id}:${key}`);
   }
 
+  // node-pty ships TWO real payloads on install: the source-built
+  // `build/Release/pty.node` (declared in the contract above) AND the
+  // electron-ABI prebuilt under `bin/<platform>-<arch>-<abi>/node-pty.node`
+  // (downloaded by ensure-node-pty-electron-abi). The prebuilt dir name
+  // carries the ABI number, which changes per Electron major — scan the
+  // actual directory instead of pinning a version.
+  const nodePtyBinRoot = path.join(nodeModules, 'node-pty', 'bin');
+  if (fs.existsSync(nodePtyBinRoot)) {
+    for (const entry of fs.readdirSync(nodePtyBinRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const absDir = path.join(nodePtyBinRoot, entry.name);
+      for (const file of fs.readdirSync(absDir)) {
+        if (isNativePayloadFile(file)) {
+          declared.add(slash(path.join('node-pty', 'bin', entry.name, file)));
+        }
+      }
+    }
+  }
+
   const actual = collectNativePayloadFiles(nodeModules).sort();
   const unexpected = actual.filter((relativePath) => !declared.has(relativePath));
   if (unexpected.length > 0) {

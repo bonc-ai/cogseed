@@ -1,7 +1,10 @@
 // ─── Boot ─────────────────────────────────────────────────────────────────
 const _bootLog = createLogger('boot');
 async function initAuth() {
-  bootApp();
+  bootApp().catch((err) => {
+    console.error('[BOOT FATAL] bootApp failed:', err);
+    _bootLog.error('bootApp failed', { error: (err && err.message) || String(err), stack: err && err.stack });
+  });
 }
 
 // ─── Boot performance guardrails ────────────────────────────────────────────
@@ -142,6 +145,9 @@ async function bootApp() {
   } else {
     console.log('[BOOT DEBUG] window.csOnboarding not available or maybeStart not a function');
   }
+
+  // Interactive tour is started by onboarding.js after completion
+  // (removed duplicate auto-start to avoid "tour already running" conflict)
   if (typeof _consumePendingTaskNotificationConversation === 'function') {
     _consumePendingTaskNotificationConversation();
   }
@@ -569,3 +575,6 @@ function setView(view, cid, opts = {}) {
   }
   if (typeof renderProjectsSection === 'function') renderProjectsSection();
 }
+
+// Expose setView to window for interactive tour
+window.setView = setView;
