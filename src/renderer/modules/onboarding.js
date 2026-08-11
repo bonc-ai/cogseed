@@ -426,8 +426,8 @@ function _csLoadAgentAssets(agentType) {
   } else if (agentType === 'opencode') {
     void _csLoadOpencodeSessions(agentType);
     _csFillAssetSection(agentType, 'skills', `<div class="cs-state">${_csEsc(label)} 的技能读取暂未接入。</div>`);
-    _csFillAssetSection(agentType, 'memory', `<div class="cs-state">${_csEsc(label)} 的记忆读取暂未接入。</div>`);
-    _csFillAssetSection(agentType, 'tasks', `<div class="cs-state">${_csEsc(label)} 的定时任务读取暂未接入。</div>`);
+    void _csLoadOpencodeMemory(agentType);
+    void _csLoadOpencodeTasks(agentType);
   } else {
     _csFillAssetSection(agentType, 'sessions', `<div class="cs-state">${_csEsc(label)} 的会话读取暂未接入。</div>`);
     _csFillAssetSection(agentType, 'skills', `<div class="cs-state">${_csEsc(label)} 的技能读取暂未接入。</div>`);
@@ -1480,7 +1480,8 @@ async function _csLoadClaudeMemory(agentType) {
     const total = (res && res.totalEntries) || 0;
 
     if (!sources.length) {
-      container.innerHTML = '<div class="cs-state">未检测到任何 Claude Code 记忆来源。</div>';
+      container.innerHTML =
+        '<div class="cs-state">未检测到 Claude Code 记忆文件。记忆来自 Claude Code 使用中自动生成的 CLAUDE.md、MEMORY.md、项目 memory 等文件——先用 Claude Code 工作一段时间，或手动在 ~/.claude/ 下创建这些文件后，这里会出现可导入的记忆。</div>';
       return;
     }
 
@@ -1648,6 +1649,164 @@ async function _csImportCodexMemory(container) {
 function _csRenderNoTasks(agentType) {
   _csFillAssetSection(agentType, 'tasks',
     '<div class="cs-state">Claude Code 没有原生的定时任务存储，暂无可导入的定时任务。你可以在本应用的「定时任务」模块里直接新建。</div>');
+}
+
+// ── OpenCode memory: config preferences from opencode.json/.jsonc ─────────
+async function _csLoadOpencodeMemory(agentType) {
+  const container = _csFillAssetSection(agentType, 'memory', '<div class="cs-state loading">正在读取 OpenCode 配置…</div>');
+  if (!container) return;
+
+  try {
+    const res = await window.orkas.invoke('sessionImport.readOpencodeMemory');
+    const present = res && res.present;
+    const entries = (res && res.entries) || [];
+
+    if (!present || !entries.length) {
+      const reasonText = res && res.reason === 'not_found'
+        ? '未找到 opencode.json / opencode.jsonc 配置文件'
+        : '配置文件为空（没有可导入的模型/指令偏好）';
+      container.innerHTML =
+        `<div class="cs-state">OpenCode 配置记忆（~/.config/opencode/opencode.json）${reasonText}。` +
+        `配置了模型提供商或全局指令后，这里会出现可导入的偏好。</div>`;
+      return;
+    }
+
+    const sample = entries.slice(0, 5).map((e) => `<div>${_csEsc(e)}</div>`).join('');
+    const more = entries.length > 5 ? '<div>…</div>' : '';
+
+    container.innerHTML =
+      `<div class="cs-state">从 OpenCode 配置检测到 ${entries.length} 条偏好。导入后进入共享知识库。</div>` +
+      `<div class="cs-import-lines">${sample}${more}</div>` +
+      `<div class="cs-import-bar">
+         <button type="button" class="cs-codex-mem-import-btn" data-agent="${_csEsc(agentType)}">导入 OpenCode 配置</button>
+         <div class="cs-import-result cs-codex-mem-result" data-agent="${_csEsc(agentType)}"></div>
+       </div>`;
+
+    const btn = container.querySelector('.cs-codex-mem-import-btn');
+    if (btn) btn.addEventListener('click', () => void _csImportCodexMemory(container));
+
+    _obLog.info('previewed OpenCode memory', { count: entries.length });
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    _obLog.warn('failed to read OpenCode memory', { error: msg });
+    container.innerHTML = `<div class="cs-state err">读取 OpenCode 配置失败：${_csEsc(msg)}</div>`;
+  }
+}
+
+// OpenCode has no scheduled-task feature (its `todo` table is an in-session
+// task checklist). We surface the REAL todos and import them as one-time
+// tasks — honestly labeled, never a fabricated cadence.
+async function _csLoadOpencodeTasks(agentType) {
+  const container = _csFillAssetSection(agentType, 'tasks', '<div class="cs-state loading">正在读取 OpenCode 任务清单…</div>');
+  if (!container) return;
+
+  try {
+    const res = await window.orkas.invoke('sessionImport.listOpencodeTodos');
+    const todos = (res && res.todos) || [];
+
+    if (!todos.length) {
+      container.innerHTML =
+        '<div class="cs-state">OpenCode 没有定时任务功能；其会话内任务清单（todo）也是空的。</div>';
+      return;
+    }
+
+    const statusZh = (s) => (s === 'completed' ? '已完成' : (s === 'in_progress' ? '进行中' : _csEsc(s || '待办')));
+    const rows = todos.map((t, idx) => {
+      const hidden = idx >= 3 ? ' style="display:none"' : '';
+      const src = t.sessionTitle ? `<small>来自会话：${_csEsc(t.sessionTitle)}</small>` : '';
+      return `
+        <div class="cs-src cs-collapsible-item"${hidden} data-todo-id="${_csEsc(t.id)}">
+          <input type="checkbox" />
+          <div class="s-ico">${CS_TERMINAL_SVG}</div>
+          <div>
+            <strong>${_csEsc(t.content)}</strong>
+            ${src}
+          </div>
+          <small style="color:var(--cs-muted);white-space:nowrap;">${statusZh(t.status)}</small>
+        </div>`;
+    }).join('');
+
+    const toggleBtn = todos.length > 3
+      ? `<button type="button" class="cs-toggle-more">显示全部 ${todos.length} 条任务</button>`
+      : '';
+
+    container.innerHTML =
+      `<div class="cs-state">检测到 ${todos.length} 条 OpenCode 任务清单（todo，无定时调度）。勾选后导入为一次性任务，执行时间默认为 1 小时后，可在「任务」模块调整。</div>` +
+      rows + toggleBtn +
+      `<div class="cs-import-bar">
+         <button type="button" class="cs-import-btn" onclick="_csImportOpencodeTodos('${_csEsc(agentType)}')">导入所选任务</button>
+         <div class="cs-import-result"></div>
+       </div>`;
+
+    container.querySelectorAll('.cs-src input[type="checkbox"]').forEach((cb) => {
+      const row = cb.closest('.cs-src');
+      cb.addEventListener('change', () => row.classList.toggle('selected', cb.checked));
+      row.addEventListener('click', (ev) => {
+        if (ev.target === cb) return;
+        cb.checked = !cb.checked;
+        row.classList.toggle('selected', cb.checked);
+      });
+    });
+
+    const moreBtn = container.querySelector('.cs-toggle-more');
+    if (moreBtn) {
+      moreBtn.addEventListener('click', () => {
+        const items = container.querySelectorAll('.cs-collapsible-item');
+        const allVisible = Array.from(items).every((el) => el.style.display !== 'none');
+        items.forEach((el, idx) => { if (idx >= 3) el.style.display = allVisible ? 'none' : ''; });
+        moreBtn.textContent = allVisible ? `显示全部 ${todos.length} 条任务` : '收起';
+      });
+    }
+
+    const badge = document.getElementById(`cs-count-${agentType}-tasks`);
+    if (badge) badge.textContent = `(${todos.length})`;
+
+    _obLog.info('loaded OpenCode todos', { count: todos.length });
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    _obLog.warn('failed to load OpenCode todos', { error: msg });
+    container.innerHTML = `<div class="cs-state err">读取 OpenCode 任务清单失败：${_csEsc(msg)}</div>`;
+  }
+}
+
+// Import the user-selected OpenCode todos as one-time tasks.
+async function _csImportOpencodeTodos(agentType) {
+  const container = _csFillAssetSection(agentType, 'tasks');
+  if (!container) return;
+  const rows = [...container.querySelectorAll('.cs-src[data-todo-id]')];
+  const selected = rows
+    .filter((r) => r.querySelector('input[type="checkbox"]')?.checked)
+    .map((r) => r.dataset.todoId)
+    .filter(Boolean);
+  const bar = container.querySelector('.cs-import-bar');
+  const btn = bar ? bar.querySelector('.cs-import-btn') : null;
+  const resultBox = bar ? bar.querySelector('.cs-import-result') : null;
+  if (!selected.length) {
+    if (resultBox) resultBox.innerHTML = '<div class="cs-state">请先勾选要导入的任务。</div>';
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = '导入中…'; }
+  if (resultBox) resultBox.innerHTML = '<div class="cs-state loading">正在导入所选任务…</div>';
+  try {
+    const res = await window.orkas.invoke('sessionImport.importOpencodeTodos', { todoIds: selected });
+    const r = res || {};
+    const parts = [`成功 ${r.imported || 0} 条`];
+    if (r.skipped) parts.push(`跳过 ${r.skipped} 条`);
+    if (r.failed) parts.push(`失败 ${r.failed} 条`);
+    resultBox.innerHTML =
+      `<div class="cs-state">导入完成：${parts.join('，')}。已作为一次性任务加入「任务」模块（默认 1 小时后执行，可调整）。</div>`;
+    selected.forEach((id) => {
+      const row = container.querySelector(`.cs-src[data-todo-id="${id}"]`);
+      if (row) { row.classList.add('done'); const cb = row.querySelector('input[type="checkbox"]'); if (cb) cb.checked = false; }
+    });
+    _obLog.info('opencode todos import finished', { selected: selected.length, result: r });
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    _obLog.warn('opencode todos import failed', { error: msg });
+    if (resultBox) resultBox.innerHTML = `<div class="cs-state err">导入任务失败：${_csEsc(msg)}</div>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '导入所选任务'; }
+  }
 }
 
 // Format an epoch-ms timestamp as a short local datetime, or a dash when null.

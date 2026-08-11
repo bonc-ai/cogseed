@@ -613,6 +613,90 @@ describe('session_import › Codex import', () => {
     expect(sessions[1].title).toContain('写一个测试');
   });
 
+  // Codex writes `input_text` (Responses API). Matching only `text` left every
+  // real session titled 'Untitled'.
+  it('titles sessions from input_text content, skipping synthetic preamble turns', async () => {
+    writeCodexSession('2026-08-09', [
+      JSON.stringify({ type: 'session_meta', timestamp: '2026-08-09T12:00:00Z', payload: { cwd: '/test/dir' } }),
+      JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: '<environment_context>\ncwd: /test/dir\n</environment_context>' }] } }),
+      JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: '# AGENTS.md instructions for /test/dir\n\nbe concise' }] } }),
+      JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: '真正的第一个问题' }] } }),
+    ].join('\n'));
+
+    const { listCodexSessions } = await import('../../../src/main/features/session_import/codex-import');
+    const [session] = await listCodexSessions(homeDir);
+
+    expect(session.title).toBe('真正的第一个问题');
+  });
+
+  it('unwraps resumed-replay and file-mention envelopes in titles', async () => {
+    writeCodexSession('2026-08-09', [
+      JSON.stringify({ type: 'session_meta', timestamp: '2026-08-09T12:00:00Z', payload: {} }),
+      JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: '[1] user: \n# Files mentioned by the user:\n\n## a.xlsx: /tmp/a.xlsx\n\n## My request for Codex:\n这个表格我看不懂' }] } }),
+    ].join('\n'));
+
+    const { listCodexSessions } = await import('../../../src/main/features/session_import/codex-import');
+    const [session] = await listCodexSessions(homeDir);
+
+    expect(session.title).toBe('这个表格我看不懂');
+  });
+
+  it('falls back to the project directory when no typed prompt exists', async () => {
+    writeCodexSession('2026-08-09', [
+      JSON.stringify({ type: 'session_meta', timestamp: '2026-08-09T12:00:00Z', payload: { cwd: '/Users/test/my-project' } }),
+      JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: '<environment_context>\ncwd: /Users/test/my-project\n</environment_context>' }] } }),
+    ].join('\n'));
+
+    const { listCodexSessions } = await import('../../../src/main/features/session_import/codex-import');
+    const [session] = await listCodexSessions(homeDir);
+
+    expect(session.title).toBe('my-project');
+  });
+
+  // Transcripts routinely exceed the 256 KiB config-file cap; sharing it
+  // rejected the majority of real sessions as `too_large`.
+  it('reads transcripts far larger than the config-file cap', async () => {
+    const filler = 'x'.repeat(2000);
+    const lines = [
+      JSON.stringify({ type: 'session_meta', timestamp: '2026-08-09T12:00:00Z', payload: { cwd: '/test/dir' } }),
+      JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: '第一个真实问题' }] } }),
+    ];
+    // ~1.2 MB of assistant turns: well past 256 KiB, well under the session cap.
+    for (let i = 0; i < 600; i++) {
+      lines.push(JSON.stringify({ type: 'response_item', payload: { role: 'assistant', content: [{ type: 'output_text', text: `${i} ${filler}` }] } }));
+    }
+    writeCodexSession('2026-08-09', lines.join('\n'));
+
+    const { listCodexSessions, readCodexSessionTranscript } = await import('../../../src/main/features/session_import/codex-import');
+    const [session] = await listCodexSessions(homeDir);
+    expect(fs.statSync(session.filePath).size).toBeGreaterThan(256 * 1024);
+
+    const result = await readCodexSessionTranscript(session.filePath);
+    expect(result.ok).toBe(true);
+    expect(result.reason).toBeUndefined();
+    expect(result.transcript?.turns[0]).toMatchObject({ role: 'user', content: '第一个真实问题' });
+    expect(result.transcript?.turns.length).toBeGreaterThan(500);
+  });
+
+  // Codex assistant turns are `output_text`; dropping them imported the user's
+  // questions with none of the replies.
+  it('keeps assistant output_text turns in the transcript', async () => {
+    writeCodexSession('2026-08-09', [
+      JSON.stringify({ type: 'session_meta', timestamp: '2026-08-09T12:00:00Z', payload: { cwd: '/test/dir' } }),
+      JSON.stringify({ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: '这个函数怎么改' }] } }),
+      JSON.stringify({ type: 'response_item', payload: { role: 'assistant', content: [{ type: 'output_text', text: '先把副作用提出来' }] } }),
+    ].join('\n'));
+
+    const { readCodexSessionTranscript, listCodexSessions } = await import('../../../src/main/features/session_import/codex-import');
+    const [session] = await listCodexSessions(homeDir);
+    const result = await readCodexSessionTranscript(session.filePath);
+
+    expect(result.transcript?.turns).toEqual([
+      { role: 'user', content: '这个函数怎么改' },
+      { role: 'assistant', content: '先把副作用提出来' },
+    ]);
+  });
+
   it('extracts facts from config.toml', async () => {
     const configContent = `
 model_provider = "custom"

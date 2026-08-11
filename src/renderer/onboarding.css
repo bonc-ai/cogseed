@@ -112,10 +112,13 @@ body.cs-onboarding-active .app-container{display:none !important}
 
 /* Give the Agent list a fixed max-height so it scrolls internally when tall,
  * keeping the whole panel (title + hint + list + actions) within one screen. */
-#cs-onboarding .cs-panel[data-cspanel="2"] .cs-list{max-height:320px;overflow-y:auto}
+#cs-onboarding .cs-panel[data-cspanel="2"] .cs-list{max-height:340px;overflow-y:auto}
 
 /* Collapse the asset panes (session list area) shorter so import button stays visible */
 #cs-onboarding .cs-panel[data-cspanel="2"] .cs-asset-panes{max-height:280px}
+
+/* Remove sticky from action bar — now the whole panel fits in one screen. */
+#cs-onboarding .cs-panel[data-cspanel="2"] .cs-actions{margin-top:20px}
 
 /* Remove sticky from action bar — now the whole panel fits in one screen. */
 #cs-onboarding .cs-panel[data-cspanel="2"] .cs-actions{margin-top:20px}
@@ -164,6 +167,9 @@ body.cs-onboarding-active .app-container{display:none !important}
   min-height:200px;max-height:460px;overflow-y:auto}
 #cs-onboarding .cs-asset-section-body{display:none;background:#fff}
 #cs-onboarding .cs-asset-section-body.active{display:block}
+
+/* Session scroll container needs bottom padding so sticky import bar doesn't cover content */
+#cs-onboarding .cs-session-scroll{padding-bottom:20px}
 
 /* Show more button */
 #cs-onboarding .cs-show-more{display:block;width:100%;padding:10px 16px;background:var(--cs-line-soft);
@@ -279,13 +285,14 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .cs-session-scroll::-webkit-scrollbar-thumb:hover{background:var(--cs-muted)}
 
 /* Session import action bar — now sticky at bottom so always visible */
-#cs-onboarding .cs-import-bar{position:sticky;bottom:0;display:flex;flex-direction:column;gap:10px;
-  padding:14px 16px;border-top:1px solid var(--cs-line);background:#fff;z-index:2}
+#cs-onboarding .cs-import-bar{position:sticky;bottom:20px;display:flex;flex-direction:column;gap:6px;
+  padding:14px 16px;border-top:1px solid var(--cs-line);background:#fff;z-index:2;
+  max-height:200px;overflow-y:auto;margin-bottom:16px}
 #cs-onboarding .cs-import-btn{align-self:flex-start;display:inline-flex;align-items:center;gap:7px;
   padding:9px 18px;border-radius:var(--cs-radius);background:var(--cs-grad);color:#fff;font-weight:650;font-size:12.5px}
 #cs-onboarding .cs-import-btn:hover{background:var(--cs-forest-deep)}
 #cs-onboarding .cs-import-btn:disabled{opacity:.5;cursor:not-allowed}
-#cs-onboarding .cs-import-result{font-size:12px;color:var(--cs-muted);line-height:1.6}
+#cs-onboarding .cs-import-result{font-size:12px;color:var(--cs-muted);line-height:1.6;margin-top:6px}
 #cs-onboarding .cs-import-lines{margin-top:8px;display:flex;flex-direction:column;gap:4px}
 #cs-onboarding .cs-import-lines>div{padding:6px 10px;border-radius:var(--cs-radius);background:var(--cs-line-soft);font-size:11.5px;color:var(--cs-ink-soft)}
 

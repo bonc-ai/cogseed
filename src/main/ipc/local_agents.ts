@@ -58,6 +58,14 @@ import {
   importCodexSession,
 } from '../features/session_import/codex-import.js';
 import { listOpencodeSessions } from '../features/local_agents/opencode_sessions.js';
+import {
+  readOpencodeMemory,
+  importOpencodeMemory,
+} from '../features/local_agents/opencode_memory.js';
+import {
+  listOpencodeTodos,
+  importOpencodeTodos,
+} from '../features/local_agents/opencode_tasks.js';
 
 const log = createLogger('ipc:local_agents');
 
@@ -392,6 +400,47 @@ export const invokeHandlers = {
       return { ok: false, sessions: [], error: result.error };
     }
     return { ok: true, sessions: result.sessions, totalCount: result.totalCount };
+  },
+
+  /**
+   * Preview OpenCode config preferences (opencode.json/.jsonc) — READ-ONLY.
+   * Empty config is an honest `present:false` + `reason:'empty'` state.
+   */
+  'sessionImport.readOpencodeMemory': async () => {
+    return readOpencodeMemory();
+  },
+
+  /**
+   * Import OpenCode config preferences into the shared memory tier.
+   * Per-entry idempotent via the memory guard.
+   */
+  'sessionImport.importOpencodeMemory': async () => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importOpencodeMemory(userId);
+  },
+
+  /**
+   * List OpenCode todos (in-session task checklist) — READ-ONLY.
+   * OpenCode has no scheduled-task store; todo is a checklist, and imports
+   * are one-time tasks. Empty array = no todos.
+   */
+  'sessionImport.listOpencodeTodos': async () => {
+    const todos = await listOpencodeTodos();
+    return { todos };
+  },
+
+  /**
+   * Import selected OpenCode todos as one-time tasks in the auto-task module.
+   * `todoIds` omitted = import all. Idempotent per (title, content).
+   */
+  'sessionImport.importOpencodeTodos': async ({ todoIds }: { todoIds?: unknown } = {}) => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const ids = Array.isArray(todoIds)
+      ? todoIds.filter((x): x is string => typeof x === 'string')
+      : undefined;
+    return importOpencodeTodos(userId, ids);
   },
 
   /**
