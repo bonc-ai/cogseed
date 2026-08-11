@@ -113,6 +113,7 @@
       }
       if (action === 'connection.connect' && typeof window.openFeishuConnection === 'function') {
         await window.openFeishuConnection();
+        await refresh();
       }
       return;
     }
@@ -166,6 +167,9 @@
       if (input.checked) state.selectedIds.add(id); else state.selectedIds.delete(id);
     });
     window.addEventListener('i18n-change', render);
+    if (window.orkas && typeof window.orkas.onPushEvent === 'function') {
+      window.orkas.onPushEvent('messaging:instance-status', () => { void refresh(); });
+    }
   }
 
   window.initTouchpointSettings = async function initTouchpointSettings() {
