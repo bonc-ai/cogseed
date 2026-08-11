@@ -42,6 +42,12 @@ export interface RecallCandidateRecord extends RecallJsonRecord {
   sourceRefs: CognitionSourceRef[];
   learningSignal?: KstarLearningSignal;
   captureKey?: string;
+  /**
+   * Recognizer-supplied belief in this judgment, 0..1. Stays absent when the
+   * recognizer gives no score — a fabricated default would read as evidence of
+   * confidence the system does not have.
+   */
+  confidence?: number;
   promotedAssetId?: string;
   decisionNote?: string;
   createdAt: string;
@@ -69,6 +75,14 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   status: 'active' | 'paused' | 'revoked';
   maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated';
   version: string;
+  /** Carried over from the promoted candidate; absent when it had none. */
+  confidence?: number;
+  /**
+   * Conversations this asset was learned from, derived from the candidate's
+   * conversation-kind source refs. Both fields are optional so records written
+   * before they existed still load.
+   */
+  sourceSessionIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -82,6 +96,35 @@ export interface SaveRecallCandidateInput {
   sourceRefs: unknown[];
   learningSignal?: KstarLearningSignal;
   captureKey?: string;
+  confidence?: number;
+}
+
+const MAX_SOURCE_SESSION_IDS = 50;
+
+/**
+ * Validate a recognizer confidence score.
+ *
+ * Absent stays absent. A present-but-unusable value throws rather than being
+ * coerced: silently rounding NaN or 1.5 into something plausible would put a
+ * number the recognizer never produced in front of the user.
+ */
+function optionalConfidence(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error('invalid confidence');
+  }
+  return Math.round(value * 100) / 100;
+}
+
+/** Conversations behind a candidate, in first-seen order and capped. */
+function sourceSessionIdsFrom(refs: CognitionSourceRef[]): string[] {
+  const ids: string[] = [];
+  for (const ref of refs) {
+    if (ref.kind !== 'conversation' || ids.includes(ref.id)) continue;
+    ids.push(ref.id);
+    if (ids.length >= MAX_SOURCE_SESSION_IDS) break;
+  }
+  return ids;
 }
 
 function boundedText(value: unknown, field: string, max: number, required = false): string | undefined {
@@ -226,6 +269,7 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
   const existing = (await listRecallCandidates(userId)).find((candidate) => fingerprint(candidate) === fingerprint(candidateDraft));
   if (existing) return existing;
 
+  const confidence = optionalConfidence(input.confidence);
   const now = new Date().toISOString();
   const record: RecallCandidateRecord = {
     schemaVersion: 1,
@@ -241,6 +285,7 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
     sourceRefs,
     ...(learningSignal ? { learningSignal } : {}),
     ...(captureKey ? { captureKey } : {}),
+    ...(confidence !== undefined ? { confidence } : {}),
     createdAt: now,
     updatedAt: now,
   };
@@ -284,6 +329,8 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
   const uncertainty = boundedText(input.uncertainty, 'uncertainty', 1_000);
   const suggestedScope = boundedText(input.suggestedScope, 'suggested scope', 500, true)!;
   const suggestedType = requireAssetType(input.suggestedType);
+  const confidence = optionalConfidence(input.confidence);
+  // develop 已把写路径切到 ...ForWrite（比 dev/shiyuxuan 的 normalizeCognitionSourceRefs 新），保留新的。
   const sourceRefs = normalizeCognitionSourceRefsForWrite(input.sourceRefs);
   if (!sourceRefs.length) throw new Error('candidate evidence is required');
   const learningSignal = normalizeLearningSignal(input.learningSignal);
@@ -294,7 +341,12 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
     if (!raw) throw new Error('recall candidate not found');
     const current = asCandidate(raw);
     if (current.status === 'rejected' || current.status === 'promoted') throw new Error('recall candidate is terminal');
-    return { ...current, judgment, ...(summary ? { summary } : {}), ...(uncertainty ? { uncertainty } : {}), suggestedType, suggestedScope, sourceRefs, ...(learningSignal ? { learningSignal } : current.learningSignal ? { learningSignal: current.learningSignal } : {}), updatedAt: new Date().toISOString() };
+    // An omitted confidence clears any previous score rather than keeping a
+    // stale one attached to a judgment that has since been edited.
+    // learningSignal 走的是相反的约定：不传就沿用旧值（它记的是评估结果，
+    // 不随判断文本编辑而失效），所以这里两种语义并存。
+    const { confidence: _previous, ...rest } = current;
+    return { ...rest, judgment, ...(summary ? { summary } : {}), ...(uncertainty ? { uncertainty } : {}), suggestedType, suggestedScope, sourceRefs, ...(learningSignal ? { learningSignal } : current.learningSignal ? { learningSignal: current.learningSignal } : {}), ...(confidence !== undefined ? { confidence } : {}), updatedAt: new Date().toISOString() };
   });
   return asCandidate(updated);
 }
@@ -324,6 +376,7 @@ export async function promoteRecallCandidate(
     if (candidate.status === 'promoted') return candidate;
     if (candidate.status === 'rejected') throw new Error('recall candidate is terminal');
     const now = new Date().toISOString();
+    const sourceSessionIds = sourceSessionIdsFrom(candidate.sourceRefs);
     const asset: RecallAbilityAssetRecord = {
       schemaVersion: 1,
       ownerId: userId,
@@ -340,6 +393,8 @@ export async function promoteRecallCandidate(
       status: 'active',
       maturity: 'seed',
       version: '1',
+      ...(candidate.confidence !== undefined ? { confidence: candidate.confidence } : {}),
+      ...(sourceSessionIds.length ? { sourceSessionIds } : {}),
       createdAt: now,
       updatedAt: now,
     };

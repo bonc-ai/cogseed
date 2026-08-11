@@ -188,3 +188,142 @@ describe('Recall candidate governance', () => {
     await expect(candidates.readRecallCandidate('user-b', candidate.id)).rejects.toThrow(/not found/i);
   });
 });
+
+describe('Recall candidate confidence', () => {
+  it('keeps confidence absent when the recognizer supplies none', async () => {
+    const candidates = await service();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Summarize before dispatching a long deliverable.',
+      suggestedType: 'skill_method',
+      suggestedScope: 'agent:writer',
+      sourceRefs: [{ kind: 'conversation', id: 'conv-1' }],
+    });
+
+    // Absent must stay absent — a default would read as a score the recognizer
+    // never produced.
+    expect('confidence' in candidate).toBe(false);
+
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id);
+    expect('confidence' in asset).toBe(false);
+  });
+
+  it('carries a supplied confidence through to the promoted asset', async () => {
+    const candidates = await service();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Prefer table output for comparisons.',
+      suggestedType: 'rule',
+      suggestedScope: 'global',
+      sourceRefs: [{ kind: 'conversation', id: 'conv-1' }],
+      confidence: 0.8125,
+    });
+
+    expect(candidate.confidence).toBe(0.81); // rounded to two decimals
+
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id);
+    expect(asset.confidence).toBe(0.81);
+  });
+
+  it('rejects an unusable confidence instead of coercing it', async () => {
+    const candidates = await service();
+    const base = {
+      suggestedType: 'rule' as const,
+      suggestedScope: 'global',
+      sourceRefs: [{ kind: 'conversation', id: 'conv-1' }],
+    };
+
+    for (const bad of [1.5, -0.1, Number.NaN, Number.POSITIVE_INFINITY, '0.5' as unknown as number]) {
+      await expect(
+        candidates.saveRecallCandidate('user-a', { ...base, judgment: `judgment ${String(bad)}`, confidence: bad }),
+      ).rejects.toThrow(/invalid confidence/i);
+    }
+
+    expect(await candidates.listRecallCandidates('user-a')).toEqual([]);
+  });
+
+  it('clears a stale confidence when an edit omits it', async () => {
+    const candidates = await service();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Original judgment.',
+      suggestedType: 'rule',
+      suggestedScope: 'global',
+      sourceRefs: [{ kind: 'conversation', id: 'conv-1' }],
+      confidence: 0.9,
+    });
+
+    const updated = await candidates.updateRecallCandidate('user-a', candidate.id, {
+      judgment: 'Rewritten judgment with different meaning.',
+      suggestedType: 'rule',
+      suggestedScope: 'global',
+      sourceRefs: [{ kind: 'conversation', id: 'conv-1' }],
+    });
+
+    // The score described the old judgment; keeping it would misattribute it.
+    expect('confidence' in updated).toBe(false);
+  });
+});
+
+describe('Recall asset sourceSessionIds', () => {
+  it('derives deduplicated conversation ids and ignores other source kinds', async () => {
+    const candidates = await service();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Reuse the approved outline across related sessions.',
+      suggestedType: 'template',
+      suggestedScope: 'global',
+      sourceRefs: [
+        { kind: 'conversation', id: 'conv-b' },
+        { kind: 'memory', id: 'mem-1' },
+        { kind: 'conversation', id: 'conv-a' },
+        { kind: 'conversation', id: 'conv-b' },
+        { kind: 'execution', id: 'exec-1' },
+      ],
+    });
+
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id);
+    expect(asset.sourceSessionIds).toEqual(['conv-b', 'conv-a']);
+  });
+
+  it('omits sourceSessionIds when no conversation evidence exists', async () => {
+    const candidates = await service();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Derived only from stored memory.',
+      suggestedType: 'personal',
+      suggestedScope: 'personal',
+      sourceRefs: [{ kind: 'memory', id: 'mem-1' }],
+    });
+
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id);
+    expect('sourceSessionIds' in asset).toBe(false);
+  });
+});
+
+describe('Recall record backward compatibility', () => {
+  it('loads candidates and assets written before the new fields existed', async () => {
+    const candidates = await service();
+    const store = await import('../../../../src/main/features/recall/store');
+    const now = new Date().toISOString();
+
+    // Records in the shape shipped before confidence/sourceSessionIds existed.
+    await store.writeRecallJsonRecord('user-a', 'candidates', 'cand-legacy0001', {
+      schemaVersion: 1,
+      ownerId: 'user-a',
+      id: 'cand-legacy0001',
+      status: 'pending',
+      judgment: 'Legacy judgment.',
+      suggestedType: 'rule',
+      suggestedScope: 'global',
+      sourceRefs: [{ kind: 'conversation', id: 'conv-legacy' }],
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const legacy = await candidates.readRecallCandidate('user-a', 'cand-legacy0001');
+    expect(legacy.judgment).toBe('Legacy judgment.');
+    expect(legacy.confidence).toBeUndefined();
+
+    // A legacy record must still promote, producing the new fields where the
+    // data supports them and leaving confidence absent.
+    const { asset } = await candidates.promoteRecallCandidate('user-a', 'cand-legacy0001');
+    expect(asset.sourceSessionIds).toEqual(['conv-legacy']);
+    expect('confidence' in asset).toBe(false);
+  });
+});

@@ -18783,6 +18783,19 @@ body.model-not-configured .main-content { flex-direction: column; }
 .ability-assets-empty { padding: 36px 18px; color: var(--muted-fg, #6b7280); text-align: center; }
 .ability-assets-tree-note, .ability-assets-usage-note { padding: 14px; color: var(--muted-fg, #6b7280); }
 .ability-assets-tree-note strong, .ability-assets-usage-note strong { display: block; margin-bottom: 5px; color: var(--fg, #111827); }
+
+/* Version history and usage records in the asset detail body. */
+.asset-history-block { padding: 12px 14px; border-top: 1px solid var(--border, #e5e7eb); }
+.asset-history-block > strong { display: block; margin-bottom: 6px; color: var(--fg, #111827); }
+.asset-history-state { color: var(--muted-fg, #6b7280); margin: 0; }
+.asset-history-state.is-error { color: var(--danger-fg, #b91c1c); }
+.asset-history-list { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; }
+.asset-history-list li { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border-subtle, #f3f4f6); font-size: 12px; }
+.asset-history-list li:last-child { border-bottom: none; }
+.asset-history-version { font-weight: 600; color: var(--fg, #111827); }
+.asset-history-at, .asset-history-note, .asset-history-run { color: var(--muted-fg, #6b7280); }
+.asset-history-title { flex: 1 1 100%; color: var(--fg, #111827); }
+
 @media (max-width: 900px) { .ability-asset-summary-grid, .ability-assets-management { grid-template-columns: 1fr; } }
 
 .ability-assets-tree-page {

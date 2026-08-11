@@ -44,6 +44,9 @@ const _skillsCognitionState = {
   receipts: [],
   assets: [],
   selectedAssetId: '',
+  // Per-asset version/audit/usage, fetched on first view of that asset's
+  // detail. Keyed by asset id so switching back does not refetch.
+  assetHistory: {},
   assetCategoryFilter: '',
   dashboard: null,
   selectedReceiptId: '',
@@ -208,6 +211,115 @@ function _abilityAssetMaturityLabel(maturity, status) {
   if (maturity === 'transfer_validated') return 'Transfer Validated';
   if (maturity === 'seed') return _cognitionText('cognition.maturity_seed', '种子');
   return maturity || status || _cognitionText('cognition.unknown', '未知');
+}
+
+/**
+ * Coarse lifecycle label (candidate / confirmed / active / deprecated).
+ * The underlying two-part state is mapped in ability-asset-status.js; the
+ * nuance it drops (paused vs revoked, deferred) comes back as a `note` suffix
+ * so a paused asset is not shown as if it were revoked.
+ */
+function _abilityAssetDisplayStatusLabel(record) {
+  const mapper = globalThis.OrkasAbilityAssetStatus;
+  if (!mapper) return _abilityAssetMaturityLabel(record?.maturity, record?.status);
+  const { key, note } = mapper.abilityAssetDisplayStatus(record);
+  const label = _cognitionText(mapper.abilityAssetDisplayStatusI18nKey(key), key);
+  if (!note) return label;
+  const noteLabel = _cognitionText(`cognition.display_status_note_${note}`, note);
+  return `${label} · ${noteLabel}`;
+}
+
+/**
+ * Fetch version/audit and usage for one asset, once.
+ *
+ * The two calls settle independently so a failure in one does not blank the
+ * other — a usage-service outage should not make the version history look
+ * empty, which would read as "this asset was never revised".
+ */
+function _ensureAbilityAssetHistory(assetId) {
+  const id = String(assetId || '').trim();
+  if (!id || _skillsCognitionState.assetHistory[id]) return;
+
+  // Render can run before the IPC bridge exists. Skip without caching an entry
+  // so a later render retries, rather than throwing and blanking the panel.
+  const bridge = typeof window !== 'undefined' && window.orkas && window.orkas.invoke ? window.orkas : null;
+  if (!bridge) return;
+
+  const entry = { versionsLoading: true, usageLoading: true, versions: [], audit: [], usage: [] };
+  _skillsCognitionState.assetHistory[id] = entry;
+
+  const rerender = () => {
+    if (_skillsCognitionState.selectedAssetId === id) renderSkillsCognitionAssets();
+  };
+
+  bridge.invoke('recall.assets.versions', { assetId: id }).then((result) => {
+    if (!result?.ok) throw new Error(result?.error || 'versions unavailable');
+    entry.versions = Array.isArray(result.versions) ? result.versions : [];
+    entry.audit = Array.isArray(result.audit) ? result.audit : [];
+  }).catch((error) => {
+    entry.versionsError = (error && error.message) || String(error);
+  }).then(() => { entry.versionsLoading = false; rerender(); });
+
+  bridge.invoke('recall.usage.list', { assetId: id }).then((result) => {
+    if (!result?.ok) throw new Error(result?.error || 'usage unavailable');
+    entry.usage = Array.isArray(result.usage) ? result.usage : [];
+  }).catch((error) => {
+    entry.usageError = (error && error.message) || String(error);
+  }).then(() => { entry.usageLoading = false; rerender(); });
+}
+
+/** Loading / error / empty states share one shape so the two blocks read alike. */
+function _renderAssetHistoryState(loading, error, empty) {
+  if (loading) return `<p class="asset-history-state">${escapeHtml(_cognitionText('cognition.loading', '加载中…'))}</p>`;
+  if (error) return `<p class="asset-history-state is-error">${escapeHtml(_cognitionText('cognition.load_failed', '认知资产数据加载失败'))}：${escapeHtml(error)}</p>`;
+  return `<p class="asset-history-state">${escapeHtml(empty)}</p>`;
+}
+
+function _renderAbilityAssetVersions(entry) {
+  const title = escapeHtml(_cognitionText('cognition.version_history', '版本历史'));
+  if (!entry || entry.versionsLoading || entry.versionsError || !entry.versions.length) {
+    const empty = _cognitionText('cognition.no_version_history', '暂无版本记录');
+    const body = _renderAssetHistoryState(!entry || entry.versionsLoading, entry && entry.versionsError, empty);
+    return `<div class="asset-history-block"><strong>${title}</strong>${body}</div>`;
+  }
+  // Audit notes explain why a version exists, so pair them by timestamp.
+  const noteAt = new Map((entry.audit || []).map((row) => [row.at, row]));
+  const rows = entry.versions.slice().reverse().map((v) => {
+    const audit = noteAt.get(v.at);
+    const action = audit ? _cognitionText(`cognition.audit_action_${audit.action}`, audit.action) : '';
+    const note = audit && audit.note ? ` · ${escapeHtml(audit.note)}` : '';
+    const snapshot = v.snapshot || {};
+    return `<li>
+      <span class="asset-history-version">v${escapeHtml(String(v.version))}</span>
+      <span class="asset-history-at">${escapeHtml(String(v.at || ''))}</span>
+      <span class="asset-history-note">${escapeHtml(action)}${note}</span>
+      <span class="asset-history-title">${escapeHtml(String(snapshot.title || ''))}</span>
+    </li>`;
+  }).join('');
+  return `<div class="asset-history-block"><strong>${title}</strong><ul class="asset-history-list">${rows}</ul></div>`;
+}
+
+function _renderAbilityAssetUsage(entry) {
+  const title = escapeHtml(_cognitionText('cognition.usage_records', '使用记录'));
+  if (!entry || entry.usageLoading || entry.usageError || !entry.usage.length) {
+    const empty = _cognitionText('cognition.no_usage_records', '暂无使用记录');
+    const body = _renderAssetHistoryState(!entry || entry.usageLoading, entry && entry.usageError, empty);
+    return `<div class="asset-history-block"><strong>${title}</strong>${body}</div>`;
+  }
+  const rows = entry.usage.slice().reverse().map((u) => {
+    // A degraded or test-double boundary means the run behind this record was
+    // not a real reuse; surfacing it keeps mock data from reading as evidence.
+    const boundary = u.boundary && u.boundary !== 'real'
+      ? ` · ${escapeHtml(_cognitionText(`cognition.usage_boundary_${u.boundary}`, u.boundary))}`
+      : '';
+    return `<li>
+      <span class="asset-history-at">${escapeHtml(String(u.createdAt || ''))}</span>
+      <span class="asset-history-run">${escapeHtml(String(u.taskRunId || ''))}</span>
+      <span class="asset-history-version">v${escapeHtml(String(u.assetVersion || ''))}</span>
+      <span class="asset-history-note">${escapeHtml(String(u.outcome || ''))}${boundary}</span>
+    </li>`;
+  }).join('');
+  return `<div class="asset-history-block"><strong>${title}</strong><ul class="asset-history-list">${rows}</ul></div>`;
 }
 
 function _abilityAssetSummary(items, category) {
@@ -1048,7 +1160,7 @@ function renderSkillsCognitionAssets() {
     const selectedClass = a.id === selected.id ? ' is-selected' : '';
     return `<button type="button" class="skills-cognition-record cognition-asset-row ability-asset-list-row${selectedClass}" data-ability-asset-id="${escapeHtml(a.id)}">
       <span class="ability-asset-row-main"><strong>${escapeHtml(a.title || a.id)}</strong><small>${escapeHtml(_abilityAssetCategoryLabel(category))}${a.version ? ` · ${escapeHtml(a.version)}` : ''}${a.scope ? ` · ${escapeHtml(a.scope)}` : ''}</small></span>
-      <span class="skills-cognition-status">${escapeHtml(_abilityAssetMaturityLabel(a.maturity, a.status))}</span>
+      <span class="skills-cognition-status">${escapeHtml(_abilityAssetDisplayStatusLabel(a))}</span>
     </button>`;
   }).join('');
   const selectedCategory = _abilityAssetCategory(selected);
@@ -1066,6 +1178,12 @@ function renderSkillsCognitionAssets() {
   const injection = selected.candidateRefs?.length
     ? _cognitionText('cognition.asset_candidate_preview', '这是待确认芽点；保存后才会获得稳定版本和默认注入资格。')
     : _cognitionText('cognition.asset_injection_preview', '下一次任务将建议使用已确认资产；使用前仍需确认范围。');
+  // Candidates carry no asset id, so only formal assets have history to fetch.
+  if (!selected.candidateRefs?.length) _ensureAbilityAssetHistory(selected.id);
+  const history = _skillsCognitionState.assetHistory[selected.id];
+  const historyBlocks = selected.candidateRefs?.length
+    ? ''
+    : `${_renderAbilityAssetVersions(history)}${_renderAbilityAssetUsage(history)}`;
   host.innerHTML = `<div class="ability-assets-workbench">
     <div class="ability-asset-summary-grid">${summary}</div>
     <div class="ability-assets-management">
@@ -1074,11 +1192,12 @@ function renderSkillsCognitionAssets() {
         <div class="skills-cognition-record-list ability-asset-list-body">${rows}</div>
       </section>
       <section class="ability-asset-detail">
-        <div class="asset-detail-head"><div><h2>${escapeHtml(selected.title || selected.id)}</h2><p>${escapeHtml(_abilityAssetCategoryLabel(selectedCategory))} · ${escapeHtml(selected.source || '')}</p></div><span class="skills-cognition-status">${escapeHtml(_abilityAssetMaturityLabel(selected.maturity, selected.status))}</span></div>
+        <div class="asset-detail-head"><div><h2>${escapeHtml(selected.title || selected.id)}</h2><p>${escapeHtml(_abilityAssetCategoryLabel(selectedCategory))} · ${escapeHtml(selected.source || '')}</p></div><span class="skills-cognition-status">${escapeHtml(_abilityAssetDisplayStatusLabel(selected))}</span></div>
         <div class="asset-detail-body">
           <div class="asset-detail-grid">${detailGrid}</div>
           <div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.relation_refs', '关联引用'))}</strong><p>${escapeHtml(relationText)}</p></div>
           <div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.workspace_refs', 'Workspace引用'))}</strong><p>${escapeHtml(workspace)}</p></div>
+          ${historyBlocks}
           <div class="injection-preview"><strong>${escapeHtml(_cognitionText('cognition.next_injection_preview', '下一次任务认知注入预览'))}</strong><p>${escapeHtml(injection)}</p></div>
           <div class="asset-controls"><button class="btn btn-sm" data-cognition-open-reuse="${escapeHtml(selected.id)}">${escapeHtml(_cognitionText('cognition.view_reuse', '查看复用证明'))}</button><button class="btn btn-sm" data-cognition-page-link="deposition" data-cognition-deposition-target="candidates">${escapeHtml(_cognitionText('cognition.view_candidates', '查看候选'))}</button></div>
         </div>
