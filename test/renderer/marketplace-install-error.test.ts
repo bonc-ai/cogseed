@@ -33,7 +33,7 @@ function loadMarketplaceRenderer(): any {
     },
     window: {
       addEventListener: () => {},
-      orkas: {
+      cogseed: {
         invoke: async () => ({ list: [] }),
       },
       Monitor: monitor,

@@ -29,7 +29,7 @@ describe('project to-do refresh ordering', () => {
       },
       window: {
         addEventListener() {},
-        orkas: {
+        cogseed: {
           invoke(channel: string) {
             if (channel !== 'projects.tasks.list') return Promise.resolve({ ok: true });
             listCalls += 1;

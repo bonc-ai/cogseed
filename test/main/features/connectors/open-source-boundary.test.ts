@@ -52,7 +52,7 @@ describe('public connector boundary', () => {
     expect(main).toContain('registerConnectorProtocol({ owner: RUNTIME_IDENTITY.protocolOwner });');
     expect(main).toContain('await consumeColdLaunchConnectorCallback();');
     expect(pkg.build.protocols).toEqual(expect.arrayContaining([
-      expect.objectContaining({ schemes: ['mateagent', 'orkas'] }),
+      expect.objectContaining({ schemes: ['cogseed', 'mateagent', 'orkas'] }),
     ]));
     expect(sourceLauncher).not.toContain('scripts/prepare-source-protocol.cjs');
   });

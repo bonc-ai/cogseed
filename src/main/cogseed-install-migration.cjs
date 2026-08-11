@@ -76,7 +76,7 @@ function planMigration({ canonicalRoot, legacyRoot, markerPath }) {
   return { kind: 'ready', canonicalRoot, legacyRoot, markerPath };
 }
 
-function copyAndVerifyMigration({ sourceRoot, destinationRoot, progress = () => {}, fsImpl = fs }) {
+function copyAndVerifyMigration({ sourceRoot, destinationRoot, progress = (_event) => {}, fsImpl = fs }) {
   if (!fsImpl.existsSync(sourceRoot)) {
     throw new Error(`missing migration source root: ${sourceRoot}`);
   }
@@ -111,7 +111,16 @@ function writeMigrationMarker({ canonicalRoot, manifest, sourceKind }) {
   return markerPath;
 }
 
-function migrateLegacyInstallRoots({ platform = process.platform, home = os.homedir(), localAppData = process.env.LOCALAPPDATA, env = process.env, fsImpl = fs, canonicalRoot: canonicalRootOverride, legacyRoot: legacyRootOverride } = {}) {
+function migrateLegacyInstallRoots(options = {}) {
+  const {
+    platform = process.platform,
+    home = os.homedir(),
+    localAppData = process.env.LOCALAPPDATA,
+    env = process.env,
+    fsImpl = fs,
+    canonicalRoot: canonicalRootOverride,
+    legacyRoot: legacyRootOverride,
+  } = options;
   const canonicalRoot = canonicalRootOverride || resolveCanonicalContainer({ platform, home, localAppData, env });
   const legacyRoot = legacyRootOverride || resolveLegacyContainer({ platform, home, localAppData, env });
   const markerPath = path.join(canonicalRoot, MIGRATION_FILENAME);

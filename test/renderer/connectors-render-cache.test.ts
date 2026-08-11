@@ -34,7 +34,7 @@ function loadConnectorsRenderer() {
       removeEventListener: () => {},
       innerWidth: 1200,
       innerHeight: 800,
-      orkas: {
+      cogseed: {
         invoke: async () => ({ ok: true, catalog: [], instances: [] }),
         onPushEvent: () => {},
       },

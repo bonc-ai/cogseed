@@ -36,10 +36,10 @@ const INTERNAL_ENTRYPOINT_CONSUMERS = Object.freeze({
     'src/main/features/local_agents/runner.ts',
   ]),
   'orkas-bridge.cjs': Object.freeze([
-    'bin/cogseed-bridge.cjs',
+    'bin/orkas-bridge.cjs',
   ]),
   'mate-runtime-worker.cjs': Object.freeze([
-    'bin/cogseed-runtime-worker.cjs',
+    'bin/mate-runtime-worker.cjs',
   ]),
   'orkas-pkg.cjs': Object.freeze([
     'src/main/features/packages.ts',

@@ -216,14 +216,14 @@ describe('Recall cognition workspace layout', () => {
     const bindings = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills-bindings.js'), 'utf-8');
     const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf-8');
 
-    expect(skills).toContain("window.orkas.invoke('recall.sources.list'");
-    expect(skills).toContain("window.orkas.invoke('recall.captures.list'");
+    expect(skills).toContain("window.cogseed.invoke('recall.sources.list'");
+    expect(skills).toContain("window.cogseed.invoke('recall.captures.list'");
     expect(skills).toContain('skills-cognition-source-row');
     expect(skills).toContain('skills-cognition-capture-row');
     expect(skills).toContain('data-cognition-page-link="deposition"');
     expect(skills).toContain('data-recall-capture-retry');
     expect(skills).toContain('data-recall-capture-settings');
-    expect(bindings).toContain("window.orkas.invoke('recall.captures.retry'");
+    expect(bindings).toContain("window.cogseed.invoke('recall.captures.retry'");
     expect(bindings).toContain("window.activateSettingsTab('credentials')");
     expect(css).toContain('.skills-cognition-source-state.is-degraded');
   });
@@ -233,9 +233,9 @@ describe('Recall cognition workspace layout', () => {
     for (const renderer of ['renderSkillsCognitionSources', 'renderSkillsCognitionBrain', 'renderSkillsCognitionContext', 'renderSkillsCognitionOntology']) {
       expect(skills).toContain(`function ${renderer}`);
     }
-    expect(skills).toContain("window.orkas.invoke('recall.projections.list'");
-    expect(skills).toContain("window.orkas.invoke('personalOntology.groups.list'");
-    expect(skills).toContain("window.orkas.invoke('personalOntology.groups.read'");
+    expect(skills).toContain("window.cogseed.invoke('recall.projections.list'");
+    expect(skills).toContain("window.cogseed.invoke('personalOntology.groups.list'");
+    expect(skills).toContain("window.cogseed.invoke('personalOntology.groups.read'");
   });
 
   it('ships capture feedback in every renderer locale', () => {

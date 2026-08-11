@@ -36,7 +36,7 @@ describe('KSTAR lightweight result review card', () => {
       querySelectorAll: (selector: string) => selector === '[data-kstar-result-action]' ? buttons : [],
     };
     const context: any = {
-      window: { orkas: { invoke: async (...args: unknown[]) => { calls.push(args); return { ok: true, review: { reviewState: 'confirmed' } }; } } },
+      window: { cogseed: { invoke: async (...args: unknown[]) => { calls.push(args); return { ok: true, review: { reviewState: 'confirmed' } }; } } },
       t: (key: string) => key,
       escapeHtml: (value: unknown) => String(value ?? '').replace(/</g, '&lt;'),
     };
