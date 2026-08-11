@@ -2749,6 +2749,7 @@ function _groupMsgToLegacy(gm) {
     ...(_normalizeCreatedSkills(gm) ? { created_skills: _normalizeCreatedSkills(gm) } : {}),
     ...(Array.isArray(gm.artifacts) && gm.artifacts.length ? { artifacts: gm.artifacts } : {}),
     ...(Array.isArray(gm.teaching_receipts) && gm.teaching_receipts.length ? { teaching_receipts: gm.teaching_receipts } : {}),
+    ...(Array.isArray(gm.recall_citations) && gm.recall_citations.length ? { recall_citations: gm.recall_citations } : {}),
     ...(Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length ? { marketplace_requests: gm.marketplace_requests } : {}),
     ...(Array.isArray(gm.wake_requests) && gm.wake_requests.length ? { wake_requests: gm.wake_requests } : {}),
     ...(gm.kstar_review ? { kstar_review: gm.kstar_review } : {}),
@@ -3697,6 +3698,103 @@ function _renderTeachingReceiptsHtml(receipts) {
     const revoke = revokeValue && revokeValue !== revokeKey ? revokeValue : '撤销';
     return `<section class="chat-teaching-receipt${revoked ? ' is-revoked' : ''}" data-teaching-receipt-id="${escapeHtml(receipt.id || '')}"><div><strong>${escapeHtml(receipt.summary || '')}</strong><span>${escapeHtml(_teachingReceiptScopeLabel(receipt.scope))} · ${escapeHtml(status)}</span></div>${revoked ? '' : `<button type="button" class="btn btn-xs" data-chat-teaching-revoke="${escapeHtml(receipt.id || '')}">${escapeHtml(revoke)}</button>`}</section>`;
   }).join('')}</div>`;
+}
+
+function _recallCitationTypeLabel(type) {
+  const key = type === 'personal'
+    ? 'chat.recall.type_personal'
+    : type === 'template'
+      ? 'chat.recall.type_template'
+      : type === 'skill_method'
+        ? 'chat.recall.type_skill_method'
+        : 'chat.recall.type_rule';
+  const fallback = type === 'personal'
+    ? 'Facts and preferences'
+    : type === 'template'
+      ? 'Template'
+      : type === 'skill_method'
+        ? 'Experience method'
+        : 'Rule';
+  const value = typeof t === 'function' ? t(key) : key;
+  return value && value !== key ? value : fallback;
+}
+
+function _recallCitationScopeLabel(scope) {
+  const normalized = String(scope || '').trim().toLowerCase();
+  const key = normalized === 'global'
+    ? 'chat.recall.scope_global'
+    : normalized === 'project'
+      ? 'chat.recall.scope_project'
+      : normalized === 'agent'
+        ? 'chat.recall.scope_agent'
+        : normalized === 'personal'
+          ? 'chat.recall.scope_personal'
+          : '';
+  if (!key) return String(scope || '').trim();
+  const fallback = normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  const value = typeof t === 'function' ? t(key) : key;
+  return value && value !== key ? value : fallback;
+}
+
+function _renderRecallCitationsHtml(citations) {
+  if (!Array.isArray(citations) || !citations.length) return '';
+  const items = citations
+    .filter((citation) => citation && citation.asset_id && citation.title)
+    .slice(0, 12);
+  if (!items.length) return '';
+  const titleKey = 'chat.recall.citations_title';
+  const titleValue = typeof t === 'function' ? t(titleKey) : titleKey;
+  const title = titleValue && titleValue !== titleKey ? titleValue : 'Memories provided to this answer';
+  const helpfulKey = 'chat.recall.feedback_helpful';
+  const helpfulValue = typeof t === 'function' ? t(helpfulKey) : helpfulKey;
+  const helpful = helpfulValue && helpfulValue !== helpfulKey ? helpfulValue : 'Helpful';
+  const improveKey = 'chat.recall.feedback_improve';
+  const improveValue = typeof t === 'function' ? t(improveKey) : improveKey;
+  const improve = improveValue && improveValue !== improveKey ? improveValue : 'Needs improvement';
+  return `<section class="chat-recall-citations"><div class="chat-recall-citations-head"><span>${_uiIconHtml('brain-circuit', 'ui-icon')}<strong>${escapeHtml(title)}</strong></span><span class="chat-recall-feedback-status" data-recall-feedback-status aria-live="polite"></span></div><div class="chat-recall-citation-list">${items.map((citation) => {
+    const type = _recallCitationTypeLabel(citation.type);
+    const scope = _recallCitationScopeLabel(citation.scope);
+    const meta = [type, scope].filter(Boolean).join(' · ');
+    return `<div class="chat-recall-citation" data-recall-asset-id="${escapeHtml(citation.asset_id)}"><strong>${escapeHtml(citation.title)}</strong>${meta ? `<span>${escapeHtml(meta)}</span>` : ''}</div>`;
+  }).join('')}</div><div class="chat-recall-feedback-actions"><button type="button" class="chat-recall-feedback-btn" data-recall-feedback="positive" title="${escapeHtml(helpful)}">${_uiIconHtml('thumbs-up', 'ui-icon')}<span>${escapeHtml(helpful)}</span></button><button type="button" class="chat-recall-feedback-btn" data-recall-feedback="negative" title="${escapeHtml(improve)}">${_uiIconHtml('thumbs-down', 'ui-icon')}<span>${escapeHtml(improve)}</span></button></div></section>`;
+}
+
+function _hydrateRecallCitations(messageEl, cid, messageId) {
+  const host = messageEl?.querySelector('.chat-recall-citations');
+  if (!host) return;
+  const resolvedMessageId = String(messageId || messageEl?.dataset?.msgId || '');
+  const buttons = Array.from(host.querySelectorAll('[data-recall-feedback]'));
+  for (const button of buttons) {
+    if (button.dataset.bound === '1') continue;
+    button.dataset.bound = '1';
+    button.addEventListener('click', async () => {
+      const feedback = button.dataset.recallFeedback;
+      if (!cid || !resolvedMessageId || (feedback !== 'positive' && feedback !== 'negative')) return;
+      if (host.dataset.feedbackBusy === '1' || host.dataset.feedbackSent === '1') return;
+      host.dataset.feedbackBusy = '1';
+      buttons.forEach((item) => { item.disabled = true; });
+      try {
+        const result = await window.cogseed.invoke('recall.usage.feedback', {
+          cid,
+          messageId: resolvedMessageId,
+          feedback,
+        });
+        if (!result?.ok) throw new Error(result?.error || 'Recall feedback failed');
+        host.dataset.feedbackSent = '1';
+        host.dataset.feedback = feedback;
+        host.classList.add('is-feedback-sent');
+        const status = host.querySelector('[data-recall-feedback-status]');
+        const key = 'chat.recall.feedback_thanks';
+        const value = typeof t === 'function' ? t(key) : key;
+        if (status) status.textContent = value && value !== key ? value : 'Thanks for the feedback';
+      } catch (error) {
+        buttons.forEach((item) => { item.disabled = false; });
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        host.dataset.feedbackBusy = '0';
+      }
+    });
+  }
 }
 
 function _hydrateTeachingReceipts(messageEl) {
@@ -6163,6 +6261,7 @@ function _messageRecordHasMountedSidecars(gm, el, opts = {}) {
   if ((_normalizeCreatedAgents(gm) || _normalizeCreatedSkills(gm)) && !el.querySelector('.chat-msg-created-agent-chip')) return false;
   if (Array.isArray(gm.artifacts) && gm.artifacts.length && !el.querySelector('.chat-artifact-host')) return false;
   if (Array.isArray(gm.teaching_receipts) && gm.teaching_receipts.length && !el.querySelector('.chat-teaching-receipts')) return false;
+  if (Array.isArray(gm.recall_citations) && gm.recall_citations.length && !el.querySelector('.chat-recall-citations')) return false;
   if (Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length && !el.querySelector('.chat-marketplace-request')) return false;
   if (gm.kstar_review_card && !el.querySelector('.chat-kstar-result-review')) return false;
   if (gm.recall_projection_card && !el.querySelector('.chat-recall-projection-card')) return false;
@@ -6865,6 +6964,9 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const teachingReceiptsHtml = role === 'assistant'
     ? _renderTeachingReceiptsHtml(message.teaching_receipts)
     : '';
+  const recallCitationsHtml = role === 'assistant'
+    ? _renderRecallCitationsHtml(message.recall_citations)
+    : '';
   // Group-chat header sits **above** the bubble, outside it: sender name +
   // timestamp on one row. Same DOM strip for historical (loaded via
   // getMessages) and live-streamed messages so users always see "who said
@@ -6890,7 +6992,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   // action row remains for created-agent/skill links and message actions.
   msgDiv.innerHTML = `
     ${headerHtml}
-    <div class="chat-bubble">${planAnnHtml}${referencesHtml}${contentHtml}${attachmentsHtml}${teachingReceiptsHtml}</div>
+    <div class="chat-bubble">${planAnnHtml}${referencesHtml}${contentHtml}${attachmentsHtml}${teachingReceiptsHtml}${recallCitationsHtml}</div>
     <div class="chat-msg-actions" data-role="msg-actions">${createdAgentHtml}${createdSkillHtml}</div>
   `;
   if (typeof opts.msgIndex === 'number') msgDiv.dataset.msgIndex = String(opts.msgIndex);
@@ -6938,6 +7040,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   if (createdAgentHtml) _hydrateMessageCreatedAgentChip(msgDiv);
   if (createdSkillHtml) _hydrateMessageCreatedSkillChip(msgDiv);
   if (teachingReceiptsHtml) _hydrateTeachingReceipts(msgDiv);
+  if (recallCitationsHtml) _hydrateRecallCitations(msgDiv, opts.cid || currentCid, message._msg_id);
   // Interactive input-form widget (assistant messages only). Appended inside
   // the bubble after markdown + chips so it reads as "reply text → confirm
   // this form". See chat-input-form.js for the widget implementation.
@@ -10673,6 +10776,7 @@ function _isRedundantRoutingOnlyCommanderRecord(gm) {
       || _normalizeCreatedAgents(gm) || _normalizeCreatedSkills(gm)
       || (Array.isArray(gm.artifacts) && gm.artifacts.length)
       || (Array.isArray(gm.teaching_receipts) && gm.teaching_receipts.length)
+      || (Array.isArray(gm.recall_citations) && gm.recall_citations.length)
       || (Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length)) {
     return false;
   }
@@ -12077,6 +12181,14 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
     if (bubble && !bubble.querySelector('.chat-teaching-receipts')) {
       bubble.insertAdjacentHTML('beforeend', _renderTeachingReceiptsHtml(gm.teaching_receipts));
       _hydrateTeachingReceipts(ph);
+    }
+  }
+
+  if (Array.isArray(gm.recall_citations) && gm.recall_citations.length) {
+    const bubble = ph.querySelector('.chat-bubble');
+    if (bubble && !bubble.querySelector('.chat-recall-citations')) {
+      bubble.insertAdjacentHTML('beforeend', _renderRecallCitationsHtml(gm.recall_citations));
+      _hydrateRecallCitations(ph, cid, gm.id);
     }
   }
 

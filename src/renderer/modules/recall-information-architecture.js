@@ -7,14 +7,14 @@
 
   function normalizeRecallLocation(page) {
     const value = typeof page === 'string' ? page.trim() : '';
-    if (value === 'sources' || value === 'captures' || value === 'candidates') {
-      return { page: 'deposition', subview: value };
+    if (value === 'sources') return { page: 'sources', subview: '' };
+    if (value === 'captures' || value === 'candidates' || value === 'deposition') {
+      return { page: 'captures', subview: value === 'candidates' ? 'candidates' : '' };
     }
-    if (value === 'brain') return { page: 'assets', subview: 'tree' };
-    if (value === 'context' || value === 'receipts') return { page: 'assets', subview: 'reuse' };
-    if (value === 'ontology') return { page: 'assets', subview: 'list', category: 'personal' };
-    if (value === 'assets') return { page: 'assets', subview: 'list' };
-    if (value === 'deposition') return { page: 'deposition', subview: 'candidates' };
+    if (value === 'assets' || value === 'brain' || value === 'context' || value === 'receipts') {
+      return { page: 'assets', subview: '' };
+    }
+    if (value === 'ontology') return { page: 'assets', subview: '', category: 'personal' };
     return { page: 'overview', subview: '' };
   }
 

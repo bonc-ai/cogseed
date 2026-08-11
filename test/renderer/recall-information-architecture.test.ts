@@ -38,15 +38,15 @@ describe('Recall information architecture', () => {
 
   it.each([
     ['overview', { page: 'overview', subview: '' }],
-    ['deposition', { page: 'deposition', subview: 'candidates' }],
-    ['sources', { page: 'deposition', subview: 'sources' }],
-    ['captures', { page: 'deposition', subview: 'captures' }],
-    ['candidates', { page: 'deposition', subview: 'candidates' }],
-    ['assets', { page: 'assets', subview: 'list' }],
-    ['brain', { page: 'assets', subview: 'tree' }],
-    ['context', { page: 'assets', subview: 'reuse' }],
-    ['ontology', { page: 'assets', subview: 'list', category: 'personal' }],
-    ['receipts', { page: 'assets', subview: 'reuse' }],
+    ['deposition', { page: 'captures', subview: '' }],
+    ['sources', { page: 'sources', subview: '' }],
+    ['captures', { page: 'captures', subview: '' }],
+    ['candidates', { page: 'captures', subview: 'candidates' }],
+    ['assets', { page: 'assets', subview: '' }],
+    ['brain', { page: 'assets', subview: '' }],
+    ['context', { page: 'assets', subview: '' }],
+    ['ontology', { page: 'assets', subview: '', category: 'personal' }],
+    ['receipts', { page: 'assets', subview: '' }],
     ['not-a-real-page', { page: 'overview', subview: '' }],
   ])('maps route %s into the exact new location', (legacy, expected) => {
     expect(normalizeRecallLocation(legacy)).toEqual(expected);

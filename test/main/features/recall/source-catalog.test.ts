@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   listConnectors: vi.fn(),
   listTeachingSignals: vi.fn(),
   readArtifactMeta: vi.fn(),
+  listKbFiles: vi.fn(),
+  enqueueKb: vi.fn(),
 }));
 
 vi.mock('../../../../src/main/features/chats', () => ({
@@ -28,12 +30,20 @@ vi.mock('../../../../src/main/features/connectors/types', () => ({
 vi.mock('../../../../src/main/features/recall/teaching-service', () => ({
   listUserTeachingSignals: mocks.listTeachingSignals,
 }));
+vi.mock('../../../../src/main/features/kb_vector', () => ({
+  listFiles: mocks.listKbFiles,
+}));
+vi.mock('../../../../src/main/features/kb_indexer', () => ({
+  enqueue: mocks.enqueueKb,
+}));
 
 import {
   COGNITION_CATALOG_KINDS,
   cognitionArtifactSourceId,
+  cognitionContextFileSourceId,
   cognitionMessageSourceId,
   listCognitionSources,
+  retryCognitionSource,
 } from '../../../../src/main/features/recall/source-catalog';
 
 const conversation = {
@@ -88,6 +98,9 @@ beforeEach(() => {
     { id: 'teach-a', conversationId: 'conv-a', messageId: 'raw-message-id', intent: 'remember', scope: 'personal', status: 'active', summary: 'Use concise replies', candidateIds: ['cand-a'], createdAt: '2026-08-01T00:02:00.000Z' },
   ]);
   mocks.readArtifactMeta.mockReturnValue({ title: 'Result board', agentId: 'commander', createdAt: '' });
+  mocks.listKbFiles.mockReturnValue([
+    { rel_path: 'folder/private.md', status: 'ready' },
+  ]);
 });
 
 describe('Recall cognition source catalog', () => {
@@ -126,7 +139,7 @@ describe('Recall cognition source catalog', () => {
     expect(groups.find((group) => group.kind === 'user_teaching_signal')?.count).toBe(1);
   });
 
-  it('exposes only authorized usable connector instances with authorization refs', async () => {
+  it('shows configured connector lifecycle while exposing authorization refs only for usable instances', async () => {
     mocks.listConnectors.mockReturnValueOnce([
       { id: 'connected', display_name: 'Connected', status: { kind: 'connected', since: 1 }, tools_cached_at: 2 },
       { id: 'degraded', display_name: 'Degraded', status: { kind: 'degraded', message: 'temporary', at: 2 }, tools_cached_at: 1 },
@@ -137,11 +150,17 @@ describe('Recall cognition source catalog', () => {
 
     const [external] = await listCognitionSources('user-a', { kinds: ['authorized_external_system'] });
 
-    expect(external.items).toHaveLength(2);
-    expect(external.items.every((item) => item.authorizationRef?.startsWith('auth-'))).toBe(true);
-    expect(JSON.stringify(external)).not.toContain('Disconnected');
-    expect(JSON.stringify(external)).not.toContain('Connecting');
-    expect(JSON.stringify(external)).not.toContain('Unauthorized');
+    expect(external.items).toHaveLength(5);
+    expect(external.items.map((item) => [item.title, item.status])).toEqual([
+      ['Connected', 'ready'],
+      ['Degraded', 'failed'],
+      ['Disconnected', 'paused'],
+      ['Connecting', 'processing'],
+      ['Unauthorized', 'failed'],
+    ]);
+    expect(external.items.filter((item) => item.authorizationRef).map((item) => item.title))
+      .toEqual(['Connected', 'Degraded']);
+    expect(external.items.every((item) => item.actions.includes('manage_connector'))).toBe(true);
   });
 
   it('degrades one failed adapter without suppressing healthy source groups', async () => {
@@ -149,8 +168,60 @@ describe('Recall cognition source catalog', () => {
     const groups = await listCognitionSources('user-a', { kinds: ['authorized_external_system', 'artifact_file'] });
 
     expect(groups).toEqual([
-      { kind: 'authorized_external_system', status: 'degraded', count: 0, items: [], reason: 'source_unavailable' },
+      {
+        kind: 'authorized_external_system',
+        status: 'failed',
+        count: 0,
+        statusCounts: { pending: 0, processing: 0, ready: 0, failed: 1, paused: 0 },
+        items: [],
+        reason: 'source_unavailable',
+      },
       expect.objectContaining({ kind: 'artifact_file', status: 'ready', count: 2 }),
     ]);
+  });
+
+  it('projects conversation and indexed-file processing states with a next action', async () => {
+    mocks.listConversations.mockResolvedValue([{ ...conversation, processing: true }]);
+    mocks.listKbFiles.mockReturnValueOnce([
+      { rel_path: 'folder/private.md', status: 'failed', error: 'private backend error' },
+    ]);
+
+    const groups = await listCognitionSources('user-a', { kinds: ['conversation', 'artifact_file'] });
+    const conversationGroup = groups.find((group) => group.kind === 'conversation')!;
+    const fileGroup = groups.find((group) => group.kind === 'artifact_file')!;
+
+    expect(conversationGroup.status).toBe('processing');
+    expect(conversationGroup.items.every((item) => item.nextAction === 'wait')).toBe(true);
+    expect(fileGroup.items.find((item) => item.subtype === 'context_file')).toMatchObject({
+      status: 'failed',
+      statusReason: 'file_index_failed',
+      nextAction: 'retry',
+    });
+    const contextFileId = cognitionContextFileSourceId('folder/private.md');
+    await retryCognitionSource('user-a', 'artifact_file', contextFileId);
+    expect(mocks.enqueueKb).toHaveBeenCalledWith('user-a', 'folder/private.md', 'upsert', { reason: 'manual' });
+    expect(JSON.stringify(groups)).not.toContain('private backend error');
+  });
+
+  it('does not offer or execute a fake retry for failed execution records', async () => {
+    mocks.listExecutions.mockResolvedValue([{
+      executionId: 'exec-failed',
+      uid: 'user-a',
+      kind: 'core-agent',
+      sessionId: 'gconv-conv-a',
+      conversationId: 'conv-a',
+      status: 'failed',
+      boundary: 'real',
+      permissionMode: 'default',
+      artifactIds: [],
+      startedAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:02:00.000Z',
+    }]);
+
+    const [group] = await listCognitionSources('user-a', { kinds: ['execution_evaluation'] });
+    expect(group.items[0]).toMatchObject({ status: 'failed', nextAction: 'none' });
+    expect(group.items[0].actions).not.toContain('retry');
+    await expect(retryCognitionSource('user-a', 'execution_evaluation', 'exec-failed'))
+      .rejects.toThrow(/not supported/i);
   });
 });

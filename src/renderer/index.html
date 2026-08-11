@@ -10,6 +10,7 @@
   <title>CogSeed</title>
   <link rel="stylesheet" href="./vendor/xterm/xterm.css" />
   <link rel="stylesheet" href="./style.css" />
+  <link rel="stylesheet" href="./recall-local.css" />
   <link rel="stylesheet" href="./onboarding.css" />
 </head>
 <body>
@@ -427,42 +428,36 @@
           <div class="skills-cognition-surface">
           <header class="skills-cognition-header">
             <div>
-              <h1 data-i18n="cognition.product_title">CogSeed</h1>
-              <p data-i18n="cognition.product_subtitle">跨 Agent 的个人能力资产层</p>
+              <h1 data-i18n="cognition.title">Recall</h1>
+              <p data-i18n="cognition.subtitle">查看会话沉淀进度与认知资产</p>
             </div>
             <button type="button" class="btn btn-sm cognition-refresh-btn" data-cognition-reload data-i18n-title="common.refresh" data-i18n-aria-label="common.refresh" title="刷新" aria-label="刷新">
               <span data-ui-icon="refresh"></span>
             </button>
           </header>
           <div class="skills-cognition-workspace">
-          <nav class="skills-cognition-tabs" id="skills-cognition-tabs" aria-label="Recall 导航" role="tablist">
-            <button type="button" class="skills-cognition-tab is-active" data-cognition-page="overview" role="tab" aria-selected="true">
-              <span data-ui-icon="layout-grid"></span><span data-i18n="cognition.overview">总览</span>
-            </button>
-            <button type="button" class="skills-cognition-tab" data-cognition-page="deposition" role="tab" aria-selected="false">
-              <span data-ui-icon="sparkles"></span><span data-i18n="cognition.deposition">认知沉淀</span><span class="cognition-nav-count" data-cognition-count="pending"></span>
-            </button>
-            <button type="button" class="skills-cognition-tab" data-cognition-page="assets" role="tab" aria-selected="false">
-              <span data-ui-icon="archive"></span><span data-i18n="cognition.ability_assets">能力资产</span><span class="cognition-nav-count" data-cognition-count="assets"></span>
-            </button>
+          <nav class="skills-cognition-tabs" id="skills-cognition-tabs" role="tablist" aria-label="Recall 导航">
+            <div class="skills-cognition-tab-group">
+              <button type="button" id="skills-cognition-tab-overview" class="skills-cognition-tab is-active" role="tab" aria-selected="true" aria-controls="skills-cognition-overview" data-cognition-page="overview"><span data-ui-icon="layout-grid"></span><span data-i18n="cognition.overview">总览</span></button>
+              <button type="button" id="skills-cognition-tab-captures" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-captures" tabindex="-1" data-cognition-page="captures"><span data-ui-icon="clock"></span><span data-i18n="cognition.capture_tasks">沉淀任务</span></button>
+              <button type="button" id="skills-cognition-tab-assets" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-assets" tabindex="-1" data-cognition-page="assets"><span data-ui-icon="archive"></span><span data-i18n="cognition.memory_content">记忆内容</span></button>
+              <button type="button" id="skills-cognition-tab-sources" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-sources" tabindex="-1" data-cognition-page="sources"><span data-ui-icon="folder-open"></span><span data-i18n="cognition.sources">数据来源</span></button>
+            </div>
           </nav>
           <main class="skills-cognition-main">
-            <section class="skills-cognition-page" id="skills-cognition-overview" data-cognition-page-body="overview">
-              <div id="skills-cognition-overview-body"></div>
-            </section>
-            <section class="skills-cognition-page" id="skills-cognition-deposition" data-cognition-page-body="deposition" hidden>
-              <div class="recall-subtabs" id="skills-cognition-deposition-tabs" role="tablist">
-                <button type="button" class="recall-subtab is-active" data-cognition-deposition-view="candidates" role="tab" aria-selected="true"><span data-i18n="cognition.pending_knowledge">待确认认知</span></button>
-                <button type="button" class="recall-subtab" data-cognition-deposition-view="captures" role="tab" aria-selected="false"><span data-i18n="cognition.organize_tasks">整理任务</span></button>
-                <button type="button" class="recall-subtab" data-cognition-deposition-view="sources" role="tab" aria-selected="false"><span data-i18n="cognition.sources">认知来源</span></button>
-              </div>
-              <section data-cognition-deposition-body="candidates"><div id="skills-cognition-candidates-body"></div></section>
-              <section data-cognition-deposition-body="captures" hidden><div id="skills-cognition-captures-body"></div></section>
-              <section data-cognition-deposition-body="sources" hidden><div id="skills-cognition-sources-body"></div></section>
-            </section>
-            <section class="skills-cognition-page" id="skills-cognition-assets" data-cognition-page-body="assets" hidden>
-              <div id="skills-cognition-assets-body"></div>
-            </section>
+          <section class="skills-cognition-page" id="skills-cognition-overview" role="tabpanel" aria-labelledby="skills-cognition-tab-overview" data-cognition-page-body="overview">
+            <div id="skills-cognition-overview-body"></div>
+          </section>
+          <section class="skills-cognition-page" id="skills-cognition-sources" role="tabpanel" aria-labelledby="skills-cognition-tab-sources" data-cognition-page-body="sources" hidden>
+            <div id="skills-cognition-sources-body"></div>
+          </section>
+          <section class="skills-cognition-page" id="skills-cognition-captures" role="tabpanel" aria-labelledby="skills-cognition-tab-captures" data-cognition-page-body="captures" hidden>
+            <div id="skills-cognition-captures-body"></div>
+            <div id="skills-cognition-capture-review-body"></div>
+          </section>
+          <section class="skills-cognition-page" id="skills-cognition-assets" role="tabpanel" aria-labelledby="skills-cognition-tab-assets" data-cognition-page-body="assets" hidden>
+            <div id="skills-cognition-assets-body"></div>
+          </section>
           </main>
           </div>
           </div>
