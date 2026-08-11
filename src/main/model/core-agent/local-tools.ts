@@ -450,7 +450,7 @@ function protectedRootMentionedByCommand(opts: LocalToolsOpts, command: string):
 function protectedWriteError(abs: string, root: string): string {
   return errText(
     'E_PROTECTED_PATH_READ_ONLY',
-    `path is inside a protected read-only Orkas resource root and cannot be modified by local tools: ${abs} (root: ${root}). Use the agent/skill edit or fork flow instead.`,
+    `path is inside a protected read-only application resource root and cannot be modified by local tools: ${abs} (root: ${root}). Use the agent/skill edit or fork flow instead.`,
   );
 }
 
@@ -1738,7 +1738,7 @@ async function guardBashPathCandidates(
         result: {
           content: errText(
             'E_BASH_DYNAMIC_PATH_UNSUPPORTED',
-            `bash ${c.reason} target "${c.raw}" uses an unresolved variable, command substitution, or glob that Orkas cannot verify. `
+            `bash ${c.reason} target "${c.raw}" uses an unresolved variable, command substitution, or glob that the application cannot verify. `
             + (access === 'write'
               ? 'Use an explicit path inside the workspace, or use write_file/edit_file/delete_file for file changes.'
               : 'Use an explicit path inside the workspace, or ask the user to switch to an all-files access mode.'),
@@ -1916,7 +1916,7 @@ function guardUnsupportedAuthCodeFlow(command: string): string | null {
     'this command starts a one-time browser verification-code flow that cannot be completed reliably through chat. '
     + 'Do not ask the user to paste verification codes into the conversation or keep a background process waiting. '
     + 'Use interactive_cli_start for commands that need live user input, use a browser/callback OAuth flow that completes on its own, '
-    + 'use an Orkas connector OAuth flow, or stop and give the user a one-time terminal command to run.',
+    + 'use the application-managed connector OAuth flow, or stop and give the user a one-time terminal command to run.',
   );
 }
 
@@ -1953,7 +1953,7 @@ function googleWorkspaceOauthClientScopeMismatchErr(): string {
   return errText(
     'E_GOOGLE_OAUTH_CLIENT_SCOPE_MISMATCH',
     'Google Cloud SDK OAuth client IDs cannot be reused with Gmail, Drive, Docs, Sheets, Calendar, Contacts, or Tasks scopes. '
-    + 'Do not synthesize Google OAuth URLs or scripts with Cloud SDK client IDs. Use an Orkas connector OAuth flow or stop and explain that Google Workspace access needs a product-managed Google connector.',
+    + 'Do not synthesize Google OAuth URLs or scripts with Cloud SDK client IDs. Use the application-managed connector OAuth flow or stop and explain that Google Workspace access needs a product-managed Google connector.',
   );
 }
 
@@ -2444,7 +2444,7 @@ function interactiveCliUserActionState(view: InteractiveCliSessionView): {
       userActionRequired: true,
       reason: view.prompt_kind,
       nextStep:
-        'The CLI is waiting for user input. Stop tool use now and ask the user to enter the requested value in the Orkas interactive CLI panel, not in chat. Do not close this command, retry with another auth method, or install alternate auth libraries while it is waiting. Continue only after the user replies, cancels, or the session output changes.',
+        'The CLI is waiting for user input. Stop tool use now and ask the user to enter the requested value in the interactive CLI panel, not in chat. Do not close this command, retry with another auth method, or install alternate auth libraries while it is waiting. Continue only after the user replies, cancels, or the session output changes.',
     };
   }
   return {
@@ -2567,7 +2567,7 @@ function createInteractiveCliSendTool(opts: LocalToolsOpts): AgentTool {
     description:
       'Send non-secret input to an interactive CLI session stdin. ' +
       'Use for agent-known responses such as y/n, menu choices, or pressing Enter. ' +
-      'Do not use this for OAuth authorization codes, passwords, tokens, API keys, or other user secrets; ask the user to type those in the Orkas interactive CLI panel instead.',
+      'Do not use this for OAuth authorization codes, passwords, tokens, API keys, or other user secrets; ask the user to type those in the interactive CLI panel instead.',
     inputSchema: {
       type: 'object',
       properties: {
