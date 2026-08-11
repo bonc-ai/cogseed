@@ -53,9 +53,9 @@ describe('recall projection card renderer', () => {
     await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
 
     expect(host.innerHTML).toContain('Old asset');
-    expect(host.innerHTML).toContain('Remove from this task');
-    expect(host.innerHTML).toContain('Preloaded assets for this task');
-    expect(host.innerHTML).toContain('Add preloaded asset');
+    expect(host.innerHTML).toContain('Remove candidate');
+    expect(host.innerHTML).toContain('Preload candidates');
+    expect(host.innerHTML).toContain('Add candidate');
     expect(host.innerHTML).not.toContain('prediction');
     expect(host.innerHTML).not.toContain('R̂');
     expect(host.innerHTML).toContain('New asset');
@@ -86,6 +86,41 @@ describe('recall projection card renderer', () => {
   });
 
 
+
+
+  it('shows that users can add assets even when no assets match automatically', async () => {
+    const { context, host } = loadModule(async (channel) => {
+      if (channel === 'recall.projections.card') return { ok: true, card: { ...previewCard, summary: { includedCount: 0, omittedCount: 0, sourceRefCount: 1, text: 'Found 0 assets' }, assetSummaries: [] } };
+      if (channel === 'recall.projections.availableAssets') return { ok: true, assets: [{ id: 'asset-new', title: 'New asset', type: 'rule', status: 'active', maturity: 'leaf', scope: 'review', version: '2' }] };
+      return { ok: true };
+    });
+
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
+
+    expect(host.innerHTML).toContain('No preload candidates selected.');
+    expect(host.innerHTML).toContain('Add candidate');
+    expect(host.innerHTML).toContain('New asset');
+  });
+
+  it('surfaces asset governance state on projection rows without adding formal asset mutations', async () => {
+    const governed = {
+      ...previewCard,
+      assetSummaries: [{ assetId: 'asset-old', title: 'Old asset', type: 'rule', status: 'paused', maturity: 'seed', scope: 'review', version: '1', recommendedAction: 'rework', recommendationReason: 'Needs a narrower scope.' }],
+    };
+    const { context, host } = loadModule(async (channel) => {
+      if (channel === 'recall.projections.card') return { ok: true, card: governed };
+      if (channel === 'recall.projections.availableAssets') return { ok: true, assets: [] };
+      return { ok: true };
+    });
+
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
+
+    expect(host.innerHTML).toContain('Paused');
+    expect(host.innerHTML).toContain('Rework recommended');
+    expect(host.innerHTML).toContain('Needs a narrower scope.');
+    expect(host.innerHTML).not.toContain('recall.assets.pause');
+  });
+
   it('confirms the preloaded asset draft through projection confirmation IPC', async () => {
     const calls: Array<[string, unknown]> = [];
     const { context, host } = loadModule(async (channel, payload) => {
@@ -97,7 +132,7 @@ describe('recall projection card renderer', () => {
     });
     await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
 
-    expect(host.innerHTML).toContain('Confirm preloaded assets');
+    expect(host.innerHTML).toContain('Confirm candidates');
     await host.handler({ target: { closest: (selector: string) => selector === '[data-recall-projection-confirm]' ? { dataset: { recallProjectionConfirm: '1' }, disabled: false } : null } });
 
     expect(calls).toContainEqual(['recall.projections.confirm', { projectionId: 'proj-a' }]);
@@ -114,7 +149,7 @@ describe('recall projection card renderer', () => {
     await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
 
     expect(host.innerHTML).toContain('Confirmed');
-    expect(host.innerHTML).not.toContain('Remove from this task');
+    expect(host.innerHTML).not.toContain('Remove candidate');
     expect(host.innerHTML).not.toContain('Add asset to this task');
   });
 

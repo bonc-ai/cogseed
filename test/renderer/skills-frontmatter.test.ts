@@ -135,10 +135,7 @@ describe('skills renderer frontmatter parsing', () => {
       'after:imported:true:已直接安装这些技能：imported。:true',
       'busy:false',
     ]);
-    // The folder import now announces the security scan rather than a bare
-    // "saving", because the deep scan runs inside this one request and the user
-    // would otherwise wait on it with no idea it was happening.
-    expect(msgEl.textContent).toBe('skills.security_import_scanning');
+    expect(msgEl.textContent).toBe('skills.saving');
   });
 
   it('tracks URL skill creation success', async () => {
@@ -232,114 +229,86 @@ describe('skills renderer frontmatter parsing', () => {
     ]);
   });
 
-  it('renders pending Recall candidates with the simplified review actions', () => {
+  it('renders personal ontology candidates as navigation-only review items', () => {
     const context = loadSkillRendererHelpers();
     const body = { innerHTML: '' };
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-candidates-body' ? body : null,
     };
-    vm.runInContext(`_skillsCognitionState.recallCandidates = [${JSON.stringify({
-      id: 'cand-pending',
-      status: 'pending',
-      judgment: 'Keep local-first memory boundaries.',
-      summary: 'Prefer local-first memory',
-      suggestedType: 'personal',
-      suggestedScope: 'user',
-      sourceRefs: [{ kind: 'conversation', id: 'conv-a' }],
+    vm.runInContext(`_skillsCognitionState.candidates = [${JSON.stringify({
+      id: 'personal_ontology:c1',
+      source: 'personal_ontology',
+      sourceId: 'c1',
+      type: 'ontology',
+      title: 'Prefer local-first memory',
+      summary: 'Remember local-first boundaries',
+      scope: 'user',
+      confidence: 'high',
+      sourceRefs: ['m1'],
     })}];`, context);
 
     context.renderSkillsCognitionCandidates();
 
-    expect(body.innerHTML).toContain('data-recall-candidate-action="edit"');
-    expect(body.innerHTML).toContain('data-recall-candidate-action="reject"');
-    expect(body.innerHTML).toContain('data-recall-candidate-action="promote"');
-    expect(body.innerHTML).not.toContain('data-recall-candidate-action="defer"');
-    expect(body.innerHTML).not.toContain('data-recall-candidate-action="resume"');
-    expect(body.innerHTML).toContain('确认并入库');
+    expect(body.innerHTML).toContain('data-cognition-candidate-action="open-personal-ontology"');
+    expect(body.innerHTML).toContain('去个人本体处理');
+    expect(body.innerHTML).not.toContain('data-cognition-candidate-action="accept"');
+    expect(body.innerHTML).not.toContain('data-cognition-candidate-action="reject"');
   });
 
-  it('keeps deferred Recall candidates on the same simplified decision actions', () => {
+  it('renders non-personal cognition candidates with approve/reject controls', () => {
     const context = loadSkillRendererHelpers();
     const body = { innerHTML: '' };
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-candidates-body' ? body : null,
     };
-    vm.runInContext(`_skillsCognitionState.recallCandidates = [${JSON.stringify({
-      id: 'cand-deferred',
-      status: 'deferred',
-      judgment: 'Add invariant checks.',
-      summary: 'Tighten validation',
-      suggestedType: 'rule',
-      suggestedScope: 'project',
-      sourceRefs: [{ kind: 'execution', id: 'run-1' }],
+    vm.runInContext(`_skillsCognitionState.candidates = [${JSON.stringify({
+      id: 'recall_candidate:p1',
+      source: 'recall_candidate',
+      sourceId: 'p1',
+      type: 'skill_evolution',
+      title: 'Tighten validation',
+      summary: 'Add invariant checks',
+      sourceRefs: ['run-1'],
     })}];`, context);
 
     context.renderSkillsCognitionCandidates();
 
-    expect(body.innerHTML).toContain('data-recall-candidate-action="edit"');
-    expect(body.innerHTML).toContain('data-recall-candidate-action="reject"');
-    expect(body.innerHTML).toContain('data-recall-candidate-action="promote"');
-    expect(body.innerHTML).not.toContain('data-recall-candidate-action="defer"');
-    expect(body.innerHTML).not.toContain('data-recall-candidate-action="resume"');
+    expect(body.innerHTML).toContain('data-cognition-candidate-action="accept"');
+    expect(body.innerHTML).toContain('data-cognition-candidate-action="reject"');
+    expect(body.innerHTML).toContain('data-cognition-candidate-action="source"');
   });
 
-  it('counts only actionable candidates in a selected capture review', () => {
+
+  it('renders normalized candidate target, evidence refs, diff state, and action set', () => {
     const context = loadSkillRendererHelpers();
     const body = { innerHTML: '' };
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-candidates-body' ? body : null,
     };
-    vm.runInContext(`
-      _skillsCognitionState.selectedCaptureId = 'capture-mixed';
-      _skillsCognitionState.captures = [{
-        id: 'capture-mixed',
-        candidateIds: ['cand-pending', 'cand-promoted', 'cand-rejected'],
-      }];
-      _skillsCognitionState.recallCandidates = [
-        { id: 'cand-pending', status: 'pending', judgment: 'Keep it', suggestedType: 'rule', suggestedScope: 'project', sourceRefs: [] },
-        { id: 'cand-promoted', status: 'promoted', judgment: 'Stored', suggestedType: 'rule', suggestedScope: 'project', promotedAssetId: 'asset-1', sourceRefs: [] },
-        { id: 'cand-rejected', status: 'rejected', judgment: 'Ignored', suggestedType: 'rule', suggestedScope: 'project', sourceRefs: [] },
-      ];
-    `, context);
-
-    context.renderSkillsCognitionCandidates();
-
-    expect(body.innerHTML).toContain('skills-cognition-status is-review_ready">1</span>');
-    expect(body.innerHTML).not.toContain('data-recall-candidate-promote-all');
-    expect(body.innerHTML).toContain('已写入 Recall');
-    expect(body.innerHTML).toContain('已忽略');
-  });
-
-
-  it('renders Recall candidate judgment, scope, evidence, and action set', () => {
-    const context = loadSkillRendererHelpers();
-    const body = { innerHTML: '' };
-    context.document = {
-      getElementById: (id: string) => id === 'skills-cognition-candidates-body' ? body : null,
-    };
-    vm.runInContext(`_skillsCognitionState.recallCandidates = [${JSON.stringify({
-      id: 'cand-review',
-      status: 'pending',
-      judgment: 'Keep every approval tied to source evidence.',
-      summary: 'Traceable review rule',
-      suggestedType: 'rule',
-      suggestedScope: 'project,review',
-      sourceRefs: [
-        { kind: 'execution', id: 'run-1' },
-        { kind: 'memory', id: 'experience-1' },
-      ],
+    vm.runInContext(`_skillsCognitionState.candidates = [${JSON.stringify({
+      id: 'recall_candidate:p1',
+      source: 'recall_candidate',
+      sourceId: 'p1',
+      type: 'skill_evolution',
+      title: 'Tighten validation',
+      summary: 'Add invariant checks',
+      targetAssetId: 'skill:writer',
+      targetAssetTitle: 'Writer Skill',
+      sourceRefs: ['run-1'],
+      evidenceRefs: ['run-1', 'experience-1'],
+      diffAvailable: true,
+      actions: ['source', 'accept'],
     })}];`, context);
 
     context.renderSkillsCognitionCandidates();
 
-    expect(body.innerHTML).toContain('Traceable review rule');
-    expect(body.innerHTML).toContain('Keep every approval tied to source evidence.');
-    expect(body.innerHTML).toContain('project,review');
+    expect(body.innerHTML).toContain('Writer Skill');
+    expect(body.innerHTML).toContain('skill:writer');
     expect(body.innerHTML).toContain('run-1');
     expect(body.innerHTML).toContain('experience-1');
-    expect(body.innerHTML).toContain('data-recall-candidate-action="promote"');
-    expect(body.innerHTML).toContain('data-recall-candidate-action="reject"');
-    expect(body.innerHTML).toContain('编辑后入库');
+    expect(body.innerHTML).toContain('data-cognition-diff-available="true"');
+    expect(body.innerHTML).toContain('data-cognition-candidate-action="accept"');
+    expect(body.innerHTML).not.toContain('data-cognition-candidate-action="reject"');
   });
 
   it('renders normalized asset relation, reuse, and candidate counts with open actions', () => {
@@ -378,6 +347,41 @@ describe('skills renderer frontmatter parsing', () => {
 
 
 
+
+
+  it('renders Recall governance metadata and lifecycle controls on formal ability assets', () => {
+    const context = loadSkillRendererHelpers();
+    const body = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => id === 'skills-cognition-assets-body' ? body : null,
+    };
+    vm.runInContext(`_skillsCognitionState.assets = [${JSON.stringify({
+      id: 'aa-rule-a',
+      type: 'rule',
+      title: 'Scoped review rule',
+      version: '2',
+      status: 'active',
+      maturity: 'transfer_validated',
+      scope: 'architecture-review',
+      scopePolicy: { purposeTags: ['architecture', 'review'], workspaceIds: ['workspace-a'] },
+      recommendedAction: 'pause',
+      recommendationReason: 'The latest transfer regressed the review result.',
+      recommendationAt: '2026-08-11T00:00:00.000Z',
+      workspaceRefs: [],
+      relationRefs: [],
+      candidateRefs: [],
+    })}];`, context);
+
+    context.renderSkillsCognitionAssets();
+
+    expect(body.innerHTML).toContain('The latest transfer regressed the review result.');
+    expect(body.innerHTML).toContain('architecture, review');
+    expect(body.innerHTML).toContain('workspace-a');
+    expect(body.innerHTML).toContain('data-ability-asset-action="pause"');
+    expect(body.innerHTML).toContain('data-ability-asset-action="revoke"');
+    expect(body.innerHTML).toContain('data-ability-asset-action="acknowledge-recommendation"');
+  });
+
   it('renders assets as compact integrated rows instead of nested cards', () => {
     const context = loadSkillRendererHelpers();
     const body = { innerHTML: '' };
@@ -410,20 +414,24 @@ describe('skills renderer frontmatter parsing', () => {
     expect(body.innerHTML).not.toContain('cognition-asset-card');
   });
 
-  it('renders Recall candidates as compact integrated rows', () => {
+  it('renders candidates as compact integrated rows using the normalized action set', () => {
     const context = loadSkillRendererHelpers();
     const body = { innerHTML: '' };
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-candidates-body' ? body : null,
     };
-    vm.runInContext(`_skillsCognitionState.recallCandidates = [${JSON.stringify({
-      id: 'cand-compact',
-      status: 'pending',
-      judgment: 'Add invariant checks.',
-      summary: 'Tighten validation',
-      suggestedType: 'rule',
-      suggestedScope: 'project',
-      sourceRefs: [{ kind: 'execution', id: 'run-1' }],
+    vm.runInContext(`_skillsCognitionState.candidates = [${JSON.stringify({
+      id: 'recall_candidate:p1',
+      source: 'recall_candidate',
+      sourceId: 'p1',
+      type: 'skill_evolution',
+      title: 'Tighten validation',
+      summary: 'Add invariant checks',
+      targetAssetId: 'skill:writer',
+      sourceRefs: ['run-1'],
+      evidenceRefs: ['experience-1'],
+      diffAvailable: true,
+      actions: ['source', 'accept'],
     })}];`, context);
 
     context.renderSkillsCognitionCandidates();
@@ -431,8 +439,39 @@ describe('skills renderer frontmatter parsing', () => {
     expect(body.innerHTML).toContain('skills-cognition-record-list');
     expect(body.innerHTML).toContain('skills-cognition-record cognition-candidate-row');
     expect(body.innerHTML).not.toContain('cognition-candidate-card');
-    expect(body.innerHTML).not.toContain('data-cognition-candidate-action');
+    expect(body.innerHTML).not.toContain('data-cognition-candidate-action="reject"');
   });
+
+
+  it('loads cognition summary into the skill detail section', async () => {
+    const context = loadSkillRendererHelpers();
+    const section = { style: { display: 'none' } };
+    const host = { innerHTML: '' };
+    const calls: any[] = [];
+    context.document = {
+      getElementById: (id: string) => {
+        if (id === 'skills-section-cognition') return section;
+        if (id === 'skills-cognition-summary') return host;
+        return null;
+      },
+    };
+    context.window.orkas = {
+      invoke: async (channel: string, payload: any) => {
+        calls.push([channel, payload]);
+        return { ok: true, summary: { version: '0.2.0', pendingCandidateCount: 2, recentReceipts: [{ executionId: 'e1' }] } };
+      },
+    };
+
+    await context.refreshSkillCognitionSummary('skill-a');
+
+    expect(calls).toEqual([['cognition.skills.summary', { skillId: 'skill-a' }]]);
+    expect(section.style.display).toBe('');
+    expect(host.innerHTML).toContain('0.2.0');
+    expect(host.innerHTML).toContain('2');
+    expect(host.innerHTML).toContain('data-cognition-page-link="receipts"');
+    expect(host.innerHTML).toContain('data-cognition-page-link="candidates"');
+  });
+
 
 
   it('renders ability assets with PRD categories and without marketplace skill promotion', () => {
@@ -441,20 +480,22 @@ describe('skills renderer frontmatter parsing', () => {
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-assets-body' ? body : null,
     };
-    vm.runInContext(`_skillsCognitionState.assets = [{"id": "CA-RULE-P3394-001", "type": "rule", "category": "rule", "title": "P3394产品决策治理规则", "source": "Codex S-P3394-0731", "version": "v1.1", "status": "active", "maturity": "transfer_validated", "owner": "本机用户 ZL", "scope": "当前P3394项目", "workspaceRefs": ["产品工作 Workspace"], "receiptRefs": ["CRR-P3394-QODER-001"], "candidateRefs": [], "relationRefs": [], "reuseCount": 1, "candidateCount": 0}, {"id": "candidate:patch-a", "type": "skill_method", "category": "skill_method", "title": "优化PRD回写Skill的来源分层", "source": "p3394_patch_candidate", "status": "candidate", "maturity": "bud", "owner": "local_user", "scope": "当前P3394项目", "workspaceRefs": [], "receiptRefs": [], "candidateRefs": ["p3394_patch:patch-a"], "relationRefs": [], "reuseCount": 0, "candidateCount": 1}];`, context);
+    vm.runInContext(`_skillsCognitionState.assets = [{"id": "CA-RULE-P3394-001", "type": "rule", "category": "rule", "title": "P3394产品决策治理规则", "source": "Codex S-P3394-0731", "version": "v1.1", "status": "active", "maturity": "transfer_validated", "owner": "本机用户 ZL", "scope": "当前P3394项目", "workspaceRefs": ["产品工作 Workspace"], "receiptRefs": ["CRR-P3394-QODER-001"], "candidateRefs": [], "relationRefs": [], "reuseCount": 1, "candidateCount": 0}, {"id": "candidate:patch-a", "type": "skill_method", "category": "skill_method", "title": "优化PRD回写Skill的来源分层", "source": "recall_candidate", "status": "candidate", "maturity": "bud", "owner": "local_user", "scope": "当前P3394项目", "workspaceRefs": [], "receiptRefs": [], "candidateRefs": ["recall_candidate:patch-a"], "relationRefs": [], "reuseCount": 0, "candidateCount": 1}];`, context);
 
     context.renderSkillsCognitionAssets();
 
     expect(body.innerHTML).toContain('ability-assets-workbench');
     expect(body.innerHTML).not.toContain('证据摘要');
     expect(body.innerHTML).toContain('规则与判断');
-    expect(body.innerHTML).toContain('可复用方法');
+    expect(body.innerHTML).toContain('技能与方法');
     expect(body.innerHTML).toContain('P3394产品决策治理规则');
     expect(body.innerHTML).toContain('Transfer Validated');
     expect(body.innerHTML).toContain('芽点');
     expect(body.innerHTML).not.toContain('office-excel');
     expect(body.innerHTML).not.toContain('marketplace · 1.0.6');
   });
+
+
 
 
 
@@ -526,7 +567,7 @@ describe('skills renderer frontmatter parsing', () => {
         scope: 'scope-b',
         workspaceRefs: [],
         receiptRefs: [],
-        candidateRefs: ['p3394_patch:B'],
+        candidateRefs: ['recall_candidate:B'],
         relationRefs: [],
       })}];
       _skillsCognitionState.selectedAssetId = 'candidate:B';
@@ -537,15 +578,10 @@ describe('skills renderer frontmatter parsing', () => {
     expect(body.innerHTML).toContain('<h2>Second Method Bud</h2>');
     expect(body.innerHTML).toContain('data-ability-asset-id="candidate:B"');
     expect(body.innerHTML).not.toContain('<h2>First Rule</h2>');
-    expect(body.innerHTML).toContain('搜索记忆内容');
-    expect(body.innerHTML).not.toContain('Asset ID');
-    expect(body.innerHTML).not.toContain('Owner');
-    expect(body.innerHTML).not.toContain('source-b');
-    expect(body.innerHTML).not.toContain('local_user');
   });
 
 
-  it('keeps ability assets in the useful list view even with stale tree state', () => {
+  it('switches ability assets between separate list and cognition tree pages', () => {
     const context = loadSkillRendererHelpers();
     const body = { innerHTML: '' };
     context.document = {
@@ -573,11 +609,89 @@ describe('skills renderer frontmatter parsing', () => {
 
     context.renderSkillsCognitionAssets();
 
-    expect(body.innerHTML).not.toContain('ability-assets-tree-page');
-    expect(body.innerHTML).not.toContain('认知树');
-    expect(body.innerHTML).toContain('ability-assets-management');
-    expect(body.innerHTML).toContain('搜索记忆内容');
+    expect(body.innerHTML).toContain('ability-assets-tree-page');
+    expect(body.innerHTML).toContain('认知树');
+    expect(body.innerHTML).not.toContain('ability-assets-management');
+    expect(body.innerHTML).not.toContain('搜索名称、来源或Asset ID');
   });
 
+
+  it('renders selected reuse receipt details inline', () => {
+    const context = loadSkillRendererHelpers();
+    const body = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => id === 'skills-cognition-receipts-body' ? body : null,
+    };
+    vm.runInContext(`
+      _skillsCognitionState.receipts = [${JSON.stringify({
+        executionId: 'exec-a', receiptId: 'receipt-a', status: 'succeeded', targetSessionId: 'gconv-a', reusedRefs: ['skill:writer'], omittedRefs: [], permissionMode: 'explicit', allowedScopes: ['skills'], boundary: 'real', createdAt: '2026-08-04T00:00:00.000Z'
+      })}];
+      _skillsCognitionState.selectedReceiptId = 'exec-a';
+      _skillsCognitionState.receiptDetails = { 'exec-a': ${JSON.stringify({
+        executionId: 'exec-a', receiptId: 'receipt-a', status: 'succeeded', sourceSessionId: 'gconv-source', targetSessionId: 'gconv-a', reusedRefs: ['skill:writer'], omittedRefs: ['memory:private'], permissionMode: 'explicit', allowedScopes: ['skills', 'memory'], boundary: 'real', executionKind: 'core-agent', agentId: 'writer', conversationId: 'gconv-a', createdAt: '2026-08-04T00:00:00.000Z', completedAt: '2026-08-04T00:01:00.000Z'
+      })} };
+    `, context);
+
+    context.renderSkillsCognitionReceipts();
+
+    expect(body.innerHTML).toContain('skills-cognition-detail');
+    expect(body.innerHTML).toContain('gconv-source');
+    expect(body.innerHTML).toContain('memory:private');
+    expect(body.innerHTML).toContain('explicit');
+  });
+
+  it('renders skill version history with rollback controls only for rollbackable snapshots', async () => {
+    const context = loadSkillRendererHelpers();
+    const section = { style: { display: 'none' } };
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => {
+        if (id === 'skills-section-cognition') return section;
+        if (id === 'skills-cognition-summary') return host;
+        return null;
+      },
+    };
+    context.window.orkas = {
+      invoke: async () => ({ ok: true, summary: {
+        version: '0.2.0', pendingCandidateCount: 0, recentReceipts: [],
+        versions: [
+          { version: '0.2.0', at: '2026-08-04T00:00:00.000Z', note: 'current', canRollback: true },
+          { version: '0.1.0', at: '2026-08-03T00:00:00.000Z', note: 'legacy', canRollback: false },
+        ],
+      } }),
+    };
+
+    await context.refreshSkillCognitionSummary('skill-a');
+
+    expect(host.innerHTML).toContain('skills-cognition-version-list');
+    expect(host.innerHTML).toContain('0.2.0');
+    expect(host.innerHTML).toContain('data-cognition-rollback-skill="skill-a"');
+    expect(host.innerHTML).toContain('data-cognition-version="0.2.0"');
+    expect(host.innerHTML).toContain('不可回滚');
+  });
+
+  it('rolls back a skill version through cognition IPC and refreshes the skill detail summary', async () => {
+    const context = loadSkillRendererHelpers();
+    const calls: any[] = [];
+    context.window.orkas = {
+      invoke: async (channel: string, payload: any) => {
+        calls.push([channel, payload]);
+        return { ok: true };
+      },
+    };
+    context.uiConfirm = async (message: string) => { calls.push(['confirm', message]); return true; };
+    context.refreshSkillCognitionSummary = async (skillId: string) => { calls.push(['refresh', skillId]); };
+    context.selectSkillFile = async () => { calls.push(['select']); };
+    vm.runInContext(`_selectedSkill = { source: 'custom', id: 'skill-a', filepath: 'SKILL.md' };`, context);
+
+    await context.rollbackSkillCognitionVersionFromDetail('skill-a', '0.1.1');
+
+    expect(calls).toEqual([
+      ['confirm', '确认回滚到版本 0.1.1？'],
+      ['cognition.skills.rollback', { skillId: 'skill-a', version: '0.1.1' }],
+      ['refresh', 'skill-a'],
+      ['select'],
+    ]);
+  });
 
 });

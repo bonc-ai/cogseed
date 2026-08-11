@@ -263,7 +263,6 @@ describe('kstar-store', () => {
           created_at: '2026-08-05T09:00:00.000Z',
           updated_at: '2026-08-05T09:00:00.000Z',
         }],
-        patch_candidates: [],
         updated_at: '2026-08-05T09:00:00.000Z',
       }), 'utf8');
 

@@ -35,7 +35,6 @@ function summarizeEngine(run: KStarCompatRun): string {
   const lines = [
     `- Engine status: ${engine.status}`,
     engine.reason ? `- Engine note: ${engine.reason}` : '',
-    engine.patch_status ? `- Patch status: ${engine.patch_status}` : '',
   ].filter(Boolean);
   const route = engine.route_recommendation;
   if (route && typeof route === 'object') {

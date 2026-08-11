@@ -4132,7 +4132,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       .filter(Boolean)
       .map((l) => JSON.parse(l));
 
-    const commanderMsgs = lines.filter((m: any) => m.from === "commander");
+    const commanderMsgs = lines.filter((m: any) => m.from === "commander" && !m.recall_projection_card);
     expect(
       commanderMsgs.length,
       "anonymous worker turn stays a single commander bubble",
@@ -4258,7 +4258,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     // second bubble). The only commander message is the pre-handoff narration —
     // and it must be NON-EMPTY: a trailing empty commander bubble (e.g. one that
     // only carried a produced-file chip) is the regression we are guarding.
-    const commanderMsgs = lines.filter((m: any) => m.from === "commander");
+    const commanderMsgs = lines.filter((m: any) => m.from === "commander" && !m.recall_projection_card);
     expect(
       commanderMsgs.length,
       "commander must not synthesize after hand-off",
@@ -4395,7 +4395,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
         (row: any) => row.from === AGENT_ID && row.text === specialistReply,
       ),
     ).toBe(true);
-    const commanderRows = rows.filter((row: any) => row.from === "commander");
+    const commanderRows = rows.filter((row: any) => row.from === "commander" && !row.recall_projection_card);
     expect(
       commanderRows,
       "only the narrated pre-dispatch segment should persist",
@@ -4473,7 +4473,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       .map((line) => JSON.parse(line));
     expect(rows.some((row: any) => row.from === AGENT_ID)).toBe(true);
     expect(
-      rows.filter((row: any) => row.from === "commander"),
+      rows.filter((row: any) => row.from === "commander" && !row.recall_projection_card),
       "compaction observability must not override an explicit terminal delivery",
     ).toEqual([]);
   }, 15_000);
@@ -5358,7 +5358,7 @@ describe("group_chat bus integration › direct agent reply routing", () => {
     });
     await waitForQuiescent(TEST_UID, cid, 3000);
 
-    const messageEvents = events.filter((e) => e.type === "message");
+    const messageEvents = events.filter((e) => e.type === "message" && !e.msg?.recall_projection_card);
     expect(messageEvents).toHaveLength(2);
     const fromAgent = messageEvents.find((e) => e.msg.from === AGENT_ID);
     expect(fromAgent).toBeTruthy();
@@ -5545,8 +5545,9 @@ describe("group_chat bus integration › direct agent reply routing", () => {
       .split("\n")
       .filter(Boolean)
       .map((l) => JSON.parse(l));
-    expect(lines).toHaveLength(2);
-    expect(lines[1]).toMatchObject({ from: AGENT_ID, to: ["user"] });
+    const nonRecallLines = lines.filter((line: any) => !line.recall_projection_card);
+    expect(nonRecallLines).toHaveLength(2);
+    expect(nonRecallLines[1]).toMatchObject({ from: AGENT_ID, to: ["user"] });
     expect(
       _recordedCalls.some((c) => c.sid === state.buildGconvSessionId(cid)),
     ).toBe(false);

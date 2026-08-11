@@ -48,38 +48,7 @@ describe('cognition feature aggregate layer', () => {
         { kind: 'user_teaching_signal', subtype: 'teaching', id: 'teaching-a' },
       ],
     });
-    const { asset: recallAsset } = await recallCandidates.promoteRecallCandidate(UID, recallCandidate.id);
-
-    const statePath = path.join(userLocalRoot(UID), 'p3394', 'kstar-state.json');
-    fs.mkdirSync(path.dirname(statePath), { recursive: true });
-    fs.writeFileSync(statePath, JSON.stringify({
-      version: 1,
-      runs: [],
-      experience_candidates: [{
-        id: 'exp-a',
-        source_run_id: 'run-a',
-        conversation_id: 'gconv-a',
-        agent_id: 'agent-a',
-        summary: 'PRD decisions must preserve source and open questions',
-        status: 'pending',
-        created_at: '2026-08-04T00:00:00.000Z',
-        updated_at: '2026-08-04T00:00:00.000Z',
-      }],
-      patch_candidates: [{
-        id: 'patch-a',
-        source_run_id: 'run-a',
-        conversation_id: 'gconv-a',
-        agent_id: 'agent-a',
-        type: 'skill_patch',
-        target: { kind: 'custom_skill', id: 'skill-a' },
-        proposal: { title: 'Improve PRD rewrite method', summary: 'Keep source layering', proposed_content: 'new content' },
-        engine: {},
-        status: 'needs_review',
-        created_at: '2026-08-04T00:00:00.000Z',
-        updated_at: '2026-08-04T00:00:00.000Z',
-      }],
-      updated_at: '2026-08-04T00:00:00.000Z',
-    }, null, 2));
+    const { asset: recallAsset } = await recallCandidates.promoteRecallCandidate(UID, recallCandidate.id, { actor: 'user' });
 
     const assets = await cognition.listCognitionAssets(UID);
     expect(assets.some((asset) => asset.id === 'memory:user')).toBe(false);
@@ -99,19 +68,6 @@ describe('cognition feature aggregate layer', () => {
         candidateRefs: expect.any(Array),
       }),
       expect.objectContaining({
-        id: 'candidate:exp-a',
-        category: 'rule',
-        maturity: 'bud',
-        status: 'candidate',
-      }),
-      expect.objectContaining({
-        id: 'candidate:patch-a',
-        category: 'skill_method',
-        maturity: 'bud',
-        status: 'candidate',
-        baselineSkillRef: 'skill:skill-a',
-      }),
-      expect.objectContaining({
         id: recallAsset.id,
         source: 'recall_ability_asset',
         relationRefs: expect.arrayContaining([
@@ -127,7 +83,7 @@ describe('cognition feature aggregate layer', () => {
     expect(dashboard.counts.assets).toBe(assets.length);
   });
 
-  it('normalizes and filters candidates from personal ontology and KSTAR patches', async () => {
+  it('normalizes and filters personal ontology candidates without reading legacy KSTAR state', async () => {
     const users = await import('../../../src/main/features/users');
     users.activateUser(UID);
     const { userLocalRoot } = await import('../../../src/main/paths');
@@ -146,28 +102,6 @@ describe('cognition feature aggregate layer', () => {
       source_memory_refs: ['mem-a'],
     }]));
 
-    const statePath = path.join(userLocalRoot(UID), 'p3394', 'kstar-state.json');
-    fs.mkdirSync(path.dirname(statePath), { recursive: true });
-    fs.writeFileSync(statePath, JSON.stringify({
-      version: 1,
-      runs: [],
-      experience_candidates: [],
-      patch_candidates: [{
-        id: 'patch-a',
-        source_run_id: 'run-a',
-        conversation_id: 'gconv-a',
-        agent_id: 'agent-a',
-        type: 'skill_patch',
-        target: { kind: 'custom_skill', id: 'skill-a' },
-        proposal: { title: 'Improve skill', summary: 'Tighten checks', rationale: 'Reduce regressions', proposed_content: 'new content' },
-        engine: {},
-        status: 'needs_review',
-        created_at: '2026-08-04T00:00:00.000Z',
-        updated_at: '2026-08-04T00:00:00.000Z',
-      }],
-      updated_at: '2026-08-04T00:00:00.000Z',
-    }, null, 2));
-
     const pending = await cognition.listCognitionCandidates(UID, { status: 'pending' });
     expect(pending).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -181,19 +115,9 @@ describe('cognition feature aggregate layer', () => {
         diffAvailable: false,
         actions: ['open_personal_ontology', 'import_to_recall'],
       }),
-      expect.objectContaining({
-        source: 'p3394_patch',
-        sourceId: 'patch-a',
-        type: 'skill_evolution',
-        skillId: 'skill-a',
-        targetAssetId: 'skill:skill-a',
-        actions: ['source', 'deep_review', 'accept', 'modify', 'defer', 'reject'],
-      }),
     ]));
 
-    await expect(cognition.listCognitionCandidates(UID, { skillId: 'skill-a' })).resolves.toEqual([
-      expect.objectContaining({ sourceId: 'patch-a' }),
-    ]);
+    await expect(cognition.listCognitionCandidates(UID, { conversationId: 'gconv-b' })).resolves.toEqual([]);
   });
 
   it('skill summary exposes version history rollback availability', async () => {

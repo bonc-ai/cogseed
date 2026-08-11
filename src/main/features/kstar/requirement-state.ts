@@ -143,7 +143,7 @@ async function previewTaskBoundary(
       ...(input.text ? { taskText: input.text } : {}),
       ...(expectedResult ? { authorization: expectedResult.source === 'model' ? 'workspace_policy' : 'user_confirmed' } : {}),
     });
-    return { projectionId: projection.id, shouldPostCard: Array.isArray(projection.assetIds) && projection.assetIds.length > 0 };
+    return { projectionId: projection.id, shouldPostCard: true };
   } catch (error) {
     log.warn('kstar requirement preview failed', { conversationId: input.conversationId, taskRunId, error: (error as Error).message });
     return undefined;
