@@ -311,6 +311,52 @@ describe('skill_reverify › load-path enforcement', () => {
   });
 });
 
+// The shallow variants are kept only as the contrast that proves the deep gate
+// closes a real hole (see "blocks a post-install payload that the local rules
+// pass" below). Nothing in production may route through them: the names differ
+// from the deep ones by one word, so a regression here is a silent downgrade of
+// the security check rather than a visible failure. A comment cannot enforce
+// that; this can.
+describe('skill trust › shallow variants stay out of production', () => {
+  it('has no production caller of the sync trust checks', () => {
+    const roots = [
+      path.resolve(__dirname, '../../../src'),
+      path.resolve(__dirname, '../../../bin'),
+    ];
+    const selfFile = path.resolve(
+      __dirname, '../../../src/main/features/skill_reverify.ts',
+    );
+
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) { walk(full); continue; }
+        if (!/\.(ts|cjs|mjs|js)$/.test(entry.name)) continue;
+        // The module may call its own shallow helpers; only external callers
+        // constitute a production route into the weaker check.
+        if (path.resolve(full) === selfFile) continue;
+        const text = fs.readFileSync(full, 'utf8');
+        for (const name of [
+          'isSkillTrustedForLoad', 'partitionSkillsByTrust', 'reverifySkills',
+        ]) {
+          // Word-boundary call sites only, and not the Deep spelling: a bare
+          // `(` after the name distinguishes a call from a mention in prose.
+          const re = new RegExp(`\\b${name}\\s*\\(`, 'g');
+          for (const m of text.matchAll(re)) {
+            const rest = text.slice(m.index ?? 0);
+            if (rest.startsWith(`${name}Deep`)) continue;
+            offenders.push(`${path.relative(roots[0], full)}: ${name}`);
+          }
+        }
+      }
+    };
+    for (const r of roots) if (fs.existsSync(r)) walk(r);
+
+    expect(offenders).toEqual([]);
+  });
+});
+
 // Load-time re-verification has to reach the same verdict as install time.
 // Measured before this existed: a payload dropped into `tests/` after install is
 // EXTREME to the deep scanner and blocked, while `validateSkillDir` returns

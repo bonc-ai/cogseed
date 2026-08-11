@@ -86,7 +86,7 @@ export function isScannerSkill(skillId: string): boolean {
  * signature checked against a key the scanner does not carry, which is a
  * different mechanism from this one.
  */
-export function expectedScannerHash(scannerDir: string): string | null {
+function expectedScannerHash(scannerDir: string): string | null {
   try {
     const raw = fs.readFileSync(pinPath(scannerDir), 'utf8').trim();
     return raw || null;

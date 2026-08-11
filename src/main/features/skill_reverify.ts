@@ -340,6 +340,22 @@ export async function reverifySkillDeep(uid: string, skillId: string): Promise<R
  *
  * One unreadable skill must not abort the sweep — a partial answer across the
  * rest is more useful than none.
+ *
+ * SUPERSEDED — do not call from new code. Use the `…Deep` variant.
+ *
+ * This runs the sync structural check (`validateSkillDir`) only, so it admits
+ * trees the deep scanner refuses: a credential-exfiltration payload under
+ * `tests/` is `ok: true` here and `blocked` there (asserted in
+ * skill-trust.test.ts, "blocks a post-install payload that the local rules
+ * pass"). Every production caller now goes through the deep variant.
+ *
+ * Kept, not deleted, because it IS that assertion's contrast: the test proves
+ * the deep gate closes a real hole by showing this function leaves it open.
+ * Delete this and the evidence for why deep re-verification exists goes with it.
+ *
+ * The hazard is the name: `isSkillTrustedForLoad` vs `isSkillTrustedForLoadDeep`
+ * differ by one word, and picking the shorter one silently weakens the check
+ * without failing anything.
  */
 export function reverifySkills(uid: string, skillIds: readonly string[]): ReverifyResult[] {
   const out: ReverifyResult[] = [];
@@ -374,6 +390,22 @@ export function reverifySkills(uid: string, skillIds: readonly string[]): Reveri
  * Cost is not a concern here — hashing the entire builtin corpus (47 skills,
  * 134 files, 1.2 MB) measures ~5 ms total, and the caller only re-checks when
  * the skills directory mtime changed.
+ *
+ * SUPERSEDED — do not call from new code. Use the `…Deep` variant.
+ *
+ * This runs the sync structural check (`validateSkillDir`) only, so it admits
+ * trees the deep scanner refuses: a credential-exfiltration payload under
+ * `tests/` is `ok: true` here and `blocked` there (asserted in
+ * skill-trust.test.ts, "blocks a post-install payload that the local rules
+ * pass"). Every production caller now goes through the deep variant.
+ *
+ * Kept, not deleted, because it IS that assertion's contrast: the test proves
+ * the deep gate closes a real hole by showing this function leaves it open.
+ * Delete this and the evidence for why deep re-verification exists goes with it.
+ *
+ * The hazard is the name: `isSkillTrustedForLoad` vs `isSkillTrustedForLoadDeep`
+ * differ by one word, and picking the shorter one silently weakens the check
+ * without failing anything.
  */
 export function isSkillTrustedForLoad(uid: string, skillId: string): {
   trusted: boolean;
@@ -394,6 +426,22 @@ export function isSkillTrustedForLoad(uid: string, skillId: string): {
  * Returns ids rather than mutating a listing so the caller keeps control over
  * how a withheld skill is surfaced — silently dropping it would leave the user
  * with a skill that has vanished for no visible reason.
+ *
+ * SUPERSEDED — do not call from new code. Use the `…Deep` variant.
+ *
+ * This runs the sync structural check (`validateSkillDir`) only, so it admits
+ * trees the deep scanner refuses: a credential-exfiltration payload under
+ * `tests/` is `ok: true` here and `blocked` there (asserted in
+ * skill-trust.test.ts, "blocks a post-install payload that the local rules
+ * pass"). Every production caller now goes through the deep variant.
+ *
+ * Kept, not deleted, because it IS that assertion's contrast: the test proves
+ * the deep gate closes a real hole by showing this function leaves it open.
+ * Delete this and the evidence for why deep re-verification exists goes with it.
+ *
+ * The hazard is the name: `isSkillTrustedForLoad` vs `isSkillTrustedForLoadDeep`
+ * differ by one word, and picking the shorter one silently weakens the check
+ * without failing anything.
  */
 export function partitionSkillsByTrust(
   uid: string,

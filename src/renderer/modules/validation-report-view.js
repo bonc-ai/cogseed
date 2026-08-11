@@ -49,21 +49,102 @@ function _suggestedFixText(v) {
   return v && v.suggested_fix ? String(v.suggested_fix) : '';
 }
 
-function _renderViolationCard(v) {
-  const color = _levelColor(v.level);
-  const label = _levelLabel(v.level);
-  const suggestedFix = _suggestedFixText(v);
+/**
+ * Group violations by rule so one problem reads as one problem.
+ *
+ * The validator emits one violation per match, which is right for a machine and
+ * wrong for a person: scanning a skill whose own rule files contain the patterns
+ * it detects produced eleven cards, four of them `no_credential_path_read` with
+ * the identical remediation sentence repeated verbatim. The fix sentence is a
+ * property of the rule, not of the match, so it belongs once per rule with the
+ * locations listed under it.
+ *
+ * Level is taken as the most severe seen for that rule: grouping must not soften
+ * an EXTREME hit by averaging it with a LOW one.
+ */
+function _groupViolationsByRule(sorted) {
+  const order = { EXTREME: 0, MEDIUM: 1, LOW: 2 };
+  const groups = new Map();
+  for (const v of sorted) {
+    // Keyed by rule alone, deliberately. Including the level in the key produced
+    // two groups for one rule when it fired at different severities, and the
+    // lesser group then rendered under its own softer badge — a grouping change
+    // that downgraded a finding on screen. One rule is one card, carrying the
+    // worst level seen.
+    const rule = String((v && v.rule) || '');
+    let g = groups.get(rule);
+    if (!g) {
+      g = { rule, level: v && v.level, occurrences: [] };
+      groups.set(rule, g);
+    }
+    if ((order[v && v.level] ?? 9) < (order[g.level] ?? 9)) g.level = v.level;
+    g.occurrences.push({
+      field: (v && v.field) || '',
+      snippet: (v && v.snippet) || '',
+      suggested_fix: (v && v.suggested_fix) || '',
+    });
+  }
+  return [...groups.values()];
+}
+
+/** How many locations to list before collapsing the rest into a count. */
+const _MAX_SHOWN_OCCURRENCES = 3;
+
+function _renderViolationGroup(g) {
+  const color = _levelColor(g.level);
+  const label = _levelLabel(g.level);
+  // Any occurrence carries the rule's fix text; they are identical by construction.
+  const suggestedFix = _suggestedFixText({ rule: g.rule, suggested_fix: g.occurrences[0]?.suggested_fix });
+  const total = g.occurrences.length;
+  const shown = g.occurrences.slice(0, _MAX_SHOWN_OCCURRENCES);
+
+  // Count in the header, so "4 places" is visible without counting cards.
+  const countBadge = total > 1
+    ? `<span style="font-size:11px;color:var(--muted);">${escapeHtml(
+      _countLabel(total),
+    )}</span>`
+    : '';
+
+  const rows = shown.map((o) => `
+      <div style="margin-bottom:6px;">
+        <div style="font-size:12px;color:var(--muted);font-family:var(--mono,monospace);">${escapeHtml(o.field)}</div>
+        ${o.snippet ? `<pre style="margin:2px 0 0;padding:5px 8px;background:var(--surface-3,rgba(0,0,0,.05));border-radius:3px;font-size:12px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">${escapeHtml(o.snippet)}</pre>` : ''}
+      </div>`).join('');
+
+  const more = total > _MAX_SHOWN_OCCURRENCES
+    ? `<div style="font-size:12px;color:var(--muted);margin-bottom:6px;">${escapeHtml(
+      _moreLabel(total - _MAX_SHOWN_OCCURRENCES),
+    )}</div>`
+    : '';
+
   return `
     <div class="quality-violation" style="border-left:3px solid ${color};padding:8px 12px;margin-bottom:10px;background:var(--surface-2,rgba(0,0,0,.03));border-radius:4px;">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
         <span style="font-size:11px;font-weight:600;color:${color};text-transform:uppercase;letter-spacing:.5px;">${escapeHtml(label)}</span>
-        <span style="font-family:var(--mono,monospace);font-size:12px;color:var(--muted);">${escapeHtml(v.rule || '')}</span>
+        <span style="font-family:var(--mono,monospace);font-size:12px;color:var(--muted);">${escapeHtml(g.rule)}</span>
+        ${countBadge}
       </div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:6px;font-family:var(--mono,monospace);">${escapeHtml(v.field || '')}</div>
-      ${v.snippet ? `<pre style="margin:0 0 6px;padding:6px 8px;background:var(--surface-3,rgba(0,0,0,.05));border-radius:3px;font-size:12px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">${escapeHtml(v.snippet)}</pre>` : ''}
-      <div style="font-size:13px;line-height:1.5;">${escapeHtml(suggestedFix)}</div>
+      ${rows}
+      ${more}
+      ${suggestedFix ? `<div style="font-size:13px;line-height:1.5;">${escapeHtml(suggestedFix)}</div>` : ''}
     </div>
   `;
+}
+
+function _countLabel(n) {
+  try {
+    const v = t('quality.occurrences');
+    if (v && v !== 'quality.occurrences') return v.replace('{n}', String(n));
+  } catch (_) { /* t() not ready */ }
+  return `${n} places`;
+}
+
+function _moreLabel(n) {
+  try {
+    const v = t('quality.occurrences_more');
+    if (v && v !== 'quality.occurrences_more') return v.replace('{n}', String(n));
+  } catch (_) { /* t() not ready */ }
+  return `+${n} more`;
 }
 
 function showValidationReport({ title, report, okLabel, forceLabel } = {}) {
@@ -84,7 +165,7 @@ function showValidationReport({ title, report, okLabel, forceLabel } = {}) {
     const titleText = escapeHtml(title || 'Quality validation');
 
     const bodyHtml = sorted.length
-      ? sorted.map(_renderViolationCard).join('')
+      ? _groupViolationsByRule(sorted).map(_renderViolationGroup).join('')
       : `<div class="muted" style="text-align:center;padding:20px;">${escapeHtml((() => {
           try { const v = t('quality.empty'); return v === 'quality.empty' ? 'No findings.' : v; }
           catch (_) { return 'No findings.'; }
