@@ -66,7 +66,56 @@ function _csUpdateImportCount(delta) {
     indicator.textContent = String(_csTotalImportCount);
     indicator.style.color = _csTotalImportCount > 0 ? '#C4612F' : '#8B8B8B';
   }
+
+  // Show/hide the import button based on whether there are checked sessions
+  const importBtn = document.getElementById('cs-do-import');
+  if (importBtn) {
+    const hasChecked = _csHasCheckedSessions();
+    importBtn.style.display = hasChecked ? 'inline-flex' : 'none';
+  }
 }
+
+// Check if any sessions are currently checked in the asset panel
+function _csHasCheckedSessions() {
+  const assetPanes = document.querySelector('#cs-agent-list .cs-asset-panes');
+  if (!assetPanes) return false;
+  const checked = assetPanes.querySelectorAll('input[type="checkbox"]:checked');
+  return checked.length > 0;
+}
+
+// Update import button visibility based on checkbox state
+function _csUpdateImportButtonVisibility() {
+  const importBtn = document.getElementById('cs-do-import');
+  if (importBtn) {
+    const hasChecked = _csHasCheckedSessions();
+    importBtn.style.display = hasChecked ? 'inline-flex' : 'none';
+  }
+}
+
+// Handle the import button click - finds which agent is active and triggers its import
+window._csDoImport = async function() {
+  const activePanel = document.querySelector('#cs-agent-list .cs-asset-panel');
+  if (!activePanel) return;
+
+  const agentType = activePanel.dataset.agent;
+  if (!agentType) return;
+
+  // Find which asset tab is active (should be sessions)
+  const activeTab = activePanel.querySelector('.cs-asset-tab.active');
+  const activeAsset = activeTab ? activeTab.dataset.asset : 'sessions';
+
+  if (activeAsset !== 'sessions') {
+    _csToast('请切换到会话标签页进行导入');
+    return;
+  }
+
+  // Trigger the appropriate import function
+  if (agentType === 'claude') {
+    await _csImportClaudeSessions(agentType);
+  } else if (agentType === 'codex') {
+    await _csImportCodexSessions(agentType);
+  }
+};
 
 function _csEsc(s) {
   return String(s == null ? '' : s)
@@ -131,14 +180,14 @@ function _csObShellHtml() {
       </section>
 
       <section class="cs-panel" data-cspanel="1">
-        <div class="cs-kicker">连接 AI 团队 · 你的 Agent 模型</div>
-        <h1>把你的 Agent 连进 AI 团队</h1>
-        <p class="cs-lead">检测到的 Agent 可以一键接入「AI 团队」，之后就能在这里直接使用它们的模型。凭证都是你自己的、只留本机。连上之后，下一步导入的旧会话就能用这些模型自动压缩、提炼。</p>
+        <div class="cs-kicker">连接 AI 团队 · 你的 Agent 能力</div>
+        <h1>把你已有的 Agent 接进 AI 团队</h1>
+        <p class="cs-lead">检测到你本机已安装的 Agent（Claude Code、Codex 等）即可一键接入：<b>配置过 API Key 的模型直接加入 AI 团队</b>，会话提取与对话直接用；<b>官方订阅登录的 Agent 无需 Key，可作为执行 Agent 接入</b>——任务会派发给本机 Agent 用它的登录态执行。凭证都是你自己的、只留本机。</p>
 
         <div class="cs-list" id="cs-team-list">
           <div class="cs-state loading">正在检测可连接的 Agent…</div>
         </div>
-        <div class="cs-mode"><span>一键连接即可，无需粘贴任何密钥。凭证只在本机使用、不上传。用订阅/OAuth 登录的 Agent 无法一键连接，需你在设置里另行登录。</span></div>
+        <div class="cs-mode"><span>一键连接即可，无需粘贴任何密钥。模型直连（调用模型做提取/对话）需要 API Key——这是 Anthropic / OpenAI 的平台规则，订阅凭证不能当 Key 用；但官方登录的 Agent 本机就能干活，接入为执行 Agent 不受影响。</span></div>
 
         <div class="cs-actions">
           <button class="cs-btn ghost" data-csnext="0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
@@ -150,26 +199,19 @@ function _csObShellHtml() {
       <section class="cs-panel" data-cspanel="2">
         <div class="cs-kicker">来源检测 · 跨 Agent · 只读</div>
         <h1>从你在其他 Agent 里的对话继续</h1>
-        <p class="cs-lead">检测你本机安装的 Agent 命令行工具，列出可导入的历史会话。<b>点击左侧 Agent，勾选想导入的会话，然后点击"导入所选会话"按钮</b>。导入的会话会用上一步连接的模型自动压缩提炼，并出现在左侧会话列表，点进去即可继续对话。</p>
+        <p class="cs-lead">点击左侧 Agent，勾选想导入的会话，再点"导入所选会话"</p>
 
-        <div style="margin:20px 0;padding:14px 18px;background:#FFF8E6;border-left:3px solid #FFB020;border-radius:6px;font-size:14px;color:#5C635D">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-            <span style="font-size:18px">💡</span>
-            <b style="color:#1F2421">操作提示</b>
-          </div>
-          <div>1. 点击左侧列表中的 Agent（如 Claude、Codex）</div>
-          <div>2. 在右侧勾选你想导入的会话</div>
-          <div>3. 点击"导入所选会话"按钮完成导入</div>
-          <div style="margin-top:8px;font-size:13px;color:#8B8B8B">
-            已导入会话数：<span id="cs-import-count" style="font-weight:600;color:#C4612F">0</span>
-          </div>
+        <div class="cs-import-hint">
+          <span>已导入 <span id="cs-import-count">0</span> 条会话</span>
+          <button type="button" class="cs-btn-inline" id="cs-do-import" style="display:none" onclick="_csDoImport()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>
+            导入所选会话
+          </button>
         </div>
 
-        <h3 style="margin:28px 0 12px;font-size:15px;font-weight:650">检测到的 Agent</h3>
         <div class="cs-list" id="cs-agent-list">
           <div class="cs-state loading">正在检测本机 Agent…</div>
         </div>
-        <div class="cs-mode"><span>读取方式：只读导入，不写入任何 Agent，也不自动修改认知资产。认知从任何 Agent 来，带去任何 Agent。</span></div>
 
         <div class="cs-actions">
           <button class="cs-btn ghost cs-step2-back" data-csnext="1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
@@ -381,6 +423,11 @@ function _csLoadAgentAssets(agentType) {
     void _csLoadCodexSkills(agentType);
     void _csLoadCodexMemory(agentType);
     void _csLoadCodexTasks(agentType);
+  } else if (agentType === 'opencode') {
+    void _csLoadOpencodeSessions(agentType);
+    _csFillAssetSection(agentType, 'skills', `<div class="cs-state">${_csEsc(label)} 的技能读取暂未接入。</div>`);
+    void _csLoadOpencodeMemory(agentType);
+    void _csLoadOpencodeTasks(agentType);
   } else {
     _csFillAssetSection(agentType, 'sessions', `<div class="cs-state">${_csEsc(label)} 的会话读取暂未接入。</div>`);
     _csFillAssetSection(agentType, 'skills', `<div class="cs-state">${_csEsc(label)} 的技能读取暂未接入。</div>`);
@@ -596,9 +643,9 @@ function _csRenderTeam(items, unsupported, localClis) {
   }
 
   // Bucket both importable and unsupported rows by their originating agent.
-  const groups = new Map(); // appType → { ids: [], needsKey: n, unsupported: n, hasCli: bool }
+  const groups = new Map(); // appType → { ids: [], needsKey: n, unsupportedReasons: [], hasCli: bool }
   const bucket = (appType) => {
-    if (!groups.has(appType)) groups.set(appType, { ids: [], needsKey: 0, unsupported: 0, hasCli: false });
+    if (!groups.has(appType)) groups.set(appType, { ids: [], needsKey: 0, unsupportedReasons: [], hasCli: false });
     return groups.get(appType);
   };
   items.forEach((it) => {
@@ -606,7 +653,7 @@ function _csRenderTeam(items, unsupported, localClis) {
     g.ids.push(it.externalId);
     if (it.needsKey) g.needsKey += 1;
   });
-  unsupported.forEach((u) => { bucket(u.appType || 'other').unsupported += 1; });
+  unsupported.forEach((u) => { bucket(u.appType || 'other').unsupportedReasons.push(u.reason || 'unknown'); });
 
   // Fold detected local coding CLIs into the same buckets. A CLI maps to a
   // canonical appType so it either enriches an existing CC Switch card or
@@ -640,19 +687,38 @@ function _csRenderTeam(items, unsupported, localClis) {
 
     // Status line: connectable count, plus honest hints for needs-key /
     // non-migratable credentials — without exposing any key values.
+    const reasonLabels = {
+      official: '官方订阅登录',
+      unsupported_protocol: '暂不支持该 Agent 类型',
+      missing_api_key: '缺少 API Key',
+      invalid_config: '配置无法解析',
+    };
+    const unReasonCounts = {};
+    (g.unsupportedReasons || []).forEach((r) => { unReasonCounts[r] = (unReasonCounts[r] || 0) + 1; });
+    const unsupportedCount = (g.unsupportedReasons || []).length;
+
     let status;
     if (connectable) {
       status = `<span class="g-status">可连接</span>`;
-    } else if (g.unsupported) {
-      status = `<span class="g-status off">需登录连接</span>`;
+    } else if (unsupportedCount) {
+      // Honest reason per CC Switch's own classification — never guess "官方".
+      const onlyOfficial = unReasonCounts.official === unsupportedCount;
+      status = onlyOfficial
+        ? `<span class="g-status off">官方登录 · 需配置 Key 直连</span>`
+        : `<span class="g-status off">暂不支持直连</span>`;
     } else {
       status = `<span class="g-status off">暂不可连接</span>`;
     }
 
     const hints = [];
-    if (g.hasCli) hints.push('检测到本机命令行，可加入团队直接干活');
-    if (g.needsKey) hints.push(`${g.needsKey} 项需连接后到设置补充 Key`);
-    if (g.unsupported) hints.push(`${g.unsupported} 项为订阅/OAuth 登录，需在设置里登录`);
+    if (g.ids.length > 0) hints.push(`模型 ${g.ids.length} 项 → 模型供应商（提取/对话用）`);
+    if (g.hasCli) hints.push('执行 Agent → AI 团队（可派发任务）');
+    if (g.needsKey) hints.push('部分模型直连需 API Key（平台规则），可稍后在设置里补充');
+    Object.keys(unReasonCounts).forEach((r) => {
+      const n = unReasonCounts[r];
+      const label = reasonLabels[r] || '暂不支持';
+      hints.push(`${n} 项为${label}${r === 'unsupported_protocol' ? ' · 可稍后在设置里手动添加' : (r === 'missing_api_key' ? ' · 该 Agent 自身的 Key 可稍后补充' : '')}`);
+    });
     const hintHtml = hints.length ? `<small>${_csEsc(hints.join(' · '))}</small>` : '';
 
     const action = connectable
@@ -817,9 +883,11 @@ async function _csLoadClaudeSessions(agentType) {
         if (ev.target === checkbox) return;
         checkbox.checked = !checkbox.checked;
         row.classList.toggle('selected', checkbox.checked);
+        _csUpdateImportButtonVisibility();
       });
       checkbox.addEventListener('change', () => {
         row.classList.toggle('selected', checkbox.checked);
+        _csUpdateImportButtonVisibility();
       });
     });
 
@@ -858,7 +926,7 @@ async function _csLoadCodexSessions(agentType) {
       const cwdLabel = s.cwd ? `<small>${_csEsc(s.cwd)}</small>` : '';
       return `
         <div class="cs-src" data-session-id="${_csEsc(s.filePath)}">
-          <input type="checkbox" disabled />
+          <input type="checkbox" />
           <div class="s-ico">${CS_TERMINAL_SVG}</div>
           <div>
             <strong>${_csEsc(s.title)}</strong>
@@ -879,14 +947,15 @@ async function _csLoadCodexSessions(agentType) {
     container.querySelectorAll('.cs-src').forEach((row) => {
       const checkbox = row.querySelector('input[type="checkbox"]');
       if (!checkbox) return;
-      checkbox.disabled = false; // Enable checkboxes
       row.addEventListener('click', (ev) => {
         if (ev.target === checkbox) return;
         checkbox.checked = !checkbox.checked;
         row.classList.toggle('selected', checkbox.checked);
+        _csUpdateImportButtonVisibility();
       });
       checkbox.addEventListener('change', () => {
         row.classList.toggle('selected', checkbox.checked);
+        _csUpdateImportButtonVisibility();
       });
     });
 
@@ -897,6 +966,106 @@ async function _csLoadCodexSessions(agentType) {
     container.innerHTML = `<div class="cs-state err">读取 Codex 会话失败：${_csEsc(msg)}</div>`;
   }
 }
+
+// ── OpenCode sessions: scan ~/.local/share/opencode/opencode.db ──
+async function _csLoadOpencodeSessions(agentType) {
+  const container = _csFillAssetSection(agentType, 'sessions', '<div class="cs-state loading">正在扫描 OpenCode 会话…</div>');
+  if (!container) return;
+
+  try {
+    const res = await window.orkas.invoke('sessionImport.listOpencodeSessions');
+
+    if (!res.ok) {
+      const errorMsg = res.error === 'not_installed'
+        ? '未找到 OpenCode 数据库（~/.local/share/opencode/opencode.db 不存在）'
+        : res.error === 'bad_schema'
+        ? 'OpenCode 数据库结构不兼容，可能版本不匹配'
+        : `读取 OpenCode 数据库失败：${res.error}`;
+      container.innerHTML = `<div class="cs-state">${errorMsg}</div>`;
+      _csUpdateAssetCount(agentType, 'sessions', 0);
+      return;
+    }
+
+    const sessions = res.sessions || [];
+    console.log('[ONBOARDING] OpenCode sessions - total count:', sessions.length);
+
+    if (!sessions.length) {
+      container.innerHTML = '<div class="cs-state">未找到 OpenCode 历史会话。</div>';
+      _csUpdateAssetCount(agentType, 'sessions', 0);
+      return;
+    }
+
+    _csUpdateAssetCount(agentType, 'sessions', sessions.length);
+
+    // Render sessions with checkboxes
+    const sessionRows = sessions.map((s) => {
+      const time = s.timeUpdated ? new Date(s.timeUpdated).toLocaleString('zh-CN', {
+        month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'
+      }) : '';
+      const modelLabel = s.model ? `${s.model.providerID}/${s.model.modelID}` : '';
+      const msgCount = s.messageCount > 0 ? `${s.messageCount} 条消息` : '无消息';
+      return `
+        <div class="cs-src" data-session-id="${_csEsc(s.id)}">
+          <input type="checkbox" />
+          <div class="s-ico">${CS_TERMINAL_SVG}</div>
+          <div>
+            <strong>${_csEsc(s.title)}</strong>
+            <small>${_csEsc(msgCount)} · ${_csEsc(modelLabel)}</small>
+          </div>
+          <small style="color:var(--cs-muted);white-space:nowrap;">${_csEsc(time)}</small>
+        </div>`;
+    }).join('');
+
+    container.innerHTML = `<div class="cs-session-scroll">${sessionRows}</div>` +
+      `<div class="cs-import-bar">
+         <button type="button" class="cs-import-btn" onclick="_csImportOpencodeSessions('${_csEsc(agentType)}')">导入所选会话（最多 3 条）</button>
+         <div class="cs-import-result" id="cs-import-result-${_csEsc(agentType)}-sessions"></div>
+       </div>`;
+
+    // Wire up checkbox interactions
+    container.querySelectorAll('.cs-src').forEach((row) => {
+      const checkbox = row.querySelector('input[type="checkbox"]');
+      if (!checkbox) return;
+      row.addEventListener('click', (ev) => {
+        if (ev.target === checkbox) return;
+        checkbox.checked = !checkbox.checked;
+        row.classList.toggle('selected', checkbox.checked);
+        _csUpdateImportButtonVisibility();
+      });
+      checkbox.addEventListener('change', () => {
+        row.classList.toggle('selected', checkbox.checked);
+        _csUpdateImportButtonVisibility();
+      });
+    });
+
+    _obLog.info('loaded OpenCode sessions', { count: sessions.length });
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    _obLog.warn('failed to load OpenCode sessions', { error: msg });
+    container.innerHTML = `<div class="cs-state err">读取 OpenCode 会话失败：${_csEsc(msg)}</div>`;
+  }
+}
+
+// Import selected OpenCode sessions (stub for now - will implement later)
+window._csImportOpencodeSessions = async function(agentType) {
+  const container = _csFillAssetSection(agentType, 'sessions');
+  if (!container) return;
+  const rows = [...container.querySelectorAll('.cs-src[data-session-id]')];
+  const selected = rows.filter((r) => r.querySelector('input[type="checkbox"]')?.checked);
+  const result = document.getElementById(`cs-import-result-${agentType}-sessions`);
+
+  if (!selected.length) {
+    if (result) result.textContent = '请先勾选要导入的会话';
+    return;
+  }
+  if (selected.length > 3) {
+    if (result) result.textContent = '一次最多只能导入 3 条会话，请减少勾选数量';
+    return;
+  }
+
+  if (result) result.textContent = 'OpenCode 会话导入功能开发中…';
+  _obLog.info('OpenCode session import requested', { count: selected.length });
+};
 
 // Import the user-selected Claude Code sessions into real conversations.
 // Honest results: per-session ok/fail shown in the import result bar; the
@@ -1311,7 +1480,8 @@ async function _csLoadClaudeMemory(agentType) {
     const total = (res && res.totalEntries) || 0;
 
     if (!sources.length) {
-      container.innerHTML = '<div class="cs-state">未检测到任何 Claude Code 记忆来源。</div>';
+      container.innerHTML =
+        '<div class="cs-state">未检测到 Claude Code 记忆文件。记忆来自 Claude Code 使用中自动生成的 CLAUDE.md、MEMORY.md、项目 memory 等文件——先用 Claude Code 工作一段时间，或手动在 ~/.claude/ 下创建这些文件后，这里会出现可导入的记忆。</div>';
       return;
     }
 
@@ -1479,6 +1649,164 @@ async function _csImportCodexMemory(container) {
 function _csRenderNoTasks(agentType) {
   _csFillAssetSection(agentType, 'tasks',
     '<div class="cs-state">Claude Code 没有原生的定时任务存储，暂无可导入的定时任务。你可以在本应用的「定时任务」模块里直接新建。</div>');
+}
+
+// ── OpenCode memory: config preferences from opencode.json/.jsonc ─────────
+async function _csLoadOpencodeMemory(agentType) {
+  const container = _csFillAssetSection(agentType, 'memory', '<div class="cs-state loading">正在读取 OpenCode 配置…</div>');
+  if (!container) return;
+
+  try {
+    const res = await window.orkas.invoke('sessionImport.readOpencodeMemory');
+    const present = res && res.present;
+    const entries = (res && res.entries) || [];
+
+    if (!present || !entries.length) {
+      const reasonText = res && res.reason === 'not_found'
+        ? '未找到 opencode.json / opencode.jsonc 配置文件'
+        : '配置文件为空（没有可导入的模型/指令偏好）';
+      container.innerHTML =
+        `<div class="cs-state">OpenCode 配置记忆（~/.config/opencode/opencode.json）${reasonText}。` +
+        `配置了模型提供商或全局指令后，这里会出现可导入的偏好。</div>`;
+      return;
+    }
+
+    const sample = entries.slice(0, 5).map((e) => `<div>${_csEsc(e)}</div>`).join('');
+    const more = entries.length > 5 ? '<div>…</div>' : '';
+
+    container.innerHTML =
+      `<div class="cs-state">从 OpenCode 配置检测到 ${entries.length} 条偏好。导入后进入共享知识库。</div>` +
+      `<div class="cs-import-lines">${sample}${more}</div>` +
+      `<div class="cs-import-bar">
+         <button type="button" class="cs-codex-mem-import-btn" data-agent="${_csEsc(agentType)}">导入 OpenCode 配置</button>
+         <div class="cs-import-result cs-codex-mem-result" data-agent="${_csEsc(agentType)}"></div>
+       </div>`;
+
+    const btn = container.querySelector('.cs-codex-mem-import-btn');
+    if (btn) btn.addEventListener('click', () => void _csImportCodexMemory(container));
+
+    _obLog.info('previewed OpenCode memory', { count: entries.length });
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    _obLog.warn('failed to read OpenCode memory', { error: msg });
+    container.innerHTML = `<div class="cs-state err">读取 OpenCode 配置失败：${_csEsc(msg)}</div>`;
+  }
+}
+
+// OpenCode has no scheduled-task feature (its `todo` table is an in-session
+// task checklist). We surface the REAL todos and import them as one-time
+// tasks — honestly labeled, never a fabricated cadence.
+async function _csLoadOpencodeTasks(agentType) {
+  const container = _csFillAssetSection(agentType, 'tasks', '<div class="cs-state loading">正在读取 OpenCode 任务清单…</div>');
+  if (!container) return;
+
+  try {
+    const res = await window.orkas.invoke('sessionImport.listOpencodeTodos');
+    const todos = (res && res.todos) || [];
+
+    if (!todos.length) {
+      container.innerHTML =
+        '<div class="cs-state">OpenCode 没有定时任务功能；其会话内任务清单（todo）也是空的。</div>';
+      return;
+    }
+
+    const statusZh = (s) => (s === 'completed' ? '已完成' : (s === 'in_progress' ? '进行中' : _csEsc(s || '待办')));
+    const rows = todos.map((t, idx) => {
+      const hidden = idx >= 3 ? ' style="display:none"' : '';
+      const src = t.sessionTitle ? `<small>来自会话：${_csEsc(t.sessionTitle)}</small>` : '';
+      return `
+        <div class="cs-src cs-collapsible-item"${hidden} data-todo-id="${_csEsc(t.id)}">
+          <input type="checkbox" />
+          <div class="s-ico">${CS_TERMINAL_SVG}</div>
+          <div>
+            <strong>${_csEsc(t.content)}</strong>
+            ${src}
+          </div>
+          <small style="color:var(--cs-muted);white-space:nowrap;">${statusZh(t.status)}</small>
+        </div>`;
+    }).join('');
+
+    const toggleBtn = todos.length > 3
+      ? `<button type="button" class="cs-toggle-more">显示全部 ${todos.length} 条任务</button>`
+      : '';
+
+    container.innerHTML =
+      `<div class="cs-state">检测到 ${todos.length} 条 OpenCode 任务清单（todo，无定时调度）。勾选后导入为一次性任务，执行时间默认为 1 小时后，可在「任务」模块调整。</div>` +
+      rows + toggleBtn +
+      `<div class="cs-import-bar">
+         <button type="button" class="cs-import-btn" onclick="_csImportOpencodeTodos('${_csEsc(agentType)}')">导入所选任务</button>
+         <div class="cs-import-result"></div>
+       </div>`;
+
+    container.querySelectorAll('.cs-src input[type="checkbox"]').forEach((cb) => {
+      const row = cb.closest('.cs-src');
+      cb.addEventListener('change', () => row.classList.toggle('selected', cb.checked));
+      row.addEventListener('click', (ev) => {
+        if (ev.target === cb) return;
+        cb.checked = !cb.checked;
+        row.classList.toggle('selected', cb.checked);
+      });
+    });
+
+    const moreBtn = container.querySelector('.cs-toggle-more');
+    if (moreBtn) {
+      moreBtn.addEventListener('click', () => {
+        const items = container.querySelectorAll('.cs-collapsible-item');
+        const allVisible = Array.from(items).every((el) => el.style.display !== 'none');
+        items.forEach((el, idx) => { if (idx >= 3) el.style.display = allVisible ? 'none' : ''; });
+        moreBtn.textContent = allVisible ? `显示全部 ${todos.length} 条任务` : '收起';
+      });
+    }
+
+    const badge = document.getElementById(`cs-count-${agentType}-tasks`);
+    if (badge) badge.textContent = `(${todos.length})`;
+
+    _obLog.info('loaded OpenCode todos', { count: todos.length });
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    _obLog.warn('failed to load OpenCode todos', { error: msg });
+    container.innerHTML = `<div class="cs-state err">读取 OpenCode 任务清单失败：${_csEsc(msg)}</div>`;
+  }
+}
+
+// Import the user-selected OpenCode todos as one-time tasks.
+async function _csImportOpencodeTodos(agentType) {
+  const container = _csFillAssetSection(agentType, 'tasks');
+  if (!container) return;
+  const rows = [...container.querySelectorAll('.cs-src[data-todo-id]')];
+  const selected = rows
+    .filter((r) => r.querySelector('input[type="checkbox"]')?.checked)
+    .map((r) => r.dataset.todoId)
+    .filter(Boolean);
+  const bar = container.querySelector('.cs-import-bar');
+  const btn = bar ? bar.querySelector('.cs-import-btn') : null;
+  const resultBox = bar ? bar.querySelector('.cs-import-result') : null;
+  if (!selected.length) {
+    if (resultBox) resultBox.innerHTML = '<div class="cs-state">请先勾选要导入的任务。</div>';
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = '导入中…'; }
+  if (resultBox) resultBox.innerHTML = '<div class="cs-state loading">正在导入所选任务…</div>';
+  try {
+    const res = await window.orkas.invoke('sessionImport.importOpencodeTodos', { todoIds: selected });
+    const r = res || {};
+    const parts = [`成功 ${r.imported || 0} 条`];
+    if (r.skipped) parts.push(`跳过 ${r.skipped} 条`);
+    if (r.failed) parts.push(`失败 ${r.failed} 条`);
+    resultBox.innerHTML =
+      `<div class="cs-state">导入完成：${parts.join('，')}。已作为一次性任务加入「任务」模块（默认 1 小时后执行，可调整）。</div>`;
+    selected.forEach((id) => {
+      const row = container.querySelector(`.cs-src[data-todo-id="${id}"]`);
+      if (row) { row.classList.add('done'); const cb = row.querySelector('input[type="checkbox"]'); if (cb) cb.checked = false; }
+    });
+    _obLog.info('opencode todos import finished', { selected: selected.length, result: r });
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    _obLog.warn('opencode todos import failed', { error: msg });
+    if (resultBox) resultBox.innerHTML = `<div class="cs-state err">导入任务失败：${_csEsc(msg)}</div>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '导入所选任务'; }
+  }
 }
 
 // Format an epoch-ms timestamp as a short local datetime, or a dash when null.
