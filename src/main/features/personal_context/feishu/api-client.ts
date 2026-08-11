@@ -98,7 +98,14 @@ export class HttpFeishuApiClient implements FeishuApiClient {
       throw new Error(`feishu api network error: ${err instanceof Error ? err.message : String(err)}`);
     }
     if (!response.ok) {
-      throw new Error(`feishu api http ${response.status}`);
+      // HTTP 非 2xx：飞书通常返回 JSON body（含业务 code/msg），
+      // 一并带进错误信息，否则无法区分是哪个端点、什么原因。
+      let detail = '';
+      try {
+        const text = await response.text();
+        if (text) detail = `: ${text.slice(0, 400)}`;
+      } catch { /* body read is best effort */ }
+      throw new Error(`feishu api http ${response.status} ${path}${detail}`);
     }
     const body = (await response.json()) as { code?: unknown; msg?: unknown };
     if (isFeishuError(body)) {

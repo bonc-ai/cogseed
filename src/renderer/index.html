@@ -1483,13 +1483,23 @@
             <!-- ─────────────────────── 消息平台 ─────────────────────── -->
             <div class="settings-tab-pane" data-settings-pane="messaging" hidden>
               <div class="touchpoint-settings-shell" aria-live="polite">
-                <div id="touchpoint-settings-page"></div>
-                <details class="touchpoint-advanced" id="touchpoint-advanced">
-                  <summary><span data-i18n="touchpoint_settings.advanced.title">高级连接管理</span><small data-i18n="touchpoint_settings.advanced.detail">机器人实例、扫码绑定与消息行为</small></summary>
+                <div class="touchpoint-view" id="touchpoint-overview-view">
+                  <div id="touchpoint-settings-page"></div>
+                </div>
+                <div class="touchpoint-view touchpoint-connections-view" id="touchpoint-connections-view" hidden>
+                  <header class="touchpoint-connections-header">
+                    <button class="btn touchpoint-icon-button" type="button" data-touchpoint-action="connections.back" data-i18n-title="touchpoint_settings.connections.back" data-i18n-aria-label="touchpoint_settings.connections.back" title="返回触点概览" aria-label="返回触点概览">
+                      <span data-ui-icon="arrow-left" data-ui-icon-class="touchpoint-refresh-icon"></span>
+                    </button>
+                    <div>
+                      <h2 data-i18n="touchpoint_settings.connections.title">连接管理</h2>
+                      <p data-i18n="touchpoint_settings.connections.detail">机器人实例、扫码绑定与消息行为</p>
+                    </div>
+                  </header>
                   <div class="messaging-settings-shell" id="messaging-settings-shell">
                     <div class="messaging-page" id="messaging-page"></div>
                   </div>
-                </details>
+                </div>
               </div>
             </div>
 

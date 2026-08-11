@@ -31,6 +31,10 @@
       error: '',
       timer: null,
     },
+    // 扫码绑定成功后的回调地址引导卡（一次性配置，飞书平台不允许程序化
+    // 修改重定向 URL，只能引导用户在开发者后台手动完成）。
+    setupGuide: null,
+    setupGuideDismissed: false,
     wecom: {
       flowId: '',
       state: '',
@@ -40,6 +44,9 @@
       cancelling: false,
       revision: 0,
       timer: null,
+      // 连续轮询网络错误计数：超过阈值即停止轮询并报错，
+      // 而不是弹窗关闭后仍无限重试（旧行为）。
+      pollErrorCount: 0,
     },
     wechat: {
       flowId: '',
@@ -51,6 +58,7 @@
       cancelling: false,
       revision: 0,
       timer: null,
+      pollErrorCount: 0,
     },
   };
 
@@ -67,6 +75,9 @@
     { key: 'dingtalk', platform: 'dingtalk', icon: 'dingtalk', group: 'soon' },
     { key: 'discord', platform: 'discord', icon: 'discord', group: 'soon' },
   ]);
+
+  // 轮询连续网络错误上限：超过后停止轮询并提示，避免弹窗已关闭还无限重试。
+  const MAX_POLL_ERRORS = 5;
 
   const QR_TERMINAL_STATES = new Set(['completed', 'cancelled', 'expired', 'denied', 'failed']);
   const WECHAT_TERMINAL_STATES = new Set(['completed', 'cancelled', 'expired', 'blocked', 'failed']);
@@ -375,6 +386,83 @@
     resetQrState();
     setNotice(labelFor('messaging.feishu_qr.completed', ''), 'success');
     renderCurrent();
+    // 绑定成功 → 拉起回调地址引导卡（一次性）：飞书要求重定向 URL 与
+    // 开发者后台精确一致，不配置则授权时必报 20029。扫码后直接引导，
+    // 用户只需复制 → 打开后台 → 粘贴 → 添加 → 发布。
+    const bound = instance && typeof instance.id === 'string' ? instance.id : state.selectedInstanceId;
+    void loadSetupGuide(bound, instance && instance.feishuTenantBrand);
+  }
+
+  async function loadSetupGuide(instanceId, brand) {
+    if (!instanceId) return;
+    try {
+      const result = await invoke('personal_context.setup_guide', { instanceId });
+      const guide = result && result.guide;
+      if (!guide || !guide.credentialReady || !guide.appId || !guide.redirectUri) return;
+      state.setupGuide = {
+        appId: guide.appId,
+        redirectUri: guide.redirectUri,
+        brand: brand === 'lark' ? 'lark' : 'feishu',
+      };
+      state.setupGuideDismissed = false;
+      renderCurrent();
+    } catch (_error) {
+      // 引导卡是尽力而为：主进程不可用时不影响绑定成功状态
+    }
+  }
+
+  function renderSetupGuideCard() {
+    if (!state.setupGuide || state.setupGuideDismissed) return null;
+    const guide = state.setupGuide;
+    const consoleUrl = guide.brand === 'lark'
+      ? `https://open.larksuite.com/app/${guide.appId}/safe`
+      : `https://open.feishu.cn/app/${guide.appId}/safe`;
+    const section = el('section', 'messaging-config-card messaging-setup-guide-card');
+    const heading = el('div', 'messaging-config-card-heading');
+    heading.appendChild(el('h3', '', labelFor('messaging.setup_guide.title', '')));
+    heading.appendChild(el('p', '', labelFor('messaging.setup_guide.desc', '')));
+    section.appendChild(heading);
+
+    const urlRow = el('div', 'messaging-setup-guide-url');
+    const url = el('code', '', guide.redirectUri);
+    urlRow.appendChild(url);
+    const copy = el('button', 'btn messaging-secondary-button', labelFor('messaging.setup_guide.copy', ''));
+    copy.type = 'button';
+    copy.appendChild(icon('copy', 'messaging-action-icon'));
+    copy.addEventListener('click', () => {
+      navigator.clipboard.writeText(guide.redirectUri).then(() => {
+        copy.textContent = labelFor('messaging.setup_guide.copied', '');
+        setTimeout(() => {
+          copy.textContent = labelFor('messaging.setup_guide.copy', '');
+        }, 1800);
+      }).catch(() => { /* clipboard unavailable; user can select the url manually */ });
+    });
+    urlRow.appendChild(copy);
+    section.appendChild(urlRow);
+
+    section.appendChild(el('p', 'messaging-setup-guide-steps', labelFor('messaging.setup_guide.steps', '')));
+
+    const actions = el('div', 'messaging-setup-guide-actions');
+    const open = el('button', 'btn messaging-scan-button', labelFor('messaging.setup_guide.open_console', ''));
+    open.type = 'button';
+    open.appendChild(icon('external-link', 'messaging-action-icon'));
+    open.addEventListener('click', () => {
+      void invoke('auth.openExternal', { url: consoleUrl }).catch(() => {
+        setNotice(labelFor('messaging.setup_guide.open_failed', ''), 'error');
+        renderCurrent();
+      });
+    });
+    const done = el('button', 'btn messaging-secondary-button', labelFor('messaging.setup_guide.done', ''));
+    done.type = 'button';
+    done.addEventListener('click', () => {
+      // 用户确认已配置：记录本机标记，触点页授权时不再拦截
+      void invoke('personal_context.setup_guide.confirm', {}).catch(() => { /* best effort */ });
+      state.setupGuideDismissed = true;
+      renderCurrent();
+    });
+    actions.append(open, done);
+    section.appendChild(actions);
+    return section;
   }
 
   async function pollQr(flowId, revision) {
@@ -674,6 +762,10 @@
   function renderFeishuPanel(channel) {
     const wrapper = el('div', 'messaging-panel-body');
     wrapper.appendChild(renderInstanceList(channel));
+    // 扫码绑定成功后弹出的回调地址引导卡（一次性）：位于实例列表下方，
+    // 绑定新的飞书机器人时自动出现，配置完成后可关闭。
+    const guideCard = renderSetupGuideCard();
+    if (guideCard) wrapper.appendChild(guideCard);
     const instances = instancesForChannel(channel);
     const instance = instances.find((item) => item.id === state.selectedInstanceId) || instances[0] || null;
     if (instance) {
@@ -726,7 +818,8 @@
   }
 
   async function startQrForChannel(channel) {
-    if (!channel || state.openingChannel) return;
+    // QR 流程进行中（含轮询）时忽略重复触发，避免连点"连接"反复创建新实例
+    if (!channel || state.openingChannel || qrIsPending()) return;
     const operation = ++state.operation;
     state.openingChannel = channel.key;
     setNotice('', '');
@@ -748,11 +841,9 @@
       state.selectedInstanceId = instance.id;
       state.openingChannel = '';
       renderCurrent();
-      // No-owner Feishu bot: guide the user to claim it by sending the first
-      // direct message — no manual open id needed (main opens a binding window).
-      if (instance.ownerConfigured === false && typeof uiAlert === 'function') {
-        uiAlert(labelFor('messaging.owner_bind_hint', ''));
-      }
+      // No-owner Feishu bot: QR 面板内有常驻的 owner 绑定引导区
+      // （messaging-owner-guide），不再弹全屏提示窗——弹窗遮罩会拦截页面
+      // 点击，打断"点按钮→扫码→完事"流程（触点页曾因此表现为"卡死"）。
       await startQr(instance);
     } catch (error) {
       if (state.operation !== operation) return;
@@ -924,6 +1015,7 @@
         state.wecom.authUrl = '';
         state.wecom.starting = false;
         state.wecom.cancelling = false;
+        state.wecom.pollErrorCount = 0;
         if (opts.render !== false) renderCurrent();
       }
     }
@@ -955,6 +1047,7 @@
     try {
       const result = await invoke('messaging.wecom_qr.status', { flowId });
       if (state.wecom.revision !== revision) return;
+      state.wecom.pollErrorCount = 0;
       const registration = result && result.registration ? result.registration : result;
       const nextState = typeof registration.state === 'string' ? registration.state : 'failed';
       if (nextState === 'completed' && registration.instance && registration.instance.id) {
@@ -975,7 +1068,17 @@
         return;
       }
       scheduleWecomPoll(flowId);
-    } catch (_) {
+    } catch (error) {
+      if (state.wecom.revision !== revision) return;
+      state.wecom.pollErrorCount += 1;
+      // 连续网络错误超过阈值才放弃：偶发抖动不应打断绑定流程，
+      // 但弹窗已关闭/网络长期不可用时也不能无限轮询下去。
+      if (state.wecom.pollErrorCount >= MAX_POLL_ERRORS) {
+        setNotice(errorMessage(error, labelFor('messaging.wecom_qr.invalid_message', '')), 'error');
+        await cancelWecomFlow({ silent: true, render: false });
+        renderCurrent();
+        return;
+      }
       scheduleWecomPoll(flowId);
     }
   }
@@ -1066,6 +1169,7 @@
     state.wechat.errorCode = '';
     state.wechat.starting = false;
     state.wechat.cancelling = false;
+    state.wechat.pollErrorCount = 0;
   }
 
   async function cancelWechatFlow(options) {
@@ -1146,7 +1250,18 @@
       }
       renderCurrent();
       scheduleWechatPoll(flowId);
-    } catch (_) {
+    } catch (error) {
+      if (state.wechat.revision !== revision) return;
+      state.wechat.pollErrorCount += 1;
+      // 连续网络错误超过阈值才放弃：偶发抖动不打断绑定流程，
+      // 但长期不可用时也不能无限轮询。
+      if (state.wechat.pollErrorCount >= MAX_POLL_ERRORS) {
+        state.wechat.error = errorMessage(error, labelFor('messaging.wechat_qr.start_failed', ''));
+        setNotice(state.wechat.error, 'error');
+        await cancelWechatFlow({ silent: true, render: false });
+        renderCurrent();
+        return;
+      }
       scheduleWechatPoll(flowId);
     }
   }

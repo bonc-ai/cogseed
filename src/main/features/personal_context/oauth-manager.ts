@@ -55,12 +55,12 @@ export interface TokenEndpoint {
   refreshToken(refreshToken: string, scopes: string[]): Promise<OAuthCredential>;
   revokeToken(refreshToken: string): Promise<void>;
   /** 用当前 access token 做轻量健康检查（如 user_info）；ok=false 时附原因。
-   *  identity 为可选的用户身份解析（unionId/tenantKey），供 provider 构建使用 */
-  healthCheck(accessToken: string): Promise<{
+   *  identity 为可选的用户身份解析（unionId/tenantKey/name），供 provider 构建使用 */
+  healthCheck?: (accessToken: string) => Promise<{
     ok: boolean;
     error?: string;
-    code?: TokenEndpointErrorCode;
-    identity?: { unionId?: string; tenantKey?: string };
+    code?: string;
+    identity?: { unionId?: string; tenantKey?: string; name?: string };
   }>;
 }
 
@@ -75,6 +75,8 @@ export interface OAuthStoreFile {
   pendingState?: string;
   scopes: string[];
   connectedAt?: string;
+  /** 授权账号的展示名（user_info.name，授权完成后写入一次） */
+  identityLabel?: string;
   /** 加密后的 OAuthCredential JSON（local-secret-store 加密），仅已授权时存在 */
   secretsEnc?: string;
 }
@@ -83,6 +85,8 @@ export interface OAuthConnectionStatus extends ConnectorStatus {
   /** true 表示令牌已失效、必须重新授权（invalid_grant） */
   needsReauth: boolean;
   connectedAt?: string;
+  /** 授权账号的展示名（user_info.name） */
+  identityLabel?: string;
 }
 
 // ── 路径与锁 ──────────────────────────────────────────────────────────────
@@ -315,7 +319,7 @@ export class OAuthManager {
         await writeStore(uid, providerId, store);
         return toConnectionStatus(store);
       }
-      let result: { ok: boolean; error?: string; code?: TokenEndpointErrorCode };
+      let result: { ok: boolean; error?: string; code?: string };
       try {
         result = await this.endpoint.healthCheck(credential.accessToken);
       } catch (err) {
@@ -329,7 +333,9 @@ export class OAuthManager {
         store.status = { kind: store.status.kind, checkedAt: nowIso() };
       } else {
         store.status = status('error', result.error ?? '健康检查失败');
-        store.lastErrorCode = result.code ?? 'provider_error';
+        store.lastErrorCode = result.code === 'invalid_grant' || result.code === 'network_error'
+          ? result.code
+          : 'provider_error';
       }
       await writeStore(uid, providerId, store);
       return toConnectionStatus(store);
@@ -342,6 +348,21 @@ export class OAuthManager {
   async getStatus(uid: string, providerId: string): Promise<OAuthConnectionStatus> {
     const store = await readStore(uid, providerId);
     return toConnectionStatus(store);
+  }
+
+  /** 授权账号展示名（user_info.name），授权完成后写入一次供 dashboard 展示 */
+  async setIdentityLabel(uid: string, providerId: string, label: string): Promise<void> {
+    const clean = typeof label === 'string' && label.trim() ? label.trim().slice(0, 120) : '';
+    if (!clean) return;
+    const release = await lockFor(uid, providerId).acquire();
+    try {
+      const store = await readStore(uid, providerId);
+      if (store.identityLabel === clean) return;
+      store.identityLabel = clean;
+      await writeStore(uid, providerId, store);
+    } finally {
+      release();
+    }
   }
 
   /** 供同步等内部使用：解密凭据；未授权/已撤销返回 null */
@@ -376,6 +397,7 @@ function toConnectionStatus(store: OAuthStoreFile): OAuthConnectionStatus {
     ...store.status,
     needsReauth: store.lastErrorCode === 'invalid_grant',
     connectedAt: store.connectedAt,
+    ...(store.identityLabel ? { identityLabel: store.identityLabel } : {}),
   };
 }
 

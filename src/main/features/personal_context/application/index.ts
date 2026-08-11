@@ -1,4 +1,4 @@
-import * as messagingRegistry from '../../messaging/registry';
+import * as messagingManager from '../../messaging/manager';
 import * as autoTasks from '../../auto_tasks';
 import {
   confirmCandidate,
@@ -43,6 +43,7 @@ function mapAuthorizationStatus(status: Awaited<ReturnType<typeof manager.getSta
   needsReauth: boolean;
   authorizing: boolean;
   error?: string;
+  identityLabel?: string;
 } {
   return {
     kind: status.needsReauth
@@ -57,6 +58,7 @@ function mapAuthorizationStatus(status: Awaited<ReturnType<typeof manager.getSta
     needsReauth: status.needsReauth,
     authorizing: Boolean(status.authorizing),
     ...(status.error ? { error: status.error } : {}),
+    ...(status.identityLabel ? { identityLabel: status.identityLabel } : {}),
   };
 }
 
@@ -64,14 +66,20 @@ function getDefaultService(): PersonalContextApplicationService {
   if (defaultService) return defaultService;
   defaultService = createPersonalContextApplicationService({
     async listMessagingInstances(userId) {
-      const instances = await messagingRegistry.listInstances(userId);
+      // 必须走 manager.listInstances（实时状态覆盖），不能直接读 registry：
+      // 磁盘持久化会把 connected/connecting 归为 disconnected（连接是瞬时态，
+      // 重启后不应信任旧状态），触点 dashboard 若读磁盘就会永远显示未连接。
+      const instances = await messagingManager.listInstances(userId);
       return instances.map((instance) => ({
         id: instance.id,
         platform: instance.platform,
         enabled: instance.enabled,
         ownerConfigured: instance.ownerConfigured,
         ...(instance.ownerLabel ? { ownerLabel: instance.ownerLabel } : {}),
+        // owner 只有 id 没名字时透传掩码 id（ou_ab12…cd34），前端"接收身份"有兜底可显示
+        ...(instance.ownerMaskedId ? { ownerMaskedId: instance.ownerMaskedId } : {}),
         statusKind: instance.status.kind,
+        ...(instance.feishuTenantBrand ? { feishuTenantBrand: instance.feishuTenantBrand } : {}),
       }));
     },
     async getAuthorizationStatus(userId) {
@@ -100,7 +108,15 @@ function getDefaultService(): PersonalContextApplicationService {
     },
     async buildBriefingPreview(userId) {
       const data = await listCandidates(userId);
-      return { state: 'preview_ready', pendingCandidateCount: data.candidate_updates.length };
+      const tasks = await autoTasks.listTasks(userId);
+      const briefingTask = tasks.find((task) => task.briefing === true);
+      return {
+        state: 'preview_ready',
+        pendingCandidateCount: data.candidate_updates.length,
+        ...(briefingTask && briefingTask.schedule.type === 'daily'
+          ? { briefingTask: { id: briefingTask.id, hour: briefingTask.schedule.hour, minute: briefingTask.schedule.minute, enabled: briefingTask.enabled } }
+          : {}),
+      };
     },
   });
   return defaultService;
@@ -222,13 +238,27 @@ export async function rejectReviewItem(userId: string, candidateId: string): Pro
 }
 
 
+/**
+ * 选取简报/测试消息的投递实例：与 service.ts 的 dashboard 主实例选择
+ * 保持同一优先级（飞书中国版品牌 > 已连接 > 第一个启用实例），否则会出现
+ * dashboard 显示飞书、实际消息却发到 Lark 的错位。
+ */
+function pickBriefingTarget(instances: Array<{ id: string; platform: string; enabled: boolean; status: { kind: string }; feishuTenantBrand?: string }>): string | undefined {
+  const candidates = instances.filter((instance) => instance.platform === 'feishu_lark' && instance.enabled);
+  return (
+    candidates.find((instance) => instance.feishuTenantBrand === 'feishu')?.id
+    ?? candidates.find((instance) => instance.status.kind === 'connected')?.id
+    ?? candidates[0]?.id
+  );
+}
+
 export async function testBriefingDelivery(userId: string, instanceId?: string): Promise<{ dashboard: PersonalContextDashboard; result: { ok: boolean; code?: string; error?: string } }> {
   const { dashboard, preview } = await previewBriefing(userId);
   if (dashboard.mode === 'demo') return { dashboard, result: { ok: true, code: 'demo_delivery' } };
-  const instances = await messagingRegistry.listInstances(userId);
-  const target = instanceId || instances.find((instance) => instance.platform === 'feishu_lark' && instance.enabled)?.id;
+  const instances = await messagingManager.listInstances(userId);
+  const target = instanceId || pickBriefingTarget(instances);
   if (!target) return { dashboard, result: { ok: false, code: 'instance_unknown', error: '没有可用的飞书消息实例' } };
-  const result = await dispatchToFeishuHome(userId, { instanceId: target, text: preview.text, sourceKey: `briefing:test:${new Date().toISOString().slice(0, 10)}` });
+  const result = await dispatchToFeishuHome(userId, { instanceId: target, text: preview.text, sourceKey: `briefing:test:${new Date().toISOString()}` });
   if ('code' in result) return { dashboard: await getDashboard(userId), result: { ok: false, code: result.code, error: result.error } };
   return { dashboard: await getDashboard(userId), result: { ok: true } };
 }
@@ -239,19 +269,39 @@ export async function scheduleBriefing(userId: string, input: { instanceId?: str
   if (!Number.isInteger(input.hour) || input.hour < 0 || input.hour > 23 || !Number.isInteger(input.minute) || input.minute < 0 || input.minute > 59) {
     return { dashboard, error: '简报时间必须是有效的小时和分钟' };
   }
-  const instances = await messagingRegistry.listInstances(userId);
+  const instances = await messagingManager.listInstances(userId);
   const target = input.instanceId || instances.find((instance) => instance.platform === 'feishu_lark' && instance.enabled)?.id;
   if (!target) return { dashboard, error: '没有可用的飞书消息实例' };
+  const schedule = { type: 'daily' as const, hour: input.hour, minute: input.minute };
+  const recipient = { kind: 'messaging' as const, instanceId: target, recipient: 'owner' as const };
+  // 去重：已存在简报任务则更新（时间/接收实例），避免重复点击产生多个每日简报。
+  const existing = (await autoTasks.listTasks(userId)).find((task) => task.briefing === true);
+  if (existing) {
+    const updated = await autoTasks.updateTask(userId, existing.id, { schedule, recipient, enabled: true });
+    if ('error' in updated) return { dashboard, error: updated.error };
+    return { dashboard: await getDashboard(userId), taskId: updated.task.id };
+  }
   const created = await autoTasks.createTask(userId, {
     title: '每日飞书简报',
     content: '生成并投递今日个人简报',
     briefing: true,
     enabled: true,
-    recipient: { kind: 'messaging', instanceId: target, recipient: 'owner' },
-    schedule: { type: 'daily', hour: input.hour, minute: input.minute },
+    recipient,
+    schedule,
   });
   if ('error' in created) return { dashboard, error: created.error };
   return { dashboard: await getDashboard(userId), taskId: created.task.id };
+}
+
+/** 取消每日简报：删除简报任务（不保留禁用任务，避免列表噪音与混淆） */
+export async function unscheduleBriefing(userId: string): Promise<{ dashboard: PersonalContextDashboard; removed: boolean; error?: string }> {
+  const dashboard = await getDashboard(userId);
+  if (dashboard.mode === 'demo') return { dashboard, removed: false, error: '演示模式无需取消' };
+  const existing = (await autoTasks.listTasks(userId)).find((task) => task.briefing === true);
+  if (!existing) return { dashboard, removed: false };
+  const result = await autoTasks.deleteTask(userId, existing.id);
+  if (!result.ok) return { dashboard, removed: false, error: '取消简报失败，请稍后重试' };
+  return { dashboard: await getDashboard(userId), removed: true };
 }
 
 export function resetPersonalContextApplicationServiceForTest(): void {

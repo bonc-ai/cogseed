@@ -13,7 +13,9 @@ export interface MessagingDependencyInstance {
   enabled: boolean;
   ownerConfigured: boolean;
   ownerLabel?: string;
+  ownerMaskedId?: string;
   statusKind: string;
+  feishuTenantBrand?: 'feishu' | 'lark';
 }
 
 export interface AuthorizationDependencyStatus {
@@ -37,6 +39,8 @@ export interface CandidateDependencyItem {
 export interface BriefingDependencySummary {
   state: BriefingState;
   pendingCandidateCount: number;
+  /** 已配置的每日简报任务（去重/状态展示用）；无则 undefined */
+  briefingTask?: { id: string; hour: number; minute: number; enabled: boolean };
 }
 
 export interface PersonalContextApplicationDependencies {
@@ -97,7 +101,13 @@ function actionsFor(input: Readonly<{
 
 async function buildRealDashboard(userId: string, deps: PersonalContextApplicationDependencies): Promise<PersonalContextDashboard> {
   const instances = await deps.listMessagingInstances(userId);
-  const feishu = instances.find((instance) => instance.platform === 'feishu_lark' && instance.enabled) || null;
+  const feishuCandidates = instances.filter((instance) => instance.platform === 'feishu_lark' && instance.enabled);
+  // 与 manager.pickFeishuInstance 保持一致的选实例优先级：飞书品牌 > 已连接 > 第一个，
+  // 避免同时配了飞书+Lark 时授权/投递落到错误的应用上。
+  const feishu = feishuCandidates.find((instance) => instance.feishuTenantBrand === 'feishu')
+    ?? feishuCandidates.find((instance) => instance.statusKind === 'connected')
+    ?? feishuCandidates[0]
+    ?? null;
   const botConnected = feishu?.statusKind === 'connected';
   const authorization = await deps.getAuthorizationStatus(userId);
   const registry = await deps.listRegistryEntries(userId);
@@ -113,6 +123,7 @@ async function buildRealDashboard(userId: string, deps: PersonalContextApplicati
       botConnected,
       ownerConfigured: Boolean(feishu?.ownerConfigured),
       ...(feishu?.ownerLabel ? { ownerLabel: feishu.ownerLabel } : {}),
+      ...(feishu?.ownerMaskedId ? { ownerMaskedId: feishu.ownerMaskedId } : {}),
       ...(!feishu ? { diagnosticCode: 'feishu_bot_not_configured' } : {}),
     },
     authorization: {
@@ -134,11 +145,20 @@ async function buildRealDashboard(userId: string, deps: PersonalContextApplicati
       nextRunAt: null,
       processed: registry.length,
       failed,
+      // 失败详情透出给设置页，避免用户卡在"同步"按钮上看不到原因。
+      ...(failed > 0 ? { message: `有 ${failed} 个资源同步失败，下次同步将自动重试` } : {}),
     },
     review: { pending: candidates.length, confirmed: 0, rejected: 0, sourceInvalidated: failed },
     briefing: {
       state: briefing.state,
-      destination: null,
+      destination: briefing.briefingTask && briefing.briefingTask.enabled
+        ? {
+            instanceId: feishu?.id || 'unknown',
+            ...(feishu?.ownerLabel ? { ownerLabel: feishu.ownerLabel } : {}),
+            configured: true,
+            schedule: { hour: briefing.briefingTask.hour, minute: briefing.briefingTask.minute },
+          }
+        : null,
       lastDelivery: null,
       pendingCandidateCount: briefing.pendingCandidateCount,
     },

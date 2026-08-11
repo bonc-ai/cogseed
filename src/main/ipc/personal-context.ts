@@ -7,6 +7,7 @@
  */
 import { safeId } from '../storage';
 import * as application from '../features/personal_context/application';
+import * as manager from '../features/personal_context/manager';
 import { parseResourceKey, RESOURCE_TYPES, type ExternalResource } from '../features/personal_context/contract';
 
 interface PersonalContextContext { userId: string }
@@ -73,6 +74,8 @@ function scopeResources(value: unknown): ExternalResource[] {
 
 export const invokeHandlers: Record<string, Handler> = {
   'personal_context.dashboard.get': async (_payload, ctx) => ({ dashboard: await application.getDashboard(ctx.userId) }),
+  'personal_context.setup_guide': async (payload, ctx) => ({ guide: await manager.getSetupGuide(ctx.userId, optionalInstanceId(payload.instanceId)) }),
+  'personal_context.setup_guide.confirm': async (_payload, ctx) => { await manager.confirmRedirectConfigured(ctx.userId); return { ok: true }; },
   'personal_context.mode.set': async (payload, ctx) => ({ dashboard: await application.setMode(ctx.userId, dashboardMode(payload.mode)) }),
   'personal_context.authorize.begin': async (payload, ctx) => ({ dashboard: await application.beginAuthorization(ctx.userId, optionalInstanceId(payload.instanceId)) }),
   'personal_context.authorize.cancel': async (_payload, ctx) => ({ dashboard: await application.cancelAuthorization(ctx.userId) }),
@@ -90,4 +93,5 @@ export const invokeHandlers: Record<string, Handler> = {
     hour: integerInRange(payload.hour, 'hour', 0, 23),
     minute: integerInRange(payload.minute, 'minute', 0, 59),
   }),
+  'personal_context.briefing.unschedule': async (_payload, ctx) => application.unscheduleBriefing(ctx.userId),
 };

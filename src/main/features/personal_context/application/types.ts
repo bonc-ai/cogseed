@@ -31,6 +31,7 @@ export interface MessagingConnectionSummary {
   botConnected: boolean;
   ownerConfigured: boolean;
   ownerLabel?: string;
+  ownerMaskedId?: string;
   diagnosticCode?: string;
 }
 
@@ -71,6 +72,8 @@ export interface BriefingDestinationSummary {
   instanceId: string;
   ownerLabel?: string;
   configured: boolean;
+  /** 已配置的每日简报时间（来自 auto task 的 daily schedule） */
+  schedule?: { hour: number; minute: number };
 }
 
 export interface DeliverySummary {

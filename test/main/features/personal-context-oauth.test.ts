@@ -217,6 +217,19 @@ describe('OAuth 撤销与存储', () => {
     expect(status2.kind).toBe('disconnected');
   });
 
+  it('setIdentityLabel 写入后 getStatus 返回授权账号展示名', async () => {
+    const { OAuthManager } = await load();
+    const manager = new OAuthManager(mockEndpoint());
+    expect((await manager.getStatus(UID, PROVIDER)).identityLabel).toBeUndefined();
+
+    await manager.setIdentityLabel(UID, PROVIDER, ' 张三 ');
+    expect((await manager.getStatus(UID, PROVIDER)).identityLabel).toBe('张三');
+
+    // 重启（新实例）后仍能读回：identityLabel 已持久化
+    const reloaded = new OAuthManager(mockEndpoint());
+    expect((await reloaded.getStatus(UID, PROVIDER)).identityLabel).toBe('张三');
+  });
+
   it('远端 revoke 失败也清除本地凭据（用户意图优先）', async () => {
     const { OAuthManager } = await load();
     const manager = new OAuthManager(mockEndpoint({

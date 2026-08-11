@@ -32,6 +32,27 @@ describe('personal context center IPC', () => {
     await expect(call('personal_context.resources.select', { resources: 'bad' })).rejects.toThrow('resources must be an array');
   });
 
+  it('exposes the briefing unschedule channel with a stable result shape', async () => {
+    const result = await call('personal_context.briefing.unschedule') as { dashboard: { mode: string }; removed: boolean };
+    expect(result.dashboard.mode).toBe('real');
+    expect(typeof result.removed).toBe('boolean');
+  });
+
+  it('returns a setup guide with the fixed redirect uri even without credentials', async () => {
+    const result = await call('personal_context.setup_guide') as { guide: { credentialReady: boolean; redirectUri: string; appId?: string; redirectConfigured: boolean } };
+    expect(typeof result.guide.credentialReady).toBe('boolean');
+    expect(result.guide.redirectUri).toBe('http://127.0.0.1:36415/oauth/feishu/callback');
+    expect(typeof result.guide.redirectConfigured).toBe('boolean');
+  });
+
+  it('confirms the redirect-url setup flag and makes the guide report it', async () => {
+    const before = await call('personal_context.setup_guide') as { guide: { redirectConfigured: boolean } };
+    await call('personal_context.setup_guide.confirm');
+    const after = await call('personal_context.setup_guide') as { guide: { redirectConfigured: boolean } };
+    expect(after.guide.redirectConfigured).toBe(true);
+    expect(before.guide.redirectConfigured).toBe(false);
+  });
+
   it('rejects renderer-crafted resources that omit required storage fields', async () => {
     await expect(call('personal_context.resources.select', { resources: [{ resourceId: 'feishu:t:calendar:c', resourceType: 'calendar', title: 'x' }] }))
       .rejects.toThrow('observedAt');

@@ -12544,6 +12544,43 @@ body.model-not-configured .main-content { flex-direction: column; }
   line-height: 1.5;
   color: var(--text-2);
 }
+/* 扫码绑定成功后的回调地址引导卡（一次性）：让"配置重定向 URL"这一步
+   在绑定流程内完成，避免用户授权时才遇到 20029 再回头找后台。 */
+.messaging-setup-guide-card {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+  background: color-mix(in srgb, var(--warn) 6%, var(--surface));
+}
+.messaging-setup-guide-url {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+.messaging-setup-guide-url code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+}
+.messaging-setup-guide-steps {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.messaging-setup-guide-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
 .messaging-manual-fields {
   display: flex;
   align-items: center;
@@ -20830,15 +20867,42 @@ body.model-not-configured .main-content { flex-direction: column; }
 
 /* ── Feishu mobile touchpoint settings ────────────────────────────────── */
 .touchpoint-settings-shell {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
   width: 100%;
   max-width: 1180px;
   margin: 0 auto;
-  padding: 4px 0 48px;
 }
+.touchpoint-view {
+  min-height: 0;
+}
+.touchpoint-view[hidden] { display: none; }
+#touchpoint-overview-view { overflow: auto; padding: 0 0 28px; }
+.touchpoint-connections-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  overflow: hidden;
+}
+.touchpoint-connections-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  padding: 2px 0;
+}
+.touchpoint-connections-header h2 { margin: 0; font-size: 18px; line-height: 1.25; }
+.touchpoint-connections-header p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.touchpoint-connections-view .messaging-settings-shell { flex: 1; }
+.touchpoint-settings-shell.is-connections-view { max-width: none; }
+.touchpoint-settings-shell.is-connections-view .touchpoint-connections-view { padding: 0 0 2px; }
 .touchpoint-settings {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
   color: var(--text);
 }
 .touchpoint-hero {
@@ -20846,7 +20910,7 @@ body.model-not-configured .main-content { flex-direction: column; }
   align-items: flex-start;
   justify-content: space-between;
   gap: 28px;
-  padding: 16px 2px 6px;
+  padding: 4px 2px 2px;
 }
 .touchpoint-hero h1 {
   margin: 0 0 7px;
@@ -21108,6 +21172,34 @@ body.model-not-configured .main-content { flex-direction: column; }
   font-size: 11.5px;
 }
 .touchpoint-lock-icon { width: 13px; height: 13px; }
+.touchpoint-briefing-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.touchpoint-briefing-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.touchpoint-briefing-time input[type="time"] {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+.touchpoint-briefing-status { margin-top: 9px; color: var(--muted); font-size: 11px; }
 .touchpoint-preview { margin-top: 14px; padding: 14px; border-radius: 10px; background: var(--surface-2); }
 .touchpoint-preview pre { max-height: 260px; margin: 0; overflow: auto; white-space: pre-wrap; color: var(--text); font: inherit; font-size: 12px; line-height: 1.65; }
 .touchpoint-governance {
@@ -21115,6 +21207,38 @@ body.model-not-configured .main-content { flex-direction: column; }
   align-items: flex-start;
   gap: 12px;
   padding: 15px 18px;
+}
+/* 授权前/绑定后的回调地址引导卡：突出但可一次性关闭 */
+.touchpoint-setup-guide {
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--warn) 6%, var(--surface));
+}
+.touchpoint-setup-guide-url {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+.touchpoint-setup-guide-url code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12.5px;
+}
+.touchpoint-setup-guide-steps {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
 }
 .touchpoint-governance > div:first-child {
   display: inline-flex;
@@ -21131,27 +21255,8 @@ body.model-not-configured .main-content { flex-direction: column; }
 .touchpoint-governance strong { display: block; margin-bottom: 3px; font-size: 12.5px; }
 .touchpoint-governance p { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.55; }
 .touchpoint-advanced {
-  margin-top: 18px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--surface);
+  display: none;
 }
-.touchpoint-advanced > summary {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 15px 18px;
-  cursor: pointer;
-  list-style: none;
-  font-size: 12.5px;
-  font-weight: 700;
-}
-.touchpoint-advanced > summary::-webkit-details-marker { display: none; }
-.touchpoint-advanced > summary::after { content: '›'; margin-left: auto; color: var(--muted); font-size: 18px; transition: transform .16s ease; }
-.touchpoint-advanced[open] > summary::after { transform: rotate(90deg); }
-.touchpoint-advanced > summary small { color: var(--muted); font-size: 11px; font-weight: 400; }
-.touchpoint-advanced .messaging-settings-shell { padding: 0 12px 12px; }
-.touchpoint-advanced .messaging-layout { min-height: 520px; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
 .touchpoint-loading { display: flex; align-items: center; gap: 9px; padding: 52px 4px; color: var(--muted); font-size: 12.5px; }
 @media (max-width: 920px) {
   .touchpoint-stepper { grid-template-columns: 1fr; gap: 9px; }

@@ -11,7 +11,10 @@
  * 当前按 OS 分配动态端口实现；验证时若不支持，改为固定端口并在应用配置中写死。
  */
 import { shell } from 'electron';
+import * as path from 'node:path';
 import { createLogger } from '../../logger';
+import { nowIso, readJson, writeJson } from '../../storage';
+import { userLocalConfigDir } from '../../paths';
 import * as messagingRegistry from '../messaging/registry';
 import { OAuthManager, OAuthConnectionStatus } from './oauth-manager';
 import { buildFeishuAuthorizeUrl, createFeishuTokenEndpoint, FEISHU_READ_SCOPES } from './feishu/oauth';
@@ -46,6 +49,18 @@ const flows = new Map<string, AuthorizeFlow>();
 
 function flowKey(uid: string, providerId: string): string {
   return `${uid}:${providerId}`;
+}
+
+/** 授权状态变化广播给渲染层（OAuth 完成/取消/撤销时）。channel 在 preload
+ * 的 `personal-context:` 推送前缀白名单内。推送是尽力而为，失败不影响流程。 */
+function broadcastAuthorizationStatus(uid: string, status: OAuthConnectionStatus): void {
+  try {
+    const ipc = require('../../ipc') as { broadcastToRenderer?: (channel: string, payload: unknown) => void };
+    if (typeof ipc.broadcastToRenderer !== 'function') return;
+    ipc.broadcastToRenderer('personal-context:authorization', { uid, status: { ...status, authorizing: false } });
+  } catch {
+    /* push is best-effort */
+  }
 }
 
 export interface BeginAuthorizeResult {
@@ -117,7 +132,8 @@ export async function beginAuthorize(
       `请关闭占用该端口的程序后重试（飞书要求回调地址固定，无法自动换端口）。`,
     );
   }
-  const oauth = createManager(appId, appSecret);
+  const endpoint = createFeishuTokenEndpoint({ app: { appId, appSecret, redirectUri: PLACEHOLDER_REDIRECT } });
+  const oauth = new OAuthManager(endpoint);
   try {
     const request = await oauth.beginAuthorize(uid, PROVIDER_ID, [...FEISHU_READ_SCOPES], (state) =>
       buildFeishuAuthorizeUrl({ appId, appSecret, redirectUri: handle.redirectUri }, state, [...FEISHU_READ_SCOPES]));
@@ -129,7 +145,18 @@ export async function beginAuthorize(
       .then(async ({ code, state }) => {
         const result = await oauth.completeAuthorize(uid, PROVIDER_ID, code, state, handle.redirectUri);
         log.info('feishu oauth completed', { status: result.kind });
+        broadcastAuthorizationStatus(uid, result);
         if (result.kind === 'connected') {
+          // 授权账号展示名：user_info.name 写入 store，供 dashboard「授权账号」展示
+          const credential = await oauth.getCredential(uid, PROVIDER_ID);
+          if (credential) {
+            const health = await endpoint.healthCheck(credential.accessToken);
+            if (health.ok && health.identity?.name) {
+              await oauth.setIdentityLabel(uid, PROVIDER_ID, health.identity.name).catch((error) => {
+                log.warn('oauth identity label write failed', { uid, error: (error as Error).message });
+              });
+            }
+          }
           // 首次连接：启动定时增量同步，并立即 tick 做有限回填（30 天/90 天）
           ensureSyncScheduler(uid).start(uid);
           void syncNow(uid).catch((error) => {
@@ -140,7 +167,8 @@ export async function beginAuthorize(
       .catch(async (error) => {
         // 超时/取消：收敛挂起的 connecting 状态为可重试的 disconnected。
         log.warn('feishu oauth callback not completed', { error: (error as Error).message });
-        await oauth.cancelAuthorize(uid, PROVIDER_ID).catch(() => undefined);
+        const status = await oauth.cancelAuthorize(uid, PROVIDER_ID).catch(() => undefined);
+        if (status) broadcastAuthorizationStatus(uid, status);
       })
       .finally(() => {
         flows.delete(flowKey(uid, PROVIDER_ID));
@@ -243,17 +271,39 @@ export interface SetupGuide {
   appId?: string;
   /** 回调地址（必须在开发者后台精确配置） */
   redirectUri: string;
+  /** 用户是否已确认配置过回调地址（本机标记，飞书无查询 API） */
+  redirectConfigured: boolean;
+}
+
+/** 本机标记：用户确认已完成重定向 URL 配置（一次性，防每次授权都拦截） */
+function setupGuideStateFile(uid: string): string {
+  return path.join(userLocalConfigDir(uid), 'personal-context', 'setup-guide.json');
+}
+
+async function isRedirectConfigured(uid: string): Promise<boolean> {
+  try {
+    const state = await readJson<{ redirectConfigured?: boolean }>(setupGuideStateFile(uid));
+    return state.redirectConfigured === true;
+  } catch {
+    return false;
+  }
+}
+
+export async function confirmRedirectConfigured(uid: string): Promise<void> {
+  await writeJson(setupGuideStateFile(uid), { redirectConfigured: true, confirmedAt: nowIso() });
 }
 
 /**
  * 配置向导数据：能自动检测的（凭据）自动检测；回调地址/权限无法检测
  * （飞书不提供修改应用配置的 API），由 UI 按步骤引导用户完成。
+ * instanceId 可选：扫码刚绑定的新实例优先（返回该实例的 appId），
+ * 否则按 pickFeishuInstance 优先级挑选。
  */
-export async function getSetupGuide(uid: string): Promise<SetupGuide> {
+export async function getSetupGuide(uid: string, instanceId?: string): Promise<SetupGuide> {
   let appId: string | undefined;
   let credentialReady = false;
   try {
-    const app = await resolveFeishuApp(uid);
+    const app = await resolveFeishuApp(uid, instanceId);
     appId = app.appId;
     credentialReady = true;
   } catch {
@@ -263,18 +313,41 @@ export async function getSetupGuide(uid: string): Promise<SetupGuide> {
     credentialReady,
     ...(appId ? { appId } : {}),
     redirectUri: `http://127.0.0.1:${FEISHU_OAUTH_CALLBACK_PORT}${FEISHU_OAUTH_CALLBACK_PATH}`,
+    redirectConfigured: await isRedirectConfigured(uid),
   };
 }
 
-/** 取消进行中的授权（关闭回调服务器、收敛状态） */
+/** 取消进行中的授权（关闭回调服务器、收敛状态）。
+ *  若凭据已被删除（resolveFeishuApp 抛出），仍强制广播 disconnected，
+ *  防止渲染层一直停在 authorizing 状态无法恢复。 */
 export async function cancelAuthorize(uid: string, providerId: string): Promise<OAuthConnectionStatus> {
   const flow = flows.get(flowKey(uid, providerId));
   if (flow) {
     await flow.handle.close().catch(() => undefined);
     flows.delete(flowKey(uid, providerId));
   }
-  const { appId, appSecret } = await resolveFeishuApp(uid);
-  return createManager(appId, appSecret).cancelAuthorize(uid, providerId);
+  let appId: string;
+  let appSecret: string;
+  try {
+    ({ appId, appSecret } = await resolveFeishuApp(uid));
+  } catch (error) {
+    // 机器人凭据已被删除或不可用：无法走正常取消流程，
+    // 直接广播 disconnected，让渲染层收敛到可重试状态。
+    log.warn('cancelAuthorize: resolveFeishuApp failed, broadcasting disconnected', {
+      uid, error: (error as Error).message,
+    });
+    const fallback: OAuthConnectionStatus = {
+      kind: 'disconnected',
+      needsReauth: false,
+      checkedAt: new Date().toISOString(),
+      error: (error as Error).message,
+    };
+    broadcastAuthorizationStatus(uid, fallback);
+    return fallback;
+  }
+  const status = await createManager(appId, appSecret).cancelAuthorize(uid, providerId);
+  broadcastAuthorizationStatus(uid, status);
+  return status;
 }
 
 /** 撤销授权：远端 revoke + 本地凭据清除（用户意图优先，远端失败也清本地）；
@@ -291,6 +364,7 @@ export async function revoke(uid: string, providerId: string): Promise<OAuthConn
     // 撤销主流程不因清理失败而中断；资源失效可在下次同步/遗忘命令重试
     log.warn('revoke cleanup failed', { uid, error: (error as Error).message });
   }
+  broadcastAuthorizationStatus(uid, status);
   return status;
 }
 

@@ -34,7 +34,17 @@ describe('touchpoint settings model', () => {
     }), [{ id: 'feishu-1', platform: 'feishu_lark', enabled: true, status: { kind: 'connected' }, ownerConfigured: true }]);
     expect(model.primaryAction).toBe('authorization.begin');
     expect(model.currentStep).toBe('authorization');
+    expect(model.botConnected).toBe(true);
     expect(model.steps.map((step: { state: string }) => step.state)).toEqual(['complete', 'current', 'waiting', 'waiting']);
+  });
+
+  it('shows owner label when both bot and owner are connected', () => {
+    const model = deriveTouchpointSettingsModel(dashboard({
+      messaging: { instanceId: 'feishu-1', botConnected: true, ownerConfigured: true, ownerLabel: '本人' },
+    }), [{ id: 'feishu-1', platform: 'feishu_lark', enabled: true, status: { kind: 'connected' }, ownerConfigured: true }]);
+    expect(model.botConnected).toBe(true);
+    expect(model.identityLabel).toBe('本人');
+    expect(model.currentStep).toBe('authorization');
   });
 
   it('shows resource and delivery controls only after authorization advances', () => {
@@ -50,5 +60,46 @@ describe('touchpoint settings model', () => {
     expect(model.showMetrics).toBe(true);
     expect(model.canConfigureDelivery).toBe(true);
     expect(model.steps.every((step: { state: string }) => step.state === 'complete')).toBe(true);
+  });
+
+  it('switches the primary action to cancel while authorization is in flight', () => {
+    const model = deriveTouchpointSettingsModel(dashboard({
+      messaging: { instanceId: 'feishu-1', botConnected: true, ownerConfigured: true },
+      authorization: { kind: 'authorizing', providerId: 'feishu', authorizing: true },
+    }), []);
+    expect(model.primaryAction).toBe('authorize.cancel');
+    expect(model.authorizing).toBe(true);
+    expect(model.authorized).toBe(false);
+  });
+
+  it('counts only enabled Feishu instances, matching the botConnected semantics', () => {
+    // 禁用实例不参与"已连接实例数"：与 botConnected（要求 enabled）对齐，
+    // 避免列表显示 2 个实例但机器人实际未连接的状态不一致。
+    const model = deriveTouchpointSettingsModel(dashboard(), [
+      { id: 'feishu-1', platform: 'feishu_lark', enabled: true, status: { kind: 'connected' } },
+      { id: 'feishu-2', platform: 'feishu_lark', enabled: false, status: { kind: 'connected' } },
+      { id: 'lark-1', platform: 'feishu_lark', enabled: true, status: { kind: 'connected' } },
+      { id: 'telegram-1', platform: 'telegram', enabled: true, status: { kind: 'connected' } },
+    ]);
+    expect(model.instanceCount).toBe(2);
+  });
+
+  it('surfaces sync failure details and configured briefing schedule', () => {
+    const model = deriveTouchpointSettingsModel(dashboard({
+      messaging: { instanceId: 'feishu-1', botConnected: true, ownerConfigured: true },
+      authorization: { kind: 'connected', providerId: 'feishu', identityLabel: '学生账号' },
+      resources: { discovered: 8, selected: 4, ready: 3, failed: 1, unsupported: 0 },
+      sync: { state: 'idle', lastRunAt: null, nextRunAt: null, processed: 8, failed: 1, message: '有 1 个资源同步失败，下次同步将自动重试' },
+      briefing: {
+        state: 'preview_ready',
+        destination: { instanceId: 'feishu-1', configured: true, schedule: { hour: 8, minute: 30 } },
+        lastDelivery: null,
+        pendingCandidateCount: 0,
+      },
+    }), []);
+    expect(model.primaryAction).toBe('sync.start');
+    expect(model.syncMessage).toContain('同步失败');
+    expect(model.briefingConfigured).toBe(true);
+    expect(model.briefingSchedule).toEqual({ hour: 8, minute: 30 });
   });
 });
