@@ -66,6 +66,7 @@ describe('CogSeed Runtime controller', () => {
     const first = await controller.startMateTask(USER, {
       requestId: 'req-controller',
       task: 'Read the file.',
+      agentId: 'agent-controller',
       profileId: 'openai-compatible:mate',
     });
     const duplicate = await controller.startMateTask(USER, {
@@ -77,6 +78,7 @@ describe('CogSeed Runtime controller', () => {
     expect(duplicate.taskId).toBe(first.taskId);
     expect(runtime.inputs).toEqual([expect.objectContaining({
       task: 'Read the file.',
+      agent_id: 'agent-controller',
       model_profile: 'openai-compatible:mate',
     })]);
 

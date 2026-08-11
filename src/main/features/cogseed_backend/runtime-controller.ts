@@ -18,6 +18,8 @@ const log = createLogger('mate-backend:runtime-controller');
 export interface StartMateTaskInput {
   requestId: string;
   task: string;
+  /** Product Agent identity passed to Runtime tools; never use this as a model profile id. */
+  agentId?: string;
   sessionId?: string;
   profileId?: string;
   context?: unknown[];
@@ -68,6 +70,7 @@ function asRuntimeInput(input: StartMateTaskInput & { runtimeSessionId?: string;
   return {
     task: input.task,
     request_id: input.requestId,
+    ...(input.agentId ? { agent_id: input.agentId } : {}),
     ...(input.runtimeSessionId ? { runtime_session_id: input.runtimeSessionId } : {}),
     ...(input.context ? { context: input.context } : {}),
     ...(input.attachments ? { attachments: input.attachments } : {}),

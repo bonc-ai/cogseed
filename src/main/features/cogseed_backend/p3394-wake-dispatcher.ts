@@ -17,23 +17,34 @@ export const mateWakeDispatcher: WakeDispatcher = {
   async dispatch(userId, request) {
     const runtime = (await import('./runtime-controller')).mateRuntimeController;
 
-    if (!request.workflow_step_id) {
+    const startDirectTask = async () => {
       const task = await runtime.startMateTask(userId, {
         requestId: `req-wake-${request.id}`,
         task: taskText(request),
         sessionId: `gconv-${request.conversation_id}`,
-        profileId: request.agent_id,
+        agentId: request.agent_id,
         ...(request.dispatch_payload.attachments?.length ? { attachments: request.dispatch_payload.attachments } : {}),
       });
       if (task.status === 'failed' || task.status === 'cancelled') {
         throw new Error(`CogSeed wake task ${task.status}`);
       }
+    };
+
+    // Legacy Group Chat handoffs may carry a workflow_step_id while their
+    // scope is still a conversation id. Only a real CogSeed coordination can
+    // enter the workflow dispatcher; otherwise preserve the interactive
+    // handoff by starting a direct CogSeed task.
+    const coordinationId = request.execution_scope_id;
+    if (!request.workflow_step_id || !coordinationId?.startsWith('mate-coord-')) {
+      await startDirectTask();
       return;
     }
 
-    const coordinationId = request.execution_scope_id || request.conversation_id;
     const coordination = await readMateCoordination(userId, coordinationId);
-    if (!coordination?.workflowRunId) throw new Error('CogSeed wake request is not bound to a workflow');
+    if (!coordination?.workflowRunId) {
+      await startDirectTask();
+      return;
+    }
     const dispatcher = createMateCollaborationDispatcher({
       startTask: (uid, input) => runtime.startMateTask(uid, input),
       cancelTask: (uid, taskId) => runtime.cancelMateTask(uid, taskId),
