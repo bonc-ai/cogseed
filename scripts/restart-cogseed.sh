@@ -3,9 +3,8 @@
 #
 # This worktree is locked to COGSEED_RUNTIME_VARIANT=cogseed and is
 # launched with `./run.sh` (macOS: `open -W -n` on the variant app bundle).
-# This script stops only processes of THIS worktree's cogseed runtime (other
-# variants such as expense/cognition are untouched), then relaunches via
-# ./run.sh in the background so the caller's shell is not blocked.
+# This script stops only processes of THIS worktree's cogseed runtime; another
+# checkout must never count as this worktree being ready.
 #
 # Usage: scripts/restart-cogseed.sh [stop|start|restart]   (default: restart)
 set -euo pipefail
@@ -15,45 +14,54 @@ VARIANT="cogseed"
 RUN_LOG="/tmp/cogseed-agent-${VARIANT}-run.log"
 DATA_LOGS="$HOME/.cogseed/runtime-variants/${VARIANT}/data/logs"
 
-# The main process and the `open -W -n` wrapper both carry
-# `orkas-runtime-variant=cogseed`; helper processes only carry the app path.
 variant_pids() {
   pgrep -f "orkas-runtime-variant=${VARIANT}" 2>/dev/null || true
 }
 
+worktree_pids() {
+  local pid
+  for pid in $(variant_pids); do
+    if ps -p "$pid" -o command= 2>/dev/null | grep -qF "$APP_DIR"; then
+      printf '%s\n' "$pid"
+    fi
+  done
+}
+
 stop() {
   local pids
-  pids="$(variant_pids)"
+  pids="$(worktree_pids)"
   if [ -z "$pids" ]; then
-    echo "[restart-cogseed] no running ${VARIANT} runtime"
+    echo "[restart-cogseed] no running ${VARIANT} runtime for this worktree"
     return 0
   fi
   for pid in $pids; do
-    # Only touch processes launched from this worktree.
-    if ps -p "$pid" -o command= 2>/dev/null | grep -qF "$APP_DIR"; then
-      kill "$pid" 2>/dev/null || true
-    fi
+    kill "$pid" 2>/dev/null || true
   done
-  # Give the app a few seconds to exit (main process teardown, flush state).
   for _ in $(seq 1 50); do
-    if ! pgrep -f "orkas-runtime-variant=${VARIANT}" >/dev/null 2>&1; then
+    if [ -z "$(worktree_pids)" ]; then
       echo "[restart-cogseed] ${VARIANT} runtime stopped"
       return 0
     fi
     sleep 0.2
   done
-  echo "[restart-cogseed] force-killing remaining ${VARIANT} processes" >&2
-  for pid in $(variant_pids); do
-    if ps -p "$pid" -o command= 2>/dev/null | grep -qF "$APP_DIR"; then
-      kill -9 "$pid" 2>/dev/null || true
-    fi
+  echo "[restart-cogseed] force-killing remaining ${VARIANT} processes for this worktree" >&2
+  for pid in $(worktree_pids); do
+    kill -9 "$pid" 2>/dev/null || true
   done
-  sleep 0.5
+  for _ in $(seq 1 50); do
+    if [ -z "$(worktree_pids)" ]; then
+      echo "[restart-cogseed] ${VARIANT} runtime stopped (forced)"
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "[restart-cogseed] ${VARIANT} processes still present after SIGKILL" >&2
+  return 1
 }
 
 start() {
-  if [ -n "$(variant_pids)" ]; then
-    echo "[restart-cogseed] ${VARIANT} runtime already running"
+  if [ -n "$(worktree_pids)" ]; then
+    echo "[restart-cogseed] ${VARIANT} runtime already running for this worktree"
     return 0
   fi
   cd "$APP_DIR"
@@ -62,11 +70,9 @@ start() {
 }
 
 wait_ready() {
-  # Wait until the variant main process is up, then confirm the app logger
-  # starts writing today's file.
   for _ in $(seq 1 60); do
-    if [ -n "$(variant_pids)" ]; then
-      echo "[restart-cogseed] ${VARIANT} runtime process is up"
+    if [ -n "$(worktree_pids)" ]; then
+      echo "[restart-cogseed] ${VARIANT} runtime process is up for this worktree"
       return 0
     fi
     sleep 0.5

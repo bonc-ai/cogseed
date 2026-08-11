@@ -28,6 +28,9 @@ describe('source runtime launchers', () => {
     expect(windows).not.toContain('Usage: run.cmd [--variant');
     expect(packageMeta.orkasSourceRuntimeVariant).toBe('cogseed');
     expect(restart).toContain('DATA_LOGS="$HOME/.cogseed/runtime-variants/${VARIANT}/data/logs"');
+    expect(restart).toContain('worktree_pids()');
+    expect(restart).toContain('if [ -n "$(worktree_pids)" ]; then');
+    expect(restart).toContain('if [ -z "$(worktree_pids)" ]; then');
     expect(legacyRestart).toContain('exec "$APP_DIR/scripts/restart-cogseed.sh" "$@"');
     expect(legacyRestart).not.toContain('VARIANT="mate"');
     expect(bootstrap).toContain('sourceVariant: packageMeta.orkasSourceRuntimeVariant');
