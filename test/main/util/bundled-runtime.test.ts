@@ -180,7 +180,7 @@ describe('bundled-runtime › media binaries (ffmpeg / whisper)', () => {
     fs.mkdirSync(path.dirname(model), { recursive: true });
     fs.writeFileSync(cli, '');
     fs.writeFileSync(model, 'model');
-    fs.writeFileSync(path.join(dir, '.orkas-whisper-ready.json'), JSON.stringify({
+    fs.writeFileSync(path.join(dir, '.cogseed-whisper-ready.json'), JSON.stringify({
       capability: { status: 'disabled', reason: 'unsupported_cpu' },
     }));
 
