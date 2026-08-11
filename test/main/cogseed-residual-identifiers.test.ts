@@ -39,7 +39,13 @@ describe('CogSeed residual identifiers', () => {
       expect(source, file).not.toContain('team-02/mate-agent.git');
       expect(source, file).not.toContain('cd mate-agent');
     }
-    expect(read('README.md')).toContain('team-02/cogseed.git');
+    const readme = read('README.md');
+    expect(readme).toContain('team-02/cogseed.git');
+    expect(readme).toContain('window.cogseed');
+    expect(readme).toContain('npm test');
+    expect(readme).toContain('CC Switch');
+    expect(readme).toContain('.cogseed');
+    expect(readme).toContain('mateagent://');
   });
 
   it('uses a canonical cogseed temp prefix for local imports', async () => {
