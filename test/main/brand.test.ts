@@ -12,9 +12,9 @@ describe('CogSeed brand contract', () => {
     expect(brand).toEqual({
       appName: 'CogSeed',
       zhName: 'CogSeed',
-      appId: 'com.mateagent.desktop',
-      protocolScheme: 'mateagent',
-      legacyConnectorScheme: 'orkas',
+      appId: 'com.cogseed.desktop',
+      protocolScheme: 'cogseed',
+      legacyConnectorSchemes: ['mateagent', 'orkas'],
       taglineZh: '跨 Agent 的个人能力资产层',
     });
   });
@@ -29,7 +29,7 @@ describe('CogSeed brand contract', () => {
     expect(pkg.build.protocols).toEqual([
       expect.objectContaining({
         name: 'CogSeed Connector Callback',
-        schemes: [brand.protocolScheme, brand.legacyConnectorScheme],
+        schemes: [brand.protocolScheme, ...brand.legacyConnectorSchemes],
       }),
     ]);
     expect(pkg.build.files).toContain('src/resources/brand.json');
@@ -88,8 +88,9 @@ describe('CogSeed brand contract', () => {
   });
 
   it('keeps approved internal compatibility symbols', () => {
-    expect(read('src/renderer/modules/ipc-shim.js')).toContain('window.orkas');
-    expect(read('src/renderer/modules/artifact-security.js')).toContain('OrkasArtifactSecurity');
+    expect(read('src/main/preload.js')).toContain("contextBridge.exposeInMainWorld('orkas'");
+    expect(read('src/renderer/modules/ipc-shim.js')).toContain('window.cogseed');
+    expect(read('src/renderer/modules/artifact-security.js')).toContain('CogSeedArtifactSecurity');
   });
 
 });

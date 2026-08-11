@@ -305,7 +305,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function bindStaticHandlers() {
-  window.orkas.onPushEvent('conversations:open-from-notification', (payload) => {
+  window.cogseed.onPushEvent('conversations:open-from-notification', (payload) => {
     _openTaskNotificationConversation(payload);
   });
 

@@ -30,7 +30,7 @@ async function initAvatarCatalog() {
   if (_avatarCatalogPromise) { await _avatarCatalogPromise; return; }
   _avatarCatalogPromise = (async () => {
     try {
-      const res = await window.orkas.invoke('avatars.getCatalog');
+      const res = await window.cogseed.invoke('avatars.getCatalog');
       const cat = res?.catalog;
       if (cat && Array.isArray(cat.icons) && Array.isArray(cat.colors)) {
         AVATAR_ICONS = cat.icons;

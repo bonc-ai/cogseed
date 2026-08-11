@@ -351,7 +351,7 @@ function renderSkillsCognitionContext() {
 async function loadRecallOntologyGroup(groupId) {
   const id = String(groupId || '');
   if (!id || Object.prototype.hasOwnProperty.call(_skillsCognitionState.ontologyGroupContent, id)) return;
-  const result = await window.orkas.invoke('personalOntology.groups.read', { groupId: id });
+  const result = await window.cogseed.invoke('personalOntology.groups.read', { groupId: id });
   _skillsCognitionState.ontologyGroupContent[id] = result?.ok === false ? '' : String(result?.content || '');
 }
 
@@ -646,7 +646,7 @@ async function loadRecallCaptureTasks(options = {}) {
   const payload = { limit: 25 };
   if (statuses.length) payload.statuses = statuses;
   if (append && _skillsCognitionState.captureNextCursor) payload.cursor = _skillsCognitionState.captureNextCursor;
-  const result = await window.orkas.invoke('recall.captures.list', payload);
+  const result = await window.cogseed.invoke('recall.captures.list', payload);
   if (!result?.ok) throw new Error(result?.error || 'recall capture list failed');
   if (append) {
     const byId = new Map((_skillsCognitionState.captures || []).map((capture) => [capture.id, capture]));
@@ -661,7 +661,7 @@ async function loadRecallCaptureTasks(options = {}) {
 }
 
 async function updateRecallCaptureSettings(patch) {
-  const result = await window.orkas.invoke('recall.captures.settings.update', patch);
+  const result = await window.cogseed.invoke('recall.captures.settings.update', patch);
   if (!result?.ok) throw new Error(result?.error || 'recall capture settings update failed');
   _skillsCognitionState.captureSettings = result.settings;
   renderSkillsCognitionCaptures();
@@ -898,7 +898,7 @@ async function openSkillsCognitionReceiptDetail(executionId) {
   _skillsCognitionState.selectedReceiptId = id;
   if (!_skillsCognitionState.receiptDetails[id]) {
     try {
-      const result = await window.orkas.invoke('cognition.receipts.read', { executionId: id });
+      const result = await window.cogseed.invoke('cognition.receipts.read', { executionId: id });
       if (!result?.ok) throw new Error(result?.error || 'receipt unavailable');
       _skillsCognitionState.receiptDetails[id] = result.receipt || null;
     } catch (error) {
@@ -1098,19 +1098,19 @@ async function loadSkillsCognitionSnapshot() {
   const captureStatuses = _captureStatusesForFilter(_skillsCognitionState.captureFilter);
   if (captureStatuses.length) capturePayload.statuses = captureStatuses;
   const [dashboard, candidates, recallCandidates, receipts, assets, sources, captures, recentCaptures, recallViews, contextProjections, ontologyGroups, teachingSignals, captureSettings] = await Promise.allSettled([
-    window.orkas.invoke('cognition.dashboard.read'),
-    window.orkas.invoke('cognition.candidates.list', { status: 'pending', limit: 200 }),
-    window.orkas.invoke('recall.candidates.list'),
-    window.orkas.invoke('cognition.receipts.list', { limit: 100 }),
-    window.orkas.invoke('cognition.assets.list', { limit: 500 }),
-    window.orkas.invoke('recall.sources.list', { limit: 100 }),
-    window.orkas.invoke('recall.captures.list', capturePayload),
-    window.orkas.invoke('recall.captures.list', { limit: 5 }),
-    window.orkas.invoke('recall.views.list', { includeExpired: true, limit: 100 }),
-    window.orkas.invoke('recall.projections.list', { includeExpired: true, limit: 100 }),
-    window.orkas.invoke('personalOntology.groups.list'),
-    window.orkas.invoke('recall.teaching.list', { limit: 20 }),
-    window.orkas.invoke('recall.captures.settings.get'),
+    window.cogseed.invoke('cognition.dashboard.read'),
+    window.cogseed.invoke('cognition.candidates.list', { status: 'pending', limit: 200 }),
+    window.cogseed.invoke('recall.candidates.list'),
+    window.cogseed.invoke('cognition.receipts.list', { limit: 100 }),
+    window.cogseed.invoke('cognition.assets.list', { limit: 500 }),
+    window.cogseed.invoke('recall.sources.list', { limit: 100 }),
+    window.cogseed.invoke('recall.captures.list', capturePayload),
+    window.cogseed.invoke('recall.captures.list', { limit: 5 }),
+    window.cogseed.invoke('recall.views.list', { includeExpired: true, limit: 100 }),
+    window.cogseed.invoke('recall.projections.list', { includeExpired: true, limit: 100 }),
+    window.cogseed.invoke('personalOntology.groups.list'),
+    window.cogseed.invoke('recall.teaching.list', { limit: 20 }),
+    window.cogseed.invoke('recall.captures.settings.get'),
   ]);
   _skillsCognitionState.dashboard = dashboard.status === 'fulfilled' && dashboard.value?.ok ? dashboard.value.dashboard : null;
   _skillsCognitionState.candidates = candidates.status === 'fulfilled' && candidates.value?.ok ? (candidates.value.candidates || []) : [];
@@ -1185,7 +1185,7 @@ async function rollbackSkillCognitionVersionFromDetail(skillId, version) {
   if (!sid || !ver) return;
   const message = _cognitionText('cognition.rollback_confirm', `确认回滚到版本 ${ver}？`).replace('{version}', ver);
   if (typeof uiConfirm === 'function' && !(await uiConfirm(message))) return;
-  const result = await window.orkas.invoke('cognition.skills.rollback', { skillId: sid, version: ver });
+  const result = await window.cogseed.invoke('cognition.skills.rollback', { skillId: sid, version: ver });
   if (!result?.ok) throw new Error(result?.error || 'rollback failed');
   await refreshSkillCognitionSummary(sid);
   if (_selectedSkill?.id === sid && typeof selectSkillFile === 'function') await selectSkillFile(_selectedSkill.filepath || 'SKILL.md');
@@ -1198,7 +1198,7 @@ async function refreshSkillCognitionSummary(skillId) {
   section.style.display = '';
   host.innerHTML = `<div class="skills-cognition-loading">${escapeHtml(_cognitionText('cognition.loading', '加载中…'))}</div>`;
   try {
-    const result = await window.orkas.invoke('cognition.skills.summary', { skillId });
+    const result = await window.cogseed.invoke('cognition.skills.summary', { skillId });
     if (!result?.ok) throw new Error(result?.error || 'summary unavailable');
     const s = result.summary || {};
     host.innerHTML = `
@@ -1320,14 +1320,14 @@ async function refreshSkillsAfterMarketplaceReconcile() {
 
 async function _refreshOpenSkillsCache() {
   try {
-    const openRes = await window.orkas.invoke('skills.listOpen');
+    const openRes = await window.cogseed.invoke('skills.listOpen');
     _openSkillsCache = (openRes && openRes.ok && Array.isArray(openRes.skills)) ? openRes.skills : [];
   } catch { _openSkillsCache = []; }
 }
 
 async function _refreshPackagesCache() {
   try {
-    const res = await window.orkas.invoke('packages.list');
+    const res = await window.cogseed.invoke('packages.list');
     _packagesCache = (res && res.ok && Array.isArray(res.packages)) ? res.packages : [];
   } catch (err) {
     _skillsLog.warn('packages load failed', err);
@@ -1342,7 +1342,7 @@ async function _refreshPackagesCache() {
 async function _mergeAgentPrivateSkills() {
   if (typeof isDevMode !== 'function' || !false || !Array.isArray(_skillsCache)) return;
   try {
-    const res = await window.orkas.invoke('skills.listPrivate');
+    const res = await window.cogseed.invoke('skills.listPrivate');
     const priv = (res && res.ok && Array.isArray(res.skills)) ? res.skills : [];
     if (!priv.length) return;
     const key = (s) => `${s.id} ${s.source}`;
@@ -1912,7 +1912,7 @@ function _wireOpenSkillCards(gridEl) {
 
 async function _setOpenSkillEnabled(id, nextEnabled) {
   try {
-    const res = await window.orkas.invoke('skills.setEnabled', { id, enabled: nextEnabled });
+    const res = await window.cogseed.invoke('skills.setEnabled', { id, enabled: nextEnabled });
     if (!res || !res.ok) { await uiAlert(t('component.toggle_failed')); return false; }
     // enable/disable is keyed by id; the same skill can appear under both
     // external and global, so flip every matching row's optimistic state.
@@ -1933,7 +1933,7 @@ async function _setGlobalSkillGroupEnabled(key, nextEnabled) {
   if (!targetIds.size) return true;
   try {
     const results = await Promise.allSettled(Array.from(targetIds).map((id) => (
-      window.orkas.invoke('skills.setEnabled', { id, enabled: nextEnabled })
+      window.cogseed.invoke('skills.setEnabled', { id, enabled: nextEnabled })
     )));
     if (results.some((res) => res.status === 'rejected' || !res.value || !res.value.ok)) {
       await loadSkills(true);
@@ -2086,7 +2086,7 @@ async function _runOpenPackageAction(command, packageName, cardEl, packageDispla
   const startedAt = Date.now();
   if (window.Monitor) (() => {})('package_action', { surface: 'skills', command });
   try {
-    const res = await window.orkas.invoke('packages.action', { command, name: packageName });
+    const res = await window.cogseed.invoke('packages.action', { command, name: packageName });
     if (!res || res.ok === false) {
       const errorMessage = (res && res.error) || t('settings.packages.action_failed');
       if (window.Monitor) {
@@ -2152,7 +2152,7 @@ async function _flipOpenSkillEnabled(id) {
  *  not mutate UI state; on success, refreshes the grid + detail page. */
 async function _flipSkillEnabled(skillId, nextEnabled) {
   try {
-    const res = await window.orkas.invoke('skills.setEnabled', { id: skillId, enabled: nextEnabled });
+    const res = await window.cogseed.invoke('skills.setEnabled', { id: skillId, enabled: nextEnabled });
     if (!res || !res.ok) {
       await uiAlert(t('component.toggle_failed'));
       return false;
@@ -2188,7 +2188,7 @@ async function _onSkillsBack() {
     const draftId = _importDraftId;
     _importDraftId = null;
     try {
-      const r = await window.orkas.invoke('skills.discardImportDraft', { id: draftId });
+      const r = await window.cogseed.invoke('skills.discardImportDraft', { id: draftId });
       if (r && r.discarded) { _skillsCache = null; await loadSkills(); }
     } catch (_) { /* best effort — a leftover empty draft is non-fatal */ }
   }
@@ -2843,7 +2843,7 @@ function _renderSkillDetailCategory(skill, source) {
     value: skill?.category || 'general',
     onChange: async (category, api) => {
       try {
-        const res = await window.orkas.invoke('skills.update', {
+        const res = await window.cogseed.invoke('skills.update', {
           id: skillId,
           updates: { category: category || 'general' },
           skipRename: true,
@@ -3123,7 +3123,7 @@ async function _flushSkillFieldSave({ validate = false } = {}) {
   const newName = String(value || '').trim();
   if (_isEditablePlatformSkill(_selectedSkill)) {
     try {
-      const data = await window.orkas.invoke('skills.updateForEdit', {
+      const data = await window.cogseed.invoke('skills.updateForEdit', {
         id: currentId,
         updates: { [field]: value },
       });
@@ -4033,7 +4033,7 @@ async function deleteSelectedSkill() {
   if (!(await uiConfirm(t('skills.delete_confirm', { name: cached?.name || sid })))) return;
   try {
     const result = _isSkillPlatformSource(src)
-      ? await window.orkas.invoke('skills.builtin.delete', { id: sid })
+      ? await window.cogseed.invoke('skills.builtin.delete', { id: sid })
       : await (await apiFetch(`/api/skills/${sid}`, { method: 'DELETE' })).json();
     if (!result.ok) {
       await uiAlert(t('skills.delete_failed_with', { reason: result.error || '' }));

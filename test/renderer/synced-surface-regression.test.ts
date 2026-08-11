@@ -159,8 +159,8 @@ describe('synced PC surface regressions', () => {
       expect(html).toContain(marker);
     }
     expect(settings).toContain("_settingsSafeCall('settings tts refresh', _settingsRefreshTtsProfiles)");
-    expect(settings).toContain("window.orkas.invoke('ttsAuth.list')");
-    expect(settings).toContain("window.orkas.invoke('ttsAuth.add'");
+    expect(settings).toContain("window.cogseed.invoke('ttsAuth.list')");
+    expect(settings).toContain("window.cogseed.invoke('ttsAuth.add'");
     expect(settings).toContain('_settingsRenderTtsEntries');
     expect(auth).toContain('export interface TtsProfile');
     expect(auth).toContain('export function loadTtsProfiles');
@@ -206,7 +206,7 @@ describe('synced PC surface regressions', () => {
     expect(html).not.toContain('settings-commander-avatar');
     expect(settings).not.toContain('_settingsRenderCommanderAvatar');
     expect(settings).not.toContain('_settingsRefreshCommanderAvatar');
-    expect(agents).toContain("window.orkas.invoke('prefs.setCommanderAvatar'");
+    expect(agents).toContain("window.cogseed.invoke('prefs.setCommanderAvatar'");
     expect(agents).toContain('allowCommanderCombo: true');
     expect(agents).toContain('hideIcons: true');
 

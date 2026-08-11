@@ -334,13 +334,13 @@ function openConversationFromTaskNotification(
 function registerIpc(): void {
   ipc.register();
 
-  ipcMain.handle('orkas.ping', () => {
+  ipcMain.handle('cogseed.ping', () => {
     return { ok: true, pong: 'pong', ts: storage.nowIso() };
   });
 
   if (IS_PACKAGED_LAUNCH_SMOKE) {
     let recorded = false;
-    ipcMain.handle('orkas.packagedLaunchSmokeReady', (event, payload) => {
+    ipcMain.handle('cogseed.packagedLaunchSmokeReady', (event, payload) => {
       if (recorded) return { ok: true };
       const owner = BrowserWindow.fromWebContents(event.sender);
       const readyState = String(payload?.rendererReadyState || '');
@@ -384,7 +384,7 @@ function registerIpc(): void {
     });
   }
 
-  ipcMain.handle('orkas.env', () => {
+  ipcMain.handle('cogseed.env', () => {
     const systemVersion = osVersion();
     const platform = desktopPlatform();
     const buildIdentity = resolveBuildIdentity({
@@ -415,7 +415,7 @@ function registerIpc(): void {
     // crashes immediately due to missing packages. The worktree-locked
     // launcher owns runtime selection and bundle preparation; here we only
     // detach-spawn it and exit so the instance lock can be released.
-    ipcMain.handle('orkas.relaunch', () => {
+    ipcMain.handle('cogseed.relaunch', () => {
       const isWin = process.platform === 'win32';
       const script = path.join(paths.PC_ROOT, isWin ? 'run.cmd' : 'run.sh');
       const [cmd, args] = isWin
@@ -451,7 +451,7 @@ function registerIpc(): void {
   // an async round-trip schedules a microtask, paint slips through. Only
   // the active language + fallback cross this synchronous boundary;
   // other locale tables load asynchronously if the user switches language.
-  ipcMain.on('orkas:bootI18n', (event) => {
+  const handleBootI18n = (event) => {
     try {
       const lang = appConfig.getLanguage();
       event.returnValue = { ok: true, lang, tables: getRendererBootTables(lang) };
@@ -459,14 +459,16 @@ function registerIpc(): void {
       log.warn('bootI18n failed', { error: (err as Error)?.message });
       event.returnValue = { ok: false };
     }
-  });
+  };
+  ipcMain.on('cogseed:bootI18n', handleBootI18n);
+  ipcMain.on('orkas:bootI18n', handleBootI18n);
 
   // Renderer reports throttled keyboard/pointer/wheel activity. Background
   // boot work uses this only as an admission hint; no interaction payload is
   // collected or persisted.
-  ipcMain.on('orkas.userActivity', () => noteBootUserActivity());
+  ipcMain.on('cogseed.userActivity', () => noteBootUserActivity());
 
-  ipcMain.handle('orkas.diagnostics', async () => {
+  ipcMain.handle('cogseed.diagnostics', async () => {
     const sample = {
       nowIso: storage.nowIso(),
       uid: storage.genUserId(),

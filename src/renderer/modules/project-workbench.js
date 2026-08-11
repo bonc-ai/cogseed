@@ -11,7 +11,7 @@
  * as a side effect of opening the panel.
  *
  * Classic script (no ESM): relies on the globals `escapeHtml`, `t` and
- * `window.orkas`, matching the sibling renderer modules. Local fallbacks keep
+ * `window.cogseed`, matching the sibling renderer modules. Local fallbacks keep
  * the pure builders usable under `require` in tests, where the renderer
  * globals are not installed.
  */
@@ -79,11 +79,11 @@ async function loadProjectWorkbench(pid) {
   let plan = null;
   try {
     const [baselineRes, planRes, bindingsRes] = await Promise.all([
-      window.orkas.invoke('workbench.baseline.list').catch(() => ({ ok: false })),
-      window.orkas.invoke('workbench.actionPlan.read', { projectId: pid }).catch(() => ({ ok: false })),
+      window.cogseed.invoke('workbench.baseline.list').catch(() => ({ ok: false })),
+      window.cogseed.invoke('workbench.actionPlan.read', { projectId: pid }).catch(() => ({ ok: false })),
       // Freeze candidates come from the project's bound skills, so the main
       // skill stays inside the project's declared scope.
-      window.orkas.invoke('projects.bindings.list', { projectId: pid }).catch(() => ({ ok: false })),
+      window.cogseed.invoke('projects.bindings.list', { projectId: pid }).catch(() => ({ ok: false })),
     ]);
     if (seq !== _workbenchLoadSeq) return;  // a newer load superseded this one
     baselines = (baselineRes && baselineRes.ok && baselineRes.baselines) || [];
@@ -96,7 +96,7 @@ async function loadProjectWorkbench(pid) {
   const baseline = baselines[0] || null;
   let decision = null;
   if (baseline) {
-    const res = await window.orkas
+    const res = await window.cogseed
       .invoke('workbench.gate.evaluate', {
         baselineId: baseline.baseline_id,
         receiptExecutionId: baseline.baseline_id,
@@ -217,7 +217,7 @@ async function _workbenchFreeze() {
   const select = document.getElementById('workbench-freeze-skill');
   const assetId = select && select.value;
   if (!assetId) return;
-  const res = await window.orkas
+  const res = await window.cogseed
     .invoke('workbench.baseline.freeze', {
       assetId,
       // The asset layer (T2-S3-01) will own real versioning; until then a
@@ -239,7 +239,7 @@ async function _workbenchFreeze() {
 
 async function _workbenchStartRun(taskId, baselineId) {
   if (!taskId || !baselineId || !_workbenchPid) return;
-  const res = await window.orkas
+  const res = await window.cogseed
     .invoke('workbench.taskRun.start', {
       projectId: _workbenchPid,
       taskId,

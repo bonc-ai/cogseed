@@ -94,7 +94,7 @@ import * as avatars from '../features/avatars';
 import * as commanderProfile from '../features/commander_profile';
 import * as commanderRuntimeStats from '../features/commander_runtime_stats';
 import * as commanderBackend from '../features/commander_backend';
-import * as mateAgentBackend from '../features/mate_agent_backend';
+import * as mateAgentBackend from '../features/cogseed_backend';
 import { getRendererTables, isLang, t } from '../i18n';
 import { isPathAllowed } from '../util/path-sandbox';
 import * as userWorkspace from '../features/user_workspace';
@@ -4537,7 +4537,7 @@ export function broadcastToRenderer(channel: string, payload: unknown): void {
 }
 
 export function register(): void {
-  ipcMain.handle('orkas.invoke', async (event, request: unknown) => {
+  const handleInvoke = async (event, request: unknown) => {
     if (!isTrustedIpcSender(event.sender)) {
       log.warn('rejected invoke from untrusted renderer');
       return { ok: false, error: 'untrusted ipc sender', code: 'E_IPC_SENDER' };
@@ -4593,13 +4593,13 @@ export function register(): void {
       }
       return out;
     }
-  });
+  };
 
   // File objects cannot cross the regular JSON invoke envelope without being
   // copied into base64. Preload resolves only genuine user-selected DOM File
   // objects through Electron `webUtils.getPathForFile` and sends their paths
   // on this private channel; the renderer never receives a raw local path.
-  ipcMain.handle('orkas.importLocalFiles', async (event, request: unknown) => {
+  const handleImportLocalFiles = async (event, request: unknown) => {
     if (!isTrustedIpcSender(event.sender)) {
       log.warn('rejected local file import from untrusted renderer');
       return { ok: false, error: 'untrusted ipc sender', code: 'E_IPC_SENDER' };
@@ -4619,9 +4619,11 @@ export function register(): void {
       });
       return { ok: false, error: normalized.error, code: normalized.code };
     }
-  });
+  };
+  ipcMain.handle('cogseed.invoke', handleInvoke);
+  ipcMain.handle('orkas.invoke', handleInvoke);
 
-  ipcMain.on('orkas.streamStart', async (event, request: unknown) => {
+  const handleStreamStart = async (event, request: unknown) => {
     if (!isTrustedIpcSender(event.sender)) return;
     const envelope = parseStreamEnvelope(request);
     if (!envelope) return;
@@ -4662,9 +4664,11 @@ export function register(): void {
       log.info(`streamDone channel=${channel} requestId=${requestId} cancelled=${state.cancelled}`);
       out({ type: 'done' });
     }
-  });
+  };
+  ipcMain.on('cogseed.streamStart', handleStreamStart);
+  ipcMain.on('orkas.streamStart', handleStreamStart);
 
-  ipcMain.on('orkas.streamCancel', (event, rawRequestId: unknown) => {
+  const handleStreamCancel = (event, rawRequestId: unknown) => {
     if (!isTrustedIpcSender(event.sender)) return;
     const requestId = parseStreamRequestId(rawRequestId);
     if (!requestId) return;
@@ -4685,5 +4689,7 @@ export function register(): void {
     // be minutes away while the provider is blocked on network I/O, and the
     // `processing` flag stays pinned until the generator's finally runs.
     try { state.controller.abort(); } catch (_) { /* already aborted */ }
-  });
+  };
+  ipcMain.on('cogseed.streamCancel', handleStreamCancel);
+  ipcMain.on('orkas.streamCancel', handleStreamCancel);
 }

@@ -89,7 +89,7 @@ async function _ossHydrateCatalogCache() {
   if (_ossCatalogHydratePromise) return _ossCatalogHydratePromise;
   _ossCatalogHydratePromise = (async () => {
     try {
-      const data = await window.orkas.invoke('marketplace.getListingsCache');
+      const data = await window.cogseed.invoke('marketplace.getListingsCache');
       const entries = data && data.entries && typeof data.entries === 'object' ? data.entries : {};
       for (const [key, value] of Object.entries(entries)) {
         if (!String(key).startsWith('project|')) continue;
@@ -104,7 +104,7 @@ async function _ossHydrateCatalogCache() {
 
 function _ossPersistCatalogCache(key, entry) {
   try {
-    window.orkas.invoke('marketplace.mergeListingsCache', {
+    window.cogseed.invoke('marketplace.mergeListingsCache', {
       entries: {
         [key]: {
           items: entry.projects || [],
@@ -155,7 +155,7 @@ function _ossDispatchCatalogUpdated(key, opts, entry) {
 async function _ossFetchCatalog(key, opts, notify) {
   if (_ossCatalogInflight.has(key)) return _ossCatalogInflight.get(key);
   _ossCatalogNextRefreshAt.set(key, Date.now() + OSS_CATALOG_REVALIDATE_MS);
-  const p = window.orkas.invoke('marketplace.listProjects', _ossCatalogPayload(opts))
+  const p = window.cogseed.invoke('marketplace.listProjects', _ossCatalogPayload(opts))
     .then((res) => {
       const bundledFallback = !!(res && (res.source === 'bundled' || res.stale === true));
       const existing = _ossCatalogCache.get(key);
@@ -172,7 +172,7 @@ async function _ossFetchCatalog(key, opts, notify) {
 }
 
 async function _ossLoadLocalCatalog(key, opts) {
-  const res = await window.orkas.invoke('marketplace.listProjects', {
+  const res = await window.cogseed.invoke('marketplace.listProjects', {
     ..._ossCatalogPayload(opts),
     local_only: true,
   });
@@ -298,7 +298,7 @@ let _ossInstalledPromise = null;
 function loadOssInstalled(force) {
   if (force) _ossInstalledPromise = null;
   if (!_ossInstalledPromise) {
-    _ossInstalledPromise = window.orkas.invoke('packages.list')
+    _ossInstalledPromise = window.cogseed.invoke('packages.list')
       .then((res) => {
         const keys = new Set();
         for (const p of (res && res.ok && Array.isArray(res.packages) ? res.packages : [])) {
@@ -321,7 +321,7 @@ function isOssProjectInstalled(p, installed) {
 // Open the project's GitHub page in the system browser.
 function ossOpenRepo(p) {
   const url = ossGithubUrl(p);
-  if (url && window.orkas) window.orkas.invoke('auth.openExternal', { url }).catch(() => {});
+  if (url && window.cogseed) window.cogseed.invoke('auth.openExternal', { url }).catch(() => {});
 }
 
 // ③ behavior — prefill the Commander composer, focus, NO send. The caret lands

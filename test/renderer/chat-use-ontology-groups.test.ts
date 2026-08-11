@@ -39,7 +39,7 @@ function makeInput(id: string): FakeInput {
 
 /** Loads the chat-use.js "core" block (same slice the existing
  *  chat-use-inline-chips.test.ts uses) into a fresh vm context, with a fake
- *  DOM providing one input per target and a fake window.orkas.invoke that the
+ *  DOM providing one input per target and a fake window.cogseed.invoke that the
  *  test controls. */
 function loadChatUseHelpers(opts: { invoke?: (channel: string, payload: any) => Promise<any> } = {}) {
   const start = chatUseSource.indexOf('// ─── Chat-input inline use chips');
@@ -89,7 +89,7 @@ function loadChatUseHelpers(opts: { invoke?: (channel: string, payload: any) => 
       getElementById(id: string) { return inputs[id] || null; },
       querySelectorAll() { return []; },
     },
-    window: { orkas: { invoke } },
+    window: { cogseed: { invoke } },
     Event: class { type: string; constructor(type: string) { this.type = type; } },
   });
 

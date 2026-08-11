@@ -108,7 +108,7 @@ function renderFilesResult(snapshot: {
         focusCalls.push([kind, ref, messageId]);
         return true;
       },
-      orkas: {
+      cogseed: {
         sync: {
           getEnabled: async () => ({ ok: true, enabled: snapshot.syncEnabled === true }),
         },

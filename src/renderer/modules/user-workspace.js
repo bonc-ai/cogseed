@@ -12,7 +12,7 @@
 //     conversations created from the empty-state composer are orphan;
 //     project binding happens only inside per-project pages.
 //
-// Depends on: ipc-shim.js (apiFetch / window.orkas.invoke)
+// Depends on: ipc-shim.js (apiFetch / window.cogseed.invoke)
 
 const _wsLog = (typeof createLogger === 'function')
   ? createLogger('user-workspace')
@@ -85,7 +85,7 @@ function _updateAllChips() {
 async function _fetchWorkspaceInfo(target) {
   const hint = _wsScopeHintFor(target);
   try {
-    const result = await window.orkas.invoke('workspace.getInfo', hint);
+    const result = await window.cogseed.invoke('workspace.getInfo', hint);
     if (result && result.ok) {
       _wsInfoByTarget[target] = {
         currentPath: result.currentPath || '',
@@ -126,11 +126,11 @@ async function _selectAndSetWorkspace(target, dirPath) {
   try {
     let selectedPath = dirPath;
     if (!selectedPath) {
-      const dirResult = await window.orkas.invoke('workspace.selectDirectory', {});
+      const dirResult = await window.cogseed.invoke('workspace.selectDirectory', {});
       if (!dirResult || !dirResult.ok || !dirResult.path) return;
       selectedPath = dirResult.path;
     }
-    const setResult = await window.orkas.invoke('workspace.set', { path: selectedPath, ...hint });
+    const setResult = await window.cogseed.invoke('workspace.set', { path: selectedPath, ...hint });
     if (setResult && setResult.ok && setResult.path) {
       await _refreshAllWorkspaceInfo();
       _wsLog.info('workspace selected', { target, path: setResult.path });
@@ -147,7 +147,7 @@ async function _selectAndSetWorkspace(target, dirPath) {
 async function _resetWorkspace(target) {
   const hint = _wsScopeHintFor(target);
   try {
-    const result = await window.orkas.invoke('workspace.reset', hint);
+    const result = await window.cogseed.invoke('workspace.reset', hint);
     if (result && result.ok && result.path) {
       await _refreshAllWorkspaceInfo();
       _wsLog.info('workspace reset', { target, path: result.path });
@@ -160,7 +160,7 @@ async function _resetWorkspace(target) {
 async function _openWorkspaceFolder(target) {
   const hint = _wsScopeHintFor(target);
   try {
-    const result = await window.orkas.invoke('workspace.openPath', hint);
+    const result = await window.cogseed.invoke('workspace.openPath', hint);
     if (result && result.ok) {
       _wsLog.info('workspace opened', result.path);
     }

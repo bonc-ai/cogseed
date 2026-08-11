@@ -3,7 +3,7 @@ REM CogSeed source launcher with isolated runtime variants.
 setlocal EnableExtensions EnableDelayedExpansion
 set "APP_DIR=%~dp0"
 if "%APP_DIR:~-1%"=="\" set "APP_DIR=%APP_DIR:~0,-1%"
-set "VARIANT=mate"
+set "VARIANT=cogseed"
 
 :parse_args
 if "%~1"=="" goto args_done
@@ -14,15 +14,15 @@ echo [CogSeed] Unknown argument: !ARG! 1>&2
 goto usage_error
 
 :args_done
-if defined ORKAS_RUNTIME_VARIANT if not "%ORKAS_RUNTIME_VARIANT%"=="mate" (
-  echo [CogSeed] This worktree is locked to the mate runtime; ORKAS_RUNTIME_VARIANT=%ORKAS_RUNTIME_VARIANT% is not allowed. 1>&2
+if defined ORKAS_RUNTIME_VARIANT if not "%ORKAS_RUNTIME_VARIANT%"=="cogseed" (
+  echo [CogSeed] This worktree is locked to the cogseed runtime; ORKAS_RUNTIME_VARIANT=%ORKAS_RUNTIME_VARIANT% is not allowed. 1>&2
   exit /b 2
 )
 if defined ORKAS_WORKSPACE_ROOT (
-  echo [CogSeed] This worktree manages its own mate data root; inherited ORKAS_WORKSPACE_ROOT is not allowed. 1>&2
+  echo [CogSeed] This worktree manages its own cogseed data root; inherited ORKAS_WORKSPACE_ROOT is not allowed. 1>&2
   exit /b 2
 )
-set "ORKAS_RUNTIME_VARIANT=mate"
+set "ORKAS_RUNTIME_VARIANT=cogseed"
 
 if not exist "%APP_DIR%\package.json" (
   echo [CogSeed] %APP_DIR%\package.json not found; check the project directory layout. 1>&2
@@ -73,5 +73,5 @@ exit /b 2
 
 :usage_ok
 echo Usage: run.cmd
-echo This worktree is locked to the mate runtime identity.
+echo This worktree is locked to the cogseed runtime identity.
 exit /b 0

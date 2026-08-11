@@ -21,7 +21,7 @@ function loadShim(
     createLogger: () => ({ warn() {}, info() {}, error() {} }),
     window: {
       Monitor: { error: monitorError },
-      orkas: {
+      cogseed: {
         invoke: invokeImpl,
         stream: streamImpl,
       },

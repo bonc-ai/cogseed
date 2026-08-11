@@ -420,7 +420,7 @@ describe('skills renderer frontmatter parsing', () => {
         return null;
       },
     };
-    context.window.orkas = {
+    context.window.cogseed = {
       invoke: async (channel: string, payload: any) => {
         calls.push([channel, payload]);
         return { ok: true, summary: { version: '0.2.0', pendingCandidateCount: 2, recentReceipts: [{ executionId: 'e1' }] } };
@@ -677,7 +677,7 @@ describe('skills renderer frontmatter parsing', () => {
         return null;
       },
     };
-    context.window.orkas = {
+    context.window.cogseed = {
       invoke: async () => ({ ok: true, summary: {
         version: '0.2.0', pendingCandidateCount: 0, recentReceipts: [],
         versions: [
@@ -699,7 +699,7 @@ describe('skills renderer frontmatter parsing', () => {
   it('rolls back a skill version through cognition IPC and refreshes the skill detail summary', async () => {
     const context = loadSkillRendererHelpers();
     const calls: any[] = [];
-    context.window.orkas = {
+    context.window.cogseed = {
       invoke: async (channel: string, payload: any) => {
         calls.push([channel, payload]);
         return { ok: true };

@@ -369,7 +369,7 @@ describe('Recall cognition renderer flow', () => {
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-overview-body' ? overview : null,
     };
-    context.window.orkas = {
+    context.window.cogseed = {
       invoke: async (channel: string, input: unknown) => {
         calls.push([channel, input]);
         return responses[channel];
@@ -455,7 +455,7 @@ describe('Recall cognition renderer flow', () => {
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-overview-body' ? overview : null,
     };
-    context.window.orkas = {
+    context.window.cogseed = {
       invoke: async (channel: string) => {
         if (channel === 'recall.sources.list') throw new Error('source read failed');
         return { ok: true };
@@ -492,7 +492,7 @@ describe('Recall cognition renderer flow', () => {
       },
       window: {
         addEventListener() {},
-        orkas: {
+        cogseed: {
           invoke: async (channel: string, input: unknown) => {
             calls.push([channel, input]);
             return { ok: true, signal: { id: 'teach-a', status: 'revoked' } };
@@ -543,7 +543,7 @@ describe('Recall cognition renderer flow', () => {
       },
       window: {
         addEventListener() {},
-        orkas: {
+        cogseed: {
           invoke: async (channel: string, input: unknown) => {
             calls.push([channel, input]);
             return { ok: true, capture: { id: 'rcap-a', status: 'paused' } };
@@ -683,7 +683,7 @@ describe('Recall cognition renderer flow', () => {
       },
       window: {
         addEventListener() {},
-        orkas: {
+        cogseed: {
           invoke: async (channel: string, input: unknown) => {
             calls.push([channel, input]);
             return { ok: true, capture: { id: `rcap-${calls.length}`, status: 'waiting_manual' } };

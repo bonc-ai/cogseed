@@ -63,7 +63,7 @@ function createCurrentBundleFixture() {
       <key>CFBundleURLName</key>
       <string>com.mateagent.desktop.connectors</string>
       <key>CFBundleURLSchemes</key>
-      <array><string>mateagent</string><string>orkas</string></array>
+      <array><string>cogseed</string><string>mateagent</string><string>orkas</string></array>
     </dict>
   </array>
 </dict>
@@ -93,11 +93,11 @@ describe('macOS source runtime bundle contract', () => {
     expect(new Set(specs.map((spec) => spec.appName)).size).toBe(variants.length);
     expect(new Set(specs.map((spec) => spec.appId)).size).toBe(variants.length);
     expect(specs.map((spec) => spec.appId)).toEqual([
-      'com.mateagent.desktop.source.main',
-      'com.mateagent.desktop.source.cognition',
-      'com.mateagent.desktop.source.expense',
-      'com.mateagent.desktop.source.mate',
-      'com.mateagent.desktop.source.optimization',
+      'com.cogseed.desktop.source.main',
+      'com.cogseed.desktop.source.cognition',
+      'com.cogseed.desktop.source.expense',
+      'com.cogseed.desktop.source.mate',
+      'com.cogseed.desktop.source.optimization',
     ]);
   });
 
@@ -106,7 +106,7 @@ describe('macOS source runtime bundle contract', () => {
       expect(sourceRuntime.sourceRuntimeBundleSpec(variant).protocolSchemes).toEqual([]);
     }
     expect(sourceRuntime.sourceRuntimeBundleSpec('mate').protocolSchemes)
-      .toEqual(['mateagent', 'orkas']);
+      .toEqual(['cogseed', 'mateagent', 'orkas']);
   });
 
   it('preserves relative framework symlinks when copying the Electron app', () => {
@@ -200,11 +200,11 @@ describe('macOS source runtime bundle contract', () => {
       .toThrow('exactly one');
   });
 
-  it('locks the executable bundle-preparation entry to mate', () => {
-    expect(sourceRuntime.parseMateWorktreeVariant(['--variant=mate']))
-      .toBe('mate');
+  it('locks the executable bundle-preparation entry to cogseed', () => {
+    expect(sourceRuntime.parseMateWorktreeVariant(['--variant=cogseed']))
+      .toBe('cogseed');
     expect(() => sourceRuntime.parseMateWorktreeVariant(['--variant=cognition']))
-      .toThrow('locked to the mate runtime');
+      .toThrow('locked to the cogseed runtime');
   });
 
   it('rejects a missing path file rather than guessing outside Electron dist', () => {

@@ -7,7 +7,7 @@ import {
 import { resolveRecipients } from '../../../../src/main/features/group_chat/router';
 import {
   resolveMateSessionIdentity,
-} from '../../../../src/main/features/mate_agent_backend/actor-session-facade';
+} from '../../../../src/main/features/cogseed_backend/actor-session-facade';
 
 describe('group_chat / Mate Phase 1 session compatibility', () => {
   it('keeps gconv/gmember public session shapes while resolving Mate-owned storage identities', () => {

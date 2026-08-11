@@ -8,7 +8,7 @@ const source = fs.readFileSync(path.join(root, 'src/renderer/modules/agents.js')
 const html = fs.readFileSync(path.join(root, 'src/renderer/index.html'), 'utf8');
 
 function loadAgentProviderHelpers() {
-  const window: any = { addEventListener() {}, removeEventListener() {}, orkas: { invoke() {} } };
+  const window: any = { addEventListener() {}, removeEventListener() {}, cogseed: { invoke() {} } };
   window.window = window;
   const context: any = {
     window, document: {}, createLogger: () => ({ warn() {}, error() {}, info() {} }),
@@ -23,7 +23,7 @@ describe('CLI custom provider selector', () => {
   it('renders a provider selector and loads masked providers through IPC', () => {
     expect(html).toContain('id="agent-ext-provider-row"');
     expect(html).toContain('id="agent-modal-ext-provider-select"');
-    expect(source).toContain("window.orkas.invoke('customProviders.list')");
+    expect(source).toContain("window.cogseed.invoke('customProviders.list')");
     expect(source).toContain('_renderExternalCliProviderSelect');
     expect(source).toContain('_getExternalCliProviderValue');
   });

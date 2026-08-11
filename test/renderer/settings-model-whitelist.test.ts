@@ -17,7 +17,7 @@ function loadSettingsSandbox(): any {
     },
     window: {
       addEventListener: vi.fn(),
-      orkas: { invoke: vi.fn() },
+      cogseed: { invoke: vi.fn() },
     },
     setTimeout,
     clearTimeout,

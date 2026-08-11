@@ -223,7 +223,7 @@ function loadHarness() {
       createElement: (tagName: string) => makeEl(tagName),
     },
     window: {
-      orkas: {
+      cogseed: {
         invoke: async (channel: string, payload: any) => {
           invokeCalls.push({ channel, payload });
           return { ok: true };
