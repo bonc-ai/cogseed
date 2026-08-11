@@ -13,6 +13,11 @@ import {
 import type { RecallJsonRecord } from './types';
 import type { KstarLearningSignal } from '../kstar/types';
 import { normalizeAbilityAssetOntologyRefs, type AbilityAssetOntologyRef } from './ontology-refs';
+import {
+  readAbilityAssetSemantics,
+  type AbilityAssetRelation,
+  type AbilityAssetSemantics,
+} from './asset-semantics';
 import { initializeAbilityAsset } from './asset-service';
 import {
   cognitionSourceRefKey,
@@ -52,6 +57,14 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   evidenceRefs: CognitionSourceRef[];
   learningSignal?: KstarLearningSignal;
   ontologyRefs?: AbilityAssetOntologyRef[];
+  /** 与其它资产的关系。缺失=没记录过。 */
+  relations?: AbilityAssetRelation[];
+  /** 溯源链：这条资产从哪些既有资产长出来的。 */
+  derivedFrom?: string[];
+  /** 什么场景下该用这条资产。 */
+  applicableWhen?: string[];
+  /** 什么场景下绝对不能用。空/缺失只代表没写过，不代表无限制。 */
+  forbiddenWhen?: string[];
   scope: string;
   status: 'active' | 'paused' | 'revoked';
   maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated';
@@ -133,7 +146,17 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   if (!evidenceRefs.length) throw new Error('malformed recall ability asset evidence');
   const learningSignal = normalizeLearningSignal(value.learningSignal);
   const ontologyRefs = value.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(value.ontologyRefs);
-  return { ...value, evidenceRefs, ...(learningSignal ? { learningSignal } : {}), ...(ontologyRefs ? { ontologyRefs } : {}) } as RecallAbilityAssetRecord;
+  const semantics = readAbilityAssetSemantics(
+    value as Record<string, unknown>,
+    typeof value.id === 'string' ? value.id : undefined,
+  );
+  return {
+    ...value,
+    evidenceRefs,
+    ...(learningSignal ? { learningSignal } : {}),
+    ...(ontologyRefs ? { ontologyRefs } : {}),
+    ...semantics,
+  } as RecallAbilityAssetRecord;
 }
 
 function candidateDirectory(userId: string): string {
@@ -291,8 +314,10 @@ export function rejectRecallCandidate(userId: string, candidateId: string, note?
 export async function promoteRecallCandidate(
   userId: string,
   candidateId: string,
-  options: { ontologyRefs?: AbilityAssetOntologyRef[] } = {},
+  options: { ontologyRefs?: AbilityAssetOntologyRef[] } & AbilityAssetSemantics = {},
 ): Promise<{ candidate: RecallCandidateRecord; asset: RecallAbilityAssetRecord }> {
+  // 语义字段在写盘前先校验，避免半写状态：候选已翻 promoted 但资产字段非法。
+  const semantics = readAbilityAssetSemantics(options as Record<string, unknown>);
   const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, async (current) => {
     if (!current) throw new Error('recall candidate not found');
     const candidate = asCandidate(current);
@@ -310,6 +335,7 @@ export async function promoteRecallCandidate(
       evidenceRefs: candidate.sourceRefs,
       ...(candidate.learningSignal ? { learningSignal: candidate.learningSignal } : {}),
       ...(options.ontologyRefs?.length ? { ontologyRefs: options.ontologyRefs } : {}),
+      ...semantics,
       scope: candidate.suggestedScope,
       status: 'active',
       maturity: 'seed',

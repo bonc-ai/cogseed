@@ -1,0 +1,55 @@
+{
+  "packId": "pack-fixture-0001",
+  "frozenAt": "2026-08-11T02:00:00.000Z",
+  "purpose": "为客户交付方案做一次评审",
+  "targetAgent": "workbuddy",
+  "expiresAt": "2026-08-11T03:00:00.000Z",
+  "assets": [
+    {
+      "assetId": "aa-0001",
+      "version": "1",
+      "type": "rule",
+      "title": "先对齐验收标准",
+      "statement": "动手前先把验收标准写成可勾选的清单。",
+      "statementHash": "97facd7f3530a939011f23c7dcfe8c139f1aff4a08e133c2be3e9544ef575b78",
+      "scope": "delivery",
+      "applicableWhen": [
+        "交付评审"
+      ]
+    },
+    {
+      "assetId": "aa-0002",
+      "version": "1",
+      "type": "template",
+      "title": "风险登记表",
+      "statement": "每个交付风险要有触发信号与处置人。",
+      "statementHash": "11d7f153aff10befed393fb353adef4b0ad8238c5c826cbc59615e452b4b72a1",
+      "scope": "delivery"
+    },
+    {
+      "assetId": "aa-0004",
+      "version": "1",
+      "type": "rule",
+      "title": "内部估算口径",
+      "statement": "对外报价前先过一遍内部估算口径。",
+      "statementHash": "67cf1885fef66e15c4a97aac7a29731967ad085dd1e9b329573e3952351980dc",
+      "scope": "delivery",
+      "forbiddenWhen": [
+        "在客户现场不要引用内部估算"
+      ]
+    }
+  ],
+  "excluded": [
+    {
+      "assetId": "aa-0003",
+      "reason": "revoked",
+      "detail": "资产已撤销"
+    },
+    {
+      "assetId": "aa-0005",
+      "reason": "missing_evidence",
+      "detail": "缺少来源证据，不进能力包"
+    }
+  ],
+  "contentHash": "cc91b975e801da0d7dfe53d1e28cd49283ffa8143d765f6a3f489780fa0fa83f"
+}

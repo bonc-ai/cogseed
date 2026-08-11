@@ -2153,6 +2153,30 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, ...(await recallCandidates.promoteRecallCandidate(ctx.userId, candidateId)) };
   },
 
+  // 候选 → 资产的带本体落点路由。与 promote 的区别：这条同时把资产语句写回
+  // 个人本体的指定位置，所以 ontology 落点非法时整条拒绝，不做「资产建了但没落位」的半成品。
+  'recall.candidates.route': async ({ candidateId, ontology } = {}, ctx) => {
+    if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
+    if (ontology === undefined) {
+      return { ok: true, ...(await kstarKnowledgeRoute.routeConfirmedKstarCandidate(ctx.userId, candidateId)) };
+    }
+    if (!ontology || typeof ontology !== 'object' || Array.isArray(ontology)) throw new Error('invalid ontology route');
+    const { groupId, section, field } = ontology as Record<string, unknown>;
+    if (!safeId(groupId)) throw new Error('invalid ontology group id');
+    if (section !== undefined && (typeof section !== 'string' || !section.trim() || section.length > 200)) throw new Error('invalid ontology section');
+    if (field !== undefined && (typeof field !== 'string' || !field.trim() || field.length > 200)) throw new Error('invalid ontology field');
+    return {
+      ok: true,
+      ...(await kstarKnowledgeRoute.routeConfirmedKstarCandidate(ctx.userId, candidateId, {
+        ontology: {
+          groupId: groupId as string,
+          ...(section !== undefined ? { section: section as string } : {}),
+          ...(field !== undefined ? { field: field as string } : {}),
+        },
+      })),
+    };
+  },
+
   'recall.assets.list': async (_args, ctx) => ({ ok: true, assets: await recallAssets.listAbilityAssets(ctx.userId) }),
   'recall.assets.read': async ({ assetId } = {}, ctx) => { if (!safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, asset: await recallAssets.readAbilityAsset(ctx.userId, assetId) }; },
   'recall.assets.pause': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid recall asset pause'); return { ok: true, asset: await recallAssets.pauseAbilityAsset(ctx.userId, assetId, note) }; },
