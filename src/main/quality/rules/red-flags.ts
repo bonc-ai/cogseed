@@ -32,6 +32,23 @@ export const RED_FLAGS: ReadonlyArray<RuleDef> = [
     suggested_fix: 'Do not access credential files directly. Accept the relevant path or secret as an input argument from the user.',
   },
   {
+    // Root-scope recursive deletion only. `rm -rf ./build` and `rm -rf "$TMPDIR/x"`
+    // are ordinary cleanup and must stay clean — the engine already scores those
+    // as `pass`, and promoting them here would break every build-tidying skill.
+    // What this catches is deletion aimed at `/`, `$HOME`, `~`, or a bare glob,
+    // which has no legitimate use inside a skill.
+    //
+    // Added because the engine blocks `rm -rf /` via a bare `DO_NOT_INSTALL`
+    // recommendation carrying no rule id, so there was nothing for the override
+    // gate to key on: the most obviously unsafe command in the corpus would have
+    // become user-overridable for lack of an identifier.
+    id: 'no_root_scope_destruction',
+    level: 'EXTREME',
+    appliesTo: ['script', 'skill_md'],
+    pattern: /\brm\s+(?:-[a-zA-Z]*\s+)*-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+(?:\/|~|\$HOME|\*)(?:\s|$|;|&)|\brm\s+(?:-[a-zA-Z]*\s+)*-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*\s+(?:\/|~|\$HOME|\*)(?:\s|$|;|&)/,
+    suggested_fix: 'Never delete recursively at / , ~ or $HOME. Scope the deletion to a specific relative path inside the working directory.',
+  },
+  {
     id: 'no_eval_with_external_input',
     level: 'EXTREME',
     appliesTo: ['script', 'skill_md'],

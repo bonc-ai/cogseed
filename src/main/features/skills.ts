@@ -209,6 +209,24 @@ export interface SkillListing {
       persistencePoints: number;
       hasBinaries: boolean;
     };
+    /**
+     * Instruction-type findings: prose directing the agent, which the code rules
+     * cannot see. Carried so the panel can quote the passage — this verdict is
+     * surfaced for the user's judgement rather than enforced, and a bare label
+     * gives them nothing to judge.
+     */
+    instructionRisk?: {
+      status: 'clean' | 'suspicious' | 'unavailable';
+      segments: Array<{ file: string; line: number; text: string; signal: string }>;
+    };
+    /**
+     * Set when the skill is installed because the user accepted a refusal.
+     *
+     * Without this the override would be invisible after the fact: the skill
+     * would look like any other, and the single most relevant fact about it —
+     * that nothing verified it and someone chose to proceed — would be lost.
+     */
+    userOverride?: { outcome: string; at: number };
   };
 }
 
@@ -925,6 +943,8 @@ async function _overlaySkillSecurity(list: SkillListing[]): Promise<SkillListing
         // is weaker" caveat on skills that may well have had a full scan.
         ...(receipt.scanner ? { scanner: receipt.scanner } : {}),
         ...(receipt.attackSurface ? { attackSurface: { ...receipt.attackSurface } } : {}),
+        ...(receipt.instructionRisk ? { instructionRisk: receipt.instructionRisk } : {}),
+        ...(receipt.userOverride ? { userOverride: receipt.userOverride } : {}),
       }
       : {};
     if (reason) {

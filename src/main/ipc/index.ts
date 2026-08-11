@@ -3151,7 +3151,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }, { force: force === true, name: typeof name === 'string' ? name : undefined });
   },
 
-  'marketplace.installSkill': async ({ id, name, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion, force }) => {
+  'marketplace.installSkill': async ({ id, name, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion, force, acceptSecurityRisk }) => {
     if (!id || typeof id !== 'string') throw new Error('id required');
     if (typeof version !== 'string' || typeof published_at !== 'number') {
       throw new Error('version + published_at required');
@@ -3165,7 +3165,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ...(typeof minVersion === 'string' ? { minVersion } : {}),
       ...(typeof min_pc_version === 'string' ? { min_pc_version } : {}),
       ...(typeof minPcVersion === 'string' ? { minPcVersion } : {}),
-    }, { force: force === true, name: typeof name === 'string' ? name : undefined });
+    }, {
+      force: force === true,
+      name: typeof name === 'string' ? name : undefined,
+      // Only meaningful for verdicts `scanVerdictAllowsOverride` accepts; the
+      // install path re-checks rather than trusting the renderer.
+      acceptSecurityRisk: acceptSecurityRisk === true,
+    });
   },
 
   // Uninstall is non-dev: wipes the local install copy + manifest entry. Does NOT touch the

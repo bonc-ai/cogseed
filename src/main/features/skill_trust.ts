@@ -129,6 +129,34 @@ export interface SecurityReceipt {
     persistencePoints: number;
     hasBinaries: boolean;
   };
+  /**
+   * Instruction-type risk carried over from the scan.
+   *
+   * Persisted because the panel reads receipts, not live scans: without this a
+   * finding would exist only for the moment of install and vanish from the
+   * skill's record. Segments are kept so the panel can quote the passage — a
+   * bare "suspicious" gives the user nothing to judge, and this verdict is
+   * surfaced for judgement rather than enforced.
+   */
+  instructionRisk?: {
+    status: 'clean' | 'suspicious' | 'unavailable';
+    segments: Array<{ file: string; line: number; text: string; signal: string }>;
+  };
+  /**
+   * The install happened because the user accepted a risk the gate had refused.
+   *
+   * Persisted so the skill panel can keep saying so. Without it an override
+   * would be invisible a day later: the skill would sit in the list looking like
+   * any other, and the one fact worth remembering about it — that nothing
+   * verified it and someone chose to proceed — would be gone.
+   *
+   * `outcome` is the verdict that was waived, kept because "user accepted a
+   * risk" is not actionable on its own; which risk is the part worth showing.
+   */
+  userOverride?: {
+    outcome: string;
+    at: number;
+  };
 }
 
 /** Why a receipt no longer applies. `null` when it still does. */
@@ -203,6 +231,53 @@ function _readAttackSurface(raw: unknown): { attackSurface?: SecurityReceipt['at
   };
 }
 
+/**
+ * Validate a persisted instruction-risk block.
+ *
+ * Unknown status strings are dropped rather than passed through: the panel keys
+ * its wording off this value, and an unrecognised status would render as neither
+ * a warning nor a clean result. Segments are rebuilt field by field — they
+ * originate in skill text, i.e. untrusted input, and they are echoed to the UI.
+ */
+function _readInstructionRisk(raw: unknown): { instructionRisk?: SecurityReceipt['instructionRisk'] } {
+  if (!raw || typeof raw !== 'object') return {};
+  const r = raw as Record<string, unknown>;
+  if (r.status !== 'clean' && r.status !== 'suspicious' && r.status !== 'unavailable') return {};
+  const segments = Array.isArray(r.segments)
+    ? r.segments.flatMap((entry) => {
+      if (!entry || typeof entry !== 'object') return [];
+      const e = entry as Record<string, unknown>;
+      if (typeof e.file !== 'string' || typeof e.text !== 'string') return [];
+      const line = typeof e.line === 'number' && Number.isInteger(e.line) && e.line > 0
+        ? e.line
+        : 1;
+      return [{
+        file: e.file.slice(0, 256),
+        line,
+        text: e.text.slice(0, 400),
+        signal: typeof e.signal === 'string' ? e.signal.slice(0, 64) : 'unknown',
+      }];
+    })
+    : [];
+  return { instructionRisk: { status: r.status, segments } };
+}
+
+/**
+ * Validate a persisted override record.
+ *
+ * Dropped entirely when malformed rather than partially reconstructed: a record
+ * claiming an override with no readable verdict would render as a warning with
+ * nothing behind it, which is worse than no warning at all.
+ */
+function _readUserOverride(raw: unknown): { userOverride?: SecurityReceipt['userOverride'] } {
+  if (!raw || typeof raw !== 'object') return {};
+  const o = raw as Record<string, unknown>;
+  if (typeof o.outcome !== 'string' || !o.outcome) return {};
+  const at = typeof o.at === 'number' && Number.isFinite(o.at) && o.at > 0 ? o.at : 0;
+  if (!at) return {};
+  return { userOverride: { outcome: o.outcome.slice(0, 64), at } };
+}
+
 export function readReceipt(uid: string, skillId: string): SecurityReceipt | null {
   if (!safeId(uid) || !safeId(skillId)) return null;
   const raw = readJsonSync<Partial<SecurityReceipt>>(_receiptFile(uid, skillId));
@@ -245,6 +320,8 @@ export function readReceipt(uid: string, skillId: string): SecurityReceipt | nul
     // is unusable: a partially-read surface would render as "0 egress points",
     // which reads as a stronger result than "unknown".
     ...(_readAttackSurface(raw.attackSurface)),
+    ...(_readInstructionRisk(raw.instructionRisk)),
+    ...(_readUserOverride(raw.userOverride)),
     scannedAt: String(raw.scannedAt || ''),
   };
 }
@@ -284,6 +361,8 @@ export function writeReceipt(
     isolated?: boolean;
     rulesDegraded?: boolean;
     attackSurface?: SecurityReceipt['attackSurface'];
+    instructionRisk?: SecurityReceipt['instructionRisk'];
+    userOverride?: SecurityReceipt['userOverride'];
   },
 ): SecurityReceipt {
   if (!safeId(uid)) throw new Error('invalid uid');
@@ -303,6 +382,8 @@ export function writeReceipt(
     ...(typeof input.isolated === 'boolean' ? { isolated: input.isolated } : {}),
     ...(input.rulesDegraded ? { rulesDegraded: true } : {}),
     ...(input.attackSurface ? { attackSurface: { ...input.attackSurface } } : {}),
+    ...(input.instructionRisk ? { instructionRisk: input.instructionRisk } : {}),
+    ...(input.userOverride ? { userOverride: input.userOverride } : {}),
     scannedAt: nowIso(),
   };
   const file = _receiptFile(uid, skillId);
@@ -337,6 +418,8 @@ export function writeInstallReceipt(
     isolated?: boolean;
     rulesDegraded?: boolean;
     attackSurface?: SecurityReceipt['attackSurface'];
+    instructionRisk?: SecurityReceipt['instructionRisk'];
+    userOverride?: SecurityReceipt['userOverride'];
   },
   violations: { violationCount: number; topRule?: string; topLevel?: 'EXTREME' | 'MEDIUM' | 'LOW' },
 ): SecurityReceipt | null {
@@ -363,6 +446,8 @@ export function writeInstallReceipt(
       ...(typeof scan.isolated === 'boolean' ? { isolated: scan.isolated } : {}),
       ...(scan.rulesDegraded ? { rulesDegraded: true } : {}),
       ...(scan.attackSurface ? { attackSurface: { ...scan.attackSurface } } : {}),
+      ...(scan.instructionRisk ? { instructionRisk: scan.instructionRisk } : {}),
+      ...(scan.userOverride ? { userOverride: scan.userOverride } : {}),
     });
   } catch (err) {
     log.warn('failed to write install security receipt', {

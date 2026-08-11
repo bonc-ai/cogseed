@@ -1453,6 +1453,44 @@ function _skillSecurityPanelText(s) {
     L.push(`  ${t('skills.secpanel_surface_note')}`);
   }
 
+  // A user override outranks everything else in this panel: it is the one fact
+  // that explains why a skill is present at all despite the gate refusing it.
+  // Shown first so it is not buried under the surface counts.
+  if (sec.userOverride) {
+    L.push('');
+    L.push(t('skills.secpanel_user_override'));
+  }
+
+  // Instruction-type risk. Shown separately from the attack surface because the
+  // two measure different things and fail independently: the code rules can
+  // return a clean 100 while the instruction layer has a finding, which is
+  // exactly what a credential-harvesting skill written entirely in prose does.
+  const instr = sec.instructionRisk;
+  if (instr && instr.status !== 'clean') {
+    L.push('');
+    L.push(t('skills.secpanel_instruction'));
+    if (instr.status === 'unavailable') {
+      // Not "nothing found": passages were flagged and nobody read them. Saying
+      // otherwise would repeat the mistake of rendering "not checked" as clean.
+      L.push(`  ${t('skills.secpanel_instruction_unavailable')}`);
+    } else {
+      L.push(`  ${t('skills.secpanel_instruction_suspicious')}`);
+    }
+    // The passage itself, verbatim. This verdict is fuzzier than the code rules,
+    // so the user gets the evidence rather than only a label — for most of these
+    // one glance beats any threshold we could pick.
+    for (const seg of (instr.segments || []).slice(0, 3)) {
+      const where = `${seg.file}:${seg.line}`;
+      const quote = String(seg.text || '').replace(/\s+/g, ' ').slice(0, 160);
+      L.push(`  · ${where} — "${quote}"`);
+    }
+    if ((instr.segments || []).length > 3) {
+      L.push(`  ${t('skills.secpanel_instruction_more')
+        .replace('{n}', String(instr.segments.length - 3))}`);
+    }
+    L.push(`  ${t('skills.secpanel_instruction_note')}`);
+  }
+
   if (!sec.status || sec.status === 'unchecked') {
     L.push('');
     L.push(t('skills.secpanel_no_record'));
