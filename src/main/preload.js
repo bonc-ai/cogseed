@@ -23,7 +23,7 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 // Synchronous i18n boot — handed to the renderer via contextBridge before any
-// renderer-side script runs. The renderer's i18n module reads window.__orkasI18nBoot
+// renderer-side script runs. The renderer's i18n module reads window.__cogseedI18nBoot
 // at script-tag execution time (line 1118 of index.html, after all data-i18n
 // elements have been parsed), so applyDomI18n() can translate the DOM before
 // the first paint. Falls back to a null bundle on failure — i18n.js then runs
@@ -31,7 +31,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 // (~1-2 ms); the trade is paying that for zero language-flash on startup.
 let _i18nBoot = null;
 try {
-  const res = ipcRenderer.sendSync('orkas:bootI18n');
+  const res = ipcRenderer.sendSync('cogseed:bootI18n');
   if (res && res.ok && res.lang && res.tables && Object.prototype.hasOwnProperty.call(res.tables, res.lang)) {
     _i18nBoot = { lang: res.lang, tables: res.tables };
   }
@@ -44,7 +44,7 @@ function nextRequestId() {
 }
 
 function invoke(channel, payload) {
-  return ipcRenderer.invoke('orkas.invoke', { channel, payload: payload || {} });
+  return ipcRenderer.invoke('cogseed.invoke', { channel, payload: payload || {} });
 }
 
 const EXPENSE_WORKBENCH_GESTURE_TTL_MS = 1500;
@@ -319,7 +319,7 @@ function importLocalFiles(scope, files, opts) {
       });
     } catch (_) { /* synthetic/non-local File; caller can use the small-file fallback */ }
   }
-  return ipcRenderer.invoke('orkas.importLocalFiles', {
+  return ipcRenderer.invoke('cogseed.importLocalFiles', {
     scope: scope === 'project' ? 'project' : 'contexts',
     projectId: opts && opts.projectId ? String(opts.projectId) : '',
     targetDir: opts && opts.targetDir ? String(opts.targetDir) : '',
@@ -336,7 +336,7 @@ function logRecord(record) {
   try {
     // invoke is awaited-able but callers don't need to; swallow errors so
     // a logging failure never breaks user interaction.
-    ipcRenderer.invoke('orkas.invoke', {
+    ipcRenderer.invoke('cogseed.invoke', {
       channel: 'log.record',
       payload: record || {},
     }).catch(() => {});
@@ -387,19 +387,19 @@ function stream(channel, payload, onEvent) {
       catch (err) {
         settled = true;
         ipcRenderer.removeListener(channelKey, listener);
-        ipcRenderer.send('orkas.streamCancel', requestId);
+        ipcRenderer.send('cogseed.streamCancel', requestId);
         reject(err);
       }
     };
 
     ipcRenderer.on(channelKey, listener);
-    ipcRenderer.send('orkas.streamStart', { requestId, channel, payload: payload || {} });
+    ipcRenderer.send('cogseed.streamStart', { requestId, channel, payload: payload || {} });
   });
 
   const cancel = () => {
     if (settled || cancelled) return;
     cancelled = true;
-    ipcRenderer.send('orkas.streamCancel', requestId);
+    ipcRenderer.send('cogseed.streamCancel', requestId);
   };
 
   return { promise, cancel };
@@ -423,15 +423,16 @@ const recycleBin = {
 
 // Expose the sync-fetched i18n bundle on its own bridge key so the renderer
 // can pick it up at module load. Read-only — the renderer never mutates it.
+contextBridge.exposeInMainWorld('__cogseedI18nBoot', _i18nBoot);
 contextBridge.exposeInMainWorld('__orkasI18nBoot', _i18nBoot);
 
-contextBridge.exposeInMainWorld('orkas', {
-  ping: () => ipcRenderer.invoke('orkas.ping'),
-  diagnostics: () => ipcRenderer.invoke('orkas.diagnostics'),
+const cogseedApi = {
+  ping: () => ipcRenderer.invoke('cogseed.ping'),
+  diagnostics: () => ipcRenderer.invoke('cogseed.diagnostics'),
   importLocalFiles,
-  env: () => ipcRenderer.invoke('orkas.env'),
-  relaunch: () => ipcRenderer.invoke('orkas.relaunch'),
-  reportUserActivity: () => ipcRenderer.send('orkas.userActivity'),
+  env: () => ipcRenderer.invoke('cogseed.env'),
+  relaunch: () => ipcRenderer.invoke('cogseed.relaunch'),
+  reportUserActivity: () => ipcRenderer.send('cogseed.userActivity'),
   getNativeSearchEnabled: () => invoke('devtools.getNativeSearchEnabled'),
   setNativeSearchEnabled: (enabled) => invoke('devtools.setNativeSearchEnabled', { enabled }),
   getLanguage: () => invoke('config.getLanguage'),
@@ -444,7 +445,10 @@ contextBridge.exposeInMainWorld('orkas', {
   stream,
   onPushEvent,
   log: logRecord,
-});
+};
+const orkasApi = new Proxy(cogseedApi, { get: (_target, prop) => cogseedApi[prop] });
+contextBridge.exposeInMainWorld('cogseed', cogseedApi);
+contextBridge.exposeInMainWorld('orkas', orkasApi);
 
 // Final-package launch smoke. The main process adds this private renderer
 // argument only when the release validator starts an isolated hidden window.
@@ -452,8 +456,8 @@ contextBridge.exposeInMainWorld('orkas', {
 // DOMContentLoaded proves the packaged renderer was read and initialized.
 if (process.argv.includes('--orkas-packaged-launch-smoke')) {
   window.addEventListener('DOMContentLoaded', () => {
-    ipcRenderer.invoke('orkas.ping')
-      .then((ping) => ipcRenderer.invoke('orkas.packagedLaunchSmokeReady', {
+    ipcRenderer.invoke('cogseed.ping')
+      .then((ping) => ipcRenderer.invoke('cogseed.packagedLaunchSmokeReady', {
         preloadLoaded: true,
         ping: ping && ping.pong,
         rendererReadyState: document.readyState,

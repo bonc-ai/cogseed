@@ -16,11 +16,11 @@ const state = await import('../src/main/features/group_chat/state.ts');
 const router = await import('../src/main/features/group_chat/router.ts');
 const visibility = await import('../src/main/features/group_chat/visibility.ts');
 const bus = await import('../src/main/features/group_chat/bus.ts');
-const permissions = await import('../src/main/features/mate_agent_runtime/kernel/tools/permissions.ts');
-const catalog = await import('../src/main/features/mate_agent_runtime/kernel/tools/catalog.ts');
-const protocol = await import('../src/main/features/mate_agent_runtime/protocol.ts');
-const runtimeStore = await import('../src/main/features/mate_agent_runtime/store.ts');
-const sessionStore = await import('../src/main/features/mate_agent_runtime/kernel/session-store.ts');
+const permissions = await import('../src/main/features/cogseed_runtime/kernel/tools/permissions.ts');
+const catalog = await import('../src/main/features/cogseed_runtime/kernel/tools/catalog.ts');
+const protocol = await import('../src/main/features/cogseed_runtime/protocol.ts');
+const runtimeStore = await import('../src/main/features/cogseed_runtime/store.ts');
+const sessionStore = await import('../src/main/features/cogseed_runtime/kernel/session-store.ts');
 const browserGuard = await import('../src/main/model/core-agent/browser-automation-guard.ts');
 const officeTools = await import('../src/main/model/core-agent/office-tools.ts');
 const migrate = await import('../src/main/util/migrate-session-ids.ts');
@@ -252,14 +252,14 @@ async function captureFamilyH(): Promise<void> {
   const pathSamples = [path.join(tempRoot, 'private', 'file.txt'), path.join(allowed, 'safe.txt')];
   let forbiddenImportScan: string[] = [];
   try {
-    forbiddenImportScan = execFileSync('rg', ['-n', "resources/builtin|features/group_chat|model/core-agent", 'src/main/features/mate_agent_runtime', '--glob', '*.ts'], { encoding: 'utf8' }).split('\n').filter(Boolean).slice(0, 20);
+    forbiddenImportScan = execFileSync('rg', ['-n', "resources/builtin|features/group_chat|model/core-agent", 'src/main/features/cogseed_runtime', '--glob', '*.ts'], { encoding: 'utf8' }).split('\n').filter(Boolean).slice(0, 20);
   } catch (err) {
     const output = (err as { stdout?: string }).stdout || '';
     forbiddenImportScan = output.split('\n').filter(Boolean).slice(0, 20);
   }
   await writeFixture('family-h', 'H-no-secret-leak-v1.json', fixture('H-no-secret-leak-v1', { secret_samples: secretSamples }, { public_projection_contains_raw_secret: false, redaction_boundary: 'host-tool-result' }, ['Synthetic credentials are inputs only; the fixture does not persist or expose them in a public projection.']));
   await writeFixture('family-h', 'H-no-path-leak-v1.json', fixture('H-no-path-leak-v1', { path_samples: pathSamples }, { allowed_root_normalized: permissions.normalizeRuntimeRoots([allowed]), outside_path_denied: true, raw_internal_path_exposed: false }, ['Absolute temporary roots are canonicalized and internal paths are not part of the public result.']));
-  await writeFixture('family-h', 'H-no-forbidden-import-v1.json', fixture('H-no-forbidden-import-v1', { scanned: 'src/main/features/mate_agent_runtime/**/*.ts' }, { forbidden_import_matches: forbiddenImportScan }, ['The runtime boundary scan is checked in as evidence; only adapter/choke-point imports are allowed.']));
+  await writeFixture('family-h', 'H-no-forbidden-import-v1.json', fixture('H-no-forbidden-import-v1', { scanned: 'src/main/features/cogseed_runtime/**/*.ts' }, { forbidden_import_matches: forbiddenImportScan }, ['The runtime boundary scan is checked in as evidence; only adapter/choke-point imports are allowed.']));
 }
 
 const only = process.argv.indexOf('--only') >= 0 ? process.argv[process.argv.indexOf('--only') + 1] : undefined;

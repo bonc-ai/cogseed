@@ -5,7 +5,7 @@ import * as path from 'node:path';
 const root = path.join(__dirname, '../../..');
 const read = (rel: string) => fs.readFileSync(path.join(root, rel), 'utf8');
 
-describe('Mate Agent source-run branding', () => {
+describe('CogSeed source-run branding', () => {
   it('prepares one variant-specific macOS bundle after dependency repair', () => {
     const source = read('scripts/prepare-source-runtime.cjs');
     expect(source).toContain('CFBundleIdentifier');
@@ -21,15 +21,18 @@ describe('Mate Agent source-run branding', () => {
 
   it('launches the prepared integration-specific macOS bundle', () => {
     const source = read('run.sh');
-    expect(source).toContain('Mate Agent.app');
+    expect(source).toContain('CogSeed.app');
+    expect(source).not.toContain('Mate Agent.app');
     expect(source).not.toContain('APP_BUNDLE="$APP_DIR/node_modules/electron/dist/Orkas.app"');
   });
 
-  it('uses Mate Agent in cross-platform launcher output', () => {
+  it('uses CogSeed in cross-platform launcher output', () => {
     const cmd = read('run.cmd');
     const ensureDeps = read('scripts/ensure-deps.cjs');
     expect(cmd).not.toContain('[Orkas]');
     expect(cmd).not.toContain('Starting Orkas');
+    expect(cmd).toContain('[CogSeed]');
+    expect(cmd).not.toContain('[Mate Agent]');
     expect(ensureDeps).not.toContain('rerun Orkas');
   });
 });

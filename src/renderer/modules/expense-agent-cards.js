@@ -68,10 +68,10 @@
   }
 
   async function invoke(channel, payload) {
-    if (!window.orkas || typeof window.orkas.invoke !== 'function') {
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') {
       throw new Error('ipc_unavailable');
     }
-    const response = await window.orkas.invoke(channel, payload);
+    const response = await window.cogseed.invoke(channel, payload);
     if (!response || response.ok !== true) throw new Error(responseError(response));
     return response;
   }

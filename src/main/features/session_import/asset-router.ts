@@ -36,7 +36,8 @@ import { createHash } from 'node:crypto';
 
 import { saveRecallCandidate } from '../recall/candidate-service';
 import { readClaudeSessionTranscript } from '../local_agents/claude_sessions';
-import { parseClaudeTranscript } from './transcript-normalize';
+import { listClaudeDesktopSessions } from '../local_agents/claude_desktop_sessions';
+import { parseClaudeTranscript, type NormalizedTranscript } from './transcript-normalize';
 import { extractSession, type CognitionItem } from './extractor';
 import { materializeSession, type MaterializeResult } from './materialize';
 import { createLogger } from '../../logger';
@@ -58,6 +59,8 @@ export interface ImportSessionResult {
   materialize?: MaterializeResult;
   cognitions: RoutedCognitionCounts;
   degraded: boolean;
+  /** Transcript was too large to read whole; only recent turns were imported. */
+  truncated?: boolean;
   reason?: string;
 }
 
@@ -177,6 +180,90 @@ export async function importClaudeSession(input: ImportClaudeSessionInput): Prom
   log.info(
     `imported claude session=${transcript.sourceId} cid=${materialize.conversationId} ` +
     `degraded=${!!extraction.degraded} cog=${cognitions.personal}/${cognitions.rule}/${cognitions.template}`,
+  );
+
+  return {
+    ok: !extraction.degraded,
+    conversationId: materialize.conversationId,
+    materialize,
+    cognitions,
+    degraded: !!extraction.degraded,
+    truncated: !!read.truncated,
+    reason: extraction.reason,
+  };
+}
+
+export interface ImportClaudeDesktopSessionInput {
+  userId: string;
+  /** `sessionId` from `listClaudeDesktopSessions`. */
+  sessionId: string;
+}
+
+/**
+ * Import one Claude **Desktop** session.
+ *
+ * Desktop sessions are metadata-only: the app stores the system prompt, model,
+ * and opening message per workspace, but not the reply stream, so there is no
+ * transcript to read. The single opening message becomes a one-turn synthetic
+ * transcript and runs the same extract → materialize → route pipeline, which
+ * gives the user a continuable conversation seeded with their original request.
+ *
+ * `sourceId` is prefixed `desktop-` so a desktop session can never collide with
+ * a CLI session in the idempotency key, even if the two ever share a uuid.
+ */
+export async function importClaudeDesktopSession(
+  input: ImportClaudeDesktopSessionInput,
+): Promise<ImportSessionResult> {
+  const zeroCounts: RoutedCognitionCounts = { personal: 0, rule: 0, template: 0 };
+
+  const scan = await listClaudeDesktopSessions();
+  if (!scan.ok) {
+    return { ok: false, cognitions: zeroCounts, degraded: true, reason: scan.error };
+  }
+
+  const meta = scan.sessions.find((s) => s.sessionId === input.sessionId);
+  if (!meta) {
+    return { ok: false, cognitions: zeroCounts, degraded: true, reason: 'session_not_found' };
+  }
+
+  const opening = (meta.initialMessage || '').trim();
+  if (!opening) {
+    return { ok: false, cognitions: zeroCounts, degraded: true, reason: 'empty_transcript' };
+  }
+
+  const sourceId = `desktop-${meta.sessionId}`;
+  const transcript: NormalizedTranscript = {
+    source: 'claude',
+    sourceId,
+    projectPath: meta.projectPath || '',
+    turns: [{ role: 'user', text: opening, ts: meta.createdAt || '' }],
+  };
+
+  const extraction = await extractSession(input.userId, transcript);
+
+  const materialize = await materializeSession({
+    userId: input.userId,
+    source: 'claude',
+    sourceId,
+    projectPath: transcript.projectPath,
+    titleHint: meta.title || undefined,
+    extraction,
+  });
+
+  let cognitions = zeroCounts;
+  if (!extraction.degraded) {
+    cognitions = await routeCognitions(
+      input.userId,
+      'claude',
+      sourceId,
+      materialize.conversationId,
+      { personal: extraction.personal, rules: extraction.rules, templates: extraction.templates },
+    );
+  }
+
+  log.info(
+    `imported claude-desktop session=${sourceId} cid=${materialize.conversationId} ` +
+    `degraded=${!!extraction.degraded}`,
   );
 
   return {

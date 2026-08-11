@@ -238,7 +238,7 @@ async function _mveReadSource(source) {
       const payload = { path: source.absPath };
       if (source.cid) payload.cid = source.cid;
       if (source.projectId) payload.projectId = source.projectId;
-      const res = await window.orkas.invoke('produced.readText', payload);
+      const res = await window.cogseed.invoke('produced.readText', payload);
       if (!res || !res.ok) return { ok: false, error: (res && res.error) || 'read_failed', detail: res };
       return { ok: true, content: String(res.text || '') };
     } catch (e) {
@@ -247,7 +247,7 @@ async function _mveReadSource(source) {
   }
   if (source.kind === 'project-file') {
     try {
-      const res = await window.orkas.invoke('projects.files.readText', {
+      const res = await window.cogseed.invoke('projects.files.readText', {
         projectId: source.projectId,
         name: source.name,
       });
@@ -280,7 +280,7 @@ async function _mveWriteSource(source, content) {
       const payload = { path: source.absPath, content };
       if (source.cid) payload.cid = source.cid;
       if (source.projectId) payload.projectId = source.projectId;
-      const res = await window.orkas.invoke('produced.writeText', payload);
+      const res = await window.cogseed.invoke('produced.writeText', payload);
       if (!res || !res.ok) return { ok: false, error: (res && res.error) || 'save_failed' };
       return { ok: true };
     } catch (e) {
@@ -289,7 +289,7 @@ async function _mveWriteSource(source, content) {
   }
   if (source.kind === 'project-file') {
     try {
-      const res = await window.orkas.invoke('projects.files.updateText', {
+      const res = await window.cogseed.invoke('projects.files.updateText', {
         projectId: source.projectId,
         name: source.name,
         content,

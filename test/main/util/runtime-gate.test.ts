@@ -324,7 +324,7 @@ function writeWhisperRuntime(root: string, key: string, contract: any): void {
     files[relativePath] = { bytes: spec.bytes, sha256: spec.sha256 };
   }
   fs.writeFileSync(path.join(dir, 'NOTICE.txt'), 'test notice');
-  fs.writeFileSync(path.join(dir, '.orkas-whisper-ready.json'), JSON.stringify({
+  fs.writeFileSync(path.join(dir, '.cogseed-whisper-ready.json'), JSON.stringify({
     schema: contract.schema,
     platformKey: key,
     version: target.version || contract.version,
@@ -374,7 +374,7 @@ describe('runtime-gate', () => {
       whisperContract: contract,
     })).toBe(path.join(root, 'whisper', key, 'bin', 'whisper-cli.exe'));
 
-    const markerFile = path.join(root, 'whisper', key, '.orkas-whisper-ready.json');
+    const markerFile = path.join(root, 'whisper', key, '.cogseed-whisper-ready.json');
     const marker = JSON.parse(fs.readFileSync(markerFile, 'utf8'));
     marker.version = contract.version;
     fs.writeFileSync(markerFile, JSON.stringify(marker));

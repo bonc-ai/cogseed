@@ -163,7 +163,7 @@ function writeWhisperRuntime(key: string, fixture: ReturnType<typeof whisperFixt
     fs.writeFileSync(file, bytes);
   }
   fs.writeFileSync(path.join(dir, 'NOTICE.txt'), 'test notice\n');
-  fs.writeFileSync(path.join(dir, '.orkas-whisper-ready.json'), JSON.stringify({
+  fs.writeFileSync(path.join(dir, '.cogseed-whisper-ready.json'), JSON.stringify({
     schema: fixture.contract.schema,
     platformKey: key,
     version: fixture.contract.version,

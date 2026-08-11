@@ -1,12 +1,12 @@
 {
-  "name": "orkas",
+  "name": "cogseed",
   "version": "2026.7.21",
   "private": true,
-  "description": "Mate Agent desktop — collaborative agent workspace",
+  "description": "CogSeed desktop — personal cognition asset workspace",
   "main": "bootstrap.cjs",
   "type": "commonjs",
   "packageManager": "npm@11.11.0",
-  "orkasSourceRuntimeVariant": "mate",
+  "orkasSourceRuntimeVariant": "cogseed",
   "imports": {
     "#core-agent": "./src/core-agent/src/index.ts"
   },
@@ -37,12 +37,9 @@
     "builtin:manifest:check": "node scripts/update-builtin-manifest.cjs --check",
     "rebuild:sqlite:electron": "node scripts/ensure-sqlite-electron-abi.mjs",
     "rebuild:pty:electron": "node scripts/ensure-node-pty-electron-abi.mjs",
-    "postinstall": "node scripts/ensure-sqlite-electron-abi.mjs && node scripts/ensure-node-pty-electron-abi.mjs && node scripts/fetch-embedding-model.mjs && npm run engine:build",
+    "postinstall": "node scripts/ensure-sqlite-electron-abi.mjs && node scripts/ensure-node-pty-electron-abi.mjs && node scripts/fetch-embedding-model.mjs",
     "prepare": "node scripts/install-git-hooks.mjs",
     "prepack": "node scripts/ensure-dev-dependencies.cjs",
-    "engine:build": "npm run build --workspace=nseap-meta-skill-engine",
-    "engine:test": "npm run test --workspace=nseap-meta-skill-engine",
-    "engine:check": "npm run check --workspace=nseap-meta-skill-engine",
     "test:resources:setup": "node scripts/setup-python-test-env.mjs",
     "audit:workspace": "node scripts/audit-local-workspace.mjs",
     "package:dev:mac": "node scripts/package-dev-mac.cjs",
@@ -89,12 +86,13 @@
     "tar": "7.5.20"
   },
   "build": {
-    "appId": "com.mateagent.desktop",
-    "productName": "Mate Agent",
+    "appId": "com.cogseed.desktop",
+    "productName": "CogSeed",
     "protocols": [
       {
-        "name": "Mate Agent Connector Callback",
+        "name": "CogSeed Connector Callback",
         "schemes": [
+          "cogseed",
           "mateagent",
           "orkas"
         ],
@@ -117,6 +115,7 @@
       "src/main/native/build/*.node",
       "src/renderer/**/*",
       "src/resources/brand.json",
+      "src/resources/identity.json",
       "src/resources/icons/**/*",
       "tsconfig.json",
       "node_modules/tsx/**/*",
@@ -275,10 +274,7 @@
       "target": "AppImage",
       "category": "Utility"
     },
-    "artifactName": "Mate-Agent-${version}-${os}-${arch}.${ext}"
+    "artifactName": "CogSeed-${version}-${os}-${arch}.${ext}"
   },
-  "license": "MIT",
-  "workspaces": [
-    "packages/*"
-  ]
+  "license": "MIT"
 }

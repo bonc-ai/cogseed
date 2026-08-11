@@ -10,11 +10,9 @@
  */
 
 import { createLogger } from '../../logger';
-import { metaSkillEnginePackageDir } from '../../paths';
 import { McpConnection } from '../connectors/mcp-client';
 import { KstarAdapter, type KstarAdapterConfig } from './kstar-adapter';
 import type { StdioTransport } from '../connectors/types';
-import * as path from 'node:path';
 
 const log = createLogger('p3394.kstar-factory');
 
@@ -33,19 +31,17 @@ export interface CreateKstarAdapterOptions {
 }
 
 const DEFAULT_MIN_PROTOCOL_VERSION = '1.0';
-const DEFAULT_ENGINE_COMMAND = 'node';
-
-function defaultEngineConfig(): Pick<CreateKstarAdapterOptions, 'engineCommand' | 'engineArgs' | 'engineCwd' | 'engineEnv'> {
-  const engineDir = metaSkillEnginePackageDir();
+function configuredEngineConfig(): Pick<CreateKstarAdapterOptions, 'engineCommand' | 'engineArgs' | 'engineCwd' | 'engineEnv'> | null {
+  const command = process.env.ORKAS_KSTAR_ENGINE_COMMAND;
+  const argsRaw = process.env.ORKAS_KSTAR_ENGINE_ARGS;
+  if (!command || !argsRaw) return null;
   return {
-    engineCommand: process.env.ORKAS_KSTAR_ENGINE_COMMAND || DEFAULT_ENGINE_COMMAND,
-    engineArgs: process.env.ORKAS_KSTAR_ENGINE_ARGS
-      ? JSON.parse(process.env.ORKAS_KSTAR_ENGINE_ARGS)
-      : [path.join(engineDir, 'dist', 'index.js'), '--stdio'],
-    engineCwd: process.env.ORKAS_KSTAR_ENGINE_CWD || engineDir,
-    engineEnv: {
-      NSEAP_ONTOLOGY_DIR: process.env.ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR || path.join(engineDir, 'ontologies'),
-    },
+    engineCommand: command,
+    engineArgs: JSON.parse(argsRaw),
+    engineCwd: process.env.ORKAS_KSTAR_ENGINE_CWD,
+    engineEnv: process.env.ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR
+      ? { NSEAP_ONTOLOGY_DIR: process.env.ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR }
+      : undefined,
   };
 }
 
@@ -110,9 +106,16 @@ export async function getKstarAdapter(userId: string): Promise<KstarAdapter | nu
   // Start new initialization
   const promise = (async () => {
     try {
+      const engineConfig = configuredEngineConfig();
+      if (!engineConfig) {
+        log.warn('kstar engine not configured', { userId });
+        adapters.set(userId, null);
+        initializationPromises.delete(userId);
+        return null;
+      }
       const adapter = await createKstarAdapter({
         userId,
-        ...defaultEngineConfig(),
+        ...engineConfig,
         minProtocolVersion: DEFAULT_MIN_PROTOCOL_VERSION,
       });
 

@@ -92,7 +92,7 @@ function loadConnectorsRenderer(
       innerWidth: 1200,
       innerHeight: 800,
       Monitor: monitor,
-      orkas: {
+      cogseed: {
         invoke,
         onPushEvent: (channel: string, handler: (payload: any) => void) => { pushHandlers.set(channel, handler); },
       },

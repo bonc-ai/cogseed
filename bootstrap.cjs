@@ -15,6 +15,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const {
+  normalizeEnv,
+} = require('./src/main/identity-contract.cjs');
+const {
+  migrateLegacyInstallRoots,
+} = require('./src/main/cogseed-install-migration.cjs');
+const {
   initializeInstallDataRoot,
   selectRuntimeVariant,
 } = require('./src/main/install-data-root.cjs');
@@ -30,20 +36,27 @@ function detectPackagedRuntime() {
 try {
   const isPackaged = detectPackagedRuntime();
   const isPackagedDev = isPackaged && packageMeta.orkasBuildChannel === 'packaged-dev';
-  if (isPackagedDev && !process.env.ORKAS_WORKSPACE_ROOT) {
-    process.env.ORKAS_WORKSPACE_ROOT = path.join(os.homedir(), '.orkas-dev', 'data');
+  const normalizedEnv = normalizeEnv(process.env);
+  Object.assign(process.env, normalizedEnv);
+  if (isPackagedDev && !process.env.COGSEED_WORKSPACE_ROOT && !process.env.ORKAS_WORKSPACE_ROOT) {
+    process.env.COGSEED_WORKSPACE_ROOT = path.join(os.homedir(), '.cogseed-dev', 'data');
   }
-  process.env.ORKAS_RUNTIME_VARIANT = selectRuntimeVariant({
+  const runtimeVariant = selectRuntimeVariant({
     argv: process.argv.slice(1),
-    envVariant: process.env.ORKAS_RUNTIME_VARIANT,
+    envVariant: process.env.ORKAS_RUNTIME_VARIANT || process.env.COGSEED_SOURCE_RUNTIME_VARIANT,
     isPackaged,
     sourceVariant: packageMeta.orkasSourceRuntimeVariant,
   });
-  initializeInstallDataRoot(process.env.ORKAS_RUNTIME_VARIANT, {
+  process.env.COGSEED_SOURCE_RUNTIME_VARIANT = runtimeVariant;
+  process.env.ORKAS_RUNTIME_VARIANT = runtimeVariant;
+  migrateLegacyInstallRoots({
+    env: process.env,
+  });
+  initializeInstallDataRoot(process.env.COGSEED_SOURCE_RUNTIME_VARIANT, {
     allowWorkspaceOverride: isPackagedDev,
   });
 } catch (err) {
-  process.stderr.write(`[Mate Agent] ${err instanceof Error ? err.message : String(err)}\n`);
+  process.stderr.write(`[CogSeed] ${err instanceof Error ? err.message : String(err)}\n`);
   process.exitCode = 2;
   throw err;
 }

@@ -18,7 +18,7 @@
 //     forceLabel — when present, shows a neutral override button
 //
 //   readQualityReport(kind, id): Promise<ValidationReport | null>
-//     thin wrapper around window.orkas.quality.read{Skill,Agent}Report
+//     thin wrapper around window.cogseed.quality.read{Skill,Agent}Report
 //     so callers don't have to remember the channel name.
 
 function _levelColor(level) {
@@ -210,7 +210,7 @@ async function readQualityReport(kind, id) {
   if (!id || (kind !== 'skill' && kind !== 'agent')) return null;
   try {
     const channel = kind === 'skill' ? 'readSkillReport' : 'readAgentReport';
-    const r = await window.orkas.quality[channel](id);
+    const r = await window.cogseed.quality[channel](id);
     if (!r || r.ok === false) return null;
     return r.report || null;
   } catch (_) {

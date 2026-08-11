@@ -66,7 +66,7 @@ async function refreshModelGuard() {
   if (_guardRefreshInFlight) return _guardRefreshInFlight;
   _guardRefreshInFlight = (async () => {
   try {
-    const res = await window.orkas.invoke('auth.hasConfiguredModel');
+    const res = await window.cogseed.invoke('auth.hasConfiguredModel');
     // Only flip the flag when the IPC returned a definitive answer. A
     // failed call (unknown channel on an old main process, transient
     // error) should leave the UI optimistic rather than lock the user
@@ -104,7 +104,7 @@ function refreshModelGuardIfStale(maxAgeMs = 2000) {
 
 async function refreshModelConfigSnapshot() {
   try {
-    const res = await window.orkas.invoke('auth.listEntries');
+    const res = await window.cogseed.invoke('auth.listEntries');
     if (res && res.ok && Array.isArray(res.entries)) {
       window.dispatchEvent(new CustomEvent('orkas:model-entries-changed', {
         detail: { entries: res.entries },

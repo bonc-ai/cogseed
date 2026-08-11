@@ -85,10 +85,10 @@
   });
 
   function invoke(channel, payload) {
-    if (!window.orkas || typeof window.orkas.invoke !== 'function') {
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') {
       return Promise.reject(new Error('IPC unavailable'));
     }
-    return window.orkas.invoke(channel, payload || {});
+    return window.cogseed.invoke(channel, payload || {});
   }
 
   // Commander-driven proactive send: main pushes a `messaging:send-confirm`
@@ -128,9 +128,9 @@
     })();
   }
 
-  if (window.orkas && typeof window.orkas.onPushEvent === 'function') {
+  if (window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
     try {
-      window.orkas.onPushEvent('messaging:send-confirm', (info) => {
+      window.cogseed.onPushEvent('messaging:send-confirm', (info) => {
         if (!info || typeof info.request_id !== 'string') return;
         _sendConfirmQueue.push(info);
         _drainSendConfirmQueue();
@@ -1538,7 +1538,7 @@
     });
     // 实例状态实时推送：主进程在状态 kind 变化时广播（心跳重复 connected
     // 不推送）。收到后更新本地实例并重渲染，让"连接中→已连接"即时可见。
-    window.orkas.onPushEvent('messaging:instance-status', (payload) => {
+    window.cogseed.onPushEvent('messaging:instance-status', (payload) => {
       if (!payload || typeof payload.instanceId !== 'string' || !payload.status) return;
       const instance = state.instances.find((item) => item.id === payload.instanceId);
       if (!instance) return;

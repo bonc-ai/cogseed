@@ -22,7 +22,6 @@ const RESOURCE_REQUIRED = Object.freeze([
   ['builtin', '_manifest.json'],
   ['runtime', 'manifest.json'],
   ['officecli', 'officecli-mac-arm64'],
-  ['packages', 'nseap-meta-skill-engine', 'dist', 'index.js'],
 ]);
 
 function normalizeAsarEntry(entry) {
@@ -99,9 +98,9 @@ function waitForMarker(markerPath, child, timeoutMs = 90_000) {
 }
 
 async function launchSmoke(appPath) {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mate-agent-packaged-dev-'));
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-packaged-dev-'));
   const markerPath = path.join(tempRoot, 'ready.json');
-  const executable = path.join(appPath, 'Contents', 'MacOS', 'Mate Agent Dev');
+  const executable = path.join(appPath, 'Contents', 'MacOS', 'CogSeed Dev');
   if (!fs.existsSync(executable)) throw new Error(`missing packaged executable: ${executable}`);
   const child = spawn(executable, [], {
     cwd: ROOT,

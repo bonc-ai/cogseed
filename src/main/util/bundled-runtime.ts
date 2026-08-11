@@ -46,16 +46,24 @@ function runtimeVariantDirs(kind: 'python' | 'uv' | 'node' | 'ffmpeg' | 'whisper
   ];
 }
 
+function readWhisperMarker(dir: string): { capability?: { status?: string } } | undefined {
+  for (const name of ['.cogseed-whisper-ready.json', '.orkas-whisper-ready.json']) {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')) as { capability?: { status?: string } };
+    } catch {
+      // try next marker
+    }
+  }
+  return undefined;
+}
+
 function whisperRuntimeEnabled(dir: string): boolean {
-  try {
-    const marker = JSON.parse(fs.readFileSync(path.join(dir, '.orkas-whisper-ready.json'), 'utf8')) as {
-      capability?: { status?: string };
-    };
-    return marker.capability?.status !== 'disabled';
-  } catch {
+  const marker = readWhisperMarker(dir);
+  if (!marker) {
     // Development payloads created before capability markers remain usable.
     return true;
   }
+  return marker.capability?.status !== 'disabled';
 }
 
 function resolvePythonExecutable(): string | undefined {

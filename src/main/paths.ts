@@ -182,9 +182,9 @@ export const sessionCloudToolResultsDir = (uid: string, sessionId: string) =>
 export const userLocalSessionsDir   = (uid: string) => path.join(userLocalRoot(uid), 'sessions');
 export const userLocalSessionFile   = (uid: string, sessionId: string) => path.join(userLocalSessionsDir(uid), `${sessionId}.jsonl`);
 
-// Mate Agent Runtime — machine-private execution boundary. Runtime sessions,
+// CogSeed Runtime — machine-private execution boundary. Runtime sessions,
 // context mirrors, memory, and run logs stay under local/mate_runtime so they
-// never sync with Mate Agent cloud chats/sessions and cannot be mistaken for
+// never sync with CogSeed cloud chats/sessions and cannot be mistaken for
 // UI-facing group-chat state.
 export const mateRuntimeRoot             = (uid: string) => path.join(userLocalRoot(uid), 'mate_runtime');
 export const mateRuntimeSessionsDir      = (uid: string) => path.join(mateRuntimeRoot(uid), 'sessions');
@@ -772,20 +772,6 @@ export function runtimeResourcesDir(): string {
     return path.join(rp, 'runtime');
   }
   return path.join(PC_ROOT, 'resources', 'runtime');
-}
-
-/** Repository-owned Meta Skill Engine package shipped with the desktop app.
- *
- *   dev:    PC/packages/nseap-meta-skill-engine/
- *   packed: <app>/Contents/Resources/packages/nseap-meta-skill-engine/      (darwin)
- *           <app>/resources/packages/nseap-meta-skill-engine/               (win/linux)
- */
-export function metaSkillEnginePackageDir(): string {
-  const rp = (process as unknown as { resourcesPath?: string }).resourcesPath;
-  if (rp && !rp.includes(`${path.sep}node_modules${path.sep}electron${path.sep}`)) {
-    return path.join(rp, 'packages', 'nseap-meta-skill-engine');
-  }
-  return path.join(PC_ROOT, 'packages', 'nseap-meta-skill-engine');
 }
 
 /** `${process.platform}-${process.arch}` → vendored OfficeCLI asset name.

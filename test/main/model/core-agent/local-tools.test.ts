@@ -917,7 +917,7 @@ describe('local-tools › create_artifact › success + callback', () => {
     expect(r.content).toMatch(/do NOT paste/i);
     const dir = path.join(tmpDir, UID, 'cloud', 'chat_artifacts', CID, created[0].id);
     expect(fs.readFileSync(path.join(dir, 'index.html'), 'utf8')).toContain('<h1>hi</h1>');
-    expect(JSON.parse(fs.readFileSync(path.join(dir, '__orkas-meta.json'), 'utf8')).agentId).toBe('helper');
+    expect(JSON.parse(fs.readFileSync(path.join(dir, '__cogseed-meta.json'), 'utf8')).agentId).toBe('helper');
   });
 });
 

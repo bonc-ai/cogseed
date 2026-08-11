@@ -23,9 +23,9 @@ const _DELETE_CONFIRM_FALLBACK_BATCH_MS = 1000;
 
 function startDeleteFileConfirmSubscription() {
   if (_deleteFileSubscription) return;  // idempotent
-  if (!window.orkas || typeof window.orkas.onPushEvent !== 'function') return;
+  if (!window.cogseed || typeof window.cogseed.onPushEvent !== 'function') return;
   try {
-    _deleteFileSubscription = window.orkas.onPushEvent(
+    _deleteFileSubscription = window.cogseed.onPushEvent(
       'delete_file.confirmation_required',
       _handleDeleteFileConfirmRequest,
     );
@@ -217,9 +217,9 @@ function _addDeleteConfirmEntry(batch, payload) {
 
 function _ackDeleteConfirmVisible(card, confirmId) {
   if (!confirmId || !card || card.offsetParent === null) return;
-  if (!window.orkas || typeof window.orkas.invoke !== 'function') return;
+  if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
   try {
-    window.orkas.invoke('delete_file.visible', { confirm_id: confirmId })
+    window.cogseed.invoke('delete_file.visible', { confirm_id: confirmId })
       .catch((err) => _deleteFileLog.warn('visible ack failed: ' + ((err && err.message) || String(err))));
   } catch (err) {
     _deleteFileLog.warn('visible ack failed: ' + ((err && err.message) || String(err)));
@@ -335,7 +335,7 @@ function _dispatchDeleteContinueEnter(inputEl) {
 
 async function _respondDeleteConfirm(confirmId, granted) {
   try {
-    await window.orkas.invoke('delete_file.respond', { confirm_id: confirmId, granted });
+    await window.cogseed.invoke('delete_file.respond', { confirm_id: confirmId, granted });
   } catch (err) {
     _deleteFileLog.warn('respond failed: ' + ((err && err.message) || String(err)));
   }

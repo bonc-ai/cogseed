@@ -39,7 +39,7 @@ function loadProjectDetailScript() {
     t: (key: string, vars?: Record<string, unknown>) => `${key}:${JSON.stringify(vars || {})}`,
     window: {
       addEventListener: vi.fn(),
-      orkas: { invoke: vi.fn() },
+      cogseed: { invoke: vi.fn() },
     },
     document: {
       readyState: 'loading',
@@ -246,7 +246,7 @@ describe('Project Library external file drag-and-drop', () => {
       size: 4,
       arrayBuffer: vi.fn(async () => new ArrayBuffer(4)),
     };
-    context.window.orkas.invoke = vi.fn(async () => ({ ok: true }));
+    context.window.cogseed.invoke = vi.fn(async () => ({ ok: true }));
     context.loadProjectDetail = vi.fn(async () => undefined);
     context.uiAlert = vi.fn(async () => undefined);
 
@@ -255,8 +255,8 @@ describe('Project Library external file drag-and-drop', () => {
     expect(hidden.arrayBuffer).not.toHaveBeenCalled();
     expect(unsupported.arrayBuffer).not.toHaveBeenCalled();
     expect(video.arrayBuffer).toHaveBeenCalledOnce();
-    expect(context.window.orkas.invoke).toHaveBeenCalledOnce();
-    expect(context.window.orkas.invoke).toHaveBeenCalledWith('projects.files.upload', expect.objectContaining({
+    expect(context.window.cogseed.invoke).toHaveBeenCalledOnce();
+    expect(context.window.cogseed.invoke).toHaveBeenCalledWith('projects.files.upload', expect.objectContaining({
       projectId: 'project-1',
       name: 'References/demo.mp4',
     }));
@@ -282,20 +282,20 @@ describe('Project Library external file drag-and-drop', () => {
         return new ArrayBuffer(1);
       }),
     }));
-    context.window.orkas.invoke = vi.fn(async () => ({ ok: true }));
+    context.window.cogseed.invoke = vi.fn(async () => ({ ok: true }));
     context.loadProjectDetail = vi.fn(async () => undefined);
 
     await context._uploadProjectFiles(files, '', 'drop');
 
     expect(maxActive).toBe(3);
-    expect(context.window.orkas.invoke).toHaveBeenCalledTimes(7);
+    expect(context.window.cogseed.invoke).toHaveBeenCalledTimes(7);
   });
 
   it('keeps telemetry and rejection alerts when the post-upload refresh fails', async () => {
     const context = loadProjectDetailScript();
     const file = { name: 'ok.md', arrayBuffer: vi.fn(async () => new ArrayBuffer(1)) };
     const rejected = { name: 'bad.zip', arrayBuffer: vi.fn() };
-    context.window.orkas.invoke = vi.fn(async () => ({ ok: true }));
+    context.window.cogseed.invoke = vi.fn(async () => ({ ok: true }));
     context.loadProjectDetail = vi.fn(async () => { throw new Error('refresh failed'); });
     context.uiAlert = vi.fn(async () => undefined);
     context._projectTrackEvent = vi.fn();

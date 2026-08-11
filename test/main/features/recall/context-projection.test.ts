@@ -20,6 +20,29 @@ async function createAssetWith(input: { judgment: string; summary: string; scope
   return candidates.promoteRecallCandidate('user-a', candidate.id);
 }
 
+async function createAutomaticAssetWith(input: {
+  judgment: string;
+  summary: string;
+  sourceId: string;
+  sourceKind?: 'conversation' | 'artifact_file';
+}) {
+  const { candidates } = await modules();
+  const sourceKind = input.sourceKind || 'conversation';
+  const candidate = await candidates.saveRecallCandidate('user-a', {
+    judgment: input.judgment,
+    summary: input.summary,
+    suggestedType: 'rule',
+    suggestedScope: 'global',
+    sourceRefs: [{
+      kind: sourceKind,
+      id: input.sourceId,
+      subtype: sourceKind === 'conversation' ? 'session' : 'artifact',
+      scope: 'personal',
+    }],
+  });
+  return candidates.promoteRecallCandidate('user-a', candidate.id);
+}
+
 const fakeSemanticOptions = {
   embedTexts: async (texts: string[]) => texts.map((text) => {
     const lower = text.toLowerCase();
@@ -65,6 +88,93 @@ describe('RecallView and ContextProjection', () => {
       expect.objectContaining({ assetId: database.asset.id, matchMethod: 'semantic', matchScore: expect.any(Number) }),
     ]);
     expect(preview.assetIds).not.toContain(scopeMismatch.asset.id);
+  });
+
+  it('creates one confirmed automatic projection from only high-relevance active assets', async () => {
+    const oauth = await createAutomaticAssetWith({
+      judgment: 'Review OAuth callback and token exchange security.',
+      summary: 'OAuth review workflow',
+      sourceId: 'conversation-oauth',
+    });
+    const database = await createAutomaticAssetWith({
+      judgment: 'Plan database migrations with rollback windows.',
+      summary: 'Database migration rule',
+      sourceId: 'conversation-database',
+    });
+    const { projection } = await modules();
+
+    const first = await projection.createAutomaticContextProjection('user-a', {
+      taskRunId: 'turn-oauth',
+      taskText: 'Audit OAuth login callback handling',
+      workspaceId: 'workspace-a',
+    }, fakeSemanticOptions);
+    const retry = await projection.createAutomaticContextProjection('user-a', {
+      taskRunId: 'turn-oauth',
+      taskText: 'Audit OAuth login callback handling',
+      workspaceId: 'workspace-a',
+    }, fakeSemanticOptions);
+
+    expect(first).toMatchObject({
+      status: 'confirmed',
+      authorization: 'not_required',
+      purpose: 'conversation_reply',
+      taskRunId: 'turn-oauth',
+      workspaceId: 'workspace-a',
+      assetIds: [oauth.asset.id],
+    });
+    expect(first?.assetIds).not.toContain(database.asset.id);
+    expect(first?.assetMatches).toEqual([
+      expect.objectContaining({ assetId: oauth.asset.id, matchMethod: 'semantic', matchScore: 1 }),
+    ]);
+    expect(retry?.id).toBe(first?.id);
+  });
+
+  it('excludes paused sources and explicitly disabled workspace references from automatic projections', async () => {
+    const pausedSource = await createAutomaticAssetWith({
+      judgment: 'Review OAuth callback and token exchange security.',
+      summary: 'Paused source OAuth rule',
+      sourceId: 'conversation-paused',
+    });
+    const disabledWorkspace = await createAutomaticAssetWith({
+      judgment: 'Audit OAuth redirect URI validation.',
+      summary: 'Disabled workspace OAuth rule',
+      sourceId: 'conversation-disabled-workspace',
+    });
+    const { refs, projection } = await modules();
+    const sourceControl = await import('../../../../src/main/features/recall/source-control');
+    await sourceControl.pauseCognitionSource('user-a', pausedSource.asset.evidenceRefs[0]);
+    const workspaceRef = await refs.addWorkspaceAssetReference('user-a', {
+      assetId: disabledWorkspace.asset.id,
+      workspaceId: 'workspace-a',
+      scope: 'global',
+    });
+    await refs.updateWorkspaceAssetReference('user-a', workspaceRef.id, { enabled: false });
+
+    await expect(projection.createAutomaticContextProjection('user-a', {
+      taskRunId: 'turn-filtered',
+      taskText: 'Audit OAuth login callback handling',
+      workspaceId: 'workspace-a',
+    }, fakeSemanticOptions)).resolves.toBeUndefined();
+  });
+
+  it('does not create an automatic projection when semantic matching fails or no asset reaches the threshold', async () => {
+    await createAutomaticAssetWith({
+      judgment: 'Plan database migrations with rollback windows.',
+      summary: 'Database migration rule',
+      sourceId: 'conversation-database',
+    });
+    const { projection } = await modules();
+
+    await expect(projection.createAutomaticContextProjection('user-a', {
+      taskRunId: 'turn-unrelated',
+      taskText: 'Audit OAuth login callback handling',
+    }, fakeSemanticOptions)).resolves.toBeUndefined();
+    await expect(projection.createAutomaticContextProjection('user-a', {
+      taskRunId: 'turn-embedding-failed',
+      taskText: 'Audit OAuth login callback handling',
+    }, {
+      embedTexts: async () => { throw new Error('embedding unavailable'); },
+    })).resolves.toBeUndefined();
   });
 
   it('deduplicates manual edits and rejects invalid revision combinations', async () => {
