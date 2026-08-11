@@ -262,8 +262,8 @@ describe('skills renderer frontmatter parsing', () => {
       getElementById: (id: string) => id === 'skills-cognition-candidates-body' ? body : null,
     };
     vm.runInContext(`_skillsCognitionState.candidates = [${JSON.stringify({
-      id: 'p3394_patch:p1',
-      source: 'p3394_patch',
+      id: 'recall_candidate:p1',
+      source: 'recall_candidate',
       sourceId: 'p1',
       type: 'skill_evolution',
       title: 'Tighten validation',
@@ -286,8 +286,8 @@ describe('skills renderer frontmatter parsing', () => {
       getElementById: (id: string) => id === 'skills-cognition-candidates-body' ? body : null,
     };
     vm.runInContext(`_skillsCognitionState.candidates = [${JSON.stringify({
-      id: 'p3394_patch:p1',
-      source: 'p3394_patch',
+      id: 'recall_candidate:p1',
+      source: 'recall_candidate',
       sourceId: 'p1',
       type: 'skill_evolution',
       title: 'Tighten validation',
@@ -347,6 +347,41 @@ describe('skills renderer frontmatter parsing', () => {
 
 
 
+
+
+  it('renders Recall governance metadata and lifecycle controls on formal ability assets', () => {
+    const context = loadSkillRendererHelpers();
+    const body = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => id === 'skills-cognition-assets-body' ? body : null,
+    };
+    vm.runInContext(`_skillsCognitionState.assets = [${JSON.stringify({
+      id: 'aa-rule-a',
+      type: 'rule',
+      title: 'Scoped review rule',
+      version: '2',
+      status: 'active',
+      maturity: 'transfer_validated',
+      scope: 'architecture-review',
+      scopePolicy: { purposeTags: ['architecture', 'review'], workspaceIds: ['workspace-a'] },
+      recommendedAction: 'pause',
+      recommendationReason: 'The latest transfer regressed the review result.',
+      recommendationAt: '2026-08-11T00:00:00.000Z',
+      workspaceRefs: [],
+      relationRefs: [],
+      candidateRefs: [],
+    })}];`, context);
+
+    context.renderSkillsCognitionAssets();
+
+    expect(body.innerHTML).toContain('The latest transfer regressed the review result.');
+    expect(body.innerHTML).toContain('architecture, review');
+    expect(body.innerHTML).toContain('workspace-a');
+    expect(body.innerHTML).toContain('data-ability-asset-action="pause"');
+    expect(body.innerHTML).toContain('data-ability-asset-action="revoke"');
+    expect(body.innerHTML).toContain('data-ability-asset-action="acknowledge-recommendation"');
+  });
+
   it('renders assets as compact integrated rows instead of nested cards', () => {
     const context = loadSkillRendererHelpers();
     const body = { innerHTML: '' };
@@ -386,8 +421,8 @@ describe('skills renderer frontmatter parsing', () => {
       getElementById: (id: string) => id === 'skills-cognition-candidates-body' ? body : null,
     };
     vm.runInContext(`_skillsCognitionState.candidates = [${JSON.stringify({
-      id: 'p3394_patch:p1',
-      source: 'p3394_patch',
+      id: 'recall_candidate:p1',
+      source: 'recall_candidate',
       sourceId: 'p1',
       type: 'skill_evolution',
       title: 'Tighten validation',
@@ -445,7 +480,7 @@ describe('skills renderer frontmatter parsing', () => {
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-assets-body' ? body : null,
     };
-    vm.runInContext(`_skillsCognitionState.assets = [{"id": "CA-RULE-P3394-001", "type": "rule", "category": "rule", "title": "P3394产品决策治理规则", "source": "Codex S-P3394-0731", "version": "v1.1", "status": "active", "maturity": "transfer_validated", "owner": "本机用户 ZL", "scope": "当前P3394项目", "workspaceRefs": ["产品工作 Workspace"], "receiptRefs": ["CRR-P3394-QODER-001"], "candidateRefs": [], "relationRefs": [], "reuseCount": 1, "candidateCount": 0}, {"id": "candidate:patch-a", "type": "skill_method", "category": "skill_method", "title": "优化PRD回写Skill的来源分层", "source": "p3394_patch_candidate", "status": "candidate", "maturity": "bud", "owner": "local_user", "scope": "当前P3394项目", "workspaceRefs": [], "receiptRefs": [], "candidateRefs": ["p3394_patch:patch-a"], "relationRefs": [], "reuseCount": 0, "candidateCount": 1}];`, context);
+    vm.runInContext(`_skillsCognitionState.assets = [{"id": "CA-RULE-P3394-001", "type": "rule", "category": "rule", "title": "P3394产品决策治理规则", "source": "Codex S-P3394-0731", "version": "v1.1", "status": "active", "maturity": "transfer_validated", "owner": "本机用户 ZL", "scope": "当前P3394项目", "workspaceRefs": ["产品工作 Workspace"], "receiptRefs": ["CRR-P3394-QODER-001"], "candidateRefs": [], "relationRefs": [], "reuseCount": 1, "candidateCount": 0}, {"id": "candidate:patch-a", "type": "skill_method", "category": "skill_method", "title": "优化PRD回写Skill的来源分层", "source": "recall_candidate", "status": "candidate", "maturity": "bud", "owner": "local_user", "scope": "当前P3394项目", "workspaceRefs": [], "receiptRefs": [], "candidateRefs": ["recall_candidate:patch-a"], "relationRefs": [], "reuseCount": 0, "candidateCount": 1}];`, context);
 
     context.renderSkillsCognitionAssets();
 
@@ -532,7 +567,7 @@ describe('skills renderer frontmatter parsing', () => {
         scope: 'scope-b',
         workspaceRefs: [],
         receiptRefs: [],
-        candidateRefs: ['p3394_patch:B'],
+        candidateRefs: ['recall_candidate:B'],
         relationRefs: [],
       })}];
       _skillsCognitionState.selectedAssetId = 'candidate:B';

@@ -48,7 +48,7 @@ describe('cognition feature aggregate layer', () => {
         { kind: 'user_teaching_signal', subtype: 'teaching', id: 'teaching-a' },
       ],
     });
-    const { asset: recallAsset } = await recallCandidates.promoteRecallCandidate(UID, recallCandidate.id);
+    const { asset: recallAsset } = await recallCandidates.promoteRecallCandidate(UID, recallCandidate.id, { actor: 'user' });
 
     const statePath = path.join(userLocalRoot(UID), 'p3394', 'kstar-state.json');
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
@@ -62,19 +62,6 @@ describe('cognition feature aggregate layer', () => {
         agent_id: 'agent-a',
         summary: 'PRD decisions must preserve source and open questions',
         status: 'pending',
-        created_at: '2026-08-04T00:00:00.000Z',
-        updated_at: '2026-08-04T00:00:00.000Z',
-      }],
-      patch_candidates: [{
-        id: 'patch-a',
-        source_run_id: 'run-a',
-        conversation_id: 'gconv-a',
-        agent_id: 'agent-a',
-        type: 'skill_patch',
-        target: { kind: 'custom_skill', id: 'skill-a' },
-        proposal: { title: 'Improve PRD rewrite method', summary: 'Keep source layering', proposed_content: 'new content' },
-        engine: {},
-        status: 'needs_review',
         created_at: '2026-08-04T00:00:00.000Z',
         updated_at: '2026-08-04T00:00:00.000Z',
       }],
@@ -105,13 +92,6 @@ describe('cognition feature aggregate layer', () => {
         status: 'candidate',
       }),
       expect.objectContaining({
-        id: 'candidate:patch-a',
-        category: 'skill_method',
-        maturity: 'bud',
-        status: 'candidate',
-        baselineSkillRef: 'skill:skill-a',
-      }),
-      expect.objectContaining({
         id: recallAsset.id,
         source: 'recall_ability_asset',
         relationRefs: expect.arrayContaining([
@@ -127,7 +107,7 @@ describe('cognition feature aggregate layer', () => {
     expect(dashboard.counts.assets).toBe(assets.length);
   });
 
-  it('normalizes and filters candidates from personal ontology and KSTAR patches', async () => {
+  it('normalizes and filters candidates from personal ontology and KSTAR experiences', async () => {
     const users = await import('../../../src/main/features/users');
     users.activateUser(UID);
     const { userLocalRoot } = await import('../../../src/main/paths');
@@ -151,17 +131,13 @@ describe('cognition feature aggregate layer', () => {
     fs.writeFileSync(statePath, JSON.stringify({
       version: 1,
       runs: [],
-      experience_candidates: [],
-      patch_candidates: [{
-        id: 'patch-a',
-        source_run_id: 'run-a',
-        conversation_id: 'gconv-a',
-        agent_id: 'agent-a',
-        type: 'skill_patch',
-        target: { kind: 'custom_skill', id: 'skill-a' },
-        proposal: { title: 'Improve skill', summary: 'Tighten checks', rationale: 'Reduce regressions', proposed_content: 'new content' },
-        engine: {},
-        status: 'needs_review',
+      experience_candidates: [{
+        id: 'exp-b',
+        source_run_id: 'run-b',
+        conversation_id: 'gconv-b',
+        agent_id: 'agent-b',
+        summary: 'Keep concise summaries',
+        status: 'pending',
         created_at: '2026-08-04T00:00:00.000Z',
         updated_at: '2026-08-04T00:00:00.000Z',
       }],
@@ -181,18 +157,10 @@ describe('cognition feature aggregate layer', () => {
         diffAvailable: false,
         actions: ['open_personal_ontology', 'import_to_recall'],
       }),
-      expect.objectContaining({
-        source: 'p3394_patch',
-        sourceId: 'patch-a',
-        type: 'skill_evolution',
-        skillId: 'skill-a',
-        targetAssetId: 'skill:skill-a',
-        actions: ['source', 'accept', 'reject'],
-      }),
     ]));
 
-    await expect(cognition.listCognitionCandidates(UID, { skillId: 'skill-a' })).resolves.toEqual([
-      expect.objectContaining({ sourceId: 'patch-a' }),
+    await expect(cognition.listCognitionCandidates(UID, { conversationId: 'gconv-b' })).resolves.toEqual([
+      expect.objectContaining({ source: 'p3394_experience', sourceId: 'exp-b', type: 'experience' }),
     ]);
   });
 

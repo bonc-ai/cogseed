@@ -45,27 +45,6 @@ export interface CompatExperienceCandidateNotionSync {
   result?: Record<string, unknown>;
 }
 
-export interface CompatPatchCandidate {
-  id: string;
-  source_run_id: string;
-  source_experience_id?: string;
-  conversation_id: string;
-  agent_id: string;
-  type: 'memory_patch' | 'skill_patch' | 'ontology_patch';
-  target: { kind: 'kb' | 'memory' | 'custom_skill' | 'ontology'; id?: string; path?: string; version?: string };
-  proposal: { title: string; summary: string; rationale: string; current_content?: string; proposed_content: string; diff?: string };
-  engine: { attribution_id?: string; proposal_id?: string; governance_decision_id?: string; route_action?: string; raw?: Record<string, unknown> };
-  status: 'proposed' | 'needs_review' | 'approved' | 'rejected' | 'applied' | 'failed';
-  review?: { decision: 'approve' | 'reject'; notes?: string; reviewed_at: string };
-  validation_id?: string;
-  validation_status?: 'pass' | 'risk' | 'blocked' | 'degraded';
-  execution_id?: string; receipt_id?: string; contrast_id?: string;
-  boundary?: import('./execution-boundary').ExecutionBoundaryInfo;
-  applied?: { target_path?: string; applied_at: string };
-  created_at: string;
-  updated_at: string;
-}
-
 export interface CompatExperienceCandidate {
   id: string;
   source_run_id: string;
@@ -141,8 +120,6 @@ export interface KStarCompatEngineRun {
   capture_interaction?: Record<string, unknown>;
   analyze_attribution?: Record<string, unknown>;
   route_recommendation?: Record<string, unknown>;
-  patch_status?: 'not_needed' | 'not_attempted_without_patch_candidate' | 'proposed' | 'governed' | 'human_reviewed';
-  propose_patch?: Record<string, unknown>;
   run_governance?: Record<string, unknown>;
   human_review?: Record<string, unknown>;
   error?: unknown;
@@ -214,54 +191,6 @@ export function projectEpisodeToLegacy(engineEpisode: Record<string, unknown>): 
     delta_a_confidence_gate: (engineEpisode.delta_a_confidence_gate as KStarCompatEpisode['delta_a_confidence_gate']) || 'warn',
     timestamp: String(engineEpisode.timestamp || new Date().toISOString()),
     session_id: String(engineEpisode.session_id || ''),
-  };
-}
-
-// ── Patch candidate projection ──────────────────────────────────────────
-
-export function projectPatchToLegacy(
-  enginePatch: Record<string, unknown>,
-  sourceRunId: string,
-  conversationId: string,
-  agentId: string,
-): CompatPatchCandidate {
-  const target = (enginePatch.target as Record<string, unknown>) || {};
-  const proposal = (enginePatch.proposal as Record<string, unknown>) || {};
-  const engineMetadata = (enginePatch.engine_metadata as Record<string, unknown>) || {};
-
-  return {
-    id: String(enginePatch.id || ''),
-    source_run_id: sourceRunId,
-    source_experience_id: enginePatch.source_experience_id as string | undefined,
-    conversation_id: conversationId,
-    agent_id: agentId,
-    type: (enginePatch.type as CompatPatchCandidate['type']) || 'memory_patch',
-    target: {
-      kind: (target.kind as CompatPatchCandidate['target']['kind']) || 'memory',
-      id: target.id as string | undefined,
-      path: target.path as string | undefined,
-      version: target.version as string | undefined,
-    },
-    proposal: {
-      title: String(proposal.title || ''),
-      summary: String(proposal.summary || ''),
-      rationale: String(proposal.rationale || ''),
-      current_content: proposal.current_content as string | undefined,
-      proposed_content: String(proposal.proposed_content || ''),
-      diff: proposal.diff as string | undefined,
-    },
-    engine: {
-      attribution_id: engineMetadata.attribution_id as string | undefined,
-      proposal_id: engineMetadata.proposal_id as string | undefined,
-      governance_decision_id: engineMetadata.governance_decision_id as string | undefined,
-      route_action: engineMetadata.route_action as string | undefined,
-      raw: engineMetadata as Record<string, unknown>,
-    },
-    status: (enginePatch.status as CompatPatchCandidate['status']) || 'proposed',
-    review: enginePatch.review as CompatPatchCandidate['review'],
-    applied: enginePatch.applied as CompatPatchCandidate['applied'],
-    created_at: String(enginePatch.created_at || new Date().toISOString()),
-    updated_at: String(enginePatch.updated_at || new Date().toISOString()),
   };
 }
 

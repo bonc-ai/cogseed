@@ -3,8 +3,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+const previewAssetIds = vi.hoisted(() => ({ value: ['asset-a'] as string[] }));
 const projectionMock = vi.hoisted(() => ({
-  previewContextProjection: vi.fn(async (_uid: string, input: unknown) => ({ id: 'proj-a', status: 'preview', assetIds: ['asset-a'], ...(input as Record<string, unknown>) })),
+  previewContextProjection: vi.fn(async (_uid: string, input: unknown) => ({ id: 'proj-a', status: 'preview', assetIds: [...previewAssetIds.value], ...(input as Record<string, unknown>) })),
 }));
 const projectionMessageMock = vi.hoisted(() => ({
   postProjectionCardMessage: vi.fn(async (userId: string, input: { cid: string; projectionId: string }, port: { send: (payload: unknown) => Promise<{ id: string }> }) => {
@@ -92,6 +93,35 @@ describe('KSTAR requirement preview trigger', () => {
     }));
     expect(projectionMock.previewContextProjection.mock.calls[0][1]).not.toHaveProperty('workspaceId');
     expect(result.projectionPreviewCreated).toEqual({ projectionId: 'proj-a' });
+  });
+
+  it('posts a visible Recall projection card even when no assets match automatically', async () => {
+    previewAssetIds.value = [];
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser('user-a');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const groupChat = await import('../../../../src/main/features/group_chat');
+
+    await bus.enqueue({ uid: 'user-a', cid: 'cid-empty', fromActorId: 'user', text: '整理 OAuth 回调流程' });
+
+    await waitFor(() => projectionMessageMock.postProjectionCardMessage.mock.calls.length > 0);
+    expect(projectionMock.previewContextProjection).toHaveBeenCalledWith('user-a', expect.objectContaining({
+      purpose: expect.any(String),
+      taskText: '整理 OAuth 回调流程',
+    }));
+    expect(projectionMessageMock.postProjectionCardMessage).toHaveBeenCalledWith(
+      'user-a',
+      { cid: 'cid-empty', projectionId: 'proj-a' },
+      expect.objectContaining({ send: expect.any(Function) }),
+    );
+    const messages = await waitForMessages(() => groupChat.readMessages('user-a', 'cid-empty'));
+    expect(messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        from: 'commander',
+        to: ['user'],
+        recall_projection_card: { projectionId: 'proj-a' },
+      }),
+    ]));
   });
 
   it('posts a visible Recall projection card when a normal user message creates a KSTAR task', async () => {

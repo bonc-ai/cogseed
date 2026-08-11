@@ -82,7 +82,6 @@ describe('P3394 KSTAR Knowledge Base promotion', () => {
       kstar_engine: {
         status: 'completed',
         reason: 'Meta-skill engine reported no patch action for this episode.',
-        patch_status: 'not_needed',
         route_recommendation: { action: 'no_action', message: '无需操作' },
         tool_calls: [],
         updated_at: '2026-07-24T00:00:00.000Z',
@@ -104,7 +103,7 @@ describe('P3394 KSTAR Knowledge Base promotion', () => {
     };
     const statePath = path.join(root, uid, 'local', 'p3394', 'kstar-state.json');
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
-    fs.writeFileSync(statePath, JSON.stringify({ version: 1, runs: [run], experience_candidates: [candidate], patch_candidates: [], updated_at: '2026-07-24T00:00:00.000Z' }, null, 2));
+    fs.writeFileSync(statePath, JSON.stringify({ version: 1, runs: [run], experience_candidates: [candidate], updated_at: '2026-07-24T00:00:00.000Z' }, null, 2));
     return { run, candidate };
   }
 

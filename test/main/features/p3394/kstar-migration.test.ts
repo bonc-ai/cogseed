@@ -51,7 +51,6 @@ describe('kstar-migration', () => {
         version: 1,
         runs: [],
         experience_candidates: [],
-        patch_candidates: [],
         tool_cycles: [],
         updated_at: '2026-07-26T10:00:00',
       };
@@ -167,7 +166,6 @@ describe('kstar-migration', () => {
           { id: 'run-2', status: 'failed', actual_result: 'Error' },
         ],
         experience_candidates: [{ id: 'exp-1', summary: 'Test experience' }],
-        patch_candidates: [{ id: 'patch-1', type: 'memory_patch' }],
         tool_cycles: [{ id: 'cycle-1', tool_name: 'read_file' }],
         updated_at: '2026-07-26T10:00:00',
       };

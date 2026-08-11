@@ -13,6 +13,7 @@ import {
 import type { RecallJsonRecord } from './types';
 import type { KstarLearningSignal } from '../kstar/types';
 import { normalizeAbilityAssetOntologyRefs, type AbilityAssetOntologyRef } from './ontology-refs';
+import { normalizeAbilityAssetScopePolicy, type RecallAbilityAssetScopePolicy } from './scope-policy';
 import { initializeAbilityAsset } from './asset-service';
 import {
   cognitionSourceRefKey,
@@ -53,6 +54,10 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   learningSignal?: KstarLearningSignal;
   ontologyRefs?: AbilityAssetOntologyRef[];
   scope: string;
+  scopePolicy?: RecallAbilityAssetScopePolicy;
+  recommendedAction?: 'pause' | 'rework';
+  recommendationReason?: string;
+  recommendationAt?: string;
   status: 'active' | 'paused' | 'revoked';
   maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated';
   version: string;
@@ -133,7 +138,8 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   if (!evidenceRefs.length) throw new Error('malformed recall ability asset evidence');
   const learningSignal = normalizeLearningSignal(value.learningSignal);
   const ontologyRefs = value.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(value.ontologyRefs);
-  return { ...value, evidenceRefs, ...(learningSignal ? { learningSignal } : {}), ...(ontologyRefs ? { ontologyRefs } : {}) } as RecallAbilityAssetRecord;
+  const scopePolicy = normalizeAbilityAssetScopePolicy(value.scopePolicy);
+  return { ...value, evidenceRefs, ...(learningSignal ? { learningSignal } : {}), ...(ontologyRefs ? { ontologyRefs } : {}), ...(scopePolicy ? { scopePolicy } : {}) } as RecallAbilityAssetRecord;
 }
 
 function candidateDirectory(userId: string): string {
@@ -291,8 +297,11 @@ export function rejectRecallCandidate(userId: string, candidateId: string, note?
 export async function promoteRecallCandidate(
   userId: string,
   candidateId: string,
-  options: { ontologyRefs?: AbilityAssetOntologyRef[] } = {},
+  options: { actor?: 'user'; ontologyRefs?: AbilityAssetOntologyRef[]; scopePolicy?: RecallAbilityAssetScopePolicy } = {},
 ): Promise<{ candidate: RecallCandidateRecord; asset: RecallAbilityAssetRecord }> {
+  if (options.actor !== 'user') throw new Error('recall candidate promotion requires a user actor');
+  const ontologyRefs = options.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(options.ontologyRefs);
+  const scopePolicy = normalizeAbilityAssetScopePolicy(options.scopePolicy);
   const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, async (current) => {
     if (!current) throw new Error('recall candidate not found');
     const candidate = asCandidate(current);
@@ -309,8 +318,9 @@ export async function promoteRecallCandidate(
       statement: candidate.judgment,
       evidenceRefs: candidate.sourceRefs,
       ...(candidate.learningSignal ? { learningSignal: candidate.learningSignal } : {}),
-      ...(options.ontologyRefs?.length ? { ontologyRefs: options.ontologyRefs } : {}),
+      ...(ontologyRefs?.length ? { ontologyRefs } : {}),
       scope: candidate.suggestedScope,
+      ...(scopePolicy ? { scopePolicy } : {}),
       status: 'active',
       maturity: 'seed',
       version: '1',

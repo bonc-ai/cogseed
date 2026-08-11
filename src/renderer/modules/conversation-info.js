@@ -41,7 +41,6 @@ const ConversationInfo = (() => {
     mate: { session: null, collaboration: null, sessions: [], loading: false, error: '' },
     wakeRequests: [],
     kstarRuns: [],
-    patchCandidates: [],
     protocolEvents: [],
     protocolError: '',
     migrationStatus: null,
@@ -259,7 +258,7 @@ const ConversationInfo = (() => {
 
   async function _load(cid) {
     const enc = encodeURIComponent(cid);
-    const [historyData, filesData, attachmentData, syncEnabled, activity, wakeData, kstarData, patchData, protocolData, migrationData, archivesData] = await Promise.all([
+    const [historyData, filesData, attachmentData, syncEnabled, activity, wakeData, kstarData, protocolData, migrationData, archivesData] = await Promise.all([
       _fetchJson(typeof _historyRequestUrl === 'function'
         ? _historyRequestUrl(cid)
         : `/api/conversations/${enc}/history?limit=10`),
@@ -275,7 +274,6 @@ const ConversationInfo = (() => {
       _loadAgentActivitySnapshot(cid),
       _fetchJson(`/api/conversations/${enc}/wake-requests`).catch(() => ({ requests: [] })),
       _fetchJson(`/api/conversations/${enc}/kstar`).catch(() => ({ runs: [] })),
-      _fetchJson(`/api/conversations/${enc}/patch-candidates`).catch(() => ({ patch_candidates: [] })),
       _fetchJson(`/api/conversations/${enc}/protocol-events`).catch((err) => ({ events: [], error: (err && err.message) || String(err) })),
       _invokeOrDefault('p3394.checkMigrationStatus', {}, { migrated: false }),
       _invokeOrDefault('p3394.listArchives', {}, { archives: [] }),
@@ -296,7 +294,6 @@ const ConversationInfo = (() => {
       collaboration: activity.runtime && activity.runtime.collaboration ? activity.runtime.collaboration : null,
       wakeRequests: Array.isArray(wakeData.requests) ? wakeData.requests : [],
       kstarRuns: Array.isArray(kstarData.runs) ? kstarData.runs : [],
-      patchCandidates: Array.isArray(patchData.patch_candidates) ? patchData.patch_candidates : [],
       protocolEvents: Array.isArray(protocolData.events) ? protocolData.events : (Array.isArray(protocolData.protocol_events) ? protocolData.protocol_events : []),
       protocolError: protocolData.error ? String(protocolData.error) : '',
       migrationStatus: migrationData || null,
@@ -939,11 +936,6 @@ const ConversationInfo = (() => {
         items.push({ kind: 'kstar', label: _label('conversation_info.collaboration.attention.kstar', 'KSTAR review required'), target: { type: 'review_center', ref: String(run.id || '') } });
       }
     }
-    for (const candidate of Array.isArray(_snapshot.patchCandidates) ? _snapshot.patchCandidates : []) {
-      if (candidate && candidate.status === 'needs_review') {
-        items.push({ kind: 'patch', label: String(candidate.proposal && candidate.proposal.title || _label('conversation_info.collaboration.attention.patch', 'Patch candidate requires review')), target: { type: 'review_center', ref: String(candidate.id || '') } });
-      }
-    }
     const collaboration = _snapshot.collaboration || {};
     const conflictStatus = (status) => {
       const normalized = String(status || 'detected');
@@ -1343,7 +1335,7 @@ const ConversationInfo = (() => {
   function bind(cid) {
     _cid = cid || null;
     _open = false;
-    _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [], runtime: null, actors: [], collaboration: null, mate: { session: null, collaboration: null, sessions: [], loading: false, error: '' }, wakeRequests: [], kstarRuns: [], patchCandidates: [], protocolEvents: [], protocolError: '', migrationStatus: null, archives: [] };
+    _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [], runtime: null, actors: [], collaboration: null, mate: { session: null, collaboration: null, sessions: [], loading: false, error: '' }, wakeRequests: [], kstarRuns: [], protocolEvents: [], protocolError: '', migrationStatus: null, archives: [] };
     _protocolFilters.agent = '';
     _protocolFilters.role = '';
     _protocolFilters.result = '';

@@ -5642,7 +5642,6 @@ function focusConversationAttention(kind, ref, messageId = '') {
   const selectors = {
     wake: escapedRef ? `.chat-wake-request[data-wake-request-id="${escapedRef}"]` : '',
     kstar: escapedRef ? `.chat-kstar-review[data-kstar-run-id="${escapedRef}"]` : '',
-    patch: escapedRef ? `.chat-patch-candidate[data-patch-candidate-id="${escapedRef}"]` : '',
   };
   if (targetKind === 'conflict') {
     const container = document.getElementById('chat-history');
@@ -6076,7 +6075,6 @@ async function loadConversationHistory(cid, opts = {}) {
     _replayBufferedGroupEvents(cid);
     void _hydratePendingWakeRequests(cid);
     void _hydrateKStarReviews(cid);
-    void _hydratePatchCandidates(cid);
 
     _mountConversationResultCard(cid);
 
@@ -7398,140 +7396,6 @@ async function _hydrateKStarReviews(cid) {
   }
 }
 
-
-function _renderPatchCandidateCard(card, cid, candidate) {
-  if (!card || !candidate?.id) return;
-  const status = String(candidate.status || 'unknown');
-  const type = String(candidate.type || 'unknown');
-  const proposal = candidate.proposal && typeof candidate.proposal === 'object' ? candidate.proposal : {};
-  const engine = candidate.engine && typeof candidate.engine === 'object' ? candidate.engine : {};
-  const review = candidate.review && typeof candidate.review === 'object' ? candidate.review : {};
-  const title = _patchCandidateText(proposal.title, t('p3394.patch.untitled'));
-  const summary = _patchCandidateText(proposal.summary, t('p3394.patch.no_summary'));
-  const rationale = _patchCandidateText(proposal.rationale);
-  const proposed = _patchCandidateText(proposal.proposed_content);
-  const routeAction = _patchCandidateText(engine.route_action);
-  const attributionId = _patchCandidateText(engine.attribution_id);
-  const reviewNotes = _patchCandidateText(review.notes || candidate.review_notes || candidate.notes);
-  const canReview = status === 'needs_review' || status === 'proposed';
-
-  card.className = `chat-patch-candidate is-${status}`;
-  card.dataset.patchCandidateId = String(candidate.id);
-  card.dataset.busy = '';
-  card.innerHTML = `
-    <div class="chat-patch-candidate-head">
-      <div>
-        <div class="chat-patch-candidate-kicker">${escapeHtml(t('p3394.patch.kicker'))}</div>
-        <div class="chat-patch-candidate-title">${escapeHtml(title)}</div>
-      </div>
-      <div class="chat-patch-candidate-badges">
-        <span class="chat-patch-candidate-badge">${escapeHtml(_patchCandidateTypeLabel(type))}</span>
-        <span class="chat-patch-candidate-badge is-status">${escapeHtml(_patchCandidateStatusLabel(status))}</span>
-      </div>
-    </div>
-    <div class="chat-patch-candidate-summary">${escapeHtml(summary)}</div>
-    <details class="chat-patch-candidate-details">
-      <summary>${escapeHtml(t('p3394.patch.details'))}</summary>
-      ${rationale ? `<div class="chat-patch-candidate-field"><strong>${escapeHtml(t('p3394.patch.rationale'))}</strong><div>${escapeHtml(rationale)}</div></div>` : ''}
-      ${proposed ? `<div class="chat-patch-candidate-field"><strong>${escapeHtml(t('p3394.patch.proposed'))}</strong><pre>${escapeHtml(proposed)}</pre></div>` : ''}
-      ${routeAction ? `<div class="chat-patch-candidate-meta">${escapeHtml(t('p3394.patch.route_action'))}: ${escapeHtml(routeAction)}</div>` : ''}
-      ${attributionId ? `<div class="chat-patch-candidate-meta">${escapeHtml(t('p3394.patch.attribution_id'))}: ${escapeHtml(attributionId)}</div>` : ''}
-      ${reviewNotes ? `<div class="chat-patch-candidate-meta">${escapeHtml(t('p3394.patch.review_notes'))}: ${escapeHtml(reviewNotes)}</div>` : ''}
-    </details>
-    ${canReview ? `
-      <textarea class="chat-patch-candidate-notes" rows="2" placeholder="${escapeHtml(t('p3394.patch.notes_placeholder'))}"></textarea>
-      <div class="chat-patch-candidate-actions">
-        <button type="button" class="btn btn-primary btn-sm" data-patch-candidate-review="approve">${escapeHtml(t('p3394.patch.approve'))}</button>
-        <button type="button" class="btn btn-sm" data-patch-candidate-review="reject">${escapeHtml(t('p3394.patch.reject'))}</button>
-      </div>` : ''}
-  `;
-  for (const button of card.querySelectorAll('[data-patch-candidate-review]')) {
-    button.addEventListener('click', () => _resolvePatchCandidateReview(card, cid, candidate, button.dataset.patchCandidateReview));
-  }
-}
-
-function _patchCandidateStatusLabel(status) {
-  const rawStatus = String(status || 'unknown');
-  const key = `p3394.patch.status.${rawStatus}`;
-  const label = t(key);
-  return label === key ? rawStatus : label;
-}
-
-function _patchCandidateTypeLabel(type) {
-  const rawType = String(type || 'unknown');
-  const key = `p3394.patch.type.${rawType}`;
-  const label = t(key);
-  return label === key ? rawType : label;
-}
-
-function _patchCandidateText(value, fallback = '') {
-  const text = String(value || '').trim();
-  return text || fallback;
-}
-
-async function _resolvePatchCandidateReview(card, cid, candidate, decision) {
-  if (!card || !candidate?.id || card.dataset.busy === '1') return;
-  card.dataset.busy = '1';
-  try {
-    const notesEl = card.querySelector('.chat-patch-candidate-notes');
-    const notes = notesEl && typeof notesEl.value === 'string' ? notesEl.value : '';
-    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/patch-candidates/${encodeURIComponent(candidate.id)}/review`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ decision, notes }),
-    });
-    const data = await res.json();
-    if (!data?.ok) throw new Error(data?.error || 'patch candidate review failed');
-    if (!data.patch_candidate?.id) throw new Error('patch candidate review returned no candidate');
-    _renderPatchCandidateCard(card, cid, data.patch_candidate);
-  } catch (err) {
-    card.dataset.busy = '';
-    _convLog.warn('patch candidate review failed', (err && err.message) || String(err));
-    try { await uiAlert(t('p3394.patch.review_failed')); } catch (_) {}
-  }
-}
-
-function _patchCandidateHost(cid, options = {}) {
-  if (!cid || cid !== currentCid) return null;
-  const existing = document.querySelector('#chat-patch-candidates-host');
-  if (existing || options.create === false) return existing || null;
-  const history = document.getElementById ? document.getElementById('chat-history') : document.querySelector('#chat-history');
-  if (!history) return null;
-  const host = document.createElement('div');
-  host.id = 'chat-patch-candidates-host';
-  host.className = 'chat-patch-candidates-host';
-  host.setAttribute('role', 'region');
-  host.setAttribute('aria-live', 'polite');
-  if (typeof _appendBeforeSpacer === 'function') _appendBeforeSpacer(history, host);
-  else history.appendChild(host);
-  return host;
-}
-
-async function _hydratePatchCandidates(cid) {
-  if (!cid || cid !== currentCid) return;
-  const host = _patchCandidateHost(cid, { create: true });
-  if (!host) return;
-  host.innerHTML = `<div class="chat-patch-candidates-title">${escapeHtml(t('p3394.patch.center_title'))}</div><div class="chat-patch-candidates-loading">${escapeHtml(t('p3394.patch.loading'))}</div>`;
-  try {
-    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/patch-candidates`);
-    const data = await res.json();
-    if (!data?.ok || cid !== currentCid) return;
-    const candidates = Array.isArray(data.patch_candidates) ? data.patch_candidates : [];
-    host.innerHTML = `<div class="chat-patch-candidates-title"><span>${escapeHtml(t('p3394.patch.center_title'))}</span><span>${escapeHtml(String(candidates.length))}</span></div>`;
-    if (!candidates.length) {
-      host.innerHTML += `<div class="chat-patch-candidates-empty">${escapeHtml(t('p3394.patch.empty'))}</div>`;
-      return;
-    }
-    for (const candidate of candidates) {
-      const card = document.createElement('div');
-      host.appendChild(card);
-      _renderPatchCandidateCard(card, cid, candidate);
-    }
-  } catch (err) {
-    _convLog.warn('patch candidate hydration failed', (err && err.message) || String(err));
-    host.innerHTML = `<div class="chat-patch-candidates-title">${escapeHtml(t('p3394.patch.center_title'))}</div><div class="chat-patch-candidates-error">${escapeHtml(t('p3394.patch.load_failed'))}</div>`;
-  }
-}
 
 function _wakeRequestHost(cid, options = {}) {
   if (!cid || cid !== currentCid) return null;
@@ -12183,8 +12047,7 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
       }
       if (isTurnEnd) {
         _evaluateAutoRecipient(cid);
-        void _hydratePatchCandidates(cid);
-      }
+          }
     } else {
       // Mid-turn side-effect message (plan announcement etc., no `seg`) —
       // append a new bubble alongside, leave the streaming placeholder alive

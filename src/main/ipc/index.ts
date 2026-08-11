@@ -1925,22 +1925,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const result = await p3394.syncExperienceCandidateToNotion(ctx.userId, candidateId);
     return { ok: result.ok, ...result };
   },
-
-
-  'p3394.listPatchCandidates': async ({ cid }, ctx) => {
-    if (!safeId(cid)) throw new Error('invalid cid');
-    return { ok: true, patch_candidates: await p3394.listPatchCandidates(ctx.userId, cid) };
-  },
-
-  'p3394.reviewPatchCandidate': async ({ cid, candidateId, decision, notes }, ctx) => {
-    if (!safeId(cid) || !safeId(candidateId)) throw new Error('invalid patch candidate scope');
-    if (decision !== 'approve' && decision !== 'reject') throw new Error('invalid patch candidate decision');
-    const existing = (await p3394.listPatchCandidates(ctx.userId, cid)).find((item) => item.id === candidateId);
-    if (!existing) throw new Error('patch candidate not found');
-    const patch_candidate = await p3394.reviewPatchCandidate(ctx.userId, candidateId, decision, typeof notes === 'string' ? notes : '');
-    return { ok: true, patch_candidate };
-  },
-
   'p3394.listArchives': async (_args, ctx) => {
     return { ok: true, archives: await p3394.listArchives(ctx.userId) };
   },
@@ -2144,13 +2128,28 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'recall.candidates.promote': async ({ candidateId } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
-    return { ok: true, ...(await recallCandidates.promoteRecallCandidate(ctx.userId, candidateId)) };
+    return { ok: true, ...(await recallCandidates.promoteRecallCandidate(ctx.userId, candidateId, { actor: 'user' })) };
   },
 
   'recall.assets.list': async (_args, ctx) => ({ ok: true, assets: await recallAssets.listAbilityAssets(ctx.userId) }),
   'recall.assets.read': async ({ assetId } = {}, ctx) => { if (!safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, asset: await recallAssets.readAbilityAsset(ctx.userId, assetId) }; },
-  'recall.assets.pause': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid recall asset pause'); return { ok: true, asset: await recallAssets.pauseAbilityAsset(ctx.userId, assetId, note) }; },
-  'recall.assets.revoke': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid recall asset revoke'); return { ok: true, asset: await recallAssets.revokeAbilityAsset(ctx.userId, assetId, note) }; },
+  'recall.assets.update': async ({ assetId, title, statement, scope, scopePolicy, type, evidenceRefs, ontologyRefs, reason, acknowledgeRecommendation } = {}, ctx) => {
+    if (!safeId(assetId)) throw new Error('invalid recall asset id');
+    const note = boundedText(reason, 'recall asset update reason', 1_000);
+    if (title !== undefined && (typeof title !== 'string' || title.length > 120)) throw new Error('invalid recall asset title');
+    if (statement !== undefined && (typeof statement !== 'string' || statement.length > 4_000)) throw new Error('invalid recall asset statement');
+    if (scope !== undefined && (typeof scope !== 'string' || scope.length > 500)) throw new Error('invalid recall asset scope');
+    if (scopePolicy !== undefined && (!scopePolicy || typeof scopePolicy !== 'object' || Array.isArray(scopePolicy))) throw new Error('invalid recall asset scope policy');
+    if (type !== undefined && !['personal', 'rule', 'template', 'skill_method'].includes(type)) throw new Error('invalid recall asset type');
+    if (evidenceRefs !== undefined && !Array.isArray(evidenceRefs)) throw new Error('invalid recall asset evidence');
+    if (ontologyRefs !== undefined && !Array.isArray(ontologyRefs)) throw new Error('invalid recall asset ontology refs');
+    if (acknowledgeRecommendation !== undefined && typeof acknowledgeRecommendation !== 'boolean') throw new Error('invalid recall asset recommendation acknowledgment');
+    return { ok: true, asset: await recallAssets.updateAbilityAsset(ctx.userId, assetId, { ...(title !== undefined ? { title } : {}), ...(statement !== undefined ? { statement } : {}), ...(scope !== undefined ? { scope } : {}), ...(scopePolicy !== undefined ? { scopePolicy } : {}), ...(type !== undefined ? { type } : {}), ...(evidenceRefs !== undefined ? { evidenceRefs } : {}), ...(ontologyRefs !== undefined ? { ontologyRefs } : {}), reason: note, actor: 'user', ...(acknowledgeRecommendation !== undefined ? { acknowledgeRecommendation } : {}) }) };
+  },
+  'recall.assets.pause': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset pause'); return { ok: true, asset: await recallAssets.pauseAbilityAsset(ctx.userId, assetId, { actor: 'user', reason: note ?? 'user pause' }) }; },
+  'recall.assets.resume': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset resume'); return { ok: true, asset: await recallAssets.resumeAbilityAsset(ctx.userId, assetId, { actor: 'user', reason: note ?? 'user resume' }) }; },
+  'recall.assets.revoke': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset revoke'); return { ok: true, asset: await recallAssets.revokeAbilityAsset(ctx.userId, assetId, { actor: 'user', reason: note ?? 'user revoke' }) }; },
+  'recall.assets.recommend': async ({ assetId, action, reason } = {}, ctx) => { if (!safeId(assetId) || (action !== 'pause' && action !== 'rework')) throw new Error('invalid recall asset recommendation'); return { ok: true, asset: await recallAssets.recommendAbilityAssetAction(ctx.userId, assetId, { actor: 'system', action, reason: boundedText(reason, 'recall asset recommendation reason', 1_000) }) }; },
   'recall.assets.versions': async ({ assetId } = {}, ctx) => { if (!safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, versions: await recallAssets.listAbilityAssetVersions(ctx.userId, assetId), audit: await recallAssets.listAbilityAssetAudit(ctx.userId, assetId) }; },
 
   'recall.workspaceRefs.list': async ({ assetId } = {}, ctx) => { if (assetId !== undefined && !safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, references: await recallWorkspaceRefs.listWorkspaceAssetReferences(ctx.userId, assetId) }; },
@@ -2217,7 +2216,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   'cognition.candidates.decide': async ({ source, candidateId, decision, reason, notes, toGlobalMemory, toGroupIds } = {}, ctx) => {
-    if (source !== 'personal_ontology' && source !== 'p3394_experience' && source !== 'p3394_patch') throw new Error('invalid cognition candidate source');
+    if (source !== 'personal_ontology' && source !== 'p3394_experience') throw new Error('invalid cognition candidate source');
     if (!safeId(candidateId)) throw new Error('invalid candidate id');
     if (decision !== 'accept' && decision !== 'reject') throw new Error('invalid cognition candidate decision');
     if (toGroupIds !== undefined && (!Array.isArray(toGroupIds) || toGroupIds.some((id) => !safeId(id)))) throw new Error('invalid group ids');

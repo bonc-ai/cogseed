@@ -35,7 +35,6 @@ describe('Collaboration attention navigation', () => {
     expect(conversationSource).toContain("function focusConversationAttention(kind, ref, messageId = '')");
     expect(conversationSource).toContain('.chat-wake-request[data-wake-request-id=');
     expect(conversationSource).toContain('.chat-kstar-review[data-kstar-run-id=');
-    expect(conversationSource).toContain('.chat-patch-candidate[data-patch-candidate-id=');
     expect(conversationSource).toContain('_flashConversationHistorySearchTarget(target)');
     expect(conversationSource).toContain("_revealConversationHistorySearchTarget(currentCid, { msgId: fallbackMessageId })");
   });

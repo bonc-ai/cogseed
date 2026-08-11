@@ -11,7 +11,6 @@ import { describe, test, expect } from 'vitest';
 import {
   projectEvidenceToLegacy,
   projectEpisodeToLegacy,
-  projectPatchToLegacy,
   projectExperienceToLegacy,
 } from '../../../../src/main/features/p3394/kstar-compat';
 
@@ -89,70 +88,6 @@ describe('kstar-compat', () => {
       expect(legacy.delta_a_confidence_gate).toBe('pass');
     });
   });
-
-  describe('patch candidate projection', () => {
-    test('projects Engine patch to legacy DTO', () => {
-      const enginePatch = {
-        id: 'patch-001',
-        type: 'skill_patch',
-        target: {
-          kind: 'custom_skill' as const,
-          id: 'skill-123',
-          version: 'v1.0',
-        },
-        proposal: {
-          title: 'Add error handling',
-          summary: 'Improve robustness',
-          rationale: 'Current implementation lacks error checks',
-          proposed_content: 'try { ... } catch { ... }',
-        },
-        status: 'proposed' as const,
-        created_at: '2026-07-26T13:00:00',
-        updated_at: '2026-07-26T13:00:00',
-      };
-
-      const legacy = projectPatchToLegacy(enginePatch, 'run-001', 'conv-001', 'agent-001');
-
-      expect(legacy.id).toBe('patch-001');
-      expect(legacy.type).toBe('skill_patch');
-      expect(legacy.target.kind).toBe('custom_skill');
-      expect(legacy.target.id).toBe('skill-123');
-      expect(legacy.proposal.title).toBe('Add error handling');
-      expect(legacy.status).toBe('proposed');
-      expect(legacy.source_run_id).toBe('run-001');
-      expect(legacy.conversation_id).toBe('conv-001');
-      expect(legacy.agent_id).toBe('agent-001');
-    });
-
-    test('preserves engine metadata in legacy DTO', () => {
-      const enginePatch = {
-        id: 'patch-002',
-        type: 'memory_patch',
-        target: { kind: 'memory' as const, path: '/memory/agent.md' },
-        proposal: {
-          title: 'Update memory',
-          summary: 'Add new experience',
-          rationale: 'Recent interaction',
-          proposed_content: '# New section',
-        },
-        engine_metadata: {
-          attribution_id: 'attr-001',
-          proposal_id: 'prop-001',
-          governance_decision_id: 'gov-001',
-        },
-        status: 'needs_review' as const,
-        created_at: '2026-07-26T14:00:00',
-        updated_at: '2026-07-26T14:00:00',
-      };
-
-      const legacy = projectPatchToLegacy(enginePatch, 'run-002', 'conv-002', 'agent-002');
-
-      expect(legacy.engine.attribution_id).toBe('attr-001');
-      expect(legacy.engine.proposal_id).toBe('prop-001');
-      expect(legacy.engine.governance_decision_id).toBe('gov-001');
-    });
-  });
-
   describe('experience candidate projection', () => {
     test('projects Engine experience to legacy DTO', () => {
       const engineExperience = {

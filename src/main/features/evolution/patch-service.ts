@@ -1,6 +1,6 @@
 import { writeSkillFileForEdit } from '../skills';
 import { appendSkillVersion, listSkillVersions } from './versions-store';
-import { validatePatchCandidateContent, type ValidationBoundary, type ValidationStatus } from '../p3394/skill-validation-run';
+import { validateSkillPatchContent, type ValidationBoundary, type ValidationStatus } from '../p3394/skill-validation-run';
 
 type WriteFn = (skillId: string, file: string, content: string) => Promise<boolean>;
 type AppendVersionFn = (uid: string, skillId: string, entry: { version: string; note?: string; runId?: string; content?: string }) => Promise<unknown>;
@@ -38,7 +38,7 @@ export async function applyPatchToSkill(
   const write = input.writeFn ?? ((id, file, content) => writeSkillFileForEdit(id, file, content));
   const appendVersion = input.appendVersionFn ?? appendSkillVersion;
   const { content, newVersion } = withBumpedVersion(input.newContent);
-  const validation = await validatePatchCandidateContent(uid, input.skillId, content, input.validationBoundary || 'real');
+  const validation = await validateSkillPatchContent(uid, input.skillId, content, input.validationBoundary || 'real');
   if (validation.status === 'blocked') {
     return { ok: false, newVersion, validationId: validation.validationId, validationStatus: validation.status };
   }

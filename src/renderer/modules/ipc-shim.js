@@ -148,8 +148,6 @@ const _IPC_ROUTES = [
   ['POST',   /^\/api\/conversations\/([^/]+)\/kstar\/([^/]+)\/review$/, 'p3394.reviewKstarCompatProjection', ['cid', 'runId']],
   ['POST',   /^\/api\/conversations\/([^/]+)\/experience\/([^/]+)\/decision$/, 'p3394.decideExperienceCandidate', ['cid', 'candidateId']],
   ['POST',   /^\/api\/conversations\/([^/]+)\/experience\/([^/]+)\/notion-sync$/, 'p3394.syncExperienceCandidateToNotion', ['cid', 'candidateId']],
-  ['GET',    /^\/api\/conversations\/([^/]+)\/patch-candidates$/, 'p3394.listPatchCandidates', ['cid']],
-  ['POST',   /^\/api\/conversations\/([^/]+)\/patch-candidates\/([^/]+)\/review$/, 'p3394.reviewPatchCandidate', ['cid', 'candidateId']],
   ['GET',    /^\/api\/conversations\/([^/]+)\/members$/,   'groupChat.listMembers',      ['cid']],
   ['GET',    /^\/api\/conversations\/([^/]+)\/runtime$/,   'groupChat.runtimeStatus',    ['cid']],
   ['GET',    /^\/api\/conversations\/([^/]+)\/collaboration\/conflicts$/, 'groupChat.listCollaborationConflicts', ['cid']],

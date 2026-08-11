@@ -310,6 +310,46 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
+    const abilityAssetAction = event.target.closest('[data-ability-asset-action]');
+    if (abilityAssetAction) {
+      const assetId = abilityAssetAction.dataset.abilityAssetId;
+      const action = abilityAssetAction.dataset.abilityAssetAction;
+      if (!assetId || !action || abilityAssetAction.dataset.busy === '1') return;
+      const selected = (_skillsCognitionState.assets || []).find((item) => item.id === assetId);
+      const defaultReason = selected?.recommendationReason || selected?.scopePolicy?.purposeTags?.join(', ') || '';
+      const promptLabel = action === 'acknowledge-recommendation'
+        ? '请输入确认建议的原因：'
+        : action === 'pause'
+          ? '请输入暂停原因：'
+          : action === 'resume'
+            ? '请输入恢复原因：'
+            : '请输入撤销原因：';
+      const reason = typeof uiPrompt === 'function'
+        ? await uiPrompt(promptLabel, defaultReason)
+        : window.prompt(promptLabel, defaultReason);
+      if (reason === null) return;
+      const trimmed = String(reason || '').trim();
+      if (!trimmed) return;
+      abilityAssetAction.dataset.busy = '1'; abilityAssetAction.disabled = true;
+      try {
+        const channel = action === 'pause' ? 'recall.assets.pause'
+          : action === 'resume' ? 'recall.assets.resume'
+          : action === 'revoke' ? 'recall.assets.revoke'
+          : 'recall.assets.update';
+        const payload = action === 'acknowledge-recommendation'
+          ? { assetId, reason: trimmed, acknowledgeRecommendation: true }
+          : { assetId, note: trimmed };
+        const result = await window.orkas.invoke(channel, payload);
+        if (!result?.ok) throw new Error(result?.error || 'recall asset governance action failed');
+        await loadSkillsCognitionSnapshot();
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        abilityAssetAction.dataset.busy = '0'; abilityAssetAction.disabled = false;
+      }
+      return;
+    }
+
     const abilityAsset = event.target.closest('[data-ability-asset-id]');
     if (abilityAsset) {
       _skillsCognitionState.selectedAssetId = abilityAsset.dataset.abilityAssetId || '';

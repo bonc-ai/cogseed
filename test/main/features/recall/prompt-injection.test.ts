@@ -40,7 +40,7 @@ async function createAsset() {
     suggestedScope: 'review,project',
     sourceRefs: [{ kind: 'execution', id: 'exec-a' }],
   });
-  return candidates.promoteRecallCandidate('user-a', candidate.id);
+  return candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
 }
 
 describe('confirmed Recall projection prompt injection', () => {

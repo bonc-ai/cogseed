@@ -4,7 +4,7 @@ import * as p3394 from '../p3394';
 import { refMatchesAsset, relationRef, titleFromText } from './normalize';
 import { listCognitionCandidates } from './candidates-adapter';
 import { listCognitionReuseReceipts } from './receipts-adapter';
-import type { CompatExperienceCandidate, CompatPatchCandidate } from '../p3394';
+import type { CompatExperienceCandidate } from '../p3394';
 import type { CognitionAssetSummary, CognitionAssetType } from './types';
 
 export interface ListCognitionAssetsFilter {
@@ -42,29 +42,6 @@ function mapExperienceCandidate(row: CompatExperienceCandidate): CognitionAssetS
   });
 }
 
-function mapPatchCandidate(row: CompatPatchCandidate): CognitionAssetSummary {
-  const skillId = row.target?.kind === 'custom_skill' && row.target.id ? row.target.id : undefined;
-  return baseAsset({
-    id: `candidate:${row.id}`,
-    type: 'skill_method',
-    category: 'skill_method',
-    title: titleFromText(row.proposal?.title || row.proposal?.summary, row.id),
-    source: 'p3394_patch_candidate',
-    version: row.target?.version,
-    status: row.status === 'approved' || row.status === 'applied' ? 'active' : row.status === 'rejected' ? 'revoked' : 'candidate',
-    maturity: row.status === 'approved' || row.status === 'applied' ? 'transfer_validated' : 'bud',
-    owner: 'local_user',
-    scope: row.conversation_id || 'current_project',
-    baselineSkillRef: skillId ? `skill:${skillId}` : undefined,
-    candidateRefs: [`p3394_patch:${row.id}`],
-    receiptRefs: [row.receipt_id].filter(Boolean) as string[],
-    relationRefs: [
-      relationRef('execution', row.source_run_id, row.proposal?.summary),
-      ...(skillId ? [relationRef('skill', skillId, row.proposal?.title)] : []),
-    ],
-  });
-}
-
 export async function listCognitionAssets(
   userId: string,
   filter: ListCognitionAssetsFilter = {},
@@ -96,7 +73,7 @@ export async function listCognitionAssets(
             ? ref.subtype === 'evaluation' ? 'evaluation' : 'execution'
             : ref.kind === 'execution'
               ? 'execution'
-              : ref.kind === 'p3394_experience' || ref.kind === 'p3394_patch'
+              : ref.kind === 'p3394_experience'
                 ? 'evaluation'
                 : ref.kind === 'conversation' || ref.kind === 'message'
               ? 'conversation'
@@ -130,11 +107,6 @@ export async function listCognitionAssets(
   if (!category || category === 'rule') {
     const experiences = await p3394.listExperienceCandidates(userId);
     items.push(...experiences.map(mapExperienceCandidate));
-  }
-
-  if (!category || category === 'skill_method') {
-    const patches = await p3394.listPatchCandidates(userId);
-    items.push(...patches.map(mapPatchCandidate));
   }
 
   await enrichAssetCounts(userId, items);

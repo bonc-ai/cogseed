@@ -15,6 +15,14 @@ const recallMock = vi.hoisted(() => ({
   rejectRecallCandidate: vi.fn(async (_uid: string, id: string, note?: string) => ({ id, note, status: 'rejected' })),
   promoteRecallCandidate: vi.fn(async (_uid: string, id: string) => ({ candidate: { id }, asset: { id: 'aa-a' } })),
 }));
+
+const assetMock = vi.hoisted(() => ({
+  updateAbilityAsset: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, ...input })),
+  pauseAbilityAsset: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, status: 'paused', ...input as object })),
+  resumeAbilityAsset: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, status: 'active', ...input as object })),
+  revokeAbilityAsset: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, status: 'revoked', ...input as object })),
+  recommendAbilityAssetAction: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, ...input })),
+}));
 const sourceMock = vi.hoisted(() => ({
   COGNITION_CATALOG_KINDS: ['conversation', 'artifact_file', 'execution_evaluation', 'user_teaching_signal', 'authorized_external_system'],
   listCognitionSources: vi.fn(async () => [{ kind: 'conversation', status: 'empty', count: 0, items: [] }]),
@@ -49,6 +57,16 @@ const projectionMock = vi.hoisted(() => ({
   readContextProjection: vi.fn(async (_uid: string, id: string) => ({ id })),
 }));
 
+const groupChatMock = vi.hoisted(() => ({
+  sendCommanderMessage: vi.fn(async (input: unknown) => ({ msg: { id: 'msg-commander', ...(input as object) } })),
+}));
+const projectionMessageMock = vi.hoisted(() => ({
+  previewAndPostProjectionCardForNextTask: vi.fn(async (_uid: string, input: unknown, port: { send(input: { text: string; card: { projectionId: string } }): Promise<{ id: string }> }) => {
+    const msg = await port.send({ text: 'Found 1 reusable ability asset for conversation_task; omitted 0.', card: { projectionId: 'proj-next' } });
+    return { taskRunId: 'rt-next', projection: { id: 'proj-next' }, card: { projectionId: 'proj-next' }, msg };
+  }),
+}));
+
 vi.mock('electron', () => ({
   ipcMain: { handle: (channel: string, fn: InvokeFn) => { if (channel === 'orkas.invoke') invokeHandler = fn; }, on: vi.fn() },
   shell: { openExternal: vi.fn(async () => undefined), showItemInFolder: vi.fn() },
@@ -56,8 +74,11 @@ vi.mock('electron', () => ({
   dialog: { showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] })) },
   app: { getPath: vi.fn(() => os.tmpdir()), isPackaged: false },
 }));
+vi.mock('../../../src/main/features/group_chat', () => groupChatMock);
+vi.mock('../../../src/main/features/recall/projection-message', () => projectionMessageMock);
 vi.mock('../../../src/main/logger', () => ({ createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }), logFromRenderer: vi.fn() }));
 vi.mock('../../../src/main/features/recall/candidate-service', () => recallMock);
+vi.mock('../../../src/main/features/recall/asset-service', () => assetMock);
 vi.mock('../../../src/main/features/recall/source-catalog', () => sourceMock);
 vi.mock('../../../src/main/features/recall/capture-service', () => captureMock);
 vi.mock('../../../src/main/features/recall/capture-settings', () => captureSettingsMock);
@@ -81,7 +102,42 @@ describe('ipc › recall candidate governance', () => {
     await expect(call('recall.candidates.save', { judgment: 'Use decision logs', suggestedType: 'rule', suggestedScope: 'architecture', sourceRefs: [{ kind: 'execution', id: 'exec-a' }] })).resolves.toMatchObject({ ok: true });
     expect(recallMock.saveRecallCandidate).toHaveBeenCalledWith(UID, expect.objectContaining({ judgment: 'Use decision logs', suggestedType: 'rule' }));
     await expect(call('recall.candidates.promote', { candidateId: 'cand-a' })).resolves.toMatchObject({ ok: true, asset: { id: 'aa-a' } });
-    expect(recallMock.promoteRecallCandidate).toHaveBeenCalledWith(UID, 'cand-a');
+    expect(recallMock.promoteRecallCandidate).toHaveBeenCalledWith(UID, 'cand-a', { actor: 'user' });
+  });
+
+
+
+  it('routes validated ability asset governance with explicit user reason and structured scope policy', async () => {
+    await expect(call('recall.assets.update', {
+      assetId: 'aa-a',
+      statement: 'Keep a scoped decision log.',
+      scope: 'architecture-review',
+      scopePolicy: { purposeTags: ['architecture', 'review'], workspaceIds: ['workspace-a'] },
+      reason: 'Narrow the reusable rule.',
+      acknowledgeRecommendation: true,
+    })).resolves.toMatchObject({ ok: true, asset: { id: 'aa-a' } });
+    expect(assetMock.updateAbilityAsset).toHaveBeenCalledWith(UID, 'aa-a', expect.objectContaining({
+      statement: 'Keep a scoped decision log.',
+      scopePolicy: { purposeTags: ['architecture', 'review'], workspaceIds: ['workspace-a'] },
+      reason: 'Narrow the reusable rule.',
+      actor: 'user',
+      acknowledgeRecommendation: true,
+    }));
+
+    await expect(call('recall.assets.resume', { assetId: 'aa-a', note: 'verified again' })).resolves.toMatchObject({ ok: true, asset: { status: 'active' } });
+    expect(assetMock.resumeAbilityAsset).toHaveBeenCalledWith(UID, 'aa-a', { actor: 'user', reason: 'verified again' });
+
+    await expect(call('recall.assets.recommend', { assetId: 'aa-a', action: 'pause', reason: 'negative transfer' })).resolves.toMatchObject({ ok: true, asset: { action: 'pause' } });
+    expect(assetMock.recommendAbilityAssetAction).toHaveBeenCalledWith(UID, 'aa-a', { actor: 'system', action: 'pause', reason: 'negative transfer' });
+  });
+
+  it('rejects malformed ability asset governance payloads before feature calls', async () => {
+    await expect(call('recall.assets.update', { assetId: 'aa-a', statement: 'x', reason: '' })).resolves.toMatchObject({ ok: false });
+    await expect(call('recall.assets.resume', { assetId: '../bad', note: 'x' })).resolves.toMatchObject({ ok: false });
+    await expect(call('recall.assets.recommend', { assetId: 'aa-a', action: 'delete', reason: 'x' })).resolves.toMatchObject({ ok: false });
+    expect(assetMock.updateAbilityAsset).not.toHaveBeenCalled();
+    expect(assetMock.resumeAbilityAsset).not.toHaveBeenCalled();
+    expect(assetMock.recommendAbilityAssetAction).not.toHaveBeenCalled();
   });
 
   it('rejects invalid ids, enums, oversized text, and missing source refs before feature calls', async () => {
@@ -148,8 +204,34 @@ describe('ipc › recall candidate governance', () => {
     expect(teachingMock.revokeUserTeachingSignal).toHaveBeenCalledWith(UID, 'teach-a');
   });
 
+
+
+  it('routes next-task reuse suggestions through the commander projection bridge', async () => {
+    await expect(call('recall.projections.previewAndPostForNextTask', {
+      cid: 'conv-a',
+      workspaceId: 'workspace-a',
+      purpose: 'conversation_task',
+      taskText: 'Next review task',
+      authorization: 'user_confirmed',
+    })).resolves.toMatchObject({ ok: true, taskRunId: 'rt-next', msg: { id: 'msg-commander' } });
+
+    expect(projectionMessageMock.previewAndPostProjectionCardForNextTask).toHaveBeenCalledWith(UID, expect.objectContaining({
+      cid: 'conv-a',
+      workspaceId: 'workspace-a',
+      purpose: 'conversation_task',
+      taskText: 'Next review task',
+      authorization: 'user_confirmed',
+    }), expect.objectContaining({ send: expect.any(Function) }));
+    expect(groupChatMock.sendCommanderMessage).toHaveBeenCalledWith(expect.objectContaining({
+      userId: UID,
+      cid: 'conv-a',
+      text: 'Found 1 reusable ability asset for conversation_task; omitted 0.',
+      recall_projection_card: { projectionId: 'proj-next' },
+    }));
+  });
+
   it('rejects malformed source and capture inputs before feature calls', async () => {
-    await expect(call('recall.sources.list', { kinds: ['p3394_patch'] }))
+    await expect(call('recall.sources.list', { kinds: ['legacy_patch'] }))
       .resolves.toMatchObject({ ok: false });
     await expect(call('recall.sources.list', { conversationId: '../bad' }))
       .resolves.toMatchObject({ ok: false });

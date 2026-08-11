@@ -110,7 +110,7 @@ describe('P3394 KSTAR Notion sync', () => {
     };
     const statePath = path.join(root, uid, 'local', 'p3394', 'kstar-state.json');
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
-    fs.writeFileSync(statePath, JSON.stringify({ version: 1, runs: [run], experience_candidates: [candidate], patch_candidates: [], updated_at: '2026-07-24T00:00:00.000Z' }, null, 2));
+    fs.writeFileSync(statePath, JSON.stringify({ version: 1, runs: [run], experience_candidates: [candidate], updated_at: '2026-07-24T00:00:00.000Z' }, null, 2));
     const promoted = await kb.promoteExperienceCandidateToKnowledgeBase(uid, candidate.id);
     if (!promoted.ok) throw new Error(promoted.error);
     return candidate.id;
