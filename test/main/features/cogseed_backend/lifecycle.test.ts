@@ -25,7 +25,7 @@ async function createTask() {
   return tasks.createMateTask(USER, { requestId: 'req-lifecycle', task: 'Run lifecycle.' });
 }
 
-describe('Mate task lifecycle', () => {
+describe('CogSeed task lifecycle', () => {
   it('allows only legal state transitions and appends matching lifecycle events', async () => {
     const created = (await createTask()).task;
     const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');

@@ -20,8 +20,8 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-describe('Mate worker recovery', () => {
-  it('marks queued/running Mate tasks recoverable without replaying their original prompts', async () => {
+describe('CogSeed worker recovery', () => {
+  it('marks queued/running CogSeed tasks recoverable without replaying their original prompts', async () => {
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
     const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
     const recovery = await import('../../../../src/main/features/cogseed_backend/recovery');

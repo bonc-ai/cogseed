@@ -62,12 +62,12 @@ export interface MateSessionRecord {
   ownerId: string;
   createdAt: string;
   updatedAt: string;
-  /** Canonical Mate session classification. Legacy records are hydrated as generic/commander. */
+  /** Canonical CogSeed session classification. Legacy records are hydrated as generic/commander. */
   sessionKind: MateSessionKind;
   actorRole: MateActorRole;
   actorId?: string;
   conversationId?: string;
-  /** Public Orkas-compatible id, retained only as an alias; storage remains Mate-owned. */
+  /** Public Orkas-compatible id, retained only as an alias; storage remains CogSeed-owned. */
   compatibilitySessionId?: string;
   commanderSessionId?: string;
   displayName?: string;

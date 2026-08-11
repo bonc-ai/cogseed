@@ -33,19 +33,19 @@ function fakeVectorStore() {
   };
 }
 
-describe('Mate-owned KB adapter', () => {
-  it('indexes and searches Mate sources under Mate-only cloud/local paths', async () => {
+describe('CogSeed-owned KB adapter', () => {
+  it('indexes and searches CogSeed sources under CogSeed-only cloud/local paths', async () => {
     const kb = await import('../../../../src/main/features/cogseed_backend/mate-kb-store');
     const paths = await import('../../../../src/main/features/cogseed_backend/paths');
     const vector = fakeVectorStore();
     const vectors = new Map<string, ReturnType<typeof fakeVectorStore>>();
     const manager = kb.createMateKbManager({ vectorStoreFactory: (uid) => { const existing = vectors.get(uid); if (existing) return existing; const created = uid === USER_A ? vector : fakeVectorStore(); vectors.set(uid, created); return created; } });
 
-    const source = await manager.indexText(USER_A, { sourceId: 'mate-source-notes', title: 'Notes', content: 'Mate-only connector notes' });
-    expect(source).toMatchObject({ sourceId: 'mate-source-notes', title: 'Notes', bytes: 25 });
+    const source = await manager.indexText(USER_A, { sourceId: 'mate-source-notes', title: 'Notes', content: 'CogSeed-only connector notes' });
+    expect(source).toMatchObject({ sourceId: 'mate-source-notes', title: 'Notes', bytes: Buffer.byteLength('CogSeed-only connector notes', 'utf8') });
     expect(paths.mateKbSourceFile(USER_A, source.sourceId)).toContain(`${path.sep}cloud${path.sep}mate_agent${path.sep}kb${path.sep}`);
     expect(paths.mateKbVectorDir(USER_A)).toContain(`${path.sep}local${path.sep}mate_agent${path.sep}kb${path.sep}`);
-    await expect(manager.search(USER_A, 'connector')).resolves.toEqual([expect.objectContaining({ rel_path: 'mate-source-notes', content: 'Mate-only connector notes' })]);
+    await expect(manager.search(USER_A, 'connector')).resolves.toEqual([expect.objectContaining({ rel_path: 'mate-source-notes', content: 'CogSeed-only connector notes' })]);
     await expect(manager.search(USER_B, 'connector')).resolves.toEqual([]);
   });
 

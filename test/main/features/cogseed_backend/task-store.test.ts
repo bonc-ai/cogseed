@@ -29,8 +29,8 @@ async function backendPaths() {
   return import('../../../../src/main/features/cogseed_backend/paths');
 }
 
-describe('Mate Agent task and session store', () => {
-  it('creates a Mate-owned cloud task/session mapping and reads it from the owner root', async () => {
+describe('CogSeed task and session store', () => {
+  it('creates a CogSeed-owned cloud task/session mapping and reads it from the owner root', async () => {
     const store = await backend();
     const paths = await backendPaths();
 
@@ -86,7 +86,7 @@ describe('Mate Agent task and session store', () => {
     expect(() => paths.mateTaskFile('../escape', 'mate-task-a')).toThrow(/user/i);
     expect(() => paths.mateTaskFile(USER_A, '../escape')).toThrow(/task/i);
   });
-  it('lists only Mate sessions in the owner scope in stable order', async () => {
+  it('lists only CogSeed sessions in the owner scope in stable order', async () => {
     const store = await backend();
     const first = await store.getOrCreateMateSession(USER_A);
     const second = await store.getOrCreateMateSession(USER_A);

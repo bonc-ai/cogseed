@@ -50,7 +50,7 @@ function runtimeFrom(events: RuntimeEventEnvelope[]): MateAgentRuntimeFacade & {
   } as MateAgentRuntimeFacade & { inputs: unknown[] };
 }
 
-describe('Mate Runtime controller', () => {
+describe('CogSeed Runtime controller', () => {
   it('returns a running task immediately, consumes Runtime events in the background, and never re-runs a duplicate request', async () => {
     const runtime = runtimeFrom([
       { type: 'event', request_id: 'req-controller', runtime_session_id: 'mruntime-controller', status: 'started' },
@@ -119,7 +119,7 @@ describe('Mate Runtime controller', () => {
       ]));
     });
   });
-  it('schedules an explicit retry as a new Mate task after a worker failure', async () => {
+  it('schedules an explicit retry as a new CogSeed task after a worker failure', async () => {
     let runs = 0;
     const runtime: MateAgentRuntimeFacade & { inputs: unknown[] } = {
       inputs: [],
@@ -145,7 +145,7 @@ describe('Mate Runtime controller', () => {
     expect(runtime.inputs[1]).toMatchObject({ task: 'Run once.' });
   });
 
-  it('resumes a recoverable task only with an explicit continuation and keeps the Mate runtime session', async () => {
+  it('resumes a recoverable task only with an explicit continuation and keeps the CogSeed runtime session', async () => {
     let runs = 0;
     const runtime: MateAgentRuntimeFacade & { inputs: unknown[] } = {
       inputs: [],
@@ -178,7 +178,7 @@ describe('Mate Runtime controller', () => {
     expect((runtime.inputs[1] as { task: string }).task).not.toContain('Original prompt');
   });
 
-  it('reports independent Mate runtime status and can restart its worker service', async () => {
+  it('reports independent CogSeed runtime status and can restart its worker service', async () => {
     const shutdown = vi.fn(async () => undefined);
     const runtime = runtimeFrom([]);
     runtime.shutdown = shutdown;

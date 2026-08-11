@@ -31,7 +31,7 @@ function safeProviderMessage(value: string, apiKey: string): string {
 function providerHttpError(status: number, body: string, apiKey: string): Error {
   const detail = safeProviderMessage(body, apiKey);
   const error = Object.assign(
-    new Error(detail ? `Mate model provider request failed (${status}): ${detail}` : `Mate model provider request failed (${status})`),
+    new Error(detail ? `CogSeed model provider request failed (${status}): ${detail}` : `CogSeed model provider request failed (${status})`),
     { status },
   );
   return error;
@@ -83,15 +83,15 @@ function mergeToolCalls(delta: Record<string, unknown>, pending: Map<number, Pen
 function finalizeToolCalls(pending: Map<number, PendingToolCall>): RuntimeModelProviderChunk[] {
   const calls: RuntimeModelProviderChunk[] = [];
   for (const [, value] of [...pending.entries()].sort(([a], [b]) => a - b)) {
-    if (!value.id || !value.name) throw new Error('Mate model provider returned incomplete tool call');
+    if (!value.id || !value.name) throw new Error('CogSeed model provider returned incomplete tool call');
     let parsed: unknown;
     try {
       parsed = JSON.parse(value.argumentsText || '{}') as unknown;
     } catch {
-      throw new Error('Mate model provider returned invalid tool arguments');
+      throw new Error('CogSeed model provider returned invalid tool arguments');
     }
     const argumentsRecord = asRecord(parsed);
-    if (!argumentsRecord) throw new Error('Mate model provider returned invalid tool arguments');
+    if (!argumentsRecord) throw new Error('CogSeed model provider returned invalid tool arguments');
     const call: RuntimeModelToolCall = { id: value.id, name: value.name, arguments: argumentsRecord };
     calls.push({ type: 'tool_call', call });
   }
@@ -173,7 +173,7 @@ export function createMateOpenAICompatibleProvider(
     if (!response.ok) {
       throw providerHttpError(response.status, await response.text().catch(() => ''), profile.apiKey);
     }
-    if (!response.body) throw new Error('Mate model provider returned an empty stream');
+    if (!response.body) throw new Error('CogSeed model provider returned an empty stream');
 
     const pendingToolCalls = new Map<number, PendingToolCall>();
     for await (const frame of sseDataFrames(response.body)) {
@@ -182,9 +182,9 @@ export function createMateOpenAICompatibleProvider(
       try {
         payloadRecord = asRecord(JSON.parse(frame));
       } catch {
-        throw new Error('Mate model provider returned malformed SSE JSON');
+        throw new Error('CogSeed model provider returned malformed SSE JSON');
       }
-      if (!payloadRecord) throw new Error('Mate model provider returned malformed SSE JSON');
+      if (!payloadRecord) throw new Error('CogSeed model provider returned malformed SSE JSON');
 
       const usage = usageChunk(payloadRecord.usage);
       if (usage) yield usage;

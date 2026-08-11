@@ -4,13 +4,13 @@
  * Holds the pre-migration `kstar-state.json` read/write helpers that manage
  * KStarCompatRun / CompatExperienceCandidate / CompatPatchCandidate records. This module never
  * computes delta_a, delta_r, or route_recommendation locally — those values
- * are Engine-owned and only read here when already present on an
- * Engine-produced payload (e.g. `createPatchCandidateFromEngineRun` reads
+ * are backend-owned and only read here when already present on an
+ * backend-produced payload (e.g. `createPatchCandidateFromEngineRun` reads
  * `engine.route_recommendation.action`, it does not derive it).
  *
  * `the deleted legacy PC KSTAR runtime` and `the deleted legacy PC KSTAR engine` (the old local fact model that DID
  * compute delta_a/delta_r) have been deleted. Any new evidence recording must
- * go through `kstar-adapter.ts` / `kstar-bus-integration.ts` instead of this
+ * go through `kstar-bus-integration.ts` instead of this
  * file.
  */
 
@@ -40,7 +40,7 @@ interface KStarLegacyState {
    * or computes them, but preserves them byte-for-byte on every write so
    * that kstar-migration.ts can still migrate/archive the full legacy
    * record later. Do not add typed accessors for these here — evidence
-   * recording now goes through kstar-adapter.ts / kstar-bus-integration.ts.
+   * recording now goes through kstar-bus-integration.ts.
    */
   [passthroughKey: string]: unknown;
 }

@@ -37,10 +37,10 @@ export async function transitionMateTask(
   assertMateUserId(userId);
   assertMateTaskId(taskId);
   const current = await readMateTask(userId, taskId);
-  if (!current) throw new Error('Mate task not found');
+  if (!current) throw new Error('CogSeed task not found');
   if (current.status === nextStatus) return current;
   if (isTerminal(current.status) || !TRANSITIONS[current.status].includes(nextStatus)) {
-    throw new Error(`invalid Mate task transition ${current.status} -> ${nextStatus}`);
+    throw new Error(`invalid CogSeed task transition ${current.status} -> ${nextStatus}`);
   }
   const updated = await updateMateTask(userId, taskId, (task) => ({
     ...task,
@@ -58,9 +58,9 @@ export async function markMateTaskRecoverable(userId: string, taskId: string, er
 
 export async function retryMateTask(userId: string, taskId: string, requestId: string): Promise<MateTaskRecord> {
   const previous = await readMateTask(userId, taskId);
-  if (!previous) throw new Error('Mate task not found');
+  if (!previous) throw new Error('CogSeed task not found');
   if (previous.status !== 'recoverable' && previous.status !== 'failed') {
-    throw new Error('Mate task is not retryable');
+    throw new Error('CogSeed task is not retryable');
   }
   return (await createMateTask(userId, {
     requestId,

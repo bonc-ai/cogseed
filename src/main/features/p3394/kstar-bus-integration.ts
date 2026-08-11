@@ -1,30 +1,22 @@
 /**
- * kstar-bus-integration.ts — Bus-to-Adapter evidence bridge
+ * kstar-bus-integration.ts — CogSeed backend-native KSTAR evidence bridge
  *
- * Routes Bus evidence recording through the KSTAR adapter instead of direct
- * legacy PC KSTAR runtime calls. Preserves existing Bus call signatures while adding
- * adapter-based recording with deduplication and degraded-mode fallback.
- *
- * Integration points:
- * - maybeRecordKStarCompatToolCycle → recordToolCycleEvidence
- * - recordAgentRunEvidence → recordAgentRunStartEvidence
- * - recordAgentContribution → recordAgentContributionEvidence
- *
- * The adapter handles:
- * - Stable ID deduplication (prevents duplicate evidence on retry)
- * - Degraded mode (appends to pending log when Engine unavailable)
- * - CAS transactions for snapshot consistency
+ * Group Chat keeps emitting collaboration evidence from the message/event bus,
+ * but evidence capture is no longer routed through a standalone Meta Skill
+ * Engine adapter. This module is a local backend sink: it writes stable,
+ * idempotent evidence records to the user-scoped KSTAR journal and returns the
+ * CogSeed backend boundary to callers.
  */
 
-import { createLogger } from '../../logger';
-import { genId12, nowIso } from '../../storage';
-import { getKstarAdapter } from './kstar-factory';
-import { appendPendingEvidence, getPendingEvidencePath } from './kstar-store';
 import * as fs from 'node:fs/promises';
+import { createLogger } from '../../logger';
+import { nowIso } from '../../storage';
+import { getPendingEvidencePath } from './kstar-store';
 import type { KStarDecisionRecord } from './kstar-compat';
 import type { ExecutionBoundaryInfo } from './execution-boundary';
 
 const log = createLogger('p3394.kstar-bus-integration');
+const COGSEED_BOUNDARY: ExecutionBoundaryInfo = { mode: 'real', provider: 'cogseed-backend' };
 
 export interface ToolCycleEvidenceInput {
   userId: string;
@@ -60,56 +52,80 @@ export interface AgentContributionEvidenceInput {
   actualAction: string;
 }
 
-async function appendPendingAdapterEvidence(
-  userId: string,
-  evidence: Record<string, unknown>,
-): Promise<{ success: false; degraded: true; boundary: ExecutionBoundaryInfo }> {
-  try {
-    await appendPendingEvidence(userId, { ...evidence, boundary: { mode: 'degraded', provider: 'meta-skill-engine-mcp', reason: 'engine_unavailable_pending_evidence' } });
-  } catch (err) {
-    log.warn('failed to append pending kstar evidence', {
-      userId,
-      evidenceId: evidence.id,
-      error: (err as Error).message,
-    });
-  }
-  return { success: false, degraded: true, boundary: { mode: 'degraded', provider: 'meta-skill-engine-mcp', reason: 'engine_unavailable_pending_evidence' } };
-}
+export type KstarEvidenceResult = {
+  success: boolean;
+  deduplicated?: boolean;
+  runId?: string;
+  boundary: ExecutionBoundaryInfo;
+};
 
-async function hasPendingContributionEvidence(
-  userId: string,
-  conversationId: string,
-): Promise<boolean> {
+async function readEvidenceRows(userId: string): Promise<Array<Record<string, unknown>>> {
   try {
     const content = await fs.readFile(getPendingEvidencePath(userId), 'utf8');
     return content
       .split('\n')
       .filter((line) => line.trim())
-      .some((line) => {
-        try {
-          const record = JSON.parse(line) as Record<string, unknown>;
-          return record.conversation_id === conversationId &&
-            record.type === 'conversation_message' &&
-            !!(record.kstar_decision as { required?: unknown } | undefined)?.required;
-        } catch {
-          return false;
-        }
-      });
+      .map((line) => {
+        try { return JSON.parse(line) as Record<string, unknown>; }
+        catch { return null; }
+      })
+      .filter((row): row is Record<string, unknown> => !!row);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw err;
   }
 }
 
-/**
- * Record tool cycle evidence through the adapter.
- * Replaces recordKStarCompatToolCycle from legacy PC KSTAR runtime.
- */
+async function writeEvidenceRows(userId: string, rows: Array<Record<string, unknown>>): Promise<void> {
+  const logPath = getPendingEvidencePath(userId);
+  await fs.mkdir(logPath.replace(/[/\\][^/\\]+$/, ''), { recursive: true });
+  const tmpPath = `${logPath}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    await fs.writeFile(tmpPath, rows.map((row) => JSON.stringify(row)).join('\n') + '\n', 'utf8');
+    await fs.rename(tmpPath, logPath);
+  } catch (err) {
+    await fs.rm(tmpPath, { force: true }).catch(() => {});
+    throw err;
+  }
+}
+
+async function recordBackendEvidence(
+  userId: string,
+  evidence: Record<string, unknown>,
+): Promise<KstarEvidenceResult> {
+  const id = typeof evidence.id === 'string' ? evidence.id : '';
+  const row = { ...evidence, boundary: COGSEED_BOUNDARY };
+  try {
+    const existing = await readEvidenceRows(userId);
+    if (id && existing.some((item) => item.id === id)) {
+      return { success: true, deduplicated: true, boundary: COGSEED_BOUNDARY };
+    }
+    await writeEvidenceRows(userId, [...existing, row]);
+    return { success: true, boundary: COGSEED_BOUNDARY };
+  } catch (err) {
+    log.warn('failed to record CogSeed KSTAR evidence', {
+      userId,
+      evidenceId: id || evidence.type,
+      error: (err as Error).message,
+    });
+    return { success: false, boundary: { ...COGSEED_BOUNDARY, mode: 'degraded', reason: 'evidence_journal_unavailable' } };
+  }
+}
+
+async function hasContributionEvidence(
+  userId: string,
+  conversationId: string,
+): Promise<boolean> {
+  const rows = await readEvidenceRows(userId);
+  return rows.some((record) => record.conversation_id === conversationId && record.type === 'conversation_message');
+}
+
+/** Record tool cycle evidence in the CogSeed backend evidence journal. */
 export async function recordToolCycleEvidence(
   input: ToolCycleEvidenceInput,
-): Promise<{ success: boolean; degraded?: boolean; boundary?: ExecutionBoundaryInfo }> {
+): Promise<KstarEvidenceResult> {
   const evidenceId = `tool-${input.conversationId}-${input.agentId}-${input.turnId}-${input.toolCallId}`;
-  const evidence = {
+  return recordBackendEvidence(input.userId, {
     id: evidenceId,
     type: 'tool_cycle',
     conversation_id: input.conversationId,
@@ -126,31 +142,15 @@ export async function recordToolCycleEvidence(
     verifier_method: input.isError ? 'error_signal' : 'generic_signal',
     duration_ms: input.durationMs,
     created_at: nowIso(),
-  };
-
-  const adapter = await getKstarAdapter(input.userId);
-  if (!adapter) {
-    log.warn('adapter unavailable for tool cycle', {
-      userId: input.userId,
-      conversationId: input.conversationId,
-      agentId: input.agentId,
-    });
-    return appendPendingAdapterEvidence(input.userId, evidence);
-  }
-
-  const result = await adapter.recordEvidence(evidence);
-  return result.success ? result : appendPendingAdapterEvidence(input.userId, evidence);
+  });
 }
 
-/**
- * Record agent run start evidence through the adapter.
- * Replaces recordAgentRunEvidence from legacy PC KSTAR runtime.
- */
+/** Record agent run start evidence in the CogSeed backend evidence journal. */
 export async function recordAgentRunStartEvidence(
   input: AgentRunStartEvidenceInput,
-): Promise<{ success: boolean; degraded?: boolean; boundary?: ExecutionBoundaryInfo }> {
+): Promise<KstarEvidenceResult> {
   const evidenceId = `run-start-${input.conversationId}-${input.agentId}-${input.turnId}`;
-  const evidence = {
+  return recordBackendEvidence(input.userId, {
     id: evidenceId,
     type: 'agent_run_result',
     conversation_id: input.conversationId,
@@ -159,31 +159,15 @@ export async function recordAgentRunStartEvidence(
     phase: 'start',
     ...input.data,
     created_at: nowIso(),
-  };
-
-  const adapter = await getKstarAdapter(input.userId);
-  if (!adapter) {
-    log.warn('adapter unavailable for agent run start', {
-      userId: input.userId,
-      conversationId: input.conversationId,
-      agentId: input.agentId,
-    });
-    return appendPendingAdapterEvidence(input.userId, evidence);
-  }
-
-  const result = await adapter.recordEvidence(evidence);
-  return result.success ? result : appendPendingAdapterEvidence(input.userId, evidence);
+  });
 }
 
-/**
- * Record agent contribution evidence through the adapter.
- * Replaces recordAgentContribution from legacy PC KSTAR runtime.
- */
+/** Record agent contribution evidence in the CogSeed backend evidence journal. */
 export async function recordAgentContributionEvidence(
   input: AgentContributionEvidenceInput,
-): Promise<{ success: boolean; degraded?: boolean; boundary?: ExecutionBoundaryInfo }> {
+): Promise<KstarEvidenceResult> {
   const evidenceId = `contribution-${input.conversationId}-${input.agentId}-${input.turnId}-${input.messageId}`;
-  const evidence = {
+  return recordBackendEvidence(input.userId, {
     id: evidenceId,
     type: 'conversation_message',
     conversation_id: input.conversationId,
@@ -195,26 +179,10 @@ export async function recordAgentContributionEvidence(
     outcome_status: input.outcomeStatus,
     actual_action: input.actualAction,
     created_at: nowIso(),
-  };
-
-  const adapter = await getKstarAdapter(input.userId);
-  if (!adapter) {
-    log.warn('adapter unavailable for agent contribution', {
-      userId: input.userId,
-      conversationId: input.conversationId,
-      agentId: input.agentId,
-    });
-    return appendPendingAdapterEvidence(input.userId, evidence);
-  }
-
-  const result = await adapter.recordEvidence(evidence);
-  return result.success ? result : appendPendingAdapterEvidence(input.userId, evidence);
+  });
 }
 
-/**
- * Close collaboration and finalize KSTAR run through the adapter.
- * Replaces finalizeCommanderCollaboration from legacy PC KSTAR runtime.
- */
+/** Close collaboration evidence without spawning a standalone Engine adapter. */
 export async function closeCollaborationEvidence(
   userId: string,
   input: {
@@ -222,34 +190,19 @@ export async function closeCollaborationEvidence(
     commanderId?: string;
     outcomeStatus: 'completed' | 'failed' | 'cancelled';
   },
-): Promise<{ success: boolean; runId?: string; degraded?: boolean; boundary?: ExecutionBoundaryInfo }> {
+): Promise<KstarEvidenceResult> {
   const commanderId = input.commanderId || 'commander';
-  const runId = `collab-${input.conversationId}-${commanderId}-${Date.now()}`;
-  const evidence = {
+  const runId = `collab-${input.conversationId}-${commanderId}`;
+  if (!(await hasContributionEvidence(userId, input.conversationId))) {
+    return { success: true, runId, deduplicated: true, boundary: COGSEED_BOUNDARY };
+  }
+  const result = await recordBackendEvidence(userId, {
     id: runId,
     type: 'collaboration_close',
     conversation_id: input.conversationId,
     commander_id: commanderId,
     outcome_status: input.outcomeStatus,
     created_at: nowIso(),
-  };
-
-  const adapter = await getKstarAdapter(userId);
-  if (!adapter) {
-    log.warn('adapter unavailable for close collaboration', {
-      userId,
-      conversationId: input.conversationId,
-    });
-    if (await hasPendingContributionEvidence(userId, input.conversationId)) {
-      await appendPendingAdapterEvidence(userId, evidence);
-    }
-    return { success: false, degraded: true, boundary: { mode: 'degraded', provider: 'meta-skill-engine-mcp', reason: 'engine_unavailable' } };
-  }
-
-  const result = await adapter.recordEvidence(evidence);
-  if (!result.success) {
-    await appendPendingAdapterEvidence(userId, evidence);
-    return { success: false, degraded: true, boundary: result.boundary };
-  }
-  return { success: true, runId, boundary: result.boundary };
+  });
+  return { ...result, runId };
 }

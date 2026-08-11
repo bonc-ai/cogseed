@@ -49,7 +49,7 @@ afterEach(() => {
   fs.rmSync(paths.userRoot(UID), { recursive: true, force: true });
 });
 
-describe('Mate Agent Runtime tool runtime MVP', () => {
+describe('CogSeed Runtime tool runtime MVP', () => {
   it('has a fixed file catalog without group/chat tools', () => {
     expect(getRuntimeToolCatalog().map((tool) => tool.name)).toEqual([
       'stat_file',

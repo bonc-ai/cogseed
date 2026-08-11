@@ -43,9 +43,9 @@ export async function recordMateTaskRunForRecall(userId: string, taskId: string)
   assertMateUserId(userId);
   assertMateTaskId(taskId);
   const task = await readMateTask(userId, taskId);
-  if (!task) throw new Error('Mate task not found');
+  if (!task) throw new Error('CogSeed task not found');
   const status = terminalStatus(task.status);
-  if (!status) throw new Error('Mate task is not terminal for Recall recording');
+  if (!status) throw new Error('CogSeed task is not terminal for Recall recording');
   const executionId = task.executionId || mateExecutionId(task.taskId);
 
   const existing = await readExistingFact(userId, task, executionId);

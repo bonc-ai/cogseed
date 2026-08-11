@@ -24,7 +24,7 @@ function importSpecifiers(source: string): string[] {
   return out;
 }
 
-describe('Mate Agent complete backend separation boundary', () => {
+describe('CogSeed complete backend separation boundary', () => {
   it('does not import Orkas Agent backend, Core runtime, shared execution-records, or Group Chat', () => {
     const banned = [
       'features/execution-records',
@@ -53,14 +53,14 @@ describe('Mate Agent complete backend separation boundary', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('keeps Mate task, execution, session, and worker state paths under mate_agent', () => {
+  it('keeps CogSeed task, execution, session, and worker state paths under mate_agent', () => {
     const paths = fs.readFileSync(path.resolve(process.cwd(), 'src/main/paths.ts'), 'utf8');
     expect(paths).toContain("path.join(userCloudRoot(uid), 'mate_agent')");
     expect(paths).toContain("path.join(userLocalRoot(uid), 'mate_agent')");
     expect(paths).toContain('mateAgentExecutionRecordsDir');
   });
 
-  it('does not expose a LegacyOrkasBackend or fallback selector in Mate production files', () => {
+  it('does not expose a LegacyOrkasBackend or fallback selector in CogSeed production files', () => {
     const source = roots.flatMap(tsFiles).map((file) => fs.readFileSync(file, 'utf8')).join('\n');
     expect(source).not.toMatch(/LegacyOrkasBackend|native\s*\|\s*core\s*\|\s*shadow/);
   });

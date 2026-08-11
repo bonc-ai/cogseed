@@ -44,8 +44,7 @@
     "audit:workspace": "node scripts/audit-local-workspace.mjs",
     "package:dev:mac": "node scripts/package-dev-mac.cjs",
     "verify:package:dev:mac": "node scripts/verify-packaged-dev.cjs",
-    "audit:branch": "node scripts/audit-branch-diff.mjs",
-    "smoke:p3394": "node scripts/smoke-p3394-real-execution.mjs"
+    "audit:branch": "node scripts/audit-branch-diff.mjs"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",

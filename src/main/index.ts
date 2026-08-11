@@ -1261,21 +1261,14 @@ if (!gotLock) {
       if (uid) await recoverRecallCaptures(uid);
     }, 'parallel', BOOT_HEAVY_DISK_DELAY_MS, { resourceClass: 'disk', preferIdle: true });
 
-    // p3394 KSTAR boot health check: degraded-schema detection + pending
-    // evidence replay. Runs after the heavy-disk cohort so the KB and
-    // marketplace walks get priority; Engine adapter acquisition here is a
-    // best-effort attempt — any failure is swallowed and the log stays
-    // intact for the next successful boot.
+    // p3394 KSTAR boot health check: degraded-schema detection only.
+    // Evidence is captured by the CogSeed backend; startup must not spawn or
+    // acquire a standalone Engine adapter.
     registerDeferred('p3394:kstar-health', async () => {
       const uid = users.getActiveUserId();
       if (!uid) return;
       const { runKstarBootRecovery } = await import('./features/p3394/kstar-recovery');
-      const { getKstarAdapter } = await import('./features/p3394/kstar-factory');
-      await runKstarBootRecovery(uid, async () => {
-        const adapter = await getKstarAdapter(uid);
-        if (!adapter?.isAvailable()) return null;
-        return (evidence) => adapter.recordEvidence(evidence as Parameters<typeof adapter.recordEvidence>[0]);
-      });
+      await runKstarBootRecovery(uid);
     }, 'parallel', BOOT_HEAVY_DISK_DELAY_MS, { resourceClass: 'disk', preferIdle: true });
 
     // Drive the immediate batch + schedule the deferred one.

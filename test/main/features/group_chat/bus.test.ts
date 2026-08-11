@@ -675,9 +675,9 @@ describe('group_chat bus › enqueue routing + persistence', () => {
   it('P3394 approval resumes the original intent through the existing enqueue runtime', async () => {
     process.env.ORKAS_P3394_WAKE_GATE = '1';
     const bus = await import('../../../../src/main/features/group_chat/bus');
-    const state = await import('../../../../src/main/features/group_chat/state');
     const wake = await import('../../../../src/main/features/p3394/wake-service');
     const controller = await import('../../../../src/main/features/p3394/wake-controller');
+    const mateTasks = await import('../../../../src/main/features/cogseed_backend/task-store');
 
     const deferred = await bus.enqueue({
       uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
@@ -693,9 +693,10 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(result.ok).toBe(true);
     await waitForQuiescent(TEST_UID, TEST_CID);
 
-    const members = await state.readMembers(TEST_UID, TEST_CID);
-    expect(members.actors.some((actor) => actor.id === AGENT_ID)).toBe(true);
-    expect(streamProbe.messages.some((text) => text.includes('完成审批后的任务'))).toBe(true);
+    const tasks = await mateTasks.listMateTasks(TEST_UID);
+    expect(tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ task: expect.stringContaining('完成审批后的任务'), profileId: AGENT_ID }),
+    ]));
     const requests = await wake.listWakeRequests(TEST_UID, TEST_CID);
     expect(requests[0].status).toBe('executed');
   });

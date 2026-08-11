@@ -174,16 +174,16 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
 
     async resumeMateTask(userId, taskId, input) {
       const current = await readMateTask(userId, taskId);
-      if (!current) throw new Error('Mate task not found');
+      if (!current) throw new Error('CogSeed task not found');
       if (current.status === 'completed' || current.status === 'cancelled') return current;
-      if (current.status !== 'recoverable') throw new Error('Mate task is not resumable');
+      if (current.status !== 'recoverable') throw new Error('CogSeed task is not resumable');
       const continuation = input.continuation.trim();
-      if (!continuation) throw new Error('Mate continuation is required');
+      if (!continuation) throw new Error('CogSeed continuation is required');
       if (resumeClaims.has(taskId)) return current;
       resumeClaims.add(taskId);
       try {
         const reserved = await updateMateTask(userId, taskId, (task) => {
-          if (task.status !== 'recoverable') throw new Error('Mate task is not resumable');
+          if (task.status !== 'recoverable') throw new Error('CogSeed task is not resumable');
           if (task.lastResumeRequestId === input.requestId) return task;
           return { ...task, lastResumeRequestId: input.requestId };
         });
@@ -205,12 +205,12 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
 
     async cancelMateTask(userId, taskId) {
       const task = await readMateTask(userId, taskId);
-      if (!task) throw new Error('Mate task not found');
+      if (!task) throw new Error('CogSeed task not found');
       if (terminal(task)) return task;
       const cancelled = await transitionMateTask(userId, taskId, 'cancelled', {});
       activeRuns.get(taskId)?.abort();
       try { await options.cancelChildrenForParent?.(userId, taskId); }
-      catch (error) { log.warn('Mate child cancellation cleanup failed', { error: logErrorRef(error) }); }
+      catch (error) { log.warn('CogSeed child cancellation cleanup failed', { error: logErrorRef(error) }); }
       return cancelled;
     },
 

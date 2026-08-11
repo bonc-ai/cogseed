@@ -20,8 +20,8 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-describe('Mate Recall execution bridge', () => {
-  it('records terminal Mate task facts into execution records without prompts or task mutation', async () => {
+describe('CogSeed Recall execution bridge', () => {
+  it('records terminal CogSeed task facts into execution records without prompts or task mutation', async () => {
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
     const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
     const bridge = await import('../../../../src/main/features/cogseed_backend/recall-bridge');

@@ -16,6 +16,64 @@ vi.mock("../../../../src/main/logger", () => ({
   createLogger: () => loggerMocks,
 }));
 
+// Production wake dispatch is CogSeed-backend-only. This test double preserves
+// the bus assertions while exercising the same entry/event contract.
+vi.mock("../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher", () => ({
+  mateWakeDispatcher: {
+    dispatch: async (uid: string, request: any, context: any) => {
+      const bus = await import("../../../../src/main/features/group_chat/bus");
+      const state = await import("../../../../src/main/features/group_chat/state");
+      const fromActorId = request.source === "user_mention" || request.source === "ui_select" ? state.USER_ID : state.COMMANDER_ID;
+      if (fromActorId === state.COMMANDER_ID && request.kstar_decision?.required) {
+        const exp = request.kstar_decision.expectation || {};
+        await bus.enqueue({
+          uid,
+          cid: request.conversation_id,
+          fromActorId: state.COMMANDER_ID,
+          forceTo: [state.USER_ID],
+          text: `授权已确认。\nS：${exp.situation || request.objective}\n任务：${exp.task || request.objective}\n执行计划：${exp.action_hat || request.dispatch_payload.text}\n预期结果：${exp.result_hat || '获得可复核的任务结果。'}`,
+          kstar_dispatch_narration: { target_agent_id: request.agent_id },
+        });
+      }
+      const admitted = await bus.enqueue({
+        uid,
+        cid: request.conversation_id,
+        fromActorId,
+        text: request.dispatch_payload.text,
+        forceTo: [request.agent_id],
+        ...(request.workflow_step_id ? { workflow_step_id: request.workflow_step_id } : {}),
+        ...(request.kstar_decision?.required ? { kstarDecision: request.kstar_decision } : {}),
+        ...(request.kstar_decision?.required && request.asset_confirmation_snapshot ? {
+          kstarTerminalProvenance: {
+            logicalRunId: request.asset_confirmation_snapshot.task_run_id,
+            executionId: request.id,
+            projectionId: request.asset_confirmation_snapshot.projection_id,
+            wakeRequestId: request.id,
+          },
+        } : {}),
+      });
+      if (!Array.isArray(admitted.to) || !admitted.to.includes(request.agent_id)) {
+        throw new Error("wake enqueue did not admit the target agent");
+      }
+      if (request.source === "hand_off_to" && request.resume_instruction && context?.targetInteractive) {
+        await state.setActiveRecipient(uid, request.conversation_id, request.agent_id);
+      }
+      if (request.source === "dispatch_to" || request.source === "run_worker" || (request.source === "hand_off_to" && request.resume_instruction && context?.targetInteractive)) {
+        await state.setOrchestrationLedger(uid, request.conversation_id, {
+          status: "waiting_for_agent",
+          blocked_on: "agent_handoff",
+          source_tool: request.source,
+          owner_agent_id: request.agent_id,
+          ...(request.agent_name ? { owner_agent_name: request.agent_name } : {}),
+          user_goal: request.objective,
+          handoff_message: request.dispatch_payload.text,
+          resume_instruction: request.resume_instruction || `After ${request.agent_name || request.agent_id} completes, continue the original Commander task.`,
+        });
+      }
+    },
+  },
+}));
+
 /**
  * End-to-end integration tests for the group_chat bus. We mock
  * `streamChatWithModel` with a programmable script keyed by session id,
@@ -3660,7 +3718,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
             name: "bash",
             arguments: {
               command:
-                "npm run test:js -- test/main/features/p3394/kstar-adapter.test.ts",
+                "npm run test:js -- test/main/features/p3394/kstar-bus-integration.test.ts",
             },
           },
         },

@@ -50,7 +50,7 @@ export interface RuntimeRunRequest {
   read_only_roots?: string[];
   writable_roots?: string[];
   /** Trusted capability grants derived by the main process from the persisted
-   *  Mate task/session (never self-declared by the worker or the model). The
+   *  CogSeed task/session (never self-declared by the worker or the model). The
    *  tool runner filters its catalog by these; the host router re-validates
    *  against the persisted session independently. */
   capabilities?: string[];

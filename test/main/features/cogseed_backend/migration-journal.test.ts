@@ -36,7 +36,7 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-describe('Mate historical migration journal', () => {
+describe('CogSeed historical migration journal', () => {
   it('appends phase entries idempotently and replays phase/rollback metadata', async () => {
     const migration = await import('../../../../src/main/features/cogseed_backend/migration-journal');
 

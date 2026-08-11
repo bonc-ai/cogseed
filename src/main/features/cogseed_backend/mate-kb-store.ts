@@ -91,7 +91,7 @@ export function createMateKbManager(options: MateKbManagerOptions = {}) {
 
   async function readRecord(userId: string, sourceId: string): Promise<MateKbSourceRecord> {
     try { return JSON.parse(await fs.readFile(mateKbSourceMetadataFile(userId, sourceId), 'utf8')); }
-    catch (error) { if (isEnoent(error)) throw new Error('Mate KB source not found'); throw error; }
+    catch (error) { if (isEnoent(error)) throw new Error('CogSeed KB source not found'); throw error; }
   }
 
   async function readContent(userId: string, sourceId: string): Promise<string> {
@@ -104,8 +104,8 @@ export function createMateKbManager(options: MateKbManagerOptions = {}) {
       const sourceId = assertMateKbSourceId(input.sourceId);
       const title = String(input.title || '').trim();
       const content = String(input.content || '');
-      if (!title || title.length > 500) throw new Error('invalid Mate KB source title');
-      if (!content || content.length > 5_000_000) throw new Error('invalid Mate KB source content');
+      if (!title || title.length > 500) throw new Error('invalid CogSeed KB source title');
+      if (!content || content.length > 5_000_000) throw new Error('invalid CogSeed KB source content');
       const bytes = Buffer.byteLength(content, 'utf8');
       const sha256 = crypto.createHash('sha256').update(content).digest('hex');
       const now = nowIso();
@@ -122,7 +122,7 @@ export function createMateKbManager(options: MateKbManagerOptions = {}) {
     async search(userId: string, query: string, opts: VecSearchOpts = {}): Promise<VecSearchHit[]> {
       assertMateUserId(userId);
       const text = String(query || '').trim();
-      if (!text || text.length > 2_000) throw new Error('invalid Mate KB query');
+      if (!text || text.length > 2_000) throw new Error('invalid CogSeed KB query');
       return store(userId).searchByQuery(text, { ...opts, k: Math.max(1, Math.min(Math.floor(opts.k || 10), 50)) });
     },
 
@@ -146,7 +146,7 @@ export function createMateKbManager(options: MateKbManagerOptions = {}) {
     async list(userId: string, opts: { scope?: MateKbScope } = {}): Promise<MateKbListRow[]> {
       const scope = opts.scope;
       if (scope) {
-        if (scope.userId !== userId) throw new Error('Mate KB scope belongs to a different user');
+        if (scope.userId !== userId) throw new Error('CogSeed KB scope belongs to a different user');
       }
       const rows = await this.listSources(userId);
       return rows.filter((row) => canAccessKbSource(scope, row.sourceId)).map((row) => ({ scope: 'mate', path: row.sourceId, kind: 'text', status: 'ready', bytes: row.bytes, title: row.title, updatedAt: row.updatedAt }));
@@ -155,7 +155,7 @@ export function createMateKbManager(options: MateKbManagerOptions = {}) {
     async searchCompatible(userId: string, input: { query: string; scope?: MateKbScope; maxChars?: number; k?: number }): Promise<MateKbSearchRow[]> {
       const scope = input.scope;
       if (scope) {
-        if (scope.userId !== userId) throw new Error('Mate KB scope belongs to a different user');
+        if (scope.userId !== userId) throw new Error('CogSeed KB scope belongs to a different user');
       }
       const maxChars = Math.max(1, Math.min(Math.floor(input.maxChars || MAX_KB_RESULT_CHARS), MAX_KB_RESULT_CHARS));
       const hits = await this.search(userId, input.query, { k: input.k });
@@ -167,10 +167,10 @@ export function createMateKbManager(options: MateKbManagerOptions = {}) {
     async readCompatible(userId: string, input: { path: string; chunk?: number; scope?: MateKbScope; maxChars?: number }): Promise<MateKbReadRow> {
       const scope = input.scope;
       if (scope) {
-        if (scope.userId !== userId) throw new Error('Mate KB scope belongs to a different user');
+        if (scope.userId !== userId) throw new Error('CogSeed KB scope belongs to a different user');
       }
       const id = assertMateKbSourceId(input.path);
-      if (!canAccessKbSource(scope, id)) throw new Error('Mate KB source is outside the current capability scope');
+      if (!canAccessKbSource(scope, id)) throw new Error('CogSeed KB source is outside the current capability scope');
       const record = await readRecord(userId, id);
       const content = await readContent(userId, id);
       const totalChunks = chunks(content, Math.max(1, Math.min(Math.floor(input.maxChars || MAX_KB_READ_CHARS), MAX_KB_READ_CHARS)));

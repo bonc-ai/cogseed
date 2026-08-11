@@ -111,7 +111,7 @@ describe('CogSeed Runtime protocol normalization', () => {
     expect(session.code).toBe('E_RUNTIME_TRANSCRIPT_PATH');
   });
 
-  it('rejects local Mate Runtime session transcript paths even when the caller passes a broad root', () => {
+  it('rejects local CogSeed Runtime session transcript paths even when the caller passes a broad root', () => {
     const uid = 'runtime-protocol-local-runtime-transcript';
     const runtimeSessionFile = paths.mateRuntimeSessionFile(uid, 'mruntime-secret');
     fs.mkdirSync(path.dirname(runtimeSessionFile), { recursive: true });

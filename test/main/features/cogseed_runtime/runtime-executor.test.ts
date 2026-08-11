@@ -44,7 +44,7 @@ afterEach(() => {
   fs.rmSync(paths.userRoot(UID), { recursive: true, force: true });
 });
 
-describe('Mate Agent Runtime native executor', () => {
+describe('CogSeed Runtime native executor', () => {
   it('keeps native executor request mapping independent from any Core selection config', async () => {
     const kernelRequest = runtimeKernelRequestFromProtocol(request({
       agent_id: 'agent-a',

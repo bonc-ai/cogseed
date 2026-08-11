@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   isAgentChatDispatchable: vi.fn(),
   isAgentEnabled: vi.fn(),
   setOrchestrationLedger: vi.fn(),
+  cogseedDispatch: vi.fn(),
 }));
 
 vi.mock("../../../../src/main/logger", () => ({
@@ -31,6 +32,9 @@ vi.mock("../../../../src/main/features/p3394/wake-service", () => ({
   rejectWakeRequest: mocks.rejectWakeRequest,
   markWakeRequestExecuted: mocks.markWakeRequestExecuted,
   resetWakeApproval: mocks.resetWakeApproval,
+}));
+vi.mock("../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher", () => ({
+  mateWakeDispatcher: { dispatch: mocks.cogseedDispatch },
 }));
 vi.mock("../../../../src/main/features/group_chat/state", () => ({
   COMMANDER_ID: "commander",
@@ -60,6 +64,8 @@ beforeEach(() => {
   mocks.isAgentChatDispatchable.mockReset();
   mocks.isAgentEnabled.mockReset();
   mocks.setOrchestrationLedger.mockReset();
+  mocks.cogseedDispatch.mockReset();
+  mocks.cogseedDispatch.mockResolvedValue(undefined);
   mocks.getAgentForChatDispatch.mockResolvedValue({ agent_id: "agent-1", interactive: false });
   mocks.getAgentDispatchPolicy.mockImplementation(async (_uid: string, agentId: string) => (
     mocks.getAgentForChatDispatch(_uid, agentId)
@@ -103,7 +109,7 @@ describe("P3394 wake controller workflow binding", () => {
     expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
-  it("approves and enqueues the exact persisted workflow step", async () => {
+  it("approves and dispatches the exact persisted workflow step into CogSeed", async () => {
     const request = {
       id: "wake-1",
       conversation_id: "cid-1",
@@ -142,13 +148,10 @@ describe("P3394 wake controller workflow binding", () => {
       dispatched: true,
       request: { status: "executed" },
     });
-    expect(mocks.enqueue).toHaveBeenCalledWith(
-      expect.objectContaining({
-        uid: "user-1",
-        cid: "cid-1",
-        forceTo: ["agent-1"],
-        workflow_step_id: "wstep-1",
-      }),
+    expect(mocks.cogseedDispatch).toHaveBeenCalledWith(
+      "user-1",
+      expect.objectContaining({ workflow_step_id: "wstep-1", agent_id: "agent-1" }),
+      expect.anything(),
     );
   });
 
@@ -188,16 +191,10 @@ describe("P3394 wake controller workflow binding", () => {
       decision: "approve",
     });
 
-    expect(mocks.setOrchestrationLedger).toHaveBeenCalledWith(
+    expect(mocks.cogseedDispatch).toHaveBeenCalledWith(
       "user-1",
-      "cid-1",
-      expect.objectContaining({
-        status: "waiting_for_agent",
-        blocked_on: "agent_handoff",
-        source_tool: "dispatch_to",
-        owner_agent_id: "agent-1",
-        resume_instruction: expect.stringContaining("continue"),
-      }),
+      expect.objectContaining({ workflow_step_id: "wstep-continue", agent_id: "agent-1" }),
+      expect.anything(),
     );
   });
 
@@ -222,7 +219,7 @@ describe("P3394 wake controller workflow binding", () => {
       request: { ...request, status: "approved" },
       approval: {},
     });
-    mocks.enqueue.mockRejectedValue(new Error("queue closed"));
+    mocks.cogseedDispatch.mockRejectedValue(new Error("runtime closed"));
     mocks.resetWakeApproval.mockResolvedValue({
       ...request,
       status: "pending",
@@ -235,11 +232,11 @@ describe("P3394 wake controller workflow binding", () => {
       decision: "approve",
     });
 
-    expect(result).toMatchObject({ ok: false, error: "queue closed" });
+    expect(result).toMatchObject({ ok: false, error: "runtime closed" });
     expect(mocks.resetWakeApproval).toHaveBeenCalledWith(
       "user-1",
       request.id,
-      expect.stringContaining("queue closed"),
+      expect.stringContaining("runtime closed"),
     );
     expect(mocks.markWakeRequestExecuted).not.toHaveBeenCalled();
   });
@@ -298,7 +295,7 @@ describe("P3394 wake controller workflow binding", () => {
       request: { ...request, status: "approved" },
       approval: {},
     });
-    mocks.enqueue.mockResolvedValue({ to: ["user"] });
+    mocks.cogseedDispatch.mockRejectedValue(new Error("CogSeed wake task did not admit the target agent"));
     mocks.resetWakeApproval.mockResolvedValue({
       ...request,
       status: "pending",
@@ -313,7 +310,7 @@ describe("P3394 wake controller workflow binding", () => {
 
     expect(result).toMatchObject({
       ok: false,
-      error: "wake enqueue did not admit the target agent",
+      error: "CogSeed wake task did not admit the target agent",
     });
     expect(mocks.resetWakeApproval).toHaveBeenCalled();
     expect(mocks.markWakeRequestExecuted).not.toHaveBeenCalled();

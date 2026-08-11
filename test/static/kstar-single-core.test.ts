@@ -43,10 +43,6 @@ describe('KSTAR has one semantic core', () => {
       // Allow test fixtures and type definitions, but no active computation
       const hasDeltaAssignment = /delta_[ar]\s*[:=]\s*[^;{]+/.test(file.content);
       if (hasDeltaAssignment) {
-        // Allow delta_r in kstar-adapter as a pass-through field from Engine
-        if (file.path.includes('kstar-adapter.ts') && /delta_r\?:/.test(file.content)) {
-          continue;
-        }
         // Allow in kstar-compat projection as Engine-to-legacy mapping
         if (file.path.includes('kstar-compat.ts')) {
           continue;
@@ -96,19 +92,17 @@ describe('KSTAR has one semantic core', () => {
     }
   });
 
-  it('all KSTAR mutation calls go through adapter or Engine package', () => {
+  it('all KSTAR mutation calls go through CogSeed backend-owned persistence', () => {
     const p3394Files = readProductionFiles(p3394Dir);
     const busFiles = readProductionFiles(groupChatDir);
     const allFiles = [...p3394Files, ...busFiles];
 
     // Approved mutation paths:
-    // - kstar-adapter.ts (recordEvidence, runCasTransaction)
-    // - kstar-bus-integration.ts (calls adapter)
-    // - kstar-store.ts (writes snapshot, appends pending evidence)
+    // - kstar-bus-integration.ts (records backend-native evidence)
+    // - kstar-store.ts (writes snapshot, appends/compacts evidence)
     // - kstar-migration.ts (writes snapshot during migration)
 
     const approvedMutators = [
-      'kstar-adapter.ts',
       'kstar-bus-integration.ts',
       'kstar-store.ts',
       'kstar-migration.ts',
@@ -129,7 +123,7 @@ describe('KSTAR has one semantic core', () => {
       if (hasDirectMutation) {
         expect(
           hasDirectMutation,
-          `${basename} must not mutate KSTAR state directly; use adapter`,
+          `${basename} must not mutate KSTAR state directly; use CogSeed backend KSTAR persistence`,
         ).toBe(false);
       }
     }

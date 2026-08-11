@@ -4,24 +4,24 @@
  *
  * Runs once per boot (deferred, idle-preferred, see index.ts) for the
  * active user, and again after every successful CAS transaction in
- * kstar-adapter.ts once the Engine is confirmed reachable. Non-fatal: a
+ * kstar-bus-integration.ts when the CogSeed backend evidence sink is available. Non-fatal: a
  * failure here must never block app startup, a transaction, or corrupt
  * on-disk state.
  *
  * Degraded-schema detection:
  *   `kstar-migration.ts` stamps `legacy_schema_version` at migration time.
  *   If a stamp names a schema this build doesn't recognize, PC assumes a
- *   newer build already touched the Engine snapshot and stays degraded
+ *   newer build already touched the CogSeed backend snapshot and stays degraded
  *   (no evidence replay) rather than risk writing stale-shaped data on
  *   top of it.
  *
  * Pending evidence replay:
- *   `kstar-adapter.ts::recordEvidence()` appends to `pending-evidence.jsonl`
- *   (via kstar-store.ts) whenever the Engine is unavailable. Replay is a
+ *   `kstar-bus-integration.ts` appends to `pending-evidence.jsonl`
+ *   (via kstar-store.ts) whenever the backend evidence sink is unavailable. Replay is a
  *   read-snapshot / call-out / filter-by-id three-phase sequence rather
  *   than a single `compactPendingEvidence` pass, because the fold callback
  *   there is synchronous and evidence delivery is not: we cannot await the
- *   Engine call from inside it. Records without a stable `id` are left
+ *   remote sink call from inside it. Records without a stable `id` are left
  *   queued forever (can't be deduped/acked) rather than being dropped.
  */
 
@@ -32,7 +32,7 @@ import { compactPendingEvidence } from './kstar-store';
 const log = createLogger('p3394.kstar-recovery');
 
 /** Schema versions this build knows how to interpret. Bump when the
- * Engine snapshot envelope (see kstar-migration.ts::transformLegacyToSnapshot)
+ * CogSeed backend snapshot envelope (see kstar-migration.ts::transformLegacyToSnapshot)
  * gains a breaking field. */
 const KNOWN_SCHEMA_VERSIONS = new Set(['1', '1.0.0']);
 
@@ -69,11 +69,10 @@ export async function checkKstarDegraded(uid: string): Promise<KstarDegradedChec
 }
 
 /**
- * Replay pending evidence accumulated while the Engine adapter was
- * unavailable. `recordEvidence` should be bound to a live, available
- * adapter — callers decide whether the Engine is reachable before calling
- * this; if it isn't, skip the call entirely rather than passing a no-op
- * (a no-op would just report every record as unresolved for no benefit).
+ * Replay pending evidence accumulated while a backend sink was unavailable.
+ * `recordEvidence` should be bound to the current CogSeed backend evidence sink.
+ * If no sink is available, callers should skip replay and leave the local
+ * journal intact.
  *
  * Only records whose delivery is confirmed successful are dropped from the
  * log. Anything that throws or reports failure stays queued for the next
@@ -95,8 +94,7 @@ export async function replayPendingEvidence(
   }
 
   // Phase 2: attempt replay outside the store's mutex — recordEvidence may
-  // call out to the Engine over stdio/network and must never hold a file
-  // lock while doing so.
+  // call out to a backend sink and must never hold a file lock while doing so.
   const succeededIds = new Set<string>();
   for (const record of pending) {
     const id = typeof record.id === 'string' ? record.id : '';
@@ -134,14 +132,13 @@ export async function replayPendingEvidence(
 
 /**
  * Boot-time composition: check degraded state, then (if not degraded)
- * replay pending evidence through the given callback. `getRecordEvidence`
- * is called lazily and only once we know we're not degraded, so callers
- * can defer acquiring/spawning the Engine adapter until it's actually
- * needed.
+ * optionally replay pending evidence through a supplied backend sink. Normal
+ * app boot calls this without a sink so startup never acquires or spawns a
+ * standalone execution backend.
  */
 export async function runKstarBootRecovery(
   uid: string,
-  getRecordEvidence: () => Promise<((evidence: Record<string, unknown>) => Promise<{ success: boolean }>) | null>,
+  getRecordEvidence?: () => Promise<((evidence: Record<string, unknown>) => Promise<{ success: boolean }>) | null>,
 ): Promise<KstarBootHealth> {
   const { migrated, stamp } = await checkMigrationStatus(uid);
 
@@ -155,14 +152,13 @@ export async function runKstarBootRecovery(
 
   let recordEvidence: ((evidence: Record<string, unknown>) => Promise<{ success: boolean }>) | null = null;
   try {
-    recordEvidence = await getRecordEvidence();
+    recordEvidence = getRecordEvidence ? await getRecordEvidence() : null;
   } catch (err) {
     log.warn('kstar boot health: failed to acquire evidence sink', { uid, error: (err as Error).message });
   }
 
   if (!recordEvidence) {
-    // Engine unavailable this boot — leave the pending log untouched; it
-    // is the durable queue for the next successful adapter connection.
+    // No replay sink this boot — leave the backend evidence journal untouched.
     return { migrated, degraded: false, replayed: 0, remaining: 0 };
   }
 

@@ -12,8 +12,10 @@ export type DecideWakeRequestResult = { ok: true; request: AgentWakeRequest; dis
 export interface DecideWakeRequestDeps { dispatcher?: WakeDispatcher; validateTarget?: (userId: string, agentId: string) => Promise<boolean> }
 
 async function defaultDispatcher(request: AgentWakeRequest): Promise<WakeDispatcher> {
-  if (request.execution_domain === 'mate') return (await import('../cogseed_backend/p3394-wake-dispatcher')).mateWakeDispatcher;
-  return (await import('../group_chat/p3394-wake-dispatcher')).groupChatWakeDispatcher;
+  if (request.execution_domain && request.execution_domain !== 'mate' && request.execution_domain !== 'group_chat') {
+    throw new Error(`unsupported wake execution domain: ${request.execution_domain}`);
+  }
+  return (await import('../cogseed_backend/p3394-wake-dispatcher')).mateWakeDispatcher;
 }
 
 export async function decideWakeRequest(userId: string, input: DecideWakeRequestInput, deps: DecideWakeRequestDeps = {}): Promise<DecideWakeRequestResult> {

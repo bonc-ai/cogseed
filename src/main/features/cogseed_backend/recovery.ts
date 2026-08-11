@@ -44,9 +44,9 @@ export async function recoverMateCollaborationSteps(userId: string): Promise<{ r
     let touched = false;
     for (const step of run.steps.filter((item) => item.status === 'running' && item.result_ref?.startsWith('mate-task-'))) {
       const task = await (await import('./task-store')).readMateTask(userId, step.result_ref!); if (!task) continue;
-      if (task.status === 'completed') { await engine.completeStep(scope, run.id, step.id, { status: 'completed', resultRef: task.taskId, resultSummary: 'Recovered completed Mate task.' }); touched = true; }
-      else if (task.status === 'failed') { await engine.completeStep(scope, run.id, step.id, { status: 'failed', resultRef: task.taskId, resultSummary: task.errorCode || 'Recovered failed Mate task.' }); touched = true; }
-      else if (task.status === 'cancelled') { await engine.completeStep(scope, run.id, step.id, { status: 'skipped', resultRef: task.taskId, resultSummary: 'Recovered cancelled Mate task.' }); touched = true; }
+      if (task.status === 'completed') { await engine.completeStep(scope, run.id, step.id, { status: 'completed', resultRef: task.taskId, resultSummary: 'Recovered completed CogSeed task.' }); touched = true; }
+      else if (task.status === 'failed') { await engine.completeStep(scope, run.id, step.id, { status: 'failed', resultRef: task.taskId, resultSummary: task.errorCode || 'Recovered failed CogSeed task.' }); touched = true; }
+      else if (task.status === 'cancelled') { await engine.completeStep(scope, run.id, step.id, { status: 'skipped', resultRef: task.taskId, resultSummary: 'Recovered cancelled CogSeed task.' }); touched = true; }
     }
     if (touched) { reconciledCount += 1; coordinationIds.push(coordinationId); }
   }
