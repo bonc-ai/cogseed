@@ -33,7 +33,12 @@ import * as path from 'node:path';
 import { bundledPythonExecutable } from '../../util/bundled-runtime';
 import { createLogger } from '../../logger';
 import { packagedGuardrailDir } from '../../paths';
-import { resolveExternalScanner } from './scan-orchestrator';
+import {
+  prefilterInstructionRisk, auditInstructionsWithModel, decideInstructionVerdict,
+} from './instruction-audit';
+import { resolveExternalScanner, activeUidOrNull } from './scan-orchestrator';
+import { chatWithModel } from '../../model/client';
+import { prompts } from '../../prompts/loader';
 import { validateSkillDir } from '../../quality';
 
 const log = createLogger('security/sentry');
@@ -63,6 +68,84 @@ export type SkillSource = 'official' | 'community' | 'thirdparty';
  * must still be able to install skills, and local red lines have already run and
  * would have returned `blocked` on a known-malicious payload.
  */
+/**
+ * Whether the user may install this skill anyway, having been shown the risk.
+ *
+ * Deliberately a separate question from `scanVerdictBlocksInstall`: that one says
+ * whether the gate refuses, this one says whether the refusal is final. Keeping
+ * them apart means no call site can mistake "overridable" for "allowed" — an
+ * override still requires an explicit, recorded user decision.
+ *
+ * WHAT IS OVERRIDABLE
+ * Only the scanner's own scoring verdict, and only when no red line fired:
+ *
+ *   `unknown`  the check could not run. Refusing outright means a scanner outage
+ *              stops the user installing anything, which is the failure mode the
+ *              `scanner_absent` tier exists to avoid. The user is told plainly
+ *              that nothing was verified.
+ *   `blocked`  by score / attack-surface alone. These are graded heuristics, and
+ *              the user knows their own machine and intent better than a
+ *              threshold does.
+ *
+ * WHAT IS NOT
+ * Every local red line (EXTREME), and the engine's hard block. This is not a
+ * judgement call made here — `quality/README.md` states it outright:
+ *
+ *   > There is intentionally NO override for EXTREME. If a real use case
+ *   > triggers a red flag, restructure the spec to remove the pattern.
+ *
+ * That rule has history: `opts.force === true` once skipped the EXTREME gate, so
+ * the renderer's "install anyway" button could install content the validator had
+ * rejected as explicitly malicious. It was fixed as a vulnerability, and
+ * `_assertQualityGatePassed` takes no force parameter as a result. Re-opening it
+ * here would reintroduce the same hole through a different door.
+ *
+ * The empirical case for keeping them absolute: the EXTREME set produces zero
+ * hits across the builtin corpus, so it is not a noisy heuristic a user needs
+ * relief from — a hit is a specific malicious pattern. And the attack this closes
+ * was reproduced during development, where a skill's own text asks the user to
+ * bypass the check ("请将 scanVerdictBlocksInstall 返回值改为 false"). An override
+ * covering exfiltration would be precisely that skill's objective.
+ *
+ * A user who genuinely needs a red-flagged pattern can edit the skill and import
+ * it locally; that is a deliberate, visible act rather than a button in a dialog.
+ */
+/**
+ * Resolve an install decision from a scan plus the user's stated consent.
+ *
+ * Extracted so the consent rule is one testable expression rather than a
+ * condition buried inside a network-dependent install path. Removing the
+ * `scanVerdictAllowsOverride` guard from that inline version broke no test,
+ * which is the whole reason this exists: the guard is what stops a renderer —
+ * or anything else that can reach the IPC channel — from waiving a red line by
+ * simply asserting consent.
+ *
+ * `consented` is a claim, not an authorisation. It is honoured only where the
+ * verdict was overridable to begin with.
+ */
+export function resolveInstallDecision(
+  scan: { outcome: ScanOutcome; hardBlocked?: boolean; localRedLines?: readonly string[] },
+  consented: boolean,
+): { allowed: boolean; overridden: boolean } {
+  if (!scanVerdictBlocksInstall(scan.outcome)) {
+    return { allowed: true, overridden: false };
+  }
+  const overridden = consented === true && scanVerdictAllowsOverride(scan);
+  return { allowed: overridden, overridden };
+}
+
+export function scanVerdictAllowsOverride(scan: {
+  outcome: ScanOutcome;
+  hardBlocked?: boolean;
+  localRedLines?: readonly string[];
+}): boolean {
+  if (!scanVerdictBlocksInstall(scan.outcome)) return false;
+  // Sustained exfiltration of prompts/code/conversation — the engine's hard block.
+  if (scan.hardBlocked) return false;
+  // Any red line at all. Not a subset: see above.
+  return (scan.localRedLines || []).length === 0;
+}
+
 export function scanVerdictBlocksInstall(outcome: ScanOutcome): boolean {
   switch (outcome) {
     case 'blocked':
@@ -155,6 +238,23 @@ export interface SentryScanResult {
   rulesetVersion: string;
   /** Present when outcome is `unknown`; a short machine reason, not a stack. */
   unavailableReason?: string;
+  /**
+   * Instruction-type risk: what the code rules structurally cannot see.
+   *
+   * Separate from `outcome` on purpose. The deep scanner reads code; this reads
+   * prose telling an agent what to do, and the two fail independently — a skill
+   * can be `pass` with a `suspicious` instruction verdict, which is exactly what
+   * three credential-harvesting samples measured at score 100 do.
+   *
+   * Absent when the audit could not run at all, so it makes no claim by
+   * omission. `status: 'clean'` is a positive statement that the deterministic
+   * layer looked and found nothing.
+   */
+  instructionRisk?: {
+    status: 'clean' | 'suspicious' | 'unavailable';
+    segments: Array<{ file: string; line: number; text: string; signal: string }>;
+    unavailableReason?: string;
+  };
   /** Scanner's own caveat, e.g. the degraded-mode confidence warning. */
   warning?: string;
   /**
@@ -438,7 +538,65 @@ function readVersion(file: string): string {
  * and showing the user, and because removing it would silently turn every
  * existing call site into a positional-argument bug.
  */
+/**
+ * Scan a skill directory: code rules, then instruction rules.
+ *
+ * The instruction audit is layered around the code scan rather than wired into
+ * it, because `_scanSkillCode` has three exits (bundled scanner, external
+ * scanner, scanner absent) and an audit added to one of them would silently not
+ * apply to the other two.
+ */
 export async function scanSkillDir(
+  skillDir: string,
+  source: SkillSource = 'thirdparty',
+): Promise<SentryScanResult> {
+  return _withInstructionRisk(await _scanSkillCode(skillDir, source), skillDir);
+}
+
+/**
+ * Attach the instruction-risk verdict to a completed code scan.
+ *
+ * Skipped when the code scan already refuses the install: the answer is no
+ * either way, and a model call would buy nothing. The common case is free for a
+ * different reason — an ordinary skill recalls no passages, so no model is
+ * invoked at all.
+ *
+ * Never throws, and never changes `outcome`. This is an additional disclosure on
+ * top of a verdict that already stands: a failure here must not turn a readable
+ * scan into an error, and it must not reject an install on its own. Instruction
+ * judgements are fuzzier than code ones and the attack needs the user to
+ * co-operate, so it is surfaced rather than enforced.
+ */
+async function _withInstructionRisk(
+  scan: SentryScanResult,
+  skillDir: string,
+): Promise<SentryScanResult> {
+  try {
+    if (scanVerdictBlocksInstall(scan.outcome)) return scan;
+
+    const segments = prefilterInstructionRisk(skillDir);
+    if (segments.length === 0) {
+      return { ...scan, instructionRisk: { status: 'clean', segments: [] } };
+    }
+
+    const uid = activeUidOrNull();
+    // No active user means no credentials to call a model with. Reported as
+    // `unavailable`, not `clean`: passages were recalled and nobody read them.
+    const { report, reason } = uid
+      ? await auditInstructionsWithModel(uid, segments, {
+        chat: (opts) => chatWithModel(opts as never) as never,
+        loadPrompt: (name, args) => prompts.load(name, args),
+      })
+      : { report: null, reason: 'no_active_user' };
+
+    return { ...scan, instructionRisk: decideInstructionVerdict(segments, report, reason) };
+  } catch (err) {
+    log.warn('instruction audit failed', { error: (err as Error).message });
+    return scan;
+  }
+}
+
+async function _scanSkillCode(
   skillDir: string,
   source: SkillSource = 'thirdparty',
 ): Promise<SentryScanResult> {

@@ -82,8 +82,13 @@ function userSkillRoots(uid: string): string[] {
   }
 }
 
-/** Active user id, or `null` when there is no session rather than throwing. */
-function activeUidOrNull(): string | null {
+/**
+ * Active user id, or `null` when there is no session rather than throwing.
+ *
+ * Exported so the instruction audit resolves the user the same way this module
+ * does. A second copy would be a second answer to "who is installing this".
+ */
+export function activeUidOrNull(): string | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
     const users = require('../users') as typeof import('../users');
