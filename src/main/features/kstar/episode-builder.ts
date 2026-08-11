@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 
 import { nowIso } from '../../storage';
-import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../mate_agent_runtime/protocol';
+import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../cogseed_runtime/protocol';
 import { normalizeCognitionSourceRefs, type CognitionSourceRef } from '../recall/source-service';
 import type { KstarAgentAction, KstarEpisodeRecord, KstarToolCall, KstarTaskStatus } from './types';
 
@@ -141,7 +141,7 @@ export function buildRuntimeKstarEpisode(input: RuntimeKstarEpisodeInput): Kstar
     ownerId: input.userId,
     id: `kse-${input.runId}`,
     sessionId: input.request.runtime_session_id,
-    sessionKind: 'mate_agent_runtime',
+    sessionKind: 'cogseed_runtime',
     taskRunId: input.runId,
     requestId: input.request.request_id,
     runtimeSessionId: input.request.runtime_session_id,

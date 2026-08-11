@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../../../../src/main/features/mate_agent_runtime/protocol';
+import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../../../../src/main/features/cogseed_runtime/protocol';
 
 function runtimeRequest(): RuntimeRunRequest {
   return {
