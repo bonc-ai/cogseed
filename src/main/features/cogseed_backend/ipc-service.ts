@@ -133,13 +133,13 @@ function rejectHiddenBackendFields(payload: Record<string, unknown>): void {
   const forbidden = ['allowFallback', 'backendPreference', 'kernelMode', 'mode', 'runtimeKernel'];
   for (const key of forbidden) {
     if (Object.prototype.hasOwnProperty.call(payload, key)) {
-      throw new Error(`Mate Agent does not accept Core/fallback field: ${key}`);
+      throw new Error(`CogSeed does not accept Core/fallback field: ${key}`);
     }
   }
 }
 
 function asObject(payload: unknown): Record<string, unknown> {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('invalid Mate Agent request');
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('invalid CogSeed request');
   return payload as Record<string, unknown>;
 }
 

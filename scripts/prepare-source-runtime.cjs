@@ -74,6 +74,7 @@ function currentAppFromPathFile(distDir, pathFile) {
 }
 
 function findSourceApp(distDir, pathFile) {
+  // Remove canonical and one-cycle bundle aliases left by older source builds.
   for (const name of ['Electron.app', 'Orkas.app', 'Mate Agent.app', `${brand.appName}.app`, `${brand.appName} [Mate].app`]) {
     const candidate = path.join(distDir, name);
     if (fs.existsSync(candidate)) return candidate;

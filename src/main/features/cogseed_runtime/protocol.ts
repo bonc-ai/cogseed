@@ -222,7 +222,7 @@ function normalizeFilePath(uid: string, rawPath: unknown, allowedRoots: readonly
   }
   const resolved = path.resolve(rawPath);
   if (isTranscriptPath(uid, resolved)) {
-    return { ok: false, code: 'E_RUNTIME_TRANSCRIPT_PATH', error: 'Runtime request cannot include Mate Agent transcript paths' };
+    return { ok: false, code: 'E_RUNTIME_TRANSCRIPT_PATH', error: 'Runtime request cannot include CogSeed transcript paths' };
   }
   if (!isPathAllowed(resolved, allowedRoots)) {
     return { ok: false, code: 'E_RUNTIME_PATH_DENIED', error: 'runtime file path is outside the explicit sandbox' };
@@ -341,8 +341,8 @@ export function normalizeRuntimeRunRequest(uid: string, raw: unknown, opts: Runt
 
 export function buildRuntimePrompt(input: Pick<RuntimeRunRequest, 'task' | 'context' | 'attachments'>): string {
   const parts = [
-    'Mate Agent Runtime request.',
-    'Use only the explicit task, context, and attachments listed in this request. Do not infer or request Mate Agent transcripts.',
+    'CogSeed Runtime request.',
+    'Use only the explicit task, context, and attachments listed in this request. Do not infer or request CogSeed transcripts.',
     '',
     '## Task',
     input.task,

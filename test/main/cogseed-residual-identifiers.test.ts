@@ -46,6 +46,12 @@ describe('CogSeed residual identifiers', () => {
     expect(readme).toContain('CC Switch');
     expect(readme).toContain('.cogseed');
     expect(readme).toContain('mateagent://');
+
+    for (const file of ['AGENTS.md', 'CLAUDE.md']) {
+      const source = read(file);
+      expect(source, file).toContain('window.cogseed.{invoke, stream}');
+      expect(source, file).not.toContain('window.orkas.{invoke, stream}');
+    }
   });
 
   it('uses a canonical cogseed temp prefix for local imports', async () => {

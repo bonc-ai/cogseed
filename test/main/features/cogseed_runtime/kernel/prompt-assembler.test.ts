@@ -25,14 +25,14 @@ function request(overrides: Partial<RuntimeKernelRequest> = {}): RuntimeKernelRe
 
 describe('native Runtime prompt assembler', () => {
   it('builds a short stable system prompt with explicit-only rules', () => {
-    expect(buildRuntimeSystemPrompt()).toContain('Mate Agent Runtime worker');
+    expect(buildRuntimeSystemPrompt()).toContain('CogSeed Runtime worker');
     expect(buildRuntimeSystemPrompt()).toContain('explicit task, context, and attachments');
     expect(buildRuntimeSystemPrompt()).not.toContain('/Users/');
   });
 
   it('formats an empty-context request without inventing history', () => {
     const prompt = assembleRuntimePrompt({ request: request() });
-    expect(prompt.system).toContain('Mate Agent Runtime worker');
+    expect(prompt.system).toContain('CogSeed Runtime worker');
     expect(prompt.user).toContain('## Task');
     expect(prompt.user).toContain('Summarize the explicit material.');
     expect(prompt.user).toContain('No explicit context was provided.');

@@ -1,7 +1,7 @@
 // ─── First-run onboarding (CogSeed four-step walkthrough) ──────────────────
 //
 // Ported from the static prototype (60秒用户旅程.html), rebuilt on top of the
-// live mate-agent renderer. Four steps:
+// live CogSeed renderer. Four steps:
 //   1. 认识 CogSeed        — product intro (static)
 //   2. 导入会话 / 检测本地 agent — REAL detection via `localAgents.list`;
 //                            session history reading is NOT wired to a real

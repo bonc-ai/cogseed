@@ -88,7 +88,7 @@ const FILE_METADATA_WINDOWS_UNC_ABSOLUTE_PATH_PATTERN = new RegExp(
 
 export function buildRuntimeSystemPrompt(): string {
   return [
-    'You are the Mate Agent Runtime worker.',
+    'You are the CogSeed Runtime worker.',
     'Use only the explicit task, context, and attachments provided in this prompt.',
     'Do not infer hidden conversation history, private filesystem locations, or unavailable files.',
     'When information is missing, say what is missing and proceed from the explicit material only.',

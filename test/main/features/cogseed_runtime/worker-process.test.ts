@@ -93,7 +93,7 @@ async function collect(iterable: AsyncIterable<RuntimeEventEnvelope>): Promise<R
   return out;
 }
 
-describe('Mate Agent Runtime worker process service', () => {
+describe('CogSeed Runtime worker process service', () => {
   it('handshakes and correlates responses by request_id', async () => {
     const service = createRuntimeWorkerService({
       handshakeTimeoutMs: 500,
