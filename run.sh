@@ -4,7 +4,7 @@
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
-VARIANT="mate"
+VARIANT="cogseed"
 
 usage() {
   cat <<'EOF'
@@ -30,15 +30,15 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-if [ -n "${ORKAS_RUNTIME_VARIANT:-}" ] && [ "$ORKAS_RUNTIME_VARIANT" != "mate" ]; then
-  echo "[CogSeed] This worktree is locked to the mate runtime; ORKAS_RUNTIME_VARIANT=$ORKAS_RUNTIME_VARIANT is not allowed." >&2
+if [ -n "${ORKAS_RUNTIME_VARIANT:-}" ] && [ "$ORKAS_RUNTIME_VARIANT" != "cogseed" ]; then
+  echo "[CogSeed] This worktree is locked to the cogseed runtime; ORKAS_RUNTIME_VARIANT=$ORKAS_RUNTIME_VARIANT is not allowed." >&2
   exit 2
 fi
 if [ -n "${ORKAS_WORKSPACE_ROOT:-}" ]; then
-  echo "[CogSeed] This worktree manages its own mate data root; inherited ORKAS_WORKSPACE_ROOT is not allowed." >&2
+  echo "[CogSeed] This worktree manages its own cogseed data root; inherited ORKAS_WORKSPACE_ROOT is not allowed." >&2
   exit 2
 fi
-export ORKAS_RUNTIME_VARIANT="mate"
+export ORKAS_RUNTIME_VARIANT="cogseed"
 
 if [ ! -f "$APP_DIR/package.json" ]; then
   echo "[CogSeed] $APP_DIR/package.json not found; check the project directory layout." >&2
