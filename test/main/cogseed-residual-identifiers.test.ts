@@ -3,6 +3,10 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+const root = path.join(__dirname, '../..');
+const read = (rel: string) => fs.readFileSync(path.join(root, rel), 'utf8');
+const readJson = (rel: string) => JSON.parse(read(rel));
+
 describe('CogSeed residual identifiers', () => {
   let tmpDir: string;
   let originalResourcesPath: string | undefined;
@@ -15,6 +19,27 @@ describe('CogSeed residual identifiers', () => {
   afterEach(() => {
     Object.defineProperty(process, 'resourcesPath', { value: originalResourcesPath, configurable: true, writable: true });
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+
+  it('uses CogSeed as the official package and repository identity', () => {
+    const pkg = readJson('package.json');
+    expect(pkg.name).toBe('cogseed');
+    expect(read('package-lock.json')).toContain('"name": "cogseed"');
+
+    const currentDocs = [
+      'README.md',
+      'README.zh-CN.md',
+      'README-源码包说明.txt',
+      '目录说明.md',
+      'docs/README.md',
+    ];
+    for (const file of currentDocs) {
+      const source = read(file);
+      expect(source, file).not.toContain('team-02/mate-agent.git');
+      expect(source, file).not.toContain('cd mate-agent');
+    }
+    expect(read('README.md')).toContain('team-02/cogseed.git');
   });
 
   it('uses a canonical cogseed temp prefix for local imports', async () => {
