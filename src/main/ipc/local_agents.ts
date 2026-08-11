@@ -38,8 +38,9 @@ import { getActiveUserId } from '../features/users.js';
 import { userToolResultsDir } from '../paths.js';
 import { createLogger } from '../logger.js';
 import { listClaudeSessions } from '../features/local_agents/claude_sessions.js';
+import { listClaudeDesktopSessions } from '../features/local_agents/claude_desktop_sessions.js';
 import { listAgentTypes, listSessions as listAcpSessions } from '../features/local_agents/acp_sessions.js';
-import { importClaudeSession } from '../features/session_import/asset-router.js';
+import { importClaudeSession, importClaudeDesktopSession } from '../features/session_import/asset-router.js';
 import { listClaudeSkills, importClaudeSkills, listCodexSkills, importCodexSkills } from '../features/session_import/skill-import.js';
 import {
   readClaudeMemory,
@@ -56,6 +57,7 @@ import {
   importCodexTasks,
   importCodexSession,
 } from '../features/session_import/codex-import.js';
+import { listOpencodeSessions } from '../features/local_agents/opencode_sessions.js';
 
 const log = createLogger('ipc:local_agents');
 
@@ -136,6 +138,21 @@ export const invokeHandlers = {
   },
 
   /**
+   * List Claude **Desktop** local-agent-mode sessions. Distinct from
+   * `listClaudeSessions`, which reads the CLI's jsonl history: this reads the
+   * desktop app's per-workspace metadata, so entries carry only the opening
+   * message (see `claude_desktop_sessions.ts`). `error: 'permission_denied'`
+   * is passed through so the UI can prompt for access instead of showing an
+   * empty list.
+   */
+  'localAgents.listClaudeDesktopSessions': async () => {
+    const res = await listClaudeDesktopSessions();
+    return res.ok
+      ? { ok: true, sessions: res.sessions }
+      : { ok: false, error: res.error, sessions: [] };
+  },
+
+  /**
    * List ACP transcript sessions from `~/.cogseed/acp-transcripts/`.
    * Returns agent types and sessions for each type. Used in onboarding
    * to detect sessions from ACP-speaking agents (Hermes, Claude Desktop, etc).
@@ -176,6 +193,21 @@ export const invokeHandlers = {
       filePath,
       titleHint: typeof titleHint === 'string' ? titleHint : undefined,
     });
+  },
+
+  /**
+   * Import one Claude **Desktop** session by `sessionId` (from
+   * `localAgents.listClaudeDesktopSessions`). Desktop sessions carry only the
+   * opening message, so the materialized conversation is seeded from that one
+   * turn rather than a full transcript.
+   */
+  'sessionImport.importClaudeDesktopSession': async (
+    { sessionId }: { sessionId?: unknown } = {},
+  ) => {
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('sessionId required');
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importClaudeDesktopSession({ userId, sessionId });
   },
 
   /**
@@ -347,6 +379,19 @@ export const invokeHandlers = {
       filePath,
       typeof titleHint === 'string' ? titleHint : undefined,
     );
+  },
+
+  /**
+   * List OpenCode sessions from `~/.local/share/opencode/opencode.db`.
+   * Returns session metadata (title, timestamps, message count, model, tokens).
+   * READ-ONLY. Best-effort: missing DB returns empty result.
+   */
+  'sessionImport.listOpencodeSessions': async () => {
+    const result = listOpencodeSessions();
+    if ('error' in result) {
+      return { ok: false, sessions: [], error: result.error };
+    }
+    return { ok: true, sessions: result.sessions, totalCount: result.totalCount };
   },
 
   /**
