@@ -21,7 +21,7 @@ function dashboard(overrides: Record<string, unknown> = {}) {
 describe('touchpoint settings model', () => {
   it('focuses an unconnected user on real Feishu connection without zero metric noise', () => {
     const model = deriveTouchpointSettingsModel(dashboard(), []);
-    expect(model.primaryAction).toBe('connection.manage');
+    expect(model.primaryAction).toBe('connection.connect');
     expect(model.currentStep).toBe('connection');
     expect(model.showMetrics).toBe(false);
     expect(model.status).toBe('not_connected');

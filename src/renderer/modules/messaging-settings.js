@@ -1609,6 +1609,18 @@
     await refresh();
   };
 
+  // Public entry point for the desktop-first touchpoint flow. It creates a
+  // fresh Feishu draft and starts the real QR binding flow, instead of merely
+  // opening the legacy settings panel.
+  window.openFeishuConnection = async function openFeishuConnection() {
+    bind();
+    if (!state.initialized) state.initialized = true;
+    await refresh();
+    state.selectedChannel = 'feishu';
+    state.selectedInstanceId = '';
+    await startQrForChannel(channelForKey('feishu'));
+  };
+
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       CHANNELS,

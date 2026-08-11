@@ -23,7 +23,7 @@
       currentStep,
       steps,
       primaryAction: !botConnected
-        ? 'connection.manage'
+        ? 'connection.connect'
         : !authorized
           ? 'authorization.begin'
           : !hasResources

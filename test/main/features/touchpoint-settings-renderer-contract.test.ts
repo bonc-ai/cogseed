@@ -14,5 +14,8 @@ describe('touchpoint settings renderer contract', () => {
     const source = fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/modules/settings.js'), 'utf8');
     expect(source).toContain('window.initTouchpointSettings');
     expect(source).not.toContain('window.initPersonalContextCenter');
+    const messaging = fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    expect(messaging).toContain('window.openFeishuConnection');
+    expect(fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/modules/touchpoint-settings-model.js'), 'utf8')).toContain("'connection.connect'");
   });
 });

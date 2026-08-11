@@ -70,7 +70,7 @@
     }
     const view = model();
     const dashboard = state.dashboard;
-    host.innerHTML = `<div class="touchpoint-settings"><header class="touchpoint-hero"><div><h1>${escape(tr('touchpoint_settings.title', '飞书移动触点'))}</h1><p>${escape(tr('touchpoint_settings.subtitle', '桌面端负责完整工作，飞书负责你离开电脑后的提醒、确认和结果回报。'))}</p></div><div class="touchpoint-hero-actions"><span class="touchpoint-status is-${view.status}"><span></span>${escape(statusText(view.status))}</span><button class="btn touchpoint-icon-button" data-touchpoint-action="refresh" aria-label="${escape(tr('touchpoint_settings.refresh', '刷新'))}">${iconMarkup('refresh', 'touchpoint-refresh-icon')}</button></div></header>${renderSteps(view)}<section class="touchpoint-next"><div><span>${escape(tr('touchpoint_settings.next_label', '当前下一步'))}</span><h2>${escape(primaryText(view.primaryAction))}</h2><p>${escape(tr(`touchpoint_settings.next_detail.${view.primaryAction}`, ''))}</p></div><button class="btn btn-primary" data-touchpoint-action="${escape(view.primaryAction)}" ${state.busy ? 'disabled' : ''}>${escape(primaryText(view.primaryAction))}</button></section><div class="touchpoint-overview">${renderConnectionCard(view)}${renderAccessCard(view)}</div>${renderResourcePicker()}${renderDelivery(view)}<section class="touchpoint-governance"><div>${iconMarkup('shield', 'touchpoint-governance-icon')}</div><div><strong>${escape(tr('touchpoint_settings.governance.title', '你始终掌握控制权'))}</strong><p>${escape(tr('touchpoint_settings.governance.detail', '默认只读；授权范围可查看、可撤销；所有外部写入和发送都需要明确确认。'))}</p></div></section>${state.notice ? `<div class="messaging-notice is-${escape(state.notice.kind)}">${escape(state.notice.text)}</div>` : ''}</div>`;
+    host.innerHTML = `<div class="touchpoint-settings"><header class="touchpoint-hero"><div><h1>${escape(tr('touchpoint_settings.title', '飞书移动触点'))}</h1><p>${escape(tr('touchpoint_settings.subtitle', '桌面端负责完整工作，飞书负责你离开电脑后的提醒、确认和结果回报。'))}</p></div><div class="touchpoint-hero-actions"><span class="touchpoint-status is-${view.status}"><span></span>${escape(statusText(view.status))}</span><button class="btn touchpoint-secondary touchpoint-manage-button" data-touchpoint-action="connection.manage">${escape(tr('touchpoint_settings.connection.manage', '连接管理'))}</button><button class="btn touchpoint-icon-button" data-touchpoint-action="refresh" aria-label="${escape(tr('touchpoint_settings.refresh', '刷新'))}">${iconMarkup('refresh', 'touchpoint-refresh-icon')}</button></div></header>${renderSteps(view)}<section class="touchpoint-next"><div><span>${escape(tr('touchpoint_settings.next_label', '当前下一步'))}</span><h2>${escape(primaryText(view.primaryAction))}</h2><p>${escape(tr(`touchpoint_settings.next_detail.${view.primaryAction}`, ''))}</p></div><button class="btn btn-primary" data-touchpoint-action="${escape(view.primaryAction)}" ${state.busy ? 'disabled' : ''}>${escape(primaryText(view.primaryAction))}</button></section><div class="touchpoint-overview">${renderConnectionCard(view)}${renderAccessCard(view)}</div>${renderResourcePicker()}${renderDelivery(view)}<section class="touchpoint-governance"><div>${iconMarkup('shield', 'touchpoint-governance-icon')}</div><div><strong>${escape(tr('touchpoint_settings.governance.title', '你始终掌握控制权'))}</strong><p>${escape(tr('touchpoint_settings.governance.detail', '默认只读；授权范围可查看、可撤销；所有外部写入和发送都需要明确确认。'))}</p></div></section>${state.notice ? `<div class="messaging-notice is-${escape(state.notice.kind)}">${escape(state.notice.text)}</div>` : ''}</div>`;
     hydrate(host);
   }
 
@@ -101,12 +101,18 @@
   async function runAction(action) {
     if (state.busy) return;
     if (action === 'refresh') return refresh();
-    if (action === 'connection.manage') {
+    if (action === 'connection.manage' || action === 'connection.connect') {
       const details = document.getElementById('touchpoint-advanced');
-      if (details) details.open = true;
+      if (details) {
+        details.open = true;
+        details.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
       if (!state.advancedLoaded && window.initMessagingSettings) {
         state.advancedLoaded = true;
         await window.initMessagingSettings();
+      }
+      if (action === 'connection.connect' && typeof window.openFeishuConnection === 'function') {
+        await window.openFeishuConnection();
       }
       return;
     }
