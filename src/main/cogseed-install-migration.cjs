@@ -85,7 +85,11 @@ function copyAndVerifyMigration({ sourceRoot, destinationRoot, progress = (_even
   fsImpl.rmSync(tempRoot, { recursive: true, force: true });
   const manifest = buildManifest(sourceRoot, fsImpl);
   progress({ stage: 'copy', fileCount: manifest.fileCount });
-  fsImpl.cpSync(sourceRoot, tempRoot, { recursive: true, force: true });
+  fsImpl.cpSync(sourceRoot, tempRoot, {
+    recursive: true,
+    force: true,
+    filter: (src) => !shouldSkipMigrationPath(sourceRoot, src),
+  });
   const copied = buildManifest(tempRoot, fsImpl);
   if (copied.fileCount !== manifest.fileCount || copied.criticalManifestHash !== manifest.criticalManifestHash) {
     fsImpl.rmSync(tempRoot, { recursive: true, force: true });
@@ -158,7 +162,14 @@ function buildManifest(root, fsImpl) {
 }
 
 function walk(root, current, entries, fsImpl) {
-  const stat = fsImpl.statSync(current);
+  if (shouldSkipMigrationPath(root, current)) return;
+  let stat;
+  try {
+    stat = fsImpl.statSync(current);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return;
+    throw err;
+  }
   if (stat.isDirectory()) {
     for (const name of fsImpl.readdirSync(current)) {
       walk(root, path.join(current, name), entries, fsImpl);
@@ -173,6 +184,11 @@ function walk(root, current, entries, fsImpl) {
     size: stat.size,
     hash: crypto.createHash('sha256').update(data).digest('hex'),
   });
+}
+
+function shouldSkipMigrationPath(root, current) {
+  const relative = path.relative(root, current).split(path.sep).join('/');
+  return relative === 'electron-user-data' || relative.startsWith('electron-user-data/');
 }
 
 function sourceKindFor(sourceRoot) {

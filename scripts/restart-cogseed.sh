@@ -13,7 +13,7 @@ set -euo pipefail
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VARIANT="cogseed"
 RUN_LOG="/tmp/cogseed-agent-${VARIANT}-run.log"
-DATA_LOGS="$HOME/.orkas/runtime-variants/${VARIANT}/data/logs"
+DATA_LOGS="$HOME/.cogseed/runtime-variants/${VARIANT}/data/logs"
 
 # The main process and the `open -W -n` wrapper both carry
 # `orkas-runtime-variant=cogseed`; helper processes only carry the app path.

@@ -200,11 +200,11 @@ describe('macOS source runtime bundle contract', () => {
       .toThrow('exactly one');
   });
 
-  it('locks the executable bundle-preparation entry to mate', () => {
-    expect(sourceRuntime.parseMateWorktreeVariant(['--variant=mate']))
-      .toBe('mate');
+  it('locks the executable bundle-preparation entry to cogseed', () => {
+    expect(sourceRuntime.parseMateWorktreeVariant(['--variant=cogseed']))
+      .toBe('cogseed');
     expect(() => sourceRuntime.parseMateWorktreeVariant(['--variant=cognition']))
-      .toThrow('locked to the mate runtime');
+      .toThrow('locked to the cogseed runtime');
   });
 
   it('rejects a missing path file rather than guessing outside Electron dist', () => {

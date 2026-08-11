@@ -62,6 +62,39 @@ describe('CogSeed legacy data-root migration', () => {
     });
   });
 
+
+  it('skips volatile Electron userData while copying legacy roots', async () => {
+    const migration = await loadMigration();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-volatile-'));
+    const source = path.join(tmp, '.orkas');
+    const destination = path.join(tmp, '.cogseed');
+    const volatileDir = path.join(source, 'electron-user-data');
+    fs.mkdirSync(volatileDir, { recursive: true });
+    fs.mkdirSync(path.join(source, 'data'), { recursive: true });
+    fs.writeFileSync(path.join(source, 'data', 'users.json'), JSON.stringify({ users: [] }));
+    fs.writeFileSync(path.join(volatileDir, 'SingletonCookie'), 'ephemeral');
+
+    const fsImpl = {
+      ...fs,
+      readdirSync(current: fs.PathLike) {
+        const names = fs.readdirSync(current as fs.PathLike);
+        if (String(current) === volatileDir) {
+          fs.rmSync(path.join(volatileDir, 'SingletonCookie'), { force: true });
+        }
+        return names;
+      },
+    };
+
+    expect(() => migration.copyAndVerifyMigration({
+      sourceRoot: source,
+      destinationRoot: destination,
+      progress: () => {},
+      fsImpl,
+    })).not.toThrow();
+    expect(fs.existsSync(path.join(destination, 'data', 'users.json'))).toBe(true);
+    expect(fs.existsSync(path.join(destination, 'electron-user-data'))).toBe(false);
+  });
+
   it('plans conflicts when both roots exist without a marker', async () => {
     const migration = await loadMigration();
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-plan-'));

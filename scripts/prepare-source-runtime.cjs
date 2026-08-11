@@ -6,7 +6,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const brand = require('../src/resources/brand.json');
 
-const RUNTIME_VARIANTS = Object.freeze(['main', 'cognition', 'expense', 'mate', 'messaging', 'optimization']);
+const RUNTIME_VARIANTS = Object.freeze(['main', 'cognition', 'expense', 'cogseed', 'mate', 'messaging', 'optimization']);
 const LABELS = Object.freeze({
   main: 'Main',
   cognition: 'Cognition',
@@ -257,8 +257,8 @@ function parseVariant(argv) {
 
 function parseMateWorktreeVariant(argv) {
   const variant = parseVariant(argv);
-  if (variant !== 'mate') {
-    throw new Error('this source worktree is locked to the mate runtime variant');
+  if (variant !== 'cogseed') {
+    throw new Error('this source worktree is locked to the cogseed runtime variant');
   }
   return variant;
 }

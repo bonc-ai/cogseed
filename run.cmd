@@ -14,7 +14,7 @@ echo [CogSeed] Unknown argument: !ARG! 1>&2
 goto usage_error
 
 :args_done
-if defined ORKAS_RUNTIME_VARIANT if not "%ORKAS_RUNTIME_VARIANT%"=="mate" (
+if defined ORKAS_RUNTIME_VARIANT if not "%ORKAS_RUNTIME_VARIANT%"=="cogseed" (
   echo [CogSeed] This worktree is locked to the cogseed runtime; ORKAS_RUNTIME_VARIANT=%ORKAS_RUNTIME_VARIANT% is not allowed. 1>&2
   exit /b 2
 )

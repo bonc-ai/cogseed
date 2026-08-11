@@ -39,8 +39,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const RUNTIME_VARIANTS = Object.freeze(['main', 'cognition', 'expense', 'mate', 'messaging', 'optimization']);
-const SOURCE_RUNTIME_VARIANTS = Object.freeze(['cognition', 'expense', 'mate', 'messaging', 'optimization']);
+const RUNTIME_VARIANTS = Object.freeze(['main', 'cognition', 'expense', 'cogseed', 'mate', 'messaging', 'optimization']);
+const SOURCE_RUNTIME_VARIANTS = Object.freeze(['cognition', 'expense', 'cogseed', 'mate', 'messaging', 'optimization']);
 
 // Early-boot diagnostics buffer. This file runs before logger.ts can be
 // loaded (logger imports paths.ts, which depends on the env var THIS file
