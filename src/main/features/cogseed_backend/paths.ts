@@ -19,7 +19,7 @@ import { safeId } from '../../storage';
 
 function assertSegment(value: string, label: string, prefix?: string): string {
   if (!safeId(value) || (prefix && !value.startsWith(prefix))) {
-    throw new Error(`invalid Mate Agent ${label}`);
+    throw new Error(`invalid CogSeed ${label}`);
   }
   return value;
 }

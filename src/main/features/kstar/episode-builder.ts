@@ -114,7 +114,7 @@ function toolCallsFromRuntimeEvents(events: RuntimeEventEnvelope[]): KstarToolCa
 
 function runtimeEvidenceRefs(request: RuntimeRunRequest, runId: string): CognitionSourceRef[] {
   return normalizeCognitionSourceRefs([
-    { kind: 'execution', id: runId, title: 'Mate Agent Runtime run' },
+    { kind: 'execution', id: runId, title: 'CogSeed Runtime run' },
     ...request.context.map((item, index) => item.type === 'text'
       ? { kind: 'context' as const, id: `context-${index}`, excerpt: item.content }
       : { kind: 'context' as const, id: `context-${index}`, title: item.label || path.basename(item.path) }),

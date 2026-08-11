@@ -2,7 +2,7 @@
 
 ## 目标
 
-使用 Mate Agent 的正式 Companion Research Repro 入口演示：
+使用 CogSeed 的正式 Companion Research Repro 入口演示：
 
 ```text
 Paper 选区 + GitHub repo/commit + local workspace + 用户意图
@@ -17,7 +17,7 @@ Paper 选区 + GitHub repo/commit + local workspace + 用户意图
 
 ## 准备
 
-1. 启动 Mate Agent。
+1. 启动 CogSeed。
 2. 打开或新建一个 Commander 会话。
 3. 准备固定 repo 的本地 workspace path。
 4. 准备 Paper 选区文本、repo URL、commit 和用户意图。

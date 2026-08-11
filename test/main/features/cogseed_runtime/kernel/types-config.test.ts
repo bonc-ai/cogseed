@@ -12,7 +12,7 @@ import type {
   RuntimeToolPolicy,
 } from '../../../../../src/main/features/cogseed_runtime/kernel/types';
 
-describe('Mate Agent Runtime native kernel config', () => {
+describe('CogSeed Runtime native kernel config', () => {
   it('starts from least-privilege tool policy', () => {
     expect(DEFAULT_RUNTIME_TOOL_POLICY).toEqual({
       fileRead: 'explicit_roots',
@@ -42,7 +42,7 @@ describe('Mate Agent Runtime native kernel config', () => {
     });
   });
 
-  it('keeps kernel request/event contracts free of Mate Agent conversation identity', () => {
+  it('keeps kernel request/event contracts free of CogSeed conversation identity', () => {
     const request: RuntimeKernelRequest = {
       userId: 'u1',
       requestId: 'req-a',

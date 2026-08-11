@@ -331,7 +331,7 @@ export const invokeHandlers = {
   },
 
   /**
-   * Import a single Codex session into a Mate Agent conversation.
+   * Import a single Codex session into a CogSeed conversation.
    * Simpler than Claude import: no extraction/cognition routing, just
    * materialize the conversation. `filePath` must be a valid JSONL path
    * from `listCodexSessions`. Returns `{ ok, conversationId, reason }`.

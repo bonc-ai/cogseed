@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the approved Mate Agent double-node companion icon assets."""
+"""Generate the approved CogSeed double-node companion icon assets."""
 
 from __future__ import annotations
 
@@ -140,15 +140,15 @@ def write_svg(path: Path) -> None:
 
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(prefix='mate-agent-icons-') as tmp:
+    with TemporaryDirectory(prefix='cogseed-icons-') as tmp:
         tmpdir = Path(tmp)
         master = render(1024)
         master.save(tmpdir / 'logo.png', 'PNG', optimize=True)
         master.resize((512, 512), Image.Resampling.LANCZOS).save(tmpdir / 'icon.png', 'PNG', optimize=True)
         master.save(tmpdir / 'icon.icns', 'ICNS')
         master.save(tmpdir / 'icon.ico', 'ICO', sizes=ICO_SIZES)
-        write_svg(tmpdir / 'mate-agent-master.svg')
-        outputs = ['logo.png', 'icon.png', 'icon.icns', 'icon.ico', 'mate-agent-master.svg']
+        write_svg(tmpdir / 'cogseed-master.svg')
+        outputs = ['logo.png', 'icon.png', 'icon.icns', 'icon.ico', 'cogseed-master.svg']
         for name in outputs:
             if not (tmpdir / name).is_file() or (tmpdir / name).stat().st_size == 0:
                 raise RuntimeError(f'icon generation produced an invalid file: {name}')

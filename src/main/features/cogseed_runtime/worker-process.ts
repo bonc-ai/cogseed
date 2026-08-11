@@ -111,7 +111,7 @@ export function createRuntimeWorkerService(options: RuntimeWorkerServiceOptions 
       for (const waiter of waiters) {
         clearTimeout(waiter.timer);
         if (parsed.protocol_version !== MATE_AGENT_RUNTIME_PROTOCOL_VERSION) {
-          waiter.reject(new Error(`Mate Agent Runtime protocol version mismatch: ${parsed.protocol_version}`));
+          waiter.reject(new Error(`CogSeed Runtime protocol version mismatch: ${parsed.protocol_version}`));
         } else {
           waiter.resolve();
         }
@@ -162,7 +162,7 @@ export function createRuntimeWorkerService(options: RuntimeWorkerServiceOptions 
       if (text) log.warn('runtime worker stderr', { text: text.slice(0, 500) });
     });
     next.once('exit', (code: number | null, signal: string | null) => {
-      const error = new Error(`Mate Agent Runtime worker exited code=${code ?? ''} signal=${signal ?? ''}`.trim());
+      const error = new Error(`CogSeed Runtime worker exited code=${code ?? ''} signal=${signal ?? ''}`.trim());
       if (child === next) child = null;
       handshake = null;
       rejectAll(error);
@@ -174,7 +174,7 @@ export function createRuntimeWorkerService(options: RuntimeWorkerServiceOptions 
     const next = spawnWorker();
     attach(next);
     handshake = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Mate Agent Runtime worker handshake timed out')), handshakeTimeoutMs);
+      const timer = setTimeout(() => reject(new Error('CogSeed Runtime worker handshake timed out')), handshakeTimeoutMs);
       helloWaiters.push({ resolve, reject, timer });
       writeJsonl(next, { type: 'hello', protocol_version: MATE_AGENT_RUNTIME_PROTOCOL_VERSION });
     });
@@ -189,7 +189,7 @@ export function createRuntimeWorkerService(options: RuntimeWorkerServiceOptions 
 
   async function* run(request: RuntimeRunRequest, opts: { signal?: AbortSignal | null } = {}): AsyncGenerator<RuntimeEventEnvelope, void, unknown> {
     await ensureWorker();
-    if (!child) throw new Error('Mate Agent Runtime worker unavailable');
+    if (!child) throw new Error('CogSeed Runtime worker unavailable');
     if (opts.signal?.aborted) {
       yield {
         type: 'error',

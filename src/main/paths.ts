@@ -182,9 +182,9 @@ export const sessionCloudToolResultsDir = (uid: string, sessionId: string) =>
 export const userLocalSessionsDir   = (uid: string) => path.join(userLocalRoot(uid), 'sessions');
 export const userLocalSessionFile   = (uid: string, sessionId: string) => path.join(userLocalSessionsDir(uid), `${sessionId}.jsonl`);
 
-// Mate Agent Runtime — machine-private execution boundary. Runtime sessions,
+// CogSeed Runtime — machine-private execution boundary. Runtime sessions,
 // context mirrors, memory, and run logs stay under local/mate_runtime so they
-// never sync with Mate Agent cloud chats/sessions and cannot be mistaken for
+// never sync with CogSeed cloud chats/sessions and cannot be mistaken for
 // UI-facing group-chat state.
 export const mateRuntimeRoot             = (uid: string) => path.join(userLocalRoot(uid), 'mate_runtime');
 export const mateRuntimeSessionsDir      = (uid: string) => path.join(mateRuntimeRoot(uid), 'sessions');

@@ -1,25 +1,30 @@
 CogSeed 源码包
 =================
 
-打包时间: 2026-08-07 09:42
-本地 HEAD: 81ee973
+项目名称: CogSeed
+仓库地址: http://10.1.12.6:54170/lhcx/project-group/opensource/team-02/cogseed.git
 
 内容
 ----
-- 完整源码: src/ (主进程 + 渲染层 + core-agent)
-- 资源: resources/ (builtin 技能/Agent、app-ui、mac-locales)
+- 完整源码: src/ (Electron 主进程、renderer、Core Agent)
+- 资源: resources/ (平台 Agent/Skill、品牌资源、运行时清单)
 - 测试: test/
-- 文档: docs/、AGENTS.md、CLAUDE.md、README.md
+- 文档: docs/、AGENTS.md、README.md
 
-已排除(体积大且可重建,不属于源码)
----------------------------------
-- node_modules/ (1.0G, npm install 重建)
-- .git/ (37M, 历史可在仓库查)
-- resources/runtime/ (427M, Python 运行时, 需 npm run runtime:ensure 下载)
-- resources/embedding-model/ (91M, 嵌入模型, postinstall 自动下载)
-- resources/officecli/ (32M, office 预览工具链)
+可重建或按平台准备的本地内容
+----------------------------
+- node_modules/ (npm install)
+- resources/runtime/ (npm run runtime:ensure / 开发依赖准备)
+- resources/embedding-model/ (postinstall 自动准备)
+- resources/officecli/、FFmpeg、Whisper 等平台资源
 
 启动方式
 --------
-npm install   # 装依赖 + 下载嵌入模型
-./run.sh      # macOS/Linux 启动
+npm install
+./run.sh      # macOS / Linux shell
+run.cmd       # Windows
+
+验证方式
+--------
+npm run typecheck
+npm test

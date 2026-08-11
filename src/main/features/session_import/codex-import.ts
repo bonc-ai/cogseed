@@ -10,7 +10,7 @@
  *
  * This importer:
  *   1. Lists Codex sessions (metadata only)
- *   2. Imports selected sessions into Mate Agent conversations
+ *   2. Imports selected sessions into CogSeed conversations
  *   3. Extracts config.toml preferences into shared memory
  *   4. Reads AGENTS.md for custom agent definitions (if present)
  */
@@ -344,7 +344,7 @@ function extractContentFromPayload(content: unknown): string {
 }
 
 /**
- * Import a single Codex session into a Mate Agent conversation.
+ * Import a single Codex session into a CogSeed conversation.
  * Simpler than Claude import: no extraction/cognition routing, just materialize.
  */
 export async function importCodexSession(

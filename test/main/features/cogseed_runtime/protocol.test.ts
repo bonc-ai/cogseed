@@ -22,7 +22,7 @@ function tmpRoot(): string {
   return dir;
 }
 
-describe('Mate Agent Runtime protocol normalization', () => {
+describe('CogSeed Runtime protocol normalization', () => {
   it('accepts only explicit task, context, attachments and generates runtime ids', () => {
     const root = tmpRoot();
     const allowedFile = path.join(root, 'notes.txt');
@@ -46,7 +46,7 @@ describe('Mate Agent Runtime protocol normalization', () => {
     expect(result.request).not.toHaveProperty('cid');
   });
 
-  it('rejects caller supplied Mate Agent conversation identity fields', () => {
+  it('rejects caller supplied CogSeed conversation identity fields', () => {
     const root = tmpRoot();
     const result = normalizeRuntimeRunRequest('runtime-protocol-user', {
       task: 'Do not accept this.',
