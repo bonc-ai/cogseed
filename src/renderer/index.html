@@ -157,11 +157,6 @@
               <span class="new-chat-scenario-label" data-i18n="new_chat.quick.rnd">Build app</span>
             </button>
           </div>
-          <!-- Continue-previous-work picker. Lists conversations imported from
-               other agents (Claude Code / Codex) during onboarding; clicking one
-               opens it so the user picks up where they left off. Wired by
-               conversation.js::_initContinueWorkChip(). -->
-          <div class="continue-work-panel" id="continue-work-panel" hidden></div>
           <!-- Open-source-driven「还能帮你做这些」capability strip. Task cards are
                rendered + wired by modules/oss.js::initOssEntry() (data from the
                curated marketplace projects catalog). Cards only show the task +
@@ -1880,7 +1875,9 @@
   <script src="./modules/user-error.js"></script>
   <script src="./modules/model-guard.js"></script>
   <script src="./modules/delete-file-confirm.js"></script>
+  <script src="./modules/interactive-tour.js"></script>
   <script src="./modules/onboarding.js"></script>
+  <script src="./modules/continue-work.js"></script>
   <script src="./modules/boot.js"></script>
   <script src="./modules/avatar.js"></script>
   <script src="./modules/avatar-picker.js"></script>

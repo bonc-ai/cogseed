@@ -21,38 +21,55 @@ variant_pids() {
   pgrep -f "orkas-runtime-variant=${VARIANT}" 2>/dev/null || true
 }
 
+# Every liveness decision uses this, not variant_pids: a mate-variant process
+# from another checkout must never count as our app being up, or the relaunch
+# gets skipped while the script reports success.
+worktree_pids() {
+  local pid
+  for pid in $(variant_pids); do
+    if ps -p "$pid" -o command= 2>/dev/null | grep -qF "$APP_DIR"; then
+      printf '%s\n' "$pid"
+    fi
+  done
+}
+
 stop() {
   local pids
-  pids="$(variant_pids)"
+  pids="$(worktree_pids)"
   if [ -z "$pids" ]; then
     echo "[restart-mate] no running ${VARIANT} runtime"
     return 0
   fi
   for pid in $pids; do
-    # Only touch processes launched from this worktree.
-    if ps -p "$pid" -o command= 2>/dev/null | grep -qF "$APP_DIR"; then
-      kill "$pid" 2>/dev/null || true
-    fi
+    kill "$pid" 2>/dev/null || true
   done
   # Give the app a few seconds to exit (main process teardown, flush state).
   for _ in $(seq 1 50); do
-    if ! pgrep -f "orkas-runtime-variant=${VARIANT}" >/dev/null 2>&1; then
+    if [ -z "$(worktree_pids)" ]; then
       echo "[restart-mate] ${VARIANT} runtime stopped"
       return 0
     fi
     sleep 0.2
   done
   echo "[restart-mate] force-killing remaining ${VARIANT} processes" >&2
-  for pid in $(variant_pids); do
-    if ps -p "$pid" -o command= 2>/dev/null | grep -qF "$APP_DIR"; then
-      kill -9 "$pid" 2>/dev/null || true
-    fi
+  for pid in $(worktree_pids); do
+    kill -9 "$pid" 2>/dev/null || true
   done
-  sleep 0.5
+  # SIGKILL is asynchronous. Wait for the entries to actually leave the process
+  # table, otherwise start() sees a dying pid and skips the relaunch.
+  for _ in $(seq 1 50); do
+    if [ -z "$(worktree_pids)" ]; then
+      echo "[restart-mate] ${VARIANT} runtime stopped (forced)"
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "[restart-mate] ${VARIANT} processes still present after SIGKILL" >&2
+  return 1
 }
 
 start() {
-  if [ -n "$(variant_pids)" ]; then
+  if [ -n "$(worktree_pids)" ]; then
     echo "[restart-mate] ${VARIANT} runtime already running"
     return 0
   fi
@@ -65,7 +82,7 @@ wait_ready() {
   # Wait until the variant main process is up, then confirm the app logger
   # starts writing today's file.
   for _ in $(seq 1 60); do
-    if [ -n "$(variant_pids)" ]; then
+    if [ -n "$(worktree_pids)" ]; then
       echo "[restart-mate] ${VARIANT} runtime process is up"
       return 0
     fi
