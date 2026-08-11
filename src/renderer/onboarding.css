@@ -249,6 +249,13 @@ body.cs-onboarding-active .app-container{display:none !important}
   font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif}
 #cs-ob-toast.show{opacity:1;transform:translate(-50%,0)}
 
+/* Scrollable session container (step 2) */
+#cs-onboarding .cs-session-scroll{max-height:320px;overflow-y:auto;overflow-x:hidden}
+#cs-onboarding .cs-session-scroll::-webkit-scrollbar{width:8px}
+#cs-onboarding .cs-session-scroll::-webkit-scrollbar-track{background:transparent}
+#cs-onboarding .cs-session-scroll::-webkit-scrollbar-thumb{background:var(--cs-line);border-radius:4px}
+#cs-onboarding .cs-session-scroll::-webkit-scrollbar-thumb:hover{background:var(--cs-muted)}
+
 /* Session import action bar (step 2) */
 #cs-onboarding .cs-import-bar{display:flex;flex-direction:column;gap:10px;padding:14px 16px;border-top:1px solid var(--cs-line)}
 #cs-onboarding .cs-import-btn{align-self:flex-start;display:inline-flex;align-items:center;gap:7px;

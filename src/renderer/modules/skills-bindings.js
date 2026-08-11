@@ -438,6 +438,11 @@ function _initSkillsCognitionBindings() {
       });
       if (!result?.ok) throw new Error(result?.error || 'candidate decision failed');
       await loadSkillsCognitionSnapshot();
+
+      // Notify interactive tour that user has reviewed a cognition
+      if (typeof window.interactiveTour !== 'undefined' && window.interactiveTour.markRecallReviewed) {
+        window.interactiveTour.markRecallReviewed();
+      }
     } catch (error) {
       if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
     } finally {
