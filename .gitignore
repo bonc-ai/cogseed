@@ -43,3 +43,9 @@ package.json.new
 # local build identity and development package output
 /.build
 /dist-dev
+
+# 误解压到仓库根的 Electron 运行时（修复 dist bundle 时踩过一次：
+# unzip 命令被终端折行截断，整包解到了这里并被 git add -A 收走）。
+/Electron.app/
+/LICENSES.chromium.html
+/version
