@@ -3891,5 +3891,14 @@
   "quality.occurrences_more": "另有 {n} 处未显示",
   "marketplace.redflag_title": "确认安装有风险的「{name}」",
   "marketplace.redflag_intro": "安全检查在「{name}」中发现明确的危险模式。这类模式在正常技能里不会出现：",
-  "marketplace.redflag_type_name": "如果你确认要安装，请输入技能名「{name}」："
+  "marketplace.redflag_type_name": "如果你确认要安装，请输入技能名「{name}」：",
+  "settings.cli_fallback.title": "指挥官 CLI 降级",
+  "settings.cli_fallback.sub": "未配置 API Key 模型时，指挥官不会失败，而是把对话交给已登录的本机 CLI Agent 执行。",
+  "settings.cli_fallback.label": "降级执行 Agent",
+  "settings.cli_fallback.auto": "自动（第一个已登录的 CLI）",
+  "settings.cli_fallback.auto_hint": "自动选择第一个已登录的 CLI（Claude Code / Codex / OpenCode）。",
+  "settings.cli_fallback.state_auto": "自动选择第一个已登录的 CLI Agent",
+  "settings.cli_fallback.state_chosen": "将使用 {cli} 作为降级执行 Agent",
+  "settings.cli_fallback.saved_no_api": "已保存。指挥官当前没有 API Key，对话将交给所选 CLI Agent 执行。",
+  "settings.cli_fallback.notice_no_api": "指挥官当前没有可用的 API Key，对话将自动交给本机已登录的 CLI Agent 执行（可在「AI 团队」设置中更改）。"
 }

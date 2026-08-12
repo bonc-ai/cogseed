@@ -3610,5 +3610,14 @@
   "quality.occurrences_more": "他に {n} 箇所",
   "marketplace.redflag_title": "リスクのある「{name}」のインストール確認",
   "marketplace.redflag_intro": "「{name}」に明確な危険パターンを検出しました。通常の技能には現れないものです:",
-  "marketplace.redflag_type_name": "それでもインストールする場合は技能名「{name}」を入力してください:"
+  "marketplace.redflag_type_name": "それでもインストールする場合は技能名「{name}」を入力してください:",
+  "settings.cli_fallback.title": "コマンダー CLI フォールバック",
+  "settings.cli_fallback.sub": "API キーが設定されていない場合、コマンダーは失敗せず、ログイン済みのローカル CLI エージェントにチャットを委ねます。",
+  "settings.cli_fallback.label": "フォールバック実行エージェント",
+  "settings.cli_fallback.auto": "自動（最初にログイン済みの CLI）",
+  "settings.cli_fallback.auto_hint": "最初にログイン済みの CLI（Claude Code / Codex / OpenCode）を自動選択します。",
+  "settings.cli_fallback.state_auto": "最初にログイン済みの CLI エージェントを自動選択",
+  "settings.cli_fallback.state_chosen": "フォールバック実行エージェントに {cli} を使用します",
+  "settings.cli_fallback.saved_no_api": "保存しました。コマンダーに API キーがないため、チャットは選択した CLI エージェントに委ねられます。",
+  "settings.cli_fallback.notice_no_api": "コマンダーに利用可能な API キーがありません。チャットはログイン済みのローカル CLI エージェントが自動で担当します（AI チーム設定で変更可）。"
 }

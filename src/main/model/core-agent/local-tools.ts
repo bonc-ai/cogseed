@@ -96,6 +96,8 @@ import { checkEditFreshness, recordRead } from './read-tracker';
 import { createLogger } from '../../logger';
 import { logErrorRef, logPathRef, maskId } from '../../util/log-redact';
 import { t } from '../../i18n';
+import * as executionLog from '../../features/execution_log';
+import * as commandIntent from '../../features/command_intent';
 import {
   closeInteractiveCliSession,
   readInteractiveCliSession,
@@ -450,7 +452,7 @@ function protectedRootMentionedByCommand(opts: LocalToolsOpts, command: string):
 function protectedWriteError(abs: string, root: string): string {
   return errText(
     'E_PROTECTED_PATH_READ_ONLY',
-    `path is inside a protected read-only Orkas resource root and cannot be modified by local tools: ${abs} (root: ${root}). Use the agent/skill edit or fork flow instead.`,
+    `path is inside a protected read-only application resource root and cannot be modified by local tools: ${abs} (root: ${root}). Use the agent/skill edit or fork flow instead.`,
   );
 }
 
@@ -1085,6 +1087,30 @@ async function executeCoreBashWithOutputTracking(
   const before = opts.onFileWritten ? collectBashFileSnapshot(outputDir) : new Map<string, BashFileSnapshotEntry>();
   const restoreEnv = withBashOutputEnv(ctx, outputDir, manifestPath);
   const restoreWritableRoots = withBashWritableRoots(ctx, bashWritableRootsFor(opts, workingDir));
+
+  // Create execution record
+  const intent = commandIntent.extractIntent(command);
+  const executionId = executionLog.generateExecutionId();
+  const record: executionLog.ExecutionRecord = {
+    id: executionId,
+    intent: intent.intent,
+    why: intent.why,
+    resources: intent.resources,
+    risk: intent.risk,
+    status: 'running',
+    startTime: Date.now(),
+    rawCommand: command,
+  };
+  executionLog.appendRecord(record);
+
+  // Broadcast execution started event to renderer
+  try {
+    const ipc = require('../../ipc') as { broadcastToRenderer?: (channel: string, payload: unknown) => void };
+    if (ipc.broadcastToRenderer) {
+      ipc.broadcastToRenderer('execution:started', record);
+    }
+  } catch { /* IPC not available */ }
+
   try {
     const direct = parseOrkasCliInvocation(input, ctx);
     const macWriteSandboxActive = process.platform === 'darwin'
@@ -1094,11 +1120,53 @@ async function executeCoreBashWithOutputTracking(
     const result = direct && !macWriteSandboxActive
       ? await executeDirectOrkasCli(direct, input, ctx, workingDir)
       : await coreBashTool.execute(input, ctx);
+
+    // Update execution record with result
+    const updates: Partial<executionLog.ExecutionRecord> = {
+      status: result.isError ? 'failed' : 'success',
+      endTime: Date.now(),
+      output: String(result.content || '').slice(0, 10000), // Cap output size
+    };
+    if (result.isError) {
+      updates.errorMessage = String(result.content || '');
+    }
+    executionLog.updateRecord(executionId, updates);
+
+    // Broadcast execution completed event
+    try {
+      const ipc = require('../../ipc') as { broadcastToRenderer?: (channel: string, payload: unknown) => void };
+      if (ipc.broadcastToRenderer) {
+        ipc.broadcastToRenderer('execution:completed', { id: executionId, ...updates });
+      }
+    } catch { /* IPC not available */ }
+
     if (!result.isError) {
       const manifestedPaths = readBashOutputManifest(manifestPath, outputDir);
       await emitBashProducedFiles(opts, before, outputDir, command, manifestedPaths);
     }
     return translateFixedBashError(result);
+  } catch (err) {
+    // Update execution record with error
+    executionLog.updateRecord(executionId, {
+      status: 'failed',
+      endTime: Date.now(),
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
+
+    // Broadcast execution failed event
+    try {
+      const ipc = require('../../ipc') as { broadcastToRenderer?: (channel: string, payload: unknown) => void };
+      if (ipc.broadcastToRenderer) {
+        ipc.broadcastToRenderer('execution:completed', {
+          id: executionId,
+          status: 'failed',
+          endTime: Date.now(),
+          errorMessage: err instanceof Error ? err.message : String(err),
+        });
+      }
+    } catch { /* IPC not available */ }
+
+    throw err;
   } finally {
     try { fs.rmSync(manifestPath, { force: true }); } catch { /* best-effort */ }
     restoreWritableRoots();
@@ -1738,7 +1806,7 @@ async function guardBashPathCandidates(
         result: {
           content: errText(
             'E_BASH_DYNAMIC_PATH_UNSUPPORTED',
-            `bash ${c.reason} target "${c.raw}" uses an unresolved variable, command substitution, or glob that Orkas cannot verify. `
+            `bash ${c.reason} target "${c.raw}" uses an unresolved variable, command substitution, or glob that the application cannot verify. `
             + (access === 'write'
               ? 'Use an explicit path inside the workspace, or use write_file/edit_file/delete_file for file changes.'
               : 'Use an explicit path inside the workspace, or ask the user to switch to an all-files access mode.'),
@@ -1990,7 +2058,7 @@ function guardUnsupportedAuthCodeFlow(command: string): string | null {
     'this command starts a one-time browser verification-code flow that cannot be completed reliably through chat. '
     + 'Do not ask the user to paste verification codes into the conversation or keep a background process waiting. '
     + 'Use interactive_cli_start for commands that need live user input, use a browser/callback OAuth flow that completes on its own, '
-    + 'use an Orkas connector OAuth flow, or stop and give the user a one-time terminal command to run.',
+    + 'use the application-managed connector OAuth flow, or stop and give the user a one-time terminal command to run.',
   );
 }
 
@@ -2027,7 +2095,7 @@ function googleWorkspaceOauthClientScopeMismatchErr(): string {
   return errText(
     'E_GOOGLE_OAUTH_CLIENT_SCOPE_MISMATCH',
     'Google Cloud SDK OAuth client IDs cannot be reused with Gmail, Drive, Docs, Sheets, Calendar, Contacts, or Tasks scopes. '
-    + 'Do not synthesize Google OAuth URLs or scripts with Cloud SDK client IDs. Use an Orkas connector OAuth flow or stop and explain that Google Workspace access needs a product-managed Google connector.',
+    + 'Do not synthesize Google OAuth URLs or scripts with Cloud SDK client IDs. Use the application-managed connector OAuth flow or stop and explain that Google Workspace access needs a product-managed Google connector.',
   );
 }
 
@@ -2534,7 +2602,7 @@ function interactiveCliUserActionState(view: InteractiveCliSessionView): {
       userActionRequired: true,
       reason: view.prompt_kind,
       nextStep:
-        'The CLI is waiting for user input. Stop tool use now and ask the user to enter the requested value in the Orkas interactive CLI panel, not in chat. Do not close this command, retry with another auth method, or install alternate auth libraries while it is waiting. Continue only after the user replies, cancels, or the session output changes.',
+        'The CLI is waiting for user input. Stop tool use now and ask the user to enter the requested value in the interactive CLI panel, not in chat. Do not close this command, retry with another auth method, or install alternate auth libraries while it is waiting. Continue only after the user replies, cancels, or the session output changes.',
     };
   }
   return {
@@ -2657,7 +2725,7 @@ function createInteractiveCliSendTool(opts: LocalToolsOpts): AgentTool {
     description:
       'Send non-secret input to an interactive CLI session stdin. ' +
       'Use for agent-known responses such as y/n, menu choices, or pressing Enter. ' +
-      'Do not use this for OAuth authorization codes, passwords, tokens, API keys, or other user secrets; ask the user to type those in the Orkas interactive CLI panel instead.',
+      'Do not use this for OAuth authorization codes, passwords, tokens, API keys, or other user secrets; ask the user to type those in the interactive CLI panel instead.',
     inputSchema: {
       type: 'object',
       properties: {

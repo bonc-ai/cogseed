@@ -3891,5 +3891,14 @@
   "quality.occurrences_more": "+{n} more not shown",
   "marketplace.redflag_title": "Confirm risky install of “{name}”",
   "marketplace.redflag_intro": "The security check found definite dangerous patterns in “{name}”. These do not appear in normal skills:",
-  "marketplace.redflag_type_name": "To install anyway, type the skill name “{name}”:"
+  "marketplace.redflag_type_name": "To install anyway, type the skill name “{name}”:",
+  "settings.cli_fallback.title": "Commander CLI fallback",
+  "settings.cli_fallback.sub": "When no API-key model is configured, Commander routes chat to your signed-in local CLI agent instead of failing.",
+  "settings.cli_fallback.label": "Fallback execution agent",
+  "settings.cli_fallback.auto": "Auto (first signed-in CLI)",
+  "settings.cli_fallback.auto_hint": "Auto-pick the first signed-in CLI (Claude Code / Codex / OpenCode).",
+  "settings.cli_fallback.state_auto": "Auto-picks the first signed-in CLI agent",
+  "settings.cli_fallback.state_chosen": "Will use {cli} as the fallback execution agent",
+  "settings.cli_fallback.saved_no_api": "Saved. Commander has no API key right now — chat will go to the selected CLI agent.",
+  "settings.cli_fallback.notice_no_api": "Commander has no usable API key — chat will automatically use your signed-in local CLI agent (change it in AI Team settings)."
 }

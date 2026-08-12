@@ -29,6 +29,7 @@ import * as groupChat from '../features/group_chat';
 import * as companionRepro from '../features/companion_repro';
 import * as p3394 from '../features/p3394';
 import * as executionRecords from '../features/execution-records';
+import * as executionLog from '../features/execution_log';
 import * as workbench from '../features/workbench';
 import * as cognition from '../features/cognition';
 import * as skillTrust from '../features/skill_trust';
@@ -92,6 +93,7 @@ import * as ttsAuth from '../features/tts_auth';
 import * as permissions from '../features/permissions';
 import * as appConfig from '../features/config';
 import * as onboardingState from '../features/onboarding_state';
+import * as cliFallback from '../features/cli_fallback';
 import * as cognitionExtraction from '../features/cognition_extraction';
 import { detectAll } from '../features/local_agents/registry';
 import * as avatars from '../features/avatars';
@@ -855,6 +857,19 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'mate_agent.runtime.status': async (_payload, ctx) => mateAgentBackend.mateIpcService.runtimeStatus(ctx.userId),
   'mate_agent.runtime.restart': async (_payload, ctx) => mateAgentBackend.mateIpcService.restartRuntime(ctx.userId),
   'mate_agent.runtime.recover': async (_payload, ctx) => mateAgentBackend.mateIpcService.recover(ctx.userId),
+
+  // Execution log handlers
+  'executionLog.readAll': async () => {
+    return { records: executionLog.readAllRecords() };
+  },
+  'executionLog.readSince': async (payload) => {
+    const sinceMs = typeof payload?.sinceMs === 'number' ? payload.sinceMs : Date.now();
+    return { records: executionLog.readRecordsSince(sinceMs) };
+  },
+  'executionLog.cleanup': async () => {
+    executionLog.cleanupOldRecords();
+    return { ok: true };
+  },
 
   'user.init': async () => {
     const user = await users.getOrCreateSelfUser();
@@ -3525,6 +3540,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     completed: onboardingState.setOnboardingCompleted(completed !== false),
   }),
 
+  // ── Commander CLI fallback (no API-key model configured) ──
+  'prefs.getCliFallback': async (_payload, ctx) => ({
+    cli: cliFallback.getCliFallback(ctx.userId),
+    noticeShown: cliFallback.cliFallbackNoticeShown(ctx.userId),
+  }),
+  'prefs.setCliFallback': async ({ cli }: { cli?: unknown } = {}) => {
+    const uid = _activeUserIdForPicker();
+    if (!uid) throw new Error('no active user');
+    return { cli: cliFallback.setCliFallback(uid, typeof cli === 'string' ? cli : '') };
+  },
+  'prefs.markCliFallbackNoticeShown': async (_payload, ctx) => {
+    cliFallback.markCliFallbackNoticeShown(ctx.userId);
+    return { ok: true };
+  },
+
+  // Whether ANY usable API-key model is configured (sync, cheap). The
+  // renderer uses this before every commander send to decide whether to
+  // fall back to the signed-in CLI agent.
+  'model.hasConfigured': async () => auth.hasConfiguredModel(),
+
   // ── Cognition extraction from sessions (onboarding) ──
   // Runs through a locally-detected CLI Agent (already authenticated on
   // the user's machine), so onboarding needs no API key. We prefer
@@ -4339,6 +4374,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // the recall surface); the legacy store-asset handler of the same name in
   // ipc/cognition.ts must not shadow it, so it is excluded from the spread.
   ...(({ 'cognition.assets.list': _legacyCognitionAssetsList, ...rest }) => rest)(cognitionHandlers),
+
+  // P3394 TaskContinuationSnapshot and ContextReuseReceipt handlers for
 };
 
 // ── Stream handlers ──────────────────────────────────────────────────────

@@ -3610,5 +3610,14 @@
   "quality.occurrences_more": "+{n} não exibidos",
   "marketplace.redflag_title": "Confirmar instalação arriscada de “{name}”",
   "marketplace.redflag_intro": "A verificação encontrou padrões claramente perigosos em “{name}”. Não aparecem em habilidades normais:",
-  "marketplace.redflag_type_name": "Para instalar mesmo assim, digite o nome “{name}”:"
+  "marketplace.redflag_type_name": "Para instalar mesmo assim, digite o nome “{name}”:",
+  "settings.cli_fallback.title": "Fallback de CLI do Commander",
+  "settings.cli_fallback.sub": "Sem modelo com API Key configurado, o Commander roteia o chat para o seu agente CLI local conectado, em vez de falhar.",
+  "settings.cli_fallback.label": "Agente de execução de fallback",
+  "settings.cli_fallback.auto": "Automático (primeiro CLI conectado)",
+  "settings.cli_fallback.auto_hint": "Seleciona automaticamente o primeiro CLI conectado (Claude Code / Codex / OpenCode).",
+  "settings.cli_fallback.state_auto": "Seleciona automaticamente o primeiro agente CLI conectado",
+  "settings.cli_fallback.state_chosen": "Usará {cli} como agente de execução de fallback",
+  "settings.cli_fallback.saved_no_api": "Salvo. O Commander não tem API Key agora — o chat irá para o agente CLI selecionado.",
+  "settings.cli_fallback.notice_no_api": "O Commander não tem API Key utilizável — o chat usará automaticamente seu agente CLI local conectado (altere nas configurações de IA)."
 }
