@@ -1,4 +1,5 @@
 import type { ResourceContentStatus } from '../contract';
+import { deriveOverall } from './dashboard-model';
 import type {
   AuthorizationKind,
   BriefingState,
@@ -66,8 +67,8 @@ function validateUserId(userId: string): string {
   return normalized;
 }
 
-function demoDashboard(): PersonalContextDashboard {
-  return {
+export function demoDashboard(): PersonalContextDashboard {
+  const dashboard: PersonalContextDashboard = {
     mode: 'demo',
     messaging: { instanceId: 'demo-feishu', botConnected: true, ownerConfigured: true, ownerLabel: '演示用户' },
     authorization: { kind: 'connected', providerId: 'feishu', identityLabel: '演示用户' },
@@ -76,7 +77,10 @@ function demoDashboard(): PersonalContextDashboard {
     review: { pending: 2, confirmed: 2, rejected: 0, sourceInvalidated: 0 },
     briefing: { state: 'preview_ready', destination: null, lastDelivery: null, pendingCandidateCount: 2 },
     actions: ['mode.real.select', 'sync.start', 'review.open', 'briefing.preview'],
+    overall: { status: 'off', chain: { connection: 'missing', authorization: 'missing', delivery: 'missing' }, issues: [] },
   };
+  dashboard.overall = deriveOverall(dashboard);
+  return dashboard;
 }
 
 function actionsFor(input: Readonly<{
@@ -167,6 +171,7 @@ async function buildRealDashboard(userId: string, deps: PersonalContextApplicati
       pendingCandidateCount: briefing.pendingCandidateCount,
     },
     actions: [],
+    overall: { status: 'off', chain: { connection: 'missing', authorization: 'missing', delivery: 'missing' }, issues: [] },
   };
   dashboard.actions = actionsFor({
     mode: 'real',
@@ -176,6 +181,7 @@ async function buildRealDashboard(userId: string, deps: PersonalContextApplicati
     pending: dashboard.review.pending,
     briefingState: briefing.state,
   });
+  dashboard.overall = deriveOverall(dashboard);
   return dashboard;
 }
 

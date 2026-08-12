@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { deriveOverall } from '../../../src/main/features/personal_context/application/dashboard-model';
+import { demoDashboard } from '../../../src/main/features/personal_context/application/service';
 import type { PersonalContextDashboard } from '../../../src/main/features/personal_context/application/types';
 
 function dashboard(overrides: Partial<PersonalContextDashboard> = {}): PersonalContextDashboard {
@@ -96,5 +97,13 @@ describe('deriveOverall', () => {
     const allOk = Object.values(overall.chain).every((state) => state === 'ok');
     expect(overall.status === 'ready').toBe(allOk);
     expect(allOk).toBe(overall.issues.length === 0);
+  });
+});
+
+describe('service overall injection', () => {
+  it('demo dashboard 聚合为 ready 且无待办', () => {
+    const overall = demoDashboard().overall;
+    expect(overall.status).toBe('ready');
+    expect(overall.issues).toEqual([]);
   });
 });
