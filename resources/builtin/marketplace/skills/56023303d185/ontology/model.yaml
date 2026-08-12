@@ -1,0 +1,18 @@
+{
+  "entities": [
+    "ProductVersion",
+    "Stage",
+    "Uncertainty",
+    "Gate",
+    "ChangeCandidate"
+  ],
+  "gate": "next_required_human_gate",
+  "relations": [
+    "routes_to",
+    "blocked_by",
+    "governed_by",
+    "supported_by"
+  ],
+  "schema_version": "1.0",
+  "stage": "Orchestrate"
+}

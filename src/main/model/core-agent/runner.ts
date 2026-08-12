@@ -48,6 +48,7 @@ import {
   formatProjectInstructionsForSystemPrompt,
   writeProjectInstructions,
 } from '../../features/projects';
+import { formatRoleProfileForSystemPrompt } from '../../features/spaces';
 import * as projectTasks from '../../features/project_tasks';
 import * as metacognition from '../../features/metacognition';
 import { assertAgentChatDispatchable } from '../../features/agent-dispatch-policy';
@@ -899,7 +900,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     : [];
 
   // Merge injected tools with extra tools from caller
-  const allTools = [
+  const allTools = params.disableTools ? [] : [
     ...injectedTools,
     ...localTools,
     ...fileTools,
@@ -1046,6 +1047,12 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ? formatMemoryForSystemPrompt(uid, memoryAgentScope, params.projectId, activeCognitionSourceIds)
     : '';
   if (memoryBlock) parts.push(memoryBlock);
+  // 二期「空间 = 角色」：项目绑空间 → 注入该角色模板画像（个人本体角色模板文件，
+  // 与 memoryBlock 同层级的读侧背景上下文；异步读文件，失败静默降级为空串）。
+  const roleProfileBlock = (uid && memoryAgentScope && params.projectId)
+    ? await formatRoleProfileForSystemPrompt(uid, params.projectId)
+    : '';
+  if (roleProfileBlock) parts.push(roleProfileBlock);
   const resolvedSystemPrompt = parts.join('\n\n');
   // P2: the truly per-turn-volatile blocks — the orchestration ledger (~7-9K
   // JSON that changes every commander turn) and the datetime tail — do NOT go

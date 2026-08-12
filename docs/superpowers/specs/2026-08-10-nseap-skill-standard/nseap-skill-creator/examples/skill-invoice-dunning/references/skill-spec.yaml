@@ -1,0 +1,11 @@
+skill_spec:
+  standard_id: nseap-skill-creator
+  skill_class: execution
+  is_skill_of_skill: false
+  level: L5
+  risk_route: Full
+  promotion_ceiling: staged          # HARD CAP
+  production_release_allowed: false  # HARD LOCK
+  session_role: sub_skill
+  owns_session: false
+  form: interpreted

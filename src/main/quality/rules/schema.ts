@@ -14,8 +14,10 @@
 import { Violation } from '../types';
 
 // Skill name pattern: starts with a letter, then word chars / dashes.
-// Spaces are not allowed. Mirrors `skills.ts::SKILL_NAME_RE`.
-const SKILL_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
+// Spaces are not allowed. Mirrors `skills.ts::SKILL_NAME_RE` for user-created
+// skills, plus CJK letters so Chinese-named marketplace display names
+// (product decision 2026-08-10) don't trip MEDIUM warnings.
+const SKILL_NAME_RE = /^[\p{L}][\p{L}\p{N}_-]*$/u;
 // Agent names mirror `agents.ts::NAME_TOKEN_RE`.
 const AGENT_NAME_RE = /^[A-Za-z0-9_一-鿿-]+$/;
 
@@ -77,7 +79,7 @@ export function validateSkillFrontmatter(
       rule: 'frontmatter_name_invalid',
       field: 'frontmatter:name',
       snippet: name.slice(0, 100),
-      suggested_fix: 'Skill name should start with a letter and contain only letters, digits, `_`, and `-`; spaces are not allowed.',
+      suggested_fix: 'Skill name should start with a letter (CJK allowed) and contain only letters, digits, `_`, and `-`; spaces are not allowed.',
     });
   }
 
@@ -131,7 +133,18 @@ export function validateSkillMeta(
   const category = _stringField(skillMeta, 'category');
   if (!category) {
     out.push({
-      level: 'MEDIUM',
+      // LOW, not MEDIUM: an absent `category` is a marketplace-catalog
+      // completeness gap, not a security signal — the skill runs fine without
+      // it. Most shipped skills omit `_meta.json` entirely, so at MEDIUM this
+      // single rule accounted for the overwhelming majority of all MEDIUM
+      // findings in the builtin corpus and put a "has findings" badge on
+      // essentially every installed skill. A warning that fires on everything
+      // teaches users to ignore warnings.
+      //
+      // `skill_meta_category_invalid` below stays MEDIUM on purpose: "set, but
+      // to something unrecognized" suggests a mistake worth surfacing, whereas
+      // "not set" is the common, benign default.
+      level: 'LOW',
       rule: 'skill_meta_category_missing',
       field: '_meta.json:category',
       snippet: '',

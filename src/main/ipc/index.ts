@@ -31,6 +31,8 @@ import * as p3394 from '../features/p3394';
 import * as executionRecords from '../features/execution-records';
 import * as workbench from '../features/workbench';
 import * as cognition from '../features/cognition';
+import * as skillTrust from '../features/skill_trust';
+import * as skillReverify from '../features/skill_reverify';
 import * as recallCandidates from '../features/recall/candidate-service';
 import * as recallAssets from '../features/recall/asset-service';
 import * as recallSkillDrafts from '../features/recall/skill-draft-service';
@@ -108,6 +110,8 @@ import {
 import { invokeHandlers as qualityHandlers } from './quality';
 import { invokeHandlers as connectorsHandlers } from './connectors';
 import { invokeHandlers as messagingHandlers } from './messaging';
+import { invokeHandlers as personalContextHandlers } from './personal-context';
+import { invokeHandlers as desktopWorkbenchHandlers } from './desktop-workbench';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as cognitionHandlers } from './cognition';
 import { safeId } from '../storage';
@@ -1009,7 +1013,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
-  'conversations.create': async ({ title = '', projectId = '' } = {}, ctx) => {
+  'conversations.create': async ({ title = '', projectId = '', kind = '' } = {}, ctx) => {
     // Validate the projectId belongs to this user before persisting it on
     // the conv record. Unknown / invalid projectIds are dropped silently
     // (the conv lands without project membership) — the renderer should
@@ -1020,8 +1024,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (projectId && typeof projectId === 'string' && safeId(projectId)) {
       if (await projects.projectExists(ctx.userId, projectId)) validProjectId = projectId;
     }
+    // 会话 kind 白名单：目前只有 space_builder（空间模式）被允许透传；
+    // 其余一律回落 normal，防止渲染层任意指定会话类型。
+    const convKind = kind === 'space_builder' ? 'space_builder' : 'normal';
     const conv = await chats.createConversation(ctx.userId, {
-      kind: 'normal',
+      kind: convKind,
       title,
       ...(validProjectId ? { projectId: validProjectId } : {}),
     });
@@ -1052,6 +1059,18 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ctx.userId, cid, title, conversationProjectHint(args));
     if (!conv) throw new Error('conversation not found');
     return { conversation: conv };
+  },
+
+  'conversations.completeSpaceBuilder': async (args, ctx) => {
+    const { cid } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    // 只允许标记 kind=space_builder 的会话；其余拒绝，防止任意会话被误标。
+    const conv = await chats.getConversation(ctx.userId, cid, conversationProjectHint(args));
+    if (!conv || conv.kind !== 'space_builder') throw new Error('not a space_builder conversation');
+    const updated = await chats.updateConversation(
+      ctx.userId, cid, { space_builder_completed: new Date().toISOString() }, conversationProjectHint(args));
+    if (!updated) throw new Error('conversation not found');
+    return { conversation: updated };
   },
 
   'conversations.deleteAll': async (_args, ctx) => {
@@ -1108,14 +1127,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { project };
   },
 
-  // ── Workspaces（工作空间一期：空间 = 主界面 + 资源作用域限制）────────────
+  // ── 情境空间（原"工作空间"：空间 = 主界面 + 资源作用域限制）────────────
   'spaces.list': async (_payload, ctx) => {
     return { spaces: await spaces.listSpaces(ctx.userId) };
   },
 
-  'spaces.create': async ({ name, template_id, icon } = {}, ctx) => {
-    const result = await spaces.createSpace(ctx.userId, { name, template_id, icon });
+  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
+    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, main_skill_ref, asset_reference_bindings });
     if (!result.ok) throw new Error((result as { error: string }).error);
+    return { space: result.space };
+  },
+
+  'spaces.createFromDraft': async ({ draft } = {}, ctx) => {
+    if (!draft || typeof draft !== 'object') throw new Error('invalid draft');
+    const result = await spaces.createSpaceFromDraft(ctx.userId, draft);
+    if (!result.ok) {
+      const err = result as { error: string; details?: string[] };
+      throw new Error(err.details && err.details.length ? `invalid_draft: ${err.details.join('；')}` : err.error);
+    }
     return { space: result.space };
   },
 
@@ -1126,9 +1155,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { space };
   },
 
-  'spaces.update': async ({ spaceId, name, icon, template_id } = {}, ctx) => {
+  'spaces.update': async ({ spaceId, name, icon, template_id, primary_template_id, secondary_template_ids, space_type, sustained_outcome, gate_status, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
-    const result = await spaces.updateSpace(ctx.userId, spaceId, { name, icon, template_id });
+    const result = await spaces.updateSpace(ctx.userId, spaceId, { name, icon, template_id, primary_template_id, secondary_template_ids, space_type, sustained_outcome, gate_status, main_skill_ref, asset_reference_bindings });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
   },
@@ -1178,7 +1207,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { templates };
   },
 
-  // ── 项目 ↔ 空间绑定（工作空间一期）──────────────────────────────────────
+  // 情境入口场景列表（教育/写作/职场+自定义，M2）
+  'spaces.scenarios.list': async (_payload, _ctx) => {
+    const scenarios = await import('../features/role_templates').then((m) => m.listScenarios());
+    return { scenarios };
+  },
+
+  // ── 项目 ↔ 空间绑定（情境空间一期）──────────────────────────────────────
   'projects.bindSpace': async ({ projectId, spaceId } = {}, ctx) => {
     if (!safeId(projectId)) throw new Error('invalid projectId');
     if (spaceId && !safeId(spaceId)) throw new Error('invalid spaceId');
@@ -1420,6 +1455,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       skillDetails: bindings.skills
         .map((id) => skillById.get(id))
         .filter(Boolean),
+    };
+  },
+
+  'projects.scope.resolve': async ({ projectId }, ctx) => {
+    if (projectId && !safeId(projectId)) throw new Error('invalid projectId');
+    const meta = await projects.getProjectScopeMeta(ctx.userId, projectId || null);
+    if (!meta.scope) return { ok: true, scope: null, space: meta.space };
+    const [agentList, skillList] = await Promise.all([
+      agents.listAgentSummaries(),
+      skills.listSkills(),
+    ]);
+    const agentById = new Map(agentList.map((a: any) => [a.agent_id, a]));
+    const skillById = new Map(skillList.map((s: any) => [s.id, s]));
+    return {
+      ok: true,
+      scope: {
+        agents: meta.scope.agents.map((id) => ({ id, name: (agentById.get(id) as any)?.name || id })),
+        skills: meta.scope.skills.map((id) => ({ id, name: (skillById.get(id) as any)?.name || id })),
+      },
+      space: meta.space,
     };
   },
 
@@ -1740,14 +1795,47 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(skillId)) throw new Error('invalid skill id');
     if (target !== 'installed-skill') throw new Error('unsupported validation target');
     const skillDir = userMarketplaceSkillDir(ctx.userId, skillId);
+    // `static`, not `real`: this channel scans the installed files and never
+    // executes the skill (the channel name says scan for the same reason).
+    // Labelling it `real` produced records that read as run evidence for a run
+    // that never happened — PRD §8.2 treats the minimal real run as a separate,
+    // still-unimplemented admission requirement.
     return { ok: true, validation: await p3394.runSkillValidation(ctx.userId, {
-      skillId, target, skillDir, allowedRoots: [skillDir], boundary: 'real',
+      skillId, target, skillDir, allowedRoots: [skillDir], boundary: 'static',
     }) };
+  },
+
+  // PRD §8.2's third admission check. Named `invocability`, not `run`: it
+  // resolves the skill and parse-checks its scripts without executing them, so
+  // the channel must not imply a real run happened.
+  'p3394.invocability.check': async ({ skillId }, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skill id');
+    return { ok: true, invocability: await p3394.verifySkillInvocability(ctx.userId, skillId) };
+  },
+
+  'p3394.invocability.read': async ({ invocabilityId }, ctx) => {
+    if (!safeId(invocabilityId)) throw new Error('invalid invocability id');
+    return { ok: true, invocability: await p3394.readSkillInvocability(ctx.userId, invocabilityId) };
   },
 
   'p3394.validation.read': async ({ validationId }, ctx) => {
     if (!safeId(validationId)) throw new Error('invalid validation id');
     return { ok: true, validation: await p3394.readSkillValidation(ctx.userId, validationId) };
+  },
+
+  /**
+   * Re-verify an installed skill against its security receipt, rescanning when
+   * the content or the ruleset changed since the last scan. This is what makes
+   * a post-install edit detectable — the install-time verdict alone cannot.
+   */
+  'skills.trust.reverify': async ({ skillId } = {}, ctx) => {
+    if (!safeId(skillId)) throw new Error('invalid skill id');
+    return { ok: true, result: await skillReverify.reverifySkillDeep(ctx.userId, skillId) };
+  },
+
+  /** Receipts on record, for a trust/audit surface. */
+  'skills.trust.list': async (_args, ctx) => {
+    return { ok: true, receipts: skillTrust.listReceipts(ctx.userId) };
   },
 
   'p3394.execution.list': async (_args, ctx) => {
@@ -2303,20 +2391,50 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }) };
   },
 
-  'cognition.candidates.decide': async ({ source, candidateId, decision, reason, notes, toGlobalMemory, toGroupIds } = {}, ctx) => {
+  'cognition.candidates.decide': async ({ source, candidateId, decision, reason, notes, toGlobalMemory, toGroupIds, semanticReview, deepReview } = {}, ctx) => {
     if (source !== 'personal_ontology' && source !== 'p3394_experience' && source !== 'p3394_patch') throw new Error('invalid cognition candidate source');
     if (!safeId(candidateId)) throw new Error('invalid candidate id');
-    if (decision !== 'accept' && decision !== 'reject') throw new Error('invalid cognition candidate decision');
+    if (decision !== 'accept' && decision !== 'modify' && decision !== 'defer' && decision !== 'reject') throw new Error('invalid cognition candidate decision');
     if (toGroupIds !== undefined && (!Array.isArray(toGroupIds) || toGroupIds.some((id) => !safeId(id)))) throw new Error('invalid group ids');
-    return { ok: true, result: await cognition.decideCognitionCandidate(ctx.userId, {
-      source,
-      candidateId,
-      decision,
-      ...(typeof reason === 'string' ? { reason } : {}),
-      ...(typeof notes === 'string' ? { notes } : {}),
-      ...(typeof toGlobalMemory === 'boolean' ? { toGlobalMemory } : {}),
-      ...(Array.isArray(toGroupIds) ? { toGroupIds } : {}),
-    }) };
+    // Two ways to get a semantic review, in order of preference:
+    //   `deepReview: true`  — main runs it itself (trustworthy origin);
+    //   `semanticReview`    — a caller forwards one it already ran.
+    // The forwarded form is safe despite coming from the renderer because
+    // `mergeSemanticReview` is monotonic: it can only escalate a verdict, never
+    // clear a deterministic finding. So a forged "all clear" cannot admit a
+    // blocked candidate.
+    const review = cognition.parseSemanticReview(semanticReview);
+    try {
+      return { ok: true, result: await cognition.decideCognitionCandidate(ctx.userId, {
+        source,
+        candidateId,
+        decision,
+        ...(typeof reason === 'string' ? { reason } : {}),
+        ...(typeof notes === 'string' ? { notes } : {}),
+        ...(typeof toGlobalMemory === 'boolean' ? { toGlobalMemory } : {}),
+        ...(Array.isArray(toGroupIds) ? { toGroupIds } : {}),
+        ...(review ? { semanticReview: review } : {}),
+        ...(deepReview === true && !review ? { runSemanticReview: true } : {}),
+      }) };
+    } catch (err) {
+      // A gate block is an expected outcome, not a crash: return the decision
+      // so the UI can explain what was found instead of showing a raw error.
+      const gate = (err as { gateDecision?: unknown }).gateDecision;
+      if (gate) {
+        return { ok: false, code: 'cognition_gate_blocked', error: (err as Error).message, gate };
+      }
+      throw err;
+    }
+  },
+
+  /**
+   * Standalone semantic review, for surfacing a deep-review result in the
+   * candidate detail view without committing an accept.
+   */
+  'cognition.candidates.deepReview': async ({ source, candidateId } = {}, ctx) => {
+    if (source !== 'personal_ontology' && source !== 'p3394_experience' && source !== 'p3394_patch') throw new Error('invalid cognition candidate source');
+    if (!safeId(candidateId)) throw new Error('invalid candidate id');
+    return { ok: true, review: await cognition.deepReviewCognitionCandidate(ctx.userId, source, candidateId) };
   },
 
   'cognition.receipts.list': async ({ status, agentId, conversationId, skillId, limit } = {}, ctx) => {
@@ -2701,24 +2819,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'personalOntology.candidates.list': async (_payload, ctx) => {
     return personalOntologyCandidates.listCandidates(ctx.userId);
   },
-  'personalOntology.candidates.confirm': async ({ candidateId, toGlobalMemory, toGroupIds, targetField, routeWithLlm }, ctx) => {
+  'personalOntology.candidates.confirm': async ({ candidateId, toGlobalMemory, toGroupIds, targetField, projectId, routeWithLlm }, ctx) => {
     if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
-    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string } = {};
+    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string; projectId?: string } = {};
     if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
     if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
     if (typeof targetField === 'string' && targetField.trim()) dest.targetField = targetField.trim();
+    if (typeof projectId === 'string' && projectId.trim()) dest.projectId = projectId.trim();
     return personalOntologyCandidates.confirmCandidate(ctx.userId, candidateId, dest, { routeWithLlm: routeWithLlm === true });
   },
   'personalOntology.candidates.reject': async ({ candidateId, reason }, ctx) => {
     if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
     return personalOntologyCandidates.rejectCandidate(ctx.userId, candidateId, reason);
   },
-  'personalOntology.candidates.confirmBatch': async ({ candidateIds, toGlobalMemory, toGroupIds, targetField, routeWithLlm }, ctx) => {
+  'personalOntology.candidates.confirmBatch': async ({ candidateIds, toGlobalMemory, toGroupIds, targetField, projectId, routeWithLlm }, ctx) => {
     if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
-    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string } = {};
+    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string; projectId?: string } = {};
     if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
     if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
     if (typeof targetField === 'string' && targetField.trim()) dest.targetField = targetField.trim();
+    if (typeof projectId === 'string' && projectId.trim()) dest.projectId = projectId.trim();
     return personalOntologyCandidates.confirmCandidates(ctx.userId, candidateIds, dest, { routeWithLlm: routeWithLlm === true });
   },
   'personalOntology.candidates.rejectBatch': async ({ candidateIds, reason }, ctx) => {
@@ -2771,9 +2891,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'personalOntology.templates.list': async (_payload, ctx) => {
     return { templates: await personalOntologyTemplateFiles.listTemplateStatus(ctx.userId) };
   },
-  'personalOntology.templates.install': async ({ templateId }, ctx) => {
-    if (!templateId || typeof templateId !== 'string') throw new Error('missing templateId');
-    return personalOntologyTemplateFiles.installTemplateFile(ctx.userId, templateId);
+  'personalOntology.templates.install': async ({ templateId, restoreData }, ctx) => {
+    if (!templateId || typeof templateId !== 'string' || !safeId(templateId)) throw new Error('invalid templateId');
+    return personalOntologyTemplateFiles.installTemplateFile(ctx.userId, templateId, !!restoreData);
+  },
+  'personalOntology.templates.uninstall': async ({ templateId, archiveMemory }, ctx) => {
+    if (!templateId || typeof templateId !== 'string' || !safeId(templateId)) throw new Error('invalid templateId');
+    return personalOntologyTemplateFiles.uninstallTemplateFile(ctx.userId, templateId, !!archiveMemory);
+  },
+  'personalOntology.templates.hasArchive': async ({ templateId }, ctx) => {
+    if (!templateId || typeof templateId !== 'string' || !safeId(templateId)) throw new Error('invalid templateId');
+    return { hasArchive: personalOntologyTemplateFiles.templateHasArchive(ctx.userId, templateId) };
+  },
+  'personalOntology.templates.hasMemoryArchive': async ({ templateId }, ctx) => {
+    if (!templateId || typeof templateId !== 'string' || !safeId(templateId)) throw new Error('invalid templateId');
+    return { hasArchive: personalOntologyTemplateFiles.templateHasMemoryArchive(ctx.userId, templateId) };
   },
 
   // ── Personal Ontology Group Fields (挖空表单字段，兼容复合 id) ──
@@ -2904,10 +3036,23 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { skill: r.skill, skills: r.skills, seedModelText: r.seedModelText, seedMessage: r.seedMessage };
   },
 
-  'skills.createFromDir': async ({ name, description, srcDir, force }) => {
-    const r = await skills.createFromDir(name ?? null, description ?? null, String(srcDir || ''), { force: force === true });
+  'skills.createFromDir': async ({ name, description, srcDir, force, acceptRedFlagRisk }) => {
+    const r = await skills.createFromDir(name ?? null, description ?? null, String(srcDir || ''), {
+      force: force === true,
+      // Set only after the user confirmed in the red-flag dialog. Kept distinct
+      // from `force`, which retry paths set for unrelated reasons.
+      acceptRedFlagRisk: acceptRedFlagRisk === true,
+    });
     if (!r.ok) return r;
-    return { skill: r.skill, skills: r.skills, seedModelText: r.seedModelText, seedMessage: r.seedMessage };
+    return {
+      skill: r.skill,
+      skills: r.skills,
+      seedModelText: r.seedModelText,
+      seedMessage: r.seedMessage,
+      // Carried on success so the renderer can confirm the scan ran; a silent
+      // pass is indistinguishable from no check at all.
+      ...(r.securityPass ? { securityScan: r.securityPass } : {}),
+    };
   },
 
   'skills.discardImportDraft': async ({ id }) => {
@@ -3057,7 +3202,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }, { force: force === true, name: typeof name === 'string' ? name : undefined });
   },
 
-  'marketplace.installSkill': async ({ id, name, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion, force }) => {
+  'marketplace.installSkill': async ({ id, name, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion, force, acceptSecurityRisk }) => {
     if (!id || typeof id !== 'string') throw new Error('id required');
     if (typeof version !== 'string' || typeof published_at !== 'number') {
       throw new Error('version + published_at required');
@@ -3071,7 +3216,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ...(typeof minVersion === 'string' ? { minVersion } : {}),
       ...(typeof min_pc_version === 'string' ? { min_pc_version } : {}),
       ...(typeof minPcVersion === 'string' ? { minPcVersion } : {}),
-    }, { force: force === true, name: typeof name === 'string' ? name : undefined });
+    }, {
+      force: force === true,
+      name: typeof name === 'string' ? name : undefined,
+      // Only meaningful for verdicts `scanVerdictAllowsOverride` accepts; the
+      // install path re-checks rather than trusting the renderer.
+      acceptSecurityRisk: acceptSecurityRisk === true,
+    });
   },
 
   // Uninstall is non-dev: wipes the local install copy + manifest entry. Does NOT touch the
@@ -4172,6 +4323,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // handler table; the dedicated IPC module returns metadata-only DTOs.
   ...messagingHandlers,
 
+  // Personal context connector (Feishu user OAuth + resource sync). Credential
+  // material never crosses this table; status DTOs only.
+  ...personalContextHandlers,
+  ...desktopWorkbenchHandlers,
+
   // Cross-session memory UI — view/edit/import/export over features/memory.ts.
   ...memoryHandlers,
 
@@ -4674,6 +4830,9 @@ export function register(): void {
         marketplaceMinAppVersion?: string;
         marketplaceCurrentAppVersion?: string;
         qualityReport?: unknown;
+        securityBlocked?: boolean;
+        securityUnavailable?: boolean;
+        securityScan?: unknown;
       } = {
         ok: false,
         error: normalized.error,
@@ -4681,6 +4840,21 @@ export function register(): void {
       };
       const qualityReport = (err as { qualityReport?: unknown }).qualityReport;
       if (qualityReport) out.qualityReport = qualityReport;
+      // Security-gate verdicts travel as structured data, not just a message,
+      // so the renderer can show the spec's risk card (risk type + impact,
+      // never the matched source text) instead of a raw error string. The two
+      // flags stay separate on purpose: "blocked" means the scanner rejected
+      // the content, "unavailable" means it could not run — telling a user
+      // their skill is malicious when the scanner merely crashed would teach
+      // them to ignore real blocks.
+      const secErr = err as {
+        securityBlocked?: boolean;
+        securityUnavailable?: boolean;
+        securityScan?: unknown;
+      };
+      if (secErr.securityBlocked) out.securityBlocked = true;
+      if (secErr.securityUnavailable) out.securityUnavailable = true;
+      if (secErr.securityScan) out.securityScan = secErr.securityScan;
       const installInfo = marketplace.getMarketplaceInstallErrorInfo(err);
       if (installInfo.kind) {
         out.marketplaceKind = installInfo.kind;

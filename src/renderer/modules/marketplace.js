@@ -88,7 +88,162 @@ function _mpErrorFromResponse(res, fallbackMessage) {
     err.marketplaceCurrentAppVersion = res.marketplaceCurrentAppVersion || '';
   }
   if (res && res.qualityReport) err.qualityReport = res.qualityReport;
+  if (res && res.securityBlocked) err.securityBlocked = true;
+  if (res && res.securityUnavailable) err.securityUnavailable = true;
+  if (res && res.securityScan) err.securityScan = res.securityScan;
+  if (res && res.securityOverridable) err.securityOverridable = true;
+  if (res && Array.isArray(res.securityRuleIds)) err.securityRuleIds = res.securityRuleIds;
   return err;
+}
+
+/**
+ * Human-readable summary of why a security scan rejected an install.
+ *
+ * Reports counts and rule ids only. The spec requires a high-risk message to
+ * name the risk type and impact "without exposing the sensitive original text"
+ * — that text may itself be the credential that got leaked.
+ */
+function _mpSecurityReasonLines(scan) {
+  const lines = [];
+  if (!scan) return lines;
+  if (Array.isArray(scan.localRedLines) && scan.localRedLines.length) {
+    lines.push(t('marketplace.security_reason_red_line'));
+  }
+  if (scan.hardBlocked) lines.push(t('marketplace.security_reason_hard_block'));
+  const s = scan.attackSurface || {};
+  if (s.egressPoints > 0) {
+    lines.push(t('marketplace.security_reason_egress').replace('{n}', String(s.egressPoints)));
+  }
+  if (s.dynamicExecPoints > 0) {
+    lines.push(t('marketplace.security_reason_dynamic_exec').replace('{n}', String(s.dynamicExecPoints)));
+  }
+  if (s.persistencePoints > 0) {
+    lines.push(t('marketplace.security_reason_persistence').replace('{n}', String(s.persistencePoints)));
+  }
+  return lines;
+}
+
+/**
+ * Show the spec's risk card for a security-gate rejection.
+ *
+ * Deliberately offers no "install anyway": a high-risk verdict is not
+ * user-overridable, and rendering an escape hatch here would undo the gate that
+ * just ran in the main process.
+ *
+ * `unavailable` is a separate message, not a softer wording of the same one. The
+ * user needs to know whether their skill looked dangerous or whether we simply
+ * could not check — conflating the two teaches them to dismiss real blocks.
+ */
+/**
+ * Plain-language lines for the red lines that fired.
+ *
+ * Keyed by rule id so each says what was actually found. Terminology is kept —
+ * `curl | sh`, `~/.ssh` — because a user who can act on this needs the specific
+ * thing, with one clause of explanation after it rather than instead of it.
+ * Unknown ids fall back to the generic reason list rather than being dropped.
+ */
+function _mpRiskRuleLines(ruleIds) {
+  const out = [];
+  for (const id of (Array.isArray(ruleIds) ? ruleIds : [])) {
+    const key = `marketplace.risk_rule_${id}`;
+    const text = t(key);
+    // `t` echoes the key back when there is no translation.
+    if (text && text !== key) out.push(text);
+  }
+  return out;
+}
+
+/**
+ * Confirm a red-flag override by making the user type the skill name.
+ *
+ * Deliberately more friction than the danger-button dialog used for a scanner
+ * outage, because the two are not equally serious. A red flag is a specific
+ * malicious pattern, and the attack this has to withstand is a skill whose own
+ * text asks the user to click through — so the gesture cannot be a single click
+ * on a button whose position the user has already learned.
+ *
+ * Returns true only on an exact name match. Case and surrounding whitespace are
+ * forgiven; nothing else is.
+ */
+async function _mpConfirmRedFlagOverride(name, ruleIds) {
+  const lines = _mpRiskRuleLines(ruleIds);
+  const detail = lines.length ? `\n\n${lines.map((r) => `• ${r}`).join('\n')}` : '';
+  // `uiPrompt` renders no title, so the heading goes into the message body —
+  // passing a `title` option would silently drop it.
+  const typed = await uiPrompt(
+    `${t('marketplace.redflag_title').replace('{name}', name)}\n\n${
+      t('marketplace.redflag_intro').replace('{name}', name)
+    }${detail}\n\n${
+      t('marketplace.redflag_type_name').replace('{name}', name)
+    }\n\n${t('marketplace.override_note')}`,
+  );
+  if (typed === null) return false;
+  return String(typed).trim().toLowerCase() === String(name).trim().toLowerCase();
+}
+
+/**
+ * Show why an install was refused, and offer "install anyway" when the refusal
+ * is waivable.
+ *
+ * Returns true when the user chose to proceed. Only reachable when the main
+ * process marked the rejection overridable — currently a scanner outage, never a
+ * red line. The renderer does not decide this: it would be a second copy of the
+ * rule, and the copy that drifts is the one that admits something it shouldn't.
+ */
+async function _mpShowSecurityCard(name, err) {
+  const scan = err && err.securityScan;
+  const unavailable = !!(err && err.securityUnavailable);
+  const overridable = !!(err && err.securityOverridable);
+  if (unavailable) {
+    if (!overridable) {
+      await uiAlert(
+        t('marketplace.security_unavailable_body').replace('{name}', name),
+        t('marketplace.security_unavailable_title'),
+      );
+      return false;
+    }
+    // Nothing was verified — said plainly, because "could not check" and "looks
+    // dangerous" call for different decisions from the user.
+    const proceed = await uiConfirmDanger({
+      title: t('marketplace.override_title').replace('{name}', name),
+      message: `${t('marketplace.override_unavailable_intro')}\n\n• ${
+        t('marketplace.security_unavailable_body').replace('{name}', name)
+      }\n\n${t('marketplace.override_note')}`,
+      dangerLabel: t('marketplace.override_confirm'),
+      cancelLabel: t('marketplace.override_cancel'),
+    });
+    return proceed === true;
+  }
+  const reasons = _mpSecurityReasonLines(scan);
+  const detail = reasons.length ? `\n\n${reasons.map((r) => `• ${r}`).join('\n')}` : '';
+  // Degraded-rules disclosure rides along on the block too: if coverage was
+  // weaker than normal the user should know the verdict came from fallback rules.
+  const degraded = scan && scan.rulesDegraded
+    ? `\n\n${t('marketplace.security_rules_degraded')}`
+    : '';
+  // Rule-specific wording first; the count-based summary is the fallback for
+  // findings that carry no rule id.
+  const ruleLines = _mpRiskRuleLines(err && err.securityRuleIds);
+  const body = ruleLines.length
+    ? `${t('marketplace.override_intro')}\n\n${ruleLines.map((r) => `• ${r}`).join('\n')}`
+    : `${t('marketplace.security_blocked_body').replace('{name}', name)}${detail}`;
+
+  if (!overridable) {
+    // Final. Says so rather than leaving the user looking for the button that
+    // would let them through — there isn't one, by design.
+    await uiAlert(
+      `${body}${degraded}\n\n${t('marketplace.override_final').replace('{name}', name)}`,
+      t('marketplace.security_blocked_title'),
+    );
+    return false;
+  }
+  const proceed = await uiConfirmDanger({
+    title: t('marketplace.override_title').replace('{name}', name),
+    message: `${body}${degraded}\n\n${t('marketplace.override_note')}`,
+    dangerLabel: t('marketplace.override_confirm'),
+    cancelLabel: t('marketplace.override_cancel'),
+  });
+  return proceed === true;
 }
 
 function _mpShowReviewStatusUi() {
@@ -1894,13 +2049,17 @@ async function _mpInstall(kind, id, itemOverride = null) {
   if (_mpState.installing.has(key)) return;
   _mpState.installing.add(key);
   _mpRender();
-  const invokeInstall = async () => {
+  const invokeInstall = async (acceptSecurityRisk = false) => {
     const channel = kind === 'agent' ? 'marketplace.installAgent' : 'marketplace.installSkill';
     const r = await window.cogseed.invoke(channel, {
       id, name: item.name || '',
       version: item.version,
       published_at: item.published_at, updated_at: item.updated_at,
       min_app_version: _mpMinAppVersion(item),
+      // Sent only after the user confirmed in the danger dialog. The main
+      // process re-checks that the verdict was overridable at all, so this flag
+      // cannot buy past a red line on its own.
+      ...(acceptSecurityRisk ? { acceptSecurityRisk: true } : {}),
     });
     if (!r || r.ok === false) throw _mpInstallErrorFromResponse(r);
   };
@@ -1918,6 +2077,23 @@ async function _mpInstall(kind, id, itemOverride = null) {
   } catch (err) {
     const msg = (err && err.message) || String(err);
     _mpTrackInstallFailure(kind, item, err);
+    // Security gate first: a scan rejection and a structural rejection are
+    // different verdicts with different remedies, and the security one carries
+    // its own structured payload rather than a QualityReport.
+    if (err && (err.securityBlocked || err.securityUnavailable)) {
+      const accepted = await _mpShowSecurityCard(err.marketplaceName || item.name || id, err);
+      if (!accepted) return;
+      // Retry once, carrying the user's decision. A second refusal is final: it
+      // means the verdict changed or was never waivable, and looping the dialog
+      // would train the user to click through it.
+      try {
+        await invokeInstall(true);
+        await markInstalled();
+      } catch (retryErr) {
+        uiAlert(_mpInstallFailedText(kind, item, retryErr));
+      }
+      return;
+    }
     // Quality validator rejection → show the structured violation list
     // instead of the generic install-failed alert. Falls back to alert if
     // the report can't be loaded.
@@ -1928,11 +2104,24 @@ async function _mpInstall(kind, id, itemOverride = null) {
       const report = err?.qualityReport || await readQualityReport(rejectedKind, rejectedId);
       if (report) {
         const title = t('quality.install_rejected_title').replace('{name}', rejectedName);
-        // Report-only: an EXTREME violation is not user-overridable, so no
-        // force action is offered. Passing a forceLabel here previously let
-        // the user re-invoke install with `force: true`, which bypassed the
-        // main-process red-flag gate entirely.
-        await showValidationReport({ title, report });
+        // The report offers an override; confirming it requires typing the skill
+        // name, and the main process re-checks consent regardless of what the
+        // renderer claims.
+        const action = await showValidationReport({
+          title, report, forceLabel: t('marketplace.override_confirm'),
+        });
+        if (action === 'force') {
+          const ruleIds = (err && err.qualityRuleIds)
+            || report.violations.filter((v) => v.level === 'EXTREME').map((v) => v.rule);
+          if (await _mpConfirmRedFlagOverride(rejectedName, ruleIds)) {
+            try {
+              await invokeInstall(true);
+              await markInstalled();
+            } catch (retryErr) {
+              uiAlert(_mpInstallFailedText(kind, item, retryErr));
+            }
+          }
+        }
       } else {
         uiAlert(_mpInstallFailedText(kind, item, err));
       }

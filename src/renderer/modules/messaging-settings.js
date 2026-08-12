@@ -31,6 +31,10 @@
       error: '',
       timer: null,
     },
+    // 扫码绑定成功后的回调地址引导卡（一次性配置，飞书平台不允许程序化
+    // 修改重定向 URL，只能引导用户在开发者后台手动完成）。
+    setupGuide: null,
+    setupGuideDismissed: false,
     wecom: {
       flowId: '',
       state: '',
@@ -40,6 +44,9 @@
       cancelling: false,
       revision: 0,
       timer: null,
+      // 连续轮询网络错误计数：超过阈值即停止轮询并报错，
+      // 而不是弹窗关闭后仍无限重试（旧行为）。
+      pollErrorCount: 0,
     },
     wechat: {
       flowId: '',
@@ -51,6 +58,7 @@
       cancelling: false,
       revision: 0,
       timer: null,
+      pollErrorCount: 0,
     },
   };
 
@@ -68,6 +76,9 @@
     { key: 'discord', platform: 'discord', icon: 'discord', group: 'soon' },
   ]);
 
+  // 轮询连续网络错误上限：超过后停止轮询并提示，避免弹窗已关闭还无限重试。
+  const MAX_POLL_ERRORS = 5;
+
   const QR_TERMINAL_STATES = new Set(['completed', 'cancelled', 'expired', 'denied', 'failed']);
   const WECHAT_TERMINAL_STATES = new Set(['completed', 'cancelled', 'expired', 'blocked', 'failed']);
   const QR_STATE_KEYS = Object.freeze({
@@ -82,6 +93,17 @@
     expired: 'messaging.feishu_qr.status_expired',
     denied: 'messaging.feishu_qr.status_denied',
     failed: 'messaging.feishu_qr.status_failed',
+  });
+
+  /** Plain-language hints per main-process registration error code. */
+  const FEISHU_QR_ERROR_HINTS = Object.freeze({
+    network_error: 'messaging.feishu_qr.error_network_error',
+    network_unreachable: 'messaging.feishu_qr.error_network_unreachable',
+    network_timeout: 'messaging.feishu_qr.error_network_timeout',
+    network_tls: 'messaging.feishu_qr.error_network_tls',
+    registration_failed: 'messaging.feishu_qr.error_registration_failed',
+    invalid_response: 'messaging.feishu_qr.error_invalid_response',
+    activation_failed: 'messaging.feishu_qr.error_activation_failed',
   });
 
   function invoke(channel, payload) {
@@ -244,6 +266,7 @@
         ? { intervalSeconds: value.intervalSeconds }
         : {}),
       ...(typeof value.error === 'string' && value.error.trim() ? { error: value.error.trim() } : {}),
+      ...(typeof value.errorCode === 'string' && value.errorCode.trim() ? { errorCode: value.errorCode.trim() } : {}),
       ...(value.instance && typeof value.instance === 'object' ? { instance: value.instance } : {}),
     };
   }
@@ -260,7 +283,16 @@
       if (next.expiresAt !== undefined) state.qr.expiresAt = next.expiresAt;
       if (next.intervalSeconds !== undefined) state.qr.intervalSeconds = next.intervalSeconds;
     }
-    if (next.error) state.qr.error = next.error;
+    if (next.errorCode) {
+      // Map the main-process error code to a plain-language hint so a network
+      // hiccup is not mistaken for a product failure.
+      const hintKey = FEISHU_QR_ERROR_HINTS[next.errorCode];
+      state.qr.error = hintKey
+        ? labelFor(hintKey, qrStateLabel('failed'))
+        : next.error || '';
+    } else if (next.error) {
+      state.qr.error = next.error;
+    }
     return next;
   }
 
@@ -354,6 +386,83 @@
     resetQrState();
     setNotice(labelFor('messaging.feishu_qr.completed', ''), 'success');
     renderCurrent();
+    // 绑定成功 → 拉起回调地址引导卡（一次性）：飞书要求重定向 URL 与
+    // 开发者后台精确一致，不配置则授权时必报 20029。扫码后直接引导，
+    // 用户只需复制 → 打开后台 → 粘贴 → 添加 → 发布。
+    const bound = instance && typeof instance.id === 'string' ? instance.id : state.selectedInstanceId;
+    void loadSetupGuide(bound, instance && instance.feishuTenantBrand);
+  }
+
+  async function loadSetupGuide(instanceId, brand) {
+    if (!instanceId) return;
+    try {
+      const result = await invoke('personal_context.setup_guide', { instanceId });
+      const guide = result && result.guide;
+      if (!guide || !guide.credentialReady || !guide.appId || !guide.redirectUri) return;
+      state.setupGuide = {
+        appId: guide.appId,
+        redirectUri: guide.redirectUri,
+        brand: brand === 'lark' ? 'lark' : 'feishu',
+      };
+      state.setupGuideDismissed = false;
+      renderCurrent();
+    } catch (_error) {
+      // 引导卡是尽力而为：主进程不可用时不影响绑定成功状态
+    }
+  }
+
+  function renderSetupGuideCard() {
+    if (!state.setupGuide || state.setupGuideDismissed) return null;
+    const guide = state.setupGuide;
+    const consoleUrl = guide.brand === 'lark'
+      ? `https://open.larksuite.com/app/${guide.appId}/safe`
+      : `https://open.feishu.cn/app/${guide.appId}/safe`;
+    const section = el('section', 'messaging-config-card messaging-setup-guide-card');
+    const heading = el('div', 'messaging-config-card-heading');
+    heading.appendChild(el('h3', '', labelFor('messaging.setup_guide.title', '')));
+    heading.appendChild(el('p', '', labelFor('messaging.setup_guide.desc', '')));
+    section.appendChild(heading);
+
+    const urlRow = el('div', 'messaging-setup-guide-url');
+    const url = el('code', '', guide.redirectUri);
+    urlRow.appendChild(url);
+    const copy = el('button', 'btn messaging-secondary-button', labelFor('messaging.setup_guide.copy', ''));
+    copy.type = 'button';
+    copy.appendChild(icon('copy', 'messaging-action-icon'));
+    copy.addEventListener('click', () => {
+      navigator.clipboard.writeText(guide.redirectUri).then(() => {
+        copy.textContent = labelFor('messaging.setup_guide.copied', '');
+        setTimeout(() => {
+          copy.textContent = labelFor('messaging.setup_guide.copy', '');
+        }, 1800);
+      }).catch(() => { /* clipboard unavailable; user can select the url manually */ });
+    });
+    urlRow.appendChild(copy);
+    section.appendChild(urlRow);
+
+    section.appendChild(el('p', 'messaging-setup-guide-steps', labelFor('messaging.setup_guide.steps', '')));
+
+    const actions = el('div', 'messaging-setup-guide-actions');
+    const open = el('button', 'btn messaging-scan-button', labelFor('messaging.setup_guide.open_console', ''));
+    open.type = 'button';
+    open.appendChild(icon('external-link', 'messaging-action-icon'));
+    open.addEventListener('click', () => {
+      void invoke('auth.openExternal', { url: consoleUrl }).catch(() => {
+        setNotice(labelFor('messaging.setup_guide.open_failed', ''), 'error');
+        renderCurrent();
+      });
+    });
+    const done = el('button', 'btn messaging-secondary-button', labelFor('messaging.setup_guide.done', ''));
+    done.type = 'button';
+    done.addEventListener('click', () => {
+      // 用户确认已配置：记录本机标记，触点页授权时不再拦截
+      void invoke('personal_context.setup_guide.confirm', {}).catch(() => { /* best effort */ });
+      state.setupGuideDismissed = true;
+      renderCurrent();
+    });
+    actions.append(open, done);
+    section.appendChild(actions);
+    return section;
   }
 
   async function pollQr(flowId, revision) {
@@ -486,19 +595,44 @@
     return labelFor(keys[status] || keys.disconnected, status);
   }
 
+  function switchActionForInstance(instance) {
+    if (instance && instance.hasCredentials === true) return 'toggle';
+    if (instance && instance.platform === 'feishu_lark') return 'bind';
+    return 'unavailable';
+  }
+
   function switchControl(instance) {
+    const action = switchActionForInstance(instance);
     const label = el('label', 'messaging-switch');
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.checked = instance.enabled === true;
-    input.disabled = state.updating || instance.hasCredentials !== true;
-    input.setAttribute('aria-label', labelFor('messaging.enabled', ''));
+    input.disabled = state.updating || action === 'unavailable' || (action === 'bind' && qrIsPending());
+    input.setAttribute('aria-label', labelFor(action === 'bind' ? 'messaging.scan' : 'messaging.enabled', ''));
     input.addEventListener('change', () => {
+      if (action === 'bind') {
+        // An unbound Feishu/Lark draft cannot be enabled yet. Treat the switch
+        // as the missing association affordance: start QR binding and keep the
+        // persisted enabled state off until activation succeeds atomically.
+        input.checked = false;
+        void startQr(instance);
+        return;
+      }
       const enabled = input.checked;
       void updateInstance({ enabled }, input);
     });
     const track = el('span', 'messaging-switch-track');
     track.setAttribute('aria-hidden', 'true');
+    track.addEventListener('click', (event) => {
+      if (action !== 'bind' || input.disabled) return;
+      // The visual track is the actual hit target; invoke the binding flow
+      // explicitly instead of relying on implicit label activation for the
+      // hidden checkbox, which is not reliable in Electron accessibility/UI
+      // automation and custom chrome combinations.
+      event.preventDefault();
+      input.checked = false;
+      void startQr(instance);
+    });
     label.append(input, track);
     return label;
   }
@@ -520,6 +654,9 @@
       statusRow.appendChild(el('span', 'messaging-qr-expiry', labelFor('messaging.feishu_qr.expires_at', '').replace('{time}', expiry)));
     }
     info.appendChild(statusRow);
+    if (instance.feishuTenantBrand === 'lark') {
+      info.appendChild(el('p', 'messaging-qr-lark-hint', labelFor('messaging.feishu_qr.lark_sign_in_hint', '')));
+    }
     const actions = el('div', 'messaging-qr-actions');
     if (state.qr.flowId && !QR_TERMINAL_STATES.has(state.qr.state)) {
       const cancel = el('button', 'btn messaging-secondary-button', labelFor('messaging.feishu_qr.cancel', ''));
@@ -625,6 +762,10 @@
   function renderFeishuPanel(channel) {
     const wrapper = el('div', 'messaging-panel-body');
     wrapper.appendChild(renderInstanceList(channel));
+    // 扫码绑定成功后弹出的回调地址引导卡（一次性）：位于实例列表下方，
+    // 绑定新的飞书机器人时自动出现，配置完成后可关闭。
+    const guideCard = renderSetupGuideCard();
+    if (guideCard) wrapper.appendChild(guideCard);
     const instances = instancesForChannel(channel);
     const instance = instances.find((item) => item.id === state.selectedInstanceId) || instances[0] || null;
     if (instance) {
@@ -677,7 +818,8 @@
   }
 
   async function startQrForChannel(channel) {
-    if (!channel || state.openingChannel) return;
+    // QR 流程进行中（含轮询）时忽略重复触发，避免连点"连接"反复创建新实例
+    if (!channel || state.openingChannel || qrIsPending()) return;
     const operation = ++state.operation;
     state.openingChannel = channel.key;
     setNotice('', '');
@@ -699,11 +841,9 @@
       state.selectedInstanceId = instance.id;
       state.openingChannel = '';
       renderCurrent();
-      // No-owner Feishu bot: guide the user to claim it by sending the first
-      // direct message — no manual open id needed (main opens a binding window).
-      if (instance.ownerConfigured === false && typeof uiAlert === 'function') {
-        uiAlert(labelFor('messaging.owner_bind_hint', ''));
-      }
+      // No-owner Feishu bot: QR 面板内有常驻的 owner 绑定引导区
+      // （messaging-owner-guide），不再弹全屏提示窗——弹窗遮罩会拦截页面
+      // 点击，打断"点按钮→扫码→完事"流程（触点页曾因此表现为"卡死"）。
       await startQr(instance);
     } catch (error) {
       if (state.operation !== operation) return;
@@ -875,6 +1015,7 @@
         state.wecom.authUrl = '';
         state.wecom.starting = false;
         state.wecom.cancelling = false;
+        state.wecom.pollErrorCount = 0;
         if (opts.render !== false) renderCurrent();
       }
     }
@@ -906,6 +1047,7 @@
     try {
       const result = await invoke('messaging.wecom_qr.status', { flowId });
       if (state.wecom.revision !== revision) return;
+      state.wecom.pollErrorCount = 0;
       const registration = result && result.registration ? result.registration : result;
       const nextState = typeof registration.state === 'string' ? registration.state : 'failed';
       if (nextState === 'completed' && registration.instance && registration.instance.id) {
@@ -926,7 +1068,17 @@
         return;
       }
       scheduleWecomPoll(flowId);
-    } catch (_) {
+    } catch (error) {
+      if (state.wecom.revision !== revision) return;
+      state.wecom.pollErrorCount += 1;
+      // 连续网络错误超过阈值才放弃：偶发抖动不应打断绑定流程，
+      // 但弹窗已关闭/网络长期不可用时也不能无限轮询下去。
+      if (state.wecom.pollErrorCount >= MAX_POLL_ERRORS) {
+        setNotice(errorMessage(error, labelFor('messaging.wecom_qr.invalid_message', '')), 'error');
+        await cancelWecomFlow({ silent: true, render: false });
+        renderCurrent();
+        return;
+      }
       scheduleWecomPoll(flowId);
     }
   }
@@ -1017,6 +1169,7 @@
     state.wechat.errorCode = '';
     state.wechat.starting = false;
     state.wechat.cancelling = false;
+    state.wechat.pollErrorCount = 0;
   }
 
   async function cancelWechatFlow(options) {
@@ -1097,7 +1250,18 @@
       }
       renderCurrent();
       scheduleWechatPoll(flowId);
-    } catch (_) {
+    } catch (error) {
+      if (state.wechat.revision !== revision) return;
+      state.wechat.pollErrorCount += 1;
+      // 连续网络错误超过阈值才放弃：偶发抖动不打断绑定流程，
+      // 但长期不可用时也不能无限轮询。
+      if (state.wechat.pollErrorCount >= MAX_POLL_ERRORS) {
+        state.wechat.error = errorMessage(error, labelFor('messaging.wechat_qr.start_failed', ''));
+        setNotice(state.wechat.error, 'error');
+        await cancelWechatFlow({ silent: true, render: false });
+        renderCurrent();
+        return;
+      }
       scheduleWechatPoll(flowId);
     }
   }
@@ -1295,7 +1459,7 @@
       const status = el('div', 'messaging-manual-bound');
       status.append(
         icon('check-circle', 'messaging-status-icon'),
-        el('span', '', instance.ownerLabel || labelFor('messaging.owner_configured', '')),
+        el('span', '', instance.ownerLabel || instance.ownerMaskedId || labelFor('messaging.owner_configured', '')),
       );
       row.appendChild(status);
       const clear = el('button', 'btn messaging-secondary-button', labelFor('messaging.owner_clear', ''));
@@ -1321,6 +1485,11 @@
         }
       }).catch(() => { /* window may have expired; leave the hint hidden */ });
     }
+
+    // Standing guide for the unbound state: the auto-bind path is primary,
+    // manual id entry is the fallback (persists even after the window closes).
+    const guide = el('p', 'messaging-owner-guide', labelFor('messaging.owner_bind_guide', ''));
+    section.appendChild(guide);
 
     const ownerIdInput = document.createElement('input');
     ownerIdInput.type = 'text';
@@ -1555,6 +1724,18 @@
     await refresh();
   };
 
+  // Public entry point for the desktop-first touchpoint flow. It creates a
+  // fresh Feishu draft and starts the real QR binding flow, instead of merely
+  // opening the legacy settings panel.
+  window.openFeishuConnection = async function openFeishuConnection() {
+    bind();
+    if (!state.initialized) state.initialized = true;
+    await refresh();
+    state.selectedChannel = 'feishu';
+    state.selectedInstanceId = '';
+    await startQrForChannel(channelForKey('feishu'));
+  };
+
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       CHANNELS,
@@ -1569,6 +1750,7 @@
         instancesForChannel,
         validateBotToken,
         parseWecomAuthMessage,
+        switchActionForInstance,
         wechatFlowActive,
         resetWechatFlow,
       },

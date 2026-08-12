@@ -32,6 +32,10 @@
  *       skipped — we can't turn an OAuth session into a portable key.
  *   gemini → protocol 'gemini'
  *       env.GEMINI_API_KEY / GOOGLE_API_KEY + env base url when present
+ *   opencode → protocol 'openai'
+ *       options.baseURL + options.apiKey; CC Switch opencode rows usually
+ *       carry an EMPTY apiKey (setCacheKey), so fall back to OpenCode's own
+ *       auth store (~/.local/share/opencode/auth.json) — real data, read-only.
  *
  * `category='official'` rows are skipped: they're the built-in
  * Anthropic/OpenAI/Google endpoints, already covered by Orkas's own catalog.
@@ -198,7 +202,48 @@ function mapRow(
     return { ...common, protocol: 'gemini', baseUrl, apiKey, ...(apiKey ? {} : { needsKey: true }) };
   }
 
+  if (appType === 'opencode') {
+    const options = asObject(cfg.options);
+    const baseUrl = typeof options.baseURL === 'string' ? options.baseURL : '';
+    let apiKey = typeof options.apiKey === 'string' ? options.apiKey : '';
+    if (!baseUrl) return undefined;
+    // CC Switch opencode rows typically store an EMPTY apiKey (setCacheKey);
+    // the real key lives in OpenCode's own auth store. Fall back to it —
+    // still read-only, still the user's own machine data.
+    if (!apiKey) apiKey = opencodeApiKeyFromAuth(baseUrl) || '';
+    return { ...common, protocol: 'openai', baseUrl, apiKey, ...(apiKey ? {} : { needsKey: true }) };
+  }
+
   return undefined;
+}
+
+/** Map an opencode base URL host to its provider key name. */
+function opencodeProviderForBaseUrl(baseUrl: string): string {
+  const m = String(baseUrl).match(/\/\/(?:[^.]+\.)?([^.]+)\./);
+  return m ? m[1] : '';
+}
+
+/**
+ * Read OpenCode's own provider auth store (`~/.local/share/opencode/auth.json`,
+ * shape `{ "<provider>": { "type": "api", "key": "sk-…" } }`) and return the
+ * key for the provider behind `baseUrl`. READ-ONLY; missing/unreadable file
+ * or unknown provider → ''. Never throws.
+ */
+function opencodeApiKeyFromAuth(baseUrl: string, home = os.homedir()): string {
+  const provider = opencodeProviderForBaseUrl(baseUrl);
+  if (!provider) return '';
+  try {
+    const authPath = path.join(home, '.local', 'share', 'opencode', 'auth.json');
+    const auth = JSON.parse(fs.readFileSync(authPath, 'utf8')) as Record<string, unknown>;
+    const entry = auth[provider];
+    if (entry && typeof entry === 'object') {
+      const key = (entry as Record<string, unknown>).key;
+      if (typeof key === 'string' && key.trim()) return key.trim();
+    }
+  } catch {
+    // missing / unreadable / malformed auth.json — no key, caller marks needsKey
+  }
+  return '';
 }
 
 /**

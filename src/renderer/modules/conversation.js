@@ -1163,6 +1163,12 @@ function _renderRecipientChip(target) {
       if (!display) display = r.name || r.id;
       nameEl.textContent = display;
       nameEl.removeAttribute('data-i18n');
+    } else if (typeof currentCid === 'string' && currentCid
+      && typeof conversations !== 'undefined' && Array.isArray(conversations)
+      && conversations.find((c) => c && c.conversation_id === currentCid && c.kind === 'space_builder')) {
+      // 空间模式会话：接收者是空间构建师（会话内置角色，不在 AI 团队列表）。
+      nameEl.textContent = t('chat.recipient_space_builder', '空间构建师');
+      nameEl.removeAttribute('data-i18n');
     } else {
       nameEl.setAttribute('data-i18n', 'chat.recipient_commander');
       nameEl.textContent = t('chat.recipient_commander');
@@ -1455,6 +1461,11 @@ function _initEmptyStateScenarios() {
   row.querySelectorAll('.new-chat-scenario-chip').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const id = btn.dataset.scenario || '';
+      // 空间模式：不填模板，直接创建 space_builder 会话并打开。
+      if (id === 'space_builder') {
+        await _startSpaceBuilderConversation();
+        return;
+      }
       const config = _SCENARIO_CONFIGS[id];
       const key = config && config.templateKey;
       const raw = key ? t(key) : '';
@@ -1502,8 +1513,213 @@ function _initContinueWorkChip() {
     }
   });
 }
+/** 提取构建师消息里的 space-draft JSON 块；无/解析失败返回 null。
+ *  容错：LLM 在中文语境下常输出全角引号/冒号/逗号，先做字符规范化再解析。 */
+function _extractSpaceDraft(text) {
+  if (!text || typeof text !== 'string') return null;
+  // 兼容 ```space-draft 后跟换行或直接跟 JSON 两种写法
+  const m = text.match(/```space-draft[\s\n]*([\s\S]*?)```/);
+  if (!m) return null;
+  return _parseSpaceDraftJson(m[1]);
+}
+
+function _parseSpaceDraftJson(raw) {
+  const parse = (s) => {
+    try { return JSON.parse(s.trim()); } catch (_) { return null; }
+  };
+  let draft = parse(raw);
+  if (draft) return draft && typeof draft === 'object' ? draft : null;
+  // 全角 → 半角规范化（中文引号/冒号/逗号/括号），再试一次。
+  const normalized = String(raw)
+    .replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
+    .replace(/：/g, ':').replace(/，/g, ',')
+    .replace(/[｛｝]/g, (c) => (c === '｛' ? '{' : '}'))
+    .replace(/[［］]/g, (c) => (c === '［' ? '[' : ']'));
+  draft = parse(normalized);
+  return draft && typeof draft === 'object' ? draft : null;
+}
+
+/** 创建空间按钮卡：标题 + 目标段落 + 配置明细行 + 创建动作。id 优先显示中文名。 */
+function _renderSpaceDraftButtonHtml(draft) {
+  const name = String(draft.name || t('new_chat.space_draft_unnamed', '我的空间'));
+  const outcome = String(draft.sustained_outcome || '').trim();
+  // 版本号可能自带 v 前缀（v1.0.0），展示时统一补一个 v 即可。
+  const fmtVersion = (v) => {
+    const s = String(v || '').trim();
+    return s ? `v${s.replace(/^v/i, '')}` : '';
+  };
+  const rows = [];
+  if (draft.primary_template_id) {
+    const tplName = _spaceAssetNames.templates[draft.primary_template_id] || draft.primary_template_id;
+    rows.push({ label: t('new_chat.space_draft_template', '模板'), text: tplName });
+  }
+  if (draft.main_skill_ref && draft.main_skill_ref.asset_id) {
+    const skillName = _spaceAssetNames.skills[draft.main_skill_ref.asset_id] || draft.main_skill_ref.asset_id;
+    const ver = fmtVersion(draft.main_skill_ref.version);
+    rows.push({ label: t('new_chat.space_draft_main_skill', '主技能'), text: ver ? `${skillName} ${ver}` : skillName });
+  }
+  const extraSkillNames = (Array.isArray(draft.extra_skill_ids) ? draft.extra_skill_ids : [])
+    .map((id) => _spaceAssetNames.skills[id] || id);
+  const extraAgentNames = (Array.isArray(draft.extra_agent_ids) ? draft.extra_agent_ids : [])
+    .map((id) => _spaceAssetNames.agents[id] || id);
+  if (extraSkillNames.length) rows.push({ label: t('new_chat.space_draft_skills', '能力'), text: extraSkillNames.join('、') });
+  if (extraAgentNames.length) rows.push({ label: t('new_chat.space_draft_agents', '帮手'), text: extraAgentNames.join('、') });
+  const rowsHtml = rows.length
+    ? `<div class="space-draft-rows">${rows.map((r) => `
+        <div class="space-draft-row">
+          <span class="space-draft-row-label">${escapeHtml(r.label)}</span>
+          <span class="space-draft-row-text">${escapeHtml(r.text)}</span>
+        </div>`).join('')}</div>`
+    : '';
+  return `<div class="space-draft-card" data-draft="${escapeHtml(JSON.stringify(draft))}">
+    <div class="space-draft-head">
+      <div class="space-draft-title">${escapeHtml(t('new_chat.space_draft_title', '空间配置草稿'))}</div>
+      <div class="space-draft-name">${escapeHtml(name)}</div>
+    </div>
+    ${outcome ? `<div class="space-draft-goal">${escapeHtml(outcome)}</div>` : ''}
+    ${rowsHtml}
+    <button type="button" class="btn btn-sm btn-primary space-draft-create-btn" data-space-draft-create>${escapeHtml(t('new_chat.space_draft_create', '创建空间'))}</button>
+  </div>`;
+}
+
+/** 资产 id → 名字映射（惰性加载一次，草稿卡友好显示用）。加载完成后
+ *  自动刷新页面上已渲染的草稿卡（无论从哪个入口进入会话都会生效）。 */
+let _spaceAssetNames = { templates: {}, skills: {}, agents: {} };
+async function _ensureSpaceAssetNames() {
+  try {
+    const [tplRes, skillRes, agentRes] = await Promise.all([
+      window.orkas.invoke('spaces.templates.list'),
+      window.orkas.invoke('skills.list'),
+      window.orkas.invoke('agents.list'),
+    ]);
+    _spaceAssetNames.templates = Object.fromEntries((tplRes.templates || []).map((t) => [t.template_id, t.name || t.template_id]));
+    _spaceAssetNames.skills = Object.fromEntries((skillRes.skills || []).map((s) => [s.id, s.name || s.id]));
+    _spaceAssetNames.agents = Object.fromEntries((agentRes.agents || []).map((a) => [a.agent_id, a.name || a.agent_id]));
+  } catch (_) { return; }
+  // 映射就绪：刷新已渲染的草稿卡（id → 中文名）。
+  try {
+    document.querySelectorAll('.space-draft-card').forEach((card) => {
+      if (!card.dataset.draft) return;
+      let draft = null;
+      try { draft = JSON.parse(card.dataset.draft); } catch (_) {}
+      if (draft) card.outerHTML = _renderSpaceDraftButtonHtml(draft);
+    });
+  } catch (_) {}
+}
+
+/** 创建空间（用户点草稿卡按钮）：走后端 createFromDraft（资产存在性校验）。
+ *  校验失败返回 null 并提示具体原因；成功返回创建的 space。 */
+async function _createSpaceFromDraft(draft) {
+  const payload = {
+    name: String(draft.name || '').trim() || t('new_chat.space_draft_unnamed', '我的空间'),
+  };
+  if (typeof draft.space_type === 'string' && draft.space_type) payload.space_type = draft.space_type;
+  if (typeof draft.sustained_outcome === 'string' && draft.sustained_outcome.trim()) payload.sustained_outcome = draft.sustained_outcome.trim();
+  if (typeof draft.primary_template_id === 'string' && draft.primary_template_id) payload.primary_template_id = draft.primary_template_id;
+  if (draft.main_skill_ref && typeof draft.main_skill_ref.asset_id === 'string' && typeof draft.main_skill_ref.version === 'string') {
+    payload.main_skill_ref = { asset_id: draft.main_skill_ref.asset_id, version: draft.main_skill_ref.version };
+  }
+  if (Array.isArray(draft.extra_skill_ids)) payload.extra_skill_ids = draft.extra_skill_ids;
+  if (Array.isArray(draft.extra_agent_ids)) payload.extra_agent_ids = draft.extra_agent_ids;
+  try {
+    const res = await window.orkas.invoke('spaces.createFromDraft', { draft: payload });
+    if (!res || res.error || !res.space) throw new Error((res && res.error) || 'create failed');
+    return res.space;
+  } catch (e) {
+    const reason = (e && e.message) || String(e || '');
+    if (typeof uiAlert === 'function') {
+      uiAlert(t('new_chat.space_draft_failed', { reason }));
+    }
+    return null;
+  }
+}
+
+/** 事件委托：草稿卡「创建空间」按钮。 */
+document.addEventListener('click', async (e) => {
+  const btn = e.target && e.target.closest ? e.target.closest('[data-space-draft-create]') : null;
+  if (!btn) return;
+  const card = btn.closest('.space-draft-card');
+  if (!card) return;
+  btn.disabled = true;
+  let draft = null;
+  try { draft = card.dataset.draft ? JSON.parse(card.dataset.draft) : null; } catch (_) { draft = null; }
+  if (!draft) { btn.disabled = false; return; }
+  const space = await _createSpaceFromDraft(draft);
+  btn.disabled = false;
+  if (!space) return;
+  // 空间已建成：标记当前 space_builder 会话完成，下次点「空间模式」不再复用
+  // 这个会话，而是新建引导会话（僵尸会话陷阱：旧会话无产出也会一直吸附点击）。
+  if (typeof currentCid === 'string' && currentCid) {
+    try {
+      const doneRes = await window.orkas.invoke('conversations.completeSpaceBuilder', { cid: currentCid });
+      // 同步本地列表缓存：本次运行内再点「空间模式」不再复用该会话。
+      if (doneRes && doneRes.conversation && Array.isArray(conversations)) {
+        const idx = conversations.findIndex((c) => c && c.conversation_id === currentCid);
+        if (idx >= 0) {
+          conversations[idx] = { ...conversations[idx], space_builder_completed: doneRes.conversation.space_builder_completed };
+          if (typeof renderConversationList === 'function') renderConversationList();
+        }
+      }
+    } catch (_) { /* 标记失败不阻断——空间已创建成功 */ }
+  }
+  if (typeof uiToast === 'function') {
+    uiToast(t('new_chat.space_draft_created', { name: space.name || space.space_id }), { variant: 'success' });
+  }
+  card.innerHTML = `<div class="space-draft-done">${escapeHtml(t('new_chat.space_draft_created', { name: space.name || space.space_id }))} ${escapeHtml(t('new_chat.space_draft_go'))}</div>`;
+});
+
+async function _startSpaceBuilderConversation() {
+  // 复用"进行中"的空间模式会话（用户再点卡片回到上次未完成的搭建）。
+  // 已产出空间（space_builder_completed）或已删除的会话不复用——上次搭建
+  // 已结束，点卡片应开新引导会话。
+  if (typeof conversations !== 'undefined' && Array.isArray(conversations)) {
+    const existing = conversations
+      .filter((c) => c && c.kind === 'space_builder' && !c.deleted_at && !c.space_builder_completed)
+      .sort((a, b) => String(b.last_active_at || b.created_at || '').localeCompare(String(a.last_active_at || a.created_at || '')))[0];
+    if (existing) {
+      // 先等资产名映射就绪再渲染（草稿卡需要中文名），再走正常会话加载。
+      await _ensureSpaceAssetNames();
+      setView('conversation', existing.conversation_id);
+      _renderRecipientChip('conversation');
+      return;
+    }
+  }
+  let conv;
+  try {
+    const res = await apiFetch('/api/conversations/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'space_builder', title: t('new_chat.space_mode_title', '空间模式') }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || t('chat.create_conv_failed'));
+    conv = data.conversation;
+  } catch (e) {
+    await uiAlert(t('chat.create_conv_failed_with_reason', { reason: (e && e.message) || e }));
+    return;
+  }
+  conv.last_active_at = new Date().toISOString();
+  conversations.unshift(conv);
+  renderConversationList();
+  // 先等资产名映射就绪再渲染（草稿卡需要中文名）。
+  await _ensureSpaceAssetNames();
+  setView('conversation', conv.conversation_id, { skipLoad: true });
+  _renderRecipientChip('conversation');
+  // 开场：让构建师自我介绍并引导（一次 LLM 调用换取完整首屏体验）。
+  try {
+    await sendInCurrentConversation(t('new_chat.space_builder_opener', '你好，我想搭建一个专属空间，请引导我。'));
+  } catch (e) {
+    _convLog?.warn('space builder opener failed', e);
+  }
+}
+
 function onEnterConversationView() {
   if (_messageSelectionState && _messageSelectionState.cid !== currentCid) _exitMessageSelection();
+  // 空间模式会话：确保资产名映射就绪（草稿卡显示中文名，加载完自动刷新）。
+  if (typeof currentCid === 'string' && currentCid && typeof conversations !== 'undefined' && Array.isArray(conversations)
+    && conversations.some((c) => c && c.conversation_id === currentCid && c.kind === 'space_builder')) {
+    _ensureSpaceAssetNames();
+  }
   // The side column is per-conversation: its aside thread is anchored to a
   // message here, and its preview is a file this conversation produced. Leaving
   // it mounted across a switch would show the previous conversation's content
@@ -2754,6 +2970,7 @@ function _groupMsgToLegacy(gm) {
     ...(Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length ? { marketplace_requests: gm.marketplace_requests } : {}),
     ...(Array.isArray(gm.wake_requests) && gm.wake_requests.length ? { wake_requests: gm.wake_requests } : {}),
     ...(gm.kstar_review ? { kstar_review: gm.kstar_review } : {}),
+    ...(gm.kstar_review_card ? { kstar_review_card: gm.kstar_review_card } : {}),
     ...(gm.plan_announcement ? { _plan_announcement: true } : {}),
     ...(Array.isArray(gm.process) && gm.process.length ? { process: gm.process } : {}),
     ...(gm.turn_id ? { _turn_id: gm.turn_id } : {}),
@@ -7100,6 +7317,16 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   if (emptyEl) emptyEl.remove();
 
   const role = message.role === 'assistant' ? 'assistant' : 'user';
+  // 空间模式会话：隐藏 KSTAR 确认消息（正文文案 + 卡片都不显示）。
+  // 这类消息由 KSTAR 评审流程生成（kstar_review_card），引导对话不需要。
+  const isSbConv = typeof conversations !== 'undefined' && Array.isArray(conversations)
+    && conversations.some((c) => c && c.conversation_id === (opts.cid || currentCid) && c.kind === 'space_builder');
+  if (role === 'assistant' && isSbConv && (message.kstar_review_card || message.kstar_review)) {
+    const hidden = document.createElement('div');
+    hidden.style.display = 'none';
+    if (message._msg_id) hidden.dataset.msgId = String(message._msg_id);
+    return hidden;
+  }
   const msgDiv = document.createElement('div');
   msgDiv.className = `chat-message ${role}`;
   // Sender id stamp — used by `_ensureConvCreateAgentInline` to detect
@@ -7125,6 +7352,11 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const contentHtml = isHtmlSnippet
     ? sanitizeHtml(rawContent)
     : `<div class="markdown-body">${_renderMessageMarkdown(displayContent)}</div>`;
+  // 空间构建师的 space-draft 块 → 渲染「创建空间」按钮（用户确认后调 spaces.create）。
+  const spaceDraft = (!isHtmlSnippet && role === 'assistant')
+    ? _extractSpaceDraft(displayContent)
+    : null;
+  const spaceDraftHtml = spaceDraft ? _renderSpaceDraftButtonHtml(spaceDraft) : '';
 
   const attachmentCid = message.attachment_cid || message.attachments_cid || opts.cid || currentCid;
   const attachmentsHtml = (role === 'user' && Array.isArray(message.attachments) && message.attachments.length)
@@ -7160,11 +7392,18 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   // Always go through _groupActorLabel for non-user messages so we never
   // accidentally render the raw agent_id. _from_label was eagerly computed
   // at translate time but the cache may have been empty then; recompute.
+  // 空间模式会话：构建师回复的消息头显示「空间构建师」（actor 在群聊机制里
+  // 仍是指挥官，但 UI 上必须让用户看到"对话对象是构建师"）。
+  const isSpaceBuilderCid = role !== 'user'
+    && typeof conversations !== 'undefined' && Array.isArray(conversations)
+    && conversations.some((c) => c && c.conversation_id === (opts.cid || currentCid) && c.kind === 'space_builder');
   const headerName = role === 'user'
     ? ''
-    : _groupActorLabel(message._from || (message._from_label ? '' : ''))
-      || message._from_label
-      || (t('chat.from_agent_unknown'));
+    : isSpaceBuilderCid
+      ? t('chat.recipient_space_builder')
+      : _groupActorLabel(message._from || (message._from_label ? '' : ''))
+        || message._from_label
+        || (t('chat.from_agent_unknown'));
   const headerActorId = role === 'user' ? '' : String(message._from || '');
   const avatarHtml = role === 'user' ? '' : _renderActorAvatarHtml(headerActorId);
   const headerHtml = role === 'user'
@@ -7176,7 +7415,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   // action row remains for created-agent/skill links and message actions.
   msgDiv.innerHTML = `
     ${headerHtml}
-    <div class="chat-bubble">${planAnnHtml}${referencesHtml}${contentHtml}${attachmentsHtml}${teachingReceiptsHtml}${recallCitationsHtml}</div>
+    <div class="chat-bubble">${planAnnHtml}${referencesHtml}${contentHtml}${spaceDraftHtml}${attachmentsHtml}${teachingReceiptsHtml}${recallCitationsHtml}</div>
     <div class="chat-msg-actions" data-role="msg-actions">${createdAgentHtml}${createdSkillHtml}</div>
   `;
   if (typeof opts.msgIndex === 'number') msgDiv.dataset.msgIndex = String(opts.msgIndex);
@@ -7259,7 +7498,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble) _mountMarketplaceInstallRequests(bubble, msgDiv, message, opts);
   }
-  if (role === 'assistant' && message.kstar_review) {
+  if (role === 'assistant' && message.kstar_review && !isSpaceBuilderCid) {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble) _mountKStarReviewCard(bubble, message.kstar_review, opts.cid || currentCid);
   }
@@ -7712,6 +7951,9 @@ async function _syncExperienceCandidateToNotion(card, review, candidate, cid) {
 }
 
 async function _hydrateKStarReviews(cid) {
+  // 空间模式会话不展示 KSTAR 评审（含历史消息携带的旧卡）。
+  if (typeof conversations !== 'undefined' && Array.isArray(conversations)
+    && conversations.some((c) => c && c.conversation_id === cid && c.kind === 'space_builder')) return;
   try {
     const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/kstar`);
     const data = await res.json();
@@ -7849,6 +8091,10 @@ function _patchCandidateHost(cid, options = {}) {
 
 async function _hydratePatchCandidates(cid) {
   if (!cid || cid !== currentCid) return;
+  // 空间模式会话不展示 KSTAR 审核中心（引导对话，无交付物评审）。
+  // typeof 防护：渲染层单测 sandbox 可能没有 conversations 全局。
+  if (typeof conversations !== 'undefined' && Array.isArray(conversations)
+    && conversations.some((c) => c && c.conversation_id === cid && c.kind === 'space_builder')) return;
   const host = _patchCandidateHost(cid, { create: true });
   if (!host) return;
   host.innerHTML = `<div class="chat-patch-candidates-title">${escapeHtml(t('p3394.patch.center_title'))}</div><div class="chat-patch-candidates-loading">${escapeHtml(t('p3394.patch.loading'))}</div>`;

@@ -39,7 +39,10 @@ export function classifyBootDevice(
     // a low-spec exception to hide avoidable contention.
     heavyDiskOffsetMs: 30_000,
     postStartupOffsetMs: 90_000,
-    connectorBootstrapDelayMs: 45_000,
+    // 消息通道（飞书/微信/企微长连接）与可选连接器共用此延迟。曾为 45s——
+    // 但收消息是核心功能，用户重启后要等近一分钟才恢复，实测不可接受；
+    // 8s 仍把启动交互窗口让给索引/市场/同步等关键任务，长连接随后建立。
+    connectorBootstrapDelayMs: 8_000,
     loginCapabilitiesDelayMs: 55_000,
   };
 }

@@ -90,7 +90,7 @@ async function loadSettings() {
     _settingsSafeCall('settings auth profiles status refresh', _settingsRefreshAuthProfilesStatus),
     _settingsSafeCall('settings custom providers refresh', _settingsRefreshCustomProviders),
     _settingsSafeCall('settings ccswitch status refresh', _settingsRefreshCcswitchStatus),
-    _settingsSafeCall('settings messaging refresh', () => window.initMessagingSettings && window.initMessagingSettings()),
+    _settingsSafeCall('settings touchpoint refresh', () => window.initTouchpointSettings && window.initTouchpointSettings()),
   ]);
   await _settingsSafeCall('settings model authorization init', () => window.initModelAuthorizationSettings && window.initModelAuthorizationSettings());
   await _settingsSafeCall('settings local execution render', _settingsRenderLocalExec);
@@ -455,6 +455,9 @@ window.addEventListener('i18n-change', () => {
 async function _settingsRefreshProviders() {
   const res = await window.cogseed.invoke('auth.listProviders');
   _settingsState.providers = (res && res.ok && Array.isArray(res.providers)) ? res.providers : [];
+  // Shared cache for the model-authorization modal so it never re-triggers
+  // auth.listProviders (core-agent cold start) just to paint preset cards.
+  if (_settingsState.providers.length) window.__settingsProvidersCache = _settingsState.providers;
 }
 
 async function _settingsRefreshEntries() {

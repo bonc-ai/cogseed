@@ -252,6 +252,13 @@ function _cwRenderFoot() {
   });
 }
 
+/** Short label for a session source, used in lists and import rows. */
+function _cwSourceLabel(source) {
+  if (source === 'claude') return 'Claude Code';
+  if (source === 'claude-desktop') return 'Claude 桌面版';
+  return 'Codex';
+}
+
 async function _cwLoadSources() {
   const grid = _cw.backdrop.querySelector('[data-cw-sources]');
   if (!grid) return;
@@ -259,13 +266,31 @@ async function _cwLoadSources() {
     const res = await window.orkas.invoke('localAgents.list');
     const entries = Array.isArray(res && res.entries) ? res.entries : [];
     const available = entries.filter((e) => e && e.available && (e.type === 'claude' || e.type === 'codex'));
+
+    // Claude Desktop is not a CLI, so it never appears in `localAgents.list`.
+    // Probe it separately and offer it as a source only when it has sessions,
+    // keeping a permission error distinct from "none found".
+    _cw.desktopDenied = false;
+    try {
+      const dres = await window.orkas.invoke('localAgents.listClaudeDesktopSessions');
+      if (dres && dres.error === 'permission_denied') _cw.desktopDenied = true;
+      else if (dres && Array.isArray(dres.sessions) && dres.sessions.length) {
+        available.push({ type: 'claude-desktop', count: dres.sessions.length });
+      }
+    } catch (err) {
+      _cwLog.warn('failed to probe claude desktop sessions', err);
+    }
+
     _cw.sources = available;
 
     if (!available.length) {
+      const denied = _cw.desktopDenied;
       grid.innerHTML = `
         <div class="cw-empty">
           <div class="cw-empty-icon">${_cwIcon('folder')}</div>
-          <div>未检测到可导入的 Claude Code / Codex 会话。</div>
+          <div>${denied
+            ? '无法访问 Claude 数据目录，请检查软件权限。'
+            : '未在本机找到 Claude Code / Codex / Claude 桌面版会话数据。'}</div>
           <button type="button" class="cw-btn ghost" data-cw-retry>重新检测</button>
         </div>`;
       grid.querySelector('[data-cw-retry]')?.addEventListener('click', () => {
@@ -277,13 +302,13 @@ async function _cwLoadSources() {
     }
 
     const sourceCard = (a) => {
-      const label = a.type === 'claude' ? 'Claude Code' : 'Codex';
       const version = a.version ? `v${_cwEsc(a.version)}` : '';
+      const meta = a.type === 'claude-desktop' ? `${a.count} 个会话` : (version || '本机检测到');
       return `
         <button type="button" class="cw-source-card${_cw.source === a.type ? ' is-active' : ''}" data-cw-source="${_cwEsc(a.type)}">
           <span class="cw-source-icon">${_cwIcon('play')}</span>
-          <span class="cw-source-name">${_cwEsc(label)}</span>
-          <span class="cw-source-meta">${version || '本机检测到'}</span>
+          <span class="cw-source-name">${_cwEsc(_cwSourceLabel(a.type))}</span>
+          <span class="cw-source-meta">${meta}</span>
         </button>`;
     };
 
@@ -317,11 +342,31 @@ async function _cwLoadSessions() {
   if (!list) return;
   list.innerHTML = '<div class="cw-loading">正在读取会话…</div>';
 
-  const wanted = _cw.source === 'all' ? ['claude', 'codex'] : [_cw.source];
+  const wanted = _cw.source === 'all'
+    ? _cw.sources.map((s) => s.type)
+    : [_cw.source];
   const sessions = [];
+  _cw.denied = false;
   for (const type of wanted) {
     try {
-      if (type === 'claude') {
+      if (type === 'claude-desktop') {
+        const res = await window.orkas.invoke('localAgents.listClaudeDesktopSessions');
+        if (res && res.error === 'permission_denied') {
+          _cw.denied = true;
+          continue;
+        }
+        for (const s of (res && res.sessions) || []) {
+          sessions.push({
+            id: `claude-desktop::${s.sessionId}`,
+            source: 'claude-desktop',
+            sessionId: s.sessionId,
+            title: s.title || '未命名会话',
+            meta: s.projectPath || s.model || '',
+            time: s.createdAt || '',
+            initialMessage: s.initialMessage || '',
+          });
+        }
+      } else if (type === 'claude') {
         const res = await window.orkas.invoke('localAgents.listClaudeSessions');
         for (const s of (res && res.sessions) || []) {
           sessions.push({
@@ -375,7 +420,9 @@ function _cwRenderSessionList() {
   }
 
   if (!_cw.sessions.length) {
-    list.innerHTML = '<div class="cw-empty">所选来源没有可导入的历史会话。</div>';
+    list.innerHTML = _cw.denied
+      ? '<div class="cw-empty">无法访问 Claude 数据目录，请检查软件权限。</div>'
+      : '<div class="cw-empty">所选来源没有可导入的历史会话。</div>';
     _cwRenderFoot();
     return;
   }
@@ -393,7 +440,7 @@ function _cwRenderSessionList() {
     return `
       <div class="cw-session-row${selected ? ' is-selected' : ''}" data-cw-session="${_cwEsc(s.id)}">
         <span class="cw-check">${_cwIcon('check')}</span>
-        <span class="cw-session-source">${s.source === 'claude' ? 'Claude' : 'Codex'}</span>
+        <span class="cw-session-source">${_cwEsc(_cwSourceLabel(s.source))}</span>
         <span class="cw-session-body">
           <span class="cw-session-title">${_cwEsc(s.title)}</span>
           <span class="cw-session-meta">${_cwEsc(s.meta || '')}${time ? ` · ${_cwEsc(time)}` : ''}</span>
@@ -428,7 +475,7 @@ async function _cwRunImport() {
   items.forEach((item) => { item.status = 'waiting'; });
   list.innerHTML = items.map((item) => `
     <div class="cw-import-row is-waiting" data-cw-import-row>
-      <span class="cw-import-source">${item.source === 'claude' ? 'Claude' : 'Codex'}</span>
+      <span class="cw-import-source">${_cwEsc(_cwSourceLabel(item.source))}</span>
       <span class="cw-import-title">${_cwEsc(item.title)}</span>
       <span class="cw-import-status">等待中</span>
     </div>`).join('');
@@ -447,18 +494,25 @@ async function _cwRunImport() {
     item.status = 'running';
     if (row) row.outerHTML = `
       <div class="cw-import-row is-running" data-cw-import-row>
-        <span class="cw-import-source">${item.source === 'claude' ? 'Claude' : 'Codex'}</span>
+        <span class="cw-import-source">${_cwEsc(_cwSourceLabel(item.source))}</span>
         <span class="cw-import-title">${_cwEsc(item.title)}</span>
         <span class="cw-import-status">导入中</span>
       </div>`;
 
     try {
-      const res = item.source === 'claude'
-        ? await window.orkas.invoke('sessionImport.importClaudeSession', { filePath: item.filePath })
-        : await window.orkas.invoke('sessionImport.importCodexSession', {
-            filePath: item.filePath,
-            titleHint: item.title,
-          });
+      let res;
+      if (item.source === 'claude') {
+        res = await window.orkas.invoke('sessionImport.importClaudeSession', { filePath: item.filePath });
+      } else if (item.source === 'claude-desktop') {
+        res = await window.orkas.invoke('sessionImport.importClaudeDesktopSession', {
+          sessionId: item.sessionId,
+        });
+      } else {
+        res = await window.orkas.invoke('sessionImport.importCodexSession', {
+          filePath: item.filePath,
+          titleHint: item.title,
+        });
+      }
       if (res && res.conversationId) {
         item.status = 'ok';
         item.cid = res.conversationId;
@@ -468,16 +522,16 @@ async function _cwRunImport() {
         }
         if (row) row.outerHTML = `
           <div class="cw-import-row is-ok" data-cw-import-row>
-            <span class="cw-import-source">${item.source === 'claude' ? 'Claude' : 'Codex'}</span>
+            <span class="cw-import-source">${_cwEsc(_cwSourceLabel(item.source))}</span>
             <span class="cw-import-title">${_cwEsc(item.title)}</span>
-            <span class="cw-import-status">已完成</span>
+            <span class="cw-import-status">${res.truncated ? '已完成 · 对话过长，已截断' : '已完成'}</span>
           </div>`;
       } else {
         item.status = 'fail';
         _cw.failed.push(item);
         if (row) row.outerHTML = `
           <div class="cw-import-row is-fail" data-cw-import-row>
-            <span class="cw-import-source">${item.source === 'claude' ? 'Claude' : 'Codex'}</span>
+            <span class="cw-import-source">${_cwEsc(_cwSourceLabel(item.source))}</span>
             <span class="cw-import-title">${_cwEsc(item.title)}</span>
             <span class="cw-import-status">失败</span>
           </div>`;
@@ -487,7 +541,7 @@ async function _cwRunImport() {
       _cw.failed.push(item);
       if (row) row.outerHTML = `
         <div class="cw-import-row is-fail" data-cw-import-row>
-          <span class="cw-import-source">${item.source === 'claude' ? 'Claude' : 'Codex'}</span>
+          <span class="cw-import-source">${_cwEsc(_cwSourceLabel(item.source))}</span>
           <span class="cw-import-title">${_cwEsc(item.title)}</span>
           <span class="cw-import-status">失败</span>
         </div>`;

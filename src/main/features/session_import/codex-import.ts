@@ -25,10 +25,81 @@ import { createTask, listTasks, type Schedule } from '../auto_tasks';
 
 const log = createLogger('session-import:codex-import');
 
+/** Cap for small config-style files (config.toml, AGENTS.md). */
 const MAX_FILE_BYTES = 256 * 1024;
+
+/**
+ * Cap for session transcripts. These grow with every assistant reply and tool
+ * result, so they are orders of magnitude larger than the config files above:
+ * a routine session is a few hundred KiB and long ones reach tens of MiB.
+ * Sharing the 256 KiB config cap rejected most real sessions as `too_large`.
+ */
+const MAX_SESSION_BYTES = 32 * 1024 * 1024;
 
 function codexDir(home = os.homedir()): string {
   return path.join(home, '.codex');
+}
+
+/**
+ * Codex prefixes most sessions with synthetic user turns it injects itself —
+ * environment context, AGENTS.md instructions, resumed-transcript envelopes,
+ * and file-mention preambles. They are real `role: 'user'` events but not
+ * anything the user typed, so titles and summaries must skip past them.
+ */
+const SYNTHETIC_USER_PREFIXES = [
+  '<environment_context',
+  '<user_instructions',
+  '<AGENTS.md',
+  '# AGENTS.md instructions',
+  '# Files mentioned by the user',
+  'The following is the Codex agent history',
+  '>>> TRANSCRIPT START',
+];
+
+function isSyntheticUserText(text: string): boolean {
+  const t = text.trimStart();
+  return SYNTHETIC_USER_PREFIXES.some((p) => t.startsWith(p));
+}
+
+/** Numbered transcript replay Codex emits when resuming: `[1] user: …`. */
+const NUMBERED_REPLAY_RE = /^\[\d+\]\s+\w+:\s*/;
+
+/**
+ * Strip the envelopes Codex wraps around a real prompt. A resumed session
+ * replays history as `[1] user: …`, and file mentions nest the prompt under a
+ * `## My request for Codex:` heading — sometimes both at once. Returns the
+ * user's own words, or '' if nothing but envelope remains.
+ */
+function unwrapUserText(text: string): string {
+  let t = text.trimStart();
+  if (NUMBERED_REPLAY_RE.test(t)) t = t.replace(NUMBERED_REPLAY_RE, '').trimStart();
+
+  const marker = t.indexOf('## My request for Codex:');
+  if (marker !== -1) t = t.slice(marker + '## My request for Codex:'.length).trimStart();
+
+  return isSyntheticUserText(t) ? '' : t.trim();
+}
+
+/**
+ * Text of the content items on a Codex `response_item` payload. Codex writes
+ * `input_text` (Responses API shape); `text` is accepted for older records.
+ */
+function payloadTexts(content: unknown): string[] {
+  if (typeof content === 'string') return content.trim() ? [content] : [];
+  if (!Array.isArray(content)) return [];
+  const out: string[] = [];
+  for (const item of content) {
+    const type = (item as { type?: unknown })?.type;
+    const text = (item as { text?: unknown })?.text;
+    if (
+      (type === 'input_text' || type === 'output_text' || type === 'text') &&
+      typeof text === 'string' &&
+      text
+    ) {
+      out.push(text);
+    }
+  }
+  return out;
 }
 
 // ── Session listing ──────────────────────────────────────────────────────
@@ -103,53 +174,85 @@ export async function listCodexSessions(home = os.homedir()): Promise<CodexSessi
   return sessions;
 }
 
+/** Bytes of a transcript scanned for listing metadata. */
+const META_SCAN_BYTES = 256 * 1024;
+
+/**
+ * Read at most `bytes` from the head of a file. Listing reads every session,
+ * and transcripts run to tens of MiB, so the whole file must not be loaded
+ * just to recover a title.
+ */
+async function readHead(filePath: string, bytes: number): Promise<string> {
+  const handle = await fsp.open(filePath, 'r');
+  try {
+    const buf = Buffer.alloc(bytes);
+    const { bytesRead } = await handle.read(buf, 0, bytes, 0);
+    return buf.subarray(0, bytesRead).toString('utf8');
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Single-line, length-capped form of transcript text for titles/summaries. */
+function condense(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max).trimEnd()}…` : flat;
+}
+
 async function extractSessionMeta(
   filePath: string,
 ): Promise<{ title: string; cwd?: string; createdAt: string }> {
   try {
-    const content = await fsp.readFile(filePath, 'utf8');
-    const lines = content.split('\n').slice(0, 20); // First 20 lines
+    // A trailing partial line from the byte-bounded read is dropped by the
+    // per-line JSON.parse below.
+    const lines = (await readHead(filePath, META_SCAN_BYTES)).split('\n');
 
-    let title = 'Untitled';
+    let title = '';
     let cwd: string | undefined;
     let createdAt = '';
 
     for (const line of lines) {
       if (!line.trim()) continue;
+      let event: {
+        type?: unknown;
+        timestamp?: unknown;
+        payload?: { cwd?: unknown; role?: unknown; content?: unknown };
+      };
       try {
-        const event = JSON.parse(line);
-
-        // Extract timestamp from first event
-        if (!createdAt && event.timestamp) {
-          createdAt = new Date(event.timestamp).toISOString();
-        }
-
-        // Extract cwd from session_meta
-        if (event.type === 'session_meta' && event.payload?.cwd) {
-          cwd = event.payload.cwd;
-        }
-
-        // Extract title from first user message
-        if (event.type === 'response_item' && event.payload?.role === 'user') {
-          const content = event.payload.content;
-          if (Array.isArray(content)) {
-            for (const item of content) {
-              if (item.type === 'text' && item.text) {
-                title = item.text.slice(0, 100);
-                break;
-              }
-            }
-          } else if (typeof content === 'string') {
-            title = content.slice(0, 100);
-          }
-          if (title !== 'Untitled') break;
-        }
+        event = JSON.parse(line);
       } catch {
-        // Skip unparseable lines
+        continue; // partial or malformed line
       }
+
+      if (!createdAt && typeof event.timestamp === 'string') {
+        const ts = new Date(event.timestamp);
+        if (!Number.isNaN(ts.getTime())) createdAt = ts.toISOString();
+      }
+
+      if (event.type === 'session_meta' && typeof event.payload?.cwd === 'string') {
+        cwd = event.payload.cwd;
+      }
+
+      // First user turn that the user actually typed.
+      if (!title && event.type === 'response_item' && event.payload?.role === 'user') {
+        for (const text of payloadTexts(event.payload.content)) {
+          if (isSyntheticUserText(text)) continue;
+          const candidate = condense(unwrapUserText(text), 100);
+          if (candidate) {
+            title = candidate;
+            break;
+          }
+        }
+      }
+
+      if (title && cwd && createdAt) break;
     }
 
-    return { title, cwd, createdAt };
+    // Sessions that never reach a typed prompt within the scan window (e.g.
+    // opened and abandoned) fall back to the project directory.
+    if (!title && cwd) title = path.basename(cwd);
+
+    return { title: title || 'Untitled', cwd, createdAt };
   } catch (err) {
     log.warn('failed to extract Codex session meta', { filePath, error: String(err) });
     return { title: 'Untitled', createdAt: new Date().toISOString() };
@@ -284,7 +387,7 @@ export async function readCodexSessionTranscript(
   try {
     const stat = await fsp.stat(filePath);
     if (!stat.isFile()) return { ok: false, reason: 'not_file' };
-    if (stat.size > MAX_FILE_BYTES) return { ok: false, reason: 'too_large' };
+    if (stat.size > MAX_SESSION_BYTES) return { ok: false, reason: 'too_large' };
 
     const content = await fsp.readFile(filePath, 'utf8');
     const lines = content.split('\n').filter((l) => l.trim());
@@ -328,19 +431,7 @@ export async function readCodexSessionTranscript(
 }
 
 function extractContentFromPayload(content: unknown): string {
-  if (typeof content === 'string') return content.trim();
-  if (Array.isArray(content)) {
-    const texts: string[] = [];
-    for (const item of content) {
-      if (item?.type === 'input_text' && item.text) {
-        texts.push(item.text);
-      } else if (item?.type === 'text' && item.text) {
-        texts.push(item.text);
-      }
-    }
-    return texts.join('\n\n').trim();
-  }
-  return '';
+  return payloadTexts(content).join('\n\n').trim();
 }
 
 /**
@@ -362,9 +453,13 @@ export async function importCodexSession(
   // Import materialize logic
   const { materializeSession } = await import('./materialize');
 
-  // Build a minimal extraction shape (no cognitions for Codex, just a plain summary)
-  const firstUserMsg = turns.find((t) => t.role === 'user')?.content || '';
-  const sessionSummary = firstUserMsg.slice(0, 200) || '从 Codex 导入的会话';
+  // Build a minimal extraction shape (no cognitions for Codex, just a plain
+  // summary). Skip the synthetic turns Codex injects ahead of the real prompt.
+  const firstUserMsg = turns
+    .filter((t) => t.role === 'user' && !isSyntheticUserText(t.content))
+    .map((t) => unwrapUserText(t.content))
+    .find((t) => t);
+  const sessionSummary = condense(firstUserMsg || '', 200) || '从 Codex 导入的会话';
 
   const extraction = {
     ok: true,

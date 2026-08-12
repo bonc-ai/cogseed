@@ -37,8 +37,12 @@ describe('unified model authorization settings surface', () => {
     expect(indexHtml).not.toContain('id="settings-add-entry-btn"');
   });
 
-  it('describes API key discovery as protocol plus key and URL before model selection', () => {
-    expect(indexHtml).toContain('data-i18n="settings.model_authorization.api_key_flow_hint"');
+  it('replaces the legacy interface-type hint with a concise flow subtitle', () => {
+    // The old two-line hint described the protocol-first flow (choose an
+    // interface type, enter key and URL). The preset-first flow keeps a
+    // single concise subtitle; the hint line must not resurface.
+    expect(indexHtml).toContain('data-i18n="settings.model_authorization.subtitle"');
+    expect(indexHtml).not.toContain('data-i18n="settings.model_authorization.api_key_flow_hint"');
   });
 
   it('labels advanced management as custom endpoint management and explains its scope', () => {
@@ -304,17 +308,18 @@ describe('model authorization interactive wizard', () => {
     await context.window.initModelAuthorizationSettings();
     await registry.get('settings-model-authorization-add-btn')!.click();
     await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'source-manual' } } });
-    expect(registry.get('model-authorization-body')!.innerHTML).toContain('choose-protocol');
-    expect(registry.get('model-authorization-body')!.innerHTML).not.toContain('openai-compatible');
-    await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'choose-protocol', protocol: 'openai' } } });
+    expect(registry.get('model-authorization-body')!.innerHTML).toContain('choose-provider-preset');
+    expect(registry.get('model-authorization-body')!.innerHTML).toContain('choose-custom-endpoint');
+    expect(registry.get('model-authorization-body')!.innerHTML).not.toContain('choose-protocol');
+    await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'choose-provider-preset', providerId: 'anthropic' } } });
+    expect(registry.get('model-authorization-body')!.innerHTML).not.toContain('model-authorization-base-url');
     await registry.get('model-authorization-actions')!.dispatch('click', { target: { dataset: { modelAuthAction: 'continue-credentials' } } });
     expect(registry.get('model-authorization-status')!.textContent).toContain('error_required');
     registry.get('model-authorization-api-key')!.value = 'sk-live-secret';
-    registry.get('model-authorization-base-url')!.value = 'https://relay.example/v1';
     const first = registry.get('model-authorization-actions')!.dispatch('click', { target: { dataset: { modelAuthAction: 'continue-credentials' } } });
     await Promise.resolve();
     expect(JSON.stringify(registry.get('model-authorization-body')!.innerHTML)).not.toContain('sk-live-secret');
-    expect(invoke).toHaveBeenCalledWith('modelAuthorizations.discover', expect.objectContaining({ kind: 'custom_api_key', protocol: 'openai', apiKey: 'sk-live-secret', baseUrl: 'https://relay.example/v1' }));
+    expect(invoke).toHaveBeenCalledWith('modelAuthorizations.discover', expect.objectContaining({ kind: 'builtin', providerId: 'anthropic' }));
     await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'source-ccswitch' } } });
     discoverResolvers.shift()!({ ok: true, token: 'discovery-1', models: [{ id: 'stale-model' }] });
     await first;
@@ -379,5 +384,26 @@ describe('model authorization interactive wizard', () => {
     await registry.get('model-authorization-actions')!.dispatch('click', { target: { dataset: { modelAuthAction: 'complete' } } });
     expect(registry.get('model-authorization-modal')!.classList.contains('open')).toBe(false);
     expect(registry.get('settings-model-authorization-list')!.innerHTML).toContain('gpt-5.6-sol');
+  });
+
+  it('walks back through wizard steps and cancels from the action bar', async () => {
+    const { context, registry } = loadInteractiveHarness();
+    await context.window.initModelAuthorizationSettings();
+    await registry.get('settings-model-authorization-add-btn')!.click();
+    // api_key_source: back returns to auth_type.
+    expect(registry.get('model-authorization-actions')!.innerHTML).toContain('model-auth-action="back"');
+    await registry.get('model-authorization-actions')!.dispatch('click', { target: { dataset: { modelAuthAction: 'back' } } });
+    expect(registry.get('model-authorization-body')!.innerHTML).toContain('choose-api-key');
+    // auth_type: no back available, cancel closes the modal.
+    expect(registry.get('model-authorization-actions')!.innerHTML).toContain('model-auth-action="cancel"');
+    expect(registry.get('model-authorization-actions')!.innerHTML).not.toContain('model-auth-action="back"');
+    // Re-enter the flow and back out of the provider preset step.
+    await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'choose-api-key' } } });
+    await registry.get('model-authorization-body')!.dispatch('click', { target: { dataset: { modelAuthAction: 'source-manual' } } });
+    expect(registry.get('model-authorization-body')!.innerHTML).toContain('choose-provider-preset');
+    await registry.get('model-authorization-actions')!.dispatch('click', { target: { dataset: { modelAuthAction: 'back' } } });
+    expect(registry.get('model-authorization-body')!.innerHTML).toContain('source-manual');
+    await registry.get('model-authorization-actions')!.dispatch('click', { target: { dataset: { modelAuthAction: 'cancel' } } });
+    expect(registry.get('model-authorization-modal')!.classList.contains('open')).toBe(false);
   });
 });

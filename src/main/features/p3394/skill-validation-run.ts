@@ -10,7 +10,21 @@ import { validateSkillDir, validateSkillFile, type ValidationReport } from '../.
 
 export type ValidationStatus = 'pass' | 'risk' | 'blocked' | 'degraded';
 export type ValidationTarget = 'working-tree' | 'installed-skill' | 'patch-candidate';
-export type ValidationBoundary = 'real' | 'degraded' | 'test-double';
+/**
+ * How the verdict was obtained.
+ *
+ * `static` means the validator read the skill's files without executing it —
+ * which is what every path in this module actually does. `real` is reserved for
+ * evidence produced by genuinely running the skill; nothing writes it yet, and it
+ * must not be claimed until something does.
+ *
+ * The distinction exists because PRD §8.2 admits a formal Baseline only after
+ * "Skill Validator, Security Scanner, and a minimal real run", and callers here
+ * previously passed `boundary: 'real'` for a static check — a record that reads
+ * as run evidence while no run happened. `degraded` still means the validator
+ * itself was unavailable, and `test-double` a stand-in.
+ */
+export type ValidationBoundary = 'static' | 'real' | 'degraded' | 'test-double';
 export interface SkillValidationRun {
   validationId: string;
   skillId: string;
@@ -21,7 +35,25 @@ export interface SkillValidationRun {
   scannedFiles: number;
   boundary: ValidationBoundary;
   createdAt: string;
+  /**
+   * Monotonic tiebreaker for records written in the same millisecond.
+   *
+   * `createdAt` resolves to 1ms, and two validations of one skill routinely land
+   * inside one. Ordering by timestamp alone then falls back to `readdir` order,
+   * so `findLatestSkillValidation` could return a stale verdict while a newer one
+   * sat on disk — and the workspace gate acts on that verdict.
+   */
+  seq: number;
 }
+
+/**
+ * Process-local counter making write order recoverable at millisecond ties.
+ *
+ * Not persisted: it only orders records this process wrote, and cross-process
+ * records are separated by far more than a millisecond in practice. `createdAt`
+ * stays the primary key; this only breaks exact ties.
+ */
+let _seq = 0;
 
 const MAX_ID = 160;
 function requireId(value: unknown, field: string): string {
@@ -52,7 +84,7 @@ export function normalizeValidationReport(
       ...(v.field ? { path: v.field } : {}),
       message: v.suggested_fix || v.rule,
     })),
-    scannedFiles: Math.max(0, Math.floor(scannedFiles)), boundary, createdAt: new Date().toISOString(),
+    scannedFiles: Math.max(0, Math.floor(scannedFiles)), boundary, createdAt: new Date().toISOString(), seq: ++_seq,
   };
 }
 
@@ -81,6 +113,15 @@ export async function runSkillValidation(uid: string, input: {
 }): Promise<SkillValidationRun> {
   requireId(input.skillId, 'skill id');
   if (!isPathAllowed(input.skillDir, input.allowedRoots)) throw new Error('skill directory is outside allowed roots');
+  // Refuse to record a run-evidence claim this function cannot substantiate: it
+  // calls the static validator and never executes the skill. Rejecting is better
+  // than silently downgrading, because a caller asking for `real` believes it is
+  // getting run evidence and would carry that belief into an admission decision.
+  // Delete this guard only together with an implementation that actually runs the
+  // skill and derives the verdict from that run.
+  if (input.boundary === 'real') {
+    throw new Error('runSkillValidation performs a static scan and cannot produce `real` run evidence');
+  }
   try {
     const [report, scannedFiles] = await Promise.all([
       Promise.resolve((input.validateFn || validateSkillDir)(input.skillDir)),
@@ -92,13 +133,13 @@ export async function runSkillValidation(uid: string, input: {
       validationId: `validation-${randomUUID()}`, skillId: input.skillId, target: input.target,
       status: 'degraded', validatorVersion: 'unavailable',
       violations: [{ level: 'EXTREME', rule: 'scanner_unavailable', message: 'Validator or target content is unavailable.' }],
-      scannedFiles: 0, boundary: 'degraded', createdAt: new Date().toISOString(),
+      scannedFiles: 0, boundary: 'degraded', createdAt: new Date().toISOString(), seq: ++_seq,
     });
   }
 }
 
 export async function validatePatchCandidateContent(
-  uid: string, skillId: string, content: string, boundary: ValidationBoundary = 'real',
+  uid: string, skillId: string, content: string, boundary: ValidationBoundary = 'static',
 ): Promise<SkillValidationRun> {
   const report = validateSkillFile({ relpath: 'SKILL.md', content });
   return persist(uid, normalizeValidationReport(skillId, 'patch-candidate', report, 1, boundary));
@@ -112,12 +153,18 @@ export async function readSkillValidation(uid: string, validationId: string): Pr
 export async function listSkillValidations(uid: string): Promise<SkillValidationRun[]> {
   const dir = path.join(userLocalRoot(uid), 'kstar', 'executions', 'validations');
   let names: string[];
-  try { names = await fs.readdir(dir); } catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []; throw err; }
+  // Sorted so the input order is defined before sorting rather than inherited
+  // from the filesystem: `readdir` order is unspecified, and the comparator below
+  // is only a partial order.
+  try { names = (await fs.readdir(dir)).sort(); } catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []; throw err; }
   const rows: SkillValidationRun[] = [];
   for (const name of names.filter((n) => n.endsWith('.json'))) {
     try { rows.push(JSON.parse(await fs.readFile(path.join(dir, name), 'utf8')) as SkillValidationRun); } catch { /* malformed ignored */ }
   }
-  return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  // Timestamp first, then the monotonic tiebreaker: same-millisecond records
+  // would otherwise be ordered by `readdir`, making "latest" nondeterministic.
+  return rows.sort((a, b) =>
+    b.createdAt.localeCompare(a.createdAt) || (b.seq || 0) - (a.seq || 0));
 }
 
 export async function findLatestSkillValidation(uid: string, skillId: string): Promise<SkillValidationRun | null> {

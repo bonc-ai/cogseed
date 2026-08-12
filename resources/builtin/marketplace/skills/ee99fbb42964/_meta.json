@@ -1,5 +1,15 @@
 {
-  "version": "1.0.3",
-  "updated_at": "2026-07-04T00:00:00",
-  "reseed_if_deleted_before": "2026-07-03T00:00:00Z"
+  "version": "1.0.5",
+  "updated_at": "2026-08-10T00:00:00",
+  "reseed_if_deleted_before": "2026-07-03T00:00:00Z",
+  "nseap": {
+    "standard_id": "nseap-skill-standard-v1",
+    "skill_class": "execution",
+    "is_skill_of_skill": false,
+    "level": "L5",
+    "risk_route": "Full",
+    "promotion_ceiling": "staged",
+    "production_release_allowed": false,
+    "compliance_tier": null
+  }
 }
