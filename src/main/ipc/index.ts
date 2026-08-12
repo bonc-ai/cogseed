@@ -58,6 +58,7 @@ import * as personalOntologyTemplateFiles from '../features/personal_ontology_te
 import { getRoleTemplate } from '../features/role_templates';
 import type { GroupEvent } from '../features/group_chat/bus';
 import * as agents from '../features/agents';
+import * as agentInheritance from '../features/agent_inheritance';
 import * as autoTasks from '../features/auto_tasks';
 import { isAgentEnabled } from '../features/component_enabled';
 import * as skills from '../features/skills';
@@ -2572,6 +2573,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const agent = await agents.getAgent(agent_id);
     if (!agent) throw new Error('agent not found');
     return { agent };
+  },
+
+  // 「查看继承内容」入口。inheritance 为 null 表示这个 Agent 生成时还没有继承
+  // 机制，渲染层必须把它和「继承为空」分开说，不能都显示成没继承任何东西。
+  'agents.inheritance': async ({ agent_id } = {}, ctx) => {
+    if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
+    const inheritance = await agentInheritance.readAgentInheritance(ctx.userId, agent_id);
+    return { ok: true, inheritance };
   },
 
   'agents.create': async ({ name = '', description = '', description_zh, description_en, workflow = '', icon, color, runtime, category, output_format } = {}) => {
