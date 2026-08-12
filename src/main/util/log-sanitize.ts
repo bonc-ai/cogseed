@@ -19,8 +19,12 @@
  */
 import * as crypto from 'node:crypto';
 
-const SENSITIVE_FIELD =
+/** 凭证类字段名的权威清单。日志脱敏与认知沉淀的 L3 准入闸都读它，
+ *  避免两处各自维护一份、日久漂移出安全缺口。 */
+export const SENSITIVE_FIELD_PATTERN =
   '(?:api_?key|access_?token|refresh_?token|id_?token|session_?id|client_?secret|private_?key|password|passwd|pwd|secret|token|authorization|cookie|set-cookie)';
+
+const SENSITIVE_FIELD = SENSITIVE_FIELD_PATTERN;
 
 const SENSITIVE_QUERY_FIELD =
   '(?:api_?key|access_?token|refresh_?token|id_?token|session_?id|client_?secret|private_?key|password|passwd|pwd|secret|token|authorization|cookie|set-cookie|code|state|signature|sign|q-ak|q-signature|x-cos-security-token|x-amz-signature|x-amz-security-token|x-amz-credential|ossaccesskeyid|security-token)';

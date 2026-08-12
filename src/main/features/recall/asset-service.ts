@@ -8,6 +8,7 @@ import { appendRecallJsonlRecord, listRecallJsonlRecords, readRecallJsonRecord, 
 import type { RecallJsonRecord } from './types';
 import { normalizeAbilityAssetOntologyRefs, type AbilityAssetOntologyRef } from './ontology-refs';
 import { readAbilityAssetSemantics } from './asset-semantics';
+import { assertNotForbiddenToPersist } from '../../util/cognition-sensitivity';
 import type { RecallAbilityAssetRecord } from './candidate-service';
 
 export interface AbilityAssetVersionRecord extends RecallJsonRecord {
@@ -182,6 +183,8 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
     : normalizeAbilityAssetOntologyRefs(input.ontologyRefs);
   // 语义字段先于写事务校验，并把 assetId 传进去挡掉自指关系。
   const semantics = readAbilityAssetSemantics(input as Record<string, unknown>, assetId);
+  // 纵深防御：候选入口已有 L3 闸，但资产可以被直接编辑，凭证能从这条路进来。
+  assertNotForbiddenToPersist([input.title, input.statement, input.scope]);
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);

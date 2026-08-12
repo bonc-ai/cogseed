@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
 import { genId12, safeId } from '../../storage';
+import { assertNotForbiddenToPersist } from '../../util/cognition-sensitivity';
 import { recallJsonRecordPath } from './paths';
 import {
   readRecallJsonRecord,
@@ -256,6 +257,11 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
   const suggestedScope = boundedText(input.suggestedScope, 'suggested scope', 500, true)!;
   const sourceRefs = normalizeCognitionSourceRefsForWrite(input.sourceRefs);
   if (!sourceRefs.length) throw new Error('candidate evidence is required');
+  // L3 准入闸（规范 16.1）：密钥、口令、未脱敏凭证不得形成候选。
+  // 拦在这里而不是输出侧脱敏，是因为候选一旦长成资产，就会被冻进能力包、
+  // 注入 Agent 提示、写进回执、跨会话复用——后面每一环都在忠实搬运它。
+  // judgment 与 summary 一起过闸，否则把凭证写在 summary 里就能绕过去。
+  assertNotForbiddenToPersist([judgment, summary, uncertainty]);
   const learningSignal = normalizeLearningSignal(input.learningSignal);
   const captureKey = input.captureKey === undefined
     ? undefined
