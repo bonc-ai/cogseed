@@ -3104,5 +3104,9 @@
   "cognition.resume.dev": "開発者向け詳細",
   "cognition.resume.fresh": "定着したばかりで使用記録はまだありません",
   "chat.created_agent_call_here": "ここで @ で呼ぶ（画面は移動しません）",
-  "chat.created_agent_call_label": "@ で呼ぶ"
+  "chat.created_agent_call_label": "@ で呼ぶ",
+  "recall.projection.summary_counts": "今回は {count} 件を引き継ぎます（{omitted} 件は対象外）",
+  "recall.projection.summary_counts_only": "今回は {count} 件を引き継ぎます",
+  "recall.projection.summary_none": "今回引き継ぐものはありません",
+  "recall.projection.summary_none_omitted": "今回引き継ぐものはありません（{omitted} 件は対象外）"
 }

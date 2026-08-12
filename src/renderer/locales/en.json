@@ -3324,5 +3324,9 @@
   "cognition.resume.dev": "Developer details",
   "cognition.resume.fresh": "Just settled — no use yet",
   "chat.created_agent_call_here": "Mention it here without leaving",
-  "chat.created_agent_call_label": "@ it"
+  "chat.created_agent_call_label": "@ it",
+  "recall.projection.summary_counts": "Carrying {count} into this task; {omitted} left out.",
+  "recall.projection.summary_counts_only": "Carrying {count} into this task.",
+  "recall.projection.summary_none": "Nothing carried into this task.",
+  "recall.projection.summary_none_omitted": "Nothing carried into this task; {omitted} left out."
 }

@@ -3104,5 +3104,9 @@
   "cognition.resume.dev": "Detalhes do desenvolvedor",
   "cognition.resume.fresh": "Recém-consolidado — ainda sem uso",
   "chat.created_agent_call_here": "Mencione aqui sem sair",
-  "chat.created_agent_call_label": "@ ele"
+  "chat.created_agent_call_label": "@ ele",
+  "recall.projection.summary_counts": "Levando {count} para esta tarefa; {omitted} de fora.",
+  "recall.projection.summary_counts_only": "Levando {count} para esta tarefa.",
+  "recall.projection.summary_none": "Nada levado para esta tarefa.",
+  "recall.projection.summary_none_omitted": "Nada levado para esta tarefa; {omitted} de fora."
 }

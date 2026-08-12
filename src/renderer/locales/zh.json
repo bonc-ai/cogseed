@@ -3324,5 +3324,9 @@
   "cognition.resume.dev": "开发者详情",
   "cognition.resume.fresh": "刚沉淀，还没有使用记录",
   "chat.created_agent_call_here": "留在这里 @ 它，不跳转",
-  "chat.created_agent_call_label": "@ 它"
+  "chat.created_agent_call_label": "@ 它",
+  "recall.projection.summary_counts": "这次带入 {count} 条认知；{omitted} 条未带",
+  "recall.projection.summary_counts_only": "这次带入 {count} 条认知",
+  "recall.projection.summary_none": "这次没有带入认知",
+  "recall.projection.summary_none_omitted": "这次没有带入认知；{omitted} 条未带"
 }
