@@ -22,27 +22,6 @@
     return out;
   }
 
-
-  /** 任务前那一行准备摘要。
-   *
-   *  由计数在渲染层组装，而不是直接显示主进程给的 `summary.text`——那句是写死的
-   *  英文，还带着 "ability asset" 这类内部术语。用户层的措辞该跟界面语言走，
-   *  内部名不外露（与认知履历、记忆披露同一条纪律）。
-   *
-   *  零条也要有话说：「这次没带」和「系统没准备」在用户眼里必须能区分开。 */
-  function _summaryText(card, assets) {
-    const included = Number(card?.summary?.includedCount ?? assets.length) || 0;
-    const omitted = Number(card?.summary?.omittedCount ?? 0) || 0;
-    if (included === 0) {
-      return omitted > 0
-        ? _label('recall.projection.summary_none_omitted', 'Nothing carried into this task; {omitted} left out.', { omitted })
-        : _label('recall.projection.summary_none', 'Nothing carried into this task.');
-    }
-    return omitted > 0
-      ? _label('recall.projection.summary_counts', 'Carrying {count} into this task; {omitted} left out.', { count: included, omitted })
-      : _label('recall.projection.summary_counts_only', 'Carrying {count} into this task.', { count: included });
-  }
-
   function _statusLabel(status) {
     if (status === 'confirmed') return _label('recall.projection.status.confirmed', 'Confirmed');
     if (status === 'preview') return _label('recall.projection.status.preview', 'Preview');
@@ -81,7 +60,7 @@
       ? `<div class="chat-recall-projection-actions"><button type="button" class="btn btn-primary btn-sm" data-recall-projection-confirm="1">${_escape(_label('recall.projection.confirm_assets', 'Confirm preloaded assets'))}</button></div>`
       : '';
     host.innerHTML = `<div class="chat-recall-projection-head"><div><strong>${_escape(_label('recall.projection.title', 'Preloaded asset list'))}</strong><small>${_escape(card?.purpose || '')}</small></div><span class="chat-recall-projection-status">${_escape(_statusLabel(card?.status))}</span></div>
-      <div class="chat-recall-projection-summary">${_escape(_summaryText(card, assets))}</div>
+      <div class="chat-recall-projection-summary">${_escape(card?.summary?.text || _label('recall.projection.summary', '{count} preloaded assets selected for this task.', { count: assets.length }))}</div>
       <div class="chat-recall-projection-section"><div class="chat-recall-projection-section-title">${_escape(_label('recall.projection.included_assets', 'Preloaded assets for this task'))}</div>${assets.length ? assets.map((asset) => _assetRow(asset, editable)).join('') : `<div class="chat-recall-projection-empty">${_escape(_label('recall.projection.no_included_assets', 'No preloaded ability assets selected for this task.'))}</div>`}</div>
       ${editable ? `<div class="chat-recall-projection-section"><div class="chat-recall-projection-section-title">${_escape(_label('recall.projection.add_assets', 'Add preloaded asset'))}</div>${availableRows}</div>` : `<div class="chat-recall-projection-locked">${_escape(_label('recall.projection.locked', 'This preloaded asset list is locked.'))}</div>`}
       ${actions}

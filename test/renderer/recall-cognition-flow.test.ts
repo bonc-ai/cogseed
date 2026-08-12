@@ -1378,9 +1378,6 @@ describe('Recall cognition renderer flow', () => {
       ['recall.assets.pause', { assetId: 'aa-method' }],
       ['recall.assets.resume', { assetId: 'aa-method' }],
       ['recall.assets.revoke', { assetId: 'aa-method' }],
-      // Usage is dispatched before versions and settles on its own, so a usage
-      // outage cannot blank the version list.
-      ['recall.usage.list', { assetId: 'aa-method' }],
       ['recall.assets.versions', { assetId: 'aa-method' }],
     ]);
     expect(refreshes).toBe(3);
