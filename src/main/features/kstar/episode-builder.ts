@@ -10,6 +10,11 @@ const MAX_SUMMARY = 600;
 const MESSAGE_TIME_TOLERANCE_MS = 5_000;
 
 export interface RuntimeKstarEpisodeInput {
+  /** 本轮实际带入的认知资产引用，形如 `asset:<id>@v<n>`。
+   *  由调用方从 ContextReuseReceipt 查出后传入——builder 是同步纯函数，
+   *  不读盘是有意的设计，不为这个字段破例。
+   *  缺失或空数组表示本轮没有带入任何资产，不代表没查。 */
+  abilityAssetRefs?: string[];
   userId: string;
   runId: string;
   request: RuntimeRunRequest;
@@ -35,6 +40,11 @@ export interface GroupKstarMessageInput {
 }
 
 export interface GroupKstarEpisodeInput {
+  /** 本轮实际带入的认知资产引用，形如 `asset:<id>@v<n>`。
+   *  由调用方从 ContextReuseReceipt 查出后传入——builder 是同步纯函数，
+   *  不读盘是有意的设计，不为这个字段破例。
+   *  缺失或空数组表示本轮没有带入任何资产，不代表没查。 */
+  abilityAssetRefs?: string[];
   userId: string;
   runId: string;
   conversationId: string;
@@ -148,7 +158,7 @@ export function buildRuntimeKstarEpisode(input: RuntimeKstarEpisodeInput): Kstar
     k: {
       memoryRefs: [],
       contextRefs: input.request.context.map((_item, index) => `context-${index}`),
-      abilityAssetRefs: [],
+      abilityAssetRefs: input.abilityAssetRefs ?? [],
       ...(contextSummary ? { promptContextSummary: compactText(contextSummary, MAX_SUMMARY) } : {}),
     },
     s: {
@@ -218,7 +228,7 @@ export function buildGroupKstarEpisode(input: GroupKstarEpisodeInput): KstarEpis
     ...(input.executionId ? { executionId: input.executionId } : {}),
     ...(input.projectionId ? { projectionId: input.projectionId } : {}),
     ...(input.wakeRequestId ? { wakeRequestId: input.wakeRequestId } : {}),
-    k: { memoryRefs: [], contextRefs: [], abilityAssetRefs: [] },
+    k: { memoryRefs: [], contextRefs: [], abilityAssetRefs: input.abilityAssetRefs ?? [] },
     s: { conversationSummary: compactText(summary, MAX_SUMMARY) },
     t: { userGoal, normalizedTask: compactText(userGoal, MAX_SUMMARY), constraints: [] },
     a: {
