@@ -32,6 +32,7 @@ import { safeId } from '../../storage';
 import { maskId } from '../../util/log-redact';
 import { readReceipt, type ContextReuseReceipt } from '../p3394/context-reuse-receipt';
 import { findLatestSkillValidation } from '../p3394/skill-validation-run';
+import { findLatestSkillInvocability } from '../p3394/skill-invocability';
 import { verifyBaseline, readBaseline } from './main-skill-baseline';
 
 const log = createLogger('workspace-gate');
@@ -47,7 +48,8 @@ export type WorkspaceGateReason =
   | 'receipt_missing'
   | 'receipt_not_completed'
   | 'receipt_not_real'
-  | 'validation_blocked';
+  | 'validation_blocked'
+  | 'skill_not_invocable';
 
 export type WorkspaceGateStatus = 'ready' | 'blocked';
 
@@ -58,6 +60,8 @@ export interface WorkspaceGateDecision {
   baselineId?: string;
   receiptExecutionId?: string;
   validationId?: string;
+  /** Invocability record consulted, when one existed (PRD §8.2 third check). */
+  invocabilityId?: string;
   evaluatedAt: string;
 }
 
@@ -126,6 +130,7 @@ export async function evaluateWorkspaceGate(
   // caller, so the gate cannot be pointed at a different skill than the one
   // the baseline froze.
   let validationId: string | undefined;
+  let invocabilityId: string | undefined;
   if (verified.ok === true) {
     const baseline = await readBaseline(userId, baselineId);
     const validation = await findLatestSkillValidation(userId, baseline.skill_ref.asset_id);
@@ -136,6 +141,21 @@ export async function evaluateWorkspaceGate(
     // No validation on record is NOT a blocker here: scanning is a separate
     // enabler track, and its absence is covered by its own gate. Only an
     // explicit `blocked` verdict stops the Workspace.
+
+    // PRD §8.2's third admission requirement. `not_invocable` means the runtime
+    // could not load the skill or an interpreter could not parse its scripts —
+    // a Workspace opened on it would fail at first use, so it blocks.
+    //
+    // `indeterminate` does not block: it means a check could not run (an
+    // interpreter this machine lacks), which is not evidence the skill is
+    // broken. Absent entirely does not block either, for the same reason the
+    // validation above does not — this is a separate track, and a missing record
+    // is not a negative verdict.
+    const invocability = await findLatestSkillInvocability(userId, baseline.skill_ref.asset_id);
+    if (invocability) {
+      invocabilityId = invocability.invocabilityId;
+      if (invocability.status === 'not_invocable') reasons.push('skill_not_invocable');
+    }
   }
 
   const decision: WorkspaceGateDecision = {
@@ -144,6 +164,7 @@ export async function evaluateWorkspaceGate(
     baselineId,
     receiptExecutionId,
     ...(validationId ? { validationId } : {}),
+    ...(invocabilityId ? { invocabilityId } : {}),
     evaluatedAt: new Date().toISOString(),
   };
 

@@ -11,6 +11,8 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/settings.js' },
     { src: './vendor/qrcode-generator/qrcode.js' },
     { src: './modules/messaging-settings.js' },
+    { src: './modules/touchpoint-settings-model.js' },
+    { src: './modules/touchpoint-settings.js' },
     { src: './modules/memory.js' },
   ],
   marketplace: [
@@ -50,6 +52,7 @@ const _rendererFeatureManifest = Object.freeze({
   'personal-ontology': [
     { src: './modules/cognition/pages.js' },
     { src: './modules/cognition/cognition.js' },
+    { src: './modules/personal-context-review.js' },
     { src: './modules/personal-ontology.js' },
   ],
   spaces: [

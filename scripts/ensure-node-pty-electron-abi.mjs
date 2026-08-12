@@ -12,7 +12,7 @@
  * rebuilt from source via @electron/rebuild.
  */
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -61,18 +61,55 @@ if (probeElectronAbi({ quiet: true })) {
 }
 
 const electronVersion = JSON.parse(readFileSync(electronPackage, 'utf8')).version;
-let rebuildBin;
-try {
-  // @electron/rebuild >= 4 restricts exports to ./lib/main.js, so resolve the
-  // package entry and take the sibling cli.js instead of the subpath.
-  rebuildBin = resolve(dirname(require_.resolve('@electron/rebuild')), 'cli.js');
-} catch {
+
+/**
+ * Locate the rebuild CLI.
+ *
+ * Resolving any subpath (`@electron/rebuild/lib/cli.js`, or even
+ * `@electron/rebuild/package.json`) fails on @electron/rebuild v4: it declares
+ * `"exports": "./lib/main.js"`, so Node rejects every other subpath with
+ * ERR_PACKAGE_PATH_NOT_EXPORTED even though the files are on disk. The old
+ * catch-all read that as "package missing", which is why a fully-installed tree
+ * reported `@electron/rebuild not found; run npm install`.
+ *
+ * Only the main entry is exported, so resolve that and walk up to the package
+ * root (the `lib/` parent). Then take the CLI path from `bin` when package.json
+ * is readable, else fall back to the conventional `lib/cli.js`. Reading
+ * package.json from an absolute path is fine — `exports` only gates specifier
+ * resolution, not file reads.
+ */
+function resolveRebuildCli(pkgName) {
+  let mainEntry;
   try {
-    rebuildBin = require_.resolve('electron-rebuild/lib/cli.js');
+    mainEntry = require_.resolve(pkgName);
   } catch {
-    console.error('[ensure-node-pty-electron-abi] @electron/rebuild not found; run `npm install` to get it');
-    process.exit(1);
+    return '';
   }
+  // .../@electron/rebuild/lib/main.js → .../@electron/rebuild
+  let pkgDir = dirname(dirname(mainEntry));
+  if (!existsSync(resolve(pkgDir, 'package.json'))) {
+    const up = dirname(pkgDir);
+    if (existsSync(resolve(up, 'package.json'))) pkgDir = up;
+  }
+  try {
+    const pkg = JSON.parse(readFileSync(resolve(pkgDir, 'package.json'), 'utf8'));
+    const binField = pkg.bin;
+    const rel = typeof binField === 'string'
+      ? binField
+      : binField && (binField['electron-rebuild'] || Object.values(binField)[0]);
+    if (rel) {
+      const abs = resolve(pkgDir, rel);
+      if (existsSync(abs)) return abs;
+    }
+  } catch { /* fall through to the conventional layout */ }
+  const legacy = resolve(pkgDir, 'lib', 'cli.js');
+  return existsSync(legacy) ? legacy : '';
+}
+
+const rebuildBin = resolveRebuildCli('@electron/rebuild') || resolveRebuildCli('electron-rebuild');
+if (!rebuildBin) {
+  console.error('[ensure-node-pty-electron-abi] @electron/rebuild not found; run `npm install` to get it');
+  process.exit(1);
 }
 
 const result = spawnSync(process.execPath, [

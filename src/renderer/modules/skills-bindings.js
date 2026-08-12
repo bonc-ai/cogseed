@@ -585,7 +585,7 @@ function _initSkillsCognitionBindings() {
 
     const promoteAll = event.target.closest('[data-recall-candidate-promote-all]');
     if (promoteAll) {
-      if (promoteAll.dataset.busy === '1') return;
+      if (promoteAll.dataset.busy === '1' || _skillsCognitionState.writingRecallCandidateBatch) return;
       const selectedCapture = (_skillsCognitionState.captures || [])
         .find((capture) => capture.id === _skillsCognitionState.selectedCaptureId);
       const selectedIds = selectedCapture ? new Set(selectedCapture.candidateIds || []) : null;
@@ -595,20 +595,43 @@ function _initSkillsCognitionBindings() {
         .map((candidate) => candidate.id);
       if (!candidateIds.length) return;
       promoteAll.dataset.busy = '1'; promoteAll.disabled = true;
-      _skillsCognitionState.writingRecallCandidateId = candidateIds[0];
-      renderSkillsCognitionCaptures();
+      _skillsCognitionState.writingRecallCandidateBatch = true;
+      const failures = [];
       try {
         for (const candidateId of candidateIds) {
-          const result = await window.cogseed.invoke('recall.candidates.promote', { candidateId });
-          if (!result?.ok) throw new Error(result?.error || 'recall candidate action failed');
+          _skillsCognitionState.writingRecallCandidateId = candidateId;
+          renderSkillsCognitionCaptures();
+          try {
+            const result = await window.cogseed.invoke('recall.candidates.promote', { candidateId });
+            if (!result?.ok) throw new Error(result?.error || 'recall candidate action failed');
+            if (result.candidate) {
+              _skillsCognitionState.recallCandidates = (_skillsCognitionState.recallCandidates || [])
+                .map((candidate) => candidate.id === candidateId ? result.candidate : candidate);
+            }
+            if (result.asset) {
+              const assets = new Map((_skillsCognitionState.assets || []).map((asset) => [asset.id, asset]));
+              assets.set(result.asset.id, result.asset);
+              _skillsCognitionState.assets = Array.from(assets.values());
+            }
+          } catch (error) {
+            failures.push({ candidateId, error });
+          }
         }
-        await loadSkillsCognitionSnapshot();
-      } catch (error) {
         await loadSkillsCognitionSnapshot().catch(() => {});
-        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+        if (failures.length) {
+          const message = _cognitionText(
+            'cognition.capture_save_all_partial',
+            '已保存 {success} 条，{failed} 条失败；失败内容已保留，可单独重试。',
+          ).replace('{success}', String(candidateIds.length - failures.length)).replace('{failed}', String(failures.length));
+          if (typeof uiAlert === 'function') await uiAlert(message);
+        } else if (typeof uiToast === 'function') {
+          uiToast(_cognitionText('cognition.capture_save_all_done', '已全部写入 Recall'), { variant: 'success' });
+        }
       } finally {
         _skillsCognitionState.writingRecallCandidateId = '';
+        _skillsCognitionState.writingRecallCandidateBatch = false;
         promoteAll.dataset.busy = '0'; promoteAll.disabled = false;
+        renderSkillsCognitionCaptures();
       }
       return;
     }
@@ -634,7 +657,7 @@ function _initSkillsCognitionBindings() {
           channel = 'recall.candidates.route';
           payload = { candidateId, ontology: { groupId } };
         }
-        if (actionName === 'save-edit') {
+        if (actionName === 'save-edit' || actionName === 'save-and-promote') {
           const card = recallAction.closest('[data-recall-candidate-id]');
           const candidate = (_skillsCognitionState.recallCandidates || []).find((item) => item.id === candidateId);
           if (!card || !candidate) throw new Error('recall candidate unavailable');
@@ -647,17 +670,22 @@ function _initSkillsCognitionBindings() {
           payload = { candidateId, judgment: card.querySelector('[data-recall-edit-judgment]')?.value || '', summary: card.querySelector('[data-recall-edit-summary]')?.value || '', suggestedScope: card.querySelector('[data-recall-edit-scope]')?.value || '', suggestedType: card.querySelector('[data-recall-edit-type]')?.value || '', sourceRefs };
         }
         if (!channel) return;
-        if (actionName === 'promote') {
+        if (actionName === 'promote' || actionName === 'save-and-promote') {
           _skillsCognitionState.writingRecallCandidateId = candidateId;
           renderSkillsCognitionCaptures();
+          renderSkillsCognitionCandidates();
         }
         const result = await window.cogseed.invoke(channel, payload);
         if (!result?.ok) throw new Error(result?.error || 'recall candidate action failed');
+        if (actionName === 'save-and-promote') {
+          const promoted = await window.cogseed.invoke('recall.candidates.promote', { candidateId });
+          if (!promoted?.ok) throw new Error(promoted?.error || 'recall candidate action failed');
+        }
         _skillsCognitionState.editingRecallCandidateId = '';
         _skillsCognitionState.writingRecallCandidateId = '';
         await loadSkillsCognitionSnapshot();
       } catch (error) {
-        if (actionName === 'promote') await loadSkillsCognitionSnapshot().catch(() => {});
+        if (actionName === 'promote' || actionName === 'save-and-promote') await loadSkillsCognitionSnapshot().catch(() => {});
         if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
       }
       finally {
@@ -689,6 +717,27 @@ function _initSkillsCognitionBindings() {
     const source = action.dataset.cognitionCandidateSource;
     const candidateId = action.dataset.cognitionCandidateId;
     if (!source || !candidateId || action.dataset.busy === '1') return;
+    // Deep review is a read-only probe: it runs both gate layers and reports,
+    // without deciding the candidate. Model failure is reported as
+    // "unavailable" rather than as a clean pass.
+    if (action.dataset.cognitionCandidateAction === 'deep-review') {
+      action.dataset.busy = '1'; action.disabled = true;
+      try {
+        const res = await window.orkas.invoke('cognition.candidates.deepReview', { source, candidateId });
+        if (!res?.ok) throw new Error(res?.error || 'deep review failed');
+        const r = res.review || {};
+        const lines = [
+          `${_cognitionText('cognition.security', '安全检查')}: ${r.status || 'unknown'}`,
+          `${_cognitionText('cognition.findings', '发现')}: ${r.findingCount || 0}`,
+        ];
+        if (r.topRule) lines.push(r.topRule);
+        if (r.degradedReason) lines.push(_cognitionText('cognition.security_degraded', '深度审查不可用'));
+        if (typeof uiAlert === 'function') await uiAlert(lines.join('\n'));
+        await loadSkillsCognitionSnapshot();
+      } catch (error) { if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error)); }
+      finally { action.dataset.busy = '0'; action.disabled = false; }
+      return;
+    }
     const decided = action.dataset.cognitionCandidateAction;
     // 四决定（PRD §5.6）：accept / modify / defer / reject；其余动作已在前面分支处理。
     if (decided !== 'accept' && decided !== 'modify' && decided !== 'defer' && decided !== 'reject') return;
@@ -700,6 +749,20 @@ function _initSkillsCognitionBindings() {
         candidateId,
         decision: decided,
       });
+      // A gate block is an expected outcome with structured findings, not a
+      // generic failure — explain what was found rather than showing the raw
+      // error string. The block itself is not user-overridable.
+      if (result && result.ok === false && result.code === 'cognition_gate_blocked') {
+        const findings = (result.gate && result.gate.findings) || [];
+        const lines = findings.slice(0, 5).map((f) => `· ${f.rule}${f.field ? ` (${f.field})` : ''}`);
+        const title = (typeof t === 'function' ? t('cognition.gate_blocked_title') : '') || '';
+        const header = title && title !== 'cognition.gate_blocked_title'
+          ? title
+          : '该候选未通过安全检查，无法保存为正式资产';
+        if (typeof uiAlert === 'function') await uiAlert([header, ...lines].join('\n'));
+        await loadSkillsCognitionSnapshot();
+        return;
+      }
       if (!result?.ok) throw new Error(result?.error || 'candidate decision failed');
       await loadSkillsCognitionSnapshot();
     } catch (error) {

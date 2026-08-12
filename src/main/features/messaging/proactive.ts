@@ -11,6 +11,7 @@
  */
 
 import { createLogger } from '../../logger';
+import { t } from '../../i18n';
 import * as manager from './manager';
 import * as registry from './registry';
 import type { MessagingInstanceClient } from './types';
@@ -189,7 +190,7 @@ export async function sendToSelf(
   const verdict = await requestSendConfirm({
     cid: opts.cid,
     instanceName: chosen.display_name,
-    ownerLabel: chosen.owner_label || '本人',
+    ownerLabel: chosen.owner_label || t('messaging.owner_label_self'),
     text,
     signal: opts.signal ?? null,
   });

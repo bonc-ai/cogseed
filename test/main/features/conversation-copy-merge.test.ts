@@ -459,6 +459,97 @@ describe('conversation copy and merge primitives', () => {
     })).rejects.toThrow(/at least two/i);
   });
 
+  it('applies an explicit time range, deduplicates across sources, and reports actual injection', async () => {
+    const chats = await import('../../../src/main/features/chats');
+    const state = await import('../../../src/main/features/group_chat/state');
+    const storage = await import('../../../src/main/storage');
+    const layout = await import('../../../src/main/util/project-layout');
+    const feature = await import('../../../src/main/features/conversation_copy_merge');
+    const first = await chats.createConversation(TEST_UID, { title: 'Range one' });
+    const second = await chats.createConversation(TEST_UID, { title: 'Range two' });
+    for (const source of [first, second]) await state.seedReservedActors(TEST_UID, source.conversation_id);
+    const append = (cid: string, message: Record<string, unknown>) => storage.appendJsonlAtomic(
+      layout.conversationMessageFile(TEST_UID, cid),
+      message,
+    );
+    await append(first.conversation_id, {
+      id: 'old-risk', ts: '2026-08-01T00:00:00.000Z', from: 'user', to: ['commander'],
+      text: 'Old risk must stay outside the range.',
+    });
+    await append(first.conversation_id, {
+      id: 'shared-message', ts: '2026-08-10T10:00:00.000Z', from: 'user', to: ['commander'],
+      text: 'Shared in-range risk.',
+    });
+    await append(second.conversation_id, {
+      id: 'shared-message', ts: '2026-08-10T10:00:00.000Z', from: 'user', to: ['commander'],
+      text: 'Shared in-range risk.',
+    });
+    await append(second.conversation_id, {
+      id: 'range-risk', ts: '2026-08-10T11:00:00.000Z', from: 'assistant', to: ['user'],
+      text: 'Actual in-range risk.',
+    });
+
+    const merged = await feature.mergeConversations(TEST_UID, [first.conversation_id, second.conversation_id], {
+      title: 'Scoped merge',
+      scope: {
+        kind: 'time_range',
+        startAt: '2026-08-10T09:00:00.000Z',
+        endAt: '2026-08-10T12:00:00.000Z',
+      },
+    });
+
+    expect(merged.scopeReceipt).toMatchObject({
+      kind: 'time_range',
+      requestedStartAt: '2026-08-10T09:00:00.000Z',
+      requestedEndAt: '2026-08-10T12:00:00.000Z',
+    });
+    expect(merged.scopeReceipt.sources).toEqual([
+      expect.objectContaining({ sourceCid: first.conversation_id, selectedMessageCount: 1, actualMessageCount: 1 }),
+      expect.objectContaining({
+        sourceCid: second.conversation_id,
+        selectedMessageCount: 2,
+        actualMessageCount: 1,
+        deduplicatedCount: 1,
+        reasons: expect.arrayContaining(['duplicate_message_id', 'private_session_omitted_for_time_range']),
+      }),
+    ]);
+    expect(merged.summaryMessage).toContain('Actual in-range risk.');
+    expect(merged.summaryMessage).not.toContain('Old risk must stay outside the range.');
+  });
+
+  it('records messages omitted by the merge context limit', async () => {
+    const chats = await import('../../../src/main/features/chats');
+    const state = await import('../../../src/main/features/group_chat/state');
+    const storage = await import('../../../src/main/storage');
+    const layout = await import('../../../src/main/util/project-layout');
+    const feature = await import('../../../src/main/features/conversation_copy_merge');
+    const first = await chats.createConversation(TEST_UID, { title: 'Large one' });
+    const second = await chats.createConversation(TEST_UID, { title: 'Large two' });
+    for (const source of [first, second]) await state.seedReservedActors(TEST_UID, source.conversation_id);
+    for (let index = 0; index < 205; index += 1) {
+      const cid = index < 103 ? first.conversation_id : second.conversation_id;
+      await storage.appendJsonlAtomic(layout.conversationMessageFile(TEST_UID, cid), {
+        id: `large-${index}`,
+        ts: new Date(Date.UTC(2026, 7, 10, 0, index)).toISOString(),
+        from: index % 2 ? 'commander' : 'user',
+        to: index % 2 ? ['user'] : ['commander'],
+        text: `Message ${index}`,
+      });
+    }
+
+    const merged = await feature.mergeConversations(TEST_UID, [first.conversation_id, second.conversation_id], {
+      title: 'Bounded merge',
+    });
+    const totals = merged.scopeReceipt.sources.reduce((acc, source) => ({
+      selected: acc.selected + source.selectedMessageCount,
+      actual: acc.actual + source.actualMessageCount,
+      truncated: acc.truncated + source.truncatedCount,
+    }), { selected: 0, actual: 0, truncated: 0 });
+
+    expect(totals).toEqual({ selected: 205, actual: 200, truncated: 5 });
+    expect(merged.scopeReceipt.sources.some((source) => source.reasons.includes('context_limit'))).toBe(true);
+  });
+
 
   it('localizes main-generated copy titles and merge summaries', async () => {
     const i18n = await import('../../../src/main/i18n');

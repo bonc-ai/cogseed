@@ -392,6 +392,17 @@ export const userPermissionsFile = (uid: string) => path.join(userCloudConfigDir
 // `resources/builtin/` (extraResources in packaged builds); startup/login
 // mirrors the relevant pieces into per-user runtime roots.
 export const packagedBuiltinDir = () => packagedResourceDir('builtin');
+
+/**
+ * Root of the packaged security guardrail components (`resources/guardrail`).
+ *
+ * Kept separate from `packagedBuiltinDir` because guardrail content is a system
+ * component, not a user-facing asset: per the security spec it must never appear
+ * in the skill catalog, the capability market, or the cognition tree, and users
+ * cannot disable it. Housing it under `builtin/` would put it one directory
+ * scan away from being enumerated as an installable skill.
+ */
+export const packagedGuardrailDir = () => packagedResourceDir('guardrail');
 export const packagedBuiltinMarketplaceDir = () => path.join(packagedBuiltinDir(), 'marketplace');
 export const packagedBuiltinMarketplaceAgentsDir = () => path.join(packagedBuiltinMarketplaceDir(), 'agents');
 export const packagedBuiltinMarketplaceSkillsDir = () => path.join(packagedBuiltinMarketplaceDir(), 'skills');
@@ -479,6 +490,7 @@ export const userMessagingConfigFile = (uid: string) => path.join(userLocalConfi
 export const userMessagingBindingsFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-bindings.json');
 export const userMessagingInboundLedgerFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-inbound.json');
 export const userMessagingDeliveryLedgerFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-delivery.json');
+export const userTouchpointLedgerFile = (uid: string) => path.join(userLocalConfigDir(uid), 'touchpoints-ledger.json');
 // Wechat iLink dynamic state (cursor + context tokens) is machine-private
 // and encrypted in place; never synced.
 export const userMessagingWeChatStateFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-wechat-state.json');

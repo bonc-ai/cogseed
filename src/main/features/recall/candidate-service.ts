@@ -57,6 +57,9 @@ export interface RecallCandidateRecord extends RecallJsonRecord {
   confidence?: number;
   promotedAssetId?: string;
   decisionNote?: string;
+  promotionErrorCode?: 'asset_write_failed';
+  promotionErrorMessage?: string;
+  promotionFailedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -372,8 +375,25 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
     // stale one attached to a judgment that has since been edited.
     // learningSignal 走的是相反的约定：不传就沿用旧值（它记的是评估结果，
     // 不随判断文本编辑而失效），所以这里两种语义并存。
-    const { confidence: _previous, ...rest } = current;
-    return { ...rest, judgment, ...(summary ? { summary } : {}), ...(uncertainty ? { uncertainty } : {}), suggestedType, suggestedScope, sourceRefs, ...(learningSignal ? { learningSignal } : current.learningSignal ? { learningSignal: current.learningSignal } : {}), ...(confidence !== undefined ? { confidence } : {}), updatedAt: new Date().toISOString() };
+    const {
+      confidence: _previousConfidence,
+      promotionErrorCode: _previousPromotionErrorCode,
+      promotionErrorMessage: _previousPromotionErrorMessage,
+      promotionFailedAt: _previousPromotionFailedAt,
+      ...rest
+    } = current;
+    return {
+      ...rest,
+      judgment,
+      ...(summary ? { summary } : {}),
+      ...(uncertainty ? { uncertainty } : {}),
+      suggestedType,
+      suggestedScope,
+      sourceRefs,
+      ...(learningSignal ? { learningSignal } : current.learningSignal ? { learningSignal: current.learningSignal } : {}),
+      ...(confidence !== undefined ? { confidence } : {}),
+      updatedAt: new Date().toISOString(),
+    };
   });
   return asCandidate(updated);
 }
@@ -395,59 +415,91 @@ export async function promoteRecallCandidate(
   candidateId: string,
   options: { ontologyRefs?: AbilityAssetOntologyRef[] } & AbilityAssetSemantics = {},
 ): Promise<{ candidate: RecallCandidateRecord; asset: RecallAbilityAssetRecord }> {
-  // 语义字段在写盘前先校验，避免半写状态：候选已翻 promoted 但资产字段非法。
-  const optionSemantics = readAbilityAssetSemantics(options as Record<string, unknown>);
-  const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, async (current) => {
-    if (!current) throw new Error('recall candidate not found');
-    const candidate = asCandidate(current);
-    if (candidate.status === 'promoted') return candidate;
-    if (candidate.status === 'rejected') throw new Error('recall candidate is terminal');
-    const recoveredAsset = (await listAbilityAssets(userId))
-      .find((asset) => asset.candidateId === candidate.id);
-    if (recoveredAsset) {
-      await initializeAbilityAsset(userId, recoveredAsset);
+  try {
+    // 语义字段在写盘前先校验，避免半写状态：候选已翻 promoted 但资产字段非法。
+    const optionSemantics = readAbilityAssetSemantics(options as Record<string, unknown>);
+    const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, async (current) => {
+      if (!current) throw new Error('recall candidate not found');
+      const candidate = asCandidate(current);
+      if (candidate.status === 'promoted') return candidate;
+      if (candidate.status === 'rejected') throw new Error('recall candidate is terminal');
+      const recoveredAsset = (await listAbilityAssets(userId))
+        .find((asset) => asset.candidateId === candidate.id);
+      if (recoveredAsset) {
+        await initializeAbilityAsset(userId, recoveredAsset);
+        return {
+          ...candidate,
+          status: 'promoted',
+          promotedAssetId: recoveredAsset.id,
+          promotionErrorCode: undefined,
+          promotionErrorMessage: undefined,
+          promotionFailedAt: undefined,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      const now = new Date().toISOString();
+      const sourceSessionIds = sourceSessionIdsFrom(candidate.sourceRefs);
+      const asset: RecallAbilityAssetRecord = {
+        schemaVersion: 1,
+        ownerId: userId,
+        id: abilityAssetIdForCandidate(candidate.id),
+        candidateId: candidate.id,
+        type: candidate.suggestedType,
+        title: candidate.summary || candidate.judgment.slice(0, 120),
+        statement: candidate.judgment,
+        evidenceRefs: candidate.sourceRefs,
+        ...(candidate.learningSignal ? { learningSignal: candidate.learningSignal } : {}),
+        ...(options.ontologyRefs?.length ? { ontologyRefs: options.ontologyRefs } : {}),
+        // 候选自带的适用/禁用条件作为底，调用方显式传入的可覆盖。
+        // 此前只认 options，于是自动链路产出的资产永远没有边界——
+        // 只有手动 promote 且调用方主动传参时才有，等于形同虚设。
+        ...(candidate.applicableWhen ? { applicableWhen: candidate.applicableWhen } : {}),
+        ...(candidate.forbiddenWhen ? { forbiddenWhen: candidate.forbiddenWhen } : {}),
+        ...optionSemantics,
+        scope: candidate.suggestedScope,
+        status: 'active',
+        maturity: 'seed',
+        version: '1',
+        ...(candidate.confidence !== undefined ? { confidence: candidate.confidence } : {}),
+        ...(sourceSessionIds.length ? { sourceSessionIds } : {}),
+        createdAt: now,
+        updatedAt: now,
+      };
+      await writeRecallJsonRecord(userId, 'ability-assets', asset.id, asset);
+      await initializeAbilityAsset(userId, asset);
       return {
         ...candidate,
         status: 'promoted',
-        promotedAssetId: recoveredAsset.id,
+        promotedAssetId: asset.id,
+        promotionErrorCode: undefined,
+        promotionErrorMessage: undefined,
+        promotionFailedAt: undefined,
+        updatedAt: now,
+      };
+    });
+    const candidate = asCandidate(updated);
+    if (!candidate.promotedAssetId) throw new Error('promoted candidate has no ability asset');
+    const storedAsset = await readRecallJsonRecord(userId, 'ability-assets', candidate.promotedAssetId);
+    if (!storedAsset) throw new Error('promoted ability asset not found');
+    return { candidate, asset: asAsset(storedAsset) };
+  } catch (error) {
+    const message = boundedText(
+      error instanceof Error ? error.message : String(error),
+      'promotion error',
+      500,
+    ) || 'Recall asset write failed';
+    await updateRecallJsonRecord(userId, 'candidates', candidateId, (current) => {
+      if (!current) return current;
+      const candidate = asCandidate(current);
+      if (candidate.status === 'promoted' || candidate.status === 'rejected') return candidate;
+      return {
+        ...candidate,
+        promotionErrorCode: 'asset_write_failed',
+        promotionErrorMessage: message,
+        promotionFailedAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
-    }
-    const now = new Date().toISOString();
-    const sourceSessionIds = sourceSessionIdsFrom(candidate.sourceRefs);
-    const asset: RecallAbilityAssetRecord = {
-      schemaVersion: 1,
-      ownerId: userId,
-      id: abilityAssetIdForCandidate(candidate.id),
-      candidateId: candidate.id,
-      type: candidate.suggestedType,
-      title: candidate.summary || candidate.judgment.slice(0, 120),
-      statement: candidate.judgment,
-      evidenceRefs: candidate.sourceRefs,
-      ...(candidate.learningSignal ? { learningSignal: candidate.learningSignal } : {}),
-      ...(options.ontologyRefs?.length ? { ontologyRefs: options.ontologyRefs } : {}),
-      // 候选自带的适用/禁用条件作为底，调用方显式传入的可覆盖。
-      // 此前只认 options，于是自动链路产出的资产永远没有边界——
-      // 只有手动 promote 且调用方主动传参时才有，等于形同虚设。
-      ...(candidate.applicableWhen ? { applicableWhen: candidate.applicableWhen } : {}),
-      ...(candidate.forbiddenWhen ? { forbiddenWhen: candidate.forbiddenWhen } : {}),
-      ...optionSemantics,
-      scope: candidate.suggestedScope,
-      status: 'active',
-      maturity: 'seed',
-      version: '1',
-      ...(candidate.confidence !== undefined ? { confidence: candidate.confidence } : {}),
-      ...(sourceSessionIds.length ? { sourceSessionIds } : {}),
-      createdAt: now,
-      updatedAt: now,
-    };
-    await writeRecallJsonRecord(userId, 'ability-assets', asset.id, asset);
-    await initializeAbilityAsset(userId, asset);
-    return { ...candidate, status: 'promoted', promotedAssetId: asset.id, updatedAt: now };
-  });
-  const candidate = asCandidate(updated);
-  if (!candidate.promotedAssetId) throw new Error('promoted candidate has no ability asset');
-  const storedAsset = await readRecallJsonRecord(userId, 'ability-assets', candidate.promotedAssetId);
-  if (!storedAsset) throw new Error('promoted ability asset not found');
-  return { candidate, asset: asAsset(storedAsset) };
+    }).catch(() => undefined);
+    throw error;
+  }
 }

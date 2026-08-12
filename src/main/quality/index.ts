@@ -69,6 +69,7 @@ export function validateSkillFile(args: {
       content: args.content,
       kind: 'script',
       field: args.relpath,
+      relpath: args.relpath,
     }));
   }
   // kind === 'other' (README / assets) → no scan
@@ -82,7 +83,11 @@ export function validateSkillFile(args: {
  * Validate an on-disk skill directory. Iterates every file the validator
  * recognizes (SKILL.md + scripts) and aggregates findings.
  *
- * EXTREME if SKILL.md is missing or unparseable.
+ * EXTREME if SKILL.md is missing or unparseable. Note that a structural
+ * failure does NOT skip the red-flag scan of scripts: a missing or malformed
+ * SKILL.md must not become a way to smuggle an unscanned payload past the
+ * gate. Structure and content are independent checks, and the content scan
+ * runs regardless of whether the structure check passed.
  */
 export function validateSkillDir(
   skillDir: string,
@@ -90,8 +95,9 @@ export function validateSkillDir(
 ): ValidationReport {
   const violations: Violation[] = [];
   const skillMdPath = path.join(skillDir, 'SKILL.md');
+  const hasSkillMd = fs.existsSync(skillMdPath);
 
-  if (!fs.existsSync(skillMdPath)) {
+  if (!hasSkillMd) {
     violations.push({
       level: 'EXTREME',
       rule: 'skill_md_missing',
@@ -99,27 +105,30 @@ export function validateSkillDir(
       snippet: '',
       suggested_fix: 'Every skill directory must contain a SKILL.md file.',
     });
-    return _finalize(violations);
-  }
-
-  try {
-    const content = fs.readFileSync(skillMdPath, 'utf8');
-    const { meta, metaViolations } = _readSkillMeta(skillDir);
-    violations.push(...metaViolations);
-    violations.push(..._scanSkillMd(
-      content,
-      'SKILL.md',
-      meta,
-      options.enforceSkillRunner !== false,
-    ));
-    violations.push(...validateSkillMeta(meta));
-    violations.push(..._scanNseapShape(skillDir, content, meta));
-  } catch (err) {
-    violations.push(parseFailureViolation({
-      kind: 'frontmatter',
-      message: (err as Error).message,
-    }));
-    return _finalize(violations);
+    // Deliberately does not return: scripts are still scanned below.
+  } else {
+    try {
+      const content = fs.readFileSync(skillMdPath, 'utf8');
+      const { meta, metaViolations } = _readSkillMeta(skillDir);
+      violations.push(...metaViolations);
+      violations.push(..._scanSkillMd(
+        content,
+        'SKILL.md',
+        meta,
+        options.enforceSkillRunner !== false,
+      ));
+      violations.push(...validateSkillMeta(meta));
+      violations.push(..._scanNseapShape(skillDir, content, meta));
+    } catch (err) {
+      violations.push(parseFailureViolation({
+        kind: 'frontmatter',
+        message: (err as Error).message,
+      }));
+      // Also does not return — an unreadable SKILL.md must not suppress the
+      // script scan below. develop's version returned here; keeping the early
+      // return would let a skill hide a payload in scripts/ behind a malformed
+      // SKILL.md, which is the hole 46cfa1e closed.
+    }
   }
 
   // Walk all other recognized files (scripts).
@@ -130,7 +139,7 @@ export function validateSkillDir(
     if (kind !== 'script') continue;
     try {
       const content = fs.readFileSync(path.join(skillDir, rel), 'utf8');
-      violations.push(...scanRedFlags({ content, kind: 'script', field: rel }));
+      violations.push(...scanRedFlags({ content, kind: 'script', field: rel, relpath: rel }));
     } catch {
       // unreadable file (binary / permission) — skip; no violation surfaced
     }
@@ -257,6 +266,8 @@ function _scanSkillMd(
       content: block.content,
       kind: 'script',  // executable block → treat as script
       field: `${field}:${block.startLine} (\`\`\`${block.lang})`,
+      // Inline blocks are first-party regardless of the enclosing path.
+      relpath: 'SKILL.md',
     }));
   }
 

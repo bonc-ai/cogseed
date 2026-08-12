@@ -254,18 +254,24 @@ describe('wechat personal adapter wire contract', () => {
   });
 
   it('checkHealth: reports error once a terminal reauth error ended the adapter', async () => {
-    const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
-    const onStatus = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => makeResponse({ ret: -14, errmsg: 'token invalid' })));
-    const adapter = new WechatPersonalAdapter(instance, secret, 'uid-1');
-    const controller = new AbortController();
-    const startPromise = adapter.start(controller.signal, { onInbound: vi.fn(), onStatus } as never);
-    await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' })));
-    controller.abort();
-    await startPromise;
-    const health = await adapter.checkHealth();
-    expect(health.kind).toBe('error');
-    expect(health.message).toContain('re-scan');
+    const { setCurrentLang } = await import('../../../src/main/i18n');
+    setCurrentLang('zh');
+    try {
+      const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
+      const onStatus = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => makeResponse({ ret: -14, errmsg: 'token invalid' })));
+      const adapter = new WechatPersonalAdapter(instance, secret, 'uid-1');
+      const controller = new AbortController();
+      const startPromise = adapter.start(controller.signal, { onInbound: vi.fn(), onStatus } as never);
+      await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' })));
+      controller.abort();
+      await startPromise;
+      const health = await adapter.checkHealth();
+      expect(health.kind).toBe('error');
+      expect(health.message).toContain('需要重新扫码');
+    } finally {
+      setCurrentLang('en');
+    }
   });
 
   describe('wechat personal adapter inbound/outbound', () => {

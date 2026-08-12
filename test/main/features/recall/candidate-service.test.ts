@@ -221,6 +221,34 @@ describe('Recall candidate governance', () => {
     await expect(candidates.promoteRecallCandidate('user-a', candidate.id)).rejects.toThrow(/terminal/i);
     await expect(candidates.readRecallCandidate('user-b', candidate.id)).rejects.toThrow(/not found/i);
   });
+
+  it('clears a previous retryable promotion failure when the candidate is edited', async () => {
+    const candidates = await service();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Keep a retryable confirmation candidate.',
+      suggestedType: 'rule',
+      suggestedScope: 'project',
+      sourceRefs: [{ kind: 'message', id: 'msg-retry' }],
+    });
+    const store = await import('../../../../src/main/features/recall/store');
+    await store.updateRecallJsonRecord('user-a', 'candidates', candidate.id, (current) => ({
+      ...current!,
+      promotionErrorCode: 'asset_write_failed',
+      promotionErrorMessage: 'disk unavailable',
+      promotionFailedAt: '2026-08-11T00:00:00.000Z',
+    }));
+
+    const edited = await candidates.updateRecallCandidate('user-a', candidate.id, {
+      judgment: 'Keep a retryable confirmation candidate with evidence.',
+      suggestedType: 'rule',
+      suggestedScope: 'project',
+      sourceRefs: [{ kind: 'message', id: 'msg-retry' }],
+    });
+
+    expect(edited.promotionErrorCode).toBeUndefined();
+    expect(edited.promotionErrorMessage).toBeUndefined();
+    expect(edited.promotionFailedAt).toBeUndefined();
+  });
 });
 
 describe('Recall candidate confidence', () => {

@@ -899,7 +899,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     ]);
   });
 
-  it('filters stale produced paths before persisting the final message', async () => {
+  it('keeps stale produced paths visible with validation failure details', async () => {
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const paths = await import('../../../../src/main/paths');
     const cid = 'cid-produced-filter';
@@ -921,7 +921,20 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
     const rows = fs.readFileSync(mainFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
     const commanderMsg = rows.find((row: any) => row.from === 'commander' && row.text === 'produced filter ok');
-    expect(commanderMsg?.produced).toEqual([finalPath]);
+    expect(commanderMsg?.produced).toEqual([stalePath, finalPath]);
+    expect(commanderMsg?.produced_results).toEqual([
+      expect.objectContaining({
+        path: stalePath,
+        status: 'invalid',
+        failure_code: 'missing',
+      }),
+      expect.objectContaining({
+        path: finalPath,
+        status: 'ready',
+        exists: true,
+        non_empty: true,
+      }),
+    ]);
     expect(bus._cidStateForTest(TEST_UID, cid)?.producedPaths.has(stalePath)).toBe(false);
     expect(bus._cidStateForTest(TEST_UID, cid)?.producedPaths.has(finalPath)).toBe(true);
   });

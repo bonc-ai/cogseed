@@ -1,0 +1,75 @@
+{
+  "description": "完整场景：今日课程+会议事件、今日课程事实、未来7天截止、偏好/项目要点 → 非降级，全段落输出",
+  "now": "2026-08-10T08:00:00",
+  "facts": [
+    {
+      "id": "fact_course_data_structure",
+      "kind": "appointment",
+      "summary": "数据结构（实验班）",
+      "date": "2026-08-10T10:00:00",
+      "sourceRef": "ontology:instance:courses/2026-spring/cs201"
+    },
+    {
+      "id": "fact_deadline_math_hw",
+      "kind": "deadline",
+      "summary": "数学作业提交",
+      "date": "2026-08-12",
+      "sourceRef": "ontology:instance:homework/math-2026-08-12"
+    },
+    {
+      "id": "fact_deadline_sensor_report",
+      "kind": "deadline",
+      "summary": "传感器选型报告",
+      "date": "2026-08-15T23:59:00",
+      "sourceRef": "ontology:instance:project/sensor-selection/report"
+    },
+    {
+      "id": "fact_pref_evening",
+      "kind": "preference",
+      "summary": "晚上学习效率更高",
+      "sourceRef": "ontology:preference:study-rhythm"
+    },
+    {
+      "id": "fact_project_sensor",
+      "kind": "project",
+      "summary": "传感器选型项目（与课题组的合作）",
+      "sourceRef": "ontology:instance:project/sensor-selection"
+    }
+  ],
+  "events": [
+    {
+      "id": "ev_1",
+      "title": "操作系统答疑",
+      "startAt": "2026-08-10T09:00:00",
+      "endAt": "2026-08-10T10:30:00",
+      "location": "A301"
+    },
+    {
+      "id": "ev_2",
+      "title": "课题组例会",
+      "startAt": "2026-08-10T14:00:00",
+      "endAt": "2026-08-10T15:00:00",
+      "location": "线上"
+    },
+    {
+      "id": "ev_3",
+      "title": "图书馆借书到期提醒",
+      "startAt": "2026-08-10T19:00:00"
+    }
+  ],
+  "expected": {
+    "degraded": false,
+    "missingData": [],
+    "sectionKeys": ["today_schedule", "upcoming_deadlines", "free_slot", "notes"],
+    "contains": [
+      "操作系统答疑",
+      "数据结构（实验班）",
+      "数学作业提交",
+      "传感器选型报告",
+      "有空档",
+      "晚上学习效率更高",
+      "A301"
+    ],
+    "notContains": ["暂无", "已接入的课程"]
+  }
+}

@@ -1,7 +1,5 @@
 import { randomUUID } from 'node:crypto';
 
-import * as lark from '@larksuiteoapi/node-sdk';
-
 import { createLogger } from '../../logger';
 import { safeId } from '../../storage';
 import { logErrorSummary } from '../../util/log-redact';
@@ -49,6 +47,9 @@ export type FeishuRegistrationErrorCode =
   | 'activation_failed'
   | 'invalid_response'
   | 'network_error'
+  | 'network_unreachable'
+  | 'network_timeout'
+  | 'network_tls'
   | 'registration_failed';
 
 export interface FeishuRegistrationDraft {
@@ -89,6 +90,9 @@ interface RegistrationFlow {
   readonly flowId: string;
   readonly draft: FeishuRegistrationDraft;
   readonly controller: AbortController;
+  /** Tenant selected by the settings channel. Draft-bound registration must
+   * stay on this brand instead of silently moving between Feishu and Lark. */
+  readonly tenantBrand: FeishuTenantBrand;
   /** Draft-bound flows register against an existing unbound instance. */
   readonly instanceId?: string;
   state: FeishuRegistrationState;
@@ -107,26 +111,139 @@ interface SdkErrorLike {
   code?: string;
 }
 
-const APP_ADDONS = {
-  // The official preset plus the scopes/events the polish features need:
-  // reaction events (feedback loop), contact user names and chat titles for
-  // readable bindings. Instances bound before this change keep their old
-  // grant; the adapters degrade silently when the API denies those calls.
-  preset: false,
-  scopes: {
-    tenant: [
-      'im:message:send_as_bot',
-      'im:message:reaction:readonly',
-      'contact:user.base:readonly',
-      'im:chat:readonly',
-    ],
-  },
-  events: {
-    items: {
-      tenant: ['im.message.receive_v1', 'im.message.reaction.created_v1'],
-    },
-  },
-} satisfies lark.AppAddons;
+/** Protocol-level failure (non-JSON response, unexpected payload) that must
+ * surface as `invalid_response` instead of being misread as a network error
+ * by the generic classification below. */
+class RegistrationProtocolError extends Error {
+  readonly code: FeishuRegistrationErrorCode = 'invalid_response';
+
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'RegistrationProtocolError';
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Registration protocol (mirrors hermes-agent plugins/platforms/feishu/
+// adapter.py _begin_registration/_poll_registration).
+//
+// The official node-sdk registerApp() polls without a `tp` parameter, and
+// apps it creates come up without the event subscription configured, so the
+// bot never receives messages. Hermes' flow carries `tp=ob_app` on the poll
+// and marks the QR with `from=hermes&tp=hermes` (no addons preset); the
+// platform then creates a fully configured bot application (event
+// subscription included) and the scan-to-create flow is ready to use without
+// touching the developer console.
+// ────────────────────────────────────────────────────────────────────────────
+
+const REGISTRATION_ACCOUNTS = {
+  feishu: 'https://accounts.feishu.cn',
+  lark: 'https://accounts.larksuite.com',
+} as const;
+
+const REGISTRATION_ENDPOINT = '/oauth/v1/app/registration';
+
+interface RegistrationBeginResult {
+  deviceCode: string;
+  verificationUriComplete: string;
+  expiresInSeconds: number;
+  intervalSeconds: number;
+}
+
+interface RegistrationPollResult {
+  clientId?: string;
+  clientSecret?: string;
+  userInfo?: RegistrationResultLike['user_info'];
+  error?: string;
+  intervalSeconds?: number;
+}
+
+async function registrationFormPost(
+  flow: RegistrationFlow,
+  baseUrl: string,
+  body: Record<string, string>,
+): Promise<Record<string, unknown>> {
+  const response = await fetch(baseUrl + REGISTRATION_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(body).toString(),
+    signal: flow.controller.signal,
+  });
+  // The registration endpoint returns JSON even on 4xx (authorization_pending
+  // comes back as HTTP 400), but a 5xx gateway/error page does not. Parse the
+  // body explicitly so a non-JSON response surfaces as invalid_response
+  // instead of a SyntaxError being misread as a network failure.
+  const raw = await response.text();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new RegistrationProtocolError('Feishu registration returned a non-JSON response', { cause: error });
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new RegistrationProtocolError('Feishu registration returned an unexpected payload');
+  }
+  return parsed as Record<string, unknown>;
+}
+
+/** Verify the environment supports client_secret auth (mirrors hermes-agent
+ * `_init_registration`). Raises if not supported. */
+async function registrationInit(flow: RegistrationFlow): Promise<void> {
+  const res = await _feishuRegistrationProtocol.formPost(flow, REGISTRATION_ACCOUNTS.feishu, {
+    action: 'init',
+  });
+  const methods = Array.isArray(res.supported_auth_methods) ? res.supported_auth_methods : [];
+  if (!methods.includes('client_secret')) {
+    throw new Error('Feishu / Lark registration environment does not support client_secret auth');
+  }
+}
+
+async function registrationBegin(flow: RegistrationFlow): Promise<RegistrationBeginResult> {
+  const res = await _feishuRegistrationProtocol.formPost(flow, REGISTRATION_ACCOUNTS.feishu, {
+    action: 'begin',
+    archetype: 'PersonalAgent',
+    auth_method: 'client_secret',
+    request_user_info: 'open_id',
+  });
+  const deviceCode = typeof res.device_code === 'string' ? res.device_code : '';
+  const verificationUriComplete = typeof res.verification_uri_complete === 'string' ? res.verification_uri_complete : '';
+  if (!deviceCode || !verificationUriComplete) {
+    throw new Error('Feishu registration did not return a device_code');
+  }
+  return {
+    deviceCode,
+    verificationUriComplete,
+    expiresInSeconds: typeof res.expires_in === 'number' ? res.expires_in : 600,
+    intervalSeconds: typeof res.interval === 'number' ? res.interval : 5,
+  };
+}
+
+async function registrationPoll(
+  flow: RegistrationFlow,
+  deviceCode: string,
+  domain: keyof typeof REGISTRATION_ACCOUNTS,
+): Promise<RegistrationPollResult> {
+  const res = await _feishuRegistrationProtocol.formPost(flow, REGISTRATION_ACCOUNTS[domain], {
+    action: 'poll',
+    device_code: deviceCode,
+    tp: 'ob_app',
+  });
+  return {
+    clientId: typeof res.client_id === 'string' ? res.client_id : undefined,
+    clientSecret: typeof res.client_secret === 'string' ? res.client_secret : undefined,
+    userInfo: res.user_info as RegistrationResultLike['user_info'] | undefined,
+    error: typeof res.error === 'string' ? res.error : undefined,
+    intervalSeconds: typeof res.interval === 'number' ? res.interval : undefined,
+  };
+}
+
+/** Replaceable transport for tests. */
+export const _feishuRegistrationProtocol = {
+  formPost: registrationFormPost,
+  init: registrationInit,
+  begin: registrationBegin,
+  poll: registrationPoll,
+};
 
 const flows = new Map<string, RegistrationFlow>();
 const retiredFlows = new Map<string, RegistrationFlow>();
@@ -272,14 +389,59 @@ function lifetimeSeconds(value: number): number {
 
 function sdkErrorCode(error: unknown): FeishuRegistrationErrorCode {
   let code = '';
-  if (error instanceof Error) code = error.name === 'AbortError' ? 'abort' : '';
-  else if (typeof error === 'object' && error !== null && 'code' in error) {
+  if (error instanceof Error) {
+    if (error.name === 'AbortError') code = 'abort';
+    else if (error instanceof RegistrationProtocolError) code = error.code;
+    else {
+      // A bare `TypeError: fetch failed` (cause lost through a wrapper) is
+      // still a connectivity symptom; any other plain error is a
+      // local/protocol failure, not a network one.
+      code = classifyNetworkError(error)
+        || (error.name === 'TypeError' && /fetch failed/.test(error.message) ? 'network_error' : 'registration_failed');
+    }
+  } else if (typeof error === 'object' && error !== null && 'code' in error) {
     const candidate = (error as SdkErrorLike).code;
     if (typeof candidate === 'string') code = candidate;
   }
   if (code === 'access_denied' || code === 'expired_token' || code === 'abort') return code;
-  if (code === 'activation_failed' || code === 'invalid_response' || code === 'network_error') return code;
-  return code ? 'registration_failed' : 'network_error';
+  if (code === 'activation_failed' || code === 'invalid_response') return code;
+  if (code === 'network_error' || code === 'network_unreachable' || code === 'network_timeout' || code === 'network_tls') {
+    return code;
+  }
+  // Unknown or missing SDK code: a generic registration failure. The network
+  // buckets are only reachable through explicit classification above.
+  return 'registration_failed';
+}
+
+/** Classify undici/node network failures from the cause chain into a
+ * user-visible hint. A bare `TypeError: fetch failed` carries the real cause
+ * on `err.cause` (ENOTFOUND, ECONNREFUSED, ETIMEDOUT, UND_ERR_CONNECT_TIMEOUT,
+ * CERT_HAS_EXPIRED, …); pi-ai-style wrappers may nest it one level deeper. */
+function classifyNetworkError(error: unknown): FeishuRegistrationErrorCode | '' {
+  let cause: unknown = error;
+  const seen = new Set<unknown>();
+  while (cause !== undefined && cause !== null && !seen.has(cause)) {
+    seen.add(cause);
+    const candidate = cause as { code?: unknown };
+    const code = typeof candidate.code === 'string' ? candidate.code.toUpperCase() : '';
+    if (code) {
+      if (code.includes('CERT') || code.startsWith('DEPTH_') || code.startsWith('SELF_SIGNED') || code.startsWith('ERR_TLS')) {
+        return 'network_tls';
+      }
+      if (code === 'ENOTFOUND' || code === 'EAI_AGAIN' || code === 'ECONNREFUSED'
+        || code === 'EHOSTUNREACH' || code === 'ENETUNREACH' || code === 'ENETDOWN'
+        || code === 'ECONNRESET' || code === 'UND_ERR_SOCKET') {
+        return 'network_unreachable';
+      }
+      if (code === 'ETIMEDOUT' || code.startsWith('UND_ERR_CONNECT') || code.startsWith('UND_ERR_HEADERS')
+        || code.startsWith('UND_ERR_BODY') || code.startsWith('UND_ERR_RESPONSE')) {
+        return 'network_timeout';
+      }
+      if (code.startsWith('UND_ERR_')) return 'network_error';
+    }
+    cause = (cause as { cause?: unknown }).cause;
+  }
+  return '';
 }
 
 function publicStatus(flow: RegistrationFlow): FeishuRegistrationStatus {
@@ -294,8 +456,17 @@ function publicStatus(flow: RegistrationFlow): FeishuRegistrationStatus {
   };
 }
 
-function registrationDomain(brand: FeishuTenantBrand | undefined): FeishuTenantBrand {
+function registrationBrand(brand: FeishuTenantBrand | undefined): FeishuTenantBrand {
   return brand === 'lark' ? 'lark' : 'feishu';
+}
+
+function activatedBrand(flow: RegistrationFlow, result: RegistrationResultLike): FeishuTenantBrand {
+  const reported = result.user_info?.tenant_brand;
+  const brand = reported === 'feishu' || reported === 'lark' ? reported : flow.tenantBrand;
+  if (flow.instanceId && brand !== flow.tenantBrand) {
+    throw new Error(`registration tenant brand mismatch: expected ${flow.tenantBrand}, received ${brand}`);
+  }
+  return brand;
 }
 
 function registrationOwner(result: RegistrationResultLike): { ownerExternalUserId: string; ownerExternalUserName?: string } {
@@ -345,14 +516,11 @@ async function discardCreatedInstance(
       current: isCurrent(flow),
       error: logErrorSummary(error),
     });
-    if (isCurrent(flow)) {
-      flow.instance = instance;
-      finish(flow, 'failed', 'activation_failed');
-    } else {
-      flow.instance = instance;
-      finish(flow, 'failed', 'activation_failed');
-      retainFlow(flow);
-    }
+    flow.instance = instance;
+    finish(flow, 'failed', 'activation_failed');
+    // A superseded flow still keeps its terminal state queryable, so the
+    // renderer can surface the cleanup failure after a newer flow took over.
+    if (!isCurrent(flow)) retainFlow(flow);
     return false;
   }
 }
@@ -361,7 +529,7 @@ async function discardCreatedInstance(
 function newInstanceActivation(): RegistrationActivation {
   return {
     async apply(flow, result) {
-      const tenantBrand = registrationDomain(result.user_info?.tenant_brand as FeishuTenantBrand | undefined);
+      const tenantBrand = activatedBrand(flow, result);
       const owner = registrationOwner(result);
       return manager.createInstance(flow.uid, {
         platform: 'feishu_lark',
@@ -385,8 +553,8 @@ function newInstanceActivation(): RegistrationActivation {
 function draftActivation(uid: string, instanceId: string): RegistrationActivation {
   let boundSecret: { appId: string; appSecret: string } | null = null;
   return {
-    async apply(_flow, result) {
-      const tenantBrand = registrationDomain(result.user_info?.tenant_brand as FeishuTenantBrand | undefined);
+    async apply(flow, result) {
+      const tenantBrand = activatedBrand(flow, result);
       const owner = registrationOwner(result);
       const secret = { appId: result.client_id.trim(), appSecret: result.client_secret.trim() };
       const bound = await registry.bindFeishuDraft(uid, instanceId, {
@@ -407,80 +575,101 @@ function draftActivation(uid: string, instanceId: string): RegistrationActivatio
 
 async function runRegistration(flow: RegistrationFlow, activation: RegistrationActivation): Promise<void> {
   try {
-    const result = await lark.registerApp({
-      source: 'desktop-messaging',
-      signal: flow.controller.signal,
-      // Keep both entry points on the official landing page: "立即创建" (create
-      // a fresh app) and "已有应用" (reuse an app the scanning account already
-      // manages). Omitting createOnly leaves the existing-app option enabled;
-      // either path yields the same client_id/client_secret result that the
-      // activation below binds.
-      appPreset: { name: flow.draft.displayName },
-      addons: APP_ADDONS,
-      onQRCodeReady: (info) => {
-        if (!isCurrent(flow) || !isAwaitingAuthorization(flow)) return;
-        try {
-          flow.qrUrl = qrUrl(info.url);
-          const expiresAt = Date.now() + lifetimeSeconds(info.expireIn) * 1000;
-          flow.expiresAt = expiresAt;
-          flow.authorizationExpiresAt = expiresAt;
-          flow.state = 'awaiting_scan';
-        } catch (error) {
-          finish(flow, 'failed', 'invalid_response');
-          abortFlow(flow, 'invalid_qr_response');
-        }
-      },
-      onStatusChange: (info) => {
-        if (!isCurrent(flow) || !isAwaitingAuthorization(flow)) return;
-        if (info.status === 'polling' || info.status === 'slow_down' || info.status === 'domain_switched') {
-          flow.state = info.status;
-          if (typeof info.interval === 'number' && Number.isFinite(info.interval)) {
-            flow.intervalSeconds = Math.max(1, Math.min(600, Math.floor(info.interval)));
-          }
-        }
-      },
-    });
-
+    await _feishuRegistrationProtocol.init(flow);
+    const begin = await _feishuRegistrationProtocol.begin(flow);
+    // Present the QR: the official launcher URL tagged exactly like
+    // hermes-agent (`from=hermes&tp=hermes`, no addons preset). The platform
+    // creates a fully configured bot application from that tag; keep both
+    // entry points on the official landing page: "立即创建" (create a fresh
+    // app) and "已有应用" (reuse an app the scanning account already manages).
+    // Omitting createOnly leaves the existing-app option enabled; either path
+    // yields the same client_id/client_secret result that the activation
+    // binds.
+    const qrUrlValue = begin.verificationUriComplete.includes('?')
+      ? `${begin.verificationUriComplete}&from=hermes&tp=hermes`
+      : `${begin.verificationUriComplete}?from=hermes&tp=hermes`;
     if (!isCurrent(flow) || !isAwaitingAuthorization(flow)) return;
-    if (expireIfNeeded(flow)) return;
-    if (!result || typeof result.client_id !== 'string' || !isValidFeishuAppId(result.client_id.trim())
-      || typeof result.client_secret !== 'string' || !result.client_secret.trim()) {
+    try {
+      flow.qrUrl = qrUrl(qrUrlValue);
+      const expiresAt = Date.now() + lifetimeSeconds(begin.expiresInSeconds) * 1000;
+      flow.expiresAt = expiresAt;
+      flow.authorizationExpiresAt = expiresAt;
+      flow.state = 'awaiting_scan';
+    } catch (error) {
       finish(flow, 'failed', 'invalid_response');
+      abortFlow(flow, 'invalid_qr_response');
       return;
     }
 
-    flow.state = 'activating';
-    clearSensitiveFlowState(flow);
-    let created: MessagingInstanceClient | undefined;
-    try {
-      if (!canActivate(flow)) return;
-      created = await activation.apply(flow, result as RegistrationResultLike);
-      flow.instance = created;
-      if (!canActivate(flow)) {
-        await discardCreatedInstance(flow, created, activation);
+    // Poll until the scan is authorized. The poll carries `tp=ob_app` so the
+    // platform creates a fully configured bot (event subscription included) —
+    // mirrors hermes-agent. A Lark (global) tenant is detected through
+    // user_info.tenant_brand; the poll then switches to the Lark accounts
+    // domain once and keeps checking the same response (fall-through), so a
+    // successful scan is never dropped.
+    let domain: keyof typeof REGISTRATION_ACCOUNTS = 'feishu';
+    let domainSwitched = false;
+    let intervalMs = Math.max(1000, begin.intervalSeconds * 1000);
+    while (isCurrent(flow) && isAwaitingAuthorization(flow) && !expireIfNeeded(flow)) {
+      let result: RegistrationPollResult;
+      try {
+        result = await _feishuRegistrationProtocol.poll(flow, begin.deviceCode, domain);
+      } catch (error) {
+        // Transient network failure: keep polling until the authorization
+        // deadline (expireIfNeeded above) stops the loop.
+        if (!isCurrent(flow) || !isAwaitingAuthorization(flow) || expireIfNeeded(flow)) return;
+        await wait(intervalMs);
+        continue;
+      }
+
+      if (result.userInfo?.tenant_brand === 'lark' && !domainSwitched) {
+        domain = 'lark';
+        domainSwitched = true;
+        if (!isCurrent(flow) || !isAwaitingAuthorization(flow)) return;
+        flow.state = 'domain_switched';
+      }
+
+      // Success: the scanning account authorized the app creation.
+      if (typeof result.clientId === 'string' && typeof result.clientSecret === 'string') {
+        if (!isCurrent(flow) || !isAwaitingAuthorization(flow)) return;
+        if (expireIfNeeded(flow)) return;
+        if (!isValidFeishuAppId(result.clientId.trim()) || !result.clientSecret.trim()) {
+          finish(flow, 'failed', 'invalid_response');
+          return;
+        }
+        await activateCreatedApp(flow, activation, {
+          client_id: result.clientId.trim(),
+          client_secret: result.clientSecret.trim(),
+          user_info: result.userInfo,
+        });
         return;
       }
-      const enabled = await manager.setEnabled(flow.uid, created.id, true);
-      flow.instance = enabled;
-      if (!canActivate(flow)) {
-        await discardCreatedInstance(flow, enabled, activation);
-        return;
+
+      switch (result.error) {
+        case 'authorization_pending':
+          if (!isCurrent(flow) || !isAwaitingAuthorization(flow)) return;
+          flow.state = 'polling';
+          break;
+        case 'slow_down':
+          intervalMs += 5000;
+          if (!isCurrent(flow) || !isAwaitingAuthorization(flow)) return;
+          flow.state = 'slow_down';
+          flow.intervalSeconds = Math.max(1, Math.min(600, Math.floor(intervalMs / 1000)));
+          break;
+        case 'access_denied':
+          finish(flow, 'denied', 'access_denied');
+          return;
+        case 'expired_token':
+          finish(flow, 'expired', 'expired_token');
+          return;
+        default:
+          if (result.error) {
+            finish(flow, 'failed', 'registration_failed');
+            return;
+          }
+          break;
       }
-      finish(flow, 'completed');
-    } catch (error) {
-      const expired = expireIfNeeded(flow);
-      log.warn('Feishu registration activation failed', {
-        flowId: flow.flowId,
-        expired,
-        error: logErrorSummary(error),
-      });
-      if (created) {
-        const discarded = await discardCreatedInstance(flow, created, activation);
-        if (!discarded) return;
-      }
-      if (isCurrent(flow) && flow.state === 'activating' && !expired) {
-        finish(flow, 'failed', 'activation_failed');
-      }
+      await wait(intervalMs);
     }
   } catch (error) {
     if (!isCurrent(flow) || !isPending(flow)) return;
@@ -495,6 +684,46 @@ async function runRegistration(flow: RegistrationFlow, activation: RegistrationA
       code,
       error: logErrorSummary(error),
     });
+  }
+}
+
+async function activateCreatedApp(
+  flow: RegistrationFlow,
+  activation: RegistrationActivation,
+  result: RegistrationResultLike,
+): Promise<void> {
+  flow.state = 'activating';
+  clearSensitiveFlowState(flow);
+  let created: MessagingInstanceClient | undefined;
+  try {
+    if (!canActivate(flow)) return;
+    created = await activation.apply(flow, result);
+    flow.instance = created;
+    if (!canActivate(flow)) {
+      await discardCreatedInstance(flow, created, activation);
+      return;
+    }
+    const enabled = await manager.setEnabled(flow.uid, created.id, true);
+    flow.instance = enabled;
+    if (!canActivate(flow)) {
+      await discardCreatedInstance(flow, enabled, activation);
+      return;
+    }
+    finish(flow, 'completed');
+  } catch (error) {
+    const expired = expireIfNeeded(flow);
+    log.warn('Feishu registration activation failed', {
+      flowId: flow.flowId,
+      expired,
+      error: logErrorSummary(error),
+    });
+    if (created) {
+      const discarded = await discardCreatedInstance(flow, created, activation);
+      if (!discarded) return;
+    }
+    if (isCurrent(flow) && flow.state === 'activating' && !expired) {
+      finish(flow, 'failed', 'activation_failed');
+    }
   }
 }
 
@@ -515,6 +744,7 @@ export async function startFeishuQrRegistration(
     flowId: randomUUID(),
     draft: normalizedDraft,
     controller: new AbortController(),
+    tenantBrand: 'feishu',
     state: 'starting',
   };
   flows.set(uid, flow);
@@ -555,6 +785,7 @@ export async function startFeishuQrRegistrationForInstance(
       policy: draftInstance.policy,
     },
     controller: new AbortController(),
+    tenantBrand: registrationBrand(draftInstance.feishuTenantBrand),
     state: 'starting',
     instanceId,
   };

@@ -133,7 +133,18 @@ export function validateSkillMeta(
   const category = _stringField(skillMeta, 'category');
   if (!category) {
     out.push({
-      level: 'MEDIUM',
+      // LOW, not MEDIUM: an absent `category` is a marketplace-catalog
+      // completeness gap, not a security signal — the skill runs fine without
+      // it. Most shipped skills omit `_meta.json` entirely, so at MEDIUM this
+      // single rule accounted for the overwhelming majority of all MEDIUM
+      // findings in the builtin corpus and put a "has findings" badge on
+      // essentially every installed skill. A warning that fires on everything
+      // teaches users to ignore warnings.
+      //
+      // `skill_meta_category_invalid` below stays MEDIUM on purpose: "set, but
+      // to something unrecognized" suggests a mistake worth surfacing, whereas
+      // "not set" is the common, benign default.
+      level: 'LOW',
       rule: 'skill_meta_category_missing',
       field: '_meta.json:category',
       snippet: '',
