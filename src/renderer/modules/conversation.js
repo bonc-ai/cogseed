@@ -1087,7 +1087,7 @@ async function validateRecipientAgainstProject(target, pid) {
   if (!cur || cur.kind !== 'agent') return;
   if (!pid) return;
   try {
-    const res = await window.orkas.invoke('projects.bindings.list', { projectId: pid });
+    const res = await window.cogseed.invoke('projects.bindings.list', { projectId: pid });
     if (!res || !res.ok) return;
     const bound = new Set((res.bindings && res.bindings.agents) || []);
     if (!bound.has(cur.id)) {
@@ -1487,6 +1487,30 @@ function _initEmptyStateScenarios() {
       }
       try { input.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
     });
+  });
+  _initContinueWorkChip();
+}
+
+// ── Continue-previous-work importer ───────────────────────────────────────
+// The chip next to the scenario row opens the standalone session import
+// wizard (`modules/continue-work.js`) so users can import and continue
+// conversations from other agents at any time, not just during onboarding.
+function _initContinueWorkChip() {
+  const chip = document.getElementById('continue-work-chip');
+  if (!chip || chip.dataset.bound === '1') return;
+  chip.dataset.bound = '1';
+
+  chip.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (window.continueWork && typeof window.continueWork.open === 'function') {
+      try {
+        window.continueWork.open();
+      } catch (err) {
+        console.error('[CW] continueWork.open threw:', err);
+      }
+    } else {
+      console.error('[CW] window.continueWork.open is not available');
+    }
   });
 }
 /** 提取构建师消息里的 space-draft JSON 块；无/解析失败返回 null。
@@ -2597,7 +2621,7 @@ function _commanderAvatar() {
 async function _ensureCommanderAvatarLoaded() {
   if (_commanderAvatarCache) return _commanderAvatarCache;
   try {
-    const res = await window.orkas.invoke('prefs.getCommanderAvatar');
+    const res = await window.cogseed.invoke('prefs.getCommanderAvatar');
     if (res?.ok && res.avatar) {
       _commanderAvatarCache = _normalizeCommanderAvatar(res.avatar);
     }
@@ -2941,6 +2965,7 @@ function _groupMsgToLegacy(gm) {
     ...(_normalizeCreatedSkills(gm) ? { created_skills: _normalizeCreatedSkills(gm) } : {}),
     ...(Array.isArray(gm.artifacts) && gm.artifacts.length ? { artifacts: gm.artifacts } : {}),
     ...(Array.isArray(gm.teaching_receipts) && gm.teaching_receipts.length ? { teaching_receipts: gm.teaching_receipts } : {}),
+    ...(Array.isArray(gm.recall_citations) && gm.recall_citations.length ? { recall_citations: gm.recall_citations } : {}),
     ...(Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length ? { marketplace_requests: gm.marketplace_requests } : {}),
     ...(Array.isArray(gm.wake_requests) && gm.wake_requests.length ? { wake_requests: gm.wake_requests } : {}),
     ...(gm.kstar_review ? { kstar_review: gm.kstar_review } : {}),
@@ -3407,7 +3432,7 @@ async function _chatAttachPickAndUpload(cid, source = 'picker') {
   _convTrackClick('chat_attachment_upload', basePayload);
   let data;
   try {
-    data = await window.orkas.invoke('conversations.attachments.pickAndUpload', { cid });
+    data = await window.cogseed.invoke('conversations.attachments.pickAndUpload', { cid });
   } catch (err) {
     _convLog.warn('native attachment picker failed', err);
     _convTrackEvent('chat_attachment_upload_result', {
@@ -3596,7 +3621,7 @@ function _chatVideoFloatingTitle() {
 // and adopts the draft attachments.
 window.COMMANDER_DRAFT_CID = DRAFT_CID;
 window.attachKbFileToDraft = async function attachKbFileToDraft(channel, payload, draftCid, afterNavigate) {
-  const data = await window.orkas.invoke(channel, { ...(payload || {}), cid: draftCid });
+  const data = await window.cogseed.invoke(channel, { ...(payload || {}), cid: draftCid });
   if (!data || !data.ok) throw new Error((data && data.error) || 'failed');
   if (typeof afterNavigate === 'function') afterNavigate();
   _addReadyDraftAttachment(draftCid, data.info);
@@ -3892,6 +3917,103 @@ function _renderTeachingReceiptsHtml(receipts) {
   }).join('')}</div>`;
 }
 
+function _recallCitationTypeLabel(type) {
+  const key = type === 'personal'
+    ? 'chat.recall.type_personal'
+    : type === 'template'
+      ? 'chat.recall.type_template'
+      : type === 'skill_method'
+        ? 'chat.recall.type_skill_method'
+        : 'chat.recall.type_rule';
+  const fallback = type === 'personal'
+    ? 'Facts and preferences'
+    : type === 'template'
+      ? 'Template'
+      : type === 'skill_method'
+        ? 'Experience method'
+        : 'Rule';
+  const value = typeof t === 'function' ? t(key) : key;
+  return value && value !== key ? value : fallback;
+}
+
+function _recallCitationScopeLabel(scope) {
+  const normalized = String(scope || '').trim().toLowerCase();
+  const key = normalized === 'global'
+    ? 'chat.recall.scope_global'
+    : normalized === 'project'
+      ? 'chat.recall.scope_project'
+      : normalized === 'agent'
+        ? 'chat.recall.scope_agent'
+        : normalized === 'personal'
+          ? 'chat.recall.scope_personal'
+          : '';
+  if (!key) return String(scope || '').trim();
+  const fallback = normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  const value = typeof t === 'function' ? t(key) : key;
+  return value && value !== key ? value : fallback;
+}
+
+function _renderRecallCitationsHtml(citations) {
+  if (!Array.isArray(citations) || !citations.length) return '';
+  const items = citations
+    .filter((citation) => citation && citation.asset_id && citation.title)
+    .slice(0, 12);
+  if (!items.length) return '';
+  const titleKey = 'chat.recall.citations_title';
+  const titleValue = typeof t === 'function' ? t(titleKey) : titleKey;
+  const title = titleValue && titleValue !== titleKey ? titleValue : 'Memories provided to this answer';
+  const helpfulKey = 'chat.recall.feedback_helpful';
+  const helpfulValue = typeof t === 'function' ? t(helpfulKey) : helpfulKey;
+  const helpful = helpfulValue && helpfulValue !== helpfulKey ? helpfulValue : 'Helpful';
+  const improveKey = 'chat.recall.feedback_improve';
+  const improveValue = typeof t === 'function' ? t(improveKey) : improveKey;
+  const improve = improveValue && improveValue !== improveKey ? improveValue : 'Needs improvement';
+  return `<section class="chat-recall-citations"><div class="chat-recall-citations-head"><span>${_uiIconHtml('brain-circuit', 'ui-icon')}<strong>${escapeHtml(title)}</strong></span><span class="chat-recall-feedback-status" data-recall-feedback-status aria-live="polite"></span></div><div class="chat-recall-citation-list">${items.map((citation) => {
+    const type = _recallCitationTypeLabel(citation.type);
+    const scope = _recallCitationScopeLabel(citation.scope);
+    const meta = [type, scope].filter(Boolean).join(' · ');
+    return `<div class="chat-recall-citation" data-recall-asset-id="${escapeHtml(citation.asset_id)}"><strong>${escapeHtml(citation.title)}</strong>${meta ? `<span>${escapeHtml(meta)}</span>` : ''}</div>`;
+  }).join('')}</div><div class="chat-recall-feedback-actions"><button type="button" class="chat-recall-feedback-btn" data-recall-feedback="positive" title="${escapeHtml(helpful)}">${_uiIconHtml('thumbs-up', 'ui-icon')}<span>${escapeHtml(helpful)}</span></button><button type="button" class="chat-recall-feedback-btn" data-recall-feedback="negative" title="${escapeHtml(improve)}">${_uiIconHtml('thumbs-down', 'ui-icon')}<span>${escapeHtml(improve)}</span></button></div></section>`;
+}
+
+function _hydrateRecallCitations(messageEl, cid, messageId) {
+  const host = messageEl?.querySelector('.chat-recall-citations');
+  if (!host) return;
+  const resolvedMessageId = String(messageId || messageEl?.dataset?.msgId || '');
+  const buttons = Array.from(host.querySelectorAll('[data-recall-feedback]'));
+  for (const button of buttons) {
+    if (button.dataset.bound === '1') continue;
+    button.dataset.bound = '1';
+    button.addEventListener('click', async () => {
+      const feedback = button.dataset.recallFeedback;
+      if (!cid || !resolvedMessageId || (feedback !== 'positive' && feedback !== 'negative')) return;
+      if (host.dataset.feedbackBusy === '1' || host.dataset.feedbackSent === '1') return;
+      host.dataset.feedbackBusy = '1';
+      buttons.forEach((item) => { item.disabled = true; });
+      try {
+        const result = await window.cogseed.invoke('recall.usage.feedback', {
+          cid,
+          messageId: resolvedMessageId,
+          feedback,
+        });
+        if (!result?.ok) throw new Error(result?.error || 'Recall feedback failed');
+        host.dataset.feedbackSent = '1';
+        host.dataset.feedback = feedback;
+        host.classList.add('is-feedback-sent');
+        const status = host.querySelector('[data-recall-feedback-status]');
+        const key = 'chat.recall.feedback_thanks';
+        const value = typeof t === 'function' ? t(key) : key;
+        if (status) status.textContent = value && value !== key ? value : 'Thanks for the feedback';
+      } catch (error) {
+        buttons.forEach((item) => { item.disabled = false; });
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        host.dataset.feedbackBusy = '0';
+      }
+    });
+  }
+}
+
 function _hydrateTeachingReceipts(messageEl) {
   messageEl?.querySelectorAll('[data-chat-teaching-revoke]').forEach((button) => {
     if (button.dataset.bound === '1') return;
@@ -3902,7 +4024,7 @@ function _hydrateTeachingReceipts(messageEl) {
       button.dataset.busy = '1';
       button.disabled = true;
       try {
-        const result = await window.orkas.invoke('recall.teaching.revoke', { signalId });
+        const result = await window.cogseed.invoke('recall.teaching.revoke', { signalId });
         if (!result?.ok) throw new Error(result?.error || 'teaching signal revoke failed');
         const receipt = button.closest('[data-teaching-receipt-id]');
         if (receipt) {
@@ -4057,7 +4179,7 @@ function _hydrateMessageAttachmentThumbs(msgDiv, cid) {
         try { if (video && typeof video.pause === 'function') video.pause(); } catch (_) {}
         try { if (window.Monitor) (() => {})('chat_attachment_video_floating_open'); } catch (_) {}
         try {
-          const res = await window.orkas.invoke('attachments.absPath', { cid: chipCid, name });
+          const res = await window.cogseed.invoke('attachments.absPath', { cid: chipCid, name });
           if (!res || !res.ok || !res.path) {
             _convLog.warn('attachments.absPath video failed', { cid: chipCid, name, error: res && res.error });
             _showFileMissingToast(name);
@@ -4083,7 +4205,7 @@ function _hydrateMessageAttachmentThumbs(msgDiv, cid) {
           let opts;
           if (name && chipCid) {
             try {
-              const res = await window.orkas.invoke('attachments.absPath', { cid: chipCid, name });
+              const res = await window.cogseed.invoke('attachments.absPath', { cid: chipCid, name });
               if (res && res.ok && res.path) opts = { absPath: res.path, cid: chipCid };
               else {
                 _convLog.warn('attachments.absPath image failed', { cid: chipCid, name, error: res && res.error });
@@ -4114,7 +4236,7 @@ function _hydrateMessageAttachmentThumbs(msgDiv, cid) {
       e.stopPropagation();
       if (typeof openChatFileViewer !== 'function') return;
       try {
-        const res = await window.orkas.invoke('attachments.absPath', { cid: chipCid, name });
+        const res = await window.cogseed.invoke('attachments.absPath', { cid: chipCid, name });
         if (!res || !res.ok || !res.path) {
           _convLog.warn('attachments.absPath failed', { cid: chipCid, name, error: res && res.error });
           _showFileMissingToast(name);
@@ -6041,6 +6163,25 @@ function _ensureCreateAgentInlineObserver() {
   _ensureConvCreateAgentInline();
 }
 
+/**
+ * Insert a welcome message for an imported conversation.
+ * Called when user opens an imported conversation for the first time.
+ */
+async function _insertImportedConversationWelcome(cid) {
+  if (!window.cogseed?.invoke) return;
+  try {
+    const result = await window.cogseed.invoke('chats.insertWelcomeMessage', { conversationId: cid });
+    if (result?.ok) {
+      // Reload the conversation to show the new welcome message
+      if (cid === currentCid) {
+        await loadConversationHistory(cid, { preserveScroll: false });
+      }
+    }
+  } catch (err) {
+    _convLog.error('welcome message insertion failed', { cid, error: err });
+  }
+}
+
 async function loadConversationHistory(cid, opts = {}) {
   const perfStartedAt = performance.now();
   const container = document.getElementById('chat-history');
@@ -6063,8 +6204,8 @@ async function loadConversationHistory(cid, opts = {}) {
       HISTORY_PAGE_SIZE,
       Number(opts.searchTarget?.msgIndex),
     ));
-    const teachingSignalsPromise = window.orkas?.invoke
-      ? window.orkas.invoke('recall.teaching.list', { conversationId: cid, limit: 100 }).catch(() => null)
+    const teachingSignalsPromise = window.cogseed?.invoke
+      ? window.cogseed.invoke('recall.teaching.list', { conversationId: cid, limit: 100 }).catch(() => null)
       : Promise.resolve(null);
     const membersStartedAt = performance.now();
     const membersPromise = _refreshGroupMembers(cid).then((actors) => {
@@ -6297,6 +6438,13 @@ async function loadConversationHistory(cid, opts = {}) {
 
     _mountConversationResultCard(cid);
 
+    // Check if this is an imported conversation that needs a welcome message
+    if (convMeta.needs_welcome === true) {
+      _insertImportedConversationWelcome(cid).catch((err) => {
+        _convLog.warn('failed to insert welcome message', { cid, error: err });
+      });
+    }
+
     // Re-add the inline "create agent" entry BEFORE scrolling so it's part of
     // scrollHeight when we jump to the bottom — otherwise the MutationObserver
     // adds it post-scroll and it ends up below the visible area.
@@ -6330,6 +6478,7 @@ function _messageRecordHasMountedSidecars(gm, el, opts = {}) {
   if ((_normalizeCreatedAgents(gm) || _normalizeCreatedSkills(gm)) && !el.querySelector('.chat-msg-created-agent-chip')) return false;
   if (Array.isArray(gm.artifacts) && gm.artifacts.length && !el.querySelector('.chat-artifact-host')) return false;
   if (Array.isArray(gm.teaching_receipts) && gm.teaching_receipts.length && !el.querySelector('.chat-teaching-receipts')) return false;
+  if (Array.isArray(gm.recall_citations) && gm.recall_citations.length && !el.querySelector('.chat-recall-citations')) return false;
   if (Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length && !el.querySelector('.chat-marketplace-request')) return false;
   if (gm.kstar_review_card && !el.querySelector('.chat-kstar-result-review')) return false;
   if (gm.recall_projection_card && !el.querySelector('.chat-recall-projection-card')) return false;
@@ -7047,6 +7196,9 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const teachingReceiptsHtml = role === 'assistant'
     ? _renderTeachingReceiptsHtml(message.teaching_receipts)
     : '';
+  const recallCitationsHtml = role === 'assistant'
+    ? _renderRecallCitationsHtml(message.recall_citations)
+    : '';
   // Group-chat header sits **above** the bubble, outside it: sender name +
   // timestamp on one row. Same DOM strip for historical (loaded via
   // getMessages) and live-streamed messages so users always see "who said
@@ -7079,7 +7231,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   // action row remains for created-agent/skill links and message actions.
   msgDiv.innerHTML = `
     ${headerHtml}
-    <div class="chat-bubble">${planAnnHtml}${referencesHtml}${contentHtml}${spaceDraftHtml}${attachmentsHtml}${teachingReceiptsHtml}</div>
+    <div class="chat-bubble">${planAnnHtml}${referencesHtml}${contentHtml}${spaceDraftHtml}${attachmentsHtml}${teachingReceiptsHtml}${recallCitationsHtml}</div>
     <div class="chat-msg-actions" data-role="msg-actions">${createdAgentHtml}${createdSkillHtml}</div>
   `;
   if (typeof opts.msgIndex === 'number') msgDiv.dataset.msgIndex = String(opts.msgIndex);
@@ -7127,6 +7279,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   if (createdAgentHtml) _hydrateMessageCreatedAgentChip(msgDiv);
   if (createdSkillHtml) _hydrateMessageCreatedSkillChip(msgDiv);
   if (teachingReceiptsHtml) _hydrateTeachingReceipts(msgDiv);
+  if (recallCitationsHtml) _hydrateRecallCitations(msgDiv, opts.cid || currentCid, message._msg_id);
   // Interactive input-form widget (assistant messages only). Appended inside
   // the bubble after markdown + chips so it reads as "reply text → confirm
   // this form". See chat-input-form.js for the widget implementation.
@@ -7370,7 +7523,7 @@ async function _hydrateMarketplaceRequestMeta(card, req, cid, msgId) {
   try {
     const q = req.name || req.id || '';
     const channel = req.kind === 'skill' ? 'marketplace.listSkills' : 'marketplace.listAgents';
-    const res = await window.orkas.invoke(channel, { q, size: 20 });
+    const res = await window.cogseed.invoke(channel, { q, size: 20 });
     const row = (res?.list || []).find((x) => x && x.id === req.id);
     if (!row) return;
     req.icon = row.icon || '';
@@ -7482,7 +7635,7 @@ async function _resolveKstarResultReview(card, review, action) {
   card.querySelectorAll('button').forEach((button) => { button.disabled = true; });
   try {
     const verdict = action === 'correct' ? 'skip' : 'met';
-    const result = await window.orkas.invoke('kstar.review.confirm', { episodeId: review.episodeId, verdict });
+    const result = await window.cogseed.invoke('kstar.review.confirm', { episodeId: review.episodeId, verdict });
     if (!result?.ok) throw new Error(result?.error || 'kstar review confirmation failed');
     _renderKstarResultReviewCard(card, { ...review, status: 'confirmed' });
   } catch (error) {
@@ -7499,7 +7652,7 @@ function _mountKstarResultReviewCard(host, review) {
   const card = document.createElement('div');
   host.appendChild(card);
   _renderKstarResultReviewCard(card, review);
-  window.orkas.invoke('kstar.review.read', { episodeId: review.episodeId }).then((result) => {
+  window.cogseed.invoke('kstar.review.read', { episodeId: review.episodeId }).then((result) => {
     const state = result?.review?.reviewState;
     if (state === 'confirmed' || state === 'unknown') {
       _renderKstarResultReviewCard(card, { ...review, status: 'confirmed' });
@@ -8143,7 +8296,7 @@ function _hydrateMessageReferenceFiles(msgDiv) {
       const cid = chip.dataset.attachCid || '';
       if (!name || !cid || typeof openChatFileViewer !== 'function') return;
       try {
-        const result = await window.orkas.invoke('attachments.absPath', { cid, name });
+        const result = await window.cogseed.invoke('attachments.absPath', { cid, name });
         if (!result?.ok || !result.path) {
           _showFileMissingToast(name);
           return;
@@ -9103,7 +9256,7 @@ function _attachBubbleActions(msgDiv, getContent, opts = {}) {
     btn.disabled = true;
     const orig = btn.innerHTML;
     try {
-      const data = await window.orkas.invoke('library.writeText', {
+      const data = await window.cogseed.invoke('library.writeText', {
         cid: currentCid,
         targetScope,
         targetPath: pick.path,
@@ -10231,6 +10384,10 @@ window.ConversationRuntime = {
   recoverPolledMessages: _recoverPolledVisibleMessages,
 };
 
+// Export conversation list invalidation and refresh for onboarding/import flows
+window._markConversationListLocallyChanged = _markConversationListLocallyChanged;
+window.loadConversations = loadConversations;
+
 const _chatScrollOffsetObservers = new WeakMap();
 
 function _stopChatScrollOffsetObserver(container) {
@@ -10865,6 +11022,7 @@ function _isRedundantRoutingOnlyCommanderRecord(gm) {
       || _normalizeCreatedAgents(gm) || _normalizeCreatedSkills(gm)
       || (Array.isArray(gm.artifacts) && gm.artifacts.length)
       || (Array.isArray(gm.teaching_receipts) && gm.teaching_receipts.length)
+      || (Array.isArray(gm.recall_citations) && gm.recall_citations.length)
       || (Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length)) {
     return false;
   }
@@ -12272,6 +12430,14 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
     }
   }
 
+  if (Array.isArray(gm.recall_citations) && gm.recall_citations.length) {
+    const bubble = ph.querySelector('.chat-bubble');
+    if (bubble && !bubble.querySelector('.chat-recall-citations')) {
+      bubble.insertAdjacentHTML('beforeend', _renderRecallCitationsHtml(gm.recall_citations));
+      _hydrateRecallCitations(ph, cid, gm.id);
+    }
+  }
+
   if (gm.kstar_review) {
     const bubble = ph.querySelector('.chat-bubble');
     if (bubble) _mountKStarReviewCard(bubble, gm.kstar_review, cid);
@@ -13339,9 +13505,9 @@ async function _onToolResultRowClick(ev) {
   pre.className = 'stream-process-line-full';
 
   if (path) {
-    // window.orkas.invoke is the canonical IPC entry (matches every
+    // window.cogseed.invoke is the canonical IPC entry (matches every
     // other feature's pattern — saved-apps / chat-artifact / workspace).
-    const inv = window.orkas && window.orkas.invoke;
+    const inv = window.cogseed && window.cogseed.invoke;
     if (typeof inv !== 'function') return;
     let res;
     try {

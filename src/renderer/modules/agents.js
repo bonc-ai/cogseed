@@ -109,7 +109,7 @@ let _externalCliProviders = [];
 let _externalCliProviderSelect = null;
 
 async function _loadExternalCliProviders() {
-  const res = await window.orkas.invoke('customProviders.list');
+  const res = await window.cogseed.invoke('customProviders.list');
   _externalCliProviders = (res && res.ok && Array.isArray(res.providers)) ? res.providers : [];
   return _externalCliProviders;
 }
@@ -238,12 +238,12 @@ function _commanderAvatarFallback() {
 async function _refreshCommanderAgentState() {
   if (_commanderAgentStateInFlight) return _commanderAgentStateInFlight;
   _commanderAgentStateInFlight = (async () => {
-    if (typeof window === 'undefined' || !window.orkas?.invoke) return;
+    if (typeof window === 'undefined' || !window.cogseed?.invoke) return;
     const [memoryRes, avatarRes, profileRes, statsRes] = await Promise.allSettled([
-      window.orkas.invoke('memory.list', { target: 'agent', agentId: _COMMANDER_AGENT_ID }),
-      window.orkas.invoke('prefs.getCommanderAvatar'),
-      window.orkas.invoke('commander.getProfile'),
-      window.orkas.invoke('commander.runtimeStats.get'),
+      window.cogseed.invoke('memory.list', { target: 'agent', agentId: _COMMANDER_AGENT_ID }),
+      window.cogseed.invoke('prefs.getCommanderAvatar'),
+      window.cogseed.invoke('commander.getProfile'),
+      window.cogseed.invoke('commander.runtimeStats.get'),
     ]);
     if (memoryRes.status === 'fulfilled') {
       _commanderAgentMemoryEntries = Array.isArray(memoryRes.value?.entries)
@@ -380,12 +380,12 @@ function _maybeLoadAgentSkillNames(ids, agentId, opts = {}) {
   if (!ids.length || _agentSkillNameRows) return Promise.resolve();
   if (_agentSkillNameLoadInFlight) return _agentSkillNameLoadInFlight;
   const hasUnresolved = ids.some((id) => _agentSkillNameForId(id) === id);
-  if (!hasUnresolved || typeof window === 'undefined' || !window.orkas?.invoke) return Promise.resolve();
+  if (!hasUnresolved || typeof window === 'undefined' || !window.cogseed?.invoke) return Promise.resolve();
   _agentSkillNameLoadInFlight = (async () => {
     try {
       const [trustedRes, openRes] = await Promise.allSettled([
-        window.orkas.invoke('skills.list'),
-        window.orkas.invoke('skills.listOpen'),
+        window.cogseed.invoke('skills.list'),
+        window.cogseed.invoke('skills.listOpen'),
       ]);
       const trusted = trustedRes.status === 'fulfilled' && Array.isArray(trustedRes.value?.skills)
         ? trustedRes.value.skills
@@ -439,7 +439,7 @@ function _agentRuntimeStats(agent) {
 
 async function _refreshAgentRuntimeStatsAfterRun(agentId) {
   const id = String(agentId || '');
-  if (!id || _isCommanderAgent(id) || _isAgentProfileMock(id) || !window.orkas?.invoke) return;
+  if (!id || _isCommanderAgent(id) || _isAgentProfileMock(id) || !window.cogseed?.invoke) return;
   try {
     await loadAgents(true);
     if (_selectedAgent?.id === id && !_agentEditing) await selectAgent(id);
@@ -668,7 +668,7 @@ async function _backfillMissingAvatars(agents) {
     if (!a.icon) updates.icon = seedAvatar.icon;
     if (!a.color) updates.color = seedAvatar.color;
     try {
-      const res = await window.orkas.invoke('agents.update', {
+      const res = await window.cogseed.invoke('agents.update', {
         agent_id: a.agent_id, updates,
       });
       if (res?.ok && res.agent) {
@@ -885,7 +885,7 @@ function renderAgentsGrid(agents) {
 async function _flipAgentEnabled(agentId, nextEnabled) {
   if (_isCommanderAgent(agentId)) return false;
   try {
-    const res = await window.orkas.invoke('agents.setEnabled', { agent_id: agentId, enabled: nextEnabled });
+    const res = await window.cogseed.invoke('agents.setEnabled', { agent_id: agentId, enabled: nextEnabled });
     if (!res || !res.ok) {
       await uiAlert(t('component.toggle_failed'));
       return false;
@@ -1171,9 +1171,9 @@ async function _detailCategoryOptions(currentValue = '') {
   const stateCats = (typeof _mpState !== 'undefined' && Array.isArray(_mpState?.categories)) ? _mpState.categories : [];
   const cacheCats = (typeof _mpCategoriesCache !== 'undefined' && Array.isArray(_mpCategoriesCache)) ? _mpCategoriesCache : [];
   let categories = stateCats.length ? stateCats : cacheCats;
-  if (!categories.length && typeof window !== 'undefined' && window.orkas?.invoke) {
+  if (!categories.length && typeof window !== 'undefined' && window.cogseed?.invoke) {
     try {
-      const res = await window.orkas.invoke('marketplace.categories', { local_only: true });
+      const res = await window.cogseed.invoke('marketplace.categories', { local_only: true });
       const list = Array.isArray(res?.list) ? res.list : [];
       if (list.length) {
         categories = list;
@@ -1252,7 +1252,7 @@ function _renderAgentHeaderCategory(agent) {
     readonly: isMock,
     onChange: async (category, api) => {
       try {
-        const res = await window.orkas.invoke('agents.update', {
+        const res = await window.cogseed.invoke('agents.update', {
           agent_id: agentId,
           updates: { category: category || 'general' },
         });
@@ -1378,7 +1378,7 @@ async function _saveAgentTextList(agent, key, values) {
     if (clean.length >= 20) break;
   }
   try {
-    const res = await window.orkas.invoke('agents.update', {
+    const res = await window.cogseed.invoke('agents.update', {
       agent_id: agent.agent_id,
       updates: { [key]: clean },
     });
@@ -1562,23 +1562,23 @@ function _renderAgentDetailMemory(agent, editing = false) {
 
 async function _agentMemoryAdd(agent, text) {
   if (_isCommanderAgent(agent)) {
-    return window.orkas.invoke('memory.add', { target: 'agent', agentId: _COMMANDER_AGENT_ID, content: text });
+    return window.cogseed.invoke('memory.add', { target: 'agent', agentId: _COMMANDER_AGENT_ID, content: text });
   }
-  return window.orkas.invoke('agents.memory.add', { agent_id: agent.agent_id, content: text });
+  return window.cogseed.invoke('agents.memory.add', { agent_id: agent.agent_id, content: text });
 }
 
 async function _agentMemoryUpdate(agent, oldText, text) {
   if (_isCommanderAgent(agent)) {
-    return window.orkas.invoke('memory.replace', { target: 'agent', agentId: _COMMANDER_AGENT_ID, oldText, content: text });
+    return window.cogseed.invoke('memory.replace', { target: 'agent', agentId: _COMMANDER_AGENT_ID, oldText, content: text });
   }
-  return window.orkas.invoke('agents.memory.update', { agent_id: agent.agent_id, old_text: oldText, content: text });
+  return window.cogseed.invoke('agents.memory.update', { agent_id: agent.agent_id, old_text: oldText, content: text });
 }
 
 async function _agentMemoryRemove(agent, text) {
   if (_isCommanderAgent(agent)) {
-    return window.orkas.invoke('memory.remove', { target: 'agent', agentId: _COMMANDER_AGENT_ID, oldText: text });
+    return window.cogseed.invoke('memory.remove', { target: 'agent', agentId: _COMMANDER_AGENT_ID, oldText: text });
   }
-  return window.orkas.invoke('agents.memory.remove', { agent_id: agent.agent_id, old_text: text });
+  return window.cogseed.invoke('agents.memory.remove', { agent_id: agent.agent_id, old_text: text });
 }
 
 function _wireAgentMemoryControls(host, agent) {
@@ -1869,7 +1869,7 @@ function _renderAgentOutputFormatSection(agent, editing = false) {
     value: current,
     onChange: async (val) => {
       try {
-        const res = await window.orkas.invoke('agents.update', {
+        const res = await window.cogseed.invoke('agents.update', {
           agent_id: agent.agent_id,
           updates: { output_format: val },
         });
@@ -1994,7 +1994,7 @@ async function _renderAgentDetailRuntime(agent) {
         }
       }
       try {
-        const res = await window.orkas.invoke('agents.update', {
+        const res = await window.cogseed.invoke('agents.update', {
           agent_id: agent.agent_id, updates,
         });
         if (res?.ok && res.agent) {
@@ -2008,7 +2008,7 @@ async function _renderAgentDetailRuntime(agent) {
           // the runtime swap still goes through.
           const safeUpdates = { ...updates };
           delete safeUpdates.name;
-          await window.orkas.invoke('agents.update', {
+          await window.cogseed.invoke('agents.update', {
             agent_id: agent.agent_id, updates: safeUpdates,
           });
           _agentsCache = null;
@@ -2074,11 +2074,11 @@ async function _renderAgentDetailProjectDir(agent) {
     const pick = async () => {
       if (!canEdit) return;
       try {
-        const picked = await window.orkas.invoke('common.pickDirectory', {
+        const picked = await window.cogseed.invoke('common.pickDirectory', {
           title: t('agents.label_project_dir'),
         });
         if (!picked || picked.cancelled || !picked.path) return;
-        const saved = await window.orkas.invoke('agents.cliProjectDir.set', {
+        const saved = await window.cogseed.invoke('agents.cliProjectDir.set', {
           agent_id: agent.agent_id,
           path: picked.path,
         });
@@ -2096,7 +2096,7 @@ async function _renderAgentDetailProjectDir(agent) {
       e.stopPropagation();
       if (!canEdit) return;
       try {
-        const saved = await window.orkas.invoke('agents.cliProjectDir.set', {
+        const saved = await window.cogseed.invoke('agents.cliProjectDir.set', {
           agent_id: agent.agent_id,
           path: '',
         });
@@ -2113,7 +2113,7 @@ async function _renderAgentDetailProjectDir(agent) {
 
   slot.innerHTML = `<div class="agent-project-dir-card is-loading">${_agentUiIconHtml('folder-open', 'agent-project-dir-icon')}<div class="agent-project-dir-main"><div class="agent-project-dir-path">${escapeHtml(t('common.loading'))}</div></div></div>`;
   try {
-    const res = await window.orkas.invoke('agents.cliProjectDir.get', { agent_id: agent.agent_id });
+    const res = await window.cogseed.invoke('agents.cliProjectDir.get', { agent_id: agent.agent_id });
     if (!res || !res.ok || !res.info) throw new Error(res?.error || 'failed');
     renderInfo(res.info);
   } catch (err) {
@@ -2164,7 +2164,7 @@ function _renderAgentDetailAvatar(agent) {
       applyAvatarToElement(trigger, nextIcon, next.color, agent.agent_id);
       try {
         if (isCommander) {
-          const res = await window.orkas.invoke('prefs.setCommanderAvatar', { icon: nextIcon, color: next.color });
+          const res = await window.cogseed.invoke('prefs.setCommanderAvatar', { icon: nextIcon, color: next.color });
           if (res?.ok && res.avatar) {
             _commanderAgentAvatar = { icon: nextIcon, color: res.avatar.color };
             if (typeof setCommanderAvatarCache === 'function') setCommanderAvatarCache({ icon: nextIcon, color: res.avatar.color });
@@ -2173,7 +2173,7 @@ function _renderAgentDetailAvatar(agent) {
             if (typeof renderProjectsSection === 'function') renderProjectsSection();
           }
         } else {
-          const res = await window.orkas.invoke('agents.update', {
+          const res = await window.cogseed.invoke('agents.update', {
             agent_id: agent.agent_id,
             updates: { icon: next.icon, color: next.color },
           });
@@ -2813,7 +2813,7 @@ async function deleteSelectedAgent() {
   if (window.Monitor) (() => {})('agent_delete', { agent_id: agentId });
   try {
     const data = isMarketplace
-      ? await window.orkas.invoke('agents.builtin.delete', { agent_id: agentId })
+      ? await window.cogseed.invoke('agents.builtin.delete', { agent_id: agentId })
       : await (await apiFetch(`/api/agents/${encodeURIComponent(agentId)}`, { method: 'DELETE' })).json();
     if (!data.ok) throw new Error(data.error || t('agents.delete_failed'));
     _selectedAgent = null; _agentEditing = false;
@@ -3001,8 +3001,8 @@ async function useAgent(agentId, managementOpenGesture) {
     && cachedAgent.reimbursement_entry_role === 'canonical';
   const preparedManagementOpen = cachedCanonicalExpenseAgent
     && managementOpenGesture === 'agent_card'
-    && window.orkas?.expenseWorkbench?.prepareOpen
-    ? window.orkas.expenseWorkbench.prepareOpen(agentId, managementOpenGesture).then(
+    && window.cogseed?.expenseWorkbench?.prepareOpen
+    ? window.cogseed.expenseWorkbench.prepareOpen(agentId, managementOpenGesture).then(
       () => ({ ok: true }),
       (error) => ({
         ok: false,
@@ -3061,7 +3061,7 @@ async function useAgent(agentId, managementOpenGesture) {
   } finally {
     if (preparedManagementOpen && !preparedManagementOpenConsumed) {
       await preparedManagementOpen;
-      await window.orkas.expenseWorkbench.close().catch(() => {});
+      await window.cogseed.expenseWorkbench.close().catch(() => {});
     }
   }
 }
@@ -3408,7 +3408,7 @@ async function _refreshAgentPickerProjectContext(anchorId) {
     try {
       // 情境空间一期修复：作用域 = resolveProjectScope（S∪B 决策树，含空间派生集），
       // 不是只读项目 bindings（B）。null = 全局可见（不过滤）；空数组 = 严格空作用域。
-      const res = await window.orkas.invoke('projects.scope.resolve', { projectId: _pickerProjectId });
+      const res = await window.cogseed.invoke('projects.scope.resolve', { projectId: _pickerProjectId });
       if (refreshSeq === _pickerProjectContextSeq && res?.ok) {
         _pickerBoundAgentIds = res.scope ? new Set((res.scope.agents || []).map((a) => a.id)) : null;
         _pickerBoundSkillIds = res.scope ? new Set((res.scope.skills || []).map((s) => s.id)) : null;
@@ -3735,7 +3735,7 @@ function _flattenLibraryPickerTree(nodes, scope, projectId) {
 async function _loadLibraryPickerRows(projectId) {
   const validProjectId = _agentPickerValidProjectId(projectId);
   const projectPromise = validProjectId
-    ? window.orkas.invoke('projects.files.tree', { projectId: validProjectId }).catch((err) => {
+    ? window.cogseed.invoke('projects.files.tree', { projectId: validProjectId }).catch((err) => {
         _agentsLog.warn('project library picker load failed', err);
         return null;
       })
@@ -3829,8 +3829,8 @@ function _renderLibraryPickerList(listEl, filterText, anchorId) {
 async function _loadOntologyPickerGroups() {
   try {
     const [gRes, tRes] = await Promise.all([
-      window.orkas.invoke('personalOntology.groups.list', {}),
-      window.orkas.invoke('personalOntology.templates.list', {}),
+      window.cogseed.invoke('personalOntology.groups.list', {}),
+      window.cogseed.invoke('personalOntology.templates.list', {}),
     ]);
     const groups = (gRes && gRes.ok !== false && Array.isArray(gRes.groups)) ? gRes.groups : [];
     const templates = (tRes && tRes.ok !== false && Array.isArray(tRes.templates)) ? tRes.templates : [];

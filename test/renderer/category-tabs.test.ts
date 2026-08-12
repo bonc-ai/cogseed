@@ -51,7 +51,7 @@ function loadCategoryRenderers() {
       body: { appendChild: () => {} },
       querySelectorAll: () => [],
     },
-    window: { addEventListener: () => {}, innerWidth: 1024, innerHeight: 768, orkas: { invoke: async () => ({ list: [] }) } },
+    window: { addEventListener: () => {}, innerWidth: 1024, innerHeight: 768, cogseed: { invoke: async () => ({ list: [] }) } },
     escapeHtml: (s: unknown) => String(s ?? '').replace(/[&<>"']/g, (ch) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     } as Record<string, string>)[ch]),
@@ -164,7 +164,7 @@ describe('agent and skill category tabs', () => {
         skills: [{ id: 'trusted', name: 'Trusted Skill', source: 'custom', category: 'general' }],
       }),
     });
-    context.window.orkas.invoke = async (channel: string) => {
+    context.window.cogseed.invoke = async (channel: string) => {
       if (channel === 'skills.listOpen') {
         openFetches += 1;
         return { ok: true, skills: openRows };
@@ -425,7 +425,7 @@ describe('agent and skill category tabs', () => {
   it('toggles namespace-shaped global-folder skill groups together', async () => {
     const { context } = loadCategoryRenderers();
     const calls: Array<{ channel: string; payload: any }> = [];
-    context.window.orkas.invoke = async (channel: string, payload: any) => {
+    context.window.cogseed.invoke = async (channel: string, payload: any) => {
       calls.push({ channel, payload });
       return { ok: true };
     };
@@ -497,7 +497,7 @@ describe('agent and skill category tabs', () => {
     const fetchResponse = new Promise((resolve) => { resolveFetch = resolve; });
     let resolvePreparation!: () => void;
     const preparation = new Promise<void>((resolve) => { resolvePreparation = resolve; });
-    context.window.orkas.expenseWorkbench = {
+    context.window.cogseed.expenseWorkbench = {
       prepareOpen: () => {
         order.push('prepare');
         return preparation;
@@ -620,7 +620,7 @@ describe('agent and skill category tabs', () => {
         tree: [{ type: 'file', relPath: 'global.md', name: 'global.md' }],
       }),
     });
-    context.window.orkas.invoke = async (channel: string, payload: any) => {
+    context.window.cogseed.invoke = async (channel: string, payload: any) => {
       if (channel === 'projects.files.tree') {
         expect(payload).toEqual({ projectId: 'p1' });
         return { ok: true, tree: [{ type: 'file', relPath: 'project.md', name: 'project.md' }] };
@@ -652,7 +652,7 @@ describe('agent and skill category tabs', () => {
         tree: [{ type: 'file', relPath: 'global.md', name: 'global.md' }],
       }),
     });
-    context.window.orkas.invoke = async (channel: string) => {
+    context.window.cogseed.invoke = async (channel: string) => {
       if (channel === 'projects.files.tree') projectTreeCalls += 1;
       return { ok: false, error: 'not_found' };
     };

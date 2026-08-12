@@ -4,7 +4,7 @@
 
 **Goal:** Turn the current adapter-style cognition prototype into a Recall-style Skill Asset Center with a stable backend view model and the agreed five-tab renderer: Overview / Skills / Candidates / Reuse Receipts / Assets.
 
-**Architecture:** Keep existing source systems authoritative: `skills`, `memory`, `personal_ontology_*`, `p3394`, `execution-records`, and `evolution`. Add a focused cognition domain layer that normalizes source data into stable view models; IPC remains validation-only; the renderer consumes only cognition IPC shapes. Remove the standalone evolution console frontend, but retain evolution backend services used by skill details, candidate governance, versions, and rollback.
+**Architecture:** Keep existing source systems authoritative: `skills`, `memory`, `personal_ontology_*`, `p3394`, and `execution-records`. Add a focused cognition domain layer that normalizes source data into stable view models; IPC remains validation-only; the renderer consumes only cognition IPC shapes. The old evolution backend was archived with the Meta Skill Engine line. Skills/Cognition retains lightweight skill version history and rollback through `src/main/features/skills/version-store.ts` and `src/main/features/skills/rollback-service.ts`.
 
 **Tech Stack:** Electron main process TypeScript, classic renderer JavaScript/HTML/CSS, `window.orkas.invoke`, Vitest via `npm run test:js`, full verification via `npm test`.
 
@@ -34,8 +34,8 @@ The Skills tab must retain the original skill-library behavior: create, import, 
 - Modify `src/main/features/cognition/dashboard.ts` — calculate Overview counts/warnings from normalized assets, candidates, and receipts.
 - Modify `src/main/features/cognition/skill-summary.ts` — return selected-skill assets, current version, version history, rollback capability, pending candidates, and recent reuse receipts.
 - Modify `src/main/features/cognition/index.ts` — export the domain functions only.
-- Modify `src/main/features/evolution/versions-store.ts` — preserve content snapshots and `canRollback`; normalize legacy records without snapshots as non-rollbackable.
-- Modify `src/main/features/evolution/patch-service.ts` — keep apply and rollback transactional at the feature level; append rollback provenance after a successful write.
+- Modify `src/main/features/skills/version-store.ts` — preserve content snapshots and `canRollback`; read legacy `local/kstar/versions` records as compatibility input.
+- Modify `src/main/features/skills/rollback-service.ts` — keep rollback transactional at the feature level; append rollback provenance after a successful write.
 - Modify `src/main/ipc/index.ts` — validate cognition filters, ids, version strings, and decision payloads; delegate to cognition/evolution features.
 
 ### Renderer
@@ -143,9 +143,8 @@ npm run test:js -- test/main/features/cognition.test.ts test/main/features/evolu
 
 **Files:**
 - Modify `src/main/ipc/index.ts`
-- Modify `src/main/features/evolution/versions-store.ts`
-- Modify `src/main/features/evolution/patch-service.ts`
-- Modify `src/main/features/evolution/index.ts`
+- Modify `src/main/features/skills/version-store.ts`
+- Modify `src/main/features/skills/rollback-service.ts`
 - Modify `test/main/ipc/cognition.test.ts`
 - Modify `test/main/features/evolution/versions-store.test.ts`
 - Modify `test/main/features/evolution/patch-service.test.ts`
@@ -179,7 +178,7 @@ npm run test:js -- test/main/features/cognition.test.ts test/main/ipc/cognition.
 - [ ] Remove the sidebar and topbar entries for the standalone evolution console.
 - [ ] Remove `panel-evolution` from the renderer shell and remove its lazy feature registration.
 - [ ] Route a persisted legacy `evolution` view to `skills` so existing users do not land on a missing panel.
-- [ ] Keep `src/main/features/evolution/` and all evolution IPC needed by the Skills/Cognition domain.
+- [ ] Keep lightweight Skills/Cognition version and rollback services; do not reintroduce standalone evolution IPC.
 - [ ] Run the updated renderer navigation tests and verify no standalone evolution frontend references remain.
 
 Run:

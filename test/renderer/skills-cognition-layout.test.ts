@@ -3,6 +3,10 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 const html = fs.readFileSync(path.join(__dirname, '../../src/renderer/index.html'), 'utf-8');
+const recallCss = [
+  fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf-8'),
+  fs.readFileSync(path.join(__dirname, '../../src/renderer/recall-local.css'), 'utf-8'),
+].join('\n');
 
 function cssBraceDepthAt(source: string, offset: number): number {
   let depth = 0;
@@ -36,16 +40,53 @@ function cssBraceDepthAt(source: string, offset: number): number {
 }
 
 describe('Recall cognition workspace layout', () => {
-  it('exposes the complete Recall workspace without KSTAR, Evolution, or Capability pages', () => {
-    for (const page of ['overview', 'sources', 'captures', 'brain', 'context', 'ontology', 'candidates', 'assets', 'receipts']) {
+  it('keeps Recall navigation focused on four user workflows', () => {
+    for (const page of ['overview', 'captures', 'assets', 'sources']) {
       expect(html).toContain(`data-cognition-page="${page}"`);
       expect(html).toContain(`data-cognition-page-body="${page}"`);
     }
-    for (const excluded of ['kstar', 'evolution', 'capability']) {
+    for (const excluded of ['candidates', 'receipts', 'brain', 'context', 'ontology', 'kstar', 'evolution', 'capability']) {
       expect(html).not.toContain(`data-cognition-page="${excluded}"`);
+      expect(html).not.toContain(`data-cognition-page-body="${excluded}"`);
     }
-    for (const group of ['cognition.nav_flow', 'cognition.nav_structure', 'cognition.nav_governance']) {
-      expect(html).toContain(`data-i18n="${group}"`);
+    expect(html).toContain('id="skills-cognition-capture-review-body"');
+  });
+
+  it('does not ship the removed hidden Recall page implementations', () => {
+    const skills = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
+    const bindings = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills-bindings.js'), 'utf-8');
+
+    for (const removedFunction of [
+      'renderSkillsCognitionBrain',
+      'renderSkillsCognitionContext',
+      'renderSkillsCognitionOntology',
+      'renderSkillsCognitionReceipts',
+      'refreshSkillCognitionSummary',
+    ]) {
+      expect(skills).not.toContain(`function ${removedFunction}`);
+    }
+    for (const removedSelector of [
+      'skills-cognition-brain-body',
+      'skills-cognition-context-body',
+      'skills-cognition-ontology-body',
+      'skills-cognition-receipts-body',
+      'data-recall-context-select',
+      'data-recall-ontology-group',
+      'data-cognition-open-receipt',
+      'data-cognition-rollback-skill',
+    ]) {
+      expect(skills).not.toContain(removedSelector);
+      expect(bindings).not.toContain(removedSelector);
+    }
+    for (const removedStyle of [
+      '.recall-brain-',
+      '.recall-context-',
+      '.recall-ontology-',
+      '.skills-cognition-inline-grid',
+      '.skills-cognition-version-list',
+      '.skills-cognition-detail-meta',
+    ]) {
+      expect(recallCss).not.toContain(removedStyle);
     }
   });
 
@@ -76,7 +117,7 @@ describe('Recall cognition workspace layout', () => {
     expect(boot).toContain("view === 'skills' ? 'panel-skills'");
     expect(boot).toContain("view === 'recall' ? 'panel-recall'");
     expect(boot).toContain("_loadViewFeature('recall', 'recall'");
-    expect(lazy).toMatch(/recall:\s*\[\s*\{ src: '\.\/modules\/skills\.js' \}/);
+    expect(lazy).toMatch(/recall:\s*\[[\s\S]*?\{ src: '\.\/modules\/skills\.js' \}/);
   });
 
   it('wraps the top navigation and pages in one integrated workspace', () => {
@@ -94,7 +135,7 @@ describe('Recall cognition workspace layout', () => {
   });
 
   it('places Recall navigation in a horizontal top bar', () => {
-    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf-8');
+    const css = recallCss;
     expect(css).toMatch(/\.skills-cognition-workspace\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/s);
     expect(css).toMatch(/\.skills-cognition-tabs\s*\{[^}]*display:\s*flex;[^}]*overflow-x:\s*auto;[^}]*border-bottom:/s);
     expect(css).toMatch(/\.skills-cognition-tab-group\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;/s);
@@ -106,56 +147,70 @@ describe('Recall cognition workspace layout', () => {
 
 
   it('keeps the Recall workspace rules outside narrow-screen media queries', () => {
-    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf-8');
+    const css = recallCss;
     const recallRules = css.indexOf('/* Recall cognition console. */');
     expect(recallRules).toBeGreaterThan(0);
     expect(cssBraceDepthAt(css, recallRules)).toBe(0);
   });
 
-  it('uses PRD page semantics for cognition candidates and ability assets', () => {
-    expect(html).toContain('data-i18n="cognition.candidate_review"');
-    expect(html).toContain('data-i18n="cognition.formal_assets"');
-    expect(html).toContain('data-ability-assets-view="list"');
-    expect(html).toContain('data-ability-assets-view="tree"');
-    expect(html).not.toContain('data-ability-assets-view="evidence"');
-    expect(html).toContain('data-ability-assets-view-panel="list"');
-    expect(html).toContain('data-ability-assets-view-panel="tree"');
-    expect(html).not.toContain('data-ability-assets-view-panel="evidence"');
+  it('keeps review inside capture tasks and exposes memory content as one page', () => {
+    expect(html).not.toContain('data-i18n="cognition.candidate_review"');
+    expect(html).toContain('data-i18n="cognition.memory_content"');
+    expect(html).not.toContain('data-ability-assets-view');
+    expect(html).not.toContain('data-ability-assets-view-panel');
+    expect(html).not.toContain('cognition.cognition_tree');
   });
 
 
   it('keeps ability asset status chips compact inside list rows', () => {
-    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf-8');
+    const css = recallCss;
     expect(css).toContain('.ability-asset-list-row .skills-cognition-status');
     expect(css).toContain('align-self: start');
     expect(css).toContain('height: fit-content');
   });
 
+  it('scrolls only the memory list while keeping the detail pane fixed on desktop', () => {
+    const css = recallCss;
+    const desktopStart = css.indexOf('@media (min-width: 901px)');
+    const desktopEnd = css.indexOf('@media (max-width: 900px)', desktopStart);
+    const desktopRules = css.slice(desktopStart, desktopEnd);
+    expect(desktopRules).toContain('#skills-cognition-assets { overflow: hidden; }');
+    expect(desktopRules).toMatch(/\.ability-asset-list-body\s*\{[\s\S]*overflow-y:\s*auto;/);
+    expect(desktopRules).toMatch(/\.ability-asset-detail\s*\{[\s\S]*height:\s*100%;/);
+    expect(desktopRules).toContain('overscroll-behavior: contain');
+  });
+
   it('shows source health and conversation capture next actions in the existing overview', () => {
     const skills = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
     const bindings = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills-bindings.js'), 'utf-8');
-    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf-8');
+    const css = recallCss;
 
-    expect(skills).toContain("window.orkas.invoke('recall.sources.list'");
-    expect(skills).toContain("window.orkas.invoke('recall.captures.list'");
+    expect(skills).toContain("window.cogseed.invoke('recall.sources.list'");
+    expect(skills).toContain("window.cogseed.invoke('recall.captures.list'");
     expect(skills).toContain('skills-cognition-source-row');
     expect(skills).toContain('skills-cognition-capture-row');
-    expect(skills).toContain('data-cognition-page-link="candidates"');
+    expect(skills).toContain('data-cognition-page-link="captures"');
     expect(skills).toContain('data-recall-capture-retry');
     expect(skills).toContain('data-recall-capture-settings');
-    expect(bindings).toContain("window.orkas.invoke('recall.captures.retry'");
+    expect(bindings).toContain("window.cogseed.invoke('recall.captures.retry'");
     expect(bindings).toContain("window.activateSettingsTab('credentials')");
     expect(css).toContain('.skills-cognition-source-state.is-degraded');
+    expect(skills).toContain('skills-cognition-overview');
+    expect(skills).toContain('recall-overview-metrics');
+    expect(skills).toContain('recall-overview-metric');
+    expect(skills).toContain('recall-overview-attention');
+    expect(skills).toContain('recall-overview-activity');
+    expect(skills).toContain('data-cognition-open-asset');
+    expect(skills).toContain('recall-overview-operation-grid');
+    expect(skills).not.toContain('skills-cognition-stat-grid');
+    expect(css).toContain('.recall-overview-pipeline');
   });
 
-  it('provides full source, Brain, Context Pack, and Ontology renderer surfaces', () => {
+  it('does not load internal Brain, Context Pack, or Ontology data for the four-page snapshot', () => {
     const skills = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
-    for (const renderer of ['renderSkillsCognitionSources', 'renderSkillsCognitionBrain', 'renderSkillsCognitionContext', 'renderSkillsCognitionOntology']) {
-      expect(skills).toContain(`function ${renderer}`);
-    }
-    expect(skills).toContain("window.orkas.invoke('recall.projections.list'");
-    expect(skills).toContain("window.orkas.invoke('personalOntology.groups.list'");
-    expect(skills).toContain("window.orkas.invoke('personalOntology.groups.read'");
+    expect(skills).not.toContain("window.cogseed.invoke('recall.projections.list'");
+    expect(skills).not.toContain("window.cogseed.invoke('personalOntology.groups.list'");
+    expect(skills).not.toContain("window.cogseed.invoke('recall.views.list'");
   });
 
   it('ships capture feedback in every renderer locale', () => {
@@ -176,12 +231,27 @@ describe('Recall cognition workspace layout', () => {
         'cognition.pipeline_next_review',
         'cognition.pipeline_next_retry',
         'cognition.pipeline_next_configure',
+        'cognition.overview_metrics',
+        'cognition.overview_active_tasks',
+        'cognition.overview_skill_candidates',
+        'cognition.overview_attention',
+        'cognition.overview_attention_hint',
+        'cognition.overview_model_required',
+        'cognition.overview_failed_tasks',
+        'cognition.overview_source_issues',
+        'cognition.overview_recent_activity',
+        'cognition.overview_activity_capture',
+        'cognition.overview_activity_memory',
+        'cognition.overview_activity_asset',
+        'cognition.overview_activity_empty',
         'cognition.teaching_title',
         'cognition.teaching_pending',
         'cognition.teaching_revoked',
         'cognition.teaching_revoke',
         'cognition.capture_queued',
+        'cognition.capture_waiting',
         'cognition.capture_extracting',
+        'cognition.capture_writing',
         'cognition.capture_review_ready',
         'cognition.capture_no_candidate',
         'cognition.capture_configuration_required',
@@ -193,6 +263,20 @@ describe('Recall cognition workspace layout', () => {
         'cognition.capture_error_model_failed',
         'cognition.capture_error_invalid_model_output',
         'cognition.capture_error_candidate_save_failed',
+        'cognition.capture_error_asset_write_failed',
+        'cognition.capture_error_asset_write_interrupted',
+        'cognition.capture_stage_asset_write',
+        'cognition.capture_review_title',
+        'cognition.capture_review_hint',
+        'cognition.capture_review_empty',
+        'cognition.memory_content',
+        'cognition.generate_skill',
+        'cognition.add_to_skill_library',
+        'cognition.skill_draft_title',
+        'cognition.skill_draft_level_a_passed',
+        'cognition.skill_draft_level_a_failed',
+        'cognition.skill_draft_hint',
+        'cognition.skill_created',
         'cognition.capture_error_unknown',
       ]) expect(messages[key]).toBeTruthy();
     }

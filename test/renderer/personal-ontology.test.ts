@@ -15,7 +15,7 @@ function loadShim(invoke: any) {
   const sandbox: any = {
     console, URL, URLSearchParams, ArrayBuffer, Uint8Array, TextEncoder, ReadableStream, btoa,
     fetch: vi.fn(), createLogger: () => ({ warn() {}, info() {}, error() {} }),
-    window: { orkas: { invoke, stream: () => ({ promise: Promise.resolve(), cancel() {} }) } },
+    window: { cogseed: { invoke, stream: () => ({ promise: Promise.resolve(), cancel() {} }) } },
   };
   sandbox.window.window = sandbox.window;
   vm.createContext(sandbox);
@@ -51,7 +51,7 @@ describe('personal ontology renderer integration', () => {
 
   it("uses Zhang Hao's direct IPC review-panel flow", () => {
     expect(ontology).toContain("_pocInvoke('personalOntology.candidates.list'");
-    expect(ontology).toContain("window.orkas.invoke('personalOntology.candidates.confirm'");
+    expect(ontology).toContain("window.cogseed.invoke('personalOntology.candidates.confirm'");
     expect(ontology).toContain("_pocInvoke('personalOntology.candidates.reject'");
     expect(ontology).toContain("_pocInvoke('personalOntology.groups.create'");
     expect(ontology).toContain('renderDestinationPanel');

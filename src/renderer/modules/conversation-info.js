@@ -245,8 +245,8 @@ const ConversationInfo = (() => {
   }
 
   async function _invokeOrDefault(channel, payload, fallback) {
-    const invoke = window && window.orkas && typeof window.orkas.invoke === 'function'
-      ? window.orkas.invoke.bind(window.orkas)
+    const invoke = window && window.cogseed && typeof window.cogseed.invoke === 'function'
+      ? window.cogseed.invoke.bind(window.cogseed)
       : null;
     if (!invoke) return fallback;
     try {
@@ -1545,7 +1545,7 @@ const ConversationInfo = (() => {
 
   async function _revealEntry(absPath, cidOverride) {
     try {
-      const res = await window.orkas.invoke('workspace.revealPath', _fileActionPayload(absPath, cidOverride));
+      const res = await window.cogseed.invoke('workspace.revealPath', _fileActionPayload(absPath, cidOverride));
       if (!res || !res.ok) {
         await uiAlert(_label('conversation_info.file_reveal_failed', 'Could not show in folder: {reason}', {
           reason: (res && res.error) || 'failed',
@@ -1576,7 +1576,7 @@ const ConversationInfo = (() => {
   async function _addEntryToLibrary(absPath, cidOverride) {
     if (!_canAddEntryToLibrary(absPath)) return;
     try {
-      const res = await window.orkas.invoke('library.importProduced', _fileActionPayload(absPath, cidOverride));
+      const res = await window.cogseed.invoke('library.importProduced', _fileActionPayload(absPath, cidOverride));
       if (!res || !res.ok) throw new Error((res && res.error) || 'failed');
       if (res.scope === 'global' && typeof currentView !== 'undefined' && currentView === 'contexts' && typeof loadContexts === 'function') {
         loadContexts();
@@ -1607,7 +1607,7 @@ const ConversationInfo = (() => {
     if (!ok) return;
 
     try {
-      const res = await window.orkas.invoke('workspace.deletePath', _fileActionPayload(absPath, options.cid));
+      const res = await window.cogseed.invoke('workspace.deletePath', _fileActionPayload(absPath, options.cid));
       if (!res || !res.ok) {
         await uiAlert(_label(isDir ? 'conversation_info.dir_delete_failed' : 'conversation_info.file_delete_failed', 'Could not delete: {reason}', {
           reason: (res && res.error) || 'failed',
@@ -1640,7 +1640,7 @@ const ConversationInfo = (() => {
   async function _openAttachment(name) {
     if (!_cid || !name || typeof openChatFileViewer !== 'function') return;
     try {
-      const res = await window.orkas.invoke('attachments.absPath', { cid: _cid, name });
+      const res = await window.cogseed.invoke('attachments.absPath', { cid: _cid, name });
       if (!res || !res.ok || !res.path) {
         _infoLog.warn('attachment preview resolve failed', { cid: _cid, name, error: res && res.error });
         const message = _label('chat.file_missing_toast', 'The file no longer exists.', { name });
@@ -1718,11 +1718,11 @@ const ConversationInfo = (() => {
           const taskId = mateAction.dataset.mateTaskId || '';
           const requestId = mateAction.dataset.mateRequestId || '';
           if (action === 'abort' && taskId) {
-            void window.orkas.invoke('mate_agent.task.abort', { taskId }).then(() => refresh(_cid));
+            void window.cogseed.invoke('mate_agent.task.abort', { taskId }).then(() => refresh(_cid));
           } else if (action === 'retry' && taskId && requestId) {
-            void window.orkas.invoke('mate_agent.task.retry', { taskId, requestId }).then(() => refresh(_cid));
+            void window.cogseed.invoke('mate_agent.task.retry', { taskId, requestId }).then(() => refresh(_cid));
           } else if (action === 'resume' && taskId && requestId) {
-            void window.orkas.invoke('mate_agent.task.resume', { taskId, requestId, continuation: (_snapshot.mate.session && _snapshot.mate.session.collaboration && _snapshot.mate.session.collaboration.task && _snapshot.mate.session.collaboration.task.title) || 'Resume task.' }).then(() => refresh(_cid));
+            void window.cogseed.invoke('mate_agent.task.resume', { taskId, requestId, continuation: (_snapshot.mate.session && _snapshot.mate.session.collaboration && _snapshot.mate.session.collaboration.task && _snapshot.mate.session.collaboration.task.title) || 'Resume task.' }).then(() => refresh(_cid));
           }
           return;
         }

@@ -206,9 +206,9 @@ describe('local_agents/bridge › auth + skills', () => {
     let envFilePath = '';
     try {
       const cfg = JSON.parse(fs.readFileSync(bridge.mcpConfigPath, 'utf8'));
-      const server = cfg.mcpServers.orkas;
+      const server = cfg.mcpServers.cogseed;
       expect(server.command).toBe(TEST_NODE);
-      expect(server.args[0]).toContain(path.join('bin', 'orkas-bridge.cjs'));
+      expect(server.args[0]).toContain(path.join('bin', 'cogseed-bridge.cjs'));
       expect(JSON.stringify(cfg)).not.toContain(bridge.token);
       expect(JSON.stringify(cfg)).not.toContain(bridge.socketPath);
       expect(server.env.ORKAS_BRIDGE_TOKEN).toBeUndefined();

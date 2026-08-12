@@ -25,9 +25,18 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
+import * as readline from 'node:readline';
 import { createLogger } from '../../logger';
 
 const log = createLogger('local-agents:claude-sessions');
+
+/** Above this size a transcript is read tail-only, to bound memory. */
+const LARGE_TRANSCRIPT_BYTES = 50 * 1024 * 1024;
+
+/** Lines retained from the end of an oversized transcript. Counts raw jsonl
+ *  lines rather than rendered turns — some lines are internal events that
+ *  `parseClaudeTranscript` drops, so this is an upper bound on messages. */
+const MAX_LINES_WHEN_LARGE = 1000;
 
 export interface ClaudeSessionSummary {
   /** Session UUID (the jsonl filename stem). */
@@ -139,4 +148,78 @@ async function _parseSessionSummary(file: string): Promise<ClaudeSessionSummary 
   if (!firstMessage || !timestamp) return null;
 
   return { sessionId, projectPath, firstMessage, timestamp, filePath: file };
+}
+
+/**
+ * Read a single Claude Code session transcript in full (READ-ONLY).
+ *
+ * Unlike `listClaudeSessions` (which reads only the first user message for the
+ * picker), this reads the whole jsonl so the session-import extractor can
+ * summarise it. Still best-effort: a malformed / unreadable file yields an
+ * empty body rather than throwing, and the caller decides how to surface that.
+ *
+ * `filePath` MUST be a path returned by `listClaudeSessions` (i.e. already
+ * inside `~/.claude/projects`). We re-assert containment here as a
+ * path-traversal backstop so a hostile IPC payload can't read arbitrary files.
+ *
+ * Read line-by-line rather than in one slurp so a long conversation can't pin
+ * an unbounded string in the main process. Past `LARGE_TRANSCRIPT_BYTES` only
+ * the most recent `MAX_LINES_WHEN_LARGE` lines are kept and `truncated` is set,
+ * so the caller can say so instead of silently importing a partial history.
+ */
+export async function readClaudeSessionTranscript(
+  filePath: string,
+): Promise<{
+  ok: boolean;
+  body: string;
+  sessionId: string;
+  truncated?: boolean;
+  reason?: string;
+}> {
+  const sessionId = path.basename(filePath, '.jsonl');
+  const projectsRoot = path.join(os.homedir(), '.claude', 'projects');
+  const resolved = path.resolve(filePath);
+  const rootWithSep = projectsRoot.endsWith(path.sep) ? projectsRoot : projectsRoot + path.sep;
+  if (!resolved.startsWith(rootWithSep) || !resolved.endsWith('.jsonl')) {
+    log.warn('rejected transcript read outside projects root', { filePath });
+    return { ok: false, body: '', sessionId, reason: 'out_of_bounds' };
+  }
+
+  let capLines = false;
+  try {
+    capLines = (await fsp.stat(resolved)).size > LARGE_TRANSCRIPT_BYTES;
+  } catch (err) {
+    log.warn('failed to stat session transcript', { filePath, error: String(err) });
+    return { ok: false, body: '', sessionId, reason: 'unreadable' };
+  }
+
+  const lines: string[] = [];
+  let dropped = 0;
+
+  try {
+    const stream = fs.createReadStream(resolved, { encoding: 'utf8' });
+    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    try {
+      for await (const line of rl) {
+        if (!line.trim()) continue;
+        lines.push(line);
+        if (capLines && lines.length > MAX_LINES_WHEN_LARGE) {
+          lines.shift();
+          dropped++;
+        }
+      }
+    } finally {
+      rl.close();
+      stream.destroy();
+    }
+  } catch (err) {
+    log.warn('failed to read session transcript', { filePath, error: String(err) });
+    return { ok: false, body: '', sessionId, reason: 'unreadable' };
+  }
+
+  if (dropped) {
+    log.info('transcript truncated to most recent lines', { sessionId, kept: lines.length, dropped });
+  }
+
+  return { ok: true, body: lines.join('\n'), sessionId, truncated: dropped > 0 };
 }

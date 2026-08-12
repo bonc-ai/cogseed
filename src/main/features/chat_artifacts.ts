@@ -12,7 +12,7 @@
  * Layout: `<uid>/cloud/chat_artifacts/<cid>/<artifactId>/`
  *   index.html               required entry point
  *   <other files...>         siblings (css / js / json / svg / inline assets)
- *   __orkas-meta.json        { title, agentId, createdAt } — written by us;
+ *   __cogseed-meta.json        { title, agentId, createdAt } — written by us;
  *                            `create_artifact` may not supply this name
  * Cloud-synced with the conversation; purged by cid on conversation delete.
  * A *separate* pool from `chat_attachments/` on purpose — attachments are user
@@ -69,12 +69,12 @@ const TEXT_EXTS: ReadonlySet<string> = new Set([
   '.html', '.htm', '.js', '.mjs', '.css', '.json', '.map', '.svg', '.xml', '.txt', '.csv',
 ]);
 
-const META_FILENAME = '__orkas-meta.json';
+const META_FILENAME = '__cogseed-meta.json';
 // Reserved virtual path prefix served by the protocol handler (the runtime
 // bridge script), never read from disk; `create_artifact` rejects files under
 // it so an artifact can't shadow the real bridge.
-export const RESERVED_PREFIX = '__orkas/';
-export const BRIDGE_RELPATH = '__orkas/bridge.js';
+export const RESERVED_PREFIXES = Object.freeze(['__orkas/', '__cogseed/']);
+export const BRIDGE_RELPATH = '__cogseed/bridge.js';
 
 const COMPACTED_HISTORY_MARKERS = [
   '[old tool input string compacted:',
@@ -202,12 +202,12 @@ export function mimeFor(name: string): string {
 // ── Runtime bridge (served at the reserved virtual path) ─────────────────
 //
 // Opt-in: an artifact that wants auto-sizing + a tidy send() helper does
-// `<script src="__orkas/bridge.js"></script>`. Everything still works without
-// it — the app may also `parent.postMessage({__orkasArtifact:true, ...}, '*')`
+// `<script src="__cogseed/bridge.js"></script>`. Everything still works without
+// it — the app may also `parent.postMessage({__cogseedArtifact:true, ...}, '*')`
 // directly.
 export const BRIDGE_JS = `(function(){
   function post(type, extra){
-    try { parent.postMessage(Object.assign({ __orkasArtifact: true, type: type }, extra || {}), '*'); }
+    try { parent.postMessage(Object.assign({ __cogseedArtifact: true, type: type }, extra || {}), '*'); }
     catch (e) {}
   }
   function reportHeight(){
@@ -234,7 +234,7 @@ export const BRIDGE_JS = `(function(){
       setInterval(reportHeight, 1000);
     }
   } catch (e) {}
-  window.orkasArtifact = api;
+  window.cogseedArtifact = api;
 })();
 `;
 
@@ -244,8 +244,8 @@ export const BRIDGE_JS = `(function(){
  * Write a new artifact bundle for (uid, cid, agentId). Validates the file set
  * (must include exactly one top-level `index.html`; per-file + total + count
  * caps; extension allowlist; UTF-8 for utf8-encoded text files; relpath
- * safety; no `__orkas/` or `__orkas-meta.json` clobber), writes atomically
- * (temp dir → rename), and stamps `__orkas-meta.json`.
+ * safety; no `__orkas/` or `__cogseed-meta.json` clobber), writes atomically
+ * (temp dir → rename), and stamps `__cogseed-meta.json`.
  */
 export function createArtifact(
   userId: string,
@@ -280,7 +280,7 @@ export function createArtifact(
     let rel: string;
     try { rel = safeRelPath(f.path); }
     catch (err) { return { ok: false, error: `file path ${JSON.stringify((raw as { path?: unknown }).path)}: ${(err as Error).message}` }; }
-    if (rel === META_FILENAME || rel.startsWith(RESERVED_PREFIX)) {
+    if (rel === META_FILENAME || RESERVED_PREFIXES.some((prefix) => rel.startsWith(prefix))) {
       return { ok: false, error: `file path "${rel}" is reserved` };
     }
     const lc = rel.toLowerCase();
@@ -449,9 +449,9 @@ export function readArtifactMeta(userId: string, cid: string, artifactId: string
 /**
  * Resolve (uid, cid, artifactId, relPath) → an on-disk file to stream, with
  * every guard rail the `chat-app://` protocol handler needs. Empty `relPath`
- * defaults to `index.html`. The reserved virtual path `__orkas/bridge.js` is
+ * defaults to `index.html`. The reserved virtual path `__cogseed/bridge.js` is
  * NOT a disk file — the handler must check for it before calling this and
- * serve `BRIDGE_JS` instead; this function rejects any `__orkas/...` request.
+ * serve `BRIDGE_JS` instead; this function rejects any reserved request.
  *
  * Error codes map to HTTP: 'bad_input'→400, 'forbidden'→403, 'not_found'→404.
  */
@@ -474,8 +474,8 @@ export function resolveArtifactFilePath(
     try { rel = safeRelPath(trimmed); }
     catch (err) { return { ok: false, code: 'bad_input', error: (err as Error).message }; }
   }
-  if (rel.startsWith(RESERVED_PREFIX)) {
-    // Only `__orkas/bridge.js` exists, and the handler serves it before
+  if (RESERVED_PREFIXES.some((prefix) => rel.startsWith(prefix))) {
+    // Only `__cogseed/bridge.js` exists, and the handler serves it before
     // reaching here; anything else under `__orkas/` is nothing.
     return { ok: false, code: 'not_found', error: 'not found' };
   }

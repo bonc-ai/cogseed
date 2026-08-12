@@ -119,7 +119,7 @@ export interface MessagingBinding {
   /**
    * Legacy bindings were keyed only by chat and are never reused for group
    * traffic. New group bindings include the external sender so distinct
-   * people in one group cannot share a Mate Agent conversation.
+   * people in one group cannot share a CogSeed conversation.
    */
   conversationScope: 'direct' | 'group_sender' | 'legacy';
   externalChatId: string;

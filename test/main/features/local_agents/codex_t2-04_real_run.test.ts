@@ -6,7 +6,8 @@
  * real network call. It spawns the actual `codex` binary and drives one
  * real turn end to end, with zero mocking of the backend/protocol layer —
  * satisfying T2-04's "no internal state machine or mock substitute"
- * requirement. Skip in normal CI via `CI` env check below.
+ * requirement. Skip in normal CI and ordinary `npm test`; set
+ * RUN_REAL_CODEX_EVIDENCE=1 to opt in.
  *
  * Run directly with:
  *   npx vitest run test/main/features/local_agents/codex_t2-04_real_run.test.ts
@@ -22,7 +23,7 @@ import { execSync } from 'node:child_process';
 import { codexBackend } from '../../../../src/main/features/local_agents/backends/codex';
 import type { LocalEvent } from '../../../../src/main/features/local_agents/backends/base';
 
-const describeIfLocal = process.env.CI ? describe.skip : describe;
+const describeIfLocal = process.env.CI || process.env.RUN_REAL_CODEX_EVIDENCE !== '1' ? describe.skip : describe;
 
 describeIfLocal('T2-04 evidence: real fresh Codex session', () => {
   it('runs one real thread/start turn against the installed codex CLI and captures real status/log/artifact events', async () => {

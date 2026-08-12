@@ -39,7 +39,34 @@ import { userToolResultsDir } from '../paths.js';
 import { createLogger } from '../logger.js';
 import { listClaudeSessions } from '../features/local_agents/claude_sessions.js';
 import { importClaudeSessions } from '../features/local_agents/import_sessions.js';
+import { listClaudeDesktopSessions } from '../features/local_agents/claude_desktop_sessions.js';
 import { listAgentTypes, listSessions as listAcpSessions } from '../features/local_agents/acp_sessions.js';
+import { importClaudeSession, importClaudeDesktopSession } from '../features/session_import/asset-router.js';
+import { listClaudeSkills, importClaudeSkills, listCodexSkills, importCodexSkills } from '../features/session_import/skill-import.js';
+import {
+  readClaudeMemory,
+  importClaudeMemory,
+  readClaudeMemories,
+  importClaudeMemories,
+  type MemorySourceKey,
+} from '../features/session_import/memory-import.js';
+import {
+  listCodexSessions,
+  readCodexMemory,
+  importCodexMemory,
+  listCodexTasks,
+  importCodexTasks,
+  importCodexSession,
+} from '../features/session_import/codex-import.js';
+import { listOpencodeSessions } from '../features/local_agents/opencode_sessions.js';
+import {
+  readOpencodeMemory,
+  importOpencodeMemory,
+} from '../features/local_agents/opencode_memory.js';
+import {
+  listOpencodeTodos,
+  importOpencodeTodos,
+} from '../features/local_agents/opencode_tasks.js';
 
 const log = createLogger('ipc:local_agents');
 
@@ -132,6 +159,21 @@ export const invokeHandlers = {
   },
 
   /**
+   * List Claude **Desktop** local-agent-mode sessions. Distinct from
+   * `listClaudeSessions`, which reads the CLI's jsonl history: this reads the
+   * desktop app's per-workspace metadata, so entries carry only the opening
+   * message (see `claude_desktop_sessions.ts`). `error: 'permission_denied'`
+   * is passed through so the UI can prompt for access instead of showing an
+   * empty list.
+   */
+  'localAgents.listClaudeDesktopSessions': async () => {
+    const res = await listClaudeDesktopSessions();
+    return res.ok
+      ? { ok: true, sessions: res.sessions }
+      : { ok: false, error: res.error, sessions: [] };
+  },
+
+  /**
    * List ACP transcript sessions from `~/.cogseed/acp-transcripts/`.
    * Returns agent types and sessions for each type. Used in onboarding
    * to detect sessions from ACP-speaking agents (Hermes, Claude Desktop, etc).
@@ -148,6 +190,287 @@ export const invokeHandlers = {
       log.warn('failed to list ACP sessions', { error: String(err) });
       return { ok: false, agentTypes: [], sessionsByType: {} };
     }
+  },
+
+  /**
+   * Import one Claude Code session for the active user: read the transcript,
+   * compress it into a summary seed, materialize a continuable conversation
+   * (appears in the sidebar), and route extracted cognitions into the Recall
+   * candidate pool. `filePath` must be one returned by `listClaudeSessions`;
+   * the reader re-validates containment under `~/.claude/projects`.
+   *
+   * Returns `{ ok, conversationId, cognitions, degraded, reason }`. `degraded`
+   * means the model couldn't produce usable structured output — the session
+   * is still materialized (honestly labeled), just with no cognitions routed.
+   */
+  'sessionImport.importClaudeSession': async (
+    { filePath, titleHint }: { filePath?: unknown; titleHint?: unknown } = {},
+  ) => {
+    if (typeof filePath !== 'string' || !filePath) throw new Error('filePath required');
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importClaudeSession({
+      userId,
+      filePath,
+      titleHint: typeof titleHint === 'string' ? titleHint : undefined,
+    });
+  },
+
+  /**
+   * Import one Claude **Desktop** session by `sessionId` (from
+   * `localAgents.listClaudeDesktopSessions`). Desktop sessions carry only the
+   * opening message, so the materialized conversation is seeded from that one
+   * turn rather than a full transcript.
+   */
+  'sessionImport.importClaudeDesktopSession': async (
+    { sessionId }: { sessionId?: unknown } = {},
+  ) => {
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('sessionId required');
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importClaudeDesktopSession({ userId, sessionId });
+  },
+
+  /**
+   * List importable Claude Code skills from `~/.claude/skills/` (metadata
+   * only). Empty array = Claude unused or no skills. Read-only.
+   */
+  'sessionImport.listClaudeSkills': async () => {
+    const skills = await listClaudeSkills();
+    return { skills };
+  },
+
+  /**
+   * Import a batch of Claude Code skills (by directory name) into the user's
+   * skill library. Each `dirName` must be one returned by
+   * `listClaudeSkills`. Best-effort per skill; already-present skills report
+   * `already_exists` rather than duplicating. Returns per-skill results plus
+   * ok/fail counts.
+   */
+  'sessionImport.importClaudeSkills': async ({ dirNames }: { dirNames?: unknown } = {}) => {
+    if (!Array.isArray(dirNames) || dirNames.some((d) => typeof d !== 'string')) {
+      throw new Error('dirNames must be a string array');
+    }
+    return importClaudeSkills(dirNames as string[]);
+  },
+
+  /**
+   * List Codex skills (READ-ONLY).
+   * Returns [] when `~/.codex/skills/.system` is absent.
+   */
+  'sessionImport.listCodexSkills': async () => {
+    const skills = await listCodexSkills();
+    return { skills };
+  },
+
+  /**
+   * Import a batch of Codex skills (by directory name) into the user's
+   * skill library. Each `dirName` must be one returned by
+   * `listCodexSkills`. Best-effort per skill; already-present skills report
+   * `already_exists` rather than duplicating. Returns per-skill results plus
+   * ok/fail counts.
+   */
+  'sessionImport.importCodexSkills': async ({ dirNames }: { dirNames?: unknown } = {}) => {
+    if (!Array.isArray(dirNames) || dirNames.some((d) => typeof d !== 'string')) {
+      throw new Error('dirNames must be a string array');
+    }
+    return importCodexSkills(dirNames as string[]);
+  },
+
+  /**
+   * Preview the user-level Claude memory (`~/.claude/CLAUDE.md`), READ-ONLY.
+   * Returns an honest `present:false` state when there is no CLAUDE.md.
+   */
+  'sessionImport.readClaudeMemory': async () => {
+    return readClaudeMemory();
+  },
+
+  /**
+   * Import the user-level CLAUDE.md into the shared memory tier (MEMORY.md).
+   * Per-entry idempotent; every write goes through the memory injection scan
+   * and char-limit guard.
+   */
+  'sessionImport.importClaudeMemory': async () => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importClaudeMemory(userId);
+  },
+
+  /**
+   * Preview ALL Claude Code memory sources (READ-ONLY):
+   *   - instructions (`~/.claude/CLAUDE.md`)
+   *   - rules        (`~/.claude/rules/*.md`)
+   *   - automem      (`~/.claude/MEMORY.md`)
+   *   - project-mem  (`~/.claude/projects/<project>/memory/*.md`)
+   *   - history      (`~/.claude/history.jsonl`, best-effort personal facts)
+   *   - workspace-project (`<workspace>/CLAUDE.md` or `<workspace>/.claude/CLAUDE.md`)
+   *   - workspace-local   (`<workspace>/CLAUDE.local.md`)
+   * Absent sources come back with present:false + a reason, never omitted.
+   */
+  'sessionImport.readClaudeMemories': async () => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const { getWorkspacePath } = await import('../features/user_workspace');
+    const workspaceDir = getWorkspacePath(userId);
+    return readClaudeMemories(undefined, workspaceDir);
+  },
+
+  /**
+   * Import selected Claude Code memory sources into the shared memory tier
+   * (MEMORY.md). Per-entry idempotent; every write runs the injection scan and
+   * char-limit guard. `sourceKeys` defaults to all seven when omitted.
+   */
+  'sessionImport.importClaudeMemories': async (
+    { sourceKeys }: { sourceKeys?: MemorySourceKey[] } = {},
+  ) => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const { getWorkspacePath } = await import('../features/user_workspace');
+    const workspaceDir = getWorkspacePath(userId);
+    return importClaudeMemories(userId, sourceKeys, undefined, workspaceDir);
+  },
+
+  /**
+   * List Codex sessions from `~/.codex/sessions/`. Returns metadata only
+   * (first message, timestamp, cwd). Best-effort: missing dir returns [].
+   */
+  'sessionImport.listCodexSessions': async () => {
+    const sessions = await listCodexSessions();
+    return { sessions };
+  },
+
+  /**
+   * Preview Codex config.toml for importable preferences (READ-ONLY).
+   * Returns structured facts about model provider, default model, reasoning
+   * effort, and trusted projects.
+   */
+  'sessionImport.readCodexMemory': async () => {
+    return readCodexMemory();
+  },
+
+  /**
+   * List Codex scheduled tasks from the `automations` table (READ-ONLY).
+   * Empty array = no tasks defined yet (a valid state, not an error).
+   */
+  'sessionImport.listCodexTasks': async () => {
+    const tasks = await listCodexTasks();
+    return { tasks };
+  },
+
+  /**
+   * Import selected Codex scheduled tasks into the in-app auto-task module.
+   * `taskIds` omitted = import all listed tasks. Idempotent (existing
+   * title+content pairs are skipped); unmappable recurrences are reported,
+   * never silently coerced. Returns per-task results with counts.
+   */
+  'sessionImport.importCodexTasks': async ({ taskIds }: { taskIds?: unknown } = {}) => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const ids = Array.isArray(taskIds)
+      ? taskIds.filter((x): x is string => typeof x === 'string')
+      : undefined;
+    return importCodexTasks(userId, ids);
+  },
+
+  /**
+   * Import Codex config.toml preferences into the shared memory tier
+   * (MEMORY.md). Per-entry idempotent; every write goes through the memory
+   * injection scan and char-limit guard.
+   */
+  'sessionImport.importCodexMemory': async () => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importCodexMemory(userId);
+  },
+
+  /**
+   * Import a single Codex session into a CogSeed conversation.
+   * Simpler than Claude import: no extraction/cognition routing, just
+   * materialize the conversation. `filePath` must be a valid JSONL path
+   * from `listCodexSessions`. Returns `{ ok, conversationId, reason }`.
+   */
+  'sessionImport.importCodexSession': async (
+    { filePath, titleHint }: { filePath?: unknown; titleHint?: unknown } = {},
+  ) => {
+    if (typeof filePath !== 'string' || !filePath) throw new Error('filePath required');
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importCodexSession(
+      userId,
+      filePath,
+      typeof titleHint === 'string' ? titleHint : undefined,
+    );
+  },
+
+  /**
+   * List OpenCode sessions from `~/.local/share/opencode/opencode.db`.
+   * Returns session metadata (title, timestamps, message count, model, tokens).
+   * READ-ONLY. Best-effort: missing DB returns empty result.
+   */
+  'sessionImport.listOpencodeSessions': async () => {
+    const result = listOpencodeSessions();
+    if ('error' in result) {
+      return { ok: false, sessions: [], error: result.error };
+    }
+    return { ok: true, sessions: result.sessions, totalCount: result.totalCount };
+  },
+
+  /**
+   * Preview OpenCode config preferences (opencode.json/.jsonc) — READ-ONLY.
+   * Empty config is an honest `present:false` + `reason:'empty'` state.
+   */
+  'sessionImport.readOpencodeMemory': async () => {
+    return readOpencodeMemory();
+  },
+
+  /**
+   * Import OpenCode config preferences into the shared memory tier.
+   * Per-entry idempotent via the memory guard.
+   */
+  'sessionImport.importOpencodeMemory': async () => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importOpencodeMemory(userId);
+  },
+
+  /**
+   * List OpenCode todos (in-session task checklist) — READ-ONLY.
+   * OpenCode has no scheduled-task store; todo is a checklist, and imports
+   * are one-time tasks. Empty array = no todos.
+   */
+  'sessionImport.listOpencodeTodos': async () => {
+    const todos = await listOpencodeTodos();
+    return { todos };
+  },
+
+  /**
+   * Import selected OpenCode todos as one-time tasks in the auto-task module.
+   * `todoIds` omitted = import all. Idempotent per (title, content).
+   */
+  'sessionImport.importOpencodeTodos': async ({ todoIds }: { todoIds?: unknown } = {}) => {
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const ids = Array.isArray(todoIds)
+      ? todoIds.filter((x): x is string => typeof x === 'string')
+      : undefined;
+    return importOpencodeTodos(userId, ids);
+  },
+
+  /**
+   * Insert a welcome message into an imported conversation. Called by the
+   * renderer when the user opens an imported conversation for the first time.
+   * Returns `{ ok, error? }`.
+   */
+  'chats.insertWelcomeMessage': async (
+    { conversationId }: { conversationId?: unknown } = {},
+  ) => {
+    if (typeof conversationId !== 'string' || !conversationId) {
+      throw new Error('conversationId required');
+    }
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    const { insertWelcomeMessage } = await import('../features/chats');
+    return insertWelcomeMessage(userId, conversationId);
   },
 
   /**

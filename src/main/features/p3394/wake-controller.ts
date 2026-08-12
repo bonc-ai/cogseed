@@ -12,7 +12,7 @@ export type DecideWakeRequestResult = { ok: true; request: AgentWakeRequest; dis
 export interface DecideWakeRequestDeps { dispatcher?: WakeDispatcher; validateTarget?: (userId: string, agentId: string) => Promise<boolean> }
 
 async function defaultDispatcher(request: AgentWakeRequest): Promise<WakeDispatcher> {
-  if (request.execution_domain === 'mate') return (await import('../mate_agent_backend/p3394-wake-dispatcher')).mateWakeDispatcher;
+  if (request.execution_domain === 'mate') return (await import('../cogseed_backend/p3394-wake-dispatcher')).mateWakeDispatcher;
   return (await import('../group_chat/p3394-wake-dispatcher')).groupChatWakeDispatcher;
 }
 

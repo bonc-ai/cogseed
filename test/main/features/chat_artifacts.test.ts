@@ -44,7 +44,7 @@ describe('chat_artifacts › createArtifact', () => {
     expect(r.title).toBe('Tip calc');
     const dir = path.join(cidDir(), r.artifactId);
     expect(fs.readFileSync(path.join(dir, 'index.html'), 'utf8')).toContain('<h1>hi</h1>');
-    const meta = JSON.parse(fs.readFileSync(path.join(dir, '__orkas-meta.json'), 'utf8'));
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, '__cogseed-meta.json'), 'utf8'));
     expect(meta.title).toBe('Tip calc');
     expect(meta.agentId).toBe(AGENT);
     expect(typeof meta.createdAt).toBe('string');
@@ -154,10 +154,10 @@ describe('chat_artifacts › createArtifact', () => {
     expect(r.ok).toBe(false);
   });
 
-  it('rejects: reserved __orkas-meta.json / __orkas/ paths', async () => {
+  it('rejects: reserved __cogseed-meta.json / __orkas/ paths', async () => {
     const m = await loadMod();
-    expect((m.createArtifact(UID, CID, AGENT, { files: [{ path: 'index.html', content: 'x' }, { path: '__orkas-meta.json', content: '{}' }] }) as { ok: boolean }).ok).toBe(false);
-    expect((m.createArtifact(UID, CID, AGENT, { files: [{ path: 'index.html', content: 'x' }, { path: '__orkas/bridge.js', content: 'x' }] }) as { ok: boolean }).ok).toBe(false);
+    expect((m.createArtifact(UID, CID, AGENT, { files: [{ path: 'index.html', content: 'x' }, { path: '__cogseed-meta.json', content: '{}' }] }) as { ok: boolean }).ok).toBe(false);
+    expect((m.createArtifact(UID, CID, AGENT, { files: [{ path: 'index.html', content: 'x' }, { path: '__cogseed/bridge.js', content: 'x' }] }) as { ok: boolean }).ok).toBe(false);
   });
 
   it('rejects: disallowed extension', async () => {

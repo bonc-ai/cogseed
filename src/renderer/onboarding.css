@@ -96,8 +96,88 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .cs-btn:disabled{opacity:.5;cursor:not-allowed}
 #cs-onboarding .cs-actions small{color:var(--cs-faint)}
 
-/* ── step 2: detected agents + sessions ── */
+/* ── step 2: LEFT-RIGHT layout (Agent sidebar + Asset content) ── */
 #cs-onboarding .cs-list{border:1px solid var(--cs-line);border-radius:12px;background:rgba(255,255,255,.92);overflow:hidden}
+
+/* Compact hint bar with inline import button */
+#cs-onboarding .cs-import-hint{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  margin:0 0 16px;padding:10px 14px;background:#FFF8E6;border-left:3px solid var(--cs-bud);
+  border-radius:6px;font-size:13px;color:var(--cs-ink-soft)}
+#cs-onboarding .cs-import-hint #cs-import-count{font-weight:700;color:var(--cs-clay)}
+#cs-onboarding .cs-btn-inline{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;
+  background:var(--cs-forest);color:#fff;border:none;border-radius:999px;font-size:13px;font-weight:600;
+  cursor:pointer;transition:all .15s}
+#cs-onboarding .cs-btn-inline:hover{background:var(--cs-forest-deep);transform:translateY(-1px)}
+#cs-onboarding .cs-btn-inline svg{width:14px;height:14px}
+
+/* Give the Agent list a fixed max-height so it scrolls internally when tall,
+ * keeping the whole panel (title + hint + list + actions) within one screen. */
+#cs-onboarding .cs-panel[data-cspanel="2"] .cs-list{max-height:340px;overflow-y:auto}
+
+/* Collapse the asset panes (session list area) shorter so import button stays visible */
+#cs-onboarding .cs-panel[data-cspanel="2"] .cs-asset-panes{max-height:280px}
+
+/* Remove sticky from action bar — now the whole panel fits in one screen. */
+#cs-onboarding .cs-panel[data-cspanel="2"] .cs-actions{margin-top:20px}
+
+/* Remove sticky from action bar — now the whole panel fits in one screen. */
+#cs-onboarding .cs-panel[data-cspanel="2"] .cs-actions{margin-top:20px}
+
+/* Import layout container */
+#cs-onboarding .cs-import-layout{display:flex;flex-direction:column;min-height:500px}
+#cs-onboarding .cs-import-header{padding:14px 16px;background:#F6FBF8;border-bottom:1px solid var(--cs-line);
+  font-size:12.5px;color:var(--cs-ink-soft);font-weight:600}
+#cs-onboarding .cs-import-body{display:grid;grid-template-columns:200px minmax(0,1fr);min-height:0}
+
+/* Left sidebar: Agent list */
+#cs-onboarding .cs-agent-sidebar{border-right:1px solid var(--cs-line);background:#FAFDFB;overflow-y:auto}
+#cs-onboarding .cs-agent-item{display:flex;align-items:center;gap:10px;padding:14px 16px;cursor:pointer;
+  border-bottom:1px solid var(--cs-line-soft);transition:background .15s}
+#cs-onboarding .cs-agent-item:hover{background:#F3FAF6}
+#cs-onboarding .cs-agent-item.active{background:#fff;border-left:3px solid var(--cs-forest);padding-left:13px}
+#cs-onboarding .cs-agent-item .ai-icon{width:32px;height:32px;border-radius:8px;background:var(--cs-forest-weak);
+  display:grid;place-items:center;flex-shrink:0}
+#cs-onboarding .cs-agent-item .ai-icon svg{width:16px;height:16px;color:var(--cs-forest)}
+#cs-onboarding .cs-agent-item.active .ai-icon{background:var(--cs-forest);box-shadow:0 2px 8px rgba(14,159,110,.25)}
+#cs-onboarding .cs-agent-item.active .ai-icon svg{color:#fff}
+#cs-onboarding .cs-agent-item .ai-info{min-width:0;flex:1}
+#cs-onboarding .cs-agent-item .ai-name{font-size:13px;font-weight:650;color:var(--cs-ink);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+#cs-onboarding .cs-agent-item .ai-version{font-size:11px;color:var(--cs-muted);margin-top:2px}
+
+/* Right content: Asset panel — left vertical tabs + right content pane */
+#cs-onboarding .cs-asset-content{background:#fff;overflow-y:auto;padding:16px}
+#cs-onboarding .cs-asset-panel{display:grid;grid-template-columns:160px 1fr;gap:16px;align-items:start}
+
+/* Left column: vertical asset tabs */
+#cs-onboarding .cs-asset-tabs{display:flex;flex-direction:column;gap:6px;position:sticky;top:0}
+#cs-onboarding .cs-asset-tab{display:flex;align-items:center;gap:10px;width:100%;padding:11px 14px;
+  background:#FAFDFB;border:1px solid var(--cs-line);border-radius:10px;cursor:pointer;
+  text-align:left;transition:background .15s,border-color .15s,box-shadow .15s}
+#cs-onboarding .cs-asset-tab:hover{background:#F3FAF6}
+#cs-onboarding .cs-asset-tab.active{background:var(--cs-forest-weak);border-color:var(--cs-forest);
+  box-shadow:inset 3px 0 0 var(--cs-forest)}
+#cs-onboarding .cs-asset-tab .ash-icon{font-size:17px;line-height:1}
+#cs-onboarding .cs-asset-tab .ash-title{font-size:13px;font-weight:700;color:var(--cs-ink);flex:1}
+#cs-onboarding .cs-asset-tab.active .ash-title{color:var(--cs-forest-deep)}
+#cs-onboarding .cs-asset-tab .ash-count{font-size:11.5px;color:var(--cs-muted);font-weight:600}
+
+/* Right column: content panes — only the active one is shown */
+#cs-onboarding .cs-asset-panes{border:1px solid var(--cs-line);border-radius:10px;background:#fff;
+  min-height:200px;max-height:460px;overflow-y:auto}
+#cs-onboarding .cs-asset-section-body{display:none;background:#fff}
+#cs-onboarding .cs-asset-section-body.active{display:block}
+
+/* Session scroll container needs bottom padding so sticky import bar doesn't cover content */
+#cs-onboarding .cs-session-scroll{padding-bottom:20px}
+
+/* Show more button */
+#cs-onboarding .cs-show-more{display:block;width:100%;padding:10px 16px;background:var(--cs-line-soft);
+  border:none;border-top:1px solid var(--cs-line);color:var(--cs-ink-soft);font-size:12px;cursor:pointer;
+  transition:all .15s;text-align:center}
+#cs-onboarding .cs-show-more:hover{background:var(--cs-line);color:var(--cs-ink)}
+
+/* Legacy styles (keep for compatibility) */
 #cs-onboarding .cs-group-head{display:flex;align-items:center;gap:8px;padding:11px 16px 7px;font-size:12px;font-weight:700;
   color:var(--cs-ink);background:#F6FBF8;border-bottom:1px solid var(--cs-line);cursor:pointer;user-select:none}
 #cs-onboarding .cs-group-head svg{width:14px;height:14px;color:var(--cs-forest)}
@@ -113,16 +193,37 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .cs-group-head .g-status.err{color:#8A3A2C;background:var(--cs-clay-weak)}
 #cs-onboarding .cs-sessions-container{transition:max-height .25s ease,opacity .2s ease}
 #cs-onboarding .cs-sessions-container.collapsed{max-height:0;opacity:0;overflow:hidden}
+/* Step 2: per-agent asset sub-sections (会话/技能/记忆/定时任务) */
+#cs-onboarding .cs-asset{border-top:1px solid var(--cs-line-soft)}
+#cs-onboarding .cs-asset:first-child{border-top:none}
+#cs-onboarding .cs-asset-head{display:flex;align-items:center;gap:8px;padding:10px 16px;cursor:pointer;
+  user-select:none;background:#FAFDFB;font-size:12.5px;font-weight:650;color:var(--cs-ink-soft)}
+#cs-onboarding .cs-asset-head:hover{background:#F3FAF6}
+#cs-onboarding .cs-asset-head .a-title{flex:1}
+#cs-onboarding .cs-asset-head .a-toggle{width:15px;height:15px;color:var(--cs-muted);transition:transform .2s}
+#cs-onboarding .cs-asset-head.collapsed .a-toggle{transform:rotate(-90deg)}
+#cs-onboarding .cs-asset-body{transition:max-height .25s ease,opacity .2s ease}
+#cs-onboarding .cs-asset-body.collapsed{max-height:0;opacity:0;overflow:hidden}
 #cs-onboarding .cs-src{display:grid;grid-template-columns:22px 42px minmax(0,1fr) auto;gap:12px;align-items:center;
-  padding:14px 16px;border-bottom:1px solid var(--cs-line);cursor:pointer;transition:background .15s}
+  padding:11px 16px;border-bottom:1px solid var(--cs-line);cursor:pointer;transition:background .15s}
 #cs-onboarding .cs-src:last-child{border-bottom:0}
 #cs-onboarding .cs-src:hover{background:#F7FBF9}
 #cs-onboarding .cs-src.selected{background:#F1F9F5}
+/* Row being imported right now — distillation runs several model turns and can
+   take a while, so give the row a live "working" pulse instead of looking
+   frozen. Cleared to .done on success. */
+#cs-onboarding .cs-src.importing{background:#FFF8E6;animation:cs-import-pulse 1.2s ease-in-out infinite}
+#cs-onboarding .cs-src.done{background:#F1F9F5;opacity:.72}
+@keyframes cs-import-pulse{0%,100%{background:#FFF8E6}50%{background:#FFEFC7}}
 #cs-onboarding .cs-src input{width:17px;height:17px;accent-color:var(--cs-forest)}
-#cs-onboarding .cs-src .s-ico{width:42px;height:42px;border-radius:9px;background:var(--cs-forest-weak);display:grid;place-items:center}
-#cs-onboarding .cs-src .s-ico svg{width:20px;height:20px;color:var(--cs-forest)}
-#cs-onboarding .cs-src strong{display:block;font-size:13.5px}
-#cs-onboarding .cs-src small{display:block;margin-top:3px;color:var(--cs-muted);font-size:11.5px;line-height:1.5}
+#cs-onboarding .cs-src .s-ico{width:38px;height:38px;border-radius:9px;background:var(--cs-forest-weak);display:grid;place-items:center}
+#cs-onboarding .cs-src .s-ico svg{width:19px;height:19px;color:var(--cs-forest)}
+#cs-onboarding .cs-src>div{min-width:0}
+/* Title: single line, ellipsis on overflow */
+#cs-onboarding .cs-src strong{display:block;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Description: clamp to 2 lines, ellipsis on overflow */
+#cs-onboarding .cs-src small{display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;
+  overflow:hidden;margin-top:2px;color:var(--cs-muted);font-size:11.5px;line-height:1.45}
 /* honest empty / failure states — no fabricated data */
 #cs-onboarding .cs-state{padding:16px;font-size:12.5px;color:var(--cs-muted);line-height:1.6;background:#fff;
   border-bottom:1px solid var(--cs-line)}
@@ -163,7 +264,8 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .cs-cand-head b{font-size:13.5px}
 #cs-onboarding .cs-cand .cs-type{font-family:var(--cs-mono);font-size:9.5px;font-weight:700;letter-spacing:.08em;color:var(--cs-forest-deep);
   background:var(--cs-forest-weak);border-radius:5px;padding:2px 8px}
-#cs-onboarding .cs-cand .cs-meta{margin-top:5px;color:var(--cs-muted);font-size:11.5px;line-height:1.6}
+#cs-onboarding .cs-cand .cs-meta{display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;
+  overflow:hidden;margin-top:5px;color:var(--cs-muted);font-size:11.5px;line-height:1.5}
 #cs-onboarding .cs-cand .cs-src-line{margin-top:6px;font-family:var(--cs-mono);font-size:10px;color:var(--cs-faint)}
 #cs-onboarding .cs-extract-progress{padding:16px;text-align:center;color:var(--cs-forest-deep);font-size:12.5px}
 
@@ -173,5 +275,85 @@ body.cs-onboarding-active .app-container{display:none !important}
   box-shadow:0 10px 28px rgba(16,65,46,.3);opacity:0;pointer-events:none;transition:all .2s;
   font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif}
 #cs-ob-toast.show{opacity:1;transform:translate(-50%,0)}
+
+/* Scrollable session container (step 2) */
+/* Session scroll area — shorter so sticky import bar fits */
+#cs-onboarding .cs-session-scroll{max-height:240px;overflow-y:auto;overflow-x:hidden}
+#cs-onboarding .cs-session-scroll::-webkit-scrollbar{width:8px}
+#cs-onboarding .cs-session-scroll::-webkit-scrollbar-track{background:transparent}
+#cs-onboarding .cs-session-scroll::-webkit-scrollbar-thumb{background:var(--cs-line);border-radius:4px}
+#cs-onboarding .cs-session-scroll::-webkit-scrollbar-thumb:hover{background:var(--cs-muted)}
+
+/* Session import action bar — now sticky at bottom so always visible */
+#cs-onboarding .cs-import-bar{position:sticky;bottom:20px;display:flex;flex-direction:column;gap:6px;
+  padding:14px 16px;border-top:1px solid var(--cs-line);background:#fff;z-index:2;
+  max-height:200px;overflow-y:auto;margin-bottom:16px}
+#cs-onboarding .cs-import-btn{align-self:flex-start;display:inline-flex;align-items:center;gap:7px;
+  padding:9px 18px;border-radius:var(--cs-radius);background:var(--cs-grad);color:#fff;font-weight:650;font-size:12.5px}
+#cs-onboarding .cs-import-btn:hover{background:var(--cs-forest-deep)}
+#cs-onboarding .cs-import-btn:disabled{opacity:.5;cursor:not-allowed}
+#cs-onboarding .cs-import-result{font-size:12px;color:var(--cs-muted);line-height:1.6;margin-top:6px}
+#cs-onboarding .cs-import-lines{margin-top:8px;display:flex;flex-direction:column;gap:4px}
+#cs-onboarding .cs-import-lines>div{padding:6px 10px;border-radius:var(--cs-radius);background:var(--cs-line-soft);font-size:11.5px;color:var(--cs-ink-soft)}
+
+/* Memory: four sources, each selectable */
+#cs-onboarding .cs-mem-sources{display:flex;flex-direction:column;gap:8px;padding:4px 16px 0}
+#cs-onboarding .cs-mem-source{border:1px solid var(--cs-line);border-radius:var(--cs-radius);padding:10px 12px}
+#cs-onboarding .cs-mem-source.absent{opacity:.6}
+#cs-onboarding .cs-mem-src-head{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px}
+#cs-onboarding .cs-mem-source.absent .cs-mem-src-head{cursor:default}
+#cs-onboarding .cs-mem-src-label{font-weight:600;color:var(--cs-ink)}
+#cs-onboarding .cs-mem-src-meta{margin-left:auto;font-size:11.5px;color:var(--cs-ink-soft)}
+#cs-onboarding .cs-mem-absent{color:var(--cs-ink-soft)}
+
+/* Show-more toggle for sessions/skills (default show 3, collapse rest) */
+#cs-onboarding .cs-toggle-more{margin:8px 16px 0;padding:6px 12px;background:var(--cs-line-soft);border:1px solid var(--cs-line);
+  border-radius:var(--cs-radius);font-size:11.5px;color:var(--cs-ink-soft);cursor:pointer;transition:all .15s}
+#cs-onboarding .cs-toggle-more:hover{background:var(--cs-line);color:var(--cs-ink)}
+
+/* Step 1a: AI team connect — provider tags */
+/* Step 1: connect AI team — one row per agent */
+/* Team rows reuse .cs-src but have NO checkbox (3 children: icon / name /
+   right-actions), so the 4-column .cs-src grid would shove the name into the
+   42px icon slot and truncate it to "Cla…". Override with a matching 3-column
+   template: icon / flexible-name / auto actions. */
+#cs-onboarding .cs-team-row{grid-template-columns:42px minmax(0,1fr) auto}
+#cs-onboarding .cs-team-row .cs-team-right{display:flex;align-items:center;gap:10px}
+#cs-onboarding .cs-team-connect{padding:7px 16px;font-size:12px}
+#cs-onboarding .cs-team-connect.done{background:var(--cs-forest-weak);color:var(--cs-forest-deep);cursor:default}
+#cs-onboarding .cs-team-connect.done:hover{background:var(--cs-forest-weak)}
+
+/* ── New layout: group by ASSET TYPE (not by agent) ── */
+#cs-onboarding .cs-detected-summary{display:flex;align-items:center;gap:12px;padding:14px 16px;background:#F6FBF8;
+  border-bottom:1px solid var(--cs-line);flex-wrap:wrap}
+#cs-onboarding .cs-summary-label{font-size:12.5px;font-weight:650;color:var(--cs-ink-soft)}
+#cs-onboarding .cs-summary-agents{display:flex;gap:10px;flex-wrap:wrap}
+#cs-onboarding .cs-detected-agent{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;
+  border-radius:20px;background:#fff;border:1px solid var(--cs-line);font-size:12px;color:var(--cs-ink);font-weight:600}
+#cs-onboarding .cs-detected-agent svg{width:14px;height:14px;color:var(--cs-forest)}
+
+/* Asset group (会话/技能/记忆/定时任务) */
+#cs-onboarding .cs-asset-group{border-top:1px solid var(--cs-line)}
+#cs-onboarding .cs-asset-group:first-of-type{border-top:none}
+#cs-onboarding .cs-asset-group-head{display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:12px;
+  align-items:center;padding:14px 16px;background:#FAFDFB;cursor:pointer;user-select:none;transition:background .15s}
+#cs-onboarding .cs-asset-group-head:hover{background:#F3FAF6}
+#cs-onboarding .cs-asset-group-head .ag-icon{font-size:20px;line-height:1}
+#cs-onboarding .cs-asset-group-head .ag-title{font-size:14px;font-weight:700;color:var(--cs-ink)}
+#cs-onboarding .cs-asset-group-head .ag-desc{font-size:12px;color:var(--cs-muted);margin-top:2px}
+#cs-onboarding .cs-asset-group-head .ag-toggle{width:16px;height:16px;color:var(--cs-muted);transition:transform .2s}
+#cs-onboarding .cs-asset-group-head.collapsed .ag-toggle{transform:rotate(-90deg)}
+#cs-onboarding .cs-asset-group-body{background:#fff;transition:max-height .25s ease,opacity .2s ease}
+#cs-onboarding .cs-asset-group-body.collapsed{max-height:0;opacity:0;overflow:hidden}
+
+/* Agent section under each asset group */
+#cs-onboarding .cs-agent-section{border-top:1px solid var(--cs-line-soft)}
+#cs-onboarding .cs-agent-section:first-child{border-top:none}
+#cs-onboarding .cs-agent-section-head{display:flex;align-items:center;gap:10px;padding:10px 16px;
+  background:#F9FCFA;border-bottom:1px solid var(--cs-line-soft)}
+#cs-onboarding .cs-agent-section-head .as-label{font-size:12.5px;font-weight:650;color:var(--cs-ink)}
+#cs-onboarding .cs-agent-section-head .as-path{font-family:var(--cs-mono);font-size:10px;color:var(--cs-faint);
+  margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px}
+#cs-onboarding .cs-agent-section-body{background:#fff}
 
 @media (prefers-reduced-motion:reduce){#cs-onboarding *,#cs-ob-toast{animation:none !important;transition:none !important}}

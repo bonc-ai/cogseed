@@ -61,7 +61,7 @@ function loadHarness(dialogResult: DialogResult, invokeImpl?: (channel: string, 
           mode: normalizedResult.mode || arg.currentMode,
         };
       }),
-      orkas: {
+      cogseed: {
         invoke: vi.fn(async (channel: string, payload: any) => {
           invokeCalls.push({ channel, payload });
           if (invokeImpl) return invokeImpl(channel, payload);

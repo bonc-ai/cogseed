@@ -199,7 +199,7 @@ describe('cognition feature aggregate layer', () => {
   it('skill summary exposes version history rollback availability', async () => {
     const users = await import('../../../src/main/features/users');
     users.activateUser(UID);
-    const { appendSkillVersion } = await import('../../../src/main/features/evolution/versions-store');
+    const { appendSkillVersion } = await import('../../../src/main/features/skills/version-store');
     const cognition = await import('../../../src/main/features/cognition');
 
     await appendSkillVersion(UID, 'skill-a', { version: '0.1.0', note: 'legacy' });

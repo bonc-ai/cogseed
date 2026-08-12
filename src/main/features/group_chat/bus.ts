@@ -75,6 +75,7 @@ import {
   type ChatMessageReference,
   type GroupMessageFailureKind,
   type MarketplaceInstallRequest,
+  type RecallMessageCitation,
   type WakeRequestSummary,
 } from "./visibility";
 import {
@@ -197,7 +198,11 @@ import { P3394Controller } from "../p3394/controller";
 import { authoritativeSessionSource } from "../p3394/session-source";
 import { EpochStore } from "../p3394/epoch-store";
 import { SenderEpochStore } from "../p3394/sender-epoch-store";
-import { buildConfirmedProjectionPromptBlock } from "../recall/prompt-injection";
+import {
+  buildRecallTurnPromptContext,
+  type RecallPromptCitation,
+} from "../recall/prompt-injection";
+import { recordRecallUsage } from "../recall/usage-service";
 
 const log = createLogger("group_chat.bus");
 
@@ -1877,6 +1882,7 @@ export interface EnqueueParams {
   use_selections?: ChatUseSelection[];
   references?: ChatMessageReference[];
   recall_projection_card?: { projectionId: string };
+  recall_citations?: RecallMessageCitation[];
   kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
   produced?: string[];
   form?: ChatFormPayload;
@@ -2415,6 +2421,9 @@ async function _enqueueBody(
       ? { references: params.references }
       : {}),
     ...(params.recall_projection_card ? { recall_projection_card: params.recall_projection_card } : {}),
+    ...(params.recall_citations && params.recall_citations.length
+      ? { recall_citations: params.recall_citations }
+      : {}),
     ...(params.kstar_review_card ? { kstar_review_card: params.kstar_review_card } : {}),
     ...(params.produced && params.produced.length
       ? { produced: params.produced }
@@ -3797,14 +3806,24 @@ async function runActorTurnBody(
     }
   }
 
-  // Confirmed Recall ability assets are host-owned context. They are read
-  // after the role prompt is assembled so user-confirmed projections enter the
-  // real model call without becoming editable task prose.
-  try {
-    const confirmedAbilityAssets = await buildConfirmedProjectionPromptBlock(uid, cid);
-    if (confirmedAbilityAssets) systemPrompt = `${systemPrompt}\n\n${confirmedAbilityAssets}`;
-  } catch (error) {
-    log.warn(`confirmed ability asset prompt injection failed cid=${cid}: ${(error as Error).message}`);
+  // Recall is host-owned model context. CLI agents do not consume this system
+  // prompt path, so they must not receive or later claim Recall citations.
+  let recallCitations: RecallPromptCitation[] = [];
+  if (!cliAgent) {
+    try {
+      const recallContext = await buildRecallTurnPromptContext(uid, {
+        cid,
+        taskRunId: item.turnId,
+        taskText: String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000),
+        ...(turnProjectId ? { workspaceId: turnProjectId } : {}),
+      });
+      if (recallContext.promptBlock) {
+        systemPrompt = `${systemPrompt}\n\n${recallContext.promptBlock}`;
+        recallCitations = recallContext.citations;
+      }
+    } catch (error) {
+      log.warn(`Recall prompt injection failed cid=${cid}: ${(error as Error).message}`);
+    }
   }
 
   // Streaming.
@@ -5069,6 +5088,20 @@ async function runActorTurnBody(
   let persistedMsg: GroupMessage | null = null;
   if (outcome.kind === "persist") {
     const tailProcessItems = processItems.slice(segState.processStart);
+    const persistedRecallCitations: RecallMessageCitation[] = (
+      !outcome.failureKind && !errText && !aborted
+        ? recallCitations
+        : []
+    ).map((citation) => ({
+      asset_id: citation.assetId,
+      title: citation.title,
+      type: citation.type,
+      version: citation.version,
+      scope: citation.scope,
+      projection_id: citation.projectionId,
+      ...(citation.matchScore !== undefined ? { match_score: citation.matchScore } : {}),
+      match_method: citation.matchMethod,
+    }));
     persistedMsg = await enqueue({
       uid,
       cid,
@@ -5106,6 +5139,9 @@ async function runActorTurnBody(
       ...(turnMarketplaceRequests.length
         ? { marketplace_requests: turnMarketplaceRequests }
         : {}),
+      ...(persistedRecallCitations.length
+        ? { recall_citations: persistedRecallCitations }
+        : {}),
       ...(tailProcessItems.length ? { process: tailProcessItems } : {}),
       // Final segment index when this turn was split at visible-dispatch
       // boundaries; lets the renderer finalize the last per-segment placeholder.
@@ -5126,6 +5162,22 @@ async function runActorTurnBody(
         ? { kstarOutcomeStatus: actorRunStatus }
         : {}),
     });
+    if (persistedRecallCitations.length) {
+      const usageWrites = await Promise.allSettled(persistedRecallCitations.map((citation) => recordRecallUsage(uid, {
+        assetId: citation.asset_id,
+        assetVersion: citation.version,
+        taskRunId: item.turnId,
+        projectionId: citation.projection_id,
+        messageId: persistedMsg.id,
+        ...(turnProjectId ? { workspaceId: turnProjectId } : {}),
+        boundary: 'real',
+        outcome: 'injected',
+      })));
+      const failedUsageWrites = usageWrites.filter((result) => result.status === 'rejected');
+      if (failedUsageWrites.length) {
+        log.warn(`Recall usage persistence partially failed cid=${cid} failed=${failedUsageWrites.length}`);
+      }
+    }
     await registerFinalOutputResources(outcome.produced || []);
   } else if (outcome.kind === "silent" && actor.kind !== "worker") {
     // outcome=silent → bus is NOT going to enqueue a message for this turn.

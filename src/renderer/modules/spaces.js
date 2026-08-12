@@ -39,7 +39,7 @@
 
   async function _invoke(channel, payload) {
     try {
-      const res = await window.orkas.invoke(channel, payload || {});
+      const res = await window.cogseed.invoke(channel, payload || {});
       return res || {};
     } catch (err) {
       return { error: (err && err.message) || String(err) };

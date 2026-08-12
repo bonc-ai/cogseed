@@ -503,8 +503,8 @@
     bindControls();
     const generate = async () => {
       try {
-        if (!window.orkas || typeof window.orkas.invoke !== 'function') throw new Error(translate('cognition.capture.generation_failed', '认知草稿生成失败，请稍后重试。'));
-        const result = await window.orkas.invoke('cognition.capture.draft', { conversationId, messageId });
+        if (!window.cogseed || typeof window.cogseed.invoke !== 'function') throw new Error(translate('cognition.capture.generation_failed', '认知草稿生成失败，请稍后重试。'));
+        const result = await window.cogseed.invoke('cognition.capture.draft', { conversationId, messageId });
         if (closed || !rendered.isConnected) return;
         if (!result || result.ok === false) throw new Error(String(result?.error || translate('cognition.capture.generation_failed', '认知草稿生成失败，请稍后重试。')));
         if (result.status === 'not_reusable') {

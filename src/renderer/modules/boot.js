@@ -1,7 +1,10 @@
 // ─── Boot ─────────────────────────────────────────────────────────────────
 const _bootLog = createLogger('boot');
 async function initAuth() {
-  bootApp();
+  bootApp().catch((err) => {
+    console.error('[BOOT FATAL] bootApp failed:', err);
+    _bootLog.error('bootApp failed', { error: (err && err.message) || String(err), stack: err && err.stack });
+  });
 }
 
 // ─── Boot performance guardrails ────────────────────────────────────────────
@@ -39,7 +42,7 @@ function _reportBootUserActivity() {
   const now = Date.now();
   if (now - _lastBootActivityReportAt < 1000) return;
   _lastBootActivityReportAt = now;
-  try { window.orkas?.reportUserActivity?.(); } catch (_) {}
+  try { window.cogseed?.reportUserActivity?.(); } catch (_) {}
 }
 for (const eventName of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
   window.addEventListener(eventName, _reportBootUserActivity, { capture: true, passive: true });
@@ -132,11 +135,19 @@ async function bootApp() {
   // It reads the machine-local onboarding marker and only lifts the overlay
   // on a device that hasn't completed it yet. Runs after the last view is
   // restored so the app is fully painted underneath the overlay.
+  console.log('[BOOT DEBUG] Checking window.csOnboarding:', window.csOnboarding);
   if (window.csOnboarding && typeof window.csOnboarding.maybeStart === 'function') {
+    console.log('[BOOT DEBUG] Calling window.csOnboarding.maybeStart()');
     Promise.resolve(window.csOnboarding.maybeStart()).catch((err) => {
+      console.log('[BOOT DEBUG] onboarding maybeStart failed:', err);
       _bootLog.warn('onboarding maybeStart failed', { error: (err && err.message) || String(err) });
     });
+  } else {
+    console.log('[BOOT DEBUG] window.csOnboarding not available or maybeStart not a function');
   }
+
+  // Interactive tour is started by onboarding.js after completion
+  // (removed duplicate auto-start to avoid "tour already running" conflict)
   if (typeof _consumePendingTaskNotificationConversation === 'function') {
     _consumePendingTaskNotificationConversation();
   }
@@ -178,9 +189,9 @@ async function bootApp() {
 // grids to expose builtin ⋯ menu (edit / delete) and the "promote to builtin"
 // item on custom cards.
 async function _stampSettingsVersion() {
-  if (!window.orkas || typeof window.orkas.env !== 'function') return;
+  if (!window.cogseed || typeof window.cogseed.env !== 'function') return;
   try {
-    const env = await window.orkas.env();
+    const env = await window.cogseed.env();
     if (env && env.isDev) document.body.classList.add('is-dev');
   } catch (_) { /* ignore — non-critical */ }
 }
@@ -263,7 +274,6 @@ function _loadViewFeature(feature, view, run) {
 function _lazyFeaturePanel(view) {
   const panelId = view === 'memory' ? 'panel-memory'
     : view === 'skills' ? 'panel-skills'
-    : view === 'evolution' ? 'panel-evolution'
     : view === 'recall' ? 'panel-recall'
     : view === 'personal-ontology' ? 'panel-personal-ontology'
     : view === 'spaces' ? 'panel-spaces'
@@ -340,6 +350,7 @@ async function initUser() {
 // ─── View routing ───
 
 function setView(view, cid, opts = {}) {
+  if (view === 'evolution') view = 'skills';
   if (currentView !== view || (view === 'conversation' && currentCid !== cid)) {
     _bootLog.info('view change', { view, cid: cid || undefined });
   }
@@ -356,8 +367,7 @@ function setView(view, cid, opts = {}) {
                 : view === 'recall' ? 'panel-recall'
                 : view === 'connectors' ? 'panel-connectors'
                 : view === 'contexts' ? 'panel-contexts'
-                : view === 'evolution' ? 'panel-evolution'
-                : view === 'personal-ontology' ? 'panel-personal-ontology'
+                            : view === 'personal-ontology' ? 'panel-personal-ontology'
                 : view === 'spaces' ? 'panel-spaces'
                 : view === 'settings' ? 'panel-settings'
                 : view === 'memory' ? 'panel-memory'
@@ -373,8 +383,6 @@ function setView(view, cid, opts = {}) {
   document.getElementById('skills-btn').classList.toggle('active', view === 'skills');
   document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall');
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connectors');
-  document.getElementById('contexts-btn')?.classList.toggle('active', view === 'contexts');
-  document.getElementById('evolution-btn')?.classList.toggle('active', view === 'evolution');
   document.getElementById('personal-ontology-btn')?.classList.toggle('active', view === 'personal-ontology');
   document.getElementById('spaces-btn')?.classList.toggle('active', view === 'spaces');
   document.getElementById('settings-btn')?.classList.toggle('active', view === 'settings');
@@ -528,13 +536,6 @@ function setView(view, cid, opts = {}) {
         if (typeof loadAutoList === 'function') loadAutoList(true);
       });
     });
-  } else if (view === 'evolution') {
-    currentCid = null;
-    _deferSidebarNavWork('evolution-tab-load', () => {
-      _loadViewFeature('evolution', 'evolution', () => {
-        if (typeof renderEvolutionConsole === 'function') renderEvolutionConsole();
-      });
-    });
   } else if (view === 'personal-ontology') {
     currentCid = null;
     _deferSidebarNavWork('personal-ontology-tab-load', () => {
@@ -574,3 +575,6 @@ function setView(view, cid, opts = {}) {
   }
   if (typeof renderProjectsSection === 'function') renderProjectsSection();
 }
+
+// Expose setView to window for interactive tour
+window.setView = setView;

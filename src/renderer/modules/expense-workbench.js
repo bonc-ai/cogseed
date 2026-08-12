@@ -69,7 +69,7 @@
     target.hidden = false;
     render(agentId, null);
     try {
-      const response = await window.orkas.invoke('expenseAgent.status', { agent_id: agentId });
+      const response = await window.cogseed.invoke('expenseAgent.status', { agent_id: agentId });
       if (!response || response.ok !== true) throw new Error('status_failed');
       render(agentId, response.result || response);
     } catch (_) {

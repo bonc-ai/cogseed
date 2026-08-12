@@ -38,10 +38,23 @@ function _projectUiIconHtml(name, className) {
 // `_skillsCache` patterns. `null` = not yet fetched.
 let _projectsCache = null;
 
+// Space (工作空间/角色) metadata, keyed by space_id → { name, icon }. Projects
+// carry a `space_id`; we group them under their space header in the sidebar so
+// the "角色 → 工作空间 → 会话" hierarchy the user picks in onboarding is
+// actually visible, not flattened into a bare project list. `null` = unfetched.
+let _spacesCache = null;
+
 // Per-project expand/collapse state, persisted across sessions so the user's
 // layout sticks. Default: collapsed.
 const _PROJECTS_EXPANDED_KEY = 'sidebar.projectExpanded';
 let _projectsExpanded = {};
+
+// Per-space expand/collapse for the sidebar group headers. Default: expanded,
+// so a freshly-created role workspace shows its conversations right away
+// instead of hiding them behind a collapsed header (which would look like the
+// import "disappeared").
+const _SPACES_EXPANDED_KEY = 'sidebar.spaceExpanded';
+let _spacesExpanded = {};
 
 function _loadProjectsExpanded() {
   try {
@@ -52,12 +65,27 @@ function _loadProjectsExpanded() {
 function _saveProjectsExpanded() {
   try { localStorage.setItem(_PROJECTS_EXPANDED_KEY, JSON.stringify(_projectsExpanded)); } catch (_) {}
 }
+function _loadSpacesExpanded() {
+  try {
+    const raw = localStorage.getItem(_SPACES_EXPANDED_KEY);
+    if (raw) _spacesExpanded = JSON.parse(raw) || {};
+  } catch (_) { _spacesExpanded = {}; }
+}
+function _saveSpacesExpanded() {
+  try { localStorage.setItem(_SPACES_EXPANDED_KEY, JSON.stringify(_spacesExpanded)); } catch (_) {}
+}
+// A space header defaults to expanded unless the user explicitly collapsed it.
+function _isSpaceExpanded(sid) {
+  return _spacesExpanded[sid] !== false;
+}
 _loadProjectsExpanded();
+_loadSpacesExpanded();
 
 // In-flight inline-create / inline-rename state. Only one editing row at a
 // time across the whole sidebar.
 let _projectsInlineCreate = false;
 let _projectsInlineRenamePid = null;
+let _spaceInlineCreateSid = null;  // space_id when creating a project under a space
 
 // ── Public API: cache + render ──────────────────────────────────────────
 
@@ -66,12 +94,24 @@ async function loadProjects(forceRefresh) {
     renderProjectsSection();
     return _projectsCache;
   }
+  // Projects and spaces load together — the sidebar groups projects under
+  // their space, so it needs both. `spaces.list` may fail or be empty (user
+  // never made a workspace); that's fine, we just render ungrouped.
   try {
-    const res = await window.orkas.invoke('projects.list', {});
-    _projectsCache = (res && res.ok && Array.isArray(res.projects)) ? res.projects : [];
+    const [projRes, spaceRes] = await Promise.all([
+      window.cogseed.invoke('projects.list', {}),
+      window.cogseed.invoke('spaces.list', {}).catch(() => null),
+    ]);
+    _projectsCache = (projRes && projRes.ok && Array.isArray(projRes.projects)) ? projRes.projects : [];
+    const spaceList = (spaceRes && Array.isArray(spaceRes.spaces)) ? spaceRes.spaces : [];
+    _spacesCache = {};
+    spaceList.forEach((s) => {
+      if (s && s.space_id) _spacesCache[s.space_id] = { name: s.name || '', icon: s.icon || '' };
+    });
   } catch (err) {
     _projectsLog.warn('load projects failed', err);
     _projectsCache = [];
+    _spacesCache = {};
   }
   renderProjectsSection();
   return _projectsCache;
@@ -137,7 +177,32 @@ function renderProjectsSection() {
   if (_projectsInlineCreate) {
     rows.push(_renderInlineCreateRow());
   }
+
+  // Group projects by their space. Projects that belong to a known space are
+  // nested under a collapsible space header (角色/工作空间); projects with no
+  // space (or a dangling space_id) render flat as before. This surfaces the
+  // "角色 → 工作空间 → 会话" hierarchy the user sets up in onboarding.
+  const spaces = _spacesCache || {};
+  const grouped = new Map(); // space_id → project[]
+  const ungrouped = [];
   for (const p of projects) {
+    const sid = p && p.space_id;
+    if (sid && spaces[sid]) {
+      if (!grouped.has(sid)) grouped.set(sid, []);
+      grouped.get(sid).push(p);
+    } else {
+      ungrouped.push(p);
+    }
+  }
+
+  // Space groups first (stable by space name), then any ungrouped projects.
+  const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+  const spaceIds = Array.from(grouped.keys()).sort((a, b) =>
+    collator.compare(spaces[a].name || '', spaces[b].name || '') || a.localeCompare(b));
+  for (const sid of spaceIds) {
+    rows.push(_renderSpaceGroup(sid, spaces[sid], grouped.get(sid), byPid));
+  }
+  for (const p of ungrouped) {
     rows.push(_renderProjectRow(p, byPid.get(p.project_id) || []));
   }
   container.innerHTML = rows.join('');
@@ -159,6 +224,69 @@ function _renderInlineCreateRow() {
              placeholder="${placeholder}" autocomplete="off" spellcheck="false" />
     </div>
   `;
+}
+
+// Inline-create row for a project under a specific space. Visually nested
+// inside the space-group-children, same style as _renderInlineCreateRow but
+// with a data-space-create attribute so the handler knows which space to bind.
+function _renderSpaceInlineCreateRow(sid) {
+  const placeholder = escapeHtml(t('sidebar.project_create_placeholder'));
+  const safeSid = escapeHtml(sid);
+  return `
+    <div class="project-row project-row-create" data-space-create="${safeSid}">
+      <span class="project-icon">${_projectUiIconHtml('folder', 'project-folder-icon')}</span>
+      <input type="text" class="project-rename-input" id="space-project-create-input"
+             placeholder="${placeholder}" autocomplete="off" spellcheck="false" />
+    </div>
+  `;
+}
+
+// A collapsible space (角色/工作空间) header with its projects nested inside.
+// The header is a sibling of top-level project rows; its children reuse the
+// exact same _renderProjectRow markup so project behavior (open, expand,
+// rename, menu) is unchanged — only the visual grouping is added.
+function _renderSpaceGroup(sid, meta, projs, byPid) {
+  const expanded = _isSpaceExpanded(sid);
+  const safeName = escapeHtml(meta.name || '');
+  const safeSid = escapeHtml(sid);
+  const icon = meta.icon
+    ? `<span class="space-emoji">${escapeHtml(meta.icon)}</span>`
+    : _projectUiIconHtml(expanded ? 'folder-open' : 'folder', 'space-folder-icon');
+  const caret = expanded ? '▾' : '▸';
+  // "+" button only when expanded, to keep collapsed row compact and avoid
+  // accidental clicks on the space name (which toggles expand/collapse).
+  const addBtn = expanded
+    ? `<button type="button" class="space-add-project-btn" data-space-add="${safeSid}" title="${escapeHtml(t('spaces.new_project_btn', '新建项目'))}" aria-label="${escapeHtml(t('spaces.new_project_btn', '新建项目'))}">+</button>`
+    : '';
+  let html = `
+    <div class="space-group-row${expanded ? ' is-expanded' : ''}" data-space-id="${safeSid}">
+      <span class="space-caret">${caret}</span>
+      <span class="space-icon">${icon}</span>
+      <span class="space-name" title="${safeName}">${safeName}</span>
+      ${addBtn}
+    </div>`;
+  if (expanded) {
+    html += `<div class="space-group-children" data-space-children="${safeSid}">`;
+    // Inline-create row for this space (if active).
+    if (_spaceInlineCreateSid === sid) {
+      html += _renderSpaceInlineCreateRow(sid);
+    }
+    for (const p of projs) {
+      html += _renderProjectRow(p, byPid.get(p.project_id) || []);
+    }
+    html += '</div>';
+  }
+  return html;
+}
+
+function _renderSpaceInlineCreateRow(sid) {
+  const placeholder = escapeHtml(t('spaces.new_project_placeholder', '输入项目名称'));
+  return `
+    <div class="project-row project-create-row" data-space-create="${escapeHtml(sid)}">
+      <span class="project-icon">${_projectUiIconHtml('folder', 'project-folder-icon')}</span>
+      <input type="text" id="space-project-create-input" class="project-create-input"
+             placeholder="${placeholder}" autocomplete="off" spellcheck="false" />
+    </div>`;
 }
 
 function _renderProjectRow(p, convs) {
@@ -233,6 +361,34 @@ function _bindProjectsHandlers(container) {
   // Inline-create input.
   const createInput = container.querySelector('#project-create-input');
   if (createInput) _bindInlineCreateInput(createInput);
+
+  // Space inline-create input (nested under a space).
+  const spaceCreateInput = container.querySelector('#space-project-create-input');
+  if (spaceCreateInput) _bindSpaceInlineCreateInput(spaceCreateInput);
+
+  // Space "+" buttons: start inline-create flow for that space.
+  container.querySelectorAll('[data-space-add]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation(); // don't trigger space-group-row toggle
+      const sid = btn.dataset.spaceAdd;
+      if (!sid) return;
+      _startSpaceInlineCreate(sid);
+    });
+  });
+
+  // Space group headers: click toggles the whole workspace open/closed.
+  container.querySelectorAll('.space-group-row[data-space-id]').forEach((row) => {
+    row.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // If clicking the "+" button, the button handler above already ran; don't toggle.
+      if (e.target.closest('[data-space-add]')) return;
+      const sid = row.dataset.spaceId;
+      if (!sid) return;
+      _spacesExpanded[sid] = !_isSpaceExpanded(sid);
+      _saveSpacesExpanded();
+      renderProjectsSection();
+    });
+  });
 
   // Inline-rename inputs (at most one).
   container.querySelectorAll('input.project-rename-input[data-rename-pid]').forEach((input) => {
@@ -348,7 +504,7 @@ function _bindInlineCreateInput(input) {
     const startedAt = performance.now();
     _projectsTrackClick('project_create_submit', { name_length: name.length });
     try {
-      const res = await window.orkas.invoke('projects.create', { name });
+      const res = await window.cogseed.invoke('projects.create', { name });
       if (!res || !res.ok) {
         _projectsTrackEvent('project_create_result', {
           result: 'failure',
@@ -383,6 +539,114 @@ function _bindInlineCreateInput(input) {
         duration_ms: Math.round(performance.now() - startedAt),
       });
       _projectsTrackError('project_create', {
+        error_type: 'exception',
+      });
+      committed = false;
+      _showProjectInlineError(input, err && err.message);
+    }
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+  });
+  input.addEventListener('blur', () => commit(true));
+  input.addEventListener('input', () => {
+    _clearProjectInlineError(input);
+  });
+}
+
+// ── Space inline create ─────────────────────────────────────────────────
+
+function _startSpaceInlineCreate(sid) {
+  if (_spaceInlineCreateSid) return;
+  _projectsTrackClick('space_project_create_open', { space_id: sid });
+  _projectsInlineCreate = false;
+  _projectsInlineRenamePid = null;
+  _spaceInlineCreateSid = sid;
+  renderProjectsSection();
+  setTimeout(() => {
+    const input = document.getElementById('space-project-create-input');
+    if (input) input.focus();
+  }, 0);
+}
+
+function _cancelSpaceInlineCreate() {
+  if (!_spaceInlineCreateSid) return;
+  _spaceInlineCreateSid = null;
+  renderProjectsSection();
+}
+
+function _bindSpaceInlineCreateInput(input) {
+  input.addEventListener('click', (e) => e.stopPropagation());
+  if (typeof window.bindNameLimitControl === 'function') window.bindNameLimitControl(input);
+  const row = input.closest('[data-space-create]');
+  const sid = row && row.dataset.spaceCreate;
+  if (!sid) return;
+  let committed = false;
+  const commit = async (accept) => {
+    if (committed) return;
+    committed = true;
+    const name = _normaliseProjectNameFinal(input.value);
+    if (!accept || !name) {
+      _cancelSpaceInlineCreate();
+      return;
+    }
+    const startedAt = performance.now();
+    _projectsTrackClick('space_project_create_submit', { space_id: sid, name_length: name.length });
+    try {
+      // Create project, then bind it to the space.
+      const createRes = await window.orkas.invoke('projects.create', { name });
+      if (!createRes || !createRes.ok) {
+        _projectsTrackEvent('space_project_create_result', {
+          result: 'failure',
+          space_id: sid,
+          duration_ms: Math.round(performance.now() - startedAt),
+        });
+        committed = false;
+        _showProjectInlineError(input, createRes && createRes.error);
+        return;
+      }
+      const pid = createRes.project && createRes.project.project_id;
+      if (!pid) {
+        committed = false;
+        _showProjectInlineError(input, 'no project_id returned');
+        return;
+      }
+      const bindRes = await window.orkas.invoke('projects.bindSpace', { projectId: pid, spaceId: sid });
+      if (!bindRes || !bindRes.ok) {
+        _projectsTrackEvent('space_project_create_result', {
+          result: 'bind_failure',
+          space_id: sid,
+          project_id: pid,
+          duration_ms: Math.round(performance.now() - startedAt),
+        });
+        committed = false;
+        _showProjectInlineError(input, bindRes && bindRes.error);
+        return;
+      }
+      _projectsTrackEvent('space_project_create_result', {
+        result: 'success',
+        space_id: sid,
+        project_id: pid,
+        duration_ms: Math.round(performance.now() - startedAt),
+      });
+      // Auto-expand the new project and open its detail panel.
+      _projectsExpanded[pid] = true;
+      _saveProjectsExpanded();
+      _spaceInlineCreateSid = null;
+      await loadProjects(true);
+      if (typeof setView === 'function') {
+        setView('project', pid, { entryPoint: 'space_project_create' });
+      }
+    } catch (err) {
+      _projectsTrackEvent('space_project_create_result', {
+        result: 'failure',
+        space_id: sid,
+        duration_ms: Math.round(performance.now() - startedAt),
+      });
+      _projectsTrackError('space_project_create', {
+        space_id: sid,
         error_type: 'exception',
       });
       committed = false;
@@ -441,7 +705,7 @@ function _bindInlineRenameInput(input) {
       name_length: next.length,
     });
     try {
-      const res = await window.orkas.invoke('projects.rename', { projectId: pid, name: next });
+      const res = await window.cogseed.invoke('projects.rename', { projectId: pid, name: next });
       if (!res || !res.ok) {
         _projectsTrackEvent('project_rename_result', {
           project_id: pid,
@@ -643,7 +907,7 @@ async function _confirmDeleteProject(pid) {
   // cascade in `projects.deleteProject` still cleans them up either way.
   let autoCount = 0;
   try {
-    const r = await window.orkas.invoke('autoTasks.list', { projectId: pid });
+    const r = await window.cogseed.invoke('autoTasks.list', { projectId: pid });
     if (r && Array.isArray(r.tasks)) autoCount = r.tasks.length;
   } catch (_) { /* ignore — fall through with autoCount = 0 */ }
   // Build the confirm dialog. When N > 0 we surface the destructive scope on
@@ -676,7 +940,7 @@ async function _confirmDeleteProject(pid) {
     auto_count: autoCount,
   });
   try {
-    const res = await window.orkas.invoke('projects.delete', { projectId: pid });
+    const res = await window.cogseed.invoke('projects.delete', { projectId: pid });
     if (!res || !res.ok) {
       _projectsTrackEvent('project_delete_result', {
         project_id: pid,

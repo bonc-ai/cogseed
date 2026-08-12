@@ -157,6 +157,15 @@ export interface Conversation {
    *  mismatch makes the reader fall back to members/history instead of
    *  trusting stale data. */
   participant_summary_updated_at?: string;
+  /** True if this conversation was imported from another agent (Claude Code,
+   *  Codex, etc.) during onboarding. Used to identify imported sessions for
+   *  special handling. */
+  imported?: boolean;
+  /** True if the user hasn't opened this imported conversation yet. When true,
+   *  opening the conversation triggers a welcome message from commander that
+   *  summarizes extracted cognitions and offers to continue the work. Reset to
+   *  false after the welcome message is inserted. */
+  needs_welcome?: boolean;
 }
 
 /** Persisted record on `<cid>.jsonl`. Aliased for legacy callers; the new
@@ -271,6 +280,8 @@ function _normaliseConversation(raw: any, fallbackCid = ''): Conversation | null
   if (typeof raw.participant_summary_updated_at === 'string' && raw.participant_summary_updated_at) {
     out.participant_summary_updated_at = raw.participant_summary_updated_at;
   }
+  if (raw.imported === true) out.imported = true;
+  if (raw.needs_welcome === true) out.needs_welcome = true;
   const syncRev = Number(raw[RECORD_SYNC_REV_FIELD]) || 0;
   if (Number.isFinite(syncRev) && syncRev > 0) out._sync_rev = Math.floor(syncRev);
   if (typeof raw[RECORD_SYNC_DEVICE_FIELD] === 'string' && raw[RECORD_SYNC_DEVICE_FIELD]) {
@@ -1737,6 +1748,15 @@ export interface CreateConversationOptions {
    *  a back-link to the task that spawned it. Used by the renderer for the
    *  clock-icon prefix and the auto-tab expand-panel grouping. */
   originAutoTaskId?: string;
+  /** True if this conversation was imported from another agent (Claude Code,
+   *  Codex, etc.) during onboarding. Used to identify imported sessions for
+   *  special handling. */
+  imported?: boolean;
+  /** True if the user hasn't opened this imported conversation yet. When true,
+   *  opening the conversation triggers a welcome message from commander that
+   *  summarizes extracted cognitions and offers to continue the work. Reset to
+   *  false after the welcome message is inserted. */
+  needs_welcome?: boolean;
 }
 
 function normaliseConversationTitle(raw: unknown): string {
@@ -1747,6 +1767,7 @@ function normaliseConversationTitle(raw: unknown): string {
 
 export async function createConversation(userId: string, {
   kind = 'normal', agentId = '', skillId = '', title = '', projectId = '', conversationId = '', originAutoTaskId = '',
+  imported = false, needs_welcome = false,
 }: CreateConversationOptions = {}): Promise<Conversation> {
   const explicitCid = conversationId && safeId(conversationId) ? conversationId : '';
   const outcome = await _withConversationIndexStore(userId, async (store) => {
@@ -1800,6 +1821,8 @@ export async function createConversation(userId: string, {
       session_id: buildConversationSessionId(cid),
       ...(projectId ? { project_id: projectId } : {}),
       ...(originAutoTaskId ? { origin_auto_task_id: originAutoTaskId } : {}),
+      ...(imported ? { imported: true } : {}),
+      ...(needs_welcome ? { needs_welcome: true } : {}),
       created_at: now,
       updated_at: now,
       agent_ids: _normaliseAgentIds(agentId ? [agentId] : []),
@@ -1860,6 +1883,35 @@ export async function renameConversation(
     title: normaliseConversationTitle(title),
     title_manually_set: true,
   }, projectIdHint);
+}
+
+/**
+ * Batch update multiple conversations to assign them to a project.
+ * Used by onboarding to group imported sessions under a role workspace.
+ * Returns the count of successfully updated conversations.
+ */
+export async function batchUpdateConversationProject(
+  userId: string,
+  conversationIds: string[],
+  projectId: string,
+): Promise<{ ok: boolean; updated: number }> {
+  if (!projectId || !safeId(projectId)) {
+    return { ok: false, updated: 0 };
+  }
+
+  let updated = 0;
+  for (const cid of conversationIds) {
+    if (!safeId(cid)) continue;
+    try {
+      const result = await updateConversation(userId, cid, { project_id: projectId });
+      if (result) updated++;
+    } catch (err) {
+      log.warn(`failed to update conversation project cid=${cid}`, { error: String(err) });
+    }
+  }
+
+  log.info(`batch updated conversations to project user=${userId} project=${projectId} updated=${updated}/${conversationIds.length}`);
+  return { ok: true, updated };
 }
 
 export async function setConversationPinned(
@@ -2287,4 +2339,69 @@ export async function sweepStaleProcessing(activeUserId?: string): Promise<{ swe
   });
   if (swept) log.info(`cleared ${swept} stale running conversations`);
   return { swept };
+}
+
+/**
+ * Insert a welcome message into an imported conversation and clear the
+ * needs_welcome flag. Called when the user opens an imported conversation
+ * for the first time.
+ */
+export async function insertWelcomeMessage(
+  userId: string,
+  conversationId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    // Read conversation to verify it needs a welcome
+    const conv = await getConversation(userId, conversationId);
+    if (!conv) return { ok: false, error: 'conversation_not_found' };
+    if (!conv.needs_welcome) return { ok: false, error: 'already_welcomed' };
+
+    // Read existing messages to extract the session summary from the seed message
+    const layout = conversationLayout(userId, conversationId, conv.project_id);
+    let sessionSummary: string | undefined;
+    try {
+      const fs = await import('node:fs/promises');
+      const content = await fs.readFile(layout.messageFile, 'utf8');
+      const lines = content.trim().split('\n').filter(Boolean);
+      // The seed message should be the first message from commander
+      if (lines.length > 0) {
+        const firstMsg = JSON.parse(lines[0]) as GroupMessage;
+        if (firstMsg.from === 'commander' && firstMsg.model_text) {
+          // Extract the summary from model_text (it follows the preamble)
+          const match = firstMsg.model_text.match(/请把它当作已发生的上下文.*?：\n\n(.+)/s);
+          if (match) {
+            sessionSummary = match[1].trim();
+          }
+        }
+      }
+    } catch (err) {
+      log.warn('failed to read seed message for welcome', { conversationId, error: String(err) });
+    }
+
+    // Generate welcome message
+    const { generateWelcomeMessage } = await import('./session_import/welcome-message');
+    const { text, modelText } = await generateWelcomeMessage({ userId, sessionSummary });
+
+    // Build and append the message
+    const welcomeMessage: GroupMessage = {
+      id: genId12(),
+      ts: nowIso(),
+      from: 'commander',
+      to: ['user'],
+      text,
+      model_text: modelText,
+    };
+
+    await appendJsonlAtomic<GroupMessage>(layout.messageFile, welcomeMessage);
+    await appendVisible(userId, conversationId, welcomeMessage, ['user', 'commander']);
+
+    // Clear the needs_welcome flag
+    await updateConversation(userId, conversationId, { needs_welcome: false }, conv.project_id ?? null);
+
+    log.info(`inserted welcome message cid=${conversationId}`);
+    return { ok: true };
+  } catch (err) {
+    log.error('failed to insert welcome message', { conversationId, error: String(err) });
+    return { ok: false, error: String(err) };
+  }
 }

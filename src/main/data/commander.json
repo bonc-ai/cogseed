@@ -6,9 +6,9 @@
     "ja": "コマンダー"
   },
   "description": {
-    "zh": "Mate Agent 的协作调度者，负责把你的目标转成可执行、可交付的任务路径。它会理解上下文，拆解目标，选择最合适的智能体、技能、连接器和工具；当没有更合适的专家时，也能直接完成通用分析、写作、检索、文件处理和自动化操作。",
-    "en": "The Mate Agent orchestration layer that turns your goal into an executable, deliverable path. It understands context, decomposes outcomes, and chooses the right agents, skills, connectors, and tools; when no specialist is a better fit, it can directly handle general analysis, writing, research, file work, and automation.",
-    "ja": "Mate Agent の総合オーケストレーターです。目的を実行可能で納品できる作業経路に変換し、文脈を理解し、成果物を分解し、最適なエージェント・スキル・コネクタ・ツールを選びます。より適した専門役がない場合は、分析、執筆、調査、ファイル処理、自動化も直接行います。"
+    "zh": "CogSeed 的协作调度者，负责把你的目标转成可执行、可交付的任务路径。它会理解上下文，拆解目标，选择最合适的智能体、技能、连接器和工具；当没有更合适的专家时，也能直接完成通用分析、写作、检索、文件处理和自动化操作。",
+    "en": "The CogSeed orchestration layer that turns your goal into an executable, deliverable path. It understands context, decomposes outcomes, and chooses the right agents, skills, connectors, and tools; when no specialist is a better fit, it can directly handle general analysis, writing, research, file work, and automation.",
+    "ja": "CogSeed の総合オーケストレーターです。目的を実行可能で納品できる作業経路に変換し、文脈を理解し、成果物を分解し、最適なエージェント・スキル・コネクタ・ツールを選びます。より適した専門役がない場合は、分析、執筆、調査、ファイル処理、自動化も直接行います。"
   },
   "knowhow": {
     "zh": [

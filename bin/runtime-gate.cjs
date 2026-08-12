@@ -196,6 +196,14 @@ function readJsonFile(label, file) {
   }
 }
 
+function firstExistingFile(label, files) {
+  for (const file of files) {
+    if (fs.existsSync(file) && fs.statSync(file).isFile()) return file;
+  }
+  requiredFile(label, files[0]);
+  return files[0];
+}
+
 function relPath(root, rel) {
   return path.join(root, ...String(rel || '').split(/[\\/]/).filter(Boolean));
 }
@@ -425,7 +433,10 @@ function verifyWhisperRuntimeDir(runtimeRoot, targetPlatform, targetArch, option
   }
   const runtimeVersion = target.version || contract.version;
   const dir = path.join(runtimeRoot, 'whisper', key);
-  const markerFile = path.join(dir, '.orkas-whisper-ready.json');
+  const markerFile = firstExistingFile('whisper runtime marker', [
+    path.join(dir, '.cogseed-whisper-ready.json'),
+    path.join(dir, '.orkas-whisper-ready.json'),
+  ]);
   const marker = readJsonFile('whisper runtime marker', markerFile);
   if (marker.schema !== contract.schema
     || marker.platformKey !== key

@@ -1,11 +1,11 @@
 /**
- * orkas-bridge host — lets an external CLI agent (claude code / codex)
- * perceive and call the Orkas environment (plan §D).
+ * cogseed-bridge host — lets an external CLI agent (claude code / codex)
+ * perceive and call the CogSeed environment (plan §D).
  *
  * Per CLI dispatch the runner starts one host: a local-IPC socket server
  * (unix domain socket / Windows named pipe — NOT a TCP port, per the
  * PC/CLAUDE.md "no occupied port" boundary) plus a generated MCP server
- * config file. The CLI agent spawns `bin/orkas-bridge.cjs` as a stdio MCP
+ * config file. The CLI agent spawns `bin/cogseed-bridge.cjs` as a stdio MCP
  * server; that client connects back here and proxies tool calls.
  *
  * Auth: a per-run random token lives in a 0600 env file consumed by the
@@ -71,7 +71,7 @@ export interface BridgeHandle {
   token: string;
   /** Path of the generated MCP config file (claude `--mcp-config`). */
   mcpConfigPath: string;
-  /** Non-secret env block used to launch orkas-bridge.cjs. */
+  /** Non-secret env block used to launch cogseed-bridge.cjs. */
   serverEnv: Record<string, string>;
   close(): Promise<void>;
 }
@@ -96,10 +96,10 @@ export interface StartBridgeOpts {
 }
 
 function _socketPath(runId: string): string {
-  if (process.platform === 'win32') return `\\\\.\\pipe\\orkas-bridge-${runId}`;
+  if (process.platform === 'win32') return `\\\\.\\pipe\\cogseed-bridge-${runId}`;
   // tmpdir keeps the path well under the unix sun_path limit (~104 bytes)
   // — the per-uid data root can be arbitrarily deep.
-  return path.join(os.tmpdir(), `orkas-bridge-${runId}.sock`);
+  return path.join(os.tmpdir(), `cogseed-bridge-${runId}.sock`);
 }
 
 type BridgeMethod = (params: Record<string, unknown>) => Promise<unknown>;
@@ -204,7 +204,7 @@ function _buildMethods(opts: StartBridgeOpts): Record<string, BridgeMethod> {
       const raw = await connectors.callTool(opts.uid, connectorId, toolName, args);
       const text = connectors.stringifyMcpResult(raw);
       const capped = text.length > CONNECTOR_RESULT_CAP
-        ? `${text.slice(0, CONNECTOR_RESULT_CAP)}\n… [truncated by orkas-bridge at ${CONNECTOR_RESULT_CAP} chars]`
+        ? `${text.slice(0, CONNECTOR_RESULT_CAP)}\n… [truncated by cogseed-bridge at ${CONNECTOR_RESULT_CAP} chars]`
         : text;
       return { text: capped };
     },
@@ -315,7 +315,7 @@ export async function startBridge(opts: StartBridgeOpts): Promise<BridgeHandle> 
     ORKAS_BRIDGE_SOCKET: socketPath,
     ORKAS_BRIDGE_TOKEN: token,
   };
-  const serverEnvFilePath = path.join(opts.configDir, 'orkas-bridge-env.json');
+  const serverEnvFilePath = path.join(opts.configDir, 'cogseed-bridge-env.json');
   const serverEnv: Record<string, string> = {
     ORKAS_BRIDGE_ENV_FILE: serverEnvFilePath,
   };
@@ -325,17 +325,17 @@ export async function startBridge(opts: StartBridgeOpts): Promise<BridgeHandle> 
   }
 
   // MCP config file the CLI agent consumes (claude `--mcp-config <path>`).
-  const bridgeEntry = path.join(opts.sandboxEnv.ORKAS_PC_DIR || '', 'bin', 'orkas-bridge.cjs');
+  const bridgeEntry = path.join(opts.sandboxEnv.ORKAS_PC_DIR || '', 'bin', 'cogseed-bridge.cjs');
   const mcpConfig = {
     mcpServers: {
-      orkas: {
+      cogseed: {
         command: opts.sandboxEnv.ORKAS_NODE || process.execPath,
         args: [bridgeEntry],
         env: serverEnv,
       },
     },
   };
-  const mcpConfigPath = path.join(opts.configDir, 'orkas-mcp-config.json');
+  const mcpConfigPath = path.join(opts.configDir, 'cogseed-mcp-config.json');
   fs.mkdirSync(opts.configDir, { recursive: true });
   fs.writeFileSync(serverEnvFilePath, JSON.stringify(secretServerEnv, null, 2), { mode: 0o600 });
   if (process.platform !== 'win32') {

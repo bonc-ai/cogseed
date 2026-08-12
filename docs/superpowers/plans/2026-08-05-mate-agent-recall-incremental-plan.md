@@ -23,7 +23,7 @@
 - `/Users/sudai/Documents/Mate Agent/src/main/features/p3394/`：经验候选、Patch 候选、执行上下文和复用能力。
 - `/Users/sudai/Documents/Mate Agent/src/main/features/execution-records.ts`：执行事实和 Task/Execution 关联。
 - `/Users/sudai/Documents/Mate Agent/src/main/features/p3394/context-reuse-receipt.ts`：已有复用审计。
-- `/Users/sudai/Documents/Mate Agent/src/main/features/evolution/`：Skill 版本、Patch、验证和回滚。
+- `/Users/sudai/Documents/Mate Agent/src/main/features/skills/`：Skill 版本和回滚。旧 evolution Patch/验证线已归档。
 - `/Users/sudai/Documents/Mate Agent/src/main/features/projects.ts`、`user_workspace.ts`：Workspace/Project 基础能力。
 - `/Users/sudai/Documents/Mate Agent/src/main/features/cognition/`：当前五 tab Asset Center 的适配层。
 

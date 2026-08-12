@@ -15,7 +15,7 @@ function loadShim(invoke: (...args: unknown[]) => Promise<unknown>) {
     btoa,
     fetch: vi.fn(),
     createLogger: () => ({ warn() {}, info() {}, error() {} }),
-    window: { orkas: { invoke, stream: () => ({ promise: Promise.resolve(), cancel() {} }) } },
+    window: { cogseed: { invoke, stream: () => ({ promise: Promise.resolve(), cancel() {} }) } },
   };
   (sandbox.window as Record<string, unknown>).window = sandbox.window;
   vm.createContext(sandbox);

@@ -5,19 +5,38 @@ export const APP_BRAND = Object.freeze({
   zhName: brand.zhName,
   appId: brand.appId,
   protocolScheme: brand.protocolScheme,
-  legacyConnectorScheme: brand.legacyConnectorScheme,
+  legacyConnectorSchemes: brand.legacyConnectorSchemes,
   taglineZh: brand.taglineZh,
 });
 
 export const CONNECTOR_PROTOCOL_SCHEMES = Object.freeze([
   APP_BRAND.protocolScheme,
-  APP_BRAND.legacyConnectorScheme,
+  ...APP_BRAND.legacyConnectorSchemes,
 ] as const);
+
+
+export type NormalizedDeepLink = Readonly<{ scheme: string; href: string; url: URL }>;
+
+export function normalizeDeepLink(rawUrl: string): NormalizedDeepLink | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  const scheme = parsed.protocol.replace(/:$/, '');
+  if (!(CONNECTOR_PROTOCOL_SCHEMES as readonly string[]).includes(scheme)) return null;
+  if (scheme !== APP_BRAND.protocolScheme) {
+    parsed = new URL(rawUrl.replace(/^[^:]+:/, `${APP_BRAND.protocolScheme}:`));
+  }
+  return Object.freeze({ scheme: APP_BRAND.protocolScheme, href: parsed.href, url: parsed });
+}
 
 export const RUNTIME_VARIANTS = Object.freeze([
   'main',
   'cognition',
   'expense',
+  'cogseed',
   'mate',
   'messaging',
   'optimization',
@@ -51,11 +70,17 @@ const SOURCE_IDENTITIES: Readonly<Record<RuntimeVariant, RuntimeIdentity>> = Obj
     appId: `${APP_BRAND.appId}.source.expense`,
     protocolOwner: false,
   }),
+  cogseed: Object.freeze({
+    variant: 'cogseed',
+    appName: APP_BRAND.appName,
+    appId: `${APP_BRAND.appId}.source.cogseed`,
+    protocolOwner: true,
+  }),
   mate: Object.freeze({
     variant: 'mate',
-    appName: APP_BRAND.appName,
+    appName: `${APP_BRAND.appName} [Legacy Mate]`,
     appId: `${APP_BRAND.appId}.source.mate`,
-    protocolOwner: true,
+    protocolOwner: false,
   }),
   messaging: Object.freeze({
     variant: 'messaging',
@@ -87,7 +112,7 @@ export function resolveRuntimeIdentity(
 ): RuntimeIdentity {
   if (isPackaged) {
     if (value && value !== 'main') {
-      throw new Error('packaged Mate Agent only supports the main runtime variant');
+      throw new Error('packaged CogSeed only supports the main runtime variant');
     }
     return Object.freeze({
       variant: 'main',

@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 function loadProjection(invokeImpl: (...args: any[]) => Promise<any>) {
   const sandbox: any = {
     console,
-    window: { orkas: { invoke: invokeImpl } },
+    window: { cogseed: { invoke: invokeImpl } },
     setTimeout,
     clearTimeout,
   };

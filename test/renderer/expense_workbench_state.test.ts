@@ -38,7 +38,7 @@ describe('reimbursement management setup view', () => {
       'agents-chat-col': chat,
     };
     const windowLike: Record<string, unknown> = {
-      orkas: { invoke: async () => ({ ok: true, result: { configured: false, ready: false } }) },
+      cogseed: { invoke: async () => ({ ok: true, result: { configured: false, ready: false } }) },
       mountExpenseSetupCard: (_target: FakeElement, payload: { agent_id: string }) => mounted.push(payload),
       addEventListener: () => undefined,
     };
