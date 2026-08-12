@@ -975,7 +975,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   'conversations.merge': async (args, ctx) => {
-    const { cids, title } = args;
+    const { cids, title, scope } = args;
     if (!Array.isArray(cids) || cids.some((cid) => !safeId(cid))) {
       throw new Error('invalid cids');
     }
@@ -983,12 +983,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       throw new Error('at least two source conversations are required');
     }
     if (typeof title !== 'string') throw new Error('invalid title');
+    if (scope !== undefined && (
+      !scope || typeof scope !== 'object' || Array.isArray(scope)
+      || (scope.kind !== 'selected_conversations' && scope.kind !== 'time_range')
+      || (scope.kind === 'time_range' && (
+        typeof scope.startAt !== 'string' || scope.startAt.length > 64
+        || typeof scope.endAt !== 'string' || scope.endAt.length > 64
+      ))
+    )) throw new Error('invalid merge scope');
     const projectIdHint = conversationProjectHint(args);
     const result = await conversationCopyMerge.mergeConversations(
       ctx.userId,
       cids,
       {
         title,
+        ...(scope ? { scope } : {}),
         ...(Object.prototype.hasOwnProperty.call(args, 'project_id') ? { projectIdHint } : {}),
       },
     );
@@ -996,6 +1005,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       conversation: result.newConversation,
       summary: result.summaryMessage,
       agent_summaries: result.agentSummaries,
+      scope_receipt: result.scopeReceipt,
     };
   },
 
@@ -3857,6 +3867,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       shell.showItemInFolder(norm);
     }
     return { path: norm };
+  },
+
+  // Open one validated output with the OS default application. This is the
+  // fallback for files that exist but cannot be previewed safely in-app.
+  'workspace.openFileExternal': async (payload, ctx) => {
+    const target = payload?.path;
+    if (typeof target !== 'string' || !target) {
+      throw new Error('missing path');
+    }
+    const norm = path.resolve(target);
+    if (!await _isAllowedFileActionPath(ctx.userId, payload, norm)) {
+      throw new Error('path is outside the user workspace');
+    }
+    let st: fs.Stats;
+    try { st = fs.statSync(norm); }
+    catch { throw new Error('file not found'); }
+    if (!st.isFile()) throw new Error('path is not a file');
+    const openErr = await shell.openPath(norm);
+    if (openErr) throw new Error(openErr);
+    return { ok: true, path: norm };
   },
 
   // Lightweight existence check for renderer previews. Same scope as

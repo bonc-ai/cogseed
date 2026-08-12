@@ -153,7 +153,7 @@ import {
 import { buildRetryResumeModelText } from "./retry_resume";
 import { isAgentEnabled, readDisabledSets } from "../component_enabled";
 import { finalizeProducedFile } from "../produced_output_hooks";
-import { selectVisibleProducedFiles } from "../produced_files";
+import { selectVisibleProducedFiles, validateProducedFiles } from "../produced_files";
 import {
   buildLanguageDirective,
   descriptionLang,
@@ -2394,6 +2394,9 @@ async function _enqueueBody(
     }
   }
 
+  const producedResults = params.produced?.length
+    ? validateProducedFiles(params.produced, params.process || [])
+    : [];
   const msg: GroupMessage = {
     id: msgId,
     ts,
@@ -2428,6 +2431,7 @@ async function _enqueueBody(
     ...(params.produced && params.produced.length
       ? { produced: params.produced }
       : {}),
+    ...(producedResults.length ? { produced_results: producedResults } : {}),
     ...(params.form ? { form: params.form } : {}),
     ...(params.created_agents && params.created_agents.length
       ? { created_agents: params.created_agents }
@@ -3957,7 +3961,7 @@ async function runActorTurnBody(
     // HTML -> PDF, etc.). Only an explicit publish_outputs declaration may
     // close/finalize files here. Otherwise keep all candidates registered so
     // the end-of-turn selector can see the complete production chain.
-    const segCandidates = existingProducedFiles(turnProduced);
+    const segCandidates = Array.from(turnProduced);
     const hasExplicitSegmentOutputs = outputsPublicationDeclared;
     const segProduced = hasExplicitSegmentOutputs
       ? selectVisibleProducedFiles(segCandidates, turnPublished)
@@ -4868,12 +4872,10 @@ async function runActorTurnBody(
     }
   }
 
-  const turnFinalCandidates = existingProducedFiles(
-    turnProduced,
-    (stalePath) => {
-      state.producedPaths.delete(stalePath);
-    },
-  );
+  const turnFinalCandidates = Array.from(turnProduced);
+  for (const stalePath of turnFinalCandidates) {
+    if (!isExistingProducedFile(stalePath)) state.producedPaths.delete(stalePath);
+  }
   const produced = selectVisibleProducedFiles(
     turnFinalCandidates,
     outputsPublicationDeclared ? turnPublished : undefined,

@@ -252,6 +252,7 @@ describe('skills renderer frontmatter parsing', () => {
     expect(body.innerHTML).toContain('data-recall-candidate-action="promote"');
     expect(body.innerHTML).not.toContain('data-recall-candidate-action="defer"');
     expect(body.innerHTML).not.toContain('data-recall-candidate-action="resume"');
+    expect(body.innerHTML).toContain('确认并入库');
   });
 
   it('keeps deferred Recall candidates on the same simplified decision actions', () => {
@@ -277,6 +278,33 @@ describe('skills renderer frontmatter parsing', () => {
     expect(body.innerHTML).toContain('data-recall-candidate-action="promote"');
     expect(body.innerHTML).not.toContain('data-recall-candidate-action="defer"');
     expect(body.innerHTML).not.toContain('data-recall-candidate-action="resume"');
+  });
+
+  it('counts only actionable candidates in a selected capture review', () => {
+    const context = loadSkillRendererHelpers();
+    const body = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => id === 'skills-cognition-candidates-body' ? body : null,
+    };
+    vm.runInContext(`
+      _skillsCognitionState.selectedCaptureId = 'capture-mixed';
+      _skillsCognitionState.captures = [{
+        id: 'capture-mixed',
+        candidateIds: ['cand-pending', 'cand-promoted', 'cand-rejected'],
+      }];
+      _skillsCognitionState.recallCandidates = [
+        { id: 'cand-pending', status: 'pending', judgment: 'Keep it', suggestedType: 'rule', suggestedScope: 'project', sourceRefs: [] },
+        { id: 'cand-promoted', status: 'promoted', judgment: 'Stored', suggestedType: 'rule', suggestedScope: 'project', promotedAssetId: 'asset-1', sourceRefs: [] },
+        { id: 'cand-rejected', status: 'rejected', judgment: 'Ignored', suggestedType: 'rule', suggestedScope: 'project', sourceRefs: [] },
+      ];
+    `, context);
+
+    context.renderSkillsCognitionCandidates();
+
+    expect(body.innerHTML).toContain('skills-cognition-status is-review_ready">1</span>');
+    expect(body.innerHTML).not.toContain('data-recall-candidate-promote-all');
+    expect(body.innerHTML).toContain('已写入 Recall');
+    expect(body.innerHTML).toContain('已忽略');
   });
 
 
@@ -308,6 +336,7 @@ describe('skills renderer frontmatter parsing', () => {
     expect(body.innerHTML).toContain('experience-1');
     expect(body.innerHTML).toContain('data-recall-candidate-action="promote"');
     expect(body.innerHTML).toContain('data-recall-candidate-action="reject"');
+    expect(body.innerHTML).toContain('编辑后入库');
   });
 
   it('renders normalized asset relation, reuse, and candidate counts with open actions', () => {

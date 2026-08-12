@@ -1504,17 +1504,27 @@ const ConversationInfo = (() => {
     const addLabel = _label('conversation_info.file_add_to_chat_action', 'Add to chat');
     const addLibraryLabel = _label('conversation_info.file_add_to_library_action', 'Add to Library');
     const deleteLabel = _label('common.delete', 'Delete');
-    const addItem = entryKind === 'file' && _canAddEntryToChat(name || absPath)
+    const allowedActions = Array.isArray(options.allowedActions)
+      ? new Set(options.allowedActions.map((action) => String(action)))
+      : null;
+    const actionAllowed = (action) => !allowedActions || allowedActions.has(action);
+    const revealItem = actionAllowed('reveal')
+      ? `<div class="ctx-row-menu-item" data-action="reveal">${escapeHtml(revealLabel)}</div>`
+      : '';
+    const addItem = actionAllowed('add-to-chat') && entryKind === 'file' && _canAddEntryToChat(name || absPath)
       ? `<div class="ctx-row-menu-item" data-action="add-to-chat">${escapeHtml(addLabel)}</div>`
       : '';
-    const addLibraryItem = entryKind === 'file' && _canAddEntryToLibrary(name || absPath, projectScoped)
+    const addLibraryItem = actionAllowed('add-to-library') && entryKind === 'file' && _canAddEntryToLibrary(name || absPath, projectScoped)
       ? `<div class="ctx-row-menu-item" data-action="add-to-library">${escapeHtml(addLibraryLabel)}</div>`
       : '';
+    const deleteItem = actionAllowed('delete')
+      ? `<div class="ctx-row-menu-item is-danger" data-action="delete">${escapeHtml(deleteLabel)}</div>`
+      : '';
     menu.innerHTML = `
-      <div class="ctx-row-menu-item" data-action="reveal">${escapeHtml(revealLabel)}</div>
+      ${revealItem}
       ${addLibraryItem}
       ${addItem}
-      <div class="ctx-row-menu-item is-danger" data-action="delete">${escapeHtml(deleteLabel)}</div>
+      ${deleteItem}
     `;
     menu.dataset.filePath = absPath;
     menu.dataset.fileName = name;
