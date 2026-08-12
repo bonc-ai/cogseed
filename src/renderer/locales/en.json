@@ -3329,5 +3329,10 @@
   "recall.projection.summary_counts_only": "Carrying {count} into this task.",
   "recall.projection.summary_none": "Nothing carried into this task.",
   "recall.projection.summary_none_omitted": "Nothing carried into this task; {omitted} left out.",
-  "cognition.route_ontology": "Confirm into ontology"
+  "cognition.route_ontology": "Confirm into ontology",
+  "cognition.export_capability_pack": "Export capability pack…",
+  "cognition.export_capability_pack_dir": "Choose where to export",
+  "cognition.export_capability_pack_purpose": "What is this pack for?",
+  "cognition.export_capability_pack_target": "Which execution end receives it?",
+  "cognition.export_capability_pack_done": "Exported: {included} carried, {excluded} left out."
 }

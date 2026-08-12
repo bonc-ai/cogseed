@@ -372,6 +372,42 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
+    const exportBtn = event.target.closest('[data-capability-pack-export]');
+    if (exportBtn) {
+      if (exportBtn.dataset.busy === '1') return;
+      // 先让用户选目录再导——导出是把认知交到产品外面去，落点必须是用户自己指定的。
+      const picked = await window.orkas.invoke('common.pickDirectory', {
+        title: _cognitionText('cognition.export_capability_pack_dir', '选择能力包导出位置'),
+      }).catch(() => null);
+      if (!picked || picked.cancelled || !picked.path) return;
+
+      const purpose = typeof uiPrompt === 'function'
+        ? await uiPrompt(_cognitionText('cognition.export_capability_pack_purpose', '这份能力包用来做什么？'))
+        : '';
+      if (!purpose) return;
+      const targetAgent = typeof uiPrompt === 'function'
+        ? await uiPrompt(_cognitionText('cognition.export_capability_pack_target', '交给哪个执行端？'))
+        : '';
+      if (!targetAgent) return;
+
+      exportBtn.dataset.busy = '1'; exportBtn.disabled = true;
+      try {
+        const result = await window.orkas.invoke('recall.capabilityPack.export', {
+          purpose, targetAgent, targetDir: picked.path,
+        });
+        if (!result?.ok) throw new Error(result?.error || 'capability pack export failed');
+        // 如实报数：带了几条、扣了几条。只说「导出成功」用户无从判断这份包够不够。
+        if (typeof uiAlert === 'function') {
+          await uiAlert(_cognitionText('cognition.export_capability_pack_done', '已导出：带入 {included} 条，未带入 {excluded} 条。')
+            .replace('{included}', String(result.included))
+            .replace('{excluded}', String(result.excluded)));
+        }
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally { exportBtn.dataset.busy = '0'; exportBtn.disabled = false; }
+      return;
+    }
+
     const recallAction = event.target.closest('[data-recall-candidate-action]');
     if (recallAction) {
       const candidateId = recallAction.dataset.recallCandidateId;

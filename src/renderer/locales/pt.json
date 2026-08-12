@@ -3109,5 +3109,10 @@
   "recall.projection.summary_counts_only": "Levando {count} para esta tarefa.",
   "recall.projection.summary_none": "Nada levado para esta tarefa.",
   "recall.projection.summary_none_omitted": "Nada levado para esta tarefa; {omitted} de fora.",
-  "cognition.route_ontology": "Confirmar na ontologia"
+  "cognition.route_ontology": "Confirmar na ontologia",
+  "cognition.export_capability_pack": "Exportar pacote…",
+  "cognition.export_capability_pack_dir": "Escolha onde exportar",
+  "cognition.export_capability_pack_purpose": "Para que serve este pacote?",
+  "cognition.export_capability_pack_target": "Qual execução vai recebê-lo?",
+  "cognition.export_capability_pack_done": "Exportado: {included} incluídos, {excluded} de fora."
 }

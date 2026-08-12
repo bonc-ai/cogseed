@@ -3109,5 +3109,10 @@
   "recall.projection.summary_counts_only": "今回は {count} 件を引き継ぎます",
   "recall.projection.summary_none": "今回引き継ぐものはありません",
   "recall.projection.summary_none_omitted": "今回引き継ぐものはありません（{omitted} 件は対象外）",
-  "cognition.route_ontology": "確認してオントロジーへ"
+  "cognition.route_ontology": "確認してオントロジーへ",
+  "cognition.export_capability_pack": "能力パックを書き出す…",
+  "cognition.export_capability_pack_dir": "書き出し先を選択",
+  "cognition.export_capability_pack_purpose": "このパックの用途は？",
+  "cognition.export_capability_pack_target": "どの実行側に渡しますか？",
+  "cognition.export_capability_pack_done": "書き出しました：{included} 件、除外 {excluded} 件。"
 }

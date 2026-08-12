@@ -457,7 +457,9 @@ function renderSkillsCognitionContext() {
     const assets = Array.isArray(record.assetRefs) ? record.assetRefs.length : Array.isArray(record.assetIds) ? record.assetIds.length : 0;
     return `<button type="button" class="recall-context-row${selected?.recordKey === record.recordKey ? ' is-selected' : ''}" data-recall-context-select="${escapeHtml(record.recordKey)}"><span><strong>${escapeHtml(record.recordKind === 'projection' ? record.taskRunId || record.id : record.id)}</strong><small>${escapeHtml(record.recordKind === 'projection' ? _cognitionText('cognition.context_projection', '任务投影') : 'RecallView')} · ${escapeHtml(record.purpose || '')}</small></span><em>${escapeHtml(_cognitionText('cognition.context_ref_count', '{sources} 来源 · {assets} 资产').replace('{sources}', String(refs)).replace('{assets}', String(assets)))}</em></button>`;
   }).join('') : `<div class="recall-workbench-empty">${escapeHtml(_cognitionText('cognition.context_empty', '尚无 Context Pack'))}</div>`;
-  host.innerHTML = `<div class="recall-workbench-page-head"><div><h2>Context Pack</h2><p>${escapeHtml(_cognitionText('cognition.context_page_hint', '会话捕获与任务执行实际使用的有界引用包'))}</p></div></div><div class="recall-context-workbench"><section class="recall-context-list">${rows}</section><section class="recall-context-detail">${_renderContextPackDetail(selected)}</section></div>`;
+  // 导出按钮放在 Context Pack 页头：这一页本来就是「本次任务实际使用的有界引用包」，
+  // 交给外部执行端的那份是同一个概念的对外形态，不另开页面。
+  host.innerHTML = `<div class="recall-workbench-page-head"><div><h2>Context Pack</h2><p>${escapeHtml(_cognitionText('cognition.context_page_hint', '会话捕获与任务执行实际使用的有界引用包'))}</p></div><button class="btn btn-sm" data-capability-pack-export>${escapeHtml(_cognitionText('cognition.export_capability_pack', '导出能力包…'))}</button></div><div class="recall-context-workbench"><section class="recall-context-list">${rows}</section><section class="recall-context-detail">${_renderContextPackDetail(selected)}</section></div>`;
 }
 
 async function loadRecallOntologyGroup(groupId) {

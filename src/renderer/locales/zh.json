@@ -3329,5 +3329,10 @@
   "recall.projection.summary_counts_only": "这次带入 {count} 条认知",
   "recall.projection.summary_none": "这次没有带入认知",
   "recall.projection.summary_none_omitted": "这次没有带入认知；{omitted} 条未带",
-  "cognition.route_ontology": "确认并落到本体"
+  "cognition.route_ontology": "确认并落到本体",
+  "cognition.export_capability_pack": "导出能力包…",
+  "cognition.export_capability_pack_dir": "选择能力包导出位置",
+  "cognition.export_capability_pack_purpose": "这份能力包用来做什么？",
+  "cognition.export_capability_pack_target": "交给哪个执行端？",
+  "cognition.export_capability_pack_done": "已导出：带入 {included} 条，未带入 {excluded} 条。"
 }
