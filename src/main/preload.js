@@ -446,13 +446,10 @@ const cogseedApi = {
   onPushEvent,
   log: logRecord,
 };
-// Plain-object copy for the legacy bridge name. contextBridge can only clone
-// plain objects/functions — a Proxy (previous impl) makes preload FAIL to
-// load entirely ("An object could not be cloned"), which drops window.cogseed
-// AND window.orkas and breaks every renderer IPC call.
-const orkasApi = Object.assign({}, cogseedApi);
 contextBridge.exposeInMainWorld('cogseed', cogseedApi);
-contextBridge.exposeInMainWorld('orkas', orkasApi);
+// contextBridge cannot clone Proxy objects in sandboxed renderers. Keep the
+// one-cycle compatibility alias as a plain object with the same allow-list.
+contextBridge.exposeInMainWorld('orkas', { ...cogseedApi });
 
 // Final-package launch smoke. The main process adds this private renderer
 // argument only when the release validator starts an isolated hidden window.

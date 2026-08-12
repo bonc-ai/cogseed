@@ -2959,6 +2959,7 @@ function _groupMsgToLegacy(gm) {
     ...(label ? { _from_label: label } : {}),
     ...(Array.isArray(gm.attachments) && gm.attachments.length ? { attachments: gm.attachments } : {}),
     ...(Array.isArray(gm.produced) && gm.produced.length ? { produced: gm.produced } : {}),
+    ...(Array.isArray(gm.produced_results) && gm.produced_results.length ? { produced_results: gm.produced_results } : {}),
     ...(Array.isArray(gm.references) && gm.references.length ? { references: gm.references } : {}),
     ...(gm.form ? { form: gm.form } : {}),
     ...(_normalizeCreatedAgents(gm) ? { created_agents: _normalizeCreatedAgents(gm) } : {}),
@@ -3731,20 +3732,29 @@ function _producedPathSpecificity(p) {
 // with the same basename, keep the more specific path so the chip opens the
 // real deliverable instead of a root-level scratch name.
 // Stable: original order is preserved within each rank.
-function _orderProducedPaths(absPaths) {
+function _orderProducedPaths(absPaths, results = []) {
+  const resultsByPath = new Map((Array.isArray(results) ? results : [])
+    .filter((item) => item && item.path)
+    .map((item) => [String(item.path), item]));
   const byBase = new Map();
   for (const [i, p] of absPaths.entries()) {
     const base = (p.split(/[\\/]/).pop() || p);
     const next = { path: p, base, i };
-    const prev = byBase.get(base);
+    const validationStatus = String(resultsByPath.get(p)?.status || '');
+    // Failed results must remain visible even when a later usable file has the
+    // same basename; otherwise the user loses the failure reason and fallback.
+    const key = validationStatus && validationStatus !== 'ready'
+      ? `${base}\u0000${p}`
+      : base;
+    const prev = byBase.get(key);
     if (!prev) {
-      byBase.set(base, next);
+      byBase.set(key, next);
       continue;
     }
     const nextScore = _producedPathSpecificity(next.path);
     const prevScore = _producedPathSpecificity(prev.path);
     if (nextScore > prevScore || (nextScore === prevScore && next.i > prev.i)) {
-      byBase.set(base, { ...next, i: prev.i });
+      byBase.set(key, { ...next, i: prev.i });
     }
   }
   return Array.from(byBase.values())
@@ -3764,6 +3774,35 @@ function _producedStatusLabel(status) {
   return t('chat.produced_status.final');
 }
 
+function _formatProducedBytes(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value < 0) return '';
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(value < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+function _producedValidationLine(result) {
+  if (!result || typeof result !== 'object') return '';
+  if (result.status === 'invalid') {
+    const code = String(result.failure_code || 'stat_failed');
+    const key = `chat.produced_validation.reason.${code}`;
+    const reason = t(key);
+    return t('chat.produced_validation.failed', { reason: reason === key ? code : reason });
+  }
+  if (result.status === 'preview_failed') {
+    return t('chat.produced_validation.preview_failed');
+  }
+  const size = _formatProducedBytes(result.bytes);
+  const capability = result.preview === 'available'
+    ? t('chat.produced_validation.preview_available')
+    : t('chat.produced_validation.local_only');
+  const tool = String(result.evidence?.producer_tool || '').trim();
+  return tool
+    ? t('chat.produced_validation.ready_with_tool', { size, capability, tool })
+    : t('chat.produced_validation.ready', { size, capability });
+}
+
 function _renderMessageProducedHtml(absPaths, opts = {}) {
   // Chip shows just the filename. The full absolute path lives only in
   // `data-produced-path` for the click handler; tooltip is a static
@@ -3773,14 +3812,22 @@ function _renderMessageProducedHtml(absPaths, opts = {}) {
   const moreHint = t('contexts.menu.more_actions');
   const outputStatus = opts.status || 'final';
   const statusLabel = _producedStatusLabel(outputStatus);
-  const ordered = _orderProducedPaths(absPaths);
+  const resultsByPath = new Map((Array.isArray(opts.results) ? opts.results : [])
+    .filter((item) => item && item.path)
+    .map((item) => [String(item.path), item]));
+  const ordered = _orderProducedPaths(absPaths, opts.results);
   const items = ordered.map((e) => {
+    const validation = resultsByPath.get(e.path);
+    const validationStatus = String(validation?.status || '');
+    const fallbacks = Array.isArray(validation?.fallbacks) ? validation.fallbacks : [];
+    const validationLine = _producedValidationLine(validation);
     const icon = _iconForProduced(e.base);
     // Mark files the side pane can actually render, so the user knows which
     // ones show a result rather than just opening a text/binary view. The
     // judgement is delegated to the viewer's own classifier — a second
     // extension table here would drift from what the pane really supports.
-    const previewable = typeof isSidePreviewableKind === 'function'
+    const previewable = validationStatus !== 'invalid'
+      && typeof isSidePreviewableKind === 'function'
       && typeof previewKindOf === 'function'
       && isSidePreviewableKind(previewKindOf(e.base));
     const previewBadge = previewable
@@ -3788,16 +3835,21 @@ function _renderMessageProducedHtml(absPaths, opts = {}) {
       : '';
     const openLabel = previewable ? t('sideBrowser.open_side') : t('chat.produced_open');
     const openTitle = previewable ? t('sideBrowser.open_side_title') : hint;
-    return `<div class="chat-msg-produced-item" data-produced-path="${escapeHtml(e.path)}"${previewable ? ' data-previewable="1"' : ''}>
-      <button type="button" class="chat-msg-produced-main" title="${escapeHtml(hint)}">
+    const invalid = validationStatus === 'invalid';
+    const canOpen = !invalid || fallbacks.includes('open');
+    const canReveal = !invalid || fallbacks.includes('reveal');
+    const openExternal = fallbacks.includes('open') && validation?.preview && validation.preview !== 'available';
+    const resolvedOpenLabel = openExternal ? t('chat.produced_open_local') : openLabel;
+    return `<div class="chat-msg-produced-item${invalid ? ' is-invalid' : ''}" data-produced-path="${escapeHtml(e.path)}"${validationStatus ? ` data-result-status="${escapeHtml(validationStatus)}"` : ''}${fallbacks.length ? ` data-result-fallbacks="${escapeHtml(fallbacks.join(','))}"` : ''}${openExternal ? ' data-open-external="1"' : ''}${previewable ? ' data-previewable="1"' : ''}>
+      <button type="button" class="chat-msg-produced-main" title="${escapeHtml(hint)}"${invalid ? ' disabled' : ''}>
         <span class="chat-msg-produced-icon">${icon}</span>
         <span class="chat-msg-produced-main-text">
           <span class="chat-msg-produced-label-row"><span class="chat-msg-produced-label">${escapeHtml(e.base)}</span>${previewBadge}<span class="chat-msg-produced-badge is-${escapeHtml(outputStatus)}">${escapeHtml(statusLabel)}</span></span>
-          <span class="chat-msg-produced-path" title="${escapeHtml(e.path)}">${escapeHtml(e.path)}</span>
+          ${validationLine ? `<span class="chat-msg-produced-validation is-${escapeHtml(validationStatus)}">${escapeHtml(validationLine)}</span>` : `<span class="chat-msg-produced-path" title="${escapeHtml(e.path)}">${escapeHtml(e.path)}</span>`}
         </span>
       </button>
-      <button type="button" class="chat-msg-produced-open-btn btn btn-sm" title="${escapeHtml(openTitle)}">${escapeHtml(openLabel)}</button>
-      <button type="button" class="chat-msg-produced-menu-btn" title="${escapeHtml(moreHint)}" aria-label="${escapeHtml(moreHint)}">⋯</button>
+      <button type="button" class="chat-msg-produced-open-btn btn btn-sm" title="${escapeHtml(openTitle)}"${canOpen ? '' : ' disabled'}>${escapeHtml(resolvedOpenLabel)}</button>
+      ${canReveal ? `<button type="button" class="chat-msg-produced-menu-btn" title="${escapeHtml(moreHint)}" aria-label="${escapeHtml(moreHint)}">⋯</button>` : ''}
     </div>`;
   });
   return `<div class="chat-msg-produced is-${escapeHtml(outputStatus)}" data-produced-status="${escapeHtml(outputStatus)}">${items.join('')}</div>`;
@@ -3822,7 +3874,10 @@ function _mountMessageProducedFooter(msgDiv, absPaths, opts = {}) {
   const bubble = msgDiv.querySelector('.chat-bubble');
   if (!bubble || bubble.querySelector('.chat-msg-produced')) return;
   const wrap = document.createElement('div');
-  wrap.innerHTML = _renderMessageProducedHtml(absPaths, { status: opts.status || 'final' });
+  wrap.innerHTML = _renderMessageProducedHtml(absPaths, {
+    status: opts.status || 'final',
+    results: opts.results,
+  });
   const node = wrap.firstElementChild;
   if (!node) return;
   bubble.appendChild(node);
@@ -4091,17 +4146,36 @@ function _openProducedFile(absPath) {
   if (typeof openChatFileViewer === 'function') openChatFileViewer(absPath, base, opts);
 }
 
+async function _openProducedFileLocally(absPath) {
+  if (!absPath || !window.cogseed || typeof window.cogseed.invoke !== 'function') return;
+  try {
+    const result = await window.cogseed.invoke('workspace.openFileExternal', {
+      path: absPath,
+      ...(currentCid ? { cid: currentCid } : {}),
+    });
+    if (!result?.ok) throw new Error(result?.error || 'failed');
+  } catch (error) {
+    const reason = (error && error.message) || String(error);
+    const message = t('chat.produced_open_local_failed', { reason });
+    if (typeof uiAlert === 'function') await uiAlert(message);
+  }
+}
+
 function _hydrateMessageProducedChips(msgDiv) {
   const rows = msgDiv.querySelectorAll('.chat-msg-produced-item[data-produced-path]');
   rows.forEach((row) => {
     const main = row.querySelector('.chat-msg-produced-main');
     const openBtn = row.querySelector('.chat-msg-produced-open-btn');
     const menuBtn = row.querySelector('.chat-msg-produced-menu-btn');
+    const invalid = row.dataset.resultStatus === 'invalid';
+    const fallbacks = String(row.dataset.resultFallbacks || '').split(',').filter(Boolean);
+    const openExternal = row.dataset.openExternal === '1';
     if (main && main.dataset.bound !== '1') {
       main.dataset.bound = '1';
       main.addEventListener('click', (e) => {
         e.stopPropagation();
-        _openProducedFile(row.dataset.producedPath);
+        if (openExternal) void _openProducedFileLocally(row.dataset.producedPath);
+        else _openProducedFile(row.dataset.producedPath);
       });
     }
     if (openBtn && openBtn.dataset.bound !== '1') {
@@ -4109,7 +4183,11 @@ function _hydrateMessageProducedChips(msgDiv) {
       openBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        _openProducedFile(row.dataset.producedPath);
+        if (openExternal) {
+          void _openProducedFileLocally(row.dataset.producedPath);
+        } else {
+          _openProducedFile(row.dataset.producedPath);
+        }
       });
     }
     if (menuBtn && menuBtn.dataset.bound !== '1') {
@@ -4122,6 +4200,7 @@ function _hydrateMessageProducedChips(msgDiv) {
         const base = p.split(/[\\/]/).pop() || p;
         window.ConversationInfo.openFileMenu(menuBtn, p, base, {
           cid: currentCid || '',
+          ...(invalid ? { allowedActions: fallbacks.includes('reveal') ? ['reveal'] : [] } : {}),
           onDeleted: () => {
             row.remove();
             const footer = msgDiv.querySelector('.chat-msg-produced');
@@ -5049,6 +5128,18 @@ function _conversationOperationDialog(options = {}) {
           ${options.sources.map((item) => `<div class="conversation-operation-source">${escapeHtml(item.title || item.conversation_id || '')}</div>`).join('')}
         </div>`
       : '';
+    const scopeHtml = options.mergeScope
+      ? `<fieldset class="conversation-operation-scope">
+          <legend>${escapeHtml(t('chat.merge.scope_label'))}</legend>
+          <label><input type="radio" name="conversation-merge-scope" value="selected_conversations" checked> <span>${escapeHtml(t('chat.merge.scope_selected'))}</span></label>
+          <label><input type="radio" name="conversation-merge-scope" value="time_range"> <span>${escapeHtml(t('chat.merge.scope_time_range'))}</span></label>
+          <div class="conversation-operation-time-range" data-merge-time-range hidden>
+            <label><span>${escapeHtml(t('chat.merge.scope_start'))}</span><input type="datetime-local" data-merge-start-at value="${escapeHtml(options.mergeScope.startValue || '')}"></label>
+            <label><span>${escapeHtml(t('chat.merge.scope_end'))}</span><input type="datetime-local" data-merge-end-at value="${escapeHtml(options.mergeScope.endValue || '')}"></label>
+          </div>
+          <small>${escapeHtml(t('chat.merge.scope_hint'))}</small>
+        </fieldset>`
+      : '';
     overlay.innerHTML = `
       <div class="modal modal-standard ui-dialog conversation-operation-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-operation-title">
         <div class="modal-title ui-dialog-title" id="conversation-operation-title">${title}</div>
@@ -5056,6 +5147,7 @@ function _conversationOperationDialog(options = {}) {
           <div class="ui-dialog-message">${message}</div>
           ${inputHtml}
           ${sourcesHtml}
+          ${scopeHtml}
           <div class="conversation-operation-error" data-operation-error hidden></div>
         </div>
         <div class="modal-actions">
@@ -5068,6 +5160,13 @@ function _conversationOperationDialog(options = {}) {
     const cancel = overlay.querySelector('[data-operation-cancel]');
     const confirm = overlay.querySelector('[data-operation-confirm]');
     const error = overlay.querySelector('[data-operation-error]');
+    const mergeScopeInputs = overlay.querySelectorAll('input[name="conversation-merge-scope"]');
+    const mergeTimeRange = overlay.querySelector('[data-merge-time-range]');
+    for (const scopeInput of mergeScopeInputs) {
+      scopeInput.addEventListener('change', () => {
+        if (mergeTimeRange) mergeTimeRange.hidden = scopeInput.value !== 'time_range' || !scopeInput.checked;
+      });
+    }
     let busy = false;
     const finish = (value) => {
       if (busy && value == null) return;
@@ -5097,7 +5196,34 @@ function _conversationOperationDialog(options = {}) {
       confirm.classList.add('is-loading');
       confirm.textContent = loadingLabel;
       try {
-        const result = await options.onConfirm(value);
+        let scope;
+        if (options.mergeScope) {
+          const kind = overlay.querySelector('input[name="conversation-merge-scope"]:checked')?.value || 'selected_conversations';
+          if (kind === 'time_range') {
+            const startValue = String(overlay.querySelector('[data-merge-start-at]')?.value || '');
+            const endValue = String(overlay.querySelector('[data-merge-end-at]')?.value || '');
+            const startMs = Date.parse(startValue);
+            const endMs = Date.parse(endValue);
+            if (!startValue || !endValue || !Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs > endMs) {
+              busy = false;
+              cancel.disabled = false;
+              confirm.disabled = false;
+              confirm.classList.remove('is-loading');
+              confirm.textContent = options.confirmLabel || t('common.confirm');
+              error.hidden = false;
+              error.textContent = t('chat.merge.scope_invalid');
+              return;
+            }
+            scope = {
+              kind: 'time_range',
+              startAt: new Date(startMs).toISOString(),
+              endAt: new Date(endMs).toISOString(),
+            };
+          } else {
+            scope = { kind: 'selected_conversations' };
+          }
+        }
+        const result = await options.onConfirm(value, scope);
         finish(result === undefined ? true : result);
       } catch (err) {
         busy = false;
@@ -5130,6 +5256,8 @@ function _mergeSummarySectionLabel(raw) {
   const normalized = String(raw || '').trim().toLowerCase();
   const labels = {
     'source conversations': 'chat.merge.section.source_conversations',
+    'context scope': 'chat.merge.section.context_scope',
+    '上下文范围': 'chat.merge.section.context_scope',
     'confirmed decisions': 'chat.merge.section.confirmed_decisions',
     'current state': 'chat.merge.section.current_state',
     'agent private context index': 'chat.merge.section.agent_private_context',
@@ -5139,6 +5267,40 @@ function _mergeSummarySectionLabel(raw) {
   };
   const key = labels[normalized];
   return key ? t(key) : raw;
+}
+
+function _renderMergeScopeReceipt(receipt) {
+  if (!receipt || !Array.isArray(receipt.sources)) return '';
+  const kindLabel = receipt.kind === 'time_range'
+    ? t('chat.merge.scope_time_range')
+    : t('chat.merge.scope_selected');
+  const rows = receipt.sources.map((source) => {
+    const selectedRange = source.selectedStartAt && source.selectedEndAt
+      ? `${formatTime(source.selectedStartAt)} - ${formatTime(source.selectedEndAt)}`
+      : t('chat.merge.scope_none');
+    const actualRange = source.actualStartAt && source.actualEndAt
+      ? `${formatTime(source.actualStartAt)} - ${formatTime(source.actualEndAt)}`
+      : t('chat.merge.scope_none');
+    const adjustments = [
+      Number(source.deduplicatedCount) > 0
+        ? t('chat.merge.scope_deduplicated', { count: source.deduplicatedCount })
+        : '',
+      Number(source.truncatedCount) > 0
+        ? t('chat.merge.scope_truncated', { count: source.truncatedCount })
+        : '',
+      Array.isArray(source.reasons) && source.reasons.includes('private_session_omitted_for_time_range')
+        ? t('chat.merge.scope_private_omitted')
+        : '',
+    ].filter(Boolean);
+    return `<div class="conversation-merge-scope-row">
+      <strong>${escapeHtml(source.sourceTitle || source.sourceCid || '')}</strong>
+      <span>${escapeHtml(t('chat.merge.scope_selected_result', { count: Number(source.selectedMessageCount) || 0, range: selectedRange }))}</span>
+      <span>${escapeHtml(t('chat.merge.scope_actual_result', { count: Number(source.actualMessageCount) || 0, range: actualRange }))}</span>
+      ${Number(source.privateSessionMessageCount) > 0 ? `<span>${escapeHtml(t('chat.merge.scope_private_result', { count: source.privateSessionMessageCount }))}</span>` : ''}
+      ${adjustments.length ? `<small>${escapeHtml(adjustments.join(' · '))}</small>` : ''}
+    </div>`;
+  }).join('');
+  return `<section class="conversation-merge-scope-receipt"><div><strong>${escapeHtml(t('chat.merge.scope_receipt_title'))}</strong><span>${escapeHtml(kindLabel)}</span></div>${rows}</section>`;
 }
 
 function _renderMergeSummaryDetails(summary) {
@@ -5173,7 +5335,9 @@ function _renderConversationResultCardHtml(card = {}) {
   const subtitle = isMerge
     ? t('chat.merge.summary_subtitle', { agentCount: Math.max(0, Number(card.agentCount) || 0) })
     : t('chat.copy.notice_subtitle');
-  const details = isMerge ? _renderMergeSummaryDetails(card.summary) : _copyNoticeBodyHtml();
+  const details = isMerge
+    ? `${_renderMergeScopeReceipt(card.scopeReceipt)}${_renderMergeSummaryDetails(card.summary)}`
+    : _copyNoticeBodyHtml();
   return `<details class="conversation-result-card ${isMerge ? 'is-merge' : 'is-copy'}">
     <summary>
       <span class="conversation-result-card-copy">
@@ -5308,6 +5472,16 @@ async function _mergeSelectedConversationsWithConfirm() {
   const cids = [..._conversationMergeSelection];
   if (cids.length < 2) return;
   const sources = cids.map(_conversationById).filter(Boolean);
+  const sourceTimes = sources
+    .flatMap((source) => [source.created_at, source.last_active_at || source.updated_at])
+    .map((value) => Date.parse(value || ''))
+    .filter(Number.isFinite);
+  const localDateTimeValue = (value) => {
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return '';
+    const offset = date.getTimezoneOffset() * 60_000;
+    return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+  };
   const result = await _conversationOperationDialog({
     title: t('chat.merge.dialog_title'),
     message: t('chat.merge.dialog_body'),
@@ -5317,13 +5491,22 @@ async function _mergeSelectedConversationsWithConfirm() {
     inputLabel: t('chat.merge.title_label'),
     inputValue: t('chat.merge.default_title'),
     sources,
-    onConfirm: async (title) => {
+    mergeScope: {
+      startValue: sourceTimes.length ? localDateTimeValue(Math.min(...sourceTimes)) : '',
+      endValue: sourceTimes.length ? localDateTimeValue(Math.max(...sourceTimes)) : '',
+    },
+    onConfirm: async (title, scope) => {
       const projectIds = [...new Set(sources.map((source) => source.project_id || ''))];
       const projectId = projectIds.length === 1 ? projectIds[0] : '';
       const res = await apiFetch('/api/conversations/merge', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cids, title, project_id: projectId || null }),
+        body: JSON.stringify({
+          cids,
+          title,
+          project_id: projectId || null,
+          scope: scope || { kind: 'selected_conversations' },
+        }),
       });
       const data = await res.json();
       if (!data || data.ok === false || !data.conversation) throw new Error(data?.error || t('chat.unknown_error'));
@@ -5340,6 +5523,7 @@ async function _mergeSelectedConversationsWithConfirm() {
     sourceCount: cids.length,
     agentCount,
     summary: result.summary || '',
+    scopeReceipt: result.scope_receipt,
   });
   _conversationMergeSelectionActive = false;
   _conversationMergeSelection.clear();
@@ -7336,7 +7520,10 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble) window.mountMessageArtifacts(bubble, message.artifacts, opts.cid || currentCid);
   }
-  if (producedPaths) _mountMessageProducedFooter(msgDiv, producedPaths, { status: _producedStatusFromReviewStatus(message.kstar_review?.status) });
+  if (producedPaths) _mountMessageProducedFooter(msgDiv, producedPaths, {
+    status: _producedStatusFromReviewStatus(message.kstar_review?.status),
+    results: message.produced_results,
+  });
   // Every assistant reply gets actions. Archive remains limited to final
   // raw-markdown replies; sanitized HTML status stubs are not archivable.
   if (role === 'assistant' && failedAssistant) {
@@ -12524,7 +12711,10 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
     if (bubble) window.mountMessageArtifacts(bubble, gm.artifacts, cid);
   }
   if (Array.isArray(gm.produced) && gm.produced.length) {
-    _mountMessageProducedFooter(ph, gm.produced, { status: _producedStatusFromReviewStatus(gm.kstar_review?.status) });
+    _mountMessageProducedFooter(ph, gm.produced, {
+      status: _producedStatusFromReviewStatus(gm.kstar_review?.status),
+      results: gm.produced_results,
+    });
   }
   _scheduleConversationInfoFileRefresh(cid);
 }

@@ -7,36 +7,40 @@ const source = fs.readFileSync(
   path.join(__dirname, '../../src/renderer/modules/conversation.js'),
   'utf8',
 );
+const utilsSource = fs.readFileSync(
+  path.join(__dirname, '../../src/renderer/modules/utils.js'),
+  'utf8',
+);
 const artifactSource = fs.readFileSync(
   path.join(__dirname, '../../src/renderer/modules/chat-artifact.js'),
   'utf8',
 );
 
-function extractFunction(name: string): string {
+function extractFunction(name: string, functionSource = source): string {
   const marker = `function ${name}`;
-  let start = source.indexOf(marker);
+  let start = functionSource.indexOf(marker);
   if (start < 0) throw new Error(`missing function: ${name}`);
-  if (source.slice(Math.max(0, start - 6), start) === 'async ') start -= 6;
-  const paramsStart = source.indexOf('(', start);
+  if (functionSource.slice(Math.max(0, start - 6), start) === 'async ') start -= 6;
+  const paramsStart = functionSource.indexOf('(', start);
   let parenDepth = 0;
   let bodyStart = -1;
-  for (let i = paramsStart; i < source.length; i += 1) {
-    if (source[i] === '(') parenDepth += 1;
-    else if (source[i] === ')') {
+  for (let i = paramsStart; i < functionSource.length; i += 1) {
+    if (functionSource[i] === '(') parenDepth += 1;
+    else if (functionSource[i] === ')') {
       parenDepth -= 1;
       if (parenDepth === 0) {
-        bodyStart = source.indexOf('{', i);
+        bodyStart = functionSource.indexOf('{', i);
         break;
       }
     }
   }
   if (bodyStart < 0) throw new Error(`missing body: ${name}`);
   let depth = 0;
-  for (let i = bodyStart; i < source.length; i += 1) {
-    if (source[i] === '{') depth += 1;
-    else if (source[i] === '}') {
+  for (let i = bodyStart; i < functionSource.length; i += 1) {
+    if (functionSource[i] === '{') depth += 1;
+    else if (functionSource[i] === '}') {
       depth -= 1;
-      if (depth === 0) return source.slice(start, i + 1);
+      if (depth === 0) return functionSource.slice(start, i + 1);
     }
   }
   throw new Error(`unterminated function: ${name}`);
@@ -49,12 +53,13 @@ function loadHelpers(): any {
     '_ensureConversationMergeActionBar',
     '_copyNoticeBodyHtml',
     '_mergeSummarySectionLabel',
+    '_renderMergeScopeReceipt',
     '_renderMergeSummaryDetails',
     '_renderConversationResultCardHtml',
   ];
   const sandbox = {
     conversations: [{ conversation_id: 'c1', title: 'Source task' }],
-    t(key: string, vars?: Record<string, number>) {
+    t(key: string, vars?: Record<string, any>) {
       const strings = {
         'chat.conv_copy_title': '复制会话',
         'chat.conv_pin_title': 'Pin',
@@ -68,12 +73,17 @@ function loadHelpers(): any {
         'chat.merge.expand': '查看合并摘要',
         'chat.merge.collapse': '收起合并摘要',
         'chat.merge.section.source_conversations': 'Source Conversations',
+        'chat.merge.section.context_scope': 'Context Scope',
         'chat.merge.section.confirmed_decisions': 'Confirmed Decisions',
         'chat.merge.section.current_state': 'Current State',
         'chat.merge.section.agent_private_context': 'Agent Private Context Index',
         'chat.merge.section.source_references': 'Source References',
         'chat.merge.section.open_questions': 'Open Questions',
         'chat.merge.section.conflicts_risks': 'Conflicts / Risks',
+        'chat.merge.scope_selected': 'Explicitly selected tasks only',
+        'chat.merge.scope_selected_result': `Selected ${vars?.count || 0} · ${vars?.range || ''}`,
+        'chat.merge.scope_actual_result': `Injected ${vars?.count || 0} · ${vars?.range || ''}`,
+        'chat.merge.scope_none': 'No matching messages',
       };
       return strings[key] || key;
     },
@@ -86,7 +96,7 @@ function loadHelpers(): any {
     _cloneConversationWithConfirm() {},
     document: { createElement() { return {}; }, getElementById() { return null; } },
   };
-  vm.runInNewContext(`${names.map(extractFunction).join('\n')}\nthis.helpers = { ${names.join(',')} };`, sandbox);
+  vm.runInNewContext(`${extractFunction('formatTime', utilsSource)}\n${names.map((name) => extractFunction(name)).join('\n')}\nthis.helpers = { ${names.join(',')} };`, sandbox);
   return sandbox.helpers;
 }
 
@@ -111,10 +121,37 @@ describe('conversation copy and merge renderer', () => {
       sourceCount: 2,
       agentCount: 1,
       summary: '## Source Conversations\n- A\n\n## Confirmed Decisions\n- Keep the API',
+      scopeReceipt: {
+        kind: 'selected_conversations',
+        sources: [{
+          sourceCid: 'c1', sourceTitle: 'Source task', selectedMessageCount: 4,
+          actualMessageCount: 3, privateSessionMessageCount: 1,
+          deduplicatedCount: 1, truncatedCount: 0, reasons: ['duplicate_message_id'],
+        }],
+      },
     });
     expect(html).toContain('已合并 2 个会话');
     expect(html).toContain('Source Conversations');
     expect(html).toContain('Confirmed Decisions');
+    expect(html).toContain('Source task');
+  });
+
+  it('shows full dates for a merge scope that crosses days', () => {
+    const { _renderMergeScopeReceipt } = loadHelpers();
+    const html = _renderMergeScopeReceipt({
+      kind: 'selected_conversations',
+      sources: [{
+        sourceCid: 'c1', sourceTitle: 'Cross-day task',
+        selectedMessageCount: 2, actualMessageCount: 2,
+        selectedStartAt: '2026-08-10T04:00:00.000Z',
+        selectedEndAt: '2026-08-11T05:30:00.000Z',
+        actualStartAt: '2026-08-10T04:00:00.000Z',
+        actualEndAt: '2026-08-11T05:30:00.000Z',
+      }],
+    });
+
+    expect(html).toContain('2026-08-10 12:00');
+    expect(html).toContain('2026-08-11 13:30');
   });
 
 

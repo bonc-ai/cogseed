@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { types as utilTypes } from 'node:util';
 import * as vm from 'node:vm';
 
 
@@ -233,6 +234,15 @@ describe('preload bridge', () => {
 
     const invalid = loadPreload({ ok: true, lang: 'en', tables: { 'zh-CN': {} } });
     expect(invalid.exposed.__cogseedI18nBoot).toBeNull();
+  });
+
+  it('exposes the legacy bridge alias as a contextBridge-cloneable plain object', () => {
+    const { api, exposed } = loadPreload();
+    const legacyApi = exposed.orkas as Record<string, unknown>;
+
+    expect(utilTypes.isProxy(legacyApi)).toBe(false);
+    expect(Object.keys(legacyApi).sort()).toEqual(Object.keys(api).sort());
+    expect(legacyApi.invoke).toBe(api.invoke);
   });
 
   it('routes invokes through one envelope', async () => {

@@ -7024,6 +7024,13 @@ body.model-not-configured .main-content { flex-direction: column; }
 .chat-msg-produced-item.is-menu-open {
   background: rgba(148, 163, 184, 0.12);
 }
+.chat-msg-produced-item.is-invalid {
+  background: rgba(220, 38, 38, 0.04);
+}
+.chat-msg-produced-item.is-invalid .chat-msg-produced-main {
+  color: var(--danger);
+  cursor: default;
+}
 .chat-msg-produced-main:focus-visible,
 .chat-msg-produced-menu-btn:focus-visible {
   outline: 2px solid rgba(14, 159, 110, 0.4);
@@ -7093,6 +7100,20 @@ body.model-not-configured .main-content { flex-direction: column; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.chat-msg-produced-validation {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.chat-msg-produced-validation.is-invalid,
+.chat-msg-produced-validation.is-preview_failed {
+  color: var(--danger);
+}
 
 .chat-msg-produced-label-row {
   display: flex;
@@ -7126,6 +7147,45 @@ body.model-not-configured .main-content { flex-direction: column; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.recall-candidate-receipt {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--primary) 22%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--primary) 5%, transparent);
+}
+.recall-candidate-receipt > strong,
+.recall-candidate-receipt > span,
+.recall-candidate-receipt > small,
+.recall-candidate-receipt > button { grid-column: 1 / -1; }
+.recall-candidate-receipt > div { min-width: 0; }
+.recall-candidate-receipt > div span { display: block; color: var(--text-muted); font-size: 11px; }
+.recall-candidate-receipt > div b { display: block; overflow: hidden; text-overflow: ellipsis; font-size: 12px; white-space: nowrap; }
+.recall-candidate-receipt.is-failed { border-color: rgba(220, 38, 38, 0.28); background: rgba(220, 38, 38, 0.05); color: var(--danger); }
+.recall-candidate-receipt.is-ignored { border-color: var(--border); background: var(--surface-subtle); color: var(--text-muted); }
+.conversation-operation-scope {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.conversation-operation-scope legend { padding: 0 4px; font-size: 12px; font-weight: 700; }
+.conversation-operation-scope > label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.conversation-operation-scope > small { color: var(--text-muted); font-size: 11px; line-height: 1.5; }
+.conversation-operation-time-range { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.conversation-operation-time-range label { display: grid; gap: 4px; min-width: 0; font-size: 11px; color: var(--text-muted); }
+.conversation-operation-time-range input { min-width: 0; padding: 7px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
+.conversation-merge-scope-receipt { display: grid; gap: 8px; margin-bottom: 12px; padding: 12px; border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent); border-radius: 7px; background: color-mix(in srgb, var(--primary) 4%, transparent); }
+.conversation-merge-scope-receipt > div:first-child { display: flex; justify-content: space-between; gap: 12px; }
+.conversation-merge-scope-receipt > div:first-child span { color: var(--text-muted); font-size: 12px; }
+.conversation-merge-scope-row { display: grid; gap: 3px; padding-top: 8px; border-top: 1px solid var(--border); }
+.conversation-merge-scope-row span, .conversation-merge-scope-row small { color: var(--text-muted); font-size: 11px; line-height: 1.45; }
+@media (max-width: 620px) { .conversation-operation-time-range { grid-template-columns: minmax(0, 1fr); } }
 /* Quick-create-agent chip — inside assistant bubble, same visual language as
    produced-chip but brighter green to signal "new custom artifact created",
    and a leading diamond icon that matches the agent-detail name header. */
