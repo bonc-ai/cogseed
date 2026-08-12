@@ -449,8 +449,60 @@ window.addEventListener('i18n-change', () => {
   _settingsRenderCommanderBackend();
   _settingsRenderCustomProviders();
   _settingsRenderCcswitchStatus();
+  _settingsRenderCliFallback();
   if (_settingsState.ccswitchPreviewRows.length) _settingsRenderCcswitchPreviewDialog();
 });
+
+// ── Commander CLI fallback (no API-key model) ─────────────────────────────
+async function _settingsRenderCliFallback() {
+  const select = document.getElementById('settings-cli-fallback-select');
+  const stateEl = document.getElementById('settings-cli-fallback-state');
+  if (!select) return;
+
+  let prefs = { cli: '', noticeShown: false };
+  try {
+    const res = await window.cogseed.invoke('prefs.getCliFallback');
+    if (res) prefs = { cli: res.cli || '', noticeShown: !!res.noticeShown };
+  } catch (_) { /* prefs unavailable */ }
+
+  select.value = prefs.cli || '';
+  if (stateEl) {
+    stateEl.textContent = prefs.cli
+      ? t('settings.cli_fallback.state_chosen').replace('{cli}', prefs.cli === 'claude' ? 'Claude Code' : (prefs.cli === 'codex' ? 'Codex' : 'OpenCode'))
+      : t('settings.cli_fallback.state_auto');
+  }
+
+  if (select.dataset.bound === '1') return;
+  select.dataset.bound = '1';
+  select.addEventListener('change', async () => {
+    try {
+      await window.cogseed.invoke('prefs.setCliFallback', { cli: select.value });
+      const res = await window.cogseed.invoke('model.hasConfigured');
+      const noApi = !(res && res.configured);
+      if (stateEl) {
+        stateEl.textContent = select.value
+          ? t('settings.cli_fallback.state_chosen').replace('{cli}', select.value === 'claude' ? 'Claude Code' : (select.value === 'codex' ? 'Codex' : 'OpenCode'))
+          : t('settings.cli_fallback.state_auto');
+      }
+      if (noApi && typeof uiToast === 'function') {
+        uiToast(t('settings.cli_fallback.saved_no_api'), { variant: 'warning', timeoutMs: 5000 });
+      }
+    } catch (err) {
+      _settingsLog.warn('cli fallback save failed', err);
+    }
+  });
+
+  // One-time honest notice when the user is in the no-API state.
+  try {
+    const modelRes = await window.cogseed.invoke('model.hasConfigured');
+    if (!(modelRes && modelRes.configured) && !prefs.noticeShown) {
+      await window.cogseed.invoke('prefs.markCliFallbackNoticeShown');
+      if (typeof uiToast === 'function') {
+        uiToast(t('settings.cli_fallback.notice_no_api'), { variant: 'warning', timeoutMs: 8000 });
+      }
+    }
+  } catch (_) { /* notice is best-effort */ }
+}
 
 async function _settingsRefreshProviders() {
   const res = await window.orkas.invoke('auth.listProviders');

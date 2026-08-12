@@ -1222,6 +1222,20 @@ if (!gotLock) {
     });
     registerDeferred('marketplace:reconcile', () => runMarketplaceInstallReconcile('startup'));
 
+    // Heal cc-switch providers synced before the auto-bind fix: bind the first
+    // declared model of each synced provider to an entry so chat dispatch can
+    // actually use it (pickChatEntry walks entries only). Cheap and idempotent.
+    registerDeferred('auth:ccswitch-bind-entries', async () => {
+      const uid = users.getActiveUserId();
+      if (!uid) return;
+      const { ensureCcSwitchBoundEntries } = await import('./features/custom_providers');
+      const bound = await ensureCcSwitchBoundEntries(uid);
+      if (bound > 0) {
+        const log = (await import('./logger')).createLogger('boot');
+        log.info('cc-switch auto-bound entries on boot', { bound });
+      }
+    });
+
     registerDeferred('boot:maintenance-sweeps', () => runBootMaintenanceSweeps(), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('search:reconcile', (signal) => searchFeature.reconcileActive(signal), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('kb:reconcile', async (signal) => {

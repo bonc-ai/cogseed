@@ -576,17 +576,23 @@ function _csAgentNameForCli(cli) {
   return cli;
 }
 
-// Detect local coding CLIs once per connect pass. Returns a Set of cli names
-// ('claude' / 'codex') that are installed & version-OK on this machine.
+// Detect local coding CLIs once per connect pass. Returns a Map cli-name →
+// { loggedIn, mode } from the real localAgents.list probe (file-based auth
+// state, never guessed).
 async function _csDetectCodingClis() {
-  const found = new Set();
+  const found = new Map();
   try {
     const res = await window.orkas.invoke('localAgents.list', { force: false });
     const entries = (res && res.entries) || [];
     entries.forEach((e) => {
       if (!e || !e.available) return;
       const cli = _csCodingCliForAppType(e.type);
-      if (cli) found.add(cli);
+      if (cli) {
+        found.set(cli, {
+          loggedIn: !!(e.auth && e.auth.loggedIn),
+          mode: (e.auth && e.auth.mode) || 'unknown',
+        });
+      }
     });
   } catch (err) {
     _obLog.warn('team CLI detect failed', { error: (err && err.message) || String(err) });
@@ -634,7 +640,7 @@ function _csRenderTeam(items, unsupported, localClis) {
   const box = document.getElementById('cs-team-list');
   if (!box) return;
 
-  const clis = localClis instanceof Set ? localClis : new Set();
+  const clis = localClis instanceof Map ? localClis : (localClis instanceof Set ? new Map([...localClis].map((c) => [c, { loggedIn: false, mode: 'unknown' }])) : new Map());
 
   if (!items.length && !unsupported.length && !clis.size) {
     box.innerHTML =
@@ -645,7 +651,7 @@ function _csRenderTeam(items, unsupported, localClis) {
   // Bucket both importable and unsupported rows by their originating agent.
   const groups = new Map(); // appType → { ids: [], needsKey: n, unsupportedReasons: [], hasCli: bool }
   const bucket = (appType) => {
-    if (!groups.has(appType)) groups.set(appType, { ids: [], needsKey: 0, unsupportedReasons: [], hasCli: false });
+    if (!groups.has(appType)) groups.set(appType, { ids: [], needsKey: 0, unsupportedReasons: [], hasCli: false, cliAuth: '' });
     return groups.get(appType);
   };
   items.forEach((it) => {
@@ -659,9 +665,16 @@ function _csRenderTeam(items, unsupported, localClis) {
   // canonical appType so it either enriches an existing CC Switch card or
   // stands up its own card when CC Switch had nothing for it.
   const cliAppType = { claude: 'claude', codex: 'codex' };
-  clis.forEach((cli) => {
+  clis.forEach((info, cli) => {
     const appType = cliAppType[cli] || cli;
-    bucket(appType).hasCli = true;
+    const g = bucket(appType);
+    g.hasCli = true;
+    // Honest sign-in state from the real credential files.
+    if (info && info.loggedIn) {
+      g.cliAuth = info.mode === 'api' ? 'API 登录' : (info.mode === 'oauth' ? '官方账号登录' : '已登录');
+    } else {
+      g.cliAuth = '';
+    }
   });
 
   // Stash ids + CLI presence for the connect handler; DOM never carries key material.
@@ -712,7 +725,11 @@ function _csRenderTeam(items, unsupported, localClis) {
 
     const hints = [];
     if (g.ids.length > 0) hints.push(`模型 ${g.ids.length} 项 → 模型供应商（提取/对话用）`);
-    if (g.hasCli) hints.push('执行 Agent → AI 团队（可派发任务）');
+    if (g.hasCli) {
+      hints.push(g.cliAuth
+        ? `执行 Agent → AI 团队（${g.cliAuth}，无需 Key 即可派发任务）`
+        : '执行 Agent → AI 团队（可派发任务）');
+    }
     if (g.needsKey) hints.push('部分模型直连需 API Key（平台规则），可稍后在设置里补充');
     Object.keys(unReasonCounts).forEach((r) => {
       const n = unReasonCounts[r];

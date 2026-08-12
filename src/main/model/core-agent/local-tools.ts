@@ -96,6 +96,8 @@ import { checkEditFreshness, recordRead } from './read-tracker';
 import { createLogger } from '../../logger';
 import { logErrorRef, logPathRef, maskId } from '../../util/log-redact';
 import { t } from '../../i18n';
+import * as executionLog from '../../features/execution_log';
+import * as commandIntent from '../../features/command_intent';
 import {
   closeInteractiveCliSession,
   readInteractiveCliSession,
@@ -1085,6 +1087,30 @@ async function executeCoreBashWithOutputTracking(
   const before = opts.onFileWritten ? collectBashFileSnapshot(outputDir) : new Map<string, BashFileSnapshotEntry>();
   const restoreEnv = withBashOutputEnv(ctx, outputDir, manifestPath);
   const restoreWritableRoots = withBashWritableRoots(ctx, bashWritableRootsFor(opts, workingDir));
+
+  // Create execution record
+  const intent = commandIntent.extractIntent(command);
+  const executionId = executionLog.generateExecutionId();
+  const record: executionLog.ExecutionRecord = {
+    id: executionId,
+    intent: intent.intent,
+    why: intent.why,
+    resources: intent.resources,
+    risk: intent.risk,
+    status: 'running',
+    startTime: Date.now(),
+    rawCommand: command,
+  };
+  executionLog.appendRecord(record);
+
+  // Broadcast execution started event to renderer
+  try {
+    const ipc = require('../../ipc') as { broadcastToRenderer?: (channel: string, payload: unknown) => void };
+    if (ipc.broadcastToRenderer) {
+      ipc.broadcastToRenderer('execution:started', record);
+    }
+  } catch { /* IPC not available */ }
+
   try {
     const direct = parseOrkasCliInvocation(input, ctx);
     const macWriteSandboxActive = process.platform === 'darwin'
@@ -1094,11 +1120,53 @@ async function executeCoreBashWithOutputTracking(
     const result = direct && !macWriteSandboxActive
       ? await executeDirectOrkasCli(direct, input, ctx, workingDir)
       : await coreBashTool.execute(input, ctx);
+
+    // Update execution record with result
+    const updates: Partial<executionLog.ExecutionRecord> = {
+      status: result.isError ? 'failed' : 'success',
+      endTime: Date.now(),
+      output: String(result.content || '').slice(0, 10000), // Cap output size
+    };
+    if (result.isError) {
+      updates.errorMessage = String(result.content || '');
+    }
+    executionLog.updateRecord(executionId, updates);
+
+    // Broadcast execution completed event
+    try {
+      const ipc = require('../../ipc') as { broadcastToRenderer?: (channel: string, payload: unknown) => void };
+      if (ipc.broadcastToRenderer) {
+        ipc.broadcastToRenderer('execution:completed', { id: executionId, ...updates });
+      }
+    } catch { /* IPC not available */ }
+
     if (!result.isError) {
       const manifestedPaths = readBashOutputManifest(manifestPath, outputDir);
       await emitBashProducedFiles(opts, before, outputDir, command, manifestedPaths);
     }
     return translateFixedBashError(result);
+  } catch (err) {
+    // Update execution record with error
+    executionLog.updateRecord(executionId, {
+      status: 'failed',
+      endTime: Date.now(),
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
+
+    // Broadcast execution failed event
+    try {
+      const ipc = require('../../ipc') as { broadcastToRenderer?: (channel: string, payload: unknown) => void };
+      if (ipc.broadcastToRenderer) {
+        ipc.broadcastToRenderer('execution:completed', {
+          id: executionId,
+          status: 'failed',
+          endTime: Date.now(),
+          errorMessage: err instanceof Error ? err.message : String(err),
+        });
+      }
+    } catch { /* IPC not available */ }
+
+    throw err;
   } finally {
     try { fs.rmSync(manifestPath, { force: true }); } catch { /* best-effort */ }
     restoreWritableRoots();

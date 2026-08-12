@@ -18,6 +18,7 @@
 
 import { createLogger } from '../../logger.js';
 import { whichBin } from './which.js';
+import { detectCliAuth } from './auth-state.js';
 import { checkMinVersion, detectVersion, parseSemver } from './version.js';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
@@ -196,6 +197,9 @@ export type LocalCliEntry = {
   error?: 'not_found' | 'version_too_old' | 'version_unknown';
   /** Human-readable detail when error is set; safe to show in UI. */
   errorDetail?: string;
+  /** Credential state (official-account sign-in vs raw key) for available
+   *  CLIs. File-based, read-only — never guesses. */
+  auth?: { loggedIn: boolean; mode: 'oauth' | 'api' | 'unknown' };
 };
 
 const CACHE_TTL_MS = 60_000;
@@ -267,7 +271,7 @@ export async function detectOne(type: LocalCliType): Promise<LocalCliEntry> {
       errorDetail: minErr,
     };
   }
-  return { type, path: resolved, version, available: true };
+  return { type, path: resolved, version, available: true, auth: detectCliAuth(type) };
 }
 
 /** Clear the cache; mainly for tests and the IPC `force: true` path. */
