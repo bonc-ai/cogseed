@@ -153,6 +153,34 @@ describe('recall projection card renderer', () => {
     expect(host.innerHTML).not.toContain('Add asset to this task');
   });
 
+  it('preserves Recall projection metadata while adapting Group Chat history messages', () => {
+    const source = fs.readFileSync(path.join(ROOT, 'src/renderer/modules/conversation.js'), 'utf8');
+    const start = source.indexOf('function _groupMsgToLegacy');
+    const end = source.indexOf('\nfunction _hashRenderText', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const adapterSource = source.slice(start, end);
+    const sandbox = {
+      _groupActorLabel: () => '',
+      _normalizeCreatedAgents: () => null,
+      _normalizeCreatedSkills: () => null,
+      _groupMessageSystemKind: () => '',
+      Date,
+    };
+    const adapt = vm.runInNewContext(`${adapterSource}; _groupMsgToLegacy`, sandbox);
+
+    expect(adapt({
+      id: 'msg-projection',
+      ts: '2026-08-12T14:03:29',
+      from: 'commander',
+      text: 'Preload candidates: 0; add or remove as needed.',
+      recall_projection_card: { projectionId: 'proj-a' },
+    })).toMatchObject({
+      role: 'assistant',
+      recall_projection_card: { projectionId: 'proj-a' },
+    });
+  });
+
   it('conversation renderer mounts Recall projection cards carried by assistant messages', () => {
     const source = fs.readFileSync(path.join(ROOT, 'src/renderer/modules/conversation.js'), 'utf8');
     expect(source).toContain('message.recall_projection_card');
