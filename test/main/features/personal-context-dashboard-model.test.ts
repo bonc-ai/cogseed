@@ -35,7 +35,7 @@ describe('deriveOverall', () => {
     expect(overall.status).toBe('attention');
     expect(overall.chain.connection).toBe('ok');
     expect(overall.chain.authorization).toBe('missing');
-    expect(overall.issues[0]).toMatchObject({ step: 'authorization', reason: 'not_configured', actionId: 'authorize.begin' });
+    expect(overall.issues[0]).toMatchObject({ step: 'authorization', reason: 'not_configured', actionId: 'authorization.begin' });
   });
 
   it('已连+已授权未选资源 → attention，选择资源待办', () => {

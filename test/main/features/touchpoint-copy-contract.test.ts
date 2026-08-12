@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { deriveTouchpointSettingsModel } = require('../../../src/renderer/modules/touchpoint-settings-model.js');
+const { deriveTouchpointSettingsModel, ISSUE_COPY } = require('../../../src/renderer/modules/touchpoint-settings-model.js');
 
 const ZH = JSON.parse(readFileSync(new URL('../../../src/renderer/locales/zh.json', import.meta.url), 'utf-8'));
 const EN = JSON.parse(readFileSync(new URL('../../../src/renderer/locales/en.json', import.meta.url), 'utf-8'));
@@ -42,6 +42,22 @@ describe('touchpoint copy contract', () => {
       if (issue.actionLabelKey) {
         expect(keyIn(ZH, issue.actionLabelKey)).toBe(true);
         expect(keyIn(EN, issue.actionLabelKey)).toBe(true);
+      }
+    }
+  });
+
+  it('every ISSUE_COPY entry resolves in zh.json and en.json', () => {
+    // 全量枚举防漏：fixture 只覆盖 2 个 reason，这里遍历 ISSUE_COPY 全部条目，
+    // 确保每个 reason 的 titleKey/detailKey/actionLabelKey 都存在于 zh/en（本次 briefing.schedule 就是漏检的）。
+    expect(Object.keys(ISSUE_COPY).length).toBeGreaterThan(0);
+    for (const [reason, copy] of Object.entries(ISSUE_COPY)) {
+      expect(keyIn(ZH, copy.titleKey), `${reason}: ${copy.titleKey} missing in zh.json`).toBe(true);
+      expect(keyIn(EN, copy.titleKey), `${reason}: ${copy.titleKey} missing in en.json`).toBe(true);
+      expect(keyIn(ZH, copy.detailKey), `${reason}: ${copy.detailKey} missing in zh.json`).toBe(true);
+      expect(keyIn(EN, copy.detailKey), `${reason}: ${copy.detailKey} missing in en.json`).toBe(true);
+      if (copy.actionLabelKey) {
+        expect(keyIn(ZH, copy.actionLabelKey), `${reason}: ${copy.actionLabelKey} missing in zh.json`).toBe(true);
+        expect(keyIn(EN, copy.actionLabelKey), `${reason}: ${copy.actionLabelKey} missing in en.json`).toBe(true);
       }
     }
   });

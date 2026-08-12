@@ -3561,14 +3561,18 @@
   "touchpoint_settings.issue.delivery_not_configured.detail": "After setup, you receive a daily schedule summary.",
   "touchpoint_settings.action.authorization.reauth": "Reauthorize",
   "touchpoint_settings.action.sync.retry": "Resync",
+  "touchpoint_settings.action.briefing.schedule": "Set daily briefing",
   "touchpoint_settings.disconnect.title": "Disconnect",
   "touchpoint_settings.disconnect.detail": "After disconnecting, Mate can no longer reach you via Feishu and calendar/file reads stop. Saved data is not deleted.",
-  "touchpoint_settings.disconnect.confirm": "Disconnect from Feishu? You will need to scan a QR code to reconnect.",
+  "touchpoint_settings.disconnect.confirm": "Disconnect Feishu? Mate will no longer reach you on Feishu and calendar/file reading stops. Saved data is kept.",
   "touchpoint_settings.disconnect.done": "Feishu connection disconnected.",
   "touchpoint_settings.advanced.account": "Your Feishu account",
+  "touchpoint_settings.advanced.account_connected": "Connected account",
+  "touchpoint_settings.advanced.not_authorized": "Not authorized",
   "touchpoint_settings.advanced.style": "Message style",
   "touchpoint_settings.advanced.style_edit": "Edit",
   "touchpoint_settings.advanced.workspace": "Workspace scope",
   "touchpoint_settings.advanced.workspace_edit": "Edit",
-  "touchpoint_settings.advanced.stop_reading": "Stop reading data"
+  "touchpoint_settings.advanced.stop_reading": "Stop reading data",
+  "touchpoint_settings.advanced.stop_reading_confirm": "Mate will stop syncing your calendar and files, but message delivery stays. Continue?"
 }

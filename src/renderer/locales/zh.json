@@ -3561,14 +3561,18 @@
   "touchpoint_settings.issue.delivery_not_configured.detail": "设置后，每天定时收到你的日程汇总。",
   "touchpoint_settings.action.authorization.reauth": "重新授权",
   "touchpoint_settings.action.sync.retry": "重新同步",
+  "touchpoint_settings.action.briefing.schedule": "设置每日简报",
   "touchpoint_settings.disconnect.title": "断开连接",
   "touchpoint_settings.disconnect.detail": "断开后 Mate 将无法通过飞书联系你，日历和资料的读取也会停止。已保存的数据不会被删除。",
-  "touchpoint_settings.disconnect.confirm": "确定要断开飞书连接吗？断开后需要重新扫码绑定才能恢复。",
+  "touchpoint_settings.disconnect.confirm": "确定要断开飞书连接吗？断开后 Mate 将无法通过飞书联系你，日历和资料的读取也会停止。已保存的数据不会被删除。",
   "touchpoint_settings.disconnect.done": "已断开飞书连接。",
   "touchpoint_settings.advanced.account": "你的飞书账号",
+  "touchpoint_settings.advanced.account_connected": "已连接账号",
+  "touchpoint_settings.advanced.not_authorized": "未授权",
   "touchpoint_settings.advanced.style": "消息样式",
   "touchpoint_settings.advanced.style_edit": "修改",
   "touchpoint_settings.advanced.workspace": "工作区范围",
   "touchpoint_settings.advanced.workspace_edit": "修改",
-  "touchpoint_settings.advanced.stop_reading": "停止读取数据"
+  "touchpoint_settings.advanced.stop_reading": "停止读取数据",
+  "touchpoint_settings.advanced.stop_reading_confirm": "停止后 Mate 将不再同步你的日历和资料，消息通道保留。确定继续吗？"
 }

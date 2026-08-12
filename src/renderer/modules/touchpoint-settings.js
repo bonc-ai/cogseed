@@ -73,7 +73,7 @@
       <details class="touchpoint-accordion">
         <summary><span>${escape(tr('touchpoint_settings.advanced.title', '高级设置'))}</span><small>${escape(tr('touchpoint_settings.advanced.detail', ''))}</small></summary>
         <div class="touchpoint-advanced-body">
-          <div class="touchpoint-advanced-row"><span>${escape(tr('touchpoint_settings.advanced.account', '你的飞书账号'))}</span><strong>${escape(view.authorizedLabel)}</strong></div>
+          <div class="touchpoint-advanced-row"><span>${escape(tr('touchpoint_settings.advanced.account', '你的飞书账号'))}</span><strong>${escape(view.identityLabel || (view.authorized ? tr('touchpoint_settings.advanced.account_connected', '已连接账号') : tr('touchpoint_settings.advanced.not_authorized', '未授权')))}</strong></div>
           <div class="touchpoint-advanced-row"><span>${escape(tr('touchpoint_settings.advanced.style', '消息样式'))}</span><button class="btn touchpoint-secondary" data-touchpoint-action="advanced.response">${escape(tr('touchpoint_settings.advanced.style_edit', '修改'))}</button></div>
           <div class="touchpoint-advanced-row"><span>${escape(tr('touchpoint_settings.advanced.workspace', '工作区范围'))}</span><button class="btn touchpoint-secondary" data-touchpoint-action="advanced.workspace">${escape(tr('touchpoint_settings.advanced.workspace_edit', '修改'))}</button></div>
           <div class="touchpoint-advanced-actions">
@@ -110,7 +110,7 @@
       return;
     }
     const view = model();
-    host.innerHTML = `<div class="touchpoint-settings"><header class="touchpoint-hero"><div><h1>${escape(tr('touchpoint_settings.title', '飞书移动触点'))}</h1><p>${escape(tr('touchpoint_settings.subtitle', ''))}</p></div><div class="touchpoint-hero-actions"><span class="touchpoint-status is-${escape(view.overallStatus)}"><span></span>${escape(tr(`touchpoint_settings.status.${view.overallStatus}`, view.overallStatus))}</span><button class="btn touchpoint-icon-button" data-touchpoint-action="refresh" aria-label="${escape(tr('touchpoint_settings.refresh', '刷新'))}">${iconMarkup('refresh', 'touchpoint-refresh-icon')}</button></div></header>${renderChainView(view)}${renderIssueCards(view)}${view.ready ? renderDelivery(view) : ''}${renderAdvancedSettings(view)}${renderSetupGuideCard()}${state.notice ? `<div class="messaging-notice is-${escape(state.notice.kind)}">${escape(state.notice.text)}</div>` : ''}</div>`;
+    host.innerHTML = `<div class="touchpoint-settings"><header class="touchpoint-hero"><div><h1>${escape(tr('touchpoint_settings.title', '飞书移动触点'))}</h1><p>${escape(tr('touchpoint_settings.subtitle', ''))}</p></div><div class="touchpoint-hero-actions"><span class="touchpoint-status is-${escape(view.overallStatus)}"><span></span>${escape(tr(`touchpoint_settings.status.${view.overallStatus}`, view.overallStatus))}</span><button class="btn touchpoint-icon-button" data-touchpoint-action="refresh" aria-label="${escape(tr('touchpoint_settings.refresh', '刷新'))}">${iconMarkup('refresh', 'touchpoint-refresh-icon')}</button></div></header>${renderChainView(view)}${renderIssueCards(view)}${renderResourcePicker()}${view.ready ? renderDelivery(view) : ''}${renderAdvancedSettings(view)}${renderSetupGuideCard()}${state.notice ? `<div class="messaging-notice is-${escape(state.notice.kind)}">${escape(state.notice.text)}</div>` : ''}</div>`;
     hydrate(host);
   }
 
@@ -231,7 +231,13 @@
           await invoke('personal_context.authorize.begin', { instanceId: state.dashboard?.messaging?.instanceId || undefined });
         }
         else if (action === 'authorization.cancel') await invoke('personal_context.authorize.cancel', {});
-        else if (action === 'authorization.revoke') await invoke('personal_context.authorize.revoke', {});
+        else if (action === 'authorization.revoke') {
+          // 停止读取数据前确认：撤权会停止日历/资料同步（消息通道保留）
+          const confirmed = typeof window.confirm === 'function'
+            && window.confirm(tr('touchpoint_settings.advanced.stop_reading_confirm', '停止后 Mate 将不再同步你的日历和资料，消息通道保留。确定继续吗？'));
+          if (!confirmed) return;
+          await invoke('personal_context.authorize.revoke', {});
+        }
         else if (action === 'resources.discover') {
           const result = await invoke('personal_context.resources.discover', {});
           state.resources = result.resources || [];
@@ -280,14 +286,14 @@
           await showConnections({ startFeishuQr: false });
         } else if (action === 'disconnect') {
           const confirmed = typeof window.confirm === 'function'
-            && window.confirm(tr('touchpoint_settings.disconnect.confirm', '确定要断开飞书连接吗？'));
+            && window.confirm(tr('touchpoint_settings.disconnect.confirm', '确定要断开飞书连接吗？断开后 Mate 将无法通过飞书联系你，日历和资料的读取也会停止。已保存的数据不会被删除。'));
           if (!confirmed) return;
           // 先撤数据授权，再删实例（revoke 依赖凭据，实例删除后凭据不可用）
           await invoke('personal_context.authorize.revoke', {}).catch(() => undefined);
           const instanceId = state.dashboard?.messaging?.instanceId;
           if (instanceId) {
             const result = await invoke('messaging.delete', { instanceId });
-            if (result && result.deleted === false) throw new Error(result.error || '断开连接失败');
+            if (!result || result.deleted === false) throw new Error(result.error || '断开连接失败');
           }
           state.notice = { kind: 'success', text: tr('touchpoint_settings.disconnect.done', '已断开飞书连接。') };
         }

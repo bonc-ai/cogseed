@@ -21306,9 +21306,9 @@ body.model-not-configured .main-content { flex-direction: column; }
 .touchpoint-advanced-row { display: flex; justify-content: space-between; align-items: center; }
 .touchpoint-advanced-actions { display: flex; gap: 10px; margin-top: 6px; }
 
-/* ── 触点三态徽标（新渲染）：attention/off 颜色 + 高级区块显示修复 ── */
+/* ── 触点三态徽标（新渲染）：attention 黄 / off 灰（未连接，非错误）+ 高级区块显示修复 ── */
 .touchpoint-status.is-attention { color: var(--warning, #ad7419); }
 .touchpoint-status.is-attention > span { background: var(--warning, #d09225); }
-.touchpoint-status.is-off { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 28%, var(--border)); }
-.touchpoint-status.is-off > span { background: var(--danger); }
+.touchpoint-status.is-off { color: #9aa0a6; border-color: color-mix(in srgb, #9aa0a6 28%, var(--border)); }
+.touchpoint-status.is-off > span { background: #9aa0a6; }
 .touchpoint-advanced { display: block; }

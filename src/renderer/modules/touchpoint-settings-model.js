@@ -35,7 +35,7 @@
     if (chain.connection === 'missing') issues.push({ severity: 'warning', step: 'connection', reason: 'not_configured', actionId: 'connection.connect' });
     else if (chain.connection === 'broken') issues.push({ severity: 'error', step: 'connection', reason: 'bot_error', actionId: 'connection.connect' });
     if (chain.authorization === 'broken') issues.push({ severity: 'error', step: 'authorization', reason: 'token_expired', actionId: 'authorization.reauth' });
-    else if (chain.authorization === 'missing' && chain.connection === 'ok') issues.push({ severity: 'warning', step: 'authorization', reason: 'not_configured', actionId: 'authorize.begin' });
+    else if (chain.authorization === 'missing' && chain.connection === 'ok') issues.push({ severity: 'warning', step: 'authorization', reason: 'not_configured', actionId: 'authorization.begin' });
     if (chain.delivery === 'broken') issues.push({ severity: 'error', step: 'delivery', reason: 'sync_failed', actionId: 'sync.retry' });
     else if (chain.delivery === 'missing' && chain.authorization === 'ok') {
       const noResources = !hasResources;
@@ -121,7 +121,7 @@
     };
   }
 
-  const api = Object.freeze({ deriveTouchpointSettingsModel });
+  const api = Object.freeze({ deriveTouchpointSettingsModel, ISSUE_COPY });
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (root) root.TouchpointSettingsModel = api;
 }(typeof window !== 'undefined' ? window : null));

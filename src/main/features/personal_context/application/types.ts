@@ -15,6 +15,7 @@ export type DashboardAction =
   | 'mode.real.select'
   | 'connection.connect'          // 新增：触点页待办卡「连接机器人」
   | 'authorize.begin'
+  | 'authorization.begin'  // 新增：触点页待办卡「授权日历和资料」（前端 runAction 分支名，与 authorize.begin 流程同义）
   | 'authorize.cancel'
   | 'authorize.revoke'
   | 'authorization.reauth'        // 新增：待办卡「重新授权」（前端映射到 authorize.begin 流程）

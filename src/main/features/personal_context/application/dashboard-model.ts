@@ -57,7 +57,7 @@ export function deriveOverall(dashboard: PersonalContextDashboard): DashboardOve
   if (chain.authorization === 'broken') {
     issues.push({ severity: 'error', step: 'authorization', reason: 'token_expired', actionId: 'authorization.reauth' });
   } else if (chain.authorization === 'missing' && chain.connection === 'ok') {
-    issues.push({ severity: 'warning', step: 'authorization', reason: 'not_configured', actionId: 'authorize.begin' });
+    issues.push({ severity: 'warning', step: 'authorization', reason: 'not_configured', actionId: 'authorization.begin' });
   }
   if (chain.delivery === 'broken') {
     issues.push({ severity: 'error', step: 'delivery', reason: 'sync_failed', actionId: 'sync.retry' });
