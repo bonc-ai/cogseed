@@ -671,6 +671,40 @@
     cardRoot.appendChild(panel);
   }
 
+  function associationCard(instance) {
+    const section = el('section', 'messaging-config-card messaging-association-card');
+    const row = el('div', 'messaging-association-row');
+    const copy = el('div', 'messaging-config-card-heading');
+    copy.appendChild(el('h3', '', labelFor('messaging.association_title', '')));
+    copy.appendChild(el('p', '', labelFor(
+      instance.hasCredentials ? 'messaging.connection_bound_sub' : 'messaging.association_sub', '',
+    )));
+    row.appendChild(copy);
+    if (instance.hasCredentials) {
+      // Already bound: scanning would try to overwrite the configured
+      // credentials, which main refuses. Show the state instead.
+      row.appendChild(el('span', 'messaging-association-bound', labelFor('messaging.connection_bound', '')));
+      section.appendChild(row);
+      renderQrPanel(instance, section);
+      return section;
+    }
+    const scanning = qrIsVisibleFor(instance);
+    const scan = el('button', 'btn messaging-scan-button', labelFor(
+      scanning ? 'messaging.feishu_qr.retry' : 'messaging.scan', '',
+    ));
+    scan.type = 'button';
+    scan.disabled = state.updating || state.qr.starting || state.qr.cancelling || qrIsPending();
+    scan.appendChild(icon(scanning ? 'refresh' : 'qr-code', 'messaging-action-icon'));
+    scan.addEventListener('click', () => {
+      if (scanning && state.qr.state && QR_TERMINAL_STATES.has(state.qr.state)) resetQrState();
+      void startQr(instance);
+    });
+    row.appendChild(scan);
+    section.appendChild(row);
+    renderQrPanel(instance, section);
+    return section;
+  }
+
   function renderInstanceList(channel) {
     const section = el('section', 'messaging-config-card messaging-instance-card');
     const heading = el('div', 'messaging-config-card-heading');
@@ -735,9 +769,34 @@
     const instances = instancesForChannel(channel);
     const instance = instances.find((item) => item.id === state.selectedInstanceId) || instances[0] || null;
     if (instance) {
-      wrapper.appendChild(identityCard(instance));     // 合并后的「你的飞书账号」卡
-      wrapper.appendChild(advancedCard(instance));     // 高级设置手风琴（含 responseSelect/workspaceSelect）
-      wrapper.appendChild(deleteCard(instance));       // 断开连接卡（文案增强）
+      wrapper.appendChild(associationCard(instance));
+      wrapper.appendChild(ownerIdentityCard(instance));
+      const responseSelect = selectControl([
+        { value: 'text', label: labelFor('messaging.response_text', '') },
+        { value: 'streaming_card', label: labelFor('messaging.response_streaming_card', '') },
+      ], instance.responseMode || 'text', state.updating);
+      responseSelect.setAttribute('aria-label', labelFor('messaging.response_title', ''));
+      responseSelect.addEventListener('change', () => {
+        if (responseSelect.value !== (instance.responseMode || 'text')) {
+          void updateInstance({ responseMode: responseSelect.value }, responseSelect);
+        }
+      });
+      const workspaceSelect = selectControl([
+        { value: 'all', label: labelFor('messaging.workspace_all', '') },
+      ], 'all', state.updating);
+      workspaceSelect.setAttribute('aria-label', labelFor('messaging.workspace_title', ''));
+      workspaceSelect.addEventListener('change', () => {
+        void updateInstance({ workspace: { type: 'all' } }, workspaceSelect);
+      });
+      wrapper.appendChild(preferencesCard(responseSelect, workspaceSelect));
+      const deletion = card('messaging.delete_title', 'messaging.delete_subtitle', 'messaging-delete-card');
+      const deleteButton = el('button', 'btn btn-danger messaging-delete-button', labelFor('messaging.delete', ''));
+      deleteButton.type = 'button';
+      deleteButton.disabled = state.updating;
+      deleteButton.appendChild(icon('trash', 'messaging-action-icon'));
+      deleteButton.addEventListener('click', () => void deleteInstance(instance, deleteButton));
+      deletion.appendChild(deleteButton);
+      wrapper.appendChild(deletion);
     } else {
       const empty = el('div', 'messaging-config-card messaging-empty-card');
       const scan = el('button', 'btn messaging-scan-button', labelFor('messaging.scan', ''));
@@ -749,145 +808,6 @@
       renderQrPanelForChannel(wrapper, channel);
     }
     return wrapper;
-  }
-
-  // 「你的飞书账号」：合并原关联机器人与归属两张卡，只显示昵称/遮罩 ID，不显示原始 ID。
-  // 卡体下方并入归属人配置（原 ownerIdentityCard 精简）：归属人是简报主动投递的前提，
-  // 半成品若整体丢弃该入口会导致 ownerConfigured=false 时无法配置/清除归属人。
-  function identityCard(instance) {
-    const ownerName = instance.ownerLabel || instance.ownerMaskedId || labelFor('messaging.owner_unknown', '');
-    const card = card('messaging.identity_title', 'messaging.identity_subtitle', 'messaging-identity-card');
-    const row = el('div', 'messaging-identity-row');
-    row.appendChild(el('span', 'messaging-identity-name', ownerName));
-    row.appendChild(el('span', 'messaging-identity-badge is-bound', labelFor('messaging.status.bound', '')));
-    card.appendChild(row);
-    appendOwnerControls(card, instance);
-    return card;
-  }
-
-  // 归属人配置（原 ownerIdentityCard 逻辑完整保留，容器从独立卡并入 identityCard 卡体）：
-  // 已配置 → 显示归属人 + 「清除归属人」；未配置 → 自动绑定窗口引导 + 手动 Open ID 表单。
-  function appendOwnerControls(section, instance) {
-    if (instance.ownerConfigured === true) {
-      // Owner already bound: show who it is and offer clearing only. The
-      // manual id entry reappears in the unbound state for rebinding.
-      const row = el('div', 'messaging-owner-bound-row');
-      const status = el('div', 'messaging-manual-bound');
-      status.append(
-        icon('check-circle', 'messaging-status-icon'),
-        el('span', '', instance.ownerLabel || instance.ownerMaskedId || labelFor('messaging.owner_configured', '')),
-      );
-      row.appendChild(status);
-      const clear = el('button', 'btn messaging-secondary-button', labelFor('messaging.owner_clear', ''));
-      clear.type = 'button';
-      clear.disabled = state.updating;
-      clear.addEventListener('click', () => void updateInstance({ clearOwner: true }, clear));
-      row.appendChild(clear);
-      section.appendChild(row);
-      return;
-    }
-
-    if (instance.platform === 'feishu_lark') {
-      // Auto-binding window: the user just needs to send the bot a direct
-      // message — no id entry. Only shown while the window is actually open.
-      const pending = el('div', 'messaging-owner-pending');
-      pending.style.display = 'none';
-      pending.append(icon('clock', 'messaging-status-icon'), el('span', '', ''));
-      section.appendChild(pending);
-      void invoke('messaging.owner_binding_status', { instanceId: instance.id }).then((res) => {
-        if (res && res.binding) {
-          pending.style.display = '';
-          pending.querySelector('span').textContent = labelFor('messaging.owner_bind_pending', '');
-        }
-      }).catch(() => { /* window may have expired; leave the hint hidden */ });
-    }
-
-    // Standing guide for the unbound state: the auto-bind path is primary,
-    // manual id entry is the fallback (persists even after the window closes).
-    const guide = el('p', 'messaging-owner-guide', labelFor('messaging.owner_bind_guide', ''));
-    section.appendChild(guide);
-
-    const ownerIdInput = document.createElement('input');
-    ownerIdInput.type = 'text';
-    ownerIdInput.className = 'form-input';
-    ownerIdInput.placeholder = 'ou_xxxxxxxxxxxxxxxx';
-    ownerIdInput.autocomplete = 'off';
-    ownerIdInput.spellcheck = false;
-    ownerIdInput.setAttribute('aria-label', labelFor('messaging.owner_open_id', ''));
-
-    const ownerNameInput = document.createElement('input');
-    ownerNameInput.type = 'text';
-    ownerNameInput.className = 'form-input';
-    ownerNameInput.placeholder = labelFor('messaging.owner_name_placeholder', '');
-    ownerNameInput.autocomplete = 'off';
-    ownerNameInput.setAttribute('aria-label', labelFor('messaging.owner_name', ''));
-
-    const save = el('button', 'btn messaging-link-button', labelFor('messaging.owner_save', ''));
-    save.type = 'button';
-    save.disabled = state.updating;
-    save.addEventListener('click', () => {
-      const ownerExternalUserId = String(ownerIdInput.value || '').trim();
-      const ownerExternalUserName = String(ownerNameInput.value || '').trim();
-      if (!/^ou_[A-Za-z0-9_-]{1,157}$/.test(ownerExternalUserId)) {
-        setNotice(labelFor('messaging.owner_open_id_invalid', ''), 'error');
-        ownerIdInput.focus();
-        renderCurrent();
-        return;
-      }
-      void updateInstance({ ownerExternalUserId, ownerExternalUserName }, save);
-    });
-
-    const fields = el('div', 'messaging-manual-fields');
-    fields.append(ownerIdInput, ownerNameInput, save);
-    section.appendChild(fields);
-  }
-
-  // 高级设置手风琴：消息样式 + 工作区范围（原 preferencesCard 折叠）
-  function advancedCard(instance) {
-    const details = el('details', 'messaging-accordion');
-    const summary = el('summary', '', labelFor('messaging.advanced_title', ''));
-    details.appendChild(summary);
-    const body = el('div', 'messaging-advanced-body');
-    const responseSelect = selectControl([
-      { value: 'text', label: labelFor('messaging.response_text', '') },
-      { value: 'streaming_card', label: labelFor('messaging.response_streaming_card', '') },
-    ], instance.responseMode || 'text', state.updating);
-    responseSelect.setAttribute('aria-label', labelFor('messaging.response_title', ''));
-    responseSelect.addEventListener('change', () => {
-      if (responseSelect.value !== (instance.responseMode || 'text')) {
-        void updateInstance({ responseMode: responseSelect.value }, responseSelect);
-      }
-    });
-    const workspaceSelect = selectControl([
-      { value: 'all', label: labelFor('messaging.workspace_all', '') },
-    ], 'all', state.updating);
-    workspaceSelect.setAttribute('aria-label', labelFor('messaging.workspace_title', ''));
-    workspaceSelect.addEventListener('change', () => {
-      void updateInstance({ workspace: { type: 'all' } }, workspaceSelect);
-    });
-    body.appendChild(selectRow(labelFor('messaging.response_title', ''), responseSelect));
-    body.appendChild(selectRow(labelFor('messaging.workspace_title', ''), workspaceSelect));
-    details.appendChild(body);
-    return details;
-  }
-
-  function selectRow(labelText, control) {
-    const row = el('div', 'messaging-advanced-row');
-    row.appendChild(el('span', '', labelText));
-    row.appendChild(control);
-    return row;
-  }
-
-  // 断开连接卡：红色 + 强二次确认（文案见 messaging.delete_confirm）
-  function deleteCard(instance) {
-    const section = card('messaging.delete_title', 'messaging.delete_subtitle', 'messaging-delete-card');
-    const deleteButton = el('button', 'btn btn-danger messaging-delete-button', labelFor('messaging.delete', ''));
-    deleteButton.type = 'button';
-    deleteButton.disabled = state.updating;
-    deleteButton.appendChild(icon('trash', 'messaging-action-icon'));
-    deleteButton.addEventListener('click', () => void deleteInstance(instance, deleteButton));
-    section.appendChild(deleteButton);
-    return section;
   }
 
   function renderQrPanelForChannel(cardRoot, channel) {
@@ -1530,6 +1450,101 @@
     }
   }
 
+  function ownerIdentityCard(instance) {
+    const section = card('messaging.owner_title', 'messaging.owner_subtitle', 'messaging-owner-card');
+    if (instance.ownerConfigured === true) {
+      // Owner already bound: show who it is and offer clearing only. The
+      // manual id entry reappears in the unbound state for rebinding.
+      const row = el('div', 'messaging-owner-bound-row');
+      const status = el('div', 'messaging-manual-bound');
+      status.append(
+        icon('check-circle', 'messaging-status-icon'),
+        el('span', '', instance.ownerLabel || instance.ownerMaskedId || labelFor('messaging.owner_configured', '')),
+      );
+      row.appendChild(status);
+      const clear = el('button', 'btn messaging-secondary-button', labelFor('messaging.owner_clear', ''));
+      clear.type = 'button';
+      clear.disabled = state.updating;
+      clear.addEventListener('click', () => void updateInstance({ clearOwner: true }, clear));
+      row.appendChild(clear);
+      section.appendChild(row);
+      return section;
+    }
+
+    if (instance.platform === 'feishu_lark') {
+      // Auto-binding window: the user just needs to send the bot a direct
+      // message — no id entry. Only shown while the window is actually open.
+      const pending = el('div', 'messaging-owner-pending');
+      pending.style.display = 'none';
+      pending.append(icon('clock', 'messaging-status-icon'), el('span', '', ''));
+      section.appendChild(pending);
+      void invoke('messaging.owner_binding_status', { instanceId: instance.id }).then((res) => {
+        if (res && res.binding) {
+          pending.style.display = '';
+          pending.querySelector('span').textContent = labelFor('messaging.owner_bind_pending', '');
+        }
+      }).catch(() => { /* window may have expired; leave the hint hidden */ });
+    }
+
+    // Standing guide for the unbound state: the auto-bind path is primary,
+    // manual id entry is the fallback (persists even after the window closes).
+    const guide = el('p', 'messaging-owner-guide', labelFor('messaging.owner_bind_guide', ''));
+    section.appendChild(guide);
+
+    const ownerIdInput = document.createElement('input');
+    ownerIdInput.type = 'text';
+    ownerIdInput.className = 'form-input';
+    ownerIdInput.placeholder = 'ou_xxxxxxxxxxxxxxxx';
+    ownerIdInput.autocomplete = 'off';
+    ownerIdInput.spellcheck = false;
+    ownerIdInput.setAttribute('aria-label', labelFor('messaging.owner_open_id', ''));
+
+    const ownerNameInput = document.createElement('input');
+    ownerNameInput.type = 'text';
+    ownerNameInput.className = 'form-input';
+    ownerNameInput.placeholder = labelFor('messaging.owner_name_placeholder', '');
+    ownerNameInput.autocomplete = 'off';
+    ownerNameInput.setAttribute('aria-label', labelFor('messaging.owner_name', ''));
+
+    const save = el('button', 'btn messaging-link-button', labelFor('messaging.owner_save', ''));
+    save.type = 'button';
+    save.disabled = state.updating;
+    save.addEventListener('click', () => {
+      const ownerExternalUserId = String(ownerIdInput.value || '').trim();
+      const ownerExternalUserName = String(ownerNameInput.value || '').trim();
+      if (!/^ou_[A-Za-z0-9_-]{1,157}$/.test(ownerExternalUserId)) {
+        setNotice(labelFor('messaging.owner_open_id_invalid', ''), 'error');
+        ownerIdInput.focus();
+        renderCurrent();
+        return;
+      }
+      void updateInstance({ ownerExternalUserId, ownerExternalUserName }, save);
+    });
+
+    const fields = el('div', 'messaging-manual-fields');
+    fields.append(ownerIdInput, ownerNameInput, save);
+    section.appendChild(fields);
+    return section;
+  }
+
+  function preferencesCard(responseControl, workspaceControl) {
+    const section = el('section', 'messaging-config-card messaging-preferences-card');
+    section.append(
+      preferenceRow('messaging.response_title', 'messaging.response_subtitle', responseControl),
+      preferenceRow('messaging.workspace_title', 'messaging.workspace_subtitle', workspaceControl),
+    );
+    return section;
+  }
+
+  function preferenceRow(titleKey, subtitleKey, control) {
+    const row = el('div', 'messaging-preference-row');
+    const copy = el('div', 'messaging-config-card-heading');
+    copy.appendChild(el('h3', '', labelFor(titleKey, '')));
+    copy.appendChild(el('p', '', labelFor(subtitleKey, '')));
+    row.append(copy, control);
+    return row;
+  }
+
   function appendNotice(page) {
     if (!state.notice) return;
     const notice = el('div', `messaging-notice is-${state.noticeKind || 'info'}`, state.notice);
@@ -1651,32 +1666,24 @@
       section.appendChild(el('div', 'messaging-menu-group-label', labelFor(
         group === 'open' ? 'messaging.group.open' : 'messaging.group.soon', '',
       )));
-      const channels = CHANNELS.filter((item) => item.group === group);
-      if (group === 'soon') {
-        // 未实现的平台收成一行灰字，不再占菜单位（设计稿 §4.1）
-        const hint = el('div', 'messaging-menu-soon-hint', labelFor('messaging.group.soon_hint', ''));
-        section.appendChild(hint);
-        aside.appendChild(section);
-        continue;
-      }
-      for (const channel of channels) {
+      for (const channel of CHANNELS.filter((item) => item.group === group)) {
         const active = state.selectedChannel === channel.key;
         const bound = instancesForChannel(channel).length > 0;
-        const row = el('button', `messaging-menu-item is-${channel.key}${active ? ' is-active' : ''}`);
+        const row = el('button', `messaging-menu-item is-${channel.key}${active ? ' is-active' : ''}${group === 'soon' ? ' is-disabled' : ''}`);
         row.type = 'button';
-        row.disabled = false;
+        row.disabled = group === 'soon';
         row.dataset.channel = channel.key;
-        row.setAttribute('aria-disabled', 'false');
+        row.setAttribute('aria-disabled', String(group === 'soon'));
         const visual = el('span', 'messaging-menu-item-icon');
         visual.appendChild(icon(channel.icon, 'messaging-menu-item-glyph'));
         row.appendChild(visual);
         row.appendChild(el('span', 'messaging-menu-item-name', labelFor(`messaging.channel.${channel.key}.title`, channel.key)));
-        if (bound) {
+        if (group === 'open' && bound) {
           const status = el('span', 'messaging-menu-item-status is-bound');
           status.appendChild(el('span', '', labelFor('messaging.status.bound', '')));
           row.appendChild(status);
         }
-        row.addEventListener('click', () => selectChannel(channel.key));
+        if (group === 'open' && !row.disabled) row.addEventListener('click', () => selectChannel(channel.key));
         section.appendChild(row);
       }
       aside.appendChild(section);

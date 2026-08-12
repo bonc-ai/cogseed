@@ -147,22 +147,16 @@ export async function beginAuthorize(
         log.info('feishu oauth completed', { status: result.kind });
         broadcastAuthorizationStatus(uid, result);
         if (result.kind === 'connected') {
-          // 授权账号展示名：user_info.name 写入 store，供 dashboard「授权账号」展示。
-          // 异步执行，不阻塞首次回填启动（一次网络往返没必要排在同步前面）。
-          void (async () => {
-            try {
-              const credential = await oauth.getCredential(uid, PROVIDER_ID);
-              if (!credential) return;
-              const health = await endpoint.healthCheck(credential.accessToken);
-              if (health.ok && health.identity?.name) {
-                await oauth.setIdentityLabel(uid, PROVIDER_ID, health.identity.name).catch((error) => {
-                  log.warn('oauth identity label write failed', { uid, error: (error as Error).message });
-                });
-              }
-            } catch (error) {
-              log.warn('feishu identity resolution failed', { uid, error: (error as Error).message });
+          // 授权账号展示名：user_info.name 写入 store，供 dashboard「授权账号」展示
+          const credential = await oauth.getCredential(uid, PROVIDER_ID);
+          if (credential) {
+            const health = await endpoint.healthCheck(credential.accessToken);
+            if (health.ok && health.identity?.name) {
+              await oauth.setIdentityLabel(uid, PROVIDER_ID, health.identity.name).catch((error) => {
+                log.warn('oauth identity label write failed', { uid, error: (error as Error).message });
+              });
             }
-          })();
+          }
           // 首次连接：启动定时增量同步，并立即 tick 做有限回填（30 天/90 天）
           ensureSyncScheduler(uid).start(uid);
           void syncNow(uid).catch((error) => {

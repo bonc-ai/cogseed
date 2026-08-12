@@ -4,12 +4,6 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { ExternalResource } from '../../../src/main/features/personal_context/contract';
 
-// 只包装 writeJson 记录写盘次数（验证批量写收敛为一次），其余保持真实实现
-vi.mock('../../../src/main/storage', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../../src/main/storage')>();
-  return { ...actual, writeJson: vi.fn(actual.writeJson) };
-});
-
 let tmpDir = '';
 let previousRoot: string | undefined;
 
@@ -112,47 +106,6 @@ describe('资源注册表幂等 upsert', () => {
   it('不可解析的 resourceId 拒绝写入', async () => {
     const { registry } = await loadRegistry();
     await expect(registry.upsert(UID, resource({ resourceId: 'bad:key' }))).rejects.toThrow();
-    expect(await registry.count(UID)).toBe(0);
-  });
-
-  it('upsertMany 批量写入：混合 new/updated/unchanged，整批一次写盘', async () => {
-    const { writeJson } = await import('../../../src/main/storage');
-    const { registry } = await loadRegistry();
-    // 预置一条已存在资源并选中（验证 updated 保留选择状态）
-    await registry.upsert(UID, resource());
-    await registry.setSelection(UID, 'feishu:tenant-1:calendar:cal_001', true);
-    // 预置写入完成后清零计数：只统计 upsertMany 自己的写盘次数
-    vi.mocked(writeJson).mockClear();
-
-    const results = await registry.upsertMany(UID, [
-      resource(), // 同版本 → unchanged
-      resource({ sourceVersion: '2026-08-02T00:00:00.000Z', title: '主日历 v2' }), // 新版本 → updated
-      resource({ resourceId: 'feishu:tenant-1:document:doc_001', resourceType: 'document', title: '文档' }), // 不存在 → new
-    ]);
-    expect(results.map((r) => r.change)).toEqual(['unchanged', 'updated', 'new']);
-    // 性能关键：整批一次写盘（首次回填 N 条资源不再逐条全量读写 registry.json）
-    expect(vi.mocked(writeJson)).toHaveBeenCalledTimes(1);
-    // 状态与逐条 upsert 等价：updated 保留选择状态与 firstSeenAt
-    const entry = await registry.get(UID, 'feishu:tenant-1:calendar:cal_001');
-    expect(entry?.resource.title).toBe('主日历 v2');
-    expect(entry?.selected).toBe(true);
-    expect(await registry.count(UID)).toBe(2);
-  });
-
-  it('upsertMany 空数组：直接返回，不写盘', async () => {
-    const { writeJson } = await import('../../../src/main/storage');
-    vi.mocked(writeJson).mockClear();
-    const { registry } = await loadRegistry();
-    expect(await registry.upsertMany(UID, [])).toEqual([]);
-    expect(vi.mocked(writeJson)).not.toHaveBeenCalled();
-  });
-
-  it('upsertMany 含不可解析 resourceId：整批抛错，全部不落盘（原子）', async () => {
-    const { registry } = await loadRegistry();
-    await expect(registry.upsertMany(UID, [
-      resource(),
-      resource({ resourceId: 'bad:key' }),
-    ])).rejects.toThrow();
     expect(await registry.count(UID)).toBe(0);
   });
 });

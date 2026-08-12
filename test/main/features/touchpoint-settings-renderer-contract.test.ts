@@ -20,15 +20,6 @@ describe('touchpoint settings renderer contract', () => {
     expect(source).toContain("if (action === 'connections.back') { showOverview(); return; }");
   });
 
-  it('talks to main through the canonical window.cogseed bridge, not the deprecated orkas alias', () => {
-    // orkas 在上游 CogSeed 重构后只是兼容 Proxy 别名，经 contextBridge 暴露后
-    // invoke/onPushEvent 不可用；触点页若回退到 orkas 会整页报"桌面端连接不可用"。
-    const source = fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/modules/touchpoint-settings.js'), 'utf8');
-    expect(source).toContain('window.cogseed.invoke(channel, payload');
-    expect(source).toContain('window.cogseed.onPushEvent');
-    expect(source).not.toContain('window.orkas');
-  });
-
   it('settings loads the unified touchpoint surface instead of both legacy centers', () => {
     const source = fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/modules/settings.js'), 'utf8');
     expect(source).toContain('window.initTouchpointSettings');

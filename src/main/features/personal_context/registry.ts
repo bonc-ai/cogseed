@@ -91,64 +91,44 @@ async function readRegistry(uid: string): Promise<RegistryFile> {
 
 export class PersonalContextRegistry {
   /**
-   * 幂等 upsert（单条）：委托批量 upsertMany（一次锁 + 一次读写）。
-   */
-  async upsert(uid: string, resource: ExternalResource): Promise<UpsertResult> {
-    const [result] = await this.upsertMany(uid, [resource]);
-    return result;
-  }
-
-  /**
-   * 幂等 upsert（批量）：同 resourceId 已存在且 sourceVersion 相同 → unchanged；
+   * 幂等 upsert：同 resourceId 已存在且 sourceVersion 相同 → unchanged；
    * sourceVersion 不同 → updated（保留 firstSeenAt 与选择状态）；不存在 → new。
    * 幂等键非空且可解析才写入（防御服务端脏数据）。
-   *
-   * 性能关键：首次回填（30 天/90 天）一次同步几十上百条资源，逐条 upsert 意味着
-   * 每条都读+写整个 registry.json；批量提交把 N 次全量读写收敛为 1 次。
-   * 语义：整批原子（任一 resourceId 不可解析 → 抛错，整批不落盘），
-   * 与 provider.sync「失败不落水位」的契约一致。
    */
-  async upsertMany(uid: string, resources: ExternalResource[]): Promise<UpsertResult[]> {
-    if (resources.length === 0) return [];
+  async upsert(uid: string, resource: ExternalResource): Promise<UpsertResult> {
     const file = registryFile(uid);
     const release = await lockFor(file).acquire();
     try {
-      const registry = await readRegistry(uid);
-      const results: UpsertResult[] = [];
-      let dirty = false;
-      for (const resource of resources) {
-        const parsed = parseResourceKey(resource.resourceId);
-        if (!parsed) {
-          log.warn('registry upsert rejected: unparsable resourceId', { resourceId: resource.resourceId });
-          throw new Error(`registry: unparsable resourceId '${resource.resourceId}'`);
-        }
-        const existing = registry.resources[resource.resourceId];
-        if (existing) {
-          // 幂等比较只看 sourceVersion（版本/事件 ID）；observedAt 是观察时间戳，
-          // 每次同步都会变化，参与比较会让同版本资源每轮 sync 都变成 updated
-          const sameVersion = existing.resource.sourceVersion === resource.sourceVersion;
-          if (sameVersion) {
-            results.push({ change: 'unchanged', resource: existing.resource });
-            continue;
-          }
-          const next: RegistryEntry = {
-            ...existing,
-            resource: { ...resource, observedAt: resource.observedAt },
-          };
-          registry.resources[resource.resourceId] = next;
-          results.push({ change: 'updated', resource: next.resource });
-        } else {
-          registry.resources[resource.resourceId] = {
-            resource,
-            selected: false,
-            firstSeenAt: nowIso(),
-          };
-          results.push({ change: 'new', resource });
-        }
-        dirty = true;
+      const parsed = parseResourceKey(resource.resourceId);
+      if (!parsed) {
+        log.warn('registry upsert rejected: unparsable resourceId', { resourceId: resource.resourceId });
+        throw new Error(`registry: unparsable resourceId '${resource.resourceId}'`);
       }
-      if (dirty) await writeJson(file, registry);
-      return results;
+      const registry = await readRegistry(uid);
+      const existing = registry.resources[resource.resourceId];
+      if (existing) {
+        // 幂等比较只看 sourceVersion（版本/事件 ID）；observedAt 是观察时间戳，
+        // 每次同步都会变化，参与比较会让同版本资源每轮 sync 都变成 updated
+        const sameVersion = existing.resource.sourceVersion === resource.sourceVersion;
+        if (sameVersion) {
+          return { change: 'unchanged', resource: existing.resource };
+        }
+        const next: RegistryEntry = {
+          ...existing,
+          resource: { ...resource, observedAt: resource.observedAt },
+        };
+        registry.resources[resource.resourceId] = next;
+        await writeJson(file, registry);
+        return { change: 'updated', resource: next.resource };
+      }
+      const entry: RegistryEntry = {
+        resource,
+        selected: false,
+        firstSeenAt: nowIso(),
+      };
+      registry.resources[resource.resourceId] = entry;
+      await writeJson(file, registry);
+      return { change: 'new', resource };
     } finally {
       release();
     }

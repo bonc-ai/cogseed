@@ -1,5 +1,4 @@
 import type { ResourceContentStatus } from '../contract';
-import { deriveOverall } from './dashboard-model';
 import type {
   AuthorizationKind,
   BriefingState,
@@ -67,20 +66,17 @@ function validateUserId(userId: string): string {
   return normalized;
 }
 
-export function demoDashboard(): PersonalContextDashboard {
-  const dashboard: PersonalContextDashboard = {
+function demoDashboard(): PersonalContextDashboard {
+  return {
     mode: 'demo',
-    messaging: { instanceId: 'demo-feishu', botConnected: true, ownerConfigured: true, ownerLabel: '演示用户', statusKind: 'connected' },
+    messaging: { instanceId: 'demo-feishu', botConnected: true, ownerConfigured: true, ownerLabel: '演示用户' },
     authorization: { kind: 'connected', providerId: 'feishu', identityLabel: '演示用户' },
     resources: { discovered: 4, selected: 3, ready: 3, failed: 0, unsupported: 0 },
     sync: { state: 'ready', lastRunAt: '2026-08-10T08:00:00.000Z', nextRunAt: null, processed: 4, failed: 0 },
     review: { pending: 2, confirmed: 2, rejected: 0, sourceInvalidated: 0 },
     briefing: { state: 'preview_ready', destination: null, lastDelivery: null, pendingCandidateCount: 2 },
     actions: ['mode.real.select', 'sync.start', 'review.open', 'briefing.preview'],
-    overall: { status: 'off', chain: { connection: 'missing', authorization: 'missing', delivery: 'missing' }, issues: [] },
   };
-  dashboard.overall = deriveOverall(dashboard);
-  return dashboard;
 }
 
 function actionsFor(input: Readonly<{
@@ -104,15 +100,7 @@ function actionsFor(input: Readonly<{
 }
 
 async function buildRealDashboard(userId: string, deps: PersonalContextApplicationDependencies): Promise<PersonalContextDashboard> {
-  // 5 个数据源互不依赖，串行 await 会让打开触点页的感知时间叠加；
-  // 并行读取（每个都是本地文件/内存，无并发写冲突）。
-  const [instances, authorization, registry, candidates, briefing] = await Promise.all([
-    deps.listMessagingInstances(userId),
-    deps.getAuthorizationStatus(userId),
-    deps.listRegistryEntries(userId),
-    deps.listCandidates(userId),
-    deps.buildBriefingPreview(userId),
-  ]);
+  const instances = await deps.listMessagingInstances(userId);
   const feishuCandidates = instances.filter((instance) => instance.platform === 'feishu_lark' && instance.enabled);
   // 与 manager.pickFeishuInstance 保持一致的选实例优先级：飞书品牌 > 已连接 > 第一个，
   // 避免同时配了飞书+Lark 时授权/投递落到错误的应用上。
@@ -121,6 +109,10 @@ async function buildRealDashboard(userId: string, deps: PersonalContextApplicati
     ?? feishuCandidates[0]
     ?? null;
   const botConnected = feishu?.statusKind === 'connected';
+  const authorization = await deps.getAuthorizationStatus(userId);
+  const registry = await deps.listRegistryEntries(userId);
+  const candidates = await deps.listCandidates(userId);
+  const briefing = await deps.buildBriefingPreview(userId);
   const ready = registry.filter((entry) => entry.valid && entry.selected && entry.contentStatus !== 'unsupported' && entry.contentStatus !== 'failed').length;
   const failed = registry.filter((entry) => !entry.valid || entry.contentStatus === 'failed').length;
   const unsupported = registry.filter((entry) => entry.contentStatus === 'unsupported').length;
@@ -132,7 +124,6 @@ async function buildRealDashboard(userId: string, deps: PersonalContextApplicati
       ownerConfigured: Boolean(feishu?.ownerConfigured),
       ...(feishu?.ownerLabel ? { ownerLabel: feishu.ownerLabel } : {}),
       ...(feishu?.ownerMaskedId ? { ownerMaskedId: feishu.ownerMaskedId } : {}),
-      ...(feishu?.statusKind ? { statusKind: feishu.statusKind } : {}),
       ...(!feishu ? { diagnosticCode: 'feishu_bot_not_configured' } : {}),
     },
     authorization: {
@@ -172,7 +163,6 @@ async function buildRealDashboard(userId: string, deps: PersonalContextApplicati
       pendingCandidateCount: briefing.pendingCandidateCount,
     },
     actions: [],
-    overall: { status: 'off', chain: { connection: 'missing', authorization: 'missing', delivery: 'missing' }, issues: [] },
   };
   dashboard.actions = actionsFor({
     mode: 'real',
@@ -182,7 +172,6 @@ async function buildRealDashboard(userId: string, deps: PersonalContextApplicati
     pending: dashboard.review.pending,
     briefingState: briefing.state,
   });
-  dashboard.overall = deriveOverall(dashboard);
   return dashboard;
 }
 

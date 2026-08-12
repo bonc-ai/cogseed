@@ -212,40 +212,6 @@ describe('sync 增量同步（mock）', () => {
     expect(result.unchanged).toBe(0);
   });
 
-  it('applyResourceMany 批量通道：全部资源一批提交，统计与逐条一致', async () => {
-    const { syncResources } = await import('../../../src/main/features/personal_context/feishu/sync');
-    const client = mockClient();
-    const batches: string[][] = [];
-    const result = await syncResources(client, {
-      tenant: TENANT,
-      unionId: UNION_ID,
-      selected: [
-        { type: 'calendar', stableId: 'cal_001' },
-        { type: 'chat', stableId: 'oc_001' },
-        { type: 'document', stableId: 'doc_001' },
-        { type: 'document', stableId: 'wk_doc_001' },
-      ],
-      cursor: null,
-      // 提供批量通道后逐条 applyResource 不应被调用
-      applyResource: async () => { throw new Error('applyResource must not be called when applyResourceMany is provided'); },
-      applyResourceMany: async (resources) => {
-        batches.push(resources.map((r) => r.resourceId));
-        return resources.map((r) => ({ change: 'new', resource: r }));
-      },
-    });
-    // 日历事件 2 + 聊天 1 + 文档 2（drive doc_001 + wiki wk_doc_001）= 5 条，一次批量提交
-    expect(batches).toEqual([[
-      'feishu:tenant-1:calendar_event:evt_001',
-      'feishu:tenant-1:calendar_event:evt_002',
-      'feishu:tenant-1:chat:oc_001',
-      'feishu:tenant-1:document:doc_001',
-      'feishu:tenant-1:document:wk_doc_001',
-    ]]);
-    expect(result.added).toBe(5);
-    // 水位计算与逐条路径一致（与「首次同步做有限回填」测试相同的期望）
-    expect(result.nextCursor.watermarks.calendar_event).toBe('2026-08-02T08:00:00.000Z');
-  });
-
   it('applyEvents 幂等：重复 event_id 只处理一次', async () => {
     const { applyEvents } = await import('../../../src/main/features/personal_context/feishu/sync');
     const client = mockClient();
