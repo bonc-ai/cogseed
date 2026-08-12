@@ -4,6 +4,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { drainMainRuntimeForTest } from '../../../helpers/drain-main-runtime';
 
+function findCommanderReply(lines: any[]) {
+  return lines.find((line) => line.from === 'commander' && !line.recall_projection_card);
+}
+
 vi.mock('../../../../src/main/logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
@@ -470,7 +474,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
 
     const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
     const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
-    const reply = lines.find((line) => line.from === 'commander');
+    const reply = findCommanderReply(lines);
     expect(reply?.text).toBe('Shared state updated.');
     expect(reply?.text).not.toContain('context-patch');
   });
@@ -486,7 +490,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
 
     const mainFile = path.join(paths.userChatsDir(TEST_UID), `${TEST_CID}.jsonl`);
     const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
-    const reply = lines.find((line) => line.from === 'commander');
+    const reply = findCommanderReply(lines);
     expect(reply?.text).toBe('没有完成调度。');
     expect(reply?.text).not.toContain('commander-result');
 
@@ -516,7 +520,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
 
     const mainFile = path.join(paths.userChatsDir(TEST_UID), `${TEST_CID}.jsonl`);
     const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
-    const reply = lines.find((line) => line.from === 'commander');
+    const reply = findCommanderReply(lines);
     expect(reply?.process).toEqual(expect.arrayContaining([
       expect.objectContaining({
         type: 'event',
@@ -569,7 +573,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
 
     const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
     const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
-    const reply = lines.find((line) => line.from === 'commander');
+    const reply = findCommanderReply(lines);
     expect(reply?.text).toBe('compaction recorded');
     expect(reply?.process).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -603,7 +607,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
 
     const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
     const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
-    const reply = lines.find((line) => line.from === 'commander');
+    const reply = findCommanderReply(lines);
     const runtime = reply?.process?.find((item: any) => item?.event?.stream === 'runtime');
     expect(runtime?.event?.data).toMatchObject({
       duration_ms: expect.any(Number),
@@ -899,7 +903,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     ]);
   });
 
-  it('keeps stale produced paths visible with validation failure details', async () => {
+  it('filters stale produced paths before persisting the final message', async () => {
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const paths = await import('../../../../src/main/paths');
     const cid = 'cid-produced-filter';
@@ -921,20 +925,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
     const rows = fs.readFileSync(mainFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
     const commanderMsg = rows.find((row: any) => row.from === 'commander' && row.text === 'produced filter ok');
-    expect(commanderMsg?.produced).toEqual([stalePath, finalPath]);
-    expect(commanderMsg?.produced_results).toEqual([
-      expect.objectContaining({
-        path: stalePath,
-        status: 'invalid',
-        failure_code: 'missing',
-      }),
-      expect.objectContaining({
-        path: finalPath,
-        status: 'ready',
-        exists: true,
-        non_empty: true,
-      }),
-    ]);
+    expect(commanderMsg?.produced).toEqual([finalPath]);
     expect(bus._cidStateForTest(TEST_UID, cid)?.producedPaths.has(stalePath)).toBe(false);
     expect(bus._cidStateForTest(TEST_UID, cid)?.producedPaths.has(finalPath)).toBe(true);
   });

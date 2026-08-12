@@ -86,13 +86,6 @@ export interface WakeRequestSummary {
   workflow_resume_token?: string;
 }
 
-export interface KStarReviewSummary {
-  run_id: string;
-  status: "needs_review" | "completed" | "failed";
-  agent_id: string;
-  turn_id: string;
-}
-
 export interface GroupMessage {
   /** Stable per-message id (not jsonl line index). Used by visibility +
    * dedupe. */
@@ -107,8 +100,6 @@ export interface GroupMessage {
   unknown_mentions?: string[];
   /** P3394 approval gates created instead of immediately waking an Agent. */
   wake_requests?: WakeRequestSummary[];
-  /** Legacy/per-message P3394 review metadata. New collaboration validation is Commander-owned and stored in KSTAR runtime state. */
-  kstar_review?: KStarReviewSummary;
   /** Recall projection card metadata used to recover confirmed assets for prompt injection. */
   recall_projection_card?: { projectionId: string };
   /** Host-verified Recall assets supplied to the model for this persisted reply. */

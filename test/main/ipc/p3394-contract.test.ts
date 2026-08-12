@@ -52,17 +52,15 @@ beforeEach(async () => {
 
 afterEach(() => { vi.resetModules(); });
 
-describe('p3394 contract after evolution removal', () => {
-  it('p3394 关键通道仍注册（invoke 不返回 unknown channel）', async () => {
-    for (const ch of [
-      'p3394.listKstarCompatProjections',
-      'p3394.reviewKstarCompatProjection',
+describe('p3394 contract after legacy KSTAR removal', () => {
+  it('keeps the generic wake and protocol channels registered', async () => {
+    for (const channel of [
+      'p3394.listWakeRequests',
+      'p3394.decideWakeRequest',
       'p3394.listProtocolEvents',
-      'p3394.decideExperienceCandidate',
     ]) {
-      const r = await probe(ch);
-      // 通道存在时错误来自参数校验（如 invalid cid），绝不会是 "unknown channel"。
-      expect(r.error ?? '').not.toContain('unknown channel');
+      const result = await probe(channel);
+      expect(result.error ?? '').not.toContain('unknown channel');
     }
   });
 });

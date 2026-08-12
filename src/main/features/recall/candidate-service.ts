@@ -13,7 +13,8 @@ import {
 import type { RecallJsonRecord } from './types';
 import type { KstarLearningSignal } from '../kstar/types';
 import { normalizeAbilityAssetOntologyRefs, type AbilityAssetOntologyRef } from './ontology-refs';
-import { initializeAbilityAsset, listAbilityAssets } from './asset-service';
+import { normalizeAbilityAssetScopePolicy, type RecallAbilityAssetScopePolicy } from './scope-policy';
+import { initializeAbilityAsset } from './asset-service';
 import {
   cognitionSourceRefKey,
   normalizeCognitionSourceRefs,
@@ -39,9 +40,6 @@ export interface RecallCandidateRecord extends RecallJsonRecord {
   captureKey?: string;
   promotedAssetId?: string;
   decisionNote?: string;
-  promotionErrorCode?: 'asset_write_failed';
-  promotionErrorMessage?: string;
-  promotionFailedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -56,6 +54,10 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   learningSignal?: KstarLearningSignal;
   ontologyRefs?: AbilityAssetOntologyRef[];
   scope: string;
+  scopePolicy?: RecallAbilityAssetScopePolicy;
+  recommendedAction?: 'pause' | 'rework';
+  recommendationReason?: string;
+  recommendationAt?: string;
   status: 'active' | 'paused' | 'revoked';
   maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated';
   version: string;
@@ -136,7 +138,8 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   if (!evidenceRefs.length) throw new Error('malformed recall ability asset evidence');
   const learningSignal = normalizeLearningSignal(value.learningSignal);
   const ontologyRefs = value.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(value.ontologyRefs);
-  return { ...value, evidenceRefs, ...(learningSignal ? { learningSignal } : {}), ...(ontologyRefs ? { ontologyRefs } : {}) } as RecallAbilityAssetRecord;
+  const scopePolicy = normalizeAbilityAssetScopePolicy(value.scopePolicy);
+  return { ...value, evidenceRefs, ...(learningSignal ? { learningSignal } : {}), ...(ontologyRefs ? { ontologyRefs } : {}), ...(scopePolicy ? { scopePolicy } : {}) } as RecallAbilityAssetRecord;
 }
 
 function candidateDirectory(userId: string): string {
@@ -149,10 +152,6 @@ function fingerprint(input: Pick<RecallCandidateRecord, 'judgment' | 'sourceRefs
 
 function candidateIdForCaptureKey(captureKey: string): string {
   return `cand-${createHash('sha256').update(captureKey).digest('hex').slice(0, 24)}`;
-}
-
-function abilityAssetIdForCandidate(candidateId: string): string {
-  return `aa-${createHash('sha256').update(candidateId).digest('hex').slice(0, 24)}`;
 }
 
 export async function listRecallCandidates(userId: string): Promise<RecallCandidateRecord[]> {
@@ -278,20 +277,7 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
     if (!raw) throw new Error('recall candidate not found');
     const current = asCandidate(raw);
     if (current.status === 'rejected' || current.status === 'promoted') throw new Error('recall candidate is terminal');
-    return {
-      ...current,
-      judgment,
-      ...(summary ? { summary } : {}),
-      ...(uncertainty ? { uncertainty } : {}),
-      suggestedType,
-      suggestedScope,
-      sourceRefs,
-      ...(learningSignal ? { learningSignal } : current.learningSignal ? { learningSignal: current.learningSignal } : {}),
-      promotionErrorCode: undefined,
-      promotionErrorMessage: undefined,
-      promotionFailedAt: undefined,
-      updatedAt: new Date().toISOString(),
-    };
+    return { ...current, judgment, ...(summary ? { summary } : {}), ...(uncertainty ? { uncertainty } : {}), suggestedType, suggestedScope, sourceRefs, ...(learningSignal ? { learningSignal } : current.learningSignal ? { learningSignal: current.learningSignal } : {}), updatedAt: new Date().toISOString() };
   });
   return asCandidate(updated);
 }
@@ -311,82 +297,43 @@ export function rejectRecallCandidate(userId: string, candidateId: string, note?
 export async function promoteRecallCandidate(
   userId: string,
   candidateId: string,
-  options: { ontologyRefs?: AbilityAssetOntologyRef[] } = {},
+  options: { actor?: 'user'; ontologyRefs?: AbilityAssetOntologyRef[]; scopePolicy?: RecallAbilityAssetScopePolicy } = {},
 ): Promise<{ candidate: RecallCandidateRecord; asset: RecallAbilityAssetRecord }> {
-  try {
-    const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, async (current) => {
-      if (!current) throw new Error('recall candidate not found');
-      const candidate = asCandidate(current);
-      if (candidate.status === 'promoted') return candidate;
-      if (candidate.status === 'rejected') throw new Error('recall candidate is terminal');
-      const recoveredAsset = (await listAbilityAssets(userId))
-        .find((asset) => asset.candidateId === candidate.id);
-      if (recoveredAsset) {
-        await initializeAbilityAsset(userId, recoveredAsset);
-        return {
-          ...candidate,
-          status: 'promoted',
-          promotedAssetId: recoveredAsset.id,
-          promotionErrorCode: undefined,
-          promotionErrorMessage: undefined,
-          promotionFailedAt: undefined,
-          updatedAt: new Date().toISOString(),
-        };
-      }
-      const now = new Date().toISOString();
-      const asset: RecallAbilityAssetRecord = {
-        schemaVersion: 1,
-        ownerId: userId,
-        id: abilityAssetIdForCandidate(candidate.id),
-        candidateId: candidate.id,
-        type: candidate.suggestedType,
-        title: candidate.summary || candidate.judgment.slice(0, 120),
-        statement: candidate.judgment,
-        evidenceRefs: candidate.sourceRefs,
-        ...(candidate.learningSignal ? { learningSignal: candidate.learningSignal } : {}),
-        ...(options.ontologyRefs?.length ? { ontologyRefs: options.ontologyRefs } : {}),
-        scope: candidate.suggestedScope,
-        status: 'active',
-        maturity: 'seed',
-        version: '1',
-        createdAt: now,
-        updatedAt: now,
-      };
-      await writeRecallJsonRecord(userId, 'ability-assets', asset.id, asset);
-      await initializeAbilityAsset(userId, asset);
-      return {
-        ...candidate,
-        status: 'promoted',
-        promotedAssetId: asset.id,
-        promotionErrorCode: undefined,
-        promotionErrorMessage: undefined,
-        promotionFailedAt: undefined,
-        updatedAt: now,
-      };
-    });
-    const candidate = asCandidate(updated);
-    if (!candidate.promotedAssetId) throw new Error('promoted candidate has no ability asset');
-    const storedAsset = await readRecallJsonRecord(userId, 'ability-assets', candidate.promotedAssetId);
-    if (!storedAsset) throw new Error('promoted ability asset not found');
-    return { candidate, asset: asAsset(storedAsset) };
-  } catch (error) {
-    const message = boundedText(
-      error instanceof Error ? error.message : String(error),
-      'promotion error',
-      500,
-    ) || 'Recall asset write failed';
-    await updateRecallJsonRecord(userId, 'candidates', candidateId, (current) => {
-      if (!current) return current;
-      const candidate = asCandidate(current);
-      if (candidate.status === 'promoted' || candidate.status === 'rejected') return candidate;
-      return {
-        ...candidate,
-        promotionErrorCode: 'asset_write_failed',
-        promotionErrorMessage: message,
-        promotionFailedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-    }).catch(() => undefined);
-    throw error;
-  }
+  if (options.actor !== 'user') throw new Error('recall candidate promotion requires a user actor');
+  const ontologyRefs = options.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(options.ontologyRefs);
+  const scopePolicy = normalizeAbilityAssetScopePolicy(options.scopePolicy);
+  const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, async (current) => {
+    if (!current) throw new Error('recall candidate not found');
+    const candidate = asCandidate(current);
+    if (candidate.status === 'promoted') return candidate;
+    if (candidate.status === 'rejected') throw new Error('recall candidate is terminal');
+    const now = new Date().toISOString();
+    const asset: RecallAbilityAssetRecord = {
+      schemaVersion: 1,
+      ownerId: userId,
+      id: `aa-${genId12()}`,
+      candidateId: candidate.id,
+      type: candidate.suggestedType,
+      title: candidate.summary || candidate.judgment.slice(0, 120),
+      statement: candidate.judgment,
+      evidenceRefs: candidate.sourceRefs,
+      ...(candidate.learningSignal ? { learningSignal: candidate.learningSignal } : {}),
+      ...(ontologyRefs?.length ? { ontologyRefs } : {}),
+      scope: candidate.suggestedScope,
+      ...(scopePolicy ? { scopePolicy } : {}),
+      status: 'active',
+      maturity: 'seed',
+      version: '1',
+      createdAt: now,
+      updatedAt: now,
+    };
+    await writeRecallJsonRecord(userId, 'ability-assets', asset.id, asset);
+    await initializeAbilityAsset(userId, asset);
+    return { ...candidate, status: 'promoted', promotedAssetId: asset.id, updatedAt: now };
+  });
+  const candidate = asCandidate(updated);
+  if (!candidate.promotedAssetId) throw new Error('promoted candidate has no ability asset');
+  const storedAsset = await readRecallJsonRecord(userId, 'ability-assets', candidate.promotedAssetId);
+  if (!storedAsset) throw new Error('promoted ability asset not found');
+  return { candidate, asset: asAsset(storedAsset) };
 }

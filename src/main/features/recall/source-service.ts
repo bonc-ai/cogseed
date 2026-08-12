@@ -32,8 +32,6 @@ export const LEGACY_COGNITION_SOURCE_KINDS = [
   'memory',
   'context',
   'ontology',
-  'p3394_experience',
-  'p3394_patch',
   'execution',
   'message',
   'artifact',
@@ -175,10 +173,6 @@ function canonicalizeSource(source: CognitionSourceInput): {
       return { kind: 'memory', taxonomyVersion: 1, subtype: 'teaching', degraded: true, reason: 'legacy_memory_untraceable' };
     case 'ontology':
       return { kind: 'ontology', taxonomyVersion: 1, subtype: 'artifact', degraded: true, reason: 'legacy_ontology_asset_ref' };
-    case 'p3394_experience':
-      return { kind: 'p3394_experience', taxonomyVersion: 1, subtype: 'evaluation', degraded: true, reason: 'legacy_experience_ref' };
-    case 'p3394_patch':
-      return { kind: 'p3394_patch', taxonomyVersion: 1, subtype: 'evaluation', degraded: true, reason: 'legacy_patch_ref' };
     default:
       return undefined;
   }

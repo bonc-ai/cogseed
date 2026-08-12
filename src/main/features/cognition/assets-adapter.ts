@@ -1,12 +1,10 @@
 import * as personalOntologyGroups from '../personal_ontology_groups';
 import { listAbilityAssets } from '../recall/asset-service';
 import { readInstalledSkillForAsset, readRecallSkillDraft } from '../recall/skill-draft-service';
-import * as p3394 from '../p3394';
 import { refMatchesAsset, relationRef, titleFromText } from './normalize';
 import { listCognitionCandidates } from './candidates-adapter';
 import { listCognitionReuseReceipts } from './receipts-adapter';
-import type { CompatExperienceCandidate, CompatPatchCandidate } from '../p3394';
-import type { CognitionAssetSummary, CognitionAssetType, CognitionSecurityView } from './types';
+import type { CognitionAssetSummary, CognitionAssetType } from './types';
 
 export interface ListCognitionAssetsFilter {
   type?: CognitionAssetType;
@@ -25,45 +23,6 @@ function baseAsset(input: Omit<CognitionAssetSummary, 'relationRefs' | 'candidat
     receiptRefs: input.receiptRefs || [],
     candidateRefs: input.candidateRefs || [],
   };
-}
-
-function mapExperienceCandidate(row: CompatExperienceCandidate): CognitionAssetSummary {
-  return baseAsset({
-    id: `candidate:${row.id}`,
-    type: 'rule',
-    category: 'rule',
-    title: titleFromText(row.summary, row.id),
-    source: 'p3394_experience_candidate',
-    status: row.status === 'approved' ? 'active' : row.status === 'rejected' ? 'revoked' : 'candidate',
-    maturity: row.status === 'approved' ? 'transfer_validated' : 'bud',
-    owner: 'local_user',
-    scope: row.conversation_id || 'current_project',
-    candidateRefs: [`p3394_experience:${row.id}`],
-    relationRefs: [relationRef('execution', row.source_run_id, row.summary)],
-  });
-}
-
-function mapPatchCandidate(row: CompatPatchCandidate): CognitionAssetSummary {
-  const skillId = row.target?.kind === 'custom_skill' && row.target.id ? row.target.id : undefined;
-  return baseAsset({
-    id: `candidate:${row.id}`,
-    type: 'skill_method',
-    category: 'skill_method',
-    title: titleFromText(row.proposal?.title || row.proposal?.summary, row.id),
-    source: 'p3394_patch_candidate',
-    version: row.target?.version,
-    status: row.status === 'approved' || row.status === 'applied' ? 'active' : row.status === 'rejected' ? 'revoked' : 'candidate',
-    maturity: row.status === 'approved' || row.status === 'applied' ? 'transfer_validated' : 'bud',
-    owner: 'local_user',
-    scope: row.conversation_id || 'current_project',
-    baselineSkillRef: skillId ? `skill:${skillId}` : undefined,
-    candidateRefs: [`p3394_patch:${row.id}`],
-    receiptRefs: [row.receipt_id].filter(Boolean) as string[],
-    relationRefs: [
-      relationRef('execution', row.source_run_id, row.proposal?.summary),
-      ...(skillId ? [relationRef('skill', skillId, row.proposal?.title)] : []),
-    ],
-  });
 }
 
 export async function listCognitionAssets(
@@ -132,8 +91,6 @@ export async function listCognitionAssets(
             ? ref.subtype === 'evaluation' ? 'evaluation' : 'execution'
             : ref.kind === 'execution'
               ? 'execution'
-              : ref.kind === 'p3394_experience' || ref.kind === 'p3394_patch'
-                ? 'evaluation'
                 : ref.kind === 'conversation' || ref.kind === 'message'
               ? 'conversation'
                   : ref.kind === 'ontology'
@@ -161,16 +118,6 @@ export async function listCognitionAssets(
         relationRefs: [relationRef('ontology', group.group_id, group.title)],
       }));
     }
-  }
-
-  if (!category || category === 'rule') {
-    const experiences = await p3394.listExperienceCandidates(userId);
-    items.push(...experiences.map(mapExperienceCandidate));
-  }
-
-  if (!category || category === 'skill_method') {
-    const patches = await p3394.listPatchCandidates(userId);
-    items.push(...patches.map(mapPatchCandidate));
   }
 
   await enrichAssetCounts(userId, items);
@@ -201,50 +148,5 @@ async function enrichAssetCounts(userId: string, items: CognitionAssetSummary[])
     });
     item.reuseCount = matchingReceipts.length;
     item.lastReusedAt = matchingReceipts[0]?.completedAt || matchingReceipts[0]?.createdAt;
-  }
-  await enrichAssetSecurity(userId, items);
-}
-
-/**
- * Populate the security axis from the validation record on disk.
- *
- * Only skill-backed assets have one: `runSkillValidation` persists per-skill
- * verdicts, and the security axis must reflect a real scan rather than being
- * inferred from maturity. Assets with no record stay `unknown` — reporting
- * them as `pass` would claim a check that never ran.
- */
-async function enrichAssetSecurity(userId: string, items: CognitionAssetSummary[]): Promise<void> {
-  const skillRefs = new Map<string, string>();
-  for (const item of items) {
-    const skillId = item.baselineSkillRef?.startsWith('skill:')
-      ? item.baselineSkillRef.slice('skill:'.length)
-      : undefined;
-    if (skillId) skillRefs.set(item.id, skillId);
-  }
-
-  const verdicts = new Map<string, CognitionSecurityView>();
-  await Promise.all([...new Set(skillRefs.values())].map(async (skillId) => {
-    try {
-      const run = await p3394.findLatestSkillValidation(userId, skillId);
-      if (!run) return;
-      verdicts.set(skillId, {
-        // `degraded` means the scanner could not complete — surfaced as
-        // `unknown` so it is never mistaken for a clean result.
-        status: run.status === 'pass' ? 'pass'
-          : run.status === 'risk' ? 'risk'
-            : run.status === 'blocked' ? 'blocked' : 'unknown',
-        findingCount: run.violations.length,
-        ...(run.violations[0]?.rule ? { topRule: run.violations[0].rule } : {}),
-        semanticReviewed: false,
-      });
-    } catch {
-      // Unreadable record: leave the asset `unknown` rather than guessing.
-    }
-  }));
-
-  for (const item of items) {
-    const skillId = skillRefs.get(item.id);
-    item.security = (skillId && verdicts.get(skillId))
-      || { status: 'unknown', findingCount: 0, semanticReviewed: false };
   }
 }

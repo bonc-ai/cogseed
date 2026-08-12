@@ -1163,12 +1163,6 @@ function _renderRecipientChip(target) {
       if (!display) display = r.name || r.id;
       nameEl.textContent = display;
       nameEl.removeAttribute('data-i18n');
-    } else if (typeof currentCid === 'string' && currentCid
-      && typeof conversations !== 'undefined' && Array.isArray(conversations)
-      && conversations.find((c) => c && c.conversation_id === currentCid && c.kind === 'space_builder')) {
-      // 空间模式会话：接收者是空间构建师（会话内置角色，不在 AI 团队列表）。
-      nameEl.textContent = t('chat.recipient_space_builder', '空间构建师');
-      nameEl.removeAttribute('data-i18n');
     } else {
       nameEl.setAttribute('data-i18n', 'chat.recipient_commander');
       nameEl.textContent = t('chat.recipient_commander');
@@ -1461,11 +1455,6 @@ function _initEmptyStateScenarios() {
   row.querySelectorAll('.new-chat-scenario-chip').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const id = btn.dataset.scenario || '';
-      // 空间模式：不填模板，直接创建 space_builder 会话并打开。
-      if (id === 'space_builder') {
-        await _startSpaceBuilderConversation();
-        return;
-      }
       const config = _SCENARIO_CONFIGS[id];
       const key = config && config.templateKey;
       const raw = key ? t(key) : '';
@@ -1513,213 +1502,8 @@ function _initContinueWorkChip() {
     }
   });
 }
-/** 提取构建师消息里的 space-draft JSON 块；无/解析失败返回 null。
- *  容错：LLM 在中文语境下常输出全角引号/冒号/逗号，先做字符规范化再解析。 */
-function _extractSpaceDraft(text) {
-  if (!text || typeof text !== 'string') return null;
-  // 兼容 ```space-draft 后跟换行或直接跟 JSON 两种写法
-  const m = text.match(/```space-draft[\s\n]*([\s\S]*?)```/);
-  if (!m) return null;
-  return _parseSpaceDraftJson(m[1]);
-}
-
-function _parseSpaceDraftJson(raw) {
-  const parse = (s) => {
-    try { return JSON.parse(s.trim()); } catch (_) { return null; }
-  };
-  let draft = parse(raw);
-  if (draft) return draft && typeof draft === 'object' ? draft : null;
-  // 全角 → 半角规范化（中文引号/冒号/逗号/括号），再试一次。
-  const normalized = String(raw)
-    .replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
-    .replace(/：/g, ':').replace(/，/g, ',')
-    .replace(/[｛｝]/g, (c) => (c === '｛' ? '{' : '}'))
-    .replace(/[［］]/g, (c) => (c === '［' ? '[' : ']'));
-  draft = parse(normalized);
-  return draft && typeof draft === 'object' ? draft : null;
-}
-
-/** 创建空间按钮卡：标题 + 目标段落 + 配置明细行 + 创建动作。id 优先显示中文名。 */
-function _renderSpaceDraftButtonHtml(draft) {
-  const name = String(draft.name || t('new_chat.space_draft_unnamed', '我的空间'));
-  const outcome = String(draft.sustained_outcome || '').trim();
-  // 版本号可能自带 v 前缀（v1.0.0），展示时统一补一个 v 即可。
-  const fmtVersion = (v) => {
-    const s = String(v || '').trim();
-    return s ? `v${s.replace(/^v/i, '')}` : '';
-  };
-  const rows = [];
-  if (draft.primary_template_id) {
-    const tplName = _spaceAssetNames.templates[draft.primary_template_id] || draft.primary_template_id;
-    rows.push({ label: t('new_chat.space_draft_template', '模板'), text: tplName });
-  }
-  if (draft.main_skill_ref && draft.main_skill_ref.asset_id) {
-    const skillName = _spaceAssetNames.skills[draft.main_skill_ref.asset_id] || draft.main_skill_ref.asset_id;
-    const ver = fmtVersion(draft.main_skill_ref.version);
-    rows.push({ label: t('new_chat.space_draft_main_skill', '主技能'), text: ver ? `${skillName} ${ver}` : skillName });
-  }
-  const extraSkillNames = (Array.isArray(draft.extra_skill_ids) ? draft.extra_skill_ids : [])
-    .map((id) => _spaceAssetNames.skills[id] || id);
-  const extraAgentNames = (Array.isArray(draft.extra_agent_ids) ? draft.extra_agent_ids : [])
-    .map((id) => _spaceAssetNames.agents[id] || id);
-  if (extraSkillNames.length) rows.push({ label: t('new_chat.space_draft_skills', '能力'), text: extraSkillNames.join('、') });
-  if (extraAgentNames.length) rows.push({ label: t('new_chat.space_draft_agents', '帮手'), text: extraAgentNames.join('、') });
-  const rowsHtml = rows.length
-    ? `<div class="space-draft-rows">${rows.map((r) => `
-        <div class="space-draft-row">
-          <span class="space-draft-row-label">${escapeHtml(r.label)}</span>
-          <span class="space-draft-row-text">${escapeHtml(r.text)}</span>
-        </div>`).join('')}</div>`
-    : '';
-  return `<div class="space-draft-card" data-draft="${escapeHtml(JSON.stringify(draft))}">
-    <div class="space-draft-head">
-      <div class="space-draft-title">${escapeHtml(t('new_chat.space_draft_title', '空间配置草稿'))}</div>
-      <div class="space-draft-name">${escapeHtml(name)}</div>
-    </div>
-    ${outcome ? `<div class="space-draft-goal">${escapeHtml(outcome)}</div>` : ''}
-    ${rowsHtml}
-    <button type="button" class="btn btn-sm btn-primary space-draft-create-btn" data-space-draft-create>${escapeHtml(t('new_chat.space_draft_create', '创建空间'))}</button>
-  </div>`;
-}
-
-/** 资产 id → 名字映射（惰性加载一次，草稿卡友好显示用）。加载完成后
- *  自动刷新页面上已渲染的草稿卡（无论从哪个入口进入会话都会生效）。 */
-let _spaceAssetNames = { templates: {}, skills: {}, agents: {} };
-async function _ensureSpaceAssetNames() {
-  try {
-    const [tplRes, skillRes, agentRes] = await Promise.all([
-      window.orkas.invoke('spaces.templates.list'),
-      window.orkas.invoke('skills.list'),
-      window.orkas.invoke('agents.list'),
-    ]);
-    _spaceAssetNames.templates = Object.fromEntries((tplRes.templates || []).map((t) => [t.template_id, t.name || t.template_id]));
-    _spaceAssetNames.skills = Object.fromEntries((skillRes.skills || []).map((s) => [s.id, s.name || s.id]));
-    _spaceAssetNames.agents = Object.fromEntries((agentRes.agents || []).map((a) => [a.agent_id, a.name || a.agent_id]));
-  } catch (_) { return; }
-  // 映射就绪：刷新已渲染的草稿卡（id → 中文名）。
-  try {
-    document.querySelectorAll('.space-draft-card').forEach((card) => {
-      if (!card.dataset.draft) return;
-      let draft = null;
-      try { draft = JSON.parse(card.dataset.draft); } catch (_) {}
-      if (draft) card.outerHTML = _renderSpaceDraftButtonHtml(draft);
-    });
-  } catch (_) {}
-}
-
-/** 创建空间（用户点草稿卡按钮）：走后端 createFromDraft（资产存在性校验）。
- *  校验失败返回 null 并提示具体原因；成功返回创建的 space。 */
-async function _createSpaceFromDraft(draft) {
-  const payload = {
-    name: String(draft.name || '').trim() || t('new_chat.space_draft_unnamed', '我的空间'),
-  };
-  if (typeof draft.space_type === 'string' && draft.space_type) payload.space_type = draft.space_type;
-  if (typeof draft.sustained_outcome === 'string' && draft.sustained_outcome.trim()) payload.sustained_outcome = draft.sustained_outcome.trim();
-  if (typeof draft.primary_template_id === 'string' && draft.primary_template_id) payload.primary_template_id = draft.primary_template_id;
-  if (draft.main_skill_ref && typeof draft.main_skill_ref.asset_id === 'string' && typeof draft.main_skill_ref.version === 'string') {
-    payload.main_skill_ref = { asset_id: draft.main_skill_ref.asset_id, version: draft.main_skill_ref.version };
-  }
-  if (Array.isArray(draft.extra_skill_ids)) payload.extra_skill_ids = draft.extra_skill_ids;
-  if (Array.isArray(draft.extra_agent_ids)) payload.extra_agent_ids = draft.extra_agent_ids;
-  try {
-    const res = await window.orkas.invoke('spaces.createFromDraft', { draft: payload });
-    if (!res || res.error || !res.space) throw new Error((res && res.error) || 'create failed');
-    return res.space;
-  } catch (e) {
-    const reason = (e && e.message) || String(e || '');
-    if (typeof uiAlert === 'function') {
-      uiAlert(t('new_chat.space_draft_failed', { reason }));
-    }
-    return null;
-  }
-}
-
-/** 事件委托：草稿卡「创建空间」按钮。 */
-document.addEventListener('click', async (e) => {
-  const btn = e.target && e.target.closest ? e.target.closest('[data-space-draft-create]') : null;
-  if (!btn) return;
-  const card = btn.closest('.space-draft-card');
-  if (!card) return;
-  btn.disabled = true;
-  let draft = null;
-  try { draft = card.dataset.draft ? JSON.parse(card.dataset.draft) : null; } catch (_) { draft = null; }
-  if (!draft) { btn.disabled = false; return; }
-  const space = await _createSpaceFromDraft(draft);
-  btn.disabled = false;
-  if (!space) return;
-  // 空间已建成：标记当前 space_builder 会话完成，下次点「空间模式」不再复用
-  // 这个会话，而是新建引导会话（僵尸会话陷阱：旧会话无产出也会一直吸附点击）。
-  if (typeof currentCid === 'string' && currentCid) {
-    try {
-      const doneRes = await window.orkas.invoke('conversations.completeSpaceBuilder', { cid: currentCid });
-      // 同步本地列表缓存：本次运行内再点「空间模式」不再复用该会话。
-      if (doneRes && doneRes.conversation && Array.isArray(conversations)) {
-        const idx = conversations.findIndex((c) => c && c.conversation_id === currentCid);
-        if (idx >= 0) {
-          conversations[idx] = { ...conversations[idx], space_builder_completed: doneRes.conversation.space_builder_completed };
-          if (typeof renderConversationList === 'function') renderConversationList();
-        }
-      }
-    } catch (_) { /* 标记失败不阻断——空间已创建成功 */ }
-  }
-  if (typeof uiToast === 'function') {
-    uiToast(t('new_chat.space_draft_created', { name: space.name || space.space_id }), { variant: 'success' });
-  }
-  card.innerHTML = `<div class="space-draft-done">${escapeHtml(t('new_chat.space_draft_created', { name: space.name || space.space_id }))} ${escapeHtml(t('new_chat.space_draft_go'))}</div>`;
-});
-
-async function _startSpaceBuilderConversation() {
-  // 复用"进行中"的空间模式会话（用户再点卡片回到上次未完成的搭建）。
-  // 已产出空间（space_builder_completed）或已删除的会话不复用——上次搭建
-  // 已结束，点卡片应开新引导会话。
-  if (typeof conversations !== 'undefined' && Array.isArray(conversations)) {
-    const existing = conversations
-      .filter((c) => c && c.kind === 'space_builder' && !c.deleted_at && !c.space_builder_completed)
-      .sort((a, b) => String(b.last_active_at || b.created_at || '').localeCompare(String(a.last_active_at || a.created_at || '')))[0];
-    if (existing) {
-      // 先等资产名映射就绪再渲染（草稿卡需要中文名），再走正常会话加载。
-      await _ensureSpaceAssetNames();
-      setView('conversation', existing.conversation_id);
-      _renderRecipientChip('conversation');
-      return;
-    }
-  }
-  let conv;
-  try {
-    const res = await apiFetch('/api/conversations/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'space_builder', title: t('new_chat.space_mode_title', '空间模式') }),
-    });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || t('chat.create_conv_failed'));
-    conv = data.conversation;
-  } catch (e) {
-    await uiAlert(t('chat.create_conv_failed_with_reason', { reason: (e && e.message) || e }));
-    return;
-  }
-  conv.last_active_at = new Date().toISOString();
-  conversations.unshift(conv);
-  renderConversationList();
-  // 先等资产名映射就绪再渲染（草稿卡需要中文名）。
-  await _ensureSpaceAssetNames();
-  setView('conversation', conv.conversation_id, { skipLoad: true });
-  _renderRecipientChip('conversation');
-  // 开场：让构建师自我介绍并引导（一次 LLM 调用换取完整首屏体验）。
-  try {
-    await sendInCurrentConversation(t('new_chat.space_builder_opener', '你好，我想搭建一个专属空间，请引导我。'));
-  } catch (e) {
-    _convLog?.warn('space builder opener failed', e);
-  }
-}
-
 function onEnterConversationView() {
   if (_messageSelectionState && _messageSelectionState.cid !== currentCid) _exitMessageSelection();
-  // 空间模式会话：确保资产名映射就绪（草稿卡显示中文名，加载完自动刷新）。
-  if (typeof currentCid === 'string' && currentCid && typeof conversations !== 'undefined' && Array.isArray(conversations)
-    && conversations.some((c) => c && c.conversation_id === currentCid && c.kind === 'space_builder')) {
-    _ensureSpaceAssetNames();
-  }
   // The side column is per-conversation: its aside thread is anchored to a
   // message here, and its preview is a file this conversation produced. Leaving
   // it mounted across a switch would show the previous conversation's content
@@ -2959,7 +2743,6 @@ function _groupMsgToLegacy(gm) {
     ...(label ? { _from_label: label } : {}),
     ...(Array.isArray(gm.attachments) && gm.attachments.length ? { attachments: gm.attachments } : {}),
     ...(Array.isArray(gm.produced) && gm.produced.length ? { produced: gm.produced } : {}),
-    ...(Array.isArray(gm.produced_results) && gm.produced_results.length ? { produced_results: gm.produced_results } : {}),
     ...(Array.isArray(gm.references) && gm.references.length ? { references: gm.references } : {}),
     ...(gm.form ? { form: gm.form } : {}),
     ...(_normalizeCreatedAgents(gm) ? { created_agents: _normalizeCreatedAgents(gm) } : {}),
@@ -2969,8 +2752,8 @@ function _groupMsgToLegacy(gm) {
     ...(Array.isArray(gm.recall_citations) && gm.recall_citations.length ? { recall_citations: gm.recall_citations } : {}),
     ...(Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length ? { marketplace_requests: gm.marketplace_requests } : {}),
     ...(Array.isArray(gm.wake_requests) && gm.wake_requests.length ? { wake_requests: gm.wake_requests } : {}),
-    ...(gm.kstar_review ? { kstar_review: gm.kstar_review } : {}),
     ...(gm.kstar_review_card ? { kstar_review_card: gm.kstar_review_card } : {}),
+    ...(gm.recall_projection_card ? { recall_projection_card: gm.recall_projection_card } : {}),
     ...(gm.plan_announcement ? { _plan_announcement: true } : {}),
     ...(Array.isArray(gm.process) && gm.process.length ? { process: gm.process } : {}),
     ...(gm.turn_id ? { _turn_id: gm.turn_id } : {}),
@@ -3732,75 +3515,30 @@ function _producedPathSpecificity(p) {
 // with the same basename, keep the more specific path so the chip opens the
 // real deliverable instead of a root-level scratch name.
 // Stable: original order is preserved within each rank.
-function _orderProducedPaths(absPaths, results = []) {
-  const resultsByPath = new Map((Array.isArray(results) ? results : [])
-    .filter((item) => item && item.path)
-    .map((item) => [String(item.path), item]));
+function _orderProducedPaths(absPaths) {
   const byBase = new Map();
   for (const [i, p] of absPaths.entries()) {
     const base = (p.split(/[\\/]/).pop() || p);
     const next = { path: p, base, i };
-    const validationStatus = String(resultsByPath.get(p)?.status || '');
-    // Failed results must remain visible even when a later usable file has the
-    // same basename; otherwise the user loses the failure reason and fallback.
-    const key = validationStatus && validationStatus !== 'ready'
-      ? `${base}\u0000${p}`
-      : base;
-    const prev = byBase.get(key);
+    const prev = byBase.get(base);
     if (!prev) {
-      byBase.set(key, next);
+      byBase.set(base, next);
       continue;
     }
     const nextScore = _producedPathSpecificity(next.path);
     const prevScore = _producedPathSpecificity(prev.path);
     if (nextScore > prevScore || (nextScore === prevScore && next.i > prev.i)) {
-      byBase.set(key, { ...next, i: prev.i });
+      byBase.set(base, { ...next, i: prev.i });
     }
   }
   return Array.from(byBase.values())
     .sort((a, b) => _producedDeliverableRank(a.base) - _producedDeliverableRank(b.base) || a.i - b.i);
 }
 
-function _producedStatusFromReviewStatus(reviewStatus) {
-  const status = String(reviewStatus || '').trim();
-  if (status === 'needs_review') return 'draft';
-  if (status === 'failed') return 'failed';
-  return 'final';
-}
-
 function _producedStatusLabel(status) {
   if (status === 'draft') return t('chat.produced_status.draft');
   if (status === 'failed') return t('chat.produced_status.failed');
   return t('chat.produced_status.final');
-}
-
-function _formatProducedBytes(bytes) {
-  const value = Number(bytes);
-  if (!Number.isFinite(value) || value < 0) return '';
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} KB`;
-  return `${(value / (1024 * 1024)).toFixed(value < 10 * 1024 * 1024 ? 1 : 0)} MB`;
-}
-
-function _producedValidationLine(result) {
-  if (!result || typeof result !== 'object') return '';
-  if (result.status === 'invalid') {
-    const code = String(result.failure_code || 'stat_failed');
-    const key = `chat.produced_validation.reason.${code}`;
-    const reason = t(key);
-    return t('chat.produced_validation.failed', { reason: reason === key ? code : reason });
-  }
-  if (result.status === 'preview_failed') {
-    return t('chat.produced_validation.preview_failed');
-  }
-  const size = _formatProducedBytes(result.bytes);
-  const capability = result.preview === 'available'
-    ? t('chat.produced_validation.preview_available')
-    : t('chat.produced_validation.local_only');
-  const tool = String(result.evidence?.producer_tool || '').trim();
-  return tool
-    ? t('chat.produced_validation.ready_with_tool', { size, capability, tool })
-    : t('chat.produced_validation.ready', { size, capability });
 }
 
 function _renderMessageProducedHtml(absPaths, opts = {}) {
@@ -3812,22 +3550,14 @@ function _renderMessageProducedHtml(absPaths, opts = {}) {
   const moreHint = t('contexts.menu.more_actions');
   const outputStatus = opts.status || 'final';
   const statusLabel = _producedStatusLabel(outputStatus);
-  const resultsByPath = new Map((Array.isArray(opts.results) ? opts.results : [])
-    .filter((item) => item && item.path)
-    .map((item) => [String(item.path), item]));
-  const ordered = _orderProducedPaths(absPaths, opts.results);
+  const ordered = _orderProducedPaths(absPaths);
   const items = ordered.map((e) => {
-    const validation = resultsByPath.get(e.path);
-    const validationStatus = String(validation?.status || '');
-    const fallbacks = Array.isArray(validation?.fallbacks) ? validation.fallbacks : [];
-    const validationLine = _producedValidationLine(validation);
     const icon = _iconForProduced(e.base);
     // Mark files the side pane can actually render, so the user knows which
     // ones show a result rather than just opening a text/binary view. The
     // judgement is delegated to the viewer's own classifier — a second
     // extension table here would drift from what the pane really supports.
-    const previewable = validationStatus !== 'invalid'
-      && typeof isSidePreviewableKind === 'function'
+    const previewable = typeof isSidePreviewableKind === 'function'
       && typeof previewKindOf === 'function'
       && isSidePreviewableKind(previewKindOf(e.base));
     const previewBadge = previewable
@@ -3835,21 +3565,16 @@ function _renderMessageProducedHtml(absPaths, opts = {}) {
       : '';
     const openLabel = previewable ? t('sideBrowser.open_side') : t('chat.produced_open');
     const openTitle = previewable ? t('sideBrowser.open_side_title') : hint;
-    const invalid = validationStatus === 'invalid';
-    const canOpen = !invalid || fallbacks.includes('open');
-    const canReveal = !invalid || fallbacks.includes('reveal');
-    const openExternal = fallbacks.includes('open') && validation?.preview && validation.preview !== 'available';
-    const resolvedOpenLabel = openExternal ? t('chat.produced_open_local') : openLabel;
-    return `<div class="chat-msg-produced-item${invalid ? ' is-invalid' : ''}" data-produced-path="${escapeHtml(e.path)}"${validationStatus ? ` data-result-status="${escapeHtml(validationStatus)}"` : ''}${fallbacks.length ? ` data-result-fallbacks="${escapeHtml(fallbacks.join(','))}"` : ''}${openExternal ? ' data-open-external="1"' : ''}${previewable ? ' data-previewable="1"' : ''}>
-      <button type="button" class="chat-msg-produced-main" title="${escapeHtml(hint)}"${invalid ? ' disabled' : ''}>
+    return `<div class="chat-msg-produced-item" data-produced-path="${escapeHtml(e.path)}"${previewable ? ' data-previewable="1"' : ''}>
+      <button type="button" class="chat-msg-produced-main" title="${escapeHtml(hint)}">
         <span class="chat-msg-produced-icon">${icon}</span>
         <span class="chat-msg-produced-main-text">
           <span class="chat-msg-produced-label-row"><span class="chat-msg-produced-label">${escapeHtml(e.base)}</span>${previewBadge}<span class="chat-msg-produced-badge is-${escapeHtml(outputStatus)}">${escapeHtml(statusLabel)}</span></span>
-          ${validationLine ? `<span class="chat-msg-produced-validation is-${escapeHtml(validationStatus)}">${escapeHtml(validationLine)}</span>` : `<span class="chat-msg-produced-path" title="${escapeHtml(e.path)}">${escapeHtml(e.path)}</span>`}
+          <span class="chat-msg-produced-path" title="${escapeHtml(e.path)}">${escapeHtml(e.path)}</span>
         </span>
       </button>
-      <button type="button" class="chat-msg-produced-open-btn btn btn-sm" title="${escapeHtml(openTitle)}"${canOpen ? '' : ' disabled'}>${escapeHtml(resolvedOpenLabel)}</button>
-      ${canReveal ? `<button type="button" class="chat-msg-produced-menu-btn" title="${escapeHtml(moreHint)}" aria-label="${escapeHtml(moreHint)}">⋯</button>` : ''}
+      <button type="button" class="chat-msg-produced-open-btn btn btn-sm" title="${escapeHtml(openTitle)}">${escapeHtml(openLabel)}</button>
+      <button type="button" class="chat-msg-produced-menu-btn" title="${escapeHtml(moreHint)}" aria-label="${escapeHtml(moreHint)}">⋯</button>
     </div>`;
   });
   return `<div class="chat-msg-produced is-${escapeHtml(outputStatus)}" data-produced-status="${escapeHtml(outputStatus)}">${items.join('')}</div>`;
@@ -3874,10 +3599,7 @@ function _mountMessageProducedFooter(msgDiv, absPaths, opts = {}) {
   const bubble = msgDiv.querySelector('.chat-bubble');
   if (!bubble || bubble.querySelector('.chat-msg-produced')) return;
   const wrap = document.createElement('div');
-  wrap.innerHTML = _renderMessageProducedHtml(absPaths, {
-    status: opts.status || 'final',
-    results: opts.results,
-  });
+  wrap.innerHTML = _renderMessageProducedHtml(absPaths, { status: opts.status || 'final' });
   const node = wrap.firstElementChild;
   if (!node) return;
   bubble.appendChild(node);
@@ -4146,36 +3868,17 @@ function _openProducedFile(absPath) {
   if (typeof openChatFileViewer === 'function') openChatFileViewer(absPath, base, opts);
 }
 
-async function _openProducedFileLocally(absPath) {
-  if (!absPath || !window.cogseed || typeof window.cogseed.invoke !== 'function') return;
-  try {
-    const result = await window.cogseed.invoke('workspace.openFileExternal', {
-      path: absPath,
-      ...(currentCid ? { cid: currentCid } : {}),
-    });
-    if (!result?.ok) throw new Error(result?.error || 'failed');
-  } catch (error) {
-    const reason = (error && error.message) || String(error);
-    const message = t('chat.produced_open_local_failed', { reason });
-    if (typeof uiAlert === 'function') await uiAlert(message);
-  }
-}
-
 function _hydrateMessageProducedChips(msgDiv) {
   const rows = msgDiv.querySelectorAll('.chat-msg-produced-item[data-produced-path]');
   rows.forEach((row) => {
     const main = row.querySelector('.chat-msg-produced-main');
     const openBtn = row.querySelector('.chat-msg-produced-open-btn');
     const menuBtn = row.querySelector('.chat-msg-produced-menu-btn');
-    const invalid = row.dataset.resultStatus === 'invalid';
-    const fallbacks = String(row.dataset.resultFallbacks || '').split(',').filter(Boolean);
-    const openExternal = row.dataset.openExternal === '1';
     if (main && main.dataset.bound !== '1') {
       main.dataset.bound = '1';
       main.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (openExternal) void _openProducedFileLocally(row.dataset.producedPath);
-        else _openProducedFile(row.dataset.producedPath);
+        _openProducedFile(row.dataset.producedPath);
       });
     }
     if (openBtn && openBtn.dataset.bound !== '1') {
@@ -4183,11 +3886,7 @@ function _hydrateMessageProducedChips(msgDiv) {
       openBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (openExternal) {
-          void _openProducedFileLocally(row.dataset.producedPath);
-        } else {
-          _openProducedFile(row.dataset.producedPath);
-        }
+        _openProducedFile(row.dataset.producedPath);
       });
     }
     if (menuBtn && menuBtn.dataset.bound !== '1') {
@@ -4200,7 +3899,6 @@ function _hydrateMessageProducedChips(msgDiv) {
         const base = p.split(/[\\/]/).pop() || p;
         window.ConversationInfo.openFileMenu(menuBtn, p, base, {
           cid: currentCid || '',
-          ...(invalid ? { allowedActions: fallbacks.includes('reveal') ? ['reveal'] : [] } : {}),
           onDeleted: () => {
             row.remove();
             const footer = msgDiv.querySelector('.chat-msg-produced');
@@ -5128,18 +4826,6 @@ function _conversationOperationDialog(options = {}) {
           ${options.sources.map((item) => `<div class="conversation-operation-source">${escapeHtml(item.title || item.conversation_id || '')}</div>`).join('')}
         </div>`
       : '';
-    const scopeHtml = options.mergeScope
-      ? `<fieldset class="conversation-operation-scope">
-          <legend>${escapeHtml(t('chat.merge.scope_label'))}</legend>
-          <label><input type="radio" name="conversation-merge-scope" value="selected_conversations" checked> <span>${escapeHtml(t('chat.merge.scope_selected'))}</span></label>
-          <label><input type="radio" name="conversation-merge-scope" value="time_range"> <span>${escapeHtml(t('chat.merge.scope_time_range'))}</span></label>
-          <div class="conversation-operation-time-range" data-merge-time-range hidden>
-            <label><span>${escapeHtml(t('chat.merge.scope_start'))}</span><input type="datetime-local" data-merge-start-at value="${escapeHtml(options.mergeScope.startValue || '')}"></label>
-            <label><span>${escapeHtml(t('chat.merge.scope_end'))}</span><input type="datetime-local" data-merge-end-at value="${escapeHtml(options.mergeScope.endValue || '')}"></label>
-          </div>
-          <small>${escapeHtml(t('chat.merge.scope_hint'))}</small>
-        </fieldset>`
-      : '';
     overlay.innerHTML = `
       <div class="modal modal-standard ui-dialog conversation-operation-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-operation-title">
         <div class="modal-title ui-dialog-title" id="conversation-operation-title">${title}</div>
@@ -5147,7 +4833,6 @@ function _conversationOperationDialog(options = {}) {
           <div class="ui-dialog-message">${message}</div>
           ${inputHtml}
           ${sourcesHtml}
-          ${scopeHtml}
           <div class="conversation-operation-error" data-operation-error hidden></div>
         </div>
         <div class="modal-actions">
@@ -5160,13 +4845,6 @@ function _conversationOperationDialog(options = {}) {
     const cancel = overlay.querySelector('[data-operation-cancel]');
     const confirm = overlay.querySelector('[data-operation-confirm]');
     const error = overlay.querySelector('[data-operation-error]');
-    const mergeScopeInputs = overlay.querySelectorAll('input[name="conversation-merge-scope"]');
-    const mergeTimeRange = overlay.querySelector('[data-merge-time-range]');
-    for (const scopeInput of mergeScopeInputs) {
-      scopeInput.addEventListener('change', () => {
-        if (mergeTimeRange) mergeTimeRange.hidden = scopeInput.value !== 'time_range' || !scopeInput.checked;
-      });
-    }
     let busy = false;
     const finish = (value) => {
       if (busy && value == null) return;
@@ -5196,34 +4874,7 @@ function _conversationOperationDialog(options = {}) {
       confirm.classList.add('is-loading');
       confirm.textContent = loadingLabel;
       try {
-        let scope;
-        if (options.mergeScope) {
-          const kind = overlay.querySelector('input[name="conversation-merge-scope"]:checked')?.value || 'selected_conversations';
-          if (kind === 'time_range') {
-            const startValue = String(overlay.querySelector('[data-merge-start-at]')?.value || '');
-            const endValue = String(overlay.querySelector('[data-merge-end-at]')?.value || '');
-            const startMs = Date.parse(startValue);
-            const endMs = Date.parse(endValue);
-            if (!startValue || !endValue || !Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs > endMs) {
-              busy = false;
-              cancel.disabled = false;
-              confirm.disabled = false;
-              confirm.classList.remove('is-loading');
-              confirm.textContent = options.confirmLabel || t('common.confirm');
-              error.hidden = false;
-              error.textContent = t('chat.merge.scope_invalid');
-              return;
-            }
-            scope = {
-              kind: 'time_range',
-              startAt: new Date(startMs).toISOString(),
-              endAt: new Date(endMs).toISOString(),
-            };
-          } else {
-            scope = { kind: 'selected_conversations' };
-          }
-        }
-        const result = await options.onConfirm(value, scope);
+        const result = await options.onConfirm(value);
         finish(result === undefined ? true : result);
       } catch (err) {
         busy = false;
@@ -5256,8 +4907,6 @@ function _mergeSummarySectionLabel(raw) {
   const normalized = String(raw || '').trim().toLowerCase();
   const labels = {
     'source conversations': 'chat.merge.section.source_conversations',
-    'context scope': 'chat.merge.section.context_scope',
-    '上下文范围': 'chat.merge.section.context_scope',
     'confirmed decisions': 'chat.merge.section.confirmed_decisions',
     'current state': 'chat.merge.section.current_state',
     'agent private context index': 'chat.merge.section.agent_private_context',
@@ -5267,40 +4916,6 @@ function _mergeSummarySectionLabel(raw) {
   };
   const key = labels[normalized];
   return key ? t(key) : raw;
-}
-
-function _renderMergeScopeReceipt(receipt) {
-  if (!receipt || !Array.isArray(receipt.sources)) return '';
-  const kindLabel = receipt.kind === 'time_range'
-    ? t('chat.merge.scope_time_range')
-    : t('chat.merge.scope_selected');
-  const rows = receipt.sources.map((source) => {
-    const selectedRange = source.selectedStartAt && source.selectedEndAt
-      ? `${formatTime(source.selectedStartAt)} - ${formatTime(source.selectedEndAt)}`
-      : t('chat.merge.scope_none');
-    const actualRange = source.actualStartAt && source.actualEndAt
-      ? `${formatTime(source.actualStartAt)} - ${formatTime(source.actualEndAt)}`
-      : t('chat.merge.scope_none');
-    const adjustments = [
-      Number(source.deduplicatedCount) > 0
-        ? t('chat.merge.scope_deduplicated', { count: source.deduplicatedCount })
-        : '',
-      Number(source.truncatedCount) > 0
-        ? t('chat.merge.scope_truncated', { count: source.truncatedCount })
-        : '',
-      Array.isArray(source.reasons) && source.reasons.includes('private_session_omitted_for_time_range')
-        ? t('chat.merge.scope_private_omitted')
-        : '',
-    ].filter(Boolean);
-    return `<div class="conversation-merge-scope-row">
-      <strong>${escapeHtml(source.sourceTitle || source.sourceCid || '')}</strong>
-      <span>${escapeHtml(t('chat.merge.scope_selected_result', { count: Number(source.selectedMessageCount) || 0, range: selectedRange }))}</span>
-      <span>${escapeHtml(t('chat.merge.scope_actual_result', { count: Number(source.actualMessageCount) || 0, range: actualRange }))}</span>
-      ${Number(source.privateSessionMessageCount) > 0 ? `<span>${escapeHtml(t('chat.merge.scope_private_result', { count: source.privateSessionMessageCount }))}</span>` : ''}
-      ${adjustments.length ? `<small>${escapeHtml(adjustments.join(' · '))}</small>` : ''}
-    </div>`;
-  }).join('');
-  return `<section class="conversation-merge-scope-receipt"><div><strong>${escapeHtml(t('chat.merge.scope_receipt_title'))}</strong><span>${escapeHtml(kindLabel)}</span></div>${rows}</section>`;
 }
 
 function _renderMergeSummaryDetails(summary) {
@@ -5335,9 +4950,7 @@ function _renderConversationResultCardHtml(card = {}) {
   const subtitle = isMerge
     ? t('chat.merge.summary_subtitle', { agentCount: Math.max(0, Number(card.agentCount) || 0) })
     : t('chat.copy.notice_subtitle');
-  const details = isMerge
-    ? `${_renderMergeScopeReceipt(card.scopeReceipt)}${_renderMergeSummaryDetails(card.summary)}`
-    : _copyNoticeBodyHtml();
+  const details = isMerge ? _renderMergeSummaryDetails(card.summary) : _copyNoticeBodyHtml();
   return `<details class="conversation-result-card ${isMerge ? 'is-merge' : 'is-copy'}">
     <summary>
       <span class="conversation-result-card-copy">
@@ -5472,16 +5085,6 @@ async function _mergeSelectedConversationsWithConfirm() {
   const cids = [..._conversationMergeSelection];
   if (cids.length < 2) return;
   const sources = cids.map(_conversationById).filter(Boolean);
-  const sourceTimes = sources
-    .flatMap((source) => [source.created_at, source.last_active_at || source.updated_at])
-    .map((value) => Date.parse(value || ''))
-    .filter(Number.isFinite);
-  const localDateTimeValue = (value) => {
-    const date = new Date(value);
-    if (!Number.isFinite(date.getTime())) return '';
-    const offset = date.getTimezoneOffset() * 60_000;
-    return new Date(date.getTime() - offset).toISOString().slice(0, 16);
-  };
   const result = await _conversationOperationDialog({
     title: t('chat.merge.dialog_title'),
     message: t('chat.merge.dialog_body'),
@@ -5491,22 +5094,13 @@ async function _mergeSelectedConversationsWithConfirm() {
     inputLabel: t('chat.merge.title_label'),
     inputValue: t('chat.merge.default_title'),
     sources,
-    mergeScope: {
-      startValue: sourceTimes.length ? localDateTimeValue(Math.min(...sourceTimes)) : '',
-      endValue: sourceTimes.length ? localDateTimeValue(Math.max(...sourceTimes)) : '',
-    },
-    onConfirm: async (title, scope) => {
+    onConfirm: async (title) => {
       const projectIds = [...new Set(sources.map((source) => source.project_id || ''))];
       const projectId = projectIds.length === 1 ? projectIds[0] : '';
       const res = await apiFetch('/api/conversations/merge', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          cids,
-          title,
-          project_id: projectId || null,
-          scope: scope || { kind: 'selected_conversations' },
-        }),
+        body: JSON.stringify({ cids, title, project_id: projectId || null }),
       });
       const data = await res.json();
       if (!data || data.ok === false || !data.conversation) throw new Error(data?.error || t('chat.unknown_error'));
@@ -5523,7 +5117,6 @@ async function _mergeSelectedConversationsWithConfirm() {
     sourceCount: cids.length,
     agentCount,
     summary: result.summary || '',
-    scopeReceipt: result.scope_receipt,
   });
   _conversationMergeSelectionActive = false;
   _conversationMergeSelection.clear();
@@ -6164,8 +5757,6 @@ function focusConversationAttention(kind, ref, messageId = '') {
   const escapedRef = targetRef ? CSS.escape(targetRef) : '';
   const selectors = {
     wake: escapedRef ? `.chat-wake-request[data-wake-request-id="${escapedRef}"]` : '',
-    kstar: escapedRef ? `.chat-kstar-review[data-kstar-run-id="${escapedRef}"]` : '',
-    patch: escapedRef ? `.chat-patch-candidate[data-patch-candidate-id="${escapedRef}"]` : '',
   };
   if (targetKind === 'conflict') {
     const container = document.getElementById('chat-history');
@@ -6617,8 +6208,6 @@ async function loadConversationHistory(cid, opts = {}) {
 
     _replayBufferedGroupEvents(cid);
     void _hydratePendingWakeRequests(cid);
-    void _hydrateKStarReviews(cid);
-    void _hydratePatchCandidates(cid);
 
     _mountConversationResultCard(cid);
 
@@ -7317,16 +6906,6 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   if (emptyEl) emptyEl.remove();
 
   const role = message.role === 'assistant' ? 'assistant' : 'user';
-  // 空间模式会话：隐藏 KSTAR 确认消息（正文文案 + 卡片都不显示）。
-  // 这类消息由 KSTAR 评审流程生成（kstar_review_card），引导对话不需要。
-  const isSbConv = typeof conversations !== 'undefined' && Array.isArray(conversations)
-    && conversations.some((c) => c && c.conversation_id === (opts.cid || currentCid) && c.kind === 'space_builder');
-  if (role === 'assistant' && isSbConv && (message.kstar_review_card || message.kstar_review)) {
-    const hidden = document.createElement('div');
-    hidden.style.display = 'none';
-    if (message._msg_id) hidden.dataset.msgId = String(message._msg_id);
-    return hidden;
-  }
   const msgDiv = document.createElement('div');
   msgDiv.className = `chat-message ${role}`;
   // Sender id stamp — used by `_ensureConvCreateAgentInline` to detect
@@ -7352,11 +6931,6 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const contentHtml = isHtmlSnippet
     ? sanitizeHtml(rawContent)
     : `<div class="markdown-body">${_renderMessageMarkdown(displayContent)}</div>`;
-  // 空间构建师的 space-draft 块 → 渲染「创建空间」按钮（用户确认后调 spaces.create）。
-  const spaceDraft = (!isHtmlSnippet && role === 'assistant')
-    ? _extractSpaceDraft(displayContent)
-    : null;
-  const spaceDraftHtml = spaceDraft ? _renderSpaceDraftButtonHtml(spaceDraft) : '';
 
   const attachmentCid = message.attachment_cid || message.attachments_cid || opts.cid || currentCid;
   const attachmentsHtml = (role === 'user' && Array.isArray(message.attachments) && message.attachments.length)
@@ -7392,18 +6966,11 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   // Always go through _groupActorLabel for non-user messages so we never
   // accidentally render the raw agent_id. _from_label was eagerly computed
   // at translate time but the cache may have been empty then; recompute.
-  // 空间模式会话：构建师回复的消息头显示「空间构建师」（actor 在群聊机制里
-  // 仍是指挥官，但 UI 上必须让用户看到"对话对象是构建师"）。
-  const isSpaceBuilderCid = role !== 'user'
-    && typeof conversations !== 'undefined' && Array.isArray(conversations)
-    && conversations.some((c) => c && c.conversation_id === (opts.cid || currentCid) && c.kind === 'space_builder');
   const headerName = role === 'user'
     ? ''
-    : isSpaceBuilderCid
-      ? t('chat.recipient_space_builder')
-      : _groupActorLabel(message._from || (message._from_label ? '' : ''))
-        || message._from_label
-        || (t('chat.from_agent_unknown'));
+    : _groupActorLabel(message._from || (message._from_label ? '' : ''))
+      || message._from_label
+      || (t('chat.from_agent_unknown'));
   const headerActorId = role === 'user' ? '' : String(message._from || '');
   const avatarHtml = role === 'user' ? '' : _renderActorAvatarHtml(headerActorId);
   const headerHtml = role === 'user'
@@ -7415,7 +6982,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   // action row remains for created-agent/skill links and message actions.
   msgDiv.innerHTML = `
     ${headerHtml}
-    <div class="chat-bubble">${planAnnHtml}${referencesHtml}${contentHtml}${spaceDraftHtml}${attachmentsHtml}${teachingReceiptsHtml}${recallCitationsHtml}</div>
+    <div class="chat-bubble">${planAnnHtml}${referencesHtml}${contentHtml}${attachmentsHtml}${teachingReceiptsHtml}${recallCitationsHtml}</div>
     <div class="chat-msg-actions" data-role="msg-actions">${createdAgentHtml}${createdSkillHtml}</div>
   `;
   if (typeof opts.msgIndex === 'number') msgDiv.dataset.msgIndex = String(opts.msgIndex);
@@ -7498,17 +7065,28 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble) _mountMarketplaceInstallRequests(bubble, msgDiv, message, opts);
   }
-  if (role === 'assistant' && message.kstar_review && !isSpaceBuilderCid) {
+  if (role === 'assistant' && message.kstar_review_card) {
     const bubble = msgDiv.querySelector('.chat-bubble');
-    if (bubble) _mountKStarReviewCard(bubble, message.kstar_review, opts.cid || currentCid);
+    if (bubble) _mountKstarResultReviewCard(bubble, message.kstar_review_card);
   }
 
   if (message.recall_projection_card && typeof window.mountRecallProjectionCard === 'function') {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble && !bubble.querySelector('.chat-recall-projection-card')) {
       const recallProjectionHost = document.createElement('div');
+      const recallProjectionFallback = bubble.querySelector('.markdown-body');
       bubble.appendChild(recallProjectionHost);
-      window.mountRecallProjectionCard(recallProjectionHost, message.recall_projection_card, { cid: opts.cid || currentCid });
+      Promise.resolve(window.mountRecallProjectionCard(
+        recallProjectionHost,
+        message.recall_projection_card,
+        { cid: opts.cid || currentCid },
+      )).then(() => {
+        if (recallProjectionFallback && !recallProjectionHost.classList.contains('is-error')) {
+          recallProjectionFallback.hidden = true;
+        }
+      }).catch(() => {
+        // Keep the persisted text visible when the interactive card cannot mount.
+      });
     }
   }
 
@@ -7520,10 +7098,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble) window.mountMessageArtifacts(bubble, message.artifacts, opts.cid || currentCid);
   }
-  if (producedPaths) _mountMessageProducedFooter(msgDiv, producedPaths, {
-    status: _producedStatusFromReviewStatus(message.kstar_review?.status),
-    results: message.produced_results,
-  });
+  if (producedPaths) _mountMessageProducedFooter(msgDiv, producedPaths);
   // Every assistant reply gets actions. Archive remains limited to final
   // raw-markdown replies; sanitized HTML status stubs are not archivable.
   if (role === 'assistant' && failedAssistant) {
@@ -7845,278 +7420,6 @@ function _mountKstarResultReviewCard(host, review) {
       _renderKstarResultReviewCard(card, { ...review, status: 'confirmed' });
     }
   }).catch(() => {});
-}
-
-function _renderKStarReviewCard(card, review, cid, candidate = null) {
-  card.dataset.busy = '';
-  const status = String(review?.status || 'needs_review');
-  card.className = `chat-kstar-review is-${status}`;
-  card.dataset.kstarRunId = String(review?.run_id || '');
-  const reviewActions = status === 'needs_review'
-    ? `<button type="button" class="btn btn-primary btn-sm" data-kstar-review="pass">${escapeHtml(t('p3394.kstar.pass'))}</button><button type="button" class="btn btn-sm" data-kstar-review="fail">${escapeHtml(t('p3394.kstar.fail'))}</button>`
-    : '';
-  const experienceActions = candidate?.status === 'pending'
-    ? `<div class="chat-kstar-experience"><span>${escapeHtml(t('p3394.experience.title'))}</span><button type="button" class="btn btn-primary btn-sm" data-experience-decision="approve">${escapeHtml(t('p3394.experience.approve'))}</button><button type="button" class="btn btn-sm" data-experience-decision="reject">${escapeHtml(t('p3394.experience.reject'))}</button></div>`
-    : '';
-  const kbError = candidate?.promotion_error ? `${t('p3394.experience.kb_failed')}: ${candidate.promotion_error}` : t('p3394.experience.kb_failed');
-  const experienceStatus = candidate?.promotion_status === 'promoted' && candidate?.kb_path
-    ? `<div class="chat-kstar-experience-status is-promoted">${escapeHtml(t('p3394.experience.kb_promoted', { path: candidate.kb_path }))}</div>`
-    : candidate?.promotion_status === 'failed'
-      ? `<div class="chat-kstar-experience-status is-failed">${escapeHtml(kbError)}</div>`
-      : '';
-  const notionError = candidate?.notion_sync?.error ? `${t('p3394.experience.notion_failed')}: ${candidate.notion_sync.error}` : t('p3394.experience.notion_failed');
-  const notionStatus = candidate?.notion_sync?.status === 'synced'
-    ? `<div class="chat-kstar-experience-status is-promoted">${escapeHtml(t('p3394.experience.notion_synced'))}${candidate.notion_sync.url ? ` <a href="${escapeHtml(candidate.notion_sync.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t('common.open'))}</a>` : ''}</div>`
-    : candidate?.notion_sync?.status === 'failed'
-      ? `<div class="chat-kstar-experience-status is-failed">${escapeHtml(notionError)}</div>`
-      : '';
-  const notionActions = candidate?.promotion_status === 'promoted' && candidate?.notion_sync?.status !== 'synced'
-    ? `<div class="chat-kstar-experience"><span>${escapeHtml(t('p3394.experience.notion_title'))}</span><button type="button" class="btn btn-sm" data-experience-notion-sync="1">${escapeHtml(t('p3394.experience.notion_sync'))}</button></div>`
-    : '';
-  card.innerHTML = `<div class="chat-kstar-title">${escapeHtml(t('p3394.kstar.title'))}</div><div class="chat-kstar-status">${escapeHtml(t(`p3394.kstar.status.${status}`))}</div><div class="chat-kstar-actions">${reviewActions}</div>${experienceActions}${experienceStatus}${notionActions}${notionStatus}`;
-  for (const button of card.querySelectorAll('[data-kstar-review]')) {
-    button.addEventListener('click', () => _resolveKStarReview(card, review, cid, button.dataset.kstarReview));
-  }
-  for (const button of card.querySelectorAll('[data-experience-decision]')) {
-    button.addEventListener('click', () => _resolveExperienceCandidate(card, review, candidate, cid, button.dataset.experienceDecision));
-  }
-  for (const button of card.querySelectorAll('[data-experience-notion-sync]')) {
-    button.addEventListener('click', () => _syncExperienceCandidateToNotion(card, review, candidate, cid));
-  }
-}
-
-function _mountKStarReviewCard(host, review, cid) {
-  if (!host || !review?.run_id || !cid) return;
-  const selector = `.chat-kstar-review[data-kstar-run-id="${CSS.escape(String(review.run_id))}"]`;
-  if (host.querySelector(selector)) return;
-  const card = document.createElement('div');
-  host.appendChild(card);
-  _renderKStarReviewCard(card, review, cid);
-}
-
-async function _resolveKStarReview(card, review, cid, decision) {
-  if (card.dataset.busy === '1') return;
-  card.dataset.busy = '1';
-  try {
-    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/kstar/${encodeURIComponent(review.run_id)}/review`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision }),
-    });
-    const data = await res.json();
-    if (!data?.ok) throw new Error(data?.error || 'KSTAR review failed');
-    _renderKStarReviewCard(card, { ...review, status: data.run.status }, cid, data.experience_candidate);
-    _applyMessageProducedStatus(card.closest('.chat-message'), _producedStatusFromReviewStatus(data.run.status));
-  } catch (err) {
-    card.dataset.busy = '';
-    _convLog.warn('KSTAR review failed', (err && err.message) || String(err));
-    try { await uiAlert(t('p3394.kstar.review_failed')); } catch (_) {}
-  }
-}
-
-async function _resolveExperienceCandidate(card, review, candidate, cid, decision) {
-  if (!candidate?.id || card.dataset.busy === '1') return;
-  card.dataset.busy = '1';
-  try {
-    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/experience/${encodeURIComponent(candidate.id)}/decision`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision }),
-    });
-    const data = await res.json();
-    if (!data?.ok) throw new Error(data?.error || 'experience decision failed');
-    _renderKStarReviewCard(card, review, cid, data.candidate);
-  } catch (err) {
-    card.dataset.busy = '';
-    _convLog.warn('experience decision failed', (err && err.message) || String(err));
-  }
-}
-
-async function _syncExperienceCandidateToNotion(card, review, candidate, cid) {
-  if (!candidate?.id || card.dataset.busy === '1') return;
-  card.dataset.busy = '1';
-  try {
-    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/experience/${encodeURIComponent(candidate.id)}/notion-sync`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
-    });
-    const data = await res.json();
-    if (!data?.ok) {
-      if (data?.candidate?.id) _renderKStarReviewCard(card, review, cid, data.candidate);
-      throw new Error(data?.error || 'Notion sync failed');
-    }
-    if (!data.candidate?.id) throw new Error('Notion sync returned no candidate');
-    _renderKStarReviewCard(card, review, cid, data.candidate);
-  } catch (err) {
-    card.dataset.busy = '';
-    const message = (err && err.message) || String(err);
-    _convLog.warn('Notion sync failed', message);
-    try { await uiAlert(`${t('p3394.experience.notion_failed')}: ${message}`); } catch (_) {}
-  }
-}
-
-async function _hydrateKStarReviews(cid) {
-  // 空间模式会话不展示 KSTAR 评审（含历史消息携带的旧卡）。
-  if (typeof conversations !== 'undefined' && Array.isArray(conversations)
-    && conversations.some((c) => c && c.conversation_id === cid && c.kind === 'space_builder')) return;
-  try {
-    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/kstar`);
-    const data = await res.json();
-    if (!data?.ok || cid !== currentCid) return;
-    const runs = Array.isArray(data.runs) ? data.runs : [];
-    const candidates = Array.isArray(data.experience_candidates) ? data.experience_candidates : [];
-    const runsById = new Map(runs.map((run) => [String(run?.id || ''), run]));
-    const candidatesByRunId = new Map(candidates.map((candidate) => [String(candidate?.source_run_id || ''), candidate]));
-    for (const card of document.querySelectorAll('#chat-history .chat-kstar-review[data-kstar-run-id]')) {
-      const run = runsById.get(String(card.dataset.kstarRunId || ''));
-      if (!run) continue;
-      const candidate = candidatesByRunId.get(String(run.id || '')) || null;
-      const latestReview = {
-        run_id: run.id,
-        status: run.status,
-        agent_id: run.agent_id,
-        turn_id: run.turn_id,
-      };
-      _renderKStarReviewCard(card, latestReview, cid, candidate);
-      _applyMessageProducedStatus(card.closest('.chat-message'), _producedStatusFromReviewStatus(run.status));
-    }
-  } catch (err) {
-    _convLog.warn('KSTAR hydration failed', (err && err.message) || String(err));
-  }
-}
-
-
-function _renderPatchCandidateCard(card, cid, candidate) {
-  if (!card || !candidate?.id) return;
-  const status = String(candidate.status || 'unknown');
-  const type = String(candidate.type || 'unknown');
-  const proposal = candidate.proposal && typeof candidate.proposal === 'object' ? candidate.proposal : {};
-  const engine = candidate.engine && typeof candidate.engine === 'object' ? candidate.engine : {};
-  const review = candidate.review && typeof candidate.review === 'object' ? candidate.review : {};
-  const title = _patchCandidateText(proposal.title, t('p3394.patch.untitled'));
-  const summary = _patchCandidateText(proposal.summary, t('p3394.patch.no_summary'));
-  const rationale = _patchCandidateText(proposal.rationale);
-  const proposed = _patchCandidateText(proposal.proposed_content);
-  const routeAction = _patchCandidateText(engine.route_action);
-  const attributionId = _patchCandidateText(engine.attribution_id);
-  const reviewNotes = _patchCandidateText(review.notes || candidate.review_notes || candidate.notes);
-  const canReview = status === 'needs_review' || status === 'proposed';
-
-  card.className = `chat-patch-candidate is-${status}`;
-  card.dataset.patchCandidateId = String(candidate.id);
-  card.dataset.busy = '';
-  card.innerHTML = `
-    <div class="chat-patch-candidate-head">
-      <div>
-        <div class="chat-patch-candidate-kicker">${escapeHtml(t('p3394.patch.kicker'))}</div>
-        <div class="chat-patch-candidate-title">${escapeHtml(title)}</div>
-      </div>
-      <div class="chat-patch-candidate-badges">
-        <span class="chat-patch-candidate-badge">${escapeHtml(_patchCandidateTypeLabel(type))}</span>
-        <span class="chat-patch-candidate-badge is-status">${escapeHtml(_patchCandidateStatusLabel(status))}</span>
-      </div>
-    </div>
-    <div class="chat-patch-candidate-summary">${escapeHtml(summary)}</div>
-    <details class="chat-patch-candidate-details">
-      <summary>${escapeHtml(t('p3394.patch.details'))}</summary>
-      ${rationale ? `<div class="chat-patch-candidate-field"><strong>${escapeHtml(t('p3394.patch.rationale'))}</strong><div>${escapeHtml(rationale)}</div></div>` : ''}
-      ${proposed ? `<div class="chat-patch-candidate-field"><strong>${escapeHtml(t('p3394.patch.proposed'))}</strong><pre>${escapeHtml(proposed)}</pre></div>` : ''}
-      ${routeAction ? `<div class="chat-patch-candidate-meta">${escapeHtml(t('p3394.patch.route_action'))}: ${escapeHtml(routeAction)}</div>` : ''}
-      ${attributionId ? `<div class="chat-patch-candidate-meta">${escapeHtml(t('p3394.patch.attribution_id'))}: ${escapeHtml(attributionId)}</div>` : ''}
-      ${reviewNotes ? `<div class="chat-patch-candidate-meta">${escapeHtml(t('p3394.patch.review_notes'))}: ${escapeHtml(reviewNotes)}</div>` : ''}
-    </details>
-    ${canReview ? `
-      <textarea class="chat-patch-candidate-notes" rows="2" placeholder="${escapeHtml(t('p3394.patch.notes_placeholder'))}"></textarea>
-      <div class="chat-patch-candidate-actions">
-        <button type="button" class="btn btn-primary btn-sm" data-patch-candidate-review="approve">${escapeHtml(t('p3394.patch.approve'))}</button>
-        <button type="button" class="btn btn-sm" data-patch-candidate-review="reject">${escapeHtml(t('p3394.patch.reject'))}</button>
-      </div>` : ''}
-  `;
-  for (const button of card.querySelectorAll('[data-patch-candidate-review]')) {
-    button.addEventListener('click', () => _resolvePatchCandidateReview(card, cid, candidate, button.dataset.patchCandidateReview));
-  }
-}
-
-function _patchCandidateStatusLabel(status) {
-  const rawStatus = String(status || 'unknown');
-  const key = `p3394.patch.status.${rawStatus}`;
-  const label = t(key);
-  return label === key ? rawStatus : label;
-}
-
-function _patchCandidateTypeLabel(type) {
-  const rawType = String(type || 'unknown');
-  const key = `p3394.patch.type.${rawType}`;
-  const label = t(key);
-  return label === key ? rawType : label;
-}
-
-function _patchCandidateText(value, fallback = '') {
-  const text = String(value || '').trim();
-  return text || fallback;
-}
-
-async function _resolvePatchCandidateReview(card, cid, candidate, decision) {
-  if (!card || !candidate?.id || card.dataset.busy === '1') return;
-  card.dataset.busy = '1';
-  try {
-    const notesEl = card.querySelector('.chat-patch-candidate-notes');
-    const notes = notesEl && typeof notesEl.value === 'string' ? notesEl.value : '';
-    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/patch-candidates/${encodeURIComponent(candidate.id)}/review`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ decision, notes }),
-    });
-    const data = await res.json();
-    if (!data?.ok) throw new Error(data?.error || 'patch candidate review failed');
-    if (!data.patch_candidate?.id) throw new Error('patch candidate review returned no candidate');
-    _renderPatchCandidateCard(card, cid, data.patch_candidate);
-  } catch (err) {
-    card.dataset.busy = '';
-    _convLog.warn('patch candidate review failed', (err && err.message) || String(err));
-    try { await uiAlert(t('p3394.patch.review_failed')); } catch (_) {}
-  }
-}
-
-function _patchCandidateHost(cid, options = {}) {
-  if (!cid || cid !== currentCid) return null;
-  const existing = document.querySelector('#chat-patch-candidates-host');
-  if (existing || options.create === false) return existing || null;
-  const history = document.getElementById ? document.getElementById('chat-history') : document.querySelector('#chat-history');
-  if (!history) return null;
-  const host = document.createElement('div');
-  host.id = 'chat-patch-candidates-host';
-  host.className = 'chat-patch-candidates-host';
-  host.setAttribute('role', 'region');
-  host.setAttribute('aria-live', 'polite');
-  if (typeof _appendBeforeSpacer === 'function') _appendBeforeSpacer(history, host);
-  else history.appendChild(host);
-  return host;
-}
-
-async function _hydratePatchCandidates(cid) {
-  if (!cid || cid !== currentCid) return;
-  // 空间模式会话不展示 KSTAR 审核中心（引导对话，无交付物评审）。
-  // typeof 防护：渲染层单测 sandbox 可能没有 conversations 全局。
-  if (typeof conversations !== 'undefined' && Array.isArray(conversations)
-    && conversations.some((c) => c && c.conversation_id === cid && c.kind === 'space_builder')) return;
-  const host = _patchCandidateHost(cid, { create: true });
-  if (!host) return;
-  host.innerHTML = `<div class="chat-patch-candidates-title">${escapeHtml(t('p3394.patch.center_title'))}</div><div class="chat-patch-candidates-loading">${escapeHtml(t('p3394.patch.loading'))}</div>`;
-  try {
-    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/patch-candidates`);
-    const data = await res.json();
-    if (!data?.ok || cid !== currentCid) return;
-    const candidates = Array.isArray(data.patch_candidates) ? data.patch_candidates : [];
-    host.innerHTML = `<div class="chat-patch-candidates-title"><span>${escapeHtml(t('p3394.patch.center_title'))}</span><span>${escapeHtml(String(candidates.length))}</span></div>`;
-    if (!candidates.length) {
-      host.innerHTML += `<div class="chat-patch-candidates-empty">${escapeHtml(t('p3394.patch.empty'))}</div>`;
-      return;
-    }
-    for (const candidate of candidates) {
-      const card = document.createElement('div');
-      host.appendChild(card);
-      _renderPatchCandidateCard(card, cid, candidate);
-    }
-  } catch (err) {
-    _convLog.warn('patch candidate hydration failed', (err && err.message) || String(err));
-    host.innerHTML = `<div class="chat-patch-candidates-title">${escapeHtml(t('p3394.patch.center_title'))}</div><div class="chat-patch-candidates-error">${escapeHtml(t('p3394.patch.load_failed'))}</div>`;
-  }
 }
 
 function _wakeRequestHost(cid, options = {}) {
@@ -12699,9 +12002,9 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
     }
   }
 
-  if (gm.kstar_review) {
+  if (gm.kstar_review_card) {
     const bubble = ph.querySelector('.chat-bubble');
-    if (bubble) _mountKStarReviewCard(bubble, gm.kstar_review, cid);
+    if (bubble) _mountKstarResultReviewCard(bubble, gm.kstar_review_card);
   }
 
   // Interactive web-app artifacts (chat-app:// iframe). Idempotent — skips
@@ -12711,10 +12014,7 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
     if (bubble) window.mountMessageArtifacts(bubble, gm.artifacts, cid);
   }
   if (Array.isArray(gm.produced) && gm.produced.length) {
-    _mountMessageProducedFooter(ph, gm.produced, {
-      status: _producedStatusFromReviewStatus(gm.kstar_review?.status),
-      results: gm.produced_results,
-    });
+    _mountMessageProducedFooter(ph, gm.produced);
   }
   _scheduleConversationInfoFileRefresh(cid);
 }
@@ -12859,8 +12159,7 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
       }
       if (isTurnEnd) {
         _evaluateAutoRecipient(cid);
-        void _hydratePatchCandidates(cid);
-      }
+          }
     } else {
       // Mid-turn side-effect message (plan announcement etc., no `seg`) —
       // append a new bubble alongside, leave the streaming placeholder alive

@@ -143,7 +143,7 @@ async function previewTaskBoundary(
       ...(input.text ? { taskText: input.text } : {}),
       ...(expectedResult ? { authorization: expectedResult.source === 'model' ? 'workspace_policy' : 'user_confirmed' } : {}),
     });
-    return { projectionId: projection.id, shouldPostCard: Array.isArray(projection.assetIds) && projection.assetIds.length > 0 };
+    return { projectionId: projection.id, shouldPostCard: true };
   } catch (error) {
     log.warn('kstar requirement preview failed', { conversationId: input.conversationId, taskRunId, error: (error as Error).message });
     return undefined;
@@ -238,6 +238,19 @@ export async function routeKstarUserMessage(
     currentRequirement.userMessageIds = uniqueIds(currentRequirement.userMessageIds, input.messageId);
     currentRequirement.updatedAt = nowIso();
     if (route.expectedResult && !currentRequirement.rHat) currentRequirement.rHat = route.expectedResult;
+    if (route.intent === 'continue') {
+      const projectionPreview = await previewTaskBoundary(
+        userId,
+        input,
+        task.id,
+        projectionPurpose(routeTitle(route, input.text)),
+        route.expectedResult,
+      );
+      if (projectionPreview) {
+        currentRequirement.projectionId = projectionPreview.projectionId;
+        if (projectionPreview.shouldPostCard) projectionPreviewCreated = { projectionId: projectionPreview.projectionId };
+      }
+    }
   }
 
   await replaceKstarRequirement(userId, route.intent === 'new'

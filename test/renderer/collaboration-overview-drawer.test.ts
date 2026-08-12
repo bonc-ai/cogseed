@@ -18,8 +18,6 @@ describe('collaboration overview locales', () => {
       expect(data['conversation_info.collaboration.status.idle']).toBeTruthy();
       expect(data['conversation_info.collaboration.step_count']).toBeTruthy();
       expect(data['conversation_info.collaboration.attention.wake']).toBeTruthy();
-      expect(data['conversation_info.collaboration.attention.kstar']).toBeTruthy();
-      expect(data['conversation_info.collaboration.attention.patch']).toBeTruthy();
     }
   });
 });
@@ -34,8 +32,6 @@ describe('Collaboration attention navigation', () => {
 
     expect(conversationSource).toContain("function focusConversationAttention(kind, ref, messageId = '')");
     expect(conversationSource).toContain('.chat-wake-request[data-wake-request-id=');
-    expect(conversationSource).toContain('.chat-kstar-review[data-kstar-run-id=');
-    expect(conversationSource).toContain('.chat-patch-candidate[data-patch-candidate-id=');
     expect(conversationSource).toContain('_flashConversationHistorySearchTarget(target)');
     expect(conversationSource).toContain("_revealConversationHistorySearchTarget(currentCid, { msgId: fallbackMessageId })");
   });

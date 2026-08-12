@@ -73,7 +73,7 @@ function summarize(projection: ContextProjectionRecord): ProjectionCardSummary {
     includedCount,
     omittedCount,
     sourceRefCount,
-    text: `Found ${includedCount} reusable ability asset${includedCount === 1 ? '' : 's'} for ${projection.purpose}; omitted ${omittedCount}.`,
+    text: `Preload candidates: ${includedCount}; add or remove as needed.`,
   };
 }
 
