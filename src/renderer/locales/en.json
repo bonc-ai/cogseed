@@ -3322,5 +3322,7 @@
   "cognition.resume.evidence": "Evidence",
   "cognition.resume.withheld_reason": "Withheld",
   "cognition.resume.dev": "Developer details",
-  "cognition.resume.fresh": "Just settled — no use yet"
+  "cognition.resume.fresh": "Just settled — no use yet",
+  "chat.created_agent_call_here": "Mention it here without leaving",
+  "chat.created_agent_call_label": "@ it"
 }

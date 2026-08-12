@@ -3679,9 +3679,14 @@ function _renderMessageCreatedAgentHtml(list) {
     .filter((p) => p && p.agent_id)
     .map((p) => {
       const name = p.name || p.agent_id;
+      // 第二个动作「稍后调用」：把 @名字 塞进输入框、留在原地，不跳走。
+      // P18 抱怨的是生成完就被带进详情页，回不来——查看配置仍然保留（点 chip 本体），
+      // 但用户更常想做的是「就在这儿使唤它」，那条路此前根本不存在。
+      const callTitle = t('chat.created_agent_call_here');
       return `<span class="chat-msg-created-agent-chip" data-agent-id="${escapeHtml(p.agent_id)}" title="${escapeHtml(name)}">
       <span class="chat-msg-created-agent-icon" aria-hidden="true">${_uiIconHtml('diamond', 'ui-icon')}</span>
       <span class="chat-msg-created-agent-label">${escapeHtml(t('chat.created_agent_chip', { name }))}</span>
+      <button type="button" class="chat-msg-created-agent-call" data-agent-call="${escapeHtml(name)}" title="${escapeHtml(callTitle)}" aria-label="${escapeHtml(callTitle)}">${escapeHtml(t('chat.created_agent_call_label'))}</button>
     </span>`;
     })
     .join('');
@@ -3689,6 +3694,27 @@ function _renderMessageCreatedAgentHtml(list) {
 }
 
 function _hydrateMessageCreatedAgentChip(msgDiv) {
+  // 「稍后调用」：把 @名字 写进输入框并聚焦，不提交也不跳走。写法与
+  // create-agent-inline 按钮一致（同一个 #chat-input + autoGrow），只是不调
+  // handleChatSubmit——用户还要补一句要它干什么。
+  for (const btn of msgDiv.querySelectorAll('[data-agent-call]')) {
+    if (btn.dataset.bound === '1') continue;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', (event) => {
+      // 必须拦住冒泡，否则外层 chip 的「查看配置」会把用户带走——
+      // 那正是这个按钮要避免的事。
+      event.stopPropagation();
+      const name = btn.dataset.agentCall;
+      if (!name) return;
+      const input = document.getElementById('chat-input');
+      if (!input) return;
+      const mention = `@${name} `;
+      input.value = input.value ? `${input.value.replace(/\s*$/, '')} ${mention}` : mention;
+      if (typeof autoGrow === 'function') autoGrow(input, 200);
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    });
+  }
   const chips = msgDiv.querySelectorAll('.chat-msg-created-agent-chip[data-agent-id]');
   for (const chip of chips) {
     if (chip.dataset.bound === '1') continue;

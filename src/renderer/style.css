@@ -7048,6 +7048,23 @@ body.model-not-configured .main-content { flex-direction: column; }
   background: rgba(22, 163, 74, 0.22);
   border-color: rgba(22, 163, 74, 0.65);
 }
+/* 「稍后调用」：与 chip 同色系但次一级，明确是第二动作而不是主动作。
+   主动作（点 chip 本体）是查看配置，这个是留在原地 @ 它。 */
+.chat-msg-created-agent-call {
+  margin-left: 2px;
+  padding: 1px 7px;
+  border: 1px solid rgba(22, 163, 74, 0.45);
+  border-radius: 7px;
+  background: transparent;
+  color: #14532d;
+  font-size: 11.5px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+.chat-msg-created-agent-call:hover {
+  background: rgba(22, 163, 74, 0.28);
+  border-color: rgba(22, 163, 74, 0.7);
+}
 .chat-msg-created-agent-icon { font-size: 13px; }
 .chat-msg-created-agent-label { font-weight: 500; }
 

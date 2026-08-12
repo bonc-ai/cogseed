@@ -3102,5 +3102,7 @@
   "cognition.resume.evidence": "証拠",
   "cognition.resume.withheld_reason": "未使用",
   "cognition.resume.dev": "開発者向け詳細",
-  "cognition.resume.fresh": "定着したばかりで使用記録はまだありません"
+  "cognition.resume.fresh": "定着したばかりで使用記録はまだありません",
+  "chat.created_agent_call_here": "ここで @ で呼ぶ（画面は移動しません）",
+  "chat.created_agent_call_label": "@ で呼ぶ"
 }

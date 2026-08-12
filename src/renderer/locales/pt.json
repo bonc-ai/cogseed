@@ -3102,5 +3102,7 @@
   "cognition.resume.evidence": "Evidência",
   "cognition.resume.withheld_reason": "Retido",
   "cognition.resume.dev": "Detalhes do desenvolvedor",
-  "cognition.resume.fresh": "Recém-consolidado — ainda sem uso"
+  "cognition.resume.fresh": "Recém-consolidado — ainda sem uso",
+  "chat.created_agent_call_here": "Mencione aqui sem sair",
+  "chat.created_agent_call_label": "@ ele"
 }
