@@ -12,6 +12,7 @@ afterEach(() => { if (previousRoot === undefined) delete process.env.ORKAS_WORKS
 
 const UID = 'user-inject';
 const AGENT_ID = 'ag-inject';
+const CID = 'conv-inject';
 
 async function seedAsset(statement: string, id: string): Promise<RecallAbilityAssetRecord> {
   const candidates = await import('../../../../src/main/features/recall/candidate-service');
@@ -39,7 +40,7 @@ async function recordBirth(assets: RecallAbilityAssetRecord[], createdAt = new D
 
 async function block(): Promise<string> {
   const bus = await import('../../../../src/main/features/group_chat/bus');
-  return bus._buildInheritedCognitionBlockForTest(UID, AGENT_ID);
+  return bus._buildInheritedCognitionBlockForTest(UID, CID, AGENT_ID);
 }
 
 describe('继承认知注入 Agent 运行时', () => {
@@ -115,5 +116,69 @@ describe('继承认知注入 Agent 运行时', () => {
 
   it('没有继承记录的 Agent 注入空串，不报错也不编造', async () => {
     expect(await block()).toBe('');
+  });
+});
+
+async function readReceiptFor(cid = CID) {
+  const { readReceipt } = await import('../../../../src/main/features/p3394/context-reuse-receipt');
+  const crypto = await import('node:crypto');
+  const { readAgentInheritance } = await import('../../../../src/main/features/agent_inheritance');
+  const inheritance = await readAgentInheritance(UID, AGENT_ID);
+  const digest = crypto.createHash('sha256')
+    .update(`${cid}\n${AGENT_ID}\n${inheritance!.capabilityPack.contentHash}`)
+    .digest('hex').slice(0, 24);
+  return readReceipt(UID, `exec-inherit-${digest}`);
+}
+
+describe('注入即生成复用回执（链路最后一跳）', () => {
+  it('注入后生成回执，记下带了哪几条及其版本', async () => {
+    const a = await seedAsset('回执要记住这条。', 'a');
+    await recordBirth([a]);
+    await block();
+
+    const receipt = await readReceiptFor();
+    expect(receipt.targetSessionId).toBe(`gmember-${CID}-${AGENT_ID}`);
+    expect(receipt.reusedRefs).toEqual([`asset:${a.id}@v1`]);
+    expect(receipt.boundary).toBe('real');
+    // 继承注入是只读的——Agent 拿到判断但不能改写认知资产。
+    expect(receipt.permissionMode).toBe('read-only');
+  });
+
+  it('被撤销而没带上的条目记进 omittedRefs，不是悄悄消失', async () => {
+    const a = await seedAsset('这条会被暂停。', 'a');
+    const b = await seedAsset('这条带得上。', 'b');
+    await recordBirth([a, b]);
+
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    await assets.pauseAbilityAsset(UID, a.id, 'under review');
+    await block();
+
+    const receipt = await readReceiptFor();
+    expect(receipt.reusedRefs).toEqual([`asset:${b.id}@v1`]);
+    expect(receipt.omittedRefs).toEqual([`asset:${a.id}@v1:paused`]);
+  });
+
+  it('同一个包重复注入同一会话只记一张回执，不按轮次刷', async () => {
+    const a = await seedAsset('反复注入的判断。', 'a');
+    await recordBirth([a]);
+
+    await block();
+    await block();
+    await block();
+
+    // 第二轮起 prepareReceipt 抛「已存在」是预期路径；回执内容不该被覆盖或重复。
+    const receipt = await readReceiptFor();
+    expect(receipt.status).toBe('prepared');
+    expect(receipt.reusedRefs).toEqual([`asset:${a.id}@v1`]);
+  });
+
+  it('一条都没带上时不记回执——没有复用就没有复用证明', async () => {
+    const a = await seedAsset('这条会被撤销。', 'a');
+    await recordBirth([a]);
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    await assets.revokeAbilityAsset(UID, a.id, 'unsafe');
+
+    expect(await block()).toBe('');
+    await expect(readReceiptFor()).rejects.toThrow('not found');
   });
 });

@@ -5361,6 +5361,56 @@ export async function _buildActiveSharedTaskContextBlockForTest(
 const MAX_INHERITED_ASSETS_IN_PROMPT = 20;
 
 /**
+ * 记一张 ContextReuseReceipt：这份出生能力包被真实注入了哪个会话、带了哪几条、
+ * 哪几条没带上。这是链路 `Asset → Capability Pack → Reuse` 的最后一跳。
+ *
+ * execution id 由 (cid, agentId, packHash) 推导而非每轮新生成：同一个包反复注入
+ * 同一个会话是同一件事，按轮次刷回执会把「复用了一次认知」稀释成一堆噪音。
+ * 因此第二轮起 `prepareReceipt` 抛「已存在」是预期结果，不是错误。
+ */
+async function recordInheritedCognitionReuse(
+  uid: string,
+  cid: string,
+  agentId: string,
+  facts: { packHash: string; reusedRefs: string[]; omittedRefs: string[] },
+): Promise<void> {
+  try {
+    const [{ prepareReceipt }, { buildGmemberSessionId }, crypto] = await Promise.all([
+      import("../p3394/context-reuse-receipt"),
+      import("./state"),
+      import("node:crypto"),
+    ]);
+    const targetSessionId = buildGmemberSessionId(cid, agentId);
+    const digest = crypto
+      .createHash("sha256")
+      .update(`${cid}\n${agentId}\n${facts.packHash}`)
+      .digest("hex")
+      .slice(0, 24);
+    await prepareReceipt(
+      uid,
+      {
+        executionId: `exec-inherit-${digest}`,
+        targetSessionId,
+        reusedRefs: facts.reusedRefs,
+        omittedRefs: facts.omittedRefs,
+        // 继承注入是只读的：Agent 拿到判断，但不能改写认知资产。
+        permissionMode: "read-only",
+        allowedScopes: ["cognition:inherited"],
+        boundary: "real",
+      },
+      { sessionId: targetSessionId },
+    );
+  } catch (err) {
+    const message = (err as Error).message;
+    // 同一包注入同一会话的第二轮起必然走到这里，属正常路径，不该刷 warn。
+    if (message.includes("already exists")) return;
+    log.warn(
+      `inherited cognition receipt not recorded agent=${agentId} cid=${cid}: ${message}`,
+    );
+  }
+}
+
+/**
  * 把 Agent 出生时继承的认知资产注入它的运行时提示。
  *
  * 没有这一步，`agent_inheritance` 记的就只是一份没人读的档案：Agent 依然
@@ -5377,6 +5427,7 @@ const MAX_INHERITED_ASSETS_IN_PROMPT = 20;
  */
 async function buildInheritedCognitionBlock(
   uid: string,
+  cid: string,
   agentId: string,
 ): Promise<string> {
   try {
@@ -5391,6 +5442,8 @@ async function buildInheritedCognitionBlock(
     if (isPackExpired(inheritance.capabilityPack)) return "";
 
     const usable: string[] = [];
+    const reusedRefs: string[] = [];
+    const omittedRefs: string[] = [];
     let droppedByRevocation = 0;
     for (const ref of inheritance.capabilityPack.assets) {
       let current;
@@ -5399,12 +5452,15 @@ async function buildInheritedCognitionBlock(
       } catch {
         // 资产已被删除：和撤销同等处理，不注入。
         droppedByRevocation++;
+        omittedRefs.push(`asset:${ref.assetId}@v${ref.version}:missing`);
         continue;
       }
       if (current.status !== "active") {
         droppedByRevocation++;
+        omittedRefs.push(`asset:${ref.assetId}@v${ref.version}:${current.status}`);
         continue;
       }
+      reusedRefs.push(`asset:${ref.assetId}@v${ref.version}`);
       const conditions = [
         ref.applicableWhen?.length ? `适用：${ref.applicableWhen.join("；")}` : "",
         ref.forbiddenWhen?.length ? `禁用：${ref.forbiddenWhen.join("；")}` : "",
@@ -5417,6 +5473,18 @@ async function buildInheritedCognitionBlock(
     if (!usable.length) return "";
     const shown = usable.slice(0, MAX_INHERITED_ASSETS_IN_PROMPT);
     const omitted = usable.length - shown.length;
+    if (omitted > 0) {
+      // 因长度截掉的也是「没带上」，回执要如实记，不能只记撤销那批。
+      for (const ref of reusedRefs.splice(shown.length)) {
+        omittedRefs.push(`${ref}:truncated`);
+      }
+    }
+
+    await recordInheritedCognitionReuse(uid, cid, agentId, {
+      packHash: inheritance.capabilityPack.contentHash,
+      reusedRefs,
+      omittedRefs,
+    });
 
     const notes = [
       droppedByRevocation
@@ -5444,9 +5512,10 @@ ${shown.join("\n")}
 
 export async function _buildInheritedCognitionBlockForTest(
   uid: string,
+  cid: string,
   agentId: string,
 ): Promise<string> {
-  return buildInheritedCognitionBlock(uid, agentId);
+  return buildInheritedCognitionBlock(uid, cid, agentId);
 }
 
 async function buildCommanderSystemPrompt(
@@ -5730,6 +5799,7 @@ async function buildAgentInGroupSystemPrompt(
       ),
       inherited_cognition_block: await buildInheritedCognitionBlock(
         uid,
+        cid,
         agent.agent_id,
       ),
       working_dir: workingDir,
