@@ -59,10 +59,10 @@ describe('builtin-resource-gate', () => {
 
     expect(gate.verifyBuiltinRoot(root, { allowIgnoredJunk: true }))
       .toBe('resource:builtin:manifest-v1');
-    expect(manifest.files).toHaveLength(311);
+    expect(manifest.files).toHaveLength(1275);
     expect(manifest.inventory.system_skills).toHaveLength(6);
-    expect(manifest.inventory.marketplace_agents).toHaveLength(32);
-    expect(manifest.inventory.marketplace_skills).toHaveLength(51);
+    expect(manifest.inventory.marketplace_agents).toHaveLength(34);
+    expect(manifest.inventory.marketplace_skills).toHaveLength(64);
     expect(manifest.inventory.marketplace_skills)
       .toContainEqual(expect.objectContaining({ id: '8d2f4b7c9a10', name: 'paper-repro' }));
     expect(manifest.inventory.marketplace_skills)

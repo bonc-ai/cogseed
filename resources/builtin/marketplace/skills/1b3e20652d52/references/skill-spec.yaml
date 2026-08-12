@@ -1,0 +1,18 @@
+skill_spec:
+  standard_id: nseap-skill-creator
+  skill_class: execution            # EndUseSkill（业务产出），非 meta_skill
+  is_skill_of_skill: false
+  level: L5                         # Skill-L5：进共享注册表的受治理技能系统
+  risk_route: Full                  # Full：共享注册表 + 涉对外能力宣称 + 客户画像数据 + 口径治理
+  promotion_ceiling: staged         # HARD CAP — 永不高于 staged
+  production_release_allowed: false # HARD LOCK — 永不为 true
+  session_role: master_task_skill   # 备一场售前交流的会话入口与主技能
+  owns_session: true                # Master Task Skill：One-Session → One-Master → Many-Sub
+  form: interpreted                 # 解释执行；compiled 快照需 metaskill 引擎
+  asset_level: L2                   # 认知资产成熟度 L2（结构化资产，未跑真实 KSTAR）
+  sub_skills:                       # 本 Master 编排的一等子技能（各自独立适用本标准）
+    - profile_analysis              # ① 画像分析
+    - session_plan_generation       # ② 定制作战方案生成
+    - objection_answering           # ③ 异议应答（喂《销售 QA 库》）
+    - persona_simulation            # ④ 画像模拟练兵
+    - customized_deck_authoring     # ⑤ 定制出稿（修改/生成 PPT，二期）

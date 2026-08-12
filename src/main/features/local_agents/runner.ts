@@ -597,6 +597,11 @@ export interface RunCliAgentOpts {
   executionLifecycle?: ExecutionLifecycleSink;
   /** Prepared receipt-bound prompt/root/permission context. */
   preparedContext?: PreparedExecutionContext;
+  /** Internal one-shot calls (e.g. onboarding cognition extraction) may pass
+   *  a synthetic agent id that is not a registered user Agent. Those callers
+   *  opt out of the chat-dispatch policy check explicitly; ordinary dispatch
+   *  keeps the assertion. */
+  skipDispatchCheck?: boolean;
   /** Forwarded each backend event verbatim, after persistence. */
   onEvent: (e: LocalEvent) => void;
 }
@@ -614,7 +619,9 @@ export interface RunCliAgentResult {
 }
 
 export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
-  await assertAgentChatDispatchable(opts.uid, opts.agentId);
+  if (!opts.skipDispatchCheck) {
+    await assertAgentChatDispatchable(opts.uid, opts.agentId);
+  }
   if (opts.preparedContext) {
     const roots = opts.preparedContext.permissionMode === 'read-only' ? opts.preparedContext.readOnlyRoots : [...opts.preparedContext.writableRoots, ...opts.preparedContext.readOnlyRoots];
     if (opts.prompt !== opts.preparedContext.prompt || !isPathAllowed(opts.cwd, roots)) {

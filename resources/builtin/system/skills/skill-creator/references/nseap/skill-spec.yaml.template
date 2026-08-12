@@ -1,0 +1,36 @@
+# NSEAP skill-spec.yaml — identity / level / route (MANDATORY for every new skill)
+
+Copy this file to `references/skill-spec.yaml` when creating a NEW skill. Confirm defaults;
+only change with reason. The level is decided by the NSEAP risk rules below.
+
+```yaml
+# Identity / level / route. Confirm defaults; only change with reason.
+skill_spec:
+  standard_id: nseap-skill-standard-v1
+  skill_class: execution            # execution | meta_skill (if it makes skills)
+  is_skill_of_skill: false          # true only for a Meta-Skill
+  level: L5                         # Skill-L: L0..L5 (L5 = governed skill system)
+  risk_route: Full                  # Lite | Full
+  promotion_ceiling: staged         # HARD CAP — never higher than staged
+  production_release_allowed: false # HARD LOCK — never true
+  session_role: sub_skill           # sub_skill | master_task_skill
+  owns_session: false               # true only for a Master Task Skill
+  form: interpreted                 # interpreted | compiled
+```
+
+## Level decision (NSEAP §7.1 / §7.2)
+
+Pick the level by risk, not by ambition:
+
+| Condition | Level |
+|---|---|
+| Personal / low-risk / no sensitive data | L2 (or L3 if ontology-grounded) |
+| To be shared / published / registered | **L5** |
+| Handles customer / private data (resumes, sales, social, meetings, architecture) | **L5** |
+| Has external actions (fetch scripts, network, write operations) | **L5** |
+| Affects hiring / acceptance / business decisions | **L5** |
+| Meta-skill (a skill that makes skills) | **L5 always** |
+
+`risk_route`: `Lite` for reversible project-level reuse; `Full` for anything above.
+`promotion_ceiling: staged` and `production_release_allowed: false` are ALWAYS the values —
+never raise them.

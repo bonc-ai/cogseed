@@ -396,14 +396,16 @@ function _initSkillsCognitionBindings() {
     const source = action.dataset.cognitionCandidateSource;
     const candidateId = action.dataset.cognitionCandidateId;
     if (!source || !candidateId || action.dataset.busy === '1') return;
+    const decided = action.dataset.cognitionCandidateAction;
+    // 四决定（PRD §5.6）：accept / modify / defer / reject；其余动作已在前面分支处理。
+    if (decided !== 'accept' && decided !== 'modify' && decided !== 'defer' && decided !== 'reject') return;
     action.dataset.busy = '1';
     action.disabled = true;
     try {
-      const decision = action.dataset.cognitionCandidateAction === 'accept' ? 'accept' : 'reject';
       const result = await window.orkas.invoke('cognition.candidates.decide', {
         source,
         candidateId,
-        decision,
+        decision: decided,
       });
       if (!result?.ok) throw new Error(result?.error || 'candidate decision failed');
       await loadSkillsCognitionSnapshot();

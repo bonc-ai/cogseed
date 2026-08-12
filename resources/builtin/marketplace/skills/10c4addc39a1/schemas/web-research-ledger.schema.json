@@ -1,0 +1,577 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nseap.example/schemas/ontology-analysis-web-research-ledger/v0.1",
+  "title": "Web Research and Source Verification Ledger",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ledger_id",
+    "plan_id",
+    "task_id",
+    "research_mode",
+    "research_date",
+    "generated_at",
+    "policy_scope_verification",
+    "queries",
+    "sources",
+    "claims",
+    "question_resolutions",
+    "standard_verifications",
+    "conflicts",
+    "completion"
+  ],
+  "properties": {
+    "ledger_id": {
+      "type": "string",
+      "pattern": "^WRL-[A-Za-z0-9_-]+$"
+    },
+    "plan_id": {
+      "type": "string",
+      "pattern": "^RP-[A-Za-z0-9_-]+$"
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "research_mode": {
+      "enum": [
+        "real",
+        "synthetic_fixture"
+      ]
+    },
+    "research_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "policy_scope_verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope_verified",
+        "official_wording",
+        "issuing_body",
+        "document_number",
+        "issue_date",
+        "effective_date",
+        "current_status",
+        "source_ids",
+        "boundary_conflicts"
+      ],
+      "properties": {
+        "scope_verified": {
+          "type": "boolean"
+        },
+        "official_wording": {
+          "type": "string",
+          "minLength": 1
+        },
+        "issuing_body": {
+          "type": "string",
+          "minLength": 1
+        },
+        "document_number": {
+          "type": "string"
+        },
+        "issue_date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "effective_date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "current_status": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "boundary_conflicts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "description",
+              "resolution_status",
+              "resolution"
+            ],
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "resolution_status": {
+                "enum": [
+                  "resolved",
+                  "unresolved"
+                ]
+              },
+              "resolution": {
+                "type": "string"
+              },
+              "source_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "queries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "query_id",
+          "query_text",
+          "purpose",
+          "executed_at",
+          "tool",
+          "result_count",
+          "selected_source_ids",
+          "notes"
+        ],
+        "properties": {
+          "query_id": {
+            "type": "string",
+            "pattern": "^Q[0-9]+$"
+          },
+          "query_text": {
+            "type": "string",
+            "minLength": 2
+          },
+          "purpose": {
+            "type": "string",
+            "minLength": 2
+          },
+          "executed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "tool": {
+            "enum": [
+              "web.search_query",
+              "web.open",
+              "web.screenshot",
+              "connector_fetch",
+              "synthetic_fixture"
+            ]
+          },
+          "result_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "selected_source_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source_id",
+          "report_source_id",
+          "title",
+          "issuer",
+          "url",
+          "source_type",
+          "primary_source",
+          "official_domain",
+          "opened_and_read",
+          "retrieval_depth",
+          "retrieval_method",
+          "accessed_at",
+          "version_or_date",
+          "verification_status",
+          "temporal_status",
+          "content_hash",
+          "query_ids",
+          "supports_claim_ids",
+          "page_or_section",
+          "notes"
+        ],
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "pattern": "^[PSR][0-9]+$"
+          },
+          "report_source_id": {
+            "type": "string",
+            "pattern": "^[PSR][0-9]+$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "issuer": {
+            "type": "string",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_type": {
+            "enum": [
+              "official_policy",
+              "official_standard",
+              "official_specification",
+              "international_organization",
+              "official_guidance",
+              "official_dataset",
+              "secondary_discovery"
+            ]
+          },
+          "primary_source": {
+            "type": "boolean"
+          },
+          "official_domain": {
+            "type": "boolean"
+          },
+          "opened_and_read": {
+            "type": "boolean"
+          },
+          "retrieval_depth": {
+            "enum": [
+              "full_page",
+              "relevant_section",
+              "pdf_text",
+              "pdf_screenshot",
+              "synthetic_fixture"
+            ]
+          },
+          "retrieval_method": {
+            "enum": [
+              "search_then_open",
+              "direct_open",
+              "pdf_open",
+              "pdf_screenshot",
+              "connector_fetch",
+              "synthetic_fixture"
+            ]
+          },
+          "accessed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "published_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "effective_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "version_or_date": {
+            "type": "string",
+            "minLength": 1
+          },
+          "verification_status": {
+            "enum": [
+              "verified",
+              "verified_with_caveat",
+              "unresolved",
+              "rejected"
+            ]
+          },
+          "temporal_status": {
+            "enum": [
+              "current",
+              "historical",
+              "future_effective",
+              "not_applicable"
+            ]
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "query_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "supports_claim_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "page_or_section": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "claims": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "claim_id",
+          "statement",
+          "critical",
+          "temporal_status",
+          "primary_source_required",
+          "source_ids",
+          "verification_status",
+          "report_locations"
+        ],
+        "properties": {
+          "claim_id": {
+            "type": "string",
+            "pattern": "^CL[0-9]+$"
+          },
+          "statement": {
+            "type": "string",
+            "minLength": 4
+          },
+          "critical": {
+            "type": "boolean"
+          },
+          "temporal_status": {
+            "enum": [
+              "current",
+              "historical",
+              "future_effective",
+              "not_applicable"
+            ]
+          },
+          "primary_source_required": {
+            "type": "boolean"
+          },
+          "source_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "verification_status": {
+            "enum": [
+              "verified",
+              "verified_with_caveat",
+              "unresolved",
+              "rejected"
+            ]
+          },
+          "report_locations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "question_resolutions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "question_id",
+          "status",
+          "source_ids",
+          "summary"
+        ],
+        "properties": {
+          "question_id": {
+            "type": "string",
+            "pattern": "^RQ[0-9]+$"
+          },
+          "status": {
+            "enum": [
+              "resolved",
+              "partially_resolved",
+              "unresolved"
+            ]
+          },
+          "source_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "standard_verifications": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "standard_name",
+          "report_source_ids",
+          "researched_version_or_date",
+          "version_match",
+          "official_source",
+          "verification_status",
+          "notes"
+        ],
+        "properties": {
+          "standard_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "report_source_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "researched_version_or_date": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version_match": {
+            "type": "boolean"
+          },
+          "official_source": {
+            "type": "boolean"
+          },
+          "verification_status": {
+            "enum": [
+              "verified",
+              "verified_with_caveat",
+              "unresolved",
+              "rejected"
+            ]
+          },
+          "notes": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "conflict_id",
+          "type",
+          "source_ids",
+          "description",
+          "resolution_status",
+          "resolution"
+        ],
+        "properties": {
+          "conflict_id": {
+            "type": "string",
+            "pattern": "^CF[0-9]+$"
+          },
+          "type": {
+            "enum": [
+              "policy_date",
+              "policy_scope",
+              "standard_version",
+              "source_authority",
+              "other"
+            ]
+          },
+          "source_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": {
+            "type": "string"
+          },
+          "resolution_status": {
+            "enum": [
+              "resolved",
+              "unresolved"
+            ]
+          },
+          "resolution": {
+            "type": "string"
+          },
+          "preferred_source_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "completion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "completed_by",
+        "completed_at",
+        "notes"
+      ],
+      "properties": {
+        "completed_by": {
+          "type": "string",
+          "minLength": 1
+        },
+        "completed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

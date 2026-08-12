@@ -125,6 +125,9 @@ export interface Conversation {
    *  title once the user has named the task, even if they chose default-like
    *  text such as "New conversation". */
   title_manually_set?: boolean;
+  /** 空间模式（space_builder）会话已产出空间的完成时间戳。设置后「空间模式」
+   *  入口不再复用该会话，下次点击会新建引导会话。 */
+  space_builder_completed?: string;
   /** Record-level sync tombstone. Deleted conversations stay in `_index.json`
    *  long enough to propagate across offline devices; user-facing readers
    *  filter them out. */
@@ -259,6 +262,9 @@ function _normaliseConversation(raw: any, fallbackCid = ''): Conversation | null
   if (typeof raw.pinned_at === 'string' && raw.pinned_at) out.pinned_at = raw.pinned_at;
   if (typeof raw.pin_state_updated_at === 'string' && raw.pin_state_updated_at) out.pin_state_updated_at = raw.pin_state_updated_at;
   if (raw.title_manually_set === true) out.title_manually_set = true;
+  if (typeof raw.space_builder_completed === 'string' && raw.space_builder_completed) {
+    out.space_builder_completed = raw.space_builder_completed;
+  }
   if (typeof raw.deleted_at === 'string' && raw.deleted_at) out.deleted_at = raw.deleted_at;
   if (Array.isArray(raw.agent_ids)) out.agent_ids = _normaliseAgentIds(raw.agent_ids);
   if (typeof raw.commander_in_chat === 'boolean') out.commander_in_chat = raw.commander_in_chat;

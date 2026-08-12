@@ -1,0 +1,63 @@
+{
+  "input_schema": {
+    "type": "object",
+    "required": ["task_id", "owner_context", "invoice_payload"],
+    "properties": {
+      "task_id": { "type": "string" },
+      "owner_context": {
+        "type": "object",
+        "required": ["owner_id", "role", "authorization_scope"],
+        "properties": {
+          "owner_id": { "type": "string" },
+          "role": { "type": "string" },
+          "authorization_scope": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "invoice_payload": {
+        "type": "object",
+        "required": ["amount_overdue", "days_overdue", "is_vip"],
+        "properties": {
+          "amount_overdue": { "type": "number" },
+          "days_overdue": { "type": "number" },
+          "is_vip": { "type": "number" }
+        }
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "required": ["actions", "result", "trace", "audit_refs"],
+    "properties": {
+      "actions": { "type": "array", "items": { "type": "string" } },
+      "result": { "type": "number" },
+      "trace": { "type": "array", "items": { "type": "string" } },
+      "audit_refs": { "type": "array", "items": { "type": "string" } }
+    }
+  },
+  "runtime_contracts": {
+    "resource": {
+      "resource_requirements": [
+        { "resource_type": "invoice", "operation": "read", "purpose": "ontology_grounded_read", "min_scope": true }
+      ],
+      "access_via_gateway_only": true,
+      "direct_resource_access": false
+    },
+    "permission": {
+      "permissions": [
+        { "action": "assess", "permission_level": "read", "hitl_required": false },
+        { "action": "execute", "permission_level": "write", "hitl_required": true },
+        { "action": "confirm", "permission_level": "write", "hitl_required": true }
+      ]
+    },
+    "owner_binding": {
+      "required_owner_sections": ["role", "authorization_scope"],
+      "owner_context_ref": "input_schema.owner_context",
+      "binding_resolved_by": "agent_layer"
+    },
+    "audit": {
+      "audit_refs_field": "output_schema.audit_refs",
+      "emitted_by": "runtime",
+      "append_only": true
+    }
+  }
+}

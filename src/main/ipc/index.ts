@@ -999,7 +999,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
-  'conversations.create': async ({ title = '', projectId = '' } = {}, ctx) => {
+  'conversations.create': async ({ title = '', projectId = '', kind = '' } = {}, ctx) => {
     // Validate the projectId belongs to this user before persisting it on
     // the conv record. Unknown / invalid projectIds are dropped silently
     // (the conv lands without project membership) — the renderer should
@@ -1010,8 +1010,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (projectId && typeof projectId === 'string' && safeId(projectId)) {
       if (await projects.projectExists(ctx.userId, projectId)) validProjectId = projectId;
     }
+    // 会话 kind 白名单：目前只有 space_builder（空间模式）被允许透传；
+    // 其余一律回落 normal，防止渲染层任意指定会话类型。
+    const convKind = kind === 'space_builder' ? 'space_builder' : 'normal';
     const conv = await chats.createConversation(ctx.userId, {
-      kind: 'normal',
+      kind: convKind,
       title,
       ...(validProjectId ? { projectId: validProjectId } : {}),
     });
@@ -1042,6 +1045,18 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ctx.userId, cid, title, conversationProjectHint(args));
     if (!conv) throw new Error('conversation not found');
     return { conversation: conv };
+  },
+
+  'conversations.completeSpaceBuilder': async (args, ctx) => {
+    const { cid } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    // 只允许标记 kind=space_builder 的会话；其余拒绝，防止任意会话被误标。
+    const conv = await chats.getConversation(ctx.userId, cid, conversationProjectHint(args));
+    if (!conv || conv.kind !== 'space_builder') throw new Error('not a space_builder conversation');
+    const updated = await chats.updateConversation(
+      ctx.userId, cid, { space_builder_completed: new Date().toISOString() }, conversationProjectHint(args));
+    if (!updated) throw new Error('conversation not found');
+    return { conversation: updated };
   },
 
   'conversations.deleteAll': async (_args, ctx) => {
@@ -1096,9 +1111,19 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { spaces: await spaces.listSpaces(ctx.userId) };
   },
 
-  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon } = {}, ctx) => {
-    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon });
+  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
+    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, main_skill_ref, asset_reference_bindings });
     if (!result.ok) throw new Error((result as { error: string }).error);
+    return { space: result.space };
+  },
+
+  'spaces.createFromDraft': async ({ draft } = {}, ctx) => {
+    if (!draft || typeof draft !== 'object') throw new Error('invalid draft');
+    const result = await spaces.createSpaceFromDraft(ctx.userId, draft);
+    if (!result.ok) {
+      const err = result as { error: string; details?: string[] };
+      throw new Error(err.details && err.details.length ? `invalid_draft: ${err.details.join('；')}` : err.error);
+    }
     return { space: result.space };
   },
 
@@ -1109,9 +1134,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { space };
   },
 
-  'spaces.update': async ({ spaceId, name, icon, template_id } = {}, ctx) => {
+  'spaces.update': async ({ spaceId, name, icon, template_id, primary_template_id, secondary_template_ids, space_type, sustained_outcome, gate_status, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
-    const result = await spaces.updateSpace(ctx.userId, spaceId, { name, icon, template_id });
+    const result = await spaces.updateSpace(ctx.userId, spaceId, { name, icon, template_id, primary_template_id, secondary_template_ids, space_type, sustained_outcome, gate_status, main_skill_ref, asset_reference_bindings });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
   },
@@ -2245,7 +2270,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'cognition.candidates.decide': async ({ source, candidateId, decision, reason, notes, toGlobalMemory, toGroupIds } = {}, ctx) => {
     if (source !== 'personal_ontology' && source !== 'p3394_experience' && source !== 'p3394_patch') throw new Error('invalid cognition candidate source');
     if (!safeId(candidateId)) throw new Error('invalid candidate id');
-    if (decision !== 'accept' && decision !== 'reject') throw new Error('invalid cognition candidate decision');
+    if (decision !== 'accept' && decision !== 'modify' && decision !== 'defer' && decision !== 'reject') throw new Error('invalid cognition candidate decision');
     if (toGroupIds !== undefined && (!Array.isArray(toGroupIds) || toGroupIds.some((id) => !safeId(id)))) throw new Error('invalid group ids');
     return { ok: true, result: await cognition.decideCognitionCandidate(ctx.userId, {
       source,
@@ -2814,9 +2839,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'personalOntology.templates.list': async (_payload, ctx) => {
     return { templates: await personalOntologyTemplateFiles.listTemplateStatus(ctx.userId) };
   },
-  'personalOntology.templates.install': async ({ templateId }, ctx) => {
-    if (!templateId || typeof templateId !== 'string') throw new Error('missing templateId');
-    return personalOntologyTemplateFiles.installTemplateFile(ctx.userId, templateId);
+  'personalOntology.templates.install': async ({ templateId, restoreData }, ctx) => {
+    if (!templateId || typeof templateId !== 'string' || !safeId(templateId)) throw new Error('invalid templateId');
+    return personalOntologyTemplateFiles.installTemplateFile(ctx.userId, templateId, !!restoreData);
+  },
+  'personalOntology.templates.uninstall': async ({ templateId, archiveMemory }, ctx) => {
+    if (!templateId || typeof templateId !== 'string' || !safeId(templateId)) throw new Error('invalid templateId');
+    return personalOntologyTemplateFiles.uninstallTemplateFile(ctx.userId, templateId, !!archiveMemory);
+  },
+  'personalOntology.templates.hasArchive': async ({ templateId }, ctx) => {
+    if (!templateId || typeof templateId !== 'string' || !safeId(templateId)) throw new Error('invalid templateId');
+    return { hasArchive: personalOntologyTemplateFiles.templateHasArchive(ctx.userId, templateId) };
+  },
+  'personalOntology.templates.hasMemoryArchive': async ({ templateId }, ctx) => {
+    if (!templateId || typeof templateId !== 'string' || !safeId(templateId)) throw new Error('invalid templateId');
+    return { hasArchive: personalOntologyTemplateFiles.templateHasMemoryArchive(ctx.userId, templateId) };
   },
 
   // ── Personal Ontology Group Fields (挖空表单字段，兼容复合 id) ──

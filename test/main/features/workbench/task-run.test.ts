@@ -204,3 +204,118 @@ describe('task run — task references', () => {
     expect(mod.decodeRunRefs('runs:run-a, ,bad/id,run-b')).toEqual(['run-a', 'run-b']);
   });
 });
+
+describe('task run — space gate & asset version freeze (P3394)', () => {
+  const spaceContext = (over: Record<string, unknown>) => ({
+    spaceId: 'sp_p3394',
+    gateStatus: 'passed' as const,
+    assetBindings: [
+      { asset_id: 'sk-rule-1', version: '1.2.0', policy: 'review_required' },
+      { asset_id: 'sk-tpl-1', version: '3.0.0', policy: 'pinned' },
+    ],
+    mainSkillRef: { asset_id: 'sk-main', version: '1.0.0', content_hash: 'b'.repeat(64) },
+    ...over,
+  });
+
+  it('allows when the space gate has not been checked yet (not_checked)', async () => {
+    // not_checked = 尚未评估（旧空间/新建空间的默认缓存值），不是"评估未通过"。
+    // 目前没有自动评估写入路径，把 not_checked 当拒绝理由会整体误伤未评估空间。
+    const mod = await import(TASK_RUN);
+    const { projectId, taskId, baselineId, skillDir } = await scaffold();
+
+    const started = await mod.startTaskRun(uid, startInput({
+      projectId, taskId, baselineId, skillDir, allowedRoots: [skillDir],
+      space: spaceContext({ gateStatus: 'not_checked' }),
+    }));
+
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    // 启动仍按空间上下文冻结资产版本
+    const refs = await mod.readFrozenAssetVersions(uid, started.executionId);
+    expect(refs.length).toBeGreaterThan(0);
+  });
+
+  it('refuses when the space gate explicitly failed', async () => {
+    const mod = await import(TASK_RUN);
+    const { projectId, taskId, baselineId, skillDir } = await scaffold();
+
+    const refused = await mod.startTaskRun(uid, startInput({
+      projectId, taskId, baselineId, skillDir, allowedRoots: [skillDir],
+      space: spaceContext({ gateStatus: 'failed' }),
+    }));
+
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.reason).toBe('space_gate_not_passed');
+
+    // 拒绝后不产生任何执行记录（验证先于创建）
+    const executions = await import(EXECUTIONS);
+    expect((await executions.list(uid)).length).toBe(0);
+  });
+
+  it('freezes asset versions on start and reads them back immutably', async () => {
+    const mod = await import(TASK_RUN);
+    const executions = await import(EXECUTIONS);
+    const { projectId, taskId, baselineId, skillDir } = await scaffold();
+
+    const started = await mod.startTaskRun(uid, startInput({
+      projectId, taskId, baselineId, skillDir, allowedRoots: [skillDir],
+      space: spaceContext({}),
+    }));
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    // 冻结事件写入执行事件流
+    const events = await executions.readEvents(uid, started.executionId);
+    const frozen = events.find((e: { type: string }) => e.type === 'asset_versions_frozen');
+    expect(frozen).toBeDefined();
+    const frozenRefs = (frozen?.metadata?.refs as Array<{ asset_id: string; version: string }>) ?? [];
+    expect(frozenRefs.length).toBe(3);
+
+    // 读取函数返回冻结集（含 Main Skill + 空间绑定，去重）
+    const refs = await mod.readFrozenAssetVersions(uid, started.executionId);
+    expect(refs.map((r: { asset_id: string; version: string }) => `${r.asset_id}@${r.version}`).sort()).toEqual([
+      'sk-main@1.0.0',
+      'sk-rule-1@1.2.0',
+      'sk-tpl-1@3.0.0',
+    ]);
+  });
+
+  it('dedupes identical asset@version in the frozen set', async () => {
+    const mod = await import(TASK_RUN);
+    const executions = await import(EXECUTIONS);
+    const { projectId, taskId, baselineId, skillDir } = await scaffold();
+
+    const started = await mod.startTaskRun(uid, startInput({
+      projectId, taskId, baselineId, skillDir, allowedRoots: [skillDir],
+      space: spaceContext({
+        // Main Skill 与绑定引用同一资产版本 → 冻结集去重
+        mainSkillRef: { asset_id: 'sk-rule-1', version: '1.2.0' },
+      }),
+    }));
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    const refs = await mod.readFrozenAssetVersions(uid, started.executionId);
+    const ruleRefs = refs.filter((r: { asset_id: string }) => r.asset_id === 'sk-rule-1');
+    expect(ruleRefs.length).toBe(1);
+    expect(refs.length).toBe(2); // sk-rule-1 + sk-tpl-1
+  });
+
+  it('no space context → no freeze event and empty frozen read', async () => {
+    const mod = await import(TASK_RUN);
+    const executions = await import(EXECUTIONS);
+    const { projectId, taskId, baselineId, skillDir } = await scaffold();
+
+    const started = await mod.startTaskRun(uid, startInput({
+      projectId, taskId, baselineId, skillDir, allowedRoots: [skillDir],
+    }));
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    const events = await executions.readEvents(uid, started.executionId);
+    expect(events.some((e: { type: string }) => e.type === 'asset_versions_frozen')).toBe(false);
+    expect(await mod.readFrozenAssetVersions(uid, started.executionId)).toEqual([]);
+  });
+});

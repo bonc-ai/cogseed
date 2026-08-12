@@ -1,0 +1,27 @@
+report_profile:
+  language: zh-CN
+  concept_min: 20
+  concept_target: 40
+  concept_max: 40
+  relation_min: 30
+  relation_target: 50
+  process_min: 5
+  process_target: 8
+  process_max: 10
+  standard_min: 8
+  stakeholder_min: 6
+  system_min: 6
+  closed_loop_min: 3
+  source_min: 5
+  research_gate_required: true
+  research_min_queries: 4
+  research_min_opened_sources: 6
+  research_min_verified_primary_sources: 6
+  research_min_official_policy_sources: 1
+  research_min_official_standard_sources: 5
+  search_snippets_are_evidence: false
+  selected_sources_must_be_opened: true
+  current_facts_require_primary_sources: true
+  shared_upper_ontology: [Party, Role, Agent, Goal, Situation, Capability, Service/Product, Process/Case, Task/Action, Resource/Asset, Information Object, Event, Decision, Policy/Rule/Constraint, Agreement/Commitment, Observation/Evidence, Risk/Control, Outcome, Measure/KPI, Episode/Learning, System/Interface]
+  mapping_relations: [exact, narrower, broader, related, local extension]
+  standard_roles: [semantic_backbone, code_system, exchange_format, event_telemetry, provenance_credential, governance_reference, local_mapping]

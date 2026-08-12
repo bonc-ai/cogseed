@@ -14,7 +14,12 @@
   }
 
   function _tv(key, vars, fallback) {
-    try { if (typeof t === 'function') { const v = t(key, vars); if (v && v !== key) return v; } } catch (_) {}
+    try {
+      if (typeof t === 'function') { const v = t(key, vars); if (v && v !== key) return v; }
+    } catch (_) {}
+    if (vars && fallback != null) {
+      return String(fallback).replace(/\{(\w+)\}/g, (m, n) => (vars[n] != null ? String(vars[n]) : m));
+    }
     return fallback;
   }
 
@@ -26,6 +31,16 @@
     } catch (_) {}
   }
 
+  /** SVG 图标（AGENTS.md：图标走 icons.js，不用 emoji/文本符号）。 */
+  function _icon(name, className) {
+    try {
+      if (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function') {
+        return window.uiIconHtml(name, className || 'ui-icon');
+      }
+    } catch (_) {}
+    return '';
+  }
+
   // ── state ────────────────────────────────────────────────────────────────
   let _pocGroups = [];
   let _pocGroupsLoaded = false;
@@ -34,6 +49,9 @@
   let _pocCandidates = [];
   let _pocBlocked = [];
   let _pocProjectNames = null; // Map(pid → name)，二期 D5 字段值 @项目 显示用（懒加载）
+  let _pocSkillNames = null;  // Map(id → {name, desc})，模板库 bundle 展示用（懒加载）
+  let _pocAgentNames = null;  // Map(id → {name, desc})
+  let _pocLibraryModalBound = false; // 模板库弹窗持久节点只绑一次
   // 右栏选中：{kind:'candidates'} | {kind:'candidate',id} | {kind:'group',id}
   let _pocSelected = { kind: 'candidates' };
   // 每张候选卡片的去向选择状态：candidate_id -> { toGlobalMemory, groupIds, field }
@@ -96,7 +114,7 @@
           <input type="checkbox" class="personal-onto-dest-template-checkbox"
                 data-candidate-id="${escapeHtml(candidateId)}" data-template-id="${escapeHtml(t.template_id)}"
                 ${allChecked ? 'checked' : ''} />
-          <span class="personal-onto-dest-template-caret" data-candidate-id="${escapeHtml(candidateId)}" data-template-id="${escapeHtml(t.template_id)}">${collapsed ? '▶' : '▼'}</span>
+          <span class="personal-onto-dest-template-caret" data-candidate-id="${escapeHtml(candidateId)}" data-template-id="${escapeHtml(t.template_id)}">${collapsed ? _icon('chevron-right', 'ui-icon personal-onto-dest-caret') : _icon('chevron-down', 'ui-icon personal-onto-dest-caret')}</span>
           <span class="personal-onto-dest-template-name">${escapeHtml(t.name)}</span>
           ${someChecked && !allChecked ? `<span class="personal-onto-dest-template-partial muted">(部分)</span>` : ''}
         </label>
@@ -138,8 +156,9 @@
 
   function _pocMaybeLoadFieldOptions(candidateId) {
     const state = _pocDestState.get(candidateId);
-    if (!state || !state.groupIds.size) return;
-    const gid = Array.from(state.groupIds)[0];
+    if (!state) return;
+    const gid = state.groupIds.size ? Array.from(state.groupIds)[0] : (state.roleGroupId || null);
+    if (!gid) return;
     if (_pocFieldCache.has(gid)) return;
     _pocFieldsForGroup(gid).then(() => {
       if (_pocDestState.has(candidateId)) _pocRerenderDetail();
@@ -149,7 +168,8 @@
   function _pocDestFor(candidateId, initialField) {
     let state = _pocDestState.get(candidateId);
     if (!state) {
-      state = { toGlobalMemory: true, groupIds: new Set(), field: initialField || 'flow' };
+      // 全局记忆恒写（确认 = 必进全局记忆）；角色为可选叠加层。
+      state = { toGlobalMemory: true, groupIds: new Set(), field: initialField || 'flow', advancedOpen: false };
       _pocDestState.set(candidateId, state);
     }
     return state;
@@ -189,7 +209,30 @@
   }
 
   // ── 候选详情（右栏）──────────────────────────────────────────────────────
-  function renderDestinationPanel(candidateId) {
+  /** 已安装模板 → 角色单选列表。每个选项显示角色名 + 分节数·字段数。 */
+  function _pocRenderRoleOptions(candidateId) {
+    const state = _pocDestFor(candidateId);
+    const installed = _pocTemplates.filter((t) => t.installed);
+    if (!installed.length) {
+      return `<div class="personal-onto-dest-empty muted">${_t('personalOntology.dest_no_roles', '尚未安装角色模板，可在「角色模板库」中安装')}</div>`;
+    }
+    const rows = installed.map((t) => {
+      const nSections = (t.sections || []).length;
+      const nFields = (t.sections || []).reduce((n, s) => n + (s.fields || []).length, 0);
+      const selected = state.roleGroupId === t.group_id;
+      return `<label class="personal-onto-dest-role-row${selected ? ' is-selected' : ''}">
+        <input type="radio" name="personal-onto-dest-role" class="personal-onto-dest-role-radio"
+               data-candidate-id="${escapeHtml(candidateId)}" data-group-id="${escapeHtml(t.group_id || '')}"
+               ${selected ? 'checked' : ''} />
+        <span class="personal-onto-dest-role-name">${escapeHtml(t.name)}</span>
+        <span class="personal-onto-dest-role-meta">${nSections} ${_t('personalOntology.dest_role_sections', '分节')} · ${nFields} ${_t('personalOntology.dest_role_fields', '字段')}</span>
+      </label>`;
+    }).join('');
+    return rows;
+  }
+
+  /** 高级区（默认折叠）：原分节树 + 填入字段 + 新建分组。 */
+  function _pocRenderAdvanced(candidateId) {
     const state = _pocDestFor(candidateId);
     const fieldOptions = _pocFieldOptionsFor(candidateId);
     const fieldValue = state.field && state.field !== 'flow' ? state.field : 'flow';
@@ -206,26 +249,44 @@
           ${fieldRows}
         </select>
       </div>`;
+    const groupsHtml = _pocGroupsLoaded && !_pocGroups.length
+      ? `<div class="personal-onto-dest-empty muted">${_t('personalOntology.dest_no_groups', '暂无记忆分组')}</div>`
+      : `<div class="personal-onto-dest-groups">${_pocRenderGroupRows(candidateId)}</div>`;
+    return `
+      <div class="personal-onto-dest-advanced" data-candidate-id="${escapeHtml(candidateId)}">
+        <button type="button" class="personal-onto-dest-advanced-toggle" data-candidate-id="${escapeHtml(candidateId)}">
+          ${state.advancedOpen ? _icon('chevron-down', 'ui-icon personal-onto-dest-advanced-caret') : _icon('chevron-right', 'ui-icon personal-onto-dest-advanced-caret')}
+          <span>${_t('personalOntology.dest_advanced_label', '高级选项')}</span>
+          <span class="muted">${_t('personalOntology.dest_advanced_hint', '精确到分组/字段')}</span>
+        </button>
+        ${state.advancedOpen ? `
+          <div class="personal-onto-dest-advanced-body">
+            ${groupsHtml}
+            ${fieldSelect}
+            <div class="personal-onto-dest-create-row">
+              <input type="text" class="personal-onto-dest-new-group-input"
+                     data-candidate-id="${escapeHtml(candidateId)}"
+                     placeholder="${escapeHtml(_t('personalOntology.dest_new_group_placeholder', '新建分组名称...'))}" />
+              <button type="button" class="btn btn-sm personal-onto-dest-create-btn" data-candidate-id="${escapeHtml(candidateId)}">
+                ${_t('personalOntology.dest_create_group_btn', '新建')}
+              </button>
+            </div>
+          </div>` : ''}
+      </div>`;
+  }
+
+  function renderDestinationPanel(candidateId) {
     return `
       <div class="personal-onto-dest-panel" data-candidate-id="${escapeHtml(candidateId)}">
-        <div class="personal-onto-dest-title">${_t('personalOntology.dest_title', '选择去向')}</div>
-        <label class="personal-onto-dest-global-row">
-          <input type="checkbox" class="personal-onto-dest-global-checkbox"
-                 data-candidate-id="${escapeHtml(candidateId)}" ${state.toGlobalMemory ? 'checked' : ''} />
-          <span>${_t('personalOntology.dest_global_memory', '全局记忆')}</span>
-        </label>
-        ${_pocGroupsLoaded && !_pocGroups.length
-          ? `<div class="personal-onto-dest-empty muted">${_t('personalOntology.dest_no_groups', '暂无记忆分组')}</div>`
-          : `<div class="personal-onto-dest-groups">${_pocRenderGroupRows(candidateId)}</div>`}
-        ${fieldSelect}
-        <div class="personal-onto-dest-create-row">
-          <input type="text" class="personal-onto-dest-new-group-input"
-                 data-candidate-id="${escapeHtml(candidateId)}"
-                 placeholder="${escapeHtml(_t('personalOntology.dest_new_group_placeholder', '新建分组名称...'))}" />
-          <button type="button" class="btn btn-sm personal-onto-dest-create-btn" data-candidate-id="${escapeHtml(candidateId)}">
-            ${_t('personalOntology.dest_create_group_btn', '新建')}
-          </button>
+        <div class="personal-onto-dest-ai-hint">
+          ${_icon('sparkles', 'ui-icon personal-onto-dest-ai-icon')}
+          <span>${_t('personalOntology.dest_ai_hint', '确认时 AI 会自动把这条内容归入最合适的位置，你可在模板文件里随时调整')}</span>
         </div>
+        <div class="personal-onto-dest-title">${_t('personalOntology.dest_role_title', '存入角色（可选）')}</div>
+        <div class="personal-onto-dest-roles">
+          ${_pocRenderRoleOptions(candidateId)}
+        </div>
+        ${_pocRenderAdvanced(candidateId)}
       </div>`;
   }
 
@@ -259,7 +320,6 @@
         ${candidate.diff_summary ? `<div class="personal-onto-card-field"><strong>${_t('personalOntology.diff', '差异')}:</strong> ${escapeHtml(candidate.diff_summary)}</div>` : ''}
         <div class="personal-onto-card-field"><strong>${_t('personalOntology.sources', '来源')}:</strong> ${candidate.source_memory_refs && candidate.source_memory_refs.length ? escapeHtml(candidate.source_memory_refs.join(', ')) : '-'}</div>
       </div>
-      <div class="personal-onto-llm-hint muted">${_t('personalOntology.llm_route_hint', '确认时将经 LLM 识别，自动填入最匹配的模板字段')}</div>
       ${renderDestinationPanel(candidate.candidate_id)}
       <div class="personal-onto-card-actions">
         <button class="btn btn-sm personal-onto-btn-confirm" data-candidate-id="${escapeHtml(candidate.candidate_id)}">${_t('personalOntology.confirm_btn', '确认')}</button>
@@ -275,7 +335,7 @@
   function _pocRenderBlockedCard(item) {
     return `<div class="personal-onto-blocked-card">
       <div class="personal-onto-blocked-header">
-        <span class="personal-onto-blocked-icon">⚠</span>
+        <span class="personal-onto-blocked-icon">${_icon('warning', 'ui-icon')}</span>
         <span class="personal-onto-blocked-source">${escapeHtml(item.source_ref || '-')}</span>
       </div>
       <div class="personal-onto-blocked-body">
@@ -330,10 +390,10 @@
                   ${v.project ? `<span class="memory-group-field-project">@${escapeHtml(_pocProjectNames ? (_pocProjectNames.get(v.project) || v.project) : v.project)}</span>` : ''}
                   <button type="button" class="memory-icon-btn" data-poc-group-action="field-edit-value"
                     data-poc-ref="${escapeHtml(ref)}" data-poc-field="${escapeHtml(f.name)}" data-poc-value="${escapeHtml(v.value)}"
-                    title="${escapeHtml(_t('memory.edit', '编辑'))}">✎</button>
+                    title="${escapeHtml(_t('memory.edit', '编辑'))}">${_icon('edit-pencil', 'ui-icon')}</button>
                   <button type="button" class="memory-icon-btn is-muted" data-poc-group-action="field-remove-value"
                     data-poc-ref="${escapeHtml(ref)}" data-poc-field="${escapeHtml(f.name)}" data-poc-value="${escapeHtml(v.value)}"
-                    title="${escapeHtml(_t('memory.delete', '删除'))}">×</button>
+                    title="${escapeHtml(_t('memory.delete', '删除'))}">${_icon('x', 'ui-icon')}</button>
                 </div>`).join('')
               : `<span class="memory-group-field-empty muted">${escapeHtml(_t('memory.group_field_empty', '暂无值'))}</span>`}
           </div>
@@ -352,7 +412,7 @@
             <button type="button" class="btn btn-sm" data-poc-group-action="entry-promote"
               data-poc-ref="${escapeHtml(ref)}" data-poc-entry="${escapeHtml(e)}">${escapeHtml(_t('memory.group_promote', '升格'))}</button>
             <button type="button" class="memory-icon-btn is-muted" data-poc-group-action="entry-remove"
-              data-poc-ref="${escapeHtml(ref)}" data-poc-entry="${escapeHtml(e)}" title="${escapeHtml(_t('memory.delete', '删除'))}">×</button>
+              data-poc-ref="${escapeHtml(ref)}" data-poc-entry="${escapeHtml(e)}" title="${escapeHtml(_t('memory.delete', '删除'))}">${_icon('x', 'ui-icon')}</button>
           </div>`).join('')
         : `<div class="memory-empty muted">${escapeHtml(_t('memory.group_flow_empty', '暂无流水条目'))}</div>`;
       return `<div class="memory-group-template-section">
@@ -385,10 +445,10 @@
                 ${v.project ? `<span class="memory-group-field-project">@${escapeHtml(_pocProjectNames ? (_pocProjectNames.get(v.project) || v.project) : v.project)}</span>` : ''}
                 <button type="button" class="memory-icon-btn" data-poc-group-action="field-edit-value"
                   data-poc-field="${escapeHtml(f.name)}" data-poc-value="${escapeHtml(v.value)}"
-                  title="${escapeHtml(_t('memory.edit', '编辑'))}">✎</button>
+                  title="${escapeHtml(_t('memory.edit', '编辑'))}">${_icon('edit-pencil', 'ui-icon')}</button>
                 <button type="button" class="memory-icon-btn is-muted" data-poc-group-action="field-remove-value"
                   data-poc-field="${escapeHtml(f.name)}" data-poc-value="${escapeHtml(v.value)}"
-                  title="${escapeHtml(_t('memory.delete', '删除'))}">×</button>
+                  title="${escapeHtml(_t('memory.delete', '删除'))}">${_icon('x', 'ui-icon')}</button>
               </div>`).join('')
             : `<span class="memory-group-field-empty muted">${escapeHtml(_t('memory.group_field_empty', '暂无值'))}</span>`}
         </div>
@@ -410,7 +470,7 @@
         <span class="memory-group-flow-idx">${i + 1}.</span>
         <span class="memory-group-flow-text">${escapeHtml(e)}</span>
         <button type="button" class="btn btn-sm" data-poc-group-action="entry-promote" data-poc-entry="${escapeHtml(e)}">${escapeHtml(_t('memory.group_promote', '升格'))}</button>
-        <button type="button" class="memory-icon-btn is-muted" data-poc-group-action="entry-remove" data-poc-entry="${escapeHtml(e)}" title="${escapeHtml(_t('memory.delete', '删除'))}">×</button>
+        <button type="button" class="memory-icon-btn is-muted" data-poc-group-action="entry-remove" data-poc-entry="${escapeHtml(e)}" title="${escapeHtml(_t('memory.delete', '删除'))}">${_icon('x', 'ui-icon')}</button>
       </div>`).join('');
     return `<div class="memory-group-flow-view">${rows}</div>`;
   }
@@ -569,22 +629,48 @@
   }
 
   // ── 模板管理 ─────────────────────────────────────────────────────────────
+  /** 安装模板：有归档 → 让用户选「恢复原数据 / 重建空模板」；无归档 → 直接装。 */
   async function _pocInstallTemplate(templateId) {
     const tmpl = _pocTemplates.find((x) => x.template_id === templateId);
     const groupCount = tmpl && tmpl.sections ? tmpl.sections.length : 0;
-    const ok = (typeof uiConfirmDanger === 'function')
-      ? await uiConfirmDanger({ title: _t('memory.templates_install', '安装'), message: _t('memory.templates_install_confirm', { n: groupCount }), dangerLabel: _t('memory.templates_install', '安装') })
-      : (typeof uiConfirm === 'function' ? await uiConfirm({ message: _t('memory.templates_install_confirm', { n: groupCount }) }) : true);
-    if (!ok) return;
-    const res = await _pocInvoke('personalOntology.templates.install', { templateId });
+    let restoreData = false;
+    // 有归档旧数据 → 提供恢复选项
+    try {
+      const ar = await _pocInvoke('personalOntology.templates.hasArchive', { templateId });
+      if (ar && ar.hasArchive) {
+        if (typeof uiConfirmDanger === 'function') {
+          const restoreOk = await uiConfirmDanger({
+            title: _t('personalOntology.template_reinstall_title', '重新安装'),
+            message: _t('personalOntology.template_reinstall_prompt', '检测到该模板的归档数据。要恢复原数据，还是重建空模板？'),
+            dangerLabel: _t('personalOntology.template_restore_btn', '恢复原数据'),
+          });
+          // uiConfirmDanger 确认 = 恢复；取消 = 询问是否重建空模板
+          if (restoreOk) restoreData = true;
+          else {
+            const freshOk = (typeof uiConfirm === 'function')
+              ? await uiConfirm({ message: _t('personalOntology.template_rebuild_prompt', '重建空模板？（不恢复归档数据）') })
+              : true;
+            if (!freshOk) return;
+          }
+        } else {
+          restoreData = false;
+        }
+      }
+    } catch (_) {}
+    const res = await _pocInvoke('personalOntology.templates.install', { templateId, restoreData });
     if (!res || res.ok === false) {
+      if (res && res.error === 'template_limit_reached') {
+        try { if (typeof uiAlert === 'function') uiAlert(_t('personalOntology.template_limit', '最多安装 3 个角色模板，请先卸载一个')); } catch (_) {}
+        return;
+      }
       _notifyFail(_t('personalOntology.templates_install_error', '模板安装失败'), new Error((res && res.error) || ''));
       return;
     }
     try {
       if (typeof uiToast === 'function') {
-        uiToast(res.already_installed ? _t('memory.templates_already_installed', '该模板已安装') : _t('memory.templates_installed_ok', '模板安装成功'),
-          { variant: res.already_installed ? 'info' : 'success' });
+        if (res.already_installed) uiToast(_t('memory.templates_already_installed', '该模板已安装'), { variant: 'info' });
+        else if (res.restored_from_archive) uiToast(_t('personalOntology.template_restored_ok', '模板已安装，归档数据已恢复'), { variant: 'success' });
+        else uiToast(_t('memory.templates_installed_ok', '模板安装成功'), { variant: 'success' });
         if (res.conflict_groups && res.conflict_groups.length) {
           uiToast(_t('memory.templates_conflict', { groups: res.conflict_groups.map((g) => g.title).join('、') }), { variant: 'warning' });
         }
@@ -593,6 +679,164 @@
     await _pocLoadGroups();
     await _pocLoadTemplates();
     renderPersonalOntology();
+  }
+
+  /** 卸载模板：确认（含全局记忆归档选项）→ 主进程归档 + 台账移除 → 提示归档位置。 */
+  async function _pocUninstallTemplate(templateId) {
+    const tmpl = _pocTemplates.find((x) => x.template_id === templateId);
+    const name = (tmpl && tmpl.name) || templateId;
+    // 该角色有没有全局记忆归档可带走
+    let memCount = 0;
+    try {
+      const mc = await _pocInvoke('memory.roleTemplateCount', { templateId });
+      if (mc && typeof mc.count === 'number') memCount = mc.count;
+    } catch (_) {}
+    const archiveMemory = memCount > 0
+      ? (typeof uiConfirm === 'function'
+          ? await uiConfirm({
+              message: _tv('personalOntology.template_uninstall_mem_confirm', { name, n: memCount },
+                '「{name}」有 {n} 条全局记忆（该角色来源）。是否一起归档？归档后重装可一并恢复。'),
+            })
+          : true)
+      : false;
+    if (!archiveMemory && memCount > 0) {
+      // 用户选择不归档全局记忆 → 只卸模板
+      const ok2 = (typeof uiConfirmDanger === 'function')
+        ? await uiConfirmDanger({
+            title: _t('personalOntology.template_uninstall_title', '卸载角色模板'),
+            message: _tv('personalOntology.template_uninstall_confirm', { name }, '卸载「{name}」？模板数据将归档保留（可重新安装恢复），不影响全局记忆。'),
+            dangerLabel: _t('personalOntology.template_uninstall_btn', '卸载'),
+          })
+        : true;
+      if (!ok2) return;
+    }
+    const res = await _pocInvoke('personalOntology.templates.uninstall', { templateId, archiveMemory: memCount > 0 ? !!archiveMemory : false });
+    if (!res || res.ok === false) {
+      _notifyFail(_t('personalOntology.template_uninstall_error', '卸载失败'), new Error((res && res.error) || ''));
+      return;
+    }
+    try {
+      if (typeof uiToast === 'function') {
+        if (res.archived_memory_count > 0) {
+          uiToast(_tv('personalOntology.template_uninstalled_mem_ok', { name, n: res.archived_memory_count }, '已卸载「{name}」，模板与 {n} 条全局记忆已一并归档'), { variant: 'success' });
+        } else {
+          uiToast(_tv('personalOntology.template_uninstalled_ok', { name }, '已卸载「{name}」，数据已归档'), { variant: 'success' });
+        }
+        if (res.archive_dir) uiToast(_tv('personalOntology.template_archive_path', { path: res.archive_dir }, '归档位置：{path}'), { variant: 'info' });
+      }
+    } catch (_) {}
+    // 如果当前正打开该模板的分组编辑器 → 回退总览
+    if (_pocSelected.kind === 'group' && _pocGroupEditor && _pocGroupEditor.templateId === templateId) {
+      _pocSelected = { kind: 'candidates' };
+      _pocGroupEditor = null;
+    }
+    await _pocLoadGroups();
+    await _pocLoadTemplates();
+    renderPersonalOntology();
+  }
+
+  /** 懒加载 skill/agent 名称映射（模板库 bundle 展示用）。 */
+  async function _pocEnsureResourceNames() {
+    if (_pocSkillNames && _pocAgentNames) return;
+    try {
+      const [skillsRes, agentsRes] = await Promise.all([
+        _pocInvoke('skills.list'),
+        _pocInvoke('agents.list'),
+      ]);
+      _pocSkillNames = new Map((skillsRes.skills || []).map((s) => [s.id, { name: s.name || s.id, desc: (s.description_zh || s.description_en || '').trim() }]));
+      _pocAgentNames = new Map((agentsRes.agents || []).map((a) => [a.agent_id, { name: a.name || a.agent_id, desc: (a.description_zh || a.description_en || '').trim() }]));
+    } catch (_) {
+      _pocSkillNames = _pocSkillNames || new Map();
+      _pocAgentNames = _pocAgentNames || new Map();
+    }
+  }
+
+  /** 模板 bundle → skill/agent 行（名称 + 一句能力简介，与工作空间详情同源）。 */
+  function _pocRenderBundle(t) {
+    const skillIds = (t.bundle && t.bundle.skill_ids) || [];
+    const agentIds = (t.bundle && t.bundle.agent_ids) || [];
+    if (!skillIds.length && !agentIds.length) return '';
+    const rows = [];
+    for (const id of skillIds) {
+      const info = _pocSkillNames ? _pocSkillNames.get(id) : null;
+      rows.push(`<div class="personal-onto-library-res">
+        <span class="personal-onto-library-res-tag is-skill">${_t('personalOntology.bundle_skill', '技能')}</span>
+        <div class="personal-onto-library-res-main">
+          <span class="personal-onto-library-res-name">${escapeHtml((info && info.name) || id)}</span>
+          ${info && info.desc ? `<span class="personal-onto-library-res-desc">${escapeHtml(info.desc)}</span>` : ''}
+        </div>
+      </div>`);
+    }
+    for (const id of agentIds) {
+      const info = _pocAgentNames ? _pocAgentNames.get(id) : null;
+      rows.push(`<div class="personal-onto-library-res">
+        <span class="personal-onto-library-res-tag is-agent">${_t('personalOntology.bundle_agent', '智能体')}</span>
+        <div class="personal-onto-library-res-main">
+          <span class="personal-onto-library-res-name">${escapeHtml((info && info.name) || id)}</span>
+          ${info && info.desc ? `<span class="personal-onto-library-res-desc">${escapeHtml(info.desc)}</span>` : ''}
+        </div>
+      </div>`);
+    }
+    return `<div class="personal-onto-library-res-list">
+      <div class="personal-onto-library-res-title">${_t('personalOntology.template_bundle_label', '配套能力')}</div>
+      ${rows.join('')}
+    </div>`;
+  }
+
+  /** 角色模板库弹窗：列出全部模板（已安装带卸载按钮，未安装带安装按钮），超 3 上限置灰。 */
+  async function _pocOpenTemplateLibrary() {
+    await _pocEnsureResourceNames();
+    const installedCount = _pocTemplates.filter((t) => t.installed).length;
+    const atLimit = installedCount >= 3;
+    const all = _pocTemplates.slice().sort((a, b) => (b.installed ? 1 : 0) - (a.installed ? 1 : 0));
+    const listEl = document.getElementById('personal-onto-template-library-list');
+    if (!listEl) return;
+    listEl.innerHTML = all.length
+      ? all.map((t) => {
+          const nSections = (t.sections || []).length;
+          const nFields = (t.sections || []).reduce((n, s) => n + (s.fields || []).length, 0);
+          const uninstallBtn = t.installed
+            ? `<button type="button" class="personal-onto-library-uninstall" data-template-id="${escapeHtml(t.template_id)}"
+                 title="${escapeHtml(_t('personalOntology.template_uninstall_tip', '卸载（数据归档保留）'))}">${_icon('x', 'ui-icon')}</button>`
+            : '';
+          const installBtn = t.installed
+            ? `<span class="personal-onto-library-installed muted">${_t('personalOntology.template_installed_badge', '已安装')}</span>`
+            : `<button type="button" class="btn btn-sm btn-primary personal-onto-library-install" data-template-id="${escapeHtml(t.template_id)}"
+                 ${atLimit ? 'disabled' : ''}>${_t('memory.templates_install', '安装')}</button>`;
+          return `<div class="personal-onto-library-card${t.installed ? ' is-installed' : ''}" data-template-id="${escapeHtml(t.template_id)}">
+            <div class="personal-onto-library-card-head">
+              <span class="personal-onto-library-card-name">${escapeHtml(t.name)}</span>
+              <span class="personal-onto-library-card-meta">${nSections} ${_t('personalOntology.dest_role_sections', '分节')} · ${nFields} ${_t('personalOntology.dest_role_fields', '字段')}</span>
+              ${uninstallBtn}
+            </div>
+            ${t.description ? `<div class="personal-onto-library-card-desc">${escapeHtml(t.description)}</div>` : ''}
+            ${_pocRenderBundle(t)}
+            <div class="personal-onto-library-card-foot">
+              ${installBtn}
+              ${!t.installed && atLimit ? `<span class="personal-onto-library-limit muted">${_t('personalOntology.template_limit_hint', '已达 3 个上限，需先卸载一个')}</span>` : ''}
+            </div>
+          </div>`;
+        }).join('')
+      : `<div class="personal-onto-empty">${_t('personalOntology.template_library_empty', '模板库为空')}</div>`;
+    // 事件绑定必须在 innerHTML 填充后做（弹窗每次打开都重写列表）
+    listEl.querySelectorAll('.personal-onto-library-install').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const tid = btn.dataset.templateId;
+        if (!tid || btn.disabled) return;
+        await _pocInstallTemplate(tid);
+        _pocOpenTemplateLibrary(); // 刷新列表（上限置灰变化）
+      });
+    });
+    listEl.querySelectorAll('.personal-onto-library-uninstall').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const tid = btn.dataset.templateId;
+        if (!tid) return;
+        await _pocUninstallTemplate(tid);
+        _pocOpenTemplateLibrary();
+      });
+    });
+    const overlay = document.getElementById('personal-onto-template-library-modal');
+    if (overlay) overlay.style.display = 'flex';
   }
 
   // ── 左栏导航渲染 ─────────────────────────────────────────────────────────
@@ -621,25 +865,38 @@
       </button>`;
     }).join('');
 
-    // 模板区（阶段 D：一行一个文件，无折叠树）
-    const templateRows = _pocTemplates.map((tmpl) => {
-      if (!tmpl.installed) {
-        return `<div class="personal-onto-nav-template">
-          <span class="personal-onto-nav-template-name">${escapeHtml(tmpl.name)}</span>
-          <button type="button" class="btn btn-sm personal-onto-template-install" data-poc-nav="template-install" data-poc-template-id="${escapeHtml(tmpl.template_id)}">${escapeHtml(_t('memory.templates_install', '安装'))}</button>
-        </div>`;
-      }
+    // 模板区：已安装 = 可点击文件行（带卸载按钮）；未安装 = 收进「角色模板库」
+    const installedTmpls = _pocTemplates.filter((t) => t.installed);
+    const uninstalledCount = _pocTemplates.length - installedTmpls.length;
+    const templateRows = installedTmpls.map((tmpl) => {
       const selected = _pocSelected.kind === 'group' && _pocSelected.id === tmpl.group_id;
-      return `<button type="button" class="personal-onto-nav-row is-file${selected ? ' is-active' : ''}" data-poc-nav="group" data-poc-id="${escapeHtml(tmpl.group_id || '')}">
-        <span class="personal-onto-nav-file-icon">📄</span>
-        <span class="personal-onto-nav-row-text">${escapeHtml(tmpl.name)}</span>
-        <span class="memory-template-name-suffix">${escapeHtml(_t('memory.templates_suffix', '模板'))}</span>
-      </button>`;
+      return `<div class="personal-onto-nav-template-row${selected ? ' is-active' : ''}">
+        <button type="button" class="personal-onto-nav-row is-file${selected ? ' is-active' : ''}" data-poc-nav="group" data-poc-id="${escapeHtml(tmpl.group_id || '')}">
+          <span class="personal-onto-nav-file-icon">${_icon('file-text', 'ui-icon')}</span>
+          <span class="personal-onto-nav-row-text">${escapeHtml(tmpl.name)}</span>
+          <span class="memory-template-name-suffix">${escapeHtml(_t('memory.templates_suffix', '模板'))}</span>
+        </button>
+        <button type="button" class="personal-onto-template-uninstall" data-poc-nav="template-uninstall" data-poc-template-id="${escapeHtml(tmpl.template_id)}"
+                title="${escapeHtml(_t('personalOntology.template_uninstall_tip', '卸载（数据归档保留）'))}">${_icon('x', 'ui-icon')}</button>
+      </div>`;
     }).join('');
     const templateSection = section(
       _t('personalOntology.nav_templates', '角色模板'),
-      _pocTemplates.length,
-      templateRows ? `<div class="personal-onto-nav-template-list">${templateRows}</div>` : '',
+      installedTmpls.length,
+      templateRows
+        ? `<div class="personal-onto-nav-template-list">${templateRows}</div>
+           ${uninstalledCount ? `<button type="button" class="personal-onto-template-library-btn" data-poc-nav="template-library">
+             ${_icon('package', 'ui-icon personal-onto-template-library-icon')}
+             <span>${_t('personalOntology.template_library', '角色模板库')}</span>
+             <span class="personal-onto-template-library-count">${uninstalledCount}</span>
+           </button>` : ''}`
+        : (uninstalledCount
+          ? `<button type="button" class="personal-onto-template-library-btn" data-poc-nav="template-library">
+               ${_icon('package', 'ui-icon personal-onto-template-library-icon')}
+               <span>${_t('personalOntology.template_library', '角色模板库')}</span>
+               <span class="personal-onto-template-library-count">${uninstalledCount}</span>
+             </button>`
+          : `<div class="personal-onto-nav-empty muted">${escapeHtml(_t('personalOntology.nav_empty', '暂无'))}</div>`),
     );
 
     // 普通分组区
@@ -647,7 +904,7 @@
     const groupRows = plainGroups.map((g) => {
       const selected = _pocSelected.kind === 'group' && _pocSelected.id === g.group_id;
       return `<button type="button" class="personal-onto-nav-row is-file${selected ? ' is-active' : ''}" data-poc-nav="group" data-poc-id="${escapeHtml(g.group_id)}">
-        <span class="personal-onto-nav-file-icon">📄</span>
+        <span class="personal-onto-nav-file-icon">${_icon('file-text', 'ui-icon')}</span>
         <span class="personal-onto-nav-row-text">${escapeHtml(g.title)}</span>
       </button>`;
     }).join('');
@@ -711,17 +968,35 @@
     const nav = document.getElementById('personal-onto-nav');
     if (!nav) return;
     nav.querySelectorAll('[data-poc-nav]').forEach((el) => {
-      el.addEventListener('click', () => {
+      el.addEventListener('click', (e) => {
         const action = el.getAttribute('data-poc-nav');
         const id = el.getAttribute('data-poc-id');
         if (action === 'candidate') { _pocSelected = { kind: 'candidate', id }; renderPersonalOntology(); }
         else if (action === 'group') { _pocOpenGroup(id); }
-        else if (action === 'template-install') {
+        else if (action === 'template-library') {
+          e.stopPropagation();
+          _pocOpenTemplateLibrary();
+        }
+        else if (action === 'template-uninstall') {
+          e.stopPropagation();
           const tid = el.getAttribute('data-poc-template-id');
-          if (tid) _pocInstallTemplate(tid);
+          if (tid) _pocUninstallTemplate(tid);
         }
       });
     });
+    // 角色模板库弹窗：关闭/遮罩点击 —— 持久节点，只绑一次（防监听器累积）
+    const libOverlay = document.getElementById('personal-onto-template-library-modal');
+    if (libOverlay && !_pocLibraryModalBound) {
+      _pocLibraryModalBound = true;
+      libOverlay.addEventListener('click', (e) => {
+        if (e.target === libOverlay) libOverlay.style.display = 'none';
+      });
+      const closeBtn = document.getElementById('personal-onto-template-library-close');
+      if (closeBtn) closeBtn.addEventListener('click', () => { libOverlay.style.display = 'none'; });
+      const cancelBtn = document.getElementById('personal-onto-template-library-cancel');
+      if (cancelBtn) cancelBtn.addEventListener('click', () => { libOverlay.style.display = 'none'; });
+    }
+    // 安装/卸载按钮绑定在 _pocOpenTemplateLibrary 内部完成（每次 innerHTML 重写后重新绑定）
   }
 
   function _pocBindDetail(root) {
@@ -735,14 +1010,30 @@
   }
 
   function _pocBindDestinationControls(root) {
-    root.querySelectorAll('.personal-onto-dest-global-checkbox').forEach((cb) => {
-      cb.addEventListener('change', () => { _pocDestFor(cb.dataset.candidateId).toGlobalMemory = cb.checked; });
+    // 角色单选：选中 → 记录 roleGroupId 并清空分节勾选（角色层与高级层互斥）
+    root.querySelectorAll('.personal-onto-dest-role-radio').forEach((radio) => {
+      radio.addEventListener('change', () => {
+        const state = _pocDestFor(radio.dataset.candidateId);
+        state.roleGroupId = radio.dataset.groupId || null;
+        if (state.roleGroupId) state.groupIds.clear();
+        _pocRerenderDetail();
+      });
     });
+    // 高级区折叠开关
+    root.querySelectorAll('.personal-onto-dest-advanced-toggle').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const state = _pocDestFor(btn.dataset.candidateId);
+        state.advancedOpen = !state.advancedOpen;
+        _pocRerenderDetail();
+      });
+    });
+    // 高级区分节勾选：选中任一分节 → 视为精确模式，清掉角色层选择
     root.querySelectorAll('.personal-onto-dest-group-checkbox').forEach((cb) => {
       cb.addEventListener('change', () => {
         const state = _pocDestFor(cb.dataset.candidateId);
         if (cb.checked) state.groupIds.add(cb.dataset.groupId);
         else state.groupIds.delete(cb.dataset.groupId);
+        if (state.groupIds.size) state.roleGroupId = null;
         _pocRerenderDetail();
         _pocMaybeLoadFieldOptions(cb.dataset.candidateId);
       });
@@ -757,6 +1048,7 @@
           if (cb.checked) state.groupIds.add(ref);
           else state.groupIds.delete(ref);
         }
+        if (state.groupIds.size) state.roleGroupId = null;
         _pocRerenderDetail();
         _pocMaybeLoadFieldOptions(cb.dataset.candidateId);
       });
@@ -892,7 +1184,10 @@
 
   function _destPayloadFor(candidateId) {
     const state = _pocDestFor(candidateId);
-    const payload = { toGlobalMemory: !!state.toGlobalMemory, toGroupIds: Array.from(state.groupIds) };
+    // 全局记忆恒写（确认 = 必进全局记忆）；去向 = 高级分节（精确）或角色模板组（AI 归位）
+    let toGroupIds = Array.from(state.groupIds);
+    if (!toGroupIds.length && state.roleGroupId) toGroupIds = [state.roleGroupId];
+    const payload = { toGlobalMemory: true, toGroupIds };
     if (state.field && state.field !== 'flow') payload.targetField = state.field;
     // 二期 D5：候选自带来源项目标记 → 透传（主进程 dest.projectId 优先于候选）
     const cand = _pocCandidates.find((x) => x.candidate_id === candidateId);
@@ -937,6 +1232,11 @@
             const fw = res.fieldWrites.find((x) => x.ok);
             uiToast(_tv('personalOntology.confirm_field_ok', { group: _pocRefLabel(fw.groupId), field: fw.fieldName },
               `已填入 ${_pocRefLabel(fw.groupId)}.${fw.fieldName}`), { variant: 'success' });
+          } else if (res.groups && res.groups.some((g) => g.ok)) {
+            // 未命中字段 → 进流水区（C-1：单条确认也要有反馈，否则用户以为候选被吞）
+            const g = res.groups.find((x) => x.ok);
+            uiToast(_tv('personalOntology.confirm_flow_ok', { group: _pocRefLabel(g.groupId) },
+              `已进入 ${_pocRefLabel(g.groupId)} 流水区（未匹配到字段）`), { variant: 'info' });
           }
           warnings.forEach((w) => uiToast(w, { variant: 'warning' }));
         }
@@ -965,13 +1265,13 @@
     if (!pending || !pending.length) return;
     if (!confirm(_t('personalOntology.confirm_all_prompt', `确认全部 ${pending.length} 个候选？`))) return;
     try {
-      const baseDest = pending.length ? _destPayloadFor(pending[0].candidate_id) : { toGlobalMemory: true, toGroupIds: [] };
       const failedIds = [];
       const fieldCounts = {};
       let toEntries = 0;
       let okCount = 0;
       for (const c of pending) {
-        const dest = { toGlobalMemory: baseDest.toGlobalMemory, toGroupIds: baseDest.toGroupIds.slice() };
+        // 每条候选用各自的选择（角色/分节），不共享第一条的
+        const dest = _destPayloadFor(c.candidate_id);
         const state = _pocDestState.get(c.candidate_id);
         const field = state && state.field ? state.field : (c.target_field || 'flow');
         if (field && field !== 'flow') dest.targetField = field;

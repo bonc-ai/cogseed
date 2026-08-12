@@ -13,7 +13,7 @@ const SAFE_SOURCE_ID = /^[A-Za-z0-9_-]{1,80}$/;
 const CONTENT_HASH = /^[a-f0-9]{64}$/;
 
 export interface MemorySource {
-  kind: 'cognition_asset';
+  kind: 'cognition_asset' | 'role_template';
   sourceId: string;
 }
 
@@ -77,7 +77,7 @@ export function validateMemoryText(content: string): string | null {
 function validSource(value: unknown): value is MemorySource {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const source = value as Partial<MemorySource>;
-  return source.kind === 'cognition_asset'
+  return (source.kind === 'cognition_asset' || source.kind === 'role_template')
     && typeof source.sourceId === 'string'
     && SAFE_SOURCE_ID.test(source.sourceId);
 }
@@ -133,9 +133,22 @@ function parseSegment(segment: string): { record: MemoryRecord | null; corruptMe
     return { record: legacyRecord(trimmed), corruptMetadata: false };
   }
   const header = parseHeader(headerLine);
-  if (!header || !body || validateMemoryText(body) || memoryContentHash(body) !== header.contentSha256) {
-    // Never surface a malformed machine header to the model as user-authored
-    // memory. The whole segment is quarantined until a caller repairs it.
+  if (!header) {
+    // header 无法解析（非机器生成格式）→ 当作普通用户文本（可读，不隔离）
+    if (trimmed.includes(RECORD_HEADER_NAMESPACE)) {
+      // 形似机器头但字段非法 → 隔离（防止伪造头注入）
+      return { record: null, corruptMetadata: true };
+    }
+    return { record: legacyRecord(trimmed), corruptMetadata: false };
+  }
+  if (!body || validateMemoryText(body) || memoryContentHash(body) !== header.contentSha256) {
+    // 合法机器头但正文被外部修改（sha 失配）→ **降级为可读 legacy 记录并剥离机器头**，
+    // 而不是隔离。否则下一次普通写入会静默覆盖删除用户数据（数据丢失）。
+    // 代价：该条目的 sources/independent 元数据丢失（按普通记忆展示），数据本身保留。
+    if (body) {
+      return { record: legacyRecord(body), corruptMetadata: false };
+    }
+    // 正文完全为空（机器头 + 空行）→ 无内容可保留，视为损坏
     return { record: null, corruptMetadata: true };
   }
   return { record: { ...header, text: body }, corruptMetadata: false };
@@ -237,6 +250,30 @@ export function ensureSourcedMemoryRecord(
   content: string,
   charLimit: number,
 ): MemoryRecordMutation & { record?: SourcedMemoryRecord } {
+  return ensureSourcedMemoryRecordWithKind(filePath, sourceId, content, charLimit, 'cognition_asset');
+}
+
+/**
+ * 角色模板来源的全局记忆写入：候选确认时，全局记忆条目附带
+ * `{ kind: 'role_template', sourceId: <template_id> }` 来源标记。
+ * 同源同文本去重；sourceId 冲突（同源多条）拒绝。正文零污染（标记在注释头）。
+ */
+export function ensureRoleTemplateMemoryRecord(
+  filePath: string,
+  templateId: string,
+  content: string,
+  charLimit: number,
+): MemoryRecordMutation & { record?: SourcedMemoryRecord } {
+  return ensureSourcedMemoryRecordWithKind(filePath, templateId, content, charLimit, 'role_template');
+}
+
+function ensureSourcedMemoryRecordWithKind(
+  filePath: string,
+  sourceId: string,
+  content: string,
+  charLimit: number,
+  kind: MemorySource['kind'],
+): MemoryRecordMutation & { record?: SourcedMemoryRecord } {
   assertSourceId(sourceId);
   const trimmed = content.trim();
   const invalid = validateMemoryText(trimmed);
@@ -247,7 +284,7 @@ export function ensureSourcedMemoryRecord(
   if (loaded.corruptMetadata) {
     return { ok: false, error: 'corrupt_metadata', records, detachedSourceIds: [] };
   }
-  const sourced = records.filter((record) => record.sources.some((source) => source.sourceId === sourceId));
+  const sourced = records.filter((record) => record.sources.some((source) => source.kind === kind && source.sourceId === sourceId));
   if (sourced.length > 1) return { ok: false, error: 'duplicate_source', records, detachedSourceIds: [] };
   if (sourced.length === 1) {
     const record = sourced[0];
@@ -259,14 +296,14 @@ export function ensureSourcedMemoryRecord(
 
   let record = records.find((candidate) => candidate.text === trimmed);
   if (record) {
-    record.sources.push({ kind: 'cognition_asset', sourceId });
+    record.sources.push({ kind, sourceId });
   } else {
     record = {
       recordId: newRecordId(),
       text: trimmed,
       contentSha256: hash,
       independent: false,
-      sources: [{ kind: 'cognition_asset', sourceId }],
+      sources: [{ kind, sourceId }],
     };
     records.push(record);
   }
@@ -314,6 +351,48 @@ export function markMatchingRecordIndependent(
   if (!record || record.independent) return null;
   record.independent = true;
   return writeMemoryRecords(filePath, records, charLimit);
+}
+
+/**
+ * 收集某角色模板来源的全部全局记忆条目（正文文本）。卸载模板时归档用。
+ * 一条记录可能同时被多个角色引用 —— 这里按文本收集（sources 含该 role_template 的）。
+ */
+export function listRoleTemplateMemoryTexts(filePath: string, templateId: string): string[] {
+  const records = loadMemoryRecords(filePath);
+  return records
+    .filter((record) => record.sources.some((source) => source.kind === 'role_template' && source.sourceId === templateId))
+    .map((record) => record.text);
+}
+
+/**
+ * 彻底移除某角色模板来源的全局记忆条目（归档后调用）。
+ * 只删 role_template 来源（不碰 cognition_asset 等其它来源）；sources 清空且非 independent
+ * 的记录一并移除（避免残留无来源的死条目）。返回被移除的正文文本。
+ */
+export function removeRoleTemplateMemoryEntries(
+  filePath: string,
+  templateId: string,
+  charLimit: number,
+): MemoryRecordMutation & { removedTexts?: string[] } {
+  const loaded = loadMemoryRecordsWithStatus(filePath);
+  const records = loaded.records;
+  if (loaded.corruptMetadata) {
+    return { ok: false, error: 'corrupt_metadata', records, detachedSourceIds: [] };
+  }
+  const removedTexts: string[] = [];
+  const next: MemoryRecord[] = [];
+  for (const record of records) {
+    const roleSources = record.sources.filter((source) => source.kind === 'role_template' && source.sourceId === templateId);
+    if (roleSources.length) {
+      removedTexts.push(record.text);
+      const rest = record.sources.filter((source) => !(source.kind === 'role_template' && source.sourceId === templateId));
+      if (rest.length > 0 || record.independent) next.push({ ...record, sources: rest });
+      continue;
+    }
+    next.push(record);
+  }
+  const result = writeMemoryRecords(filePath, next, charLimit);
+  return result.ok ? { ...result, removedTexts } : result;
 }
 
 export function newIndependentRecord(text: string): MemoryRecord {

@@ -744,6 +744,12 @@ function renderSkillsCognitionCandidates() {
       if (action === 'accept') {
         return `<button class="btn btn-sm btn-primary" data-cognition-candidate-action="accept" data-cognition-candidate-source="${escapeHtml(c.source)}" data-cognition-candidate-id="${escapeHtml(c.sourceId)}">${escapeHtml(_cognitionText('cognition.accept', '保存'))}</button>`;
       }
+      if (action === 'modify') {
+        return `<button class="btn btn-sm" data-cognition-candidate-action="modify" data-cognition-candidate-source="${escapeHtml(c.source)}" data-cognition-candidate-id="${escapeHtml(c.sourceId)}">${escapeHtml(_cognitionText('cognition.modify', '修改后保存'))}</button>`;
+      }
+      if (action === 'defer') {
+        return `<button class="btn btn-sm" data-cognition-candidate-action="defer" data-cognition-candidate-source="${escapeHtml(c.source)}" data-cognition-candidate-id="${escapeHtml(c.sourceId)}">${escapeHtml(_cognitionText('cognition.defer', '暂缓'))}</button>`;
+      }
       if (action === 'reject') {
         return `<button class="btn btn-sm btn-danger" data-cognition-candidate-action="reject" data-cognition-candidate-source="${escapeHtml(c.source)}" data-cognition-candidate-id="${escapeHtml(c.sourceId)}">${escapeHtml(_cognitionText('cognition.reject', '拒绝'))}</button>`;
       }

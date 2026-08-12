@@ -211,6 +211,10 @@ export async function extractCognitionsFromSession(input: ExtractionInput): Prom
       prompt,
       cwd: os.tmpdir(),
       signal: controller.signal,
+      // Synthetic internal agent id — not a registered user Agent, so the
+      // chat-dispatch policy assertion does not apply. The CLI binary itself
+      // (and its local auth) is what actually runs the turn.
+      skipDispatchCheck: true,
       onEvent: () => {},
     });
   } catch (err) {

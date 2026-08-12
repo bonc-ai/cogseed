@@ -1,0 +1,34 @@
+[
+  {
+    "instance_id": "CASE-PS-001",
+    "timestamp": "2026-06",
+    "client": "联通软研院",
+    "industry": "电信/运营商",
+    "industry_standard": "TM Forum SID / Open Digital Architecture",
+    "meeting_type": "专项交流",
+    "core_scenarios": ["全场景ECS介绍"],
+    "applied_rules": ["R-TELECOM-01", "R-FIRST-VISIT-01"],
+    "context": "联通软研院技术团队，ECS全场景交流，形成V3.4版本PPT",
+    "outcome": "PPT完成，作为工业企业版本的参照模板",
+    "delta_r": "首版PPT无四层架构图，客户不理解「本体可替换」的含义；补入四层架构图后客户提问质量明显提升，开始问「ISA-95和我们现有标准的关系」",
+    "lesson_learned": "四层架构图是核心页，不能省略；行业标准本体的选型必须在PPT中明确标注，让客户看到「第二层是可替换的」",
+    "completeness": "complete",
+    "source": "ECS-联通软研院V3.4.pptx"
+  },
+  {
+    "instance_id": "CASE-PS-002",
+    "timestamp": "2026-07（预计）",
+    "client": "国能宁煤集团",
+    "industry": "能源/煤炭",
+    "industry_standard": "ISA-95 Core Enterprise Ontology",
+    "meeting_type": "首次拜访",
+    "core_scenarios": ["财务审计", "合规检查"],
+    "applied_rules": ["R-INDUSTRY-01", "R-FIRST-VISIT-01", "R-SCENARIO-AUDIT-01", "R-PAIN-PRIORITY-01"],
+    "context": "国能宁煤集团财务负责人，霍总安排，国信联系人吴永强/吴鑫蕊，原思路为招采智能化POC案例，本次改为ECS框架交流",
+    "outcome": "待填写",
+    "delta_r": "待会后填写",
+    "lesson_learned": "待填写",
+    "completeness": "incomplete",
+    "source": "张剑发起，赵丽霞负责PPT框架"
+  }
+]

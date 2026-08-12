@@ -289,3 +289,156 @@ describe('template_file_ops › project source marker on template sections', () 
     expect(groups.parseFieldValueLine(line)).toEqual(fv);
   });
 });
+
+describe('template_file_ops › uninstall / archive / reinstall-restore', () => {
+  it('uninstall archives the template file and removes the ledger row', async () => {
+    const m = await loadMod();
+    await m.installTemplateFile(UID, 'student');
+    // 写入一条字段值，验证归档时数据保留
+    const row = m.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const ref = m.buildContentRef(row.group_id, '学习背景');
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '本科', '手动');
+
+    const res = await m.uninstallTemplateFile(UID, 'student');
+    expect(res.ok).toBe(true);
+    expect(res.archive_dir).toBeTruthy();
+    // 台账移除
+    expect(m.readGroups(UID).some((g) => g.template_id === 'student')).toBe(false);
+    // 原文件已移走
+    expect(fs.existsSync(path.join(groupsDir(), 'student.md'))).toBe(false);
+    // 归档目录有旧文件
+    expect(fs.existsSync(path.join(res.archive_dir!, 'student.md'))).toBe(true);
+  });
+
+  it('reinstall with restoreData restores archived field values', async () => {
+    const m = await loadMod();
+    await m.installTemplateFile(UID, 'student');
+    const row = m.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const ref = m.buildContentRef(row.group_id, '学习背景');
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '本科', '手动');
+    await m.uninstallTemplateFile(UID, 'student');
+
+    const again = await m.installTemplateFile(UID, 'student', true);
+    expect(again.ok).toBe(true);
+    expect(again.restored_from_archive).toBe(true);
+    // 数据恢复
+    const row2 = m.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const ref2 = m.buildContentRef(row2.group_id, '学习背景');
+    const fields = await m.listFieldsByRef(UID, ref2);
+    const edu = fields.fields!.find((f) => f.name === '教育阶段');
+    expect(edu && edu.values).toEqual([{ value: '本科', source: '手动' }]);
+  });
+
+  it('reinstall without restoreData builds a fresh empty template', async () => {
+    const m = await loadMod();
+    await m.installTemplateFile(UID, 'student');
+    const row = m.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const ref = m.buildContentRef(row.group_id, '学习背景');
+    await m.appendFieldValueToRef(UID, ref, '教育阶段', '本科', '手动');
+    await m.uninstallTemplateFile(UID, 'student');
+
+    const again = await m.installTemplateFile(UID, 'student', false);
+    expect(again.ok).toBe(true);
+    expect(again.restored_from_archive).toBeFalsy();
+    const row2 = m.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const ref2 = m.buildContentRef(row2.group_id, '学习背景');
+    const fields = await m.listFieldsByRef(UID, ref2);
+    const edu = fields.fields!.find((f) => f.name === '教育阶段');
+    expect(!edu || !edu.values || edu.values.length === 0).toBe(true);
+  });
+
+  it('uninstall is idempotent for a template that is not installed', async () => {
+    const m = await loadMod();
+    const res = await m.uninstallTemplateFile(UID, 'student');
+    expect(res.ok).toBe(true);
+    expect(res.archive_dir).toBeUndefined();
+  });
+
+  it('uninstall with archiveMemory archives role-tagged global memory and removes it from USER.md', async () => {
+    const m = await loadMod();
+    const mem = await import('../../../src/main/features/memory');
+    await m.installTemplateFile(UID, 'student');
+    // 写入一条带角色标签的全局记忆
+    await mem.addRoleTemplateMemoryEntry(UID, 'user', 'student', '会主动核查工具执行过程');
+    expect(mem.countRoleTemplateMemoryEntries(UID, 'student')).toBe(1);
+
+    const res = await m.uninstallTemplateFile(UID, 'student', true);
+    expect(res.ok).toBe(true);
+    expect(res.archived_memory_count).toBe(1);
+    // 归档文件存在
+    expect(fs.existsSync(path.join(res.archive_dir!, 'student.memory.md'))).toBe(true);
+    // 全局记忆已移除
+    expect(mem.countRoleTemplateMemoryEntries(UID, 'student')).toBe(0);
+    const userMd = fs.readFileSync(path.join(tmpDir, UID, 'cloud', 'memory', 'USER.md'), 'utf8');
+    expect(userMd).not.toContain('会主动核查工具执行过程');
+  });
+
+  it('reinstall with restoreData restores archived global memory', async () => {
+    const m = await loadMod();
+    const mem = await import('../../../src/main/features/memory');
+    await m.installTemplateFile(UID, 'student');
+    await mem.addRoleTemplateMemoryEntry(UID, 'user', 'student', '会主动核查工具执行过程');
+    await m.uninstallTemplateFile(UID, 'student', true);
+
+    const again = await m.installTemplateFile(UID, 'student', true);
+    expect(again.ok).toBe(true);
+    expect(again.restored_memory_count).toBe(1);
+    expect(mem.countRoleTemplateMemoryEntries(UID, 'student')).toBe(1);
+    const userMd = fs.readFileSync(path.join(tmpDir, UID, 'cloud', 'memory', 'USER.md'), 'utf8');
+    expect(userMd).toContain('会主动核查工具执行过程');
+    expect(userMd).toContain('role_template');
+  });
+
+  it('reinstall without restoreData does not restore archived memory', async () => {
+    const m = await loadMod();
+    const mem = await import('../../../src/main/features/memory');
+    await m.installTemplateFile(UID, 'student');
+    await mem.addRoleTemplateMemoryEntry(UID, 'user', 'student', '会主动核查工具执行过程');
+    await m.uninstallTemplateFile(UID, 'student', true);
+
+    const again = await m.installTemplateFile(UID, 'student', false);
+    expect(again.ok).toBe(true);
+    expect(again.restored_memory_count).toBeFalsy();
+    expect(mem.countRoleTemplateMemoryEntries(UID, 'student')).toBe(0);
+  });
+
+  it('B-1: archive writes the memory file BEFORE removing live data (crash-safe order)', async () => {
+    const m = await loadMod();
+    const mem = await import('../../../src/main/features/memory');
+    await m.installTemplateFile(UID, 'student');
+    await mem.addRoleTemplateMemoryEntry(UID, 'user', 'student', '崩溃窗口保护条目');
+    const un = await m.uninstallTemplateFile(UID, 'student', true);
+    expect(un.ok).toBe(true);
+    expect(un.archived_memory_count).toBe(1);
+    // 归档文件先于活数据删除存在：模拟归档已写但活数据未删的窗口
+    // （重试卸载应基于"已归档文本"而非重新收集活数据 —— 本实现顺序保证归档先写）
+    const archivedText = fs.readFileSync(path.join(un.archive_dir!, 'student.memory.md'), 'utf8');
+    expect(archivedText).toContain('崩溃窗口保护条目');
+  });
+
+  it('B-2: readTemplateArchive picks the NEWEST backup when multiple exist', async () => {
+    const m = await loadMod();
+    await m.installTemplateFile(UID, 'student');
+    // 手工造两个归档目录（旧 + 新），内容不同
+    const base = groupsDir();
+    const oldDir = path.join(base, '_backup_1000000000000');
+    const newDir = path.join(base, '_backup_2000000000000');
+    fs.mkdirSync(oldDir, { recursive: true });
+    fs.mkdirSync(newDir, { recursive: true });
+    fs.writeFileSync(path.join(oldDir, 'student.md'), '# 旧数据');
+    fs.writeFileSync(path.join(newDir, 'student.md'), '# 新数据');
+    expect(m.readTemplateArchive(UID, 'student')).toContain('新数据');
+  });
+
+  it('B-2: reinstall with restoreData clears the archives afterwards', async () => {
+    const m = await loadMod();
+    await m.installTemplateFile(UID, 'student');
+    const un = await m.uninstallTemplateFile(UID, 'student', true);
+    expect(fs.existsSync(path.join(un.archive_dir!, 'student.md'))).toBe(true);
+    const again = await m.installTemplateFile(UID, 'student', true);
+    expect(again.ok).toBe(true);
+    // 归档已清理（数据已回活）
+    expect(m.templateHasArchive(UID, 'student')).toBe(false);
+    expect(m.templateHasMemoryArchive(UID, 'student')).toBe(false);
+  });
+});

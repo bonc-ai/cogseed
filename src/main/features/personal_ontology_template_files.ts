@@ -19,6 +19,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { userOntologyGroupsDir } from '../paths';
 import { writeTextAtomicSync, safeId, nowIso, genId12 } from '../storage';
+import { collectRoleTemplateMemoryEntries, removeRoleTemplateMemoryFromLive, restoreRoleTemplateMemoryEntries } from './memory';
 import { getRoleTemplate, listRoleTemplates, type PresetGroup } from './role_templates';
 import {
   parseFieldValueLine,
@@ -53,6 +54,8 @@ export { readGroups };
 const log = createLogger('personal-ontology-template-files');
 
 const MAX_FILE_BYTES = 200 * 1024 * 1024;
+/** 角色模板安装上限：每人最多 3 个（产品规则，防去向面板/空间选择过载）。 */
+export const MAX_INSTALLED_TEMPLATES = 3;
 
 /** 复合 id 分隔符：`<group_id>::<分节名>`。普通组 id 不含此分隔符。 */
 export const SECTION_REF_SEP = '::';
@@ -214,6 +217,10 @@ export interface InstallTemplateFileResult {
   already_installed?: boolean;
   created?: GroupMeta[];
   conflict_groups?: Array<{ group_id: string; title: string }>;
+  /** 重装时是否从归档恢复了旧数据（有旧数据 → true）。 */
+  restored_from_archive?: boolean;
+  /** 随模板恢复的全局记忆条目数。 */
+  restored_memory_count?: number;
   error?: string;
 }
 
@@ -221,8 +228,14 @@ export interface InstallTemplateFileResult {
  * 安装角色模板：生成单个 `<template_id>.md`（全部分节 + 字段空坑落盘）+ 台账
  * 一行（title = 模板名，rel_path = 模板文件）。幂等：同 template_id 已装 →
  * already_installed（不覆盖文件）。与普通组同名 → conflict_groups 警告。
+ * `restoreData`：重装时若归档目录有旧文件 → 恢复旧数据（字段值/流水保留），
+ * 否则新建空模板。卸载走 uninstallTemplateFile（归档保留）。
  */
-export async function installTemplateFile(uid: string, templateId: string): Promise<InstallTemplateFileResult> {
+export async function installTemplateFile(
+  uid: string,
+  templateId: string,
+  restoreData = false,
+): Promise<InstallTemplateFileResult> {
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
   const template = getRoleTemplate(templateId);
   if (!template) return { ok: false, error: 'template not found' };
@@ -237,22 +250,50 @@ export async function installTemplateFile(uid: string, templateId: string): Prom
     return { ok: true, already_installed: true, conflict_groups: conflictGroups };
   }
 
-  const content: TemplateFileContent = {
-    title: template.name,
-    template_id: templateId,
-    version: template.version,
-    installed_at: nowIso(),
-    sections: template.preset_groups.map((p) => ({
-      title: p.title,
-      fields: Object.fromEntries(p.fields.map((f) => [f.name, [] as FieldValue[]])),
-      flowEntries: [],
-    })),
-  };
+  // 角色模板上限：每人最多安装 3 个（产品规则，防去向面板/空间选择过载）。
+  const installedCount = groups.filter((g) => g.template_id).length;
+  if (installedCount >= MAX_INSTALLED_TEMPLATES) {
+    return { ok: false, error: 'template_limit_reached', conflict_groups: conflictGroups };
+  }
 
   const abs = templateFileAbsPath(uid, templateId);
+  let restored_from_archive = false;
+  let restored_memory_count = 0;
   try {
     fs.mkdirSync(path.dirname(abs), { recursive: true });
-    writeTextAtomicSync(abs, serializeTemplateContent(content));
+    if (restoreData) {
+      const archived = readTemplateArchive(uid, templateId);
+      if (archived != null) {
+        writeTextAtomicSync(abs, archived); // 恢复旧数据（字段值/流水原样）
+        restored_from_archive = true;
+      }
+    }
+    if (!restored_from_archive) {
+      const content: TemplateFileContent = {
+        title: template.name,
+        template_id: templateId,
+        version: template.version,
+        installed_at: nowIso(),
+        sections: template.preset_groups.map((p) => ({
+          title: p.title,
+          fields: Object.fromEntries(p.fields.map((f) => [f.name, [] as FieldValue[]])),
+          flowEntries: [],
+        })),
+      };
+      writeTextAtomicSync(abs, serializeTemplateContent(content));
+    }
+    // 恢复随模板归档的全局记忆（.memory.md）—— 按实际成功数上报（B-3：空间满时
+    // 部分恢复失败，不能按归档长度谎报）。
+    if (restoreData) {
+      const memArchived = readTemplateMemoryArchive(uid, templateId);
+      if (memArchived) {
+        restored_memory_count = restoreRoleTemplateMemoryEntries(uid, templateId, memArchived);
+      }
+    }
+    // 恢复成功后清理该模板的归档（数据已回活；B-2：避免旧归档残留/隐私驻留）
+    if (restored_from_archive || restored_memory_count > 0) {
+      clearTemplateArchives(uid, templateId);
+    }
   } catch (err) {
     return { ok: false, error: (err as Error).message };
   }
@@ -271,8 +312,165 @@ export async function installTemplateFile(uid: string, templateId: string): Prom
   groups.push(meta);
   writeGroups(uid, groups);
   notifyGroupUpserted(uid, relPath);
-  log.info('ontology template file installed', { uid, templateId });
-  return { ok: true, created: [meta], conflict_groups: conflictGroups };
+  log.info('ontology template file installed', { uid, templateId, restored_from_archive, restored_memory_count });
+  return { ok: true, created: [meta], conflict_groups: conflictGroups, restored_from_archive, restored_memory_count };
+}
+
+// ── 卸载 / 归档 ─────────────────────────────────────────────────────────────
+
+export interface UninstallTemplateFileResult {
+  ok: boolean;
+  error?: string;
+  /** 归档目录绝对路径（数据保留位置，UI 展示给用户）。 */
+  archive_dir?: string;
+  /** 随模板一起归档的全局记忆条目数。 */
+  archived_memory_count?: number;
+}
+
+/** 模板文件归档目录：`.personal_ontology_groups/_backup_<ts>/`（与既有备份先例同构）。 */
+export function templateArchiveDir(uid: string): string {
+  return path.join(userOntologyGroupsDir(uid), `_backup_${Date.now()}`);
+}
+
+/**
+ * 卸载角色模板：把 `<template_id>.md` 整体移到归档目录（**数据保留**，可重装
+ * 恢复），并从台账移除该组。`archiveMemory` 时，该角色来源的全局记忆条目
+ * （USER.md/MEMORY.md 中带 role_template 标签的）一并归档到
+ * `<template_id>.memory.md` 并从全局记忆移除。幂等：模板未安装 → ok（无操作）。
+ */
+export async function uninstallTemplateFile(
+  uid: string,
+  templateId: string,
+  archiveMemory = false,
+): Promise<UninstallTemplateFileResult> {
+  if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
+  const groups = readGroups(uid);
+  const row = groups.find((g) => g.template_id === templateId);
+  if (!row) return { ok: true }; // 未安装 → 无操作
+
+  const abs = templateFileAbsPath(uid, templateId);
+  let archive_dir: string | undefined;
+  let archived_memory_count = 0;
+  try {
+    if (fs.existsSync(abs) || archiveMemory) {
+      archive_dir = templateArchiveDir(uid);
+      fs.mkdirSync(archive_dir, { recursive: true });
+      if (fs.existsSync(abs)) {
+        fs.renameSync(abs, path.join(archive_dir, `${templateId}.md`));
+      }
+      if (archiveMemory) {
+        // 顺序保证（防崩溃窗口数据丢失）：先收集 → 先写归档文件 → 再删活数据。
+        // 若在"归档已写、活数据未删"之间崩溃 → 重试安全（重装恢复可去重）；
+        // 若反过来（先删后写）崩溃 → 数据永久丢失。
+        const texts = collectRoleTemplateMemoryEntries(uid, templateId);
+        const all = [...(texts.user || []), ...(texts.memory || [])];
+        if (all.length) {
+          // B-4 分层：user/memory 分区头，恢复时按原层级还原（不再全部降级为 user）
+          const parts: string[] = [];
+          if (texts.user.length) parts.push(`# user\n${texts.user.join('\n§\n')}`);
+          if (texts.memory.length) parts.push(`# memory\n${texts.memory.join('\n§\n')}`);
+          writeTextAtomicSync(path.join(archive_dir, `${templateId}.memory.md`), parts.join('\n\n'));
+          const removed = removeRoleTemplateMemoryFromLive(uid, templateId);
+          if (!removed.userOk || !removed.memoryOk) {
+            log.warn('uninstall: global-memory removal failed after archive write', { uid, templateId, removed });
+            // 归档已写，活数据可能残留 —— 不视为失败（数据双份可恢复），但记录
+          }
+          archived_memory_count = all.length;
+        }
+      }
+    }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+
+  writeGroups(uid, groups.filter((g) => g.group_id !== row.group_id));
+  log.info('ontology template file uninstalled (archived)', {
+    uid, templateId,
+    // 归档路径脱敏：只记相对名（_backup_<ts>），不落绝对路径（含 uid 数据根）
+    archive_base: archive_dir ? path.basename(archive_dir) : undefined,
+    archived_memory_count,
+  });
+  return { ok: true, archive_dir, archived_memory_count };
+}
+
+/** 归档目录里是否还有该模板的旧数据（重装时决定是否提供「恢复原数据」选项）。 */
+export function templateHasArchive(uid: string, templateId: string): boolean {
+  return listArchiveDirs(uid).some((dir) => fs.existsSync(path.join(dir, `${templateId}.md`)));
+}
+
+/** 全部 `_backup_<ts>` 归档目录（绝对路径），按时间戳**从新到旧**排序。 */
+function listArchiveDirs(uid: string): string[] {
+  try {
+    const base = userOntologyGroupsDir(uid);
+    if (!fs.existsSync(base)) return [];
+    return fs.readdirSync(base, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && /^_backup_\d+$/.test(entry.name))
+      .map((entry) => path.join(base, entry.name))
+      .sort((a, b) => {
+        const ta = Number(path.basename(a).replace('_backup_', ''));
+        const tb = Number(path.basename(b).replace('_backup_', ''));
+        return tb - ta; // 新的在前
+      });
+  } catch {
+    return [];
+  }
+}
+
+/** 从归档目录读回模板旧数据；无归档 → null。按时间戳取最新一份。 */
+export function readTemplateArchive(uid: string, templateId: string): string | null {
+  for (const dir of listArchiveDirs(uid)) {
+    const p = path.join(dir, `${templateId}.md`);
+    if (fs.existsSync(p)) {
+      try { return fs.readFileSync(p, 'utf8'); } catch { /* 继续找下一份 */ }
+    }
+  }
+  return null;
+}
+
+/**
+ * 从归档目录读回该模板随附的全局记忆归档（`.memory.md`）。
+ * 格式（B-4 起）：`# user` / `# memory` 分区头 + § 分隔正文；旧格式（无分区头）
+ * 全部按 user 处理（候选确认时 user 级是默认去向）。无归档 → null。
+ */
+export function readTemplateMemoryArchive(
+  uid: string,
+  templateId: string,
+): { user: string[]; memory: string[] } | null {
+  for (const dir of listArchiveDirs(uid)) {
+    const p = path.join(dir, `${templateId}.memory.md`);
+    if (fs.existsSync(p)) {
+      try {
+        const raw = fs.readFileSync(p, 'utf8').trim();
+        if (!raw) return { user: [], memory: [] };
+        const user: string[] = [];
+        const memory: string[] = [];
+        let current: string[] | null = null;
+        for (const line of raw.split(/\r?\n/)) {
+          if (line.trim() === '# user') { current = user; continue; }
+          if (line.trim() === '# memory') { current = memory; continue; }
+          if (current === null) current = user; // 旧格式：无分区头 → user
+          current.push(line);
+        }
+        const split = (arr: string[]) => arr.join('\n').split(/\n?§\n?/).map((s) => s.trim()).filter(Boolean);
+        return { user: split(user), memory: split(memory) };
+      } catch { /* 继续找下一份 */ }
+    }
+  }
+  return null;
+}
+
+/** 归档目录里是否还有该模板的全局记忆归档（决定重装时是否提示恢复记忆）。 */
+export function templateHasMemoryArchive(uid: string, templateId: string): boolean {
+  return listArchiveDirs(uid).some((dir) => fs.existsSync(path.join(dir, `${templateId}.memory.md`)));
+}
+
+/** 重装恢复成功后清理该模板的所有归档（数据已回活，避免旧归档残留/隐私驻留）。 */
+export function clearTemplateArchives(uid: string, templateId: string): void {
+  for (const dir of listArchiveDirs(uid)) {
+    for (const name of [`${templateId}.md`, `${templateId}.memory.md`]) {
+      try { fs.rmSync(path.join(dir, name), { force: true }); } catch { /* 忽略 */ }
+    }
+  }
 }
 
 // ── 模板文件"读改写"骨架（与 groups.ts 的 mutateGroupContent 对应）──────────
@@ -809,6 +1007,8 @@ export interface TemplateStatus {
   group_id?: string;
   /** 已安装时从模板文件读的分节（含空坑与已填值）。 */
   sections?: TemplateStatusSection[];
+  /** 模板捆绑资源（角色空间 = 本体模板 + skill + task agent 打通的数据源）。 */
+  bundle?: { skill_ids: string[]; agent_ids: string[] };
 }
 
 /**
@@ -839,6 +1039,7 @@ export async function listTemplateStatus(uid: string): Promise<TemplateStatus[]>
       installed_version: row?.template_version,
       group_id: row?.group_id,
       sections,
+      bundle: t.bundle ? { skill_ids: t.bundle.skill_ids || [], agent_ids: t.bundle.agent_ids || [] } : undefined,
     };
   });
 }

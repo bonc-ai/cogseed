@@ -3,6 +3,18 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+// listSpaces 内部动态 import('./agents')/('./skills') 构造真实有效集合；
+// 用可变 fixture 模拟「当前用户可见资源」，验证失效数非空集合假阳性（P3394 回归）。
+const visibleSkillIds = vi.hoisted(() => new Set<string>());
+const visibleAgentIds = vi.hoisted(() => new Set<string>());
+
+vi.mock('../../../src/main/features/skills', () => ({
+  listSkills: async () => Array.from(visibleSkillIds).map((id) => ({ id, name: id })),
+}));
+vi.mock('../../../src/main/features/agents', () => ({
+  listAgents: async () => Array.from(visibleAgentIds).map((agent_id) => ({ agent_id, name: agent_id })),
+}));
+
 // 纯函数直接静态导入（无 WS_ROOT 依赖）
 import {
   resolveSpaceResources,
@@ -375,5 +387,57 @@ describe('spaces › CRUD', () => {
     // listSpaces 跳过坏文件
     const list = await spaces.listSpaces(TEST_UID);
     expect(list.length).toBe(0);
+  });
+});
+
+describe('spaces › listSpaces 失效数（真实有效集合，P3394 假阳性回归）', () => {
+  // student bundle: 5 cogseed skills + 3 cogseed agents
+  const BUNDLE_SKILLS = ['0e847fc8685e', '3def7f0eb34a', '4a8054f512e9', '4bb1813c8335', 'aef5bf07573f'];
+  const BUNDLE_AGENTS = ['3bf780cd23be', '54f102b6c1ee', '5a5fe1598ed0'];
+
+  beforeEach(() => {
+    visibleSkillIds.clear();
+    visibleAgentIds.clear();
+  });
+
+  it('引用全部有效 → invalid_count = 0（空集合假阳性回归）', async () => {
+    BUNDLE_SKILLS.forEach((id) => visibleSkillIds.add(id));
+    BUNDLE_AGENTS.forEach((id) => visibleAgentIds.add(id));
+    visibleSkillIds.add('sk-a');
+    visibleAgentIds.add('ag-1');
+
+    const spaces = await loadSpaces();
+    const created = await spaces.createSpace(TEST_UID, { name: '有效空间', template_id: 'student' });
+    if (!created.ok) throw new Error('create failed');
+    await spaces.addSpaceResource(TEST_UID, created.space.space_id, 'skill', 'sk-a');
+    await spaces.addSpaceResource(TEST_UID, created.space.space_id, 'agent', 'ag-1');
+
+    const list = await spaces.listSpaces(TEST_UID);
+    const me = list.find((s) => s.space_id === created.space.space_id);
+    expect(me).toBeDefined();
+    expect(me?.skill_count).toBe(6); // bundle 5 + extra 1
+    expect(me?.agent_count).toBe(4); // bundle 3 + extra 1
+    expect(me?.invalid_count).toBe(0); // 全有效 → 不误报失效
+  });
+
+  it('失效引用计入 invalid_count，有效引用不误报', async () => {
+    BUNDLE_SKILLS.forEach((id) => visibleSkillIds.add(id));
+    BUNDLE_AGENTS.forEach((id) => visibleAgentIds.add(id));
+    // sk-a 有效、__gone__ 无效
+    visibleSkillIds.add('sk-a');
+
+    const spaces = await loadSpaces();
+    const created = await spaces.createSpace(TEST_UID, { name: '混合空间', template_id: 'student' });
+    if (!created.ok) throw new Error('create failed');
+    await spaces.addSpaceResource(TEST_UID, created.space.space_id, 'skill', 'sk-a');
+    await spaces.addSpaceResource(TEST_UID, created.space.space_id, 'skill', '__gone__');
+    await spaces.addSpaceResource(TEST_UID, created.space.space_id, 'agent', '__gone_agent__');
+
+    const list = await spaces.listSpaces(TEST_UID);
+    const me = list.find((s) => s.space_id === created.space.space_id);
+    expect(me).toBeDefined();
+    expect(me?.skill_count).toBe(7); // bundle 5 + extra 2（含失效）
+    expect(me?.agent_count).toBe(4); // bundle 3 + extra 1（含失效）
+    expect(me?.invalid_count).toBe(2); // 仅 2 个真失效
   });
 });

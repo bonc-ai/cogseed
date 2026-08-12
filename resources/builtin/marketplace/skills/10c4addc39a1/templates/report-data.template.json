@@ -1,0 +1,193 @@
+{
+  "meta": {
+    "volume_number": "",
+    "domain_name_cn": "",
+    "domain_name_en": "",
+    "report_version": "v0.1",
+    "research_date": "YYYY-MM-DD",
+    "status": "candidate",
+    "title": "",
+    "subtitle": "Domain Ontology Landscape and Alignment Report",
+    "deliverable_for": "总体架构负责人",
+    "scope_statement": "",
+    "output_filename": "report.docx",
+    "confidentiality": "内部研究候选稿",
+    "research_note": "",
+    "keywords": []
+  },
+  "executive_summary": {
+    "paragraphs": [
+      {
+        "text": "",
+        "source_refs": []
+      },
+      {
+        "text": "",
+        "source_refs": []
+      },
+      {
+        "text": "",
+        "source_refs": []
+      }
+    ],
+    "core_conclusions": [
+      {
+        "title": "",
+        "text": "",
+        "source_refs": []
+      },
+      {
+        "title": "",
+        "text": "",
+        "source_refs": []
+      },
+      {
+        "title": "",
+        "text": "",
+        "source_refs": []
+      }
+    ]
+  },
+  "policy_context": {
+    "task_objective": {
+      "text": "",
+      "source_refs": []
+    },
+    "policy_scope": [
+      {
+        "text": "",
+        "source_refs": []
+      }
+    ],
+    "included_scope": [],
+    "excluded_scope": [],
+    "boundary_clarifications": []
+  },
+  "methodology": {
+    "shared_upper_ontology": [
+      "Party",
+      "Role",
+      "Agent",
+      "Goal",
+      "Situation",
+      "Capability",
+      "Service/Product",
+      "Process/Case",
+      "Task/Action",
+      "Resource/Asset",
+      "Information Object",
+      "Event",
+      "Decision",
+      "Policy/Rule/Constraint",
+      "Agreement/Commitment",
+      "Observation/Evidence",
+      "Risk/Control",
+      "Outcome",
+      "Measure/KPI",
+      "Episode/Learning",
+      "System/Interface"
+    ],
+    "four_layers": [
+      {
+        "name": "领域现实层",
+        "description": "",
+        "examples": []
+      },
+      {
+        "name": "运营语义层",
+        "description": "",
+        "examples": []
+      },
+      {
+        "name": "系统表示层",
+        "description": "",
+        "examples": []
+      },
+      {
+        "name": "认知语义层",
+        "description": "",
+        "examples": []
+      }
+    ],
+    "evidence_levels": [
+      {
+        "code": "P",
+        "meaning": "政策/政府",
+        "usage": "正式范围与约束"
+      },
+      {
+        "code": "S",
+        "meaning": "官方标准/规范",
+        "usage": "外部对标"
+      },
+      {
+        "code": "I",
+        "meaning": "内部材料",
+        "usage": "企业或项目实践"
+      },
+      {
+        "code": "E",
+        "meaning": "专家确认",
+        "usage": "规则与边界"
+      },
+      {
+        "code": "A",
+        "meaning": "分析建议",
+        "usage": "架构推断"
+      }
+    ],
+    "common_flow": [
+      "Situation",
+      "Goal/Policy",
+      "Service/Product",
+      "Process/Case",
+      "Task/Decision/Action",
+      "Event/Evidence",
+      "Outcome/KPI",
+      "Episode/Learning"
+    ]
+  },
+  "modules": [],
+  "stakeholders": [],
+  "systems": [],
+  "concepts": [],
+  "semantic_confusions": [],
+  "relations": [],
+  "processes": [],
+  "events": [],
+  "decisions": [],
+  "rules_constraints": [],
+  "risk_controls": [],
+  "kpis": [],
+  "standards": [],
+  "upper_mappings": [],
+  "agent_governance": {
+    "objects": [],
+    "autonomy_levels": [],
+    "human_final_decisions": [],
+    "manifest_fields": []
+  },
+  "closed_loops": [],
+  "kstar_mapping": [],
+  "architecture_boundaries": [],
+  "implementation_priorities": [],
+  "review_questions": [],
+  "workbook_fields": [],
+  "workbook_examples": [],
+  "sources": [],
+  "material_treatment": [],
+  "research_assurance": {
+    "gate_status": "pending",
+    "research_plan_id": "pending",
+    "research_ledger_id": "pending",
+    "research_date": "YYYY-MM-DD",
+    "queries_executed": 0,
+    "opened_sources": 0,
+    "verified_primary_sources": 0,
+    "official_policy_sources": 0,
+    "official_standard_sources": 0,
+    "unresolved_conflicts": 1,
+    "gate_report_ref": "generated-at-runtime",
+    "notes": "Do not mark passed manually; scripts/validate_research_bundle.py computes the gate."
+  }
+}

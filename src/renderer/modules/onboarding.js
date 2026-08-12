@@ -277,7 +277,7 @@ async function _csLoadClaudeSessions(agentType) {
       }) : '';
       const projectLabel = s.projectPath ? `<small>${_csEsc(s.projectPath)}</small>` : '';
       return `
-        <div class="cs-src" data-session-id="${_csEsc(s.filePath)}">
+        <div class="cs-src" data-session-id="${_csEsc(s.sessionId)}" data-session-path="${_csEsc(s.filePath)}" data-session-title="${_csEsc(s.firstMessage || '')}">
           <input type="checkbox" />
           <div class="s-ico">${CS_TERMINAL_SVG}</div>
           <div>
@@ -288,7 +288,11 @@ async function _csLoadClaudeSessions(agentType) {
         </div>`;
     }).join('');
 
-    container.innerHTML = sessionRows;
+    container.innerHTML = `${sessionRows}
+      <div class="cs-actions" style="margin-top:10px">
+        <button class="cs-btn ghost" id="cs-import-selected">导入所选到最近对话</button>
+        <small id="cs-import-status" style="color:var(--cs-muted)"></small>
+      </div>`;
 
     // Wire up checkbox interactions.
     container.querySelectorAll('.cs-src').forEach((row) => {
@@ -301,6 +305,45 @@ async function _csLoadClaudeSessions(agentType) {
       checkbox.addEventListener('change', () => {
         row.classList.toggle('selected', checkbox.checked);
       });
+    });
+
+    // Import checked sessions into the recent-conversation list.
+    const importBtn = container.querySelector('#cs-import-selected');
+    const importStatus = container.querySelector('#cs-import-status');
+    importBtn?.addEventListener('click', async () => {
+      const picked = Array.from(container.querySelectorAll('.cs-src input[type="checkbox"]:checked'))
+        .map((cb) => {
+          const row = cb.closest('.cs-src');
+          return {
+            sessionId: row?.dataset.sessionId || '',
+            filePath: row?.dataset.sessionPath || '',
+            firstMessage: row?.dataset.sessionTitle || '',
+          };
+        })
+        .filter((s) => s.sessionId && s.filePath);
+      if (!picked.length) {
+        if (importStatus) importStatus.textContent = '请先勾选要导入的会话';
+        return;
+      }
+      if (importBtn) importBtn.disabled = true;
+      if (importStatus) importStatus.textContent = `正在导入 ${picked.length} 个会话…`;
+      try {
+        const res = await window.orkas.invoke('localAgents.importClaudeSessions', { sessions: picked });
+        if (res && res.ok) {
+          if (importStatus) {
+            importStatus.textContent = `已导入 ${res.imported} 个会话到最近对话${res.errors.length ? `，${res.errors.length} 个失败` : ''}。`;
+          }
+          if (res.imported > 0 && typeof loadConversations === 'function') loadConversations();
+        } else {
+          if (importStatus) importStatus.textContent = `导入失败：${(res && res.error) || '未知错误'}`;
+        }
+      } catch (err) {
+        const msg = (err && err.message) || String(err);
+        if (importStatus) importStatus.textContent = `导入失败：${msg}`;
+        _obLog.warn('import claude sessions failed', { error: msg });
+      } finally {
+        if (importBtn) importBtn.disabled = false;
+      }
     });
 
     _obLog.info('loaded Claude sessions', { count: sessions.length });
@@ -412,8 +455,10 @@ async function _csExtractCognitions() {
     if (agentBox) {
       agentBox.querySelectorAll('.cs-src input[type="checkbox"]:checked').forEach((cb) => {
         const row = cb.closest('.cs-src');
-        const sessionId = row ? row.dataset.sessionId : null;
-        if (sessionId) selectedSessions.push(sessionId);
+        // Claude sessions carry an explicit file path (data-session-path);
+        // ACP sessions historically stuffed the path into data-session-id.
+        const filePath = row ? (row.dataset.sessionPath || row.dataset.sessionId) : null;
+        if (filePath) selectedSessions.push(filePath);
       });
     }
 

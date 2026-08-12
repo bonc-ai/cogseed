@@ -21,7 +21,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { userLocalRoot, userOntologyGroupsDir } from '../paths';
 import { writeTextAtomicSync, safeId, nowIso, readJsonSync } from '../storage';
-import { addEntry as addMemoryEntry } from './memory';
+import { addEntry as addMemoryEntry, addRoleTemplateMemoryEntry } from './memory';
 import { listGroups } from './personal_ontology_groups';
 import { getRoleTemplate } from './role_templates';
 import { routeCandidateToField } from './personal_ontology_router';
@@ -499,6 +499,7 @@ async function writeCandidateToDestinations(
   candidate: CandidateUpdate,
   dest: ConfirmDestinations,
   source = '候选',
+  userPickedRole = false,
 ): Promise<ConfirmCandidateResult> {
   const text = (candidate.memory_text || candidate.summary || '').trim();
   if (!text) return { ok: false, error: 'candidate has no memory text' };
@@ -511,7 +512,19 @@ async function writeCandidateToDestinations(
 
   if (wantsGlobal) {
     const target = candidate.memory_scope === 'shared' ? 'memory' : 'user';
-    const res = addMemoryEntry(uid, target, text);
+    // 角色标签：只有**用户显式选了角色模板**（去向含模板组）时，全局记忆条目才附带
+    // 来源标记；LLM 自动加入的模板去向（userPickedRole=false）不打标签 —— 否则
+    // 用户从未关联的角色会在卸载时连带归档/删除其全局记忆（A-4）。
+    let roleTemplateId: string | undefined;
+    if (userPickedRole) {
+      for (const gid of groupIds) {
+        const tpl = await resolveTemplateGroupSections(uid, gid.split('::')[0]);
+        if (tpl) { roleTemplateId = tpl.template_id; break; }
+      }
+    }
+    const res = roleTemplateId
+      ? addRoleTemplateMemoryEntry(uid, target, roleTemplateId, text)
+      : addMemoryEntry(uid, target, text);
     result.globalMemory = { ok: res.ok, ...(res.error ? { error: res.error } : {}) };
     if (res.ok) anySucceeded = true;
     else log.warn('candidate global-memory write blocked', { uid, candidateId: candidate.candidate_id, error: res.error });
@@ -625,16 +638,22 @@ async function resolveLlmRoute(
   candidate: CandidateUpdate,
   dest: ConfirmDestinations,
   opts: ConfirmCandidateOptions,
-): Promise<{ effectiveDest: ConfirmDestinations; source: string }> {
-  if (!opts.routeWithLlm || dest.targetField) return { effectiveDest: dest, source: '候选' };
+): Promise<{ effectiveDest: ConfirmDestinations; source: string; userPickedRole: boolean }> {
+  // 用户是否显式选过角色模板（原始 dest 含模板组）。LLM 分支 3 自动加入的模板
+  // 不算 —— 那只是"自动归位"，用户没有主动关联该角色。
+  const userPickedRole = (dest.toGroupIds || []).some((id) => {
+    if (id.includes('::')) return false; // 复合 id 是分节，不是模板组本身
+    return true;
+  });
+  if (!opts.routeWithLlm || dest.targetField) return { effectiveDest: dest, source: '候选', userPickedRole };
   const text = (candidate.memory_text || candidate.summary || '').trim();
-  if (!text) return { effectiveDest: dest, source: '候选' };
+  if (!text) return { effectiveDest: dest, source: '候选', userPickedRole };
 
   const catalog = await listTemplateFileCatalog(uid);
-  if (!catalog.length) return { effectiveDest: dest, source: '候选' };
+  if (!catalog.length) return { effectiveDest: dest, source: '候选', userPickedRole };
   const decision = await routeCandidateToField(uid, text, catalog);
   if (decision.action !== 'field' || !decision.group_title || !decision.field_name) {
-    return { effectiveDest: dest, source: '候选' }; // flow → 维持原 dest（流水区）
+    return { effectiveDest: dest, source: '候选', userPickedRole }; // flow → 维持原 dest（流水区）
   }
 
   const dest2: ConfirmDestinations = { ...dest, toGroupIds: dest.toGroupIds ? [...dest.toGroupIds] : [] };
@@ -646,7 +665,7 @@ async function resolveLlmRoute(
     const entry = catalog.find((e) => e.group_id === groupId);
     if (entry && entry.sections.some((s) => s.title === section && s.fields.includes(decision.field_name))) {
       dest2.targetField = decision.field_name;
-      return { effectiveDest: dest2, source: '智能' };
+      return { effectiveDest: dest2, source: '智能', userPickedRole };
     }
   }
   // 2) 用户已选普通组（title 匹配）→ 建议字段，最终由 listFieldsByRef 预检查兜底
@@ -655,7 +674,21 @@ async function resolveLlmRoute(
     groups.some((g) => g.group_id === id && !g.template_id && g.title === decision.group_title),
   )) {
     dest2.targetField = decision.field_name;
-    return { effectiveDest: dest2, source: '智能' };
+    return { effectiveDest: dest2, source: '智能', userPickedRole };
+  }
+  // 2b) 用户只选了角色（模板组纯 group_id，未展开到分节）→ 在该角色模板内找分节，
+  //     命中则把去向收窄到该分节复合 id + 目标字段（LLM 自动归位）。
+  for (const id of dest2.toGroupIds) {
+    if (id.includes('::')) continue; // 已是复合 id，走上面的分节分支
+    const entry = catalog.find((e) => e.group_id === id);
+    if (!entry) continue;
+    const sec = entry.sections.find((s) => s.title === decision.group_title && s.fields.includes(decision.field_name));
+    if (sec) {
+      dest2.toGroupIds = dest2.toGroupIds.filter((x) => x !== id);
+      dest2.toGroupIds.push(buildContentRef(id, sec.title));
+      dest2.targetField = decision.field_name;
+      return { effectiveDest: dest2, source: '智能', userPickedRole };
+    }
   }
   // 3) 用户没选组 → 找第一个含该分节.字段的模板文件，自动加入（复合 id）
   if (!dest2.toGroupIds.length) {
@@ -665,10 +698,10 @@ async function resolveLlmRoute(
     if (hit) {
       dest2.toGroupIds.push(buildContentRef(hit.group_id, decision.group_title));
       dest2.targetField = decision.field_name;
-      return { effectiveDest: dest2, source: '智能' };
+      return { effectiveDest: dest2, source: '智能', userPickedRole: false };
     }
   }
-  return { effectiveDest: dest, source: '候选' };
+  return { effectiveDest: dest, source: '候选', userPickedRole };
 }
 
 /**
@@ -692,8 +725,8 @@ export async function confirmCandidate(
   }
 
   const candidate = candidates[idx];
-  const { effectiveDest, source } = await resolveLlmRoute(uid, candidate, dest, opts);
-  const result = await writeCandidateToDestinations(uid, candidate, effectiveDest, source);
+  const { effectiveDest, source, userPickedRole } = await resolveLlmRoute(uid, candidate, dest, opts);
+  const result = await writeCandidateToDestinations(uid, candidate, effectiveDest, source, userPickedRole);
   if (!result.ok) return result;
 
   candidates.splice(idx, 1);
@@ -767,8 +800,8 @@ export async function confirmCandidates(
 
   for (const c of candidates) {
     if (!idSet.has(c.candidate_id)) { remaining.push(c); continue; }
-    const { effectiveDest, source } = await resolveLlmRoute(uid, c, dest, opts);
-    const res = await writeCandidateToDestinations(uid, c, effectiveDest, source);
+    const { effectiveDest, source, userPickedRole } = await resolveLlmRoute(uid, c, dest, opts);
+    const res = await writeCandidateToDestinations(uid, c, effectiveDest, source, userPickedRole);
     results[c.candidate_id] = res;
     if (res.ok) confirmedCount++;
     else { remaining.push(c); failedIds.push(c.candidate_id); }

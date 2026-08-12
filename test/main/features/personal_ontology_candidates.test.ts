@@ -44,6 +44,10 @@ async function loadGroups() {
   return import('../../../src/main/features/personal_ontology_groups');
 }
 
+async function loadTemplateMod() {
+  return import('../../../src/main/features/personal_ontology_template_files');
+}
+
 function candidatesMdPath(): string {
   return path.join(tmpDir, UID, 'local', 'ontology_candidates', 'candidates.md');
 }
@@ -175,6 +179,59 @@ describe('personal_ontology_candidates › confirmCandidate writes to real memor
     expect(fs.existsSync(sharedMemoryPath())).toBe(true);
     expect(fs.readFileSync(sharedMemoryPath(), 'utf8')).toContain('规则：API 返回空结果时显示空状态');
     expect(fs.existsSync(userProfilePath())).toBe(false);
+  });
+
+  it('confirming with a role template destination tags the global-memory entry with the template id', async () => {
+    const poc = await loadModule();
+    const file = candidatesMdPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, poc.serializeCandidatesMarkdown([{
+      candidate_id: 'cand-role-1',
+      kind: 'preference',
+      confidence: 'high',
+      summary: '喜欢研究',
+      memory_scope: 'user',
+      memory_text: '喜欢阅读研究方法论文献',
+      source_memory_refs: [],
+    }]));
+    // 安装一个模板并拿到其模板组 group_id
+    const tf = await loadTemplateMod();
+    const inst = await tf.installTemplateFile(UID, 'student');
+    const groupId = inst.created![0].group_id;
+
+    const res = await poc.confirmCandidate(UID, 'cand-role-1', { toGroupIds: [groupId] });
+    expect(res.ok).toBe(true);
+
+    const userMd = fs.readFileSync(userProfilePath(), 'utf8');
+    // 正文零污染：文本照常出现
+    expect(userMd).toContain('喜欢阅读研究方法论文献');
+    // 元数据头带 role_template 来源标记
+    expect(userMd).toMatch(/mate-agent-memory:v1.*role_template.*student/);
+    // 不带标签的裸条目不出现（这条是带标签写入的）
+    expect(userMd).toContain('"kind":"role_template"');
+    expect(userMd).toContain('"sourceId":"student"');
+  });
+
+  it('confirming without a role destination writes a plain (untagged) global-memory entry', async () => {
+    const poc = await loadModule();
+    const file = candidatesMdPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, poc.serializeCandidatesMarkdown([{
+      candidate_id: 'cand-plain-1',
+      kind: 'preference',
+      confidence: 'high',
+      summary: '喜欢打篮球',
+      memory_scope: 'user',
+      memory_text: '平时喜欢打篮球',
+      source_memory_refs: [],
+    }]));
+
+    const res = await poc.confirmCandidate(UID, 'cand-plain-1');
+    expect(res.ok).toBe(true);
+
+    const userMd = fs.readFileSync(userProfilePath(), 'utf8');
+    expect(userMd).toContain('平时喜欢打篮球');
+    expect(userMd).not.toContain('role_template');
   });
 
   it('returns ok:false and keeps the candidate when candidate_id is unknown', async () => {
@@ -655,6 +712,39 @@ describe('personal_ontology_candidates › routeWithLlm integration (router mock
     // router mock 命中 协作关系.协作项目 → LLM 自动 push 复合 id；projectId 随 dest 展开保留
     const content = tmpl.readTemplateFileText(UID, 'student');
     expect(content).toMatch(/### 协作项目\n- 喜欢用大白话解释 \[智能\] @proj:p_llm/);
+  });
+
+  it('A-4: LLM auto-routed template destination does NOT tag the global-memory entry (user never picked the role)', async () => {
+    const tmpl = await import('../../../src/main/features/personal_ontology_template_files');
+    const mem = await import('../../../src/main/features/memory');
+    await tmpl.installTemplateFile(UID, 'student');
+    // 用户未选任何角色（toGroupIds 空），LLM 分支 3 自动加入学生模板
+    const poc = await seedCandidate('cand-llm-4');
+    const res = await poc.confirmCandidate(UID, 'cand-llm-4', {}, { routeWithLlm: true });
+    expect(res.ok).toBe(true);
+    // 模板字段写入了（LLM 自动归位）
+    const content = tmpl.readTemplateFileText(UID, 'student');
+    expect(content).toContain('### 协作项目');
+    // 全局记忆条目存在但不带角色标签
+    const userMd = fs.readFileSync(userProfilePath(), 'utf8');
+    expect(userMd).toContain('喜欢用大白话解释');
+    expect(userMd).not.toContain('role_template');
+    expect(mem.countRoleTemplateMemoryEntries(UID, 'student')).toBe(0);
+  });
+
+  it('user-picked role still tags the global-memory entry (explicit choice)', async () => {
+    const tmpl = await import('../../../src/main/features/personal_ontology_template_files');
+    const mem = await import('../../../src/main/features/memory');
+    await tmpl.installTemplateFile(UID, 'student');
+    const row = tmpl.readGroups(UID).find((g) => g.template_id === 'student')!;
+    const poc = await seedCandidate('cand-llm-5');
+    // 用户显式选角色（纯 group_id，无分节）→ LLM 2b 分支收窄到分节
+    const res = await poc.confirmCandidate(UID, 'cand-llm-5', { toGroupIds: [row.group_id] }, { routeWithLlm: true });
+    expect(res.ok).toBe(true);
+    const userMd = fs.readFileSync(userProfilePath(), 'utf8');
+    expect(userMd).toContain('role_template');
+    expect(userMd).toContain('"sourceId":"student"');
+    expect(mem.countRoleTemplateMemoryEntries(UID, 'student')).toBe(1);
   });
 });
 

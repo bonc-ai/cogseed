@@ -2,7 +2,7 @@ export type CognitionCandidateSource = 'personal_ontology' | 'p3394_experience' 
 export type CognitionCandidateType = 'preference' | 'ontology' | 'rule' | 'experience' | 'skill_evolution';
 export type CognitionCandidateStatus = 'pending' | 'accepted' | 'deferred' | 'rejected';
 
-export type CognitionCandidateAction = 'source' | 'accept' | 'reject' | 'open_personal_ontology' | 'import_to_recall';
+export type CognitionCandidateAction = 'source' | 'accept' | 'modify' | 'defer' | 'reject' | 'open_personal_ontology' | 'import_to_recall';
 
 export interface CognitionRelationRef {
   type: 'skill' | 'knowledge' | 'ontology' | 'evaluation' | 'conversation' | 'execution' | 'memory' | 'receipt';

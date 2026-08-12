@@ -2492,12 +2492,17 @@ async function _enqueueBody(
 
   const guardedKStarDecision =
     fromKind === "agent" && params.turn_end && params.turn_id
-      ? applyKStarGuard(
-          params.kstarDecision,
-          cid,
-          rewrittenText,
-          params.produced,
-        )
+      ? await (async () => {
+          // 空间模式（space_builder）是引导对话，不做 KSTAR 交付物评审。
+          const convKind = await getConversationKindSafe(uid, cid);
+          if (convKind === "space_builder") return undefined;
+          return applyKStarGuard(
+            params.kstarDecision,
+            cid,
+            rewrittenText,
+            params.produced,
+          );
+        })()
       : undefined;
   if (fromKind === "agent" && params.turn_end && params.turn_id && guardedKStarDecision?.required) {
     try {
@@ -3662,24 +3667,32 @@ async function runActorTurnBody(
   // brittle classification is what repeatedly recreated empty tail bubbles.
   let terminalHandoffCompleted = false;
   if (isCommander) {
-    systemPrompt = await buildCommanderSystemPrompt(
-      uid,
-      cid,
-      turnProjectScope?.agents ?? null,
-    );
-    extraTools = await buildCommanderExtraTools(
-      state,
-      w,
-      item.llmPayload,
-      item.fromActorId,
-      item.attachments,
-      turnProjectId,
-      () => segState.flush(),
-      () => {
-        terminalHandoffCompleted = true;
-        _terminalHandoffObserverForTest?.();
-      },
-    );
+    // 空间模式会话（kind=space_builder）：用户↔构建师的一对一引导对话。
+    // 构建师不派活不写文件——零额外工具，数据全部走 Runtime injection 快照。
+    const convKind = await getConversationKindSafe(uid, cid);
+    if (convKind === "space_builder") {
+      systemPrompt = await buildSpaceBuilderSystemPrompt(uid);
+      extraTools = [];
+    } else {
+      systemPrompt = await buildCommanderSystemPrompt(
+        uid,
+        cid,
+        turnProjectScope?.agents ?? null,
+      );
+      extraTools = await buildCommanderExtraTools(
+        state,
+        w,
+        item.llmPayload,
+        item.fromActorId,
+        item.attachments,
+        turnProjectId,
+        () => segState.flush(),
+        () => {
+          terminalHandoffCompleted = true;
+          _terminalHandoffObserverForTest?.();
+        },
+      );
+    }
     // skillList stays undefined for commander — every skill is globally
     // visible (skills are NOT project-scoped this round; see CLAUDE.md §6).
   } else if (actor.kind === "worker") {
@@ -5424,8 +5437,83 @@ async function buildCommanderSystemPrompt(
   return appendLanguageDirective(main);
 }
 
+/** 空间模式（space_builder）会话的系统提示：构建师角色 + 真实资源快照注入。
+ *  数据快照来自现有 feature（skills/agents/role_templates），第一版不做工具化——
+ *  构建师零额外工具（extraTools=[]），只依据快照推荐；用户从草稿创建空间。 */
+async function buildSpaceBuilderSystemPrompt(uid: string): Promise<string> {
+  const { prompts } = await import("../../prompts/loader");
+  const [skillsFeat, agentsFeat, templatesFeat] = await Promise.all([
+    import("../skills"),
+    import("../agents"),
+    import("../role_templates"),
+  ]);
+  const [skills, agents, templates, scenarios] = await Promise.all([
+    skillsFeat.listSkills(),
+    agentsFeat.listAgents().catch(() => []),
+    templatesFeat.listRoleTemplates(),
+    templatesFeat.listScenarios(),
+  ]);
+  const clip = (s: string, n = 90) => {
+    const t = String(s || "").replace(/\s+/g, " ").trim();
+    return t.length > n ? `${t.slice(0, n)}…` : t;
+  };
+  const skillsBlock = skills.length
+    ? skills
+        .filter((s) => s.enabled !== false)
+        .map((s) => {
+          const desc = s.description_zh || s.description_en || "";
+          return `- ${s.name || s.id}（id: ${s.id}${s.version ? `, v${s.version}` : ""}）— ${clip(desc)}`;
+        })
+        .join("\n")
+    : "（暂无可用技能）";
+  const agentsBlock = agents.length
+    ? agents.map((a) => {
+        const desc = (a as { description_zh?: string; description_en?: string }).description_zh
+          || (a as { description_zh?: string; description_en?: string }).description_en
+          || (a as { description?: string }).description
+          || "";
+        return `- ${a.name || a.agent_id}（id: ${a.agent_id}）— ${clip(desc)}`;
+      }).join("\n")
+    : "（暂无可用智能体）";
+  const templatesBlock = templates.length
+    ? templates.map((t) => `- ${t.name}（id: ${t.template_id}）— ${clip(t.description)}`).join("\n")
+    : "（暂无角色模板）";
+  const scenariosBlock = scenarios.length
+    ? scenarios.map((s) => {
+        const extra = (s as { suggested_secondary_template_ids?: string[] }).suggested_secondary_template_ids?.length
+          ? `，可配模板: ${(s as { suggested_secondary_template_ids?: string[] }).suggested_secondary_template_ids!.join("/")}`
+          : "";
+        return `- ${s.name}（id: ${s.scenario_id}）— ${clip(s.description || "")}${extra}`;
+      }).join("\n")
+    : "（暂无场景）";
+  const main = renderPromptWithSharedRules(
+    prompts,
+    "space_builder",
+    {
+      skills_block: skillsBlock,
+      agents_block: agentsBlock,
+      templates_block: templatesBlock,
+      scenarios_block: scenariosBlock,
+    },
+    false,
+  );
+  return appendLanguageDirective(main);
+}
+
+/** 会话 kind 快速读取（动态 import 避免 chats ↔ group_chat 循环依赖）。
+ *  读不到/异常一律视为 normal，绝不改变既有行为。 */
+async function getConversationKindSafe(uid: string, cid: string): Promise<string> {
+  try {
+    const chats = await import("../chats");
+    const conv = await chats.getConversation(uid, cid);
+    return conv?.kind || "normal";
+  } catch {
+    return "normal";
+  }
+}
+
 type SharedPromptTemplate =
-  "chat_commander" | "chat_agent_in_group" | "chat_cli_agent";
+  "chat_commander" | "chat_agent_in_group" | "chat_cli_agent" | "space_builder";
 type PromptTemplateArgs = Record<string, string | number | boolean>;
 type PromptLoader = {
   load(template: string, args?: PromptTemplateArgs): string;

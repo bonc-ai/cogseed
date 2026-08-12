@@ -1,0 +1,31 @@
+{
+  "case_ids": [
+    "EVAL-ORCH-001",
+    "EVAL-ORCH-002",
+    "EVAL-ORCH-003",
+    "EVAL-ORCH-004",
+    "EVAL-ORCH-005",
+    "EVAL-ORCH-006",
+    "EVAL-ORCH-007",
+    "EVAL-ORCH-008",
+    "EVAL-ORCH-009",
+    "EVAL-ORCH-010"
+  ],
+  "count": 10,
+  "coverage": [
+    "anti_trigger",
+    "boundary",
+    "failure",
+    "prohibited_behavior",
+    "trigger"
+  ],
+  "id": "EVAL-MANIFEST-ORCH-001",
+  "negative_count": 4,
+  "negative_ids": [
+    "EVAL-ORCH-007",
+    "EVAL-ORCH-008",
+    "EVAL-ORCH-009",
+    "EVAL-ORCH-010"
+  ],
+  "schema_version": "1.0"
+}
