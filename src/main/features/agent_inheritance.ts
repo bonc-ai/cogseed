@@ -142,6 +142,23 @@ const COLLECTED_DEFINITION_LENGTH = 300;
  * 术语的价值正在于「出生那一刻它指什么」，跟着本体改动漂移就失去了消歧作用，
  * 与能力包冻结资产版本是同一个道理。
  */
+/** 从一条流水条目里取出真正的内容。
+ *
+ *  `parseGroupContent` 对角色模板那种「只有骨架、没填内容」的文件不做结构解析，
+ *  会把整份原文当成一条 entry 返回。直接拿来当释义，注入给 Agent 的就是一堆
+ *  章节标题加模板元数据——比不给更糟，因为模型会把它当成真实定义去理解。
+ *
+ *  所以这里只留真正的内容行：剔掉 markdown 标题（`#`）与引用式模板元数据（`>`）。
+ *  剔完为空说明这个分组用户还没填过东西，那它就是没有释义，整条不收。 */
+function meaningfulEntryText(entry: unknown): string {
+  return String(entry ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#') && !line.startsWith('>'))
+    .join(' ')
+    .trim();
+}
+
 export async function collectAgentBirthContext(userId: string): Promise<{
   glossary: AgentGlossaryEntry[];
   memoryRefs: string[];
@@ -170,7 +187,8 @@ export async function collectAgentBirthContext(userId: string): Promise<{
         const parsed = groupsFeature.parseGroupContent(content.content);
         const fieldParts = Object.entries(parsed.fields)
           .map(([field, values]) => `${field}：${values.map((v) => v.value).join('、')}`);
-        definition = [...fieldParts, ...parsed.entries].join('；').replace(/\s+/g, ' ').trim();
+        const entryParts = parsed.entries.map(meaningfulEntryText).filter(Boolean);
+        definition = [...fieldParts, ...entryParts].join('；').replace(/\s+/g, ' ').trim();
       }
     } catch {
       definition = '';

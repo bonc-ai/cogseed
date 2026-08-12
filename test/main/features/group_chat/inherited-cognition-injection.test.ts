@@ -177,6 +177,61 @@ describe('出生上下文采集', () => {
     const { collectAgentBirthContext } = await import('../../../../src/main/features/agent_inheritance');
     expect(await collectAgentBirthContext(UID)).toEqual({ glossary: [], memoryRefs: [] });
   });
+
+  it('只有骨架的角色模板不产出术语（真机抓到的回归）', async () => {
+    // 真实装机上 software_engineer 模板就是这个形状：装了但一条都没填。
+    // parseGroupContent 对它不做结构解析，会把整份原文当成一条 entry 返回；
+    // 早先版本直接拿来当释义，注入给 Agent 的是一堆章节标题加模板元数据。
+    const groups = await import('../../../../src/main/features/personal_ontology_groups');
+    const created = await groups.createGroup(UID, '软件工程师');
+    await groups.writeGroupContent(UID, created.group!.group_id, [
+      '# 软件工程师（模板）',
+      '',
+      '> 模板: software_engineer@0.2.0-review.1 | 已安装: 2026-08-09T19:13:55',
+      '',
+      '## 技术专长',
+      '',
+      '### 语言与框架',
+      '',
+      '### 流水',
+      '',
+      '## 编码偏好',
+      '',
+      '### 评审偏好',
+      '',
+    ].join('\n'));
+
+    const { collectAgentBirthContext } = await import('../../../../src/main/features/agent_inheritance');
+    const collected = await collectAgentBirthContext(UID);
+
+    // 空骨架没有释义，整条不收——宁可术语表为空，也不能拿标题冒充定义。
+    expect(collected.glossary).toEqual([]);
+    // 分组本身仍然被记为记忆引用。
+    expect(collected.memoryRefs).toEqual([created.group!.group_id]);
+  });
+
+  it('骨架里填了内容后，只取内容不取标题', async () => {
+    const groups = await import('../../../../src/main/features/personal_ontology_groups');
+    const created = await groups.createGroup(UID, '交付节奏');
+    await groups.writeGroupContent(UID, created.group!.group_id, [
+      '# 交付节奏（模板）',
+      '',
+      '> 模板: delivery@1.0 | 已安装: 2026-08-09T19:13:55',
+      '',
+      '## 周期',
+      '',
+      '两周一个迭代，周五封版。',
+      '',
+    ].join('\n'));
+
+    const { collectAgentBirthContext } = await import('../../../../src/main/features/agent_inheritance');
+    const collected = await collectAgentBirthContext(UID);
+
+    expect(collected.glossary).toHaveLength(1);
+    expect(collected.glossary[0].definition).toBe('两周一个迭代，周五封版。');
+    // 标题与模板元数据不得混进释义。
+    expect(collected.glossary[0].definition).not.toMatch(/#|模板:|已安装/);
+  });
 });
 
 async function readReceiptFor(cid = CID) {
