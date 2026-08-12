@@ -75,10 +75,43 @@ describe('touchpoint copy contract', () => {
       }
       return hits;
     };
-    // 扁平键结构：直接筛选 issue./chain. 前缀的键值做黑名单扫描
+    // 扁平键结构：整个 touchpoint_settings 段做黑名单扫描（覆盖 issue./chain./action./
+    // advanced./disconnect. 等全部前缀）；回调地址引导卡 setup_guide 是白名单例外（
+    // 其文案必须含"回调地址/redirect"才能指导用户），扫描时排除。
     const hits = Object.entries(ZH as Record<string, unknown>)
-      .filter(([k]) => k.startsWith('touchpoint_settings.issue.') || k.startsWith('touchpoint_settings.chain.'))
+      .filter(([k]) => k.startsWith('touchpoint_settings.') && !k.includes('setup_guide'))
       .flatMap(([k, v]) => walk(v, k));
     expect(hits).toEqual([]);
+  });
+});
+
+describe('touchpoint action mapping', () => {
+  // model 全部可能输出的 actionId（primaryAction + issues[].actionId）必须在
+  // touchpoint-settings.js 的 ACTION_HANDLERS 注册，否则待办卡按钮点击静默无操作。
+  const SOURCE = readFileSync(new URL('../../../src/renderer/modules/touchpoint-settings.js', import.meta.url), 'utf-8');
+  const HANDLERS = SOURCE.match(/ACTION_HANDLERS = Object\.freeze\(\{([\s\S]*?)\}\);/)?.[1] || '';
+  const handlerIds = new Set(
+    [...HANDLERS.matchAll(/^\s{4}'([^']+)':/gm)].map((m) => m[1]),
+  );
+
+  it('every actionId the model can emit has a registered handler', () => {
+    // 枚举 model 全部可能输出的 actionId：primaryAction + issues[].actionId
+    const candidates = new Set<string>(['connection.connect']);
+    const fixtures: Array<Record<string, unknown>> = [
+      { overall: { status: 'off', chain: { connection: 'missing', authorization: 'missing', delivery: 'missing' }, issues: [] } },
+      { overall: { status: 'attention', chain: { connection: 'ok', authorization: 'broken', delivery: 'missing' }, issues: [{ severity: 'error', step: 'authorization', reason: 'token_expired', actionId: 'authorization.reauth' }] } },
+      { overall: { status: 'attention', chain: { connection: 'ok', authorization: 'ok', delivery: 'broken' }, issues: [{ severity: 'error', step: 'delivery', reason: 'sync_failed', actionId: 'sync.retry' }] } },
+      { overall: { status: 'attention', chain: { connection: 'ok', authorization: 'missing', delivery: 'missing' }, issues: [{ severity: 'warning', step: 'authorization', reason: 'not_configured', actionId: 'authorization.begin' }] } },
+      { overall: { status: 'attention', chain: { connection: 'ok', authorization: 'ok', delivery: 'missing' }, issues: [{ severity: 'warning', step: 'delivery', reason: 'no_resources', actionId: 'resources.discover' }] } },
+      { overall: { status: 'attention', chain: { connection: 'ok', authorization: 'ok', delivery: 'missing' }, issues: [{ severity: 'warning', step: 'delivery', reason: 'not_configured', actionId: 'briefing.schedule' }] } },
+    ];
+    for (const fixture of fixtures) {
+      const model = deriveTouchpointSettingsModel({ mode: 'real', messaging: { instanceId: 'f', botConnected: true, ownerConfigured: true }, authorization: { kind: 'connected', providerId: 'feishu' }, resources: { discovered: 1, selected: 1, ready: 1, failed: 0, unsupported: 0 }, sync: { state: 'ready', lastRunAt: null, nextRunAt: null, processed: 1, failed: 0 }, review: { pending: 0, confirmed: 0, rejected: 0, sourceInvalidated: 0 }, briefing: { state: 'preview_ready', destination: null, lastDelivery: null, pendingCandidateCount: 0 }, actions: [], overall: fixture.overall }, []);
+      candidates.add(model.primaryAction);
+      for (const issue of model.issues) if (issue.actionId) candidates.add(issue.actionId);
+    }
+    for (const id of candidates) {
+      expect(handlerIds.has(id), `actionId '${id}' 未在 touchpoint-settings.js ACTION_HANDLERS 注册`).toBe(true);
+    }
   });
 });

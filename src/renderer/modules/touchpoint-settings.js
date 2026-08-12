@@ -249,7 +249,7 @@
           const resources = state.resources.filter((resource) => state.selectedIds.has(resource.resourceId));
           await invoke('personal_context.resources.select', { resources });
           state.notice = { kind: 'success', text: tr('touchpoint_settings.resources.saved', '读取范围已保存。') };
-        } else if (action === 'sync.start') await invoke('personal_context.sync.start', {});
+        } else if (action === 'sync.start' || action === 'sync.retry') await invoke('personal_context.sync.start', {});
         else if (action === 'briefing.preview') {
           const result = await invoke('personal_context.briefing.preview', {});
           state.preview = result.preview || null;
@@ -326,6 +326,7 @@
     'resources.discover': 'resources.discover',
     'resources.save': 'resources.save',
     'sync.start': 'sync.start',
+    'sync.retry': 'sync.retry',
     'briefing.preview': 'briefing.preview',
     'briefing.test': 'briefing.test',
     'briefing.schedule': 'briefing.schedule',

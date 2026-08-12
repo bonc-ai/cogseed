@@ -98,6 +98,58 @@ describe('deriveOverall', () => {
     expect(overall.status === 'ready').toBe(allOk);
     expect(allOk).toBe(overall.issues.length === 0);
   });
+
+  it('broken 优先不叠加：connection broken + authorization missing → 仅 connection error 卡', () => {
+    // connection 环节 broken（instanceId 存在但 botConnected=false）已产生 error 卡；
+    // authorization missing 的引导卡前置要求 connection === ok，broken 时不叠加，
+    // 避免「机器人都没就绪还让用户去授权」的双卡噪音。
+    const overall = deriveOverall(dashboard({
+      messaging: { instanceId: 'feishu-1', botConnected: false, ownerConfigured: false },
+    }));
+    expect(overall.chain.connection).toBe('broken');
+    expect(overall.chain.authorization).toBe('missing');
+    expect(overall.issues).toEqual([
+      { severity: 'error', step: 'connection', reason: 'bot_error', actionId: 'connection.connect' },
+    ]);
+  });
+
+  it('delivery 前置依赖：authorization broken 时不生成 delivery 卡', () => {
+    // 授权环节 broken 时投递链路前置未就绪（missing），即使 sync 报了失败也不
+    // 生成 delivery 卡——先解决授权，避免叠加一个无意义的 sync.retry 重试动作。
+    const overall = deriveOverall(dashboard({
+      messaging: { instanceId: 'feishu-1', botConnected: true, ownerConfigured: true },
+      authorization: { kind: 'needs_reauth', providerId: 'feishu' },
+      sync: { state: 'partial_failure', lastRunAt: null, nextRunAt: null, processed: 2, failed: 1 },
+    }));
+    expect(overall.chain.delivery).toBe('missing');
+    expect(overall.issues).toHaveLength(1);
+    expect(overall.issues[0]).toMatchObject({ step: 'authorization', reason: 'token_expired', actionId: 'authorization.reauth' });
+  });
+
+  it('不变量：三环节非全 ok 且非全 missing → attention 且 issues 非空', () => {
+    // 中间态收敛断言（与全 ok=ready、全 missing=off 两个端点互补）：
+    // 每种中间组合都必须落到 attention 并带至少一张待办卡，不得静默吞掉问题。
+    const midStates: Array<Partial<PersonalContextDashboard>> = [
+      // ok/missing/missing：已连未授权
+      { messaging: { instanceId: 'feishu-1', botConnected: true, ownerConfigured: true } },
+      // ok/broken/missing：令牌过期
+      { messaging: { instanceId: 'feishu-1', botConnected: true, ownerConfigured: true }, authorization: { kind: 'needs_reauth', providerId: 'feishu' } },
+      // broken/missing/missing：实例未就绪
+      { messaging: { instanceId: 'feishu-1', botConnected: false, ownerConfigured: false } },
+      // ok/ok/broken：同步失败
+      { messaging: { instanceId: 'feishu-1', botConnected: true, ownerConfigured: true }, authorization: { kind: 'connected', providerId: 'feishu' }, resources: { discovered: 2, selected: 2, ready: 1, failed: 1, unsupported: 0 }, sync: { state: 'partial_failure', lastRunAt: '2026-08-12T00:00:00.000Z', nextRunAt: null, processed: 2, failed: 1 } },
+    ];
+    for (const override of midStates) {
+      const overall = deriveOverall(dashboard(override));
+      const states = Object.values(overall.chain);
+      const allOk = states.every((s) => s === 'ok');
+      const allMissing = states.every((s) => s === 'missing');
+      expect(allOk).toBe(false);
+      expect(allMissing).toBe(false);
+      expect(overall.status).toBe('attention');
+      expect(overall.issues.length).toBeGreaterThan(0);
+    }
+  });
 });
 
 describe('service overall injection', () => {
