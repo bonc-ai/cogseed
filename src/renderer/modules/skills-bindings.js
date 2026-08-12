@@ -383,6 +383,16 @@ function _initSkillsCognitionBindings() {
       try {
         let channel = actionName === 'promote' ? 'recall.candidates.promote' : actionName === 'reject' ? 'recall.candidates.reject' : actionName === 'defer' ? 'recall.candidates.defer' : actionName === 'resume' ? 'recall.candidates.resume' : '';
         let payload = { candidateId };
+        if (actionName === 'route-ontology') {
+          // 统一候选池的本体出口。走 recall.candidates.route 而不是先 promote 再单独写本体：
+          // 那条通道在服务端是一个事务——本体落点非法时整条拒绝，不会留下
+          // 「资产建了但没落位」的半成品。
+          const card = recallAction.closest('[data-recall-candidate-id]');
+          const groupId = card?.querySelector('[data-recall-route-group]')?.value || '';
+          if (!groupId) throw new Error('pick an ontology group first');
+          channel = 'recall.candidates.route';
+          payload = { candidateId, ontology: { groupId } };
+        }
         if (actionName === 'save-edit') {
           const card = recallAction.closest('[data-recall-candidate-id]');
           const candidate = (_skillsCognitionState.recallCandidates || []).find((item) => item.id === candidateId);

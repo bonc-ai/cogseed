@@ -3328,5 +3328,6 @@
   "recall.projection.summary_counts": "这次带入 {count} 条认知；{omitted} 条未带",
   "recall.projection.summary_counts_only": "这次带入 {count} 条认知",
   "recall.projection.summary_none": "这次没有带入认知",
-  "recall.projection.summary_none_omitted": "这次没有带入认知；{omitted} 条未带"
+  "recall.projection.summary_none_omitted": "这次没有带入认知；{omitted} 条未带",
+  "cognition.route_ontology": "确认并落到本体"
 }

@@ -3108,5 +3108,6 @@
   "recall.projection.summary_counts": "今回は {count} 件を引き継ぎます（{omitted} 件は対象外）",
   "recall.projection.summary_counts_only": "今回は {count} 件を引き継ぎます",
   "recall.projection.summary_none": "今回引き継ぐものはありません",
-  "recall.projection.summary_none_omitted": "今回引き継ぐものはありません（{omitted} 件は対象外）"
+  "recall.projection.summary_none_omitted": "今回引き継ぐものはありません（{omitted} 件は対象外）",
+  "cognition.route_ontology": "確認してオントロジーへ"
 }
