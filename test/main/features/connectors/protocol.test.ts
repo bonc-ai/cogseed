@@ -44,6 +44,7 @@ describe('connector callback protocol', () => {
   it('accepts only connector OAuth callbacks', async () => {
     const { _test } = await import('../../../../src/main/features/connectors/protocol');
 
+    expect(_test.connectorCallbackKind('cogseed://connectors/oauth/callback?exchange_code=x')).toBe('server');
     expect(_test.connectorCallbackKind('mateagent://connectors/oauth/callback?exchange_code=x')).toBe('server');
     expect(_test.connectorCallbackKind('mateagent://connectors/oauth/dcr-callback?exchange_code=x')).toBe('dcr');
     expect(_test.connectorCallbackKind('orkas://connectors/oauth/callback?exchange_code=x')).toBe('server');
@@ -57,6 +58,7 @@ describe('connector callback protocol', () => {
     const protocol = await import('../../../../src/main/features/connectors/protocol');
     expect(protocol.registerConnectorProtocol({ owner: true })).toBe(true);
 
+    expect(electronMock.app.setAsDefaultProtocolClient).toHaveBeenCalledWith('cogseed');
     expect(electronMock.app.setAsDefaultProtocolClient).toHaveBeenCalledWith('mateagent');
     expect(electronMock.app.setAsDefaultProtocolClient).toHaveBeenCalledWith('orkas');
     const openUrl = electronMock.listeners.get('open-url');
@@ -65,8 +67,10 @@ describe('connector callback protocol', () => {
 
     await openUrl?.({ preventDefault }, 'mateagent://connectors/oauth/callback?exchange_code=one');
     await vi.waitFor(() => expect(connectorMock.handleCallbackUrl).toHaveBeenCalledTimes(1));
+    expect(connectorMock.handleCallbackUrl).toHaveBeenLastCalledWith('cogseed://connectors/oauth/callback?exchange_code=one');
     await openUrl?.({ preventDefault }, 'orkas://connectors/oauth/dcr-callback?exchange_code=two');
     await vi.waitFor(() => expect(connectorMock.handleDcrCallbackUrl).toHaveBeenCalledTimes(1));
+    expect(connectorMock.handleDcrCallbackUrl).toHaveBeenLastCalledWith('cogseed://connectors/oauth/dcr-callback?exchange_code=two');
 
     expect(preventDefault).toHaveBeenCalledTimes(2);
     expect(electronMock.window.restore).toHaveBeenCalled();

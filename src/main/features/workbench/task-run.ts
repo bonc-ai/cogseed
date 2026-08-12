@@ -36,6 +36,7 @@ import { maskId } from '../../util/log-redact';
 import {
   createLifecycleSink,
   read as readExecution,
+  readEvents as readExecutionEvents,
   type ExecutionBoundary,
   type ExecutionKind,
   type ExecutionLifecycleSink,
@@ -54,12 +55,34 @@ export type TaskRunRole = 'agent-a' | 'agent-b';
 
 const TASK_RUN_ROLES: readonly TaskRunRole[] = ['agent-a', 'agent-b'];
 
-/** Why a run was refused. Every value is a blocking condition, never a warning. */
+/** 为什么一个 run 被拒绝。每个值都是阻塞条件，绝不是警告。 */
 export type StartTaskRunRefusal =
   | { reason: 'baseline_missing' }
   | { reason: 'baseline_drift' }
   | { reason: 'baseline_unreadable' }
-  | { reason: 'task_not_found' };
+  | { reason: 'task_not_found' }
+  | { reason: 'space_gate_not_passed' };
+
+/**
+ * 启动时的空间上下文（服务层从 spaces 读取后传入，task-run 不直接 import
+ * spaces——避免 features 层耦合；字段名与 spaces.ts 的类型结构兼容）。
+ * P0：只校验上架 Gate + 冻结版本引用；角色组合/跨空间等后续迭代再扩展。
+ */
+export interface TaskRunSpaceContext {
+  spaceId: string;
+  gateStatus: 'not_checked' | 'passed' | 'failed';
+  /** 空间对正式资产的版本引用（TaskRun 启动时全部冻结）。 */
+  assetBindings: Array<{ asset_id: string; version: string; content_hash?: string; policy?: string }>;
+  /** 空间绑定的 Main Skill（一并冻结）。 */
+  mainSkillRef?: { asset_id: string; version: string; content_hash?: string };
+}
+
+/** 冻结的资产版本引用（从执行事件流读取，append-only 天然不可变）。 */
+export interface FrozenAssetVersionRef {
+  asset_id: string;
+  version: string;
+  content_hash?: string;
+}
 
 export interface StartTaskRunInput {
   projectId: string;
@@ -75,6 +98,8 @@ export interface StartTaskRunInput {
   kind: ExecutionKind;
   boundary: ExecutionBoundary;
   permissionMode: string;
+  /** 可选：空间上下文。提供时校验上架 Gate 并冻结资产版本引用。 */
+  space?: TaskRunSpaceContext;
   sessionId?: string;
   conversationId?: string;
   agentId?: string;
@@ -144,6 +169,20 @@ export async function startTaskRun(
     return { ok: false, ...REFUSAL_FOR_BASELINE[failure] };
   }
 
+  // 空间上架 Gate 校验（提供空间上下文时）：仅显式评估失败（failed）的空间
+  // 不得启动正式 TaskRun。not_checked 表示"尚未评估"而非"评估未通过"——
+  // 目前系统没有自动评估写入路径（evaluateWorkspaceGate 是纯判断不落盘，
+  // gate_status 仅作缓存/标记），旧空间与新建空间默认均为 not_checked；
+  // 若把 not_checked 当作拒绝理由，接线后所有未评估空间会被整体误伤。
+  if (input.space && input.space.gateStatus === 'failed') {
+    log.warn('refused task run: space gate failed', {
+      user_id: maskId(userId),
+      space_id: maskId(input.space.spaceId),
+      gate_status: input.space.gateStatus,
+    });
+    return { ok: false, reason: 'space_gate_not_passed' };
+  }
+
   const executionId = input.executionId
     ? requireId(input.executionId, 'execution id')
     : `run-${randomUUID()}`;
@@ -165,6 +204,19 @@ export async function startTaskRun(
   // without duplicating baseline fields onto the execution record.
   await lifecycle.event('baseline_bound', { baselineId, role });
 
+  // 资产版本冻结（PRD §3.4.2 规则 1）：TaskRun 启动时快照空间引用的全部
+  // 正式资产版本 + Main Skill；运行中不静默切换。事件流 append-only，
+  // 冻结集天然不可变，历史 run 可复现。
+  if (input.space) {
+    const frozenRefs: FrozenAssetVersionRef[] = [
+      ...(input.space.mainSkillRef ? [input.space.mainSkillRef] : []),
+      ...input.space.assetBindings.map((b) => ({ asset_id: b.asset_id, version: b.version, ...(b.content_hash ? { content_hash: b.content_hash } : {}) })),
+    ].filter((ref, idx, arr) => arr.findIndex((r) => r.asset_id === ref.asset_id && r.version === ref.version) === idx);
+    if (frozenRefs.length) {
+      await lifecycle.event('asset_versions_frozen', { refs: frozenRefs, spaceId: input.space.spaceId });
+    }
+  }
+
   await attachRunToTask(userId, projectId, taskId, executionId);
 
   log.info('started task run', {
@@ -174,6 +226,7 @@ export async function startTaskRun(
     execution_id: maskId(executionId),
     baseline_id: maskId(baselineId),
     role,
+    ...(input.space ? { space_id: maskId(input.space.spaceId) } : {}),
   });
 
   return { ok: true, executionId, role, baselineId, lifecycle };
@@ -248,6 +301,25 @@ export async function readLatestRunId(
 ): Promise<string | null> {
   const refs = await readRunIds(userId, projectId, taskId);
   return refs.length ? refs[refs.length - 1] : null;
+}
+
+/**
+ * 读取某次 TaskRun 启动时冻结的资产版本引用（PRD §3.4.2）。
+ *
+ * 从执行事件流的 `asset_versions_frozen` 事件读取——事件 append-only，
+ * 因此返回的冻结集对该 run 永久不可变；无事件 → 空数组（该 run 未绑定空间）。
+ * 历史 run 的复现与审计依赖此函数，不读空间的当前绑定（空间引用可变，
+ * 运行冻结不可变）。
+ */
+export async function readFrozenAssetVersions(
+  userId: string,
+  executionId: string,
+): Promise<FrozenAssetVersionRef[]> {
+  const events = await readExecutionEvents(userId, executionId);
+  const frozen = events.find((e) => e.type === 'asset_versions_frozen');
+  if (!frozen) return [];
+  const refs = frozen.metadata?.refs;
+  return Array.isArray(refs) ? (refs as FrozenAssetVersionRef[]) : [];
 }
 
 /**

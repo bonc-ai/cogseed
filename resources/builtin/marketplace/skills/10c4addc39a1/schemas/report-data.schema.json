@@ -1,0 +1,458 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nseap.example/schemas/ontology-analysis-report-data/v0.1",
+  "title": "Ontology Landscape and Alignment Report Data",
+  "type": "object",
+  "required": [
+    "meta",
+    "executive_summary",
+    "policy_context",
+    "methodology",
+    "research_assurance",
+    "modules",
+    "stakeholders",
+    "systems",
+    "concepts",
+    "semantic_confusions",
+    "relations",
+    "processes",
+    "events",
+    "decisions",
+    "rules_constraints",
+    "risk_controls",
+    "kpis",
+    "standards",
+    "upper_mappings",
+    "agent_governance",
+    "closed_loops",
+    "kstar_mapping",
+    "architecture_boundaries",
+    "implementation_priorities",
+    "review_questions",
+    "workbook_fields",
+    "workbook_examples",
+    "sources",
+    "material_treatment"
+  ],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": [
+        "volume_number",
+        "domain_name_cn",
+        "domain_name_en",
+        "report_version",
+        "research_date",
+        "status",
+        "title",
+        "output_filename"
+      ]
+    },
+    "executive_summary": {
+      "type": "object",
+      "required": [
+        "paragraphs",
+        "core_conclusions"
+      ]
+    },
+    "policy_context": {
+      "type": "object",
+      "required": [
+        "task_objective",
+        "policy_scope",
+        "included_scope",
+        "excluded_scope",
+        "boundary_clarifications"
+      ]
+    },
+    "methodology": {
+      "type": "object",
+      "required": [
+        "shared_upper_ontology",
+        "four_layers",
+        "evidence_levels",
+        "common_flow"
+      ]
+    },
+    "modules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "scope",
+          "core_objects",
+          "dependencies"
+        ]
+      },
+      "minItems": 1
+    },
+    "stakeholders": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "party",
+          "roles",
+          "responsibilities",
+          "authority_or_evidence"
+        ]
+      },
+      "minItems": 1
+    },
+    "systems": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "system",
+          "authoritative_data",
+          "source_objects",
+          "sor_rule"
+        ]
+      },
+      "minItems": 1
+    },
+    "concepts": {
+      "type": "array",
+      "minItems": 20,
+      "maxItems": 40,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name_cn",
+          "name_en",
+          "group",
+          "upper_parent",
+          "definition",
+          "source_refs",
+          "maturity"
+        ]
+      }
+    },
+    "semantic_confusions": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "required": [
+          "expression",
+          "clarification"
+        ]
+      }
+    },
+    "relations": {
+      "type": "array",
+      "minItems": 30,
+      "items": {
+        "type": "object",
+        "required": [
+          "subject",
+          "predicate",
+          "object",
+          "meaning",
+          "source_or_status"
+        ]
+      }
+    },
+    "processes": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "trigger",
+          "stages",
+          "decisions",
+          "evidence",
+          "outcome"
+        ]
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "event",
+          "trigger",
+          "state_change",
+          "evidence"
+        ]
+      },
+      "minItems": 1
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "decision",
+          "authority",
+          "evidence",
+          "result",
+          "hitl"
+        ]
+      },
+      "minItems": 1
+    },
+    "rules_constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "rule",
+          "reason",
+          "source_or_status",
+          "priority"
+        ]
+      },
+      "minItems": 1
+    },
+    "risk_controls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "risk",
+          "consequence",
+          "control",
+          "owner",
+          "evidence"
+        ]
+      },
+      "minItems": 1
+    },
+    "kpis": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "kpi",
+          "definition",
+          "measure",
+          "source",
+          "caveat"
+        ]
+      },
+      "minItems": 1
+    },
+    "standards": {
+      "type": "array",
+      "minItems": 8,
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "organization",
+          "version_or_date",
+          "role",
+          "coverage",
+          "reusable_concepts",
+          "mapping_relation",
+          "backbone_recommendation",
+          "strengths",
+          "gaps",
+          "local_extension",
+          "source_refs"
+        ]
+      }
+    },
+    "upper_mappings": {
+      "type": "array",
+      "minItems": 20,
+      "items": {
+        "type": "object",
+        "required": [
+          "upper_construct",
+          "domain_concepts",
+          "usage"
+        ]
+      }
+    },
+    "agent_governance": {
+      "type": "object",
+      "required": [
+        "objects",
+        "autonomy_levels",
+        "human_final_decisions",
+        "manifest_fields"
+      ]
+    },
+    "closed_loops": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "situation",
+          "goal",
+          "process",
+          "task_decision",
+          "evidence_event",
+          "outcome_kpi",
+          "episode_learning"
+        ]
+      }
+    },
+    "kstar_mapping": {
+      "type": "array",
+      "minItems": 6,
+      "items": {
+        "type": "object",
+        "required": [
+          "stage",
+          "inputs",
+          "outputs",
+          "controls"
+        ]
+      }
+    },
+    "architecture_boundaries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "layer",
+          "assets",
+          "ownership"
+        ]
+      },
+      "minItems": 1
+    },
+    "implementation_priorities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "priority",
+          "work_package",
+          "result"
+        ]
+      },
+      "minItems": 1
+    },
+    "review_questions": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "string"
+      }
+    },
+    "workbook_fields": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "field",
+          "purpose"
+        ]
+      },
+      "minItems": 1
+    },
+    "workbook_examples": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object"
+      }
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 5,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "evidence_type",
+          "title",
+          "verification_status",
+          "usage"
+        ]
+      }
+    },
+    "material_treatment": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "material",
+          "treatment",
+          "reason"
+        ]
+      },
+      "minItems": 1
+    },
+    "research_assurance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gate_status",
+        "research_plan_id",
+        "research_ledger_id",
+        "research_date",
+        "queries_executed",
+        "opened_sources",
+        "verified_primary_sources",
+        "official_policy_sources",
+        "official_standard_sources",
+        "unresolved_conflicts",
+        "gate_report_ref",
+        "notes"
+      ],
+      "properties": {
+        "gate_status": {
+          "const": "passed"
+        },
+        "research_plan_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "research_ledger_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "research_date": {
+          "type": "string",
+          "format": "date"
+        },
+        "queries_executed": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "opened_sources": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "verified_primary_sources": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "official_policy_sources": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "official_standard_sources": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "unresolved_conflicts": {
+          "const": 0
+        },
+        "gate_report_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

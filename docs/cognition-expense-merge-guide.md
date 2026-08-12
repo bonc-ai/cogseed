@@ -8,7 +8,7 @@
 | --- | --- |
 | 合并基线 | `origin/develop` @ `b35e19e1eeef842e9cb97827d7d2cc8ffaf2d875` |
 | 功能集成提交 | `427bb2524bc2b529932e7e35205f12e15e21cedc` |
-| GitLab 仓库 | `http://10.1.12.6:54170/lhcx/project-group/opensource/team-02/mate-agent.git` |
+| GitLab 仓库 | `http://10.1.12.6:54170/lhcx/project-group/opensource/team-02/cogseed.git` |
 | 当前远端分支 | `origin/dev/niubaokang` |
 | 合并方向 | `dev/niubaokang` -> `develop` |
 | 与基线差异 | 19 个提交，154 个文件，新增 21,941 行、删除 626 行 |

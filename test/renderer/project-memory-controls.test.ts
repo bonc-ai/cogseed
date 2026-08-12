@@ -47,7 +47,7 @@ describe('project memory controls', () => {
   });
 
   it('guards project-instruction saves with dirty, limit, and error states', () => {
-    expect(source).toContain("window.orkas.invoke('projects.instructions.set'");
+    expect(source).toContain("window.cogseed.invoke('projects.instructions.set'");
     expect(source).toContain("input.value !== (input.dataset.savedValue || '')");
     expect(source).toContain('saveBtn.disabled = !dirty || over');
     expect(source).toContain("uiAlert(t('project.instructions.save_failed'))");

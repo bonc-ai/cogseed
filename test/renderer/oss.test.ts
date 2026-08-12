@@ -73,7 +73,7 @@ function loadOss(opts: LoadOpts = {}) {
     setChatRecipient: (target: string, next: any) => { calls.setRecipient.push({ target, next }); },
     openMarketplace: (tab: string) => { calls.openMarketplace.push(tab); },
   };
-  context.window.orkas = {
+  context.window.cogseed = {
     invoke: opts.invoke || (async (channel: string) => {
       if (channel === 'marketplace.getListingsCache') return { entries: {} };
       if (channel === 'marketplace.mergeListingsCache') return { ok: true };
@@ -81,8 +81,8 @@ function loadOss(opts: LoadOpts = {}) {
     }),
   };
   // wrap default invoke to count
-  const baseInvoke = context.window.orkas.invoke;
-  context.window.orkas.invoke = async (...a: any[]) => {
+  const baseInvoke = context.window.cogseed.invoke;
+  context.window.cogseed.invoke = async (...a: any[]) => {
     invokeCount++;
     invokeCalls.push({ channel: a[0], payload: a[1] });
     return baseInvoke(...a);

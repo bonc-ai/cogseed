@@ -20,6 +20,7 @@
       models: Array.isArray(draft.models) ? draft.models.map((model) => ({ ...model })) : [],
       selectedModels: Array.isArray(draft.selectedModels) ? [...draft.selectedModels] : [],
       defaultModel: draft.defaultModel || '',
+      preselectAll: !!draft.preselectAll,
     };
   }
 
@@ -92,7 +93,7 @@
       if (next.authType !== 'api_key') throw new Error('api key auth type required');
       if (action.source !== 'manual' && action.source !== 'ccswitch') throw new Error('invalid api key source');
       next.source = action.source;
-      next.step = action.source === 'ccswitch' ? 'ccswitch_select' : 'protocol';
+      next.step = action.source === 'ccswitch' ? 'ccswitch_select' : 'provider_preset';
       next.credential = {};
       next.discoveryToken = '';
       next.discoveryStatus = 'idle';
@@ -125,6 +126,9 @@
         apiKey: String(action.apiKey || ''),
         baseUrl: String(action.baseUrl || '').trim(),
       };
+      // Builtin presets ship their own model catalog; preselect every entry so
+      // the user can go from API key to usable model without extra clicks.
+      next.preselectAll = next.providerKind === 'builtin';
       next.step = 'credential_ready';
       return repairSelection(next);
     }
@@ -153,6 +157,29 @@
       next.step = 'discovering';
       return repairSelection(next);
     }
+    if (type === 'back') {
+      // Step back through the current flow; entered data (key, models) is
+      // kept so the user can fix one field without restarting. Credential
+      // input ('credentials') and the ready state ('credential_ready') share
+      // one UI step; 'discovering' is a transient transition between
+      // credentials and models — backing out of it lands back on the
+      // credentials step it came from.
+      const order = next.authType === 'oauth'
+        ? ['auth_type', 'provider', 'oauth_signin', 'models', 'confirm']
+        : next.source === 'ccswitch'
+          ? ['auth_type', 'api_key_source', 'ccswitch_select', 'models', 'confirm']
+          : ['auth_type', 'api_key_source', 'provider_preset', 'credential_ready', 'models', 'confirm'];
+      if (next.step === 'discovering') {
+        next.step = 'credential_ready';
+        return repairSelection(next);
+      }
+      let current = next.step;
+      if (current === 'credentials') current = 'credential_ready';
+      if (current === 'manual_model') current = 'models';
+      const idx = order.indexOf(current);
+      if (idx > 0) next.step = order[idx - 1];
+      return repairSelection(next);
+    }
     return next;
   }
 
@@ -168,6 +195,8 @@
       const known = new Set(next.models.map((model) => model.id));
       if (next.source === 'ccswitch' && next.declaredModels.length) {
         next.selectedModels = next.declaredModels.filter((id) => known.has(id));
+      } else if (next.preselectAll) {
+        next.selectedModels = Array.from(known);
       } else {
         next.selectedModels = [];
       }
@@ -314,14 +343,23 @@
   }
 
   async function invoke(channel, payload) {
-    if (!window || !window.orkas || typeof window.orkas.invoke !== 'function') return { ok: false, error: 'ipc unavailable' };
-    return window.orkas.invoke(channel, payload);
+    if (!window || !window.cogseed || typeof window.cogseed.invoke !== 'function') return { ok: false, error: 'ipc unavailable' };
+    return window.cogseed.invoke(channel, payload);
   }
 
   async function ensureProviders() {
     if (controller.providers.length) return controller.providers;
+    // Reuse the settings page's provider list when it is already loaded so
+    // opening the modal never re-triggers auth.listProviders (core-agent cold
+    // start can take 1-2s) just to paint the preset cards.
+    const shared = typeof window !== 'undefined' ? window.__settingsProvidersCache : null;
+    if (Array.isArray(shared) && shared.length) {
+      controller.providers = shared;
+      return controller.providers;
+    }
     const res = await invoke('auth.listProviders');
     controller.providers = (res && res.ok && Array.isArray(res.providers)) ? res.providers : [];
+    if (typeof window !== 'undefined' && controller.providers.length) window.__settingsProvidersCache = controller.providers;
     return controller.providers;
   }
 
@@ -338,9 +376,23 @@
   }
 
   function activeSteps() {
-    const steps = ['auth_type', 'provider', 'credentials', 'models', 'confirm'];
-    const current = controller.draft.step;
-    return steps.map((step) => `<span class="model-authorization-step${step === current ? ' is-active' : ''}">${esc(step)}</span>`).join('');
+    // Steps are flow-dependent: API-key presets, CC Switch import, and OAuth
+    // each show their own sequence with localized labels (no raw step ids).
+    const draft = controller.draft;
+    const steps = draft.authType === 'oauth'
+      ? [['auth_type', 'step_auth_type'], ['provider', 'step_provider'], ['models', 'step_models'], ['confirm', 'step_confirm']]
+      : draft.source === 'ccswitch'
+        ? [['auth_type', 'step_auth_type'], ['api_key_source', 'step_api_key_source'], ['ccswitch_select', 'step_ccswitch'], ['models', 'step_models'], ['confirm', 'step_confirm']]
+        : [['auth_type', 'step_auth_type'], ['api_key_source', 'step_api_key_source'], ['provider_preset', 'step_provider_preset'], ['credentials', 'step_credentials'], ['models', 'step_models'], ['confirm', 'step_confirm']];
+    let current = draft.step;
+    if (current === 'credential_ready' || current === 'discovering') current = 'credentials';
+    if (current === 'manual_model') current = 'models';
+    const idx = steps.findIndex(([step]) => step === current);
+    return steps.map(([step, key], i) => {
+      const done = idx >= 0 && i < idx;
+      const active = step === current;
+      return `<span class="model-authorization-step${active ? ' is-active' : ''}${done ? ' is-done' : ''}">${done ? '<span class="model-authorization-step-check">✓</span>' : ''}${esc(tr(`settings.model_authorization.${key}`))}</span>`;
+    }).join('');
   }
 
   function renderChoices() {
@@ -368,16 +420,100 @@
     </div>`;
   }
 
+  // Brand accent colors for the preset letter badges. No image assets are
+  // shipped (matches the onboarding "no per-agent brand marks" rule); a
+  // neutral slate color covers providers without an entry.
+  const PRESET_COLORS = Object.freeze({
+    deepseek: '#4D6BFE',
+    openai: '#10A37F',
+    google: '#4285F4',
+    anthropic: '#D97757',
+    zai: '#3859FF',
+    moonshot: '#1A1A1A',
+    'kimi-coding': '#5E5CE6',
+    'minimax-cn': '#7B61FF',
+    doubao: '#325AB4',
+    openrouter: '#7B61FF',
+  });
+
+  function providerInitial(provider) {
+    const label = String(provider.label || provider.id || '?');
+    return esc(label.trim().charAt(0).toUpperCase());
+  }
+
+  function renderProviderPresets() {
+    if (!controller.providers.length) {
+      // Providers load in the background after opening the modal; paint a
+      // placeholder instead of blocking the click.
+      return `<div class="model-authorization-progress">${esc(tr('settings.model_authorization.providers_loading'))}</div>`;
+    }
+    const presets = controller.providers.filter((provider) => provider.supportsApiKey && !provider.manualModel);
+    const cards = presets.map((provider) => {
+      const color = PRESET_COLORS[provider.id] || '#6b7280';
+      const badge = provider.recommended
+        ? ` <span class="model-authorization-provider-badge">${esc(tr('settings.model_authorization.preset_recommended'))}</span>`
+        : '';
+      const configured = (provider.profiles && provider.profiles.length)
+        ? ` <span class="model-authorization-provider-configured">${esc(tr('settings.model_authorization.provider_configured'))}</span>`
+        : '';
+      // subscriptionNote is an i18n key resolved here so the hint follows the
+      // UI language (e.g. Moonshot pay-as-you-go vs Kimi Coding subscription).
+      const note = provider.subscriptionNote
+        ? `<span class="model-authorization-provider-note">${esc(tr(provider.subscriptionNote))}</span>`
+        : '';
+      const docs = provider.docsUrl
+        ? `<span class="model-authorization-provider-docs"><a href="${esc(provider.docsUrl)}" target="_blank" rel="noopener noreferrer">${esc(tr('settings.model_authorization.provider_docs_hint'))}</a></span>`
+        : '';
+      return `<button type="button" class="model-authorization-choice model-authorization-provider-card" data-model-auth-action="choose-provider-preset" data-provider-id="${esc(provider.id)}">
+        <span class="model-authorization-provider-logo" style="--provider-color:${color}">${providerInitial(provider)}</span>
+        <span class="model-authorization-provider-main">
+          <span class="model-authorization-provider-title">${esc(provider.label)}${badge}${configured}</span>
+          ${note}${docs}
+        </span>
+      </button>`;
+    }).join('');
+    const custom = `<button type="button" class="model-authorization-choice model-authorization-provider-card model-authorization-provider-card-custom" data-model-auth-action="choose-custom-endpoint">
+      <span class="model-authorization-provider-logo" style="--provider-color:#6b7280">＋</span>
+      <span class="model-authorization-provider-main">
+        <span class="model-authorization-provider-title">${esc(tr('settings.model_authorization.custom_endpoint'))}</span>
+        <span class="model-authorization-provider-note">${esc(tr('settings.model_authorization.custom_endpoint_hint'))}</span>
+      </span>
+    </button>`;
+    if (!presets.length) return `<div class="settings-empty">${esc(tr('settings.model_authorization.ccswitch_preview_empty'))}</div>`;
+    return `<div class="model-authorization-progress">${esc(tr('settings.model_authorization.provider_preset_title'))}</div>
+      <div class="model-authorization-choice-grid model-authorization-provider-grid">${cards}${custom}</div>`;
+  }
+
   function endpointLabel(baseUrl) {
     try { return new URL(baseUrl).hostname || 'Custom endpoint'; }
     catch { return 'Custom endpoint'; }
   }
 
+  function keyInputHtml() {
+    const eye = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
+      ? window.uiIconHtml('eye', 'model-authorization-key-toggle-icon')
+      : '👁';
+    return `<div class="model-authorization-key-wrap">
+      <input id="model-authorization-api-key" class="form-input" type="password" autocomplete="off" spellcheck="false" />
+      <button type="button" class="model-authorization-key-toggle" data-model-auth-action="toggle-key-visible" data-target="model-authorization-api-key" title="${esc(tr('settings.model_authorization.key_show'))}">${eye}</button>
+    </div>`;
+  }
+
   function renderCredentials() {
+    const provider = controller.providers.find((item) => item.id === controller.draft.providerId);
+    const isBuiltin = controller.draft.providerKind === 'builtin';
+    const title = isBuiltin && provider ? provider.label : tr('settings.model_authorization.api_key_flow_hint');
+    const baseRow = isBuiltin
+      ? `<div class="model-authorization-note">${esc(tr('settings.model_authorization.base_url_builtin_hint'))}</div>`
+      : `<div class="form-row"><label>${esc(tr('settings.custom.base_url'))}</label><input id="model-authorization-base-url" class="form-input" type="url" autocomplete="off" spellcheck="false" placeholder="https://api.example.com/v1" /></div>`;
+    const docs = isBuiltin && provider && provider.docsUrl
+      ? `<a class="model-authorization-provider-docs" href="${esc(provider.docsUrl)}" target="_blank" rel="noopener noreferrer">${esc(tr('settings.model_authorization.provider_docs_hint'))}</a>`
+      : '';
     return `<div class="model-authorization-credentials">
-      <div class="model-authorization-progress">${esc(tr('settings.model_authorization.api_key_flow_hint'))}</div>
-      <div class="form-row"><label>${esc(tr('settings.custom.api_key'))}</label><input id="model-authorization-api-key" class="form-input" type="text" autocomplete="off" spellcheck="false" /></div>
-      <div class="form-row"><label>${esc(tr('settings.custom.base_url'))}</label><input id="model-authorization-base-url" class="form-input" type="url" autocomplete="off" spellcheck="false" placeholder="https://api.example.com/v1" /></div>
+      <div class="model-authorization-progress">${esc(title)}</div>
+      <div class="form-row"><label>${esc(tr('settings.custom.api_key'))}</label>${keyInputHtml()}</div>
+      ${baseRow}
+      ${docs}
     </div>`;
   }
 
@@ -418,25 +554,37 @@
     return `<div class="model-authorization-progress">${esc(tr('settings.model_authorization.progress_discovering'))}</div>`;
   }
 
+  function renderActions() {
+    const step = controller.draft.step;
+    const cancel = `<button class="btn" data-model-auth-action="cancel">${esc(tr('common.cancel') || 'Cancel')}</button>`;
+    const back = `<button class="btn" data-model-auth-action="back">${esc(tr('common.back') || 'Back')}</button>`;
+    if (step === 'auth_type') return cancel;
+    if (step === 'credentials' || step === 'credential_ready') {
+      return `${back}<button class="btn btn-primary" data-model-auth-action="continue-credentials">${esc(tr('common.continue') || 'Continue')}</button>`;
+    }
+    if (step === 'models' || step === 'manual_model') {
+      const disabled = controller.busy || !controller.draft.selectedModels.length;
+      return `${back}<button class="btn btn-primary" data-model-auth-action="complete"${disabled ? ' disabled' : ''}>${esc(tr('settings.model_authorization.complete'))}</button>`;
+    }
+    return back;
+  }
+
   function render() {
     const steps = el('model-authorization-steps');
     const body = el('model-authorization-body');
     const actions = el('model-authorization-actions');
     if (!body || !actions) return;
     if (steps) steps.innerHTML = activeSteps();
-    actions.innerHTML = '';
+    actions.innerHTML = renderActions();
     if (controller.draft.step === 'auth_type') body.innerHTML = renderChoices();
     else if (controller.draft.step === 'api_key_source') body.innerHTML = renderSourceChoices();
     else if (controller.draft.step === 'provider' || controller.draft.step === 'protocol') body.innerHTML = renderProtocols();
+    else if (controller.draft.step === 'provider_preset') body.innerHTML = renderProviderPresets();
     else if (controller.draft.step === 'ccswitch_select') body.innerHTML = renderCcswitchRows();
-    else if (controller.draft.step === 'credentials' || controller.draft.step === 'credential_ready') {
-      body.innerHTML = renderCredentials();
-      actions.innerHTML = `<button class="btn btn-primary" data-model-auth-action="continue-credentials">${esc(tr('common.continue') || 'Continue')}</button>`;
-    } else if (controller.draft.step === 'discovering') body.innerHTML = renderProgress();
-    else if (controller.draft.step === 'models' || controller.draft.step === 'manual_model') {
-      body.innerHTML = renderModels();
-      actions.innerHTML = `<button class="btn btn-primary" data-model-auth-action="complete" ${controller.draft.selectedModels.length ? '' : 'disabled'}>${esc(tr('settings.model_authorization.complete'))}</button>`;
-    } else body.innerHTML = renderChoices();
+    else if (controller.draft.step === 'credentials' || controller.draft.step === 'credential_ready') body.innerHTML = renderCredentials();
+    else if (controller.draft.step === 'discovering') body.innerHTML = renderProgress();
+    else if (controller.draft.step === 'models' || controller.draft.step === 'manual_model') body.innerHTML = renderModels();
+    else body.innerHTML = renderChoices();
   }
 
   function startDraft() {
@@ -450,8 +598,13 @@
 
   async function chooseAuthType(authType) {
     controller.draft = transition(controller.draft, { type: 'choose_auth_type', authType });
-    await ensureProviders();
     render();
+    // Load the provider catalog in the background instead of awaiting it
+    // here — the click must not stall on a 1-2s core-agent cold start. The
+    // preset step paints a loading placeholder and re-renders when ready.
+    if (!controller.providers.length) {
+      ensureProviders().then(() => { if (controller.open) render(); });
+    }
   }
 
   async function chooseApiKeySource(source) {
@@ -469,7 +622,8 @@
       controller.ccswitchUnsupported = (res && res.ok && Array.isArray(res.unsupported)) ? res.unsupported : [];
       setStatus('', '');
     } else {
-      // Manual API-key flow is protocol-first; provider catalogs are not part of this path.
+      // Manual API-key flow now starts from the builtin provider presets; the
+      // custom-endpoint card inside the presets keeps the protocol-first path.
     }
     render();
   }
@@ -495,6 +649,12 @@
     }
   }
 
+  async function chooseProviderPreset(providerId) {
+    if (!providerId) return;
+    controller.draft = transition(controller.draft, { type: 'choose_provider', providerId, providerKind: 'builtin' });
+    render();
+  }
+
   async function selectCcswitch(externalId) {
     const res = await invoke('modelAuthorizations.prepareCcSwitch', { externalId });
     if (!res || !res.ok) {
@@ -518,8 +678,26 @@
 
   async function continueCredentials() {
     const keyEl = el('model-authorization-api-key');
-    const baseUrlEl = el('model-authorization-base-url');
     const apiKey = String((keyEl && keyEl.value) || '').trim();
+    const isBuiltin = controller.draft.providerKind === 'builtin';
+    if (!apiKey) {
+      setStatus(tr('settings.model_authorization.error_required'), 'error');
+      return;
+    }
+    if (isBuiltin) {
+      // Builtin preset: base URL is provider-owned, so only the key is asked
+      // for; the model list comes from the local catalog (no network probe).
+      const providerId = controller.draft.providerId;
+      controller.draft = transition(controller.draft, {
+        type: 'set_api_key_credentials',
+        providerKind: 'builtin',
+        providerId,
+        apiKey,
+      });
+      await discoverModels({ kind: 'builtin', providerId });
+      return;
+    }
+    const baseUrlEl = el('model-authorization-base-url');
     const baseUrl = String((baseUrlEl && baseUrlEl.value) || '').trim();
     const protocol = controller.draft.customProvider && controller.draft.customProvider.protocol;
     if (!apiKey || !baseUrl || !protocol) {
@@ -551,19 +729,35 @@
   }
 
   async function completeDraft() {
+    if (controller.busy) return;
     let payload;
     try { payload = buildCompletionPayload(controller.draft); }
     catch (err) { setStatus((err && err.message) || tr('settings.model_authorization.error_required'), 'error'); return; }
     const testPayload = payload.source === 'ccswitch'
       ? { kind: 'ccswitch_draft', draftId: payload.draftId, model: payload.defaultModel }
-      : { kind: 'custom_api_key', protocol: payload.customProvider.protocol, baseUrl: payload.customProvider.baseUrl, apiKey: payload.customProvider.apiKey, model: payload.defaultModel };
-    const testRes = await invoke('modelAuthorizations.testDraft', testPayload);
-    if (!testRes || !testRes.ok) { setStatus((testRes && testRes.error) || tr('settings.model_authorization.error_test_failed'), 'error'); return; }
-    const res = await invoke('modelAuthorizations.complete', payload);
-    if (!res || !res.ok) { setStatus((res && res.error) || tr('settings.model_authorization.complete_failed'), 'error'); return; }
-    closeModal();
-    await refreshModelAuthorizationSettings();
-    if (typeof refreshModelGuard === 'function') await refreshModelGuard();
+      : payload.providerKind === 'builtin'
+        ? { kind: 'builtin_api_key', providerId: payload.providerId, apiKey: payload.apiKey, model: payload.defaultModel }
+        : { kind: 'custom_api_key', protocol: payload.customProvider.protocol, baseUrl: payload.customProvider.baseUrl, apiKey: payload.customProvider.apiKey, model: payload.defaultModel };
+    // The test call hits the provider over the network; disable the button
+    // and show progress so the wait reads as work, not a freeze.
+    controller.busy = true;
+    setStatus(tr('settings.model_authorization.testing_connection'), '');
+    render();
+    let succeeded = false;
+    try {
+      const testRes = await invoke('modelAuthorizations.testDraft', testPayload);
+      if (!testRes || !testRes.ok) { setStatus((testRes && testRes.error) || tr('settings.model_authorization.error_test_failed'), 'error'); return; }
+      const res = await invoke('modelAuthorizations.complete', payload);
+      if (!res || !res.ok) { setStatus((res && res.error) || tr('settings.model_authorization.complete_failed'), 'error'); return; }
+      succeeded = true;
+      closeModal();
+      await refreshModelAuthorizationSettings();
+      if (typeof refreshModelGuard === 'function') await refreshModelGuard();
+    } finally {
+      controller.busy = false;
+      if (succeeded) setStatus('', '');
+      if (controller.open) render();
+    }
   }
 
   async function removeAuthorization(authorizationId) {
@@ -585,7 +779,7 @@
     }
   }
 
-  async function handleAction(dataset) {
+  async function handleAction(dataset, targetNode) {
     const action = dataset && dataset.modelAuthAction;
     if (!action) return;
     if (action === 'choose-oauth') return chooseAuthType('oauth');
@@ -593,9 +787,24 @@
     if (action === 'source-manual') return chooseApiKeySource('manual');
     if (action === 'source-ccswitch') return chooseApiKeySource('ccswitch');
     if (action === 'choose-provider') return chooseProvider(dataset);
+    if (action === 'choose-provider-preset') return chooseProviderPreset(dataset.providerId);
+    if (action === 'choose-custom-endpoint') return chooseProtocol('openai');
     if (action === 'choose-protocol') return chooseProtocol(dataset.protocol);
     if (action === 'select-ccswitch') return selectCcswitch(dataset.externalId);
     if (action === 'continue-credentials') return continueCredentials();
+    if (action === 'back') { controller.draft = transition(controller.draft, { type: 'back' }); render(); return; }
+    if (action === 'cancel') { closeModal(); return; }
+    if (action === 'toggle-key-visible') {
+      const input = el(dataset.target || 'model-authorization-api-key');
+      if (input) {
+        const show = input.type !== 'text';
+        input.type = show ? 'text' : 'password';
+        if (targetNode && typeof targetNode.setAttribute === 'function') {
+          targetNode.setAttribute('title', tr(show ? 'settings.model_authorization.key_hide' : 'settings.model_authorization.key_show'));
+        }
+      }
+      return;
+    }
     if (action === 'toggle-model') { controller.draft = toggleModel(controller.draft, dataset.modelId, dataset.checked !== 'false'); render(); return; }
     if (action === 'default-model') { controller.draft = setDefaultModel(controller.draft, dataset.modelId); render(); return; }
     if (action === 'add-manual-model') { const input = el('model-authorization-manual-model'); controller.draft = addManualModel(controller.draft, input && input.value); render(); return; }
@@ -608,7 +817,7 @@
       const node = el(id);
       if (!node || node.dataset.modelAuthorizationBound) continue;
       node.dataset.modelAuthorizationBound = '1';
-      node.addEventListener('click', (event) => handleAction(event && event.target && event.target.dataset));
+      node.addEventListener('click', (event) => handleAction(event && event.target && event.target.dataset, event && event.target));
       node.addEventListener('keydown', (event) => {
         if (!event || event.key !== 'Enter') return;
         if (event.isComposing || event.keyCode === 229) return;
@@ -619,7 +828,7 @@
     const authorizationList = el('settings-model-authorization-list');
     if (authorizationList && !authorizationList.dataset.modelAuthorizationBound) {
       authorizationList.dataset.modelAuthorizationBound = '1';
-      authorizationList.addEventListener('click', (event) => handleAction(event && event.target && event.target.dataset));
+      authorizationList.addEventListener('click', (event) => handleAction(event && event.target && event.target.dataset, event && event.target));
     }
   }
 
@@ -633,15 +842,24 @@
     list.innerHTML = controller.authorizations.map((auth) => {
       const models = Array.isArray(auth.models) ? auth.models : [];
       const defaultModel = (models.find((model) => model.default) || models[0] || {}).model || auth.defaultModel || '';
+      const chips = models.map((model) => {
+        const id = model.model || model.id || '';
+        const isDefault = id === defaultModel;
+        return `<span class="model-authorization-model-chip${isDefault ? ' is-default' : ''}">${esc(id)}${isDefault ? '<span class="model-authorization-chip-check">✓</span>' : ''}</span>`;
+      }).join('');
       const warning = auth.unbound || auth.warningCode === 'unbound_authorization'
         ? tr('settings.model_authorization.unbound_title')
         : '';
       return `<div class="model-authorization-card" data-authorization-id="${esc(auth.authorizationId || auth.id)}">
-        <div class="model-authorization-card-head"><div><div class="model-authorization-card-title">${esc(auth.label || auth.providerLabel || auth.authorizationId || auth.id)}</div><div class="model-authorization-card-meta">${esc(auth.authType || '')} · ${esc(auth.source || '')}</div></div></div>
+        <div class="model-authorization-card-head">
+          <div>
+            <div class="model-authorization-card-title">${esc(auth.label || auth.providerLabel || auth.authorizationId || auth.id)}</div>
+            <div class="model-authorization-card-meta"><span class="model-authorization-auth-type">${esc(auth.authType || '')}</span><span>${esc(auth.source || '')}</span></div>
+          </div>
+          <button type="button" class="btn btn-sm btn-danger" data-model-auth-action="remove-authorization" data-authorization-id="${esc(auth.authorizationId || auth.id)}">${esc(tr('settings.model_authorization.remove_authorization'))}</button>
+        </div>
         ${warning ? `<div class="model-authorization-warning">${esc(warning)}</div>` : ''}
-        <div>${esc(models.map((model) => model.model || model.id).filter(Boolean).join(', '))}</div>
-        <div class="model-authorization-card-meta">${esc(tr('settings.model_authorization.default_label'))}: ${esc(defaultModel)}</div>
-        <div class="model-authorization-card-actions"><button type="button" class="btn btn-sm btn-danger" data-model-auth-action="remove-authorization" data-authorization-id="${esc(auth.authorizationId || auth.id)}">${esc(tr('settings.model_authorization.remove_authorization'))}</button></div>
+        ${chips ? `<div class="model-authorization-model-chips">${chips}</div>` : ''}
       </div>`;
     }).join('');
   }

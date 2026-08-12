@@ -1,5 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 
 import { genId12, safeId } from '../../storage';
 import { createLogger } from '../../logger';
@@ -12,6 +13,7 @@ import type { RecallAbilityAssetRecord } from './candidate-service';
 import type { AgentWakeRequest, WakeApproval } from '../p3394/types';
 import { approveWakeRequest, getWakeRequest } from '../p3394/wake-service';
 import { normalizeCognitionSourceRefs, type CognitionSourceRef } from './source-service';
+import { isCognitionSourceEnabled } from './source-control';
 
 const log = createLogger('recall.context-projection');
 let lastProjectionCreatedAtMs = 0;
@@ -21,7 +23,7 @@ export type ContextProjectionStatus = 'preview' | 'confirmed' | 'deferred' | 're
 
 export interface OmittedAssetRef {
   assetId: string;
-  reason: 'asset_paused' | 'asset_revoked' | 'workspace_not_referenced' | 'workspace_disabled' | 'scope_mismatch';
+  reason: 'asset_paused' | 'asset_revoked' | 'workspace_not_referenced' | 'workspace_disabled' | 'scope_mismatch' | 'source_unavailable';
 }
 
 export type RecallAssetMatchMethod = 'semantic' | 'recency_fallback' | 'manual';
@@ -62,6 +64,14 @@ export interface ProjectionInput {
 
 export interface ProjectionSemanticOptions {
   embedTexts?: (texts: string[]) => Promise<number[][]>;
+  minScore?: number;
+  limit?: number;
+}
+
+export interface AutomaticProjectionInput {
+  taskRunId: string;
+  taskText: string;
+  workspaceId?: string;
 }
 
 export interface BuildRecallViewResult {
@@ -216,6 +226,22 @@ function scopeIncludes(scope: string, purpose: string): boolean {
   return terms.includes(purpose) || terms.includes('*');
 }
 
+function automaticProjectionId(taskRunId: string, workspaceId?: string): string {
+  const digest = createHash('sha256')
+    .update(`${taskRunId}\n${workspaceId || ''}\nconversation_reply`)
+    .digest('hex')
+    .slice(0, 24);
+  return `proj-auto-${digest}`;
+}
+
+async function hasEnabledAutomaticSources(userId: string, asset: RecallAbilityAssetRecord): Promise<boolean> {
+  for (const source of asset.evidenceRefs) {
+    if (source.taxonomyVersion !== 2) continue;
+    if (!(await isCognitionSourceEnabled(userId, source))) return false;
+  }
+  return true;
+}
+
 
 function normalizeProjectionAssetIds(value: unknown, field: string): string[] {
   if (value === undefined) return [];
@@ -333,6 +359,101 @@ export async function previewContextProjection(userId: string, input: Projection
     taskRunId, ...(workspaceId ? { workspaceId } : {}), purpose, authorization,
     assetIds: view.assetIds, ...(view.assetVersions ? { assetVersions: view.assetVersions } : {}), ...(view.assetMatches ? { assetMatches: view.assetMatches } : {}), sourceRefs: view.sourceRefs, omittedRefs: view.omittedRefs,
     ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}), status: 'preview', createdAt: now,
+  };
+  await writeRecallJsonRecord(userId, 'projections', record.id, record);
+  return record;
+}
+
+export async function createAutomaticContextProjection(
+  userId: string,
+  input: AutomaticProjectionInput,
+  options: ProjectionSemanticOptions = {},
+): Promise<ContextProjectionRecord | undefined> {
+  const taskRunId = normalizeTerm(input.taskRunId, 'task run id', 160);
+  const taskText = normalizeTerm(input.taskText, 'task text', 2_000);
+  const workspaceId = input.workspaceId === undefined
+    ? undefined
+    : normalizeTerm(input.workspaceId, 'workspace id', 160);
+  const id = automaticProjectionId(taskRunId, workspaceId);
+  const existing = await readRecallJsonRecord(userId, 'projections', id);
+  if (existing) {
+    const projection = asProjection(existing);
+    if (projection.status === 'confirmed') return projection;
+  }
+
+  const minScore = Number.isFinite(options.minScore)
+    ? Math.max(0, Math.min(1, Number(options.minScore)))
+    : 0.35;
+  const limit = Number.isFinite(options.limit)
+    ? Math.max(1, Math.min(12, Math.floor(Number(options.limit))))
+    : 4;
+  const allAssets = await listAbilityAssets(userId);
+  const workspaceRefs = workspaceId ? await listWorkspaceAssetReferences(userId) : [];
+  const workspaceRefsByAsset = new Map(
+    workspaceRefs
+      .filter((ref) => ref.workspaceId === workspaceId)
+      .map((ref) => [ref.assetId, ref]),
+  );
+  const eligibleAssets: RecallAbilityAssetRecord[] = [];
+  const omittedRefs: OmittedAssetRef[] = [];
+  for (const asset of allAssets) {
+    if (asset.status === 'paused') {
+      omittedRefs.push({ assetId: asset.id, reason: 'asset_paused' });
+      continue;
+    }
+    if (asset.status === 'revoked') {
+      omittedRefs.push({ assetId: asset.id, reason: 'asset_revoked' });
+      continue;
+    }
+    const workspaceRef = workspaceRefsByAsset.get(asset.id);
+    if (workspaceRef && !workspaceRef.enabled) {
+      omittedRefs.push({ assetId: asset.id, reason: 'workspace_disabled' });
+      continue;
+    }
+    if (!(await hasEnabledAutomaticSources(userId, asset))) {
+      omittedRefs.push({ assetId: asset.id, reason: 'source_unavailable' });
+      continue;
+    }
+    eligibleAssets.push(asset);
+  }
+  if (!eligibleAssets.length) return undefined;
+
+  let ranked: Awaited<ReturnType<typeof rankAssetsBySemanticMatch>>;
+  try {
+    ranked = await rankAssetsBySemanticMatch(taskText, eligibleAssets, options);
+  } catch (error) {
+    log.warn('automatic Recall semantic matching unavailable; skipping injection', {
+      userId,
+      taskRunId,
+      error: (error as Error).message,
+    });
+    return undefined;
+  }
+  const matchByAssetId = new Map(ranked.assetMatches.map((match) => [match.assetId, match]));
+  const selectedAssets = ranked.assets
+    .filter((asset) => (matchByAssetId.get(asset.id)?.matchScore || 0) >= minScore)
+    .slice(0, limit);
+  if (!selectedAssets.length) return undefined;
+
+  const now = projectionNowIso();
+  const selectedIds = new Set(selectedAssets.map((asset) => asset.id));
+  const record: ContextProjectionRecord = {
+    schemaVersion: 2,
+    ownerId: userId,
+    id,
+    taskRunId,
+    ...(workspaceId ? { workspaceId } : {}),
+    purpose: 'conversation_reply',
+    authorization: 'not_required',
+    assetIds: selectedAssets.map((asset) => asset.id),
+    assetVersions: Object.fromEntries(selectedAssets.map((asset) => [asset.id, asset.version])),
+    assetMatches: ranked.assetMatches.filter((match) => selectedIds.has(match.assetId)),
+    sourceRefs: sourceRefsForAssets(selectedAssets),
+    omittedRefs,
+    status: 'confirmed',
+    createdAt: now,
+    confirmedAt: now,
+    decidedAt: now,
   };
   await writeRecallJsonRecord(userId, 'projections', record.id, record);
   return record;

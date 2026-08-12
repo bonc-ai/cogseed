@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nseap.example/schemas/ontology-analysis-research-plan/v0.1",
+  "title": "Mandatory Web Research Plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "plan_id",
+    "skill_id",
+    "skill_version",
+    "task_id",
+    "research_mode",
+    "domain",
+    "research_date",
+    "web_research_required",
+    "research_questions",
+    "source_strategy",
+    "minimum_evidence",
+    "conflict_policy"
+  ],
+  "properties": {
+    "plan_id": {
+      "type": "string",
+      "pattern": "^RP-[A-Za-z0-9_-]+$"
+    },
+    "skill_id": {
+      "const": "ontology-analysis-skill"
+    },
+    "skill_version": {
+      "const": "0.1.0"
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "research_mode": {
+      "enum": [
+        "real",
+        "synthetic_fixture"
+      ]
+    },
+    "domain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "volume_number",
+        "domain_name_cn",
+        "domain_name_en"
+      ],
+      "properties": {
+        "volume_number": {
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "domain_name_cn": {
+          "type": "string",
+          "minLength": 1
+        },
+        "domain_name_en": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "research_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "web_research_required": {
+      "type": "boolean"
+    },
+    "research_questions": {
+      "type": "array",
+      "minItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "question_id",
+          "question",
+          "critical",
+          "expected_source_types"
+        ],
+        "properties": {
+          "question_id": {
+            "type": "string",
+            "pattern": "^RQ[0-9]+$"
+          },
+          "question": {
+            "type": "string",
+            "minLength": 8
+          },
+          "critical": {
+            "type": "boolean"
+          },
+          "expected_source_types": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "official_policy",
+                "official_standard",
+                "official_specification",
+                "international_organization",
+                "official_guidance",
+                "official_dataset",
+                "secondary_discovery"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "source_strategy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preferred_source_types",
+        "secondary_sources_discovery_only",
+        "search_snippets_are_evidence",
+        "selected_sources_must_be_opened",
+        "current_facts_require_primary_sources",
+        "official_domains"
+      ],
+      "properties": {
+        "preferred_source_types": {
+          "type": "array",
+          "minItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "official_policy",
+              "official_standard",
+              "official_specification",
+              "international_organization",
+              "official_guidance",
+              "official_dataset"
+            ]
+          }
+        },
+        "secondary_sources_discovery_only": {
+          "const": true
+        },
+        "search_snippets_are_evidence": {
+          "const": false
+        },
+        "selected_sources_must_be_opened": {
+          "const": true
+        },
+        "current_facts_require_primary_sources": {
+          "const": true
+        },
+        "official_domains": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "minimum_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "min_queries",
+        "min_opened_sources",
+        "min_verified_primary_sources",
+        "min_official_policy_sources",
+        "min_official_standard_sources"
+      ],
+      "properties": {
+        "min_queries": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "min_opened_sources": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "min_verified_primary_sources": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "min_official_policy_sources": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "min_official_standard_sources": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "conflict_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prefer_issuing_authority",
+        "date_conflicts_must_be_resolved",
+        "version_conflicts_must_be_resolved",
+        "scope_conflicts_must_be_resolved"
+      ],
+      "properties": {
+        "prefer_issuing_authority": {
+          "const": true
+        },
+        "date_conflicts_must_be_resolved": {
+          "const": true
+        },
+        "version_conflicts_must_be_resolved": {
+          "const": true
+        },
+        "scope_conflicts_must_be_resolved": {
+          "const": true
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "research_mode": {
+            "const": "real"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "web_research_required": {
+            "const": true
+          }
+        }
+      }
+    }
+  ]
+}

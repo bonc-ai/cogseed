@@ -30,7 +30,7 @@ export interface PresetGroup {
 }
 
 /**
- * 角色模板自带的技能/智能体捆绑（工作空间一期）。
+ * 角色模板自带的技能/智能体捆绑（情境空间）。
  * id 引用当前用户可见资源：技能 = `listSkills()` 的 id（custom + marketplace），
  * 智能体 = `listAgents()` 的 id。派生时按有效集合过滤失效引用（见 spaces.ts）。
  */
@@ -53,7 +53,7 @@ const BUILTIN_TEMPLATES: RoleTemplate[] = [
   {
     template_id: "student",
     name: "学生",
-    description: "在校学生：课程、作业、考试与学习计划的结构化记忆",
+    description: "学生学习空间：以真正理解而不是记忆为目标。通过诊断和苏格拉底追问引导你自己形成答案，把阅读转成论点—证据—问题式的主动笔记；按截止日、先修依赖与掌握度规划学期地图，每天只挑 1–3 个可完成的学习动作；每周用完成证据和误区日志调整负荷与复习间隔。内置学习研究、学习计划、练习反馈三个智能体，不代劳、不虚构学习证据。",
     version: '0.2.0-review.1',
     preset_groups: [
       {
@@ -147,7 +147,7 @@ const BUILTIN_TEMPLATES: RoleTemplate[] = [
   {
     template_id: "scholar",
     name: "学者",
-    description: "学术研究者：研究问题、文献证据、方法与复现记录",
+    description: "学者研究空间：把宽泛主题收敛为可研究、可证伪、有贡献边界的问题；用可复现的检索与纳排标准构建文献证据表，综合证据强度、分歧与空白；以主张—证据—推理组织论文并核验引文对主张的真实支持；研究设计阶段检查问题—设计—样本—测量—结论的对齐、偏差与伦理风险，捕获环境与参数保证独立复跑。内置文献综述、研究设计评审、引文核验三个智能体，坚持不虚构证据。",
     version: '0.2.0-review.1',
     preset_groups: [
       {
@@ -244,7 +244,7 @@ const BUILTIN_TEMPLATES: RoleTemplate[] = [
   {
     template_id: "fde",
     name: "FDE 交付",
-    description: "解决方案交付：客户目标、现状集成、方案取舍与验收标准",
+    description: "解决方案交付空间：从客户业务成果出发澄清现状、数据、系统与约束，建立事实与假设账本；把成果映射到能力与架构选项，明确非功能需求、权衡与 POC；设计可重复采集与签署的验收证据，把方案转成双方责任、依赖、readiness gate 与回滚路径清晰的交付计划。内置解决方案草案、客户 Context、集成验证三个智能体，不编造接口与验收证据。",
     version: '0.2.0-review.1',
     preset_groups: [
       {
@@ -342,7 +342,7 @@ const BUILTIN_TEMPLATES: RoleTemplate[] = [
   {
     template_id: "product_manager",
     name: "产品经理",
-    description: "产品经理：产品目标、用户场景、路线图与决策记录",
+    description: "产品经理工作空间：从需求证据到交付评审的全流程支持。把访谈、工单、销售反馈等原始输入整理成可追溯的需求证据与问题主题；基于用户流程与产品目标产出可评审的 PRD、用户故事和可观察验收标准；设计指标体系与优先级框架做版本取舍；研究竞品与市场信号支撑定位和差异化决策。内置 PRD 一致性检查、竞品研究、客户需求评估三个智能体，全程遵循『不虚构证据、数据不可得时不编造』的原则。",
     version: '0.2.0-review.1',
     preset_groups: [
       {
@@ -431,7 +431,7 @@ const BUILTIN_TEMPLATES: RoleTemplate[] = [
   {
     template_id: "project_manager",
     name: "项目经理",
-    description: "项目经理：项目范围、计划资源、风险台账与状态汇报",
+    description: "项目管理空间：从会议材料中分离事实、决定与行动项并保留定位证据；把模糊目标拆成遵守 100% 规则、可验收且有责任人的 WBS，转成有依赖逻辑、容量约束与关键路径的可预测计划；基于基线与证据生成面向决策的状态与预测；建立带触发器、责任人、缓解与应急方案的 RAID 账本并按阈值升级。内置周度状态、项目风险扫描、项目计划三个智能体，只依据真实证据汇报。",
     version: '0.2.0-review.1',
     preset_groups: [
       {
@@ -524,7 +524,7 @@ const BUILTIN_TEMPLATES: RoleTemplate[] = [
   {
     template_id: "technical_writer",
     name: "技术写作",
-    description: "技术写作与知识管理：文档域、术语体系与来源治理",
+    description: "技术写作空间：从代码、规范和现有文档提取带版本与定位的事实账本；按受众任务设计可发现、可扩展的文档结构；维护带定义、别名、禁用词与审批记录的术语表；把用户目标写成可执行、可验证、可访问的技术内容；版本变更时输出受影响资产、迁移步骤与风险。内置文档一致性检查、来源探索、变更影响三个智能体，不虚构接口与步骤。",
     version: '0.2.0-review.1',
     preset_groups: [
       {
@@ -606,7 +606,7 @@ const BUILTIN_TEMPLATES: RoleTemplate[] = [
   {
     template_id: "recruiter",
     name: "招聘专员",
-    description: "招聘专员：职位需求、资格标准、候选流程与合规边界",
+    description: "招聘工作空间：把招聘需求转成与业务成果相连、可观察的胜任力评分卡；围绕胜任力假设设计一致的核心问题与行为锚点；从简历只抽取候选人明确陈述的可定位证据，用固定 rubric 生成要求—证据解释矩阵，暴露缺口而非自动淘汰；合并独立面试反馈时保留分歧与证据缺口。内置招聘评估缺口、简历批量解析、候选人对比三个智能体，不自动排序录用、不臆测未陈述经历。",
     version: '0.2.0-review.1',
     preset_groups: [
       {
@@ -702,7 +702,7 @@ const BUILTIN_TEMPLATES: RoleTemplate[] = [
   {
     template_id: "software_engineer",
     name: "软件工程师",
-    description: "软件工程师：代码库、架构依赖、构建测试与发布治理",
+    description: "软件工程空间：围绕变更意图建立最小代码地图，不盲目全量读取；把验收标准映射到文件、接口、数据迁移、测试、发布与回滚的有序计划；按风险覆盖正常、边界、错误、权限与恢复路径并保留可复跑测试证据；通过稳定复现与单变量实验定位根因，审查变更的正确性、安全、性能与可维护性。内置代码库探索、代码质量评审、测试运行三个智能体，不编造测试结果。",
     version: '0.2.0-review.1',
     preset_groups: [
       {
@@ -806,7 +806,150 @@ const BUILTIN_TEMPLATES: RoleTemplate[] = [
       agent_ids: ["36cb9c97ac31", "876218dd6c3f", "9099ea65848a"],
     },
   },
+{
+    template_id: 'ecommerce_ops',
+    name: '电商运营',
+    description: "电商运营空间：覆盖从选品到复盘的完整打法。从市场趋势、竞品表现与利润空间筛选潜力商品，拆解竞品店铺的选品结构、视觉与内容策略；多平台比价输出价格带分布与定价建议；从卖点提炼撰写详情页文案与小红书笔记；按周期汇总 GMV、转化、流量与广告数据，定位问题并给出下周行动建议。内置选品分析、内容创作、数据复盘三个智能体，数据不可得时不编造。",
+    version: '1.0.0',
+    preset_groups: [
+        {
+          title: "店铺与品类",
+          fields: [
+            { name: "店铺类型" },
+            { name: "主营类目" },
+            { name: "目标人群" },
+            { name: "价格带" },
+            { name: "平台" },
+          ],
+        },
+        {
+          title: "选品与商品",
+          fields: [
+            { name: "在售商品" },
+            { name: "选品标准" },
+            { name: "竞品名单" },
+            { name: "毛利目标" },
+            { name: "库存方式" },
+          ],
+        },
+        {
+          title: "内容与渠道",
+          fields: [
+            { name: "主推渠道" },
+            { name: "内容形式" },
+            { name: "发布节奏" },
+            { name: "账号定位" },
+            { name: "素材库" },
+          ],
+        },
+        {
+          title: "数据与目标",
+          fields: [
+            { name: "月销目标" },
+            { name: "核心指标" },
+            { name: "广告预算" },
+            { name: "复盘习惯" },
+          ],
+        },
+        {
+          title: "审美与品牌",
+          fields: [
+            { name: "品牌调性" },
+            { name: "视觉风格" },
+            { name: "禁忌元素" },
+            { name: "参考店铺" },
+          ],
+        }
+    ],
+        bundle: {
+          skill_ids: ["8ac59333bc31", "79943922f937", "a5c864d6b267", "02d958231673", "a31023dd51a0"],
+          agent_ids: ["1ce66a5d9875", "2a2d007ec7e2", "bc60fe682b5a"],
+        },
+  },
 ];
+
+// ── 情境空间场景（Scenario）—— 建空间的 UX 入口，推荐角色模板组合 ──────────
+
+/**
+ * 场景 = 情境空间创建时的语义入口（教育/写作/职场+自定义）。
+ * 场景推荐主+副角色模板组合 + 建议额外资源（基线之上再追加）。
+ * 渲染层显示场景卡，点击后进入创建流程（模板预填）。
+ *
+ * 注意：场景是纯 UX 概念，不落盘；空间仍只存 primary/secondary/extra。
+ */
+export interface Scenario {
+  scenario_id: string;
+  /** 场景显示名（中文；UI 通过 i18n 覆盖可本地化）。 */
+  name: string;
+  description: string;
+  /** emoji 图标 */
+  icon: string;
+  /** 建议主角色模板 id；无 = 自定义场景，由用户自选。 */
+  suggested_primary_template_id?: string;
+  /** 建议副角色模板 id 列表。 */
+  suggested_secondary_template_ids: string[];
+  /** 建议额外技能 id（模板 bundle 之外再追加）；空 = 不推荐。 */
+  suggested_extra_skills: string[];
+  /** 建议额外智能体 id（模板 bundle 之外再追加）；空 = 不推荐。 */
+  suggested_extra_agents: string[];
+}
+
+const SCENARIOS: Scenario[] = [
+  {
+    scenario_id: 'education',
+    name: '教育',
+    description: '学生与学者的学习研究空间：课程管理、论文写作、知识体系构建',
+    icon: '🎓',
+    suggested_primary_template_id: 'student',
+    suggested_secondary_template_ids: ['scholar'],
+    suggested_extra_skills: [],
+    suggested_extra_agents: [],
+  },
+  {
+    scenario_id: 'writing',
+    name: '写作',
+    description: '技术写作与知识管理空间：文档体系、术语治理、内容发布',
+    icon: '📝',
+    suggested_primary_template_id: 'technical_writer',
+    suggested_secondary_template_ids: [],
+    suggested_extra_skills: [],
+    suggested_extra_agents: [],
+  },
+  {
+    scenario_id: 'workplace',
+    name: '职场',
+    description: '产品、项目与交付的专业协作空间：需求管理、进度追踪、方案交付',
+    icon: '💼',
+    suggested_primary_template_id: 'product_manager',
+    suggested_secondary_template_ids: ['project_manager', 'fde'],
+    suggested_extra_skills: [],
+    suggested_extra_agents: [],
+  },
+  {
+    scenario_id: 'custom',
+    name: '自定义',
+    description: '自由拼装：不预设模板，自行选择角色与资源组合',
+    icon: '🧩',
+    // 无 suggested_primary → 用户自选
+    suggested_primary_template_id: undefined,
+    suggested_secondary_template_ids: [],
+    suggested_extra_skills: [],
+    suggested_extra_agents: [],
+  },
+];
+
+/** 返回场景列表（防御性拷贝）。 */
+export function listScenarios(): Scenario[] {
+  return SCENARIOS.map((s) => ({ ...s, suggested_secondary_template_ids: [...s.suggested_secondary_template_ids], suggested_extra_skills: [...s.suggested_extra_skills], suggested_extra_agents: [...s.suggested_extra_agents] }));
+}
+
+/** 按 scenario_id 查找场景；未命中返回 undefined。 */
+export function getScenario(scenarioId: string): Scenario | undefined {
+  const found = SCENARIOS.find((s) => s.scenario_id === scenarioId);
+  return found ? { ...found, suggested_secondary_template_ids: [...found.suggested_secondary_template_ids], suggested_extra_skills: [...found.suggested_extra_skills], suggested_extra_agents: [...found.suggested_extra_agents] } : undefined;
+}
+
+// ── 模板查询 API ───────────────────────────────────────────────────────────
 
 /** 返回内置模板列表（防御性拷贝，调用方改动不影响注册表）。 */
 export function listRoleTemplates(): RoleTemplate[] {

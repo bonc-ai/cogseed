@@ -134,6 +134,12 @@ export const mateAgentLocalRoot    = (uid: string) => path.join(userLocalRoot(ui
 export const mateAgentWorkerStateDir = (uid: string) => path.join(mateAgentLocalRoot(uid), 'worker-state');
 export const mateAgentRecoveryStateFile = (uid: string) => path.join(mateAgentWorkerStateDir(uid), 'last-recovery.json');
 export const mateAgentCoordinationsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'coordinations');
+export const mateAgentAssetEventsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'asset-events');
+export const mateAgentAuditReceiptsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'audit-receipts');
+export const mateAgentReviewDecisionsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'review-decisions');
+export const mateAgentCostTelemetryDir = (uid: string) => path.join(mateAgentLocalRoot(uid), 'cost-telemetry');
+export const mateAgentCapabilityPacksDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'capability-packs');
+export const mateAgentSkillLifecycleDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'skill-lifecycle');
 export const userChatsDir           = (uid: string) => path.join(userCloudRoot(uid), 'chats');
 export const userSkillChatDir       = (uid: string, sid: string) => path.join(userChatsDir(uid), 'skill', sid);
 export const userAgentChatDir       = (uid: string, aid: string) => path.join(userChatsDir(uid), 'agent', aid);
@@ -182,9 +188,9 @@ export const sessionCloudToolResultsDir = (uid: string, sessionId: string) =>
 export const userLocalSessionsDir   = (uid: string) => path.join(userLocalRoot(uid), 'sessions');
 export const userLocalSessionFile   = (uid: string, sessionId: string) => path.join(userLocalSessionsDir(uid), `${sessionId}.jsonl`);
 
-// Mate Agent Runtime — machine-private execution boundary. Runtime sessions,
+// CogSeed Runtime — machine-private execution boundary. Runtime sessions,
 // context mirrors, memory, and run logs stay under local/mate_runtime so they
-// never sync with Mate Agent cloud chats/sessions and cannot be mistaken for
+// never sync with CogSeed cloud chats/sessions and cannot be mistaken for
 // UI-facing group-chat state.
 export const mateRuntimeRoot             = (uid: string) => path.join(userLocalRoot(uid), 'mate_runtime');
 export const mateRuntimeSessionsDir      = (uid: string) => path.join(mateRuntimeRoot(uid), 'sessions');
@@ -289,7 +295,7 @@ export const userProjectsDir       = (uid: string) => path.join(userCloudRoot(ui
 export const projectDir            = (uid: string, pid: string) => path.join(userProjectsDir(uid), pid);
 export const projectMetaFile       = (uid: string, pid: string) => path.join(projectDir(uid, pid), 'project.json');
 export const projectBindingsFile   = (uid: string, pid: string) => path.join(projectDir(uid, pid), 'bindings.json');
-// Workspaces (工作空间一期): per-space JSON under `<uid>/cloud/spaces/`.
+// 情境空间（原"工作空间"）：per-space JSON under `<uid>/cloud/spaces/`.
 // No aggregate `_index.json` — listing scans `spaces/*.json` (same
 // no-aggregate rationale as projects).
 export const userSpacesDir         = (uid: string) => path.join(userCloudRoot(uid), 'spaces');
@@ -386,6 +392,17 @@ export const userPermissionsFile = (uid: string) => path.join(userCloudConfigDir
 // `resources/builtin/` (extraResources in packaged builds); startup/login
 // mirrors the relevant pieces into per-user runtime roots.
 export const packagedBuiltinDir = () => packagedResourceDir('builtin');
+
+/**
+ * Root of the packaged security guardrail components (`resources/guardrail`).
+ *
+ * Kept separate from `packagedBuiltinDir` because guardrail content is a system
+ * component, not a user-facing asset: per the security spec it must never appear
+ * in the skill catalog, the capability market, or the cognition tree, and users
+ * cannot disable it. Housing it under `builtin/` would put it one directory
+ * scan away from being enumerated as an installable skill.
+ */
+export const packagedGuardrailDir = () => packagedResourceDir('guardrail');
 export const packagedBuiltinMarketplaceDir = () => path.join(packagedBuiltinDir(), 'marketplace');
 export const packagedBuiltinMarketplaceAgentsDir = () => path.join(packagedBuiltinMarketplaceDir(), 'agents');
 export const packagedBuiltinMarketplaceSkillsDir = () => path.join(packagedBuiltinMarketplaceDir(), 'skills');
@@ -473,6 +490,7 @@ export const userMessagingConfigFile = (uid: string) => path.join(userLocalConfi
 export const userMessagingBindingsFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-bindings.json');
 export const userMessagingInboundLedgerFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-inbound.json');
 export const userMessagingDeliveryLedgerFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-delivery.json');
+export const userTouchpointLedgerFile = (uid: string) => path.join(userLocalConfigDir(uid), 'touchpoints-ledger.json');
 // Wechat iLink dynamic state (cursor + context tokens) is machine-private
 // and encrypted in place; never synced.
 export const userMessagingWeChatStateFile = (uid: string) => path.join(userLocalConfigDir(uid), 'messaging-wechat-state.json');

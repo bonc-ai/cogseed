@@ -6,9 +6,9 @@ import { Jimp } from 'jimp';
 const root = path.join(__dirname, '../..');
 const asset = (name: string) => path.join(root, 'src/resources/icons', name);
 
-describe('Mate Agent brand assets', () => {
+describe('CogSeed brand assets', () => {
   it('ships a maintainable SVG master with the approved palette', () => {
-    const svg = fs.readFileSync(asset('mate-agent-master.svg'), 'utf8');
+    const svg = fs.readFileSync(asset('cogseed-master.svg'), 'utf8');
     expect(svg).toContain('viewBox="0 0 1024 1024"');
     expect(svg).toContain('#7C3AED');
     expect(svg).toContain('#3B82F6');

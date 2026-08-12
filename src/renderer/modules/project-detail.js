@@ -141,12 +141,12 @@ async function loadProjectDetail(pid) {
   }
   try {
     const [getRes, listRes, filesRes, kbRes, instrRes, autoRes] = await Promise.all([
-      window.orkas.invoke('projects.get', { projectId: pid }),
-      window.orkas.invoke('projects.bindings.list', { projectId: pid }),
-      window.orkas.invoke('projects.files.tree', { projectId: pid }),
-      window.orkas.invoke('projects.files.status', { projectId: pid, skipReconcile: true }).catch((err) => ({ ok: false, error: err?.message || String(err) })),
-      window.orkas.invoke('projects.instructions.get', { projectId: pid }).catch((err) => ({ ok: false, error: err?.message || String(err) })),
-      window.orkas.invoke('autoTasks.list', { projectId: pid }).catch((err) => ({ ok: false, error: err?.message || String(err) })),
+      window.cogseed.invoke('projects.get', { projectId: pid }),
+      window.cogseed.invoke('projects.bindings.list', { projectId: pid }),
+      window.cogseed.invoke('projects.files.tree', { projectId: pid }),
+      window.cogseed.invoke('projects.files.status', { projectId: pid, skipReconcile: true }).catch((err) => ({ ok: false, error: err?.message || String(err) })),
+      window.cogseed.invoke('projects.instructions.get', { projectId: pid }).catch((err) => ({ ok: false, error: err?.message || String(err) })),
+      window.cogseed.invoke('autoTasks.list', { projectId: pid }).catch((err) => ({ ok: false, error: err?.message || String(err) })),
     ]);
     if (loadSeq !== _projectDetailLoadSeq || pid !== _projectDetailPid) return;
     if (!getRes?.ok || !listRes?.ok || !filesRes?.ok) {
@@ -467,7 +467,7 @@ function _bindProjectInstructions() {
     const startedAt = performance.now();
     saveBtn.disabled = true;
     try {
-      const res = await window.orkas.invoke('projects.instructions.set', { projectId: _projectDetailPid, content });
+      const res = await window.cogseed.invoke('projects.instructions.set', { projectId: _projectDetailPid, content });
       if (!res?.ok) throw new Error(res?.error || 'save_failed');
       input.dataset.savedValue = content;
       if (_projectDetailMeta?.instructions) _projectDetailMeta.instructions.content = content;
@@ -583,7 +583,7 @@ async function _loadProjectMemory(pid) {
   if (!pid) { _projectMemory = []; _renderProjectMemoryList(); return; }
   let nextMemory = [];
   try {
-    const res = await window.orkas.invoke('memory.list', { target: 'project', projectId: pid });
+    const res = await window.cogseed.invoke('memory.list', { target: 'project', projectId: pid });
     nextMemory = (res && res.ok && Array.isArray(res.entries)) ? res.entries : [];
   } catch (err) {
     _projectDetailLog.warn('load project memory failed', err);
@@ -689,7 +689,7 @@ async function _mutateProjectMemory(channel, payload) {
   _projectMemoryLoadSeq += 1;
   _updateProjectMemoryEditor();
   try {
-    const res = await window.orkas.invoke(channel, {
+    const res = await window.cogseed.invoke(channel, {
       target: 'project',
       projectId: pid,
       ...(payload || {}),
@@ -796,7 +796,7 @@ async function _loadProjectTodos(pid) {
   if (!pid) { _projectTodos = []; _renderProjectTodosList(); return; }
   let nextTodos = [];
   try {
-    const res = await window.orkas.invoke('projects.tasks.list', { projectId: pid });
+    const res = await window.cogseed.invoke('projects.tasks.list', { projectId: pid });
     nextTodos = (res && res.ok && Array.isArray(res.tasks)) ? res.tasks : [];
   } catch (err) {
     _projectDetailLog.warn('load project todos failed', err);
@@ -923,7 +923,7 @@ async function _saveProjectTodoEditor() {
   const input = document.getElementById('project-todo-input');
   const title = String(input?.value || '').trim();
   if (!title || !_projectDetailPid) return;
-  const ok = await _todoMutate(() => window.orkas.invoke('projects.tasks.create', {
+  const ok = await _todoMutate(() => window.cogseed.invoke('projects.tasks.create', {
     projectId: _projectDetailPid,
     title,
   }));
@@ -976,7 +976,7 @@ function _bindProjectTodos() {
       if (!tid || !_projectDetailPid || _projectTodoMutating) return;
       const deleteBtn = target?.closest?.('[data-action="todo-delete"]');
       if (deleteBtn) {
-        await _todoMutate(() => window.orkas.invoke('projects.tasks.delete', { projectId: _projectDetailPid, taskId: tid }));
+        await _todoMutate(() => window.cogseed.invoke('projects.tasks.delete', { projectId: _projectDetailPid, taskId: tid }));
         return;
       }
       const fromStatus = row.dataset.status || 'todo';
@@ -987,7 +987,7 @@ function _bindProjectTodos() {
         from_status: fromStatus,
         to_status: nextStatus,
       });
-      const ok = await _todoMutate(() => window.orkas.invoke('projects.tasks.update', {
+      const ok = await _todoMutate(() => window.cogseed.invoke('projects.tasks.update', {
         projectId: _projectDetailPid,
         taskId: tid,
         status: nextStatus,
@@ -1155,7 +1155,7 @@ function _onProjectAgentMenuKeyDown(ev) {
 async function _removeProjectAgent(agentId) {
   if (!_projectDetailPid || !agentId) return;
   try {
-    const res = await window.orkas.invoke('projects.bindings.remove', {
+    const res = await window.cogseed.invoke('projects.bindings.remove', {
       projectId: _projectDetailPid,
       kind: 'agent',
       id: agentId,
@@ -1328,7 +1328,7 @@ function _hasPendingProjectKbStatuses() {
 
 async function _refreshProjectKbStatusSnapshot(pid) {
   if (!pid || pid !== _projectDetailPid) return;
-  const res = await window.orkas.invoke('projects.files.status', { projectId: pid, skipReconcile: true });
+  const res = await window.cogseed.invoke('projects.files.status', { projectId: pid, skipReconcile: true });
   if (!res?.ok || pid !== _projectDetailPid) return;
   const flatFiles = _flattenProjectLibraryFiles(_projectDetailMeta?.files || []);
   _projectKbStatusByName = _buildProjectKbStatusMap(flatFiles, res.files || []);
@@ -1343,7 +1343,7 @@ function _kickProjectKbReconcileIfNeeded() {
   const pid = _projectDetailPid;
   if (!pid) return;
   _projectKbReconcileInFlight = true;
-  window.orkas.invoke('projects.files.reconcile', { projectId: pid })
+  window.cogseed.invoke('projects.files.reconcile', { projectId: pid })
     .then(() => _refreshProjectKbStatusSnapshot(pid))
     .catch((err) => _projectDetailLog.warn('project kb reconcile failed', err))
     .finally(() => {
@@ -1770,7 +1770,7 @@ function _bindProjectFileRows() {
 async function _resolveProjectFilePath(name) {
   if (!_projectDetailPid || !name) return null;
   try {
-    const res = await window.orkas.invoke('projects.files.absPath', {
+    const res = await window.cogseed.invoke('projects.files.absPath', {
       projectId: _projectDetailPid,
       name,
     });
@@ -1886,7 +1886,7 @@ function _clearProjectLibraryViewer() {
 async function _showProjectTextViewer(name) {
   const els = _prepProjectLibraryViewer(name);
   if (!els || !els.bodyEl || !els.actionsEl) return;
-  const res = await window.orkas.invoke('projects.files.readText', {
+  const res = await window.cogseed.invoke('projects.files.readText', {
     projectId: _projectDetailPid,
     name,
   });
@@ -1921,7 +1921,7 @@ async function _showProjectTextViewer(name) {
 async function _showProjectImageViewer(name) {
   const els = _prepProjectLibraryViewer(name);
   if (!els || !els.bodyEl || !els.actionsEl) return;
-  const res = await window.orkas.invoke('projects.files.image', {
+  const res = await window.cogseed.invoke('projects.files.image', {
     projectId: _projectDetailPid,
     name,
   });
@@ -1951,7 +1951,7 @@ async function _showProjectPdfViewer(name) {
 async function _showProjectDocxViewer(name) {
   const els = _prepProjectLibraryViewer(name);
   if (!els || !els.bodyEl || !els.actionsEl) return;
-  const res = await window.orkas.invoke('projects.files.docxHtml', {
+  const res = await window.cogseed.invoke('projects.files.docxHtml', {
     projectId: _projectDetailPid,
     name,
   });
@@ -1965,7 +1965,7 @@ async function _showProjectOfficeViewer(name) {
   const els = _prepProjectLibraryViewer(name);
   if (!els || !els.bodyEl || !els.actionsEl) return;
   els.bodyEl.innerHTML = `<div class="chat-file-viewer-loading">…</div>`;
-  const res = await window.orkas.invoke('projects.files.officeHtml', {
+  const res = await window.cogseed.invoke('projects.files.officeHtml', {
     projectId: _projectDetailPid,
     name,
   });
@@ -2019,7 +2019,7 @@ async function _revealProjectFile(name) {
   const absPath = await _resolveProjectFilePath(name);
   if (!absPath) return;
   try {
-    const res = await window.orkas.invoke('workspace.revealPath', {
+    const res = await window.cogseed.invoke('workspace.revealPath', {
       path: absPath,
       projectId: _projectDetailPid,
     });
@@ -2041,7 +2041,7 @@ async function _reprocessProjectFile(name) {
     };
     _updateProjectFileKbChip(name);
     _scheduleProjectKbStatusRefreshIfNeeded();
-    const res = await window.orkas.invoke('projects.files.reprocess', {
+    const res = await window.cogseed.invoke('projects.files.reprocess', {
       projectId: _projectDetailPid,
       name,
     });
@@ -2082,7 +2082,7 @@ async function _deleteProjectFile(name) {
     file_kind: kind || 'other',
   });
   try {
-    const res = await window.orkas.invoke('projects.files.delete', {
+    const res = await window.cogseed.invoke('projects.files.delete', {
       projectId: _projectDetailPid,
       name,
     });
@@ -2415,7 +2415,7 @@ async function _createProjectTextFile(parentDir = '') {
     has_target_dir: !!parentDir,
   });
   try {
-    const res = await window.orkas.invoke('projects.files.createText', {
+    const res = await window.cogseed.invoke('projects.files.createText', {
       projectId: _projectDetailPid,
       name: fullPath,
     });
@@ -2461,7 +2461,7 @@ async function _createProjectDir(parentDir = '') {
     has_target_dir: !!parentDir,
   });
   try {
-    const res = await window.orkas.invoke('projects.files.mkdir', {
+    const res = await window.cogseed.invoke('projects.files.mkdir', {
       projectId: _projectDetailPid,
       path: rel,
     });
@@ -2562,7 +2562,7 @@ async function _handleProjectLibraryMove(srcName, targetDir) {
   const entryType = row?.dataset?.type || 'file';
   const startedAt = performance.now();
   try {
-    const res = await window.orkas.invoke('projects.files.rename', {
+    const res = await window.cogseed.invoke('projects.files.rename', {
       projectId: _projectDetailPid,
       oldName: srcName,
       name: next,
@@ -2631,7 +2631,7 @@ async function _renameProjectFile(name) {
     file_kind: kind || 'other',
   });
   try {
-    const res = await window.orkas.invoke('projects.files.rename', {
+    const res = await window.cogseed.invoke('projects.files.rename', {
       projectId: _projectDetailPid,
       oldName: name,
       name: next,
@@ -2702,12 +2702,12 @@ function _applyProjectKbEvent(ev) {
 }
 
 function _ensureProjectKbEventSubscription(pid) {
-  if (!pid || !window.orkas || typeof window.orkas.stream !== 'function') return;
+  if (!pid || !window.cogseed || typeof window.cogseed.stream !== 'function') return;
   if (_projectKbEventsHandle && _projectKbEventsPid === pid) return;
   _stopProjectKbEventSubscription();
   _projectKbEventsPid = pid;
   try {
-    _projectKbEventsHandle = window.orkas.stream('project.kb.events', { projectId: pid }, (msg) => {
+    _projectKbEventsHandle = window.cogseed.stream('project.kb.events', { projectId: pid }, (msg) => {
       if (msg?.type === 'event' && msg.event) _applyProjectKbEvent(msg.event);
     });
     _projectKbEventsHandle.promise.catch(() => {
@@ -2802,8 +2802,8 @@ async function _uploadProjectFiles(fileList, targetDir = '', source = 'drop') {
       try {
         const targetName = _projectJoinPath(targetDir, file.name || 'file');
         let res = null;
-        if (window.orkas && typeof window.orkas.importLocalFiles === 'function') {
-          const imported = await window.orkas.importLocalFiles('project', [file], {
+        if (window.cogseed && typeof window.cogseed.importLocalFiles === 'function') {
+          const imported = await window.cogseed.importLocalFiles('project', [file], {
             projectId: uploadProjectId,
             targetDir,
           });
@@ -2817,7 +2817,7 @@ async function _uploadProjectFiles(fileList, targetDir = '', source = 'drop') {
             res = { ok: false, error: 'local file path unavailable' };
           } else {
             const buf = await file.arrayBuffer();
-            res = await window.orkas.invoke('projects.files.upload', {
+            res = await window.cogseed.invoke('projects.files.upload', {
               projectId: uploadProjectId,
               name: targetName,
               data: _arrayBufferToBase64(buf),
@@ -2882,7 +2882,7 @@ async function _uploadProjectFilesNative(targetDir = '') {
   _setProjectFilesStatus(t('project.files.uploading'));
   let data;
   try {
-    data = await window.orkas.invoke('projects.files.pickAndUpload', {
+    data = await window.cogseed.invoke('projects.files.pickAndUpload', {
       projectId: uploadProjectId,
       targetDir,
     });
@@ -3105,7 +3105,7 @@ function _bindRemoveButtons() {
         binding_id: id,
       });
       try {
-        await window.orkas.invoke('projects.bindings.remove', {
+        await window.cogseed.invoke('projects.bindings.remove', {
           projectId: _projectDetailPid, kind, id,
         });
         await loadProjectDetail(_projectDetailPid);
@@ -3145,7 +3145,7 @@ async function _openAddPicker(kind) {
 
   let candidates;
   try {
-    const res = await window.orkas.invoke('projects.bindings.candidates', {
+    const res = await window.cogseed.invoke('projects.bindings.candidates', {
       projectId: _projectDetailPid,
     });
     if (!res?.ok) throw new Error(res?.error || 'load_failed');
@@ -3240,7 +3240,7 @@ async function _openAddPicker(kind) {
           binding_id: id,
         });
         try {
-          const res = await window.orkas.invoke('projects.bindings.add', {
+          const res = await window.cogseed.invoke('projects.bindings.add', {
             projectId: _projectDetailPid, kind: k, id,
           });
           if (!res?.ok) throw new Error(res?.error || 'add_failed');
@@ -3332,7 +3332,7 @@ async function _commitRename(newName) {
     source: 'detail',
   });
   try {
-    const res = await window.orkas.invoke('projects.rename', {
+    const res = await window.cogseed.invoke('projects.rename', {
       projectId: _projectDetailPid, name: trimmed,
     });
     if (!res || !res.ok) {

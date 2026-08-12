@@ -66,6 +66,37 @@ function seed() {
   fs.writeFileSync(pending, `${JSON.stringify({
     boundary: { mode: 'real', provider: 'meta-skill-engine-mcp' },
   })}\n`);
+
+  // ── P3394 保底切片数据（inspectP3394BaselineContracts）──────────────
+  // 1. 空间：gate passed + main_skill_ref
+  fs.mkdirSync(path.join(root, uid, 'cloud', 'spaces'), { recursive: true });
+  writeJson(path.join(root, uid, 'cloud', 'spaces', 'sp_1.json'), {
+    space_id: 'sp_1',
+    name: '复杂项目交付',
+    gate_status: 'passed',
+    main_skill_ref: { asset_id: 'sk-handoff', version: '1.0.0' },
+  });
+  // 2. 事件账本
+  fs.mkdirSync(path.join(root, uid, 'cloud', 'mate_agent', 'asset-events'), { recursive: true });
+  fs.writeFileSync(path.join(root, uid, 'cloud', 'mate_agent', 'asset-events', 'sk-handoff.jsonl'), `${JSON.stringify({ event_id: 'e1', event_type: 'asset_user_confirmed' })}\n`);
+  // 3. 能力包（未过期）
+  fs.mkdirSync(path.join(root, uid, 'cloud', 'mate_agent', 'capability-packs'), { recursive: true });
+  writeJson(path.join(root, uid, 'cloud', 'mate_agent', 'capability-packs', 'cp_1.json'), {
+    pack_id: 'cp_1',
+    expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+  });
+  // 4. ReviewDecision 账本
+  fs.mkdirSync(path.join(root, uid, 'cloud', 'mate_agent', 'review-decisions'), { recursive: true });
+  fs.writeFileSync(path.join(root, uid, 'cloud', 'mate_agent', 'review-decisions', 'cand-1.jsonl'), `${JSON.stringify({ decision_id: 'rd_1', decision_type: 'accept' })}\n`);
+  // 5. Skill 生命周期建议
+  fs.mkdirSync(path.join(root, uid, 'cloud', 'mate_agent', 'skill-lifecycle'), { recursive: true });
+  fs.writeFileSync(path.join(root, uid, 'cloud', 'mate_agent', 'skill-lifecycle', 'sk-handoff.jsonl'), `${JSON.stringify({ recommendation_id: 'slr_1', recommendation_type: 'no_change' })}\n`);
+  // 6. EvaluationContract
+  fs.mkdirSync(path.join(root, uid, 'local', 'kstar', 'evaluation-contracts'), { recursive: true });
+  writeJson(path.join(root, uid, 'local', 'kstar', 'evaluation-contracts', 'ec_1.json'), { evaluation_contract_id: 'ec_1' });
+  // 7. 成本遥测
+  fs.mkdirSync(path.join(root, uid, 'local', 'mate_agent', 'cost-telemetry'), { recursive: true });
+  fs.writeFileSync(path.join(root, uid, 'local', 'mate_agent', 'cost-telemetry', '2026-08.jsonl'), `${JSON.stringify({ record_id: 'ct_1' })}\n`);
 }
 
 describe('p3394 smoke contract', () => {

@@ -90,7 +90,7 @@ async function loadSettings() {
     _settingsSafeCall('settings auth profiles status refresh', _settingsRefreshAuthProfilesStatus),
     _settingsSafeCall('settings custom providers refresh', _settingsRefreshCustomProviders),
     _settingsSafeCall('settings ccswitch status refresh', _settingsRefreshCcswitchStatus),
-    _settingsSafeCall('settings messaging refresh', () => window.initMessagingSettings && window.initMessagingSettings()),
+    _settingsSafeCall('settings touchpoint refresh', () => window.initTouchpointSettings && window.initTouchpointSettings()),
   ]);
   await _settingsSafeCall('settings model authorization init', () => window.initModelAuthorizationSettings && window.initModelAuthorizationSettings());
   await _settingsSafeCall('settings local execution render', _settingsRenderLocalExec);
@@ -123,7 +123,7 @@ function _settingsTaskNotificationPermissionState(state) {
 
 async function _settingsRefreshTaskNotifications() {
   try {
-    const res = await window.orkas.invoke('prefs.getTaskNotifications');
+    const res = await window.cogseed.invoke('prefs.getTaskNotifications');
     _settingsState.taskNotifications = (res && res.ok)
       ? {
           enabled: !!res.enabled,
@@ -186,7 +186,7 @@ function _settingsRenderTaskNotifications() {
       openBtn.addEventListener('click', async () => {
         openBtn.disabled = true;
         try {
-          await window.orkas.invoke('prefs.openTaskNotificationSettings');
+          await window.cogseed.invoke('prefs.openTaskNotificationSettings');
         } catch (err) {
           _settingsLog.warn('open task notification settings failed', err);
         } finally {
@@ -208,7 +208,7 @@ function _settingsRenderTaskNotifications() {
       const permissionState = _settingsTaskNotificationPermissionState(currentState);
       cb.disabled = true;
       try {
-        const res = await window.orkas.invoke('prefs.setTaskNotifications', { enabled: next });
+        const res = await window.cogseed.invoke('prefs.setTaskNotifications', { enabled: next });
         if (res && res.ok) {
           _settingsState.taskNotifications = {
             ...currentState,
@@ -251,7 +251,7 @@ function _settingsBindClientConfigOnce() {}
 const _LOCALEXEC_MODES = ['workspace_approval', 'all_files_approval', 'all_files_auto'];
 
 async function _settingsRefreshLocalExec() {
-  const res = await window.orkas.invoke('permissions.getLocalExec');
+  const res = await window.cogseed.invoke('permissions.getLocalExec');
   const mode = (res && res.ok && _LOCALEXEC_MODES.includes(res.mode)) ? res.mode : 'all_files_approval';
   _settingsState.localExec = { mode };
 }
@@ -269,7 +269,7 @@ function _settingsRenderLocalExec() {
         const next = radio.value;
         const prev = (_settingsState.localExec && _settingsState.localExec.mode) || 'all_files_approval';
         try {
-          const res = await window.orkas.invoke('permissions.setLocalExecMode', { mode: next });
+          const res = await window.cogseed.invoke('permissions.setLocalExecMode', { mode: next });
           if (res && res.ok && res.mode) {
             _settingsState.localExec = { mode: res.mode };
             _settingsRenderLocalExec();
@@ -296,7 +296,7 @@ function _settingsRenderLocalExec() {
 
 async function _settingsRefreshMetacognition() {
   try {
-    const res = await window.orkas.invoke('prefs.getMetacognition');
+    const res = await window.cogseed.invoke('prefs.getMetacognition');
     _settingsState.metacognition = (res && res.ok)
       ? { enabled: !!res.enabled, envForcedOff: !!res.envForcedOff }
       : { enabled: true, envForcedOff: false };
@@ -320,7 +320,7 @@ function _settingsRenderMetacognition() {
       if (cb.disabled) return;
       const next = !!cb.checked;
       try {
-        const res = await window.orkas.invoke('prefs.setMetacognition', { enabled: next });
+        const res = await window.cogseed.invoke('prefs.setMetacognition', { enabled: next });
         if (res && res.ok) {
           _settingsState.metacognition = { ..._settingsState.metacognition, enabled: !!res.enabled };
         } else {
@@ -353,7 +353,7 @@ function _settingsRenderMetacognition() {
 
 async function _settingsRefreshDataRoot() {
   try {
-    const res = await window.orkas.invoke('app.dataRootPath');
+    const res = await window.cogseed.invoke('app.dataRootPath');
     _settingsState.dataRoot = (res && res.ok && res.path) ? String(res.path) : '';
   } catch (_) {
     _settingsState.dataRoot = '';
@@ -377,7 +377,7 @@ function _settingsRenderDataRoot() {
   if (!btn.dataset.bound) {
     btn.addEventListener('click', async () => {
       try {
-        await window.orkas.invoke('app.openDataRoot');
+        await window.cogseed.invoke('app.openDataRoot');
       } catch (err) {
         _settingsLog.warn('open data root failed', { error: (err && err.message) || String(err) });
         _settingsTrackEvent('settings_open_data_root_result', { result: 'failure' });
@@ -505,18 +505,21 @@ async function _settingsRenderCliFallback() {
 }
 
 async function _settingsRefreshProviders() {
-  const res = await window.orkas.invoke('auth.listProviders');
+  const res = await window.cogseed.invoke('auth.listProviders');
   _settingsState.providers = (res && res.ok && Array.isArray(res.providers)) ? res.providers : [];
+  // Shared cache for the model-authorization modal so it never re-triggers
+  // auth.listProviders (core-agent cold start) just to paint preset cards.
+  if (_settingsState.providers.length) window.__settingsProvidersCache = _settingsState.providers;
 }
 
 async function _settingsRefreshEntries() {
-  const res = await window.orkas.invoke('auth.listEntries', { includeUnavailable: true });
+  const res = await window.cogseed.invoke('auth.listEntries', { includeUnavailable: true });
   _settingsState.entries = (res && res.ok && Array.isArray(res.entries)) ? res.entries : [];
   if (typeof trackModelConfigSnapshot === 'function') trackModelConfigSnapshot(_settingsState.entries);
 }
 
 async function _settingsRefreshAuthProfilesStatus() {
-  const res = await window.orkas.invoke('auth.getProfilesStoreStatus');
+  const res = await window.cogseed.invoke('auth.getProfilesStoreStatus');
   _settingsState.authProfilesStatus = (res && res.ok !== undefined) ? res : null;
 }
 
@@ -541,7 +544,7 @@ function _settingsRenderAuthProfilesRecovery() {
 
 async function _settingsResetAuthProfilesStore() {
   _settingsSetStatus('settings-auth-profiles-reset-status', '', t('settings.auth_recovery.resetting'));
-  const res = await window.orkas.invoke('auth.resetProfilesStoreAfterDecryptFailure');
+  const res = await window.cogseed.invoke('auth.resetProfilesStoreAfterDecryptFailure');
   if (!res || !res.ok) {
     _settingsSetStatus('settings-auth-profiles-reset-status', 'error', (res && res.error) || t('settings.auth_recovery.reset_failed'));
     return;
@@ -553,7 +556,7 @@ async function _settingsResetAuthProfilesStore() {
 }
 
 async function _settingsRefreshCommanderBackend() {
-  const res = await window.orkas.invoke('settings.getCommanderBackend');
+  const res = await window.cogseed.invoke('settings.getCommanderBackend');
   if (res && res.ok) {
     _settingsState.commanderBackendView = {
       settings: res.settings || { backend: 'orkas-core-agent', authEntryId: null, localCli: null },
@@ -615,7 +618,7 @@ function _settingsRenderCommanderBackend() {
 async function _settingsSaveCommanderBackend() {
   const settings = { backend: 'orkas-core-agent', authEntryId: null, localCli: null };
   _settingsSetStatus('settings-commander-backend-status', '', t('settings.save_loading'));
-  const res = await window.orkas.invoke('settings.setCommanderBackend', { settings });
+  const res = await window.cogseed.invoke('settings.setCommanderBackend', { settings });
   if (!res || !res.ok) {
     _settingsSetStatus('settings-commander-backend-status', 'error', (res && res.error) || t('settings.save_failed'));
     return;
@@ -635,12 +638,12 @@ function _settingsCustomProviderProtocolLabel(protocol) {
 }
 
 async function _settingsRefreshCustomProviders() {
-  const res = await window.orkas.invoke('customProviders.list');
+  const res = await window.cogseed.invoke('customProviders.list');
   _settingsState.customProviders = (res && res.ok && Array.isArray(res.providers)) ? res.providers : [];
 }
 
 async function _settingsRefreshCcswitchStatus() {
-  const res = await window.orkas.invoke('customProviders.ccswitch.probe');
+  const res = await window.cogseed.invoke('customProviders.ccswitch.probe');
   _settingsState.ccswitchStatus = (res && res.ok !== false) ? res : { ok: false, available: false, error: (res && res.error) || t('settings.ccswitch.probe_failed') };
 }
 
@@ -718,7 +721,7 @@ function _settingsRenderCustomProviders() {
       const ok = typeof uiConfirm === 'function' ? await uiConfirm(t('settings.custom_providers.confirm_delete', { name: provider.name || provider.id })) : true;
       if (!ok) return;
       _settingsSetStatus('settings-custom-providers-status', 'busy', t('settings.custom_providers.deleting'));
-      const res = await window.orkas.invoke('customProviders.remove', { id: provider.id });
+      const res = await window.cogseed.invoke('customProviders.remove', { id: provider.id });
       if (!res || !res.ok) {
         _settingsSetStatus('settings-custom-providers-status', 'error', (res && res.error) || t('settings.custom_providers.delete_failed'));
         return;
@@ -782,7 +785,7 @@ function _settingsOpenCustomProviderModal(provider = null) {
     status.className = 'form-msg';
     saveBtn.disabled = true;
     const channel = provider?.id ? 'customProviders.update' : 'customProviders.add';
-    const res = await window.orkas.invoke(channel, payload);
+    const res = await window.cogseed.invoke(channel, payload);
     saveBtn.disabled = false;
     if (!res || !res.ok) {
       status.textContent = (res && res.error) || t('settings.custom_providers.save_failed');
@@ -809,7 +812,7 @@ async function _settingsOpenCcswitchPreviewDialog() {
   title.textContent = t('settings.ccswitch.preview_title');
   status.textContent = t('settings.ccswitch.loading');
   status.className = 'form-msg';
-  const res = await window.orkas.invoke('customProviders.ccswitch.preview');
+  const res = await window.cogseed.invoke('customProviders.ccswitch.preview');
   _settingsState.ccswitchPreviewRows = (res && res.ok && Array.isArray(res.rows)) ? res.rows : (res && res.ok && Array.isArray(res.items) ? res.items : []);
   _settingsState.ccswitchPreviewSelectedIds = _settingsState.ccswitchPreviewRows.filter((row) => row.selected !== false).map((row) => row.externalId);
   _settingsRenderCcswitchPreviewDialog();
@@ -859,7 +862,7 @@ function _settingsRenderCcswitchPreviewDialog() {
   syncBtn.addEventListener('click', async () => {
     status.textContent = t('settings.ccswitch.syncing');
     status.className = 'form-msg';
-    const res = await window.orkas.invoke('customProviders.ccswitch.sync', { externalIds: _settingsState.ccswitchPreviewSelectedIds });
+    const res = await window.cogseed.invoke('customProviders.ccswitch.sync', { externalIds: _settingsState.ccswitchPreviewSelectedIds });
     if (!res || !res.ok) {
       status.textContent = (res && res.error) || t('settings.ccswitch.sync_failed');
       status.className = 'form-msg error';
@@ -887,7 +890,7 @@ function _settingsSyncCustomModelFields(providerId) {
 async function _settingsGetModels(providerId) {
   if (!providerId) return [];
   if (_settingsState.modelsCache[providerId]) return _settingsState.modelsCache[providerId];
-  const res = await window.orkas.invoke('auth.listModels', { provider: providerId });
+  const res = await window.cogseed.invoke('auth.listModels', { provider: providerId });
   const list = (res && res.ok && Array.isArray(res.models)) ? res.models : [];
   _settingsState.modelsCache[providerId] = list;
   return list;
@@ -999,7 +1002,7 @@ async function _settingsAddManualModelEntry(provider) {
   if (!apiKey) { _settingsSetStatus('settings-picker-status', 'error', t('settings.paste_key_first')); return; }
 
   _settingsSetStatus('settings-picker-status', '', t('settings.save_loading'));
-  const addRes = await window.orkas.invoke('auth.addApiKey', {
+  const addRes = await window.cogseed.invoke('auth.addApiKey', {
     provider: provider.id,
     apiKey,
     label: label || undefined,
@@ -1009,7 +1012,7 @@ async function _settingsAddManualModelEntry(provider) {
     _settingsSetStatus('settings-picker-status', 'error', (addRes && addRes.error) || t('settings.save_failed'));
     return;
   }
-  const entryRes = await window.orkas.invoke('auth.addEntry', {
+  const entryRes = await window.cogseed.invoke('auth.addEntry', {
     provider: provider.id,
     model,
     profileId: addRes.profileId,
@@ -1161,7 +1164,7 @@ function _settingsShowApiKeyForm(provider, modelId) {
     saveBtn.disabled = true;
     msg.textContent = t('settings.save_loading'); msg.className = 'form-msg';
     _settingsLog.info('add api key', { provider: provider.id, model: customModelId, has_label: !!label, has_base_url: !!customBaseUrl });
-    const addRes = await window.orkas.invoke('auth.addApiKey', {
+    const addRes = await window.cogseed.invoke('auth.addApiKey', {
       provider: provider.id,
       apiKey,
       label: label || undefined,
@@ -1174,7 +1177,7 @@ function _settingsShowApiKeyForm(provider, modelId) {
       _settingsLog.warn('add api key failed', { provider: provider.id, error: addRes && addRes.error });
       return;
     }
-    const entryRes = await window.orkas.invoke('auth.addEntry', {
+    const entryRes = await window.cogseed.invoke('auth.addEntry', {
       provider: provider.id,
       model: customModelId,
       profileId: addRes.profileId,
@@ -1258,7 +1261,7 @@ async function _settingsStartOAuthFlow(provider, modelId) {
   const closeFlow = () => {
     if (_oauthFlowPollTimer) { clearInterval(_oauthFlowPollTimer); _oauthFlowPollTimer = null; }
     if (_oauthFlowId) {
-      window.orkas.invoke('auth.cancelOAuthFlow', { flowId: _oauthFlowId }).catch(() => {});
+      window.cogseed.invoke('auth.cancelOAuthFlow', { flowId: _oauthFlowId }).catch(() => {});
     }
     _oauthFlowId = null;
     _oauthFlowTarget = null;
@@ -1270,7 +1273,7 @@ async function _settingsStartOAuthFlow(provider, modelId) {
   document.addEventListener('keydown', onKey, true);
 
   _settingsLog.info('oauth start', { provider: oauthProviderId });
-  const startRes = await window.orkas.invoke('auth.startOAuth', { provider: oauthProviderId });
+  const startRes = await window.cogseed.invoke('auth.startOAuth', { provider: oauthProviderId });
   if (!startRes || !startRes.ok) {
     body.innerHTML = `<div class="oauth-flow-stage error">${escapeHtml((startRes && startRes.error) || t('settings.oauth.start_failed'))}</div>`;
     _settingsLog.warn('oauth start failed', { provider: oauthProviderId, error: startRes && startRes.error });
@@ -1281,7 +1284,7 @@ async function _settingsStartOAuthFlow(provider, modelId) {
   let lastKind = '';
   _oauthFlowPollTimer = setInterval(async () => {
     if (!_oauthFlowId) return;
-    const res = await window.orkas.invoke('auth.pollOAuthFlow', { flowId: _oauthFlowId });
+    const res = await window.cogseed.invoke('auth.pollOAuthFlow', { flowId: _oauthFlowId });
     if (!res || !res.ok) return;
     const status = res.status || {};
     if (status.kind === lastKind && status.kind !== 'done' && status.kind !== 'error') return;
@@ -1327,7 +1330,7 @@ function _oauthFlowRender(provider, status, closeFlow) {
       </div>` : ''}
     `;
     body.querySelector('.oauth-open-btn').onclick = () => {
-      window.orkas.invoke('auth.openExternal', { url }).catch(() => {});
+      window.cogseed.invoke('auth.openExternal', { url }).catch(() => {});
     };
     body.querySelector('.oauth-copy-btn').onclick = async () => {
       try { await navigator.clipboard.writeText(url); } catch (_) {}
@@ -1338,7 +1341,7 @@ function _oauthFlowRender(provider, status, closeFlow) {
         const val = (input.value || '').trim();
         if (!val) return;
         body.innerHTML = `<div class="oauth-flow-stage">${escapeHtml(t('settings.oauth.submitting'))}</div>`;
-        await window.orkas.invoke('auth.submitOAuthInput', { flowId: _oauthFlowId, value: val });
+        await window.cogseed.invoke('auth.submitOAuthInput', { flowId: _oauthFlowId, value: val });
       };
       body.querySelector('.oauth-manual-submit-btn').onclick = submit;
       input.addEventListener('keydown', (e) => {
@@ -1367,7 +1370,7 @@ function _oauthFlowRender(provider, status, closeFlow) {
       const val = input.value || '';
       if (!val && !prompt.allowEmpty) return;
       body.innerHTML = `<div class="oauth-flow-stage">${escapeHtml(t('settings.oauth.submitting'))}</div>`;
-      await window.orkas.invoke('auth.submitOAuthInput', { flowId: _oauthFlowId, value: val });
+      await window.cogseed.invoke('auth.submitOAuthInput', { flowId: _oauthFlowId, value: val });
     };
     body.querySelector('.oauth-submit-btn').onclick = submit;
     input.addEventListener('keydown', (e) => {
@@ -1395,12 +1398,12 @@ function _oauthFlowRender(provider, status, closeFlow) {
         // the chat-time call will throw "model not found".
         let model = target.modelId;
         if (entryProvider !== target.provider.id) {
-          const modelsRes = await window.orkas.invoke('auth.listModels', { provider: entryProvider });
+          const modelsRes = await window.cogseed.invoke('auth.listModels', { provider: entryProvider });
           const supported = (modelsRes && modelsRes.ok && Array.isArray(modelsRes.models)) ? modelsRes.models : [];
           const hit = supported.find(m => m.id === model);
           if (!hit && supported.length) model = supported[0].id;
         }
-        await window.orkas.invoke('auth.addEntry', {
+        await window.cogseed.invoke('auth.addEntry', {
           provider: entryProvider,
           model,
           profileId,
@@ -1485,7 +1488,7 @@ function _settingsRenderEntryRow(entry, idx) {
   modelEl.addEventListener('mousedown', (e) => e.stopPropagation());
   modelEl.setAttribute('draggable', 'false');
   (async () => {
-    const res = await window.orkas.invoke('auth.listModels', { provider: entry.provider });
+    const res = await window.cogseed.invoke('auth.listModels', { provider: entry.provider });
     const list = (res && res.ok && Array.isArray(res.models)) ? res.models : [];
     const modelState = _settingsEntryModelState(entry, list);
     modelSel.setOptions(modelState.options, {
@@ -1494,7 +1497,7 @@ function _settingsRenderEntryRow(entry, idx) {
     });
     modelSel.onChange(async (val) => {
       if (!val || val === entry.model) return;
-      const up = await window.orkas.invoke('auth.updateEntryModel', { entryId: entry.entryId, model: val });
+      const up = await window.cogseed.invoke('auth.updateEntryModel', { entryId: entry.entryId, model: val });
       if (!up || !up.ok) {
         await uiAlert((up && up.error) || t('settings.entries.switch_model_failed'));
         modelSel.setValue(entry.model);
@@ -1621,7 +1624,7 @@ async function _settingsAttachReorderDnd(row, opts) {
     let refIdx = ids.indexOf(id);
     if (refIdx < 0) refIdx = ids.length;
     ids.splice(before ? refIdx : refIdx + 1, 0, srcId);
-    const res = await window.orkas.invoke(ipcName, { orderedIds: ids });
+    const res = await window.cogseed.invoke(ipcName, { orderedIds: ids });
     if (res && res.ok) {
       await onSuccess(res);
     } else {
@@ -1632,7 +1635,7 @@ async function _settingsAttachReorderDnd(row, opts) {
 
 async function _settingsTestEntry(entry, statusEl) {
   _settingsSetRowStatus(statusEl, 'busy', t('settings.entries.testing'), 'entry-status');
-  const res = await window.orkas.invoke('auth.testConnection', {
+  const res = await window.cogseed.invoke('auth.testConnection', {
     provider: entry.provider,
     model: entry.model,
     profileId: entry.profileId,
@@ -1654,7 +1657,7 @@ async function _settingsRemoveEntry(entry) {
     provider: entry.provider,
     model: entry.model,
   });
-  const res = await window.orkas.invoke('auth.removeEntry', { entryId: entry.entryId });
+  const res = await window.cogseed.invoke('auth.removeEntry', { entryId: entry.entryId });
   if (!res || !res.ok) {
     _settingsLog.warn('remove entry failed', { entry_id: entry.entryId, error: res && res.error });
     await uiAlert((res && res.error) || t('settings.entries.delete_failed'));
@@ -1712,7 +1715,7 @@ function _searchProviderLabel(id) {
 }
 
 async function _settingsRefreshSearchProfiles() {
-  const res = await window.orkas.invoke('searchAuth.list');
+  const res = await window.cogseed.invoke('searchAuth.list');
   _settingsState.searchProfiles = (res && res.ok && Array.isArray(res.profiles)) ? res.profiles : [];
 }
 
@@ -1751,7 +1754,7 @@ async function _settingsClickAddSearchKey() {
   if (!apiKey)   { _settingsSetStatus('settings-search-status', 'error', t('settings.search.error_key_needed')); return; }
   _settingsSetStatus('settings-search-status', 'busy', t('settings.search.adding'));
   try {
-    const res = await window.orkas.invoke('searchAuth.add', { provider, apiKey, label: 'default' });
+    const res = await window.cogseed.invoke('searchAuth.add', { provider, apiKey, label: 'default' });
     if (!res || !res.ok) {
       _settingsSetStatus('settings-search-status', 'error', (res && res.error) || t('settings.search.add_failed'));
       return;
@@ -1805,7 +1808,7 @@ function _settingsRenderSearchEntries() {
     delBtn.addEventListener('click', async () => {
       const ok = await uiConfirm(t('settings.search.confirm_delete', { provider: _searchProviderLabel(p.provider) }));
       if (!ok) return;
-      const res = await window.orkas.invoke('searchAuth.remove', { id: p.id });
+      const res = await window.cogseed.invoke('searchAuth.remove', { id: p.id });
       if (res && res.ok) {
         await _settingsRefreshSearchProfiles();
         _settingsRenderSearchEntries();
@@ -1847,7 +1850,7 @@ function _imageProviderLabel(id) {
 }
 
 async function _settingsRefreshImageProfiles() {
-  const res = await window.orkas.invoke('imageAuth.list');
+  const res = await window.cogseed.invoke('imageAuth.list');
   _settingsState.imageProfiles = (res && res.ok && Array.isArray(res.profiles)) ? res.profiles : [];
 }
 
@@ -1884,7 +1887,7 @@ async function _settingsClickAddImageKey() {
   if (!apiKey)   { _settingsSetStatus('settings-image-status', 'error', t('settings.image.error_key_needed')); return; }
   _settingsSetStatus('settings-image-status', 'busy', t('settings.image.adding'));
   try {
-    const res = await window.orkas.invoke('imageAuth.add', { provider, model, apiKey, label: 'default' });
+    const res = await window.cogseed.invoke('imageAuth.add', { provider, model, apiKey, label: 'default' });
     if (!res || !res.ok) {
       _settingsSetStatus('settings-image-status', 'error', (res && res.error) || t('settings.image.add_failed'));
       return;
@@ -1938,7 +1941,7 @@ function _settingsRenderImageEntries() {
     delBtn.addEventListener('click', async () => {
       const ok = await uiConfirm(t('settings.image.confirm_delete', { provider: _imageProviderLabel(p.provider, p.model) }));
       if (!ok) return;
-      const res = await window.orkas.invoke('imageAuth.remove', { id: p.id });
+      const res = await window.cogseed.invoke('imageAuth.remove', { id: p.id });
       if (res && res.ok) {
         await _settingsRefreshImageProfiles();
         _settingsRenderImageEntries();
@@ -1989,7 +1992,7 @@ function _settingsSelectedVideoProvider() {
 }
 
 async function _settingsRefreshVideoProfiles() {
-  const res = await window.orkas.invoke('videoAuth.list');
+  const res = await window.cogseed.invoke('videoAuth.list');
   _settingsState.videoProfiles = (res && res.ok && Array.isArray(res.profiles)) ? res.profiles : [];
   _settingsState.videoAuthProviderOptions = (res && res.ok && Array.isArray(res.providers) && res.providers.length)
     ? res.providers
@@ -2037,7 +2040,7 @@ async function _settingsClickAddVideoKey() {
   if (!apiKey) { _settingsSetStatus('settings-video-status', 'error', t('settings.video.error_key_needed')); return; }
   _settingsSetStatus('settings-video-status', 'busy', t('settings.video.adding'));
   try {
-    const res = await window.orkas.invoke('videoAuth.add', { provider, apiKey, label: 'default' });
+    const res = await window.cogseed.invoke('videoAuth.add', { provider, apiKey, label: 'default' });
     if (!res || !res.ok) {
       _settingsSetStatus('settings-video-status', 'error', (res && res.error) || t('settings.video.add_failed'));
       return;
@@ -2091,7 +2094,7 @@ function _settingsRenderVideoEntries() {
     delBtn.addEventListener('click', async () => {
       const ok = await uiConfirm(t('settings.video.confirm_delete', { provider: _videoProviderLabel(p.provider, p.model) }));
       if (!ok) return;
-      const res = await window.orkas.invoke('videoAuth.remove', { id: p.id });
+      const res = await window.cogseed.invoke('videoAuth.remove', { id: p.id });
       if (res && res.ok) {
         await _settingsRefreshVideoProfiles();
         _settingsRenderVideoEntries();
@@ -2118,7 +2121,7 @@ function _settingsRenderVideoEntries() {
 // ── Text-to-speech API key section ─────────────────────────────────────────
 
 async function _settingsRefreshTtsProfiles() {
-  const res = await window.orkas.invoke('ttsAuth.list');
+  const res = await window.cogseed.invoke('ttsAuth.list');
   if (!res || !res.ok) return;
   _settingsState.ttsPresets = Array.isArray(res.presets) ? res.presets : [];
   _settingsState.ttsProfiles = Array.isArray(res.profiles) ? res.profiles : [];
@@ -2213,7 +2216,7 @@ async function _settingsClickAddTts() {
 
   _settingsSetStatus('settings-tts-status', 'busy', t('settings.tts.adding'));
   try {
-    const res = await window.orkas.invoke('ttsAuth.add', payload);
+    const res = await window.cogseed.invoke('ttsAuth.add', payload);
     if (!res || !res.ok) {
       _settingsSetStatus('settings-tts-status', 'error', (res && res.error) || t('settings.tts.add_failed'));
       return;
@@ -2270,7 +2273,7 @@ function _settingsRenderTtsEntries() {
     delBtn.addEventListener('click', async () => {
       const ok = await uiConfirm(t('settings.tts.confirm_delete', { provider: _ttsProviderLabel(p.provider) }));
       if (!ok) return;
-      const res = await window.orkas.invoke('ttsAuth.remove', { id: p.id });
+      const res = await window.cogseed.invoke('ttsAuth.remove', { id: p.id });
       if (res && res.ok) await _settingsRefreshTtsProfiles();
     });
     actions.appendChild(delBtn);

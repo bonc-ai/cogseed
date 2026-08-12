@@ -1,7 +1,7 @@
 // ─── First-run onboarding (CogSeed four-step walkthrough) ──────────────────
 //
 // Ported from the static prototype (60秒用户旅程.html), rebuilt on top of the
-// live mate-agent renderer. Four steps:
+// live CogSeed renderer. Four steps:
 //   1. 认识 CogSeed        — product intro (static)
 //   2. 导入会话 / 检测本地 agent — REAL detection via `localAgents.list`;
 //                            session history reading is NOT wired to a real
@@ -500,7 +500,7 @@ async function _csLoadTeam(force) {
   // an empty list that looks like a bug.
   let probe = null;
   try {
-    probe = await window.orkas.invoke('customProviders.ccswitch.probe');
+    probe = await window.cogseed.invoke('customProviders.ccswitch.probe');
   } catch (err) {
     _obLog.warn('ccswitch probe failed', { error: (err && err.message) || String(err) });
   }
@@ -517,7 +517,7 @@ async function _csLoadTeam(force) {
     // detection gives coding CLIs (Claude/Codex) we can add as team agents.
     // The team should show a CLI even when CC Switch has no card for it.
     const [res, localClis] = await Promise.all([
-      window.orkas.invoke('customProviders.ccswitch.preview'),
+      window.cogseed.invoke('customProviders.ccswitch.preview'),
       _csDetectCodingClis(),
     ]);
     if (!res || res.ok !== true) {
@@ -582,7 +582,7 @@ function _csAgentNameForCli(cli) {
 async function _csDetectCodingClis() {
   const found = new Map();
   try {
-    const res = await window.orkas.invoke('localAgents.list', { force: false });
+    const res = await window.cogseed.invoke('localAgents.list', { force: false });
     const entries = (res && res.entries) || [];
     entries.forEach((e) => {
       if (!e || !e.available) return;
@@ -611,7 +611,7 @@ async function _csEnsureCliAgent(cli, existingAgents) {
       return rt && rt.kind === 'cli' && rt.cli === cli;
     });
     if (already) return 'exists';
-    const res = await window.orkas.invoke('agents.create', {
+    const res = await window.cogseed.invoke('agents.create', {
       name: _csAgentNameForCli(cli),
       description: cli === 'claude'
         ? '本机 Claude Code 命令行，作为 AI 团队成员执行编码任务'
@@ -782,7 +782,7 @@ async function _csConnectTeam(box, appType) {
     let added = 0;
     let updated = 0;
     if (externalIds.length) {
-      const res = await window.orkas.invoke('customProviders.ccswitch.sync', { externalIds });
+      const res = await window.cogseed.invoke('customProviders.ccswitch.sync', { externalIds });
       if (!res || res.ok !== true) {
         const reason = (res && res.reason) || '未知原因';
         _csToast(`连接「${label}」失败：${reason}`);
@@ -800,7 +800,7 @@ async function _csConnectTeam(box, appType) {
     if (cli) {
       let existing = [];
       try {
-        const listRes = await window.orkas.invoke('agents.list', {});
+        const listRes = await window.cogseed.invoke('agents.list', {});
         existing = (listRes && listRes.agents) || [];
       } catch (err) {
         _obLog.warn('team connect: agents.list failed', { error: (err && err.message) || String(err) });
@@ -840,7 +840,7 @@ async function _csLoadAgents(force) {
   if (!box) return;
   box.innerHTML = '<div class="cs-state loading">正在检测本机 Agent…</div>';
   try {
-    const res = await window.orkas.invoke('localAgents.list', { force: !!force });
+    const res = await window.cogseed.invoke('localAgents.list', { force: !!force });
     _csRenderAgents(res && res.entries);
   } catch (err) {
     const msg = (err && err.message) || String(err);
@@ -854,7 +854,7 @@ async function _csLoadClaudeSessions(agentType) {
   if (!container) return;
 
   try {
-    const res = await window.orkas.invoke('localAgents.listClaudeSessions');
+    const res = await window.cogseed.invoke('localAgents.listClaudeSessions');
     const recentSessions = (res && res.sessions) || [];
 
     console.log('[ONBOARDING] Claude sessions - total count:', recentSessions.length);
@@ -875,7 +875,7 @@ async function _csLoadClaudeSessions(agentType) {
       }) : '';
       const projectLabel = s.projectPath ? `<small>${_csEsc(s.projectPath)}</small>` : '';
       return `
-        <div class="cs-src" data-session-id="${_csEsc(s.filePath)}">
+        <div class="cs-src" data-session-id="${_csEsc(s.sessionId)}" data-session-path="${_csEsc(s.filePath)}" data-session-title="${_csEsc(s.firstMessage || '')}">
           <input type="checkbox" />
           <div class="s-ico">${CS_TERMINAL_SVG}</div>
           <div>
@@ -921,7 +921,7 @@ async function _csLoadCodexSessions(agentType) {
   if (!container) return;
 
   try {
-    const res = await window.orkas.invoke('sessionImport.listCodexSessions');
+    const res = await window.cogseed.invoke('sessionImport.listCodexSessions');
     const recentSessions = (res && res.sessions) || [];
 
     console.log('[ONBOARDING] Codex sessions - total count:', recentSessions.length);
@@ -1122,7 +1122,7 @@ async function _csImportClaudeSessions(agentType) {
   await _csMapWithConcurrency(selected, CS_IMPORT_CONCURRENCY, async (row) => {
     const filePath = row.dataset.sessionId;
     try {
-      const res = await window.orkas.invoke('sessionImport.importClaudeSession', { filePath });
+      const res = await window.cogseed.invoke('sessionImport.importClaudeSession', { filePath });
       // Success = conversation was materialized, even if cognition extraction degraded
       if (res && res.conversationId) {
         ok++;
@@ -1215,7 +1215,7 @@ async function _csImportCodexSessions(agentType) {
     const filePath = row.dataset.sessionId;
     const title = row.querySelector('strong')?.textContent || '';
     try {
-      const res = await window.orkas.invoke('sessionImport.importCodexSession', {
+      const res = await window.cogseed.invoke('sessionImport.importCodexSession', {
         filePath,
         titleHint: title,
       });
@@ -1263,7 +1263,7 @@ async function _csLoadClaudeSkills(agentType) {
 
   try {
     console.log('[CLAUDE SKILLS] Invoking sessionImport.listClaudeSkills...');
-    const res = await window.orkas.invoke('sessionImport.listClaudeSkills');
+    const res = await window.cogseed.invoke('sessionImport.listClaudeSkills');
     console.log('[CLAUDE SKILLS] IPC result:', res);
     const skills = (res && res.skills) || [];
     console.log('[CLAUDE SKILLS] Parsed skills array:', skills.length, 'items');
@@ -1364,7 +1364,7 @@ async function _csImportSelectedSkills(container) {
   const ipcMethod = agentType === 'codex' ? 'sessionImport.importCodexSkills' : 'sessionImport.importClaudeSkills';
 
   try {
-    const res = await window.orkas.invoke(ipcMethod, { dirNames });
+    const res = await window.cogseed.invoke(ipcMethod, { dirNames });
     const okCount = (res && res.okCount) || 0;
     const failCount = (res && res.failCount) || 0;
     const imported = (res && res.imported) || [];
@@ -1399,7 +1399,7 @@ async function _csLoadCodexSkills(agentType) {
 
   try {
     console.log('[CODEX SKILLS] Invoking sessionImport.listCodexSkills...');
-    const res = await window.orkas.invoke('sessionImport.listCodexSkills');
+    const res = await window.cogseed.invoke('sessionImport.listCodexSkills');
     console.log('[CODEX SKILLS] IPC result:', res);
     const skills = (res && res.skills) || [];
     console.log('[CODEX SKILLS] Parsed skills array:', skills.length, 'items');
@@ -1492,7 +1492,7 @@ async function _csLoadClaudeMemory(agentType) {
   if (!container) return;
 
   try {
-    const res = await window.orkas.invoke('sessionImport.readClaudeMemories');
+    const res = await window.cogseed.invoke('sessionImport.readClaudeMemories');
     const sources = (res && res.sources) || [];
     const total = (res && res.totalEntries) || 0;
 
@@ -1561,7 +1561,7 @@ async function _csImportClaudeMemory(container) {
   resultBox.innerHTML = '<div class="cs-extract-progress">正在导入记忆…</div>';
 
   try {
-    const res = await window.orkas.invoke('sessionImport.importClaudeMemories', { sourceKeys });
+    const res = await window.cogseed.invoke('sessionImport.importClaudeMemories', { sourceKeys });
     if (!res || !res.ok) {
       const reason = (res && res.reason) || '未知原因';
       resultBox.innerHTML = `<div class="cs-state err">导入记忆失败：${_csEsc(reason)}</div>`;
@@ -1593,7 +1593,7 @@ async function _csLoadCodexMemory(agentType) {
   if (!container) return;
 
   try {
-    const res = await window.orkas.invoke('sessionImport.readCodexMemory');
+    const res = await window.cogseed.invoke('sessionImport.readCodexMemory');
     const present = res && res.present;
     const entries = (res && res.entries) || [];
 
@@ -1634,7 +1634,7 @@ async function _csImportCodexMemory(container) {
   resultBox.innerHTML = '<div class="cs-extract-progress">正在导入 Codex 配置…</div>';
 
   try {
-    const res = await window.orkas.invoke('sessionImport.importCodexMemory');
+    const res = await window.cogseed.invoke('sessionImport.importCodexMemory');
     if (!res || !res.ok) {
       const reason = (res && res.reason) || '未知原因';
       resultBox.innerHTML = `<div class="cs-state err">导入失败：${_csEsc(reason)}</div>`;
@@ -1858,7 +1858,7 @@ async function _csLoadCodexTasks(agentType) {
   if (!container) return;
 
   try {
-    const res = await window.orkas.invoke('sessionImport.listCodexTasks');
+    const res = await window.cogseed.invoke('sessionImport.listCodexTasks');
     const tasks = (res && res.tasks) || [];
 
     if (!tasks.length) {
@@ -1955,7 +1955,7 @@ async function _csImportCodexTasks(agentType) {
   if (btn) { btn.disabled = true; btn.textContent = '导入中…'; }
   if (resultBox) resultBox.innerHTML = '<div class="cs-state loading">正在导入所选任务…</div>';
   try {
-    const res = await window.orkas.invoke('sessionImport.importCodexTasks', { taskIds: selected });
+    const res = await window.cogseed.invoke('sessionImport.importCodexTasks', { taskIds: selected });
     const r = res || {};
     const parts = [`成功 ${r.imported || 0} 个`];
     if (r.skipped) parts.push(`跳过 ${r.skipped} 个`);
@@ -2019,7 +2019,7 @@ async function _csImportSelectedSessions(container) {
 
   for (const item of selected) {
     try {
-      const res = await window.orkas.invoke('sessionImport.importClaudeSession', {
+      const res = await window.cogseed.invoke('sessionImport.importClaudeSession', {
         filePath: item.filePath,
         titleHint: item.title,
       });
@@ -2072,7 +2072,7 @@ async function _csLoadAcpSessions() {
   if (!box) return;
 
   try {
-    const res = await window.orkas.invoke('localAgents.listAcpSessions');
+    const res = await window.cogseed.invoke('localAgents.listAcpSessions');
     if (!res || !res.ok) return;
 
     const { agentTypes, sessionsByType } = res;
@@ -2162,7 +2162,7 @@ async function _csLoadRoleTemplates() {
   box.innerHTML = '<div class="cs-state loading">正在加载角色模板...</div>';
 
   try {
-    const res = await window.orkas.invoke('spaces.templates.list');
+    const res = await window.cogseed.invoke('spaces.templates.list');
     if (!res || !res.templates || !Array.isArray(res.templates)) {
       box.innerHTML = '<div class="cs-state">角色模板加载失败</div>';
       return;
@@ -2183,8 +2183,8 @@ async function _csLoadRoleTemplates() {
     // 优先级排序
     priorityTemplates.sort((a, b) => priority.indexOf(a.template_id) - priority.indexOf(b.template_id));
 
-    // 显示前6个（4个优先 + 2个其他）
-    const display = [...priorityTemplates.slice(0, 4), ...otherTemplates.slice(0, 2)];
+    // 全部展示：优先角色在前，其余模板（空白空间等）跟在后面
+    const display = [...priorityTemplates, ...otherTemplates];
 
     // 图标映射
     const icons = {
@@ -2275,7 +2275,7 @@ async function _csFinish() {
       // should land in the SAME workspace, not create "学生"/"学生"/"学生".
       let spaceId = '';
       try {
-        const listRes = await window.orkas.invoke('spaces.list', {});
+        const listRes = await window.cogseed.invoke('spaces.list', {});
         const existing = (listRes && listRes.spaces || []).find((s) => s && s.template_id === _csRolePicked);
         if (existing && existing.space_id) {
           spaceId = existing.space_id;
@@ -2287,7 +2287,7 @@ async function _csFinish() {
 
       // Only create when no space for this template exists yet.
       if (!spaceId) {
-        const createRes = await window.orkas.invoke('spaces.create', {
+        const createRes = await window.cogseed.invoke('spaces.create', {
           name: spaceName,
           template_id: _csRolePicked,
         });
@@ -2306,7 +2306,7 @@ async function _csFinish() {
         // the role's workspace, not a generic "导入的会话" bucket.
         let projectId = '';
         try {
-          const projList = await window.orkas.invoke('projects.list', {});
+          const projList = await window.cogseed.invoke('projects.list', {});
           const bound = (projList && projList.projects || []).find((p) => p && p.space_id === spaceId);
           if (bound && bound.project_id) {
             projectId = bound.project_id;
@@ -2321,12 +2321,12 @@ async function _csFinish() {
           // the role/space name is already shown by the sidebar space-group
           // header above it. Naming the project after the role too would read as
           // a redundant "产品经理 > 产品经理". So: space = 产品经理, project = 导入的会话.
-          const projectRes = await window.orkas.invoke('projects.create', { name: '导入的会话' });
+          const projectRes = await window.cogseed.invoke('projects.create', { name: '导入的会话' });
           if (projectRes && projectRes.project && projectRes.project.project_id) {
             projectId = projectRes.project.project_id;
             // 把项目挂到工作空间下（项目创建接口本身不接收 spaceId）。
             try {
-              await window.orkas.invoke('projects.bindSpace', { projectId, spaceId });
+              await window.cogseed.invoke('projects.bindSpace', { projectId, spaceId });
             } catch (bindErr) {
               _obLog.warn('failed to bind role project to workspace', {
                 projectId,
@@ -2340,7 +2340,7 @@ async function _csFinish() {
         if (projectId) {
 
           // 批量更新所有导入的会话，绑定到这个项目
-          const updateRes = await window.orkas.invoke('conversations.batchUpdateProject', {
+          const updateRes = await window.cogseed.invoke('conversations.batchUpdateProject', {
             conversationIds: _csImportedConversationIds,
             projectId: projectId,
           });
@@ -2389,7 +2389,7 @@ async function _csFinish() {
   }
 
   try {
-    await window.orkas.invoke('prefs.setOnboarding', { completed: true });
+    await window.cogseed.invoke('prefs.setOnboarding', { completed: true });
     _obLog.info('onboarding completed and persisted');
   } catch (err) {
     // Persisting the marker failed — surface it rather than silently
@@ -2497,37 +2497,9 @@ async function maybeStartOnboarding() {
   console.log('[ONBOARDING DEBUG] maybeStartOnboarding called');
   _obLog.info('maybeStartOnboarding called');
 
-  // TEMPORARY: Force show onboarding for testing new features (30-day filter, 3-session limit, space project creation)
-  console.log('[ONBOARDING DEBUG] Force showing onboarding');
-  // Reset standalone mode for full onboarding flow
-  _csStandaloneMode = false;
-  _csBuild();
-  // Ensure normal flow buttons are visible
-  const shell = document.getElementById('cs-onboarding');
-  if (shell) {
-    const backBtn = shell.querySelector('.cs-step2-back');
-    const nextBtn = shell.querySelector('.cs-step2-next');
-    const finishBtn = shell.querySelector('.cs-step2-finish');
-    if (backBtn) backBtn.style.display = 'inline-flex';
-    if (nextBtn) nextBtn.style.display = 'inline-flex';
-    if (finishBtn) finishBtn.style.display = 'none';
-  }
-  console.log('[ONBOARDING DEBUG] Adding cs-onboarding-active class to body');
-  document.body.classList.add('cs-onboarding-active');
-  console.log('[ONBOARDING DEBUG] Body classes:', document.body.className);
-  console.log('[ONBOARDING DEBUG] #cs-onboarding exists:', !!document.getElementById('cs-onboarding'));
-  console.log('[ONBOARDING DEBUG] #cs-onboarding computed display:',
-    document.getElementById('cs-onboarding') ? window.getComputedStyle(document.getElementById('cs-onboarding')).display : 'N/A');
-  console.log('[ONBOARDING DEBUG] Going to step 0');
-  _csGoStep(0);
-  _obLog.info('onboarding walkthrough FORCED (testing mode)');
-  console.log('[ONBOARDING DEBUG] Onboarding should now be visible');
-  return;
-
-  // Original logic - commented out for testing
-  /*
   try {
-    const res = await window.orkas.invoke('prefs.getOnboarding');
+    const res = await window.cogseed.invoke('prefs.getOnboarding');
+    console.log('[ONBOARDING DEBUG] prefs.getOnboarding result:', res);
     if (res && res.completed === true) {
       _obLog.info('onboarding already completed, skipping');
       return;
@@ -2542,7 +2514,6 @@ async function maybeStartOnboarding() {
   document.body.classList.add('cs-onboarding-active');
   _csGoStep(0);
   _obLog.info('onboarding walkthrough started');
-  */
 }
 
 // Expose for boot.js. Kept on window so classic-script load order doesn't matter.

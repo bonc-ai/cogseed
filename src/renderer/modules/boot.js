@@ -42,7 +42,7 @@ function _reportBootUserActivity() {
   const now = Date.now();
   if (now - _lastBootActivityReportAt < 1000) return;
   _lastBootActivityReportAt = now;
-  try { window.orkas?.reportUserActivity?.(); } catch (_) {}
+  try { window.cogseed?.reportUserActivity?.(); } catch (_) {}
 }
 for (const eventName of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
   window.addEventListener(eventName, _reportBootUserActivity, { capture: true, passive: true });
@@ -189,9 +189,9 @@ async function bootApp() {
 // grids to expose builtin ⋯ menu (edit / delete) and the "promote to builtin"
 // item on custom cards.
 async function _stampSettingsVersion() {
-  if (!window.orkas || typeof window.orkas.env !== 'function') return;
+  if (!window.cogseed || typeof window.cogseed.env !== 'function') return;
   try {
-    const env = await window.orkas.env();
+    const env = await window.cogseed.env();
     if (env && env.isDev) document.body.classList.add('is-dev');
   } catch (_) { /* ignore — non-critical */ }
 }

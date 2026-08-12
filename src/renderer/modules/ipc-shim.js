@@ -2,7 +2,7 @@ const _shimLog = typeof createLogger === 'function' ? createLogger('ipc-shim') :
 // ─── HTTP → IPC shim ─────────────────────────────────────────────────
 // The original app was served over HTTP; every network call went through
 // `apiFetch(url, options)` which wrapped `fetch`. In Electron we route the
-// same calls through `window.orkas.invoke` (for request/response) or
+// same calls through `window.cogseed.invoke` (for request/response) or
 // `.stream` (for SSE). The shim translates URL + method into an IPC channel
 // + payload and returns a Response-like object so the rest of the file's
 // 3000+ lines can stay unchanged.
@@ -212,11 +212,11 @@ function _monitorIpcError(kind, channel, data) {
 }
 
 function _hasOrkasInvoke() {
-  return !!(window.orkas && typeof window.orkas.invoke === 'function');
+  return !!(window.cogseed && typeof window.cogseed.invoke === 'function');
 }
 
 function _hasOrkasStream() {
-  return !!(window.orkas && typeof window.orkas.stream === 'function');
+  return !!(window.cogseed && typeof window.cogseed.stream === 'function');
 }
 
 const _mateProjectionCache = new Map();
@@ -226,7 +226,7 @@ let _mateProjectionInvokeOverride = null;
 function _mateProjectionInvoke(channel, payload) {
   if (_mateProjectionInvokeOverride) return _mateProjectionInvokeOverride(channel, payload);
   if (!_hasOrkasInvoke()) return Promise.reject(new Error('ipc bridge unavailable'));
-  return window.orkas.invoke(channel, payload);
+  return window.cogseed.invoke(channel, payload);
 }
 
 function _mateProjectionEntry(key, loader, onUpdate) {
@@ -286,7 +286,7 @@ function _isStreamCancel(err) {
 }
 
 /**
- * Convert a window.orkas.stream call into a Response whose body is a
+ * Convert a window.cogseed.stream call into a Response whose body is a
  * ReadableStream of SSE-formatted bytes. The existing app.js SSE reader
  * (`res.body.getReader()` + 'data: …\\n\\n' parse) works unchanged.
  */
@@ -296,7 +296,7 @@ function _streamResponse(channel, payload, signal) {
 
   const readable = new ReadableStream({
     start(controller) {
-      streamHandle = window.orkas.stream(channel, payload, (ev) => {
+      streamHandle = window.cogseed.stream(channel, payload, (ev) => {
         const chunk = encoder.encode('data: ' + JSON.stringify(ev) + '\n\n');
         try { controller.enqueue(chunk); } catch (_) { /* already closed */ }
       });
@@ -365,7 +365,7 @@ async function _uploadBinary(channel, options, extraParams) {
   }
   const data = btoa(binary);
   try {
-    const result = await window.orkas.invoke(channel, { ...(extraParams || {}), name, data });
+    const result = await window.cogseed.invoke(channel, { ...(extraParams || {}), name, data });
     return _mockJsonResponse(result);
   } catch (err) {
     _monitorIpcError('ipc_upload', channel, { msg: err && err.message ? err.message : String(err) });
@@ -424,7 +424,7 @@ function apiFetch(url, options) {
     return _uploadBinary(uploadChannel, options, params).catch((err) => _mockErrorResponse((err && err.message) || String(err), 500));
   }
 
-  // Streaming: go through window.orkas.stream + ReadableStream body.
+  // Streaming: go through window.cogseed.stream + ReadableStream body.
   if (opts.stream) {
     if (!_hasOrkasStream()) {
       return Promise.resolve(_mockJsonResponse({ ok: false, error: 'ipc stream bridge unavailable' }));
@@ -442,7 +442,7 @@ function apiFetch(url, options) {
     return Promise.resolve(_mockJsonResponse({ ok: false, error: 'ipc bridge unavailable' }));
   }
 
-  return window.orkas.invoke(channel, payload)
+  return window.cogseed.invoke(channel, payload)
     .then((result) => {
       return _mockJsonResponse(result);
     })

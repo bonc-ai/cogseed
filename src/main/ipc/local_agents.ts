@@ -38,6 +38,7 @@ import { getActiveUserId } from '../features/users.js';
 import { userToolResultsDir } from '../paths.js';
 import { createLogger } from '../logger.js';
 import { listClaudeSessions } from '../features/local_agents/claude_sessions.js';
+import { importClaudeSessions } from '../features/local_agents/import_sessions.js';
 import { listClaudeDesktopSessions } from '../features/local_agents/claude_desktop_sessions.js';
 import { listAgentTypes, listSessions as listAcpSessions } from '../features/local_agents/acp_sessions.js';
 import { importClaudeSession, importClaudeDesktopSession } from '../features/session_import/asset-router.js';
@@ -143,6 +144,18 @@ export const invokeHandlers = {
   'localAgents.listClaudeSessions': async () => {
     const sessions = await listClaudeSessions();
     return { sessions };
+  },
+
+  /**
+   * Import picked Claude Code sessions as read-only conversations in the
+   * user's chat list (cid = claude sessionId → idempotent re-import).
+   * Returns per-session outcome; a single failure doesn't abort the batch.
+   */
+  'localAgents.importClaudeSessions': async ({ sessions }: { sessions?: Array<{ sessionId: string; filePath: string; firstMessage?: string; projectPath?: string }> } = {}, ctx) => {
+    const list = Array.isArray(sessions) ? sessions.filter((s) => s && s.sessionId && s.filePath) : [];
+    if (!list.length) return { ok: false, error: 'no sessions provided', imported: 0, skipped: 0, errors: [] };
+    const result = await importClaudeSessions(ctx.userId, list);
+    return result;
   },
 
   /**
@@ -371,7 +384,7 @@ export const invokeHandlers = {
   },
 
   /**
-   * Import a single Codex session into a Mate Agent conversation.
+   * Import a single Codex session into a CogSeed conversation.
    * Simpler than Claude import: no extraction/cognition routing, just
    * materialize the conversation. `filePath` must be a valid JSONL path
    * from `listCodexSessions`. Returns `{ ok, conversationId, reason }`.

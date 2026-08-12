@@ -1,5 +1,5 @@
 /**
- * Workspaces（工作空间一期）—— 空间 = 主界面 + 资源作用域限制。
+ * 情境空间（原"工作空间"）—— 空间 = 主界面 + 资源作用域限制。
  *
  * 空间是纯配置实体（模板 + 技能/智能体集合，纯元数据），不存会话/文件/记忆。
  * 项目通过 `project.json.space_id` 引用空间；运行时资源 = 空间派生集 ∪ 项目
@@ -8,7 +8,7 @@
  * 数据布局（照抄 projects.ts 的 no-aggregate 模式，云同步友好）：
  *   `<uid>/cloud/spaces/<space_id>.json` = 单文件实体，列目录扫描即列表。
  *
- * 语义裁决（工作空间变更设计 v0.2 §2.4）：
+ * 语义裁决（情境空间变更设计 v0.2 §2.4）：
  *   S1 空配置（无模板且无 extra）→ 派生结果全空，调用方据此返回 null（全局可见），
  *      不沿用项目 bindings "空数组 = 零资源" 的语义；
  *   S2 两级资源：项目运行时 = S ∪ B（空间派生集 ∪ 项目 bindings 追加）；
@@ -35,12 +35,29 @@ export interface Space {
   name: string;
   /** 可选卡片图标（emoji）。 */
   icon?: string;
-  /** 套用的角色模板 id；缺省 = 未套模板。 */
+  /**
+   * @deprecated 保留兼容：读取时等效 primary_template_id，写入时同步两者。
+   * 新代码请用 primary_template_id + secondary_template_ids。
+   */
   template_id?: string;
+  /** 主角色模板 id（必选，兼容旧字段 template_id；缺省 = 未套模板）。 */
+  primary_template_id?: string;
+  /** 副角色模板 id 列表（可选，最多 2 个）。 */
+  secondary_template_ids: string[];
   /** 空间级扩充技能（共享，空间内所有项目吃到）。 */
   extra_skills: string[];
   /** 空间级扩充智能体。 */
   extra_agents: string[];
+  /** 空间类型（缺省 complex_project；PRD §0.6.6 四类之一）。 */
+  space_type?: SpaceType;
+  /** 持续目标/工作领域（一个空间一个；PRD §0.6.5 规则 2）。 */
+  sustained_outcome?: string;
+  /** 上架 Gate 状态缓存（'passed' = 最近一次评估通过；实时判断走 evaluateWorkspaceGate）。 */
+  gate_status?: SpaceGateStatus;
+  /** 空间绑定的 Main Skill（引用不复制；AssetRef 契约与 main-skill-baseline 对齐）。 */
+  main_skill_ref?: SpaceAssetRef;
+  /** 空间对正式资产的版本引用绑定（默认 review_required；PRD §3.4.2）。 */
+  asset_reference_bindings?: SpaceAssetReferenceBinding[];
   created_at: string;
   updated_at: string;
 }
@@ -48,6 +65,8 @@ export interface Space {
 /** 列表展示用派生元数据（不落盘，渲染层 Stage A 用）。 */
 export interface SpaceWithMeta extends Space {
   template_name?: string;
+  /** 主+副角色模板名列表（空格间隔）；单模板时与 template_name 相同。 */
+  template_names?: string;
   skill_count: number;
   agent_count: number;
   invalid_count: number;
@@ -55,15 +74,86 @@ export interface SpaceWithMeta extends Space {
 
 /** 派生结果（纯函数输出）。 */
 export interface SpaceResources {
-  /** 解析到的模板；无模板/模板不存在 = null。 */
+  /** 解析到的主模板；无模板/模板不存在 = null。 */
   template: RoleTemplate | null;
+  /** 解析到的副模板列表（最多 2 个）。 */
+  secondary_templates: RoleTemplate[];
   /** 模板 bundle ∪ extra，过滤失效、去重保序。 */
   effective_skills: string[];
   effective_agents: string[];
   invalid_refs: { skills: string[]; agents: string[] };
 }
 
-export type SpaceError = 'name_empty' | 'name_dup' | 'not_found' | 'too_long';
+export type SpaceError = 'name_empty' | 'name_dup' | 'not_found' | 'too_long' | 'invalid_space_type';
+
+// ── P3394 空间扩展（PRD doc-v1.6 §0.6.5/§0.6.6/§3.4.2）─────────────────────
+
+/** 空间类型（PRD §0.6.6 四类；前台统一"空间"心智）。 */
+export type SpaceType = 'complex_project' | 'professional_work' | 'recurring_routine' | 'temporary_task';
+
+/** 上架 Gate 状态缓存：'passed' = 最近一次评估通过。可展示性仍以
+ *  workbench/gate.ts::evaluateWorkspaceGate 实时判断为准（本字段只作缓存/标记）。 */
+export type SpaceGateStatus = 'not_checked' | 'passed' | 'failed';
+
+/** 空间对正式资产的引用策略（PRD §3.4.2）。 */
+export type AssetReferencePolicy = 'pinned' | 'review_required' | 'follow_latest_compatible';
+
+/** 能力资产引用（引用不复制；字段名与 workbench/main-skill-baseline 的 AssetRef 对齐）。 */
+export interface SpaceAssetRef {
+  asset_id: string;
+  version: string;
+  content_hash?: string;
+}
+
+/** 空间资产引用绑定：一个正式资产版本 + 引用策略。 */
+export interface SpaceAssetReferenceBinding extends SpaceAssetRef {
+  policy: AssetReferencePolicy;
+  bound_at: string;
+  updated_at?: string;
+}
+
+const SPACE_TYPES: readonly SpaceType[] = ['complex_project', 'professional_work', 'recurring_routine', 'temporary_task'];
+const GATE_STATUSES: readonly SpaceGateStatus[] = ['not_checked', 'passed', 'failed'];
+const ASSET_POLICIES: readonly AssetReferencePolicy[] = ['pinned', 'review_required', 'follow_latest_compatible'];
+
+function isSpaceType(v: unknown): v is SpaceType {
+  return typeof v === 'string' && (SPACE_TYPES as readonly string[]).includes(v);
+}
+function isGateStatus(v: unknown): v is SpaceGateStatus {
+  return typeof v === 'string' && (GATE_STATUSES as readonly string[]).includes(v);
+}
+function isPolicy(v: unknown): v is AssetReferencePolicy {
+  return typeof v === 'string' && (ASSET_POLICIES as readonly string[]).includes(v);
+}
+
+/** 读时归一化能力资产引用；非法/缺关键字段 → undefined。 */
+function normaliseAssetRef(raw: unknown): SpaceAssetRef | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.asset_id !== 'string' || !r.asset_id) return undefined;
+  if (typeof r.version !== 'string' || !r.version) return undefined;
+  const out: SpaceAssetRef = { asset_id: r.asset_id, version: r.version };
+  if (typeof r.content_hash === 'string' && r.content_hash) out.content_hash = r.content_hash;
+  return out;
+}
+
+/** 读时归一化引用绑定数组；逐项过滤非法，缺 policy 默认 review_required。 */
+function normaliseBindings(raw: unknown): SpaceAssetReferenceBinding[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: SpaceAssetReferenceBinding[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const ref = normaliseAssetRef(item);
+    if (!ref) continue;
+    const r = item as Record<string, unknown>;
+    const policy = isPolicy(r.policy) ? r.policy : 'review_required';
+    const bound_at = typeof r.bound_at === 'string' && r.bound_at ? r.bound_at : new Date().toISOString();
+    const b: SpaceAssetReferenceBinding = { ...ref, policy, bound_at };
+    if (typeof r.updated_at === 'string' && r.updated_at) b.updated_at = r.updated_at;
+    out.push(b);
+  }
+  return out.length ? out : undefined;
+}
 
 // ── Pure helpers ───────────────────────────────────────────────────────────
 
@@ -90,27 +180,44 @@ export function parseTemplateFileBundle(text: string): RoleTemplateBundle {
 }
 
 /** 空间 → 资源派生（纯函数，同步）。
- *  @param space  空间（可部分：只用 template_id/extra_skills/extra_agents）
+ *  @param space  空间（可部分：primary_template_id/extra_skills/extra_agents）
  *  @param valid  当前用户可见资源的 id 集合（调用方从 listSkills/listAgents 构造）
  *  @returns effective = 模板 bundle ∪ extra 过滤失效去重保序；失效 id 归 invalid_refs。 */
 export function resolveSpaceResources(
-  space: Pick<Space, 'template_id' | 'extra_skills' | 'extra_agents'>,
+  space: Pick<Space, 'primary_template_id' | 'secondary_template_ids' | 'extra_skills' | 'extra_agents'> & { template_id?: string },
   valid: { skills?: ReadonlySet<string>; agents?: ReadonlySet<string> },
 ): SpaceResources {
   const validSkills = valid.skills ?? new Set<string>();
   const validAgents = valid.agents ?? new Set<string>();
 
+  // 归一化：兼容旧 template_id 字段（等效 primary_template_id）
+  const primary = space.primary_template_id || space.template_id;
+  const secondary = space.secondary_template_ids ?? [];
+
   let template: RoleTemplate | null = null;
+  const secondaryTemplates: RoleTemplate[] = [];
   const bundleSkills: string[] = [];
   const bundleAgents: string[] = [];
 
-  if (space.template_id) {
-    template = getRoleTemplate(space.template_id) ?? null;
+  // 主模板
+  if (primary) {
+    template = getRoleTemplate(primary) ?? null;
     if (template?.bundle) {
       bundleSkills.push(...template.bundle.skill_ids);
       bundleAgents.push(...template.bundle.agent_ids);
     }
-    // 模板存在但无 bundle（旧内置/自定义模板）→ 空捆绑，兼容。
+  }
+  // 副模板（去重：排除与主模板相同的 id）
+  for (const sid of secondary) {
+    if (sid === primary) continue;
+    const st = getRoleTemplate(sid);
+    if (st) {
+      secondaryTemplates.push(st);
+      if (st.bundle) {
+        bundleSkills.push(...st.bundle.skill_ids);
+        bundleAgents.push(...st.bundle.agent_ids);
+      }
+    }
   }
 
   const unionSkills = [...bundleSkills, ...(space.extra_skills ?? [])];
@@ -138,6 +245,7 @@ export function resolveSpaceResources(
 
   return {
     template,
+    secondary_templates: secondaryTemplates,
     effective_skills: effectiveSkills,
     effective_agents: effectiveAgents,
     invalid_refs: { skills: invalidSkills, agents: invalidAgents },
@@ -152,13 +260,25 @@ function _normaliseSpace(raw: any): Space | null {
   if (!sid) return null;
   const filt = (arr: unknown): string[] =>
     Array.isArray(arr) ? arr.filter((s) => typeof s === 'string' && !!s) as string[] : [];
+  // 归一化：旧数据 template_id → primary_template_id；新数据优先 primary
+  const primary = (typeof raw.primary_template_id === 'string' && raw.primary_template_id)
+    || (typeof raw.template_id === 'string' && raw.template_id)
+    || undefined;
+  const secondary = filt(raw.secondary_template_ids);
   return {
     space_id: sid,
     name: typeof raw.name === 'string' ? raw.name : '',
     icon: typeof raw.icon === 'string' && raw.icon ? raw.icon : undefined,
-    template_id: typeof raw.template_id === 'string' && raw.template_id ? raw.template_id : undefined,
+    template_id: primary, // 兼容旧字段
+    primary_template_id: primary,
+    secondary_template_ids: secondary,
     extra_skills: filt(raw.extra_skills),
     extra_agents: filt(raw.extra_agents),
+    space_type: isSpaceType(raw.space_type) ? raw.space_type : 'complex_project',
+    sustained_outcome: typeof raw.sustained_outcome === 'string' && raw.sustained_outcome ? raw.sustained_outcome : undefined,
+    gate_status: isGateStatus(raw.gate_status) ? raw.gate_status : 'not_checked',
+    main_skill_ref: normaliseAssetRef(raw.main_skill_ref),
+    asset_reference_bindings: normaliseBindings(raw.asset_reference_bindings),
     created_at: typeof raw.created_at === 'string' ? raw.created_at : '',
     updated_at: typeof raw.updated_at === 'string' ? raw.updated_at : '',
   };
@@ -235,17 +355,29 @@ async function _listSpaceIds(uid: string): Promise<string[]> {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
-/** 空间列表 + 派生展示元数据（模板名/资源数/失效数）。坏文件跳过。 */
+/** 空间列表 + 派生展示元数据（模板名/资源数/失效数）。坏文件跳过。
+ *  失效数用真实有效集合（listSkills/listAgents，均有磁盘缓存）：一次构造、
+ *  全部空间复用，避免空集合导致「所有引用全失效」的假阳性（P3394 回归）。 */
 export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
   const ids = await _listSpaceIds(uid);
+  const [agents, skills] = await Promise.all([
+    import('./agents').then((m) => m.listAgents()).catch(() => []),
+    import('./skills').then((m) => m.listSkills()).catch(() => []),
+  ]);
+  const valid = {
+    skills: new Set(skills.map((s) => s.id)),
+    agents: new Set(agents.map((a) => a.agent_id)),
+  };
   const out: SpaceWithMeta[] = [];
   for (const sid of ids) {
     const s = await _readSpace(uid, sid);
     if (!s) continue;
-    const res = resolveSpaceResources(s, { skills: new Set(), agents: new Set() });
+    const res = resolveSpaceResources(s, valid);
     out.push({
       ...s,
       template_name: res.template?.name,
+      template_names: [res.template?.name, ...res.secondary_templates.map((t) => t.name)]
+        .filter(Boolean).join(' ') || undefined,
       skill_count: res.effective_skills.length + res.invalid_refs.skills.length,
       agent_count: res.effective_agents.length + res.invalid_refs.agents.length,
       invalid_count: res.invalid_refs.skills.length + res.invalid_refs.agents.length,
@@ -263,30 +395,175 @@ export async function getSpace(uid: string, spaceId: string): Promise<Space | nu
 
 export async function createSpace(
   uid: string,
-  opts: { name: string; template_id?: string; icon?: string },
+  opts: {
+    name: string;
+    template_id?: string;
+    primary_template_id?: string;
+    secondary_template_ids?: string[];
+    icon?: string;
+    space_type?: SpaceType;
+    sustained_outcome?: string;
+    main_skill_ref?: SpaceAssetRef;
+    asset_reference_bindings?: SpaceAssetReferenceBinding[];
+  },
 ): Promise<{ ok: true; space: Space } | { ok: false; error: SpaceError }> {
   const name = normName(opts.name);
   if (!name) return { ok: false, error: 'name_empty' };
   if (await _isDuplicateName(uid, name)) return { ok: false, error: 'name_dup' };
+  if (opts.space_type !== undefined && !isSpaceType(opts.space_type)) {
+    return { ok: false, error: 'invalid_space_type' };
+  }
+  if (opts.sustained_outcome !== undefined && opts.sustained_outcome.length > 200) {
+    return { ok: false, error: 'too_long' };
+  }
+  // 归一化：template_id 兼容，primary 优先
+  const primary = opts.primary_template_id || opts.template_id || undefined;
+  const secondary = (opts.secondary_template_ids || []).filter(Boolean).slice(0, 2);
   const space: Space = {
     space_id: genSpaceId(),
     name,
     icon: typeof opts.icon === 'string' && opts.icon ? opts.icon : undefined,
-    template_id: typeof opts.template_id === 'string' && opts.template_id ? opts.template_id : undefined,
+    template_id: primary,
+    primary_template_id: primary,
+    secondary_template_ids: secondary,
     extra_skills: [],
     extra_agents: [],
+    space_type: opts.space_type ?? 'complex_project',
+    sustained_outcome: opts.sustained_outcome || undefined,
+    gate_status: 'not_checked',
+    main_skill_ref: normaliseAssetRef(opts.main_skill_ref),
+    asset_reference_bindings: normaliseBindings(opts.asset_reference_bindings),
     created_at: nowIso(),
     updated_at: nowIso(),
   };
   await _writeSpace(uid, space);
-  log.info(`created space user=${uid} sid=${space.space_id} name=${name}`);
+  log.info(`created space user=${uid} sid=${space.space_id} name=${name} type=${space.space_type}`);
   return { ok: true, space };
+}
+
+// ── 空间构建师草稿 → 创建（带资产存在性校验）──────────────────────────────
+
+export interface SpaceDraft {
+  name: string;
+  space_type?: string;
+  sustained_outcome?: string;
+  primary_template_id?: string;
+  main_skill_ref?: SpaceAssetRef;
+  extra_skill_ids?: string[];
+  extra_agent_ids?: string[];
+}
+
+/** 空间构建师产出的草稿 → 创建空间。与 createSpace 的区别：引用资产
+ *  （模板/技能/智能体）必须真实存在且可用，非法引用逐个报告而不是静默丢弃
+ *  ——LLM 推荐的 id 可能幻觉，后端是最后一道闸。 */
+export async function createSpaceFromDraft(
+  uid: string,
+  draft: SpaceDraft,
+): Promise<
+  | { ok: true; space: Space }
+  | { ok: false; error: SpaceError | 'invalid_draft'; details?: string[] }
+> {
+  const details: string[] = [];
+  // 1. 基础字段（复用 createSpace 语义）
+  const name = normName(draft.name);
+  if (!name) return { ok: false, error: 'name_empty' };
+  if (await _isDuplicateName(uid, name)) return { ok: false, error: 'name_dup' };
+  const spaceType: SpaceType = draft.space_type === undefined || !draft.space_type
+    ? 'complex_project'
+    : draft.space_type as SpaceType;
+  if (!isSpaceType(spaceType)) details.push(`space_type 非法: ${spaceType}`);
+  if (draft.sustained_outcome !== undefined && draft.sustained_outcome.length > 200) {
+    details.push('sustained_outcome 超过 200 字上限');
+  }
+  // 2. 模板存在性
+  let templateId: string | undefined;
+  let bundleSkillIds = new Set<string>();
+  let bundleAgentIds = new Set<string>();
+  if (draft.primary_template_id) {
+    const tpls = await import('./role_templates').then((m) => m.listRoleTemplates());
+    const tpl = tpls.find((t) => t.template_id === draft.primary_template_id);
+    if (tpl) {
+      templateId = tpl.template_id;
+      (tpl.bundle?.skill_ids || []).forEach((id) => bundleSkillIds.add(id));
+      (tpl.bundle?.agent_ids || []).forEach((id) => bundleAgentIds.add(id));
+    } else {
+      details.push(`角色模板不存在: ${draft.primary_template_id}`);
+    }
+  }
+  // 3. 主技能存在性 + 可用
+  let mainSkillRef: SpaceAssetRef | undefined;
+  const skillsList = await import('./skills').then((m) => m.listSkills()).catch(() => []);
+  if (draft.main_skill_ref && draft.main_skill_ref.asset_id) {
+    const hit = skillsList.find((s) => s.id === draft.main_skill_ref.asset_id);
+    if (hit && hit.enabled !== false) {
+      mainSkillRef = normaliseAssetRef(draft.main_skill_ref) || undefined;
+    } else {
+      details.push(`主技能不存在或已禁用: ${draft.main_skill_ref.asset_id}`);
+    }
+  }
+  // 4. extra 技能：存在 + 可用 + 去重（内部 + 模板内置——模板内置属冗余，自动剔除不算错误）
+  const extraSkills: string[] = [];
+  const seenSkills = new Set<string>();
+  for (const id of draft.extra_skill_ids || []) {
+    if (!id || seenSkills.has(id)) continue;
+    seenSkills.add(id);
+    const hit = skillsList.find((s) => s.id === id);
+    if (!hit || hit.enabled === false) { details.push(`技能不存在或已禁用: ${id}`); continue; }
+    if (bundleSkillIds.has(id)) continue; // 模板已内置：冗余引用，静默去重
+    extraSkills.push(id);
+  }
+  // 5. extra 智能体：存在 + 去重（内部 + 模板内置——模板内置属冗余，自动剔除不算错误）
+  const agentsList = await import('./agents').then((m) => m.listAgents()).catch(() => []);
+  const extraAgents: string[] = [];
+  const seenAgents = new Set<string>();
+  for (const id of draft.extra_agent_ids || []) {
+    if (!id || seenAgents.has(id)) continue;
+    seenAgents.add(id);
+    const hit = agentsList.find((a) => a.agent_id === id);
+    if (!hit) { details.push(`智能体不存在: ${id}`); continue; }
+    if (bundleAgentIds.has(id)) continue; // 模板已内置：冗余引用，静默去重
+    extraAgents.push(id);
+  }
+  // 6. 存在任何非法引用 → 拒绝创建（严谨：宁可报错，不可静默残缺）
+  if (details.length) return { ok: false, error: 'invalid_draft', details };
+
+  const space = await createSpace(uid, {
+    name,
+    space_type: spaceType,
+    sustained_outcome: draft.sustained_outcome || undefined,
+    primary_template_id: templateId,
+    main_skill_ref: mainSkillRef,
+  });
+  if (!space.ok) return space;
+  for (const id of extraSkills) {
+    try { await addSpaceResource(uid, space.space.space_id, 'skill', id); } catch (err) {
+      log.warn(`draft extra skill attach failed uid=${uid} sid=${space.space.space_id} id=${id}: ${(err as Error).message}`);
+    }
+  }
+  for (const id of extraAgents) {
+    try { await addSpaceResource(uid, space.space.space_id, 'agent', id); } catch (err) {
+      log.warn(`draft extra agent attach failed uid=${uid} sid=${space.space.space_id} id=${id}: ${(err as Error).message}`);
+    }
+  }
+  log.info(`created space from draft user=${uid} sid=${space.space.space_id} name=${name} extras=${extraSkills.length}/${extraAgents.length}`);
+  return { ok: true, space: space.space };
 }
 
 export async function updateSpace(
   uid: string,
   spaceId: string,
-  opts: { name?: string; icon?: string; template_id?: string },
+  opts: {
+    name?: string;
+    icon?: string;
+    template_id?: string;
+    primary_template_id?: string;
+    secondary_template_ids?: string[];
+    space_type?: SpaceType | null;
+    sustained_outcome?: string | null;
+    gate_status?: SpaceGateStatus | null;
+    main_skill_ref?: SpaceAssetRef | null;
+    asset_reference_bindings?: SpaceAssetReferenceBinding[] | null;
+  },
 ): Promise<{ ok: true; space: Space } | { ok: false; error: SpaceError }> {
   const cur = await _readSpace(uid, spaceId);
   if (!cur) return { ok: false, error: 'not_found' };
@@ -297,7 +574,36 @@ export async function updateSpace(
     cur.name = name;
   }
   if (opts.icon !== undefined) cur.icon = opts.icon || undefined;
-  if (opts.template_id !== undefined) cur.template_id = opts.template_id || undefined;
+  if (opts.primary_template_id !== undefined || opts.template_id !== undefined) {
+    const primary = opts.primary_template_id || opts.template_id || undefined;
+    cur.primary_template_id = primary;
+    cur.template_id = primary; // 同步兼容字段
+  }
+  if (opts.secondary_template_ids !== undefined) {
+    cur.secondary_template_ids = (opts.secondary_template_ids || []).filter(Boolean).slice(0, 2);
+  }
+  if (opts.space_type !== undefined) {
+    if (opts.space_type === null) cur.space_type = 'complex_project';
+    else if (isSpaceType(opts.space_type)) cur.space_type = opts.space_type;
+    else return { ok: false, error: 'invalid_space_type' };
+  }
+  if (opts.sustained_outcome !== undefined) {
+    if (opts.sustained_outcome === null) cur.sustained_outcome = undefined;
+    else if (opts.sustained_outcome.length > 200) return { ok: false, error: 'too_long' };
+    else cur.sustained_outcome = opts.sustained_outcome || undefined;
+  }
+  if (opts.gate_status !== undefined) {
+    if (opts.gate_status === null) cur.gate_status = 'not_checked';
+    else if (isGateStatus(opts.gate_status)) cur.gate_status = opts.gate_status;
+    else return { ok: false, error: 'invalid_space_type' };
+  }
+  if (opts.main_skill_ref !== undefined) {
+    cur.main_skill_ref = opts.main_skill_ref === null ? undefined : normaliseAssetRef(opts.main_skill_ref);
+  }
+  if (opts.asset_reference_bindings !== undefined) {
+    cur.asset_reference_bindings =
+      opts.asset_reference_bindings === null ? undefined : normaliseBindings(opts.asset_reference_bindings);
+  }
   cur.updated_at = nowIso();
   await _writeSpace(uid, cur);
   return { ok: true, space: cur };
@@ -402,4 +708,62 @@ export async function resolveSpaceResourcesForUser(uid: string, space: Space): P
     skills: new Set(skills.map((s) => s.id)),
     agents: new Set(agents.map((a) => a.agent_id)),
   });
+}
+
+/**
+ * 情境空间「角色画像」注入：项目绑空间 + 空间有主模板 → 读主+副角色模板文件
+ * （个人本体唯一事实来源）的有值字段，格式化为「当前角色画像」块，由 runner 注入
+ * system prompt。主角色优先，副角色字段排后；空坑不注入；任何失败 → ''（静默降级）。
+ */
+export async function formatRoleProfileForSystemPrompt(
+  uid: string,
+  projectId: string | null | undefined,
+): Promise<string> {
+  try {
+    if (!projectId) return '';
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
+    const projects = await import('./projects');
+    const meta = await projects.getProjectScopeMeta(uid, projectId);
+    const space = meta.space;
+    const primary = space?.primary_template_id || space?.template_id;
+    if (!primary) return '';
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
+    const tmpl = await import('./personal_ontology_template_files');
+
+    // 收集所有需要读的模板 id（主+副，去重）
+    const allTemplateIds = [primary];
+    if (space?.secondary_template_ids?.length) {
+      for (const sid of space.secondary_template_ids) {
+        if (sid && sid !== primary) allTemplateIds.push(sid);
+      }
+    }
+
+    const allLines: string[] = [];
+    for (const tid of allTemplateIds) {
+      const text = tmpl.readTemplateFileText(uid, tid);
+      if (!text) continue;
+      const content = tmpl.parseTemplateContent(text);
+      const tpl = getRoleTemplate(tid);
+      const tplName = (tpl && tpl.name) || tid;
+      const lines: string[] = [];
+      for (const sec of content.sections) {
+        for (const [fieldName, values] of Object.entries(sec.fields)) {
+          if (!values.length) continue; // 空坑不注入
+          lines.push(`- ${sec.title} · ${fieldName}: ${values.map((v) => v.value).join('、')}`);
+        }
+      }
+      if (lines.length) {
+        allLines.push(`### 角色「${tplName}」`, ...lines);
+      }
+    }
+    if (!allLines.length) return ''; // 全空坑 → 不注入空画像
+
+    return [
+      `## 当前角色画像`,
+      `本空间绑定了以下角色模板；以下为已记录的个人画像（来源：个人本体角色模板文件，随候选确认更新）：`,
+      ...allLines,
+    ].join('\n');
+  } catch {
+    return ''; // 静默降级
+  }
 }

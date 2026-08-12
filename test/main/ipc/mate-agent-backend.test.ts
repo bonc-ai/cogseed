@@ -65,7 +65,7 @@ beforeEach(async () => {
   streamHandler = null;
   vi.resetModules();
   vi.clearAllMocks();
-  vi.doMock('../../../src/main/features/mate_agent_backend', () => ({ mateIpcService: mateService }));
+  vi.doMock('../../../src/main/features/cogseed_backend', () => ({ mateIpcService: mateService }));
   vi.doMock('../../../src/main/ipc/local_agents', () => ({ invokeHandlers: {} }));
   const users = await import('../../../src/main/features/users');
   users.activateUser(TEST_UID);

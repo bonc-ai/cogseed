@@ -301,6 +301,13 @@ describe('settings tabs module', () => {
         await cancelWecomFlow({ silent: true, render: false });`);
   });
 
+  it('turns an unbound Feishu/Lark switch into a binding action instead of a dead disabled control', () => {
+    const { hooks } = loadMessagingSettingsTestHooks();
+    expect(hooks.__test.switchActionForInstance({ platform: 'feishu_lark', hasCredentials: false })).toBe('bind');
+    expect(hooks.__test.switchActionForInstance({ platform: 'feishu_lark', hasCredentials: true })).toBe('toggle');
+    expect(hooks.__test.switchActionForInstance({ platform: 'telegram', hasCredentials: false })).toBe('unavailable');
+  });
+
   it('keeps an add-binding entry for open channels after the first instance', () => {
     const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
     expect(source).toContain("labelFor('messaging.instance.add', '')");

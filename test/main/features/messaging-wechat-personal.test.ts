@@ -254,18 +254,24 @@ describe('wechat personal adapter wire contract', () => {
   });
 
   it('checkHealth: reports error once a terminal reauth error ended the adapter', async () => {
-    const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
-    const onStatus = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => makeResponse({ ret: -14, errmsg: 'token invalid' })));
-    const adapter = new WechatPersonalAdapter(instance, secret, 'uid-1');
-    const controller = new AbortController();
-    const startPromise = adapter.start(controller.signal, { onInbound: vi.fn(), onStatus } as never);
-    await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' })));
-    controller.abort();
-    await startPromise;
-    const health = await adapter.checkHealth();
-    expect(health.kind).toBe('error');
-    expect(health.message).toContain('re-scan');
+    const { setCurrentLang } = await import('../../../src/main/i18n');
+    setCurrentLang('zh');
+    try {
+      const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
+      const onStatus = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => makeResponse({ ret: -14, errmsg: 'token invalid' })));
+      const adapter = new WechatPersonalAdapter(instance, secret, 'uid-1');
+      const controller = new AbortController();
+      const startPromise = adapter.start(controller.signal, { onInbound: vi.fn(), onStatus } as never);
+      await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' })));
+      controller.abort();
+      await startPromise;
+      const health = await adapter.checkHealth();
+      expect(health.kind).toBe('error');
+      expect(health.message).toContain('需要重新扫码');
+    } finally {
+      setCurrentLang('en');
+    }
   });
 
   describe('wechat personal adapter inbound/outbound', () => {
@@ -471,6 +477,8 @@ describe('wechat personal adapter wire contract', () => {
     it('accepts numeric message_id as the real protocol sends', async () => {
       const { _wechatTestHooks } = await import('../../../src/main/features/messaging/wechat-personal');
       const envelope = _wechatTestHooks.normalizeInbound(ownerInstance, 'owner-1', {
+        // 数值型 message_id（真实协议如此）。注意：不能超过 MAX_SAFE_INTEGER（9.007e15），
+        // 否则字面量解析即丢精度，String() 拿到的是失真值，断言永远失败。
         message_id: 7491873521689278,
         from_user_id: 'owner-1',
         item_list: [{ type: 1, text_item: { text: '窗口测试' } }],

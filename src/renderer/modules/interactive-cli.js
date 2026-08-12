@@ -72,8 +72,8 @@ function _iclUpdateLinks(session) {
     btn.innerHTML = `${_iclIcon('external', 'interactive-cli-link-icon')}<span>${_iclEsc(_iclT('interactive_cli.open_link', 'Open link'))}</span>`;
     btn.title = url;
     btn.addEventListener('click', () => {
-      if (!window.orkas || typeof window.orkas.invoke !== 'function') return;
-      window.orkas.invoke('auth.openExternal', { url }).catch((err) => {
+      if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
+      window.cogseed.invoke('auth.openExternal', { url }).catch((err) => {
         _interactiveCliLog.warn('open external failed', { error: err && err.message });
       });
     });
@@ -258,7 +258,7 @@ function _iclRevealSession(session) {
       if (!input || input.disabled) return;
       const value = input.value;
       try {
-        await window.orkas.invoke('interactiveCli.send', {
+        await window.cogseed.invoke('interactiveCli.send', {
           session_id: session.id,
           input: value,
           add_newline: true,
@@ -280,7 +280,7 @@ function _iclRevealSession(session) {
     stop.addEventListener('click', async () => {
       if (session.status !== 'running') return;
       try {
-        await window.orkas.invoke('interactiveCli.close', { session_id: session.id });
+        await window.cogseed.invoke('interactiveCli.close', { session_id: session.id });
       } catch (err) {
         _interactiveCliLog.warn('stop session failed', { error: err && err.message });
       }
@@ -319,9 +319,9 @@ function _iclHandleEvent(payload) {
   }
 }
 
-if (window.orkas && typeof window.orkas.onPushEvent === 'function') {
+if (window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
   try {
-    window.orkas.onPushEvent('interactive-cli:event', _iclHandleEvent);
+    window.cogseed.onPushEvent('interactive-cli:event', _iclHandleEvent);
   } catch (err) {
     _interactiveCliLog.warn('interactive CLI push channel unavailable', { error: err && err.message });
   }

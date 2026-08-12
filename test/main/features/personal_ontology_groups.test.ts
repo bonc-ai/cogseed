@@ -330,7 +330,7 @@ describe('personal_ontology_groups › listRoleTemplateStatus', () => {
   it('reports not-installed for every template before install', async () => {
     const groups = await loadModule();
     const status = await groups.listRoleTemplateStatus(UID);
-    expect(status).toHaveLength(8);
+    expect(status).toHaveLength(9); // 8 内置 + 电商运营（2026-08-07 角色扩充演练）
     for (const s of status) {
       expect(s.installed).toBe(false);
       expect(s.installed_version).toBeUndefined();

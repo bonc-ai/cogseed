@@ -590,8 +590,8 @@ function transformChatUseTokens(content) {
  *  一句提示文本，避免拼出一个空洞的"请参考：''"。 */
 async function _fetchOntologyGroupContent(groupId) {
   try {
-    if (!window.orkas || typeof window.orkas.invoke !== 'function') return '';
-    const res = await window.orkas.invoke('personalOntology.groups.read', { groupId });
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return '';
+    const res = await window.cogseed.invoke('personalOntology.groups.read', { groupId });
     return (res && res.ok !== false && typeof res.content === 'string') ? res.content : '';
   } catch (err) {
     console.warn('[chat-use] failed to read ontology group content', groupId, err);

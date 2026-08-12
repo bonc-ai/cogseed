@@ -89,7 +89,7 @@ let _localCliEntries = null;
 async function loadLocalCliEntries({ force = false } = {}) {
   if (_localCliEntries && !force) return _localCliEntries;
   try {
-    const res = await window.orkas.invoke('localAgents.list', { force });
+    const res = await window.cogseed.invoke('localAgents.list', { force });
     _localCliEntries = Array.isArray(res?.entries) ? res.entries : [];
   } catch (e) {
     _localAgentsLog.warn('localAgents.list failed', e);

@@ -93,11 +93,18 @@ describe('quality › schema › validateSkillMeta', () => {
     expect(v).toEqual([]);
   });
 
-  it('flags missing or invalid category as advisory', () => {
+  it('flags missing category as LOW and an invalid one as MEDIUM', () => {
     const missing = validateSkillMeta({});
     const missingCat = missing.find((x) => x.rule === 'skill_meta_category_missing');
-    expect(missingCat?.level).toBe('MEDIUM');
+    // LOW: omitting `_meta.json` is the common, benign default — most shipped
+    // skills do it. At MEDIUM this one rule dominated the corpus's MEDIUM count
+    // and marked essentially every install as "has findings", which is how a
+    // warning becomes noise.
+    expect(missingCat?.level).toBe('LOW');
 
+    // Still MEDIUM: a category that IS set but unrecognized suggests a typo or a
+    // stale code, which is worth a look. "Set wrong" and "not set" are different
+    // signals and must not collapse to the same level.
     const invalid = validateSkillMeta({ category: 'bad category' });
     const invalidCat = invalid.find((x) => x.rule === 'skill_meta_category_invalid');
     expect(invalidCat?.level).toBe('MEDIUM');

@@ -28,7 +28,7 @@ async function _showBridgePermissionDialog(info) {
   });
   const allow = choice === 'allow_once' || choice === 'allow_always';
   try {
-    await window.orkas.invoke('bridge.permission_response', {
+    await window.cogseed.invoke('bridge.permission_response', {
       request_id: info.request_id,
       allow,
       always: choice === 'allow_always',
@@ -51,9 +51,9 @@ async function _drainBridgePermissionQueue() {
   }
 }
 
-if (window.orkas && typeof window.orkas.onPushEvent === 'function') {
+if (window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
   try {
-    window.orkas.onPushEvent('bridge:permission', (info) => {
+    window.cogseed.onPushEvent('bridge:permission', (info) => {
       if (!info || typeof info.request_id !== 'string') return;
       _bridgePermissionQueue.push(info);
       _drainBridgePermissionQueue();

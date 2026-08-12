@@ -55,6 +55,23 @@ description: "把已确认的问题证据、产品目标、用户流程和约束
 - 数据互相冲突：并列冲突及适用条件，不自行裁决为单一事实。
 - 预算耗尽：返回当前证据、未完成步骤和可安全续跑点。
 
+<!-- NSEAP-GATE:BEGIN -->
+## NSEAP Gate 契约
+
+- `use_when`：需要“建立从问题证据到需求ID、用户故事、验收和Evaluation的可追溯链。”，并已提供或授权“问题与证据摘要”与“目标用户、业务目标、范围和非目标”等最小业务输入。
+- `do_not_use_when`：缺少或未授权“问题与证据摘要”；“目标用户、业务目标、范围和非目标”的对象、范围或版本无法确认；任务不属于“prd-user-stories”职责；或请求违反专属判断规则“事实、假设、建议和已批准决策必须分层。”。通用安全红线仍适用：不得越权、伪造证据或直接覆盖正式资产。
+- `positive_examples`：`请基于已授权材料执行prd-user-stories，输出结构化PRD并保留证据定位。`
+- `negative_examples`：`没有问题与证据摘要，仍请直接完成prd-user-stories。`；`目标用户、业务目标、范围和非目标尚未确认，但请直接定稿结构化PRD。`
+
+本 Skill 是 `EndUseSkill · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+
+执行时按需读取以下一层引用：
+
+- 输入/输出和运行边界：[schemas.json](schemas.json)、[references/input-contract.md](references/input-contract.md)、[references/output-contract.md](references/output-contract.md)
+- 本体、验证和失败归因：[references/ontology-mapping.md](references/ontology-mapping.md)、[references/validation-contract.md](references/validation-contract.md)、[references/failure-modes.md](references/failure-modes.md)
+- 评测、演进和治理：[evals/evals.json](evals/evals.json)、[references/kstar-evolution.md](references/kstar-evolution.md)、[references/governance-boundaries.md](references/governance-boundaries.md)
+<!-- NSEAP-GATE:END -->
+
 ## 详细方法
 
 执行前读取 [references/method.md](references/method.md)。需要输出模板、质量Gate和示例时，以该文件为准。

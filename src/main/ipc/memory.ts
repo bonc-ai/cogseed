@@ -138,6 +138,15 @@ export const invokeHandlers = {
     },
   }),
 
+  'memory.roleTemplateCount': async (payload: any, ctx: any) => {
+    const templateId = payload?.templateId;
+    // templateId 是内置模板 id（字母数字下划线），拒绝路径类输入（纵深防御）
+    if (!templateId || typeof templateId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(templateId)) {
+      throw new Error('invalid templateId');
+    }
+    return { count: memory.countRoleTemplateMemoryEntries(ctx.userId, templateId) };
+  },
+
   'memory.reveal': async (payload: any, ctx: any) => {
     // Path is resolved here from the scope — the renderer never supplies a
     // path, so there's no arbitrary-reveal surface.
