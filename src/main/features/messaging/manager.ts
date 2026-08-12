@@ -11,6 +11,7 @@ import * as projects from '../projects';
 import * as wakeService from '../p3394/wake-service';
 import * as ontologyCandidates from '../personal_ontology_candidates';
 import * as touchpointLedger from '../touchpoints/ledger';
+import * as touchpointActions from '../touchpoints/actions';
 import { buildResolvedTouchpointCard, TOUCHPOINT_CARD_INPUT_ID } from '../touchpoints/feishu/card';
 import type { TouchpointActionKind } from '../touchpoints/types';
 import * as registry from './registry';
@@ -692,7 +693,12 @@ async function handleTouchpointCardAction(uid: string, action: CardActionEnvelop
       signature,
       ...(content ? { content } : {}),
     });
-    if (!outcome.duplicate) void finalizeTouchpointCard(uid, action, kind as TouchpointActionKind, content);
+    if (!outcome.duplicate) {
+      void finalizeTouchpointCard(uid, action, kind as TouchpointActionKind, content);
+      // Business effects (reschedule, update, …) run fire-and-forget; a
+      // failing handler never changes the accepted receipt outcome.
+      void touchpointActions.notifyTouchpointActionHandlers(uid, outcome.action).catch(() => undefined);
+    }
     return { accepted: true, duplicate: outcome.duplicate };
   } catch (error) {
     log.warn('touchpoint card action rejected', {
