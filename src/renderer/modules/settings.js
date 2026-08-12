@@ -446,6 +446,9 @@ window.addEventListener('i18n-change', () => {
 async function _settingsRefreshProviders() {
   const res = await window.orkas.invoke('auth.listProviders');
   _settingsState.providers = (res && res.ok && Array.isArray(res.providers)) ? res.providers : [];
+  // Shared cache for the model-authorization modal so it never re-triggers
+  // auth.listProviders (core-agent cold start) just to paint preset cards.
+  if (_settingsState.providers.length) window.__settingsProvidersCache = _settingsState.providers;
 }
 
 async function _settingsRefreshEntries() {
