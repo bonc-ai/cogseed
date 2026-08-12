@@ -41,7 +41,6 @@ const _skillsCognitionState = {
   selectedAssetId: '',
   assetCategoryFilter: '',
   assetSearchQuery: '',
-  // Per-asset version/audit/usage, fetched when the history panel is opened.
   assetHistoryById: {},
   visibleAssetHistoryId: '',
   dashboard: null,
@@ -204,60 +203,6 @@ function _abilityAssetMaturityLabel(maturity, status) {
   if (maturity === 'transfer_validated') return 'Transfer Validated';
   if (maturity === 'seed') return _cognitionText('cognition.maturity_seed', '种子');
   return maturity || status || _cognitionText('cognition.unknown', '未知');
-}
-
-/**
- * Coarse lifecycle label (candidate / confirmed / active / deprecated).
- * The underlying two-part state is mapped in ability-asset-status.js; the
- * nuance it drops (paused vs revoked, deferred) comes back as a `note` suffix
- * so a paused asset is not shown as if it were revoked.
- */
-function _abilityAssetDisplayStatusLabel(record) {
-  const mapper = globalThis.OrkasAbilityAssetStatus;
-  if (!mapper) return _abilityAssetMaturityLabel(record?.maturity, record?.status);
-  const { key, note } = mapper.abilityAssetDisplayStatus(record);
-  const label = _cognitionText(mapper.abilityAssetDisplayStatusI18nKey(key), key);
-  if (!note) return label;
-  const noteLabel = _cognitionText(`cognition.display_status_note_${note}`, note);
-  return `${label} · ${noteLabel}`;
-}
-
-/** Loading / error / empty states share one shape so the two blocks read alike. */
-function _renderAssetHistoryState(loading, error, empty) {
-  if (loading) return `<p class="asset-history-state">${escapeHtml(_cognitionText('cognition.loading', '加载中…'))}</p>`;
-  if (error) return `<p class="asset-history-state is-error">${escapeHtml(_cognitionText('cognition.load_failed', '认知资产数据加载失败'))}：${escapeHtml(error)}</p>`;
-  return `<p class="asset-history-state">${escapeHtml(empty)}</p>`;
-}
-
-/**
- * Usage rows for the version-history panel.
- *
- * Version history answers "这条被改过几次"; usage answers "它真被带进过几次任务".
- * The panel itself (fetch, toggle, close) belongs to `_renderRecallAssetHistory`
- * — this only contributes the usage block so there stays exactly one history
- * panel rather than two competing ones.
- */
-function _renderAbilityAssetUsage(entry) {
-  const title = escapeHtml(_cognitionText('cognition.usage_records', '使用记录'));
-  if (!entry || entry.usageLoading || entry.usageError || !entry.usage?.length) {
-    const empty = _cognitionText('cognition.no_usage_records', '暂无使用记录');
-    const body = _renderAssetHistoryState(!entry || entry.usageLoading, entry && entry.usageError, empty);
-    return `<div class="asset-history-block"><strong>${title}</strong>${body}</div>`;
-  }
-  const rows = entry.usage.slice().reverse().map((u) => {
-    // A degraded or test-double boundary means the run behind this record was
-    // not a real reuse; surfacing it keeps mock data from reading as evidence.
-    const boundary = u.boundary && u.boundary !== 'real'
-      ? ` · ${escapeHtml(_cognitionText(`cognition.usage_boundary_${u.boundary}`, u.boundary))}`
-      : '';
-    return `<li>
-      <span class="asset-history-at">${escapeHtml(String(u.createdAt || ''))}</span>
-      <span class="asset-history-run">${escapeHtml(String(u.taskRunId || ''))}</span>
-      <span class="asset-history-version">v${escapeHtml(String(u.assetVersion || ''))}</span>
-      <span class="asset-history-note">${escapeHtml(String(u.outcome || ''))}${boundary}</span>
-    </li>`;
-  }).join('');
-  return `<div class="asset-history-block"><strong>${title}</strong><ul class="asset-history-list">${rows}</ul></div>`;
 }
 
 // Security status is a separate axis from maturity: "safe to admit" and "proven
@@ -1242,7 +1187,7 @@ function _renderRecallAssetHistory(assetId) {
     const versions = Array.isArray(history.versions) ? history.versions : [];
     body = versions.length ? versions.map((version) => `<div class="recall-asset-version-row"><span><strong>v${escapeHtml(version.version || '')}</strong><small>${escapeHtml(_cognitionDate(version.at))}</small></span><p>${escapeHtml(version.snapshot?.title || '')}</p></div>`).join('') : `<div class="skills-cognition-empty">${escapeHtml(_cognitionText('cognition.asset_versions_empty', '暂无版本记录'))}</div>`;
   }
-  return `<section class="recall-asset-version-panel"><div class="recall-asset-version-head"><strong>${escapeHtml(_cognitionText('cognition.version_history', '版本历史'))}</strong><button type="button" class="btn btn-sm recall-asset-version-close" data-recall-asset-history-close title="${escapeHtml(closeLabel)}" aria-label="${escapeHtml(closeLabel)}">${closeIcon}</button></div>${body}${_renderAbilityAssetUsage(history)}</section>`;
+  return `<section class="recall-asset-version-panel"><div class="recall-asset-version-head"><strong>${escapeHtml(_cognitionText('cognition.version_history', '版本历史'))}</strong><button type="button" class="btn btn-sm recall-asset-version-close" data-recall-asset-history-close title="${escapeHtml(closeLabel)}" aria-label="${escapeHtml(closeLabel)}">${closeIcon}</button></div>${body}</section>`;
 }
 
 function renderSkillsCognitionAssets() {
@@ -1298,7 +1243,7 @@ function renderSkillsCognitionAssets() {
     const contentSummary = _abilityAssetContentSummary(a);
     return `<button type="button" class="skills-cognition-record cognition-asset-row ability-asset-list-row${selectedClass}" data-ability-asset-id="${escapeHtml(a.id)}">
       <span class="ability-asset-row-main"><strong>${escapeHtml(displayTitle)}</strong>${contentSummary ? `<span class="ability-asset-row-summary">${escapeHtml(contentSummary)}</span>` : ''}<small>${escapeHtml(_abilityAssetCategoryLabel(category))}${a.version ? ` · ${escapeHtml(a.version)}` : ''}${!contentSummary && a.scope ? ` · ${escapeHtml(a.scope)}` : ''}</small></span>
-      <span class="skills-cognition-status">${escapeHtml(_abilityAssetDisplayStatusLabel(a))}</span>
+      <span class="skills-cognition-status">${escapeHtml(_abilityAssetMaturityLabel(a.maturity, a.status))}</span>
       ${_renderCognitionSecurityChip(a.security)}
     </button>`;
   }).join('');
@@ -1356,14 +1301,11 @@ function renderSkillsCognitionAssets() {
     <div class="ability-asset-summary-grid">${summary}</div>
     <div class="ability-assets-management">
       <section class="ability-asset-list">
-        <!-- 导出入口跟着资产走：develop 已移除 Context Pack 页，而「交给外部执行端的
-             那一份」本质就是这一页里这些资产的对外冻结形态，所以挂在资产列表页头，
-             不为它单开一个页面。 -->
-        <div class="ability-asset-list-head">${searchInput}<button type="button" class="btn btn-sm" data-capability-pack-export>${escapeHtml(_cognitionText('cognition.export_capability_pack', '导出能力包…'))}</button></div>
+        <div class="ability-asset-list-head">${searchInput}</div>
         <div class="skills-cognition-record-list ability-asset-list-body">${rows}</div>
       </section>
       <section class="ability-asset-detail">
-        <div class="asset-detail-head"><div><h2>${escapeHtml(selectedDisplayTitle)}</h2><p>${escapeHtml(_abilityAssetCategoryLabel(selectedCategory))}</p></div><div class="asset-detail-head-actions"><span class="skills-cognition-status is-${escapeHtml(selected.status || '')}">${escapeHtml(_abilityAssetDisplayStatusLabel(selected))}</span>${_renderCognitionSecurityChip(selected.security)}${assetMore}</div></div>
+        <div class="asset-detail-head"><div><h2>${escapeHtml(selectedDisplayTitle)}</h2><p>${escapeHtml(_abilityAssetCategoryLabel(selectedCategory))}</p></div><div class="asset-detail-head-actions"><span class="skills-cognition-status is-${escapeHtml(selected.status || '')}">${escapeHtml(_abilityAssetMaturityLabel(selected.maturity, selected.status))}</span>${_renderCognitionSecurityChip(selected.security)}${assetMore}</div></div>
         <div class="asset-detail-body">
           ${skillDraftFeedback}
           ${selectedContentSummaryBlock}
@@ -1387,10 +1329,6 @@ async function loadSkillsCognitionSnapshot() {
   const capturePayload = { limit: 25 };
   const captureStatuses = _captureStatusesForFilter(snapshotCaptureFilter);
   if (captureStatuses.length) capturePayload.statuses = captureStatuses;
-  // 先把本体抽取技能的产出搬进统一候选池，再拉列表——否则技能刚产出的候选
-  // 要等用户手动逐条导入才看得见。幂等，反复进页面不会重复建候选。
-  // 失败不阻断渲染：搬不动是本体侧的问题，认知区其余内容照常显示。
-  try { await window.cogseed.invoke('recall.candidates.syncOntology'); } catch (_) {}
   const [dashboard, recallCandidates, assets, sources, captures, recentCaptures, teachingSignals, captureSettings] = await Promise.allSettled([
     Promise.resolve().then(() => window.cogseed.invoke('cognition.dashboard.read')),
     Promise.resolve().then(() => window.cogseed.invoke('recall.candidates.list')),

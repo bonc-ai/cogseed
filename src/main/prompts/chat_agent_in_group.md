@@ -157,6 +157,4 @@ $inputs_schema
 ### Working directory
 $working_dir
 
-$inherited_cognition_block
-
 $shared_task_context_block

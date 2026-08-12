@@ -102,14 +102,6 @@ export class KstarAdapter {
         return;
       }
 
-      // Hydrate the freshly spawned Engine from the on-disk snapshot before any
-      // evidence is recorded. Engine state starts empty, and recordEvidence
-      // persists whatever the Engine exports, so skipping this would overwrite
-      // the user's accumulated history with a single-record snapshot.
-      if (!(await this.hydrateEngineState())) {
-        return;
-      }
-
       this.available = true;
       log.info('engine handshake ok', {
         userId: this.userId,
@@ -122,58 +114,6 @@ export class KstarAdapter {
         userId: this.userId,
         error: (err as Error).message,
       });
-    }
-  }
-
-  /**
-   * Push the on-disk snapshot into the Engine so its in-memory state matches
-   * this user's history.
-   *
-   * Returns false when a snapshot exists but cannot be loaded. That case stays
-   * degraded on purpose: continuing would let later writes export a partial
-   * state over a snapshot we failed to read, so evidence goes to the pending
-   * log until an operator resolves the bad file.
-   */
-  private async hydrateEngineState(): Promise<boolean> {
-    let snapshot: unknown;
-    try {
-      snapshot = await readKstarSnapshot(this.userId);
-    } catch (err) {
-      this.degradedReason = `Failed to read snapshot: ${(err as Error).message}`;
-      log.warn('snapshot read failed during handshake', {
-        userId: this.userId,
-        error: (err as Error).message,
-      });
-      return false;
-    }
-
-    if (!snapshot) {
-      return true; // First run for this user; Engine's empty state is correct.
-    }
-
-    try {
-      const result = await this.connection.callTool(
-        'snapshot_import',
-        { snapshot },
-        { timeoutMs: 30_000 },
-      );
-      const parsed = parseToolResult<{ success: boolean; error?: string }>(result);
-      if (!parsed?.success) {
-        this.degradedReason = `Snapshot hydration rejected: ${parsed?.error ?? 'unknown reason'}`;
-        log.error('engine rejected snapshot during handshake', {
-          userId: this.userId,
-          reason: parsed?.error ?? 'unknown',
-        });
-        return false;
-      }
-      return true;
-    } catch (err) {
-      this.degradedReason = `Snapshot hydration failed: ${(err as Error).message}`;
-      log.warn('snapshot hydration failed', {
-        userId: this.userId,
-        error: (err as Error).message,
-      });
-      return false;
     }
   }
 
@@ -286,29 +226,10 @@ export class KstarAdapter {
         boundedEvidence,
         { timeoutMs: 15_000 },
       );
-      const parsed = parseToolResult<{
-        success: boolean;
-        deduplicated?: boolean;
-        snapshot?: unknown;
-      }>(result);
+      const parsed = parseToolResult<{ success: boolean; deduplicated?: boolean }>(result);
 
       if (!parsed?.success) {
         return { success: false, boundary };
-      }
-
-      // Engine state is in-memory and dies with the process, so a record that
-      // only lands there is lost on restart. Persist the returned snapshot.
-      // Deduplicated writes changed nothing, so they skip the disk write.
-      if (!parsed.deduplicated && parsed.snapshot !== undefined) {
-        try {
-          await writeKstarSnapshot(this.userId, parsed.snapshot);
-        } catch (err) {
-          log.warn('failed to persist snapshot after evidence record', {
-            userId: this.userId,
-            evidenceId: evidence.id,
-            error: (err as Error).message,
-          });
-        }
       }
 
       return { success: true, deduplicated: parsed.deduplicated, boundary };

@@ -71,12 +71,8 @@ describe('renderer lazy feature loader', () => {
 
     const skills = loadFeatureLoader();
     await skills.context.loadRendererFeature('skills');
-    // ability-asset-status.js is a pure mapping helper skills.js reads at
-    // render time, so it has to load first. The point of this assertion is
-    // that no private publishing module joins the list.
     expect(skills.appended.map((script) => script.src)).toEqual([
       './modules/recall-information-architecture.js',
-      './modules/ability-asset-status.js',
       './modules/skills.js',
       './modules/skills-bindings.js',
     ]);
