@@ -9,6 +9,7 @@ import {
 import type {
   DeliveryLedgerEntry,
   InboundLedgerEntry,
+  JsonCompatibleValue,
   MessagingDeliveryLedgerFile,
   MessagingInboundLedgerFile,
 } from './types';
@@ -21,6 +22,23 @@ const EMPTY_INBOUND: MessagingInboundLedgerFile = { version: 1, entries: {} };
 const EMPTY_DELIVERY: MessagingDeliveryLedgerFile = { version: 1, entries: {} };
 const MAX_DELIVERY_TEXT_LENGTH = 12_000;
 const MAX_DELIVERY_IDEMPOTENCY_KEY_LENGTH = 160;
+/** Card JSON replay cap: touchpoint cards are small, and the ledger is a
+ * machine-private JSON file that restart recovery replays verbatim. */
+const MAX_DELIVERY_CARD_JSON_LENGTH = 16_000;
+
+/** Validated card payload kept for restart recovery; invalid or oversized
+ * cards are dropped so a corrupt entry can never wedge a delivery. */
+function normalizeDeliveryCard(raw: unknown): Record<string, JsonCompatibleValue> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(raw);
+  } catch {
+    return undefined;
+  }
+  if (!serialized || serialized.length > MAX_DELIVERY_CARD_JSON_LENGTH) return undefined;
+  return raw as Record<string, JsonCompatibleValue>;
+}
 
 /** Terminal-state waiters keyed by `<uid>\0<delivery key>`. A waiter registers
  * only after a first non-terminal read, then re-reads; state changes between
@@ -126,6 +144,7 @@ function normalizeDelivery(raw: Partial<MessagingDeliveryLedgerFile>): Messaging
     const idempotencyKey = typeof candidate.idempotencyKey === 'string' && candidate.idempotencyKey.trim()
       ? candidate.idempotencyKey.trim().slice(0, MAX_DELIVERY_IDEMPOTENCY_KEY_LENGTH)
       : undefined;
+    const card = normalizeDeliveryCard(candidate.card);
     // Old ledgers retained only a text hash. They cannot safely replay a
     // delivery after restart, so make their interrupted records terminal
     // instead of leaving an invisible permanent pending state.
@@ -146,6 +165,7 @@ function normalizeDelivery(raw: Partial<MessagingDeliveryLedgerFile>): Messaging
       sourceMessageId: String(candidate.sourceMessageId || '').slice(0, 160),
       textHash: String(candidate.textHash || '').slice(0, 128),
       ...(text ? { text } : {}),
+      ...(card ? { card } : {}),
       ...(typeof candidate.replyToMessageId === 'string' && candidate.replyToMessageId.trim()
         ? { replyToMessageId: candidate.replyToMessageId.trim().slice(0, 512) }
         : {}),
@@ -288,6 +308,8 @@ export async function beginDelivery(
   boundedKey(entry.key, 'delivery key');
   const text = typeof entry.text === 'string' ? entry.text.trim().slice(0, MAX_DELIVERY_TEXT_LENGTH) : '';
   if (!text) throw new Error('delivery text required for recovery');
+  const card = entry.card === undefined ? undefined : normalizeDeliveryCard(entry.card);
+  if (entry.card !== undefined && !card) throw new Error('delivery card payload invalid');
   const recipientId = typeof entry.recipientId === 'string' && entry.recipientId.trim()
     ? entry.recipientId.trim().slice(0, 512)
     : typeof entry.externalChatId === 'string'
@@ -315,6 +337,7 @@ export async function beginDelivery(
       recipientId,
       recipientIdType,
       text: existing?.text || text,
+      card: existing?.card || card,
       idempotencyKey: existing?.idempotencyKey
         || (typeof entry.idempotencyKey === 'string' && entry.idempotencyKey.trim()
           ? entry.idempotencyKey.trim().slice(0, MAX_DELIVERY_IDEMPOTENCY_KEY_LENGTH)

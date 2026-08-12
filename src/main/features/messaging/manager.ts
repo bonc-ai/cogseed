@@ -10,6 +10,9 @@ import * as groupChat from '../group_chat';
 import * as projects from '../projects';
 import * as wakeService from '../p3394/wake-service';
 import * as ontologyCandidates from '../personal_ontology_candidates';
+import * as touchpointLedger from '../touchpoints/ledger';
+import { buildResolvedTouchpointCard } from '../touchpoints/feishu/card';
+import type { TouchpointActionKind } from '../touchpoints/types';
 import * as registry from './registry';
 import * as bindings from './bindings';
 import * as ledger from './ledger';
@@ -278,6 +281,7 @@ export async function sendProactive(
     instanceId: string;
     recipientId: string;
     text: string;
+    card?: Record<string, JsonCompatibleValue>;
     sourceKey: string;
     signal?: AbortSignal | null;
   },
@@ -304,6 +308,7 @@ export async function sendProactive(
     sourceMessageId: sourceKey,
     textHash: ledger.textHash(text),
     text,
+    ...(input.card ? { card: input.card } : {}),
     idempotencyKey: `proactive-${ledger.textHash(sourceKey).slice(0, 24)}`,
   });
   if (!begun.duplicate) {
@@ -618,6 +623,11 @@ async function handleCardAction(uid: string, action: CardActionEnvelope): Promis
   if (!instance.policy.allowUserIds.includes(action.externalUserId)) {
     return { accepted: false, duplicate: false, reason: 'user_not_allowed' };
   }
+  // 触达点意图卡片（touchpoint 特性产出）：按钮 value 携带签名回执信封，
+  // 确认/拒绝等动作直接消费进触达点 ledger。
+  if (action.action === 'touchpoint') {
+    return handleTouchpointCardAction(uid, action);
+  }
   // 候选确认卡片（personal_context 管线产出）：按钮 value 携带 candidate_id，
   // 确认/拒绝直接落 personal_ontology 候选池，无 wake_id。
   if (action.action === 'candidate_approve' || action.action === 'candidate_reject') {
@@ -649,6 +659,64 @@ async function handleCardAction(uid: string, action: CardActionEnvelope): Promis
     return { accepted: true, duplicate: false };
   }
   return { accepted: false, duplicate: false, reason: 'unsupported_card_action' };
+}
+
+/** Buttons on touchpoint intent cards carry a signed receipt envelope in
+ * their value; clicking one consumes the action in the touchpoint ledger and
+ * swaps the card for its terminal state. Duplicate clicks are idempotent —
+ * the ledger returns the stored record and the card is not re-finalized. */
+async function handleTouchpointCardAction(uid: string, action: CardActionEnvelope): Promise<MessagingInboundResult> {
+  const payloadText = (field: string): string => {
+    const entry = action.payload[field];
+    return typeof entry === 'string' && entry.trim() ? entry.trim() : '';
+  };
+  const intentId = payloadText('intent_id');
+  const actionId = payloadText('action_id');
+  const envelopeUserId = payloadText('user_id');
+  const kind = payloadText('kind');
+  const occurredAt = payloadText('occurred_at');
+  const signature = payloadText('signature');
+  if (!intentId || !actionId || !envelopeUserId || !kind || !occurredAt || !signature) {
+    return { accepted: false, duplicate: false, reason: 'invalid_card_action' };
+  }
+  try {
+    const outcome = await touchpointLedger.consumeTouchpointAction(uid, {
+      actionId,
+      intentId,
+      userId: envelopeUserId,
+      action: kind,
+      occurredAt,
+      signature,
+    });
+    if (!outcome.duplicate) void finalizeTouchpointCard(uid, action, kind as TouchpointActionKind);
+    return { accepted: true, duplicate: outcome.duplicate };
+  } catch (error) {
+    log.warn('touchpoint card action rejected', {
+      instanceId: action.instanceId,
+      intentId,
+      action: kind,
+      error: logErrorSummary(error),
+    });
+    return { accepted: false, duplicate: false, reason: 'touchpoint_action_rejected' };
+  }
+}
+
+/** Replaces a resolved touchpoint card with its terminal state so the same
+ * buttons cannot be clicked twice (mirrors the wake approval finalize). */
+async function finalizeTouchpointCard(uid: string, action: CardActionEnvelope, kind: TouchpointActionKind): Promise<void> {
+  const runtime = runtimes.get(uid)?.get(action.instanceId);
+  if (!runtime || !isCurrentRuntime(uid, runtime)) return;
+  const adapter = runtime.adapter;
+  if (!isCardAdapter(adapter)) return;
+  try {
+    await adapter.updateCard(action.externalMessageId, buildResolvedTouchpointCard(kind));
+  } catch (error) {
+    log.warn('touchpoint card finalize failed', {
+      instanceId: action.instanceId,
+      externalMessageId: action.externalMessageId,
+      error: logErrorSummary(error),
+    });
+  }
 }
 
 /** Localized terminal label for an approval choice. Keys mirror the card

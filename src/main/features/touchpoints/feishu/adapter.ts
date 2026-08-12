@@ -1,6 +1,7 @@
 import { t } from '../../../i18n';
 import * as manager from '../../messaging/manager';
 import * as registry from '../../messaging/registry';
+import { buildTouchpointCard } from './card';
 import type {
   TouchpointChannelAdapter,
   TouchpointDeliveryResult,
@@ -61,10 +62,13 @@ export function createFeishuTouchpointAdapter(options: { instanceId: string }): 
         throw new FeishuTouchpointAdapterError('owner_not_bound', 'Feishu owner identity is not bound.');
       }
       try {
+        // Actionable intents go out as interactive cards whose buttons carry
+        // signed receipt envelopes; read-only intents stay plain text.
         const { entry } = await manager.sendProactive(userId, {
           instanceId,
           recipientId: instance.ownerExternalUserId,
           text: renderFeishuTouchpointText(intent),
+          ...(intent.actionContract ? { card: buildTouchpointCard(intent) } : {}),
           sourceKey: `touchpoint:${intent.intentId}`,
           signal: null,
         });

@@ -227,5 +227,16 @@
   "touchpoints.feishu.open_mate": "回到 Mate 查看完整结果",
   "touchpoints.feishu.review_mate": "回到 Mate 查看并处理",
   "touchpoints.feishu.approve_mate": "请在卡片中审批，或回到 Mate 调整任务",
-  "touchpoints.feishu.briefing_mate": "回到 Mate 调整今日计划"
+  "touchpoints.feishu.briefing_mate": "回到 Mate 调整今日计划",
+  "touchpoints.card.button.approve": "批准",
+  "touchpoints.card.button.confirm": "确认",
+  "touchpoints.card.button.reject": "拒绝",
+  "touchpoints.card.button.snooze": "稍后提醒",
+  "touchpoints.card.button.open": "查看详情",
+  "touchpoints.card.button.edit": "编辑",
+  "touchpoints.card.button.adjust": "调整",
+  "touchpoints.card.button.retry": "重试",
+  "touchpoints.card.button.forget_source": "遗忘来源",
+  "touchpoints.card.button.revoke_grant": "撤销授权",
+  "touchpoints.card.resolved": "已处理"
 }

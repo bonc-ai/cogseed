@@ -1344,6 +1344,173 @@ describe('messaging manager adapter flow', () => {
     }
   });
 
+  it('consumes a touchpoint intent action through a signed card click', async () => {
+    const adapter: MessagingCardAdapter = {
+      platform: 'feishu_lark',
+      async start(signal, callbacks) {
+        await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      async stop() {},
+      async checkHealth() {
+        return { kind: 'connected', checkedAt: new Date().toISOString() };
+      },
+      sendMessage: vi.fn(async () => ({})),
+      sendCard: vi.fn(async () => ({})),
+      updateCard: vi.fn(async () => ({})),
+      sendApprovalCard: vi.fn(async () => ({})),
+    };
+    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
+      createAdapter: vi.fn(() => adapter),
+    }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: vi.fn(async () => ({ ok: true })) }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe: vi.fn(() => () => undefined) }));
+
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const touchpointLedger = await import('../../../src/main/features/touchpoints/ledger');
+      const { createTouchpointDomainEvent } = await import('../../../src/main/features/touchpoints/events');
+      const { createTouchpointIntent } = await import('../../../src/main/features/touchpoints/intents');
+      const { signTouchpointAction } = await import('../../../src/main/features/touchpoints/sign');
+
+      const created = await registry.createInstance('user-1', {
+        platform: 'feishu_lark',
+        displayName: 'Touchpoint bot',
+        policy: { allowUserIds: ['user-1'] },
+        secret: { appId: 'cli_1234567890abcdef', appSecret: 'secret' },
+      });
+      await manager.setEnabled('user-1', created.id, true);
+      await vi.waitFor(async () => {
+        const instances = await manager.listInstances('user-1');
+        expect(instances[0]?.status.kind).toBe('connected');
+      });
+
+      // 构造一条已送达的审批意图（planned → ready → sending → sent）。
+      const event = createTouchpointDomainEvent('user-1', {
+        eventId: 'event-1',
+        kind: 'task.approval_required',
+        subject: { type: 'task', id: 'task-1' },
+        occurredAt: '2026-08-10T13:00:00.000Z',
+        summary: { title: '审批：张明请假', body: '下周三请一天假。' },
+      });
+      const intent = createTouchpointIntent('user-1', event, {
+        intentId: 'intent-1',
+        channel: 'feishu',
+        template: 'task_approval',
+        priority: 'high',
+        availableFrom: '2026-08-10T13:00:00.000Z',
+        expiresAt: '2026-09-01T13:00:00.000Z',
+        dedupeKey: 'task:task-1:approval:event-1',
+        actionContract: { version: 1, allowedActions: ['approve', 'reject'] },
+      });
+      await touchpointLedger.reserveTouchpointIntent('user-1', intent);
+      await touchpointLedger.transitionTouchpointIntent('user-1', 'intent-1', ['planned'], { status: 'ready' });
+      await touchpointLedger.transitionTouchpointIntent('user-1', 'intent-1', ['ready'], { status: 'sending' });
+      await touchpointLedger.transitionTouchpointIntent('user-1', 'intent-1', ['sending'], { status: 'sent' });
+
+      const occurredAt = new Date().toISOString();
+      const envelope = {
+        intent_id: 'intent-1',
+        action_id: 'action-1',
+        user_id: 'user-1',
+        kind: 'approve',
+        occurred_at: occurredAt,
+        signature: signTouchpointAction('intent-1', 'user-1', 'approve', occurredAt),
+      };
+
+      // 批准路径：动作消费进 ledger，卡片更新为终态。
+      const accepted = await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'touchpoint-card-1',
+        externalChatId: 'oc_touchpoint',
+        externalUserId: 'user-1',
+        action: 'touchpoint',
+        payload: envelope,
+        receivedAt: new Date().toISOString(),
+      });
+      expect(accepted).toMatchObject({ accepted: true, duplicate: false });
+      await vi.waitFor(() => expect(adapter.updateCard).toHaveBeenCalledTimes(1));
+      const ledgerState = await touchpointLedger.readTouchpointLedgerForTest('user-1');
+      expect(ledgerState.actions['action-1']).toMatchObject({ intentId: 'intent-1', action: 'approve', userId: 'user-1' });
+
+      // 重复点击同一信封：幂等 accepted，不再二次更新卡片。
+      const duplicate = await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'touchpoint-card-1',
+        externalChatId: 'oc_touchpoint',
+        externalUserId: 'user-1',
+        action: 'touchpoint',
+        payload: envelope,
+        receivedAt: new Date().toISOString(),
+      });
+      expect(duplicate).toMatchObject({ accepted: true, duplicate: true });
+      expect(adapter.updateCard).toHaveBeenCalledTimes(1);
+
+      // 缺信封字段的卡片动作被拒绝。
+      const rejected = await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'touchpoint-card-2',
+        externalChatId: 'oc_touchpoint',
+        externalUserId: 'user-1',
+        action: 'touchpoint',
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
+      expect(rejected).toMatchObject({ accepted: false, reason: 'invalid_card_action' });
+
+      // 未送达（非 sent）的意图不可消费。
+      const pendingEvent = createTouchpointDomainEvent('user-1', {
+        eventId: 'event-2',
+        kind: 'task.approval_required',
+        subject: { type: 'task', id: 'task-2' },
+        occurredAt: '2026-08-10T13:00:00.000Z',
+        summary: { title: '审批：李四加班' },
+      });
+      const pendingIntent = createTouchpointIntent('user-1', pendingEvent, {
+        intentId: 'intent-2',
+        channel: 'feishu',
+        template: 'task_approval',
+        priority: 'normal',
+        availableFrom: '2026-08-10T13:00:00.000Z',
+        expiresAt: '2026-09-01T13:00:00.000Z',
+        dedupeKey: 'task:task-2:approval:event-2',
+        actionContract: { version: 1, allowedActions: ['approve'] },
+      });
+      await touchpointLedger.reserveTouchpointIntent('user-1', pendingIntent);
+      const notActionable = await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'touchpoint-card-3',
+        externalChatId: 'oc_touchpoint',
+        externalUserId: 'user-1',
+        action: 'touchpoint',
+        payload: {
+          ...envelope,
+          intent_id: 'intent-2',
+          action_id: 'action-2',
+          occurred_at: occurredAt,
+          signature: signTouchpointAction('intent-2', 'user-1', 'approve', occurredAt),
+        },
+        receivedAt: new Date().toISOString(),
+      });
+      expect(notActionable).toMatchObject({ accepted: false, reason: 'touchpoint_action_rejected' });
+    } finally {
+      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      vi.doUnmock('../../../src/main/features/group_chat');
+      vi.doUnmock('../../../src/main/features/group_chat/bus');
+    }
+  });
+
   it('drops an outbound reply without a message id before any delivery attempt', async () => {
     let busListener: ((event: unknown) => void) | undefined;
     const groupSend = vi.fn(async () => ({ ok: true }));

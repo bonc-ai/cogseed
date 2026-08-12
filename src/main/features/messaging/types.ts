@@ -220,6 +220,10 @@ export interface DeliveryLedgerEntry {
   /** Outbound text is kept in the machine-private ledger so a process restart
    * can recover a failed send without reading mutable conversation history. */
   text?: string;
+  /** Interactive card payload (Feishu `interactive`) for proactive sends.
+   * Text-only sends omit it; restart recovery replays the card JSON verbatim
+   * through the adapter's `sendCard` path. */
+  card?: Record<string, JsonCompatibleValue>;
   replyToMessageId?: string;
   threadId?: string;
   replyInThread?: boolean;
