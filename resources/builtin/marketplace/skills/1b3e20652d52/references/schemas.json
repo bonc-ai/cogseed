@@ -1,0 +1,81 @@
+{
+  "input_schema": {
+    "type": "object",
+    "required": ["task_id", "owner_context", "customer_profile_payload"],
+    "properties": {
+      "task_id": { "type": "string" },
+      "owner_context": {
+        "type": "object",
+        "required": ["owner_id", "role", "authorization_scope"],
+        "properties": {
+          "owner_id": { "type": "string" },
+          "role": { "type": "string" },
+          "authorization_scope": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "customer_profile_payload": {
+        "type": "object",
+        "required": ["industry", "audience_level", "relationship_trust", "meeting_format"],
+        "properties": {
+          "customer_name": { "type": "string" },
+          "industry": { "type": "string", "description": "能源/煤炭/电网/石油天然气/制造/电信/政务/其他" },
+          "audience_level": { "type": "string", "description": "P1_一把手 / P2_执行层信息化 / P3_技术验证纪检" },
+          "relationship_trust": { "type": "string", "description": "A_直接可靠 / B_渠道二道贩子 / C_竞对未确认" },
+          "meeting_format": { "type": "string", "description": "高层15分 / 中层30分 / Demo45分" },
+          "compliance_sensitive": { "type": "number", "description": "0/1，合规型客户→可解释可倒查词系" },
+          "pain_trigger": { "type": "array", "items": { "type": "string" } },
+          "known_impression": { "type": "array", "items": { "type": "string" } },
+          "existing_systems": { "type": "array", "items": { "type": "string" } },
+          "priority_scenarios": { "type": "array", "items": { "type": "string" } },
+          "decision_chain_note": { "type": "string" }
+        }
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "required": ["actions", "result", "trace", "audit_refs"],
+    "properties": {
+      "actions": { "type": "array", "items": { "type": "string" } },
+      "result": {
+        "type": "object",
+        "description": "session_plan（一期，子能力①-④）+ customized_deck（二期，子能力⑤，status 恒 pending_human_review）",
+        "properties": {
+          "session_plan": { "type": "object" },
+          "customized_deck": { "type": "object" }
+        }
+      },
+      "trace": { "type": "array", "items": { "type": "string" } },
+      "audit_refs": { "type": "array", "items": { "type": "string" } }
+    }
+  },
+  "runtime_contracts": {
+    "resource": {
+      "resource_requirements": [
+        { "resource_type": "customer_profile", "operation": "read", "purpose": "ontology_grounded_read", "min_scope": true },
+        { "resource_type": "sales_qa_library", "operation": "read", "purpose": "ontology_grounded_read", "min_scope": true },
+        { "resource_type": "frozen_caliber_table", "operation": "read", "purpose": "ontology_grounded_read", "min_scope": true }
+      ],
+      "access_via_gateway_only": true,
+      "direct_resource_access": false
+    },
+    "permission": {
+      "permissions": [
+        { "action": "analyze", "permission_level": "read", "hitl_required": false },
+        { "action": "assemble", "permission_level": "read", "hitl_required": false },
+        { "action": "confirm", "permission_level": "write", "hitl_required": true },
+        { "action": "generate_deck", "permission_level": "write", "hitl_required": true }
+      ]
+    },
+    "owner_binding": {
+      "required_owner_sections": ["role", "authorization_scope"],
+      "owner_context_ref": "input_schema.owner_context",
+      "binding_resolved_by": "agent_layer"
+    },
+    "audit": {
+      "audit_refs_field": "output_schema.audit_refs",
+      "emitted_by": "runtime",
+      "append_only": true
+    }
+  }
+}

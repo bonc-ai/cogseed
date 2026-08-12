@@ -228,6 +228,50 @@ Research category rule: choose `data` for deep-research / evidence collection / 
 
 Category sanity pass before final reply: if the chosen code is `general`, write one private sentence of evidence to yourself: "no single domain dominates because ...". If you cannot complete that sentence, change to the more specific category.
 
+## NSEAP compliance — MANDATORY for every new skill
+
+The platform's skill standard is **NSEAP Skill Standard v1.0** (fully aligned). Every
+NEW skill you create (Mode A) must ship as a compliant SkillPackage, not just a bare
+SKILL.md. Templates are in `<SYSTEM_SKILLS_ROOT>/skill-creator/references/nseap/` — read
+them before authoring and copy the shapes.
+
+**Non-negotiable requirements (missing any → the skill is not created):**
+
+1. **Trigger + anti-trigger semantics** in SKILL.md body (§5.3, hard requirement):
+   - `use_when` — when to fire.
+   - `do_not_use_when` / `negative_examples` — when it must NOT fire. A skill that
+     cannot say when not to fire is a governance risk and is rejected at registration.
+   - positive + negative examples.
+2. **Dual contracts** (§5.4, hard requirement): `references/input-contract.md` +
+   `references/output-contract.md`. Input is three-layer: `task_id` + `owner_context`
+   (values injected by the Agent layer) + `<primary>_payload`. Output always includes
+   `audit_refs`. `owner_context` is a field-position the skill exposes, never fills.
+3. **`references/skill-spec.yaml`** — identity/level/route. `promotion_ceiling: staged`
+   and `production_release_allowed: false` are ALWAYS the values (axiom 5 / §8.2).
+   Level is decided by risk: personal/low-risk → L2-L3; shared/private-data/external
+   actions/decisions → **L5**; meta-skills → **L5 always**.
+4. **`references/ontology-mapping.md`** — TBox (concepts) / RBox (rules, structured
+   field/op/value) / ABox (instances) + `source_refs`. No ontology slice → script, not
+   a skill (axiom 2).
+5. **`references/governance-boundaries.md`** — non-claims block + staged cap.
+6. **`references/validation-contract.md`** — boundary tests + HITL policy (preview →
+   confirm → execute; write actions require HITL).
+7. **`references/eval-cases.yaml`** — positive/negative examples.
+8. **`references/kstar-evolution.md`** — evolution hook declaration (bounded patch,
+   symbolic decides right/wrong, neural only proposes DRAFT wording).
+9. **`evals/evals.json`** — machine-readable eval set (can start as honest stub).
+
+**Level A/B shape**: Level A = five well-formed sections + ontology slice (auto via
+templates). Level B = A + trigger/anti-trigger + dual contracts + staged caps + the
+artifact set above. The created skill is a **staged candidate**, never a production
+release. Do not claim Level C (release) — that is governance work, out of scope.
+
+**Editing / importing existing skills (Modes B/C)**: source-preserving (see import
+rules below) — do NOT force the 9-file skeleton onto imported skills, but DO fill
+`references/` from the NSEAP templates when the source already carries the equivalent
+content, and always emit `_meta.json.nseap` grading via metadata tags when the platform
+supports it.
+
 ## Quality bar — SKILL.md body
 
 API-doc style, not a product brochure. Short sentences, lists, code blocks. For brand-new skills, keep these human/model-readable sections:

@@ -14,8 +14,10 @@
 import { Violation } from '../types';
 
 // Skill name pattern: starts with a letter, then word chars / dashes.
-// Spaces are not allowed. Mirrors `skills.ts::SKILL_NAME_RE`.
-const SKILL_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
+// Spaces are not allowed. Mirrors `skills.ts::SKILL_NAME_RE` for user-created
+// skills, plus CJK letters so Chinese-named marketplace display names
+// (product decision 2026-08-10) don't trip MEDIUM warnings.
+const SKILL_NAME_RE = /^[\p{L}][\p{L}\p{N}_-]*$/u;
 // Agent names mirror `agents.ts::NAME_TOKEN_RE`.
 const AGENT_NAME_RE = /^[A-Za-z0-9_一-鿿-]+$/;
 
@@ -77,7 +79,7 @@ export function validateSkillFrontmatter(
       rule: 'frontmatter_name_invalid',
       field: 'frontmatter:name',
       snippet: name.slice(0, 100),
-      suggested_fix: 'Skill name should start with a letter and contain only letters, digits, `_`, and `-`; spaces are not allowed.',
+      suggested_fix: 'Skill name should start with a letter (CJK allowed) and contain only letters, digits, `_`, and `-`; spaces are not allowed.',
     });
   }
 

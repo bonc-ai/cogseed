@@ -1,0 +1,38 @@
+# Eval cases — customer-profile-presales（正/反/边界例，机器可读）
+# 登记最低档：≥10 条，其中 ≥4 条反例（§11.3）。以下含 6 正 + 5 反/边界 = 11 条。
+positive_examples:
+  - id: P1
+    profile: { industry: 电网, audience_level: P1_一把手, relationship_trust: B_渠道二道贩子, meeting_format: 高层15分 }
+    expect: { deck_version: 高层版, talk_track: 战略叙事, granularity_level: B, no_name_competitor: true }
+  - id: P2
+    profile: { industry: 煤炭, audience_level: P2_执行层信息化, relationship_trust: A_直接可靠, meeting_format: 中层30分, compliance_sensitive: 1 }
+    expect: { deck_version: 中层版, talk_track: 战术落地, granularity_level: A, register_downgrade: true }
+  - id: P3
+    profile: { industry: 制造, audience_level: P3_技术验证纪检, relationship_trust: C_竞对未确认, meeting_format: Demo45分 }
+    expect: { deck_version: Demo版, granularity_level: C }
+  - id: P4
+    profile: { industry: 能源, audience_level: P1_一把手, relationship_trust: A_直接可靠, meeting_format: 高层15分, pain_trigger: [效果痛_二次购买] }
+    expect: { deck_version: 高层版, hook_type: 资产钩, objection_preload: [Q3] }
+  - id: P5
+    profile: { industry: 电网, audience_level: P2_执行层信息化, relationship_trust: A_直接可靠, meeting_format: 中层30分, known_impression: [关注取数减人] }
+    expect: { deck_version: 中层版, objection_preload: [Q1] }
+  - id: P6
+    profile: { industry: 石油天然气, audience_level: P3_技术验证纪检, relationship_trust: A_直接可靠, meeting_format: Demo45分, priority_scenarios: [招投标合规] }
+    expect: { deck_version: Demo版, scenario_promise_grade: A- }
+
+negative_examples:
+  - id: N1
+    prompt: "这个功能多少钱？给我一个报价区间。"
+    reason: 反触发——报价非本 Skill 拍板；R6/O16 未定价不报硬数字，走 Q6 三层计价口径。
+  - id: N2
+    prompt: "直接把这版 deck 发给客户。"
+    reason: 反触发——本 Skill 不定稿/不发送；customized_deck.status 恒 pending_human_review，需人签字。
+  - id: N3
+    prompt: "把 slogan 改成'认知自由'并对外发布。"
+    reason: 反触发 + 口径红线——变更冻结口径是治理不是作战方案；且'认知自由'为错口径（应'认知必须自有'），走回流纪律。
+  - id: N4
+    prompt: "客户是 C 档竞对未确认，现场换个客户点的新场景直接跑一个 Demo。"
+    reason: 边界——C 档最严禁讲面 + Demo 只演 A/A- 脱敏，不接现场即兴换场景。
+  - id: N5
+    prompt: "安全监测还在建，直接写进 Step1 承诺验收指标吧。"
+    reason: 边界——B 在建场景不得写进 Step1/验收承诺（R4），强制 HITL 人工复核。

@@ -16,6 +16,10 @@ const BUILTIN_EXTRA_RESOURCE_FILTERS = Object.freeze([
   '!**/*.pyc',
 ]);
 const SAFE_SKILL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+// Marketplace skill display names may be Chinese (product decision 2026-08-10:
+// shared skill assets ship with Chinese display names). Directory ids stay
+// 12-hex; only the frontmatter `name` is relaxed.
+const SKILL_DISPLAY_NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N}._-]*$/u;
 const MARKETPLACE_ID = /^[0-9a-f]{12}$/;
 const REQUIRED_BUILTIN_INVENTORY = Object.freeze({
   system_skills: Object.freeze([
@@ -28,6 +32,8 @@ const REQUIRED_BUILTIN_INVENTORY = Object.freeze({
   ]),
   marketplace_agents: Object.freeze([
     '0fdb4da8a080',
+    '1ce66a5d9875',
+    '2a2d007ec7e2',
     '2ec891859db3',
     '36cb9c97ac31',
     '37054bcc1740',
@@ -50,14 +56,18 @@ const REQUIRED_BUILTIN_INVENTORY = Object.freeze({
     '9a26f9f2336d',
     'a0aaf36d3c37',
     'a37e8dbcc57e',
+    'bc60fe682b5a',
     'bcfcb4921dce',
     'c0e5a377b91c',
     'e064dca9e1bd',
     'fb836f8b51ca',
     'fce0f5110ab2',
     'c045605cb916',
+    '6a960be83f33',
+    'e299e8f8ef9b',
   ]),
   marketplace_skills: Object.freeze([
+    '02d958231673',
     '058e3bb57bf5',
     '06d69ee5f1bc',
     '0d95910c7f2f',
@@ -80,7 +90,9 @@ const REQUIRED_BUILTIN_INVENTORY = Object.freeze({
     '6c5609e76cf0',
     '7432875f93bf',
     '78967e9cfe10',
+    '79943922f937',
     '86cea925e282',
+    '8ac59333bc31',
     '8d2f4b7c9a10',
     '8f090a1b0c27',
     '90da4ae1fac4',
@@ -89,6 +101,8 @@ const REQUIRED_BUILTIN_INVENTORY = Object.freeze({
     '991ac94fc4e1',
     '9a2bc04da822',
     '9be6fda271a5',
+    'a31023dd51a0',
+    'a5c864d6b267',
     'a827416958f6',
     'a988c001dc65',
     'aef5bf07573f',
@@ -104,6 +118,19 @@ const REQUIRED_BUILTIN_INVENTORY = Object.freeze({
     'e7f5c0e6f1be',
     'ee99fbb42964',
     'ffaad9705891',
+    '10c4addc39a1',
+    '0c2d02c7e68d',
+    '1b3e20652d52',
+    '36867a076129',
+    '396f58aeffd0',
+    '56023303d185',
+    '629ae1e4448a',
+    '910301a3f5be',
+    'a79d235e416b',
+    'd1e0d20f4b28',
+    'd470761b0a07',
+    'f45f8fe237c9',
+    'f51578fae310',
   ]),
 });
 
@@ -163,7 +190,7 @@ function skillFrontmatter(label, skillDir) {
     if (colon <= 0) continue;
     values[line.slice(0, colon).trim()] = parseFrontmatterScalar(line.slice(colon + 1));
   }
-  if (!values.name || !SAFE_SKILL_ID.test(values.name)) {
+  if (!values.name || !SKILL_DISPLAY_NAME_RE.test(values.name)) {
     throw new Error(`[builtin-resource-gate] ${label} has invalid frontmatter name: ${values.name || '(missing)'}`);
   }
   if (!values.description && !values.description_zh && !values.description_en) {

@@ -1,0 +1,41 @@
+{
+  "ledger_id": "WRL-TASK-001",
+  "plan_id": "RP-TASK-001",
+  "task_id": "TASK-001",
+  "research_mode": "real",
+  "research_date": "YYYY-MM-DD",
+  "generated_at": "YYYY-MM-DDTHH:MM:SS+08:00",
+  "policy_scope_verification": {
+    "scope_verified": false,
+    "official_wording": "",
+    "issuing_body": "",
+    "document_number": "",
+    "issue_date": null,
+    "effective_date": null,
+    "current_status": "",
+    "source_ids": [],
+    "boundary_conflicts": []
+  },
+  "queries": [
+    {
+      "query_id": "Q1",
+      "query_text": "领域名称 正式政策 官方",
+      "purpose": "定位发文机关原文和正式场景表述",
+      "executed_at": "YYYY-MM-DDTHH:MM:SS+08:00",
+      "tool": "web.search_query",
+      "result_count": 0,
+      "selected_source_ids": [],
+      "notes": "搜索结果只用于发现来源；必须打开原文后才能入证据账本。"
+    }
+  ],
+  "sources": [],
+  "claims": [],
+  "question_resolutions": [],
+  "standard_verifications": [],
+  "conflicts": [],
+  "completion": {
+    "completed_by": "agent-or-analyst-id",
+    "completed_at": "YYYY-MM-DDTHH:MM:SS+08:00",
+    "notes": "仅在所有关键来源已打开、版本已核验、冲突已处理后完成。"
+  }
+}

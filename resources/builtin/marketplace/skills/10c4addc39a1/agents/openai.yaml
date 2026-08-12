@@ -1,0 +1,30 @@
+agent:
+  name: ontology-analysis-skill-agent
+  runtime: openai
+  session_role: master_task_skill
+  owns_session: true
+  instructions_ref: ../SKILL.md
+  capabilities: [files, web_primary_sources, python, container, docx, visual_review]
+  tool_policy:
+    retrieve_user_files_first: true
+    web_research_required_before_modeling: true
+    current_facts_require_primary_sources: true
+    secondary_sources_discovery_only: true
+    search_snippets_are_evidence: false
+    selected_sources_must_be_opened: true
+    relevant_pdf_pages_must_be_inspected: true
+    record_query_and_access_log: true
+    record_source_content_hash: true
+    research_gate_required_before_docx: true
+    block_if_web_unavailable_for_current_facts: true
+    direct_resource_access: false
+    access_via_gateway_only: true
+  research_artifacts:
+    plan: research-plan.json
+    ledger: web-research-ledger.json
+    computed_gate: research-gate.json
+    validator: ../scripts/validate_research_bundle.py
+  governance:
+    promotion_ceiling: staged
+    production_release_allowed: false
+    human_final_review_required: true

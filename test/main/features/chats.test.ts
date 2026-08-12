@@ -60,6 +60,18 @@ describe('chats › createConversation', () => {
     expect(idx[0].title).toBe('t1');
   });
 
+  it('persists kind=space_builder (空间模式会话) and round-trips it', async () => {
+    const chats = await loadChats();
+    const conv = await chats.createConversation(TEST_UID, { kind: 'space_builder', title: '空间模式' });
+    expect(conv.kind).toBe('space_builder');
+    expect(conv.session_id).toBe(`gconv-${conv.conversation_id}`);
+    const back = await chats.getConversation(TEST_UID, conv.conversation_id);
+    expect(back?.kind).toBe('space_builder');
+    // 普通会话不受影响：默认回落 normal
+    const normal = await chats.createConversation(TEST_UID, { title: 'n' });
+    expect(normal.kind).toBe('normal');
+  });
+
   it('touches the per-cid jsonl on create', async () => {
     const chats = await loadChats();
     const conv = await chats.createConversation(TEST_UID);

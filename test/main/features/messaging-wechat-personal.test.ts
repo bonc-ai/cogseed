@@ -477,6 +477,8 @@ describe('wechat personal adapter wire contract', () => {
     it('accepts numeric message_id as the real protocol sends', async () => {
       const { _wechatTestHooks } = await import('../../../src/main/features/messaging/wechat-personal');
       const envelope = _wechatTestHooks.normalizeInbound(ownerInstance, 'owner-1', {
+        // 数值型 message_id（真实协议如此）。注意：不能超过 MAX_SAFE_INTEGER（9.007e15），
+        // 否则字面量解析即丢精度，String() 拿到的是失真值，断言永远失败。
         message_id: 7491873521689278,
         from_user_id: 'owner-1',
         item_list: [{ type: 1, text_item: { text: '窗口测试' } }],

@@ -120,11 +120,23 @@ export async function listCognitionCandidates(
     p3394.listExperienceCandidates(userId, filter.conversationId),
     p3394.listPatchCandidates(userId, filter.conversationId),
   ]);
-  return applyFilter([
+  const candidates = applyFilter([
     ...(personal.candidate_updates || []).map(mapPersonal),
     ...experiences.map(mapExperience),
     ...patches.map(mapPatch),
   ], filter);
+
+  // 拒绝/暂缓抑制（FR-EXT-07）：pending 候选若最近被 defer/reject 且无 accept
+  // 覆盖，不重复提示——账本过滤，不侵入底层存储。
+  const reviewDecisions = await import('./review-decision');
+  const visible: CognitionCandidateView[] = [];
+  for (const c of candidates) {
+    if (c.status === 'pending' && await reviewDecisions.isCandidateSuppressed(userId, `${c.source}:${c.sourceId}`)) {
+      continue;
+    }
+    visible.push(c);
+  }
+  return visible;
 }
 
 export async function decideCognitionCandidate(
@@ -132,13 +144,37 @@ export async function decideCognitionCandidate(
   input: {
     source: CognitionCandidateSource;
     candidateId: string;
-    decision: 'accept' | 'reject';
+    decision: 'accept' | 'modify' | 'defer' | 'reject';
     reason?: string;
     notes?: string;
     toGlobalMemory?: boolean;
     toGroupIds?: string[];
+    /** 前指建议（短确认语"采用/确认/是"场景必填；PRD FR-REV-03）。 */
+    antecedentRef?: string;
+    scope?: string;
+    sourceSignalRef?: string;
   },
 ): Promise<unknown> {
+  const targetRef = `${input.source}:${input.candidateId}`;
+  // 先记录审查决定（账本）。短确认语缺 antecedent_ref 会在此抛错（资产零变化）。
+  const reviewDecisions = await import('./review-decision');
+  await reviewDecisions.writeReviewDecision(userId, {
+    targetRef,
+    decisionType: input.decision,
+    decision: input.decision,
+    ...(input.antecedentRef ? { antecedentRef: input.antecedentRef } : {}),
+    ...(input.scope ? { scope: input.scope } : {}),
+    ...(input.sourceSignalRef ? { sourceSignalRef: input.sourceSignalRef } : {}),
+    ...(input.reason ? { reason: input.reason } : {}),
+    ...(input.notes && input.decision === 'modify' ? { modifiedContent: input.notes } : {}),
+  });
+
+  if (input.decision === 'defer') {
+    // 暂缓：不改变底层候选状态（pending 保留），由列表层按账本过滤抑制。
+    // "稍后处理"入口读账本重新呈现。
+    return { ok: true, deferred: true, targetRef };
+  }
+
   if (input.source === 'personal_ontology') {
     if (input.decision === 'accept') {
       return personalOntologyCandidates.confirmCandidate(userId, input.candidateId, {
@@ -146,6 +182,7 @@ export async function decideCognitionCandidate(
         toGroupIds: input.toGroupIds,
       });
     }
+    // modify = 拒绝原内容（不直接确认原候选），修改后的新候选由下次提取生成
     return personalOntologyCandidates.rejectCandidate(userId, input.candidateId, input.reason);
   }
   if (input.source === 'p3394_experience') {
