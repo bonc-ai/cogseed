@@ -24,7 +24,7 @@ describe('touchpoint settings model', () => {
     expect(model.primaryAction).toBe('connection.connect');
     expect(model.currentStep).toBe('connection');
     expect(model.showMetrics).toBe(false);
-    expect(model.status).toBe('not_connected');
+    expect(model.status).toBe('off');
     expect(model.steps.map((step: { state: string }) => step.state)).toEqual(['current', 'waiting', 'waiting', 'waiting']);
   });
 
@@ -101,5 +101,56 @@ describe('touchpoint settings model', () => {
     expect(model.syncMessage).toContain('同步失败');
     expect(model.briefingConfigured).toBe(true);
     expect(model.briefingSchedule).toEqual({ hour: 8, minute: 30 });
+  });
+
+  it('uses backend overall when present (ready + no issues)', () => {
+    const model = deriveTouchpointSettingsModel(dashboard({
+      overall: {
+        status: 'ready',
+        chain: { connection: 'ok', authorization: 'ok', delivery: 'ok' },
+        issues: [],
+      },
+    }), []);
+    expect(model.overallStatus).toBe('ready');
+    expect(model.issues).toEqual([]);
+    expect(model.chain.connection.state).toBe('ok');
+  });
+
+  it('renders issues as view models with i18n keys', () => {
+    const model = deriveTouchpointSettingsModel(dashboard({
+      overall: {
+        status: 'attention',
+        chain: { connection: 'ok', authorization: 'broken', delivery: 'missing' },
+        issues: [{ severity: 'error', step: 'authorization', reason: 'token_expired', actionId: 'authorization.reauth' }],
+      },
+    }), []);
+    expect(model.issues[0]).toMatchObject({
+      severity: 'error', step: 'authorization', reason: 'token_expired', actionId: 'authorization.reauth',
+    });
+    expect(typeof model.issues[0].titleKey).toBe('string');
+    expect(typeof model.issues[0].actionLabelKey).toBe('string');
+  });
+
+  it('falls back to local derivation when overall is absent (legacy fixtures)', () => {
+    const model = deriveTouchpointSettingsModel(dashboard({
+      messaging: { instanceId: 'feishu-1', botConnected: true, ownerConfigured: true, ownerLabel: '本人' },
+      authorization: { kind: 'connected', providerId: 'feishu', identityLabel: '学生账号' },
+      resources: { discovered: 8, selected: 4, ready: 4, failed: 0, unsupported: 0 },
+      sync: { state: 'ready', lastRunAt: '2026-08-10T12:00:00.000Z', nextRunAt: null, processed: 8, failed: 0 },
+    }), []);
+    expect(model.overallStatus).toBe('ready');
+    expect(model.chain.connection.state).toBe('ok');
+    expect(model.issues).toEqual([]);
+  });
+
+  it('regression: authorized with empty identityLabel shows 已连接账号, never 未授权', () => {
+    const model = deriveTouchpointSettingsModel(dashboard({
+      messaging: { instanceId: 'feishu-1', botConnected: true, ownerConfigured: true },
+      authorization: { kind: 'connected', providerId: 'feishu' }, // 无 identityLabel
+      resources: { discovered: 2, selected: 2, ready: 2, failed: 0, unsupported: 0 },
+      sync: { state: 'ready', lastRunAt: null, nextRunAt: null, processed: 2, failed: 0 },
+    }), []);
+    expect(model.authorized).toBe(true);
+    expect(model.authorizedLabel).toBe('已连接账号');
   });
 });
