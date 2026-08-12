@@ -21272,3 +21272,43 @@ body.model-not-configured .main-content { flex-direction: column; }
   .touchpoint-resource-row { grid-template-columns: auto minmax(0, 1fr); }
   .touchpoint-resource-type { grid-column: 2; }
 }
+
+/* ── 触点链路状态图 ── */
+.touchpoint-chain { display: flex; align-items: stretch; gap: 8px; margin: 16px 0; }
+.touchpoint-chain-node { flex: 1; display: flex; align-items: center; gap: 8px; padding: 12px; border: 1px solid var(--border-color, #ddd); border-radius: 10px; background: var(--surface-color, #fff); }
+.touchpoint-chain-node .touchpoint-chain-dot { width: 10px; height: 10px; border-radius: 50%; background: #aaa; flex: none; }
+.touchpoint-chain-node.is-ok .touchpoint-chain-dot { background: #34a853; }
+.touchpoint-chain-node.is-broken { border-color: #ea4335; }
+.touchpoint-chain-node.is-broken .touchpoint-chain-dot { background: #ea4335; }
+.touchpoint-chain-node.is-missing { opacity: .75; }
+.touchpoint-chain-node.is-progress .touchpoint-chain-dot { background: #fbbc04; animation: touchpoint-pulse 1.2s infinite; }
+.touchpoint-chain-label strong { display: block; font-size: 13px; }
+.touchpoint-chain-label small { color: #888; font-size: 11px; }
+.touchpoint-chain-arrow { align-self: center; color: #999; }
+@keyframes touchpoint-pulse { 50% { opacity: .4; } }
+
+/* ── 待办卡 ── */
+.touchpoint-issues { display: grid; gap: 10px; margin: 16px 0; }
+.touchpoint-issue-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--border-color, #ddd); border-radius: 10px; background: var(--surface-color, #fff); }
+.touchpoint-issue-card.is-error { border-color: #f5c6cb; background: #fef6f6; }
+.touchpoint-issue-card.is-warning { border-color: #ffe3a3; background: #fffaf0; }
+.touchpoint-issue-body { flex: 1; }
+.touchpoint-issue-body h3 { margin: 0 0 2px; font-size: 14px; }
+.touchpoint-issue-body p { margin: 0; color: #666; font-size: 12px; }
+.touchpoint-issue-action { flex: none; }
+
+/* ── 高级设置手风琴 ── */
+.touchpoint-accordion summary { cursor: pointer; padding: 12px 14px; border: 1px solid var(--border-color, #ddd); border-radius: 10px; background: var(--surface-color, #fff); list-style: none; display: flex; justify-content: space-between; align-items: baseline; }
+.touchpoint-accordion summary::-webkit-details-marker { display: none; }
+.touchpoint-accordion summary small { color: #888; }
+.touchpoint-accordion[open] summary { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.touchpoint-advanced-body { border: 1px solid var(--border-color, #ddd); border-top: none; border-radius: 0 0 10px 10px; padding: 12px 14px; display: grid; gap: 10px; }
+.touchpoint-advanced-row { display: flex; justify-content: space-between; align-items: center; }
+.touchpoint-advanced-actions { display: flex; gap: 10px; margin-top: 6px; }
+
+/* ── 触点三态徽标（新渲染）：attention/off 颜色 + 高级区块显示修复 ── */
+.touchpoint-status.is-attention { color: var(--warning, #ad7419); }
+.touchpoint-status.is-attention > span { background: var(--warning, #d09225); }
+.touchpoint-status.is-off { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 28%, var(--border)); }
+.touchpoint-status.is-off > span { background: var(--danger); }
+.touchpoint-advanced { display: block; }
