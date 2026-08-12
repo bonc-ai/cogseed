@@ -446,7 +446,11 @@ const cogseedApi = {
   onPushEvent,
   log: logRecord,
 };
-const orkasApi = new Proxy(cogseedApi, { get: (_target, prop) => cogseedApi[prop] });
+// Plain-object copy for the legacy bridge name. contextBridge can only clone
+// plain objects/functions — a Proxy (previous impl) makes preload FAIL to
+// load entirely ("An object could not be cloned"), which drops window.cogseed
+// AND window.orkas and breaks every renderer IPC call.
+const orkasApi = Object.assign({}, cogseedApi);
 contextBridge.exposeInMainWorld('cogseed', cogseedApi);
 contextBridge.exposeInMainWorld('orkas', orkasApi);
 

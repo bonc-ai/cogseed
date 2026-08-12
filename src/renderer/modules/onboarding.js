@@ -2211,17 +2211,28 @@ async function _csLoadRoleTemplates() {
         ? `<span class="r-tags">${bundleInfo.map(info => `<span class="r-tag">${_csEsc(info)}</span>`).join('')}</span>`
         : '';
 
+      // 描述截断：模板原文可能很长，只展示一句核心说明，避免把
+      // 底部「完成设置」按钮挤出首屏。
+      const desc = String(t.description || '').trim();
+      const shortDesc = desc.length > 56 ? `${desc.slice(0, 56)}…` : desc;
+
       return `
         <button class="cs-role-card" data-template-id="${_csEsc(t.template_id)}">
           <span class="r-ico">${icon}</span>
           <h3>${_csEsc(t.name)}</h3>
-          <p>${_csEsc(t.description)}</p>
+          <p>${_csEsc(shortDesc)}</p>
           ${tags}
         </button>
       `;
     }).join('');
 
-    box.innerHTML = html;
+    // 全部角色放在一个可滑动区域里（滚动浏览），底部操作按钮
+    // （跳过 / 完成设置）固定可见，不被卡片数量挤下去。
+    box.innerHTML = `<div class="cs-role-scroll">${html}</div>`;
+    const scrollBox = box.querySelector('.cs-role-scroll');
+    if (scrollBox && scrollBox.scrollHeight > scrollBox.clientHeight) {
+      scrollBox.classList.add('has-overflow');
+    }
   } catch (err) {
     const msg = (err && err.message) || String(err);
     _obLog.warn('failed to load role templates', { error: msg });
@@ -2490,10 +2501,20 @@ function _csBuild() {
   _csObBuilt = true;
 }
 
-// Called by boot.js after the last view is restored. Fire-and-forget: it must
-// never block first paint. Only lifts the overlay when the machine-local
-// marker says the walkthrough has not been completed here yet.
+// Called by boot.js (early, right after i18n, AND as a safety net after the
+// last view is restored). Fire-and-forget: it must never block first paint.
+// Only lifts the overlay when the machine-local marker says the walkthrough
+// has not been completed here yet.
+let _csStarted = false;
+
 async function maybeStartOnboarding() {
+  // boot.js may call this twice (early + post-restore safety net). The second
+  // call must never reset the user's current step back to step 0 — once the
+  // walkthrough is up, it stays where the user left it.
+  if (_csStarted) {
+    _obLog.info('onboarding already started, skipping re-entry');
+    return;
+  }
   console.log('[ONBOARDING DEBUG] maybeStartOnboarding called');
   _obLog.info('maybeStartOnboarding called');
 
@@ -2510,6 +2531,7 @@ async function maybeStartOnboarding() {
     _obLog.warn('onboarding marker read failed — skipping walkthrough', { error: (err && err.message) || String(err) });
     return;
   }
+  _csStarted = true;
   _csBuild();
   document.body.classList.add('cs-onboarding-active');
   _csGoStep(0);
