@@ -45,7 +45,12 @@
 import { createHash } from 'node:crypto';
 
 import { safeId } from '../../storage';
-import { redactSourceExcerpt, type CognitionSourceRef } from './source-service';
+import {
+  normalizeCognitionSourceRef,
+  redactSourceExcerpt,
+  type CognitionSourceInput,
+  type CognitionSourceRef,
+} from './source-service';
 import type { AbilityAssetType, SaveRecallCandidateInput } from './candidate-service';
 
 /** Separator for the human-readable run key. Never used as a ref id. */
@@ -173,7 +178,15 @@ export function makeRunKey(conversationId: string, agentId: string, turnId: stri
  */
 export function runAnchorRef(runKey: string): CognitionSourceRef {
   const digest = createHash('sha256').update(runKey).digest('hex').slice(0, 16);
-  return { kind: 'execution', id: `run-${digest}`, title: compact(runKey, MAX_TITLE_LENGTH) || runKey };
+  const ref = refIfUsable({
+    kind: 'execution',
+    id: `run-${digest}`,
+    title: compact(runKey, MAX_TITLE_LENGTH) || runKey,
+  });
+  // id 是本函数拼出来的（`run-` + hex），必然通过 safeId；拿不到 ref 说明
+  // source 分类规则变了，属于坏不变量，不能静默返回一个残缺锚点。
+  if (!ref) throw new Error('run anchor ref failed normalization');
+  return ref;
 }
 
 function isRealBoundary(record: EvidenceRecord): boolean {
@@ -272,9 +285,13 @@ export function groupEvidenceIntoRuns(records: readonly unknown[]): GroupedEvide
   return { runs: [...runs.values()], closes, unattributed };
 }
 
-/** Refs are dropped by normalization unless their id is `safeId`-clean. */
-function refIfUsable(ref: CognitionSourceRef): CognitionSourceRef | null {
-  return safeId(ref.id) ? ref : null;
+/** Refs are dropped by normalization unless their id is `safeId`-clean.
+ *
+ *  走 `normalizeCognitionSourceRef` 而不是自己拼字段：`taxonomyVersion` 与
+ *  `subtype` 由 kind 推导，手写字面量会填错，而这两个字段决定证据在能力册里
+ *  怎么归类。normalizer 内部已含同一套 safeId 校验。 */
+function refIfUsable(ref: CognitionSourceInput): CognitionSourceRef | null {
+  return normalizeCognitionSourceRef(ref) ?? null;
 }
 
 function toolCycleRef(record: EvidenceRecord): CognitionSourceRef | null {
