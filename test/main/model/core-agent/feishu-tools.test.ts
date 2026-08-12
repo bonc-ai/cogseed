@@ -13,6 +13,12 @@ const mocks = {
     getDashboard: vi.fn(),
     scheduleBriefing: vi.fn(),
   },
+  proactive: {
+    sendFileToSelf: vi.fn(),
+  },
+  workspace: {
+    getWorkspacePath: vi.fn(),
+  },
 };
 
 async function tools() {
@@ -66,32 +72,44 @@ describe('core-agent feishu tools', () => {
     vi.doMock('../../../../src/main/features/auto_tasks', () => mocks.autoTasks);
     vi.doMock('../../../../src/main/features/touchpoints/ledger', () => mocks.touchpointLedger);
     vi.doMock('../../../../src/main/features/personal_context/application', () => mocks.application);
+    vi.doMock('../../../../src/main/features/messaging/proactive', () => mocks.proactive);
+    vi.doMock('../../../../src/main/features/user_workspace', () => mocks.workspace);
     mocks.autoTasks.listTasks.mockReset();
     mocks.touchpointLedger.listTouchpointIntents.mockReset();
     mocks.touchpointLedger.listTouchpointActions.mockReset();
     mocks.application.getDashboard.mockReset();
     mocks.application.scheduleBriefing.mockReset();
+    mocks.proactive.sendFileToSelf.mockReset();
+    mocks.workspace.getWorkspacePath.mockReset();
   });
 
   afterEach(() => {
     vi.doUnmock('../../../../src/main/features/auto_tasks');
     vi.doUnmock('../../../../src/main/features/touchpoints/ledger');
     vi.doUnmock('../../../../src/main/features/personal_context/application');
+    vi.doUnmock('../../../../src/main/features/messaging/proactive');
+    vi.doUnmock('../../../../src/main/features/user_workspace');
   });
 
-  it('builds exactly the four feishu tools with closed schemas', async () => {
-    const [dashboard, briefingGet, briefingSchedule, touchpointList] = await tools();
+  it('builds exactly the five feishu tools with closed schemas', async () => {
+    const [dashboard, briefingGet, briefingSchedule, touchpointList, sendFile] = await tools();
     expect(dashboard.name).toBe('feishu_dashboard');
     expect(briefingGet.name).toBe('briefing_get');
     expect(briefingSchedule.name).toBe('briefing_schedule');
     expect(touchpointList.name).toBe('touchpoint_list');
-    for (const tool of [dashboard, briefingGet, touchpointList]) {
+    expect(sendFile.name).toBe('messaging_send_file');
+    for (const tool of [dashboard, briefingGet, touchpointList, sendFile]) {
       expect(tool.inputSchema).toMatchObject({ type: 'object', additionalProperties: false });
     }
     expect(briefingSchedule.inputSchema).toMatchObject({
       type: 'object',
       additionalProperties: false,
       required: ['hour', 'minute'],
+    });
+    expect(sendFile.inputSchema).toMatchObject({
+      type: 'object',
+      additionalProperties: false,
+      required: ['file_path'],
     });
     // No credentials, ids, or secret-shaped fields leak into schemas.
     expect(JSON.stringify(briefingSchedule.inputSchema)).not.toMatch(/chat_id|open_id|secret|token|app_id/i);
@@ -159,5 +177,49 @@ describe('core-agent feishu tools', () => {
     const result = await dashboard.execute({}, ctx());
     expect(result.isError).toBe(true);
     expect(String(result.content)).toContain('E_FEISHU_DASHBOARD_UNAVAILABLE');
+  });
+
+  it('messaging_send_file forwards scoped paths to the proactive file send', async () => {
+    mocks.workspace.getWorkspacePath.mockReturnValue('/workspace');
+    mocks.proactive.sendFileToSelf.mockResolvedValue({
+      status: 'sent',
+      instance_id: 'bot-1',
+      text_length: 10,
+      attempts: 1,
+      delivery_id: 'om_file_1',
+    });
+    const [, , , , sendFile] = await tools();
+
+    const result = await sendFile.execute({ file_path: '/workspace/report.pdf', file_name: '报告.pdf' }, ctx());
+
+    expect(mocks.proactive.sendFileToSelf).toHaveBeenCalledWith(
+      'user-1',
+      { file_path: '/workspace/report.pdf', file_name: '报告.pdf' },
+      expect.objectContaining({ cid: 'turn', sourceKey: expect.stringMatching(/^file:/) }),
+    );
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(String(result.content))).toMatchObject({ status: 'sent' });
+  });
+
+  it('messaging_send_file rejects paths outside the workspace/attachment scope', async () => {
+    mocks.workspace.getWorkspacePath.mockReturnValue('/workspace');
+    const [, , , , sendFile] = await tools();
+
+    const result = await sendFile.execute({ file_path: '/etc/passwd' }, ctx());
+
+    expect(result.isError).toBe(true);
+    expect(String(result.content)).toContain('E_PATH_OUT_OF_SCOPE');
+    expect(mocks.proactive.sendFileToSelf).not.toHaveBeenCalled();
+  });
+
+  it('messaging_send_file requires an absolute file_path up front', async () => {
+    mocks.workspace.getWorkspacePath.mockReturnValue('/workspace');
+    const [, , , , sendFile] = await tools();
+
+    const result = await sendFile.execute({ file_path: 'relative.md' }, ctx());
+
+    expect(result.isError).toBe(true);
+    expect(String(result.content)).toContain('E_PATH_OUT_OF_SCOPE');
+    expect(mocks.proactive.sendFileToSelf).not.toHaveBeenCalled();
   });
 });

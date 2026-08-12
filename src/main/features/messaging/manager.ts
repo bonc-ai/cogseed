@@ -338,6 +338,75 @@ export async function sendProactive(
   }
 }
 
+/** Proactive file send to the owner: uploads and sends a local file through
+ * the same idempotent delivery ledger as `sendProactive`. The text fallback
+ * for recovery is a `[file] name` marker, so an adapter without `sendFile`
+ * still delivers something instead of wedging. */
+export async function sendProactiveFile(
+  uid: string,
+  input: {
+    instanceId: string;
+    recipientId: string;
+    filePath: string;
+    fileName: string;
+    sourceKey: string;
+    signal?: AbortSignal | null;
+  },
+): Promise<{ entry: DeliveryLedgerEntry }> {
+  assertUserId(uid);
+  const runtime = runtimes.get(uid)?.get(input.instanceId);
+  if (!runtime || !isCurrentRuntime(uid, runtime)) {
+    throw new Error('messaging instance is not running');
+  }
+  const filePath = typeof input.filePath === 'string' && input.filePath.trim() ? input.filePath.trim() : '';
+  if (!filePath || filePath.length > 1024) throw new Error('proactive file path required');
+  const fileName = typeof input.fileName === 'string' && input.fileName.trim()
+    ? input.fileName.trim().slice(0, 240)
+    : filePath.split('/').pop() || 'file';
+  const sourceKey = typeof input.sourceKey === 'string' && input.sourceKey.trim()
+    ? input.sourceKey.trim().slice(0, 160)
+    : '';
+  if (!sourceKey) throw new Error('proactive source key required');
+  const recipientId = typeof input.recipientId === 'string' ? input.recipientId.trim() : '';
+  if (!recipientId || recipientId.length > 512) throw new Error('proactive recipient required');
+  const text = `[文件] ${fileName}`;
+  const key = ledger.deliveryKey(input.instanceId, sourceKey);
+  const begun = await ledger.beginDelivery(uid, {
+    key,
+    instanceId: input.instanceId,
+    recipientId,
+    recipientIdType: 'open_id',
+    sourceMessageId: sourceKey,
+    textHash: ledger.textHash(text),
+    text,
+    file: { path: filePath, name: fileName },
+    idempotencyKey: `proactive-${ledger.textHash(sourceKey).slice(0, 24)}`,
+  });
+  if (!begun.duplicate) {
+    if (!isCurrentRuntime(uid, runtime) || runtime.controller.signal.aborted) {
+      await ledger.finishDelivery(uid, key, {
+        status: 'cancelled',
+        error: 'delivery cancelled because messaging instance stopped',
+      });
+    } else {
+      await runtime.attemptDelivery(key, begun.entry);
+    }
+  }
+  try {
+    const terminal = await ledger.waitForDeliveryTerminal(uid, key, { signal: input.signal ?? null });
+    if (terminal.status === 'cancelled') {
+      throw new Error('proactive file delivery cancelled');
+    }
+    return { entry: terminal };
+  } catch (error) {
+    if (input.signal?.aborted) {
+      await ledger.cancelDelivery(uid, key, 'proactive file send aborted').catch(() => undefined);
+      throw Object.assign(new Error('proactive file send aborted'), { name: 'AbortError' });
+    }
+    throw error;
+  }
+}
+
 const CHAT_LOCKS_MAX = 1000;
 const chatLocks = new Map<string, Mutex>();
 

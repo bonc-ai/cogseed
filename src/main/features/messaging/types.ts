@@ -224,6 +224,13 @@ export interface DeliveryLedgerEntry {
    * Text-only sends omit it; restart recovery replays the card JSON verbatim
    * through the adapter's `sendCard` path. */
   card?: Record<string, JsonCompatibleValue>;
+  /** Local file to upload and send as a file message (md/doc/pdf/…). Kept as
+   * a path reference so restart recovery re-reads the file; adapters without
+   * `sendFile` fall back to a text delivery. */
+  file?: {
+    path: string;
+    name: string;
+  };
   replyToMessageId?: string;
   threadId?: string;
   replyInThread?: boolean;
@@ -288,6 +295,16 @@ export interface MessagingAdapter {
   sendMessage(
     chatId: string,
     text: string,
+    signal?: AbortSignal,
+    context?: MessagingSendContext,
+  ): Promise<{ deliveryId?: string }>;
+  /** Upload and send a local file as a file message (md/doc/pdf/…).
+   * Optional: adapters without file support leave it unset, and the delivery
+   * ledger falls back to text for file entries. */
+  sendFile?(
+    chatId: string,
+    filePath: string,
+    fileName?: string,
     signal?: AbortSignal,
     context?: MessagingSendContext,
   ): Promise<{ deliveryId?: string }>;

@@ -309,6 +309,39 @@ describe('messaging registry and ledgers', () => {
     expect(read).toMatchObject({ recipientId: 'ou_self_1', recipientIdType: 'open_id' });
   });
 
+  it('persists a file delivery payload across write and reload', async () => {
+    const ledger = await import('../../../src/main/features/messaging/ledger');
+    const begun = await ledger.beginDelivery('user-1', {
+      key: ledger.deliveryKey('bot-1', 'file-1'),
+      instanceId: 'bot-1',
+      recipientId: 'ou_self_1',
+      recipientIdType: 'open_id',
+      sourceMessageId: 'file-1',
+      textHash: ledger.textHash('[文件] report.pdf'),
+      text: '[文件] report.pdf',
+      file: { path: '/workspace/report.pdf', name: 'report.pdf' },
+    });
+    expect(begun.duplicate).toBe(false);
+    expect(begun.entry.file).toEqual({ path: '/workspace/report.pdf', name: 'report.pdf' });
+
+    const read = await ledger.getDelivery('user-1', begun.entry.key);
+    expect(read?.file).toEqual({ path: '/workspace/report.pdf', name: 'report.pdf' });
+  });
+
+  it('rejects malformed file delivery payloads', async () => {
+    const ledger = await import('../../../src/main/features/messaging/ledger');
+    await expect(ledger.beginDelivery('user-1', {
+      key: ledger.deliveryKey('bot-1', 'file-bad'),
+      instanceId: 'bot-1',
+      recipientId: 'ou_self_1',
+      recipientIdType: 'open_id',
+      sourceMessageId: 'file-bad',
+      textHash: ledger.textHash('x'),
+      text: 'x',
+      file: { path: '', name: 'x' },
+    })).rejects.toThrow('delivery file payload invalid');
+  });
+
   it('deduplicates inbound and delivery records without re-sending sent output', async () => {
     const ledger = await import('../../../src/main/features/messaging/ledger');
     const first = await ledger.reserveInbound('user-1', ledger.inboundKey('bot-1', 'message-1'));
@@ -1997,6 +2030,22 @@ describe('feishu approval cards', () => {
     } finally {
       setCurrentLang('en');
     }
+  });
+});
+
+describe('feishu file_type mapping', () => {
+  it('maps known document extensions and falls back to stream', async () => {
+    const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');
+    expect(_adapterTestHooks.feishuFileTypeForName('report.pdf')).toBe('pdf');
+    expect(_adapterTestHooks.feishuFileTypeForName('report.PDF')).toBe('pdf');
+    expect(_adapterTestHooks.feishuFileTypeForName('doc.docx')).toBe('doc');
+    expect(_adapterTestHooks.feishuFileTypeForName('doc.doc')).toBe('doc');
+    expect(_adapterTestHooks.feishuFileTypeForName('sheet.xlsx')).toBe('xls');
+    expect(_adapterTestHooks.feishuFileTypeForName('deck.pptx')).toBe('ppt');
+    expect(_adapterTestHooks.feishuFileTypeForName('video.mp4')).toBe('mp4');
+    expect(_adapterTestHooks.feishuFileTypeForName('notes.md')).toBe('stream');
+    expect(_adapterTestHooks.feishuFileTypeForName('archive.zip')).toBe('stream');
+    expect(_adapterTestHooks.feishuFileTypeForName('noext')).toBe('stream');
   });
 });
 

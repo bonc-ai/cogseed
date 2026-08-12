@@ -794,12 +794,18 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
       })
     : [];
 
-  // Feishu touchpoint tools (status/briefing/touchpoint records). Same
-  // Commander-only gate as messaging tools: workers, edit sessions, CLI and
-  // reflection never get them, so they cannot read or mutate user Feishu
+  // Feishu touchpoint tools (status/briefing/touchpoint records + file send).
+  // Same Commander-only gate as messaging tools: workers, edit sessions, CLI
+  // and reflection never get them, so they cannot read or mutate user Feishu
   // configuration from a narrower session.
   const feishuTools: AgentTool[] = uid && !params.disableTools && isCommander
-    ? createFeishuTools({ userId: uid })
+    ? createFeishuTools({
+        userId: uid,
+        ...(params.cid ? { cid: params.cid } : {}),
+        ...(params.projectId ? { projectId: params.projectId } : {}),
+        ...(params.extraRoots?.length ? { extraRoots: params.extraRoots } : {}),
+        ...(params.turnId ? { turnId: params.turnId } : {}),
+      })
     : [];
 
   // Media generation. Shares the localExec access mode with

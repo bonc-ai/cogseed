@@ -9,14 +9,52 @@
  * change to the user before calling it.
  */
 
+import * as crypto from 'node:crypto';
+import * as path from 'node:path';
+
 import type { AgentTool, ToolContext, ToolResult } from '#core-agent';
 
 import * as autoTasks from '../../features/auto_tasks';
 import * as touchpointLedger from '../../features/touchpoints/ledger';
 import * as application from '../../features/personal_context/application';
+import * as proactive from '../../features/messaging/proactive';
+import { isPathAllowed } from '../../util/path-sandbox';
+import { getWorkspacePath } from '../../features/user_workspace';
+import { chatAttachmentDirForConversation } from '../../util/project-layout';
 
 export interface FeishuToolsOpts {
   userId: string;
+  /** Conversation id: scopes attachment roots and confirms routing. */
+  cid?: string;
+  projectId?: string;
+  extraRoots?: readonly string[];
+  turnId?: string;
+}
+
+/** Roots the model may send files from: workspace + conversation attachments
+ * (mirrors the local file tools' scope). */
+function feishuFileRoots(opts: FeishuToolsOpts): string[] {
+  const roots: string[] = [];
+  if (opts.userId) {
+    try {
+      const ws = getWorkspacePath(opts.userId, opts.projectId);
+      if (ws) roots.push(ws);
+    } catch {
+      // workspace resolution failure leaves the workspace root out; other
+      // roots still apply
+    }
+    if (opts.cid) {
+      try {
+        roots.push(chatAttachmentDirForConversation(opts.userId, opts.cid));
+      } catch {
+        // attachment dir unavailable; workspace root still applies
+      }
+    }
+  }
+  if (opts.extraRoots?.length) {
+    for (const root of opts.extraRoots) if (root) roots.push(root);
+  }
+  return roots;
 }
 
 function errResult(code: string, msg: string): ToolResult {
@@ -193,13 +231,88 @@ function createTouchpointListTool(opts: FeishuToolsOpts): AgentTool {
   };
 }
 
+/** Stable per-(turn, path) source key: a replayed call reuses the ledger
+ * entry and never sends the file twice. */
+function fileSourceKeyFor(cid: string | undefined, turnId: string | undefined, filePath: string): string {
+  const digest = crypto.createHash('sha256').update(filePath.trim(), 'utf8').digest('hex').slice(0, 24);
+  return `file:${cid || 'turn'}:${turnId || 'turn'}:${digest}`;
+}
+
+function createSendFileTool(opts: FeishuToolsOpts): AgentTool {
+  return {
+    name: 'messaging_send_file',
+    description:
+      'Send a local file (markdown, Word, PDF, spreadsheet, …) to the configured owner ("self") ' +
+      'through one Feishu/Lark bot. The user must approve a confirmation dialog before anything ' +
+      'is uploaded or sent; a denied, timed-out, or aborted request reports not_sent and must not ' +
+      'be retried automatically. file_path must be an absolute path the user can read via ' +
+      'read_file (workspace or conversation attachment scope) — never guess paths outside that ' +
+      'scope. Omit instance_id only when exactly one bot is available; with several, use the ' +
+      'instance_id from messaging_list_targets.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        instance_id: {
+          type: 'string',
+          description: 'Optional bot instance id from messaging_list_targets; required when several bots are available.',
+        },
+        file_path: {
+          type: 'string',
+          description: 'Absolute path of the local file to send (workspace/attachment scope).',
+        },
+        file_name: {
+          type: 'string',
+          description: 'Optional display file name; defaults to the base name of file_path.',
+        },
+      },
+      required: ['file_path'],
+      additionalProperties: false,
+    },
+    async execute(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+      const raw = input as { instance_id?: unknown; file_path?: unknown; file_name?: unknown };
+      const filePath = typeof raw.file_path === 'string' ? raw.file_path.trim() : '';
+      if (!filePath) {
+        return errResult('E_MESSAGING_INVALID_INPUT', 'file_path is required');
+      }
+      const roots = feishuFileRoots(opts);
+      if (!roots.length || !isPathAllowed(filePath, roots)) {
+        return errResult(
+          'E_PATH_OUT_OF_SCOPE',
+          'file_path is outside the workspace/attachment scope of this conversation',
+        );
+      }
+      const fileName = typeof raw.file_name === 'string' && raw.file_name.trim()
+        ? raw.file_name.trim()
+        : path.basename(filePath);
+      const instanceId = raw.instance_id === undefined ? undefined : String(raw.instance_id).trim();
+      const result = await proactive.sendFileToSelf(
+        opts.userId,
+        {
+          ...(instanceId ? { instance_id: instanceId } : {}),
+          file_path: filePath,
+          file_name: fileName,
+        },
+        {
+          cid: opts.cid || 'turn',
+          sourceKey: fileSourceKeyFor(opts.cid, opts.turnId, filePath),
+          signal: ctx.signal ?? null,
+        },
+      );
+      const content = JSON.stringify(result);
+      if (result.status === 'error') return { content, isError: true };
+      return { content };
+    },
+  };
+}
+
 /** Build the Commander-only Feishu tools. Inject only for gconv sessions
- *  with a resolved uid (see runner.ts). */
+ * with a resolved uid (see runner.ts). */
 export function createFeishuTools(opts: FeishuToolsOpts): AgentTool[] {
   return [
     createDashboardTool(opts),
     createBriefingGetTool(opts),
     createBriefingScheduleTool(opts),
     createTouchpointListTool(opts),
+    createSendFileTool(opts),
   ];
 }

@@ -23,6 +23,9 @@ const MAX_DELIVERY_IDEMPOTENCY_KEY_LENGTH = 160;
 /** Card JSON replay cap: touchpoint cards are small, and the ledger is a
  * machine-private JSON file that restart recovery replays verbatim. */
 const MAX_DELIVERY_CARD_JSON_LENGTH = 16_000;
+/** Local file path/name caps for file deliveries. */
+const MAX_DELIVERY_FILE_PATH_LENGTH = 1024;
+const MAX_DELIVERY_FILE_NAME_LENGTH = 240;
 
 /** Validated card payload kept for restart recovery; invalid or oversized
  * cards are dropped so a corrupt entry can never wedge a delivery. */
@@ -36,6 +39,21 @@ function normalizeDeliveryCard(raw: unknown): Record<string, JsonCompatibleValue
   }
   if (!serialized || serialized.length > MAX_DELIVERY_CARD_JSON_LENGTH) return undefined;
   return raw as Record<string, JsonCompatibleValue>;
+}
+
+/** Validated file payload kept for restart recovery; malformed entries are
+ * dropped so a corrupt record can never wedge a delivery. */
+function normalizeDeliveryFile(raw: unknown): { path: string; name: string } | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const candidate = raw as { path?: unknown; name?: unknown };
+  const filePath = typeof candidate.path === 'string' && candidate.path.trim()
+    ? candidate.path.trim().slice(0, MAX_DELIVERY_FILE_PATH_LENGTH)
+    : '';
+  const name = typeof candidate.name === 'string' && candidate.name.trim()
+    ? candidate.name.trim().slice(0, MAX_DELIVERY_FILE_NAME_LENGTH)
+    : '';
+  if (!filePath || !name) return undefined;
+  return { path: filePath, name };
 }
 
 /** Terminal-state waiters keyed by `<uid>\0<delivery key>`. A waiter registers
@@ -146,6 +164,7 @@ function normalizeDelivery(raw: Partial<MessagingDeliveryLedgerFile>): Messaging
       ? candidate.idempotencyKey.trim().slice(0, MAX_DELIVERY_IDEMPOTENCY_KEY_LENGTH)
       : undefined;
     const card = normalizeDeliveryCard(candidate.card);
+    const file = normalizeDeliveryFile(candidate.file);
     // Old ledgers retained only a text hash. They cannot safely replay a
     // delivery after restart, so make their interrupted records terminal
     // instead of leaving an invisible permanent pending state.
@@ -167,6 +186,7 @@ function normalizeDelivery(raw: Partial<MessagingDeliveryLedgerFile>): Messaging
       textHash: String(candidate.textHash || '').slice(0, 128),
       ...(text ? { text } : {}),
       ...(card ? { card } : {}),
+      ...(file ? { file } : {}),
       ...(typeof candidate.replyToMessageId === 'string' && candidate.replyToMessageId.trim()
         ? { replyToMessageId: candidate.replyToMessageId.trim().slice(0, 512) }
         : {}),
@@ -311,6 +331,8 @@ export async function beginDelivery(
   if (!text) throw new Error('delivery text required for recovery');
   const card = entry.card === undefined ? undefined : normalizeDeliveryCard(entry.card);
   if (entry.card !== undefined && !card) throw new Error('delivery card payload invalid');
+  const file = entry.file === undefined ? undefined : normalizeDeliveryFile(entry.file);
+  if (entry.file !== undefined && !file) throw new Error('delivery file payload invalid');
   const recipientId = typeof entry.recipientId === 'string' && entry.recipientId.trim()
     ? entry.recipientId.trim().slice(0, 512)
     : typeof entry.externalChatId === 'string'
@@ -339,6 +361,7 @@ export async function beginDelivery(
       recipientIdType,
       text: existing?.text || text,
       card: existing?.card || card,
+      file: existing?.file || file,
       idempotencyKey: existing?.idempotencyKey
         || (typeof entry.idempotencyKey === 'string' && entry.idempotencyKey.trim()
           ? entry.idempotencyKey.trim().slice(0, MAX_DELIVERY_IDEMPOTENCY_KEY_LENGTH)
