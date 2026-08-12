@@ -2180,6 +2180,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
+  // 「这条判断从哪来、走到了哪一段」。段状态区分 reached / not_reached：
+  // 还没进过能力包是「还没走到」，不是出错，渲染层不得当成红色错误。
+  'recall.assets.chain': async ({ assetId } = {}, ctx) => {
+    if (!safeId(assetId)) throw new Error('invalid recall asset id');
+    const { traceCognitionChainByAsset } = await import('../features/recall/cognition-chain');
+    return { ok: true, chain: await traceCognitionChainByAsset(ctx.userId, assetId) };
+  },
+
   'recall.assets.list': async (_args, ctx) => ({ ok: true, assets: await recallAssets.listAbilityAssets(ctx.userId) }),
   'recall.assets.read': async ({ assetId } = {}, ctx) => { if (!safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, asset: await recallAssets.readAbilityAsset(ctx.userId, assetId) }; },
   'recall.assets.pause': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid recall asset pause'); return { ok: true, asset: await recallAssets.pauseAbilityAsset(ctx.userId, assetId, note) }; },

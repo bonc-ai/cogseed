@@ -182,6 +182,34 @@ export async function recordAgentInheritance(
   });
 }
 
+/** 列出该用户所有 Agent 的出生快照。
+ *
+ *  链路追溯要反查「这条资产进过哪些 Agent 的能力包」，只能按 agentId 精确读
+ *  是答不了的，所以扫一遍 agents 目录。没有继承记录的 Agent 直接跳过——
+ *  它们在追溯里本来就不该出现。 */
+export async function listAgentInheritance(userId: string): Promise<AgentInheritanceRecord[]> {
+  const agentsRoot = path.dirname(agentDir(userId, 'placeholder'));
+  let entries: string[];
+  try {
+    entries = await fs.readdir(agentsRoot);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
+  }
+  const records: AgentInheritanceRecord[] = [];
+  for (const entry of entries) {
+    if (!safeId(entry)) continue;
+    try {
+      const record = await readAgentInheritance(userId, entry);
+      if (record) records.push(record);
+    } catch {
+      // 单条损坏不该让整个追溯页空白。
+      continue;
+    }
+  }
+  return records.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
 /** 读出生快照。返回 null 表示这个 Agent 生成时还没有继承机制——
  *  调用方必须把它和「继承了空」区分开来展示。 */
 export async function readAgentInheritance(

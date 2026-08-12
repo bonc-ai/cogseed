@@ -215,6 +215,35 @@ export async function readReceipt(
   }
 }
 
+/** 列出该用户全部复用回执。
+ *
+ *  回执按 executionId 分目录存，此前只能按 id 精确读——想回答「这条资产被哪些
+ *  任务用过」就无从下手。链路追溯需要反查，所以这里做一次目录扫描。
+ *  单条损坏不影响整体：跳过并继续，否则一份坏文件会让整个追溯页面空白。
+ */
+export async function listReceipts(userId: string): Promise<ContextReuseReceipt[]> {
+  const executionsDir = path.dirname(path.dirname(contextReuseReceiptPath(userId, 'placeholder')));
+  let entries: string[];
+  try {
+    entries = await fs.readdir(executionsDir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
+  }
+  const receipts: ContextReuseReceipt[] = [];
+  for (const entry of entries) {
+    if (!safeId(entry)) continue;
+    try {
+      receipts.push(parseStoredReceipt(
+        await fs.readFile(path.join(executionsDir, entry, 'context-reuse-receipt.json'), 'utf8'),
+      ));
+    } catch {
+      continue;
+    }
+  }
+  return receipts.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
 export async function prepareReceipt(
   userId: string,
   input: PrepareContextReuseReceiptInput,
