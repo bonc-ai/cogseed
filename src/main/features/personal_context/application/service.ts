@@ -100,7 +100,15 @@ function actionsFor(input: Readonly<{
 }
 
 async function buildRealDashboard(userId: string, deps: PersonalContextApplicationDependencies): Promise<PersonalContextDashboard> {
-  const instances = await deps.listMessagingInstances(userId);
+  // 5 个数据源互不依赖，串行 await 会让打开触点页的感知时间叠加；
+  // 并行读取（每个都是本地文件/内存，无并发写冲突）。
+  const [instances, authorization, registry, candidates, briefing] = await Promise.all([
+    deps.listMessagingInstances(userId),
+    deps.getAuthorizationStatus(userId),
+    deps.listRegistryEntries(userId),
+    deps.listCandidates(userId),
+    deps.buildBriefingPreview(userId),
+  ]);
   const feishuCandidates = instances.filter((instance) => instance.platform === 'feishu_lark' && instance.enabled);
   // 与 manager.pickFeishuInstance 保持一致的选实例优先级：飞书品牌 > 已连接 > 第一个，
   // 避免同时配了飞书+Lark 时授权/投递落到错误的应用上。
@@ -109,10 +117,6 @@ async function buildRealDashboard(userId: string, deps: PersonalContextApplicati
     ?? feishuCandidates[0]
     ?? null;
   const botConnected = feishu?.statusKind === 'connected';
-  const authorization = await deps.getAuthorizationStatus(userId);
-  const registry = await deps.listRegistryEntries(userId);
-  const candidates = await deps.listCandidates(userId);
-  const briefing = await deps.buildBriefingPreview(userId);
   const ready = registry.filter((entry) => entry.valid && entry.selected && entry.contentStatus !== 'unsupported' && entry.contentStatus !== 'failed').length;
   const failed = registry.filter((entry) => !entry.valid || entry.contentStatus === 'failed').length;
   const unsupported = registry.filter((entry) => entry.contentStatus === 'unsupported').length;

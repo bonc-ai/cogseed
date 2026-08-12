@@ -30,12 +30,18 @@ export interface SelectedRef {
 
 export type ApplyResource = (resource: ExternalResource) => Promise<UpsertResult> | UpsertResult;
 
+/** 批量落盘通道（provider 接 registry.upsertMany）：一次同步的 N 条资源
+ *  收敛为一次注册表读写，避免回填时逐条全量读写 registry.json */
+export type ApplyResourceMany = (resources: ExternalResource[]) => Promise<UpsertResult[]> | UpsertResult[];
+
 export interface SyncResourcesOptions {
   tenant: string;
   unionId: string;
   selected: SelectedRef[];
   cursor?: SyncCursor | null;
   applyResource: ApplyResource;
+  /** 可选：提供时本类型资源收集为一批统一提交（性能优化，语义与 applyResource 一致） */
+  applyResourceMany?: ApplyResourceMany;
   /** 测试注入时间（默认真实时钟） */
   now?: () => Date;
   observedAt?: string;
@@ -47,6 +53,10 @@ function isoDaysFrom(now: Date, days: number): string {
 
 async function applyOne(resource: ExternalResource, applyResource: ApplyResource, counts: { added: number; updated: number; unchanged: number }): Promise<void> {
   const result = await applyResource(resource);
+  countOne(result, counts);
+}
+
+function countOne(result: UpsertResult, counts: { added: number; updated: number; unchanged: number }): void {
   if (result.change === 'new') counts.added += 1;
   else if (result.change === 'updated') counts.updated += 1;
   else counts.unchanged += 1;
@@ -68,24 +78,32 @@ function maxWatermark(resources: ExternalResource[], type: ResourceType, current
 /**
  * 列表式增量同步：日历事件（回填/水位）+ 已选资源类型的水位增量。
  * 返回 nextCursor（watermarks 只含本次观察值，合并/截断由 cursor store 负责）。
+ *
+ * 性能：各类型拉取并行进行；落盘优先走 applyResourceMany（批量一次写），
+ * 未提供时逐条 applyResource（语义完全一致，供测试注入）。
  */
 export async function syncResources(client: FeishuApiClient, opts: SyncResourcesOptions): Promise<SyncResult> {
-  const { tenant, unionId, selected, cursor, applyResource, now = () => new Date(), observedAt } = opts;
+  const { tenant, unionId, selected, cursor, applyResource, applyResourceMany, now = () => new Date(), observedAt } = opts;
   const counts = { added: 0, updated: 0, unchanged: 0 };
   const newWatermarks: Record<string, string> = {};
+
+  // 全部待落盘资源收集到同一批次，最后统一提交（批量一次写 or 逐条）
+  const batch: ExternalResource[] = [];
 
   const calendarRefs = selected.filter((ref) => ref.type === 'calendar');
   if (calendarRefs.length > 0) {
     const rangeStart = isoDaysFrom(now(), -BACKFILL_DAYS_PAST);
     const rangeEnd = isoDaysFrom(now(), BACKFILL_DAYS_FUTURE);
     const updatedAfter = cursor?.watermarks['calendar_event'];
-    for (const ref of calendarRefs) {
+    // 多个已选日历并行拉取（飞书 QPS 限制宽松，并发数 = 已选日历数）
+    const calendarBatches = await Promise.all(calendarRefs.map(async (ref) => {
       const rawEvents = await client.listCalendarEvents(ref.stableId, { start: rangeStart, end: rangeEnd }, updatedAfter);
       const resources = rawEvents.map((raw) => normalizeCalendarEvent(tenant, unionId, raw, { observedAt }));
-      for (const resource of resources) {
-        await applyOne(resource, applyResource, counts);
-      }
       const watermark = maxWatermark(resources, 'calendar_event', updatedAfter);
+      return { resources, watermark };
+    }));
+    for (const { resources, watermark } of calendarBatches) {
+      batch.push(...resources);
       if (watermark) newWatermarks['calendar_event'] = watermark;
     }
   }
@@ -122,11 +140,18 @@ export async function syncResources(client: FeishuApiClient, opts: SyncResources
     if (current) {
       resources = resources.filter((resource) => resource.sourceVersion && resource.sourceVersion > current);
     }
-    for (const resource of resources) {
-      await applyOne(resource, applyResource, counts);
-    }
+    batch.push(...resources);
     const watermark = maxWatermark(resources, type, current);
     if (watermark) newWatermarks[type] = watermark;
+  }
+
+  if (applyResourceMany && batch.length > 0) {
+    const results = await applyResourceMany(batch);
+    for (const result of results) countOne(result, counts);
+  } else {
+    for (const resource of batch) {
+      await applyOne(resource, applyResource, counts);
+    }
   }
 
   const nextCursor: SyncCursor = {

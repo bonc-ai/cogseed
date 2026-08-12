@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { classifyBootDevice } from '../../../src/main/util/boot-device-profile';
 
 describe('boot device profile', () => {
-  it('keeps non-critical work outside the interaction window on normal machines', () => {
+  it('restores messaging/connector channels early, keeps disk/login work outside the interaction window', () => {
     expect(classifyBootDevice(8, 16 * 1024 ** 3)).toMatchObject({
       tier: 'standard',
       heavyDiskOffsetMs: 30_000,
       postStartupOffsetMs: 90_000,
-      connectorBootstrapDelayMs: 45_000,
+      connectorBootstrapDelayMs: 8_000,
       loginCapabilitiesDelayMs: 55_000,
     });
   });
@@ -20,7 +20,7 @@ describe('boot device profile', () => {
       tier: 'low',
       heavyDiskOffsetMs: 30_000,
       postStartupOffsetMs: 90_000,
-      connectorBootstrapDelayMs: 45_000,
+      connectorBootstrapDelayMs: 8_000,
       loginCapabilitiesDelayMs: 55_000,
     });
   });

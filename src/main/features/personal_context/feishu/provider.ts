@@ -56,6 +56,9 @@ export function createFeishuProvider(client: FeishuApiClient, opts: FeishuProvid
         selected: refs,
         cursor: prev,
         applyResource: (resource) => opts.registry.upsert(ctx.uid, resource),
+        // 批量落盘：首次回填一次同步可能上百条资源，逐条 upsert 会 N 次全量读写
+        // registry.json；批量提交收敛为一次读 + 一次写。
+        applyResourceMany: (resources) => opts.registry.upsertMany(ctx.uid, resources),
       });
 
       // 同步成功才落水位；expectedPrev 防并发覆盖
