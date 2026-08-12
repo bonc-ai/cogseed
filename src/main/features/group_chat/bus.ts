@@ -5357,6 +5357,98 @@ export async function _buildActiveSharedTaskContextBlockForTest(
   return buildActiveSharedTaskContextBlock(uid, cid);
 }
 
+/** 一次注入多少条继承的认知。超出的不静默丢弃，块尾会写明省略了几条。 */
+const MAX_INHERITED_ASSETS_IN_PROMPT = 20;
+
+/**
+ * 把 Agent 出生时继承的认知资产注入它的运行时提示。
+ *
+ * 没有这一步，`agent_inheritance` 记的就只是一份没人读的档案：Agent 依然
+ * 只带着角色提示上场，被问到前序项目的判断只能瞎猜。
+ *
+ * 两条纪律，方向相反，都必须守：
+ *
+ * - **内容用冻结版本**。注入的是出生那一刻通过审阅的 statement 与版本号，
+ *   不是资产的当前文本。这样回执才说得清「当时用的是第几版」，
+ *   资产事后被编辑也不会让一个早已生成的 Agent 悄悄换了行为。
+ * - **撤销与暂停按当下判定**。冻结的是内容，不是授权。资产被撤销之后
+ *   必须立刻停止注入，否则「撤销」对已生成的 Agent 完全无效——
+ *   这是最容易漏、后果最重的一条。过期的能力包同理整份不注入。
+ */
+async function buildInheritedCognitionBlock(
+  uid: string,
+  agentId: string,
+): Promise<string> {
+  try {
+    const [{ readAgentInheritance }, { isPackExpired }, assetService] = await Promise.all([
+      import("../agent_inheritance"),
+      import("../p3394/capability-pack"),
+      import("../recall/asset-service"),
+    ]);
+
+    const inheritance = await readAgentInheritance(uid, agentId);
+    if (!inheritance) return "";
+    if (isPackExpired(inheritance.capabilityPack)) return "";
+
+    const usable: string[] = [];
+    let droppedByRevocation = 0;
+    for (const ref of inheritance.capabilityPack.assets) {
+      let current;
+      try {
+        current = await assetService.readAbilityAsset(uid, ref.assetId);
+      } catch {
+        // 资产已被删除：和撤销同等处理，不注入。
+        droppedByRevocation++;
+        continue;
+      }
+      if (current.status !== "active") {
+        droppedByRevocation++;
+        continue;
+      }
+      const conditions = [
+        ref.applicableWhen?.length ? `适用：${ref.applicableWhen.join("；")}` : "",
+        ref.forbiddenWhen?.length ? `禁用：${ref.forbiddenWhen.join("；")}` : "",
+      ].filter(Boolean).join(" / ");
+      usable.push(
+        `- [${ref.assetId} v${ref.version}] ${ref.statement}${conditions ? `\n  (${conditions})` : ""}`,
+      );
+    }
+
+    if (!usable.length) return "";
+    const shown = usable.slice(0, MAX_INHERITED_ASSETS_IN_PROMPT);
+    const omitted = usable.length - shown.length;
+
+    const notes = [
+      droppedByRevocation
+        ? `${droppedByRevocation} inherited item(s) withheld: revoked or paused since this agent was created.`
+        : "",
+      omitted ? `${omitted} further item(s) omitted for length.` : "",
+    ].filter(Boolean);
+
+    return `### Inherited cognition
+These judgments were carried over when you were created. Treat them as the
+user's established practice, not as suggestions. Respect every stated
+forbidden-condition. If one conflicts with the current task, say so instead of
+silently ignoring it.
+
+<inherited-cognition>
+${shown.join("\n")}
+</inherited-cognition>${notes.length ? `\n${notes.join(" ")}` : ""}`;
+  } catch (err) {
+    log.warn(
+      `inherited cognition prompt injection failed agent=${agentId}: ${(err as Error).message}`,
+    );
+    return "";
+  }
+}
+
+export async function _buildInheritedCognitionBlockForTest(
+  uid: string,
+  agentId: string,
+): Promise<string> {
+  return buildInheritedCognitionBlock(uid, agentId);
+}
+
 async function buildCommanderSystemPrompt(
   uid: string,
   cid: string,
@@ -5635,6 +5727,10 @@ async function buildAgentInGroupSystemPrompt(
       shared_task_context_block: await buildActiveSharedTaskContextBlock(
         uid,
         cid,
+      ),
+      inherited_cognition_block: await buildInheritedCognitionBlock(
+        uid,
+        agent.agent_id,
       ),
       working_dir: workingDir,
       output_format_hint: buildOutputFormatHint(agent.output_format),
