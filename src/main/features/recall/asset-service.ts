@@ -20,6 +20,7 @@ export interface AbilityAssetVersionRecord extends RecallJsonRecord {
     | 'title' | 'statement' | 'type' | 'scope' | 'evidenceRefs' | 'status' | 'maturity'
     | 'version' | 'learningSignal' | 'ontologyRefs'
     | 'relations' | 'derivedFrom' | 'applicableWhen' | 'forbiddenWhen'
+    | 'targetAgentIds' | 'sensitivity'
   >;
 }
 
@@ -41,6 +42,8 @@ export interface UpdateAbilityAssetInput {
   derivedFrom?: RecallAbilityAssetRecord['derivedFrom'];
   applicableWhen?: RecallAbilityAssetRecord['applicableWhen'];
   forbiddenWhen?: RecallAbilityAssetRecord['forbiddenWhen'];
+  targetAgentIds?: RecallAbilityAssetRecord['targetAgentIds'];
+  sensitivity?: RecallAbilityAssetRecord['sensitivity'];
   id?: never;
   ownerId?: never;
 }
@@ -97,6 +100,8 @@ function snapshot(asset: RecallAbilityAssetRecord): AbilityAssetVersionRecord['s
     ...(asset.derivedFrom ? { derivedFrom: asset.derivedFrom } : {}),
     ...(asset.applicableWhen ? { applicableWhen: asset.applicableWhen } : {}),
     ...(asset.forbiddenWhen ? { forbiddenWhen: asset.forbiddenWhen } : {}),
+    ...(asset.targetAgentIds ? { targetAgentIds: asset.targetAgentIds } : {}),
+    ...(asset.sensitivity ? { sensitivity: asset.sensitivity } : {}),
     status: asset.status,
     maturity: asset.maturity,
     version: asset.version,

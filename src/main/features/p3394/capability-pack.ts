@@ -33,6 +33,7 @@ export type PackExclusionReason =
   | 'revoked'
   | 'scope_mismatch'
   | 'forbidden_here'
+  | 'not_for_this_agent'
   | 'missing_evidence'
   | 'superseded'
   | 'user_excluded';
@@ -143,6 +144,7 @@ function excludeReasonFor(
   asset: RecallAbilityAssetRecord,
   userExcluded: Set<string>,
   situation: string[],
+  targetAgent: string,
 ): { reason: PackExclusionReason; detail?: string } | null {
   if (userExcluded.has(asset.id)) {
     return { reason: 'user_excluded', detail: '本次由你手动移除' };
@@ -155,6 +157,11 @@ function excludeReasonFor(
   }
   if (!asset.evidenceRefs.length) {
     return { reason: 'missing_evidence', detail: '缺少来源证据，不进能力包' };
+  }
+  // 限定了接收方就必须按它过滤，否则这个字段只是装饰。
+  // 缺失 = 不限定（放行）；空数组 = 谁都不给（拦死）——两者含义不同。
+  if (asset.targetAgentIds !== undefined && !asset.targetAgentIds.includes(targetAgent)) {
+    return { reason: 'not_for_this_agent', detail: '未授权给这个智能体' };
   }
   // forbiddenWhen 命中即排除。空数组只代表没写过禁用条件，不构成放行理由。
   if (asset.forbiddenWhen?.length && situation.length) {
@@ -217,7 +224,7 @@ export function buildCapabilityPack(input: BuildCapabilityPackInput): MinimumCap
   const excluded: PackExcludedAsset[] = [];
 
   for (const asset of [...input.assets].sort((a, b) => a.id.localeCompare(b.id))) {
-    const exclusion = excludeReasonFor(asset, userExcluded, situation);
+    const exclusion = excludeReasonFor(asset, userExcluded, situation, targetAgent);
     if (exclusion) {
       excluded.push({ assetId: asset.id, reason: exclusion.reason, ...(exclusion.detail ? { detail: exclusion.detail } : {}) });
       continue;

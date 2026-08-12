@@ -18,6 +18,7 @@ import {
   readAbilityAssetSemantics,
   type AbilityAssetRelation,
   type AbilityAssetSemantics,
+  type AbilityAssetSensitivity,
 } from './asset-semantics';
 import { initializeAbilityAsset } from './asset-service';
 import {
@@ -77,6 +78,10 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   applicableWhen?: string[];
   /** 什么场景下绝对不能用。空/缺失只代表没写过，不代表无限制。 */
   forbiddenWhen?: string[];
+  /** 限定接收方。缺失=不限定；空数组=谁都不给。 */
+  targetAgentIds?: string[];
+  /** L0/L1/L2。缺失=没分过级，不等于 L0。L3 被准入闸挡在候选之前，不会出现。 */
+  sensitivity?: AbilityAssetSensitivity;
   scope: string;
   status: 'active' | 'paused' | 'revoked';
   maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated';
