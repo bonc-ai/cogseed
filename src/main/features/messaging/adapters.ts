@@ -1137,7 +1137,10 @@ export class FeishuAdapter implements MessagingCardAdapter {
         },
       })
       : await this.client.im.v1.message.create({
-        params: { receive_id_type: 'chat_id' },
+        // Same recipient-type routing as the text path: proactive sends to
+        // the owner use open_id; ordinary replies default to chat_id. The
+        // type is trusted — it can only come from manager-provided context.
+        params: { receive_id_type: context?.recipientIdType === 'open_id' ? 'open_id' : 'chat_id' },
         data: {
           receive_id: chatId,
           msg_type: 'interactive',
