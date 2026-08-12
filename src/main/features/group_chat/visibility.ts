@@ -21,6 +21,7 @@ import { conversationLayout } from "../../util/project-layout";
 import { appendJsonlAtomic, readJsonl } from "../../storage";
 import { COMMANDER_ID, USER_ID } from "./state";
 import { createLogger } from "../../logger";
+import type { ProducedFileValidation } from "../produced_files";
 
 const log = createLogger("group_chat.visibility");
 
@@ -57,6 +58,8 @@ export interface ChatMessageReference {
    * active model turn and never persists that machine-specific path. */
   attachments?: Array<{ name: string; kind?: string }>;
   produced?: string[];
+  /** Host-verified result snapshot captured when the message is persisted. */
+  produced_results?: ProducedFileValidation[];
 }
 
 /** Stable source taxonomy for a user-visible failed assistant bubble. UI
