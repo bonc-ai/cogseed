@@ -51,5 +51,10 @@
       "detail": "缺少来源证据，不进能力包"
     }
   ],
-  "contentHash": "cc91b975e801da0d7dfe53d1e28cd49283ffa8143d765f6a3f489780fa0fa83f"
+  "fieldScope": [
+    "statement",
+    "provenance",
+    "conditions"
+  ],
+  "contentHash": "255f64c35d970bd13a40acfe4fc1feddc2e1fd8a54fafe3689997300835137c2"
 }

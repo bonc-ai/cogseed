@@ -59,6 +59,11 @@ export interface PackAssetRef {
   forbiddenWhen?: string[];
 }
 
+/** 这次投影带走了资产的哪些字段。PRD 0.6.6-1 要求引用声明里包含「字段范围」——
+ *  执行端据此知道自己拿到的是完整判断还是切片，用户也能看出外发了多少。
+ *  这里如实列出 PackAssetRef 实际承载的字段，不是一句「已最小化」的口号。 */
+export type PackFieldScope = 'statement' | 'conditions' | 'provenance';
+
 export interface MinimumCapabilityPack {
   packId: string;
   /** 这次任务要干什么——决定投影范围，也写进回执。 */
@@ -71,6 +76,12 @@ export interface MinimumCapabilityPack {
   expiresAt: string;
   assets: PackAssetRef[];
   excluded: PackExcludedAsset[];
+  /** 本次带走了资产的哪些字段。 */
+  fieldScope: PackFieldScope[];
+  /** 冻结时在用的 Main Skill Baseline（PRD 0.6.5-5 要求与资产版本一同锁定）。
+   *  只记 baseline_id：内容由 workbench 的 baseline 存储持有并自带漂移校验，
+   *  在这里复制一份只会多出一个会过期的副本。缺失表示本次没有绑定 baseline。 */
+  mainSkillBaselineId?: string;
   /** 覆盖上述所有字段的内容摘要，签发后不可变。 */
   contentHash: string;
 }
@@ -86,6 +97,8 @@ export interface BuildCapabilityPackInput {
   userExcludedAssetIds?: string[];
   /** 当前任务场景标签，用来比对 forbiddenWhen。留空表示不做场景过滤。 */
   situation?: string[];
+  /** 本次冻结绑定的 Main Skill Baseline id。 */
+  mainSkillBaselineId?: string;
 }
 
 function requireText(value: unknown, field: string, max: number): string {
@@ -128,16 +141,24 @@ function canonicalAssetRef(ref: PackAssetRef): string {
  *  故意不含 packId 与 frozenAt：同样一组资产在不同时刻发两次，内容 hash 相同，
  *  这样能识别出「重复投影」；要区分具体某一次用 packId。 */
 export function computePackContentHash(
-  pack: Pick<MinimumCapabilityPack, 'purpose' | 'targetAgent' | 'expiresAt' | 'assets' | 'excluded'>,
+  pack: Pick<
+    MinimumCapabilityPack,
+    'purpose' | 'targetAgent' | 'expiresAt' | 'assets' | 'excluded' | 'fieldScope' | 'mainSkillBaselineId'
+  >,
 ): string {
   const parts = [
     pack.purpose,
     pack.targetAgent,
     pack.expiresAt,
-    pack.assets.map(canonicalAssetRef).join(''),
-    pack.excluded.map((entry) => `${entry.assetId}${entry.reason}`).join(''),
+    pack.assets.map(canonicalAssetRef).join(''),
+    pack.excluded.map((entry) => `${entry.assetId}${entry.reason}`).join(''),
+    // 字段范围与 baseline 都决定执行端实际拿到什么，必须进 hash：
+    // 否则扩大了外发范围、或换了一份 baseline，contentHash 却不变，
+    // 完整性校验就成了摆设。
+    [...(pack.fieldScope ?? [])].sort().join(','),
+    pack.mainSkillBaselineId ?? '',
   ];
-  return sha256(parts.join(''));
+  return sha256(parts.join(''));
 }
 
 function excludeReasonFor(
@@ -240,7 +261,19 @@ export function buildCapabilityPack(input: BuildCapabilityPackInput): MinimumCap
     throw new Error('capability pack exceeds the maximum asset count');
   }
 
-  const body = { purpose, targetAgent, expiresAt, assets, excluded };
+  // 如实反映 PackAssetRef 实际带走了什么，而不是声明一个理想范围。
+  const fieldScope: PackFieldScope[] = ['statement', 'provenance'];
+  if (assets.some((ref) => ref.applicableWhen?.length || ref.forbiddenWhen?.length)) {
+    fieldScope.push('conditions');
+  }
+  const mainSkillBaselineId = input.mainSkillBaselineId === undefined
+    ? undefined
+    : requireText(input.mainSkillBaselineId, 'main skill baseline id', 160);
+
+  const body = {
+    purpose, targetAgent, expiresAt, assets, excluded, fieldScope,
+    ...(mainSkillBaselineId ? { mainSkillBaselineId } : {}),
+  };
   return { packId, frozenAt, ...body, contentHash: computePackContentHash(body) };
 }
 

@@ -245,3 +245,65 @@ describe('有效期判定', () => {
     expect(() => isPackExpired(fixedTestPack(), 'not-a-clock')).toThrow('clock reading');
   });
 });
+
+describe('字段范围与 Main Skill Baseline（PRD 0.6.6-1 / 0.6.5-5）', () => {
+  it('如实反映实际带走了哪些字段，而不是声明一个理想范围', () => {
+    const bare = buildCapabilityPack({
+      packId: 'pack-scope-bare', purpose: '无条件资产', targetAgent: 'workbuddy',
+      frozenAt: FROZEN_AT, expiresAt: EXPIRES_AT,
+      assets: [asset({ id: 'aa-plain' })],
+    });
+    expect(bare.fieldScope).toEqual(['statement', 'provenance']);
+
+    const withConditions = buildCapabilityPack({
+      packId: 'pack-scope-cond', purpose: '带条件资产', targetAgent: 'workbuddy',
+      frozenAt: FROZEN_AT, expiresAt: EXPIRES_AT,
+      assets: [asset({ id: 'aa-cond', applicableWhen: ['评审接口时'] })],
+    });
+    expect(withConditions.fieldScope).toContain('conditions');
+  });
+
+  it('字段范围变化必须改变 contentHash', () => {
+    // 否则扩大了外发范围而 hash 不变，完整性校验就漏掉了。
+    const a = buildCapabilityPack({
+      packId: 'pack-h1', purpose: '同一目的', targetAgent: 'workbuddy',
+      frozenAt: FROZEN_AT, expiresAt: EXPIRES_AT,
+      assets: [asset({ id: 'aa-x' })],
+    });
+    const b = buildCapabilityPack({
+      packId: 'pack-h2', purpose: '同一目的', targetAgent: 'workbuddy',
+      frozenAt: FROZEN_AT, expiresAt: EXPIRES_AT,
+      assets: [asset({ id: 'aa-x', applicableWhen: ['某场景'] })],
+    });
+    expect(b.fieldScope).not.toEqual(a.fieldScope);
+    expect(b.contentHash).not.toBe(a.contentHash);
+  });
+
+  it('绑定的 Main Skill Baseline 只记 id，且换 baseline 会改变 hash', () => {
+    const base = {
+      purpose: '锁定 baseline', targetAgent: 'workbuddy',
+      frozenAt: FROZEN_AT, expiresAt: EXPIRES_AT, assets: [asset({ id: 'aa-b' })],
+    };
+    const none = buildCapabilityPack({ ...base, packId: 'pack-b0' });
+    const one = buildCapabilityPack({ ...base, packId: 'pack-b1', mainSkillBaselineId: 'msb-001' });
+    const two = buildCapabilityPack({ ...base, packId: 'pack-b2', mainSkillBaselineId: 'msb-002' });
+
+    expect(none.mainSkillBaselineId).toBeUndefined();
+    expect(one.mainSkillBaselineId).toBe('msb-001');
+    // 只记 id，不复制 baseline 内容——内容由 workbench 的存储持有并自带漂移校验。
+    expect(JSON.stringify(one)).not.toContain('skill_ref');
+    expect(one.contentHash).not.toBe(none.contentHash);
+    expect(two.contentHash).not.toBe(one.contentHash);
+  });
+
+  it('完整性校验覆盖新字段：偷改字段范围会被抓到', () => {
+    const pack = buildCapabilityPack({
+      packId: 'pack-tamper-scope', purpose: '防篡改', targetAgent: 'workbuddy',
+      frozenAt: FROZEN_AT, expiresAt: EXPIRES_AT, assets: [asset({ id: 'aa-t' })],
+    });
+    expect(() => assertPackIntegrity({ ...pack, fieldScope: ['statement'] }))
+      .toThrow('content hash mismatch');
+    expect(() => assertPackIntegrity({ ...pack, mainSkillBaselineId: 'msb-injected' }))
+      .toThrow('content hash mismatch');
+  });
+});
