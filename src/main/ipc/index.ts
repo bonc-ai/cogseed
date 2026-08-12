@@ -110,7 +110,7 @@ import { invokeHandlers as connectorsHandlers } from './connectors';
 import { invokeHandlers as messagingHandlers } from './messaging';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as cognitionHandlers } from './cognition';
-import { safeId } from '../storage';
+import { genId12, safeId } from '../storage';
 import { createLogger, logFromRenderer } from '../logger';
 import {
   markConfirmationVisible as markDeleteConfirmationVisible,
@@ -1964,6 +1964,48 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   // 把本体抽取技能的产出搬进统一候选池。幂等：反复调不会重复建候选。
   // 认知区加载时顺带调一次，用户不必记得手动逐条导入。
+  // 能力包文件交接（接入方案 L0 档）。不依赖目标端是否支持自定义 MCP——
+  // 导出两份文件，用户自己放进对方项目里。
+  //
+  // 刻意不写 ContextReuseReceipt：导出只证明「交付了」，不证明「被用了」。
+  // 方案 4.1 写死了对外主张纪律，文件复制不构成跨 Agent 传递证明；
+  // 在这里记一笔会让履历页的「实际带入几次」凭空变大。
+  'recall.capabilityPack.export': async ({ purpose, targetAgent, targetDir, situation, expiresInHours } = {}, ctx) => {
+    if (typeof purpose !== 'string' || !purpose.trim()) throw new Error('invalid capability pack purpose');
+    if (typeof targetAgent !== 'string' || !targetAgent.trim()) throw new Error('invalid target agent');
+    if (typeof targetDir !== 'string' || !targetDir.trim()) throw new Error('invalid export directory');
+    if (situation !== undefined && (!Array.isArray(situation) || situation.some((tag) => typeof tag !== 'string'))) {
+      throw new Error('invalid situation tags');
+    }
+    const hours = expiresInHours === undefined ? 24 : Number(expiresInHours);
+    if (!Number.isFinite(hours) || hours <= 0 || hours > 24 * 30) throw new Error('invalid expiry window');
+
+    const [{ buildCapabilityPack }, { exportCapabilityPack }, assetService] = await Promise.all([
+      import('../features/p3394/capability-pack'),
+      import('../features/p3394/capability-pack-export'),
+      import('../features/recall/asset-service'),
+    ]);
+    const frozenAt = new Date();
+    const pack = buildCapabilityPack({
+      packId: `pack-${genId12()}`,
+      purpose,
+      targetAgent,
+      frozenAt: frozenAt.toISOString(),
+      expiresAt: new Date(frozenAt.getTime() + hours * 3_600_000).toISOString(),
+      assets: await assetService.listAbilityAssets(ctx.userId),
+      ...(situation ? { situation } : {}),
+    });
+    const files = await exportCapabilityPack(pack, targetDir);
+    return {
+      ok: true,
+      packId: pack.packId,
+      contentHash: pack.contentHash,
+      included: pack.assets.length,
+      excluded: pack.excluded.length,
+      ...files,
+    };
+  },
+
   'recall.candidates.syncOntology': async (_args, ctx) => {
     const { syncOntologyCandidatesIntoPool } = await import('../features/recall/ontology-candidate-bridge');
     return { ok: true, sync: await syncOntologyCandidatesIntoPool(ctx.userId) };
