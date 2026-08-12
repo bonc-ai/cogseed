@@ -158,14 +158,37 @@ function _initSkillsCognitionBindings() {
       if (actionName === 'versions') {
         _skillsCognitionState.assetHistoryById ||= {};
         _skillsCognitionState.visibleAssetHistoryId = assetId;
-        _skillsCognitionState.assetHistoryById[assetId] = { loading: true };
+        _skillsCognitionState.assetHistoryById[assetId] = { loading: true, usageLoading: true, usage: [] };
         renderSkillsCognitionAssets();
+        // Usage settles on its own so a usage-service outage cannot blank the
+        // version list — that would read as "这条从没被改过", which is a
+        // different and wrong claim.
+        window.cogseed.invoke('recall.usage.list', { assetId }).then((usageResult) => {
+          if (!usageResult?.ok) throw new Error(usageResult?.error || 'usage unavailable');
+          const entry = _skillsCognitionState.assetHistoryById[assetId];
+          if (!entry) return;
+          entry.usage = Array.isArray(usageResult.usage) ? usageResult.usage : [];
+          entry.usageLoading = false;
+        }).catch((error) => {
+          const entry = _skillsCognitionState.assetHistoryById[assetId];
+          if (!entry) return;
+          entry.usageError = (error && error.message) || String(error);
+          entry.usageLoading = false;
+        }).then(() => {
+          if (_skillsCognitionState.visibleAssetHistoryId === assetId) renderSkillsCognitionAssets();
+        });
+
         const result = await window.cogseed.invoke('recall.assets.versions', { assetId });
         if (!result?.ok) throw new Error(result?.error || 'recall asset versions failed');
+        const previous = _skillsCognitionState.assetHistoryById[assetId] || {};
         _skillsCognitionState.assetHistoryById[assetId] = {
           loading: false,
           versions: result.versions || [],
           audit: result.audit || [],
+          // Carry whatever the independent usage fetch has already produced.
+          usage: previous.usage || [],
+          usageLoading: previous.usageLoading !== false,
+          usageError: previous.usageError,
         };
         renderSkillsCognitionAssets();
         return;
@@ -524,6 +547,42 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
+    const exportBtn = event.target.closest('[data-capability-pack-export]');
+    if (exportBtn) {
+      if (exportBtn.dataset.busy === '1') return;
+      // 先让用户选目录再导——导出是把认知交到产品外面去，落点必须是用户自己指定的。
+      const picked = await window.cogseed.invoke('common.pickDirectory', {
+        title: _cognitionText('cognition.export_capability_pack_dir', '选择能力包导出位置'),
+      }).catch(() => null);
+      if (!picked || picked.cancelled || !picked.path) return;
+
+      const purpose = typeof uiPrompt === 'function'
+        ? await uiPrompt(_cognitionText('cognition.export_capability_pack_purpose', '这份能力包用来做什么？'))
+        : '';
+      if (!purpose) return;
+      const targetAgent = typeof uiPrompt === 'function'
+        ? await uiPrompt(_cognitionText('cognition.export_capability_pack_target', '交给哪个执行端？'))
+        : '';
+      if (!targetAgent) return;
+
+      exportBtn.dataset.busy = '1'; exportBtn.disabled = true;
+      try {
+        const result = await window.cogseed.invoke('recall.capabilityPack.export', {
+          purpose, targetAgent, targetDir: picked.path,
+        });
+        if (!result?.ok) throw new Error(result?.error || 'capability pack export failed');
+        // 如实报数：带了几条、扣了几条。只说「导出成功」用户无从判断这份包够不够。
+        if (typeof uiAlert === 'function') {
+          await uiAlert(_cognitionText('cognition.export_capability_pack_done', '已导出：带入 {included} 条，未带入 {excluded} 条。')
+            .replace('{included}', String(result.included))
+            .replace('{excluded}', String(result.excluded)));
+        }
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally { exportBtn.dataset.busy = '0'; exportBtn.disabled = false; }
+      return;
+    }
+
     const promoteAll = event.target.closest('[data-recall-candidate-promote-all]');
     if (promoteAll) {
       if (promoteAll.dataset.busy === '1' || _skillsCognitionState.writingRecallCandidateBatch) return;
@@ -588,7 +647,17 @@ function _initSkillsCognitionBindings() {
       try {
         let channel = actionName === 'promote' ? 'recall.candidates.promote' : actionName === 'reject' ? 'recall.candidates.reject' : actionName === 'defer' ? 'recall.candidates.defer' : actionName === 'resume' ? 'recall.candidates.resume' : '';
         let payload = { candidateId };
-        if (actionName === 'save-and-promote') {
+        if (actionName === 'route-ontology') {
+          // 统一候选池的本体出口。走 recall.candidates.route 而不是先 promote 再单独写本体：
+          // 那条通道在服务端是一个事务——本体落点非法时整条拒绝，不会留下
+          // 「资产建了但没落位」的半成品。
+          const card = recallAction.closest('[data-recall-candidate-id]');
+          const groupId = card?.querySelector('[data-recall-route-group]')?.value || '';
+          if (!groupId) throw new Error('pick an ontology group first');
+          channel = 'recall.candidates.route';
+          payload = { candidateId, ontology: { groupId } };
+        }
+        if (actionName === 'save-edit' || actionName === 'save-and-promote') {
           const card = recallAction.closest('[data-recall-candidate-id]');
           const candidate = (_skillsCognitionState.recallCandidates || []).find((item) => item.id === candidateId);
           if (!card || !candidate) throw new Error('recall candidate unavailable');

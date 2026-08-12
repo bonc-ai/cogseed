@@ -7,13 +7,21 @@ import { normalizeCognitionSourceRefs } from './source-service';
 import { appendRecallJsonlRecord, listRecallJsonlRecords, readRecallJsonRecord, updateRecallJsonRecord } from './store';
 import type { RecallJsonRecord } from './types';
 import { normalizeAbilityAssetOntologyRefs, type AbilityAssetOntologyRef } from './ontology-refs';
+import { readAbilityAssetSemantics } from './asset-semantics';
+import { assertNotForbiddenToPersist } from '../../util/cognition-sensitivity';
 import type { RecallAbilityAssetRecord } from './candidate-service';
 
 export interface AbilityAssetVersionRecord extends RecallJsonRecord {
   assetId: string;
   version: string;
   at: string;
-  snapshot: Pick<RecallAbilityAssetRecord, 'title' | 'statement' | 'type' | 'scope' | 'evidenceRefs' | 'status' | 'maturity' | 'version' | 'learningSignal' | 'ontologyRefs'>;
+  snapshot: Pick<
+    RecallAbilityAssetRecord,
+    | 'title' | 'statement' | 'type' | 'scope' | 'evidenceRefs' | 'status' | 'maturity'
+    | 'version' | 'learningSignal' | 'ontologyRefs'
+    | 'relations' | 'derivedFrom' | 'applicableWhen' | 'forbiddenWhen'
+    | 'targetAgentIds' | 'sensitivity'
+  >;
 }
 
 export interface AbilityAssetAuditRecord extends RecallJsonRecord {
@@ -30,6 +38,12 @@ export interface UpdateAbilityAssetInput {
   type?: RecallAbilityAssetRecord['type'];
   evidenceRefs?: RecallAbilityAssetRecord['evidenceRefs'];
   ontologyRefs?: RecallAbilityAssetRecord['ontologyRefs'];
+  relations?: RecallAbilityAssetRecord['relations'];
+  derivedFrom?: RecallAbilityAssetRecord['derivedFrom'];
+  applicableWhen?: RecallAbilityAssetRecord['applicableWhen'];
+  forbiddenWhen?: RecallAbilityAssetRecord['forbiddenWhen'];
+  targetAgentIds?: RecallAbilityAssetRecord['targetAgentIds'];
+  sensitivity?: RecallAbilityAssetRecord['sensitivity'];
   id?: never;
   ownerId?: never;
 }
@@ -48,7 +62,16 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   const evidenceRefs = normalizeCognitionSourceRefs(value.evidenceRefs);
   if (!evidenceRefs.length) throw new Error('malformed recall ability asset evidence');
   const ontologyRefs = value.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(value.ontologyRefs);
-  return { ...value, evidenceRefs, ...(ontologyRefs ? { ontologyRefs } : {}) } as RecallAbilityAssetRecord;
+  const semantics = readAbilityAssetSemantics(
+    value as Record<string, unknown>,
+    typeof value.id === 'string' ? value.id : undefined,
+  );
+  return {
+    ...value,
+    evidenceRefs,
+    ...(ontologyRefs ? { ontologyRefs } : {}),
+    ...semantics,
+  } as RecallAbilityAssetRecord;
 }
 
 function bounded(value: unknown, field: string, max: number): string {
@@ -73,6 +96,12 @@ function snapshot(asset: RecallAbilityAssetRecord): AbilityAssetVersionRecord['s
     evidenceRefs: asset.evidenceRefs,
     ...(asset.learningSignal ? { learningSignal: asset.learningSignal } : {}),
     ...(asset.ontologyRefs ? { ontologyRefs: asset.ontologyRefs } : {}),
+    ...(asset.relations ? { relations: asset.relations } : {}),
+    ...(asset.derivedFrom ? { derivedFrom: asset.derivedFrom } : {}),
+    ...(asset.applicableWhen ? { applicableWhen: asset.applicableWhen } : {}),
+    ...(asset.forbiddenWhen ? { forbiddenWhen: asset.forbiddenWhen } : {}),
+    ...(asset.targetAgentIds ? { targetAgentIds: asset.targetAgentIds } : {}),
+    ...(asset.sensitivity ? { sensitivity: asset.sensitivity } : {}),
     status: asset.status,
     maturity: asset.maturity,
     version: asset.version,
@@ -157,6 +186,10 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
   const ontologyRefs = input.ontologyRefs === undefined
     ? undefined
     : normalizeAbilityAssetOntologyRefs(input.ontologyRefs);
+  // 语义字段先于写事务校验，并把 assetId 传进去挡掉自指关系。
+  const semantics = readAbilityAssetSemantics(input as Record<string, unknown>, assetId);
+  // 纵深防御：候选入口已有 L3 闸，但资产可以被直接编辑，凭证能从这条路进来。
+  assertNotForbiddenToPersist([input.title, input.statement, input.scope]);
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
@@ -168,6 +201,7 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
       ...(input.type !== undefined ? { type: input.type } : {}),
       ...(evidenceRefs !== undefined ? { evidenceRefs } : {}),
       ...(ontologyRefs !== undefined ? { ontologyRefs } : {}),
+      ...semantics,
       version: nextVersion(current.version),
       updatedAt: new Date().toISOString(),
     };

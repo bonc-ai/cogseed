@@ -61,6 +61,7 @@ import * as personalOntologyTemplateFiles from '../features/personal_ontology_te
 import { getRoleTemplate } from '../features/role_templates';
 import type { GroupEvent } from '../features/group_chat/bus';
 import * as agents from '../features/agents';
+import * as agentInheritance from '../features/agent_inheritance';
 import * as autoTasks from '../features/auto_tasks';
 import { isAgentEnabled } from '../features/component_enabled';
 import * as skills from '../features/skills';
@@ -114,7 +115,7 @@ import { invokeHandlers as personalContextHandlers } from './personal-context';
 import { invokeHandlers as desktopWorkbenchHandlers } from './desktop-workbench';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as cognitionHandlers } from './cognition';
-import { safeId } from '../storage';
+import { genId12, safeId } from '../storage';
 import { createLogger, logFromRenderer } from '../logger';
 import {
   markConfirmationVisible as markDeleteConfirmationVisible,
@@ -2060,6 +2061,55 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, ...(await p3394.checkMigrationStatus(ctx.userId)) };
   },
 
+  // 把本体抽取技能的产出搬进统一候选池。幂等：反复调不会重复建候选。
+  // 认知区加载时顺带调一次，用户不必记得手动逐条导入。
+  // 能力包文件交接（接入方案 L0 档）。不依赖目标端是否支持自定义 MCP——
+  // 导出两份文件，用户自己放进对方项目里。
+  //
+  // 刻意不写 ContextReuseReceipt：导出只证明「交付了」，不证明「被用了」。
+  // 方案 4.1 写死了对外主张纪律，文件复制不构成跨 Agent 传递证明；
+  // 在这里记一笔会让履历页的「实际带入几次」凭空变大。
+  'recall.capabilityPack.export': async ({ purpose, targetAgent, targetDir, situation, expiresInHours } = {}, ctx) => {
+    if (typeof purpose !== 'string' || !purpose.trim()) throw new Error('invalid capability pack purpose');
+    if (typeof targetAgent !== 'string' || !targetAgent.trim()) throw new Error('invalid target agent');
+    if (typeof targetDir !== 'string' || !targetDir.trim()) throw new Error('invalid export directory');
+    if (situation !== undefined && (!Array.isArray(situation) || situation.some((tag) => typeof tag !== 'string'))) {
+      throw new Error('invalid situation tags');
+    }
+    const hours = expiresInHours === undefined ? 24 : Number(expiresInHours);
+    if (!Number.isFinite(hours) || hours <= 0 || hours > 24 * 30) throw new Error('invalid expiry window');
+
+    const [{ buildCapabilityPack }, { exportCapabilityPack }, assetService] = await Promise.all([
+      import('../features/p3394/capability-pack-delivery'),
+      import('../features/p3394/capability-pack-export'),
+      import('../features/recall/asset-service'),
+    ]);
+    const frozenAt = new Date();
+    const pack = buildCapabilityPack({
+      packId: `pack-${genId12()}`,
+      purpose,
+      targetAgent,
+      frozenAt: frozenAt.toISOString(),
+      expiresAt: new Date(frozenAt.getTime() + hours * 3_600_000).toISOString(),
+      assets: await assetService.listAbilityAssets(ctx.userId),
+      ...(situation ? { situation } : {}),
+    });
+    const files = await exportCapabilityPack(pack, targetDir);
+    return {
+      ok: true,
+      packId: pack.packId,
+      contentHash: pack.contentHash,
+      included: pack.assets.length,
+      excluded: pack.excluded.length,
+      ...files,
+    };
+  },
+
+  'recall.candidates.syncOntology': async (_args, ctx) => {
+    const { syncOntologyCandidatesIntoPool } = await import('../features/recall/ontology-candidate-bridge');
+    return { ok: true, sync: await syncOntologyCandidatesIntoPool(ctx.userId) };
+  },
+
   'recall.candidates.list': async (_args, ctx) => ({ ok: true, candidates: await recallCandidates.listRecallCandidates(ctx.userId) }),
 
   'recall.sources.list': async ({ kinds, conversationId, limit } = {}, ctx) => {
@@ -2262,19 +2312,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, candidate: await recallCandidates.readRecallCandidate(ctx.userId, candidateId) };
   },
 
-  'recall.candidates.save': async ({ judgment, summary, uncertainty, suggestedType, suggestedScope, sourceRefs } = {}, ctx) => {
+  'recall.candidates.save': async ({ judgment, summary, uncertainty, suggestedType, suggestedScope, sourceRefs, confidence } = {}, ctx) => {
     if (typeof judgment !== 'string' || judgment.length > 4_000) throw new Error('invalid recall candidate judgment');
     if (summary !== undefined && (typeof summary !== 'string' || summary.length > 1_000)) throw new Error('invalid recall candidate summary');
     if (uncertainty !== undefined && (typeof uncertainty !== 'string' || uncertainty.length > 1_000)) throw new Error('invalid recall candidate uncertainty');
     if (suggestedType !== 'personal' && suggestedType !== 'rule' && suggestedType !== 'template' && suggestedType !== 'skill_method') throw new Error('invalid recall candidate type');
     if (typeof suggestedScope !== 'string' || suggestedScope.length > 500) throw new Error('invalid recall candidate scope');
     if (!Array.isArray(sourceRefs) || sourceRefs.length > 100) throw new Error('invalid recall candidate source refs');
-    return { ok: true, candidate: await recallCandidates.saveRecallCandidate(ctx.userId, { judgment, ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, sourceRefs }) };
+    if (confidence !== undefined && (typeof confidence !== 'number' || !Number.isFinite(confidence) || confidence < 0 || confidence > 1)) throw new Error('invalid recall candidate confidence');
+    return { ok: true, candidate: await recallCandidates.saveRecallCandidate(ctx.userId, { judgment, ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, sourceRefs, ...(confidence !== undefined ? { confidence } : {}) }) };
   },
 
-  'recall.candidates.update': async ({ candidateId, judgment, summary, uncertainty, suggestedType, suggestedScope, sourceRefs } = {}, ctx) => {
+  'recall.candidates.update': async ({ candidateId, judgment, summary, uncertainty, suggestedType, suggestedScope, sourceRefs, confidence } = {}, ctx) => {
     if (!safeId(candidateId) || typeof judgment !== 'string' || judgment.length > 4_000 || (summary !== undefined && (typeof summary !== 'string' || summary.length > 1_000)) || (uncertainty !== undefined && (typeof uncertainty !== 'string' || uncertainty.length > 1_000)) || (suggestedType !== 'personal' && suggestedType !== 'rule' && suggestedType !== 'template' && suggestedType !== 'skill_method') || typeof suggestedScope !== 'string' || suggestedScope.length > 500 || !Array.isArray(sourceRefs) || sourceRefs.length > 100) throw new Error('invalid recall candidate update');
-    return { ok: true, candidate: await recallCandidates.updateRecallCandidate(ctx.userId, candidateId, { judgment, ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, sourceRefs }) };
+    if (confidence !== undefined && (typeof confidence !== 'number' || !Number.isFinite(confidence) || confidence < 0 || confidence > 1)) throw new Error('invalid recall candidate confidence');
+    return { ok: true, candidate: await recallCandidates.updateRecallCandidate(ctx.userId, candidateId, { judgment, ...(summary !== undefined ? { summary } : {}), ...(uncertainty !== undefined ? { uncertainty } : {}), suggestedType, suggestedScope, sourceRefs, ...(confidence !== undefined ? { confidence } : {}) }) };
   },
 
   'recall.candidates.defer': async ({ candidateId, note } = {}, ctx) => {
@@ -2297,6 +2349,38 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.candidates.promote': async ({ candidateId } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
     return { ok: true, ...(await recallCaptures.promoteRecallCaptureCandidate(ctx.userId, candidateId)) };
+  },
+
+  // 候选 → 资产的带本体落点路由。与 promote 的区别：这条同时把资产语句写回
+  // 个人本体的指定位置，所以 ontology 落点非法时整条拒绝，不做「资产建了但没落位」的半成品。
+  'recall.candidates.route': async ({ candidateId, ontology } = {}, ctx) => {
+    if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
+    if (ontology === undefined) {
+      return { ok: true, ...(await kstarKnowledgeRoute.routeConfirmedKstarCandidate(ctx.userId, candidateId)) };
+    }
+    if (!ontology || typeof ontology !== 'object' || Array.isArray(ontology)) throw new Error('invalid ontology route');
+    const { groupId, section, field } = ontology as Record<string, unknown>;
+    if (!safeId(groupId)) throw new Error('invalid ontology group id');
+    if (section !== undefined && (typeof section !== 'string' || !section.trim() || section.length > 200)) throw new Error('invalid ontology section');
+    if (field !== undefined && (typeof field !== 'string' || !field.trim() || field.length > 200)) throw new Error('invalid ontology field');
+    return {
+      ok: true,
+      ...(await kstarKnowledgeRoute.routeConfirmedKstarCandidate(ctx.userId, candidateId, {
+        ontology: {
+          groupId: groupId as string,
+          ...(section !== undefined ? { section: section as string } : {}),
+          ...(field !== undefined ? { field: field as string } : {}),
+        },
+      })),
+    };
+  },
+
+  // 「这条判断从哪来、走到了哪一段」。段状态区分 reached / not_reached：
+  // 还没进过能力包是「还没走到」，不是出错，渲染层不得当成红色错误。
+  'recall.assets.chain': async ({ assetId } = {}, ctx) => {
+    if (!safeId(assetId)) throw new Error('invalid recall asset id');
+    const { traceCognitionChainByAsset } = await import('../features/recall/cognition-chain');
+    return { ok: true, chain: await traceCognitionChainByAsset(ctx.userId, assetId) };
   },
 
   'recall.assets.list': async (_args, ctx) => ({ ok: true, assets: await recallAssets.listAbilityAssets(ctx.userId) }),
@@ -2745,6 +2829,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const agent = await agents.getAgent(agent_id);
     if (!agent) throw new Error('agent not found');
     return { agent };
+  },
+
+  // 「查看继承内容」入口。inheritance 为 null 表示这个 Agent 生成时还没有继承
+  // 机制，渲染层必须把它和「继承为空」分开说，不能都显示成没继承任何东西。
+  'agents.inheritance': async ({ agent_id } = {}, ctx) => {
+    if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
+    const inheritance = await agentInheritance.readAgentInheritance(ctx.userId, agent_id);
+    return { ok: true, inheritance };
   },
 
   'agents.create': async ({ name = '', description = '', description_zh, description_en, workflow = '', icon, color, runtime, category, output_format } = {}) => {

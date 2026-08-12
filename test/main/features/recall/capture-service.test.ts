@@ -438,6 +438,40 @@ describe('Recall conversation capture', () => {
     });
   });
 
+  it('re-snapshots instead of parking forever when the tail is a settled assistant message', async () => {
+    // 真机死锁回归：commander 会在 turn_end 之后继续追发消息，快照因此永远落后
+    // 一条。早先版本在这里转进 waiting_completion 并清空 scheduledFor，而该状态
+    // 只能靠新的会话完成事件解除——没有新对话就永远等下去，整台装机一条候选都
+    // 产不出来。尾部不是待回复的用户消息时，应把它纳入快照并重新计时。
+    const capture = await captureModule();
+    const waiting = await capture.queueRecallCaptureFromTerminal(completedEvent);
+    const store = await import('../../../../src/main/features/recall/store');
+    await store.updateRecallJsonRecord('capture-user', 'captures', waiting!.id, (current) => ({
+      ...current!,
+      scheduledFor: new Date(Date.now() - 1_000).toISOString(),
+    }));
+    mocks.getMessages.mockResolvedValue([...messages, {
+      id: 'commander-trailing',
+      ts: new Date().toISOString(),
+      from: 'commander',
+      to: ['user'],
+      text: 'One more note after the turn ended.',
+    }]);
+    const scheduledCall = mocks.scheduleBootBackground.mock.calls.find(([name]) => name === `recall:capture:${waiting!.id}`);
+
+    await scheduledCall![1](new AbortController().signal);
+
+    const rearmed = await capture.readRecallCapture('capture-user', waiting!.id);
+    // 关键：仍在 waiting_quiet 且重新排了期，而不是无限期驻留。
+    expect(rearmed.status).toBe('waiting_quiet');
+    expect(rearmed.scheduledFor).toBeTruthy();
+    expect(Date.parse(rearmed.scheduledFor!)).toBeGreaterThan(Date.now());
+    // 尾部消息已纳入快照，下次触发时快照与最新一致即可抽取。
+    expect(rearmed.messageIds.at(-1)).toBe('commander-trailing');
+    // 不从陈旧快照抽取的原意保持不变。
+    expect(mocks.runModel).not.toHaveBeenCalled();
+  });
+
   it('checks the visible message boundary when the quiet period expires', async () => {
     const capture = await captureModule();
     const waiting = await capture.queueRecallCaptureFromTerminal(completedEvent);

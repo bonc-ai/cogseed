@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
 import { genId12, safeId } from '../../storage';
+import { assertNotForbiddenToPersist } from '../../util/cognition-sensitivity';
 import { recallJsonRecordPath } from './paths';
 import {
   readRecallJsonRecord,
@@ -13,6 +14,12 @@ import {
 import type { RecallJsonRecord } from './types';
 import type { KstarLearningSignal } from '../kstar/types';
 import { normalizeAbilityAssetOntologyRefs, type AbilityAssetOntologyRef } from './ontology-refs';
+import {
+  readAbilityAssetSemantics,
+  type AbilityAssetRelation,
+  type AbilityAssetSemantics,
+  type AbilityAssetSensitivity,
+} from './asset-semantics';
 import { initializeAbilityAsset, listAbilityAssets } from './asset-service';
 import {
   cognitionSourceRefKey,
@@ -37,6 +44,17 @@ export interface RecallCandidateRecord extends RecallJsonRecord {
   sourceRefs: CognitionSourceRef[];
   learningSignal?: KstarLearningSignal;
   captureKey?: string;
+  /** 抽取时识别出的适用/禁用场景。缺失=没识别出来，不是无限制。
+   *  promote 时原样带进资产，这样自动链路产出的资产才有边界，
+   *  而不是只有手动 promote 时调用方传参才有。 */
+  applicableWhen?: string[];
+  forbiddenWhen?: string[];
+  /**
+   * Recognizer-supplied belief in this judgment, 0..1. Stays absent when the
+   * recognizer gives no score — a fabricated default would read as evidence of
+   * confidence the system does not have.
+   */
+  confidence?: number;
   promotedAssetId?: string;
   decisionNote?: string;
   promotionErrorCode?: 'asset_write_failed';
@@ -55,10 +73,30 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   evidenceRefs: CognitionSourceRef[];
   learningSignal?: KstarLearningSignal;
   ontologyRefs?: AbilityAssetOntologyRef[];
+  /** 与其它资产的关系。缺失=没记录过。 */
+  relations?: AbilityAssetRelation[];
+  /** 溯源链：这条资产从哪些既有资产长出来的。 */
+  derivedFrom?: string[];
+  /** 什么场景下该用这条资产。 */
+  applicableWhen?: string[];
+  /** 什么场景下绝对不能用。空/缺失只代表没写过，不代表无限制。 */
+  forbiddenWhen?: string[];
+  /** 限定接收方。缺失=不限定；空数组=谁都不给。 */
+  targetAgentIds?: string[];
+  /** L0/L1/L2。缺失=没分过级，不等于 L0。L3 被准入闸挡在候选之前，不会出现。 */
+  sensitivity?: AbilityAssetSensitivity;
   scope: string;
   status: 'active' | 'paused' | 'revoked';
   maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated';
   version: string;
+  /** Carried over from the promoted candidate; absent when it had none. */
+  confidence?: number;
+  /**
+   * Conversations this asset was learned from, derived from the candidate's
+   * conversation-kind source refs. Both fields are optional so records written
+   * before they existed still load.
+   */
+  sourceSessionIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -72,6 +110,37 @@ export interface SaveRecallCandidateInput {
   sourceRefs: unknown[];
   learningSignal?: KstarLearningSignal;
   captureKey?: string;
+  confidence?: number;
+  applicableWhen?: string[];
+  forbiddenWhen?: string[];
+}
+
+const MAX_SOURCE_SESSION_IDS = 50;
+
+/**
+ * Validate a recognizer confidence score.
+ *
+ * Absent stays absent. A present-but-unusable value throws rather than being
+ * coerced: silently rounding NaN or 1.5 into something plausible would put a
+ * number the recognizer never produced in front of the user.
+ */
+function optionalConfidence(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error('invalid confidence');
+  }
+  return Math.round(value * 100) / 100;
+}
+
+/** Conversations behind a candidate, in first-seen order and capped. */
+function sourceSessionIdsFrom(refs: CognitionSourceRef[]): string[] {
+  const ids: string[] = [];
+  for (const ref of refs) {
+    if (ref.kind !== 'conversation' || ids.includes(ref.id)) continue;
+    ids.push(ref.id);
+    if (ids.length >= MAX_SOURCE_SESSION_IDS) break;
+  }
+  return ids;
 }
 
 function boundedText(value: unknown, field: string, max: number, required = false): string | undefined {
@@ -136,7 +205,17 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   if (!evidenceRefs.length) throw new Error('malformed recall ability asset evidence');
   const learningSignal = normalizeLearningSignal(value.learningSignal);
   const ontologyRefs = value.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(value.ontologyRefs);
-  return { ...value, evidenceRefs, ...(learningSignal ? { learningSignal } : {}), ...(ontologyRefs ? { ontologyRefs } : {}) } as RecallAbilityAssetRecord;
+  const semantics = readAbilityAssetSemantics(
+    value as Record<string, unknown>,
+    typeof value.id === 'string' ? value.id : undefined,
+  );
+  return {
+    ...value,
+    evidenceRefs,
+    ...(learningSignal ? { learningSignal } : {}),
+    ...(ontologyRefs ? { ontologyRefs } : {}),
+    ...semantics,
+  } as RecallAbilityAssetRecord;
 }
 
 function candidateDirectory(userId: string): string {
@@ -197,7 +276,15 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
   const suggestedScope = boundedText(input.suggestedScope, 'suggested scope', 500, true)!;
   const sourceRefs = normalizeCognitionSourceRefsForWrite(input.sourceRefs);
   if (!sourceRefs.length) throw new Error('candidate evidence is required');
+  // L3 准入闸（规范 16.1）：密钥、口令、未脱敏凭证不得形成候选。
+  // 拦在这里而不是输出侧脱敏，是因为候选一旦长成资产，就会被冻进能力包、
+  // 注入 Agent 提示、写进回执、跨会话复用——后面每一环都在忠实搬运它。
+  // judgment 与 summary 一起过闸，否则把凭证写在 summary 里就能绕过去。
+  assertNotForbiddenToPersist([judgment, summary, uncertainty]);
   const learningSignal = normalizeLearningSignal(input.learningSignal);
+  // 复用资产语义字段的同一套规范化：去重、长度上限、大小写不敏感，
+  // 免得候选层和资产层各有一套约束、promote 时才发现对不上。
+  const candidateSemantics = readAbilityAssetSemantics(input as unknown as Record<string, unknown>);
   const captureKey = input.captureKey === undefined
     ? undefined
     : boundedText(input.captureKey, 'capture key', 160, true);
@@ -210,6 +297,7 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
   const existing = (await listRecallCandidates(userId)).find((candidate) => fingerprint(candidate) === fingerprint(candidateDraft));
   if (existing) return existing;
 
+  const confidence = optionalConfidence(input.confidence);
   const now = new Date().toISOString();
   const record: RecallCandidateRecord = {
     schemaVersion: 1,
@@ -225,6 +313,9 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
     sourceRefs,
     ...(learningSignal ? { learningSignal } : {}),
     ...(captureKey ? { captureKey } : {}),
+    ...(confidence !== undefined ? { confidence } : {}),
+    ...(candidateSemantics.applicableWhen ? { applicableWhen: candidateSemantics.applicableWhen } : {}),
+    ...(candidateSemantics.forbiddenWhen ? { forbiddenWhen: candidateSemantics.forbiddenWhen } : {}),
     createdAt: now,
     updatedAt: now,
   };
@@ -268,6 +359,8 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
   const uncertainty = boundedText(input.uncertainty, 'uncertainty', 1_000);
   const suggestedScope = boundedText(input.suggestedScope, 'suggested scope', 500, true)!;
   const suggestedType = requireAssetType(input.suggestedType);
+  const confidence = optionalConfidence(input.confidence);
+  // develop 已把写路径切到 ...ForWrite（比 dev/shiyuxuan 的 normalizeCognitionSourceRefs 新），保留新的。
   const sourceRefs = normalizeCognitionSourceRefsForWrite(input.sourceRefs);
   if (!sourceRefs.length) throw new Error('candidate evidence is required');
   const learningSignal = normalizeLearningSignal(input.learningSignal);
@@ -278,8 +371,19 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
     if (!raw) throw new Error('recall candidate not found');
     const current = asCandidate(raw);
     if (current.status === 'rejected' || current.status === 'promoted') throw new Error('recall candidate is terminal');
+    // An omitted confidence clears any previous score rather than keeping a
+    // stale one attached to a judgment that has since been edited.
+    // learningSignal 走的是相反的约定：不传就沿用旧值（它记的是评估结果，
+    // 不随判断文本编辑而失效），所以这里两种语义并存。
+    const {
+      confidence: _previousConfidence,
+      promotionErrorCode: _previousPromotionErrorCode,
+      promotionErrorMessage: _previousPromotionErrorMessage,
+      promotionFailedAt: _previousPromotionFailedAt,
+      ...rest
+    } = current;
     return {
-      ...current,
+      ...rest,
       judgment,
       ...(summary ? { summary } : {}),
       ...(uncertainty ? { uncertainty } : {}),
@@ -287,9 +391,7 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
       suggestedScope,
       sourceRefs,
       ...(learningSignal ? { learningSignal } : current.learningSignal ? { learningSignal: current.learningSignal } : {}),
-      promotionErrorCode: undefined,
-      promotionErrorMessage: undefined,
-      promotionFailedAt: undefined,
+      ...(confidence !== undefined ? { confidence } : {}),
       updatedAt: new Date().toISOString(),
     };
   });
@@ -311,9 +413,11 @@ export function rejectRecallCandidate(userId: string, candidateId: string, note?
 export async function promoteRecallCandidate(
   userId: string,
   candidateId: string,
-  options: { ontologyRefs?: AbilityAssetOntologyRef[] } = {},
+  options: { ontologyRefs?: AbilityAssetOntologyRef[] } & AbilityAssetSemantics = {},
 ): Promise<{ candidate: RecallCandidateRecord; asset: RecallAbilityAssetRecord }> {
   try {
+    // 语义字段在写盘前先校验，避免半写状态：候选已翻 promoted 但资产字段非法。
+    const optionSemantics = readAbilityAssetSemantics(options as Record<string, unknown>);
     const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, async (current) => {
       if (!current) throw new Error('recall candidate not found');
       const candidate = asCandidate(current);
@@ -334,6 +438,7 @@ export async function promoteRecallCandidate(
         };
       }
       const now = new Date().toISOString();
+      const sourceSessionIds = sourceSessionIdsFrom(candidate.sourceRefs);
       const asset: RecallAbilityAssetRecord = {
         schemaVersion: 1,
         ownerId: userId,
@@ -345,10 +450,18 @@ export async function promoteRecallCandidate(
         evidenceRefs: candidate.sourceRefs,
         ...(candidate.learningSignal ? { learningSignal: candidate.learningSignal } : {}),
         ...(options.ontologyRefs?.length ? { ontologyRefs: options.ontologyRefs } : {}),
+        // 候选自带的适用/禁用条件作为底，调用方显式传入的可覆盖。
+        // 此前只认 options，于是自动链路产出的资产永远没有边界——
+        // 只有手动 promote 且调用方主动传参时才有，等于形同虚设。
+        ...(candidate.applicableWhen ? { applicableWhen: candidate.applicableWhen } : {}),
+        ...(candidate.forbiddenWhen ? { forbiddenWhen: candidate.forbiddenWhen } : {}),
+        ...optionSemantics,
         scope: candidate.suggestedScope,
         status: 'active',
         maturity: 'seed',
         version: '1',
+        ...(candidate.confidence !== undefined ? { confidence: candidate.confidence } : {}),
+        ...(sourceSessionIds.length ? { sourceSessionIds } : {}),
         createdAt: now,
         updatedAt: now,
       };

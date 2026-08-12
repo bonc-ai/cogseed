@@ -7212,6 +7212,23 @@ body.model-not-configured .main-content { flex-direction: column; }
   background: rgba(22, 163, 74, 0.22);
   border-color: rgba(22, 163, 74, 0.65);
 }
+/* 「稍后调用」：与 chip 同色系但次一级，明确是第二动作而不是主动作。
+   主动作（点 chip 本体）是查看配置，这个是留在原地 @ 它。 */
+.chat-msg-created-agent-call {
+  margin-left: 2px;
+  padding: 1px 7px;
+  border: 1px solid rgba(22, 163, 74, 0.45);
+  border-radius: 7px;
+  background: transparent;
+  color: #14532d;
+  font-size: 11.5px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+.chat-msg-created-agent-call:hover {
+  background: rgba(22, 163, 74, 0.28);
+  border-color: rgba(22, 163, 74, 0.7);
+}
 .chat-msg-created-agent-icon { font-size: 13px; }
 .chat-msg-created-agent-label { font-weight: 500; }
 
@@ -18101,6 +18118,24 @@ body.model-not-configured .main-content { flex-direction: column; }
 #panel-personal-ontology .cognition-status-growing,
 #panel-personal-ontology .cognition-status-bright { background: var(--cog-green-soft); color: var(--cog-green); }
 #panel-personal-ontology .cognition-summary { margin: 17px 0; padding-bottom: 17px; border-bottom: 1px solid var(--cog-border); color: #435970; font-size: 14px; line-height: 1.7; }
+/* 认知履历与证据。默认层只有一行已发生事实，展开才看完整履历。
+   刻意不做成进度条／步骤条：未发生的段是「还没有」，不是欠了一步。 */
+#panel-personal-ontology .cognition-resume { margin: 14px 0; }
+#panel-personal-ontology .cognition-resume-box { border: 1px solid var(--cog-border); border-radius: 6px; background: #fbfdfc; }
+#panel-personal-ontology .cognition-resume-line { padding: 10px 12px; cursor: pointer; color: #435970; font-size: 13px; line-height: 1.6; list-style: none; }
+#panel-personal-ontology .cognition-resume-line::-webkit-details-marker { display: none; }
+#panel-personal-ontology .cognition-resume-line::before { content: '▸'; margin-right: 6px; color: #90a8bd; }
+#panel-personal-ontology .cognition-resume-box[open] .cognition-resume-line::before { content: '▾'; }
+#panel-personal-ontology .cognition-resume-body { padding: 4px 12px 12px; border-top: 1px solid var(--cog-border); }
+#panel-personal-ontology .cognition-resume-row { display: flex; gap: 10px; padding: 6px 0; font-size: 13px; line-height: 1.6; }
+#panel-personal-ontology .cognition-resume-key { flex: 0 0 56px; color: #7d93a8; }
+#panel-personal-ontology .cognition-resume-value { flex: 1 1 auto; color: #435970; }
+/* 未发生只是灰一点，不用告警色——它不是错误。 */
+#panel-personal-ontology .cognition-resume-row.is-not-yet .cognition-resume-value { color: #93a6b8; }
+#panel-personal-ontology .cognition-resume-withheld { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--cog-border); }
+#panel-personal-ontology .cognition-resume-dev { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--cog-border); }
+#panel-personal-ontology .cognition-resume-dev > summary { color: #93a6b8; font-size: 12px; cursor: pointer; }
+#panel-personal-ontology .cognition-resume-dev-body { padding-top: 6px; color: #7d93a8; font-family: var(--mono, monospace); font-size: 11.5px; line-height: 1.7; word-break: break-all; }
 #panel-personal-ontology .cognition-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 #panel-personal-ontology .cognition-metrics > div { border: 1px solid #e2eee7; border-radius: 5px; background: #f7faf8; padding: 10px; }
 #panel-personal-ontology .cognition-metrics strong,
@@ -19015,6 +19050,19 @@ body.model-not-configured .main-content { flex-direction: column; }
 .ability-assets-empty { padding: 36px 18px; color: var(--muted-fg, #6b7280); text-align: center; }
 .ability-assets-tree-note, .ability-assets-usage-note { padding: 14px; color: var(--muted-fg, #6b7280); }
 .ability-assets-tree-note strong, .ability-assets-usage-note strong { display: block; margin-bottom: 5px; color: var(--fg, #111827); }
+
+/* Version history and usage records in the asset detail body. */
+.asset-history-block { padding: 12px 14px; border-top: 1px solid var(--border, #e5e7eb); }
+.asset-history-block > strong { display: block; margin-bottom: 6px; color: var(--fg, #111827); }
+.asset-history-state { color: var(--muted-fg, #6b7280); margin: 0; }
+.asset-history-state.is-error { color: var(--danger-fg, #b91c1c); }
+.asset-history-list { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; }
+.asset-history-list li { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border-subtle, #f3f4f6); font-size: 12px; }
+.asset-history-list li:last-child { border-bottom: none; }
+.asset-history-version { font-weight: 600; color: var(--fg, #111827); }
+.asset-history-at, .asset-history-note, .asset-history-run { color: var(--muted-fg, #6b7280); }
+.asset-history-title { flex: 1 1 100%; color: var(--fg, #111827); }
+
 @media (max-width: 900px) { .ability-asset-summary-grid, .ability-assets-management { grid-template-columns: 1fr; } }
 
 .ability-assets-tree-page {

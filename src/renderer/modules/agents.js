@@ -1699,6 +1699,7 @@ function _renderAgentDetail(agent, editing) {
   // without entering edit mode. The header chip was removed because
   // it duplicated information the dropdown already exposes.
   _renderAgentDetailRuntime(agent);
+  _renderAgentDetailInheritance(agent);
   _renderAgentDetailProjectDir(agent);
   const localizedDesc = _agentSummary(agent, lang);
   descEl.textContent = localizedDesc;
@@ -1908,6 +1909,108 @@ function _renderAgentOutputFormatSection(agent, editing = false) {
  *
  *  Reuses `_aiSelectMount` (see CLAUDE.md "Reuse UI components") and
  *  persists each change via `agents.update({ runtime })`. */
+/**
+ * 「查看继承内容」——这个 Agent 出生时带走了什么。
+ *
+ * 三条展示纪律：
+ *
+ * 1. **没有记录 ≠ 继承为空**。老 Agent 生成时还没有继承机制，后端返回 null。
+ *    这时说「这个智能体创建时还没有继承记录」，不能显示成「继承了 0 条」——
+ *    后者是在对用户撒谎。
+ * 2. **只摆事实**。列出的是「3 条认知 · 5 个术语」这种用户自己能数的东西，
+ *    不出现「上下文完整」「继承良好」这类系统结论。
+ * 3. **排除项要露出来**。出生时被挡掉的资产带着原因一起显示，
+ *    否则最小投影就成了黑箱。
+ */
+async function _renderAgentDetailInheritance(agent) {
+  const section = document.getElementById('agents-detail-inheritance-section');
+  const slot = document.getElementById('agents-detail-inheritance');
+  if (!section || !slot) return;
+  slot.innerHTML = '';
+  section.style.display = 'none';
+  if (!agent?.agent_id) return;
+
+  let inheritance = null;
+  try {
+    const res = await apiFetch(`/api/agents/${encodeURIComponent(agent.agent_id)}/inheritance`);
+    inheritance = res?.inheritance || null;
+  } catch (err) {
+    // 读不到就不显示这一节，不用错误信息占据详情页。
+    return;
+  }
+
+  section.style.display = '';
+  if (!inheritance) {
+    // 关键区分：没有记录，不是继承为空。
+    const none = _agentLabel(
+      'agents.inheritance_absent',
+      '这个智能体创建时还没有继承记录。',
+      'This agent was created before inheritance was recorded.',
+      'このエージェントの作成時には継承記録がありませんでした。',
+    );
+    slot.innerHTML = `<div class="agents-detail-list-item"><span class="agents-detail-list-text">${escapeHtml(none)}</span></div>`;
+    return;
+  }
+
+  const pack = inheritance.capabilityPack || {};
+  const assets = Array.isArray(pack.assets) ? pack.assets : [];
+  const excluded = Array.isArray(pack.excluded) ? pack.excluded : [];
+  const glossary = Array.isArray(inheritance.glossary) ? inheritance.glossary : [];
+
+  const rows = [];
+  for (const ref of assets) {
+    const version = _agentLabel('agents.inheritance_version', '第 {v} 版', 'v{v}', 'v{v}')
+      .replace('{v}', String(ref.version ?? ''));
+    rows.push(`
+      <div class="agents-detail-list-item">
+        <span class="agents-detail-list-icon is-ability" aria-hidden="true">${_agentDetailListIconHtml('ability')}</span>
+        <span class="agents-detail-list-text">${escapeHtml(ref.statement || ref.title || '')} <em>${escapeHtml(version)}</em></span>
+      </div>`);
+  }
+  for (const entry of glossary) {
+    rows.push(`
+      <div class="agents-detail-list-item">
+        <span class="agents-detail-list-icon is-memory" aria-hidden="true">${_agentDetailListIconHtml('memory')}</span>
+        <span class="agents-detail-list-text">${escapeHtml(entry.term)}: ${escapeHtml(entry.definition)}</span>
+      </div>`);
+  }
+  // 被挡掉的也要看得见，带原因——最小投影不能是黑箱。
+  for (const entry of excluded) {
+    rows.push(`
+      <div class="agents-detail-list-item">
+        <span class="agents-detail-list-icon is-standard" aria-hidden="true">${_agentDetailListIconHtml('standard')}</span>
+        <span class="agents-detail-list-text">${escapeHtml(entry.assetId)} — ${escapeHtml(entry.detail || entry.reason || '')}</span>
+      </div>`);
+  }
+
+  if (!rows.length) {
+    const empty = _agentLabel(
+      'agents.inheritance_empty',
+      '创建时没有可继承的认知资产或术语。',
+      'Nothing was available to inherit at creation time.',
+      '作成時に継承できるものはありませんでした。',
+    );
+    slot.innerHTML = `<div class="agents-detail-list-item"><span class="agents-detail-list-text">${escapeHtml(empty)}</span></div>`;
+    return;
+  }
+
+  // 只报用户自己能数的事实，不下「继承良好」这类结论。
+  const summary = _agentLabel(
+    'agents.inheritance_summary',
+    '{a} 条认知 · {g} 个术语 · {x} 条未带入',
+    '{a} judgments · {g} terms · {x} withheld',
+    '{a} 件の判断 · {g} 件の用語 · {x} 件は除外',
+  ).replace('{a}', String(assets.length))
+    .replace('{g}', String(glossary.length))
+    .replace('{x}', String(excluded.length));
+
+  slot.innerHTML = `
+    <div class="agents-detail-list-item">
+      <span class="agents-detail-list-text"><strong>${escapeHtml(summary)}</strong></span>
+    </div>
+    ${rows.join('')}`;
+}
+
 async function _renderAgentDetailRuntime(agent) {
   const section = document.getElementById('agents-detail-runtime-section');
   const slot = document.getElementById('agents-detail-runtime');

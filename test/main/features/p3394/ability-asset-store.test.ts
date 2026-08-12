@@ -1,3 +1,7 @@
+// Covers the DEPRECATED p3394 ability-asset schema, not the live one.
+// `recall/candidate-service.ts::RecallAbilityAssetRecord` is the formal
+// runtime schema; these cases exist only to keep the deprecated module
+// honest until it is removed. Do not extend them with new behaviour.
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';

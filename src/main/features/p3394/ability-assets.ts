@@ -1,5 +1,42 @@
+/**
+ * DEPRECATED — superseded by `features/recall/`.
+ *
+ * `recall/candidate-service.ts::RecallAbilityAssetRecord` is the formal runtime
+ * schema for ability assets. It is what `recall.assets.list` returns and what
+ * asset-service, tree-service, context-projection, proof-service, and
+ * cognition/assets-adapter read and write. This module has no production
+ * caller: it is not re-exported from `p3394/index.ts` and is reachable only
+ * from tests.
+ *
+ * Every field here already has a recall-side equivalent, so there is nothing to
+ * migrate:
+ *
+ *   scope (object)     → RecallAbilityAssetRecord.scope (string), with the
+ *                        per-workspace bindings in recall/workspace-refs.ts
+ *   versions[]         → recall/asset-service.ts::listAbilityAssetVersions()
+ *   audit[]            → recall/asset-service.ts::listAbilityAssetAudit()
+ *   workspace_refs[]   → recall/workspace-refs.ts::WorkspaceAssetReference
+ *   recommended_action → recall/proof-service.ts::EffectivenessProofRecord
+ *                        .recommendedAction (four values; this one has two)
+ *   evidence_refs      → CognitionSourceRef via recall/source-service.ts
+ *
+ * Versions and audit stay independent records on purpose. Inlining them back
+ * into the asset record, the way this schema does, means double writes.
+ *
+ * Not deleted yet, deliberately. Two things still point at it:
+ *   1. `test/main/features/p3394/kstar-store.test.ts` uses this store as the
+ *      vehicle for a `withKstarUserLock` shared-lock regression.
+ *   2. The `<uid>/local/kstar/ability-assets.json` it used to write may still
+ *      exist for users who ran an older build. recall/ writes somewhere else
+ *      entirely (`<uid>/cloud/recall/records/ability-assets/`), so that file is
+ *      orphaned rather than conflicting.
+ *
+ * Remove once that test is re-pointed and the orphaned file has either a
+ * migration or an explicit decision to abandon it.
+ */
 import { safeId } from '../../storage';
 
+/** @deprecated Use `AbilityAssetType` from `features/recall/candidate-service`. */
 export type AbilityAssetType = 'personal' | 'rule' | 'template' | 'skill_method';
 export type AssetStatus = 'active' | 'paused' | 'revoked';
 export type AssetMaturity = 'seed' | 'transfer_validated' | 'effectiveness_validated';
@@ -14,6 +51,10 @@ export interface AbilityAssetScope {
   file_kinds?: string[];
 }
 
+/**
+ * @deprecated Use `RecallAbilityAssetRecord` from
+ * `features/recall/candidate-service`. See the file header for the field map.
+ */
 export interface AbilityAsset {
   id: string;
   source_candidate_id: string;

@@ -244,8 +244,18 @@ interface ParsedCandidate {
   uncertainty?: string;
   suggestedType: AbilityAssetType;
   suggestedScope: string;
+  /** 什么场景下该用这条判断。模型识别不出就缺失——缺失是诚实的，
+   *  逼它每条都填只会得到编造的条件。 */
+  applicableWhen?: string[];
+  /** 什么场景下不该用。空/缺失只代表没识别出来，不代表无限制。 */
+  forbiddenWhen?: string[];
   evidence: string[];
 }
+
+/** 抽取出的适用/禁用条件的条数与单条长度上限。这些条件会进能力包并注入
+ *  Agent 提示，放任模型写长文会挤掉真正的判断。 */
+const MAX_EXTRACTED_CONDITIONS = 6;
+const MAX_EXTRACTED_CONDITION_LENGTH = 200;
 
 class CaptureFailure extends Error {
   constructor(readonly code: string, message: string) {
@@ -475,6 +485,32 @@ export function selectCaptureMessages(
   });
 }
 
+/** 抽取出的适用/禁用条件。可选：模型识别不出就不写，绝不为了凑字段而编造。
+ *  条数与长度都设上限——这些条件会进能力包并注入 Agent 提示，
+ *  一条 500 字的「适用条件」是抽取失败，不是有用信息。 */
+function boundedConditionList(value: unknown, field: string): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) throw new CaptureFailure('invalid_model_output', `invalid ${field}`);
+  if (value.length > MAX_EXTRACTED_CONDITIONS) {
+    throw new CaptureFailure('invalid_model_output', `too many ${field} entries`);
+  }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    if (typeof raw !== 'string') throw new CaptureFailure('invalid_model_output', `invalid ${field}`);
+    const text = raw.replace(/\s+/g, ' ').trim();
+    if (!text) continue;
+    if (text.length > MAX_EXTRACTED_CONDITION_LENGTH) {
+      throw new CaptureFailure('invalid_model_output', `${field} entry is too long`);
+    }
+    const key = text.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(text);
+  }
+  return out.length ? out : undefined;
+}
+
 function boundedRequiredText(value: unknown, field: string, max: number): string {
   if (typeof value !== 'string') throw new CaptureFailure('invalid_model_output', `missing ${field}`);
   const text = value.replace(/\s+/g, ' ').trim();
@@ -519,12 +555,16 @@ export function parseRecallCaptureOutput(raw: string, validLabels: Set<string>):
     const uncertainty = candidate.uncertainty === undefined
       ? undefined
       : boundedRequiredText(candidate.uncertainty, 'uncertainty', 1_000);
+    const applicableWhen = boundedConditionList(candidate.applicableWhen, 'applicableWhen');
+    const forbiddenWhen = boundedConditionList(candidate.forbiddenWhen, 'forbiddenWhen');
     return {
       judgment: boundedRequiredText(candidate.judgment, 'judgment', 4_000),
       summary: boundedRequiredText(candidate.summary, 'summary', 1_000),
       ...(uncertainty ? { uncertainty } : {}),
       suggestedType: parseCandidateType(candidate.suggestedType),
       suggestedScope: boundedRequiredText(candidate.suggestedScope, 'suggestedScope', 500),
+      ...(applicableWhen ? { applicableWhen } : {}),
+      ...(forbiddenWhen ? { forbiddenWhen } : {}),
       evidence,
     };
   });
@@ -534,8 +574,11 @@ function extractionSystemPrompt(): string {
   return [
     'You extract durable, user-reviewable knowledge from one completed conversation run.',
     'Return exactly one JSON object and no markdown or commentary.',
-    'Schema: {"candidates":[{"judgment":"...","summary":"...","suggestedType":"personal|rule|template|skill_method","suggestedScope":"...","evidence":["m1"],"uncertainty":"optional"}]}',
+    'Schema: {"candidates":[{"judgment":"...","summary":"...","suggestedType":"personal|rule|template|skill_method","suggestedScope":"...","evidence":["m1"],"uncertainty":"optional","applicableWhen":["optional"],"forbiddenWhen":["optional"]}]}',
     'Return at most 3 candidates. Return {"candidates":[]} when nothing is durable enough.',
+    'applicableWhen and forbiddenWhen are optional lists of short concrete situations, at most 6 each.',
+    'Only include them when the conversation actually shows the boundary. Omit rather than guess: a fabricated limit is worse than none, because it is applied silently on later tasks.',
+    'forbiddenWhen is for situations where following this judgment would be wrong or harmful, not for restating the judgment in the negative.',
     'Only extract reusable preferences, constraints, decisions, templates, or methods supported by the supplied messages.',
     'Write candidate text in the same language as the conversation.',
     'Do not invent facts. Every candidate must cite at least one supplied message label.',
@@ -1188,6 +1231,8 @@ export async function runRecallCapture(
           ...(candidate.uncertainty ? { uncertainty: candidate.uncertainty } : {}),
           suggestedType: candidate.suggestedType,
           suggestedScope: candidate.suggestedScope,
+          ...(candidate.applicableWhen ? { applicableWhen: candidate.applicableWhen } : {}),
+          ...(candidate.forbiddenWhen ? { forbiddenWhen: candidate.forbiddenWhen } : {}),
           captureKey: `capture-${capture.id}-${index}`,
           sourceRefs: [
             { kind: 'conversation', subtype: 'session', scope: 'conversation', id: capture.conversationId, title: conversation.title },
@@ -1317,14 +1362,75 @@ async function activateScheduledCapture(userId: string, id: string): Promise<Rec
     }
 
     const capturedLastMessageId = stored.messageIds.at(-1);
-    if (!latestMessage || latestMessage.id !== capturedLastMessageId) {
+    if (!latestMessage) {
+      // 会话里一条可捕获消息都没有：没有快照可刷新，只能等新的完成事件。
       return updateCapture(userId, id, (current) => !['waiting_quiet', 'scheduled'].includes(current.status)
         ? current
         : {
             ...current,
             status: 'waiting_completion',
             scheduledFor: undefined,
-            ...(latestMessage && isIsoTimestamp(latestMessage.ts) ? { lastActivityAt: latestMessage.ts } : {}),
+            updatedAt: new Date().toISOString(),
+          });
+    }
+    // 尾部是用户刚发的消息：回复多半正在路上，从这里抽取会截到半轮对话。
+    // 这种情况保持原样等完成事件——`isQuiescent` 查的是总线有没有在跑，
+    // 拦不住「用户已发出、worker 还没起来」的空隙。
+    const latestIsPendingUserTurn = latestMessage.id !== capturedLastMessageId
+      && latestMessage.from === 'user';
+    if (latestIsPendingUserTurn) {
+      return updateCapture(userId, id, (current) => !['waiting_quiet', 'scheduled'].includes(current.status)
+        ? current
+        : {
+            ...current,
+            status: 'waiting_completion',
+            scheduledFor: undefined,
+            ...(isIsoTimestamp(latestMessage.ts) ? { lastActivityAt: latestMessage.ts } : {}),
+            updatedAt: new Date().toISOString(),
+          });
+    }
+    if (latestMessage.id !== capturedLastMessageId) {
+      // 走到这里 `isQuiescent` 已经通过，且尾部不是待回复的用户消息——
+      // 会话确实结束了，只是快照没跟上尾部消息。
+      //
+      // 早先版本在这里转进 `waiting_completion` 并清空 `scheduledFor`，那是个死锁：
+      // 该状态只能靠新的会话完成事件解除，而 commander 会在 `turn_end` 之后继续
+      // 追发消息，于是快照永远落后一条，定时一到必然退回等待，再也不会自己触发。
+      // 真机上这条捕获就是这样卡死的，导致整台装机一条候选都产不出来。
+      //
+      // 安静但快照落后，说明那几条尾巴属于同一段已经结束的对话。把它们纳入快照，
+      // 再给一个完整静默窗口：若真的结束了，下次触发时快照与最新一致即可抽取；
+      // 若用户又活跃起来，`isQuiescent` 会在下一轮把它挡回去。
+      // 仍然不从陈旧快照抽取，只是把「等一个可能永不到来的事件」换成「重新计时」。
+      let refreshed: GroupMessage[] = [];
+      try {
+        refreshed = (await chats.getMessages(userId, stored.conversationId, 2_000))
+          .filter(isCaptureMessage);
+      } catch {
+        refreshed = [];
+      }
+      if (!refreshed.length) {
+        return updateCapture(userId, id, (current) => !['waiting_quiet', 'scheduled'].includes(current.status)
+          ? current
+          : {
+              ...current,
+              scheduledFor: new Date(Date.now() + 60_000).toISOString(),
+              updatedAt: new Date().toISOString(),
+            });
+      }
+      // quietMinutes 在非 manual 策略下必然已写入记录；缺失时沿用本函数其它分支
+      // 用的 +60 秒保守回退，不去凭空发明一个默认值。
+      const nextScheduledFor = stored.quietMinutes === undefined
+        ? new Date(Date.now() + 60_000)
+        : quietScheduleAt(new Date(), stored.quietMinutes);
+      return updateCapture(userId, id, (current) => !['waiting_quiet', 'scheduled'].includes(current.status)
+        ? current
+        : {
+            ...current,
+            messageIds: refreshed.map((message) => message.id),
+            status: 'waiting_quiet',
+            scheduledFor: nextScheduledFor.toISOString(),
+            ...(isIsoTimestamp(latestMessage.ts) ? { lastActivityAt: latestMessage.ts } : {}),
             updatedAt: new Date().toISOString(),
           });
     }

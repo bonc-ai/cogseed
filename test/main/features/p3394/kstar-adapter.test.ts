@@ -17,6 +17,10 @@ import {
   KstarAdapter,
   type KstarAdapterConfig,
 } from '../../../../src/main/features/p3394/kstar-adapter';
+import {
+  writeKstarSnapshot,
+  readKstarSnapshot,
+} from '../../../../src/main/features/p3394/kstar-store';
 import type { McpConnection } from '../../../../src/main/features/connectors/mcp-client';
 
 describe('kstar-adapter', () => {
@@ -124,6 +128,107 @@ describe('kstar-adapter', () => {
 
       expect(adapter.isAvailable()).toBe(false);
       expect(adapter.getDegradedReason()).toContain('connection');
+    });
+
+    test('hydrates the Engine from the on-disk snapshot', async () => {
+      // A freshly spawned Engine holds no state. Without hydration the first
+      // evidence write would export a single-record snapshot over this history.
+      const onDisk = { schema_version: 1, generation: 7, evidence: [{ id: 'old-1' }] };
+      await writeKstarSnapshot(testUid, onDisk);
+
+      vi.mocked(mockConnection.callTool)
+        .mockResolvedValueOnce({
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                engine_version: '2.0.0',
+                protocol_version: '1.0',
+                capabilities: ['snapshot'],
+              }),
+            },
+          ],
+        })
+        .mockResolvedValueOnce({
+          content: [{ type: 'text', text: JSON.stringify({ success: true, generation: 7 }) }],
+        });
+
+      const adapter = new KstarAdapter({
+        userId: testUid,
+        connection: mockConnection,
+        minProtocolVersion: '1.0',
+      });
+      await adapter.initialize();
+
+      expect(mockConnection.callTool).toHaveBeenCalledWith(
+        'snapshot_import',
+        { snapshot: onDisk },
+        expect.any(Object),
+      );
+      expect(adapter.isAvailable()).toBe(true);
+    });
+
+    test('stays degraded when the Engine rejects the on-disk snapshot', async () => {
+      // Proceeding here would let later writes export partial state over a
+      // snapshot we could not load, destroying history.
+      await writeKstarSnapshot(testUid, { schema_version: 1, generation: 3, evidence: [] });
+
+      vi.mocked(mockConnection.callTool)
+        .mockResolvedValueOnce({
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                engine_version: '2.0.0',
+                protocol_version: '1.0',
+                capabilities: ['snapshot'],
+              }),
+            },
+          ],
+        })
+        .mockResolvedValueOnce({
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ success: false, error: 'snapshot_hash mismatch' }),
+            },
+          ],
+        });
+
+      const adapter = new KstarAdapter({
+        userId: testUid,
+        connection: mockConnection,
+        minProtocolVersion: '1.0',
+      });
+      await adapter.initialize();
+
+      expect(adapter.isAvailable()).toBe(false);
+      expect(adapter.getDegradedReason()).toContain('snapshot_hash mismatch');
+    });
+
+    test('skips hydration when the user has no snapshot yet', async () => {
+      vi.mocked(mockConnection.callTool).mockResolvedValue({
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              engine_version: '2.0.0',
+              protocol_version: '1.0',
+              capabilities: ['snapshot'],
+            }),
+          },
+        ],
+      });
+
+      const adapter = new KstarAdapter({
+        userId: testUid,
+        connection: mockConnection,
+        minProtocolVersion: '1.0',
+      });
+      await adapter.initialize();
+
+      expect(adapter.isAvailable()).toBe(true);
+      expect(mockConnection.callTool).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -343,6 +448,107 @@ describe('kstar-adapter', () => {
       const result = await adapter.recordEvidence(evidence);
 
       expect(result.deduplicated).toBe(true);
+    });
+
+    test('persists the snapshot the Engine returns', async () => {
+      // Engine state is in-memory only, so an unpersisted record is lost on
+      // the next Engine restart.
+      const engineSnapshot = {
+        schema_version: 1,
+        generation: 1,
+        evidence: [{ id: 'ev-001', type: 'tool_cycle' }],
+      };
+
+      vi.mocked(mockConnection.callTool)
+        .mockResolvedValueOnce({
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                engine_version: '2.0.0',
+                protocol_version: '1.0',
+                capabilities: ['evidence'],
+              }),
+            },
+          ],
+        })
+        .mockResolvedValueOnce({
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: true,
+                deduplicated: false,
+                snapshot: engineSnapshot,
+              }),
+            },
+          ],
+        });
+
+      const adapter = new KstarAdapter({
+        userId: testUid,
+        connection: mockConnection,
+        minProtocolVersion: '1.0',
+      });
+      await adapter.initialize();
+
+      const result = await adapter.recordEvidence({ id: 'ev-001', type: 'tool_cycle' });
+
+      expect(result.success).toBe(true);
+      expect(await readKstarSnapshot(testUid)).toEqual(engineSnapshot);
+    });
+
+    test('does not rewrite the snapshot for deduplicated evidence', async () => {
+      const existing = { schema_version: 1, generation: 4, evidence: [{ id: 'ev-001' }] };
+      await writeKstarSnapshot(testUid, existing);
+
+      vi.mocked(mockConnection.callTool)
+        .mockResolvedValueOnce({
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                engine_version: '2.0.0',
+                protocol_version: '1.0',
+                capabilities: ['evidence'],
+              }),
+            },
+          ],
+        })
+        .mockResolvedValueOnce({
+          content: [{ type: 'text', text: JSON.stringify({ success: true, generation: 4 }) }],
+        })
+        .mockResolvedValueOnce({
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: true,
+                deduplicated: true,
+                snapshot: { schema_version: 1, generation: 4, evidence: [{ id: 'ev-001' }] },
+              }),
+            },
+          ],
+        });
+
+      const adapter = new KstarAdapter({
+        userId: testUid,
+        connection: mockConnection,
+        minProtocolVersion: '1.0',
+      });
+      await adapter.initialize();
+
+      const result = await adapter.recordEvidence({ id: 'ev-001', type: 'tool_cycle' });
+
+      expect(result.deduplicated).toBe(true);
+      // The .previous backup only appears on a second write; its absence shows
+      // the deduplicated call did not touch disk.
+      const previousExists = await fs
+        .access(path.join(testRoot, testUid, 'local', 'kstar', 'snapshot.json.previous'))
+        .then(() => true)
+        .catch(() => false);
+      expect(previousExists).toBe(false);
+      expect(await readKstarSnapshot(testUid)).toEqual(existing);
     });
   });
 

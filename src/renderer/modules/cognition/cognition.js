@@ -14,6 +14,12 @@
   let pagination = { page: 1, pageSize: PAGE_SIZE, total: 0, totalPages: 0 };
 
   function el(id) { return document.getElementById(id); }
+  // pages.js 的同名函数在它自己的 IIFE 里取不到，这里保持同一套转义规则。
+  function escapeHtml(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
   function translate(key, fallback, vars) {
     if (typeof t === 'function') {
       const translated = t(key, vars);
@@ -536,7 +542,87 @@
     return true;
   }
 
+  /**
+   * 「这条认知的履历和证据」。
+   *
+   * **不是五步流程完成度。** 默认层只给一句已经发生过的事实摘要——没发生的段
+   * 不出现在摘要里，否则「0 次任务中带入」会读成欠了一步。展开后才按
+   * 形成 / 沉淀 / 继承 / 使用 / 证据 看完整履历，这时没发生的段如实写
+   * 「还没有…」，是陈述不是欠账。
+   *
+   * 用户层不出现 Capability Pack、ContextReuseReceipt 这类实现名，
+   * 它们只在末尾折叠的开发者详情里。
+   */
+  async function hydrateResume(page) {
+    const slots = page.querySelectorAll('[data-cognition-resume]');
+    for (const slot of slots) {
+      const assetId = slot.dataset.cognitionResume;
+      if (!assetId || slot.dataset.resumeLoaded === '1') continue;
+      slot.dataset.resumeLoaded = '1';
+
+      let chain = null;
+      try {
+        const response = await window.apiFetch(`/api/recall/assets/${encodeURIComponent(assetId)}/chain`);
+        const result = await response.json();
+        chain = result?.chain || null;
+      } catch (error) {
+        // 拿不到履历就不显示这一块，不用错误信息占位。
+        continue;
+      }
+      if (!chain || !Array.isArray(chain.segments)) continue;
+
+      const labels = {
+        formation: translate('cognition.resume.formation', '形成'),
+        settling: translate('cognition.resume.settling', '沉淀'),
+        inheritance: translate('cognition.resume.inheritance', '继承'),
+        use: translate('cognition.resume.use', '使用'),
+        evidence: translate('cognition.resume.evidence', '证据'),
+      };
+
+      // 摘要只列已经发生的段——这是「不暗示必须走满五段」的关键。
+      const happened = chain.segments.filter((s) => s.status === 'happened' && s.detail);
+      const summaryLine = happened.length
+        ? happened.map((s) => s.detail).join(' · ')
+        : translate('cognition.resume.fresh', '刚沉淀，还没有使用记录');
+
+      const rows = chain.segments.map((seg) => {
+        const label = labels[seg.stage] || seg.stage;
+        const cls = seg.status === 'happened' ? 'is-happened' : 'is-not-yet';
+        return `<div class="cognition-resume-row ${cls}">`
+          + `<span class="cognition-resume-key">${escapeHtml(label)}</span>`
+          + `<span class="cognition-resume-value">${escapeHtml(seg.detail || '')}</span>`
+          + '</div>';
+      }).join('');
+
+      // 未带入原因逐条列出——沉默比说错更伤信任。
+      const withheld = Array.isArray(chain.withheld) ? chain.withheld : [];
+      const withheldRows = withheld.length
+        ? `<div class="cognition-resume-withheld">${withheld.map((w) => (
+            `<div class="cognition-resume-row is-not-yet">`
+            + `<span class="cognition-resume-key">${escapeHtml(translate('cognition.resume.withheld_reason', '未带入'))}</span>`
+            + `<span class="cognition-resume-value">${escapeHtml(w.reason)}</span></div>`
+          )).join('')}</div>`
+        : '';
+
+      // 内部实现名只在这里露出，用户层不出现。
+      const devDetail = `<details class="cognition-resume-dev">`
+        + `<summary>${escapeHtml(translate('cognition.resume.dev', '开发者详情'))}</summary>`
+        + `<div class="cognition-resume-dev-body">`
+        + `<div>asset: ${escapeHtml(chain.assetId || '')} · v${escapeHtml(String(chain.assetVersion || ''))}</div>`
+        + (chain.candidateId ? `<div>candidate: ${escapeHtml(chain.candidateId)}</div>` : '')
+        + `<div>capability packs: ${escapeHtml((chain.carriedByAgentIds || []).join(', ') || '—')}</div>`
+        + `<div>context reuse receipts: ${escapeHtml(String(chain.usedInSessions || 0))}</div>`
+        + '</div></details>';
+
+      slot.innerHTML = `<details class="cognition-resume-box">`
+        + `<summary class="cognition-resume-line">${escapeHtml(summaryLine)}</summary>`
+        + `<div class="cognition-resume-body">${rows}${withheldRows}${devDetail}</div>`
+        + '</details>';
+    }
+  }
+
   function bind(page) {
+    void hydrateResume(page);
     page.querySelectorAll('[data-cognition-view]').forEach((button) => {
       button.addEventListener('click', () => {
         view = button.dataset.cognitionView || 'tree';

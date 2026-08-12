@@ -222,13 +222,41 @@ export async function confirmKstarReview(
   });
 }
 
+
+/** 本轮实际带入了哪些认知资产。
+ *
+ *  证据来源是 ContextReuseReceipt——注入发生时就写下了 `reusedRefs`，
+ *  且与 `execution-records` 的 `turn-<turnId>` 同名落在同一目录。Episode 只是
+ *  按自己的 executionId 把它取回来，不重新推断一遍：两处各自判断迟早会打架，
+ *  而回执是有 hash、能对账的那一份。
+ *
+ *  查不到回执就返回空——本轮确实没带入任何资产（比如该 Agent 没有出生继承，
+ *  或带上的全被撤销了）。空表示「没有」，不表示「没查」，所以不抛错也不 warn。 */
+async function resolveAbilityAssetRefs(
+  userId: string,
+  executionId: string | undefined,
+): Promise<string[]> {
+  if (!executionId) return [];
+  try {
+    const { readReceipt } = await import('../p3394/context-reuse-receipt');
+    const receipt = await readReceipt(userId, executionId);
+    return receipt.reusedRefs.filter((ref) => ref.startsWith('asset:'));
+  } catch {
+    return [];
+  }
+}
+
+// Runtime 侧不接：它没有 executionId，而且 Runtime worker 是隔离的，
+// 按 CLAUDE.md 连 cross_session_memory 都被 deferred，本来就不走继承注入——
+// 硬接一个查不到的 id 只会造出「查了但永远为空」的假象。
 export async function captureRuntimeKstarClosure(input: RuntimeKstarClosureInput): Promise<KstarClosureResult> {
   const episode = buildRuntimeKstarEpisode(input);
   return serializeClosure(closureLocks, `${input.userId}:${episode.id}`, () => finishClosure(input.userId, episode, input.bridge, input.inferReview));
 }
 
 export async function captureGroupKstarClosure(input: GroupKstarClosureInput): Promise<KstarClosureResult> {
-  const episode = buildGroupKstarEpisode(input);
+  const abilityAssetRefs = await resolveAbilityAssetRefs(input.userId, input.executionId);
+  const episode = buildGroupKstarEpisode({ ...input, abilityAssetRefs });
   const result = await serializeClosure(closureLocks, `${input.userId}:${episode.id}`, () => finishClosure(input.userId, episode, input.bridge, input.inferReview));
   try {
     const { attachKstarEpisodeToCurrentRequirement } = await import('./requirement-state');

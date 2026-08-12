@@ -59,6 +59,8 @@ const _IPC_ROUTES = [
   ['POST',   '/api/personalOntology/candidates/reject',       'personalOntology.candidates.reject'],
   ['POST',   '/api/personalOntology/candidates/confirmBatch', 'personalOntology.candidates.confirmBatch'],
   ['POST',   '/api/personalOntology/candidates/rejectBatch',  'personalOntology.candidates.rejectBatch'],
+  ['GET',    /^\/api\/agents\/([^/]+)\/inheritance$/, 'agents.inheritance', ['agent_id']],
+  ['GET',    /^\/api\/recall\/assets\/([^/]+)\/chain$/, 'recall.assets.chain', ['assetId']],
   ['GET',    '/api/cognition/assets/page',    'cognition.assets.page'],
   ['GET',    '/api/cognition/assets',         'cognition.assets.list'],
   ['POST',   '/api/cognition/assets',         'cognition.assets.create'],

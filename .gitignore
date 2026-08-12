@@ -44,6 +44,12 @@ package.json.new
 /.build
 /dist-dev
 
+# 误解压到仓库根的 Electron 运行时（修复 dist bundle 时踩过一次：
+# unzip 命令被终端折行截断，整包解到了这里并被 git add -A 收走）。
+/Electron.app/
+/LICENSES.chromium.html
+/version
+
 # Per-machine tool permissions. Plans under .claude/plans/ are shared
 # deliberately; this file is local state and would churn per developer.
 /.claude/settings.local.json
