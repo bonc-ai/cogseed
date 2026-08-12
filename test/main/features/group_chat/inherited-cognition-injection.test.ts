@@ -234,15 +234,10 @@ describe('出生上下文采集', () => {
   });
 });
 
-async function readReceiptFor(cid = CID) {
+async function readReceiptFor(turnId = 'test-turn') {
   const { readReceipt } = await import('../../../../src/main/features/p3394/context-reuse-receipt');
-  const crypto = await import('node:crypto');
-  const { readAgentInheritance } = await import('../../../../src/main/features/agent_inheritance');
-  const inheritance = await readAgentInheritance(UID, AGENT_ID);
-  const digest = crypto.createHash('sha256')
-    .update(`${cid}\n${AGENT_ID}\n${inheritance!.capabilityPack.contentHash}`)
-    .digest('hex').slice(0, 24);
-  return readReceipt(UID, `exec-inherit-${digest}`);
+  // 回执绑真实执行 id，与 execution-records 写的 turn-<turnId> 同名。
+  return readReceipt(UID, `turn-${turnId}`);
 }
 
 describe('注入即生成复用回执（链路最后一跳）', () => {

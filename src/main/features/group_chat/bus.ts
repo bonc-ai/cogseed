@@ -3698,6 +3698,7 @@ async function runActorTurnBody(
         interactive: false,
       },
       workingDir,
+      item.turnId,
     );
   } else {
     const agent = await agentsFeat.getAgent(actor.id);
@@ -3772,6 +3773,7 @@ async function runActorTurnBody(
         cid,
         agent,
         workingDir,
+        item.turnId,
       );
       // Runtime skills start from the agent-authored skill_list and append
       // agent-owned private/self-evolved skills. User-explicit picker choices
@@ -5366,32 +5368,31 @@ const MAX_INHERITED_GLOSSARY_IN_PROMPT = 30;
  * 记一张 ContextReuseReceipt：这份出生能力包被真实注入了哪个会话、带了哪几条、
  * 哪几条没带上。这是链路 `Asset → Capability Pack → Reuse` 的最后一跳。
  *
- * execution id 由 (cid, agentId, packHash) 推导而非每轮新生成：同一个包反复注入
- * 同一个会话是同一件事，按轮次刷回执会把「复用了一次认知」稀释成一堆噪音。
- * 因此第二轮起 `prepareReceipt` 抛「已存在」是预期结果，不是错误。
+ * execution id 用本轮真实的 `turn-<turnId>`，与 `execution-records` 写的执行记录
+ * 同名。早先版本自造了一个 `exec-inherit-<hash>` 合成 id 来做幂等，真机重启后
+ * 暴露出问题：回执落在一个没有 `record.json` 的目录里，执行记录扫描器每次启动
+ * 都反复 warn「skipping unreadable execution record」，而且语义上回执挂在了一次
+ * 不存在的执行上——回执本该是某次真实执行的凭证。
+ *
+ * 同一轮重试会撞上「已存在」，那是预期结果，不是错误。
  */
 async function recordInheritedCognitionReuse(
   uid: string,
   cid: string,
   agentId: string,
-  facts: { packHash: string; reusedRefs: string[]; omittedRefs: string[] },
+  turnId: string,
+  facts: { reusedRefs: string[]; omittedRefs: string[] },
 ): Promise<void> {
   try {
-    const [{ prepareReceipt }, { buildGmemberSessionId }, crypto] = await Promise.all([
+    const [{ prepareReceipt }, { buildGmemberSessionId }] = await Promise.all([
       import("../p3394/context-reuse-receipt"),
       import("./state"),
-      import("node:crypto"),
     ]);
     const targetSessionId = buildGmemberSessionId(cid, agentId);
-    const digest = crypto
-      .createHash("sha256")
-      .update(`${cid}\n${agentId}\n${facts.packHash}`)
-      .digest("hex")
-      .slice(0, 24);
     await prepareReceipt(
       uid,
       {
-        executionId: `exec-inherit-${digest}`,
+        executionId: `turn-${turnId}`,
         targetSessionId,
         reusedRefs: facts.reusedRefs,
         omittedRefs: facts.omittedRefs,
@@ -5431,6 +5432,7 @@ async function buildInheritedCognitionBlock(
   uid: string,
   cid: string,
   agentId: string,
+  turnId: string,
 ): Promise<string> {
   try {
     const [{ readAgentInheritance }, { isPackExpired }, assetService] = await Promise.all([
@@ -5491,8 +5493,7 @@ async function buildInheritedCognitionBlock(
       }
     }
 
-    await recordInheritedCognitionReuse(uid, cid, agentId, {
-      packHash: inheritance.capabilityPack.contentHash,
+    await recordInheritedCognitionReuse(uid, cid, agentId, turnId, {
       reusedRefs,
       omittedRefs,
     });
@@ -5525,8 +5526,9 @@ export async function _buildInheritedCognitionBlockForTest(
   uid: string,
   cid: string,
   agentId: string,
+  turnId = 'test-turn',
 ): Promise<string> {
-  return buildInheritedCognitionBlock(uid, cid, agentId);
+  return buildInheritedCognitionBlock(uid, cid, agentId, turnId);
 }
 
 async function buildCommanderSystemPrompt(
@@ -5771,6 +5773,7 @@ async function buildAgentInGroupSystemPrompt(
     profile?: unknown;
   },
   workingDir: string,
+  turnId: string,
 ): Promise<string> {
   const { prompts } = await import("../../prompts/loader");
   // Render the agent's declared inputs schema so the LLM knows when to
@@ -5812,6 +5815,7 @@ async function buildAgentInGroupSystemPrompt(
         uid,
         cid,
         agent.agent_id,
+        turnId,
       ),
       working_dir: workingDir,
       output_format_hint: buildOutputFormatHint(agent.output_format),
