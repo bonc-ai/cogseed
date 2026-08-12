@@ -2523,7 +2523,7 @@
   "chat.message_edit_failed": "Não foi possível atualizar a mensagem. A conversa foi recarregada a partir do histórico salvo.",
   "agents.manage": "Gerenciar",
   "agents.manage_tooltip": "Abrir a bancada de gerenciamento deste agente",
-  "settings.tab.messaging": "Plataformas de mensagens",
+  "settings.tab.messaging": "Touchpoints",
   "personalOntology.workspace_title": "Minha cognição",
   "personalOntology.workspace_subtitle": "Revise candidatos e acompanhe o crescimento da cognição aceita por evidências e reutilização.",
   "personalOntology.tab_candidates": "Revisão de candidatos",

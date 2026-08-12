@@ -2755,7 +2755,7 @@
   "chat.message_edit_failed": "消息更新失败，已从保存的历史记录重新加载会话。",
   "agents.manage": "管理",
   "agents.manage_tooltip": "打开此智能体的管理工作台",
-  "settings.tab.messaging": "消息平台",
+  "settings.tab.messaging": "触点",
   "expense_workbench.title": "报销智能体",
   "expense_workbench.back": "返回 Agent",
   "expense_workbench.kicker": "EXPENSE WORKBENCH",

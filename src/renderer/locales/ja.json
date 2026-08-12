@@ -2523,7 +2523,7 @@
   "chat.message_edit_failed": "メッセージを更新できませんでした。保存済みの履歴から会話を再読み込みしました。",
   "agents.manage": "管理",
   "agents.manage_tooltip": "このエージェントの管理ワークベンチを開く",
-  "settings.tab.messaging": "メッセージプラットフォーム",
+  "settings.tab.messaging": "Touchpoints",
   "personalOntology.workspace_title": "私の認知",
   "personalOntology.workspace_subtitle": "候補を審査した後、証拠と再利用履歴から認知の成長を確認します。",
   "personalOntology.tab_candidates": "候補の審査",

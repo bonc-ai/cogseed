@@ -2755,7 +2755,7 @@
   "chat.message_edit_failed": "The message could not be updated. The conversation was reloaded from saved history.",
   "agents.manage": "Manage",
   "agents.manage_tooltip": "Open this agent's management workbench",
-  "settings.tab.messaging": "Message Platforms",
+  "settings.tab.messaging": "Touchpoints",
   "expense_workbench.title": "Expense Workbench",
   "expense_workbench.back": "Back to Agent",
   "expense_workbench.kicker": "EXPENSE WORKBENCH",
