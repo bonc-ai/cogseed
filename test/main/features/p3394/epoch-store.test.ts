@@ -35,9 +35,22 @@ describe('P3394 EpochStore', () => {
     expect(await store.nextEpoch('u1', 'gconv-abc')).toBe(1);
     expect(await store.nextEpoch('u1', 'gconv-abc')).toBe(2);
     expect(await store.current('u1', 'gconv-abc')).toBe(2);
-    const p = path.join(root, 'u1', 'local', 'kstar', 'p3394-epochs.json');
+    const p = path.join(root, 'u1', 'local', 'p3394', 'p3394-epochs.json');
     const disk = JSON.parse(fs.readFileSync(p, 'utf8'));
     expect(disk['gconv-abc']).toBe(2);
+  });
+
+  it('migrates an existing receiver watermark from the retired local/kstar path', async () => {
+    const legacyDir = path.join(root, 'u1', 'local', 'kstar');
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(path.join(legacyDir, 'p3394-epochs.json'), JSON.stringify({ 'gconv-legacy': 7 }), 'utf8');
+
+    const { EpochStore } = await import('../../../../src/main/features/p3394/epoch-store');
+    const store = new EpochStore();
+
+    expect(await store.current('u1', 'gconv-legacy')).toBe(7);
+    expect(fs.existsSync(path.join(root, 'u1', 'local', 'p3394', 'p3394-epochs.json'))).toBe(true);
+    expect(fs.existsSync(path.join(legacyDir, 'p3394-epochs.json'))).toBe(false);
   });
 
   it('不同 session 各自独立', async () => {
@@ -55,7 +68,7 @@ describe('P3394 EpochStore', () => {
   });
 
   it('磁盘坏 JSON 不崩,current 返回 0', async () => {
-    const dir = path.join(root, 'u1', 'local', 'kstar');
+    const dir = path.join(root, 'u1', 'local', 'p3394');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'p3394-epochs.json'), 'not json{{{', 'utf8');
     const { EpochStore } = await import('../../../../src/main/features/p3394/epoch-store');
@@ -77,7 +90,7 @@ describe('P3394 EpochStore', () => {
     // 从 0 收到 incoming=5,水位应直接跳到 5,而非 +1 只到 1(否则同条 5 重放仍绕过)。
     expect(await store.admit('u1', 'gconv-a', 5)).toEqual({ replay: false, epoch: 5 });
     expect(await store.current('u1', 'gconv-a')).toBe(5);
-    const p = path.join(root, 'u1', 'local', 'kstar', 'p3394-epochs.json');
+    const p = path.join(root, 'u1', 'local', 'p3394', 'p3394-epochs.json');
     expect(JSON.parse(fs.readFileSync(p, 'utf8'))['gconv-a']).toBe(5);
   });
 

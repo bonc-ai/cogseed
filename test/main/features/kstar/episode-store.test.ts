@@ -8,7 +8,7 @@ let previousWorkspaceRoot: string | undefined;
 
 beforeEach(() => {
   vi.resetModules();
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-kstar-store-'));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-kstar-episode-'));
   previousWorkspaceRoot = process.env.ORKAS_WORKSPACE_ROOT;
   process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
 });

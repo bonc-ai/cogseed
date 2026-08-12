@@ -1,4 +1,4 @@
-export type CognitionCandidateSource = 'personal_ontology' | 'p3394_experience';
+export type CognitionCandidateSource = 'personal_ontology';
 export type CognitionCandidateType = 'preference' | 'ontology' | 'rule' | 'experience' | 'skill_evolution';
 export type CognitionCandidateStatus = 'pending' | 'accepted' | 'deferred' | 'rejected';
 

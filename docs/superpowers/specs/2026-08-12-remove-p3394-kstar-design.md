@@ -10,7 +10,7 @@ Delete the legacy P3394 KSTAR system end to end while preserving the current can
 
 Delete the legacy P3394 KSTAR implementation:
 
-- Engine adapter, factory, snapshots, pending-evidence replay, recovery, migration, and archive surfaces.
+- Engine adapter, factory, snapshots, pending-evidence replay, recovery, migration, archive surfaces, and the orphaned P3394 ability-asset store.
 - Compat run, Pass/Fail review, Experience Candidate, Knowledge Base promotion, and Notion sync.
 - Group Chat dual-write of tool/run/contribution evidence into the P3394 Engine adapter.
 - P3394 KSTAR boot initialization.
@@ -32,6 +32,8 @@ Keep:
 The generic wake path currently imports `KStarDecisionRecord` and `KStarExpectation` from `p3394/kstar-compat.ts`. These small decision/expectation contracts are not legacy engine storage or review records; move them to canonical KSTAR ownership under `features/kstar/dispatch-decision.ts` and update wake/group-chat imports.
 
 The canonical requirement/preload lifecycle remains the source of current KSTAR task state. This phase does not merge canonical Episode Review with Requirement PRM/AAR; it only removes the old P3394 implementation.
+
+The generic receiver/sender epoch watermarks are not KSTAR learning state. Their files move from the retired `<uid>/local/kstar/` namespace to `<uid>/local/p3394/`; when the new file is absent, the store performs a one-time atomic rename of the old watermark file so replay protection is preserved without continuing to write new runtime state under the KSTAR directory.
 
 ## Resulting runtime flow
 

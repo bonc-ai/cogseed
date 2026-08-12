@@ -15,28 +15,44 @@ const recallMock = vi.hoisted(() => ({
   rejectRecallCandidate: vi.fn(async (_uid: string, id: string, note?: string) => ({ id, note, status: 'rejected' })),
   promoteRecallCandidate: vi.fn(async (_uid: string, id: string) => ({ candidate: { id }, asset: { id: 'aa-a' } })),
 }));
-
 const assetMock = vi.hoisted(() => ({
-  updateAbilityAsset: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, ...input })),
+  listAbilityAssets: vi.fn(async () => []),
+  readAbilityAsset: vi.fn(async (_uid: string, id: string) => ({ id })),
+  updateAbilityAsset: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, ...input as object })),
   pauseAbilityAsset: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, status: 'paused', ...input as object })),
   resumeAbilityAsset: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, status: 'active', ...input as object })),
   revokeAbilityAsset: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, status: 'revoked', ...input as object })),
-  recommendAbilityAssetAction: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, ...input })),
+  recommendAbilityAssetAction: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, ...input as object })),
+  listAbilityAssetVersions: vi.fn(async (_uid: string, id: string) => [{ assetId: id, version: '1' }]),
+  listAbilityAssetAudit: vi.fn(async (_uid: string, id: string) => [{ assetId: id, action: 'created' }]),
 }));
 const sourceMock = vi.hoisted(() => ({
   COGNITION_CATALOG_KINDS: ['conversation', 'artifact_file', 'execution_evaluation', 'user_teaching_signal', 'authorized_external_system'],
   listCognitionSources: vi.fn(async () => [{ kind: 'conversation', status: 'empty', count: 0, items: [] }]),
+  pauseCognitionSource: vi.fn(async (_uid: string, kind: string, sourceId: string) => ({ kind, sourceId, availability: 'paused' })),
+  resumeCognitionSource: vi.fn(async (_uid: string, kind: string, sourceId: string) => ({ kind, sourceId, availability: 'active' })),
+  retryCognitionSource: vi.fn(async (_uid: string, kind: string, sourceId: string) => ({ kind, sourceId, availability: 'active' })),
+  reconnectCognitionSource: vi.fn(async (_uid: string, kind: string, sourceId: string) => ({ kind, sourceId, availability: 'active' })),
+  previewCognitionSourceRemoval: vi.fn(async () => ({ affectedAssetCount: 2, revocableAssetCount: 1 })),
+  removeCognitionSource: vi.fn(async (_uid: string, kind: string, sourceId: string, revokeAssets: boolean) => ({
+    control: { kind, sourceId, availability: 'removed' },
+    affectedAssetIds: ['aa-a', 'aa-b'],
+    revokedAssetIds: revokeAssets ? ['aa-a'] : [],
+    failedAssetIds: [],
+  })),
 }));
 const captureMock = vi.hoisted(() => ({
   listRecallCaptures: vi.fn(async () => []),
   queryRecallCaptures: vi.fn(async () => ({ captures: [], nextCursor: null, counts: { waiting: 0, processing: 0, review: 0, failed: 0, completed: 0, cancelled: 0 } })),
   readRecallCapture: vi.fn(async (_uid: string, id: string) => ({ id, status: 'queued' })),
+  readRecallCaptureWorkflow: vi.fn(async (_uid: string, id: string) => ({ id, status: 'review_ready', workflowStatus: 'completed' })),
   retryRecallCapture: vi.fn(async (_uid: string, id: string) => ({ id, status: 'queued' })),
   pauseRecallCapture: vi.fn(async (_uid: string, id: string) => ({ id, status: 'paused' })),
   resumeRecallCapture: vi.fn(async (_uid: string, id: string) => ({ id, status: 'queued' })),
   cancelRecallCapture: vi.fn(async (_uid: string, id: string) => ({ id, status: 'cancelled' })),
   runRecallCaptureNow: vi.fn(async (_uid: string, id: string) => ({ id, status: 'queued' })),
   queueManualRecallCaptureFromConversation: vi.fn(async (_uid: string, conversationId: string) => ({ id: 'rcap-manual', conversationId, status: 'waiting_manual' })),
+  promoteRecallCaptureCandidate: vi.fn(async (_uid: string, id: string) => ({ candidate: { id }, asset: { id: 'aa-a' } })),
 }));
 const captureSettingsMock = vi.hoisted(() => ({
   readRecallCaptureSettings: vi.fn(async (uid: string) => ({ id: 'settings', ownerId: uid, enabled: true, executionPolicy: 'smart', quietMinutes: 10, nightlyStart: '02:00', nightlyEnd: '06:00', catchUpMissed: true })),
@@ -56,15 +72,24 @@ const projectionMock = vi.hoisted(() => ({
   confirmContextProjection: vi.fn(async (_uid: string, id: string) => ({ id, status: 'confirmed' })),
   readContextProjection: vi.fn(async (_uid: string, id: string) => ({ id })),
 }));
-
-const groupChatMock = vi.hoisted(() => ({
-  sendCommanderMessage: vi.fn(async (input: unknown) => ({ msg: { id: 'msg-commander', ...(input as object) } })),
+const usageFeedbackMock = vi.hoisted(() => ({
+  recordRecallMessageFeedback: vi.fn(async (_uid: string, input: unknown) => ({
+    ...input as object,
+    citationCount: 1,
+    recordedCount: 1,
+    records: [],
+  })),
 }));
-const projectionMessageMock = vi.hoisted(() => ({
-  previewAndPostProjectionCardForNextTask: vi.fn(async (_uid: string, input: unknown, port: { send(input: { text: string; card: { projectionId: string } }): Promise<{ id: string }> }) => {
-    const msg = await port.send({ text: 'Found 1 reusable ability asset for conversation_task; omitted 0.', card: { projectionId: 'proj-next' } });
-    return { taskRunId: 'rt-next', projection: { id: 'proj-next' }, card: { projectionId: 'proj-next' }, msg };
-  }),
+const skillDraftMock = vi.hoisted(() => ({
+  prepareRecallSkillDraft: vi.fn(async (_uid: string, assetId: string) => ({
+    assetId,
+    draftHash: 'a'.repeat(64),
+    validation: { ok: true, target: 'level_a', label: 'level_a_structure', issues: [] },
+  })),
+  confirmRecallSkillDraft: vi.fn(async (_uid: string, assetId: string) => ({
+    draft: { assetId, status: 'installed' },
+    skill: { id: 'apply-recall-method', name: 'apply-recall-method' },
+  })),
 }));
 
 vi.mock('electron', () => ({
@@ -74,8 +99,6 @@ vi.mock('electron', () => ({
   dialog: { showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] })) },
   app: { getPath: vi.fn(() => os.tmpdir()), isPackaged: false },
 }));
-vi.mock('../../../src/main/features/group_chat', () => groupChatMock);
-vi.mock('../../../src/main/features/recall/projection-message', () => projectionMessageMock);
 vi.mock('../../../src/main/logger', () => ({ createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }), logFromRenderer: vi.fn() }));
 vi.mock('../../../src/main/features/recall/candidate-service', () => recallMock);
 vi.mock('../../../src/main/features/recall/asset-service', () => assetMock);
@@ -85,6 +108,8 @@ vi.mock('../../../src/main/features/recall/capture-settings', () => captureSetti
 vi.mock('../../../src/main/features/recall/recall-view-service', () => viewMock);
 vi.mock('../../../src/main/features/recall/teaching-service', () => teachingMock);
 vi.mock('../../../src/main/features/recall/context-projection', () => projectionMock);
+vi.mock('../../../src/main/features/recall/usage-feedback-service', () => usageFeedbackMock);
+vi.mock('../../../src/main/features/recall/skill-draft-service', () => skillDraftMock);
 
 beforeEach(async () => {
   process.env.ORKAS_WORKSPACE_ROOT = os.tmpdir();
@@ -98,53 +123,94 @@ afterEach(() => vi.resetModules());
 function call(channel: string, payload: unknown = {}) { if (!invokeHandler) throw new Error('missing handler'); return invokeHandler({ sender: trustedIpcSender() }, { channel, payload }); }
 
 describe('ipc › recall candidate governance', () => {
+  it('routes Recall memory pause, resume, removal, and version history', async () => {
+    await expect(call('recall.assets.pause', { assetId: 'aa-method', note: '暂时不用' }))
+      .resolves.toMatchObject({ ok: true, asset: { status: 'paused' } });
+    await expect(call('recall.assets.resume', { assetId: 'aa-method' }))
+      .resolves.toMatchObject({ ok: true, asset: { status: 'active' } });
+    await expect(call('recall.assets.revoke', { assetId: 'aa-method', note: '用户移除' }))
+      .resolves.toMatchObject({ ok: true, asset: { status: 'revoked' } });
+    await expect(call('recall.assets.versions', { assetId: 'aa-method' }))
+      .resolves.toMatchObject({ ok: true, versions: [{ version: '1' }], audit: [{ action: 'created' }] });
+
+    expect(assetMock.pauseAbilityAsset).toHaveBeenCalledWith(UID, 'aa-method', { actor: 'user', reason: '暂时不用' });
+    expect(assetMock.resumeAbilityAsset).toHaveBeenCalledWith(UID, 'aa-method', { actor: 'user', reason: 'user resume' });
+    expect(assetMock.revokeAbilityAsset).toHaveBeenCalledWith(UID, 'aa-method', { actor: 'user', reason: '用户移除' });
+    expect(assetMock.listAbilityAssetVersions).toHaveBeenCalledWith(UID, 'aa-method');
+    await expect(call('recall.assets.resume', { assetId: '../bad' })).resolves.toMatchObject({ ok: false });
+    expect(assetMock.resumeAbilityAsset).toHaveBeenCalledTimes(1);
+  });
+
   it('routes validated save and governance actions with the active uid', async () => {
     await expect(call('recall.candidates.save', { judgment: 'Use decision logs', suggestedType: 'rule', suggestedScope: 'architecture', sourceRefs: [{ kind: 'execution', id: 'exec-a' }] })).resolves.toMatchObject({ ok: true });
     expect(recallMock.saveRecallCandidate).toHaveBeenCalledWith(UID, expect.objectContaining({ judgment: 'Use decision logs', suggestedType: 'rule' }));
     await expect(call('recall.candidates.promote', { candidateId: 'cand-a' })).resolves.toMatchObject({ ok: true, asset: { id: 'aa-a' } });
-    expect(recallMock.promoteRecallCandidate).toHaveBeenCalledWith(UID, 'cand-a', { actor: 'user' });
+    expect(captureMock.promoteRecallCaptureCandidate).toHaveBeenCalledWith(UID, 'cand-a');
   });
 
-
-
-  it('routes validated ability asset governance with explicit user reason and structured scope policy', async () => {
+  it('routes structured ability asset governance and recommendations', async () => {
     await expect(call('recall.assets.update', {
-      assetId: 'aa-a',
-      statement: 'Keep a scoped decision log.',
-      scope: 'architecture-review',
-      scopePolicy: { purposeTags: ['architecture', 'review'], workspaceIds: ['workspace-a'] },
-      reason: 'Narrow the reusable rule.',
+      assetId: 'aa-method',
+      statement: 'Keep the reusable method scoped.',
+      scopePolicy: { purposeTags: ['review'], workspaceIds: ['workspace-a'] },
+      reason: 'Narrow the reuse boundary.',
       acknowledgeRecommendation: true,
-    })).resolves.toMatchObject({ ok: true, asset: { id: 'aa-a' } });
-    expect(assetMock.updateAbilityAsset).toHaveBeenCalledWith(UID, 'aa-a', expect.objectContaining({
-      statement: 'Keep a scoped decision log.',
-      scopePolicy: { purposeTags: ['architecture', 'review'], workspaceIds: ['workspace-a'] },
-      reason: 'Narrow the reusable rule.',
+    })).resolves.toMatchObject({ ok: true, asset: { id: 'aa-method' } });
+    expect(assetMock.updateAbilityAsset).toHaveBeenCalledWith(UID, 'aa-method', expect.objectContaining({
+      statement: 'Keep the reusable method scoped.',
+      scopePolicy: { purposeTags: ['review'], workspaceIds: ['workspace-a'] },
+      reason: 'Narrow the reuse boundary.',
       actor: 'user',
       acknowledgeRecommendation: true,
     }));
 
-    await expect(call('recall.assets.resume', { assetId: 'aa-a', note: 'verified again' })).resolves.toMatchObject({ ok: true, asset: { status: 'active' } });
-    expect(assetMock.resumeAbilityAsset).toHaveBeenCalledWith(UID, 'aa-a', { actor: 'user', reason: 'verified again' });
-
-    await expect(call('recall.assets.recommend', { assetId: 'aa-a', action: 'pause', reason: 'negative transfer' })).resolves.toMatchObject({ ok: true, asset: { action: 'pause' } });
-    expect(assetMock.recommendAbilityAssetAction).toHaveBeenCalledWith(UID, 'aa-a', { actor: 'system', action: 'pause', reason: 'negative transfer' });
+    await expect(call('recall.assets.recommend', { assetId: 'aa-method', action: 'rework', reason: 'Effectiveness regressed.' }))
+      .resolves.toMatchObject({ ok: true, asset: { action: 'rework' } });
+    expect(assetMock.recommendAbilityAssetAction).toHaveBeenCalledWith(UID, 'aa-method', {
+      actor: 'system', action: 'rework', reason: 'Effectiveness regressed.',
+    });
   });
 
-  it('rejects malformed ability asset governance payloads before feature calls', async () => {
-    await expect(call('recall.assets.update', { assetId: 'aa-a', statement: 'x', reason: '' })).resolves.toMatchObject({ ok: false });
-    await expect(call('recall.assets.resume', { assetId: '../bad', note: 'x' })).resolves.toMatchObject({ ok: false });
-    await expect(call('recall.assets.recommend', { assetId: 'aa-a', action: 'delete', reason: 'x' })).resolves.toMatchObject({ ok: false });
-    expect(assetMock.updateAbilityAsset).not.toHaveBeenCalled();
-    expect(assetMock.resumeAbilityAsset).not.toHaveBeenCalled();
-    expect(assetMock.recommendAbilityAssetAction).not.toHaveBeenCalled();
+  it('routes the two-step Recall skill draft flow and validates the confirmation hash', async () => {
+    await expect(call('recall.skills.prepare', { assetId: 'aa-method' }))
+      .resolves.toMatchObject({ ok: true, draft: { assetId: 'aa-method' } });
+    expect(skillDraftMock.prepareRecallSkillDraft).toHaveBeenCalledWith(UID, 'aa-method');
+
+    const draftHash = 'a'.repeat(64);
+    await expect(call('recall.skills.confirm', { assetId: 'aa-method', draftHash }))
+      .resolves.toMatchObject({ ok: true, skill: { id: 'apply-recall-method' } });
+    expect(skillDraftMock.confirmRecallSkillDraft).toHaveBeenCalledWith(UID, 'aa-method', draftHash);
+
+    await expect(call('recall.skills.prepare', { assetId: '../bad' })).resolves.toMatchObject({ ok: false });
+    await expect(call('recall.skills.confirm', { assetId: 'aa-method', draftHash: 'bad' })).resolves.toMatchObject({ ok: false });
+    expect(skillDraftMock.confirmRecallSkillDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes the retryable Recall skill generation state through IPC', async () => {
+    skillDraftMock.prepareRecallSkillDraft.mockResolvedValueOnce({
+      assetId: 'aa-method',
+      assetVersion: '1',
+      status: 'failed',
+      title: 'Review method',
+      scope: 'product',
+      attempt: 1,
+      errorCode: 'model_not_configured',
+      errorMessage: 'A usable model has not been configured.',
+      retryable: true,
+    });
+
+    await expect(call('recall.skills.prepare', { assetId: 'aa-method' })).resolves.toMatchObject({
+      ok: true,
+      draft: { status: 'failed', errorCode: 'model_not_configured', retryable: true },
+    });
+    expect(skillDraftMock.prepareRecallSkillDraft).toHaveBeenCalledWith(UID, 'aa-method');
   });
 
   it('rejects invalid ids, enums, oversized text, and missing source refs before feature calls', async () => {
     await expect(call('recall.candidates.save', { judgment: 'x', suggestedType: 'unknown', suggestedScope: 'a', sourceRefs: [] })).resolves.toMatchObject({ ok: false });
     await expect(call('recall.candidates.promote', { candidateId: '../bad' })).resolves.toMatchObject({ ok: false });
     await expect(call('recall.candidates.defer', { candidateId: 'cand-a', note: 'x'.repeat(1_001) })).resolves.toMatchObject({ ok: false });
-    expect(recallMock.promoteRecallCandidate).not.toHaveBeenCalled();
+    expect(captureMock.promoteRecallCaptureCandidate).not.toHaveBeenCalled();
   });
 
   it('routes validated source and capture requests through the active user boundary', async () => {
@@ -155,15 +221,34 @@ describe('ipc › recall candidate governance', () => {
       conversationId: 'conv-a',
       limit: 10,
     });
+    await expect(call('recall.sources.pause', { kind: 'conversation', sourceId: 'conv-a' }))
+      .resolves.toMatchObject({ ok: true, control: { availability: 'paused' } });
+    await expect(call('recall.sources.resume', { kind: 'conversation', sourceId: 'conv-a' }))
+      .resolves.toMatchObject({ ok: true, control: { availability: 'active' } });
+    await expect(call('recall.sources.retry', { kind: 'artifact_file', sourceId: 'ctx-a' }))
+      .resolves.toMatchObject({ ok: true });
+    await expect(call('recall.sources.reconnect', { kind: 'conversation', sourceId: 'conv-a' }))
+      .resolves.toMatchObject({ ok: true });
+    await expect(call('recall.sources.removeImpact', { kind: 'conversation', sourceId: 'conv-a' }))
+      .resolves.toMatchObject({ ok: true, impact: { affectedAssetCount: 2, revocableAssetCount: 1 } });
+    await expect(call('recall.sources.remove', { kind: 'conversation', sourceId: 'conv-a', revokeAssets: false }))
+      .resolves.toMatchObject({ ok: true, result: { revokedAssetIds: [] } });
+    expect(sourceMock.removeCognitionSource).toHaveBeenCalledWith(UID, 'conversation', 'conv-a', false);
 
     await expect(call('recall.captures.list', { limit: 5 }))
       .resolves.toMatchObject({ ok: true, captures: [] });
     expect(captureMock.queryRecallCaptures).toHaveBeenCalledWith(UID, { limit: 5 });
     await expect(call('recall.captures.list', { statuses: ['waiting_quiet', 'waiting_completion'], executionPolicy: 'smart' }))
       .resolves.toMatchObject({ ok: true, captures: [] });
+    await expect(call('recall.captures.list', { statuses: ['completed'] }))
+      .resolves.toMatchObject({ ok: true, captures: [] });
+    expect(captureMock.queryRecallCaptures).toHaveBeenCalledWith(UID, { statuses: ['completed'] });
+    await expect(call('recall.captures.list', { statuses: ['waiting', 'writing'] }))
+      .resolves.toMatchObject({ ok: true, captures: [] });
 
     await expect(call('recall.captures.read', { captureId: 'rcap-a' }))
-      .resolves.toMatchObject({ ok: true, capture: { id: 'rcap-a' } });
+      .resolves.toMatchObject({ ok: true, capture: { id: 'rcap-a', workflowStatus: 'completed' } });
+    expect(captureMock.readRecallCaptureWorkflow).toHaveBeenCalledWith(UID, 'rcap-a');
 
     await expect(call('recall.captures.retry', { captureId: 'rcap-a' }))
       .resolves.toMatchObject({ ok: true, capture: { status: 'queued' } });
@@ -204,36 +289,16 @@ describe('ipc › recall candidate governance', () => {
     expect(teachingMock.revokeUserTeachingSignal).toHaveBeenCalledWith(UID, 'teach-a');
   });
 
-
-
-  it('routes next-task reuse suggestions through the commander projection bridge', async () => {
-    await expect(call('recall.projections.previewAndPostForNextTask', {
-      cid: 'conv-a',
-      workspaceId: 'workspace-a',
-      purpose: 'conversation_task',
-      taskText: 'Next review task',
-      authorization: 'user_confirmed',
-    })).resolves.toMatchObject({ ok: true, taskRunId: 'rt-next', msg: { id: 'msg-commander' } });
-
-    expect(projectionMessageMock.previewAndPostProjectionCardForNextTask).toHaveBeenCalledWith(UID, expect.objectContaining({
-      cid: 'conv-a',
-      workspaceId: 'workspace-a',
-      purpose: 'conversation_task',
-      taskText: 'Next review task',
-      authorization: 'user_confirmed',
-    }), expect.objectContaining({ send: expect.any(Function) }));
-    expect(groupChatMock.sendCommanderMessage).toHaveBeenCalledWith(expect.objectContaining({
-      userId: UID,
-      cid: 'conv-a',
-      text: 'Found 1 reusable ability asset for conversation_task; omitted 0.',
-      recall_projection_card: { projectionId: 'proj-next' },
-    }));
-  });
-
   it('rejects malformed source and capture inputs before feature calls', async () => {
-    await expect(call('recall.sources.list', { kinds: ['legacy_patch'] }))
+    await expect(call('recall.sources.list', { kinds: ['obsolete_source_kind'] }))
       .resolves.toMatchObject({ ok: false });
     await expect(call('recall.sources.list', { conversationId: '../bad' }))
+      .resolves.toMatchObject({ ok: false });
+    await expect(call('recall.sources.pause', { kind: 'conversation', sourceId: '../bad' }))
+      .resolves.toMatchObject({ ok: false });
+    await expect(call('recall.sources.remove', { kind: 'conversation', sourceId: 'conv-a' }))
+      .resolves.toMatchObject({ ok: false });
+    await expect(call('recall.sources.retry', { kind: 'unknown', sourceId: 'conv-a' }))
       .resolves.toMatchObject({ ok: false });
     await expect(call('recall.captures.list', { limit: 101 }))
       .resolves.toMatchObject({ ok: false });
@@ -247,5 +312,29 @@ describe('ipc › recall candidate governance', () => {
       .resolves.toMatchObject({ ok: false });
     await expect(call('recall.projections.list', { status: 'unknown' }))
       .resolves.toMatchObject({ ok: false });
+  });
+
+  it('routes only validated Recall message feedback through the active user boundary', async () => {
+    await expect(call('recall.usage.feedback', {
+      cid: 'conv-a',
+      messageId: 'msg-a',
+      feedback: 'positive',
+    })).resolves.toMatchObject({
+      ok: true,
+      result: { feedback: 'positive', citationCount: 1 },
+    });
+    expect(usageFeedbackMock.recordRecallMessageFeedback).toHaveBeenCalledWith(UID, {
+      cid: 'conv-a',
+      messageId: 'msg-a',
+      feedback: 'positive',
+    });
+
+    await expect(call('recall.usage.feedback', {
+      cid: '../bad', messageId: 'msg-a', feedback: 'positive',
+    })).resolves.toMatchObject({ ok: false });
+    await expect(call('recall.usage.feedback', {
+      cid: 'conv-a', messageId: 'msg-a', feedback: 'neutral',
+    })).resolves.toMatchObject({ ok: false });
+    expect(usageFeedbackMock.recordRecallMessageFeedback).toHaveBeenCalledTimes(1);
   });
 });
