@@ -160,7 +160,7 @@ interface DashboardOverall {
 | 从未配置 | missing | missing | missing | off |
 | 已连机器人、未授权 | ok | missing | missing | attention |
 | 已连+已授权、未选资源 | ok | ok | missing | attention |
-| 授权令牌过期 | ok | broken | broken | attention |
+| 授权令牌过期 | ok | broken | missing | attention |
 | 全部就绪 | ok | ok | ok | ready |
 
 > 「已连接但未选资源」落入 `attention`（待办：选择资源），而非 `off` —— `off` 只表示用户尚未开始任何配置。
