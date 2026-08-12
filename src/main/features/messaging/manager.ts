@@ -11,7 +11,7 @@ import * as projects from '../projects';
 import * as wakeService from '../p3394/wake-service';
 import * as ontologyCandidates from '../personal_ontology_candidates';
 import * as touchpointLedger from '../touchpoints/ledger';
-import { buildResolvedTouchpointCard } from '../touchpoints/feishu/card';
+import { buildResolvedTouchpointCard, TOUCHPOINT_CARD_INPUT_ID } from '../touchpoints/feishu/card';
 import type { TouchpointActionKind } from '../touchpoints/types';
 import * as registry from './registry';
 import * as bindings from './bindings';
@@ -676,6 +676,9 @@ async function handleTouchpointCardAction(uid: string, action: CardActionEnvelop
   const kind = payloadText('kind');
   const occurredAt = payloadText('occurred_at');
   const signature = payloadText('signature');
+  // Free-text content from the card input field; trimmed, capped, and
+  // validated by the touchpoint receipt contract.
+  const content = payloadText(TOUCHPOINT_CARD_INPUT_ID);
   if (!intentId || !actionId || !envelopeUserId || !kind || !occurredAt || !signature) {
     return { accepted: false, duplicate: false, reason: 'invalid_card_action' };
   }
@@ -687,8 +690,9 @@ async function handleTouchpointCardAction(uid: string, action: CardActionEnvelop
       action: kind,
       occurredAt,
       signature,
+      ...(content ? { content } : {}),
     });
-    if (!outcome.duplicate) void finalizeTouchpointCard(uid, action, kind as TouchpointActionKind);
+    if (!outcome.duplicate) void finalizeTouchpointCard(uid, action, kind as TouchpointActionKind, content);
     return { accepted: true, duplicate: outcome.duplicate };
   } catch (error) {
     log.warn('touchpoint card action rejected', {
@@ -702,14 +706,15 @@ async function handleTouchpointCardAction(uid: string, action: CardActionEnvelop
 }
 
 /** Replaces a resolved touchpoint card with its terminal state so the same
- * buttons cannot be clicked twice (mirrors the wake approval finalize). */
-async function finalizeTouchpointCard(uid: string, action: CardActionEnvelope, kind: TouchpointActionKind): Promise<void> {
+ * buttons cannot be clicked twice (mirrors the wake approval finalize).
+ * Submitted content is echoed back on the resolved card. */
+async function finalizeTouchpointCard(uid: string, action: CardActionEnvelope, kind: TouchpointActionKind, content?: string): Promise<void> {
   const runtime = runtimes.get(uid)?.get(action.instanceId);
   if (!runtime || !isCurrentRuntime(uid, runtime)) return;
   const adapter = runtime.adapter;
   if (!isCardAdapter(adapter)) return;
   try {
-    await adapter.updateCard(action.externalMessageId, buildResolvedTouchpointCard(kind));
+    await adapter.updateCard(action.externalMessageId, buildResolvedTouchpointCard(kind, content));
   } catch (error) {
     log.warn('touchpoint card finalize failed', {
       instanceId: action.instanceId,

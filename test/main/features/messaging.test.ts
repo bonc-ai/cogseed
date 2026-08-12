@@ -1455,6 +1455,35 @@ describe('messaging manager adapter flow', () => {
       expect(duplicate).toMatchObject({ accepted: true, duplicate: true });
       expect(adapter.updateCard).toHaveBeenCalledTimes(1);
 
+      // 带填写内容的动作：content 落 ledger，终态卡片回显提交内容。
+      const withContent = await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'touchpoint-card-1',
+        externalChatId: 'oc_touchpoint',
+        externalUserId: 'user-1',
+        action: 'touchpoint',
+        payload: {
+          ...envelope,
+          action_id: 'action-2',
+          kind: 'reject',
+          occurred_at: occurredAt,
+          signature: signTouchpointAction('intent-1', 'user-1', 'reject', occurredAt),
+          tp_content: '不同意，请重新提交预算',
+        },
+        receivedAt: new Date().toISOString(),
+      });
+      expect(withContent).toMatchObject({ accepted: true, duplicate: false });
+      await vi.waitFor(() => expect(adapter.updateCard).toHaveBeenCalledTimes(2));
+      const ledgerAfter = await touchpointLedger.readTouchpointLedgerForTest('user-1');
+      expect(ledgerAfter.actions['action-2']).toMatchObject({
+        intentId: 'intent-1',
+        action: 'reject',
+        content: '不同意，请重新提交预算',
+      });
+      const resolvedCard = (adapter.updateCard as ReturnType<typeof vi.fn>).mock.calls[1][1] as Record<string, unknown>;
+      expect(JSON.stringify(resolvedCard)).toContain('不同意，请重新提交预算');
+
       // 缺信封字段的卡片动作被拒绝。
       const rejected = await manager.ingestCardAction('user-1', {
         platform: 'feishu_lark',
@@ -1821,6 +1850,27 @@ describe('feishu card action normalization', () => {
     });
     expect(action?.action).toBe('button');
     expect(action?.payload).toEqual({ wake_id: 'wake-2' });
+  });
+
+  it('merges input form values into the payload keyed by field id', async () => {
+    const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');
+    const action = _adapterTestHooks.normalizeFeishuCardAction(instance, {
+      context: { open_message_id: 'om_1', open_chat_id: 'oc_1' },
+      operator: { open_id: 'ou_admin' },
+      action: {
+        tag: 'button',
+        value: { action: 'touchpoint', intent_id: 'intent-1', kind: 'approve' },
+        form: { tp_content: '同意，但需补材料', tp_other: 3, tp_bad: { nested: true } },
+      },
+    });
+    expect(action?.payload).toMatchObject({
+      intent_id: 'intent-1',
+      kind: 'approve',
+      tp_content: '同意，但需补材料',
+      tp_other: 3,
+    });
+    // Non-primitive form entries are dropped like button values.
+    expect(action?.payload).not.toHaveProperty('tp_bad');
   });
 });
 

@@ -92,6 +92,18 @@ export interface TouchpointDomainEventInput {
 export interface TouchpointActionContract {
   version: 1;
   allowedActions: TouchpointActionKind[];
+  /** Optional free-text input rendered above the card buttons. The card wires
+   * it to the fixed field id `tp_content`; the submitted value travels back
+   * in the action envelope's `content` (e.g. an approval note or a new
+   * deadline). Omit for button-only receipts. */
+  input?: {
+    /** Short label shown above the input field. */
+    label: string;
+    /** Placeholder text inside the field. */
+    placeholder?: string;
+    /** Block submission until the field is filled (Feishu validates). */
+    required?: boolean;
+  };
 }
 
 export interface TouchpointIntent {
@@ -137,6 +149,8 @@ export interface TouchpointActionEnvelopeInput {
   action: string;
   occurredAt: string;
   signature: string;
+  /** Free-text content submitted with the action (card input field). */
+  content?: string;
 }
 
 export interface TouchpointActionEnvelope {
@@ -147,6 +161,8 @@ export interface TouchpointActionEnvelope {
   action: TouchpointActionKind;
   occurredAt: string;
   signature: string;
+  /** Free-text content submitted with the action (card input field). */
+  content?: string;
 }
 
 export interface TouchpointActionRecord {
@@ -158,6 +174,8 @@ export interface TouchpointActionRecord {
   occurredAt: string;
   signatureHash: string;
   consumedAt: string;
+  /** Free-text content submitted with the action (card input field). */
+  content?: string;
 }
 
 export interface TouchpointLedgerFile {

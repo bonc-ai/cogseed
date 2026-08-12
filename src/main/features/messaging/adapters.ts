@@ -342,7 +342,13 @@ interface FeishuCardActionEvent {
   open_message_id?: string;
   open_chat_id?: string;
   operator?: { open_id?: string; user_id?: string; name?: string };
-  action?: { tag?: string; value?: Record<string, unknown> };
+  action?: {
+    tag?: string;
+    value?: Record<string, unknown>;
+    /** Input values of the card's input fields, keyed by input `name`
+     * (Feishu attaches this whenever the card contains an input element). */
+    form?: Record<string, unknown>;
+  };
 }
 
 function normalizeFeishuCardAction(
@@ -361,6 +367,15 @@ function normalizeFeishuCardAction(
   const payload: Record<string, JsonCompatibleValue> = {};
   for (const [key, entry] of Object.entries(value)) {
     if (key === 'action') continue;
+    if (entry === null || typeof entry === 'string' || typeof entry === 'number' || typeof entry === 'boolean') {
+      payload[key] = entry as JsonCompatibleValue;
+    }
+  }
+  // Input values ride alongside the button value, keyed by the input `name`.
+  // Same primitive-only filter; card-defined fields (e.g. `tp_content`) are
+  // forwarded to the action handler verbatim.
+  const form = event.action?.form && typeof event.action.form === 'object' ? event.action.form : {};
+  for (const [key, entry] of Object.entries(form)) {
     if (entry === null || typeof entry === 'string' || typeof entry === 'number' || typeof entry === 'boolean') {
       payload[key] = entry as JsonCompatibleValue;
     }

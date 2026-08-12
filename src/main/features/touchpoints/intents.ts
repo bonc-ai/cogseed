@@ -26,6 +26,12 @@ const TEMPLATE_SET = new Set<string>(TOUCHPOINT_TEMPLATES);
 const PRIORITY_SET = new Set<string>(TOUCHPOINT_PRIORITIES);
 const ACTION_SET = new Set<string>(TOUCHPOINT_ACTION_KINDS);
 
+/** Cap for free-text action content (card input field). */
+const MAX_ACTION_CONTENT_LENGTH = 2_000;
+/** Control characters rejected inside action content: line structure (\n \r
+ * \t) is fine, everything else below space is not. */
+const ACTION_CONTENT_INVALID_RE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+
 const EVENT_TEMPLATE_MAP: Readonly<Record<TouchpointDomainEvent['kind'], readonly TouchpointTemplate[]>> = {
   'briefing.ready': ['daily_briefing'],
   'ontology.confirmation_required': ['ontology_confirmation'],
@@ -68,7 +74,29 @@ function normalizeActionContract(
   if (!allowedActions.length) {
     throw new TouchpointContractError('invalid_action_contract', 'Touchpoint action contract has no actions.', 'actionContract.allowedActions');
   }
-  return { version: 1, allowedActions };
+  let normalizedInput: TouchpointActionContract['input'];
+  if (contract.input !== undefined) {
+    if (!contract.input || typeof contract.input !== 'object') {
+      throw new TouchpointContractError('invalid_action_contract', 'Touchpoint action contract input is invalid.', 'actionContract.input');
+    }
+    const label = typeof contract.input.label === 'string' ? contract.input.label.trim() : '';
+    if (!label || label.length > 120) {
+      throw new TouchpointContractError('invalid_action_contract', 'Touchpoint action contract input label is invalid.', 'actionContract.input.label');
+    }
+    const placeholder = typeof contract.input.placeholder === 'string' && contract.input.placeholder.trim()
+      ? contract.input.placeholder.trim().slice(0, 120)
+      : undefined;
+    normalizedInput = {
+      label,
+      ...(placeholder ? { placeholder } : {}),
+      ...(contract.input.required === true ? { required: true } : {}),
+    };
+  }
+  return {
+    version: 1,
+    allowedActions,
+    ...(normalizedInput ? { input: normalizedInput } : {}),
+  };
 }
 
 export function createTouchpointIntent(
@@ -156,6 +184,10 @@ export function validateTouchpointActionEnvelope(
   if (signature.length < 8 || signature.length > 512 || /[\u0000-\u001f\u007f]/.test(signature)) {
     throw new TouchpointContractError('invalid_signature', 'Touchpoint action signature is invalid.', 'signature');
   }
+  const content = typeof input.content === 'string' ? input.content.trim().slice(0, MAX_ACTION_CONTENT_LENGTH) : undefined;
+  if (content && ACTION_CONTENT_INVALID_RE.test(content)) {
+    throw new TouchpointContractError('invalid_content', 'Touchpoint action content contains invalid characters.', 'content');
+  }
 
   return {
     version: 1,
@@ -165,5 +197,6 @@ export function validateTouchpointActionEnvelope(
     action: input.action as TouchpointActionKind,
     occurredAt: normalizeTouchpointTimestamp(input.occurredAt, 'occurredAt'),
     signature,
+    ...(content ? { content } : {}),
   };
 }

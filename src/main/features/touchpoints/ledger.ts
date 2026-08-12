@@ -109,6 +109,7 @@ function normalizeAction(raw: unknown): TouchpointActionRecord | null {
   if (!safeId(candidate.userId) || !safeId(candidate.actionId) || !safeId(candidate.intentId)) return null;
   if (!/^[0-9a-f]{64}$/.test(candidate.signatureHash)) return null;
   if (!Number.isFinite(Date.parse(candidate.occurredAt)) || !Number.isFinite(Date.parse(candidate.consumedAt))) return null;
+  const content = normalizeText(candidate.content, 2_000);
   return {
     version: 1,
     actionId: candidate.actionId,
@@ -118,6 +119,7 @@ function normalizeAction(raw: unknown): TouchpointActionRecord | null {
     occurredAt: new Date(Date.parse(candidate.occurredAt)).toISOString(),
     signatureHash: candidate.signatureHash,
     consumedAt: new Date(Date.parse(candidate.consumedAt)).toISOString(),
+    ...(content ? { content } : {}),
   };
 }
 
@@ -255,6 +257,7 @@ export async function consumeTouchpointAction(
       occurredAt: action.occurredAt,
       signatureHash,
       consumedAt: now.toISOString(),
+      ...(action.content ? { content: action.content } : {}),
     };
     ledger.actions[record.actionId] = record;
     return { duplicate: false, action: record };

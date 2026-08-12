@@ -48,15 +48,32 @@ function buildTouchpointButton(intent: TouchpointIntent, action: TouchpointActio
   };
 }
 
+/** Fixed input field id carried by every touchpoint card form. The adapter
+ * merges `card.action.form` into the action payload under this key, and the
+ * messaging manager forwards it as the envelope's `content`. */
+export const TOUCHPOINT_CARD_INPUT_ID = 'tp_content';
+
 /** Interactive card for an actionable touchpoint intent. Every button in the
  * intent's action contract carries a signed receipt envelope; clicks route
  * back through the messaging card-action pipeline into the touchpoint
- * ledger's `consumeTouchpointAction`. */
+ * ledger's `consumeTouchpointAction`. When the contract declares an input
+ * field, it is rendered above the buttons and its submitted value travels
+ * back as the envelope's `content`. */
 export function buildTouchpointCard(intent: TouchpointIntent): Record<string, JsonCompatibleValue> {
   const body = intent.content.body?.trim();
   const elements: Array<Record<string, JsonCompatibleValue>> = [
     { tag: 'markdown', content: [intent.content.title.trim(), body].filter(Boolean).join('\n\n').slice(0, 1500) },
   ];
+  const input = intent.actionContract?.input;
+  if (input) {
+    elements.push({
+      tag: 'input',
+      name: TOUCHPOINT_CARD_INPUT_ID,
+      label: { tag: 'plain_text', content: input.label.slice(0, 120) },
+      ...(input.placeholder ? { placeholder: { tag: 'plain_text', content: input.placeholder.slice(0, 120) } } : {}),
+      ...(input.required === true ? { required: true } : {}),
+    });
+  }
   if (intent.actionContract?.allowedActions.length) {
     elements.push({
       tag: 'action',
@@ -75,9 +92,14 @@ export function buildTouchpointCard(intent: TouchpointIntent): Record<string, Js
 
 /** Terminal replacement card shown after a touchpoint action is consumed, so
  * the same buttons cannot be clicked twice (mirrors the resolved approval
- * card in the messaging manager). */
-export function buildResolvedTouchpointCard(action: TouchpointActionKind): Record<string, JsonCompatibleValue> {
+ * card in the messaging manager). Submitted `content` is echoed back so the
+ * user sees exactly what was recorded. */
+export function buildResolvedTouchpointCard(
+  action: TouchpointActionKind,
+  content?: string,
+): Record<string, JsonCompatibleValue> {
   const label = t(`touchpoints.card.button.${action}`);
+  const note = typeof content === 'string' && content.trim() ? content.trim().slice(0, 2_000) : '';
   return {
     config: { wide_screen_mode: true },
     header: {
@@ -85,7 +107,9 @@ export function buildResolvedTouchpointCard(action: TouchpointActionKind): Recor
       template: 'green',
     },
     elements: [
-      { tag: 'markdown', content: `✅ **${label}** — ${t('touchpoints.card.resolved')}` },
+      { tag: 'markdown', content: note
+        ? `✅ **${label}** — ${t('touchpoints.card.resolved')}\n\n> ${note}`
+        : `✅ **${label}** — ${t('touchpoints.card.resolved')}` },
     ],
   };
 }
