@@ -43,6 +43,11 @@ export interface RecallCandidateRecord extends RecallJsonRecord {
   sourceRefs: CognitionSourceRef[];
   learningSignal?: KstarLearningSignal;
   captureKey?: string;
+  /** 抽取时识别出的适用/禁用场景。缺失=没识别出来，不是无限制。
+   *  promote 时原样带进资产，这样自动链路产出的资产才有边界，
+   *  而不是只有手动 promote 时调用方传参才有。 */
+  applicableWhen?: string[];
+  forbiddenWhen?: string[];
   /**
    * Recognizer-supplied belief in this judgment, 0..1. Stays absent when the
    * recognizer gives no score — a fabricated default would read as evidence of
@@ -98,6 +103,8 @@ export interface SaveRecallCandidateInput {
   learningSignal?: KstarLearningSignal;
   captureKey?: string;
   confidence?: number;
+  applicableWhen?: string[];
+  forbiddenWhen?: string[];
 }
 
 const MAX_SOURCE_SESSION_IDS = 50;
@@ -263,6 +270,9 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
   // judgment 与 summary 一起过闸，否则把凭证写在 summary 里就能绕过去。
   assertNotForbiddenToPersist([judgment, summary, uncertainty]);
   const learningSignal = normalizeLearningSignal(input.learningSignal);
+  // 复用资产语义字段的同一套规范化：去重、长度上限、大小写不敏感，
+  // 免得候选层和资产层各有一套约束、promote 时才发现对不上。
+  const candidateSemantics = readAbilityAssetSemantics(input as unknown as Record<string, unknown>);
   const captureKey = input.captureKey === undefined
     ? undefined
     : boundedText(input.captureKey, 'capture key', 160, true);
@@ -292,6 +302,8 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
     ...(learningSignal ? { learningSignal } : {}),
     ...(captureKey ? { captureKey } : {}),
     ...(confidence !== undefined ? { confidence } : {}),
+    ...(candidateSemantics.applicableWhen ? { applicableWhen: candidateSemantics.applicableWhen } : {}),
+    ...(candidateSemantics.forbiddenWhen ? { forbiddenWhen: candidateSemantics.forbiddenWhen } : {}),
     createdAt: now,
     updatedAt: now,
   };
@@ -375,7 +387,7 @@ export async function promoteRecallCandidate(
   options: { ontologyRefs?: AbilityAssetOntologyRef[] } & AbilityAssetSemantics = {},
 ): Promise<{ candidate: RecallCandidateRecord; asset: RecallAbilityAssetRecord }> {
   // 语义字段在写盘前先校验，避免半写状态：候选已翻 promoted 但资产字段非法。
-  const semantics = readAbilityAssetSemantics(options as Record<string, unknown>);
+  const optionSemantics = readAbilityAssetSemantics(options as Record<string, unknown>);
   const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, async (current) => {
     if (!current) throw new Error('recall candidate not found');
     const candidate = asCandidate(current);
@@ -394,7 +406,12 @@ export async function promoteRecallCandidate(
       evidenceRefs: candidate.sourceRefs,
       ...(candidate.learningSignal ? { learningSignal: candidate.learningSignal } : {}),
       ...(options.ontologyRefs?.length ? { ontologyRefs: options.ontologyRefs } : {}),
-      ...semantics,
+      // 候选自带的适用/禁用条件作为底，调用方显式传入的可覆盖。
+      // 此前只认 options，于是自动链路产出的资产永远没有边界——
+      // 只有手动 promote 且调用方主动传参时才有，等于形同虚设。
+      ...(candidate.applicableWhen ? { applicableWhen: candidate.applicableWhen } : {}),
+      ...(candidate.forbiddenWhen ? { forbiddenWhen: candidate.forbiddenWhen } : {}),
+      ...optionSemantics,
       scope: candidate.suggestedScope,
       status: 'active',
       maturity: 'seed',
