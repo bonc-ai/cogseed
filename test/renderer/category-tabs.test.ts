@@ -705,8 +705,13 @@ describe('agent and skill category tabs', () => {
 
     const rows = await context._loadLibraryPickerRows('p-deleted');
 
-    expect(vm.runInContext('_resolveActiveProjectId("auto-recipient-chip")', context)).toBe('');
-    expect(projectTreeCalls).toBe(0);
+    // 工作空间一期修复后语义：_agentPickerProjectExists 不再用可能过期的
+    // _projectsCache 判死（新建项目不在缓存 → 作用域静默丢失 bug），改为放行
+    // 交主进程/调用侧裁决——已删除项目仍回退全局：
+    //   - _resolveActiveProjectId 保留 pid（不再渲染层清空）
+    //   - files.tree 返回 not_found → _loadLibraryPickerRows 降级，rows 只有 global
+    expect(vm.runInContext('_resolveActiveProjectId("auto-recipient-chip")', context)).toBe('p-deleted');
+    expect(projectTreeCalls).toBe(1); // 调用一次后降级（not_found → 回退全局）
     expect(rows.map((row: any) => [row.scope, row.rel])).toEqual([['global', 'global.md']]);
   });
 

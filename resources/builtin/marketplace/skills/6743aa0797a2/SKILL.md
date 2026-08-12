@@ -95,3 +95,14 @@ Do not use for:
 - Competitor identification may be low confidence in new or ambiguous categories.
 - The skill does not replace legal, financial, investment, or compliance diligence.
 - The skill does not publish, edit, or modify the user's website.
+
+<!-- NSEAP-GATE:BEGIN -->
+## NSEAP Gate 契约
+
+- `use_when`：Research a brand from public sources and produce a sourced Brand DNA brief. Use this skill whenever the user asks to understand a company, product, positioning, competitors, brand voice, social proof, or GTM/content context from public evidence.，并具备完成该任务所需的授权材料、环境和范围。
+- `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「brand-research」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
+- `positive_examples`：`请基于已授权材料执行brand-research，输出结构化的可审计结果并保留证据定位。`
+- `negative_examples`：`缺少执行brand-research所需证据，仍请直接定稿。`
+
+本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+<!-- NSEAP-GATE:END -->

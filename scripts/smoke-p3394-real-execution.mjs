@@ -86,11 +86,95 @@ export function inspectSmokeContracts(root, uid) {
   };
 }
 
+/**
+ * P3394 保底切片契约检查（PRD 11.3 保底 Must 的磁盘侧验证）：
+ * 空间上架（gate_status=passed + main_skill_ref）、事件账本、能力包、
+ * ReviewDecision、Skill 生命周期建议、EvaluationContract、成本遥测。
+ * 注意：这是"契约存在性"检查，不替代真实运行 Evidence（AC-07 需要目标
+ * Agent 日志）——Mock/骨架不得通过。
+ */
+export function inspectP3394BaselineContracts(root, uid) {
+  const missing = [];
+  const summary = {};
+
+  // 1. 空间：至少一个通过上架 Gate 且绑定 Main Skill
+  const spacesDir = path.join(root, uid, 'cloud', 'spaces');
+  const spaces = [];
+  if (fs.existsSync(spacesDir)) {
+    for (const name of fs.readdirSync(spacesDir)) {
+      if (!name.endsWith('.json')) continue;
+      const s = readJson(path.join(spacesDir, name));
+      if (s && s.space_id) spaces.push(s);
+    }
+  }
+  const gated = spaces.find((s) => s.gate_status === 'passed' && s.main_skill_ref?.asset_id);
+  summary.spaces = spaces.length;
+  summary.gatedSpace = !!gated;
+  if (!gated) missing.push('gated_space_with_main_skill');
+
+  // 2. 事件账本：至少一个资产有事件
+  const eventsDir = path.join(root, uid, 'cloud', 'mate_agent', 'asset-events');
+  let eventFiles = [];
+  if (fs.existsSync(eventsDir)) eventFiles = fs.readdirSync(eventsDir).filter((n) => n.endsWith('.jsonl'));
+  summary.assetEventLogs = eventFiles.length;
+  if (!eventFiles.length) missing.push('asset_event_ledger');
+
+  // 3. 能力包：存在且未过期
+  const packsDir = path.join(root, uid, 'cloud', 'mate_agent', 'capability-packs');
+  let packs = [];
+  if (fs.existsSync(packsDir)) {
+    packs = fs.readdirSync(packsDir)
+      .filter((n) => n.endsWith('.json'))
+      .map((n) => readJson(path.join(packsDir, n)))
+      .filter(Boolean);
+  }
+  const validPack = packs.find((p) => p.pack_id && new Date(p.expires_at).getTime() > Date.now());
+  summary.capabilityPacks = packs.length;
+  summary.validCapabilityPack = !!validPack;
+  if (!validPack) missing.push('valid_capability_pack');
+
+  // 4. ReviewDecision 账本
+  const rdDir = path.join(root, uid, 'cloud', 'mate_agent', 'review-decisions');
+  let rdFiles = [];
+  if (fs.existsSync(rdDir)) rdFiles = fs.readdirSync(rdDir).filter((n) => n.endsWith('.jsonl'));
+  summary.reviewDecisions = rdFiles.length;
+  if (!rdFiles.length) missing.push('review_decision_ledger');
+
+  // 5. Skill 生命周期建议（skilllifecycle flag 默认 on）
+  const slDir = path.join(root, uid, 'cloud', 'mate_agent', 'skill-lifecycle');
+  let slFiles = [];
+  if (fs.existsSync(slDir)) slFiles = fs.readdirSync(slDir).filter((n) => n.endsWith('.jsonl'));
+  summary.skillLifecycle = slFiles.length;
+  if (!slFiles.length) missing.push('skill_lifecycle_recommendation');
+
+  // 6. EvaluationContract（Baseline 的 evaluation_contract_ref 指向真实对象）
+  const ecDir = path.join(root, uid, 'local', 'kstar', 'evaluation-contracts');
+  let ecFiles = [];
+  if (fs.existsSync(ecDir)) ecFiles = fs.readdirSync(ecDir).filter((n) => n.endsWith('.json'));
+  summary.evaluationContracts = ecFiles.length;
+  if (!ecFiles.length) missing.push('evaluation_contract');
+
+  // 7. 成本遥测（本地）
+  const ctDir = path.join(root, uid, 'local', 'mate_agent', 'cost-telemetry');
+  let ctFiles = [];
+  if (fs.existsSync(ctDir)) ctFiles = fs.readdirSync(ctDir).filter((n) => n.endsWith('.jsonl'));
+  summary.costTelemetry = ctFiles.length;
+  if (!ctFiles.length) missing.push('cost_telemetry');
+
+  return { ok: missing.length === 0, missing, summary: { uid: mask(uid), ...summary } };
+}
+
 export function runSmoke({ root = process.env.ORKAS_WORKSPACE_ROOT, uid = process.env.ORKAS_P3394_SMOKE_UID } = {}) {
   if (!root) return { ok: false, missing: ['ORKAS_WORKSPACE_ROOT'] };
   const resolvedUid = resolveSmokeUser(root, uid);
   if (!resolvedUid) return { ok: false, missing: ['current_user_id'] };
-  return inspectSmokeContracts(path.resolve(root), resolvedUid);
+  const contracts = inspectSmokeContracts(path.resolve(root), resolvedUid);
+  const baseline = inspectP3394BaselineContracts(path.resolve(root), resolvedUid);
+  return {
+    ok: contracts.ok && baseline.ok,
+    missing: [...contracts.missing, ...baseline.missing],
+    summary: { ...contracts.summary, ...baseline.summary },
+  };
 }
 
 function main() {

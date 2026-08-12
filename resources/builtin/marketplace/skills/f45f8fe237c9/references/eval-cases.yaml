@@ -1,0 +1,23 @@
+{
+  "evaluation_refs": [
+    "EVAL-FRAME-001",
+    "EVAL-FRAME-002",
+    "EVAL-FRAME-003",
+    "EVAL-FRAME-004",
+    "EVAL-FRAME-005",
+    "EVAL-FRAME-006",
+    "EVAL-FRAME-007",
+    "EVAL-FRAME-008",
+    "EVAL-FRAME-009",
+    "EVAL-FRAME-010"
+  ],
+  "id": "EVAL-SET-FRAME-001",
+  "negative_refs": [
+    "EVAL-FRAME-007",
+    "EVAL-FRAME-008",
+    "EVAL-FRAME-009",
+    "EVAL-FRAME-010"
+  ],
+  "schema_version": "1.0",
+  "source_type": "synthetic"
+}

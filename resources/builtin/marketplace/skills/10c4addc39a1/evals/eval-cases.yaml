@@ -1,0 +1,49 @@
+eval_cases:
+  - id: research_gate_pass
+    kind: positive
+    input: fixtures/research + fixtures/sample-report-data.json
+    expected: computed research gate passed; DOCX pipeline may start
+  - id: missing_primary_source
+    kind: negative
+    input: fixtures/research-failures/missing-primary-source
+    expected: RESEARCH_GATE_FAILURE; no DOCX
+  - id: unresolved_policy_date_conflict
+    kind: negative
+    input: fixtures/research-failures/unresolved-policy-date-conflict
+    expected: SOURCE_VERSION_CONFLICT/RESEARCH_GATE_FAILURE; no DOCX
+  - id: standard_version_mismatch
+    kind: negative
+    input: fixtures/research-failures/standard-version-mismatch
+    expected: RESEARCH_GATE_FAILURE; no DOCX
+  - id: search_snippet_only
+    kind: negative
+    input: search result snippets without opened sources
+    expected: block
+  - id: web_unavailable_current_policy
+    kind: boundary
+    input: current policy required; no web tool
+    expected: block and state missing evidence
+  - id: internal_material_only
+    kind: boundary
+    input: rich internal ontology, no official policy or standard verification
+    expected: treat as local extension; research gate remains blocked
+  - id: resolved_conflict
+    kind: positive
+    input: conflicting mirror and issuer dates with documented issuer-source resolution
+    expected: gate may pass
+  - id: report_source_crosswalk
+    kind: positive
+    input: every P/S/R appendix ID resolves to ledger entry
+    expected: pass
+  - id: dangling_report_source
+    kind: negative
+    input: report contains S9 absent from web ledger
+    expected: block
+  - id: complete_word
+    kind: positive
+    input: passed research gate and valid report bundle
+    expected: Word contains Chapter 2.4 and Appendix B research summary
+  - id: production_release
+    kind: negative
+    input: auto publish after gate pass
+    expected: prohibited; staged ceiling

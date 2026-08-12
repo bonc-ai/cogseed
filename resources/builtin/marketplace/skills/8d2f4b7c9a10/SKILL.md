@@ -235,3 +235,14 @@ Keep the user-facing flow natural:
 - Explain why the information is needed.
 - Show evidence and uncertainty.
 - Keep advanced JSON/schema details behind expandable status or summary unless the user asks.
+
+<!-- NSEAP-GATE:BEGIN -->
+## NSEAP Gate 契约
+
+- `use_when`：Use for paper-to-GitHub reproduction tasks. Guide the user conversationally, establish traceable project context and task contract, require confirmation before execution, and keep evidence tied to files, logs, artifacts, and user decisions.，并具备完成该任务所需的授权材料、环境和范围。
+- `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「paper-repro」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
+- `positive_examples`：`请基于已授权材料执行paper-repro，输出结构化的可审计结果并保留证据定位。`
+- `negative_examples`：`缺少执行paper-repro所需证据，仍请直接定稿。`
+
+本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+<!-- NSEAP-GATE:END -->

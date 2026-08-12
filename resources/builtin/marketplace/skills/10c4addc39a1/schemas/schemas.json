@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "task_id",
+      "owner_context",
+      "domain_payload"
+    ],
+    "properties": {
+      "task_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "owner_context": {
+        "type": "object",
+        "required": [
+          "owner_id",
+          "role",
+          "authorization_scope"
+        ],
+        "properties": {
+          "owner_id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "authorization_scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "domain_payload": {
+        "type": "object",
+        "required": [
+          "volume_number",
+          "domain_name_cn",
+          "domain_name_en",
+          "research_date",
+          "materials",
+          "research_bundle_dir"
+        ],
+        "properties": {
+          "volume_number": {
+            "type": [
+              "string",
+              "integer"
+            ]
+          },
+          "domain_name_cn": {
+            "type": "string"
+          },
+          "domain_name_en": {
+            "type": "string"
+          },
+          "research_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "policy_urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "materials": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "output_basename": {
+            "type": "string"
+          },
+          "research_bundle_dir": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Directory containing research-plan.json and web-research-ledger.json"
+          }
+        }
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "actions",
+      "result",
+      "trace",
+      "audit_refs"
+    ],
+    "properties": {
+      "actions": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "result": {
+        "type": "object"
+      },
+      "trace": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "audit_refs": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "runtime_contracts": {
+    "resource": {
+      "resource_requirements": [
+        {
+          "resource_type": "domain_material",
+          "operation": "read",
+          "purpose": "ontology_grounded_research",
+          "min_scope": true
+        },
+        {
+          "resource_type": "official_source",
+          "operation": "read",
+          "purpose": "policy_and_standard_verification",
+          "min_scope": true
+        },
+        {
+          "resource_type": "web_research_ledger",
+          "operation": "write",
+          "purpose": "machine_verifiable_primary_source_gate",
+          "min_scope": true
+        },
+        {
+          "resource_type": "local_artifact",
+          "operation": "write",
+          "purpose": "staged_report_generation",
+          "min_scope": true
+        }
+      ],
+      "access_via_gateway_only": true,
+      "direct_resource_access": false
+    },
+    "permission": {
+      "permissions": [
+        {
+          "action": "research_and_generate_local_draft",
+          "permission_level": "write",
+          "hitl_required": false
+        },
+        {
+          "action": "overwrite_existing_report",
+          "permission_level": "write",
+          "hitl_required": true
+        },
+        {
+          "action": "publish_or_send",
+          "permission_level": "prohibited",
+          "hitl_required": true
+        }
+      ]
+    },
+    "owner_binding": {
+      "required_owner_sections": [
+        "role",
+        "authorization_scope"
+      ],
+      "owner_context_ref": "input_schema.owner_context",
+      "binding_resolved_by": "agent_layer"
+    },
+    "audit": {
+      "audit_refs_field": "output_schema.audit_refs",
+      "emitted_by": "runtime",
+      "append_only": true
+    },
+    "research_gate": {
+      "mandatory_before_report_validation": true,
+      "computed_by": "scripts/validate_research_bundle.py",
+      "search_snippets_are_evidence": false,
+      "selected_sources_must_be_opened": true,
+      "current_facts_require_primary_sources": true,
+      "failure_blocks_docx_generation": true
+    }
+  }
+}

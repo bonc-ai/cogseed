@@ -38,6 +38,9 @@ import {
   getCustomSkill,
   parseSkillFrontmatter,
 } from '../skills';
+import { ensureNseapSkillSkeleton } from '../nseap_skill_skeleton';
+import { userSkillsDir } from '../../paths';
+import { getActiveUserId } from '../users';
 import { createLogger } from '../../logger';
 
 const log = createLogger('session-import:skill-import');
@@ -219,6 +222,15 @@ export async function importClaudeSkill(dirName: string): Promise<ImportSkillRes
     if (!ok) helperFails += 1;
   }
 
+  // NSEAP skeleton conversion: auto-generate the missing standard artifacts
+  // (same as the skill-library import path — onboarding-imported skills must
+  // be NSEAP-compliant too).
+  try {
+    ensureNseapSkillSkeleton(path.join(userSkillsDir(getActiveUserId()), skillId), name);
+  } catch (err) {
+    log.warn('session-import nseap skeleton generation failed', { skillId, error: String(err) });
+  }
+
   log.info(`imported claude skill "${name}" as ${skillId} (files=${files.length}, helperFails=${helperFails})`);
   return { ok: true, skillId, name };
 }
@@ -349,6 +361,15 @@ export async function importCodexSkill(dirName: string): Promise<ImportSkillResu
   for (const f of files) {
     const ok = await writeSkillFileForEdit(skillId, f.path, f.content);
     if (!ok) helperFails += 1;
+  }
+
+  // NSEAP skeleton conversion: auto-generate the missing standard artifacts
+  // (same as the skill-library import path — onboarding-imported skills must
+  // be NSEAP-compliant too).
+  try {
+    ensureNseapSkillSkeleton(path.join(userSkillsDir(getActiveUserId()), skillId), name);
+  } catch (err) {
+    log.warn('session-import nseap skeleton generation failed', { skillId, error: String(err) });
   }
 
   log.info(`imported codex skill "${name}" as ${skillId} (files=${files.length}, helperFails=${helperFails})`);

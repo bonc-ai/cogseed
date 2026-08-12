@@ -1,0 +1,12 @@
+# Identity / level / route. Confirm defaults; only change with reason.
+skill_spec:
+  standard_id: nseap-skill-creator
+  skill_class: execution            # execution | meta_skill (if it makes skills)
+  is_skill_of_skill: false
+  level: L5                         # Skill-L: L0..L5 (L5 = governed skill system)
+  risk_route: Full                  # Lite | Full
+  promotion_ceiling: staged         # HARD CAP — never higher than staged
+  production_release_allowed: false # HARD LOCK — never true
+  session_role: sub_skill           # sub_skill | master_task_skill
+  owns_session: false
+  form: interpreted                 # interpreted | compiled

@@ -2,8 +2,11 @@ export type CognitionCandidateSource = 'personal_ontology' | 'p3394_experience' 
 export type CognitionCandidateType = 'preference' | 'ontology' | 'rule' | 'experience' | 'skill_evolution';
 export type CognitionCandidateStatus = 'pending' | 'accepted' | 'deferred' | 'rejected';
 
-export type CognitionCandidateAction = 'source' | 'accept' | 'reject' | 'deep_review'
-  | 'open_personal_ontology' | 'import_to_recall';
+// Union merged across both sides: develop added `modify`/`defer`, this branch
+// added `deep_review`. Dropping either would silently disable an action the
+// renderer already emits.
+export type CognitionCandidateAction = 'source' | 'accept' | 'modify' | 'defer'
+  | 'reject' | 'deep_review' | 'open_personal_ontology' | 'import_to_recall';
 
 /**
  * Security / admission status — the axis that answers "is this safe to admit".

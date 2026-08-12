@@ -381,3 +381,115 @@ describe('group_content_format › strip fields (parse → drop 字段区 → se
     expect(content).not.toContain('## 字段区');
   });
 });
+
+// ── 二期 D5：字段值来源项目标记（@proj:<pid>）───────────────────────────────
+
+describe('group_content_format › project source marker (@proj:)', () => {
+  it('parseFieldValueLine: value with source + project marker', async () => {
+    const g = await loadGroups();
+    expect(g.parseFieldValueLine('- 机器学习 [智能] @proj:p_abc')).toEqual({
+      value: '机器学习',
+      source: '智能',
+      project: 'p_abc',
+    });
+  });
+
+  it('parseFieldValueLine: legacy value with source only → no project field', async () => {
+    const g = await loadGroups();
+    const parsed = g.parseFieldValueLine('- 机器学习 [智能]');
+    expect(parsed).toEqual({ value: '机器学习', source: '智能' });
+    expect('project' in (parsed ?? {})).toBe(false);
+  });
+
+  it('parseFieldValueLine: bare value → 手动 source, no project', async () => {
+    const g = await loadGroups();
+    expect(g.parseFieldValueLine('- 裸值')).toEqual({ value: '裸值', source: '手动' });
+  });
+
+  it('serializeFieldValueLine: appends @proj:<pid> after source', async () => {
+    const g = await loadGroups();
+    expect(g.serializeFieldValueLine({ value: '机器学习', source: '智能', project: 'p_abc' })).toBe(
+      '- 机器学习 [智能] @proj:p_abc',
+    );
+  });
+
+  it('serializeFieldValueLine: no project → unchanged legacy output', async () => {
+    const g = await loadGroups();
+    expect(g.serializeFieldValueLine({ value: '机器学习', source: '智能' })).toBe('- 机器学习 [智能]');
+  });
+
+  it('round-trip: parse(serialize(x)) === x for values with project marker', async () => {
+    const g = await loadGroups();
+    const fv = { value: '机器学习', source: '智能', project: 'p_abc' };
+    expect(g.parseFieldValueLine(g.serializeFieldValueLine(fv))).toEqual(fv);
+  });
+
+  it('escaped [ inside value coexists with project marker', async () => {
+    const g = await loadGroups();
+    const fv = { value: '项目「晚风」 [已归档]', source: '手动', project: 'p_xyz' };
+    const line = g.serializeFieldValueLine(fv);
+    expect(line).toBe('- 项目「晚风」 \\[已归档] [手动] @proj:p_xyz');
+    expect(g.parseFieldValueLine(line)).toEqual(fv);
+  });
+
+  it('parseGroupContent: dual-zone file with @proj: rows keeps project on values', async () => {
+    const g = await loadGroups();
+    const text = ['## 字段区', '', '### 课程', '- 机器学习 [智能] @proj:p_abc', '- 考研数学 [智能] @proj:p_def', '- 数据结构 [手动]', '', '## 流水区'].join('\n');
+    const c = g.parseGroupContent(text);
+    expect(c.fields['课程']).toEqual([
+      { value: '机器学习', source: '智能', project: 'p_abc' },
+      { value: '考研数学', source: '智能', project: 'p_def' },
+      { value: '数据结构', source: '手动' },
+    ]);
+  });
+
+  it('serializeGroupContent round-trips a file containing @proj: rows byte-identically', async () => {
+    const g = await loadGroups();
+    const text = ['## 字段区', '', '### 课程', '- 机器学习 [智能] @proj:p_abc', '- 数据结构 [手动]', '', '---', '', '## 流水区'].join('\n');
+    expect(g.serializeGroupContent(g.parseGroupContent(text))).toBe(text);
+  });
+
+  it('legacy file without any @ marker round-trips unchanged', async () => {
+    const g = await loadGroups();
+    const text = ['## 字段区', '', '### 偏好', '- 沟通风格：喜欢大白话 [候选]', '', '---', '', '## 流水区'].join('\n');
+    expect(g.serializeGroupContent(g.parseGroupContent(text))).toBe(text);
+  });
+
+  it('appendFieldValue persists project marker to the file', async () => {
+    const { groups, groupId } = await createGroupWith('g');
+    await groups.appendFieldValue(UID, groupId, '课程', '机器学习', '智能', 'p_abc');
+    const content = fs.readFileSync(groupFile(groupId), 'utf8');
+    expect(content).toContain('- 机器学习 [智能] @proj:p_abc');
+    const back = groups.parseGroupContent(content);
+    expect(back.fields['课程']).toEqual([{ value: '机器学习', source: '智能', project: 'p_abc' }]);
+  });
+
+  it('appendFieldValue without project stays legacy format', async () => {
+    const { groups, groupId } = await createGroupWith('g');
+    await groups.appendFieldValue(UID, groupId, '课程', '数据结构', '手动');
+    const content = fs.readFileSync(groupFile(groupId), 'utf8');
+    expect(content).toContain('- 数据结构 [手动]');
+    expect(content).not.toContain('@proj:');
+  });
+
+  it('same value+source from DIFFERENT projects coexist (project is part of dedupe key)', async () => {
+    const { groups, groupId } = await createGroupWith('g');
+    await groups.appendFieldValue(UID, groupId, '课程', '机器学习', '智能', 'p_aaa');
+    const r2 = await groups.appendFieldValue(UID, groupId, '课程', '机器学习', '智能', 'p_bbb');
+    expect(r2.ok).toBe(true);
+    const back = groups.parseGroupContent(fs.readFileSync(groupFile(groupId), 'utf8'));
+    expect(back.fields['课程']).toEqual([
+      { value: '机器学习', source: '智能', project: 'p_aaa' },
+      { value: '机器学习', source: '智能', project: 'p_bbb' },
+    ]);
+  });
+
+  it('same value+source+project dedupes (idempotent append)', async () => {
+    const { groups, groupId } = await createGroupWith('g');
+    await groups.appendFieldValue(UID, groupId, '课程', '机器学习', '智能', 'p_aaa');
+    const r2 = await groups.appendFieldValue(UID, groupId, '课程', '机器学习', '智能', 'p_aaa');
+    expect(r2.ok).toBe(true);
+    const back = groups.parseGroupContent(fs.readFileSync(groupFile(groupId), 'utf8'));
+    expect(back.fields['课程']).toHaveLength(1);
+  });
+});

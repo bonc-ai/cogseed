@@ -33,10 +33,16 @@ function fakeBuildRunner(reply: string | (() => Promise<string>)) {
 }
 
 describe('personal_ontology_router › parseRouteDecision', () => {
-  it('parses a valid field decision', async () => {
+  it('parses a valid field decision (confidence 缺省视为 low)', async () => {
     const r = await loadModule();
     expect(r.parseRouteDecision('{"action":"field","group_title":"课程","field_name":"课程名称"}'))
-      .toEqual({ action: 'field', group_title: '课程', field_name: '课程名称' });
+      .toEqual({ action: 'field', group_title: '课程', field_name: '课程名称', confidence: 'low' });
+  });
+
+  it('parses field decision with explicit confidence', async () => {
+    const r = await loadModule();
+    expect(r.parseRouteDecision('{"action":"field","group_title":"课程","field_name":"课程名称","confidence":"high"}'))
+      .toEqual({ action: 'field', group_title: '课程', field_name: '课程名称', confidence: 'high' });
   });
 
   it('parses flow', async () => {
@@ -46,8 +52,8 @@ describe('personal_ontology_router › parseRouteDecision', () => {
 
   it('extracts JSON embedded in prose (LLM often adds text)', async () => {
     const r = await loadModule();
-    expect(r.parseRouteDecision('好的，这条应填入课程组：\n{"action":"field","group_title":"课程","field_name":"学校"}\n完毕'))
-      .toEqual({ action: 'field', group_title: '课程', field_name: '学校' });
+    expect(r.parseRouteDecision('好的，这条应填入课程组：\n{"action":"field","group_title":"课程","field_name":"学校","confidence":"high"}\n完毕'))
+      .toEqual({ action: 'field', group_title: '课程', field_name: '学校', confidence: 'high' });
   });
 
   it('returns null for garbage / missing / invalid JSON', async () => {
@@ -71,12 +77,12 @@ describe('personal_ontology_router › buildRoutePrompt', () => {
 });
 
 describe('personal_ontology_router › routeCandidateToField', () => {
-  it('returns a validated field decision when LLM output is in the catalog', async () => {
+  it('returns a validated field decision when LLM output is high-confidence and in the catalog', async () => {
     const r = await loadModule();
     const decision = await r.routeCandidateToField('u1', '喜欢大白话', fakeCatalog(), {
-      buildRunnerFn: fakeBuildRunner('{"action":"field","group_title":"偏好","field_name":"沟通风格"}') as any,
+      buildRunnerFn: fakeBuildRunner('{"action":"field","group_title":"偏好","field_name":"沟通风格","confidence":"high"}') as any,
     });
-    expect(decision).toEqual({ action: 'field', group_title: '偏好', field_name: '沟通风格' });
+    expect(decision).toEqual({ action: 'field', group_title: '偏好', field_name: '沟通风格', confidence: 'high' });
   });
 
   it('flow when LLM says flow', async () => {
@@ -87,10 +93,27 @@ describe('personal_ontology_router › routeCandidateToField', () => {
     expect(decision).toEqual({ action: 'flow' });
   });
 
+  it('flow when LLM is only medium/low confidence (置信度门禁：防误填污染画像)', async () => {
+    const r = await loadModule();
+    const d1 = await r.routeCandidateToField('u1', '可能喜欢大白话', fakeCatalog(), {
+      buildRunnerFn: fakeBuildRunner('{"action":"field","group_title":"偏好","field_name":"沟通风格","confidence":"medium"}') as any,
+    });
+    expect(d1).toEqual({ action: 'flow' });
+    const d2 = await r.routeCandidateToField('u1', 'x', fakeCatalog(), {
+      buildRunnerFn: fakeBuildRunner('{"action":"field","group_title":"偏好","field_name":"沟通风格","confidence":"low"}') as any,
+    });
+    expect(d2).toEqual({ action: 'flow' });
+    // 缺 confidence 字段也视为 low → flow（旧格式回复不自动填坑）
+    const d3 = await r.routeCandidateToField('u1', 'x', fakeCatalog(), {
+      buildRunnerFn: fakeBuildRunner('{"action":"field","group_title":"偏好","field_name":"沟通风格"}') as any,
+    });
+    expect(d3).toEqual({ action: 'flow' });
+  });
+
   it('flow when LLM hallucinates a section/field not in the catalog', async () => {
     const r = await loadModule();
     const decision = await r.routeCandidateToField('u1', 'x', fakeCatalog(), {
-      buildRunnerFn: fakeBuildRunner('{"action":"field","group_title":"不存在的分节","field_name":"不存在的字段"}') as any,
+      buildRunnerFn: fakeBuildRunner('{"action":"field","group_title":"不存在的分节","field_name":"不存在的字段","confidence":"high"}') as any,
     });
     expect(decision).toEqual({ action: 'flow' });
   });
@@ -110,7 +133,7 @@ describe('personal_ontology_router › routeCandidateToField', () => {
   it('flow when catalog is empty (no installed templates)', async () => {
     const r = await loadModule();
     const decision = await r.routeCandidateToField('u1', 'x', [], {
-      buildRunnerFn: fakeBuildRunner('{"action":"field","group_title":"课程","field_name":"课程名称"}') as any,
+      buildRunnerFn: fakeBuildRunner('{"action":"field","group_title":"课程","field_name":"课程名称","confidence":"high"}') as any,
     });
     expect(decision).toEqual({ action: 'flow' });
   });

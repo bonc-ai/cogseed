@@ -46,6 +46,7 @@ function _decisionOf(report: { ok: boolean; violations: Array<{ rule: string }> 
 
 const _LEVEL_RANK: Record<string, number> = { EXTREME: 3, MEDIUM: 2, LOW: 1 };
 
+
 /**
  * Highest-severity violation in a report.
  *

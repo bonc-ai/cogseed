@@ -28,6 +28,7 @@ describe('new chat home surface', () => {
     const html = read('src/renderer/index.html');
 
     expect(newChatScenarioOrder(html)).toEqual([
+      'space_builder',
       'data',
       'video',
       'ui_design',

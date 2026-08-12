@@ -1,0 +1,29 @@
+{
+  "interface": {
+    "display_name": "文献检索与证据综合",
+    "short_description": "用可复现检索和纳排标准构建证据表并综合强度、分歧与空白。",
+    "default_prompt": "Use $literature-evidence and follow its evidence, approval, and output contract."
+  },
+  "policy": {
+    "allow_implicit_invocation": true
+  },
+  "nseap_runtime": {
+    "executor": "codex_skill_interpreter",
+    "binding_status": "target_state_not_run",
+    "skill_entrypoint": "../SKILL.md",
+    "schema_ref": "../schemas.json",
+    "permissions": {
+      "direct_resource_access": false,
+      "external_actions": "deny_without_explicit_approval",
+      "formal_asset_write": false,
+      "candidate_write_only": true
+    },
+    "governance": {
+      "level": "L5",
+      "risk_route": "Full",
+      "promotion_ceiling": "staged",
+      "production_release_allowed": false,
+      "independent_review": "pending"
+    }
+  }
+}

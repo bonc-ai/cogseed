@@ -858,7 +858,7 @@ async function _csLoadClaudeSessions(agentType) {
       }) : '';
       const projectLabel = s.projectPath ? `<small>${_csEsc(s.projectPath)}</small>` : '';
       return `
-        <div class="cs-src" data-session-id="${_csEsc(s.filePath)}">
+        <div class="cs-src" data-session-id="${_csEsc(s.sessionId)}" data-session-path="${_csEsc(s.filePath)}" data-session-title="${_csEsc(s.firstMessage || '')}">
           <input type="checkbox" />
           <div class="s-ico">${CS_TERMINAL_SVG}</div>
           <div>
@@ -2166,8 +2166,8 @@ async function _csLoadRoleTemplates() {
     // 优先级排序
     priorityTemplates.sort((a, b) => priority.indexOf(a.template_id) - priority.indexOf(b.template_id));
 
-    // 显示前6个（4个优先 + 2个其他）
-    const display = [...priorityTemplates.slice(0, 4), ...otherTemplates.slice(0, 2)];
+    // 全部展示：优先角色在前，其余模板（空白空间等）跟在后面
+    const display = [...priorityTemplates, ...otherTemplates];
 
     // 图标映射
     const icons = {
@@ -2480,35 +2480,6 @@ async function maybeStartOnboarding() {
   console.log('[ONBOARDING DEBUG] maybeStartOnboarding called');
   _obLog.info('maybeStartOnboarding called');
 
-  // TEMPORARY: Force show onboarding for testing new features (30-day filter, 3-session limit, space project creation)
-  console.log('[ONBOARDING DEBUG] Force showing onboarding');
-  // Reset standalone mode for full onboarding flow
-  _csStandaloneMode = false;
-  _csBuild();
-  // Ensure normal flow buttons are visible
-  const shell = document.getElementById('cs-onboarding');
-  if (shell) {
-    const backBtn = shell.querySelector('.cs-step2-back');
-    const nextBtn = shell.querySelector('.cs-step2-next');
-    const finishBtn = shell.querySelector('.cs-step2-finish');
-    if (backBtn) backBtn.style.display = 'inline-flex';
-    if (nextBtn) nextBtn.style.display = 'inline-flex';
-    if (finishBtn) finishBtn.style.display = 'none';
-  }
-  console.log('[ONBOARDING DEBUG] Adding cs-onboarding-active class to body');
-  document.body.classList.add('cs-onboarding-active');
-  console.log('[ONBOARDING DEBUG] Body classes:', document.body.className);
-  console.log('[ONBOARDING DEBUG] #cs-onboarding exists:', !!document.getElementById('cs-onboarding'));
-  console.log('[ONBOARDING DEBUG] #cs-onboarding computed display:',
-    document.getElementById('cs-onboarding') ? window.getComputedStyle(document.getElementById('cs-onboarding')).display : 'N/A');
-  console.log('[ONBOARDING DEBUG] Going to step 0');
-  _csGoStep(0);
-  _obLog.info('onboarding walkthrough FORCED (testing mode)');
-  console.log('[ONBOARDING DEBUG] Onboarding should now be visible');
-  return;
-
-  // Original logic - commented out for testing
-  /*
   try {
     const res = await window.cogseed.invoke('prefs.getOnboarding');
     console.log('[ONBOARDING DEBUG] prefs.getOnboarding result:', res);
@@ -2526,7 +2497,6 @@ async function maybeStartOnboarding() {
   document.body.classList.add('cs-onboarding-active');
   _csGoStep(0);
   _obLog.info('onboarding walkthrough started');
-  */
 }
 
 // Expose for boot.js. Kept on window so classic-script load order doesn't matter.

@@ -641,14 +641,16 @@ function _initSkillsCognitionBindings() {
       finally { action.dataset.busy = '0'; action.disabled = false; }
       return;
     }
+    const decided = action.dataset.cognitionCandidateAction;
+    // 四决定（PRD §5.6）：accept / modify / defer / reject；其余动作已在前面分支处理。
+    if (decided !== 'accept' && decided !== 'modify' && decided !== 'defer' && decided !== 'reject') return;
     action.dataset.busy = '1';
     action.disabled = true;
     try {
-      const decision = action.dataset.cognitionCandidateAction === 'accept' ? 'accept' : 'reject';
       const result = await window.cogseed.invoke('cognition.candidates.decide', {
         source,
         candidateId,
-        decision,
+        decision: decided,
       });
       // A gate block is an expected outcome with structured findings, not a
       // generic failure — explain what was found rather than showing the raw

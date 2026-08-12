@@ -57,3 +57,5 @@ package.json.new
 # open-source distribution. Not source: its presence in a normal checkout would
 # tell the app the bundled scanner is intentionally absent.
 /resources/guardrail/SCANNER_ABSENT
+# Hermes desktop attachments (PRD/转写等敏感文件，勿入库)
+/.hermes/

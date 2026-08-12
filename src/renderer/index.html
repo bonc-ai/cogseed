@@ -129,6 +129,10 @@
                the caret to the first [...] placeholder. Wired by
                _initEmptyStateScenarios() in conversation.js. -->
           <div class="new-chat-scenarios" id="new-chat-scenarios">
+            <button type="button" class="new-chat-scenario-chip is-space-builder" data-scenario="space_builder">
+              <span data-ui-icon="layout-grid" data-ui-icon-class="new-chat-scenario-icon"></span>
+              <span class="new-chat-scenario-label" data-i18n="new_chat.quick.space_builder">Space Mode</span>
+            </button>
             <button type="button" class="new-chat-scenario-chip" id="continue-work-chip">
               <span data-ui-icon="play-triangle" data-ui-icon-class="new-chat-scenario-icon"></span>
               <span class="new-chat-scenario-label" data-i18n="new_chat.quick.continue_work">Continue previous work</span>
@@ -1113,9 +1117,25 @@
             </div>
           </div>
         </div>
+        <!-- 角色模板库弹窗：未安装模板列表 -->
+        <div class="personal-onto-modal-overlay" id="personal-onto-template-library-modal" style="display:none">
+          <div class="personal-onto-modal personal-onto-library-modal">
+            <div class="personal-onto-modal-header">
+              <span data-i18n="personalOntology.template_library">角色模板库</span>
+              <button type="button" class="modal-close-btn" id="personal-onto-template-library-close" aria-label="Close">×</button>
+            </div>
+            <div class="personal-onto-modal-body">
+              <div class="personal-onto-library-sub muted" data-i18n="personalOntology.template_library_sub">未安装的角色模板，安装后显示在左侧「角色模板」区（最多 3 个）</div>
+              <div class="personal-onto-library-list" id="personal-onto-template-library-list"></div>
+            </div>
+            <div class="personal-onto-modal-footer">
+              <button class="btn btn-sm" id="personal-onto-template-library-cancel" data-i18n="common.close">关闭</button>
+            </div>
+          </div>
+        </div>
       </section>
 
-      <!-- Workspaces（工作空间一期：空间 = 主界面 + 资源作用域限制） -->
+      <!-- 情境空间（原"工作空间"：空间 = 主界面 + 资源作用域限制） -->
       <section class="panel" id="panel-spaces">
         <div class="spaces-view" id="spaces-view"></div>
         <!-- 新建空间弹窗 -->
@@ -1137,6 +1157,20 @@
             <div class="spaces-modal-footer">
               <button class="btn btn-sm" id="spaces-modal-cancel" data-i18n="common.cancel">取消</button>
               <button class="btn btn-sm btn-primary" id="spaces-modal-create" data-i18n="spaces.create_btn">创建</button>
+            </div>
+          </div>
+        </div>
+        <!-- 主技能选择弹窗 -->
+        <div class="spaces-modal-overlay" id="spaces-main-skill-modal" style="display:none">
+          <div class="spaces-modal">
+            <div class="spaces-modal-header">
+              <span data-i18n="spaces.main_skill_pick_title">选择主技能</span>
+            </div>
+            <div class="spaces-modal-body">
+              <div class="spaces-skill-pick-list" id="spaces-main-skill-list"></div>
+            </div>
+            <div class="spaces-modal-footer">
+              <button class="btn btn-sm" id="spaces-main-skill-cancel" data-i18n="common.cancel">取消</button>
             </div>
           </div>
         </div>

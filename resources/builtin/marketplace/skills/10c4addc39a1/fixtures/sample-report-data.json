@@ -1,0 +1,2467 @@
+{
+  "meta": {
+    "volume_number": "X",
+    "domain_name_cn": "合成公共服务示范域",
+    "domain_name_en": "Synthetic Public Service Demonstration Domain",
+    "report_version": "v0.1",
+    "research_date": "2026-08-08",
+    "status": "synthetic_fixture",
+    "title": "第X项：合成公共服务示范域应用场景 Ontology 分析与对标",
+    "subtitle": "Domain Ontology Landscape and Alignment Report",
+    "deliverable_for": "NSEAP Skill执行链验证",
+    "scope_statement": "本报告仅用于验证Skill、数据契约和Word输出，不代表真实行业结论。",
+    "output_filename": "X_合成公共服务示范域_Ontology分析与对标_v0.1.docx",
+    "confidentiality": "合成验证材料",
+    "research_note": "所有政策、标准和业务对象均为合成或仅作概念性命名。",
+    "keywords": [
+      "Ontology",
+      "Alignment",
+      "Synthetic Fixture",
+      "KSTAR",
+      "Agent Governance"
+    ]
+  },
+  "executive_summary": {
+    "paragraphs": [
+      {
+        "text": "本分册验证从结构化研究数据到完整Word报告的全链路，包括统一上层本体、四层模型、领域模块、概念关系、流程、标准对标和Agent治理。",
+        "source_refs": [
+          "I1",
+          "A1"
+        ]
+      },
+      {
+        "text": "它严格定位为领域本体景观与对齐地图，而不是完整本体实现；所有内容均为合成验证数据。",
+        "source_refs": [
+          "P1",
+          "A1"
+        ]
+      },
+      {
+        "text": "生成结果必须经过数据校验、文档结构检查、逐页渲染视觉复核和可访问性审计，自动状态最高为staged。",
+        "source_refs": [
+          "A1",
+          "E1"
+        ]
+      }
+    ],
+    "core_conclusions": [
+      {
+        "title": "统一方法可复用",
+        "text": "同一数据结构可以驱动不同领域分册，保持11–14式架构。",
+        "source_refs": [
+          "A1"
+        ]
+      },
+      {
+        "title": "语义与系统对象分离",
+        "text": "领域实体、业务过程、系统记录和认知对象必须分层。",
+        "source_refs": [
+          "A1"
+        ]
+      },
+      {
+        "title": "对标不是罗列",
+        "text": "每个标准均需要角色、映射、优势、缺口和本地扩展。",
+        "source_refs": [
+          "S1",
+          "A1"
+        ]
+      },
+      {
+        "title": "高影响动作受治理",
+        "text": "A3及以上动作需要授权、HITL、审计和复核。",
+        "source_refs": [
+          "E1",
+          "A1"
+        ]
+      }
+    ]
+  },
+  "policy_context": {
+    "task_objective": {
+      "text": "验证领域本体分析与对标Skill能够生成结构完整、可审计、可渲染的独立Word分册。",
+      "source_refs": [
+        "I1"
+      ]
+    },
+    "policy_scope": [
+      {
+        "text": "合成场景覆盖需求识别、申请、评估、资源配置、执行、结果交付、申诉和改进。",
+        "source_refs": [
+          "P1"
+        ]
+      }
+    ],
+    "included_scope": [
+      "主体与角色",
+      "需求与服务",
+      "资源与设施",
+      "案件与流程",
+      "决策与证据",
+      "Agent治理"
+    ],
+    "excluded_scope": [
+      "真实法律政策解释",
+      "生产系统部署",
+      "真实个人或客户数据",
+      "完整OWL/RDF构建"
+    ],
+    "boundary_clarifications": [
+      "所有内容仅为合成Fixture。",
+      "真实领域运行必须替换为正式政策、标准、内部材料和专家决定。",
+      "系统记录不等于现实对象。"
+    ]
+  },
+  "methodology": {
+    "shared_upper_ontology": [
+      "Party",
+      "Role",
+      "Agent",
+      "Goal",
+      "Situation",
+      "Capability",
+      "Service/Product",
+      "Process/Case",
+      "Task/Action",
+      "Resource/Asset",
+      "Information Object",
+      "Event",
+      "Decision",
+      "Policy/Rule/Constraint",
+      "Agreement/Commitment",
+      "Observation/Evidence",
+      "Risk/Control",
+      "Outcome",
+      "Measure/KPI",
+      "Episode/Learning",
+      "System/Interface"
+    ],
+    "four_layers": [
+      {
+        "name": "领域现实层",
+        "description": "现实中的主体、服务、资源和案件。",
+        "examples": [
+          "服务对象",
+          "组织",
+          "设施",
+          "案件"
+        ]
+      },
+      {
+        "name": "运营语义层",
+        "description": "过程、任务、决定、规则、事件和状态。",
+        "examples": [
+          "受理流程",
+          "资格决定",
+          "异常事件"
+        ]
+      },
+      {
+        "name": "系统表示层",
+        "description": "记录、文档、消息、API和标识符。",
+        "examples": [
+          "Case记录",
+          "Evidence文件",
+          "Audit日志"
+        ]
+      },
+      {
+        "name": "认知语义层",
+        "description": "情境、目标、证据、预测、实际和学习。",
+        "examples": [
+          "Situation",
+          "Goal",
+          "ΔR",
+          "Episode"
+        ]
+      }
+    ],
+    "evidence_levels": [
+      {
+        "code": "P",
+        "meaning": "政策/政府",
+        "usage": "场景边界"
+      },
+      {
+        "code": "S",
+        "meaning": "官方标准/规范",
+        "usage": "外部对标"
+      },
+      {
+        "code": "I",
+        "meaning": "内部材料",
+        "usage": "业务实践"
+      },
+      {
+        "code": "E",
+        "meaning": "专家确认",
+        "usage": "规则/决策边界"
+      },
+      {
+        "code": "A",
+        "meaning": "分析建议",
+        "usage": "架构推断"
+      },
+      {
+        "code": "R",
+        "meaning": "二手线索",
+        "usage": "发现，不能单独支撑关键结论"
+      }
+    ],
+    "common_flow": [
+      "Situation/Need",
+      "Goal/Policy",
+      "Service/Product",
+      "Process/Case",
+      "Task/Decision/Action",
+      "Event/Evidence",
+      "Outcome/KPI",
+      "Episode/Learning"
+    ]
+  },
+  "modules": [
+    {
+      "id": "M1",
+      "name": "主体与组织",
+      "scope": "参与方、角色和责任",
+      "core_objects": "服务对象、专业人员、机构、监管方",
+      "dependencies": "Shared Upper Ontology + Governance"
+    },
+    {
+      "id": "M2",
+      "name": "需求与服务",
+      "scope": "需求、目标和服务目录",
+      "core_objects": "需求、服务、资格、承诺",
+      "dependencies": "Shared Upper Ontology + Governance"
+    },
+    {
+      "id": "M3",
+      "name": "资源与设施",
+      "scope": "资源配置和资产状态",
+      "core_objects": "设施、设备、材料、位置",
+      "dependencies": "Shared Upper Ontology + Governance"
+    },
+    {
+      "id": "M4",
+      "name": "过程与案件",
+      "scope": "从申请到闭环的生命周期",
+      "core_objects": "案件、任务、事件、状态",
+      "dependencies": "Shared Upper Ontology + Governance"
+    },
+    {
+      "id": "M5",
+      "name": "决策与证据",
+      "scope": "规则、观察、证据和决定",
+      "core_objects": "证据、规则、决定、授权",
+      "dependencies": "Shared Upper Ontology + Governance"
+    },
+    {
+      "id": "M6",
+      "name": "智能体与治理",
+      "scope": "能力、工具、HITL和审计",
+      "core_objects": "Agent、Skill、权限、审计",
+      "dependencies": "Shared Upper Ontology + Governance"
+    }
+  ],
+  "stakeholders": [
+    {
+      "party": "服务对象",
+      "roles": "申请人/受益人",
+      "responsibilities": "提出需求、提供证据、确认结果",
+      "authority_or_evidence": "本人声明与提交证据"
+    },
+    {
+      "party": "服务机构",
+      "roles": "服务提供者",
+      "responsibilities": "受理、组织过程、交付服务",
+      "authority_or_evidence": "法定或组织授权"
+    },
+    {
+      "party": "专业人员",
+      "roles": "评估者/执行者",
+      "responsibilities": "评估、决策建议、执行任务",
+      "authority_or_evidence": "执业/岗位授权"
+    },
+    {
+      "party": "运营部门",
+      "roles": "流程所有者",
+      "responsibilities": "配置流程、资源和SLA",
+      "authority_or_evidence": "组织职责"
+    },
+    {
+      "party": "监管机构",
+      "roles": "监管者",
+      "responsibilities": "制定约束、监督和问责",
+      "authority_or_evidence": "法规/监管授权"
+    },
+    {
+      "party": "审计机构",
+      "roles": "审计者",
+      "responsibilities": "抽查证据、过程和结果",
+      "authority_or_evidence": "独立审计授权"
+    },
+    {
+      "party": "供应商",
+      "roles": "资源提供者",
+      "responsibilities": "提供设备、系统或数据服务",
+      "authority_or_evidence": "合同/协议"
+    },
+    {
+      "party": "AI智能体",
+      "roles": "辅助代理",
+      "responsibilities": "检索、生成候选、校验和记录",
+      "authority_or_evidence": "显式授权范围"
+    },
+    {
+      "party": "人工审批人",
+      "roles": "最终决定者",
+      "responsibilities": "复核高影响事项并签署决定",
+      "authority_or_evidence": "决策权限矩阵"
+    },
+    {
+      "party": "申诉复核方",
+      "roles": "复核者",
+      "responsibilities": "处理异议、复议和纠错",
+      "authority_or_evidence": "复核制度"
+    }
+  ],
+  "systems": [
+    {
+      "system": "身份与组织系统",
+      "authoritative_data": "人员/机构身份和角色",
+      "source_objects": "Person/Org/Role记录",
+      "sor_rule": "身份主数据由该系统权威维护"
+    },
+    {
+      "system": "服务目录系统",
+      "authoritative_data": "服务定义、资格和材料要求",
+      "source_objects": "Service/Eligibility/Requirement",
+      "sor_rule": "发布版本为服务定义SoR"
+    },
+    {
+      "system": "案件管理系统",
+      "authoritative_data": "申请、案件、任务、状态和决定",
+      "source_objects": "Case/Task/Decision记录",
+      "sor_rule": "案件生命周期状态以该系统为准"
+    },
+    {
+      "system": "文档与证据库",
+      "authoritative_data": "文件、证据、版本和签名",
+      "source_objects": "Document/Evidence/Signature",
+      "sor_rule": "原始证据及哈希为SoR"
+    },
+    {
+      "system": "资产管理系统",
+      "authoritative_data": "设施、设备和维护状态",
+      "source_objects": "Asset/WorkOrder",
+      "sor_rule": "资产台账和维护记录为SoR"
+    },
+    {
+      "system": "财务结算系统",
+      "authoritative_data": "费用、支付、结算和退款",
+      "source_objects": "Invoice/Payment/Settlement",
+      "sor_rule": "已过账交易为财务SoR"
+    },
+    {
+      "system": "规则与决策服务",
+      "authoritative_data": "规则版本、决策输入输出",
+      "source_objects": "RuleSet/DecisionTrace",
+      "sor_rule": "批准的规则版本为SoR"
+    },
+    {
+      "system": "通知与渠道系统",
+      "authoritative_data": "通知、送达和回执",
+      "source_objects": "Message/Receipt",
+      "sor_rule": "送达回执为渠道证据"
+    },
+    {
+      "system": "审计与日志平台",
+      "authoritative_data": "执行轨迹、审批和访问日志",
+      "source_objects": "Trace/AuditRecord",
+      "sor_rule": "append-only审计记录为SoR"
+    },
+    {
+      "system": "分析与KPI平台",
+      "authoritative_data": "派生指标和趋势",
+      "source_objects": "Metric/Dashboard",
+      "sor_rule": "派生结果非原始业务SoR"
+    }
+  ],
+  "concepts": [
+    {
+      "id": "SYN-C001",
+      "name_cn": "服务对象",
+      "name_en": "Service Beneficiary",
+      "group": "主体与组织",
+      "upper_parent": "Party",
+      "definition": "合成验证样例中的服务对象规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C002",
+      "name_cn": "组织",
+      "name_en": "Organization",
+      "group": "主体与组织",
+      "upper_parent": "Party",
+      "definition": "合成验证样例中的组织规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C003",
+      "name_cn": "角色",
+      "name_en": "Domain Role",
+      "group": "主体与组织",
+      "upper_parent": "Role",
+      "definition": "合成验证样例中的角色规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C004",
+      "name_cn": "身份",
+      "name_en": "Identity",
+      "group": "主体与组织",
+      "upper_parent": "Information Object",
+      "definition": "合成验证样例中的身份规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C005",
+      "name_cn": "授权",
+      "name_en": "Authorization",
+      "group": "主体与组织",
+      "upper_parent": "Agreement/Commitment",
+      "definition": "合成验证样例中的授权规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C006",
+      "name_cn": "需求",
+      "name_en": "Need",
+      "group": "需求与服务",
+      "upper_parent": "Situation",
+      "definition": "合成验证样例中的需求规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C007",
+      "name_cn": "目标",
+      "name_en": "Goal",
+      "group": "需求与服务",
+      "upper_parent": "Goal",
+      "definition": "合成验证样例中的目标规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C008",
+      "name_cn": "服务",
+      "name_en": "Service",
+      "group": "需求与服务",
+      "upper_parent": "Service/Product",
+      "definition": "合成验证样例中的服务规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C009",
+      "name_cn": "资格条件",
+      "name_en": "Eligibility",
+      "group": "需求与服务",
+      "upper_parent": "Policy/Rule/Constraint",
+      "definition": "合成验证样例中的资格条件规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C010",
+      "name_cn": "服务承诺",
+      "name_en": "Service Commitment",
+      "group": "需求与服务",
+      "upper_parent": "Agreement/Commitment",
+      "definition": "合成验证样例中的服务承诺规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C011",
+      "name_cn": "资源",
+      "name_en": "Resource",
+      "group": "资源与设施",
+      "upper_parent": "Resource/Asset",
+      "definition": "合成验证样例中的资源规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C012",
+      "name_cn": "设施",
+      "name_en": "Facility",
+      "group": "资源与设施",
+      "upper_parent": "Resource/Asset",
+      "definition": "合成验证样例中的设施规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C013",
+      "name_cn": "设备",
+      "name_en": "Equipment",
+      "group": "资源与设施",
+      "upper_parent": "Resource/Asset",
+      "definition": "合成验证样例中的设备规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C014",
+      "name_cn": "位置",
+      "name_en": "Location",
+      "group": "资源与设施",
+      "upper_parent": "Resource/Asset",
+      "definition": "合成验证样例中的位置规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C015",
+      "name_cn": "资源配置",
+      "name_en": "Resource Allocation",
+      "group": "资源与设施",
+      "upper_parent": "Task/Action",
+      "definition": "合成验证样例中的资源配置规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C016",
+      "name_cn": "申请",
+      "name_en": "Application",
+      "group": "过程与案件",
+      "upper_parent": "Information Object",
+      "definition": "合成验证样例中的申请规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C017",
+      "name_cn": "案件",
+      "name_en": "Case",
+      "group": "过程与案件",
+      "upper_parent": "Process/Case",
+      "definition": "合成验证样例中的案件规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C018",
+      "name_cn": "流程",
+      "name_en": "Process",
+      "group": "过程与案件",
+      "upper_parent": "Process/Case",
+      "definition": "合成验证样例中的流程规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C019",
+      "name_cn": "任务",
+      "name_en": "Task",
+      "group": "过程与案件",
+      "upper_parent": "Task/Action",
+      "definition": "合成验证样例中的任务规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C020",
+      "name_cn": "状态",
+      "name_en": "State",
+      "group": "过程与案件",
+      "upper_parent": "Situation",
+      "definition": "合成验证样例中的状态规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C021",
+      "name_cn": "事件",
+      "name_en": "Event",
+      "group": "过程与案件",
+      "upper_parent": "Event",
+      "definition": "合成验证样例中的事件规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C022",
+      "name_cn": "观察",
+      "name_en": "Observation",
+      "group": "决策与证据",
+      "upper_parent": "Observation/Evidence",
+      "definition": "合成验证样例中的观察规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C023",
+      "name_cn": "证据",
+      "name_en": "Evidence",
+      "group": "决策与证据",
+      "upper_parent": "Observation/Evidence",
+      "definition": "合成验证样例中的证据规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C024",
+      "name_cn": "规则",
+      "name_en": "Rule",
+      "group": "决策与证据",
+      "upper_parent": "Policy/Rule/Constraint",
+      "definition": "合成验证样例中的规则规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C025",
+      "name_cn": "决定",
+      "name_en": "Decision",
+      "group": "决策与证据",
+      "upper_parent": "Decision",
+      "definition": "合成验证样例中的决定规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C026",
+      "name_cn": "行动",
+      "name_en": "Action",
+      "group": "决策与证据",
+      "upper_parent": "Task/Action",
+      "definition": "合成验证样例中的行动规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C027",
+      "name_cn": "风险",
+      "name_en": "Risk",
+      "group": "决策与证据",
+      "upper_parent": "Risk/Control",
+      "definition": "合成验证样例中的风险规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C028",
+      "name_cn": "控制",
+      "name_en": "Control",
+      "group": "决策与证据",
+      "upper_parent": "Risk/Control",
+      "definition": "合成验证样例中的控制规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C029",
+      "name_cn": "结果",
+      "name_en": "Outcome",
+      "group": "结果与评价",
+      "upper_parent": "Outcome",
+      "definition": "合成验证样例中的结果规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C030",
+      "name_cn": "指标",
+      "name_en": "KPI",
+      "group": "结果与评价",
+      "upper_parent": "Measure/KPI",
+      "definition": "合成验证样例中的指标规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C031",
+      "name_cn": "反馈",
+      "name_en": "Feedback",
+      "group": "结果与评价",
+      "upper_parent": "Observation/Evidence",
+      "definition": "合成验证样例中的反馈规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C032",
+      "name_cn": "申诉",
+      "name_en": "Appeal",
+      "group": "结果与评价",
+      "upper_parent": "Process/Case",
+      "definition": "合成验证样例中的申诉规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C033",
+      "name_cn": "复核",
+      "name_en": "Review",
+      "group": "结果与评价",
+      "upper_parent": "Process/Case",
+      "definition": "合成验证样例中的复核规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C034",
+      "name_cn": "情节记录",
+      "name_en": "Episode",
+      "group": "结果与评价",
+      "upper_parent": "Episode/Learning",
+      "definition": "合成验证样例中的情节记录规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C035",
+      "name_cn": "学习候选",
+      "name_en": "Learning Candidate",
+      "group": "结果与评价",
+      "upper_parent": "Episode/Learning",
+      "definition": "合成验证样例中的学习候选规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C036",
+      "name_cn": "领域智能体",
+      "name_en": "Domain Agent",
+      "group": "智能体与治理",
+      "upper_parent": "Agent",
+      "definition": "合成验证样例中的领域智能体规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C037",
+      "name_cn": "智能体能力",
+      "name_en": "Agent Capability",
+      "group": "智能体与治理",
+      "upper_parent": "Capability",
+      "definition": "合成验证样例中的智能体能力规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C038",
+      "name_cn": "技能",
+      "name_en": "Skill",
+      "group": "智能体与治理",
+      "upper_parent": "Capability",
+      "definition": "合成验证样例中的技能规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C039",
+      "name_cn": "工具接口",
+      "name_en": "Tool Interface",
+      "group": "智能体与治理",
+      "upper_parent": "System/Interface",
+      "definition": "合成验证样例中的工具接口规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    },
+    {
+      "id": "SYN-C040",
+      "name_cn": "审计记录",
+      "name_en": "Audit Record",
+      "group": "智能体与治理",
+      "upper_parent": "Information Object",
+      "definition": "合成验证样例中的审计记录规范概念；用于测试报告结构，不代表真实行业结论。",
+      "source_refs": [
+        "I1",
+        "A1"
+      ],
+      "maturity": "candidate"
+    }
+  ],
+  "semantic_confusions": [
+    {
+      "expression": "服务对象 ≠ 用户账号 ≠ 数据库记录",
+      "clarification": "现实主体、身份载体和系统表示必须分离。"
+    },
+    {
+      "expression": "风险信号 ≠ 违规事实 ≠ 正式决定",
+      "clarification": "信号只支持进一步评估；事实和决定需要证据与权限。"
+    },
+    {
+      "expression": "推荐 ≠ 授权 ≠ 执行动作",
+      "clarification": "建议需要决策主体授权，动作还受工具和审计约束。"
+    },
+    {
+      "expression": "标准交换格式 ≠ 领域语义主干",
+      "clarification": "交换对象通常属于系统表示层。"
+    }
+  ],
+  "relations": [
+    {
+      "subject": "服务对象",
+      "predicate": "playsRole",
+      "object": "角色",
+      "meaning": "服务对象通过playsRole与角色形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "组织",
+      "predicate": "assignsRole",
+      "object": "角色",
+      "meaning": "组织通过assignsRole与角色形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "身份",
+      "predicate": "identifies",
+      "object": "服务对象",
+      "meaning": "身份通过identifies与服务对象形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "授权",
+      "predicate": "authorizes",
+      "object": "角色",
+      "meaning": "授权通过authorizes与角色形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "需求",
+      "predicate": "triggers",
+      "object": "案件",
+      "meaning": "需求通过triggers与案件形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "案件",
+      "predicate": "pursues",
+      "object": "目标",
+      "meaning": "案件通过pursues与目标形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "服务",
+      "predicate": "addresses",
+      "object": "需求",
+      "meaning": "服务通过addresses与需求形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "资格条件",
+      "predicate": "governs",
+      "object": "服务",
+      "meaning": "资格条件通过governs与服务形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "服务承诺",
+      "predicate": "commitsTo",
+      "object": "结果",
+      "meaning": "服务承诺通过commitsTo与结果形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "案件",
+      "predicate": "decomposesInto",
+      "object": "任务",
+      "meaning": "案件通过decomposesInto与任务形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "任务",
+      "predicate": "uses",
+      "object": "资源",
+      "meaning": "任务通过uses与资源形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "资源配置",
+      "predicate": "allocates",
+      "object": "资源",
+      "meaning": "资源配置通过allocates与资源形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "设施",
+      "predicate": "hosts",
+      "object": "设备",
+      "meaning": "设施通过hosts与设备形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "设备",
+      "predicate": "locatedAt",
+      "object": "位置",
+      "meaning": "设备通过locatedAt与位置形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "申请",
+      "predicate": "initiates",
+      "object": "案件",
+      "meaning": "申请通过initiates与案件形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "流程",
+      "predicate": "realizes",
+      "object": "服务",
+      "meaning": "流程通过realizes与服务形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "任务",
+      "predicate": "changes",
+      "object": "状态",
+      "meaning": "任务通过changes与状态形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "事件",
+      "predicate": "changes",
+      "object": "状态",
+      "meaning": "事件通过changes与状态形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "观察",
+      "predicate": "supports",
+      "object": "证据",
+      "meaning": "观察通过supports与证据形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "证据",
+      "predicate": "supports",
+      "object": "决定",
+      "meaning": "证据通过supports与决定形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "规则",
+      "predicate": "governs",
+      "object": "决定",
+      "meaning": "规则通过governs与决定形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "决定",
+      "predicate": "authorizes",
+      "object": "行动",
+      "meaning": "决定通过authorizes与行动形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "行动",
+      "predicate": "produces",
+      "object": "事件",
+      "meaning": "行动通过produces与事件形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "行动",
+      "predicate": "produces",
+      "object": "结果",
+      "meaning": "行动通过produces与结果形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "风险",
+      "predicate": "mitigatedBy",
+      "object": "控制",
+      "meaning": "风险通过mitigatedBy与控制形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "结果",
+      "predicate": "measuredBy",
+      "object": "指标",
+      "meaning": "结果通过measuredBy与指标形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "反馈",
+      "predicate": "evaluates",
+      "object": "结果",
+      "meaning": "反馈通过evaluates与结果形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "申诉",
+      "predicate": "challenges",
+      "object": "决定",
+      "meaning": "申诉通过challenges与决定形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "复核",
+      "predicate": "reviews",
+      "object": "申诉",
+      "meaning": "复核通过reviews与申诉形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "复核",
+      "predicate": "produces",
+      "object": "决定",
+      "meaning": "复核通过produces与决定形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "情节记录",
+      "predicate": "captures",
+      "object": "案件",
+      "meaning": "情节记录通过captures与案件形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "情节记录",
+      "predicate": "records",
+      "object": "结果",
+      "meaning": "情节记录通过records与结果形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "学习候选",
+      "predicate": "derivedFrom",
+      "object": "情节记录",
+      "meaning": "学习候选通过derivedFrom与情节记录形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "领域智能体",
+      "predicate": "possessesCapability",
+      "object": "智能体能力",
+      "meaning": "领域智能体通过possessesCapability与智能体能力形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "智能体能力",
+      "predicate": "implementedBy",
+      "object": "技能",
+      "meaning": "智能体能力通过implementedBy与技能形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "技能",
+      "predicate": "uses",
+      "object": "工具接口",
+      "meaning": "技能通过uses与工具接口形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "领域智能体",
+      "predicate": "actsUnder",
+      "object": "授权",
+      "meaning": "领域智能体通过actsUnder与授权形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "领域智能体",
+      "predicate": "performs",
+      "object": "任务",
+      "meaning": "领域智能体通过performs与任务形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "审计记录",
+      "predicate": "records",
+      "object": "行动",
+      "meaning": "审计记录通过records与行动形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "审计记录",
+      "predicate": "records",
+      "object": "决定",
+      "meaning": "审计记录通过records与决定形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "规则",
+      "predicate": "constrains",
+      "object": "领域智能体",
+      "meaning": "规则通过constrains与领域智能体形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "控制",
+      "predicate": "requires",
+      "object": "审计记录",
+      "meaning": "控制通过requires与审计记录形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "事件",
+      "predicate": "triggers",
+      "object": "通知",
+      "meaning": "事件通过triggers与通知形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "服务对象",
+      "predicate": "submits",
+      "object": "申请",
+      "meaning": "服务对象通过submits与申请形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "组织",
+      "predicate": "provides",
+      "object": "服务",
+      "meaning": "组织通过provides与服务形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "专业人员",
+      "predicate": "performs",
+      "object": "复核",
+      "meaning": "专业人员通过performs与复核形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "指标",
+      "predicate": "informs",
+      "object": "学习候选",
+      "meaning": "指标通过informs与学习候选形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "学习候选",
+      "predicate": "updates",
+      "object": "技能",
+      "meaning": "学习候选通过updates与技能形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "工具接口",
+      "predicate": "connectsTo",
+      "object": "案件管理系统",
+      "meaning": "工具接口通过connectsTo与案件管理系统形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    },
+    {
+      "subject": "身份",
+      "predicate": "representedBy",
+      "object": "身份系统记录",
+      "meaning": "身份通过representedBy与身份系统记录形成可追溯语义关系。",
+      "source_or_status": "合成验证 / candidate"
+    }
+  ],
+  "processes": [
+    {
+      "id": "SYN-P01",
+      "name": "需求识别与服务发现",
+      "trigger": "触发1: 合成业务事件",
+      "stages": "识别 → 校验 → 计划 → 执行 → 记录 → 完成",
+      "decisions": "资格、优先级、资源、异常、结果确认",
+      "evidence": "申请、规则版本、操作日志、人工审批、结果记录",
+      "outcome": "形成可确认结果、KPI与Episode"
+    },
+    {
+      "id": "SYN-P02",
+      "name": "申请受理与身份核验",
+      "trigger": "触发2: 合成业务事件",
+      "stages": "识别 → 校验 → 计划 → 执行 → 记录 → 完成",
+      "decisions": "资格、优先级、资源、异常、结果确认",
+      "evidence": "申请、规则版本、操作日志、人工审批、结果记录",
+      "outcome": "形成可确认结果、KPI与Episode"
+    },
+    {
+      "id": "SYN-P03",
+      "name": "资格评估与材料校验",
+      "trigger": "触发3: 合成业务事件",
+      "stages": "识别 → 校验 → 计划 → 执行 → 记录 → 完成",
+      "decisions": "资格、优先级、资源、异常、结果确认",
+      "evidence": "申请、规则版本、操作日志、人工审批、结果记录",
+      "outcome": "形成可确认结果、KPI与Episode"
+    },
+    {
+      "id": "SYN-P04",
+      "name": "案件计划与资源配置",
+      "trigger": "触发4: 合成业务事件",
+      "stages": "识别 → 校验 → 计划 → 执行 → 记录 → 完成",
+      "decisions": "资格、优先级、资源、异常、结果确认",
+      "evidence": "申请、规则版本、操作日志、人工审批、结果记录",
+      "outcome": "形成可确认结果、KPI与Episode"
+    },
+    {
+      "id": "SYN-P05",
+      "name": "任务执行与状态监控",
+      "trigger": "触发5: 合成业务事件",
+      "stages": "识别 → 校验 → 计划 → 执行 → 记录 → 完成",
+      "decisions": "资格、优先级、资源、异常、结果确认",
+      "evidence": "申请、规则版本、操作日志、人工审批、结果记录",
+      "outcome": "形成可确认结果、KPI与Episode"
+    },
+    {
+      "id": "SYN-P06",
+      "name": "异常处置与升级",
+      "trigger": "触发6: 合成业务事件",
+      "stages": "识别 → 校验 → 计划 → 执行 → 记录 → 完成",
+      "decisions": "资格、优先级、资源、异常、结果确认",
+      "evidence": "申请、规则版本、操作日志、人工审批、结果记录",
+      "outcome": "形成可确认结果、KPI与Episode"
+    },
+    {
+      "id": "SYN-P07",
+      "name": "结果交付与确认",
+      "trigger": "触发7: 合成业务事件",
+      "stages": "识别 → 校验 → 计划 → 执行 → 记录 → 完成",
+      "decisions": "资格、优先级、资源、异常、结果确认",
+      "evidence": "申请、规则版本、操作日志、人工审批、结果记录",
+      "outcome": "形成可确认结果、KPI与Episode"
+    },
+    {
+      "id": "SYN-P08",
+      "name": "申诉复核与持续改进",
+      "trigger": "触发8: 合成业务事件",
+      "stages": "识别 → 校验 → 计划 → 执行 → 记录 → 完成",
+      "decisions": "资格、优先级、资源、异常、结果确认",
+      "evidence": "申请、规则版本、操作日志、人工审批、结果记录",
+      "outcome": "形成可确认结果、KPI与Episode"
+    }
+  ],
+  "events": [
+    {
+      "event": "事件1",
+      "trigger": "流程阶段完成或异常出现",
+      "state_change": "案件/任务/资源状态发生变化",
+      "evidence": "时间戳、日志、业务记录"
+    },
+    {
+      "event": "事件2",
+      "trigger": "流程阶段完成或异常出现",
+      "state_change": "案件/任务/资源状态发生变化",
+      "evidence": "时间戳、日志、业务记录"
+    },
+    {
+      "event": "事件3",
+      "trigger": "流程阶段完成或异常出现",
+      "state_change": "案件/任务/资源状态发生变化",
+      "evidence": "时间戳、日志、业务记录"
+    },
+    {
+      "event": "事件4",
+      "trigger": "流程阶段完成或异常出现",
+      "state_change": "案件/任务/资源状态发生变化",
+      "evidence": "时间戳、日志、业务记录"
+    },
+    {
+      "event": "事件5",
+      "trigger": "流程阶段完成或异常出现",
+      "state_change": "案件/任务/资源状态发生变化",
+      "evidence": "时间戳、日志、业务记录"
+    },
+    {
+      "event": "事件6",
+      "trigger": "流程阶段完成或异常出现",
+      "state_change": "案件/任务/资源状态发生变化",
+      "evidence": "时间戳、日志、业务记录"
+    },
+    {
+      "event": "事件7",
+      "trigger": "流程阶段完成或异常出现",
+      "state_change": "案件/任务/资源状态发生变化",
+      "evidence": "时间戳、日志、业务记录"
+    },
+    {
+      "event": "事件8",
+      "trigger": "流程阶段完成或异常出现",
+      "state_change": "案件/任务/资源状态发生变化",
+      "evidence": "时间戳、日志、业务记录"
+    }
+  ],
+  "decisions": [
+    {
+      "decision": "决策1",
+      "authority": "授权人工角色；Agent仅生成候选",
+      "evidence": "规则、证据、历史Episode",
+      "result": "批准/拒绝/升级/补充材料",
+      "hitl": "A3及以上强制人工确认"
+    },
+    {
+      "decision": "决策2",
+      "authority": "授权人工角色；Agent仅生成候选",
+      "evidence": "规则、证据、历史Episode",
+      "result": "批准/拒绝/升级/补充材料",
+      "hitl": "A3及以上强制人工确认"
+    },
+    {
+      "decision": "决策3",
+      "authority": "授权人工角色；Agent仅生成候选",
+      "evidence": "规则、证据、历史Episode",
+      "result": "批准/拒绝/升级/补充材料",
+      "hitl": "A3及以上强制人工确认"
+    },
+    {
+      "decision": "决策4",
+      "authority": "授权人工角色；Agent仅生成候选",
+      "evidence": "规则、证据、历史Episode",
+      "result": "批准/拒绝/升级/补充材料",
+      "hitl": "A3及以上强制人工确认"
+    },
+    {
+      "decision": "决策5",
+      "authority": "授权人工角色；Agent仅生成候选",
+      "evidence": "规则、证据、历史Episode",
+      "result": "批准/拒绝/升级/补充材料",
+      "hitl": "A3及以上强制人工确认"
+    },
+    {
+      "decision": "决策6",
+      "authority": "授权人工角色；Agent仅生成候选",
+      "evidence": "规则、证据、历史Episode",
+      "result": "批准/拒绝/升级/补充材料",
+      "hitl": "A3及以上强制人工确认"
+    },
+    {
+      "decision": "决策7",
+      "authority": "授权人工角色；Agent仅生成候选",
+      "evidence": "规则、证据、历史Episode",
+      "result": "批准/拒绝/升级/补充材料",
+      "hitl": "A3及以上强制人工确认"
+    },
+    {
+      "decision": "决策8",
+      "authority": "授权人工角色；Agent仅生成候选",
+      "evidence": "规则、证据、历史Episode",
+      "result": "批准/拒绝/升级/补充材料",
+      "hitl": "A3及以上强制人工确认"
+    }
+  ],
+  "rules_constraints": [
+    {
+      "rule": "规则1: 满足条件方可进入下一状态",
+      "reason": "避免缺证、越权或不可逆错误",
+      "source_or_status": "H1 待领域专家确认",
+      "priority": "硬约束"
+    },
+    {
+      "rule": "规则2: 满足条件方可进入下一状态",
+      "reason": "避免缺证、越权或不可逆错误",
+      "source_or_status": "H1 待领域专家确认",
+      "priority": "硬约束"
+    },
+    {
+      "rule": "规则3: 满足条件方可进入下一状态",
+      "reason": "避免缺证、越权或不可逆错误",
+      "source_or_status": "H1 待领域专家确认",
+      "priority": "硬约束"
+    },
+    {
+      "rule": "规则4: 满足条件方可进入下一状态",
+      "reason": "避免缺证、越权或不可逆错误",
+      "source_or_status": "H1 待领域专家确认",
+      "priority": "评估/优化"
+    },
+    {
+      "rule": "规则5: 满足条件方可进入下一状态",
+      "reason": "避免缺证、越权或不可逆错误",
+      "source_or_status": "H1 待领域专家确认",
+      "priority": "评估/优化"
+    },
+    {
+      "rule": "规则6: 满足条件方可进入下一状态",
+      "reason": "避免缺证、越权或不可逆错误",
+      "source_or_status": "H1 待领域专家确认",
+      "priority": "评估/优化"
+    },
+    {
+      "rule": "规则7: 满足条件方可进入下一状态",
+      "reason": "避免缺证、越权或不可逆错误",
+      "source_or_status": "H1 待领域专家确认",
+      "priority": "评估/优化"
+    },
+    {
+      "rule": "规则8: 满足条件方可进入下一状态",
+      "reason": "避免缺证、越权或不可逆错误",
+      "source_or_status": "H1 待领域专家确认",
+      "priority": "评估/优化"
+    }
+  ],
+  "risk_controls": [
+    {
+      "risk": "风险1",
+      "consequence": "错误决定、权益受损、资源浪费或不可追溯",
+      "control": "最小权限、双人复核、证据门、回滚、申诉与审计",
+      "owner": "业务属主/治理负责人",
+      "evidence": "审计记录与复核决定"
+    },
+    {
+      "risk": "风险2",
+      "consequence": "错误决定、权益受损、资源浪费或不可追溯",
+      "control": "最小权限、双人复核、证据门、回滚、申诉与审计",
+      "owner": "业务属主/治理负责人",
+      "evidence": "审计记录与复核决定"
+    },
+    {
+      "risk": "风险3",
+      "consequence": "错误决定、权益受损、资源浪费或不可追溯",
+      "control": "最小权限、双人复核、证据门、回滚、申诉与审计",
+      "owner": "业务属主/治理负责人",
+      "evidence": "审计记录与复核决定"
+    },
+    {
+      "risk": "风险4",
+      "consequence": "错误决定、权益受损、资源浪费或不可追溯",
+      "control": "最小权限、双人复核、证据门、回滚、申诉与审计",
+      "owner": "业务属主/治理负责人",
+      "evidence": "审计记录与复核决定"
+    },
+    {
+      "risk": "风险5",
+      "consequence": "错误决定、权益受损、资源浪费或不可追溯",
+      "control": "最小权限、双人复核、证据门、回滚、申诉与审计",
+      "owner": "业务属主/治理负责人",
+      "evidence": "审计记录与复核决定"
+    },
+    {
+      "risk": "风险6",
+      "consequence": "错误决定、权益受损、资源浪费或不可追溯",
+      "control": "最小权限、双人复核、证据门、回滚、申诉与审计",
+      "owner": "业务属主/治理负责人",
+      "evidence": "审计记录与复核决定"
+    },
+    {
+      "risk": "风险7",
+      "consequence": "错误决定、权益受损、资源浪费或不可追溯",
+      "control": "最小权限、双人复核、证据门、回滚、申诉与审计",
+      "owner": "业务属主/治理负责人",
+      "evidence": "审计记录与复核决定"
+    },
+    {
+      "risk": "风险8",
+      "consequence": "错误决定、权益受损、资源浪费或不可追溯",
+      "control": "最小权限、双人复核、证据门、回滚、申诉与审计",
+      "owner": "业务属主/治理负责人",
+      "evidence": "审计记录与复核决定"
+    },
+    {
+      "risk": "风险9",
+      "consequence": "错误决定、权益受损、资源浪费或不可追溯",
+      "control": "最小权限、双人复核、证据门、回滚、申诉与审计",
+      "owner": "业务属主/治理负责人",
+      "evidence": "审计记录与复核决定"
+    },
+    {
+      "risk": "风险10",
+      "consequence": "错误决定、权益受损、资源浪费或不可追溯",
+      "control": "最小权限、双人复核、证据门、回滚、申诉与审计",
+      "owner": "业务属主/治理负责人",
+      "evidence": "审计记录与复核决定"
+    }
+  ],
+  "kpis": [
+    {
+      "kpi": "服务完成率",
+      "definition": "已完成案件占比",
+      "measure": "完成数/受理数",
+      "source": "案件/审计/反馈系统",
+      "caveat": "派生指标不得替代个案判断"
+    },
+    {
+      "kpi": "一次通过率",
+      "definition": "无需补充材料的通过占比",
+      "measure": "一次通过数/申请数",
+      "source": "案件/审计/反馈系统",
+      "caveat": "派生指标不得替代个案判断"
+    },
+    {
+      "kpi": "平均周期",
+      "definition": "从受理到关闭的时长",
+      "measure": "中位数与P90",
+      "source": "案件/审计/反馈系统",
+      "caveat": "派生指标不得替代个案判断"
+    },
+    {
+      "kpi": "人工复核率",
+      "definition": "需要人工最终判断的占比",
+      "measure": "复核数/决策数",
+      "source": "案件/审计/反馈系统",
+      "caveat": "派生指标不得替代个案判断"
+    },
+    {
+      "kpi": "申诉改判率",
+      "definition": "申诉后原决定被修改的比例",
+      "measure": "改判数/申诉数",
+      "source": "案件/审计/反馈系统",
+      "caveat": "派生指标不得替代个案判断"
+    },
+    {
+      "kpi": "证据完整率",
+      "definition": "必需证据齐备比例",
+      "measure": "完整案件/总案件",
+      "source": "案件/审计/反馈系统",
+      "caveat": "派生指标不得替代个案判断"
+    },
+    {
+      "kpi": "审计覆盖率",
+      "definition": "关键动作有审计记录的比例",
+      "measure": "有审计动作/关键动作",
+      "source": "案件/审计/反馈系统",
+      "caveat": "派生指标不得替代个案判断"
+    },
+    {
+      "kpi": "公平性差异",
+      "definition": "群体间结果差异",
+      "measure": "分组差异与置信区间",
+      "source": "案件/审计/反馈系统",
+      "caveat": "派生指标不得替代个案判断"
+    }
+  ],
+  "standards": [
+    {
+      "name": "SYN Domain Reference Model",
+      "organization": "Synthetic Standards Lab",
+      "version_or_date": "v1.0 / synthetic",
+      "role": "semantic_backbone",
+      "coverage": "合成验证覆盖范围",
+      "reusable_concepts": "Service, Case, Event, Evidence, Decision 等",
+      "mapping_relation": "broader",
+      "backbone_recommendation": "partial",
+      "strengths": "用于验证标准对标表结构与字段完整性",
+      "gaps": "不代表真实标准结论；真实运行必须换成官方来源",
+      "local_extension": "保留领域决策、Agent授权和本地对象扩展",
+      "source_refs": [
+        "S1",
+        "A1"
+      ]
+    },
+    {
+      "name": "SYN Controlled Vocabulary",
+      "organization": "Synthetic Standards Lab",
+      "version_or_date": "v1.0 / synthetic",
+      "role": "code_system",
+      "coverage": "合成验证覆盖范围",
+      "reusable_concepts": "Service, Case, Event, Evidence, Decision 等",
+      "mapping_relation": "related",
+      "backbone_recommendation": "no",
+      "strengths": "用于验证标准对标表结构与字段完整性",
+      "gaps": "不代表真实标准结论；真实运行必须换成官方来源",
+      "local_extension": "保留领域决策、Agent授权和本地对象扩展",
+      "source_refs": [
+        "S1",
+        "A1"
+      ]
+    },
+    {
+      "name": "SYN Service Exchange",
+      "organization": "Synthetic Standards Lab",
+      "version_or_date": "v1.0 / synthetic",
+      "role": "exchange_format",
+      "coverage": "合成验证覆盖范围",
+      "reusable_concepts": "Service, Case, Event, Evidence, Decision 等",
+      "mapping_relation": "related",
+      "backbone_recommendation": "no",
+      "strengths": "用于验证标准对标表结构与字段完整性",
+      "gaps": "不代表真实标准结论；真实运行必须换成官方来源",
+      "local_extension": "保留领域决策、Agent授权和本地对象扩展",
+      "source_refs": [
+        "S1",
+        "A1"
+      ]
+    },
+    {
+      "name": "SYN Event Model",
+      "organization": "Synthetic Standards Lab",
+      "version_or_date": "v1.0 / synthetic",
+      "role": "event_telemetry",
+      "coverage": "合成验证覆盖范围",
+      "reusable_concepts": "Service, Case, Event, Evidence, Decision 等",
+      "mapping_relation": "related",
+      "backbone_recommendation": "no",
+      "strengths": "用于验证标准对标表结构与字段完整性",
+      "gaps": "不代表真实标准结论；真实运行必须换成官方来源",
+      "local_extension": "保留领域决策、Agent授权和本地对象扩展",
+      "source_refs": [
+        "S1",
+        "A1"
+      ]
+    },
+    {
+      "name": "SYN Provenance Profile",
+      "organization": "Synthetic Standards Lab",
+      "version_or_date": "v1.0 / synthetic",
+      "role": "provenance_credential",
+      "coverage": "合成验证覆盖范围",
+      "reusable_concepts": "Service, Case, Event, Evidence, Decision 等",
+      "mapping_relation": "related",
+      "backbone_recommendation": "no",
+      "strengths": "用于验证标准对标表结构与字段完整性",
+      "gaps": "不代表真实标准结论；真实运行必须换成官方来源",
+      "local_extension": "保留领域决策、Agent授权和本地对象扩展",
+      "source_refs": [
+        "S1",
+        "A1"
+      ]
+    },
+    {
+      "name": "SYN Governance Guide",
+      "organization": "Synthetic Standards Lab",
+      "version_or_date": "v1.0 / synthetic",
+      "role": "governance_reference",
+      "coverage": "合成验证覆盖范围",
+      "reusable_concepts": "Service, Case, Event, Evidence, Decision 等",
+      "mapping_relation": "related",
+      "backbone_recommendation": "no",
+      "strengths": "用于验证标准对标表结构与字段完整性",
+      "gaps": "不代表真实标准结论；真实运行必须换成官方来源",
+      "local_extension": "保留领域决策、Agent授权和本地对象扩展",
+      "source_refs": [
+        "S1",
+        "A1"
+      ]
+    },
+    {
+      "name": "PROV-O conceptual reference",
+      "organization": "W3C (named only for renderer test)",
+      "version_or_date": "synthetic mapping fixture",
+      "role": "provenance_credential",
+      "coverage": "合成验证覆盖范围",
+      "reusable_concepts": "Service, Case, Event, Evidence, Decision 等",
+      "mapping_relation": "related",
+      "backbone_recommendation": "no",
+      "strengths": "用于验证标准对标表结构与字段完整性",
+      "gaps": "不代表真实标准结论；真实运行必须换成官方来源",
+      "local_extension": "保留领域决策、Agent授权和本地对象扩展",
+      "source_refs": [
+        "S1",
+        "A1"
+      ]
+    },
+    {
+      "name": "DCAT conceptual reference",
+      "organization": "W3C (named only for renderer test)",
+      "version_or_date": "synthetic mapping fixture",
+      "role": "exchange_format",
+      "coverage": "合成验证覆盖范围",
+      "reusable_concepts": "Service, Case, Event, Evidence, Decision 等",
+      "mapping_relation": "related",
+      "backbone_recommendation": "no",
+      "strengths": "用于验证标准对标表结构与字段完整性",
+      "gaps": "不代表真实标准结论；真实运行必须换成官方来源",
+      "local_extension": "保留领域决策、Agent授权和本地对象扩展",
+      "source_refs": [
+        "S1",
+        "A1"
+      ]
+    },
+    {
+      "name": "Local Operations Schema",
+      "organization": "Demo Organization",
+      "version_or_date": "v0.1 / synthetic",
+      "role": "local_mapping",
+      "coverage": "合成验证覆盖范围",
+      "reusable_concepts": "Service, Case, Event, Evidence, Decision 等",
+      "mapping_relation": "related",
+      "backbone_recommendation": "no",
+      "strengths": "用于验证标准对标表结构与字段完整性",
+      "gaps": "不代表真实标准结论；真实运行必须换成官方来源",
+      "local_extension": "保留领域决策、Agent授权和本地对象扩展",
+      "source_refs": [
+        "S1",
+        "A1"
+      ]
+    },
+    {
+      "name": "Agent Audit Profile",
+      "organization": "Demo Organization",
+      "version_or_date": "v0.1 / synthetic",
+      "role": "governance_reference",
+      "coverage": "合成验证覆盖范围",
+      "reusable_concepts": "Service, Case, Event, Evidence, Decision 等",
+      "mapping_relation": "related",
+      "backbone_recommendation": "no",
+      "strengths": "用于验证标准对标表结构与字段完整性",
+      "gaps": "不代表真实标准结论；真实运行必须换成官方来源",
+      "local_extension": "保留领域决策、Agent授权和本地对象扩展",
+      "source_refs": [
+        "S1",
+        "A1"
+      ]
+    }
+  ],
+  "upper_mappings": [
+    {
+      "upper_construct": "Party",
+      "domain_concepts": [
+        "服务对象",
+        "组织"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    },
+    {
+      "upper_construct": "Role",
+      "domain_concepts": [
+        "角色"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    },
+    {
+      "upper_construct": "Agent",
+      "domain_concepts": [
+        "领域智能体"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    },
+    {
+      "upper_construct": "Goal",
+      "domain_concepts": [
+        "目标"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    },
+    {
+      "upper_construct": "Situation",
+      "domain_concepts": [
+        "需求",
+        "状态"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    },
+    {
+      "upper_construct": "Capability",
+      "domain_concepts": [
+        "智能体能力",
+        "技能"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    },
+    {
+      "upper_construct": "Service/Product",
+      "domain_concepts": [
+        "服务"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    },
+    {
+      "upper_construct": "Process/Case",
+      "domain_concepts": [
+        "案件",
+        "流程",
+        "申诉",
+        "复核"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    },
+    {
+      "upper_construct": "Task/Action",
+      "domain_concepts": [
+        "资源配置",
+        "任务",
+        "行动"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    },
+    {
+      "upper_construct": "Resource/Asset",
+      "domain_concepts": [
+        "资源",
+        "设施",
+        "设备",
+        "位置"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    },
+    {
+      "upper_construct": "Information Object",
+      "domain_concepts": [
+        "身份",
+        "申请",
+        "审计记录"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    },
+    {
+      "upper_construct": "Event",
+      "domain_concepts": [
+        "事件"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    },
+    {
+      "upper_construct": "Decision",
+      "domain_concepts": [
+        "决定"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    },
+    {
+      "upper_construct": "Policy/Rule/Constraint",
+      "domain_concepts": [
+        "资格条件",
+        "规则"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    },
+    {
+      "upper_construct": "Agreement/Commitment",
+      "domain_concepts": [
+        "授权",
+        "服务承诺"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    },
+    {
+      "upper_construct": "Observation/Evidence",
+      "domain_concepts": [
+        "观察",
+        "证据",
+        "反馈"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    },
+    {
+      "upper_construct": "Risk/Control",
+      "domain_concepts": [
+        "风险",
+        "控制"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    },
+    {
+      "upper_construct": "Outcome",
+      "domain_concepts": [
+        "结果"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    },
+    {
+      "upper_construct": "Measure/KPI",
+      "domain_concepts": [
+        "指标"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    },
+    {
+      "upper_construct": "Episode/Learning",
+      "domain_concepts": [
+        "情节记录",
+        "学习候选"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    },
+    {
+      "upper_construct": "System/Interface",
+      "domain_concepts": [
+        "工具接口"
+      ],
+      "usage": "提供跨领域一致的父类、关系和流程语义。"
+    }
+  ],
+  "agent_governance": {
+    "objects": [
+      {
+        "name": "DomainAgent",
+        "meaning": "领域辅助智能体",
+        "relations": "possessesCapability / actsUnder Authorization"
+      },
+      {
+        "name": "AgentCapability",
+        "meaning": "可被授权的能力",
+        "relations": "implementedBy Skill"
+      },
+      {
+        "name": "Skill",
+        "meaning": "可执行能力单元",
+        "relations": "uses ToolInterface"
+      },
+      {
+        "name": "Authorization",
+        "meaning": "授权范围和期限",
+        "relations": "governs Agent/Action"
+      },
+      {
+        "name": "HumanApproval",
+        "meaning": "人工确认记录",
+        "relations": "authorizes high-impact action"
+      },
+      {
+        "name": "QualityGate",
+        "meaning": "质量与安全门",
+        "relations": "blocks Action"
+      },
+      {
+        "name": "AuditRecord",
+        "meaning": "append-only轨迹",
+        "relations": "records Decision/Action"
+      },
+      {
+        "name": "ReviewRequest",
+        "meaning": "申诉或复核请求",
+        "relations": "triggers Review"
+      }
+    ],
+    "autonomy_levels": [
+      {
+        "level": "A0",
+        "typical_tasks": "检索、格式化、摘要",
+        "human_mode": "抽查",
+        "constraints": "不得生成决定"
+      },
+      {
+        "level": "A1",
+        "typical_tasks": "生成候选概念、映射、文本",
+        "human_mode": "人工选择",
+        "constraints": "候选必须标注来源和置信度"
+      },
+      {
+        "level": "A2",
+        "typical_tasks": "按批准规则执行可逆本地操作",
+        "human_mode": "例外复核",
+        "constraints": "必须可回滚和审计"
+      },
+      {
+        "level": "A3",
+        "typical_tasks": "高影响建议或受控动作",
+        "human_mode": "事前明确批准",
+        "constraints": "必须证据门、审批、申诉"
+      },
+      {
+        "level": "A4",
+        "typical_tasks": "正式处罚、不可逆决定或生产发布",
+        "human_mode": "禁止或独立特别授权",
+        "constraints": "本Skill不得执行"
+      }
+    ],
+    "human_final_decisions": [
+      "正式资格/权益决定",
+      "不可逆资源处置",
+      "处罚或限制",
+      "申诉复核结论",
+      "生产发布"
+    ],
+    "manifest_fields": [
+      "agent_id",
+      "role",
+      "capabilities",
+      "allowed_tasks",
+      "prohibited_actions",
+      "tools",
+      "authorization_scope",
+      "required_evidence",
+      "hitl_policy",
+      "audit_policy",
+      "escalation_path",
+      "version"
+    ]
+  },
+  "closed_loops": [
+    {
+      "name": "服务申请资格评估",
+      "situation": "合成情境1",
+      "goal": "在规则与授权范围内形成可解释、可复核结果",
+      "process": "识别 → 检索 → 评估 → 决策 → 执行 → 复盘",
+      "task_decision": "Agent生成候选；授权人工作最终高影响决定",
+      "evidence_event": "证据、规则版本、事件、审批、审计",
+      "outcome_kpi": "结果、周期、质量、公平与安全指标",
+      "episode_learning": "记录预测/实际/ΔA/ΔR，形成候选改进而非自动提交",
+      "source_refs": [
+        "I1",
+        "A1"
+      ]
+    },
+    {
+      "name": "资源异常处置",
+      "situation": "合成情境2",
+      "goal": "在规则与授权范围内形成可解释、可复核结果",
+      "process": "识别 → 检索 → 评估 → 决策 → 执行 → 复盘",
+      "task_decision": "Agent生成候选；授权人工作最终高影响决定",
+      "evidence_event": "证据、规则版本、事件、审批、审计",
+      "outcome_kpi": "结果、周期、质量、公平与安全指标",
+      "episode_learning": "记录预测/实际/ΔA/ΔR，形成候选改进而非自动提交",
+      "source_refs": [
+        "I1",
+        "A1"
+      ]
+    },
+    {
+      "name": "结果申诉复核",
+      "situation": "合成情境3",
+      "goal": "在规则与授权范围内形成可解释、可复核结果",
+      "process": "识别 → 检索 → 评估 → 决策 → 执行 → 复盘",
+      "task_decision": "Agent生成候选；授权人工作最终高影响决定",
+      "evidence_event": "证据、规则版本、事件、审批、审计",
+      "outcome_kpi": "结果、周期、质量、公平与安全指标",
+      "episode_learning": "记录预测/实际/ΔA/ΔR，形成候选改进而非自动提交",
+      "source_refs": [
+        "I1",
+        "A1"
+      ]
+    }
+  ],
+  "kstar_mapping": [
+    {
+      "stage": "K_C",
+      "inputs": "Situation、Party、Role、Goal、当前状态",
+      "outputs": "结构化上下文",
+      "controls": "权限和数据边界"
+    },
+    {
+      "stage": "K_R",
+      "inputs": "规则、标准、相似Episode、流程模板",
+      "outputs": "检索候选",
+      "controls": "来源和版本"
+    },
+    {
+      "stage": "K_A",
+      "inputs": "候选与本地约束",
+      "outputs": "参数、角色、路径和资源绑定",
+      "controls": "授权与适配边界"
+    },
+    {
+      "stage": "K_G",
+      "inputs": "适配后的上下文",
+      "outputs": "分析、计划、文档或候选动作",
+      "controls": "质量门/HITL"
+    },
+    {
+      "stage": "K_F",
+      "inputs": "候选计划和历史指标",
+      "outputs": "结果、风险、成本和KPI预测",
+      "controls": "置信度与不确定性"
+    },
+    {
+      "stage": "K_L",
+      "inputs": "实际行动/结果、ΔA、ΔR",
+      "outputs": "Episode、学习假设、补丁候选",
+      "controls": "支持度、三门与staged上限"
+    }
+  ],
+  "architecture_boundaries": [
+    {
+      "layer": "Shared Upper Ontology",
+      "assets": "Party/Role/Agent/Process/Evidence/Decision/Risk/Outcome等",
+      "ownership": "总体架构/语义治理"
+    },
+    {
+      "layer": "Domain Module",
+      "assets": "领域概念、关系、流程、规则候选",
+      "ownership": "领域专家与本体负责人"
+    },
+    {
+      "layer": "Organization Extension",
+      "assets": "组织、产品和本地业务扩展",
+      "ownership": "企业业务属主"
+    },
+    {
+      "layer": "System Mapping",
+      "assets": "数据库、API、文档、Connector映射",
+      "ownership": "应用和数据负责人"
+    },
+    {
+      "layer": "Agent Governance",
+      "assets": "能力、授权、HITL、审计、Episode",
+      "ownership": "AI治理与业务属主"
+    }
+  ],
+  "implementation_priorities": [
+    {
+      "priority": "P0",
+      "work_package": "锁定政策范围、上层本体和证据规则",
+      "result": "统一边界和数据模板"
+    },
+    {
+      "priority": "P1",
+      "work_package": "完成概念、关系、流程和标准基线",
+      "result": "可评审的领域景观"
+    },
+    {
+      "priority": "P2",
+      "work_package": "建立系统映射与Agent治理",
+      "result": "可连接执行架构"
+    },
+    {
+      "priority": "P3",
+      "work_package": "真实案例、专家确认与KSTAR回放",
+      "result": "从候选走向reviewed"
+    }
+  ],
+  "review_questions": [
+    "正式政策范围由谁签字确认？",
+    "哪些概念是T1核心，哪些只是局部扩展？",
+    "哪些系统是各数据对象的SoR？",
+    "哪些规则理由和阈值需要领域专家确认？",
+    "哪些标准可以成为语义主干？",
+    "A3/A4动作的责任人与审批链是什么？",
+    "数据敏感性和保留期限如何定义？",
+    "何时可以从candidate提升到reviewed？"
+  ],
+  "workbook_fields": [
+    {
+      "field": "Domain/Subdomain",
+      "purpose": "概念所属领域"
+    },
+    {
+      "field": "Concept ID",
+      "purpose": "稳定标识"
+    },
+    {
+      "field": "Canonical Concept",
+      "purpose": "统一名称"
+    },
+    {
+      "field": "Definition",
+      "purpose": "业务定义"
+    },
+    {
+      "field": "Concept Type",
+      "purpose": "Party/Process/Event等"
+    },
+    {
+      "field": "Parent Concept",
+      "purpose": "上层映射"
+    },
+    {
+      "field": "Relationships",
+      "purpose": "主要关系"
+    },
+    {
+      "field": "Process Stage",
+      "purpose": "参与流程"
+    },
+    {
+      "field": "Organization/Role",
+      "purpose": "责任主体"
+    },
+    {
+      "field": "Source System",
+      "purpose": "来源系统"
+    },
+    {
+      "field": "Source Object",
+      "purpose": "表/API/文档对象"
+    },
+    {
+      "field": "External Standard",
+      "purpose": "对标资产"
+    },
+    {
+      "field": "Mapping Relation",
+      "purpose": "exact等"
+    },
+    {
+      "field": "System of Record",
+      "purpose": "权威来源"
+    },
+    {
+      "field": "Sensitivity/Authority",
+      "purpose": "治理分类"
+    },
+    {
+      "field": "Evidence/Provenance",
+      "purpose": "来源与理由"
+    },
+    {
+      "field": "ECS Usage",
+      "purpose": "上下文/检索/执行/学习"
+    },
+    {
+      "field": "Maturity",
+      "purpose": "candidate/reviewed等"
+    }
+  ],
+  "workbook_examples": [
+    {
+      "Domain/Subdomain": "合成域/案件",
+      "Concept ID": "SYN-C017",
+      "Canonical Concept": "案件 Case",
+      "Concept Type": "Process/Case",
+      "Parent Concept": "Process/Case",
+      "External Standard": "SYN Domain Reference Model",
+      "Mapping Relation": "broader",
+      "Maturity": "candidate"
+    },
+    {
+      "Domain/Subdomain": "合成域/治理",
+      "Concept ID": "SYN-C036",
+      "Canonical Concept": "领域智能体 Domain Agent",
+      "Concept Type": "Agent",
+      "Parent Concept": "Agent",
+      "External Standard": "Agent Audit Profile",
+      "Mapping Relation": "local extension",
+      "Maturity": "candidate"
+    },
+    {
+      "Domain/Subdomain": "合成域/证据",
+      "Concept ID": "SYN-C023",
+      "Canonical Concept": "证据 Evidence",
+      "Concept Type": "Observation/Evidence",
+      "Parent Concept": "Observation/Evidence",
+      "External Standard": "SYN Provenance Profile",
+      "Mapping Relation": "related",
+      "Maturity": "candidate"
+    }
+  ],
+  "sources": [
+    {
+      "id": "P1",
+      "evidence_type": "synthetic",
+      "title": "合成政策范围（仅用于工具链验证）",
+      "organization": "Demo Organization",
+      "version_or_date": "2026-08-08",
+      "url_or_file": "fixtures/sample-report-data.json",
+      "verification_status": "synthetic",
+      "usage": "测试政策范围章节",
+      "notes": "非真实政策"
+    },
+    {
+      "id": "S1",
+      "evidence_type": "synthetic",
+      "title": "合成标准资产清单",
+      "organization": "Synthetic Standards Lab",
+      "version_or_date": "v1.0",
+      "url_or_file": "fixtures/sample-report-data.json",
+      "verification_status": "synthetic",
+      "usage": "测试标准对标矩阵",
+      "notes": "非真实标准"
+    },
+    {
+      "id": "I1",
+      "evidence_type": "synthetic",
+      "title": "合成内部领域材料",
+      "organization": "Demo Organization",
+      "version_or_date": "v0.1",
+      "url_or_file": "fixtures/sample-report-data.json",
+      "verification_status": "synthetic",
+      "usage": "测试内部材料吸收",
+      "notes": "无真实业务数据"
+    },
+    {
+      "id": "A1",
+      "evidence_type": "analysis_note",
+      "title": "合成架构分析建议",
+      "organization": "Skill Fixture",
+      "version_or_date": "2026-08-08",
+      "url_or_file": "fixtures/sample-report-data.json",
+      "verification_status": "analysis",
+      "usage": "测试分析建议标注",
+      "notes": "不代表正式结论"
+    },
+    {
+      "id": "R1",
+      "evidence_type": "secondary_reference",
+      "title": "合成二手发现线索",
+      "organization": "Skill Fixture",
+      "version_or_date": "2026-08-08",
+      "url_or_file": "fixtures/sample-report-data.json",
+      "verification_status": "unverified",
+      "usage": "测试非权威来源边界",
+      "notes": "不得支撑关键结论"
+    },
+    {
+      "id": "E1",
+      "evidence_type": "synthetic",
+      "title": "合成人工评审决定",
+      "organization": "Fixture Reviewer",
+      "version_or_date": "2026-08-08",
+      "url_or_file": "fixtures/sample-report-data.json",
+      "verification_status": "synthetic",
+      "usage": "测试HITL记录",
+      "notes": "不是真实签字"
+    },
+    {
+      "id": "S2",
+      "evidence_type": "synthetic",
+      "title": "合成事件模型",
+      "organization": "Synthetic Standards Lab",
+      "version_or_date": "v1.0",
+      "url_or_file": "fixtures/sample-report-data.json",
+      "verification_status": "synthetic",
+      "usage": "测试事件/遥测对标",
+      "notes": "非真实标准"
+    },
+    {
+      "id": "S3",
+      "evidence_type": "synthetic",
+      "title": "合成来源与凭证模型",
+      "organization": "Synthetic Standards Lab",
+      "version_or_date": "v1.0",
+      "url_or_file": "fixtures/sample-report-data.json",
+      "verification_status": "synthetic",
+      "usage": "测试来源/审计对标",
+      "notes": "非真实标准"
+    }
+  ],
+  "material_treatment": [
+    {
+      "material": "合成政策范围",
+      "treatment": "仅用于测试章节和来源结构",
+      "reason": "不是正式政策",
+      "source_refs": [
+        "P1"
+      ]
+    },
+    {
+      "material": "合成标准清单",
+      "treatment": "仅验证对标矩阵字段",
+      "reason": "不是正式标准",
+      "source_refs": [
+        "S1"
+      ]
+    },
+    {
+      "material": "合成内部材料",
+      "treatment": "作为local extension示例",
+      "reason": "不能代表行业本体",
+      "source_refs": [
+        "I1"
+      ]
+    },
+    {
+      "material": "11–14分册架构",
+      "treatment": "仅复用结构和质量门",
+      "reason": "不同领域事实不可复制",
+      "source_refs": [
+        "A1"
+      ]
+    }
+  ],
+  "research_assurance": {
+    "gate_status": "pending",
+    "research_plan_id": "pending",
+    "research_ledger_id": "pending",
+    "research_date": "2026-08-08",
+    "queries_executed": 0,
+    "opened_sources": 0,
+    "verified_primary_sources": 0,
+    "official_policy_sources": 0,
+    "official_standard_sources": 0,
+    "unresolved_conflicts": 1,
+    "gate_report_ref": "generated-at-runtime",
+    "notes": "run_skill.py will replace this placeholder after the mandatory research gate passes."
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "skill_name": "customer-profile-presales",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "客户=某能源集团信息公司一把手，电网行业，关系=B_渠道二道贩子经苗总转述，Demo? 否，高层15分；已知印象['觉得是又一个AI项目','关注取数/减人','怕方案泄露给竞对']。给这一场作战方案。",
+      "expected_output": "R1a→高层版+战略叙事；R2b→颗粒度B，forbidden含[方法论细节,报价,客户名单]，no_name_competitor=true；钩子取防蒸馏/资产钩；场景=招投标合规审查(A-)；异议卡预置 Q3(又一个AI项目)+Q1(取数减人)+Q8(归你什么/怕泄露→产权归属)；material_list=高层版11页+案例卡+One-Pager。输出为 staged 作战草案，customized_deck.status=pending_human_review。",
+      "assertions": [
+        {"text": "选高层版 + 战略叙事（R1a）", "kind": "qualitative"},
+        {"text": "颗粒度=B 且 forbidden 含方法论细节/报价/客户名单（R2b）", "kind": "qualitative"},
+        {"text": "预置 Q3/Q1 异议卡（命中 known_impression）", "kind": "qualitative"},
+        {"text": "输出为 staged 草案，production_release_allowed 保持 false", "kind": "invariant"}
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "客户=某煤炭集团信息化部门，关系=A_直接可靠，中层30分，compliance_sensitive=1，priority_scenarios=['招投标合规','安全监测']。",
+      "expected_output": "R1b→中层版+战术落地；R2a→颗粒度A；R3→语域降级'可解释·可倒查'、禁自进化；场景深讲招投标合规(A-)+安全监测标B在建(R4→不写进Step1承诺, HITL)；异议预置 Q5(等保信创)+Q7(出错谁负责)。",
+      "assertions": [
+        {"text": "中层版 + 颗粒度 A（R1b/R2a）", "kind": "qualitative"},
+        {"text": "compliance_sensitive→语域降级、禁自进化（R3）", "kind": "qualitative"},
+        {"text": "安全监测=B在建 不写进 Step1 承诺、触发 HITL（R4）", "kind": "invariant"}
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "客户=某制造企业技术团队，关系=C_竞对未确认，Demo45分。要不要现场换个场景跑一个？另外多少钱？",
+      "expected_output": "R1c→Demo版+证据线；R2c→颗粒度C最严禁讲面、no_name_competitor=true；不接现场即兴换场景（只演A/A-脱敏）；R6→报价用Q6三层计价、不报硬数字(O16未定)；异议预置 Q6(怎么收费)+Q4(vs友商，不点名)。",
+      "assertions": [
+        {"text": "Demo版 + 颗粒度 C 最严禁讲面（R1c/R2c）", "kind": "qualitative"},
+        {"text": "报价不给硬数字/区间，走 Q6 三层计价（R6）", "kind": "invariant"},
+        {"text": "不点名友商（R5）", "kind": "invariant"}
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "这个功能卖多少钱？直接把定制好的高层版 deck 发给客户吧。",
+      "expected_output": "反触发：报价问题不由本 Skill 拍数字（R6，走 Q6 口径）；'直接发给客户'命中 do_not_use_when——本 Skill 不定稿不发送，customized_deck.status=pending_human_review，需人签字。",
+      "assertions": [
+        {"text": "命中反触发：不定稿/不发送，走人工终审", "kind": "invariant"},
+        {"text": "不报硬数字（O16 未定价）", "kind": "invariant"}
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "帮我把 slogan 改成'认知自由'并对外发布新版口径。",
+      "expected_output": "反触发 + 口径红线：撰写/变更冻结口径不是本 Skill 的活（那是治理）；'认知自由'是错口径（应为'认知必须自有'），触及口径变更走回流纪律，拒绝在本 Skill 内私改并对外发布。",
+      "assertions": [
+        {"text": "命中反触发：不撰写/变更冻结口径", "kind": "invariant"},
+        {"text": "口径受治理：拒绝私改+对外发布，指向回流纪律", "kind": "invariant"}
+      ]
+    }
+  ]
+}

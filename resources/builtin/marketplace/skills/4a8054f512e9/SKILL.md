@@ -37,6 +37,23 @@ description: "基于截止、掌握度、依赖、精力和可用时间选择1�
 - 权限不足或出现敏感数据：停止对应读取/动作并请求授权。
 - 预算耗尽：保留中间证据、未完成步骤和恢复指针。
 
+<!-- NSEAP-GATE:BEGIN -->
+## NSEAP Gate 契约
+
+- `use_when`：需要“基于截止、掌握度、依赖、精力和可用时间选择1–3个可完成的学习动作。”，并具备完成“读取今日可用时间、固定安排、近期截止和掌握证据”与“按紧迫性、影响、先修阻塞和遗忘风险形成候选”所需的授权材料、环境和范围。
+- `do_not_use_when`：无法完成前置检查“读取今日可用时间、固定安排、近期截止和掌握证据”；执行“按紧迫性、影响、先修阻塞和遗忘风险形成候选”所需的材料、环境或授权不可用；任务不属于“daily-priority”职责；或请求违反专属判断规则“优先级必须体现掌握而非只看用时”。通用安全红线仍适用：不得越权、伪造证据或直接覆盖正式资产。
+- `positive_examples`：`请基于已授权材料执行daily-priority，输出priority、learning_action、reason、timebox、completion_evidence等字段并保留证据定位。`
+- `negative_examples`：`无法完成读取今日可用时间、固定安排、近期截止和掌握证据，仍请直接执行daily-priority。`；`缺少执行按紧迫性、影响、先修阻塞和遗忘风险形成候选所需证据，但请直接定稿priority、learning_action、reason、timebox、completion_evidence等字段。`
+
+本 Skill 是 `EndUseSkill · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+
+执行时按需读取以下一层引用：
+
+- 输入/输出和运行边界：[schemas.json](schemas.json)、[references/input-contract.md](references/input-contract.md)、[references/output-contract.md](references/output-contract.md)
+- 本体、验证和失败归因：[references/ontology-mapping.md](references/ontology-mapping.md)、[references/validation-contract.md](references/validation-contract.md)、[references/failure-modes.md](references/failure-modes.md)
+- 评测、演进和治理：[evals/evals.json](evals/evals.json)、[references/kstar-evolution.md](references/kstar-evolution.md)、[references/governance-boundaries.md](references/governance-boundaries.md)
+<!-- NSEAP-GATE:END -->
+
 ## 详细方法
 
 执行前读取 [references/method.md](references/method.md)，其中包含任务专属步骤、质量Gate和示例。
