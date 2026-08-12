@@ -62,11 +62,14 @@
 ```
 
 ### 3.1 Hero
-- 标题/副标题保留原文案。
+- 标题保留原文「飞书移动触点」；副标题保留原文「桌面端负责完整工作，飞书负责你离开电脑后的提醒、确认和结果回报」（i18n 键 `touchpoint_settings.title/subtitle`，与截图一致，不重写措辞）。
 - 整体状态徽标：`ready` → 「可正常使用」（绿）；`attention` → 「需要处理」（琥珀）；`off` → 「未连接」（灰）。
 - 保留刷新按钮（排障兜底）；「管理连接」按钮删除（入口收敛到高级设置）。
 
 ### 3.2 连接状态图（替代 stepper + 双信息面板）
+
+> ⚠️ 明确：现有**四步 stepper**（连接机器人→授权数据→选择资源→开始使用）与「飞书连接与身份」「数据访问范围」**双信息面板将整体移除**，由本链路状态图 + 待办卡替代。stepper 隐含线性步骤语义，但真实状态非线形（断连≠进度回退），故弃用。
+
 - 三环节链路：`connection`（你的飞书账号）→ `authorization`（读取范围，显示资源数）→ `delivery`（每日简报，显示时间）。
 - 环节色：`ok` 绿 / `broken` 红（显示原因一行）/ `missing` 灰（占位文案：尚未连接 / 未允许读取 / 未设置简报）。
 - **纯展示**：环节不做点击跳转，操作一律由待办卡承担，避免双交互入口。
@@ -82,11 +85,16 @@
 - 内容：投递时间展示 + 内联修改 + [预览] [发送测试] [取消每日简报]。
 - 预览结果折叠在卡内（原 preview 区域保留，改为卡内展开）。
 
-### 3.5 高级设置（折叠手风琴）
+### 3.5 高级设置（折叠手风琴，初始为折叠态）
+
+> 普通用户默认不展开；手风琴标题行只显示「高级设置」。以下各项初始折叠。
+
 - **消息样式**（原「机器人回复颗粒度」）：选项用白话——「简洁文字」/「富文本卡片」，隐藏 Card JSON 2.0 等实现细节。
 - **工作区范围**：保留原下拉。
 - **你的飞书账号**：昵称 + 头像（原「归属/接收身份」合并至此，不显示 ou_ 原始 ID）。
-- **断开连接**（原「删除机器人」）：红色 + 二次确认弹窗（文案：「断开后 Mate 将无法通过飞书联系你，日历和资料的读取也会停止」）。
+- **停止读取数据**（原「数据访问范围」面板的「撤销授权」，动作复用现有 `authorization.revoke`）：白话文案「不再同步日历和资料，飞书消息通道保留」。轻量二次确认（单步弹窗）。
+- **断开连接**（原「删除机器人」）：**彻底移除**——删除机器人实例 + 数据授权一并停止。红色 + 强二次确认（弹窗内明确列出影响：「断开后 Mate 将无法通过飞书联系你，日历和资料的读取也会停止，已保存的数据不会被删除」）。
+- **「停止读取数据」与「断开连接」的关系**：前者只停数据读取、保留消息通道（温和，可随时重新授权恢复）；后者全停（彻底，需重新扫码绑定才能恢复）。两个操作分层放置，红色仅用于「断开连接」。
 
 ## 4. 连接管理页瘦身（前端）
 
@@ -131,12 +139,35 @@ interface DashboardOverall {
 
 ### 5.2 聚合规则（`dashboard-model.ts` 纯函数，单一事实源）
 
+环节判定（按序）：
+
 - `chain.connection`：`ok` ⇔ 有已启用飞书实例且归属已配置（复用现 `botConnected` 语义）；`missing` = 无实例；`broken` = 实例存在但状态为 error/disabled。
 - `chain.authorization`：`ok` ⇔ `authorization.kind === 'connected'`；`missing` = 未授权过；`broken` = token 失效（`needsReauth`）或撤销中。
-- `chain.delivery`：`ok` ⇔ 授权 ok 且已选资源 > 0 且同步状态非失败；`missing` = 未选资源或未设简报；`broken` = 同步持续失败。
-- `status`：三环节全 `ok` → `ready`；全 `missing`（无实例、无授权、无资源）→ `off`；其余 → `attention`。
-- `issues[]`：每个非 `ok` 环节产出一条（或两条）待办；`action.id` 复用现有 `runAction` 动作名（`connection.connect` / `authorization.begin` / `authorization.revoke` / `resources.discover` / `sync.start` / `briefing.schedule` 等），新增 `authorization.reauth`（重新授权）。
-- **一致性不变量（契约测试锁定）**：`status === 'ready' ⇔ chain 三环节全 ok ⇔ issues 为空`。
+- `chain.delivery`：`ok` ⇔ `authorization` 环节 `ok` 且已选资源 > 0 且同步状态非失败；`missing` = 未选资源或未设简报；`broken` = 同步持续失败。
+
+整体 `status` 决策树（按序判定）：
+
+```
+三环节全 ok                                → ready（可正常使用）
+三环节全 missing（无实例 且 无授权 且 无资源）→ off（未连接，全新状态）
+其余（任一环节 ok 或 broken）               → attention（需要处理）
+```
+
+典型中间态示例：
+
+| 场景 | connection | authorization | delivery | status |
+|------|-----------|---------------|----------|--------|
+| 从未配置 | missing | missing | missing | off |
+| 已连机器人、未授权 | ok | missing | missing | attention |
+| 已连+已授权、未选资源 | ok | ok | missing | attention |
+| 授权令牌过期 | ok | broken | broken | attention |
+| 全部就绪 | ok | ok | ok | ready |
+
+> 「已连接但未选资源」落入 `attention`（待办：选择资源），而非 `off` —— `off` 只表示用户尚未开始任何配置。
+
+`issues[]` 生成规则：每个非 `ok` 环节产出一条（或两条）待办；`broken` 优先于 `missing`（如授权环节 `broken` 只发「重新授权」卡，不叠加发「去授权」卡）。`action.id` 复用现有 `runAction` 动作名（`connection.connect` / `authorization.begin` / `authorization.revoke` / `resources.discover` / `sync.start` / `briefing.schedule` 等），新增 `authorization.reauth`（重新授权）。
+
+**一致性不变量（契约测试锁定）**：`status === 'ready' ⇔ chain 三环节全 ok ⇔ issues 为空`。
 
 ### 5.3 矛盾根因修复
 
@@ -147,11 +178,15 @@ interface DashboardOverall {
 ### 5.4 术语翻译
 
 - `ou_*` 原始 ID：仅在高级页排障区块可显示（可加可不加，倾向不加）；用户主界面一律用昵称。
-- 前端渲染串快照测试锁定：用户可见渲染串不含 `ou_`、`Card JSON`、`颗粒度`、`实例`、`回调地址`（回调地址引导文案在授权前置引导卡中保留——那是开发者后台操作必需，但措辞已由向导承接）。
+- **技术词白名单（唯一允许出现技术措辞的两处）**：
+  1. 授权前置「回调地址配置引导卡」（重定向 URL / 开发者后台 / 回调地址）——飞书开发者后台的一次性必需步骤，程序无法代改。
+  2. 排障日志与错误详情（对用户隐藏，仅诊断）。
+  除上述两处外，用户可见渲染串一律白话，由 §7.4 术语快照测试锁定。
 
 ## 6. 数据流与错误处理
 
-- 进入触点页 → `personal_context.dashboard.get`（含 overall）+ `messaging.list`（现有两条调用不变，overall 在 dashboard 内新增）。
+- 进入触点页 → `personal_context.dashboard.get`（含 overall）+ `messaging.list`（现有两条调用，可并行）。
+- **依赖关系澄清（无竞态）**：`overall` 聚合在**后端** `dashboard.get` 内部完成——聚合纯函数自行读取 messaging registry / OAuth store / registry 计数（复用 `resolveFeishuApp`/`getStatus` 既有内部读取路径），**不依赖前端传入**。前端 `messaging.list` 仅用于连接管理视图与高级设置渲染实例列表，不参与聚合判定。两条 IPC 调用并行执行互不阻塞。
 - 推送刷新沿用现有：`messaging:instance-status`、`personal-context:authorization` → `refresh()`。
 - 错误分层：
   - 业务态问题（未连接/令牌过期/同步失败）→ `chain` 环节 + 待办卡，可恢复。
@@ -162,8 +197,10 @@ interface DashboardOverall {
 1. **聚合一致性契约**：`ready ⇔ chain 全 ok ⇔ issues 空`；各中间态（仅断连 / 仅过期 / 仅未授权）下 status/chain/issues 的精确快照。
 2. **回归**：`connected` 但 identityLabel 空 → 文案「已连接账号」，非「未授权」。
 3. **状态图 model 层**：断链环节标 `broken` 并带原因；`missing` 占位文案。
-4. **术语快照**：触点页与连接管理页的渲染串不含 `ou_`/`Card JSON`/`颗粒度`/`实例`。
-5. **待办卡动作映射**：issue.action.id → runAction 处理函数全量映射（新增动作必须注册，防漏）。
+4. **术语快照（unit + integration 双保险）**：
+   - unit：渲染函数纯输出断言——直接调用各区块渲染函数，断言输出串不含 `ou_`/`Card JSON`/`颗粒度`/`实例`。
+   - integration：用真实 dashboard 数据（含各中间态 fixture）驱动完整渲染，验证同一断言；防止 unit 层 mock 绕过真实数据路径。
+5. **待办卡动作映射（防漏注册）**：测试枚举 `dashboard-model` 可能产出的**全部 action.id**，断言前端 `runAction` 存在对应分支——新增动作必须同时注册 handler，否则测试失败。运行时兜底：未知 action.id 渲染为禁用按钮 + `console.warn`（renderer 为纯 JS 无编译期，用测试强制 + 运行时兜底双保险）。
 6. 现有 `personal-context-*` 契约测试保持通过（overall 为增量字段，不破坏旧断言）。
 
 ## 8. 实施顺序
