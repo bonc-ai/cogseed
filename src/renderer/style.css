@@ -21312,3 +21312,17 @@ body.model-not-configured .main-content { flex-direction: column; }
 .touchpoint-status.is-off { color: #9aa0a6; border-color: color-mix(in srgb, #9aa0a6 28%, var(--border)); }
 .touchpoint-status.is-off > span { background: #9aa0a6; }
 .touchpoint-advanced { display: block; }
+
+/* ── 消息平台：即将支持一行灰字 ── */
+.messaging-menu-soon-hint { padding: 8px 12px; color: #999; font-size: 12px; line-height: 1.5; }
+
+/* ── 消息平台：你的飞书账号卡 ── */
+.messaging-identity-card .messaging-identity-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.messaging-identity-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.messaging-identity-badge.is-bound { color: #188038; background: rgba(24,128,56,.1); border-radius: 10px; padding: 2px 8px; font-size: 12px; }
+
+/* ── 消息平台：高级设置手风琴 ── */
+.messaging-accordion summary { cursor: pointer; list-style: none; font-weight: 600; }
+.messaging-accordion summary::-webkit-details-marker { display: none; }
+.messaging-advanced-body { display: grid; gap: 10px; margin-top: 10px; }
+.messaging-advanced-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
