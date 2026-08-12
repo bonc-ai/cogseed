@@ -7,12 +7,12 @@ Prompt context only: keep hard constraints, short rationale, and traps already h
 Single-process Electron app. Main is a Node backend, renderer is vanilla HTML/CSS/JS, and IPC is the only app communication path.
 
 - No HTTP server, no occupied port, and no local auth layer in main.
-- Renderer access goes through the `contextBridge` allow-list API `window.orkas.{invoke, stream}`.
+- Renderer access goes through the canonical `contextBridge` allow-list API `window.cogseed.{invoke, stream}`; `window.orkas` is a deprecated one-cycle compatibility alias.
 - No TypeScript/JSX/bundler in the renderer; classic scripts only.
 - `src/main/preload.js` must remain `.js`; preload does not run the tsx hook.
 - LLM calls use the in-process `core-agent` loaded dynamically through `import('#core-agent')`.
 - Local CLI agents are the explicit child-process exception. `features/local_agents/runner.ts` is the only CLI dispatch spawn path.
-- Mate Agent Runtime worker is the backend-isolation child-process exception. The worker process itself is spawned only through `features/mate_agent_runtime/worker-process.ts` and speaks the Runtime JSONL protocol; no IPC handler/renderer code may spawn it directly. Inside that isolated worker, Runtime tool execution is limited to the dedicated `features/mate_agent_runtime/kernel/tools/` choke points: shell commands through `shell-tools.ts`, and skill scripts through `skill-tools.ts` → `bin/run-skill.cjs`.
+- CogSeed Runtime worker is the backend-isolation child-process exception. The worker process itself is spawned only through `features/cogseed_runtime/worker-process.ts` and speaks the Runtime JSONL protocol; no IPC handler/renderer code may spawn it directly. Inside that isolated worker, Runtime tool execution is limited to the dedicated `features/cogseed_runtime/kernel/tools/` choke points: shell commands through `shell-tools.ts`, and skill scripts through `skill-tools.ts` → `bin/run-skill.cjs`.
 - MCP stdio connectors spawn only through `features/connectors/mcp-client.ts`.
 - User data is mostly JSON/JSONL for readability and sync friendliness; sqlite is reserved for the KB vector store.
 - macOS and Windows are primary. Platform branches need platform-specific verification.
@@ -117,7 +117,7 @@ Attachments:
 ## Artifacts And Saved Apps
 
 - `create_artifact` writes only to `<uid>/cloud/chat_artifacts/<cid>/<artifactId>/`.
-- `chat-app://` serves only validated artifact files through `features/chat_artifacts.ts`; never expose `window.orkas` or IPC to the iframe.
+- `chat-app://` serves only validated artifact files through `features/chat_artifacts.ts`; never expose `window.cogseed`, the legacy `window.orkas` alias, or IPC to the iframe.
 - Artifact-to-app communication is the validated `postMessage` contract and routes back as a normal user message.
 - Saved apps live only under `<uid>/cloud/saved_apps/<appId>/` and open through the saved-app resolver.
 - Editing a saved app is fork-and-modify via a new conversation and attachment bundle; it is not in-place mutation.
@@ -165,7 +165,7 @@ Dev-mode marketplace editing/upload/delete is hosted/private tooling. Runtime ga
 ## Renderer
 
 - Classic scripts only. Add new script files to `index.html`.
-- New `window.orkas.*` APIs require a main IPC handler; renderer shim routes are centralized.
+- New `window.cogseed.*` APIs require a main IPC handler; renderer shim routes are centralized. Do not add new APIs only to the legacy `window.orkas` alias.
 - Markdown rendering uses `renderMarkdown`; dashboard directives and schema references change together.
 - Do not append cache-busting query strings to renderer resources.
 - Renderer icons are centralized in `modules/icons.js`; do not hard-code SVG paths or use emoji icons.
@@ -200,7 +200,7 @@ Dev-mode marketplace editing/upload/delete is hosted/private tooling. Runtime ga
 - Do not test typing-only wrappers, trivial getters, happy-path-only cases, or implementation internals.
 - LLM-output parsers/sanitizers need fixture sets for both accepted real shapes and rejected look-alikes.
 - Pure renderer functions may expose a guarded CommonJS bridge for tests; DOM/i18n/IPC code should not.
-- After completing changes to this messaging worktree, restart the running app for verification instead of asking the user to do it manually: run `scripts/restart-mate.sh` (stops only this worktree's `messaging` runtime and relaunches via `./run.sh` in the background; other variants are untouched). Confirm startup via `~/.orkas/runtime-variants/messaging/data/logs/<date>.log` and the launcher log `/tmp/mate-agent-messaging-run.log`, then run the real-environment verification.
+- After completing changes to this messaging worktree, restart the running app for verification instead of asking the user to do it manually: run `scripts/restart-cogseed.sh` (stops only this worktree's `messaging` runtime and relaunches via `./run.sh` in the background; other variants are untouched). Confirm startup via `~/.cogseed/runtime-variants/cogseed/data/logs/<date>.log` and the launcher log `/tmp/cogseed-agent-cogseed-run.log`, then run the real-environment verification.
 
 ## Do Not
 

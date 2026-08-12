@@ -14,9 +14,9 @@ function _autoEventsTrack(kind, action, data) {
 
 function startAutoEventsSubscription() {
   if (_autoEventsHandle) return;
-  if (!window.orkas || typeof window.orkas.stream !== 'function') return;
+  if (!window.cogseed || typeof window.cogseed.stream !== 'function') return;
   try {
-    _autoEventsHandle = window.orkas.stream('autoTasks.events', {}, (ev) => {
+    _autoEventsHandle = window.cogseed.stream('autoTasks.events', {}, (ev) => {
       const inner = ev && ev.event;
       if (!inner) return;
       const taskId = inner.taskId || inner.task_id || '';

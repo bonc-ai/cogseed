@@ -23,12 +23,15 @@ vi.mock('../../../src/main/model/client', () => ({
 
 let tmpDir: string;
 let prevWs: string | undefined;
+let prevHome: string | undefined;
 const TEST_UID = 'u1';
 
 beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-skills-'));
   prevWs = process.env.ORKAS_WORKSPACE_ROOT;
+  prevHome = process.env.HOME;
   process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
+  process.env.HOME = tmpDir;
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
   users.activateUser(TEST_UID);
@@ -39,7 +42,10 @@ afterEach(async () => {
     const reports = await import('../../../src/main/quality/report');
     await reports.drainReportWrites();
   } finally {
-    process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+    if (prevWs === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
+    else process.env.ORKAS_WORKSPACE_ROOT = prevWs;
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
     streamImpl.current = null;
     chatImpl.current = null;
     vi.unstubAllGlobals();

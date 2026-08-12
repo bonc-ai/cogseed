@@ -413,6 +413,13 @@ describe('memory › formatForSystemPrompt', () => {
     expect(block).toContain('project uses React');
     expect(block).toContain('prefers terse answers');
   });
+
+  it('A-3: role_template tagged MEMORY.md entries are visible to the system prompt (always-on role facts)', async () => {
+    const mem = await loadMemory();
+    mem.addRoleTemplateMemoryEntry('u1', 'memory', 'student', '通用规则：先查证再下结论');
+    const block = mem.formatForSystemPrompt('u1');
+    expect(block).toContain('先查证再下结论');
+  });
 });
 
 // ── Security: injection scanning ────────────────────────────────
@@ -873,5 +880,49 @@ describe('memory › project tier', () => {
     expect(() => mem.addEntry('u1', { project: '../evil' }, 'x')).toThrow(/invalid project id/);
     expect(() => mem.listEntries('u1', { project: 'a/b' })).toThrow(/invalid project id/);
     expect(() => mem.formatForSystemPrompt('u1', 'a1', '..')).toThrow(/invalid project id/);
+  });
+});
+
+// ── Role-template tagged entries: corruption resilience & metadata retention ──
+
+describe('memory › role-template tags survive edits', () => {
+  it('A-1: hand-edited entry (sha mismatch) degrades to readable legacy instead of being silently deleted', async () => {
+    const mem = await loadMemory();
+    await mem.addRoleTemplateMemoryEntry('u1', 'user', 'student', '喜欢大白话解释');
+    const file = path.join(process.env.ORKAS_WORKSPACE_ROOT!, 'u1', 'cloud', 'memory', 'USER.md');
+    let raw = fs.readFileSync(file, 'utf8');
+    raw = raw.replace('喜欢大白话解释', '喜欢大白话解释（改）'); // 模拟用户手改
+    fs.writeFileSync(file, raw);
+    await mem.addEntry('u1', 'user', '新条目xyz');
+    const after = fs.readFileSync(file, 'utf8');
+    // 手改条目不能被下一次普通写入静默删除
+    expect(after).toContain('喜欢大白话解释（改）');
+    expect(after).toContain('新条目xyz');
+  });
+
+  it('A-2: ordinary user-scope writes keep existing role_template tags', async () => {
+    const mem = await loadMemory();
+    await mem.addRoleTemplateMemoryEntry('u1', 'user', 'student', '会主动核查工具执行过程');
+    await mem.addEntry('u1', 'user', '普通新条目abc');
+    expect(mem.countRoleTemplateMemoryEntries('u1', 'student')).toBe(1);
+    // 内容也在
+    const block = mem.formatForSystemPrompt('u1');
+    expect(block).toContain('会主动核查工具执行过程');
+  });
+
+  it('A-2: replace keeps the replaced record\'s role tags', async () => {
+    const mem = await loadMemory();
+    await mem.addRoleTemplateMemoryEntry('u1', 'user', 'student', '会主动核查工具执行过程');
+    await mem.replaceEntry('u1', 'user', '会主动核查', '会主动核查工具执行过程（更新）');
+    expect(mem.countRoleTemplateMemoryEntries('u1', 'student')).toBe(1);
+  });
+
+  it('A-2: remove one role\'s entry keeps the other role\'s tags intact', async () => {
+    const mem = await loadMemory();
+    await mem.addRoleTemplateMemoryEntry('u1', 'user', 'student', '会主动核查工具执行过程');
+    await mem.addRoleTemplateMemoryEntry('u1', 'user', 'scholar', '喜欢阅读文献');
+    await mem.removeEntry('u1', 'user', '会主动核查');
+    expect(mem.countRoleTemplateMemoryEntries('u1', 'student')).toBe(0);
+    expect(mem.countRoleTemplateMemoryEntries('u1', 'scholar')).toBe(1);
   });
 });

@@ -18,6 +18,7 @@ import { nowIso, readJson, safeId, writeJson } from '../../storage';
 import { userLocalRoot } from '../../paths';
 import { withKstarUserLock } from './kstar-lock';
 import type { AbilityAsset } from './ability-assets';
+import { appendAssetEvent, type AssetEventType } from './asset-events';
 
 /** @deprecated Use `features/recall/asset-service`. */
 export interface AbilityAssetStoreState {
@@ -108,9 +109,42 @@ export async function getAbilityAsset(uid: string, assetId: string): Promise<Abi
   return asset ? cloneAsset(asset) : null;
 }
 
+/** 可选事件账本选项：传入时 store 写路径遵循"先事件后资产"（PRD 原则 14）。
+ *  事件是提交点：appendAssetEvent 成功后才写资产；事件失败 → 抛错、资产零变化。
+ *  不传时保持原有行为（现有 KSTAR/KB 调用方零影响，向后兼容）。 */
+export interface AssetStoreEventOptions {
+  eventType: AssetEventType;
+  actor?: 'user' | 'system';
+  sourceRefs?: string[];
+  permissionRef?: string;
+  fromState?: string;
+  toState?: string;
+}
+
+async function emitAssetEvent(uid: string, assetId: string, version: string, opts: AssetStoreEventOptions): Promise<void> {
+  const ev = await appendAssetEvent(uid, {
+    assetId,
+    version,
+    eventType: opts.eventType,
+    actor: opts.actor,
+    sourceRefs: opts.sourceRefs,
+    permissionRef: opts.permissionRef,
+    fromState: opts.fromState,
+    toState: opts.toState,
+  });
+  if (!ev.ok) throw new Error('asset event write failed; asset change aborted');
+}
+
 /** @deprecated Use `features/recall/asset-service`. */
-export async function createAbilityAssetRecord(uid: string, asset: AbilityAsset): Promise<AbilityAsset> {
+export async function createAbilityAssetRecord(
+  uid: string,
+  asset: AbilityAsset,
+  eventOptions?: AssetStoreEventOptions,
+): Promise<AbilityAsset> {
   const nextAsset = assertAsset(asset);
+  if (eventOptions) {
+    await emitAssetEvent(uid, nextAsset.id, String(nextAsset.version), eventOptions);
+  }
   const next = await mutateState(uid, (state) => {
     const assets = state.assets.filter((item) => item.id !== nextAsset.id);
     assets.push(nextAsset);
@@ -120,8 +154,15 @@ export async function createAbilityAssetRecord(uid: string, asset: AbilityAsset)
 }
 
 /** @deprecated Use `features/recall/asset-service`. */
-export async function updateAbilityAssetRecord(uid: string, asset: AbilityAsset): Promise<AbilityAsset> {
+export async function updateAbilityAssetRecord(
+  uid: string,
+  asset: AbilityAsset,
+  eventOptions?: AssetStoreEventOptions,
+): Promise<AbilityAsset> {
   const nextAsset = assertAsset(asset);
+  if (eventOptions) {
+    await emitAssetEvent(uid, nextAsset.id, String(nextAsset.version), eventOptions);
+  }
   const next = await mutateState(uid, (state) => {
     if (!state.assets.some((item) => item.id === nextAsset.id)) {
       throw new Error('ability asset not found');

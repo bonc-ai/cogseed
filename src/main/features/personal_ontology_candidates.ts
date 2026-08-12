@@ -21,7 +21,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { userLocalRoot, userOntologyGroupsDir } from '../paths';
 import { writeTextAtomicSync, safeId, nowIso, readJsonSync } from '../storage';
-import { addEntry as addMemoryEntry } from './memory';
+import { addEntry as addMemoryEntry, addRoleTemplateMemoryEntry } from './memory';
 import { listGroups } from './personal_ontology_groups';
 import { getRoleTemplate } from './role_templates';
 import { routeCandidateToField } from './personal_ontology_router';
@@ -48,6 +48,8 @@ export interface ConfirmDestinations {
   toGlobalMemory?: boolean;
   toGroupIds?: string[];
   targetField?: string;
+  /** 二期 D5：来源项目 id。确认落盘时附加到字段值（`@proj:<pid>`），展示层按项目过滤。 */
+  projectId?: string;
 }
 
 /** Per-destination outcome, so the UI can tell "全局记忆写入失败" apart from
@@ -74,6 +76,13 @@ export type CandidateKind = 'preference' | 'instance' | 'property' | 'relation' 
  *  `shared` → MEMORY.md （更泛化的事实/规则，跨项目跨 agent，容量稍大） */
 export type MemoryTargetScope = 'user' | 'shared';
 
+/** 敏感度级别：standard = 常规注入 prompt，restricted = 存但不注入 LLM，
+ *  sensitive = 加密/额外保护（本版仅占位，暂与 restricted 行为一致）。 */
+export type SensitivityLevel = 'standard' | 'restricted' | 'sensitive';
+
+/** 写入者身份：标识候选由谁产出（用户手动/LLM 提取/技能生成）。 */
+export type WriteActor = 'user' | 'llm' | 'skill';
+
 export interface CandidateUpdate {
   candidate_id: string;
   kind: CandidateKind;
@@ -92,6 +101,15 @@ export interface CandidateUpdate {
    *  用户可在下拉里改；目标分组无此字段时回退流水区。 */
   target_field?: string;
   source_memory_refs: string[];
+  /** 二期 D5：来源项目 id（候选进池时标记，`- 来源项目:` 行）。确认落盘附加
+   *  `@proj:<pid>`；dest.projectId 显式传入时覆盖（用户/UI 意图优先）。 */
+  project_id?: string;
+  /** M3：敏感度级别。缺省 `standard`（兼容旧数据）。 */
+  sensitivity?: SensitivityLevel;
+  /** M3：写入者身份。缺省 `llm`（候选多由技能/LLM 产出）。 */
+  write_actor?: WriteActor;
+  /** M3：候选记录时间（ISO 8601）。缺省空字符串（旧数据无此字段）。 */
+  recorded_time?: string;
 }
 
 export interface BlockedItem {
@@ -141,10 +159,16 @@ const CANDIDATE_FIELD_LABELS: Record<string, string> = {
   '差异': 'diff_summary',
   '建议字段': 'target_field',
   '来源': 'source_memory_refs',
+  '来源项目': 'project_id',
+  '敏感度': 'sensitivity',
+  '写入者': 'write_actor',
+  '记录时间': 'recorded_time',
 };
 
 const VALID_KINDS: CandidateKind[] = ['preference', 'instance', 'property', 'relation', 'rule'];
 const VALID_CONFIDENCE = ['low', 'medium', 'high'];
+const VALID_SENSITIVITY: SensitivityLevel[] = ['standard', 'restricted', 'sensitive'];
+const VALID_WRITE_ACTORS: WriteActor[] = ['user', 'llm', 'skill'];
 
 function coerceKind(v: unknown): CandidateKind {
   return (VALID_KINDS as string[]).includes(String(v)) ? (v as CandidateKind) : 'instance';
@@ -152,6 +176,14 @@ function coerceKind(v: unknown): CandidateKind {
 
 function coerceConfidence(v: unknown): 'low' | 'medium' | 'high' {
   return (VALID_CONFIDENCE.includes(String(v)) ? v : 'medium') as 'low' | 'medium' | 'high';
+}
+
+function coerceSensitivity(v: unknown): SensitivityLevel {
+  return (VALID_SENSITIVITY as string[]).includes(String(v)) ? (v as SensitivityLevel) : 'standard';
+}
+
+function coerceWriteActor(v: unknown): WriteActor {
+  return (VALID_WRITE_ACTORS as string[]).includes(String(v)) ? (v as WriteActor) : 'llm';
 }
 
 function coerceMemoryScope(v: unknown): MemoryTargetScope {
@@ -182,9 +214,13 @@ export function parseCandidatesMarkdown(text: string): CandidateUpdate[] {
       summary: raw.summary || '',
       memory_scope: coerceMemoryScope(raw.memory_scope),
       memory_text: raw.memory_text || raw.summary || '',
+      sensitivity: coerceSensitivity(raw.sensitivity),
+      write_actor: coerceWriteActor(raw.write_actor),
+      recorded_time: raw.recorded_time || '',
       ...(raw.registry_like_path ? { registry_like_path: raw.registry_like_path } : {}),
       ...(raw.diff_summary ? { diff_summary: raw.diff_summary } : {}),
       ...(raw.target_field ? { target_field: raw.target_field } : {}),
+      ...(raw.project_id ? { project_id: raw.project_id } : {}),
       source_memory_refs: raw.source_memory_refs
         ? raw.source_memory_refs.split(',').map(s => s.trim()).filter(Boolean)
         : [],
@@ -207,6 +243,10 @@ export function serializeCandidatesMarkdown(candidates: CandidateUpdate[]): stri
     if (c.registry_like_path) lines.push(`- 路径: ${c.registry_like_path}`);
     if (c.diff_summary) lines.push(`- 差异: ${c.diff_summary}`);
     if (c.target_field) lines.push(`- 建议字段: ${c.target_field}`);
+    if (c.project_id) lines.push(`- 来源项目: ${c.project_id}`);
+    if (c.sensitivity && c.sensitivity !== 'standard') lines.push(`- 敏感度: ${c.sensitivity}`);
+    if (c.write_actor && c.write_actor !== 'llm') lines.push(`- 写入者: ${c.write_actor}`);
+    if (c.recorded_time) lines.push(`- 记录时间: ${c.recorded_time}`);
     if (c.source_memory_refs?.length) lines.push(`- 来源: ${c.source_memory_refs.join(', ')}`);
     return lines.join('\n');
   });
@@ -459,6 +499,7 @@ async function writeCandidateToDestinations(
   candidate: CandidateUpdate,
   dest: ConfirmDestinations,
   source = '候选',
+  userPickedRole = false,
 ): Promise<ConfirmCandidateResult> {
   const text = (candidate.memory_text || candidate.summary || '').trim();
   if (!text) return { ok: false, error: 'candidate has no memory text' };
@@ -471,7 +512,19 @@ async function writeCandidateToDestinations(
 
   if (wantsGlobal) {
     const target = candidate.memory_scope === 'shared' ? 'memory' : 'user';
-    const res = addMemoryEntry(uid, target, text);
+    // 角色标签：只有**用户显式选了角色模板**（去向含模板组）时，全局记忆条目才附带
+    // 来源标记；LLM 自动加入的模板去向（userPickedRole=false）不打标签 —— 否则
+    // 用户从未关联的角色会在卸载时连带归档/删除其全局记忆（A-4）。
+    let roleTemplateId: string | undefined;
+    if (userPickedRole) {
+      for (const gid of groupIds) {
+        const tpl = await resolveTemplateGroupSections(uid, gid.split('::')[0]);
+        if (tpl) { roleTemplateId = tpl.template_id; break; }
+      }
+    }
+    const res = roleTemplateId
+      ? addRoleTemplateMemoryEntry(uid, target, roleTemplateId, text)
+      : addMemoryEntry(uid, target, text);
     result.globalMemory = { ok: res.ok, ...(res.error ? { error: res.error } : {}) };
     if (res.ok) anySucceeded = true;
     else log.warn('candidate global-memory write blocked', { uid, candidateId: candidate.candidate_id, error: res.error });
@@ -502,7 +555,7 @@ async function writeCandidateToDestinations(
             ? tpl.sections.find((s) => Object.prototype.hasOwnProperty.call(s.fields, dest.targetField as string))
             : undefined;
           if (sec) {
-            const res = await appendFieldValueToRef(uid, `${groupId}::${sec.title}`, dest.targetField, text, source);
+            const res = await appendFieldValueToRef(uid, `${groupId}::${sec.title}`, dest.targetField, text, source, dest.projectId ?? candidate.project_id);
             result.fieldWrites.push({
               groupId,
               fieldName: dest.targetField as string,
@@ -539,7 +592,7 @@ async function writeCandidateToDestinations(
           fieldExists = false;
         }
         if (fieldExists) {
-          const res = await appendFieldValueToRef(uid, groupId, dest.targetField, text, source);
+          const res = await appendFieldValueToRef(uid, groupId, dest.targetField, text, source, dest.projectId ?? candidate.project_id);
           result.fieldWrites.push({
             groupId,
             fieldName: dest.targetField as string,
@@ -585,16 +638,22 @@ async function resolveLlmRoute(
   candidate: CandidateUpdate,
   dest: ConfirmDestinations,
   opts: ConfirmCandidateOptions,
-): Promise<{ effectiveDest: ConfirmDestinations; source: string }> {
-  if (!opts.routeWithLlm || dest.targetField) return { effectiveDest: dest, source: '候选' };
+): Promise<{ effectiveDest: ConfirmDestinations; source: string; userPickedRole: boolean }> {
+  // 用户是否显式选过角色模板（原始 dest 含模板组）。LLM 分支 3 自动加入的模板
+  // 不算 —— 那只是"自动归位"，用户没有主动关联该角色。
+  const userPickedRole = (dest.toGroupIds || []).some((id) => {
+    if (id.includes('::')) return false; // 复合 id 是分节，不是模板组本身
+    return true;
+  });
+  if (!opts.routeWithLlm || dest.targetField) return { effectiveDest: dest, source: '候选', userPickedRole };
   const text = (candidate.memory_text || candidate.summary || '').trim();
-  if (!text) return { effectiveDest: dest, source: '候选' };
+  if (!text) return { effectiveDest: dest, source: '候选', userPickedRole };
 
   const catalog = await listTemplateFileCatalog(uid);
-  if (!catalog.length) return { effectiveDest: dest, source: '候选' };
+  if (!catalog.length) return { effectiveDest: dest, source: '候选', userPickedRole };
   const decision = await routeCandidateToField(uid, text, catalog);
   if (decision.action !== 'field' || !decision.group_title || !decision.field_name) {
-    return { effectiveDest: dest, source: '候选' }; // flow → 维持原 dest（流水区）
+    return { effectiveDest: dest, source: '候选', userPickedRole }; // flow → 维持原 dest（流水区）
   }
 
   const dest2: ConfirmDestinations = { ...dest, toGroupIds: dest.toGroupIds ? [...dest.toGroupIds] : [] };
@@ -606,7 +665,7 @@ async function resolveLlmRoute(
     const entry = catalog.find((e) => e.group_id === groupId);
     if (entry && entry.sections.some((s) => s.title === section && s.fields.includes(decision.field_name))) {
       dest2.targetField = decision.field_name;
-      return { effectiveDest: dest2, source: '智能' };
+      return { effectiveDest: dest2, source: '智能', userPickedRole };
     }
   }
   // 2) 用户已选普通组（title 匹配）→ 建议字段，最终由 listFieldsByRef 预检查兜底
@@ -615,7 +674,21 @@ async function resolveLlmRoute(
     groups.some((g) => g.group_id === id && !g.template_id && g.title === decision.group_title),
   )) {
     dest2.targetField = decision.field_name;
-    return { effectiveDest: dest2, source: '智能' };
+    return { effectiveDest: dest2, source: '智能', userPickedRole };
+  }
+  // 2b) 用户只选了角色（模板组纯 group_id，未展开到分节）→ 在该角色模板内找分节，
+  //     命中则把去向收窄到该分节复合 id + 目标字段（LLM 自动归位）。
+  for (const id of dest2.toGroupIds) {
+    if (id.includes('::')) continue; // 已是复合 id，走上面的分节分支
+    const entry = catalog.find((e) => e.group_id === id);
+    if (!entry) continue;
+    const sec = entry.sections.find((s) => s.title === decision.group_title && s.fields.includes(decision.field_name));
+    if (sec) {
+      dest2.toGroupIds = dest2.toGroupIds.filter((x) => x !== id);
+      dest2.toGroupIds.push(buildContentRef(id, sec.title));
+      dest2.targetField = decision.field_name;
+      return { effectiveDest: dest2, source: '智能', userPickedRole };
+    }
   }
   // 3) 用户没选组 → 找第一个含该分节.字段的模板文件，自动加入（复合 id）
   if (!dest2.toGroupIds.length) {
@@ -625,10 +698,10 @@ async function resolveLlmRoute(
     if (hit) {
       dest2.toGroupIds.push(buildContentRef(hit.group_id, decision.group_title));
       dest2.targetField = decision.field_name;
-      return { effectiveDest: dest2, source: '智能' };
+      return { effectiveDest: dest2, source: '智能', userPickedRole: false };
     }
   }
-  return { effectiveDest: dest, source: '候选' };
+  return { effectiveDest: dest, source: '候选', userPickedRole };
 }
 
 /**
@@ -652,8 +725,8 @@ export async function confirmCandidate(
   }
 
   const candidate = candidates[idx];
-  const { effectiveDest, source } = await resolveLlmRoute(uid, candidate, dest, opts);
-  const result = await writeCandidateToDestinations(uid, candidate, effectiveDest, source);
+  const { effectiveDest, source, userPickedRole } = await resolveLlmRoute(uid, candidate, dest, opts);
+  const result = await writeCandidateToDestinations(uid, candidate, effectiveDest, source, userPickedRole);
   if (!result.ok) return result;
 
   candidates.splice(idx, 1);
@@ -727,8 +800,8 @@ export async function confirmCandidates(
 
   for (const c of candidates) {
     if (!idSet.has(c.candidate_id)) { remaining.push(c); continue; }
-    const { effectiveDest, source } = await resolveLlmRoute(uid, c, dest, opts);
-    const res = await writeCandidateToDestinations(uid, c, effectiveDest, source);
+    const { effectiveDest, source, userPickedRole } = await resolveLlmRoute(uid, c, dest, opts);
+    const res = await writeCandidateToDestinations(uid, c, effectiveDest, source, userPickedRole);
     results[c.candidate_id] = res;
     if (res.ok) confirmedCount++;
     else { remaining.push(c); failedIds.push(c.candidate_id); }

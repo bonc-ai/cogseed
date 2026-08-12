@@ -38,6 +38,10 @@ import {
   scanAgentRunnerContract,
   scanSkillRunnerContract,
 } from './rules/skill-runner';
+import {
+  validateNseapSkillShape,
+  validateNseapRuntimeGuards,
+} from './rules/nseap';
 
 // Re-export the types so callers only need one import path.
 export type { Violation, ValidationReport, Level } from './types';
@@ -109,6 +113,7 @@ export function validateSkillDir(
       options.enforceSkillRunner !== false,
     ));
     violations.push(...validateSkillMeta(meta));
+    violations.push(..._scanNseapShape(skillDir, content, meta));
   } catch (err) {
     violations.push(parseFailureViolation({
       kind: 'frontmatter',
@@ -268,6 +273,46 @@ function _scanSkillMeta(content: string): Violation[] {
   } catch (err) {
     return [skillMetaParseViolation((err as Error).message)];
   }
+}
+
+/**
+ * NSEAP skill shape scan — MEDIUM-level advisory (does not gate writes) so
+ * existing marketplace skills without NSEAP fields keep importing. Combines
+ * the pure shape checks with the runtime_contracts guard check when a
+ * schemas.json carrying `runtime_contracts` is present.
+ */
+function _scanNseapShape(
+  skillDir: string,
+  skillMd: string,
+  meta: Record<string, unknown>,
+): Violation[] {
+  const files: string[] = [..._walkFiles(skillDir, '')];
+  const out: Violation[] = [];
+  const { violations, level } = validateNseapSkillShape({ skillMd, meta, files });
+  out.push(...violations);
+
+  const schemaRel = files.find((f) => /schemas\.json$/.test(f.replace(/\\/g, '/')));
+  if (schemaRel) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(path.join(skillDir, schemaRel), 'utf8'));
+      out.push(...validateNseapRuntimeGuards(parsed, schemaRel));
+    } catch {
+      // unreadable / non-JSON schemas.json → skip guard check silently
+    }
+  }
+
+  // Record the computed tier as an informational violation so persisted
+  // reports carry the Level A/B result (level 'LOW' keeps it non-gating).
+  if (level) {
+    out.push({
+      level: 'LOW',
+      rule: 'nseap_compliance_tier',
+      field: 'SKILL.md',
+      snippet: `Level ${level}`,
+      suggested_fix: `Skill shape reaches Level ${level}. Fill the author-owned files to reach Level B; C (release) is governance work.`,
+    });
+  }
+  return out;
 }
 
 function _readSkillMeta(skillDir: string): { meta: Record<string, unknown>; metaViolations: Violation[] } {

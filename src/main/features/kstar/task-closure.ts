@@ -1,6 +1,6 @@
 import { createLogger } from '../../logger';
 import { subscribeTaskTerminals, type TaskTerminalEvent, type TaskTerminalListener } from '../group_chat/bus';
-import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../mate_agent_runtime/protocol';
+import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../cogseed_runtime/protocol';
 import type { RecallCandidateRecord } from '../recall/candidate-service';
 import {
   readKstarEpisode,

@@ -24,8 +24,8 @@ import { safeId, writeJson } from '../storage';
 import { fileEditLock } from '../util/locks';
 import {
   buildCapabilityPack,
-  type MinimumCapabilityPack,
-} from './p3394/capability-pack';
+  type DeliveryCapabilityPack,
+} from './p3394/capability-pack-delivery';
 import type { RecallAbilityAssetRecord } from './recall/candidate-service';
 
 const MAX_ROLE_PROMPT_LENGTH = 8_000;
@@ -52,7 +52,7 @@ export interface AgentInheritanceRecord {
   schemaVersion: 1;
   agentId: string;
   /** 出生时冻结的认知资产（含版本与内容哈希）。 */
-  capabilityPack: MinimumCapabilityPack;
+  capabilityPack: DeliveryCapabilityPack;
   /** 角色提示在出生那一刻的原文快照。 */
   rolePrompt: string;
   /** 从哪个会话/项目里长出来的——只记 id。 */

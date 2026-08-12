@@ -13,7 +13,7 @@
  * guards around actions — there are no actions to guard.
  *
  * Classic script, consistent with sibling renderer modules: relies on the
- * globals `escapeHtml`, `t`, `renderMarkdown`, `uiConfirm` and `window.orkas`.
+ * globals `escapeHtml`, `t`, `renderMarkdown`, `uiConfirm` and `window.cogseed`.
  */
 
 /** Anchor of the current thread. null = nothing selected yet. */
@@ -91,7 +91,7 @@ async function loadChatAside(cid, projectId) {
   _asideProjectId = projectId || null;
   _asideTurns = [];
   if (!_asideCid) { _renderAsideBody([], {}); return; }
-  const res = await window.orkas
+  const res = await window.cogseed
     .invoke('aside.list', { cid: _asideCid, project_id: _asideProjectId })
     .catch(() => null);
   _asideTurns = (res && res.ok && res.turns) || [];
@@ -167,8 +167,8 @@ async function _submitAside() {
   let answer = '';
   _renderAsideBody(_asideTurns, { pendingQuestion: question, pendingAnswer: '' });
 
-  // `window.orkas.stream` returns { promise, cancel } — not a thenable.
-  const call = window.orkas.stream('aside.askStream', {
+  // `window.cogseed.stream` returns { promise, cancel } — not a thenable.
+  const call = window.cogseed.stream('aside.askStream', {
     cid: _asideCid,
     project_id: _asideProjectId,
     ...(_asideAnchor.msgId
@@ -205,7 +205,7 @@ async function _clearAside() {
     ? await uiConfirm({ message: t('aside.clear_confirm') })
     : true;
   if (!confirmed) return;
-  await window.orkas.invoke('aside.clear', { cid: _asideCid, project_id: _asideProjectId })
+  await window.cogseed.invoke('aside.clear', { cid: _asideCid, project_id: _asideProjectId })
     .catch(() => null);
   _asideTurns = [];
   _renderAsideBody([], {});

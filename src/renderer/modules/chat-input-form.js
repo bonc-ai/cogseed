@@ -223,7 +223,7 @@
       const pick = async () => {
         if (disabled) return;
         try {
-          const res = await window.orkas.invoke('common.pickDirectory', {
+          const res = await window.cogseed.invoke('common.pickDirectory', {
             title: field.label || 'Choose a directory',
           });
           if (res && !res.cancelled && res.path) {
@@ -426,7 +426,7 @@
       if (disabled) return;
       let picked = [];
       try {
-        const res = await window.orkas.invoke('common.pickFiles', {
+        const res = await window.cogseed.invoke('common.pickFiles', {
           title: field.label || 'Choose file',
           multiple,
           extensions: _acceptToExtensions(field.accept),

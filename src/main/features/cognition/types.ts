@@ -2,7 +2,7 @@ export type CognitionCandidateSource = 'personal_ontology' | 'p3394_experience' 
 export type CognitionCandidateType = 'preference' | 'ontology' | 'rule' | 'experience' | 'skill_evolution';
 export type CognitionCandidateStatus = 'pending' | 'accepted' | 'deferred' | 'rejected';
 
-export type CognitionCandidateAction = 'source' | 'accept' | 'reject' | 'open_personal_ontology' | 'import_to_recall';
+export type CognitionCandidateAction = 'source' | 'accept' | 'modify' | 'defer' | 'reject' | 'open_personal_ontology' | 'import_to_recall';
 
 export interface CognitionRelationRef {
   type: 'skill' | 'knowledge' | 'ontology' | 'evaluation' | 'conversation' | 'execution' | 'memory' | 'receipt';
@@ -60,10 +60,22 @@ export type CognitionAssetType = 'personal' | 'rule' | 'template' | 'skill_metho
 export type CognitionAssetMaturity = 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated';
 export type CognitionAssetStatus = 'active' | 'paused' | 'revoked' | 'candidate';
 
+export interface CognitionRecallSkillDraftSummary {
+  draftHash: string;
+  fileCount: number;
+  workflowSteps: string[];
+  validationOk: boolean;
+  recallContext?: {
+    assetCount: number;
+    sourceCount: number;
+  };
+}
+
 export interface CognitionAssetSummary {
   id: string;
   type: CognitionAssetType;
   title: string;
+  summary?: string;
   source: string;
   version?: string;
   status?: CognitionAssetStatus | string;
@@ -76,6 +88,10 @@ export interface CognitionAssetSummary {
   receiptRefs: string[];
   candidateRefs: string[];
   baselineSkillRef?: string;
+  generatedSkillId?: string;
+  recallSkillDraftStatus?: 'failed' | 'draft';
+  recallSkillDraftErrorCode?: string;
+  recallSkillDraft?: CognitionRecallSkillDraftSummary;
   relationRefs: CognitionRelationRef[];
   candidateCount: number;
   reuseCount: number;

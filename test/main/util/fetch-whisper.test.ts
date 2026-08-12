@@ -68,7 +68,7 @@ describe('fetch-whisper', () => {
   it('persists an unsupported-CPU capability state without changing verified file records', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-whisper-marker-'));
     tempDirs.push(dir);
-    const markerFile = path.join(dir, '.orkas-whisper-ready.json');
+    const markerFile = path.join(dir, '.cogseed-whisper-ready.json');
     fs.writeFileSync(markerFile, JSON.stringify({ schema: 1, files: { cli: { bytes: 1 } }, capability: { status: 'ready' } }));
 
     fetchWhisper.writeCapabilityState(dir, { status: 'disabled', reason: 'unsupported_cpu' });

@@ -15,14 +15,23 @@ import {
   type TaskTerminalListener,
 } from '../group_chat/bus';
 import type { GroupMessage } from '../group_chat/visibility';
-import { readRecallCandidate, saveRecallCandidate, type AbilityAssetType } from './candidate-service';
+import {
+  promoteRecallCandidate,
+  readRecallCandidate,
+  saveRecallCandidate,
+  type AbilityAssetType,
+  type RecallAbilityAssetRecord,
+  type RecallCandidateRecord,
+} from './candidate-service';
 import { recallJsonRecordPath } from './paths';
 import {
   cognitionArtifactSourceId,
   cognitionMessageSourceId,
   listCognitionSources,
 } from './source-catalog';
+import { readCognitionSourceControl } from './source-control';
 import { createRecallView, isRecallViewExpired, readRecallView, type RecallViewRecord } from './recall-view-service';
+import { prepareRecallSkillDraft } from './skill-draft-service';
 import {
   readRecallJsonRecord,
   updateRecallJsonRecord,
@@ -42,6 +51,27 @@ const MAX_CAPTURE_MESSAGES = 32;
 const MAX_CAPTURE_TEXT_CHARS = 22_000;
 const MAX_MODEL_CANDIDATES = 3;
 
+async function prepareSkillDraftForPromotedAsset(
+  userId: string,
+  promoted: { candidate: RecallCandidateRecord; asset: RecallAbilityAssetRecord },
+): Promise<void> {
+  if (promoted.asset.type !== 'skill_method' || promoted.asset.status !== 'active') return;
+  try {
+    const draft = await prepareRecallSkillDraft(userId, promoted.asset.id);
+    if (draft.status === 'failed') {
+      log.warn('automatic Recall skill draft failed', {
+        asset_id: promoted.asset.id,
+        code: draft.errorCode,
+      });
+    }
+  } catch (error) {
+    log.warn('automatic Recall skill draft could not be prepared', {
+      asset_id: promoted.asset.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 export type RecallCaptureStatus =
   | 'waiting_quiet'
   | 'waiting_completion'
@@ -49,6 +79,7 @@ export type RecallCaptureStatus =
   | 'scheduled'
   | 'queued'
   | 'extracting'
+  | 'writing'
   | 'paused'
   | 'review_ready'
   | 'no_candidate'
@@ -60,7 +91,8 @@ export type RecallCaptureStage =
   | 'model_check'
   | 'recall_view'
   | 'model_extraction'
-  | 'candidate_save';
+  | 'candidate_save'
+  | 'asset_write';
 
 export interface RecallCaptureModelUsage {
   inputTokens?: number;
@@ -88,6 +120,7 @@ export interface RecallCaptureRecord extends RecallJsonRecord {
   resumeStatus?: 'waiting_quiet' | 'waiting_completion' | 'waiting_manual' | 'scheduled' | 'queued';
   attempt: number;
   candidateIds: string[];
+  writingCandidateId?: string;
   recallViewId?: string;
   errorCode?: string;
   recoveredAt?: string;
@@ -99,8 +132,83 @@ export interface RecallCaptureRecord extends RecallJsonRecord {
   updatedAt: string;
 }
 
+export type RecallCaptureWorkflowStatus = RecallCaptureStatus | 'completed';
+
+export type RecallCaptureDisplayStatus =
+  | 'waiting'
+  | 'extracting'
+  | 'review_ready'
+  | 'writing'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type RecallCaptureDisplayReason =
+  | 'quiet_period'
+  | 'conversation_active'
+  | 'manual_start_required'
+  | 'nightly_window'
+  | 'queued'
+  | 'paused'
+  | 'extracting'
+  | 'asset_write'
+  | 'review_pending'
+  | 'no_candidate'
+  | 'review_completed'
+  | 'model_not_configured'
+  | 'model_auth_required'
+  | 'asset_write_failed'
+  | 'asset_write_interrupted'
+  | 'capture_failed'
+  | 'cancelled';
+
+export type RecallCaptureAction =
+  | 'run_now'
+  | 'pause'
+  | 'resume'
+  | 'cancel'
+  | 'review_candidates'
+  | 'configure_model'
+  | 'retry'
+  | 'view_assets'
+  | 'open_conversation';
+
+export interface RecallCaptureReviewSummary {
+  total: number;
+  pending: number;
+  deferred: number;
+  promoted: number;
+  rejected: number;
+  missing: number;
+}
+
+export type RecallCaptureNextAction =
+  | 'wait_quiet'
+  | 'complete_conversation'
+  | 'run_now'
+  | 'wait_nightly'
+  | 'wait_processing'
+  | 'resume'
+  | 'review_candidates'
+  | 'configure_model'
+  | 'retry'
+  | 'view_assets'
+  | 'none';
+
+export interface RecallCaptureWorkflowRecord extends RecallCaptureRecord {
+  workflowStatus: RecallCaptureWorkflowStatus;
+  displayStatus: RecallCaptureDisplayStatus;
+  displayReason: RecallCaptureDisplayReason;
+  reviewSummary: RecallCaptureReviewSummary;
+  linkedAssetIds: string[];
+  nextAction: RecallCaptureNextAction;
+  actions: RecallCaptureAction[];
+}
+
+export type RecallCaptureQueryStatus = RecallCaptureStatus | RecallCaptureDisplayStatus | 'completed';
+
 export interface ListRecallCapturesQuery {
-  statuses?: RecallCaptureStatus[];
+  statuses?: RecallCaptureQueryStatus[];
   executionPolicy?: RecallCaptureExecutionPolicy | 'immediate';
   cursor?: string;
   limit?: number;
@@ -116,7 +224,7 @@ export interface RecallCaptureCounts {
 }
 
 export interface RecallCapturePage {
-  captures: RecallCaptureRecord[];
+  captures: RecallCaptureWorkflowRecord[];
   nextCursor: string | null;
   counts: RecallCaptureCounts;
 }
@@ -166,6 +274,7 @@ function isCaptureStatus(value: unknown): value is RecallCaptureStatus {
     || value === 'scheduled'
     || value === 'queued'
     || value === 'extracting'
+    || value === 'writing'
     || value === 'paused'
     || value === 'review_ready'
     || value === 'no_candidate'
@@ -178,7 +287,8 @@ function isCaptureStage(value: unknown): value is RecallCaptureStage {
   return value === 'model_check'
     || value === 'recall_view'
     || value === 'model_extraction'
-    || value === 'candidate_save';
+    || value === 'candidate_save'
+    || value === 'asset_write';
 }
 
 function isExecutionPolicy(value: unknown): value is RecallCaptureRecord['executionPolicy'] {
@@ -224,6 +334,8 @@ function asCapture(value: RecallJsonRecord): RecallCaptureRecord {
     || Number(value.attempt) < 1
     || !Array.isArray(value.candidateIds)
     || value.candidateIds.some((id) => typeof id !== 'string')
+    || (value.writingCandidateId !== undefined
+      && (typeof value.writingCandidateId !== 'string' || !safeId(value.writingCandidateId)))
     || (value.recallViewId !== undefined && (typeof value.recallViewId !== 'string' || !safeId(value.recallViewId)))
     || (value.stage !== undefined && !isCaptureStage(value.stage))
     || (value.executionPolicy !== undefined && !isExecutionPolicy(value.executionPolicy))
@@ -250,6 +362,9 @@ function asCapture(value: RecallJsonRecord): RecallCaptureRecord {
     ...value,
     taxonomyVersion: 2,
     executionPolicy: isExecutionPolicy(value.executionPolicy) ? value.executionPolicy : 'immediate',
+    stage: ['review_ready', 'no_candidate', 'cancelled'].includes(String(value.status))
+      ? undefined
+      : value.stage,
     ...(normalizeModelUsage(value.modelUsage) ? { modelUsage: normalizeModelUsage(value.modelUsage) } : {}),
   } as RecallCaptureRecord;
 }
@@ -508,6 +623,174 @@ export async function readRecallCapture(userId: string, id: string): Promise<Rec
   return asCapture(record);
 }
 
+function candidateUnavailableForWorkflow(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.message === 'recall candidate not found'
+    || error.message.startsWith('malformed recall candidate')
+    || error.message.startsWith('malformed recall record:');
+}
+
+function captureNextAction(
+  capture: RecallCaptureRecord,
+  workflowStatus: RecallCaptureWorkflowStatus,
+  linkedAssetIds: string[],
+): RecallCaptureNextAction {
+  if (workflowStatus === 'completed') return linkedAssetIds.length ? 'view_assets' : 'none';
+  if (workflowStatus === 'waiting_quiet') return 'wait_quiet';
+  if (workflowStatus === 'waiting_completion') return 'complete_conversation';
+  if (workflowStatus === 'waiting_manual') return 'run_now';
+  if (workflowStatus === 'scheduled') return 'wait_nightly';
+  if (workflowStatus === 'queued' || workflowStatus === 'extracting' || workflowStatus === 'writing') return 'wait_processing';
+  if (workflowStatus === 'paused') return 'resume';
+  if (workflowStatus === 'review_ready') return 'review_candidates';
+  if (workflowStatus === 'configuration_required') return 'configure_model';
+  if (workflowStatus === 'failed') return 'retry';
+  if (capture.status === 'no_candidate' || workflowStatus === 'cancelled') return 'none';
+  return 'none';
+}
+
+function captureDisplayStatus(
+  capture: RecallCaptureRecord,
+  workflowStatus: RecallCaptureWorkflowStatus,
+): RecallCaptureDisplayStatus {
+  if (workflowStatus === 'completed') return 'completed';
+  if (workflowStatus === 'failed' || workflowStatus === 'configuration_required') return 'failed';
+  if (workflowStatus === 'cancelled') return 'cancelled';
+  if (workflowStatus === 'extracting') return 'extracting';
+  if (workflowStatus === 'writing') return 'writing';
+  if (workflowStatus === 'review_ready') return 'review_ready';
+  if (capture.status === 'no_candidate') return 'completed';
+  return 'waiting';
+}
+
+function captureDisplayReason(
+  capture: RecallCaptureRecord,
+  workflowStatus: RecallCaptureWorkflowStatus,
+): RecallCaptureDisplayReason {
+  if (workflowStatus === 'completed') {
+    return capture.status === 'no_candidate' ? 'no_candidate' : 'review_completed';
+  }
+  if (workflowStatus === 'cancelled') return 'cancelled';
+  if (capture.errorCode === 'model_not_configured') return 'model_not_configured';
+  if (capture.errorCode === 'model_auth_required') return 'model_auth_required';
+  if (capture.errorCode === 'asset_write_failed') return 'asset_write_failed';
+  if (capture.errorCode === 'asset_write_interrupted') return 'asset_write_interrupted';
+  if (workflowStatus === 'failed' || workflowStatus === 'configuration_required') return 'capture_failed';
+  if (workflowStatus === 'writing') return 'asset_write';
+  if (workflowStatus === 'extracting') return 'extracting';
+  if (workflowStatus === 'review_ready') return 'review_pending';
+  if (workflowStatus === 'waiting_quiet') return 'quiet_period';
+  if (workflowStatus === 'waiting_completion') return 'conversation_active';
+  if (workflowStatus === 'waiting_manual') return 'manual_start_required';
+  if (workflowStatus === 'scheduled') return 'nightly_window';
+  if (workflowStatus === 'paused') return 'paused';
+  return 'queued';
+}
+
+function captureActions(
+  capture: RecallCaptureRecord,
+  workflowStatus: RecallCaptureWorkflowStatus,
+  linkedAssetIds: string[],
+): RecallCaptureAction[] {
+  const actions: RecallCaptureAction[] = [];
+  if (['waiting_quiet', 'waiting_completion', 'waiting_manual', 'scheduled', 'paused'].includes(capture.status)) {
+    actions.push('run_now');
+  }
+  if (['waiting_quiet', 'waiting_completion', 'waiting_manual', 'scheduled', 'queued', 'extracting'].includes(capture.status)
+    && !(capture.status === 'extracting' && capture.stage === 'candidate_save')) {
+    actions.push('pause');
+  }
+  if (capture.status === 'paused') actions.push('resume');
+  if (workflowStatus === 'configuration_required') actions.push('configure_model', 'retry');
+  else if (workflowStatus === 'failed') actions.push('retry');
+  if (workflowStatus === 'review_ready') actions.push('review_candidates');
+  if (workflowStatus === 'completed' && linkedAssetIds.length) actions.push('view_assets');
+  if (!['review_ready', 'no_candidate', 'writing', 'cancelled', 'completed'].includes(workflowStatus)
+    && !(capture.status === 'extracting' && capture.stage === 'candidate_save')) {
+    actions.push('cancel');
+  }
+  actions.push('open_conversation');
+  return [...new Set(actions)];
+}
+
+async function summarizeRecallCaptures(
+  userId: string,
+  captures: RecallCaptureRecord[],
+): Promise<RecallCaptureWorkflowRecord[]> {
+  const candidateReads = new Map<string, Promise<RecallCandidateRecord | undefined>>();
+  const readCandidate = (candidateId: string): Promise<RecallCandidateRecord | undefined> => {
+    if (!safeId(candidateId)) return Promise.resolve(undefined);
+    const cached = candidateReads.get(candidateId);
+    if (cached) return cached;
+    const pending = readRecallCandidate(userId, candidateId).catch((error: unknown) => {
+      if (candidateUnavailableForWorkflow(error)) return undefined;
+      throw error;
+    });
+    candidateReads.set(candidateId, pending);
+    return pending;
+  };
+
+  return Promise.all(captures.map(async (capture) => {
+    const candidateIds = [...new Set(capture.candidateIds)];
+    const candidates = await Promise.all(candidateIds.map(readCandidate));
+    const reviewSummary: RecallCaptureReviewSummary = {
+      total: candidateIds.length,
+      pending: 0,
+      deferred: 0,
+      promoted: 0,
+      rejected: 0,
+      missing: 0,
+    };
+    const linkedAssetIds = new Set<string>();
+    for (const candidate of candidates) {
+      if (!candidate) {
+        reviewSummary.missing += 1;
+        continue;
+      }
+      reviewSummary[candidate.status] += 1;
+      if (candidate.status === 'promoted' && candidate.promotedAssetId && safeId(candidate.promotedAssetId)) {
+        linkedAssetIds.add(candidate.promotedAssetId);
+      }
+    }
+
+    let workflowStatus: RecallCaptureWorkflowStatus = capture.status;
+    if (capture.status === 'no_candidate') {
+      workflowStatus = 'completed';
+    } else if (capture.status === 'review_ready' && reviewSummary.missing > 0) {
+      workflowStatus = 'failed';
+    } else if (
+      capture.status === 'review_ready'
+      && reviewSummary.total > 0
+      && reviewSummary.pending === 0
+      && reviewSummary.deferred === 0
+      && reviewSummary.missing === 0
+      && reviewSummary.promoted + reviewSummary.rejected === reviewSummary.total
+    ) {
+      workflowStatus = 'completed';
+    }
+    const linkedAssets = [...linkedAssetIds];
+    const displayStatus = captureDisplayStatus(capture, workflowStatus);
+    return {
+      ...capture,
+      workflowStatus,
+      displayStatus,
+      displayReason: captureDisplayReason(capture, workflowStatus),
+      reviewSummary,
+      linkedAssetIds: linkedAssets,
+      nextAction: captureNextAction(capture, workflowStatus, linkedAssets),
+      actions: captureActions(capture, workflowStatus, linkedAssets),
+    };
+  }));
+}
+
+export async function readRecallCaptureWorkflow(
+  userId: string,
+  id: string,
+): Promise<RecallCaptureWorkflowRecord> {
+  const [capture] = await summarizeRecallCaptures(userId, [await readRecallCapture(userId, id)]);
+  return capture;
+}
+
 async function listAllRecallCaptures(userId: string): Promise<RecallCaptureRecord[]> {
   let names: string[];
   try {
@@ -546,22 +829,26 @@ async function findMergeableAutomaticCapture(
   ));
 }
 
-export async function listRecallCaptures(userId: string, limit = 20): Promise<RecallCaptureRecord[]> {
+export async function listRecallCaptures(userId: string, limit = 20): Promise<RecallCaptureWorkflowRecord[]> {
   const wanted = Math.max(1, Math.min(100, Math.floor(Number(limit) || 20)));
-  return (await listAllRecallCaptures(userId)).slice(0, wanted);
+  return summarizeRecallCaptures(userId, (await listAllRecallCaptures(userId)).slice(0, wanted));
 }
 
-function captureCounts(captures: RecallCaptureRecord[]): RecallCaptureCounts {
+function captureCounts(captures: RecallCaptureWorkflowRecord[]): RecallCaptureCounts {
   return captures.reduce<RecallCaptureCounts>((counts, capture) => {
-    if (capture.status === 'extracting') counts.processing += 1;
-    else if (capture.status === 'review_ready') counts.review += 1;
-    else if (capture.status === 'failed') counts.failed += 1;
-    else if (capture.status === 'no_candidate') counts.completed += 1;
-    else if (capture.status === 'cancelled') counts.cancelled += 1;
+    if (capture.displayStatus === 'extracting' || capture.displayStatus === 'writing') counts.processing += 1;
+    else if (capture.displayStatus === 'review_ready') counts.review += 1;
+    else if (capture.displayStatus === 'failed') counts.failed += 1;
+    else if (capture.displayStatus === 'completed') counts.completed += 1;
+    else if (capture.displayStatus === 'cancelled') counts.cancelled += 1;
     else counts.waiting += 1;
     return counts;
   }, { waiting: 0, processing: 0, review: 0, failed: 0, completed: 0, cancelled: 0 });
 }
+
+const DISPLAY_CAPTURE_STATUSES = new Set<RecallCaptureDisplayStatus>([
+  'waiting', 'extracting', 'review_ready', 'writing', 'completed', 'failed', 'cancelled',
+]);
 
 function encodeCaptureCursor(capture: RecallCaptureRecord): string {
   return Buffer.from(JSON.stringify([capture.updatedAt, capture.id]), 'utf8').toString('base64url');
@@ -587,13 +874,21 @@ export async function queryRecallCaptures(
   userId: string,
   query: ListRecallCapturesQuery = {},
 ): Promise<RecallCapturePage> {
-  const all = await listAllRecallCaptures(userId);
+  const all = await summarizeRecallCaptures(userId, await listAllRecallCaptures(userId));
   const counts = captureCounts(all);
   const statuses = query.statuses?.length ? new Set(query.statuses) : undefined;
   const cursor = query.cursor ? decodeCaptureCursor(query.cursor) : undefined;
   const limit = Math.max(1, Math.min(100, Math.floor(Number(query.limit) || 25)));
   const filtered = all.filter((capture) => {
-    if (statuses && !statuses.has(capture.status)) return false;
+    if (statuses && ![...statuses].some((status) => (
+      DISPLAY_CAPTURE_STATUSES.has(status as RecallCaptureDisplayStatus)
+        ? capture.displayStatus === status
+        : status === 'completed'
+          ? capture.workflowStatus === 'completed'
+        : status === 'no_candidate'
+          ? capture.status === 'no_candidate'
+          : capture.workflowStatus === status
+    ))) return false;
     if (query.executionPolicy && capture.executionPolicy !== query.executionPolicy) return false;
     if (!cursor) return true;
     return capture.updatedAt < cursor[0]
@@ -612,9 +907,9 @@ export async function queryRecallCaptures(
 async function updateCapture(
   userId: string,
   id: string,
-  updater: (capture: RecallCaptureRecord) => RecallCaptureRecord,
+  updater: (capture: RecallCaptureRecord) => RecallCaptureRecord | Promise<RecallCaptureRecord>,
 ): Promise<RecallCaptureRecord> {
-  const updated = await updateRecallJsonRecord(userId, CAPTURE_COLLECTION, id, (current) => {
+  const updated = await updateRecallJsonRecord(userId, CAPTURE_COLLECTION, id, async (current) => {
     if (!current) throw new Error('recall capture not found');
     return updater(asCapture(current));
   });
@@ -713,6 +1008,21 @@ export async function runRecallCapture(
 ): Promise<RecallCaptureRecord> {
   const queued = await readRecallCapture(userId, id);
   if (queued.status !== 'queued') return queued;
+  const sourceControl = await readCognitionSourceControl(userId, {
+    kind: 'conversation',
+    id: queued.conversationId,
+  });
+  if (sourceControl && sourceControl.availability !== 'active') {
+    return updateCapture(userId, id, (current) => current.status !== 'queued'
+      ? current
+      : {
+          ...current,
+          status: 'paused',
+          resumeStatus: 'queued',
+          errorCode: sourceControl.availability === 'removed' ? 'source_removed' : 'source_paused',
+          updatedAt: new Date().toISOString(),
+        });
+  }
   let claimed = false;
   const startedAt = new Date().toISOString();
   let capture = await updateCapture(userId, id, (current) => ({
@@ -940,6 +1250,33 @@ export async function runRecallCapture(
       }
     }
 
+    const candidateIds = [...new Set(candidates.map((candidate) => candidate.id))];
+    capture = await updateCapture(userId, id, (current) => current.status !== 'extracting'
+      ? current
+      : {
+          ...current,
+          candidateIds,
+          updatedAt: new Date().toISOString(),
+        });
+    if (capture.status !== 'extracting' || signal?.aborted) return settleInterruptedCapture(userId, id);
+
+    const reviewSettings = await readRecallCaptureSettings(userId);
+    const automaticCandidates = reviewSettings.reviewPolicy === 'auto'
+      ? candidates.filter((candidate) => !candidate.uncertainty)
+      : [];
+    if (automaticCandidates.length) {
+      capture = await setCaptureStage(userId, id, 'asset_write');
+      if (capture.status !== 'extracting' || signal?.aborted) return settleInterruptedCapture(userId, id);
+      try {
+        for (const candidate of automaticCandidates) {
+          const promoted = await promoteRecallCandidate(userId, candidate.id);
+          await prepareSkillDraftForPromotedAsset(userId, promoted);
+        }
+      } catch {
+        throw new CaptureFailure('asset_write_failed', 'automatic recall asset write failed');
+      }
+    }
+
     const finishedAt = new Date().toISOString();
     const modelUsage = normalizeModelUsage(result.meta.usage);
     capture = await updateCapture(userId, id, (current) => current.status !== 'extracting'
@@ -947,7 +1284,8 @@ export async function runRecallCapture(
       : {
           ...current,
           status: candidates.length ? 'review_ready' : 'no_candidate',
-          candidateIds: [...new Set(candidates.map((candidate) => candidate.id))],
+          stage: undefined,
+          candidateIds,
           errorCode: undefined,
           finishedAt,
           durationMs: durationSince(current.startedAt, finishedAt),
@@ -1170,6 +1508,18 @@ export function scheduleRecallCapture(userId: string, id: string): void {
 export async function queueRecallCaptureFromTerminal(
   event: TaskTerminalEvent,
 ): Promise<RecallCaptureRecord | undefined> {
+  const sourceControl = await readCognitionSourceControl(event.user_id, {
+    kind: 'conversation',
+    id: event.conversation_id,
+  });
+  if (sourceControl && sourceControl.availability !== 'active') {
+    log.info('recall terminal capture skipped: conversation source disabled', {
+      conversation_id: event.conversation_id,
+      run_id: event.run_id,
+      availability: sourceControl.availability,
+    });
+    return undefined;
+  }
   if (event.status !== 'completed') {
     const pending = await findMergeableAutomaticCapture(event.user_id, event.conversation_id);
     if (!pending) return undefined;
@@ -1227,6 +1577,14 @@ export async function queueRecallCaptureFromTerminal(
       conversation_id: event.conversation_id,
       run_id: event.run_id,
       anchor_message_id: event.anchor_message_id || '',
+    });
+    return undefined;
+  }
+  if (selected.at(-1)?.role !== 'assistant') {
+    log.warn('recall terminal capture skipped: completed exchange has no assistant response', {
+      conversation_id: event.conversation_id,
+      run_id: event.run_id,
+      selected_count: selected.length,
     });
     return undefined;
   }
@@ -1344,6 +1702,15 @@ export async function queueManualRecallCaptureFromConversation(
   userId: string,
   conversationId: string,
 ): Promise<RecallCaptureRecord> {
+  const sourceControl = await readCognitionSourceControl(userId, {
+    kind: 'conversation',
+    id: conversationId,
+  });
+  if (sourceControl && sourceControl.availability !== 'active') {
+    throw new Error(sourceControl.availability === 'removed'
+      ? 'conversation source was removed from Recall'
+      : 'conversation source is paused');
+  }
   const conversation = await chats.getConversation(userId, conversationId);
   if (!conversation) throw new Error('conversation not found');
 
@@ -1428,9 +1795,73 @@ export async function queueManualRecallCaptureFromConversation(
   return stored;
 }
 
+export async function promoteRecallCaptureCandidate(
+  userId: string,
+  candidateId: string,
+): Promise<{ candidate: RecallCandidateRecord; asset: RecallAbilityAssetRecord }> {
+  if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
+  const capture = (await listAllRecallCaptures(userId)).find((item) => item.candidateIds.includes(candidateId));
+  if (!capture) {
+    const promoted = await promoteRecallCandidate(userId, candidateId);
+    await prepareSkillDraftForPromotedAsset(userId, promoted);
+    return promoted;
+  }
+
+  await updateCapture(userId, capture.id, (current) => {
+    if (!current.candidateIds.includes(candidateId)) throw new Error('candidate does not belong to recall capture');
+    if (current.status === 'writing') throw new Error('recall capture is already writing');
+    if (current.status !== 'review_ready') throw new Error('recall capture is not ready for review');
+    return {
+      ...current,
+      status: 'writing',
+      stage: 'asset_write',
+      writingCandidateId: candidateId,
+      errorCode: undefined,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+
+  try {
+    const promoted = await promoteRecallCandidate(userId, candidateId);
+    await prepareSkillDraftForPromotedAsset(userId, promoted);
+    await updateCapture(userId, capture.id, (current) => (
+      current.status === 'writing' && current.writingCandidateId === candidateId
+        ? {
+            ...current,
+            status: 'review_ready',
+            stage: undefined,
+            writingCandidateId: undefined,
+            errorCode: undefined,
+            updatedAt: new Date().toISOString(),
+          }
+        : current
+    ));
+    return promoted;
+  } catch (error) {
+    await updateCapture(userId, capture.id, (current) => (
+      current.status === 'writing' && current.writingCandidateId === candidateId
+        ? {
+            ...current,
+            status: 'review_ready',
+            stage: undefined,
+            writingCandidateId: undefined,
+            errorCode: 'asset_write_failed',
+            updatedAt: new Date().toISOString(),
+          }
+        : current
+    ));
+    throw error;
+  }
+}
+
 export async function retryRecallCapture(userId: string, id: string): Promise<RecallCaptureRecord> {
-  const capture = await updateCapture(userId, id, (current) => {
-    if (current.status !== 'failed' && current.status !== 'configuration_required') {
+  const capture = await updateCapture(userId, id, async (current) => {
+    let retryable = current.status === 'failed' || current.status === 'configuration_required';
+    if (current.status === 'review_ready') {
+      const [workflow] = await summarizeRecallCaptures(userId, [current]);
+      retryable = workflow.workflowStatus === 'failed' && workflow.reviewSummary.missing > 0;
+    }
+    if (!retryable) {
       throw new Error('recall capture is not retryable');
     }
     return {
@@ -1511,6 +1942,7 @@ export async function cancelRecallCapture(userId: string, id: string): Promise<R
   const key = captureTaskKey(userId, id);
   const finishedAt = new Date().toISOString();
   const capture = await updateCapture(userId, id, (current) => {
+    if (current.status === 'writing') throw new Error('recall capture is writing an approved candidate');
     if (['review_ready', 'no_candidate', 'cancelled'].includes(current.status)) {
       throw new Error('recall capture is terminal');
     }
@@ -1535,6 +1967,16 @@ export async function cancelRecallCapture(userId: string, id: string): Promise<R
 
 export async function runRecallCaptureNow(userId: string, id: string): Promise<RecallCaptureRecord> {
   const key = captureTaskKey(userId, id);
+  const stored = await readRecallCapture(userId, id);
+  const sourceControl = await readCognitionSourceControl(userId, {
+    kind: 'conversation',
+    id: stored.conversationId,
+  });
+  if (sourceControl && sourceControl.availability !== 'active') {
+    throw new Error(sourceControl.availability === 'removed'
+      ? 'conversation source was removed from Recall'
+      : 'conversation source is paused');
+  }
   const capture = await updateCapture(userId, id, (current) => {
     if (current.status === 'queued' || current.status === 'extracting') return current;
     if (![
@@ -1569,6 +2011,18 @@ export async function recoverRecallCaptures(userId: string): Promise<number> {
   let recovered = 0;
   for (const item of captures) {
     let capture = item;
+    if (capture.status === 'writing') {
+      const recoveredAt = new Date().toISOString();
+      capture = await updateCapture(userId, capture.id, (current) => ({
+        ...current,
+        status: 'review_ready',
+        stage: undefined,
+        writingCandidateId: undefined,
+        errorCode: 'asset_write_interrupted',
+        recoveredAt,
+        updatedAt: recoveredAt,
+      }));
+    }
     if (capture.status === 'extracting' || capture.status === 'queued') {
       const recoveredAt = new Date().toISOString();
       capture = await updateCapture(userId, capture.id, (current) => ({

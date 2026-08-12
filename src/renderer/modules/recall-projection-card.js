@@ -89,14 +89,14 @@
   }
 
   async function _loadCard(projectionId) {
-    const result = await window.orkas.invoke('recall.projections.card', { projectionId });
+    const result = await window.cogseed.invoke('recall.projections.card', { projectionId });
     if (!result?.ok || !result.card) throw new Error(result?.error || 'projection card unavailable');
     return result.card;
   }
 
   async function _loadAvailable(projectionId, editable) {
     if (!editable) return [];
-    const result = await window.orkas.invoke('recall.projections.availableAssets', { projectionId });
+    const result = await window.cogseed.invoke('recall.projections.availableAssets', { projectionId });
     if (!result?.ok) return [];
     return Array.isArray(result.assets) ? result.assets : [];
   }
@@ -130,8 +130,8 @@
         button.disabled = true;
         try {
           const result = confirm
-            ? await window.orkas.invoke('recall.projections.confirm', { projectionId })
-            : await window.orkas.invoke('recall.projections.revise', remove
+            ? await window.cogseed.invoke('recall.projections.confirm', { projectionId })
+            : await window.cogseed.invoke('recall.projections.revise', remove
               ? { projectionId, removeAssetIds: [assetId] }
               : { projectionId, addAssetIds: [assetId] });
           if (!result?.ok) throw new Error(result?.error || (confirm ? 'projection confirmation failed' : 'projection revision failed'));

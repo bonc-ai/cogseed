@@ -6,7 +6,7 @@ import {
   readAbilityAssetSemantics,
   resolveDefaultUsePolicy,
 } from '../../../../src/main/features/recall/asset-semantics';
-import { buildCapabilityPack } from '../../../../src/main/features/p3394/capability-pack';
+import { buildCapabilityPack } from '../../../../src/main/features/p3394/capability-pack-delivery';
 import type { RecallAbilityAssetRecord } from '../../../../src/main/features/recall/candidate-service';
 
 const AT = '2026-08-11T02:00:00.000Z';

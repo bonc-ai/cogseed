@@ -314,8 +314,8 @@
   }
 
   async function invoke(channel, payload) {
-    if (!window || !window.orkas || typeof window.orkas.invoke !== 'function') return { ok: false, error: 'ipc unavailable' };
-    return window.orkas.invoke(channel, payload);
+    if (!window || !window.cogseed || typeof window.cogseed.invoke !== 'function') return { ok: false, error: 'ipc unavailable' };
+    return window.cogseed.invoke(channel, payload);
   }
 
   async function ensureProviders() {

@@ -305,7 +305,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function bindStaticHandlers() {
-  window.orkas.onPushEvent('conversations:open-from-notification', (payload) => {
+  window.cogseed.onPushEvent('conversations:open-from-notification', (payload) => {
     _openTaskNotificationConversation(payload);
   });
 
@@ -316,11 +316,8 @@ function bindStaticHandlers() {
   document.getElementById('skills-btn').addEventListener('click', () => _setViewFromSidebar('skills'));
   document.getElementById('recall-btn')?.addEventListener('click', () => _setViewFromSidebar('recall'));
   document.getElementById('connectors-btn')?.addEventListener('click', () => _setViewFromSidebar('connectors'));
-  document.getElementById('evolution-btn')?.addEventListener('click', () => _setViewFromSidebar('evolution'));
   document.getElementById('personal-ontology-btn')?.addEventListener('click', () => _setViewFromSidebar('personal-ontology'));
   document.getElementById('spaces-btn')?.addEventListener('click', () => _setViewFromSidebar('spaces'));
-  document.getElementById('topbar-evolution-toggle')?.addEventListener('click', () => _setViewFromSidebar('evolution'));
-  document.getElementById('contexts-btn').addEventListener('click', () => _setViewFromSidebar('contexts'));
   document.getElementById('settings-btn')?.addEventListener('click', () => _setViewFromSidebar('settings'));
 
   // Global search trigger + Cmd+K

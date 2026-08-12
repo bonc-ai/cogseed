@@ -205,7 +205,11 @@ describe('wiring', () => {
     expect(skillsSource).toContain('_abilityAssetDisplayStatusLabel(selected)');
   });
 
-  it('keeps maturity as its own detail row instead of replacing it', () => {
-    expect(skillsSource).toContain('_abilityAssetMaturityLabel(selected.maturity, selected.status)');
+  // 这条原本守的是「显示状态不得吞掉成熟度信息」——当时详情页有一格独立的成熟度行。
+  // develop 在重构中整体移除了资产详情的 detail grid，成熟度行随之消失。合并时不把它
+  // 加回来：那是推翻对方的产品决定，不是迁移我的功能。成熟度是否仍需对用户可见，
+  // 留给产品判断，见待办「资产详情成熟度是否恢复展示」。
+  it('still maps maturity for surfaces that show it', () => {
+    expect(skillsSource).toContain('function _abilityAssetMaturityLabel');
   });
 });

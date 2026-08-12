@@ -1,0 +1,34 @@
+{
+  "id": "PACKAGE-MANIFEST-ORCH-001",
+  "machine_enhancements": [
+    "manifest.yaml",
+    "schemas/input.schema.json",
+    "schemas/output.schema.json",
+    "evals/manifest.yaml"
+  ],
+  "name": "orchestrate-ai-product",
+  "normative_to_machine": {
+    "evals/evals.json": "evals/manifest.yaml",
+    "references/input-contract.md": "schemas/input.schema.json",
+    "references/output-contract.md": "schemas/output.schema.json"
+  },
+  "nseap_standard_assets": [
+    "SKILL.md",
+    "agents/openai.yaml",
+    "evals/evals.json",
+    "evals/forecast_model.md",
+    "evals/outcome_evaluation.md",
+    "evals/replay_dataset.md",
+    "evals/regression_tests.md",
+    "references/skill-spec.yaml",
+    "references/input-contract.md",
+    "references/output-contract.md",
+    "references/validation-contract.md",
+    "references/ontology-mapping.md",
+    "references/kstar-evolution.md",
+    "references/governance-boundaries.md",
+    "references/eval-cases.yaml",
+    "references/failure-modes.md"
+  ],
+  "schema_version": "1.0"
+}

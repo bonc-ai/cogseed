@@ -1,0 +1,14 @@
+{
+  "appName": "CogSeed",
+  "appId": "com.cogseed.desktop",
+  "protocolScheme": "cogseed",
+  "legacyProtocolSchemes": ["mateagent", "orkas"],
+  "dataRootName": ".cogseed",
+  "legacyDataRootNames": [".orkas"],
+  "devDataRootName": ".cogseed-dev",
+  "legacyDevDataRootNames": [".orkas-dev"],
+  "runtimeVariant": "cogseed",
+  "legacyRuntimeVariants": ["mate"],
+  "envPrefix": "COGSEED",
+  "legacyEnvPrefix": "ORKAS"
+}

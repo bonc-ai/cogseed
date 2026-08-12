@@ -1,0 +1,36 @@
+tbox:
+  DomainBrief: [domain_id, scope, policy_sources]
+  ResearchPlan: [plan_id, research_questions, source_strategy, minimum_evidence, conflict_policy]
+  SearchQuery: [query_id, query_text, purpose, executed_at, selected_source_ids]
+  WebSource: [source_id, report_source_id, issuer, url, source_type, primary_source, opened_and_read, version_or_date, content_hash]
+  VerifiedClaim: [claim_id, statement, temporal_status, source_ids, verification_status]
+  StandardVerification: [standard_name, report_source_ids, researched_version_or_date, version_match]
+  ResearchConflict: [conflict_id, type, source_ids, resolution_status, resolution]
+  ResearchGate: [gate_id, conditions, metrics, blockers, gate_status]
+  CanonicalConcept: [id, name_cn, name_en, upper_parent, definition, maturity]
+  RelationTriple: [subject, predicate, object, meaning]
+  StandardAsset: [role, version, mapping, strengths, gaps]
+  ReportArtifact: [docx, data, research_gate, validation, verification, render, a11y]
+rbox:
+  - rule_id: R1
+    formal: current policy and standard facts require opened primary sources
+  - rule_id: R2
+    formal: search snippets and model memory are not evidence
+  - rule_id: R3
+    formal: official policy defines default scene boundary
+  - rule_id: R4
+    formal: unresolved policy date, scope or standard version conflict blocks report generation
+  - rule_id: R5
+    formal: every report standard requires an official exact-name and version binding
+  - rule_id: R6
+    formal: domain reality, operational semantics, system representation and cognitive semantics remain distinct
+  - rule_id: R7
+    formal: full report contains 20-40 concepts and 5-10 processes
+  - rule_id: R8
+    formal: high-impact Agent actions require authorization, HITL, audit and review
+  - rule_id: R9
+    formal: DOCX delivery requires render, full visual review and accessibility audit
+  - rule_id: R10
+    formal: automatic promotion stops at staged
+abox: {}
+source_refs: [materials::19-domain-framework, benchmarks::volumes-11-14, standard::NSEAP-Skill-v1.0]

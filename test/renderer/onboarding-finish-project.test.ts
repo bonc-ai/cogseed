@@ -38,7 +38,7 @@ function loadOnboardingRenderer() {
     window: {
       addEventListener() {},
       _markConversationListLocallyChanged() {},
-      orkas: {
+      cogseed: {
         async invoke(channel: string, payload: any = {}) {
           calls.push([channel, payload]);
           if (channel === 'spaces.create') return { ok: true, space: { space_id: 'space1' } };

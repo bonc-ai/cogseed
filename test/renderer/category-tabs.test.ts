@@ -51,7 +51,7 @@ function loadCategoryRenderers() {
       body: { appendChild: () => {} },
       querySelectorAll: () => [],
     },
-    window: { addEventListener: () => {}, innerWidth: 1024, innerHeight: 768, orkas: { invoke: async () => ({ list: [] }) } },
+    window: { addEventListener: () => {}, innerWidth: 1024, innerHeight: 768, cogseed: { invoke: async () => ({ list: [] }) } },
     escapeHtml: (s: unknown) => String(s ?? '').replace(/[&<>"']/g, (ch) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     } as Record<string, string>)[ch]),
@@ -164,7 +164,7 @@ describe('agent and skill category tabs', () => {
         skills: [{ id: 'trusted', name: 'Trusted Skill', source: 'custom', category: 'general' }],
       }),
     });
-    context.window.orkas.invoke = async (channel: string) => {
+    context.window.cogseed.invoke = async (channel: string) => {
       if (channel === 'skills.listOpen') {
         openFetches += 1;
         return { ok: true, skills: openRows };
@@ -425,7 +425,7 @@ describe('agent and skill category tabs', () => {
   it('toggles namespace-shaped global-folder skill groups together', async () => {
     const { context } = loadCategoryRenderers();
     const calls: Array<{ channel: string; payload: any }> = [];
-    context.window.orkas.invoke = async (channel: string, payload: any) => {
+    context.window.cogseed.invoke = async (channel: string, payload: any) => {
       calls.push({ channel, payload });
       return { ok: true };
     };
@@ -497,7 +497,7 @@ describe('agent and skill category tabs', () => {
     const fetchResponse = new Promise((resolve) => { resolveFetch = resolve; });
     let resolvePreparation!: () => void;
     const preparation = new Promise<void>((resolve) => { resolvePreparation = resolve; });
-    context.window.orkas.expenseWorkbench = {
+    context.window.cogseed.expenseWorkbench = {
       prepareOpen: () => {
         order.push('prepare');
         return preparation;
@@ -620,7 +620,7 @@ describe('agent and skill category tabs', () => {
         tree: [{ type: 'file', relPath: 'global.md', name: 'global.md' }],
       }),
     });
-    context.window.orkas.invoke = async (channel: string, payload: any) => {
+    context.window.cogseed.invoke = async (channel: string, payload: any) => {
       if (channel === 'projects.files.tree') {
         expect(payload).toEqual({ projectId: 'p1' });
         return { ok: true, tree: [{ type: 'file', relPath: 'project.md', name: 'project.md' }] };
@@ -652,7 +652,7 @@ describe('agent and skill category tabs', () => {
         tree: [{ type: 'file', relPath: 'global.md', name: 'global.md' }],
       }),
     });
-    context.window.orkas.invoke = async (channel: string) => {
+    context.window.cogseed.invoke = async (channel: string) => {
       if (channel === 'projects.files.tree') projectTreeCalls += 1;
       return { ok: false, error: 'not_found' };
     };
@@ -660,8 +660,13 @@ describe('agent and skill category tabs', () => {
 
     const rows = await context._loadLibraryPickerRows('p-deleted');
 
-    expect(vm.runInContext('_resolveActiveProjectId("auto-recipient-chip")', context)).toBe('');
-    expect(projectTreeCalls).toBe(0);
+    // 工作空间一期修复后语义：_agentPickerProjectExists 不再用可能过期的
+    // _projectsCache 判死（新建项目不在缓存 → 作用域静默丢失 bug），改为放行
+    // 交主进程/调用侧裁决——已删除项目仍回退全局：
+    //   - _resolveActiveProjectId 保留 pid（不再渲染层清空）
+    //   - files.tree 返回 not_found → _loadLibraryPickerRows 降级，rows 只有 global
+    expect(vm.runInContext('_resolveActiveProjectId("auto-recipient-chip")', context)).toBe('p-deleted');
+    expect(projectTreeCalls).toBe(1); // 调用一次后降级（not_found → 回退全局）
     expect(rows.map((row: any) => [row.scope, row.rel])).toEqual([['global', 'global.md']]);
   });
 

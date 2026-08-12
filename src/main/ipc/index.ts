@@ -30,10 +30,10 @@ import * as companionRepro from '../features/companion_repro';
 import * as p3394 from '../features/p3394';
 import * as executionRecords from '../features/execution-records';
 import * as workbench from '../features/workbench';
-import * as evolution from '../features/evolution';
 import * as cognition from '../features/cognition';
 import * as recallCandidates from '../features/recall/candidate-service';
 import * as recallAssets from '../features/recall/asset-service';
+import * as recallSkillDrafts from '../features/recall/skill-draft-service';
 import * as recallWorkspaceRefs from '../features/recall/workspace-refs';
 import * as recallProjection from '../features/recall/context-projection';
 import * as recallProjectionCard from '../features/recall/projection-card';
@@ -46,6 +46,7 @@ import * as kstarReviewService from '../features/kstar/review-service';
 import * as recallProofs from '../features/recall/proof-service';
 import * as recallTree from '../features/recall/tree-service';
 import * as recallUsage from '../features/recall/usage-service';
+import * as recallUsageFeedback from '../features/recall/usage-feedback-service';
 import * as effectivenessFeedback from '../features/recall/effectiveness-feedback';
 import * as recallSources from '../features/recall/source-catalog';
 import * as recallCaptures from '../features/recall/capture-service';
@@ -96,7 +97,7 @@ import * as avatars from '../features/avatars';
 import * as commanderProfile from '../features/commander_profile';
 import * as commanderRuntimeStats from '../features/commander_runtime_stats';
 import * as commanderBackend from '../features/commander_backend';
-import * as mateAgentBackend from '../features/mate_agent_backend';
+import * as mateAgentBackend from '../features/cogseed_backend';
 import { getRendererTables, isLang, t } from '../i18n';
 import { isPathAllowed } from '../util/path-sandbox';
 import * as userWorkspace from '../features/user_workspace';
@@ -999,7 +1000,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
-  'conversations.create': async ({ title = '', projectId = '' } = {}, ctx) => {
+  'conversations.create': async ({ title = '', projectId = '', kind = '' } = {}, ctx) => {
     // Validate the projectId belongs to this user before persisting it on
     // the conv record. Unknown / invalid projectIds are dropped silently
     // (the conv lands without project membership) — the renderer should
@@ -1010,8 +1011,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (projectId && typeof projectId === 'string' && safeId(projectId)) {
       if (await projects.projectExists(ctx.userId, projectId)) validProjectId = projectId;
     }
+    // 会话 kind 白名单：目前只有 space_builder（空间模式）被允许透传；
+    // 其余一律回落 normal，防止渲染层任意指定会话类型。
+    const convKind = kind === 'space_builder' ? 'space_builder' : 'normal';
     const conv = await chats.createConversation(ctx.userId, {
-      kind: 'normal',
+      kind: convKind,
       title,
       ...(validProjectId ? { projectId: validProjectId } : {}),
     });
@@ -1042,6 +1046,18 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ctx.userId, cid, title, conversationProjectHint(args));
     if (!conv) throw new Error('conversation not found');
     return { conversation: conv };
+  },
+
+  'conversations.completeSpaceBuilder': async (args, ctx) => {
+    const { cid } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    // 只允许标记 kind=space_builder 的会话；其余拒绝，防止任意会话被误标。
+    const conv = await chats.getConversation(ctx.userId, cid, conversationProjectHint(args));
+    if (!conv || conv.kind !== 'space_builder') throw new Error('not a space_builder conversation');
+    const updated = await chats.updateConversation(
+      ctx.userId, cid, { space_builder_completed: new Date().toISOString() }, conversationProjectHint(args));
+    if (!updated) throw new Error('conversation not found');
+    return { conversation: updated };
   },
 
   'conversations.deleteAll': async (_args, ctx) => {
@@ -1098,14 +1114,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { project };
   },
 
-  // ── Workspaces（工作空间一期：空间 = 主界面 + 资源作用域限制）────────────
+  // ── 情境空间（原"工作空间"：空间 = 主界面 + 资源作用域限制）────────────
   'spaces.list': async (_payload, ctx) => {
     return { spaces: await spaces.listSpaces(ctx.userId) };
   },
 
-  'spaces.create': async ({ name, template_id, icon } = {}, ctx) => {
-    const result = await spaces.createSpace(ctx.userId, { name, template_id, icon });
+  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
+    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, main_skill_ref, asset_reference_bindings });
     if (!result.ok) throw new Error((result as { error: string }).error);
+    return { space: result.space };
+  },
+
+  'spaces.createFromDraft': async ({ draft } = {}, ctx) => {
+    if (!draft || typeof draft !== 'object') throw new Error('invalid draft');
+    const result = await spaces.createSpaceFromDraft(ctx.userId, draft);
+    if (!result.ok) {
+      const err = result as { error: string; details?: string[] };
+      throw new Error(err.details && err.details.length ? `invalid_draft: ${err.details.join('；')}` : err.error);
+    }
     return { space: result.space };
   },
 
@@ -1116,9 +1142,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { space };
   },
 
-  'spaces.update': async ({ spaceId, name, icon, template_id } = {}, ctx) => {
+  'spaces.update': async ({ spaceId, name, icon, template_id, primary_template_id, secondary_template_ids, space_type, sustained_outcome, gate_status, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
-    const result = await spaces.updateSpace(ctx.userId, spaceId, { name, icon, template_id });
+    const result = await spaces.updateSpace(ctx.userId, spaceId, { name, icon, template_id, primary_template_id, secondary_template_ids, space_type, sustained_outcome, gate_status, main_skill_ref, asset_reference_bindings });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
   },
@@ -1168,7 +1194,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { templates };
   },
 
-  // ── 项目 ↔ 空间绑定（工作空间一期）──────────────────────────────────────
+  // 情境入口场景列表（教育/写作/职场+自定义，M2）
+  'spaces.scenarios.list': async (_payload, _ctx) => {
+    const scenarios = await import('../features/role_templates').then((m) => m.listScenarios());
+    return { scenarios };
+  },
+
+  // ── 项目 ↔ 空间绑定（情境空间一期）──────────────────────────────────────
   'projects.bindSpace': async ({ projectId, spaceId } = {}, ctx) => {
     if (!safeId(projectId)) throw new Error('invalid projectId');
     if (spaceId && !safeId(spaceId)) throw new Error('invalid spaceId');
@@ -1410,6 +1442,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       skillDetails: bindings.skills
         .map((id) => skillById.get(id))
         .filter(Boolean),
+    };
+  },
+
+  'projects.scope.resolve': async ({ projectId }, ctx) => {
+    if (projectId && !safeId(projectId)) throw new Error('invalid projectId');
+    const meta = await projects.getProjectScopeMeta(ctx.userId, projectId || null);
+    if (!meta.scope) return { ok: true, scope: null, space: meta.space };
+    const [agentList, skillList] = await Promise.all([
+      agents.listAgentSummaries(),
+      skills.listSkills(),
+    ]);
+    const agentById = new Map(agentList.map((a: any) => [a.agent_id, a]));
+    const skillById = new Map(skillList.map((s: any) => [s.id, s]));
+    return {
+      ok: true,
+      scope: {
+        agents: meta.scope.agents.map((id) => ({ id, name: (agentById.get(id) as any)?.name || id })),
+        skills: meta.scope.skills.map((id) => ({ id, name: (skillById.get(id) as any)?.name || id })),
+      },
+      space: meta.space,
     };
   },
 
@@ -1981,7 +2033,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!Number.isFinite(hours) || hours <= 0 || hours > 24 * 30) throw new Error('invalid expiry window');
 
     const [{ buildCapabilityPack }, { exportCapabilityPack }, assetService] = await Promise.all([
-      import('../features/p3394/capability-pack'),
+      import('../features/p3394/capability-pack-delivery'),
       import('../features/p3394/capability-pack-export'),
       import('../features/recall/asset-service'),
     ]);
@@ -2031,6 +2083,53 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
+  'recall.sources.pause': async ({ kind, sourceId } = {}, ctx) => {
+    if (!recallSources.COGNITION_CATALOG_KINDS.includes(kind) || !safeId(sourceId)) {
+      throw new Error('invalid cognition source');
+    }
+    return { ok: true, control: await recallSources.pauseCognitionSource(ctx.userId, kind, sourceId) };
+  },
+
+  'recall.sources.resume': async ({ kind, sourceId } = {}, ctx) => {
+    if (!recallSources.COGNITION_CATALOG_KINDS.includes(kind) || !safeId(sourceId)) {
+      throw new Error('invalid cognition source');
+    }
+    return { ok: true, control: await recallSources.resumeCognitionSource(ctx.userId, kind, sourceId) };
+  },
+
+  'recall.sources.retry': async ({ kind, sourceId } = {}, ctx) => {
+    if (!recallSources.COGNITION_CATALOG_KINDS.includes(kind) || !safeId(sourceId)) {
+      throw new Error('invalid cognition source');
+    }
+    return { ok: true, control: await recallSources.retryCognitionSource(ctx.userId, kind, sourceId) };
+  },
+
+  'recall.sources.reconnect': async ({ kind, sourceId } = {}, ctx) => {
+    if (!recallSources.COGNITION_CATALOG_KINDS.includes(kind) || !safeId(sourceId)) {
+      throw new Error('invalid cognition source');
+    }
+    return { ok: true, control: await recallSources.reconnectCognitionSource(ctx.userId, kind, sourceId) };
+  },
+
+  'recall.sources.removeImpact': async ({ kind, sourceId } = {}, ctx) => {
+    if (!recallSources.COGNITION_CATALOG_KINDS.includes(kind) || !safeId(sourceId)) {
+      throw new Error('invalid cognition source');
+    }
+    return { ok: true, impact: await recallSources.previewCognitionSourceRemoval(ctx.userId, kind, sourceId) };
+  },
+
+  'recall.sources.remove': async ({ kind, sourceId, revokeAssets } = {}, ctx) => {
+    if (
+      !recallSources.COGNITION_CATALOG_KINDS.includes(kind)
+      || !safeId(sourceId)
+      || typeof revokeAssets !== 'boolean'
+    ) throw new Error('invalid cognition source removal');
+    return {
+      ok: true,
+      result: await recallSources.removeCognitionSource(ctx.userId, kind, sourceId, revokeAssets),
+    };
+  },
+
   'recall.views.list': async ({ purpose, workspaceId, includeExpired, limit } = {}, ctx) => {
     if (purpose !== undefined && purpose !== 'conversation_capture' && purpose !== 'task_context') throw new Error('invalid recall view purpose');
     if (workspaceId !== undefined && !safeId(workspaceId)) throw new Error('invalid workspace id');
@@ -2074,8 +2173,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.captures.list': async ({ limit, statuses, executionPolicy, cursor } = {}, ctx) => {
     if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) throw new Error('invalid capture limit');
     const validStatuses = new Set([
-      'waiting_quiet', 'waiting_completion', 'waiting_manual', 'scheduled', 'queued', 'extracting', 'paused',
-      'review_ready', 'no_candidate', 'configuration_required', 'failed', 'cancelled',
+      'waiting', 'waiting_quiet', 'waiting_completion', 'waiting_manual', 'scheduled', 'queued', 'extracting', 'paused',
+      'review_ready', 'writing', 'completed', 'no_candidate', 'configuration_required', 'failed', 'cancelled',
     ]);
     if (statuses !== undefined && (
       !Array.isArray(statuses)
@@ -2099,7 +2198,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'recall.captures.read': async ({ captureId } = {}, ctx) => {
     if (!safeId(captureId)) throw new Error('invalid recall capture id');
-    return { ok: true, capture: await recallCaptures.readRecallCapture(ctx.userId, captureId) };
+    return { ok: true, capture: await recallCaptures.readRecallCaptureWorkflow(ctx.userId, captureId) };
   },
 
   'recall.captures.retry': async ({ captureId } = {}, ctx) => {
@@ -2202,7 +2301,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'recall.candidates.promote': async ({ candidateId } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
-    return { ok: true, ...(await recallCandidates.promoteRecallCandidate(ctx.userId, candidateId)) };
+    return { ok: true, ...(await recallCaptures.promoteRecallCaptureCandidate(ctx.userId, candidateId)) };
   },
 
   // 候选 → 资产的带本体落点路由。与 promote 的区别：这条同时把资产语句写回
@@ -2240,8 +2339,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.assets.list': async (_args, ctx) => ({ ok: true, assets: await recallAssets.listAbilityAssets(ctx.userId) }),
   'recall.assets.read': async ({ assetId } = {}, ctx) => { if (!safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, asset: await recallAssets.readAbilityAsset(ctx.userId, assetId) }; },
   'recall.assets.pause': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid recall asset pause'); return { ok: true, asset: await recallAssets.pauseAbilityAsset(ctx.userId, assetId, note) }; },
+  'recall.assets.resume': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid recall asset resume'); return { ok: true, asset: await recallAssets.resumeAbilityAsset(ctx.userId, assetId, note) }; },
   'recall.assets.revoke': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid recall asset revoke'); return { ok: true, asset: await recallAssets.revokeAbilityAsset(ctx.userId, assetId, note) }; },
   'recall.assets.versions': async ({ assetId } = {}, ctx) => { if (!safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, versions: await recallAssets.listAbilityAssetVersions(ctx.userId, assetId), audit: await recallAssets.listAbilityAssetAudit(ctx.userId, assetId) }; },
+
+  'recall.skills.prepare': async ({ assetId } = {}, ctx) => {
+    if (!safeId(assetId)) throw new Error('invalid recall asset id');
+    return { ok: true, draft: await recallSkillDrafts.prepareRecallSkillDraft(ctx.userId, assetId) };
+  },
+
+  'recall.skills.confirm': async ({ assetId, draftHash } = {}, ctx) => {
+    if (!safeId(assetId) || typeof draftHash !== 'string' || !/^[a-f0-9]{64}$/.test(draftHash)) {
+      throw new Error('invalid recall skill confirmation');
+    }
+    return { ok: true, ...(await recallSkillDrafts.confirmRecallSkillDraft(ctx.userId, assetId, draftHash)) };
+  },
 
   'recall.workspaceRefs.list': async ({ assetId } = {}, ctx) => { if (assetId !== undefined && !safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, references: await recallWorkspaceRefs.listWorkspaceAssetReferences(ctx.userId, assetId) }; },
   'recall.workspaceRefs.add': async ({ assetId, workspaceId, scope, enabled } = {}, ctx) => { if (!safeId(assetId) || !safeId(workspaceId) || typeof scope !== 'string' || (enabled !== undefined && typeof enabled !== 'boolean')) throw new Error('invalid workspace reference'); return { ok: true, reference: await recallWorkspaceRefs.addWorkspaceAssetReference(ctx.userId, { assetId, workspaceId, scope, ...(enabled !== undefined ? { enabled } : {}) }) }; },
@@ -2287,6 +2399,16 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.tree.rebuild': async (_args, ctx) => ({ ok: true, tree: await recallTree.rebuildCognitionTree(ctx.userId) }),
   'recall.usage.list': async ({ assetId } = {}, ctx) => { if (assetId !== undefined && !safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, usage: await recallUsage.listRecallUsage(ctx.userId, assetId) }; },
 
+  'recall.usage.feedback': async ({ cid, messageId, feedback } = {}, ctx) => {
+    if (!safeId(cid) || !safeId(messageId) || (feedback !== 'positive' && feedback !== 'negative')) {
+      throw new Error('invalid Recall usage feedback');
+    }
+    return {
+      ok: true,
+      result: await recallUsageFeedback.recordRecallMessageFeedback(ctx.userId, { cid, messageId, feedback }),
+    };
+  },
+
   'cognition.dashboard.read': async (_args, ctx) => {
     return { ok: true, dashboard: await cognition.buildCognitionDashboard(ctx.userId) };
   },
@@ -2309,7 +2431,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'cognition.candidates.decide': async ({ source, candidateId, decision, reason, notes, toGlobalMemory, toGroupIds } = {}, ctx) => {
     if (source !== 'personal_ontology' && source !== 'p3394_experience' && source !== 'p3394_patch') throw new Error('invalid cognition candidate source');
     if (!safeId(candidateId)) throw new Error('invalid candidate id');
-    if (decision !== 'accept' && decision !== 'reject') throw new Error('invalid cognition candidate decision');
+    if (decision !== 'accept' && decision !== 'modify' && decision !== 'defer' && decision !== 'reject') throw new Error('invalid cognition candidate decision');
     if (toGroupIds !== undefined && (!Array.isArray(toGroupIds) || toGroupIds.some((id) => !safeId(id)))) throw new Error('invalid group ids');
     return { ok: true, result: await cognition.decideCognitionCandidate(ctx.userId, {
       source,
@@ -2708,130 +2830,30 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   // ── Skills ──
-  'evolution.dashboard': async (_payload, ctx) => {
-    return evolution.buildDashboard(ctx.userId);
-  },
-  'evolution.evolve.start': async ({ skillId, episode, currentContent, agentId }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    if (!episode || typeof currentContent !== 'string') throw new Error('missing episode/currentContent');
-    return evolution.startEvolutionRun(ctx.userId, { skillId, episode, currentContent, agentId });
-  },
-  'evolution.evolve.step': async ({ runId }, ctx) => {
-    if (!safeId(runId)) throw new Error('invalid runId');
-    return evolution.stepEvolutionRun(ctx.userId, runId);
-  },
-  'evolution.evolve.abort': async ({ runId }, ctx) => {
-    if (!safeId(runId)) throw new Error('invalid runId');
-    return evolution.abortEvolutionRun(ctx.userId, runId);
-  },
-  'evolution.evolve.get': async ({ runId }, ctx) => {
-    if (!safeId(runId)) throw new Error('invalid runId');
-    return { run: await evolution.readEvolutionRun(ctx.userId, runId) };
-  },
-  'evolution.evolve.list': async (_payload, ctx) => {
-    return { runs: await evolution.listEvolutionRuns(ctx.userId) };
-  },
-  'evolution.evolve.recommend': async ({ skillId }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    return evolution.recommendForSkill(ctx.userId, skillId);
-  },
-  'evolution.evals.get': async ({ skillId }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    return evolution.readEvalRecord(ctx.userId, skillId);
-  },
-  'evolution.evals.saveCase': async ({ skillId, evalCase }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    if (!evalCase || typeof evalCase.id !== 'number') throw new Error('invalid evalCase');
-    return evolution.upsertEvalCase(ctx.userId, skillId, evalCase);
-  },
-  'evolution.evals.standard.get': async ({ skillId }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    return evolution.readEvalStandard(ctx.userId, skillId);
-  },
-  'evolution.evals.standard.save': async ({ skillId, assertions, cases }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    return evolution.saveEvalStandard(ctx.userId, skillId, {
-      assertions: Array.isArray(assertions) ? assertions : [],
-      cases: Array.isArray(cases) ? cases : [],
-    });
-  },
-  'evolution.ontology.list': async ({ skillId }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    return { ontologies: await evolution.listSkillOntologies(ctx.userId, skillId) };
-  },
-  'evolution.ontology.extract': async ({ skillId, text, agentId }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    if (typeof text !== 'string' || !text.trim()) throw new Error('missing text');
-    return evolution.extractAndSaveOntology(ctx.userId, skillId, text, agentId ?? '');
-  },
-  'evolution.patches.apply': async ({ skillId, newContent }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    if (typeof newContent !== 'string' || !newContent.trim()) throw new Error('missing newContent');
-    return evolution.applyPatchToSkill(ctx.userId, { skillId, newContent });
-  },
-  'evolution.skills.versions': async ({ skillId }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    return { versions: await evolution.listSkillVersions(ctx.userId, skillId) };
-  },
-  'evolution.skills.export': async ({ skillId, version }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    return evolution.exportSkillZip(ctx.userId, skillId, typeof version === 'string' ? version : '0.0.0');
-  },
-  'evolution.skills.captureIntent': async ({ name, purpose, trigger_contexts, output_format, edge_cases, dependencies, examples }, ctx) => {
-    if (typeof name !== 'string' || !name.trim()) throw new Error('missing name');
-    if (typeof purpose !== 'string' || !purpose.trim()) throw new Error('missing purpose');
-    return evolution.captureSkillIntent(ctx.userId, {
-      name, purpose,
-      trigger_contexts: Array.isArray(trigger_contexts) ? trigger_contexts : [],
-      output_format: typeof output_format === 'string' ? output_format : 'structured_analysis',
-      edge_cases: Array.isArray(edge_cases) ? edge_cases : [],
-      dependencies: Array.isArray(dependencies) ? dependencies : [],
-      examples: Array.isArray(examples) ? examples : [],
-    });
-  },
-  'evolution.skills.createDraft': async ({ name, description, category }, ctx) => {
-    if (typeof name !== 'string' || !name.trim()) throw new Error('missing name');
-    return evolution.createSkillFromDraft(ctx.userId, {
-      name, description: typeof description === 'string' ? description : '', category: typeof category === 'string' ? category : '',
-    });
-  },
-  'evolution.ontology.bindings': async ({ skillId }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    return { refs: await evolution.listOntologyBindings(ctx.userId, skillId) };
-  },
-  'evolution.ontology.bind': async ({ skillId, ontologyId }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    if (!ontologyId || typeof ontologyId !== 'string') throw new Error('missing ontologyId');
-    return { refs: await evolution.bindOntology(ctx.userId, skillId, ontologyId) };
-  },
-  'evolution.ontology.unbind': async ({ skillId, ontologyId }, ctx) => {
-    if (!safeId(skillId)) throw new Error('invalid skillId');
-    if (!ontologyId || typeof ontologyId !== 'string') throw new Error('missing ontologyId');
-    return { refs: await evolution.unbindOntology(ctx.userId, skillId, ontologyId) };
-  },
-
   // ── Personal Ontology Candidates ──
   'personalOntology.candidates.list': async (_payload, ctx) => {
     return personalOntologyCandidates.listCandidates(ctx.userId);
   },
-  'personalOntology.candidates.confirm': async ({ candidateId, toGlobalMemory, toGroupIds, targetField, routeWithLlm }, ctx) => {
+  'personalOntology.candidates.confirm': async ({ candidateId, toGlobalMemory, toGroupIds, targetField, projectId, routeWithLlm }, ctx) => {
     if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
-    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string } = {};
+    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string; projectId?: string } = {};
     if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
     if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
     if (typeof targetField === 'string' && targetField.trim()) dest.targetField = targetField.trim();
+    if (typeof projectId === 'string' && projectId.trim()) dest.projectId = projectId.trim();
     return personalOntologyCandidates.confirmCandidate(ctx.userId, candidateId, dest, { routeWithLlm: routeWithLlm === true });
   },
   'personalOntology.candidates.reject': async ({ candidateId, reason }, ctx) => {
     if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
     return personalOntologyCandidates.rejectCandidate(ctx.userId, candidateId, reason);
   },
-  'personalOntology.candidates.confirmBatch': async ({ candidateIds, toGlobalMemory, toGroupIds, targetField, routeWithLlm }, ctx) => {
+  'personalOntology.candidates.confirmBatch': async ({ candidateIds, toGlobalMemory, toGroupIds, targetField, projectId, routeWithLlm }, ctx) => {
     if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
-    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string } = {};
+    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string; projectId?: string } = {};
     if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
     if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
     if (typeof targetField === 'string' && targetField.trim()) dest.targetField = targetField.trim();
+    if (typeof projectId === 'string' && projectId.trim()) dest.projectId = projectId.trim();
     return personalOntologyCandidates.confirmCandidates(ctx.userId, candidateIds, dest, { routeWithLlm: routeWithLlm === true });
   },
   'personalOntology.candidates.rejectBatch': async ({ candidateIds, reason }, ctx) => {
@@ -2884,9 +2906,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'personalOntology.templates.list': async (_payload, ctx) => {
     return { templates: await personalOntologyTemplateFiles.listTemplateStatus(ctx.userId) };
   },
-  'personalOntology.templates.install': async ({ templateId }, ctx) => {
-    if (!templateId || typeof templateId !== 'string') throw new Error('missing templateId');
-    return personalOntologyTemplateFiles.installTemplateFile(ctx.userId, templateId);
+  'personalOntology.templates.install': async ({ templateId, restoreData }, ctx) => {
+    if (!templateId || typeof templateId !== 'string' || !safeId(templateId)) throw new Error('invalid templateId');
+    return personalOntologyTemplateFiles.installTemplateFile(ctx.userId, templateId, !!restoreData);
+  },
+  'personalOntology.templates.uninstall': async ({ templateId, archiveMemory }, ctx) => {
+    if (!templateId || typeof templateId !== 'string' || !safeId(templateId)) throw new Error('invalid templateId');
+    return personalOntologyTemplateFiles.uninstallTemplateFile(ctx.userId, templateId, !!archiveMemory);
+  },
+  'personalOntology.templates.hasArchive': async ({ templateId }, ctx) => {
+    if (!templateId || typeof templateId !== 'string' || !safeId(templateId)) throw new Error('invalid templateId');
+    return { hasArchive: personalOntologyTemplateFiles.templateHasArchive(ctx.userId, templateId) };
+  },
+  'personalOntology.templates.hasMemoryArchive': async ({ templateId }, ctx) => {
+    if (!templateId || typeof templateId !== 'string' || !safeId(templateId)) throw new Error('invalid templateId');
+    return { hasArchive: personalOntologyTemplateFiles.templateHasMemoryArchive(ctx.userId, templateId) };
   },
 
   // ── Personal Ontology Group Fields (挖空表单字段，兼容复合 id) ──
@@ -4570,18 +4604,6 @@ const streamHandlers: Record<string, StreamHandler> = {
     });
   },
 
-  'evolution.evals.run': async function* ({ skillId, cases, outputs, agentId }, ctx) {
-    if (!safeId(skillId)) {
-      yield { type: 'error', text: 'invalid skillId' };
-      return;
-    }
-    if (!Array.isArray(cases)) {
-      yield { type: 'error', text: 'invalid cases' };
-      return;
-    }
-    yield* evolution.runEvalStream(ctx.userId, skillId, { cases, outputs: outputs ?? {}, agentId });
-  },
-
   'agents.chat.sendStream': async function* ({ id, content, model_text, attachments }, ctx, signal) {
     if (!safeId(id)) {
       yield { type: 'error', text: 'invalid agent id' };
@@ -4744,7 +4766,7 @@ export function broadcastToRenderer(channel: string, payload: unknown): void {
 }
 
 export function register(): void {
-  ipcMain.handle('orkas.invoke', async (event, request: unknown) => {
+  const handleInvoke = async (event, request: unknown) => {
     if (!isTrustedIpcSender(event.sender)) {
       log.warn('rejected invoke from untrusted renderer');
       return { ok: false, error: 'untrusted ipc sender', code: 'E_IPC_SENDER' };
@@ -4800,13 +4822,13 @@ export function register(): void {
       }
       return out;
     }
-  });
+  };
 
   // File objects cannot cross the regular JSON invoke envelope without being
   // copied into base64. Preload resolves only genuine user-selected DOM File
   // objects through Electron `webUtils.getPathForFile` and sends their paths
   // on this private channel; the renderer never receives a raw local path.
-  ipcMain.handle('orkas.importLocalFiles', async (event, request: unknown) => {
+  const handleImportLocalFiles = async (event, request: unknown) => {
     if (!isTrustedIpcSender(event.sender)) {
       log.warn('rejected local file import from untrusted renderer');
       return { ok: false, error: 'untrusted ipc sender', code: 'E_IPC_SENDER' };
@@ -4826,9 +4848,11 @@ export function register(): void {
       });
       return { ok: false, error: normalized.error, code: normalized.code };
     }
-  });
+  };
+  ipcMain.handle('cogseed.invoke', handleInvoke);
+  ipcMain.handle('orkas.invoke', handleInvoke);
 
-  ipcMain.on('orkas.streamStart', async (event, request: unknown) => {
+  const handleStreamStart = async (event, request: unknown) => {
     if (!isTrustedIpcSender(event.sender)) return;
     const envelope = parseStreamEnvelope(request);
     if (!envelope) return;
@@ -4869,9 +4893,11 @@ export function register(): void {
       log.info(`streamDone channel=${channel} requestId=${requestId} cancelled=${state.cancelled}`);
       out({ type: 'done' });
     }
-  });
+  };
+  ipcMain.on('cogseed.streamStart', handleStreamStart);
+  ipcMain.on('orkas.streamStart', handleStreamStart);
 
-  ipcMain.on('orkas.streamCancel', (event, rawRequestId: unknown) => {
+  const handleStreamCancel = (event, rawRequestId: unknown) => {
     if (!isTrustedIpcSender(event.sender)) return;
     const requestId = parseStreamRequestId(rawRequestId);
     if (!requestId) return;
@@ -4892,5 +4918,7 @@ export function register(): void {
     // be minutes away while the provider is blocked on network I/O, and the
     // `processing` flag stays pinned until the generator's finally runs.
     try { state.controller.abort(); } catch (_) { /* already aborted */ }
-  });
+  };
+  ipcMain.on('cogseed.streamCancel', handleStreamCancel);
+  ipcMain.on('orkas.streamCancel', handleStreamCancel);
 }

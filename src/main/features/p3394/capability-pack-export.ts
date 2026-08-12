@@ -23,7 +23,7 @@
 import * as path from 'node:path';
 
 import { writeJson } from '../../storage';
-import { assertPackIntegrity, isPackExpired, type MinimumCapabilityPack } from './capability-pack';
+import { assertPackIntegrity, isPackExpired, type DeliveryCapabilityPack } from './capability-pack-delivery';
 
 export interface CapabilityPackExportFiles {
   manifestPath: string;
@@ -50,7 +50,7 @@ function renderConditions(label: string, values?: string[]): string {
 
 /** 人读版能力包。刻意不写 `assetId` 之外的内部字段名——这份是给用户和对方
  *  执行端的人看的，statementHash 那类校验数据留在 manifest 里。 */
-export function renderContextPackMarkdown(pack: MinimumCapabilityPack): string {
+export function renderContextPackMarkdown(pack: DeliveryCapabilityPack): string {
   const lines: string[] = [
     `# 能力包 ${pack.packId}`,
     '',
@@ -118,7 +118,7 @@ export function renderContextPackMarkdown(pack: MinimumCapabilityPack): string {
  * 不该被交出去——对方拿到之后没有任何办法发现这件事。
  */
 export async function exportCapabilityPack(
-  pack: MinimumCapabilityPack,
+  pack: DeliveryCapabilityPack,
   targetDir: string,
   now: string | number = Date.now(),
 ): Promise<CapabilityPackExportFiles> {

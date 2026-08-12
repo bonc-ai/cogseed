@@ -20,7 +20,7 @@ import {
   type AbilityAssetSemantics,
   type AbilityAssetSensitivity,
 } from './asset-semantics';
-import { initializeAbilityAsset } from './asset-service';
+import { initializeAbilityAsset, listAbilityAssets } from './asset-service';
 import {
   cognitionSourceRefKey,
   normalizeCognitionSourceRefs,
@@ -227,6 +227,10 @@ function candidateIdForCaptureKey(captureKey: string): string {
   return `cand-${createHash('sha256').update(captureKey).digest('hex').slice(0, 24)}`;
 }
 
+function abilityAssetIdForCandidate(candidateId: string): string {
+  return `aa-${createHash('sha256').update(candidateId).digest('hex').slice(0, 24)}`;
+}
+
 export async function listRecallCandidates(userId: string): Promise<RecallCandidateRecord[]> {
   let names: string[];
   try { names = await fs.readdir(candidateDirectory(userId)); }
@@ -398,12 +402,23 @@ export async function promoteRecallCandidate(
     const candidate = asCandidate(current);
     if (candidate.status === 'promoted') return candidate;
     if (candidate.status === 'rejected') throw new Error('recall candidate is terminal');
+    const recoveredAsset = (await listAbilityAssets(userId))
+      .find((asset) => asset.candidateId === candidate.id);
+    if (recoveredAsset) {
+      await initializeAbilityAsset(userId, recoveredAsset);
+      return {
+        ...candidate,
+        status: 'promoted',
+        promotedAssetId: recoveredAsset.id,
+        updatedAt: new Date().toISOString(),
+      };
+    }
     const now = new Date().toISOString();
     const sourceSessionIds = sourceSessionIdsFrom(candidate.sourceRefs);
     const asset: RecallAbilityAssetRecord = {
       schemaVersion: 1,
       ownerId: userId,
-      id: `aa-${genId12()}`,
+      id: abilityAssetIdForCandidate(candidate.id),
       candidateId: candidate.id,
       type: candidate.suggestedType,
       title: candidate.summary || candidate.judgment.slice(0, 120),

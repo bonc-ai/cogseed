@@ -22,7 +22,7 @@ function loadProjectDetailScript() {
     t: (key: string, vars?: Record<string, unknown>) => `${key}:${JSON.stringify(vars || {})}`,
     window: {
       addEventListener: vi.fn(),
-      orkas: { invoke: vi.fn() },
+      cogseed: { invoke: vi.fn() },
     },
     document: {
       readyState: 'loading',
@@ -49,7 +49,7 @@ describe('Project Library popup copy', () => {
     expect(prompt).toContain('contexts.file.del_confirm');
     expect(prompt).toContain('quarterly-plan.md');
     expect(prompt).not.toContain('Research/Notes');
-    expect(context.window.orkas.invoke).not.toHaveBeenCalled();
+    expect(context.window.cogseed.invoke).not.toHaveBeenCalled();
   });
 
   it('lists failed filenames without exposing project backend details', async () => {
@@ -59,7 +59,7 @@ describe('Project Library popup copy', () => {
       size: 12,
       arrayBuffer: vi.fn(async () => new ArrayBuffer(12)),
     };
-    context.window.orkas.invoke = vi.fn(async () => ({
+    context.window.cogseed.invoke = vi.fn(async () => ({
       ok: false,
       error: 'EACCES: /private/project/path must stay hidden',
     }));

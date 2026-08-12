@@ -17,7 +17,7 @@ function loadModule(invoke: (channel: string, payload?: unknown) => Promise<unkn
     addEventListener(type: string, handler: unknown) { this.handler = handler; this.handlerType = type; },
   };
   const context: any = {
-    window: { orkas: { invoke } },
+    window: { cogseed: { invoke } },
     document: {},
     escapeHtml: (value: unknown) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
     t: (_key: string, varsOrFallback?: unknown) => typeof varsOrFallback === 'string' ? varsOrFallback : _key,

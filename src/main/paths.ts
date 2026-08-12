@@ -134,6 +134,12 @@ export const mateAgentLocalRoot    = (uid: string) => path.join(userLocalRoot(ui
 export const mateAgentWorkerStateDir = (uid: string) => path.join(mateAgentLocalRoot(uid), 'worker-state');
 export const mateAgentRecoveryStateFile = (uid: string) => path.join(mateAgentWorkerStateDir(uid), 'last-recovery.json');
 export const mateAgentCoordinationsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'coordinations');
+export const mateAgentAssetEventsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'asset-events');
+export const mateAgentAuditReceiptsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'audit-receipts');
+export const mateAgentReviewDecisionsDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'review-decisions');
+export const mateAgentCostTelemetryDir = (uid: string) => path.join(mateAgentLocalRoot(uid), 'cost-telemetry');
+export const mateAgentCapabilityPacksDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'capability-packs');
+export const mateAgentSkillLifecycleDir = (uid: string) => path.join(mateAgentCloudRoot(uid), 'skill-lifecycle');
 export const userChatsDir           = (uid: string) => path.join(userCloudRoot(uid), 'chats');
 export const userSkillChatDir       = (uid: string, sid: string) => path.join(userChatsDir(uid), 'skill', sid);
 export const userAgentChatDir       = (uid: string, aid: string) => path.join(userChatsDir(uid), 'agent', aid);
@@ -182,9 +188,9 @@ export const sessionCloudToolResultsDir = (uid: string, sessionId: string) =>
 export const userLocalSessionsDir   = (uid: string) => path.join(userLocalRoot(uid), 'sessions');
 export const userLocalSessionFile   = (uid: string, sessionId: string) => path.join(userLocalSessionsDir(uid), `${sessionId}.jsonl`);
 
-// Mate Agent Runtime — machine-private execution boundary. Runtime sessions,
+// CogSeed Runtime — machine-private execution boundary. Runtime sessions,
 // context mirrors, memory, and run logs stay under local/mate_runtime so they
-// never sync with Mate Agent cloud chats/sessions and cannot be mistaken for
+// never sync with CogSeed cloud chats/sessions and cannot be mistaken for
 // UI-facing group-chat state.
 export const mateRuntimeRoot             = (uid: string) => path.join(userLocalRoot(uid), 'mate_runtime');
 export const mateRuntimeSessionsDir      = (uid: string) => path.join(mateRuntimeRoot(uid), 'sessions');
@@ -289,7 +295,7 @@ export const userProjectsDir       = (uid: string) => path.join(userCloudRoot(ui
 export const projectDir            = (uid: string, pid: string) => path.join(userProjectsDir(uid), pid);
 export const projectMetaFile       = (uid: string, pid: string) => path.join(projectDir(uid, pid), 'project.json');
 export const projectBindingsFile   = (uid: string, pid: string) => path.join(projectDir(uid, pid), 'bindings.json');
-// Workspaces (工作空间一期): per-space JSON under `<uid>/cloud/spaces/`.
+// 情境空间（原"工作空间"）：per-space JSON under `<uid>/cloud/spaces/`.
 // No aggregate `_index.json` — listing scans `spaces/*.json` (same
 // no-aggregate rationale as projects).
 export const userSpacesDir         = (uid: string) => path.join(userCloudRoot(uid), 'spaces');
@@ -761,20 +767,6 @@ export function runtimeResourcesDir(): string {
     return path.join(rp, 'runtime');
   }
   return path.join(PC_ROOT, 'resources', 'runtime');
-}
-
-/** Repository-owned Meta Skill Engine package shipped with the desktop app.
- *
- *   dev:    PC/packages/nseap-meta-skill-engine/
- *   packed: <app>/Contents/Resources/packages/nseap-meta-skill-engine/      (darwin)
- *           <app>/resources/packages/nseap-meta-skill-engine/               (win/linux)
- */
-export function metaSkillEnginePackageDir(): string {
-  const rp = (process as unknown as { resourcesPath?: string }).resourcesPath;
-  if (rp && !rp.includes(`${path.sep}node_modules${path.sep}electron${path.sep}`)) {
-    return path.join(rp, 'packages', 'nseap-meta-skill-engine');
-  }
-  return path.join(PC_ROOT, 'packages', 'nseap-meta-skill-engine');
 }
 
 /** `${process.platform}-${process.arch}` → vendored OfficeCLI asset name.

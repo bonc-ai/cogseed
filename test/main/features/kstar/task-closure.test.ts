@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../../../../src/main/features/mate_agent_runtime/protocol';
+import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../../../../src/main/features/cogseed_runtime/protocol';
 
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;

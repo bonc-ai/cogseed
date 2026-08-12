@@ -47,7 +47,7 @@ function loadProjectsRenderer(options: {
       addEventListener() {},
       uiIconHtml: () => '',
       refreshAutoProjectOptions: (pid: string) => { refreshAutoProjectCalls.push(pid); },
-      orkas: {
+      cogseed: {
         invoke: async (channel: string) => {
           if (channel === 'autoTasks.list') return { tasks: [] };
           if (channel === 'projects.delete') return { ok: true };

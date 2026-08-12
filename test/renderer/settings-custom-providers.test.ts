@@ -146,7 +146,8 @@ function buildHarness() {
 
   const windowListeners = new Map<string, Array<(...args: any[]) => unknown>>();
   const windowObj: any = {
-    orkas: { invoke },
+    cogseed: { invoke },
+    cogseed: { invoke },
     addEventListener(type: string, handler: (...args: any[]) => unknown) {
       const list = windowListeners.get(type) || [];
       list.push(handler);

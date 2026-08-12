@@ -37,6 +37,23 @@ description: "依据受众任务和内容生命周期设计可发现、可扩展
 - 权限不足或出现敏感数据：停止对应读取/动作并请求授权。
 - 预算耗尽：保留中间证据、未完成步骤和恢复指针。
 
+<!-- NSEAP-GATE:BEGIN -->
+## NSEAP Gate 契约
+
+- `use_when`：需要“依据受众任务和内容生命周期设计可发现、可扩展的文档结构。”，并具备完成“盘点受众、关键任务、现有内容、搜索词和维护约束”与“定义教程/操作/概念/参考/排障等内容类型与边界”所需的授权材料、环境和范围。
+- `do_not_use_when`：无法完成前置检查“盘点受众、关键任务、现有内容、搜索词和维护约束”；执行“定义教程/操作/概念/参考/排障等内容类型与边界”所需的材料、环境或授权不可用；任务不属于“information-architecture”职责；或请求违反专属判断规则“导航按用户任务而非组织架构设计”。通用安全红线仍适用：不得越权、伪造证据或直接覆盖正式资产。
+- `positive_examples`：`请基于已授权材料执行information-architecture，输出audience、job_to_be_done、content_type、canonical_location、navigation_label等字段并保留证据定位。`
+- `negative_examples`：`无法完成盘点受众、关键任务、现有内容、搜索词和维护约束，仍请直接执行information-architecture。`；`缺少执行定义教程/操作/概念/参考/排障等内容类型与边界所需证据，但请直接定稿audience、job_to_be_done、content_type、canonical_location、navigation_label等字段。`
+
+本 Skill 是 `EndUseSkill · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+
+执行时按需读取以下一层引用：
+
+- 输入/输出和运行边界：[schemas.json](schemas.json)、[references/input-contract.md](references/input-contract.md)、[references/output-contract.md](references/output-contract.md)
+- 本体、验证和失败归因：[references/ontology-mapping.md](references/ontology-mapping.md)、[references/validation-contract.md](references/validation-contract.md)、[references/failure-modes.md](references/failure-modes.md)
+- 评测、演进和治理：[evals/evals.json](evals/evals.json)、[references/kstar-evolution.md](references/kstar-evolution.md)、[references/governance-boundaries.md](references/governance-boundaries.md)
+<!-- NSEAP-GATE:END -->
+
 ## 详细方法
 
 执行前读取 [references/method.md](references/method.md)，其中包含任务专属步骤、质量Gate和示例。

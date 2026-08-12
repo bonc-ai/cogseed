@@ -382,7 +382,7 @@ async function _gotoSearchResult(r) {
       setView('project', r.project_id);
       setTimeout(async () => {
         try {
-          const res = await window.orkas.invoke('projects.files.absPath', { projectId: r.project_id, name: r.path });
+          const res = await window.cogseed.invoke('projects.files.absPath', { projectId: r.project_id, name: r.path });
           if (res && res.ok && typeof openChatFileViewer === 'function') {
             openChatFileViewer(res.path, r.title || r.path, { projectId: r.project_id });
           }

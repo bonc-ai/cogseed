@@ -40,10 +40,6 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/skills.js' },
     { src: './modules/skills-bindings.js' },
   ],
-  evolution: [
-    { src: './modules/evolution/pages.js' },
-    { src: './modules/evolution/console.js' },
-  ],
   recall: [
     { src: './modules/recall-information-architecture.js' },
     // 同上：recall 组同样加载 skills.js，状态映射必须先到位。

@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-// End-to-end: a real `bin/orkas-bridge.cjs` process (the MCP server a CLI
+// End-to-end: a real `bin/cogseed-bridge.cjs` process (the MCP server a CLI
 // agent spawns) speaking MCP JSON-RPC over stdio, proxying to a live
 // bridge host. Pins the riskiest seam: SDK absolute-path requires + zod
 // schemas + the socket RPC roundtrip.
@@ -40,7 +40,7 @@ class McpStdioClient {
   private buf = '';
   private waiters = new Map<number, (msg: any) => void>();
   constructor(env: Record<string, string>) {
-    this.child = spawn(TEST_NODE, [path.join(process.cwd(), 'bin', 'orkas-bridge.cjs')], {
+    this.child = spawn(TEST_NODE, [path.join(process.cwd(), 'bin', 'cogseed-bridge.cjs')], {
       env: { ...process.env, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -74,7 +74,7 @@ class McpStdioClient {
   }
 }
 
-describe('orkas-bridge.cjs › MCP stdio e2e', () => {
+describe('cogseed-bridge.cjs › MCP stdio e2e', () => {
   it('initializes, lists tools, and proxies orkas_list_skills through the socket', async () => {
     // Fixture skill in the trusted custom root.
     const skillDir = path.join(tmpDir, TEST_UID, 'cloud', 'skills', 'demo-skill');
@@ -103,7 +103,7 @@ describe('orkas-bridge.cjs › MCP stdio e2e', () => {
         capabilities: {},
         clientInfo: { name: 'vitest', version: '0' },
       });
-      expect(init.result?.serverInfo?.name).toBe('orkas');
+      expect(init.result?.serverInfo?.name).toBe('cogseed');
       client.notify('notifications/initialized');
 
       const tools = await client.request(2, 'tools/list', {});

@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   runModel: vi.fn(),
   saveCandidate: vi.fn(),
   readCandidate: vi.fn(),
+  promoteCandidate: vi.fn(),
+  prepareSkillDraft: vi.fn(),
   scheduleBootBackground: vi.fn(),
 }));
 
@@ -28,6 +30,10 @@ vi.mock('../../../../src/main/model/core-agent/runner', () => ({ buildRunner: mo
 vi.mock('../../../../src/main/features/recall/candidate-service', () => ({
   saveRecallCandidate: mocks.saveCandidate,
   readRecallCandidate: mocks.readCandidate,
+  promoteRecallCandidate: mocks.promoteCandidate,
+}));
+vi.mock('../../../../src/main/features/recall/skill-draft-service', () => ({
+  prepareRecallSkillDraft: mocks.prepareSkillDraft,
 }));
 vi.mock('../../../../src/main/util/boot_init', () => ({
   scheduleBootBackground: mocks.scheduleBootBackground,
@@ -104,6 +110,11 @@ beforeEach(() => {
     ...input,
   }));
   mocks.readCandidate.mockRejectedValue(new Error('candidate not found'));
+  mocks.promoteCandidate.mockImplementation(async (_userId: string, candidateId: string) => ({
+    candidate: { id: candidateId, status: 'promoted', promotedAssetId: 'aa-promoted' },
+    asset: { id: 'aa-promoted' },
+  }));
+  mocks.prepareSkillDraft.mockReset().mockResolvedValue({ status: 'draft', assetId: 'aa-promoted' });
   mocks.scheduleBootBackground.mockImplementation(() => ({
     cancel: vi.fn(),
     promise: new Promise<void>(() => {}),
@@ -117,11 +128,36 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-async function captureModule() {
-  return import('../../../../src/main/features/recall/capture-service');
+async function captureModule(reviewPolicy: 'auto' | 'manual' = 'manual') {
+  const capture = await import('../../../../src/main/features/recall/capture-service');
+  const settings = await import('../../../../src/main/features/recall/capture-settings');
+  await settings.updateRecallCaptureSettings('capture-user', { reviewPolicy });
+  return capture;
 }
 
 describe('Recall conversation capture', () => {
+  it('does not create or run captures while the conversation source is paused or removed', async () => {
+    const capture = await captureModule();
+    const controls = await import('../../../../src/main/features/recall/source-control');
+    const source = {
+      kind: 'conversation' as const,
+      subtype: 'session' as const,
+      scope: 'conversation' as const,
+      id: 'conv-1',
+      title: 'Decision work',
+    };
+
+    await controls.pauseCognitionSource('capture-user', source as any);
+    await expect(capture.queueRecallCaptureFromTerminal(completedEvent)).resolves.toBeUndefined();
+    await expect(capture.queueManualRecallCaptureFromConversation('capture-user', 'conv-1'))
+      .rejects.toThrow(/paused/i);
+
+    await controls.removeCognitionSource('capture-user', source as any, false);
+    await expect(capture.queueRecallCaptureFromTerminal(completedEvent)).resolves.toBeUndefined();
+    await expect(capture.queueManualRecallCaptureFromConversation('capture-user', 'conv-1'))
+      .rejects.toThrow(/removed/i);
+  });
+
   it('keeps only visible successful messages and enforces the prompt budget', async () => {
     const capture = await captureModule();
     const selected = capture.selectCaptureMessages([
@@ -251,6 +287,14 @@ describe('Recall conversation capture', () => {
       attempt: 1,
     });
     expect(await capture.listRecallCaptures('capture-user')).toHaveLength(1);
+  });
+
+  it('does not create an automatic capture when a completed run has no assistant response', async () => {
+    const capture = await captureModule();
+    mocks.getMessages.mockResolvedValue([messages[0]]);
+
+    await expect(capture.queueRecallCaptureFromTerminal(completedEvent)).resolves.toBeUndefined();
+    expect(await capture.listRecallCaptures('capture-user')).toEqual([]);
   });
 
   it('creates a task from the persisted terminal message bounds', async () => {
@@ -607,13 +651,14 @@ describe('Recall conversation capture', () => {
       status: 'review_ready',
       candidateIds: ['cand-0'],
       recallViewId: modelPayload.recallView.id,
-      stage: 'candidate_save',
       startedAt: expect.any(String),
       finishedAt: expect.any(String),
       durationMs: expect.any(Number),
       modelUsage: { inputTokens: 120, outputTokens: 30, totalTokens: 150 },
     });
+    expect(completed.stage).toBeUndefined();
     const persisted = await capture.readRecallCapture('capture-user', queued!.id);
+    expect(persisted.stage).toBeUndefined();
     expect(persisted.recallViewId).toBe(modelPayload.recallView.id);
     const views = await import('../../../../src/main/features/recall/recall-view-service');
     const recallView = await views.readRecallView('capture-user', persisted.recallViewId!);
@@ -631,6 +676,112 @@ describe('Recall conversation capture', () => {
     ]));
     expect(recallView.sourceRefs.every((ref) => ref.excerpt === undefined)).toBe(true);
     expect(JSON.stringify(recallView)).not.toContain('/private/attachment.txt');
+  });
+
+  it('automatically writes clear candidates to Recall when automatic review is enabled', async () => {
+    mocks.runModel.mockResolvedValueOnce({
+      text: JSON.stringify({
+        candidates: [{
+          judgment: 'Keep a traceable decision log.',
+          summary: 'Decision traceability',
+          suggestedType: 'rule',
+          suggestedScope: 'project',
+          evidence: ['m1'],
+        }],
+      }),
+      content: [],
+      meta: { aborted: false },
+    });
+
+    const capture = await captureModule('auto');
+    const queued = await capture.queueRecallCaptureFromTerminal(completedEvent);
+    await capture.runRecallCaptureNow('capture-user', queued!.id);
+    const completed = await capture.runRecallCapture('capture-user', queued!.id);
+
+    expect(mocks.promoteCandidate).toHaveBeenCalledWith('capture-user', 'cand-0');
+    expect(completed).toMatchObject({ status: 'review_ready', candidateIds: ['cand-0'] });
+  });
+
+  it('automatically prepares a Skill draft when deposition promotes a skill and method asset', async () => {
+    mocks.runModel.mockResolvedValueOnce({
+      text: JSON.stringify({
+        candidates: [{
+          judgment: 'Review the request, apply the method, and validate the result.',
+          summary: 'Evidence-first review method',
+          suggestedType: 'skill_method',
+          suggestedScope: 'product review',
+          evidence: ['m1'],
+        }],
+      }),
+      content: [],
+      meta: { aborted: false },
+    });
+    mocks.promoteCandidate.mockResolvedValueOnce({
+      candidate: { id: 'cand-0', status: 'promoted', promotedAssetId: 'aa-method' },
+      asset: { id: 'aa-method', type: 'skill_method', status: 'active' },
+    });
+    mocks.prepareSkillDraft.mockResolvedValueOnce({ status: 'draft', assetId: 'aa-method' });
+
+    const capture = await captureModule('auto');
+    const queued = await capture.queueRecallCaptureFromTerminal(completedEvent);
+    await capture.runRecallCaptureNow('capture-user', queued!.id);
+    const completed = await capture.runRecallCapture('capture-user', queued!.id);
+
+    expect(mocks.prepareSkillDraft).toHaveBeenCalledWith('capture-user', 'aa-method');
+    expect(completed).toMatchObject({ status: 'review_ready', candidateIds: ['cand-0'] });
+  });
+
+  it('keeps uncertain candidates for review even when automatic review is enabled', async () => {
+    mocks.runModel.mockResolvedValueOnce({
+      text: JSON.stringify({
+        candidates: [{
+          judgment: 'Use the short review format.',
+          summary: 'Short review format',
+          uncertainty: 'The user may only want this for the current project.',
+          suggestedType: 'template',
+          suggestedScope: 'project',
+          evidence: ['m1'],
+        }],
+      }),
+      content: [],
+      meta: { aborted: false },
+    });
+
+    const capture = await captureModule('auto');
+    const queued = await capture.queueRecallCaptureFromTerminal(completedEvent);
+    await capture.runRecallCaptureNow('capture-user', queued!.id);
+    const completed = await capture.runRecallCapture('capture-user', queued!.id);
+
+    expect(mocks.promoteCandidate).not.toHaveBeenCalled();
+    expect(completed).toMatchObject({ status: 'review_ready', candidateIds: ['cand-0'] });
+  });
+
+  it('keeps extracted candidate references when automatic Recall writing fails', async () => {
+    mocks.runModel.mockResolvedValueOnce({
+      text: JSON.stringify({
+        candidates: [{
+          judgment: 'Keep a traceable decision log.',
+          summary: 'Decision traceability',
+          suggestedType: 'rule',
+          suggestedScope: 'project',
+          evidence: ['m1'],
+        }],
+      }),
+      content: [],
+      meta: { aborted: false },
+    });
+    mocks.promoteCandidate.mockRejectedValueOnce(new Error('write failed'));
+
+    const capture = await captureModule('auto');
+    const queued = await capture.queueRecallCaptureFromTerminal(completedEvent);
+    await capture.runRecallCaptureNow('capture-user', queued!.id);
+    const failed = await capture.runRecallCapture('capture-user', queued!.id);
+
+    expect(failed).toMatchObject({
+      status: 'failed',
+      errorCode: 'asset_write_failed',
+      candidateIds: ['cand-0'],
+    });
   });
 
   it('rejects pause and cancel once candidate persistence has started', async () => {
@@ -1036,9 +1187,225 @@ describe('Recall conversation capture', () => {
 
     const page = await capture.queryRecallCaptures('capture-user', { statuses: ['waiting_quiet'], limit: 1 });
     expect(page.captures).toHaveLength(1);
-    expect(page.captures[0]).toMatchObject({ executionPolicy: 'immediate' });
+    expect(page.captures[0]).toMatchObject({
+      executionPolicy: 'immediate',
+      workflowStatus: 'waiting_quiet',
+      displayStatus: 'waiting',
+      displayReason: 'quiet_period',
+      reviewSummary: { total: 0, pending: 0, deferred: 0, promoted: 0, rejected: 0, missing: 0 },
+      linkedAssetIds: [],
+      nextAction: 'wait_quiet',
+      actions: expect.arrayContaining(['run_now', 'pause', 'cancel', 'open_conversation']),
+    });
+    await expect(capture.queryRecallCaptures('capture-user', { statuses: ['waiting'] }))
+      .resolves.toMatchObject({ captures: [{ id: queued!.id, displayStatus: 'waiting' }] });
     expect(page.counts.waiting).toBe(1);
     expect(page.nextCursor).toBeNull();
+  });
+
+  it('derives completed workflow state from terminal candidates without rewriting the capture', async () => {
+    const capture = await captureModule();
+    const queued = await capture.queueRecallCaptureFromTerminal(completedEvent);
+    const store = await import('../../../../src/main/features/recall/store');
+    await store.updateRecallJsonRecord('capture-user', 'captures', queued!.id, (current) => ({
+      ...current!,
+      status: 'review_ready',
+      stage: 'candidate_save',
+      candidateIds: ['cand-promoted', 'cand-rejected'],
+    }));
+    mocks.readCandidate.mockImplementation(async (_userId: string, candidateId: string) => (
+      candidateId === 'cand-promoted'
+        ? { id: candidateId, status: 'promoted', promotedAssetId: 'aa-promoted' }
+        : { id: candidateId, status: 'rejected' }
+    ));
+    const paths = await import('../../../../src/main/features/recall/paths');
+    const storedPath = paths.recallJsonRecordPath('capture-user', 'captures', queued!.id);
+    const beforeRead = fs.readFileSync(storedPath, 'utf8');
+
+    const completedPage = await capture.queryRecallCaptures('capture-user', { statuses: ['completed'] });
+    const reviewPage = await capture.queryRecallCaptures('capture-user', { statuses: ['review_ready'] });
+    const detail = await capture.readRecallCaptureWorkflow('capture-user', queued!.id);
+
+    expect(completedPage.captures).toHaveLength(1);
+    expect(completedPage.captures[0]).toMatchObject({
+      status: 'review_ready',
+      workflowStatus: 'completed',
+      displayStatus: 'completed',
+      displayReason: 'review_completed',
+      reviewSummary: { total: 2, pending: 0, deferred: 0, promoted: 1, rejected: 1, missing: 0 },
+      linkedAssetIds: ['aa-promoted'],
+      nextAction: 'view_assets',
+      actions: expect.arrayContaining(['view_assets', 'open_conversation']),
+    });
+    expect(completedPage.captures[0].stage).toBeUndefined();
+    expect(completedPage.counts).toMatchObject({ completed: 1, review: 0 });
+    expect(reviewPage.captures).toHaveLength(0);
+    expect(detail.workflowStatus).toBe('completed');
+    await expect(capture.readRecallCapture('capture-user', queued!.id)).resolves.toMatchObject({
+      status: 'review_ready',
+      stage: undefined,
+    });
+    expect(fs.readFileSync(storedPath, 'utf8')).toBe(beforeRead);
+  });
+
+  it('keeps pending and deferred candidates in review', async () => {
+    const capture = await captureModule();
+    const queued = await capture.queueRecallCaptureFromTerminal(completedEvent);
+    const store = await import('../../../../src/main/features/recall/store');
+    await store.updateRecallJsonRecord('capture-user', 'captures', queued!.id, (current) => ({
+      ...current!,
+      status: 'review_ready',
+      candidateIds: ['cand-pending', 'cand-deferred'],
+    }));
+    mocks.readCandidate.mockImplementation(async (_userId: string, candidateId: string) => (
+      candidateId === 'cand-pending'
+        ? { id: candidateId, status: 'pending' }
+        : { id: candidateId, status: 'deferred' }
+    ));
+
+    const reviewPage = await capture.queryRecallCaptures('capture-user', { statuses: ['review_ready'] });
+    const completedPage = await capture.queryRecallCaptures('capture-user', { statuses: ['completed'] });
+
+    expect(reviewPage.captures[0]).toMatchObject({
+      workflowStatus: 'review_ready',
+      displayStatus: 'review_ready',
+      displayReason: 'review_pending',
+      reviewSummary: { total: 2, pending: 1, deferred: 1, promoted: 0, rejected: 0, missing: 0 },
+      linkedAssetIds: [],
+      nextAction: 'review_candidates',
+      actions: expect.arrayContaining(['review_candidates', 'open_conversation']),
+    });
+    expect(reviewPage.counts).toMatchObject({ completed: 0, review: 1 });
+    expect(completedPage.captures).toHaveLength(0);
+  });
+
+  it('marks missing candidate references as retryable workflow failures', async () => {
+    const capture = await captureModule();
+    const queued = await capture.queueRecallCaptureFromTerminal(completedEvent);
+    const store = await import('../../../../src/main/features/recall/store');
+    await store.updateRecallJsonRecord('capture-user', 'captures', queued!.id, (current) => ({
+      ...current!,
+      status: 'review_ready',
+      candidateIds: ['cand-missing'],
+    }));
+    mocks.readCandidate.mockRejectedValue(new Error('recall candidate not found'));
+
+    const failedPage = await capture.queryRecallCaptures('capture-user', { statuses: ['failed'] });
+
+    expect(failedPage.captures[0]).toMatchObject({
+      status: 'review_ready',
+      workflowStatus: 'failed',
+      displayStatus: 'failed',
+      displayReason: 'capture_failed',
+      reviewSummary: { total: 1, pending: 0, deferred: 0, promoted: 0, rejected: 0, missing: 1 },
+      linkedAssetIds: [],
+      nextAction: 'retry',
+      actions: expect.arrayContaining(['retry', 'open_conversation']),
+    });
+    await expect(capture.retryRecallCapture('capture-user', queued!.id))
+      .resolves.toMatchObject({ status: 'queued', attempt: 2 });
+  });
+
+  it('maps no-candidate captures to the completed workflow filter', async () => {
+    const capture = await captureModule();
+    const queued = await capture.queueRecallCaptureFromTerminal(completedEvent);
+    const store = await import('../../../../src/main/features/recall/store');
+    await store.updateRecallJsonRecord('capture-user', 'captures', queued!.id, (current) => ({
+      ...current!,
+      status: 'no_candidate',
+      candidateIds: [],
+    }));
+
+    const completedPage = await capture.queryRecallCaptures('capture-user', { statuses: ['completed'] });
+
+    expect(completedPage.captures[0]).toMatchObject({
+      status: 'no_candidate',
+      workflowStatus: 'completed',
+      displayStatus: 'completed',
+      displayReason: 'no_candidate',
+      reviewSummary: { total: 0, pending: 0, deferred: 0, promoted: 0, rejected: 0, missing: 0 },
+      linkedAssetIds: [],
+      nextAction: 'none',
+    });
+    expect(completedPage.counts.completed).toBe(1);
+  });
+
+  it('persists the approved candidate write phase and completes after the asset is stored', async () => {
+    const capture = await captureModule();
+    const queued = await capture.queueRecallCaptureFromTerminal(completedEvent);
+    const store = await import('../../../../src/main/features/recall/store');
+    await store.updateRecallJsonRecord('capture-user', 'captures', queued!.id, (current) => ({
+      ...current!,
+      status: 'review_ready',
+      candidateIds: ['cand-write'],
+    }));
+
+    let markWriteStarted!: () => void;
+    let releaseWrite!: () => void;
+    let promoted = false;
+    const writeStarted = new Promise<void>((resolve) => { markWriteStarted = resolve; });
+    const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    mocks.readCandidate.mockImplementation(async (_userId: string, candidateId: string) => ({
+      id: candidateId,
+      status: promoted ? 'promoted' : 'pending',
+      ...(promoted ? { promotedAssetId: 'aa-write' } : {}),
+    }));
+    mocks.promoteCandidate.mockImplementationOnce(async (_userId: string, candidateId: string) => {
+      markWriteStarted();
+      await writeGate;
+      promoted = true;
+      return {
+        candidate: { id: candidateId, status: 'promoted', promotedAssetId: 'aa-write' },
+        asset: { id: 'aa-write' },
+      };
+    });
+
+    const writingPromise = capture.promoteRecallCaptureCandidate('capture-user', 'cand-write');
+    await writeStarted;
+    await expect(capture.readRecallCaptureWorkflow('capture-user', queued!.id)).resolves.toMatchObject({
+      status: 'writing',
+      stage: 'asset_write',
+      writingCandidateId: 'cand-write',
+      displayStatus: 'writing',
+      displayReason: 'asset_write',
+      actions: ['open_conversation'],
+    });
+    await expect(capture.cancelRecallCapture('capture-user', queued!.id)).rejects.toThrow(/writing/i);
+
+    releaseWrite();
+    await expect(writingPromise).resolves.toMatchObject({ asset: { id: 'aa-write' } });
+    await expect(capture.readRecallCaptureWorkflow('capture-user', queued!.id)).resolves.toMatchObject({
+      status: 'review_ready',
+      workflowStatus: 'completed',
+      displayStatus: 'completed',
+      linkedAssetIds: ['aa-write'],
+    });
+  });
+
+  it('recovers an interrupted approved-candidate write back to review', async () => {
+    const capture = await captureModule();
+    const queued = await capture.queueRecallCaptureFromTerminal(completedEvent);
+    const store = await import('../../../../src/main/features/recall/store');
+    await store.updateRecallJsonRecord('capture-user', 'captures', queued!.id, (current) => ({
+      ...current!,
+      status: 'writing',
+      stage: 'asset_write',
+      writingCandidateId: 'cand-write',
+      candidateIds: ['cand-write'],
+    }));
+    mocks.readCandidate.mockResolvedValue({ id: 'cand-write', status: 'pending' });
+
+    await expect(capture.recoverRecallCaptures('capture-user')).resolves.toBe(0);
+    const recovered = await capture.readRecallCaptureWorkflow('capture-user', queued!.id);
+    expect(recovered).toMatchObject({
+      status: 'review_ready',
+      workflowStatus: 'review_ready',
+      displayStatus: 'review_ready',
+      displayReason: 'asset_write_interrupted',
+      errorCode: 'asset_write_interrupted',
+      actions: expect.arrayContaining(['review_candidates', 'open_conversation']),
+    });
+    expect(recovered).not.toHaveProperty('writingCandidateId');
   });
 
   it('rejects unknown evidence, invalid types, and more than three candidates as a whole', async () => {

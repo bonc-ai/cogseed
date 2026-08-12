@@ -9,7 +9,7 @@
  */
 
 import { describe, test, expect, vi, beforeEach } from 'vitest';
-import { createKstarAdapter, getKstarAdapter } from '../../../../src/main/features/p3394/kstar-factory';
+import { closeKstarAdapter, createKstarAdapter, getKstarAdapter } from '../../../../src/main/features/p3394/kstar-factory';
 import { KstarAdapter } from '../../../../src/main/features/p3394/kstar-adapter';
 
 // Mock the McpConnection and KstarAdapter
@@ -47,8 +47,14 @@ vi.mock('../../../../src/main/features/p3394/kstar-adapter', () => ({
 }));
 
 describe('kstar-factory', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    delete process.env.ORKAS_KSTAR_ENGINE_COMMAND;
+    delete process.env.ORKAS_KSTAR_ENGINE_ARGS;
+    delete process.env.ORKAS_KSTAR_ENGINE_CWD;
+    delete process.env.ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR;
+    await closeKstarAdapter('default-user');
+    await closeKstarAdapter('env-user');
   });
 
   describe('createKstarAdapter', () => {
@@ -156,26 +162,37 @@ describe('kstar-factory', () => {
   });
 
   describe('getKstarAdapter', () => {
-    test('defaults to the repository Meta Skill Engine stdio process', async () => {
+    test('returns null when no external KSTAR engine is configured', async () => {
       const { McpConnection } = await import(
         '../../../../src/main/features/connectors/mcp-client'
       );
 
-      await getKstarAdapter('default-user');
+      const adapter = await getKstarAdapter('default-user');
 
+      expect(adapter).toBeNull();
+      expect(McpConnection).not.toHaveBeenCalled();
+    });
+
+    test('uses explicit external KSTAR engine environment configuration', async () => {
+      const { McpConnection } = await import(
+        '../../../../src/main/features/connectors/mcp-client'
+      );
+      process.env.ORKAS_KSTAR_ENGINE_COMMAND = 'node';
+      process.env.ORKAS_KSTAR_ENGINE_ARGS = JSON.stringify(['/opt/kstar/dist/index.js', '--stdio']);
+      process.env.ORKAS_KSTAR_ENGINE_CWD = '/opt/kstar';
+      process.env.ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR = '/opt/kstar/ontologies';
+
+      const adapter = await getKstarAdapter('env-user');
+
+      expect(adapter).toBeDefined();
       expect(McpConnection).toHaveBeenCalledWith(
-        'p3394-engine-default-user',
+        'p3394-engine-env-user',
         expect.objectContaining({
           kind: 'stdio',
           command: 'node',
-          args: expect.arrayContaining([
-            expect.stringContaining('packages/nseap-meta-skill-engine/dist/index.js'),
-            '--stdio',
-          ]),
-          cwd: expect.stringContaining('packages/nseap-meta-skill-engine'),
-          env: expect.objectContaining({
-            NSEAP_ONTOLOGY_DIR: expect.stringContaining('packages/nseap-meta-skill-engine/ontologies'),
-          }),
+          args: ['/opt/kstar/dist/index.js', '--stdio'],
+          cwd: '/opt/kstar',
+          env: { NSEAP_ONTOLOGY_DIR: '/opt/kstar/ontologies' },
         }),
       );
     });

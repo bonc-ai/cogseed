@@ -67,7 +67,7 @@ function _bashAgentLabel(info) {
 
 async function _getBashPermissionCurrentMode() {
   try {
-    const res = await window.orkas.invoke('permissions.getLocalExec');
+    const res = await window.cogseed.invoke('permissions.getLocalExec');
     const mode = res && res.mode;
     return _bashIsMode(mode) ? mode : _BASH_PERMISSION_DEFAULT_MODE;
   } catch (err) {
@@ -79,7 +79,7 @@ async function _getBashPermissionCurrentMode() {
 async function _setBashPermissionMode(mode) {
   if (!_bashIsMode(mode)) return false;
   try {
-    const res = await window.orkas.invoke('permissions.setLocalExecMode', { mode });
+    const res = await window.cogseed.invoke('permissions.setLocalExecMode', { mode });
     return !!(res && res.mode === mode && res.ok !== false);
   } catch (err) {
     _bashPermLog.warn('set local access mode failed', { mode, error: err && err.message });
@@ -296,7 +296,7 @@ async function _showBashPermissionDialog(info) {
   } catch (_e) { /* telemetry must not break the gate */ }
 
   try {
-    await window.orkas.invoke('bash.permission_response', {
+    await window.cogseed.invoke('bash.permission_response', {
       request_id: info.request_id,
       decision,
     });
@@ -318,9 +318,9 @@ async function _drainBashPermissionQueue() {
   }
 }
 
-if (window.orkas && typeof window.orkas.onPushEvent === 'function') {
+if (window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
   try {
-    window.orkas.onPushEvent('bash:permission', (info) => {
+    window.cogseed.onPushEvent('bash:permission', (info) => {
       if (!info || typeof info.request_id !== 'string') return;
       _bashPermQueue.push(info);
       _drainBashPermissionQueue();

@@ -5,8 +5,8 @@ import * as path from 'node:path';
 
 import {
   buildCapabilityPack,
-  type MinimumCapabilityPack,
-} from '../../../../src/main/features/p3394/capability-pack';
+  type DeliveryCapabilityPack,
+} from '../../../../src/main/features/p3394/capability-pack-delivery';
 import {
   exportCapabilityPack,
   renderContextPackMarkdown,
@@ -32,7 +32,7 @@ function asset(overrides: Partial<RecallAbilityAssetRecord> & { id: string }): R
   } as RecallAbilityAssetRecord;
 }
 
-function samplePack(): MinimumCapabilityPack {
+function samplePack(): DeliveryCapabilityPack {
   return buildCapabilityPack({
     packId: 'pack-export-1',
     purpose: '交给外部执行端做一次接口评审',
@@ -110,7 +110,7 @@ describe('导出落盘', () => {
 
   it('拒绝导出被篡改的包', async () => {
     const pack = samplePack();
-    const tampered: MinimumCapabilityPack = {
+    const tampered: DeliveryCapabilityPack = {
       ...pack,
       assets: [{ ...pack.assets[0], statement: '偷偷换掉的判断' }],
     };
