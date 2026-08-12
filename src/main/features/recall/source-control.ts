@@ -215,7 +215,7 @@ export async function removeCognitionSource(
       continue;
     }
     try {
-      await revokeAbilityAsset(userId, asset.id, `source_removed:${source.kind}:${source.id}`);
+      await revokeAbilityAsset(userId, asset.id, { actor: 'user' as const, reason: `source_removed:${source.kind}:${source.id}` });
       revokedAssetIds.push(asset.id);
     } catch {
       failedAssetIds.push(asset.id);
