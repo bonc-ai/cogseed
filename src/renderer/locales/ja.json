@@ -3296,5 +3296,8 @@
   "marketplace.override_note": "インストール後、この技能は「リスクを承知で導入」と表示され続けます。",
   "skills.secpanel_user_override": "リスクを承知でこの技能を導入しました",
   "quality.occurrences": "{n} 箇所",
-  "quality.occurrences_more": "他に {n} 箇所"
+  "quality.occurrences_more": "他に {n} 箇所",
+  "marketplace.redflag_title": "リスクのある「{name}」のインストール確認",
+  "marketplace.redflag_intro": "「{name}」に明確な危険パターンを検出しました。通常の技能には現れないものです:",
+  "marketplace.redflag_type_name": "それでもインストールする場合は技能名「{name}」を入力してください:"
 }

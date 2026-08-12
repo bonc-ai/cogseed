@@ -2959,8 +2959,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { skill: r.skill, skills: r.skills, seedModelText: r.seedModelText, seedMessage: r.seedMessage };
   },
 
-  'skills.createFromDir': async ({ name, description, srcDir, force }) => {
-    const r = await skills.createFromDir(name ?? null, description ?? null, String(srcDir || ''), { force: force === true });
+  'skills.createFromDir': async ({ name, description, srcDir, force, acceptRedFlagRisk }) => {
+    const r = await skills.createFromDir(name ?? null, description ?? null, String(srcDir || ''), {
+      force: force === true,
+      // Set only after the user confirmed in the red-flag dialog. Kept distinct
+      // from `force`, which retry paths set for unrelated reasons.
+      acceptRedFlagRisk: acceptRedFlagRisk === true,
+    });
     if (!r.ok) return r;
     return {
       skill: r.skill,

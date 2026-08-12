@@ -154,6 +154,34 @@ function _mpRiskRuleLines(ruleIds) {
 }
 
 /**
+ * Confirm a red-flag override by making the user type the skill name.
+ *
+ * Deliberately more friction than the danger-button dialog used for a scanner
+ * outage, because the two are not equally serious. A red flag is a specific
+ * malicious pattern, and the attack this has to withstand is a skill whose own
+ * text asks the user to click through — so the gesture cannot be a single click
+ * on a button whose position the user has already learned.
+ *
+ * Returns true only on an exact name match. Case and surrounding whitespace are
+ * forgiven; nothing else is.
+ */
+async function _mpConfirmRedFlagOverride(name, ruleIds) {
+  const lines = _mpRiskRuleLines(ruleIds);
+  const detail = lines.length ? `\n\n${lines.map((r) => `• ${r}`).join('\n')}` : '';
+  // `uiPrompt` renders no title, so the heading goes into the message body —
+  // passing a `title` option would silently drop it.
+  const typed = await uiPrompt(
+    `${t('marketplace.redflag_title').replace('{name}', name)}\n\n${
+      t('marketplace.redflag_intro').replace('{name}', name)
+    }${detail}\n\n${
+      t('marketplace.redflag_type_name').replace('{name}', name)
+    }\n\n${t('marketplace.override_note')}`,
+  );
+  if (typed === null) return false;
+  return String(typed).trim().toLowerCase() === String(name).trim().toLowerCase();
+}
+
+/**
  * Show why an install was refused, and offer "install anyway" when the refusal
  * is waivable.
  *
@@ -2076,11 +2104,24 @@ async function _mpInstall(kind, id, itemOverride = null) {
       const report = err?.qualityReport || await readQualityReport(rejectedKind, rejectedId);
       if (report) {
         const title = t('quality.install_rejected_title').replace('{name}', rejectedName);
-        // Report-only: an EXTREME violation is not user-overridable, so no
-        // force action is offered. Passing a forceLabel here previously let
-        // the user re-invoke install with `force: true`, which bypassed the
-        // main-process red-flag gate entirely.
-        await showValidationReport({ title, report });
+        // The report offers an override; confirming it requires typing the skill
+        // name, and the main process re-checks consent regardless of what the
+        // renderer claims.
+        const action = await showValidationReport({
+          title, report, forceLabel: t('marketplace.override_confirm'),
+        });
+        if (action === 'force') {
+          const ruleIds = (err && err.qualityRuleIds)
+            || report.violations.filter((v) => v.level === 'EXTREME').map((v) => v.rule);
+          if (await _mpConfirmRedFlagOverride(rejectedName, ruleIds)) {
+            try {
+              await invokeInstall(true);
+              await markInstalled();
+            } catch (retryErr) {
+              uiAlert(_mpInstallFailedText(kind, item, retryErr));
+            }
+          }
+        }
       } else {
         uiAlert(_mpInstallFailedText(kind, item, err));
       }

@@ -3296,5 +3296,8 @@
   "marketplace.override_note": "Após instalar, esta habilidade fica marcada como “risco aceito por você”.",
   "skills.secpanel_user_override": "Você aceitou o risco e instalou esta habilidade",
   "quality.occurrences": "{n} locais",
-  "quality.occurrences_more": "+{n} não exibidos"
+  "quality.occurrences_more": "+{n} não exibidos",
+  "marketplace.redflag_title": "Confirmar instalação arriscada de “{name}”",
+  "marketplace.redflag_intro": "A verificação encontrou padrões claramente perigosos em “{name}”. Não aparecem em habilidades normais:",
+  "marketplace.redflag_type_name": "Para instalar mesmo assim, digite o nome “{name}”:"
 }

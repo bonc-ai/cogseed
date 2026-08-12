@@ -3509,5 +3509,8 @@
   "marketplace.override_note": "Once installed, this skill stays marked “you accepted the risk”.",
   "skills.secpanel_user_override": "You accepted the risk and installed this skill",
   "quality.occurrences": "{n} places",
-  "quality.occurrences_more": "+{n} more not shown"
+  "quality.occurrences_more": "+{n} more not shown",
+  "marketplace.redflag_title": "Confirm risky install of “{name}”",
+  "marketplace.redflag_intro": "The security check found definite dangerous patterns in “{name}”. These do not appear in normal skills:",
+  "marketplace.redflag_type_name": "To install anyway, type the skill name “{name}”:"
 }

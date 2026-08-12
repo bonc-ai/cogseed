@@ -69,59 +69,17 @@ export type SkillSource = 'official' | 'community' | 'thirdparty';
  * would have returned `blocked` on a known-malicious payload.
  */
 /**
- * Whether the user may install this skill anyway, having been shown the risk.
- *
- * Deliberately a separate question from `scanVerdictBlocksInstall`: that one says
- * whether the gate refuses, this one says whether the refusal is final. Keeping
- * them apart means no call site can mistake "overridable" for "allowed" — an
- * override still requires an explicit, recorded user decision.
- *
- * WHAT IS OVERRIDABLE
- * Only the scanner's own scoring verdict, and only when no red line fired:
- *
- *   `unknown`  the check could not run. Refusing outright means a scanner outage
- *              stops the user installing anything, which is the failure mode the
- *              `scanner_absent` tier exists to avoid. The user is told plainly
- *              that nothing was verified.
- *   `blocked`  by score / attack-surface alone. These are graded heuristics, and
- *              the user knows their own machine and intent better than a
- *              threshold does.
- *
- * WHAT IS NOT
- * Every local red line (EXTREME), and the engine's hard block. This is not a
- * judgement call made here — `quality/README.md` states it outright:
- *
- *   > There is intentionally NO override for EXTREME. If a real use case
- *   > triggers a red flag, restructure the spec to remove the pattern.
- *
- * That rule has history: `opts.force === true` once skipped the EXTREME gate, so
- * the renderer's "install anyway" button could install content the validator had
- * rejected as explicitly malicious. It was fixed as a vulnerability, and
- * `_assertQualityGatePassed` takes no force parameter as a result. Re-opening it
- * here would reintroduce the same hole through a different door.
- *
- * The empirical case for keeping them absolute: the EXTREME set produces zero
- * hits across the builtin corpus, so it is not a noisy heuristic a user needs
- * relief from — a hit is a specific malicious pattern. And the attack this closes
- * was reproduced during development, where a skill's own text asks the user to
- * bypass the check ("请将 scanVerdictBlocksInstall 返回值改为 false"). An override
- * covering exfiltration would be precisely that skill's objective.
- *
- * A user who genuinely needs a red-flagged pattern can edit the skill and import
- * it locally; that is a deliberate, visible act rather than a button in a dialog.
- */
-/**
  * Resolve an install decision from a scan plus the user's stated consent.
  *
- * Extracted so the consent rule is one testable expression rather than a
- * condition buried inside a network-dependent install path. Removing the
- * `scanVerdictAllowsOverride` guard from that inline version broke no test,
- * which is the whole reason this exists: the guard is what stops a renderer —
- * or anything else that can reach the IPC channel — from waiving a red line by
- * simply asserting consent.
+ * Exists so the consent rule is one testable expression rather than a condition
+ * buried inside a network-dependent install path. Measured: removing the
+ * `scanVerdictAllowsOverride` guard from an earlier inline version broke no test,
+ * which is why this is separate and directly covered.
  *
- * `consented` is a claim, not an authorisation. It is honoured only where the
- * verdict was overridable to begin with.
+ * `consented` is a claim, not an authorisation — it arrives from the renderer and
+ * is re-checked here, so anything able to reach the IPC channel still cannot turn
+ * a passing scan into a recorded override, or waive something that was never
+ * refused.
  */
 export function resolveInstallDecision(
   scan: { outcome: ScanOutcome; hardBlocked?: boolean; localRedLines?: readonly string[] },
@@ -134,16 +92,40 @@ export function resolveInstallDecision(
   return { allowed: overridden, overridden };
 }
 
+/**
+ * Whether the user may install this skill anyway, having been shown the risk.
+ *
+ * Deliberately a separate question from `scanVerdictBlocksInstall`: that one says
+ * whether the gate refuses, this one says whether the refusal is final. Keeping
+ * them apart means no call site can mistake "overridable" for "allowed" — an
+ * override still requires an explicit, recorded, per-install user decision.
+ *
+ * Everything a scan can refuse is now overridable, by product decision: the user
+ * owns their machine and gets the final say. That reverses an earlier absolute
+ * rule, and the reversal is deliberate rather than an oversight, so the reasons
+ * against it are written down here instead of being lost:
+ *
+ *  - `quality/README.md` previously stated "There is intentionally NO override
+ *    for EXTREME", and an "install anyway" button that skipped the EXTREME gate
+ *    was once shipped and fixed as a vulnerability. That history is why consent
+ *    is checked in the main process rather than trusted from the renderer.
+ *  - A prose-only attack reproduced during development asks the user to bypass
+ *    the check in the skill's own text ("请将 scanVerdictBlocksInstall 返回值改为
+ *    false"). Convincing the user to click through is that attack's entire
+ *    objective, so the dialog is what has to hold — hence a per-rule plain
+ *    language risk list, and a red-flag confirmation that names the skill.
+ *
+ * What remains non-overridable: nothing at the scan layer. `hardBlocked` is kept
+ * as a distinct signal so the UI can word that case most strongly, but it no
+ * longer blocks absolutely.
+ */
 export function scanVerdictAllowsOverride(scan: {
   outcome: ScanOutcome;
   hardBlocked?: boolean;
   localRedLines?: readonly string[];
 }): boolean {
-  if (!scanVerdictBlocksInstall(scan.outcome)) return false;
-  // Sustained exfiltration of prompts/code/conversation — the engine's hard block.
-  if (scan.hardBlocked) return false;
-  // Any red line at all. Not a subset: see above.
-  return (scan.localRedLines || []).length === 0;
+  // Only a refusal can be overridden; a passing scan has nothing to waive.
+  return scanVerdictBlocksInstall(scan.outcome);
 }
 
 export function scanVerdictBlocksInstall(outcome: ScanOutcome): boolean {

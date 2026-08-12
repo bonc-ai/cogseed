@@ -888,7 +888,7 @@ async function _installMarketplaceAgentLocked(
     // `report.ok === false` means an EXTREME violation, and EXTREME is not
     // user-overridable (see `quality/README.md`) — `force` must not reach it.
     // See `_assertQualityGatePassed` for why force is deliberately ignored here.
-    _assertQualityGatePassed('agent', agentId, preReport);
+    _assertQualityGatePassed('agent', agentId, preReport, opts.acceptSecurityRisk === true);
     // 4. Now materialize the agent: cache content → `<uid>/local/marketplace/agents/<id>/`.
     //    `_install.json` is a version pin read by `marketplace_reconcile.ts::_agentNeedsPull`
     //    on other devices to skip a re-pull when their local copy already matches the manifest's
@@ -1012,7 +1012,7 @@ async function _installMarketplaceSkillLocked(
     });
     if (!skillReport.ok) {
       await fsp.rm(target, { recursive: true, force: true });
-      _assertQualityGatePassed('skill', skillId, skillReport);
+      _assertQualityGatePassed('skill', skillId, skillReport, opts.acceptSecurityRisk === true);
     }
 
     const skillContentSha = sha256OfFile(path.join(target, 'SKILL.md'));
@@ -1142,6 +1142,11 @@ function _qualityInstallError(
   const e = new Error(`Quality validation rejected ${kind} ${id} (${reason})`);
   (e as { qualityKind?: string }).qualityKind = kind;
   (e as { qualityId?: string }).qualityId = id;
+  // Rule ids drive the plain-language risk list in the confirm dialog, so the
+  // user is told what was found rather than only that something was.
+  (e as { qualityRuleIds?: string[] }).qualityRuleIds =
+    [...new Set(blockingViolations.map((v) => v.rule).filter(Boolean))];
+  (e as { qualityOverridable?: boolean }).qualityOverridable = true;
   (e as { qualityReport?: QualityReport }).qualityReport = {
     ...report,
     ok: false,
@@ -1170,8 +1175,19 @@ function _qualityInstallError(
  */
 function _assertQualityGatePassed(
   kind: 'agent' | 'skill', id: string, report: QualityReport,
+  acceptRedFlagRisk = false,
 ): void {
   if (report.ok) return;
+  // An informed user may proceed. This reverses the previous absolute rule; see
+  // `quality/README.md` for why, and for what the earlier rule was protecting
+  // against. The consent must be explicit and per-install — it is never implied
+  // by `force`, which ordinary retry paths set for unrelated reasons.
+  if (acceptRedFlagRisk) {
+    log.warn('install proceeding on user red-flag override', {
+      kind, id, rules: report.violations.filter((v) => v.level === 'EXTREME').map((v) => v.rule),
+    });
+    return;
+  }
   throw _qualityInstallError(kind, id, report);
 }
 

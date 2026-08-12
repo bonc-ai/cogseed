@@ -1958,7 +1958,15 @@ function _sourceSkillInstallMeta(sourceRoot: string, sourceSkillMd: string): Ski
  * the EXTREME hit is recorded as MEDIUM after demotion. That sample imported
  * cleanly before this check looked at `original_level`.
  */
-function _isQualityBlockedImport(report: QualityReport): boolean {
+function _isQualityBlockedImport(
+  report: QualityReport, acceptRedFlagRisk = false,
+): boolean {
+  // An informed user may proceed past a red flag. Reverses an earlier absolute
+  // rule; the reasoning and the history it overturns are in `quality/README.md`.
+  // Note this reads `original_level`, so a demotion (e.g. a `tests/` path) cannot
+  // quietly turn a red flag into a soft advisory — the override has to be a
+  // decision, not a side effect of where the file happens to live.
+  if (acceptRedFlagRisk) return false;
   if (!report.ok) return true;
   return report.violations.some((v) => (v.original_level || v.level) === 'EXTREME');
 }
@@ -1970,6 +1978,7 @@ async function _installSourceSkillRoots(
   files: { src: string; rel: string; size: number }[],
   sourceRoots: string[],
   totalBytes: number,
+  acceptRedFlagRisk = false,
 ): Promise<ImportResult> {
   const reserved = new Set<string>();
   const createdIds: string[] = [];
@@ -2026,7 +2035,7 @@ async function _installSourceSkillRoots(
       firstReportSkillId = skill.id;
     }
   }
-  if (firstReport && _isQualityBlockedImport(firstReport)) {
+  if (firstReport && _isQualityBlockedImport(firstReport, acceptRedFlagRisk)) {
     for (const id of createdIds) {
       try { await deleteCustomSkill(id); } catch { /* best-effort rollback */ }
     }
@@ -2049,7 +2058,10 @@ async function _installSourceSkillRoots(
   let worstScan: SentryScanResult | undefined;
   for (const skill of createdSkills) {
     const scan = await _scanImportedSkill(customSkillDir(skill.id));
-    if (scanVerdictBlocksInstall(scan.outcome)) {
+    // Same consent as the quality gate above. Gating them differently would let
+    // one refuse what the other just waived, and the user would see a dialog that
+    // does nothing.
+    if (!acceptRedFlagRisk && scanVerdictBlocksInstall(scan.outcome)) {
       return _rejectImportForSecurity(scan, createdIds);
     }
     // Recorded per skill, after the reject check: only verdicts that actually
@@ -2088,6 +2100,7 @@ async function _createEditableDraftFromImportDir(
   realSrc: string,
   files: { src: string; rel: string; size: number }[],
   totalBytes: number,
+  acceptRedFlagRisk = false,
 ): Promise<ImportResult> {
   const effectiveName = (name || '').trim() || _defaultSkillNameFromDir(realSrc);
   const effectiveDesc = (description || '').trim() || t('skills.import.default_desc_dir');
@@ -2111,7 +2124,7 @@ async function _createEditableDraftFromImportDir(
   void persistQualityReport({
     uid: getActiveUserId(), kind: 'skill', id: created.id, report,
   });
-  if (_isQualityBlockedImport(report)) {
+  if (_isQualityBlockedImport(report, acceptRedFlagRisk)) {
     try { await deleteCustomSkill(created.id); } catch { /* best-effort rollback */ }
     return {
       ok: false,
@@ -2125,7 +2138,7 @@ async function _createEditableDraftFromImportDir(
   // the agent reads these files into a model context, so anything known-bad must
   // be rejected while it is still just bytes on disk.
   const scan = await _scanImportedSkill(skillDir);
-  if (scanVerdictBlocksInstall(scan.outcome)) {
+  if (!acceptRedFlagRisk && scanVerdictBlocksInstall(scan.outcome)) {
     return _rejectImportForSecurity(scan, [created.id]);
   }
   await _recordImportReceipt(created.id, skillDir, scan);
@@ -2240,10 +2253,10 @@ export async function createFromDir(
   name: string | null,
   description: string | null,
   srcDir: string,
-  // `force` is accepted for IPC/renderer compatibility but no longer weakens
-  // the quality gate: EXTREME violations are non-overridable. See
-  // `_isQualityBlockedImport`.
-  _opts: { force?: boolean } = {},
+  // `force` stays separate from red-flag consent on purpose: ordinary retry paths
+  // set `force`, so treating it as consent would silently accept security risk on
+  // behalf of a user who only asked to retry.
+  _opts: { force?: boolean; acceptRedFlagRisk?: boolean } = {},
 ): Promise<ImportResult> {
   if (!srcDir || !path.isAbsolute(srcDir)) {
     return { ok: false, error: t('skills.errors.path_not_absolute') };
@@ -2274,11 +2287,13 @@ export async function createFromDir(
   if (sourceRoots.length > 0) {
     return _installSourceSkillRoots(
       name, description, realSrc, files, sourceRoots, totalBytes,
+      _opts.acceptRedFlagRisk === true,
     );
   }
 
   return _createEditableDraftFromImportDir(
     name, description, realSrc, files, totalBytes,
+    _opts.acceptRedFlagRisk === true,
   );
 }
 
