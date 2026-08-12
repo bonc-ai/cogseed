@@ -349,6 +349,9 @@ export interface MessagingInstanceClient extends MessagingInstance {
   hasCredentials: boolean;
   ownerConfigured: boolean;
   ownerLabel?: string;
+  /** Masked owner open id (e.g. `ou_ab12…cd34`) shown when no name is set;
+   * the full id never leaves the main process. */
+  ownerMaskedId?: string;
   ownerIdentitySource?: MessagingOwnerIdentitySource;
 }
 
