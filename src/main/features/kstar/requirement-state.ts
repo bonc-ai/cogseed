@@ -238,6 +238,19 @@ export async function routeKstarUserMessage(
     currentRequirement.userMessageIds = uniqueIds(currentRequirement.userMessageIds, input.messageId);
     currentRequirement.updatedAt = nowIso();
     if (route.expectedResult && !currentRequirement.rHat) currentRequirement.rHat = route.expectedResult;
+    if (route.intent === 'continue') {
+      const projectionPreview = await previewTaskBoundary(
+        userId,
+        input,
+        task.id,
+        projectionPurpose(routeTitle(route, input.text)),
+        route.expectedResult,
+      );
+      if (projectionPreview) {
+        currentRequirement.projectionId = projectionPreview.projectionId;
+        if (projectionPreview.shouldPostCard) projectionPreviewCreated = { projectionId: projectionPreview.projectionId };
+      }
+    }
   }
 
   await replaceKstarRequirement(userId, route.intent === 'new'
