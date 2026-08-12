@@ -9480,11 +9480,85 @@ function _makeConvChatController(cid, options = {}) {
   return ctrl;
 }
 
+// ── Commander CLI fallback ────────────────────────────────────────────────
+// No API-key model configured → the commander can't answer by itself. Route
+// the conversation to the user's signed-in CLI agent (Claude Code / Codex /
+// OpenCode), which runs on their official account — the only local execution
+// backend. Preferred CLI comes from settings (prefs.setCliFallback); when
+// unset, the first signed-in CLI is picked. Honest, idempotent, never
+// fabricates a model.
+let _cliFallbackApplied = null; // cid → cli (per conversation, once)
+
+async function _maybeApplyCliFallback(cid) {
+  if (_cliFallbackApplied === cid) return false;
+  if (!window.orkas || typeof window.orkas.invoke !== 'function') return false;
+
+  let modelRes;
+  try {
+    modelRes = await window.orkas.invoke('model.hasConfigured');
+  } catch (_) { return false; }
+  if (modelRes && modelRes.configured) return false;
+
+  let cli = '';
+  try {
+    const fb = await window.orkas.invoke('prefs.getCliFallback');
+    cli = (fb && fb.cli) || '';
+  } catch (_) { /* fall through to auto-pick */ }
+
+  if (!cli) {
+    try {
+      const listRes = await window.orkas.invoke('localAgents.list', { force: false });
+      const entry = (listRes && listRes.entries || []).find(
+        (e) => e && e.available && e.auth && e.auth.loggedIn
+          && ['claude', 'codex', 'opencode'].includes(e.type),
+      );
+      cli = entry ? entry.type : '';
+    } catch (_) { /* no auth state available */ }
+  }
+  if (!cli) return false;
+
+  let agent = null;
+  try {
+    const listRes = await window.orkas.invoke('agents.list', {});
+    agent = (listRes && listRes.agents || []).find(
+      (a) => a && a.runtime && a.runtime.kind === 'cli' && a.runtime.cli === cli,
+    );
+  } catch (_) { /* agents list unavailable */ }
+  if (!agent) return false;
+
+  _recipientByCid[cid] = { kind: 'agent', id: String(agent.agent_id || ''), name: String(agent.name || cli) };
+  _cliFallbackApplied = cid;
+  try { _renderRecipientChip('conversation'); } catch (_) {}
+  const label = cli === 'claude' ? 'Claude Code' : (cli === 'codex' ? 'Codex' : 'OpenCode');
+  _convLog.info('commander CLI fallback applied', { cid, cli, agentId: agent.agent_id });
+  if (typeof uiToast === 'function') {
+    uiToast(`指挥官当前没有可用的 API Key，消息已自动交给 ${label} 执行（可在设置中更改）`, { variant: 'warning', timeoutMs: 6000 });
+  }
+  return true;
+}
+
 async function sendInConversation(cid, content, extra, options = {}) {
   if (!cid) return { started: false, aborted: false, errored: false, result: 'failure' };
   const startedAt = performance.now();
   const sendOptions = options && typeof options === 'object' ? options : {};
   const statAgentId = String(sendOptions.agent_id || '');
+
+  // Commander CLI fallback: when no API-key model is configured and the
+  // message targets the commander (no explicit agent), route this
+  // conversation to the user's signed-in CLI agent so chat still works.
+  // Cheap IPC checks; any failure falls through to the normal send path.
+  if (!statAgentId) {
+    try {
+      const recipient = _activeRecipient('conversation');
+      const toCommander = !recipient || recipient.kind === 'commander';
+      if (toCommander) {
+        await _maybeApplyCliFallback(cid);
+      }
+    } catch (err) {
+      _convLog.warn('cli fallback check failed', err);
+    }
+  }
+
   let doneResult = null;
   let taskStarted = false;
   const attachmentCount = Array.isArray(extra && extra.attachments) ? extra.attachments.length : 0;
