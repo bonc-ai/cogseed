@@ -13,9 +13,11 @@ export type BriefingState = 'not_configured' | 'preview_ready' | 'sending' | 'de
 export type DashboardAction =
   | 'mode.demo.start'
   | 'mode.real.select'
+  | 'connection.connect'          // 新增：触点页待办卡「连接机器人」
   | 'authorize.begin'
   | 'authorize.cancel'
   | 'authorize.revoke'
+  | 'authorization.reauth'        // 新增：待办卡「重新授权」（前端映射到 authorize.begin 流程）
   | 'resources.discover'
   | 'resources.select'
   | 'sync.start'
@@ -90,6 +92,24 @@ export interface BriefingSummary {
   pendingCandidateCount: number;
 }
 
+// ── 语义聚合层（overall）─────────────────────────────
+export type ChainState = 'ok' | 'missing' | 'broken';
+export type OverallStatus = 'ready' | 'attention' | 'off';
+export type IssueReason = 'not_configured' | 'token_expired' | 'sync_failed' | 'no_resources' | 'bot_error';
+
+export interface DashboardIssue {
+  severity: 'error' | 'warning';
+  step: 'connection' | 'authorization' | 'delivery';
+  reason: IssueReason;
+  actionId: DashboardAction | null;
+}
+
+export interface DashboardOverall {
+  status: OverallStatus;
+  chain: { connection: ChainState; authorization: ChainState; delivery: ChainState };
+  issues: DashboardIssue[];
+}
+
 export interface PersonalContextDashboard {
   mode: DashboardMode;
   messaging: MessagingConnectionSummary;
@@ -99,6 +119,7 @@ export interface PersonalContextDashboard {
   review: ReviewSummary;
   briefing: BriefingSummary;
   actions: DashboardAction[];
+  overall: DashboardOverall;   // 新增：语义聚合层
 }
 
 export interface SerializedPersonalContextError {
