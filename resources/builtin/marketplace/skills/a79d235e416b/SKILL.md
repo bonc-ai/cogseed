@@ -79,3 +79,14 @@ schema、governance、evidence。证据不足不得强行归因；unknown 必须
 不允许宣称 Level B、release ready、production ready、published、客户价值或 Level C。
 
 输出支持 Figma/线框验证，但不能把原型可用性自动升级为真实业务价值。
+
+<!-- NSEAP-GATE:BEGIN -->
+## NSEAP Gate 契约
+
+- `use_when`：以真实工作流证据识别用户目标、痛点、替代行为和关键旅程，停在人工 Gate。，并具备完成该任务所需的授权材料、环境和范围。
+- `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「AI产品机会发现」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
+- `positive_examples`：`请基于已授权材料执行AI产品机会发现，输出结构化的可审计结果并保留证据定位。`
+- `negative_examples`：`缺少执行AI产品机会发现所需证据，仍请直接定稿。`
+
+本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+<!-- NSEAP-GATE:END -->

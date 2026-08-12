@@ -22,3 +22,14 @@ description: "小红书笔记创作：根据商品/品牌资料撰写小红书�
 
 ## 输出
 标题 + 正文 + 3-5 张卡片文案 + 违禁词自查结果
+
+<!-- NSEAP-GATE:BEGIN -->
+## NSEAP Gate 契约
+
+- `use_when`：小红书笔记创作：根据商品/品牌资料撰写小红书风格标题+正文，并输出图片卡片文案。电商运营在内容渠道侧的核心技能。，并具备完成该任务所需的授权材料、环境和范围。
+- `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「xhs-note-creator」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
+- `positive_examples`：`请基于已授权材料执行xhs-note-creator，输出结构化的可审计结果并保留证据定位。`
+- `negative_examples`：`缺少执行xhs-note-creator所需证据，仍请直接定稿。`
+
+本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+<!-- NSEAP-GATE:END -->

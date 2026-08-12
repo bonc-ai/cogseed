@@ -557,3 +557,14 @@ production_release_allowed=false
 A passed research gate means the evidence bundle is structurally complete, sources are classified and cross-bound, versions/conflicts are recorded, and hard conditions passed. It does **not** independently certify external truth, professional correctness, production readiness, official authority, or third-party conformity.
 
 The skill may report that a staged candidate passed specified checks. It must not claim production readiness, official authority, complete-domain-ontology status, professional approval, external certification, or business value based on synthetic fixtures.
+
+<!-- NSEAP-GATE:BEGIN -->
+## NSEAP Gate 契约
+
+- `use_when`：对指定行业/领域做本体景观与标准对标分析：强制官网检索与来源核验门禁、规范概念建模、共享上层本体映射、Agent/HITL 治理与 KSTAR/ECS 闭环，产出经完整校验渲染的 Word 领域本体分册（候选版，staged 封顶）。，并具备完成该任务所需的授权材料、环境和范围。
+- `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「本体分析对标」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
+- `positive_examples`：`请基于已授权材料执行本体分析对标，输出结构化的可审计结果并保留证据定位。`
+- `negative_examples`：`缺少执行本体分析对标所需证据，仍请直接定稿。`
+
+本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+<!-- NSEAP-GATE:END -->
