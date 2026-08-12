@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   manager: {
     listInstances: vi.fn(),
     sendProactive: vi.fn(),
+    getLiveInstanceStatus: vi.fn(),
   },
   registry: {
     getInstance: vi.fn(),
@@ -31,6 +32,8 @@ describe('touchpoint test approval card delivery', () => {
   beforeEach(() => {
     mocks.manager.listInstances.mockReset();
     mocks.manager.sendProactive.mockReset();
+    mocks.manager.getLiveInstanceStatus.mockReset();
+    mocks.manager.getLiveInstanceStatus.mockResolvedValue({ kind: 'connected', checkedAt: '2026-08-10T13:00:00.000Z' });
     mocks.registry.getInstance.mockReset();
     mocks.registry.getInstance.mockResolvedValue(connectedFeishuInstance());
   });

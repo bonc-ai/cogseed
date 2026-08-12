@@ -55,7 +55,10 @@ export function createFeishuTouchpointAdapter(options: { instanceId: string }): 
         throw new FeishuTouchpointAdapterError('wrong_platform', 'Configured messaging instance is not Feishu or Lark.');
       }
       if (!instance.enabled) throw new FeishuTouchpointAdapterError('instance_disabled', 'Feishu messaging instance is disabled.');
-      if (instance.status.kind !== 'connected') {
+      // 磁盘状态被故意降级（registry.normalizeStatus 从不落盘 connected），
+      // 已连接的实例读磁盘也是 disconnected——连接判断必须走 runtime 实时状态。
+      const live = await manager.getLiveInstanceStatus(userId, instanceId);
+      if (!live || live.kind !== 'connected') {
         throw new FeishuTouchpointAdapterError('instance_not_connected', 'Feishu messaging instance is not connected.', true);
       }
       if (!instance.ownerExternalUserId) {

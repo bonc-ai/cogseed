@@ -1083,6 +1083,21 @@ export async function listInstances(uid: string): Promise<MessagingInstanceClien
   return instances.map((instance) => withLiveStatus(uid, instance));
 }
 
+/** Live connection status for one instance, or null when no runtime is
+ * registered. Disk state is deliberately degraded (`registry.normalizeStatus`
+ * never persists `connected`), so proactive senders must check the live
+ * status here instead of the persisted one — reading the file shows a
+ * connected instance as disconnected. */
+export async function getLiveInstanceStatus(
+  uid: string,
+  instanceId: string,
+): Promise<MessagingInstanceStatus | null> {
+  assertUserId(uid);
+  const runtime = runtimes.get(uid)?.get(instanceId);
+  const live = runtime && runtime.active ? liveStatuses.get(uid)?.get(instanceId) : undefined;
+  return live ? cloneStatus(live) : null;
+}
+
 export async function health(uid: string, instanceId: string): Promise<MessagingInstanceStatus> {
   return withLifecycle(uid, instanceId, async () => {
     const loaded = await registry.getInstanceWithSecret(uid, instanceId);
