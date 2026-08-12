@@ -60,6 +60,7 @@ import { officeCliAvailable } from '../../features/office/office_engine';
 import { createKbTools } from './kb-tools';
 import { createChatHistoryTools } from './chat-history-tools';
 import { createMessagingTools } from './messaging-tools';
+import { createFeishuTools } from './feishu-tools';
 import { createImageGenTool } from './image-gen-tool';
 import { createVideoStudioTool } from './video-studio-tool';
 import { createResearchRerankTool } from './research-rerank-tool';
@@ -793,6 +794,14 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
       })
     : [];
 
+  // Feishu touchpoint tools (status/briefing/touchpoint records). Same
+  // Commander-only gate as messaging tools: workers, edit sessions, CLI and
+  // reflection never get them, so they cannot read or mutate user Feishu
+  // configuration from a narrower session.
+  const feishuTools: AgentTool[] = uid && !params.disableTools && isCommander
+    ? createFeishuTools({ userId: uid })
+    : [];
+
   // Media generation. Shares the localExec access mode with
   // local-tools (writing image bytes is the same blast radius as write_file).
   // Skipped when uid is unknown — generators need the
@@ -907,6 +916,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ...kbTools,
     ...chatHistoryTools,
     ...messagingTools,
+    ...feishuTools,
     ...imageGenTools,
     ...videoStudioTools,
     ...deepResearchTools,

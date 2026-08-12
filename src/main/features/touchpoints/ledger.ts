@@ -216,6 +216,16 @@ export async function listTouchpointIntents(userId: string): Promise<TouchpointI
       || right.intentId.localeCompare(left.intentId));
 }
 
+export async function listTouchpointActions(userId: string, limit = 20): Promise<TouchpointActionRecord[]> {
+  assertUserId(userId);
+  const bounded = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 100) : 20;
+  const ledger = normalizeLedger(await readJson(userTouchpointLedgerFile(userId)));
+  return Object.values(ledger.actions)
+    .filter((action) => action.userId === userId)
+    .sort((left, right) => right.consumedAt.localeCompare(left.consumedAt))
+    .slice(0, bounded);
+}
+
 export async function transitionTouchpointIntent(
   userId: string,
   intentId: string,
