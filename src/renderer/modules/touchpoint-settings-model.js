@@ -13,6 +13,11 @@
     const authorized = authorization.kind === 'connected';
     const hasResources = Number(resources.selected || 0) > 0;
     const ready = botConnected && authorized && hasResources && ['ready', 'awaiting_review'].includes(sync.state);
+    // 已配置机器人（后端已选出飞书实例）但尚未连接成功：显示「连接中…」而非「没配置」。
+    // 启动后实例连接慢是常态，此时实时状态可能还是 connecting/disconnected，
+    // 只要存在已配置实例就归为连接中，避免误报"没配置"。
+    const configured = Boolean(messaging.instanceId);
+    const connecting = !botConnected && configured;
     const currentStep = !botConnected ? 'connection' : !authorized ? 'authorization' : !hasResources ? 'resources' : 'ready';
     const order = ['connection', 'authorization', 'resources', 'ready'];
     const currentIndex = order.indexOf(currentStep);
@@ -22,7 +27,7 @@
     }));
     const destination = briefing.destination || null;
     return {
-      status: ready ? 'ready' : botConnected ? 'connected' : 'not_connected',
+      status: ready ? 'ready' : botConnected ? 'connected' : connecting ? 'connecting' : 'not_connected',
       currentStep,
       steps,
       primaryAction: !botConnected

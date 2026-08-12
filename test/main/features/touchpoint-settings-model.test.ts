@@ -28,6 +28,16 @@ describe('touchpoint settings model', () => {
     expect(model.steps.map((step: { state: string }) => step.state)).toEqual(['current', 'waiting', 'waiting', 'waiting']);
   });
 
+  it('shows connecting for a configured bot that has not connected yet (slow startup link)', () => {
+    // 已配置机器人（存在实例）但连接尚未完成：启动后连接慢是常态，
+    // 此时应显示「连接中…」而非误报「没配置」。
+    const model = deriveTouchpointSettingsModel(dashboard({
+      messaging: { instanceId: 'feishu-1', botConnected: false, ownerConfigured: true },
+    }), [{ id: 'feishu-1', platform: 'feishu_lark', enabled: true, status: { kind: 'connecting' }, ownerConfigured: true }]);
+    expect(model.status).toBe('connecting');
+    expect(model.primaryAction).toBe('connection.connect');
+  });
+
   it('moves to resource authorization after a real bot and owner are connected', () => {
     const model = deriveTouchpointSettingsModel(dashboard({
       messaging: { instanceId: 'feishu-1', botConnected: true, ownerConfigured: true, ownerLabel: '本人' },

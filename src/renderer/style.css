@@ -21350,6 +21350,12 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 .touchpoint-status.is-connected { color: var(--warning, #ad7419); }
 .touchpoint-status.is-connected > span { background: var(--warning, #d09225); }
+.touchpoint-status.is-connecting { color: var(--primary); border-color: color-mix(in srgb, var(--primary) 28%, var(--border)); }
+.touchpoint-status.is-connecting > span { background: var(--primary); animation: touchpoint-status-pulse 1.2s infinite; }
+@keyframes touchpoint-status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
 .touchpoint-status.is-ready { color: var(--success); border-color: color-mix(in srgb, var(--success) 28%, var(--border)); }
 .touchpoint-status.is-ready > span { background: var(--success); }
 .touchpoint-status.is-not_connected > span { background: var(--danger); }
