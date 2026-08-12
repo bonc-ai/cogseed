@@ -119,6 +119,66 @@ describe('继承认知注入 Agent 运行时', () => {
   });
 });
 
+describe('术语表继承', () => {
+  async function birthWithGlossary(glossary: Array<{ term: string; definition: string }>) {
+    const { recordAgentInheritance } = await import('../../../../src/main/features/agent_inheritance');
+    return recordAgentInheritance(UID, {
+      agentId: AGENT_ID,
+      rolePrompt: '你负责交付评审。',
+      assets: [],
+      glossary,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  it('术语与释义注入提示，模型才不会按通识重新解释', async () => {
+    await birthWithGlossary([{ term: 'KSTAR', definition: '认知评估机制，不是核聚变装置' }]);
+    const out = await block();
+    expect(out).toContain('### Inherited glossary');
+    expect(out).toContain('- KSTAR: 认知评估机制，不是核聚变装置');
+    expect(out).toContain('do not');
+  });
+
+  it('一条资产都没带上时，术语表照样给', async () => {
+    // 术语解决的是「被问到专有名词只能瞎猜」，和有没有认知资产是两回事。
+    await birthWithGlossary([{ term: '能力包', definition: '交给执行端的最小认知集合' }]);
+    const out = await block();
+    expect(out).toContain('能力包');
+    expect(out).not.toContain('### Inherited cognition');
+  });
+
+  it('既无资产也无术语时仍返回空串，不留空壳标题', async () => {
+    await birthWithGlossary([]);
+    expect(await block()).toBe('');
+  });
+});
+
+describe('出生上下文采集', () => {
+  it('只收有实际内容的分组，不用标题硬凑空释义', async () => {
+    const groups = await import('../../../../src/main/features/personal_ontology_groups');
+    const withContent = await groups.createGroup(UID, '交付节奏');
+    await groups.createGroup(UID, '空分组');
+    await groups.writeGroupContent(
+      UID,
+      withContent.group!.group_id,
+      '## 字段\n\n### 周期\n- 两周一个迭代 [用户]\n',
+    );
+
+    const { collectAgentBirthContext } = await import('../../../../src/main/features/agent_inheritance');
+    const collected = await collectAgentBirthContext(UID);
+
+    expect(collected.glossary.map((e) => e.term)).toEqual(['交付节奏']);
+    expect(collected.glossary[0].definition).toContain('两周一个迭代');
+    // 记忆引用记全部分组 id（只记 id，不搬正文）。
+    expect(collected.memoryRefs).toHaveLength(2);
+  });
+
+  it('没有任何分组时返回空，不报错', async () => {
+    const { collectAgentBirthContext } = await import('../../../../src/main/features/agent_inheritance');
+    expect(await collectAgentBirthContext(UID)).toEqual({ glossary: [], memoryRefs: [] });
+  });
+});
+
 async function readReceiptFor(cid = CID) {
   const { readReceipt } = await import('../../../../src/main/features/p3394/context-reuse-receipt');
   const crypto = await import('node:crypto');

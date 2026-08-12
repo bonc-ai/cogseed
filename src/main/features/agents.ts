@@ -3104,10 +3104,14 @@ async function _recordInheritance(
   context: CreateAgentInheritanceContext,
 ): Promise<void> {
   try {
-    const [{ recordAgentInheritance }, { listAbilityAssets }] = await Promise.all([
+    const [{ recordAgentInheritance, collectAgentBirthContext }, { listAbilityAssets }] = await Promise.all([
       import('./agent_inheritance'),
       import('./recall/asset-service'),
     ]);
+    // 调用方没给术语表/记忆时，从用户自己的个人本体分组采集——不采就永远是空的。
+    const collected = context.glossary || context.memoryRefs
+      ? { glossary: context.glossary ?? [], memoryRefs: context.memoryRefs ?? [] }
+      : await collectAgentBirthContext(context.userId);
     await recordAgentInheritance(context.userId, {
       agentId: agent.agent_id,
       rolePrompt: workflow,
@@ -3117,8 +3121,8 @@ async function _recordInheritance(
         ...(context.projectId ? { projectId: context.projectId } : {}),
         ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
       },
-      ...(context.glossary ? { glossary: context.glossary } : {}),
-      ...(context.memoryRefs ? { memoryRefs: context.memoryRefs } : {}),
+      ...(collected.glossary.length ? { glossary: collected.glossary } : {}),
+      ...(collected.memoryRefs.length ? { memoryRefs: collected.memoryRefs } : {}),
       createdAt: new Date().toISOString(),
     });
   } catch (err) {

@@ -125,6 +125,67 @@ function normalizeMemoryRefs(refs: string[] | undefined): string[] | undefined {
   return out;
 }
 
+/** 一个 Agent 出生时最多带走多少条术语。超出的不带——术语表是给模型消歧用的，
+ *  不是把整个本体塞进提示词。 */
+const MAX_COLLECTED_GLOSSARY = 40;
+/** 单条释义的取材上限，超出截断。 */
+const COLLECTED_DEFINITION_LENGTH = 300;
+
+/**
+ * 从用户的个人本体分组采集术语表与记忆引用。
+ *
+ * 术语来自**用户自己定义过的**分组标题与字段，不做 LLM 抽取、不编造释义——
+ * 一个 Agent 出生时该知道的「KSTAR 在这里指什么」，只能是用户已经写下来的那个
+ * 意思，不能是模型现编的。取不到内容的分组直接跳过，不用标题硬凑一条空释义。
+ *
+ * 术语表存的是文本而非引用，这是 `memoryRefs` 那条「只记 id」纪律的**有意例外**：
+ * 术语的价值正在于「出生那一刻它指什么」，跟着本体改动漂移就失去了消歧作用，
+ * 与能力包冻结资产版本是同一个道理。
+ */
+export async function collectAgentBirthContext(userId: string): Promise<{
+  glossary: AgentGlossaryEntry[];
+  memoryRefs: string[];
+}> {
+  const groupsFeature = await import('./personal_ontology_groups');
+  let groups;
+  try {
+    groups = await groupsFeature.listGroups(userId);
+  } catch {
+    return { glossary: [], memoryRefs: [] };
+  }
+
+  const glossary: AgentGlossaryEntry[] = [];
+  const memoryRefs: string[] = [];
+  for (const group of groups) {
+    if (!safeId(group.group_id)) continue;
+    memoryRefs.push(group.group_id);
+    if (glossary.length >= MAX_COLLECTED_GLOSSARY) continue;
+
+    const term = typeof group.title === 'string' ? group.title.trim() : '';
+    if (!term) continue;
+    let definition = '';
+    try {
+      const content = await groupsFeature.readGroupContent(userId, group.group_id);
+      if (content.ok && content.content) {
+        const parsed = groupsFeature.parseGroupContent(content.content);
+        const fieldParts = Object.entries(parsed.fields)
+          .map(([field, values]) => `${field}：${values.map((v) => v.value).join('、')}`);
+        definition = [...fieldParts, ...parsed.entries].join('；').replace(/\s+/g, ' ').trim();
+      }
+    } catch {
+      definition = '';
+    }
+    // 没有实际内容就不收——宁可术语表短，也不要一堆只有标题的空壳。
+    if (!definition) continue;
+    glossary.push({
+      term,
+      definition: definition.slice(0, COLLECTED_DEFINITION_LENGTH),
+    });
+  }
+
+  return { glossary, memoryRefs };
+}
+
 export function agentInheritanceFile(userId: string, agentId: string): string {
   if (!safeId(agentId)) throw new Error('invalid agent id');
   return path.join(agentDir(userId, agentId), 'inheritance.json');

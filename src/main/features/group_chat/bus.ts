@@ -5359,6 +5359,8 @@ export async function _buildActiveSharedTaskContextBlockForTest(
 
 /** 一次注入多少条继承的认知。超出的不静默丢弃，块尾会写明省略了几条。 */
 const MAX_INHERITED_ASSETS_IN_PROMPT = 20;
+/** 术语表进提示的条数上限。 */
+const MAX_INHERITED_GLOSSARY_IN_PROMPT = 30;
 
 /**
  * 记一张 ContextReuseReceipt：这份出生能力包被真实注入了哪个会话、带了哪几条、
@@ -5470,7 +5472,16 @@ async function buildInheritedCognitionBlock(
       );
     }
 
-    if (!usable.length) return "";
+    // 术语表单独成段：它解决的是「被问到前序项目的专有名词只能瞎猜」，
+    // 和认知资产是两回事——即使一条资产都没带上，术语该给还得给。
+    const glossaryLines = (inheritance.glossary ?? [])
+      .slice(0, MAX_INHERITED_GLOSSARY_IN_PROMPT)
+      .map((entry) => `- ${entry.term}: ${entry.definition}`);
+    const glossaryBlock = glossaryLines.length
+      ? `\n\n### Inherited glossary\nTerms as the user defined them when you were created. Use these meanings; do not\nre-interpret them from general knowledge.\n\n<inherited-glossary>\n${glossaryLines.join("\n")}\n</inherited-glossary>`
+      : "";
+
+    if (!usable.length) return glossaryBlock.trim();
     const shown = usable.slice(0, MAX_INHERITED_ASSETS_IN_PROMPT);
     const omitted = usable.length - shown.length;
     if (omitted > 0) {
@@ -5501,7 +5512,7 @@ silently ignoring it.
 
 <inherited-cognition>
 ${shown.join("\n")}
-</inherited-cognition>${notes.length ? `\n${notes.join(" ")}` : ""}`;
+</inherited-cognition>${notes.length ? `\n${notes.join(" ")}` : ""}${glossaryBlock}`;
   } catch (err) {
     log.warn(
       `inherited cognition prompt injection failed agent=${agentId}: ${(err as Error).message}`,
