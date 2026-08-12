@@ -76,7 +76,7 @@
       ? `<div class="chat-recall-projection-actions"><button type="button" class="btn btn-primary btn-sm" data-recall-projection-confirm="1">${_escape(_label('recall.projection.confirm_assets', 'Confirm candidates'))}</button></div>`
       : '';
     host.innerHTML = `<div class="chat-recall-projection-head"><div><strong>${_escape(_label('recall.projection.title', 'Preload candidates'))}</strong><small>${_escape(card?.purpose || '')}</small></div><span class="chat-recall-projection-status">${_escape(_statusLabel(card?.status))}</span></div>
-      <div class="chat-recall-projection-summary">${_escape(card?.summary?.text || _label('recall.projection.summary', '{count} preload candidates.', { count: assets.length }))}</div>
+      <div class="chat-recall-projection-summary">${_escape(_label('recall.projection.summary', '{count} preload candidates.', { count: assets.length }))}</div>
       <div class="chat-recall-projection-section"><div class="chat-recall-projection-section-title">${_escape(_label('recall.projection.included_assets', 'Preload candidates'))}</div>${assets.length ? assets.map((asset) => _assetRow(asset, editable)).join('') : `<div class="chat-recall-projection-empty">${_escape(_label('recall.projection.no_included_assets', 'No preload candidates selected.'))}</div>`}</div>
       ${editable ? `<div class="chat-recall-projection-section"><div class="chat-recall-projection-section-title">${_escape(_label('recall.projection.add_assets', 'Add candidate'))}</div>${availableRows}</div>` : `<div class="chat-recall-projection-locked">${_escape(_label('recall.projection.locked', 'These preload candidates are locked.'))}</div>`}
       ${actions}

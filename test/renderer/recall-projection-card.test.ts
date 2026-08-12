@@ -181,10 +181,24 @@ describe('recall projection card renderer', () => {
     });
   });
 
+  it('uses localized candidate counts instead of the backend English summary text', async () => {
+    const { context, host } = loadModule(async (channel) => {
+      if (channel === 'recall.projections.card') return { ok: true, card: previewCard };
+      if (channel === 'recall.projections.availableAssets') return { ok: true, assets: [] };
+      return { ok: true };
+    });
+
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
+
+    expect(host.innerHTML).not.toContain('Found 1 asset');
+    expect(host.innerHTML).toContain('1 preload candidates.');
+  });
+
   it('conversation renderer mounts Recall projection cards carried by assistant messages', () => {
     const source = fs.readFileSync(path.join(ROOT, 'src/renderer/modules/conversation.js'), 'utf8');
     expect(source).toContain('message.recall_projection_card');
     expect(source).toContain('window.mountRecallProjectionCard');
+    expect(source).toContain('recallProjectionFallback.hidden = true');
   });
 
 });
