@@ -18,8 +18,6 @@ const inboundLocks = new Map<string, Mutex>();
 const deliveryLocks = new Map<string, Mutex>();
 const pendingInbound = new Map<string, Set<string>>();
 const pendingDeliveries = new Map<string, Set<string>>();
-const EMPTY_INBOUND: MessagingInboundLedgerFile = { version: 1, entries: {} };
-const EMPTY_DELIVERY: MessagingDeliveryLedgerFile = { version: 1, entries: {} };
 const MAX_DELIVERY_TEXT_LENGTH = 12_000;
 const MAX_DELIVERY_IDEMPOTENCY_KEY_LENGTH = 160;
 /** Card JSON replay cap: touchpoint cards are small, and the ledger is a
@@ -104,7 +102,10 @@ function clearPending(entries: Map<string, Set<string>>, uid: string, key: strin
 }
 
 function normalizeInbound(raw: Partial<MessagingInboundLedgerFile>): MessagingInboundLedgerFile {
-  if (raw.version !== 1 || !raw.entries || typeof raw.entries !== 'object') return { ...EMPTY_INBOUND };
+  // Fresh containers on every fallback: spreading the shared EMPTY constant
+  // keeps the same entries reference, leaking writes into later reads of
+  // missing files (same class of bug as touchpoints ledger).
+  if (raw.version !== 1 || !raw.entries || typeof raw.entries !== 'object') return { version: 1, entries: {} };
   const entries: Record<string, InboundLedgerEntry> = {};
   for (const [key, value] of Object.entries(raw.entries)) {
     const candidate = value as InboundLedgerEntry;
@@ -132,7 +133,7 @@ function normalizeInbound(raw: Partial<MessagingInboundLedgerFile>): MessagingIn
 }
 
 function normalizeDelivery(raw: Partial<MessagingDeliveryLedgerFile>): MessagingDeliveryLedgerFile {
-  if (raw.version !== 1 || !raw.entries || typeof raw.entries !== 'object') return { ...EMPTY_DELIVERY };
+  if (raw.version !== 1 || !raw.entries || typeof raw.entries !== 'object') return { version: 1, entries: {} };
   const entries: Record<string, DeliveryLedgerEntry> = {};
   for (const [key, value] of Object.entries(raw.entries)) {
     const candidate = value as DeliveryLedgerEntry;
