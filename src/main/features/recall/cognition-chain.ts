@@ -1,24 +1,32 @@
-/** 一条认知从哪来、走到了哪一段。
+/** 一条认知的履历与证据。
  *
- *  链路是 `Source → Candidate → Asset → Capability Pack → Reuse`。五段各有各的
- *  存储（候选与资产在 recall/，能力包在 agent 出生快照里，回执在 p3394/），
- *  此前没有贯穿的查询入口——用户问「我这条判断到底沉淀下来没有、被用过没有」
- *  没人答得上。
+ *  **这不是流程完成度。** 底下确实有 `Source → Candidate → Asset →
+ *  Capability Pack → Reuse` 这条实现链路，但对用户呈现的是一份履历：
+ *  这条判断从哪来、成了什么、谁带着它、真用过几次、哪几次没用上为什么。
+ *  一条只在两个智能体里躺着、还没被任务带入的认知，不是「五步只走了三步」，
+ *  它就是一条还没被用过的认知——这两种说法给用户的暗示完全不同。
  *
- *  两条纪律：
+ *  由此来的三条纪律：
  *
- *  1. **只报事实，不下结论。** 每段返回的是发生过什么、什么时候、多少次，
- *     不返回「这条资产很稳」这类系统判断。用户自己看 6 次任务 3 类场景，
- *     比看一个形容词有用。
- *  2. **未达到 ≠ 失败。** 一条刚沉淀的资产还没进过任何能力包，是正常的
- *     「还没走到」，不是出错。所以段状态区分 `reached` / `not_reached`，
- *     调用方不得把 `not_reached` 渲染成红色错误。
+ *  1. **段名用用户语言。** `formation / settling / inheritance / use / evidence`，
+ *     不叫 pack / receipt。Capability Pack、ContextReuseReceipt 这些实现名
+ *     只能出现在开发者详情里，用户层看到的是「进入了哪些智能体」「实际用过几次」。
+ *  2. **状态词避开进度语义。** 用 `happened` / `not_yet`，不用
+ *     completed / pending —— 后者暗示欠着一步没做。调用方不得把 `not_yet`
+ *     渲染成红色或警告。
+ *  3. **只报事实，不下结论。** 给「在 4 次任务中实际带入」这种用户自己能数的数，
+ *     不给「这条很稳」。未带入的次数要带原因，沉默比说错更伤信任。
  */
 
 import type { CognitionSourceRef } from './source-service';
 
-export type ChainStage = 'source' | 'candidate' | 'asset' | 'pack' | 'reuse';
-export type ChainSegmentStatus = 'reached' | 'not_reached';
+/** 用户层的五段命名。刻意不叫 pack / receipt——那是实现名，
+ *  用户看到的是「进入了哪些智能体」「实际用过几次」。 */
+export type ChainStage = 'formation' | 'settling' | 'inheritance' | 'use' | 'evidence';
+
+/** 段是否已经发生过。命名刻意避开 completed/pending 一类进度词：
+ *  这是一份履历，不是一条要走满的流程。没发生就是还没发生，不是欠着。 */
+export type ChainSegmentStatus = 'happened' | 'not_yet';
 
 export interface ChainSegment {
   stage: ChainStage;
@@ -31,6 +39,14 @@ export interface ChainSegment {
   detail?: string;
 }
 
+/** 某次本来该带上、结果没带上的记录。用户问「为什么这次没用我这条」时，
+ *  答案必须是具体原因，不能是沉默。 */
+export interface ChainWithheldEntry {
+  /** 撤销 / 暂停 / 资产已删 / 因长度截断。 */
+  reason: string;
+  at: string;
+}
+
 export interface CognitionChainView {
   assetId?: string;
   candidateId?: string;
@@ -39,6 +55,12 @@ export interface CognitionChainView {
   /** 资产当前状态，撤销/暂停要在追溯里看得见。 */
   assetStatus?: 'active' | 'paused' | 'revoked';
   assetVersion?: string;
+  /** 带走这条认知的智能体 id。 */
+  carriedByAgentIds: string[];
+  /** 实际把它带进去的会话数。 */
+  usedInSessions: number;
+  /** 没带上的次数与原因。 */
+  withheld: ChainWithheldEntry[];
   segments: ChainSegment[];
 }
 
@@ -49,7 +71,7 @@ function segment(
 ): ChainSegment {
   return {
     stage,
-    status: reached ? 'reached' : 'not_reached',
+    status: reached ? 'happened' : 'not_yet',
     ...(extra.at ? { at: extra.at } : {}),
     ...(extra.count !== undefined ? { count: extra.count } : {}),
     ...(extra.detail ? { detail: extra.detail } : {}),
@@ -95,9 +117,20 @@ export async function traceCognitionChainByAsset(
   const packs = (await inheritance.listAgentInheritance(userId))
     .filter((record) => record.capabilityPack.assets.some((ref) => ref.assetId === assetId));
 
-  // 复用：扫回执，看这条资产真的被带进过哪些会话。
-  const reuses = (await receipts.listReceipts(userId))
-    .filter((receipt) => receipt.reusedRefs.some((ref) => refMentionsAsset(ref, assetId)));
+  // 实际使用与「本可用却没带上」：同一批回执，两个方向都要看。
+  const allReceipts = await receipts.listReceipts(userId);
+  const uses = allReceipts.filter((r) => r.reusedRefs.some((ref) => refMentionsAsset(ref, assetId)));
+  const withheld: ChainWithheldEntry[] = [];
+  for (const receipt of allReceipts) {
+    for (const ref of receipt.omittedRefs) {
+      if (!refMentionsAsset(ref, assetId)) continue;
+      // 引用形如 `asset:<id>@v<n>:<reason>`，尾段才是原因。
+      const reason = ref.split(':').slice(3).join(':') || ref.split(':').pop() || 'unknown';
+      withheld.push({ reason, at: receipt.createdAt });
+    }
+  }
+
+  const carriedByAgentIds = packs.map((record) => record.agentId);
 
   return {
     assetId,
@@ -105,28 +138,40 @@ export async function traceCognitionChainByAsset(
     sourceRefs,
     assetStatus: asset.status,
     assetVersion: asset.version,
+    carriedByAgentIds,
+    usedInSessions: uses.length,
+    withheld,
     segments: [
-      segment('source', sourceRefs.length > 0, {
+      // 形成：这条判断是从哪些真实材料里长出来的。
+      segment('formation', sourceRefs.length > 0, {
         count: sourceRefs.length,
-        detail: sourceRefs.length ? `${sourceRefs.length} 条来源证据` : undefined,
-      }),
-      segment('candidate', Boolean(candidate), {
         ...(candidate ? { at: candidate.createdAt } : {}),
-        ...(candidate ? {} : { detail: '候选记录已不存在，溯源链断了一节' }),
+        detail: sourceRefs.length ? `来自 ${sourceRefs.length} 条来源` : undefined,
       }),
-      segment('asset', true, {
+      // 沉淀：它成了一条正式认知，现在是第几版。
+      segment('settling', true, {
         at: asset.createdAt,
-        detail: `第 ${asset.version} 版${asset.status === 'active' ? '' : ` · 已${asset.status === 'paused' ? '暂停' : '撤销'}`}`,
+        detail: `当前第 ${asset.version} 版${asset.status === 'active' ? '' : ` · 已${asset.status === 'paused' ? '暂停' : '撤销'}`}`,
       }),
-      segment('pack', packs.length > 0, {
-        count: packs.length,
+      // 继承：哪些智能体带着它出生。
+      segment('inheritance', carriedByAgentIds.length > 0, {
+        count: carriedByAgentIds.length,
         ...(packs.length ? { at: packs[packs.length - 1].createdAt } : {}),
-        detail: packs.length ? `进入 ${packs.length} 个智能体的能力包` : '还没进过任何能力包',
+        detail: carriedByAgentIds.length
+          ? `已进入 ${carriedByAgentIds.length} 个智能体`
+          : '还没有智能体带着它',
       }),
-      segment('reuse', reuses.length > 0, {
-        count: reuses.length,
-        ...(reuses.length ? { at: reuses[reuses.length - 1].createdAt } : {}),
-        detail: reuses.length ? `被 ${reuses.length} 次任务真实带入` : '还没有复用记录',
+      // 使用：真的在任务里被带进去过几次。
+      segment('use', uses.length > 0, {
+        count: uses.length,
+        ...(uses.length ? { at: uses[uses.length - 1].createdAt } : {}),
+        detail: uses.length ? `在 ${uses.length} 次任务中实际带入` : '还没有在任务中用过',
+      }),
+      // 证据：没带上的那些次，各是什么原因。
+      segment('evidence', withheld.length > 0, {
+        count: withheld.length,
+        ...(withheld.length ? { at: withheld[0].at } : {}),
+        detail: withheld.length ? `${withheld.length} 次未带入，均有记录原因` : '没有未带入记录',
       }),
     ],
   };

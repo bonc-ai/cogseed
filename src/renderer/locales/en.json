@@ -3314,5 +3314,13 @@
   "agents.inheritance_absent": "This agent was created before inheritance was recorded.",
   "agents.inheritance_empty": "Nothing was available to inherit at creation time.",
   "agents.inheritance_version": "v{v}",
-  "agents.inheritance_summary": "{a} judgments · {g} terms · {x} withheld"
+  "agents.inheritance_summary": "{a} judgments · {g} terms · {x} withheld",
+  "cognition.resume.formation": "Formed",
+  "cognition.resume.settling": "Settled",
+  "cognition.resume.inheritance": "Carried",
+  "cognition.resume.use": "Used",
+  "cognition.resume.evidence": "Evidence",
+  "cognition.resume.withheld_reason": "Withheld",
+  "cognition.resume.dev": "Developer details",
+  "cognition.resume.fresh": "Just settled — no use yet"
 }

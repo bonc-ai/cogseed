@@ -322,6 +322,8 @@
       + `<h2>${escapeHtml(asset.title)}</h2>`
       + `<div class="cognition-status cognition-status-${escapeHtml(asset.stage)}"><i></i>${escapeHtml(meta.state)} · ${escapeHtml(meta.description)}</div>`
       + `<p class="cognition-summary">${escapeHtml(asset.summary)}</p>`
+      // 履历与证据。内容异步填充（见 cognition.js hydrateResume），这里只留槽位。
+      + `<div class="cognition-resume" data-cognition-resume="${escapeHtml(asset.id)}"></div>`
       + renderInvalidation(asset)
       + '<div class="cognition-metrics">'
       + `<div><strong>${evidence.length}</strong><span>${escapeHtml(text('cognition.metric.evidence', '有效证据'))}</span></div>`

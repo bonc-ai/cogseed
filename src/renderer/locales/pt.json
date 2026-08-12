@@ -3094,5 +3094,13 @@
   "agents.inheritance_absent": "Este agente foi criado antes do registro de herança.",
   "agents.inheritance_empty": "Nada disponível para herdar na criação.",
   "agents.inheritance_version": "v{v}",
-  "agents.inheritance_summary": "{a} julgamentos · {g} termos · {x} retidos"
+  "agents.inheritance_summary": "{a} julgamentos · {g} termos · {x} retidos",
+  "cognition.resume.formation": "Formação",
+  "cognition.resume.settling": "Consolidação",
+  "cognition.resume.inheritance": "Herdado",
+  "cognition.resume.use": "Uso",
+  "cognition.resume.evidence": "Evidência",
+  "cognition.resume.withheld_reason": "Retido",
+  "cognition.resume.dev": "Detalhes do desenvolvedor",
+  "cognition.resume.fresh": "Recém-consolidado — ainda sem uso"
 }

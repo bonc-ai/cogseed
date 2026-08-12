@@ -3094,5 +3094,13 @@
   "agents.inheritance_absent": "このエージェントの作成時には継承記録がありませんでした。",
   "agents.inheritance_empty": "作成時に継承できるものはありませんでした。",
   "agents.inheritance_version": "v{v}",
-  "agents.inheritance_summary": "{a} 件の判断 · {g} 件の用語 · {x} 件は除外"
+  "agents.inheritance_summary": "{a} 件の判断 · {g} 件の用語 · {x} 件は除外",
+  "cognition.resume.formation": "形成",
+  "cognition.resume.settling": "定着",
+  "cognition.resume.inheritance": "継承",
+  "cognition.resume.use": "使用",
+  "cognition.resume.evidence": "証拠",
+  "cognition.resume.withheld_reason": "未使用",
+  "cognition.resume.dev": "開発者向け詳細",
+  "cognition.resume.fresh": "定着したばかりで使用記録はまだありません"
 }

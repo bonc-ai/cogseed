@@ -3314,5 +3314,13 @@
   "agents.inheritance_absent": "这个智能体创建时还没有继承记录。",
   "agents.inheritance_empty": "创建时没有可继承的认知资产或术语。",
   "agents.inheritance_version": "第 {v} 版",
-  "agents.inheritance_summary": "{a} 条认知 · {g} 个术语 · {x} 条未带入"
+  "agents.inheritance_summary": "{a} 条认知 · {g} 个术语 · {x} 条未带入",
+  "cognition.resume.formation": "形成",
+  "cognition.resume.settling": "沉淀",
+  "cognition.resume.inheritance": "继承",
+  "cognition.resume.use": "使用",
+  "cognition.resume.evidence": "证据",
+  "cognition.resume.withheld_reason": "未带入",
+  "cognition.resume.dev": "开发者详情",
+  "cognition.resume.fresh": "刚沉淀，还没有使用记录"
 }
