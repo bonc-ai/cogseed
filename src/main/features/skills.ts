@@ -49,7 +49,7 @@ import {
 } from '../storage';
 import { invalidateSkills as invalidateCoreAgentSkills } from '../model/core-agent/skill-registry';
 import { readDisabledSets, setSkillEnabled } from './component_enabled';
-import { partitionSkillsByTrustDeep, topViolationOf } from './skill_reverify';
+import { partitionSkillsByTrustDeep, topViolationOf, isConventionRule } from './skill_reverify';
 import { listReceipts, skillPayloadHash, writeInstallReceipt, type SecurityReceipt } from './skill_trust';
 import { scanVerdictBlocksInstall } from './security/sentry-adapter';
 import { scanSkillDir, type SentryScanResult } from './security/sentry-adapter';
@@ -969,7 +969,14 @@ async function _overlaySkillSecurity(list: SkillListing[]): Promise<SkillListing
     // A receipt written before `topLevel` existed has no level, and is treated as
     // not notable rather than assumed severe — the next rescan fills it in.
     //
-    const notable = receipt.topLevel === 'EXTREME' || receipt.topLevel === 'MEDIUM';
+    // Convention rules are excluded by rule id, not by level — see
+    // `isConventionRule`. They are an authoring contract that fires at MEDIUM on
+    // most of the library, and letting them drive the badge would mark clean
+    // skills as "has findings", the exact failure the paragraph above exists to
+    // prevent. Belt and braces with `_decisionOf`: this also covers receipts
+    // written before that fix, which recorded `risk` for convention-only reports.
+    const notable = !isConventionRule(receipt.topRule || '')
+      && (receipt.topLevel === 'EXTREME' || receipt.topLevel === 'MEDIUM');
     const status = receipt.decision === 'risk' && notable ? 'risk' as const : 'verified' as const;
     return { ...s, security: { status, ...common } };
   });
@@ -1984,6 +1991,7 @@ async function _installSourceSkillRoots(
 ): Promise<ImportResult> {
   const reserved = new Set<string>();
   const createdIds: string[] = [];
+  const pendingSkeletons: { skillDir: string; skillId: string; name: string }[] = [];
   const createdSkills: CustomSkill[] = [];
   const single = sourceRoots.length === 1;
 
@@ -2005,17 +2013,13 @@ async function _installSourceSkillRoots(
       const rootFiles = _dropSourceMetaFiles(_filesForSourceSkillRoot(sourceRoot, files, sourceRoots));
       fs.rmSync(skillMetaFile(skillDir), { force: true });
       _copyImportedSkillFilesPreservingSource(skillDir, rootFiles);
-      // NSEAP skeleton conversion: auto-generate the missing standard
-      // artifacts as templates (appendix A "defaults are compliant");
-      // author-owned ★ files are left for the metadata-check chat.
-      try {
-        ensureNseapSkillSkeleton(skillDir, effectiveName);
-      } catch (err) {
-        log.warn('import-dir nseap skeleton generation failed', {
-          skill_id: created.id,
-          error_message: (err as Error).message,
-        });
-      }
+      // NSEAP skeleton generation is deferred until after the security scan —
+      // see the loop below. Doing it here diluted the verdict: the skeleton adds
+      // eight `references/*.md` templates, and measured on a fixture with
+      // `chmod 777` plus an env-driven POST the outcome moved from `restricted`
+      // to `pass` purely because clean files outnumbered the suspicious ones.
+      // The scan must judge what the user actually supplied.
+      pendingSkeletons.push({ skillDir, skillId: created.id, name: effectiveName });
       writeSkillOrkasMetaFullSync(skillDir, _sourceSkillInstallMeta(sourceRoot, sourceSkillMd));
 
       const fresh = await getCustomSkill(created.id);
@@ -2069,6 +2073,7 @@ async function _installSourceSkillRoots(
   // The reported verdict is the worst one seen, so a batch containing a
   // `restricted` root is not summarized to the user as a clean pass.
   let worstScan: SentryScanResult | undefined;
+  const admitted: { skillId: string; scan: SentryScanResult }[] = [];
   for (const skill of createdSkills) {
     const scan = await _scanImportedSkill(customSkillDir(skill.id));
     // Same consent as the quality gate above. Gating them differently would let
@@ -2077,14 +2082,40 @@ async function _installSourceSkillRoots(
     if (!acceptRedFlagRisk && scanVerdictBlocksInstall(scan.outcome)) {
       return _rejectImportForSecurity(scan, createdIds);
     }
-    // Recorded per skill, after the reject check: only verdicts that actually
-    // admitted the skill become receipts.
-    await _recordImportReceipt(skill.id, customSkillDir(skill.id), scan);
+    admitted.push({ skillId: skill.id, scan });
     if (!worstScan || (scan.outcome === 'restricted' && worstScan.outcome !== 'restricted')) {
       worstScan = scan;
     }
   }
 
+  // Skeleton generation sits between the scan and the receipt, and both sides of
+  // that ordering are load-bearing:
+  //
+  //  - After the scan, because the skeleton's eight `references/*.md` templates
+  //    otherwise dilute the verdict. Measured: a fixture with `chmod 777` and an
+  //    env-driven POST moved from `restricted` to `pass` once the templates were
+  //    present, so a payload could be laundered by padding a skill with harmless
+  //    files.
+  //  - Before the receipt, because the receipt's baseline hash covers the whole
+  //    tree. Measured: the hash differs before and after generation, so recording
+  //    it first would make every imported skill read as tampered on the next
+  //    verification.
+  for (const pending of pendingSkeletons) {
+    try {
+      ensureNseapSkillSkeleton(pending.skillDir, pending.name);
+    } catch (err) {
+      log.warn('import-dir nseap skeleton generation failed', {
+        skill_id: pending.skillId,
+        error_message: (err as Error).message,
+      });
+    }
+  }
+
+  // Receipts last: only verdicts that admitted the skill become receipts, and the
+  // hash must describe the tree as it will be found on disk.
+  for (const entry of admitted) {
+    await _recordImportReceipt(entry.skillId, customSkillDir(entry.skillId), entry.scan);
+  }
 
   log.info('created-from-dir direct skill install', {
     skill_count: createdSkills.length,

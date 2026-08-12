@@ -41,11 +41,31 @@ export interface ReverifyResult {
 
 function _decisionOf(report: { ok: boolean; violations: Array<{ rule: string }> }): ReceiptDecision {
   if (!report.ok) return 'blocked';
-  return report.violations.length ? 'risk' : 'pass';
+  // Convention-only findings are not risk. Without this, develop's NSEAP ruleset
+  // turns every skill that predates the standard into `risk`, and a badge that
+  // flags the entire library teaches users to ignore it — which would leave the
+  // genuine cases unread.
+  return report.violations.some((v) => !isConventionRule(v.rule)) ? 'risk' : 'pass';
 }
 
 const _LEVEL_RANK: Record<string, number> = { EXTREME: 3, MEDIUM: 2, LOW: 1 };
 
+/**
+ * Authoring-convention rules, which describe completeness rather than safety.
+ *
+ * NSEAP requires standard artifacts of every skill ("declare `use_when`", "add an
+ * output contract"). Those fire at MEDIUM across nearly the whole existing
+ * library — measured, six of them on a fixture this suite calls CLEAN. A missing
+ * contract is a real authoring gap and the quality report lists it in full, but it
+ * is not a reason to tell the user a skill is a security risk.
+ *
+ * Kept as one predicate because two callers need the same answer: the decision
+ * (`pass` vs `risk`) and the ranking that picks which finding to name. Deriving it
+ * twice is how they would drift apart.
+ */
+export function isConventionRule(rule: string): boolean {
+  return String(rule || '').startsWith('nseap_');
+}
 
 /**
  * Highest-severity violation in a report.
@@ -62,7 +82,19 @@ export function topViolationOf(
   let best: { rule: string; level?: 'EXTREME' | 'MEDIUM' | 'LOW' } | null = null;
   let bestRank = -1;
   for (const v of violations) {
-    const rank = _LEVEL_RANK[String(v.level)] ?? 0;
+    // Convention rules lose ties to substantive ones. NSEAP findings ("declare
+    // use_when", "add an output contract") fire at MEDIUM on most of the library,
+    // so on a first-seen tie-break they would occupy `topRule` and hide a real
+    // MEDIUM security finding behind an authoring nit — measured with
+    // `nseap_trigger_missing` masking `no_raw_ip_or_suspicious_tld_endpoint`.
+    // Ranked below the same level rather than dropped: with nothing else present
+    // they are still the top finding, which is accurate.
+    // Convention rules lose ties to substantive ones, so a real MEDIUM finding is
+    // never hidden behind an authoring nit. Measured: `nseap_trigger_missing`
+    // masking `no_raw_ip_or_suspicious_tld_endpoint` at the same level.
+    // Scaled rather than penalised past zero so a convention-only report still
+    // reports its finding instead of looking empty.
+    const rank = (_LEVEL_RANK[String(v.level)] ?? 0) * 2 + (isConventionRule(v.rule) ? 0 : 1);
     if (rank > bestRank) {
       bestRank = rank;
       best = { rule: v.rule, ...(v.level ? { level: v.level as 'EXTREME' | 'MEDIUM' | 'LOW' } : {}) };

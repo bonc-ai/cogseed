@@ -502,4 +502,90 @@ describe('skill trust › deep re-verification', () => {
   }, 240_000);
 });
 
+/**
+ * Convention rules must not crowd out substantive findings.
+ *
+ * develop's NSEAP ruleset fires at MEDIUM on most of the existing library ("declare
+ * use_when", "add an output contract"). Those are completeness requirements, not
+ * safety ones, and they arrive in scan order — so on a naive first-seen tie-break
+ * they take `topRule` and the security badge ends up describing an authoring nit
+ * while a real MEDIUM finding sits behind it.
+ */
+describe('topViolationOf › convention rules lose ties', () => {
+  // Imported inside each test: this file mocks `skill_reverify` for the tampering
+  // suites, and a top-level static import would bypass that mock.
+  it('prefers a security finding over an NSEAP finding at the same level', async () => {
+    const { topViolationOf } = await import('../../../src/main/features/skill_reverify');
+    const top = topViolationOf([
+      { rule: 'nseap_trigger_missing', level: 'MEDIUM' },
+      { rule: 'no_raw_ip_or_suspicious_tld_endpoint', level: 'MEDIUM' },
+    ]);
 
+    expect(top?.rule).toBe('no_raw_ip_or_suspicious_tld_endpoint');
+  });
+
+  // Order-independent: the masking bug only showed up in one of the two orders.
+  it('prefers the security finding regardless of scan order', async () => {
+    const { topViolationOf } = await import('../../../src/main/features/skill_reverify');
+    const top = topViolationOf([
+      { rule: 'no_raw_ip_or_suspicious_tld_endpoint', level: 'MEDIUM' },
+      { rule: 'nseap_trigger_missing', level: 'MEDIUM' },
+    ]);
+
+    expect(top?.rule).toBe('no_raw_ip_or_suspicious_tld_endpoint');
+  });
+
+  // Severity still dominates: a convention rule must never outrank a higher level,
+  // nor be demoted below one.
+  it('keeps severity above the convention adjustment', async () => {
+    const { topViolationOf } = await import('../../../src/main/features/skill_reverify');
+    expect(topViolationOf([
+      { rule: 'nseap_trigger_missing', level: 'EXTREME' },
+      { rule: 'no_raw_ip_or_suspicious_tld_endpoint', level: 'MEDIUM' },
+    ])?.rule).toBe('nseap_trigger_missing');
+
+    expect(topViolationOf([
+      { rule: 'nseap_trigger_missing', level: 'MEDIUM' },
+      { rule: 'skill_meta_category_missing', level: 'LOW' },
+    ])?.rule).toBe('nseap_trigger_missing');
+  });
+
+  // With nothing else present a convention rule IS the top finding; reporting
+  // nothing would be a lie about an empty report.
+  it('still reports a convention rule when it is the only finding', async () => {
+    const { topViolationOf } = await import('../../../src/main/features/skill_reverify');
+    expect(topViolationOf([{ rule: 'nseap_trigger_missing', level: 'MEDIUM' }])?.rule)
+      .toBe('nseap_trigger_missing');
+  });
+});
+
+/**
+ * Convention findings must not read as security risk.
+ *
+ * develop's NSEAP ruleset requires standard artifacts of every skill and fires at
+ * MEDIUM on nearly all existing content — six findings on this file's own CLEAN
+ * fixture. Reporting that as `risk` would mark the whole library, and a badge that
+ * flags everything is one users learn to ignore, leaving the real cases unread.
+ */
+describe('reverify › convention findings are not risk', () => {
+  it('decides pass for a skill whose only findings are NSEAP contracts', () => {
+    mkSkill('conv', CLEAN);
+
+    // The fixture trips six nseap_* rules and nothing else.
+    const res = reverifySkill(UID, 'conv');
+
+    expect(res.decision).toBe('pass');
+  });
+
+  // The other half: a genuine finding alongside convention noise still reports.
+  it('still decides risk when a substantive finding is present', () => {
+    mkSkill('mixed', {
+      ...CLEAN,
+      'scripts/net.py': 'import requests\nrequests.post("http://10.1.2.3/x", json={})\n',
+    });
+
+    const res = reverifySkill(UID, 'mixed');
+
+    expect(res.decision).toBe('risk');
+  });
+});
