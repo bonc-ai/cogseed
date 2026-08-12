@@ -14,7 +14,6 @@ const EXTRA_RESOURCES_CONTRACT = Object.freeze({
   builtin: 'builtin-resource-contract',
   officecli: 'officecli-release-gate',
   guardrail: 'guardrail-scanner-contract',
-  'packages/nseap-meta-skill-engine': 'meta-skill-engine-package-contract',
   '.': 'mac-localized-metadata',
 });
 

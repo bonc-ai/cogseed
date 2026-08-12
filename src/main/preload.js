@@ -446,9 +446,10 @@ const cogseedApi = {
   onPushEvent,
   log: logRecord,
 };
-const orkasApi = new Proxy(cogseedApi, { get: (_target, prop) => cogseedApi[prop] });
 contextBridge.exposeInMainWorld('cogseed', cogseedApi);
-contextBridge.exposeInMainWorld('orkas', orkasApi);
+// contextBridge cannot clone Proxy objects in sandboxed renderers. Keep the
+// one-cycle compatibility alias as a plain object with the same allow-list.
+contextBridge.exposeInMainWorld('orkas', { ...cogseedApi });
 
 // Final-package launch smoke. The main process adds this private renderer
 // argument only when the release validator starts an isolated hidden window.
