@@ -36,6 +36,8 @@ export interface MessagingConnectionSummary {
   ownerLabel?: string;
   ownerMaskedId?: string;
   diagnosticCode?: string;
+  /** 实例实时状态 kind（connected/connecting/error/disconnected）：connecting 是瞬态，渲染层以 inProgress 表达 */
+  statusKind?: string;
 }
 
 export interface AuthorizationSummary {

@@ -143,6 +143,17 @@ describe('touchpoint settings model', () => {
     expect(model.issues).toEqual([]);
   });
 
+  it('fallback: connecting 瞬态 → connection inProgress 且不发连接 issue', () => {
+    // overall 缺失走本地兜底时，statusKind=connecting 同样按瞬态处理：
+    // connection 归 missing + inProgress=true，不产生「连接机器人」待办卡。
+    const model = deriveTouchpointSettingsModel(dashboard({
+      messaging: { instanceId: 'feishu-1', botConnected: false, ownerConfigured: true, statusKind: 'connecting' },
+    }), []);
+    expect(model.chain.connection.state).toBe('missing');
+    expect(model.chain.connection.inProgress).toBe(true);
+    expect(model.issues.filter((issue: { step: string }) => issue.step === 'connection')).toEqual([]);
+  });
+
   it('regression: authorized with empty identityLabel shows 已连接账号, never 未授权', () => {
     const model = deriveTouchpointSettingsModel(dashboard({
       messaging: { instanceId: 'feishu-1', botConnected: true, ownerConfigured: true },

@@ -17,7 +17,11 @@
 
   // ── 本地兜底推导（overall 缺失时，如旧数据/旧测试 fixture）──────────────
   function fallbackChain(dashboard, botConnected, authorized, hasResources, syncState) {
-    const connection = !botConnected ? (dashboard.messaging && dashboard.messaging.instanceId ? 'broken' : 'missing') : 'ok';
+    // 与后端 chainConnection 对齐：仅 error 态判 broken；connecting/disconnected/未配置
+    // 一律 missing（connecting 由渲染层读 statusKind 特判 inProgress，不产生待办）。
+    const connection = !botConnected
+      ? (dashboard.messaging && dashboard.messaging.statusKind === 'error' ? 'broken' : 'missing')
+      : 'ok';
     const authKind = dashboard.authorization && dashboard.authorization.kind;
     const authorization = !authorized
       ? (authKind === 'needs_reauth' || authKind === 'revoked' || authKind === 'error' ? 'broken' : 'missing')
@@ -32,7 +36,8 @@
   function fallbackOverall(dashboard, botConnected, authorized, hasResources, syncState) {
     const chain = fallbackChain(dashboard, botConnected, authorized, hasResources, syncState);
     const issues = [];
-    if (chain.connection === 'missing') issues.push({ severity: 'warning', step: 'connection', reason: 'not_configured', actionId: 'connection.connect' });
+    // connecting 是瞬态：不发「连接机器人」卡（渲染层以 inProgress 显示处理中）
+    if (chain.connection === 'missing' && dashboard.messaging && dashboard.messaging.statusKind !== 'connecting') issues.push({ severity: 'warning', step: 'connection', reason: 'not_configured', actionId: 'connection.connect' });
     else if (chain.connection === 'broken') issues.push({ severity: 'error', step: 'connection', reason: 'bot_error', actionId: 'connection.connect' });
     if (chain.authorization === 'broken') issues.push({ severity: 'error', step: 'authorization', reason: 'token_expired', actionId: 'authorization.reauth' });
     else if (chain.authorization === 'missing' && chain.connection === 'ok') issues.push({ severity: 'warning', step: 'authorization', reason: 'not_configured', actionId: 'authorization.begin' });
@@ -77,7 +82,8 @@
     const overall = data.overall || fallbackOverall(data, botConnected, authorized, hasResources, sync.state);
     const syncInProgress = ['discovering', 'syncing', 'extracting'].includes(sync.state);
     const chain = {
-      connection: { state: overall.chain.connection, inProgress: false },
+      // connecting 是瞬态：以 inProgress 表达"处理中"（overall 与 fallback 路径统一按 data.messaging.statusKind 判定）
+      connection: { state: overall.chain.connection, inProgress: messaging.statusKind === 'connecting' },
       authorization: { state: overall.chain.authorization, inProgress: authorizing },
       delivery: { state: overall.chain.delivery, inProgress: syncInProgress },
     };

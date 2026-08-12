@@ -100,14 +100,34 @@ describe('deriveOverall', () => {
   });
 
   it('broken 优先不叠加：connection broken + authorization missing → 仅 connection error 卡', () => {
-    // connection 环节 broken（instanceId 存在但 botConnected=false）已产生 error 卡；
+    // connection 环节 broken（statusKind=error 且 botConnected=false）已产生 error 卡；
     // authorization missing 的引导卡前置要求 connection === ok，broken 时不叠加，
     // 避免「机器人都没就绪还让用户去授权」的双卡噪音。
     const overall = deriveOverall(dashboard({
-      messaging: { instanceId: 'feishu-1', botConnected: false, ownerConfigured: false },
+      messaging: { instanceId: 'feishu-1', botConnected: false, ownerConfigured: false, statusKind: 'error' },
     }));
     expect(overall.chain.connection).toBe('broken');
     expect(overall.chain.authorization).toBe('missing');
+    expect(overall.issues).toEqual([
+      { severity: 'error', step: 'connection', reason: 'bot_error', actionId: 'connection.connect' },
+    ]);
+  });
+
+  it('connecting 瞬态 → connection missing 且不发连接卡（渲染层以 inProgress 表达）', () => {
+    // 启动/重连窗口内实例真实状态是 connecting：不是错误也不是未配置，
+    // 归 missing 且不发「连接机器人」卡，避免已配置用户被误导去重新扫码。
+    const overall = deriveOverall(dashboard({
+      messaging: { instanceId: 'feishu-1', botConnected: false, ownerConfigured: true, statusKind: 'connecting' },
+    }));
+    expect(overall.chain.connection).toBe('missing');
+    expect(overall.issues.filter((issue) => issue.step === 'connection')).toEqual([]);
+  });
+
+  it('statusKind=error → connection broken + bot_error 卡', () => {
+    const overall = deriveOverall(dashboard({
+      messaging: { instanceId: 'feishu-1', botConnected: false, ownerConfigured: false, statusKind: 'error' },
+    }));
+    expect(overall.chain.connection).toBe('broken');
     expect(overall.issues).toEqual([
       { severity: 'error', step: 'connection', reason: 'bot_error', actionId: 'connection.connect' },
     ]);
@@ -134,8 +154,8 @@ describe('deriveOverall', () => {
       { messaging: { instanceId: 'feishu-1', botConnected: true, ownerConfigured: true } },
       // ok/broken/missing：令牌过期
       { messaging: { instanceId: 'feishu-1', botConnected: true, ownerConfigured: true }, authorization: { kind: 'needs_reauth', providerId: 'feishu' } },
-      // broken/missing/missing：实例未就绪
-      { messaging: { instanceId: 'feishu-1', botConnected: false, ownerConfigured: false } },
+      // broken/missing/missing：实例 error 态未就绪
+      { messaging: { instanceId: 'feishu-1', botConnected: false, ownerConfigured: false, statusKind: 'error' } },
       // ok/ok/broken：同步失败
       { messaging: { instanceId: 'feishu-1', botConnected: true, ownerConfigured: true }, authorization: { kind: 'connected', providerId: 'feishu' }, resources: { discovered: 2, selected: 2, ready: 1, failed: 1, unsupported: 0 }, sync: { state: 'partial_failure', lastRunAt: '2026-08-12T00:00:00.000Z', nextRunAt: null, processed: 2, failed: 1 } },
     ];

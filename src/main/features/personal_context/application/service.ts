@@ -70,7 +70,7 @@ function validateUserId(userId: string): string {
 export function demoDashboard(): PersonalContextDashboard {
   const dashboard: PersonalContextDashboard = {
     mode: 'demo',
-    messaging: { instanceId: 'demo-feishu', botConnected: true, ownerConfigured: true, ownerLabel: '演示用户' },
+    messaging: { instanceId: 'demo-feishu', botConnected: true, ownerConfigured: true, ownerLabel: '演示用户', statusKind: 'connected' },
     authorization: { kind: 'connected', providerId: 'feishu', identityLabel: '演示用户' },
     resources: { discovered: 4, selected: 3, ready: 3, failed: 0, unsupported: 0 },
     sync: { state: 'ready', lastRunAt: '2026-08-10T08:00:00.000Z', nextRunAt: null, processed: 4, failed: 0 },
@@ -132,6 +132,7 @@ async function buildRealDashboard(userId: string, deps: PersonalContextApplicati
       ownerConfigured: Boolean(feishu?.ownerConfigured),
       ...(feishu?.ownerLabel ? { ownerLabel: feishu.ownerLabel } : {}),
       ...(feishu?.ownerMaskedId ? { ownerMaskedId: feishu.ownerMaskedId } : {}),
+      ...(feishu?.statusKind ? { statusKind: feishu.statusKind } : {}),
       ...(!feishu ? { diagnosticCode: 'feishu_bot_not_configured' } : {}),
     },
     authorization: {

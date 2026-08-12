@@ -9,12 +9,14 @@ import type { ChainState, DashboardIssue, DashboardOverall, PersonalContextDashb
 
 /**
  * 连接环节：ok ⇔ 有已启用实例且归属已配置（botConnected 语义）；
- * broken = 有实例但未就绪；missing = 无实例。
+ * broken = 实例 error 态；missing = 其余（未配置/connecting/disconnected——
+ * connecting 是瞬态，渲染层读 statusKind 特判"处理中"，不产生待办）。
  */
 function chainConnection(dashboard: PersonalContextDashboard): ChainState {
   const { messaging } = dashboard;
   if (messaging.botConnected === true && messaging.ownerConfigured === true) return 'ok';
-  return messaging.instanceId ? 'broken' : 'missing';
+  if (messaging.statusKind === 'error') return 'broken';
+  return 'missing'; // 含 connecting/disconnected：渲染层以 inProgress 表达"处理中"
 }
 
 /**
@@ -49,7 +51,7 @@ export function deriveOverall(dashboard: PersonalContextDashboard): DashboardOve
     delivery: chainDelivery(dashboard),
   };
   const issues: DashboardIssue[] = [];
-  if (chain.connection === 'missing') {
+  if (chain.connection === 'missing' && dashboard.messaging.statusKind !== 'connecting') {
     issues.push({ severity: 'warning', step: 'connection', reason: 'not_configured', actionId: 'connection.connect' });
   } else if (chain.connection === 'broken') {
     issues.push({ severity: 'error', step: 'connection', reason: 'bot_error', actionId: 'connection.connect' });
