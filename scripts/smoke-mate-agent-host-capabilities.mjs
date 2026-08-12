@@ -18,8 +18,8 @@ process.env.ORKAS_MATE_RUNTIME_TEST_HOST_ECHO = '1';
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 let service;
 try {
-  const { createRuntimeWorkerService } = require('../src/main/features/mate_agent_runtime/worker-process.ts');
-  const { createMateHostToolRouter } = require('../src/main/features/mate_agent_backend/host-tool-router.ts');
+  const { createRuntimeWorkerService } = require('../src/main/features/cogseed_runtime/worker-process.ts');
+  const { createMateHostToolRouter } = require('../src/main/features/cogseed_backend/host-tool-router.ts');
   const calls = [];
   const router = createMateHostToolRouter({
     office: { run: async (name, input, scope) => { calls.push({ name, userId: scope.userId }); return { content: JSON.stringify({ office: input.path }) }; } },

@@ -1,5 +1,7 @@
 # 交接文档 · Meta-Skill 六页进化控制台
 
+> Archived from active worktree on 2026-08-10. The full implementation is preserved on branch `dev/archive-meta-skill-evolution-console` at `/Users/sudai/.config/codex/worktrees/Mate Agent/meta-skill-evolution-preserve`. The active worktree no longer carries the bundled Meta Skill Engine or standalone Evolution Console.
+
 > 日期：2026-07-28 · 分支：`integration/abc-meta-skill-engine`（领先 main 43 个提交）
 > 状态：全部完成并通过验证，**待用户本人合并 main**（未 push / 未 merge）。
 

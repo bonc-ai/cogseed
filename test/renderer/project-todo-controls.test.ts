@@ -50,7 +50,7 @@ describe('project to-do controls', () => {
       },
       window: {
         addEventListener() {},
-        orkas: {
+        cogseed: {
           async invoke(channel: string, payload: Record<string, unknown>) {
             invocations.push({ channel, payload });
             if (channel === 'projects.tasks.list') return { ok: true, tasks: [] };

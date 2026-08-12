@@ -82,9 +82,9 @@ function _termHasXterm() {
 function _termHasIpc() {
   return (
     typeof window !== 'undefined' &&
-    window.orkas &&
-    typeof window.orkas.invoke === 'function' &&
-    typeof window.orkas.stream === 'function'
+    window.cogseed &&
+    typeof window.cogseed.invoke === 'function' &&
+    typeof window.cogseed.stream === 'function'
   );
 }
 
@@ -186,7 +186,7 @@ function _termCloseTab(id) {
 function _termDisposeTab(tab) {
   try { tab.streamCancel && tab.streamCancel(); } catch (_) { /* ignore */ }
   if (tab.sessionId && _termHasIpc()) {
-    window.orkas.invoke('terminal.close', { session_id: tab.sessionId }).catch(() => {});
+    window.cogseed.invoke('terminal.close', { session_id: tab.sessionId }).catch(() => {});
   }
   try { tab.term && tab.term.dispose(); } catch (_) { /* ignore */ }
   tab.term = null;
@@ -221,7 +221,7 @@ function _termFitActive() {
     try {
       tab.fit.fit();
       if (tab.sessionId && _termHasIpc()) {
-        window.orkas.invoke('terminal.resize', {
+        window.cogseed.invoke('terminal.resize', {
           session_id: tab.sessionId,
           cols: tab.term.cols,
           rows: tab.term.rows,
@@ -337,7 +337,7 @@ async function _termOpenSession(tab) {
   // Input → backend PTY.
   term.onData((data) => {
     if (tab.sessionId && _termHasIpc()) {
-      window.orkas.invoke('terminal.write', { session_id: tab.sessionId, data }).catch(() => {});
+      window.cogseed.invoke('terminal.write', { session_id: tab.sessionId, data }).catch(() => {});
     }
   });
 
@@ -349,7 +349,7 @@ async function _termOpenSession(tab) {
   // Create backend PTY session sized to the fitted terminal.
   try {
     if (tab.fit) tab.fit.fit();
-    const res = await window.orkas.invoke('terminal.create', {
+    const res = await window.cogseed.invoke('terminal.create', {
       cols: term.cols,
       rows: term.rows,
     });
@@ -364,7 +364,7 @@ async function _termOpenSession(tab) {
   }
 
   // Open the output stream.
-  const { promise, cancel } = window.orkas.stream(
+  const { promise, cancel } = window.cogseed.stream(
     'terminal.stream',
     { session_id: tab.sessionId },
     (ev) => {

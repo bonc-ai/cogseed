@@ -13,7 +13,7 @@ function loadSecurity() {
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(source, context, { filename: 'artifact-security.js' });
-  return context.OrkasArtifactSecurity;
+  return context.CogSeedArtifactSecurity;
 }
 
 describe('artifact iframe security boundary', () => {
@@ -55,7 +55,7 @@ describe('artifact iframe security boundary', () => {
     const security = loadSecurity();
     const liveWindow = {};
     const frame = { contentWindow: liveWindow };
-    const data = { __orkasArtifact: true, type: 'submit' };
+    const data = { __cogseedArtifact: true, type: 'submit' };
     expect(security.trustedArtifactMessage({ source: liveWindow, data }, frame)).toBe(true);
     expect(security.trustedArtifactMessage({ source: {}, data }, frame)).toBe(false);
     expect(security.trustedArtifactMessage({ source: liveWindow, data: { type: 'submit' } }, frame)).toBe(false);

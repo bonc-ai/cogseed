@@ -197,7 +197,7 @@ function expectedFiles(target) {
 function ready(destDir, platformKey, target) {
   const version = runtimeVersion(target);
   try {
-    const marker = JSON.parse(fs.readFileSync(path.join(destDir, '.orkas-whisper-ready.json'), 'utf8'));
+    const marker = JSON.parse(fs.readFileSync(path.join(destDir, '.cogseed-whisper-ready.json'), 'utf8'));
     if (marker.schema !== WHISPER_RUNTIME_CONTRACT.schema
       || marker.platformKey !== platformKey
       || marker.version !== version
@@ -312,7 +312,7 @@ function writeMarker(tempDir, platformKey, target) {
   for (const relativePath of Object.keys(expectedFiles(target))) {
     files[relativePath] = fileRecord(rel(tempDir, relativePath));
   }
-  fs.writeFileSync(path.join(tempDir, '.orkas-whisper-ready.json'), `${JSON.stringify({
+  fs.writeFileSync(path.join(tempDir, '.cogseed-whisper-ready.json'), `${JSON.stringify({
     schema: WHISPER_RUNTIME_CONTRACT.schema,
     platformKey,
     version: runtimeVersion(target),
@@ -324,7 +324,7 @@ function writeMarker(tempDir, platformKey, target) {
 }
 
 function writeCapabilityState(destDir, capability) {
-  const markerFile = path.join(destDir, '.orkas-whisper-ready.json');
+  const markerFile = path.join(destDir, '.cogseed-whisper-ready.json');
   const marker = JSON.parse(fs.readFileSync(markerFile, 'utf8'));
   marker.capability = capability;
   fs.writeFileSync(markerFile, `${JSON.stringify(marker, null, 2)}\n`);

@@ -75,7 +75,7 @@ function loadHarness() {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     },
-    window: { addEventListener: vi.fn(), orkas: { invoke } },
+    window: { addEventListener: vi.fn(), cogseed: { invoke } },
     setTimeout,
     clearTimeout,
     setInterval,

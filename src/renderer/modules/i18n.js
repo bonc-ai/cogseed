@@ -14,7 +14,7 @@
 // Tables ship under `src/renderer/locales/*.json`. The primary delivery
 // is a synchronous `ipcRenderer.sendSync('orkas:bootI18n')` in preload, which
 // hands the renderer `{lang, tables}` before any DOM script runs — see the
-// `_bootSyncI18n` IIFE below. The async `window.orkas.getLocales` /
+// `_bootSyncI18n` IIFE below. The async `window.cogseed.getLocales` /
 // `getLanguage` IPC pair remains as a fallback inside `initI18n()` for the
 // rare case where preload didn't expose the bundle (handler missing during
 // hot reload, contextBridge crash, ...).
@@ -70,7 +70,7 @@ function _setDocumentLang(lang) {
 }
 
 // Synchronous boot path. preload.js does `ipcRenderer.sendSync('orkas:bootI18n')`
-// and exposes the result on `window.__orkasI18nBoot` BEFORE any DOM scripts
+// and exposes the result on `window.__cogseedI18nBoot` BEFORE any DOM scripts
 // run. By the time this script tag executes (index.html line 1118 — after all
 // data-i18n elements have been parsed), the table + the user's lang are
 // already in hand. Apply translations now and the DOM never paints in the
@@ -78,7 +78,7 @@ function _setDocumentLang(lang) {
 // registered), fall through to the async initI18n() flow below.
 (function _bootSyncI18n() {
   try {
-    const boot = (typeof window !== 'undefined') ? window.__orkasI18nBoot : null;
+    const boot = (typeof window !== 'undefined') ? window.__cogseedI18nBoot : null;
     if (!boot || !boot.tables) return;
     if (isSupportedLang(boot.lang)) _currentLang = boot.lang;
     _tables = boot.tables || {};
@@ -112,7 +112,7 @@ function getLang() { return _currentLang; }
 
 async function _ensureLanguageTable(lang) {
   if (_tables[lang]) return;
-  const localesRes = await window.orkas.getLocales();
+  const localesRes = await window.cogseed.getLocales();
   if (localesRes && localesRes.ok && localesRes.tables) {
     _tables = { ..._tables, ...localesRes.tables };
   }
@@ -121,8 +121,8 @@ async function _ensureLanguageTable(lang) {
 async function initI18n() {
   if (_ready) return _currentLang;
   try {
-    const langRes = await window.orkas.getLanguage();
-    const localesRes = await window.orkas.getLocales();
+    const langRes = await window.cogseed.getLanguage();
+    const localesRes = await window.cogseed.getLocales();
     if (langRes && langRes.ok && isSupportedLang(langRes.language)) {
       _currentLang = langRes.language;
     }
@@ -143,7 +143,7 @@ async function setLang(lang) {
   if (lang === _currentLang) return _currentLang;
   try {
     await _ensureLanguageTable(lang);
-    const res = await window.orkas.setLanguage(lang);
+    const res = await window.cogseed.setLanguage(lang);
     if (res && res.ok && res.language) {
       _currentLang = res.language;
     } else {
@@ -161,7 +161,7 @@ async function setLang(lang) {
 
 async function refreshLangFromMain() {
   try {
-    const res = await window.orkas.getLanguage();
+    const res = await window.cogseed.getLanguage();
     const next = res && res.ok && isSupportedLang(res.language) ? res.language : _currentLang;
     if (next === _currentLang) return _currentLang;
     await _ensureLanguageTable(next);

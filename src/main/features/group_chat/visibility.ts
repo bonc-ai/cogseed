@@ -30,6 +30,17 @@ export interface ChatUseSelection {
   name?: string;
 }
 
+export interface RecallMessageCitation {
+  asset_id: string;
+  title: string;
+  type: 'personal' | 'rule' | 'template' | 'skill_method';
+  version: string;
+  scope: string;
+  projection_id: string;
+  match_score?: number;
+  match_method: 'semantic' | 'manual';
+}
+
 /** Immutable snapshot of one visible message referenced from another task.
  * The main process resolves these fields from the source JSONL; renderer
  * callers submit only source conversation/message locators. */
@@ -97,6 +108,8 @@ export interface GroupMessage {
   kstar_review?: KStarReviewSummary;
   /** Recall projection card metadata used to recover confirmed assets for prompt injection. */
   recall_projection_card?: { projectionId: string };
+  /** Host-verified Recall assets supplied to the model for this persisted reply. */
+  recall_citations?: RecallMessageCitation[];
   /** KSTAR lightweight review confirmation card; raw evidence stays in main storage. */
   kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
   /** Plain `@token` list (raw text mentions). */

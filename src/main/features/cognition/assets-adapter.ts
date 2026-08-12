@@ -1,5 +1,6 @@
 import * as personalOntologyGroups from '../personal_ontology_groups';
 import { listAbilityAssets } from '../recall/asset-service';
+import { readInstalledSkillForAsset, readRecallSkillDraft } from '../recall/skill-draft-service';
 import * as p3394 from '../p3394';
 import { refMatchesAsset, relationRef, titleFromText } from './normalize';
 import { listCognitionCandidates } from './candidates-adapter';
@@ -72,19 +73,54 @@ export async function listCognitionAssets(
   const category = filter.category || filter.type;
   const items: CognitionAssetSummary[] = [];
   const formalAssets = await listAbilityAssets(userId);
+  const generatedSkillIds = new Map(await Promise.all(formalAssets
+    .filter((asset) => asset.type === 'skill_method')
+    .map(async (asset) => {
+      try { return [asset.id, await readInstalledSkillForAsset(userId, asset.id)] as const; }
+      catch { return [asset.id, undefined] as const; }
+    })));
+  const skillDrafts = new Map(await Promise.all(formalAssets
+    .filter((asset) => asset.type === 'skill_method')
+    .map(async (asset) => {
+      try { return [asset.id, await readRecallSkillDraft(userId, asset.id)] as const; }
+      catch { return [asset.id, undefined] as const; }
+    })));
   for (const asset of formalAssets) {
     if (category && asset.type !== category) continue;
+    const skillDraft = skillDrafts.get(asset.id);
+    const currentSkillDraft = skillDraft?.sourceAssetVersion === asset.version ? skillDraft : undefined;
     items.push(baseAsset({
       id: asset.id,
       type: asset.type,
       category: asset.type,
       title: asset.title,
+      summary: asset.statement,
       source: 'recall_ability_asset',
       version: asset.version,
       status: asset.status,
       maturity: asset.maturity,
       owner: asset.ownerId,
       scope: asset.scope,
+      ...(generatedSkillIds.get(asset.id) ? { generatedSkillId: generatedSkillIds.get(asset.id) } : {}),
+      ...(currentSkillDraft?.status === 'draft' ? { recallSkillDraftStatus: 'draft' as const } : {}),
+      ...(currentSkillDraft?.status === 'draft' ? {
+        recallSkillDraft: {
+          draftHash: currentSkillDraft.draftHash,
+          fileCount: currentSkillDraft.files.length,
+          workflowSteps: currentSkillDraft.proposal?.workflowSteps || [],
+          validationOk: currentSkillDraft.validation.ok,
+          ...(currentSkillDraft.recallContext ? {
+            recallContext: {
+              assetCount: currentSkillDraft.recallContext.assetIds.length,
+              sourceCount: currentSkillDraft.recallContext.sourceRefs.length,
+            },
+          } : {}),
+        },
+      } : {}),
+      ...(currentSkillDraft?.status === 'failed' ? {
+        recallSkillDraftStatus: 'failed' as const,
+        recallSkillDraftErrorCode: currentSkillDraft.errorCode,
+      } : {}),
       candidateRefs: [asset.candidateId],
       relationRefs: asset.evidenceRefs.map((ref) => relationRef(
         ref.kind === 'artifact_file'

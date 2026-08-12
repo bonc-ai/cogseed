@@ -174,6 +174,40 @@ describe('Recall candidate governance', () => {
     ]);
   });
 
+  it('recovers an asset written before the candidate promotion state was persisted', async () => {
+    const candidates = await service();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Recover the durable asset after an interrupted promotion.',
+      suggestedType: 'rule',
+      suggestedScope: 'project',
+      sourceRefs: [{ kind: 'execution', id: 'exec-recovery' }],
+    });
+    const store = await import('../../../../src/main/features/recall/store');
+    const interruptedAt = '2026-08-01T00:00:00.000Z';
+    await store.writeRecallJsonRecord('user-a', 'ability-assets', 'aa-interrupted', {
+      schemaVersion: 1,
+      ownerId: 'user-a',
+      id: 'aa-interrupted',
+      candidateId: candidate.id,
+      type: 'rule',
+      title: 'Recovered asset',
+      statement: candidate.judgment,
+      evidenceRefs: candidate.sourceRefs,
+      scope: 'project',
+      status: 'active',
+      maturity: 'seed',
+      version: '1',
+      createdAt: interruptedAt,
+      updatedAt: interruptedAt,
+    });
+
+    const recovered = await candidates.promoteRecallCandidate('user-a', candidate.id);
+    expect(recovered.candidate).toMatchObject({ status: 'promoted', promotedAssetId: 'aa-interrupted' });
+    expect(recovered.asset.id).toBe('aa-interrupted');
+    const assets = await (await import('../../../../src/main/features/recall/asset-service')).listAbilityAssets('user-a');
+    expect(assets.filter((asset) => asset.candidateId === candidate.id)).toHaveLength(1);
+  });
+
   it('rejects promotion of a rejected candidate and isolates records by owner', async () => {
     const candidates = await service();
     const candidate = await candidates.saveRecallCandidate('user-a', {

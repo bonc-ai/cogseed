@@ -38,7 +38,7 @@ function loadReceiptHelpers(invoke = async () => ({ ok: true })) {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;'),
-    window: { orkas: { invoke } },
+    window: { cogseed: { invoke } },
   };
   vm.createContext(context);
   vm.runInContext([

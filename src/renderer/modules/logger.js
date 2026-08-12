@@ -1,7 +1,7 @@
 /**
  * Renderer-side logger bridge.
  *
- * Every call is forwarded to main via `window.orkas.log({ level, module,
+ * Every call is forwarded to main via `window.cogseed.log({ level, module,
  * message, data })`. Main's `logFromRenderer()` routes the record through
  * `electron-log` under a `renderer/<module>` scope, so renderer activity
  * ends up in the same daily file as main-process activity, grep-able
@@ -63,8 +63,8 @@ const createLogger = (function () {
 
   function send(level, module, message, args) {
     try {
-      if (window.orkas && typeof window.orkas.log === 'function') {
-        window.orkas.log({ level, module, message: String(message ?? ''), data: args });
+      if (window.cogseed && typeof window.cogseed.log === 'function') {
+        window.cogseed.log({ level, module, message: String(message ?? ''), data: args });
       }
     } catch (_) { /* never let logging crash the UI */ }
   }

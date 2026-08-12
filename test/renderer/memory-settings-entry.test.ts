@@ -41,7 +41,7 @@ describe('settings memory entry', () => {
         },
         addEventListener() {},
       },
-      window: { orkas: { invoke }, addEventListener() {} },
+      window: { cogseed: { invoke }, addEventListener() {} },
       setView,
       t: (key: string, vars?: { n?: number }) => key === 'memory.entry_desc' ? `count:${vars?.n || 0}` : key,
       setTimeout,

@@ -84,7 +84,7 @@ export async function copyLocalFileAtomic(
   await fsp.mkdir(path.dirname(target), { recursive: true });
   const temp = path.join(
     path.dirname(target),
-    `.orkas-import-${process.pid}-${crypto.randomBytes(6).toString('hex')}.tmp`,
+    `.cogseed-import-${process.pid}-${crypto.randomBytes(6).toString('hex')}.tmp`,
   );
   try {
     await fsp.copyFile(source, temp);

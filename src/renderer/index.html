@@ -1,15 +1,16 @@
 <!doctype html>
 <!-- `<html lang>` is updated to the user's preferred language by i18n.js at
      script-load (line 1118), based on the sync bundle preload exposed on
-     window.__orkasI18nBoot. The fallback `en` here is what shows if both the
+     window.__cogseedI18nBoot. The fallback `en` here is what shows if both the
      preload bridge and the IPC handler are unavailable. -->
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Mate Agent</title>
+  <title>CogSeed</title>
   <link rel="stylesheet" href="./vendor/xterm/xterm.css" />
   <link rel="stylesheet" href="./style.css" />
+  <link rel="stylesheet" href="./recall-local.css" />
   <link rel="stylesheet" href="./onboarding.css" />
 </head>
 <body>
@@ -17,7 +18,7 @@
     <aside class="sidebar">
       <div class="sidebar-logo">
         <img class="logo-icon" src="../resources/icons/logo.png" alt="" draggable="false" />
-        <div class="logo-text" data-i18n="brand.name">Mate Agent</div>
+        <div class="logo-text" data-i18n="brand.name">CogSeed</div>
       </div>
       <button class="sidebar-search-btn" id="sidebar-search-btn" data-i18n-title="sidebar.search_title" title="Global search (Cmd/Ctrl+K)">
         <span data-ui-icon="search" data-ui-icon-class="sidebar-search-icon"></span>
@@ -27,15 +28,12 @@
         </span>
       </button>
       <div class="sidebar-actions">
-        <button class="sidebar-btn primary" id="new-chat-btn"><span data-ui-icon="message-square" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.new_chat">Commander</span><span class="sidebar-btn-running-chip" id="commander-running-chip" hidden></span></button>
-        <button class="sidebar-btn" id="mate-workbench-btn"><span data-ui-icon="sparkles" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.mate_today">今日</span></button>
+        <button class="sidebar-btn primary" id="new-chat-btn"><span data-ui-icon="message-square" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.new_chat">New session</span><span class="sidebar-btn-running-chip" id="commander-running-chip" hidden></span></button>
         <button class="sidebar-btn" id="auto-btn"><span data-ui-icon="clock" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.auto">Auto</span></button>
         <button class="sidebar-btn" id="agents-btn"><span data-ui-icon="users" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.agents">Agents</span></button>
         <button class="sidebar-btn" id="skills-btn"><span data-ui-icon="sparkles" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.skills">Skills</span></button>
-        <button class="sidebar-btn" id="recall-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.recall">Recall</span></button>
+        <button class="sidebar-btn" id="recall-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.recall">Cognitive assets</span></button>
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connectors">Connectors</span></button>
-        <button class="sidebar-btn" id="contexts-btn"><span data-ui-icon="database" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.contexts">Library</span></button>
-        <button class="sidebar-btn" id="evolution-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.evolution">进化控制台</span></button>
         <button class="sidebar-btn" id="personal-ontology-btn"><span data-ui-icon="sparkles" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.personal_ontology">我的认知</span></button>
         <button class="sidebar-btn" id="spaces-btn"><span data-ui-icon="layout-grid" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.spaces">工作空间</span></button>
       </div>
@@ -160,11 +158,6 @@
               <span class="new-chat-scenario-label" data-i18n="new_chat.quick.rnd">Build app</span>
             </button>
           </div>
-          <!-- Continue-previous-work picker. Lists conversations imported from
-               other agents (Claude Code / Codex) during onboarding; clicking one
-               opens it so the user picks up where they left off. Wired by
-               conversation.js::_initContinueWorkChip(). -->
-          <div class="continue-work-panel" id="continue-work-panel" hidden></div>
           <!-- Open-source-driven「还能帮你做这些」capability strip. Task cards are
                rendered + wired by modules/oss.js::initOssEntry() (data from the
                curated marketplace projects catalog). Cards only show the task +
@@ -174,7 +167,7 @@
             <div class="oss-entry-head">
               <span data-ui-icon="sparkles" data-ui-icon-class="oss-entry-spark"></span>
               <span class="oss-entry-title" data-i18n="oss.title">You can also ask for these</span>
-              <span class="oss-entry-sub" data-i18n="oss.subtitle">Just describe what you need — Mate Agent sets up the right tools.</span>
+              <span class="oss-entry-sub" data-i18n="oss.subtitle">Just describe what you need — CogSeed sets up the right tools.</span>
               <button type="button" class="oss-entry-more" id="oss-entry-more">
                 <span data-i18n="oss.more">More capabilities</span>
                 <span data-ui-icon="arrow-right" data-ui-icon-class="oss-entry-more-arrow"></span>
@@ -203,11 +196,6 @@
                 <div class="chat-header-meta" id="chat-header-meta"></div>
               </div>
               <div class="chat-header-actions">
-                <button type="button" class="chat-header-details-btn" id="topbar-evolution-toggle"
-                        data-i18n-title="evolution.enter_title"
-                        data-i18n-aria-label="evolution.enter_title"
-                        title="进化控制台" aria-label="进化控制台">
-                  <span data-ui-icon="git-branch" data-ui-icon-class="chat-header-details-icon"></span>
                 <button type="button" class="chat-header-details-btn" id="chat-terminal-toggle"
                         data-i18n-title="terminal_panel.toggle_title"
                         data-i18n-aria-label="terminal_panel.toggle_title"
@@ -440,42 +428,36 @@
           <div class="skills-cognition-surface">
           <header class="skills-cognition-header">
             <div>
-              <h1 data-i18n="cognition.product_title">CogSeed</h1>
-              <p data-i18n="cognition.product_subtitle">跨 Agent 的个人能力资产层</p>
+              <h1 data-i18n="cognition.title">Recall</h1>
+              <p data-i18n="cognition.subtitle">查看会话沉淀进度与认知资产</p>
             </div>
             <button type="button" class="btn btn-sm cognition-refresh-btn" data-cognition-reload data-i18n-title="common.refresh" data-i18n-aria-label="common.refresh" title="刷新" aria-label="刷新">
               <span data-ui-icon="refresh"></span>
             </button>
           </header>
           <div class="skills-cognition-workspace">
-          <nav class="skills-cognition-tabs" id="skills-cognition-tabs" aria-label="Recall 导航" role="tablist">
-            <button type="button" class="skills-cognition-tab is-active" data-cognition-page="overview" role="tab" aria-selected="true">
-              <span data-ui-icon="layout-grid"></span><span data-i18n="cognition.overview">总览</span>
-            </button>
-            <button type="button" class="skills-cognition-tab" data-cognition-page="deposition" role="tab" aria-selected="false">
-              <span data-ui-icon="sparkles"></span><span data-i18n="cognition.deposition">认知沉淀</span><span class="cognition-nav-count" data-cognition-count="pending"></span>
-            </button>
-            <button type="button" class="skills-cognition-tab" data-cognition-page="assets" role="tab" aria-selected="false">
-              <span data-ui-icon="archive"></span><span data-i18n="cognition.ability_assets">能力资产</span><span class="cognition-nav-count" data-cognition-count="assets"></span>
-            </button>
+          <nav class="skills-cognition-tabs" id="skills-cognition-tabs" role="tablist" aria-label="Recall 导航">
+            <div class="skills-cognition-tab-group">
+              <button type="button" id="skills-cognition-tab-overview" class="skills-cognition-tab is-active" role="tab" aria-selected="true" aria-controls="skills-cognition-overview" data-cognition-page="overview"><span data-ui-icon="layout-grid"></span><span data-i18n="cognition.overview">总览</span></button>
+              <button type="button" id="skills-cognition-tab-captures" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-captures" tabindex="-1" data-cognition-page="captures"><span data-ui-icon="clock"></span><span data-i18n="cognition.capture_tasks">沉淀任务</span></button>
+              <button type="button" id="skills-cognition-tab-assets" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-assets" tabindex="-1" data-cognition-page="assets"><span data-ui-icon="archive"></span><span data-i18n="cognition.memory_content">记忆内容</span></button>
+              <button type="button" id="skills-cognition-tab-sources" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-sources" tabindex="-1" data-cognition-page="sources"><span data-ui-icon="folder-open"></span><span data-i18n="cognition.sources">数据来源</span></button>
+            </div>
           </nav>
           <main class="skills-cognition-main">
-            <section class="skills-cognition-page" id="skills-cognition-overview" data-cognition-page-body="overview">
-              <div id="skills-cognition-overview-body"></div>
-            </section>
-            <section class="skills-cognition-page" id="skills-cognition-deposition" data-cognition-page-body="deposition" hidden>
-              <div class="recall-subtabs" id="skills-cognition-deposition-tabs" role="tablist">
-                <button type="button" class="recall-subtab is-active" data-cognition-deposition-view="candidates" role="tab" aria-selected="true"><span data-i18n="cognition.pending_knowledge">待确认认知</span></button>
-                <button type="button" class="recall-subtab" data-cognition-deposition-view="captures" role="tab" aria-selected="false"><span data-i18n="cognition.organize_tasks">整理任务</span></button>
-                <button type="button" class="recall-subtab" data-cognition-deposition-view="sources" role="tab" aria-selected="false"><span data-i18n="cognition.sources">认知来源</span></button>
-              </div>
-              <section data-cognition-deposition-body="candidates"><div id="skills-cognition-candidates-body"></div></section>
-              <section data-cognition-deposition-body="captures" hidden><div id="skills-cognition-captures-body"></div></section>
-              <section data-cognition-deposition-body="sources" hidden><div id="skills-cognition-sources-body"></div></section>
-            </section>
-            <section class="skills-cognition-page" id="skills-cognition-assets" data-cognition-page-body="assets" hidden>
-              <div id="skills-cognition-assets-body"></div>
-            </section>
+          <section class="skills-cognition-page" id="skills-cognition-overview" role="tabpanel" aria-labelledby="skills-cognition-tab-overview" data-cognition-page-body="overview">
+            <div id="skills-cognition-overview-body"></div>
+          </section>
+          <section class="skills-cognition-page" id="skills-cognition-sources" role="tabpanel" aria-labelledby="skills-cognition-tab-sources" data-cognition-page-body="sources" hidden>
+            <div id="skills-cognition-sources-body"></div>
+          </section>
+          <section class="skills-cognition-page" id="skills-cognition-captures" role="tabpanel" aria-labelledby="skills-cognition-tab-captures" data-cognition-page-body="captures" hidden>
+            <div id="skills-cognition-captures-body"></div>
+            <div id="skills-cognition-capture-review-body"></div>
+          </section>
+          <section class="skills-cognition-page" id="skills-cognition-assets" role="tabpanel" aria-labelledby="skills-cognition-tab-assets" data-cognition-page-body="assets" hidden>
+            <div id="skills-cognition-assets-body"></div>
+          </section>
           </main>
           </div>
           </div>
@@ -1099,17 +1081,6 @@
       </section>
 
 
-      <!-- Evolution Console -->
-      <section class="panel" id="panel-evolution">
-        <div class="evo-console">
-          <aside class="evo-console-sidebar">
-            <div class="evo-console-title" data-i18n="evolution.title">进化控制台</div>
-            <nav class="evo-console-nav" id="evo-console-nav"></nav>
-          </aside>
-          <div class="evo-console-content" id="evo-console-body"></div>
-        </div>
-      </section>
-
       <!-- Personal Ontology Candidates -->
       <section class="panel" id="panel-personal-ontology">
         <div class="personal-onto-layout">
@@ -1142,11 +1113,6 @@
             </div>
           </div>
         </div>
-      </section>
-
-      <!-- Mate 今日：桌面端主体工作台 -->
-      <section class="panel" id="panel-mate-workbench">
-        <div class="mate-workbench" id="mate-workbench" aria-live="polite"></div>
       </section>
 
       <!-- Workspaces（工作空间一期：空间 = 主界面 + 资源作用域限制） -->
@@ -1211,6 +1177,16 @@
 
               <div class="settings-group">
                 <div class="settings-group-head">
+                  <div class="settings-group-title" data-i18n="settings.contexts.title">资料库</div>
+                  <div class="settings-group-sub" data-i18n="settings.contexts.sub">管理可供模型引用的资料库内容。</div>
+                </div>
+                <div class="settings-row">
+                  <button class="btn btn-sm" id="settings-contexts-open-btn" type="button" data-i18n="settings.contexts.open">打开资料库</button>
+                </div>
+              </div>
+
+              <div class="settings-group">
+                <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.data_root.title">Data root</div>
                   <div class="settings-group-sub" data-i18n="settings.data_root.sub">All conversations, agents, skills, and Library content live under this directory. Click the path to open it in the OS file manager.</div>
                 </div>
@@ -1245,7 +1221,7 @@
               <div class="settings-group">
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.task_notifications.title">任务通知</div>
-                  <div class="settings-group-sub" data-i18n="settings.task_notifications.sub">当 Mate Agent 不在前台时，在任务完成、失败或需要输入时发送系统通知。</div>
+                  <div class="settings-group-sub" data-i18n="settings.task_notifications.sub">当 CogSeed 不在前台时，在任务完成、失败或需要输入时发送系统通知。</div>
                 </div>
                 <div class="settings-row">
                   <label class="settings-toggle">
@@ -1254,7 +1230,7 @@
                   </label>
                 </div>
                 <div class="settings-row settings-task-notification-permission" id="settings-task-notification-permission" role="status" aria-live="polite" hidden>
-                  <span class="settings-task-notification-permission-text" data-i18n="settings.task_notifications.permission_disabled">系统已关闭 Mate Agent 的通知权限。请前往系统设置开启，否则无法收到任务进度提醒。</span>
+                  <span class="settings-task-notification-permission-text" data-i18n="settings.task_notifications.permission_disabled">系统已关闭 CogSeed 的通知权限。请前往系统设置开启，否则无法收到任务进度提醒。</span>
                   <button type="button" class="btn btn-sm" id="settings-task-notification-open-settings" data-i18n="settings.task_notifications.open_settings">打开系统设置</button>
                 </div>
               </div>
@@ -1482,24 +1458,8 @@
 
             <!-- ─────────────────────── 消息平台 ─────────────────────── -->
             <div class="settings-tab-pane" data-settings-pane="messaging" hidden>
-              <div class="touchpoint-settings-shell" aria-live="polite">
-                <div class="touchpoint-view" id="touchpoint-overview-view">
-                  <div id="touchpoint-settings-page"></div>
-                </div>
-                <div class="touchpoint-view touchpoint-connections-view" id="touchpoint-connections-view" hidden>
-                  <header class="touchpoint-connections-header">
-                    <button class="btn touchpoint-icon-button" type="button" data-touchpoint-action="connections.back" data-i18n-title="touchpoint_settings.connections.back" data-i18n-aria-label="touchpoint_settings.connections.back" title="返回触点概览" aria-label="返回触点概览">
-                      <span data-ui-icon="arrow-left" data-ui-icon-class="touchpoint-refresh-icon"></span>
-                    </button>
-                    <div>
-                      <h2 data-i18n="touchpoint_settings.connections.title">连接管理</h2>
-                      <p data-i18n="touchpoint_settings.connections.detail">机器人实例、扫码绑定与消息行为</p>
-                    </div>
-                  </header>
-                  <div class="messaging-settings-shell" id="messaging-settings-shell">
-                    <div class="messaging-page" id="messaging-page"></div>
-                  </div>
-                </div>
+              <div class="messaging-settings-shell" id="messaging-settings-shell" aria-live="polite">
+                <div class="messaging-page" id="messaging-page"></div>
               </div>
             </div>
 
@@ -1906,12 +1866,13 @@
   <script src="./modules/ipc-shim.js"></script>
   <script src="./modules/lazy-features.js"></script>
   <script src="./modules/i18n.js"></script>
-  <script src="./modules/mate-workbench.js"></script>
   <script src="./modules/chat-use.js"></script>
   <script src="./modules/user-error.js"></script>
   <script src="./modules/model-guard.js"></script>
   <script src="./modules/delete-file-confirm.js"></script>
+  <script src="./modules/interactive-tour.js"></script>
   <script src="./modules/onboarding.js"></script>
+  <script src="./modules/continue-work.js"></script>
   <script src="./modules/boot.js"></script>
   <script src="./modules/avatar.js"></script>
   <script src="./modules/avatar-picker.js"></script>

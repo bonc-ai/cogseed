@@ -6,7 +6,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const brand = require('../src/resources/brand.json');
 
-const RUNTIME_VARIANTS = Object.freeze(['main', 'cognition', 'expense', 'mate', 'messaging', 'optimization']);
+const RUNTIME_VARIANTS = Object.freeze(['main', 'cognition', 'expense', 'cogseed', 'mate', 'messaging', 'optimization']);
 const LABELS = Object.freeze({
   main: 'Main',
   cognition: 'Cognition',
@@ -42,7 +42,7 @@ function sourceRuntimeBundleSpec(value) {
   return Object.freeze({
     ...identity,
     protocolSchemes: identity.protocolOwner
-      ? Object.freeze([brand.protocolScheme, brand.legacyConnectorScheme])
+      ? Object.freeze([brand.protocolScheme, ...(brand.legacyConnectorSchemes || [brand.legacyConnectorScheme]).filter(Boolean)])
       : Object.freeze([]),
   });
 }
@@ -74,7 +74,8 @@ function currentAppFromPathFile(distDir, pathFile) {
 }
 
 function findSourceApp(distDir, pathFile) {
-  for (const name of ['Electron.app', 'Orkas.app', `${brand.appName}.app`, `${brand.appName} [Mate].app`]) {
+  // Remove canonical and one-cycle bundle aliases left by older source builds.
+  for (const name of ['Electron.app', 'Orkas.app', 'Mate Agent.app', `${brand.appName}.app`, `${brand.appName} [Mate].app`]) {
     const candidate = path.join(distDir, name);
     if (fs.existsSync(candidate)) return candidate;
   }
@@ -257,8 +258,8 @@ function parseVariant(argv) {
 
 function parseMateWorktreeVariant(argv) {
   const variant = parseVariant(argv);
-  if (variant !== 'mate') {
-    throw new Error('this source worktree is locked to the mate runtime variant');
+  if (variant !== 'cogseed') {
+    throw new Error('this source worktree is locked to the cogseed runtime variant');
   }
   return variant;
 }
@@ -266,9 +267,9 @@ function parseMateWorktreeVariant(argv) {
 function main() {
   try {
     const result = prepareSourceRuntimeBundle({ variant: parseMateWorktreeVariant(process.argv.slice(2)) });
-    if (result.appBundle) console.log(`[Mate Agent] Prepared source runtime bundle: ${result.appName}`);
+    if (result.appBundle) console.log(`[CogSeed] Prepared source runtime bundle: ${result.appName}`);
   } catch (error) {
-    console.error(`[Mate Agent] ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`[CogSeed] ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 2;
   }
 }

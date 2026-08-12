@@ -160,7 +160,7 @@ function loadInteractiveHarness() {
     return Promise.resolve({ ok: true });
   });
   const windowObj: any = {
-    orkas: { invoke },
+    cogseed: { invoke },
     addEventListener(type: string, handler: (...args: any[]) => unknown) { const list = windowListeners.get(type) || []; list.push(handler); windowListeners.set(type, list); },
   };
   const refreshModelGuard = vi.fn(async () => true);

@@ -31,7 +31,7 @@ let _mpReturnView = 'agents';
 // Categories are read on every panel open. Caching at three levels (renderer in-mem ↑↑↑
 // localStorage ↑↑ main biz file ↑) so the first openMarketplace after PC launch finds the
 // chip strip painted *synchronously* — no IPC roundtrip latency. localStorage is sync and
-// available before window.orkas IPC is ready; the in-memory variable is the hot path; the
+// available before window.cogseed IPC is ready; the in-memory variable is the hot path; the
 // async preload below refreshes localStorage in the background.
 const MP_CATEGORIES_LS_KEY = 'orkas:mp:categories';
 let _mpCategoriesCache = (() => {
@@ -111,7 +111,7 @@ function _mpMaybeRefreshCategoriesForCodes(codes) {
   if (now - _mpUnknownCategoryRefreshAt < MP_UNKNOWN_CATEGORY_REFRESH_MIN_MS) return;
   _mpUnknownCategoryRefreshAt = now;
   try {
-    _mpUnknownCategoryRefreshInFlight = window.orkas.invoke('marketplace.categories', { force_refresh: true })
+    _mpUnknownCategoryRefreshInFlight = window.cogseed.invoke('marketplace.categories', { force_refresh: true })
       .then((r) => {
         const list = (r && r.list) || [];
         if (!list.length) return;
@@ -285,7 +285,7 @@ async function _mpHydrateListingsCache() {
   if (_mpListingsHydrated) return;
   _mpListingsHydrated = true;
   try {
-    const data = await window.orkas.invoke('marketplace.getListingsCache');
+    const data = await window.cogseed.invoke('marketplace.getListingsCache');
     const entries = data?.entries || {};
     for (const [k, v] of Object.entries(entries)) {
       if (v && Array.isArray(v.items) && typeof v.ts === 'number') {
@@ -299,7 +299,7 @@ function _mpPersistListingsCache() {
   // Fire-and-forget: serialization happens in main. Renderer just snapshots the Map.
   const entries = {};
   for (const [k, v] of _mpListingsCache.entries()) entries[k] = v;
-  window.orkas.invoke('marketplace.setListingsCache', { entries }).catch(() => { /* ignore */ });
+  window.cogseed.invoke('marketplace.setListingsCache', { entries }).catch(() => { /* ignore */ });
 }
 
 
@@ -391,10 +391,10 @@ function openMarketplace(initialTab = 'agent', opts = {}) {
   _mpRender();
 
   // Best-effort cache sweep — never blocks the UI.
-  window.orkas.invoke('marketplace.sweepCache').catch(() => { /* ignore */ });
+  window.cogseed.invoke('marketplace.sweepCache').catch(() => { /* ignore */ });
 
-  if (!_mpState.appVersion && window.orkas && typeof window.orkas.env === 'function') {
-    window.orkas.env().then((env) => {
+  if (!_mpState.appVersion && window.cogseed && typeof window.cogseed.env === 'function') {
+    window.cogseed.env().then((env) => {
       const v = env && env.version;
       if (typeof v === 'string' && v && _mpState) {
         _mpState.appVersion = v;
@@ -486,15 +486,15 @@ function _mpShowResourceSyncSkippedToast(payload) {
 
 async function _mpInitReconcileWatch() {
   if (_mpReconcileWatchStarted || _mpReconcileWatchStarting) return;
-  if (!window.orkas || typeof window.orkas.invoke !== 'function' || typeof window.orkas.onPushEvent !== 'function') {
+  if (!window.cogseed || typeof window.cogseed.invoke !== 'function' || typeof window.cogseed.onPushEvent !== 'function') {
     return;
   }
   _mpReconcileWatchStarting = true;
   try {
-    window.orkas.onPushEvent('marketplace:reconcile-status', (status) => {
+    window.cogseed.onPushEvent('marketplace:reconcile-status', (status) => {
       _mpApplyReconcileStatus(status);
     });
-    window.orkas.onPushEvent('marketplace:resource-sync-skipped', (payload) => {
+    window.cogseed.onPushEvent('marketplace:resource-sync-skipped', (payload) => {
       _mpShowResourceSyncSkippedToast(payload);
     });
     _mpReconcileWatchStarted = true;
@@ -503,7 +503,7 @@ async function _mpInitReconcileWatch() {
     return;
   }
   try {
-    const initial = await window.orkas.invoke('marketplace.reconcileStatus');
+    const initial = await window.cogseed.invoke('marketplace.reconcileStatus');
     _mpApplyReconcileStatus(initial);
   } catch { /* main not ready yet — push event will fill us in */ }
   _mpReconcileWatchStarting = false;
@@ -717,8 +717,8 @@ async function _mpLoadAll() {
 async function _mpRefreshInstalledState() {
   try {
     const [instAgents, instSkills] = await Promise.all([
-      window.orkas.invoke('agents.list'),
-      window.orkas.invoke('skills.list'),
+      window.cogseed.invoke('agents.list'),
+      window.cogseed.invoke('skills.list'),
     ]);
     if (!_mpState) return;
     const agentRows = ((instAgents && instAgents.agents) || [])
@@ -758,7 +758,7 @@ function _mpInstalledSource(source) {
 async function _mpRefreshCategoriesIfMissing() {
   if (_mpCategoriesCache) return;
   try {
-    const r = await window.orkas.invoke('marketplace.categories', {});
+    const r = await window.cogseed.invoke('marketplace.categories', {});
     const list = (r && r.list) || [];
     if (!list.length || !_mpState) return;
     _mpCategoriesCache = list;
@@ -852,7 +852,7 @@ document.addEventListener('visibilitychange', () => {
 // without ever blocking the UI — fire-and-forget; failures keep the localStorage copy.
 (function _mpPreloadCategories() {
   try {
-    window.orkas.invoke('marketplace.categories', {}).then((r) => {
+    window.cogseed.invoke('marketplace.categories', {}).then((r) => {
       const list = (r && r.list) || [];
       if (list.length) {
         _mpCategoriesCache = list;
@@ -863,12 +863,12 @@ document.addEventListener('visibilitychange', () => {
         }
       }
     }).catch(() => { /* ignore */ });
-  } catch { /* preload happens at script load; window.orkas not ready is OK */ }
+  } catch { /* preload happens at script load; window.cogseed not ready is OK */ }
 })();
 
 (function _mpBindDeepLinkOpen() {
   try {
-    window.orkas.onPushEvent('marketplace:open-detail', (payload) => {
+    window.cogseed.onPushEvent('marketplace:open-detail', (payload) => {
       const normalized = _mpNormalizeDeepLinkPayload(payload);
       if (!normalized) return;
       openMarketplace(normalized.kind, {
@@ -1032,7 +1032,7 @@ async function _mpLoadListingsPage(kind, { append, page }) {
   const key = _mpListingsKey(kind, cat, status, q);
   const channel = kind === 'agent' ? 'marketplace.listAgents' : 'marketplace.listSkills';
   try {
-    const r = await window.orkas.invoke(channel, {
+    const r = await window.cogseed.invoke(channel, {
       category: cat || null, status: status || null, q: q || null, page, size: MP_LISTINGS_PAGE_SIZE,
     });
     if (_mpState._loadGen[kind] !== myGen) return;
@@ -1436,7 +1436,7 @@ async function _mpOpenDetail(kind, item, opts = {}) {
 
   try {
     if (kind === 'agent') {
-      const detail = await window.orkas.invoke('marketplace.detailAgent', {
+      const detail = await window.cogseed.invoke('marketplace.detailAgent', {
         id: item.id, version: item.version,
         published_at: item.published_at, updated_at: item.updated_at,
         min_app_version: _mpMinAppVersion(item),
@@ -1445,20 +1445,20 @@ async function _mpOpenDetail(kind, item, opts = {}) {
       _mpState.detailAgentJson = detail.agent_json;
     } else {
       try {
-        const detail = await window.orkas.invoke('marketplace.detailSkill', {
+        const detail = await window.cogseed.invoke('marketplace.detailSkill', {
           id: item.id, version: item.version,
           published_at: item.published_at, updated_at: item.updated_at,
           min_app_version: _mpMinAppVersion(item),
         });
         if (!detail || detail.ok === false) throw _mpErrorFromResponse(detail, 'detail failed');
-        const files = await window.orkas.invoke('marketplace.cacheSkillFiles', { id: item.id });
+        const files = await window.cogseed.invoke('marketplace.cacheSkillFiles', { id: item.id });
         _mpState.detailSkillFiles = (files && files.list) || [];
         const selected = _mpState.detailSkillFiles.find((f) => f.path === _mpState.detailSkillSelected)
           ? _mpState.detailSkillSelected
           : 'SKILL.md';
         _mpState.detailSkillSelected = selected;
         if (_mpState.detailSkillFiles.find((f) => f.path === selected)) {
-          const r = await window.orkas.invoke('marketplace.cacheSkillRead', { id: item.id, file: selected });
+          const r = await window.cogseed.invoke('marketplace.cacheSkillRead', { id: item.id, file: selected });
           _mpState.detailSkillFileText = (r && r.content) || '';
         }
       } catch (err) {
@@ -1588,7 +1588,7 @@ function _mpRenderDetail() {
         if (!file) return;
         _mpState.detailSkillSelected = file;
         try {
-          const r = await window.orkas.invoke('marketplace.cacheSkillRead', { id: item.id, file });
+          const r = await window.cogseed.invoke('marketplace.cacheSkillRead', { id: item.id, file });
           _mpState.detailSkillFileText = (r && r.content) || '';
         } catch (err) {
           _mpState.detailSkillFileText = `// load failed: ${_mpUserErrorMessage(err, 'marketplace.action_failed_retry_later')}`;
@@ -1896,7 +1896,7 @@ async function _mpInstall(kind, id, itemOverride = null) {
   _mpRender();
   const invokeInstall = async () => {
     const channel = kind === 'agent' ? 'marketplace.installAgent' : 'marketplace.installSkill';
-    const r = await window.orkas.invoke(channel, {
+    const r = await window.cogseed.invoke(channel, {
       id, name: item.name || '',
       version: item.version,
       published_at: item.published_at, updated_at: item.updated_at,
@@ -1964,7 +1964,7 @@ async function _mpUninstall(kind, id) {
   _mpRender();
   try {
     const channel = kind === 'agent' ? 'marketplace.uninstallAgent' : 'marketplace.uninstallSkill';
-    const r = await window.orkas.invoke(channel, { id });
+    const r = await window.cogseed.invoke(channel, { id });
     if (!r || r.ok === false) throw new Error((r && r.error) || 'uninstall failed');
     if (kind === 'agent') _mpState.installedAgentIds.delete(id);
     else _mpState.installedSkillIds.delete(id);
@@ -2067,7 +2067,7 @@ async function mountMarketplaceCategorySelect(elId, initialValue = '') {
   if (!el) return;
   let categories = [];
   try {
-    const r = await window.orkas.invoke('marketplace.categories', { local_only: true });
+    const r = await window.cogseed.invoke('marketplace.categories', { local_only: true });
     categories = (r && r.list) || [];
   } catch { /* swallowed — main's fallback handles it */ }
   const lang = (typeof getLang === 'function') ? getLang() : 'en';

@@ -185,11 +185,11 @@ function _bridgeSupported(cli: LocalCliType): boolean {
  *  Runtime-generated (not a tracked prompt md); keep it to capability
  *  discovery — the tool descriptions carry the details. */
 const BRIDGE_SYSTEM_PROMPT =
-  'You are running inside Orkas, the user\'s agent workspace. An MCP server named "orkas" is '
-  + 'connected: it lists and reads the user\'s Orkas skills (orkas_list_skills / orkas_read_skill / '
+  'You are running inside CogSeed, the user\'s agent workspace. An MCP server named "cogseed" is '
+  + 'connected: it lists and reads the user\'s CogSeed skills (orkas_list_skills / orkas_read_skill / '
   + 'orkas_run_skill), reaches their connected services (orkas_list_connector_tools / '
   + 'orkas_call_connector_tool — calls may wait for the user to approve a permission prompt in '
-  + 'Orkas), and browses/searches their knowledge base (orkas_kb_list / orkas_kb_search / '
+  + 'CogSeed), and browses/searches their knowledge base (orkas_kb_list / orkas_kb_search / '
   + 'orkas_kb_read). Prefer these '
   + 'tools when the task involves the user\'s skills, services, or library content.';
 
@@ -591,7 +591,7 @@ export interface RunCliAgentOpts {
   prompt: string;
   cwd: string;
   signal: AbortSignal;
-  /** Optional host orchestration tools exposed through orkas-bridge. */
+  /** Optional host orchestration tools exposed through cogseed-bridge. */
   bridgeOrchestration?: import('./bridge').BridgeOrchestrationTools;
   /** Optional shared execution recorder. Absent keeps legacy behavior. */
   executionLifecycle?: ExecutionLifecycleSink;
@@ -828,12 +828,12 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
   }, idleTickMs);
   if (typeof idleTimer.unref === 'function') idleTimer.unref();
 
-  // orkas-bridge (plan §D): per-run host exposing the user's Orkas
+  // cogseed-bridge (plan §D): per-run host exposing the user's CogSeed
   // skills / connectors / KB to the CLI agent over a local socket. Bridge
   // failures never fail the dispatch — the CLI just runs without the
   // `orkas` MCP server, same as before the bridge existed.
   let bridge: import('./bridge').BridgeHandle | null = null;
-  if (_bridgeSupported(opts.cli) && process.env.ORKAS_BRIDGE_DISABLED !== '1') {
+  if (_bridgeSupported(opts.cli) && process.env.COGSEED_BRIDGE_DISABLED !== '1') {
     try {
       const [{ startBridge }, { buildSkillSandboxEnv }] = await Promise.all([
         import('./bridge.js'),
@@ -891,7 +891,7 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
           mcpConfigPath: bridge.mcpConfigPath,
           server: {
             command: bridge.serverEnv.ORKAS_NODE || process.execPath,
-            args: [`${bridge.serverEnv.ORKAS_PC_DIR}/bin/orkas-bridge.cjs`],
+            args: [`${bridge.serverEnv.ORKAS_PC_DIR}/bin/cogseed-bridge.cjs`],
             env: bridge.serverEnv,
           },
           appendSystemPrompt: BRIDGE_SYSTEM_PROMPT,

@@ -5,7 +5,7 @@
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
-  if (root) root.OrkasArtifactSecurity = api;
+  if (root) root.CogSeedArtifactSecurity = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
@@ -32,7 +32,7 @@
     try { source = frame.contentWindow; } catch (_) { return false; }
     if (!source || event.source !== source) return false;
     const data = event.data;
-    return !!data && typeof data === 'object' && data.__orkasArtifact === true;
+    return !!data && typeof data === 'object' && data.__cogseedArtifact === true;
   }
 
   return Object.freeze({ SANDBOX, safeExternalHttpUrl, trustedArtifactMessage });

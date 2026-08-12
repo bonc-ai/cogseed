@@ -1,8 +1,11 @@
 {
-  "appName": "Mate Agent",
-  "zhName": "Mate 智伴",
-  "appId": "com.mateagent.desktop",
-  "protocolScheme": "mateagent",
-  "legacyConnectorScheme": "orkas",
-  "taglineZh": "你的协作型智能体工作台"
+  "appName": "CogSeed",
+  "zhName": "CogSeed",
+  "appId": "com.cogseed.desktop",
+  "protocolScheme": "cogseed",
+  "taglineZh": "跨 Agent 的个人能力资产层",
+  "legacyConnectorSchemes": [
+    "mateagent",
+    "orkas"
+  ]
 }

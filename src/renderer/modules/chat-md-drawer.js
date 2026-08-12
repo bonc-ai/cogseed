@@ -53,7 +53,7 @@ async function openChatMdDrawer({ source, initialMode, title }) {
         try {
           const payload = { path: source.absPath };
           if (source.cid) payload.cid = source.cid;
-          window.orkas.invoke('workspace.revealPath', payload);
+          window.cogseed.invoke('workspace.revealPath', payload);
         } catch (err) {
           _chatMdDrawerLog.warn('revealPath failed', err);
         }
