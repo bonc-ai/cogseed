@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 const UID = 'test-user-sl';
-const MOD = '../../../../src/main/features/evolution/skill-lifecycle';
+const MOD = '../../../../src/main/features/skills/skill-lifecycle';
 const FLAGS = '../../../../src/main/features/p3394/flags';
 
 let tmpDir: string;
