@@ -1962,6 +1962,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, ...(await p3394.checkMigrationStatus(ctx.userId)) };
   },
 
+  // 把本体抽取技能的产出搬进统一候选池。幂等：反复调不会重复建候选。
+  // 认知区加载时顺带调一次，用户不必记得手动逐条导入。
+  'recall.candidates.syncOntology': async (_args, ctx) => {
+    const { syncOntologyCandidatesIntoPool } = await import('../features/recall/ontology-candidate-bridge');
+    return { ok: true, sync: await syncOntologyCandidatesIntoPool(ctx.userId) };
+  },
+
   'recall.candidates.list': async (_args, ctx) => ({ ok: true, candidates: await recallCandidates.listRecallCandidates(ctx.userId) }),
 
   'recall.sources.list': async ({ kinds, conversationId, limit } = {}, ctx) => {

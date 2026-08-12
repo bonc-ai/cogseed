@@ -1225,6 +1225,10 @@ async function loadSkillsCognitionSnapshot() {
   const capturePayload = { limit: 25 };
   const captureStatuses = _captureStatusesForFilter(_skillsCognitionState.captureFilter);
   if (captureStatuses.length) capturePayload.statuses = captureStatuses;
+  // 先把本体抽取技能的产出搬进统一候选池，再拉列表——否则技能刚产出的候选
+  // 要等用户手动逐条导入才看得见。幂等，反复进页面不会重复建候选。
+  // 失败不阻断渲染：搬不动是本体侧的问题，认知区其余内容照常显示。
+  try { await window.orkas.invoke('recall.candidates.syncOntology'); } catch (_) {}
   const [dashboard, candidates, recallCandidates, receipts, assets, sources, captures, recentCaptures, recallViews, contextProjections, ontologyGroups, teachingSignals, captureSettings] = await Promise.allSettled([
     window.orkas.invoke('cognition.dashboard.read'),
     window.orkas.invoke('cognition.candidates.list', { status: 'pending', limit: 200 }),
