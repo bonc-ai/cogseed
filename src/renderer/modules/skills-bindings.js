@@ -620,6 +620,27 @@ function _initSkillsCognitionBindings() {
     const source = action.dataset.cognitionCandidateSource;
     const candidateId = action.dataset.cognitionCandidateId;
     if (!source || !candidateId || action.dataset.busy === '1') return;
+    // Deep review is a read-only probe: it runs both gate layers and reports,
+    // without deciding the candidate. Model failure is reported as
+    // "unavailable" rather than as a clean pass.
+    if (action.dataset.cognitionCandidateAction === 'deep-review') {
+      action.dataset.busy = '1'; action.disabled = true;
+      try {
+        const res = await window.orkas.invoke('cognition.candidates.deepReview', { source, candidateId });
+        if (!res?.ok) throw new Error(res?.error || 'deep review failed');
+        const r = res.review || {};
+        const lines = [
+          `${_cognitionText('cognition.security', '安全检查')}: ${r.status || 'unknown'}`,
+          `${_cognitionText('cognition.findings', '发现')}: ${r.findingCount || 0}`,
+        ];
+        if (r.topRule) lines.push(r.topRule);
+        if (r.degradedReason) lines.push(_cognitionText('cognition.security_degraded', '深度审查不可用'));
+        if (typeof uiAlert === 'function') await uiAlert(lines.join('\n'));
+        await loadSkillsCognitionSnapshot();
+      } catch (error) { if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error)); }
+      finally { action.dataset.busy = '0'; action.disabled = false; }
+      return;
+    }
     const decided = action.dataset.cognitionCandidateAction;
     // 四决定（PRD §5.6）：accept / modify / defer / reject；其余动作已在前面分支处理。
     if (decided !== 'accept' && decided !== 'modify' && decided !== 'defer' && decided !== 'reject') return;
@@ -631,6 +652,20 @@ function _initSkillsCognitionBindings() {
         candidateId,
         decision: decided,
       });
+      // A gate block is an expected outcome with structured findings, not a
+      // generic failure — explain what was found rather than showing the raw
+      // error string. The block itself is not user-overridable.
+      if (result && result.ok === false && result.code === 'cognition_gate_blocked') {
+        const findings = (result.gate && result.gate.findings) || [];
+        const lines = findings.slice(0, 5).map((f) => `· ${f.rule}${f.field ? ` (${f.field})` : ''}`);
+        const title = (typeof t === 'function' ? t('cognition.gate_blocked_title') : '') || '';
+        const header = title && title !== 'cognition.gate_blocked_title'
+          ? title
+          : '该候选未通过安全检查，无法保存为正式资产';
+        if (typeof uiAlert === 'function') await uiAlert([header, ...lines].join('\n'));
+        await loadSkillsCognitionSnapshot();
+        return;
+      }
       if (!result?.ok) throw new Error(result?.error || 'candidate decision failed');
       await loadSkillsCognitionSnapshot();
     } catch (error) {

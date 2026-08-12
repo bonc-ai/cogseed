@@ -49,6 +49,10 @@ import {
 } from '../storage';
 import { invalidateSkills as invalidateCoreAgentSkills } from '../model/core-agent/skill-registry';
 import { readDisabledSets, setSkillEnabled } from './component_enabled';
+import { partitionSkillsByTrustDeep, topViolationOf, isConventionRule } from './skill_reverify';
+import { listReceipts, skillPayloadHash, writeInstallReceipt, type SecurityReceipt } from './skill_trust';
+import { scanVerdictBlocksInstall } from './security/sentry-adapter';
+import { scanSkillDir, type SentryScanResult } from './security/sentry-adapter';
 import { findOuterTagRanges } from '../util/markdown-prose-code';
 import {
   validateSkillFile,
@@ -138,6 +142,93 @@ export interface SkillListing {
    *  frontmatter `ownerAgent`). Set only on entries returned by
    *  `listAgentPrivateSkills`; `listSkills` filters these out entirely. */
   ownerAgent?: string;
+  /**
+   * **Computed at load time, not persisted.** Security-receipt state for a
+   * marketplace install. Absent for custom skills, which carry no receipt.
+   *
+   * `withheld` is the state the load gate acts on: the files changed after the
+   * scan that admitted them (or the ruleset moved) and the rescan found an
+   * EXTREME violation. It is reported here so the panel can render the skill as
+   * held-back rather than letting it vanish — a card disappearing silently reads
+   * as a bug and invites a blind reinstall.
+   *
+   * `verified` / `risk` are informational: they let the panel answer "was this
+   * checked, and when" without the user having to trust that silence means yes.
+   * `unchecked` means no receipt is on record yet (a scan will run on next load).
+   */
+  security?: {
+    status: 'verified' | 'risk' | 'withheld' | 'unchecked';
+    /** Why a prior verdict stopped applying, e.g. `payload_changed`. Withheld only. */
+    reason?: string;
+    /** ISO timestamp of the scan that produced the current verdict. */
+    scannedAt?: string;
+    /** Validator build behind the verdict, so a stale check is explainable. */
+    validatorVersion?: string;
+    /** Findings recorded by that scan. 0 for a clean pass. */
+    findingCount?: number;
+    /** 0-100 deep-scanner score, when a deep scan produced this verdict. */
+    securityScore?: number;
+    /** Deep scanner build, e.g. skill-sentry's version. */
+    scannerVersion?: string;
+    /** Ruleset the scanner loaded. */
+    rulesetVersion?: string;
+    /**
+     * Whether the scan ran isolated.
+     *
+     * Surfaced so the panel can say "not isolated, lower confidence" rather than
+     * implying sandboxed verification the scan did not actually perform.
+     */
+    isolated?: boolean;
+    /**
+     * True when the scanner ran on fallback rules instead of the versioned set.
+     *
+     * The badge must disclose this: a fallback-rules pass has materially weaker
+     * coverage, and presenting it as a clean check would be the "already safe"
+     * placeholder the spec forbids.
+     */
+    rulesDegraded?: boolean;
+    /**
+     * Which rule set produced the verdict: `deep` is the full scanner, `local`
+     * the regex-only subset that still runs when the deep scanner is
+     * unavailable.
+     *
+     * Surfaced because the two are not interchangeable — the local subset passes
+     * payloads the deep scanner blocks — and a badge that reads the same for both
+     * would tell the user a `local` pass is as strong as a `deep` one.
+     */
+    scanner?: 'deep' | 'local';
+    /**
+     * Attack-surface counts from the scan. Counts only, never matched text.
+     *
+     * Forwarded so the detail panel can explain a passing verdict — a clean scan
+     * that still found a persistence point is worth showing, and the equivalent
+     * breakdown is already shown when an import is refused.
+     */
+    attackSurface?: {
+      egressPoints: number;
+      dynamicExecPoints: number;
+      persistencePoints: number;
+      hasBinaries: boolean;
+    };
+    /**
+     * Instruction-type findings: prose directing the agent, which the code rules
+     * cannot see. Carried so the panel can quote the passage — this verdict is
+     * surfaced for the user's judgement rather than enforced, and a bare label
+     * gives them nothing to judge.
+     */
+    instructionRisk?: {
+      status: 'clean' | 'suspicious' | 'unavailable';
+      segments: Array<{ file: string; line: number; text: string; signal: string }>;
+    };
+    /**
+     * Set when the skill is installed because the user accepted a refusal.
+     *
+     * Without this the override would be invisible after the fact: the skill
+     * would look like any other, and the single most relevant fact about it —
+     * that nothing verified it and someone chose to proceed — would be lost.
+     */
+    userOverride?: { outcome: string; at: number };
+  };
 }
 
 export interface CustomSkill {
@@ -774,6 +865,123 @@ function _overlaySkillEnabled(list: SkillListing[]): SkillListing[] {
   return list.map((s) => ({ ...s, enabled: !disabledSkillIds.has(s.id) }));
 }
 
+/**
+ * Annotate marketplace entries with their security-receipt state.
+ *
+ * Kept separate from `_overlaySkillEnabled` because the two answer different
+ * questions and must not be conflated: `enabled` is the user's preference and
+ * they can toggle it back, whereas a withheld skill is held by verification and
+ * the user cannot re-enable it. Merging them into one "unavailable" flag would
+ * invite exactly the "just toggle it on" affordance that must not exist.
+ *
+ * Reads receipts rather than rescanning. `partitionSkillsByTrust` already
+ * rescans anything stale (that is what makes the withheld verdict current), so
+ * by the time the receipt is read it describes the bytes on disk. Building the
+ * informational half from `listReceipts` keeps this to one directory read
+ * instead of a second hash pass over the corpus.
+ *
+ * Only marketplace installs carry receipts (`reverifySkill` resolves
+ * `userMarketplaceSkillDir`), so custom skills are left unannotated rather than
+ * probed for a receipt that never exists and mislabeled `unchecked`.
+ *
+ * Failure is silent by design: this is presentation. If the trust check throws,
+ * entries come back unannotated — the same fail-open direction the load gate
+ * uses, and one that cannot make a working skill look broken.
+ */
+async function _overlaySkillSecurity(list: SkillListing[]): Promise<SkillListing[]> {
+  // Custom skills are included now that `reverifySkill` resolves their directory
+  // too. They were excluded while it looked only in the marketplace tree, where
+  // a custom id never exists — so they came back `unknown` and were left
+  // unannotated rather than mislabelled. Both kinds are scanned by the same
+  // rules: `skills.writeFile` and the self-evolution patch path both write into
+  // the custom tree, so its bytes are not necessarily hand-authored.
+  //
+  // Agent-private skills stay out: `listSkills` already excludes them, so
+  // nothing here can see one.
+  const scannableIds = list
+    .filter((s) => s.source === 'marketplace' || s.source === 'custom')
+    .map((s) => s.id);
+  if (!scannableIds.length) return list;
+
+  const uid = getActiveUserId();
+  let withheldById: Map<string, string>;
+  let receiptById: Map<string, SecurityReceipt>;
+  try {
+    const { withheld } = await partitionSkillsByTrustDeep(uid, scannableIds);
+    withheldById = new Map(withheld.map((w) => [w.skillId, w.reason || 'unknown']));
+    receiptById = new Map(listReceipts(uid).map((r) => [r.skillId, r]));
+  } catch {
+    return list;
+  }
+
+  return list.map((s) => {
+    if (s.source !== 'marketplace' && s.source !== 'custom') return s;
+    // External skills (Claude Code / Codex, `category: 'external'`) live outside
+    // our skill trees: no receipt is ever written for them and no scan will run.
+    // They carry `source: 'custom'`, so without this they fell through as
+    // `unchecked` — which promises "a scan will run on next load" and would never
+    // come true. Left unannotated instead: no claim rather than a false one.
+    if (s.category === 'external') return s;
+    const reason = withheldById.get(s.id);
+    const receipt = receiptById.get(s.id);
+    const common = receipt
+      ? {
+        scannedAt: receipt.scannedAt,
+        validatorVersion: receipt.validatorVersion,
+        findingCount: receipt.violationCount,
+        // Deep-scan provenance. All optional: receipts written before the
+        // scanner existed, or by a scan that could not run it, simply omit
+        // these and the UI falls back to the plain "checked at" line.
+        ...(typeof receipt.securityScore === 'number'
+          ? { securityScore: receipt.securityScore } : {}),
+        ...(receipt.scannerVersion ? { scannerVersion: receipt.scannerVersion } : {}),
+        ...(receipt.rulesetVersion ? { rulesetVersion: receipt.rulesetVersion } : {}),
+        ...(typeof receipt.isolated === 'boolean' ? { isolated: receipt.isolated } : {}),
+        ...(receipt.rulesDegraded ? { rulesDegraded: true } : {}),
+        // Only forwarded when the receipt actually records it. A missing value
+        // must stay missing rather than defaulting to `local`: an old receipt is
+        // of unknown depth, and guessing the weaker value would put a "coverage
+        // is weaker" caveat on skills that may well have had a full scan.
+        ...(receipt.scanner ? { scanner: receipt.scanner } : {}),
+        ...(receipt.attackSurface ? { attackSurface: { ...receipt.attackSurface } } : {}),
+        ...(receipt.instructionRisk ? { instructionRisk: receipt.instructionRisk } : {}),
+        ...(receipt.userOverride ? { userOverride: receipt.userOverride } : {}),
+      }
+      : {};
+    if (reason) {
+      return { ...s, security: { status: 'withheld' as const, reason, ...common } };
+    }
+    if (!receipt) return { ...s, security: { status: 'unchecked' as const } };
+    // A `blocked` receipt without a withheld verdict cannot normally happen (the
+    // gate would have withheld it); treat it as withheld rather than inventing a
+    // fourth state, so the two never disagree in the UI.
+    if (receipt.decision === 'blocked') {
+      return { ...s, security: { status: 'withheld' as const, reason: 'blocked', ...common } };
+    }
+    // `decision: 'risk'` means "the scan recorded at least one violation of any
+    // level" — including LOW/MEDIUM metadata nits like a missing `_meta.json`
+    // category, which nearly every builtin skill currently trips. Surfacing that
+    // verbatim would label the whole library "has findings" and train users to
+    // ignore the badge, so `risk` is shown only when the top finding was MEDIUM
+    // or above. The receipt keeps the raw decision; this is presentation, and it
+    // must not cry wolf.
+    //
+    // A receipt written before `topLevel` existed has no level, and is treated as
+    // not notable rather than assumed severe — the next rescan fills it in.
+    //
+    // Convention rules are excluded by rule id, not by level — see
+    // `isConventionRule`. They are an authoring contract that fires at MEDIUM on
+    // most of the library, and letting them drive the badge would mark clean
+    // skills as "has findings", the exact failure the paragraph above exists to
+    // prevent. Belt and braces with `_decisionOf`: this also covers receipts
+    // written before that fix, which recorded `risk` for convention-only reports.
+    const notable = !isConventionRule(receipt.topRule || '')
+      && (receipt.topLevel === 'EXTREME' || receipt.topLevel === 'MEDIUM');
+    const status = receipt.decision === 'risk' && notable ? 'risk' as const : 'verified' as const;
+    return { ...s, security: { status, ...common } };
+  });
+}
+
 /** User-facing skill list — custom + marketplace + external (Claude Code, Codex),
  *  EXCLUDING agent-private (`ownerAgent`) skills (those belong to one agent's
  *  internal pipeline and must not appear in the panel; see PC CLAUDE.md §Skills). */
@@ -853,7 +1061,10 @@ export async function listSkills(): Promise<SkillListing[]> {
     log.warn('failed to scan Codex skills:', err);
   }
 
-  return [...internal, ...external];
+  // External skills carry no receipt, and neither do custom ones — the overlay
+  // leaves unannotated what it cannot vouch for rather than labelling it
+  // `unchecked`, which would read as "scanned, nothing found".
+  return _overlaySkillSecurity([...internal, ...external]);
 }
 
 /** Dev-only: the agent-private (`ownerAgent`) skills hidden from `listSkills`.
@@ -1433,13 +1644,108 @@ export interface ImportResult {
   ok: boolean;
   skill?: CustomSkill;
   skills?: CustomSkill[];
-  seedModelText?: string;
+  /**
+   * Text seeded into the skill edit chat, or `false` to open no chat at all.
+   *
+   * `false` is distinct from absent: the renderer reads a missing value as "use
+   * the default refine prompt", so suppressing the chat has to be explicit.
+   */
+  seedModelText?: string | false;
   // Deprecated compatibility alias. Import flows should treat this as model
   // text, not as visible UI copy.
   seedMessage?: string | false;
   report?: QualityReport;
   skillId?: string;
   error?: string;
+  /** Deep-scan verdict when the security gate rejected the import. */
+  securityScan?: SentryScanResult;
+  /** True when the scan ran and rejected the content. */
+  securityBlocked?: boolean;
+  /** True when the scan could not run at all (fail closed, not a threat claim). */
+  securityUnavailable?: boolean;
+  /**
+   * Verdict of a scan that PASSED, so the UI can confirm the check ran.
+   *
+   * Present on success as well as failure: a pass that produces no visible
+   * evidence is indistinguishable from no check at all.
+   */
+  securityPass?: SentryScanResult;
+}
+
+/**
+ * Deep security scan for an imported skill directory.
+ *
+ * Imports reach this on the same footing as marketplace installs — the two used
+ * to disagree, and the gap was exploitable: only the marketplace path ran the
+ * deep scan, so a payload that the marketplace refused could still be side-
+ * loaded through import. One scanner, both doors.
+ *
+ * Imported content is always treated as `community`, never `official`: an
+ * arbitrary local directory or URL has strictly less provenance than a
+ * platform-published skill, so it gets the stricter threshold.
+ *
+ * Runs BEFORE the refine agent is seeded. The agent reads the imported files
+ * into a model context, and those files are attacker-controlled — scanning
+ * first means known-malicious content never reaches the model at all.
+ */
+async function _scanImportedSkill(skillDir: string): Promise<SentryScanResult> {
+  return scanSkillDir(skillDir, 'community');
+}
+
+/**
+ * Record a passing import scan as a receipt.
+ *
+ * The import already deep-scans and rolls the batch back on `blocked`, but the
+ * result used to be discarded — so an imported skill had no baseline hash, and
+ * every later defence that compares against one was inert for it: tamper
+ * detection had nothing to diff, and load-time re-verification resolved only the
+ * marketplace tree and returned `unknown`. Measured, a credential-exfiltration
+ * payload hidden in `tests/` inside a custom skill was neither blocked nor
+ * withheld before this.
+ *
+ * Best-effort by design: the scan has already passed and the skill is installed,
+ * so a failed write must not undo that. It only means the first re-verification
+ * rescans instead of reusing a receipt.
+ */
+async function _recordImportReceipt(skillId: string, skillDir: string, scan: SentryScanResult): Promise<void> {
+  try {
+    const hash = skillPayloadHash(skillDir);
+    if (!hash) return;
+    const report = validateSkillDir(skillDir, { enforceSkillRunner: false });
+    const top = topViolationOf(report.violations);
+    writeInstallReceipt(getActiveUserId(), skillId, hash, scan, {
+      violationCount: report.violations.length,
+      ...(top?.rule ? { topRule: top.rule } : {}),
+      ...(top?.level ? { topLevel: top.level } : {}),
+    });
+  } catch (err) {
+    log.warn('failed to record import receipt', { skillId, error: (err as Error).message });
+  }
+}
+
+/**
+ * Turn a rejecting scan verdict into an `ImportResult`, rolling back first.
+ *
+ * `blocked` and `unavailable` are reported separately rather than collapsed into
+ * one error: telling a user their skill is malicious when the scanner merely
+ * failed to start would train them to dismiss the real thing.
+ */
+async function _rejectImportForSecurity(
+  scan: SentryScanResult,
+  skillIds: string[],
+): Promise<ImportResult> {
+  for (const id of skillIds) {
+    try { await deleteCustomSkill(id); } catch { /* best-effort rollback */ }
+  }
+  const unavailable = scan.outcome === 'unknown';
+  return {
+    ok: false,
+    error: unavailable
+      ? t('skills.errors.security_unavailable')
+      : t('skills.errors.security_blocked'),
+    securityScan: scan,
+    ...(unavailable ? { securityUnavailable: true } : { securityBlocked: true }),
+  };
 }
 
 function _defaultSkillNameFromUrl(url: string): string {
@@ -1616,26 +1922,18 @@ function _sourceSkillInstallMeta(sourceRoot: string, sourceSkillMd: string): Ski
     DEFAULT_MARKETPLACE_CATEGORY_CODE,
   );
   const status = String(filePatch.status || sourceMeta.status || sourceMeta.state || 'approved').trim() || 'approved';
-  // Bootstrap only. The visible metadata-check chat rewrites _meta.json with
-  // model-authored category/routing, so source bookkeeping or legacy fields
-  // must not leak into the installed skill.
+  // Category comes from the source frontmatter, falling back to the default —
+  // no model round-trip. A metadata-check chat used to run after a direct
+  // install and could rewrite `category`/`routing`, but it was removed: its seed
+  // was a bare statement ("已直接安装这些技能：…") with no instruction, the two
+  // fields it could touch are cosmetic here (`category` already resolves from
+  // frontmatter, and nothing reads `routing` — skill dispatch keys off name and
+  // description), and it took over the whole chat pane to do it. When the model
+  // was out of credit it surfaced a raw `402 Insufficient Balance` next to a
+  // skill that had in fact installed fine.
+  //
+  // Source bookkeeping and legacy fields are still dropped rather than copied.
   return { category, status };
-}
-
-function _sourceSkillMetadataSeed(createdSkills: CustomSkill[]): string {
-  const ids = createdSkills.map((skill) => skill.id).filter(Boolean).join(', ');
-  return t('skills.import.seed_existing_meta', { skills: ids });
-}
-
-async function _markSourceSkillMetadataSession(firstSkillId: string, targetSkillIds: string[]): Promise<void> {
-  if (!firstSkillId || targetSkillIds.length === 0) return;
-  const uid = getActiveUserId();
-  const current = await loadSkillChatMeta(uid, firstSkillId);
-  await saveSkillChatMeta(uid, firstSkillId, {
-    ...current,
-    import_meta_targets: targetSkillIds,
-    import_meta_created_at: nowIso(),
-  });
 }
 
 /**
@@ -1656,8 +1954,30 @@ async function _markSourceSkillMetadataSession(firstSkillId: string, targetSkill
  * `force` remains meaningful for MEDIUM/LOW advisories, which never blocked
  * the write to begin with.
  */
-function _isQualityBlockedImport(report: QualityReport): boolean {
-  return !report.ok;
+/**
+ * Whether the structural report should block an import.
+ *
+ * Reads through context demotion rather than trusting `report.ok`. `ok` reflects
+ * the *effective* level, and both rulesets lower severity for `test/`, `vendor/`
+ * and `generated/` paths — right for how loudly a finding is reported, wrong for
+ * a gate, since a test directory is a perfectly good place to hide a payload.
+ *
+ * Verified: a skill whose only payload is `tests/fixtures.sh` running
+ * `cat ~/.aws/credentials | curl -d @-` produces `report.ok === true`, because
+ * the EXTREME hit is recorded as MEDIUM after demotion. That sample imported
+ * cleanly before this check looked at `original_level`.
+ */
+function _isQualityBlockedImport(
+  report: QualityReport, acceptRedFlagRisk = false,
+): boolean {
+  // An informed user may proceed past a red flag. Reverses an earlier absolute
+  // rule; the reasoning and the history it overturns are in `quality/README.md`.
+  // Note this reads `original_level`, so a demotion (e.g. a `tests/` path) cannot
+  // quietly turn a red flag into a soft advisory — the override has to be a
+  // decision, not a side effect of where the file happens to live.
+  if (acceptRedFlagRisk) return false;
+  if (!report.ok) return true;
+  return report.violations.some((v) => (v.original_level || v.level) === 'EXTREME');
 }
 
 async function _installSourceSkillRoots(
@@ -1667,9 +1987,11 @@ async function _installSourceSkillRoots(
   files: { src: string; rel: string; size: number }[],
   sourceRoots: string[],
   totalBytes: number,
+  acceptRedFlagRisk = false,
 ): Promise<ImportResult> {
   const reserved = new Set<string>();
   const createdIds: string[] = [];
+  const pendingSkeletons: { skillDir: string; skillId: string; name: string }[] = [];
   const createdSkills: CustomSkill[] = [];
   const single = sourceRoots.length === 1;
 
@@ -1691,17 +2013,13 @@ async function _installSourceSkillRoots(
       const rootFiles = _dropSourceMetaFiles(_filesForSourceSkillRoot(sourceRoot, files, sourceRoots));
       fs.rmSync(skillMetaFile(skillDir), { force: true });
       _copyImportedSkillFilesPreservingSource(skillDir, rootFiles);
-      // NSEAP skeleton conversion: auto-generate the missing standard
-      // artifacts as templates (appendix A "defaults are compliant");
-      // author-owned ★ files are left for the metadata-check chat.
-      try {
-        ensureNseapSkillSkeleton(skillDir, effectiveName);
-      } catch (err) {
-        log.warn('import-dir nseap skeleton generation failed', {
-          skill_id: created.id,
-          error_message: (err as Error).message,
-        });
-      }
+      // NSEAP skeleton generation is deferred until after the security scan —
+      // see the loop below. Doing it here diluted the verdict: the skeleton adds
+      // eight `references/*.md` templates, and measured on a fixture with
+      // `chmod 777` plus an env-driven POST the outcome moved from `restricted`
+      // to `pass` purely because clean files outnumbered the suspicious ones.
+      // The scan must judge what the user actually supplied.
+      pendingSkeletons.push({ skillDir, skillId: created.id, name: effectiveName });
       writeSkillOrkasMetaFullSync(skillDir, _sourceSkillInstallMeta(sourceRoot, sourceSkillMd));
 
       const fresh = await getCustomSkill(created.id);
@@ -1734,7 +2052,7 @@ async function _installSourceSkillRoots(
       firstReportSkillId = skill.id;
     }
   }
-  if (firstReport && _isQualityBlockedImport(firstReport)) {
+  if (firstReport && _isQualityBlockedImport(firstReport, acceptRedFlagRisk)) {
     for (const id of createdIds) {
       try { await deleteCustomSkill(id); } catch { /* best-effort rollback */ }
     }
@@ -1745,7 +2063,59 @@ async function _installSourceSkillRoots(
       skillId: firstReportSkillId,
     };
   }
-  await _markSourceSkillMetadataSession(createdSkills[0]?.id || '', createdSkills.map((skill) => skill.id));
+
+  // Deep scan every skill this import produced. A multi-root import is
+  // all-or-nothing: one bad root rolls back the whole batch, because the roots
+  // came from one source the user made a single decision about, and leaving the
+  // "clean" siblings of a malicious payload installed would be a strange
+  // partial state to explain.
+  //
+  // The reported verdict is the worst one seen, so a batch containing a
+  // `restricted` root is not summarized to the user as a clean pass.
+  let worstScan: SentryScanResult | undefined;
+  const admitted: { skillId: string; scan: SentryScanResult }[] = [];
+  for (const skill of createdSkills) {
+    const scan = await _scanImportedSkill(customSkillDir(skill.id));
+    // Same consent as the quality gate above. Gating them differently would let
+    // one refuse what the other just waived, and the user would see a dialog that
+    // does nothing.
+    if (!acceptRedFlagRisk && scanVerdictBlocksInstall(scan.outcome)) {
+      return _rejectImportForSecurity(scan, createdIds);
+    }
+    admitted.push({ skillId: skill.id, scan });
+    if (!worstScan || (scan.outcome === 'restricted' && worstScan.outcome !== 'restricted')) {
+      worstScan = scan;
+    }
+  }
+
+  // Skeleton generation sits between the scan and the receipt, and both sides of
+  // that ordering are load-bearing:
+  //
+  //  - After the scan, because the skeleton's eight `references/*.md` templates
+  //    otherwise dilute the verdict. Measured: a fixture with `chmod 777` and an
+  //    env-driven POST moved from `restricted` to `pass` once the templates were
+  //    present, so a payload could be laundered by padding a skill with harmless
+  //    files.
+  //  - Before the receipt, because the receipt's baseline hash covers the whole
+  //    tree. Measured: the hash differs before and after generation, so recording
+  //    it first would make every imported skill read as tampered on the next
+  //    verification.
+  for (const pending of pendingSkeletons) {
+    try {
+      ensureNseapSkillSkeleton(pending.skillDir, pending.name);
+    } catch (err) {
+      log.warn('import-dir nseap skeleton generation failed', {
+        skill_id: pending.skillId,
+        error_message: (err as Error).message,
+      });
+    }
+  }
+
+  // Receipts last: only verdicts that admitted the skill become receipts, and the
+  // hash must describe the tree as it will be found on disk.
+  for (const entry of admitted) {
+    await _recordImportReceipt(entry.skillId, customSkillDir(entry.skillId), entry.scan);
+  }
 
   log.info('created-from-dir direct skill install', {
     skill_count: createdSkills.length,
@@ -1753,13 +2123,19 @@ async function _installSourceSkillRoots(
     bytes: totalBytes,
     source_root: realSrc,
   });
-  const seedModelText = _sourceSkillMetadataSeed(createdSkills);
   return {
     ok: true,
     skill: createdSkills[0],
     skills: createdSkills,
-    seedModelText,
-    seedMessage: seedModelText,
+    // `false`, not omitted: the renderer treats a missing seed as "use the
+    // default refine prompt", and only an explicit false suppresses the chat.
+    //
+    // A direct install is complete on its own — metadata comes from the source
+    // frontmatter and the security toast already reports the outcome, so there is
+    // nothing for the user to supervise here.
+    seedModelText: false,
+    seedMessage: false,
+    ...(worstScan ? { securityPass: worstScan } : {}),
   };
 }
 
@@ -1769,6 +2145,7 @@ async function _createEditableDraftFromImportDir(
   realSrc: string,
   files: { src: string; rel: string; size: number }[],
   totalBytes: number,
+  acceptRedFlagRisk = false,
 ): Promise<ImportResult> {
   const effectiveName = (name || '').trim() || _defaultSkillNameFromDir(realSrc);
   const effectiveDesc = (description || '').trim() || t('skills.import.default_desc_dir');
@@ -1792,7 +2169,7 @@ async function _createEditableDraftFromImportDir(
   void persistQualityReport({
     uid: getActiveUserId(), kind: 'skill', id: created.id, report,
   });
-  if (_isQualityBlockedImport(report)) {
+  if (_isQualityBlockedImport(report, acceptRedFlagRisk)) {
     try { await deleteCustomSkill(created.id); } catch { /* best-effort rollback */ }
     return {
       ok: false,
@@ -1801,6 +2178,15 @@ async function _createEditableDraftFromImportDir(
       skillId: created.id,
     };
   }
+
+  // Deep scan before the refine agent is seeded below. Ordering is the point:
+  // the agent reads these files into a model context, so anything known-bad must
+  // be rejected while it is still just bytes on disk.
+  const scan = await _scanImportedSkill(skillDir);
+  if (!acceptRedFlagRisk && scanVerdictBlocksInstall(scan.outcome)) {
+    return _rejectImportForSecurity(scan, [created.id]);
+  }
+  await _recordImportReceipt(created.id, skillDir, scan);
 
   const fresh = await getCustomSkill(created.id) || created;
   log.info('created-from-dir import draft', {
@@ -1815,6 +2201,7 @@ async function _createEditableDraftFromImportDir(
     skills: [fresh],
     seedModelText,
     seedMessage: seedModelText,
+    securityPass: scan,
   };
 }
 
@@ -1911,10 +2298,10 @@ export async function createFromDir(
   name: string | null,
   description: string | null,
   srcDir: string,
-  // `force` is accepted for IPC/renderer compatibility but no longer weakens
-  // the quality gate: EXTREME violations are non-overridable. See
-  // `_isQualityBlockedImport`.
-  _opts: { force?: boolean } = {},
+  // `force` stays separate from red-flag consent on purpose: ordinary retry paths
+  // set `force`, so treating it as consent would silently accept security risk on
+  // behalf of a user who only asked to retry.
+  _opts: { force?: boolean; acceptRedFlagRisk?: boolean } = {},
 ): Promise<ImportResult> {
   if (!srcDir || !path.isAbsolute(srcDir)) {
     return { ok: false, error: t('skills.errors.path_not_absolute') };
@@ -1945,11 +2332,13 @@ export async function createFromDir(
   if (sourceRoots.length > 0) {
     return _installSourceSkillRoots(
       name, description, realSrc, files, sourceRoots, totalBytes,
+      _opts.acceptRedFlagRisk === true,
     );
   }
 
   return _createEditableDraftFromImportDir(
     name, description, realSrc, files, totalBytes,
+    _opts.acceptRedFlagRisk === true,
   );
 }
 
@@ -2214,6 +2603,15 @@ async function saveSkillChatMeta(userId: string, skillId: string, meta: SkillCha
   await writeJson(skillChatMetaPath(userId, skillId), meta);
 }
 
+/**
+ * Skill ids a pending direct-import metadata chat is allowed to touch.
+ *
+ * Nothing writes this marker any more — the post-install metadata chat was
+ * removed. The read path stays because users who imported before that change can
+ * still have `import_meta_targets` sitting in an existing chat sidecar, and it is
+ * what keeps such a session restricted to sidecar-only edits. Deleting the reader
+ * would silently promote those sessions to full file-write access.
+ */
 function _skillChatImportMetaTargets(meta: SkillChatMeta): Set<string> {
   const raw = Array.isArray(meta.import_meta_targets) ? meta.import_meta_targets : [];
   return new Set(raw.map((id) => String(id || '').trim()).filter(Boolean));

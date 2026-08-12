@@ -76,6 +76,45 @@ function loadCategoryRenderers() {
       'skills.no_match': '无匹配技能',
       'skills.source_custom': '自定义',
       'skills.source_marketplace': '市场',
+      'skills.security_withheld': '未通过安检',
+      'skills.security_withheld_hint': '安装后文件发生变化，已暂停使用。重新安装可恢复。',
+      'skills.security_verified': '已通过安检',
+      'skills.security_risk': '安检有提示',
+      'skills.security_unchecked': '尚未检查',
+      'skills.security_findings': '{n} 项提示',
+      'skills.security_validator': '校验器 {version}',
+      'skills.security_score': '评分 {n}/100',
+      'skills.security_scanner_deep': '深度扫描（完整规则集）',
+      'skills.security_scanner_local': '仅本地规则，覆盖较弱',
+      'skills.secpanel_title': '安全检查',
+      'skills.secpanel_score': '评分',
+      'skills.secpanel_method': '检查方式',
+      'skills.secpanel_ruleset': '规则包',
+      'skills.secpanel_scanner': '扫描器',
+      'skills.secpanel_isolation': '隔离环境',
+      'skills.secpanel_isolated_yes': '沙箱隔离',
+      'skills.secpanel_isolated_no': '非隔离，可信度较低',
+      'skills.secpanel_checked_at': '检查时间',
+      'skills.secpanel_surface': '攻击面',
+      'skills.secpanel_egress': '外发点',
+      'skills.secpanel_dynexec': '动态执行',
+      'skills.secpanel_persist': '持久化',
+      'skills.secpanel_binaries': '二进制文件',
+      'skills.secpanel_surface_clean': '未发现值得注意的攻击面',
+      'skills.secpanel_surface_note': '按类别计数，不展示匹配到的原文',
+      'skills.secpanel_surface_floor': '计数为下限（每类最多统计 20 项）',
+      'skills.secpanel_no_record': '尚无检查记录。点击下方按钮开始检查。',
+      'skills.security_ruleset': '规则包 {version}',
+      'skills.security_rules_degraded': '规则库未完整加载，检测覆盖较弱',
+      'skills.security_not_isolated': '非隔离扫描，可信度较低',
+      'skills.security_scanned_just_now': '刚刚检查',
+      'skills.security_scanned_days_ago': '{n} 天前检查',
+      'skills.security_summary_verified': '{n} 个技能已通过安检',
+      'skills.security_summary_risk': '{n} 个有提示',
+      'skills.security_summary_withheld': '{n} 个未通过',
+      'skills.security_summary_unchecked': '{n} 个待检查',
+      'skills.security_recheck': '重新检查',
+      'skills.security_rechecking': '检查中…',
       'component.disable': '停用',
       'component.enable': '启用',
       'settings.packages.update': '更新',
@@ -90,7 +129,13 @@ function loadCategoryRenderers() {
       'agent_picker.library_group_global': '全局资料库',
       'agent_picker.library_empty': '资料库为空',
       'agent_picker.library_no_match': '没有匹配的资料库文件',
-    } as Record<string, string>)[key]?.replace('{count}', String(vars?.count ?? '')) || key,
+    } as Record<string, string>)[key]
+      ?.replace('{count}', String(vars?.count ?? ''))
+      // The security strings use {n}/{version}; without these the placeholders
+      // render literally and an assertion on the visible text would pass while
+      // the real UI showed "{n} 个技能已通过安检".
+      .replace('{n}', String(vars?.n ?? ''))
+      .replace('{version}', String(vars?.version ?? '')) || key,
     normalizeDisplayText: (value: unknown) => String(value ?? '').trim(),
     pickLocalizedName: (c: any) => c?.name_zh || c?.name_en || c?.code || '',
     pickLocalizedField: (item: any, base: string, lang: string) => item?.[`${base}_${lang}`] || item?.[base] || '',
@@ -688,5 +733,211 @@ describe('agent and skill category tabs', () => {
     expect(html).toContain('Trusted Skill');
     expect(html).not.toContain('External Smoke');
     expect(html).toContain('Global Helper');
+  });
+});
+
+// The main process marks a tampered marketplace skill as `security.withheld`
+// rather than dropping it (see features/skills.ts::_overlaySkillSecurity). The
+// card must then explain that state — a silently inert card reads as a bug and
+// invites a blind reinstall.
+describe('skills grid › withheld (failed security check) cards', () => {
+  it('renders the withheld chip and disables Use', () => {
+    const { context, el } = loadCategoryRenderers();
+    context.renderSkillsGrid([
+      { id: 'tampered', name: 'Tampered Skill', source: 'marketplace', category: '', enabled: true,
+        security: { status: 'withheld', reason: 'payload_changed' } },
+    ]);
+
+    const html = el('skills-grid').innerHTML;
+    expect(html).toContain('未通过安检');
+    expect(html).toContain('skill-card-chip is-withheld');
+    expect(html).toContain('is-withheld');
+    // Use must be inert even though the user's `enabled` preference is true.
+    expect(html).toContain('disabled aria-disabled="true"');
+    // The hint tells the user the fix rather than just naming the state.
+    expect(html).toContain('重新安装可恢复');
+  });
+
+  it('leaves a normal skill card untouched', () => {
+    const { context, el } = loadCategoryRenderers();
+    context.renderSkillsGrid([
+      { id: 'clean', name: 'Clean Skill', source: 'marketplace', category: '', enabled: true },
+    ]);
+
+    const html = el('skills-grid').innerHTML;
+    expect(html).toContain('Clean Skill');
+    expect(html).not.toContain('未通过安检');
+    expect(html).not.toContain('is-withheld');
+    expect(html).not.toContain('disabled aria-disabled="true"');
+  });
+
+  // A disabled skill and a withheld one are different states: the user can
+  // toggle `enabled` back, but cannot clear a withhold. Both dim the card, so
+  // the withheld marker has to be present to tell them apart.
+  it('distinguishes a withheld card from a merely disabled one', () => {
+    const { context, el } = loadCategoryRenderers();
+    context.renderSkillsGrid([
+      { id: 'off', name: 'Disabled Skill', source: 'marketplace', category: '', enabled: false },
+    ]);
+
+    const html = el('skills-grid').innerHTML;
+    expect(html).toContain('is-disabled');
+    expect(html).not.toContain('is-withheld');
+    expect(html).not.toContain('未通过安检');
+  });
+});
+
+// The shield badge + rollup line are what make the security checks visible when
+// nothing is wrong. Without them the only evidence the mechanism exists is a
+// card turning amber, i.e. it looks like it does nothing right up until it
+// blocks something.
+describe('skills grid › security badge and summary', () => {
+  it('renders a quiet shield for a verified skill, with scan detail in the tooltip', () => {
+    const { context, el } = loadCategoryRenderers();
+    context.renderSkillsGrid([
+      { id: 'ok', name: 'Verified Skill', source: 'marketplace', category: '', enabled: true,
+        security: { status: 'verified', scannedAt: new Date().toISOString(), validatorVersion: '0.6.1', findingCount: 0 } },
+    ]);
+
+    const html = el('skills-grid').innerHTML;
+    expect(html).toContain('skill-card-shield is-verified');
+    // Tooltip answers "was it checked, and when" — the point of the badge.
+    expect(html).toContain('已通过安检');
+    expect(html).toContain('刚刚检查');
+    expect(html).toContain('校验器 0.6.1');
+    // A healthy skill stays fully usable and unmarked otherwise.
+    expect(html).not.toContain('未通过安检');
+    expect(html).not.toContain('disabled aria-disabled="true"');
+  });
+
+  // The shield is a <button>: the tooltip carries the same summary, but hover is
+  // unreachable by keyboard and by touch, and the attack-surface breakdown does
+  // not fit in a title attribute.
+  it('makes the shield an activatable control carrying the skill id', () => {
+    const { context, el } = loadCategoryRenderers();
+    context.renderSkillsGrid([
+      { id: 'ok', name: 'Verified Skill', source: 'marketplace', category: '', enabled: true,
+        security: { status: 'verified', scannedAt: new Date().toISOString(), scanner: 'deep' } },
+    ]);
+
+    // Asserted on markup, not via querySelector: this suite renders into a
+    // FakeElement whose querySelector always returns null.
+    const html = el('skills-grid').innerHTML;
+    expect(html).toContain('<button type="button" class="skill-card-shield');
+    expect(html).toContain('data-skill-security="ok"');
+  });
+
+  // A local-only pass is toned down like a degraded one: the regex subset clears
+  // payloads the full ruleset blocks, so it must not wear the clean colour.
+  it('tones down a pass that only the local rules produced', () => {
+    const { context, el } = loadCategoryRenderers();
+    context.renderSkillsGrid([
+      { id: 'loc', name: 'Local Only', source: 'marketplace', category: '', enabled: true,
+        security: { status: 'verified', scannedAt: new Date().toISOString(), scanner: 'local' } },
+    ]);
+
+    const html = el('skills-grid').innerHTML;
+    expect(html).toContain('skill-card-shield is-risk');
+    expect(html).toContain('仅本地规则，覆盖较弱');
+  });
+
+  it('does not double-mark a withheld skill with a shield', () => {
+    const { context, el } = loadCategoryRenderers();
+    context.renderSkillsGrid([
+      { id: 'bad', name: 'Tampered', source: 'marketplace', category: '', enabled: true,
+        security: { status: 'withheld', reason: 'payload_changed' } },
+    ]);
+
+    const html = el('skills-grid').innerHTML;
+    // The worded chip already explains it; a shield too would be noise.
+    expect(html).toContain('未通过安检');
+    expect(html).not.toContain('skill-card-shield');
+  });
+
+  it('summarizes counts and stays calm when nothing is withheld', () => {
+    const { context, el } = loadCategoryRenderers();
+    context.renderSkillsGrid([
+      { id: 'a', name: 'A', source: 'marketplace', category: '', enabled: true, security: { status: 'verified' } },
+      { id: 'b', name: 'B', source: 'marketplace', category: '', enabled: true, security: { status: 'verified' } },
+      { id: 'c', name: 'C', source: 'marketplace', category: '', enabled: true, security: { status: 'unchecked' } },
+    ]);
+
+    const html = el('skills-grid').innerHTML;
+    expect(html).toContain('2 个技能已通过安检');
+    expect(html).toContain('1 个待检查');
+    // No withheld skill → no alarm styling. The healthy case must not look like
+    // a warning banner, or users learn to dismiss the row.
+    expect(html).not.toContain('needs-attention');
+    expect(html).toContain('重新检查');
+  });
+
+  it('escalates the summary when a skill is withheld', () => {
+    const { context, el } = loadCategoryRenderers();
+    context.renderSkillsGrid([
+      { id: 'a', name: 'A', source: 'marketplace', category: '', enabled: true, security: { status: 'verified' } },
+      { id: 'b', name: 'B', source: 'marketplace', category: '', enabled: true, security: { status: 'withheld', reason: 'payload_changed' } },
+    ]);
+
+    const html = el('skills-grid').innerHTML;
+    expect(html).toContain('needs-attention');
+    expect(html).toContain('1 个未通过');
+  });
+
+  // Custom skills carry no receipt, so there is nothing truthful to summarize —
+  // and a "0 verified" row on a custom-only library would be pure clutter.
+  it('omits the summary entirely when no skill reports security state', () => {
+    const { context, el } = loadCategoryRenderers();
+    context.renderSkillsGrid([
+      { id: 'mine', name: 'Mine', source: 'custom', category: '', enabled: true },
+    ]);
+
+    const html = el('skills-grid').innerHTML;
+    expect(html).not.toContain('skills-security-summary');
+    expect(html).not.toContain('重新检查');
+  });
+
+  // The deep scanner reports a score and how the scan was produced. Both belong
+  // on the badge: the score is the part a user can judge, and the provenance is
+  // what keeps a weakened check from reading as a clean one.
+  it('shows the deep-scan score and ruleset on the tooltip', () => {
+    const { context, el } = loadCategoryRenderers();
+    context.renderSkillsGrid([
+      { id: 'ok', name: 'Scanned', source: 'marketplace', category: '', enabled: true,
+        security: {
+          status: 'verified', scannedAt: new Date().toISOString(), findingCount: 0,
+          securityScore: 100, isolated: true, rulesetVersion: 'ruleset v1.0.0',
+        } },
+    ]);
+
+    const html = el('skills-grid').innerHTML;
+    expect(html).toContain('评分 100/100');
+    expect(html).toContain('规则包 ruleset v1.0.0');
+    // Isolated scans say nothing extra — the caveat exists only for the degraded case.
+    expect(html).not.toContain('非隔离扫描');
+  });
+
+  // Regression guard for the silent-weakening failure mode. When the scanner
+  // falls back to its built-in rules, coverage drops materially (measured: an
+  // SSH-key exfiltration sample scores ALLOW/100 on fallback rules and
+  // DO_NOT_INSTALL/20 on the real set). Showing that as a plain green "checked"
+  // would be exactly the "already safe" placeholder the spec forbids, so the
+  // badge both states the caveat and drops the reassuring colour.
+  it('does not present a degraded-rules pass as a clean verified badge', () => {
+    const { context, el } = loadCategoryRenderers();
+    context.renderSkillsGrid([
+      { id: 'deg', name: 'Degraded', source: 'marketplace', category: '', enabled: true,
+        security: {
+          status: 'verified', scannedAt: new Date().toISOString(), findingCount: 0,
+          securityScore: 100, isolated: false, rulesDegraded: true,
+        } },
+    ]);
+
+    const html = el('skills-grid').innerHTML;
+    expect(html).toContain('规则库未完整加载');
+    expect(html).toContain('非隔离扫描');
+    // Colour carries the signal for most users, so a weakened check must not
+    // wear the clean one.
+    expect(html).not.toContain('skill-card-shield is-verified');
+    expect(html).toContain('skill-card-shield is-risk');
   });
 });

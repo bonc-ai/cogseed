@@ -2,7 +2,42 @@ export type CognitionCandidateSource = 'personal_ontology' | 'p3394_experience' 
 export type CognitionCandidateType = 'preference' | 'ontology' | 'rule' | 'experience' | 'skill_evolution';
 export type CognitionCandidateStatus = 'pending' | 'accepted' | 'deferred' | 'rejected';
 
-export type CognitionCandidateAction = 'source' | 'accept' | 'modify' | 'defer' | 'reject' | 'open_personal_ontology' | 'import_to_recall';
+// Union merged across both sides: develop added `modify`/`defer`, this branch
+// added `deep_review`. Dropping either would silently disable an action the
+// renderer already emits.
+export type CognitionCandidateAction = 'source' | 'accept' | 'modify' | 'defer'
+  | 'reject' | 'deep_review' | 'open_personal_ontology' | 'import_to_recall';
+
+/**
+ * Security / admission status — the axis that answers "is this safe to admit".
+ *
+ * Deliberately separate from `CognitionAssetMaturity`, which answers "has this
+ * proven useful". The security spec requires the two never be collapsed into a
+ * single "已通过": a candidate can be safe but useless, or desirable but
+ * malicious. UI must render them as distinct fields.
+ *
+ * `unknown` is a first-class state, not a synonym for `pass`: it means no scan
+ * is on record (or the scanner was unavailable). Reporting it as `pass` would
+ * tell the user content was checked when it wasn't.
+ */
+export type CognitionSecurityStatus = 'pass' | 'risk' | 'blocked' | 'unknown';
+
+/** Compact projection of a gate decision, sized for list rendering. */
+export interface CognitionSecurityView {
+  status: CognitionSecurityStatus;
+  /** Total findings across both layers. */
+  findingCount: number;
+  /** Highest-severity rule id, for a one-line explanation. */
+  topRule?: string;
+  /** Whether the semantic (agent) layer contributed to this verdict. */
+  semanticReviewed: boolean;
+  /**
+   * Set when the semantic layer was expected but unavailable. The status is
+   * still authoritative (the deterministic layer ran), but callers should
+   * surface "deep review unavailable" rather than implying a full pass.
+   */
+  degradedReason?: string;
+}
 
 export interface CognitionRelationRef {
   type: 'skill' | 'knowledge' | 'ontology' | 'evaluation' | 'conversation' | 'execution' | 'memory' | 'receipt';
@@ -30,6 +65,13 @@ export interface CognitionCandidateView {
   skillId?: string;
   createdAt?: string;
   updatedAt?: string;
+  /**
+   * Deterministic admission status, computed at list time for display.
+   *
+   * Display only — it is recomputed at accept time. A renderer must never be
+   * able to admit a candidate by claiming it already passed.
+   */
+  security?: CognitionSecurityView;
   raw?: unknown;
 }
 
@@ -81,7 +123,14 @@ export interface CognitionAssetSummary {
   status?: CognitionAssetStatus | string;
   enabled?: boolean;
   category: CognitionAssetType;
+  /** Maturity axis: has this proven useful. Never conflate with `security`. */
   maturity: CognitionAssetMaturity;
+  /**
+   * Security axis: is this safe to use. Independent of `maturity` — an asset
+   * can be `effectiveness_validated` and later become `blocked` when the
+   * ruleset is updated, without losing its maturity history.
+   */
+  security?: CognitionSecurityView;
   owner: string;
   scope: string;
   workspaceRefs: string[];

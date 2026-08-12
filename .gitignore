@@ -44,5 +44,18 @@ package.json.new
 /.build
 /dist-dev
 
+# Per-machine tool permissions. Plans under .claude/plans/ are shared
+# deliberately; this file is local state and would churn per developer.
+/.claude/settings.local.json
+
+# Generated at release time by scripts/pin-scanner-integrity.mjs. Describes the
+# scanner tree it sits beside, so it is not source and must not be committed —
+# a stale pin would report a clean tree as tampered.
+/resources/guardrail/skill-sentry.INTEGRITY
+
+# Written by scripts/strip-closed-source-scanner.mjs when building an
+# open-source distribution. Not source: its presence in a normal checkout would
+# tell the app the bundled scanner is intentionally absent.
+/resources/guardrail/SCANNER_ABSENT
 # Hermes desktop attachments (PRD/转写等敏感文件，勿入库)
 /.hermes/

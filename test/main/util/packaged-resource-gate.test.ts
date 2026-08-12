@@ -117,7 +117,8 @@ describe('packaged-resource-gate', () => {
   it('requires every package extraResources destination to have shared contract ownership', () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
     expect(verifyExtraResourcesConfig(pkg.build.extraResources)).toEqual([
-      'embedding-model', 'runtime', 'builtin', 'officecli', '.',
+      'embedding-model', 'runtime', 'builtin', 'officecli', 'guardrail',
+      'packages/nseap-meta-skill-engine', '.',
     ]);
   });
 
