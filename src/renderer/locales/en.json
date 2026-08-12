@@ -3275,7 +3275,7 @@
   "spaces.role_template": "Role template",
   "spaces.skills_unit": "skills",
   "spaces.space_no_desc": "No template: all resources available.",
-  "spaces.subtitle": "Each workspace = a scoped working environment: limited ontology / skills / agents",
+  "spaces.subtitle": "Each space = a ready-made kit: roles, skills, and agents pre-configured for the scenario, ready to use",
   "spaces.tab_projects": "Projects",
   "spaces.tab_resources": "Resources",
   "spaces.template_label": "Role template (optional)",
