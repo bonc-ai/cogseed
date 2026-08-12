@@ -25,13 +25,16 @@ import {
 import {
   ENTRY_SEPARATOR,
   detachMemorySource,
+  ensureRoleTemplateMemoryRecord,
   ensureSourcedMemoryRecord,
   findSourcedMemoryRecord,
+  listRoleTemplateMemoryTexts,
   loadMemoryRecords,
   loadMemoryRecordsWithStatus,
   markMatchingRecordIndependent,
   memoryContentHash,
   newIndependentRecord,
+  removeRoleTemplateMemoryEntries,
   validateMemoryText,
   writeMemoryRecords,
   type SourcedMemoryRecord,
@@ -340,6 +343,91 @@ function writeStrictEntries(filePath: string, entries: MemoryEntry[], charLimit:
     : { ok: false, error: result.error || 'memory_write_failed' };
 }
 
+/**
+ * 角色模板来源的全局记忆写入：候选确认选角色时，USER.md/MEMORY.md 条目附带
+ * `{ kind: 'role_template', sourceId: <template_id> }` 来源标记（注释头，正文零污染）。
+ * 便于卸载模板时按标签删除/备份/恢复该角色的全局记忆数据。
+ */
+export function addRoleTemplateMemoryEntry(
+  userId: string,
+  target: MemoryScope,
+  templateId: string,
+  content: string,
+): MemoryOpResult {
+  const trimmed = content.trim();
+  if (!trimmed) return buildResult(userId, target, false, 'empty content');
+  const invalid = validateMemoryText(trimmed);
+  if (invalid) return buildResult(userId, target, false, invalid);
+  const threat = scanForInjection(trimmed);
+  if (threat) {
+    log.warn('blocked memory write', { threat, content_chars: trimmed.length });
+    return buildResult(userId, target, false, `blocked: suspicious content (${threat})`);
+  }
+  const filePath = fileForTarget(userId, target);
+  const limit = limitForTarget(target);
+  const result = ensureRoleTemplateMemoryRecord(filePath, templateId, trimmed, limit);
+  if (!result.ok) return buildResult(userId, target, false, result.error || 'memory_write_failed');
+  notifyMemoryDirty(target);
+  return buildResult(userId, target, true, undefined, { nearLimit: result.nearLimit });
+}
+
+/** 该角色模板来源的全局记忆条目数（跨 USER.md + MEMORY.md）。 */
+export function countRoleTemplateMemoryEntries(userId: string, templateId: string): number {
+  return listRoleTemplateMemoryTexts(fileForTarget(userId, 'user'), templateId).length
+    + listRoleTemplateMemoryTexts(fileForTarget(userId, 'memory'), templateId).length;
+}
+
+/**
+ * 收集某角色模板的全部全局记忆正文（跨 USER.md + MEMORY.md）。
+ * 只读，不修改任何文件 —— 调用方负责先写归档、再调用 remove* 删除活数据。
+ */
+export function collectRoleTemplateMemoryEntries(
+  userId: string,
+  templateId: string,
+): { user: string[]; memory: string[] } {
+  return {
+    user: listRoleTemplateMemoryTexts(fileForTarget(userId, 'user'), templateId),
+    memory: listRoleTemplateMemoryTexts(fileForTarget(userId, 'memory'), templateId),
+  };
+}
+
+/**
+ * 从活文件移除某角色模板的全部全局记忆条目（归档文件已写成功后再调用）。
+ * 返回各文件移除是否成功；失败时调用方不应继续（避免"归档了但没移除"双写）。
+ */
+export function removeRoleTemplateMemoryFromLive(
+  userId: string,
+  templateId: string,
+): { userOk: boolean; memoryOk: boolean } {
+  let userOk = true;
+  let memoryOk = true;
+  const userRes = removeRoleTemplateMemoryEntries(fileForTarget(userId, 'user'), templateId, USER_CHAR_LIMIT);
+  if (!userRes.ok) userOk = false;
+  else notifyMemoryDirty('user');
+  const memoryRes = removeRoleTemplateMemoryEntries(fileForTarget(userId, 'memory'), templateId, MEMORY_CHAR_LIMIT);
+  if (!memoryRes.ok) memoryOk = false;
+  else notifyMemoryDirty('memory');
+  return { userOk, memoryOk };
+}
+
+/** 恢复某角色模板的全局记忆归档（重装模板时调用）。返回实际成功条数。 */
+export function restoreRoleTemplateMemoryEntries(
+  userId: string,
+  templateId: string,
+  texts: { user: string[]; memory: string[] },
+): number {
+  let restored = 0;
+  for (const text of texts.user || []) {
+    const res = addRoleTemplateMemoryEntry(userId, 'user', templateId, text);
+    if (res.ok) restored++;
+  }
+  for (const text of texts.memory || []) {
+    const res = addRoleTemplateMemoryEntry(userId, 'memory', templateId, text);
+    if (res.ok) restored++;
+  }
+  return restored;
+}
+
 function buildResult(userId: string, target: MemoryScope, ok: boolean, error?: string, extra?: { nearLimit?: boolean }): MemoryOpResult {
   const entries = loadEntries(fileForTarget(userId, target));
   const text = entries.map(e => e.text).join(ENTRY_SEPARATOR);
@@ -452,16 +540,22 @@ export function addEntry(userId: string, target: MemoryScope, content: string): 
     notifyMemoryDirty(target);
     return buildResult(userId, target, true, undefined, { nearLimit: write.nearLimit });
   }
+  if (target === 'user') {
+    // USER.md 走 records 通道：保留 sources/independent 元数据（否则普通写入
+    // 会剥掉 role_template 标签，破坏卸载归档契约）。
+    const loaded = loadMemoryRecordsWithStatus(filePath);
+    if (loaded.corruptMetadata) return buildResult(userId, target, false, 'corrupt_metadata');
+    const records = loaded.records;
+    if (records.some((record) => record.text === trimmed)) return buildResult(userId, target, true);
+    records.push(newIndependentRecord(trimmed));
+    const write = writeMemoryRecords(filePath, records, limit);
+    if (!write.ok) return buildResult(userId, target, false, write.error);
+    notifyMemoryDirty(target);
+    return buildResult(userId, target, true, undefined, { nearLimit: write.nearLimit });
+  }
+  // agent/project 层级保持 legacy saveEntries（有 entry 数量上限）
   const entries = loadEntries(filePath);
   entries.push({ text: trimmed });
-
-  if (isStrictScope(target)) {
-    const res = writeStrictEntries(filePath, entries, limit);
-    if (!res.ok) return buildResult(userId, target, false, res.error);
-    notifyMemoryDirty(target);
-    return buildResult(userId, target, true, undefined, { nearLimit: res.nearLimit });
-  }
-
   saveEntries(filePath, entries, limit, entryLimitForTarget(target));
   notifyMemoryDirty(target);
   return buildResult(userId, target, true);
@@ -511,18 +605,32 @@ export function replaceEntry(userId: string, target: MemoryScope, oldText: strin
       ...(detachedSourceIds.length ? { detachedCognitionSourceIds: detachedSourceIds } : {}),
     };
   }
+  if (target === 'user') {
+    // USER.md 走 records 通道：保留 sources/independent（防止剥掉 role_template 标签）
+    const loaded = loadMemoryRecordsWithStatus(filePath);
+    if (loaded.corruptMetadata) return buildResult(userId, target, false, 'corrupt_metadata');
+    const records = loaded.records;
+    const matches = records
+      .map((record, index) => ({ record, index }))
+      .filter(({ record }) => record.text.includes(oldText));
+    if (matches.length === 0) return buildResult(userId, target, false, 'old_text not found');
+    if (matches.length > 1) return buildResult(userId, target, false, 'old_text is ambiguous');
+    const { record, index } = matches[0];
+    if (records.some((candidate, candidateIndex) => candidateIndex !== index && candidate.text === trimmed)) {
+      return buildResult(userId, target, false, 'content already exists');
+    }
+    // 替换保留原记录的 sources（替换内容 ≠ 换角色）
+    records[index] = { ...record, text: trimmed, contentSha256: memoryContentHash(trimmed) };
+    const write = writeMemoryRecords(filePath, records, limit);
+    if (!write.ok) return buildResult(userId, target, false, write.error);
+    notifyMemoryDirty(target);
+    return buildResult(userId, target, true, undefined, { nearLimit: write.nearLimit });
+  }
   const entries = loadEntries(filePath);
   const idx = entries.findIndex(e => e.text.includes(oldText));
   if (idx === -1) return buildResult(userId, target, false, 'old_text not found');
 
   entries[idx] = { text: trimmed };
-
-  if (isStrictScope(target)) {
-    const res = writeStrictEntries(filePath, entries, limit);
-    if (!res.ok) return buildResult(userId, target, false, res.error);
-    notifyMemoryDirty(target);
-    return buildResult(userId, target, true, undefined, { nearLimit: res.nearLimit });
-  }
 
   saveEntries(filePath, entries, limit, entryLimitForTarget(target));
   notifyMemoryDirty(target);
@@ -587,10 +695,19 @@ export function removeEntry(userId: string, target: MemoryScope, oldText: string
 
   entries.splice(idx, 1);
 
-  if (isStrictScope(target)) {
-    // Removal only shrinks the store, so this can never trip char_limit_exceeded.
-    const res = writeStrictEntries(filePath, entries, limit);
-    if (!res.ok) return buildResult(userId, target, false, res.error);
+  if (target === 'user') {
+    // USER.md 走 records 通道：保留其余记录的 sources/independent
+    const loaded = loadMemoryRecordsWithStatus(filePath);
+    if (loaded.corruptMetadata) return buildResult(userId, target, false, 'corrupt_metadata');
+    const records = loaded.records;
+    const matches = records
+      .map((record, index) => ({ record, index }))
+      .filter(({ record }) => record.text.includes(oldText));
+    if (matches.length === 0) return buildResult(userId, target, false, 'old_text not found');
+    if (matches.length > 1) return buildResult(userId, target, false, 'old_text is ambiguous');
+    records.splice(matches[0].index, 1);
+    const write = writeMemoryRecords(filePath, records, limit);
+    if (!write.ok) return buildResult(userId, target, false, write.error);
     notifyMemoryDirty(target);
     return buildResult(userId, target, true);
   }
@@ -819,7 +936,9 @@ export function formatForSystemPrompt(
   const userEntries = loadEntries(userProfileFile(userId));     // cross-agent profile
   const sharedEntries = loadMemoryRecords(userMemoryFile(userId))
     .filter((record) => record.independent || record.sources.length === 0
-      || record.sources.some((source) => activeCognitionSourceIds.has(source.sourceId)))
+      || record.sources.some((source) => activeCognitionSourceIds.has(source.sourceId))
+      // role_template 来源 = 角色画像（长期事实），常驻可见；cognition asset 才受 active 门控
+      || record.sources.some((source) => source.kind === 'role_template'))
     .map(({ text }) => ({ text }));                              // cross-project, cross-agent facts
   const projectEntries = projectId ? loadEntries(projectMemoryFile(userId, projectId)) : []; // this project only
   const agentEntries = agentId ? loadAgentEntries(userId, agentId) : []; // this agent only

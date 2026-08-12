@@ -43,3 +43,6 @@ package.json.new
 # local build identity and development package output
 /.build
 /dist-dev
+
+# Hermes desktop attachments (PRD/转写等敏感文件，勿入库)
+/.hermes/

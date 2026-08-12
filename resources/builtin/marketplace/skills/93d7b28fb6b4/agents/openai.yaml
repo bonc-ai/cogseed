@@ -1,0 +1,29 @@
+{
+  "interface": {
+    "display_name": "实现计划",
+    "short_description": "把验收标准映射到文件、接口、数据迁移、测试、发布和回滚的有序计划。",
+    "default_prompt": "Use $implementation-plan and follow its evidence, approval, and output contract."
+  },
+  "policy": {
+    "allow_implicit_invocation": true
+  },
+  "nseap_runtime": {
+    "executor": "codex_skill_interpreter",
+    "binding_status": "target_state_not_run",
+    "skill_entrypoint": "../SKILL.md",
+    "schema_ref": "../schemas.json",
+    "permissions": {
+      "direct_resource_access": false,
+      "external_actions": "deny_without_explicit_approval",
+      "formal_asset_write": false,
+      "candidate_write_only": true
+    },
+    "governance": {
+      "level": "L5",
+      "risk_route": "Full",
+      "promotion_ceiling": "staged",
+      "production_release_allowed": false,
+      "independent_review": "pending"
+    }
+  }
+}

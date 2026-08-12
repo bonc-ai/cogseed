@@ -1,0 +1,25 @@
+interface:
+  display_name: "竞品与市场研究"
+  short_description: "围绕明确决策问题形成带来源等级、时间与定位的竞品市场研究"
+  default_prompt: "使用 $competitor-market-research：围绕这个产品决策问题开展竞品与市场研究。"
+
+# NSEAP-GATE:BEGIN
+policy:
+  allow_implicit_invocation: true
+nseap_runtime:
+  executor: "codex_skill_interpreter"
+  binding_status: "target_state_not_run"
+  skill_entrypoint: "../SKILL.md"
+  schema_ref: "../schemas.json"
+  permissions:
+    direct_resource_access: false
+    external_actions: "deny_without_explicit_approval"
+    formal_asset_write: false
+    candidate_write_only: true
+  governance:
+    level: "L5"
+    risk_route: "Full"
+    promotion_ceiling: "staged"
+    production_release_allowed: false
+    independent_review: "pending"
+# NSEAP-GATE:END

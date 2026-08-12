@@ -825,3 +825,47 @@ describe('projects › 工作空间绑定与作用域派生', () => {
     expect(scope).toEqual({ agents: [], skills: [] });
   });
 });
+
+describe('projects › getProjectScopeMeta（作用域 + 空间元数据，供 @ picker 作用域用）', () => {
+  it('未绑空间 → scope null + space null（全局可见）', async () => {
+    const projects = await loadProjects();
+    const p = await projects.createProject(TEST_UID, 'P');
+    if (!p.ok) throw new Error('create failed');
+    const meta = await projects.getProjectScopeMeta(TEST_UID, p.project.project_id);
+    expect(meta.scope).toBeNull();
+    expect(meta.space).toBeNull();
+  });
+
+  it('绑空间 → scope = S∪B + space 元数据', async () => {
+    const projects = await loadProjects();
+    const p = await projects.createProject(TEST_UID, 'P');
+    if (!p.ok) throw new Error('create failed');
+    writeCustomSkill('sk-a');
+    writeAgent('ag-1');
+    const s = await makeSpace('S', { skills: ['sk-a'], agents: ['ag-1'] });
+    await projects.bindSpace(TEST_UID, p.project.project_id, s.space_id);
+    await projects.addSkillBinding(TEST_UID, p.project.project_id, 'sk-a'); // 与 S 重叠 → 合并去重
+    const meta = await projects.getProjectScopeMeta(TEST_UID, p.project.project_id);
+    expect(meta.scope).toEqual({ skills: ['sk-a'], agents: ['ag-1'] });
+    expect(meta.space).toEqual({ space_id: s.space_id, name: 'S' });
+  });
+
+  it('绑模板空间 → space.template_id 透出（渲染层可据此折叠本体 tab）', async () => {
+    const projects = await loadProjects();
+    const p = await projects.createProject(TEST_UID, 'P');
+    if (!p.ok) throw new Error('create failed');
+    const spaces = await import('../../../src/main/features/spaces');
+    const created = await spaces.createSpace(TEST_UID, { name: '学生', template_id: 'student' });
+    if (!created.ok) throw new Error('create space failed');
+    await projects.bindSpace(TEST_UID, p.project.project_id, created.space.space_id);
+    const meta = await projects.getProjectScopeMeta(TEST_UID, p.project.project_id);
+    expect(meta.space).toEqual({ space_id: created.space.space_id, name: '学生', template_id: 'student', primary_template_id: 'student' });
+  });
+
+  it('项目不存在 → scope null + space null（降级不炸）', async () => {
+    const projects = await loadProjects();
+    const meta = await projects.getProjectScopeMeta(TEST_UID, 'p_nope');
+    expect(meta.scope).toBeNull();
+    expect(meta.space).toBeNull();
+  });
+});

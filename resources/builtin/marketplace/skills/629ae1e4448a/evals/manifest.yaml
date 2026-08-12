@@ -1,0 +1,31 @@
+{
+  "case_ids": [
+    "EVAL-DEFINE-001",
+    "EVAL-DEFINE-002",
+    "EVAL-DEFINE-003",
+    "EVAL-DEFINE-004",
+    "EVAL-DEFINE-005",
+    "EVAL-DEFINE-006",
+    "EVAL-DEFINE-007",
+    "EVAL-DEFINE-008",
+    "EVAL-DEFINE-009",
+    "EVAL-DEFINE-010"
+  ],
+  "count": 10,
+  "coverage": [
+    "anti_trigger",
+    "boundary",
+    "failure",
+    "prohibited_behavior",
+    "trigger"
+  ],
+  "id": "EVAL-MANIFEST-DEFINE-001",
+  "negative_count": 4,
+  "negative_ids": [
+    "EVAL-DEFINE-007",
+    "EVAL-DEFINE-008",
+    "EVAL-DEFINE-009",
+    "EVAL-DEFINE-010"
+  ],
+  "schema_version": "1.0"
+}

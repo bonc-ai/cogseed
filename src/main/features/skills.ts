@@ -56,6 +56,7 @@ import {
   ValidationReport as QualityReport,
 } from '../quality';
 import { persistReport as persistQualityReport } from '../quality/report';
+import { ensureNseapSkillSkeleton } from './nseap_skill_skeleton';
 import {
   DEFAULT_MARKETPLACE_CATEGORY_CODE,
   normalizeMarketplaceCategoryCode,
@@ -1690,6 +1691,17 @@ async function _installSourceSkillRoots(
       const rootFiles = _dropSourceMetaFiles(_filesForSourceSkillRoot(sourceRoot, files, sourceRoots));
       fs.rmSync(skillMetaFile(skillDir), { force: true });
       _copyImportedSkillFilesPreservingSource(skillDir, rootFiles);
+      // NSEAP skeleton conversion: auto-generate the missing standard
+      // artifacts as templates (appendix A "defaults are compliant");
+      // author-owned ★ files are left for the metadata-check chat.
+      try {
+        ensureNseapSkillSkeleton(skillDir, effectiveName);
+      } catch (err) {
+        log.warn('import-dir nseap skeleton generation failed', {
+          skill_id: created.id,
+          error_message: (err as Error).message,
+        });
+      }
       writeSkillOrkasMetaFullSync(skillDir, _sourceSkillInstallMeta(sourceRoot, sourceSkillMd));
 
       const fresh = await getCustomSkill(created.id);

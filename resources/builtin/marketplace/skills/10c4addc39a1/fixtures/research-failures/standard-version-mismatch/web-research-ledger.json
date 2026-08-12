@@ -1,0 +1,419 @@
+{
+  "ledger_id": "WRL-TASK-DEMO-001",
+  "plan_id": "RP-TASK-DEMO-001",
+  "task_id": "TASK-DEMO-001",
+  "research_mode": "synthetic_fixture",
+  "research_date": "2026-08-08",
+  "generated_at": "2026-08-08T08:30:00+08:00",
+  "policy_scope_verification": {
+    "scope_verified": true,
+    "official_wording": "Synthetic policy wording used only to test the mandatory research gate and Word toolchain.",
+    "issuing_body": "Demo Organization",
+    "document_number": "SYN-POLICY-001",
+    "issue_date": "2026-08-08",
+    "effective_date": "2026-08-08",
+    "current_status": "synthetic_fixture",
+    "source_ids": [
+      "P1"
+    ],
+    "boundary_conflicts": []
+  },
+  "queries": [
+    {
+      "query_id": "Q1",
+      "query_text": "synthetic validation domain official policy",
+      "purpose": "test official policy discovery and open record",
+      "executed_at": "2026-08-08T08:00:00+08:00",
+      "tool": "synthetic_fixture",
+      "result_count": 2,
+      "selected_source_ids": [
+        "P1"
+      ],
+      "notes": "Synthetic; no external factual claim."
+    },
+    {
+      "query_id": "Q2",
+      "query_text": "synthetic domain reference model official specification",
+      "purpose": "test standard version verification",
+      "executed_at": "2026-08-08T08:05:00+08:00",
+      "tool": "synthetic_fixture",
+      "result_count": 4,
+      "selected_source_ids": [
+        "S1",
+        "S2"
+      ],
+      "notes": "Synthetic; no external factual claim."
+    },
+    {
+      "query_id": "Q3",
+      "query_text": "synthetic provenance event model official",
+      "purpose": "test provenance and event standard roles",
+      "executed_at": "2026-08-08T08:10:00+08:00",
+      "tool": "synthetic_fixture",
+      "result_count": 3,
+      "selected_source_ids": [
+        "S3",
+        "R1"
+      ],
+      "notes": "Secondary source remains discovery-only."
+    }
+  ],
+  "sources": [
+    {
+      "source_id": "P1",
+      "report_source_id": "P1",
+      "title": "合成政策范围（仅用于工具链验证）",
+      "issuer": "Demo Organization",
+      "url": "https://policy.synthetic.example/syn-policy-001",
+      "source_type": "official_policy",
+      "primary_source": true,
+      "official_domain": true,
+      "opened_and_read": true,
+      "retrieval_depth": "synthetic_fixture",
+      "retrieval_method": "synthetic_fixture",
+      "accessed_at": "2026-08-08T08:01:00+08:00",
+      "published_date": "2026-08-08",
+      "effective_date": "2026-08-08",
+      "version_or_date": "2026-08-08",
+      "verification_status": "verified",
+      "temporal_status": "not_applicable",
+      "content_hash": "sha256:935e65809a55190e1a0802509bf0db4eb7d26f091fe078598488dd5dae2e53f9",
+      "query_ids": [
+        "Q1"
+      ],
+      "supports_claim_ids": [
+        "CL1"
+      ],
+      "page_or_section": "synthetic fixture",
+      "notes": "Not a real policy."
+    },
+    {
+      "source_id": "S1",
+      "report_source_id": "S1",
+      "title": "合成标准资产清单",
+      "issuer": "Synthetic Standards Lab",
+      "url": "https://standards.synthetic.example/domain-reference",
+      "source_type": "official_standard",
+      "primary_source": true,
+      "official_domain": true,
+      "opened_and_read": true,
+      "retrieval_depth": "synthetic_fixture",
+      "retrieval_method": "synthetic_fixture",
+      "accessed_at": "2026-08-08T08:06:00+08:00",
+      "published_date": "2026-08-08",
+      "effective_date": null,
+      "version_or_date": "v1.0",
+      "verification_status": "verified",
+      "temporal_status": "not_applicable",
+      "content_hash": "sha256:a358bccff5c15926477539d953a6e2c52d591785433e55fca041820fa790809d",
+      "query_ids": [
+        "Q2"
+      ],
+      "supports_claim_ids": [
+        "CL2",
+        "CL3"
+      ],
+      "page_or_section": "synthetic fixture",
+      "notes": "Not a real standard."
+    },
+    {
+      "source_id": "S2",
+      "report_source_id": "S2",
+      "title": "合成事件模型",
+      "issuer": "Synthetic Standards Lab",
+      "url": "https://standards.synthetic.example/event-model",
+      "source_type": "official_specification",
+      "primary_source": true,
+      "official_domain": true,
+      "opened_and_read": true,
+      "retrieval_depth": "synthetic_fixture",
+      "retrieval_method": "synthetic_fixture",
+      "accessed_at": "2026-08-08T08:07:00+08:00",
+      "published_date": "2026-08-08",
+      "effective_date": null,
+      "version_or_date": "v1.0",
+      "verification_status": "verified",
+      "temporal_status": "not_applicable",
+      "content_hash": "sha256:f003c032afbd96a38d45f2a464e3d895a3c5d509ba3213554522f0d5a439bfae",
+      "query_ids": [
+        "Q2"
+      ],
+      "supports_claim_ids": [
+        "CL3"
+      ],
+      "page_or_section": "synthetic fixture",
+      "notes": "Not a real standard."
+    },
+    {
+      "source_id": "S3",
+      "report_source_id": "S3",
+      "title": "合成来源与凭证模型",
+      "issuer": "Synthetic Standards Lab",
+      "url": "https://standards.synthetic.example/provenance",
+      "source_type": "international_organization",
+      "primary_source": true,
+      "official_domain": true,
+      "opened_and_read": true,
+      "retrieval_depth": "synthetic_fixture",
+      "retrieval_method": "synthetic_fixture",
+      "accessed_at": "2026-08-08T08:11:00+08:00",
+      "published_date": "2026-08-08",
+      "effective_date": null,
+      "version_or_date": "v1.0",
+      "verification_status": "verified",
+      "temporal_status": "not_applicable",
+      "content_hash": "sha256:21cc8aaaf2c40017e6cde1fea42c73e4bee989d744cb35eb7f794eaf649a0fb9",
+      "query_ids": [
+        "Q3"
+      ],
+      "supports_claim_ids": [
+        "CL3"
+      ],
+      "page_or_section": "synthetic fixture",
+      "notes": "Not a real standard."
+    },
+    {
+      "source_id": "R1",
+      "report_source_id": "R1",
+      "title": "合成二手发现线索",
+      "issuer": "Skill Fixture",
+      "url": "https://discovery.synthetic.example/lead",
+      "source_type": "secondary_discovery",
+      "primary_source": false,
+      "official_domain": false,
+      "opened_and_read": true,
+      "retrieval_depth": "synthetic_fixture",
+      "retrieval_method": "synthetic_fixture",
+      "accessed_at": "2026-08-08T08:12:00+08:00",
+      "published_date": "2026-08-08",
+      "effective_date": null,
+      "version_or_date": "2026-08-08",
+      "verification_status": "verified_with_caveat",
+      "temporal_status": "not_applicable",
+      "content_hash": "sha256:6a4ce48ecc87adbc08cfdf8b73c9c53c57a4450b8bba157302c2079a88b77a89",
+      "query_ids": [
+        "Q3"
+      ],
+      "supports_claim_ids": [
+        "CL4"
+      ],
+      "page_or_section": "synthetic fixture",
+      "notes": "Discovery-only; cannot support critical claims."
+    }
+  ],
+  "claims": [
+    {
+      "claim_id": "CL1",
+      "statement": "Synthetic policy scope is explicitly marked as a fixture.",
+      "critical": true,
+      "temporal_status": "not_applicable",
+      "primary_source_required": true,
+      "source_ids": [
+        "P1"
+      ],
+      "verification_status": "verified",
+      "report_locations": [
+        "policy_context.policy_scope"
+      ]
+    },
+    {
+      "claim_id": "CL2",
+      "statement": "Synthetic reference model is used only to test the semantic-backbone alignment table.",
+      "critical": true,
+      "temporal_status": "not_applicable",
+      "primary_source_required": true,
+      "source_ids": [
+        "S1"
+      ],
+      "verification_status": "verified",
+      "report_locations": [
+        "standards"
+      ]
+    },
+    {
+      "claim_id": "CL3",
+      "statement": "Synthetic standard versions are bound to report rows for machine validation.",
+      "critical": true,
+      "temporal_status": "not_applicable",
+      "primary_source_required": true,
+      "source_ids": [
+        "S1",
+        "S2",
+        "S3"
+      ],
+      "verification_status": "verified",
+      "report_locations": [
+        "standards.version_or_date"
+      ]
+    },
+    {
+      "claim_id": "CL4",
+      "statement": "Secondary discovery source is not used for load-bearing conclusions.",
+      "critical": false,
+      "temporal_status": "not_applicable",
+      "primary_source_required": false,
+      "source_ids": [
+        "R1"
+      ],
+      "verification_status": "verified_with_caveat",
+      "report_locations": [
+        "sources"
+      ]
+    }
+  ],
+  "question_resolutions": [
+    {
+      "question_id": "RQ1",
+      "status": "resolved",
+      "source_ids": [
+        "P1"
+      ],
+      "summary": "Synthetic policy boundary recorded."
+    },
+    {
+      "question_id": "RQ2",
+      "status": "resolved",
+      "source_ids": [
+        "S1",
+        "S2"
+      ],
+      "summary": "Synthetic domestic-style assets recorded."
+    },
+    {
+      "question_id": "RQ3",
+      "status": "resolved",
+      "source_ids": [
+        "S3"
+      ],
+      "summary": "Synthetic international-style asset recorded."
+    },
+    {
+      "question_id": "RQ4",
+      "status": "resolved",
+      "source_ids": [
+        "S1",
+        "S2",
+        "S3"
+      ],
+      "summary": "All report standard rows have explicit synthetic version bindings."
+    }
+  ],
+  "standard_verifications": [
+    {
+      "standard_name": "SYN Domain Reference Model",
+      "report_source_ids": [
+        "S1"
+      ],
+      "researched_version_or_date": "v1.0 / synthetic",
+      "version_match": false,
+      "official_source": true,
+      "verification_status": "unresolved",
+      "notes": "Synthetic fixture binding; not a real standard claim."
+    },
+    {
+      "standard_name": "SYN Controlled Vocabulary",
+      "report_source_ids": [
+        "S1"
+      ],
+      "researched_version_or_date": "v1.0 / synthetic",
+      "version_match": true,
+      "official_source": true,
+      "verification_status": "verified",
+      "notes": "Synthetic fixture binding; not a real standard claim."
+    },
+    {
+      "standard_name": "SYN Service Exchange",
+      "report_source_ids": [
+        "S1"
+      ],
+      "researched_version_or_date": "v1.0 / synthetic",
+      "version_match": true,
+      "official_source": true,
+      "verification_status": "verified",
+      "notes": "Synthetic fixture binding; not a real standard claim."
+    },
+    {
+      "standard_name": "SYN Event Model",
+      "report_source_ids": [
+        "S1"
+      ],
+      "researched_version_or_date": "v1.0 / synthetic",
+      "version_match": true,
+      "official_source": true,
+      "verification_status": "verified",
+      "notes": "Synthetic fixture binding; not a real standard claim."
+    },
+    {
+      "standard_name": "SYN Provenance Profile",
+      "report_source_ids": [
+        "S1"
+      ],
+      "researched_version_or_date": "v1.0 / synthetic",
+      "version_match": true,
+      "official_source": true,
+      "verification_status": "verified",
+      "notes": "Synthetic fixture binding; not a real standard claim."
+    },
+    {
+      "standard_name": "SYN Governance Guide",
+      "report_source_ids": [
+        "S1"
+      ],
+      "researched_version_or_date": "v1.0 / synthetic",
+      "version_match": true,
+      "official_source": true,
+      "verification_status": "verified",
+      "notes": "Synthetic fixture binding; not a real standard claim."
+    },
+    {
+      "standard_name": "PROV-O conceptual reference",
+      "report_source_ids": [
+        "S1"
+      ],
+      "researched_version_or_date": "synthetic mapping fixture",
+      "version_match": true,
+      "official_source": true,
+      "verification_status": "verified",
+      "notes": "Synthetic fixture binding; not a real standard claim."
+    },
+    {
+      "standard_name": "DCAT conceptual reference",
+      "report_source_ids": [
+        "S1"
+      ],
+      "researched_version_or_date": "synthetic mapping fixture",
+      "version_match": true,
+      "official_source": true,
+      "verification_status": "verified",
+      "notes": "Synthetic fixture binding; not a real standard claim."
+    },
+    {
+      "standard_name": "Local Operations Schema",
+      "report_source_ids": [
+        "S1"
+      ],
+      "researched_version_or_date": "v0.1 / synthetic",
+      "version_match": true,
+      "official_source": true,
+      "verification_status": "verified",
+      "notes": "Synthetic fixture binding; not a real standard claim."
+    },
+    {
+      "standard_name": "Agent Audit Profile",
+      "report_source_ids": [
+        "S1"
+      ],
+      "researched_version_or_date": "v0.1 / synthetic",
+      "version_match": true,
+      "official_source": true,
+      "verification_status": "verified",
+      "notes": "Synthetic fixture binding; not a real standard claim."
+    }
+  ],
+  "conflicts": [],
+  "completion": {
+    "completed_by": "synthetic-fixture",
+    "completed_at": "2026-08-08T08:30:00+08:00",
+    "notes": "Executable test evidence only; no business-value claim."
+  }
+}

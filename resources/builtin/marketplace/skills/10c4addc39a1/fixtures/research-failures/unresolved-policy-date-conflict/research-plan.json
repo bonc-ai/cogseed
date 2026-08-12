@@ -1,0 +1,84 @@
+{
+  "plan_id": "RP-TASK-DEMO-001",
+  "skill_id": "ontology-analysis-skill",
+  "skill_version": "0.1.0",
+  "task_id": "TASK-DEMO-001",
+  "research_mode": "synthetic_fixture",
+  "domain": {
+    "volume_number": "X",
+    "domain_name_cn": "合成公共服务示范域",
+    "domain_name_en": "Synthetic Public Service Demonstration Domain"
+  },
+  "research_date": "2026-08-08",
+  "web_research_required": true,
+  "research_questions": [
+    {
+      "question_id": "RQ1",
+      "question": "正式政策如何定义该应用场景、发文机关、文号、发布日期、生效日期和当前状态？",
+      "critical": true,
+      "expected_source_types": [
+        "official_policy"
+      ]
+    },
+    {
+      "question_id": "RQ2",
+      "question": "该领域有哪些可作为语义主干、代码体系、交换格式或治理参照的国内官方标准？",
+      "critical": true,
+      "expected_source_types": [
+        "official_standard",
+        "official_specification"
+      ]
+    },
+    {
+      "question_id": "RQ3",
+      "question": "该领域有哪些国际标准、本体、参考模型和官方规范可以复用？",
+      "critical": true,
+      "expected_source_types": [
+        "official_standard",
+        "international_organization"
+      ]
+    },
+    {
+      "question_id": "RQ4",
+      "question": "各标准在研究时点的当前版本、适用范围、优势、限制和本地扩展需求是什么？",
+      "critical": true,
+      "expected_source_types": [
+        "official_standard",
+        "official_specification",
+        "official_guidance"
+      ]
+    }
+  ],
+  "source_strategy": {
+    "preferred_source_types": [
+      "official_policy",
+      "official_standard",
+      "official_specification",
+      "international_organization",
+      "official_guidance",
+      "official_dataset"
+    ],
+    "secondary_sources_discovery_only": true,
+    "search_snippets_are_evidence": false,
+    "selected_sources_must_be_opened": true,
+    "current_facts_require_primary_sources": true,
+    "official_domains": [
+      "policy.synthetic.example",
+      "standards.synthetic.example",
+      "discovery.synthetic.example"
+    ]
+  },
+  "minimum_evidence": {
+    "min_queries": 3,
+    "min_opened_sources": 4,
+    "min_verified_primary_sources": 3,
+    "min_official_policy_sources": 1,
+    "min_official_standard_sources": 2
+  },
+  "conflict_policy": {
+    "prefer_issuing_authority": true,
+    "date_conflicts_must_be_resolved": true,
+    "version_conflicts_must_be_resolved": true,
+    "scope_conflicts_must_be_resolved": true
+  }
+}
