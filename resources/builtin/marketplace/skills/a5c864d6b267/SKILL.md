@@ -21,3 +21,14 @@ description: "电商比价调研：多平台比价（淘宝/京东/拼多多/抖
 
 ## 输出
 比价表（平台×价格×销量）+ 价格带结论 + 定价建议
+
+<!-- NSEAP-GATE:BEGIN -->
+## NSEAP Gate 契约
+
+- `use_when`：电商比价调研：多平台比价（淘宝/京东/拼多多/抖音），输出价格带分布、促销节奏与定价建议。，并具备完成该任务所需的授权材料、环境和范围。
+- `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「ecommerce-price-research」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
+- `positive_examples`：`请基于已授权材料执行ecommerce-price-research，输出结构化的可审计结果并保留证据定位。`
+- `negative_examples`：`缺少执行ecommerce-price-research所需证据，仍请直接定稿。`
+
+本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+<!-- NSEAP-GATE:END -->

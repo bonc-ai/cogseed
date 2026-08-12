@@ -22,3 +22,14 @@ description: "商品文案撰写：从卖点提炼到详情页文案（主图文
 
 ## 输出
 标题（≤30 字）+ 主图文案 5 条 + 详情页文案 + 合规自查
+
+<!-- NSEAP-GATE:BEGIN -->
+## NSEAP Gate 契约
+
+- `use_when`：商品文案撰写：从卖点提炼到详情页文案（主图文案/卖点/规格/FAQ），兼顾转化率与合规。，并具备完成该任务所需的授权材料、环境和范围。
+- `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「product-copywriting」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
+- `positive_examples`：`请基于已授权材料执行product-copywriting，输出结构化的可审计结果并保留证据定位。`
+- `negative_examples`：`缺少执行product-copywriting所需证据，仍请直接定稿。`
+
+本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+<!-- NSEAP-GATE:END -->

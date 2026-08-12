@@ -23,3 +23,14 @@ description: "销售数据复盘：按周期汇总 GMV/转化/流量结构/广�
 
 ## 输出
 数据总览表 + 问题清单 + 下周行动项
+
+<!-- NSEAP-GATE:BEGIN -->
+## NSEAP Gate 契约
+
+- `use_when`：销售数据复盘：按周期汇总 GMV/转化/流量结构/广告数据，定位问题并给出下周行动建议。，并具备完成该任务所需的授权材料、环境和范围。
+- `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「sales-data-review」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
+- `positive_examples`：`请基于已授权材料执行sales-data-review，输出结构化的可审计结果并保留证据定位。`
+- `negative_examples`：`缺少执行sales-data-review所需证据，仍请直接定稿。`
+
+本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+<!-- NSEAP-GATE:END -->
