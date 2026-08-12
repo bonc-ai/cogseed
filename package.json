@@ -200,17 +200,6 @@
         ]
       },
       {
-        "from": "packages/nseap-meta-skill-engine",
-        "to": "packages/nseap-meta-skill-engine",
-        "filter": [
-          "dist/**/*",
-          "ontologies/**/*",
-          "package.json",
-          "README.md",
-          "!**/.DS_Store"
-        ]
-      },
-      {
         "from": "resources/mac-locales",
         "to": ".",
         "filter": [
