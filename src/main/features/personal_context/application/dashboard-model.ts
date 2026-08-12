@@ -23,8 +23,13 @@ function chainConnection(dashboard: PersonalContextDashboard): ChainState {
  * 授权环节：ok = connected；broken = needs_reauth/revoked/error；
  * missing = 其余（disconnected/ready_to_authorize/authorizing——authorizing 由
  * 渲染层读组件字段特判"授权中"，不产生待办）。
+ *
+ * 依赖前置：机器人未连接时授权环节亮"等待中"（灰），即使旧 token 仍有效
+ * （8-12 实测回归：实例 disconnected 但 OAuth connected + sync ready 时，
+ * 旧决策树产出「尚未连接 + 后环全绿」的自相矛盾链路）。
  */
 function chainAuthorization(dashboard: PersonalContextDashboard): ChainState {
+  if (chainConnection(dashboard) !== 'ok') return 'missing';
   const kind = dashboard.authorization.kind;
   if (kind === 'connected') return 'ok';
   if (kind === 'needs_reauth' || kind === 'revoked' || kind === 'error') return 'broken';
@@ -34,10 +39,11 @@ function chainAuthorization(dashboard: PersonalContextDashboard): ChainState {
 /**
  * 投递环节：前置（连接+授权）未就绪或未选资源 → missing；
  * 同步失败 → broken；ready/awaiting_review → ok；其余（进行中）→ missing（渲染层特判）。
+ * 依赖前置同授权环节：上游未就绪时一律"等待中"（灰），链路状态不允许前灰后绿。
  */
 function chainDelivery(dashboard: PersonalContextDashboard): ChainState {
-  const { authorization, resources, sync } = dashboard;
-  if (authorization.kind !== 'connected') return 'missing';
+  const { resources, sync } = dashboard;
+  if (chainConnection(dashboard) !== 'ok' || chainAuthorization(dashboard) !== 'ok') return 'missing';
   if (resources.selected === 0) return 'missing';
   if (sync.state === 'failed' || sync.state === 'partial_failure') return 'broken';
   if (sync.state === 'ready' || sync.state === 'awaiting_review') return 'ok';
@@ -74,5 +80,10 @@ export function deriveOverall(dashboard: PersonalContextDashboard): DashboardOve
   }
   const allOk = chain.connection === 'ok' && chain.authorization === 'ok' && chain.delivery === 'ok';
   const allMissing = chain.connection === 'missing' && chain.authorization === 'missing' && chain.delivery === 'missing';
-  return { status: allOk ? 'ready' : allMissing ? 'off' : 'attention', chain, issues };
+  // off 仅表示"从未配置"：链路全灰且无任何配置痕迹（没绑过机器人、没授权过）。
+  // 曾授权/曾绑定但链路断开的用户应落到 attention（有历史配置，不是全新开始）。
+  const neverConfigured = allMissing
+    && !dashboard.messaging.ownerConfigured
+    && (dashboard.authorization.kind === 'disconnected' || dashboard.authorization.kind === 'ready_to_authorize');
+  return { status: allOk ? 'ready' : neverConfigured ? 'off' : 'attention', chain, issues };
 }

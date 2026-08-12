@@ -110,13 +110,13 @@
       return;
     }
     const view = model();
-    host.innerHTML = `<div class="touchpoint-settings"><header class="touchpoint-hero"><div><h1>${escape(tr('touchpoint_settings.title', '飞书移动触点'))}</h1><p>${escape(tr('touchpoint_settings.subtitle', ''))}</p></div><div class="touchpoint-hero-actions"><span class="touchpoint-status is-${escape(view.overallStatus)}"><span></span>${escape(tr(`touchpoint_settings.status.${view.overallStatus}`, view.overallStatus))}</span><button class="btn touchpoint-icon-button" data-touchpoint-action="refresh" aria-label="${escape(tr('touchpoint_settings.refresh', '刷新'))}">${iconMarkup('refresh', 'touchpoint-refresh-icon')}</button></div></header>${renderChainView(view)}${renderIssueCards(view)}${renderResourcePicker()}${view.ready ? renderDelivery(view) : ''}${renderAdvancedSettings(view)}${renderSetupGuideCard()}${state.notice ? `<div class="messaging-notice is-${escape(state.notice.kind)}">${escape(state.notice.text)}</div>` : ''}</div>`;
+    host.innerHTML = `<div class="touchpoint-settings"><header class="touchpoint-hero"><div><h1>${escape(tr('touchpoint_settings.title', '飞书移动触点'))}</h1><p>${escape(tr('touchpoint_settings.subtitle', ''))}</p></div><div class="touchpoint-hero-actions"><span class="touchpoint-status is-${escape(view.overallStatus)}"><span></span>${escape(tr(`touchpoint_settings.status.${view.overallStatus}`, view.overallStatus))}</span><button class="btn touchpoint-icon-button" data-touchpoint-action="refresh" aria-label="${escape(tr('touchpoint_settings.refresh', '刷新'))}">${iconMarkup('refresh', 'touchpoint-refresh-icon')}</button></div></header>${renderChainView(view)}${renderIssueCards(view)}${renderResourcePicker()}${renderDelivery(view)}${renderAdvancedSettings(view)}${renderSetupGuideCard()}${state.notice ? `<div class="messaging-notice is-${escape(state.notice.kind)}">${escape(state.notice.text)}</div>` : ''}</div>`;
     hydrate(host);
   }
 
   async function invoke(channel, payload) {
-    if (!window.orkas || typeof window.orkas.invoke !== 'function') throw new Error(tr('touchpoint_settings.ipc_unavailable', '桌面端连接不可用。'));
-    const result = await window.orkas.invoke(channel, payload || {});
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') throw new Error(tr('touchpoint_settings.ipc_unavailable', '桌面端连接不可用。'));
+    const result = await window.cogseed.invoke(channel, payload || {});
     // IPC 约定：失败返回 { ok: false, error }（不 reject）。不检查会导致
     // 上层把 undefined 当成功数据，页面误判为 loading/卡死。
     if (result && result.ok === false) {
@@ -374,10 +374,10 @@
       if (input.checked) state.selectedIds.add(id); else state.selectedIds.delete(id);
     });
     window.addEventListener('i18n-change', render);
-    if (window.orkas && typeof window.orkas.onPushEvent === 'function') {
-      window.orkas.onPushEvent('messaging:instance-status', () => { void refresh(); });
+    if (window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
+      window.cogseed.onPushEvent('messaging:instance-status', () => { void refresh(); });
       // OAuth 完成/取消/撤销后主动刷新，避免用户扫完码页面还停在旧状态
-      window.orkas.onPushEvent('personal-context:authorization', () => { void refresh(); });
+      window.cogseed.onPushEvent('personal-context:authorization', () => { void refresh(); });
     }
   }
 

@@ -23,18 +23,26 @@
       ? (dashboard.messaging && dashboard.messaging.statusKind === 'error' ? 'broken' : 'missing')
       : 'ok';
     const authKind = dashboard.authorization && dashboard.authorization.kind;
-    const authorization = !authorized
-      ? (authKind === 'needs_reauth' || authKind === 'revoked' || authKind === 'error' ? 'broken' : 'missing')
-      : 'ok';
-    const delivery = !authorized || !hasResources
+    // 依赖前置（与后端 chainAuthorization 对齐）：机器人未连接时授权环节一律"等待中"，
+    // 即使旧 token 仍有效，避免「尚未连接 + 后环全绿」的自相矛盾链路。
+    const authorization = connection !== 'ok'
       ? 'missing'
-      : (syncState === 'failed' || syncState === 'partial_failure' ? 'broken'
-        : (syncState === 'ready' || syncState === 'awaiting_review' ? 'ok' : 'missing'));
+      : !authorized
+        ? (authKind === 'needs_reauth' || authKind === 'revoked' || authKind === 'error' ? 'broken' : 'missing')
+        : 'ok';
+    // 依赖前置（与后端 chainDelivery 对齐）：连接或授权未就绪时投递环节一律"等待中"。
+    const delivery = connection !== 'ok' || authorization !== 'ok'
+      ? 'missing'
+      : !hasResources
+        ? 'missing'
+        : (syncState === 'failed' || syncState === 'partial_failure' ? 'broken'
+          : (syncState === 'ready' || syncState === 'awaiting_review' ? 'ok' : 'missing'));
     return { connection, authorization, delivery };
   }
 
   function fallbackOverall(dashboard, botConnected, authorized, hasResources, syncState) {
     const chain = fallbackChain(dashboard, botConnected, authorized, hasResources, syncState);
+    const authKind = dashboard.authorization && dashboard.authorization.kind;
     const issues = [];
     // connecting 是瞬态：不发「连接机器人」卡（渲染层以 inProgress 显示处理中）
     if (chain.connection === 'missing' && dashboard.messaging && dashboard.messaging.statusKind !== 'connecting') issues.push({ severity: 'warning', step: 'connection', reason: 'not_configured', actionId: 'connection.connect' });
@@ -48,7 +56,12 @@
     }
     const allOk = chain.connection === 'ok' && chain.authorization === 'ok' && chain.delivery === 'ok';
     const allMissing = chain.connection === 'missing' && chain.authorization === 'missing' && chain.delivery === 'missing';
-    return { status: allOk ? 'ready' : allMissing ? 'off' : 'attention', chain, issues };
+    // off 仅表示"从未配置"（与后端 deriveOverall 对齐）：链路全灰且无任何配置痕迹。
+    // 曾授权/曾绑定但链路断开的用户应落到 attention（有历史配置，不是全新开始）。
+    const neverConfigured = allMissing
+      && !(dashboard.messaging && dashboard.messaging.ownerConfigured)
+      && (authKind === 'disconnected' || authKind === 'ready_to_authorize');
+    return { status: allOk ? 'ready' : neverConfigured ? 'off' : 'attention', chain, issues };
   }
 
   function buildIssueViewModel(issue) {

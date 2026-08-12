@@ -146,6 +146,24 @@ describe('deriveOverall', () => {
     expect(overall.issues[0]).toMatchObject({ step: 'authorization', reason: 'token_expired', actionId: 'authorization.reauth' });
   });
 
+  it('机器人未连接但旧授权仍有效 → 三环节 missing + attention，仅连接待办（链路不矛盾）', () => {
+    // 8-12 实测回归：messaging 实例 disconnected 但 OAuth token 有效（connected）、
+    // 同步跑过（ready）时，旧决策树产出「尚未连接 + 日历与资料绿 + 每日简报绿」的
+    // 自相矛盾链路。授权/投递环节必须依赖前置：机器人没连上，后环一律"等待中"。
+    // 曾授权过 → 不是"从未配置"，徽章应落 attention（需要处理）而非 off。
+    const overall = deriveOverall(dashboard({
+      messaging: { instanceId: 'feishu-1', botConnected: false, ownerConfigured: true },
+      authorization: { kind: 'connected', providerId: 'feishu' },
+      resources: { discovered: 3, selected: 3, ready: 3, failed: 0, unsupported: 0 },
+      sync: { state: 'ready', lastRunAt: '2026-08-12T00:00:00.000Z', nextRunAt: null, processed: 3, failed: 0 },
+    }));
+    expect(overall.chain).toEqual({ connection: 'missing', authorization: 'missing', delivery: 'missing' });
+    expect(overall.status).toBe('attention');
+    expect(overall.issues).toEqual([
+      { severity: 'warning', step: 'connection', reason: 'not_configured', actionId: 'connection.connect' },
+    ]);
+  });
+
   it('不变量：三环节非全 ok 且非全 missing → attention 且 issues 非空', () => {
     // 中间态收敛断言（与全 ok=ready、全 missing=off 两个端点互补）：
     // 每种中间组合都必须落到 attention 并带至少一张待办卡，不得静默吞掉问题。
