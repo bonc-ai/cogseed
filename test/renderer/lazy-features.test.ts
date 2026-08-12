@@ -45,6 +45,8 @@ describe('renderer lazy feature loader', () => {
       './modules/settings.js',
       './vendor/qrcode-generator/qrcode.js',
       './modules/messaging-settings.js',
+      './modules/touchpoint-settings-model.js',
+      './modules/touchpoint-settings.js',
       './modules/memory.js',
     ]);
     expect(appended.every((script) => script.async === false)).toBe(true);

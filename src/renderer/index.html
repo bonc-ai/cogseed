@@ -1333,12 +1333,11 @@
                 <div class="settings-group-head">
                   <div>
                     <div class="settings-group-title" data-i18n="settings.model_authorization.title">Model authorizations</div>
-                    <div class="settings-group-sub" data-i18n="settings.model_authorization.subtitle">Use an API key or import from CC Switch, test the connection, then choose one or more returned models.</div>
-                    <div class="settings-group-sub" id="settings-model-authorization-api-key-flow-hint" data-i18n="settings.model_authorization.api_key_flow_hint">API Key flow: choose an interface type, enter the key and URL, test the connection, then select models from the response.</div>
+                    <div class="settings-group-sub" data-i18n="settings.model_authorization.subtitle">Manage API keys and OAuth sign-ins for model providers.</div>
                   </div>
                   <div class="settings-group-head-actions">
-                    <button class="btn btn-primary" id="settings-model-authorization-add-btn" data-ui-icon="plus" data-i18n="settings.model_authorization.add">Add authorization</button>
-                    <button class="btn" id="settings-model-authorization-advanced-btn" data-ui-icon="settings" data-i18n="settings.model_authorization.advanced">Custom endpoint management</button>
+                    <button class="btn btn-primary" id="settings-model-authorization-add-btn"><span data-ui-icon="plus"></span><span data-i18n="settings.model_authorization.add">Add authorization</span></button>
+                    <button class="btn" id="settings-model-authorization-advanced-btn"><span data-ui-icon="settings"></span><span data-i18n="settings.model_authorization.advanced">Custom endpoint management</span></button>
                   </div>
                 </div>
                 <div class="settings-entries model-authorization-list" id="settings-model-authorization-list">
@@ -1492,8 +1491,24 @@
 
             <!-- ─────────────────────── 消息平台 ─────────────────────── -->
             <div class="settings-tab-pane" data-settings-pane="messaging" hidden>
-              <div class="messaging-settings-shell" id="messaging-settings-shell" aria-live="polite">
-                <div class="messaging-page" id="messaging-page"></div>
+              <div class="touchpoint-settings-shell" aria-live="polite">
+                <div class="touchpoint-view" id="touchpoint-overview-view">
+                  <div id="touchpoint-settings-page"></div>
+                </div>
+                <div class="touchpoint-view touchpoint-connections-view" id="touchpoint-connections-view" hidden>
+                  <header class="touchpoint-connections-header">
+                    <button class="btn touchpoint-icon-button" type="button" data-touchpoint-action="connections.back" data-i18n-title="touchpoint_settings.connections.back" data-i18n-aria-label="touchpoint_settings.connections.back" title="返回触点概览" aria-label="返回触点概览">
+                      <span data-ui-icon="arrow-left" data-ui-icon-class="touchpoint-refresh-icon"></span>
+                    </button>
+                    <div>
+                      <h2 data-i18n="touchpoint_settings.connections.title">连接管理</h2>
+                      <p data-i18n="touchpoint_settings.connections.detail">机器人实例、扫码绑定与消息行为</p>
+                    </div>
+                  </header>
+                  <div class="messaging-settings-shell" id="messaging-settings-shell">
+                    <div class="messaging-page" id="messaging-page"></div>
+                  </div>
+                </div>
               </div>
             </div>
 

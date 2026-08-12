@@ -439,11 +439,18 @@ function toClient(instance: MessagingInstanceDisk, hasCredentials: boolean): Mes
     ...metadata
   } = instance;
   const ownerConfigured = Boolean(ownerExternalUserId);
+  // Without a friendly name the client DTO gets a masked id (ou_ab12…cd34)
+  // instead of nothing, so the renderer can confirm who is bound without
+  // ever exposing the full open id.
+  const ownerMaskedId = ownerConfigured && ownerExternalUserId.length > 11
+    ? `${ownerExternalUserId.slice(0, 7)}…${ownerExternalUserId.slice(-4)}`
+    : undefined;
   return {
     ...metadata,
     hasCredentials,
     ownerConfigured,
     ...(ownerConfigured && ownerExternalUserName ? { ownerLabel: ownerExternalUserName } : {}),
+    ...(ownerConfigured && !ownerExternalUserName && ownerMaskedId ? { ownerMaskedId } : {}),
     ...(ownerConfigured && ownerIdentitySource ? { ownerIdentitySource } : {}),
   };
 }
