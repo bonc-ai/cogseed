@@ -596,7 +596,7 @@ function _bindSpaceInlineCreateInput(input) {
     _projectsTrackClick('space_project_create_submit', { space_id: sid, name_length: name.length });
     try {
       // Create project, then bind it to the space.
-      const createRes = await window.orkas.invoke('projects.create', { name });
+      const createRes = await (window.cogseed || window.orkas).invoke('projects.create', { name });
       if (!createRes || !createRes.ok) {
         _projectsTrackEvent('space_project_create_result', {
           result: 'failure',
@@ -613,7 +613,7 @@ function _bindSpaceInlineCreateInput(input) {
         _showProjectInlineError(input, 'no project_id returned');
         return;
       }
-      const bindRes = await window.orkas.invoke('projects.bindSpace', { projectId: pid, spaceId: sid });
+      const bindRes = await (window.cogseed || window.orkas).invoke('projects.bindSpace', { projectId: pid, spaceId: sid });
       if (!bindRes || !bindRes.ok) {
         _projectsTrackEvent('space_project_create_result', {
           result: 'bind_failure',

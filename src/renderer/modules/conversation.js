@@ -1588,9 +1588,9 @@ let _spaceAssetNames = { templates: {}, skills: {}, agents: {} };
 async function _ensureSpaceAssetNames() {
   try {
     const [tplRes, skillRes, agentRes] = await Promise.all([
-      window.orkas.invoke('spaces.templates.list'),
-      window.orkas.invoke('skills.list'),
-      window.orkas.invoke('agents.list'),
+      (window.cogseed || window.orkas).invoke('spaces.templates.list'),
+      (window.cogseed || window.orkas).invoke('skills.list'),
+      (window.cogseed || window.orkas).invoke('agents.list'),
     ]);
     _spaceAssetNames.templates = Object.fromEntries((tplRes.templates || []).map((t) => [t.template_id, t.name || t.template_id]));
     _spaceAssetNames.skills = Object.fromEntries((skillRes.skills || []).map((s) => [s.id, s.name || s.id]));
@@ -1622,7 +1622,7 @@ async function _createSpaceFromDraft(draft) {
   if (Array.isArray(draft.extra_skill_ids)) payload.extra_skill_ids = draft.extra_skill_ids;
   if (Array.isArray(draft.extra_agent_ids)) payload.extra_agent_ids = draft.extra_agent_ids;
   try {
-    const res = await window.orkas.invoke('spaces.createFromDraft', { draft: payload });
+    const res = await (window.cogseed || window.orkas).invoke('spaces.createFromDraft', { draft: payload });
     if (!res || res.error || !res.space) throw new Error((res && res.error) || 'create failed');
     return res.space;
   } catch (e) {
@@ -1651,7 +1651,7 @@ document.addEventListener('click', async (e) => {
   // 这个会话，而是新建引导会话（僵尸会话陷阱：旧会话无产出也会一直吸附点击）。
   if (typeof currentCid === 'string' && currentCid) {
     try {
-      const doneRes = await window.orkas.invoke('conversations.completeSpaceBuilder', { cid: currentCid });
+      const doneRes = await (window.cogseed || window.orkas).invoke('conversations.completeSpaceBuilder', { cid: currentCid });
       // 同步本地列表缓存：本次运行内再点「空间模式」不再复用该会话。
       if (doneRes && doneRes.conversation && Array.isArray(conversations)) {
         const idx = conversations.findIndex((c) => c && c.conversation_id === currentCid);
