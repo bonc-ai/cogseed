@@ -77,9 +77,10 @@ Conversation.space_id (string | null)
   - 文件：`src/main/features/spaces.ts`
   - 验收：单测或 smoke 验证返回该空间下会话列表。
   - ✅ 完成（2026-08-13）：**实现于 `chats.ts`**（非 plan 原写的 spaces.ts——会话归一化/排序/索引读取器均为 chats.ts 私有，放 spaces.ts 需反向依赖；spaces.ts 保持纯配置实体）。`listSpaceConversations(userId, spaceId)`：先读空间自有索引 `spaceChatIndexFile`（v5 迁移后/空间根落点），再扫全局+项目根兜底双字段兼容期带 space_id 的会话，按 conversation_id 去重（空间索引优先）、过滤墓碑、活动倒序。验证证据：`npm run typecheck` 通过；fixture（空间索引 2 行含 1 墓碑 + 全局 1 双字段 + 1 orphan）断言返回 2 条（空间索引+双字段）、排除 orphan 和墓碑、空空间/非法 spaceId 返回 []。
-- [ ] **T1.2 空间产物聚合**：新开 `src/main/features/spaces_artifacts.ts`，遍历空间会话 → `chat_attachments.listAttachments(uid, cid)` + artifact 目录扫描，统一成 `{name, type, ext, sourceSessionId, time}` 形状。
+- [x] **T1.2 空间产物聚合**：新开 `src/main/features/spaces_artifacts.ts`，遍历空间会话 → `chat_attachments.listAttachments(uid, cid)` + artifact 目录扫描，统一成 `{name, type, ext, sourceSessionId, time}` 形状。
   - 文件：`src/main/features/spaces_artifacts.ts`
   - 验收：返回统一产物列表，附件和 artifact 都在。
+  - ✅ 完成（2026-08-13）：`spaces_artifacts.ts` 的 `listSpaceArtifacts(uid, spaceId)` 遍历 `listSpaceConversations` 结果，直接扫空间附件目录 `spaceChatAttachmentDir`（`ALLOWED_EXTENSIONS` 白名单过滤）+ 空间产物目录 `spaceChatArtifactCidDir`（读 `__cogseed-meta.json` 取标题/createdAt），统一 `{name,type:'attachment'|'artifact',ext,sourceSessionId,time,artifactId?}`，按时间倒序。**关键偏差**：未复用 `chat_attachments.listAttachments`/`artifactDirForConversation`——两者经 project-layout 按 project_id 解析（尚不支持空间根），v5 已把已绑空间会话的附件/产物搬到 `spaces/<sid>/`，故直接读空间路径与迁移落点对齐（阶段 4 统一后可收敛）。验证证据：`npm run typecheck` 通过；fixture（空间 1 会话 + 2 附件 + 1 artifact 带 meta 标题）断言附件/产物齐全、标题/时间/类型正确、空空间返回 []。
 - [ ] **T1.3 空间资产引用（路线 A 激活死字段）**：`spaces.ts` 新增 `bindSpaceAsset` / `unbindSpaceAsset` / `listSpaceAssetBindings`，读写 `asset_reference_bindings`；绑定默认 policy=`follow_latest_compatible`；回填资产 title/type 用 `recall/asset-service.ts` 的 `listAbilityAssets`。
   - 文件：`src/main/features/spaces.ts`（字段已存在，加读写函数）
   - 验收：绑定/解绑/列出走通，policy 默认 follow_latest。
