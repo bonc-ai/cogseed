@@ -186,6 +186,70 @@ describe('confirmed Recall projection prompt injection', () => {
     });
   });
 
+  it('injects only the explicitly committed projection for a KSTAR turn', async () => {
+    const selected = await createAssetWith({
+      judgment: 'Review OAuth callback and token exchange security.',
+      summary: 'OAuth review workflow',
+      sourceId: 'conversation-explicit-oauth',
+    });
+    const unrelated = await createAssetWith({
+      judgment: 'Plan database migrations with rollback windows.',
+      summary: 'Database migration rule',
+      sourceId: 'conversation-explicit-database',
+    });
+    const { projection, promptInjection } = await modules();
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-explicit',
+      purpose: 'global',
+      taskText: 'Audit OAuth login callback handling',
+    }, fakeSemanticOptions);
+    const revised = await projection.reviseContextProjection('user-a', preview.id, {
+      removeAssetIds: [unrelated.asset.id],
+    });
+    const confirmed = await projection.confirmContextProjection('user-a', revised.id);
+
+    const result = await promptInjection.buildRecallTurnPromptContext('user-a', {
+      cid: 'cid-explicit',
+      taskRunId: 'turn-explicit',
+      taskText: 'Audit OAuth login callback handling',
+      committedProjectionId: confirmed.id,
+      forecastId: 'wf-explicit',
+    });
+
+    expect(result.citations).toEqual([
+      expect.objectContaining({
+        assetId: selected.asset.id,
+        projectionId: confirmed.id,
+        forecastId: 'wf-explicit',
+        matchMethod: 'manual',
+      }),
+    ]);
+    expect(result.promptBlock).toContain(selected.asset.statement);
+    expect(result.promptBlock).not.toContain(unrelated.asset.statement);
+  });
+
+  it('rejects committed injection when a frozen asset version changed', async () => {
+    const selected = await createAssetWith({
+      judgment: 'Review OAuth callback state.',
+      summary: 'OAuth callback state',
+      sourceId: 'conversation-version-drift',
+    });
+    const { projection, promptInjection } = await modules();
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-drift', purpose: 'global',
+    });
+    const confirmed = await projection.confirmContextProjection('user-a', preview.id);
+    await assets.updateAbilityAsset('user-a', selected.asset.id, {
+      statement: 'Changed after Forecast.', actor: 'user', reason: 'test drift',
+    });
+
+    await expect(promptInjection.buildRecallTurnPromptContext('user-a', {
+      cid: 'cid-drift', taskRunId: 'turn-drift', taskText: 'Review OAuth',
+      committedProjectionId: confirmed.id,
+    })).rejects.toMatchObject({ code: 'projection_asset_version_changed' });
+  });
+
   it('returns no turn context when no approved memory is relevant', async () => {
     await createAssetWith({
       judgment: 'Plan database migrations with rollback windows.',

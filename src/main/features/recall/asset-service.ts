@@ -14,6 +14,7 @@ import type { RecallAbilityAssetRecord } from './candidate-service';
 import { readAbilityAssetRelationContract } from './asset-relations';
 import { normalizeAbilityAssetScopePolicy, type RecallAbilityAssetScopePolicy } from './scope-policy';
 import { assertNotForbiddenToPersist } from '../../util/cognition-sensitivity';
+import { normalizeCausalRule } from './world-model-types';
 
 export type AbilityAssetActor = 'user' | 'system';
 export type AbilityAssetRecommendedAction = 'pause' | 'rework';
@@ -27,8 +28,8 @@ export interface AbilityAssetVersionRecord extends RecallJsonRecord {
   snapshot: Pick<
     RecallAbilityAssetRecord,
     | 'title' | 'statement' | 'type' | 'scope' | 'scopePolicy' | 'evidenceRefs'
-    | 'status' | 'maturity' | 'version' | 'learningSignal' | 'ontologyRefs'
-    | 'relations' | 'derivedFrom'
+    | 'status' | 'maturity' | 'version' | 'learningSignal' | 'learningProvenance'
+    | 'ontologyRefs' | 'relations' | 'derivedFrom'
   >;
 }
 
@@ -139,6 +140,7 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   const ontologyRefs = value.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(value.ontologyRefs);
   const relationContract = readAbilityAssetRelationContract(value, value.id);
   const scopePolicy = normalizeAbilityAssetScopePolicy(value.scopePolicy);
+  const causalRule = value.causalRule === undefined ? undefined : normalizeCausalRule(value.causalRule);
   const recommendedAction = value.recommendedAction;
   if (recommendedAction !== undefined && recommendedAction !== 'pause' && recommendedAction !== 'rework') throw new Error('malformed recall ability asset recommendation');
   if (recommendedAction !== undefined && (typeof value.recommendationReason !== 'string' || !value.recommendationReason.trim() || typeof value.recommendationAt !== 'string')) throw new Error('malformed recall ability asset recommendation');
@@ -158,6 +160,7 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
     ...(ontologyRefs ? { ontologyRefs } : {}),
     ...relationContract,
     ...(scopePolicy ? { scopePolicy } : {}),
+    ...(causalRule ? { causalRule } : {}),
   } as RecallAbilityAssetRecord;
 }
 
@@ -190,6 +193,7 @@ function snapshot(asset: RecallAbilityAssetRecord): AbilityAssetVersionRecord['s
     ...(asset.scopePolicy ? { scopePolicy: asset.scopePolicy } : {}),
     evidenceRefs: asset.evidenceRefs,
     ...(asset.learningSignal ? { learningSignal: asset.learningSignal } : {}),
+    ...(asset.learningProvenance ? { learningProvenance: asset.learningProvenance } : {}),
     ...(asset.ontologyRefs ? { ontologyRefs: asset.ontologyRefs } : {}),
     ...(asset.relations ? { relations: asset.relations } : {}),
     ...(asset.derivedFrom ? { derivedFrom: asset.derivedFrom } : {}),

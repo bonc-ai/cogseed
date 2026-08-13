@@ -1118,6 +1118,8 @@ interface QueueItem {
    * Used to grant read-only access to source attachment directories. */
   references?: ChatMessageReference[];
   useSelections?: ChatUseSelection[];
+  committedProjectionId?: string;
+  forecastId?: string;
   /** Preserve the target persistent session's active durable turn. */
   resumeActiveTurn?: boolean;
   /** Shadow-tap marker: this turn was triggered NOT because the actor was
@@ -1246,6 +1248,7 @@ interface CidState {
     logicalRunId?: string;
     executionId?: string;
     projectionId?: string;
+    forecastId?: string;
     wakeRequestId?: string;
   };
 }
@@ -1268,6 +1271,7 @@ export interface TaskTerminalEvent {
   logical_run_id?: string;
   execution_id?: string;
   projection_id?: string;
+  forecast_id?: string;
   wake_request_id?: string;
 }
 
@@ -1468,6 +1472,7 @@ function _emitTaskRunTerminalIfQuiescent(
       ...(run.logicalRunId ? { logical_run_id: run.logicalRunId } : {}),
       ...(run.executionId ? { execution_id: run.executionId } : {}),
       ...(run.projectionId ? { projection_id: run.projectionId } : {}),
+      ...(run.forecastId ? { forecast_id: run.forecastId } : {}),
       ...(run.wakeRequestId ? { wake_request_id: run.wakeRequestId } : {}),
     };
     if (!event.projection_id || !event.logical_run_id || !event.wake_request_id) {
@@ -1827,6 +1832,14 @@ export interface EnqueueParams {
   /** Host-verified failed-turn continuation. Kept off the persisted message
    * schema; it only controls how the recipient worker opens its session. */
   resumeActiveTurn?: boolean;
+  /** Skip KSTAR requirement routing + Recall projection gating for this
+   *  enqueue. Used by the resume path so confirming a projection does not
+   *  create a second projection and re-gate the same user message. */
+  skipKstarRouting?: boolean;
+  /** Exact committed Recall projection used by the pre-execution Forecast. */
+  committedProjectionId?: string;
+  /** Forecast frozen before this Commander turn was admitted. */
+  forecastId?: string;
   attachments?: string[];
   use_selections?: ChatUseSelection[];
   references?: ChatMessageReference[];
@@ -1900,6 +1913,7 @@ export interface EnqueueParams {
     logicalRunId?: string;
     executionId?: string;
     projectionId?: string;
+    forecastId?: string;
     wakeRequestId?: string;
   };
   /** Marker for the Commander-visible task/plan/expected-result declaration. */
@@ -1939,6 +1953,7 @@ export async function enqueue(params: EnqueueParams): Promise<GroupMessage> {
       ...(provenance?.logicalRunId ? { logicalRunId: provenance.logicalRunId } : {}),
       ...(provenance?.executionId ? { executionId: provenance.executionId } : {}),
       ...(provenance?.projectionId ? { projectionId: provenance.projectionId } : {}),
+      ...(provenance?.forecastId ? { forecastId: provenance.forecastId } : {}),
       ...(provenance?.wakeRequestId ? { wakeRequestId: provenance.wakeRequestId } : {}),
     };
   }
@@ -2094,6 +2109,11 @@ async function _enqueueBody(
   }
   to = Array.from(new Set(to));
 
+  // Conversation project id resolved once here and threaded to KSTAR/Recall
+  // so automatic projection matching is scoped to the same project the
+  // dispatch/workspace resolution below uses.
+  let conversationProjectId: string | undefined;
+
   // Project scope at dispatch time: if the conversation belongs to a
   // project, drop any recipient agent_id that isn't bound to the project
   // (CLAUDE.md §6 — "if recipient unavailable, hand off to commander").
@@ -2108,6 +2128,7 @@ async function _enqueueBody(
     const { getConversation } = await import("../chats");
     const conv = await getConversation(uid, cid);
     const projectId = (conv as any)?.project_id;
+    if (typeof projectId === "string" && projectId) conversationProjectId = projectId;
     if (typeof projectId === "string" && projectId) {
       const projectsFeat = await import("../projects");
       const scope = await projectsFeat.resolveProjectScope(uid, projectId);
@@ -2369,6 +2390,31 @@ async function _enqueueBody(
     }
   }
 
+  // Route KSTAR synchronously for user messages so a Recall projection
+  // preview can gate the Commander dispatch BEFORE the turn starts. When a
+  // preview is created, the user message is routed to the human-only sink
+  // and the Commander turn is resumed only after the user confirms the card.
+  let projectionPreviewCreated: { projectionId: string; requirementId: string; taskRunId: string } | undefined;
+  if (fromActorId === USER_ID && !params.skipKstarRouting) {
+    try {
+      const { routeKstarUserMessage } = await import('../kstar/requirement-state');
+      const routed = await routeKstarUserMessage(uid, {
+        conversationId: cid,
+        messageId: msgId,
+        text: String(text || ''),
+        ...(conversationProjectId ? { workspaceId: conversationProjectId } : {}),
+      });
+      if (routed.projectionPreviewCreated?.projectionId) {
+        projectionPreviewCreated = routed.projectionPreviewCreated;
+        to = [USER_ID];
+      }
+      const { drainKstarTaskState } = await import('../kstar/task-aggregate');
+      await drainKstarTaskState(uid, cid);
+    } catch (err) {
+      log.warn(`KSTAR requirement routing failed cid=${cid}: ${(err as Error).message}`);
+    }
+  }
+
   const msg: GroupMessage = {
     id: msgId,
     ts,
@@ -2431,38 +2477,6 @@ async function _enqueueBody(
     ...(params.turn_id ? { turn_id: params.turn_id } : {}),
   };
 
-  if (fromActorId === USER_ID) {
-    void (async () => {
-      try {
-        const { routeKstarUserMessage } = await import('../kstar/requirement-state');
-        const routed = await routeKstarUserMessage(uid, { conversationId: cid, messageId: msg.id, text: String(text || '') });
-        if (routed.projectionPreviewCreated?.projectionId) {
-          const { postProjectionCardMessage } = await import('../recall/projection-message');
-          await postProjectionCardMessage(uid, {
-            cid,
-            projectionId: routed.projectionPreviewCreated.projectionId,
-          }, {
-            send: async (payload) => {
-              const posted = await enqueue({
-                uid,
-                cid: payload.cid,
-                fromActorId: COMMANDER_ID,
-                forceTo: [USER_ID],
-                text: String(payload.text || ''),
-                recall_projection_card: { projectionId: payload.card.projectionId },
-              });
-              return { id: posted.id };
-            },
-          });
-        }
-        const { drainKstarTaskState } = await import('../kstar/task-aggregate');
-        await drainKstarTaskState(uid, cid);
-      } catch (err) {
-        log.warn(`KSTAR requirement routing failed cid=${cid}: ${(err as Error).message}`);
-      }
-    })();
-  }
-
   if (state.taskRun && params.kstarTerminalProvenance) {
     const provenance = params.kstarTerminalProvenance;
     state.taskRun = {
@@ -2470,6 +2484,7 @@ async function _enqueueBody(
       ...(provenance.logicalRunId ? { logicalRunId: provenance.logicalRunId } : {}),
       ...(provenance.executionId ? { executionId: provenance.executionId } : {}),
       ...(provenance.projectionId ? { projectionId: provenance.projectionId } : {}),
+      ...(provenance.forecastId ? { forecastId: provenance.forecastId } : {}),
       ...(provenance.wakeRequestId ? { wakeRequestId: provenance.wakeRequestId } : {}),
     };
   }
@@ -2517,6 +2532,52 @@ async function _enqueueBody(
   log.info(
     `enqueue user=${uid} cid=${cid} msg=${msgId} from=${fromActorId} to=${to.join(",")} len=${rewrittenText.length}${params.turn_end ? " turn_end=1" : ""}${unknown.length ? ` unknown=${unknown.join(",")}` : ""}`,
   );
+
+  // When a Recall projection preview gates this user message, persist the
+  // pending dispatch so the user's confirm action can resume the Commander
+  // turn, then post the visible preload-candidate card.
+  if (projectionPreviewCreated) {
+    try {
+      const { setPendingProjectionDispatch } = await import('./state');
+      await setPendingProjectionDispatch(uid, cid, {
+        projectionId: projectionPreviewCreated.projectionId,
+        requirementId: projectionPreviewCreated.requirementId,
+        taskRunId: projectionPreviewCreated.taskRunId,
+        userMessageId: msgId,
+        userMessageText: String(text || ''),
+        status: 'waiting_confirmation',
+        createdAt: ts,
+        updatedAt: ts,
+      });
+    } catch (err) {
+      log.warn(`pending projection dispatch persist failed cid=${cid}: ${(err as Error).message}`);
+    }
+    try {
+      const { postProjectionCardMessage } = await import('../recall/projection-message');
+      await postProjectionCardMessage(uid, {
+        cid,
+        projectionId: projectionPreviewCreated.projectionId,
+      }, {
+        send: async (payload) => {
+          const posted = await enqueue({
+            uid,
+            cid: payload.cid,
+            fromActorId: COMMANDER_ID,
+            forceTo: [USER_ID],
+            text: String(payload.text || ''),
+            recall_projection_card: { projectionId: payload.card.projectionId },
+          });
+          return { id: posted.id };
+        },
+      });
+    } catch (err) {
+      log.warn(`projection card post failed cid=${cid}: ${(err as Error).message}`);
+    }
+  }
+
+  // Dispatch to non-user recipients. When the projection gate above routed
+  // `to` to the human-only sink, this loop is naturally a no-op for the user
+  // message; the Commander turn starts only after `resumePendingProjectionDispatch`.
 
   let backendFollowupHandled = false;
   if (backendFollowupAgentId) {
@@ -2604,6 +2665,8 @@ async function _enqueueBody(
       ...(msg.use_selections && msg.use_selections.length
         ? { useSelections: msg.use_selections.slice() }
         : {}),
+      ...(params.committedProjectionId ? { committedProjectionId: params.committedProjectionId } : {}),
+      ...(params.forecastId ? { forecastId: params.forecastId } : {}),
       ...(params.resumeActiveTurn ? { resumeActiveTurn: true } : {}),
       ...(params.workflow_step_id
         ? { workflow_step_id: params.workflow_step_id }
@@ -3804,6 +3867,8 @@ async function runActorTurnBody(
         taskRunId: item.turnId,
         taskText: String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000),
         ...(turnProjectId ? { workspaceId: turnProjectId } : {}),
+        ...(item.committedProjectionId ? { committedProjectionId: item.committedProjectionId } : {}),
+        ...(item.forecastId ? { forecastId: item.forecastId } : {}),
       });
       if (recallContext.promptBlock) {
         systemPrompt = `${systemPrompt}\n\n${recallContext.promptBlock}`;
@@ -5035,6 +5100,7 @@ async function runActorTurnBody(
       version: citation.version,
       scope: citation.scope,
       projection_id: citation.projectionId,
+      ...(citation.forecastId ? { forecast_id: citation.forecastId } : {}),
       ...(citation.matchScore !== undefined ? { match_score: citation.matchScore } : {}),
       match_method: citation.matchMethod,
     }));
@@ -10172,4 +10238,38 @@ function _hasPriorVisibleCliHistory(
   return _priorVisibleCliHistory(item, slice).some((m) =>
     (m.text || "").trim(),
   );
+}
+
+/** Resume a user-message dispatch that was gated behind a Recall projection
+ *  preview. Clears the pending marker and re-enqueues the original text as an
+ *  internal dispatch record targeting the Commander (hidden from user history,
+ *  same pattern as the P3394 wake dispatcher). Returns true if a pending
+ *  dispatch was found and resumed. */
+export async function resumePendingProjectionDispatch(
+  userId: string,
+  cid: string,
+): Promise<boolean> {
+  if (!safeId(userId) || !safeId(cid)) throw new Error('invalid projection dispatch resume');
+  const { readState, clearPendingProjectionDispatch } = await import('./state');
+  const stateFile = await readState(userId, cid);
+  const pending = stateFile.pending_projection_dispatch;
+  if (!pending || pending.status !== 'ready_to_dispatch' || !pending.forecastId) return false;
+  await clearPendingProjectionDispatch(userId, cid);
+  await enqueue({
+    uid: userId,
+    cid,
+    fromActorId: USER_ID,
+    text: pending.userMessageText,
+    forceTo: [COMMANDER_ID],
+    dispatch: true,
+    skipKstarRouting: true,
+    committedProjectionId: pending.projectionId,
+    forecastId: pending.forecastId,
+    kstarTerminalProvenance: {
+      logicalRunId: pending.taskRunId,
+      projectionId: pending.projectionId,
+      forecastId: pending.forecastId,
+    },
+  });
+  return true;
 }

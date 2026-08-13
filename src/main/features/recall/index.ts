@@ -32,8 +32,10 @@ export type { RecallSkillDraftFile, RecallSkillDraftPreview, RecallSkillDraftRec
 export { addWorkspaceAssetReference, listWorkspaceAssetReferenceHistory, listWorkspaceAssetReferences, removeWorkspaceAssetReference, updateWorkspaceAssetReference } from './workspace-refs';
 export type { WorkspaceAssetReference, WorkspaceAssetReferenceHistory } from './workspace-refs';
 
-export { buildRecallView, confirmContextProjection, createAutomaticContextProjection, previewContextProjection, readContextProjection } from './context-projection';
-export type { AutomaticProjectionInput, BuildRecallViewResult, ContextProjectionRecord, ContextProjectionStatus, OmittedAssetRef, ProjectionAuthorization, ProjectionInput, ProjectionSemanticOptions, RecallAssetMatch, RecallAssetMatchMethod } from './context-projection';
+export { buildRecallView, confirmContextProjection, createAutomaticContextProjection, isCommittedProjection, previewContextProjection, readContextProjection, validateCommittedProjectionAssetVersions } from './context-projection';
+export type { AutomaticProjectionInput, BuildRecallViewResult, ContextProjectionRecord, ContextProjectionStatus, OmittedAssetRef, ProjectionAuthorization, ProjectionInput, ProjectionKnowledgeErrorCode, ProjectionSemanticOptions, RecallAssetMatch, RecallAssetMatchMethod } from './context-projection';
+export { loadCommittedProjectionKnowledge } from './projection-knowledge';
+export type { CommittedProjectionKnowledge } from './projection-knowledge';
 export { createRecallView, isRecallViewExpired, listRecallViews, readRecallView } from './recall-view-service';
 export type { CreateRecallViewInput, ListRecallViewsQuery, RecallViewPurpose, RecallViewRecord } from './recall-view-service';
 export { classifyTeachingIntent, listUserTeachingSignals, readUserTeachingSignal, recordTeachingSignalAfterMemoryWrite, revokeUserTeachingSignal, teachingMemoryRef, teachingSignalId } from './teaching-service';
@@ -60,3 +62,8 @@ export { handleRecallTaskTerminal } from './terminal-proof';
 export type { RecallTaskTerminalEvent, RecallTaskTerminalStatus } from './terminal-proof';
 export { recordEffectivenessFeedback, recordTaskEffectivenessFeedback } from './effectiveness-feedback';
 export type { RecallEffectivenessFeedback, RecordEffectivenessFeedbackInput, RecordTaskEffectivenessFeedbackInput } from './effectiveness-feedback';
+
+export { applyCausalRules, buildWorldModelForecastRecord, collectWorldSnapshot, readWorldModelForecast, reconcileWorldModel, saveWorldModelForecast, simulateWorld } from './world-model';
+export { normalizeCausalRule } from './world-model-types';
+export type { WorldModelReconciliationOptions } from './world-model-reconciliation';
+export type { CausalRule, CausalRuleSeverity, PredictedRisk, AcceptanceSignalResult, ActionDeltaDetail, ResultDeltaDetail, WorldModelAbilityAsset, WorldModelCausalRuleRef, WorldModelCoreState, WorldModelEnvironmentState, WorldModelForecast, WorldModelForecastRecord, WorldModelOntologyState, WorldModelPredicateKey, WorldModelSimulationInput, WorldModelSkillsState, WorldModelReconciliation, WorldModelSnapshot } from './world-model-types';

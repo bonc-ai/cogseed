@@ -38,6 +38,7 @@ export interface RecallMessageCitation {
   version: string;
   scope: string;
   projection_id: string;
+  forecast_id?: string;
   match_score?: number;
   match_method: 'semantic' | 'manual';
 }

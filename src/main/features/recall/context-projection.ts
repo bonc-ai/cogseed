@@ -21,6 +21,31 @@ let lastProjectionCreatedAtMs = 0;
 export type ProjectionAuthorization = 'user_confirmed' | 'workspace_policy' | 'not_required';
 export type ContextProjectionStatus = 'preview' | 'confirmed' | 'deferred' | 'rejected' | 'expired' | 'revoked';
 
+export type ProjectionKnowledgeErrorCode =
+  | 'projection_not_committed'
+  | 'projection_expired'
+  | 'projection_versions_missing'
+  | 'projection_asset_missing'
+  | 'projection_asset_inactive'
+  | 'projection_asset_version_changed'
+  | 'projection_asset_ineligible'
+  | 'projection_source_unavailable';
+
+const PROJECTION_KNOWLEDGE_ERROR_MESSAGES: Record<ProjectionKnowledgeErrorCode, string> = {
+  projection_not_committed: 'projection is not committed',
+  projection_expired: 'projection has expired',
+  projection_versions_missing: 'projection asset versions are missing',
+  projection_asset_missing: 'projection asset is missing',
+  projection_asset_inactive: 'projection asset is no longer active',
+  projection_asset_version_changed: 'projection asset version changed',
+  projection_asset_ineligible: 'projection asset is no longer eligible',
+  projection_source_unavailable: 'projection source is unavailable',
+};
+
+export function projectionKnowledgeError(code: ProjectionKnowledgeErrorCode): Error & { code: ProjectionKnowledgeErrorCode } {
+  return Object.assign(new Error(PROJECTION_KNOWLEDGE_ERROR_MESSAGES[code]), { code });
+}
+
 export interface OmittedAssetRef {
   assetId: string;
   reason: 'asset_paused' | 'asset_revoked' | 'workspace_not_referenced' | 'workspace_disabled' | 'scope_mismatch' | 'source_unavailable';
@@ -50,6 +75,10 @@ export interface ContextProjectionRecord extends RecallJsonRecord {
   confirmedAt?: string;
   decidedAt?: string;
   decisionNote?: string;
+}
+
+export function isCommittedProjection(projection: ContextProjectionRecord): boolean {
+  return projection.status === 'confirmed';
 }
 
 export interface ProjectionInput {
@@ -459,18 +488,57 @@ export async function createAutomaticContextProjection(
   return record;
 }
 
-async function validateProjectionAssetVersions(userId: string, projection: ContextProjectionRecord): Promise<Record<string, string>> {
-  const expected = projection.assetVersions || {};
-  const actual: Record<string, string> = {};
-  for (const assetId of projection.assetIds) {
-    const asset = await readAbilityAsset(userId, assetId);
-    if (asset.status !== 'active') throw new Error('context projection asset is no longer active');
-    actual[asset.id] = asset.version;
-    if (expected[asset.id] !== undefined && expected[asset.id] !== asset.version) {
-      throw new Error('context projection asset version changed; refresh projection');
-    }
+async function validateFrozenProjectionAssets(
+  userId: string,
+  projection: ContextProjectionRecord,
+  requireCommitted: boolean,
+): Promise<Record<string, string>> {
+  if (requireCommitted && !isCommittedProjection(projection)) {
+    throw projectionKnowledgeError('projection_not_committed');
   }
-  return Object.keys(expected).length ? expected : actual;
+  if (projection.expiresAt && Date.parse(projection.expiresAt) <= Date.now()) {
+    throw projectionKnowledgeError('projection_expired');
+  }
+  const expected = projection.assetVersions;
+  if (!expected || Object.keys(expected).length !== projection.assetIds.length) {
+    throw projectionKnowledgeError('projection_versions_missing');
+  }
+  const out: Record<string, string> = {};
+  for (const assetId of projection.assetIds) {
+    let asset: RecallAbilityAssetRecord;
+    try {
+      asset = await readAbilityAsset(userId, assetId);
+    } catch {
+      throw projectionKnowledgeError('projection_asset_missing');
+    }
+    if (asset.status !== 'active') throw projectionKnowledgeError('projection_asset_inactive');
+    if (expected[assetId] !== asset.version) throw projectionKnowledgeError('projection_asset_version_changed');
+    if (!(await isAssetEligibleForProjection(userId, asset, projection))) {
+      throw projectionKnowledgeError('projection_asset_ineligible');
+    }
+    for (const source of asset.evidenceRefs) {
+      if (source.taxonomyVersion !== 2) continue;
+      if (!(await isCognitionSourceEnabled(userId, source))) {
+        throw projectionKnowledgeError('projection_source_unavailable');
+      }
+    }
+    out[assetId] = expected[assetId];
+  }
+  return out;
+}
+
+export function validateProjectionAssetVersions(
+  userId: string,
+  projection: ContextProjectionRecord,
+): Promise<Record<string, string>> {
+  return validateFrozenProjectionAssets(userId, projection, false);
+}
+
+export function validateCommittedProjectionAssetVersions(
+  userId: string,
+  projection: ContextProjectionRecord,
+): Promise<Record<string, string>> {
+  return validateFrozenProjectionAssets(userId, projection, true);
 }
 
 

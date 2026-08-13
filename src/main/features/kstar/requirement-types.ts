@@ -1,4 +1,5 @@
 import type { CognitionSourceRef } from '../recall/source-service';
+import type { ActionDeltaDetail, ResultDeltaDetail } from '../recall/world-model-types';
 import type { KstarAttribution, KstarJsonRecord, KstarOutcome } from './types';
 
 export const KSTAR_PRM_WEIGHTS = Object.freeze({
@@ -45,6 +46,8 @@ export interface KstarRequirementPrmReview {
   attribution: KstarAttribution;
   reason: string;
   confidence: number;
+  actionDelta?: ActionDeltaDetail;
+  resultDelta?: ResultDeltaDetail;
   evidenceRefs: CognitionSourceRef[];
 }
 
@@ -82,6 +85,12 @@ export interface KstarRequirementRecord extends KstarJsonRecord {
   rHat?: KstarExpectedResult;
   /** Task-scoped Recall projection used as the preloaded asset list for this requirement. */
   projectionId?: string;
+  /** Full ordered history of Recall projections created for this requirement.
+   *  `projectionId` stays as the latest pointer for backward-compatible
+   *  lifecycle/wake lookups; this array retains every prior projection. */
+  projectionIds: string[];
+  /** World-model forecast record produced at task boundary ((A_hat, R_hat)). */
+  forecastId?: string;
   /** Wake request bound when the preloaded asset list is confirmed and the Agent is woken. */
   wakeRequestId?: string;
   prmReview?: KstarRequirementPrmReview;
