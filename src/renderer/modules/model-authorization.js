@@ -347,6 +347,7 @@
     discoverySeq: 0,
     busy: false,
     removingAuthorizationId: '',
+    removingModelEntryId: '',
   };
 
   function tr(key, vars) {
@@ -922,6 +923,34 @@
     }
   }
 
+  async function removeAuthorizationModel(authorizationId, entryId) {
+    const authId = normalizeModelId(authorizationId);
+    const modelEntryId = normalizeModelId(entryId);
+    if (!authId || !modelEntryId || controller.removingModelEntryId) return;
+    if (typeof uiConfirm !== 'function'
+      || !(await uiConfirm(tr('settings.model_authorization.confirm_remove_model')))) return;
+    controller.removingModelEntryId = modelEntryId;
+    setAuthorizationStatus('', '');
+    renderAuthorizationCards();
+    try {
+      const outcome = await invokeResult(
+        'modelAuthorizations.removeModel',
+        { authorizationId: authId, entryId: modelEntryId },
+        'settings.model_authorization.remove_model_failed',
+      );
+      const res = outcome.result;
+      if (!outcome.ok || !res || !res.removed) {
+        setAuthorizationStatus(outcome.message, 'error');
+        return;
+      }
+      await refreshModelAuthorizationSettings();
+      if (typeof refreshModelGuard === 'function') await refreshModelGuard();
+    } finally {
+      controller.removingModelEntryId = '';
+      renderAuthorizationCards();
+    }
+  }
+
   async function handleAction(dataset, targetNode) {
     const action = dataset && dataset.modelAuthAction;
     if (!action) return;
@@ -953,6 +982,7 @@
     if (action === 'default-model') { controller.draft = setDefaultModel(controller.draft, dataset.modelId); render(); return; }
     if (action === 'add-manual-model') { const input = el('model-authorization-manual-model'); controller.draft = addManualModel(controller.draft, input && input.value); render(); return; }
     if (action === 'complete') return completeDraft();
+    if (action === 'remove-model') return removeAuthorizationModel(dataset.authorizationId, dataset.entryId);
     if (action === 'remove-authorization') return removeAuthorization(dataset.authorizationId);
   }
 
@@ -984,23 +1014,32 @@
       return;
     }
     list.innerHTML = controller.authorizations.map((auth) => {
+      const authorizationId = auth.authorizationId || auth.id || '';
       const models = Array.isArray(auth.models) ? auth.models : [];
       const defaultModel = (models.find((model) => model.default) || models[0] || {}).model || auth.defaultModel || '';
       const chips = models.map((model) => {
         const id = model.model || model.id || '';
         const isDefault = id === defaultModel;
-        return `<span class="model-authorization-model-chip${isDefault ? ' is-default' : ''}">${esc(id)}${isDefault ? '<span class="model-authorization-chip-check">✓</span>' : ''}</span>`;
+        const entryId = normalizeModelId(model.entryId);
+        const removeIcon = typeof window.uiIconHtml === 'function'
+          ? window.uiIconHtml('x', 'model-authorization-model-remove-icon')
+          : '';
+        const removing = entryId && controller.removingModelEntryId === entryId;
+        const removeButton = entryId
+          ? `<button type="button" class="model-authorization-model-remove" data-model-auth-action="remove-model" data-authorization-id="${esc(authorizationId)}" data-entry-id="${esc(entryId)}" title="${esc(tr('settings.model_authorization.confirm_remove_model'))}" aria-label="${esc(tr('settings.model_authorization.confirm_remove_model'))}"${removing ? ' disabled' : ''}>${removeIcon}</button>`
+          : '';
+        return `<span class="model-authorization-model-chip${isDefault ? ' is-default' : ''}"><span class="model-authorization-model-chip-label">${esc(id)}</span>${isDefault ? '<span class="model-authorization-chip-check">✓</span>' : ''}${removeButton}</span>`;
       }).join('');
       const warning = auth.unbound || auth.warningCode === 'unbound_authorization'
         ? tr('settings.model_authorization.unbound_title')
         : '';
-      return `<div class="model-authorization-card" data-authorization-id="${esc(auth.authorizationId || auth.id)}">
+      return `<div class="model-authorization-card" data-authorization-id="${esc(authorizationId)}">
         <div class="model-authorization-card-head">
           <div>
-            <div class="model-authorization-card-title">${esc(auth.label || auth.providerLabel || auth.authorizationId || auth.id)}</div>
+            <div class="model-authorization-card-title">${esc(auth.label || auth.providerLabel || authorizationId)}</div>
             <div class="model-authorization-card-meta"><span class="model-authorization-auth-type">${esc(auth.authType || '')}</span><span>${esc(auth.source || '')}</span></div>
           </div>
-          <button type="button" class="btn btn-sm btn-danger" data-model-auth-action="remove-authorization" data-authorization-id="${esc(auth.authorizationId || auth.id)}">${esc(tr('settings.model_authorization.remove_authorization'))}</button>
+          <button type="button" class="btn btn-sm btn-danger" data-model-auth-action="remove-authorization" data-authorization-id="${esc(authorizationId)}">${esc(tr('settings.model_authorization.remove_authorization'))}</button>
         </div>
         ${warning ? `<div class="model-authorization-warning">${esc(warning)}</div>` : ''}
         ${chips ? `<div class="model-authorization-model-chips">${chips}</div>` : ''}

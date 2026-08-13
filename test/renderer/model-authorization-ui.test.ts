@@ -538,6 +538,93 @@ describe('model authorization interactive wizard', () => {
     expect(refreshModelGuard).not.toHaveBeenCalled();
   });
 
+  it('renders removable model chips only when the backend provides entry ids', async () => {
+    const { context, registry, invoke } = loadInteractiveHarness();
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'auth.listProviders') return Promise.resolve({ ok: true, providers: [] });
+      if (channel === 'modelAuthorizations.list') return Promise.resolve({ ok: true, authorizations: [{
+        authorizationId: 'profile:anthropic:work', label: 'work', authType: 'api_key', source: 'manual', models: [
+          { entryId: 'entry-a', model: 'model-a', default: true },
+          { entryId: 'entry-b', model: 'model-b', default: false },
+          { model: 'legacy-model', default: false },
+        ],
+      }] });
+      return Promise.resolve({ ok: true });
+    });
+
+    await context.window.initModelAuthorizationSettings();
+    const html = registry.get('settings-model-authorization-list')!.innerHTML;
+    expect(html).toContain('data-model-auth-action="remove-model"');
+    expect(html).toContain('data-authorization-id="profile:anthropic:work"');
+    expect(html).toContain('data-entry-id="entry-a"');
+    expect(html).toContain('data-entry-id="entry-b"');
+    expect(html).not.toMatch(/data-entry-id=""/);
+  });
+
+  it('keeps models when removal is cancelled or rejected', async () => {
+    const harness = loadInteractiveHarness();
+    const { context, registry, invoke, refreshModelGuard } = harness;
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'auth.listProviders') return Promise.resolve({ ok: true, providers: [] });
+      if (channel === 'modelAuthorizations.list') return Promise.resolve({ ok: true, authorizations: [{
+        authorizationId: 'profile:anthropic:work', label: 'work', authType: 'api_key', source: 'manual', models: [
+          { entryId: 'entry-a', model: 'model-a', default: true },
+          { entryId: 'entry-b', model: 'model-b', default: false },
+        ],
+      }] });
+      return Promise.resolve({ ok: true });
+    });
+    await context.window.initModelAuthorizationSettings();
+    context.uiConfirm.mockResolvedValueOnce(false);
+    await registry.get('settings-model-authorization-list')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'remove-model', authorizationId: 'profile:anthropic:work', entryId: 'entry-a' } },
+    });
+    expect(invoke).not.toHaveBeenCalledWith('modelAuthorizations.removeModel', expect.anything());
+    expect(registry.get('settings-model-authorization-list')!.innerHTML).toContain('model-a');
+
+    context.uiConfirm.mockResolvedValueOnce(true);
+    invoke.mockRejectedValueOnce(new Error('remove model failure'));
+    await expect(registry.get('settings-model-authorization-list')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'remove-model', authorizationId: 'profile:anthropic:work', entryId: 'entry-a' } },
+    })).resolves.toBeUndefined();
+    expect(registry.get('settings-model-authorization-list')!.innerHTML).toContain('model-a');
+    expect(registry.get('settings-model-authorization-status')!.textContent)
+      .toBe('settings.model_authorization.remove_model_failed');
+    expect(refreshModelGuard).not.toHaveBeenCalled();
+  });
+
+  it('refreshes backend model order and leaves the authorization unbound after the last removal', async () => {
+    const { context, registry, invoke, refreshModelGuard } = loadInteractiveHarness();
+    let listCount = 0;
+    invoke.mockImplementation((channel: string, payload?: any) => {
+      if (channel === 'auth.listProviders') return Promise.resolve({ ok: true, providers: [] });
+      if (channel === 'modelAuthorizations.removeModel') return Promise.resolve({ ok: true, removed: true });
+      if (channel === 'modelAuthorizations.list') {
+        listCount += 1;
+        const models = listCount === 1
+          ? [{ entryId: 'entry-a', model: 'model-a', default: true }]
+          : [];
+        return Promise.resolve({ ok: true, authorizations: [{
+          authorizationId: 'profile:anthropic:work', label: 'work', authType: 'api_key', source: 'manual',
+          unbound: models.length === 0, warningCode: models.length === 0 ? 'unbound_authorization' : undefined, models,
+        }] });
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    await context.window.initModelAuthorizationSettings();
+    await registry.get('settings-model-authorization-list')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'remove-model', authorizationId: 'profile:anthropic:work', entryId: 'entry-a' } },
+    });
+
+    expect(invoke).toHaveBeenCalledWith('modelAuthorizations.removeModel', {
+      authorizationId: 'profile:anthropic:work', entryId: 'entry-a',
+    });
+    expect(registry.get('settings-model-authorization-list')!.innerHTML).toContain('settings.model_authorization.unbound_title');
+    expect(registry.get('settings-model-authorization-list')!.innerHTML).not.toContain('>model-a<');
+    expect(refreshModelGuard).toHaveBeenCalledOnce();
+  });
+
   it('validates manual API key fields and discards late discovery after source changes', async () => {
     const { context, registry, invoke, discoverResolvers } = loadInteractiveHarness();
     await context.window.initModelAuthorizationSettings();

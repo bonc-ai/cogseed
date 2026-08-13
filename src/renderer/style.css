@@ -17127,6 +17127,13 @@ body.model-not-configured .main-content { flex-direction: column; }
 .model-authorization-card-title { font-weight: 650; }
 .model-authorization-card-meta { color: var(--text-muted, #6b7280); font-size: 12px; }
 .model-authorization-card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.model-authorization-model-chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.model-authorization-model-chip { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
+.model-authorization-model-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-authorization-model-remove { width: 22px; height: 22px; flex: 0 0 22px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; }
+.model-authorization-model-remove:hover { background: var(--surface-2, #f3f4f6); }
+.model-authorization-model-remove:disabled { cursor: wait; opacity: 0.55; }
+.model-authorization-model-remove-icon { width: 13px; height: 13px; }
 .model-authorization-steps { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 18px 12px; }
 .model-authorization-step { padding: 4px 9px; border-radius: 999px; background: var(--surface-2, #f3f4f6); color: var(--text-muted, #6b7280); font-size: 12px; }
 .model-authorization-step.is-active { background: var(--accent-soft, #E2F5EC); color: var(--accent, #0E9F6E); font-weight: 650; }
