@@ -1,8 +1,4 @@
-import {
-  getAgentForChatDispatch,
-  type Agent,
-  type AgentRuntime,
-} from '../agents';
+import type { Agent, AgentRuntime } from '../agents';
 import { isAgentEnabled } from '../component_enabled';
 import { assertMateAgentId, assertMateConversationId, assertMateUserId } from './paths';
 import type { RuntimeTextContext } from '../cogseed_runtime/protocol';
@@ -51,7 +47,7 @@ export async function resolveCogSeedAgentExecutionContext(
   assertMateConversationId(conversationId);
   const enabled = deps.isAgentEnabled ?? isAgentEnabled;
   if (!enabled(userId, safeAgentId)) throw new Error('CogSeed Agent is unavailable');
-  const load = deps.getAgentForChatDispatch ?? getAgentForChatDispatch;
+  const load = deps.getAgentForChatDispatch ?? (await import('../agents')).getAgentForChatDispatch;
   const agent = await load(userId, safeAgentId);
   if (!agent || agent.agent_id !== safeAgentId) throw new Error('CogSeed Agent is unavailable');
   const skillList = agent.skill_list === undefined ? undefined : cleanList(agent.skill_list);

@@ -6,7 +6,6 @@ import { mateBrowserAdapter } from './browser-adapter';
 import { createMateCoordinator, type MateCoordinator } from './coordinator';
 import { mateControlService } from './mate-control-service';
 import { resolveRuntimeCapabilities } from './messaging-capability-policy';
-import { runMessagingHostTool } from './messaging-host-adapter';
 
 interface HostAdapter { run(name: any, input: Record<string, unknown>, scope: MateHostToolScope, opts?: { signal?: AbortSignal | null }): Promise<MateHostToolResult> }
 export interface MateHostToolRouterDeps { office?: HostAdapter; browser?: HostAdapter; coordinator?: MateCoordinator }
@@ -49,6 +48,7 @@ export function createMateHostToolRouter(deps: MateHostToolRouterDeps = {}) {
         if (!capabilities.includes('messaging.proactive')) {
           return { content: '[E_RUNTIME_HOST_TOOL_FORBIDDEN] messaging tools require a Commander runtime scope', isError: true };
         }
+        const { runMessagingHostTool } = await import('./messaging-host-adapter');
         return cap(await runMessagingHostTool(call.name, call.input, {
           userId: request.user_id,
           sourceKey: `${request.request_id}:${call.call_id}`,
