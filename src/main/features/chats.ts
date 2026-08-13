@@ -109,6 +109,9 @@ export interface Conversation {
    *  `<cid>.jsonl`, `groupChatDir`, `chat_attachments`, and `session_id`
    *  paths stay verbatim, so cid uniqueness + §5 isolation are unaffected. */
   project_id?: string;
+  /** 空间化重构（删项目层）：会话直接挂空间。缺失/空 = orphan 会话，不算任何
+   *  空间（任务/产物列表不纳入）。阶段 0 与 project_id 双字段兼容并存。 */
+  space_id?: string;
   /** Set when this conversation was created by an auto-task fire (sidebar
    *  "Automation" tab). Used by the renderer to render the clock icon next
    *  to the title and to group the conv under its originating task in the
@@ -267,6 +270,7 @@ function _normaliseConversation(raw: any, fallbackCid = ''): Conversation | null
     updated_at: updatedAt,
   };
   if (typeof raw.project_id === 'string' && raw.project_id) out.project_id = raw.project_id;
+  if (typeof raw.space_id === 'string' && raw.space_id) out.space_id = raw.space_id;
   if (typeof raw.origin_auto_task_id === 'string' && raw.origin_auto_task_id) out.origin_auto_task_id = raw.origin_auto_task_id;
   if (typeof raw.pinned_at === 'string' && raw.pinned_at) out.pinned_at = raw.pinned_at;
   if (typeof raw.pin_state_updated_at === 'string' && raw.pin_state_updated_at) out.pin_state_updated_at = raw.pin_state_updated_at;
@@ -342,6 +346,7 @@ function _stampConversationSync(userId: string, c: Conversation): Conversation {
 
 const CLEARABLE_CONVERSATION_FIELDS = [
   'project_id',
+  'space_id',
   'origin_auto_task_id',
   'pinned_at',
   'pin_state_updated_at',
@@ -1740,6 +1745,9 @@ export interface CreateConversationOptions {
    *  validating the projectId exists for this user — chats.ts persists it
    *  verbatim. */
   projectId?: string;
+  /** 空间化重构：会话直接挂空间。语义同 projectId——IPC 层负责校验存在性，
+   *  chats.ts 原样持久化。缺失 = orphan 会话。 */
+  spaceId?: string;
   /** Optional explicit conversation id. Used when an external source already
    *  minted the id. Must be a `safeId`; if it collides with an existing conv,
    *  that conv is returned unchanged. Defaults to a fresh generated id. */
@@ -1766,7 +1774,7 @@ function normaliseConversationTitle(raw: unknown): string {
 }
 
 export async function createConversation(userId: string, {
-  kind = 'normal', agentId = '', skillId = '', title = '', projectId = '', conversationId = '', originAutoTaskId = '',
+  kind = 'normal', agentId = '', skillId = '', title = '', projectId = '', spaceId = '', conversationId = '', originAutoTaskId = '',
   imported = false, needs_welcome = false,
 }: CreateConversationOptions = {}): Promise<Conversation> {
   const explicitCid = conversationId && safeId(conversationId) ? conversationId : '';
@@ -1790,6 +1798,7 @@ export async function createConversation(userId: string, {
           skill_id: skillId || current.skill_id || '',
           session_id: current.session_id || buildConversationSessionId(explicitCid),
           ...(projectId ? { project_id: projectId } : {}),
+          ...(spaceId ? { space_id: spaceId } : {}),
           ...(originAutoTaskId ? { origin_auto_task_id: originAutoTaskId } : {}),
           updated_at: now,
         });
@@ -1820,6 +1829,7 @@ export async function createConversation(userId: string, {
       skill_id: skillId || '',
       session_id: buildConversationSessionId(cid),
       ...(projectId ? { project_id: projectId } : {}),
+      ...(spaceId ? { space_id: spaceId } : {}),
       ...(originAutoTaskId ? { origin_auto_task_id: originAutoTaskId } : {}),
       ...(imported ? { imported: true } : {}),
       ...(needs_welcome ? { needs_welcome: true } : {}),
