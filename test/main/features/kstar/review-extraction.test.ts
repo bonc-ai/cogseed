@@ -178,7 +178,7 @@ describe('KSTAR review and Recall bridge', () => {
 
     expect(candidates).toHaveLength(1);
     expect(candidates[0]).toMatchObject({
-      status: 'pending',
+      status: 'pending_review',
       suggestedType: 'rule',
       learningSignal: {
         deltaR: -0.8,

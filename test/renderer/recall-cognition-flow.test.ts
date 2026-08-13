@@ -397,7 +397,7 @@ describe('Recall cognition renderer flow', () => {
 
     context.renderSkillsCognitionCaptures();
 
-    expect(host.innerHTML).toContain('已开启 · 夜间 · 自动入库');
+    expect(host.innerHTML).toContain('已开启 · 夜间 · 自动整理');
     expect(host.innerHTML).toContain('data-recall-capture-settings-toggle aria-expanded="false"');
     expect(host.innerHTML).toContain('class="recall-capture-control-expanded" hidden');
     expect(host.innerHTML).toContain('data-recall-capture-enabled');
@@ -573,8 +573,8 @@ describe('Recall cognition renderer flow', () => {
     };
     vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
       recallCandidates: [
-        { id: 'cand-a', status: 'pending', summary: '第一条', judgment: '第一条判断', suggestedType: 'rule', suggestedScope: 'project', sourceRefs: [] },
-        { id: 'cand-b', status: 'deferred', summary: '第二条', judgment: '第二条判断', suggestedType: 'template', suggestedScope: 'project', sourceRefs: [] },
+        { id: 'cand-a', status: 'pending_review', summary: '第一条', judgment: '第一条判断', suggestedType: 'rule', suggestedScope: 'project', sourceRefs: [] },
+        { id: 'cand-b', status: 'pending_review', summary: '第二条', judgment: '第二条判断', suggestedType: 'template', suggestedScope: 'project', sourceRefs: [] },
       ],
     })})`, context);
 
@@ -583,6 +583,49 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).toContain('data-recall-candidate-promote-all');
     expect(host.innerHTML).toContain('全部保存');
     expect(host.innerHTML).not.toContain('暂缓');
+  });
+
+  it('connects candidate editing to the modify-and-save confirmation path', () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => id === 'skills-cognition-candidates-body' ? host : null,
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      recallCandidates: [{
+        id: 'cand-edit', status: 'pending_review', summary: '修改候选', judgment: '修改前内容',
+        suggestedType: 'rule', suggestedScope: 'project', sourceRefs: [{ kind: 'conversation', id: 'conv-a' }],
+      }],
+      editingRecallCandidateId: 'cand-edit',
+    })})`, context);
+
+    context.renderSkillsCognitionCandidates();
+
+    expect(host.innerHTML).toContain('data-recall-candidate-action="save-and-promote"');
+    expect(host.innerHTML).toContain('修改后保存');
+    expect(host.innerHTML).not.toContain('data-recall-candidate-action="save-edit"');
+  });
+
+  it('shows explicit reject and keep-current decisions without offering an asset write', () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => id === 'skills-cognition-candidates-body' ? host : null,
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      recallCandidates: [{
+        id: 'cand-keep', status: 'pending_review', summary: '保留当前规则', judgment: '当前版本仍然适用',
+        value: '避免不必要的版本变化', suggestedType: 'rule', suggestedScope: 'project',
+        suggestedAction: 'keep_current', sourceRefs: [{ kind: 'conversation', id: 'conv-a' }],
+      }],
+    })})`, context);
+
+    context.renderSkillsCognitionCandidates();
+
+    expect(host.innerHTML).toContain('data-recall-candidate-action="keep-current"');
+    expect(host.innerHTML).toContain('data-recall-candidate-action="reject"');
+    expect(host.innerHTML).toContain('data-recall-candidate-action="ignore"');
+    expect(host.innerHTML).not.toContain('data-recall-candidate-action="promote"');
   });
 
   it('collapses empty source groups and hides an empty review section', () => {
@@ -844,8 +887,8 @@ describe('Recall cognition renderer flow', () => {
         updatedAt: '2026-08-08T12:00:00.000Z',
       }],
       recallCandidates: [
-        { id: 'candidate-a', status: 'pending' },
-        { id: 'candidate-b', status: 'deferred' },
+        { id: 'candidate-a', status: 'pending_review' },
+        { id: 'candidate-b', status: 'failed' },
       ],
       assets: [{
         id: 'asset-method', title: '需求评审方法', category: 'skill_method', type: 'skill_method',
@@ -1504,9 +1547,10 @@ describe('Recall cognition renderer flow', () => {
       captures: [],
       selectedCaptureId: '',
       recallCandidates: [
-        { id: 'cand-a', status: 'pending' },
-        { id: 'cand-b', status: 'deferred' },
-        { id: 'cand-c', status: 'promoted' },
+        { id: 'cand-a', status: 'pending_review' },
+        { id: 'cand-b', status: 'pending_review' },
+        { id: 'cand-risk', status: 'pending_review', risk: 'high' },
+        { id: 'cand-c', status: 'confirmed' },
       ],
       writingRecallCandidateId: '',
     };
@@ -1537,11 +1581,65 @@ describe('Recall cognition renderer flow', () => {
     await clickHandler!({ target });
 
     expect(calls).toEqual([
-      ['recall.candidates.promote', { candidateId: 'cand-a' }],
-      ['recall.candidates.promote', { candidateId: 'cand-b' }],
+      ['recall.candidates.promoteBatch', { candidateIds: ['cand-a', 'cand-b'] }],
     ]);
     expect(refreshes).toBe(1);
     expect(state.writingRecallCandidateId).toBe('');
+    expect(button.disabled).toBe(false);
+    expect(button.dataset.busy).toBe('0');
+  });
+
+  it('requires an independent confirmation and acknowledges high-risk candidate promotion', async () => {
+    let clickHandler: ((event: any) => Promise<void>) | undefined;
+    const calls: Array<[string, unknown]> = [];
+    const confirmations: unknown[] = [];
+    const panel: any = {
+      dataset: {},
+      addEventListener: (type: string, handler: (event: any) => Promise<void>) => {
+        if (type === 'click') clickHandler = handler;
+      },
+    };
+    const button: any = {
+      dataset: { recallCandidateAction: 'promote', recallCandidateId: 'cand-risk' },
+      disabled: false,
+    };
+    button.closest = (selector: string) => selector === '[data-recall-candidate-action]' ? button : null;
+    const context: any = {
+      document: {
+        getElementById: (id: string) => id === 'panel-recall' ? panel : null,
+        querySelectorAll: () => [],
+      },
+      window: {
+        addEventListener() {},
+        cogseed: {
+          invoke: async (channel: string, input: unknown) => {
+            calls.push([channel, input]);
+            return { ok: true };
+          },
+        },
+      },
+      _skillsCognitionState: {
+        recallCandidates: [{ id: 'cand-risk', status: 'pending_review', risk: 'high' }],
+        writingRecallCandidateId: '',
+      },
+      _cognitionText: (_key: string, fallback: string) => fallback,
+      uiConfirm: async (input: unknown) => { confirmations.push(input); return true; },
+      renderSkillsCognitionCaptures() {},
+      renderSkillsCognitionCandidates() {},
+      loadSkillsCognitionSnapshot: async () => {},
+      initSkillsCognitionConsole() {},
+      switchSkillsCognitionPage() {},
+      setTimeout,
+    };
+    vm.createContext(context);
+    vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
+
+    await clickHandler!({ target: button });
+
+    expect(confirmations).toHaveLength(1);
+    expect(calls).toEqual([
+      ['recall.candidates.promote', { candidateId: 'cand-risk', riskAcknowledged: true }],
+    ]);
     expect(button.disabled).toBe(false);
     expect(button.dataset.busy).toBe('0');
   });

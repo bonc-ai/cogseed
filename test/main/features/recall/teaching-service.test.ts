@@ -48,7 +48,7 @@ describe('User teaching signals', () => {
     expect(signals[0]).toMatchObject({ taxonomyVersion: 2, status: 'active', scope: 'project', candidateIds: [expect.stringMatching(/^cand-/)] });
     const listedCandidates = await candidates.listRecallCandidates('user-a');
     expect(listedCandidates).toHaveLength(1);
-    expect(listedCandidates[0]).toMatchObject({ status: 'pending', captureKey: `teaching-${signals[0]!.id}` });
+    expect(listedCandidates[0]).toMatchObject({ status: 'pending_review', captureKey: `teaching-${signals[0]!.id}` });
     expect(listedCandidates[0].sourceRefs.map((ref) => `${ref.kind}:${ref.subtype}`)).toEqual([
       'conversation:session',
       'conversation:message',

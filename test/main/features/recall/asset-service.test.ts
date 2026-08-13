@@ -75,6 +75,61 @@ describe('Recall ability assets', () => {
     await expect(assets.pauseAbilityAsset('user-a', asset.id, { actor: 'system', reason: 'automated pause' } as never)).rejects.toThrow(/user actor/i);
   });
 
+  it('rejects L3 credentials from asset edits without creating a new version', async () => {
+    const { candidates, assets } = await modules();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Use the approved service client for requests.',
+      suggestedType: 'rule',
+      suggestedScope: 'project',
+      sourceRefs: [{ kind: 'execution', id: 'exec-secret-edit' }],
+    });
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+
+    await expect(assets.updateAbilityAsset('user-a', asset.id, {
+      statement: 'Use api_key=sk-123456789012345678901234 for requests.',
+      actor: 'user',
+      reason: 'Attempt to persist a credential.',
+    })).rejects.toThrow(/forbidden to persist/i);
+
+    await expect(assets.readAbilityAsset('user-a', asset.id)).resolves.toMatchObject({ version: '1' });
+    await expect(assets.listAbilityAssetVersions('user-a', asset.id)).resolves.toHaveLength(1);
+  });
+
+  it('rejects credentials in learning signals at the formal asset boundary', async () => {
+    const { assets } = await modules();
+    const now = new Date().toISOString();
+    await expect(assets.createAbilityAsset('user-a', {
+      schemaVersion: 2,
+      ownerId: 'user-a',
+      id: 'aa-direct-secret-signal',
+      candidateId: 'cand-direct-secret-signal',
+      sourceCandidateIds: ['cand-direct-secret-signal'],
+      reviewDecisionId: 'rd_direct_secret_signal',
+      type: 'rule',
+      title: 'Direct asset boundary test',
+      statement: 'Persist only safe learning signals.',
+      evidenceRefs: [{ kind: 'conversation', id: 'conv-direct-secret-signal' }],
+      learningSignal: {
+        expectedResult: 'Use api_key=sk-123456789012345678901234',
+        actualResult: 'Request completed.',
+        deltaR: 'unknown',
+        deltaA: 'unknown',
+        outcome: 'met_expected',
+        confidence: 0.8,
+        source: 'review',
+      },
+      scope: 'project',
+      status: 'active',
+      lifecycleStatus: 'user_confirmed_unverified',
+      maturity: 'seed',
+      version: '1',
+      createdAt: now,
+      updatedAt: now,
+    }, { actor: 'user', reason: 'review_decision:rd_direct_secret_signal' }))
+      .rejects.toThrow(/forbidden to persist/i);
+    await expect(assets.listAbilityAssets('user-a')).resolves.toEqual([]);
+  });
+
   it('stores structured scope policy alongside legacy scope text and version snapshots', async () => {
     const { candidates, assets } = await modules();
     const candidate = await candidates.saveRecallCandidate('user-a', {
