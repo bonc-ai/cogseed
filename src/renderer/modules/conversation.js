@@ -1455,6 +1455,11 @@ function _initEmptyStateScenarios() {
   row.querySelectorAll('.new-chat-scenario-chip').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const id = btn.dataset.scenario || '';
+      // 空间模式：不填模板，直接创建 space_builder 会话并打开。
+      if (id === 'space_builder') {
+        await _startSpaceBuilderConversation();
+        return;
+      }
       const config = _SCENARIO_CONFIGS[id];
       const key = config && config.templateKey;
       const raw = key ? t(key) : '';

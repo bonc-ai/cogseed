@@ -1122,9 +1122,19 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { spaces: await spaces.listSpaces(ctx.userId) };
   },
 
-  'spaces.create': async ({ name, template_id, icon } = {}, ctx) => {
-    const result = await spaces.createSpace(ctx.userId, { name, template_id, icon });
+  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
+    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, main_skill_ref, asset_reference_bindings });
     if (!result.ok) throw new Error((result as { error: string }).error);
+    return { space: result.space };
+  },
+
+  'spaces.createFromDraft': async ({ draft } = {}, ctx) => {
+    if (!draft || typeof draft !== 'object') throw new Error('invalid draft');
+    const result = await spaces.createSpaceFromDraft(ctx.userId, draft);
+    if (!result.ok) {
+      const err = result as { error: string; details?: string[] };
+      throw new Error(err.details && err.details.length ? `invalid_draft: ${err.details.join('；')}` : err.error);
+    }
     return { space: result.space };
   },
 
@@ -1185,6 +1195,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'spaces.templates.list': async (_payload, _ctx) => {
     const templates = await import('../features/role_templates').then((m) => m.listRoleTemplates());
     return { templates };
+  },
+
+  // 情境入口场景列表（教育/写作/职场+自定义，M2）
+  'spaces.scenarios.list': async (_payload, _ctx) => {
+    const scenarios = await import('../features/role_templates').then((m) => m.listScenarios());
+    return { scenarios };
   },
 
   // ── 项目 ↔ 空间绑定（工作空间一期）──────────────────────────────────────
