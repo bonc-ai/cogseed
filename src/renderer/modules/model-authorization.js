@@ -305,6 +305,11 @@
     bound: false,
     open: false,
     providers: [],
+    providerCatalog: {
+      status: 'idle',
+      error: '',
+    },
+    providerLoadSeq: 0,
     authorizations: [],
     draft: createDraft(),
     ccswitchRows: [],
@@ -347,19 +352,39 @@
     return window.cogseed.invoke(channel, payload);
   }
 
-  async function ensureProviders() {
-    if (controller.providers.length) return controller.providers;
+  async function ensureProviders(options) {
+    const force = !!(options && options.force);
+    if (!force && controller.providerCatalog.status === 'ready') return controller.providers;
+    if (!force && controller.providerCatalog.status === 'loading') return controller.providers;
     // Reuse the settings page's provider list when it is already loaded so
     // opening the modal never re-triggers auth.listProviders (core-agent cold
     // start can take 1-2s) just to paint the preset cards.
     const shared = typeof window !== 'undefined' ? window.__settingsProvidersCache : null;
-    if (Array.isArray(shared) && shared.length) {
+    if (!force && Array.isArray(shared)) {
       controller.providers = shared;
+      controller.providerCatalog.status = 'ready';
+      controller.providerCatalog.error = '';
       return controller.providers;
     }
-    const res = await invoke('auth.listProviders');
-    controller.providers = (res && res.ok && Array.isArray(res.providers)) ? res.providers : [];
-    if (typeof window !== 'undefined' && controller.providers.length) window.__settingsProvidersCache = controller.providers;
+    const loadSeq = ++controller.providerLoadSeq;
+    controller.providerCatalog.status = 'loading';
+    controller.providerCatalog.error = '';
+    try {
+      const res = await invoke('auth.listProviders');
+      if (loadSeq !== controller.providerLoadSeq) return controller.providers;
+      if (!res || res.ok !== true || !Array.isArray(res.providers)) {
+        controller.providerCatalog.status = 'error';
+        controller.providerCatalog.error = tr('settings.model_authorization.providers_load_failed');
+        return controller.providers;
+      }
+      controller.providers = res.providers;
+      controller.providerCatalog.status = 'ready';
+      if (typeof window !== 'undefined') window.__settingsProvidersCache = controller.providers;
+    } catch (_error) {
+      if (loadSeq !== controller.providerLoadSeq) return controller.providers;
+      controller.providerCatalog.status = 'error';
+      controller.providerCatalog.error = tr('settings.model_authorization.providers_load_failed');
+    }
     return controller.providers;
   }
 
@@ -442,12 +467,11 @@
   }
 
   function renderProviderPresets() {
-    if (!controller.providers.length) {
-      // Providers load in the background after opening the modal; paint a
-      // placeholder instead of blocking the click.
-      return `<div class="model-authorization-progress">${esc(tr('settings.model_authorization.providers_loading'))}</div>`;
-    }
-    const presets = controller.providers.filter((provider) => provider.supportsApiKey && !provider.manualModel);
+    const presets = controller.providers.filter((provider) =>
+      provider && provider.providerKind === 'builtin'
+      && provider.supportsApiKey
+      && !provider.manualModel
+    );
     const cards = presets.map((provider) => {
       const color = PRESET_COLORS[provider.id] || '#6b7280';
       const badge = provider.recommended
@@ -479,8 +503,17 @@
         <span class="model-authorization-provider-note">${esc(tr('settings.model_authorization.custom_endpoint_hint'))}</span>
       </span>
     </button>`;
-    if (!presets.length) return `<div class="settings-empty">${esc(tr('settings.model_authorization.ccswitch_preview_empty'))}</div>`;
+    let catalogState = '';
+    if (controller.providerCatalog.status === 'loading' || controller.providerCatalog.status === 'idle') {
+      catalogState = `<div class="model-authorization-progress">${esc(tr('settings.model_authorization.providers_loading'))}</div>`;
+    } else if (controller.providerCatalog.status === 'error') {
+      catalogState = `<div class="model-authorization-warning">${esc(controller.providerCatalog.error || tr('settings.model_authorization.providers_load_failed'))}</div>
+        <button type="button" class="btn" data-model-auth-action="retry-providers">${esc(tr('settings.model_authorization.retry_providers'))}</button>`;
+    } else if (!presets.length) {
+      catalogState = `<div class="settings-empty">${esc(tr('settings.model_authorization.providers_empty'))}</div>`;
+    }
     return `<div class="model-authorization-progress">${esc(tr('settings.model_authorization.provider_preset_title'))}</div>
+      ${catalogState}
       <div class="model-authorization-choice-grid model-authorization-provider-grid">${cards}${custom}</div>`;
   }
 
@@ -655,6 +688,15 @@
     render();
   }
 
+  async function retryProviders() {
+    if (controller.providerCatalog.status === 'loading') return;
+    controller.providerCatalog.error = '';
+    const pending = ensureProviders({ force: true });
+    render();
+    await pending;
+    if (controller.open) render();
+  }
+
   async function selectCcswitch(externalId) {
     const res = await invoke('modelAuthorizations.prepareCcSwitch', { externalId });
     if (!res || !res.ok) {
@@ -789,6 +831,7 @@
     if (action === 'choose-provider') return chooseProvider(dataset);
     if (action === 'choose-provider-preset') return chooseProviderPreset(dataset.providerId);
     if (action === 'choose-custom-endpoint') return chooseProtocol('openai');
+    if (action === 'retry-providers') return retryProviders();
     if (action === 'choose-protocol') return chooseProtocol(dataset.protocol);
     if (action === 'select-ccswitch') return selectCcswitch(dataset.externalId);
     if (action === 'continue-credentials') return continueCredentials();

@@ -146,9 +146,14 @@ function loadInteractiveHarness() {
   const invoke = vi.fn((channel: string, payload?: any) => {
     if (channel === 'modelAuthorizations.list') return Promise.resolve({ ok: true, authorizations: [] });
     if (channel === 'auth.listProviders') return Promise.resolve({ ok: true, providers: [
-      { id: 'openai-codex', label: 'OpenAI Codex', supportsOAuth: true, supportsApiKey: false },
-      { id: 'openai-compatible', label: 'OpenAI Compatible', supportsOAuth: false, supportsApiKey: true, manualModel: true },
-      { id: 'anthropic', label: 'Anthropic', supportsOAuth: false, supportsApiKey: true },
+      { id: 'openai-codex', label: 'OpenAI Codex', providerKind: 'builtin', supportsOAuth: true, supportsApiKey: false },
+      { id: 'openai-compatible', label: 'OpenAI Compatible', providerKind: 'builtin', supportsOAuth: false, supportsApiKey: true, manualModel: true },
+      { id: 'anthropic', label: 'Anthropic', providerKind: 'builtin', supportsOAuth: false, supportsApiKey: true },
+      {
+        id: 'cp:custom-relay', label: 'Custom Relay', providerKind: 'custom',
+        supportsOAuth: false, supportsApiKey: true, manualModel: false,
+        profiles: [{ profileId: 'cp:custom-relay' }],
+      },
     ] });
     if (channel === 'auth.startOAuth') return Promise.resolve({ ok: true, kind: 'done', profileId: `${payload.provider}:profile` });
     if (channel === 'customProviders.ccswitch.preview') return Promise.resolve({ ok: true, items: [
@@ -301,6 +306,39 @@ describe('model authorization interactive wizard', () => {
     expect(registry.get('settings-model-authorization-advanced')!.hidden).toBe(false);
     await registry.get('model-authorization-body')!.dispatch('keydown', { key: 'Enter', isComposing: true, keyCode: 229, preventDefault: vi.fn() });
     expect(registry.get('model-authorization-body')!.innerHTML).toContain('source-manual');
+  });
+
+  it('keeps saved custom providers out of builtin presets while preserving the custom endpoint entry', async () => {
+    const { context, registry } = loadInteractiveHarness();
+    await context.window.initModelAuthorizationSettings();
+    await registry.get('settings-model-authorization-add-btn')!.click();
+    await registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'source-manual' } },
+    });
+
+    const bodyHtml = registry.get('model-authorization-body')!.innerHTML;
+    expect(bodyHtml).not.toContain('data-provider-id="cp:custom-relay"');
+    expect(bodyHtml).not.toContain('Custom Relay');
+    expect(bodyHtml).toContain('choose-custom-endpoint');
+  });
+
+  it('renders an empty builtin catalog without hiding the custom endpoint entry', async () => {
+    const { context, registry, invoke } = loadInteractiveHarness();
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'modelAuthorizations.list') return Promise.resolve({ ok: true, authorizations: [] });
+      if (channel === 'auth.listProviders') return Promise.resolve({ ok: true, providers: [] });
+      return Promise.resolve({ ok: true });
+    });
+
+    await context.window.initModelAuthorizationSettings();
+    await registry.get('settings-model-authorization-add-btn')!.click();
+    await registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'source-manual' } },
+    });
+
+    const bodyHtml = registry.get('model-authorization-body')!.innerHTML;
+    expect(bodyHtml).toContain('choose-custom-endpoint');
+    expect(bodyHtml).toContain('settings.model_authorization.providers_empty');
   });
 
   it('validates manual API key fields and discards late discovery after source changes', async () => {
