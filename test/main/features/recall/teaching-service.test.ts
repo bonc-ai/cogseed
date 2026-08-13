@@ -72,4 +72,31 @@ describe('User teaching signals', () => {
     })).resolves.toBeUndefined();
     await expect(candidates.listRecallCandidates('user-a')).resolves.toEqual([]);
   });
+
+  it('downgrades a promoted asset when its teaching Evidence is revoked', async () => {
+    const teaching = await import('../../../../src/main/features/recall/teaching-service');
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const signal = await teaching.recordTeachingSignalAfterMemoryWrite('user-a', {
+      conversationId: 'conv-a',
+      messageId: 'message-a',
+      userMessage: '请记住：所有结论都附来源。',
+      memoryContent: '所有结论都附来源。',
+      memoryScope: 'project',
+    });
+    const candidate = await candidates.readRecallCandidate('user-a', signal!.candidateIds[0]);
+    const asset = (await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' })).asset;
+    await assets.setAbilityAssetMaturity('user-a', asset.id, 'transfer_validated');
+
+    await teaching.revokeUserTeachingSignal('user-a', signal!.id);
+
+    await expect(assets.readAbilityAsset('user-a', asset.id)).resolves.toMatchObject({
+      status: 'active',
+      maturity: 'bud',
+    });
+    expect(await assets.listAbilityAssetAudit('user-a', asset.id)).toContainEqual(expect.objectContaining({
+      action: 'maturity_downgraded',
+      note: `evidence_revoked:user_teaching_signal:${signal!.id}`,
+    }));
+  });
 });

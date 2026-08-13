@@ -60,6 +60,10 @@ export async function listCognitionAssets(
       maturity: asset.maturity,
       owner: asset.ownerId,
       scope: asset.scope,
+      ...(asset.scopePolicy ? { scopePolicy: asset.scopePolicy } : {}),
+      ...(asset.recommendedAction ? { recommendedAction: asset.recommendedAction } : {}),
+      ...(asset.recommendationReason ? { recommendationReason: asset.recommendationReason } : {}),
+      ...(asset.recommendationAt ? { recommendationAt: asset.recommendationAt } : {}),
       ...(generatedSkillIds.get(asset.id) ? { generatedSkillId: generatedSkillIds.get(asset.id) } : {}),
       ...(currentSkillDraft?.status === 'draft' ? { recallSkillDraftStatus: 'draft' as const } : {}),
       ...(currentSkillDraft?.status === 'draft' ? {

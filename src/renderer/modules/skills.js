@@ -993,7 +993,7 @@ function _renderCognitionOverviewMetrics() {
     ['sources', 'cognition.pipeline_sources', '数据来源', _cognitionVisibleSourceCount(sources)],
     ['captures', 'cognition.overview_active_tasks', '进行中任务', Number(captures.waiting || 0) + Number(captures.processing || 0)],
     ['captures', 'cognition.pipeline_candidates', '待审核', Math.max(candidates.length, Number(captures.review || 0))],
-    ['assets', 'cognition.memory_content', '记忆内容', assets.length],
+    ['assets', 'cognition.ability_assets', '能力资产', assets.length],
     ['assets', 'cognition.overview_skill_candidates', '可生成 Skill', skillCandidates.length],
   ];
   return `<section class="recall-overview-metrics" aria-label="${escapeHtml(_cognitionText('cognition.overview_metrics', 'Recall 核心指标'))}">${metrics.map(([page, key, fallback, value]) => `
@@ -1055,7 +1055,7 @@ function _renderCognitionRecentActivity() {
       ? `data-cognition-open-asset="${escapeHtml(item.id)}"`
       : 'data-cognition-page-link="captures"';
     const kind = item.kind === 'asset'
-      ? _cognitionText('cognition.overview_activity_memory', '记忆内容')
+      ? _cognitionText('cognition.overview_activity_memory', '能力资产')
       : _cognitionText('cognition.overview_activity_capture', '会话沉淀');
     return `<button type="button" class="recall-overview-activity-row" ${action}><span class="recall-overview-activity-main"><strong>${escapeHtml(item.title || item.id)}</strong><small>${escapeHtml(kind)} · ${escapeHtml(item.detail)}</small></span><span class="recall-overview-activity-meta"><b>${escapeHtml(item.status)}</b>${item.at ? `<small>${escapeHtml(_cognitionDate(item.at))}</small>` : ''}</span></button>`;
   }).join('') : _renderCognitionEmpty(_cognitionText('cognition.overview_activity_empty', '完成会话沉淀后，最近变化会显示在这里'));
@@ -1087,7 +1087,7 @@ function _renderCognitionPipelineStatus() {
     [_cognitionText('cognition.pipeline_sources', '数据来源'), _cognitionVisibleSourceCount(sources)],
     [_cognitionText('cognition.pipeline_views', '已整理会话'), captures.filter((capture) => capture.recallViewId).length],
     [_cognitionText('cognition.pipeline_candidates', '待审核'), pendingCandidates.length],
-    [_cognitionText('cognition.memory_content', '记忆内容'), assets.length],
+    [_cognitionText('cognition.ability_assets', '能力资产'), assets.length],
   ].map(([label, count], index) => `<span class="skills-cognition-source-state"><b>${escapeHtml(label)}</b><em>${escapeHtml(String(count))}</em></span>${index < 3 ? '<i class="cognition-pipeline-arrow" aria-hidden="true">→</i>' : ''}`).join('');
   return `<section class="skills-cognition-flow-band recall-overview-pipeline"><div class="skills-cognition-band-head"><h2>${escapeHtml(_cognitionText('cognition.pipeline_title', '沉淀进度'))}</h2><span>${escapeHtml(next)}</span>${action}</div><div class="skills-cognition-source-row cognition-pipeline-row">${stages}</div></section>`;
 }
@@ -1176,10 +1176,34 @@ function renderSkillsCognitionCandidates() {
   }).join('')}</div></section>`;
 }
 
+/**
+ * 当前状态下允许的治理动作（规范 22.1）。
+ *
+ * 按状态生成而不是全部列出再逐个禁用：一个点不动的「恢复」不会告诉用户为什么
+ * 点不动，不如不给。彻底清除后只剩版本入口——墓碑没有内容可治理，其余动作在
+ * 服务端也会被 assertNotPurged 挡掉，摆出来只会让人以为还能操作。
+ */
+function _recallAssetActions(status) {
+  if (status === 'purged') return ['versions'];
+  const actions = [];
+  if (status === 'active') actions.push('pause');
+  if (status === 'paused') actions.push('resume');
+  if (status === 'active' || status === 'paused') actions.push('archive');
+  if (status === 'archived' || status === 'deleted') actions.push('restore');
+  if (status !== 'deleted' && status !== 'revoked') actions.push('delete');
+  if (status !== 'revoked') actions.push('revoke');
+  actions.push('purge', 'versions');
+  return actions;
+}
+
 function _recallAssetActionLabel(action) {
   const labels = {
     pause: _cognitionText('cognition.asset_action_pause', '暂停使用'),
     resume: _cognitionText('cognition.asset_action_resume', '恢复使用'),
+    archive: _cognitionText('cognition.asset_action_archive', '归档'),
+    restore: _cognitionText('cognition.asset_action_restore', '恢复'),
+    delete: _cognitionText('cognition.asset_action_delete', '删除'),
+    purge: _cognitionText('cognition.asset_action_purge', '彻底清除'),
     revoke: _cognitionText('cognition.asset_action_revoke', '移除记忆'),
     versions: _cognitionText('cognition.asset_action_versions', '查看版本'),
   };
@@ -1196,7 +1220,17 @@ function _renderRecallAssetHistory(assetId) {
     body = `<div class="skills-cognition-error">${escapeHtml(history.error)}</div>`;
   } else if (history && !history.loading) {
     const versions = Array.isArray(history.versions) ? history.versions : [];
-    body = versions.length ? versions.map((version) => `<div class="recall-asset-version-row"><span><strong>v${escapeHtml(version.version || '')}</strong><small>${escapeHtml(_cognitionDate(version.at))}</small></span><p>${escapeHtml(version.snapshot?.title || '')}</p></div>`).join('') : `<div class="skills-cognition-empty">${escapeHtml(_cognitionText('cognition.asset_versions_empty', '暂无版本记录'))}</div>`;
+    // 回滚按钮挂在版本行上：要回到哪一版是选择题，放进「更多」菜单就没地方选。
+    // 当前版本不给回滚按钮——回滚到自己没有意义，服务端也会拒。
+    const currentVersion = String(_skillsCognitionState.assets?.find((item) => item.id === assetId)?.version || '');
+    const rollbackLabel = _cognitionText('cognition.asset_action_rollback', '回滚到此版本');
+    body = versions.length ? versions.map((version) => {
+      const value = String(version.version || '');
+      const rollback = value && value !== currentVersion
+        ? `<button type="button" class="btn btn-sm recall-asset-rollback" data-recall-asset-rollback="${escapeHtml(assetId)}" data-recall-asset-version="${escapeHtml(value)}">${escapeHtml(rollbackLabel)}</button>`
+        : '';
+      return `<div class="recall-asset-version-row"><span><strong>v${escapeHtml(value)}</strong><small>${escapeHtml(_cognitionDate(version.at))}</small></span><p>${escapeHtml(version.snapshot?.title || '')}</p>${rollback}</div>`;
+    }).join('') : `<div class="skills-cognition-empty">${escapeHtml(_cognitionText('cognition.asset_versions_empty', '暂无版本记录'))}</div>`;
   }
   return `<section class="recall-asset-version-panel"><div class="recall-asset-version-head"><strong>${escapeHtml(_cognitionText('cognition.version_history', '版本历史'))}</strong><button type="button" class="btn btn-sm recall-asset-version-close" data-recall-asset-history-close title="${escapeHtml(closeLabel)}" aria-label="${escapeHtml(closeLabel)}">${closeIcon}</button></div>${body}</section>`;
 }
@@ -1226,7 +1260,7 @@ function renderSkillsCognitionAssets() {
     ? categoryItems.filter((item) => [item.title, item.summary, item.statement, item.id, item.scope, item.category, item.type]
       .some((value) => String(value || '').toLocaleLowerCase().includes(searchQuery)))
     : categoryItems;
-  const searchInput = `<input class="asset-search" value="${escapeHtml(_skillsCognitionState.assetSearchQuery || '')}" placeholder="${escapeHtml(_cognitionText('cognition.search_ability_assets', '搜索记忆内容'))}" aria-label="${escapeHtml(_cognitionText('cognition.search_ability_assets', '搜索记忆内容'))}">`;
+  const searchInput = `<input class="asset-search" value="${escapeHtml(_skillsCognitionState.assetSearchQuery || '')}" placeholder="${escapeHtml(_cognitionText('cognition.search_ability_assets', '搜索能力资产'))}" aria-label="${escapeHtml(_cognitionText('cognition.search_ability_assets', '搜索能力资产'))}">`;
   if (!items.length) {
     host.innerHTML = `<div class="ability-assets-workbench">
       <div class="ability-asset-summary-grid">${summary}</div>
@@ -1239,7 +1273,7 @@ function renderSkillsCognitionAssets() {
     host.innerHTML = `<div class="ability-assets-workbench">
       <div class="ability-asset-summary-grid">${summary}</div>
       <div class="ability-assets-management">
-        <section class="ability-asset-list"><div class="ability-asset-list-head">${searchInput}</div><div class="ability-assets-empty">${escapeHtml(searchQuery ? _cognitionText('cognition.asset_search_empty', '未找到匹配的记忆内容') : _cognitionText('cognition.empty_asset_category', '该分类暂无能力资产'))}</div></section>
+        <section class="ability-asset-list"><div class="ability-asset-list-head">${searchInput}</div><div class="ability-assets-empty">${escapeHtml(searchQuery ? _cognitionText('cognition.asset_search_empty', '未找到匹配的能力资产') : _cognitionText('cognition.empty_asset_category', '该分类暂无能力资产'))}</div></section>
         <section class="ability-asset-detail"><div class="ability-assets-empty"><strong>${escapeHtml(selectedCategory)}</strong><br>${escapeHtml(_cognitionText('cognition.empty_asset_category_hint', '当候选被确认并保存为正式资产后，会出现在这里。'))}</div></section>
       </div>
     </div>`;
@@ -1267,9 +1301,7 @@ function renderSkillsCognitionAssets() {
   const relationRefs = Array.isArray(selected.relationRefs) ? selected.relationRefs : [];
   const relationText = relationRefs.length ? [...new Set(relationRefs.map(_cognitionRelationRefText).filter(Boolean))].join('、') : _cognitionText('cognition.no_refs', '未记录引用');
   const isRecallAsset = selected.source === 'recall_ability_asset';
-  const assetManagementActions = isRecallAsset
-    ? [selected.status === 'paused' ? 'resume' : selected.status === 'active' ? 'pause' : '', selected.status === 'revoked' ? '' : 'revoke', 'versions'].filter(Boolean)
-    : [];
+  const assetManagementActions = isRecallAsset ? _recallAssetActions(selected.status) : [];
   const assetMoreLabel = _cognitionText('common.more', '更多');
   const assetMoreIcon = typeof uiIconHtml === 'function' ? uiIconHtml('more-horizontal') : '<span aria-hidden="true">...</span>';
   const assetMore = assetManagementActions.length

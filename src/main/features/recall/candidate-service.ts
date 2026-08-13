@@ -14,6 +14,11 @@ import {
 import type { RecallJsonRecord } from './types';
 import type { KstarLearningSignal } from '../kstar/types';
 import { normalizeAbilityAssetOntologyRefs, type AbilityAssetOntologyRef } from './ontology-refs';
+import {
+  readAbilityAssetRelationContract,
+  type AbilityAssetRelation,
+  type AbilityAssetRelationContract,
+} from './asset-relations';
 import { normalizeAbilityAssetScopePolicy, type RecallAbilityAssetScopePolicy } from './scope-policy';
 import {
   createAbilityAsset,
@@ -97,15 +102,21 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   evidenceRefs: CognitionSourceRef[];
   learningSignal?: KstarLearningSignal;
   ontologyRefs?: AbilityAssetOntologyRef[];
+  relations?: AbilityAssetRelation[];
+  derivedFrom?: string[];
   scope: string;
   scopePolicy?: RecallAbilityAssetScopePolicy;
   recommendedAction?: 'pause' | 'rework';
   recommendationReason?: string;
   recommendationAt?: string;
-  status: 'active' | 'paused' | 'revoked';
+  status: 'active' | 'paused' | 'archived' | 'deleted' | 'purged' | 'revoked';
   lifecycleStatus: 'user_confirmed_unverified';
-  maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated';
+  maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated' | 'stable';
+  deletedAt?: string;
+  purgedAt?: string;
   version: string;
+  /** Provenance for assets learned from conversation sources. */
+  sourceSessionIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -152,6 +163,18 @@ export interface PromoteRecallCandidateOptions {
   decisionId?: string;
   decisionReason?: string;
   riskAcknowledged?: boolean;
+}
+
+const MAX_SOURCE_SESSION_IDS = 50;
+
+function sourceSessionIdsFrom(refs: CognitionSourceRef[]): string[] {
+  const ids: string[] = [];
+  for (const ref of refs) {
+    if (ref.kind !== 'conversation' || ids.includes(ref.id)) continue;
+    ids.push(ref.id);
+    if (ids.length >= MAX_SOURCE_SESSION_IDS) break;
+  }
+  return ids;
 }
 
 function boundedText(value: unknown, field: string, max: number, required = false): string | undefined {
@@ -283,6 +306,7 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   if (!evidenceRefs.length) throw new Error('malformed recall ability asset evidence');
   const learningSignal = normalizeLearningSignal(value.learningSignal);
   const ontologyRefs = value.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(value.ontologyRefs);
+  const relationContract = readAbilityAssetRelationContract(value, value.id);
   const scopePolicy = normalizeAbilityAssetScopePolicy(value.scopePolicy);
   return {
     ...value,
@@ -291,6 +315,7 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
     evidenceRefs,
     ...(learningSignal ? { learningSignal } : {}),
     ...(ontologyRefs ? { ontologyRefs } : {}),
+    ...relationContract,
     ...(scopePolicy ? { scopePolicy } : {}),
   } as RecallAbilityAssetRecord;
 }
@@ -711,10 +736,11 @@ async function persistHandoffReceipt(
 export async function promoteRecallCandidate(
   userId: string,
   candidateId: string,
-  options: PromoteRecallCandidateOptions = {},
+  options: PromoteRecallCandidateOptions & AbilityAssetRelationContract = {},
 ): Promise<{ candidate: RecallCandidateRecord; asset: RecallAbilityAssetRecord; decision: ReviewDecision; receipt: RecallAssetHandoffReceipt }> {
   if (options.actor !== 'user') throw new Error('recall candidate promotion requires a user actor');
   const ontologyRefs = options.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(options.ontologyRefs);
+  const relationContract = readAbilityAssetRelationContract(options as Record<string, unknown>);
   const scopePolicy = normalizeAbilityAssetScopePolicy(options.scopePolicy);
   let decision: ReviewDecision | undefined;
   let updated: RecallJsonRecord;
@@ -773,6 +799,7 @@ export async function promoteRecallCandidate(
     const handoffReason = `review_decision:${decision.decision_id}`;
     if (candidate.suggestedAction === 'create') {
       const assetId = `aa-${createHash('sha256').update(`${candidate.id}\n${decision.decision_id}`).digest('hex').slice(0, 24)}`;
+      const sourceSessionIds = sourceSessionIdsFrom(candidate.sourceRefs);
       stored = await createAbilityAsset(userId, {
         schemaVersion: 2,
         ownerId: userId,
@@ -786,12 +813,14 @@ export async function promoteRecallCandidate(
         evidenceRefs: candidate.evidenceRefs,
         ...(candidate.learningSignal ? { learningSignal: candidate.learningSignal } : {}),
         ...(ontologyRefs?.length ? { ontologyRefs } : {}),
+        ...relationContract,
         scope: candidate.suggestedScope,
         ...(scopePolicy ? { scopePolicy } : {}),
         status: 'active',
         lifecycleStatus: 'user_confirmed_unverified',
         maturity: 'seed',
         version: '1',
+        ...(sourceSessionIds.length ? { sourceSessionIds } : {}),
         createdAt: now,
         updatedAt: now,
       }, { actor: 'user', reason: handoffReason });
@@ -813,6 +842,7 @@ export async function promoteRecallCandidate(
           scope: candidate.suggestedScope,
           evidenceRefs: candidate.evidenceRefs,
           ...(ontologyRefs?.length ? { ontologyRefs } : {}),
+          ...relationContract,
           ...(scopePolicy ? { scopePolicy } : {}),
           actor: 'user',
           reason: handoffReason,
