@@ -3597,6 +3597,8 @@ async function runActorTurnBody(
         taskRunId: item.turnId,
         taskText: String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000),
         ...(turnProjectId ? { workspaceId: turnProjectId } : {}),
+        ...(item.committedProjectionId ? { committedProjectionId: item.committedProjectionId } : {}),
+        ...(item.forecastId ? { forecastId: item.forecastId } : {}),
       });
       if (recallContext.promptBlock) {
         systemPrompt = `${systemPrompt}\n\n${recallContext.promptBlock}`;
@@ -4828,6 +4830,7 @@ async function runActorTurnBody(
       version: citation.version,
       scope: citation.scope,
       projection_id: citation.projectionId,
+      ...(citation.forecastId ? { forecast_id: citation.forecastId } : {}),
       ...(citation.matchScore !== undefined ? { match_score: citation.matchScore } : {}),
       match_method: citation.matchMethod,
     }));
