@@ -59,10 +59,11 @@ Conversation.space_id (string | null)
   - 文件：`src/main/features/chats.ts:94`（接口）、`:251`（normalise）
   - 验收：`node --check` 通过；`npm run test:js` 不新增失败。
   - ✅ 完成（2026-08-13）：`Conversation` 加 `space_id?`；`_normaliseConversation` 读 `raw.space_id`（旧数据无字段时缺省，向后兼容）；`CreateConversationOptions.spaceId?` + `createConversation` 解构 `spaceId=''` 并在 created/revived 两处落 `space_id`；`CLEARABLE_CONVERSATION_FIELDS` 加 `'space_id'`（同步合并清字段口径与 project_id 一致）。验证证据：`npm run typecheck` 通过；`npm run test:js` 18 failed files / 69 failed tests（7811 passed）——全部为基线既有失败（recall actor 校验、renderer category-tabs/conversation-copy-merge、p3394 KSTAR、builtin-resource-gate 等），与本次 space_id 改动无关，**新增失败 0**。风险：space_id 读取未做 safeId 校验（与 project_id 同口径，IPC 层负责校验存在性）。
-- [ ] **T0.3 迁移执行逻辑**：v5 迁移脚本实现「对每个 project，若有 space_id，则把该项目下所有会话的 `project_id` 复制到 `space_id`，并写入新归档目录」。
+- [x] **T0.3 迁移执行逻辑**：v5 迁移脚本实现「对每个 project，若有 space_id，则把该项目下所有会话的 `project_id` 复制到 `space_id`，并写入新归档目录」。
   - 关键：`cloud/projects/<pid>/...` → `cloud/spaces/<sid>/...`（会话、附件、artifact、group_chat、session 全部搬）。
   - 文件：`src/main/util/migrate-project-layout-v5.ts` + `src/main/paths.ts`（新增 `spaceChatsDir` 等路径函数）
   - 验收：构造一个含 project+space_id 的测试数据，跑迁移，断言文件落到 `cloud/spaces/<sid>/` 且会话 JSON 带 space_id。
+  - ✅ 完成（2026-08-13）：`paths.ts` 新增 `spaceContentDir/spaceChatsDir/spaceChatIndexFile/spaceGroupChat*/spaceSessionsDir/spaceSession*/spaceChatAttachmentsDir/spaceChatArtifactsDir/spaceArtifactDir` 全套（含 `assertSpaceSegment` 路径段防护）；空间内容目录 `cloud/spaces/<sid>/` 与空间 meta 单文件 `cloud/spaces/<sid>.json` 同层共存（`_listSpaceIds` 只认 `.json` 文件，不冲突）。`migrateProjectLayoutV5` 实现搬移：索引行打 `space_id`（`= project.space_id`，**非** `= conversation.project_id`，已按目标架构消歧）+ 多项目同空间按 cid 合并索引、chats(jsonl+group)/sessions/attachments/artifacts 整目录搬（目标存在→逐文件合并、冲突→`.legacy-v5-<hash>` 保留不覆盖）。验证证据：`npm run typecheck` 通过；构造 3 项目（2 指向同一空间 + 1 orphan）跑迁移断言全过（空间索引 3 行全带 space_id 且 project_id 保留、文件落 `spaces/<sid>/`、orphan 原地不动）；`npm run smoke` OK。风险：未加锁/未建 marker/未注册（T0.4 补）；orphan 项目本阶段不搬，其 `projects/<pid>/` 待阶段 4 清。
 - [ ] **T0.4 迁移注册 + 幂等**：在 `boot_init` 注册 v5 迁移（参考 v4 的注册点），加锁 + 版本标记，重复启动不重复迁移。
   - 文件：`src/main/util/boot_init.ts`
   - 验收：连跑两次 smoke，第二次迁移统计为 0（幂等）。
