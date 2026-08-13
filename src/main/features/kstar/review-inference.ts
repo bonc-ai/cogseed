@@ -2,6 +2,8 @@ import { createLogger } from '../../logger';
 import { buildRunner } from '../../model/core-agent/runner';
 import { hasConfiguredModel } from '../auth';
 import type { SaveKstarReviewInput } from './review-service';
+import { reconcileWorldModel } from '../recall/world-model';
+import type { WorldModelForecast } from '../recall/world-model-types';
 import type { KstarAttribution, KstarEpisodeRecord, KstarOutcome, KstarReviewInferenceMethod, KstarReviewState } from './types';
 
 const log = createLogger('kstar.review-inference');
@@ -20,6 +22,10 @@ export interface KstarReviewInferenceOptions {
   runModel?: (input: { systemPrompt: string; message: string }) => Promise<string>;
   /** Allow closure flows to keep a provisional signal when actual output exists but model review is unavailable. */
   allowProvisionalEvidenceFallback?: boolean;
+  /** World-model forecast (A_hat, R_hat) produced at task boundary. When
+   *  present, its R_hat replaces the user-goal text as the expected result and
+   *  drives the deltaR/deltaA reconciliation. */
+  forecast?: WorldModelForecast;
 }
 
 interface ParsedModelReview {
@@ -71,9 +77,14 @@ export function buildDeterministicReviewEvidence(episode: KstarEpisodeRecord): {
   };
 }
 
-function reviewBase(episode: KstarEpisodeRecord): Pick<SaveKstarReviewInput, 'expectedResult' | 'actualResult' | 'evidenceRefs'> {
+function reviewBase(episode: KstarEpisodeRecord, forecast?: WorldModelForecast): Pick<SaveKstarReviewInput, 'expectedResult' | 'actualResult' | 'evidenceRefs'> {
   const evidence = buildDeterministicReviewEvidence(episode);
-  return { ...evidence, evidenceRefs: episode.evidenceRefs };
+  // Prefer the world-model predicted result when available; otherwise fall
+  // back to the task text (graceful degradation without a forecast).
+  const expectedResult = forecast?.rHat.summary?.trim()
+    ? forecast.rHat.summary
+    : evidence.expectedResult;
+  return { ...evidence, expectedResult, evidenceRefs: episode.evidenceRefs };
 }
 
 function unknownInference(episode: KstarEpisodeRecord): KstarReviewInferenceResult {
@@ -170,7 +181,33 @@ export async function inferKstarReview(
   options: KstarReviewInferenceOptions = {},
 ): Promise<KstarReviewInferenceResult> {
   if (episode.ownerId !== userId) throw new Error('kstar episode owner mismatch');
-  const base = reviewBase(episode);
+  const forecast = options.forecast;
+  const base = reviewBase(episode, forecast);
+  if (forecast && episode.r.status === 'completed') {
+    // World-model reconciliation: deltaA gates deltaR. Use the forecast's
+    // predicted result as the true R_hat instead of the user-goal text.
+    const reconciled = reconcileWorldModel(forecast, episode);
+    return {
+      review: {
+        ...base,
+        deltaR: reconciled.deltaR,
+        deltaA: reconciled.deltaA,
+        outcome: reconciled.attribution === 'execution_gap'
+          ? 'worse_than_expected'
+          : reconciled.deltaR === 0 ? 'met_expected' : reconciled.deltaR === 'unknown' ? 'unclear' : 'worse_than_expected',
+        attribution: reconciled.attribution,
+        reason: reconciled.attribution === 'execution_gap'
+          ? 'The realized intervention differs from the forecast; result delta is polluted by an execution gap.'
+          : reconciled.deltaR === 0
+            ? 'The forecast result matched the realized result.'
+            : 'The forecast result differed from the realized result.',
+        confidence: reconciled.deltaA === 'unknown' && reconciled.deltaR === 'unknown' ? 0.5 : 0.9,
+      },
+      reviewState: 'inferred',
+      inferenceMethod: 'deterministic',
+      needsConfirmation: false,
+    };
+  }
   if (episode.r.status === 'failed' || episode.r.status === 'cancelled') {
     return {
       review: {
