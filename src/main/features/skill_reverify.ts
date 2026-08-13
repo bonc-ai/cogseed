@@ -357,7 +357,7 @@ export async function reverifySkillDeep(uid: string, skillId: string): Promise<R
   // Letting it set `risk` would turn an unfinished declaration into a security
   // badge, and — since no shipped skill carries a manifest yet — would mark the
   // entire library at once, which is exactly how a badge stops being read.
-  const nseapDeclaration = await _checkNseapDeclaration(skillDir, skillId);
+  const nseapDeclaration = await checkNseapDeclaration(skillDir, skillId);
 
   const receipt = writeReceipt(uid, skillId, {
     payloadHash,
@@ -399,7 +399,7 @@ export async function reverifySkillDeep(uid: string, skillId: string): Promise<R
  *  4. **It cannot throw.** Re-verification decides whether a skill may load; an
  *     advisory extra must never be able to break that.
  */
-async function _checkNseapDeclaration(
+export async function checkNseapDeclaration(
   skillDir: string,
   skillId: string,
 ): Promise<SecurityReceipt['nseapDeclaration'] | undefined> {

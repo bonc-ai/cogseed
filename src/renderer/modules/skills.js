@@ -3675,6 +3675,19 @@ function _skillAutoSeedHasModelText(autoSeed) {
   return !!(autoSeed && typeof autoSeed === 'object' && typeof autoSeed.modelText === 'string' && autoSeed.modelText.trim());
 }
 
+function _nseapDeclarationLines(nseap) {
+  if (!nseap) return [];
+  const out = [];
+  if (nseap.status === 'unavailable') out.push(`• ${t('skills.secpanel_nseap_unavailable')}`);
+  else if (nseap.status === 'mismatch') out.push(`• ${t('skills.secpanel_nseap_mismatch')}`);
+  else if (nseap.status === 'needs_input') out.push(`• ${t('skills.secpanel_nseap_needs_input')}`);
+  else if (nseap.status === 'pass_with_warnings') out.push(`• ${t('skills.secpanel_nseap_warnings')}`);
+  for (const f of (nseap.findings || []).slice(0, 6)) {
+    out.push(`• ${f.ruleId}${f.message ? ` — ${f.message}` : ''}`);
+  }
+  return out;
+}
+
 // When called with {autoSeed: true} (e.g. right after skill creation), sends
 // a short "help me refine this skill" message to kick off the LLM. Import
 // flows pass {displayText, modelText}: the chat bubble stays concise, while
@@ -3701,6 +3714,27 @@ async function toggleSkillEditMode(opts = {}) {
     // rename + refreshes caches before we re-render readonly view.
     const committed = await _flushSkillFieldSave({ validate: true });
     if (committed === false) return;
+
+    try {
+      const precheck = await window.cogseed.invoke('skills.checkNseapDeclaration', {
+        id: _skillEditSkillId,
+      });
+      const lines = _nseapDeclarationLines(precheck?.nseapDeclaration);
+      if (lines.length) {
+        const choice = typeof uiChoice === 'function'
+          ? await uiChoice({
+            title: t('skills.edit_nseap_precheck_title'),
+            message: `${t('skills.edit_nseap_precheck_body')}\n\n${lines.join('\n')}`,
+            choices: [
+              { id: 'continue', label: t('skills.edit_nseap_precheck_continue'), style: 'primary' },
+              { id: 'back', label: t('skills.edit_nseap_precheck_back'), style: '' },
+            ],
+          })
+          : 'continue';
+        if (choice !== 'continue') return;
+      }
+    } catch (_) { /* precheck is advisory */ }
+
     // Explicit "Done" is a commit: keep the skill (even an empty import draft
     // the user chose to finalize) and stop the back-prompt from firing.
     _importDraftId = null;
@@ -4318,7 +4352,7 @@ async function _saveSkillFromUrl({ msgEl }) {
       ..._skillCreateResourceFromResponse(data),
       skill_count: _skillCreateCountFromResponse(data),
     });
-    await _afterSkillCreated(createdId, true, autoSeed);
+    await _afterImportedSkill(data);
   } catch (e) {
     msgEl.textContent = t('skills.network_error_plain');
     msgEl.className = 'form-msg err';
@@ -4415,7 +4449,7 @@ async function _saveSkillFromDirWithQuality({ msgEl, srcDir, force, tracking }) 
       skill_count: _skillCreateCountFromResponse(data),
       forced: !!force,
     });
-    await _afterSkillCreated(createdId, true, _skillImportAutoSeedFromResponse(data));
+    await _afterImportedSkill(data);
   } catch (e) {
     msgEl.textContent = t('skills.network_error_plain');
     msgEl.className = 'form-msg err';
@@ -4459,6 +4493,82 @@ async function _afterSkillCreated(sid, isNew, autoSeed) {
       }
     }).catch(() => {});
   }
+}
+
+async function _afterImportedSkill(data) {
+  closeSkillModal();
+  _skillsCache = null;
+  await loadSkills();
+  setView('skills');
+
+  const skills = Array.isArray(data?.skills) ? data.skills : (data?.skill ? [data.skill] : []);
+  const ids = skills.map((s) => String(s?.id || '')).filter(Boolean);
+  const names = skills.map((s) => String(s?.name || s?.id || '')).filter(Boolean).join('、');
+
+  const warnings = [];
+  if (typeof readQualityReport === 'function') {
+    for (const id of ids) {
+      try {
+        const report = await readQualityReport('skill', id);
+        const violations = Array.isArray(report?.violations) ? report.violations : [];
+        for (const v of violations) {
+          if (!v) continue;
+          warnings.push(`• ${String(v.rule || '')}${v.field ? ` · ${String(v.field)}` : ''}`);
+        }
+      } catch (_) { /* report is best-effort */ }
+    }
+  }
+
+  const nseapWarnings = ids.flatMap((id) => {
+    const cached = (_skillsCache || []).find((s) => String(s?.id || '') === id);
+    return _nseapDeclarationLines(cached?.security?.nseapDeclaration);
+  });
+
+  const seen = new Set();
+  const uniqueWarnings = warnings
+    .filter((w) => {
+      if (seen.has(w)) return false;
+      seen.add(w);
+      return true;
+    })
+    .slice(0, 8);
+  const seenNseap = new Set();
+  const uniqueNseapWarnings = nseapWarnings
+    .filter((w) => {
+      if (seenNseap.has(w)) return false;
+      seenNseap.add(w);
+      return true;
+    })
+    .slice(0, 8);
+
+  const lines = [t('skills.import_review_body', { count: ids.length })];
+  if (names) lines.push(`\n${names}`);
+  if (uniqueWarnings.length) {
+    lines.push(`\n${t('skills.import_review_issues')}\n${uniqueWarnings.join('\n')}`);
+  }
+  if (uniqueNseapWarnings.length) {
+    lines.push(`\n${t('skills.import_review_nseap_issues')}\n${uniqueNseapWarnings.join('\n')}`);
+  }
+  if (!uniqueWarnings.length && !uniqueNseapWarnings.length) {
+    lines.push(`\n${t('skills.import_review_no_issues')}`);
+  }
+
+  const choice = typeof uiChoice === 'function'
+    ? await uiChoice({
+      title: t('skills.import_review_title'),
+      message: lines.join('\n'),
+      choices: [
+        { id: 'keep', label: t('skills.import_review_keep'), style: 'primary' },
+        { id: 'discard', label: t('skills.import_review_discard'), style: 'danger' },
+      ],
+    })
+    : 'keep';
+
+  if (choice !== 'discard') return;
+
+  await Promise.allSettled(ids.map((id) => apiFetch(`/api/skills/${id}`, { method: 'DELETE' })));
+  _skillsCache = null;
+  await loadSkills();
 }
 
 function editSelectedSkill() {
