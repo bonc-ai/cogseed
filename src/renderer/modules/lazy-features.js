@@ -20,11 +20,6 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/marketplace.js' },
   ],
   agents: [],
-  project: [
-    { src: './modules/library-transfer.js' },
-    { src: './modules/project-workbench.js' },
-    { src: './modules/project-detail.js' },
-  ],
   auto: [
     { src: './modules/auto.js' },
   ],

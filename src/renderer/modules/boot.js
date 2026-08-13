@@ -127,7 +127,6 @@ async function bootApp() {
     _stampSettingsVersion(),
     (async () => { await initUser(); await initUserWorkspace(); })(),
     initAvatarCatalog(),
-    loadProjects(),
   ]));
 
   // ── Stage B (parallel, depends on Stage A) ─────────────────────────
@@ -294,7 +293,6 @@ function _lazyFeaturePanel(view) {
     : view === 'workspace' ? 'panel-workspace'
     : view === 'contexts' ? 'panel-contexts'
     : view === 'settings' ? 'panel-settings'
-    : view === 'project' ? 'panel-project'
     : view === 'auto' ? 'panel-auto'
     : view === 'marketplace' ? 'panel-marketplace'
     : view === 'devtools' ? 'panel-devtools'
@@ -388,7 +386,6 @@ function setView(view, cid, opts = {}) {
                 : view === 'settings' ? 'panel-settings'
                 : view === 'memory' ? 'panel-memory'
                 : view === 'devtools' ? 'panel-devtools'
-                : view === 'project' ? 'panel-project'
                 : view === 'marketplace' ? 'panel-marketplace'
                 : 'panel-conversation';
   document.getElementById(panelId).classList.add('active');
@@ -584,20 +581,9 @@ function setView(view, cid, opts = {}) {
         }
       });
     });
-  } else if (view === 'project') {
-    // `cid` arg is repurposed as `pid` for this view (single second-arg
-    // slot kept; the function only inspects it for 'conversation' above).
-    currentCid = null;
-    if (typeof primeProjectDetailShell === 'function') primeProjectDetailShell(cid || '');
-    _deferSidebarNavWork('project-tab-load', () => {
-      _loadViewFeature('project', 'project', () => {
-        if (typeof loadProjectDetail === 'function') loadProjectDetail(cid || '');
-      });
-    });
   } else {
     currentCid = null;
   }
-  if (typeof renderProjectsSection === 'function') renderProjectsSection();
 }
 
 // Expose setView to window for interactive tour

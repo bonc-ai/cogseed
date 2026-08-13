@@ -629,9 +629,8 @@ async function loadAgents(forceRefresh, opts = {}) {
         // → loadAgents, so the first sidebar render lands before the cache
         // is populated and the badges fall back to seed-derived avatars —
         // re-render once the cache exists so they pick up the authored
-        // icon. Projects section subscribes to the same render call.
+        // icon. Conversation list subscribes to the same render call.
         if (typeof renderConversationList === 'function') renderConversationList();
-        if (typeof renderProjectsSection === 'function') renderProjectsSection();
         if (summary) return;
         await _refreshCommanderAgentState();
         renderAgentsList(_agentsCache);

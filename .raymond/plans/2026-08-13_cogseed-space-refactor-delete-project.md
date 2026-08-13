@@ -105,12 +105,13 @@ Conversation.space_id (string | null)
 
 **目标**：侧边栏不再显示项目，会话直接显示在空间下。
 
-- [ ] **T3.1 删侧边栏项目区块**：`index.html` 删 `sidebar-projects-section`（41-50行）。
+- [x] **T3.1 删侧边栏项目区块**：`index.html` 删 `sidebar-projects-section`（41-50行）。
   - 文件：`src/renderer/index.html`
-- [ ] **T3.2 停用 projects.js 渲染**：`boot.js`/`state.js` 移除 `renderProjectsSection` 调用；`interactive-tour.js:40-62` 的项目选择器改为走空间选择器。
+- [x] **T3.2 停用 projects.js 渲染**：`boot.js`/`state.js` 移除 `renderProjectsSection` 调用；`interactive-tour.js:40-62` 的项目选择器改为走空间选择器。
   - 文件：`boot.js`、`state.js`、`interactive-tour.js`
-- [ ] **T3.3 删 panel-project 路由**：`boot.js` 删 `project` view 分支 + panel 映射；`lazy-features.js` 删 project 条目。
+- [x] **T3.3 删 panel-project 路由**：`boot.js` 删 `project` view 分支 + panel 映射；`lazy-features.js` 删 project 条目。
   - 验收：点侧边栏无项目入口，无残留报错。
+  - ✅ 完成（2026-08-13，T3.1/T3.2/T3.3 合并一次提交——同属「删项目 UI」、一次重启一次 CDP）：index.html 删 `sidebar-projects-section` + `<script projects.js>`；boot.js 删 `project` view 分支 + `_lazyFeaturePanel`/`setView` 两处 panel 映射 + `loadProjects()`（stageA 无守卫直调）+ `renderProjectsSection()` 调用；agents.js 删 2 处 `renderProjectsSection()`（634/2172 其中 2172 是守卫式、634 已删）；lazy-features.js 删 `project` manifest 条目；interactive-tour.js 删 `IMPORTED_PROJECT_NAME`+`_findProjectRowByName`，conversation 步骤 resolveTarget 改走 `#conversation-list .conv-item` + `#ws-view .ws-space-card` 兜底。**关键偏差/决定**：(1) `renderProjectsSection` 调用点实为 boot.js+agents.js（plan 原写 state.js 无此调用）；(2) 保留 `panel-project` HTML 段（~235行死代码）未删——因 chat-use.js 仍引用 `#project-chat-input` 等，删 HTML 会先破 chat-use，留待阶段 4 与 chat-use 项目引用一起清；(3) conversation.js/onboarding.js/project-detail.js 里残留的 `renderProjectsSection/loadProjects/autoExpandActiveConvProject` 调用均为 `typeof === 'function'` 守卫式，projects.js 卸载后安全 no-op，阶段 4 grep 归零时清。验证证据（CDP）：`#projects-list`/`sidebar-projects-section`/`projects-add-btn` 均 false、`typeof renderProjectsSection|primeProjectDetailShell|loadProjects` 均 'undefined'、workspace-btn/spaces-btn/conv-list 仍在；切换 workspace/spaces/new-chat/settings 四 view 全 `ok:true` 无抛错；`setView('project')` 不抛错（回退 panel-conversation）；日志无 renderer 报错；workspace 面板正常渲染（14632 字符、有空间卡）。
 
 ### 阶段 4：废弃项目后端（依赖阶段 3，最重）
 

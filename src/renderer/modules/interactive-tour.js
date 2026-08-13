@@ -32,34 +32,17 @@ let _tourObserver = null;
 let _tourRepositionTimer = null;
 let _tourFinishTimer = null;
 
-// Project name onboarding uses when it groups imported conversations.
-// Keep in sync with the `projects.create` call in onboarding's role setup.
-const IMPORTED_PROJECT_NAME = '导入的会话';
-
-function _findProjectRowByName(name) {
-  const rows = document.querySelectorAll('#projects-list .project-row[data-pid]');
-  for (const row of rows) {
-    const label = row.querySelector('.project-name');
-    if (label && label.textContent.trim() === name) return row;
-  }
-  return null;
-}
-
 // Tour step definitions
 const TOUR_STEPS = [
   {
     id: 'conversation',
     title: '查看导入的会话',
     description: '这些是你从其他 Agent 导入的历史会话。点击打开一个会话，看看它的内容。',
-    // Onboarding moves imported conversations into a project, which leaves the
-    // ungrouped `#conversation-list` empty — so anchoring there highlighted a
-    // blank box. Resolve the real row instead, preferring the deepest thing
-    // the user can actually click.
+    // 空间化重构后项目层已废弃，导入会话直接落在未分组会话列表；空间中心
+    // 的空间卡片作兜底锚点。
     resolveTarget: () => (
-      document.querySelector('#projects-list .project-conv-list .conv-item[data-cid]')
-      || _findProjectRowByName(IMPORTED_PROJECT_NAME)
-      || document.querySelector('#conversation-list .conv-item[data-cid]')
-      || document.querySelector('#projects-list .project-row[data-pid]')
+      document.querySelector('#conversation-list .conv-item[data-cid]')
+      || document.querySelector('#ws-view .ws-space-card')
     ),
     position: 'right',
     checkComplete: () => {
