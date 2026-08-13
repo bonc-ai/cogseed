@@ -1063,6 +1063,18 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { conversation: conv };
   },
 
+  'conversations.completeSpaceBuilder': async (args, ctx) => {
+    const { cid } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    // 只允许标记 kind=space_builder 的会话；其余拒绝，防止任意会话被误标。
+    const conv = await chats.getConversation(ctx.userId, cid, conversationProjectHint(args));
+    if (!conv || conv.kind !== 'space_builder') throw new Error('not a space_builder conversation');
+    const updated = await chats.updateConversation(
+      ctx.userId, cid, { space_builder_completed: new Date().toISOString() }, conversationProjectHint(args));
+    if (!updated) throw new Error('conversation not found');
+    return { conversation: updated };
+  },
+
   'conversations.deleteAll': async (_args, ctx) => {
     const convs = await chats.listConversations(ctx.userId);
     await recycleBin.createAppRecycleBatchForConversations(

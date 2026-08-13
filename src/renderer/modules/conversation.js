@@ -1163,6 +1163,12 @@ function _renderRecipientChip(target) {
       if (!display) display = r.name || r.id;
       nameEl.textContent = display;
       nameEl.removeAttribute('data-i18n');
+    } else if (typeof currentCid === 'string' && currentCid
+      && typeof conversations !== 'undefined' && Array.isArray(conversations)
+      && conversations.find((c) => c && c.conversation_id === currentCid && c.kind === 'space_builder')) {
+      // 空间模式会话：接收者是空间构建师（会话内置角色，不在 AI 团队列表）。
+      nameEl.textContent = t('chat.recipient_space_builder', '空间构建师');
+      nameEl.removeAttribute('data-i18n');
     } else {
       nameEl.setAttribute('data-i18n', 'chat.recipient_commander');
       nameEl.textContent = t('chat.recipient_commander');
@@ -1709,6 +1715,11 @@ async function _startSpaceBuilderConversation() {
 
 function onEnterConversationView() {
   if (_messageSelectionState && _messageSelectionState.cid !== currentCid) _exitMessageSelection();
+  // 空间模式会话：确保资产名映射就绪（草稿卡显示中文名，加载完自动刷新）。
+  if (typeof currentCid === 'string' && currentCid && typeof conversations !== 'undefined' && Array.isArray(conversations)
+    && conversations.some((c) => c && c.conversation_id === currentCid && c.kind === 'space_builder')) {
+    _ensureSpaceAssetNames();
+  }
   // The side column is per-conversation: its aside thread is anchored to a
   // message here, and its preview is a file this conversation produced. Leaving
   // it mounted across a switch would show the previous conversation's content
@@ -7136,6 +7147,11 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const contentHtml = isHtmlSnippet
     ? sanitizeHtml(rawContent)
     : `<div class="markdown-body">${_renderMessageMarkdown(displayContent)}</div>`;
+  // 空间构建师的 space-draft 块 → 渲染「创建空间」按钮（用户确认后调 spaces.create）。
+  const spaceDraft = (!isHtmlSnippet && role === 'assistant')
+    ? _extractSpaceDraft(displayContent)
+    : null;
+  const spaceDraftHtml = spaceDraft ? _renderSpaceDraftButtonHtml(spaceDraft) : '';
 
   const attachmentCid = message.attachment_cid || message.attachments_cid || opts.cid || currentCid;
   const attachmentsHtml = (role === 'user' && Array.isArray(message.attachments) && message.attachments.length)
@@ -7171,11 +7187,18 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   // Always go through _groupActorLabel for non-user messages so we never
   // accidentally render the raw agent_id. _from_label was eagerly computed
   // at translate time but the cache may have been empty then; recompute.
+  // 空间模式会话：构建师回复的消息头显示「空间构建师」（actor 在群聊机制里
+  // 仍是指挥官，但 UI 上必须让用户看到"对话对象是构建师"）。
+  const isSpaceBuilderCid = role !== 'user'
+    && typeof conversations !== 'undefined' && Array.isArray(conversations)
+    && conversations.some((c) => c && c.conversation_id === (opts.cid || currentCid) && c.kind === 'space_builder');
   const headerName = role === 'user'
     ? ''
-    : _groupActorLabel(message._from || (message._from_label ? '' : ''))
-      || message._from_label
-      || (t('chat.from_agent_unknown'));
+    : isSpaceBuilderCid
+      ? t('chat.recipient_space_builder')
+      : _groupActorLabel(message._from || (message._from_label ? '' : ''))
+        || message._from_label
+        || (t('chat.from_agent_unknown'));
   const headerActorId = role === 'user' ? '' : String(message._from || '');
   const avatarHtml = role === 'user' ? '' : _renderActorAvatarHtml(headerActorId);
   const headerHtml = role === 'user'
@@ -7187,7 +7210,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   // action row remains for created-agent/skill links and message actions.
   msgDiv.innerHTML = `
     ${headerHtml}
-    <div class="chat-bubble">${planAnnHtml}${referencesHtml}${contentHtml}${attachmentsHtml}${teachingReceiptsHtml}${recallCitationsHtml}</div>
+    <div class="chat-bubble">${planAnnHtml}${referencesHtml}${contentHtml}${spaceDraftHtml}${attachmentsHtml}${teachingReceiptsHtml}${recallCitationsHtml}</div>
     <div class="chat-msg-actions" data-role="msg-actions">${createdAgentHtml}${createdSkillHtml}</div>
   `;
   if (typeof opts.msgIndex === 'number') msgDiv.dataset.msgIndex = String(opts.msgIndex);
