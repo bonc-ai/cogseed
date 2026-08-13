@@ -1,4 +1,4 @@
-import type { KStarDecisionRecord } from '../kstar/dispatch-decision';
+import type { KStarDecisionRecord } from './kstar-compat';
 
 export type WakeSource =
   | "user_mention"
