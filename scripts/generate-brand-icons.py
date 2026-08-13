@@ -6,7 +6,7 @@ orange seed-guardian character). This script:
 
 - removes the near-white background with a soft alpha transition;
 - writes a transparent page logo (logo.png, 1024x1024);
-- writes a light-background app icon (icon.png, 512x512);
+- writes a rounded light-background app-icon tile (icon.png, 512x512);
 - regenerates the Windows ICO and macOS ICNS containers;
 - writes a maintainable labeled SVG master (cogseed-master.svg).
 
@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from PIL import Image, ImageChops, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageOps
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'src' / 'resources' / 'icons'
@@ -88,6 +88,23 @@ def _square_padded(image: Image.Image, target: int, fill: tuple[int, int, int, i
     return canvas
 
 
+
+def _rounded_tile(logo: Image.Image, size: int, corner: int, background: tuple[int, int, int]) -> Image.Image:
+    """Build a macOS-style app-icon tile: transparent corners, rounded light
+    background, and the brand mark centered at ~62% of the canvas so the Dock
+    renders it at the same visual size as other apps."""
+    tile = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+    mask = Image.new('L', (size, size), 0)
+    draw = ImageDraw.Draw(mask)
+    draw.rounded_rectangle((0, 0, size - 1, size - 1), radius=corner, fill=255)
+    tile.paste(Image.new('RGBA', (size, size), (*background, 255)), (0, 0), mask)
+
+    content = round(size * 0.62)
+    scaled = logo.resize((content, content), Image.Resampling.LANCZOS)
+    tile.paste(scaled, ((size - content) // 2, (size - content) // 2), scaled)
+    return tile
+
+
 def write_svg(path: Path) -> None:
     path.write_text(
         '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
@@ -143,7 +160,8 @@ def main() -> None:
         transparent.alpha_composite(square)
         transparent.save(tmpdir / 'logo.png', 'PNG', optimize=True)
 
-        icon = _square_padded(mark, 512, (*ICON_BACKGROUND, 255))
+        logo_square = _square_padded(mark, 512, (0, 0, 0, 0))
+        icon = _rounded_tile(logo_square, 512, corner=114, background=ICON_BACKGROUND)
         icon.save(tmpdir / 'icon.png', 'PNG', optimize=True)
         icon.save(tmpdir / 'icon.icns', 'ICNS')
         icon.save(tmpdir / 'icon.ico', 'ICO', sizes=ICO_SIZES)

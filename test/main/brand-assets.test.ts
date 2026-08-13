@@ -81,7 +81,11 @@ describe('CogSeed brand assets', () => {
     expect(readPngHeader(asset('logo.png'))).toEqual({ bitDepth: 8, colorType: 6 });
     expect(readPngHeader(asset('icon.png'))).toEqual({ bitDepth: 8, colorType: 6 });
     expect(hasFullyTransparentPixel(logo)).toBe(true);
-    expect(hasFullyTransparentPixel(icon)).toBe(false);
+    // macOS-style rounded app-icon tile: transparent corners, opaque center.
+    expect(hasFullyTransparentPixel(icon)).toBe(true);
+    expect(icon.bitmap.data[3]).toBe(0); // top-left corner is transparent
+    const centerOffset = ((icon.bitmap.width * 256) + 256) * 4;
+    expect(icon.bitmap.data[centerOffset + 3]).toBe(255); // center is opaque
     expect(hasOpaqueLightPixel(icon)).toBe(true);
     expect(hasPixelNear(logo, darkGreen)).toBe(true);
     expect(hasPixelNear(logo, orange)).toBe(true);
