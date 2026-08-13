@@ -242,6 +242,12 @@ export async function inferKstarReview(
   }
   if (episode.r.status !== 'completed') return unknownInference(episode);
 
+  // No model configured: report an honest 'unknown' review instead of
+  // fabricating a provisional met_expected learning signal.
+  if (!options.runModel && !hasConfiguredModel().configured) {
+    return unknownInference(episode);
+  }
+
   try {
     const text = options.runModel
       ? await options.runModel({ systemPrompt: inferenceSystemPrompt(), message: JSON.stringify(buildDeterministicReviewEvidence(episode)) })

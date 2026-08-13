@@ -9,7 +9,6 @@
  *      constraints, so the LLM simulation is grounded in the frozen lessons.
  */
 
-import { createLogger } from '../../logger';
 import { buildRunner } from '../../model/core-agent/runner';
 import { readRecallJsonRecord, writeRecallJsonRecord } from './store';
 import { genId12 } from '../../storage';
@@ -27,8 +26,6 @@ import type {
   WorldModelSnapshot,
 } from './world-model-types';
 import type { KstarEpisodeRecord } from '../kstar/types';
-
-const log = createLogger('recall.world-model');
 
 /** Deterministic A-Box predicates for the F002 risk pass. */
 const PREDICATE_TESTS: Record<WorldModelPredicateKey, (s: WorldModelSnapshot) => boolean> = {
@@ -118,51 +115,35 @@ export async function simulateWorld(
   input: WorldModelSimulationInput,
   snapshot: WorldModelSnapshot,
 ): Promise<WorldModelForecast> {
+  if (!hasConfiguredModel().configured) {
+    throw new Error('world model simulation requires a configured model');
+  }
+
   const predictedRisks = applyCausalRules(snapshot, input.k.rules);
 
-  if (!hasConfiguredModel().configured) {
-    return {
-      aHat: { plan: [], expectedTools: [], expectedActors: [] },
-      rHat: { summary: '', acceptanceSignals: [], predictedFiles: [] },
-      predictedRisks,
-    };
-  }
-
-  try {
-    const { runner } = await buildRunner({
-      sessionId: `kstar-forecast-${snapshot.taskRunId}`,
-      userId,
-      systemPrompt: forecastSystemPrompt(),
-      disableTools: true,
-      ephemeralSession: true,
-      skillList: [],
-    });
-    const riskBlock = predictedRisks.length
-      ? `\n\nKnown risk constraints (do not contradict these):\n${JSON.stringify(predictedRisks.map((r) => ({ cause: r.cause, effect: r.effect, mitigation: r.mitigation, severity: r.severity })))}`
-      : '';
-    const result = await runner.run({
-      message: JSON.stringify({
-        k: { abilityAssetRefs: input.k.abilityAssetRefs },
-        s: input.s,
-        t: input.t,
-      }) + riskBlock,
-      thinkingLevel: 'off',
-      cacheRetention: 'none',
-    });
-    if (result.meta.aborted || result.meta.error) throw new Error('world model unavailable');
-    const forecast = parseForecast(result.text);
-    return { ...forecast, predictedRisks };
-  } catch (error) {
-    log.warn('world model simulation degraded to deterministic forecast', {
-      taskRunId: snapshot.taskRunId,
-      error: (error as Error).message,
-    });
-    return {
-      aHat: { plan: [], expectedTools: [], expectedActors: [] },
-      rHat: { summary: '', acceptanceSignals: [], predictedFiles: [] },
-      predictedRisks,
-    };
-  }
+  const { runner } = await buildRunner({
+    sessionId: `kstar-forecast-${snapshot.taskRunId}`,
+    userId,
+    systemPrompt: forecastSystemPrompt(),
+    disableTools: true,
+    ephemeralSession: true,
+    skillList: [],
+  });
+  const riskBlock = predictedRisks.length
+    ? `\n\nKnown risk constraints (do not contradict these):\n${JSON.stringify(predictedRisks.map((r) => ({ cause: r.cause, effect: r.effect, mitigation: r.mitigation, severity: r.severity })))}`
+    : '';
+  const result = await runner.run({
+    message: JSON.stringify({
+      k: { abilityAssetRefs: input.k.abilityAssetRefs },
+      s: input.s,
+      t: input.t,
+    }) + riskBlock,
+    thinkingLevel: 'off',
+    cacheRetention: 'none',
+  });
+  if (result.meta.aborted || result.meta.error) throw new Error('world model unavailable');
+  const forecast = parseForecast(result.text);
+  return { ...forecast, predictedRisks };
 }
 
 /** Assemble an A-Box snapshot from the current world state. Kept explicit so

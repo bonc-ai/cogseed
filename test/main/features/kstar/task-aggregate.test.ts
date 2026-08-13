@@ -71,6 +71,34 @@ const fakeCandidate = (id: string): RecallCandidateRecord => ({
   createdAt: '2026-08-08T00:00:00.000Z', updatedAt: '2026-08-08T00:00:00.000Z',
 });
 
+async function seedWorldModelForecast(requirementId: string): Promise<string> {
+  const { saveWorldModelForecast } = await import('../../../../src/main/features/recall/world-model');
+  const record = {
+    schemaVersion: 1,
+    ownerId: 'user-a',
+    id: 'wf-task-aggregate-forecast',
+    taskRunId: 'task-auto-signal',
+    requirementId,
+    input: {
+      k: { abilityAssetRefs: [], rules: [] },
+      s: { conversationSummary: 'Produce the requested deliverable' },
+      t: { userGoal: 'Produce the requested deliverable', constraints: [] },
+    },
+    forecast: {
+      aHat: { plan: ['write_file'], expectedTools: ['write_file'], expectedActors: ['commander'] },
+      rHat: {
+        summary: 'Produced the requested deliverable.',
+        acceptanceSignals: [],
+        predictedFiles: ['deliverable.md'],
+      },
+      predictedRisks: [],
+    },
+    createdAt: '2026-08-09T00:00:00.000Z',
+  };
+  await saveWorldModelForecast('user-a', record as any);
+  return record.id;
+}
+
 describe('KSTAR task aggregation', () => {
   it('consumes requirementJustClosed before aggregating and bridges one deduped candidate', async () => {
     const { store, task, requirement } = await seedClosedTask();
@@ -110,7 +138,7 @@ describe('KSTAR task aggregation', () => {
 
 
 
-  it('bridges a provisional candidate when completion evidence exists without user feedback', async () => {
+  it('bridges a candidate when completion evidence and a world-model forecast exist without user feedback', async () => {
     const store = await import('../../../../src/main/features/kstar/requirement-store');
     const aggregate = await import('../../../../src/main/features/kstar/task-aggregate');
     const task = store.createKstarTaskRecord('user-a', { conversationId: 'cid-auto-signal', title: 'Auto signal task' });
@@ -118,9 +146,10 @@ describe('KSTAR task aggregation', () => {
       taskId: task.id, conversationId: 'cid-auto-signal', userMessageIds: ['msg-auto'], title: 'Auto signal task', goalText: 'Produce the requested deliverable',
     });
     requirement.episodeIds = ['kse-auto-signal'];
+    const forecastId = await seedWorldModelForecast(requirement.id);
     await writeCompletedEpisode(store, 'kse-auto-signal');
     await store.replaceKstarTask('user-a', { ...task, requirementIds: [requirement.id], currentRequirementId: requirement.id, status: 'closing', closeReason: 'user_complete' });
-    await store.replaceKstarRequirement('user-a', { ...requirement, status: 'waiting_review' });
+    await store.replaceKstarRequirement('user-a', { ...requirement, status: 'waiting_review', forecastId });
     const state = store.createInitialConversationTaskState('user-a', 'cid-auto-signal');
     await store.writeConversationTaskState('user-a', { ...state, currentTaskId: task.id, currentRequirementId: requirement.id, requirementJustClosed: requirement.id, taskComplete: true });
 
