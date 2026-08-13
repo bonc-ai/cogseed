@@ -101,6 +101,13 @@ export async function listCognitionAssets(
       maturity: asset.maturity,
       owner: asset.ownerId,
       scope: asset.scope,
+      // 边界契约原样透传。只有正式资产有这些字段——下面几个 mapper 产出的是
+      // 候选和本体分组，它们还没经过 promote，不该假装有资产级的边界。
+      ...(asset.applicableWhen?.length ? { applicableWhen: [...asset.applicableWhen] } : {}),
+      ...(asset.forbiddenWhen?.length ? { forbiddenWhen: [...asset.forbiddenWhen] } : {}),
+      ...(asset.sensitivity ? { sensitivity: asset.sensitivity } : {}),
+      ...(asset.targetAgentIds ? { targetAgentIds: [...asset.targetAgentIds] } : {}),
+      ...(asset.confidence !== undefined ? { confidence: asset.confidence } : {}),
       ...(generatedSkillIds.get(asset.id) ? { generatedSkillId: generatedSkillIds.get(asset.id) } : {}),
       ...(currentSkillDraft?.status === 'draft' ? { recallSkillDraftStatus: 'draft' as const } : {}),
       ...(currentSkillDraft?.status === 'draft' ? {

@@ -186,6 +186,40 @@ function _renderCognitionInlineRefs(refs) {
 }
 
 
+/** 正式资产的边界：什么时候该用、什么时候绝不能用、给谁、多敏感。
+ *
+ *  这几条在能力包交付端是真实生效的——`capability-pack-delivery` 按
+ *  `targetAgentIds` 和 `forbiddenWhen` 过滤掉不该带的资产。此前展示层看不到它们，
+ *  用户就无法解释一条资产为什么没被带进某次任务。
+ *
+ *  一条都没有时整块不渲染：空块会被读成「没有限制」，而缺失只表示没记录过。 */
+function _renderAbilityAssetBoundary(asset) {
+  if (!asset) return '';
+  const rows = [];
+  const applicable = Array.isArray(asset.applicableWhen) ? asset.applicableWhen.filter(Boolean) : [];
+  const forbidden = Array.isArray(asset.forbiddenWhen) ? asset.forbiddenWhen.filter(Boolean) : [];
+  if (applicable.length) {
+    rows.push([_cognitionText('cognition.asset_applicable_when', '适用场景'), applicable.join('；')]);
+  }
+  if (forbidden.length) {
+    rows.push([_cognitionText('cognition.asset_forbidden_when', '禁用场景'), forbidden.join('；')]);
+  }
+  if (asset.sensitivity) {
+    rows.push([_cognitionText('cognition.asset_sensitivity', '敏感级别'), String(asset.sensitivity)]);
+  }
+  if (Array.isArray(asset.targetAgentIds)) {
+    // 空数组是有意义的状态（谁都不给），必须和「没限定」区分开。
+    rows.push([
+      _cognitionText('cognition.asset_target_agents', '限定接收方'),
+      asset.targetAgentIds.length
+        ? asset.targetAgentIds.join('、')
+        : _cognitionText('cognition.asset_target_agents_none', '不投递给任何 Agent'),
+    ]);
+  }
+  if (!rows.length) return '';
+  return `<div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.asset_boundary', '使用边界'))}</strong>${rows.map(([label, value]) => `<p>${escapeHtml(label)}：${escapeHtml(value)}</p>`).join('')}</div>`;
+}
+
 function _abilityAssetCategoryLabel(category) {
   const labels = {
     personal: _cognitionText('cognition.asset_category_personal', '关于我'),
@@ -1369,6 +1403,7 @@ function renderSkillsCognitionAssets() {
           ${selectedContentSummaryBlock}
           <div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.relation_refs', '关联引用'))}</strong><p>${escapeHtml(relationText)}</p></div>
           ${workspaceRefs.length ? `<div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.workspace_refs', 'Workspace引用'))}</strong><p>${escapeHtml(workspaceRefs.join('、'))}</p></div>` : ''}
+          ${_renderAbilityAssetBoundary(selected)}
           ${_renderRecallAssetHistory(selected.id)}
         </div>
       </section>

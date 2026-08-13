@@ -212,4 +212,66 @@ describe('cognition feature aggregate layer', () => {
     ]);
   });
 
+  // 边界字段在数据层和能力包交付端都已生效（delivery 按 targetAgentIds /
+  // forbiddenWhen 真实过滤），但展示层此前完全看不到，用户无从解释一条资产
+  // 为什么没被带进某次任务。这条守的是「资产上写了，摘要里就必须有」。
+  it('carries the formal asset boundary contract through to the summary', async () => {
+    const users = await import('../../../src/main/features/users');
+    users.activateUser(UID);
+    const recallCandidates = await import('../../../src/main/features/recall/candidate-service');
+    const cognition = await import('../../../src/main/features/cognition');
+
+    const candidate = await recallCandidates.saveRecallCandidate(UID, {
+      judgment: 'Escalate to a human before touching production credentials.',
+      suggestedType: 'rule',
+      suggestedScope: 'project',
+      sourceRefs: [{ kind: 'conversation', id: 'conv-boundary' }],
+      applicableWhen: ['处理线上事故'],
+      forbiddenWhen: ['演示环境'],
+      confidence: 0.8,
+    });
+    const { asset } = await recallCandidates.promoteRecallCandidate(UID, candidate.id, {
+      sensitivity: 'L2',
+      targetAgentIds: ['ag-oncall'],
+    });
+
+    const summaries = await cognition.listCognitionAssets(UID);
+    const summary = summaries.find((item) => item.id === asset.id);
+    expect(summary).toBeDefined();
+    expect(summary).toEqual(expect.objectContaining({
+      applicableWhen: ['处理线上事故'],
+      forbiddenWhen: ['演示环境'],
+      sensitivity: 'L2',
+      targetAgentIds: ['ag-oncall'],
+      confidence: 0.8,
+    }));
+  });
+
+  it('keeps "delivered to nobody" distinct from "unrestricted" in the summary', async () => {
+    // 空数组和缺失在交付端含义相反，摘要层不能把两者压成同一个形状。
+    const users = await import('../../../src/main/features/users');
+    users.activateUser(UID);
+    const recallCandidates = await import('../../../src/main/features/recall/candidate-service');
+    const cognition = await import('../../../src/main/features/cognition');
+
+    const open = await recallCandidates.saveRecallCandidate(UID, {
+      judgment: 'Unrestricted rule for everyone.',
+      suggestedType: 'rule', suggestedScope: 'project',
+      sourceRefs: [{ kind: 'conversation', id: 'conv-open' }],
+    });
+    const nobody = await recallCandidates.saveRecallCandidate(UID, {
+      judgment: 'Quarantined rule pending review.',
+      suggestedType: 'rule', suggestedScope: 'project',
+      sourceRefs: [{ kind: 'conversation', id: 'conv-nobody' }],
+    });
+    const openAsset = (await recallCandidates.promoteRecallCandidate(UID, open.id)).asset;
+    const nobodyAsset = (await recallCandidates.promoteRecallCandidate(UID, nobody.id, {
+      targetAgentIds: [],
+    })).asset;
+
+    const summaries = await cognition.listCognitionAssets(UID);
+    expect(summaries.find((item) => item.id === openAsset.id)?.targetAgentIds).toBeUndefined();
+    expect(summaries.find((item) => item.id === nobodyAsset.id)?.targetAgentIds).toEqual([]);
+  });
+
 });

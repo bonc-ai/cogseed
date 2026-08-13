@@ -1,3 +1,7 @@
+// 敏感级别直接复用正式资产的定义，不在这一层另起一套枚举——展示层重新定义
+// 分级会让两处日久漂移，而分级是安全语义。
+import type { AbilityAssetSensitivity } from '../recall/asset-semantics';
+
 export type CognitionCandidateSource = 'personal_ontology' | 'p3394_experience' | 'p3394_patch';
 export type CognitionCandidateType = 'preference' | 'ontology' | 'rule' | 'experience' | 'skill_evolution';
 export type CognitionCandidateStatus = 'pending' | 'accepted' | 'deferred' | 'rejected';
@@ -133,6 +137,24 @@ export interface CognitionAssetSummary {
   security?: CognitionSecurityView;
   owner: string;
   scope: string;
+  /**
+   * 正式资产的边界契约，原样透传自 `RecallAbilityAssetRecord`，不在这一层加工。
+   *
+   * 下面四个边界字段此前只存在于数据层与能力包交付端（`capability-pack-delivery`
+   * 按 `targetAgentIds` 和 `forbiddenWhen` 真实过滤过），展示层却完全看不到，
+   * 于是用户无法判断一条资产为什么被带上或被漏掉。
+   *
+   * 缺失一律表示「没记录过」，不表示「无限制」——尤其 `forbiddenWhen` 为空
+   * 只代表没人写过禁用条件，消费方不得据此推断该资产随处可用。
+   */
+  applicableWhen?: string[];
+  forbiddenWhen?: string[];
+  /** L0/L1/L2。缺失=没分过级，不等于 L0。L3 被准入闸挡在候选之前，不会出现。 */
+  sensitivity?: AbilityAssetSensitivity;
+  /** 限定接收方。缺失=不限定；空数组=谁都不给。 */
+  targetAgentIds?: string[];
+  /** 识别器给出的置信度 0..1；缺失就是缺失，不补默认值。 */
+  confidence?: number;
   workspaceRefs: string[];
   receiptRefs: string[];
   candidateRefs: string[];
