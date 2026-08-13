@@ -5,7 +5,6 @@ import * as path from 'node:path';
 
 import { createCrossSessionMemoryTool, type MemoryTier } from '../../../../src/core-agent/src/tools/memory-tool';
 import { createProjectInstructionsTool } from '../../../../src/core-agent/src/tools/project-instructions-tool';
-import { createProjectTasksTool } from '../../../../src/core-agent/src/tools/project-tasks-tool';
 
 vi.mock('../../../../src/main/model/client', () => ({
   async *streamChatWithModel() {
@@ -35,10 +34,9 @@ afterEach(() => {
 });
 
 async function setupProjectStateTools() {
-  const [projects, memory, projectTasks] = await Promise.all([
+  const [projects, memory] = await Promise.all([
     import('../../../../src/main/features/projects'),
     import('../../../../src/main/features/memory'),
-    import('../../../../src/main/features/project_tasks'),
   ]);
   const created = await projects.createProject(UID, 'Tool integration');
   if (!created.ok) throw new Error(`create failed: ${created.error}`);
@@ -55,47 +53,11 @@ async function setupProjectStateTools() {
     list: (tier: MemoryTier) => memory.listEntries(UID, memoryScope(tier)),
   };
   const memoryTool = createCrossSessionMemoryTool(memoryHandler, { includeProjectTier: true });
-  const tasksTool = createProjectTasksTool({
-    async list() {
-      const tasks = await projectTasks.listTasks(UID, pid);
-      return { ok: true, tasks: tasks.map(projectTasks.taskView), progress: projectTasks.computeProgress(tasks) };
-    },
-    async create(input) {
-      const result = await projectTasks.createTask(UID, pid, {
-        title: input.title,
-        detail: input.detail,
-        status: input.status,
-        owner_agent: input.owner,
-        created_by: 'Commander',
-      });
-      return result.ok
-        ? { ok: true, task: projectTasks.taskView(result.task) }
-        : { ok: false, error: result.error };
-    },
-    async update(taskId, patch) {
-      const result = await projectTasks.updateTask(UID, pid, taskId, {
-        title: patch.title,
-        detail: patch.detail,
-        status: patch.status,
-        owner_agent: patch.owner,
-        result_ref: patch.result_ref,
-      });
-      return result.ok
-        ? { ok: true, task: projectTasks.taskView(result.task) }
-        : { ok: false, error: result.error };
-    },
-    async complete(taskId, resultRef) {
-      const result = await projectTasks.completeTask(UID, pid, taskId, resultRef);
-      return result.ok
-        ? { ok: true, task: projectTasks.taskView(result.task) }
-        : { ok: false, error: result.error };
-    },
-  });
-  return { projects, memory, projectTasks, pid, instructionsTool, memoryHandler, memoryTool, tasksTool };
+  return { projects, memory, pid, instructionsTool, memoryHandler, memoryTool };
 }
 
 describe('project state tools → durable feature stores', () => {
-  it('round-trips instructions, durable memory, and task progress through real handlers', async () => {
+  it('round-trips instructions and durable memory through real handlers', async () => {
     const state = await setupProjectStateTools();
     const ctx = {} as any;
 
@@ -113,27 +75,6 @@ describe('project state tools → durable feature stores', () => {
     }, ctx);
     expect(remembered.isError).toBe(false);
     expect(state.memory.formatForSystemPrompt(UID, undefined, state.pid)).toContain('The payment provider is Stripe.');
-
-    const created = await state.tasksTool.execute({
-      action: 'create',
-      title: 'Implement webhook retries',
-      detail: 'Retry transient failures three times.',
-      owner: 'Backend',
-    }, ctx);
-    expect(created.isError).toBe(false);
-    const taskId = JSON.parse(created.content).task.id as string;
-    expect(await state.projectTasks.formatProjectStatusForTurn(UID, state.pid))
-      .toContain('Implement webhook retries');
-
-    const completed = await state.tasksTool.execute({
-      action: 'complete',
-      task_id: taskId,
-      result_ref: 'chat-checkout-result',
-    }, ctx);
-    expect(completed.isError).toBe(false);
-    const finalStatus = await state.projectTasks.formatProjectStatusForTurn(UID, state.pid);
-    expect(finalStatus).toContain('Progress: 1/1 done, 0 open.');
-    expect(finalStatus).toContain('No open tasks — all are done/cancelled.');
   });
 
   it('enforces sub-agent project-memory read-only mode against the same real store', async () => {

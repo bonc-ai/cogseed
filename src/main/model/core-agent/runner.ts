@@ -49,7 +49,6 @@ import {
   writeProjectInstructions,
 } from '../../features/projects';
 import { formatRoleProfileForSystemPrompt } from '../../features/spaces';
-import * as projectTasks from '../../features/project_tasks';
 import * as metacognition from '../../features/metacognition';
 import { assertAgentChatDispatchable } from '../../features/agent-dispatch-policy';
 import { appendAgentSkill, listAgentSummaries } from '../../features/agents';
@@ -617,49 +616,8 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     }));
   }
 
-  // Project tasks: the project's shared, structured work backlog. Real work
-  // sessions in a project only (commander + agents) — gated like the memory
-  // project tier (`memoryAgentScope`), so edit / one-shot / reflection sessions
-  // never get it. Owner is a display NAME here (best-effort — the store
-  // validates a resolved id when the UI supplies one; the name is kept for
-  // display).
   if (uid && memoryAgentScope && params.projectId) {
     const pid = params.projectId;
-    const cid = params.cid || '';
-    const toView = (task: import('../../features/project_tasks').ProjectTask) => projectTasks.taskView(task);
-    const projectTasksHandler = {
-      list: async () => {
-        const tasks = await projectTasks.listTasks(uid, pid);
-        return { ok: true, tasks: tasks.map(toView), progress: projectTasks.computeProgress(tasks) };
-      },
-      create: async (input: { title: string; detail?: string; owner?: string; status?: projectTasks.TaskStatus }) => {
-        const r = await projectTasks.createTask(uid, pid, {
-          title: input.title,
-          ...(input.detail !== undefined ? { detail: input.detail } : {}),
-          ...(input.status !== undefined ? { status: input.status } : {}),
-          ...(input.owner ? { owner_agent: input.owner } : {}),
-          created_by: 'agent',
-          ...(cid ? { origin_cid: cid } : {}),
-        });
-        return r.ok ? { ok: true, task: toView(r.task) } : { ok: false, error: (r as { error: string }).error };
-      },
-      update: async (taskId: string, patch: { title?: string; detail?: string; status?: projectTasks.TaskStatus; owner?: string; result_ref?: string }) => {
-        const r = await projectTasks.updateTask(uid, pid, taskId, {
-          ...(patch.title !== undefined ? { title: patch.title } : {}),
-          ...(patch.detail !== undefined ? { detail: patch.detail } : {}),
-          ...(patch.status !== undefined ? { status: patch.status } : {}),
-          ...(patch.owner !== undefined ? { owner_agent: patch.owner } : {}),
-          ...(patch.result_ref !== undefined ? { result_ref: patch.result_ref } : {}),
-        });
-        return r.ok ? { ok: true, task: toView(r.task) } : { ok: false, error: (r as { error: string }).error };
-      },
-      complete: async (taskId: string, resultRef?: string) => {
-        const r = await projectTasks.completeTask(uid, pid, taskId, resultRef);
-        return r.ok ? { ok: true, task: toView(r.task) } : { ok: false, error: (r as { error: string }).error };
-      },
-    };
-    const { createProjectTasksTool } = await import('../../../core-agent/src/tools/project-tasks-tool');
-    injectedTools.push(createProjectTasksTool(projectTasksHandler));
 
     // Project instructions (ORKAS.md): the project's goal + rules. Commander
     // writes; sub-agents read it from their system prompt but don't get this
@@ -1078,14 +1036,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // (core-agent AgentRunParams.turnEphemeral → getMessagesForModel), the
   // uncached tail after all history, so the system + history cache prefix stays
   // byte-stable across turns. See Common/docs/plans/context-cost-optimization.md.
-  // Live project task board (project sessions only). Rides the turn — NOT the
-  // cached system prefix — because it changes as tasks update. The goal/rules
-  // stay in ORKAS.md (prefix) and decisions in the memory block; this is the
-  // task layer. See features/project_tasks.ts::formatProjectStatusForTurn.
-  const projectStatusBlock = (uid && memoryAgentScope && params.projectId)
-    ? await projectTasks.formatProjectStatusForTurn(uid, params.projectId)
-    : '';
-  const turnEphemeral = [orchestrationBlock, volatileTail, projectStatusBlock]
+  const turnEphemeral = [orchestrationBlock, volatileTail]
     .filter((b) => b && b.trim())
     .join('\n\n');
 

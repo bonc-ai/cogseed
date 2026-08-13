@@ -383,11 +383,6 @@ export const projectFilesDir           = (uid: string, pid: string) => projectCo
 // Legacy project Library source from v3 and earlier. Only migration/fallback
 // paths should read this; new writes use projectFilesDir()/contexts/.
 export const projectLegacyFilesDir     = (uid: string, pid: string) => path.join(projectDir(uid, assertProjectSegment(pid)), 'files');
-// Structured task backlog (the project work-state's task layer). One file per
-// task, cloud-synced with the project (directory-is-truth, no aggregate index —
-// mirrors the project listing). See Common/docs/plans/project-work-state.md.
-export const projectTasksDir        = (uid: string, pid: string) => path.join(projectDir(uid, assertProjectSegment(pid)), 'tasks');
-export const projectTaskFile        = (uid: string, pid: string, tid: string) => path.join(projectTasksDir(uid, pid), `${assertProjectSegment(tid)}.json`);
 export const projectLocalDir        = (uid: string, pid: string) => path.join(userLocalRoot(uid), 'projects', pid);
 export const projectLibraryVectorDbPath = (uid: string, pid: string) => path.join(projectLocalDir(uid, pid), 'contexts', '.kb', 'vector.db');
 export const agentDir            = (uid: string, agentId: string) => path.join(userAgentsDir(uid), agentId || '_default');

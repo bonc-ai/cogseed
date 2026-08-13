@@ -59,7 +59,7 @@ Targets:
 - shared: stable facts that hold across projects and matter to every agent. Use sparingly.
 - user: stable user-wide profile/preferences every agent should know.
 
-Use when the user asks to remember something, gives a durable correction/preference, or states a future-relevant fact. Do not save trivia, raw dumps/logs, rediscoverable facts, the current task's working decisions, one-off task state, plans, progress, or temporary debug notes. Live progress and todo status belong in project_tasks.
+Use when the user asks to remember something, gives a durable correction/preference, or states a future-relevant fact. Do not save trivia, raw dumps/logs, rediscoverable facts, the current task's working decisions, one-off task state, plans, progress, or temporary debug notes.
 
 Current non-empty entries for these targets are already present in your system context. Do not call list merely to load or refresh context. Use list only when the user explicitly asks to inspect stored memory or when an exact current entry is needed for replace/remove.
 

@@ -135,11 +135,11 @@ Conversation.space_id (string | null)
 
 ---
 
-## 四、开放问题（执行前需再确认）
+## 四、开放问题（已决策 2026-08-13）
 
-1. **项目文件树（project_files.ts）**：删法 B 后，项目文件树是「挂到空间下」还是「砍掉」？默认挂空间下（空间文件树），但若空间不需要文件树则砍掉，省 892 行。
-2. **项目库索引（project_library_indexer.ts）**：同样挂空间 or 砍掉？这影响 KB 检索的粒度。
-3. **存量无 space_id 的项目**：迁移时，某项目没绑空间（space_id 空），它下面的会话迁到哪？默认：迁到 orphan（space_id=null），其文件挪到 orphan 归档目录。
+1. **项目文件树（project_files.ts）**：✅ 挂空间（选项2：后端+IPC+前端 UI 一起搬）。空间文件树根 = `spaces/<sid>/contexts/`，前端文件树 UI 随项目废弃迁入空间（本期一并做）。
+2. **项目库索引（project_library_indexer.ts）**：✅ 挂空间。索引键 `project_id` → `space_id`，向量库 `local/spaces/<sid>/contexts/.kb/`。与文件树绑定，T4.3+T4.4 作为一对一起迁移。
+3. **存量无 space_id 的项目**：迁移时迁到 orphan（space_id=null），文件挪 orphan 归档目录（维持原默认）。
 
 ---
 

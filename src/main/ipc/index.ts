@@ -24,7 +24,6 @@ import * as projects from '../features/projects';
 import * as spaces from '../features/spaces';
 import * as spacesArtifacts from '../features/spaces_artifacts';
 import * as projectFiles from '../features/project_files';
-import * as projectTasks from '../features/project_tasks';
 import * as projectLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
 import * as companionRepro from '../features/companion_repro';
@@ -1280,47 +1279,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true };
   },
 
-  // ── Project tasks (structured work backlog — user + agent shared) ─────────
-  'projects.tasks.list': async ({ projectId } = {}, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    const tasks = await projectTasks.listTasks(ctx.userId, projectId);
-    return { tasks, progress: projectTasks.computeProgress(tasks) };
-  },
-
-  'projects.tasks.create': async ({ projectId, title, detail, status, owner_agent, owner_agent_id, depends_on } = {}, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (typeof title !== 'string') throw new Error('invalid title');
-    const r = await projectTasks.createTask(ctx.userId, projectId, {
-      title, detail, status, owner_agent, owner_agent_id, depends_on, created_by: 'user',
-    });
-    if (!r.ok) throw new Error((r as { error: string }).error);
-    return { task: r.task };
-  },
-
-  'projects.tasks.update': async ({ projectId, taskId, title, detail, status, owner_agent, owner_agent_id, result_ref } = {}, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
-    const r = await projectTasks.updateTask(ctx.userId, projectId, taskId, { title, detail, status, owner_agent, owner_agent_id, result_ref });
-    if (!r.ok) throw new Error((r as { error: string }).error);
-    return { task: r.task };
-  },
-
-  'projects.tasks.complete': async ({ projectId, taskId, resultRef } = {}, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
-    const r = await projectTasks.completeTask(ctx.userId, projectId, taskId, resultRef);
-    if (!r.ok) throw new Error((r as { error: string }).error);
-    return { task: r.task };
-  },
-
-  'projects.tasks.delete': async ({ projectId, taskId } = {}, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
-    const r = await projectTasks.deleteTask(ctx.userId, projectId, taskId);
-    if (!r.ok) throw new Error((r as { error: string }).error);
-    return { ok: true };
-  },
-
   'projects.files.list': async ({ projectId }, ctx) => {
     if (!safeId(projectId)) throw new Error('invalid projectId');
     if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
@@ -1888,44 +1846,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         receiptExecutionId,
       }),
     };
-  },
-
-  'workbench.actionPlan.read': async ({ projectId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid project id');
-    return { ok: true, plan: await workbench.projectActionPlan(ctx.userId, projectId) };
-  },
-
-  'workbench.taskRuns.list': async ({ projectId, taskId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid project id');
-    if (!safeId(taskId)) throw new Error('invalid task id');
-    return { ok: true, runs: await workbench.listTaskRuns(ctx.userId, projectId, taskId) };
-  },
-
-  'workbench.taskRun.start': async ({ projectId, taskId, baselineId, role }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid project id');
-    if (!safeId(taskId)) throw new Error('invalid task id');
-    if (!safeId(baselineId)) throw new Error('invalid baseline id');
-    const baseline = await workbench.readBaseline(ctx.userId, baselineId);
-    const skillDir = _resolveWorkbenchSkillDir(ctx.userId, baseline.skill_ref.asset_id);
-    if (!skillDir) return { ok: false, refusal: 'baseline_unreadable' };
-    const started = await workbench.startTaskRun(ctx.userId, {
-      projectId,
-      taskId,
-      baselineId,
-      skillDir,
-      allowedRoots: [skillDir],
-      role: role === 'agent-a' ? 'agent-a' : 'agent-b',
-      // The Workspace surface starts an in-process run; CLI-backed dispatch
-      // keeps flowing through the local-agents runner, which owns its own
-      // adapter identity.
-      kind: 'core-agent',
-      boundary: 'real',
-      permissionMode: 'ask',
-    });
-    // A refusal is a normal outcome (a drifted or absent baseline must block),
-    // so it is reported rather than thrown.
-    if (started.ok !== true) return { ok: false, refusal: started.reason };
-    return { ok: true, executionId: started.executionId, role: started.role };
   },
 
   'p3394.behaviorContrast.start': async ({ contrastId, receiptExecutionId, task, attachmentIds, conversationId, agentId, executionKind }, ctx) => {
