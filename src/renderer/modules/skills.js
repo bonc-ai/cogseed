@@ -70,6 +70,11 @@ function _cognitionStatusLabel(status) {
     degraded: _cognitionText('cognition.status_degraded', '降级'),
     rejected: _cognitionText('cognition.status_rejected', '拒绝'),
     pending: _cognitionText('cognition.status_pending', '待确认'),
+    pending_review: _cognitionText('cognition.status_pending', '待确认'),
+    observed: _cognitionText('cognition.status_observed', '观察中'),
+    weak_observation: _cognitionText('cognition.status_observed', '待补证'),
+    deferred: _cognitionText('cognition.status_deferred', '稍后处理'),
+    ignored: _cognitionText('cognition.status_ignored', '已忽略'),
     accepted: _cognitionText('cognition.status_accepted', '已确认'),
     preview: _cognitionText('cognition.status_preview', '预览'),
     confirmed: _cognitionText('cognition.status_confirmed', '已确认'),
@@ -807,7 +812,7 @@ function _captureTaskDetail(capture) {
     : '';
   const workflowStatus = _captureWorkflowStatus(capture);
   const reviewMetrics = workflowStatus !== 'completed' && reviewSummary.total ? `<div class="recall-capture-review-summary">
-    ${reviewSummary.promoted ? `<span><b>${escapeHtml(_cognitionText('cognition.candidate_status_promoted', '已自动入库'))}</b>${escapeHtml(String(reviewSummary.promoted))}</span>` : ''}
+    ${reviewSummary.promoted ? `<span><b>${escapeHtml(_cognitionText('cognition.candidate_status_promoted', '已确认入库'))}</b>${escapeHtml(String(reviewSummary.promoted))}</span>` : ''}
     ${reviewSummary.pending + reviewSummary.deferred ? `<span><b>${escapeHtml(_cognitionText('cognition.candidate_status_pending', '需要确认'))}</b>${escapeHtml(String(reviewSummary.pending + reviewSummary.deferred))}</span>` : ''}
     ${reviewSummary.rejected ? `<span><b>${escapeHtml(_cognitionText('cognition.candidate_status_rejected', '已忽略'))}</b>${escapeHtml(String(reviewSummary.rejected))}</span>` : ''}
   </div>` : '';
@@ -841,7 +846,7 @@ function _renderCaptureSettings() {
       : _cognitionText('cognition.capture_model_unconfigured', '尚未配置模型'));
   const policies = ['smart', 'nightly', 'manual'].map((policy) => `<button type="button" class="recall-capture-policy${settings.executionPolicy === policy ? ' is-active' : ''}" data-recall-capture-policy="${policy}" aria-pressed="${settings.executionPolicy === policy ? 'true' : 'false'}" ${settings.enabled ? '' : 'disabled'}>${escapeHtml(_capturePolicyLabel(policy))}</button>`).join('');
   const reviewPolicy = settings.reviewPolicy === 'manual' ? 'manual' : 'auto';
-  const reviewPolicies = ['auto', 'manual'].map((policy) => `<button type="button" class="recall-capture-policy${reviewPolicy === policy ? ' is-active' : ''}" data-recall-review-policy="${policy}" aria-pressed="${reviewPolicy === policy ? 'true' : 'false'}" ${settings.enabled ? '' : 'disabled'}>${escapeHtml(_cognitionText(`cognition.capture_review_policy_${policy}`, policy === 'auto' ? '自动入库' : '逐条确认'))}</button>`).join('');
+  const reviewPolicies = ['auto', 'manual'].map((policy) => `<button type="button" class="recall-capture-policy${reviewPolicy === policy ? ' is-active' : ''}" data-recall-review-policy="${policy}" aria-pressed="${reviewPolicy === policy ? 'true' : 'false'}" ${settings.enabled ? '' : 'disabled'}>${escapeHtml(_cognitionText(`cognition.capture_review_policy_${policy}`, policy === 'auto' ? '自动整理' : '集中确认'))}</button>`).join('');
   const quietMinutes = Number.isInteger(settings.quietMinutes) ? settings.quietMinutes : 10;
   const quietOptions = [...new Set([5, 10, 30, quietMinutes])].sort((left, right) => left - right)
     .map((minutes) => `<option value="${minutes}" ${quietMinutes === minutes ? 'selected' : ''}>${escapeHtml(_cognitionText('cognition.capture_quiet_minutes_option', '{count} 分钟').replace('{count}', String(minutes)))}</option>`).join('');
@@ -851,7 +856,7 @@ function _renderCaptureSettings() {
     : _cognitionText('common.disabled', '已关闭');
   const reviewLabel = _cognitionText(
     `cognition.capture_review_policy_${reviewPolicy}`,
-    reviewPolicy === 'auto' ? '自动入库' : '逐条确认',
+    reviewPolicy === 'auto' ? '自动整理' : '集中确认',
   );
   const modelWarning = modelReady ? '' : `<div class="recall-capture-model-state is-compact"><div><label>${escapeHtml(_cognitionText('cognition.capture_model', '沉淀模型'))}</label><strong>${escapeHtml(modelName)}</strong><span class="skills-cognition-status is-configuration_required">${escapeHtml(_cognitionText('cognition.capture_configuration_required', '需要配置模型'))}</span></div><button type="button" class="btn btn-sm" data-recall-capture-settings>${escapeHtml(_cognitionText('cognition.capture_configure_action', '配置模型'))}</button></div>`;
   return `<section class="recall-capture-control-panel${expanded ? ' is-expanded' : ''}">
@@ -867,7 +872,7 @@ function _renderCaptureSettings() {
       </div>
       <div class="recall-capture-control-grid">
       <div class="recall-capture-control-field"><label>${escapeHtml(_cognitionText('cognition.capture_execution_policy', '执行时机'))}</label><div class="recall-capture-policy-group" role="group">${policies}</div></div>
-      <div class="recall-capture-control-field"><label>${escapeHtml(_cognitionText('cognition.capture_review_policy', '保存方式'))}</label><div class="recall-capture-policy-group is-review" role="group">${reviewPolicies}</div><span>${escapeHtml(_cognitionText('cognition.capture_review_policy_hint', '明确内容自动入库；不确定内容仍会等待确认'))}</span></div>
+      <div class="recall-capture-control-field"><label>${escapeHtml(_cognitionText('cognition.capture_review_policy', '候选整理'))}</label><div class="recall-capture-policy-group is-review" role="group">${reviewPolicies}</div><span>${escapeHtml(_cognitionText('cognition.capture_review_policy_hint', '系统只整理候选；确认后才会写入正式资产'))}</span></div>
       <div class="recall-capture-control-field recall-capture-quiet-window" ${settings.executionPolicy === 'smart' ? '' : 'hidden'}><label>${escapeHtml(_cognitionText('cognition.capture_quiet_period', '静默等待'))}</label><select data-recall-capture-quiet-minutes ${settings.enabled ? '' : 'disabled'}>${quietOptions}</select><span>${escapeHtml(_cognitionText('cognition.capture_quiet_hint', '期间继续对话会重新计时'))}</span></div>
       <div class="recall-capture-control-field recall-capture-night-window" ${settings.executionPolicy === 'nightly' ? '' : 'hidden'}><label>${escapeHtml(_cognitionText('cognition.capture_nightly_window', '夜间窗口'))}</label><div><input type="time" data-recall-capture-night-start value="${escapeHtml(settings.nightlyStart)}" ${settings.enabled ? '' : 'disabled'}><span>–</span><input type="time" data-recall-capture-night-end value="${escapeHtml(settings.nightlyEnd)}" ${settings.enabled ? '' : 'disabled'}></div><label class="recall-capture-check"><input type="checkbox" data-recall-capture-catch-up ${settings.catchUpMissed ? 'checked' : ''} ${settings.enabled ? '' : 'disabled'}>${escapeHtml(_cognitionText('cognition.capture_catch_up', '错过后空闲补跑'))}</label></div>
       </div>
@@ -978,7 +983,7 @@ function _renderCognitionOverviewMetrics() {
   const sources = Array.isArray(_skillsCognitionState.sources) ? _skillsCognitionState.sources : [];
   const captures = _skillsCognitionState.captureCounts || {};
   const candidates = (Array.isArray(_skillsCognitionState.recallCandidates) ? _skillsCognitionState.recallCandidates : [])
-    .filter((candidate) => candidate.status === 'pending' || candidate.status === 'deferred');
+    .filter((candidate) => candidate.status === 'pending_review' || candidate.status === 'failed');
   const assets = (Array.isArray(_skillsCognitionState.assets) ? _skillsCognitionState.assets : [])
     .filter((asset) => asset.status === 'active');
   const skillCandidates = assets.filter((asset) => (
@@ -1061,7 +1066,7 @@ function _renderCognitionPipelineStatus() {
   const sources = Array.isArray(_skillsCognitionState.sources) ? _skillsCognitionState.sources : [];
   const captures = Array.isArray(_skillsCognitionState.recentCaptures) ? _skillsCognitionState.recentCaptures : [];
   const pendingCandidates = (Array.isArray(_skillsCognitionState.recallCandidates) ? _skillsCognitionState.recallCandidates : [])
-    .filter((candidate) => candidate.status === 'pending' || candidate.status === 'deferred');
+    .filter((candidate) => candidate.status === 'pending_review' || candidate.status === 'failed');
   const assets = Array.isArray(_skillsCognitionState.assets) ? _skillsCognitionState.assets : [];
   const latestCapture = captures[0];
   let next = _cognitionText('cognition.pipeline_next_conversation', '下一步：完成一轮会话，系统会自动整理内容');
@@ -1106,7 +1111,7 @@ function renderSkillsCognitionOverview() {
   if (!host) return;
   const d = _skillsCognitionState.dashboard || {};
   const candidates = (Array.isArray(_skillsCognitionState.recallCandidates) ? _skillsCognitionState.recallCandidates : [])
-    .filter((candidate) => candidate.status === 'pending' || candidate.status === 'deferred');
+    .filter((candidate) => candidate.status === 'pending_review' || candidate.status === 'failed');
   const warnings = Array.isArray(d.warnings) ? d.warnings : [];
   const primarySections = new Set(['dashboard', 'recallCandidates', 'assets', 'sources', 'captures', 'recentCaptures', 'captureSettings']);
   const loadErrors = (Array.isArray(_skillsCognitionState.loadErrors) ? _skillsCognitionState.loadErrors : [])
@@ -1150,7 +1155,7 @@ function renderSkillsCognitionCandidates() {
     .find((capture) => capture.id === _skillsCognitionState.selectedCaptureId);
   const selectedIds = selectedCapture ? new Set(selectedCapture.candidateIds || []) : null;
   const recallItems = allCandidates.filter((candidate) => (
-    (candidate.status === 'pending' || candidate.status === 'deferred')
+    (candidate.status === 'pending_review' || candidate.status === 'failed')
     && (!selectedIds || selectedIds.has(candidate.id))
   ));
   if (!recallItems.length) {
@@ -1159,10 +1164,15 @@ function renderSkillsCognitionCandidates() {
   }
   const reviewActions = `<div class="recall-capture-review-head-actions"><span class="skills-cognition-status is-review_ready">${escapeHtml(String(recallItems.length))}</span>${recallItems.length > 1 ? `<button type="button" class="btn btn-sm btn-primary" data-recall-candidate-promote-all>${escapeHtml(_cognitionText('cognition.capture_save_all_to_recall', '全部保存'))}</button>` : ''}</div>`;
   host.innerHTML = `<section class="recall-capture-review"><div class="recall-workbench-section-head"><div><h2>${escapeHtml(_cognitionText('cognition.capture_review_title', '待审核内容'))}</h2><p>${escapeHtml(_cognitionText('cognition.capture_review_hint', '确认后写入 Recall；不需要的内容可以忽略'))}</p></div>${reviewActions}</div><div class="skills-cognition-record-list recall-candidate-list">${recallItems.map((candidate) => {
-    const actions = candidate.status === 'pending' || candidate.status === 'deferred' ? ['promote', 'edit', 'reject'] : [];
+    const primaryAction = candidate.suggestedAction === 'keep_current'
+      ? 'keep-current'
+      : candidate.suggestedAction === 'reject' ? 'reject' : 'promote';
+    const actions = candidate.status === 'pending_review' || candidate.status === 'failed'
+      ? [primaryAction, 'edit', 'defer', ...(primaryAction === 'reject' ? [] : ['reject']), 'ignore']
+      : [];
     const editing = _skillsCognitionState.editingRecallCandidateId === candidate.id;
-    const editForm = editing ? `<div class="skills-cognition-detail-block recall-candidate-editor"><label>${escapeHtml(_cognitionText('cognition.judgment', '我的判断'))}<textarea data-recall-edit-judgment>${escapeHtml(candidate.judgment || '')}</textarea></label><label>${escapeHtml(_cognitionText('cognition.summary', '摘要'))}<input data-recall-edit-summary value="${escapeHtml(candidate.summary || '')}"></label><label>${escapeHtml(_cognitionText('cognition.scope', '作用域'))}<input data-recall-edit-scope value="${escapeHtml(candidate.suggestedScope || '')}"></label><label>${escapeHtml(_cognitionText('cognition.type', '类型'))}<select data-recall-edit-type>${['personal','rule','template','skill_method'].map((type) => `<option value="${type}" ${candidate.suggestedType === type ? 'selected' : ''}>${escapeHtml(_abilityAssetCategoryLabel(type))}</option>`).join('')}</select></label><label>${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}<textarea data-recall-edit-evidence>${escapeHtml((candidate.sourceRefs || []).map((ref) => `${ref.kind}:${ref.id}`).join('\n'))}</textarea></label><div class="skills-cognition-actions"><button class="btn btn-sm btn-primary" data-recall-candidate-action="save-edit" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('common.save', '保存'))}</button><button class="btn btn-sm" data-recall-candidate-action="cancel-edit" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('common.cancel', '取消'))}</button></div></div>` : '';
-    return `<article class="skills-cognition-record cognition-candidate-row" data-recall-candidate-id="${escapeHtml(candidate.id)}"><div class="skills-cognition-record-head"><h2>${escapeHtml(candidate.summary || candidate.judgment || candidate.id)}</h2><span class="skills-cognition-status is-${escapeHtml(candidate.status || '')}">${escapeHtml(_cognitionStatusLabel(candidate.status))}</span></div><p>${escapeHtml(candidate.judgment || '')}</p><div class="skills-cognition-meta">${escapeHtml(_abilityAssetCategoryLabel(candidate.suggestedType))} · ${escapeHtml(candidate.suggestedScope || '')}</div><div class="skills-cognition-detail-block"><strong>${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}</strong><div class="skills-cognition-ref-row">${_renderCognitionInlineRefs(candidate.sourceRefs)}</div></div>${editForm}<div class="skills-cognition-actions">${actions.map((action) => `<button class="btn btn-sm ${action === 'promote' ? 'btn-primary' : ''}" data-recall-candidate-action="${escapeHtml(action)}" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(action === 'promote' ? _cognitionText('cognition.capture_save_to_recall', '保存到 Recall') : action === 'reject' ? _cognitionText('cognition.capture_ignore', '忽略') : _cognitionText('skills.edit', '编辑'))}</button>`).join('')}</div></article>`;
+    const editForm = editing ? `<div class="skills-cognition-detail-block recall-candidate-editor"><label>${escapeHtml(_cognitionText('cognition.judgment', '我的判断'))}<textarea data-recall-edit-judgment>${escapeHtml(candidate.judgment || '')}</textarea></label><label>${escapeHtml(_cognitionText('cognition.summary', '摘要'))}<input data-recall-edit-summary value="${escapeHtml(candidate.summary || '')}"></label><label>${escapeHtml(_cognitionText('cognition.scope', '作用域'))}<input data-recall-edit-scope value="${escapeHtml(candidate.suggestedScope || '')}"></label><label>${escapeHtml(_cognitionText('cognition.type', '类型'))}<select data-recall-edit-type>${['personal','rule','template','skill_method'].map((type) => `<option value="${type}" ${candidate.suggestedType === type ? 'selected' : ''}>${escapeHtml(_abilityAssetCategoryLabel(type))}</option>`).join('')}</select></label><label>${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}<textarea data-recall-edit-evidence>${escapeHtml((candidate.sourceRefs || []).map((ref) => `${ref.kind}:${ref.id}`).join('\n'))}</textarea></label><div class="skills-cognition-actions"><button class="btn btn-sm btn-primary" data-recall-candidate-action="save-and-promote" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('cognition.candidate_modify_and_save', '修改后保存'))}</button><button class="btn btn-sm" data-recall-candidate-action="cancel-edit" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('common.cancel', '取消'))}</button></div></div>` : '';
+    return `<article class="skills-cognition-record cognition-candidate-row" data-recall-candidate-id="${escapeHtml(candidate.id)}"><div class="skills-cognition-record-head"><h2>${escapeHtml(candidate.summary || candidate.judgment || candidate.id)}</h2><span class="skills-cognition-status is-${escapeHtml(candidate.status || '')}">${escapeHtml(_cognitionStatusLabel(candidate.status))}</span></div><p>${escapeHtml(candidate.judgment || '')}</p>${candidate.value ? `<p class="skills-cognition-meta">${escapeHtml(candidate.value)}</p>` : ''}<div class="skills-cognition-meta">${escapeHtml(_abilityAssetCategoryLabel(candidate.suggestedType))} · ${escapeHtml(candidate.suggestedScope || '')}</div>${candidate.failureMessage ? `<div class="skills-cognition-error">${escapeHtml(candidate.failureMessage)}</div>` : ''}<div class="skills-cognition-detail-block"><strong>${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}</strong><div class="skills-cognition-ref-row">${_renderCognitionInlineRefs(candidate.evidenceRefs || candidate.sourceRefs)}</div></div>${editForm}<div class="skills-cognition-actions">${actions.map((action) => `<button class="btn btn-sm ${action === primaryAction ? 'btn-primary' : ''}" data-recall-candidate-action="${escapeHtml(action)}" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(action === 'promote' ? _cognitionText('cognition.capture_save_to_recall', '保存到 Recall') : action === 'keep-current' ? _cognitionText('cognition.candidate_keep_current', '保持当前版本') : action === 'reject' ? _cognitionText('cognition.candidate_reject', '拒绝') : action === 'ignore' ? _cognitionText('cognition.capture_ignore', '忽略') : action === 'defer' ? _cognitionText('cognition.status_deferred', '稍后') : _cognitionText('skills.edit', '编辑'))}</button>`).join('')}</div></article>`;
   }).join('')}</div></section>`;
 }
 

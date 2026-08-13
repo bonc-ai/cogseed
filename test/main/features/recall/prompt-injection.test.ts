@@ -57,7 +57,7 @@ async function createAssetWith(input: { judgment: string; summary: string; sourc
       scope: 'personal',
     }],
   });
-  return candidates.promoteRecallCandidate('user-a', candidate.id);
+  return candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
 }
 
 const fakeSemanticOptions = {
