@@ -338,6 +338,7 @@ describe('auth › listProviders grouping', () => {
 
     // anthropic — both API-key and OAuth work against the same endpoint.
     const anth = providers.find((p) => p.id === 'anthropic')!;
+    expect(anth.providerKind).toBe('builtin');
     expect(anth.supportsApiKey).toBe(true);
     expect(anth.supportsOAuth).toBe(true);
     expect(anth.oauthProvider).toBe('anthropic');
@@ -687,6 +688,7 @@ describe('auth › custom providers', () => {
     expect(listed.providers).toContainEqual(expect.objectContaining({
       id: providerId,
       label: 'Custom Relay',
+      providerKind: 'custom',
       supportsApiKey: true,
       supportsOAuth: false,
       manualModel: false,

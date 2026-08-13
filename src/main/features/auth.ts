@@ -881,9 +881,12 @@ export interface ProfileView {
   lastUsed: number;
 }
 
+export type ProviderKind = 'builtin' | 'custom';
+
 export interface ProviderEntry {
   id: string;
   label: string;
+  providerKind: ProviderKind;
   featured: boolean;
   supportsApiKey: boolean;
   supportsOAuth: boolean;
@@ -1014,6 +1017,7 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
     return {
       id,
       label: providerLabel(id),
+      providerKind: 'builtin',
       featured: featuredIds.has(id),
       supportsApiKey,
       supportsOAuth,
@@ -1030,6 +1034,7 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
     providers.push({
       id: `cp:${custom.id}`,
       label: custom.name,
+      providerKind: 'custom',
       featured: false,
       supportsApiKey: true,
       supportsOAuth: false,
