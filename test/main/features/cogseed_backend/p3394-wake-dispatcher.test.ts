@@ -2,6 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 
 const startMateTask = vi.fn(async () => ({ status: 'running' }));
 const cancelMateTask = vi.fn();
+const resolveCogSeedAgentExecutionContext = vi.fn(async () => ({
+  agentId: 'agent-1',
+  agentName: 'Formal Agent',
+  workflow: 'Follow the formal workflow.',
+  skillList: ['skill-one'],
+  interactive: true,
+  runtime: { kind: 'in_process' as const },
+}));
 
 vi.mock('../../../../src/main/features/cogseed_backend/runtime-controller', () => ({
   mateRuntimeController: { startMateTask, cancelMateTask },
@@ -9,6 +17,13 @@ vi.mock('../../../../src/main/features/cogseed_backend/runtime-controller', () =
 
 vi.mock('../../../../src/main/features/cogseed_backend/coordinator', () => ({
   readMateCoordination: vi.fn(),
+}));
+
+vi.mock('../../../../src/main/features/cogseed_backend/agent-execution-context', () => ({
+  resolveCogSeedAgentExecutionContext,
+  buildCogSeedAgentRuntimeContext: vi.fn(() => [
+    { type: 'text', label: 'Formal Agent execution context', content: 'Follow the formal workflow.' },
+  ]),
 }));
 
 describe('CogSeed P3394 wake dispatcher', () => {
@@ -38,6 +53,11 @@ describe('CogSeed P3394 wake dispatcher', () => {
       sessionId: 'gconv-cid-1',
       agentId: 'agent-1',
       task: 'Continue interactively',
+      conversationId: 'cid-1',
+      executionKind: 'cogseed-native',
+      allowedSkillIds: ['skill-one'],
+      context: [{ type: 'text', label: 'Formal Agent execution context', content: 'Follow the formal workflow.' }],
     }));
+    expect(startMateTask.mock.calls[0]?.[1]).not.toHaveProperty('profileId');
   });
 });

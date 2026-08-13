@@ -123,6 +123,9 @@ export function hydrateMateSessionRecord(
     actorRole: row.actorRole || identity.actorRole,
     ...(row.actorId || identity.actorId ? { actorId: row.actorId || identity.actorId } : {}),
     ...(row.conversationId || identity.conversationId ? { conversationId: row.conversationId || identity.conversationId } : {}),
+    ...(row.agentId || (identity.sessionKind === 'member' ? row.actorId || identity.actorId : undefined)
+      ? { agentId: row.agentId || row.actorId || identity.actorId }
+      : {}),
     ...(row.compatibilitySessionId || identity.externalSessionId !== identity.canonicalSessionId
       ? { compatibilitySessionId: row.compatibilitySessionId || identity.externalSessionId }
       : {}),

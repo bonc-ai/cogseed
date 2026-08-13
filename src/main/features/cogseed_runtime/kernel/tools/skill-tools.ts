@@ -76,6 +76,9 @@ export async function runRuntimeSkillTool(
   }
   try {
     const skillId = validateSkillToken(input.skill_id, 'skill_id');
+    if (!(ctx.allowedSkillIds ?? []).includes(skillId)) {
+      return formatError('E_RUNTIME_PERMISSION_DENIED', 'runtime skill is outside the persisted Agent allowlist');
+    }
     const script = validateSkillToken(input.script, 'script');
     const cwd = typeof input.cwd === 'string' && input.cwd.trim()
       ? normalizeRuntimePath(input.cwd, ctx.allowedRoots)

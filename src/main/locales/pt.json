@@ -203,5 +203,6 @@
   "expense_agent.submit.message": "Enviar este reembolso para {target}?",
   "expense_agent.submit.detail": "Caso: {case}\\nImpressão dos materiais: {hash}\\n\\nIsso cria uma solicitação de aprovação no Feishu. Não aprova o pagamento; os aprovadores designados revisam no Feishu.",
   "expense_agent.submit.unavailable": "Não foi possível mostrar a confirmação; nada foi enviado.",
-  "expense_agent.submit.cancelled": "O envio foi cancelado; nenhum dado foi enviado ao Feishu."
+  "expense_agent.submit.cancelled": "O envio foi cancelado; nenhum dado foi enviado ao Feishu.",
+  "cogseed.runtime_failed": "O agente não conseguiu concluir esta resposta. Tente novamente."
 }

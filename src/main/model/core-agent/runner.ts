@@ -229,6 +229,8 @@ export interface BuildRunnerParams {
    * loop budget and the full tool set.
    */
   disableTools?: boolean;
+  /** Restrict tools to a read/search allowlist only. */
+  toolAccess?: 'read-only';
   /** Provider stream deadline before its first usable text/tool event. This
    * boundary is safe for fallback because no visible output has committed. */
   providerFirstEventTimeoutMs?: number;
@@ -922,11 +924,25 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // never reach another actor's tools[] regardless of which injection path
   // produced it. Caller-supplied extraTools / core-agent builtins aren't in the
   // catalog, so `isToolVisibleToAgent` returns true for them (unaffected).
-  const visibleTools = params.disableTools
+  let visibleTools = params.disableTools
     ? []
     : allTools.filter((tool) => isToolVisibleToAgent(tool.name, agentId));
+  if (!params.disableTools && params.toolAccess === 'read-only') {
+    const readOnlyAllowlist = new Set([
+      'read_file', 'stat_file', 'search_files', 'grep_files', 'list_files',
+      'web_search', 'web_fetch', 'kb_list', 'kb_search', 'kb_read',
+      'tool_result_search', 'tool_result_read_chunk',
+    ]);
+    visibleTools = visibleTools.filter((tool) => readOnlyAllowlist.has(tool.name));
+  }
   const visibleToolNameSet = new Set(visibleTools.map((tool) => tool.name));
-  const builtinTools = params.disableTools ? [] : mod.getBuiltinTools();
+  let builtinTools = params.disableTools ? [] : mod.getBuiltinTools();
+  if (!params.disableTools && params.toolAccess === 'read-only') {
+    const readOnlyBuiltinAllowlist = new Set([
+      'read_file', 'list_files', 'web_fetch', 'web_search',
+    ]);
+    builtinTools = builtinTools.filter((t) => readOnlyBuiltinAllowlist.has(t.name));
+  }
 
   // Apply one simple 8K per-result policy at AgentRunner's FINAL result
   // boundary. Keeping this as a result transformer (instead of pre-wrapping

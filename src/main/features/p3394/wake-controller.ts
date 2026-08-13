@@ -5,7 +5,7 @@ import { approveWakeRequest, getWakeRequest, markWakeRequestExecuted, rejectWake
 import type { AgentWakeRequest } from './types';
 import type { WakeDispatcher } from './wake-dispatcher';
 import type { WakeAssetConfirmationSnapshot } from './types';
-import { setActiveRecipient, setOrchestrationLedger } from '../group_chat/state';
+import { commitHandoffState } from '../group_chat/state';
 
 const log = createLogger('p3394.wake-controller');
 export interface DecideWakeRequestInput { requestId: string; decision: 'approve' | 'reject'; reason?: string; assetConfirmationSnapshot?: WakeAssetConfirmationSnapshot }
@@ -41,16 +41,18 @@ export async function decideWakeRequest(userId: string, input: DecideWakeRequest
     try {
       await (deps.dispatcher ?? await defaultDispatcher(request)).dispatch(userId, request, { targetInteractive });
       if (targetInteractive && request.source === 'hand_off_to') {
-        await setActiveRecipient(userId, request.conversation_id, request.agent_id);
-        await setOrchestrationLedger(userId, request.conversation_id, {
-          status: 'waiting_for_agent',
-          blocked_on: 'agent_handoff',
-          source_tool: 'hand_off_to',
-          owner_agent_id: request.agent_id,
-          ...(request.agent_name ? { owner_agent_name: request.agent_name } : {}),
-          user_goal: request.objective,
-          handoff_message: request.dispatch_payload.text,
-          resume_instruction: request.resume_instruction?.trim() || `After ${request.agent_name || request.agent_id} completes, continue the original Commander task.`,
+        await commitHandoffState(userId, request.conversation_id, {
+          recipient_id: request.agent_id,
+          ledger: {
+            status: 'waiting_for_agent',
+            blocked_on: 'agent_handoff',
+            source_tool: 'hand_off_to',
+            owner_agent_id: request.agent_id,
+            ...(request.agent_name ? { owner_agent_name: request.agent_name } : {}),
+            user_goal: request.objective,
+            handoff_message: request.dispatch_payload.text,
+            resume_instruction: request.resume_instruction?.trim() || `After ${request.agent_name || request.agent_id} completes, continue the original Commander task.`,
+          },
         });
       }
     } catch (error) {

@@ -4,6 +4,10 @@ import { createMateCollaborationDispatcher } from './collaboration-dispatcher';
 import { readMateCoordination } from './coordinator';
 import type { WakeDispatcher } from '../p3394/wake-dispatcher';
 import type { AgentWakeRequest } from '../p3394/types';
+import {
+  buildCogSeedAgentRuntimeContext,
+  resolveCogSeedAgentExecutionContext,
+} from './agent-execution-context';
 
 function taskText(request: AgentWakeRequest): string {
   return request.dispatch_payload.model_text?.trim() || request.dispatch_payload.text;
@@ -18,11 +22,29 @@ export const mateWakeDispatcher: WakeDispatcher = {
     const runtime = (await import('./runtime-controller')).mateRuntimeController;
 
     const startDirectTask = async () => {
+      const executionContext = await resolveCogSeedAgentExecutionContext(
+        userId,
+        request.agent_id,
+        request.conversation_id,
+      );
       const task = await runtime.startMateTask(userId, {
         requestId: `req-wake-${request.id}`,
         task: taskText(request),
         sessionId: `gconv-${request.conversation_id}`,
         agentId: request.agent_id,
+        conversationId: request.conversation_id,
+        executionKind: executionContext.runtime.kind === 'cli' ? 'local-cli' : 'cogseed-native',
+        ...(executionContext.runtime.kind === 'cli' ? {
+          localCli: {
+            cli: executionContext.runtime.cli,
+            agentName: executionContext.agentName,
+            ...(executionContext.runtime.model ? { model: executionContext.runtime.model } : {}),
+            ...(executionContext.runtime.custom_args?.length ? { customArgs: executionContext.runtime.custom_args } : {}),
+            ...(executionContext.runtime.cli_provider_id ? { cliProviderId: executionContext.runtime.cli_provider_id } : {}),
+          },
+        } : {}),
+        ...(executionContext.skillList !== undefined ? { allowedSkillIds: executionContext.skillList } : {}),
+        context: buildCogSeedAgentRuntimeContext(executionContext),
         ...(request.dispatch_payload.attachments?.length ? { attachments: request.dispatch_payload.attachments } : {}),
       });
       if (task.status === 'failed' || task.status === 'cancelled') {

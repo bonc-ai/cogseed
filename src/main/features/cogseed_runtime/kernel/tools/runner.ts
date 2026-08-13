@@ -21,6 +21,7 @@ export interface RuntimeToolRunnerOptions {
   toolPolicy: RuntimeToolPolicy;
   /** Main-process-derived capability grants; gates Commander-only tools. */
   capabilities?: readonly string[];
+  allowedSkillIds?: readonly string[];
   maxInlineToolResultTokens?: number;
   connectorManager?: MateConnectorManager;
   kbManager?: MateKbManager;
@@ -47,6 +48,7 @@ export function createRuntimeToolRunner(options: RuntimeToolRunnerOptions): Runt
     writableRoots,
     pcDir: options.pcDir ?? process.cwd(),
     toolPolicy: options.toolPolicy,
+    allowedSkillIds: options.allowedSkillIds ?? [],
   };
   const capTokens = options.maxInlineToolResultTokens ?? DEFAULT_INLINE_RESULT_TOKENS;
   const toolResultsDir = mateRuntimeSessionToolResultsDir(options.userId, options.runtimeSessionId);

@@ -11,7 +11,9 @@ const mocks = vi.hoisted(() => ({
   getAgentDispatchPolicy: vi.fn(),
   isAgentChatDispatchable: vi.fn(),
   isAgentEnabled: vi.fn(),
+  setActiveRecipient: vi.fn(),
   setOrchestrationLedger: vi.fn(),
+  commitHandoffState: vi.fn(),
   cogseedDispatch: vi.fn(),
 }));
 
@@ -39,8 +41,9 @@ vi.mock("../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher", (
 vi.mock("../../../../src/main/features/group_chat/state", () => ({
   COMMANDER_ID: "commander",
   USER_ID: "user",
-  setActiveRecipient: vi.fn(),
+  setActiveRecipient: mocks.setActiveRecipient,
   setOrchestrationLedger: mocks.setOrchestrationLedger,
+  commitHandoffState: mocks.commitHandoffState,
 }));
 vi.mock("../../../../src/main/features/agents", () => ({
   getAgentForChatDispatch: mocks.getAgentForChatDispatch,
@@ -63,7 +66,10 @@ beforeEach(() => {
   mocks.getAgentDispatchPolicy.mockReset();
   mocks.isAgentChatDispatchable.mockReset();
   mocks.isAgentEnabled.mockReset();
+  mocks.setActiveRecipient.mockReset();
   mocks.setOrchestrationLedger.mockReset();
+  mocks.commitHandoffState.mockReset();
+  mocks.commitHandoffState.mockResolvedValue({ state: {}, rollbackToken: { prior: {}, committed: {} } });
   mocks.cogseedDispatch.mockReset();
   mocks.cogseedDispatch.mockResolvedValue(undefined);
   mocks.getAgentForChatDispatch.mockResolvedValue({ agent_id: "agent-1", interactive: false });
@@ -196,6 +202,80 @@ describe("P3394 wake controller workflow binding", () => {
       expect.objectContaining({ workflow_step_id: "wstep-continue", agent_id: "agent-1" }),
       expect.anything(),
     );
+    expect(mocks.setActiveRecipient).not.toHaveBeenCalled();
+    expect(mocks.setOrchestrationLedger).not.toHaveBeenCalled();
+    expect(mocks.commitHandoffState).not.toHaveBeenCalled();
+  });
+
+  it("keeps an approved hand_off_to wake interactive after CogSeed admission", async () => {
+    const request = {
+      id: "wake-interactive-handoff",
+      conversation_id: "cid-1",
+      agent_id: "agent-1",
+      agent_name: "Hermes",
+      source: "hand_off_to",
+      source_actor_id: "commander",
+      objective: "Continue with Hermes",
+      context_scope: ["conversation:cid-1"],
+      behavior_scope: ["hand_off_to"],
+      dispatch_payload: { text: "Continue with Hermes" },
+      status: "pending",
+      created_at: "t",
+      updated_at: "t",
+    } as any;
+    mocks.getWakeRequest.mockResolvedValue(request);
+    mocks.approveWakeRequest.mockResolvedValue({ request: { ...request, status: "approved" }, approval: {} });
+    mocks.markWakeRequestExecuted.mockResolvedValue({ ...request, status: "executed" });
+
+    const controller = await import("../../../../src/main/features/p3394/wake-controller");
+    const result = await controller.decideWakeRequest("user-1", {
+      requestId: request.id,
+      decision: "approve",
+    });
+
+    expect(result).toMatchObject({ ok: true, dispatched: true });
+    expect(mocks.commitHandoffState).toHaveBeenCalledWith("user-1", "cid-1", {
+      recipient_id: "agent-1",
+      ledger: expect.objectContaining({
+        status: "waiting_for_agent",
+        blocked_on: "agent_handoff",
+        source_tool: "hand_off_to",
+        owner_agent_id: "agent-1",
+      }),
+    });
+    expect(mocks.setActiveRecipient).not.toHaveBeenCalled();
+    expect(mocks.setOrchestrationLedger).not.toHaveBeenCalled();
+  });
+
+  it("keeps anonymous run_worker approval headless", async () => {
+    const request = {
+      id: "wake-anonymous-worker",
+      conversation_id: "cid-1",
+      agent_id: "agent-1",
+      source: "run_worker",
+      source_actor_id: "commander",
+      objective: "Run a bounded helper",
+      context_scope: ["conversation:cid-1"],
+      behavior_scope: ["run_worker"],
+      dispatch_payload: { text: "Run a bounded helper" },
+      status: "pending",
+      created_at: "t",
+      updated_at: "t",
+    } as any;
+    mocks.getWakeRequest.mockResolvedValue(request);
+    mocks.approveWakeRequest.mockResolvedValue({ request: { ...request, status: "approved" }, approval: {} });
+    mocks.markWakeRequestExecuted.mockResolvedValue({ ...request, status: "executed" });
+
+    const controller = await import("../../../../src/main/features/p3394/wake-controller");
+    const result = await controller.decideWakeRequest("user-1", {
+      requestId: request.id,
+      decision: "approve",
+    });
+
+    expect(result).toMatchObject({ ok: true, dispatched: true });
+    expect(mocks.commitHandoffState).not.toHaveBeenCalled();
+    expect(mocks.setActiveRecipient).not.toHaveBeenCalled();
+    expect(mocks.setOrchestrationLedger).not.toHaveBeenCalled();
   });
 
   it("resets approval and leaves the request resumable when enqueue throws", async () => {

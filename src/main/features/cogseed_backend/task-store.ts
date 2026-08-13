@@ -5,6 +5,8 @@ import { appendMateTaskEvent } from './event-store';
 import { fileEditLock } from '../../util/locks';
 import {
   assertMateRequestId,
+  assertMateAgentId,
+  assertMateConversationId,
   assertMateCoordinationId,
   assertMateTaskId,
   assertMateUserId,
@@ -12,20 +14,39 @@ import {
   mateTaskFile,
   mateTasksDirectory,
 } from './paths';
-import { getOrCreateMateSession, readMateSession, listMateSessions } from './session-store';
+import {
+  getOrCreateMateAgentSession,
+  getOrCreateMateSession,
+  readMateSession,
+  listMateSessions,
+  setMateSessionActiveTask,
+} from './session-store';
+import { resolveMateSessionIdentity } from './actor-session-facade';
 import {
   MATE_AGENT_BACKEND_SCHEMA_VERSION,
   type MateRequestClaim,
   type MateSessionRecord,
   type MateTaskRecord,
+  type MateLocalCliConfig,
 } from './types';
 
-export { getOrCreateMateSession, readMateSession, listMateSessions } from './session-store';
+export {
+  getOrCreateMateAgentSession,
+  getOrCreateMateSession,
+  readMateSession,
+  listMateSessions,
+  setMateSessionActiveTask,
+} from './session-store';
 
 export interface CreateMateTaskInput {
   requestId: string;
   task: string;
   sessionId?: string;
+  conversationId?: string;
+  agentId?: string;
+  executionKind?: 'cogseed-native' | 'local-cli';
+  allowedSkillIds?: string[];
+  localCli?: MateLocalCliConfig;
   profileId?: string;
   retryOfTaskId?: string;
   coordinationId?: string;
@@ -60,6 +81,28 @@ function validateTask(userId: string, value: unknown, expectedTaskId?: string): 
   if (row.coordinationId !== undefined && (typeof row.coordinationId !== 'string' || !row.coordinationId.startsWith('mate-coord-'))) throw new Error('malformed CogSeed task');
   if (row.parentTaskId !== undefined && (typeof row.parentTaskId !== 'string' || !row.parentTaskId.startsWith('mate-task-'))) throw new Error('malformed CogSeed task');
   if (row.coordinationDepth !== undefined && (!Number.isInteger(row.coordinationDepth) || Number(row.coordinationDepth) < 1)) throw new Error('malformed CogSeed task');
+  if (row.conversationId !== undefined) assertMateConversationId(String(row.conversationId));
+  if (row.agentId !== undefined) assertMateAgentId(String(row.agentId));
+  if (row.executionKind !== undefined && row.executionKind !== 'cogseed-native' && row.executionKind !== 'local-cli') {
+    throw new Error('malformed CogSeed task');
+  }
+  if (row.allowedSkillIds !== undefined) {
+    if (!Array.isArray(row.allowedSkillIds) || row.allowedSkillIds.length > 128) throw new Error('malformed CogSeed task');
+    for (const skillId of row.allowedSkillIds) assertMateAgentId(String(skillId));
+  }
+  if (row.localCli !== undefined) {
+    const localCli = row.localCli as Record<string, unknown>;
+    if (!localCli || typeof localCli !== 'object' || Array.isArray(localCli)
+      || typeof localCli.cli !== 'string' || !localCli.cli.trim()
+      || (localCli.agentName !== undefined && typeof localCli.agentName !== 'string')
+      || (localCli.model !== undefined && typeof localCli.model !== 'string')
+      || (localCli.cliProviderId !== undefined && typeof localCli.cliProviderId !== 'string')
+      || (localCli.customArgs !== undefined && (!Array.isArray(localCli.customArgs)
+        || localCli.customArgs.some((item) => typeof item !== 'string')))) {
+      throw new Error('malformed CogSeed task');
+    }
+  }
+  if (row.executionKind === 'local-cli' && row.localCli === undefined) throw new Error('malformed CogSeed task');
   assertMateRequestId(row.requestId);
   if (row.lastResumeRequestId !== undefined) assertMateRequestId(String(row.lastResumeRequestId));
   if (typeof row.task !== 'string' || typeof row.status !== 'string' || typeof row.createdAt !== 'string' || typeof row.updatedAt !== 'string') {
@@ -138,11 +181,31 @@ export async function listMateTasks(userId: string): Promise<MateTaskRecord[]> {
   return tasks.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
+export async function readLatestMateTaskForAgent(
+  userId: string,
+  conversationId: string,
+  agentId: string,
+): Promise<MateTaskRecord | null> {
+  const safeConversationId = assertMateConversationId(conversationId);
+  const safeAgentId = assertMateAgentId(agentId);
+  const session = await getOrCreateMateAgentSession(userId, safeConversationId, safeAgentId);
+  if (session.activeTaskId) {
+    const active = await readMateTask(userId, session.activeTaskId);
+    if (active && active.conversationId === safeConversationId && active.agentId === safeAgentId) return active;
+  }
+  return (await listMateTasks(userId)).find((task) => (
+    task.conversationId === safeConversationId && task.agentId === safeAgentId
+  )) ?? null;
+}
+
 export async function createMateTask(userId: string, input: CreateMateTaskInput): Promise<CreateMateTaskResult> {
   assertMateUserId(userId);
   const requestId = assertMateRequestId(String(input.requestId || ''));
   const task = String(input.task || '').trim();
   if (!task) throw new Error('CogSeed task is required');
+  if (input.executionKind === 'local-cli' && !String(input.localCli?.cli || '').trim()) {
+    throw new Error('CogSeed local CLI configuration is required');
+  }
   const claimFile = mateRequestClaimFile(userId, requestId);
 
   return fileEditLock(claimFile).runExclusive(async () => {
@@ -159,7 +222,23 @@ export async function createMateTask(userId: string, input: CreateMateTaskInput)
       }
     }
 
-    const session: MateSessionRecord = await getOrCreateMateSession(userId, input.sessionId);
+    const requestedAgentId = input.agentId ? assertMateAgentId(String(input.agentId)) : undefined;
+    let requestedConversationId = input.conversationId
+      ? assertMateConversationId(String(input.conversationId))
+      : undefined;
+    if (input.sessionId) {
+      const identity = resolveMateSessionIdentity(input.sessionId);
+      if (requestedConversationId && identity.conversationId && requestedConversationId !== identity.conversationId) {
+        throw new Error('CogSeed task conversation/session mismatch');
+      }
+      if (!requestedConversationId) requestedConversationId = identity.conversationId;
+      if (requestedAgentId && identity.sessionKind === 'member' && identity.actorId !== requestedAgentId) {
+        throw new Error('CogSeed task Agent/session mismatch');
+      }
+    }
+    const session: MateSessionRecord = requestedAgentId && requestedConversationId
+      ? await getOrCreateMateAgentSession(userId, requestedConversationId, requestedAgentId)
+      : await getOrCreateMateSession(userId, input.sessionId);
     const createdAt = nowIso();
     const taskRecord: MateTaskRecord = {
       schemaVersion: MATE_AGENT_BACKEND_SCHEMA_VERSION,
@@ -171,6 +250,21 @@ export async function createMateTask(userId: string, input: CreateMateTaskInput)
       ownerId: userId,
       status: 'created',
       task,
+      ...(requestedConversationId ? { conversationId: requestedConversationId } : {}),
+      ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+      ...(input.executionKind ? { executionKind: input.executionKind } : {}),
+      ...(input.allowedSkillIds !== undefined
+        ? { allowedSkillIds: Array.from(new Set(input.allowedSkillIds.map((item) => assertMateAgentId(String(item))))) }
+        : {}),
+      ...(input.localCli ? {
+        localCli: {
+          cli: String(input.localCli.cli || '').trim(),
+          ...(input.localCli.agentName ? { agentName: String(input.localCli.agentName) } : {}),
+          ...(input.localCli.model ? { model: String(input.localCli.model) } : {}),
+          ...(input.localCli.customArgs?.length ? { customArgs: input.localCli.customArgs.map(String) } : {}),
+          ...(input.localCli.cliProviderId ? { cliProviderId: String(input.localCli.cliProviderId) } : {}),
+        },
+      } : {}),
       ...(input.profileId ? { profileId: String(input.profileId) } : {}),
       ...(input.retryOfTaskId ? { retryOfTaskId: assertMateTaskId(String(input.retryOfTaskId)) } : {}),
       ...(input.coordinationId ? { coordinationId: assertMateCoordinationId(String(input.coordinationId)) } : {}),
@@ -188,6 +282,7 @@ export async function createMateTask(userId: string, input: CreateMateTaskInput)
     };
     await writeJson(mateTaskFile(userId, taskRecord.taskId), taskRecord);
     await writeJson(claimFile, claim);
+    await setMateSessionActiveTask(userId, session.sessionId, taskRecord.taskId);
     await appendMateTaskEvent(userId, taskRecord.taskId, taskRecord.sessionId, 'task.created', { requestId });
     return { task: taskRecord, created: true };
   });

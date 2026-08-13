@@ -1464,11 +1464,13 @@ describe('messaging card action dispatch', () => {
   });
 
   it('routes approve/deny card actions to the wake approval gate', async () => {
-    const approveWakeRequest = vi.fn(async () => ({ request: { id: 'wake-1' }, approval: {} }));
-    const rejectWakeRequest = vi.fn(async () => ({}));
-    vi.doMock('../../../src/main/features/p3394/wake-service', () => ({
-      approveWakeRequest,
-      rejectWakeRequest,
+    const decideWakeRequest = vi.fn(async (_uid: string, input: { requestId: string; decision: string }) => ({
+      ok: true,
+      request: { id: input.requestId },
+      dispatched: input.decision === 'approve',
+    }));
+    vi.doMock('../../../src/main/features/p3394/wake-controller', () => ({
+      decideWakeRequest,
     }));
     try {
       const registry = await import('../../../src/main/features/messaging/registry');
@@ -1492,14 +1494,14 @@ describe('messaging card action dispatch', () => {
       };
       const approved = await manager.ingestCardAction('user-1', { ...base, action: 'approve', payload: { wake_id: 'wake-1' } });
       expect(approved.accepted).toBe(true);
-      expect(approveWakeRequest).toHaveBeenCalledWith('user-1', 'wake-1');
+      expect(decideWakeRequest).toHaveBeenCalledWith('user-1', { requestId: 'wake-1', decision: 'approve' });
       const denied = await manager.ingestCardAction('user-1', { ...base, action: 'deny', payload: { wake_id: 'wake-2' } });
       expect(denied.accepted).toBe(true);
-      expect(rejectWakeRequest).toHaveBeenCalledWith('user-1', 'wake-2');
+      expect(decideWakeRequest).toHaveBeenCalledWith('user-1', { requestId: 'wake-2', decision: 'reject' });
       const unsupported = await manager.ingestCardAction('user-1', { ...base, action: 'jump', payload: { wake_id: 'wake-3' } });
       expect(unsupported).toMatchObject({ accepted: false, reason: 'unsupported_card_action' });
     } finally {
-      vi.doUnmock('../../../src/main/features/p3394/wake-service');
+      vi.doUnmock('../../../src/main/features/p3394/wake-controller');
       vi.resetModules();
     }
   });

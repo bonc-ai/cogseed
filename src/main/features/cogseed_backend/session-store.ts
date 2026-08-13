@@ -2,7 +2,15 @@ import * as fs from 'node:fs/promises';
 
 import { genId12, nowIso, writeJson } from '../../storage';
 import { fileEditLock } from '../../util/locks';
-import { assertMateSessionId, assertMateUserId, mateSessionFile, mateSessionsDirectory } from './paths';
+import {
+  assertMateAgentId,
+  assertMateConversationId,
+  assertMateSessionId,
+  assertMateUserId,
+  mateAgentSessionMappingFile,
+  mateSessionFile,
+  mateSessionsDirectory,
+} from './paths';
 import {
   buildMateCommanderCompatibilityId,
   buildMateCommanderSessionId,
@@ -22,6 +30,35 @@ import {
 
 function isEnoent(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT');
+}
+
+interface MateAgentSessionMapping {
+  schemaVersion: typeof MATE_AGENT_BACKEND_SCHEMA_VERSION;
+  ownerId: string;
+  conversationId: string;
+  agentId: string;
+  sessionId: string;
+  createdAt: string;
+}
+
+function validateAgentSessionMapping(
+  userId: string,
+  conversationId: string,
+  agentId: string,
+  value: unknown,
+): MateAgentSessionMapping {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed CogSeed Agent session mapping');
+  const row = value as Record<string, unknown>;
+  if (row.schemaVersion !== MATE_AGENT_BACKEND_SCHEMA_VERSION
+    || row.ownerId !== userId
+    || row.conversationId !== conversationId
+    || row.agentId !== agentId
+    || typeof row.sessionId !== 'string'
+    || typeof row.createdAt !== 'string') {
+    throw new Error('malformed CogSeed Agent session mapping');
+  }
+  assertMateSessionId(row.sessionId);
+  return row as unknown as MateAgentSessionMapping;
 }
 
 function validateActor(value: unknown): MateActorRecord {
@@ -53,12 +90,18 @@ function validateSession(userId: string, value: unknown, expectedSessionId?: str
     throw new Error('malformed CogSeed session');
   }
   if (typeof row.createdAt !== 'string' || typeof row.updatedAt !== 'string') throw new Error('malformed CogSeed session');
+  if (row.conversationId !== undefined) assertMateConversationId(String(row.conversationId));
+  if (row.agentId !== undefined) assertMateAgentId(String(row.agentId));
+  if (row.activeTaskId !== undefined && (typeof row.activeTaskId !== 'string' || !row.activeTaskId.startsWith('mate-task-'))) {
+    throw new Error('malformed CogSeed session');
+  }
   const hydrated = hydrateMateSessionRecord(row as unknown as MateSessionRecord);
   if (hydrated.roster) hydrated.roster = hydrated.roster.map(validateActor);
   if (hydrated.sessionKind === 'member') {
     if (!hydrated.actorId || !hydrated.conversationId || !hydrated.commanderSessionId || !hydrated.displayName) {
       throw new Error('malformed CogSeed member session');
     }
+    if (hydrated.agentId !== hydrated.actorId) throw new Error('CogSeed member Agent identity mismatch');
   }
   if (hydrated.sessionKind === 'commander' && (!hydrated.conversationId || !hydrated.roster)) {
     throw new Error('malformed CogSeed commander session');
@@ -149,6 +192,7 @@ export async function getOrCreateMateSession(userId: string, sessionId?: string)
       actorRole: identity.actorRole,
       ...(identity.actorId ? { actorId: identity.actorId } : {}),
       ...(identity.conversationId ? { conversationId: identity.conversationId } : {}),
+      ...(identity.sessionKind === 'member' && identity.actorId ? { agentId: identity.actorId } : {}),
       ...(identity.externalSessionId ? { compatibilitySessionId: identity.externalSessionId } : {}),
       ...(identity.sessionKind === 'member'
         ? {
@@ -193,6 +237,9 @@ export async function getOrCreateMateMemberSession(
   const commanderSessionId = buildMateCommanderSessionId(conversationId);
   const updated = await updateMateSession(userId, session.sessionId, (current) => ({
     ...current,
+    actorId,
+    agentId: actorId,
+    conversationId,
     actorRole,
     displayName: displayName.trim() || actorId,
     commanderSessionId,
@@ -206,6 +253,84 @@ export async function getOrCreateMateMemberSession(
   return updated as MateMemberSession;
 }
 
+/** Durable formal-Agent lookup keyed only by the user-scoped conversation and
+ * Agent identity. The deterministic member id is the persisted source of
+ * truth; no module-level cache participates in session reuse. */
+export async function getOrCreateMateAgentSession(
+  userId: string,
+  conversationId: string,
+  agentId: string,
+  displayName = agentId,
+): Promise<MateMemberSession> {
+  assertMateUserId(userId);
+  const safeConversationId = assertMateConversationId(conversationId);
+  const safeAgentId = assertMateAgentId(agentId);
+  const mappingFile = mateAgentSessionMappingFile(userId, safeConversationId, safeAgentId);
+  return fileEditLock(mappingFile).runExclusive(async () => {
+    try {
+      const mapping = validateAgentSessionMapping(
+        userId,
+        safeConversationId,
+        safeAgentId,
+        JSON.parse(await fs.readFile(mappingFile, 'utf8')),
+      );
+      const existing = await readMateSession(userId, mapping.sessionId);
+      if (!existing || existing.sessionKind !== 'member'
+        || existing.conversationId !== safeConversationId
+        || existing.agentId !== safeAgentId
+        || existing.actorId !== safeAgentId) {
+        throw new Error('CogSeed Agent session mapping references an invalid session');
+      }
+      return existing as MateMemberSession;
+    } catch (error) {
+      if (!isEnoent(error)) {
+        if (error instanceof SyntaxError) throw new Error('malformed CogSeed Agent session mapping');
+        throw error;
+      }
+    }
+
+    const reusable = (await listMateSessions(userId)).find((session) => (
+      session.sessionKind === 'member'
+      && session.conversationId === safeConversationId
+      && session.agentId === safeAgentId
+      && session.actorId === safeAgentId
+    ));
+    let session: MateMemberSession;
+    if (reusable) {
+      session = reusable as MateMemberSession;
+    } else {
+      const createdAt = nowIso();
+      session = await writeSession(userId, {
+        schemaVersion: MATE_AGENT_BACKEND_SCHEMA_VERSION,
+        sessionId: `mate-session-agent-${genId12()}`,
+        runtimeSessionId: `mruntime-${genId12()}`,
+        ownerId: userId,
+        createdAt,
+        updatedAt: createdAt,
+        sessionKind: 'member',
+        actorRole: 'member',
+        actorId: safeAgentId,
+        agentId: safeAgentId,
+        conversationId: safeConversationId,
+        commanderSessionId: buildMateCommanderSessionId(safeConversationId),
+        displayName: displayName.trim() || safeAgentId,
+        lifecycleState: 'active',
+        joinedAt: createdAt,
+      }) as MateMemberSession;
+    }
+    const mapping: MateAgentSessionMapping = {
+      schemaVersion: MATE_AGENT_BACKEND_SCHEMA_VERSION,
+      ownerId: userId,
+      conversationId: safeConversationId,
+      agentId: safeAgentId,
+      sessionId: session.sessionId,
+      createdAt: nowIso(),
+    };
+    await writeJson(mappingFile, mapping);
+    return session;
+  });
+}
+
 export async function readMateCommanderSession(userId: string, conversationOrSessionId: string): Promise<MateCommanderSession | null> {
   const session = await readMateSession(userId, commanderInputToSessionId(conversationOrSessionId));
   if (!session) return null;
@@ -216,6 +341,15 @@ export async function readMateCommanderSession(userId: string, conversationOrSes
 export async function readMateRoster(userId: string, conversationOrSessionId: string): Promise<MateActorRecord[]> {
   const session = await readMateCommanderSession(userId, conversationOrSessionId);
   return session?.roster || [];
+}
+
+export async function setMateSessionActiveTask(
+  userId: string,
+  sessionId: string,
+  taskId: string,
+): Promise<MateSessionRecord> {
+  if (!taskId.startsWith('mate-task-')) throw new Error('invalid CogSeed task id');
+  return updateMateSession(userId, sessionId, (current) => ({ ...current, activeTaskId: taskId }));
 }
 
 export async function joinMateMember(

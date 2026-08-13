@@ -30,7 +30,7 @@ import {
   isFileSystemCaseSensitive,
   isPathAllowed,
 } from "../../util/path-sandbox";
-import { appendJsonlAtomic, genId12, nowIso, safeId } from "../../storage";
+import { appendJsonlAtomic, genId12, nowIso, readJsonl, safeId } from "../../storage";
 import * as path from "node:path";
 import * as fs from "node:fs";
 
@@ -59,6 +59,7 @@ import {
   takeOrchestrationLedgerForAgent,
   takeOrchestrationLedgerForForm,
   clearOrchestrationLedger,
+  abortConversationRoutingState,
 } from "./state";
 import type {
   HandoffStateRollbackToken,
@@ -69,6 +70,7 @@ import { maxToolLoopsForActorKind } from "./actor-budgets";
 import {
   GroupMessage,
   appendVisible,
+  appendVisibleStrict,
   readSlice,
   buildReplayPrefix,
   type ChatUseSelection,
@@ -179,6 +181,7 @@ import {
 } from "../../model/core-agent/skill-registry";
 import { buildRuntimeDatetimeBlock } from "../../prompts/runtime_context";
 import { evaluateWake, listWakeRequests } from "../p3394/wake-service";
+import { allowLegacyGroupChatFormalAgentExecutorForTest, allowLegacyRunWorkerTestRoutes } from "../p3394/execution-boundary";
 import {
   type KStarDecisionRecord,
   type KStarExpectation,
@@ -1403,6 +1406,10 @@ interface CidState {
    *  between the commander's narration and the agent's first token. Anonymous
    *  workers (kind:'worker') are NOT mirrored: their stream is suppressed. */
   nestedTurns: Map<string, ActiveTurn & { order: number }>;
+  /** Formal Agent turns executed by CogSeed Backend. Unlike nested Group Chat
+   * dispatches these are authoritative for quiescence because no Group Chat
+   * worker remains running while Runtime produces the projected reply. */
+  backendTurns: Map<string, ActiveTurn & { order: number }>;
   /** Abortable, timeout-free logical read/write admission for this cid. */
   accessAdmission: CoordinatorAccessAdmission;
   /** Absolute paths written by any actor in THIS conversation since the
@@ -1495,6 +1502,18 @@ let _actorTurnPreBodyHookForTest:
   null;
 let _finishNestedDispatchStepForTest: typeof finishNestedDispatchStep | null =
   null;
+type InteractiveFollowupStarter = (input: {
+  userId: string;
+  conversationId: string;
+  agentId: string;
+  requestId: string;
+  task: string;
+  visibleContext?: string;
+  attachments?: unknown[];
+}) => Promise<{ taskId: string; status: string }>;
+let _interactiveFollowupStarterForTest: InteractiveFollowupStarter | null = null;
+type BackendConversationCanceller = (userId: string, conversationId: string) => Promise<unknown>;
+let _backendConversationCancellerForTest: BackendConversationCanceller | null = null;
 
 export function _setEnqueueAdmissionGateForTest(
   gate: (() => Promise<void>) | null,
@@ -1515,6 +1534,18 @@ export function _setFinishNestedDispatchStepForTest(
   _finishNestedDispatchStepForTest = finish;
 }
 
+export function _setInteractiveFollowupStarterForTest(
+  starter: InteractiveFollowupStarter | null,
+): void {
+  _interactiveFollowupStarterForTest = starter;
+}
+
+export function _setBackendConversationCancellerForTest(
+  canceller: BackendConversationCanceller | null,
+): void {
+  _backendConversationCancellerForTest = canceller;
+}
+
 function getOrInitCid(uid: string, cid: string): CidState {
   const k = cidKey(uid, cid);
   let s = _cids.get(k);
@@ -1530,6 +1561,7 @@ function getOrInitCid(uid: string, cid: string): CidState {
       backgroundWrites: new Set(),
       nextTurnOrder: 0,
       nestedTurns: new Map(),
+      backendTurns: new Map(),
       accessAdmission: new CoordinatorAccessAdmission(),
       producedPaths: new Set(),
     };
@@ -1728,6 +1760,9 @@ function activeTurnsForState(state: CidState): ActiveTurn[] {
       order: nt.order,
     });
   }
+  for (const [, turn] of state.backendTurns) {
+    turns.push({ ...turn });
+  }
   turns.sort((a, b) => a.order - b.order);
   return turns.map(({ actor, turn_id, msg_id, started_at_ms }) => ({
     actor,
@@ -1762,6 +1797,7 @@ export function isQuiescent(uid: string, cid: string): boolean {
   const s = _cids.get(cidKey(uid, cid));
   if (!s) return true;
   if (s.pendingEnqueues > 0) return false;
+  if (s.backendTurns.size > 0) return false;
   for (const [, w] of s.workers) {
     if (w.running) return false;
     if (w.queue.length > 0) return false;
@@ -1861,6 +1897,147 @@ async function appendMain(
       error: (err as Error)?.message,
     });
   }
+}
+
+export interface ProjectedGroupProcessInput {
+  uid: string;
+  cid: string;
+  agentId: string;
+  turnId: string;
+  kind: 'task.created' | 'task.queued' | 'task.started' | 'model.delta'
+    | 'tool.started' | 'tool.finished' | 'task.completed' | 'task.failed'
+    | 'task.cancelled' | 'task.recoverable';
+  data: Record<string, unknown>;
+}
+
+/** Projection-only live event. It deliberately emits without enqueueing or
+ * starting a Group Chat worker; CogSeed Backend remains the executor. */
+export async function appendProjectedProcessEvent(input: ProjectedGroupProcessInput): Promise<void> {
+  if (!safeId(input.cid) || !safeId(input.agentId) || !safeId(input.turnId)) {
+    throw new Error('invalid CogSeed Group Chat process projection');
+  }
+  const state = getOrInitCid(input.uid, input.cid);
+  const kind = input.kind;
+  if (kind === 'task.started' && !state.backendTurns.has(input.turnId)) {
+    state.nextTurnOrder += 1;
+    state.backendTurns.set(input.turnId, {
+      actor: input.agentId,
+      turn_id: input.turnId,
+      started_at_ms: Date.now(),
+      order: state.nextTurnOrder,
+    });
+    await _syncStateStatus(state, true);
+  }
+  emit(state, {
+    type: 'process',
+    cid: input.cid,
+    actor: input.agentId,
+    turn_id: input.turnId,
+    data: input.data,
+  });
+  if (kind === 'task.cancelled' || kind === 'task.recoverable') {
+    state.backendTurns.delete(input.turnId);
+    _recordTaskRunOutcome(state, kind === 'task.cancelled' ? 'cancelled' : 'waiting_input');
+    await _syncStateStatus(state);
+  }
+}
+
+export interface ProjectedAgentMessageInput {
+  uid: string;
+  cid: string;
+  agentId: string;
+  turnId: string;
+  text: string;
+  process?: GroupMessage['process'];
+  failureKind?: GroupMessageFailureKind;
+  failureCode?: string;
+  terminalStatus?: 'completed' | 'failed';
+}
+
+/** Persist and publish one Backend-produced Agent reply without routing it
+ * back through the Group Chat executor. */
+export async function appendProjectedAgentMessage(input: ProjectedAgentMessageInput): Promise<GroupMessage | null> {
+  if (!safeId(input.cid) || !safeId(input.agentId) || !safeId(input.turnId)) {
+    throw new Error('invalid CogSeed Group Chat message projection');
+  }
+  const text = String(input.text || '').trim();
+  const chats = await import('../chats');
+  const conversation = await chats.getConversation(input.uid, input.cid);
+  if (!conversation) return null;
+  const state = getOrInitCid(input.uid, input.cid);
+  if (!text) {
+    // A successful Runtime may legitimately produce no visible text. The
+    // terminal projection still owns lifecycle cleanup, but must not create an
+    // empty Agent bubble or leave the IPC stream waiting forever.
+    state.backendTurns.delete(input.turnId);
+    _recordTaskRunOutcome(state, input.terminalStatus ?? (input.failureKind ? 'failed' : 'completed'));
+    await _syncStateStatus(state);
+    return null;
+  }
+  await seedReservedActors(input.uid, input.cid, conversation.project_id || null);
+  await ensureAgentMember(input.uid, input.cid, input.agentId);
+  const members = await readMembers(input.uid, input.cid, conversation.project_id || null);
+  const messageFile = conversationLayout(input.uid, input.cid, conversation.project_id || null).messageFile;
+  const existingRows = await readJsonl<GroupMessage>(messageFile, 10_000);
+  let existing: GroupMessage | undefined;
+  for (let index = existingRows.length - 1; index >= 0; index -= 1) {
+    const row = existingRows[index];
+    if (!row.deleted_at && row.from === input.agentId && row.turn_id === input.turnId) {
+      existing = row;
+      break;
+    }
+  }
+  const msg: GroupMessage = existing ?? {
+    id: genId12(),
+    ts: nowIso(),
+    from: input.agentId,
+    to: [USER_ID],
+    text,
+    turn_id: input.turnId,
+    ...(input.process?.length ? { process: input.process } : {}),
+    ...(input.failureKind ? { failure_kind: input.failureKind } : {}),
+    ...(input.failureCode ? { failure_code: input.failureCode } : {}),
+  };
+  if (!existing) {
+    await appendMain(input.uid, input.cid, msg, {
+      senderKind: 'agent',
+      senderId: input.agentId,
+      agentIds: [input.agentId],
+    });
+  }
+  const allActorIds = Array.from(new Set([
+    input.agentId,
+    USER_ID,
+    COMMANDER_ID,
+    ...members.actors.map((actor) => actor.id),
+  ]));
+  const { process: _process, ...sliceRow } = msg;
+  for (const actorId of allActorIds) {
+    if (actorId === USER_ID) continue;
+    const slice = await readSlice(input.uid, input.cid, actorId, 10_000, conversation.project_id || null);
+    if (slice.some((row) => row.id === msg.id)) continue;
+    await appendVisibleStrict(
+      input.uid,
+      input.cid,
+      sliceRow as GroupMessage,
+      [actorId],
+      conversation.project_id || null,
+    );
+  }
+  if (!existing || state.backendTurns.has(input.turnId)) {
+    emit(state, {
+      type: 'message',
+      cid: input.cid,
+      msg,
+      turn_end: true,
+      turn_id: input.turnId,
+    });
+  }
+  state.backendTurns.delete(input.turnId);
+  _recordTaskRunOutcome(state, input.terminalStatus ?? (input.failureKind ? 'failed' : 'completed'));
+  if (state.taskRun) state.taskRun.lastMessageId = msg.id;
+  await _syncStateStatus(state);
+  return msg;
 }
 
 // ── enqueue ──────────────────────────────────────────────────────────────
@@ -2066,6 +2243,7 @@ async function _enqueueBody(
 
   let to: string[] = [];
   let unknown: string[] = [];
+  let userHasExplicitMention = false;
   if (params.forceTo && params.forceTo.length) {
     to = params.forceTo.slice();
   } else {
@@ -2103,6 +2281,12 @@ async function _enqueueBody(
       log.warn(
         `build agent name map failed cid=${cid}: ${(err as Error).message}`,
       );
+    }
+    if (fromKind === 'user') {
+      userHasExplicitMention = parseMentions(text, {
+        fromKind,
+        names: agentDisplayNames,
+      }).length > 0;
     }
     const r = resolveRecipients({
       fromKind,
@@ -2173,6 +2357,23 @@ async function _enqueueBody(
     log.warn(`project-scope filter cid=${cid}: ${(err as Error).message}`);
   }
 
+  let backendFollowupAgentId = '';
+  if (fromKind === 'user'
+    && floorRecipient
+    && !allowLegacyGroupChatFormalAgentExecutorForTest()
+    && !userHasExplicitMention
+    && !(params.forceTo?.length)
+    && to.length === 1
+    && to[0] === floorRecipient
+    && !RESERVED_IDS.has(floorRecipient)) {
+    try {
+      const formalAgent = await agentsFeat.getAgentForChatDispatch(uid, floorRecipient);
+      if (formalAgent && isAgentEnabled(uid, floorRecipient)) backendFollowupAgentId = floorRecipient;
+    } catch (err) {
+      log.warn(`interactive Backend follow-up target failed cid=${cid}: ${(err as Error).message}`);
+    }
+  }
+
   // P3394 Wake Gate: a human mention is a dispatch intent, not implicit
   // permission to join the roster or start an Agent. Preserve the visible user
   // message, but route it to the human-only sink until an explicit approval
@@ -2184,10 +2385,14 @@ async function _enqueueBody(
       : fromKind === "commander" && params.dispatch
         ? ("plan_step" as const)
         : null;
-  if (enqueueWakeSource && process.env.ORKAS_P3394_WAKE_GATE !== "0") {
+  if (enqueueWakeSource && !allowLegacyGroupChatFormalAgentExecutorForTest()) {
     const admitted: string[] = [];
     for (const recipientId of to) {
       if (RESERVED_IDS.has(recipientId)) {
+        admitted.push(recipientId);
+        continue;
+      }
+      if (recipientId === backendFollowupAgentId) {
         admitted.push(recipientId);
         continue;
       }
@@ -2576,10 +2781,63 @@ async function _enqueueBody(
     `enqueue user=${uid} cid=${cid} msg=${msgId} from=${fromActorId} to=${to.join(",")} len=${rewrittenText.length}${params.turn_end ? " turn_end=1" : ""}${unknown.length ? ` unknown=${unknown.join(",")}` : ""}`,
   );
 
+  let backendFollowupHandled = false;
+  if (backendFollowupAgentId) {
+    backendFollowupHandled = true;
+    const priorSlice = (await readSlice(uid, cid, backendFollowupAgentId))
+      .filter((row) => row.id !== msg.id && !row.deleted_at && !row.dispatch)
+      .slice(-12);
+    const visibleContext = priorSlice
+      .map((row) => `${row.from}: ${String(row.model_text || row.text || '').trim()}`)
+      .filter((row) => row.length > 2)
+      .join('\n\n')
+      .slice(0, 12_000);
+    const attachments = (msg.attachments || []).map((name) => ({
+      type: 'file',
+      path: path.join(chatAttachmentDirForConversation(uid, cid), name),
+      name,
+    }));
+    const starter: InteractiveFollowupStarter = _interactiveFollowupStarterForTest ?? (async (input) => {
+      const { startMateInteractiveFollowup } = await import('../cogseed_backend/interactive-turn');
+      return startMateInteractiveFollowup(input.userId, {
+        conversationId: input.conversationId,
+        agentId: input.agentId,
+        requestId: input.requestId,
+        task: input.task,
+        ...(input.visibleContext ? { visibleContext: input.visibleContext } : {}),
+        ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+      });
+    });
+    try {
+      await starter({
+        userId: uid,
+        conversationId: cid,
+        agentId: backendFollowupAgentId,
+        requestId: `req-followup-${msg.id}`,
+        task: String(msg.model_text || msg.text || '').trim(),
+        ...(visibleContext ? { visibleContext } : {}),
+        ...(attachments.length ? { attachments } : {}),
+      });
+    } catch (err) {
+      log.warn(`interactive Backend follow-up admission failed cid=${cid}: ${(err as Error).message}`);
+      await appendProjectedAgentMessage({
+        uid,
+        cid,
+        agentId: backendFollowupAgentId,
+        turnId: `turn-followup-${msg.id}`,
+        text: t('cogseed.runtime_failed'),
+        failureKind: 'runtime',
+        failureCode: 'runtime_admission_failed',
+        terminalStatus: 'failed',
+      });
+    }
+  }
+
   // Dispatch to non-user recipients.
   const refreshed = dispatchMembers;
   for (const recipientId of to) {
     if (recipientId === USER_ID) continue;
+    if (backendFollowupHandled && recipientId === backendFollowupAgentId) continue;
     const actor = refreshed.actors.find((a) => a.id === recipientId);
     if (!actor) {
       log.warn(`recipient ${recipientId} not in roster (cid=${cid})`);
@@ -5986,7 +6244,7 @@ function coordinatorDispatchContract(
     "required_capabilities",
   );
   const writeScopes = normalizeDeclaredWriteScopes(input?.write_scopes);
-  const accessMode = input?.access_mode === "read" ? "read" : "write";
+  const accessMode = input?.access_mode === "read" ? "read" : (allowLegacyRunWorkerTestRoutes() || typeof input?.to === 'string' ? "write" : "read");
   return {
     dependsOn,
     requiredCapabilities,
@@ -6207,7 +6465,7 @@ async function gateNestedAgentWake(
   workflowResumeToken?: string,
   kstarDecision?: KStarDecisionRecord,
 ): Promise<WakeRequestSummary | null> {
-  if (actor.kind !== "agent" || process.env.ORKAS_P3394_WAKE_GATE === "0")
+  if (actor.kind !== "agent" || allowLegacyGroupChatFormalAgentExecutorForTest())
     return null;
   const decision = await evaluateWake(state.uid, {
     conversationId: state.cid,
@@ -9031,7 +9289,13 @@ async function buildCommanderExtraTools(
       if (!task) return _toolError("`task` is required");
       const blocked = await blockedByCollaborationGateToolResult(uid, cid);
       if (blocked) return blocked;
+      const contract = dispatchContract;
+      const legacy = allowLegacyRunWorkerTestRoutes();
       if (!toRaw) {
+        const inputWantsWrite = input?.access_mode === 'write' || (Array.isArray(input?.write_scopes) && input.write_scopes.length > 0);
+        if (!legacy && inputWantsWrite) {
+          return _toolError("Anonymous run_worker is read-only. Formal Agent work must use dispatch_to.");
+        }
         // Anonymous ephemeral worker — the commander's private isolated helper. G8d step 3:
         // run it in-process, synchronously, and hand its FULL result straight
         // back as this tool's result (single-layer dispatch — no staging, no
@@ -9083,6 +9347,9 @@ async function buildCommanderExtraTools(
         return { content: workerExecution.value!.outcome.payload };
       }
       const resolvedId = await resolveDispatchTarget(cid, toRaw);
+      if (!legacy) {
+        return _toolError("Named run_worker is forbidden. Use dispatch_to for formal Agent work. Anonymous run_worker is read-only only.");
+      }
       if (!resolvedId) {
         return _toolError(t("errors.unknown_actor", { name: toRaw }));
       }
@@ -9296,6 +9563,7 @@ export async function abort(uid: string, cid: string): Promise<void> {
   let abortedModelSessions = 0;
   if (state) {
     _recordTaskRunOutcome(state, "cancelled");
+    state.backendTurns.clear();
     for (const [, w] of state.workers) {
       cleared += w.queue.length;
       if (w.abortController) aborted += 1;
@@ -9307,6 +9575,15 @@ export async function abort(uid: string, cid: string): Promise<void> {
         /* ignore */
       }
     }
+  }
+  try {
+    const cancelBackend = _backendConversationCancellerForTest ?? (async (userId: string, conversationId: string) => {
+      const { mateRuntimeController } = await import('../cogseed_backend/runtime-controller');
+      return mateRuntimeController.cancelConversationTasks(userId, conversationId);
+    });
+    await cancelBackend(uid, cid);
+  } catch (err) {
+    log.warn(`abort CogSeed Backend tasks failed cid=${cid}: ${(err as Error).message}`);
   }
   // Belt-and-suspenders abort for model turns. In production traces we saw
   // user stop requests reach this function while the bus worker map no longer
@@ -9345,7 +9622,7 @@ export async function abort(uid: string, cid: string): Promise<void> {
   } catch {
     /* not loaded */
   }
-  await setStatus(uid, cid, "aborted");
+  await abortConversationRoutingState(uid, cid);
   if (state) {
     emit(state, { type: "aborted", cid });
     await emitStateChanged(state);

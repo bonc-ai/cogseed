@@ -9,9 +9,12 @@ import { createLogger } from '../../logger';
 import { logErrorRef } from '../../util/log-redact';
 import { appendMateTaskEvent } from './event-store';
 import { markMateTaskRecoverable, retryMateTask as retryStoredMateTask, transitionMateTask } from './lifecycle';
-import { createMateTask, readMateTask, updateMateTask } from './task-store';
+import { createMateTask, listMateTasks, readMateTask, updateMateTask } from './task-store';
 import { resolveRuntimeCapabilities } from './messaging-capability-policy';
 import type { MateTaskRecord } from './types';
+import type { MateGroupChatProjectionInput, MateProjectionEvent } from './group-chat-projection';
+import type { MateLocalCliExecutionAdapter } from './local-cli-execution-adapter';
+import type { MateLocalCliConfig } from './types';
 
 const log = createLogger('mate-backend:runtime-controller');
 
@@ -20,6 +23,10 @@ export interface StartMateTaskInput {
   task: string;
   /** Product Agent identity passed to Runtime tools; never use this as a model profile id. */
   agentId?: string;
+  conversationId?: string;
+  executionKind?: 'cogseed-native' | 'local-cli';
+  allowedSkillIds?: string[];
+  localCli?: MateLocalCliConfig;
   sessionId?: string;
   profileId?: string;
   context?: unknown[];
@@ -57,6 +64,7 @@ export interface MateRuntimeController {
   retryMateTask(userId: string, taskId: string, requestId: string): Promise<MateTaskRecord>;
   resumeMateTask(userId: string, taskId: string, input: ResumeMateTaskInput): Promise<MateTaskRecord>;
   cancelMateTask(userId: string, taskId: string): Promise<MateTaskRecord>;
+  cancelConversationTasks(userId: string, conversationId: string): Promise<MateTaskRecord[]>;
   runtimeStatus(): Promise<MateRuntimeStatus>;
   restartRuntime(): Promise<{ restarted: true }>;
 }
@@ -64,6 +72,8 @@ export interface MateRuntimeController {
 export interface MateRuntimeControllerOptions {
   runtime?: MateAgentRuntimeFacade;
   cancelChildrenForParent?: (userId: string, parentTaskId: string) => Promise<void>;
+  projectTaskEvent?: (input: MateGroupChatProjectionInput) => Promise<unknown>;
+  localCliAdapter?: MateLocalCliExecutionAdapter;
 }
 
 function asRuntimeInput(input: StartMateTaskInput & { runtimeSessionId?: string; capabilities?: string[] }): MateAgentRuntimeInput {
@@ -71,6 +81,8 @@ function asRuntimeInput(input: StartMateTaskInput & { runtimeSessionId?: string;
     task: input.task,
     request_id: input.requestId,
     ...(input.agentId ? { agent_id: input.agentId } : {}),
+    ...(input.executionKind ? { execution_kind: input.executionKind } : {}),
+    ...(input.allowedSkillIds !== undefined ? { allowed_skill_ids: input.allowedSkillIds } : {}),
     ...(input.runtimeSessionId ? { runtime_session_id: input.runtimeSessionId } : {}),
     ...(input.context ? { context: input.context } : {}),
     ...(input.attachments ? { attachments: input.attachments } : {}),
@@ -84,7 +96,33 @@ function terminal(task: MateTaskRecord): boolean {
   return task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled';
 }
 
-async function mapRuntimeEvent(userId: string, task: MateTaskRecord, event: RuntimeEventEnvelope): Promise<MateTaskRecord> {
+async function projectTaskEventBestEffort(
+  userId: string,
+  task: MateTaskRecord,
+  event: MateProjectionEvent,
+  projectTaskEvent: (input: MateGroupChatProjectionInput) => Promise<unknown>,
+): Promise<void> {
+  if (!task.conversationId || !task.agentId) return;
+  try {
+    await projectTaskEvent({
+      userId,
+      conversationId: task.conversationId,
+      agentId: task.agentId,
+      taskId: task.taskId,
+      sessionId: task.sessionId,
+      event,
+    });
+  } catch (error) {
+    log.warn('CogSeed Runtime event projection failed', { error: logErrorRef(error) });
+  }
+}
+
+async function mapRuntimeEvent(
+  userId: string,
+  task: MateTaskRecord,
+  event: RuntimeEventEnvelope,
+  projectTaskEvent: (input: MateGroupChatProjectionInput) => Promise<unknown>,
+): Promise<MateTaskRecord> {
   const latest = await readMateTask(userId, task.taskId);
   const runtimeRunId = typeof event.metadata?.runtime_run_id === 'string' ? event.metadata.runtime_run_id : undefined;
   if (runtimeRunId && latest && latest.runtimeRunId !== runtimeRunId) {
@@ -92,27 +130,48 @@ async function mapRuntimeEvent(userId: string, task: MateTaskRecord, event: Runt
   }
   if (latest && terminal(latest)) return latest;
   if (event.type === 'result' && event.status === 'completed') {
-    return transitionMateTask(userId, task.taskId, 'completed', { outputChars: String(event.text || '').length });
+    const completed = await transitionMateTask(userId, task.taskId, 'completed', { outputChars: String(event.text || '').length });
+    await projectTaskEventBestEffort(userId, completed, {
+      eventId: `mate-event-terminal-${task.taskId}`,
+      type: 'task.completed',
+      payload: { text: String(event.text || '') },
+    }, projectTaskEvent);
+    return completed;
   }
   if (event.type === 'error' && event.status === 'cancelled') {
-    return transitionMateTask(userId, task.taskId, 'cancelled', {});
+    const cancelled = await transitionMateTask(userId, task.taskId, 'cancelled', {});
+    await projectTaskEventBestEffort(userId, cancelled, {
+      eventId: `mate-event-terminal-${task.taskId}`,
+      type: 'task.cancelled',
+      payload: {},
+    }, projectTaskEvent);
+    return cancelled;
   }
   if (event.type === 'error' && event.status === 'failed') {
-    return transitionMateTask(userId, task.taskId, 'failed', { errorCode: 'runtime_failed' });
+    const failed = await transitionMateTask(userId, task.taskId, 'failed', { errorCode: 'runtime_failed' });
+    await projectTaskEventBestEffort(userId, failed, {
+      eventId: `mate-event-terminal-${task.taskId}`,
+      type: 'task.failed',
+      payload: {},
+    }, projectTaskEvent);
+    return failed;
   }
   if (event.type === 'event' && event.status === 'running') {
     const kernelEvent = event.metadata?.kernel_event;
     if (kernelEvent === 'tool_call') {
-      await appendMateTaskEvent(userId, task.taskId, task.sessionId, 'tool.started', {
+      const stored = await appendMateTaskEvent(userId, task.taskId, task.sessionId, 'tool.started', {
         ...(typeof event.metadata?.name === 'string' ? { name: event.metadata.name } : {}),
       });
+      await projectTaskEventBestEffort(userId, task, stored, projectTaskEvent);
     } else if (kernelEvent === 'tool_result') {
-      await appendMateTaskEvent(userId, task.taskId, task.sessionId, 'tool.finished', {
+      const stored = await appendMateTaskEvent(userId, task.taskId, task.sessionId, 'tool.finished', {
         ...(typeof event.metadata?.name === 'string' ? { name: event.metadata.name } : {}),
         ...(typeof event.metadata?.isError === 'boolean' ? { isError: event.metadata.isError } : {}),
       });
+      await projectTaskEventBestEffort(userId, task, stored, projectTaskEvent);
     } else if (event.text) {
-      await appendMateTaskEvent(userId, task.taskId, task.sessionId, 'model.delta', { text: event.text });
+      const stored = await appendMateTaskEvent(userId, task.taskId, task.sessionId, 'model.delta', { text: event.text });
+      await projectTaskEventBestEffort(userId, task, stored, projectTaskEvent);
     }
   }
   return (await readMateTask(userId, task.taskId)) ?? task;
@@ -123,18 +182,52 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
   const activeRuns = new Map<string, AbortController>();
   const runtimeWorkerId = 'mate-worker-' + genId12();
   const resumeClaims = new Set<string>();
+  const projectTaskEvent = options.projectTaskEvent ?? (async (input) => {
+    const { mateGroupChatProjection } = await import('./group-chat-projection');
+    return mateGroupChatProjection.project(input);
+  });
+  let defaultLocalCliAdapter: MateLocalCliExecutionAdapter | null = null;
+  const localCliAdapter = async (): Promise<MateLocalCliExecutionAdapter> => {
+    if (options.localCliAdapter) return options.localCliAdapter;
+    if (!defaultLocalCliAdapter) {
+      defaultLocalCliAdapter = (await import('./local-cli-execution-adapter')).mateLocalCliExecutionAdapter;
+    }
+    return defaultLocalCliAdapter;
+  };
 
   async function consumeRuntime(userId: string, task: MateTaskRecord, input: StartMateTaskInput & { runtimeSessionId?: string }, controller: AbortController): Promise<void> {
     let current = task;
     try {
-      for await (const event of runtime.run(userId, asRuntimeInput(input), { signal: controller.signal })) {
-        current = await mapRuntimeEvent(userId, current, event);
+      const stream = task.executionKind === 'local-cli'
+        ? (await localCliAdapter()).run({
+            userId,
+            conversationId: task.conversationId!,
+            agentId: task.agentId!,
+            agentName: task.localCli?.agentName,
+            requestId: input.requestId,
+            taskId: task.taskId,
+            sessionId: task.sessionId,
+            runtimeSessionId: task.runtimeSessionId,
+            task: input.task,
+            context: input.context,
+            attachments: input.attachments,
+            workingDir: input.workingDir,
+            localCli: task.localCli!,
+          }, { signal: controller.signal })
+        : runtime.run(userId, asRuntimeInput(input), { signal: controller.signal });
+      for await (const event of stream) {
+        current = await mapRuntimeEvent(userId, current, event, projectTaskEvent);
         if (terminal(current)) break;
       }
     } catch {
       const latest = await readMateTask(userId, task.taskId);
       if (latest && !terminal(latest)) {
-        await markMateTaskRecoverable(userId, task.taskId, 'runtime_worker_error');
+        const recoverable = await markMateTaskRecoverable(userId, task.taskId, 'runtime_worker_error');
+        await projectTaskEventBestEffort(userId, recoverable, {
+          eventId: `mate-event-recoverable-${task.taskId}`,
+          type: 'task.recoverable',
+          payload: {},
+        }, projectTaskEvent);
       }
     } finally {
       activeRuns.delete(task.taskId);
@@ -148,11 +241,34 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
     if (task.status === 'created' || task.status === 'recoverable') {
       task = await transitionMateTask(userId, task.taskId, 'queued');
     }
-    if (task.status === 'queued') task = await transitionMateTask(userId, task.taskId, 'running');
+    if (task.status === 'queued') {
+      task = await transitionMateTask(userId, task.taskId, 'running');
+      await projectTaskEventBestEffort(userId, task, {
+        eventId: `mate-event-started-${task.taskId}`,
+        type: 'task.started',
+        payload: {},
+      }, projectTaskEvent);
+    }
     const controller = new AbortController();
     activeRuns.set(task.taskId, controller);
     setImmediate(() => { void consumeRuntime(userId, task, input, controller); });
     return task;
+  }
+
+  async function cancelTask(userId: string, taskId: string): Promise<MateTaskRecord> {
+    const task = await readMateTask(userId, taskId);
+    if (!task) throw new Error('CogSeed task not found');
+    if (terminal(task)) return task;
+    const cancelled = await transitionMateTask(userId, taskId, 'cancelled', {});
+    await projectTaskEventBestEffort(userId, cancelled, {
+      eventId: `mate-event-terminal-${taskId}`,
+      type: 'task.cancelled',
+      payload: {},
+    }, projectTaskEvent);
+    activeRuns.get(taskId)?.abort();
+    try { await options.cancelChildrenForParent?.(userId, taskId); }
+    catch (error) { log.warn('CogSeed child cancellation cleanup failed', { error: logErrorRef(error) }); }
+    return cancelled;
   }
 
   return {
@@ -170,6 +286,11 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
       return launchTask(userId, retried, {
         requestId,
         task: retried.task,
+        ...(retried.agentId ? { agentId: retried.agentId } : {}),
+        ...(retried.conversationId ? { conversationId: retried.conversationId } : {}),
+        ...(retried.executionKind ? { executionKind: retried.executionKind } : {}),
+        ...(retried.allowedSkillIds !== undefined ? { allowedSkillIds: retried.allowedSkillIds } : {}),
+        ...(retried.localCli ? { localCli: retried.localCli } : {}),
         ...(retried.profileId ? { profileId: retried.profileId } : {}),
         capabilities,
       });
@@ -194,6 +315,11 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
           requestId: input.requestId,
           task: continuation,
           runtimeSessionId: reserved.runtimeSessionId,
+          ...(reserved.agentId ? { agentId: reserved.agentId } : {}),
+          ...(reserved.conversationId ? { conversationId: reserved.conversationId } : {}),
+          ...(reserved.executionKind ? { executionKind: reserved.executionKind } : {}),
+          ...(reserved.allowedSkillIds !== undefined ? { allowedSkillIds: reserved.allowedSkillIds } : {}),
+          ...(reserved.localCli ? { localCli: reserved.localCli } : {}),
           ...(input.profileId || reserved.profileId ? { profileId: input.profileId || reserved.profileId } : {}),
           ...(input.context ? { context: input.context } : {}),
           ...(input.attachments ? { attachments: input.attachments } : {}),
@@ -207,13 +333,15 @@ export function createMateRuntimeController(options: MateRuntimeControllerOption
     },
 
     async cancelMateTask(userId, taskId) {
-      const task = await readMateTask(userId, taskId);
-      if (!task) throw new Error('CogSeed task not found');
-      if (terminal(task)) return task;
-      const cancelled = await transitionMateTask(userId, taskId, 'cancelled', {});
-      activeRuns.get(taskId)?.abort();
-      try { await options.cancelChildrenForParent?.(userId, taskId); }
-      catch (error) { log.warn('CogSeed child cancellation cleanup failed', { error: logErrorRef(error) }); }
+      return cancelTask(userId, taskId);
+    },
+
+    async cancelConversationTasks(userId, conversationId) {
+      const active = (await listMateTasks(userId)).filter((task) => (
+        task.conversationId === conversationId && !terminal(task)
+      ));
+      const cancelled: MateTaskRecord[] = [];
+      for (const task of active) cancelled.push(await cancelTask(userId, task.taskId));
       return cancelled;
     },
 

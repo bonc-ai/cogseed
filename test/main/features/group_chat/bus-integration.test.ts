@@ -293,6 +293,7 @@ beforeEach(async () => {
   prevWakeGate = process.env.ORKAS_P3394_WAKE_GATE;
   process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
   process.env.ORKAS_P3394_WAKE_GATE = "0";
+  process.env.ORKAS_LEGACY_RUN_WORKER_TEST = "0";
   _resetScripts();
   _recordedCalls.length = 0;
   _recordedToolResults.length = 0;
@@ -1014,6 +1015,107 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
   // The commander reads the result and synthesises within the SAME turn. The
   // mock's `__call_tool__` drives the real tool execute() so the nested run
   // actually streams (routed by its gworker/gmember session id).
+  it('exposes run_worker as anonymous read-only helper only in the production contract', async () => {
+    const cid = newCid();
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const previous = process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+    delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+    try {
+      _setScript(state.buildGconvSessionId(cid), [
+        { type: '__capture_tool_definitions__' },
+        { type: 'final', text: 'captured' },
+      ]);
+      await bus.enqueue({ uid: TEST_UID, cid, fromActorId: 'user', text: 'inspect strict worker' });
+      await waitForQuiescent(TEST_UID, cid, 4000);
+      const tool = _recordedToolDefinitions.find((candidate) => candidate.name === 'run_worker');
+      expect(tool?.inputSchema.properties.to).toBeTruthy(); // backward-compat schema field
+      expect(tool?.inputSchema.properties.access_mode.enum).toContain('read');
+      expect(tool?.inputSchema.properties.access_mode.enum).toContain('write');
+      // Runtime enforcement, not schema: named/write run_worker is rejected in strict mode
+    } finally {
+      if (previous === undefined) delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+      else process.env.ORKAS_LEGACY_RUN_WORKER_TEST = previous;
+    }
+  });
+
+  it('rejects named run_worker before starting a formal Agent', async () => {
+    const cid = newCid();
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const previous = process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+    delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+    try {
+      _setScript(state.buildGconvSessionId(cid), [
+        { type: '__call_tool__', name: 'run_worker', input: { to: AGENT_NAME, task: 'write a report' } },
+        { type: 'final', text: 'handled' },
+      ]);
+      _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+        { type: 'final', text: 'MUST NOT RUN' },
+      ]);
+      await bus.enqueue({ uid: TEST_UID, cid, fromActorId: 'user', text: 'strict named worker' });
+      await waitForQuiescent(TEST_UID, cid, 4000);
+      const result = _recordedToolResults.find((entry) => entry.name === 'run_worker');
+      expect(result?.isError).toBe(true);
+      expect(JSON.parse(result!.content).error).toMatch(/dispatch_to/);
+      expect(_recordedCalls.filter((call) => call.sid === state.buildGmemberSessionId(cid, AGENT_ID))).toHaveLength(0);
+    } finally {
+      if (previous === undefined) delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+      else process.env.ORKAS_LEGACY_RUN_WORKER_TEST = previous;
+    }
+  });
+
+  it('rejects write-capable anonymous run_worker before starting the helper', async () => {
+    const cid = newCid();
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const previous = process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+    delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+    try {
+      _setScript(state.buildGconvSessionId(cid), [
+        { type: '__call_tool__', name: 'run_worker', input: { task: 'change files', access_mode: 'write', write_scopes: ['src'] } },
+        { type: 'final', text: 'handled' },
+      ]);
+      _setScript('gworker-*', [{ type: 'final', text: 'MUST NOT RUN' }]);
+      await bus.enqueue({ uid: TEST_UID, cid, fromActorId: 'user', text: 'strict write worker' });
+      await waitForQuiescent(TEST_UID, cid, 4000);
+      const result = _recordedToolResults.find((entry) => entry.name === 'run_worker');
+      expect(result?.isError).toBe(true);
+      expect(JSON.parse(result!.content).error).toMatch(/read-only/i);
+      expect(_recordedCalls.filter((call) => call.sid.startsWith('gworker-'))).toHaveLength(0);
+    } finally {
+      if (previous === undefined) delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+      else process.env.ORKAS_LEGACY_RUN_WORKER_TEST = previous;
+    }
+  });
+
+  it('defaults an anonymous run_worker workflow step to read access', async () => {
+    const cid = newCid();
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const collaboration = await import('../../../../src/main/features/group_chat/collaboration');
+    const previous = process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+    delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+    try {
+      _setScript(state.buildGconvSessionId(cid), [
+        { type: '__call_tool__', name: 'run_worker', input: { task: 'count records only' } },
+        { type: 'final', text: 'counted' },
+      ]);
+      _setScript('gworker-*', [{ type: 'final', text: '42' }]);
+      await bus.enqueue({ uid: TEST_UID, cid, fromActorId: 'user', text: 'count records' });
+      await waitForQuiescent(TEST_UID, cid, 4000);
+      const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+      const step = run?.steps.find((step) => step.source_tool === 'run_worker');
+      expect(step).toBeTruthy();
+      expect(step?.actor_kind).toBe('anonymous_worker');
+      expect(step?.access_mode).toBe('read');
+      // write_scopes absent for anonymous without explicit scopes
+    } finally {
+      if (previous === undefined) delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+      else process.env.ORKAS_LEGACY_RUN_WORKER_TEST = previous;
+    }
+  });
+
   it("run_worker (anonymous) runs the worker IN-PROCESS and hands its full result back as the tool result — no roster member, no worker bubble, no lingering worker", async () => {
     const cid = newCid();
     const state =
@@ -4990,6 +5092,12 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     expect(st.orchestration_ledger?.resume_instruction).toContain(
       "dispatch ContentWriter",
     );
+
+    // The remainder of this legacy integration fixture intentionally drives
+    // the historical in-process Agent test double so its scripted handback
+    // assertions remain deterministic. Production cannot enable this bypass.
+    process.env.ORKAS_P3394_WAKE_GATE = "0";
+  process.env.ORKAS_LEGACY_RUN_WORKER_TEST = "0";
 
     _setScript(state.buildGmemberSessionId(cid, researcherId), [
       {

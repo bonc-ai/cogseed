@@ -40,6 +40,14 @@ export function assertMateRequestId(requestId: string): string {
   return assertSegment(requestId, 'request id', 'req-');
 }
 
+export function assertMateConversationId(conversationId: string): string {
+  return assertSegment(conversationId, 'conversation id');
+}
+
+export function assertMateAgentId(agentId: string): string {
+  return assertSegment(agentId, 'agent id');
+}
+
 export function mateBackendCloudRoot(userId: string): string {
   assertMateUserId(userId);
   return path.dirname(mateAgentTasksDir(userId));
@@ -62,12 +70,28 @@ export function mateTaskEventsFile(userId: string, taskId: string): string {
   return path.join(mateAgentTaskEventsDir(assertMateUserId(userId)), `${assertMateTaskId(taskId)}.jsonl`);
 }
 
+export function mateTaskProjectionFile(userId: string, taskId: string): string {
+  return path.join(mateAgentTaskEventsDir(assertMateUserId(userId)), '_projections', `${assertMateTaskId(taskId)}.json`);
+}
+
 export function mateSessionsDirectory(userId: string): string {
   return mateAgentSessionsDir(assertMateUserId(userId));
 }
 
 export function mateSessionFile(userId: string, sessionId: string): string {
   return path.join(mateAgentSessionsDir(assertMateUserId(userId)), `${assertMateSessionId(sessionId)}.json`);
+}
+
+export function mateAgentSessionMappingsDirectory(userId: string): string {
+  return path.join(mateAgentSessionsDir(assertMateUserId(userId)), '_agent_map');
+}
+
+export function mateAgentSessionMappingFile(userId: string, conversationId: string, agentId: string): string {
+  const key = Buffer.from(JSON.stringify([
+    assertMateConversationId(conversationId),
+    assertMateAgentId(agentId),
+  ]), 'utf8').toString('base64url');
+  return path.join(mateAgentSessionMappingsDirectory(userId), `${key}.json`);
 }
 
 export function mateRequestClaimFile(userId: string, requestId: string): string {

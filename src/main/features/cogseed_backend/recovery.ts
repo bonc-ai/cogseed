@@ -2,6 +2,7 @@ import { nowIso, writeJson } from '../../storage';
 import { markMateTaskRecoverable } from './lifecycle';
 import { assertMateUserId, mateRecoveryStateFile } from './paths';
 import { listMateTasks } from './task-store';
+import type { MateGroupChatProjectionInput } from './group-chat-projection';
 
 export interface MateRecoveryReport {
   recoveredCount: number;
@@ -10,12 +11,37 @@ export interface MateRecoveryReport {
   taskIds: string[];
 }
 
-export async function recoverMateTasks(userId: string): Promise<MateRecoveryReport> {
+export async function recoverMateTasks(
+  userId: string,
+  options: { projectTaskEvent?: (input: MateGroupChatProjectionInput) => Promise<unknown> } = {},
+): Promise<MateRecoveryReport> {
   assertMateUserId(userId);
   const tasks = await listMateTasks(userId);
   const recoverable = tasks.filter((task) => task.status === 'created' || task.status === 'queued' || task.status === 'running');
+  const projectTaskEvent = options.projectTaskEvent ?? (async (input: MateGroupChatProjectionInput) => {
+    const { mateGroupChatProjection } = await import('./group-chat-projection');
+    return mateGroupChatProjection.project(input);
+  });
   for (const task of recoverable) {
-    await markMateTaskRecoverable(userId, task.taskId, 'worker_restart');
+    const updated = await markMateTaskRecoverable(userId, task.taskId, 'worker_restart');
+    if (updated.conversationId && updated.agentId) {
+      try {
+        await projectTaskEvent({
+          userId,
+          conversationId: updated.conversationId,
+          agentId: updated.agentId,
+          taskId: updated.taskId,
+          sessionId: updated.sessionId,
+          event: {
+            eventId: `mate-event-recovery-${updated.taskId}`,
+            type: 'task.recoverable',
+            payload: { errorCode: 'worker_restart' },
+          },
+        });
+      } catch {
+        // Recovery state is authoritative; display projection remains best-effort.
+      }
+    }
   }
   const taskIds = recoverable.map((task) => task.taskId);
   const collaborationRecovery = await recoverMateCollaborationSteps(userId);

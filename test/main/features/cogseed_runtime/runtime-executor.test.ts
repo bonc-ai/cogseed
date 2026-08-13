@@ -51,6 +51,8 @@ describe('CogSeed Runtime native executor', () => {
       model_profile: 'profile-a',
       working_dir: paths.userLocalRoot(UID),
       read_only_roots: [paths.userLocalRoot(UID)],
+      execution_kind: 'cogseed-native',
+      allowed_skill_ids: ['skill-alpha'],
     }));
 
     expect(kernelRequest).toEqual(expect.objectContaining({
@@ -63,7 +65,9 @@ describe('CogSeed Runtime native executor', () => {
       workingDir: paths.userLocalRoot(UID),
       readOnlyRoots: [paths.userLocalRoot(UID)],
       writableRoots: [],
-      toolPolicy: MATE_RUNTIME_TOOL_POLICY,
+      executionKind: 'cogseed-native',
+      allowedSkillIds: ['skill-alpha'],
+      toolPolicy: { ...MATE_RUNTIME_TOOL_POLICY, skillRun: 'allowlisted_skills' },
     }));
     expect(JSON.stringify(kernelRequest)).not.toContain('cid');
   });

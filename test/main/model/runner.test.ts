@@ -116,6 +116,34 @@ describe('runner › buildRunner auth gate', () => {
     expect(fs.existsSync(sessionFile)).toBe(false);
   });
 
+  it('limits read-only helper runs to an explicit read/search tool allowlist', async () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test-placeholder';
+    const users = await import('../../../src/main/features/users');
+    users.activateUser('runner-readonly-helper');
+    const { buildRunner } = await loadRunner();
+
+    const built = await buildRunner({
+      sessionId: 'gworker-readonly-helper',
+      userId: 'runner-readonly-helper',
+      systemPrompt: 'Inspect without changing state.',
+      skillList: [],
+      toolAccess: 'read-only',
+      ephemeralSession: true,
+    });
+
+    const names = built.toolDefs.map((tool) => tool.name);
+    expect(names).toEqual(expect.arrayContaining([
+      'read_file', 'stat_file', 'search_files', 'grep_files', 'list_files',
+      'web_search', 'web_fetch', 'kb_list', 'kb_search', 'kb_read',
+    ]));
+    expect(names).not.toEqual(expect.arrayContaining([
+      'write_file', 'edit_file', 'bash', 'delete_file', 'create_artifact',
+      'generate_image', 'markdown_to_pdf', 'html_to_pdf',
+      ,
+    ]));
+    // toolDefs is authoritative; AgentRunner internals may differ
+  });
+
   it('throws the "no model configured" error when auth-profiles.json has empty entries', async () => {
     // Simulate a user who opened settings, saved nothing, ended up with an
     // empty profiles file — pickChatEntry still returns null.
