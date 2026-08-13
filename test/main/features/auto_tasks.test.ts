@@ -81,11 +81,13 @@ vi.mock('../../../src/main/features/agents', () => ({
 const dispatchRuntime = vi.hoisted(() => ({
   assembleBriefingText: vi.fn(),
   dispatchToFeishuHome: vi.fn(),
+  dispatchBriefingTouchpoint: vi.fn(),
 }));
 
 vi.mock('../../../src/main/features/personal_context/feishu-dispatch', () => ({
   assembleBriefingText: dispatchRuntime.assembleBriefingText,
   dispatchToFeishuHome: dispatchRuntime.dispatchToFeishuHome,
+  dispatchBriefingTouchpoint: dispatchRuntime.dispatchBriefingTouchpoint,
 }));
 
 const TEST_UID = 'auto-unit-user';
@@ -978,7 +980,9 @@ describe('auto_tasks › messaging recipient（方案 A：主页会话投递）'
   beforeEach(() => {
     dispatchRuntime.dispatchToFeishuHome.mockReset();
     dispatchRuntime.assembleBriefingText.mockReset();
+    dispatchRuntime.dispatchBriefingTouchpoint.mockReset();
     dispatchRuntime.dispatchToFeishuHome.mockResolvedValue({ ok: true });
+    dispatchRuntime.dispatchBriefingTouchpoint.mockResolvedValue({ ok: true });
     dispatchRuntime.assembleBriefingText.mockResolvedValue('【今日简报】降级：暂无已接入数据');
   });
 
@@ -1036,11 +1040,13 @@ describe('auto_tasks › messaging recipient（方案 A：主页会话投递）'
     unsubscribe();
 
     expect(dispatchRuntime.assembleBriefingText).toHaveBeenCalledWith(TEST_UID);
-    expect(dispatchRuntime.dispatchToFeishuHome).toHaveBeenCalledWith(TEST_UID, {
+    // 简报走触达点管线（可交互卡片），不再走文本直发。
+    expect(dispatchRuntime.dispatchBriefingTouchpoint).toHaveBeenCalledWith(TEST_UID, {
       instanceId: 'inst_feishu_1',
       text: '【今日简报】降级：暂无已接入数据',
       sourceKey: 'briefing:at_a1b2c3d2:2026-05-22',
     });
+    expect(dispatchRuntime.dispatchToFeishuHome).not.toHaveBeenCalled();
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ type: 'delivered', task_id: taskId });
   });

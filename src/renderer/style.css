@@ -4005,6 +4005,73 @@ body.model-not-configured .main-content { flex-direction: column; }
   .dashboard .db-grid[data-columns="3"],
   .dashboard .db-grid[data-columns="4"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* Approval card management keeps the frequent edit path short and moves
+ * routing controls into an explicit advanced section. */
+.touchpoint-button-icon { width: 14px; height: 14px; margin-right: 6px; }
+.touchpoint-approval-manager { display: flex; flex-direction: column; gap: 18px; padding: 20px 2px 32px; color: var(--text); }
+.touchpoint-manager-header { display: flex; align-items: flex-start; gap: 12px; padding-bottom: 4px; }
+.touchpoint-manager-header > div:nth-child(2) { min-width: 0; flex: 1 1 auto; }
+.touchpoint-manager-header h1 { margin: 2px 0 5px; font-size: 26px; line-height: 1.2; letter-spacing: -.03em; }
+.touchpoint-manager-header p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+.touchpoint-manager-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+.touchpoint-back-icon { width: 17px; height: 17px; }
+.touchpoint-approval-layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(270px, .9fr); gap: 18px; align-items: start; }
+.touchpoint-template-editor { min-width: 0; padding: 18px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.touchpoint-scene-tabs { display: flex; gap: 5px; margin-bottom: 18px; padding: 4px; border-radius: 10px; background: var(--surface-2); }
+.touchpoint-scene-tab { flex: 1 1 0; min-width: 0; min-height: 34px; padding: 0 9px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font: inherit; font-size: 11.5px; font-weight: 650; cursor: pointer; }
+.touchpoint-scene-tab.is-active { background: var(--surface); color: var(--text); box-shadow: 0 1px 4px color-mix(in srgb, var(--text) 10%, transparent); }
+.touchpoint-template-fields { display: grid; gap: 15px; }
+.touchpoint-template-fields label,
+.touchpoint-template-button-fields label,
+.touchpoint-template-routing label { display: flex; flex-direction: column; gap: 6px; color: var(--text-2, var(--muted)); font-size: 11.5px; font-weight: 650; }
+.touchpoint-template-fields input,
+.touchpoint-template-fields textarea,
+.touchpoint-template-button-fields input,
+.touchpoint-template-routing select { width: 100%; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 12.5px; font-weight: 500; }
+.touchpoint-template-fields input,
+.touchpoint-template-button-fields input,
+.touchpoint-template-routing select { min-height: 38px; padding: 0 10px; }
+.touchpoint-template-fields textarea { min-height: 128px; padding: 10px; resize: vertical; line-height: 1.6; }
+.touchpoint-template-fields input:focus,
+.touchpoint-template-fields textarea:focus,
+.touchpoint-template-button-fields input:focus,
+.touchpoint-template-routing select:focus { outline: 2px solid color-mix(in srgb, var(--primary) 24%, transparent); border-color: var(--primary); }
+.touchpoint-template-button-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.touchpoint-template-variables,
+.touchpoint-template-advanced { margin-top: 15px; border-top: 1px solid var(--border); }
+.touchpoint-template-variables > summary,
+.touchpoint-template-advanced > summary { display: flex; align-items: center; gap: 9px; padding: 14px 0 3px; list-style: none; color: var(--text); font-size: 12px; font-weight: 700; cursor: pointer; }
+.touchpoint-template-variables > summary::-webkit-details-marker,
+.touchpoint-template-advanced > summary::-webkit-details-marker { display: none; }
+.touchpoint-template-variables > summary::after,
+.touchpoint-template-advanced > summary::after { content: '›'; margin-left: auto; color: var(--muted); font-size: 17px; transition: transform .16s ease; }
+.touchpoint-template-variables[open] > summary::after,
+.touchpoint-template-advanced[open] > summary::after { transform: rotate(90deg); }
+.touchpoint-template-variables summary small,
+.touchpoint-template-advanced summary small { margin-left: 2px; color: var(--muted); font-size: 10.5px; font-weight: 400; }
+.touchpoint-template-variable-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0 2px; }
+.touchpoint-template-variable-list code { padding: 4px 7px; border-radius: 5px; color: var(--primary); background: color-mix(in srgb, var(--primary) 9%, var(--surface-2)); font-size: 11px; }
+.touchpoint-advanced-icon { width: 14px; height: 14px; color: var(--muted); }
+.touchpoint-template-routing { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 8px 0 2px 23px; }
+.touchpoint-template-routing p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 10.5px; line-height: 1.5; font-weight: 400; }
+.touchpoint-template-preview { position: sticky; top: 18px; min-width: 0; padding: 18px; border: 1px solid color-mix(in srgb, var(--primary) 20%, var(--border)); border-radius: 14px; background: linear-gradient(145deg, color-mix(in srgb, var(--primary) 6%, var(--surface)), var(--surface)); }
+.touchpoint-template-preview-label { display: flex; align-items: center; gap: 7px; margin-bottom: 13px; color: var(--muted); font-size: 11px; font-weight: 750; text-transform: uppercase; letter-spacing: .06em; }
+.touchpoint-preview-icon { width: 14px; height: 14px; color: var(--primary); }
+.touchpoint-template-card { padding: 17px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: 0 8px 22px color-mix(in srgb, var(--text) 6%, transparent); }
+.touchpoint-template-card-badge { display: inline-flex; padding: 4px 7px; border-radius: 5px; color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, var(--surface-2)); font-size: 10px; font-weight: 750; }
+.touchpoint-template-card h3 { margin: 14px 0 8px; font-size: 17px; line-height: 1.35; }
+.touchpoint-template-card p { min-height: 68px; margin: 0; color: var(--text-2, var(--muted)); font-size: 12px; line-height: 1.65; }
+.touchpoint-template-card-note { margin-top: 14px; padding-top: 11px; border-top: 1px solid var(--border); color: var(--muted); font-size: 10.5px; }
+.touchpoint-template-card-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
+.touchpoint-template-card-actions button { min-height: 34px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 11.5px; font-weight: 650; }
+.touchpoint-template-card-actions button.is-primary { border-color: var(--primary); background: var(--primary); color: #fff; }
+.touchpoint-template-help { display: flex; align-items: flex-start; gap: 10px; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--success) 24%, var(--border)); border-radius: 12px; background: color-mix(in srgb, var(--success) 5%, var(--surface)); }
+.touchpoint-template-help > div:first-child { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex: 0 0 auto; border-radius: 8px; color: var(--success); background: color-mix(in srgb, var(--success) 11%, var(--surface)); }
+.touchpoint-template-help strong { display: block; margin: 2px 0 4px; font-size: 12px; }
+.touchpoint-template-help p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+@media (max-width: 820px) { .touchpoint-approval-layout { grid-template-columns: 1fr; } .touchpoint-template-preview { position: static; } }
+@media (max-width: 620px) { .touchpoint-manager-header { flex-wrap: wrap; } .touchpoint-manager-header > div:nth-child(2) { flex-basis: calc(100% - 52px); } .touchpoint-manager-actions { width: 100%; padding-left: 46px; } .touchpoint-manager-actions .btn { flex: 1 1 0; } .touchpoint-scene-tabs { overflow-x: auto; } .touchpoint-scene-tab { flex: 0 0 auto; min-width: 100px; } .touchpoint-template-button-fields, .touchpoint-template-routing { grid-template-columns: 1fr; } .touchpoint-template-routing { padding-left: 23px; } }
 @media (max-width: 480px) {
   .dashboard .db-grid[data-columns="2"],
   .dashboard .db-grid[data-columns="3"],
@@ -20980,4 +21047,428 @@ body.model-not-configured .main-content { flex-direction: column; }
     box-shadow: 0 0 0 8px rgba(14, 159, 110, 0.15),
                 0 0 0 2px var(--primary);
   }
+}
+/* ── Feishu mobile touchpoint settings ────────────────────────────────── */
+.touchpoint-settings-shell {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+}
+.touchpoint-view {
+  min-width: 0;
+  min-height: 0;
+}
+.touchpoint-view[hidden] {
+  display: none;
+}
+#touchpoint-overview-view {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0 48px;
+}
+.touchpoint-connections-view {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 12px;
+  overflow: hidden;
+}
+.touchpoint-connections-view .messaging-settings-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.touchpoint-settings-shell.is-connections-view {
+  max-width: none;
+}
+.touchpoint-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  color: var(--text);
+}
+.touchpoint-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 28px;
+  padding: 16px 2px 6px;
+}
+.touchpoint-hero h1 {
+  margin: 0 0 7px;
+  font-size: 28px;
+  line-height: 1.2;
+  letter-spacing: -.035em;
+}
+.touchpoint-hero p {
+  max-width: 720px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.65;
+}
+.touchpoint-hero-actions,
+.touchpoint-inline-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.touchpoint-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.touchpoint-status > span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.touchpoint-status.is-connected { color: var(--warning, #ad7419); }
+.touchpoint-status.is-connected > span { background: var(--warning, #d09225); }
+.touchpoint-status.is-ready { color: var(--success); border-color: color-mix(in srgb, var(--success) 28%, var(--border)); }
+.touchpoint-status.is-ready > span { background: var(--success); }
+.touchpoint-status.is-not_connected > span { background: var(--danger); }
+.touchpoint-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 10px;
+}
+.touchpoint-refresh-icon { width: 15px; height: 15px; }
+.touchpoint-stepper {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 22px minmax(0, 1fr) 22px minmax(0, 1fr) 22px minmax(0, 1fr);
+  align-items: center;
+  padding: 15px 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+.touchpoint-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: var(--muted);
+}
+.touchpoint-step-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface-2);
+  font-size: 11px;
+  font-weight: 750;
+}
+.touchpoint-step strong,
+.touchpoint-step span:not(.touchpoint-step-index) {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.touchpoint-step strong { color: var(--text); font-size: 12px; }
+.touchpoint-step div > span { margin-top: 2px; color: var(--muted); font-size: 10.5px; }
+.touchpoint-step.is-current .touchpoint-step-index {
+  color: #fff;
+  border-color: var(--primary);
+  background: var(--primary);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.touchpoint-step.is-complete .touchpoint-step-index {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 35%, var(--border));
+  background: color-mix(in srgb, var(--success) 10%, var(--surface));
+}
+.touchpoint-step-check { width: 13px; height: 13px; }
+.touchpoint-step-line { height: 1px; background: var(--border); }
+.touchpoint-next {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 22px 24px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--primary) 24%, var(--border));
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 94% 0%, color-mix(in srgb, var(--primary) 13%, transparent), transparent 34%),
+    linear-gradient(135deg, color-mix(in srgb, var(--primary) 7%, var(--surface)), var(--surface));
+}
+.touchpoint-next > div { min-width: 0; }
+.touchpoint-next > div > span {
+  color: var(--primary);
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.touchpoint-next h2 { margin: 6px 0 4px; font-size: 19px; letter-spacing: -.02em; }
+.touchpoint-next p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+.touchpoint-next > .btn { flex: 0 0 auto; min-width: 138px; }
+.touchpoint-overview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.touchpoint-card,
+.touchpoint-resource-panel,
+.touchpoint-delivery,
+.touchpoint-governance {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+.touchpoint-card { padding: 18px; }
+.touchpoint-card-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: 58px;
+}
+.touchpoint-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  border-radius: 11px;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface-2));
+}
+.touchpoint-card-icon.is-feishu { color: #20a7d8; background: #e9f7fd; }
+.touchpoint-card-glyph { width: 18px; height: 18px; }
+.touchpoint-card h3,
+.touchpoint-resource-panel h3,
+.touchpoint-delivery h3 { margin: 0 0 4px; font-size: 15px; }
+.touchpoint-card-heading p,
+.touchpoint-section-heading p { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.55; }
+.touchpoint-facts { display: grid; gap: 0; margin: 16px 0 14px; }
+.touchpoint-facts > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 33px;
+  border-top: 1px solid var(--border);
+}
+.touchpoint-facts dt { color: var(--muted); font-size: 11.5px; }
+.touchpoint-facts dd { margin: 0; color: var(--text); font-size: 11.5px; font-weight: 650; text-align: right; }
+.touchpoint-secondary {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+.touchpoint-secondary:hover:not(:disabled) { background: var(--surface-2); }
+.touchpoint-resource-panel,
+.touchpoint-delivery { padding: 20px; }
+.touchpoint-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 15px;
+}
+.touchpoint-resource-list { display: grid; gap: 7px; }
+.touchpoint-resource-row {
+  display: grid;
+  grid-template-columns: auto 78px minmax(0, 1fr);
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  cursor: pointer;
+}
+.touchpoint-resource-row input { accent-color: var(--primary); }
+.touchpoint-resource-type {
+  overflow: hidden;
+  color: var(--primary);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+}
+.touchpoint-resource-row strong,
+.touchpoint-resource-row small { display: block; }
+.touchpoint-resource-row strong { overflow: hidden; font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.touchpoint-resource-row small { margin-top: 2px; color: var(--muted); font-size: 10.5px; }
+.touchpoint-delivery-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+}
+.touchpoint-delivery-grid article {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface-2);
+}
+.touchpoint-delivery-grid article > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  color: var(--primary);
+  background: var(--surface);
+}
+.touchpoint-delivery-icon { width: 14px; height: 14px; }
+.touchpoint-delivery-grid strong { display: block; font-size: 12px; }
+.touchpoint-delivery-grid p { margin: 4px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
+.touchpoint-inline-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+.touchpoint-briefing-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.touchpoint-briefing-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.touchpoint-briefing-time input[type="time"] {
+  width: 102px;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+}
+.touchpoint-template-config { margin: 18px 0 22px; padding: 18px; border: 1px solid var(--border-color, #dfe3e8); border-radius: 8px; background: var(--bg-primary, #fff); }
+.touchpoint-template-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.touchpoint-template-grid label { display: flex; flex-direction: column; gap: 5px; color: var(--text-secondary, #646e7b); font-size: 12px; }
+.touchpoint-template-grid .span-2 { grid-column: span 2; }
+.touchpoint-template-grid input, .touchpoint-template-grid textarea, .touchpoint-template-grid select { width: 100%; border: 1px solid var(--border-color, #d9dde3); border-radius: 6px; padding: 8px 9px; color: var(--text-primary, #1f2329); background: var(--bg-primary, #fff); font: inherit; font-size: 12px; }
+.touchpoint-template-grid textarea { min-height: 90px; resize: vertical; line-height: 1.5; }
+.touchpoint-template-hint { margin-top: 12px; color: var(--text-tertiary, #7a8491); font-size: 11px; }
+.touchpoint-template-hint code { padding: 2px 4px; border-radius: 3px; color: var(--brand-color, #245bdb); background: var(--brand-bg, #eaf1ff); }
+@media (max-width: 680px) { .touchpoint-template-grid { grid-template-columns: 1fr; } .touchpoint-template-grid .span-2 { grid-column: span 1; } }
+.touchpoint-briefing-row > .btn {
+  flex: 0 0 auto;
+  min-height: 34px;
+}
+.touchpoint-locked-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.touchpoint-lock-icon { width: 13px; height: 13px; }
+.touchpoint-preview { margin-top: 14px; padding: 14px; border-radius: 10px; background: var(--surface-2); }
+.touchpoint-preview pre { max-height: 260px; margin: 0; overflow: auto; white-space: pre-wrap; color: var(--text); font: inherit; font-size: 12px; line-height: 1.65; }
+.touchpoint-governance {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 15px 18px;
+}
+.touchpoint-governance > div:first-child {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 10%, var(--surface));
+}
+.touchpoint-governance-icon { width: 15px; height: 15px; }
+.touchpoint-governance strong { display: block; margin-bottom: 3px; font-size: 12.5px; }
+.touchpoint-governance p { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.55; }
+.touchpoint-advanced {
+  margin-top: 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+.touchpoint-advanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 15px 18px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.touchpoint-advanced > summary::-webkit-details-marker { display: none; }
+.touchpoint-advanced > summary::after { content: '›'; margin-left: auto; color: var(--muted); font-size: 18px; transition: transform .16s ease; }
+.touchpoint-advanced[open] > summary::after { transform: rotate(90deg); }
+.touchpoint-advanced > summary small { color: var(--muted); font-size: 11px; font-weight: 400; }
+.touchpoint-advanced .messaging-settings-shell { padding: 0 12px 12px; }
+.touchpoint-advanced .messaging-layout { min-height: 520px; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.touchpoint-loading { display: flex; align-items: center; gap: 9px; padding: 52px 4px; color: var(--muted); font-size: 12.5px; }
+@media (max-width: 920px) {
+  .touchpoint-stepper { grid-template-columns: 1fr; gap: 9px; }
+  .touchpoint-step-line { display: none; }
+  .touchpoint-overview { grid-template-columns: 1fr; }
+  .touchpoint-delivery-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .touchpoint-hero,
+  .touchpoint-next,
+  .touchpoint-section-heading { flex-direction: column; align-items: stretch; }
+  .touchpoint-next > .btn { width: 100%; }
+  .touchpoint-resource-row { grid-template-columns: auto minmax(0, 1fr); }
+  .touchpoint-resource-type { grid-column: 2; }
+  .touchpoint-briefing-row { align-items: stretch; }
+  .touchpoint-briefing-time,
+  .touchpoint-briefing-row > .btn { width: 100%; }
+  .touchpoint-briefing-time { justify-content: space-between; }
+  .touchpoint-briefing-time input[type="time"] { width: auto; }
 }

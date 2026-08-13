@@ -1,9 +1,11 @@
 /**
- * Connector-only deep-link delivery for the public desktop build.
+ * Deep-link delivery for the public desktop build: connector OAuth callbacks
+ * plus the Hub account login callback.
  *
- * Account login is intentionally absent. The only accepted URLs are:
+ * Accepted URLs:
  *   - orkas://connectors/oauth/callback
  *   - orkas://connectors/oauth/dcr-callback
+ *   - orkas://account/callback   (Hub account login; see features/hub_account)
  *
  * OAuth redirects always land on the public HTTPS Server first. Its landing page then opens one
  * of the URLs above so the exact app instance that started the flow can finish the exchange. This
@@ -16,6 +18,7 @@ import { CONNECTOR_PROTOCOL_SCHEMES, normalizeDeepLink } from '../../brand';
 import { createLogger } from '../../logger';
 import { safeUrlAction } from '../../util/log-redact';
 import { handleCallbackUrl, handleDcrCallbackUrl } from './index';
+import { handleAccountCallbackUrl, accountCallbackUrl } from '../hub_account';
 
 const log = createLogger('connectors:protocol');
 const SERVER_CALLBACK_PATH = '/oauth/callback';
@@ -34,9 +37,9 @@ function _connectorCallbackKind(rawUrl: string): 'server' | 'dcr' | null {
   return null;
 }
 
-function _extractConnectorCallback(argv: readonly string[] | undefined): string | null {
+function _extractCallback(argv: readonly string[] | undefined): string | null {
   for (const value of argv || []) {
-    if (typeof value === 'string' && _connectorCallbackKind(value)) return value;
+    if (typeof value === 'string' && (accountCallbackUrl(value) || _connectorCallbackKind(value))) return value;
   }
   return null;
 }
@@ -51,8 +54,9 @@ function _focusMainWindow(): void {
 
 async function _dispatch(rawUrl: string): Promise<void> {
   const normalized = normalizeDeepLink(rawUrl);
-  const kind = normalized ? _connectorCallbackKind(normalized.href) : null;
-  if (!kind) {
+  const account = normalized ? accountCallbackUrl(normalized.href) : null;
+  const kind = account ? 'account' : (normalized ? _connectorCallbackKind(normalized.href) : null);
+  if (!account && !kind) {
     log.warn('ignored non-connector deep link', { action: safeUrlAction(rawUrl) });
     return;
   }
@@ -60,13 +64,14 @@ async function _dispatch(rawUrl: string): Promise<void> {
     _pending = rawUrl;
     return;
   }
-  log.info('connector deep link received', { action: safeUrlAction(rawUrl), kind });
+  log.info('deep link received', { action: safeUrlAction(rawUrl), kind: account ? 'account' : kind });
   _focusMainWindow();
   try {
-    if (kind === 'dcr') await handleDcrCallbackUrl(normalized?.href || rawUrl);
+    if (account) await handleAccountCallbackUrl(account);
+    else if (kind === 'dcr') await handleDcrCallbackUrl(normalized?.href || rawUrl);
     else await handleCallbackUrl(normalized?.href || rawUrl);
   } catch (err) {
-    log.warn('connector deep link handling failed', { error: (err as Error).message, kind });
+    log.warn('deep link handling failed', { error: (err as Error).message, kind: account ? 'account' : kind });
   }
 }
 
@@ -92,22 +97,22 @@ export function registerConnectorProtocol(options: Readonly<{ owner: boolean }>)
 
     app.on('open-url', (event, rawUrl) => {
       const normalized = normalizeDeepLink(rawUrl);
-      if (!normalized || !_connectorCallbackKind(normalized.href)) return;
+      if (!normalized || (!accountCallbackUrl(normalized.href) && !_connectorCallbackKind(normalized.href))) return;
       event.preventDefault();
       void _dispatch(rawUrl);
     });
 
-    const cold = _extractConnectorCallback(process.argv);
+    const cold = _extractCallback(process.argv);
     if (cold) _pending = cold;
   } else {
-    log.info('connector protocol registration disabled for this runtime');
+    log.info('protocol registration disabled for this runtime');
   }
 
   // Window activation belongs to the single-instance contract, not protocol
   // ownership. Every runtime focuses its own existing window on a duplicate
   // launch; only the owner may consume an OAuth callback from argv.
   app.on('second-instance', (_event, argv) => {
-    const rawUrl = options.owner ? _extractConnectorCallback(argv) : null;
+    const rawUrl = options.owner ? _extractCallback(argv) : null;
     if (rawUrl) void _dispatch(rawUrl);
     else _focusMainWindow();
   });
@@ -122,4 +127,4 @@ export async function consumeColdLaunchConnectorCallback(): Promise<void> {
   await _dispatch(rawUrl);
 }
 
-export const _test = { connectorCallbackKind: _connectorCallbackKind, extractConnectorCallback: _extractConnectorCallback };
+export const _test = { connectorCallbackKind: _connectorCallbackKind, extractCallback: _extractCallback, dispatch: _dispatch };

@@ -238,5 +238,16 @@
   "touchpoints.feishu.open_mate": "Mate で完全な結果を確認",
   "touchpoints.feishu.review_mate": "Mate で確認して処理",
   "touchpoints.feishu.approve_mate": "カードで承認するか、Mate でタスクを調整してください",
-  "touchpoints.feishu.briefing_mate": "Mate で今日の予定を調整"
+  "touchpoints.feishu.briefing_mate": "Mate で今日の予定を調整",
+  "touchpoints.card.button.approve": "承認",
+  "touchpoints.card.button.confirm": "確認",
+  "touchpoints.card.button.reject": "拒否",
+  "touchpoints.card.button.snooze": "後で通知",
+  "touchpoints.card.button.open": "詳細を表示",
+  "touchpoints.card.button.edit": "編集",
+  "touchpoints.card.button.adjust": "調整",
+  "touchpoints.card.button.retry": "再試行",
+  "touchpoints.card.button.forget_source": "ソースを忘れる",
+  "touchpoints.card.button.revoke_grant": "認可を取り消す",
+  "touchpoints.card.resolved": "処理済み"
 }
