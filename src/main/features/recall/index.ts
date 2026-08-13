@@ -58,3 +58,6 @@ export { handleRecallTaskTerminal } from './terminal-proof';
 export type { RecallTaskTerminalEvent, RecallTaskTerminalStatus } from './terminal-proof';
 export { recordEffectivenessFeedback, recordTaskEffectivenessFeedback } from './effectiveness-feedback';
 export type { RecallEffectivenessFeedback, RecordEffectivenessFeedbackInput, RecordTaskEffectivenessFeedbackInput } from './effectiveness-feedback';
+
+export { applyCausalRules, collectWorldSnapshot, normalizeCausalRule, simulateWorld } from './world-model';
+export type { CausalRule, CausalRuleSeverity, PredictedRisk, WorldModelCoreState, WorldModelEnvironmentState, WorldModelForecast, WorldModelForecastRecord, WorldModelOntologyState, WorldModelPredicateKey, WorldModelSimulationInput, WorldModelSkillsState, WorldModelSnapshot } from './world-model-types';

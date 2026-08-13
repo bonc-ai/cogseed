@@ -9,6 +9,7 @@ import type { RecallJsonRecord } from './types';
 import { normalizeAbilityAssetOntologyRefs } from './ontology-refs';
 import type { RecallAbilityAssetRecord } from './candidate-service';
 import { normalizeAbilityAssetScopePolicy, type RecallAbilityAssetScopePolicy } from './scope-policy';
+import { normalizeCausalRule } from './world-model';
 
 export type AbilityAssetActor = 'user' | 'system';
 export type AbilityAssetRecommendedAction = 'pause' | 'rework';
@@ -71,10 +72,11 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   if (!evidenceRefs.length) throw new Error('malformed recall ability asset evidence');
   const ontologyRefs = value.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(value.ontologyRefs);
   const scopePolicy = normalizeAbilityAssetScopePolicy(value.scopePolicy);
+  const causalRule = value.causalRule === undefined ? undefined : normalizeCausalRule(value.causalRule);
   const recommendedAction = value.recommendedAction;
   if (recommendedAction !== undefined && recommendedAction !== 'pause' && recommendedAction !== 'rework') throw new Error('malformed recall ability asset recommendation');
   if (recommendedAction !== undefined && (typeof value.recommendationReason !== 'string' || !value.recommendationReason.trim() || typeof value.recommendationAt !== 'string')) throw new Error('malformed recall ability asset recommendation');
-  return { ...value, evidenceRefs, ...(ontologyRefs ? { ontologyRefs } : {}), ...(scopePolicy ? { scopePolicy } : {}) } as RecallAbilityAssetRecord;
+  return { ...value, evidenceRefs, ...(ontologyRefs ? { ontologyRefs } : {}), ...(scopePolicy ? { scopePolicy } : {}), ...(causalRule ? { causalRule } : {}) } as RecallAbilityAssetRecord;
 }
 
 function bounded(value: unknown, field: string, max: number): string {

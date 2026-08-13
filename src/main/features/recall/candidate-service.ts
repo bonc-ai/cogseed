@@ -14,6 +14,8 @@ import type { RecallJsonRecord } from './types';
 import type { KstarLearningSignal } from '../kstar/types';
 import { normalizeAbilityAssetOntologyRefs, type AbilityAssetOntologyRef } from './ontology-refs';
 import { normalizeAbilityAssetScopePolicy, type RecallAbilityAssetScopePolicy } from './scope-policy';
+import type { CausalRule } from './world-model-types';
+import { normalizeCausalRule } from './world-model';
 import { initializeAbilityAsset, listAbilityAssets } from './asset-service';
 import {
   cognitionSourceRefKey,
@@ -55,6 +57,8 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   ontologyRefs?: AbilityAssetOntologyRef[];
   scope: string;
   scopePolicy?: RecallAbilityAssetScopePolicy;
+  /** R-Box causal rule frozen from a delta_r lesson (world-model ontology). */
+  causalRule?: CausalRule;
   recommendedAction?: 'pause' | 'rework';
   recommendationReason?: string;
   recommendationAt?: string;
@@ -301,13 +305,14 @@ export function rejectRecallCandidate(userId: string, candidateId: string, note?
 export async function promoteRecallCandidate(
   userId: string,
   candidateId: string,
-  options: { actor?: 'user'; ontologyRefs?: AbilityAssetOntologyRef[]; scopePolicy?: RecallAbilityAssetScopePolicy } = {},
+  options: { actor?: 'user'; ontologyRefs?: AbilityAssetOntologyRef[]; scopePolicy?: RecallAbilityAssetScopePolicy; causalRule?: CausalRule } = {},
 ): Promise<{ candidate: RecallCandidateRecord; asset: RecallAbilityAssetRecord }> {
   // `actor` defaults to 'user' for upward compatibility with callers that
   // only pass ontologyRefs. Governance still records the actor when provided.
   const actor = options.actor ?? 'user';
   const ontologyRefs = options.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(options.ontologyRefs);
   const scopePolicy = normalizeAbilityAssetScopePolicy(options.scopePolicy);
+  const causalRule = options.causalRule === undefined ? undefined : normalizeCausalRule(options.causalRule);
   const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, async (current) => {
     if (!current) throw new Error('recall candidate not found');
     const candidate = asCandidate(current);
@@ -343,6 +348,7 @@ export async function promoteRecallCandidate(
       ...(ontologyRefs?.length ? { ontologyRefs } : {}),
       scope: candidate.suggestedScope,
       ...(scopePolicy ? { scopePolicy } : {}),
+      ...(causalRule ? { causalRule } : {}),
       status: 'active',
       maturity: 'seed',
       version: '1',
