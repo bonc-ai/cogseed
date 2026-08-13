@@ -288,9 +288,9 @@ function _csObShellHtml() {
       </section>
 
       <section class="cs-panel" data-cspanel="3">
-        <div class="cs-kicker">可选 · 随时能改</div>
-        <h1>你主要在做哪类工作？</h1>
-        <p class="cs-lead">角色模板给你一套起步结构和常用技能，<b>不会自动生成任何关于你的信息</b>。选择后会创建一个工作空间，之后随时可换、可叠加。</p>
+        <div class="cs-kicker" id="cs-role-kicker">可选 · 随时能改</div>
+        <h1 id="cs-role-title">你主要在做哪类工作？</h1>
+        <p class="cs-lead" id="cs-role-lead">角色模板给你一套起步结构和常用技能，<b>不会自动生成任何关于你的信息</b>。选择后会创建一个工作空间，之后随时可换、可叠加。</p>
         <div class="cs-role-cards" id="cs-role-cards">
           <div class="cs-state loading">正在加载角色模板...</div>
         </div>
@@ -1474,7 +1474,7 @@ async function _csImportClaudeSessions(agentType) {
   paint();
   selected.forEach((r) => r.classList.add('importing'));
   await _csMapWithConcurrency(selected, CS_IMPORT_CONCURRENCY, async (row) => {
-    const filePath = row.dataset.sessionId;
+    const filePath = row.dataset.sessionPath;
     try {
       const res = await window.cogseed.invoke('sessionImport.importClaudeSession', { filePath });
       // Success = conversation was materialized, even if cognition extraction degraded
@@ -1514,6 +1514,17 @@ async function _csImportClaudeSessions(agentType) {
   if (ok > 0) {
     _csUpdateImportCount(ok);
     await _csRefreshConversationList();
+    // 导入成功后重新分析会话内容并推荐模板
+    try {
+      const rec = await window.cogseed.invoke('sessionImport.recommendStartingPoint');
+      if (rec && rec.suggestedTemplate) {
+        _csSuggestedTemplateId = rec.suggestedTemplate.templateId;
+        _csRecommendation = rec;
+        _obLog.info('template recommended after import', { templateId: _csSuggestedTemplateId });
+      }
+    } catch (err) {
+      _obLog.warn('failed to recommend template after import', { error: (err && err.message) || String(err) });
+    }
   }
   _obLog.info('claude sessions import finished', { ok, failed, cognitions });
 }
@@ -1734,6 +1745,17 @@ async function _csImportCodexSessions(agentType) {
   if (ok > 0) {
     _csUpdateImportCount(ok);
     await _csRefreshConversationList();
+    // 导入成功后重新分析会话内容并推荐模板
+    try {
+      const rec = await window.cogseed.invoke('sessionImport.recommendStartingPoint');
+      if (rec && rec.suggestedTemplate) {
+        _csSuggestedTemplateId = rec.suggestedTemplate.templateId;
+        _csRecommendation = rec;
+        _obLog.info('template recommended after import', { templateId: _csSuggestedTemplateId });
+      }
+    } catch (err) {
+      _obLog.warn('failed to recommend template after import', { error: (err && err.message) || String(err) });
+    }
   }
   _obLog.info('codex sessions import finished', { ok, failed });
 }
@@ -2735,6 +2757,17 @@ async function _csLoadRoleTemplates() {
         const kw = _csRecommendation && _csRecommendation.suggestedTemplate
           ? (_csRecommendation.suggestedTemplate.matchedKeywords || []).slice(0, 4).join('、')
           : '';
+        // 推荐场景：把步骤标题从「你主要在做哪类工作？」切换为「已为你推荐」，
+        // 让用户知道这个角色来自他真实的会话内容，而不是凭空选的。
+        const roleName = suggested.querySelector('h3') ? suggested.querySelector('h3').textContent : '';
+        const titleEl = document.getElementById('cs-role-title');
+        if (titleEl) titleEl.textContent = kw
+          ? `根据你之前的任务，我推荐了「${roleName}」`
+          : '根据你之前的任务，我推荐了合适的角色';
+        const kickerEl = document.getElementById('cs-role-kicker');
+        if (kickerEl) kickerEl.textContent = '为你推荐 · 可选 · 随时能改';
+        const leadEl = document.getElementById('cs-role-lead');
+        if (leadEl) leadEl.innerHTML = `这是根据你的会话内容匹配出的角色，直接用它，或换成下面任意一个。<b>不会自动生成任何关于你的信息</b>。`;
         _csToast(kw ? `根据你会话里的「${kw}」推荐了这个角色，可自行更换` : '已为你推荐一个角色，可自行更换');
       }
     }
