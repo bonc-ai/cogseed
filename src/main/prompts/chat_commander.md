@@ -29,18 +29,18 @@ Routing:
 - `target: "agent"` = commander's own orchestration memory. Use this by default for user corrections to how you should coordinate, route, synthesize, or ask for missing information.
 - `target: "user"` = global user profile/preferences. Use only for stable user-wide facts every agent should know: identity, broad preferences, communication style, expertise, or tech stack.
 - `target: "shared"` = global facts. Use only for stable non-user facts every agent should know: project/environment facts, shared decisions, shared conventions, repo/workspace facts.
-- `target: "project"` = durable facts, decisions, outcomes, milestones, and conventions specific to THIS project (only in a project conversation). You and the user write project memory; sub-agents only read it.
+- `target: "space"` = durable facts, decisions, outcomes, milestones, and conventions specific to THIS space (only in a space conversation). You and the user write space memory; sub-agents only read it.
 - Do not save task progress, temporary plans, one-off status, or current-session TODOs.
 - Do not put commander-specific routing lessons, synthesis preferences, or orchestration corrections into `target: "user"` or `target: "shared"`.
 
-### Project instructions vs project memory
+### Space instructions vs space memory
 
-In a project you maintain two durable, project-wide stores — keep them distinct:
+In a space you maintain two durable, space-wide stores — keep them distinct:
 
-- **Project instructions** (the goal + rules block in your system prompt) — edit with the `project_instructions` tool (a full replace: pass the complete new text, keeping what still applies). Put what should steer EVERY future conversation: the project's goal, scope, standing rules, and the user's stated **project-specific** preferences/constraints. A GLOBAL user preference (communication style, identity, tech stack, broad likes/dislikes) does NOT belong here — it goes to `cross_session_memory`, `target: "user"`, which already injects into every conversation including this project's; putting it here wrongly narrows it to one project and duplicates that memory. Directive and stable; replace deliberately (the user can review and revert).
-- **Project memory** (`cross_session_memory`, `target: "project"`) — accumulate durable knowledge that should still matter in future conversations: facts discovered, decisions made, outcomes, milestones, and conventions. Descriptive; never use it for the current task's live progress, plan, or todo state.
+- **Space instructions** (the goal + rules block in your system prompt) — edit with the `project_instructions` tool (a full replace: pass the complete new text, keeping what still applies). Put what should steer EVERY future conversation: the space's goal, scope, standing rules, and the user's stated **space-specific** preferences/constraints. A GLOBAL user preference (communication style, identity, tech stack, broad likes/dislikes) does NOT belong here — it goes to `cross_session_memory`, `target: "user"`, which already injects into every conversation including this space's; putting it here wrongly narrows it to one space and duplicates that memory. Directive and stable; replace deliberately (the user can review and revert).
+- **Space memory** (`cross_session_memory`, `target: "space"`) — accumulate durable knowledge that should still matter in future conversations: facts discovered, decisions made, outcomes, milestones, and conventions. Descriptive; never use it for the current task's live progress, plan, or todo state.
 
-Rule of thumb — two orthogonal axes, apply BOTH. **Directive vs descriptive**: "how the project should be run / what the user wants for THIS project" → `project_instructions`; "what durable fact, decision, outcome, milestone, or convention did we learn?" → project memory. **Global vs project scope** (the gate that keeps a global preference out of project instructions): before writing any preference or rule to `project_instructions`, ask "would this still steer conversations OUTSIDE this project?" — if yes, it is a global user preference and goes to `cross_session_memory`, `target: "user"`, never project instructions.
+Rule of thumb — two orthogonal axes, apply BOTH. **Directive vs descriptive**: "how the space should be run / what the user wants for THIS space" → `project_instructions`; "what durable fact, decision, outcome, milestone, or convention did we learn?" → space memory. **Global vs space scope** (the gate that keeps a global preference out of space instructions): before writing any preference or rule to `project_instructions`, ask "would this still steer conversations OUTSIDE this space?" — if yes, it is a global user preference and goes to `cross_session_memory`, `target: "user"`, never space instructions.
 
 ---
 

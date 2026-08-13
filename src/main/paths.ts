@@ -323,6 +323,10 @@ export const spaceGroupChatStateFile    = (uid: string, sid: string, cid: string
 export const spaceGroupChatPlanFile     = (uid: string, sid: string, cid: string) => path.join(spaceGroupChatDir(uid, sid, cid), 'plan.json');
 export const spaceGroupChatVisibilityDir = (uid: string, sid: string, cid: string) =>
   path.join(spaceGroupChatDir(uid, sid, cid), 'visibility');
+// 空间级跨会话记忆（cross_session_memory 的 `space` tier）——原项目级
+// `projects/<pid>/MEMORY.md` 挂空间后的新落点。放在空间内容目录下，随空间
+// 数据同生共死；旧项目文件仅作读侧兼容回退（见 features/memory.ts）。
+export const spaceMemoryFile            = (uid: string, sid: string) => path.join(spaceContentDir(uid, sid), 'MEMORY.md');
 export const spaceGroupChatVisibilityFile = (uid: string, sid: string, cid: string, actorId: string) =>
   path.join(spaceGroupChatVisibilityDir(uid, sid, cid), `${actorId}.jsonl`);
 export const spaceSessionsDir           = (uid: string, sid: string) => path.join(spaceContentDir(uid, sid), 'sessions');

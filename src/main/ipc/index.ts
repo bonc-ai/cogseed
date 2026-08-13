@@ -20,7 +20,6 @@ import * as users from '../features/users';
 import * as chats from '../features/chats';
 import * as conversationAside from '../features/conversation_aside';
 import * as modelClient from '../model/client';
-import * as projects from '../features/projects';
 import * as spaces from '../features/spaces';
 import * as spacesArtifacts from '../features/spaces_artifacts';
 import * as spaceFiles from '../features/project_files';
@@ -1133,7 +1132,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     const result = await spaces.deleteSpace(ctx.userId, spaceId);
     if (!result.ok) throw new Error((result as { error: string }).error);
-    return { unbound_projects: result.unbound_projects };
+    return { ok: true };
   },
 
   'spaces.resources.add': async ({ spaceId, kind, id } = {}, ctx) => {

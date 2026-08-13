@@ -3819,6 +3819,7 @@ async function runActorTurnBody(
         slice,
         workingDir: cliWorkingDir,
         ...(turnProjectId ? { projectId: turnProjectId } : {}),
+        ...(turnSpaceId ? { spaceId: turnSpaceId } : {}),
         signal: w.abortController.signal,
         onCoordinatorActivity: (event) => coordinatorLease?.observe(event),
         onProcessInfo: (pid) => coordinator.setCliProcessPid(pid),
@@ -4375,27 +4376,28 @@ async function runActorTurnBody(
                 name: ag.name,
                 kind: "created",
               });
-              // Project-scoped conv: auto-bind the new agent into the project's
-              // bindings.json so it's actually reachable from this conversation
-              // (commander picker filters by `_pickerBoundAgentIds`; LLM
-              // dispatch is gated by the same project scope per CLAUDE.md §5).
+              // Space-scoped conv: auto-add the new agent to the space's
+              // extra_agents so it's actually reachable from this conversation
+              // (commander picker filters by the space scope; LLM dispatch is
+              // gated by the same space scope per CLAUDE.md §6).
               // Without this hop the user creates an agent and immediately
               // can't @-mention it from the same conv — observed bug shape
-              // when the project's bindings predate the new agent.
-              if (turnProjectId) {
+              // when the space predates the new agent.
+              if (turnSpaceId) {
                 try {
-                  const projectsFeatBind = await import("../projects");
-                  await projectsFeatBind.addAgentBinding(
+                  const spacesFeatBind = await import("../spaces");
+                  await spacesFeatBind.addSpaceResource(
                     uid,
-                    turnProjectId,
+                    turnSpaceId,
+                    "agent",
                     ag.agent_id,
                   );
                   log.info(
-                    `auto-bound agent ${ag.agent_id} to project ${turnProjectId} after commander creation`,
+                    `auto-added agent ${ag.agent_id} to space ${turnSpaceId} after commander creation`,
                   );
                 } catch (err) {
                   log.warn(
-                    `auto-bind agent failed cid=${cid} pid=${turnProjectId} aid=${ag.agent_id}: ${(err as Error).message}`,
+                    `auto-add agent failed cid=${cid} sid=${turnSpaceId} aid=${ag.agent_id}: ${(err as Error).message}`,
                   );
                 }
               }
@@ -4459,25 +4461,26 @@ async function runActorTurnBody(
             ) {
               workingText = `${workingText}\n\n${_formatValidationWarnings(result.validation_warnings)}`;
             }
-            // Project-scoped conv: auto-bind the new skill so the LLM in this
+            // Space-scoped conv: auto-add the new skill so the LLM in this
             // conv actually sees it via getSystemPromptBlock allowlist. Same
-            // bug shape as the agent auto-bind above — without this the user
+            // bug shape as the agent auto-add above — without this the user
             // creates a skill, the file lands on disk, but the LLM in this
-            // project conv can never invoke it (allowlist excludes it).
-            if (turnProjectId && result.kind === "created") {
+            // space conv can never invoke it (allowlist excludes it).
+            if (turnSpaceId && result.kind === "created") {
               try {
-                const projectsFeatBind = await import("../projects");
-                await projectsFeatBind.addSkillBinding(
+                const spacesFeatBind = await import("../spaces");
+                await spacesFeatBind.addSpaceResource(
                   uid,
-                  turnProjectId,
+                  turnSpaceId,
+                  "skill",
                   result.skillId,
                 );
                 log.info(
-                  `auto-bound skill ${result.skillId} to project ${turnProjectId} after commander creation`,
+                  `auto-added skill ${result.skillId} to space ${turnSpaceId} after commander creation`,
                 );
               } catch (err) {
                 log.warn(
-                  `auto-bind skill failed cid=${cid} pid=${turnProjectId} sid=${result.skillId}: ${(err as Error).message}`,
+                  `auto-add skill failed cid=${cid} sid=${turnSpaceId} sid=${result.skillId}: ${(err as Error).message}`,
                 );
               }
             }
@@ -9270,6 +9273,7 @@ async function _runCliAgentTurn(opts: {
   item: QueueItem;
   slice: GroupMessage[];
   projectId?: string;
+  spaceId?: string;
   workingDir: string;
   signal: AbortSignal;
   onCoordinatorActivity?: (event: CoordinatorActivityEvent) => void;
@@ -9329,7 +9333,7 @@ async function _runCliAgentTurn(opts: {
     opts.item,
     opts.slice,
     bridgeHistory,
-    opts.projectId,
+    opts.spaceId,
   );
   // When `_buildCliPrompt` took the slash-command fast-path, promptText is
   // the raw `/cmd …` we forwarded. Remember the command name so the
@@ -9658,7 +9662,7 @@ async function _buildCliPrompt(
   item: QueueItem,
   slice: GroupMessage[],
   bridgeHistory: boolean,
-  projectId?: string,
+  spaceId?: string,
 ): Promise<string> {
   // Slash-command fast-path: when the user sends `/foo …` to a CLI agent,
   // forward the raw text so the CLI's own slash dispatcher (built-ins +
@@ -9712,21 +9716,21 @@ async function _buildCliPrompt(
       .trim();
   }
 
-  // ── Project instructions (ORKAS.md) — the conversation's project scope.
+  // ── Space instructions — the conversation's space scope.
   // Mirrors `core-agent/runner.ts`, which injects the same block for
   // in-process agents: low-churn user configuration, so it sits ahead of
   // the runtime region and stays byte-identical across turns. Without it a
   // CLI agent is told its name, the protocol, and the task — but nothing
-  // about the project it was summoned into, so standing rules like a repo
+  // about the space it was summoned into, so standing rules like a repo
   // path never reach it and it guesses from cwd instead.
-  // Instructions only: the in-process context policy arbitrates project
+  // Instructions only: the in-process context policy arbitrates space
   // status / memory layers that this frame does not carry.
   let projectBlock = "";
-  if (projectId) {
-    const projectsFeat = await import("../projects");
-    projectBlock = projectsFeat.formatProjectInstructionsForSystemPrompt(
+  if (spaceId) {
+    const spacesFeat = await import("../spaces");
+    projectBlock = spacesFeat.formatSpaceInstructionsForSystemPrompt(
       uid,
-      projectId,
+      spaceId,
     );
   }
 
@@ -9861,7 +9865,7 @@ export async function _buildCliPromptForTest(
   item: QueueItem,
   slice: GroupMessage[],
   bridgeHistory: boolean,
-  projectId?: string,
+  spaceId?: string,
 ): Promise<string> {
   return _buildCliPrompt(
     uid,
@@ -9870,7 +9874,7 @@ export async function _buildCliPromptForTest(
     item,
     slice,
     bridgeHistory,
-    projectId,
+    spaceId,
   );
 }
 

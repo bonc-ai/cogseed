@@ -494,6 +494,7 @@ export interface ConversationDisplayRow {
   conversation_id: string;
   title: string;
   project_id: string;
+  space_id: string;
 }
 
 /** Compact search/display catalog. Reuses the central parsed index snapshot
@@ -506,6 +507,7 @@ export async function listConversationDisplayRows(userId: string): Promise<Conve
       conversation_id: row.conversation_id,
       title: row.title || '',
       project_id: typeof row.project_id === 'string' ? row.project_id : '',
+      space_id: typeof row.space_id === 'string' ? row.space_id : '',
     }));
 }
 

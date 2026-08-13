@@ -686,30 +686,22 @@ export function formatSpaceContextPolicyForSystemPrompt(): string {
   ].join('\n');
 }
 
-/** 删除空间 = 删能力包，不删项目。引用项目由 projects.unbindProjectsBySpace 解绑
- *  （lazy require 避免静态循环依赖）。 */
+/** 删除空间 = 删空间元数据（能力包）。空间下会话不删除（数据归用户）。
+ *  项目壳已废弃（T4.5），不再有项目解绑逻辑。 */
 export async function deleteSpace(
   uid: string,
   spaceId: string,
-): Promise<{ ok: true; unbound_projects: string[] } | { ok: false; error: SpaceError }> {
+): Promise<{ ok: true } | { ok: false; error: SpaceError }> {
   const cur = await _readSpace(uid, spaceId);
   if (!cur) return { ok: false, error: 'not_found' };
-  let unbound: string[] = [];
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
-    const projects = await import('./projects');
-    unbound = await projects.unbindProjectsBySpace(uid, spaceId);
-  } catch (err) {
-    log.warn(`unbind projects on space delete user=${uid} sid=${spaceId}: ${(err as Error).message}`);
-  }
   try {
     const f = spaceMetaFile(uid, spaceId);
     if (fs.existsSync(f)) await fsp.rm(f, { force: true });
   } catch (err) {
     log.warn(`drop space file user=${uid} sid=${spaceId}: ${(err as Error).message}`);
   }
-  log.info(`deleted space user=${uid} sid=${spaceId} unbound_projects=${unbound.length}`);
-  return { ok: true, unbound_projects: unbound };
+  log.info(`deleted space user=${uid} sid=${spaceId}`);
+  return { ok: true };
 }
 
 export async function addSpaceResource(
@@ -880,20 +872,17 @@ export async function resolveSpaceScope(
 }
 
 /**
- * 情境空间「角色画像」注入：项目绑空间 + 空间有主模板 → 读主+副角色模板文件
+ * 情境空间「角色画像」注入：会话挂空间 + 空间有主模板 → 读主+副角色模板文件
  * （个人本体唯一事实来源）的有值字段，格式化为「当前角色画像」块，由 runner 注入
  * system prompt。主角色优先，副角色字段排后；空坑不注入；任何失败 → ''（静默降级）。
  */
 export async function formatRoleProfileForSystemPrompt(
   uid: string,
-  projectId: string | null | undefined,
+  spaceId: string | null | undefined,
 ): Promise<string> {
   try {
-    if (!projectId) return '';
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
-    const projects = await import('./projects');
-    const meta = await projects.getProjectScopeMeta(uid, projectId);
-    const space = meta.space;
+    if (!spaceId) return '';
+    const space = await _readSpace(uid, spaceId);
     const primary = space?.primary_template_id || space?.template_id;
     if (!primary) return '';
     // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require

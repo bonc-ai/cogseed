@@ -553,21 +553,22 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
 
   if (uid && memoryAgentScope) {
     // Cross-session memory. `agent` tier binds to THIS caller's scope and
-    // `project` to THIS conversation's project, so the model can never reach
-    // another agent's or project's store; `shared`/`user` are global. The
-    // `project` tier exists only in project sessions — outside a project it is
+    // `space` to THIS conversation's space, so the model can never reach
+    // another agent's or space's store; `shared`/`user` are global. The
+    // `space` tier exists only in space sessions — outside a space it is
     // absent from the tool schema entirely (see memory-tool.ts).
     const scopeId = memoryAgentScope; // narrowed to string
-    const projectScopeId = params.projectId || '';
-    const toScope = (tier: 'agent' | 'project' | 'shared' | 'user'): MemoryScope =>
+    const spaceScopeId = params.spaceId || '';
+    const legacyProjectScopeId = params.projectId || '';
+    const toScope = (tier: 'agent' | 'space' | 'shared' | 'user'): MemoryScope =>
       tier === 'agent' ? { agent: scopeId }
-      : tier === 'project' ? { project: projectScopeId }
+      : tier === 'space' ? { space: spaceScopeId }
       : tier === 'shared' ? 'memory' : 'user';
-    const teachingScope = (tier: 'agent' | 'project' | 'shared' | 'user'): UserTeachingScope => (
-      tier === 'agent' ? 'agent' : tier === 'project' ? 'project' : 'personal'
+    const teachingScope = (tier: 'agent' | 'space' | 'shared' | 'user'): UserTeachingScope => (
+      tier === 'agent' ? 'agent' : tier === 'space' ? 'project' : 'personal'
     );
     const recordTeaching = async (
-      tier: 'agent' | 'project' | 'shared' | 'user',
+      tier: 'agent' | 'space' | 'shared' | 'user',
       content: string,
       result: Awaited<ReturnType<typeof addEntryTransactional>>,
     ) => {
@@ -612,10 +613,10 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
       remove: async (tier, oldText) => removeEntryTransactional(uid, toScope(tier), oldText),      list: (tier) => listEntries(uid, toScope(tier)),
     };
     const { createCrossSessionMemoryTool } = await import('../../../core-agent/src/tools/memory-tool');
-    // Project memory: commander read+write, sub-agents read-only (list only).
+    // Space memory: commander read+write, sub-agents read-only (list only).
     injectedTools.push(createCrossSessionMemoryTool(memoryHandler, {
-      includeProjectTier: !!projectScopeId,
-      projectTierReadOnly: !!projectScopeId && !isCommander,
+      includeProjectTier: !!spaceScopeId,
+      projectTierReadOnly: !!spaceScopeId && !isCommander,
     }));
   }
 
@@ -739,7 +740,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   const chatHistoryTools = uid && isCommander ? createChatHistoryTools({
     userId: uid,
     ...(params.cid ? { currentCid: params.cid } : {}),
-    ...(params.projectId ? { projectId: params.projectId } : {}),
+    ...(params.spaceId ? { spaceId: params.spaceId } : {}),
   }) : [];
 
   // Proactive Feishu/Lark messaging (Commander-only). The tools resolve the
@@ -1021,13 +1022,13 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     }
   }
   const memoryBlock = (uid && memoryAgentScope)
-    ? formatMemoryForSystemPrompt(uid, memoryAgentScope, params.projectId, activeCognitionSourceIds)
+    ? formatMemoryForSystemPrompt(uid, memoryAgentScope, params.spaceId, params.projectId, activeCognitionSourceIds)
     : '';
   if (memoryBlock) parts.push(memoryBlock);
-  // 二期「空间 = 角色」：项目绑空间 → 注入该角色模板画像（个人本体角色模板文件，
+  // 二期「空间 = 角色」：会话挂空间 → 注入该角色模板画像（个人本体角色模板文件，
   // 与 memoryBlock 同层级的读侧背景上下文；异步读文件，失败静默降级为空串）。
-  const roleProfileBlock = (uid && memoryAgentScope && params.projectId)
-    ? await formatRoleProfileForSystemPrompt(uid, params.projectId)
+  const roleProfileBlock = (uid && memoryAgentScope && params.spaceId)
+    ? await formatRoleProfileForSystemPrompt(uid, params.spaceId)
     : '';
   if (roleProfileBlock) parts.push(roleProfileBlock);
   const resolvedSystemPrompt = parts.join('\n\n');

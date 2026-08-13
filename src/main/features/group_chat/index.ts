@@ -1196,17 +1196,17 @@ async function _autoBindInstalledMarketplaceResource(
   try {
     const chats = await import('../chats');
     const conv = await chats.getConversation(userId, cid);
-    const projectId = (conv as any)?.project_id;
-    if (typeof projectId !== 'string' || !projectId) return;
-    const projectsFeat = await import('../projects');
+    const spaceId = (conv as any)?.space_id;
+    if (typeof spaceId !== 'string' || !spaceId) return;
+    const spacesFeat = await import('../spaces');
     if (req.kind === 'agent') {
-      await projectsFeat.addAgentBinding(userId, projectId, req.id);
+      await spacesFeat.addSpaceResource(userId, spaceId, 'agent', req.id);
     } else {
-      await projectsFeat.addSkillBinding(userId, projectId, req.id);
+      await spacesFeat.addSpaceResource(userId, spaceId, 'skill', req.id);
     }
-    log.info(`auto-bound marketplace ${req.kind} ${req.id} to project ${projectId} after install`);
+    log.info(`auto-added marketplace ${req.kind} ${req.id} to space ${spaceId} after install`);
   } catch (err) {
-    log.warn(`marketplace install auto-bind failed user=${userId} cid=${cid} id=${req.id}: ${(err as Error).message}`);
+    log.warn(`marketplace install auto-add failed user=${userId} cid=${cid} id=${req.id}: ${(err as Error).message}`);
   }
 }
 

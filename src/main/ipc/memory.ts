@@ -20,16 +20,16 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { shell } from 'electron';
 import * as memory from '../features/memory';
-import * as projects from '../features/projects';
+import * as spaces from '../features/spaces';
 import type { MemoryScope } from '../features/memory';
-import { userMemoryFile, userProfileFile, userMemoryDir, agentMemoryFile, projectMemoryFile } from '../paths';
+import { userMemoryFile, userProfileFile, userMemoryDir, agentMemoryFile, projectMemoryFile, spaceMemoryFile } from '../paths';
 import { createLogger } from '../logger';
 
 const log = createLogger('ipc:memory');
 
 /** Build a MemoryScope from the renderer payload. 'shared' (new) and 'memory'
  *  (legacy) both map to the shared store; 'agent' needs an agentId and
- *  'project' a projectId. */
+ *  'space' a spaceId. */
 function normScope(payload: any): MemoryScope {
   const tier = payload?.target;
   if (tier === 'user') return 'user';
@@ -38,10 +38,10 @@ function normScope(payload: any): MemoryScope {
     if (!agentId) throw new Error('agentId is required for an agent-scoped memory op');
     return { agent: agentId };
   }
-  if (tier === 'project') {
-    const projectId = String(payload?.projectId || '').trim();
-    if (!projectId) throw new Error('projectId is required for a project-scoped memory op');
-    return { project: projectId };
+  if (tier === 'space') {
+    const spaceId = String(payload?.spaceId || '').trim();
+    if (!spaceId) throw new Error('spaceId is required for a space-scoped memory op');
+    return { space: spaceId };
   }
   return 'memory'; // 'shared' | 'memory' | default
 }
@@ -49,20 +49,20 @@ function normScope(payload: any): MemoryScope {
 function fileForScope(userId: string, scope: MemoryScope): string {
   if (scope === 'user') return userProfileFile(userId);
   if (scope === 'memory') return userMemoryFile(userId);
-  if ('project' in scope) return projectMemoryFile(userId, scope.project);
+  if ('space' in scope) return spaceMemoryFile(userId, scope.space);
   return agentMemoryFile(userId, scope.agent);
 }
 
 /** Resolve and authorize a renderer-supplied scope before any memory read or
  * write. Path construction performs the segment validation; the ownership
- * check prevents a valid-looking but stale/foreign project id from creating an
- * orphan `projects/<pid>/MEMORY.md` directory. */
+ * check prevents a valid-looking but stale/foreign space id from creating an
+ * orphan `spaces/<sid>/MEMORY.md` directory. */
 async function resolveScope(userId: string, payload: any): Promise<MemoryScope> {
   const scope = normScope(payload);
   fileForScope(userId, scope);
-  if (typeof scope === 'object' && 'project' in scope
-      && !(await projects.projectExists(userId, scope.project))) {
-    throw new Error('project_not_found');
+  if (typeof scope === 'object' && 'space' in scope
+      && !(await spaces.spaceExists(userId, scope.space))) {
+    throw new Error('space_not_found');
   }
   return scope;
 }
