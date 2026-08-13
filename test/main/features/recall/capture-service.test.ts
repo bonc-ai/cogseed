@@ -31,6 +31,9 @@ vi.mock('../../../../src/main/features/recall/candidate-service', () => ({
   saveRecallCandidate: mocks.saveCandidate,
   readRecallCandidate: mocks.readCandidate,
   promoteRecallCandidate: mocks.promoteCandidate,
+  isRecallCandidateReviewable: (candidate: { status?: string }) => (
+    candidate.status === 'pending_review' || candidate.status === 'failed'
+  ),
 }));
 vi.mock('../../../../src/main/features/recall/skill-draft-service', () => ({
   prepareRecallSkillDraft: mocks.prepareSkillDraft,
@@ -109,12 +112,12 @@ beforeEach(() => {
   });
   mocks.saveCandidate.mockImplementation(async (_userId: string, input: { captureKey: string }) => ({
     id: `cand-${input.captureKey.slice(-1)}`,
-    status: 'pending',
+    status: 'pending_review',
     ...input,
   }));
   mocks.readCandidate.mockRejectedValue(new Error('candidate not found'));
   mocks.promoteCandidate.mockImplementation(async (_userId: string, candidateId: string) => ({
-    candidate: { id: candidateId, status: 'promoted', promotedAssetId: 'aa-promoted' },
+    candidate: { id: candidateId, status: 'confirmed', promotedAssetId: 'aa-promoted' },
     asset: { id: 'aa-promoted' },
   }));
   mocks.prepareSkillDraft.mockReset().mockResolvedValue({ status: 'draft', assetId: 'aa-promoted' });
@@ -647,7 +650,38 @@ describe('Recall conversation capture', () => {
     expect(JSON.stringify(recallView)).not.toContain('/private/attachment.txt');
   });
 
-  it('automatically writes clear candidates to Recall when automatic review is enabled', async () => {
+  it('keeps weak observations without creating a review task', async () => {
+    mocks.runModel.mockResolvedValueOnce({
+      text: JSON.stringify({
+        candidates: [{
+          judgment: 'Possible reusable local convention.',
+          value: 'May reduce repeated formatting work.',
+          summary: 'Local convention',
+          suggestedType: 'rule',
+          suggestedScope: 'project',
+          suggestedAction: 'create',
+          evidence: ['m1'],
+        }],
+      }),
+      content: [],
+      meta: { aborted: false },
+    });
+    mocks.saveCandidate.mockResolvedValueOnce({
+      id: 'cand-weak',
+      status: 'weak_observation',
+      taskRunId: 'run-1',
+    });
+
+    const capture = await captureModule();
+    const queued = await capture.queueRecallCaptureFromTerminal(completedEvent);
+    await capture.runRecallCaptureNow('capture-user', queued!.id);
+    const completed = await capture.runRecallCapture('capture-user', queued!.id);
+
+    expect(completed).toMatchObject({ status: 'no_candidate', candidateIds: [] });
+    expect(mocks.saveCandidate).toHaveBeenCalledWith('capture-user', expect.objectContaining({ taskRunId: 'run-1' }));
+  });
+
+  it('keeps clear candidates for confirmation when the legacy automatic review setting is enabled', async () => {
     mocks.runModel.mockResolvedValueOnce({
       text: JSON.stringify({
         candidates: [{
@@ -667,11 +701,11 @@ describe('Recall conversation capture', () => {
     await capture.runRecallCaptureNow('capture-user', queued!.id);
     const completed = await capture.runRecallCapture('capture-user', queued!.id);
 
-    expect(mocks.promoteCandidate).toHaveBeenCalledWith('capture-user', 'cand-0', { actor: 'user' });
+    expect(mocks.promoteCandidate).not.toHaveBeenCalled();
     expect(completed).toMatchObject({ status: 'review_ready', candidateIds: ['cand-0'] });
   });
 
-  it('automatically prepares a Skill draft when deposition promotes a skill and method asset', async () => {
+  it('does not prepare a Skill draft before a deposited skill candidate is confirmed', async () => {
     mocks.runModel.mockResolvedValueOnce({
       text: JSON.stringify({
         candidates: [{
@@ -685,18 +719,13 @@ describe('Recall conversation capture', () => {
       content: [],
       meta: { aborted: false },
     });
-    mocks.promoteCandidate.mockResolvedValueOnce({
-      candidate: { id: 'cand-0', status: 'promoted', promotedAssetId: 'aa-method' },
-      asset: { id: 'aa-method', type: 'skill_method', status: 'active' },
-    });
-    mocks.prepareSkillDraft.mockResolvedValueOnce({ status: 'draft', assetId: 'aa-method' });
-
     const capture = await captureModule('auto');
     const queued = await capture.queueRecallCaptureFromTerminal(completedEvent);
     await capture.runRecallCaptureNow('capture-user', queued!.id);
     const completed = await capture.runRecallCapture('capture-user', queued!.id);
 
-    expect(mocks.prepareSkillDraft).toHaveBeenCalledWith('capture-user', 'aa-method');
+    expect(mocks.promoteCandidate).not.toHaveBeenCalled();
+    expect(mocks.prepareSkillDraft).not.toHaveBeenCalled();
     expect(completed).toMatchObject({ status: 'review_ready', candidateIds: ['cand-0'] });
   });
 
@@ -725,7 +754,7 @@ describe('Recall conversation capture', () => {
     expect(completed).toMatchObject({ status: 'review_ready', candidateIds: ['cand-0'] });
   });
 
-  it('keeps extracted candidate references when automatic Recall writing fails', async () => {
+  it('keeps extracted candidate references without attempting an automatic Recall write', async () => {
     mocks.runModel.mockResolvedValueOnce({
       text: JSON.stringify({
         candidates: [{
@@ -739,18 +768,16 @@ describe('Recall conversation capture', () => {
       content: [],
       meta: { aborted: false },
     });
-    mocks.promoteCandidate.mockRejectedValueOnce(new Error('write failed'));
-
     const capture = await captureModule('auto');
     const queued = await capture.queueRecallCaptureFromTerminal(completedEvent);
     await capture.runRecallCaptureNow('capture-user', queued!.id);
-    const failed = await capture.runRecallCapture('capture-user', queued!.id);
+    const completed = await capture.runRecallCapture('capture-user', queued!.id);
 
-    expect(failed).toMatchObject({
-      status: 'failed',
-      errorCode: 'asset_write_failed',
+    expect(completed).toMatchObject({
+      status: 'review_ready',
       candidateIds: ['cand-0'],
     });
+    expect(mocks.promoteCandidate).not.toHaveBeenCalled();
   });
 
   it('rejects pause and cancel once candidate persistence has started', async () => {
@@ -774,7 +801,7 @@ describe('Recall conversation capture', () => {
     mocks.saveCandidate.mockImplementationOnce(async (_userId: string, input: { captureKey: string }) => {
       markSaveStarted();
       await saveGate;
-      return { id: 'cand-finalizing', status: 'pending', ...input };
+      return { id: 'cand-finalizing', status: 'pending_review', ...input };
     });
 
     const capture = await captureModule();
@@ -864,7 +891,7 @@ describe('Recall conversation capture', () => {
     expect(signal).toBeTruthy();
     mocks.readCandidate.mockResolvedValue({
       id: signal!.candidateIds[0],
-      status: 'pending',
+      status: 'pending_review',
       judgment: 'Always keep decisions traceable.',
     });
     mocks.saveCandidate.mockClear();
@@ -904,10 +931,60 @@ describe('Recall conversation capture', () => {
     }));
   });
 
+  it('sends rejected teaching content with new conversation evidence back through candidate governance', async () => {
+    const teaching = await import('../../../../src/main/features/recall/teaching-service');
+    const signal = await teaching.recordTeachingSignalAfterMemoryWrite('capture-user', {
+      conversationId: 'conv-1',
+      messageId: 'user-1',
+      userMessage: '请记住：Always keep decisions traceable.',
+      memoryContent: 'Always keep decisions traceable.',
+      memoryScope: 'project',
+    });
+    expect(signal).toBeTruthy();
+    mocks.readCandidate.mockResolvedValue({
+      id: signal!.candidateIds[0],
+      status: 'rejected',
+      judgment: 'Always keep decisions traceable.',
+    });
+    mocks.saveCandidate.mockClear().mockImplementationOnce(async (_userId: string, input: { captureKey: string }) => ({
+      id: 'cand-reconsidered',
+      status: 'pending_review',
+      ...input,
+    }));
+    mocks.runModel.mockResolvedValueOnce({
+      text: JSON.stringify({
+        candidates: [{
+          judgment: 'Always keep decisions traceable.',
+          value: 'Make later reviews auditable.',
+          summary: 'Traceable decisions',
+          suggestedType: 'rule',
+          suggestedScope: 'project',
+          evidence: ['m1'],
+        }],
+      }),
+      content: [],
+      meta: { aborted: false },
+    });
+
+    const capture = await captureModule();
+    const queued = await capture.queueRecallCaptureFromTerminal(completedEvent);
+    await capture.runRecallCaptureNow('capture-user', queued!.id);
+    const completed = await capture.runRecallCapture('capture-user', queued!.id);
+
+    expect(completed.candidateIds).toEqual(['cand-reconsidered']);
+    expect(mocks.saveCandidate).toHaveBeenCalledWith('capture-user', expect.objectContaining({
+      judgment: 'Always keep decisions traceable.',
+      captureKey: `capture-${queued!.id}-0`,
+      sourceRefs: expect.arrayContaining([
+        expect.objectContaining({ kind: 'conversation', subtype: 'message' }),
+      ]),
+    }));
+  });
+
   it('matches candidates across every teaching signal attached to the same user message', async () => {
     mocks.saveCandidate.mockImplementation(async (_userId: string, input: { captureKey: string }) => ({
       id: `cand-${input.captureKey}`,
-      status: 'pending',
+      status: 'pending_review',
       ...input,
     }));
     const teaching = await import('../../../../src/main/features/recall/teaching-service');
@@ -927,7 +1004,7 @@ describe('Recall conversation capture', () => {
     });
     mocks.readCandidate.mockImplementation(async (_userId: string, candidateId: string) => ({
       id: candidateId,
-      status: 'pending',
+      status: 'pending_review',
       judgment: candidateId === secondSignal!.candidateIds[0]
         ? 'Use the completed decision log as the review template.'
         : 'Always keep decisions traceable.',
@@ -1184,7 +1261,7 @@ describe('Recall conversation capture', () => {
     }));
     mocks.readCandidate.mockImplementation(async (_userId: string, candidateId: string) => (
       candidateId === 'cand-promoted'
-        ? { id: candidateId, status: 'promoted', promotedAssetId: 'aa-promoted' }
+        ? { id: candidateId, status: 'confirmed', promotedAssetId: 'aa-promoted' }
         : { id: candidateId, status: 'rejected' }
     ));
     const paths = await import('../../../../src/main/features/recall/paths');
@@ -1217,7 +1294,7 @@ describe('Recall conversation capture', () => {
     expect(fs.readFileSync(storedPath, 'utf8')).toBe(beforeRead);
   });
 
-  it('keeps pending and deferred candidates in review', async () => {
+  it('keeps pending candidates in review while deferred candidates stay quiet', async () => {
     const capture = await captureModule();
     const queued = await capture.queueRecallCaptureFromTerminal(completedEvent);
     const store = await import('../../../../src/main/features/recall/store');
@@ -1228,7 +1305,7 @@ describe('Recall conversation capture', () => {
     }));
     mocks.readCandidate.mockImplementation(async (_userId: string, candidateId: string) => (
       candidateId === 'cand-pending'
-        ? { id: candidateId, status: 'pending' }
+        ? { id: candidateId, status: 'pending_review' }
         : { id: candidateId, status: 'deferred' }
     ));
 
@@ -1239,7 +1316,7 @@ describe('Recall conversation capture', () => {
       workflowStatus: 'review_ready',
       displayStatus: 'review_ready',
       displayReason: 'review_pending',
-      reviewSummary: { total: 2, pending: 1, deferred: 1, promoted: 0, rejected: 0, missing: 0 },
+      reviewSummary: { total: 1, pending: 1, deferred: 0, promoted: 0, rejected: 0, missing: 0 },
       linkedAssetIds: [],
       nextAction: 'review_candidates',
       actions: expect.arrayContaining(['review_candidates', 'open_conversation']),
@@ -1316,7 +1393,7 @@ describe('Recall conversation capture', () => {
     const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
     mocks.readCandidate.mockImplementation(async (_userId: string, candidateId: string) => ({
       id: candidateId,
-      status: promoted ? 'promoted' : 'pending',
+      status: promoted ? 'confirmed' : 'pending_review',
       ...(promoted ? { promotedAssetId: 'aa-write' } : {}),
     }));
     mocks.promoteCandidate.mockImplementationOnce(async (_userId: string, candidateId: string) => {
@@ -1324,7 +1401,7 @@ describe('Recall conversation capture', () => {
       await writeGate;
       promoted = true;
       return {
-        candidate: { id: candidateId, status: 'promoted', promotedAssetId: 'aa-write' },
+        candidate: { id: candidateId, status: 'confirmed', promotedAssetId: 'aa-write' },
         asset: { id: 'aa-write' },
       };
     });
@@ -1362,7 +1439,7 @@ describe('Recall conversation capture', () => {
       writingCandidateId: 'cand-write',
       candidateIds: ['cand-write'],
     }));
-    mocks.readCandidate.mockResolvedValue({ id: 'cand-write', status: 'pending' });
+    mocks.readCandidate.mockResolvedValue({ id: 'cand-write', status: 'pending_review' });
 
     await expect(capture.recoverRecallCaptures('capture-user')).resolves.toBe(0);
     const recovered = await capture.readRecallCaptureWorkflow('capture-user', queued!.id);

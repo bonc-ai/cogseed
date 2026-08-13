@@ -16,6 +16,7 @@ import {
 } from '../group_chat/bus';
 import type { GroupMessage } from '../group_chat/visibility';
 import {
+  isRecallCandidateReviewable,
   promoteRecallCandidate,
   readRecallCandidate,
   saveRecallCandidate,
@@ -240,10 +241,14 @@ export interface CapturePromptMessage {
 
 interface ParsedCandidate {
   judgment: string;
+  value: string;
   summary: string;
   uncertainty?: string;
   suggestedType: AbilityAssetType;
   suggestedScope: string;
+  suggestedAction?: 'create' | 'update' | 'limit_scope' | 'pause' | 'keep_current' | 'reject';
+  risk?: 'low' | 'medium' | 'high';
+  targetAssetId?: string;
   evidence: string[];
 }
 
@@ -487,6 +492,17 @@ function parseCandidateType(value: unknown): AbilityAssetType {
   throw new CaptureFailure('invalid_model_output', 'invalid suggestedType');
 }
 
+function parseCandidateAction(value: unknown): NonNullable<ParsedCandidate['suggestedAction']> {
+  if (value === 'create' || value === 'update' || value === 'limit_scope' || value === 'pause'
+    || value === 'keep_current' || value === 'reject') return value;
+  throw new CaptureFailure('invalid_model_output', 'invalid suggestedAction');
+}
+
+function parseCandidateRisk(value: unknown): NonNullable<ParsedCandidate['risk']> {
+  if (value === 'low' || value === 'medium' || value === 'high') return value;
+  throw new CaptureFailure('invalid_model_output', 'invalid risk');
+}
+
 export function parseRecallCaptureOutput(raw: string, validLabels: Set<string>): ParsedCandidate[] {
   let parsed: unknown;
   try {
@@ -519,12 +535,20 @@ export function parseRecallCaptureOutput(raw: string, validLabels: Set<string>):
     const uncertainty = candidate.uncertainty === undefined
       ? undefined
       : boundedRequiredText(candidate.uncertainty, 'uncertainty', 1_000);
+    const targetAssetId = candidate.targetAssetId === undefined
+      ? undefined
+      : boundedRequiredText(candidate.targetAssetId, 'targetAssetId', 160);
+    if (targetAssetId && !safeId(targetAssetId)) throw new CaptureFailure('invalid_model_output', 'invalid targetAssetId');
     return {
       judgment: boundedRequiredText(candidate.judgment, 'judgment', 4_000),
+      value: boundedRequiredText(candidate.value ?? candidate.summary, 'value', 1_000),
       summary: boundedRequiredText(candidate.summary, 'summary', 1_000),
       ...(uncertainty ? { uncertainty } : {}),
       suggestedType: parseCandidateType(candidate.suggestedType),
       suggestedScope: boundedRequiredText(candidate.suggestedScope, 'suggestedScope', 500),
+      ...(candidate.suggestedAction === undefined ? {} : { suggestedAction: parseCandidateAction(candidate.suggestedAction) }),
+      ...(candidate.risk === undefined ? {} : { risk: parseCandidateRisk(candidate.risk) }),
+      ...(targetAssetId ? { targetAssetId } : {}),
       evidence,
     };
   });
@@ -534,7 +558,7 @@ function extractionSystemPrompt(): string {
   return [
     'You extract durable, user-reviewable knowledge from one completed conversation run.',
     'Return exactly one JSON object and no markdown or commentary.',
-    'Schema: {"candidates":[{"judgment":"...","summary":"...","suggestedType":"personal|rule|template|skill_method","suggestedScope":"...","evidence":["m1"],"uncertainty":"optional"}]}',
+    'Schema: {"candidates":[{"judgment":"what to retain","value":"how this reduces future repetition or risk","summary":"short title","suggestedType":"personal|rule|template|skill_method","suggestedScope":"...","suggestedAction":"create|update|limit_scope|pause|keep_current|reject","targetAssetId":"required unless action is create","risk":"low|medium|high","evidence":["m1"],"uncertainty":"optional"}]}',
     'Return at most 3 candidates. Return {"candidates":[]} when nothing is durable enough.',
     'Only extract reusable preferences, constraints, decisions, templates, or methods supported by the supplied messages.',
     'Write candidate text in the same language as the conversation.',
@@ -691,7 +715,7 @@ async function summarizeRecallCaptures(
     const candidateIds = [...new Set(capture.candidateIds)];
     const candidates = await Promise.all(candidateIds.map(readCandidate));
     const reviewSummary: RecallCaptureReviewSummary = {
-      total: candidateIds.length,
+      total: 0,
       pending: 0,
       deferred: 0,
       promoted: 0,
@@ -701,17 +725,25 @@ async function summarizeRecallCaptures(
     const linkedAssetIds = new Set<string>();
     for (const candidate of candidates) {
       if (!candidate) {
+        reviewSummary.total += 1;
         reviewSummary.missing += 1;
         continue;
       }
-      reviewSummary[candidate.status] += 1;
-      if (candidate.status === 'promoted' && candidate.promotedAssetId && safeId(candidate.promotedAssetId)) {
+      if (candidate.status === 'observed' || candidate.status === 'weak_observation' || candidate.status === 'deferred') continue;
+      reviewSummary.total += 1;
+      if (candidate.status === 'pending_review' || candidate.status === 'failed') reviewSummary.pending += 1;
+      else if (candidate.status === 'confirmed') reviewSummary.promoted += 1;
+      else if (candidate.status === 'ignored' || candidate.status === 'expired') reviewSummary.rejected += 1;
+      else reviewSummary[candidate.status] += 1;
+      if (candidate.status === 'confirmed' && candidate.promotedAssetId && safeId(candidate.promotedAssetId)) {
         linkedAssetIds.add(candidate.promotedAssetId);
       }
     }
 
     let workflowStatus: RecallCaptureWorkflowStatus = capture.status;
     if (capture.status === 'no_candidate') {
+      workflowStatus = 'completed';
+    } else if (capture.status === 'review_ready' && reviewSummary.total === 0) {
       workflowStatus = 'completed';
     } else if (capture.status === 'review_ready' && reviewSummary.missing > 0) {
       workflowStatus = 'failed';
@@ -1170,8 +1202,8 @@ export async function runRecallCapture(
           comparableCandidateText(current.judgment) === comparableCandidateText(candidate.judgment)
         ));
         if (matching) {
-          if (matching.status === 'pending' || matching.status === 'deferred') candidates.push(matching);
-          continue;
+          if (isRecallCandidateReviewable(matching)) candidates.push(matching);
+          if (isRecallCandidateReviewable(matching) || matching.status === 'confirmed') continue;
         }
       }
       const artifactRefs = evidenceMessages.flatMap((message) => message.artifacts.map((artifact) => ({
@@ -1182,13 +1214,18 @@ export async function runRecallCapture(
         title: artifact.title,
       })));
       try {
-        candidates.push(await saveRecallCandidate(userId, {
+        const storedCandidate = await saveRecallCandidate(userId, {
           judgment: candidate.judgment,
+          value: candidate.value,
           summary: candidate.summary,
           ...(candidate.uncertainty ? { uncertainty: candidate.uncertainty } : {}),
           suggestedType: candidate.suggestedType,
           suggestedScope: candidate.suggestedScope,
+          ...(candidate.suggestedAction ? { suggestedAction: candidate.suggestedAction } : {}),
+          ...(candidate.risk ? { risk: candidate.risk } : {}),
+          ...(candidate.targetAssetId ? { targetAssetId: candidate.targetAssetId } : {}),
           captureKey: `capture-${capture.id}-${index}`,
+          taskRunId: capture.terminalRunId,
           sourceRefs: [
             { kind: 'conversation', subtype: 'session', scope: 'conversation', id: capture.conversationId, title: conversation.title },
             ...evidenceMessages.map((message) => ({
@@ -1199,7 +1236,8 @@ export async function runRecallCapture(
             })),
             ...artifactRefs,
           ],
-        }));
+        });
+        if (isRecallCandidateReviewable(storedCandidate)) candidates.push(storedCandidate);
       } catch {
         throw new CaptureFailure('candidate_save_failed', 'candidate could not be saved');
       }
@@ -1215,30 +1253,13 @@ export async function runRecallCapture(
         });
     if (capture.status !== 'extracting' || signal?.aborted) return settleInterruptedCapture(userId, id);
 
-    const reviewSettings = await readRecallCaptureSettings(userId);
-    const automaticCandidates = reviewSettings.reviewPolicy === 'auto'
-      ? candidates.filter((candidate) => !candidate.uncertainty)
-      : [];
-    if (automaticCandidates.length) {
-      capture = await setCaptureStage(userId, id, 'asset_write');
-      if (capture.status !== 'extracting' || signal?.aborted) return settleInterruptedCapture(userId, id);
-      try {
-        for (const candidate of automaticCandidates) {
-          const promoted = await promoteRecallCandidate(userId, candidate.id, { actor: 'user' });
-          await prepareSkillDraftForPromotedAsset(userId, promoted);
-        }
-      } catch {
-        throw new CaptureFailure('asset_write_failed', 'automatic recall asset write failed');
-      }
-    }
-
     const finishedAt = new Date().toISOString();
     const modelUsage = normalizeModelUsage(result.meta.usage);
     capture = await updateCapture(userId, id, (current) => current.status !== 'extracting'
       ? current
       : {
           ...current,
-          status: candidates.length ? 'review_ready' : 'no_candidate',
+          status: candidates.some(isRecallCandidateReviewable) ? 'review_ready' : 'no_candidate',
           stage: undefined,
           candidateIds,
           errorCode: undefined,
@@ -1692,11 +1713,12 @@ export async function queueManualRecallCaptureFromConversation(
 export async function promoteRecallCaptureCandidate(
   userId: string,
   candidateId: string,
+  options: { riskAcknowledged?: boolean } = {},
 ): Promise<{ candidate: RecallCandidateRecord; asset: RecallAbilityAssetRecord }> {
   if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
   const capture = (await listAllRecallCaptures(userId)).find((item) => item.candidateIds.includes(candidateId));
   if (!capture) {
-    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user' });
+    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', riskAcknowledged: options.riskAcknowledged });
     await prepareSkillDraftForPromotedAsset(userId, promoted);
     return promoted;
   }
@@ -1716,7 +1738,7 @@ export async function promoteRecallCaptureCandidate(
   });
 
   try {
-    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user' });
+    const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', riskAcknowledged: options.riskAcknowledged });
     await prepareSkillDraftForPromotedAsset(userId, promoted);
     await updateCapture(userId, capture.id, (current) => (
       current.status === 'writing' && current.writingCandidateId === candidateId

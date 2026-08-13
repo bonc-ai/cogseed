@@ -11,8 +11,14 @@ const recallMock = vi.hoisted(() => ({
   readRecallCandidate: vi.fn(async (_uid: string, id: string) => ({ id })),
   saveRecallCandidate: vi.fn(async (_uid: string, input: unknown) => input),
   deferRecallCandidate: vi.fn(async (_uid: string, id: string, note?: string) => ({ id, note, status: 'deferred' })),
-  resumeRecallCandidate: vi.fn(async (_uid: string, id: string) => ({ id, status: 'pending' })),
+  resumeRecallCandidate: vi.fn(async (_uid: string, id: string) => ({ id, status: 'pending_review' })),
   rejectRecallCandidate: vi.fn(async (_uid: string, id: string, note?: string) => ({ id, note, status: 'rejected' })),
+  ignoreRecallCandidate: vi.fn(async (_uid: string, id: string, note?: string) => ({ id, note, status: 'ignored' })),
+  keepCurrentRecallCandidate: vi.fn(async (_uid: string, id: string, note?: string) => ({ id, note, status: 'ignored' })),
+  batchPromoteRecallCandidates: vi.fn(async (_uid: string, candidateIds: string[]) => ({
+    succeeded: candidateIds.map((candidateId) => ({ candidateId, assetId: `aa-${candidateId}`, reviewDecisionId: `rd_${candidateId}00000000` })),
+    failed: [],
+  })),
   promoteRecallCandidate: vi.fn(async (_uid: string, id: string) => ({ candidate: { id }, asset: { id: 'aa-a' } })),
 }));
 const assetMock = vi.hoisted(() => ({
@@ -151,7 +157,11 @@ describe('ipc › recall candidate governance', () => {
     await expect(call('recall.candidates.save', { judgment: 'Use decision logs', suggestedType: 'rule', suggestedScope: 'architecture', sourceRefs: [{ kind: 'execution', id: 'exec-a' }] })).resolves.toMatchObject({ ok: true });
     expect(recallMock.saveRecallCandidate).toHaveBeenCalledWith(UID, expect.objectContaining({ judgment: 'Use decision logs', suggestedType: 'rule' }));
     await expect(call('recall.candidates.promote', { candidateId: 'cand-a' })).resolves.toMatchObject({ ok: true, asset: { id: 'aa-a' } });
-    expect(captureMock.promoteRecallCaptureCandidate).toHaveBeenCalledWith(UID, 'cand-a');
+    expect(captureMock.promoteRecallCaptureCandidate).toHaveBeenCalledWith(UID, 'cand-a', { riskAcknowledged: false });
+    await expect(call('recall.candidates.ignore', { candidateId: 'cand-a', note: 'not reusable' })).resolves.toMatchObject({ ok: true, candidate: { status: 'ignored' } });
+    expect(recallMock.ignoreRecallCandidate).toHaveBeenCalledWith(UID, 'cand-a', 'not reusable');
+    await expect(call('recall.candidates.promoteBatch', { candidateIds: ['cand-a', 'cand-b'] })).resolves.toMatchObject({ ok: true, failed: [] });
+    expect(recallMock.batchPromoteRecallCandidates).toHaveBeenCalledWith(UID, ['cand-a', 'cand-b']);
   });
 
   it('routes structured ability asset governance and recommendations', async () => {

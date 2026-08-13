@@ -224,7 +224,7 @@ export async function revokeUserTeachingSignal(userId: string, signalId: string)
   await Promise.all(updated.candidateIds.map(async (candidateId) => {
     try {
       const candidate = await readRecallCandidate(userId, candidateId);
-      if (candidate.status === 'pending' || candidate.status === 'deferred') {
+      if (candidate.status === 'pending_review' || candidate.status === 'deferred' || candidate.status === 'failed') {
         await rejectRecallCandidate(userId, candidateId, 'teaching_signal_revoked');
       }
     } catch {

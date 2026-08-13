@@ -616,7 +616,7 @@ function _initSkillsCognitionBindings() {
         .find((capture) => capture.id === _skillsCognitionState.selectedCaptureId);
       const selectedIds = selectedCapture ? new Set(selectedCapture.candidateIds || []) : null;
       const candidateIds = (_skillsCognitionState.recallCandidates || [])
-        .filter((candidate) => (candidate.status === 'pending' || candidate.status === 'deferred')
+        .filter((candidate) => candidate.status === 'pending_review' && candidate.risk !== 'high'
           && (!selectedIds || selectedIds.has(candidate.id)))
         .map((candidate) => candidate.id);
       if (!candidateIds.length) return;
@@ -624,25 +624,9 @@ function _initSkillsCognitionBindings() {
       _skillsCognitionState.writingRecallCandidateBatch = true;
       const failures = [];
       try {
-        for (const candidateId of candidateIds) {
-          _skillsCognitionState.writingRecallCandidateId = candidateId;
-          renderSkillsCognitionCaptures();
-          try {
-            const result = await window.cogseed.invoke('recall.candidates.promote', { candidateId });
-            if (!result?.ok) throw new Error(result?.error || 'recall candidate action failed');
-            if (result.candidate) {
-              _skillsCognitionState.recallCandidates = (_skillsCognitionState.recallCandidates || [])
-                .map((candidate) => candidate.id === candidateId ? result.candidate : candidate);
-            }
-            if (result.asset) {
-              const assets = new Map((_skillsCognitionState.assets || []).map((asset) => [asset.id, asset]));
-              assets.set(result.asset.id, result.asset);
-              _skillsCognitionState.assets = Array.from(assets.values());
-            }
-          } catch (error) {
-            failures.push({ candidateId, error });
-          }
-        }
+        const result = await window.cogseed.invoke('recall.candidates.promoteBatch', { candidateIds });
+        if (!result?.ok) throw new Error(result?.error || 'recall candidate batch action failed');
+        failures.push(...(result.failed || []));
         await loadSkillsCognitionSnapshot().catch(() => {});
         if (failures.length) {
           const message = _cognitionText(
@@ -671,11 +655,24 @@ function _initSkillsCognitionBindings() {
       if (actionName === 'cancel-edit') { _skillsCognitionState.editingRecallCandidateId = ''; renderSkillsCognitionCandidates(); return; }
       recallAction.dataset.busy = '1'; recallAction.disabled = true;
       try {
-        let channel = actionName === 'promote' ? 'recall.candidates.promote' : actionName === 'reject' ? 'recall.candidates.reject' : actionName === 'defer' ? 'recall.candidates.defer' : actionName === 'resume' ? 'recall.candidates.resume' : '';
+        let channel = actionName === 'promote' ? 'recall.candidates.promote' : actionName === 'reject' ? 'recall.candidates.reject' : actionName === 'ignore' ? 'recall.candidates.ignore' : actionName === 'keep-current' ? 'recall.candidates.keepCurrent' : actionName === 'defer' ? 'recall.candidates.defer' : actionName === 'resume' ? 'recall.candidates.resume' : '';
         let payload = { candidateId };
+        const candidate = (_skillsCognitionState.recallCandidates || []).find((item) => item.id === candidateId);
+        let riskAcknowledged = false;
+        if (actionName === 'promote' || actionName === 'save-and-promote') {
+          if (candidate?.risk === 'high') {
+            const confirmed = typeof uiConfirm === 'function' && await uiConfirm({
+              message: _cognitionText('cognition.candidate_high_risk_confirm', '这是高风险资产变更。确认继续保存吗？'),
+              okLabel: _cognitionText('common.confirm', '确认'),
+              cancelLabel: _cognitionText('common.cancel', '取消'),
+            });
+            if (!confirmed) return;
+            riskAcknowledged = true;
+            if (actionName === 'promote') payload = { candidateId, riskAcknowledged: true };
+          }
+        }
         if (actionName === 'save-and-promote') {
           const card = recallAction.closest('[data-recall-candidate-id]');
-          const candidate = (_skillsCognitionState.recallCandidates || []).find((item) => item.id === candidateId);
           if (!card || !candidate) throw new Error('recall candidate unavailable');
           channel = 'recall.candidates.update';
           const evidenceText = card.querySelector('[data-recall-edit-evidence]')?.value || '';
@@ -683,7 +680,7 @@ function _initSkillsCognitionBindings() {
             const divider = value.indexOf(':');
             return divider > 0 ? { kind: value.slice(0, divider), id: value.slice(divider + 1) } : { kind: 'memory', id: value };
           });
-          payload = { candidateId, judgment: card.querySelector('[data-recall-edit-judgment]')?.value || '', summary: card.querySelector('[data-recall-edit-summary]')?.value || '', suggestedScope: card.querySelector('[data-recall-edit-scope]')?.value || '', suggestedType: card.querySelector('[data-recall-edit-type]')?.value || '', sourceRefs };
+          payload = { candidateId, judgment: card.querySelector('[data-recall-edit-judgment]')?.value || '', value: candidate.value || '', summary: card.querySelector('[data-recall-edit-summary]')?.value || '', suggestedScope: card.querySelector('[data-recall-edit-scope]')?.value || '', suggestedType: card.querySelector('[data-recall-edit-type]')?.value || '', suggestedAction: candidate.suggestedAction || 'create', risk: candidate.risk || 'low', sourceRefs, evidenceRefs: sourceRefs, expiresAt: candidate.expiresAt, taskRunId: candidate.taskRunId, targetAssetId: candidate.targetAssetId };
         }
         if (!channel) return;
         if (actionName === 'promote' || actionName === 'save-and-promote') {
@@ -694,7 +691,7 @@ function _initSkillsCognitionBindings() {
         const result = await window.cogseed.invoke(channel, payload);
         if (!result?.ok) throw new Error(result?.error || 'recall candidate action failed');
         if (actionName === 'save-and-promote') {
-          const promoted = await window.cogseed.invoke('recall.candidates.promote', { candidateId });
+          const promoted = await window.cogseed.invoke('recall.candidates.promote', { candidateId, ...(riskAcknowledged ? { riskAcknowledged: true } : {}) });
           if (!promoted?.ok) throw new Error(promoted?.error || 'recall candidate action failed');
         }
         _skillsCognitionState.editingRecallCandidateId = '';
