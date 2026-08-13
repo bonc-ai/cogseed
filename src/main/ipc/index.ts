@@ -114,7 +114,6 @@ import { invokeHandlers as messagingHandlers } from './messaging';
 import { invokeHandlers as personalContextHandlers } from './personal-context';
 import { invokeHandlers as touchpointHandlers } from './touchpoints';
 import { invokeHandlers as desktopWorkbenchHandlers } from './desktop-workbench';
-import { invokeHandlers as hubAccountHandlers } from './hub-account';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as cognitionHandlers } from './cognition';
 import { safeId } from '../storage';
@@ -4215,9 +4214,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   ...touchpointHandlers,
   ...desktopWorkbenchHandlers,
 
-  // CogSeed Hub account — desktop-side account management against the Hub
-  // account service. Tokens never cross this table; renderer-safe status DTOs only.
-  ...hubAccountHandlers,
   // Cross-session memory UI — view/edit/import/export over features/memory.ts.
   ...memoryHandlers,
 
