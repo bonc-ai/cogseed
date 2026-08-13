@@ -108,10 +108,12 @@ async function prepare(
     const forecast = await run(userId, {
       taskRunId: requirement.taskId,
       requirementId: requirement.id,
+      committedProjectionId: projection.id,
       ...(task?.workspaceId ? { workspaceId: task.workspaceId } : {}),
       taskText: requirement.goalText,
+      constraints: [],
+      acceptanceCriteria: requirement.rHat?.acceptanceSignals || [],
     });
-    if (!forecast) throw Object.assign(new Error('world model unavailable'), { code: 'world_model_unavailable' });
     await replaceKstarRequirement(userId, { ...requirement, forecastId: forecast.id, updatedAt: nowIso() });
     await updatePendingProjectionDispatch(userId, input.cid, (current) => ({
       ...current,

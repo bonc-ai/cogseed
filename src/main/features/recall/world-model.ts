@@ -38,6 +38,10 @@ const PREDICATE_TESTS: Record<WorldModelPredicateKey, (s: WorldModelSnapshot) =>
   no_active_assets: (s) => s.ontology.activeAssets === 0,
 };
 
+function bareCausalRules(input: WorldModelSimulationInput['k']['rules']): CausalRule[] {
+  return input.map((entry) => ('rule' in entry ? entry.rule : entry));
+}
+
 /**
  * F002 equivalent: apply R-Box rules to an A-Box snapshot and return the
  * predicted risks whose deterministic predicate currently fires.
@@ -119,7 +123,7 @@ export async function simulateWorld(
     throw new Error('world model simulation requires a configured model');
   }
 
-  const predictedRisks = applyCausalRules(snapshot, input.k.rules);
+  const predictedRisks = applyCausalRules(snapshot, bareCausalRules(input.k.rules));
 
   const { runner } = await buildRunner({
     sessionId: `kstar-forecast-${snapshot.taskRunId}`,
@@ -134,7 +138,7 @@ export async function simulateWorld(
     : '';
   const result = await runner.run({
     message: JSON.stringify({
-      k: { abilityAssetRefs: input.k.abilityAssetRefs },
+      k: input.k,
       s: input.s,
       t: input.t,
     }) + riskBlock,
@@ -166,7 +170,7 @@ export function collectWorldSnapshot(
   return {
     schemaVersion: 1,
     ownerId: userId,
-    id: `snap-${input.taskRunId}`,
+    id: `snap-${genId12()}`,
     taskRunId: input.taskRunId,
     environment: {
       workspace: input.workspace,
@@ -199,20 +203,52 @@ export async function readWorldModelForecast(
   forecastId: string,
 ): Promise<WorldModelForecastRecord | null> {
   const raw = await readRecallJsonRecord(userId, 'world-model-forecasts', forecastId);
-  return raw ? raw as WorldModelForecastRecord : null;
+  if (!raw) return null;
+  const record = raw as WorldModelForecastRecord;
+  const provenanceComplete = Boolean(
+    record.projectionId
+    && record.projectionConfirmedAt
+    && record.assetVersions
+    && record.ruleRefs
+    && record.snapshotId
+  );
+  return { ...record, provenanceComplete };
 }
 
 /** Build a forecast record from simulation inputs + output. */
 export function buildWorldModelForecastRecord(
   userId: string,
-  input: { taskRunId: string; requirementId: string; forecast: WorldModelForecast; simulationInput: WorldModelSimulationInput },
+  input: {
+    taskRunId: string;
+    requirementId: string;
+    forecast: WorldModelForecast;
+    simulationInput: WorldModelSimulationInput;
+    projectionId?: string;
+    projectionConfirmedAt?: string;
+    assetVersions?: Record<string, string>;
+    ruleRefs?: string[];
+    snapshotId?: string;
+  },
 ): WorldModelForecastRecord {
+  const provenanceComplete = Boolean(
+    input.projectionId
+    && input.projectionConfirmedAt
+    && input.assetVersions
+    && input.ruleRefs
+    && input.snapshotId
+  );
   return {
     schemaVersion: 1,
     ownerId: userId,
     id: `wf-${genId12()}`,
     taskRunId: input.taskRunId,
     requirementId: input.requirementId,
+    ...(input.projectionId ? { projectionId: input.projectionId } : {}),
+    ...(input.projectionConfirmedAt ? { projectionConfirmedAt: input.projectionConfirmedAt } : {}),
+    ...(input.assetVersions ? { assetVersions: input.assetVersions } : {}),
+    ...(input.ruleRefs ? { ruleRefs: input.ruleRefs } : {}),
+    ...(input.snapshotId ? { snapshotId: input.snapshotId } : {}),
+    provenanceComplete,
     input: input.simulationInput,
     forecast: input.forecast,
     createdAt: new Date().toISOString(),

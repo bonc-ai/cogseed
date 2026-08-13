@@ -135,23 +135,54 @@ export interface WorldModelForecast {
   predictedRisks: PredictedRisk[];
 }
 
+export interface WorldModelKnowledge {
+  /** Present for strong-consistency Forecasts; omitted only by legacy records. */
+  projectionId?: string;
+  projectionConfirmedAt?: string;
+  abilityAssetRefs: string[];
+  abilityAssets?: WorldModelAbilityAsset[];
+  assetVersions?: Record<string, string>;
+  /** Legacy records store bare rules; new records store versioned rule refs. */
+  rules: Array<CausalRule | WorldModelCausalRuleRef>;
+}
+
+export interface WorldModelSituation {
+  snapshotId?: string;
+  workspaceId?: string;
+  conversationSummary: string;
+  environment?: {
+    workspaceAvailable: boolean;
+    modelConfigured: boolean;
+    fileSystemAvailable: boolean;
+    shellAvailable: boolean;
+  };
+  execution?: {
+    groupChatStatus: 'idle' | 'running' | 'aborted';
+    availableActors: string[];
+    accessConstraints: string[];
+    energyConstraints: string[];
+  };
+  lifecycle?: {
+    requirementStatus?: string;
+    projectionStatus: 'confirmed';
+  };
+  recall?: {
+    selectedAssetCount: number;
+    selectedRuleCount: number;
+  };
+}
+
+export interface WorldModelTask {
+  userGoal: string;
+  constraints: string[];
+  acceptanceCriteria?: string[];
+}
+
 /** Inputs to the world-model simulation f(K, S, T). */
 export interface WorldModelSimulationInput {
-  /** K = ontology snapshot (ability assets that form the knowledge base). */
-  k: {
-    abilityAssetRefs: string[];
-    rules: CausalRule[];
-  };
-  /** S = current situation snapshot. */
-  s: {
-    workspaceId?: string;
-    conversationSummary: string;
-  };
-  /** T = task to forecast. */
-  t: {
-    userGoal: string;
-    constraints: string[];
-  };
+  k: WorldModelKnowledge;
+  s: WorldModelSituation;
+  t: WorldModelTask;
 }
 
 /** Persisted world-model forecast record. */
@@ -159,6 +190,13 @@ export interface WorldModelForecastRecord extends RecallJsonRecord {
   schemaVersion: 1;
   taskRunId: string;
   requirementId: string;
+  /** Strong-consistency provenance. Legacy records may omit these fields. */
+  projectionId?: string;
+  projectionConfirmedAt?: string;
+  assetVersions?: Record<string, string>;
+  ruleRefs?: string[];
+  snapshotId?: string;
+  provenanceComplete?: boolean;
   input: WorldModelSimulationInput;
   forecast: WorldModelForecast;
   createdAt: string;
