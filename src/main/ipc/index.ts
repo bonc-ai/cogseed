@@ -1746,7 +1746,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (target !== 'installed-skill') throw new Error('unsupported validation target');
     const skillDir = userMarketplaceSkillDir(ctx.userId, skillId);
     return { ok: true, validation: await p3394.runSkillValidation(ctx.userId, {
-      skillId, target, skillDir, allowedRoots: [skillDir], boundary: 'real',
+      skillId, target, skillDir, allowedRoots: [skillDir], boundary: 'static',
     }) };
   },
 
