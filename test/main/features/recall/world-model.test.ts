@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyCausalRules, normalizeCausalRule } from '../../../../src/main/features/recall/world-model';
+import { applyCausalRules, normalizeCausalRule, reconcileWorldModel } from '../../../../src/main/features/recall/world-model';
 import type { WorldModelSnapshot } from '../../../../src/main/features/recall/world-model-types';
 
 function snapshot(overrides: Partial<WorldModelSnapshot> = {}): WorldModelSnapshot {
@@ -82,5 +82,41 @@ describe('recall world-model causal rules', () => {
       [normalizeCausalRule(rule({ cause: 'Too few rules', predicateKey: 'too_few_rules', severity: 'low', deltaR: -0.2 })) as any],
     );
     expect(risks).toEqual([expect.objectContaining({ cause: 'Too few rules' })]);
+  });
+});
+
+describe('recall world-model reconciliation', () => {
+  const forecast = {
+    aHat: { plan: ['write'], expectedTools: ['write_file'], expectedActors: ['commander'] },
+    rHat: { summary: 'done', acceptanceSignals: ['verified'], predictedFiles: ['report.md'] },
+    predictedRisks: [],
+  };
+
+  function episode(overrides: Partial<any> = {}): any {
+    return {
+      a: { toolCalls: [{ name: 'write_file', status: 'ok' }], agentActions: [] },
+      r: { status: 'completed', finalText: 'done', producedFiles: ['report.md'], verification: { passed: true } },
+      ...overrides,
+    };
+  }
+
+  it('returns execution_gap when a predicted tool was not realized (deltaA gate)', () => {
+    const result = reconcileWorldModel(forecast, episode({ a: { toolCalls: [{ name: 'read_file', status: 'ok' }] } }));
+    expect(result.deltaA).toBe(-1);
+    expect(result.deltaR).toBe('unknown');
+    expect(result.attribution).toBe('execution_gap');
+  });
+
+  it('returns clean deltaR when predicted and realized interventions match', () => {
+    const result = reconcileWorldModel(forecast, episode());
+    expect(result.deltaA).toBe(0);
+    expect(result.deltaR).toBe(0);
+  });
+
+  it('marks deltaR polluted when tools match but predicted files are missing', () => {
+    const result = reconcileWorldModel(forecast, episode({ r: { status: 'completed', finalText: 'done', producedFiles: [], verification: { passed: true } } }));
+    expect(result.deltaA).toBe(0);
+    expect(result.deltaR).toBe(-1);
+    expect(result.attribution).toBe('knowledge_gap');
   });
 });

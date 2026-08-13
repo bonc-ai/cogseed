@@ -86,6 +86,8 @@ export interface KstarRequirementRecord extends KstarJsonRecord {
    *  `projectionId` stays as the latest pointer for backward-compatible
    *  lifecycle/wake lookups; this array retains every prior projection. */
   projectionIds: string[];
+  /** World-model forecast record produced at task boundary ((A_hat, R_hat)). */
+  forecastId?: string;
   /** Wake request bound when the preloaded asset list is confirmed and the Agent is woken. */
   wakeRequestId?: string;
   prmReview?: KstarRequirementPrmReview;

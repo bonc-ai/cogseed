@@ -74,6 +74,7 @@ function validateRequirement(userId: string, raw: Record<string, unknown>): Ksta
     typeof raw.goalText !== 'string' || raw.goalText.length > MAX_GOAL ||
     (raw.rHat !== undefined && (() => { validateExpectedResult(raw.rHat); return false; })()) ||
     (raw.projectionId !== undefined && (typeof raw.projectionId !== 'string' || !safeId(raw.projectionId))) ||
+    (raw.forecastId !== undefined && (typeof raw.forecastId !== 'string' || !safeId(raw.forecastId))) ||
     !Array.isArray(raw.projectionIds) || raw.projectionIds.some((item: unknown) => typeof item !== 'string' || !safeId(item)) ||
     (raw.wakeRequestId !== undefined && (typeof raw.wakeRequestId !== 'string' || !safeId(raw.wakeRequestId))) ||
     (raw.prmReview !== undefined && (typeof raw.prmReview !== 'object' || raw.prmReview === null)) ||
