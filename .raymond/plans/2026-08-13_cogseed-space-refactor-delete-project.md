@@ -85,9 +85,10 @@ Conversation.space_id (string | null)
   - 文件：`src/main/features/spaces.ts`（字段已存在，加读写函数）
   - 验收：绑定/解绑/列出走通，policy 默认 follow_latest。
   - ✅ 完成（2026-08-13）：`bindSpaceAsset(uid, spaceId, ref)`（policy 缺省 `follow_latest_compatible`，同 asset_id 幂等覆盖 version/policy/updated_at，非法 ref → `invalid_ref`）；`unbindSpaceAsset`（按 asset_id 移除，空则清字段）；`listSpaceAssetBindings`（回填 title/asset_type，用动态 import `recall/asset-service.listAbilityAssets`，失败静默降级为空回填）；新增 `SpaceAssetBindingView` 展示类型。验证证据：`npm run typecheck` 通过；fixture（构造 recall 资产 schemaVersion/ownerId/id 完整）断言默认 policy、幂等覆盖、显式 policy、非法 ref、回填 title/type、解绑、not_found 全过。风险：回填依赖 recall 资产读取器，其校验较严（schemaVersion/ownerId/id 必填），资产缺失时 title/type 缺省为 undefined（UI 侧需容忍）。
-- [ ] **T1.4 IPC 三个 handler**：`ipc/index.ts` 加 `spaces.conversations.list`、`spaces.artifacts.list`、`spaces.assets.list`（+ assets.bind/unbind）。
+- [x] **T1.4 IPC 三个 handler**：`ipc/index.ts` 加 `spaces.conversations.list`、`spaces.artifacts.list`、`spaces.assets.list`（+ assets.bind/unbind）。
   - 文件：`src/main/ipc/index.ts`
   - 验收：`npm run typecheck` 通过；前端可 invoke 拿到数据。
+  - ✅ 完成（2026-08-13）：新增 5 个 handler——`spaces.conversations.list`（→chats.listSpaceConversations）、`spaces.artifacts.list`（→spacesArtifacts.listSpaceArtifacts）、`spaces.assets.list`（→spaces.listSpaceAssetBindings）、`spaces.assets.bind`（→spaces.bindSpaceAsset）、`spaces.assets.unbind`（→spaces.unbindSpaceAsset），均 `safeId` 校验 spaceId、错误 throw（与既有 spaces.* handler 同款）。`import * as spacesArtifacts` 已加。验证证据：`npm run typecheck` 通过；handler 键唯一无冲突；`npm run test:js` 18 failed files / 69 failed tests（7811 passed）——与基线完全一致，**新增失败 0**（grep 新增符号零命中）。前端 invoke 真数据渲染留待阶段 2（CDP）。
 
 ### 阶段 2：空间三 tab 前端（依赖阶段 1）
 

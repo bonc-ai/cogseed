@@ -22,6 +22,7 @@ import * as conversationAside from '../features/conversation_aside';
 import * as modelClient from '../model/client';
 import * as projects from '../features/projects';
 import * as spaces from '../features/spaces';
+import * as spacesArtifacts from '../features/spaces_artifacts';
 import * as projectFiles from '../features/project_files';
 import * as projectTasks from '../features/project_tasks';
 import * as projectLibraryIndexer from '../features/project_library_indexer';
@@ -1216,6 +1217,36 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'spaces.scenarios.list': async (_payload, _ctx) => {
     const scenarios = await import('../features/role_templates').then((m) => m.listScenarios());
     return { scenarios };
+  },
+
+  // ── 空间三 tab 数据源（空间化重构阶段 1）──────────────────────────────
+  'spaces.conversations.list': async ({ spaceId } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    return { conversations: await chats.listSpaceConversations(ctx.userId, spaceId) };
+  },
+
+  'spaces.artifacts.list': async ({ spaceId } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    return { artifacts: await spacesArtifacts.listSpaceArtifacts(ctx.userId, spaceId) };
+  },
+
+  'spaces.assets.list': async ({ spaceId } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    return { bindings: await spaces.listSpaceAssetBindings(ctx.userId, spaceId) };
+  },
+
+  'spaces.assets.bind': async ({ spaceId, ref } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    const result = await spaces.bindSpaceAsset(ctx.userId, spaceId, ref || {});
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { bindings: result.bindings };
+  },
+
+  'spaces.assets.unbind': async ({ spaceId, assetId } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    const result = await spaces.unbindSpaceAsset(ctx.userId, spaceId, assetId || '');
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { bindings: result.bindings };
   },
 
   // ── 项目 ↔ 空间绑定（工作空间一期）──────────────────────────────────────
