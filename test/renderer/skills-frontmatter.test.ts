@@ -409,7 +409,7 @@ describe('skills renderer frontmatter parsing', () => {
     context.document = {
       getElementById: (id: string) => id === 'skills-cognition-assets-body' ? body : null,
     };
-    vm.runInContext(`_skillsCognitionState.assets = [{"id": "CA-RULE-P3394-001", "type": "rule", "category": "rule", "title": "P3394产品决策治理规则", "source": "Codex S-P3394-0731", "version": "v1.1", "status": "active", "maturity": "transfer_validated", "owner": "本机用户 ZL", "scope": "当前P3394项目", "workspaceRefs": ["产品工作 Workspace"], "receiptRefs": ["CRR-P3394-QODER-001"], "candidateRefs": [], "relationRefs": [], "reuseCount": 1, "candidateCount": 0}, {"id": "candidate:patch-a", "type": "skill_method", "category": "skill_method", "title": "优化PRD回写Skill的来源分层", "source": "p3394_patch_candidate", "status": "candidate", "maturity": "bud", "owner": "local_user", "scope": "当前P3394项目", "workspaceRefs": [], "receiptRefs": [], "candidateRefs": ["p3394_patch:patch-a"], "relationRefs": [], "reuseCount": 0, "candidateCount": 1}];`, context);
+    vm.runInContext(`_skillsCognitionState.assets = [{"id": "CA-RULE-P3394-001", "type": "rule", "category": "rule", "title": "P3394产品决策治理规则", "source": "Codex S-P3394-0731", "version": "v1.1", "status": "active", "maturity": "transfer_validated", "owner": "本机用户 ZL", "scope": "当前P3394项目", "workspaceRefs": ["产品工作 Workspace"], "receiptRefs": ["CRR-P3394-QODER-001"], "candidateRefs": [], "relationRefs": [], "reuseCount": 1, "candidateCount": 0}, {"id": "candidate:method-a", "type": "skill_method", "category": "skill_method", "title": "优化PRD回写Skill的来源分层", "source": "recall_candidate", "status": "candidate", "maturity": "bud", "owner": "local_user", "scope": "当前P3394项目", "workspaceRefs": [], "receiptRefs": [], "candidateRefs": ["cand-method-a"], "relationRefs": [], "reuseCount": 0, "candidateCount": 1}];`, context);
 
     context.renderSkillsCognitionAssets();
 
@@ -494,7 +494,7 @@ describe('skills renderer frontmatter parsing', () => {
         scope: 'scope-b',
         workspaceRefs: [],
         receiptRefs: [],
-        candidateRefs: ['p3394_patch:B'],
+        candidateRefs: ['cand-b'],
         relationRefs: [],
       })}];
       _skillsCognitionState.selectedAssetId = 'candidate:B';
@@ -547,5 +547,42 @@ describe('skills renderer frontmatter parsing', () => {
     expect(body.innerHTML).toContain('搜索记忆内容');
   });
 
+
+
+  it('renders Recall asset governance state and actions in the latest asset detail layout', () => {
+    const context = loadSkillRendererHelpers();
+    const body = { innerHTML: '', querySelector: () => null };
+    context.document = {
+      getElementById: (id: string) => id === 'skills-cognition-assets-body' ? body : null,
+    };
+    vm.runInContext(`_skillsCognitionState.assets = [${JSON.stringify({
+      id: 'aa-governed',
+      type: 'rule',
+      category: 'rule',
+      title: 'Scoped review rule',
+      statement: 'Keep review evidence scoped.',
+      status: 'active',
+      maturity: 'transfer_validated',
+      version: '2',
+      scope: 'review',
+      scopePolicy: { purposeTags: ['review'], workspaceIds: ['workspace-a'] },
+      recommendedAction: 'rework',
+      recommendationReason: 'Narrow the boundary before reuse.',
+      evidenceRefs: [],
+      relationRefs: [],
+      workspaceRefs: [],
+      receiptRefs: [],
+      candidateRefs: [],
+      reuseCount: 0,
+      candidateCount: 0,
+    })}]; _skillsCognitionState.selectedAssetId = 'aa-governed';`, context);
+
+    context.renderSkillsCognitionAssets();
+
+    expect(body.innerHTML).toContain('Narrow the boundary before reuse.');
+    expect(body.innerHTML).toContain('workspace-a');
+    expect(body.innerHTML).toContain('data-ability-asset-action="pause"');
+    expect(body.innerHTML).toContain('data-ability-asset-action="acknowledge-recommendation"');
+  });
 
 });

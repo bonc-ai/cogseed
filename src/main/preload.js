@@ -347,7 +347,7 @@ function logRecord(record) {
 // the lifecycle (unlike `stream` which the renderer starts). Channel names are restricted to
 // a known prefix list so the renderer can't tap into arbitrary internal IPC traffic.
 const PUSH_EVENT_CHANNELS = new Set();
-const PUSH_EVENT_PREFIXES = ['marketplace:', 'conversations:', 'connectors:', 'client-config:', 'delete_file.', 'bridge:', 'bash:', 'interactive-cli:', 'messaging:'];
+const PUSH_EVENT_PREFIXES = ['marketplace:', 'conversations:', 'connectors:', 'client-config:', 'delete_file.', 'bridge:', 'bash:', 'interactive-cli:', 'messaging:', 'personal-context:'];
 function isAllowedPushChannel(channel) {
   if (typeof channel !== 'string') return false;
   return PUSH_EVENT_CHANNELS.has(channel) || PUSH_EVENT_PREFIXES.some((p) => channel.startsWith(p));
@@ -446,9 +446,10 @@ const cogseedApi = {
   onPushEvent,
   log: logRecord,
 };
-const orkasApi = new Proxy(cogseedApi, { get: (_target, prop) => cogseedApi[prop] });
 contextBridge.exposeInMainWorld('cogseed', cogseedApi);
-contextBridge.exposeInMainWorld('orkas', orkasApi);
+// contextBridge cannot clone Proxy objects in sandboxed renderers. Keep the
+// one-cycle compatibility alias as a plain object with the same allow-list.
+contextBridge.exposeInMainWorld('orkas', { ...cogseedApi });
 
 // Final-package launch smoke. The main process adds this private renderer
 // argument only when the release validator starts an isolated hidden window.

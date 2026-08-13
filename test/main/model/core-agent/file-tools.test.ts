@@ -579,6 +579,23 @@ describe('file-tools › stat_file', () => {
   });
 });
 
+describe('file-tools › list_files', () => {
+  it('treats an unmaterialized conversation workspace as an empty directory', async () => {
+    const { tools, wsDir } = await buildTools();
+    const conversationDir = path.join(wsDir, 'new-conversation');
+    expect(fs.existsSync(conversationDir)).toBe(false);
+
+    const r = await getTool(tools, 'list_files').execute(
+      { path: conversationDir },
+      { workingDir: conversationDir, signal: undefined } as any,
+    );
+
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toBe('');
+    expect(fs.existsSync(conversationDir)).toBe(false);
+  });
+});
+
 describe('file-tools › search_files', () => {
   it('finds by substring across workspace + attachment dir', async () => {
     const { tools, wsDir, attDir } = await buildTools();

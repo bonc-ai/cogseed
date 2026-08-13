@@ -3,6 +3,18 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+// listSpaces 内部动态 import('./agents')/('./skills') 构造真实有效集合；
+// 用可变 fixture 模拟「当前用户可见资源」，验证失效数非空集合假阳性（P3394 回归）。
+const visibleSkillIds = vi.hoisted(() => new Set<string>());
+const visibleAgentIds = vi.hoisted(() => new Set<string>());
+
+vi.mock('../../../src/main/features/skills', () => ({
+  listSkills: async () => Array.from(visibleSkillIds).map((id) => ({ id, name: id })),
+}));
+vi.mock('../../../src/main/features/agents', () => ({
+  listAgents: async () => Array.from(visibleAgentIds).map((agent_id) => ({ agent_id, name: agent_id })),
+}));
+
 // 纯函数直接静态导入（无 WS_ROOT 依赖）
 import {
   resolveSpaceResources,
@@ -38,6 +50,7 @@ function makeSpace(over: Partial<Space> = {}): Space {
     name: '测试空间',
     extra_skills: [],
     extra_agents: [],
+    secondary_template_ids: [],
     created_at: '2026-08-06T00:00:00',
     updated_at: '2026-08-06T00:00:00',
     ...over,
@@ -127,6 +140,70 @@ describe('spaces › resolveSpaceResources（纯函数）', () => {
     }
     expect(r.effective_skills.filter((s) => s === '0e847fc8685e').length).toBe(1);
   });
+
+  it('多模板（主+副）：主+副 bundle ∪ extra 并集去重', () => {
+    // 主模板 student (5 skills, 3 agents) + 副模板 scholar (5 skills, 3 agents)
+    const space = makeSpace({
+      primary_template_id: 'student',
+      secondary_template_ids: ['scholar'],
+      extra_skills: ['sk-extra'],
+    });
+    const valid = {
+      skills: new Set([
+        '0e847fc8685e','3def7f0eb34a','4a8054f512e9','4bb1813c8335','aef5bf07573f', // student
+        '17b2d5e85d87','2b7f7c8621d5','4ff31e1cab6f','6c5609e76cf0','86cea925e282', // scholar
+        'sk-extra',
+      ]),
+      agents: new Set([
+        '3bf780cd23be','54f102b6c1ee','5a5fe1598ed0', // student
+        '37054bcc1740','57f6f828af9f','a37e8dbcc57e', // scholar
+      ]),
+    };
+    const r = resolveSpaceResources(space, valid);
+    expect(r.template?.template_id).toBe('student');
+    expect(r.secondary_templates.length).toBe(1);
+    expect(r.secondary_templates[0].template_id).toBe('scholar');
+    // 两模板 skill 并集 (5+5+1=11) 全部有效
+    expect(r.effective_skills.length).toBe(11);
+    // 两模板 agent 并集 (3+3=6) 全部有效
+    expect(r.effective_agents.length).toBe(6);
+  });
+
+  it('多模板：副模板与主模板同 id → 去重跳过', () => {
+    const space = makeSpace({
+      primary_template_id: 'student',
+      secondary_template_ids: ['student', 'scholar'],
+    });
+    const valid = {
+      skills: new Set([
+        '0e847fc8685e','3def7f0eb34a','4a8054f512e9','4bb1813c8335','aef5bf07573f',
+        '17b2d5e85d87','2b7f7c8621d5','4ff31e1cab6f','6c5609e76cf0','86cea925e282',
+      ]),
+      agents: new Set([
+        '3bf780cd23be','54f102b6c1ee','5a5fe1598ed0',
+        '37054bcc1740','57f6f828af9f','a37e8dbcc57e',
+      ]),
+    };
+    const r = resolveSpaceResources(space, valid);
+    // secondary_templates 不含同 id 的主模板
+    expect(r.secondary_templates.length).toBe(1);
+    expect(r.secondary_templates[0].template_id).toBe('scholar');
+    // 不重复计数
+    expect(r.effective_skills.length).toBe(10);
+  });
+
+  it('兼容旧 template_id 字段 = primary_template_id', () => {
+    // 旧数据只有 template_id，无 primary
+    const space = makeSpace({ template_id: 'student', extra_skills: ['sk-a'] });
+    const valid = {
+      skills: new Set(['0e847fc8685e','3def7f0eb34a','4a8054f512e9','4bb1813c8335','aef5bf07573f','sk-a']),
+      agents: new Set(['3bf780cd23be','54f102b6c1ee','5a5fe1598ed0']),
+    };
+    const r = resolveSpaceResources(space, valid);
+    expect(r.template?.template_id).toBe('student');
+    expect(r.secondary_templates).toEqual([]);
+    expect(r.effective_skills.length).toBe(6);
+  });
 });
 
 describe('spaces › parseTemplateFileBundle（自定义模板捆绑声明）', () => {
@@ -197,6 +274,38 @@ describe('spaces › CRUD', () => {
     const dup = await spaces.createSpace(TEST_UID, { name: 'alpha' });
     expect(dup.ok).toBe(false);
     if (!dup.ok) expect(dup.error).toBe('name_dup');
+  });
+
+  it('create 可带 primary_template_id + secondary_template_ids；兼容旧字段归一化', async () => {
+    const spaces = await loadSpaces();
+    const created = await spaces.createSpace(TEST_UID, {
+      name: '多角色空间',
+      primary_template_id: 'student',
+      secondary_template_ids: ['scholar', 'fde'],
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    expect(created.space.primary_template_id).toBe('student');
+    expect(created.space.template_id).toBe('student'); // 同步兼容字段
+    expect(created.space.secondary_template_ids).toEqual(['scholar', 'fde']);
+
+    // 旧 template_id 兼容 create
+    const oldStyle = await spaces.createSpace(TEST_UID, { name: '旧款空间', template_id: 'scholar' });
+    expect(oldStyle.ok).toBe(true);
+    if (!oldStyle.ok) return;
+    expect(oldStyle.space.primary_template_id).toBe('scholar');
+    expect(oldStyle.space.template_id).toBe('scholar');
+    expect(oldStyle.space.secondary_template_ids).toEqual([]);
+
+    // update 换主+副模板
+    const swapped = await spaces.updateSpace(TEST_UID, created.space.space_id, {
+      primary_template_id: 'product_manager',
+      secondary_template_ids: [],
+    });
+    expect(swapped.ok).toBe(true);
+    if (!swapped.ok) return;
+    expect(swapped.space.primary_template_id).toBe('product_manager');
+    expect(swapped.space.secondary_template_ids).toEqual([]);
   });
 
   it('create 可带 template_id + icon；update 可换模板且保留 extra', async () => {
@@ -278,5 +387,57 @@ describe('spaces › CRUD', () => {
     // listSpaces 跳过坏文件
     const list = await spaces.listSpaces(TEST_UID);
     expect(list.length).toBe(0);
+  });
+});
+
+describe('spaces › listSpaces 失效数（真实有效集合，P3394 假阳性回归）', () => {
+  // student bundle: 5 cogseed skills + 3 cogseed agents
+  const BUNDLE_SKILLS = ['0e847fc8685e', '3def7f0eb34a', '4a8054f512e9', '4bb1813c8335', 'aef5bf07573f'];
+  const BUNDLE_AGENTS = ['3bf780cd23be', '54f102b6c1ee', '5a5fe1598ed0'];
+
+  beforeEach(() => {
+    visibleSkillIds.clear();
+    visibleAgentIds.clear();
+  });
+
+  it('引用全部有效 → invalid_count = 0（空集合假阳性回归）', async () => {
+    BUNDLE_SKILLS.forEach((id) => visibleSkillIds.add(id));
+    BUNDLE_AGENTS.forEach((id) => visibleAgentIds.add(id));
+    visibleSkillIds.add('sk-a');
+    visibleAgentIds.add('ag-1');
+
+    const spaces = await loadSpaces();
+    const created = await spaces.createSpace(TEST_UID, { name: '有效空间', template_id: 'student' });
+    if (!created.ok) throw new Error('create failed');
+    await spaces.addSpaceResource(TEST_UID, created.space.space_id, 'skill', 'sk-a');
+    await spaces.addSpaceResource(TEST_UID, created.space.space_id, 'agent', 'ag-1');
+
+    const list = await spaces.listSpaces(TEST_UID);
+    const me = list.find((s) => s.space_id === created.space.space_id);
+    expect(me).toBeDefined();
+    expect(me?.skill_count).toBe(6); // bundle 5 + extra 1
+    expect(me?.agent_count).toBe(4); // bundle 3 + extra 1
+    expect(me?.invalid_count).toBe(0); // 全有效 → 不误报失效
+  });
+
+  it('失效引用计入 invalid_count，有效引用不误报', async () => {
+    BUNDLE_SKILLS.forEach((id) => visibleSkillIds.add(id));
+    BUNDLE_AGENTS.forEach((id) => visibleAgentIds.add(id));
+    // sk-a 有效、__gone__ 无效
+    visibleSkillIds.add('sk-a');
+
+    const spaces = await loadSpaces();
+    const created = await spaces.createSpace(TEST_UID, { name: '混合空间', template_id: 'student' });
+    if (!created.ok) throw new Error('create failed');
+    await spaces.addSpaceResource(TEST_UID, created.space.space_id, 'skill', 'sk-a');
+    await spaces.addSpaceResource(TEST_UID, created.space.space_id, 'skill', '__gone__');
+    await spaces.addSpaceResource(TEST_UID, created.space.space_id, 'agent', '__gone_agent__');
+
+    const list = await spaces.listSpaces(TEST_UID);
+    const me = list.find((s) => s.space_id === created.space.space_id);
+    expect(me).toBeDefined();
+    expect(me?.skill_count).toBe(7); // bundle 5 + extra 2（含失效）
+    expect(me?.agent_count).toBe(4); // bundle 3 + extra 1（含失效）
+    expect(me?.invalid_count).toBe(2); // 仅 2 个真失效
   });
 });

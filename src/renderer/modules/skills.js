@@ -206,6 +206,54 @@ function _abilityAssetSummary(items, category) {
   return items.filter((item) => (item.category || item.type) === category).length;
 }
 
+function _abilityAssetRecommendationLabel(action) {
+  if (action === 'pause') return _cognitionText('cognition.recall_recommend_pause', '建议暂停');
+  if (action === 'rework') return _cognitionText('cognition.recall_recommend_rework', '建议重做');
+  return action || '';
+}
+
+function _abilityAssetScopePolicyLines(policy) {
+  if (!policy || typeof policy !== 'object') return [];
+  const fields = [
+    ['purposeTags', _cognitionText('cognition.scope_policy_purpose_tags', 'Purpose tags')],
+    ['agentIds', _cognitionText('cognition.scope_policy_agent_ids', 'Agents')],
+    ['roleIds', _cognitionText('cognition.scope_policy_role_ids', 'Roles')],
+    ['projectIds', _cognitionText('cognition.scope_policy_project_ids', 'Projects')],
+    ['workspaceIds', _cognitionText('cognition.scope_policy_workspace_ids', 'Workspaces')],
+    ['conversationKinds', _cognitionText('cognition.scope_policy_conversation_kinds', 'Conversation kinds')],
+    ['fileKinds', _cognitionText('cognition.scope_policy_file_kinds', 'File kinds')],
+  ];
+  return fields.map(([field, label]) => {
+    const values = Array.isArray(policy[field]) ? policy[field].filter(Boolean).map(String) : [];
+    return values.length ? `${label}: ${values.join(', ')}` : '';
+  }).filter(Boolean);
+}
+
+function _renderAbilityAssetGovernance(selected) {
+  const policyLines = _abilityAssetScopePolicyLines(selected.scopePolicy);
+  const policyHtml = policyLines.length
+    ? `<div class="reference-strip ability-asset-scope-policy"><strong>${escapeHtml(_cognitionText('cognition.scope_policy', '结构化作用域'))}</strong><p>${escapeHtml(policyLines.join(' · '))}</p></div>`
+    : '';
+  const recommendationHtml = selected.recommendedAction
+    ? `<div class="reference-strip ability-asset-recommendation is-${escapeHtml(selected.recommendedAction)}"><strong>${escapeHtml(_abilityAssetRecommendationLabel(selected.recommendedAction))}</strong><p>${escapeHtml(selected.recommendationReason || _cognitionText('cognition.recall_recommendation_needs_review', '该资产需要用户复核。'))}</p>${selected.recommendationAt ? `<small>${escapeHtml(_cognitionDate(selected.recommendationAt))}</small>` : ''}</div>`
+    : '';
+  const actions = [];
+  if (selected.status === 'active') {
+    actions.push(`<button class="btn btn-sm" data-ability-asset-action="pause" data-ability-asset-id="${escapeHtml(selected.id)}">${escapeHtml(_cognitionText('cognition.asset_pause', '暂停'))}</button>`);
+    actions.push(`<button class="btn btn-sm btn-danger" data-ability-asset-action="revoke" data-ability-asset-id="${escapeHtml(selected.id)}">${escapeHtml(_cognitionText('cognition.asset_revoke', '撤销'))}</button>`);
+  } else if (selected.status === 'paused') {
+    actions.push(`<button class="btn btn-sm btn-primary" data-ability-asset-action="resume" data-ability-asset-id="${escapeHtml(selected.id)}">${escapeHtml(_cognitionText('cognition.asset_resume', '恢复'))}</button>`);
+    actions.push(`<button class="btn btn-sm btn-danger" data-ability-asset-action="revoke" data-ability-asset-id="${escapeHtml(selected.id)}">${escapeHtml(_cognitionText('cognition.asset_revoke', '撤销'))}</button>`);
+  }
+  if (selected.recommendedAction && selected.status !== 'revoked') {
+    actions.push(`<button class="btn btn-sm btn-primary" data-ability-asset-action="acknowledge-recommendation" data-ability-asset-id="${escapeHtml(selected.id)}">${escapeHtml(_cognitionText('cognition.asset_acknowledge_recommendation', '确认建议'))}</button>`);
+  }
+  const actionHtml = actions.length
+    ? `<div class="asset-controls ability-asset-governance-actions">${actions.join('')}</div>`
+    : `<div class="skills-cognition-muted">${escapeHtml(_cognitionText('cognition.asset_no_governance_actions', '该资产当前无可用治理动作。'))}</div>`;
+  return `<div class="ability-asset-governance"><div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.asset_governance', '治理状态'))}</strong><p>${escapeHtml(selected.status || 'active')}${selected.recommendedAction ? ` · ${escapeHtml(_abilityAssetRecommendationLabel(selected.recommendedAction))}` : ''}</p></div>${policyHtml}${recommendationHtml}${actionHtml}</div>`;
+}
+
 function _abilityAssetDisplayTitle(asset) {
   const title = String(asset?.title || asset?.id || '').trim();
   const scope = String(asset?.scope || '').trim();
@@ -1263,6 +1311,7 @@ function renderSkillsCognitionAssets() {
           ${selectedContentSummaryBlock}
           <div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.relation_refs', '关联引用'))}</strong><p>${escapeHtml(relationText)}</p></div>
           ${workspaceRefs.length ? `<div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.workspace_refs', 'Workspace引用'))}</strong><p>${escapeHtml(workspaceRefs.join('、'))}</p></div>` : ''}
+          ${_renderAbilityAssetGovernance(selected)}
           ${_renderRecallAssetHistory(selected.id)}
         </div>
       </section>

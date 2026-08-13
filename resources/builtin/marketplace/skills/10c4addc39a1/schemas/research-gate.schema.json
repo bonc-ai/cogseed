@@ -1,0 +1,250 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nseap.example/schemas/ontology-analysis-research-gate/v0.1",
+  "title": "Computed Research Gate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "gate_id",
+    "skill_id",
+    "skill_version",
+    "plan_id",
+    "ledger_id",
+    "research_date",
+    "generated_at",
+    "gate_status",
+    "conditions",
+    "metrics",
+    "checks",
+    "blockers",
+    "warnings",
+    "hashes",
+    "promotion_ceiling",
+    "production_release_allowed"
+  ],
+  "properties": {
+    "gate_id": {
+      "type": "string",
+      "pattern": "^RG-[A-Za-z0-9_-]+$"
+    },
+    "skill_id": {
+      "const": "ontology-analysis-skill"
+    },
+    "skill_version": {
+      "const": "0.1.0"
+    },
+    "plan_id": {
+      "type": "string"
+    },
+    "ledger_id": {
+      "type": "string"
+    },
+    "research_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "gate_status": {
+      "enum": [
+        "passed",
+        "failed"
+      ]
+    },
+    "conditions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "web_research_executed",
+        "official_policy_source_found",
+        "policy_scope_verified",
+        "selected_sources_opened",
+        "search_snippets_not_used_as_evidence",
+        "all_current_facts_have_primary_sources",
+        "all_standard_versions_verified",
+        "all_source_refs_resolvable",
+        "all_critical_questions_resolved",
+        "unresolved_date_conflicts",
+        "unresolved_standard_version_conflicts",
+        "unresolved_scope_conflicts"
+      ],
+      "properties": {
+        "web_research_executed": {
+          "type": "boolean"
+        },
+        "official_policy_source_found": {
+          "type": "boolean"
+        },
+        "policy_scope_verified": {
+          "type": "boolean"
+        },
+        "selected_sources_opened": {
+          "type": "boolean"
+        },
+        "search_snippets_not_used_as_evidence": {
+          "type": "boolean"
+        },
+        "all_current_facts_have_primary_sources": {
+          "type": "boolean"
+        },
+        "all_standard_versions_verified": {
+          "type": "boolean"
+        },
+        "all_source_refs_resolvable": {
+          "type": "boolean"
+        },
+        "all_critical_questions_resolved": {
+          "type": "boolean"
+        },
+        "unresolved_date_conflicts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unresolved_standard_version_conflicts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unresolved_scope_conflicts": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "queries_executed",
+        "opened_sources",
+        "verified_primary_sources",
+        "official_policy_sources",
+        "official_standard_sources",
+        "critical_claims",
+        "verified_critical_claims",
+        "report_external_sources",
+        "resolved_conflicts",
+        "unresolved_conflicts"
+      ],
+      "properties": {
+        "queries_executed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "opened_sources": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "verified_primary_sources": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "official_policy_sources": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "official_standard_sources": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "critical_claims": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "verified_critical_claims": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "report_external_sources": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resolved_conflicts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unresolved_conflicts": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "check_id",
+          "status",
+          "message",
+          "evidence_refs"
+        ],
+        "properties": {
+          "check_id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "passed",
+              "failed",
+              "warning"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "hashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plan_sha256",
+        "ledger_sha256",
+        "report_data_sha256"
+      ],
+      "properties": {
+        "plan_sha256": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ledger_sha256": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "report_data_sha256": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "promotion_ceiling": {
+      "const": "staged"
+    },
+    "production_release_allowed": {
+      "const": false
+    }
+  }
+}

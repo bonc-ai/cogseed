@@ -7,6 +7,7 @@ const GATE = '../../../../src/main/features/workbench/gate';
 const BASELINE = '../../../../src/main/features/workbench/main-skill-baseline';
 const RECEIPT = '../../../../src/main/features/p3394/context-reuse-receipt';
 const VALIDATION = '../../../../src/main/features/p3394/skill-validation-run';
+const INVOCABILITY = '../../../../src/main/features/p3394/skill-invocability';
 const PATHS = '../../../../src/main/paths';
 
 const ASSET_ID = 'asset-cross-agent-continuity';
@@ -92,13 +93,44 @@ describe('workspace gate — ready', () => {
     const validation = await import(VALIDATION);
     const input = await gateInput();
 
-    await validation.validatePatchCandidateContent(uid, ASSET_ID, '---\nname: continuity\n---\nbody\n');
+    await validation.validateSkillPatchContent(uid, ASSET_ID, '---\nname: continuity\n---\nbody\n');
 
     const decision = await mod.evaluateWorkspaceGate(uid, input);
     expect(decision.reasons).not.toContain('validation_blocked');
     expect(decision.status).toBe('ready');
     expect(decision.validationId).toBeTruthy();
   });
+});
+
+// PRD §8.2's third admission requirement. The gate consults it, but the three
+// verdicts are not interchangeable: only `not_invocable` is evidence of a defect.
+describe('workspace gate — invocability (PRD §8.2)', () => {
+  it('blocks a baseline whose skill cannot be invoked', async () => {
+    const mod = await import(GATE);
+    const invocability = await import(INVOCABILITY);
+    const input = await gateInput();
+
+    // The baseline's skill dir is not a skill root, so the skill does not
+    // resolve where the runtime would look for it.
+    const run = await invocability.verifySkillInvocability(uid, ASSET_ID);
+    expect(run.status).toBe('not_invocable');
+
+    const decision = await mod.evaluateWorkspaceGate(uid, input);
+    expect(decision.reasons).toContain('skill_not_invocable');
+    expect(decision.status).toBe('blocked');
+    expect(decision.invocabilityId).toBe(run.invocabilityId);
+  }, 60_000);
+
+  // Absent is not negative: invocability is a separate track, and a missing
+  // record is not evidence the skill is broken.
+  it('stays ready when no invocability record exists', async () => {
+    const mod = await import(GATE);
+    const input = await gateInput();
+
+    const decision = await mod.evaluateWorkspaceGate(uid, input);
+    expect(decision.reasons).not.toContain('skill_not_invocable');
+    expect(decision.invocabilityId).toBeUndefined();
+  }, 60_000);
 });
 
 describe('workspace gate — each condition blocks on its own', () => {
@@ -173,7 +205,7 @@ describe('workspace gate — each condition blocks on its own', () => {
     const input = await gateInput();
 
     // An EXTREME violation yields a `blocked` verdict.
-    await validation.validatePatchCandidateContent(
+    await validation.validateSkillPatchContent(
       uid, ASSET_ID, 'no frontmatter at all, which the validator rejects outright',
     );
     const latest = await validation.findLatestSkillValidation(uid, ASSET_ID);

@@ -19,6 +19,7 @@
  */
 
 import {
+  addEntry,
   loadCustomProviders,
   removeEntriesForProvider,
   saveCustomProviders,
@@ -222,6 +223,7 @@ export interface CcSwitchSyncResult {
   reason?: string;
   added: number;
   updated: number;
+  bound: number;
   total: number;
 }
 
@@ -235,12 +237,12 @@ export interface CcSwitchSyncResult {
  * (the user-confirmed subset from the preview). When omitted, all importable
  * CC Switch providers are synced — used by the "re-sync" action.
  */
-export function syncFromCcSwitch(userId: string, selectedExternalIds?: string[], home?: string): CcSwitchSyncResult {
+export async function syncFromCcSwitch(userId: string, selectedExternalIds?: string[], home?: string): Promise<CcSwitchSyncResult> {
   // Lazy require to keep better-sqlite3 out of the module load path for
   // callers that never import from CC Switch.
   const { readCcSwitchImportItems } = require('./ccswitch_import') as typeof import('./ccswitch_import');
   const res = readCcSwitchImportItems(home);
-  if (!res.ok) return { ok: false, reason: (res as { reason: string }).reason, added: 0, updated: 0, total: 0 };
+  if (!res.ok) return { ok: false, reason: (res as { reason: string }).reason, added: 0, updated: 0, bound: 0, total: 0 };
 
   const wanted = selectedExternalIds && selectedExternalIds.length
     ? new Set(selectedExternalIds)
@@ -296,8 +298,41 @@ export function syncFromCcSwitch(userId: string, selectedExternalIds?: string[],
   }
 
   if (added || updated) saveCustomProviders(userId, list);
-  log.info('cc-switch sync done', { added, updated, total: items.length });
-  return { ok: true, added, updated, total: items.length };
+
+  const bound = await ensureCcSwitchBoundEntries(userId);
+
+  log.info('cc-switch sync done', { added, updated, bound, total: items.length });
+  return { ok: true, added, updated, bound, total: items.length };
+}
+
+/**
+ * Bind the first declared model of every synced CC Switch provider to an
+ * entry, so chat dispatch (pickChatEntry — which walks `store.entries` only)
+ * can actually use it. A synced provider without a bound entry is invisible
+ * to chat even though the UI said "connected". Idempotent via addEntry's
+ * dedupe; providers without a declared model list are left unbound (we never
+ * guess a model name). Runs on every sync AND at boot (via boot_init) so
+ * providers synced before this fix heal themselves without a manual re-sync.
+ */
+export async function ensureCcSwitchBoundEntries(userId: string): Promise<number> {
+  const list = listCustomProviders(userId);
+  let bound = 0;
+  for (const p of list) {
+    if (p.source !== 'ccswitch') continue;
+    if (!p.apiKey) continue;
+    if (!p.models?.length) continue;
+    try {
+      await addEntry({
+        provider: `cp:${p.id}`,
+        model: p.models[0],
+        profileId: `cp:${p.id}`,
+      });
+      bound += 1;
+    } catch (err) {
+      log.warn('cc-switch auto-bind entry failed', { provider: p.id, error: (err as Error).message });
+    }
+  }
+  return bound;
 }
 
 /** Preview importable CC Switch providers (no write). apiKey is masked by the

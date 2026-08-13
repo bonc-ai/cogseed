@@ -25,9 +25,27 @@ describe('P3394 SenderEpochStore', () => {
     expect(await store.next('u1', 'commander', 'gmember-c1-a1')).toBe(1);
     expect(await store.next('u1', 'commander', 'gmember-c1-a1')).toBe(2);
 
-    const file = path.join(root, 'u1', 'local', 'kstar', 'p3394-sender-epochs.json');
+    const file = path.join(root, 'u1', 'local', 'p3394', 'p3394-sender-epochs.json');
     const disk = JSON.parse(fs.readFileSync(file, 'utf8'));
     expect(disk[p3394SenderEpochStreamKey('commander', 'gmember-c1-a1')]).toBe(2);
+  });
+
+  it('migrates an existing sender watermark from the retired local/kstar path', async () => {
+    const legacyDir = path.join(root, 'u1', 'local', 'kstar');
+    fs.mkdirSync(legacyDir, { recursive: true });
+    const { p3394SenderEpochStreamKey, SenderEpochStore } = await import(
+      '../../../../src/main/features/p3394/sender-epoch-store'
+    );
+    fs.writeFileSync(
+      path.join(legacyDir, 'p3394-sender-epochs.json'),
+      JSON.stringify({ [p3394SenderEpochStreamKey('commander', 'gmember-legacy')]: 9 }),
+      'utf8',
+    );
+
+    const store = new SenderEpochStore();
+    expect(await store.next('u1', 'commander', 'gmember-legacy')).toBe(10);
+    expect(fs.existsSync(path.join(root, 'u1', 'local', 'p3394', 'p3394-sender-epochs.json'))).toBe(true);
+    expect(fs.existsSync(path.join(legacyDir, 'p3394-sender-epochs.json'))).toBe(false);
   });
 
   it('isolates sender and recipient session streams', async () => {
@@ -50,7 +68,7 @@ describe('P3394 SenderEpochStore', () => {
   });
 
   it('treats malformed JSON as an empty store', async () => {
-    const dir = path.join(root, 'u1', 'local', 'kstar');
+    const dir = path.join(root, 'u1', 'local', 'p3394');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'p3394-sender-epochs.json'), '{bad json', 'utf8');
     const { SenderEpochStore } = await import('../../../../src/main/features/p3394/sender-epoch-store');
@@ -59,7 +77,7 @@ describe('P3394 SenderEpochStore', () => {
   });
 
   it('propagates non-ENOENT read failures', async () => {
-    const file = path.join(root, 'u1', 'local', 'kstar', 'p3394-sender-epochs.json');
+    const file = path.join(root, 'u1', 'local', 'p3394', 'p3394-sender-epochs.json');
     fs.mkdirSync(file, { recursive: true });
     const { SenderEpochStore } = await import('../../../../src/main/features/p3394/sender-epoch-store');
 

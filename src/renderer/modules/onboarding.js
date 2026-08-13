@@ -576,17 +576,23 @@ function _csAgentNameForCli(cli) {
   return cli;
 }
 
-// Detect local coding CLIs once per connect pass. Returns a Set of cli names
-// ('claude' / 'codex') that are installed & version-OK on this machine.
+// Detect local coding CLIs once per connect pass. Returns a Map cli-name →
+// { loggedIn, mode } from the real localAgents.list probe (file-based auth
+// state, never guessed).
 async function _csDetectCodingClis() {
-  const found = new Set();
+  const found = new Map();
   try {
     const res = await window.cogseed.invoke('localAgents.list', { force: false });
     const entries = (res && res.entries) || [];
     entries.forEach((e) => {
       if (!e || !e.available) return;
       const cli = _csCodingCliForAppType(e.type);
-      if (cli) found.add(cli);
+      if (cli) {
+        found.set(cli, {
+          loggedIn: !!(e.auth && e.auth.loggedIn),
+          mode: (e.auth && e.auth.mode) || 'unknown',
+        });
+      }
     });
   } catch (err) {
     _obLog.warn('team CLI detect failed', { error: (err && err.message) || String(err) });
@@ -634,7 +640,7 @@ function _csRenderTeam(items, unsupported, localClis) {
   const box = document.getElementById('cs-team-list');
   if (!box) return;
 
-  const clis = localClis instanceof Set ? localClis : new Set();
+  const clis = localClis instanceof Map ? localClis : (localClis instanceof Set ? new Map([...localClis].map((c) => [c, { loggedIn: false, mode: 'unknown' }])) : new Map());
 
   if (!items.length && !unsupported.length && !clis.size) {
     box.innerHTML =
@@ -645,7 +651,7 @@ function _csRenderTeam(items, unsupported, localClis) {
   // Bucket both importable and unsupported rows by their originating agent.
   const groups = new Map(); // appType → { ids: [], needsKey: n, unsupportedReasons: [], hasCli: bool }
   const bucket = (appType) => {
-    if (!groups.has(appType)) groups.set(appType, { ids: [], needsKey: 0, unsupportedReasons: [], hasCli: false });
+    if (!groups.has(appType)) groups.set(appType, { ids: [], needsKey: 0, unsupportedReasons: [], hasCli: false, cliAuth: '' });
     return groups.get(appType);
   };
   items.forEach((it) => {
@@ -659,9 +665,16 @@ function _csRenderTeam(items, unsupported, localClis) {
   // canonical appType so it either enriches an existing CC Switch card or
   // stands up its own card when CC Switch had nothing for it.
   const cliAppType = { claude: 'claude', codex: 'codex' };
-  clis.forEach((cli) => {
+  clis.forEach((info, cli) => {
     const appType = cliAppType[cli] || cli;
-    bucket(appType).hasCli = true;
+    const g = bucket(appType);
+    g.hasCli = true;
+    // Honest sign-in state from the real credential files.
+    if (info && info.loggedIn) {
+      g.cliAuth = info.mode === 'api' ? 'API 登录' : (info.mode === 'oauth' ? '官方账号登录' : '已登录');
+    } else {
+      g.cliAuth = '';
+    }
   });
 
   // Stash ids + CLI presence for the connect handler; DOM never carries key material.
@@ -712,7 +725,11 @@ function _csRenderTeam(items, unsupported, localClis) {
 
     const hints = [];
     if (g.ids.length > 0) hints.push(`模型 ${g.ids.length} 项 → 模型供应商（提取/对话用）`);
-    if (g.hasCli) hints.push('执行 Agent → AI 团队（可派发任务）');
+    if (g.hasCli) {
+      hints.push(g.cliAuth
+        ? `执行 Agent → AI 团队（${g.cliAuth}，无需 Key 即可派发任务）`
+        : '执行 Agent → AI 团队（可派发任务）');
+    }
     if (g.needsKey) hints.push('部分模型直连需 API Key（平台规则），可稍后在设置里补充');
     Object.keys(unReasonCounts).forEach((r) => {
       const n = unReasonCounts[r];
@@ -858,7 +875,7 @@ async function _csLoadClaudeSessions(agentType) {
       }) : '';
       const projectLabel = s.projectPath ? `<small>${_csEsc(s.projectPath)}</small>` : '';
       return `
-        <div class="cs-src" data-session-id="${_csEsc(s.filePath)}">
+        <div class="cs-src" data-session-id="${_csEsc(s.sessionId)}" data-session-path="${_csEsc(s.filePath)}" data-session-title="${_csEsc(s.firstMessage || '')}">
           <input type="checkbox" />
           <div class="s-ico">${CS_TERMINAL_SVG}</div>
           <div>
@@ -2166,8 +2183,8 @@ async function _csLoadRoleTemplates() {
     // 优先级排序
     priorityTemplates.sort((a, b) => priority.indexOf(a.template_id) - priority.indexOf(b.template_id));
 
-    // 显示前6个（4个优先 + 2个其他）
-    const display = [...priorityTemplates.slice(0, 4), ...otherTemplates.slice(0, 2)];
+    // 全部展示：优先角色在前，其余模板（空白空间等）跟在后面
+    const display = [...priorityTemplates, ...otherTemplates];
 
     // 图标映射
     const icons = {
@@ -2194,17 +2211,28 @@ async function _csLoadRoleTemplates() {
         ? `<span class="r-tags">${bundleInfo.map(info => `<span class="r-tag">${_csEsc(info)}</span>`).join('')}</span>`
         : '';
 
+      // 描述截断：模板原文可能很长，只展示一句核心说明，避免把
+      // 底部「完成设置」按钮挤出首屏。
+      const desc = String(t.description || '').trim();
+      const shortDesc = desc.length > 56 ? `${desc.slice(0, 56)}…` : desc;
+
       return `
         <button class="cs-role-card" data-template-id="${_csEsc(t.template_id)}">
           <span class="r-ico">${icon}</span>
           <h3>${_csEsc(t.name)}</h3>
-          <p>${_csEsc(t.description)}</p>
+          <p>${_csEsc(shortDesc)}</p>
           ${tags}
         </button>
       `;
     }).join('');
 
-    box.innerHTML = html;
+    // 全部角色放在一个可滑动区域里（滚动浏览），底部操作按钮
+    // （跳过 / 完成设置）固定可见，不被卡片数量挤下去。
+    box.innerHTML = `<div class="cs-role-scroll">${html}</div>`;
+    const scrollBox = box.querySelector('.cs-role-scroll');
+    if (scrollBox && scrollBox.scrollHeight > scrollBox.clientHeight) {
+      scrollBox.classList.add('has-overflow');
+    }
   } catch (err) {
     const msg = (err && err.message) || String(err);
     _obLog.warn('failed to load role templates', { error: msg });
@@ -2473,42 +2501,23 @@ function _csBuild() {
   _csObBuilt = true;
 }
 
-// Called by boot.js after the last view is restored. Fire-and-forget: it must
-// never block first paint. Only lifts the overlay when the machine-local
-// marker says the walkthrough has not been completed here yet.
+// Called by boot.js (early, right after i18n, AND as a safety net after the
+// last view is restored). Fire-and-forget: it must never block first paint.
+// Only lifts the overlay when the machine-local marker says the walkthrough
+// has not been completed here yet.
+let _csStarted = false;
+
 async function maybeStartOnboarding() {
+  // boot.js may call this twice (early + post-restore safety net). The second
+  // call must never reset the user's current step back to step 0 — once the
+  // walkthrough is up, it stays where the user left it.
+  if (_csStarted) {
+    _obLog.info('onboarding already started, skipping re-entry');
+    return;
+  }
   console.log('[ONBOARDING DEBUG] maybeStartOnboarding called');
   _obLog.info('maybeStartOnboarding called');
 
-  // TEMPORARY: Force show onboarding for testing new features (30-day filter, 3-session limit, space project creation)
-  console.log('[ONBOARDING DEBUG] Force showing onboarding');
-  // Reset standalone mode for full onboarding flow
-  _csStandaloneMode = false;
-  _csBuild();
-  // Ensure normal flow buttons are visible
-  const shell = document.getElementById('cs-onboarding');
-  if (shell) {
-    const backBtn = shell.querySelector('.cs-step2-back');
-    const nextBtn = shell.querySelector('.cs-step2-next');
-    const finishBtn = shell.querySelector('.cs-step2-finish');
-    if (backBtn) backBtn.style.display = 'inline-flex';
-    if (nextBtn) nextBtn.style.display = 'inline-flex';
-    if (finishBtn) finishBtn.style.display = 'none';
-  }
-  console.log('[ONBOARDING DEBUG] Adding cs-onboarding-active class to body');
-  document.body.classList.add('cs-onboarding-active');
-  console.log('[ONBOARDING DEBUG] Body classes:', document.body.className);
-  console.log('[ONBOARDING DEBUG] #cs-onboarding exists:', !!document.getElementById('cs-onboarding'));
-  console.log('[ONBOARDING DEBUG] #cs-onboarding computed display:',
-    document.getElementById('cs-onboarding') ? window.getComputedStyle(document.getElementById('cs-onboarding')).display : 'N/A');
-  console.log('[ONBOARDING DEBUG] Going to step 0');
-  _csGoStep(0);
-  _obLog.info('onboarding walkthrough FORCED (testing mode)');
-  console.log('[ONBOARDING DEBUG] Onboarding should now be visible');
-  return;
-
-  // Original logic - commented out for testing
-  /*
   try {
     const res = await window.cogseed.invoke('prefs.getOnboarding');
     console.log('[ONBOARDING DEBUG] prefs.getOnboarding result:', res);
@@ -2522,11 +2531,11 @@ async function maybeStartOnboarding() {
     _obLog.warn('onboarding marker read failed — skipping walkthrough', { error: (err && err.message) || String(err) });
     return;
   }
+  _csStarted = true;
   _csBuild();
   document.body.classList.add('cs-onboarding-active');
   _csGoStep(0);
   _obLog.info('onboarding walkthrough started');
-  */
 }
 
 // Expose for boot.js. Kept on window so classic-script load order doesn't matter.

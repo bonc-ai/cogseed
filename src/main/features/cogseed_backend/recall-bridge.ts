@@ -3,6 +3,8 @@ import { readMateTaskEvents } from './event-store';
 import { assertMateTaskId, assertMateUserId } from './paths';
 import { readMateTask } from './task-store';
 import type { MateTaskRecord } from './types';
+import { listContextProjections } from '../recall/context-projection';
+import { handleRecallTaskTerminal } from '../recall/terminal-proof';
 
 export interface MateRecallRunFact {
   executionId: string;
@@ -39,6 +41,34 @@ async function readExistingFact(userId: string, task: MateTaskRecord, executionI
   }
 }
 
+async function recordConfirmedProjectionTransferProof(
+  userId: string,
+  task: MateTaskRecord,
+  executionId: string,
+  status: MateRecallRunFact['status'],
+): Promise<void> {
+  const taskRunIds = new Set([
+    task.taskId,
+    executionId,
+    task.runtimeSessionId,
+    task.runtimeRunId,
+  ].filter((value): value is string => Boolean(value)));
+  const projection = (await listContextProjections(userId, { status: 'confirmed', includeExpired: false, limit: 100 }))
+    .find((item) => taskRunIds.has(item.taskRunId));
+  if (!projection) return;
+  await handleRecallTaskTerminal({
+    run_id: task.taskId,
+    user_id: userId,
+    conversation_id: task.sessionId,
+    status,
+    projection_id: projection.id,
+    logical_run_id: projection.taskRunId,
+    execution_id: executionId,
+    started_at_ms: Date.parse(task.createdAt) || Date.now(),
+    finished_at_ms: Date.parse(task.terminalAt || task.updatedAt) || Date.now(),
+  });
+}
+
 export async function recordMateTaskRunForRecall(userId: string, taskId: string): Promise<MateRecallRunFact> {
   assertMateUserId(userId);
   assertMateTaskId(taskId);
@@ -49,7 +79,10 @@ export async function recordMateTaskRunForRecall(userId: string, taskId: string)
   const executionId = task.executionId || mateExecutionId(task.taskId);
 
   const existing = await readExistingFact(userId, task, executionId);
-  if (existing) return existing;
+  if (existing) {
+    await recordConfirmedProjectionTransferProof(userId, task, executionId, existing.status);
+    return existing;
+  }
 
   const mateEvents = await readMateTaskEvents(userId, task.taskId, 0, 500);
   const facts = {
@@ -83,6 +116,7 @@ export async function recordMateTaskRunForRecall(userId: string, taskId: string)
   });
   await mateExecutionRecords.appendEvent(userId, executionId, 'terminal', { status });
   await mateExecutionRecords.complete(userId, executionId, status, facts);
+  await recordConfirmedProjectionTransferProof(userId, task, executionId, status);
 
   return { executionId, taskId: task.taskId, sessionId: task.sessionId, runtimeSessionId: task.runtimeSessionId, status };
 }

@@ -12,7 +12,26 @@ function workspaceRoot(): string {
 }
 
 function senderEpochFile(uid: string): string {
+  return path.join(workspaceRoot(), uid, 'local', 'p3394', 'p3394-sender-epochs.json');
+}
+
+function legacySenderEpochFile(uid: string): string {
   return path.join(workspaceRoot(), uid, 'local', 'kstar', 'p3394-sender-epochs.json');
+}
+
+async function migrateLegacySenderEpochFile(uid: string): Promise<void> {
+  const current = senderEpochFile(uid);
+  const legacy = legacySenderEpochFile(uid);
+  await fs.mkdir(path.dirname(current), { recursive: true });
+  try {
+    await fs.rename(legacy, current);
+    log.info('migrated sender epoch watermarks to p3394 storage', { uid });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return;
+    log.warn('sender epoch watermark migration failed', { uid, error: (err as Error).message });
+    throw err;
+  }
 }
 
 export function p3394SenderEpochStreamKey(senderActorId: string, recipientSessionId: string): string {
@@ -32,17 +51,33 @@ export class SenderEpochStore {
   }
 
   private async read(uid: string): Promise<Record<string, number>> {
+    let raw: string;
     try {
-      const raw = await fs.readFile(senderEpochFile(uid), 'utf8');
+      raw = await fs.readFile(senderEpochFile(uid), 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        await migrateLegacySenderEpochFile(uid);
+        try {
+          raw = await fs.readFile(senderEpochFile(uid), 'utf8');
+        } catch (migratedReadErr) {
+          if ((migratedReadErr as NodeJS.ErrnoException).code === 'ENOENT') return {};
+          log.error('sender epoch read failed after migration', { uid, error: (migratedReadErr as Error).message });
+          throw migratedReadErr;
+        }
+      } else {
+        log.error('sender epoch read failed', { uid, error: (err as Error).message });
+        throw err;
+      }
+    }
+
+    try {
       const value = JSON.parse(raw);
       return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
       if (err instanceof SyntaxError) {
         log.warn('sender epoch parse failed, treating as empty', { uid });
         return {};
       }
-      log.error('sender epoch read failed', { uid, error: (err as Error).message });
       throw err;
     }
   }

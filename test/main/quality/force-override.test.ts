@@ -1,8 +1,14 @@
 /**
- * Regression tests for the "EXTREME is never user-overridable" invariant.
+ * Regression tests for the validator contract the install gates depend on.
  *
- * `quality/README.md` states there is intentionally no override for EXTREME,
- * but two install paths accepted a `force` flag that skipped the gate:
+ * EXTREME is now user-overridable via explicit per-install consent (see
+ * `quality/README.md`), but that changed the *gate*, not the *validator*: red
+ * flagged content must still report `ok === false`, and `ok` must still be the
+ * single block condition. Otherwise consent would have nothing to consent to —
+ * the content would sail through with no dialog at all.
+ *
+ * `force` remains separate from consent, which is what these tests protect. The
+ * history: two install paths once accepted `force` and skipped the gate outright:
  *
  *   - Marketplace install passed `opts.force === true` straight past the
  *     `validateSkillDir` / `validateAgentSpec` result, so the renderer's
@@ -11,7 +17,8 @@
  *   - Dir import hard-blocked only `skill_script_requires_runner` (an
  *     authoring convention) while letting `force` bypass all nine genuine
  *     red-flag rules — the convention rule was unskippable while the
- *     security rules were skippable.
+ *     security rules were skippable. (There were nine such rules then; there are
+ *     22 now.)
  *
  * These tests assert the property the gate depends on: for content carrying a
  * red flag, `report.ok` is false, and `ok` is the single block condition. They
@@ -44,8 +51,8 @@ const CLEAN_SKILL_MD = [
   'Body.',
 ].join('\n');
 
-describe('quality › EXTREME is the block condition (no force override)', () => {
-  it('reports ok=false for a red-flagged script, so force cannot be consulted', () => {
+describe('quality › EXTREME is the block condition (force alone never waives it)', () => {
+  it('reports ok=false for a red-flagged script, so the gate has something to gate', () => {
     // `no_credential_path_read` — reading ~/.ssh/.
     const dir = mkSkillDir({
       'SKILL.md': CLEAN_SKILL_MD,

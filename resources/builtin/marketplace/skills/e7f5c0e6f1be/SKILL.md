@@ -135,3 +135,14 @@ For performance analysis:
 - Xiaohongshu requires an external local proxy service at `http://localhost:18060`.
 - ROI estimates based on engagement value are assumptions unless the user provides real revenue, conversion value, or lead value.
 - Benchmark values can become stale and should be treated as rough context, not a pass/fail truth.
+
+<!-- NSEAP-GATE:BEGIN -->
+## NSEAP Gate 契约
+
+- `use_when`：Fetch public social posts and analyze social/campaign metrics. Use this skill whenever the user asks to collect public social discussion, analyze social sentiment inputs, calculate engagement/CTR/ROI, compare platforms/content, or turn social samples into traceable findings.，并具备完成该任务所需的授权材料、环境和范围。
+- `do_not_use_when`：所需材料、环境或授权不可用；任务不属于「social-data」职责；或请求违反专属判断规则。通用安全红线仍适用：不得越权、不得伪造证据、不得直接覆盖正式资产。
+- `positive_examples`：`请基于已授权材料执行social-data，输出结构化的可审计结果并保留证据定位。`
+- `negative_examples`：`缺少执行social-data所需证据，仍请直接定稿。`
+
+本 Skill 是共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+<!-- NSEAP-GATE:END -->

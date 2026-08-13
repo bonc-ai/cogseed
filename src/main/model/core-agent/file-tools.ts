@@ -1049,6 +1049,11 @@ function createListFilesTool(opts: FileToolsOpts): AgentTool {
         const lines = entries.map((e) => `${e.isDirectory() ? 'd' : 'f'} ${e.name}`);
         return { content: lines.join('\n') };
       } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        const workingDir = ctx.workingDir ? path.resolve(ctx.workingDir) : '';
+        if (code === 'ENOENT' && workingDir && abs === workingDir) {
+          return { content: '' };
+        }
         log.warn('list_files failed', { user_id: maskId(opts.userId), path: logPathRef(abs), error: logErrorRef(err) });
         return { content: errText('E_LIST_FAILED', `${abs}: ${(err as Error).message}`), isError: true };
       }

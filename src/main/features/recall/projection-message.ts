@@ -49,15 +49,9 @@ export interface PostProjectionCardMessageResult {
   card: RecallProjectionCard;
 }
 
-function plural(count: number): string {
-  return count === 1 ? '' : 's';
-}
-
 function cardMessageText(card: RecallProjectionCard): string {
   const included = Number(card.summary?.includedCount || card.includedAssetIds?.length || 0);
-  const omitted = Number(card.summary?.omittedCount || card.omittedAssetRefs?.length || 0);
-  const purpose = String(card.purpose || 'this task');
-  return `Found ${included} reusable ability asset${plural(included)} for ${purpose}; omitted ${omitted}.`;
+  return `Preload candidates: ${included}; add or remove as needed.`;
 }
 
 export async function postProjectionCardMessage(

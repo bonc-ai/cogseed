@@ -1,0 +1,19 @@
+skill_spec:
+  standard_id: NSEAP-Skill-v1.0
+  skill_id: ontology-analysis-skill
+  version: 0.1.0
+  skill_class: ProductionProcessSkill
+  is_skill_of_skill: false
+  level: L5
+  asset_level: L2
+  risk_route: Full
+  session_role: master_task_skill
+  owns_session: true
+  form: interpreted
+  mandatory_research_gate: true
+  search_snippets_are_evidence: false
+  selected_sources_must_be_opened: true
+  current_facts_require_primary_sources: true
+  promotion_ceiling: staged
+  production_release_allowed: false
+  lifecycle_status: staged_candidate

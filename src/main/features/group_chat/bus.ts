@@ -185,14 +185,7 @@ import { allowLegacyGroupChatFormalAgentExecutorForTest, allowLegacyRunWorkerTes
 import {
   type KStarDecisionRecord,
   type KStarExpectation,
-} from "../p3394/kstar-compat";
-import {
-  recordToolCycleEvidence,
-  recordAgentRunStartEvidence,
-  recordAgentContributionEvidence,
-  closeCollaborationEvidence,
-} from "../p3394/kstar-bus-integration";
-import { promoteExperienceCandidateToKnowledgeBase } from "../p3394/kstar-kb";
+} from "../kstar/dispatch-decision";
 import {
   buildP3394Level2Manifest,
   normalizeP3394AgentMessage,
@@ -211,7 +204,7 @@ const log = createLogger("group_chat.bus");
 
 // Process-wide P3394 admission controller: wraps the stateless normalize kernel
 // with real session resolution, epoch watermarking, and context-scope checks.
-// The EpochStore persists receiver watermarks under <uid>/local/kstar/.
+// Generic P3394 receiver/sender watermarks live under <uid>/local/p3394/.
 const _p3394EpochStore = new EpochStore();
 const _p3394SenderEpochStore = new SenderEpochStore();
 const _defaultP3394Controller = new P3394Controller({
@@ -324,71 +317,6 @@ function kstarDecisionRecord(
     source: "commander",
     commander_mode: input.mode,
   };
-}
-
-const KSTAR_GUARD_KEYWORDS =
-  /论文|报告|长文|代码|最终|交付|保存|文件|评审|审核|review|report|paper|essay|code|deliverable|final|file/i;
-
-function applyKStarGuard(
-  input: KStarDecisionRecord | undefined,
-  cid: string,
-  actualResult: string,
-  produced: string[] | undefined,
-): KStarDecisionRecord | undefined {
-  if (input?.required)
-    return {
-      ...input,
-      source: input.source || "commander",
-      commander_mode: input.commander_mode || "required",
-    };
-  const matched: string[] = [];
-  if (Array.isArray(produced) && produced.length > 0)
-    matched.push("produced_files");
-  if (actualResult.length >= 3000) matched.push("long_output");
-  const expectedTask = input?.expectation?.task || "";
-  if (
-    KSTAR_GUARD_KEYWORDS.test(expectedTask) ||
-    KSTAR_GUARD_KEYWORDS.test(actualResult.slice(0, 1200))
-  )
-    matched.push("deliverable_keywords");
-  if (!matched.length) return undefined;
-  return {
-    required: true,
-    reason: `Bus KSTAR guard upgraded this delegated task to required (${matched.join(", ")}).`,
-    expectation: {
-      k_snapshot_ref:
-        input?.expectation?.k_snapshot_ref || `conversation:${cid}`,
-      situation:
-        input?.expectation?.situation ||
-        "Bus guard inferred this turn may contain a durable or decision-impacting deliverable.",
-      task:
-        input?.expectation?.task || "Review the delegated agent deliverable.",
-      action_hat:
-        input?.expectation?.action_hat ||
-        "Agent should complete the delegated task and produce a reviewable result.",
-      result_hat:
-        input?.expectation?.result_hat ||
-        "A durable deliverable or long-form result should be reviewed before final acceptance.",
-    },
-    source: "bus_guard",
-    commander_mode: input?.commander_mode || (input ? "skip" : undefined),
-    guard: { upgraded: true, matched_rules: matched, confidence: "hard" },
-  };
-}
-
-function buildKStarActualActionSummary(
-  actorId: string,
-  produced: string[] | undefined,
-  toolSummaries: string[] = [],
-): string {
-  const files =
-    Array.isArray(produced) && produced.length
-      ? ` Produced files: ${produced.join(", ")}`
-      : "";
-  const tools = toolSummaries.length
-    ? ` Tool evidence: ${toolSummaries.slice(0, 8).join("; ")}.`
-    : "";
-  return `${actorId} completed the delegated agent turn.${tools}${files}`;
 }
 
 function isExistingProducedFile(absPath: string): boolean {
@@ -856,122 +784,6 @@ function shapeValue(value: unknown, depth = 0): unknown {
     return out;
   }
   return typeof value;
-}
-
-function argumentShape(value: unknown): Record<string, unknown> | undefined {
-  const obj = objectRecord(value);
-  const entries = Object.entries(obj).slice(0, 20);
-  if (!entries.length) return undefined;
-  return Object.fromEntries(
-    entries.map(([key, child]) => [key, shapeValue(child)]),
-  );
-}
-
-function numericField(value: unknown): number | undefined {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : undefined;
-}
-
-function kstarToolCallId(rawId: unknown, toolName: string): string {
-  const id = typeof rawId === "string" ? rawId.trim() : "";
-  if (safeId(id)) return id;
-  return `tool-${toolName.replace(/[^A-Za-z0-9_-]+/g, "_").slice(0, 48) || "call"}-${genId12()}`;
-}
-
-function isToolEndEvent(
-  event: ProcessEvent | null,
-): event is ProcessEvent & { data: Record<string, unknown> } {
-  if (event?.stream !== "tool") return false;
-  const data = objectRecord(event.data);
-  const phase = String(data.phase || data.status || "").toLowerCase();
-  return (
-    phase === "end" ||
-    phase === "result" ||
-    phase === "completed" ||
-    phase === "failed"
-  );
-}
-
-function toolEventId(data: Record<string, unknown>, toolName: string): string {
-  return kstarToolCallId(
-    data.id || data.tool_call_id || data.call_id,
-    toolName,
-  );
-}
-
-function rememberKStarToolStart(
-  event: ProcessEvent | null,
-  argumentShapes: Map<string, Record<string, unknown>>,
-): void {
-  if (event?.stream !== "tool") return;
-  const data = objectRecord(event.data);
-  const phase = String(data.phase || data.status || "").toLowerCase();
-  if (phase !== "start") return;
-  const toolName = String(data.name || data.toolName || data.tool || "")
-    .trim()
-    .slice(0, 120);
-  if (!toolName) return;
-  const shape = argumentShape(data.arguments || data.input || data.args);
-  if (shape) argumentShapes.set(toolEventId(data, toolName), shape);
-}
-
-async function maybeRecordKStarToolCycle(input: {
-  uid: string;
-  cid: string;
-  actor: Actor;
-  turnId: string;
-  event: ProcessEvent | null;
-  kstarRequired: boolean;
-  argumentShapes: Map<string, Record<string, unknown>>;
-  toolSummaries: string[];
-}): Promise<void> {
-  if (
-    !input.kstarRequired ||
-    input.actor.kind !== "agent" ||
-    !isToolEndEvent(input.event)
-  )
-    return;
-  const data = objectRecord(input.event.data);
-  const toolName = String(data.name || data.toolName || data.tool || "")
-    .trim()
-    .slice(0, 120);
-  if (!toolName) return;
-  const toolCallId = toolEventId(data, toolName);
-  const resultPreview = boundedString(
-    data.result_preview || data.output || data.message || data.error || "",
-    1000,
-  );
-
-  // Route through adapter integration layer
-  const result = await recordToolCycleEvidence({
-    userId: input.uid,
-    conversationId: input.cid,
-    agentId: input.actor.id,
-    turnId: input.turnId,
-    toolCallId,
-    toolName,
-    argumentsShape:
-      argumentShape(data.arguments || data.input || data.args) ||
-      input.argumentShapes.get(toolCallId),
-    resultPreview,
-    resultSize: numericField(data.result_size || data.size),
-    isError:
-      data.isError === true ||
-      data.is_error === true ||
-      String(data.status || "").toLowerCase() === "failed",
-    durationMs: numericField(data.duration_ms || data.durationMs),
-  });
-
-  input.argumentShapes.delete(toolCallId);
-
-  // Build tool summary for actualAction (used in contribution evidence)
-  const toolFailed = data.isError === true ||
-    data.is_error === true ||
-    String(data.status || "").toLowerCase() === "failed";
-  const status = toolFailed ? "failed" : "succeeded";
-  input.toolSummaries.push(
-    `${toolName} ${status}`,
-  );
 }
 
 /** True when a commander turn's process trail ONLY routed: it carries at least
@@ -1681,45 +1493,6 @@ function _emitTaskRunTerminalIfQuiescent(
   })();
 }
 
-function scheduleCommanderKStarValidation(
-  state: CidState,
-  stateFile: StateFile,
-  taskStatus: TaskTerminalStatus | null,
-): void {
-  const waitingOnLedger =
-    stateFile.orchestration_ledger?.status === "waiting_for_form" ||
-    stateFile.orchestration_ledger?.status === "waiting_for_agent";
-  if (waitingOnLedger || taskStatus === "waiting_input") return;
-  const outcomeStatus: "completed" | "failed" | "cancelled" =
-    stateFile.status === "aborted" || taskStatus === "cancelled"
-      ? "cancelled"
-      : taskStatus === "failed"
-        ? "failed"
-        : "completed";
-  trackBackgroundWrite(
-    state,
-    (async () => {
-      const wakeRequests = await listWakeRequests(state.uid, state.cid);
-      if (
-        wakeRequests.some(
-          (request) => request.status === "pending" || request.status === "approved",
-        )
-      ) {
-        return;
-      }
-      const result = await closeCollaborationEvidence(state.uid, {
-        conversationId: state.cid,
-        commanderId: COMMANDER_ID,
-        outcomeStatus,
-      });
-      if (result.success && result.runId) {
-        log.info(`Commander collaboration closed cid=${state.cid} runId=${result.runId}`);
-      }
-    })(),
-    "Commander KSTAR collaboration validation",
-  );
-}
-
 function emit(state: CidState, ev: GroupEvent): void {
   for (const l of state.listeners) {
     try {
@@ -1861,7 +1634,6 @@ async function _syncStateStatus(
   if (want === "idle") {
     const taskStatus = state.taskRun?.status || null;
     _emitTaskRunTerminalIfQuiescent(state, result.state);
-    scheduleCommanderKStarValidation(state, result.state, taskStatus);
   }
 }
 
@@ -2132,8 +1904,6 @@ export interface EnqueueParams {
   };
   /** Marker for the Commander-visible task/plan/expected-result declaration. */
   kstar_dispatch_narration?: { target_agent_id: string; workflow_step_id?: string };
-  /** Compact tool-cycle summaries captured during this agent turn for KSTAR attribution. */
-  kstarToolSummaries?: string[];
   /** Terminal outcome recorded with an Agent contribution for Commander validation. */
   kstarOutcomeStatus?: AgentRunStatus;
 }
@@ -2702,39 +2472,6 @@ async function _enqueueBody(
       ...(provenance.projectionId ? { projectionId: provenance.projectionId } : {}),
       ...(provenance.wakeRequestId ? { wakeRequestId: provenance.wakeRequestId } : {}),
     };
-  }
-
-  const guardedKStarDecision =
-    fromKind === "agent" && params.turn_end && params.turn_id
-      ? applyKStarGuard(
-          params.kstarDecision,
-          cid,
-          rewrittenText,
-          params.produced,
-        )
-      : undefined;
-  if (fromKind === "agent" && params.turn_end && params.turn_id && guardedKStarDecision?.required) {
-    try {
-      await recordAgentContributionEvidence({
-        userId: uid,
-        conversationId: cid,
-        agentId: fromActorId,
-        turnId: params.turn_id,
-        messageId: msgId,
-        actualResult: rewrittenText,
-        kstarDecision: guardedKStarDecision,
-        outcomeStatus: params.kstarOutcomeStatus || "success",
-        actualAction: buildKStarActualActionSummary(
-          fromActorId,
-          params.produced,
-          params.kstarToolSummaries,
-        ),
-      });
-    } catch (err) {
-      log.warn(
-        `P3394 KSTAR contribution record failed cid=${cid} actor=${fromActorId}: ${(err as Error).message}`,
-      );
-    }
   }
 
   // Persist: main jsonl + each recipient + sender (so sender sees own history
@@ -3788,8 +3525,6 @@ async function runActorTurnBody(
   // history reload can rerender the rail (renderer accumulates it live, but
   // without persistence it vanishes on refresh). Cap the array so a runaway
   // tool storm can't bloat the jsonl. Skip `delta` and `assistant` events.
-  const kstarToolArgumentShapes = new Map<string, Record<string, unknown>>();
-  const kstarToolSummaries: string[] = [];
   if (item.attachments && item.attachments.length) {
     try {
       const attachmentsMod = await import("../chat_attachments");
@@ -4572,24 +4307,6 @@ async function runActorTurnBody(
               ? (inner as Record<string, unknown>)
               : undefined;
           if (actor.kind !== "worker") {
-            if (actor.kind === "agent" && item.kstarDecision?.required) {
-              try {
-                await recordAgentRunStartEvidence({
-                  userId: uid,
-                  conversationId: cid,
-                  agentId: actor.id,
-                  turnId: item.turnId,
-                  data:
-                    inner && typeof inner === "object"
-                      ? (inner as Record<string, unknown>)
-                      : {},
-                });
-              } catch (err) {
-                log.warn(
-                  `P3394 evidence adapter failed cid=${cid} actor=${actor.id}: ${(err as Error).message}`,
-                );
-              }
-            }
             emit(state, {
               type: "agent_run_result",
               cid,
@@ -4618,23 +4335,6 @@ async function runActorTurnBody(
             const event = processEventForPersistence(
               (ev as { event?: unknown }).event,
             );
-            rememberKStarToolStart(event, kstarToolArgumentShapes);
-            try {
-              await maybeRecordKStarToolCycle({
-                uid,
-                cid,
-                actor,
-                turnId: item.turnId,
-                event,
-                kstarRequired: !!item.kstarDecision?.required,
-                argumentShapes: kstarToolArgumentShapes,
-                toolSummaries: kstarToolSummaries,
-              });
-            } catch (err) {
-              log.warn(
-                `P3394 tool evidence adapter failed cid=${cid} actor=${actor.id}: ${(err as Error).message}`,
-              );
-            }
             if (text)
               appendProcessItem(processItems, {
                 type: "progress",
@@ -4645,23 +4345,6 @@ async function runActorTurnBody(
             const event = processEventForPersistence(
               (ev as { event?: unknown }).event,
             );
-            rememberKStarToolStart(event, kstarToolArgumentShapes);
-            try {
-              await maybeRecordKStarToolCycle({
-                uid,
-                cid,
-                actor,
-                turnId: item.turnId,
-                event,
-                kstarRequired: !!item.kstarDecision?.required,
-                argumentShapes: kstarToolArgumentShapes,
-                toolSummaries: kstarToolSummaries,
-              });
-            } catch (err) {
-              log.warn(
-                `P3394 tool evidence adapter failed cid=${cid} actor=${actor.id}: ${(err as Error).message}`,
-              );
-            }
             if (event && event.stream !== "assistant") {
               appendProcessItem(processItems, { type: "event", event });
             }
@@ -5399,9 +5082,6 @@ async function runActorTurnBody(
       turn_id: item.turnId,
       ...(item.kstarDecision?.required
         ? { kstarDecision: item.kstarDecision }
-        : {}),
-      ...(item.kstarDecision?.required && kstarToolSummaries.length
-        ? { kstarToolSummaries }
         : {}),
       ...(actor.kind === "agent" && item.kstarDecision?.required
         ? { kstarOutcomeStatus: actorRunStatus }

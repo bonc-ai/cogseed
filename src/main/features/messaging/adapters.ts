@@ -1,5 +1,6 @@
 import { createLogger } from '../../logger';
 import { logErrorSummary } from '../../util/log-redact';
+import { t } from '../../i18n';
 import * as lark from '@larksuiteoapi/node-sdk';
 import * as wecom from '@wecom/aibot-node-sdk';
 import type { TextMessage, WsFrame } from '@wecom/aibot-node-sdk';
@@ -1173,11 +1174,11 @@ export class FeishuAdapter implements MessagingCardAdapter {
       value: { action, wake_id: approval.wakeId },
     });
     const actions: Record<string, JsonCompatibleValue>[] = [
-      button('✅ 允许一次', 'approve', 'primary'),
+      button(t('messaging.approval.button.approve_once'), 'approve', 'primary'),
     ];
-    if (approval.allowSession !== false) actions.push(button('✅ 本次会话', 'approve_session'));
-    if (approval.allowPermanent !== false) actions.push(button('✅ 总是允许', 'approve_always'));
-    actions.push(button('❌ 拒绝', 'deny', 'danger'));
+    if (approval.allowSession !== false) actions.push(button(t('messaging.approval.button.approve_session'), 'approve_session'));
+    if (approval.allowPermanent !== false) actions.push(button(t('messaging.approval.button.approve_always'), 'approve_always'));
+    actions.push(button(t('messaging.approval.button.deny'), 'deny', 'danger'));
     const card: Record<string, JsonCompatibleValue> = {
       config: { wide_screen_mode: true },
       header: {

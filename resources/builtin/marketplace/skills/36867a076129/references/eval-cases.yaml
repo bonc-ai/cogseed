@@ -1,0 +1,23 @@
+{
+  "evaluation_refs": [
+    "EVAL-BUILD-001",
+    "EVAL-BUILD-002",
+    "EVAL-BUILD-003",
+    "EVAL-BUILD-004",
+    "EVAL-BUILD-005",
+    "EVAL-BUILD-006",
+    "EVAL-BUILD-007",
+    "EVAL-BUILD-008",
+    "EVAL-BUILD-009",
+    "EVAL-BUILD-010"
+  ],
+  "id": "EVAL-SET-BUILD-001",
+  "negative_refs": [
+    "EVAL-BUILD-007",
+    "EVAL-BUILD-008",
+    "EVAL-BUILD-009",
+    "EVAL-BUILD-010"
+  ],
+  "schema_version": "1.0",
+  "source_type": "synthetic"
+}

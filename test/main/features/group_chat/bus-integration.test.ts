@@ -544,33 +544,6 @@ async function makeSeedAgentCli(): Promise<void> {
   fs.writeFileSync(file, JSON.stringify(agent));
 }
 
-async function readPendingKStarEvidence(uid: string): Promise<any[]> {
-  const store = await import(
-    "../../../../src/main/features/p3394/kstar-store"
-  );
-  const pendingPath = store.getPendingEvidencePath(uid);
-  if (!fs.existsSync(pendingPath)) return [];
-  return fs
-    .readFileSync(pendingPath, "utf-8")
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-}
-
-async function waitForPendingKStarEvidence(
-  uid: string,
-  predicate: (record: any) => boolean,
-  timeoutMs = 2000,
-): Promise<any | null> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const found = (await readPendingKStarEvidence(uid)).find(predicate);
-    if (found) return found;
-    await new Promise((r) => setTimeout(r, 20));
-  }
-  return null;
-}
-
 describe("group_chat bus integration › teaching receipts", () => {
   it("persists a deduplicated teaching receipt on the visible commander reply", async () => {
     const cid = newCid();
@@ -3699,13 +3672,11 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     ).toBe(1);
   }, 12_000);
 
-  it("dispatch_to with kstar=required contributes evidence to one Commander validation", async () => {
+  it("dispatch_to with kstar=required injects the Commander expectation into the Agent turn", async () => {
     const cid = newCid();
     const state =
       await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
-    const paths = await import("../../../../src/main/paths");
-    const storage = await import("../../../../src/main/storage");
     const AGENT_REPLY = "KSTAR-AGENT-DRAFT: 完成论文初稿并保存 draft.md";
     _setScript(state.buildGconvSessionId(cid), [
       {
@@ -3748,197 +3719,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     expect(agentCall?.message).toContain("生成论文初稿文件并说明结构");
     expect(agentCall?.message).toContain("先用自然语言说明你理解的任务、预期结果和执行计划");
 
-    const lines = await storage.readJsonl<any>(
-      path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`),
-    );
-    const agentMessage = lines.find(
-      (m: any) =>
-        m.from === AGENT_ID && String(m.text || "").includes(AGENT_REPLY),
-    );
-    expect(agentMessage?.kstar_review).toBeUndefined();
 
-    const closeEvidence = await waitForPendingKStarEvidence(
-      TEST_UID,
-      (record) => record.conversation_id === cid && record.type === "collaboration_close",
-      2000,
-    );
-    expect(closeEvidence).toMatchObject({
-      commander_id: "commander",
-      outcome_status: "completed",
-    });
-    const contribution = await waitForPendingKStarEvidence(
-      TEST_UID,
-      (record) => record.conversation_id === cid && record.type === "conversation_message",
-      2000,
-    );
-    expect(contribution).toMatchObject({
-      agent_id: AGENT_ID,
-      actual_result: expect.stringContaining(AGENT_REPLY),
-      kstar_decision: {
-        required: true,
-        source: "commander",
-        reason: "论文初稿是用户可审阅交付物",
-      },
-    });
-    expect(contribution.kstar_decision.expectation).toMatchObject({
-      task: "根据研究报告写论文初稿",
-      result_hat: "得到可审阅论文初稿",
-    });
-  }, 12_000);
-
-  it("dispatch_to with kstar=required records agent tool cycles for attribution", async () => {
-    const cid = newCid();
-    const state =
-      await import("../../../../src/main/features/group_chat/state");
-    const bus = await import("../../../../src/main/features/group_chat/bus");
-    _setScript(state.buildGconvSessionId(cid), [
-      {
-        type: "__call_tool__",
-        name: "dispatch_to",
-        input: {
-          to: AGENT_NAME,
-          message: "运行定向测试并修复失败",
-          kstar: "required",
-          kstar_reason: "测试修复需要工具级归因证据",
-          kstar_expectation: {
-            task: "运行定向测试并修复失败",
-            action_hat: "执行测试命令并根据结果修复",
-            result_hat: "定向测试通过",
-          },
-        },
-      },
-      { type: "final", text: "等待工具证据验收。" },
-    ]);
-    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
-      {
-        type: "event",
-        event: {
-          stream: "tool",
-          data: {
-            phase: "start",
-            id: "tool-bash-1",
-            name: "bash",
-            arguments: {
-              command:
-                "npm run test:js -- test/main/features/p3394/kstar-bus-integration.test.ts",
-            },
-          },
-        },
-      },
-      {
-        type: "event",
-        event: {
-          stream: "tool",
-          data: {
-            phase: "end",
-            id: "tool-bash-1",
-            name: "bash",
-            isError: true,
-            result_preview: "Error: one targeted test failed",
-            duration_ms: 512,
-          },
-        },
-      },
-      { type: "final", text: "修复完成，但测试曾失败一次。" },
-    ]);
-
-    bus.subscribe(TEST_UID, cid, () => {});
-    await bus.enqueue({
-      uid: TEST_UID,
-      cid,
-      fromActorId: "user",
-      text: "修复定向测试",
-    });
-    await waitForQuiescent(TEST_UID, cid, 4000);
-
-    const cycle = await waitForPendingKStarEvidence(
-      TEST_UID,
-      (record) => record.conversation_id === cid && record.type === "tool_cycle",
-      2000,
-    );
-    expect(cycle).toMatchObject({
-      conversation_id: cid,
-      agent_id: AGENT_ID,
-      tool_call_id: "tool-bash-1",
-      tool_name: "bash",
-      status: "failed",
-      verifier_method: "error_signal",
-      arguments_shape: { command: "string" },
-    });
-
-    const contribution = await waitForPendingKStarEvidence(
-      TEST_UID,
-      (record) => record.conversation_id === cid && record.type === "conversation_message",
-      2000,
-    );
-    expect(contribution?.actual_action).toContain("bash failed");
-  }, 12_000);
-
-  it("bus KSTAR guard upgrades skipped long deliverables into Commander evidence", async () => {
-    const cid = newCid();
-    const state =
-      await import("../../../../src/main/features/group_chat/state");
-    const bus = await import("../../../../src/main/features/group_chat/bus");
-    const paths = await import("../../../../src/main/paths");
-    const storage = await import("../../../../src/main/storage");
-    const LONG_REPORT = `报告正文 ${"需要验收的长文内容。".repeat(260)}`;
-    _setScript(state.buildGconvSessionId(cid), [
-      {
-        type: "__call_tool__",
-        name: "dispatch_to",
-        input: {
-          to: AGENT_NAME,
-          message: "简单处理一下",
-          kstar: "skip",
-          kstar_reason: "Commander mistakenly skipped review",
-        },
-      },
-      { type: "final", text: "收到，等待验收。" },
-    ]);
-    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
-      { type: "final", text: LONG_REPORT },
-    ]);
-
-    bus.subscribe(TEST_UID, cid, () => {});
-    await bus.enqueue({
-      uid: TEST_UID,
-      cid,
-      fromActorId: "user",
-      text: "生成报告",
-    });
-    await waitForQuiescent(TEST_UID, cid, 4000);
-
-    const lines = await storage.readJsonl<any>(
-      path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`),
-    );
-    const agentMessage = lines.find(
-      (m: any) =>
-        m.from === AGENT_ID && String(m.text || "").includes("报告正文"),
-    );
-    expect(agentMessage?.kstar_review).toBeUndefined();
-
-    const closeEvidence = await waitForPendingKStarEvidence(
-      TEST_UID,
-      (record) => record.conversation_id === cid && record.type === "collaboration_close",
-      2000,
-    );
-    expect(closeEvidence).toMatchObject({
-      commander_id: "commander",
-      outcome_status: "completed",
-    });
-    const contribution = await waitForPendingKStarEvidence(
-      TEST_UID,
-      (record) => record.conversation_id === cid && record.type === "conversation_message",
-      2000,
-    );
-    expect(contribution.kstar_decision).toMatchObject({
-      required: true,
-      source: "bus_guard",
-      guard: { upgraded: true },
-    });
-    expect(contribution.kstar_decision.guard?.matched_rules).toEqual(
-      expect.arrayContaining(["deliverable_keywords"]),
-    );
   }, 12_000);
 
   it("dispatch_to with kstar=skip keeps lightweight agent replies outside Review Gate", async () => {
@@ -3946,8 +3727,6 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     const state =
       await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
-    const paths = await import("../../../../src/main/paths");
-    const storage = await import("../../../../src/main/storage");
     const AGENT_REPLY = "LIGHTWEIGHT-EXPLAIN: 这是一个简单解释。";
     _setScript(state.buildGconvSessionId(cid), [
       {
@@ -3975,16 +3754,11 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     });
     await waitForQuiescent(TEST_UID, cid, 4000);
 
-    const lines = await storage.readJsonl<any>(
-      path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`),
+    const agentCall = _recordedCalls.find(
+      (call) => call.sid === state.buildGmemberSessionId(cid, AGENT_ID),
     );
-    const agentMessage = lines.find(
-      (m: any) =>
-        m.from === AGENT_ID && String(m.text || "").includes(AGENT_REPLY),
-    );
-    expect(agentMessage).toBeTruthy();
-    expect(agentMessage?.kstar_review).toBeUndefined();
-    expect(await readPendingKStarEvidence(TEST_UID)).toEqual([]);
+    expect(agentCall?.message).not.toContain('<agent-task-introduction>');
+    expect(agentCall?.message).not.toContain('预期结果');
   }, 12_000);
 
   it("dispatch_to can fan out to multiple named agents in one commander turn and keep both visible replies", async () => {
@@ -4292,7 +4066,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       .filter(Boolean)
       .map((l) => JSON.parse(l));
 
-    const commanderMsgs = lines.filter((m: any) => m.from === "commander");
+    const commanderMsgs = lines.filter((m: any) => m.from === "commander" && !m.recall_projection_card);
     expect(
       commanderMsgs.length,
       "anonymous worker turn stays a single commander bubble",
@@ -4418,7 +4192,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     // second bubble). The only commander message is the pre-handoff narration —
     // and it must be NON-EMPTY: a trailing empty commander bubble (e.g. one that
     // only carried a produced-file chip) is the regression we are guarding.
-    const commanderMsgs = lines.filter((m: any) => m.from === "commander");
+    const commanderMsgs = lines.filter((m: any) => m.from === "commander" && !m.recall_projection_card);
     expect(
       commanderMsgs.length,
       "commander must not synthesize after hand-off",
@@ -4555,7 +4329,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
         (row: any) => row.from === AGENT_ID && row.text === specialistReply,
       ),
     ).toBe(true);
-    const commanderRows = rows.filter((row: any) => row.from === "commander");
+    const commanderRows = rows.filter((row: any) => row.from === "commander" && !row.recall_projection_card);
     expect(
       commanderRows,
       "only the narrated pre-dispatch segment should persist",
@@ -4633,7 +4407,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       .map((line) => JSON.parse(line));
     expect(rows.some((row: any) => row.from === AGENT_ID)).toBe(true);
     expect(
-      rows.filter((row: any) => row.from === "commander"),
+      rows.filter((row: any) => row.from === "commander" && !row.recall_projection_card),
       "compaction observability must not override an explicit terminal delivery",
     ).toEqual([]);
   }, 15_000);
@@ -5524,7 +5298,7 @@ describe("group_chat bus integration › direct agent reply routing", () => {
     });
     await waitForQuiescent(TEST_UID, cid, 3000);
 
-    const messageEvents = events.filter((e) => e.type === "message");
+    const messageEvents = events.filter((e) => e.type === "message" && !e.msg?.recall_projection_card);
     expect(messageEvents).toHaveLength(2);
     const fromAgent = messageEvents.find((e) => e.msg.from === AGENT_ID);
     expect(fromAgent).toBeTruthy();
@@ -5711,8 +5485,9 @@ describe("group_chat bus integration › direct agent reply routing", () => {
       .split("\n")
       .filter(Boolean)
       .map((l) => JSON.parse(l));
-    expect(lines).toHaveLength(2);
-    expect(lines[1]).toMatchObject({ from: AGENT_ID, to: ["user"] });
+    const nonRecallLines = lines.filter((line: any) => !line.recall_projection_card);
+    expect(nonRecallLines).toHaveLength(2);
+    expect(nonRecallLines[1]).toMatchObject({ from: AGENT_ID, to: ["user"] });
     expect(
       _recordedCalls.some((c) => c.sid === state.buildGconvSessionId(cid)),
     ).toBe(false);
@@ -6147,7 +5922,6 @@ describe("group_chat bus integration › wake-gated dispatch continuation", () =
       status: "pending",
       workflow_step_id: expect.stringMatching(/^wstep-/),
     });
-    expect(await readPendingKStarEvidence(TEST_UID)).toHaveLength(0);
     await confirmKstarWakeForTest(cid, request!.id);
 
     _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
@@ -6175,15 +5949,6 @@ describe("group_chat bus integration › wake-gated dispatch continuation", () =
       .filter(Boolean)
       .map((line) => JSON.parse(line));
     expect(lines.some((message: any) => String(message.text || "").includes("CODEX-REVIEW-RESULT"))).toBe(true);
-    const closeEvidence = await waitForPendingKStarEvidence(
-      TEST_UID,
-      (record) => record.conversation_id === cid && record.type === "collaboration_close",
-      2000,
-    );
-    expect(closeEvidence).toMatchObject({
-      commander_id: "commander",
-      outcome_status: "completed",
-    });
   }, 15_000);
 });
 

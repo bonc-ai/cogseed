@@ -18,6 +18,7 @@
 
 import { createLogger } from '../../logger.js';
 import { whichBin } from './which.js';
+import { detectCliAuth } from './auth-state.js';
 import { checkMinVersion, detectVersion, parseSemver } from './version.js';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
@@ -126,6 +127,37 @@ async function detectCodexPackageVersion(binPath: string): Promise<string | null
   return null;
 }
 
+/**
+ * npm-package version fallback for Claude Code. The native `claude --version`
+ * probe can be SIGKILLed in GUI-launched / daemonized environments (observed
+ * on arm64 macOS with claude-code 2.x), which would mark claude as
+ * `version_unknown` and hide it from the onboarding picker despite a healthy
+ * install. The npm wrapper package.json carries the real version, so read it
+ * the same way codex does.
+ */
+async function detectClaudePackageVersion(binPath: string): Promise<string | null> {
+  let dir: string;
+  try { dir = path.dirname(await fs.realpath(binPath)); }
+  catch { dir = path.dirname(binPath); }
+
+  for (let i = 0; i < 8; i += 1) {
+    const pkgPath = path.join(dir, 'package.json');
+    try {
+      const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf8'));
+      if (pkg?.name === '@anthropic-ai/claude-code' && typeof pkg.version === 'string') {
+        const sv = parseSemver(pkg.version);
+        if (sv) return `${sv.major}.${sv.minor}.${sv.patch}`;
+      }
+    } catch {
+      // Keep walking toward the npm package root.
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
 function parseProjectVersionToml(raw: string): string | null {
   const m = /^\s*version\s*=\s*["']([^"']+)["']/m.exec(raw);
   if (!m) return null;
@@ -196,6 +228,9 @@ export type LocalCliEntry = {
   error?: 'not_found' | 'version_too_old' | 'version_unknown';
   /** Human-readable detail when error is set; safe to show in UI. */
   errorDetail?: string;
+  /** Credential state (official-account sign-in vs raw key) for available
+   *  CLIs. File-based, read-only — never guesses. */
+  auth?: { loggedIn: boolean; mode: 'oauth' | 'api' | 'unknown' };
 };
 
 const CACHE_TTL_MS = 60_000;
@@ -239,9 +274,15 @@ export async function detectOne(type: LocalCliType): Promise<LocalCliEntry> {
   }
   // The npm @openai/codex wrapper can hang on `--version` in GUI-launched
   // environments. Prefer its package.json version when available; fall back to
-  // the normal subprocess probe for standalone/non-npm installs.
+  // the normal subprocess probe for standalone/non-npm installs. Claude Code
+  // gets the same treatment: its native `--version` can be SIGKILLed under
+  // GUI launch, so prefer the npm wrapper package.json version first.
   const versionProbes = VERSION_PROBES[type];
-  let version = type === 'codex' ? await detectCodexPackageVersion(resolved) : null;
+  let version = type === 'codex'
+    ? await detectCodexPackageVersion(resolved)
+    : type === 'claude'
+      ? await detectClaudePackageVersion(resolved)
+      : null;
   for (const versionArgs of versionProbes) {
     if (version) break;
     version = await detectVersion(resolved, 5000, versionArgs);
@@ -267,7 +308,7 @@ export async function detectOne(type: LocalCliType): Promise<LocalCliEntry> {
       errorDetail: minErr,
     };
   }
-  return { type, path: resolved, version, available: true };
+  return { type, path: resolved, version, available: true, auth: detectCliAuth(type) };
 }
 
 /** Clear the cache; mainly for tests and the IPC `force: true` path. */

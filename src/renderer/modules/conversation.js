@@ -2752,7 +2752,8 @@ function _groupMsgToLegacy(gm) {
     ...(Array.isArray(gm.recall_citations) && gm.recall_citations.length ? { recall_citations: gm.recall_citations } : {}),
     ...(Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length ? { marketplace_requests: gm.marketplace_requests } : {}),
     ...(Array.isArray(gm.wake_requests) && gm.wake_requests.length ? { wake_requests: gm.wake_requests } : {}),
-    ...(gm.kstar_review ? { kstar_review: gm.kstar_review } : {}),
+    ...(gm.kstar_review_card ? { kstar_review_card: gm.kstar_review_card } : {}),
+    ...(gm.recall_projection_card ? { recall_projection_card: gm.recall_projection_card } : {}),
     ...(gm.plan_announcement ? { _plan_announcement: true } : {}),
     ...(Array.isArray(gm.process) && gm.process.length ? { process: gm.process } : {}),
     ...(gm.turn_id ? { _turn_id: gm.turn_id } : {}),
@@ -3532,13 +3533,6 @@ function _orderProducedPaths(absPaths) {
   }
   return Array.from(byBase.values())
     .sort((a, b) => _producedDeliverableRank(a.base) - _producedDeliverableRank(b.base) || a.i - b.i);
-}
-
-function _producedStatusFromReviewStatus(reviewStatus) {
-  const status = String(reviewStatus || '').trim();
-  if (status === 'needs_review') return 'draft';
-  if (status === 'failed') return 'failed';
-  return 'final';
 }
 
 function _producedStatusLabel(status) {
@@ -5763,8 +5757,6 @@ function focusConversationAttention(kind, ref, messageId = '') {
   const escapedRef = targetRef ? CSS.escape(targetRef) : '';
   const selectors = {
     wake: escapedRef ? `.chat-wake-request[data-wake-request-id="${escapedRef}"]` : '',
-    kstar: escapedRef ? `.chat-kstar-review[data-kstar-run-id="${escapedRef}"]` : '',
-    patch: escapedRef ? `.chat-patch-candidate[data-patch-candidate-id="${escapedRef}"]` : '',
   };
   if (targetKind === 'conflict') {
     const container = document.getElementById('chat-history');
@@ -6216,8 +6208,6 @@ async function loadConversationHistory(cid, opts = {}) {
 
     _replayBufferedGroupEvents(cid);
     void _hydratePendingWakeRequests(cid);
-    void _hydrateKStarReviews(cid);
-    void _hydratePatchCandidates(cid);
 
     _mountConversationResultCard(cid);
 
@@ -7075,17 +7065,28 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble) _mountMarketplaceInstallRequests(bubble, msgDiv, message, opts);
   }
-  if (role === 'assistant' && message.kstar_review) {
+  if (role === 'assistant' && message.kstar_review_card) {
     const bubble = msgDiv.querySelector('.chat-bubble');
-    if (bubble) _mountKStarReviewCard(bubble, message.kstar_review, opts.cid || currentCid);
+    if (bubble) _mountKstarResultReviewCard(bubble, message.kstar_review_card);
   }
 
   if (message.recall_projection_card && typeof window.mountRecallProjectionCard === 'function') {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble && !bubble.querySelector('.chat-recall-projection-card')) {
       const recallProjectionHost = document.createElement('div');
+      const recallProjectionFallback = bubble.querySelector('.markdown-body');
       bubble.appendChild(recallProjectionHost);
-      window.mountRecallProjectionCard(recallProjectionHost, message.recall_projection_card, { cid: opts.cid || currentCid });
+      Promise.resolve(window.mountRecallProjectionCard(
+        recallProjectionHost,
+        message.recall_projection_card,
+        { cid: opts.cid || currentCid },
+      )).then(() => {
+        if (recallProjectionFallback && !recallProjectionHost.classList.contains('is-error')) {
+          recallProjectionFallback.hidden = true;
+        }
+      }).catch(() => {
+        // Keep the persisted text visible when the interactive card cannot mount.
+      });
     }
   }
 
@@ -7097,7 +7098,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble) window.mountMessageArtifacts(bubble, message.artifacts, opts.cid || currentCid);
   }
-  if (producedPaths) _mountMessageProducedFooter(msgDiv, producedPaths, { status: _producedStatusFromReviewStatus(message.kstar_review?.status) });
+  if (producedPaths) _mountMessageProducedFooter(msgDiv, producedPaths);
   // Every assistant reply gets actions. Archive remains limited to final
   // raw-markdown replies; sanitized HTML status stubs are not archivable.
   if (role === 'assistant' && failedAssistant) {
@@ -7419,271 +7420,6 @@ function _mountKstarResultReviewCard(host, review) {
       _renderKstarResultReviewCard(card, { ...review, status: 'confirmed' });
     }
   }).catch(() => {});
-}
-
-function _renderKStarReviewCard(card, review, cid, candidate = null) {
-  card.dataset.busy = '';
-  const status = String(review?.status || 'needs_review');
-  card.className = `chat-kstar-review is-${status}`;
-  card.dataset.kstarRunId = String(review?.run_id || '');
-  const reviewActions = status === 'needs_review'
-    ? `<button type="button" class="btn btn-primary btn-sm" data-kstar-review="pass">${escapeHtml(t('p3394.kstar.pass'))}</button><button type="button" class="btn btn-sm" data-kstar-review="fail">${escapeHtml(t('p3394.kstar.fail'))}</button>`
-    : '';
-  const experienceActions = candidate?.status === 'pending'
-    ? `<div class="chat-kstar-experience"><span>${escapeHtml(t('p3394.experience.title'))}</span><button type="button" class="btn btn-primary btn-sm" data-experience-decision="approve">${escapeHtml(t('p3394.experience.approve'))}</button><button type="button" class="btn btn-sm" data-experience-decision="reject">${escapeHtml(t('p3394.experience.reject'))}</button></div>`
-    : '';
-  const kbError = candidate?.promotion_error ? `${t('p3394.experience.kb_failed')}: ${candidate.promotion_error}` : t('p3394.experience.kb_failed');
-  const experienceStatus = candidate?.promotion_status === 'promoted' && candidate?.kb_path
-    ? `<div class="chat-kstar-experience-status is-promoted">${escapeHtml(t('p3394.experience.kb_promoted', { path: candidate.kb_path }))}</div>`
-    : candidate?.promotion_status === 'failed'
-      ? `<div class="chat-kstar-experience-status is-failed">${escapeHtml(kbError)}</div>`
-      : '';
-  const notionError = candidate?.notion_sync?.error ? `${t('p3394.experience.notion_failed')}: ${candidate.notion_sync.error}` : t('p3394.experience.notion_failed');
-  const notionStatus = candidate?.notion_sync?.status === 'synced'
-    ? `<div class="chat-kstar-experience-status is-promoted">${escapeHtml(t('p3394.experience.notion_synced'))}${candidate.notion_sync.url ? ` <a href="${escapeHtml(candidate.notion_sync.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t('common.open'))}</a>` : ''}</div>`
-    : candidate?.notion_sync?.status === 'failed'
-      ? `<div class="chat-kstar-experience-status is-failed">${escapeHtml(notionError)}</div>`
-      : '';
-  const notionActions = candidate?.promotion_status === 'promoted' && candidate?.notion_sync?.status !== 'synced'
-    ? `<div class="chat-kstar-experience"><span>${escapeHtml(t('p3394.experience.notion_title'))}</span><button type="button" class="btn btn-sm" data-experience-notion-sync="1">${escapeHtml(t('p3394.experience.notion_sync'))}</button></div>`
-    : '';
-  card.innerHTML = `<div class="chat-kstar-title">${escapeHtml(t('p3394.kstar.title'))}</div><div class="chat-kstar-status">${escapeHtml(t(`p3394.kstar.status.${status}`))}</div><div class="chat-kstar-actions">${reviewActions}</div>${experienceActions}${experienceStatus}${notionActions}${notionStatus}`;
-  for (const button of card.querySelectorAll('[data-kstar-review]')) {
-    button.addEventListener('click', () => _resolveKStarReview(card, review, cid, button.dataset.kstarReview));
-  }
-  for (const button of card.querySelectorAll('[data-experience-decision]')) {
-    button.addEventListener('click', () => _resolveExperienceCandidate(card, review, candidate, cid, button.dataset.experienceDecision));
-  }
-  for (const button of card.querySelectorAll('[data-experience-notion-sync]')) {
-    button.addEventListener('click', () => _syncExperienceCandidateToNotion(card, review, candidate, cid));
-  }
-}
-
-function _mountKStarReviewCard(host, review, cid) {
-  if (!host || !review?.run_id || !cid) return;
-  const selector = `.chat-kstar-review[data-kstar-run-id="${CSS.escape(String(review.run_id))}"]`;
-  if (host.querySelector(selector)) return;
-  const card = document.createElement('div');
-  host.appendChild(card);
-  _renderKStarReviewCard(card, review, cid);
-}
-
-async function _resolveKStarReview(card, review, cid, decision) {
-  if (card.dataset.busy === '1') return;
-  card.dataset.busy = '1';
-  try {
-    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/kstar/${encodeURIComponent(review.run_id)}/review`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision }),
-    });
-    const data = await res.json();
-    if (!data?.ok) throw new Error(data?.error || 'KSTAR review failed');
-    _renderKStarReviewCard(card, { ...review, status: data.run.status }, cid, data.experience_candidate);
-    _applyMessageProducedStatus(card.closest('.chat-message'), _producedStatusFromReviewStatus(data.run.status));
-  } catch (err) {
-    card.dataset.busy = '';
-    _convLog.warn('KSTAR review failed', (err && err.message) || String(err));
-    try { await uiAlert(t('p3394.kstar.review_failed')); } catch (_) {}
-  }
-}
-
-async function _resolveExperienceCandidate(card, review, candidate, cid, decision) {
-  if (!candidate?.id || card.dataset.busy === '1') return;
-  card.dataset.busy = '1';
-  try {
-    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/experience/${encodeURIComponent(candidate.id)}/decision`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision }),
-    });
-    const data = await res.json();
-    if (!data?.ok) throw new Error(data?.error || 'experience decision failed');
-    _renderKStarReviewCard(card, review, cid, data.candidate);
-  } catch (err) {
-    card.dataset.busy = '';
-    _convLog.warn('experience decision failed', (err && err.message) || String(err));
-  }
-}
-
-async function _syncExperienceCandidateToNotion(card, review, candidate, cid) {
-  if (!candidate?.id || card.dataset.busy === '1') return;
-  card.dataset.busy = '1';
-  try {
-    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/experience/${encodeURIComponent(candidate.id)}/notion-sync`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
-    });
-    const data = await res.json();
-    if (!data?.ok) {
-      if (data?.candidate?.id) _renderKStarReviewCard(card, review, cid, data.candidate);
-      throw new Error(data?.error || 'Notion sync failed');
-    }
-    if (!data.candidate?.id) throw new Error('Notion sync returned no candidate');
-    _renderKStarReviewCard(card, review, cid, data.candidate);
-  } catch (err) {
-    card.dataset.busy = '';
-    const message = (err && err.message) || String(err);
-    _convLog.warn('Notion sync failed', message);
-    try { await uiAlert(`${t('p3394.experience.notion_failed')}: ${message}`); } catch (_) {}
-  }
-}
-
-async function _hydrateKStarReviews(cid) {
-  try {
-    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/kstar`);
-    const data = await res.json();
-    if (!data?.ok || cid !== currentCid) return;
-    const runs = Array.isArray(data.runs) ? data.runs : [];
-    const candidates = Array.isArray(data.experience_candidates) ? data.experience_candidates : [];
-    const runsById = new Map(runs.map((run) => [String(run?.id || ''), run]));
-    const candidatesByRunId = new Map(candidates.map((candidate) => [String(candidate?.source_run_id || ''), candidate]));
-    for (const card of document.querySelectorAll('#chat-history .chat-kstar-review[data-kstar-run-id]')) {
-      const run = runsById.get(String(card.dataset.kstarRunId || ''));
-      if (!run) continue;
-      const candidate = candidatesByRunId.get(String(run.id || '')) || null;
-      const latestReview = {
-        run_id: run.id,
-        status: run.status,
-        agent_id: run.agent_id,
-        turn_id: run.turn_id,
-      };
-      _renderKStarReviewCard(card, latestReview, cid, candidate);
-      _applyMessageProducedStatus(card.closest('.chat-message'), _producedStatusFromReviewStatus(run.status));
-    }
-  } catch (err) {
-    _convLog.warn('KSTAR hydration failed', (err && err.message) || String(err));
-  }
-}
-
-
-function _renderPatchCandidateCard(card, cid, candidate) {
-  if (!card || !candidate?.id) return;
-  const status = String(candidate.status || 'unknown');
-  const type = String(candidate.type || 'unknown');
-  const proposal = candidate.proposal && typeof candidate.proposal === 'object' ? candidate.proposal : {};
-  const engine = candidate.engine && typeof candidate.engine === 'object' ? candidate.engine : {};
-  const review = candidate.review && typeof candidate.review === 'object' ? candidate.review : {};
-  const title = _patchCandidateText(proposal.title, t('p3394.patch.untitled'));
-  const summary = _patchCandidateText(proposal.summary, t('p3394.patch.no_summary'));
-  const rationale = _patchCandidateText(proposal.rationale);
-  const proposed = _patchCandidateText(proposal.proposed_content);
-  const routeAction = _patchCandidateText(engine.route_action);
-  const attributionId = _patchCandidateText(engine.attribution_id);
-  const reviewNotes = _patchCandidateText(review.notes || candidate.review_notes || candidate.notes);
-  const canReview = status === 'needs_review' || status === 'proposed';
-
-  card.className = `chat-patch-candidate is-${status}`;
-  card.dataset.patchCandidateId = String(candidate.id);
-  card.dataset.busy = '';
-  card.innerHTML = `
-    <div class="chat-patch-candidate-head">
-      <div>
-        <div class="chat-patch-candidate-kicker">${escapeHtml(t('p3394.patch.kicker'))}</div>
-        <div class="chat-patch-candidate-title">${escapeHtml(title)}</div>
-      </div>
-      <div class="chat-patch-candidate-badges">
-        <span class="chat-patch-candidate-badge">${escapeHtml(_patchCandidateTypeLabel(type))}</span>
-        <span class="chat-patch-candidate-badge is-status">${escapeHtml(_patchCandidateStatusLabel(status))}</span>
-      </div>
-    </div>
-    <div class="chat-patch-candidate-summary">${escapeHtml(summary)}</div>
-    <details class="chat-patch-candidate-details">
-      <summary>${escapeHtml(t('p3394.patch.details'))}</summary>
-      ${rationale ? `<div class="chat-patch-candidate-field"><strong>${escapeHtml(t('p3394.patch.rationale'))}</strong><div>${escapeHtml(rationale)}</div></div>` : ''}
-      ${proposed ? `<div class="chat-patch-candidate-field"><strong>${escapeHtml(t('p3394.patch.proposed'))}</strong><pre>${escapeHtml(proposed)}</pre></div>` : ''}
-      ${routeAction ? `<div class="chat-patch-candidate-meta">${escapeHtml(t('p3394.patch.route_action'))}: ${escapeHtml(routeAction)}</div>` : ''}
-      ${attributionId ? `<div class="chat-patch-candidate-meta">${escapeHtml(t('p3394.patch.attribution_id'))}: ${escapeHtml(attributionId)}</div>` : ''}
-      ${reviewNotes ? `<div class="chat-patch-candidate-meta">${escapeHtml(t('p3394.patch.review_notes'))}: ${escapeHtml(reviewNotes)}</div>` : ''}
-    </details>
-    ${canReview ? `
-      <textarea class="chat-patch-candidate-notes" rows="2" placeholder="${escapeHtml(t('p3394.patch.notes_placeholder'))}"></textarea>
-      <div class="chat-patch-candidate-actions">
-        <button type="button" class="btn btn-primary btn-sm" data-patch-candidate-review="approve">${escapeHtml(t('p3394.patch.approve'))}</button>
-        <button type="button" class="btn btn-sm" data-patch-candidate-review="reject">${escapeHtml(t('p3394.patch.reject'))}</button>
-      </div>` : ''}
-  `;
-  for (const button of card.querySelectorAll('[data-patch-candidate-review]')) {
-    button.addEventListener('click', () => _resolvePatchCandidateReview(card, cid, candidate, button.dataset.patchCandidateReview));
-  }
-}
-
-function _patchCandidateStatusLabel(status) {
-  const rawStatus = String(status || 'unknown');
-  const key = `p3394.patch.status.${rawStatus}`;
-  const label = t(key);
-  return label === key ? rawStatus : label;
-}
-
-function _patchCandidateTypeLabel(type) {
-  const rawType = String(type || 'unknown');
-  const key = `p3394.patch.type.${rawType}`;
-  const label = t(key);
-  return label === key ? rawType : label;
-}
-
-function _patchCandidateText(value, fallback = '') {
-  const text = String(value || '').trim();
-  return text || fallback;
-}
-
-async function _resolvePatchCandidateReview(card, cid, candidate, decision) {
-  if (!card || !candidate?.id || card.dataset.busy === '1') return;
-  card.dataset.busy = '1';
-  try {
-    const notesEl = card.querySelector('.chat-patch-candidate-notes');
-    const notes = notesEl && typeof notesEl.value === 'string' ? notesEl.value : '';
-    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/patch-candidates/${encodeURIComponent(candidate.id)}/review`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ decision, notes }),
-    });
-    const data = await res.json();
-    if (!data?.ok) throw new Error(data?.error || 'patch candidate review failed');
-    if (!data.patch_candidate?.id) throw new Error('patch candidate review returned no candidate');
-    _renderPatchCandidateCard(card, cid, data.patch_candidate);
-  } catch (err) {
-    card.dataset.busy = '';
-    _convLog.warn('patch candidate review failed', (err && err.message) || String(err));
-    try { await uiAlert(t('p3394.patch.review_failed')); } catch (_) {}
-  }
-}
-
-function _patchCandidateHost(cid, options = {}) {
-  if (!cid || cid !== currentCid) return null;
-  const existing = document.querySelector('#chat-patch-candidates-host');
-  if (existing || options.create === false) return existing || null;
-  const history = document.getElementById ? document.getElementById('chat-history') : document.querySelector('#chat-history');
-  if (!history) return null;
-  const host = document.createElement('div');
-  host.id = 'chat-patch-candidates-host';
-  host.className = 'chat-patch-candidates-host';
-  host.setAttribute('role', 'region');
-  host.setAttribute('aria-live', 'polite');
-  if (typeof _appendBeforeSpacer === 'function') _appendBeforeSpacer(history, host);
-  else history.appendChild(host);
-  return host;
-}
-
-async function _hydratePatchCandidates(cid) {
-  if (!cid || cid !== currentCid) return;
-  const host = _patchCandidateHost(cid, { create: true });
-  if (!host) return;
-  host.innerHTML = `<div class="chat-patch-candidates-title">${escapeHtml(t('p3394.patch.center_title'))}</div><div class="chat-patch-candidates-loading">${escapeHtml(t('p3394.patch.loading'))}</div>`;
-  try {
-    const res = await apiFetch(`/api/conversations/${encodeURIComponent(cid)}/patch-candidates`);
-    const data = await res.json();
-    if (!data?.ok || cid !== currentCid) return;
-    const candidates = Array.isArray(data.patch_candidates) ? data.patch_candidates : [];
-    host.innerHTML = `<div class="chat-patch-candidates-title"><span>${escapeHtml(t('p3394.patch.center_title'))}</span><span>${escapeHtml(String(candidates.length))}</span></div>`;
-    if (!candidates.length) {
-      host.innerHTML += `<div class="chat-patch-candidates-empty">${escapeHtml(t('p3394.patch.empty'))}</div>`;
-      return;
-    }
-    for (const candidate of candidates) {
-      const card = document.createElement('div');
-      host.appendChild(card);
-      _renderPatchCandidateCard(card, cid, candidate);
-    }
-  } catch (err) {
-    _convLog.warn('patch candidate hydration failed', (err && err.message) || String(err));
-    host.innerHTML = `<div class="chat-patch-candidates-title">${escapeHtml(t('p3394.patch.center_title'))}</div><div class="chat-patch-candidates-error">${escapeHtml(t('p3394.patch.load_failed'))}</div>`;
-  }
 }
 
 function _wakeRequestHost(cid, options = {}) {
@@ -9744,11 +9480,85 @@ function _makeConvChatController(cid, options = {}) {
   return ctrl;
 }
 
+// ── Commander CLI fallback ────────────────────────────────────────────────
+// No API-key model configured → the commander can't answer by itself. Route
+// the conversation to the user's signed-in CLI agent (Claude Code / Codex /
+// OpenCode), which runs on their official account — the only local execution
+// backend. Preferred CLI comes from settings (prefs.setCliFallback); when
+// unset, the first signed-in CLI is picked. Honest, idempotent, never
+// fabricates a model.
+let _cliFallbackApplied = null; // cid → cli (per conversation, once)
+
+async function _maybeApplyCliFallback(cid) {
+  if (_cliFallbackApplied === cid) return false;
+  if (!window.orkas || typeof window.orkas.invoke !== 'function') return false;
+
+  let modelRes;
+  try {
+    modelRes = await window.orkas.invoke('model.hasConfigured');
+  } catch (_) { return false; }
+  if (modelRes && modelRes.configured) return false;
+
+  let cli = '';
+  try {
+    const fb = await window.orkas.invoke('prefs.getCliFallback');
+    cli = (fb && fb.cli) || '';
+  } catch (_) { /* fall through to auto-pick */ }
+
+  if (!cli) {
+    try {
+      const listRes = await window.orkas.invoke('localAgents.list', { force: false });
+      const entry = (listRes && listRes.entries || []).find(
+        (e) => e && e.available && e.auth && e.auth.loggedIn
+          && ['claude', 'codex', 'opencode'].includes(e.type),
+      );
+      cli = entry ? entry.type : '';
+    } catch (_) { /* no auth state available */ }
+  }
+  if (!cli) return false;
+
+  let agent = null;
+  try {
+    const listRes = await window.orkas.invoke('agents.list', {});
+    agent = (listRes && listRes.agents || []).find(
+      (a) => a && a.runtime && a.runtime.kind === 'cli' && a.runtime.cli === cli,
+    );
+  } catch (_) { /* agents list unavailable */ }
+  if (!agent) return false;
+
+  _recipientByCid[cid] = { kind: 'agent', id: String(agent.agent_id || ''), name: String(agent.name || cli) };
+  _cliFallbackApplied = cid;
+  try { _renderRecipientChip('conversation'); } catch (_) {}
+  const label = cli === 'claude' ? 'Claude Code' : (cli === 'codex' ? 'Codex' : 'OpenCode');
+  _convLog.info('commander CLI fallback applied', { cid, cli, agentId: agent.agent_id });
+  if (typeof uiToast === 'function') {
+    uiToast(`指挥官当前没有可用的 API Key，消息已自动交给 ${label} 执行（可在设置中更改）`, { variant: 'warning', timeoutMs: 6000 });
+  }
+  return true;
+}
+
 async function sendInConversation(cid, content, extra, options = {}) {
   if (!cid) return { started: false, aborted: false, errored: false, result: 'failure' };
   const startedAt = performance.now();
   const sendOptions = options && typeof options === 'object' ? options : {};
   const statAgentId = String(sendOptions.agent_id || '');
+
+  // Commander CLI fallback: when no API-key model is configured and the
+  // message targets the commander (no explicit agent), route this
+  // conversation to the user's signed-in CLI agent so chat still works.
+  // Cheap IPC checks; any failure falls through to the normal send path.
+  if (!statAgentId) {
+    try {
+      const recipient = _activeRecipient('conversation');
+      const toCommander = !recipient || recipient.kind === 'commander';
+      if (toCommander) {
+        await _maybeApplyCliFallback(cid);
+      }
+    } catch (err) {
+      _convLog.warn('cli fallback check failed', err);
+    }
+  }
+
   let doneResult = null;
   let taskStarted = false;
   const attachmentCount = Array.isArray(extra && extra.attachments) ? extra.attachments.length : 0;
@@ -12192,9 +12002,9 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
     }
   }
 
-  if (gm.kstar_review) {
+  if (gm.kstar_review_card) {
     const bubble = ph.querySelector('.chat-bubble');
-    if (bubble) _mountKStarReviewCard(bubble, gm.kstar_review, cid);
+    if (bubble) _mountKstarResultReviewCard(bubble, gm.kstar_review_card);
   }
 
   // Interactive web-app artifacts (chat-app:// iframe). Idempotent — skips
@@ -12204,7 +12014,7 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
     if (bubble) window.mountMessageArtifacts(bubble, gm.artifacts, cid);
   }
   if (Array.isArray(gm.produced) && gm.produced.length) {
-    _mountMessageProducedFooter(ph, gm.produced, { status: _producedStatusFromReviewStatus(gm.kstar_review?.status) });
+    _mountMessageProducedFooter(ph, gm.produced);
   }
   _scheduleConversationInfoFileRefresh(cid);
 }
@@ -12349,8 +12159,7 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
       }
       if (isTurnEnd) {
         _evaluateAutoRecipient(cid);
-        void _hydratePatchCandidates(cid);
-      }
+          }
     } else {
       // Mid-turn side-effect message (plan announcement etc., no `seg`) —
       // append a new bubble alongside, leave the streaming placeholder alive

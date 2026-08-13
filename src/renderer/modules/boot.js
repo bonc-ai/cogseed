@@ -98,6 +98,20 @@ async function bootApp() {
   // i18n must be ready before any other UI module renders labels.
   await _bootStage('initI18n', initI18n);
 
+  // First-run walkthrough FIRST: check the machine-local onboarding marker
+  // right after i18n, BEFORE Stage A/B. The walkthrough is a full-screen
+  // overlay — the user should land on it immediately, never on a half-loaded
+  // main UI that swaps to the walkthrough seconds later. It is fire-and-
+  // forget so it never blocks first paint; Stage A/B keep warming the main
+  // UI underneath the overlay. `maybeStart` is idempotent (skips when the
+  // marker says completed), so the original post-Stage-B call below stays
+  // as a safety net for edge cases where the early check raced boot.
+  if (window.csOnboarding && typeof window.csOnboarding.maybeStart === 'function') {
+    Promise.resolve(window.csOnboarding.maybeStart()).catch((err) => {
+      _bootLog.warn('onboarding maybeStart (early) failed', { error: (err && err.message) || String(err) });
+    });
+  }
+
   // ── Stage A (parallel, no inter-dependencies) ──────────────────────
   // All four are independent IPC calls. Three downstream constraints,
   // all honored by staging:

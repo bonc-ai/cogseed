@@ -47,6 +47,65 @@ import * as path from 'node:path';
 
 import { sha256OfFile } from '../util/sha256';
 import { marketplaceContentTreeHash } from '../util/marketplace-tree-hash';
+import { writeInstallReceipt } from './skill_trust';
+import { topViolationOf } from './skill_reverify';
+import {
+  scanSkillDir, scanVerdictBlocksInstall, scanVerdictAllowsOverride,
+  resolveInstallDecision, type SentryScanResult, type SkillSource,
+} from './security/sentry-adapter';
+
+/**
+ * One-line, machine-readable reason for a security block.
+ *
+ * Reports attack-surface counts and rule ids only — never the matched source
+ * text. The spec requires a high-risk message to state the risk type and impact
+ * "without exposing the sensitive original text", since that text may itself be
+ * a leaked credential.
+ */
+function _securityBlockReason(scan: SentryScanResult): string {
+  if (scan.localRedLines?.length) return `red lines: ${scan.localRedLines.join(', ')}`;
+  if (scan.hardBlocked) return 'hard-block red line (suspected data exfiltration)';
+  const parts: string[] = [];
+  // Absent when nothing was measured (`unknown` / `scanner_absent`), so this is
+  // guarded rather than zero-filled upstream: a zeroed surface would read as
+  // "scanned, nothing found" and explain a rejection with counts of zero.
+  const s = scan.attackSurface;
+  if (s && s.egressPoints > 0) parts.push(`${s.egressPoints} network egress point(s)`);
+  if (s && s.dynamicExecPoints > 0) parts.push(`${s.dynamicExecPoints} dynamic execution point(s)`);
+  if (s && s.persistencePoints > 0) parts.push(`${s.persistencePoints} persistence point(s)`);
+  if (parts.length) return parts.join('; ');
+  return scan.riskClassification || scan.recommendation || 'security scan rejected';
+}
+
+/**
+ * Build the error thrown when the deep scan rejects an install.
+ *
+ * Carries the structured verdict on the error so the IPC layer and renderer can
+ * render the spec's risk card (§5.2) instead of only a message string. Mirrors
+ * `_qualityInstallError`'s shape so both gates surface the same way.
+ */
+function _securityInstallError(
+  skillId: string, name: string, scan: SentryScanResult,
+): Error {
+  const unavailable = scan.outcome === 'unknown';
+  const e = new Error(unavailable
+    ? `Security check unavailable for skill ${name || skillId} (${scan.unavailableReason || 'unknown'})`
+    : `Security scan rejected skill ${name || skillId} (${_securityBlockReason(scan)})`);
+  (e as { securityBlocked?: boolean }).securityBlocked = !unavailable;
+  (e as { securityUnavailable?: boolean }).securityUnavailable = unavailable;
+  (e as { securitySkillId?: string }).securitySkillId = skillId;
+  (e as { securityScan?: SentryScanResult }).securityScan = scan;
+  // Whether the renderer may offer "install anyway". Computed here, next to the
+  // verdict, rather than re-derived in the UI: a second copy of the
+  // non-overridable rule set is how an exfiltration finding eventually becomes
+  // waivable in one place and not the other.
+  (e as { securityOverridable?: boolean }).securityOverridable =
+    scanVerdictAllowsOverride(scan);
+  // Rule ids drive the plain-language explanation, so the dialog can say what was
+  // found instead of only that something was.
+  (e as { securityRuleIds?: string[] }).securityRuleIds = [...(scan.localRedLines || [])];
+  return e;
+}
 import { logPathRef } from '../util/log-redact';
 import { fetchWithRetry } from '../util/retry';
 import {
@@ -433,7 +492,22 @@ type MarketplaceFreshness = {
   updated_at?: number;
 } & MinAppVersionSource;
 type MarketplaceInstallKind = 'agent' | 'skill';
-type MarketplaceInstallOpts = { force?: boolean; name?: string };
+type MarketplaceInstallOpts = {
+  force?: boolean;
+  name?: string;
+  /**
+   * The user was shown the risk and chose to install anyway.
+   *
+   * Distinct from `force`, which predates this and gates unrelated things
+   * (dependency propagation, advisories that never blocked). Reusing it would
+   * have made every existing `force: true` caller silently accept security
+   * risk — and `force` is set by ordinary retry paths.
+   *
+   * Honoured only where `scanVerdictAllowsOverride` agrees, so a caller passing
+   * this cannot buy past a red line by asserting consent.
+   */
+  acceptSecurityRisk?: boolean;
+};
 
 function _currentAppVersion(): string {
   try { return app.getVersion(); } catch { return ''; }
@@ -814,7 +888,7 @@ async function _installMarketplaceAgentLocked(
     // `report.ok === false` means an EXTREME violation, and EXTREME is not
     // user-overridable (see `quality/README.md`) — `force` must not reach it.
     // See `_assertQualityGatePassed` for why force is deliberately ignored here.
-    _assertQualityGatePassed('agent', agentId, preReport);
+    _assertQualityGatePassed('agent', agentId, preReport, opts.acceptSecurityRisk === true);
     // 4. Now materialize the agent: cache content → `<uid>/local/marketplace/agents/<id>/`.
     //    `_install.json` is a version pin read by `marketplace_reconcile.ts::_agentNeedsPull`
     //    on other devices to skip a re-pull when their local copy already matches the manifest's
@@ -938,11 +1012,75 @@ async function _installMarketplaceSkillLocked(
     });
     if (!skillReport.ok) {
       await fsp.rm(target, { recursive: true, force: true });
-      _assertQualityGatePassed('skill', skillId, skillReport);
+      _assertQualityGatePassed('skill', skillId, skillReport, opts.acceptSecurityRisk === true);
     }
 
     const skillContentSha = sha256OfFile(path.join(target, 'SKILL.md'));
     const skillTreeHash = marketplaceContentTreeHash(target);
+
+    // Deep security scan (skill-sentry + our EXTREME red lines). Runs after the
+    // structural gate above because a skill that fails structurally is already
+    // rolled back; this one decides whether structurally-valid content is safe.
+    //
+    // Source tier drives the threshold: platform-published skills
+    // (`create_uid === '0'`) are only rejected on an outright DO_NOT_INSTALL,
+    // while community uploads are also held back at CAUTION. Unknown
+    // provenance falls to the stricter tier, never the looser one.
+    const sourceTier: SkillSource = String(detail.create_uid || '') === '0'
+      ? 'official'
+      : 'community';
+    const scan = await scanSkillDir(target, sourceTier);
+    // An informed user may accept a refusal the gate is willing to have waived —
+    // currently only a scanner outage, never a red line. Checked through
+    // `scanVerdictAllowsOverride` rather than trusting the flag, so consent
+    // cannot be asserted for something that was never overridable.
+    const decision = resolveInstallDecision(scan, opts.acceptSecurityRisk === true);
+    const overridden = decision.overridden;
+    if (overridden) {
+      log.warn('install proceeding on user security override', {
+        skillId, outcome: scan.outcome,
+      });
+    }
+    if (!decision.allowed) {
+      // Roll back before throwing so a rejected skill leaves nothing on disk —
+      // the spec requires "formal assets unchanged" after a high-risk block.
+      //
+      // `unknown` rolls back too (fail closed, spec §6.2: a new executable asset
+      // whose check could not run is not installed), but is flagged separately
+      // on the error so the UI can say "check unavailable" rather than
+      // "malicious" — conflating the two would train users to dismiss real
+      // blocks.
+      await fsp.rm(target, { recursive: true, force: true });
+      throw _securityInstallError(skillId, skillName, scan);
+    }
+
+    // Bind this verdict to the exact bytes and ruleset that produced it, so a
+    // later edit or a ruleset upgrade makes the verdict provably stale instead
+    // of silently standing forever. Reuses the report above rather than
+    // rescanning: the receipt must record the verdict that actually gated the
+    // install, not a second opinion.
+    if (skillTreeHash) {
+      // Top finding computed by severity, not by position: the validator
+      // returns violations in scan order, so `violations[0]` is only
+      // incidentally the most severe one.
+      const top = topViolationOf(skillReport.violations);
+      // Shared with the custom-import path so the two cannot drift; it swallows
+      // its own failures, since a receipt is an audit aid and not part of the
+      // gate the install already passed.
+      writeInstallReceipt(
+        getActiveUserId(), skillId, skillTreeHash,
+        // The override rides on the scan so the receipt records what was waived,
+        // not merely that something was.
+        overridden
+          ? { ...scan, userOverride: { outcome: scan.outcome, at: Date.now() } }
+          : scan,
+        {
+          violationCount: skillReport.violations.length,
+          ...(top?.rule ? { topRule: top.rule } : {}),
+          ...(top?.level ? { topLevel: top.level } : {}),
+        },
+      );
+    }
     const installedAt = Date.now();
     await fsp.writeFile(path.join(target, '_install.json'),
       JSON.stringify({
@@ -1004,6 +1142,11 @@ function _qualityInstallError(
   const e = new Error(`Quality validation rejected ${kind} ${id} (${reason})`);
   (e as { qualityKind?: string }).qualityKind = kind;
   (e as { qualityId?: string }).qualityId = id;
+  // Rule ids drive the plain-language risk list in the confirm dialog, so the
+  // user is told what was found rather than only that something was.
+  (e as { qualityRuleIds?: string[] }).qualityRuleIds =
+    [...new Set(blockingViolations.map((v) => v.rule).filter(Boolean))];
+  (e as { qualityOverridable?: boolean }).qualityOverridable = true;
   (e as { qualityReport?: QualityReport }).qualityReport = {
     ...report,
     ok: false,
@@ -1032,8 +1175,19 @@ function _qualityInstallError(
  */
 function _assertQualityGatePassed(
   kind: 'agent' | 'skill', id: string, report: QualityReport,
+  acceptRedFlagRisk = false,
 ): void {
   if (report.ok) return;
+  // An informed user may proceed. This reverses the previous absolute rule; see
+  // `quality/README.md` for why, and for what the earlier rule was protecting
+  // against. The consent must be explicit and per-install — it is never implied
+  // by `force`, which ordinary retry paths set for unrelated reasons.
+  if (acceptRedFlagRisk) {
+    log.warn('install proceeding on user red-flag override', {
+      kind, id, rules: report.violations.filter((v) => v.level === 'EXTREME').map((v) => v.rule),
+    });
+    return;
+  }
   throw _qualityInstallError(kind, id, report);
 }
 

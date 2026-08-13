@@ -9,7 +9,7 @@ import { isPathAllowed } from '../../util/path-sandbox';
 import { validateSkillDir, validateSkillFile, type ValidationReport } from '../../quality';
 
 export type ValidationStatus = 'pass' | 'risk' | 'blocked' | 'degraded';
-export type ValidationTarget = 'working-tree' | 'installed-skill' | 'patch-candidate';
+export type ValidationTarget = 'working-tree' | 'installed-skill' | 'skill-patch';
 export type ValidationBoundary = 'real' | 'degraded' | 'test-double';
 export interface SkillValidationRun {
   validationId: string;
@@ -97,11 +97,11 @@ export async function runSkillValidation(uid: string, input: {
   }
 }
 
-export async function validatePatchCandidateContent(
+export async function validateSkillPatchContent(
   uid: string, skillId: string, content: string, boundary: ValidationBoundary = 'real',
 ): Promise<SkillValidationRun> {
   const report = validateSkillFile({ relpath: 'SKILL.md', content });
-  return persist(uid, normalizeValidationReport(skillId, 'patch-candidate', report, 1, boundary));
+  return persist(uid, normalizeValidationReport(skillId, 'skill-patch', report, 1, boundary));
 }
 
 export async function readSkillValidation(uid: string, validationId: string): Promise<SkillValidationRun> {

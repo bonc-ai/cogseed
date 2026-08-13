@@ -1,0 +1,23 @@
+{
+  "evaluation_refs": [
+    "EVAL-DEFINE-001",
+    "EVAL-DEFINE-002",
+    "EVAL-DEFINE-003",
+    "EVAL-DEFINE-004",
+    "EVAL-DEFINE-005",
+    "EVAL-DEFINE-006",
+    "EVAL-DEFINE-007",
+    "EVAL-DEFINE-008",
+    "EVAL-DEFINE-009",
+    "EVAL-DEFINE-010"
+  ],
+  "id": "EVAL-SET-DEFINE-001",
+  "negative_refs": [
+    "EVAL-DEFINE-007",
+    "EVAL-DEFINE-008",
+    "EVAL-DEFINE-009",
+    "EVAL-DEFINE-010"
+  ],
+  "schema_version": "1.0",
+  "source_type": "synthetic"
+}

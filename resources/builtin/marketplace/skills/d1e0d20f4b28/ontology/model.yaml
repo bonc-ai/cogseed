@@ -1,0 +1,18 @@
+{
+  "entities": [
+    "ReleaseDecision",
+    "Outcome",
+    "KSTAREpisode",
+    "Delta",
+    "ChangeCandidate"
+  ],
+  "gate": "Learning & Evolution Gate",
+  "relations": [
+    "observed_in",
+    "differs_from",
+    "proposes",
+    "approved_by"
+  ],
+  "schema_version": "1.0",
+  "stage": "Launch & Learn"
+}

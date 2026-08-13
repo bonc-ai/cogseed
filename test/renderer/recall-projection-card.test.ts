@@ -53,9 +53,9 @@ describe('recall projection card renderer', () => {
     await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
 
     expect(host.innerHTML).toContain('Old asset');
-    expect(host.innerHTML).toContain('Remove from this task');
-    expect(host.innerHTML).toContain('Preloaded assets for this task');
-    expect(host.innerHTML).toContain('Add preloaded asset');
+    expect(host.innerHTML).toContain('Remove candidate');
+    expect(host.innerHTML).toContain('Preload candidates');
+    expect(host.innerHTML).toContain('Add candidate');
     expect(host.innerHTML).not.toContain('prediction');
     expect(host.innerHTML).not.toContain('R̂');
     expect(host.innerHTML).toContain('New asset');
@@ -86,6 +86,41 @@ describe('recall projection card renderer', () => {
   });
 
 
+
+
+  it('shows that users can add assets even when no assets match automatically', async () => {
+    const { context, host } = loadModule(async (channel) => {
+      if (channel === 'recall.projections.card') return { ok: true, card: { ...previewCard, summary: { includedCount: 0, omittedCount: 0, sourceRefCount: 1, text: 'Found 0 assets' }, assetSummaries: [] } };
+      if (channel === 'recall.projections.availableAssets') return { ok: true, assets: [{ id: 'asset-new', title: 'New asset', type: 'rule', status: 'active', maturity: 'leaf', scope: 'review', version: '2' }] };
+      return { ok: true };
+    });
+
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
+
+    expect(host.innerHTML).toContain('No preload candidates selected.');
+    expect(host.innerHTML).toContain('Add candidate');
+    expect(host.innerHTML).toContain('New asset');
+  });
+
+  it('surfaces asset governance state on projection rows without adding formal asset mutations', async () => {
+    const governed = {
+      ...previewCard,
+      assetSummaries: [{ assetId: 'asset-old', title: 'Old asset', type: 'rule', status: 'paused', maturity: 'seed', scope: 'review', version: '1', recommendedAction: 'rework', recommendationReason: 'Needs a narrower scope.' }],
+    };
+    const { context, host } = loadModule(async (channel) => {
+      if (channel === 'recall.projections.card') return { ok: true, card: governed };
+      if (channel === 'recall.projections.availableAssets') return { ok: true, assets: [] };
+      return { ok: true };
+    });
+
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
+
+    expect(host.innerHTML).toContain('Paused');
+    expect(host.innerHTML).toContain('Rework recommended');
+    expect(host.innerHTML).toContain('Needs a narrower scope.');
+    expect(host.innerHTML).not.toContain('recall.assets.pause');
+  });
+
   it('confirms the preloaded asset draft through projection confirmation IPC', async () => {
     const calls: Array<[string, unknown]> = [];
     const { context, host } = loadModule(async (channel, payload) => {
@@ -97,7 +132,7 @@ describe('recall projection card renderer', () => {
     });
     await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
 
-    expect(host.innerHTML).toContain('Confirm preloaded assets');
+    expect(host.innerHTML).toContain('Confirm candidates');
     await host.handler({ target: { closest: (selector: string) => selector === '[data-recall-projection-confirm]' ? { dataset: { recallProjectionConfirm: '1' }, disabled: false } : null } });
 
     expect(calls).toContainEqual(['recall.projections.confirm', { projectionId: 'proj-a' }]);
@@ -114,14 +149,56 @@ describe('recall projection card renderer', () => {
     await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
 
     expect(host.innerHTML).toContain('Confirmed');
-    expect(host.innerHTML).not.toContain('Remove from this task');
+    expect(host.innerHTML).not.toContain('Remove candidate');
     expect(host.innerHTML).not.toContain('Add asset to this task');
+  });
+
+  it('preserves Recall projection metadata while adapting Group Chat history messages', () => {
+    const source = fs.readFileSync(path.join(ROOT, 'src/renderer/modules/conversation.js'), 'utf8');
+    const start = source.indexOf('function _groupMsgToLegacy');
+    const end = source.indexOf('\nfunction _hashRenderText', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const adapterSource = source.slice(start, end);
+    const sandbox = {
+      _groupActorLabel: () => '',
+      _normalizeCreatedAgents: () => null,
+      _normalizeCreatedSkills: () => null,
+      _groupMessageSystemKind: () => '',
+      Date,
+    };
+    const adapt = vm.runInNewContext(`${adapterSource}; _groupMsgToLegacy`, sandbox);
+
+    expect(adapt({
+      id: 'msg-projection',
+      ts: '2026-08-12T14:03:29',
+      from: 'commander',
+      text: 'Preload candidates: 0; add or remove as needed.',
+      recall_projection_card: { projectionId: 'proj-a' },
+    })).toMatchObject({
+      role: 'assistant',
+      recall_projection_card: { projectionId: 'proj-a' },
+    });
+  });
+
+  it('uses localized candidate counts instead of the backend English summary text', async () => {
+    const { context, host } = loadModule(async (channel) => {
+      if (channel === 'recall.projections.card') return { ok: true, card: previewCard };
+      if (channel === 'recall.projections.availableAssets') return { ok: true, assets: [] };
+      return { ok: true };
+    });
+
+    await context.window.mountRecallProjectionCard(host, { projectionId: 'proj-a' }, { cid: 'cid-a' });
+
+    expect(host.innerHTML).not.toContain('Found 1 asset');
+    expect(host.innerHTML).toContain('1 preload candidates.');
   });
 
   it('conversation renderer mounts Recall projection cards carried by assistant messages', () => {
     const source = fs.readFileSync(path.join(ROOT, 'src/renderer/modules/conversation.js'), 'utf8');
     expect(source).toContain('message.recall_projection_card');
     expect(source).toContain('window.mountRecallProjectionCard');
+    expect(source).toContain('recallProjectionFallback.hidden = true');
   });
 
 });

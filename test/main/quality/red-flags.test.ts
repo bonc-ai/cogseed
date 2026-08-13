@@ -362,8 +362,21 @@ describe('quality › red-flags › extractExecutableBlocks', () => {
 });
 
 describe('quality › red-flags › meta', () => {
-  it('all rules are EXTREME (v0 has no other level)', () => {
-    for (const r of RED_FLAGS) expect(r.level).toBe('EXTREME');
+  it('uses only declared levels, and EXTREME for anything blocking', () => {
+    // v0 was EXTREME-only. Ported rules introduced a non-blocking tier: a
+    // hardcoded webhook URL is worth surfacing but should not make a skill
+    // uninstallable, since chat integrations are a legitimate use.
+    for (const r of RED_FLAGS) expect(['EXTREME', 'MEDIUM', 'LOW']).toContain(r.level);
+    expect(RED_FLAGS.some((r) => r.level === 'EXTREME')).toBe(true);
+  });
+
+  it('only credential rules opt out of context demotion', () => {
+    // `neverDemote` bypasses the context layer, so its use has to stay
+    // deliberate: a real secret is real wherever it is quoted, but a generic
+    // pattern that never demotes would reintroduce vendor false positives.
+    for (const r of RED_FLAGS.filter((x) => x.neverDemote)) {
+      expect(r.id, r.id).toMatch(/hardcoded|private_key/);
+    }
   });
 
   it('rule ids are unique', () => {

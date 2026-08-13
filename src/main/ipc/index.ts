@@ -29,6 +29,7 @@ import * as groupChat from '../features/group_chat';
 import * as companionRepro from '../features/companion_repro';
 import * as p3394 from '../features/p3394';
 import * as executionRecords from '../features/execution-records';
+import * as executionLog from '../features/execution_log';
 import * as workbench from '../features/workbench';
 import * as cognition from '../features/cognition';
 import * as recallCandidates from '../features/recall/candidate-service';
@@ -90,6 +91,7 @@ import * as ttsAuth from '../features/tts_auth';
 import * as permissions from '../features/permissions';
 import * as appConfig from '../features/config';
 import * as onboardingState from '../features/onboarding_state';
+import * as cliFallback from '../features/cli_fallback';
 import * as cognitionExtraction from '../features/cognition_extraction';
 import { detectAll } from '../features/local_agents/registry';
 import * as avatars from '../features/avatars';
@@ -851,6 +853,19 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'mate_agent.runtime.status': async (_payload, ctx) => mateAgentBackend.mateIpcService.runtimeStatus(ctx.userId),
   'mate_agent.runtime.restart': async (_payload, ctx) => mateAgentBackend.mateIpcService.restartRuntime(ctx.userId),
   'mate_agent.runtime.recover': async (_payload, ctx) => mateAgentBackend.mateIpcService.recover(ctx.userId),
+
+  // Execution log handlers
+  'executionLog.readAll': async () => {
+    return { records: executionLog.readAllRecords() };
+  },
+  'executionLog.readSince': async (payload) => {
+    const sinceMs = typeof payload?.sinceMs === 'number' ? payload.sinceMs : Date.now();
+    return { records: executionLog.readRecordsSince(sinceMs) };
+  },
+  'executionLog.cleanup': async () => {
+    executionLog.cleanupOldRecords();
+    return { ok: true };
+  },
 
   'user.init': async () => {
     const user = await users.getOrCreateSelfUser();
@@ -1889,78 +1904,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     });
   },
 
-  'p3394.listKstarCompatProjections': async ({ cid }, ctx) => {
-    if (!safeId(cid)) throw new Error('invalid cid');
-    const [runs, experienceCandidates] = await Promise.all([
-      p3394.listKstarCompatProjections(ctx.userId, cid),
-      p3394.listExperienceCandidates(ctx.userId, cid),
-    ]);
-    return { ok: true, runs, experience_candidates: experienceCandidates };
-  },
-
   'p3394.listProtocolEvents': async ({ cid }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
     return { ok: true, protocol_events: await p3394.listP3394ProtocolEvents(ctx.userId, cid) };
   },
 
-  'p3394.reviewKstarCompatProjection': async ({ cid, runId, decision, notes }, ctx) => {
-    if (!safeId(cid) || !safeId(runId)) throw new Error('invalid KSTAR scope');
-    if (decision !== 'pass' && decision !== 'fail') throw new Error('invalid review decision');
-    const run = (await p3394.listKstarCompatProjections(ctx.userId, cid)).find((item) => item.id === runId);
-    if (!run) throw new Error('KSTAR run not found');
-    return { ok: true, ...(await p3394.reviewKstarCompatProjection(ctx.userId, runId, {
-      decision, ...(typeof notes === 'string' ? { notes } : {}),
-    })) };
-  },
-
-  'p3394.decideExperienceCandidate': async ({ cid, candidateId, decision }, ctx) => {
-    if (!safeId(cid) || !safeId(candidateId)) throw new Error('invalid experience scope');
-    if (decision !== 'approve' && decision !== 'reject') throw new Error('invalid experience decision');
-    const existing = await p3394.getExperienceCandidate(ctx.userId, candidateId);
-    if (!existing || existing.conversation_id !== cid) throw new Error('experience candidate not found');
-    const candidate = await p3394.decideExperienceCandidate(ctx.userId, candidateId, decision);
-    if (decision !== 'approve') return { ok: true, candidate };
-    const promotion = await p3394.promoteExperienceCandidateToKnowledgeBase(ctx.userId, candidate.id);
-    return { ok: true, candidate: promotion.ok ? promotion.candidate : candidate, kb_promotion: promotion };
-  },
-
-
-  'p3394.syncExperienceCandidateToNotion': async ({ cid, candidateId }, ctx) => {
-    if (!safeId(cid) || !safeId(candidateId)) throw new Error('invalid experience scope');
-    const existing = await p3394.getExperienceCandidate(ctx.userId, candidateId);
-    if (!existing || existing.conversation_id !== cid) throw new Error('experience candidate not found');
-    const result = await p3394.syncExperienceCandidateToNotion(ctx.userId, candidateId);
-    return { ok: result.ok, ...result };
-  },
-
-
-  'p3394.listPatchCandidates': async ({ cid }, ctx) => {
-    if (!safeId(cid)) throw new Error('invalid cid');
-    return { ok: true, patch_candidates: await p3394.listPatchCandidates(ctx.userId, cid) };
-  },
-
-  'p3394.reviewPatchCandidate': async ({ cid, candidateId, decision, notes }, ctx) => {
-    if (!safeId(cid) || !safeId(candidateId)) throw new Error('invalid patch candidate scope');
-    if (decision !== 'approve' && decision !== 'reject') throw new Error('invalid patch candidate decision');
-    const existing = (await p3394.listPatchCandidates(ctx.userId, cid)).find((item) => item.id === candidateId);
-    if (!existing) throw new Error('patch candidate not found');
-    const patch_candidate = await p3394.reviewPatchCandidate(ctx.userId, candidateId, decision, typeof notes === 'string' ? notes : '');
-    return { ok: true, patch_candidate };
-  },
-
-  'p3394.listArchives': async (_args, ctx) => {
-    return { ok: true, archives: await p3394.listArchives(ctx.userId) };
-  },
-
-  'p3394.readArchive': async ({ timestamp }, ctx) => {
-    if (typeof timestamp !== 'string' || !timestamp.trim()) throw new Error('invalid archive timestamp');
-    const archive = await p3394.readArchive(ctx.userId, timestamp.trim());
-    return archive ? { ok: true, archive } : { ok: false, error: 'archive not found' };
-  },
-
-  'p3394.checkMigrationStatus': async (_args, ctx) => {
-    return { ok: true, ...(await p3394.checkMigrationStatus(ctx.userId)) };
-  },
 
   'recall.candidates.list': async (_args, ctx) => ({ ok: true, candidates: await recallCandidates.listRecallCandidates(ctx.userId) }),
 
@@ -2203,9 +2151,23 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'recall.assets.list': async (_args, ctx) => ({ ok: true, assets: await recallAssets.listAbilityAssets(ctx.userId) }),
   'recall.assets.read': async ({ assetId } = {}, ctx) => { if (!safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, asset: await recallAssets.readAbilityAsset(ctx.userId, assetId) }; },
-  'recall.assets.pause': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid recall asset pause'); return { ok: true, asset: await recallAssets.pauseAbilityAsset(ctx.userId, assetId, note) }; },
-  'recall.assets.resume': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid recall asset resume'); return { ok: true, asset: await recallAssets.resumeAbilityAsset(ctx.userId, assetId, note) }; },
-  'recall.assets.revoke': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid recall asset revoke'); return { ok: true, asset: await recallAssets.revokeAbilityAsset(ctx.userId, assetId, note) }; },
+  'recall.assets.update': async ({ assetId, title, statement, scope, scopePolicy, type, evidenceRefs, ontologyRefs, reason, acknowledgeRecommendation } = {}, ctx) => {
+    if (!safeId(assetId)) throw new Error('invalid recall asset id');
+    const note = boundedText(reason, 'recall asset update reason', 1_000);
+    if (title !== undefined && (typeof title !== 'string' || title.length > 120)) throw new Error('invalid recall asset title');
+    if (statement !== undefined && (typeof statement !== 'string' || statement.length > 4_000)) throw new Error('invalid recall asset statement');
+    if (scope !== undefined && (typeof scope !== 'string' || scope.length > 500)) throw new Error('invalid recall asset scope');
+    if (scopePolicy !== undefined && (!scopePolicy || typeof scopePolicy !== 'object' || Array.isArray(scopePolicy))) throw new Error('invalid recall asset scope policy');
+    if (type !== undefined && !['personal', 'rule', 'template', 'skill_method'].includes(type)) throw new Error('invalid recall asset type');
+    if (evidenceRefs !== undefined && !Array.isArray(evidenceRefs)) throw new Error('invalid recall asset evidence');
+    if (ontologyRefs !== undefined && !Array.isArray(ontologyRefs)) throw new Error('invalid recall asset ontology refs');
+    if (acknowledgeRecommendation !== undefined && typeof acknowledgeRecommendation !== 'boolean') throw new Error('invalid recall asset recommendation acknowledgment');
+    return { ok: true, asset: await recallAssets.updateAbilityAsset(ctx.userId, assetId, { ...(title !== undefined ? { title } : {}), ...(statement !== undefined ? { statement } : {}), ...(scope !== undefined ? { scope } : {}), ...(scopePolicy !== undefined ? { scopePolicy } : {}), ...(type !== undefined ? { type } : {}), ...(evidenceRefs !== undefined ? { evidenceRefs } : {}), ...(ontologyRefs !== undefined ? { ontologyRefs } : {}), reason: note, actor: 'user', ...(acknowledgeRecommendation !== undefined ? { acknowledgeRecommendation } : {}) }) };
+  },
+  'recall.assets.pause': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset pause'); return { ok: true, asset: await recallAssets.pauseAbilityAsset(ctx.userId, assetId, { actor: 'user', reason: note ?? 'user pause' }) }; },
+  'recall.assets.resume': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset resume'); return { ok: true, asset: await recallAssets.resumeAbilityAsset(ctx.userId, assetId, { actor: 'user', reason: note ?? 'user resume' }) }; },
+  'recall.assets.revoke': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset revoke'); return { ok: true, asset: await recallAssets.revokeAbilityAsset(ctx.userId, assetId, { actor: 'user', reason: note ?? 'user revoke' }) }; },
+  'recall.assets.recommend': async ({ assetId, action, reason } = {}, ctx) => { if (!safeId(assetId) || (action !== 'pause' && action !== 'rework')) throw new Error('invalid recall asset recommendation'); return { ok: true, asset: await recallAssets.recommendAbilityAssetAction(ctx.userId, assetId, { actor: 'system', action, reason: boundedText(reason, 'recall asset recommendation reason', 1_000) }) }; },
   'recall.assets.versions': async ({ assetId } = {}, ctx) => { if (!safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, versions: await recallAssets.listAbilityAssetVersions(ctx.userId, assetId), audit: await recallAssets.listAbilityAssetAudit(ctx.userId, assetId) }; },
 
   'recall.skills.prepare': async ({ assetId } = {}, ctx) => {
@@ -2294,7 +2256,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   'cognition.candidates.decide': async ({ source, candidateId, decision, reason, notes, toGlobalMemory, toGroupIds } = {}, ctx) => {
-    if (source !== 'personal_ontology' && source !== 'p3394_experience' && source !== 'p3394_patch') throw new Error('invalid cognition candidate source');
+    if (source !== 'personal_ontology') throw new Error('invalid cognition candidate source');
     if (!safeId(candidateId)) throw new Error('invalid candidate id');
     if (decision !== 'accept' && decision !== 'reject') throw new Error('invalid cognition candidate decision');
     if (toGroupIds !== undefined && (!Array.isArray(toGroupIds) || toGroupIds.some((id) => !safeId(id)))) throw new Error('invalid group ids');
@@ -3364,6 +3326,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     completed: onboardingState.setOnboardingCompleted(completed !== false),
   }),
 
+  // ── Commander CLI fallback (no API-key model configured) ──
+  'prefs.getCliFallback': async (_payload, ctx) => ({
+    cli: cliFallback.getCliFallback(ctx.userId),
+    noticeShown: cliFallback.cliFallbackNoticeShown(ctx.userId),
+  }),
+  'prefs.setCliFallback': async ({ cli }: { cli?: unknown } = {}) => {
+    const uid = _activeUserIdForPicker();
+    if (!uid) throw new Error('no active user');
+    return { cli: cliFallback.setCliFallback(uid, typeof cli === 'string' ? cli : '') };
+  },
+  'prefs.markCliFallbackNoticeShown': async (_payload, ctx) => {
+    cliFallback.markCliFallbackNoticeShown(ctx.userId);
+    return { ok: true };
+  },
+
+  // Whether ANY usable API-key model is configured (sync, cheap). The
+  // renderer uses this before every commander send to decide whether to
+  // fall back to the signed-in CLI agent.
+  'model.hasConfigured': async () => auth.hasConfiguredModel(),
+
   // ── Cognition extraction from sessions (onboarding) ──
   // Runs through a locally-detected CLI Agent (already authenticated on
   // the user's machine), so onboarding needs no API key. We prefer
@@ -4153,6 +4135,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // the recall surface); the legacy store-asset handler of the same name in
   // ipc/cognition.ts must not shadow it, so it is excluded from the spread.
   ...(({ 'cognition.assets.list': _legacyCognitionAssetsList, ...rest }) => rest)(cognitionHandlers),
+
+  // P3394 TaskContinuationSnapshot and ContextReuseReceipt handlers for
 };
 
 // ── Stream handlers ──────────────────────────────────────────────────────

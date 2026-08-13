@@ -56,4 +56,39 @@ describe('CogSeed Recall execution bridge', () => {
       expect.objectContaining({ type: 'terminal', payload: expect.objectContaining({ status: 'completed' }) }),
     ]));
   });
+
+  it('uses a confirmed projection to create a recall transfer proof and is idempotent on repeat bridge calls', async () => {
+    const tasks = await import('../../../../src/main/features/mate_agent_backend/task-store');
+    const lifecycle = await import('../../../../src/main/features/mate_agent_backend/lifecycle');
+    const bridge = await import('../../../../src/main/features/mate_agent_backend/recall-bridge');
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const refs = await import('../../../../src/main/features/recall/workspace-refs');
+    const projection = await import('../../../../src/main/features/recall/context-projection');
+    const proofs = await import('../../../../src/main/features/recall/proof-service');
+
+    const candidate = await candidates.saveRecallCandidate(USER, {
+      judgment: 'Bring confirmed Mate task evidence into Recall.',
+      suggestedType: 'rule',
+      suggestedScope: 'review',
+      sourceRefs: [{ kind: 'execution', id: 'exec-a' }],
+    });
+    const { asset } = await candidates.promoteRecallCandidate(USER, candidate.id, { actor: 'user' });
+    await refs.addWorkspaceAssetReference(USER, { assetId: asset.id, workspaceId: 'workspace-a', scope: 'review' });
+    const created = (await tasks.createMateTask(USER, { requestId: 'req-provenance', task: 'Use confirmed projection.' })).task;
+    const preview = await projection.previewContextProjection(USER, { taskRunId: created.taskId, workspaceId: 'workspace-a', purpose: 'review', authorization: 'user_confirmed' });
+    const confirmed = await projection.confirmContextProjection(USER, preview.id);
+    await lifecycle.transitionMateTask(USER, created.taskId, 'queued');
+    await lifecycle.transitionMateTask(USER, created.taskId, 'running');
+    await lifecycle.transitionMateTask(USER, created.taskId, 'completed', { outputChars: 7 });
+    await tasks.updateMateTask(USER, created.taskId, (current) => ({ ...current, executionId: 'mate-exec-provenance' }));
+    await tasks.updateMateTask(USER, created.taskId, (current) => ({ ...current, terminalAt: current.terminalAt || new Date().toISOString() }));
+
+    const first = await bridge.recordMateTaskRunForRecall(USER, created.taskId);
+    const second = await bridge.recordMateTaskRunForRecall(USER, created.taskId);
+    const transferProofs = await proofs.listTransferProofs(USER);
+
+    expect(first).toMatchObject({ taskId: created.taskId, status: 'completed' });
+    expect(second).toEqual(first);
+    expect(transferProofs).toEqual([expect.objectContaining({ projectionId: confirmed.id, executionId: first.executionId, status: 'succeeded' })]);
+  });
 });

@@ -1,0 +1,131 @@
+{
+  "artifact_manifest": [
+    "SKILL.md",
+    "agents/openai.yaml",
+    "evals/evals.json",
+    "evals/forecast_model.md",
+    "evals/outcome_evaluation.md",
+    "evals/replay_dataset.md",
+    "evals/regression_tests.md",
+    "references/skill-spec.yaml",
+    "references/input-contract.md",
+    "references/output-contract.md",
+    "references/validation-contract.md",
+    "references/ontology-mapping.md",
+    "references/kstar-evolution.md",
+    "references/governance-boundaries.md",
+    "references/eval-cases.yaml",
+    "references/failure-modes.md",
+    "manifest.yaml",
+    "schemas/input.schema.json",
+    "schemas/output.schema.json",
+    "evals/manifest.yaml"
+  ],
+  "business_context": {
+    "abox_examples": [
+      {
+        "id": "SYNTHETIC-LEARN-001",
+        "source_type": "synthetic"
+      }
+    ],
+    "rbox_relations": [
+      "observed_in",
+      "differs_from",
+      "proposes",
+      "approved_by"
+    ],
+    "tbox_classes": [
+      "ReleaseDecision",
+      "Outcome",
+      "KSTAREpisode",
+      "Delta",
+      "ChangeCandidate"
+    ]
+  },
+  "contracts": {
+    "input": "schemas/input.schema.json",
+    "output": "schemas/output.schema.json"
+  },
+  "evaluation_contract": {
+    "coverage_categories": 5,
+    "minimum": 10,
+    "negative_minimum": 4,
+    "suite_e2e_required_on_material_change": true
+  },
+  "failure_attribution": [
+    "product",
+    "model",
+    "prompt",
+    "data",
+    "tool",
+    "permission",
+    "workflow",
+    "schema",
+    "governance",
+    "evidence"
+  ],
+  "generated_by": "FACTORY-CANDIDATE-001",
+  "governance": {
+    "automation_ceiling": "staged_eligible",
+    "owner_gates": [
+      "Learning & Evolution Gate",
+      "staged decision",
+      "production release"
+    ],
+    "production_release_allowed": false
+  },
+  "id": "SKILL-LAUNCH-LEARN-AI-PRODUCT-001",
+  "kstar_hook": {
+    "bounded_patch": true,
+    "change_candidate_required": true,
+    "delta_r_is_not_release": true
+  },
+  "name": "launch-learn-ai-product",
+  "nseap_category": "EndUseSkill",
+  "schema_version": "1.0",
+  "status": "candidate",
+  "suite_role": "stage",
+  "tool_bindings": [
+    {
+      "fallback": "blocked",
+      "permission": "read-and-bounded-draft",
+      "scope": "approved-project-root",
+      "tool": "local-filesystem"
+    },
+    {
+      "fallback": "blocked",
+      "permission": "execute-read-only-checks",
+      "scope": "current-package",
+      "tool": "local-validator"
+    }
+  ],
+  "trigger": {
+    "ambiguity_behavior": "ask",
+    "required_context": [
+      "product_version_id",
+      "approved source refs",
+      "release_decision_ref",
+      "real_run_refs",
+      "outcome_definition"
+    ],
+    "stage_compatibility": [
+      "Launch & Learn"
+    ],
+    "when_not_to_use": [
+      "尚无发布决定却要求上线",
+      "把 synthetic 结果称为真实学习",
+      "根据单次输出静默改 Skill"
+    ],
+    "when_to_use": [
+      "候选已获得相应发布授权并需要观察真实结果",
+      "需要复盘真实运行偏差或提出演进"
+    ]
+  },
+  "validation_contract": {
+    "gate": "Learning & Evolution Gate",
+    "protected_failures": 0,
+    "ref": "references/validation-contract.md"
+  },
+  "version": "0.1.0",
+  "workflow_ref": "SKILL.md#executable-workflow"
+}
