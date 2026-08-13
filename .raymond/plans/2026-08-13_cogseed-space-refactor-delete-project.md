@@ -73,9 +73,10 @@ Conversation.space_id (string | null)
 
 **目标**：新增「空间 → 任务/产物/资产」三个查询函数 + IPC，前端可读真数据。
 
-- [ ] **T1.1 空间任务列表**：`spaces.ts` 新增 `listSpaceConversations(uid, spaceId)`，直接查 `conversation.space_id == spaceId`（阶段0后不再是 project 反查），合并排序返回。
+- [x] **T1.1 空间任务列表**：`spaces.ts` 新增 `listSpaceConversations(uid, spaceId)`，直接查 `conversation.space_id == spaceId`（阶段0后不再是 project 反查），合并排序返回。
   - 文件：`src/main/features/spaces.ts`
   - 验收：单测或 smoke 验证返回该空间下会话列表。
+  - ✅ 完成（2026-08-13）：**实现于 `chats.ts`**（非 plan 原写的 spaces.ts——会话归一化/排序/索引读取器均为 chats.ts 私有，放 spaces.ts 需反向依赖；spaces.ts 保持纯配置实体）。`listSpaceConversations(userId, spaceId)`：先读空间自有索引 `spaceChatIndexFile`（v5 迁移后/空间根落点），再扫全局+项目根兜底双字段兼容期带 space_id 的会话，按 conversation_id 去重（空间索引优先）、过滤墓碑、活动倒序。验证证据：`npm run typecheck` 通过；fixture（空间索引 2 行含 1 墓碑 + 全局 1 双字段 + 1 orphan）断言返回 2 条（空间索引+双字段）、排除 orphan 和墓碑、空空间/非法 spaceId 返回 []。
 - [ ] **T1.2 空间产物聚合**：新开 `src/main/features/spaces_artifacts.ts`，遍历空间会话 → `chat_attachments.listAttachments(uid, cid)` + artifact 目录扫描，统一成 `{name, type, ext, sourceSessionId, time}` 形状。
   - 文件：`src/main/features/spaces_artifacts.ts`
   - 验收：返回统一产物列表，附件和 artifact 都在。

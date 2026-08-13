@@ -22,7 +22,7 @@ import * as readline from 'node:readline';
 import { randomUUID } from 'node:crypto';
 
 import {
-  userChatsDir, userLocalConfigDir, projectChatsDir, projectChatIndexFile, WS_ROOT,
+  userChatsDir, userLocalConfigDir, projectChatsDir, projectChatIndexFile, spaceChatIndexFile, WS_ROOT,
 } from '../paths';
 import {
   conversationLayout,
@@ -1208,6 +1208,34 @@ export async function listConversations(userId: string): Promise<Conversation[]>
   } finally {
     if (_conversationListInFlight.get(userId) === run) _conversationListInFlight.delete(userId);
   }
+}
+
+/** 空间化重构（删项目层）：查某空间下的会话（空间「任务」tab 数据源）。
+ *  直接按 conversation.space_id 匹配——先读空间自有索引（v5 迁移后 / 空间根落点），
+ *  再扫全局+项目根兜底双字段兼容期带 space_id 的会话，按 conversation_id 去重
+ *  （空间索引优先），过滤墓碑，活动倒序。 */
+export async function listSpaceConversations(userId: string, spaceId: string): Promise<Conversation[]> {
+  if (!safeId(spaceId)) return [];
+  const byCid = new Map<string, Conversation>();
+
+  const spaceRaw: any = await readJson(spaceChatIndexFile(userId, spaceId));
+  const spaceItems = Array.isArray(spaceRaw)
+    ? spaceRaw : (spaceRaw && Array.isArray(spaceRaw.items) ? spaceRaw.items : []);
+  for (const raw of spaceItems) {
+    const row = _normaliseConversation(raw);
+    if (!row) continue;
+    if (!row.space_id) row.space_id = spaceId;
+    byCid.set(row.conversation_id, row);
+  }
+
+  for (const c of await _readIndexConversations(userId)) {
+    if (c.space_id !== spaceId) continue;
+    if (!byCid.has(c.conversation_id)) byCid.set(c.conversation_id, c);
+  }
+
+  return Array.from(byCid.values())
+    .filter((c) => !isDeletedConversation(c))
+    .sort(_compareConversationIndexRows);
 }
 
 export interface StartupConversationList {
