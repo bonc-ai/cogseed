@@ -15,7 +15,7 @@ import type { KstarLearningSignal } from '../kstar/types';
 import { normalizeAbilityAssetOntologyRefs, type AbilityAssetOntologyRef } from './ontology-refs';
 import { normalizeAbilityAssetScopePolicy, type RecallAbilityAssetScopePolicy } from './scope-policy';
 import type { CausalRule } from './world-model-types';
-import { normalizeCausalRule } from './world-model';
+import { normalizeCausalRule } from './world-model-types';
 import { initializeAbilityAsset, listAbilityAssets } from './asset-service';
 import {
   cognitionSourceRefKey,

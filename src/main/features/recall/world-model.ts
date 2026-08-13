@@ -14,6 +14,9 @@ import { buildRunner } from '../../model/core-agent/runner';
 import { readRecallJsonRecord, writeRecallJsonRecord } from './store';
 import { genId12 } from '../../storage';
 import { hasConfiguredModel } from '../auth';
+import { normalizeCausalRule } from './world-model-types';
+
+const MAX_SUMMARY = 4_000;
 import type {
   CausalRule,
   PredictedRisk,
@@ -26,54 +29,6 @@ import type {
 import type { KstarEpisodeRecord } from '../kstar/types';
 
 const log = createLogger('recall.world-model');
-
-const MAX_CAUSE = 200;
-const MAX_EFFECT = 500;
-const MAX_MITIGATION = 1_000;
-const MAX_SUMMARY = 4_000;
-
-function bounded(value: unknown, field: string, max: number): string {
-  if (typeof value !== 'string') throw new Error(`invalid causal rule ${field}`);
-  const text = value.replace(/\s+/g, ' ').trim();
-  if (!text || text.length > max) throw new Error(`invalid causal rule ${field}`);
-  return text;
-}
-
-const VALID_PREDICATES = new Set<WorldModelPredicateKey>([
-  'workspace_unavailable',
-  'model_not_configured',
-  'bash_unavailable',
-  'skills_missing',
-  'too_few_skills',
-  'too_few_rules',
-  'no_active_assets',
-]);
-
-/** Validate and normalize a stored causal rule. */
-export function normalizeCausalRule(value: unknown): CausalRule {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('invalid causal rule');
-  }
-  const record = value as Record<string, unknown>;
-  if (
-    record.predicateKey !== undefined
-    && !VALID_PREDICATES.has(record.predicateKey as WorldModelPredicateKey)
-  ) throw new Error('invalid causal rule predicate');
-  if (record.deltaR !== 'unknown' && (typeof record.deltaR !== 'number' || !Number.isFinite(record.deltaR) || record.deltaR < -1 || record.deltaR > 1)) {
-    throw new Error('invalid causal rule deltaR');
-  }
-  if (record.severity !== 'high' && record.severity !== 'medium' && record.severity !== 'low') {
-    throw new Error('invalid causal rule severity');
-  }
-  return {
-    cause: bounded(record.cause, 'cause', MAX_CAUSE),
-    ...(record.predicateKey !== undefined ? { predicateKey: record.predicateKey as WorldModelPredicateKey } : {}),
-    effect: bounded(record.effect, 'effect', MAX_EFFECT),
-    mitigation: bounded(record.mitigation, 'mitigation', MAX_MITIGATION),
-    severity: record.severity as CausalRule['severity'],
-    deltaR: record.deltaR as CausalRule['deltaR'],
-  };
-}
 
 /** Deterministic A-Box predicates for the F002 risk pass. */
 const PREDICATE_TESTS: Record<WorldModelPredicateKey, (s: WorldModelSnapshot) => boolean> = {

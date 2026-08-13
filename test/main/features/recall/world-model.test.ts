@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { applyCausalRules, normalizeCausalRule, reconcileWorldModel } from '../../../../src/main/features/recall/world-model';
+import { applyCausalRules, reconcileWorldModel } from '../../../../src/main/features/recall/world-model';
+import { normalizeCausalRule } from '../../../../src/main/features/recall/world-model-types';
 import type { WorldModelSnapshot } from '../../../../src/main/features/recall/world-model-types';
 
 function snapshot(overrides: Partial<WorldModelSnapshot> = {}): WorldModelSnapshot {

@@ -15,7 +15,6 @@ import {
   listKstarRequirementsForTask,
 } from './requirement-store';
 import { previewContextProjection } from '../recall/context-projection';
-import { runWorldModelAtBoundary } from './world-model-bridge';
 import {
   routeRequirementIntent,
   type KstarRequirementRouterOptions,
@@ -148,6 +147,7 @@ async function previewTaskBoundary(
       ...(input.text ? { taskText: input.text } : {}),
       ...(expectedResult ? { authorization: expectedResult.source === 'model' ? 'workspace_policy' : 'user_confirmed' } : {}),
     });
+    const { runWorldModelAtBoundary } = await import('./world-model-bridge');
     const forecast = await runWorldModelAtBoundary(userId, {
       taskRunId,
       requirementId: taskRunId,

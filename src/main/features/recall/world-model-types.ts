@@ -138,3 +138,50 @@ export interface WorldModelForecastRecord extends RecallJsonRecord {
   forecast: WorldModelForecast;
   createdAt: string;
 }
+
+
+// ── Pure validation (kept dependency-free so callers like candidate-service
+//    can import it without pulling in the LLM runner) ──────────────────────
+
+const CAUSAL_RULE_VALID_PREDICATES = new Set<WorldModelPredicateKey>([
+  'workspace_unavailable',
+  'model_not_configured',
+  'bash_unavailable',
+  'skills_missing',
+  'too_few_skills',
+  'too_few_rules',
+  'no_active_assets',
+]);
+
+/** Validate and normalize a stored causal rule (R-Box entry). */
+export function normalizeCausalRule(value: unknown): CausalRule {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('invalid causal rule');
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    record.predicateKey !== undefined
+    && !CAUSAL_RULE_VALID_PREDICATES.has(record.predicateKey as WorldModelPredicateKey)
+  ) throw new Error('invalid causal rule predicate');
+  if (
+    record.deltaR !== 'unknown'
+    && (typeof record.deltaR !== 'number' || !Number.isFinite(record.deltaR) || record.deltaR < -1 || record.deltaR > 1)
+  ) throw new Error('invalid causal rule deltaR');
+  if (record.severity !== 'high' && record.severity !== 'medium' && record.severity !== 'low') {
+    throw new Error('invalid causal rule severity');
+  }
+  const cause = typeof record.cause === 'string' ? record.cause.replace(/\s+/g, ' ').trim() : '';
+  const effect = typeof record.effect === 'string' ? record.effect.replace(/\s+/g, ' ').trim() : '';
+  const mitigation = typeof record.mitigation === 'string' ? record.mitigation.replace(/\s+/g, ' ').trim() : '';
+  if (!cause || cause.length > 200) throw new Error('invalid causal rule cause');
+  if (!effect || effect.length > 500) throw new Error('invalid causal rule effect');
+  if (!mitigation || mitigation.length > 1000) throw new Error('invalid causal rule mitigation');
+  return {
+    cause,
+    ...(record.predicateKey !== undefined ? { predicateKey: record.predicateKey as WorldModelPredicateKey } : {}),
+    effect,
+    mitigation,
+    severity: record.severity as CausalRule['severity'],
+    deltaR: record.deltaR as CausalRule['deltaR'],
+  };
+}
