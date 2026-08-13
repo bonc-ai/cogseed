@@ -18,9 +18,11 @@ const recallMock = vi.hoisted(() => ({
 const assetMock = vi.hoisted(() => ({
   listAbilityAssets: vi.fn(async () => []),
   readAbilityAsset: vi.fn(async (_uid: string, id: string) => ({ id })),
-  pauseAbilityAsset: vi.fn(async (_uid: string, id: string, note?: string) => ({ id, note, status: 'paused' })),
-  resumeAbilityAsset: vi.fn(async (_uid: string, id: string, note?: string) => ({ id, note, status: 'active' })),
-  revokeAbilityAsset: vi.fn(async (_uid: string, id: string, note?: string) => ({ id, note, status: 'revoked' })),
+  updateAbilityAsset: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, ...input as object })),
+  pauseAbilityAsset: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, status: 'paused', ...input as object })),
+  resumeAbilityAsset: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, status: 'active', ...input as object })),
+  revokeAbilityAsset: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, status: 'revoked', ...input as object })),
+  recommendAbilityAssetAction: vi.fn(async (_uid: string, id: string, input: unknown) => ({ id, ...input as object })),
   listAbilityAssetVersions: vi.fn(async (_uid: string, id: string) => [{ assetId: id, version: '1' }]),
   listAbilityAssetAudit: vi.fn(async (_uid: string, id: string) => [{ assetId: id, action: 'created' }]),
 }));
@@ -131,9 +133,9 @@ describe('ipc › recall candidate governance', () => {
     await expect(call('recall.assets.versions', { assetId: 'aa-method' }))
       .resolves.toMatchObject({ ok: true, versions: [{ version: '1' }], audit: [{ action: 'created' }] });
 
-    expect(assetMock.pauseAbilityAsset).toHaveBeenCalledWith(UID, 'aa-method', '暂时不用');
-    expect(assetMock.resumeAbilityAsset).toHaveBeenCalledWith(UID, 'aa-method', undefined);
-    expect(assetMock.revokeAbilityAsset).toHaveBeenCalledWith(UID, 'aa-method', '用户移除');
+    expect(assetMock.pauseAbilityAsset).toHaveBeenCalledWith(UID, 'aa-method', { actor: 'user', reason: '暂时不用' });
+    expect(assetMock.resumeAbilityAsset).toHaveBeenCalledWith(UID, 'aa-method', { actor: 'user', reason: 'user resume' });
+    expect(assetMock.revokeAbilityAsset).toHaveBeenCalledWith(UID, 'aa-method', { actor: 'user', reason: '用户移除' });
     expect(assetMock.listAbilityAssetVersions).toHaveBeenCalledWith(UID, 'aa-method');
     await expect(call('recall.assets.resume', { assetId: '../bad' })).resolves.toMatchObject({ ok: false });
     expect(assetMock.resumeAbilityAsset).toHaveBeenCalledTimes(1);
@@ -144,6 +146,29 @@ describe('ipc › recall candidate governance', () => {
     expect(recallMock.saveRecallCandidate).toHaveBeenCalledWith(UID, expect.objectContaining({ judgment: 'Use decision logs', suggestedType: 'rule' }));
     await expect(call('recall.candidates.promote', { candidateId: 'cand-a' })).resolves.toMatchObject({ ok: true, asset: { id: 'aa-a' } });
     expect(captureMock.promoteRecallCaptureCandidate).toHaveBeenCalledWith(UID, 'cand-a');
+  });
+
+  it('routes structured ability asset governance and recommendations', async () => {
+    await expect(call('recall.assets.update', {
+      assetId: 'aa-method',
+      statement: 'Keep the reusable method scoped.',
+      scopePolicy: { purposeTags: ['review'], workspaceIds: ['workspace-a'] },
+      reason: 'Narrow the reuse boundary.',
+      acknowledgeRecommendation: true,
+    })).resolves.toMatchObject({ ok: true, asset: { id: 'aa-method' } });
+    expect(assetMock.updateAbilityAsset).toHaveBeenCalledWith(UID, 'aa-method', expect.objectContaining({
+      statement: 'Keep the reusable method scoped.',
+      scopePolicy: { purposeTags: ['review'], workspaceIds: ['workspace-a'] },
+      reason: 'Narrow the reuse boundary.',
+      actor: 'user',
+      acknowledgeRecommendation: true,
+    }));
+
+    await expect(call('recall.assets.recommend', { assetId: 'aa-method', action: 'rework', reason: 'Effectiveness regressed.' }))
+      .resolves.toMatchObject({ ok: true, asset: { action: 'rework' } });
+    expect(assetMock.recommendAbilityAssetAction).toHaveBeenCalledWith(UID, 'aa-method', {
+      actor: 'system', action: 'rework', reason: 'Effectiveness regressed.',
+    });
   });
 
   it('routes the two-step Recall skill draft flow and validates the confirmation hash', async () => {
@@ -265,7 +290,7 @@ describe('ipc › recall candidate governance', () => {
   });
 
   it('rejects malformed source and capture inputs before feature calls', async () => {
-    await expect(call('recall.sources.list', { kinds: ['p3394_patch'] }))
+    await expect(call('recall.sources.list', { kinds: ['obsolete_source_kind'] }))
       .resolves.toMatchObject({ ok: false });
     await expect(call('recall.sources.list', { conversationId: '../bad' }))
       .resolves.toMatchObject({ ok: false });

@@ -132,8 +132,8 @@ describe('Recall candidate governance', () => {
     });
 
     const [first, second] = await Promise.all([
-      candidates.promoteRecallCandidate('user-a', candidate.id),
-      candidates.promoteRecallCandidate('user-a', candidate.id),
+      candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' }),
+      candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' }),
     ]);
 
     expect(first.candidate.status).toBe('promoted');
@@ -158,14 +158,14 @@ describe('Recall candidate governance', () => {
       suggestedScope: 'project',
       sourceRefs: [{ kind: 'message', id: 'msg-a' }],
     });
-    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id);
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
     const store = await import('../../../../src/main/features/recall/store');
     await store.updateRecallJsonRecord('user-a', 'ability-assets', promoted.asset.id, (current) => ({
       ...current!,
       evidenceRefs: [{ kind: 'ontology', id: 'ontology-a' }],
     }));
 
-    const repeated = await candidates.promoteRecallCandidate('user-a', candidate.id);
+    const repeated = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
     expect(repeated.asset.evidenceRefs).toEqual([
       expect.objectContaining({
         kind: 'ontology', subtype: 'artifact', id: 'ontology-a', taxonomyVersion: 1,
@@ -218,7 +218,7 @@ describe('Recall candidate governance', () => {
     });
     await candidates.rejectRecallCandidate('user-a', candidate.id, 'duplicate');
 
-    await expect(candidates.promoteRecallCandidate('user-a', candidate.id)).rejects.toThrow(/terminal/i);
+    await expect(candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' })).rejects.toThrow(/terminal/i);
     await expect(candidates.readRecallCandidate('user-b', candidate.id)).rejects.toThrow(/not found/i);
   });
 

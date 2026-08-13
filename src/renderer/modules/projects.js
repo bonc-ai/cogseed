@@ -98,9 +98,17 @@ async function loadProjects(forceRefresh) {
   // their space, so it needs both. `spaces.list` may fail or be empty (user
   // never made a workspace); that's fine, we just render ungrouped.
   try {
+    // `spaces.list` fans out to agents/skills reads which can stall under boot
+    // concurrency; a hung spaces call must never block first paint / boot.
+    // Bound it: on timeout treat spaces as empty (projects still render
+    // ungrouped) — the sidebar is not worth freezing the whole boot for.
+    const spacesWithTimeout = Promise.race([
+      window.cogseed.invoke('spaces.list', {}),
+      new Promise((resolve) => setTimeout(() => resolve(null), 5000)),
+    ]).catch(() => null);
     const [projRes, spaceRes] = await Promise.all([
       window.cogseed.invoke('projects.list', {}),
-      window.cogseed.invoke('spaces.list', {}).catch(() => null),
+      spacesWithTimeout,
     ]);
     _projectsCache = (projRes && projRes.ok && Array.isArray(projRes.projects)) ? projRes.projects : [];
     const spaceList = (spaceRes && Array.isArray(spaceRes.spaces)) ? spaceRes.spaces : [];

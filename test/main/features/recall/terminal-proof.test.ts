@@ -54,7 +54,7 @@ async function confirmedProjection(taskRunId: string) {
     suggestedScope: 'review',
     sourceRefs: [{ kind: 'execution', id: `exec-${taskRunId}` }],
   });
-  const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id);
+  const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
   await refs.addWorkspaceAssetReference('user-a', { assetId: asset.id, workspaceId: 'workspace-a', scope: 'review' });
   const preview = await projection.previewContextProjection('user-a', {
     taskRunId, workspaceId: 'workspace-a', purpose: 'review', authorization: 'user_confirmed',

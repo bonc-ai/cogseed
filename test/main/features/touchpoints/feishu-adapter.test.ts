@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   registry: { getInstance: vi.fn() },
-  manager: { sendProactive: vi.fn() },
+  manager: {
+    sendProactive: vi.fn(),
+    getLiveInstanceStatus: vi.fn(),
+  },
 }));
 
 vi.mock('../../../../src/main/features/messaging/registry', () => mocks.registry);
@@ -40,6 +43,8 @@ describe('Feishu touchpoint adapter', () => {
   beforeEach(() => {
     mocks.registry.getInstance.mockReset();
     mocks.manager.sendProactive.mockReset();
+    mocks.manager.getLiveInstanceStatus.mockReset();
+    mocks.manager.getLiveInstanceStatus.mockResolvedValue({ kind: 'connected', checkedAt: '2026-08-10T13:00:00.000Z' });
   });
 
   it('renders domain content rather than internal ids or credentials', () => {
@@ -72,16 +77,90 @@ describe('Feishu touchpoint adapter', () => {
     }));
   });
 
+  it('sends an interactive card for actionable intents', async () => {
+    mocks.registry.getInstance.mockResolvedValue({
+      id: 'feishu-1',
+      platform: 'feishu_lark',
+      enabled: true,
+      status: { kind: 'connected' },
+      ownerExternalUserId: 'ou_owner',
+    });
+    mocks.manager.sendProactive.mockResolvedValue({ entry: { externalDeliveryId: 'om_card', attempts: 1 } });
+
+    const adapter = createFeishuTouchpointAdapter({ instanceId: 'feishu-1' });
+    await adapter.send('user-1', intent());
+
+    const call = mocks.manager.sendProactive.mock.calls[0][1] as {
+      card?: Record<string, unknown>;
+    };
+    expect(call.card).toBeTruthy();
+    expect(call.card?.header).toBeTruthy();
+  });
+
+  it('stays plain text for read-only intents', async () => {
+    mocks.registry.getInstance.mockResolvedValue({
+      id: 'feishu-1',
+      platform: 'feishu_lark',
+      enabled: true,
+      status: { kind: 'connected' },
+      ownerExternalUserId: 'ou_owner',
+    });
+    mocks.manager.sendProactive.mockResolvedValue({ entry: { externalDeliveryId: 'om_text', attempts: 1 } });
+
+    const readOnly = createTouchpointIntent('user-1', createTouchpointDomainEvent('user-1', {
+      eventId: 'event-2',
+      kind: 'task.completed',
+      subject: { type: 'task', id: 'task-2' },
+      occurredAt: '2026-08-10T13:00:00.000Z',
+      summary: { title: '任务完成', body: '已收尾。' },
+    }), {
+      intentId: 'intent-2',
+      channel: 'feishu',
+      template: 'task_result',
+      priority: 'normal',
+      availableFrom: '2026-08-10T13:00:00.000Z',
+      expiresAt: '2026-08-11T13:00:00.000Z',
+      dedupeKey: 'task:task-2:result:event-2',
+    });
+
+    const adapter = createFeishuTouchpointAdapter({ instanceId: 'feishu-1' });
+    await adapter.send('user-1', readOnly);
+
+    const call = mocks.manager.sendProactive.mock.calls[0][1] as {
+      card?: Record<string, unknown>;
+    };
+    expect(call.card).toBeUndefined();
+  });
+
   it.each([
     [null, 'instance_not_found'],
     [{ id: 'feishu-1', platform: 'wecom', enabled: true, status: { kind: 'connected' }, ownerExternalUserId: 'ou_owner' }, 'wrong_platform'],
     [{ id: 'feishu-1', platform: 'feishu_lark', enabled: false, status: { kind: 'disabled' }, ownerExternalUserId: 'ou_owner' }, 'instance_disabled'],
-    [{ id: 'feishu-1', platform: 'feishu_lark', enabled: true, status: { kind: 'disconnected' }, ownerExternalUserId: 'ou_owner' }, 'instance_not_connected'],
     [{ id: 'feishu-1', platform: 'feishu_lark', enabled: true, status: { kind: 'connected' } }, 'owner_not_bound'],
   ])('rejects unusable real connections: %s', async (instance, code) => {
     mocks.registry.getInstance.mockResolvedValue(instance);
     const adapter = createFeishuTouchpointAdapter({ instanceId: 'feishu-1' });
     await expect(adapter.send('user-1', intent())).rejects.toMatchObject({ code });
+    expect(mocks.manager.sendProactive).not.toHaveBeenCalled();
+  });
+
+  it('rejects delivery when the live connection status is not connected', async () => {
+    // 磁盘状态被故意降级（normalizeStatus 从不落盘 connected），连接判断
+    // 必须依赖 runtime 实时状态；实时状态缺失或非 connected 时拒绝投递。
+    mocks.registry.getInstance.mockResolvedValue({
+      id: 'feishu-1',
+      platform: 'feishu_lark',
+      enabled: true,
+      status: { kind: 'disconnected' },
+      ownerExternalUserId: 'ou_owner',
+    });
+    mocks.manager.getLiveInstanceStatus.mockResolvedValue(null);
+
+    const adapter = createFeishuTouchpointAdapter({ instanceId: 'feishu-1' });
+    await expect(adapter.send('user-1', intent())).rejects.toMatchObject({
+      code: 'instance_not_connected',
+      retryable: true,
+    });
     expect(mocks.manager.sendProactive).not.toHaveBeenCalled();
   });
 

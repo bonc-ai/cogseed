@@ -24,8 +24,6 @@ function renderFilesResult(snapshot: {
   runtime?: any;
   collaboration?: any;
   wakeRequests?: any[];
-  kstarRuns?: any[];
-  patchCandidates?: any[];
   protocolEvents?: any[];
   protocolError?: string;
   protocolResponse?: any;
@@ -85,8 +83,6 @@ function renderFilesResult(snapshot: {
         if (url.includes('/files')) return { ok: true, ...snapshot.files };
         if (url.includes('/attachments')) return { ok: true, items: snapshot.attachments || [] };
         if (url.includes('/wake-requests')) return { ok: true, requests: snapshot.wakeRequests || [] };
-        if (url.includes('/kstar')) return { ok: true, runs: snapshot.kstarRuns || [] };
-        if (url.includes('/patch-candidates')) return { ok: true, patch_candidates: snapshot.patchCandidates || [] };
         if (url.includes('/protocol-events')) return snapshot.protocolResponse || (snapshot.protocolError ? { ok: false, error: snapshot.protocolError } : { ok: true, events: snapshot.protocolEvents || [] });
         if (url.includes('/members')) return { ok: true, actors: snapshot.actors || [] };
         if (url.includes('/runtime')) return { ok: true, ...(snapshot.runtime || {}), ...(snapshot.collaboration ? { collaboration: snapshot.collaboration } : {}) };
@@ -187,8 +183,6 @@ describe('ConversationInfo Collaboration tab shell', () => {
       runtime: { processing: false },
       collaboration: null,
       wakeRequests: [],
-      kstarRuns: [],
-      patchCandidates: [],
     });
 
     expect(result.html).toContain('No active collaboration yet.');
@@ -276,7 +270,7 @@ describe('ConversationInfo Collaboration tab shell', () => {
     expect(result.html).toContain('DeepResearcher');
   });
 
-  it('renders an attention-needed section from wake, KSTAR, and patch candidate state', async () => {
+  it('renders an attention-needed section from pending wake state', async () => {
     const result = await renderFilesResult({
       activeTab: 'collaboration',
       history: [],
@@ -286,13 +280,10 @@ describe('ConversationInfo Collaboration tab shell', () => {
       runtime: { processing: false },
       collaboration: { objective: 'Audit release', status: 'blocked', phase: 'review', steps: [] },
       wakeRequests: [{ id: 'wake-1', status: 'pending', agent_name: 'Researcher' }],
-      kstarRuns: [{ id: 'run-1', status: 'needs_review' }],
-      patchCandidates: [{ id: 'patch-1', status: 'needs_review', proposal: { title: 'Fix routing rule' } }],
     });
 
     expect(result.html).toContain('Attention Needed');
     expect(result.html).toContain('Researcher');
-    expect(result.html).toContain('Fix routing rule');
     expect(result.html).toContain('Open in chat');
   });
 
@@ -369,13 +360,10 @@ describe('ConversationInfo Collaboration tab shell', () => {
       runtime: { processing: false },
       collaboration: { objective: 'Audit release', status: 'blocked', phase: 'review', steps: [] },
       wakeRequests: [{ id: 'wake-1', status: 'pending', agent_name: 'Researcher' }],
-      kstarRuns: [{ id: 'run-1', status: 'needs_review' }],
-      patchCandidates: [{ id: 'patch-1', status: 'needs_review', proposal: { title: 'Fix routing rule' } }],
     });
 
     expect(result.html).not.toContain('data-kstar-review');
     expect(result.html).not.toContain('data-wake-decision');
-    expect(result.html).not.toContain('data-patch-candidate-review');
   });
 
   it('still references the legacy Agent Activity implementation while collaboration work is in progress', async () => {

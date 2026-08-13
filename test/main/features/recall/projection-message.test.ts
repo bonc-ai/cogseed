@@ -79,7 +79,7 @@ describe('recall projection chat messages', () => {
       card: expect.objectContaining({ projectionId: 'proj-a' }),
     }));
     expect(enqueueMock.mock.calls[0][0]).toMatchObject({
-      text: 'Found 2 reusable ability assets for review; omitted 1.',
+      text: 'Preload candidates: 2; add or remove as needed.',
     });
     expect(JSON.stringify(enqueueMock.mock.calls[0][0])).not.toContain('statement');
     expect(result).toMatchObject({ ok: true, card: { projectionId: 'proj-a' }, msg: { id: 'msg-a' } });

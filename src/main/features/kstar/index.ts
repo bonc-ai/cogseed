@@ -1,4 +1,5 @@
 export * from './types';
+export * from './dispatch-decision';
 export * from './paths';
 export * from './episode-store';
 export * from './episode-builder';
