@@ -21,7 +21,7 @@ export type { CapturePromptMessage, ListRecallCapturesQuery, RecallCaptureCounts
 export { isWithinNightlyWindow, nextNightlyRunAt, readRecallCaptureSettings, updateRecallCaptureSettings } from './capture-settings';
 export type { RecallCaptureExecutionPolicy, RecallCaptureSettingsRecord, UpdateRecallCaptureSettingsInput } from './capture-settings';
 
-export { initializeAbilityAsset, listAbilityAssetAudit, listAbilityAssetVersions, listAbilityAssets, pauseAbilityAsset, readAbilityAsset, resumeAbilityAsset, revokeAbilityAsset, setAbilityAssetMaturity, updateAbilityAsset } from './asset-service';
+export { downgradeAbilityAssetMaturityForRevokedEvidence, initializeAbilityAsset, listAbilityAssetAudit, listAbilityAssetVersions, listAbilityAssets, pauseAbilityAsset, readAbilityAsset, resumeAbilityAsset, revokeAbilityAsset, setAbilityAssetMaturity, updateAbilityAsset } from './asset-service';
 export type { AbilityAssetAuditRecord, AbilityAssetVersionRecord, UpdateAbilityAssetInput } from './asset-service';
 
 export { confirmRecallSkillDraft, prepareRecallSkillDraft, readInstalledSkillForAsset, readRecallSkillDraft } from './skill-draft-service';

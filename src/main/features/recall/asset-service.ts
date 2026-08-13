@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import { safeId } from '../../storage';
 import { recallJsonRecordPath } from './paths';
-import { normalizeCognitionSourceRefs } from './source-service';
+import { normalizeCognitionSourceRefs, type CognitionSourceRef } from './source-service';
 import {
   appendRecallJsonlRecord, listRecallJsonlRecords, readRecallJsonRecord,
   removeRecallJsonlStream, updateRecallJsonRecord,
@@ -34,7 +34,8 @@ export interface AbilityAssetAuditRecord extends RecallJsonRecord {
    * 「谁在什么时候把它恢复了」，来源状态在上一条审计里，不必在这里重复编码。
    */
   action: 'created' | 'updated' | 'paused' | 'resumed' | 'revoked'
-    | 'archived' | 'deleted' | 'purged' | 'restored' | 'rolled_back';
+    | 'archived' | 'deleted' | 'purged' | 'restored' | 'rolled_back'
+    | 'maturity_downgraded';
   at: string;
   note?: string;
 }
@@ -451,4 +452,38 @@ export async function setAbilityAssetMaturity(
     return { ...current, maturity, updatedAt: new Date().toISOString() };
   });
   return asAsset(updated);
+}
+
+/**
+ * Evidence 撤销后回收由它支撑的成熟度声明。
+ *
+ * 资产仍是用户确认过的正式资产，所以不删正文、不改治理状态；但来源链已经失效，
+ * 不能继续声称它完成过 transfer / effectiveness 验证。`bud` 是既有使用矩阵中的
+ * User Confirmed / Unverified 档，正好表达「资产仍在、效果待重新验证」。来源随后
+ * 恢复也不会自动升回去，新的 proof 才能升阶。
+ */
+export async function downgradeAbilityAssetMaturityForRevokedEvidence(
+  userId: string,
+  assetId: string,
+  source: Pick<CognitionSourceRef, 'kind' | 'id'>,
+): Promise<{ asset: RecallAbilityAssetRecord; downgraded: boolean }> {
+  if (typeof source.kind !== 'string' || !safeId(source.id)) throw new Error('invalid revoked evidence source');
+  let downgraded = false;
+  const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
+    if (!raw) throw new Error('recall ability asset not found');
+    const current = asAsset(raw);
+    if (
+      current.status === 'purged'
+      || current.maturity === 'seed'
+      || current.maturity === 'bud'
+      || !current.evidenceRefs.some((ref) => ref.kind === source.kind && ref.id === source.id)
+    ) return current;
+    downgraded = true;
+    return { ...current, maturity: 'bud', updatedAt: new Date().toISOString() };
+  });
+  const asset = asAsset(updated);
+  if (downgraded) {
+    await appendAudit(userId, asset.id, 'maturity_downgraded', `evidence_revoked:${source.kind}:${source.id}`);
+  }
+  return { asset, downgraded };
 }

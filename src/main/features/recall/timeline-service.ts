@@ -16,6 +16,7 @@ export type RecallAssetTimelineKind =
   | 'asset_paused'
   | 'asset_resumed'
   | 'asset_revoked'
+  | 'asset_maturity_downgraded'
   | 'asset_version'
   | 'projection_confirmed'
   | 'usage_recorded'
@@ -89,6 +90,7 @@ function itemTitle(kind: RecallAssetTimelineKind, extra?: string): string {
     case 'asset_paused': return 'Asset paused';
     case 'asset_resumed': return 'Asset resumed';
     case 'asset_revoked': return 'Asset revoked';
+    case 'asset_maturity_downgraded': return 'Asset maturity downgraded';
     case 'asset_version': return 'Asset version saved';
     case 'projection_confirmed': return 'Projection confirmed';
     case 'usage_recorded': return 'Usage recorded';
@@ -115,6 +117,8 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
           ? 'asset_paused'
           : audit.action === 'resumed'
             ? 'asset_resumed'
+            : audit.action === 'maturity_downgraded'
+              ? 'asset_maturity_downgraded'
             : 'asset_revoked';
     pushSorted(items, {
       id: audit.id,

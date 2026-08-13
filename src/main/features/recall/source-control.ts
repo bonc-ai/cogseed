@@ -3,7 +3,11 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 import { safeId } from '../../storage';
-import { listAbilityAssets, revokeAbilityAsset } from './asset-service';
+import {
+  downgradeAbilityAssetMaturityForRevokedEvidence,
+  listAbilityAssets,
+  revokeAbilityAsset,
+} from './asset-service';
 import { recallJsonRecordPath } from './paths';
 import {
   COGNITION_SOURCE_TYPES,
@@ -36,6 +40,7 @@ export interface CognitionSourceControlRecord extends RecallJsonRecord {
 export interface RemoveCognitionSourceResult {
   control: CognitionSourceControlRecord;
   affectedAssetIds: string[];
+  downgradedAssetIds: string[];
   revokedAssetIds: string[];
   failedAssetIds: string[];
 }
@@ -205,17 +210,29 @@ export async function removeCognitionSource(
     ref.kind === source.kind && ref.id === source.id
   )));
   const affectedAssetIds = affected.map((asset) => asset.id);
-  if (!revokeAssets) return { control, affectedAssetIds, revokedAssetIds: [], failedAssetIds: [] };
+  if (!revokeAssets) {
+    const downgrades = await Promise.all(affected.map((asset) => (
+      downgradeAbilityAssetMaturityForRevokedEvidence(userId, asset.id, source)
+    )));
+    return {
+      control,
+      affectedAssetIds,
+      downgradedAssetIds: affected.filter((_, index) => downgrades[index].downgraded).map((asset) => asset.id),
+      revokedAssetIds: [],
+      failedAssetIds: [],
+    };
+  }
 
+  const downgradedAssetIds: string[] = [];
   const revokedAssetIds: string[] = [];
   const failedAssetIds: string[] = [];
   for (const asset of affected) {
-    if (asset.status === 'revoked') {
-      revokedAssetIds.push(asset.id);
-      continue;
-    }
     try {
-      await revokeAbilityAsset(userId, asset.id, `source_removed:${source.kind}:${source.id}`);
+      const downgrade = await downgradeAbilityAssetMaturityForRevokedEvidence(userId, asset.id, source);
+      if (downgrade.downgraded) downgradedAssetIds.push(asset.id);
+      if (asset.status !== 'revoked') {
+        await revokeAbilityAsset(userId, asset.id, `source_removed:${source.kind}:${source.id}`);
+      }
       revokedAssetIds.push(asset.id);
     } catch {
       failedAssetIds.push(asset.id);
@@ -223,9 +240,9 @@ export async function removeCognitionSource(
   }
   if (failedAssetIds.length) {
     const failedControl = await setSourceControl(userId, source, 'removed', 'asset_revoke_partial');
-    return { control: failedControl, affectedAssetIds, revokedAssetIds, failedAssetIds };
+    return { control: failedControl, affectedAssetIds, downgradedAssetIds, revokedAssetIds, failedAssetIds };
   }
-  return { control, affectedAssetIds, revokedAssetIds, failedAssetIds };
+  return { control, affectedAssetIds, downgradedAssetIds, revokedAssetIds, failedAssetIds };
 }
 
 export async function previewCognitionSourceRemoval(

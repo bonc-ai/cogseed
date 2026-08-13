@@ -35,6 +35,7 @@ const sourceMock = vi.hoisted(() => ({
   removeCognitionSource: vi.fn(async (_uid: string, kind: string, sourceId: string, revokeAssets: boolean) => ({
     control: { kind, sourceId, availability: 'removed' },
     affectedAssetIds: ['aa-a', 'aa-b'],
+    downgradedAssetIds: revokeAssets ? [] : ['aa-a'],
     revokedAssetIds: revokeAssets ? ['aa-a'] : [],
     failedAssetIds: [],
   })),
@@ -207,7 +208,7 @@ describe('ipc › recall candidate governance', () => {
     await expect(call('recall.sources.removeImpact', { kind: 'conversation', sourceId: 'conv-a' }))
       .resolves.toMatchObject({ ok: true, impact: { affectedAssetCount: 2, revocableAssetCount: 1 } });
     await expect(call('recall.sources.remove', { kind: 'conversation', sourceId: 'conv-a', revokeAssets: false }))
-      .resolves.toMatchObject({ ok: true, result: { revokedAssetIds: [] } });
+      .resolves.toMatchObject({ ok: true, result: { downgradedAssetIds: ['aa-a'], revokedAssetIds: [] } });
     expect(sourceMock.removeCognitionSource).toHaveBeenCalledWith(UID, 'conversation', 'conv-a', false);
 
     await expect(call('recall.captures.list', { limit: 5 }))

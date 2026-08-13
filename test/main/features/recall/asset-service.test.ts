@@ -153,6 +153,37 @@ describe('治理状态模型', () => {
     expect(loaded.deletedAt).toBeUndefined();
   });
 
+  it('Evidence 撤销将验证成熟度退回 bud，且 seed、bud 与无关 Evidence 幂等不变', async () => {
+    const { assets } = await modules();
+    for (const maturity of ['transfer_validated', 'effectiveness_validated', 'stable'] as const) {
+      const uid = `user-evidence-${maturity}`;
+      const asset = await seedAsset(uid);
+      await assets.setAbilityAssetMaturity(uid, asset.id, maturity);
+
+      const result = await assets.downgradeAbilityAssetMaturityForRevokedEvidence(uid, asset.id, {
+        kind: 'execution', id: 'exec-gov',
+      });
+
+      expect(result.downgraded).toBe(true);
+      expect(result.asset.maturity).toBe('bud');
+    }
+
+    for (const maturity of ['seed', 'bud'] as const) {
+      const uid = `user-evidence-unchanged-${maturity}`;
+      const asset = await seedAsset(uid);
+      await assets.setAbilityAssetMaturity(uid, asset.id, maturity);
+      await expect(assets.downgradeAbilityAssetMaturityForRevokedEvidence(uid, asset.id, {
+        kind: 'execution', id: 'exec-gov',
+      })).resolves.toMatchObject({ downgraded: false, asset: { maturity } });
+    }
+
+    const seed = await seedAsset('user-evidence-unrelated');
+    await assets.setAbilityAssetMaturity('user-evidence-unrelated', seed.id, 'transfer_validated');
+    await expect(assets.downgradeAbilityAssetMaturityForRevokedEvidence('user-evidence-unrelated', seed.id, {
+      kind: 'execution', id: 'exec-other',
+    })).resolves.toMatchObject({ downgraded: false, asset: { maturity: 'transfer_validated' } });
+  });
+
   it('保留期按 deletedAt 现算，不依赖预存的到期时间', async () => {
     // 存事实不存政策：保留期天数改了也不需要迁移已有记录。
     const { assets } = await modules();
