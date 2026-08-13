@@ -1,5 +1,4 @@
 import type { MateRuntimeController } from './runtime-controller';
-import { mateRuntimeController } from './runtime-controller';
 import {
   buildCogSeedAgentRuntimeContext,
   resolveCogSeedAgentExecutionContext,
@@ -55,7 +54,7 @@ export async function startMateInteractiveFollowup(
       content: visibleContext.slice(0, MAX_VISIBLE_CONTEXT_CHARS),
     });
   }
-  const controller = deps.runtimeController ?? mateRuntimeController;
+  const controller = deps.runtimeController ?? (await import('./runtime-controller')).mateRuntimeController;
   return controller.startMateTask(userId, {
     requestId,
     task,

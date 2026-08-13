@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 const enqueue = vi.fn();
-vi.mock('../../../../src/main/features/group_chat/bus', () => ({ enqueue }));
+vi.mock('../../../../src/main/features/group_chat/bus', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../src/main/features/group_chat/bus')>();
+  return { ...actual, enqueue };
+});
 
 describe('CogSeed to Group Chat projection contract', () => {
   it('projects process events and one terminal Agent message without executing through the Group Chat bus', async () => {
