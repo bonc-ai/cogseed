@@ -3094,6 +3094,7 @@
   "recall.projection.confirm_assets": "プリロード済みアセットを確認",
   "settings.title": "設定",
   "sidebar.spaces": "ワークスペース",
+  "sidebar.workspace": "スペースセンター",
   "spaces.add_btn": "追加",
   "spaces.add_fail": "追加に失敗しました",
   "spaces.agents_unit": "エージェント",

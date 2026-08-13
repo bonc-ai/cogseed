@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="./style.css" />
   <link rel="stylesheet" href="./recall-local.css" />
   <link rel="stylesheet" href="./onboarding.css" />
+  <link rel="stylesheet" href="./workspace.css" />
 </head>
 <body>
   <div class="app-container">
@@ -36,6 +37,7 @@
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connectors">Connectors</span></button>
         <button class="sidebar-btn" id="personal-ontology-btn"><span data-ui-icon="sparkles" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.personal_ontology">我的认知</span></button>
         <button class="sidebar-btn" id="spaces-btn"><span data-ui-icon="layout-grid" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.spaces">工作空间</span></button>
+        <button class="sidebar-btn" id="workspace-btn"><span data-ui-icon="folder" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.workspace">空间中心</span></button>
       </div>
       <div class="sidebar-conversation-nav">
         <div class="sidebar-section sidebar-projects-section">
@@ -1174,6 +1176,11 @@
             </div>
           </div>
         </div>
+      </section>
+
+      <!-- Workspace Center (PRD v0.3 布局 UI 壳，与 panel-spaces 并存) -->
+      <section class="panel" id="panel-workspace">
+        <div class="ws-view" id="ws-view"></div>
       </section>
 
       <!-- Settings -->

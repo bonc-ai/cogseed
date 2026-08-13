@@ -318,6 +318,7 @@ function bindStaticHandlers() {
   document.getElementById('connectors-btn')?.addEventListener('click', () => _setViewFromSidebar('connectors'));
   document.getElementById('personal-ontology-btn')?.addEventListener('click', () => _setViewFromSidebar('personal-ontology'));
   document.getElementById('spaces-btn')?.addEventListener('click', () => _setViewFromSidebar('spaces'));
+  document.getElementById('workspace-btn')?.addEventListener('click', () => _setViewFromSidebar('workspace'));
   document.getElementById('settings-btn')?.addEventListener('click', () => _setViewFromSidebar('settings'));
 
   // Global search trigger + Cmd+K

@@ -3304,6 +3304,7 @@
   "recall.projection.confirm_assets": "确认预加载资产",
   "settings.title": "设置",
   "sidebar.spaces": "工作空间",
+  "sidebar.workspace": "空间中心",
   "spaces.add_btn": "添加",
   "spaces.add_fail": "添加失败",
   "spaces.agents_unit": "智能体",

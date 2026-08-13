@@ -55,6 +55,9 @@ const _rendererFeatureManifest = Object.freeze({
   spaces: [
     { src: './modules/spaces.js' },
   ],
+  workspace: [
+    { src: './modules/workspace.js' },
+  ],
 });
 
 const _rendererFeatureLoads = new Map();

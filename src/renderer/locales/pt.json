@@ -3094,6 +3094,7 @@
   "recall.projection.confirm_assets": "Confirmar ativos pré-carregados",
   "settings.title": "Configurações",
   "sidebar.spaces": "Espaços de trabalho",
+  "sidebar.workspace": "Central de espaços",
   "spaces.add_btn": "Adicionar",
   "spaces.add_fail": "Falha ao adicionar",
   "spaces.agents_unit": "agentes",

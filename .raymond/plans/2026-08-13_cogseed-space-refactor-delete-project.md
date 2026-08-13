@@ -94,11 +94,12 @@ Conversation.space_id (string | null)
 
 **目标**：`workspace.js` 三个 tab 从空态换成真数据渲染。
 
-- [ ] **T2.1 任务 tab**：`workspace.js` 任务 tab 调 `spaces.conversations.list`，渲染会话行（复用 `ws-session-row`）。
-- [ ] **T2.2 产物 tab**：调 `spaces.artifacts.list`，渲染产物卡（复用 `ws-artifact-card`）。
-- [ ] **T2.3 资产 tab**：调 `spaces.assets.list`，渲染资产卡（复用 `ws-asset-card`），含绑定/解绑交互（解绑走 `spaces.assets.unbind`）。
+- [x] **T2.1 任务 tab**：`workspace.js` 任务 tab 调 `spaces.conversations.list`，渲染会话行（复用 `ws-session-row`）。
+- [x] **T2.2 产物 tab**：调 `spaces.artifacts.list`，渲染产物卡（复用 `ws-artifact-card`）。
+- [x] **T2.3 资产 tab**：调 `spaces.assets.list`，渲染资产卡（复用 `ws-asset-card`），含绑定/解绑交互（解绑走 `spaces.assets.unbind`）。
   - 文件：`src/renderer/modules/workspace.js`（三个 tab 各自 `_render*Pane`）
   - 验收：CDP 实测三 tab 显示真数据；空态正常。
+  - ✅ 完成（2026-08-13，T2.1/T2.2/T2.3 合并为一次 renderer 改动——同一文件、一次重启、一次 CDP 会话，拆分无独立价值）：`_sessions/_artifacts/_assets` 改为 `let` + 新增 `_detailLoadedFor`；新增 `_loadSpaceDetail(spaceId)`（并行调 3 个 IPC）+ 映射函数 `_mapConversation`（会话→任务行）/`_mapArtifact`（产物→卡，ext→类别）/`_mapAsset`（绑定→资产卡，asset_type→中文标签）/`_artifactCategory`/`_assetTypeLabel`；`_go('space')` 触发异步加载三 tab；三个空态文案改为「该空间暂无…」；资产卡加 `.ws-unbind` 解绑按钮（`spaces.assets.unbind` → 强制重载）。验证证据（CDP 实测）：种入测试空间后重启 app，`Runtime.evaluate` 断言——空间中心 `hasSeedSpace=true`（8 卡含测试空间）；点开空间后任务 tab `taskRows=1` 且含「CDP测试任务」、产物 tab `cards=2`（附件 report.pdf + artifact「CDP仪表盘」）、资产 tab `cards=1` 含「CDP决策规则」+ `unbindBtns=1`；点解绑后 `cards=0` 且空态「该空间暂无资产」出现。`node --check` 通过；测试数据已清理（3/3）。风险：renderer 无 typecheck（排除在 tsconfig 外），依赖 `node --check` + CDP DOM 断言；产物类别映射把图片/视频/音频兜底为「文档」（筛选项未扩展）。
 
 ### 阶段 3：废弃项目 UI（依赖阶段 2）
 

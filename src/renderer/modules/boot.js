@@ -291,6 +291,7 @@ function _lazyFeaturePanel(view) {
     : view === 'recall' ? 'panel-recall'
     : view === 'personal-ontology' ? 'panel-personal-ontology'
     : view === 'spaces' ? 'panel-spaces'
+    : view === 'workspace' ? 'panel-workspace'
     : view === 'contexts' ? 'panel-contexts'
     : view === 'settings' ? 'panel-settings'
     : view === 'project' ? 'panel-project'
@@ -383,6 +384,7 @@ function setView(view, cid, opts = {}) {
                 : view === 'contexts' ? 'panel-contexts'
                             : view === 'personal-ontology' ? 'panel-personal-ontology'
                 : view === 'spaces' ? 'panel-spaces'
+                : view === 'workspace' ? 'panel-workspace'
                 : view === 'settings' ? 'panel-settings'
                 : view === 'memory' ? 'panel-memory'
                 : view === 'devtools' ? 'panel-devtools'
@@ -399,6 +401,7 @@ function setView(view, cid, opts = {}) {
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connectors');
   document.getElementById('personal-ontology-btn')?.classList.toggle('active', view === 'personal-ontology');
   document.getElementById('spaces-btn')?.classList.toggle('active', view === 'spaces');
+  document.getElementById('workspace-btn')?.classList.toggle('active', view === 'workspace');
   document.getElementById('settings-btn')?.classList.toggle('active', view === 'settings');
   document.getElementById('devtools-btn')?.classList.toggle('active', view === 'devtools');
   document.querySelectorAll('.conv-item').forEach(it => {
@@ -562,6 +565,13 @@ function setView(view, cid, opts = {}) {
     _deferSidebarNavWork('spaces-tab-load', () => {
       _loadViewFeature('spaces', 'spaces', () => {
         if (typeof renderSpaces === 'function') renderSpaces();
+      });
+    });
+  } else if (view === 'workspace') {
+    currentCid = null;
+    _deferSidebarNavWork('workspace-tab-load', () => {
+      _loadViewFeature('workspace', 'workspace', () => {
+        if (typeof renderWorkspace === 'function') renderWorkspace();
       });
     });
   } else if (view === 'settings') {

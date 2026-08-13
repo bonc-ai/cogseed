@@ -3304,6 +3304,7 @@
   "recall.projection.confirm_assets": "Confirm preloaded assets",
   "settings.title": "Settings",
   "sidebar.spaces": "Workspaces",
+  "sidebar.workspace": "Space Center",
   "spaces.add_btn": "Add",
   "spaces.add_fail": "Add failed",
   "spaces.agents_unit": "agents",
