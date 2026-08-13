@@ -16,15 +16,19 @@ export interface KstarJsonRecord {
 
 export interface KstarToolCall {
   id?: string;
+  sequence?: number;
+  actor?: string;
   name: string;
   argumentsSummary?: string;
   status?: 'ok' | 'error' | 'cancelled' | 'unknown';
 }
 
 export interface KstarAgentAction {
+  sequence?: number;
   actor?: string;
   action: string;
   summary?: string;
+  status?: 'ok' | 'error' | 'cancelled' | 'unknown';
 }
 
 export interface KstarEpisodeRecord extends KstarJsonRecord {
@@ -38,6 +42,7 @@ export interface KstarEpisodeRecord extends KstarJsonRecord {
   logicalRunId?: string;
   executionId?: string;
   projectionId?: string;
+  forecastId?: string;
   wakeRequestId?: string;
   k: {
     memoryRefs: string[];

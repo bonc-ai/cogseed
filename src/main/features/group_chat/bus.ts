@@ -1264,6 +1264,7 @@ export interface TaskTerminalEvent {
   logical_run_id?: string;
   execution_id?: string;
   projection_id?: string;
+  forecast_id?: string;
   wake_request_id?: string;
 }
 
@@ -1439,6 +1440,7 @@ function _emitTaskRunTerminalIfQuiescent(
       ...(run.logicalRunId ? { logical_run_id: run.logicalRunId } : {}),
       ...(run.executionId ? { execution_id: run.executionId } : {}),
       ...(run.projectionId ? { projection_id: run.projectionId } : {}),
+      ...(run.forecastId ? { forecast_id: run.forecastId } : {}),
       ...(run.wakeRequestId ? { wake_request_id: run.wakeRequestId } : {}),
     };
     if (!event.projection_id || !event.logical_run_id || !event.wake_request_id) {
