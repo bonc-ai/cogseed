@@ -63,6 +63,7 @@ import * as agents from '../features/agents';
 import * as autoTasks from '../features/auto_tasks';
 import { isAgentEnabled } from '../features/component_enabled';
 import * as skills from '../features/skills';
+import * as skillReverify from '../features/skill_reverify';
 import * as marketplace from '../features/marketplace';
 import * as notificationPermissions from '../features/notification_permissions';
 import * as marketplaceBiz from '../features/marketplace_biz';
@@ -2848,6 +2849,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (source !== 'marketplace' && source !== 'builtin' && source !== 'custom') throw new Error('invalid source');
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
     return skills.readSkillFile(source, id, file);
+  },
+
+  'skills.checkNseapDeclaration': async ({ id }, ctx) => {
+    if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
+    const found = await skills.getSkillForEdit(id);
+    if (!found || found.source !== 'custom') throw new Error('only custom skills can be pre-checked');
+    const nseapDeclaration = await skillReverify.checkNseapDeclaration(found.dir, id);
+    return { nseapDeclaration };
   },
 
   'skills.writeFile': async ({ id, file, content }) => {
