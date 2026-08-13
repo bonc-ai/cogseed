@@ -1,137 +1,121 @@
 #!/usr/bin/env python3
-"""Generate the approved CogSeed double-node companion icon assets."""
+"""Generate the approved CogSeed brand icon assets from the approved logo source.
+
+The source is the user-approved animal-and-seed brand mark (dark green ring,
+orange seed-guardian character). This script:
+
+- removes the near-white background with a soft alpha transition;
+- writes a transparent page logo (logo.png, 1024x1024);
+- writes a light-background app icon (icon.png, 512x512);
+- regenerates the Windows ICO and macOS ICNS containers;
+- writes a maintainable labeled SVG master (cogseed-master.svg).
+
+Usage:
+    python3 scripts/generate-brand-icons.py [SOURCE_PNG]
+
+The source defaults to the approved desktop upload; pass an explicit path when
+regenerating from another location.
+"""
 
 from __future__ import annotations
 
-import math
 import os
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageOps
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'src' / 'resources' / 'icons'
-PURPLE = '#7C3AED'
-BLUE = '#3B82F6'
-CYAN = '#22D3EE'
-BG = '#11152B'
+
+DEFAULT_SOURCE = Path('/Users/sudai/Desktop/微信图片_20260813194423_1297_537.png')
+
+# App icon background: opaque light warm-white (r,g,b all >= 239 so the asset
+# contract can distinguish it from the transparent page logo).
+ICON_BACKGROUND = (248, 245, 240)
+
 ICO_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
 
-
-def _hex_rgb(value: str) -> tuple[int, int, int]:
-    value = value.lstrip('#')
-    return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
-
-
-def _linear_gradient(size: int, start: str, end: str) -> Image.Image:
-    start_rgb = _hex_rgb(start)
-    end_rgb = _hex_rgb(end)
-    image = Image.new('RGBA', (size, size))
-    draw = ImageDraw.Draw(image)
-    for x in range(size):
-        t = x / max(1, size - 1)
-        rgb = tuple(round(start_rgb[i] * (1 - t) + end_rgb[i] * t) for i in range(3))
-        draw.line((x, 0, x, size), fill=(*rgb, 255))
-    return image
+# Whitening-distance soft mask: pixels whose minimum channel is >= BACKGROUND_MIN
+# are fully transparent; pixels below BACKGROUND_MIN - SOFT are fully opaque;
+# the SOFT range in between becomes a smooth alpha ramp for anti-aliased edges.
+BACKGROUND_MIN = 248
+SOFT = 16
 
 
-def _bezier_points(scale: float) -> list[tuple[float, float]]:
-    p0 = (420 * scale, 570 * scale)
-    p1 = (530 * scale, 420 * scale)
-    p2 = (610 * scale, 420 * scale)
-    p3 = (690 * scale, 370 * scale)
-    points: list[tuple[float, float]] = []
-    for step in range(41):
-        t = step / 40
-        u = 1 - t
-        x = u**3 * p0[0] + 3 * u**2 * t * p1[0] + 3 * u * t**2 * p2[0] + t**3 * p3[0]
-        y = u**3 * p0[1] + 3 * u**2 * t * p1[1] + 3 * u * t**2 * p2[1] + t**3 * p3[1]
-        points.append((x, y))
-    return points
+def _alpha_for_whiteness(min_channel: Image.Image) -> Image.Image:
+    """Turn the minimum RGB channel into a soft alpha mask (0=bg, 255=mark)."""
+
+    def ramp(value: int) -> int:
+        if value >= BACKGROUND_MIN:
+            return 0
+        if value <= BACKGROUND_MIN - SOFT:
+            return 255
+        return round((BACKGROUND_MIN - value) * 255 / SOFT)
+
+    return Image.eval(min_channel, ramp)
 
 
-def render(size: int) -> Image.Image:
-    scale = size / 1024
-    image = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+def _remove_background(source: Image.Image) -> Image.Image:
+    rgb = source.convert('RGB')
+    red, green, blue = rgb.split()
+    min_channel = ImageChops.darker(ImageChops.darker(red, green), blue)
+    alpha = _alpha_for_whiteness(min_channel)
+    return Image.merge('RGBA', (red, green, blue, alpha))
 
-    background = Image.new('RGBA', image.size, (0, 0, 0, 0))
-    bg_draw = ImageDraw.Draw(background)
-    bg_draw.rounded_rectangle(
-        (48 * scale, 48 * scale, 976 * scale, 976 * scale),
-        radius=220 * scale,
-        fill=BG,
-    )
-    image.alpha_composite(background)
 
-    aura = Image.new('RGBA', image.size, (0, 0, 0, 0))
-    aura_draw = ImageDraw.Draw(aura)
-    aura_draw.ellipse((170 * scale, 420 * scale, 650 * scale, 900 * scale), fill=(124, 58, 237, 85))
-    aura_draw.ellipse((560 * scale, 210 * scale, 850 * scale, 500 * scale), fill=(59, 130, 246, 70))
-    aura = aura.filter(ImageFilter.GaussianBlur(max(1, round(65 * scale))))
-    image.alpha_composite(aura)
+def _square_padded(image: Image.Image, target: int, fill: tuple[int, int, int, int]) -> Image.Image:
+    """Center the mark on a square canvas with symmetric padding, resize to target."""
+    box = image.getchannel('A').getbbox()
+    if not box:
+        raise RuntimeError('source mark has no visible pixels after background removal')
+    margin = 12
+    left = max(0, box[0] - margin)
+    top = max(0, box[1] - margin)
+    right = min(image.width, box[2] + margin)
+    bottom = min(image.height, box[3] + margin)
+    cropped = image.crop((left, top, right, bottom))
 
-    points = _bezier_points(scale)
-    glow = Image.new('RGBA', image.size, (0, 0, 0, 0))
-    glow_draw = ImageDraw.Draw(glow)
-    glow_draw.line(points, fill=(34, 211, 238, 145), width=max(2, round(78 * scale)), joint='curve')
-    glow = glow.filter(ImageFilter.GaussianBlur(max(1, round(28 * scale))))
-    image.alpha_composite(glow)
+    side = max(cropped.width, cropped.height)
+    square = Image.new('RGBA', (side, side), fill)
+    square.alpha_composite(cropped, ((side - cropped.width) // 2, (side - cropped.height) // 2))
 
-    connector = Image.new('RGBA', image.size, (0, 0, 0, 0))
-    connector_draw = ImageDraw.Draw(connector)
-    connector_draw.line(points, fill=CYAN, width=max(2, round(30 * scale)), joint='curve')
-    image.alpha_composite(connector)
-
-    node_gradient = _linear_gradient(size, PURPLE, BLUE)
-    node_mask = Image.new('L', image.size, 0)
-    mask_draw = ImageDraw.Draw(node_mask)
-    mask_draw.ellipse((205 * scale, 465 * scale, 595 * scale, 855 * scale), fill=255)
-    mask_draw.ellipse((600 * scale, 255 * scale, 820 * scale, 475 * scale), fill=255)
-    image.alpha_composite(Image.composite(node_gradient, Image.new('RGBA', image.size), node_mask))
-
-    rim = Image.new('RGBA', image.size, (0, 0, 0, 0))
-    rim_draw = ImageDraw.Draw(rim)
-    rim_draw.ellipse(
-        (205 * scale, 465 * scale, 595 * scale, 855 * scale),
-        outline=(255, 255, 255, 42),
-        width=max(1, round(8 * scale)),
-    )
-    rim_draw.ellipse(
-        (600 * scale, 255 * scale, 820 * scale, 475 * scale),
-        outline=(255, 255, 255, 52),
-        width=max(1, round(7 * scale)),
-    )
-    image.alpha_composite(rim)
-
-    highlights = Image.new('RGBA', image.size, (0, 0, 0, 0))
-    hi_draw = ImageDraw.Draw(highlights)
-    hi_draw.ellipse((285 * scale, 545 * scale, 390 * scale, 650 * scale), fill=(248, 252, 255, 242))
-    hi_draw.ellipse((654 * scale, 307 * scale, 711 * scale, 364 * scale), fill=(248, 252, 255, 242))
-    image.alpha_composite(highlights)
-
-    return image
+    content = round(target * 0.88)
+    scaled = square.resize((content, content), Image.Resampling.LANCZOS)
+    canvas = Image.new('RGBA', (target, target), fill)
+    canvas.alpha_composite(scaled, ((target - content) // 2, (target - content) // 2))
+    return canvas
 
 
 def write_svg(path: Path) -> None:
     path.write_text(
         '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <defs>
-    <linearGradient id="node" x1="0" y1="0" x2="1" y2="0">
-      <stop stop-color="#7C3AED"/>
-      <stop offset="1" stop-color="#3B82F6"/>
-    </linearGradient>
-    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="28"/>
-    </filter>
-  </defs>
-  <rect x="48" y="48" width="928" height="928" rx="220" fill="#11152B"/>
-  <path d="M420 570 C530 420 610 420 690 370" fill="none" stroke="#22D3EE" stroke-width="78" stroke-linecap="round" opacity=".42" filter="url(#glow)"/>
-  <path d="M420 570 C530 420 610 420 690 370" fill="none" stroke="#22D3EE" stroke-width="30" stroke-linecap="round"/>
-  <circle cx="400" cy="660" r="195" fill="url(#node)" stroke="#FFFFFF" stroke-opacity=".16" stroke-width="8"/>
-  <circle cx="710" cy="365" r="110" fill="url(#node)" stroke="#FFFFFF" stroke-opacity=".2" stroke-width="7"/>
-  <circle cx="337.5" cy="597.5" r="52.5" fill="#F8FCFF"/>
-  <circle cx="682.5" cy="335.5" r="28.5" fill="#F8FCFF"/>
+  <!-- Approved CogSeed brand mark: green sprout ring and orange seed-guardian character. -->
+  <g id="brand">
+    <circle id="ring" cx="512" cy="512" r="400" fill="none" stroke="#146441" stroke-width="88"/>
+    <g id="character">
+      <circle cx="392" cy="322" r="58" fill="#D58926"/>
+      <circle cx="632" cy="322" r="58" fill="#D58926"/>
+      <ellipse cx="512" cy="700" rx="252" ry="218" fill="#D58926"/>
+      <ellipse cx="512" cy="740" rx="150" ry="130" fill="#F1E3CB"/>
+      <circle cx="512" cy="408" r="158" fill="#F1E3CB"/>
+      <circle cx="454" cy="392" r="16" fill="#146441"/>
+      <circle cx="570" cy="392" r="16" fill="#146441"/>
+      <ellipse cx="512" cy="452" rx="20" ry="13" fill="#146441"/>
+      <path d="M470 496 Q512 528 554 496" fill="none" stroke="#146441" stroke-width="14" stroke-linecap="round"/>
+      <path d="M392 640 Q330 760 420 830" fill="none" stroke="#D58926" stroke-width="46" stroke-linecap="round"/>
+      <path d="M632 640 Q694 760 604 830" fill="none" stroke="#D58926" stroke-width="46" stroke-linecap="round"/>
+    </g>
+    <g id="seed">
+      <path d="M512 790 C560 800 582 862 512 930 C442 862 464 800 512 790 Z" fill="#D58926"/>
+      <ellipse cx="512" cy="830" rx="16" ry="26" fill="#F8E7C8"/>
+    </g>
+    <g id="leaves">
+      <path d="M452 250 C470 190 540 190 560 250 C520 240 490 240 452 250 Z" fill="#146441"/>
+      <path d="M512 270 C500 320 470 330 452 310 C480 290 500 280 512 270 Z" fill="#146441"/>
+    </g>
+  </g>
 </svg>
 ''',
         encoding='utf-8',
@@ -139,18 +123,36 @@ def write_svg(path: Path) -> None:
 
 
 def main() -> None:
+    source = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_SOURCE
+    if not source.is_file():
+        raise SystemExit(
+            f'brand icon source not found: {source}\n'
+            'Pass the approved source PNG as the first argument, e.g.\n'
+            '  python3 scripts/generate-brand-icons.py /path/to/brand-source.png'
+        )
+
+    with Image.open(source) as raw:
+        mark = _remove_background(raw)
+
     OUT.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(prefix='cogseed-icons-') as tmp:
+    with TemporaryDirectory(prefix='cogseed-brand-') as tmp:
         tmpdir = Path(tmp)
-        master = render(1024)
-        master.save(tmpdir / 'logo.png', 'PNG', optimize=True)
-        master.resize((512, 512), Image.Resampling.LANCZOS).save(tmpdir / 'icon.png', 'PNG', optimize=True)
-        master.save(tmpdir / 'icon.icns', 'ICNS')
-        master.save(tmpdir / 'icon.ico', 'ICO', sizes=ICO_SIZES)
+
+        transparent = Image.new('RGBA', (1024, 1024), (0, 0, 0, 0))
+        square = _square_padded(mark, 1024, (0, 0, 0, 0))
+        transparent.alpha_composite(square)
+        transparent.save(tmpdir / 'logo.png', 'PNG', optimize=True)
+
+        icon = _square_padded(mark, 512, (*ICON_BACKGROUND, 255))
+        icon.save(tmpdir / 'icon.png', 'PNG', optimize=True)
+        icon.save(tmpdir / 'icon.icns', 'ICNS')
+        icon.save(tmpdir / 'icon.ico', 'ICO', sizes=ICO_SIZES)
         write_svg(tmpdir / 'cogseed-master.svg')
+
         outputs = ['logo.png', 'icon.png', 'icon.icns', 'icon.ico', 'cogseed-master.svg']
         for name in outputs:
-            if not (tmpdir / name).is_file() or (tmpdir / name).stat().st_size == 0:
+            target = tmpdir / name
+            if not target.is_file() or target.stat().st_size == 0:
                 raise RuntimeError(f'icon generation produced an invalid file: {name}')
         for name in outputs:
             os.replace(tmpdir / name, OUT / name)
