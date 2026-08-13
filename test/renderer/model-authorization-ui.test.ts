@@ -405,6 +405,61 @@ describe('model authorization interactive wizard', () => {
     expect(prepareHarness.registry.get('model-authorization-body')!.innerHTML).toContain('cc-1');
   });
 
+  it('requires CC Switch reselection when the draft expires during discovery', async () => {
+    const { context, registry, invoke } = loadInteractiveHarness();
+    invoke.mockImplementation((channel: string, payload?: any) => {
+      if (channel === 'modelAuthorizations.list') return Promise.resolve({ ok: true, authorizations: [] });
+      if (channel === 'auth.listProviders') return Promise.resolve({ ok: true, providers: [] });
+      if (channel === 'customProviders.ccswitch.preview') return Promise.resolve({ ok: true, items: [{
+        externalId: 'cc-1', name: 'CC entry', protocol: 'anthropic', apiKeyMasked: 'sk-***', models: ['a'],
+      }] });
+      if (channel === 'modelAuthorizations.prepareCcSwitch') return Promise.resolve({
+        ok: true, draft: { draftId: 'expired-draft', externalId: payload.externalId, maskedKey: 'sk-***' },
+      });
+      if (channel === 'modelAuthorizations.discover') return Promise.resolve({ ok: false, errorCode: 'draft_expired' });
+      return Promise.resolve({ ok: true });
+    });
+
+    await context.window.initModelAuthorizationSettings();
+    await registry.get('settings-model-authorization-add-btn')!.click();
+    await registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'source-ccswitch' } },
+    });
+    await registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'select-ccswitch', externalId: 'cc-1' } },
+    });
+
+    expect(registry.get('model-authorization-body')!.innerHTML).toContain('cc-1');
+    expect(registry.get('model-authorization-actions')!.innerHTML).toContain('model-auth-action="back"');
+    expect(registry.get('model-authorization-status')!.textContent)
+      .toBe('settings.model_authorization.ccswitch_draft_expired');
+  });
+
+  it('requires CC Switch reselection when the draft expires between test and completion', async () => {
+    const { context, registry, invoke, discoverResolvers } = loadInteractiveHarness();
+    await context.window.initModelAuthorizationSettings();
+    await registry.get('settings-model-authorization-add-btn')!.click();
+    await registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'source-ccswitch' } },
+    });
+    const selecting = registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'select-ccswitch', externalId: 'cc-1' } },
+    });
+    await flushAsync();
+    discoverResolvers.shift()!({ ok: true, models: [{ id: 'claude-test' }], declaredModels: ['claude-test'] });
+    await selecting;
+    invoke.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false, errorCode: 'draft_not_found' });
+
+    await registry.get('model-authorization-actions')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'complete' } },
+    });
+
+    expect(registry.get('model-authorization-modal')!.classList.contains('open')).toBe(true);
+    expect(registry.get('model-authorization-body')!.innerHTML).toContain('cc-1');
+    expect(registry.get('model-authorization-status')!.textContent)
+      .toBe('settings.model_authorization.ccswitch_draft_expired');
+  });
+
   it('restores credentials when discovery rejects without rendering the API key', async () => {
     const { context, registry, invoke } = loadInteractiveHarness();
     await context.window.initModelAuthorizationSettings();

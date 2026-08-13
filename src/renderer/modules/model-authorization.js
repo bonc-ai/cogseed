@@ -140,7 +140,7 @@
     if (type === 'ccswitch_ready') {
       next.authType = 'api_key';
       next.source = 'ccswitch';
-      next.providerKind = 'builtin';
+      next.providerKind = 'custom';
       next.draftId = normalizeModelId(action.draftId);
       next.externalId = normalizeModelId(action.externalId || next.externalId);
       next.credential = {
@@ -241,6 +241,34 @@
     if (!next.defaultModel) next.defaultModel = id;
     next.step = 'models';
     return repairSelection(next);
+  }
+
+  function isExpiredCcSwitchDraft(result) {
+    const code = String(result && (result.errorCode || result.code) || '').trim();
+    return code === 'draft_not_found' || code === 'draft_expired';
+  }
+
+  function resetExpiredCcSwitchDraft() {
+    const next = cloneDraft(controller.draft);
+    next.step = 'ccswitch_select';
+    next.providerKind = null;
+    next.providerId = '';
+    next.profileId = '';
+    next.draftId = '';
+    next.externalId = '';
+    next.customProvider = null;
+    next.credential = {};
+    next.discoveryToken = '';
+    next.discoveryStatus = 'idle';
+    next.discoveryErrorCode = '';
+    next.declaredModels = [];
+    next.models = [];
+    next.selectedModels = [];
+    next.defaultModel = '';
+    next.preselectAll = false;
+    controller.draft = next;
+    setStatus(tr('settings.model_authorization.ccswitch_draft_expired'), 'error');
+    render();
   }
 
   function serializeSafeDraft(draft) {
@@ -813,6 +841,10 @@
     );
     if (controller.draft.discoveryToken !== token) return;
     const result = outcome.result || { ok: false, errorCode: 'network_error' };
+    if (controller.draft.source === 'ccswitch' && isExpiredCcSwitchDraft(result)) {
+      resetExpiredCcSwitchDraft();
+      return;
+    }
     controller.draft = applyDiscovery(controller.draft, { ...(result || {}), token, declaredModels: (result && result.declaredModels) || payload.declaredModels || [] });
     setStatus(result && result.ok === false ? outcome.message : '', result && result.ok === false ? 'error' : '');
     render();
@@ -840,12 +872,20 @@
         testPayload,
         'settings.model_authorization.error_test_failed',
       );
+      if (payload.source === 'ccswitch' && isExpiredCcSwitchDraft(testOutcome.result)) {
+        resetExpiredCcSwitchDraft();
+        return;
+      }
       if (!testOutcome.ok) { setStatus(testOutcome.message, 'error'); return; }
       const completionOutcome = await invokeResult(
         'modelAuthorizations.complete',
         payload,
         'settings.model_authorization.complete_failed',
       );
+      if (payload.source === 'ccswitch' && isExpiredCcSwitchDraft(completionOutcome.result)) {
+        resetExpiredCcSwitchDraft();
+        return;
+      }
       if (!completionOutcome.ok) { setStatus(completionOutcome.message, 'error'); return; }
       succeeded = true;
       closeModal();
