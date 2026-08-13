@@ -19,6 +19,7 @@
  */
 
 import type { CognitionSourceRef } from './source-service';
+import type { RecallAbilityAssetRecord } from './candidate-service';
 
 /** 用户层的五段命名。刻意不叫 pack / receipt——那是实现名，
  *  用户看到的是「进入了哪些智能体」「实际用过几次」。 */
@@ -52,8 +53,13 @@ export interface CognitionChainView {
   candidateId?: string;
   /** 这条认知的来源证据。 */
   sourceRefs: CognitionSourceRef[];
-  /** 资产当前状态，撤销/暂停要在追溯里看得见。 */
-  assetStatus?: 'active' | 'paused' | 'revoked';
+  /**
+   * 资产当前状态，撤销/暂停/归档/删除都要在追溯里看得见。
+   *
+   * 直接引用资产契约而不是重列一遍取值：这里原先抄了一份三值联合，治理状态扩到
+   * 六值时就地失配。追溯层没有理由拥有自己的状态词表。
+   */
+  assetStatus?: RecallAbilityAssetRecord['status'];
   assetVersion?: string;
   /** 带走这条认知的智能体 id。 */
   carriedByAgentIds: string[];
@@ -76,6 +82,24 @@ function segment(
     ...(extra.count !== undefined ? { count: extra.count } : {}),
     ...(extra.detail ? { detail: extra.detail } : {}),
   };
+}
+
+/**
+ * 沉淀段落里跟在版本号后面的状态后缀。
+ *
+ * 早先写成 `paused ? '暂停' : '撤销'` 的二选一，补进 archived / deleted / purged
+ * 之后那种写法会把它们全部显示成「已撤销」——把可恢复的说成终态，是在骗用户。
+ * 未知状态返回空串：不认识的状态不编一个说法。
+ */
+function assetStatusSuffix(status: RecallAbilityAssetRecord['status']): string {
+  const label: Partial<Record<RecallAbilityAssetRecord['status'], string>> = {
+    paused: '暂停',
+    archived: '归档',
+    deleted: '删除',
+    purged: '彻底清除',
+    revoked: '撤销',
+  };
+  return label[status] ? ` · 已${label[status]}` : '';
 }
 
 /** 回执里的资产引用形如 `asset:<id>@v<version>`，可能带 `:reason` 后缀。 */
@@ -151,7 +175,7 @@ export async function traceCognitionChainByAsset(
       // 沉淀：它成了一条正式认知，现在是第几版。
       segment('settling', true, {
         at: asset.createdAt,
-        detail: `当前第 ${asset.version} 版${asset.status === 'active' ? '' : ` · 已${asset.status === 'paused' ? '暂停' : '撤销'}`}`,
+        detail: `当前第 ${asset.version} 版${assetStatusSuffix(asset.status)}`,
       }),
       // 继承：哪些智能体带着它出生。
       segment('inheritance', carriedByAgentIds.length > 0, {

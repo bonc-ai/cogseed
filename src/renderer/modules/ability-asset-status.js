@@ -27,6 +27,12 @@
     PAUSED: 'paused',
     /** Terminal on the candidate side; belongs to candidate history, not the register. */
     REJECTED: 'rejected',
+    /** Moved out of the daily list, history kept, restorable. */
+    ARCHIVED: 'archived',
+    /** Removed from usable assets but still inside the retention window. */
+    DELETED: 'deleted',
+    /** Tombstone after a purge: content and versions are gone for good. */
+    PURGED: 'purged',
     DEPRECATED: 'deprecated',
     /**
      * Any combination this mapping does not recognize, including a promoted
@@ -37,7 +43,9 @@
     UNKNOWN: 'unknown',
   };
 
-  var VALIDATED = { transfer_validated: 1, effectiveness_validated: 1 };
+  // `stable` sits above `effectiveness_validated`; both are proven rungs, so the
+  // ladder resolves them to the same display state.
+  var VALIDATED = { transfer_validated: 1, effectiveness_validated: 1, stable: 1 };
   var UNVALIDATED = { seed: 1, bud: 1 };
 
   /**
@@ -79,6 +87,11 @@
     // Checked before `active` so a paused or revoked asset keeps its own
     // identity regardless of how far up the maturity ladder it had climbed.
     if (status === 'paused') return { key: DISPLAY.PAUSED };
+    // Archived and deleted are recoverable; folding them into DEPRECATED would
+    // tell the user a reversible state is terminal.
+    if (status === 'archived') return { key: DISPLAY.ARCHIVED };
+    if (status === 'deleted') return { key: DISPLAY.DELETED };
+    if (status === 'purged') return { key: DISPLAY.PURGED };
     if (status === 'revoked') return { key: DISPLAY.DEPRECATED };
     if (status === 'active') return { key: maturityStage(maturity) || DISPLAY.UNKNOWN };
 

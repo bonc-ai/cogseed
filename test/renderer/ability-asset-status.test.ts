@@ -28,7 +28,7 @@ function load() {
 
 const { DISPLAY, abilityAssetDisplayStatus, abilityAssetDisplayStatusI18nKey } = load();
 
-const MATURITIES = ['seed', 'bud', 'transfer_validated', 'effectiveness_validated'];
+const MATURITIES = ['seed', 'bud', 'transfer_validated', 'effectiveness_validated', 'stable'];
 
 describe('candidate side', () => {
   it('shows pending as candidate', () => {
@@ -106,6 +106,27 @@ describe('asset side', () => {
     }
   });
 
+  it('keeps recoverable governance states distinct from the terminal one', () => {
+    // 归档和删除都可恢复，彻底清除不可恢复。三者若都折进 deprecated，用户会
+    // 以为一次可撤销的操作是终态——这正是「已暂停≠已停用」同一条理由。
+    expect(abilityAssetDisplayStatus({ status: 'archived', maturity: 'seed' })).toEqual({ key: 'archived' });
+    expect(abilityAssetDisplayStatus({ status: 'deleted', maturity: 'seed' })).toEqual({ key: 'deleted' });
+    expect(abilityAssetDisplayStatus({ status: 'purged', maturity: 'seed' })).toEqual({ key: 'purged' });
+    expect(abilityAssetDisplayStatus({ status: 'revoked', maturity: 'seed' })).toEqual({ key: 'deprecated' });
+  });
+
+  it('keeps the new governance states independent of how far maturity climbed', () => {
+    for (const maturity of MATURITIES) {
+      expect(abilityAssetDisplayStatus({ status: 'archived', maturity })).toEqual({ key: 'archived' });
+      expect(abilityAssetDisplayStatus({ status: 'deleted', maturity })).toEqual({ key: 'deleted' });
+      expect(abilityAssetDisplayStatus({ status: 'purged', maturity })).toEqual({ key: 'purged' });
+    }
+  });
+
+  it('treats stable as a proven rung, like effectiveness_validated', () => {
+    expect(abilityAssetDisplayStatus({ status: 'active', maturity: 'stable' })).toEqual({ key: 'active' });
+  });
+
   it('reports unknown for an active asset whose maturity it cannot place', () => {
     // No optimistic floor: an unrecognized rung means the ladder changed under
     // us, and guessing "confirmed" would hide that.
@@ -117,7 +138,9 @@ describe('asset side', () => {
 
 describe('unmapped input', () => {
   it('returns unknown without guessing', () => {
-    for (const input of [null, undefined, 'active', 42, [], {}, { status: 'archived' }, { maturity: 'seed' }]) {
+    // `archived` used to live here as an unmapped example; it is now a real
+    // governance state, so an equally unmapped value takes its place.
+    for (const input of [null, undefined, 'active', 42, [], {}, { status: 'shredded' }, { maturity: 'seed' }]) {
       expect(abilityAssetDisplayStatus(input as never)).toEqual({ key: 'unknown' });
     }
   });
@@ -163,11 +186,16 @@ describe('read-only guarantee', () => {
     }
   });
 
-  it('leaves the underlying status and maturity vocabularies untouched', () => {
+  it('mirrors the underlying status and maturity vocabularies rather than redefining them', () => {
+    // 这条守的是「展示层不得自己发明词表」。治理状态在补齐规范 22.1 的五个操作时
+    // 从三值扩到六值、成熟度加了 stable，所以这里跟着底层一起更新——但断言仍然
+    // 指向 candidate-service 的源文本，任何一侧单独改动都会在这里断掉。
     expect(candidateService).toContain("'pending' | 'deferred' | 'rejected' | 'promoted'");
-    expect(candidateService).toContain("status: 'active' | 'paused' | 'revoked'");
     expect(candidateService).toContain(
-      "maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated'",
+      "status: 'active' | 'paused' | 'archived' | 'deleted' | 'purged' | 'revoked'",
+    );
+    expect(candidateService).toContain(
+      "maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated' | 'stable'",
     );
   });
 });

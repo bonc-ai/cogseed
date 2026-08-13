@@ -52,12 +52,52 @@ function assetsDirectory(userId: string): string {
   return path.dirname(recallJsonRecordPath(userId, 'ability-assets', 'placeholder'));
 }
 
+/** 治理状态白名单。旧记录只会含前三种，新增的三种向后兼容地放行。 */
+const ABILITY_ASSET_STATUSES = new Set<RecallAbilityAssetRecord['status']>([
+  'active', 'paused', 'archived', 'deleted', 'purged', 'revoked',
+]);
+
+const ABILITY_ASSET_MATURITIES = new Set<RecallAbilityAssetRecord['maturity']>([
+  'seed', 'bud', 'transfer_validated', 'effectiveness_validated', 'stable',
+]);
+
+/**
+ * 删除保留期长度（天）。
+ *
+ * 规范 22.1 只写了「进入保留期」「保留期内可恢复」，没有给出具体天数，所以这里
+ * 是占位值，等产品确认后只改这一个常量。记录里存的是 `deletedAt` 这个事实而不是
+ * 算好的到期时间，因此改动此常量不需要迁移任何已有数据。
+ *
+ * TODO(产品确认): 保留期天数，以及到期后是自动 purge 还是仅停止恢复入口。
+ */
+export const ABILITY_ASSET_DELETION_RETENTION_DAYS = 30;
+
+/**
+ * 一条已删除的资产是否仍在保留期内（即是否还能恢复）。
+ *
+ * 缺 `deletedAt` 的已删除记录一律视为「不在保留期内」：宁可让用户走申诉，也好过
+ * 依据一个不存在的时间戳声称还能恢复。
+ */
+export function isWithinDeletionRetention(
+  asset: Pick<RecallAbilityAssetRecord, 'status' | 'deletedAt'>,
+  now: Date = new Date(),
+): boolean {
+  if (asset.status !== 'deleted' || !asset.deletedAt) return false;
+  const deletedAt = Date.parse(asset.deletedAt);
+  if (Number.isNaN(deletedAt)) return false;
+  return now.getTime() - deletedAt < ABILITY_ASSET_DELETION_RETENTION_DAYS * 86_400_000;
+}
+
 function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   if (
     typeof value.candidateId !== 'string' || typeof value.title !== 'string' ||
     typeof value.statement !== 'string' || !Array.isArray(value.evidenceRefs) ||
     typeof value.scope !== 'string' || typeof value.version !== 'string' ||
-    (value.status !== 'active' && value.status !== 'paused' && value.status !== 'revoked')
+    !ABILITY_ASSET_STATUSES.has(value.status as RecallAbilityAssetRecord['status']) ||
+    (value.maturity !== undefined
+      && !ABILITY_ASSET_MATURITIES.has(value.maturity as RecallAbilityAssetRecord['maturity']))
+    || (value.deletedAt !== undefined
+      && (typeof value.deletedAt !== 'string' || Number.isNaN(Date.parse(value.deletedAt))))
   ) throw new Error('malformed recall ability asset');
   const evidenceRefs = normalizeCognitionSourceRefs(value.evidenceRefs);
   if (!evidenceRefs.length) throw new Error('malformed recall ability asset evidence');

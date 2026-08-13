@@ -116,3 +116,73 @@ describe('Recall ability assets', () => {
     ]);
   });
 });
+
+describe('治理状态模型', () => {
+  async function seedAsset(uid: string) {
+    const { candidates } = await modules();
+    const candidate = await candidates.saveRecallCandidate(uid, {
+      judgment: 'Record governance decisions with their evidence.',
+      suggestedType: 'rule', suggestedScope: 'architecture',
+      sourceRefs: [{ kind: 'execution', id: 'exec-gov' }],
+    });
+    return (await candidates.promoteRecallCandidate(uid, candidate.id)).asset;
+  }
+
+  it('接受规范 22.1 的全部治理状态，并拒绝编造的状态', async () => {
+    const { assets } = await modules();
+    const { updateRecallJsonRecord } = await import('../../../../src/main/features/recall/store');
+    const asset = await seedAsset('user-gov');
+
+    for (const status of ['active', 'paused', 'archived', 'deleted', 'purged', 'revoked'] as const) {
+      await updateRecallJsonRecord('user-gov', 'ability-assets', asset.id, (raw) => ({
+        ...raw!, status, ...(status === 'deleted' ? { deletedAt: new Date().toISOString() } : {}),
+      }));
+      expect((await assets.readAbilityAsset('user-gov', asset.id)).status).toBe(status);
+    }
+
+    await updateRecallJsonRecord('user-gov', 'ability-assets', asset.id, (raw) => ({ ...raw!, status: 'shredded' }));
+    await expect(assets.readAbilityAsset('user-gov', asset.id)).rejects.toThrow('malformed recall ability asset');
+  });
+
+  it('旧记录不带 deletedAt 也能照常读出', async () => {
+    // 向后兼容：本次只是放宽白名单，存量记录里没有任何新状态和新字段。
+    const { assets } = await modules();
+    const asset = await seedAsset('user-legacy');
+    const loaded = await assets.readAbilityAsset('user-legacy', asset.id);
+    expect(loaded.status).toBe('active');
+    expect(loaded.deletedAt).toBeUndefined();
+  });
+
+  it('保留期按 deletedAt 现算，不依赖预存的到期时间', async () => {
+    // 存事实不存政策：保留期天数改了也不需要迁移已有记录。
+    const { assets } = await modules();
+    const { ABILITY_ASSET_DELETION_RETENTION_DAYS, isWithinDeletionRetention } = assets;
+    const day = 86_400_000;
+    const now = new Date('2026-09-01T00:00:00.000Z');
+    const justDeleted = new Date(now.getTime() - day).toISOString();
+    const longGone = new Date(now.getTime() - (ABILITY_ASSET_DELETION_RETENTION_DAYS + 1) * day).toISOString();
+
+    expect(isWithinDeletionRetention({ status: 'deleted', deletedAt: justDeleted }, now)).toBe(true);
+    expect(isWithinDeletionRetention({ status: 'deleted', deletedAt: longGone }, now)).toBe(false);
+    // 缺 deletedAt 的已删除记录不声称可恢复；非 deleted 状态压根不适用保留期。
+    expect(isWithinDeletionRetention({ status: 'deleted' }, now)).toBe(false);
+    expect(isWithinDeletionRetention({ status: 'deleted', deletedAt: 'not-a-date' }, now)).toBe(false);
+    expect(isWithinDeletionRetention({ status: 'archived', deletedAt: justDeleted }, now)).toBe(false);
+  });
+
+  it('非 active 状态一律挡在投影之外', async () => {
+    // 下游用 `status !== 'active'` 拒绝式判断，新增状态必须天然被排除，
+    // 否则一条已删除的资产会被带进任务。
+    const { assets } = await modules();
+    const { updateRecallJsonRecord } = await import('../../../../src/main/features/recall/store');
+    const workspaceRefs = await import('../../../../src/main/features/recall/workspace-refs');
+    const asset = await seedAsset('user-gate');
+
+    for (const status of ['paused', 'archived', 'deleted', 'purged', 'revoked'] as const) {
+      await updateRecallJsonRecord('user-gate', 'ability-assets', asset.id, (raw) => ({ ...raw!, status }));
+      await expect(workspaceRefs.addWorkspaceAssetReference('user-gate', {
+        assetId: asset.id, workspaceId: 'ws-1', scope: 'project',
+      })).rejects.toThrow('ability asset is not active');
+    }
+  });
+});

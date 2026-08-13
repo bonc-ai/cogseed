@@ -103,8 +103,11 @@ export interface CognitionReuseReceiptView {
 }
 
 export type CognitionAssetType = 'personal' | 'rule' | 'template' | 'skill_method';
-export type CognitionAssetMaturity = 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated';
-export type CognitionAssetStatus = 'active' | 'paused' | 'revoked' | 'candidate';
+// 与 RecallAbilityAssetRecord 的治理状态保持同步，另加展示层特有的 `candidate`
+// ——候选还没 promote 成资产，在资产侧没有对应状态。
+export type CognitionAssetMaturity = 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated' | 'stable';
+export type CognitionAssetStatus =
+  | 'active' | 'paused' | 'archived' | 'deleted' | 'purged' | 'revoked' | 'candidate';
 
 export interface CognitionRecallSkillDraftSummary {
   draftHash: string;

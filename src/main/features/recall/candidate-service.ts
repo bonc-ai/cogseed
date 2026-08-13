@@ -86,8 +86,33 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   /** L0/L1/L2。缺失=没分过级，不等于 L0。L3 被准入闸挡在候选之前，不会出现。 */
   sensitivity?: AbilityAssetSensitivity;
   scope: string;
-  status: 'active' | 'paused' | 'revoked';
-  maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated';
+  /**
+   * 治理状态（规范 22.1）。除 active 外全部停止默认注入——下游一律用
+   * `status !== 'active'` 拒绝式判断，所以新增状态天然不会被误带进任务。
+   *
+   *   active   正常使用
+   *   paused   暂停默认注入，历史与 Evidence 保留，可恢复
+   *   archived 从日常列表移出、不参与推荐，历史保留，可恢复
+   *   deleted  移出可用资产并进入保留期，保留期内可恢复（见 `deletedAt`）
+   *   purged   彻底清除后的墓碑：内容与版本已删，仅留不可识别的审计最小项
+   *   revoked  撤销
+   */
+  status: 'active' | 'paused' | 'archived' | 'deleted' | 'purged' | 'revoked';
+  /**
+   * 成熟度阶梯（规范 10.1）。`stable` 是 `effectiveness_validated` 之上的一档，
+   * 在 10.2 默认使用矩阵里与后者同属一行。
+   *
+   * 不收 `trial_use`：规范阶梯里有这一步，但 10.2 没有给它独立的使用策略行，
+   * 目前也没有任何环节能产出它。加一个到不了又不改变行为的档位，只会让
+   * 消费方以为自己需要处理它。
+   */
+  maturity: 'seed' | 'bud' | 'transfer_validated' | 'effectiveness_validated' | 'stable';
+  /**
+   * 进入删除保留期的时刻。只记事实，不记算好的到期时间——保留期长度是政策，
+   * 政策改了不该要求迁移已有记录。是否仍在保留期由
+   * `asset-service.ts::isWithinDeletionRetention` 现算。
+   */
+  deletedAt?: string;
   version: string;
   /** Carried over from the promoted candidate; absent when it had none. */
   confidence?: number;
