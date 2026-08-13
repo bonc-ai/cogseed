@@ -296,17 +296,17 @@ async function _importLocalFileEntries(payload: any, ctx: IpcContext): Promise<{
     return { files: results };
   }
 
-  if (scope === 'project') {
-    const projectId = payload?.projectId;
-    if (!safeId(projectId) || !await projects.projectExists(ctx.userId, projectId)) {
-      throw new Error('invalid projectId');
+  if (scope === 'space') {
+    const spaceId = payload?.spaceId;
+    if (!safeId(spaceId) || !await spaces.spaceExists(ctx.userId, spaceId)) {
+      throw new Error('invalid spaceId');
     }
     for (const entry of entries) {
       const name = path.basename(entry.name);
       const targetName = _targetInDir(payload?.targetDir, name);
       const result = await spaceFiles.importSpaceFileFromPath(
         ctx.userId,
-        projectId,
+        spaceId,
         targetName,
         entry.path,
       );
@@ -1025,16 +1025,16 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
-  'conversations.create': async ({ title = '', projectId = '', kind = '' } = {}, ctx) => {
-    // Validate the projectId belongs to this user before persisting it on
-    // the conv record. Unknown / invalid projectIds are dropped silently
-    // (the conv lands without project membership) — the renderer should
-    // not be able to put a conv into a project the backend doesn't know
-    // about, but a stale / since-deleted pid coming from the commander chip
+  'conversations.create': async ({ title = '', spaceId = '', kind = '' } = {}, ctx) => {
+    // Validate the spaceId belongs to this user before persisting it on
+    // the conv record. Unknown / invalid spaceIds are dropped silently
+    // (the conv lands without space membership) — the renderer should
+    // not be able to put a conv into a space the backend doesn't know
+    // about, but a stale / since-deleted sid coming from the commander chip
     // shouldn't fail the create either.
-    let validProjectId = '';
-    if (projectId && typeof projectId === 'string' && safeId(projectId)) {
-      if (await projects.projectExists(ctx.userId, projectId)) validProjectId = projectId;
+    let validSpaceId = '';
+    if (spaceId && typeof spaceId === 'string' && safeId(spaceId)) {
+      if (await spaces.spaceExists(ctx.userId, spaceId)) validSpaceId = spaceId;
     }
     // 会话 kind 白名单：目前只有 space_builder（空间模式）被允许透传；
     // 其余一律回落 normal，防止渲染层任意指定会话类型。
@@ -1042,7 +1042,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const conv = await chats.createConversation(ctx.userId, {
       kind: convKind,
       title,
-      ...(validProjectId ? { projectId: validProjectId } : {}),
+      ...(validSpaceId ? { spaceId: validSpaceId } : {}),
     });
     return { conversation: conv };
   },
@@ -1095,51 +1095,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { deleted };
   },
 
-  'conversations.batchUpdateProject': async ({ conversationIds, projectId }, ctx) => {
-    if (!Array.isArray(conversationIds)) throw new Error('conversationIds must be an array');
-    if (typeof projectId !== 'string' || !safeId(projectId)) throw new Error('invalid projectId');
-    const result = await chats.batchUpdateConversationProject(ctx.userId, conversationIds, projectId);
-    return result;
-  },
-
-  // ── Projects (logical groups of conversations + scoped workspace) ──
-  'projects.list': async (_payload, ctx) => {
-    return { projects: await projects.listProjects(ctx.userId) };
-  },
-
-  'projects.create': async ({ name }, ctx) => {
-    const result = await projects.createProject(ctx.userId, name);
-    if (!result.ok) throw new Error((result as { error: string }).error);
-    return { project: result.project };
-  },
-
-  'projects.rename': async ({ projectId, name }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    const result = await projects.renameProject(ctx.userId, projectId, name);
-    if (!result.ok) throw new Error((result as { error: string }).error);
-    return { project: result.project };
-  },
-
-  'projects.delete': async ({ projectId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    const batch = await recycleBin.createAppRecycleBatchForProject(ctx.userId, projectId);
-    if (!batch?.items?.length) throw _codedError('recycle_archive_failed');
-    const result = await projects.deleteProject(ctx.userId, projectId);
-    if (!result.ok) {
-      await recycleBin.deleteRecycleBatch(ctx.userId, batch.id).catch(() => {});
-      throw new Error((result as { error: string }).error);
-    }
-    return { deleted_convs: result.deleted_convs, deleted_auto_tasks: result.deleted_auto_tasks };
-  },
-
-  'projects.get': async ({ projectId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    const project = await projects.getProject(ctx.userId, projectId);
-    if (!project) throw new Error('not_found');
-    return { project };
-  },
-
-  // ── Workspaces（工作空间一期：空间 = 主界面 + 资源作用域限制）────────────
   'spaces.list': async (_payload, ctx) => {
     return { spaces: await spaces.listSpaces(ctx.userId) };
   },
@@ -1256,21 +1211,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   // ── 项目 ↔ 空间绑定（工作空间一期）──────────────────────────────────────
-  'projects.bindSpace': async ({ projectId, spaceId } = {}, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (spaceId && !safeId(spaceId)) throw new Error('invalid spaceId');
-    const result = await projects.bindSpace(ctx.userId, projectId, spaceId || '');
-    if (!result.ok) throw new Error((result as { error: string }).error);
-    return { ok: true };
-  },
-
-  'projects.getSpace': async ({ projectId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    return { space: await projects.getSpace(ctx.userId, projectId) };
-  },
-
-  // User-authored per-space instructions. User-owned: edited only here via
-  // the space settings UI; agents read it from the system prompt.
   'spaces.instructions.get': async ({ spaceId }, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     const result = await spaces.readSpaceInstructions(ctx.userId, spaceId);
@@ -1432,86 +1372,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // the renderer can paint the detail page in one round-trip. Unknown ids
   // (referent deleted) are pruned here so stale bindings never become user
   // cleanup work.
-  'projects.bindings.list': async ({ projectId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
-    const [agentList, skillList] = await Promise.all([
-      agents.listAgentSummaries(),
-      skills.listSkills(),
-    ]);
-    const dispatchableAgents = agentList.filter((agent) => agents.isAgentChatDispatchable(agent));
-    const agentById = new Map(dispatchableAgents.map((agent) => [agent.agent_id, agent]));
-    const skillById = new Map(skillList.map((s: any) => [s.id, s]));
-    const pruned = await projects.pruneBindings(ctx.userId, projectId, {
-      agents: new Set(dispatchableAgents.map((agent) => agent.agent_id)),
-      skills: new Set(skillList.map((s: any) => s.id)),
-    });
-    if (!pruned.ok) throw new Error((pruned as { error: string }).error);
-    const bindings = pruned.bindings;
-    return {
-      bindings,
-      agentDetails: bindings.agents
-        .map((id) => agentById.get(id))
-        .filter(Boolean),
-      skillDetails: bindings.skills
-        .map((id) => skillById.get(id))
-        .filter(Boolean),
-    };
-  },
-
-  'projects.bindings.add': async ({ projectId, kind, id }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (typeof id !== 'string' || !id) throw new Error('invalid id');
-    let result;
-    if (kind === 'agent') {
-      if (!agents.isValidAgentId(id)) throw new Error('invalid id');
-      const agent = await agents.getAgent(id);
-      if (!agents.isAgentChatDispatchable(agent)) throw new Error('agent_disabled');
-      result = await projects.addAgentBinding(ctx.userId, projectId, id);
-    } else if (kind === 'skill') {
-      result = await projects.addSkillBinding(ctx.userId, projectId, id);
-    } else {
-      throw new Error('invalid kind');
-    }
-    if (!result.ok) throw new Error((result as { error: string }).error);
-    return { bindings: result.bindings };
-  },
-
-  'projects.bindings.remove': async ({ projectId, kind, id }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (typeof id !== 'string' || !id) throw new Error('invalid id');
-    let result;
-    if (kind === 'agent') {
-      result = await projects.removeAgentBinding(ctx.userId, projectId, id);
-    } else if (kind === 'skill') {
-      result = await projects.removeSkillBinding(ctx.userId, projectId, id);
-    } else {
-      throw new Error('invalid kind');
-    }
-    if (!result.ok) throw new Error((result as { error: string }).error);
-    return { bindings: result.bindings };
-  },
-
-  // Candidates = enabled [builtin + custom] minus already-bound. Powers the
-  // "Add" picker on the project detail page so disabled agents never appear
-  // as addable project members.
-  'projects.bindings.candidates': async ({ projectId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
-    const bindings = await projects.getBindings(ctx.userId, projectId);
-    const boundAgents = new Set(bindings.agents);
-    const boundSkills = new Set(bindings.skills);
-    const [agentList, skillList] = await Promise.all([
-      agents.listAgentSearchListings(),
-      skills.listSkills(),
-    ]);
-    return {
-      agents: agentList.filter((agent) => agents.isAgentChatDispatchable(agent) && !boundAgents.has(agent.agent_id)),
-      skills: skillList.filter((s: any) => !boundSkills.has(s.id)),
-    };
-  },
-
-  // ── Auto tasks (per-task dir at cloud/auto_tasks/<id>/; see features/auto_tasks.ts) ──
   'autoTasks.list': async ({ projectId } = {}, ctx) => {
     const opts: { projectId?: string | null } = {};
     if (projectId === null) opts.projectId = null;
