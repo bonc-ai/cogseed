@@ -238,5 +238,16 @@
   "touchpoints.feishu.open_mate": "Abra o Mate para ver o resultado completo",
   "touchpoints.feishu.review_mate": "Abra o Mate para revisar e tratar este item",
   "touchpoints.feishu.approve_mate": "Aprove no cartão ou abra o Mate para ajustar a tarefa",
-  "touchpoints.feishu.briefing_mate": "Abra o Mate para ajustar o plano de hoje"
+  "touchpoints.feishu.briefing_mate": "Abra o Mate para ajustar o plano de hoje",
+  "touchpoints.card.button.approve": "Aprovar",
+  "touchpoints.card.button.confirm": "Confirmar",
+  "touchpoints.card.button.reject": "Rejeitar",
+  "touchpoints.card.button.snooze": "Lembrar depois",
+  "touchpoints.card.button.open": "Ver detalhes",
+  "touchpoints.card.button.edit": "Editar",
+  "touchpoints.card.button.adjust": "Ajustar",
+  "touchpoints.card.button.retry": "Repetir",
+  "touchpoints.card.button.forget_source": "Esquecer fonte",
+  "touchpoints.card.button.revoke_grant": "Revogar concessão",
+  "touchpoints.card.resolved": "Processado"
 }

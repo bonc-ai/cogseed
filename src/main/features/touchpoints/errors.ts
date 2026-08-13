@@ -15,6 +15,7 @@ export type TouchpointContractErrorCode =
   | 'intent_expired'
   | 'action_not_allowed'
   | 'invalid_signature'
+  | 'invalid_content'
   | 'intent_not_found'
   | 'intent_not_actionable'
   | 'invalid_status_transition'

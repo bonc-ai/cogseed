@@ -17,6 +17,9 @@
     briefingTime: '08:00',
     // 授权前引导：用户未确认过回调地址配置时，授权入口先展示引导卡
     setupGuide: null,
+    touchpointConfig: null,
+    touchpointScene: 'task_approval',
+    touchpointDrafts: Object.create(null),
   };
 
   function tr(key, fallback, vars) {
@@ -74,7 +77,56 @@
     const briefingStatus = view.briefingConfigured && view.briefingSchedule
       ? `${tr('touchpoint_settings.delivery.configured', '每日简报已设置：')}${String(view.briefingSchedule.hour).padStart(2, '0')}:${String(view.briefingSchedule.minute).padStart(2, '0')}`
       : '';
-    return `<section class="touchpoint-delivery"><div class="touchpoint-section-heading"><div><h3>${escape(tr('touchpoint_settings.delivery.title', '离开电脑后，Mate 如何联系你'))}</h3><p>${escape(tr('touchpoint_settings.delivery.subtitle', '移动触点只承担简报、重要提醒、审批和结果回报。'))}</p></div></div><div class="touchpoint-delivery-grid"><article><span>${iconMarkup('sun', 'touchpoint-delivery-icon')}</span><div><strong>${escape(tr('touchpoint_settings.delivery.briefing', '今日简报'))}</strong><p>${escape(tr('touchpoint_settings.delivery.briefing_detail', '每天汇总日程、截止风险和建议。'))}</p></div></article><article><span>${iconMarkup('bell', 'touchpoint-delivery-icon')}</span><div><strong>${escape(tr('touchpoint_settings.delivery.reminders', '重要提醒'))}</strong><p>${escape(tr('touchpoint_settings.delivery.reminders_detail', '只在冲突、截止或状态变化时打扰。'))}</p></div></article><article><span>${iconMarkup('check-circle', 'touchpoint-delivery-icon')}</span><div><strong>${escape(tr('touchpoint_settings.delivery.approvals', '确认与审批'))}</strong><p>${escape(tr('touchpoint_settings.delivery.approvals_detail', '事实确认和 Agent 审批同步回桌面端。'))}</p></div></article></div>${view.canConfigureDelivery ? `<div class="touchpoint-inline-actions"><button class="btn touchpoint-secondary" data-touchpoint-action="briefing.preview">${escape(tr('touchpoint_settings.delivery.preview', '预览今日简报'))}</button><button class="btn btn-primary" data-touchpoint-action="briefing.test">${escape(tr('touchpoint_settings.delivery.test', '发送测试消息'))}</button></div><div class="touchpoint-briefing-row"><label class="touchpoint-briefing-time">${escape(tr('touchpoint_settings.delivery.time_label', '每日投递时间'))}<input type="time" value="${escape(briefingTime)}" data-touchpoint-briefing-time></label><button class="btn btn-primary" data-touchpoint-action="briefing.schedule">${escape(scheduleLabel)}</button>${view.briefingConfigured ? `<button class="btn touchpoint-secondary" data-touchpoint-action="briefing.unschedule">${escape(tr('touchpoint_settings.delivery.unschedule', '取消每日简报'))}</button>` : ''}</div>${briefingStatus ? `<div class="touchpoint-briefing-status">${escape(briefingStatus)}</div>` : ''}` : `<div class="touchpoint-locked-note">${iconMarkup('lock', 'touchpoint-lock-icon')}<span>${escape(tr('touchpoint_settings.delivery.locked', '完成连接、授权和资源同步后即可配置。'))}</span></div>`}${state.preview ? `<div class="touchpoint-preview"><pre>${escape(state.preview.text || '')}</pre></div>` : ''}</section>`;
+    return `<section class="touchpoint-delivery"><div class="touchpoint-section-heading"><div><h3>${escape(tr('touchpoint_settings.delivery.title', '离开电脑后，Mate 如何联系你'))}</h3><p>${escape(tr('touchpoint_settings.delivery.subtitle', '移动触点只承担简报、重要提醒、审批和结果回报。'))}</p></div></div><div class="touchpoint-delivery-grid"><article><span>${iconMarkup('sun', 'touchpoint-delivery-icon')}</span><div><strong>${escape(tr('touchpoint_settings.delivery.briefing', '今日简报'))}</strong><p>${escape(tr('touchpoint_settings.delivery.briefing_detail', '每天汇总日程、截止风险和建议。'))}</p></div></article><article><span>${iconMarkup('bell', 'touchpoint-delivery-icon')}</span><div><strong>${escape(tr('touchpoint_settings.delivery.reminders', '重要提醒'))}</strong><p>${escape(tr('touchpoint_settings.delivery.reminders_detail', '只在冲突、截止或状态变化时打扰。'))}</p></div></article><article><span>${iconMarkup('check-circle', 'touchpoint-delivery-icon')}</span><div><strong>${escape(tr('touchpoint_settings.delivery.approvals', '确认与审批'))}</strong><p>${escape(tr('touchpoint_settings.delivery.approvals_detail', '事实确认和 Agent 审批同步回桌面端。'))}</p></div></article></div>${view.canConfigureDelivery ? `<div class="touchpoint-inline-actions"><button class="btn touchpoint-secondary" data-touchpoint-action="briefing.preview">${escape(tr('touchpoint_settings.delivery.preview', '预览今日简报'))}</button><button class="btn btn-primary" data-touchpoint-action="briefing.test">${escape(tr('touchpoint_settings.delivery.test', '发送测试消息'))}</button><button class="btn touchpoint-secondary" data-touchpoint-action="approval_cards.manage">${iconMarkup('settings', 'touchpoint-button-icon')}${escape(tr('touchpoint_settings.approval_cards.manage', '审批卡片管理'))}</button></div><div class="touchpoint-briefing-row"><label class="touchpoint-briefing-time">${escape(tr('touchpoint_settings.delivery.time_label', '每日投递时间'))}<input type="time" value="${escape(briefingTime)}" data-touchpoint-briefing-time></label><button class="btn btn-primary" data-touchpoint-action="briefing.schedule">${escape(scheduleLabel)}</button>${view.briefingConfigured ? `<button class="btn touchpoint-secondary" data-touchpoint-action="briefing.unschedule">${escape(tr('touchpoint_settings.delivery.unschedule', '取消每日简报'))}</button>` : ''}</div>${briefingStatus ? `<div class="touchpoint-briefing-status">${escape(briefingStatus)}</div>` : ''}` : `<div class="touchpoint-locked-note">${iconMarkup('lock', 'touchpoint-lock-icon')}<span>${escape(tr('touchpoint_settings.delivery.locked', '完成连接、授权和资源同步后即可配置。'))}</span></div>`}${state.preview ? `<div class="touchpoint-preview"><pre>${escape(state.preview.text || '')}</pre></div>` : ''}</section>`;
+  }
+
+  function touchpointTemplate() {
+    const config = state.touchpointConfig;
+    return config && config.templates && config.templates[state.touchpointScene]
+      ? config.templates[state.touchpointScene]
+      : { title: '', body: '', buttons: {} };
+  }
+
+  function currentTouchpointDraft() {
+    const template = touchpointTemplate();
+    return state.touchpointDrafts[state.touchpointScene] || {
+      title: template.title || '',
+      body: template.body || '',
+      approve: template.buttons?.approve || '',
+      reject: template.buttons?.reject || '',
+    };
+  }
+
+  function previewTemplateText(value) {
+    const examples = {
+      actor: tr('touchpoint_settings.template.preview.actor', 'Mate'),
+      summary: tr('touchpoint_settings.template.preview.summary', '任务已准备完成，需要你确认是否继续执行。'),
+      task_title: tr('touchpoint_settings.template.preview.task_title', '确认项目交付方案'),
+      impact: tr('touchpoint_settings.template.preview.impact', '确认后将继续执行并同步结果。'),
+    };
+    return String(value || '').replace(/{{\s*(actor|summary|task_title|impact)\s*}}/g, (_, key) => examples[key] || '');
+  }
+
+  function renderTouchpointTemplatePreview(draft) {
+    const title = previewTemplateText(draft.title) || tr('touchpoint_settings.template.preview.empty_title', '卡片标题会显示在这里');
+    const body = previewTemplateText(draft.body) || tr('touchpoint_settings.template.preview.empty_body', '填写正文后，可在这里查看卡片的大致效果。');
+    const approve = draft.approve || tr('touchpoint_settings.template.preview.approve', '同意');
+    const reject = draft.reject || tr('touchpoint_settings.template.preview.reject', '拒绝');
+    return `<aside class="touchpoint-template-preview" data-touchpoint-template-preview><div class="touchpoint-template-preview-label">${iconMarkup('eye', 'touchpoint-preview-icon')}${escape(tr('touchpoint_settings.template.preview.title', '卡片预览'))}</div><div class="touchpoint-template-card"><span class="touchpoint-template-card-badge">${escape(tr(`touchpoint_settings.template.scene.${state.touchpointScene}`, state.touchpointScene))}</span><h3 data-touchpoint-preview-title>${escape(title)}</h3><p data-touchpoint-preview-body>${escape(body).replace(/\n/g, '<br>')}</p><div class="touchpoint-template-card-note">${escape(tr('touchpoint_settings.template.preview.note', '审批人可在飞书中补充意见'))}</div><div class="touchpoint-template-card-actions"><button type="button" tabindex="-1">${escape(reject)}</button><button type="button" tabindex="-1" class="is-primary">${escape(approve)}</button></div></div></aside>`;
+  }
+
+  function renderTouchpointConfig() {
+    const config = state.touchpointConfig;
+    if (!config) return `<div class="touchpoint-loading"><span class="spinner"></span>${escape(tr('touchpoint_settings.template.loading', '正在加载审批卡片设置…'))}</div>`;
+    const draft = currentTouchpointDraft();
+    const instances = (config.instances || []).filter((item) => item.platform === 'feishu_lark');
+    const option = (value, emptyLabel) => `<option value="">${escape(emptyLabel)}</option>${instances.map((item) => `<option value="${escape(item.id)}" ${item.id === value ? 'selected' : ''}>${escape(item.displayName)}${item.feishuTenantBrand ? ` (${escape(item.feishuTenantBrand)})` : ''}</option>`).join('')}`;
+    const scenes = ['task_approval', 'ontology_confirmation', 'daily_briefing'];
+    return `<div class="touchpoint-approval-layout"><main class="touchpoint-template-editor"><div class="touchpoint-scene-tabs" role="tablist" aria-label="${escape(tr('touchpoint_settings.template.scene', '场景'))}">${scenes.map((scene) => `<button type="button" role="tab" aria-selected="${scene === state.touchpointScene}" class="touchpoint-scene-tab${scene === state.touchpointScene ? ' is-active' : ''}" data-touchpoint-scene="${scene}">${escape(tr(`touchpoint_settings.template.scene.${scene}`, scene))}</button>`).join('')}</div><div class="touchpoint-template-fields"><label><span>${escape(tr('touchpoint_settings.template.title_field', '标题'))}</span><input data-touchpoint-config-title value="${escape(draft.title)}" placeholder="${escape(tr('touchpoint_settings.template.title_placeholder', '例如：{{actor}} 请求你确认任务'))}"></label><label><span>${escape(tr('touchpoint_settings.template.body_field', '正文'))}</span><textarea data-touchpoint-config-body placeholder="${escape(tr('touchpoint_settings.template.body_placeholder', '说明需要审批的内容，以及批准后的影响。'))}">${escape(draft.body)}</textarea></label><div class="touchpoint-template-button-fields"><label><span>${escape(tr('touchpoint_settings.template.approve_label', '批准按钮'))}</span><input data-touchpoint-config-button="approve" value="${escape(draft.approve)}"></label><label><span>${escape(tr('touchpoint_settings.template.reject_label', '拒绝按钮'))}</span><input data-touchpoint-config-button="reject" value="${escape(draft.reject)}"></label></div></div><details class="touchpoint-template-variables"><summary>${escape(tr('touchpoint_settings.template.variables_summary', '插入动态信息'))}<small>${escape(tr('touchpoint_settings.template.variables_detail', '卡片发送时会自动替换'))}</small></summary><div class="touchpoint-template-variable-list"><code>{{actor}}</code><code>{{summary}}</code><code>{{task_title}}</code><code>{{impact}}</code></div></details><details class="touchpoint-template-advanced"><summary>${iconMarkup('settings', 'touchpoint-advanced-icon')}<span>${escape(tr('touchpoint_settings.template.advanced', '高级设置'))}<small>${escape(tr('touchpoint_settings.template.advanced_detail', '指定由哪个飞书机器人发送'))}</small></span></summary><div class="touchpoint-template-routing"><label>${escape(tr('touchpoint_settings.template.default_instance', '默认发送机器人'))}<select data-touchpoint-config-default>${option(config.defaultInstanceId, tr('touchpoint_settings.template.unset', '未设置'))}</select></label><label>${escape(tr('touchpoint_settings.template.scene_override', '当前场景单独指定'))}<select data-touchpoint-config-route>${option((config.routes || {})[state.touchpointScene], tr('touchpoint_settings.template.follow_default', '跟随默认发送机器人'))}</select></label><p>${escape(tr('touchpoint_settings.template.routing_help', '通常无需修改。只有配置了多个机器人时，才需要为当前场景单独指定。'))}</p></div></details></main>${renderTouchpointTemplatePreview(draft)}</div>`;
+  }
+
+  function renderApprovalCardManager() {
+    return `<div class="touchpoint-approval-manager"><header class="touchpoint-manager-header"><button type="button" class="btn touchpoint-icon-button" data-touchpoint-action="approval_cards.back" aria-label="${escape(tr('touchpoint_settings.approval_cards.back', '返回触达设置'))}">${iconMarkup('chevron-left', 'touchpoint-back-icon')}</button><div><h1>${escape(tr('touchpoint_settings.approval_cards.title', '审批卡片管理'))}</h1><p>${escape(tr('touchpoint_settings.approval_cards.subtitle', '选择使用场景，修改卡片内容，然后保存或发送测试卡片。'))}</p></div><div class="touchpoint-manager-actions"><button class="btn touchpoint-secondary" data-touchpoint-action="touchpoint.test" ${state.busy ? 'disabled' : ''}>${iconMarkup('send', 'touchpoint-button-icon')}${escape(tr('touchpoint_settings.approval_cards.test', '发送测试卡片'))}</button><button class="btn btn-primary" data-touchpoint-action="touchpoint.config.save" ${state.busy ? 'disabled' : ''}>${escape(tr('touchpoint_settings.template.save', '保存模板'))}</button></div></header>${state.notice ? `<div class="messaging-notice is-${escape(state.notice.kind)}">${escape(state.notice.text)}</div>` : ''}${renderTouchpointConfig()}<section class="touchpoint-template-help"><div>${iconMarkup('check-circle', 'touchpoint-governance-icon')}</div><div><strong>${escape(tr('touchpoint_settings.approval_cards.help_title', '只需要关注卡片文案'))}</strong><p>${escape(tr('touchpoint_settings.approval_cards.help_detail', '审批结果、按钮动作和安全校验由系统处理；机器人选择仅在多机器人场景下需要调整。'))}</p></div></section></div>`;
   }
 
   function render() {
@@ -83,6 +135,11 @@
     if (!state.dashboard) {
       // 首次加载/刷新失败：错误提示要可见，不能只剩转圈
       host.innerHTML = `<div class="touchpoint-loading"><span class="spinner"></span>${escape(tr('touchpoint_settings.loading', '正在检查真实连接…'))}</div>${state.notice ? `<div class="messaging-notice is-${escape(state.notice.kind)}">${escape(state.notice.text)}</div>` : ''}`;
+      return;
+    }
+    if (state.view === 'approvalCards') {
+      host.innerHTML = renderApprovalCardManager();
+      hydrate(host);
       return;
     }
     const view = model();
@@ -112,6 +169,8 @@
       ]);
       state.dashboard = dashboardResult.dashboard;
       state.instances = Array.isArray(messagingResult.instances) ? messagingResult.instances : [];
+      const configResult = await invoke('touchpoints.config.get', {});
+      state.touchpointConfig = { ...(configResult.config || {}), instances: configResult.instances || state.instances };
       // 已配置简报时同步时间输入框，避免与真实配置脱节
       const destination = state.dashboard && state.dashboard.briefing ? state.dashboard.briefing.destination : null;
       if (destination && destination.configured && destination.schedule) {
@@ -133,9 +192,10 @@
     const overview = overviewView();
     const connections = connectionsView();
     if (host) host.classList.toggle('is-connections-view', view === 'connections');
-    if (overview) overview.hidden = view !== 'overview';
+    if (overview) overview.hidden = view === 'connections';
     if (connections) connections.hidden = view !== 'connections';
     if (connections && view === 'connections') hydrate(connections);
+    if (view !== 'connections') render();
   }
 
   function showOverview() {
@@ -190,6 +250,8 @@
     if (state.busy) return;
     if (action === 'refresh') return refresh();
     if (action === 'connections.back') { showOverview(); return; }
+    if (action === 'approval_cards.back') { state.touchpointDrafts = Object.create(null); showOverview(); return; }
+    if (action === 'approval_cards.manage') { state.notice = null; state.touchpointDrafts = Object.create(null); setTouchpointView('approvalCards'); return; }
     if (action === 'connection.manage') { await showConnections(); return; }
     if (action === 'connection.connect') { await showConnections({ startFeishuQr: true }); return; }
     if (action === 'setup_guide.done') { await confirmSetupGuideDone(); return; }
@@ -225,13 +287,18 @@
           const result = await invoke('personal_context.briefing.preview', {});
           state.preview = result.preview || null;
         } else if (action === 'briefing.test') {
-          const result = await invoke('personal_context.briefing.test_delivery', {});
+          const result = await invoke('personal_context.briefing.test_delivery', { instanceId: state.touchpointConfig?.routes?.daily_briefing || state.touchpointConfig?.defaultInstanceId || undefined });
           if (!result.result?.ok) throw new Error(result.result?.error || tr('touchpoint_settings.delivery.failed', '测试消息发送失败。'));
           state.notice = { kind: 'success', text: tr('touchpoint_settings.delivery.sent', '测试消息已发送到飞书。') };
+        } else if (action === 'touchpoint.test') {
+          if (state.view === 'approvalCards') await saveTouchpointConfig();
+          const result = await invoke('touchpoints.test_card_delivery', { instanceId: state.touchpointConfig?.routes?.task_approval || state.touchpointConfig?.defaultInstanceId || undefined });
+          if (!result.ok) throw new Error(result.error || tr('touchpoint_settings.delivery.test_approval_failed', '测试审批卡片发送失败。'));
+          state.notice = { kind: 'success', text: tr('touchpoint_settings.delivery.test_approval_sent', '测试审批卡片已发送到飞书，请在飞书中填写意见并点击按钮。') };
         } else if (action === 'briefing.schedule') {
           const match = /^(\d{2}):(\d{2})$/.exec(state.briefingTime || '');
           if (!match) throw new Error(tr('touchpoint_settings.delivery.time_invalid', '简报时间格式不正确。'));
-          const result = await invoke('personal_context.briefing.schedule', { hour: Number(match[1]), minute: Number(match[2]) });
+          const result = await invoke('personal_context.briefing.schedule', { instanceId: state.touchpointConfig?.routes?.daily_briefing || state.touchpointConfig?.defaultInstanceId || undefined, hour: Number(match[1]), minute: Number(match[2]) });
           if (!result.taskId) throw new Error(result.error || tr('touchpoint_settings.delivery.schedule_failed', '简报设置失败。'));
           state.notice = { kind: 'success', text: tr('touchpoint_settings.delivery.scheduled', '每日简报已设置。') };
         } else if (action === 'briefing.unschedule') {
@@ -249,6 +316,9 @@
           if (guide && guide.appId) {
             await invoke('auth.openExternal', { url: `https://open.feishu.cn/app/${guide.appId}/safe` });
           }
+        } else if (action === 'touchpoint.config.save') {
+          await saveTouchpointConfig();
+          state.notice = { kind: 'success', text: tr('touchpoint_settings.template.saved', '触达模板和实例路由已保存。') };
         }
         const dashboardResult = await invoke('personal_context.dashboard.get', {});
         state.dashboard = dashboardResult.dashboard;
@@ -264,6 +334,19 @@
         state.busy = false; render();
       }
     }
+  }
+
+  async function saveTouchpointConfig() {
+    const host = root();
+    const scene = state.touchpointScene;
+    const draft = currentTouchpointDraft();
+    const templates = { ...(state.touchpointConfig?.templates || {}), [scene]: { title: draft.title, body: draft.body, buttons: { approve: draft.approve, reject: draft.reject } } };
+    const routeInput = host.querySelector('[data-touchpoint-config-route]');
+    const defaultInput = host.querySelector('[data-touchpoint-config-default]');
+    const routes = { ...(state.touchpointConfig?.routes || {}), [scene]: routeInput ? routeInput.value || null : (state.touchpointConfig?.routes || {})[scene] || null };
+    const saved = await invoke('touchpoints.config.save', { config: { version: 1, defaultInstanceId: defaultInput ? defaultInput.value || null : state.touchpointConfig?.defaultInstanceId || null, templates, routes } });
+    state.touchpointConfig = { ...(saved.config || {}), instances: state.instances };
+    delete state.touchpointDrafts[state.touchpointScene];
   }
 
   function bind() {
@@ -298,6 +381,31 @@
       const id = input && input.dataset ? input.dataset.touchpointResource : '';
       if (!id) return;
       if (input.checked) state.selectedIds.add(id); else state.selectedIds.delete(id);
+    });
+    host.addEventListener('click', (event) => {
+      const sceneButton = event.target && event.target.closest ? event.target.closest('[data-touchpoint-scene]') : null;
+      if (!sceneButton) return;
+      state.touchpointScene = sceneButton.dataset.touchpointScene || 'task_approval';
+      delete state.touchpointDrafts[state.touchpointScene];
+      render();
+    });
+    host.addEventListener('input', (event) => {
+      const input = event.target;
+      if (!input || !input.dataset) return;
+      const draft = currentTouchpointDraft();
+      if (input.dataset.touchpointConfigTitle !== undefined) draft.title = input.value || '';
+      else if (input.dataset.touchpointConfigBody !== undefined) draft.body = input.value || '';
+      else if (input.dataset.touchpointConfigButton === 'approve') draft.approve = input.value || '';
+      else if (input.dataset.touchpointConfigButton === 'reject') draft.reject = input.value || '';
+      else return;
+      state.touchpointDrafts[state.touchpointScene] = draft;
+      const preview = host.querySelector('[data-touchpoint-template-preview]');
+      if (preview) {
+        const replacement = document.createElement('div');
+        replacement.innerHTML = renderTouchpointTemplatePreview(draft);
+        preview.replaceWith(replacement.firstElementChild);
+        hydrate(host);
+      }
     });
     window.addEventListener('i18n-change', render);
     if (window.cogseed && typeof window.cogseed.onPushEvent === 'function') {

@@ -6,6 +6,7 @@ import { userTouchpointLedgerFile } from '../../paths';
 import { TouchpointContractError } from './errors';
 import { validateTouchpointActionEnvelope } from './intents';
 import type {
+  TouchpointActionContract,
   TouchpointActionEnvelopeInput,
   TouchpointActionRecord,
   TouchpointIntent,
@@ -13,7 +14,8 @@ import type {
   TouchpointLedgerFile,
 } from './types';
 
-const EMPTY_LEDGER: TouchpointLedgerFile = { version: 1, intents: {}, actions: {} };
+const ACTION_LABEL_KEYS = new Set(['open', 'snooze', 'confirm', 'reject', 'edit', 'approve', 'adjust', 'retry', 'forget_source', 'revoke_grant']);
+
 const locks = new Map<string, Mutex>();
 const TERMINAL_STATUSES = new Set<TouchpointIntentStatus>(['sent', 'failed', 'expired', 'cancelled', 'suppressed']);
 function timestampIso(): string {
@@ -52,6 +54,21 @@ function normalizeText(value: unknown, maxLength: number): string | undefined {
   return normalized;
 }
 
+function normalizeContractInput(raw: unknown): TouchpointActionContract['input'] | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const candidate = raw as { label?: unknown; placeholder?: unknown; required?: unknown };
+  const label = typeof candidate.label === 'string' && candidate.label.trim() ? candidate.label.trim().slice(0, 120) : '';
+  if (!label) return undefined;
+  const placeholder = typeof candidate.placeholder === 'string' && candidate.placeholder.trim()
+    ? candidate.placeholder.trim().slice(0, 120)
+    : undefined;
+  return {
+    label,
+    ...(placeholder ? { placeholder } : {}),
+    ...(candidate.required === true ? { required: true } : {}),
+  };
+}
+
 function normalizeIntent(raw: unknown): TouchpointIntent | null {
   if (!raw || typeof raw !== 'object') return null;
   const candidate = raw as Partial<TouchpointIntent>;
@@ -69,8 +86,16 @@ function normalizeIntent(raw: unknown): TouchpointIntent | null {
   if (!['feishu'].includes(candidate.channel) || !['daily_briefing', 'ontology_confirmation', 'task_approval', 'task_result', 'task_failure', 'deadline_risk', 'calendar_conflict', 'binding_status'].includes(candidate.template)) return null;
   if (!['low', 'normal', 'high', 'urgent'].includes(candidate.priority)) return null;
   if (!['planned', 'ready', 'suppressed', 'sending', 'sent', 'retry_pending', 'failed', 'expired', 'cancelled'].includes(candidate.status)) return null;
+  const contractInput = candidate.actionContract?.input === undefined ? undefined : normalizeContractInput(candidate.actionContract.input);
   const actionContract = candidate.actionContract && candidate.actionContract.version === 1 && Array.isArray(candidate.actionContract.allowedActions)
-    ? { version: 1 as const, allowedActions: [...candidate.actionContract.allowedActions] }
+    ? {
+      version: 1 as const,
+      allowedActions: [...candidate.actionContract.allowedActions],
+      ...(contractInput ? { input: contractInput } : {}),
+      ...(candidate.actionContract.buttonLabels && typeof candidate.actionContract.buttonLabels === 'object'
+        ? { buttonLabels: Object.fromEntries(Object.entries(candidate.actionContract.buttonLabels).filter(([key, value]) => ACTION_LABEL_KEYS.has(key) && typeof value === 'string').map(([key, value]) => [key, String(value).trim().slice(0, 80)])) as TouchpointActionContract['buttonLabels'] }
+        : {}),
+    }
     : undefined;
   return {
     version: 1,
@@ -109,6 +134,7 @@ function normalizeAction(raw: unknown): TouchpointActionRecord | null {
   if (!safeId(candidate.userId) || !safeId(candidate.actionId) || !safeId(candidate.intentId)) return null;
   if (!/^[0-9a-f]{64}$/.test(candidate.signatureHash)) return null;
   if (!Number.isFinite(Date.parse(candidate.occurredAt)) || !Number.isFinite(Date.parse(candidate.consumedAt))) return null;
+  const content = normalizeText(candidate.content, 2_000);
   return {
     version: 1,
     actionId: candidate.actionId,
@@ -118,14 +144,18 @@ function normalizeAction(raw: unknown): TouchpointActionRecord | null {
     occurredAt: new Date(Date.parse(candidate.occurredAt)).toISOString(),
     signatureHash: candidate.signatureHash,
     consumedAt: new Date(Date.parse(candidate.consumedAt)).toISOString(),
+    ...(content ? { content } : {}),
   };
 }
 
 function normalizeLedger(raw: unknown): TouchpointLedgerFile {
-  if (!raw || typeof raw !== 'object') return { ...EMPTY_LEDGER };
+  // Fresh containers on every fallback: the empty ledger is a shared module
+  // constant, and spreading it keeps the same intents/actions references —
+  // a reserved intent would then leak into later reads of missing files.
+  if (!raw || typeof raw !== 'object') return { version: 1, intents: {}, actions: {} };
   const candidate = raw as Partial<TouchpointLedgerFile>;
   if (candidate.version !== 1 || !candidate.intents || typeof candidate.intents !== 'object' || !candidate.actions || typeof candidate.actions !== 'object') {
-    return { ...EMPTY_LEDGER };
+    return { version: 1, intents: {}, actions: {} };
   }
   const intents: Record<string, TouchpointIntent> = {};
   for (const [key, value] of Object.entries(candidate.intents)) {
@@ -189,6 +219,16 @@ export async function listTouchpointIntents(userId: string): Promise<TouchpointI
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)
       || right.createdAt.localeCompare(left.createdAt)
       || right.intentId.localeCompare(left.intentId));
+}
+
+export async function listTouchpointActions(userId: string, limit = 20): Promise<TouchpointActionRecord[]> {
+  assertUserId(userId);
+  const bounded = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 100) : 20;
+  const ledger = normalizeLedger(await readJson(userTouchpointLedgerFile(userId)));
+  return Object.values(ledger.actions)
+    .filter((action) => action.userId === userId)
+    .sort((left, right) => right.consumedAt.localeCompare(left.consumedAt))
+    .slice(0, bounded);
 }
 
 export async function transitionTouchpointIntent(
@@ -255,6 +295,7 @@ export async function consumeTouchpointAction(
       occurredAt: action.occurredAt,
       signatureHash,
       consumedAt: now.toISOString(),
+      ...(action.content ? { content: action.content } : {}),
     };
     ledger.actions[record.actionId] = record;
     return { duplicate: false, action: record };

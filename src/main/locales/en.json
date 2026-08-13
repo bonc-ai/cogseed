@@ -238,5 +238,16 @@
   "touchpoints.feishu.open_mate": "Open Mate to view the complete result",
   "touchpoints.feishu.review_mate": "Open Mate to review and handle this item",
   "touchpoints.feishu.approve_mate": "Approve in the card or open Mate to adjust the task",
-  "touchpoints.feishu.briefing_mate": "Open Mate to adjust today’s plan"
+  "touchpoints.feishu.briefing_mate": "Open Mate to adjust today’s plan",
+  "touchpoints.card.button.approve": "Approve",
+  "touchpoints.card.button.confirm": "Confirm",
+  "touchpoints.card.button.reject": "Reject",
+  "touchpoints.card.button.snooze": "Remind me later",
+  "touchpoints.card.button.open": "View details",
+  "touchpoints.card.button.edit": "Edit",
+  "touchpoints.card.button.adjust": "Adjust",
+  "touchpoints.card.button.retry": "Retry",
+  "touchpoints.card.button.forget_source": "Forget source",
+  "touchpoints.card.button.revoke_grant": "Revoke grant",
+  "touchpoints.card.resolved": "Processed"
 }

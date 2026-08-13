@@ -39,7 +39,7 @@ const log = createLogger('session-import:materialize');
 
 export interface MaterializeInput {
   userId: string;
-  source: 'claude' | 'codex';
+  source: 'claude' | 'codex' | 'workbuddy';
   sourceId: string;
   /** Original project path, used only to enrich the title. */
   projectPath?: string;
