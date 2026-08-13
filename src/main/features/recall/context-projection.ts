@@ -31,8 +31,19 @@ export type ProjectionKnowledgeErrorCode =
   | 'projection_asset_ineligible'
   | 'projection_source_unavailable';
 
+const PROJECTION_KNOWLEDGE_ERROR_MESSAGES: Record<ProjectionKnowledgeErrorCode, string> = {
+  projection_not_committed: 'projection is not committed',
+  projection_expired: 'projection has expired',
+  projection_versions_missing: 'projection asset versions are missing',
+  projection_asset_missing: 'projection asset is missing',
+  projection_asset_inactive: 'projection asset is no longer active',
+  projection_asset_version_changed: 'projection asset version changed',
+  projection_asset_ineligible: 'projection asset is no longer eligible',
+  projection_source_unavailable: 'projection source is unavailable',
+};
+
 export function projectionKnowledgeError(code: ProjectionKnowledgeErrorCode): Error & { code: ProjectionKnowledgeErrorCode } {
-  return Object.assign(new Error(code), { code });
+  return Object.assign(new Error(PROJECTION_KNOWLEDGE_ERROR_MESSAGES[code]), { code });
 }
 
 export interface OmittedAssetRef {
