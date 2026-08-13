@@ -1,5 +1,5 @@
 /**
- * Pure visibility primitives for Mate collaboration records.
+ * Pure visibility primitives for CogSeed collaboration records.
  *
  * This module intentionally owns small, stable DTOs instead of importing the
  * canonical actor/session model. Phase 1 and later adapters can translate

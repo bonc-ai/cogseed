@@ -131,6 +131,8 @@ export interface ChatOptions {
    * budget and the full tool set.
    */
   disableTools?: boolean;
+  /** Restrict tools to a read-only allowlist (anonymous worker helper use only). */
+  toolAccess?: 'read-only';
   abortSignal?: AbortSignal | null;
   /** Legacy openclaw CLI timeout — ignored, retained for signature parity. */
   timeout?: number;

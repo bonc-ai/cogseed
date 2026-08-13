@@ -1276,6 +1276,7 @@ if (!gotLock) {
     }, 'parallel', BOOT_HEAVY_DISK_DELAY_MS, { resourceClass: 'disk', preferIdle: true });
 
 
+
     // Drive the immediate batch + schedule the deferred one.
     void runBootPhases(BOOT_BACKGROUND_DEFER_MS);
 

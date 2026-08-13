@@ -28,7 +28,7 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
   return events;
 }
 
-describe('Mate Runtime native-only production boundary', () => {
+describe('CogSeed Runtime native-only production boundary', () => {
   it('does not keep a Core executor import, selector, or fallback file in the production Runtime', () => {
     const worker = fs.readFileSync(path.join(runtimeRoot, 'worker.ts'), 'utf8');
     const executor = fs.readFileSync(path.join(runtimeRoot, 'runtime-executor.ts'), 'utf8');
@@ -38,7 +38,7 @@ describe('Mate Runtime native-only production boundary', () => {
     expect(fs.existsSync(path.join(runtimeRoot, 'core-executor.ts'))).toBe(false);
   });
 
-  it('constructs the default native executor from a Mate provider without a Core fallback', async () => {
+  it('constructs the default native executor from a CogSeed provider without a Core fallback', async () => {
     const provider: RuntimeModelProvider = async function* () {
       yield { type: 'delta', text: 'native answer' };
     };

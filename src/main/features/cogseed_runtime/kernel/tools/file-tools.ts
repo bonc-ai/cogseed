@@ -25,6 +25,7 @@ export interface RuntimeToolCallContext {
   writableRoots: readonly string[];
   pcDir: string;
   toolPolicy: RuntimeToolPolicy;
+  allowedSkillIds?: readonly string[];
 }
 
 export interface RuntimeToolImplementation<TInput = Record<string, unknown>> {

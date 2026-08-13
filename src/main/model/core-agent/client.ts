@@ -1034,6 +1034,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     thinkingLevel,
     nested = false,
     drainSteer,
+    toolAccess,
   } = opts;
 
   const diagnostics = createModelRunLogDiagnostics();
@@ -1251,10 +1252,12 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       systemPrompt,
       userId,
       ...(disableTools ? { disableTools: true } : {}),
+      ...(toolAccess === 'read-only' ? { toolAccess: 'read-only' } : {}),
       agentId,
       ...(agentName ? { agentName } : {}),
       ...(maxToolLoops ? { maxToolLoops } : {}),
       ...(disableTools ? { disableTools: true } : {}),
+      ...(toolAccess === 'read-only' ? { toolAccess: 'read-only' } : {}),
       providerFirstEventTimeoutMs: Math.max(1, streamIdleTimeout * 1000),
       ...(cid ? { cid } : {}),
       ...(turnId ? { turnId } : {}),

@@ -17,7 +17,7 @@ export interface MateSessionIdentity {
 }
 
 function assertSafePart(value: string, label: string): string {
-  if (!safeId(value)) throw new Error(`invalid Mate ${label}`);
+  if (!safeId(value)) throw new Error(`invalid CogSeed ${label}`);
   return value;
 }
 
@@ -40,7 +40,7 @@ export function buildMateMemberCompatibilityId(conversationId: string, actorId: 
 function parseMemberAlias(sessionId: string): { conversationId: string; actorId: string } {
   const tail = sessionId.slice('gmember-'.length);
   const separator = tail.lastIndexOf('-');
-  if (separator <= 0 || separator === tail.length - 1) throw new Error('invalid Mate gmember session id');
+  if (separator <= 0 || separator === tail.length - 1) throw new Error('invalid CogSeed gmember session id');
   const conversationId = tail.slice(0, separator);
   const actorId = tail.slice(separator + 1);
   assertSafePart(conversationId, 'conversation id');
@@ -57,7 +57,7 @@ export function resolveMateSessionIdentity(sessionId: string): MateSessionIdenti
   const externalSessionId = assertSafePart(String(sessionId || ''), 'session id');
   if (externalSessionId.startsWith('gconv-')) {
     const conversationId = assertSafePart(externalSessionId.slice('gconv-'.length), 'conversation id');
-    if (!conversationId) throw new Error('invalid Mate gconv session id');
+    if (!conversationId) throw new Error('invalid CogSeed gconv session id');
     return {
       externalSessionId,
       canonicalSessionId: buildMateCommanderSessionId(conversationId),
@@ -80,7 +80,7 @@ export function resolveMateSessionIdentity(sessionId: string): MateSessionIdenti
   }
   if (externalSessionId.startsWith('mate-session-gconv-')) {
     const conversationId = assertSafePart(externalSessionId.slice('mate-session-gconv-'.length), 'conversation id');
-    if (!conversationId) throw new Error('invalid Mate commander session id');
+    if (!conversationId) throw new Error('invalid CogSeed commander session id');
     return {
       externalSessionId,
       canonicalSessionId: externalSessionId,
@@ -109,7 +109,7 @@ export function resolveMateSessionIdentity(sessionId: string): MateSessionIdenti
       actorRole: 'commander',
     };
   }
-  throw new Error('invalid Mate session id');
+  throw new Error('invalid CogSeed session id');
 }
 
 export function hydrateMateSessionRecord(
@@ -123,6 +123,9 @@ export function hydrateMateSessionRecord(
     actorRole: row.actorRole || identity.actorRole,
     ...(row.actorId || identity.actorId ? { actorId: row.actorId || identity.actorId } : {}),
     ...(row.conversationId || identity.conversationId ? { conversationId: row.conversationId || identity.conversationId } : {}),
+    ...(row.agentId || (identity.sessionKind === 'member' ? row.actorId || identity.actorId : undefined)
+      ? { agentId: row.agentId || row.actorId || identity.actorId }
+      : {}),
     ...(row.compatibilitySessionId || identity.externalSessionId !== identity.canonicalSessionId
       ? { compatibilitySessionId: row.compatibilitySessionId || identity.externalSessionId }
       : {}),

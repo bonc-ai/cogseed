@@ -8,7 +8,7 @@ import {
   renewSchedulerLease,
 } from '../../../../src/main/features/cogseed_backend/scheduler-leases';
 
-describe('Mate scheduler lease primitives', () => {
+describe('CogSeed scheduler lease primitives', () => {
   it('acquires active leases idempotently and rejects competing holders before expiry', () => {
     let state = createSchedulerLeaseState();
     let acquire = acquireSchedulerLease(state, { userId: 'user-a', resourceId: 'sched-item-a', scopeId: 'scope-a', leaseId: 'lease-a', holderId: 'worker-a', generation: 1, now: 100, ttlMs: 50 });

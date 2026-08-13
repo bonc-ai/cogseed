@@ -81,6 +81,9 @@ export async function runRuntimeSkillTool(
   }
   try {
     const skillId = validateSkillToken(input.skill_id, 'skill_id');
+    if (!(ctx.allowedSkillIds ?? []).includes(skillId)) {
+      return formatError('E_RUNTIME_PERMISSION_DENIED', 'runtime skill is outside the persisted Agent allowlist');
+    }
     const script = validateSkillToken(input.script, 'script');
     // Security-receipt check before spawning. The Runtime worker reaches
     // `run-skill.cjs` directly, so without this a skill withheld from the

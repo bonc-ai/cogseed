@@ -33,6 +33,8 @@ describe('CogSeed Runtime protocol normalization', () => {
       context: [{ type: 'text', content: 'Only this context.' }],
       attachments: [{ type: 'file', path: allowedFile, name: 'notes.txt' }],
       agent_id: 'agent_runtime',
+      execution_kind: 'cogseed-native',
+      allowed_skill_ids: ['skill-alpha', 'skill-beta', 'skill-alpha'],
     }, { allowedRoots: [root] });
 
     expect(result.ok).toBe(true);
@@ -40,10 +42,23 @@ describe('CogSeed Runtime protocol normalization', () => {
     expect(result.request.protocol_version).toBe(MATE_AGENT_RUNTIME_PROTOCOL_VERSION);
     expect(result.request.request_id).toMatch(/^req-/);
     expect(result.request.runtime_session_id).toMatch(/^mruntime-/);
+    expect(result.request.execution_kind).toBe('cogseed-native');
+    expect(result.request.allowed_skill_ids).toEqual(['skill-alpha', 'skill-beta']);
     expect(result.request.task).toBe('Summarize this explicit input.');
     expect(result.request.context).toEqual([{ type: 'text', content: 'Only this context.' }]);
     expect(result.request.attachments?.[0].path).toBe(allowedFile);
     expect(result.request).not.toHaveProperty('cid');
+  });
+
+  it('rejects Backend-owned local CLI execution at the native Runtime boundary', () => {
+    const result = normalizeRuntimeRunRequest('runtime-protocol-user', {
+      task: 'Run through a local CLI.',
+      execution_kind: 'local-cli',
+    }, { allowedRoots: [] });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected local CLI rejection');
+    expect(result.error).toMatch(/backend|local CLI/i);
   });
 
   it('rejects caller supplied CogSeed conversation identity fields', () => {
@@ -111,7 +126,7 @@ describe('CogSeed Runtime protocol normalization', () => {
     expect(session.code).toBe('E_RUNTIME_TRANSCRIPT_PATH');
   });
 
-  it('rejects local Mate Runtime session transcript paths even when the caller passes a broad root', () => {
+  it('rejects local CogSeed Runtime session transcript paths even when the caller passes a broad root', () => {
     const uid = 'runtime-protocol-local-runtime-transcript';
     const runtimeSessionFile = paths.mateRuntimeSessionFile(uid, 'mruntime-secret');
     fs.mkdirSync(path.dirname(runtimeSessionFile), { recursive: true });

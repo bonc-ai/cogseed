@@ -43,7 +43,7 @@ export function createMateConnectorManager(options: MateConnectorManagerOptions 
     assertMateUserId(userId);
     const id = assertMateConnectorId(connectorId);
     assertCapabilityScope(userId, scope);
-    if (!canAccessConnector(scope, id)) throw new Error('Mate connector is outside the current capability scope');
+    if (!canAccessConnector(scope, id)) throw new Error('CogSeed connector is outside the current capability scope');
     const connector = await readMateConnector(userId, id);
     const key = `${userId}:${id}`;
     let current = connections.get(key);
@@ -91,9 +91,9 @@ export function createMateConnectorManager(options: MateConnectorManagerOptions 
       const { connector, connection: current } = await connection(userId, connectorId, opts.scope);
       const tools = connector.toolsCache.length ? connector.toolsCache : await current.listTools(opts);
       const selected = tools.find((tool) => tool.name === toolName);
-      if (!selected) throw new Error('Mate connector tool not found');
-      if (connector.enabledSubtools !== null && !connector.enabledSubtools.includes(toolName)) throw new Error('Mate connector tool is not enabled');
-      if (!canAccessConnectorTool(opts.scope, connector.id, toolName)) throw new Error('Mate connector tool is outside the current capability scope');
+      if (!selected) throw new Error('CogSeed connector tool not found');
+      if (connector.enabledSubtools !== null && !connector.enabledSubtools.includes(toolName)) throw new Error('CogSeed connector tool is not enabled');
+      if (!canAccessConnectorTool(opts.scope, connector.id, toolName)) throw new Error('CogSeed connector tool is outside the current capability scope');
       if (!connector.toolsCache.length) await updateMateConnectorTools(userId, connector.id, tools, 'connected');
       const result = await current.callTool(toolName, args, opts);
       return capCapabilityValue(result, `${connector.id}.${toolName}`);

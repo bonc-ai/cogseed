@@ -215,6 +215,7 @@
   "expense_agent.submit.detail": "案例：{case}\\n材料指纹：{hash}\\n\\n此操作会在飞书创建审批请求，不代表付款已获批准；指定的人工审批人仍需在飞书中审核。",
   "expense_agent.submit.unavailable": "无法显示提交确认，本次未提交。",
   "expense_agent.submit.cancelled": "已取消提交，未向飞书发送数据。",
+"cogseed.runtime_failed": "智能体未能完成本次回复。请重试。",
   "messaging.new_session_confirmation": "已开始新的对话。请告诉我接下来要处理什么。",
   "messaging.approval.approve": "已允许",
   "messaging.approval.approve_once": "已允许一次",
