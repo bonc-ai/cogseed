@@ -117,9 +117,10 @@ Conversation.space_id (string | null)
 
 **目标**：40 个 `projects.*` IPC 处理 + 项目功能迁移/砍掉 + 会话执行路径改空间作用域。
 
-- [ ] **T4.1 会话执行作用域改造（最高风险）**：`group_chat/bus.ts` 里 `resolveProjectScope(uid, projectId)` → 改成 `resolveSpaceScope(uid, spaceId)`，读 `conversation.space_id`，作用域直接取空间派生集。
+- [x] **T4.1 会话执行作用域改造（最高风险）**：`group_chat/bus.ts` 里 `resolveProjectScope(uid, projectId)` → 改成 `resolveSpaceScope(uid, spaceId)`，读 `conversation.space_id`，作用域直接取空间派生集。
   - 文件：`src/main/features/group_chat/bus.ts`（约1926、3174、3190行）
   - 验收：`npm run test:js` 全绿，尤其 agent-runner/cli 测试。
+  - ✅ 完成（2026-08-13）：`spaces.ts` 新增 `resolveSpaceScope(uid, spaceId): Promise<SpaceScope|null>`（SpaceScope={skills,agents}）——语义裁决 S1：spaceId 空/空间缺失/派生集全空（空配置或全失效引用）→ null=全局可见；否则返回空间派生集（纯 S，无 B bindings 层）。bus.ts 两处作用域站点改走 space_id：(1) dispatch 时过滤（原 1926）读 `conv.space_id` 调 resolveSpaceScope 丢弃未绑定 recipient；(2) turn 作用域（原 3186）新增 `turnSpaceId`（从 conv.space_id）+ `turnSpaceScope` 注入 commander prompt（`turnSpaceScope?.agents`）。**保留 `turnProjectId`**（workspace 路径/auto-bind/项目指令仍用，T4.2~T4.6 清）。TDD：`spaces.test.ts` 新增 5 个 resolveSpaceScope 用例（空 spaceId/空间不存在/空配置/有效 extra/全失效 → null）。验证证据：`npm run typecheck` 通过；`npx vitest run spaces.test.ts + bus.test.ts + bus-integration.test.ts` 214 用例全绿；`npm run test:js` 全量 69 failed/7816 passed——与基线 69 完全一致，**新增失败 0**（我加的 5 用例通过 + 修复了阶段 3 遗留的 2 个 lazy-features 项目入口断言）。风险：`resolveProjectScope` 仍在 projects.ts 供 getProjectScopeMeta/role-profile 注入用（T4.5 删 projects.ts 时清）；turnProjectId 与 turnSpaceId 双字段并存期。
 - [ ] **T4.2 砍 project_tasks**：删 `project_tasks.ts` + `projects.tasks.*` IPC（空间内任务=会话，不再需要）。
 - [ ] **T4.3 迁移 project_files → 空间文件树**：`project_files.ts` 改为按 space_id 组织，`projects.files.*` IPC 改为 `spaces.files.*`（或砍掉，见开放问题）。
 - [ ] **T4.4 迁移 project_library_indexer → 空间库索引**：索引键从 project_id 改 space_id。

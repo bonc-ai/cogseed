@@ -780,6 +780,29 @@ export async function resolveSpaceResourcesForUser(uid: string, space: Space): P
   });
 }
 
+/** 会话执行作用域（空间化重构阶段 4 / T4.1）——会话直接挂空间的严格作用域。
+ *  * 语义（裁决 S1）：spaceId 空 / 空间缺失 / 派生集全空（空配置或全失效引用）→
+ *  返回 null = 全局可见（不套空间 = 全资源可用）；否则返回空间派生集（skills+agents）。
+ *  与旧 resolveProjectScope 的区别：不再有项目 bindings（B）层，S∪B 退化为纯 S。 */
+export interface SpaceScope {
+  skills: string[];
+  agents: string[];
+}
+
+export async function resolveSpaceScope(
+  uid: string,
+  spaceId: string | null | undefined,
+): Promise<SpaceScope | null> {
+  if (!spaceId) return null;
+  const space = await _readSpace(uid, spaceId);
+  if (!space) return null; // 空间缺失/损坏 → 降级全局可见
+  const res = await resolveSpaceResourcesForUser(uid, space);
+  if (res.effective_skills.length === 0 && res.effective_agents.length === 0) {
+    return null; // S1：空配置/全失效 → 全局可见
+  }
+  return { skills: res.effective_skills, agents: res.effective_agents };
+}
+
 /**
  * 情境空间「角色画像」注入：项目绑空间 + 空间有主模板 → 读主+副角色模板文件
  * （个人本体唯一事实来源）的有值字段，格式化为「当前角色画像」块，由 runner 注入

@@ -390,6 +390,53 @@ describe('spaces › CRUD', () => {
   });
 });
 
+describe('spaces › resolveSpaceScope（会话作用域，T4.1）', () => {
+  it('spaceId 空 → null（全局可见）', async () => {
+    const spaces = await loadSpaces();
+    expect(await spaces.resolveSpaceScope(TEST_UID, null)).toBeNull();
+    expect(await spaces.resolveSpaceScope(TEST_UID, '')).toBeNull();
+    expect(await spaces.resolveSpaceScope(TEST_UID, undefined)).toBeNull();
+  });
+
+  it('空间不存在 → null（降级全局可见）', async () => {
+    const spaces = await loadSpaces();
+    expect(await spaces.resolveSpaceScope(TEST_UID, 'sp_nonexistent')).toBeNull();
+  });
+
+  it('空配置（无模板无 extra）→ null（裁决 S1：全局可见）', async () => {
+    visibleSkillIds.clear();
+    visibleAgentIds.clear();
+    const spaces = await loadSpaces();
+    const created = await spaces.createSpace(TEST_UID, { name: '空空间' });
+    if (!created.ok) throw new Error('create failed');
+    expect(await spaces.resolveSpaceScope(TEST_UID, created.space.space_id)).toBeNull();
+  });
+
+  it('有有效 extra 技能/智能体 → 严格作用域 {skills, agents}', async () => {
+    visibleSkillIds.clear();
+    visibleAgentIds.clear();
+    visibleSkillIds.add('sk-a');
+    visibleAgentIds.add('ag-1');
+    const spaces = await loadSpaces();
+    const created = await spaces.createSpace(TEST_UID, { name: '作用域空间' });
+    if (!created.ok) throw new Error('create failed');
+    await spaces.addSpaceResource(TEST_UID, created.space.space_id, 'skill', 'sk-a');
+    await spaces.addSpaceResource(TEST_UID, created.space.space_id, 'agent', 'ag-1');
+    const scope = await spaces.resolveSpaceScope(TEST_UID, created.space.space_id);
+    expect(scope).toEqual({ skills: ['sk-a'], agents: ['ag-1'] });
+  });
+
+  it('全部引用失效 → null（派生集全空 → 全局可见，S1）', async () => {
+    visibleSkillIds.clear();
+    visibleAgentIds.clear();
+    const spaces = await loadSpaces();
+    const created = await spaces.createSpace(TEST_UID, { name: '失效空间' });
+    if (!created.ok) throw new Error('create failed');
+    await spaces.addSpaceResource(TEST_UID, created.space.space_id, 'skill', '__gone__');
+    expect(await spaces.resolveSpaceScope(TEST_UID, created.space.space_id)).toBeNull();
+  });
+});
+
 describe('spaces › listSpaces 失效数（真实有效集合，P3394 假阳性回归）', () => {
   // student bundle: 5 cogseed skills + 3 cogseed agents
   const BUNDLE_SKILLS = ['0e847fc8685e', '3def7f0eb34a', '4a8054f512e9', '4bb1813c8335', 'aef5bf07573f'];

@@ -125,23 +125,9 @@ describe('renderer lazy feature loader', () => {
     ]);
   });
 
-  it('keeps automation out of the base project entry and loads it on demand', async () => {
-    const { context, appended } = loadFeatureLoader();
-    await context.loadRendererFeature('project');
-    expect(appended.map((script) => script.src)).toEqual([
-      './modules/library-transfer.js',
-      './modules/project-workbench.js',
-      './modules/project-detail.js',
-    ]);
-
-    await context.loadRendererFeature('auto');
-
-    expect(appended.map((script) => script.src)).toEqual([
-      './modules/library-transfer.js',
-      './modules/project-workbench.js',
-      './modules/project-detail.js',
-      './modules/auto.js',
-    ]);
+  it('removes the project feature entry after the space refactor', async () => {
+    const { context } = loadFeatureLoader();
+    await expect(context.loadRendererFeature('project')).rejects.toThrow('unknown renderer feature: project');
   });
 
   it('opens the recipient picker before loading tab-specific catalogs', () => {
@@ -182,14 +168,10 @@ describe('renderer lazy feature loader', () => {
     expect(lazyBoundary).toContain('_loadViewFeature(feature, view, run)');
   });
 
-  it('primes the cached project shell before deferring the project feature', () => {
+  it('removes the project view branch after the space refactor', () => {
     const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/boot.js'), 'utf8');
-    const projectBranch = source.slice(source.indexOf("} else if (view === 'project')"));
-
-    expect(projectBranch.indexOf('primeProjectDetailShell')).toBeGreaterThanOrEqual(0);
-    expect(projectBranch.indexOf('primeProjectDetailShell')).toBeLessThan(
-      projectBranch.indexOf("_deferSidebarNavWork('project-tab-load'"),
-    );
+    expect(source).not.toContain("} else if (view === 'project')");
+    expect(source).not.toContain('primeProjectDetailShell');
   });
 
   it('upgrades the Agent startup summary once without force-refreshing every tab visit', () => {

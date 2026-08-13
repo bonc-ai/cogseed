@@ -1910,23 +1910,18 @@ async function _enqueueBody(
   }
   to = Array.from(new Set(to));
 
-  // Project scope at dispatch time: if the conversation belongs to a
-  // project, drop any recipient agent_id that isn't bound to the project
-  // (CLAUDE.md §6 — "if recipient unavailable, hand off to commander").
-  // Reserved ids (user / commander) always pass through. After filtering,
-  // an empty `to` falls through to the sender-default rule below — for
-  // user-initiated text that means "go to commander", which is the
-  // explicit hand-off the requirement asks for. Cheap: one project.json
-  // + bindings.json read,
-  // resolveProjectScope already memoises file existence checks. Skipped
-  // when the conv has no project_id (orphan = unrestricted).
+  // 空间作用域 at dispatch time: 会话挂空间 → 丢弃未绑定空间的 recipient
+  // （CLAUDE.md §6 — "recipient 不可用则转交 commander"）。reserved ids
+  // （user/commander）恒放行。过滤后空 `to` 落入下方 sender-default 规则。
+  // 廉价：一次 space.json 读 + 空间派生集解析，resolveSpaceScope 已 memoise
+  // 文件存在性。会话无 space_id（orphan）→ 跳过（不受限）。
   try {
     const { getConversation } = await import("../chats");
     const conv = await getConversation(uid, cid);
-    const projectId = (conv as any)?.project_id;
-    if (typeof projectId === "string" && projectId) {
-      const projectsFeat = await import("../projects");
-      const scope = await projectsFeat.resolveProjectScope(uid, projectId);
+    const spaceId = (conv as any)?.space_id;
+    if (typeof spaceId === "string" && spaceId) {
+      const spacesFeat = await import("../spaces");
+      const scope = await spacesFeat.resolveSpaceScope(uid, spaceId);
       if (scope) {
         const bound = new Set(scope.agents);
         const before = to;
@@ -1934,13 +1929,13 @@ async function _enqueueBody(
         if (to.length !== before.length) {
           const dropped = before.filter((id) => !to.includes(id));
           log.info(
-            `dispatch project-scope drop cid=${cid} pid=${projectId} from=${fromActorId} dropped=${dropped.join(",")}`,
+            `dispatch space-scope drop cid=${cid} sid=${spaceId} from=${fromActorId} dropped=${dropped.join(",")}`,
           );
         }
       }
     }
   } catch (err) {
-    log.warn(`project-scope filter cid=${cid}: ${(err as Error).message}`);
+    log.warn(`space-scope filter cid=${cid}: ${(err as Error).message}`);
   }
 
   // P3394 Wake Gate: a human mention is a dispatch intent, not implicit
@@ -3168,32 +3163,30 @@ async function runActorTurnBody(
   // consumer below (CLI cwd fallback, streamChatWithModel, etc.) without
   // re-reading the conv index per tool call.
   let turnProjectId: string | undefined;
+  let turnSpaceId: string | undefined;
   try {
     const { getConversation } = await import("../chats");
     const _conv = await getConversation(uid, cid);
     const _pid = (_conv as any)?.project_id;
     if (typeof _pid === "string" && _pid) turnProjectId = _pid;
+    const _sid = (_conv as any)?.space_id;
+    if (typeof _sid === "string" && _sid) turnSpaceId = _sid;
   } catch {
     /* default scope */
   }
 
-  // Project bindings (strict scope of agents visible to the commander LLM).
-  // `null` = orphan conversation OR stale projectId — falls back to legacy
-  // global visibility. Resolved once per turn alongside the workspace
-  // resolver and threaded into the commander prompt. See
-  // CLAUDE.md §6: project scope is the outer intersection BEFORE the 4
-  // enable-filter sites; do not add a 5th.
-  let turnProjectScope: import("../projects").ProjectBindings | null = null;
-  if (turnProjectId) {
+  // 空间作用域（删项目层后：会话直接挂空间，严格作用域 = 空间派生集 agents）。
+  // `null` = orphan 会话（无 space_id）或空间缺失 → 回退全局可见。每 turn 解析一次，
+  // 与 workspace resolver 并列，注入 commander prompt。见 CLAUDE.md §6（外层交集，
+  // 4 个 enable-filter 站点之前，勿加第 5 个）。
+  let turnSpaceScope: import("../spaces").SpaceScope | null = null;
+  if (turnSpaceId) {
     try {
-      const projectsFeat = await import("../projects");
-      turnProjectScope = await projectsFeat.resolveProjectScope(
-        uid,
-        turnProjectId,
-      );
+      const spacesFeat = await import("../spaces");
+      turnSpaceScope = await spacesFeat.resolveSpaceScope(uid, turnSpaceId);
     } catch (err) {
       log.warn(
-        `resolve project scope cid=${cid} pid=${turnProjectId}: ${(err as Error).message}`,
+        `resolve space scope cid=${cid} sid=${turnSpaceId}: ${(err as Error).message}`,
       );
     }
   }
@@ -3416,7 +3409,7 @@ async function runActorTurnBody(
       systemPrompt = await buildCommanderSystemPrompt(
         uid,
         cid,
-        turnProjectScope?.agents ?? null,
+        turnSpaceScope?.agents ?? null,
       );
       extraTools = await buildCommanderExtraTools(
         state,
