@@ -28,6 +28,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import {
+  userLocalRoot,
   projectMetaFile,
   projectChatIndexFile,
   projectChatsDir,
@@ -308,45 +309,130 @@ function migrateProjectToSpace(uid: string, pid: string, sid: string, stats: Pro
   stats.attachments_moved += moveDirSafe(uid, projectChatAttachmentsDir(uid, pid), spaceChatAttachmentsDir(uid, sid), stats.warnings);
   stats.artifacts_moved += moveDirSafe(uid, projectChatArtifactsDir(uid, pid), spaceChatArtifactsDir(uid, sid), stats.warnings);
 
-  stats.projects_migrated += 1;
+  // 只有真有会话被迁才算「项目已迁移」，空项目/force 重跑（源已空）不计数。
+  if (tagged.length > 0) stats.projects_migrated += 1;
+}
+
+// ── 幂等 + 加锁 + 版本标记（T0.4）─────────────────────────────────────────
+
+const STALE_LOCK_MS = 10 * 60 * 1000;
+
+export interface ProjectLayoutMigrationV5Options {
+  /** 忽略 completed 标记（sync 拉取迟到数据后强制重跑）。 */
+  force?: boolean;
+}
+
+function markerFile(uid: string): string {
+  return path.join(userLocalRoot(uid), 'migrations', 'project-layout-v5.json');
+}
+
+function lockFile(uid: string): string {
+  return path.join(userLocalRoot(uid), 'migrations', 'project-layout-v5.lock');
+}
+
+function alreadyApplied(uid: string): boolean {
+  const marker: any = readJsonSync(markerFile(uid));
+  return Number(marker?.version) === MIGRATION_VERSION;
+}
+
+function processIsAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+function lockIsActive(file: string): boolean {
+  const raw: any = readJsonSync(file);
+  const pid = Number(raw?.pid) || 0;
+  if (pid && processIsAlive(pid)) return true;
+  try {
+    return Date.now() - fs.statSync(file).mtimeMs < STALE_LOCK_MS && !pid;
+  } catch {
+    return false;
+  }
+}
+
+function acquireMigrationLock(uid: string): number | null {
+  const file = lockFile(uid);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const fd = fs.openSync(file, 'wx');
+      fs.writeSync(fd, JSON.stringify({ pid: process.pid, started_at_ms: Date.now() }), null, 'utf8');
+      fs.fsyncSync(fd);
+      return fd;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return null;
+      if (lockIsActive(file)) return null;
+      try { fs.rmSync(file, { force: true }); }
+      catch { return null; }
+    }
+  }
+  return null;
 }
 
 /**
- * T0.3 搬移执行入口：对每个有 space_id 的项目，把会话/会话状态/附件/产物搬到
- * 空间内容目录，并把会话索引行 `space_id` 置为项目 space_id（project_id 保留，双字段兼容）。
- * 未加锁/未建 marker/未注册——T0.4 补（幂等 + boot 注册）。
+ * v5 搬移执行入口（T0.3 搬移 + T0.4 幂等/加锁/版本标记）。
+ * 对每个有 space_id 的项目，把会话/会话状态/附件/产物搬到空间内容目录，
+ * 并把会话索引行 `space_id` 置为项目 space_id（project_id 保留，双字段兼容）。
+ * 幂等：marker 版本 = MIGRATION_VERSION 时直接返回空统计；加锁防并发；force 强制重跑。
  */
-export function migrateProjectLayoutV5(uid: string): ProjectSpaceMoveStats {
+export function migrateProjectLayoutV5(
+  uid: string,
+  opts: ProjectLayoutMigrationV5Options = {},
+): ProjectSpaceMoveStats {
   const stats = emptyMoveStats();
   if (!safeId(uid)) {
     stats.warnings.push(`invalid uid: ${String(uid)}`);
     return stats;
   }
+  if (!opts.force && alreadyApplied(uid)) return stats;
 
-  const before = collectProjectSpaceStats(uid);
+  fs.mkdirSync(path.dirname(markerFile(uid)), { recursive: true });
+  const fd = acquireMigrationLock(uid);
+  if (fd === null) return stats;
 
-  for (const pid of listProjectIds(uid)) {
-    const meta: any = readJsonSync(projectMetaFile(uid, pid));
-    const sid = typeof meta?.space_id === 'string' && safeId(meta.space_id) ? meta.space_id : '';
-    if (!sid) continue; // orphan 项目（无 space_id）→ 阶段 4 处理
-    try {
-      migrateProjectToSpace(uid, pid, sid, stats);
-    } catch (err) {
-      stats.warnings.push(`migrate project ${pid} → space ${sid} failed: ${(err as Error).message}`);
+  try {
+    const before = collectProjectSpaceStats(uid);
+
+    for (const pid of listProjectIds(uid)) {
+      const meta: any = readJsonSync(projectMetaFile(uid, pid));
+      const sid = typeof meta?.space_id === 'string' && safeId(meta.space_id) ? meta.space_id : '';
+      if (!sid) continue; // orphan 项目（无 space_id）→ 阶段 4 处理
+      try {
+        migrateProjectToSpace(uid, pid, sid, stats);
+      } catch (err) {
+        stats.warnings.push(`migrate project ${pid} → space ${sid} failed: ${(err as Error).message}`);
+      }
     }
-  }
 
-  if (stats.projects_migrated || stats.warnings.length) {
-    log.info('project layout v5 (space) migration complete', {
-      uid,
-      before: {
-        projects_total: before.projects_total,
-        projects_with_space: before.projects_with_space,
-        projects_orphan: before.projects_orphan,
-        conversations_total: before.conversations_total,
-      },
-      ...stats,
+    writeJsonSync(markerFile(uid), {
+      version: MIGRATION_VERSION,
+      migrated_at: new Date().toISOString(),
+      stats,
     });
+
+    if (stats.projects_migrated || stats.warnings.length) {
+      log.info('project layout v5 (space) migration complete', {
+        uid,
+        before: {
+          projects_total: before.projects_total,
+          projects_with_space: before.projects_with_space,
+          projects_orphan: before.projects_orphan,
+          conversations_total: before.conversations_total,
+        },
+        ...stats,
+      });
+    }
+  } catch (err) {
+    stats.warnings.push((err as Error).message);
+    log.warn('project layout v5 (space) migration failed', { uid, error: (err as Error).message });
+  } finally {
+    try { fs.closeSync(fd); } catch { /* best effort */ }
+    try { fs.unlinkSync(lockFile(uid)); } catch { /* best effort */ }
   }
   return stats;
 }

@@ -64,9 +64,10 @@ Conversation.space_id (string | null)
   - 文件：`src/main/util/migrate-project-layout-v5.ts` + `src/main/paths.ts`（新增 `spaceChatsDir` 等路径函数）
   - 验收：构造一个含 project+space_id 的测试数据，跑迁移，断言文件落到 `cloud/spaces/<sid>/` 且会话 JSON 带 space_id。
   - ✅ 完成（2026-08-13）：`paths.ts` 新增 `spaceContentDir/spaceChatsDir/spaceChatIndexFile/spaceGroupChat*/spaceSessionsDir/spaceSession*/spaceChatAttachmentsDir/spaceChatArtifactsDir/spaceArtifactDir` 全套（含 `assertSpaceSegment` 路径段防护）；空间内容目录 `cloud/spaces/<sid>/` 与空间 meta 单文件 `cloud/spaces/<sid>.json` 同层共存（`_listSpaceIds` 只认 `.json` 文件，不冲突）。`migrateProjectLayoutV5` 实现搬移：索引行打 `space_id`（`= project.space_id`，**非** `= conversation.project_id`，已按目标架构消歧）+ 多项目同空间按 cid 合并索引、chats(jsonl+group)/sessions/attachments/artifacts 整目录搬（目标存在→逐文件合并、冲突→`.legacy-v5-<hash>` 保留不覆盖）。验证证据：`npm run typecheck` 通过；构造 3 项目（2 指向同一空间 + 1 orphan）跑迁移断言全过（空间索引 3 行全带 space_id 且 project_id 保留、文件落 `spaces/<sid>/`、orphan 原地不动）；`npm run smoke` OK。风险：未加锁/未建 marker/未注册（T0.4 补）；orphan 项目本阶段不搬，其 `projects/<pid>/` 待阶段 4 清。
-- [ ] **T0.4 迁移注册 + 幂等**：在 `boot_init` 注册 v5 迁移（参考 v4 的注册点），加锁 + 版本标记，重复启动不重复迁移。
+- [x] **T0.4 迁移注册 + 幂等**：在 `boot_init` 注册 v5 迁移（参考 v4 的注册点），加锁 + 版本标记，重复启动不重复迁移。
   - 文件：`src/main/util/boot_init.ts`
   - 验收：连跑两次 smoke，第二次迁移统计为 0（幂等）。
+  - ✅ 完成（2026-08-13）：v5 迁移加 `markerFile`(`local/migrations/project-layout-v5.json`，版本=5)/`lockFile`(wx+pid+stale 10min)/`alreadyApplied`/`acquireMigrationLock`；`migrateProjectLayoutV5(uid, {force?})` 幂等（marker 命中直接返回空统计）+ 加锁 + 写完 marker。**注册点修正**：实际注册在 `features/users.ts::activateUser`（紧接 v4 之后），非 plan 原写的 `boot_init.ts`——v4 的注册点本来就在 activateUser，boot_init.ts 只管 boot 阶段调度不挂迁移。验证证据：`npm run typecheck` 通过；fixture 连跑 3 次（第 1 次搬 1 会话、第 2 次 0、第 3 次 force 0 且索引不重复）断言全过；`npm run smoke` OK。🔴 风险（阶段 0~3 中间态）：注册后对真实数据启动会搬走已绑空间的会话，而执行路径（conversationLayout/resolveProjectScope）仍读 projects/，导致这些会话暂时不可见——需阶段 4（T4.1）改空间根后整体对外。开发期勿对真实数据跑完整 app。
 
 ### 阶段 1：空间三 tab 数据层（依赖阶段 0）
 
