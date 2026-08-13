@@ -14,6 +14,8 @@ import type {
   TouchpointLedgerFile,
 } from './types';
 
+const ACTION_LABEL_KEYS = new Set(['open', 'snooze', 'confirm', 'reject', 'edit', 'approve', 'adjust', 'retry', 'forget_source', 'revoke_grant']);
+
 const locks = new Map<string, Mutex>();
 const TERMINAL_STATUSES = new Set<TouchpointIntentStatus>(['sent', 'failed', 'expired', 'cancelled', 'suppressed']);
 function timestampIso(): string {
@@ -90,6 +92,9 @@ function normalizeIntent(raw: unknown): TouchpointIntent | null {
       version: 1 as const,
       allowedActions: [...candidate.actionContract.allowedActions],
       ...(contractInput ? { input: contractInput } : {}),
+      ...(candidate.actionContract.buttonLabels && typeof candidate.actionContract.buttonLabels === 'object'
+        ? { buttonLabels: Object.fromEntries(Object.entries(candidate.actionContract.buttonLabels).filter(([key, value]) => ACTION_LABEL_KEYS.has(key) && typeof value === 'string').map(([key, value]) => [key, String(value).trim().slice(0, 80)])) as TouchpointActionContract['buttonLabels'] }
+        : {}),
     }
     : undefined;
   return {

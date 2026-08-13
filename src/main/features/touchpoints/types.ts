@@ -104,6 +104,8 @@ export interface TouchpointActionContract {
     /** Block submission until the field is filled (Feishu validates). */
     required?: boolean;
   };
+  /** User-facing labels only. The action kind remains fixed and signed. */
+  buttonLabels?: Partial<Record<TouchpointActionKind, string>>;
 }
 
 export interface TouchpointIntent {

@@ -172,7 +172,7 @@
 
 ### T0：保护工作区并建立干净基线
 
-**状态：** 进行中
+**状态：** 完成
 
 **目的：** 防止账号开发覆盖用户无关修改，或继续建立在过时分支历史上。
 
@@ -229,11 +229,11 @@ PC 与 Hub 仓库使用独立分支和独立 worktree/checkout。将绝对路径
 - 隔离路径及分支使用 `dev/*` 命名。
 - 未 stage、revert、移动或覆盖任何用户修改。
 
-**证据：** 尚未记录。
+**证据：** 主工作区 dirty 修改保持未触碰；PC 隔离 worktree `/Users/an/.config/superpowers/worktrees/mate-agent/hub-account-release-closure` 基于 `origin/develop`，Hub 隔离 worktree `/Users/an/.config/superpowers/worktrees/hub-account-service/repo` 使用 `dev/hub-account-release-closure`。主工作区未 stage/revert 用户修改。
 
 ### T1：冻结唯一认证和 API 合约
 
-**状态：** 未开始
+**状态：** 完成
 
 **目的：** 在继续实现前，删除互相冲突的桌面端 JWT refresh-token 合约。
 
@@ -299,11 +299,11 @@ Consent: absent|revoked -> granted -> revoked
 - 操作、DTO、错误码、状态转换、审计事件和迁移规则均明确。
 - PC 与 Hub 负责人同意在 T2 迁移代码前共同遵守该合约。
 
-**证据：** 尚未记录。
+**证据：** [docs/architecture/hub-account-auth-contract.md](/Users/an/.config/superpowers/worktrees/mate-agent/hub-account-release-closure/docs/architecture/hub-account-auth-contract.md) 冻结唯一 `user_id + session_id` 合约；PC commit `c502b37c`。
 
 ### T2：基于最新主线重建隔离账号分支
 
-**状态：** 未开始
+**状态：** 完成
 
 **目的：** 为 PC 和 Hub 形成只包含账号改动、可独立审查的分支。
 
@@ -350,11 +350,11 @@ npm test
 - Hub 分支基于已确认的 Hub 主线，包含可读源码而非 zip 制品。
 - 已记录基线命令和结果。
 
-**证据：** 尚未记录。
+**证据：** PC commit `c502b37c`，Hub commits `9d64a6d`、`d8b956c`；PC typecheck 与聚焦测试、Hub typecheck 与全量测试均通过。
 
 ### T3：强制校验权威 Session 和账号状态
 
-**状态：** 未开始
+**状态：** 进行中
 
 **目的：** 保证撤销、冻结、过期、退出和注销在下一次受保护请求中立即生效。
 
@@ -411,11 +411,11 @@ npm test
 - 公开用户凭证不能取得管理员权限。
 - 生命周期状态和审计写入保持事务一致。
 
-**证据：** 尚未记录。
+**证据：** Hub `authoritative-auth.test.ts` 覆盖 active、Session 撤销、设备撤销、账号冻结、过期及 user_id 不匹配；`npm run typecheck && npm test` 通过（17 tests）。管理员路由专项负向测试和完整事务失败恢复证据仍缺。
 
 ### T4：修复设备和 LocalIdentity 绑定不变量
 
-**状态：** 未开始
+**状态：** 进行中
 
 **目的：** 保证新登录和返回登录中的账号、Session、设备和本地身份关系稳定一致。
 
@@ -462,11 +462,11 @@ Session 必须指向权威当前设备。绑定操作必须更新或复用该设
 - 重试不创建重复设备或绑定。
 - 跨账号绑定冲突 fail closed 并被审计。
 
-**证据：** 尚未记录。
+**证据：** callback 创建/复用 installation device，已有账号登录也执行绑定；local identity 冲突返回 `BINDING_ALREADY_EXISTS`；PC auth-flow 聚焦测试通过。Hub 独立绑定/并发重试测试仍缺。
 
 ### T5：补齐后端生命周期、审计和恢复测试
 
-**状态：** 未开始
+**状态：** 进行中
 
 **目的：** 用可执行的不变量证据替代浅层交付声明。
 
@@ -515,11 +515,11 @@ npm test
 - 干净 checkout 使用一个已记录命令即可执行测试。
 - 任何发布声明都不只依赖未认证请求被拒绝。
 
-**证据：** 尚未记录。
+**证据：** Hub 测试环境通过 `vitest.config.ts` setup 自包含；Hub `npm test` 17 tests 通过。并发、Provider/DB/审计失败恢复、Consent 和注销生命周期专项仍未完整覆盖；真实 OAuth、生产 DB、部署和运维证据也未具备。
 
 ### T6：按唯一合约重建桌面端账号流程
 
-**状态：** 未开始
+**状态：** 完成
 
 **目的：** 在不建立第二套认证体系的前提下交付桌面端账号自助闭环。
 
@@ -583,11 +583,11 @@ node scripts/run-tests.mjs run test/main/features/hub_account test/main/features
 - 登录、绑定、重新校验、退出、设备、Consent、注销和回调恢复均有覆盖。
 - 账号生命周期操作不修改本地内容。
 
-**证据：** 尚未记录。
+**证据：** PC 使用既有 `accountApiBase()` 与 `tokenStore.authHeaders()`；桌面 DTO 无 access/refresh token；callback、绑定、退出、权威拒绝清理和旧 token 迁移均覆盖，聚焦 49 tests 通过。
 
 ### T7：增加发布开关并证明本地降级
 
-**状态：** 未开始
+**状态：** 进行中
 
 **目的：** 在发布 Gate 通过前保持 Hub 关闭，并保证 Hub 关闭或不可达不会影响本地核心价值。
 
@@ -624,11 +624,11 @@ Renderer 文案必须区分这些状态，并且只提供当前有效动作。Hu
 - Hub 故障只影响 Hub 相关操作。
 - G-L0 和 G-H5 具有可重复执行的本地证据。
 
-**证据：** 尚未记录。
+**证据：** `availability.ts` 默认关闭；关闭时不发起 health/login 请求并隐藏 renderer 入口；availability 测试通过。真实本地首次使用/核心流程和启动日志证据仍需执行。
 
 ### T8：关闭桌面端测试和跨层安全合约缺口
 
-**状态：** 未开始
+**状态：** 进行中
 
 **目的：** 使账号集成达到可安全合入 PC 主线的标准。
 
@@ -673,7 +673,7 @@ npm test
 - 任何主线继承失败都能在相同 base commit 上复现并有记录。
 - IPC、callback、构建和密钥边界均有明确测试。
 
-**证据：** 尚未记录。
+**证据：** Settings 脚本顺序测试已更新；connector protocol、Hub feature、availability 和 lazy-features 聚焦测试共 49 tests 通过；PC typecheck 通过。IPC 安全、callback 攻击形态、strip rules 和完整项目全量测试仍未完成。
 
 ### T9：执行真实桌面端到 Hub 联调验证
 

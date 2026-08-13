@@ -365,6 +365,8 @@ interface FeishuCardActionEvent {
     /** Input values of the card's input fields, keyed by input `name`
      * (Feishu attaches this whenever the card contains an input element). */
     form?: Record<string, unknown>;
+    /** Form values returned by Feishu for input/select elements. */
+    form_value?: Record<string, unknown>;
   };
 }
 
@@ -391,10 +393,13 @@ function normalizeFeishuCardAction(
   // Input values ride alongside the button value, keyed by the input `name`.
   // Same primitive-only filter; card-defined fields (e.g. `tp_content`) are
   // forwarded to the action handler verbatim.
-  const form = event.action?.form && typeof event.action.form === 'object' ? event.action.form : {};
-  for (const [key, entry] of Object.entries(form)) {
+  const forms = [event.action?.form_value, event.action?.form];
+  for (const form of forms) {
+    if (!form || typeof form !== 'object') continue;
+    for (const [key, entry] of Object.entries(form)) {
     if (entry === null || typeof entry === 'string' || typeof entry === 'number' || typeof entry === 'boolean') {
       payload[key] = entry as JsonCompatibleValue;
+    }
     }
   }
   return {

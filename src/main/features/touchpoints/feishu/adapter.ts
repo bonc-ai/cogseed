@@ -2,6 +2,7 @@ import { t } from '../../../i18n';
 import * as manager from '../../messaging/manager';
 import * as registry from '../../messaging/registry';
 import { buildTouchpointCard } from './card';
+import { applyTouchpointTemplate } from '../config';
 import type {
   TouchpointChannelAdapter,
   TouchpointDeliveryResult,
@@ -49,6 +50,7 @@ export function createFeishuTouchpointAdapter(options: { instanceId: string }): 
   return {
     channel: 'feishu',
     async send(userId: string, intent: TouchpointIntent): Promise<TouchpointDeliveryResult> {
+      const renderedIntent = await applyTouchpointTemplate(userId, intent);
       const instance = await registry.getInstance(userId, instanceId);
       if (!instance) throw new FeishuTouchpointAdapterError('instance_not_found', 'Feishu messaging instance was not found.');
       if (instance.platform !== 'feishu_lark') {
@@ -70,9 +72,9 @@ export function createFeishuTouchpointAdapter(options: { instanceId: string }): 
         const { entry } = await manager.sendProactive(userId, {
           instanceId,
           recipientId: instance.ownerExternalUserId,
-          text: renderFeishuTouchpointText(intent),
-          ...(intent.actionContract ? { card: buildTouchpointCard(intent) } : {}),
-          sourceKey: `touchpoint:${intent.intentId}`,
+          text: renderFeishuTouchpointText(renderedIntent),
+          ...(renderedIntent.actionContract ? { card: buildTouchpointCard(renderedIntent) } : {}),
+          sourceKey: `touchpoint:${renderedIntent.intentId}`,
           signal: null,
         });
         if (!entry.externalDeliveryId) {

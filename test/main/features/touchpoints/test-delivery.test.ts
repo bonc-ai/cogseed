@@ -55,7 +55,7 @@ describe('touchpoint test approval card delivery', () => {
     expect(call.recipientId).toBe('ou_owner');
     const elements = (call.card?.elements as Array<Record<string, unknown>>) || [];
     const input = elements.find((element) => element.tag === 'input');
-    expect((input as Record<string, unknown>)?.name).toBe('tp_content');
+    expect((input as Record<string, unknown>)?.element_id).toBe('tp_content');
     const actionRow = elements.find((element) => element.tag === 'action');
     expect((actionRow?.actions as Array<Record<string, unknown>>).length).toBeGreaterThanOrEqual(2);
 

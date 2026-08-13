@@ -1893,7 +1893,7 @@ describe('feishu card action normalization', () => {
       action: {
         tag: 'button',
         value: { action: 'touchpoint', intent_id: 'intent-1', kind: 'approve' },
-        form: { tp_content: '同意，但需补材料', tp_other: 3, tp_bad: { nested: true } },
+        form_value: { tp_content: '同意，但需补材料', tp_other: 3, tp_bad: { nested: true } },
       },
     });
     expect(action?.payload).toMatchObject({
@@ -1904,6 +1904,17 @@ describe('feishu card action normalization', () => {
     });
     // Non-primitive form entries are dropped like button values.
     expect(action?.payload).not.toHaveProperty('tp_bad');
+
+    const legacyAction = _adapterTestHooks.normalizeFeishuCardAction(instance, {
+      context: { open_message_id: 'om_2', open_chat_id: 'oc_1' },
+      operator: { open_id: 'ou_admin' },
+      action: {
+        tag: 'button',
+        value: { action: 'touchpoint' },
+        form: { tp_content: '旧版回调仍可兼容' },
+      },
+    });
+    expect(legacyAction?.payload.tp_content).toBe('旧版回调仍可兼容');
   });
 });
 

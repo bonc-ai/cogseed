@@ -122,7 +122,7 @@ describe('Feishu touchpoint card', () => {
     const elements = card.elements as Array<Record<string, unknown>>;
     const input = elements.find((element) => element.tag === 'input');
     expect(input).toBeTruthy();
-    expect((input as Record<string, unknown>).name).toBe('tp_content');
+    expect((input as Record<string, unknown>).element_id).toBe('tp_content');
     expect((input as Record<string, unknown>).required).toBe(true);
     expect(JSON.stringify((input as Record<string, unknown>).label)).toContain('审批意见');
     expect(JSON.stringify((input as Record<string, unknown>).placeholder)).toContain('选填');

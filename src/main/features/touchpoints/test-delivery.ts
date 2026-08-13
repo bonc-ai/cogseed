@@ -6,6 +6,7 @@ import { createTouchpointIntent } from './intents';
 import { reserveTouchpointIntent } from './ledger';
 import { dispatchTouchpointIntent } from './orchestrator';
 import { createFeishuTouchpointAdapter } from './feishu/adapter';
+import { getTouchpointConfig, resolveTouchpointInstanceId } from './config';
 
 export interface TestApprovalCardDeliveryResult {
   ok: boolean;
@@ -30,9 +31,14 @@ export async function testApprovalCardDelivery(
 ): Promise<TestApprovalCardDeliveryResult> {
   const instances = await messagingManager.listInstances(userId);
   const candidates = instances.filter((instance) => instance.platform === 'feishu_lark' && instance.enabled);
-  const target = instanceId?.trim()
-    || candidates.find((instance) => instance.status.kind === 'connected')?.id
-    || candidates[0]?.id;
+  const touchpointConfig = await getTouchpointConfig(userId);
+  const configured = await resolveTouchpointInstanceId(userId, 'task_approval', instanceId);
+  const hasExplicitSelection = Boolean(instanceId?.trim())
+    || Object.prototype.hasOwnProperty.call(touchpointConfig.routes, 'task_approval')
+    || touchpointConfig.defaultInstanceId !== null;
+  const target = hasExplicitSelection
+    ? (configured && candidates.some((instance) => instance.id === configured) ? configured : undefined)
+    : candidates.find((instance) => instance.status.kind === 'connected')?.id || candidates[0]?.id;
   if (!target) return { ok: false, code: 'instance_unknown', error: '没有可用的飞书消息实例' };
 
   const now = new Date();

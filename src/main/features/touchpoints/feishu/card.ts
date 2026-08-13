@@ -30,7 +30,7 @@ function buildTouchpointButton(intent: TouchpointIntent, action: TouchpointActio
   const actionId = randomUUID();
   return {
     tag: 'button',
-    text: { tag: 'plain_text', content: t(`touchpoints.card.button.${action}`) },
+    text: { tag: 'plain_text', content: intent.actionContract?.buttonLabels?.[action] || t(`touchpoints.card.button.${action}`) },
     type: ACTION_BUTTON_TYPES[action] || 'default',
     // The envelope travels inside the button value so `card.action.trigger`
     // events carry everything the receipt contract needs. Values are limited
@@ -68,7 +68,10 @@ export function buildTouchpointCard(intent: TouchpointIntent): Record<string, Js
   if (input) {
     elements.push({
       tag: 'input',
-      name: TOUCHPOINT_CARD_INPUT_ID,
+      // Feishu interactive cards identify form controls with element_id.
+      // `name` is not a valid input-component field and is silently ignored
+      // by Feishu, leaving the card without a visible text box.
+      element_id: TOUCHPOINT_CARD_INPUT_ID,
       label: { tag: 'plain_text', content: input.label.slice(0, 120) },
       ...(input.placeholder ? { placeholder: { tag: 'plain_text', content: input.placeholder.slice(0, 120) } } : {}),
       ...(input.required === true ? { required: true } : {}),
