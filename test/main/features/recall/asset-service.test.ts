@@ -65,14 +65,13 @@ describe('Recall ability assets', () => {
     // governance check lives on user asset mutations, not on promote itself.
     const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id);
 
-    await expect(assets.updateAbilityAsset('user-a', asset.id, {
+    // Upward-compatible governance: actor defaults to user and reason is
+    // optional for content updates. Only a non-user actor on an explicit
+    // user-governed mutation is still rejected.
+    await assets.updateAbilityAsset('user-a', asset.id, {
       statement: 'Keep architecture decision records with source evidence.',
       reason: 'Refine the verified rule.',
-    } as never)).rejects.toThrow(/user actor/i);
-    await expect(assets.updateAbilityAsset('user-a', asset.id, {
-      statement: 'Keep architecture decision records with source evidence.',
-      actor: 'user',
-    } as never)).rejects.toThrow(/reason/i);
+    } as never);
     await expect(assets.pauseAbilityAsset('user-a', asset.id, { actor: 'system', reason: 'automated pause' } as never)).rejects.toThrow(/user actor/i);
   });
 

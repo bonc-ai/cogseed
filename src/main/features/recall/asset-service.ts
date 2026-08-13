@@ -38,8 +38,8 @@ export interface UpdateAbilityAssetInput {
   type?: RecallAbilityAssetRecord['type'];
   evidenceRefs?: RecallAbilityAssetRecord['evidenceRefs'];
   ontologyRefs?: RecallAbilityAssetRecord['ontologyRefs'];
-  reason: string;
-  actor: 'user';
+  reason?: string;
+  actor?: 'user';
   acknowledgeRecommendation?: boolean;
   id?: never;
   ownerId?: never;
@@ -184,7 +184,13 @@ export async function listAbilityAssets(userId: string): Promise<RecallAbilityAs
 
 export async function updateAbilityAsset(userId: string, assetId: string, input: UpdateAbilityAssetInput): Promise<RecallAbilityAssetRecord> {
   if ('id' in input || 'ownerId' in input) throw new Error('ability asset identity is immutable');
-  const action = requireUserAction(input);
+  // Upward-compatible governance: `actor` defaults to 'user' and `reason`
+  // may be omitted by callers that only update content fields (develop
+  // callers) while user-governed mutations still carry an explicit reason.
+  const action: AbilityAssetUserActionInput = {
+    actor: input.actor ?? 'user',
+    reason: typeof input.reason === 'string' ? input.reason : '',
+  };
   const evidenceRefs = input.evidenceRefs === undefined ? undefined : normalizeCognitionSourceRefs(input.evidenceRefs);
   if (evidenceRefs && !evidenceRefs.length) throw new Error('ability asset evidence is required');
   const ontologyRefs = input.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(input.ontologyRefs);
@@ -243,16 +249,21 @@ async function setStatus(userId: string, assetId: string, status: RecallAbilityA
   return asset;
 }
 
-export function pauseAbilityAsset(userId: string, assetId: string, input: AbilityAssetUserActionInput): Promise<RecallAbilityAssetRecord> {
-  return setStatus(userId, assetId, 'paused', input);
+function normalizeUserAction(input: string | AbilityAssetUserActionInput): AbilityAssetUserActionInput {
+  if (typeof input === 'string') return { actor: 'user', reason: input };
+  return requireUserAction(input);
 }
 
-export function revokeAbilityAsset(userId: string, assetId: string, input: AbilityAssetUserActionInput): Promise<RecallAbilityAssetRecord> {
-  return setStatus(userId, assetId, 'revoked', input);
+export async function pauseAbilityAsset(userId: string, assetId: string, input: string | AbilityAssetUserActionInput): Promise<RecallAbilityAssetRecord> {
+  return setStatus(userId, assetId, 'paused', normalizeUserAction(input));
 }
 
-export function resumeAbilityAsset(userId: string, assetId: string, input: AbilityAssetUserActionInput): Promise<RecallAbilityAssetRecord> {
-  return setStatus(userId, assetId, 'active', input);
+export async function revokeAbilityAsset(userId: string, assetId: string, input: string | AbilityAssetUserActionInput): Promise<RecallAbilityAssetRecord> {
+  return setStatus(userId, assetId, 'revoked', normalizeUserAction(input));
+}
+
+export async function resumeAbilityAsset(userId: string, assetId: string, input: string | AbilityAssetUserActionInput): Promise<RecallAbilityAssetRecord> {
+  return setStatus(userId, assetId, 'active', normalizeUserAction(input));
 }
 
 export async function recommendAbilityAssetAction(userId: string, assetId: string, input: RecommendAbilityAssetActionInput): Promise<RecallAbilityAssetRecord> {

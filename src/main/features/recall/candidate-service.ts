@@ -14,7 +14,7 @@ import type { RecallJsonRecord } from './types';
 import type { KstarLearningSignal } from '../kstar/types';
 import { normalizeAbilityAssetOntologyRefs, type AbilityAssetOntologyRef } from './ontology-refs';
 import { normalizeAbilityAssetScopePolicy, type RecallAbilityAssetScopePolicy } from './scope-policy';
-import { initializeAbilityAsset } from './asset-service';
+import { initializeAbilityAsset, listAbilityAssets } from './asset-service';
 import {
   cognitionSourceRefKey,
   normalizeCognitionSourceRefs,
@@ -154,6 +154,10 @@ function candidateIdForCaptureKey(captureKey: string): string {
   return `cand-${createHash('sha256').update(captureKey).digest('hex').slice(0, 24)}`;
 }
 
+function abilityAssetIdForCandidate(candidateId: string): string {
+  return `aa-${createHash('sha256').update(candidateId).digest('hex').slice(0, 24)}`;
+}
+
 export async function listRecallCandidates(userId: string): Promise<RecallCandidateRecord[]> {
   let names: string[];
   try { names = await fs.readdir(candidateDirectory(userId)); }
@@ -277,7 +281,7 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
     if (!raw) throw new Error('recall candidate not found');
     const current = asCandidate(raw);
     if (current.status === 'rejected' || current.status === 'promoted') throw new Error('recall candidate is terminal');
-    return { ...current, judgment, ...(summary ? { summary } : {}), ...(uncertainty ? { uncertainty } : {}), suggestedType, suggestedScope, sourceRefs, ...(learningSignal ? { learningSignal } : current.learningSignal ? { learningSignal: current.learningSignal } : {}), updatedAt: new Date().toISOString() };
+    return { ...current, judgment, ...(summary ? { summary } : {}), ...(uncertainty ? { uncertainty } : {}), suggestedType, suggestedScope, sourceRefs, ...(learningSignal ? { learningSignal } : current.learningSignal ? { learningSignal: current.learningSignal } : {}), promotionErrorCode: undefined, promotionErrorMessage: undefined, promotionFailedAt: undefined, updatedAt: new Date().toISOString() };
   });
   return asCandidate(updated);
 }
@@ -309,11 +313,27 @@ export async function promoteRecallCandidate(
     const candidate = asCandidate(current);
     if (candidate.status === 'promoted') return candidate;
     if (candidate.status === 'rejected') throw new Error('recall candidate is terminal');
+    // Interrupted-promotion recovery: reuse an already-written asset rather
+    // than creating a duplicate (develop baseline behavior).
+    const recoveredAsset = (await listAbilityAssets(userId))
+      .find((asset) => asset.candidateId === candidate.id);
+    if (recoveredAsset) {
+      await initializeAbilityAsset(userId, recoveredAsset, { actor });
+      return {
+        ...candidate,
+        status: 'promoted',
+        promotedAssetId: recoveredAsset.id,
+        promotionErrorCode: undefined,
+        promotionErrorMessage: undefined,
+        promotionFailedAt: undefined,
+        updatedAt: new Date().toISOString(),
+      };
+    }
     const now = new Date().toISOString();
     const asset: RecallAbilityAssetRecord = {
       schemaVersion: 1,
       ownerId: userId,
-      id: `aa-${genId12()}`,
+      id: abilityAssetIdForCandidate(candidate.id),
       candidateId: candidate.id,
       type: candidate.suggestedType,
       title: candidate.summary || candidate.judgment.slice(0, 120),
@@ -331,7 +351,15 @@ export async function promoteRecallCandidate(
     };
     await writeRecallJsonRecord(userId, 'ability-assets', asset.id, asset);
     await initializeAbilityAsset(userId, asset, { actor });
-    return { ...candidate, status: 'promoted', promotedAssetId: asset.id, updatedAt: now };
+    return {
+      ...candidate,
+      status: 'promoted',
+      promotedAssetId: asset.id,
+      promotionErrorCode: undefined,
+      promotionErrorMessage: undefined,
+      promotionFailedAt: undefined,
+      updatedAt: now,
+    };
   });
   const candidate = asCandidate(updated);
   if (!candidate.promotedAssetId) throw new Error('promoted candidate has no ability asset');
