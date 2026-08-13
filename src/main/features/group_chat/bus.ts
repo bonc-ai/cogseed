@@ -1115,6 +1115,8 @@ interface QueueItem {
    * Used to grant read-only access to source attachment directories. */
   references?: ChatMessageReference[];
   useSelections?: ChatUseSelection[];
+  committedProjectionId?: string;
+  forecastId?: string;
   /** Preserve the target persistent session's active durable turn. */
   resumeActiveTurn?: boolean;
   /** Shadow-tap marker: this turn was triggered NOT because the actor was
@@ -1239,6 +1241,7 @@ interface CidState {
     logicalRunId?: string;
     executionId?: string;
     projectionId?: string;
+    forecastId?: string;
     wakeRequestId?: string;
   };
 }
@@ -1654,6 +1657,10 @@ export interface EnqueueParams {
    *  enqueue. Used by the resume path so confirming a projection does not
    *  create a second projection and re-gate the same user message. */
   skipKstarRouting?: boolean;
+  /** Exact committed Recall projection used by the pre-execution Forecast. */
+  committedProjectionId?: string;
+  /** Forecast frozen before this Commander turn was admitted. */
+  forecastId?: string;
   attachments?: string[];
   use_selections?: ChatUseSelection[];
   references?: ChatMessageReference[];
@@ -1727,6 +1734,7 @@ export interface EnqueueParams {
     logicalRunId?: string;
     executionId?: string;
     projectionId?: string;
+    forecastId?: string;
     wakeRequestId?: string;
   };
   /** Marker for the Commander-visible task/plan/expected-result declaration. */
@@ -1766,6 +1774,7 @@ export async function enqueue(params: EnqueueParams): Promise<GroupMessage> {
       ...(provenance?.logicalRunId ? { logicalRunId: provenance.logicalRunId } : {}),
       ...(provenance?.executionId ? { executionId: provenance.executionId } : {}),
       ...(provenance?.projectionId ? { projectionId: provenance.projectionId } : {}),
+      ...(provenance?.forecastId ? { forecastId: provenance.forecastId } : {}),
       ...(provenance?.wakeRequestId ? { wakeRequestId: provenance.wakeRequestId } : {}),
     };
   }
@@ -2178,7 +2187,7 @@ async function _enqueueBody(
   // preview can gate the Commander dispatch BEFORE the turn starts. When a
   // preview is created, the user message is routed to the human-only sink
   // and the Commander turn is resumed only after the user confirms the card.
-  let projectionPreviewCreated: { projectionId: string } | undefined;
+  let projectionPreviewCreated: { projectionId: string; requirementId: string; taskRunId: string } | undefined;
   if (fromActorId === USER_ID && !params.skipKstarRouting) {
     try {
       const { routeKstarUserMessage } = await import('../kstar/requirement-state');
@@ -2268,6 +2277,7 @@ async function _enqueueBody(
       ...(provenance.logicalRunId ? { logicalRunId: provenance.logicalRunId } : {}),
       ...(provenance.executionId ? { executionId: provenance.executionId } : {}),
       ...(provenance.projectionId ? { projectionId: provenance.projectionId } : {}),
+      ...(provenance.forecastId ? { forecastId: provenance.forecastId } : {}),
       ...(provenance.wakeRequestId ? { wakeRequestId: provenance.wakeRequestId } : {}),
     };
   }
@@ -2324,9 +2334,13 @@ async function _enqueueBody(
       const { setPendingProjectionDispatch } = await import('./state');
       await setPendingProjectionDispatch(uid, cid, {
         projectionId: projectionPreviewCreated.projectionId,
+        requirementId: projectionPreviewCreated.requirementId,
+        taskRunId: projectionPreviewCreated.taskRunId,
         userMessageId: msgId,
         userMessageText: String(text || ''),
+        status: 'waiting_confirmation',
         createdAt: ts,
+        updatedAt: ts,
       });
     } catch (err) {
       log.warn(`pending projection dispatch persist failed cid=${cid}: ${(err as Error).message}`);
@@ -2389,6 +2403,8 @@ async function _enqueueBody(
       ...(msg.use_selections && msg.use_selections.length
         ? { useSelections: msg.use_selections.slice() }
         : {}),
+      ...(params.committedProjectionId ? { committedProjectionId: params.committedProjectionId } : {}),
+      ...(params.forecastId ? { forecastId: params.forecastId } : {}),
       ...(params.resumeActiveTurn ? { resumeActiveTurn: true } : {}),
       ...(params.workflow_step_id
         ? { workflow_step_id: params.workflow_step_id }
@@ -9873,7 +9889,7 @@ export async function resumePendingProjectionDispatch(
   const { readState, clearPendingProjectionDispatch } = await import('./state');
   const stateFile = await readState(userId, cid);
   const pending = stateFile.pending_projection_dispatch;
-  if (!pending) return false;
+  if (!pending || pending.status !== 'ready_to_dispatch' || !pending.forecastId) return false;
   await clearPendingProjectionDispatch(userId, cid);
   await enqueue({
     uid: userId,
@@ -9883,6 +9899,13 @@ export async function resumePendingProjectionDispatch(
     forceTo: [COMMANDER_ID],
     dispatch: true,
     skipKstarRouting: true,
+    committedProjectionId: pending.projectionId,
+    forecastId: pending.forecastId,
+    kstarTerminalProvenance: {
+      logicalRunId: pending.taskRunId,
+      projectionId: pending.projectionId,
+      forecastId: pending.forecastId,
+    },
   });
   return true;
 }

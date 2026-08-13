@@ -8,6 +8,9 @@ const previewProjectionIds = vi.hoisted(() => ({ values: ['proj-a'] as string[],
 const projectionMock = vi.hoisted(() => ({
   previewContextProjection: vi.fn(async (_uid: string, input: unknown) => ({ id: previewProjectionIds.values[previewProjectionIds.index++] || `proj-${previewProjectionIds.index}`, status: 'preview', assetIds: [...previewAssetIds.value], ...(input as Record<string, unknown>) })),
 }));
+const worldModelBridgeMock = vi.hoisted(() => ({
+  runWorldModelAtBoundary: vi.fn(async () => ({ id: 'wf-should-not-run' })),
+}));
 const projectionMessageMock = vi.hoisted(() => ({
   postProjectionCardMessage: vi.fn(async (userId: string, input: { cid: string; projectionId: string }, port: { send: (payload: unknown) => Promise<{ id: string }> }) => {
     const card = { kind: 'recall_projection_card', projectionId: input.projectionId, taskRunId: 'kst-a', purpose: 'review', status: 'preview' };
@@ -21,6 +24,7 @@ vi.mock('../../../../src/main/logger', () => ({
 }));
 vi.mock('../../../../src/main/features/recall/context-projection', () => projectionMock);
 vi.mock('../../../../src/main/features/recall/projection-message', () => projectionMessageMock);
+vi.mock('../../../../src/main/features/kstar/world-model-bridge', () => worldModelBridgeMock);
 vi.mock('../../../../src/main/model/client', () => ({
   async *streamChatWithModel() { yield { type: 'final', text: '' }; yield { type: 'done' }; },
   async chatWithModel() { return { ok: true, text: '', error: '', aborted: false }; },
@@ -37,6 +41,7 @@ beforeEach(() => {
   vi.resetModules();
   projectionMock.previewContextProjection.mockClear();
   projectionMessageMock.postProjectionCardMessage.mockClear();
+  worldModelBridgeMock.runWorldModelAtBoundary.mockClear();
   previewProjectionIds.values = ['proj-a'];
   previewProjectionIds.index = 0;
 });
@@ -120,7 +125,9 @@ describe('KSTAR requirement preview trigger', () => {
       taskText: '修复 OAuth callback',
     }));
     expect(projectionMock.previewContextProjection.mock.calls[0][1]).not.toHaveProperty('workspaceId');
-    expect(result.projectionPreviewCreated).toEqual({ projectionId: 'proj-a' });
+    expect(result.projectionPreviewCreated).toEqual(expect.objectContaining({ projectionId: 'proj-a' }));
+    expect(worldModelBridgeMock.runWorldModelAtBoundary).not.toHaveBeenCalled();
+    expect(result.currentRequirement.forecastId).toBeUndefined();
   });
 
   it('posts a visible Recall projection card even when no assets match automatically', async () => {
@@ -202,9 +209,22 @@ describe('KSTAR requirement preview trigger', () => {
       projectionId: 'proj-a',
       userMessageId: msg.id,
       userMessageText: '修复 OAuth callback',
+      status: 'waiting_confirmation',
+      requirementId: expect.stringMatching(/^ksreq-/),
+      taskRunId: expect.stringMatching(/^kst-/),
     });
 
-    // Confirm resumes the commander dispatch.
+    // A raw resume before Forecast readiness is forbidden.
+    expect(await bus.resumePendingProjectionDispatch('user-a', 'cid-block')).toBe(false);
+    expect((await state.readState('user-a', 'cid-block')).pending_projection_dispatch)
+      .toMatchObject({ status: 'waiting_confirmation' });
+
+    await state.updatePendingProjectionDispatch('user-a', 'cid-block', (current) => ({
+      ...current,
+      status: 'ready_to_dispatch',
+      forecastId: 'wf-ready',
+      updatedAt: new Date().toISOString(),
+    }));
     const resumed = await bus.resumePendingProjectionDispatch('user-a', 'cid-block');
     expect(resumed).toBe(true);
     const cleared = await state.readState('user-a', 'cid-block');

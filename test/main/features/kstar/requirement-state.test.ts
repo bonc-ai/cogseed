@@ -114,6 +114,7 @@ describe('KSTAR requirement state transitions', () => {
     }, modelRoute('new'));
 
     expect(result.currentRequirement.projectionId).toMatch(/^proj-/);
+    expect(result.currentRequirement.forecastId).toBeUndefined();
   });
 
 
@@ -146,7 +147,7 @@ describe('KSTAR requirement state transitions', () => {
     expect(second.currentRequirement.projectionIds).toHaveLength(2);
     expect(second.currentRequirement.projectionIds[0]).toBe(first.currentRequirement.projectionId);
     expect(second.currentRequirement.projectionIds[1]).toBe(second.currentRequirement.projectionId);
-    expect(second.projectionPreviewCreated).toEqual({ projectionId: second.currentRequirement.projectionId });
+    expect(second.projectionPreviewCreated).toEqual(expect.objectContaining({ projectionId: second.currentRequirement.projectionId }));
     await expect(store.readConversationTaskState('user-a', 'cid-a')).resolves.toMatchObject({ taskComplete: false });
   });
 

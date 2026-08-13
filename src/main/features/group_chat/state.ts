@@ -177,9 +177,16 @@ export interface StateFile {
    *  confirm / reject / defer / a fresh user message. */
   pending_projection_dispatch?: {
     projectionId: string;
+    requirementId: string;
+    taskRunId: string;
     userMessageId: string;
     userMessageText: string;
+    status: 'waiting_confirmation' | 'forecasting' | 'world_model_failed' | 'ready_to_dispatch';
+    forecastId?: string;
+    errorCode?: string;
+    errorMessage?: string;
     createdAt: string;
+    updatedAt: string;
   };
   /** System-created sync-conflict resolution metadata. A commander turn may
    *  close only these records, and only by emitting a matching XML result. */
@@ -574,18 +581,28 @@ export async function readState(
         ...(data.pending_projection_dispatch
           && typeof data.pending_projection_dispatch?.projectionId === 'string'
           && safeId(data.pending_projection_dispatch.projectionId)
+          && typeof data.pending_projection_dispatch?.requirementId === 'string'
+          && safeId(data.pending_projection_dispatch.requirementId)
+          && typeof data.pending_projection_dispatch?.taskRunId === 'string'
+          && safeId(data.pending_projection_dispatch.taskRunId)
           && typeof data.pending_projection_dispatch?.userMessageId === 'string'
           && safeId(data.pending_projection_dispatch.userMessageId)
           && typeof data.pending_projection_dispatch?.userMessageText === 'string'
           && data.pending_projection_dispatch.userMessageText
+          && ['waiting_confirmation', 'forecasting', 'world_model_failed', 'ready_to_dispatch'].includes(data.pending_projection_dispatch.status)
           ? {
               pending_projection_dispatch: {
                 projectionId: data.pending_projection_dispatch.projectionId,
+                requirementId: data.pending_projection_dispatch.requirementId,
+                taskRunId: data.pending_projection_dispatch.taskRunId,
                 userMessageId: data.pending_projection_dispatch.userMessageId,
                 userMessageText: data.pending_projection_dispatch.userMessageText,
-                createdAt: typeof data.pending_projection_dispatch.createdAt === 'string'
-                  ? data.pending_projection_dispatch.createdAt
-                  : nowIso(),
+                status: data.pending_projection_dispatch.status,
+                ...(typeof data.pending_projection_dispatch.forecastId === 'string' && safeId(data.pending_projection_dispatch.forecastId) ? { forecastId: data.pending_projection_dispatch.forecastId } : {}),
+                ...(typeof data.pending_projection_dispatch.errorCode === 'string' ? { errorCode: data.pending_projection_dispatch.errorCode } : {}),
+                ...(typeof data.pending_projection_dispatch.errorMessage === 'string' ? { errorMessage: data.pending_projection_dispatch.errorMessage } : {}),
+                createdAt: typeof data.pending_projection_dispatch.createdAt === 'string' ? data.pending_projection_dispatch.createdAt : nowIso(),
+                updatedAt: typeof data.pending_projection_dispatch.updatedAt === 'string' ? data.pending_projection_dispatch.updatedAt : nowIso(),
               },
             }
           : {}),
@@ -1124,6 +1141,20 @@ export async function setPendingProjectionDispatch(
   return _stateLock(uid, cid).runExclusive(async () => {
     const s = await readState(uid, cid);
     s.pending_projection_dispatch = pending;
+    await writeStateRaw(uid, cid, s);
+    return s;
+  });
+}
+
+export async function updatePendingProjectionDispatch(
+  uid: string,
+  cid: string,
+  update: (current: NonNullable<StateFile['pending_projection_dispatch']>) => NonNullable<StateFile['pending_projection_dispatch']>,
+): Promise<StateFile> {
+  return _stateLock(uid, cid).runExclusive(async () => {
+    const s = await readState(uid, cid);
+    if (!s.pending_projection_dispatch) throw new Error('pending projection dispatch not found');
+    s.pending_projection_dispatch = update(s.pending_projection_dispatch);
     await writeStateRaw(uid, cid, s);
     return s;
   });

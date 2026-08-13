@@ -72,6 +72,17 @@ const projectionMock = vi.hoisted(() => ({
   confirmContextProjection: vi.fn(async (_uid: string, id: string) => ({ id, status: 'confirmed' })),
   readContextProjection: vi.fn(async (_uid: string, id: string) => ({ id })),
 }));
+const preExecutionMock = vi.hoisted(() => ({
+  confirmProjectionAndPrepareDispatch: vi.fn(async (_uid: string, input: unknown) => ({
+    projection: { id: 'proj-a', status: 'confirmed' },
+    forecast: { id: 'wf-a' },
+    resumed: true,
+    ...input as object,
+  })),
+  retryProjectionForecast: vi.fn(async (_uid: string, input: unknown) => ({
+    forecast: { id: 'wf-a' }, resumed: true, ...input as object,
+  })),
+}));
 const usageFeedbackMock = vi.hoisted(() => ({
   recordRecallMessageFeedback: vi.fn(async (_uid: string, input: unknown) => ({
     ...input as object,
@@ -108,6 +119,7 @@ vi.mock('../../../src/main/features/recall/capture-settings', () => captureSetti
 vi.mock('../../../src/main/features/recall/recall-view-service', () => viewMock);
 vi.mock('../../../src/main/features/recall/teaching-service', () => teachingMock);
 vi.mock('../../../src/main/features/recall/context-projection', () => projectionMock);
+vi.mock('../../../src/main/features/kstar/pre-execution-service', () => preExecutionMock);
 vi.mock('../../../src/main/features/recall/usage-feedback-service', () => usageFeedbackMock);
 vi.mock('../../../src/main/features/recall/skill-draft-service', () => skillDraftMock);
 
@@ -287,6 +299,20 @@ describe('ipc › recall candidate governance', () => {
     await expect(call('recall.teaching.revoke', { signalId: 'teach-a' }))
       .resolves.toMatchObject({ ok: true, signal: { status: 'revoked' } });
     expect(teachingMock.revokeUserTeachingSignal).toHaveBeenCalledWith(UID, 'teach-a');
+  });
+
+  it('routes KSTAR projection confirmation and Forecast retry through the pre-execution service', async () => {
+    await expect(call('recall.projections.confirm', { projectionId: 'proj-a', cid: 'cid-a' }))
+      .resolves.toMatchObject({ ok: true, forecast: { id: 'wf-a' }, resumed: true });
+    expect(preExecutionMock.confirmProjectionAndPrepareDispatch).toHaveBeenCalledWith(UID, {
+      projectionId: 'proj-a', cid: 'cid-a',
+    });
+
+    await expect(call('recall.projections.retryForecast', { projectionId: 'proj-a', cid: 'cid-a' }))
+      .resolves.toMatchObject({ ok: true, forecast: { id: 'wf-a' }, resumed: true });
+    expect(preExecutionMock.retryProjectionForecast).toHaveBeenCalledWith(UID, {
+      projectionId: 'proj-a', cid: 'cid-a',
+    });
   });
 
   it('rejects malformed source and capture inputs before feature calls', async () => {

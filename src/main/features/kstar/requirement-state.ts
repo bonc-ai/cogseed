@@ -40,7 +40,7 @@ export interface KstarRouteUserMessageResult {
   task: KstarTaskRecord;
   currentRequirement: KstarRequirementRecord;
   route: KstarRequirementRouteResult;
-  projectionPreviewCreated?: { projectionId: string };
+  projectionPreviewCreated?: { projectionId: string; requirementId: string; taskRunId: string };
 }
 
 export interface KstarRequirementStateOptions {
@@ -100,7 +100,7 @@ async function createTaskWithRequirement(
   userId: string,
   input: KstarUserMessageContext,
   route: KstarRequirementRouteResult,
-): Promise<{ task: KstarTaskRecord; requirement: KstarRequirementRecord; projectionPreviewCreated?: { projectionId: string } }> {
+): Promise<{ task: KstarTaskRecord; requirement: KstarRequirementRecord; projectionPreviewCreated?: { projectionId: string; requirementId: string; taskRunId: string } }> {
   const title = routeTitle(route, input.text);
   const task = createKstarTaskRecord(userId, {
     conversationId: input.conversationId,
@@ -121,14 +121,13 @@ async function createTaskWithRequirement(
   if (projectionPreview) {
     requirement.projectionId = projectionPreview.projectionId;
     requirement.projectionIds = [...requirement.projectionIds, projectionPreview.projectionId];
-    if (projectionPreview.forecastId) requirement.forecastId = projectionPreview.forecastId;
   }
   await replaceKstarRequirement(userId, requirement);
   await replaceKstarTask(userId, task);
   return {
     task,
     requirement,
-    ...(projectionPreview?.shouldPostCard ? { projectionPreviewCreated: { projectionId: projectionPreview.projectionId } } : {}),
+    ...(projectionPreview?.shouldPostCard ? { projectionPreviewCreated: { projectionId: projectionPreview.projectionId, requirementId: requirement.id, taskRunId: task.id } } : {}),
   };
 }
 
@@ -138,7 +137,7 @@ async function previewTaskBoundary(
   taskRunId: string,
   purpose: string,
   expectedResult?: KstarRequirementRouteResult['expectedResult'],
-): Promise<{ projectionId: string; forecastId?: string; shouldPostCard: boolean } | undefined> {
+): Promise<{ projectionId: string; shouldPostCard: boolean } | undefined> {
   try {
     const projection = await previewContextProjection(userId, {
       taskRunId,
@@ -147,14 +146,7 @@ async function previewTaskBoundary(
       ...(input.text ? { taskText: input.text } : {}),
       ...(expectedResult ? { authorization: expectedResult.source === 'model' ? 'workspace_policy' : 'user_confirmed' } : {}),
     });
-    const { runWorldModelAtBoundary } = await import('./world-model-bridge');
-    const forecast = await runWorldModelAtBoundary(userId, {
-      taskRunId,
-      requirementId: taskRunId,
-      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
-      taskText: input.text,
-    });
-    return { projectionId: projection.id, ...(forecast ? { forecastId: forecast.id } : {}), shouldPostCard: true };
+    return { projectionId: projection.id, shouldPostCard: true };
   } catch (error) {
     log.warn('kstar requirement preview failed', { conversationId: input.conversationId, taskRunId, error: (error as Error).message });
     return undefined;
@@ -181,7 +173,7 @@ export async function routeKstarUserMessage(
     hasOpenTask,
     hasOpenRequirement,
   }, options.routerOptions);
-  let projectionPreviewCreated: { projectionId: string } | undefined;
+  let projectionPreviewCreated: { projectionId: string; requirementId: string; taskRunId: string } | undefined;
 
   if (!task || !currentRequirement || !hasOpenTask) {
     const created = await createTaskWithRequirement(userId, input, route);
@@ -245,10 +237,9 @@ export async function routeKstarUserMessage(
     if (projectionPreview) {
       next.projectionId = projectionPreview.projectionId;
       next.projectionIds = [...next.projectionIds, projectionPreview.projectionId];
-      if (projectionPreview.forecastId) next.forecastId = projectionPreview.forecastId;
     }
     await replaceKstarRequirement(userId, next);
-    if (projectionPreview?.shouldPostCard) projectionPreviewCreated = { projectionId: projectionPreview.projectionId };
+    if (projectionPreview?.shouldPostCard) projectionPreviewCreated = { projectionId: projectionPreview.projectionId, requirementId: next.id, taskRunId: task.id };
   } else {
     currentRequirement.userMessageIds = uniqueIds(currentRequirement.userMessageIds, input.messageId);
     currentRequirement.updatedAt = nowIso();
@@ -264,8 +255,7 @@ export async function routeKstarUserMessage(
       if (projectionPreview) {
         currentRequirement.projectionId = projectionPreview.projectionId;
         currentRequirement.projectionIds = [...currentRequirement.projectionIds, projectionPreview.projectionId];
-        if (projectionPreview.forecastId) currentRequirement.forecastId = projectionPreview.forecastId;
-        if (projectionPreview.shouldPostCard) projectionPreviewCreated = { projectionId: projectionPreview.projectionId };
+        if (projectionPreview.shouldPostCard) projectionPreviewCreated = { projectionId: projectionPreview.projectionId, requirementId: currentRequirement.id, taskRunId: task.id };
       }
     }
   }

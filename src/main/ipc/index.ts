@@ -41,6 +41,7 @@ import * as recallProjectionCard from '../features/recall/projection-card';
 import * as recallProjectionMessage from '../features/recall/projection-message';
 import * as recallTimeline from '../features/recall/timeline-service';
 import * as kstarKnowledgeRoute from '../features/kstar/knowledge-route-service';
+import * as kstarPreExecution from '../features/kstar/pre-execution-service';
 import { readKstarTaskLifecycle } from '../features/kstar/lifecycle-adapter';
 import * as kstarTaskClosure from '../features/kstar/task-closure';
 import * as kstarReviewService from '../features/kstar/review-service';
@@ -2203,7 +2204,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       }),
     };
   },
-  'recall.projections.confirm': async ({ projectionId, cid } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); if (cid !== undefined && !safeId(cid)) throw new Error('invalid projection confirm cid'); const projection = await recallProjection.confirmContextProjection(ctx.userId, projectionId); if (cid) { const groupBus = await import('../features/group_chat/bus'); await groupBus.resumePendingProjectionDispatch(ctx.userId, cid); } return { ok: true, projection }; },
+  'recall.projections.confirm': async ({ projectionId, cid } = {}, ctx) => { if (!safeId(projectionId) || !safeId(cid)) throw new Error('invalid projection confirm'); return { ok: true, ...(await kstarPreExecution.confirmProjectionAndPrepareDispatch(ctx.userId, { projectionId, cid })) }; },
+  'recall.projections.retryForecast': async ({ projectionId, cid } = {}, ctx) => { if (!safeId(projectionId) || !safeId(cid)) throw new Error('invalid projection retry'); return { ok: true, ...(await kstarPreExecution.retryProjectionForecast(ctx.userId, { projectionId, cid })) }; },
   'recall.projections.revise': async ({ projectionId, purpose, addAssetIds, removeAssetIds, decisionNote } = {}, ctx) => { if (!safeId(projectionId) || (purpose !== undefined && typeof purpose !== 'string') || (addAssetIds !== undefined && (!Array.isArray(addAssetIds) || addAssetIds.length > 100 || addAssetIds.some((id) => !safeId(id)))) || (removeAssetIds !== undefined && (!Array.isArray(removeAssetIds) || removeAssetIds.length > 100 || removeAssetIds.some((id) => !safeId(id)))) || (decisionNote !== undefined && typeof decisionNote !== 'string')) throw new Error('invalid projection revision'); return { ok: true, projection: await recallProjection.reviseContextProjection(ctx.userId, projectionId, { ...(purpose !== undefined ? { purpose } : {}), ...(addAssetIds !== undefined ? { addAssetIds } : {}), ...(removeAssetIds !== undefined ? { removeAssetIds } : {}), ...(decisionNote !== undefined ? { decisionNote } : {}) }) }; },
   'recall.projections.availableAssets': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, assets: await recallProjection.listAvailableProjectionAssets(ctx.userId, projectionId) }; },
   'recall.projections.confirmAndApproveWake': async ({ cid, projectionId, wakeRequestId } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId) || !safeId(wakeRequestId)) throw new Error('invalid projection wake confirmation'); return recallProjection.confirmAndApproveWake(ctx.userId, { cid, projectionId, wakeRequestId }); },

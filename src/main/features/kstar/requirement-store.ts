@@ -208,6 +208,22 @@ export async function listKstarRequirementsForTask(userId: string, taskId: strin
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
+
+export async function findKstarRequirementByProjection(
+  userId: string,
+  conversationId: string,
+  projectionId: string,
+): Promise<KstarRequirementRecord> {
+  if (!safeId(conversationId) || !safeId(projectionId)) throw new Error('invalid kstar projection lookup');
+  const records = await listKstarJsonRecords(userId, 'requirements');
+  const matches = records
+    .map((record) => validateRequirement(userId, record as Record<string, unknown>))
+    .filter((record) => record.conversationId === conversationId && record.projectionId === projectionId);
+  if (matches.length === 0) throw new Error('no kstar requirement matches conversation and projection');
+  if (matches.length > 1) throw new Error('multiple kstar requirements match conversation and projection');
+  return matches[0];
+}
+
 export async function bindKstarRequirementWakeRequestByProjection(
   userId: string,
   conversationId: string,
