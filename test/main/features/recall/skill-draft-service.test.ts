@@ -159,7 +159,7 @@ async function createAsset(type: 'rule' | 'skill_method' = 'skill_method') {
     suggestedScope: 'product review',
     sourceRefs: [{ kind: 'artifact_file', subtype: 'context_file', id: `context-${type}` }],
   });
-  return (await candidates.promoteRecallCandidate(UID, candidate.id)).asset;
+  return (await candidates.promoteRecallCandidate(UID, candidate.id, { actor: 'user' })).asset;
 }
 
 describe('Recall skill draft service', () => {
@@ -170,7 +170,7 @@ describe('Recall skill draft service', () => {
     await expect(service.prepareRecallSkillDraft(UID, rule.id)).rejects.toThrow(/only skill method/i);
 
     const method = await createAsset();
-    await assets.pauseAbilityAsset(UID, method.id, 'review later');
+    await assets.pauseAbilityAsset(UID, method.id, { actor: 'user', reason: 'review later' });
     await expect(service.prepareRecallSkillDraft(UID, method.id)).rejects.toThrow(/only active/i);
   });
 
@@ -371,7 +371,7 @@ describe('Recall skill draft service', () => {
     );
     await vi.waitFor(() => expect(modelMocks.runCalls).toHaveLength(1));
     modelMocks.runGate = null;
-    await assets.updateAbilityAsset(UID, asset.id, { statement: `${asset.statement} Use the current approved checklist.` });
+    await assets.updateAbilityAsset(UID, asset.id, { statement: `${asset.statement} Use the current approved checklist.`, actor: 'user', reason: 'refresh approved checklist' });
     const current = await service.prepareRecallSkillDraft(UID, asset.id);
     expect(current).toMatchObject({ status: 'draft', assetVersion: '2' });
 
@@ -459,7 +459,7 @@ describe('Recall skill draft service', () => {
       () => 'rejected',
     );
     await started.promise;
-    await assets.updateAbilityAsset(UID, asset.id, { statement: `${asset.statement} Use the approved release checklist.` });
+    await assets.updateAbilityAsset(UID, asset.id, { statement: `${asset.statement} Use the approved release checklist.`, actor: 'user', reason: 'refresh release checklist' });
     const currentDraft = await service.prepareRecallSkillDraft(UID, asset.id);
     expect(currentDraft).toMatchObject({ status: 'draft', assetVersion: '2' });
     release.resolve();
@@ -474,7 +474,7 @@ describe('Recall skill draft service', () => {
     const assets = await import('../../../../src/main/features/recall/asset-service');
     const asset = await createAsset();
     const draft = await service.prepareRecallSkillDraft(UID, asset.id);
-    await assets.updateAbilityAsset(UID, asset.id, { statement: `${asset.statement} Use the current approved checklist.` });
+    await assets.updateAbilityAsset(UID, asset.id, { statement: `${asset.statement} Use the current approved checklist.`, actor: 'user', reason: 'refresh approved checklist' });
 
     await expect(service.confirmRecallSkillDraft(UID, asset.id, draft.draftHash)).rejects.toThrow(/asset changed/i);
     await expect(service.readInstalledSkillForAsset(UID, asset.id)).resolves.toBeUndefined();
@@ -490,6 +490,8 @@ describe('Recall skill draft service', () => {
 
     await assets.updateAbilityAsset(UID, relatedRule.id, {
       statement: `${relatedRule.statement} Preserve the reviewed boundary.`,
+      actor: 'user',
+      reason: 'preserve reviewed boundary',
     });
 
     await expect(service.confirmRecallSkillDraft(UID, method.id, draft.draftHash))
@@ -517,7 +519,7 @@ describe('Recall skill draft service', () => {
     const firstDraft = await service.prepareRecallSkillDraft(UID, asset.id);
     if (firstDraft.status !== 'draft') throw new Error('expected first draft');
     const firstInstall = await service.confirmRecallSkillDraft(UID, asset.id, firstDraft.draftHash);
-    await assets.updateAbilityAsset(UID, asset.id, { statement: `${asset.statement} Use the approved release checklist.` });
+    await assets.updateAbilityAsset(UID, asset.id, { statement: `${asset.statement} Use the approved release checklist.`, actor: 'user', reason: 'refresh release checklist' });
 
     expect(await service.readInstalledSkillForAsset(UID, asset.id)).toBeUndefined();
     const nextDraft = await service.prepareRecallSkillDraft(UID, asset.id);
