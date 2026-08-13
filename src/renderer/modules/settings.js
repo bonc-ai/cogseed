@@ -91,7 +91,6 @@ async function loadSettings() {
     _settingsSafeCall('settings custom providers refresh', _settingsRefreshCustomProviders),
     _settingsSafeCall('settings ccswitch status refresh', _settingsRefreshCcswitchStatus),
     _settingsSafeCall('settings touchpoint refresh', () => window.initTouchpointSettings && window.initTouchpointSettings()),
-    _settingsSafeCall('settings hub account refresh', () => window.initHubAccountSettings && window.initHubAccountSettings()),
   ]);
   await _settingsSafeCall('settings model authorization init', () => window.initModelAuthorizationSettings && window.initModelAuthorizationSettings());
   await _settingsSafeCall('settings local execution render', _settingsRenderLocalExec);
