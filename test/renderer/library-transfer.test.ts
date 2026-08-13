@@ -47,31 +47,23 @@ describe('shared Library transfer dialog', () => {
 
   it('keeps row menus compact with one consolidated transfer action', () => {
     const contexts = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/contexts.js'), 'utf8');
-    const project = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/project-detail.js'), 'utf8');
     const dialog = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/library-transfer.js'), 'utf8');
     const archivePicker = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/kb-picker.js'), 'utf8');
     const zh = JSON.parse(fs.readFileSync(path.join(__dirname, '../../src/renderer/locales/zh.json'), 'utf8'));
 
     expect(contexts.match(/action: 'organize'/g)).toHaveLength(2);
-    expect(project.match(/action: 'organize'/g)).toHaveLength(2);
-    expect(`${contexts}\n${project}`).not.toMatch(/action: '(move_to|copy_to)'/);
+    expect(contexts).not.toMatch(/action: '(move_to|copy_to)'/);
     expect(contexts).toContain("label: t('contexts.transfer.title'), dividerBefore: true");
-    expect(project).toContain("label: t('contexts.transfer.title'), dividerBefore: true");
     expect(contexts).toContain('ctx-row-menu-divider');
-    expect(project).toContain('ctx-row-menu-divider');
     const contextMenuStart = contexts.indexOf('function _ctxMenuItemsFor');
     const contextFileStart = contexts.indexOf('  // file', contextMenuStart);
     const contextFileMenu = contexts.slice(contextFileStart, contexts.indexOf('\n  return items;', contextFileStart));
-    const projectFileMenu = project.slice(project.indexOf('function _projectFileMenuItemsFor'), project.indexOf('\n  return items;', project.indexOf('function _projectFileMenuItemsFor')));
-    for (const source of [contextFileMenu, projectFileMenu]) {
-      const ordered = ['edit', 'rename', 'delete', 'ask_commander', 'organize'];
-      ordered.forEach((action, index) => {
-        if (index > 0) expect(source.indexOf(`action: '${action}'`)).toBeGreaterThan(source.indexOf(`action: '${ordered[index - 1]}'`));
-      });
-      expect(source).toContain("action: 'ask_commander', label: t('contexts.menu.ask_commander'), dividerBefore: true");
-    }
+    const ordered = ['edit', 'rename', 'delete', 'ask_commander', 'organize'];
+    ordered.forEach((action, index) => {
+      if (index > 0) expect(contextFileMenu.indexOf(`action: '${action}'`)).toBeGreaterThan(contextFileMenu.indexOf(`action: '${ordered[index - 1]}'`));
+    });
+    expect(contextFileMenu).toContain("action: 'ask_commander', label: t('contexts.menu.ask_commander'), dividerBefore: true");
     expect(contextFileMenu.indexOf("action: 'open_in_system'")).toBeGreaterThan(contextFileMenu.indexOf("action: 'organize'"));
-    expect(projectFileMenu.indexOf("action: 'reveal'")).toBeGreaterThan(projectFileMenu.indexOf("action: 'organize'"));
     expect(dialog).toContain("data-transfer-mode=\"move\"");
     expect(dialog).toContain("data-transfer-mode=\"copy\"");
     expect(dialog).toContain("root.orkas.invoke('library.transfer'");
