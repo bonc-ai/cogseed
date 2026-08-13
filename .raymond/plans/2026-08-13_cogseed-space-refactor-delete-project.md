@@ -148,6 +148,7 @@ Conversation.space_id (string | null)
 - **🔴 最高风险**：T4.1 会话执行作用域改造。`resolveProjectScope` 在 runTurn 热路径，改错会导致所有会话执行作用域错误（技能/智能体全错）。必须 TDD + 跑满测试。
 - **🔴 迁移必须幂等 + 有回滚**：存量数据迁移一旦写错目录，用户数据就乱了。v5 迁移要：加锁、版本标记、迁移前备份统计、幂等重入。
 - **顺序纪律**：阶段 0→1→2→3→4→5 严格依赖，不可跳。特别是「先建 space_id 字段并迁移（阶段0），再改执行路径（T4.1）」，否则中间态执行会断。
+- **执行无迭代上限**：推进不受 tick/迭代次数约束，不设 max iterations，逐任务持续执行直到阶段 0→5 全部完成、验收通过才算终态。
 - **不加新 npm 依赖**（AGENTS.md 铁律）。
 - **不用 mock 兜底**：API 空就显示空态，不编造数据。
 - **renderer 改完要重启 app 验证**（classic script，无热更新）。
@@ -161,3 +162,4 @@ Conversation.space_id (string | null)
 2. **progress-driven-cron-execution**：建 PROGRESS.md，cron 每 tick 推进一个原子任务。
 
 推荐后者（工程大、周期长），PROGRESS.md 首版即本文件的阶段总览表 + 待办清单。
+- 两种方式均**无迭代上限**：不设 tick/任务次数上限，持续推进到全部任务完成、验收通过为止。
