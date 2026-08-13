@@ -43,13 +43,14 @@
  * the user "this content is dangerous"; `unknown` tells them "we could not
  * check". Reporting the second as the first trains users to dismiss real blocks.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { bundledPythonExecutable } from '../../util/bundled-runtime';
 import { createLogger } from '../../logger';
 import { packagedGuardrailDir } from '../../paths';
+import { marketplaceContentTreeHash } from '../../util/marketplace-tree-hash';
 
 const log = createLogger('security/nseap-core');
 
@@ -58,6 +59,11 @@ const RUN_TIMEOUT_MS = 60_000;
 
 /** Directory name under `resources/guardrail/`. Hardcoded, never configurable. */
 const ENGINE_DIR_NAME = 'nseap-security-core';
+
+/** Pin file stored beside the engine tree, never inside it. */
+const PIN_FILE_NAME = 'nseap-security-core.INTEGRITY';
+
+export type NseapCoreIntegrity = 'verified' | 'tampered' | 'unpinned' | 'unreadable';
 
 /**
  * Validation mode, mirroring the engine's own two modes.
@@ -201,6 +207,52 @@ function unavailable(reason: string): NseapResult {
   };
 }
 
+function unavailableWithExitCode(reason: string, exitCode: number | null): NseapResult {
+  return {
+    verdict: 'unknown',
+    exitCode,
+    engineResult: null,
+    findings: [],
+    worktreeDigest: null,
+    subjectDigest: null,
+    unavailableReason: reason,
+  };
+}
+
+/**
+ * Verify the engine tree against its pinned hash.
+ *
+ * Mirrors `scanner_trust.verifyScannerIntegrity`, but applies to this advisory
+ * engine rather than the admission scanner. The pin is read from a sibling file
+ * and checked with the same tree hash used at release time.
+ */
+export function verifyNseapCoreIntegrity(dir: string): {
+  status: NseapCoreIntegrity;
+  expected?: string;
+  actual?: string;
+} {
+  let expected = '';
+  try {
+    expected = fs.readFileSync(path.join(path.dirname(dir), PIN_FILE_NAME), 'utf8').trim();
+  } catch {
+    expected = '';
+  }
+
+  let actual = '';
+  try {
+    actual = marketplaceContentTreeHash(dir);
+  } catch {
+    return { status: 'unreadable' };
+  }
+  if (!actual) return { status: 'unreadable' };
+  if (!expected) return { status: 'unpinned', actual };
+  if (expected !== actual) {
+    log.warn('nseap engine integrity mismatch', { expected, actual });
+    return { status: 'tampered', expected, actual };
+  }
+  return { status: 'verified', expected, actual };
+}
+
 function _findings(report: Record<string, unknown>): NseapFinding[] {
   const validation = report.validation as Record<string, unknown> | undefined;
   const raw = Array.isArray(validation?.findings) ? validation.findings : [];
@@ -219,17 +271,73 @@ function _findings(report: Record<string, unknown>): NseapFinding[] {
 }
 
 /**
+ * Parse the engine's stdout into a report object.
+ *
+ * Kept as a separate function so tests can cover the failure without needing a
+ * hostile Python interpreter: a report is either JSON or it is not.
+ */
+export function parseNseapReport(stdout: string): Record<string, unknown> | null {
+  const text = String(stdout || '').trim();
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Combine an engine exit code and its parsed report into a platform verdict.
+ *
+ * Exported for direct testing because the unparseable-report rule is the part
+ * most likely to regress: an exit code of 0 must not become `pass` when no
+ * report was produced.
+ */
+export function resultFromExitCodeAndReport(
+  code: number | null,
+  report: Record<string, unknown> | null,
+): NseapResult {
+  if (!report || typeof report !== 'object' || Array.isArray(report)) {
+    return unavailableWithExitCode('unparseable_report', code);
+  }
+
+  const subject = (report.subject || {}) as Record<string, unknown>;
+  const validation = (report.validation || {}) as Record<string, unknown>;
+  if (typeof validation !== 'object' || Array.isArray(validation)) {
+    return unavailableWithExitCode('unparseable_report', code);
+  }
+  return {
+    verdict: verdictFromExitCode(code),
+    exitCode: code,
+    engineResult: typeof validation.result === 'string' ? validation.result : null,
+    findings: _findings(report),
+    worktreeDigest: typeof subject.worktree_digest === 'string' ? subject.worktree_digest : null,
+    subjectDigest: typeof subject.subject_digest === 'string' ? subject.subject_digest : null,
+  };
+}
+
+/**
  * Validate a skill directory with the engine.
  *
  * Returns `unknown` rather than throwing for every failure path, so a caller can
  * always distinguish "the content is bad" from "the check did not run".
  */
-export function validateSkillWithEngine(
+export async function validateSkillWithEngine(
   skillRoot: string,
   mode: NseapValidationMode = 'PREVALIDATION',
-): NseapResult {
+): Promise<NseapResult> {
   const dir = engineDir();
   if (!dir) return unavailable('engine_absent');
+
+  const integrity = verifyNseapCoreIntegrity(dir);
+  if (integrity.status !== 'verified') {
+    log.warn('nseap engine integrity check failed', {
+      status: integrity.status,
+      expected: integrity.expected,
+      actual: integrity.actual,
+    });
+    return unavailable(`engine_integrity_${integrity.status}`);
+  }
 
   const python = resolvePython(dir);
   if (!python) return unavailable('python_absent');
@@ -242,65 +350,53 @@ export function validateSkillWithEngine(
     '--mode', mode,
   ];
 
-  let r: ReturnType<typeof spawnSync>;
+  let code: number | null;
+  let stdout: string;
   try {
-    r = spawnSync(python, args, {
-      cwd: dir,
-      timeout: RUN_TIMEOUT_MS,
-      encoding: 'utf8',
-      maxBuffer: 8 * 1024 * 1024,
-      env: {
-        ...process.env,
-        // Vendored yaml first, then the engine package itself.
-        PYTHONPATH: [path.join(dir, 'vendor'), dir].join(path.delimiter),
-        // Writing .pyc files into the engine tree would change its tree hash and
-        // make the pinned-integrity check report `tampered` after the first run.
-        // Measured: without this, one run leaves 15 files under
-        // `security_core/__pycache__` and the pin no longer matches.
-        PYTHONDONTWRITEBYTECODE: '1',
-      },
-    });
+    ({ code, stdout } = await new Promise<{ code: number | null; stdout: string }>((resolve, reject) => {
+      const child = spawn(python, args, {
+        cwd: dir,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          // Vendored yaml first, then the engine package itself.
+          PYTHONPATH: [path.join(dir, 'vendor'), dir].join(path.delimiter),
+          // Writing .pyc files into the engine tree would change its tree hash and
+          // make the pinned-integrity check report `tampered` after the first run.
+          // Measured: without this, one run leaves 15 files under
+          // `security_core/__pycache__` and the pin no longer matches.
+          PYTHONDONTWRITEBYTECODE: '1',
+          // Keep non-ASCII findings decodable on Windows, where the default
+          // stdout encoding can otherwise mangle the engine's report.
+          PYTHONIOENCODING: 'utf-8',
+        },
+      });
+
+      let out = '';
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL');
+        reject(new Error('timeout'));
+      }, RUN_TIMEOUT_MS);
+      child.stdout.on('data', (d) => { out += String(d); });
+      child.stderr.on('data', () => { /* consumed to avoid a blocked pipe */ });
+      child.on('error', (e) => {
+        clearTimeout(timer);
+        reject(e);
+      });
+      child.on('close', (exitCode) => {
+        clearTimeout(timer);
+        resolve({ code: typeof exitCode === 'number' ? exitCode : null, stdout: out });
+      });
+    }));
   } catch (err) {
-    log.warn('engine spawn failed', { error: (err as Error).message });
-    return unavailable('spawn_failed');
+    const msg = (err as Error).message || 'spawn_failed';
+    log.warn('engine spawn failed', { error: msg });
+    return unavailable(msg === 'timeout' ? 'timeout' : 'spawn_failed');
   }
 
-  if (r.error) {
-    log.warn('engine run errored', { error: r.error.message });
-    return unavailable('spawn_failed');
-  }
-  // spawnSync reports a timeout kill via `signal`, not via a non-zero status.
-  if (r.signal) return unavailable('timeout');
-
-  const code = typeof r.status === 'number' ? r.status : null;
-  const verdict = verdictFromExitCode(code);
-
-  let report: Record<string, unknown> | null = null;
-  try {
-    const text = String(r.stdout || '').trim();
-    if (text) report = JSON.parse(text) as Record<string, unknown>;
-  } catch {
-    // An unparseable report is not evidence of danger: keep the exit-code
-    // verdict, but surface that details are missing.
+  const report = parseNseapReport(stdout);
+  if (!report) {
     log.warn('engine report was not valid JSON', { exitCode: code });
   }
-
-  if (!report) {
-    return {
-      verdict, exitCode: code, engineResult: null, findings: [],
-      worktreeDigest: null, subjectDigest: null,
-      ...(verdict === 'unknown' ? { unavailableReason: 'unparseable_report' } : {}),
-    };
-  }
-
-  const subject = (report.subject || {}) as Record<string, unknown>;
-  const validation = (report.validation || {}) as Record<string, unknown>;
-  return {
-    verdict,
-    exitCode: code,
-    engineResult: typeof validation.result === 'string' ? validation.result : null,
-    findings: _findings(report),
-    worktreeDigest: typeof subject.worktree_digest === 'string' ? subject.worktree_digest : null,
-    subjectDigest: typeof subject.subject_digest === 'string' ? subject.subject_digest : null,
-  };
+  return resultFromExitCodeAndReport(code, report);
 }

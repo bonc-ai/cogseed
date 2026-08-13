@@ -409,7 +409,7 @@ async function _checkNseapDeclaration(
     if (!fs.existsSync(manifest)) return { status: 'absent' };
 
     const { validateSkillWithEngine } = await import('./security/nseap-core-adapter');
-    const r = validateSkillWithEngine(skillDir, 'PREVALIDATION');
+    const r = await validateSkillWithEngine(skillDir, 'PREVALIDATION');
 
     if (r.verdict === 'unknown') {
       log.warn('nseap declaration check unavailable', {
