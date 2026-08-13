@@ -193,14 +193,26 @@ function _initSkillsCognitionBindings() {
         renderSkillsCognitionAssets();
         return;
       }
-      if (actionName === 'revoke') {
-        const message = _cognitionText('cognition.asset_revoke_confirm', '确认从 Recall 中移除这条记忆？原始会话和文件不会被删除。');
+      // 不可逆或有时限的动作必须先确认。归档与恢复不确认：它们随时可撤销，
+      // 每一步都拦一下只会让用户养成闭眼点确认的习惯，真正危险的那次也就拦不住。
+      const confirmations = {
+        revoke: ['cognition.asset_revoke_confirm', '确认从 Recall 中移除这条记忆？原始会话和文件不会被删除。'],
+        delete: ['cognition.asset_delete_confirm', '删除后进入保留期，期内可以恢复；保留期过后将无法找回。确认删除？'],
+        purge: ['cognition.asset_purge_confirm', '彻底清除会删掉这条认知的内容和全部历史版本，且无法恢复。确认清除？'],
+      };
+      const confirmation = confirmations[actionName];
+      if (confirmation) {
+        const message = _cognitionText(confirmation[0], confirmation[1]);
         if (typeof uiConfirm !== 'function' || !(await uiConfirm(message))) return;
       }
       const channels = {
         pause: 'recall.assets.pause',
         resume: 'recall.assets.resume',
         revoke: 'recall.assets.revoke',
+        archive: 'recall.assets.archive',
+        restore: 'recall.assets.restore',
+        delete: 'recall.assets.delete',
+        purge: 'recall.assets.purge',
       };
       const channel = channels[actionName];
       if (!channel) return;
@@ -208,7 +220,12 @@ function _initSkillsCognitionBindings() {
       if (!result?.ok) throw new Error(result?.error || 'recall asset action failed');
       await loadSkillsCognitionSnapshot();
       if (typeof uiToast === 'function') {
-        uiToast(_cognitionText(`cognition.asset_action_${actionName}_done`, actionName === 'pause' ? '记忆已暂停使用' : actionName === 'resume' ? '记忆已恢复使用' : '记忆已移除'), { variant: 'success' });
+        const done = {
+          pause: '已暂停使用', resume: '已恢复使用', revoke: '已移除',
+          archive: '已归档', restore: '已恢复', delete: '已删除，保留期内可恢复',
+          purge: '已彻底清除',
+        };
+        uiToast(_cognitionText(`cognition.asset_action_${actionName}_done`, done[actionName] || '已完成'), { variant: 'success' });
       }
     } catch (error) {
       _skillsCognitionState.assetHistoryById ||= {};
@@ -216,6 +233,23 @@ function _initSkillsCognitionBindings() {
         _skillsCognitionState.assetHistoryById[assetId] = { loading: false, error: (error && error.message) || String(error) };
         renderSkillsCognitionAssets();
       }
+      if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+    } finally {
+      control.dataset.busy = '0'; control.disabled = false;
+    }
+  };
+
+  const runRecallAssetRollback = async (control, assetId, version) => {
+    if (!assetId || !version || control.dataset.busy === '1') return;
+    control.dataset.busy = '1'; control.disabled = true;
+    try {
+      const result = await window.cogseed.invoke('recall.assets.rollback', { assetId, version });
+      if (!result?.ok) throw new Error(result?.error || 'recall asset rollback failed');
+      await loadSkillsCognitionSnapshot();
+      if (typeof uiToast === 'function') {
+        uiToast(_cognitionText('cognition.asset_action_rollback_done', '已回滚到所选版本'), { variant: 'success' });
+      }
+    } catch (error) {
       if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
     } finally {
       control.dataset.busy = '0'; control.disabled = false;
@@ -279,9 +313,20 @@ function _initSkillsCognitionBindings() {
         clientY: event.clientY || rect.bottom,
       }, actions.map((actionName) => ({
         label: _recallAssetActionLabel(actionName),
-        icon: actionName === 'revoke' ? 'trash-2' : actionName === 'versions' ? 'history' : actionName === 'resume' ? 'play' : 'pause',
+        icon: ({
+          pause: 'pause', resume: 'play', archive: 'archive', restore: 'rotate-ccw',
+          delete: 'trash-2', purge: 'trash-2', revoke: 'trash-2', versions: 'history',
+        })[actionName] || 'pause',
         onClick: () => runRecallAssetAction(assetMore, actionName, assetId),
       })));
+      return;
+    }
+
+    const assetRollback = event.target.closest('[data-recall-asset-rollback]');
+    if (assetRollback) {
+      const assetId = assetRollback.dataset.recallAssetRollback || '';
+      const version = assetRollback.dataset.recallAssetVersion || '';
+      if (assetId && version) await runRecallAssetRollback(assetRollback, assetId, version);
       return;
     }
 

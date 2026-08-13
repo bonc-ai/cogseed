@@ -1254,10 +1254,34 @@ function renderSkillsCognitionCandidates() {
   }).join('')}</div></section>`;
 }
 
+/**
+ * 当前状态下允许的治理动作（规范 22.1）。
+ *
+ * 按状态生成而不是全部列出再逐个禁用：一个点不动的「恢复」不会告诉用户为什么
+ * 点不动，不如不给。彻底清除后只剩版本入口——墓碑没有内容可治理，其余动作在
+ * 服务端也会被 assertNotPurged 挡掉，摆出来只会让人以为还能操作。
+ */
+function _recallAssetActions(status) {
+  if (status === 'purged') return ['versions'];
+  const actions = [];
+  if (status === 'active') actions.push('pause');
+  if (status === 'paused') actions.push('resume');
+  if (status === 'active' || status === 'paused') actions.push('archive');
+  if (status === 'archived' || status === 'deleted') actions.push('restore');
+  if (status !== 'deleted' && status !== 'revoked') actions.push('delete');
+  if (status !== 'revoked') actions.push('revoke');
+  actions.push('purge', 'versions');
+  return actions;
+}
+
 function _recallAssetActionLabel(action) {
   const labels = {
     pause: _cognitionText('cognition.asset_action_pause', '暂停使用'),
     resume: _cognitionText('cognition.asset_action_resume', '恢复使用'),
+    archive: _cognitionText('cognition.asset_action_archive', '归档'),
+    restore: _cognitionText('cognition.asset_action_restore', '恢复'),
+    delete: _cognitionText('cognition.asset_action_delete', '删除'),
+    purge: _cognitionText('cognition.asset_action_purge', '彻底清除'),
     revoke: _cognitionText('cognition.asset_action_revoke', '移除记忆'),
     versions: _cognitionText('cognition.asset_action_versions', '查看版本'),
   };
@@ -1274,7 +1298,17 @@ function _renderRecallAssetHistory(assetId) {
     body = `<div class="skills-cognition-error">${escapeHtml(history.error)}</div>`;
   } else if (history && !history.loading) {
     const versions = Array.isArray(history.versions) ? history.versions : [];
-    body = versions.length ? versions.map((version) => `<div class="recall-asset-version-row"><span><strong>v${escapeHtml(version.version || '')}</strong><small>${escapeHtml(_cognitionDate(version.at))}</small></span><p>${escapeHtml(version.snapshot?.title || '')}</p></div>`).join('') : `<div class="skills-cognition-empty">${escapeHtml(_cognitionText('cognition.asset_versions_empty', '暂无版本记录'))}</div>`;
+    // 回滚按钮挂在版本行上：要回到哪一版是选择题，放进「更多」菜单就没地方选。
+    // 当前版本不给回滚按钮——回滚到自己没有意义，服务端也会拒。
+    const currentVersion = String(_skillsCognitionState.assets?.find((item) => item.id === assetId)?.version || '');
+    const rollbackLabel = _cognitionText('cognition.asset_action_rollback', '回滚到此版本');
+    body = versions.length ? versions.map((version) => {
+      const value = String(version.version || '');
+      const rollback = value && value !== currentVersion
+        ? `<button type="button" class="btn btn-sm recall-asset-rollback" data-recall-asset-rollback="${escapeHtml(assetId)}" data-recall-asset-version="${escapeHtml(value)}">${escapeHtml(rollbackLabel)}</button>`
+        : '';
+      return `<div class="recall-asset-version-row"><span><strong>v${escapeHtml(value)}</strong><small>${escapeHtml(_cognitionDate(version.at))}</small></span><p>${escapeHtml(version.snapshot?.title || '')}</p>${rollback}</div>`;
+    }).join('') : `<div class="skills-cognition-empty">${escapeHtml(_cognitionText('cognition.asset_versions_empty', '暂无版本记录'))}</div>`;
   }
   return `<section class="recall-asset-version-panel"><div class="recall-asset-version-head"><strong>${escapeHtml(_cognitionText('cognition.version_history', '版本历史'))}</strong><button type="button" class="btn btn-sm recall-asset-version-close" data-recall-asset-history-close title="${escapeHtml(closeLabel)}" aria-label="${escapeHtml(closeLabel)}">${closeIcon}</button></div>${body}${_renderAbilityAssetUsage(history)}</section>`;
 }
@@ -1346,9 +1380,7 @@ function renderSkillsCognitionAssets() {
   const relationRefs = Array.isArray(selected.relationRefs) ? selected.relationRefs : [];
   const relationText = relationRefs.length ? [...new Set(relationRefs.map(_cognitionRelationRefText).filter(Boolean))].join('、') : _cognitionText('cognition.no_refs', '未记录引用');
   const isRecallAsset = selected.source === 'recall_ability_asset';
-  const assetManagementActions = isRecallAsset
-    ? [selected.status === 'paused' ? 'resume' : selected.status === 'active' ? 'pause' : '', selected.status === 'revoked' ? '' : 'revoke', 'versions'].filter(Boolean)
-    : [];
+  const assetManagementActions = isRecallAsset ? _recallAssetActions(selected.status) : [];
   const assetMoreLabel = _cognitionText('common.more', '更多');
   const assetMoreIcon = typeof uiIconHtml === 'function' ? uiIconHtml('more-horizontal') : '<span aria-hidden="true">...</span>';
   const assetMore = assetManagementActions.length

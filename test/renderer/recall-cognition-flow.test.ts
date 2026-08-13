@@ -85,13 +85,23 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).not.toContain('data-cognition-page-link="sources"');
     expect(host.innerHTML).toContain('可复用方法');
     expect(host.innerHTML).toContain('data-recall-asset-more="aa-method"');
-    expect(host.innerHTML).toContain('data-recall-asset-actions="pause,revoke,versions"');
+    expect(host.innerHTML).toContain('data-recall-asset-actions="pause,archive,delete,revoke,purge,versions"');
 
     vm.runInContext(`_skillsCognitionState.assets[0].generatedSkillId = 'apply-prd-review';`, context);
     context.renderSkillsCognitionAssets();
     expect(host.innerHTML).toContain('已加入技能库');
     expect(host.innerHTML).toContain('data-cognition-open-skill="apply-prd-review"');
     expect(host.innerHTML).not.toContain('data-recall-skill-generate=');
+  });
+
+  it('shows governance actions appropriate to each Recall asset status', () => {
+    const context = loadSkillsRenderer();
+    expect(Array.from(context._recallAssetActions('active'))).toEqual(['pause', 'archive', 'delete', 'revoke', 'purge', 'versions']);
+    expect(Array.from(context._recallAssetActions('paused'))).toEqual(['resume', 'archive', 'delete', 'revoke', 'purge', 'versions']);
+    expect(Array.from(context._recallAssetActions('archived'))).toEqual(['restore', 'delete', 'revoke', 'purge', 'versions']);
+    expect(Array.from(context._recallAssetActions('deleted'))).toEqual(['restore', 'revoke', 'purge', 'versions']);
+    expect(Array.from(context._recallAssetActions('revoked'))).toEqual(['purge', 'versions']);
+    expect(Array.from(context._recallAssetActions('purged'))).toEqual(['versions']);
   });
 
   it('uses a concise method name while keeping the deposited content visible', () => {
@@ -1329,7 +1339,7 @@ describe('Recall cognition renderer flow', () => {
     const button: any = {
       dataset: {
         recallAssetMore: 'aa-method',
-        recallAssetActions: 'pause,resume,revoke,versions',
+        recallAssetActions: 'pause,resume,archive,restore,delete,purge,revoke,versions',
       },
       disabled: false,
       getBoundingClientRect: () => ({ right: 10, bottom: 20 }),
@@ -1371,23 +1381,39 @@ describe('Recall cognition renderer flow', () => {
 
     expect(clickHandler).toBeTypeOf('function');
     await clickHandler!({ target, clientX: 1, clientY: 2 });
-    expect(menuItems).toHaveLength(4);
+    expect(menuItems).toHaveLength(8);
     for (const item of menuItems) await item.onClick();
+
+    const rollbackButton: any = {
+      dataset: { recallAssetRollback: 'aa-method', recallAssetVersion: '1' },
+      disabled: false,
+    };
+    await clickHandler!({
+      target: {
+        closest: (selector: string) => selector === '[data-recall-asset-rollback]' ? rollbackButton : null,
+      },
+    });
 
     expect(calls).toEqual([
       ['recall.assets.pause', { assetId: 'aa-method' }],
       ['recall.assets.resume', { assetId: 'aa-method' }],
+      ['recall.assets.archive', { assetId: 'aa-method' }],
+      ['recall.assets.restore', { assetId: 'aa-method' }],
+      ['recall.assets.delete', { assetId: 'aa-method' }],
+      ['recall.assets.purge', { assetId: 'aa-method' }],
       ['recall.assets.revoke', { assetId: 'aa-method' }],
       // Usage is dispatched before versions and settles on its own, so a usage
       // outage cannot blank the version list.
       ['recall.usage.list', { assetId: 'aa-method' }],
       ['recall.assets.versions', { assetId: 'aa-method' }],
+      ['recall.assets.rollback', { assetId: 'aa-method', version: '1' }],
     ]);
-    expect(refreshes).toBe(3);
+    expect(refreshes).toBe(8);
     expect(renders).toBeGreaterThanOrEqual(2);
     expect(state.visibleAssetHistoryId).toBe('aa-method');
     expect(state.assetHistoryById['aa-method'].versions[0].version).toBe('1');
     expect(button.disabled).toBe(false);
+    expect(rollbackButton.disabled).toBe(false);
   });
 
   it('queues one historical conversation with a single click and refreshes all tasks', async () => {
