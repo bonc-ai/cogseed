@@ -9,6 +9,7 @@ const _rendererFeatureManifest = Object.freeze({
   settings: [
     { src: './modules/model-authorization.js' },
     { src: './modules/settings.js' },
+    { src: './modules/hub-account.js' },
     { src: './vendor/qrcode-generator/qrcode.js' },
     { src: './modules/messaging-settings.js' },
     { src: './modules/touchpoint-settings-model.js' },
@@ -37,15 +38,11 @@ const _rendererFeatureManifest = Object.freeze({
   ],
   skills: [
     { src: './modules/recall-information-architecture.js' },
-    // Pure status mapping; must load before skills.js reads it at render time.
-    { src: './modules/ability-asset-status.js' },
     { src: './modules/skills.js' },
     { src: './modules/skills-bindings.js' },
   ],
   recall: [
     { src: './modules/recall-information-architecture.js' },
-    // 同上：recall 组同样加载 skills.js，状态映射必须先到位。
-    { src: './modules/ability-asset-status.js' },
     { src: './modules/skills.js' },
     { src: './modules/skills-bindings.js' },
   ],

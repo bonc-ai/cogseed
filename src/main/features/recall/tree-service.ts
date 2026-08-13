@@ -1,5 +1,5 @@
 import { listAbilityAssets } from './asset-service';
-import type { AbilityAssetRelationKind } from './asset-semantics';
+import type { AbilityAssetRelationKind } from './asset-relations';
 import type { RecallAbilityAssetRecord } from './candidate-service';
 import { readRecallJsonRecord, writeRecallJsonRecord } from './store';
 import { RECALL_SCHEMA_VERSION, type RecallJsonRecord } from './types';

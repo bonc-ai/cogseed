@@ -231,7 +231,10 @@ export async function removeCognitionSource(
       const downgrade = await downgradeAbilityAssetMaturityForRevokedEvidence(userId, asset.id, source);
       if (downgrade.downgraded) downgradedAssetIds.push(asset.id);
       if (asset.status !== 'revoked') {
-        await revokeAbilityAsset(userId, asset.id, `source_removed:${source.kind}:${source.id}`);
+        await revokeAbilityAsset(userId, asset.id, {
+          actor: 'user',
+          reason: `source_removed:${source.kind}:${source.id}`,
+        });
       }
       revokedAssetIds.push(asset.id);
     } catch {

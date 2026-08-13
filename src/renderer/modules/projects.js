@@ -98,9 +98,17 @@ async function loadProjects(forceRefresh) {
   // their space, so it needs both. `spaces.list` may fail or be empty (user
   // never made a workspace); that's fine, we just render ungrouped.
   try {
+    // `spaces.list` fans out to agents/skills reads which can stall under boot
+    // concurrency; a hung spaces call must never block first paint / boot.
+    // Bound it: on timeout treat spaces as empty (projects still render
+    // ungrouped) — the sidebar is not worth freezing the whole boot for.
+    const spacesWithTimeout = Promise.race([
+      window.cogseed.invoke('spaces.list', {}),
+      new Promise((resolve) => setTimeout(() => resolve(null), 5000)),
+    ]).catch(() => null);
     const [projRes, spaceRes] = await Promise.all([
       window.cogseed.invoke('projects.list', {}),
-      window.cogseed.invoke('spaces.list', {}).catch(() => null),
+      spacesWithTimeout,
     ]);
     _projectsCache = (projRes && projRes.ok && Array.isArray(projRes.projects)) ? projRes.projects : [];
     const spaceList = (spaceRes && Array.isArray(spaceRes.spaces)) ? spaceRes.spaces : [];
@@ -596,7 +604,7 @@ function _bindSpaceInlineCreateInput(input) {
     _projectsTrackClick('space_project_create_submit', { space_id: sid, name_length: name.length });
     try {
       // Create project, then bind it to the space.
-      const createRes = await window.orkas.invoke('projects.create', { name });
+      const createRes = await (window.cogseed || window.orkas).invoke('projects.create', { name });
       if (!createRes || !createRes.ok) {
         _projectsTrackEvent('space_project_create_result', {
           result: 'failure',
@@ -613,7 +621,7 @@ function _bindSpaceInlineCreateInput(input) {
         _showProjectInlineError(input, 'no project_id returned');
         return;
       }
-      const bindRes = await window.orkas.invoke('projects.bindSpace', { projectId: pid, spaceId: sid });
+      const bindRes = await (window.cogseed || window.orkas).invoke('projects.bindSpace', { projectId: pid, spaceId: sid });
       if (!bindRes || !bindRes.ok) {
         _projectsTrackEvent('space_project_create_result', {
           result: 'bind_failure',

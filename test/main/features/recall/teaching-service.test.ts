@@ -85,7 +85,7 @@ describe('User teaching signals', () => {
       memoryScope: 'project',
     });
     const candidate = await candidates.readRecallCandidate('user-a', signal!.candidateIds[0]);
-    const asset = (await candidates.promoteRecallCandidate('user-a', candidate.id)).asset;
+    const asset = (await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' })).asset;
     await assets.setAbilityAssetMaturity('user-a', asset.id, 'transfer_validated');
 
     await teaching.revokeUserTeachingSignal('user-a', signal!.id);

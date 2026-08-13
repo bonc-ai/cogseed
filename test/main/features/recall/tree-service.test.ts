@@ -42,7 +42,7 @@ async function seedAsset(
     suggestedScope: 'review',
     sourceRefs: [sourceRef],
   });
-  const { asset } = await candidates.promoteRecallCandidate(userId, candidate.id);
+  const { asset } = await candidates.promoteRecallCandidate(userId, candidate.id, { actor: 'user' });
   return { candidate, asset };
 }
 
@@ -62,6 +62,8 @@ describe('cognition tree asset relation contract', () => {
     const updated = await assets.updateAbilityAsset('u', refinement.asset.id, {
       relations: [{ kind: 'refines', assetId: base.asset.id, note: 'Narrows the storage boundary.' }],
       derivedFrom: [base.asset.id],
+      reason: 'Declare the asset relationship contract.',
+      actor: 'user',
     });
     await usage.recordRecallUsage('u', {
       assetId: updated.id,
@@ -119,6 +121,8 @@ describe('cognition tree asset relation contract', () => {
     );
     await assets.updateAbilityAsset('u-dangling', source.asset.id, {
       relations: [{ kind: 'depends_on', assetId: 'asset-from-another-snapshot' }],
+      reason: 'Declare an externally resolved dependency.',
+      actor: 'user',
     });
 
     const graph = await tree.rebuildCognitionTree('u-dangling');

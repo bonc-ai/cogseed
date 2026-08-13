@@ -49,8 +49,8 @@ function _findProjectRowByName(name) {
 const TOUR_STEPS = [
   {
     id: 'conversation',
-    title: '查看导入的会话',
-    description: '这些是你从其他 Agent 导入的历史会话。点击打开一个会话，看看它的内容。',
+    title: '你的历史会话',
+    description: '你过去的对话都在这里，随时能接着聊。点开一条看看。',
     // Onboarding moves imported conversations into a project, which leaves the
     // ungrouped `#conversation-list` empty — so anchoring there highlighted a
     // blank box. Resolve the real row instead, preferring the deepest thing
@@ -70,7 +70,7 @@ const TOUR_STEPS = [
   {
     id: 'agents',
     title: '查看 AI 团队',
-    description: '这是你连接的 AI Agent 团队。点击 Agents 按钮查看已连接的模型。',
+    description: '这些是你接入的模型和本机 Agent，任务由它们执行。点左侧「AI 团队」看看都有谁。',
     target: '#agents-btn',
     position: 'right',
     checkComplete: () => {
@@ -80,7 +80,7 @@ const TOUR_STEPS = [
   {
     id: 'skills',
     title: '查看技能库',
-    description: '这里是你的技能库，包含各种可以调用的技能。点击 Skills 按钮查看。',
+    description: '这里放着你能调用的技能，干活时按需取用。点左侧「技能库」看看。',
     target: '#skills-btn',
     position: 'right',
     checkComplete: () => {
@@ -89,8 +89,8 @@ const TOUR_STEPS = [
   },
   {
     id: 'recall',
-    title: '打开认知资产',
-    description: '从导入的会话中提取了候选认知。点击「认知资产」，看看沉淀出了什么。',
+    title: '你的认知资产',
+    description: 'CogSeed 从你的会话里发现了值得留下的认知。点「认知资产」，看它们放在了哪。',
     target: '#recall-btn',
     position: 'right',
     checkComplete: () => {
@@ -104,8 +104,8 @@ const TOUR_STEPS = [
     // Overview already renders a link to the candidate list whenever candidates
     // are pending, so anchor to that instead of inventing a new entry point.
     id: 'recall-review',
-    title: '审核候选认知',
-    description: '候选认知在「认知沉淀」页，概览页看不到。从这里进入候选列表，然后确认或拒绝任意一条。',
+    title: '候选认知，你说了算',
+    description: '候选只是建议，不是结论。进入候选列表，确认或拒绝任意一条——只有你点头的才会留下。',
     resolveTarget: () => (
       // Once the user has navigated, the overview link is gone and the decision
       // buttons are on screen — follow them so the card stops pointing at a
@@ -120,8 +120,8 @@ const TOUR_STEPS = [
   },
   {
     id: 'recall-assets',
-    title: '查看沉淀出的资产',
-    description: '确认过的认知会沉淀成「能力资产」。点开这一页，看看已经攒下了什么。',
+    title: '确认后，认知归你',
+    description: '你刚确认的认知，已经沉淀为正式资产。点开这页，看看攒下了什么。',
     // The Recall nav tab is the stable entry point; the overview page also
     // renders a link to the same place, so fall back to it when the user is
     // still on overview and the tab is off-screen.
@@ -141,8 +141,8 @@ const TOUR_STEPS = [
   },
   {
     id: 'recall-asset-detail',
-    title: '查看一条资产详情',
-    description: '点击列表里的任意一条资产，右侧会显示它的版本、来源和下一次任务的注入预览。',
+    title: '一条资产里有什么',
+    description: '点开任意一条：能看到它的版本、来源，以及下次任务时会怎样用上它。',
     // Prefer a row the user hasn't got open: the assets page auto-selects the
     // first record, so pointing at that one asks for a click that changes
     // nothing on screen.
@@ -386,11 +386,12 @@ function _showTourStep(stepIndex) {
   const tooltipHTML = `
     <div class="tour-tooltip-content">
       <div class="tour-tooltip-header">
-        <span class="tour-tooltip-badge">${stepIndex + 1} / ${TOUR_STEPS.length}</span>
+        <span class="tour-tooltip-badge">第 ${stepIndex + 1} 步 / 共 ${TOUR_STEPS.length} 步</span>
         <h3 class="tour-tooltip-title">${_tourEsc(step.title)}</h3>
       </div>
+      <div class="tour-tooltip-progress"><i style="width:${Math.round(((stepIndex + 1) / TOUR_STEPS.length) * 100)}%"></i></div>
       <p class="tour-tooltip-desc">${_tourEsc(step.description)}</p>
-      <div class="tour-tooltip-hint">👆 完成高亮处的操作后自动继续</div>
+      <div class="tour-tooltip-hint">👆 按提示完成高亮处的操作，自动进入下一步</div>
       <div class="tour-tooltip-actions">
         <button type="button" class="tour-tooltip-btn" data-tour-action="skip">跳过引导</button>
         <button type="button" class="tour-tooltip-btn primary" data-tour-action="next">${
@@ -519,7 +520,7 @@ function _showTourFinishCard() {
       <div class="tour-tooltip-header">
         <h3 class="tour-tooltip-title">引导完成</h3>
       </div>
-      <p class="tour-tooltip-desc">四个主要入口都走过一遍了：会话、Agents、Skills、认知资产。认知的完整链路也走通了：候选 → 审核 → 沉淀成能力资产。以后随时可以从左侧边栏回到它们。</p>
+      <p class="tour-tooltip-desc">你刚走通了完整链路：会话 → 提取候选 → 你确认 → 沉淀为正式认知。下次开工时，这些认知会自动跟上——换哪个 AI 都能接着干。随时可从左侧边栏回来。</p>
       <div class="tour-tooltip-actions">
         <button type="button" class="tour-tooltip-btn primary" data-tour-action="done">知道了</button>
       </div>

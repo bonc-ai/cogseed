@@ -18,6 +18,7 @@
 
 import { createLogger } from '../../logger.js';
 import { whichBin } from './which.js';
+import { detectCliAuth } from './auth-state.js';
 import { checkMinVersion, detectVersion, parseSemver } from './version.js';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
@@ -26,7 +27,7 @@ import * as path from 'node:path';
 const log = createLogger('local-agents');
 
 /** Canonical CLI type names. New backends add an entry here + in BIN_NAMES + ENV_KEYS. */
-export const LOCAL_CLI_TYPES = ['claude', 'codex', 'openclaw', 'opencode', 'hermes'] as const;
+export const LOCAL_CLI_TYPES = ['claude', 'codex', 'openclaw', 'opencode', 'hermes', 'workbuddy'] as const;
 
 export type LocalCliType = (typeof LOCAL_CLI_TYPES)[number];
 
@@ -37,6 +38,9 @@ const BIN_NAMES: Record<LocalCliType, string> = {
   openclaw: 'openclaw',
   opencode: 'opencode',
   hermes: 'hermes',
+  // WorkBuddy (Tencent) ships the CLI as `codebuddy` inside the app bundle;
+  // it is not placed on PATH, so discovery relies on localCliSearchDirs below.
+  workbuddy: 'codebuddy',
 };
 
 /** Env var to override default binary path per CLI. */
@@ -46,6 +50,7 @@ const ENV_KEYS: Record<LocalCliType, string> = {
   openclaw: 'ORKAS_OPENCLAW_PATH',
   opencode: 'ORKAS_OPENCODE_PATH',
   hermes: 'ORKAS_HERMES_PATH',
+  workbuddy: 'ORKAS_WORKBUDDY_PATH',
 };
 
 /** Documented version probes for each CLI, in compatibility order. */
@@ -57,6 +62,8 @@ const VERSION_PROBES: Record<LocalCliType, readonly (readonly string[])[]> = {
   // Hermes documents both forms across releases. Prefer the stable
   // subcommand, then tolerate installations that expose only the flag.
   hermes: [['version'], ['--version']],
+  // codebuddy prints a bare semver on `--version` (verified 2.115.0).
+  workbuddy: [['--version']],
 };
 
 export function localCliSearchDirs(
@@ -99,6 +106,11 @@ export function localCliSearchDirs(
   if (type === 'codex' && platform === 'darwin') {
     dirs.push('/Applications/Codex.app/Contents/Resources');
     dirs.push('/Applications/ChatGPT.app/Contents/Resources');
+  }
+  if (type === 'workbuddy' && platform === 'darwin') {
+    // WorkBuddy bundles its CLI (`codebuddy`) inside the app's unpacked
+    // asar. GUI-launched apps never see it on PATH, so probe the bundle.
+    dirs.push('/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin');
   }
   return dirs;
 }
@@ -227,6 +239,9 @@ export type LocalCliEntry = {
   error?: 'not_found' | 'version_too_old' | 'version_unknown';
   /** Human-readable detail when error is set; safe to show in UI. */
   errorDetail?: string;
+  /** Credential state (official-account sign-in vs raw key) for available
+   *  CLIs. File-based, read-only — never guesses. */
+  auth?: { loggedIn: boolean; mode: 'oauth' | 'api' | 'unknown' };
 };
 
 const CACHE_TTL_MS = 60_000;
@@ -304,7 +319,7 @@ export async function detectOne(type: LocalCliType): Promise<LocalCliEntry> {
       errorDetail: minErr,
     };
   }
-  return { type, path: resolved, version, available: true };
+  return { type, path: resolved, version, available: true, auth: detectCliAuth(type) };
 }
 
 /** Clear the cache; mainly for tests and the IPC `force: true` path. */

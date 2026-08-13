@@ -36,12 +36,10 @@ const _skillsCognitionState = {
   loadErrors: [],
   editingRecallCandidateId: '',
   writingRecallCandidateId: '',
-  writingRecallCandidateBatch: false,
   assets: [],
   selectedAssetId: '',
   assetCategoryFilter: '',
   assetSearchQuery: '',
-  // Per-asset version/audit/usage, fetched when the history panel is opened.
   assetHistoryById: {},
   visibleAssetHistoryId: '',
   dashboard: null,
@@ -72,8 +70,6 @@ function _cognitionStatusLabel(status) {
     degraded: _cognitionText('cognition.status_degraded', '降级'),
     rejected: _cognitionText('cognition.status_rejected', '拒绝'),
     pending: _cognitionText('cognition.status_pending', '待确认'),
-    deferred: _cognitionText('cognition.status_pending', '待确认'),
-    promoted: _cognitionText('cognition.candidate_state_stored', '已入库'),
     accepted: _cognitionText('cognition.status_accepted', '已确认'),
     preview: _cognitionText('cognition.status_preview', '预览'),
     confirmed: _cognitionText('cognition.status_confirmed', '已确认'),
@@ -186,40 +182,6 @@ function _renderCognitionInlineRefs(refs) {
 }
 
 
-/** 正式资产的边界：什么时候该用、什么时候绝不能用、给谁、多敏感。
- *
- *  这几条在能力包交付端是真实生效的——`capability-pack-delivery` 按
- *  `targetAgentIds` 和 `forbiddenWhen` 过滤掉不该带的资产。此前展示层看不到它们，
- *  用户就无法解释一条资产为什么没被带进某次任务。
- *
- *  一条都没有时整块不渲染：空块会被读成「没有限制」，而缺失只表示没记录过。 */
-function _renderAbilityAssetBoundary(asset) {
-  if (!asset) return '';
-  const rows = [];
-  const applicable = Array.isArray(asset.applicableWhen) ? asset.applicableWhen.filter(Boolean) : [];
-  const forbidden = Array.isArray(asset.forbiddenWhen) ? asset.forbiddenWhen.filter(Boolean) : [];
-  if (applicable.length) {
-    rows.push([_cognitionText('cognition.asset_applicable_when', '适用场景'), applicable.join('；')]);
-  }
-  if (forbidden.length) {
-    rows.push([_cognitionText('cognition.asset_forbidden_when', '禁用场景'), forbidden.join('；')]);
-  }
-  if (asset.sensitivity) {
-    rows.push([_cognitionText('cognition.asset_sensitivity', '敏感级别'), String(asset.sensitivity)]);
-  }
-  if (Array.isArray(asset.targetAgentIds)) {
-    // 空数组是有意义的状态（谁都不给），必须和「没限定」区分开。
-    rows.push([
-      _cognitionText('cognition.asset_target_agents', '限定接收方'),
-      asset.targetAgentIds.length
-        ? asset.targetAgentIds.join('、')
-        : _cognitionText('cognition.asset_target_agents_none', '不投递给任何 Agent'),
-    ]);
-  }
-  if (!rows.length) return '';
-  return `<div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.asset_boundary', '使用边界'))}</strong>${rows.map(([label, value]) => `<p>${escapeHtml(label)}：${escapeHtml(value)}</p>`).join('')}</div>`;
-}
-
 function _abilityAssetCategoryLabel(category) {
   const labels = {
     personal: _cognitionText('cognition.asset_category_personal', '关于我'),
@@ -240,90 +202,56 @@ function _abilityAssetMaturityLabel(maturity, status) {
   return maturity || status || _cognitionText('cognition.unknown', '未知');
 }
 
-/**
- * Coarse lifecycle label (candidate / confirmed / active / deprecated).
- * The underlying two-part state is mapped in ability-asset-status.js; the
- * nuance it drops (paused vs revoked, deferred) comes back as a `note` suffix
- * so a paused asset is not shown as if it were revoked.
- */
-function _abilityAssetDisplayStatusLabel(record) {
-  const mapper = globalThis.OrkasAbilityAssetStatus;
-  if (!mapper) return _abilityAssetMaturityLabel(record?.maturity, record?.status);
-  const { key, note } = mapper.abilityAssetDisplayStatus(record);
-  const label = _cognitionText(mapper.abilityAssetDisplayStatusI18nKey(key), key);
-  if (!note) return label;
-  const noteLabel = _cognitionText(`cognition.display_status_note_${note}`, note);
-  return `${label} · ${noteLabel}`;
-}
-
-/** Loading / error / empty states share one shape so the two blocks read alike. */
-function _renderAssetHistoryState(loading, error, empty) {
-  if (loading) return `<p class="asset-history-state">${escapeHtml(_cognitionText('cognition.loading', '加载中…'))}</p>`;
-  if (error) return `<p class="asset-history-state is-error">${escapeHtml(_cognitionText('cognition.load_failed', '认知资产数据加载失败'))}：${escapeHtml(error)}</p>`;
-  return `<p class="asset-history-state">${escapeHtml(empty)}</p>`;
-}
-
-/**
- * Usage rows for the version-history panel.
- *
- * Version history answers "这条被改过几次"; usage answers "它真被带进过几次任务".
- * The panel itself (fetch, toggle, close) belongs to `_renderRecallAssetHistory`
- * — this only contributes the usage block so there stays exactly one history
- * panel rather than two competing ones.
- */
-function _renderAbilityAssetUsage(entry) {
-  const title = escapeHtml(_cognitionText('cognition.usage_records', '使用记录'));
-  if (!entry || entry.usageLoading || entry.usageError || !entry.usage?.length) {
-    const empty = _cognitionText('cognition.no_usage_records', '暂无使用记录');
-    const body = _renderAssetHistoryState(!entry || entry.usageLoading, entry && entry.usageError, empty);
-    return `<div class="asset-history-block"><strong>${title}</strong>${body}</div>`;
-  }
-  const rows = entry.usage.slice().reverse().map((u) => {
-    // A degraded or test-double boundary means the run behind this record was
-    // not a real reuse; surfacing it keeps mock data from reading as evidence.
-    const boundary = u.boundary && u.boundary !== 'real'
-      ? ` · ${escapeHtml(_cognitionText(`cognition.usage_boundary_${u.boundary}`, u.boundary))}`
-      : '';
-    return `<li>
-      <span class="asset-history-at">${escapeHtml(String(u.createdAt || ''))}</span>
-      <span class="asset-history-run">${escapeHtml(String(u.taskRunId || ''))}</span>
-      <span class="asset-history-version">v${escapeHtml(String(u.assetVersion || ''))}</span>
-      <span class="asset-history-note">${escapeHtml(String(u.outcome || ''))}${boundary}</span>
-    </li>`;
-  }).join('');
-  return `<div class="asset-history-block"><strong>${title}</strong><ul class="asset-history-list">${rows}</ul></div>`;
-}
-
-// Security status is a separate axis from maturity: "safe to admit" and "proven
-// useful" are independent questions. They are rendered as two chips so a user
-// cannot read one as implying the other — an asset can be mature and later
-// become blocked, or be freshly scanned clean but unproven.
-function _cognitionSecurityLabel(security) {
-  const status = security && security.status;
-  if (status === 'pass') return _cognitionText('cognition.security_pass', '安全检查通过');
-  if (status === 'risk') return _cognitionText('cognition.security_risk', '发现风险');
-  if (status === 'blocked') return _cognitionText('cognition.security_blocked', '已阻断');
-  return _cognitionText('cognition.security_unknown', '未检查');
-}
-
-function _renderCognitionSecurityChip(security) {
-  const status = (security && security.status) || 'unknown';
-  const label = _cognitionSecurityLabel(security);
-  const count = security && security.findingCount ? security.findingCount : 0;
-  const rule = security && security.topRule ? security.topRule : '';
-  // A degraded semantic layer must be visible: otherwise "no findings" reads as
-  // "fully checked" when only the deterministic half ran.
-  const degraded = security && security.degradedReason
-    ? ` · ${escapeHtml(_cognitionText('cognition.security_degraded', '深度审查不可用'))}`
-    : '';
-  const detail = count
-    ? ` · ${count}${rule ? ` · ${escapeHtml(rule)}` : ''}`
-    : '';
-  return `<span class="skills-cognition-security" data-cognition-security="${escapeHtml(status)}" title="${escapeHtml(rule)}">${escapeHtml(label)}${detail}${degraded}</span>`;
-}
-
 function _abilityAssetSummary(items, category) {
   return items.filter((item) => (item.category || item.type) === category).length;
+}
+
+function _abilityAssetRecommendationLabel(action) {
+  if (action === 'pause') return _cognitionText('cognition.recall_recommend_pause', '建议暂停');
+  if (action === 'rework') return _cognitionText('cognition.recall_recommend_rework', '建议重做');
+  return action || '';
+}
+
+function _abilityAssetScopePolicyLines(policy) {
+  if (!policy || typeof policy !== 'object') return [];
+  const fields = [
+    ['purposeTags', _cognitionText('cognition.scope_policy_purpose_tags', 'Purpose tags')],
+    ['agentIds', _cognitionText('cognition.scope_policy_agent_ids', 'Agents')],
+    ['roleIds', _cognitionText('cognition.scope_policy_role_ids', 'Roles')],
+    ['projectIds', _cognitionText('cognition.scope_policy_project_ids', 'Projects')],
+    ['workspaceIds', _cognitionText('cognition.scope_policy_workspace_ids', 'Workspaces')],
+    ['conversationKinds', _cognitionText('cognition.scope_policy_conversation_kinds', 'Conversation kinds')],
+    ['fileKinds', _cognitionText('cognition.scope_policy_file_kinds', 'File kinds')],
+  ];
+  return fields.map(([field, label]) => {
+    const values = Array.isArray(policy[field]) ? policy[field].filter(Boolean).map(String) : [];
+    return values.length ? `${label}: ${values.join(', ')}` : '';
+  }).filter(Boolean);
+}
+
+function _renderAbilityAssetGovernance(selected) {
+  const policyLines = _abilityAssetScopePolicyLines(selected.scopePolicy);
+  const policyHtml = policyLines.length
+    ? `<div class="reference-strip ability-asset-scope-policy"><strong>${escapeHtml(_cognitionText('cognition.scope_policy', '结构化作用域'))}</strong><p>${escapeHtml(policyLines.join(' · '))}</p></div>`
+    : '';
+  const recommendationHtml = selected.recommendedAction
+    ? `<div class="reference-strip ability-asset-recommendation is-${escapeHtml(selected.recommendedAction)}"><strong>${escapeHtml(_abilityAssetRecommendationLabel(selected.recommendedAction))}</strong><p>${escapeHtml(selected.recommendationReason || _cognitionText('cognition.recall_recommendation_needs_review', '该资产需要用户复核。'))}</p>${selected.recommendationAt ? `<small>${escapeHtml(_cognitionDate(selected.recommendationAt))}</small>` : ''}</div>`
+    : '';
+  const actions = [];
+  if (selected.status === 'active') {
+    actions.push(`<button class="btn btn-sm" data-ability-asset-action="pause" data-ability-asset-id="${escapeHtml(selected.id)}">${escapeHtml(_cognitionText('cognition.asset_pause', '暂停'))}</button>`);
+    actions.push(`<button class="btn btn-sm btn-danger" data-ability-asset-action="revoke" data-ability-asset-id="${escapeHtml(selected.id)}">${escapeHtml(_cognitionText('cognition.asset_revoke', '撤销'))}</button>`);
+  } else if (selected.status === 'paused') {
+    actions.push(`<button class="btn btn-sm btn-primary" data-ability-asset-action="resume" data-ability-asset-id="${escapeHtml(selected.id)}">${escapeHtml(_cognitionText('cognition.asset_resume', '恢复'))}</button>`);
+    actions.push(`<button class="btn btn-sm btn-danger" data-ability-asset-action="revoke" data-ability-asset-id="${escapeHtml(selected.id)}">${escapeHtml(_cognitionText('cognition.asset_revoke', '撤销'))}</button>`);
+  }
+  if (selected.recommendedAction && selected.status !== 'revoked') {
+    actions.push(`<button class="btn btn-sm btn-primary" data-ability-asset-action="acknowledge-recommendation" data-ability-asset-id="${escapeHtml(selected.id)}">${escapeHtml(_cognitionText('cognition.asset_acknowledge_recommendation', '确认建议'))}</button>`);
+  }
+  const actionHtml = actions.length
+    ? `<div class="asset-controls ability-asset-governance-actions">${actions.join('')}</div>`
+    : `<div class="skills-cognition-muted">${escapeHtml(_cognitionText('cognition.asset_no_governance_actions', '该资产当前无可用治理动作。'))}</div>`;
+  return `<div class="ability-asset-governance"><div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.asset_governance', '治理状态'))}</strong><p>${escapeHtml(selected.status || 'active')}${selected.recommendedAction ? ` · ${escapeHtml(_abilityAssetRecommendationLabel(selected.recommendedAction))}` : ''}</p></div>${policyHtml}${recommendationHtml}${actionHtml}</div>`;
 }
 
 function _abilityAssetDisplayTitle(asset) {
@@ -1222,35 +1150,19 @@ function renderSkillsCognitionCandidates() {
     .find((capture) => capture.id === _skillsCognitionState.selectedCaptureId);
   const selectedIds = selectedCapture ? new Set(selectedCapture.candidateIds || []) : null;
   const recallItems = allCandidates.filter((candidate) => (
-    selectedIds
-      ? selectedIds.has(candidate.id)
-      : candidate.status === 'pending' || candidate.status === 'deferred'
+    (candidate.status === 'pending' || candidate.status === 'deferred')
+    && (!selectedIds || selectedIds.has(candidate.id))
   ));
   if (!recallItems.length) {
     host.innerHTML = '';
     return;
   }
-  const actionableCount = recallItems.filter((candidate) => candidate.status === 'pending' || candidate.status === 'deferred').length;
-  const reviewActions = `<div class="recall-capture-review-head-actions"><span class="skills-cognition-status is-review_ready">${escapeHtml(String(actionableCount))}</span>${actionableCount > 1 ? `<button type="button" class="btn btn-sm btn-primary" data-recall-candidate-promote-all${_skillsCognitionState.writingRecallCandidateBatch ? ' disabled' : ''}>${escapeHtml(_cognitionText('cognition.capture_save_all_to_recall', '全部保存'))}</button>` : ''}</div>`;
+  const reviewActions = `<div class="recall-capture-review-head-actions"><span class="skills-cognition-status is-review_ready">${escapeHtml(String(recallItems.length))}</span>${recallItems.length > 1 ? `<button type="button" class="btn btn-sm btn-primary" data-recall-candidate-promote-all>${escapeHtml(_cognitionText('cognition.capture_save_all_to_recall', '全部保存'))}</button>` : ''}</div>`;
   host.innerHTML = `<section class="recall-capture-review"><div class="recall-workbench-section-head"><div><h2>${escapeHtml(_cognitionText('cognition.capture_review_title', '待审核内容'))}</h2><p>${escapeHtml(_cognitionText('cognition.capture_review_hint', '确认后写入 Recall；不需要的内容可以忽略'))}</p></div>${reviewActions}</div><div class="skills-cognition-record-list recall-candidate-list">${recallItems.map((candidate) => {
-    const pending = candidate.status === 'pending' || candidate.status === 'deferred';
-    const confirming = pending && _skillsCognitionState.writingRecallCandidateId === candidate.id;
-    const failed = pending && !!candidate.promotionErrorMessage;
-    const displayState = confirming ? 'confirming' : failed ? 'failed' : candidate.status;
-    const actions = pending && !confirming ? ['promote', 'edit', 'reject'] : [];
+    const actions = candidate.status === 'pending' || candidate.status === 'deferred' ? ['promote', 'edit', 'reject'] : [];
     const editing = _skillsCognitionState.editingRecallCandidateId === candidate.id;
-    const asset = candidate.promotedAssetId
-      ? (_skillsCognitionState.assets || []).find((item) => item.id === candidate.promotedAssetId)
-      : null;
-    const resultReceipt = candidate.status === 'promoted'
-      ? `<div class="recall-candidate-receipt"><strong>${escapeHtml(_cognitionText('cognition.candidate_receipt_title', '已写入 Recall'))}</strong><div><span>${escapeHtml(_cognitionText('cognition.candidate_receipt_asset', '资产'))}</span><b>${escapeHtml(candidate.promotedAssetId || '')}</b></div><div><span>${escapeHtml(_cognitionText('cognition.type', '类型'))}</span><b>${escapeHtml(_abilityAssetCategoryLabel(asset?.category || asset?.type || candidate.suggestedType))}</b></div><div><span>${escapeHtml(_cognitionText('cognition.version', '版本'))}</span><b>v${escapeHtml(asset?.version || '1')}</b></div><div><span>${escapeHtml(_cognitionText('cognition.candidate_receipt_destination', '落点'))}</span><b>${escapeHtml(`Recall · ${asset?.scope || candidate.suggestedScope || ''}`)}</b></div><div><span>${escapeHtml(_cognitionText('cognition.candidate_receipt_stage', '当前阶段'))}</span><b>${escapeHtml(_cognitionText('cognition.candidate_state_stored', '已入库'))}</b></div>${candidate.promotedAssetId ? `<button type="button" class="btn btn-sm" data-cognition-open-asset="${escapeHtml(candidate.promotedAssetId)}">${escapeHtml(_cognitionText('cognition.candidate_receipt_next', '查看能力资产'))}</button>` : ''}</div>`
-      : candidate.status === 'rejected'
-        ? `<div class="recall-candidate-receipt is-ignored"><strong>${escapeHtml(_cognitionText('cognition.candidate_state_ignored', '已忽略'))}</strong><span>${escapeHtml(_cognitionText('cognition.candidate_ignored_hint', '未写入 Recall，不会用于后续会话'))}</span></div>`
-        : failed
-          ? `<div class="recall-candidate-receipt is-failed"><strong>${escapeHtml(_cognitionText('cognition.candidate_state_failed', '确认失败'))}</strong><span>${escapeHtml(candidate.promotionErrorMessage || '')}</span><small>${escapeHtml(_cognitionText('cognition.candidate_retry_hint', '候选内容已保留，可以重试'))}</small></div>`
-          : '';
-    const editForm = editing ? `<div class="skills-cognition-detail-block recall-candidate-editor"><label>${escapeHtml(_cognitionText('cognition.judgment', '我的判断'))}<textarea data-recall-edit-judgment>${escapeHtml(candidate.judgment || '')}</textarea></label><label>${escapeHtml(_cognitionText('cognition.summary', '摘要'))}<input data-recall-edit-summary value="${escapeHtml(candidate.summary || '')}"></label><label>${escapeHtml(_cognitionText('cognition.scope', '作用域'))}<input data-recall-edit-scope value="${escapeHtml(candidate.suggestedScope || '')}"></label><label>${escapeHtml(_cognitionText('cognition.type', '类型'))}<select data-recall-edit-type>${['personal','rule','template','skill_method'].map((type) => `<option value="${type}" ${candidate.suggestedType === type ? 'selected' : ''}>${escapeHtml(_abilityAssetCategoryLabel(type))}</option>`).join('')}</select></label><label>${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}<textarea data-recall-edit-evidence>${escapeHtml((candidate.sourceRefs || []).map((ref) => `${ref.kind}:${ref.id}`).join('\n'))}</textarea></label><div class="skills-cognition-actions"><button class="btn btn-sm btn-primary" data-recall-candidate-action="save-and-promote" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('cognition.candidate_edit_and_store', '保存并入库'))}</button><button class="btn btn-sm" data-recall-candidate-action="cancel-edit" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('common.cancel', '取消'))}</button></div></div>` : '';
-    return `<article class="skills-cognition-record cognition-candidate-row" data-recall-candidate-id="${escapeHtml(candidate.id)}"><div class="skills-cognition-record-head"><h2>${escapeHtml(candidate.summary || candidate.judgment || candidate.id)}</h2><span class="skills-cognition-status is-${escapeHtml(displayState || '')}">${escapeHtml(confirming ? _cognitionText('cognition.candidate_state_confirming', '确认中') : failed ? _cognitionText('cognition.candidate_state_failed', '确认失败') : candidate.status === 'rejected' ? _cognitionText('cognition.candidate_state_ignored', '已忽略') : _cognitionStatusLabel(candidate.status))}</span></div><p>${escapeHtml(candidate.judgment || '')}</p><div class="skills-cognition-meta">${escapeHtml(_abilityAssetCategoryLabel(candidate.suggestedType))} · ${escapeHtml(candidate.suggestedScope || '')}</div><div class="skills-cognition-detail-block"><strong>${escapeHtml(_cognitionText('cognition.candidate_source', '来源'))}</strong><div class="skills-cognition-ref-row">${_renderCognitionInlineRefs(candidate.sourceRefs)}</div></div>${resultReceipt}${editForm}<div class="skills-cognition-actions">${actions.map((action) => `<button class="btn btn-sm ${action === 'promote' ? 'btn-primary' : ''}" data-recall-candidate-action="${escapeHtml(action)}" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(action === 'promote' ? _cognitionText(failed ? 'cognition.candidate_retry_store' : 'cognition.candidate_confirm_store', failed ? '重试入库' : '确认并入库') : action === 'reject' ? _cognitionText('cognition.capture_ignore', '忽略') : _cognitionText('cognition.candidate_edit_store', '编辑后入库'))}</button>`).join('')}</div></article>`;
+    const editForm = editing ? `<div class="skills-cognition-detail-block recall-candidate-editor"><label>${escapeHtml(_cognitionText('cognition.judgment', '我的判断'))}<textarea data-recall-edit-judgment>${escapeHtml(candidate.judgment || '')}</textarea></label><label>${escapeHtml(_cognitionText('cognition.summary', '摘要'))}<input data-recall-edit-summary value="${escapeHtml(candidate.summary || '')}"></label><label>${escapeHtml(_cognitionText('cognition.scope', '作用域'))}<input data-recall-edit-scope value="${escapeHtml(candidate.suggestedScope || '')}"></label><label>${escapeHtml(_cognitionText('cognition.type', '类型'))}<select data-recall-edit-type>${['personal','rule','template','skill_method'].map((type) => `<option value="${type}" ${candidate.suggestedType === type ? 'selected' : ''}>${escapeHtml(_abilityAssetCategoryLabel(type))}</option>`).join('')}</select></label><label>${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}<textarea data-recall-edit-evidence>${escapeHtml((candidate.sourceRefs || []).map((ref) => `${ref.kind}:${ref.id}`).join('\n'))}</textarea></label><div class="skills-cognition-actions"><button class="btn btn-sm btn-primary" data-recall-candidate-action="save-edit" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('common.save', '保存'))}</button><button class="btn btn-sm" data-recall-candidate-action="cancel-edit" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('common.cancel', '取消'))}</button></div></div>` : '';
+    return `<article class="skills-cognition-record cognition-candidate-row" data-recall-candidate-id="${escapeHtml(candidate.id)}"><div class="skills-cognition-record-head"><h2>${escapeHtml(candidate.summary || candidate.judgment || candidate.id)}</h2><span class="skills-cognition-status is-${escapeHtml(candidate.status || '')}">${escapeHtml(_cognitionStatusLabel(candidate.status))}</span></div><p>${escapeHtml(candidate.judgment || '')}</p><div class="skills-cognition-meta">${escapeHtml(_abilityAssetCategoryLabel(candidate.suggestedType))} · ${escapeHtml(candidate.suggestedScope || '')}</div><div class="skills-cognition-detail-block"><strong>${escapeHtml(_cognitionText('cognition.evidence_refs', '证据引用'))}</strong><div class="skills-cognition-ref-row">${_renderCognitionInlineRefs(candidate.sourceRefs)}</div></div>${editForm}<div class="skills-cognition-actions">${actions.map((action) => `<button class="btn btn-sm ${action === 'promote' ? 'btn-primary' : ''}" data-recall-candidate-action="${escapeHtml(action)}" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(action === 'promote' ? _cognitionText('cognition.capture_save_to_recall', '保存到 Recall') : action === 'reject' ? _cognitionText('cognition.capture_ignore', '忽略') : _cognitionText('skills.edit', '编辑'))}</button>`).join('')}</div></article>`;
   }).join('')}</div></section>`;
 }
 
@@ -1310,7 +1222,7 @@ function _renderRecallAssetHistory(assetId) {
       return `<div class="recall-asset-version-row"><span><strong>v${escapeHtml(value)}</strong><small>${escapeHtml(_cognitionDate(version.at))}</small></span><p>${escapeHtml(version.snapshot?.title || '')}</p>${rollback}</div>`;
     }).join('') : `<div class="skills-cognition-empty">${escapeHtml(_cognitionText('cognition.asset_versions_empty', '暂无版本记录'))}</div>`;
   }
-  return `<section class="recall-asset-version-panel"><div class="recall-asset-version-head"><strong>${escapeHtml(_cognitionText('cognition.version_history', '版本历史'))}</strong><button type="button" class="btn btn-sm recall-asset-version-close" data-recall-asset-history-close title="${escapeHtml(closeLabel)}" aria-label="${escapeHtml(closeLabel)}">${closeIcon}</button></div>${body}${_renderAbilityAssetUsage(history)}</section>`;
+  return `<section class="recall-asset-version-panel"><div class="recall-asset-version-head"><strong>${escapeHtml(_cognitionText('cognition.version_history', '版本历史'))}</strong><button type="button" class="btn btn-sm recall-asset-version-close" data-recall-asset-history-close title="${escapeHtml(closeLabel)}" aria-label="${escapeHtml(closeLabel)}">${closeIcon}</button></div>${body}</section>`;
 }
 
 function renderSkillsCognitionAssets() {
@@ -1366,8 +1278,7 @@ function renderSkillsCognitionAssets() {
     const contentSummary = _abilityAssetContentSummary(a);
     return `<button type="button" class="skills-cognition-record cognition-asset-row ability-asset-list-row${selectedClass}" data-ability-asset-id="${escapeHtml(a.id)}">
       <span class="ability-asset-row-main"><strong>${escapeHtml(displayTitle)}</strong>${contentSummary ? `<span class="ability-asset-row-summary">${escapeHtml(contentSummary)}</span>` : ''}<small>${escapeHtml(_abilityAssetCategoryLabel(category))}${a.version ? ` · ${escapeHtml(a.version)}` : ''}${!contentSummary && a.scope ? ` · ${escapeHtml(a.scope)}` : ''}</small></span>
-      <span class="skills-cognition-status">${escapeHtml(_abilityAssetDisplayStatusLabel(a))}</span>
-      ${_renderCognitionSecurityChip(a.security)}
+      <span class="skills-cognition-status">${escapeHtml(_abilityAssetMaturityLabel(a.maturity, a.status))}</span>
     </button>`;
   }).join('');
   const selectedCategory = selected.category || selected.type;
@@ -1422,20 +1333,17 @@ function renderSkillsCognitionAssets() {
     <div class="ability-asset-summary-grid">${summary}</div>
     <div class="ability-assets-management">
       <section class="ability-asset-list">
-        <!-- 导出入口跟着资产走：develop 已移除 Context Pack 页，而「交给外部执行端的
-             那一份」本质就是这一页里这些资产的对外冻结形态，所以挂在资产列表页头，
-             不为它单开一个页面。 -->
-        <div class="ability-asset-list-head">${searchInput}<button type="button" class="btn btn-sm" data-capability-pack-export>${escapeHtml(_cognitionText('cognition.export_capability_pack', '导出能力包…'))}</button></div>
+        <div class="ability-asset-list-head">${searchInput}</div>
         <div class="skills-cognition-record-list ability-asset-list-body">${rows}</div>
       </section>
       <section class="ability-asset-detail">
-        <div class="asset-detail-head"><div><h2>${escapeHtml(selectedDisplayTitle)}</h2><p>${escapeHtml(_abilityAssetCategoryLabel(selectedCategory))}</p></div><div class="asset-detail-head-actions"><span class="skills-cognition-status is-${escapeHtml(selected.status || '')}">${escapeHtml(_abilityAssetDisplayStatusLabel(selected))}</span>${_renderCognitionSecurityChip(selected.security)}${assetMore}</div></div>
+        <div class="asset-detail-head"><div><h2>${escapeHtml(selectedDisplayTitle)}</h2><p>${escapeHtml(_abilityAssetCategoryLabel(selectedCategory))}</p></div><div class="asset-detail-head-actions"><span class="skills-cognition-status is-${escapeHtml(selected.status || '')}">${escapeHtml(_abilityAssetMaturityLabel(selected.maturity, selected.status))}</span>${assetMore}</div></div>
         <div class="asset-detail-body">
           ${skillDraftFeedback}
           ${selectedContentSummaryBlock}
           <div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.relation_refs', '关联引用'))}</strong><p>${escapeHtml(relationText)}</p></div>
           ${workspaceRefs.length ? `<div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.workspace_refs', 'Workspace引用'))}</strong><p>${escapeHtml(workspaceRefs.join('、'))}</p></div>` : ''}
-          ${_renderAbilityAssetBoundary(selected)}
+          ${_renderAbilityAssetGovernance(selected)}
           ${_renderRecallAssetHistory(selected.id)}
         </div>
       </section>
@@ -1454,10 +1362,6 @@ async function loadSkillsCognitionSnapshot() {
   const capturePayload = { limit: 25 };
   const captureStatuses = _captureStatusesForFilter(snapshotCaptureFilter);
   if (captureStatuses.length) capturePayload.statuses = captureStatuses;
-  // 先把本体抽取技能的产出搬进统一候选池，再拉列表——否则技能刚产出的候选
-  // 要等用户手动逐条导入才看得见。幂等，反复进页面不会重复建候选。
-  // 失败不阻断渲染：搬不动是本体侧的问题，认知区其余内容照常显示。
-  try { await window.cogseed.invoke('recall.candidates.syncOntology'); } catch (_) {}
   const [dashboard, recallCandidates, assets, sources, captures, recentCaptures, teachingSignals, captureSettings] = await Promise.allSettled([
     Promise.resolve().then(() => window.cogseed.invoke('cognition.dashboard.read')),
     Promise.resolve().then(() => window.cogseed.invoke('recall.candidates.list')),
@@ -1562,14 +1466,6 @@ function _skillCardChipsHtml(s) {
   }
   const catLabel = _resolveCategoryLabel(s && s.category, lang);
   if (catLabel) parts.push(`<span class="skill-card-chip">${escapeHtml(catLabel)}</span>`);
-  // Withheld state leads the chip row: it explains why the card is inert, so it
-  // has to be readable before the version/category chips.
-  if (_isSkillWithheld(s)) {
-    parts.unshift(
-      `<span class="skill-card-chip is-withheld" title="${escapeHtml(t('skills.security_withheld_hint'))}">`
-      + `${escapeHtml(t('skills.security_withheld'))}</span>`,
-    );
-  }
   return parts.join('');
 }
 
@@ -1762,6 +1658,46 @@ function _skillSecurityPanelText(s) {
         .replace('{n}', String(instr.segments.length - 3))}`);
     }
     L.push(`  ${t('skills.secpanel_instruction_note')}`);
+  }
+
+  // NSEAP declaration check: what the skill's security manifest claims versus
+  // what its tree contains. Last in the panel, and deliberately quieter than the
+  // blocks above: those report what the skill might DO, this reports whether its
+  // paperwork is complete. A mismatch is an authoring defect, so it must not be
+  // dressed up in the same language as a finding.
+  //
+  // `absent` and `pass` both render nothing, for opposite reasons. No shipped
+  // skill carries a security manifest today, so printing `absent` would add a
+  // line to every skill in the library that reads as a defect while describing
+  // one that does not exist. `pass` is silent because a panel that says "nothing
+  // wrong" for each check that passed buries the one line that matters.
+  const nseap = sec.nseapDeclaration;
+  if (nseap && nseap.status !== 'absent' && nseap.status !== 'pass') {
+    L.push('');
+    L.push(t('skills.secpanel_nseap'));
+    if (nseap.status === 'unavailable') {
+      // The engine could not run. Distinct from "checked and found nothing":
+      // reporting infrastructure failure as a clean result is the same error as
+      // rendering "not checked" as safe.
+      L.push(`  ${t('skills.secpanel_nseap_unavailable')}`);
+    } else if (nseap.status === 'mismatch') {
+      L.push(`  ${t('skills.secpanel_nseap_mismatch')}`);
+    } else if (nseap.status === 'needs_input') {
+      L.push(`  ${t('skills.secpanel_nseap_needs_input')}`);
+    } else {
+      L.push(`  ${t('skills.secpanel_nseap_warnings')}`);
+    }
+    // Rule id plus message, capped. The id is what makes a gap actionable — the
+    // author can look it up — while the message alone often is not.
+    for (const f of (nseap.findings || []).slice(0, 3)) {
+      const msg = String(f.message || '').replace(/\s+/g, ' ').slice(0, 160);
+      L.push(`  · ${f.ruleId}${msg ? ` — ${msg}` : ''}`);
+    }
+    if ((nseap.findings || []).length > 3) {
+      L.push(`  ${t('skills.secpanel_nseap_more')
+        .replace('{n}', String(nseap.findings.length - 3))}`);
+    }
+    L.push(`  ${t('skills.secpanel_nseap_note')}`);
   }
 
   if (!sec.status || sec.status === 'unchecked') {
@@ -2062,23 +1998,16 @@ function renderSkillsGrid(skills) {
     const moreBtn = `<button type="button" class="skill-card-more" data-skill-more title="${moreTitle}" aria-label="${moreTitle}">⋯</button>`;
     const enabled = s.enabled !== false;
     const cardChips = _skillCardChipsHtml(s);
-    // A withheld skill cannot be used, and unlike `is-disabled` the user has no
-    // toggle to bring it back — so the Use button is inert for a different
-    // reason and gets its own title explaining the fix (reinstall).
-    const withheld = _isSkillWithheld(s);
-    const usable = enabled && !withheld;
-    const thisUseTitle = withheld ? escapeHtml(t('skills.security_withheld_hint')) : useTitle;
     return `
-      <div class="skill-card${enabled ? '' : ' is-disabled'}${withheld ? ' is-withheld' : ''}" data-id="${escapeHtml(s.id)}" data-source="${escapeHtml(s.source || '')}">
+      <div class="skill-card${enabled ? '' : ' is-disabled'}" data-id="${escapeHtml(s.id)}" data-source="${escapeHtml(s.source || '')}">
         <div class="skill-card-header">
           <span class="skill-card-name">${escapeHtml(s.name)}</span>
-          ${_skillSecurityBadgeHtml(s)}
           ${moreBtn}
         </div>
         <div class="${descClass}">${escapeHtml(descText)}</div>
         <div class="skill-card-actions">
           ${cardChips}
-          <button type="button" class="skill-card-use" data-skill-use title="${thisUseTitle}" aria-label="${thisUseTitle}" ${usable ? '' : 'disabled aria-disabled="true" tabindex="-1"'}>
+          <button type="button" class="skill-card-use" data-skill-use title="${useTitle}" aria-label="${useTitle}" ${enabled ? '' : 'disabled aria-disabled="true" tabindex="-1"'}>
             ${escapeHtml(t('skills.use'))}
           </button>
         </div>
@@ -2124,14 +2053,11 @@ function renderSkillsGrid(skills) {
     for (const [owner, list] of byOwner) privateHtml += sectionHtml(`${baseLabel} · ${owner}`, list);
   }
   gridEl.classList.add('is-sectioned');
-  gridEl.innerHTML = _skillsSecuritySummaryHtml(filtered)
-    + sectionHtml(customChipLabel, groups.custom)
+  gridEl.innerHTML = sectionHtml(customChipLabel, groups.custom)
     + sectionHtml(marketplaceGroupLabel, groups.marketplace)
     + privateHtml
     + _openSkillsSectionHtml();
   _wireOpenSkillCards(gridEl);
-  _wireSkillsSecurityRecheck(gridEl);
-  _wireSkillSecurityPanels(gridEl);
 
   // Wire card / ▶ / ⋯ click handlers. (Enable/disable lives in the ⋯ menu now.)
   // Scope to editable-tier cards (`data-id`): open-tier cards (`data-open-id`,
@@ -2145,11 +2071,7 @@ function renderSkillsGrid(skills) {
     card.addEventListener('click', (e) => {
       if (e.target.closest('[data-skill-use]')) {
         e.stopPropagation();
-        // `is-withheld` as well as `is-disabled`: the button is rendered with
-        // `disabled`, but this handler sits on the CARD, so a click landing on a
-        // disabled child still arrives here. Checking only `is-disabled` would
-        // let a withheld skill be invoked from the grid.
-        if (!card.classList.contains('is-disabled') && !card.classList.contains('is-withheld')) {
+        if (!card.classList.contains('is-disabled')) {
           const skill = _skillsCache?.find(s => s.id === id && s.source === source);
           useSkill(id, skill?.name || id);
         }
@@ -2394,74 +2316,6 @@ function _openSkillsSectionHtml() {
     : '';
   return externalHtml
     + globalSection(globalSkillRows);
-}
-
-/**
- * Wire the summary row's "re-check" button.
- *
- * Re-verifies every marketplace skill, then reloads the list so the badges
- * reflect the new verdicts. Exists because a user who sees "3 unchecked" needs
- * somewhere to go — a status display with no action invites reinstalling at
- * random to make the warning move.
- *
- * `skills.trust.reverify` is per-skill, so this fans out. Sequentially, not with
- * `Promise.all`: that handler now runs the deep scanner, which spawns a Python
- * subprocess per rescan, and this button's whole purpose is the case where every
- * receipt is stale at once — parallel would launch one process per installed
- * skill simultaneously. Sequential keeps a slow sweep slow instead of making it a
- * thundering herd.
- *
- * Failures are swallowed per skill: one unreadable directory must not abort the
- * sweep, and the reloaded list shows whatever did resolve.
- */
-function _wireSkillsSecurityRecheck(gridEl) {
-  const btn = gridEl.querySelector('[data-skills-recheck]');
-  if (!btn) return;
-  btn.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    if (btn.dataset.busy === '1') return;
-    btn.dataset.busy = '1';
-    const original = btn.textContent;
-    btn.textContent = t('skills.security_rechecking');
-    try {
-      const ids = (_skillsCache || [])
-        .filter((s) => s && s.security && s.security.status)
-        .map((s) => s.id);
-      for (const id of ids) {
-        try {
-          await window.orkas.invoke('skills.trust.reverify', { skillId: id });
-        } catch { /* one bad skill must not abort the sweep */ }
-      }
-      await loadSkills(true);
-    } catch {
-      btn.textContent = original;
-    } finally {
-      btn.dataset.busy = '';
-    }
-  });
-}
-
-/**
- * Open the security detail panel when a shield is clicked.
- *
- * `stopPropagation` because the shield sits inside the card, and a bare click on
- * the card opens the skill itself — without it, inspecting the badge would
- * navigate away from the list.
- */
-function _wireSkillSecurityPanels(gridEl) {
-  for (const btn of gridEl.querySelectorAll('[data-skill-security]')) {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      const id = btn.dataset.skillSecurity || '';
-      const skill = (_skillsCache || []).find((s) => s && String(s.id) === id);
-      if (!skill) return;
-      // `uiAlert` takes only a message, so the heading is the first line of the
-      // body rather than a dialog title.
-      const heading = `${skill.name || id} · ${t('skills.secpanel_title')}`;
-      await uiAlert(`${heading}\n\n${_skillSecurityPanelText(skill)}`);
-    });
-  }
 }
 
 function _wireOpenSkillCards(gridEl) {
@@ -3853,6 +3707,19 @@ function _skillAutoSeedHasModelText(autoSeed) {
   return !!(autoSeed && typeof autoSeed === 'object' && typeof autoSeed.modelText === 'string' && autoSeed.modelText.trim());
 }
 
+function _nseapDeclarationLines(nseap) {
+  if (!nseap) return [];
+  const out = [];
+  if (nseap.status === 'unavailable') out.push(`• ${t('skills.secpanel_nseap_unavailable')}`);
+  else if (nseap.status === 'mismatch') out.push(`• ${t('skills.secpanel_nseap_mismatch')}`);
+  else if (nseap.status === 'needs_input') out.push(`• ${t('skills.secpanel_nseap_needs_input')}`);
+  else if (nseap.status === 'pass_with_warnings') out.push(`• ${t('skills.secpanel_nseap_warnings')}`);
+  for (const f of (nseap.findings || []).slice(0, 6)) {
+    out.push(`• ${f.ruleId}${f.message ? ` — ${f.message}` : ''}`);
+  }
+  return out;
+}
+
 // When called with {autoSeed: true} (e.g. right after skill creation), sends
 // a short "help me refine this skill" message to kick off the LLM. Import
 // flows pass {displayText, modelText}: the chat bubble stays concise, while
@@ -3879,6 +3746,27 @@ async function toggleSkillEditMode(opts = {}) {
     // rename + refreshes caches before we re-render readonly view.
     const committed = await _flushSkillFieldSave({ validate: true });
     if (committed === false) return;
+
+    try {
+      const precheck = await window.cogseed.invoke('skills.checkNseapDeclaration', {
+        id: _skillEditSkillId,
+      });
+      const lines = _nseapDeclarationLines(precheck?.nseapDeclaration);
+      if (lines.length) {
+        const choice = typeof uiChoice === 'function'
+          ? await uiChoice({
+            title: t('skills.edit_nseap_precheck_title'),
+            message: `${t('skills.edit_nseap_precheck_body')}\n\n${lines.join('\n')}`,
+            choices: [
+              { id: 'continue', label: t('skills.edit_nseap_precheck_continue'), style: 'primary' },
+              { id: 'back', label: t('skills.edit_nseap_precheck_back'), style: '' },
+            ],
+          })
+          : 'continue';
+        if (choice !== 'continue') return;
+      }
+    } catch (_) { /* precheck is advisory */ }
+
     // Explicit "Done" is a commit: keep the skill (even an empty import draft
     // the user chose to finalize) and stop the back-prompt from firing.
     _importDraftId = null;
@@ -4496,7 +4384,7 @@ async function _saveSkillFromUrl({ msgEl }) {
       ..._skillCreateResourceFromResponse(data),
       skill_count: _skillCreateCountFromResponse(data),
     });
-    await _afterSkillCreated(createdId, true, autoSeed);
+    await _afterImportedSkill(data);
   } catch (e) {
     msgEl.textContent = t('skills.network_error_plain');
     msgEl.className = 'form-msg err';
@@ -4525,90 +4413,6 @@ async function _saveSkillFromDir({ msgEl }) {
   });
 }
 
-/**
- * Human-readable reasons a security scan rejected an import.
- *
- * Counts and categories only — never the matched source text, which may itself
- * be the credential that was about to leak.
- */
-function _skillSecurityReasonLines(scan) {
-  const lines = [];
-  if (!scan) return lines;
-  if (Array.isArray(scan.localRedLines) && scan.localRedLines.length) {
-    lines.push(t('marketplace.security_reason_red_line'));
-  }
-  if (scan.hardBlocked) lines.push(t('marketplace.security_reason_hard_block'));
-  const s = scan.attackSurface || {};
-  if (s.egressPoints > 0) {
-    lines.push(t('marketplace.security_reason_egress').replace('{n}', String(s.egressPoints)));
-  }
-  if (s.dynamicExecPoints > 0) {
-    lines.push(t('marketplace.security_reason_dynamic_exec').replace('{n}', String(s.dynamicExecPoints)));
-  }
-  if (s.persistencePoints > 0) {
-    lines.push(t('marketplace.security_reason_persistence').replace('{n}', String(s.persistencePoints)));
-  }
-  return lines;
-}
-
-/**
- * Report a security-gate rejection for an import.
- *
- * No "import anyway": a high-risk verdict is not user-overridable, and an escape
- * hatch here would undo the main-process gate that just ran.
- *
- * `unavailable` gets its own wording rather than a softened version of the block
- * — the user needs to know whether their skill looked dangerous or whether the
- * check simply could not run.
- */
-async function _skillShowSecurityRejection(name, data) {
-  const scan = data && data.securityScan;
-  if (data && data.securityUnavailable) {
-    await uiAlert(
-      t('marketplace.security_unavailable_body').replace('{name}', name),
-      t('marketplace.security_unavailable_title'),
-    );
-    return;
-  }
-  const reasons = _skillSecurityReasonLines(scan);
-  const detail = reasons.length ? `\n\n${reasons.map((r) => `• ${r}`).join('\n')}` : '';
-  const degraded = scan && scan.rulesDegraded
-    ? `\n\n${t('marketplace.security_rules_degraded')}`
-    : '';
-  await uiAlert(
-    `${t('skills.security_import_blocked_body').replace('{name}', name)}${detail}${degraded}`,
-    t('marketplace.security_blocked_title'),
-  );
-}
-
-/**
- * Toast the outcome of a passing scan.
- *
- * A silent pass would leave the check invisible, which is how a security feature
- * ends up looking like it does nothing until the day it blocks something. Kept to
- * a toast rather than a modal: a clean result should not need dismissing.
- *
- * A `restricted` verdict is stated as a caveat, not celebrated as a pass, and a
- * degraded ruleset is disclosed rather than glossed — the spec forbids
- * presenting a weakened check as a clean one.
- */
-function _skillToastSecurityPass(scan) {
-  if (!scan || typeof uiToast !== 'function') return;
-  if (scan.rulesDegraded) {
-    uiToast(t('skills.security_import_degraded'), { variant: 'warning', timeoutMs: 6000 });
-    return;
-  }
-  if (scan.outcome === 'restricted') {
-    uiToast(t('skills.security_import_restricted'), { variant: 'warning', timeoutMs: 6000 });
-    return;
-  }
-  const score = typeof scan.score === 'number' ? scan.score : null;
-  const msg = score === null
-    ? t('skills.security_import_passed')
-    : t('skills.security_import_passed_score').replace('{n}', String(score));
-  uiToast(msg, { variant: 'success', timeoutMs: 3600 });
-}
-
 function _qualityImportRejectedTitle(name) {
   const tmpl = t('quality.import_rejected_title');
   const fallback = `Import rejected by quality validator: ${name}`;
@@ -4620,10 +4424,7 @@ function _qualityImportRejectedTitle(name) {
 async function _saveSkillFromDirWithQuality({ msgEl, srcDir, force, tracking }) {
   tracking = tracking || _skillCreateTracking('dir', { forced: !!force });
   try {
-    // The deep scan runs inside this one request, so the wait is stated up front
-    // rather than after the fact — otherwise the modal sits on a bare "saving…"
-    // for the length of a scan the user was never told about.
-    msgEl.textContent = t('skills.security_import_scanning');
+    msgEl.textContent = t('skills.saving');
     msgEl.className = 'form-msg';
     _setSkillModalBusy(true);
     await _waitForSkillModalBusyPaint();
@@ -4635,14 +4436,6 @@ async function _saveSkillFromDirWithQuality({ msgEl, srcDir, force, tracking }) 
     const data = await res.json();
     if (!data.ok) {
       _setSkillModalBusy(false);
-      // Security rejection before the quality report: the two are different
-      // verdicts, and only the security one carries a scan payload.
-      if (data.securityBlocked || data.securityUnavailable) {
-        const rejectedName = srcDir.split(/[\\/]/).filter(Boolean).pop() || srcDir;
-        await _skillShowSecurityRejection(rejectedName, data);
-        _skillCreateTrackResult(tracking, 'failure', { error_code: 'security_blocked' });
-        return;
-      }
       if (data.report && typeof showValidationReport === 'function') {
         const titleName = data.skillId || srcDir.split(/[\\/]/).filter(Boolean).pop() || srcDir;
         // Report-only: an EXTREME violation is not overridable, so no force
@@ -4688,10 +4481,7 @@ async function _saveSkillFromDirWithQuality({ msgEl, srcDir, force, tracking }) 
       skill_count: _skillCreateCountFromResponse(data),
       forced: !!force,
     });
-    // Confirm the check ran. Without this a pass is indistinguishable from no
-    // check at all, which is how the mechanism ends up looking decorative.
-    _skillToastSecurityPass(data.securityScan);
-    await _afterSkillCreated(createdId, true, _skillImportAutoSeedFromResponse(data));
+    await _afterImportedSkill(data);
   } catch (e) {
     msgEl.textContent = t('skills.network_error_plain');
     msgEl.className = 'form-msg err';
@@ -4735,6 +4525,82 @@ async function _afterSkillCreated(sid, isNew, autoSeed) {
       }
     }).catch(() => {});
   }
+}
+
+async function _afterImportedSkill(data) {
+  closeSkillModal();
+  _skillsCache = null;
+  await loadSkills();
+  setView('skills');
+
+  const skills = Array.isArray(data?.skills) ? data.skills : (data?.skill ? [data.skill] : []);
+  const ids = skills.map((s) => String(s?.id || '')).filter(Boolean);
+  const names = skills.map((s) => String(s?.name || s?.id || '')).filter(Boolean).join('、');
+
+  const warnings = [];
+  if (typeof readQualityReport === 'function') {
+    for (const id of ids) {
+      try {
+        const report = await readQualityReport('skill', id);
+        const violations = Array.isArray(report?.violations) ? report.violations : [];
+        for (const v of violations) {
+          if (!v) continue;
+          warnings.push(`• ${String(v.rule || '')}${v.field ? ` · ${String(v.field)}` : ''}`);
+        }
+      } catch (_) { /* report is best-effort */ }
+    }
+  }
+
+  const nseapWarnings = ids.flatMap((id) => {
+    const cached = (_skillsCache || []).find((s) => String(s?.id || '') === id);
+    return _nseapDeclarationLines(cached?.security?.nseapDeclaration);
+  });
+
+  const seen = new Set();
+  const uniqueWarnings = warnings
+    .filter((w) => {
+      if (seen.has(w)) return false;
+      seen.add(w);
+      return true;
+    })
+    .slice(0, 8);
+  const seenNseap = new Set();
+  const uniqueNseapWarnings = nseapWarnings
+    .filter((w) => {
+      if (seenNseap.has(w)) return false;
+      seenNseap.add(w);
+      return true;
+    })
+    .slice(0, 8);
+
+  const lines = [t('skills.import_review_body', { count: ids.length })];
+  if (names) lines.push(`\n${names}`);
+  if (uniqueWarnings.length) {
+    lines.push(`\n${t('skills.import_review_issues')}\n${uniqueWarnings.join('\n')}`);
+  }
+  if (uniqueNseapWarnings.length) {
+    lines.push(`\n${t('skills.import_review_nseap_issues')}\n${uniqueNseapWarnings.join('\n')}`);
+  }
+  if (!uniqueWarnings.length && !uniqueNseapWarnings.length) {
+    lines.push(`\n${t('skills.import_review_no_issues')}`);
+  }
+
+  const choice = typeof uiChoice === 'function'
+    ? await uiChoice({
+      title: t('skills.import_review_title'),
+      message: lines.join('\n'),
+      choices: [
+        { id: 'keep', label: t('skills.import_review_keep'), style: 'primary' },
+        { id: 'discard', label: t('skills.import_review_discard'), style: 'danger' },
+      ],
+    })
+    : 'keep';
+
+  if (choice !== 'discard') return;
+
+  await Promise.allSettled(ids.map((id) => apiFetch(`/api/skills/${id}`, { method: 'DELETE' })));
+  _skillsCache = null;
+  await loadSkills();
 }
 
 function editSelectedSkill() {

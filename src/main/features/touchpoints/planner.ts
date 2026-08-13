@@ -27,7 +27,12 @@ const EVENT_PLANS: Readonly<Record<TouchpointDomainEvent['kind'], EventPlan>> = 
     template: 'daily_briefing',
     priority: 'normal',
     ttlMs: DAY_MS,
-    actionContract: { version: 1, allowedActions: ['open', 'snooze', 'adjust'] },
+    actionContract: {
+      version: 1,
+      allowedActions: ['open', 'snooze', 'adjust'],
+      // 调整简报时间：用户在输入框填 HH:mm，随动作回执为 content。
+      input: { label: '新的简报时间（HH:mm）', placeholder: '例如 20:00' },
+    },
   },
   'ontology.confirmation_required': {
     template: 'ontology_confirmation',

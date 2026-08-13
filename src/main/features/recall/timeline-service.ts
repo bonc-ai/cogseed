@@ -16,6 +16,11 @@ export type RecallAssetTimelineKind =
   | 'asset_paused'
   | 'asset_resumed'
   | 'asset_revoked'
+  | 'asset_archived'
+  | 'asset_deleted'
+  | 'asset_purged'
+  | 'asset_restored'
+  | 'asset_rolled_back'
   | 'asset_maturity_downgraded'
   | 'asset_version'
   | 'projection_confirmed'
@@ -90,6 +95,11 @@ function itemTitle(kind: RecallAssetTimelineKind, extra?: string): string {
     case 'asset_paused': return 'Asset paused';
     case 'asset_resumed': return 'Asset resumed';
     case 'asset_revoked': return 'Asset revoked';
+    case 'asset_archived': return 'Asset archived';
+    case 'asset_deleted': return 'Asset deleted';
+    case 'asset_purged': return 'Asset purged';
+    case 'asset_restored': return 'Asset restored';
+    case 'asset_rolled_back': return 'Asset rolled back';
     case 'asset_maturity_downgraded': return 'Asset maturity downgraded';
     case 'asset_version': return 'Asset version saved';
     case 'projection_confirmed': return 'Projection confirmed';
@@ -109,17 +119,22 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
   const items: RecallAssetTimelineItem[] = [];
 
   for (const audit of await listAbilityAssetAudit(userId, assetId)) {
-    const kind: RecallAssetTimelineKind = audit.action === 'created'
-      ? 'asset_created'
-      : audit.action === 'updated'
-        ? 'asset_updated'
-        : audit.action === 'paused'
-          ? 'asset_paused'
-          : audit.action === 'resumed'
-            ? 'asset_resumed'
-            : audit.action === 'maturity_downgraded'
-              ? 'asset_maturity_downgraded'
-            : 'asset_revoked';
+    const kind: RecallAssetTimelineKind = ({
+      created: 'asset_created',
+      updated: 'asset_updated',
+      paused: 'asset_paused',
+      resumed: 'asset_resumed',
+      revoked: 'asset_revoked',
+      archived: 'asset_archived',
+      deleted: 'asset_deleted',
+      purged: 'asset_purged',
+      restored: 'asset_restored',
+      rolled_back: 'asset_rolled_back',
+      maturity_downgraded: 'asset_maturity_downgraded',
+      pause_recommended: 'asset_updated',
+      rework_recommended: 'asset_updated',
+      recommendation_cleared: 'asset_updated',
+    } as const)[audit.action];
     pushSorted(items, {
       id: audit.id,
       kind,

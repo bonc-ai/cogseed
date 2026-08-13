@@ -1402,9 +1402,6 @@ describe('Recall cognition renderer flow', () => {
       ['recall.assets.delete', { assetId: 'aa-method' }],
       ['recall.assets.purge', { assetId: 'aa-method' }],
       ['recall.assets.revoke', { assetId: 'aa-method' }],
-      // Usage is dispatched before versions and settles on its own, so a usage
-      // outage cannot blank the version list.
-      ['recall.usage.list', { assetId: 'aa-method' }],
       ['recall.assets.versions', { assetId: 'aa-method' }],
       ['recall.assets.rollback', { assetId: 'aa-method', version: '1' }],
     ]);

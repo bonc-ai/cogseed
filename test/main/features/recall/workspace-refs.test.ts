@@ -11,7 +11,7 @@ describe('Recall workspace asset references', () => {
   it('references one asset from multiple workspaces without copying ownership', async () => {
     const { candidates, refs } = await modules();
     const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Preserve source evidence.', suggestedType: 'rule', suggestedScope: 'project,review', sourceRefs: [{ kind: 'execution', id: 'exec-a' }] });
-    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id);
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
     const first = await refs.addWorkspaceAssetReference('user-a', { assetId: asset.id, workspaceId: 'workspace-a', scope: 'project,review' });
     const duplicate = await refs.addWorkspaceAssetReference('user-a', { assetId: asset.id, workspaceId: 'workspace-a', scope: 'project,review' });
     const second = await refs.addWorkspaceAssetReference('user-a', { assetId: asset.id, workspaceId: 'workspace-b', scope: 'project' });
@@ -23,7 +23,7 @@ describe('Recall workspace asset references', () => {
   it('permits scope narrowing and preserves removal history', async () => {
     const { candidates, refs } = await modules();
     const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Use source evidence.', suggestedType: 'rule', suggestedScope: 'project,review', sourceRefs: [{ kind: 'memory', id: 'mem-a' }] });
-    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id);
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
     const reference = await refs.addWorkspaceAssetReference('user-a', { assetId: asset.id, workspaceId: 'workspace-a', scope: 'project,review' });
     const narrowed = await refs.updateWorkspaceAssetReference('user-a', reference.id, { scope: 'project' });
     expect(narrowed.scope).toBe('project');

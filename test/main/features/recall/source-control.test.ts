@@ -78,8 +78,8 @@ describe('Recall source controls', () => {
       suggestedScope: 'global',
       sourceRefs: [{ kind: 'conversation', subtype: 'session', id: 'conv-b' }],
     });
-    const matchingAsset = (await candidates.promoteRecallCandidate('user-a', matchingCandidate.id)).asset;
-    const otherAsset = (await candidates.promoteRecallCandidate('user-a', otherCandidate.id)).asset;
+    const matchingAsset = (await candidates.promoteRecallCandidate('user-a', matchingCandidate.id, { actor: 'user' })).asset;
+    const otherAsset = (await candidates.promoteRecallCandidate('user-a', otherCandidate.id, { actor: 'user' })).asset;
 
     await expect(controls.previewCognitionSourceRemoval('user-a', conversationSource as any)).resolves.toEqual({
       affectedAssetCount: 1,
@@ -106,7 +106,7 @@ describe('Recall source controls', () => {
         { kind: 'conversation', subtype: 'session', id: 'conv-b' },
       ],
     });
-    const asset = (await candidates.promoteRecallCandidate('user-a', candidate.id)).asset;
+    const asset = (await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' })).asset;
     await assets.setAbilityAssetMaturity('user-a', asset.id, 'effectiveness_validated');
 
     const result = await controls.removeCognitionSource('user-a', conversationSource as any, false);

@@ -235,6 +235,12 @@ NEW skill you create (Mode A) must ship as a compliant SkillPackage, not just a 
 SKILL.md. Templates are in `<SYSTEM_SKILLS_ROOT>/skill-creator/references/nseap/` — read
 them before authoring and copy the shapes.
 
+Detailed references live in that same directory; read the one matching what you are
+unsure about rather than guessing: `nine-elements.md` (the nine required elements),
+`schemas.md` (dual-schema shapes), `artifact-tree.md` (the file layout to produce),
+`compliance-tiers.md` (what Level A vs B actually requires), `non-claims.md` (the
+non-claims block wording), and `templates/ontology-slice.yaml.template`.
+
 **Non-negotiable requirements (missing any → the skill is not created):**
 
 1. **Trigger + anti-trigger semantics** in SKILL.md body (§5.3, hard requirement):

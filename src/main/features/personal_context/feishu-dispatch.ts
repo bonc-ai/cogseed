@@ -17,9 +17,14 @@
  *      空（场景只信本体，管线就位后由 loadFacts 注入）。
  */
 
+import * as crypto from 'node:crypto';
+
 import * as proactive from '../messaging/proactive';
 import * as messagingRegistry from '../messaging/registry';
 import { sendProactive } from '../messaging/manager';
+import { createTouchpointDomainEvent } from '../touchpoints/events';
+import { orchestrateTouchpointEvent, dispatchTouchpointIntent } from '../touchpoints/orchestrator';
+import { createFeishuTouchpointAdapter } from '../touchpoints/feishu/adapter';
 import { PersonalContextRegistry } from './registry';
 import type { ExternalResource } from './contract';
 import { createLogger } from '../../logger';
@@ -29,6 +34,9 @@ import {
   type BriefingFact,
   type BriefingInput,
 } from './briefing';
+// 简报触达点动作处理器（snooze/adjust 业务效果）。副作用注册：挂在
+// feishu-dispatch 的加载链上（auto_tasks 与 application 都依赖本模块）。
+import './briefing-actions';
 
 export interface DispatchToFeishuHomeOptions {
   instanceId: string;
@@ -102,6 +110,74 @@ export async function dispatchToFeishuHome(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log.warn('briefing dispatch failed', { instanceId: opts.instanceId, error: message });
+    return { ok: false, code: 'delivery_failed', error: message };
+  }
+}
+
+/** 简报走触达点管线：把 `briefing.ready` 事件编排为可交互卡片意图并投递。
+ * 卡片带 稍后提醒/调整 按钮（调整附带时间输入框）；按钮回执经触达点 ledger
+ * 消费后由简报动作处理器落地业务效果。幂等沿用 sourceKey 派生的稳定
+ * eventId（同日同任务重入被触达点 dedupe 拦截）。 */
+export async function dispatchBriefingTouchpoint(
+  uid: string,
+  opts: DispatchToFeishuHomeOptions,
+): Promise<DispatchResult> {
+  const text = typeof opts.text === 'string' ? opts.text.trim() : '';
+  if (!text) return { ok: false, code: 'empty_text', error: '简报文本为空' };
+  const sourceKey = typeof opts.sourceKey === 'string' && opts.sourceKey.trim() ? opts.sourceKey.trim() : '';
+  if (!sourceKey) return { ok: false, code: 'missing_source_key', error: '缺少幂等键' };
+
+  // 可用性门控与文本路径一致（实例存在、可投递、归属人已配置）。
+  let targets;
+  try {
+    targets = await proactive.listTargets(uid);
+  } catch (err) {
+    return { ok: false, code: 'targets_unavailable', error: `无法读取消息实例状态：${(err as Error).message}` };
+  }
+  const target = targets.targets.find((t) => t.instance_id === opts.instanceId);
+  if (!target) return { ok: false, code: 'instance_unknown', error: '未知消息实例，请检查任务配置的实例 id' };
+  if (target.status !== 'available') {
+    if (target.status === 'owner_missing') {
+      return { ok: false, code: 'owner_missing', error: '该实例未配置归属人（主页会话不可用）' };
+    }
+    return { ok: false, code: 'instance_unavailable', error: `消息实例不可用（${target.status}）` };
+  }
+
+  const now = new Date();
+  // 触达点标识符不允许冒号：sourceKey（briefing:taskId:日期）必须派生为
+  // 安全形式。eventId 与 subject.id 同源，dedupe 语义不变。
+  const stableId = `briefing-${crypto.createHash('sha256').update(sourceKey, 'utf8').digest('hex').slice(0, 24)}`;
+  const event = createTouchpointDomainEvent(uid, {
+    eventId: stableId,
+    kind: 'briefing.ready',
+    subject: { type: 'briefing', id: stableId },
+    occurredAt: now.toISOString(),
+    summary: { title: '今日简报', body: text },
+    contextRef: sourceKey,
+  });
+  try {
+    const planned = await orchestrateTouchpointEvent(uid, event, { policy: { enabled: true } });
+    if (planned.status !== 'planned') {
+      // duplicate：同日同任务已投递，幂等成功。
+      return { ok: true };
+    }
+    const adapter = createFeishuTouchpointAdapter({ instanceId: opts.instanceId });
+    const sent = await dispatchTouchpointIntent(uid, planned.intent.intentId, adapter);
+    if (sent.status === 'sent') {
+      log.info('briefing dispatched via touchpoint', {
+        instanceId: opts.instanceId,
+        intentId: sent.intentId,
+        textLen: text.length,
+        sourceKey,
+      });
+      return { ok: true };
+    }
+    const message = sent.error || '简报投递失败';
+    log.warn('briefing touchpoint dispatch failed', { instanceId: opts.instanceId, error: message });
+    return { ok: false, code: 'delivery_failed', error: message };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.warn('briefing touchpoint dispatch error', { instanceId: opts.instanceId, error: message });
     return { ok: false, code: 'delivery_failed', error: message };
   }
 }

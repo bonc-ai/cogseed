@@ -189,7 +189,7 @@ describe('KSTAR review and Recall bridge', () => {
       },
     });
     const promoted = await (await import('../../../../src/main/features/recall/candidate-service'))
-      .promoteRecallCandidate('review-user', candidates[0].id);
+      .promoteRecallCandidate('review-user', candidates[0].id, { actor: 'user' });
     expect(promoted.asset.learningSignal).toMatchObject({
       deltaR: -0.8,
       deltaA: 0.2,

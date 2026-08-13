@@ -349,6 +349,16 @@ export async function reverifySkillDeep(uid: string, skillId: string): Promise<R
     });
   }
 
+  // NSEAP declaration check — ADVISORY ONLY, and deliberately last.
+  //
+  // Nothing below may touch `decision`. The engine answers "does this skill's
+  // security manifest match what the tree actually contains", which is not the
+  // same question as "is this dangerous": a mismatch is usually an authoring gap.
+  // Letting it set `risk` would turn an unfinished declaration into a security
+  // badge, and — since no shipped skill carries a manifest yet — would mark the
+  // entire library at once, which is exactly how a badge stops being read.
+  const nseapDeclaration = await checkNseapDeclaration(skillDir, skillId);
+
   const receipt = writeReceipt(uid, skillId, {
     payloadHash,
     decision,
@@ -357,6 +367,7 @@ export async function reverifySkillDeep(uid: string, skillId: string): Promise<R
     ...deepEvidence,
     ...(topRule ? { topRule } : {}),
     ...(topLevel ? { topLevel } : {}),
+    ...(nseapDeclaration ? { nseapDeclaration } : {}),
   });
 
   if (reason === 'payload_changed') {
@@ -366,6 +377,68 @@ export async function reverifySkillDeep(uid: string, skillId: string): Promise<R
   }
 
   return { skillId, decision, rescanned: true, staleReason: reason, receipt };
+}
+
+/**
+ * Run the NSEAP security-declaration check for one skill.
+ *
+ * Returns `undefined` when there is nothing worth recording, so the receipt does
+ * not grow a field for every skill in the library.
+ *
+ * Four properties this function must keep, in order of how badly breaking each
+ * one would hurt:
+ *
+ *  1. **It never decides anything.** The caller does not read the result into
+ *     `decision`. This is advisory evidence about declaration completeness.
+ *  2. **No manifest means `absent`, not `pass`.** Every skill shipped today lacks
+ *     `references/security-manifest.yaml`. Running the engine on those would cost
+ *     a process spawn per skill to learn nothing, and recording `pass` would
+ *     claim a check that never happened.
+ *  3. **Engine unavailability is `unavailable`, never a finding.** A missing
+ *     interpreter is not evidence about the skill.
+ *  4. **It cannot throw.** Re-verification decides whether a skill may load; an
+ *     advisory extra must never be able to break that.
+ */
+export async function checkNseapDeclaration(
+  skillDir: string,
+  skillId: string,
+): Promise<SecurityReceipt['nseapDeclaration'] | undefined> {
+  try {
+    // Cheap FS check before paying for a subprocess: the common case is absence.
+    const manifest = path.join(skillDir, 'references', 'security-manifest.yaml');
+    if (!fs.existsSync(manifest)) return { status: 'absent' };
+
+    const { validateSkillWithEngine } = await import('./security/nseap-core-adapter');
+    const r = await validateSkillWithEngine(skillDir, 'PREVALIDATION');
+
+    if (r.verdict === 'unknown') {
+      log.warn('nseap declaration check unavailable', {
+        skillId, reason: r.unavailableReason || 'unknown', exitCode: r.exitCode,
+      });
+      return { status: 'unavailable' };
+    }
+
+    // `blocked` from the engine means the declaration contradicts the tree. It is
+    // reported as `mismatch` rather than reusing the receipt's security wording:
+    // this is a declaration defect, and calling it "blocked" in a security record
+    // would read as a threat verdict.
+    const status = r.verdict === 'blocked' ? 'mismatch' : r.verdict;
+    const findings = r.findings
+      .filter((f) => f.severity !== 'INFO')
+      .map((f) => ({ ruleId: f.ruleId, severity: f.severity, message: f.message }));
+
+    return {
+      status,
+      ...(r.engineResult ? { engineResult: r.engineResult } : {}),
+      ...(findings.length ? { findings } : {}),
+    };
+  } catch (err) {
+    // Never propagate: see property 4 above.
+    log.warn('nseap declaration check errored', {
+      skillId, error: (err as Error).message,
+    });
+    return { status: 'unavailable' };
+  }
 }
 
 /**

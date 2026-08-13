@@ -18,6 +18,8 @@ const USER_IDS = {
   transition: `touchpoint-transition-${suffix}`,
   action: `touchpoint-action-${suffix}`,
   reject: `touchpoint-reject-${suffix}`,
+  inputRoundtrip: `touchpoint-input-${suffix}`,
+  contentRoundtrip: `touchpoint-content-${suffix}`,
 };
 
 function makeIntent(userId = 'user-1', overrides: Partial<TouchpointIntent> = {}): TouchpointIntent {
@@ -115,6 +117,57 @@ describe('touchpoint ledger', () => {
     expect(duplicate).toMatchObject({ duplicate: true, action: { actionId: 'action-1' } });
     expect(first.action.signatureHash).toMatch(/^[0-9a-f]{64}$/);
     expect(JSON.stringify(await api.readTouchpointLedgerForTest(USER_IDS.action))).not.toContain('sig_v1_abc123');
+  });
+
+  it('keeps the contract input field across persist and reload', async () => {
+    const intent = makeIntent(USER_IDS.inputRoundtrip, {
+      dedupeKey: 'task:task-1:approval:input-v1',
+      actionContract: {
+        version: 1,
+        allowedActions: ['approve', 'reject'],
+        input: { label: '审批意见', placeholder: '选填', required: true },
+      },
+    });
+    const { userTouchpointLedgerFile } = await import('../../../../src/main/paths');
+    const f = userTouchpointLedgerFile(USER_IDS.inputRoundtrip);
+    console.log('TP-DEBUG file:', f);
+    try {
+      const raw = await import('node:fs/promises').then((fsm) => fsm.readFile(f, 'utf8'));
+      console.log('TP-DEBUG content:', raw.slice(0, 200));
+    } catch (e) {
+      console.log('TP-DEBUG file missing');
+    }
+    await api.reserveTouchpointIntent(USER_IDS.inputRoundtrip, intent);
+
+    const reloaded = await api.getTouchpointIntent(USER_IDS.inputRoundtrip, 'intent-1');
+    expect(reloaded?.intentId).toBe('intent-1');
+    expect(reloaded?.actionContract).toMatchObject({
+      allowedActions: ['approve', 'reject'],
+      input: { label: '审批意见', placeholder: '选填', required: true },
+    });
+  });
+
+  it('persists submitted content with the action record', async () => {
+    const intent = makeIntent(USER_IDS.contentRoundtrip, { intentId: 'intent-content-1', dedupeKey: 'task:task-1:approval:content-v1' });
+    await api.reserveTouchpointIntent(USER_IDS.contentRoundtrip, intent);
+    await api.transitionTouchpointIntent(USER_IDS.contentRoundtrip, 'intent-content-1', ['planned'], { status: 'ready' });
+    await api.transitionTouchpointIntent(USER_IDS.contentRoundtrip, 'intent-content-1', ['ready'], { status: 'sending' });
+    await api.transitionTouchpointIntent(USER_IDS.contentRoundtrip, 'intent-content-1', ['sending'], { status: 'sent' });
+
+    const input = {
+      actionId: 'action-content-1',
+      intentId: 'intent-content-1',
+      userId: USER_IDS.contentRoundtrip,
+      action: 'reject',
+      occurredAt: '2026-08-10T02:00:00.000Z',
+      signature: 'sig_v1_abc123',
+      content: '不同意，请重新提交预算',
+    };
+    const consumed = await api.consumeTouchpointAction(USER_IDS.contentRoundtrip, input, new Date('2026-08-10T02:00:01.000Z'));
+    expect(consumed.action.content).toBe('不同意，请重新提交预算');
+
+    const reloaded = await api.readTouchpointLedgerForTest(USER_IDS.contentRoundtrip);
+    expect(reloaded.actions['action-content-1']?.content).toBe('不同意，请重新提交预算');
   });
 
   it('rejects actions for unsent, missing, expired, or cross-user intents', async () => {

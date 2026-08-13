@@ -32,7 +32,7 @@ export async function routeConfirmedKstarCandidate(
   input: RouteConfirmedKstarCandidateInput = {},
 ): Promise<RouteConfirmedKstarCandidateResult> {
   const ontologyRefs = input.ontology ? [placement(input.ontology)] : [];
-  const promoted = await promoteRecallCandidate(userId, candidateId, { ontologyRefs });
+  const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', ontologyRefs });
   if (!input.ontology) return promoted;
 
   const ref = input.ontology.section ? buildContentRef(input.ontology.groupId, input.ontology.section) : input.ontology.groupId;

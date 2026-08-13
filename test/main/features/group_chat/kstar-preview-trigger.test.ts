@@ -3,8 +3,10 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+const previewAssetIds = vi.hoisted(() => ({ value: ['asset-a'] as string[] }));
+const previewProjectionIds = vi.hoisted(() => ({ values: ['proj-a'] as string[], index: 0 }));
 const projectionMock = vi.hoisted(() => ({
-  previewContextProjection: vi.fn(async (_uid: string, input: unknown) => ({ id: 'proj-a', status: 'preview', assetIds: ['asset-a'], ...(input as Record<string, unknown>) })),
+  previewContextProjection: vi.fn(async (_uid: string, input: unknown) => ({ id: previewProjectionIds.values[previewProjectionIds.index++] || `proj-${previewProjectionIds.index}`, status: 'preview', assetIds: [...previewAssetIds.value], ...(input as Record<string, unknown>) })),
 }));
 const projectionMessageMock = vi.hoisted(() => ({
   postProjectionCardMessage: vi.fn(async (userId: string, input: { cid: string; projectionId: string }, port: { send: (payload: unknown) => Promise<{ id: string }> }) => {
@@ -35,6 +37,8 @@ beforeEach(() => {
   vi.resetModules();
   projectionMock.previewContextProjection.mockClear();
   projectionMessageMock.postProjectionCardMessage.mockClear();
+  previewProjectionIds.values = ['proj-a'];
+  previewProjectionIds.index = 0;
 });
 
 afterEach(() => {
@@ -53,6 +57,31 @@ async function waitForMessages(loader: () => Promise<unknown[]>): Promise<unknow
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error('messages not posted');
+}
+
+async function waitForMessagesAtLeast(loader: () => Promise<unknown[]>, minimum: number): Promise<unknown[]> {
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline) {
+    const messages = await loader();
+    if (messages.length >= minimum) return messages;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`expected at least ${minimum} messages`);
+}
+
+async function waitForProjectionMessage(
+  groupChat: { readMessages: (userId: string, cid: string) => Promise<unknown[]> },
+  userId: string,
+  cid: string,
+  projectionId: string,
+): Promise<unknown[]> {
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline) {
+    const messages = await groupChat.readMessages(userId, cid);
+    if (messages.some((message) => (message as { recall_projection_card?: { projectionId?: string } }).recall_projection_card?.projectionId === projectionId)) return messages;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`projection message not posted: ${projectionId}`);
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {
@@ -92,6 +121,68 @@ describe('KSTAR requirement preview trigger', () => {
     }));
     expect(projectionMock.previewContextProjection.mock.calls[0][1]).not.toHaveProperty('workspaceId');
     expect(result.projectionPreviewCreated).toEqual({ projectionId: 'proj-a' });
+  });
+
+  it('posts a visible Recall projection card even when no assets match automatically', async () => {
+    previewAssetIds.value = [];
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser('user-a');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const groupChat = await import('../../../../src/main/features/group_chat');
+
+    await bus.enqueue({ uid: 'user-a', cid: 'cid-empty', fromActorId: 'user', text: '整理 OAuth 回调流程' });
+
+    await waitFor(() => projectionMessageMock.postProjectionCardMessage.mock.calls.length > 0);
+    expect(projectionMock.previewContextProjection).toHaveBeenCalledWith('user-a', expect.objectContaining({
+      purpose: expect.any(String),
+      taskText: '整理 OAuth 回调流程',
+    }));
+    expect(projectionMessageMock.postProjectionCardMessage).toHaveBeenCalledWith(
+      'user-a',
+      { cid: 'cid-empty', projectionId: 'proj-a' },
+      expect.objectContaining({ send: expect.any(Function) }),
+    );
+    const messages = await waitForMessages(() => groupChat.readMessages('user-a', 'cid-empty'));
+    expect(messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        from: 'commander',
+        to: ['user'],
+        recall_projection_card: { projectionId: 'proj-a' },
+      }),
+    ]));
+  });
+
+  it('posts a fresh visible Recall projection card for a continued user message', async () => {
+    previewProjectionIds.values = ['proj-a', 'proj-b'];
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser('user-a');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const groupChat = await import('../../../../src/main/features/group_chat');
+
+    await bus.enqueue({ uid: 'user-a', cid: 'cid-continue', fromActorId: 'user', text: '修复 OAuth callback' });
+    await waitFor(() => projectionMessageMock.postProjectionCardMessage.mock.calls.length === 1);
+
+    await bus.enqueue({ uid: 'user-a', cid: 'cid-continue', fromActorId: 'user', text: '继续检查 refresh token' });
+    await waitFor(() => projectionMessageMock.postProjectionCardMessage.mock.calls.length === 2);
+
+    expect(projectionMock.previewContextProjection).toHaveBeenCalledTimes(2);
+    expect(projectionMock.previewContextProjection.mock.calls[1][1]).toEqual(expect.objectContaining({
+      taskText: '继续检查 refresh token',
+      purpose: expect.any(String),
+    }));
+    expect(projectionMessageMock.postProjectionCardMessage).toHaveBeenLastCalledWith(
+      'user-a',
+      { cid: 'cid-continue', projectionId: 'proj-b' },
+      expect.objectContaining({ send: expect.any(Function) }),
+    );
+    const messages = await waitForProjectionMessage(groupChat, 'user-a', 'cid-continue', 'proj-b');
+    expect(messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        from: 'commander',
+        to: ['user'],
+        recall_projection_card: { projectionId: 'proj-b' },
+      }),
+    ]));
   });
 
   it('posts a visible Recall projection card when a normal user message creates a KSTAR task', async () => {

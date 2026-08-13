@@ -40,7 +40,7 @@ async function promoteAsset(userId: string, statement: string, scope = 'review')
     suggestedScope: scope,
     sourceRefs: [{ kind: 'memory', id: `mem-${scope}` }],
   });
-  return (await candidates.promoteRecallCandidate(userId, candidate.id)).asset;
+  return (await candidates.promoteRecallCandidate(userId, candidate.id, { actor: 'user' })).asset;
 }
 
 describe('Recall asset proof timeline', () => {
@@ -51,13 +51,13 @@ describe('Recall asset proof timeline', () => {
     const asset = await promoteAsset('user-a', 'Always include decision evidence.', 'review');
 
     vi.setSystemTime(new Date('2026-08-06T00:01:00.000Z'));
-    await assets.updateAbilityAsset('user-a', asset.id, { statement: 'Always include decision evidence and rationale.' });
+    await assets.updateAbilityAsset('user-a', asset.id, { statement: 'Always include decision evidence and rationale.', reason: 'Refine the reused statement.', actor: 'user' });
 
     vi.setSystemTime(new Date('2026-08-06T00:02:00.000Z'));
-    await assets.pauseAbilityAsset('user-a', asset.id, 'needs verification');
+    await assets.pauseAbilityAsset('user-a', asset.id, { actor: 'user', reason: 'needs verification' });
 
     vi.setSystemTime(new Date('2026-08-06T00:03:00.000Z'));
-    await assets.resumeAbilityAsset('user-a', asset.id, 'verification complete');
+    await assets.resumeAbilityAsset('user-a', asset.id, { actor: 'user', reason: 'verification complete' });
 
     vi.setSystemTime(new Date('2026-08-06T00:04:00.000Z'));
     const preview = await projection.previewContextProjection('user-a', { taskRunId: 'task-a', purpose: 'review', authorization: 'user_confirmed' });

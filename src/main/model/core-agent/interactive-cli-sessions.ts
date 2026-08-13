@@ -223,7 +223,7 @@ function ensureUserActionLifetime(s: Session): void {
   installLifetimeTimer(
     s,
     Math.max(1, target - now),
-    `\n[Orkas] Interactive CLI session timed out after waiting ${USER_ACTION_MIN_REMAINING_MS}ms for user action.\n`,
+    `\nInteractive CLI session timed out after waiting ${USER_ACTION_MIN_REMAINING_MS}ms for user action.\n`,
   );
 }
 
@@ -394,7 +394,7 @@ export function startInteractiveCliSession(opts: StartInteractiveCliSessionOpts)
     lifetimeTimer: setTimeout(() => {}, maxLifetimeMs),
   };
   clearTimeout(session.lifetimeTimer);
-  installLifetimeTimer(session, maxLifetimeMs, `\n[Orkas] Interactive CLI session timed out after ${maxLifetimeMs}ms.\n`);
+  installLifetimeTimer(session, maxLifetimeMs, `\nInteractive CLI session timed out after ${maxLifetimeMs}ms.\n`);
   _sessions.set(id, session);
 
   child.stdout.on('data', (data: Buffer) => appendOutput(session, 'stdout', data));

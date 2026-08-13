@@ -23,6 +23,11 @@ const gate = require('../../../bin/builtin-resource-gate.cjs') as {
   };
   verifyBuiltinExtraResourcesConfig(extraResources: unknown): boolean;
   verifyBuiltinRoot(root: string, options?: { allowIgnoredJunk?: boolean }): string;
+  REQUIRED_BUILTIN_INVENTORY: {
+    system_skills: readonly string[];
+    marketplace_agents: readonly string[];
+    marketplace_skills: readonly string[];
+  };
 };
 const contentManifest = require('../../../src/main/util/builtin-content-manifest.js') as {
   collectBuiltinFiles(root: string, options?: { allowIgnoredJunk?: boolean }): Array<{
@@ -59,10 +64,17 @@ describe('builtin-resource-gate', () => {
 
     expect(gate.verifyBuiltinRoot(root, { allowIgnoredJunk: true }))
       .toBe('resource:builtin:manifest-v1');
-    expect(manifest.files).toHaveLength(1275);
-    expect(manifest.inventory.system_skills).toHaveLength(6);
-    expect(manifest.inventory.marketplace_agents).toHaveLength(34);
-    expect(manifest.inventory.marketplace_skills).toHaveLength(64);
+
+    // Inventory sizes are asserted against the gate's own required lists rather
+    // than literals. `exactNames` already fails on any name that is missing or
+    // extra, so a literal here restated a stronger check in a weaker form and
+    // only added a number to hand-edit on every content change.
+    expect(manifest.inventory.system_skills)
+      .toHaveLength(gate.REQUIRED_BUILTIN_INVENTORY.system_skills.length);
+    expect(manifest.inventory.marketplace_agents)
+      .toHaveLength(gate.REQUIRED_BUILTIN_INVENTORY.marketplace_agents.length);
+    expect(manifest.inventory.marketplace_skills)
+      .toHaveLength(gate.REQUIRED_BUILTIN_INVENTORY.marketplace_skills.length);
     expect(manifest.inventory.marketplace_skills)
       .toContainEqual(expect.objectContaining({ id: '8d2f4b7c9a10', name: 'paper-repro' }));
     expect(manifest.inventory.marketplace_skills)
@@ -109,6 +121,44 @@ describe('builtin-resource-gate', () => {
           'stage-assemble',
         ]),
       }));
+  });
+
+  /**
+   * Guards the one failure mode no other layer catches: files disappear AND the
+   * manifest is regenerated, so every hash is internally consistent and nothing
+   * looks wrong.
+   *
+   * Measured on a copy of `resources/builtin` with the manifest regenerated after
+   * the deletion:
+   *   - delete a required system SKILL.md  → caught (`missing system skill`)
+   *   - delete a whole agent directory     → caught (`inventory does not match`)
+   *   - delete one references/*.md         → NOT caught by any layer
+   *   - delete 20 skills' schemas.json     → NOT caught by any layer
+   *
+   * The old form of this test asserted a literal count, which did catch the last
+   * two — but had to be hand-edited on every content change, and was silently
+   * left stale twice (129 → 138 → … → 1275 while the tree held 1421), during
+   * which it was failing rather than guarding.
+   *
+   * So the count is compared against the committed `_manifest.json` instead. That
+   * file is a real second source: it is written by `npm run builtin:manifest` and
+   * reviewed in a diff, so dropping files without noticing means committing a
+   * manifest whose row count moved — visible in review — rather than editing a
+   * number in a test to make it pass.
+   */
+  it('tracks exactly the files the committed manifest declares', () => {
+    const root = path.join(process.cwd(), 'resources', 'builtin');
+    const manifest = gate.createBuiltinManifest(root, { allowIgnoredJunk: true });
+    const committed = JSON.parse(
+      fs.readFileSync(path.join(root, '_manifest.json'), 'utf8'),
+    ) as { files: unknown[] };
+
+    expect(manifest.files).toHaveLength(committed.files.length);
+    // A floor as well, so a mass deletion accompanied by a regenerated manifest
+    // cannot shrink both sides in lockstep and still pass. Deliberately far below
+    // the real count: this is a "the tree was gutted" tripwire, not a running
+    // total to maintain.
+    expect(manifest.files.length).toBeGreaterThan(900);
   });
 
   it('rejects missing primary files before a release can be signed', () => {

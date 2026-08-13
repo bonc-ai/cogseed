@@ -20,16 +20,16 @@ describe('Recall ability assets', () => {
   it('updates immutable-id assets with append-only snapshots and lifecycle audit events', async () => {
     const { candidates, assets } = await modules();
     const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Keep decision records with evidence.', suggestedType: 'rule', suggestedScope: 'architecture', sourceRefs: [{ kind: 'execution', id: 'exec-a' }] });
-    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id);
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
 
-    const updated = await assets.updateAbilityAsset('user-a', asset.id, { statement: 'Keep architecture decision records with source evidence.', scope: 'architecture-review' });
+    const updated = await assets.updateAbilityAsset('user-a', asset.id, { statement: 'Keep architecture decision records with source evidence.', scope: 'architecture-review', reason: 'Keep the newest architecture review version.', actor: 'user' });
     expect(updated.id).toBe(asset.id);
     expect(updated.version).toBe('2');
     expect(updated.statement).toContain('architecture decision');
 
-    const paused = await assets.pauseAbilityAsset('user-a', asset.id, 'needs review');
+    const paused = await assets.pauseAbilityAsset('user-a', asset.id, { actor: 'user', reason: 'needs review' });
     expect(paused.status).toBe('paused');
-    const revoked = await assets.revokeAbilityAsset('user-a', asset.id, 'unsafe');
+    const revoked = await assets.revokeAbilityAsset('user-a', asset.id, { actor: 'user', reason: 'unsafe' });
     expect(revoked.status).toBe('revoked');
 
     const versions = await assets.listAbilityAssetVersions('user-a', asset.id);
@@ -44,10 +44,151 @@ describe('Recall ability assets', () => {
   it('never changes asset ownership or accepts mutable identity fields', async () => {
     const { candidates, assets } = await modules();
     const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Prefer local evidence.', suggestedType: 'personal', suggestedScope: 'personal', sourceRefs: [{ kind: 'memory', id: 'mem-a' }] });
-    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id);
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
 
     await expect(assets.updateAbilityAsset('user-a', asset.id, { id: 'aa-other' } as never)).rejects.toThrow(/identity/i);
     await expect(assets.readAbilityAsset('user-b', asset.id)).rejects.toThrow(/not found/i);
+  });
+
+
+
+  it('requires user governance metadata for promotion and user asset mutations', async () => {
+    const { candidates, assets } = await modules();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Keep decision records with evidence.',
+      suggestedType: 'rule',
+      suggestedScope: 'architecture',
+      sourceRefs: [{ kind: 'execution', id: 'exec-governance' }],
+    });
+
+    await expect(candidates.promoteRecallCandidate('user-a', candidate.id)).rejects.toThrow(/user actor/i);
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+
+    await expect(assets.updateAbilityAsset('user-a', asset.id, {
+      statement: 'Keep architecture decision records with source evidence.',
+      reason: 'Refine the verified rule.',
+    } as never)).rejects.toThrow(/user actor/i);
+    await expect(assets.updateAbilityAsset('user-a', asset.id, {
+      statement: 'Keep architecture decision records with source evidence.',
+      actor: 'user',
+    } as never)).rejects.toThrow(/reason/i);
+    await expect(assets.pauseAbilityAsset('user-a', asset.id, { actor: 'system', reason: 'automated pause' } as never)).rejects.toThrow(/user actor/i);
+  });
+
+  it('stores structured scope policy alongside legacy scope text and version snapshots', async () => {
+    const { candidates, assets } = await modules();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Use PRM notes for architecture reviews.',
+      suggestedType: 'rule',
+      suggestedScope: 'architecture',
+      sourceRefs: [{ kind: 'execution', id: 'exec-scope' }],
+    });
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, {
+      actor: 'user',
+      scopePolicy: {
+        purposeTags: ['architecture', 'review'],
+        workspaceIds: ['workspace-a'],
+        conversationKinds: ['gconv'],
+      },
+    } as never);
+
+    expect(asset.scope).toBe('architecture');
+    expect(asset.scopePolicy).toEqual({
+      purposeTags: ['architecture', 'review'],
+      workspaceIds: ['workspace-a'],
+      conversationKinds: ['gconv'],
+    });
+
+    const updated = await assets.updateAbilityAsset('user-a', asset.id, {
+      scope: 'architecture-review',
+      scopePolicy: { purposeTags: ['architecture-review'], fileKinds: ['md'] },
+      reason: 'Narrow reuse to architecture review markdown workflows.',
+      actor: 'user',
+    } as never);
+    expect(updated.version).toBe('2');
+    expect(updated.scopePolicy).toEqual({ purposeTags: ['architecture-review'], fileKinds: ['md'] });
+
+    const versions = await assets.listAbilityAssetVersions('user-a', asset.id);
+    expect(versions[0].snapshot.scopePolicy).toEqual({
+      purposeTags: ['architecture', 'review'],
+      workspaceIds: ['workspace-a'],
+      conversationKinds: ['gconv'],
+    });
+    expect(versions[1]).toMatchObject({ reason: 'Narrow reuse to architecture review markdown workflows.', actor: 'user' });
+    expect(versions[1].snapshot.scopePolicy).toEqual({ purposeTags: ['architecture-review'], fileKinds: ['md'] });
+  });
+
+  it('records advisory rework without mutating behavior and requires an explicit user revision to clear it', async () => {
+    const { candidates, assets } = await modules();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Use a decision log before changing architecture.',
+      suggestedType: 'rule',
+      suggestedScope: 'architecture',
+      sourceRefs: [{ kind: 'execution', id: 'exec-rework' }],
+    });
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+
+    const recommended = await assets.recommendAbilityAssetAction('user-a', asset.id, {
+      action: 'rework',
+      reason: 'The reused rule produced a worse-than-expected result.',
+      actor: 'system',
+    } as never);
+    expect(recommended).toMatchObject({
+      status: 'active',
+      version: '1',
+      statement: asset.statement,
+      recommendedAction: 'rework',
+      recommendationReason: 'The reused rule produced a worse-than-expected result.',
+    });
+
+    const repeated = await assets.recommendAbilityAssetAction('user-a', asset.id, {
+      action: 'rework',
+      reason: 'The reused rule produced a worse-than-expected result.',
+      actor: 'system',
+    } as never);
+    expect(repeated.updatedAt).toBe(recommended.updatedAt);
+
+    const revised = await assets.updateAbilityAsset('user-a', asset.id, {
+      statement: 'Use a decision log and validate assumptions before changing architecture.',
+      reason: 'Rework after a negative transfer outcome.',
+      actor: 'user',
+      acknowledgeRecommendation: true,
+    });
+    expect(revised.version).toBe('2');
+    expect(revised.recommendedAction).toBeUndefined();
+    expect(revised.recommendationReason).toBeUndefined();
+
+    const audit = await assets.listAbilityAssetAudit('user-a', asset.id);
+    expect(audit.map((entry) => entry.action)).toEqual(['created', 'rework_recommended', 'updated', 'recommendation_cleared']);
+  });
+
+  it('keeps pause recommendations advisory until the user pauses the asset and blocks revoked asset changes', async () => {
+    const { candidates, assets } = await modules();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Prefer reversible experiments.',
+      suggestedType: 'rule',
+      suggestedScope: 'experiments',
+      sourceRefs: [{ kind: 'execution', id: 'exec-pause' }],
+    });
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    const recommended = await assets.recommendAbilityAssetAction('user-a', asset.id, {
+      action: 'pause',
+      reason: 'The latest transfer created a regression.',
+      actor: 'system',
+    } as never);
+    expect(recommended.status).toBe('active');
+    expect(recommended.recommendedAction).toBe('pause');
+
+    const paused = await assets.pauseAbilityAsset('user-a', asset.id, { actor: 'user', reason: 'Pause after regression.' } as never);
+    expect(paused.status).toBe('paused');
+    expect(paused.recommendedAction).toBeUndefined();
+
+    const revoked = await assets.revokeAbilityAsset('user-a', asset.id, { actor: 'user', reason: 'Unsafe across repeated runs.' } as never);
+    await expect(assets.updateAbilityAsset('user-a', revoked.id, {
+      statement: 'Attempt to mutate a revoked rule.',
+      reason: 'No mutation after revoke.',
+      actor: 'user',
+    } as never)).rejects.toThrow(/revoked/i);
   });
 
   it('preserves legacy kinds while normalizing evidence metadata at asset boundaries', async () => {
@@ -58,7 +199,7 @@ describe('Recall ability assets', () => {
       suggestedScope: 'project',
       sourceRefs: [{ kind: 'message', id: 'msg-a' }],
     });
-    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id);
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
     const store = await import('../../../../src/main/features/recall/store');
     await store.updateRecallJsonRecord('user-a', 'ability-assets', asset.id, (current) => ({
       ...current!,
@@ -78,6 +219,8 @@ describe('Recall ability assets', () => {
 
     const updated = await assets.updateAbilityAsset('user-a', asset.id, {
       evidenceRefs: [{ kind: 'execution', id: 'exec-a' } as never],
+      reason: 'Update the evidence set.',
+      actor: 'user',
     });
     expect(updated.evidenceRefs).toEqual([
       expect.objectContaining({ kind: 'execution', subtype: 'execution', id: 'exec-a', taxonomyVersion: 1 }),
@@ -125,7 +268,7 @@ describe('治理状态模型', () => {
       suggestedType: 'rule', suggestedScope: 'architecture',
       sourceRefs: [{ kind: 'execution', id: 'exec-gov' }],
     });
-    return (await candidates.promoteRecallCandidate(uid, candidate.id)).asset;
+    return (await candidates.promoteRecallCandidate(uid, candidate.id, { actor: 'user' })).asset;
   }
 
   it('接受规范 22.1 的全部治理状态，并拒绝编造的状态', async () => {
@@ -219,6 +362,8 @@ describe('治理状态模型', () => {
 });
 
 describe('治理动作', () => {
+  const userAction = (reason: string) => ({ actor: 'user' as const, reason });
+
   async function seed(uid: string) {
     const { candidates, assets } = await modules();
     const candidate = await candidates.saveRecallCandidate(uid, {
@@ -226,16 +371,16 @@ describe('治理动作', () => {
       suggestedType: 'rule', suggestedScope: 'architecture',
       sourceRefs: [{ kind: 'execution', id: 'exec-act' }],
     });
-    const asset = (await candidates.promoteRecallCandidate(uid, candidate.id)).asset;
+    const asset = (await candidates.promoteRecallCandidate(uid, candidate.id, { actor: 'user' })).asset;
     return { assets, asset };
   }
 
   it('归档与删除各自留下自己的审计动作，而不是都记成撤销', async () => {
     const { assets, asset } = await seed('user-act');
-    await assets.archiveAbilityAsset('user-act', asset.id, '暂时不用');
+    await assets.archiveAbilityAsset('user-act', asset.id, userAction('暂时不用'));
     expect((await assets.readAbilityAsset('user-act', asset.id)).status).toBe('archived');
 
-    const deleted = await assets.deleteAbilityAsset('user-act', asset.id);
+    const deleted = await assets.deleteAbilityAsset('user-act', asset.id, userAction('进入删除保留期'));
     expect(deleted.status).toBe('deleted');
     expect(deleted.deletedAt).toBeTruthy();
 
@@ -248,18 +393,18 @@ describe('治理动作', () => {
   it('重复删除不刷新保留期计时', async () => {
     // 否则用户点两次删除就把保留期悄悄延长了。
     const { assets, asset } = await seed('user-redelete');
-    const first = await assets.deleteAbilityAsset('user-redelete', asset.id);
-    const again = await assets.deleteAbilityAsset('user-redelete', asset.id);
+    const first = await assets.deleteAbilityAsset('user-redelete', asset.id, userAction('delete'));
+    const again = await assets.deleteAbilityAsset('user-redelete', asset.id, userAction('delete again'));
     expect(again.deletedAt).toBe(first.deletedAt);
   });
 
   it('恢复能把归档和保留期内的删除放回 active', async () => {
     const { assets, asset } = await seed('user-restore');
-    await assets.archiveAbilityAsset('user-restore', asset.id);
-    expect((await assets.restoreAbilityAsset('user-restore', asset.id)).status).toBe('active');
+    await assets.archiveAbilityAsset('user-restore', asset.id, userAction('archive'));
+    expect((await assets.restoreAbilityAsset('user-restore', asset.id, userAction('restore archive'))).status).toBe('active');
 
-    await assets.deleteAbilityAsset('user-restore', asset.id);
-    const restored = await assets.restoreAbilityAsset('user-restore', asset.id);
+    await assets.deleteAbilityAsset('user-restore', asset.id, userAction('delete'));
+    const restored = await assets.restoreAbilityAsset('user-restore', asset.id, userAction('restore deleted asset'));
     expect(restored.status).toBe('active');
     expect(restored.deletedAt).toBeUndefined();
   });
@@ -269,21 +414,23 @@ describe('治理动作', () => {
     const { assets, asset } = await seed('user-expired');
     const { updateRecallJsonRecord } = await import('../../../../src/main/features/recall/store');
     const stale = new Date(Date.now() - (assets.ABILITY_ASSET_DELETION_RETENTION_DAYS + 1) * 86_400_000);
-    await assets.deleteAbilityAsset('user-expired', asset.id);
+    await assets.deleteAbilityAsset('user-expired', asset.id, userAction('delete'));
     await updateRecallJsonRecord('user-expired', 'ability-assets', asset.id, (raw) => ({
       ...raw!, deletedAt: stale.toISOString(),
     }));
-    await expect(assets.restoreAbilityAsset('user-expired', asset.id))
+    await expect(assets.restoreAbilityAsset('user-expired', asset.id, userAction('restore')))
       .rejects.toThrow('retention window has expired');
   });
 
   it('彻底清除留下墓碑：内容与版本清空，id 与时间线保留', async () => {
     // Receipt 里写着 asset:<id>@v<version>，记录整个消失会让历史回执指向虚空。
     const { assets, asset } = await seed('user-purge');
-    await assets.updateAbilityAsset('user-purge', asset.id, { title: 'Second version' });
+    await assets.updateAbilityAsset('user-purge', asset.id, {
+      title: 'Second version', reason: 'Create a second version.', actor: 'user',
+    });
     expect((await assets.listAbilityAssetVersions('user-purge', asset.id)).length).toBeGreaterThan(1);
 
-    const tombstone = await assets.purgeAbilityAsset('user-purge', asset.id, '用户要求彻底清除');
+    const tombstone = await assets.purgeAbilityAsset('user-purge', asset.id, userAction('用户要求彻底清除'));
     expect(tombstone.status).toBe('purged');
     expect(tombstone.id).toBe(asset.id);
     expect(tombstone.candidateId).toBe(asset.candidateId);
@@ -302,13 +449,13 @@ describe('治理动作', () => {
 
   it('彻底清除是终态，任何后续治理动作都被拒绝', async () => {
     const { assets, asset } = await seed('user-terminal');
-    await assets.purgeAbilityAsset('user-terminal', asset.id);
+    await assets.purgeAbilityAsset('user-terminal', asset.id, userAction('purge'));
     for (const call of [
-      () => assets.restoreAbilityAsset('user-terminal', asset.id),
-      () => assets.archiveAbilityAsset('user-terminal', asset.id),
-      () => assets.pauseAbilityAsset('user-terminal', asset.id),
-      () => assets.deleteAbilityAsset('user-terminal', asset.id),
-      () => assets.rollbackAbilityAsset('user-terminal', asset.id, '1'),
+      () => assets.restoreAbilityAsset('user-terminal', asset.id, userAction('restore')),
+      () => assets.archiveAbilityAsset('user-terminal', asset.id, userAction('archive')),
+      () => assets.pauseAbilityAsset('user-terminal', asset.id, userAction('pause')),
+      () => assets.deleteAbilityAsset('user-terminal', asset.id, userAction('delete')),
+      () => assets.rollbackAbilityAsset('user-terminal', asset.id, '1', userAction('rollback')),
     ]) {
       await expect(call()).rejects.toThrow('ability asset has been purged');
     }
@@ -317,11 +464,13 @@ describe('治理动作', () => {
   it('回滚生成新版本而不改写历史，且不动治理状态与成熟度', async () => {
     // 规范 10.4：回滚只影响后续默认引用；已引用旧版本的 TaskRun 仍指向当时的版本。
     const { assets, asset } = await seed('user-rollback');
-    await assets.updateAbilityAsset('user-rollback', asset.id, { title: 'Renamed in v2' });
+    await assets.updateAbilityAsset('user-rollback', asset.id, {
+      title: 'Renamed in v2', reason: 'Rename for v2.', actor: 'user',
+    });
     await assets.setAbilityAssetMaturity('user-rollback', asset.id, 'transfer_validated');
-    await assets.pauseAbilityAsset('user-rollback', asset.id);
+    await assets.pauseAbilityAsset('user-rollback', asset.id, userAction('pause'));
 
-    const rolled = await assets.rollbackAbilityAsset('user-rollback', asset.id, '1');
+    const rolled = await assets.rollbackAbilityAsset('user-rollback', asset.id, '1', userAction('rollback to v1'));
     expect(rolled.title).toBe(asset.title);
     expect(rolled.version).toBe('3');            // 新版本，不是退回 v1
     expect(rolled.status).toBe('paused');         // 治理状态不因回滚复活
@@ -335,9 +484,9 @@ describe('治理动作', () => {
 
   it('回滚到不存在的版本或原地版本都被拒绝', async () => {
     const { assets, asset } = await seed('user-rollback-bad');
-    await expect(assets.rollbackAbilityAsset('user-rollback-bad', asset.id, '99'))
+    await expect(assets.rollbackAbilityAsset('user-rollback-bad', asset.id, '99', userAction('rollback')))
       .rejects.toThrow('version not found');
-    await expect(assets.rollbackAbilityAsset('user-rollback-bad', asset.id, asset.version))
+    await expect(assets.rollbackAbilityAsset('user-rollback-bad', asset.id, asset.version, userAction('rollback')))
       .rejects.toThrow('already at that version');
   });
 });

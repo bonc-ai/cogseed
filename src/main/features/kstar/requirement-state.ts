@@ -143,15 +143,7 @@ async function previewTaskBoundary(
       ...(input.text ? { taskText: input.text } : {}),
       ...(expectedResult ? { authorization: expectedResult.source === 'model' ? 'workspace_policy' : 'user_confirmed' } : {}),
     });
-    // 规范 14.1 要求任务前「必须」展示一行准备摘要，9.5 要求「无需更新也要透明」，
-    // 而这里零条时不贴卡——「这次什么都没带」和「系统压根没准备」在用户眼里
-    // 因此长得一模一样。
-    //
-    // 但不能简单改成恒贴：这张卡是以**聊天消息**形式插进对话的，每个任务边界都发
-    // 一条会直接撞上规范 9.2 的打扰预算，实测也打乱了十余处消息序列。
-    // 要做到常驻可见，得换一个非消息载体（任务前的常驻摘要条），那是设计决策，
-    // 不是把这个布尔量翻过来就行。留在这里等交互定稿。
-    return { projectionId: projection.id, shouldPostCard: Array.isArray(projection.assetIds) && projection.assetIds.length > 0 };
+    return { projectionId: projection.id, shouldPostCard: true };
   } catch (error) {
     log.warn('kstar requirement preview failed', { conversationId: input.conversationId, taskRunId, error: (error as Error).message });
     return undefined;
@@ -246,6 +238,19 @@ export async function routeKstarUserMessage(
     currentRequirement.userMessageIds = uniqueIds(currentRequirement.userMessageIds, input.messageId);
     currentRequirement.updatedAt = nowIso();
     if (route.expectedResult && !currentRequirement.rHat) currentRequirement.rHat = route.expectedResult;
+    if (route.intent === 'continue') {
+      const projectionPreview = await previewTaskBoundary(
+        userId,
+        input,
+        task.id,
+        projectionPurpose(routeTitle(route, input.text)),
+        route.expectedResult,
+      );
+      if (projectionPreview) {
+        currentRequirement.projectionId = projectionPreview.projectionId;
+        if (projectionPreview.shouldPostCard) projectionPreviewCreated = { projectionId: projectionPreview.projectionId };
+      }
+    }
   }
 
   await replaceKstarRequirement(userId, route.intent === 'new'

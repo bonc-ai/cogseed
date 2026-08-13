@@ -37,7 +37,6 @@ import { getLanguage } from './config';
 import { getWorkspacePath } from './user_workspace';
 import { buildAttachmentManifest } from './chat_attachments';
 import { addAgentEntry, listAgentEntries, removeAgentEntry, replaceAgentEntry } from './memory';
-import type { AgentGlossaryEntry } from './agent_inheritance';
 import {
   normalizeAgentRuntimeStatsFile,
   recordAgentRuntimeStatsForDevice,
@@ -1033,7 +1032,7 @@ function _normalizeRuntime(raw: unknown): AgentRuntime | null {
  *  cwd instead of the user workspace; the chip in the conversation
  *  surface lets the user set it. Single source of truth for both UI
  *  visibility and dispatch routing. */
-export const CODING_CLIS = new Set<string>(['claude', 'codex']);
+export const CODING_CLIS = new Set<string>(['claude', 'codex', 'workbuddy']);
 export function cliIsCodingAgent(cli: string | undefined): boolean {
   return !!cli && CODING_CLIS.has(cli);
 }
@@ -3103,55 +3102,7 @@ export function isValidAgentId(id: unknown): boolean {
  * (`extractAgentFieldBlocks`), only the outcome differs: agent-edit
  * updates an existing agent, this one creates a fresh one.
  */
-/** 生成 Agent 时的出生上下文。缺省表示调用方拿不到——这时不落继承记录，
- *  而不是落一份 origin 全空的假记录。 */
-export interface CreateAgentInheritanceContext {
-  userId: string;
-  conversationId?: string;
-  projectId?: string;
-  workspaceId?: string;
-  glossary?: AgentGlossaryEntry[];
-  memoryRefs?: string[];
-}
-
-/** 把出生快照落盘。失败只 warn 不抛：Agent 已经建好了，
- *  继承记录写不进去不该让整个创建回滚——但缺失必须在读取侧显式可见。 */
-async function _recordInheritance(
-  agent: Agent,
-  workflow: string,
-  context: CreateAgentInheritanceContext,
-): Promise<void> {
-  try {
-    const [{ recordAgentInheritance, collectAgentBirthContext }, { listAbilityAssets }] = await Promise.all([
-      import('./agent_inheritance'),
-      import('./recall/asset-service'),
-    ]);
-    // 调用方没给术语表/记忆时，从用户自己的个人本体分组采集——不采就永远是空的。
-    const collected = context.glossary || context.memoryRefs
-      ? { glossary: context.glossary ?? [], memoryRefs: context.memoryRefs ?? [] }
-      : await collectAgentBirthContext(context.userId);
-    await recordAgentInheritance(context.userId, {
-      agentId: agent.agent_id,
-      rolePrompt: workflow,
-      assets: await listAbilityAssets(context.userId),
-      origin: {
-        ...(context.conversationId ? { conversationId: context.conversationId } : {}),
-        ...(context.projectId ? { projectId: context.projectId } : {}),
-        ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
-      },
-      ...(collected.glossary.length ? { glossary: collected.glossary } : {}),
-      ...(collected.memoryRefs.length ? { memoryRefs: collected.memoryRefs } : {}),
-      createdAt: new Date().toISOString(),
-    });
-  } catch (err) {
-    log.warn(`agent inheritance not recorded for ${agent.agent_id}: ${(err as Error).message}`);
-  }
-}
-
-export async function createAgentFromBlocks(
-  fields: ExtractedFields,
-  inheritance?: CreateAgentInheritanceContext,
-): Promise<Agent | null> {
+export async function createAgentFromBlocks(fields: ExtractedFields): Promise<Agent | null> {
   const name = (fields.name || '').trim();
   const workflow = (fields.workflow || '').trim();
   const category = fields.category
@@ -3177,11 +3128,9 @@ export async function createAgentFromBlocks(
   if (Array.isArray(fields.inputs)) updates.inputs = fields.inputs;
   if (Array.isArray(fields.knowhow)) updates.knowhow = fields.knowhow;
   if (Array.isArray(fields.standards)) updates.standards = fields.standards;
-  const agent = Object.keys(updates).length
-    ? (await updateCustomAgent(created.agent_id, updates)) || created
-    : created;
-  // 出生快照在 skill_list/inputs 折叠之后才记，这样 rolePrompt 与最终落盘的
-  // workflow 一致；没有上下文就不记，读取侧会把「没有记录」和「继承为空」分开展示。
-  if (inheritance) await _recordInheritance(agent, workflow, inheritance);
-  return agent;
+  if (Object.keys(updates).length) {
+    const updated = await updateCustomAgent(created.agent_id, updates);
+    return updated || created;
+  }
+  return created;
 }

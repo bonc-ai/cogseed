@@ -159,12 +159,31 @@ export class RuntimeInstance {
   async attemptDelivery(key: string, entry: DeliveryLedgerEntry): Promise<void> {
     if (!this.isCurrent()) return;
     try {
-      const receipt = await this.adapter.sendMessage(
-        entry.recipientId,
-        entry.text || '',
-        this.controller.signal,
-        deliveryContext(entry),
-      );
+      // Interactive-card sends (touchpoint intents) replay through sendCard;
+      // file sends go through sendFile when the adapter supports it;
+      // everything else stays on the plain-text path. Non-card/file adapters
+      // fall back to text so an entry can never wedge a delivery.
+      const receipt = entry.card && isCardAdapter(this.adapter)
+        ? await this.adapter.sendCard(
+          entry.recipientId,
+          entry.card,
+          this.controller.signal,
+          deliveryContext(entry),
+        )
+        : entry.file && typeof this.adapter.sendFile === 'function'
+          ? await this.adapter.sendFile(
+            entry.recipientId,
+            entry.file.path,
+            entry.file.name,
+            this.controller.signal,
+            deliveryContext(entry),
+          )
+          : await this.adapter.sendMessage(
+            entry.recipientId,
+            entry.text || '',
+            this.controller.signal,
+            deliveryContext(entry),
+          );
       await ledger.finishDelivery(this.uid, key, {
         status: 'sent',
         ...(receipt.deliveryId ? { externalDeliveryId: receipt.deliveryId } : {}),

@@ -317,14 +317,17 @@ function initializeInstallDataRoot(
     if (options.allowWorkspaceOverride !== true) {
       throw new Error('inherited COGSEED_WORKSPACE_ROOT is not allowed for normal app startup');
     }
-    process.env.COGSEED_RUNTIME_CONTAINER = path.dirname(
-      path.resolve(inheritedWorkspaceRoot),
-    );
-    process.env.ORKAS_RUNTIME_CONTAINER = process.env.COGSEED_RUNTIME_CONTAINER;
+    const workspaceRoot = path.resolve(inheritedWorkspaceRoot);
+    const container = path.dirname(workspaceRoot);
+    fs.mkdirSync(workspaceRoot, { recursive: true });
+    process.env.COGSEED_RUNTIME_CONTAINER = container;
+    process.env.COGSEED_WORKSPACE_ROOT = workspaceRoot;
+    process.env.ORKAS_RUNTIME_CONTAINER = container;
+    process.env.ORKAS_WORKSPACE_ROOT = workspaceRoot;
     return Object.freeze({
       variant,
-      container: process.env.COGSEED_RUNTIME_CONTAINER,
-      workspaceRoot: path.resolve(inheritedWorkspaceRoot),
+      container,
+      workspaceRoot,
       overridden: true,
     });
   }

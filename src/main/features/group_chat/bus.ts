@@ -153,7 +153,7 @@ import {
 import { buildRetryResumeModelText } from "./retry_resume";
 import { isAgentEnabled, readDisabledSets } from "../component_enabled";
 import { finalizeProducedFile } from "../produced_output_hooks";
-import { selectVisibleProducedFiles, validateProducedFiles } from "../produced_files";
+import { selectVisibleProducedFiles } from "../produced_files";
 import {
   buildLanguageDirective,
   descriptionLang,
@@ -182,14 +182,7 @@ import { evaluateWake, listWakeRequests } from "../p3394/wake-service";
 import {
   type KStarDecisionRecord,
   type KStarExpectation,
-} from "../p3394/kstar-compat";
-import {
-  recordToolCycleEvidence,
-  recordAgentRunStartEvidence,
-  recordAgentContributionEvidence,
-  closeCollaborationEvidence,
-} from "../p3394/kstar-bus-integration";
-import { promoteExperienceCandidateToKnowledgeBase } from "../p3394/kstar-kb";
+} from "../kstar/dispatch-decision";
 import {
   buildP3394Level2Manifest,
   normalizeP3394AgentMessage,
@@ -208,7 +201,7 @@ const log = createLogger("group_chat.bus");
 
 // Process-wide P3394 admission controller: wraps the stateless normalize kernel
 // with real session resolution, epoch watermarking, and context-scope checks.
-// The EpochStore persists receiver watermarks under <uid>/local/kstar/.
+// Generic P3394 receiver/sender watermarks live under <uid>/local/p3394/.
 const _p3394EpochStore = new EpochStore();
 const _p3394SenderEpochStore = new SenderEpochStore();
 const _defaultP3394Controller = new P3394Controller({
@@ -321,71 +314,6 @@ function kstarDecisionRecord(
     source: "commander",
     commander_mode: input.mode,
   };
-}
-
-const KSTAR_GUARD_KEYWORDS =
-  /论文|报告|长文|代码|最终|交付|保存|文件|评审|审核|review|report|paper|essay|code|deliverable|final|file/i;
-
-function applyKStarGuard(
-  input: KStarDecisionRecord | undefined,
-  cid: string,
-  actualResult: string,
-  produced: string[] | undefined,
-): KStarDecisionRecord | undefined {
-  if (input?.required)
-    return {
-      ...input,
-      source: input.source || "commander",
-      commander_mode: input.commander_mode || "required",
-    };
-  const matched: string[] = [];
-  if (Array.isArray(produced) && produced.length > 0)
-    matched.push("produced_files");
-  if (actualResult.length >= 3000) matched.push("long_output");
-  const expectedTask = input?.expectation?.task || "";
-  if (
-    KSTAR_GUARD_KEYWORDS.test(expectedTask) ||
-    KSTAR_GUARD_KEYWORDS.test(actualResult.slice(0, 1200))
-  )
-    matched.push("deliverable_keywords");
-  if (!matched.length) return undefined;
-  return {
-    required: true,
-    reason: `Bus KSTAR guard upgraded this delegated task to required (${matched.join(", ")}).`,
-    expectation: {
-      k_snapshot_ref:
-        input?.expectation?.k_snapshot_ref || `conversation:${cid}`,
-      situation:
-        input?.expectation?.situation ||
-        "Bus guard inferred this turn may contain a durable or decision-impacting deliverable.",
-      task:
-        input?.expectation?.task || "Review the delegated agent deliverable.",
-      action_hat:
-        input?.expectation?.action_hat ||
-        "Agent should complete the delegated task and produce a reviewable result.",
-      result_hat:
-        input?.expectation?.result_hat ||
-        "A durable deliverable or long-form result should be reviewed before final acceptance.",
-    },
-    source: "bus_guard",
-    commander_mode: input?.commander_mode || (input ? "skip" : undefined),
-    guard: { upgraded: true, matched_rules: matched, confidence: "hard" },
-  };
-}
-
-function buildKStarActualActionSummary(
-  actorId: string,
-  produced: string[] | undefined,
-  toolSummaries: string[] = [],
-): string {
-  const files =
-    Array.isArray(produced) && produced.length
-      ? ` Produced files: ${produced.join(", ")}`
-      : "";
-  const tools = toolSummaries.length
-    ? ` Tool evidence: ${toolSummaries.slice(0, 8).join("; ")}.`
-    : "";
-  return `${actorId} completed the delegated agent turn.${tools}${files}`;
 }
 
 function isExistingProducedFile(absPath: string): boolean {
@@ -853,122 +781,6 @@ function shapeValue(value: unknown, depth = 0): unknown {
     return out;
   }
   return typeof value;
-}
-
-function argumentShape(value: unknown): Record<string, unknown> | undefined {
-  const obj = objectRecord(value);
-  const entries = Object.entries(obj).slice(0, 20);
-  if (!entries.length) return undefined;
-  return Object.fromEntries(
-    entries.map(([key, child]) => [key, shapeValue(child)]),
-  );
-}
-
-function numericField(value: unknown): number | undefined {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : undefined;
-}
-
-function kstarToolCallId(rawId: unknown, toolName: string): string {
-  const id = typeof rawId === "string" ? rawId.trim() : "";
-  if (safeId(id)) return id;
-  return `tool-${toolName.replace(/[^A-Za-z0-9_-]+/g, "_").slice(0, 48) || "call"}-${genId12()}`;
-}
-
-function isToolEndEvent(
-  event: ProcessEvent | null,
-): event is ProcessEvent & { data: Record<string, unknown> } {
-  if (event?.stream !== "tool") return false;
-  const data = objectRecord(event.data);
-  const phase = String(data.phase || data.status || "").toLowerCase();
-  return (
-    phase === "end" ||
-    phase === "result" ||
-    phase === "completed" ||
-    phase === "failed"
-  );
-}
-
-function toolEventId(data: Record<string, unknown>, toolName: string): string {
-  return kstarToolCallId(
-    data.id || data.tool_call_id || data.call_id,
-    toolName,
-  );
-}
-
-function rememberKStarToolStart(
-  event: ProcessEvent | null,
-  argumentShapes: Map<string, Record<string, unknown>>,
-): void {
-  if (event?.stream !== "tool") return;
-  const data = objectRecord(event.data);
-  const phase = String(data.phase || data.status || "").toLowerCase();
-  if (phase !== "start") return;
-  const toolName = String(data.name || data.toolName || data.tool || "")
-    .trim()
-    .slice(0, 120);
-  if (!toolName) return;
-  const shape = argumentShape(data.arguments || data.input || data.args);
-  if (shape) argumentShapes.set(toolEventId(data, toolName), shape);
-}
-
-async function maybeRecordKStarToolCycle(input: {
-  uid: string;
-  cid: string;
-  actor: Actor;
-  turnId: string;
-  event: ProcessEvent | null;
-  kstarRequired: boolean;
-  argumentShapes: Map<string, Record<string, unknown>>;
-  toolSummaries: string[];
-}): Promise<void> {
-  if (
-    !input.kstarRequired ||
-    input.actor.kind !== "agent" ||
-    !isToolEndEvent(input.event)
-  )
-    return;
-  const data = objectRecord(input.event.data);
-  const toolName = String(data.name || data.toolName || data.tool || "")
-    .trim()
-    .slice(0, 120);
-  if (!toolName) return;
-  const toolCallId = toolEventId(data, toolName);
-  const resultPreview = boundedString(
-    data.result_preview || data.output || data.message || data.error || "",
-    1000,
-  );
-
-  // Route through adapter integration layer
-  const result = await recordToolCycleEvidence({
-    userId: input.uid,
-    conversationId: input.cid,
-    agentId: input.actor.id,
-    turnId: input.turnId,
-    toolCallId,
-    toolName,
-    argumentsShape:
-      argumentShape(data.arguments || data.input || data.args) ||
-      input.argumentShapes.get(toolCallId),
-    resultPreview,
-    resultSize: numericField(data.result_size || data.size),
-    isError:
-      data.isError === true ||
-      data.is_error === true ||
-      String(data.status || "").toLowerCase() === "failed",
-    durationMs: numericField(data.duration_ms || data.durationMs),
-  });
-
-  input.argumentShapes.delete(toolCallId);
-
-  // Build tool summary for actualAction (used in contribution evidence)
-  const toolFailed = data.isError === true ||
-    data.is_error === true ||
-    String(data.status || "").toLowerCase() === "failed";
-  const status = toolFailed ? "failed" : "succeeded";
-  input.toolSummaries.push(
-    `${toolName} ${status}`,
-  );
 }
 
 /** True when a commander turn's process trail ONLY routed: it carries at least
@@ -1649,45 +1461,6 @@ function _emitTaskRunTerminalIfQuiescent(
   })();
 }
 
-function scheduleCommanderKStarValidation(
-  state: CidState,
-  stateFile: StateFile,
-  taskStatus: TaskTerminalStatus | null,
-): void {
-  const waitingOnLedger =
-    stateFile.orchestration_ledger?.status === "waiting_for_form" ||
-    stateFile.orchestration_ledger?.status === "waiting_for_agent";
-  if (waitingOnLedger || taskStatus === "waiting_input") return;
-  const outcomeStatus: "completed" | "failed" | "cancelled" =
-    stateFile.status === "aborted" || taskStatus === "cancelled"
-      ? "cancelled"
-      : taskStatus === "failed"
-        ? "failed"
-        : "completed";
-  trackBackgroundWrite(
-    state,
-    (async () => {
-      const wakeRequests = await listWakeRequests(state.uid, state.cid);
-      if (
-        wakeRequests.some(
-          (request) => request.status === "pending" || request.status === "approved",
-        )
-      ) {
-        return;
-      }
-      const result = await closeCollaborationEvidence(state.uid, {
-        conversationId: state.cid,
-        commanderId: COMMANDER_ID,
-        outcomeStatus,
-      });
-      if (result.success && result.runId) {
-        log.info(`Commander collaboration closed cid=${state.cid} runId=${result.runId}`);
-      }
-    })(),
-    "Commander KSTAR collaboration validation",
-  );
-}
-
 function emit(state: CidState, ev: GroupEvent): void {
   for (const l of state.listeners) {
     try {
@@ -1825,7 +1598,6 @@ async function _syncStateStatus(
   if (want === "idle") {
     const taskStatus = state.taskRun?.status || null;
     _emitTaskRunTerminalIfQuiescent(state, result.state);
-    scheduleCommanderKStarValidation(state, result.state, taskStatus);
   }
 }
 
@@ -1955,8 +1727,6 @@ export interface EnqueueParams {
   };
   /** Marker for the Commander-visible task/plan/expected-result declaration. */
   kstar_dispatch_narration?: { target_agent_id: string; workflow_step_id?: string };
-  /** Compact tool-cycle summaries captured during this agent turn for KSTAR attribution. */
-  kstarToolSummaries?: string[];
   /** Terminal outcome recorded with an Agent contribution for Commander validation. */
   kstarOutcomeStatus?: AgentRunStatus;
 }
@@ -2394,9 +2164,6 @@ async function _enqueueBody(
     }
   }
 
-  const producedResults = params.produced?.length
-    ? validateProducedFiles(params.produced, params.process || [])
-    : [];
   const msg: GroupMessage = {
     id: msgId,
     ts,
@@ -2431,7 +2198,6 @@ async function _enqueueBody(
     ...(params.produced && params.produced.length
       ? { produced: params.produced }
       : {}),
-    ...(producedResults.length ? { produced_results: producedResults } : {}),
     ...(params.form ? { form: params.form } : {}),
     ...(params.created_agents && params.created_agents.length
       ? { created_agents: params.created_agents }
@@ -2501,44 +2267,6 @@ async function _enqueueBody(
       ...(provenance.projectionId ? { projectionId: provenance.projectionId } : {}),
       ...(provenance.wakeRequestId ? { wakeRequestId: provenance.wakeRequestId } : {}),
     };
-  }
-
-  const guardedKStarDecision =
-    fromKind === "agent" && params.turn_end && params.turn_id
-      ? await (async () => {
-          // 空间模式（space_builder）是引导对话，不做 KSTAR 交付物评审。
-          const convKind = await getConversationKindSafe(uid, cid);
-          if (convKind === "space_builder") return undefined;
-          return applyKStarGuard(
-            params.kstarDecision,
-            cid,
-            rewrittenText,
-            params.produced,
-          );
-        })()
-      : undefined;
-  if (fromKind === "agent" && params.turn_end && params.turn_id && guardedKStarDecision?.required) {
-    try {
-      await recordAgentContributionEvidence({
-        userId: uid,
-        conversationId: cid,
-        agentId: fromActorId,
-        turnId: params.turn_id,
-        messageId: msgId,
-        actualResult: rewrittenText,
-        kstarDecision: guardedKStarDecision,
-        outcomeStatus: params.kstarOutcomeStatus || "success",
-        actualAction: buildKStarActualActionSummary(
-          fromActorId,
-          params.produced,
-          params.kstarToolSummaries,
-        ),
-      });
-    } catch (err) {
-      log.warn(
-        `P3394 KSTAR contribution record failed cid=${cid} actor=${fromActorId}: ${(err as Error).message}`,
-      );
-    }
   }
 
   // Persist: main jsonl + each recipient + sender (so sender sees own history
@@ -3539,8 +3267,6 @@ async function runActorTurnBody(
   // history reload can rerender the rail (renderer accumulates it live, but
   // without persistence it vanishes on refresh). Cap the array so a runaway
   // tool storm can't bloat the jsonl. Skip `delta` and `assistant` events.
-  const kstarToolArgumentShapes = new Map<string, Record<string, unknown>>();
-  const kstarToolSummaries: string[] = [];
   if (item.attachments && item.attachments.length) {
     try {
       const attachmentsMod = await import("../chat_attachments");
@@ -3724,7 +3450,6 @@ async function runActorTurnBody(
         interactive: false,
       },
       workingDir,
-      item.turnId,
     );
   } else {
     const agent = await agentsFeat.getAgent(actor.id);
@@ -3799,7 +3524,6 @@ async function runActorTurnBody(
         cid,
         agent,
         workingDir,
-        item.turnId,
       );
       // Runtime skills start from the agent-authored skill_list and append
       // agent-owned private/self-evolved skills. User-explicit picker choices
@@ -3976,7 +3700,7 @@ async function runActorTurnBody(
     // HTML -> PDF, etc.). Only an explicit publish_outputs declaration may
     // close/finalize files here. Otherwise keep all candidates registered so
     // the end-of-turn selector can see the complete production chain.
-    const segCandidates = Array.from(turnProduced);
+    const segCandidates = existingProducedFiles(turnProduced);
     const hasExplicitSegmentOutputs = outputsPublicationDeclared;
     const segProduced = hasExplicitSegmentOutputs
       ? selectVisibleProducedFiles(segCandidates, turnPublished)
@@ -4333,24 +4057,6 @@ async function runActorTurnBody(
               ? (inner as Record<string, unknown>)
               : undefined;
           if (actor.kind !== "worker") {
-            if (actor.kind === "agent" && item.kstarDecision?.required) {
-              try {
-                await recordAgentRunStartEvidence({
-                  userId: uid,
-                  conversationId: cid,
-                  agentId: actor.id,
-                  turnId: item.turnId,
-                  data:
-                    inner && typeof inner === "object"
-                      ? (inner as Record<string, unknown>)
-                      : {},
-                });
-              } catch (err) {
-                log.warn(
-                  `P3394 evidence adapter failed cid=${cid} actor=${actor.id}: ${(err as Error).message}`,
-                );
-              }
-            }
             emit(state, {
               type: "agent_run_result",
               cid,
@@ -4379,23 +4085,6 @@ async function runActorTurnBody(
             const event = processEventForPersistence(
               (ev as { event?: unknown }).event,
             );
-            rememberKStarToolStart(event, kstarToolArgumentShapes);
-            try {
-              await maybeRecordKStarToolCycle({
-                uid,
-                cid,
-                actor,
-                turnId: item.turnId,
-                event,
-                kstarRequired: !!item.kstarDecision?.required,
-                argumentShapes: kstarToolArgumentShapes,
-                toolSummaries: kstarToolSummaries,
-              });
-            } catch (err) {
-              log.warn(
-                `P3394 tool evidence adapter failed cid=${cid} actor=${actor.id}: ${(err as Error).message}`,
-              );
-            }
             if (text)
               appendProcessItem(processItems, {
                 type: "progress",
@@ -4406,23 +4095,6 @@ async function runActorTurnBody(
             const event = processEventForPersistence(
               (ev as { event?: unknown }).event,
             );
-            rememberKStarToolStart(event, kstarToolArgumentShapes);
-            try {
-              await maybeRecordKStarToolCycle({
-                uid,
-                cid,
-                actor,
-                turnId: item.turnId,
-                event,
-                kstarRequired: !!item.kstarDecision?.required,
-                argumentShapes: kstarToolArgumentShapes,
-                toolSummaries: kstarToolSummaries,
-              });
-            } catch (err) {
-              log.warn(
-                `P3394 tool evidence adapter failed cid=${cid} actor=${actor.id}: ${(err as Error).message}`,
-              );
-            }
             if (event && event.stream !== "assistant") {
               appendProcessItem(processItems, { type: "event", event });
             }
@@ -4702,13 +4374,7 @@ async function runActorTurnBody(
               }
             }
           } else {
-            // 带上出生上下文，新 Agent 才能承接前序项目的认知资产与会话来源；
-            // 没有这一步生成出来的只有角色提示，被问到前序项目的术语只能瞎猜。
-            const ag = await agentsFeat.createAgentFromBlocks(fields, {
-              userId: uid,
-              ...(cid ? { conversationId: cid } : {}),
-              ...(turnProjectId ? { projectId: turnProjectId } : {}),
-            });
+            const ag = await agentsFeat.createAgentFromBlocks(fields);
             if (ag) {
               createdAgents.push({
                 agent_id: ag.agent_id,
@@ -4893,10 +4559,12 @@ async function runActorTurnBody(
     }
   }
 
-  const turnFinalCandidates = Array.from(turnProduced);
-  for (const stalePath of turnFinalCandidates) {
-    if (!isExistingProducedFile(stalePath)) state.producedPaths.delete(stalePath);
-  }
+  const turnFinalCandidates = existingProducedFiles(
+    turnProduced,
+    (stalePath) => {
+      state.producedPaths.delete(stalePath);
+    },
+  );
   const produced = selectVisibleProducedFiles(
     turnFinalCandidates,
     outputsPublicationDeclared ? turnPublished : undefined,
@@ -5165,9 +4833,6 @@ async function runActorTurnBody(
       ...(item.kstarDecision?.required
         ? { kstarDecision: item.kstarDecision }
         : {}),
-      ...(item.kstarDecision?.required && kstarToolSummaries.length
-        ? { kstarToolSummaries }
-        : {}),
       ...(actor.kind === "agent" && item.kstarDecision?.required
         ? { kstarOutcomeStatus: actorRunStatus }
         : {}),
@@ -5426,176 +5091,76 @@ export async function _buildActiveSharedTaskContextBlockForTest(
   return buildActiveSharedTaskContextBlock(uid, cid);
 }
 
-/** 一次注入多少条继承的认知。超出的不静默丢弃，块尾会写明省略了几条。 */
-const MAX_INHERITED_ASSETS_IN_PROMPT = 20;
-/** 术语表进提示的条数上限。 */
-const MAX_INHERITED_GLOSSARY_IN_PROMPT = 30;
-
-/**
- * 记一张 ContextReuseReceipt：这份出生能力包被真实注入了哪个会话、带了哪几条、
- * 哪几条没带上。这是链路 `Asset → Capability Pack → Reuse` 的最后一跳。
- *
- * execution id 用本轮真实的 `turn-<turnId>`，与 `execution-records` 写的执行记录
- * 同名。早先版本自造了一个 `exec-inherit-<hash>` 合成 id 来做幂等，真机重启后
- * 暴露出问题：回执落在一个没有 `record.json` 的目录里，执行记录扫描器每次启动
- * 都反复 warn「skipping unreadable execution record」，而且语义上回执挂在了一次
- * 不存在的执行上——回执本该是某次真实执行的凭证。
- *
- * 同一轮重试会撞上「已存在」，那是预期结果，不是错误。
- */
-async function recordInheritedCognitionReuse(
-  uid: string,
-  cid: string,
-  agentId: string,
-  turnId: string,
-  facts: { reusedRefs: string[]; omittedRefs: string[] },
-): Promise<void> {
-  try {
-    const [{ prepareReceipt }, { buildGmemberSessionId }] = await Promise.all([
-      import("../p3394/context-reuse-receipt"),
-      import("./state"),
-    ]);
-    const targetSessionId = buildGmemberSessionId(cid, agentId);
-    await prepareReceipt(
-      uid,
-      {
-        executionId: `turn-${turnId}`,
-        targetSessionId,
-        reusedRefs: facts.reusedRefs,
-        omittedRefs: facts.omittedRefs,
-        // 继承注入是只读的：Agent 拿到判断，但不能改写认知资产。
-        permissionMode: "read-only",
-        allowedScopes: ["cognition:inherited"],
-        boundary: "real",
-      },
-      { sessionId: targetSessionId },
-    );
-  } catch (err) {
-    const message = (err as Error).message;
-    // 同一包注入同一会话的第二轮起必然走到这里，属正常路径，不该刷 warn。
-    if (message.includes("already exists")) return;
-    log.warn(
-      `inherited cognition receipt not recorded agent=${agentId} cid=${cid}: ${message}`,
-    );
-  }
+async function buildSpaceBuilderSystemPrompt(uid: string): Promise<string> {
+  const { prompts } = await import("../../prompts/loader");
+  const [skillsFeat, agentsFeat, templatesFeat] = await Promise.all([
+    import("../skills"),
+    import("../agents"),
+    import("../role_templates"),
+  ]);
+  const [skills, agents, templates, scenarios] = await Promise.all([
+    skillsFeat.listSkills(),
+    agentsFeat.listAgents().catch(() => []),
+    templatesFeat.listRoleTemplates(),
+    templatesFeat.listScenarios(),
+  ]);
+  const clip = (s: string, n = 90) => {
+    const t = String(s || "").replace(/\s+/g, " ").trim();
+    return t.length > n ? `${t.slice(0, n)}…` : t;
+  };
+  const skillsBlock = skills.length
+    ? skills
+        .filter((s) => s.enabled !== false)
+        .map((s) => {
+          const desc = s.description_zh || s.description_en || "";
+          return `- ${s.name || s.id}（id: ${s.id}${s.version ? `, v${s.version}` : ""}）— ${clip(desc)}`;
+        })
+        .join("\n")
+    : "（暂无可用技能）";
+  const agentsBlock = agents.length
+    ? agents.map((a) => {
+        const desc = (a as { description_zh?: string; description_en?: string }).description_zh
+          || (a as { description_zh?: string; description_en?: string }).description_en
+          || (a as { description?: string }).description
+          || "";
+        return `- ${a.name || a.agent_id}（id: ${a.agent_id}）— ${clip(desc)}`;
+      }).join("\n")
+    : "（暂无可用智能体）";
+  const templatesBlock = templates.length
+    ? templates.map((t) => `- ${t.name}（id: ${t.template_id}）— ${clip(t.description)}`).join("\n")
+    : "（暂无角色模板）";
+  const scenariosBlock = scenarios.length
+    ? scenarios.map((s) => {
+        const extra = (s as { suggested_secondary_template_ids?: string[] }).suggested_secondary_template_ids?.length
+          ? `，可配模板: ${(s as { suggested_secondary_template_ids?: string[] }).suggested_secondary_template_ids!.join("/")}`
+          : "";
+        return `- ${s.name}（id: ${s.scenario_id}）— ${clip(s.description || "")}${extra}`;
+      }).join("\n")
+    : "（暂无场景）";
+  const main = renderPromptWithSharedRules(
+    prompts,
+    "space_builder",
+    {
+      skills_block: skillsBlock,
+      agents_block: agentsBlock,
+      templates_block: templatesBlock,
+      scenarios_block: scenariosBlock,
+    },
+    false,
+  );
+  return appendLanguageDirective(main);
 }
 
-/**
- * 把 Agent 出生时继承的认知资产注入它的运行时提示。
- *
- * 没有这一步，`agent_inheritance` 记的就只是一份没人读的档案：Agent 依然
- * 只带着角色提示上场，被问到前序项目的判断只能瞎猜。
- *
- * 两条纪律，方向相反，都必须守：
- *
- * - **内容用冻结版本**。注入的是出生那一刻通过审阅的 statement 与版本号，
- *   不是资产的当前文本。这样回执才说得清「当时用的是第几版」，
- *   资产事后被编辑也不会让一个早已生成的 Agent 悄悄换了行为。
- * - **撤销与暂停按当下判定**。冻结的是内容，不是授权。资产被撤销之后
- *   必须立刻停止注入，否则「撤销」对已生成的 Agent 完全无效——
- *   这是最容易漏、后果最重的一条。过期的能力包同理整份不注入。
- */
-async function buildInheritedCognitionBlock(
-  uid: string,
-  cid: string,
-  agentId: string,
-  turnId: string,
-): Promise<string> {
+/** 会话 kind 快速读取（动态 import 避免 chats ↔ group_chat 循环依赖）。
+ *  读不到/异常一律视为 normal，绝不改变既有行为。 */
+async function getConversationKindSafe(uid: string, cid: string): Promise<string> {
   try {
-    const [{ readAgentInheritance }, { isPackExpired }, assetService] = await Promise.all([
-      import("../agent_inheritance"),
-      import("../p3394/capability-pack-delivery"),
-      import("../recall/asset-service"),
-    ]);
-
-    const inheritance = await readAgentInheritance(uid, agentId);
-    if (!inheritance) return "";
-    if (isPackExpired(inheritance.capabilityPack)) return "";
-
-    const usable: string[] = [];
-    const reusedRefs: string[] = [];
-    const omittedRefs: string[] = [];
-    let droppedByRevocation = 0;
-    for (const ref of inheritance.capabilityPack.assets) {
-      let current;
-      try {
-        current = await assetService.readAbilityAsset(uid, ref.assetId);
-      } catch {
-        // 资产已被删除：和撤销同等处理，不注入。
-        droppedByRevocation++;
-        omittedRefs.push(`asset:${ref.assetId}@v${ref.version}:missing`);
-        continue;
-      }
-      if (current.status !== "active") {
-        droppedByRevocation++;
-        omittedRefs.push(`asset:${ref.assetId}@v${ref.version}:${current.status}`);
-        continue;
-      }
-      reusedRefs.push(`asset:${ref.assetId}@v${ref.version}`);
-      const conditions = [
-        ref.applicableWhen?.length ? `适用：${ref.applicableWhen.join("；")}` : "",
-        ref.forbiddenWhen?.length ? `禁用：${ref.forbiddenWhen.join("；")}` : "",
-      ].filter(Boolean).join(" / ");
-      usable.push(
-        `- [${ref.assetId} v${ref.version}] ${ref.statement}${conditions ? `\n  (${conditions})` : ""}`,
-      );
-    }
-
-    // 术语表单独成段：它解决的是「被问到前序项目的专有名词只能瞎猜」，
-    // 和认知资产是两回事——即使一条资产都没带上，术语该给还得给。
-    const glossaryLines = (inheritance.glossary ?? [])
-      .slice(0, MAX_INHERITED_GLOSSARY_IN_PROMPT)
-      .map((entry) => `- ${entry.term}: ${entry.definition}`);
-    const glossaryBlock = glossaryLines.length
-      ? `\n\n### Inherited glossary\nTerms as the user defined them when you were created. Use these meanings; do not\nre-interpret them from general knowledge.\n\n<inherited-glossary>\n${glossaryLines.join("\n")}\n</inherited-glossary>`
-      : "";
-
-    if (!usable.length) return glossaryBlock.trim();
-    const shown = usable.slice(0, MAX_INHERITED_ASSETS_IN_PROMPT);
-    const omitted = usable.length - shown.length;
-    if (omitted > 0) {
-      // 因长度截掉的也是「没带上」，回执要如实记，不能只记撤销那批。
-      for (const ref of reusedRefs.splice(shown.length)) {
-        omittedRefs.push(`${ref}:truncated`);
-      }
-    }
-
-    await recordInheritedCognitionReuse(uid, cid, agentId, turnId, {
-      reusedRefs,
-      omittedRefs,
-    });
-
-    const notes = [
-      droppedByRevocation
-        ? `${droppedByRevocation} inherited item(s) withheld: revoked or paused since this agent was created.`
-        : "",
-      omitted ? `${omitted} further item(s) omitted for length.` : "",
-    ].filter(Boolean);
-
-    return `### Inherited cognition
-These judgments were carried over when you were created. Treat them as the
-user's established practice, not as suggestions. Respect every stated
-forbidden-condition. If one conflicts with the current task, say so instead of
-silently ignoring it.
-
-<inherited-cognition>
-${shown.join("\n")}
-</inherited-cognition>${notes.length ? `\n${notes.join(" ")}` : ""}${glossaryBlock}`;
-  } catch (err) {
-    log.warn(
-      `inherited cognition prompt injection failed agent=${agentId}: ${(err as Error).message}`,
-    );
-    return "";
+    const chats = await import("../chats");
+    const conv = await chats.getConversation(uid, cid);
+    return conv?.kind || "normal";
+  } catch {
+    return "normal";
   }
-}
-
-export async function _buildInheritedCognitionBlockForTest(
-  uid: string,
-  cid: string,
-  agentId: string,
-  turnId = 'test-turn',
-): Promise<string> {
-  return buildInheritedCognitionBlock(uid, cid, agentId, turnId);
 }
 
 async function buildCommanderSystemPrompt(
@@ -5669,81 +5234,6 @@ async function buildCommanderSystemPrompt(
     true,
   );
   return appendLanguageDirective(main);
-}
-
-/** 空间模式（space_builder）会话的系统提示：构建师角色 + 真实资源快照注入。
- *  数据快照来自现有 feature（skills/agents/role_templates），第一版不做工具化——
- *  构建师零额外工具（extraTools=[]），只依据快照推荐；用户从草稿创建空间。 */
-async function buildSpaceBuilderSystemPrompt(uid: string): Promise<string> {
-  const { prompts } = await import("../../prompts/loader");
-  const [skillsFeat, agentsFeat, templatesFeat] = await Promise.all([
-    import("../skills"),
-    import("../agents"),
-    import("../role_templates"),
-  ]);
-  const [skills, agents, templates, scenarios] = await Promise.all([
-    skillsFeat.listSkills(),
-    agentsFeat.listAgents().catch(() => []),
-    templatesFeat.listRoleTemplates(),
-    templatesFeat.listScenarios(),
-  ]);
-  const clip = (s: string, n = 90) => {
-    const t = String(s || "").replace(/\s+/g, " ").trim();
-    return t.length > n ? `${t.slice(0, n)}…` : t;
-  };
-  const skillsBlock = skills.length
-    ? skills
-        .filter((s) => s.enabled !== false)
-        .map((s) => {
-          const desc = s.description_zh || s.description_en || "";
-          return `- ${s.name || s.id}（id: ${s.id}${s.version ? `, v${s.version}` : ""}）— ${clip(desc)}`;
-        })
-        .join("\n")
-    : "（暂无可用技能）";
-  const agentsBlock = agents.length
-    ? agents.map((a) => {
-        const desc = (a as { description_zh?: string; description_en?: string }).description_zh
-          || (a as { description_zh?: string; description_en?: string }).description_en
-          || (a as { description?: string }).description
-          || "";
-        return `- ${a.name || a.agent_id}（id: ${a.agent_id}）— ${clip(desc)}`;
-      }).join("\n")
-    : "（暂无可用智能体）";
-  const templatesBlock = templates.length
-    ? templates.map((t) => `- ${t.name}（id: ${t.template_id}）— ${clip(t.description)}`).join("\n")
-    : "（暂无角色模板）";
-  const scenariosBlock = scenarios.length
-    ? scenarios.map((s) => {
-        const extra = (s as { suggested_secondary_template_ids?: string[] }).suggested_secondary_template_ids?.length
-          ? `，可配模板: ${(s as { suggested_secondary_template_ids?: string[] }).suggested_secondary_template_ids!.join("/")}`
-          : "";
-        return `- ${s.name}（id: ${s.scenario_id}）— ${clip(s.description || "")}${extra}`;
-      }).join("\n")
-    : "（暂无场景）";
-  const main = renderPromptWithSharedRules(
-    prompts,
-    "space_builder",
-    {
-      skills_block: skillsBlock,
-      agents_block: agentsBlock,
-      templates_block: templatesBlock,
-      scenarios_block: scenariosBlock,
-    },
-    false,
-  );
-  return appendLanguageDirective(main);
-}
-
-/** 会话 kind 快速读取（动态 import 避免 chats ↔ group_chat 循环依赖）。
- *  读不到/异常一律视为 normal，绝不改变既有行为。 */
-async function getConversationKindSafe(uid: string, cid: string): Promise<string> {
-  try {
-    const chats = await import("../chats");
-    const conv = await chats.getConversation(uid, cid);
-    return conv?.kind || "normal";
-  } catch {
-    return "normal";
-  }
 }
 
 type SharedPromptTemplate =
@@ -5915,7 +5405,6 @@ async function buildAgentInGroupSystemPrompt(
     profile?: unknown;
   },
   workingDir: string,
-  turnId: string,
 ): Promise<string> {
   const { prompts } = await import("../../prompts/loader");
   // Render the agent's declared inputs schema so the LLM knows when to
@@ -5952,12 +5441,6 @@ async function buildAgentInGroupSystemPrompt(
       shared_task_context_block: await buildActiveSharedTaskContextBlock(
         uid,
         cid,
-      ),
-      inherited_cognition_block: await buildInheritedCognitionBlock(
-        uid,
-        cid,
-        agent.agent_id,
-        turnId,
       ),
       working_dir: workingDir,
       output_format_hint: buildOutputFormatHint(agent.output_format),

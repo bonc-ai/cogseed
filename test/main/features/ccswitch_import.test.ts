@@ -105,17 +105,25 @@ env_key = "OPENAI_API_KEY"` }),
     createDb([
       {
         id: 'one', app_type: 'codex', name: 'One',
-        settings_config: JSON.stringify({ auth: { OPENAI_API_KEY: 'key-1' }, env: { OPENAI_BASE_URL: 'https://one.example/v1' } }),
+        settings_config: JSON.stringify({ auth: { OPENAI_API_KEY: 'key-1' }, env: { OPENAI_BASE_URL: 'https://one.example/v1' }, model: 'gpt-5' }),
       },
       {
         id: 'two', app_type: 'codex', name: 'Two',
-        settings_config: JSON.stringify({ auth: { OPENAI_API_KEY: 'key-2' }, env: { OPENAI_BASE_URL: 'https://two.example/v1' } }),
+        settings_config: JSON.stringify({ auth: { OPENAI_API_KEY: 'key-2' }, env: { OPENAI_BASE_URL: 'https://two.example/v1' }, model: 'gpt-5' }),
       },
     ]);
     const providers = await import('../../../src/main/features/custom_providers');
-    expect(providers.syncFromCcSwitch(UID, ['codex:one'], home)).toMatchObject({ ok: true, added: 1, updated: 0 });
+    await expect(providers.syncFromCcSwitch(UID, ['codex:one'], home)).resolves.toMatchObject({ ok: true, added: 1, updated: 0 });
     expect(providers.listCustomProviders(UID)).toHaveLength(1);
-    expect(providers.syncFromCcSwitch(UID, ['codex:one'], home)).toMatchObject({ ok: true, added: 0, updated: 1 });
+    await expect(providers.syncFromCcSwitch(UID, ['codex:one'], home)).resolves.toMatchObject({ ok: true, added: 0, updated: 1 });
     expect(providers.listCustomProviders(UID)).toHaveLength(1);
+
+    // A synced provider with a declared model must be AUTO-BOUND to an entry
+    // (pickChatEntry only walks entries) — otherwise "connected" chat would
+    // still report no usable model.
+    const auth = await import('../../../src/main/features/auth');
+    const { entries } = await auth.listEntries();
+    const providerId = `cp:${providers.listCustomProviders(UID)[0].id}`;
+    expect(entries.some((e) => e.provider === providerId && e.model === 'gpt-5')).toBe(true);
   });
 });

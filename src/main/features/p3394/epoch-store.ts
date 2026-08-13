@@ -15,12 +15,31 @@ function workspaceRoot(): string {
   return root;
 }
 function epochFile(uid: string): string {
+  return path.join(workspaceRoot(), uid, 'local', 'p3394', 'p3394-epochs.json');
+}
+
+function legacyEpochFile(uid: string): string {
   return path.join(workspaceRoot(), uid, 'local', 'kstar', 'p3394-epochs.json');
+}
+
+async function migrateLegacyEpochFile(uid: string): Promise<void> {
+  const current = epochFile(uid);
+  const legacy = legacyEpochFile(uid);
+  await fs.mkdir(path.dirname(current), { recursive: true });
+  try {
+    await fs.rename(legacy, current);
+    log.info('migrated receiver epoch watermarks to p3394 storage', { uid });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return;
+    log.warn('receiver epoch watermark migration failed', { uid, error: (err as Error).message });
+    throw err;
+  }
 }
 
 /**
  * P3394 接收方水位 epoch 存储。防消息重复投递。
- * uid 级 mutex 串行化写,防并发丢更新(照抄 kstar-store)。
+ * uid 级 mutex 串行化写，防并发丢更新。
  */
 export class EpochStore {
   private mutexes = new Map<string, Mutex>();
@@ -35,10 +54,22 @@ export class EpochStore {
     try {
       raw = await fs.readFile(epochFile(uid), 'utf8');
     } catch (err) {
-      // 只对文件缺失返回空 map;真实 IO 错误抛出,防拿空 map 写回抹掉其它 session 水位。
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
-      log.error('epoch read failed', { uid, error: (err as Error).message });
-      throw err;
+      // The legacy KSTAR directory is retired. Move its generic P3394
+      // watermark file once, then keep all subsequent reads/writes in local/p3394.
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        await migrateLegacyEpochFile(uid);
+        try {
+          raw = await fs.readFile(epochFile(uid), 'utf8');
+        } catch (migratedReadErr) {
+          if ((migratedReadErr as NodeJS.ErrnoException).code === 'ENOENT') return {};
+          log.error('epoch read failed after migration', { uid, error: (migratedReadErr as Error).message });
+          throw migratedReadErr;
+        }
+      } else {
+        // 只对文件缺失返回空 map;真实 IO 错误抛出,防拿空 map 写回抹掉其它 session 水位。
+        log.error('epoch read failed', { uid, error: (err as Error).message });
+        throw err;
+      }
     }
     // 坏 JSON 不崩:解析失败或非对象一律返回空 map。
     try {
