@@ -61,7 +61,7 @@
     return `<div class="chat-recall-projection-available"><div><strong>${_escape(title)}</strong>${meta ? `<small>${_escape(meta)}</small>` : ''}</div><button type="button" class="btn btn-sm" data-recall-projection-add="${_escape(id)}">${_escape(_label('recall.projection.add_task_asset', 'Add candidate'))}</button></div>`;
   }
 
-  function _render(host, card, available, opts) {
+  function _render(host, card, available, opts, forecastFailure) {
     const editable = card?.status === 'preview';
     const assets = Array.isArray(card?.assetSummaries) ? card.assetSummaries : [];
     const omitted = Array.isArray(card?.omittedAssetRefs) ? card.omittedAssetRefs : [];
@@ -72,9 +72,11 @@
         : '';
     host.className = 'chat-recall-projection-card';
     host.dataset.projectionId = String(card?.projectionId || opts?.projectionId || '');
-    const actions = editable
-      ? `<div class="chat-recall-projection-actions"><button type="button" class="btn btn-primary btn-sm" data-recall-projection-confirm="1">${_escape(_label('recall.projection.confirm_assets', 'Confirm candidates'))}</button></div>`
-      : '';
+    const actions = forecastFailure
+      ? `<div class="chat-recall-projection-forecast-failure" role="alert"><strong>${_escape(_label('recall.projection.forecast_failed', 'Forecast failed; task has not started.'))}</strong><small>${_escape(forecastFailure.message || '')}</small><button type="button" class="btn btn-sm" data-recall-projection-retry="1">${_escape(_label('recall.projection.retry_forecast', 'Retry forecast'))}</button></div>`
+      : editable
+        ? `<div class="chat-recall-projection-actions"><button type="button" class="btn btn-primary btn-sm" data-recall-projection-confirm="1">${_escape(_label('recall.projection.confirm_assets', 'Confirm candidates'))}</button></div>`
+        : '';
     host.innerHTML = `<div class="chat-recall-projection-head"><div><strong>${_escape(_label('recall.projection.title', 'Preload candidates'))}</strong><small>${_escape(card?.purpose || '')}</small></div><span class="chat-recall-projection-status">${_escape(_statusLabel(card?.status))}</span></div>
       <div class="chat-recall-projection-summary">${_escape(_label('recall.projection.summary', '{count} preload candidates.', { count: assets.length }))}</div>
       <div class="chat-recall-projection-section"><div class="chat-recall-projection-section-title">${_escape(_label('recall.projection.included_assets', 'Preload candidates'))}</div>${assets.length ? assets.map((asset) => _assetRow(asset, editable)).join('') : `<div class="chat-recall-projection-empty">${_escape(_label('recall.projection.no_included_assets', 'No preload candidates selected.'))}</div>`}</div>
@@ -100,12 +102,13 @@
     if (!host || !messageCard?.projectionId) return;
     const projectionId = String(messageCard.projectionId);
     const cid = String(opts.cid || '');
+    let forecastFailure = null;
     async function refresh() {
       host.dataset.loading = '1';
       try {
         const card = await _loadCard(projectionId);
         const available = await _loadAvailable(projectionId, card.status === 'preview');
-        _render(host, card, available, { ...opts, projectionId });
+        _render(host, card, available, { ...opts, projectionId }, forecastFailure);
       } catch (error) {
         host.className = 'chat-recall-projection-card is-error';
         host.innerHTML = _escape((error && error.message) || String(error));
@@ -117,23 +120,32 @@
       host.dataset.recallProjectionBound = '1';
       host.addEventListener('click', async (event) => {
         const confirm = event.target.closest('[data-recall-projection-confirm]');
-        const remove = !confirm ? event.target.closest('[data-recall-projection-remove]') : null;
-        const add = !confirm && !remove ? event.target.closest('[data-recall-projection-add]') : null;
-        const button = confirm || remove || add;
+        const retry = !confirm ? event.target.closest('[data-recall-projection-retry]') : null;
+        const remove = !confirm && !retry ? event.target.closest('[data-recall-projection-remove]') : null;
+        const add = !confirm && !retry && !remove ? event.target.closest('[data-recall-projection-add]') : null;
+        const button = confirm || retry || remove || add;
         if (!button || button.disabled || host.dataset.loading === '1') return;
         const assetId = remove ? remove.dataset.recallProjectionRemove : add?.dataset.recallProjectionAdd;
-        if (!confirm && !assetId) return;
+        if (!confirm && !retry && !assetId) return;
         button.disabled = true;
         try {
           const result = confirm
             ? await window.cogseed.invoke('recall.projections.confirm', { projectionId, ...(cid ? { cid } : {}) })
-            : await window.cogseed.invoke('recall.projections.revise', remove
-              ? { projectionId, removeAssetIds: [assetId] }
-              : { projectionId, addAssetIds: [assetId] });
-          if (!result?.ok) throw new Error(result?.error || (confirm ? 'projection confirmation failed' : 'projection revision failed'));
+            : retry
+              ? await window.cogseed.invoke('recall.projections.retryForecast', { projectionId, ...(cid ? { cid } : {}) })
+              : await window.cogseed.invoke('recall.projections.revise', remove
+                ? { projectionId, removeAssetIds: [assetId] }
+                : { projectionId, addAssetIds: [assetId] });
+          if (!result?.ok) throw Object.assign(new Error(result?.error || (confirm ? 'projection confirmation failed' : retry ? 'forecast retry failed' : 'projection revision failed')), { code: result?.code });
+          forecastFailure = null;
           await refresh();
         } catch (error) {
-          if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+          const code = error && error.code;
+          const retryable = ['model_not_configured', 'model_unavailable', 'model_auth_failed', 'forecast_unavailable'].includes(code);
+          if (confirm && retryable) {
+            forecastFailure = { message: (error && error.message) || String(error) };
+            await refresh();
+          } else if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
         } finally {
           button.disabled = false;
         }

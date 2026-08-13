@@ -3900,5 +3900,7 @@
   "settings.cli_fallback.state_auto": "Auto-picks the first signed-in CLI agent",
   "settings.cli_fallback.state_chosen": "Will use {cli} as the fallback execution agent",
   "settings.cli_fallback.saved_no_api": "Saved. Commander has no API key right now — chat will go to the selected CLI agent.",
-  "settings.cli_fallback.notice_no_api": "Commander has no usable API key — chat will automatically use your signed-in local CLI agent (change it in AI Team settings)."
+  "settings.cli_fallback.notice_no_api": "Commander has no usable API key — chat will automatically use your signed-in local CLI agent (change it in AI Team settings).",
+  "recall.projection.forecast_failed": "Forecast failed; task has not started.",
+  "recall.projection.retry_forecast": "Retry forecast"
 }

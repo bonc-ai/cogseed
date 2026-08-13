@@ -238,5 +238,7 @@
   "touchpoints.feishu.open_mate": "Open Mate to view the complete result",
   "touchpoints.feishu.review_mate": "Open Mate to review and handle this item",
   "touchpoints.feishu.approve_mate": "Approve in the card or open Mate to adjust the task",
-  "touchpoints.feishu.briefing_mate": "Open Mate to adjust today’s plan"
+  "touchpoints.feishu.briefing_mate": "Open Mate to adjust today’s plan",
+  "recall.projection.forecast_failed": "Forecast failed; task has not started.",
+  "recall.projection.retry_forecast": "Retry forecast"
 }
