@@ -42,30 +42,30 @@ function isEnoent(error: unknown): boolean {
 }
 
 function assertExecutionId(executionId: string): string {
-  if (!/^mate-exec-[A-Za-z0-9_-]+$/.test(executionId)) throw new Error('invalid Mate execution id');
+  if (!/^mate-exec-[A-Za-z0-9_-]+$/.test(executionId)) throw new Error('invalid CogSeed execution id');
   return executionId;
 }
 
 function validateRecord(userId: string, executionId: string, value: unknown): MateExecutionRecord {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed Mate execution record');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed CogSeed execution record');
   const row = value as Record<string, unknown>;
-  if (row.schemaVersion !== MATE_EXECUTION_SCHEMA_VERSION || row.ownerId !== userId || row.executionId !== executionId) throw new Error('malformed Mate execution record');
-  if (row.kind !== 'mate-agent' || row.boundary !== 'real' || row.permissionMode !== 'cogseed-runtime') throw new Error('malformed Mate execution record');
-  if (typeof row.taskId !== 'string' || typeof row.sessionId !== 'string' || typeof row.runtimeSessionId !== 'string') throw new Error('malformed Mate execution record');
+  if (row.schemaVersion !== MATE_EXECUTION_SCHEMA_VERSION || row.ownerId !== userId || row.executionId !== executionId) throw new Error('malformed CogSeed execution record');
+  if (row.kind !== 'mate-agent' || row.boundary !== 'real' || row.permissionMode !== 'cogseed-runtime') throw new Error('malformed CogSeed execution record');
+  if (typeof row.taskId !== 'string' || typeof row.sessionId !== 'string' || typeof row.runtimeSessionId !== 'string') throw new Error('malformed CogSeed execution record');
   assertMateTaskId(row.taskId);
-  if (!String(row.sessionId).startsWith('mate-session-') || !String(row.runtimeSessionId).startsWith('mruntime-')) throw new Error('malformed Mate execution record');
-  if (typeof row.status !== 'string' || !['queued', 'running', 'completed', 'failed', 'cancelled'].includes(row.status)) throw new Error('malformed Mate execution record');
-  if (typeof row.createdAt !== 'string' || typeof row.updatedAt !== 'string') throw new Error('malformed Mate execution record');
+  if (!String(row.sessionId).startsWith('mate-session-') || !String(row.runtimeSessionId).startsWith('mruntime-')) throw new Error('malformed CogSeed execution record');
+  if (typeof row.status !== 'string' || !['queued', 'running', 'completed', 'failed', 'cancelled'].includes(row.status)) throw new Error('malformed CogSeed execution record');
+  if (typeof row.createdAt !== 'string' || typeof row.updatedAt !== 'string') throw new Error('malformed CogSeed execution record');
   return row as unknown as MateExecutionRecord;
 }
 
 function validateEvent(userId: string, executionId: string, value: unknown): MateExecutionEvent {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed Mate execution event');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed CogSeed execution event');
   const row = value as Record<string, unknown>;
-  if (row.schemaVersion !== MATE_EXECUTION_SCHEMA_VERSION || row.executionId !== executionId) throw new Error('malformed Mate execution event');
-  if (typeof row.eventId !== 'string' || !row.eventId.startsWith('mate-exec-event-')) throw new Error('malformed Mate execution event');
-  if (typeof row.sequence !== 'number' || !Number.isInteger(row.sequence) || row.sequence < 1 || typeof row.type !== 'string' || typeof row.createdAt !== 'string') throw new Error('malformed Mate execution event');
-  if (!row.payload || typeof row.payload !== 'object' || Array.isArray(row.payload)) throw new Error('malformed Mate execution event');
+  if (row.schemaVersion !== MATE_EXECUTION_SCHEMA_VERSION || row.executionId !== executionId) throw new Error('malformed CogSeed execution event');
+  if (typeof row.eventId !== 'string' || !row.eventId.startsWith('mate-exec-event-')) throw new Error('malformed CogSeed execution event');
+  if (typeof row.sequence !== 'number' || !Number.isInteger(row.sequence) || row.sequence < 1 || typeof row.type !== 'string' || typeof row.createdAt !== 'string') throw new Error('malformed CogSeed execution event');
+  if (!row.payload || typeof row.payload !== 'object' || Array.isArray(row.payload)) throw new Error('malformed CogSeed execution event');
   void userId;
   return row as unknown as MateExecutionEvent;
 }
@@ -76,8 +76,8 @@ export async function read(userId: string, executionId: string): Promise<MateExe
   try {
     return validateRecord(userId, id, JSON.parse(await fs.readFile(mateExecutionRecordFile(userId, id), 'utf8')));
   } catch (error) {
-    if (isEnoent(error)) throw new Error('Mate execution record not found');
-    if (error instanceof SyntaxError) throw new Error('malformed Mate execution record');
+    if (isEnoent(error)) throw new Error('CogSeed execution record not found');
+    if (error instanceof SyntaxError) throw new Error('malformed CogSeed execution record');
     throw error;
   }
 }
@@ -99,9 +99,9 @@ async function readEventsUnlocked(userId: string, executionId: string): Promise<
   const rows: MateExecutionEvent[] = [];
   for (const [index, line] of text.split('\n').entries()) {
     if (!line && index === text.split('\n').length - 1) continue;
-    try { rows.push(validateEvent(userId, executionId, JSON.parse(line))); } catch { throw new Error('malformed Mate execution event at line ' + (index + 1)); }
+    try { rows.push(validateEvent(userId, executionId, JSON.parse(line))); } catch { throw new Error('malformed CogSeed execution event at line ' + (index + 1)); }
   }
-  rows.forEach((event, index) => { if (event.sequence !== index + 1) throw new Error('malformed Mate execution event sequence'); });
+  rows.forEach((event, index) => { if (event.sequence !== index + 1) throw new Error('malformed CogSeed execution event sequence'); });
   return rows;
 }
 

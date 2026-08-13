@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createMateIpcService } from '../../../../src/main/features/cogseed_backend/ipc-service';
 
-describe('Mate IPC service', () => {
+describe('CogSeed IPC service', () => {
   it('delegates validated user-scoped task operations without exposing backend selection or fallback fields', async () => {
     const controller = {
       startMateTask: vi.fn(async (_userId: string, input: { requestId: string; task: string }) => ({ taskId: 'mate-task-ipc', status: 'running', ...input })),

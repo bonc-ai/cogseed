@@ -356,13 +356,13 @@ async function _listSpaceIds(uid: string): Promise<string[]> {
 // ── Public API ─────────────────────────────────────────────────────────────
 
 /** 空间列表 + 派生展示元数据（模板名/资源数/失效数）。坏文件跳过。
- *  失效数用真实有效集合（listSkills/listAgents，均有磁盘缓存）：一次构造、
+ *  失效数用真实有效集合（listSkillCatalog/listAgents，均有磁盘缓存）：一次构造、
  *  全部空间复用，避免空集合导致「所有引用全失效」的假阳性（P3394 回归）。 */
 export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
   const ids = await _listSpaceIds(uid);
   const [agents, skills] = await Promise.all([
     import('./agents').then((m) => m.listAgents()).catch(() => []),
-    import('./skills').then((m) => m.listSkills()).catch(() => []),
+    import('./skills').then((m) => m.listSkillCatalog()).catch(() => []),
   ]);
   const valid = {
     skills: new Set(skills.map((s) => s.id)),
@@ -492,7 +492,7 @@ export async function createSpaceFromDraft(
   }
   // 3. 主技能存在性 + 可用
   let mainSkillRef: SpaceAssetRef | undefined;
-  const skillsList = await import('./skills').then((m) => m.listSkills()).catch(() => []);
+  const skillsList = await import('./skills').then((m) => m.listSkillCatalog()).catch(() => []);
   if (draft.main_skill_ref && draft.main_skill_ref.asset_id) {
     const hit = skillsList.find((s) => s.id === draft.main_skill_ref.asset_id);
     if (hit && hit.enabled !== false) {
@@ -697,12 +697,12 @@ export async function pruneInvalidSpaceResources(
   return { ok: true, removed };
 }
 
-/** 用户级派生：内部用 listAgents/listSkills 构造有效集合（均有磁盘缓存），
+/** 用户级派生：内部用 listAgents/listSkillCatalog 构造有效集合（均有磁盘缓存），
  *  再走纯函数。仅绑空间的项目在 runTurn 热路径上调用；未绑空间零开销。 */
 export async function resolveSpaceResourcesForUser(uid: string, space: Space): Promise<SpaceResources> {
   const [agents, skills] = await Promise.all([
     import('./agents').then((m) => m.listAgents()).catch(() => []),
-    import('./skills').then((m) => m.listSkills()).catch(() => []),
+    import('./skills').then((m) => m.listSkillCatalog()).catch(() => []),
   ]);
   return resolveSpaceResources(space, {
     skills: new Set(skills.map((s) => s.id)),

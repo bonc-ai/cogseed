@@ -13,11 +13,11 @@ export interface MateCollaborationDispatcherDeps {
 
 export function createMateCollaborationDispatcher(deps: MateCollaborationDispatcherDeps): CollaborationDispatcher {
   const readTask = deps.readTask ?? readMateTask;
-  const mate = (scope: CollaborationScope) => { if (scope.domain !== 'mate') throw new Error('Mate dispatcher requires mate domain'); return scope; };
+  const mate = (scope: CollaborationScope) => { if (scope.domain !== 'mate') throw new Error('CogSeed dispatcher requires mate domain'); return scope; };
   return {
     async dispatchStep(scope, _run: WorkflowRun, step: WorkflowStep): Promise<DispatchReceipt> {
-      mate(scope); const coordination = await readMateCoordination(scope.ownerId, scope.scopeId); if (!coordination) throw new Error('Mate coordination not found');
-      const parent = await readTask(scope.ownerId, coordination.parentTaskId); if (!parent) throw new Error('Mate coordination parent task not found');
+      mate(scope); const coordination = await readMateCoordination(scope.ownerId, scope.scopeId); if (!coordination) throw new Error('CogSeed coordination not found');
+      const parent = await readTask(scope.ownerId, coordination.parentTaskId); if (!parent) throw new Error('CogSeed coordination parent task not found');
       const requestId = step.resume_token?.startsWith('req-') ? step.resume_token : `req-${step.id}`;
       const child = await deps.startTask(scope.ownerId, { requestId, task: step.objective || step.title, ...(parent.profileId ? { profileId: parent.profileId } : {}), coordinationId: coordination.coordinationId, parentTaskId: parent.taskId, coordinationDepth: (parent.coordinationDepth ?? 0) + 1 });
       return { executionId: child.taskId, status: child.status === 'completed' ? 'completed' : child.status === 'failed' ? 'failed' : child.status === 'cancelled' ? 'cancelled' : 'running' };

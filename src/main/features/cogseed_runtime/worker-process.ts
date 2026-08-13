@@ -129,7 +129,7 @@ export function createRuntimeWorkerService(options: RuntimeWorkerServiceOptions 
         try {
           result = options.hostToolHandler
             ? await options.hostToolHandler(call, { request: run.request, signal: run.hostAbort.signal })
-            : { content: '[E_RUNTIME_HOST_TOOL_DISABLED] Mate host tools are unavailable', isError: true };
+            : { content: '[E_RUNTIME_HOST_TOOL_DISABLED] CogSeed host tools are unavailable', isError: true };
         } catch (error) {
           result = { content: error instanceof Error ? error.message : String(error), isError: true };
         }

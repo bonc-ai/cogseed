@@ -9,9 +9,10 @@
  * Detection is FILE-BASED and READ-ONLY — we never probe the CLI's own auth
  * endpoints, never read tokens into memory beyond a boolean existence check.
  *
- *   claude   → ~/.claude/.credentials.json   (OAuth session file)
- *   codex    → ~/.codex/auth.json            (OAuth session file)
- *   opencode → ~/.local/share/opencode/auth.json ({ "<provider>": {type,key} })
+ *   claude    → ~/.claude/.credentials.json   (OAuth session file)
+ *   codex     → ~/.codex/auth.json            (OAuth session file)
+ *   opencode  → ~/.local/share/opencode/auth.json ({ "<provider>": {type,key} })
+ *   workbuddy → ~/.workbuddy/app/sessions.json (app-managed sign-in record)
  *
  * A file's presence means the user signed in through the official flow; an
  * `api`-typed opencode entry means a raw key was configured. Absence of the
@@ -40,6 +41,27 @@ function codexAuthFile(home: string): string {
 
 function opencodeAuthFile(home: string): string {
   return path.join(home, '.local', 'share', 'opencode', 'auth.json');
+}
+
+function workbuddyAuthFile(home: string): string {
+  return path.join(home, '.workbuddy', 'app', 'sessions.json');
+}
+
+/** WorkBuddy manages sign-in inside the app; the CLI reuses it and reports
+ *  `apiKeySource:"copilot.tencent.com"` at init. The only file-based,
+ *  read-only signal we can honestly read is the app's own session record —
+ *  presence of a `sessions` entry with a `userId` means the user is signed
+ *  in. We never read tokens; a boolean existence + shape check only. */
+function workbuddyLoggedIn(home: string): boolean {
+  try {
+    const raw = JSON.parse(fs.readFileSync(workbuddyAuthFile(home), 'utf8')) as {
+      sessions?: Array<{ userId?: unknown }>;
+    };
+    return Array.isArray(raw.sessions)
+      && raw.sessions.some(s => s && typeof s === 'object' && typeof s.userId === 'string' && s.userId.length > 0);
+  } catch {
+    return false;
+  }
 }
 
 /** Read opencode auth.json and decide api vs oauth from the first entry. */
@@ -75,6 +97,12 @@ export function detectCliAuth(type: string, home = os.homedir()): CliAuthState {
         return { loggedIn: false, mode: 'unknown' };
       }
       return { loggedIn: true, mode: opencodeAuthMode(home) };
+    case 'workbuddy':
+      // App-managed OAuth sign-in (Tencent account). No raw key on disk we
+      // can read; treat a valid session record as an official sign-in.
+      return workbuddyLoggedIn(home)
+        ? { loggedIn: true, mode: 'oauth' }
+        : { loggedIn: false, mode: 'unknown' };
     default:
       return { loggedIn: false, mode: 'unknown' };
   }

@@ -215,6 +215,7 @@
   "expense_agent.submit.detail": "Caso: {case}\\nImpressão dos materiais: {hash}\\n\\nIsso cria uma solicitação de aprovação no Feishu. Não aprova o pagamento; os aprovadores designados revisam no Feishu.",
   "expense_agent.submit.unavailable": "Não foi possível mostrar a confirmação; nada foi enviado.",
   "expense_agent.submit.cancelled": "O envio foi cancelado; nenhum dado foi enviado ao Feishu.",
+"cogseed.runtime_failed": "O agente não conseguiu concluir esta resposta. Tente novamente.",
   "messaging.new_session_confirmation": "Nova conversa iniciada. O que você gostaria que eu resolva em seguida?",
   "messaging.approval.approve": "Permitido",
   "messaging.approval.approve_once": "Permitido uma vez",
@@ -238,5 +239,16 @@
   "touchpoints.feishu.open_mate": "Abra o Mate para ver o resultado completo",
   "touchpoints.feishu.review_mate": "Abra o Mate para revisar e tratar este item",
   "touchpoints.feishu.approve_mate": "Aprove no cartão ou abra o Mate para ajustar a tarefa",
-  "touchpoints.feishu.briefing_mate": "Abra o Mate para ajustar o plano de hoje"
+  "touchpoints.feishu.briefing_mate": "Abra o Mate para ajustar o plano de hoje",
+  "touchpoints.card.button.approve": "Aprovar",
+  "touchpoints.card.button.confirm": "Confirmar",
+  "touchpoints.card.button.reject": "Rejeitar",
+  "touchpoints.card.button.snooze": "Lembrar depois",
+  "touchpoints.card.button.open": "Ver detalhes",
+  "touchpoints.card.button.edit": "Editar",
+  "touchpoints.card.button.adjust": "Ajustar",
+  "touchpoints.card.button.retry": "Repetir",
+  "touchpoints.card.button.forget_source": "Esquecer fonte",
+  "touchpoints.card.button.revoke_grant": "Revogar concessão",
+  "touchpoints.card.resolved": "Processado"
 }

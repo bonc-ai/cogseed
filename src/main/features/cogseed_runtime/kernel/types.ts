@@ -31,6 +31,8 @@ export interface RuntimeKernelRequest {
   /** Main-process-derived capability grants (see protocol.RuntimeRunRequest). */
   capabilities: string[];
   agentId?: string;
+  executionKind: 'cogseed-native';
+  allowedSkillIds: string[];
   modelProfile?: string;
   workingDir?: string;
 }

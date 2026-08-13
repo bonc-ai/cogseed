@@ -40,7 +40,7 @@ async function createAutomaticAssetWith(input: {
       scope: 'personal',
     }],
   });
-  return candidates.promoteRecallCandidate('user-a', candidate.id);
+  return candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
 }
 
 const fakeSemanticOptions = {

@@ -67,14 +67,6 @@ for (const arg of process.argv.slice(1)) {
     process.env.ORKAS_API_BASE_URL = arg.slice('--orkas-api-base-url='.length);
   } else if (arg.startsWith('--orkas-voice-api-base=')) {
     process.env.ORKAS_VOICE_API_BASE = arg.slice('--orkas-voice-api-base='.length);
-  } else if (arg.startsWith('--orkas-kstar-engine-command=')) {
-    process.env.ORKAS_KSTAR_ENGINE_COMMAND = arg.slice('--orkas-kstar-engine-command='.length);
-  } else if (arg.startsWith('--orkas-kstar-engine-args=')) {
-    process.env.ORKAS_KSTAR_ENGINE_ARGS = arg.slice('--orkas-kstar-engine-args='.length);
-  } else if (arg.startsWith('--orkas-kstar-engine-cwd=')) {
-    process.env.ORKAS_KSTAR_ENGINE_CWD = arg.slice('--orkas-kstar-engine-cwd='.length);
-  } else if (arg.startsWith('--orkas-kstar-engine-ontology-dir=')) {
-    process.env.ORKAS_KSTAR_ENGINE_ONTOLOGY_DIR = arg.slice('--orkas-kstar-engine-ontology-dir='.length);
   }
 }
 

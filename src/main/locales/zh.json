@@ -215,6 +215,7 @@
   "expense_agent.submit.detail": "案例：{case}\\n材料指纹：{hash}\\n\\n此操作会在飞书创建审批请求，不代表付款已获批准；指定的人工审批人仍需在飞书中审核。",
   "expense_agent.submit.unavailable": "无法显示提交确认，本次未提交。",
   "expense_agent.submit.cancelled": "已取消提交，未向飞书发送数据。",
+  "cogseed.runtime_failed": "智能体未能完成本次回复。请重试。",
   "messaging.new_session_confirmation": "已开始新的对话。请告诉我接下来要处理什么。",
   "messaging.approval.approve": "已允许",
   "messaging.approval.approve_once": "已允许一次",
@@ -240,5 +241,16 @@
   "touchpoints.feishu.approve_mate": "请在卡片中审批，或回到 Mate 调整任务",
   "touchpoints.feishu.briefing_mate": "回到 Mate 调整今日计划",
   "recall.projection.forecast_failed": "世界模型预测失败，任务尚未开始。",
-  "recall.projection.retry_forecast": "重试预测"
+  "recall.projection.retry_forecast": "重试预测",
+  "touchpoints.card.button.approve": "批准",
+  "touchpoints.card.button.confirm": "确认",
+  "touchpoints.card.button.reject": "拒绝",
+  "touchpoints.card.button.snooze": "稍后提醒",
+  "touchpoints.card.button.open": "查看详情",
+  "touchpoints.card.button.edit": "编辑",
+  "touchpoints.card.button.adjust": "调整",
+  "touchpoints.card.button.retry": "重试",
+  "touchpoints.card.button.forget_source": "遗忘来源",
+  "touchpoints.card.button.revoke_grant": "撤销授权",
+  "touchpoints.card.resolved": "已处理"
 }

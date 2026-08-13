@@ -21,7 +21,7 @@ beforeEach(() => {
   runMessagingHostTool.mockReset();
 });
 
-describe('Mate host tool router', () => {
+describe('CogSeed host tool router', () => {
   it('routes allowlisted capabilities with request scope and caps results', async () => {
     const office = { run: vi.fn(async () => ({ content: 'office-result' })) };
     const browser = { run: vi.fn(async () => ({ content: 'browser-result' })) };

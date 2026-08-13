@@ -965,6 +965,22 @@ export async function resetConversationRoutingState(uid: string, cid: string): P
   });
 }
 
+/** Terminal user abort: stop the conversation and clear all interactive
+ * routing state in one persisted transition. */
+export async function abortConversationRoutingState(uid: string, cid: string): Promise<StateFile> {
+  return _stateLock(uid, cid).runExclusive(async () => {
+    const s = await readState(uid, cid);
+    const previousStatus = s.status;
+    s.status = 'aborted';
+    s.in_flight = [];
+    delete s.active_recipient;
+    delete s.orchestration_ledger;
+    s.last_active_at = nowIso();
+    await _writeStatusTransition(uid, cid, previousStatus, 'aborted', s);
+    return s;
+  });
+}
+
 export async function markOrchestrationInterrupted(
   uid: string,
   cid: string,

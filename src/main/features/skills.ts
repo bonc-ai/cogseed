@@ -221,6 +221,27 @@ export interface SkillListing {
       segments: Array<{ file: string; line: number; text: string; signal: string }>;
     };
     /**
+     * NSEAP declaration check: whether the skill's security manifest is coherent.
+     *
+     * Forwarded as-is, ADVISORY ONLY. This must never influence `status` — that
+     * verdict is the scan's, and a declaration gap is an authoring defect, not a
+     * threat. Note the engine reads the manifest's own fields, not the skill's
+     * code: a `pass` means the paperwork is self-consistent, never that the code
+     * was checked. See `skill_trust.SecurityReceipt.nseapDeclaration` for the
+     * measured evidence behind that distinction.
+     *
+     * `absent` is forwarded rather than dropped here so the panel — not this
+     * layer — decides whether silence is the right rendering. Keeping the
+     * distinction intact matters: `absent` (no manifest to check) and `pass`
+     * (checked, coherent) are different claims, and collapsing them at the
+     * boundary would make the stronger one unrecoverable downstream.
+     */
+    nseapDeclaration?: {
+      status: 'pass' | 'pass_with_warnings' | 'needs_input' | 'mismatch' | 'absent' | 'unavailable';
+      engineResult?: string;
+      findings?: Array<{ ruleId: string; severity: string; message: string }>;
+    };
+    /**
      * Set when the skill is installed because the user accepted a refusal.
      *
      * Without this the override would be invisible after the fact: the skill
@@ -945,6 +966,7 @@ async function _overlaySkillSecurity(list: SkillListing[]): Promise<SkillListing
         ...(receipt.scanner ? { scanner: receipt.scanner } : {}),
         ...(receipt.attackSurface ? { attackSurface: { ...receipt.attackSurface } } : {}),
         ...(receipt.instructionRisk ? { instructionRisk: receipt.instructionRisk } : {}),
+        ...(receipt.nseapDeclaration ? { nseapDeclaration: receipt.nseapDeclaration } : {}),
         ...(receipt.userOverride ? { userOverride: receipt.userOverride } : {}),
       }
       : {};
@@ -982,10 +1004,15 @@ async function _overlaySkillSecurity(list: SkillListing[]): Promise<SkillListing
   });
 }
 
-/** User-facing skill list — custom + marketplace + external (Claude Code, Codex),
- *  EXCLUDING agent-private (`ownerAgent`) skills (those belong to one agent's
- *  internal pipeline and must not appear in the panel; see PC CLAUDE.md §Skills). */
-export async function listSkills(): Promise<SkillListing[]> {
+/** Lightweight skill catalog for reference pickers and relationship indexes.
+ *
+ * This deliberately omits the deep security-receipt overlay. Callers may use
+ * the returned ids and labels for display/reference bookkeeping, but skill
+ * execution must still pass through the runtime trust gate. Keeping the
+ * catalog separate prevents an inventory page from waiting while a stale
+ * library is rescanned sequentially.
+ */
+export async function listSkillCatalog(): Promise<SkillListing[]> {
   const internal = _overlaySkillEnabled((await _allSkillListingsCached()).filter((s) => !s.ownerAgent));
 
   // Auto-detect external skills from Claude Code and Codex
@@ -1061,10 +1088,17 @@ export async function listSkills(): Promise<SkillListing[]> {
     log.warn('failed to scan Codex skills:', err);
   }
 
+  return [...internal, ...external];
+}
+
+/** User-facing skill list — custom + marketplace + external (Claude Code, Codex),
+ *  EXCLUDING agent-private (`ownerAgent`) skills (those belong to one agent's
+ *  internal pipeline and must not appear in the panel; see PC CLAUDE.md §Skills). */
+export async function listSkills(): Promise<SkillListing[]> {
   // External skills carry no receipt, and neither do custom ones — the overlay
   // leaves unannotated what it cannot vouch for rather than labelling it
   // `unchecked`, which would read as "scanned, nothing found".
-  return _overlaySkillSecurity([...internal, ...external]);
+  return _overlaySkillSecurity(await listSkillCatalog());
 }
 
 /** Dev-only: the agent-private (`ownerAgent`) skills hidden from `listSkills`.

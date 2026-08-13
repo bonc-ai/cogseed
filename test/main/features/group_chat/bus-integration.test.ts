@@ -16,6 +16,64 @@ vi.mock("../../../../src/main/logger", () => ({
   createLogger: () => loggerMocks,
 }));
 
+// Production wake dispatch is CogSeed-backend-only. This test double preserves
+// the bus assertions while exercising the same entry/event contract.
+vi.mock("../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher", () => ({
+  mateWakeDispatcher: {
+    dispatch: async (uid: string, request: any, context: any) => {
+      const bus = await import("../../../../src/main/features/group_chat/bus");
+      const state = await import("../../../../src/main/features/group_chat/state");
+      const fromActorId = request.source === "user_mention" || request.source === "ui_select" ? state.USER_ID : state.COMMANDER_ID;
+      if (fromActorId === state.COMMANDER_ID && request.kstar_decision?.required) {
+        const exp = request.kstar_decision.expectation || {};
+        await bus.enqueue({
+          uid,
+          cid: request.conversation_id,
+          fromActorId: state.COMMANDER_ID,
+          forceTo: [state.USER_ID],
+          text: `授权已确认。\nS：${exp.situation || request.objective}\n任务：${exp.task || request.objective}\n执行计划：${exp.action_hat || request.dispatch_payload.text}\n预期结果：${exp.result_hat || '获得可复核的任务结果。'}`,
+          kstar_dispatch_narration: { target_agent_id: request.agent_id },
+        });
+      }
+      const admitted = await bus.enqueue({
+        uid,
+        cid: request.conversation_id,
+        fromActorId,
+        text: request.dispatch_payload.text,
+        forceTo: [request.agent_id],
+        ...(request.workflow_step_id ? { workflow_step_id: request.workflow_step_id } : {}),
+        ...(request.kstar_decision?.required ? { kstarDecision: request.kstar_decision } : {}),
+        ...(request.kstar_decision?.required && request.asset_confirmation_snapshot ? {
+          kstarTerminalProvenance: {
+            logicalRunId: request.asset_confirmation_snapshot.task_run_id,
+            executionId: request.id,
+            projectionId: request.asset_confirmation_snapshot.projection_id,
+            wakeRequestId: request.id,
+          },
+        } : {}),
+      });
+      if (!Array.isArray(admitted.to) || !admitted.to.includes(request.agent_id)) {
+        throw new Error("wake enqueue did not admit the target agent");
+      }
+      if (request.source === "hand_off_to" && request.resume_instruction && context?.targetInteractive) {
+        await state.setActiveRecipient(uid, request.conversation_id, request.agent_id);
+      }
+      if (request.source === "dispatch_to" || request.source === "run_worker" || (request.source === "hand_off_to" && request.resume_instruction && context?.targetInteractive)) {
+        await state.setOrchestrationLedger(uid, request.conversation_id, {
+          status: "waiting_for_agent",
+          blocked_on: "agent_handoff",
+          source_tool: request.source,
+          owner_agent_id: request.agent_id,
+          ...(request.agent_name ? { owner_agent_name: request.agent_name } : {}),
+          user_goal: request.objective,
+          handoff_message: request.dispatch_payload.text,
+          resume_instruction: request.resume_instruction || `After ${request.agent_name || request.agent_id} completes, continue the original Commander task.`,
+        });
+      }
+    },
+  },
+}));
+
 /**
  * End-to-end integration tests for the group_chat bus. We mock
  * `streamChatWithModel` with a programmable script keyed by session id,
@@ -241,6 +299,7 @@ beforeEach(async () => {
   prevWakeGate = process.env.ORKAS_P3394_WAKE_GATE;
   process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
   process.env.ORKAS_P3394_WAKE_GATE = "0";
+  process.env.ORKAS_LEGACY_RUN_WORKER_TEST = "0";
   _resetScripts();
   _recordedCalls.length = 0;
   _recordedToolResults.length = 0;
@@ -935,6 +994,107 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
   // The commander reads the result and synthesises within the SAME turn. The
   // mock's `__call_tool__` drives the real tool execute() so the nested run
   // actually streams (routed by its gworker/gmember session id).
+  it('exposes run_worker as anonymous read-only helper only in the production contract', async () => {
+    const cid = newCid();
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const previous = process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+    delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+    try {
+      _setScript(state.buildGconvSessionId(cid), [
+        { type: '__capture_tool_definitions__' },
+        { type: 'final', text: 'captured' },
+      ]);
+      await bus.enqueue({ uid: TEST_UID, cid, fromActorId: 'user', text: 'inspect strict worker' });
+      await waitForQuiescent(TEST_UID, cid, 4000);
+      const tool = _recordedToolDefinitions.find((candidate) => candidate.name === 'run_worker');
+      expect(tool?.inputSchema.properties.to).toBeTruthy(); // backward-compat schema field
+      expect(tool?.inputSchema.properties.access_mode.enum).toContain('read');
+      expect(tool?.inputSchema.properties.access_mode.enum).toContain('write');
+      // Runtime enforcement, not schema: named/write run_worker is rejected in strict mode
+    } finally {
+      if (previous === undefined) delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+      else process.env.ORKAS_LEGACY_RUN_WORKER_TEST = previous;
+    }
+  });
+
+  it('rejects named run_worker before starting a formal Agent', async () => {
+    const cid = newCid();
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const previous = process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+    delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+    try {
+      _setScript(state.buildGconvSessionId(cid), [
+        { type: '__call_tool__', name: 'run_worker', input: { to: AGENT_NAME, task: 'write a report' } },
+        { type: 'final', text: 'handled' },
+      ]);
+      _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+        { type: 'final', text: 'MUST NOT RUN' },
+      ]);
+      await bus.enqueue({ uid: TEST_UID, cid, fromActorId: 'user', text: 'strict named worker' });
+      await waitForQuiescent(TEST_UID, cid, 4000);
+      const result = _recordedToolResults.find((entry) => entry.name === 'run_worker');
+      expect(result?.isError).toBe(true);
+      expect(JSON.parse(result!.content).error).toMatch(/dispatch_to/);
+      expect(_recordedCalls.filter((call) => call.sid === state.buildGmemberSessionId(cid, AGENT_ID))).toHaveLength(0);
+    } finally {
+      if (previous === undefined) delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+      else process.env.ORKAS_LEGACY_RUN_WORKER_TEST = previous;
+    }
+  });
+
+  it('rejects write-capable anonymous run_worker before starting the helper', async () => {
+    const cid = newCid();
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const previous = process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+    delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+    try {
+      _setScript(state.buildGconvSessionId(cid), [
+        { type: '__call_tool__', name: 'run_worker', input: { task: 'change files', access_mode: 'write', write_scopes: ['src'] } },
+        { type: 'final', text: 'handled' },
+      ]);
+      _setScript('gworker-*', [{ type: 'final', text: 'MUST NOT RUN' }]);
+      await bus.enqueue({ uid: TEST_UID, cid, fromActorId: 'user', text: 'strict write worker' });
+      await waitForQuiescent(TEST_UID, cid, 4000);
+      const result = _recordedToolResults.find((entry) => entry.name === 'run_worker');
+      expect(result?.isError).toBe(true);
+      expect(JSON.parse(result!.content).error).toMatch(/read-only/i);
+      expect(_recordedCalls.filter((call) => call.sid.startsWith('gworker-'))).toHaveLength(0);
+    } finally {
+      if (previous === undefined) delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+      else process.env.ORKAS_LEGACY_RUN_WORKER_TEST = previous;
+    }
+  });
+
+  it('defaults an anonymous run_worker workflow step to read access', async () => {
+    const cid = newCid();
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const collaboration = await import('../../../../src/main/features/group_chat/collaboration');
+    const previous = process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+    delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+    try {
+      _setScript(state.buildGconvSessionId(cid), [
+        { type: '__call_tool__', name: 'run_worker', input: { task: 'count records only' } },
+        { type: 'final', text: 'counted' },
+      ]);
+      _setScript('gworker-*', [{ type: 'final', text: '42' }]);
+      await bus.enqueue({ uid: TEST_UID, cid, fromActorId: 'user', text: 'count records' });
+      await waitForQuiescent(TEST_UID, cid, 4000);
+      const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
+      const step = run?.steps.find((step) => step.source_tool === 'run_worker');
+      expect(step).toBeTruthy();
+      expect(step?.actor_kind).toBe('anonymous_worker');
+      expect(step?.access_mode).toBe('read');
+      // write_scopes absent for anonymous without explicit scopes
+    } finally {
+      if (previous === undefined) delete process.env.ORKAS_LEGACY_RUN_WORKER_TEST;
+      else process.env.ORKAS_LEGACY_RUN_WORKER_TEST = previous;
+    }
+  });
+
   it("run_worker (anonymous) runs the worker IN-PROCESS and hands its full result back as the tool result — no roster member, no worker bubble, no lingering worker", async () => {
     const cid = newCid();
     const state =
@@ -3565,6 +3725,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     expect(agentCall?.message).toContain("生成论文初稿文件并说明结构");
     expect(agentCall?.message).toContain("先用自然语言说明你理解的任务、预期结果和执行计划");
 
+
   }, 12_000);
 
   it("dispatch_to with kstar=skip keeps lightweight agent replies outside Review Gate", async () => {
@@ -4711,6 +4872,12 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     expect(st.orchestration_ledger?.resume_instruction).toContain(
       "dispatch ContentWriter",
     );
+
+    // The remainder of this legacy integration fixture intentionally drives
+    // the historical in-process Agent test double so its scripted handback
+    // assertions remain deterministic. Production cannot enable this bypass.
+    process.env.ORKAS_P3394_WAKE_GATE = "0";
+  process.env.ORKAS_LEGACY_RUN_WORKER_TEST = "0";
 
     _setScript(state.buildGmemberSessionId(cid, researcherId), [
       {

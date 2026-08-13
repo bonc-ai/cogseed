@@ -60,18 +60,17 @@
 
   // ── data ─────────────────────────────────────────────────────────────────
   async function _loadData() {
-    const [spacesRes, templatesRes, scenariosRes, skillsRes, agentsRes] = await Promise.all([
+    const [spacesRes, templatesRes, scenariosRes, resourcesRes] = await Promise.all([
       _invoke('spaces.list'),
       _invoke('spaces.templates.list'),
       _invoke('spaces.scenarios.list'),
-      _invoke('skills.list'),
-      _invoke('agents.list'),
+      _invoke('spaces.resources.catalog'),
     ]);
     _spaces = Array.isArray(spacesRes.spaces) ? spacesRes.spaces : [];
     _templates = Array.isArray(templatesRes.templates) ? templatesRes.templates : [];
     _scenarios = Array.isArray(scenariosRes.scenarios) ? scenariosRes.scenarios : [];
-    _skillNames = new Map((skillsRes.skills || []).map((s) => [s.id, { name: s.name || s.id, desc: (s.description_zh || s.description_en || '').trim(), version: s.version }]));
-    _agentNames = new Map((agentsRes.agents || []).map((a) => [a.agent_id, { name: a.name || a.agent_id, desc: (a.description_zh || a.description_en || '').trim() }]));
+    _skillNames = new Map((resourcesRes.skills || []).map((s) => [s.id, { name: s.name || s.id, desc: (s.description_zh || s.description_en || '').trim(), version: s.version }]));
+    _agentNames = new Map((resourcesRes.agents || []).map((a) => [a.agent_id, { name: a.name || a.agent_id, desc: (a.description_zh || a.description_en || '').trim() }]));
     _loaded = true;
   }
 
@@ -570,13 +569,9 @@
     const sel = document.getElementById('spaces-add-id');
     if (!sel) return;
     const kind = document.getElementById('spaces-add-kind')?.value || 'skill';
-    const [skillsRes, agentsRes] = await Promise.all([
-      kind === 'skill' ? _invoke('skills.list') : Promise.resolve({}),
-      kind === 'agent' ? _invoke('agents.list') : Promise.resolve({}),
-    ]);
     const items = kind === 'skill'
-      ? ((skillsRes.skills || skillsRes.list || [])).map((s) => ({ id: s.id, name: s.name }))
-      : ((agentsRes.agents || agentsRes.list || [])).map((a) => ({ id: a.agent_id, name: a.name || a.agent_id }));
+      ? Array.from(_skillNames.entries()).map(([id, info]) => ({ id, name: info.name || id }))
+      : Array.from(_agentNames.entries()).map(([id, info]) => ({ id, name: info.name || id }));
     const existing = new Set(kind === 'skill' ? space.extra_skills : space.extra_agents);
     const opts = items.filter((i) => !existing.has(i.id))
       .map((i) => `<option value="${escapeHtml(i.id)}">${escapeHtml(i.name || i.id)}</option>`).join('');
@@ -735,12 +730,17 @@
   async function renderSpaces() {
     const view = document.getElementById('spaces-view');
     if (!view) return;
+    view.innerHTML = `<div class="spaces-empty">${escapeHtml(_t('common.loading', '加载中…'))}</div>`;
     try {
       await _loadData();
       _renderGallery();
     } catch (err) {
       console.error('[spaces] render failed', err);
-      view.innerHTML = `<div class="spaces-empty">${_t('spaces.load_error', '加载失败')}: ${escapeHtml((err && err.message) || String(err))}</div>`;
+      view.innerHTML = `<div class="spaces-empty">
+        <div>${escapeHtml(_t('spaces.load_error', '加载失败'))}: ${escapeHtml((err && err.message) || String(err))}</div>
+        <button type="button" class="btn btn-sm" data-spaces-retry>${escapeHtml(_t('common.retry', '重试'))}</button>
+      </div>`;
+      view.querySelector('[data-spaces-retry]')?.addEventListener('click', () => renderSpaces());
     }
   }
 

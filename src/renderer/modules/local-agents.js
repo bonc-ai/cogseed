@@ -54,6 +54,12 @@ const CLI_DEFAULTS = {
     description_en: "General-purpose multi-step agent over the ACP protocol with tool use and session-scoped resume, good at walking a defined process step by step; For: 'walk through this process step by step', 'continue from the last session', 'coordinate a few tools to finish this'; Triggers: multi-step, process, task, tool use, resume session, ACP, coordinate",
     isCoding: false,
   },
+  workbuddy: {
+    name: 'WorkBuddy',
+    description_zh: '代码研发智能体——腾讯 WorkBuddy 内置 CodeBuddy 命令行,在本地项目里端到端做软件开发：实现新功能、修复 bug、跨多文件重构、写测试、调试,可长时间自主迭代、直接改文件跑命令；适合"实现一下这个功能"、"把这个 bug 修了"、"重构这个模块"、"给这段代码加测试"；触发词：写代码、开发、实现、修 bug、重构、加功能、写测试、改代码、调试',
+    description_en: "Coding agent — Tencent WorkBuddy's built-in CodeBuddy CLI for end-to-end software development in your local project: builds features, fixes bugs, refactors across files, writes tests, and debugs autonomously, editing files and running commands directly over long sessions; For: 'implement this feature', 'fix this bug', 'refactor this module', 'add tests for this code'; Triggers: code, develop, implement, fix bug, refactor, add feature, write tests, edit code, debug",
+    isCoding: true,
+  },
 };
 
 /** Defaults for a given CLI type, or null when the type is unknown. */
