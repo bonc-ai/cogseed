@@ -44,8 +44,8 @@ export { listRecallUsage, recordRecallUsage } from './usage-service';
 export { recordRecallMessageFeedback } from './usage-feedback-service';
 export type { RecallMessageFeedback, RecordRecallMessageFeedbackInput, RecordRecallMessageFeedbackResult } from './usage-feedback-service';
 export type { RecallUsageRecord, RecordRecallUsageInput } from './usage-service';
-export { readCognitionTree, rebuildCognitionTree } from './tree-service';
-export type { CognitionTreeEdge, CognitionTreeNode, CognitionTreeRecord } from './tree-service';
+export { COGNITION_TREE_CONTRACT, COGNITION_TREE_CONTRACT_VERSION, readCognitionTree, rebuildCognitionTree } from './tree-service';
+export type { CognitionTreeEdge, CognitionTreeNode, CognitionTreeNodeId, CognitionTreeRecord } from './tree-service';
 
 export { listAbilityAssetTimeline, listRecallTimeline } from './timeline-service';
 export type { RecallAssetTimelineItem, RecallAssetTimelineKind } from './timeline-service';
