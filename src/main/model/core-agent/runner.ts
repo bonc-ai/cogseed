@@ -44,10 +44,10 @@ import {
 } from '../../features/memory';
 import { listActiveCognitionSourceIds } from '../../features/cognition';
 import {
-  formatProjectContextPolicyForSystemPrompt,
-  formatProjectInstructionsForSystemPrompt,
-  writeProjectInstructions,
-} from '../../features/projects';
+  formatSpaceContextPolicyForSystemPrompt,
+  formatSpaceInstructionsForSystemPrompt,
+  writeSpaceInstructions,
+} from '../../features/spaces';
 import { formatRoleProfileForSystemPrompt } from '../../features/spaces';
 import * as metacognition from '../../features/metacognition';
 import { assertAgentChatDispatchable } from '../../features/agent-dispatch-policy';
@@ -619,17 +619,17 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     }));
   }
 
-  if (uid && memoryAgentScope && params.projectId) {
-    const pid = params.projectId;
+  if (uid && memoryAgentScope && params.spaceId) {
+    const sid = params.spaceId;
 
-    // Project instructions (ORKAS.md): the project's goal + rules. Commander
-    // writes; sub-agents read it from their system prompt but don't get this
+    // Space instructions: the space's goal + rules. Commander writes;
+    // sub-agents read it from their system prompt but don't get this
     // tool. Injected for the commander only, so there is no other write path.
     if (isCommander) {
       const { createProjectInstructionsTool } = await import('../../../core-agent/src/tools/project-instructions-tool');
       injectedTools.push(createProjectInstructionsTool({
         set: async (instructions: string) => {
-          const r = await writeProjectInstructions(uid, pid, instructions);
+          const r = await writeSpaceInstructions(uid, sid, instructions);
           return r.ok ? { ok: true } : { ok: false, error: (r as { error: string }).error };
         },
       }));
@@ -989,15 +989,15 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // Static rules for resolving conflicts among the user-managed project
   // layers. Always present in real project work sessions, even when ORKAS.md,
   // memory, or the task backlog is empty.
-  const projectContextPolicyBlock = (uid && memoryAgentScope && params.projectId)
-    ? formatProjectContextPolicyForSystemPrompt()
+  const projectContextPolicyBlock = (uid && memoryAgentScope && params.spaceId)
+    ? formatSpaceContextPolicyForSystemPrompt()
     : '';
   if (projectContextPolicyBlock) parts.push(projectContextPolicyBlock);
-  // User-authored project instructions (read side): low-churn configuration,
+  // User-authored space instructions (read side): low-churn configuration,
   // so it stays in the stable cache prefix (before the runtime injection).
   // Gated on memoryAgentScope like memory: edit/one-shot sessions get neither.
-  const projectInstructionsBlock = (uid && memoryAgentScope && params.projectId)
-    ? formatProjectInstructionsForSystemPrompt(uid, params.projectId)
+  const projectInstructionsBlock = (uid && memoryAgentScope && params.spaceId)
+    ? formatSpaceInstructionsForSystemPrompt(uid, params.spaceId)
     : '';
   if (projectInstructionsBlock) parts.push(projectInstructionsBlock);
   if (runtimeInjectionBlock) parts.push(runtimeInjectionBlock);

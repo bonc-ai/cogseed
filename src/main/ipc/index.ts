@@ -1269,19 +1269,19 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { space: await projects.getSpace(ctx.userId, projectId) };
   },
 
-  // User-authored per-project instructions (ORKAS.md). User-owned: edited only
-  // here via the project settings UI; agents read it from the system prompt.
-  'projects.instructions.get': async ({ projectId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    const result = await projects.readProjectInstructions(ctx.userId, projectId);
+  // User-authored per-space instructions. User-owned: edited only here via
+  // the space settings UI; agents read it from the system prompt.
+  'spaces.instructions.get': async ({ spaceId }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    const result = await spaces.readSpaceInstructions(ctx.userId, spaceId);
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { content: result.content, limit: result.limit };
   },
 
-  'projects.instructions.set': async ({ projectId, content }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.instructions.set': async ({ spaceId, content }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof content !== 'string') throw new Error('invalid content');
-    const result = await projects.writeProjectInstructions(ctx.userId, projectId, content);
+    const result = await spaces.writeSpaceInstructions(ctx.userId, spaceId, content);
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { ok: true };
   },
