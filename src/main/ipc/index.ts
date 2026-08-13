@@ -29,6 +29,7 @@ import * as groupChat from '../features/group_chat';
 import * as companionRepro from '../features/companion_repro';
 import * as p3394 from '../features/p3394';
 import * as executionRecords from '../features/execution-records';
+import * as executionLog from '../features/execution_log';
 import * as workbench from '../features/workbench';
 import * as cognition from '../features/cognition';
 import * as recallCandidates from '../features/recall/candidate-service';
@@ -90,6 +91,7 @@ import * as ttsAuth from '../features/tts_auth';
 import * as permissions from '../features/permissions';
 import * as appConfig from '../features/config';
 import * as onboardingState from '../features/onboarding_state';
+import * as cliFallback from '../features/cli_fallback';
 import * as cognitionExtraction from '../features/cognition_extraction';
 import { detectAll } from '../features/local_agents/registry';
 import * as avatars from '../features/avatars';
@@ -856,6 +858,19 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'mate_agent.runtime.restart': async (_payload, ctx) => mateAgentBackend.mateIpcService.restartRuntime(ctx.userId),
   'mate_agent.runtime.recover': async (_payload, ctx) => mateAgentBackend.mateIpcService.recover(ctx.userId),
 
+  // Execution log handlers
+  'executionLog.readAll': async () => {
+    return { records: executionLog.readAllRecords() };
+  },
+  'executionLog.readSince': async (payload) => {
+    const sinceMs = typeof payload?.sinceMs === 'number' ? payload.sinceMs : Date.now();
+    return { records: executionLog.readRecordsSince(sinceMs) };
+  },
+  'executionLog.cleanup': async () => {
+    executionLog.cleanupOldRecords();
+    return { ok: true };
+  },
+
   'user.init': async () => {
     const user = await users.getOrCreateSelfUser();
     return user;
@@ -1003,7 +1018,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
-  'conversations.create': async ({ title = '', projectId = '', kind = '' } = {}, ctx) => {
+  'conversations.create': async ({ title = '', projectId = '' } = {}, ctx) => {
     // Validate the projectId belongs to this user before persisting it on
     // the conv record. Unknown / invalid projectIds are dropped silently
     // (the conv lands without project membership) — the renderer should
@@ -1014,11 +1029,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (projectId && typeof projectId === 'string' && safeId(projectId)) {
       if (await projects.projectExists(ctx.userId, projectId)) validProjectId = projectId;
     }
-    // 会话 kind 白名单：目前只有 space_builder（空间模式）被允许透传；
-    // 其余一律回落 normal，防止渲染层任意指定会话类型。
-    const convKind = kind === 'space_builder' ? 'space_builder' : 'normal';
     const conv = await chats.createConversation(ctx.userId, {
-      kind: convKind,
+      kind: 'normal',
       title,
       ...(validProjectId ? { projectId: validProjectId } : {}),
     });
@@ -1049,18 +1061,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ctx.userId, cid, title, conversationProjectHint(args));
     if (!conv) throw new Error('conversation not found');
     return { conversation: conv };
-  },
-
-  'conversations.completeSpaceBuilder': async (args, ctx) => {
-    const { cid } = args;
-    if (!safeId(cid)) throw new Error('invalid cid');
-    // 只允许标记 kind=space_builder 的会话；其余拒绝，防止任意会话被误标。
-    const conv = await chats.getConversation(ctx.userId, cid, conversationProjectHint(args));
-    if (!conv || conv.kind !== 'space_builder') throw new Error('not a space_builder conversation');
-    const updated = await chats.updateConversation(
-      ctx.userId, cid, { space_builder_completed: new Date().toISOString() }, conversationProjectHint(args));
-    if (!updated) throw new Error('conversation not found');
-    return { conversation: updated };
   },
 
   'conversations.deleteAll': async (_args, ctx) => {
@@ -1117,24 +1117,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { project };
   },
 
-  // ── 情境空间（原"工作空间"：空间 = 主界面 + 资源作用域限制）────────────
+  // ── Workspaces（工作空间一期：空间 = 主界面 + 资源作用域限制）────────────
   'spaces.list': async (_payload, ctx) => {
     return { spaces: await spaces.listSpaces(ctx.userId) };
   },
 
-  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
-    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, main_skill_ref, asset_reference_bindings });
+  'spaces.create': async ({ name, template_id, icon } = {}, ctx) => {
+    const result = await spaces.createSpace(ctx.userId, { name, template_id, icon });
     if (!result.ok) throw new Error((result as { error: string }).error);
-    return { space: result.space };
-  },
-
-  'spaces.createFromDraft': async ({ draft } = {}, ctx) => {
-    if (!draft || typeof draft !== 'object') throw new Error('invalid draft');
-    const result = await spaces.createSpaceFromDraft(ctx.userId, draft);
-    if (!result.ok) {
-      const err = result as { error: string; details?: string[] };
-      throw new Error(err.details && err.details.length ? `invalid_draft: ${err.details.join('；')}` : err.error);
-    }
     return { space: result.space };
   },
 
@@ -1145,9 +1135,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { space };
   },
 
-  'spaces.update': async ({ spaceId, name, icon, template_id, primary_template_id, secondary_template_ids, space_type, sustained_outcome, gate_status, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
+  'spaces.update': async ({ spaceId, name, icon, template_id } = {}, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
-    const result = await spaces.updateSpace(ctx.userId, spaceId, { name, icon, template_id, primary_template_id, secondary_template_ids, space_type, sustained_outcome, gate_status, main_skill_ref, asset_reference_bindings });
+    const result = await spaces.updateSpace(ctx.userId, spaceId, { name, icon, template_id });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
   },
@@ -1197,13 +1187,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { templates };
   },
 
-  // 情境入口场景列表（教育/写作/职场+自定义，M2）
-  'spaces.scenarios.list': async (_payload, _ctx) => {
-    const scenarios = await import('../features/role_templates').then((m) => m.listScenarios());
-    return { scenarios };
-  },
-
-  // ── 项目 ↔ 空间绑定（情境空间一期）──────────────────────────────────────
+  // ── 项目 ↔ 空间绑定（工作空间一期）──────────────────────────────────────
   'projects.bindSpace': async ({ projectId, spaceId } = {}, ctx) => {
     if (!safeId(projectId)) throw new Error('invalid projectId');
     if (spaceId && !safeId(spaceId)) throw new Error('invalid spaceId');
@@ -1445,26 +1429,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       skillDetails: bindings.skills
         .map((id) => skillById.get(id))
         .filter(Boolean),
-    };
-  },
-
-  'projects.scope.resolve': async ({ projectId }, ctx) => {
-    if (projectId && !safeId(projectId)) throw new Error('invalid projectId');
-    const meta = await projects.getProjectScopeMeta(ctx.userId, projectId || null);
-    if (!meta.scope) return { ok: true, scope: null, space: meta.space };
-    const [agentList, skillList] = await Promise.all([
-      agents.listAgentSummaries(),
-      skills.listSkills(),
-    ]);
-    const agentById = new Map(agentList.map((a: any) => [a.agent_id, a]));
-    const skillById = new Map(skillList.map((s: any) => [s.id, s]));
-    return {
-      ok: true,
-      scope: {
-        agents: meta.scope.agents.map((id) => ({ id, name: (agentById.get(id) as any)?.name || id })),
-        skills: meta.scope.skills.map((id) => ({ id, name: (skillById.get(id) as any)?.name || id })),
-      },
-      space: meta.space,
     };
   },
 
@@ -1944,78 +1908,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     });
   },
 
-  'p3394.listKstarCompatProjections': async ({ cid }, ctx) => {
-    if (!safeId(cid)) throw new Error('invalid cid');
-    const [runs, experienceCandidates] = await Promise.all([
-      p3394.listKstarCompatProjections(ctx.userId, cid),
-      p3394.listExperienceCandidates(ctx.userId, cid),
-    ]);
-    return { ok: true, runs, experience_candidates: experienceCandidates };
-  },
-
   'p3394.listProtocolEvents': async ({ cid }, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
     return { ok: true, protocol_events: await p3394.listP3394ProtocolEvents(ctx.userId, cid) };
   },
 
-  'p3394.reviewKstarCompatProjection': async ({ cid, runId, decision, notes }, ctx) => {
-    if (!safeId(cid) || !safeId(runId)) throw new Error('invalid KSTAR scope');
-    if (decision !== 'pass' && decision !== 'fail') throw new Error('invalid review decision');
-    const run = (await p3394.listKstarCompatProjections(ctx.userId, cid)).find((item) => item.id === runId);
-    if (!run) throw new Error('KSTAR run not found');
-    return { ok: true, ...(await p3394.reviewKstarCompatProjection(ctx.userId, runId, {
-      decision, ...(typeof notes === 'string' ? { notes } : {}),
-    })) };
-  },
-
-  'p3394.decideExperienceCandidate': async ({ cid, candidateId, decision }, ctx) => {
-    if (!safeId(cid) || !safeId(candidateId)) throw new Error('invalid experience scope');
-    if (decision !== 'approve' && decision !== 'reject') throw new Error('invalid experience decision');
-    const existing = await p3394.getExperienceCandidate(ctx.userId, candidateId);
-    if (!existing || existing.conversation_id !== cid) throw new Error('experience candidate not found');
-    const candidate = await p3394.decideExperienceCandidate(ctx.userId, candidateId, decision);
-    if (decision !== 'approve') return { ok: true, candidate };
-    const promotion = await p3394.promoteExperienceCandidateToKnowledgeBase(ctx.userId, candidate.id);
-    return { ok: true, candidate: promotion.ok ? promotion.candidate : candidate, kb_promotion: promotion };
-  },
-
-
-  'p3394.syncExperienceCandidateToNotion': async ({ cid, candidateId }, ctx) => {
-    if (!safeId(cid) || !safeId(candidateId)) throw new Error('invalid experience scope');
-    const existing = await p3394.getExperienceCandidate(ctx.userId, candidateId);
-    if (!existing || existing.conversation_id !== cid) throw new Error('experience candidate not found');
-    const result = await p3394.syncExperienceCandidateToNotion(ctx.userId, candidateId);
-    return { ok: result.ok, ...result };
-  },
-
-
-  'p3394.listPatchCandidates': async ({ cid }, ctx) => {
-    if (!safeId(cid)) throw new Error('invalid cid');
-    return { ok: true, patch_candidates: await p3394.listPatchCandidates(ctx.userId, cid) };
-  },
-
-  'p3394.reviewPatchCandidate': async ({ cid, candidateId, decision, notes }, ctx) => {
-    if (!safeId(cid) || !safeId(candidateId)) throw new Error('invalid patch candidate scope');
-    if (decision !== 'approve' && decision !== 'reject') throw new Error('invalid patch candidate decision');
-    const existing = (await p3394.listPatchCandidates(ctx.userId, cid)).find((item) => item.id === candidateId);
-    if (!existing) throw new Error('patch candidate not found');
-    const patch_candidate = await p3394.reviewPatchCandidate(ctx.userId, candidateId, decision, typeof notes === 'string' ? notes : '');
-    return { ok: true, patch_candidate };
-  },
-
-  'p3394.listArchives': async (_args, ctx) => {
-    return { ok: true, archives: await p3394.listArchives(ctx.userId) };
-  },
-
-  'p3394.readArchive': async ({ timestamp }, ctx) => {
-    if (typeof timestamp !== 'string' || !timestamp.trim()) throw new Error('invalid archive timestamp');
-    const archive = await p3394.readArchive(ctx.userId, timestamp.trim());
-    return archive ? { ok: true, archive } : { ok: false, error: 'archive not found' };
-  },
-
-  'p3394.checkMigrationStatus': async (_args, ctx) => {
-    return { ok: true, ...(await p3394.checkMigrationStatus(ctx.userId)) };
-  },
 
   'recall.candidates.list': async (_args, ctx) => ({ ok: true, candidates: await recallCandidates.listRecallCandidates(ctx.userId) }),
 
@@ -2258,9 +2155,23 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'recall.assets.list': async (_args, ctx) => ({ ok: true, assets: await recallAssets.listAbilityAssets(ctx.userId) }),
   'recall.assets.read': async ({ assetId } = {}, ctx) => { if (!safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, asset: await recallAssets.readAbilityAsset(ctx.userId, assetId) }; },
-  'recall.assets.pause': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid recall asset pause'); return { ok: true, asset: await recallAssets.pauseAbilityAsset(ctx.userId, assetId, note) }; },
-  'recall.assets.resume': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid recall asset resume'); return { ok: true, asset: await recallAssets.resumeAbilityAsset(ctx.userId, assetId, note) }; },
-  'recall.assets.revoke': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid recall asset revoke'); return { ok: true, asset: await recallAssets.revokeAbilityAsset(ctx.userId, assetId, note) }; },
+  'recall.assets.update': async ({ assetId, title, statement, scope, scopePolicy, type, evidenceRefs, ontologyRefs, reason, acknowledgeRecommendation } = {}, ctx) => {
+    if (!safeId(assetId)) throw new Error('invalid recall asset id');
+    const note = boundedText(reason, 'recall asset update reason', 1_000);
+    if (title !== undefined && (typeof title !== 'string' || title.length > 120)) throw new Error('invalid recall asset title');
+    if (statement !== undefined && (typeof statement !== 'string' || statement.length > 4_000)) throw new Error('invalid recall asset statement');
+    if (scope !== undefined && (typeof scope !== 'string' || scope.length > 500)) throw new Error('invalid recall asset scope');
+    if (scopePolicy !== undefined && (!scopePolicy || typeof scopePolicy !== 'object' || Array.isArray(scopePolicy))) throw new Error('invalid recall asset scope policy');
+    if (type !== undefined && !['personal', 'rule', 'template', 'skill_method'].includes(type)) throw new Error('invalid recall asset type');
+    if (evidenceRefs !== undefined && !Array.isArray(evidenceRefs)) throw new Error('invalid recall asset evidence');
+    if (ontologyRefs !== undefined && !Array.isArray(ontologyRefs)) throw new Error('invalid recall asset ontology refs');
+    if (acknowledgeRecommendation !== undefined && typeof acknowledgeRecommendation !== 'boolean') throw new Error('invalid recall asset recommendation acknowledgment');
+    return { ok: true, asset: await recallAssets.updateAbilityAsset(ctx.userId, assetId, { ...(title !== undefined ? { title } : {}), ...(statement !== undefined ? { statement } : {}), ...(scope !== undefined ? { scope } : {}), ...(scopePolicy !== undefined ? { scopePolicy } : {}), ...(type !== undefined ? { type } : {}), ...(evidenceRefs !== undefined ? { evidenceRefs } : {}), ...(ontologyRefs !== undefined ? { ontologyRefs } : {}), reason: note, actor: 'user', ...(acknowledgeRecommendation !== undefined ? { acknowledgeRecommendation } : {}) }) };
+  },
+  'recall.assets.pause': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset pause'); return { ok: true, asset: await recallAssets.pauseAbilityAsset(ctx.userId, assetId, { actor: 'user', reason: note ?? 'user pause' }) }; },
+  'recall.assets.resume': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset resume'); return { ok: true, asset: await recallAssets.resumeAbilityAsset(ctx.userId, assetId, { actor: 'user', reason: note ?? 'user resume' }) }; },
+  'recall.assets.revoke': async ({ assetId, note } = {}, ctx) => { if (!safeId(assetId) || (note !== undefined && (typeof note !== 'string' || !note.trim() || note.length > 1_000))) throw new Error('invalid recall asset revoke'); return { ok: true, asset: await recallAssets.revokeAbilityAsset(ctx.userId, assetId, { actor: 'user', reason: note ?? 'user revoke' }) }; },
+  'recall.assets.recommend': async ({ assetId, action, reason } = {}, ctx) => { if (!safeId(assetId) || (action !== 'pause' && action !== 'rework')) throw new Error('invalid recall asset recommendation'); return { ok: true, asset: await recallAssets.recommendAbilityAssetAction(ctx.userId, assetId, { actor: 'system', action, reason: boundedText(reason, 'recall asset recommendation reason', 1_000) }) }; },
   'recall.assets.versions': async ({ assetId } = {}, ctx) => { if (!safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, versions: await recallAssets.listAbilityAssetVersions(ctx.userId, assetId), audit: await recallAssets.listAbilityAssetAudit(ctx.userId, assetId) }; },
 
   'recall.skills.prepare': async ({ assetId } = {}, ctx) => {
@@ -2349,9 +2260,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   'cognition.candidates.decide': async ({ source, candidateId, decision, reason, notes, toGlobalMemory, toGroupIds } = {}, ctx) => {
-    if (source !== 'personal_ontology' && source !== 'p3394_experience' && source !== 'p3394_patch') throw new Error('invalid cognition candidate source');
+    if (source !== 'personal_ontology') throw new Error('invalid cognition candidate source');
     if (!safeId(candidateId)) throw new Error('invalid candidate id');
-    if (decision !== 'accept' && decision !== 'modify' && decision !== 'defer' && decision !== 'reject') throw new Error('invalid cognition candidate decision');
+    if (decision !== 'accept' && decision !== 'reject') throw new Error('invalid cognition candidate decision');
     if (toGroupIds !== undefined && (!Array.isArray(toGroupIds) || toGroupIds.some((id) => !safeId(id)))) throw new Error('invalid group ids');
     return { ok: true, result: await cognition.decideCognitionCandidate(ctx.userId, {
       source,
@@ -2746,26 +2657,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'personalOntology.candidates.list': async (_payload, ctx) => {
     return personalOntologyCandidates.listCandidates(ctx.userId);
   },
-  'personalOntology.candidates.confirm': async ({ candidateId, toGlobalMemory, toGroupIds, targetField, projectId, routeWithLlm }, ctx) => {
+  'personalOntology.candidates.confirm': async ({ candidateId, toGlobalMemory, toGroupIds, targetField, routeWithLlm }, ctx) => {
     if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
-    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string; projectId?: string } = {};
+    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string } = {};
     if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
     if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
     if (typeof targetField === 'string' && targetField.trim()) dest.targetField = targetField.trim();
-    if (typeof projectId === 'string' && projectId.trim()) dest.projectId = projectId.trim();
     return personalOntologyCandidates.confirmCandidate(ctx.userId, candidateId, dest, { routeWithLlm: routeWithLlm === true });
   },
   'personalOntology.candidates.reject': async ({ candidateId, reason }, ctx) => {
     if (!candidateId || typeof candidateId !== 'string') throw new Error('missing candidateId');
     return personalOntologyCandidates.rejectCandidate(ctx.userId, candidateId, reason);
   },
-  'personalOntology.candidates.confirmBatch': async ({ candidateIds, toGlobalMemory, toGroupIds, targetField, projectId, routeWithLlm }, ctx) => {
+  'personalOntology.candidates.confirmBatch': async ({ candidateIds, toGlobalMemory, toGroupIds, targetField, routeWithLlm }, ctx) => {
     if (!Array.isArray(candidateIds)) throw new Error('candidateIds must be array');
-    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string; projectId?: string } = {};
+    const dest: { toGlobalMemory?: boolean; toGroupIds?: string[]; targetField?: string } = {};
     if (typeof toGlobalMemory === 'boolean') dest.toGlobalMemory = toGlobalMemory;
     if (Array.isArray(toGroupIds)) dest.toGroupIds = toGroupIds.filter((id) => typeof id === 'string');
     if (typeof targetField === 'string' && targetField.trim()) dest.targetField = targetField.trim();
-    if (typeof projectId === 'string' && projectId.trim()) dest.projectId = projectId.trim();
     return personalOntologyCandidates.confirmCandidates(ctx.userId, candidateIds, dest, { routeWithLlm: routeWithLlm === true });
   },
   'personalOntology.candidates.rejectBatch': async ({ candidateIds, reason }, ctx) => {
@@ -2818,21 +2727,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'personalOntology.templates.list': async (_payload, ctx) => {
     return { templates: await personalOntologyTemplateFiles.listTemplateStatus(ctx.userId) };
   },
-  'personalOntology.templates.install': async ({ templateId, restoreData }, ctx) => {
-    if (!templateId || typeof templateId !== 'string' || !safeId(templateId)) throw new Error('invalid templateId');
-    return personalOntologyTemplateFiles.installTemplateFile(ctx.userId, templateId, !!restoreData);
-  },
-  'personalOntology.templates.uninstall': async ({ templateId, archiveMemory }, ctx) => {
-    if (!templateId || typeof templateId !== 'string' || !safeId(templateId)) throw new Error('invalid templateId');
-    return personalOntologyTemplateFiles.uninstallTemplateFile(ctx.userId, templateId, !!archiveMemory);
-  },
-  'personalOntology.templates.hasArchive': async ({ templateId }, ctx) => {
-    if (!templateId || typeof templateId !== 'string' || !safeId(templateId)) throw new Error('invalid templateId');
-    return { hasArchive: personalOntologyTemplateFiles.templateHasArchive(ctx.userId, templateId) };
-  },
-  'personalOntology.templates.hasMemoryArchive': async ({ templateId }, ctx) => {
-    if (!templateId || typeof templateId !== 'string' || !safeId(templateId)) throw new Error('invalid templateId');
-    return { hasArchive: personalOntologyTemplateFiles.templateHasMemoryArchive(ctx.userId, templateId) };
+  'personalOntology.templates.install': async ({ templateId }, ctx) => {
+    if (!templateId || typeof templateId !== 'string') throw new Error('missing templateId');
+    return personalOntologyTemplateFiles.installTemplateFile(ctx.userId, templateId);
   },
 
   // ── Personal Ontology Group Fields (挖空表单字段，兼容复合 id) ──
@@ -3432,6 +3329,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'prefs.setOnboarding': async ({ completed }: { completed?: unknown } = {}) => ({
     completed: onboardingState.setOnboardingCompleted(completed !== false),
   }),
+
+  // ── Commander CLI fallback (no API-key model configured) ──
+  'prefs.getCliFallback': async (_payload, ctx) => ({
+    cli: cliFallback.getCliFallback(ctx.userId),
+    noticeShown: cliFallback.cliFallbackNoticeShown(ctx.userId),
+  }),
+  'prefs.setCliFallback': async ({ cli }: { cli?: unknown } = {}) => {
+    const uid = _activeUserIdForPicker();
+    if (!uid) throw new Error('no active user');
+    return { cli: cliFallback.setCliFallback(uid, typeof cli === 'string' ? cli : '') };
+  },
+  'prefs.markCliFallbackNoticeShown': async (_payload, ctx) => {
+    cliFallback.markCliFallbackNoticeShown(ctx.userId);
+    return { ok: true };
+  },
+
+  // Whether ANY usable API-key model is configured (sync, cheap). The
+  // renderer uses this before every commander send to decide whether to
+  // fall back to the signed-in CLI agent.
+  'model.hasConfigured': async () => auth.hasConfiguredModel(),
 
   // ── Cognition extraction from sessions (onboarding) ──
   // Runs through a locally-detected CLI Agent (already authenticated on
@@ -4220,7 +4137,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // CogSeed Hub account — desktop-side account management against the Hub
   // account service. Tokens never cross this table; renderer-safe status DTOs only.
   ...hubAccountHandlers,
-
   // Cross-session memory UI — view/edit/import/export over features/memory.ts.
   ...memoryHandlers,
 
@@ -4232,6 +4148,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // the recall surface); the legacy store-asset handler of the same name in
   // ipc/cognition.ts must not shadow it, so it is excluded from the spread.
   ...(({ 'cognition.assets.list': _legacyCognitionAssetsList, ...rest }) => rest)(cognitionHandlers),
+
+  // P3394 TaskContinuationSnapshot and ContextReuseReceipt handlers for
 };
 
 // ── Stream handlers ──────────────────────────────────────────────────────

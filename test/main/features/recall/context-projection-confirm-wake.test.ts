@@ -54,7 +54,7 @@ async function createPreviewProjection() {
     suggestedScope: 'review,project',
     sourceRefs: [{ kind: 'execution', id: 'exec-a' }],
   });
-  const asset = await candidates.promoteRecallCandidate('user-a', candidate.id);
+  const asset = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
   await refs.addWorkspaceAssetReference('user-a', { assetId: asset.asset.id, workspaceId: 'workspace-a', scope: 'review' });
   const preview = await projection.previewContextProjection('user-a', {
     taskRunId: 'task-a', workspaceId: 'workspace-a', purpose: 'review', taskText: 'Review OAuth callback flow',
@@ -248,7 +248,7 @@ describe('Recall context projection status and confirmation boundaries', () => {
       dispatchPayload: { text: 'Version change review' },
     });
     const recallAssets = await import('../../../../src/main/features/recall/asset-service');
-    await recallAssets.updateAbilityAsset('user-a', asset, { title: 'Keep decision logs and revisions.' });
+    await recallAssets.updateAbilityAsset('user-a', asset, { title: 'Keep decision logs and revisions.', reason: 'Refine the title.', actor: 'user' });
 
     await expect(projection.confirmAndApproveWake('user-a', {
       cid: 'cid-a',

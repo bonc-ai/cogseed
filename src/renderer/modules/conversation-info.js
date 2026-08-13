@@ -40,12 +40,8 @@ const ConversationInfo = (() => {
     collaboration: null,
     mate: { session: null, collaboration: null, sessions: [], loading: false, error: '' },
     wakeRequests: [],
-    kstarRuns: [],
-    patchCandidates: [],
     protocolEvents: [],
     protocolError: '',
-    migrationStatus: null,
-    archives: [],
   };
   const _protocolFilters = { agent: '', role: '', result: '' };
   const _CI_TEXT_EXTS = new Set([
@@ -259,7 +255,7 @@ const ConversationInfo = (() => {
 
   async function _load(cid) {
     const enc = encodeURIComponent(cid);
-    const [historyData, filesData, attachmentData, syncEnabled, activity, wakeData, kstarData, patchData, protocolData, migrationData, archivesData] = await Promise.all([
+    const [historyData, filesData, attachmentData, syncEnabled, activity, wakeData, protocolData] = await Promise.all([
       _fetchJson(typeof _historyRequestUrl === 'function'
         ? _historyRequestUrl(cid)
         : `/api/conversations/${enc}/history?limit=10`),
@@ -274,11 +270,7 @@ const ConversationInfo = (() => {
       _loadSyncEnabled(),
       _loadAgentActivitySnapshot(cid),
       _fetchJson(`/api/conversations/${enc}/wake-requests`).catch(() => ({ requests: [] })),
-      _fetchJson(`/api/conversations/${enc}/kstar`).catch(() => ({ runs: [] })),
-      _fetchJson(`/api/conversations/${enc}/patch-candidates`).catch(() => ({ patch_candidates: [] })),
       _fetchJson(`/api/conversations/${enc}/protocol-events`).catch((err) => ({ events: [], error: (err && err.message) || String(err) })),
-      _invokeOrDefault('p3394.checkMigrationStatus', {}, { migrated: false }),
-      _invokeOrDefault('p3394.listArchives', {}, { archives: [] }),
     ]);
     return {
       conversation: historyData.conversation || null,
@@ -295,12 +287,8 @@ const ConversationInfo = (() => {
       actors: Array.isArray(activity.actors) ? activity.actors : [],
       collaboration: activity.runtime && activity.runtime.collaboration ? activity.runtime.collaboration : null,
       wakeRequests: Array.isArray(wakeData.requests) ? wakeData.requests : [],
-      kstarRuns: Array.isArray(kstarData.runs) ? kstarData.runs : [],
-      patchCandidates: Array.isArray(patchData.patch_candidates) ? patchData.patch_candidates : [],
       protocolEvents: Array.isArray(protocolData.events) ? protocolData.events : (Array.isArray(protocolData.protocol_events) ? protocolData.protocol_events : []),
       protocolError: protocolData.error ? String(protocolData.error) : '',
-      migrationStatus: migrationData || null,
-      archives: Array.isArray(archivesData.archives) ? archivesData.archives : [],
     };
   }
 
@@ -934,16 +922,6 @@ const ConversationInfo = (() => {
         });
       }
     }
-    for (const run of Array.isArray(_snapshot.kstarRuns) ? _snapshot.kstarRuns : []) {
-      if (run && run.status === 'needs_review') {
-        items.push({ kind: 'kstar', label: _label('conversation_info.collaboration.attention.kstar', 'KSTAR review required'), target: { type: 'review_center', ref: String(run.id || '') } });
-      }
-    }
-    for (const candidate of Array.isArray(_snapshot.patchCandidates) ? _snapshot.patchCandidates : []) {
-      if (candidate && candidate.status === 'needs_review') {
-        items.push({ kind: 'patch', label: String(candidate.proposal && candidate.proposal.title || _label('conversation_info.collaboration.attention.patch', 'Patch candidate requires review')), target: { type: 'review_center', ref: String(candidate.id || '') } });
-      }
-    }
     const collaboration = _snapshot.collaboration || {};
     const conflictStatus = (status) => {
       const normalized = String(status || 'detected');
@@ -977,54 +955,6 @@ const ConversationInfo = (() => {
     return `<section class="conversation-info-collaboration-section"><div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.collaboration.section_attention', 'Attention Needed'))}</div><div class="conversation-info-collaboration-attention-list">${body}</div></section>`;
   }
 
-  function _renderKStarHistorySection() {
-    const migrationStatus = _snapshot.migrationStatus || null;
-    const archives = Array.isArray(_snapshot.archives) ? _snapshot.archives : [];
-
-    if (!migrationStatus && archives.length === 0) return '';
-
-    let statusHtml = '';
-    if (migrationStatus && migrationStatus.migrated) {
-      const stamp = migrationStatus.stamp || {};
-      const migratedAt = stamp.migrated_at ? new Date(stamp.migrated_at).toLocaleString() : '';
-      statusHtml = `<div class="conversation-info-kstar-migration-status is-migrated">
-        <div class="conversation-info-kstar-migration-label">${escapeHtml(_label('conversation_info.kstar.migration_completed', 'KSTAR Engine migration completed'))}</div>
-        ${migratedAt ? `<div class="conversation-info-kstar-migration-time">${escapeHtml(migratedAt)}</div>` : ''}
-      </div>`;
-    } else if (migrationStatus && migrationStatus.degraded) {
-      statusHtml = `<div class="conversation-info-kstar-migration-status is-degraded">
-        <div class="conversation-info-kstar-migration-label">${escapeHtml(_label('conversation_info.kstar.migration_degraded', 'KSTAR Engine running in degraded mode'))}</div>
-        <div class="conversation-info-kstar-migration-note">${escapeHtml(_label('conversation_info.kstar.migration_degraded_note', 'Newer schema detected'))}</div>
-      </div>`;
-    }
-
-    let archivesHtml = '';
-    if (archives.length > 0) {
-      const archiveRows = archives.slice(0, 5).map((timestamp) => {
-        const displayTime = timestamp.replace(/T/, ' ').replace(/-/g, ':');
-        return `<div class="conversation-info-kstar-archive-item" data-archive-timestamp="${escapeHtml(timestamp)}">
-          <div class="conversation-info-kstar-archive-time">${escapeHtml(displayTime)}</div>
-        </div>`;
-      }).join('');
-      const truncatedNote = archives.length > 5
-        ? `<div class="conversation-info-kstar-archive-truncated">${escapeHtml(_label('conversation_info.kstar.archives_truncated', 'Showing {shown} of {total}', { shown: 5, total: archives.length }))}</div>`
-        : '';
-      archivesHtml = `<div class="conversation-info-kstar-archives">
-        <div class="conversation-info-kstar-archives-label">${escapeHtml(_label('conversation_info.kstar.archives', 'Archived snapshots'))}</div>
-        <div class="conversation-info-kstar-archives-list">${archiveRows}</div>
-        ${truncatedNote}
-      </div>`;
-    }
-
-    if (!statusHtml && !archivesHtml) return '';
-
-    return `<section class="conversation-info-collaboration-section">
-      <div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.kstar.section_history', 'KSTAR History'))}</div>
-      ${statusHtml}
-      ${archivesHtml}
-    </section>`;
-  }
-
   function _renderCollaborationOverview() {
     const mateState = _snapshot.mate || {};
     if (!_snapshot.collaboration && !mateState.session && !mateState.loading && !mateState.error && !_deriveAgentActivityRows(_snapshot).length && !_collectCollaborationAttentionItems().length) {
@@ -1036,7 +966,7 @@ const ConversationInfo = (() => {
     const mateHtml = (mateState.session || mateState.loading || mateState.error)
       ? _safeSection(() => _renderMateOverview(), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)
       : '';
-    return `<div class="conversation-info-collaboration"><div class="conversation-info-collaboration-header"><div class="conversation-info-collaboration-heading">${escapeHtml(_label('conversation_info.collaboration.title', 'Collaboration'))}</div><div class="conversation-info-collaboration-subtitle">${escapeHtml(_label('conversation_info.collaboration.subtitle', 'How this conversation is progressing'))}</div></div>${mateHtml}${_safeSection(() => _renderCollaborationTaskOverview(collaboration, runtime), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAgentActivitySection(), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAttentionSection(attentionItems), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderKStarHistorySection(), '')}</div>`;
+    return `<div class="conversation-info-collaboration"><div class="conversation-info-collaboration-header"><div class="conversation-info-collaboration-heading">${escapeHtml(_label('conversation_info.collaboration.title', 'Collaboration'))}</div><div class="conversation-info-collaboration-subtitle">${escapeHtml(_label('conversation_info.collaboration.subtitle', 'How this conversation is progressing'))}</div></div>${mateHtml}${_safeSection(() => _renderCollaborationTaskOverview(collaboration, runtime), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAgentActivitySection(), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}${_safeSection(() => _renderCollaborationAttentionSection(attentionItems), `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.collaboration.load_failed', 'Could not load collaboration overview'))}</div>`)}</div>`;
   }
 
   function _protocolEventData(event) {
@@ -1343,7 +1273,7 @@ const ConversationInfo = (() => {
   function bind(cid) {
     _cid = cid || null;
     _open = false;
-    _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [], runtime: null, actors: [], collaboration: null, mate: { session: null, collaboration: null, sessions: [], loading: false, error: '' }, wakeRequests: [], kstarRuns: [], patchCandidates: [], protocolEvents: [], protocolError: '', migrationStatus: null, archives: [] };
+    _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [], runtime: null, actors: [], collaboration: null, mate: { session: null, collaboration: null, sessions: [], loading: false, error: '' }, wakeRequests: [], protocolEvents: [], protocolError: '' };
     _protocolFilters.agent = '';
     _protocolFilters.role = '';
     _protocolFilters.result = '';

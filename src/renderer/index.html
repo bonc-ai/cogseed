@@ -1363,6 +1363,25 @@
                 </div>
               </div>
 
+              <div class="settings-group settings-cli-fallback-group">
+                <div class="settings-group-head">
+                  <div class="settings-group-title" data-i18n="settings.cli_fallback.title">Commander CLI fallback</div>
+                  <div class="settings-group-sub" data-i18n="settings.cli_fallback.sub">When no API-key model is configured, Commander routes chat to your signed-in CLI agent instead of failing.</div>
+                </div>
+                <div class="settings-row">
+                  <div class="settings-row-info">
+                    <div data-i18n="settings.cli_fallback.label">Fallback execution agent</div>
+                    <div class="settings-row-desc" id="settings-cli-fallback-state" data-i18n="settings.cli_fallback.auto_hint">Auto-pick the first signed-in CLI (Claude Code / Codex / OpenCode).</div>
+                  </div>
+                  <select id="settings-cli-fallback-select">
+                    <option value="" data-i18n="settings.cli_fallback.auto">Auto (first signed-in CLI)</option>
+                    <option value="claude">Claude Code</option>
+                    <option value="codex">Codex</option>
+                    <option value="opencode">OpenCode</option>
+                  </select>
+                </div>
+              </div>
+
               <div class="settings-group settings-commander-backend-group">
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.commander_backend.title">Commander backend</div>

@@ -6,7 +6,7 @@ let tmp: string; let previous: string | undefined;
 beforeEach(() => { vi.resetModules(); tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-recall-projection-')); previous = process.env.ORKAS_WORKSPACE_ROOT; process.env.ORKAS_WORKSPACE_ROOT = tmp; });
 afterEach(() => { if (previous === undefined) delete process.env.ORKAS_WORKSPACE_ROOT; else process.env.ORKAS_WORKSPACE_ROOT = previous; fs.rmSync(tmp, { recursive: true, force: true }); });
 async function modules() { const [candidates, assets, refs, projection] = await Promise.all([import('../../../../src/main/features/recall/candidate-service'), import('../../../../src/main/features/recall/asset-service'), import('../../../../src/main/features/recall/workspace-refs'), import('../../../../src/main/features/recall/context-projection')]); return { candidates, assets, refs, projection }; }
-async function createAsset() { const { candidates } = await modules(); const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Preserve source evidence in reviews.', suggestedType: 'rule', suggestedScope: 'review,project', sourceRefs: [{ kind: 'execution', id: 'exec-a' }, { kind: 'memory', id: 'mem-a' }] }); return candidates.promoteRecallCandidate('user-a', candidate.id); }
+async function createAsset() { const { candidates } = await modules(); const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Preserve source evidence in reviews.', suggestedType: 'rule', suggestedScope: 'review,project', sourceRefs: [{ kind: 'execution', id: 'exec-a' }, { kind: 'memory', id: 'mem-a' }] }); return candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' }); }
 
 async function createAssetWith(input: { judgment: string; summary: string; scope?: string; sourceId: string }) {
   const { candidates } = await modules();
@@ -17,7 +17,7 @@ async function createAssetWith(input: { judgment: string; summary: string; scope
     suggestedScope: input.scope || 'review',
     sourceRefs: [{ kind: 'execution', id: input.sourceId }],
   });
-  return candidates.promoteRecallCandidate('user-a', candidate.id);
+  return candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
 }
 
 async function createAutomaticAssetWith(input: {
@@ -58,8 +58,8 @@ describe('RecallView and ContextProjection', () => {
     const { refs, assets, projection } = await modules();
     await refs.addWorkspaceAssetReference('user-a', { assetId: asset.id, workspaceId: 'workspace-a', scope: 'review' });
     const otherCandidate = await (await modules()).candidates.saveRecallCandidate('user-a', { judgment: 'Only use archived data with confirmation.', suggestedType: 'rule', suggestedScope: 'archive', sourceRefs: [{ kind: 'memory', id: 'mem-b' }] });
-    const other = await (await modules()).candidates.promoteRecallCandidate('user-a', otherCandidate.id);
-    await assets.pauseAbilityAsset('user-a', other.asset.id, 'not ready');
+    const other = await (await modules()).candidates.promoteRecallCandidate('user-a', otherCandidate.id, { actor: 'user' });
+    await assets.pauseAbilityAsset('user-a', other.asset.id, { actor: 'user', reason: 'not ready' });
 
     const preview = await projection.previewContextProjection('user-a', { taskRunId: 'task-a', workspaceId: 'workspace-a', purpose: 'review', authorization: 'user_confirmed' });
     expect(preview.status).toBe('preview');
@@ -205,7 +205,7 @@ describe('RecallView and ContextProjection', () => {
     await refs.addWorkspaceAssetReference('user-a', { assetId: first.asset.id, workspaceId: 'workspace-a', scope: 'review' });
     await refs.addWorkspaceAssetReference('user-a', { assetId: inactive.asset.id, workspaceId: 'workspace-a', scope: 'review' });
     await refs.addWorkspaceAssetReference('user-a', { assetId: scopeMismatch.asset.id, workspaceId: 'workspace-a', scope: 'security' });
-    await assets.pauseAbilityAsset('user-a', inactive.asset.id, 'not ready');
+    await assets.pauseAbilityAsset('user-a', inactive.asset.id, { actor: 'user', reason: 'not ready' });
     const preview = await projection.previewContextProjection('user-a', { taskRunId: 'task-invalid-add', workspaceId: 'workspace-a', purpose: 'review' });
 
     await expect(projection.reviseContextProjection('user-a', preview.id, { addAssetIds: ['asset-missing'] }))

@@ -1224,6 +1224,20 @@ if (!gotLock) {
     });
     registerDeferred('marketplace:reconcile', () => runMarketplaceInstallReconcile('startup'));
 
+    // Heal cc-switch providers synced before the auto-bind fix: bind the first
+    // declared model of each synced provider to an entry so chat dispatch can
+    // actually use it (pickChatEntry walks entries only). Cheap and idempotent.
+    registerDeferred('auth:ccswitch-bind-entries', async () => {
+      const uid = users.getActiveUserId();
+      if (!uid) return;
+      const { ensureCcSwitchBoundEntries } = await import('./features/custom_providers');
+      const bound = await ensureCcSwitchBoundEntries(uid);
+      if (bound > 0) {
+        const log = (await import('./logger')).createLogger('boot');
+        log.info('cc-switch auto-bound entries on boot', { bound });
+      }
+    });
+
     registerDeferred('boot:maintenance-sweeps', () => runBootMaintenanceSweeps(), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('search:reconcile', (signal) => searchFeature.reconcileActive(signal), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('kb:reconcile', async (signal) => {
@@ -1261,22 +1275,6 @@ if (!gotLock) {
       if (uid) await recoverRecallCaptures(uid);
     }, 'parallel', BOOT_HEAVY_DISK_DELAY_MS, { resourceClass: 'disk', preferIdle: true });
 
-    // p3394 KSTAR boot health check: degraded-schema detection + pending
-    // evidence replay. Runs after the heavy-disk cohort so the KB and
-    // marketplace walks get priority; Engine adapter acquisition here is a
-    // best-effort attempt — any failure is swallowed and the log stays
-    // intact for the next successful boot.
-    registerDeferred('p3394:kstar-health', async () => {
-      const uid = users.getActiveUserId();
-      if (!uid) return;
-      const { runKstarBootRecovery } = await import('./features/p3394/kstar-recovery');
-      const { getKstarAdapter } = await import('./features/p3394/kstar-factory');
-      await runKstarBootRecovery(uid, async () => {
-        const adapter = await getKstarAdapter(uid);
-        if (!adapter?.isAvailable()) return null;
-        return (evidence) => adapter.recordEvidence(evidence as Parameters<typeof adapter.recordEvidence>[0]);
-      });
-    }, 'parallel', BOOT_HEAVY_DISK_DELAY_MS, { resourceClass: 'disk', preferIdle: true });
 
     // Drive the immediate batch + schedule the deferred one.
     void runBootPhases(BOOT_BACKGROUND_DEFER_MS);

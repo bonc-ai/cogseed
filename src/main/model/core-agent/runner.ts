@@ -915,7 +915,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     : [];
 
   // Merge injected tools with extra tools from caller
-  const allTools = [
+  const allTools = params.disableTools ? [] : [
     ...injectedTools,
     ...localTools,
     ...fileTools,

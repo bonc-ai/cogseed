@@ -190,6 +190,16 @@
         ]
       },
       {
+        "from": "resources/guardrail",
+        "to": "guardrail",
+        "filter": [
+          "**/*",
+          "!**/.DS_Store",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      },
+      {
         "from": "resources/mac-locales",
         "to": ".",
         "filter": [

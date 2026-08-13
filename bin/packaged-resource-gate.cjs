@@ -13,6 +13,7 @@ const EXTRA_RESOURCES_CONTRACT = Object.freeze({
   runtime: 'target-runtime-gate',
   builtin: 'builtin-resource-contract',
   officecli: 'officecli-release-gate',
+  guardrail: 'guardrail-scanner-contract',
   '.': 'mac-localized-metadata',
 });
 

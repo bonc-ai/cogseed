@@ -6,20 +6,27 @@ import { recallJsonRecordPath } from './paths';
 import { normalizeCognitionSourceRefs } from './source-service';
 import { appendRecallJsonlRecord, listRecallJsonlRecords, readRecallJsonRecord, updateRecallJsonRecord } from './store';
 import type { RecallJsonRecord } from './types';
-import { normalizeAbilityAssetOntologyRefs, type AbilityAssetOntologyRef } from './ontology-refs';
+import { normalizeAbilityAssetOntologyRefs } from './ontology-refs';
 import type { RecallAbilityAssetRecord } from './candidate-service';
+import { normalizeAbilityAssetScopePolicy, type RecallAbilityAssetScopePolicy } from './scope-policy';
+
+export type AbilityAssetActor = 'user' | 'system';
+export type AbilityAssetRecommendedAction = 'pause' | 'rework';
 
 export interface AbilityAssetVersionRecord extends RecallJsonRecord {
   assetId: string;
   version: string;
   at: string;
-  snapshot: Pick<RecallAbilityAssetRecord, 'title' | 'statement' | 'type' | 'scope' | 'evidenceRefs' | 'status' | 'maturity' | 'version' | 'learningSignal' | 'ontologyRefs'>;
+  reason?: string;
+  actor?: AbilityAssetActor;
+  snapshot: Pick<RecallAbilityAssetRecord, 'title' | 'statement' | 'type' | 'scope' | 'scopePolicy' | 'evidenceRefs' | 'status' | 'maturity' | 'version' | 'learningSignal' | 'ontologyRefs'>;
 }
 
 export interface AbilityAssetAuditRecord extends RecallJsonRecord {
   assetId: string;
-  action: 'created' | 'updated' | 'paused' | 'resumed' | 'revoked';
+  action: 'created' | 'updated' | 'paused' | 'resumed' | 'revoked' | 'pause_recommended' | 'rework_recommended' | 'recommendation_cleared';
   at: string;
+  actor?: AbilityAssetActor;
   note?: string;
 }
 
@@ -27,11 +34,26 @@ export interface UpdateAbilityAssetInput {
   title?: string;
   statement?: string;
   scope?: string;
+  scopePolicy?: RecallAbilityAssetScopePolicy;
   type?: RecallAbilityAssetRecord['type'];
   evidenceRefs?: RecallAbilityAssetRecord['evidenceRefs'];
   ontologyRefs?: RecallAbilityAssetRecord['ontologyRefs'];
+  reason: string;
+  actor: 'user';
+  acknowledgeRecommendation?: boolean;
   id?: never;
   ownerId?: never;
+}
+
+export interface AbilityAssetUserActionInput {
+  actor: 'user';
+  reason: string;
+}
+
+export interface RecommendAbilityAssetActionInput {
+  action: AbilityAssetRecommendedAction;
+  reason: string;
+  actor: AbilityAssetActor;
 }
 
 function assetsDirectory(userId: string): string {
@@ -48,7 +70,11 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   const evidenceRefs = normalizeCognitionSourceRefs(value.evidenceRefs);
   if (!evidenceRefs.length) throw new Error('malformed recall ability asset evidence');
   const ontologyRefs = value.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(value.ontologyRefs);
-  return { ...value, evidenceRefs, ...(ontologyRefs ? { ontologyRefs } : {}) } as RecallAbilityAssetRecord;
+  const scopePolicy = normalizeAbilityAssetScopePolicy(value.scopePolicy);
+  const recommendedAction = value.recommendedAction;
+  if (recommendedAction !== undefined && recommendedAction !== 'pause' && recommendedAction !== 'rework') throw new Error('malformed recall ability asset recommendation');
+  if (recommendedAction !== undefined && (typeof value.recommendationReason !== 'string' || !value.recommendationReason.trim() || typeof value.recommendationAt !== 'string')) throw new Error('malformed recall ability asset recommendation');
+  return { ...value, evidenceRefs, ...(ontologyRefs ? { ontologyRefs } : {}), ...(scopePolicy ? { scopePolicy } : {}) } as RecallAbilityAssetRecord;
 }
 
 function bounded(value: unknown, field: string, max: number): string {
@@ -56,6 +82,13 @@ function bounded(value: unknown, field: string, max: number): string {
   const text = value.replace(/\s+/g, ' ').trim();
   if (!text || text.length > max) throw new Error(`invalid ability asset ${field}`);
   return text;
+}
+
+function requireUserAction(input: unknown): AbilityAssetUserActionInput {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('ability asset action requires a user actor');
+  const record = input as Record<string, unknown>;
+  if (record.actor !== 'user') throw new Error('ability asset action requires a user actor');
+  return { actor: 'user', reason: bounded(record.reason, 'reason', 1_000) };
 }
 
 function nextVersion(version: string): string {
@@ -70,6 +103,7 @@ function snapshot(asset: RecallAbilityAssetRecord): AbilityAssetVersionRecord['s
     statement: asset.statement,
     type: asset.type,
     scope: asset.scope,
+    ...(asset.scopePolicy ? { scopePolicy: asset.scopePolicy } : {}),
     evidenceRefs: asset.evidenceRefs,
     ...(asset.learningSignal ? { learningSignal: asset.learningSignal } : {}),
     ...(asset.ontologyRefs ? { ontologyRefs: asset.ontologyRefs } : {}),
@@ -81,22 +115,21 @@ function snapshot(asset: RecallAbilityAssetRecord): AbilityAssetVersionRecord['s
 
 function asVersion(value: RecallJsonRecord): AbilityAssetVersionRecord {
   const rawSnapshot = value.snapshot;
-  if (
-    typeof value.assetId !== 'string' || typeof value.version !== 'string' || typeof value.at !== 'string' ||
-    !rawSnapshot || typeof rawSnapshot !== 'object' || Array.isArray(rawSnapshot)
-  ) throw new Error('malformed recall ability asset version');
+  if (typeof value.assetId !== 'string' || typeof value.version !== 'string' || typeof value.at !== 'string' || !rawSnapshot || typeof rawSnapshot !== 'object' || Array.isArray(rawSnapshot)) throw new Error('malformed recall ability asset version');
   const versionSnapshot = rawSnapshot as Record<string, unknown>;
   if (!Array.isArray(versionSnapshot.evidenceRefs)) throw new Error('malformed recall ability asset version evidence');
+  const scopePolicy = normalizeAbilityAssetScopePolicy(versionSnapshot.scopePolicy);
   return {
     ...value,
     snapshot: {
       ...versionSnapshot,
+      ...(scopePolicy ? { scopePolicy } : {}),
       evidenceRefs: normalizeCognitionSourceRefs(versionSnapshot.evidenceRefs),
     },
   } as AbilityAssetVersionRecord;
 }
 
-async function appendVersion(userId: string, asset: RecallAbilityAssetRecord): Promise<void> {
+async function appendVersion(userId: string, asset: RecallAbilityAssetRecord, metadata: { reason?: string; actor?: AbilityAssetActor } = {}): Promise<void> {
   const at = new Date().toISOString();
   await appendRecallJsonlRecord(userId, 'ability-asset-versions', asset.id, {
     schemaVersion: 1,
@@ -105,11 +138,13 @@ async function appendVersion(userId: string, asset: RecallAbilityAssetRecord): P
     assetId: asset.id,
     version: asset.version,
     at,
+    ...(metadata.reason ? { reason: metadata.reason } : {}),
+    ...(metadata.actor ? { actor: metadata.actor } : {}),
     snapshot: snapshot(asset),
   } satisfies AbilityAssetVersionRecord);
 }
 
-async function appendAudit(userId: string, assetId: string, action: AbilityAssetAuditRecord['action'], note?: string): Promise<void> {
+async function appendAudit(userId: string, assetId: string, action: AbilityAssetAuditRecord['action'], metadata: { note?: string; actor?: AbilityAssetActor } = {}): Promise<void> {
   const at = new Date().toISOString();
   await appendRecallJsonlRecord(userId, 'ability-asset-audit', assetId, {
     schemaVersion: 1,
@@ -118,15 +153,16 @@ async function appendAudit(userId: string, assetId: string, action: AbilityAsset
     assetId,
     action,
     at,
-    ...(note ? { note } : {}),
+    ...(metadata.actor ? { actor: metadata.actor } : {}),
+    ...(metadata.note ? { note: metadata.note } : {}),
   } satisfies AbilityAssetAuditRecord);
 }
 
-export async function initializeAbilityAsset(userId: string, asset: RecallAbilityAssetRecord): Promise<void> {
+export async function initializeAbilityAsset(userId: string, asset: RecallAbilityAssetRecord, metadata: { reason?: string; actor?: AbilityAssetActor } = {}): Promise<void> {
   const current = await listAbilityAssetVersions(userId, asset.id);
-  if (!current.length) await appendVersion(userId, asset);
+  if (!current.length) await appendVersion(userId, asset, metadata);
   const audit = await listAbilityAssetAudit(userId, asset.id);
-  if (!audit.length) await appendAudit(userId, asset.id, 'created');
+  if (!audit.length) await appendAudit(userId, asset.id, 'created', metadata.reason || metadata.actor ? { note: metadata.reason, actor: metadata.actor } : {});
 }
 
 export async function readAbilityAsset(userId: string, assetId: string): Promise<RecallAbilityAssetRecord> {
@@ -142,65 +178,100 @@ export async function listAbilityAssets(userId: string): Promise<RecallAbilityAs
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw error;
   }
-  const records = await Promise.all(names.filter((name) => name.endsWith('.json') && safeId(name.slice(0, -5)))
-    .map((name) => readRecallJsonRecord(userId, 'ability-assets', name.slice(0, -5))));
-  return records.filter((record): record is RecallJsonRecord => Boolean(record)).map(asAsset)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const records = await Promise.all(names.filter((name) => name.endsWith('.json') && safeId(name.slice(0, -5))).map((name) => readRecallJsonRecord(userId, 'ability-assets', name.slice(0, -5))));
+  return records.filter((record): record is RecallJsonRecord => Boolean(record)).map(asAsset).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 export async function updateAbilityAsset(userId: string, assetId: string, input: UpdateAbilityAssetInput): Promise<RecallAbilityAssetRecord> {
   if ('id' in input || 'ownerId' in input) throw new Error('ability asset identity is immutable');
-  const evidenceRefs = input.evidenceRefs === undefined
-    ? undefined
-    : normalizeCognitionSourceRefs(input.evidenceRefs);
+  const action = requireUserAction(input);
+  const evidenceRefs = input.evidenceRefs === undefined ? undefined : normalizeCognitionSourceRefs(input.evidenceRefs);
   if (evidenceRefs && !evidenceRefs.length) throw new Error('ability asset evidence is required');
-  const ontologyRefs = input.ontologyRefs === undefined
-    ? undefined
-    : normalizeAbilityAssetOntologyRefs(input.ontologyRefs);
+  const ontologyRefs = input.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(input.ontologyRefs);
+  const scopePolicy = input.scopePolicy === undefined ? undefined : normalizeAbilityAssetScopePolicy(input.scopePolicy);
+  let clearedRecommendation = false;
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
+    if (current.status === 'revoked') throw new Error('revoked ability asset cannot be changed');
+    clearedRecommendation = Boolean(current.recommendedAction && input.acknowledgeRecommendation);
     const next: RecallAbilityAssetRecord = {
       ...current,
       ...(input.title !== undefined ? { title: bounded(input.title, 'title', 120) } : {}),
       ...(input.statement !== undefined ? { statement: bounded(input.statement, 'statement', 4_000) } : {}),
       ...(input.scope !== undefined ? { scope: bounded(input.scope, 'scope', 500) } : {}),
+      ...(scopePolicy !== undefined ? { scopePolicy } : {}),
       ...(input.type !== undefined ? { type: input.type } : {}),
       ...(evidenceRefs !== undefined ? { evidenceRefs } : {}),
       ...(ontologyRefs !== undefined ? { ontologyRefs } : {}),
       version: nextVersion(current.version),
       updatedAt: new Date().toISOString(),
     };
+    if (clearedRecommendation) {
+      delete next.recommendedAction;
+      delete next.recommendationReason;
+      delete next.recommendationAt;
+    }
     return next;
   });
   const asset = asAsset(updated);
-  await appendVersion(userId, asset);
-  await appendAudit(userId, asset.id, 'updated');
+  await appendVersion(userId, asset, { reason: action.reason, actor: action.actor });
+  await appendAudit(userId, asset.id, 'updated', { note: action.reason, actor: action.actor });
+  if (clearedRecommendation) await appendAudit(userId, asset.id, 'recommendation_cleared', { note: action.reason, actor: action.actor });
   return asset;
 }
 
-async function setStatus(userId: string, assetId: string, status: RecallAbilityAssetRecord['status'], note?: string): Promise<RecallAbilityAssetRecord> {
-  const normalizedNote = note === undefined ? undefined : bounded(note, 'audit note', 1_000);
+async function setStatus(userId: string, assetId: string, status: RecallAbilityAssetRecord['status'], input: AbilityAssetUserActionInput): Promise<RecallAbilityAssetRecord> {
+  const action = requireUserAction(input);
+  let clearedRecommendation = false;
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
-    return { ...current, status, updatedAt: new Date().toISOString() };
+    if (current.status === 'revoked' && status !== 'revoked') throw new Error('revoked ability asset cannot be changed');
+    clearedRecommendation = Boolean(current.recommendedAction && (status === 'paused' || status === 'revoked'));
+    const next: RecallAbilityAssetRecord = { ...current, status, updatedAt: new Date().toISOString() };
+    if (clearedRecommendation) {
+      delete next.recommendedAction;
+      delete next.recommendationReason;
+      delete next.recommendationAt;
+    }
+    return next;
   });
   const asset = asAsset(updated);
-  await appendAudit(userId, asset.id, status === 'paused' ? 'paused' : status === 'active' ? 'resumed' : 'revoked', normalizedNote);
+  await appendAudit(userId, asset.id, status === 'paused' ? 'paused' : status === 'active' ? 'resumed' : 'revoked', { note: action.reason, actor: action.actor });
+  if (clearedRecommendation) await appendAudit(userId, asset.id, 'recommendation_cleared', { note: action.reason, actor: action.actor });
   return asset;
 }
 
-export function pauseAbilityAsset(userId: string, assetId: string, note?: string): Promise<RecallAbilityAssetRecord> {
-  return setStatus(userId, assetId, 'paused', note);
+export function pauseAbilityAsset(userId: string, assetId: string, input: AbilityAssetUserActionInput): Promise<RecallAbilityAssetRecord> {
+  return setStatus(userId, assetId, 'paused', input);
 }
 
-export function revokeAbilityAsset(userId: string, assetId: string, note?: string): Promise<RecallAbilityAssetRecord> {
-  return setStatus(userId, assetId, 'revoked', note);
+export function revokeAbilityAsset(userId: string, assetId: string, input: AbilityAssetUserActionInput): Promise<RecallAbilityAssetRecord> {
+  return setStatus(userId, assetId, 'revoked', input);
 }
 
-export function resumeAbilityAsset(userId: string, assetId: string, note?: string): Promise<RecallAbilityAssetRecord> {
-  return setStatus(userId, assetId, 'active', note);
+export function resumeAbilityAsset(userId: string, assetId: string, input: AbilityAssetUserActionInput): Promise<RecallAbilityAssetRecord> {
+  return setStatus(userId, assetId, 'active', input);
+}
+
+export async function recommendAbilityAssetAction(userId: string, assetId: string, input: RecommendAbilityAssetActionInput): Promise<RecallAbilityAssetRecord> {
+  if (input.action !== 'pause' && input.action !== 'rework') throw new Error('invalid ability asset recommendation');
+  const reason = bounded(input.reason, 'recommendation reason', 1_000);
+  const actor = input.actor === 'system' ? 'system' : input.actor === 'user' ? 'user' : undefined;
+  if (!actor) throw new Error('invalid ability asset recommendation actor');
+  let appended = false;
+  const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
+    if (!raw) throw new Error('recall ability asset not found');
+    const current = asAsset(raw);
+    if (current.status === 'revoked') throw new Error('revoked ability asset cannot be changed');
+    if (current.recommendedAction === input.action && current.recommendationReason === reason) return current;
+    appended = true;
+    return { ...current, recommendedAction: input.action, recommendationReason: reason, recommendationAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  });
+  const asset = asAsset(updated);
+  if (appended) await appendAudit(userId, asset.id, input.action === 'pause' ? 'pause_recommended' : 'rework_recommended', { note: reason, actor });
+  return asset;
 }
 
 export async function listAbilityAssetVersions(userId: string, assetId: string): Promise<AbilityAssetVersionRecord[]> {
@@ -211,11 +282,7 @@ export async function listAbilityAssetAudit(userId: string, assetId: string): Pr
   return (await listRecallJsonlRecords(userId, 'ability-asset-audit', assetId, 0)) as AbilityAssetAuditRecord[];
 }
 
-export async function setAbilityAssetMaturity(
-  userId: string,
-  assetId: string,
-  maturity: RecallAbilityAssetRecord['maturity'],
-): Promise<RecallAbilityAssetRecord> {
+export async function setAbilityAssetMaturity(userId: string, assetId: string, maturity: RecallAbilityAssetRecord['maturity']): Promise<RecallAbilityAssetRecord> {
   const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);

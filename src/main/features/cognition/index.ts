@@ -1219,6 +1219,7 @@ export async function listCognitionStoreAssets(userId: string): Promise<Cognitio
 
 // ── develop 侧能力（candidates/receipts/dashboard/skill-summary 等）─────────
 export * from './types';
+export * from './gate';
 export * from './candidates-adapter';
 export * from './receipts-adapter';
 export * from './assets-adapter';

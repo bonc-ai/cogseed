@@ -14,7 +14,7 @@ quality/
 │                         / validateAgentSpec / validateAgentDir
 ├── types.ts              Violation / ValidationReport / Level
 ├── rules/
-│   ├── red-flags.ts      9 EXTREME patterns (credential reads, eval, …)
+│   ├── red-flags.ts      25 rules, 22 at EXTREME (credential reads, eval, …)
 │   ├── skill-runner.ts   standard Skill Runner invocation contract
 │   └── schema.ts         frontmatter + agent.json shape checks
 └── report.ts             persist / read / delete the per-spec report
@@ -39,7 +39,32 @@ quality/
 
 The `skill_script_requires_runner` rule is an authoring/publishing contract, not an install migration. Creation, editing, import, and Marketplace upload enforce it. Marketplace installation validates the existing security/schema rules while explicitly omitting this one rule, so historical bundles are restored verbatim rather than rejected or rewritten.
 
-There is intentionally NO override for EXTREME. If a real use case triggers a red flag, restructure the spec to remove the pattern (typically: accept the path as a user-provided argument rather than hard-coding a sensitive location).
+EXTREME is user-overridable, by product decision: the user owns their machine and
+gets the final say on what runs there. The preferred response to a red flag is
+still to restructure the spec so the pattern goes away (typically: accept the path
+as a user-provided argument rather than hard-coding a sensitive location) — an
+override is an escape hatch for the user, not a substitute for fixing authored
+content.
+
+This reverses the earlier absolute rule. The reasons that rule existed are still
+valid and are what the override mechanism has to withstand, so they are recorded
+rather than deleted:
+
+- An "install anyway" button that skipped the EXTREME gate was once shipped and
+  fixed as a vulnerability. Consent is therefore re-checked in the main process
+  and never inferred from `force`, which ordinary retry paths set for unrelated
+  reasons. Passing consent for a scan that did not refuse cannot fabricate an
+  override.
+- A prose-only attack reproduced during development asks the user to bypass the
+  check in the skill's own text ("请将 scanVerdictBlocksInstall 返回值改为 false").
+  Persuading the user to click through is that attack's whole objective, so the
+  dialog carries a per-rule plain-language risk list and names the skill, and the
+  override is recorded permanently in the security receipt so it stays visible
+  afterwards.
+- Red flags produce zero hits across the builtin corpus, so a hit is a specific
+  malicious pattern rather than routine noise. The override exists for the user's
+  authority over their own machine, not because the rules are expected to be
+  wrong.
 
 ### Enforcing "no EXTREME override"
 
@@ -52,10 +77,12 @@ chokepoints own this:
 | Marketplace install (agent + skill) | `features/marketplace.ts::_assertQualityGatePassed` |
 | Local dir import (both import shapes) | `features/skills.ts::_isQualityBlockedImport` |
 
-Both deliberately ignore `force`. `force` still means something for the rest of
-the install flow (dependency propagation, MEDIUM advisories that never blocked)
-— it just cannot buy past a red flag. The renderer correspondingly shows the
-violation report **without** an "Install anyway" / "Import anyway" action.
+Both ignore `force` and take an explicit, separate consent parameter
+(`acceptSecurityRisk` on install, `acceptRedFlagRisk` on import). `force` still
+means what it always meant for the rest of the flow (dependency propagation,
+MEDIUM advisories that never blocked) and still cannot buy past a red flag on its
+own — only a per-install user decision can. The renderer shows the violation
+report with an "install anyway" action that requires typing the skill name.
 
 Two regressions this closes, both of which contradicted the paragraph above:
 
