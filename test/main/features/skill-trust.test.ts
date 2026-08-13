@@ -589,3 +589,105 @@ describe('reverify › convention findings are not risk', () => {
     expect(res.decision).toBe('risk');
   });
 });
+
+describe('skill_trust › nseap declaration check (advisory only)', () => {
+  /**
+   * A security manifest whose declaration contradicts the tree.
+   *
+   * `network.enabled: false` while a bundled script posts to the network is the
+   * mismatch this check exists to surface — and the assertion below is that it
+   * still does NOT move `decision`.
+   */
+  const MANIFEST_MISMATCH = [
+    'manifest_version: "1.1.1"',
+    'security_ontology:',
+    '  id: ecs.security.skill',
+    '  version: "1.1.1"',
+    'skill:',
+    '  id: demo',
+    '  name: demo',
+    '  version: "1.0.0"',
+    '  description: demo',
+    '  environment: development',
+    'ownership:',
+    '  human_owner: tester',
+    '  organization: test',
+    '  role: owner',
+    'provenance:',
+    '  source_type: internal',
+    '  source_uri: local',
+    '  author: tester',
+    '  checksum: DEFERRED_UNTIL_FREEZE',
+    'network:',
+    '  enabled: false',
+    '  allowlist: []',
+    '  deny_private_network: true',
+    '  allow_dynamic_download: false',
+    '',
+  ].join('\n');
+
+  it('records `absent` without spawning the engine when no manifest exists', async () => {
+    mkSkill('no-manifest', CLEAN);
+
+    const deep = await reverifySkillDeep(UID, 'no-manifest');
+
+    // `absent` must be distinct from `pass`: claiming a clean declaration check
+    // for a file that does not exist would be a false statement, and every
+    // skill shipped today is in this state.
+    expect(deep.receipt?.nseapDeclaration?.status).toBe('absent');
+    expect(deep.receipt?.nseapDeclaration?.findings).toBeUndefined();
+  });
+
+  it('does not change the verdict for an otherwise-clean skill', async () => {
+    mkSkill('declared', { ...CLEAN, 'references/security-manifest.yaml': MANIFEST_MISMATCH });
+
+    const deep = await reverifySkillDeep(UID, 'declared');
+
+    // The whole point of "advisory only": whatever the engine concluded, a clean
+    // tree stays `pass`. If this ever fails, an unfinished declaration has been
+    // promoted into a security badge.
+    expect(deep.decision).toBe('pass');
+    // And the evidence is still recorded rather than dropped.
+    expect(deep.receipt?.nseapDeclaration).toBeDefined();
+  });
+
+  it('records a status that is never the receipt decision vocabulary', async () => {
+    mkSkill('vocab', { ...CLEAN, 'references/security-manifest.yaml': MANIFEST_MISMATCH });
+
+    const deep = await reverifySkillDeep(UID, 'vocab');
+    const status = deep.receipt?.nseapDeclaration?.status;
+
+    // A declaration defect must not be labelled `blocked` inside a security
+    // record — that wording reads as a threat verdict.
+    expect(status).not.toBe('blocked');
+    expect(status).not.toBe('risk');
+    expect([
+      'pass', 'pass_with_warnings', 'needs_input', 'mismatch', 'absent', 'unavailable',
+    ]).toContain(status);
+  });
+
+  it('survives a malformed manifest without failing re-verification', async () => {
+    mkSkill('broken-manifest', {
+      ...CLEAN,
+      'references/security-manifest.yaml': 'this: [is: not: valid: yaml\n\t\tbroken\n',
+    });
+
+    // Property 4: an advisory extra must never be able to break the decision
+    // that governs whether a skill may load.
+    const deep = await reverifySkillDeep(UID, 'broken-manifest');
+
+    expect(deep.decision).toBe('pass');
+    expect(deep.receipt?.nseapDeclaration?.status).toBeTruthy();
+  });
+
+  it('round-trips the declaration record through the receipt file', async () => {
+    mkSkill('persist', { ...CLEAN, 'references/security-manifest.yaml': MANIFEST_MISMATCH });
+
+    await reverifySkillDeep(UID, 'persist');
+    // Read back from disk, not from the return value: a field that is written but
+    // not parsed on read would silently vanish for every later consumer.
+    const reread = readReceipt(UID, 'persist');
+
+    expect(reread?.nseapDeclaration?.status).toBeTruthy();
+  });
+});
