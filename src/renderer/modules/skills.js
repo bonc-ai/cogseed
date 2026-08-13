@@ -1616,6 +1616,46 @@ function _skillSecurityPanelText(s) {
     L.push(`  ${t('skills.secpanel_instruction_note')}`);
   }
 
+  // NSEAP declaration check: what the skill's security manifest claims versus
+  // what its tree contains. Last in the panel, and deliberately quieter than the
+  // blocks above: those report what the skill might DO, this reports whether its
+  // paperwork is complete. A mismatch is an authoring defect, so it must not be
+  // dressed up in the same language as a finding.
+  //
+  // `absent` and `pass` both render nothing, for opposite reasons. No shipped
+  // skill carries a security manifest today, so printing `absent` would add a
+  // line to every skill in the library that reads as a defect while describing
+  // one that does not exist. `pass` is silent because a panel that says "nothing
+  // wrong" for each check that passed buries the one line that matters.
+  const nseap = sec.nseapDeclaration;
+  if (nseap && nseap.status !== 'absent' && nseap.status !== 'pass') {
+    L.push('');
+    L.push(t('skills.secpanel_nseap'));
+    if (nseap.status === 'unavailable') {
+      // The engine could not run. Distinct from "checked and found nothing":
+      // reporting infrastructure failure as a clean result is the same error as
+      // rendering "not checked" as safe.
+      L.push(`  ${t('skills.secpanel_nseap_unavailable')}`);
+    } else if (nseap.status === 'mismatch') {
+      L.push(`  ${t('skills.secpanel_nseap_mismatch')}`);
+    } else if (nseap.status === 'needs_input') {
+      L.push(`  ${t('skills.secpanel_nseap_needs_input')}`);
+    } else {
+      L.push(`  ${t('skills.secpanel_nseap_warnings')}`);
+    }
+    // Rule id plus message, capped. The id is what makes a gap actionable — the
+    // author can look it up — while the message alone often is not.
+    for (const f of (nseap.findings || []).slice(0, 3)) {
+      const msg = String(f.message || '').replace(/\s+/g, ' ').slice(0, 160);
+      L.push(`  · ${f.ruleId}${msg ? ` — ${msg}` : ''}`);
+    }
+    if ((nseap.findings || []).length > 3) {
+      L.push(`  ${t('skills.secpanel_nseap_more')
+        .replace('{n}', String(nseap.findings.length - 3))}`);
+    }
+    L.push(`  ${t('skills.secpanel_nseap_note')}`);
+  }
+
   if (!sec.status || sec.status === 'unchecked') {
     L.push('');
     L.push(t('skills.secpanel_no_record'));

@@ -145,11 +145,22 @@ export interface SecurityReceipt {
   /**
    * NSEAP security-declaration check, from the security-core engine.
    *
-   * ADVISORY ONLY — this never changes `decision`. The engine compares what a
-   * skill's `references/security-manifest.yaml` *declares* against what the tree
-   * actually contains, which is a different question from "is this dangerous":
-   * a declaration mismatch is usually an authoring gap, and a skill can be
-   * perfectly safe with no declaration at all.
+   * ADVISORY ONLY — this never changes `decision`.
+   *
+   * What the engine actually checks is narrower than its name suggests, and the
+   * difference matters: it validates the *declaration's internal consistency* —
+   * whether the manifest's own fields contradict each other, and whether required
+   * entries are present and non-placeholder. It does NOT read the skill's code.
+   *
+   * Measured, so it is not mistaken for a stronger guarantee later: a manifest
+   * declaring `network.enabled: false` alongside a bundled script that calls
+   * `requests.post` returns PASS. `SEC-NETWORK-003` — the rule that sounds like it
+   * would catch this — tests `actions.allowed[].external_network`, another
+   * declared field. Code behaviour is the deep scanner's job and stays that way;
+   * a `pass` here means "the paperwork is coherent", never "the code was checked".
+   *
+   * So a mismatch is an authoring gap, and a skill can be perfectly safe with no
+   * declaration at all — which is why this never touches the verdict.
    *
    * `absent` is the common case and is deliberately distinct from `pass`: no
    * shipped skill carries a security manifest today, and reporting "checked and
