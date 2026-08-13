@@ -394,6 +394,10 @@ export async function getSpace(uid: string, spaceId: string): Promise<Space | nu
   return _readSpace(uid, spaceId);
 }
 
+export async function spaceExists(uid: string, spaceId: string): Promise<boolean> {
+  return (await getSpace(uid, spaceId)) !== null;
+}
+
 export async function createSpace(
   uid: string,
   opts: {

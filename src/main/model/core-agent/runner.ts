@@ -212,6 +212,9 @@ export interface BuildRunnerParams {
    *  resolution picks up the project-scoped selection. Resolved once at
    *  the top of group_chat::runTurn from `conv.project_id`. */
   projectId?: string;
+  /** Space id of the conversation, when it belongs to one. Threaded to
+   *  kb-tools so Library retrieval resolves the space-scoped index. */
+  spaceId?: string;
   /** Agent id bound to the conversation. Empty/undefined = default scope. */
   agentId?: string;
   /** Human-readable actor name used in user-facing local permission prompts. */
@@ -725,7 +728,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // (matches file-tools).
   const kbTools = uid && !params.disableTools ? createKbTools({
     userId: uid,
-    ...(params.projectId ? { projectId: params.projectId } : {}),
+    ...(params.spaceId ? { spaceId: params.spaceId } : {}),
   }) : [];
 
   // Conversation-history tools (chat_search + chat_read). Commander-only:

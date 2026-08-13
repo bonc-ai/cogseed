@@ -3935,6 +3935,7 @@ async function runActorTurnBody(
         },
         ...(item.resumeActiveTurn ? { resumeActiveTurn: true } : {}),
         ...(turnProjectId ? { projectId: turnProjectId } : {}),
+        ...(turnSpaceId ? { spaceId: turnSpaceId } : {}),
         onFileWritten,
         onOutputsPublished,
         hasProducedPath,

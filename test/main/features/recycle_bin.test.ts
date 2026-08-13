@@ -428,7 +428,7 @@ describe('global recycle bin', () => {
 
     expect(batch?.display_items).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        category: 'project_file',
+        category: 'space_file',
         title: 'specs/overview.md',
         detail: 'Knowledge Hub',
         path: relProjectFile,

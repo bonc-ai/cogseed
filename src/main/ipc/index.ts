@@ -23,8 +23,8 @@ import * as modelClient from '../model/client';
 import * as projects from '../features/projects';
 import * as spaces from '../features/spaces';
 import * as spacesArtifacts from '../features/spaces_artifacts';
-import * as projectFiles from '../features/project_files';
-import * as projectLibraryIndexer from '../features/project_library_indexer';
+import * as spaceFiles from '../features/project_files';
+import * as spaceLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
 import * as companionRepro from '../features/companion_repro';
 import * as p3394 from '../features/p3394';
@@ -304,7 +304,7 @@ async function _importLocalFileEntries(payload: any, ctx: IpcContext): Promise<{
     for (const entry of entries) {
       const name = path.basename(entry.name);
       const targetName = _targetInDir(payload?.targetDir, name);
-      const result = await projectFiles.importProjectFileFromPath(
+      const result = await spaceFiles.importSpaceFileFromPath(
         ctx.userId,
         projectId,
         targetName,
@@ -658,17 +658,24 @@ function _libraryTextTargetName(payload: any): string {
   return raw || 'archive.md';
 }
 
-async function _resolveLibraryTargetProjectId(userId: string, payload: any): Promise<string | undefined> {
+async function _resolveLibraryTargetSpaceId(userId: string, payload: any): Promise<string | undefined> {
   const requestedScope = payload?.targetScope && typeof payload.targetScope === 'object'
     ? payload.targetScope
     : null;
-  const cidProjectId = await _resolveWorkspaceScope(userId, payload);
-  let projectId: string | undefined = cidProjectId;
-  if (requestedScope?.type === 'global') projectId = undefined;
-  if (requestedScope?.type === 'project' && typeof requestedScope.projectId === 'string' && safeId(requestedScope.projectId)) {
-    projectId = requestedScope.projectId;
+  let spaceId: string | undefined;
+  if (payload && typeof payload.cid === 'string' && payload.cid && safeId(payload.cid)) {
+    const { getConversation } = await import('../features/chats');
+    const conv = await getConversation(userId, payload.cid);
+    const sid = (conv as any)?.space_id;
+    spaceId = typeof sid === 'string' && sid ? sid : undefined;
+  } else if (payload && typeof payload.spaceId === 'string' && payload.spaceId && safeId(payload.spaceId)) {
+    spaceId = payload.spaceId;
   }
-  return projectId;
+  if (requestedScope?.type === 'global') spaceId = undefined;
+  if (requestedScope?.type === 'space' && typeof requestedScope.spaceId === 'string' && safeId(requestedScope.spaceId)) {
+    spaceId = requestedScope.spaceId;
+  }
+  return spaceId;
 }
 
 async function _importProducedToLibrary(payload: any, ctx: IpcContext): Promise<any> {
@@ -683,13 +690,13 @@ async function _importProducedToLibrary(payload: any, ctx: IpcContext): Promise<
   catch { return { ok: false, error: 'not_found' }; }
   if (!st.isFile()) return { ok: false, error: 'not_supported' };
 
-  const projectId = await _resolveLibraryTargetProjectId(ctx.userId, payload);
+  const spaceId = await _resolveLibraryTargetSpaceId(ctx.userId, payload);
   const buf = fs.readFileSync(norm);
   const targetName = _libraryImportTargetName(payload, norm);
-  if (projectId) {
-    const result = await projectFiles.uploadProjectFile(ctx.userId, projectId, targetName, buf);
+  if (spaceId) {
+    const result = await spaceFiles.uploadSpaceFile(ctx.userId, spaceId, targetName, buf);
     if (!result.ok) return result;
-    return { ok: true, scope: 'project', projectId, info: result.info };
+    return { ok: true, scope: 'space', spaceId, info: result.info };
   }
 
   const relPath = typeof payload?.targetPath === 'string' && payload.targetPath.trim()
@@ -703,11 +710,11 @@ async function _importProducedToLibrary(payload: any, ctx: IpcContext): Promise<
 async function _writeTextToLibrary(payload: any, ctx: IpcContext): Promise<any> {
   const content = typeof payload?.content === 'string' ? payload.content : '';
   const targetName = _libraryTextTargetName(payload);
-  const projectId = await _resolveLibraryTargetProjectId(ctx.userId, payload);
-  if (projectId) {
-    const result = await projectFiles.uploadProjectFile(ctx.userId, projectId, targetName, Buffer.from(content, 'utf8'));
+  const spaceId = await _resolveLibraryTargetSpaceId(ctx.userId, payload);
+  if (spaceId) {
+    const result = await spaceFiles.uploadSpaceFile(ctx.userId, spaceId, targetName, Buffer.from(content, 'utf8'));
     if (!result.ok) return result;
-    return { ok: true, scope: 'project', projectId, info: result.info };
+    return { ok: true, scope: 'space', spaceId, info: result.info };
   }
 
   const result = contexts.writeContextFile(targetName, content);
@@ -777,7 +784,7 @@ async function _afterRecycleRestore(ctx: IpcContext, paths: string[]): Promise<v
     }
     const projectFile = /^cloud\/projects\/([^/]+)\/(?:contexts|files)\/(.+)$/.exec(rel);
     if (projectFile && safeId(projectFile[1]) && projectFile[2]) {
-      projectLibraryIndexer.enqueue(ctx.userId, projectFile[1], projectFile[2], 'upsert');
+      spaceLibraryIndexer.enqueue(ctx.userId, projectFile[1], projectFile[2], 'upsert');
     }
   }
   if (change.domains.includes('agents')) {
@@ -1279,44 +1286,44 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true };
   },
 
-  'projects.files.list': async ({ projectId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
-    return { files: await projectFiles.listProjectFiles(ctx.userId, projectId) };
+  'spaces.files.list': async ({ spaceId }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
+    return { files: await spaceFiles.listSpaceFiles(ctx.userId, spaceId) };
   },
 
-  'projects.files.tree': async ({ projectId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
-    return { tree: await projectFiles.listProjectFileTree(ctx.userId, projectId) };
+  'spaces.files.tree': async ({ spaceId }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
+    return { tree: await spaceFiles.listSpaceFileTree(ctx.userId, spaceId) };
   },
 
-  'projects.files.mkdir': async ({ projectId, path: relPath }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.mkdir': async ({ spaceId, path: relPath }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof relPath !== 'string' || !relPath) throw new Error('invalid path');
-    return projectFiles.createProjectDir(ctx.userId, projectId, relPath);
+    return spaceFiles.createSpaceDir(ctx.userId, spaceId, relPath);
   },
 
-  'projects.files.upload': async ({ projectId, name, data }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.upload': async ({ spaceId, name, data }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof data !== 'string') throw new Error('missing data');
     if (data.length > 12 * 1024 * 1024) {
       return { ok: false, error: 'large uploads require path-based import', code: 'E_IMPORT_PATH_REQUIRED' };
     }
     const buf = Buffer.from(data, 'base64');
-    return projectFiles.uploadProjectFile(ctx.userId, projectId, name || '', buf);
+    return spaceFiles.uploadSpaceFile(ctx.userId, spaceId, name || '', buf);
   },
 
-  'projects.files.pickAndUpload': async ({ projectId, targetDir } = {}, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
+  'spaces.files.pickAndUpload': async ({ spaceId, targetDir } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
     const picked = await _pickLocalFiles('Choose files', PROJECT_PICK_EXTENSIONS, true);
     const results = [];
     for (const filePath of picked) {
       const name = path.basename(filePath);
       try {
         const targetName = _targetInDir(targetDir, name);
-        const res = await projectFiles.importProjectFileFromPath(ctx.userId, projectId, targetName, filePath);
+        const res = await spaceFiles.importSpaceFileFromPath(ctx.userId, spaceId, targetName, filePath);
         results.push({ name, targetName, ...res });
       } catch (err) {
         results.push({ ok: false, name, error: (err as Error)?.message || String(err) });
@@ -1325,73 +1332,73 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, files: results };
   },
 
-  'projects.files.createText': async ({ projectId, name }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.createText': async ({ spaceId, name }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
-    return projectFiles.createProjectTextFile(ctx.userId, projectId, name);
+    return spaceFiles.createSpaceTextFile(ctx.userId, spaceId, name);
   },
 
-  'projects.files.readText': async ({ projectId, name }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.readText': async ({ spaceId, name }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
-    return projectFiles.readProjectTextFile(ctx.userId, projectId, name);
+    return spaceFiles.readSpaceTextFile(ctx.userId, spaceId, name);
   },
 
-  'projects.files.updateText': async ({ projectId, name, content }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.updateText': async ({ spaceId, name, content }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
     if (typeof content !== 'string') throw new Error('missing content');
-    return projectFiles.updateProjectTextFile(ctx.userId, projectId, name, content);
+    return spaceFiles.updateSpaceTextFile(ctx.userId, spaceId, name, content);
   },
 
-  'projects.files.rename': async ({ projectId, oldName, name }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.rename': async ({ spaceId, oldName, name }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof oldName !== 'string' || !oldName) throw new Error('invalid oldName');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
-    return projectFiles.renameProjectFile(ctx.userId, projectId, oldName, name);
+    return spaceFiles.renameSpaceFile(ctx.userId, spaceId, oldName, name);
   },
 
-  'projects.files.delete': async ({ projectId, name }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.delete': async ({ spaceId, name }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
     await recycleBin.createAppRecycleBatchForCloudEntry(
       ctx.userId,
-      `cloud/projects/${projectId}/contexts/${name}`,
-      'project_file',
+      `cloud/spaces/${spaceId}/contexts/${name}`,
+      'space_file',
     );
-    return projectFiles.deleteProjectEntry(ctx.userId, projectId, name);
+    return spaceFiles.deleteSpaceEntry(ctx.userId, spaceId, name);
   },
 
   'library.transfer': async (payload, ctx) => {
     return libraryTransfer.transferLibraryEntries(ctx.userId, payload);
   },
 
-  'projects.files.absPath': async ({ projectId, name }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.absPath': async ({ spaceId, name }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
-    const r = await projectFiles.resolveProjectFileAbsPath(ctx.userId, projectId, name);
+    const r = await spaceFiles.resolveSpaceFileAbsPath(ctx.userId, spaceId, name);
     if (!r.ok) return { ok: false, error: (r as { error?: string }).error || 'failed' };
     return { ok: true, path: r.absPath, kind: r.kind };
   },
 
-  'projects.files.image': async ({ projectId, name }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.image': async ({ spaceId, name }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
-    return projectFiles.readProjectImage(ctx.userId, projectId, name);
+    return spaceFiles.readSpaceImage(ctx.userId, spaceId, name);
   },
 
-  'projects.files.docxHtml': async ({ projectId, name }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.docxHtml': async ({ spaceId, name }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
-    return projectFiles.readProjectDocxHtml(ctx.userId, projectId, name);
+    return spaceFiles.readSpaceDocxHtml(ctx.userId, spaceId, name);
   },
 
-  'projects.files.status': async ({ projectId, skipReconcile }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
-    const reconcile = skipReconcile ? null : await projectLibraryIndexer.reconcile(ctx.userId, projectId);
-    const summary = projectLibraryIndexer.statusSummary(ctx.userId, projectId);
-    const files = projectLibraryIndexer.listFiles(ctx.userId, projectId).map((r) => ({
+  'spaces.files.status': async ({ spaceId, skipReconcile }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
+    const reconcile = skipReconcile ? null : await spaceLibraryIndexer.reconcile(ctx.userId, spaceId);
+    const summary = spaceLibraryIndexer.statusSummary(ctx.userId, spaceId);
+    const files = spaceLibraryIndexer.listFiles(ctx.userId, spaceId).map((r) => ({
       name: r.rel_path,
       path: r.rel_path,
       kind: r.kind,
@@ -1404,18 +1411,18 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { summary, files, reconcile };
   },
 
-  'projects.files.reconcile': async ({ projectId }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
-    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
-    const result = await projectLibraryIndexer.reconcile(ctx.userId, projectId);
+  'spaces.files.reconcile': async ({ spaceId }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
+    const result = await spaceLibraryIndexer.reconcile(ctx.userId, spaceId);
     return { result };
   },
 
-  'projects.files.reprocess': async ({ projectId, name }, ctx) => {
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+  'spaces.files.reprocess': async ({ spaceId, name }, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
-    if (!await projects.projectExists(ctx.userId, projectId)) throw new Error('not_found');
-    projectLibraryIndexer.enqueue(ctx.userId, projectId, name, 'upsert', { force: true });
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
+    spaceLibraryIndexer.enqueue(ctx.userId, spaceId, name, 'upsert', { force: true });
     return { ok: true, name };
   },
 
@@ -1578,7 +1585,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (typeof taskId !== 'string' || !taskId) throw new Error('invalid taskId');
     if (!safeId(projectId)) throw new Error('invalid projectId');
     if (typeof name !== 'string' || !name.trim()) throw new Error('missing name');
-    const resolved = await projectFiles.resolveProjectFileAbsPath(ctx.userId, projectId, name);
+    const resolved = await spaceFiles.resolveSpaceFileAbsPath(ctx.userId, projectId, name);
     if (!resolved.ok) throw new Error((resolved as { error?: string }).error || 'not_found');
     const st = fs.statSync(resolved.absPath);
     if (!st.isFile()) throw new Error('not_a_file');
@@ -2513,13 +2520,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { info: res.info };
   },
 
-  // Same as above but for a project-scoped Library file — resolves through
-  // `resolveProjectFileAbsPath`, which validates project ownership + name.
-  'projects.files.attachToDraft': async ({ projectId, name, cid } = {}, ctx) => {
+  // Same as above but for a space-scoped Library file — resolves through
+  // `resolveSpaceFileAbsPath`, which validates space ownership + name.
+  'spaces.files.attachToDraft': async ({ spaceId, name, cid } = {}, ctx) => {
     if (!safeId(cid)) throw new Error('invalid cid');
-    if (!safeId(projectId)) throw new Error('invalid projectId');
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name.trim()) throw new Error('missing name');
-    const resolved = await projectFiles.resolveProjectFileAbsPath(ctx.userId, projectId, name);
+    const resolved = await spaceFiles.resolveSpaceFileAbsPath(ctx.userId, spaceId, name);
     if (!resolved.ok) throw new Error((resolved as { error?: string }).error || 'not_found');
     const res = await chatAttachments.importAttachmentFromPath(ctx.userId, cid, resolved.absPath);
     if (!res.ok) throw new Error((res as { error: string }).error);
@@ -2768,10 +2775,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return marketplace.uninstallMarketplaceSkill(id);
   },
 
-  'projects.files.officeHtml': async ({ projectId, name }, ctx) => {
-    if (!projectId || typeof projectId !== 'string') throw new Error('missing projectId');
+  'spaces.files.officeHtml': async ({ spaceId, name }, ctx) => {
+    if (!spaceId || typeof spaceId !== 'string') throw new Error('missing spaceId');
     if (!name || typeof name !== 'string') throw new Error('missing name');
-    return projectFiles.readProjectOfficeHtml(ctx.userId, projectId, name);
+    return spaceFiles.readSpaceOfficeHtml(ctx.userId, spaceId, name);
   },
 
   'prefs.getTaskNotifications': async () => ({
@@ -4445,19 +4452,19 @@ const streamHandlers: Record<string, StreamHandler> = {
     });
   },
 
-  'project.kb.events': async function* ({ projectId }, ctx, signal) {
-    if (!safeId(projectId)) {
-      yield { type: 'error', text: 'invalid projectId' };
+  'space.kb.events': async function* ({ spaceId }, ctx, signal) {
+    if (!safeId(spaceId)) {
+      yield { type: 'error', text: 'invalid spaceId' };
       return;
     }
-    const queue: import('../features/project_library_indexer').ProjectLibraryStatusEvent[] = [];
+    const queue: import('../features/project_library_indexer').SpaceLibraryStatusEvent[] = [];
     let notify: (() => void) | null = null;
-    const listener = (ev: import('../features/project_library_indexer').ProjectLibraryStatusEvent) => {
-      if (ev.userId !== ctx.userId || ev.projectId !== projectId) return;
+    const listener = (ev: import('../features/project_library_indexer').SpaceLibraryStatusEvent) => {
+      if (ev.userId !== ctx.userId || ev.spaceId !== spaceId) return;
       queue.push(ev);
       notify?.();
     };
-    projectLibraryIndexer.projectLibraryEvents.on('status', listener);
+    spaceLibraryIndexer.spaceLibraryEvents.on('status', listener);
     const abortPromise = new Promise<void>((r) => {
       if (signal.aborted) r();
       else signal.addEventListener('abort', () => r(), { once: true });
@@ -4474,7 +4481,7 @@ const streamHandlers: Record<string, StreamHandler> = {
         ]);
       }
     } finally {
-      projectLibraryIndexer.projectLibraryEvents.off('status', listener);
+      spaceLibraryIndexer.spaceLibraryEvents.off('status', listener);
     }
   },
 

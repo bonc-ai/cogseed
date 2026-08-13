@@ -335,6 +335,14 @@ export const spaceChatArtifactsDir      = (uid: string, sid: string) => path.joi
 export const spaceChatArtifactCidDir    = (uid: string, sid: string, cid: string) => path.join(spaceChatArtifactsDir(uid, sid), cid);
 export const spaceArtifactDir           = (uid: string, sid: string, cid: string, artifactId: string) =>
   path.join(spaceChatArtifactCidDir(uid, sid, cid), artifactId);
+// 空间文件树（原项目文件树 project_files.ts 挂空间）。源文件属空间而非单会话，
+// 空间内每个会话都能拿到文件列表 + 只读访问。路径 `spaces/<sid>/contexts/`。
+export const spaceContextsDir           = (uid: string, sid: string) => path.join(spaceContentDir(uid, sid), 'contexts');
+export const spaceFilesDir              = (uid: string, sid: string) => spaceContextsDir(uid, sid);
+// 空间库索引（原项目库索引挂空间）：源文件 `spaces/<sid>/contexts/`，派生向量库
+// 机器本地 `local/spaces/<sid>/contexts/.kb/`，与全局 Library/KB 设计对齐。
+export const spaceLocalDir              = (uid: string, sid: string) => path.join(userLocalRoot(uid), 'spaces', sid);
+export const spaceLibraryVectorDbPath   = (uid: string, sid: string) => path.join(spaceLocalDir(uid, sid), 'contexts', '.kb', 'vector.db');
 /** Guard a project id used as a single path segment for project-scoped
  *  instructions/memory. The pid comes from the conv index / IPC (never
  *  model-supplied), but these paths are written to, so reject traversal /

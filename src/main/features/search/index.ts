@@ -336,20 +336,20 @@ export async function searchContexts(query: string, userId?: string): Promise<Se
   });
 }
 
-export async function searchProjectContexts(userId: string, projectId: string, query: string): Promise<SearchResult[]> {
+export async function searchSpaceContexts(userId: string, spaceId: string, query: string): Promise<SearchResult[]> {
   const q = (query || '').trim();
-  const pid = (projectId || '').trim();
-  if (!q || !pid) return [];
+  const sid = (spaceId || '').trim();
+  if (!q || !sid) return [];
   const qLower = q.toLowerCase();
   const tokens = tokenize(q).filter((t) => t.length > 1 || !isCJK(t));
   try {
-    const [projectFiles, projects] = await Promise.all([
+    const [spaceFiles, spaces] = await Promise.all([
       import('../project_files'),
-      import('../projects'),
+      import('../spaces'),
     ]);
-    const [files, project] = await Promise.all([
-      projectFiles.listProjectFiles(userId, pid),
-      projects.getProject(userId, pid).catch(() => null),
+    const [files, space] = await Promise.all([
+      spaceFiles.listSpaceFiles(userId, sid),
+      spaces.getSpace(userId, sid).catch(() => null),
     ]);
     const scored: SearchResult[] = [];
     for (const f of files) {
@@ -367,15 +367,15 @@ export async function searchProjectContexts(userId: string, projectId: string, q
         title: name,
         snippet: name,
         score,
-        library_scope: 'project',
-        project_id: pid,
-        project_name: project?.name || '',
+        library_scope: 'space',
+        space_id: sid,
+        space_name: space?.name || '',
       });
     }
     scored.sort((a, b) => b.score - a.score || String(a.path || '').localeCompare(String(b.path || '')));
     return scored.slice(0, MAX_PER_KIND);
   } catch (err) {
-    log.warn(`project contexts search failed user=${userId} pid=${pid}: ${(err as Error).message}`);
+    log.warn(`space contexts search failed user=${userId} sid=${sid}: ${(err as Error).message}`);
     return [];
   }
 }
@@ -669,7 +669,7 @@ export async function searchAll(
   const tasks: Array<Promise<void>> = [];
   if (scope === 'all' || scope === 'context') {
     tasks.push(searchContexts(q).then((r) => { buckets.push(...r); }));
-    if (projectId) tasks.push(searchProjectContexts(userId, projectId, q).then((r) => { buckets.push(...r); }));
+    if (projectId) tasks.push(searchSpaceContexts(userId, projectId, q).then((r) => { buckets.push(...r); }));
   }
   if (scope === 'all' || scope === 'chat')    tasks.push(searchChats(userId, q).then((r) => { buckets.push(...r); }));
   if (scope === 'all' || scope === 'agent')   tasks.push(searchAgents(userId, q).then((r) => { buckets.push(...r); }));
