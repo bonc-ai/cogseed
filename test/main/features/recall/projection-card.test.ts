@@ -40,7 +40,7 @@ async function createAsset(input: { userId?: string; judgment: string; summary: 
     suggestedScope: input.scope || 'review,project',
     sourceRefs: [{ kind: 'execution', id: input.sourceId }],
   });
-  return candidates.promoteRecallCandidate(userId, candidate.id);
+  return candidates.promoteRecallCandidate(userId, candidate.id, { actor: 'user' });
 }
 
 const fakeSemanticOptions = {
@@ -62,7 +62,7 @@ describe('Recall projection chat card', () => {
     const { refs, assets, projection, cards } = await modules();
     await refs.addWorkspaceAssetReference('user-a', { assetId: included.asset.id, workspaceId: 'workspace-a', scope: 'review' });
     await refs.addWorkspaceAssetReference('user-a', { assetId: omitted.asset.id, workspaceId: 'workspace-a', scope: 'review' });
-    await assets.pauseAbilityAsset('user-a', omitted.asset.id, 'needs rework');
+    await assets.pauseAbilityAsset('user-a', omitted.asset.id, { actor: 'user', reason: 'needs rework' });
 
     const preview = await projection.previewContextProjection('user-a', { taskRunId: 'task-a', workspaceId: 'workspace-a', purpose: 'review' });
     const card = await cards.buildProjectionCard('user-a', preview.id);

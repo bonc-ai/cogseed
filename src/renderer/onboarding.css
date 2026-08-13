@@ -234,9 +234,9 @@ body.cs-onboarding-active .app-container{display:none !important}
   padding:12px 16px;border:1px solid var(--cs-line);border-radius:10px;background:#fff;font-size:12.5px;color:var(--cs-ink-soft)}
 
 /* ── step 3: role cards ── */
-#cs-onboarding .cs-role-cards{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
-#cs-onboarding .cs-role-card{border:1px solid var(--cs-line);border-radius:14px;padding:18px;cursor:pointer;transition:all .15s;
-  text-align:left;background:#fff}
+#cs-onboarding .cs-role-cards{display:block}
+#cs-onboarding .cs-role-card{border:1px solid var(--cs-line);border-radius:14px;padding:16px 18px;cursor:pointer;transition:all .15s;
+  text-align:left;background:#fff;display:flex;flex-direction:column;min-width:0}
 #cs-onboarding .cs-role-card:hover{border-color:var(--cs-forest);box-shadow:0 6px 18px rgba(12,62,47,.07)}
 #cs-onboarding .cs-role-card.selected{border-color:var(--cs-forest);box-shadow:inset 0 0 0 1px var(--cs-forest);background:#F6FBF8}
 #cs-onboarding .cs-role-card .r-ico{width:38px;height:38px;border-radius:10px;background:var(--cs-forest-weak);display:grid;place-items:center;margin-bottom:10px}
@@ -357,3 +357,50 @@ body.cs-onboarding-active .app-container{display:none !important}
 #cs-onboarding .cs-agent-section-body{background:#fff}
 
 @media (prefers-reduced-motion:reduce){#cs-onboarding *,#cs-ob-toast{animation:none !important;transition:none !important}}
+
+/* ── step 3: role cards — compact, scrollable, first-screen friendly ── */
+#cs-onboarding .cs-role-card p{
+  display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;
+  overflow:hidden;margin:0 0 8px;
+}
+#cs-onboarding .cs-role-scroll{
+  max-height:380px;overflow-y:auto;
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;
+  border:1px solid var(--cs-line);border-radius:14px;padding:16px;
+  background:rgba(255,255,255,.6);
+}
+#cs-onboarding .cs-role-scroll.has-overflow{
+  background:
+    linear-gradient(#fff 30%, rgba(255,255,255,0)),
+    linear-gradient(rgba(255,255,255,0), #fff 70%) 0 100%,
+    radial-gradient(60% 50% at 50% 0%, rgba(14,159,110,.12), transparent 70%) 0 0,
+    radial-gradient(60% 50% at 50% 100%, rgba(14,159,110,.12), transparent 70%) 0 100%;
+  background-repeat:no-repeat;background-size:100% 14px,100% 14px,100% 10px,100% 10px;
+  background-attachment:local,local,scroll,scroll;
+}
+#cs-onboarding .cs-role-scroll::-webkit-scrollbar{width:6px}
+#cs-onboarding .cs-role-scroll::-webkit-scrollbar-thumb{background:var(--cs-line-strong);border-radius:3px}
+#cs-onboarding .cs-role-scroll::-webkit-scrollbar-thumb:hover{background:var(--cs-muted)}
+
+@media (prefers-reduced-motion:reduce){#cs-onboarding *,#cs-ob-toast{animation:none !important;transition:none !important}}
+
+/* ── step 3: role cards — compact, first-screen friendly ── */
+#cs-onboarding .cs-role-card p{
+  display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;
+  overflow:hidden;margin:0 0 8px;
+}
+#cs-onboarding .cs-role-more{margin-top:10px}
+#cs-onboarding .cs-role-more-toggle{
+  width:100%;padding:9px 12px;border:1px dashed var(--cs-line);border-radius:10px;
+  color:var(--cs-muted);font-size:12px;font-weight:600;cursor:pointer;
+  transition:all .15s;background:#fff;
+}
+#cs-onboarding .cs-role-more-toggle:hover{border-color:var(--cs-forest);color:var(--cs-forest)}
+#cs-onboarding .cs-role-more-body{
+  display:grid;grid-template-columns:repeat(2,1fr);gap:12px;
+  max-height:0;overflow:hidden;opacity:0;margin-top:0;
+  transition:max-height .32s ease,opacity .25s ease,margin-top .32s ease;
+}
+#cs-onboarding .cs-role-more-body.open{
+  max-height:640px;opacity:1;margin-top:10px;
+}

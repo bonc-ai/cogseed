@@ -72,11 +72,14 @@ describe('runtime variant isolation', () => {
   });
 
   it('rejects inherited workspace roots outside controlled packaged-dev verification', () => {
+    const previousCogseedRoot = process.env.COGSEED_WORKSPACE_ROOT;
+    const previousCogseedContainer = process.env.COGSEED_RUNTIME_CONTAINER;
     const previousRoot = process.env.ORKAS_WORKSPACE_ROOT;
     const previousContainer = process.env.ORKAS_RUNTIME_CONTAINER;
     const injectedRoot = path.join('/tmp', 'mate-runtime-injected-root');
     try {
-      process.env.ORKAS_WORKSPACE_ROOT = injectedRoot;
+      process.env.COGSEED_WORKSPACE_ROOT = injectedRoot;
+      delete process.env.ORKAS_WORKSPACE_ROOT;
       expect(() => installRoot.initializeInstallDataRoot(SOURCE_VARIANT))
         .toThrow(/inherited (?:COGSEED|ORKAS)_WORKSPACE_ROOT is not allowed/);
       expect(installRoot.initializeInstallDataRoot(SOURCE_VARIANT, {
@@ -86,7 +89,15 @@ describe('runtime variant isolation', () => {
         workspaceRoot: path.resolve(injectedRoot),
         overridden: true,
       });
+      expect(process.env.COGSEED_WORKSPACE_ROOT).toBe(path.resolve(injectedRoot));
+      expect(process.env.ORKAS_WORKSPACE_ROOT).toBe(path.resolve(injectedRoot));
+      expect(process.env.COGSEED_RUNTIME_CONTAINER).toBe(path.dirname(path.resolve(injectedRoot)));
+      expect(process.env.ORKAS_RUNTIME_CONTAINER).toBe(path.dirname(path.resolve(injectedRoot)));
     } finally {
+      if (previousCogseedRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+      else process.env.COGSEED_WORKSPACE_ROOT = previousCogseedRoot;
+      if (previousCogseedContainer === undefined) delete process.env.COGSEED_RUNTIME_CONTAINER;
+      else process.env.COGSEED_RUNTIME_CONTAINER = previousCogseedContainer;
       if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT;
       else process.env.ORKAS_WORKSPACE_ROOT = previousRoot;
       if (previousContainer === undefined) delete process.env.ORKAS_RUNTIME_CONTAINER;

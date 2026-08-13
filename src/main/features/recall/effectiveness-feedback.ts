@@ -5,6 +5,7 @@ import {
   type EffectivenessProofRecord,
 } from './proof-service';
 import { readContextProjection } from './context-projection';
+import { recommendAbilityAssetAction } from './asset-service';
 
 export type RecallEffectivenessFeedback = 'positive' | 'neutral' | 'negative' | 'invalid' | 'rework';
 
@@ -48,11 +49,33 @@ function evaluateFeedbackProof(
   });
 }
 
-export function recordEffectivenessFeedback(
+async function applyRecommendedAssetAction(
+  userId: string,
+  proof: EffectivenessProofRecord,
+): Promise<void> {
+  const action = proof.recommendedAction;
+  if (action !== 'pause' && action !== 'rework') return;
+  const transfer = (await listTransferProofs(userId)).find((item) => item.id === proof.transferProofId);
+  if (!transfer) return;
+  const reason = proof.observedResult.length > 1_000
+    ? `${proof.observedResult.slice(0, 997)}...`
+    : proof.observedResult;
+  for (const item of transfer.assetVersions) {
+    await recommendAbilityAssetAction(userId, item.assetId, {
+      actor: 'system',
+      action,
+      reason,
+    });
+  }
+}
+
+export async function recordEffectivenessFeedback(
   userId: string,
   input: RecordEffectivenessFeedbackInput,
 ): Promise<EffectivenessProofRecord> {
-  return evaluateFeedbackProof(userId, input.transferProofId, input);
+  const proof = await evaluateFeedbackProof(userId, input.transferProofId, input);
+  await applyRecommendedAssetAction(userId, proof);
+  return proof;
 }
 
 export async function recordTaskEffectivenessFeedback(
@@ -76,7 +99,9 @@ export async function recordTaskEffectivenessFeedback(
   if (!transfers.length) throw new Error('no successful transfer proof for task run');
   const proofs: EffectivenessProofRecord[] = [];
   for (const transfer of transfers) {
-    proofs.push(await evaluateFeedbackProof(userId, transfer.id, input));
+    const proof = await evaluateFeedbackProof(userId, transfer.id, input);
+    proofs.push(proof);
+    await applyRecommendedAssetAction(userId, proof);
   }
   return { proofs };
 }

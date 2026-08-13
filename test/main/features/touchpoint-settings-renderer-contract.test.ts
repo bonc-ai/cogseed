@@ -29,6 +29,17 @@ describe('touchpoint settings renderer contract', () => {
     expect(fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/modules/touchpoint-settings-model.js'), 'utf8')).toContain("'connection.connect'");
   });
 
+  it('keeps the overview scrollable inside the flex settings panel', () => {
+    const style = fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/style.css'), 'utf8');
+    expect(style).toContain('.touchpoint-settings-shell {');
+    expect(style).toContain('min-height: 0;');
+    expect(style).toContain('#touchpoint-overview-view {');
+    expect(style).toContain('overflow-y: auto;');
+    expect(style).toContain('.touchpoint-connections-view .messaging-settings-shell {');
+    expect(style).toContain('.touchpoint-briefing-row {');
+    expect(style).toContain('.touchpoint-briefing-time input[type="time"] {');
+  });
+
   it('feeds the touchpoint dashboard with live messaging status instead of the disk-normalized one', () => {
     // 磁盘持久化会把 connected/connecting 归一为 disconnected（连接是瞬时态，
     // 重启后不应信任旧状态）。触点 dashboard 必须走 manager.listInstances
@@ -66,5 +77,35 @@ describe('touchpoint settings renderer contract', () => {
     expect(source).toContain("action === 'setup_guide.done'");
     expect(source).toContain("invoke('personal_context.setup_guide.confirm', {})");
     expect(source).toContain('renderSetupGuideCard()');
+  });
+
+  it('exposes template editing and explicit instance routing controls', () => {
+    const source = fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/modules/touchpoint-settings.js'), 'utf8');
+    expect(source).toContain("touchpoints.config.get");
+    expect(source).toContain("touchpoints.config.save");
+    expect(source).toContain('data-touchpoint-config-default');
+    expect(source).toContain('data-touchpoint-config-route');
+    expect(source).toContain('data-touchpoint-config-button="approve"');
+    expect(source).toContain('instanceId: state.touchpointConfig');
+  });
+
+  it('keeps approval-card configuration behind a dedicated simplified management view', () => {
+    const source = fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/modules/touchpoint-settings.js'), 'utf8');
+    expect(source).toContain("state.view === 'approvalCards'");
+    expect(source).toContain('data-touchpoint-action="approval_cards.manage"');
+    expect(source).toContain('data-touchpoint-action="approval_cards.back"');
+    expect(source).toContain('data-touchpoint-action="touchpoint.test"');
+    expect(source).toContain('data-touchpoint-template-preview');
+    expect(source).toContain('<details class="touchpoint-template-advanced">');
+    expect(source).toContain('data-touchpoint-scene="${scene}"');
+    expect(source).not.toContain("renderTouchpointConfig()}<div class=\"touchpoint-delivery-grid\"");
+  });
+
+  it('styles the approval-card manager as a responsive editor with a stable preview', () => {
+    const style = fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/style.css'), 'utf8');
+    expect(style).toContain('.touchpoint-approval-layout {');
+    expect(style).toContain('.touchpoint-template-preview {');
+    expect(style).toContain('.touchpoint-scene-tabs {');
+    expect(style).toContain('.touchpoint-template-advanced {');
   });
 });

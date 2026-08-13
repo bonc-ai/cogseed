@@ -158,6 +158,14 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
   { name: 'messaging_list_targets', group: 'messaging', summary: 'List configured Feishu/Lark bots and which can proactively message the configured owner (self); read-only diagnostics.' },
   { name: 'messaging_send', group: 'messaging', summary: 'Send a text message to the configured owner (self) through one Feishu/Lark bot, after the user approves a confirmation dialog.' },
 
+  // Feishu companion surface (Commander-only — injected by runner.ts for
+  // gconv sessions with a resolved uid; read-only status + briefing write)
+  { name: 'feishu_dashboard', group: 'messaging', summary: 'Read the Feishu companion status: bot connection, authorization/sync state, and briefing configuration (sanitized).' },
+  { name: 'briefing_get', group: 'messaging', summary: 'Read the daily-briefing configuration: scheduled time, enabled state, recent delivery.' },
+  { name: 'briefing_schedule', group: 'messaging', summary: 'Set or change the daily briefing time (hour/minute); mutates user configuration.' },
+  { name: 'touchpoint_list', group: 'messaging', summary: 'List recent touchpoint notifications (intents) and the card actions the owner recorded.' },
+  { name: 'messaging_send_file', group: 'messaging', summary: 'Send a local file (md/doc/pdf/…) to the configured owner (self) through one Feishu/Lark bot, after confirmation; workspace/attachment-scoped paths only.' },
+
   // Task-local and cross-session state
   { name: 'manage_execution_plan', group: 'meta', summary: 'Manage the durable current-task objective and milestone statuses for long/tool-heavy work; session-local and independent of context summaries.' },
   { name: 'cross_session_memory', group: 'meta', summary: 'Read/write user profile, shared facts, and agent memory that persist across sessions.' },

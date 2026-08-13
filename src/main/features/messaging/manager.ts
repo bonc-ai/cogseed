@@ -10,6 +10,10 @@ import * as groupChat from '../group_chat';
 import * as projects from '../projects';
 import * as wakeService from '../p3394/wake-service';
 import * as ontologyCandidates from '../personal_ontology_candidates';
+import * as touchpointLedger from '../touchpoints/ledger';
+import * as touchpointActions from '../touchpoints/actions';
+import { buildResolvedTouchpointCard, TOUCHPOINT_CARD_INPUT_ID } from '../touchpoints/feishu/card';
+import type { TouchpointActionKind } from '../touchpoints/types';
 import * as registry from './registry';
 import * as bindings from './bindings';
 import * as ledger from './ledger';
@@ -278,6 +282,7 @@ export async function sendProactive(
     instanceId: string;
     recipientId: string;
     text: string;
+    card?: Record<string, JsonCompatibleValue>;
     sourceKey: string;
     signal?: AbortSignal | null;
   },
@@ -304,6 +309,7 @@ export async function sendProactive(
     sourceMessageId: sourceKey,
     textHash: ledger.textHash(text),
     text,
+    ...(input.card ? { card: input.card } : {}),
     idempotencyKey: `proactive-${ledger.textHash(sourceKey).slice(0, 24)}`,
   });
   if (!begun.duplicate) {
@@ -327,6 +333,75 @@ export async function sendProactive(
       // Stop the retry timer / restart recovery from ever firing this send.
       await ledger.cancelDelivery(uid, key, 'proactive send aborted').catch(() => undefined);
       throw Object.assign(new Error('proactive send aborted'), { name: 'AbortError' });
+    }
+    throw error;
+  }
+}
+
+/** Proactive file send to the owner: uploads and sends a local file through
+ * the same idempotent delivery ledger as `sendProactive`. The text fallback
+ * for recovery is a `[file] name` marker, so an adapter without `sendFile`
+ * still delivers something instead of wedging. */
+export async function sendProactiveFile(
+  uid: string,
+  input: {
+    instanceId: string;
+    recipientId: string;
+    filePath: string;
+    fileName: string;
+    sourceKey: string;
+    signal?: AbortSignal | null;
+  },
+): Promise<{ entry: DeliveryLedgerEntry }> {
+  assertUserId(uid);
+  const runtime = runtimes.get(uid)?.get(input.instanceId);
+  if (!runtime || !isCurrentRuntime(uid, runtime)) {
+    throw new Error('messaging instance is not running');
+  }
+  const filePath = typeof input.filePath === 'string' && input.filePath.trim() ? input.filePath.trim() : '';
+  if (!filePath || filePath.length > 1024) throw new Error('proactive file path required');
+  const fileName = typeof input.fileName === 'string' && input.fileName.trim()
+    ? input.fileName.trim().slice(0, 240)
+    : filePath.split('/').pop() || 'file';
+  const sourceKey = typeof input.sourceKey === 'string' && input.sourceKey.trim()
+    ? input.sourceKey.trim().slice(0, 160)
+    : '';
+  if (!sourceKey) throw new Error('proactive source key required');
+  const recipientId = typeof input.recipientId === 'string' ? input.recipientId.trim() : '';
+  if (!recipientId || recipientId.length > 512) throw new Error('proactive recipient required');
+  const text = `[文件] ${fileName}`;
+  const key = ledger.deliveryKey(input.instanceId, sourceKey);
+  const begun = await ledger.beginDelivery(uid, {
+    key,
+    instanceId: input.instanceId,
+    recipientId,
+    recipientIdType: 'open_id',
+    sourceMessageId: sourceKey,
+    textHash: ledger.textHash(text),
+    text,
+    file: { path: filePath, name: fileName },
+    idempotencyKey: `proactive-${ledger.textHash(sourceKey).slice(0, 24)}`,
+  });
+  if (!begun.duplicate) {
+    if (!isCurrentRuntime(uid, runtime) || runtime.controller.signal.aborted) {
+      await ledger.finishDelivery(uid, key, {
+        status: 'cancelled',
+        error: 'delivery cancelled because messaging instance stopped',
+      });
+    } else {
+      await runtime.attemptDelivery(key, begun.entry);
+    }
+  }
+  try {
+    const terminal = await ledger.waitForDeliveryTerminal(uid, key, { signal: input.signal ?? null });
+    if (terminal.status === 'cancelled') {
+      throw new Error('proactive file delivery cancelled');
+    }
+    return { entry: terminal };
+  } catch (error) {
+    if (input.signal?.aborted) {
+      await ledger.cancelDelivery(uid, key, 'proactive file send aborted').catch(() => undefined);
+      throw Object.assign(new Error('proactive file send aborted'), { name: 'AbortError' });
     }
     throw error;
   }
@@ -618,6 +693,11 @@ async function handleCardAction(uid: string, action: CardActionEnvelope): Promis
   if (!instance.policy.allowUserIds.includes(action.externalUserId)) {
     return { accepted: false, duplicate: false, reason: 'user_not_allowed' };
   }
+  // 触达点意图卡片（touchpoint 特性产出）：按钮 value 携带签名回执信封，
+  // 确认/拒绝等动作直接消费进触达点 ledger。
+  if (action.action === 'touchpoint') {
+    return handleTouchpointCardAction(uid, action);
+  }
   // 候选确认卡片（personal_context 管线产出）：按钮 value 携带 candidate_id，
   // 确认/拒绝直接落 personal_ontology 候选池，无 wake_id。
   if (action.action === 'candidate_approve' || action.action === 'candidate_reject') {
@@ -649,6 +729,74 @@ async function handleCardAction(uid: string, action: CardActionEnvelope): Promis
     return { accepted: true, duplicate: false };
   }
   return { accepted: false, duplicate: false, reason: 'unsupported_card_action' };
+}
+
+/** Buttons on touchpoint intent cards carry a signed receipt envelope in
+ * their value; clicking one consumes the action in the touchpoint ledger and
+ * swaps the card for its terminal state. Duplicate clicks are idempotent —
+ * the ledger returns the stored record and the card is not re-finalized. */
+async function handleTouchpointCardAction(uid: string, action: CardActionEnvelope): Promise<MessagingInboundResult> {
+  const payloadText = (field: string): string => {
+    const entry = action.payload[field];
+    return typeof entry === 'string' && entry.trim() ? entry.trim() : '';
+  };
+  const intentId = payloadText('intent_id');
+  const actionId = payloadText('action_id');
+  const envelopeUserId = payloadText('user_id');
+  const kind = payloadText('kind');
+  const occurredAt = payloadText('occurred_at');
+  const signature = payloadText('signature');
+  // Free-text content from the card input field; trimmed, capped, and
+  // validated by the touchpoint receipt contract.
+  const content = payloadText(TOUCHPOINT_CARD_INPUT_ID);
+  if (!intentId || !actionId || !envelopeUserId || !kind || !occurredAt || !signature) {
+    return { accepted: false, duplicate: false, reason: 'invalid_card_action' };
+  }
+  try {
+    const outcome = await touchpointLedger.consumeTouchpointAction(uid, {
+      actionId,
+      intentId,
+      userId: envelopeUserId,
+      action: kind,
+      occurredAt,
+      signature,
+      ...(content ? { content } : {}),
+    });
+    if (!outcome.duplicate) {
+      void finalizeTouchpointCard(uid, action, kind as TouchpointActionKind, content);
+      // Business effects (reschedule, update, …) run fire-and-forget; a
+      // failing handler never changes the accepted receipt outcome.
+      void touchpointActions.notifyTouchpointActionHandlers(uid, outcome.action).catch(() => undefined);
+    }
+    return { accepted: true, duplicate: outcome.duplicate };
+  } catch (error) {
+    log.warn('touchpoint card action rejected', {
+      instanceId: action.instanceId,
+      intentId,
+      action: kind,
+      error: logErrorSummary(error),
+    });
+    return { accepted: false, duplicate: false, reason: 'touchpoint_action_rejected' };
+  }
+}
+
+/** Replaces a resolved touchpoint card with its terminal state so the same
+ * buttons cannot be clicked twice (mirrors the wake approval finalize).
+ * Submitted content is echoed back on the resolved card. */
+async function finalizeTouchpointCard(uid: string, action: CardActionEnvelope, kind: TouchpointActionKind, content?: string): Promise<void> {
+  const runtime = runtimes.get(uid)?.get(action.instanceId);
+  if (!runtime || !isCurrentRuntime(uid, runtime)) return;
+  const adapter = runtime.adapter;
+  if (!isCardAdapter(adapter)) return;
+  try {
+    await adapter.updateCard(action.externalMessageId, buildResolvedTouchpointCard(kind, content));
+  } catch (error) {
+    log.warn('touchpoint card finalize failed', {
+      instanceId: action.instanceId,
+      externalMessageId: action.externalMessageId,
+      error: logErrorSummary(error),
+    });
+  }
 }
 
 /** Localized terminal label for an approval choice. Keys mirror the card
@@ -1008,6 +1156,21 @@ export async function listInstances(uid: string): Promise<MessagingInstanceClien
   assertUserId(uid);
   const instances = await registry.listInstances(uid);
   return instances.map((instance) => withLiveStatus(uid, instance));
+}
+
+/** Live connection status for one instance, or null when no runtime is
+ * registered. Disk state is deliberately degraded (`registry.normalizeStatus`
+ * never persists `connected`), so proactive senders must check the live
+ * status here instead of the persisted one — reading the file shows a
+ * connected instance as disconnected. */
+export async function getLiveInstanceStatus(
+  uid: string,
+  instanceId: string,
+): Promise<MessagingInstanceStatus | null> {
+  assertUserId(uid);
+  const runtime = runtimes.get(uid)?.get(instanceId);
+  const live = runtime && runtime.active ? liveStatuses.get(uid)?.get(instanceId) : undefined;
+  return live ? cloneStatus(live) : null;
 }
 
 export async function health(uid: string, instanceId: string): Promise<MessagingInstanceStatus> {

@@ -74,9 +74,38 @@ export interface MergeConversationResult {
   newConversation: Conversation;
   summaryMessage: string;
   agentSummaries: Record<string, AgentSummary>;
+  scopeReceipt: MergeScopeReceipt;
+}
+
+export type MergeScope =
+  | { kind: 'selected_conversations' }
+  | { kind: 'time_range'; startAt: string; endAt: string };
+
+export interface MergeSourceScopeReceipt {
+  sourceCid: string;
+  sourceTitle: string;
+  selectedStartAt?: string;
+  selectedEndAt?: string;
+  selectedMessageCount: number;
+  actualStartAt?: string;
+  actualEndAt?: string;
+  actualMessageCount: number;
+  privateSessionMessageCount: number;
+  deduplicatedCount: number;
+  truncatedCount: number;
+  reasons: Array<'duplicate_message_id' | 'context_limit' | 'private_session_omitted_for_time_range'>;
+}
+
+export interface MergeScopeReceipt {
+  kind: MergeScope['kind'];
+  requestedStartAt?: string;
+  requestedEndAt?: string;
+  maxMessages: number;
+  sources: MergeSourceScopeReceipt[];
 }
 
 type ProjectHint = string | null | undefined;
+const MAX_MERGE_UI_MESSAGES = 200;
 
 function destinationProjectId(
   source: Conversation | undefined,
@@ -186,7 +215,135 @@ function sourceSessionText(messages: SessionMessageRecord[]): string[] {
     if (!text) continue;
     lines.push(`${message.role}: ${text}`);
   }
-  return lines.slice(-24);
+  return [...new Set(lines)].slice(-24);
+}
+
+function normalizeMergeScope(scope: MergeScope | undefined): MergeScope {
+  if (!scope || scope.kind === 'selected_conversations') {
+    return { kind: 'selected_conversations' };
+  }
+  if (scope.kind !== 'time_range') throw new Error('invalid merge scope');
+  const startMs = Date.parse(scope.startAt);
+  const endMs = Date.parse(scope.endAt);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs > endMs) {
+    throw new Error('invalid merge time range');
+  }
+  return {
+    kind: 'time_range',
+    startAt: new Date(startMs).toISOString(),
+    endAt: new Date(endMs).toISOString(),
+  };
+}
+
+function messageTimestamp(message: MessageRecord): number {
+  const value = Date.parse(message.ts);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function selectMergeMessages(
+  sources: Conversation[],
+  allMessagesByCid: Map<string, MessageRecord[]>,
+  scope: MergeScope,
+): { messagesByCid: Map<string, MessageRecord[]>; receipt: MergeScopeReceipt } {
+  const candidates: Array<{ source: Conversation; message: MessageRecord; order: number }> = [];
+  const sourceStats = new Map<string, {
+    selected: MessageRecord[];
+    deduplicatedCount: number;
+    selectedMessageCount: number;
+    selectedStartAt?: string;
+    selectedEndAt?: string;
+  }>();
+  const globallySeen = new Set<string>();
+  for (const source of sources) {
+    const raw = (allMessagesByCid.get(source.conversation_id) || [])
+      .map((message, order) => ({ message, order }))
+      .filter(({ message }) => {
+        if (scope.kind !== 'time_range') return true;
+        const ts = messageTimestamp(message);
+        return ts >= Date.parse(scope.startAt) && ts <= Date.parse(scope.endAt);
+      })
+      .sort((left, right) => messageTimestamp(left.message) - messageTimestamp(right.message) || left.order - right.order);
+    const seen = new Set<string>();
+    const selected: MessageRecord[] = [];
+    let deduplicatedCount = 0;
+    for (const { message, order } of raw) {
+      const key = message.id || `${message.ts}:${message.from}:${message.text}`;
+      if (seen.has(key) || globallySeen.has(key)) {
+        deduplicatedCount += 1;
+        continue;
+      }
+      seen.add(key);
+      globallySeen.add(key);
+      selected.push(message);
+      candidates.push({ source, message, order });
+    }
+    sourceStats.set(source.conversation_id, {
+      selected,
+      deduplicatedCount,
+      selectedMessageCount: raw.length,
+      ...(raw[0] ? { selectedStartAt: raw[0].message.ts } : {}),
+      ...(raw.at(-1) ? { selectedEndAt: raw.at(-1)!.message.ts } : {}),
+    });
+  }
+
+  candidates.sort((left, right) => (
+    messageTimestamp(left.message) - messageTimestamp(right.message)
+    || left.source.conversation_id.localeCompare(right.source.conversation_id)
+    || left.order - right.order
+  ));
+  const included = candidates.length > MAX_MERGE_UI_MESSAGES
+    ? candidates.slice(-MAX_MERGE_UI_MESSAGES)
+    : candidates;
+  const includedIds = new Map<string, Set<string>>();
+  for (const { source, message } of included) {
+    const ids = includedIds.get(source.conversation_id) || new Set<string>();
+    ids.add(message.id || `${message.ts}:${message.from}:${message.text}`);
+    includedIds.set(source.conversation_id, ids);
+  }
+
+  const messagesByCid = new Map<string, MessageRecord[]>();
+  const receipts: MergeSourceScopeReceipt[] = [];
+  for (const source of sources) {
+    const stats = sourceStats.get(source.conversation_id) || {
+      selected: [], deduplicatedCount: 0, selectedMessageCount: 0,
+    };
+    const ids = includedIds.get(source.conversation_id) || new Set<string>();
+    const actual = stats.selected.filter((message) => ids.has(message.id || `${message.ts}:${message.from}:${message.text}`));
+    messagesByCid.set(source.conversation_id, actual);
+    const actualFirst = actual[0];
+    const actualLast = actual.at(-1);
+    const truncatedCount = Math.max(0, stats.selected.length - actual.length);
+    const reasons: MergeSourceScopeReceipt['reasons'] = [];
+    if (stats.deduplicatedCount) reasons.push('duplicate_message_id');
+    if (truncatedCount) reasons.push('context_limit');
+    if (scope.kind === 'time_range') reasons.push('private_session_omitted_for_time_range');
+    receipts.push({
+      sourceCid: source.conversation_id,
+      sourceTitle: source.title,
+      ...(stats.selectedStartAt ? { selectedStartAt: stats.selectedStartAt } : {}),
+      ...(stats.selectedEndAt ? { selectedEndAt: stats.selectedEndAt } : {}),
+      selectedMessageCount: stats.selectedMessageCount,
+      ...(actualFirst ? { actualStartAt: actualFirst.ts } : {}),
+      ...(actualLast ? { actualEndAt: actualLast.ts } : {}),
+      actualMessageCount: actual.length,
+      privateSessionMessageCount: 0,
+      deduplicatedCount: stats.deduplicatedCount,
+      truncatedCount,
+      reasons,
+    });
+  }
+  return {
+    messagesByCid,
+    receipt: {
+      kind: scope.kind,
+      ...(scope.kind === 'time_range' ? {
+        requestedStartAt: scope.startAt,
+        requestedEndAt: scope.endAt,
+      } : {}),
+      maxMessages: MAX_MERGE_UI_MESSAGES,
+      sources: receipts,
+    },
+  };
 }
 
 async function readAllJsonl<T>(file: string): Promise<T[]> {
@@ -357,6 +514,7 @@ function buildMergeSummary(
   sources: Conversation[],
   agentSummaries: Record<string, AgentSummary>,
   messagesByCid: Map<string, MessageRecord[]>,
+  scopeReceipt: MergeScopeReceipt,
 ): string {
   const sourceLines = sources.map((source) => `- ${source.title || source.conversation_id} (${source.conversation_id})`);
   const agentLines = Object.entries(agentSummaries).map(([agentId, summary]) => (
@@ -366,12 +524,43 @@ function buildMergeSummary(
     .filter((message) => /conflict|risk|冲突|风险/i.test(message.text))
     .map((message) => compact(message.text, 240)))
     .slice(0, 8);
+  const scopeLines = scopeReceipt.sources.map((source) => {
+    const selectedRange = source.selectedStartAt && source.selectedEndAt
+      ? `${source.selectedStartAt} - ${source.selectedEndAt}`
+      : t('conversation.merge.scope.none');
+    const actualRange = source.actualStartAt && source.actualEndAt
+      ? `${source.actualStartAt} - ${source.actualEndAt}`
+      : t('conversation.merge.scope.none');
+    const adjustments = [
+      source.deduplicatedCount
+        ? t('conversation.merge.scope.deduplicated', { count: source.deduplicatedCount })
+        : '',
+      source.truncatedCount
+        ? t('conversation.merge.scope.truncated', { count: source.truncatedCount })
+        : '',
+      source.reasons.includes('private_session_omitted_for_time_range')
+        ? t('conversation.merge.scope.private_omitted')
+        : '',
+    ].filter(Boolean).join('; ');
+    return [
+      `- ${source.sourceTitle || source.sourceCid} (${source.sourceCid})`,
+      `  - ${t('conversation.merge.scope.selected')}: ${source.selectedMessageCount} · ${selectedRange}`,
+      `  - ${t('conversation.merge.scope.actual')}: ${source.actualMessageCount} · ${actualRange}`,
+      ...(source.privateSessionMessageCount
+        ? [`  - ${t('conversation.merge.scope.private_sessions')}: ${source.privateSessionMessageCount}`]
+        : []),
+      ...(adjustments ? [`  - ${t('conversation.merge.scope.adjustments')}: ${adjustments}`] : []),
+    ].join('\n');
+  });
 
   return [
     t('conversation.merge.heading', { count: sources.length, title }),
     '',
     `## ${t('conversation.merge.section.sources')}`,
     sourceLines.join('\n'),
+    '',
+    `## ${t('conversation.merge.section.scope')}`,
+    scopeLines.join('\n'),
     '',
     `## ${t('conversation.merge.section.decisions')}`,
     `- ${t('conversation.merge.decisions.merged')}`,
@@ -532,7 +721,7 @@ export async function cloneConversation(
 export async function mergeConversations(
   userId: string,
   sourceCids: string[],
-  opts: { title: string; projectIdHint?: string | null },
+  opts: { title: string; projectIdHint?: string | null; scope?: MergeScope },
 ): Promise<MergeConversationResult> {
   const uniqueCids = [...new Set(sourceCids)];
   if (uniqueCids.some((cid) => !safeId(cid))) {
@@ -545,8 +734,9 @@ export async function mergeConversations(
     requireConversation(await getConversation(userId, cid), cid)
   )));
   const destinationProject = mergeDestinationProjectId(sources, opts);
+  const scope = normalizeMergeScope(opts.scope);
 
-  const messagesByCid = new Map<string, MessageRecord[]>();
+  const allMessagesByCid = new Map<string, MessageRecord[]>();
   const workstreams = new Map<string, Array<{
     cid: string;
     title: string;
@@ -561,19 +751,27 @@ export async function mergeConversations(
     const messages = await readAllJsonl<MessageRecord>(
       conversationMessageReadFile(userId, source.conversation_id, project),
     );
-    messagesByCid.set(source.conversation_id, messages);
+    allMessagesByCid.set(source.conversation_id, messages);
+  }
+  const selected = selectMergeMessages(sources, allMessagesByCid, scope);
+  const messagesByCid = selected.messagesByCid;
+  const scopeReceipt = selected.receipt;
+
+  for (const source of sources) {
+    const project = source.project_id ?? null;
+    const messages = messagesByCid.get(source.conversation_id) || [];
     const members = await readMembers(userId, source.conversation_id, project);
     for (const actor of members.actors) {
       if (!mergedActors.has(actor.id)) mergedActors.set(actor.id, { ...actor });
     }
-    const collaboration = await readActiveCollaborationState(
-      userId,
-      source.conversation_id,
-      project,
-    );
+    const collaboration = scope.kind === 'selected_conversations'
+      ? await readActiveCollaborationState(userId, source.conversation_id, project)
+      : null;
     for (const agentId of collectAgentIds(source, members)) {
       const sessionId = buildGmemberSessionId(source.conversation_id, agentId);
-      const session = await readSessionMessagesForUser(userId, sessionId);
+      const session = scope.kind === 'selected_conversations'
+        ? await readSessionMessagesForUser(userId, sessionId)
+        : [];
       const visibleMessages = await readSlice(
         userId,
         source.conversation_id,
@@ -581,12 +779,19 @@ export async function mergeConversations(
         10_000,
         project,
       );
+      const actualIds = new Set(messages.map((message) => message.id));
+      const scopedVisibleMessages = visibleMessages.filter((message) => actualIds.has(message.id));
+      const receipt = scopeReceipt.sources.find((item) => item.sourceCid === source.conversation_id);
+      if (receipt) receipt.privateSessionMessageCount = Math.max(
+        receipt.privateSessionMessageCount,
+        sourceSessionText(session).length,
+      );
       const list = workstreams.get(agentId) || [];
       list.push({
         cid: source.conversation_id,
         title: source.title,
         session,
-        messages: visibleMessages,
+        messages: scopedVisibleMessages,
         collaboration: collaboration?.snapshot || null,
       });
       workstreams.set(agentId, list);
@@ -595,12 +800,22 @@ export async function mergeConversations(
 
   const agentSummaries: Record<string, AgentSummary> = {};
   for (const [agentId, streams] of workstreams) {
+    const seenSessionLines = new Set<string>();
+    const deduplicatedStreams = streams.map((stream) => ({
+      ...stream,
+      session: stream.session.filter((message) => {
+        const key = `${message.role}:${compact(textFromContent(message.content), 900)}`;
+        if (seenSessionLines.has(key)) return false;
+        seenSessionLines.add(key);
+        return true;
+      }),
+    }));
     agentSummaries[agentId] = {
-      sourceCids: streams.map((stream) => stream.cid),
-      markdown: buildAgentMarkdown(agentId, streams),
+      sourceCids: deduplicatedStreams.map((stream) => stream.cid),
+      markdown: buildAgentMarkdown(agentId, deduplicatedStreams),
     };
   }
-  const summaryMessage = buildMergeSummary(opts.title, sources, agentSummaries, messagesByCid);
+  const summaryMessage = buildMergeSummary(opts.title, sources, agentSummaries, messagesByCid, scopeReceipt);
   const allActors = [...mergedActors.values()];
   if (!allActors.some((actor) => actor.kind === 'commander')) {
     allActors.unshift({ kind: 'commander', id: 'commander', name: 'Commander', joined_at: nowIso() });
@@ -656,7 +871,7 @@ export async function mergeConversations(
       }], summary.markdown);
     }
 
-    return { newConversation: destination, summaryMessage, agentSummaries };
+    return { newConversation: destination, summaryMessage, agentSummaries, scopeReceipt };
   } catch (err) {
     return rollbackDestination(userId, destinationCid, destinationProject, err);
   }

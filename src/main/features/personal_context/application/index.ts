@@ -11,6 +11,7 @@ import { assembleBriefingInput, dispatchToFeishuHome } from '../feishu-dispatch'
 import * as manager from '../manager';
 import { PersonalContextRegistry } from '../registry';
 import { ScopeManifestStore } from '../scope-manifest';
+import { getTouchpointConfig, resolveTouchpointInstanceId } from '../../touchpoints/config';
 import type { ExternalResource } from '../contract';
 import { createPersonalContextApplicationService, type PersonalContextApplicationService } from './service';
 import type { PersonalContextDashboard } from './types';
@@ -256,7 +257,13 @@ export async function testBriefingDelivery(userId: string, instanceId?: string):
   const { dashboard, preview } = await previewBriefing(userId);
   if (dashboard.mode === 'demo') return { dashboard, result: { ok: true, code: 'demo_delivery' } };
   const instances = await messagingManager.listInstances(userId);
-  const target = instanceId || pickBriefingTarget(instances);
+  const touchpointConfig = await getTouchpointConfig(userId);
+  const configuredSelection = Boolean(instanceId)
+    || Object.prototype.hasOwnProperty.call(touchpointConfig.routes, 'daily_briefing')
+    || touchpointConfig.defaultInstanceId !== null;
+  const target = configuredSelection
+    ? await resolveTouchpointInstanceId(userId, 'daily_briefing', instanceId)
+    : pickBriefingTarget(instances);
   if (!target) return { dashboard, result: { ok: false, code: 'instance_unknown', error: '没有可用的飞书消息实例' } };
   const result = await dispatchToFeishuHome(userId, { instanceId: target, text: preview.text, sourceKey: `briefing:test:${new Date().toISOString()}` });
   if ('code' in result) return { dashboard: await getDashboard(userId), result: { ok: false, code: result.code, error: result.error } };
@@ -270,7 +277,13 @@ export async function scheduleBriefing(userId: string, input: { instanceId?: str
     return { dashboard, error: '简报时间必须是有效的小时和分钟' };
   }
   const instances = await messagingManager.listInstances(userId);
-  const target = input.instanceId || instances.find((instance) => instance.platform === 'feishu_lark' && instance.enabled)?.id;
+  const touchpointConfig = await getTouchpointConfig(userId);
+  const configuredSelection = Boolean(input.instanceId)
+    || Object.prototype.hasOwnProperty.call(touchpointConfig.routes, 'daily_briefing')
+    || touchpointConfig.defaultInstanceId !== null;
+  const target = configuredSelection
+    ? await resolveTouchpointInstanceId(userId, 'daily_briefing', input.instanceId)
+    : instances.find((instance) => instance.platform === 'feishu_lark' && instance.enabled)?.id;
   if (!target) return { dashboard, error: '没有可用的飞书消息实例' };
   const schedule = { type: 'daily' as const, hour: input.hour, minute: input.minute };
   const recipient = { kind: 'messaging' as const, instanceId: target, recipient: 'owner' as const };

@@ -60,7 +60,7 @@ import { getActiveUserId, hasActiveUser } from './users';
 import * as chats from './chats';
 import * as groupChat from './group_chat';
 import { getAgentForChatDispatch, getAgentDispatchPolicy, isAgentChatDispatchable } from './agents';
-import { assembleBriefingText, dispatchToFeishuHome } from './personal_context/feishu-dispatch';
+import { assembleBriefingText, dispatchBriefingTouchpoint, dispatchToFeishuHome } from './personal_context/feishu-dispatch';
 
 const log = createLogger('auto-tasks');
 
@@ -1224,11 +1224,18 @@ async function _fireMessagingTask(
   // 幂等键：简报任务 briefing:${taskId}:${触发日}；普通 messaging 任务
   // auto-task:${taskId}:${触发日}。同一触发日重入不会重复投递（ledger 去重）。
   const sourceKey = `${task.briefing ? 'briefing' : 'auto-task'}:${task.id}:${_localDateKey(new Date())}`;
-  const res = await dispatchToFeishuHome(uid, {
-    instanceId: recipient.instanceId,
-    text,
-    sourceKey,
-  });
+  // 简报走触达点管线（可交互卡片 + 动作回执）；普通 messaging 任务保持文本直发。
+  const res = task.briefing
+    ? await dispatchBriefingTouchpoint(uid, {
+      instanceId: recipient.instanceId,
+      text,
+      sourceKey,
+    })
+    : await dispatchToFeishuHome(uid, {
+      instanceId: recipient.instanceId,
+      text,
+      sourceKey,
+    });
   // 注：项目 tsconfig 为 strict:false，`if (!res.ok)` 的判别收窄失效，
   // 必须用字面量比较 `res.ok === false` 才能收窄到失败分支。
   if (res.ok === false) {
