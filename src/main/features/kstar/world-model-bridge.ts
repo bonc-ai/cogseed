@@ -34,6 +34,10 @@ export async function runWorldModelAtBoundary(
   userId: string,
   input: RunWorldModelAtBoundaryInput,
 ): Promise<WorldModelForecastRecord | undefined> {
+  // Feature gate: the world-model forecast is opt-in while the full
+  // (A_hat, R_hat) reconciliation loop is still being validated. Keeps the
+  // existing KSTAR enqueue path latency-neutral until explicitly enabled.
+  if (process.env.ORKAS_WORLD_MODEL !== '1') return undefined;
   try {
     const assets = await listAbilityAssets(userId);
     const rules: CausalRule[] = assets
