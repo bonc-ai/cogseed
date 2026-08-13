@@ -11,6 +11,7 @@
  * One session per local identity — a later login replaces the previous one.
  */
 import * as localSecrets from '../../util/local-secret-store';
+import { readHubAccountState, writeHubAccountState } from './state';
 import type { HubSession } from './types';
 
 const HUB_SECRET_NAMESPACE = 'hub-account';
@@ -53,8 +54,6 @@ export function clearHubSession(uid: string): void {
 }
 
 // ── ciphertext storage (piggy-backs on the state file's JSON) ─────────────
-
-import { readHubAccountState, writeHubAccountState } from './state';
 
 function readSessionCiphertext(uid: string): string | null {
   return readHubAccountState(uid).session_enc ?? null;

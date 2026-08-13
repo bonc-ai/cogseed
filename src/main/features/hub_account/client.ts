@@ -12,6 +12,14 @@
  * `AUTH_INVALID_TOKEN`, `BINDING_ALREADY_EXISTS`) so callers can branch.
  */
 import { createLogger } from '../../logger';
+import type {
+  HubAccountMe,
+  HubBindResult,
+  HubCallbackResult,
+  HubConsent,
+  HubDevice,
+  HubRefreshResult,
+} from './types';
 
 const log = createLogger('hub_account:client');
 
@@ -40,23 +48,25 @@ interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   token?: string | null;
   body?: unknown;
+  /** Return the full response envelope (`{ data, total, page, ... }`) instead of unwrapping `data`. */
+  raw?: boolean;
 }
 
 export interface HubClient {
   login(provider: string, redirectUri: string): Promise<{ authorize_url: string; state: string }>;
-  callback(code: string, state: string): Promise<import('./types').HubCallbackResult>;
-  refresh(refreshToken: string): Promise<import('./types').HubRefreshResult>;
+  callback(code: string, state: string): Promise<HubCallbackResult>;
+  refresh(refreshToken: string): Promise<HubRefreshResult>;
   logout(accessToken: string): Promise<{ message: string }>;
-  me(accessToken: string): Promise<import('./types').HubAccountMe>;
+  me(accessToken: string): Promise<HubAccountMe>;
   bind(
     accessToken: string,
     body: { local_identity_id: string; device_name: string; device_os: string },
-  ): Promise<import('./types').HubBindResult>;
-  listDevices(accessToken: string, page?: number, pageSize?: number): Promise<{ data: import('./types').HubDevice[]; total: number }>;
+  ): Promise<HubBindResult>;
+  listDevices(accessToken: string, page?: number, pageSize?: number): Promise<{ data: HubDevice[]; total: number }>;
   revokeDevice(accessToken: string, deviceId: string): Promise<{ device_id: string; revoked_sessions: number }>;
-  listConsents(accessToken: string): Promise<import('./types').HubConsent[]>;
-  setConsent(accessToken: string, scope: string): Promise<import('./types').HubConsent>;
-  revokeConsent(accessToken: string, scope: string): Promise<import('./types').HubConsent>;
+  listConsents(accessToken: string): Promise<HubConsent[]>;
+  setConsent(accessToken: string, scope: string): Promise<HubConsent>;
+  revokeConsent(accessToken: string, scope: string): Promise<HubConsent>;
   deleteAccount(accessToken: string, confirmation: string): Promise<{ account_id: string; status: string; deletion_scheduled_at: string }>;
   healthz(): Promise<boolean>;
   readyz(): Promise<boolean>;
@@ -89,7 +99,7 @@ export function createHubClient(baseUrl: string): HubClient {
 
     const payload = json as { ok?: boolean; data?: unknown; error?: { code?: string; message?: string; details?: Record<string, unknown> } } | null;
     if (res.ok && payload?.ok !== false) {
-      return (payload?.data ?? payload) as T;
+      return (opts.raw ? payload : (payload?.data ?? payload)) as T;
     }
 
     const code = payload?.error?.code || 'HUB_UNKNOWN_ERROR';
@@ -115,9 +125,9 @@ export function createHubClient(baseUrl: string): HubClient {
     bind: (accessToken, body) =>
       request('/api/v1/local-identity/bind', { method: 'POST', token: accessToken, body }),
     async listDevices(accessToken, page = 1, pageSize = 20) {
-      return request<{ data: import('./types').HubDevice[]; total: number }>(
+      return request<{ data: HubDevice[]; total: number }>(
         `/api/v1/devices?page=${page}&page_size=${pageSize}`,
-        { token: accessToken },
+        { token: accessToken, raw: true },
       );
     },
     revokeDevice: (accessToken, deviceId) =>
