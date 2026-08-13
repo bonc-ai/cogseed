@@ -103,7 +103,7 @@ describe('recall world-model reconciliation', () => {
 
   it('returns execution_gap when a predicted tool was not realized (deltaA gate)', () => {
     const result = reconcileWorldModel(forecast, episode({ a: { toolCalls: [{ name: 'read_file', status: 'ok' }] } }));
-    expect(result.deltaA).toBe(-1);
+    expect(result.deltaA).toBeLessThan(0);
     expect(result.deltaR).toBe('unknown');
     expect(result.attribution).toBe('execution_gap');
   });
@@ -117,7 +117,7 @@ describe('recall world-model reconciliation', () => {
   it('marks deltaR polluted when tools match but predicted files are missing', () => {
     const result = reconcileWorldModel(forecast, episode({ r: { status: 'completed', finalText: 'done', producedFiles: [], verification: { passed: true } } }));
     expect(result.deltaA).toBe(0);
-    expect(result.deltaR).toBe(-1);
+    expect(result.deltaR).toBeLessThan(0);
     expect(result.attribution).toBe('knowledge_gap');
   });
 });

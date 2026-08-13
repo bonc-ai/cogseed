@@ -1,4 +1,5 @@
 import type { CognitionSourceRef } from '../recall/source-service';
+import type { ActionDeltaDetail, ResultDeltaDetail } from '../recall/world-model-types';
 import type { KstarAttribution, KstarJsonRecord, KstarOutcome } from './types';
 
 export const KSTAR_PRM_WEIGHTS = Object.freeze({
@@ -45,6 +46,8 @@ export interface KstarRequirementPrmReview {
   attribution: KstarAttribution;
   reason: string;
   confidence: number;
+  actionDelta?: ActionDeltaDetail;
+  resultDelta?: ResultDeltaDetail;
   evidenceRefs: CognitionSourceRef[];
 }
 

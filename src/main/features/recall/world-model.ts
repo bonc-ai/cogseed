@@ -15,6 +15,8 @@ import { genId12 } from '../../storage';
 import { hasConfiguredModel } from '../auth';
 import { normalizeCausalRule } from './world-model-types';
 import { selectWorldModelCandidate, validateWorldModelCandidate } from './world-model-scoring';
+export { reconcileWorldModel } from './world-model-reconciliation';
+export type { WorldModelReconciliationOptions } from './world-model-reconciliation';
 
 const MAX_SUMMARY = 4_000;
 import type {
@@ -27,7 +29,6 @@ import type {
   WorldModelSimulationInput,
   WorldModelSnapshot,
 } from './world-model-types';
-import type { KstarEpisodeRecord } from '../kstar/types';
 
 /** Deterministic A-Box predicates for the F002 risk pass. */
 const PREDICATE_TESTS: Record<WorldModelPredicateKey, (s: WorldModelSnapshot) => boolean> = {
@@ -301,68 +302,4 @@ export function buildWorldModelForecastRecord(
     forecast: input.forecast,
     createdAt: new Date().toISOString(),
   };
-}
-
-/** Result of reconciling a world-model forecast against realized execution. */
-export interface WorldModelReconciliation {
-  /** Delta between predicted intervention (A_hat) and realized action (A). */
-  deltaA: number | 'unknown';
-  /** Delta between predicted result (R_hat) and realized result (R). */
-  deltaR: number | 'unknown';
-  /** Attribution: execution_gap when deltaA is non-zero (deltaR is polluted),
-   *  otherwise derived from the realized-result delta. */
-  attribution: 'knowledge_gap' | 'rule_gap' | 'template_gap' | 'skill_gap' | 'execution_gap' | 'unclear';
-}
-
-/** Compare predicted tools/actors with realized tool calls. A mismatch is a
- *  signal that embodiment was incomplete (A != A_hat). */
-function compareInterventions(
-  forecast: WorldModelForecast,
-  episode: KstarEpisodeRecord,
-): number | 'unknown' {
-  if (!forecast.aHat.plan.length && !forecast.aHat.expectedTools.length) return 'unknown';
-  const realizedTools = new Set(episode.a.toolCalls.map((c) => c.name));
-  const predictedTools = new Set(forecast.aHat.expectedTools);
-  if (!predictedTools.size) return 'unknown';
-  let missing = 0;
-  for (const tool of predictedTools) if (!realizedTools.has(tool)) missing += 1;
-  if (missing === 0) return 0;
-  return -1;
-}
-
-/** Compare predicted acceptance signals / files with realized verification. */
-function compareResults(
-  forecast: WorldModelForecast,
-  episode: KstarEpisodeRecord,
-): number | 'unknown' {
-  if (!forecast.rHat.acceptanceSignals.length && !forecast.rHat.predictedFiles.length) return 'unknown';
-  const realizedFiles = new Set(episode.r.producedFiles);
-  const predictedFiles = new Set(forecast.rHat.predictedFiles);
-  const missingFiles = [...predictedFiles].filter((f) => !realizedFiles.has(f)).length;
-  const passed = episode.r.verification !== undefined;
-  const acceptanceSignalsMet = forecast.rHat.acceptanceSignals.length === 0 ? true : passed;
-  if (acceptanceSignalsMet && missingFiles === 0) return 0;
-  return -1;
-}
-
-/**
- * Reconcile a forecast against the realized episode using the KSTAR theory:
- * deltaA gates trust in deltaR. When deltaA != 0, the result delta is polluted
- * by an execution/embodiment gap and must be attributed there, not to the model.
- */
-export function reconcileWorldModel(
-  forecast: WorldModelForecast,
-  episode: KstarEpisodeRecord,
-): WorldModelReconciliation {
-  const deltaA = compareInterventions(forecast, episode);
-  if (deltaA !== 0 && deltaA !== 'unknown') {
-    return {
-      deltaA,
-      deltaR: 'unknown',
-      attribution: 'execution_gap',
-    };
-  }
-  const deltaR = compareResults(forecast, episode);
-  const attribution = deltaR === 0 ? 'unclear' : deltaR === 'unknown' ? 'unclear' : 'knowledge_gap';
-  return { deltaA, deltaR, attribution };
 }

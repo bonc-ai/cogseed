@@ -2,8 +2,9 @@ import { createLogger } from '../../logger';
 import { buildRunner } from '../../model/core-agent/runner';
 import { hasConfiguredModel } from '../auth';
 import type { SaveKstarReviewInput } from './review-service';
-import { reconcileWorldModel } from '../recall/world-model';
+import { reconcileWorldModel } from '../recall/world-model-reconciliation';
 import type { WorldModelForecast } from '../recall/world-model-types';
+import type { AbilityAssetType } from '../recall/candidate-service';
 import type { KstarAttribution, KstarEpisodeRecord, KstarOutcome, KstarReviewInferenceMethod, KstarReviewState } from './types';
 
 const log = createLogger('kstar.review-inference');
@@ -26,6 +27,7 @@ export interface KstarReviewInferenceOptions {
    *  present, its R_hat replaces the user-goal text as the expected result and
    *  drives the deltaR/deltaA reconciliation. */
   forecast?: WorldModelForecast;
+  selectedAssetTypes?: AbilityAssetType[];
 }
 
 interface ParsedModelReview {
@@ -186,7 +188,7 @@ export async function inferKstarReview(
   if (forecast && episode.r.status === 'completed') {
     // World-model reconciliation: deltaA gates deltaR. Use the forecast's
     // predicted result as the true R_hat instead of the user-goal text.
-    const reconciled = reconcileWorldModel(forecast, episode);
+    const reconciled = reconcileWorldModel(forecast, episode, { selectedAssetTypes: options.selectedAssetTypes });
     return {
       review: {
         ...base,
@@ -196,6 +198,8 @@ export async function inferKstarReview(
           ? 'worse_than_expected'
           : reconciled.deltaR === 0 ? 'met_expected' : reconciled.deltaR === 'unknown' ? 'unclear' : 'worse_than_expected',
         attribution: reconciled.attribution,
+        actionDelta: reconciled.actionDelta,
+        resultDelta: reconciled.resultDelta,
         reason: reconciled.attribution === 'execution_gap'
           ? 'The realized intervention differs from the forecast; result delta is polluted by an execution gap.'
           : reconciled.deltaR === 0

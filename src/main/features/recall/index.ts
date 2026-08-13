@@ -63,5 +63,5 @@ export type { RecallEffectivenessFeedback, RecordEffectivenessFeedbackInput, Rec
 
 export { applyCausalRules, buildWorldModelForecastRecord, collectWorldSnapshot, readWorldModelForecast, reconcileWorldModel, saveWorldModelForecast, simulateWorld } from './world-model';
 export { normalizeCausalRule } from './world-model-types';
-export type { WorldModelReconciliation } from './world-model';
-export type { CausalRule, CausalRuleSeverity, PredictedRisk, WorldModelAbilityAsset, WorldModelCausalRuleRef, WorldModelCoreState, WorldModelEnvironmentState, WorldModelForecast, WorldModelForecastRecord, WorldModelOntologyState, WorldModelPredicateKey, WorldModelSimulationInput, WorldModelSkillsState, WorldModelSnapshot } from './world-model-types';
+export type { WorldModelReconciliationOptions } from './world-model-reconciliation';
+export type { CausalRule, CausalRuleSeverity, PredictedRisk, AcceptanceSignalResult, ActionDeltaDetail, ResultDeltaDetail, WorldModelAbilityAsset, WorldModelCausalRuleRef, WorldModelCoreState, WorldModelEnvironmentState, WorldModelForecast, WorldModelForecastRecord, WorldModelOntologyState, WorldModelPredicateKey, WorldModelSimulationInput, WorldModelSkillsState, WorldModelReconciliation, WorldModelSnapshot } from './world-model-types';

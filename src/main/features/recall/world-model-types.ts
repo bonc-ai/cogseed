@@ -221,6 +221,38 @@ export interface WorldModelSimulationInput {
 }
 
 /** Persisted world-model forecast record. */
+export interface ActionDeltaDetail {
+  missingTools: string[];
+  unexpectedTools: string[];
+  missingActors: string[];
+  unexpectedActors: string[];
+  missingPlanSteps: string[];
+  extraActions: string[];
+  failedActions: string[];
+  orderMismatch: boolean;
+}
+
+export interface AcceptanceSignalResult {
+  signal: string;
+  status: 'met' | 'not_met' | 'unknown';
+  evidence: string;
+}
+
+export interface ResultDeltaDetail {
+  acceptanceSignals: AcceptanceSignalResult[];
+  missingPredictedFiles: string[];
+  unexpectedProducedFiles: string[];
+  terminalStatus: 'completed' | 'failed' | 'cancelled' | 'waiting_input';
+}
+
+export interface WorldModelReconciliation {
+  deltaA: number | 'unknown';
+  deltaR: number | 'unknown';
+  attribution: 'knowledge_gap' | 'rule_gap' | 'template_gap' | 'skill_gap' | 'execution_gap' | 'unclear';
+  actionDelta: ActionDeltaDetail;
+  resultDelta: ResultDeltaDetail;
+}
+
 export interface WorldModelForecastRecord extends RecallJsonRecord {
   schemaVersion: 1;
   taskRunId: string;

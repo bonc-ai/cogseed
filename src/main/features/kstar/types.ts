@@ -1,5 +1,6 @@
 import type { AbilityAssetType } from '../recall/candidate-service';
 import type { CognitionSourceRef } from '../recall/source-service';
+import type { ActionDeltaDetail, ResultDeltaDetail } from '../recall/world-model-types';
 
 export const KSTAR_SCHEMA_VERSION = 1;
 
@@ -94,6 +95,8 @@ export interface KstarReviewRecord extends KstarJsonRecord {
   attribution: KstarAttribution;
   reason: string;
   confidence: number;
+  actionDelta?: ActionDeltaDetail;
+  resultDelta?: ResultDeltaDetail;
   reviewState?: KstarReviewState;
   inferenceMethod?: KstarReviewInferenceMethod;
   needsConfirmation?: boolean;

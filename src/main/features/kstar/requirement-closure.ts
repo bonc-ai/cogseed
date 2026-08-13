@@ -77,6 +77,8 @@ function prmFromInferredReview(requirement: KstarRequirementRecord, result: Ksta
     attribution: review.attribution,
     reason: review.reason,
     confidence: review.confidence,
+    ...(review.actionDelta ? { actionDelta: review.actionDelta } : {}),
+    ...(review.resultDelta ? { resultDelta: review.resultDelta } : {}),
     evidenceRefs: normalizeCognitionSourceRefs(review.evidenceRefs),
   };
 }
@@ -97,7 +99,10 @@ async function prmFromCompletionEvidence(userId: string, requirement: KstarRequi
     : undefined;
   const inferred = await inferKstarReview(userId, episode, {
     allowProvisionalEvidenceFallback: true,
-    ...(forecast ? { forecast: forecast.forecast } : {}),
+    ...(forecast ? {
+      forecast: forecast.forecast,
+      selectedAssetTypes: (forecast.input.k.abilityAssets || []).map((asset) => asset.type),
+    } : {}),
   });
   if (inferred.review.deltaR === 'unknown' && inferred.review.deltaA === 'unknown') return null;
   return prmFromInferredReview(requirement, inferred);
