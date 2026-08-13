@@ -263,8 +263,10 @@ function isVisibleTo(actorId: string, msg: GroupMessage): boolean {
   return false;
 }
 
-/** Append the message to every actor's slice that should see it. */
-export async function appendVisible(
+/** Append the message to every actor's slice that should see it. Throws on
+ * a write failure so callers that own a durable projection can retry without
+ * marking their terminal state complete. */
+export async function appendVisibleStrict(
   uid: string,
   cid: string,
   msg: GroupMessage,
@@ -276,9 +278,27 @@ export async function appendVisible(
   for (const actorId of actorIds) {
     if (actorId === USER_ID) continue; // user reads main jsonl
     if (!isVisibleTo(actorId, msg)) continue;
-    const file = layout.visibilityFile(actorId);
+    await appendJsonlAtomic<GroupMessage>(layout.visibilityFile(actorId), msg);
+  }
+}
+
+/** Best-effort compatibility path for ordinary Group Chat writes. Durable
+ * Backend projections use appendVisibleStrict so a missing slice remains
+ * retryable instead of being silently accepted. */
+export async function appendVisible(
+  uid: string,
+  cid: string,
+  msg: GroupMessage,
+  actorIds: string[],
+  projectIdHint?: string | null,
+): Promise<void> {
+  const layout = conversationLayout(uid, cid, projectIdHint);
+  fs.mkdirSync(layout.visibilityDir, { recursive: true });
+  for (const actorId of actorIds) {
+    if (actorId === USER_ID) continue;
+    if (!isVisibleTo(actorId, msg)) continue;
     try {
-      await appendJsonlAtomic<GroupMessage>(file, msg);
+      await appendJsonlAtomic<GroupMessage>(layout.visibilityFile(actorId), msg);
     } catch (err) {
       log.warn(
         `append visible failed user=${uid} cid=${cid} actor=${actorId}: ${(err as Error).message}`,

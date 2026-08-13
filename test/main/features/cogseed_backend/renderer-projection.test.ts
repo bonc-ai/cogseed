@@ -63,7 +63,7 @@ const events = [
   },
 ];
 
-describe('Mate renderer-safe projections', () => {
+describe('CogSeed renderer-safe projections', () => {
   it('projects sessions without owner/runtime identifiers and includes task counts', async () => {
     const service = createMateIpcService({
       listSessions: vi.fn(async () => [session]),
@@ -86,7 +86,7 @@ describe('Mate renderer-safe projections', () => {
 
 
 
-  it('accepts a gconv compatibility id and reads the canonical Mate session', async () => {
+  it('accepts a gconv compatibility id and reads the canonical CogSeed session', async () => {
     const canonicalSession = { ...session, sessionId: 'mate-session-gconv-conversation-a' };
     const readSession = vi.fn(async (_userId: string, sessionId: string) => sessionId === canonicalSession.sessionId ? canonicalSession : null);
     const service = createMateIpcService({
@@ -103,7 +103,7 @@ describe('Mate renderer-safe projections', () => {
 
 
 
-  it('returns an empty projection when a conversation has no Mate session yet', async () => {
+  it('returns an empty projection when a conversation has no CogSeed session yet', async () => {
     const service = createMateIpcService({
       readSession: vi.fn(async () => null),
     } as any);

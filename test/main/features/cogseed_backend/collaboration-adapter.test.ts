@@ -6,7 +6,7 @@ import { createMateCollaborationStore } from '../../../../src/main/features/cogs
 const UID = 'mate-collab-store-user';
 afterEach(() => fs.rmSync(paths.userRoot(UID), { recursive: true, force: true }));
 
-it('persists control-plane state only inside the Mate coordination domain', async () => {
+it('persists control-plane state only inside the CogSeed coordination domain', async () => {
   const store = createMateCollaborationStore(); const scope = { ownerId: UID, domain: 'mate' as const, scopeId: 'mate-coord-test' };
   const run: any = { version: 1, id: 'run-1', cid: scope.scopeId, objective: 'x', kind: 'custom', status: 'running', phase: 'x', steps: [], context_id: 'ctx-1', created_by: 'mate', created_at: 't', updated_at: 't' };
   const context: any = { version: 1, id: 'ctx-1', cid: scope.scopeId, run_id: 'run-1', objective: 'x', phase: 'x', revision: 1, constraints: [], facts: [], decisions: [], open_questions: [], risks: [], artifacts: [], agent_outputs: {}, gates: [], proposals: [], conflicts: [], updated_at: 't' };

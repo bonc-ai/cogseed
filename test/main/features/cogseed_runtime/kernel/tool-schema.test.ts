@@ -5,7 +5,7 @@ import {
   getRuntimeToolCatalog,
 } from '../../../../../src/main/features/cogseed_runtime/kernel/tools/catalog';
 
-describe('Mate Runtime OpenAI tool schema contract', () => {
+describe('CogSeed Runtime OpenAI tool schema contract', () => {
   it('exposes the complete approved safe Runtime catalog with strict JSON schemas', () => {
     const catalog = getRuntimeToolCatalog();
     const tools = getRuntimeOpenAIToolCatalog();

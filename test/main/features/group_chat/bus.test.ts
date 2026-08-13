@@ -676,12 +676,12 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(await wake.listWakeRequests(TEST_UID, TEST_CID)).toHaveLength(1);
   });
 
-  it('P3394 approval resumes the original intent through the existing enqueue runtime', async () => {
+  it('P3394 approval admits the original intent through CogSeed Backend without using the Agent id as a model profile', async () => {
     process.env.ORKAS_P3394_WAKE_GATE = '1';
     const bus = await import('../../../../src/main/features/group_chat/bus');
-    const state = await import('../../../../src/main/features/group_chat/state');
     const wake = await import('../../../../src/main/features/p3394/wake-service');
     const controller = await import('../../../../src/main/features/p3394/wake-controller');
+    const mateTasks = await import('../../../../src/main/features/cogseed_backend/task-store');
 
     const deferred = await bus.enqueue({
       uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
@@ -697,11 +697,54 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(result.ok).toBe(true);
     await waitForQuiescent(TEST_UID, TEST_CID);
 
-    const members = await state.readMembers(TEST_UID, TEST_CID);
-    expect(members.actors.some((actor) => actor.id === AGENT_ID)).toBe(true);
-    expect(streamProbe.messages.some((text) => text.includes('完成审批后的任务'))).toBe(true);
+    const tasks = await mateTasks.listMateTasks(TEST_UID);
+    expect(tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        task: expect.stringContaining('完成审批后的任务'),
+        agentId: AGENT_ID,
+        conversationId: TEST_CID,
+      }),
+    ]));
+    expect(tasks.find((task) => task.agentId === AGENT_ID)).not.toHaveProperty('profileId');
     const requests = await wake.listWakeRequests(TEST_UID, TEST_CID);
     expect(requests[0].status).toBe('executed');
+  });
+
+  it('routes a no-mention user follow-up for the active formal Agent into CogSeed instead of the Group Chat model loop', async () => {
+    process.env.ORKAS_P3394_WAKE_GATE = '1';
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const wake = await import('../../../../src/main/features/p3394/wake-service');
+    const followups: any[] = [];
+    await state.ensureAgentMember(TEST_UID, TEST_CID, AGENT_ID, AGENT_NAME);
+    await state.setActiveRecipient(TEST_UID, TEST_CID, AGENT_ID);
+    (bus as any)._setInteractiveFollowupStarterForTest(async (input: any) => {
+      followups.push(input);
+      return { taskId: 'mate-task-followup', status: 'running' };
+    });
+
+    try {
+      const beforeModelCalls = streamProbe.messages.length;
+      const msg = await bus.enqueue({
+        uid: TEST_UID,
+        cid: TEST_CID,
+        fromActorId: 'user',
+        text: '继续处理下一步，不需要重新唤醒。',
+      });
+
+      expect(msg.to).toEqual([AGENT_ID]);
+      expect(followups).toEqual([expect.objectContaining({
+        userId: TEST_UID,
+        conversationId: TEST_CID,
+        agentId: AGENT_ID,
+        requestId: `req-followup-${msg.id}`,
+        task: '继续处理下一步，不需要重新唤醒。',
+      })]);
+      expect(streamProbe.messages).toHaveLength(beforeModelCalls);
+      expect(await wake.listWakeRequests(TEST_UID, TEST_CID)).toHaveLength(0);
+    } finally {
+      (bus as any)._setInteractiveFollowupStarterForTest(null);
+    }
   });
 
   it('P3394 Wake Gate blocks an unapproved plan-step dispatch', async () => {
@@ -1751,6 +1794,40 @@ describe('group_chat bus › abort', () => {
     expect(st.status).toBe('aborted');
     expect(st.in_flight).toEqual([]);
     await bus.dropConv(TEST_UID, TEST_CID);
+  });
+
+  it('group abort cancels Backend conversation tasks and clears the interactive recipient and ledger', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const cancelled: any[] = [];
+    await state.ensureAgentMember(TEST_UID, TEST_CID, AGENT_ID, AGENT_NAME);
+    await state.commitHandoffState(TEST_UID, TEST_CID, {
+      recipient_id: AGENT_ID,
+      ledger: {
+        status: 'waiting_for_agent',
+        blocked_on: 'agent_handoff',
+        source_tool: 'hand_off_to',
+        owner_agent_id: AGENT_ID,
+        user_goal: 'Finish the task',
+        handoff_message: 'Continue',
+        resume_instruction: 'Return when explicitly complete',
+      },
+    });
+    (bus as any)._setBackendConversationCancellerForTest(async (uid: string, cid: string) => {
+      cancelled.push([uid, cid]);
+      return [];
+    });
+
+    try {
+      await bus.abort(TEST_UID, TEST_CID);
+      expect(cancelled).toEqual([[TEST_UID, TEST_CID]]);
+      await expect(state.readState(TEST_UID, TEST_CID)).resolves.toMatchObject({ status: 'aborted' });
+      const persisted = await state.readState(TEST_UID, TEST_CID);
+      expect(persisted.active_recipient).toBeUndefined();
+      expect(persisted.orchestration_ledger).toBeUndefined();
+    } finally {
+      (bus as any)._setBackendConversationCancellerForTest(null);
+    }
   });
 });
 

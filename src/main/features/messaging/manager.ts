@@ -8,6 +8,7 @@ import { isCardAdapter } from './stream-card';
 import { safeId } from '../../storage';
 import * as groupChat from '../group_chat';
 import * as projects from '../projects';
+import * as wakeController from '../p3394/wake-controller';
 import * as wakeService from '../p3394/wake-service';
 import * as ontologyCandidates from '../personal_ontology_candidates';
 import * as touchpointLedger from '../touchpoints/ledger';
@@ -719,12 +720,14 @@ async function handleCardAction(uid: string, action: CardActionEnvelope): Promis
   if (!wakeId) return { accepted: false, duplicate: false, reason: 'unsupported_card_action' };
   if (action.action === 'approve' || action.action === 'approve_once'
     || action.action === 'approve_session' || action.action === 'approve_always') {
-    await wakeService.approveWakeRequest(uid, wakeId);
+    const decision = await wakeController.decideWakeRequest(uid, { requestId: wakeId, decision: 'approve' });
+    if (decision.ok === false) return { accepted: false, duplicate: false, reason: decision.error || 'wake_approval_failed' };
     void finalizeApprovalCard(uid, action);
     return { accepted: true, duplicate: false };
   }
   if (action.action === 'deny') {
-    await wakeService.rejectWakeRequest(uid, wakeId);
+    const decision = await wakeController.decideWakeRequest(uid, { requestId: wakeId, decision: 'reject' });
+    if (decision.ok === false) return { accepted: false, duplicate: false, reason: decision.error || 'wake_rejection_failed' };
     void finalizeApprovalCard(uid, action);
     return { accepted: true, duplicate: false };
   }
