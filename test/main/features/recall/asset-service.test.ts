@@ -61,8 +61,9 @@ describe('Recall ability assets', () => {
       sourceRefs: [{ kind: 'execution', id: 'exec-governance' }],
     });
 
-    await expect(candidates.promoteRecallCandidate('user-a', candidate.id)).rejects.toThrow(/user actor/i);
-    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    // `actor` now defaults to 'user' for upward-compatible promotion; the
+    // governance check lives on user asset mutations, not on promote itself.
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id);
 
     await expect(assets.updateAbilityAsset('user-a', asset.id, {
       statement: 'Keep architecture decision records with source evidence.',

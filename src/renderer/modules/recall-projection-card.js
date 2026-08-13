@@ -99,6 +99,7 @@
   async function mountRecallProjectionCard(host, messageCard, opts = {}) {
     if (!host || !messageCard?.projectionId) return;
     const projectionId = String(messageCard.projectionId);
+    const cid = String(opts.cid || '');
     async function refresh() {
       host.dataset.loading = '1';
       try {
@@ -125,7 +126,7 @@
         button.disabled = true;
         try {
           const result = confirm
-            ? await window.cogseed.invoke('recall.projections.confirm', { projectionId })
+            ? await window.cogseed.invoke('recall.projections.confirm', { projectionId, ...(cid ? { cid } : {}) })
             : await window.cogseed.invoke('recall.projections.revise', remove
               ? { projectionId, removeAssetIds: [assetId] }
               : { projectionId, addAssetIds: [assetId] });

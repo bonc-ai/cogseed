@@ -185,6 +185,37 @@ describe('KSTAR requirement preview trigger', () => {
     ]));
   });
 
+  it('blocks the Commander dispatch until the projection is confirmed', async () => {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser('user-a');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const groupChat = await import('../../../../src/main/features/group_chat');
+
+    const msg = await bus.enqueue({ uid: 'user-a', cid: 'cid-block', fromActorId: 'user', text: '修复 OAuth callback' });
+
+    // User message is visible but routed to the human-only sink, not commander.
+    expect(msg.to).toEqual(['user']);
+
+    const stateFile = await state.readState('user-a', 'cid-block');
+    expect(stateFile.pending_projection_dispatch).toMatchObject({
+      projectionId: 'proj-a',
+      userMessageId: msg.id,
+      userMessageText: '修复 OAuth callback',
+    });
+
+    // Confirm resumes the commander dispatch.
+    const resumed = await bus.resumePendingProjectionDispatch('user-a', 'cid-block');
+    expect(resumed).toBe(true);
+    const cleared = await state.readState('user-a', 'cid-block');
+    expect(cleared.pending_projection_dispatch).toBeUndefined();
+
+    const messages = await waitForMessagesAtLeast(() => groupChat.readMessages('user-a', 'cid-block'), 4);
+    expect(messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: 'user', text: '修复 OAuth callback', dispatch: true, to: ['commander'] }),
+    ]));
+  });
+
   it('posts a visible Recall projection card when a normal user message creates a KSTAR task', async () => {
     const users = await import('../../../../src/main/features/users');
     users.activateUser('user-a');

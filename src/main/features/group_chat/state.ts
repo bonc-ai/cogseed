@@ -171,6 +171,16 @@ export interface StateFile {
    *  the next no-@ user message"; this answers "what commander task should be
    *  resumed when that interaction completes." */
   orchestration_ledger?: OrchestrationLedger;
+  /** Pending user-message dispatch blocked on a Recall projection preview.
+   *  The user message is persisted and the card is shown, but the Commander
+   *  turn is not enqueued until the projection is confirmed. Cleared on
+   *  confirm / reject / defer / a fresh user message. */
+  pending_projection_dispatch?: {
+    projectionId: string;
+    userMessageId: string;
+    userMessageText: string;
+    createdAt: string;
+  };
   /** System-created sync-conflict resolution metadata. A commander turn may
    *  close only these records, and only by emitting a matching XML result. */
   sync_conflict_resolution?: {
@@ -561,6 +571,24 @@ export async function readState(
           ? { active_recipient: data.active_recipient }
           : {}),
         ...(orchestrationLedger ? { orchestration_ledger: orchestrationLedger } : {}),
+        ...(data.pending_projection_dispatch
+          && typeof data.pending_projection_dispatch?.projectionId === 'string'
+          && safeId(data.pending_projection_dispatch.projectionId)
+          && typeof data.pending_projection_dispatch?.userMessageId === 'string'
+          && safeId(data.pending_projection_dispatch.userMessageId)
+          && typeof data.pending_projection_dispatch?.userMessageText === 'string'
+          && data.pending_projection_dispatch.userMessageText
+          ? {
+              pending_projection_dispatch: {
+                projectionId: data.pending_projection_dispatch.projectionId,
+                userMessageId: data.pending_projection_dispatch.userMessageId,
+                userMessageText: data.pending_projection_dispatch.userMessageText,
+                createdAt: typeof data.pending_projection_dispatch.createdAt === 'string'
+                  ? data.pending_projection_dispatch.createdAt
+                  : nowIso(),
+              },
+            }
+          : {}),
         ...(Array.isArray(data.sync_conflict_resolution?.conflicts)
           ? {
               sync_conflict_resolution: {
@@ -1084,6 +1112,30 @@ export async function setCodingProjectDir(
     }
     s.last_active_at = nowIso();
     await writeStateRaw(uid, cid, s);
+    return s;
+  });
+}
+
+export async function setPendingProjectionDispatch(
+  uid: string,
+  cid: string,
+  pending: NonNullable<StateFile['pending_projection_dispatch']>,
+): Promise<StateFile> {
+  return _stateLock(uid, cid).runExclusive(async () => {
+    const s = await readState(uid, cid);
+    s.pending_projection_dispatch = pending;
+    await writeStateRaw(uid, cid, s);
+    return s;
+  });
+}
+
+export async function clearPendingProjectionDispatch(uid: string, cid: string): Promise<StateFile> {
+  return _stateLock(uid, cid).runExclusive(async () => {
+    const s = await readState(uid, cid);
+    if (s.pending_projection_dispatch) {
+      delete s.pending_projection_dispatch;
+      await writeStateRaw(uid, cid, s);
+    }
     return s;
   });
 }

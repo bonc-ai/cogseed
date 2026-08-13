@@ -143,6 +143,9 @@ describe('KSTAR requirement state transitions', () => {
     expect(second.currentRequirement.userMessageIds).toEqual(['msg-a', 'msg-b']);
     expect(second.currentRequirement.projectionId).toMatch(/^proj-/);
     expect(second.currentRequirement.projectionId).not.toBe(first.currentRequirement.projectionId);
+    expect(second.currentRequirement.projectionIds).toHaveLength(2);
+    expect(second.currentRequirement.projectionIds[0]).toBe(first.currentRequirement.projectionId);
+    expect(second.currentRequirement.projectionIds[1]).toBe(second.currentRequirement.projectionId);
     expect(second.projectionPreviewCreated).toEqual({ projectionId: second.currentRequirement.projectionId });
     await expect(store.readConversationTaskState('user-a', 'cid-a')).resolves.toMatchObject({ taskComplete: false });
   });

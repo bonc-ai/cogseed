@@ -74,6 +74,7 @@ function validateRequirement(userId: string, raw: Record<string, unknown>): Ksta
     typeof raw.goalText !== 'string' || raw.goalText.length > MAX_GOAL ||
     (raw.rHat !== undefined && (() => { validateExpectedResult(raw.rHat); return false; })()) ||
     (raw.projectionId !== undefined && (typeof raw.projectionId !== 'string' || !safeId(raw.projectionId))) ||
+    !Array.isArray(raw.projectionIds) || raw.projectionIds.some((item: unknown) => typeof item !== 'string' || !safeId(item)) ||
     (raw.wakeRequestId !== undefined && (typeof raw.wakeRequestId !== 'string' || !safeId(raw.wakeRequestId))) ||
     (raw.prmReview !== undefined && (typeof raw.prmReview !== 'object' || raw.prmReview === null)) ||
     (raw.aar !== undefined && (typeof raw.aar !== 'object' || raw.aar === null)) ||
@@ -156,6 +157,7 @@ export function createKstarRequirementRecord(
     conversationId: input.conversationId,
     userMessageIds: [...new Set(input.userMessageIds)],
     episodeIds: [],
+    projectionIds: [],
     status: 'open',
     title: normalizedText(input.title, 'requirement title', MAX_TITLE),
     goalText: normalizedText(input.goalText, 'requirement goal', MAX_GOAL),

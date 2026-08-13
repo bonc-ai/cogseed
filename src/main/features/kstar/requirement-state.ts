@@ -118,7 +118,10 @@ async function createTaskWithRequirement(
   task.requirementIds = [requirement.id];
   task.currentRequirementId = requirement.id;
   const projectionPreview = await previewTaskBoundary(userId, input, task.id, projectionPurpose(title), route.expectedResult);
-  if (projectionPreview) requirement.projectionId = projectionPreview.projectionId;
+  if (projectionPreview) {
+    requirement.projectionId = projectionPreview.projectionId;
+    requirement.projectionIds = [...requirement.projectionIds, projectionPreview.projectionId];
+  }
   await replaceKstarRequirement(userId, requirement);
   await replaceKstarTask(userId, task);
   return {
@@ -231,7 +234,10 @@ export async function routeKstarUserMessage(
     state.pendingTaskStart = undefined;
     currentRequirement = next;
     const projectionPreview = await previewTaskBoundary(userId, input, task.id, projectionPurpose(next.title), route.expectedResult);
-    if (projectionPreview) next.projectionId = projectionPreview.projectionId;
+    if (projectionPreview) {
+      next.projectionId = projectionPreview.projectionId;
+      next.projectionIds = [...next.projectionIds, projectionPreview.projectionId];
+    }
     await replaceKstarRequirement(userId, next);
     if (projectionPreview?.shouldPostCard) projectionPreviewCreated = { projectionId: projectionPreview.projectionId };
   } else {
@@ -248,6 +254,7 @@ export async function routeKstarUserMessage(
       );
       if (projectionPreview) {
         currentRequirement.projectionId = projectionPreview.projectionId;
+        currentRequirement.projectionIds = [...currentRequirement.projectionIds, projectionPreview.projectionId];
         if (projectionPreview.shouldPostCard) projectionPreviewCreated = { projectionId: projectionPreview.projectionId };
       }
     }

@@ -135,7 +135,7 @@ describe('recall projection card renderer', () => {
     expect(host.innerHTML).toContain('Confirm candidates');
     await host.handler({ target: { closest: (selector: string) => selector === '[data-recall-projection-confirm]' ? { dataset: { recallProjectionConfirm: '1' }, disabled: false } : null } });
 
-    expect(calls).toContainEqual(['recall.projections.confirm', { projectionId: 'proj-a' }]);
+    expect(calls).toContainEqual(['recall.projections.confirm', { projectionId: 'proj-a', cid: 'cid-a' }]);
     expect(calls.some(([channel]) => channel.includes('prediction'))).toBe(false);
   });
 

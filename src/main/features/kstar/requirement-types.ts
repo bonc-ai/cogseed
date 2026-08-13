@@ -82,6 +82,10 @@ export interface KstarRequirementRecord extends KstarJsonRecord {
   rHat?: KstarExpectedResult;
   /** Task-scoped Recall projection used as the preloaded asset list for this requirement. */
   projectionId?: string;
+  /** Full ordered history of Recall projections created for this requirement.
+   *  `projectionId` stays as the latest pointer for backward-compatible
+   *  lifecycle/wake lookups; this array retains every prior projection. */
+  projectionIds: string[];
   /** Wake request bound when the preloaded asset list is confirmed and the Agent is woken. */
   wakeRequestId?: string;
   prmReview?: KstarRequirementPrmReview;

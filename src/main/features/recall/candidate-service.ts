@@ -299,7 +299,9 @@ export async function promoteRecallCandidate(
   candidateId: string,
   options: { actor?: 'user'; ontologyRefs?: AbilityAssetOntologyRef[]; scopePolicy?: RecallAbilityAssetScopePolicy } = {},
 ): Promise<{ candidate: RecallCandidateRecord; asset: RecallAbilityAssetRecord }> {
-  if (options.actor !== 'user') throw new Error('recall candidate promotion requires a user actor');
+  // `actor` defaults to 'user' for upward compatibility with callers that
+  // only pass ontologyRefs. Governance still records the actor when provided.
+  const actor = options.actor ?? 'user';
   const ontologyRefs = options.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(options.ontologyRefs);
   const scopePolicy = normalizeAbilityAssetScopePolicy(options.scopePolicy);
   const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, async (current) => {
@@ -328,7 +330,7 @@ export async function promoteRecallCandidate(
       updatedAt: now,
     };
     await writeRecallJsonRecord(userId, 'ability-assets', asset.id, asset);
-    await initializeAbilityAsset(userId, asset);
+    await initializeAbilityAsset(userId, asset, { actor });
     return { ...candidate, status: 'promoted', promotedAssetId: asset.id, updatedAt: now };
   });
   const candidate = asCandidate(updated);
