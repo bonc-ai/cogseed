@@ -314,6 +314,8 @@
     draft: createDraft(),
     ccswitchRows: [],
     ccswitchUnsupported: [],
+    ccswitchPreviewSeq: 0,
+    ccswitchPrepareSeq: 0,
     discoverySeq: 0,
     busy: false,
     removingAuthorizationId: '',
@@ -352,6 +354,23 @@
     return window.cogseed.invoke(channel, payload);
   }
 
+  async function invokeResult(channel, payload, fallbackKey) {
+    try {
+      const result = await invoke(channel, payload);
+      if (!result || result.ok === false) {
+        const resultMessage = result && typeof result.error === 'string' ? result.error.trim() : '';
+        return {
+          ok: false,
+          result: result || null,
+          message: resultMessage ? resultMessage.slice(0, 300) : tr(fallbackKey),
+        };
+      }
+      return { ok: true, result };
+    } catch (_error) {
+      return { ok: false, result: null, message: tr(fallbackKey) };
+    }
+  }
+
   async function ensureProviders(options) {
     const force = !!(options && options.force);
     if (!force && controller.providerCatalog.status === 'ready') return controller.providers;
@@ -370,11 +389,12 @@
     controller.providerCatalog.status = 'loading';
     controller.providerCatalog.error = '';
     try {
-      const res = await invoke('auth.listProviders');
+      const outcome = await invokeResult('auth.listProviders', undefined, 'settings.model_authorization.providers_load_failed');
       if (loadSeq !== controller.providerLoadSeq) return controller.providers;
-      if (!res || res.ok !== true || !Array.isArray(res.providers)) {
+      const res = outcome.result;
+      if (!outcome.ok || !res || !Array.isArray(res.providers)) {
         controller.providerCatalog.status = 'error';
-        controller.providerCatalog.error = tr('settings.model_authorization.providers_load_failed');
+        controller.providerCatalog.error = outcome.message;
         return controller.providers;
       }
       controller.providers = res.providers;
@@ -642,9 +662,23 @@
 
   async function chooseApiKeySource(source) {
     controller.draft = transition(controller.draft, { type: 'choose_api_key_source', source });
+    const previewSeq = ++controller.ccswitchPreviewSeq;
     if (source === 'ccswitch') {
       setStatus(tr('settings.model_authorization.ccswitch_preview_loading'), '');
-      const res = await invoke('customProviders.ccswitch.preview');
+      const outcome = await invokeResult(
+        'customProviders.ccswitch.preview',
+        undefined,
+        'settings.model_authorization.ccswitch_load_failed',
+      );
+      if (previewSeq !== controller.ccswitchPreviewSeq || controller.draft.source !== 'ccswitch') return;
+      if (!outcome.ok) {
+        controller.ccswitchRows = [];
+        controller.ccswitchUnsupported = [];
+        setStatus(outcome.message, 'error');
+        render();
+        return;
+      }
+      const res = outcome.result;
       const rawItems = (res && res.ok && Array.isArray(res.items)) ? res.items : ((res && res.ok && Array.isArray(res.rows)) ? res.rows : []);
       controller.ccswitchRows = rawItems.map((item) => ({
         ...item,
@@ -698,11 +732,20 @@
   }
 
   async function selectCcswitch(externalId) {
-    const res = await invoke('modelAuthorizations.prepareCcSwitch', { externalId });
-    if (!res || !res.ok) {
-      setStatus((res && (res.error || res.errorCode)) || tr('settings.model_authorization.error_required'), 'error');
+    const prepareSeq = ++controller.ccswitchPrepareSeq;
+    const outcome = await invokeResult(
+      'modelAuthorizations.prepareCcSwitch',
+      { externalId },
+      'settings.model_authorization.ccswitch_load_failed',
+    );
+    if (prepareSeq !== controller.ccswitchPrepareSeq
+      || controller.draft.source !== 'ccswitch'
+      || controller.draft.step !== 'ccswitch_select') return;
+    if (!outcome.ok) {
+      setStatus(outcome.message, 'error');
       return;
     }
+    const res = outcome.result;
     const prepared = res.draft && typeof res.draft === 'object' ? res.draft : res;
     const draftId = String(prepared.draftId || '').trim();
     if (!draftId) {
@@ -763,10 +806,15 @@
     const token = `discovery-${++controller.discoverySeq}`;
     controller.draft = transition(controller.draft, { type: 'begin_discovery', token });
     render();
-    const result = await invoke('modelAuthorizations.discover', payload);
+    const outcome = await invokeResult(
+      'modelAuthorizations.discover',
+      payload,
+      'settings.model_authorization.error_discovery_failed',
+    );
     if (controller.draft.discoveryToken !== token) return;
+    const result = outcome.result || { ok: false, errorCode: 'network_error' };
     controller.draft = applyDiscovery(controller.draft, { ...(result || {}), token, declaredModels: (result && result.declaredModels) || payload.declaredModels || [] });
-    setStatus(result && result.ok === false ? (result.error || tr('settings.model_authorization.error_discovery_failed')) : '', result && result.ok === false ? 'error' : '');
+    setStatus(result && result.ok === false ? outcome.message : '', result && result.ok === false ? 'error' : '');
     render();
   }
 
@@ -787,10 +835,18 @@
     render();
     let succeeded = false;
     try {
-      const testRes = await invoke('modelAuthorizations.testDraft', testPayload);
-      if (!testRes || !testRes.ok) { setStatus((testRes && testRes.error) || tr('settings.model_authorization.error_test_failed'), 'error'); return; }
-      const res = await invoke('modelAuthorizations.complete', payload);
-      if (!res || !res.ok) { setStatus((res && res.error) || tr('settings.model_authorization.complete_failed'), 'error'); return; }
+      const testOutcome = await invokeResult(
+        'modelAuthorizations.testDraft',
+        testPayload,
+        'settings.model_authorization.error_test_failed',
+      );
+      if (!testOutcome.ok) { setStatus(testOutcome.message, 'error'); return; }
+      const completionOutcome = await invokeResult(
+        'modelAuthorizations.complete',
+        payload,
+        'settings.model_authorization.complete_failed',
+      );
+      if (!completionOutcome.ok) { setStatus(completionOutcome.message, 'error'); return; }
       succeeded = true;
       closeModal();
       await refreshModelAuthorizationSettings();
@@ -809,9 +865,14 @@
     controller.removingAuthorizationId = id;
     setAuthorizationStatus('', '');
     try {
-      const res = await invoke('modelAuthorizations.remove', { authorizationId: id });
-      if (!res || !res.ok || !res.removed) {
-        setAuthorizationStatus((res && res.error) || tr('settings.entries.delete_failed'), 'error');
+      const outcome = await invokeResult(
+        'modelAuthorizations.remove',
+        { authorizationId: id },
+        'settings.entries.delete_failed',
+      );
+      const res = outcome.result;
+      if (!outcome.ok || !res || !res.removed) {
+        setAuthorizationStatus(outcome.message, 'error');
         return;
       }
       await refreshModelAuthorizationSettings();
@@ -908,8 +969,19 @@
   }
 
   async function refreshModelAuthorizationSettings() {
-    const res = await invoke('modelAuthorizations.list');
-    controller.authorizations = (res && res.ok && Array.isArray(res.authorizations)) ? res.authorizations : (Array.isArray(res) ? res : []);
+    const outcome = await invokeResult(
+      'modelAuthorizations.list',
+      undefined,
+      'settings.model_authorization.authorization_list_failed',
+    );
+    if (!outcome.ok) {
+      setAuthorizationStatus(outcome.message, 'error');
+      renderAuthorizationCards();
+      return;
+    }
+    const res = outcome.result;
+    controller.authorizations = (res && Array.isArray(res.authorizations)) ? res.authorizations : (Array.isArray(res) ? res : []);
+    setAuthorizationStatus('', '');
     renderAuthorizationCards();
   }
 

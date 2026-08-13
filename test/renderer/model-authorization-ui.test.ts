@@ -190,6 +190,26 @@ function loadInteractiveHarness() {
   return { context, registry, invoke, discoverResolvers, windowListeners, refreshModelGuard };
 }
 
+async function enterManualBuiltinModels(harness: ReturnType<typeof loadInteractiveHarness>) {
+  const { context, registry, discoverResolvers } = harness;
+  await context.window.initModelAuthorizationSettings();
+  await registry.get('settings-model-authorization-add-btn')!.click();
+  await registry.get('model-authorization-body')!.dispatch('click', {
+    target: { dataset: { modelAuthAction: 'source-manual' } },
+  });
+  await registry.get('model-authorization-body')!.dispatch('click', {
+    target: { dataset: { modelAuthAction: 'choose-provider-preset', providerId: 'anthropic' } },
+  });
+  registry.get('model-authorization-api-key')!.value = 'sk-private-test-value';
+  const pending = registry.get('model-authorization-actions')!.dispatch('click', {
+    target: { dataset: { modelAuthAction: 'continue-credentials' } },
+  });
+  await flushAsync();
+  discoverResolvers.shift()!({ ok: true, models: [{ id: 'claude-test' }] });
+  await pending;
+  return registry.get('model-authorization-body')!;
+}
+
 describe('model authorization interactive wizard', () => {
   it('renders a localized model-selection warning for an unbound authorization', async () => {
     const { context, registry, invoke } = loadInteractiveHarness();
@@ -339,6 +359,128 @@ describe('model authorization interactive wizard', () => {
     const bodyHtml = registry.get('model-authorization-body')!.innerHTML;
     expect(bodyHtml).toContain('choose-custom-endpoint');
     expect(bodyHtml).toContain('settings.model_authorization.providers_empty');
+  });
+
+  it('recovers when provider loading rejects and keeps retry plus custom endpoint available', async () => {
+    const { context, registry, invoke } = loadInteractiveHarness();
+    invoke.mockRejectedValueOnce(new Error('provider loader secret detail'));
+
+    await expect(context.window.initModelAuthorizationSettings()).resolves.toBeUndefined();
+    await registry.get('settings-model-authorization-add-btn')!.click();
+    await registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'source-manual' } },
+    });
+
+    const bodyHtml = registry.get('model-authorization-body')!.innerHTML;
+    expect(bodyHtml).toContain('retry-providers');
+    expect(bodyHtml).toContain('choose-custom-endpoint');
+    expect(bodyHtml).toContain('settings.model_authorization.providers_load_failed');
+    expect(bodyHtml).not.toContain('provider loader secret detail');
+  });
+
+  it('recovers when CC Switch preview or preparation rejects', async () => {
+    const previewHarness = loadInteractiveHarness();
+    await previewHarness.context.window.initModelAuthorizationSettings();
+    await previewHarness.registry.get('settings-model-authorization-add-btn')!.click();
+    previewHarness.invoke.mockRejectedValueOnce(new Error('preview failure'));
+    await expect(previewHarness.registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'source-ccswitch' } },
+    })).resolves.toBeUndefined();
+    expect(previewHarness.registry.get('model-authorization-status')!.textContent)
+      .toBe('settings.model_authorization.ccswitch_load_failed');
+    expect(previewHarness.registry.get('model-authorization-body')!.innerHTML).toContain('ccswitch_preview_empty');
+
+    const prepareHarness = loadInteractiveHarness();
+    await prepareHarness.context.window.initModelAuthorizationSettings();
+    await prepareHarness.registry.get('settings-model-authorization-add-btn')!.click();
+    await prepareHarness.registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'source-ccswitch' } },
+    });
+    prepareHarness.invoke.mockRejectedValueOnce(new Error('prepare failure'));
+    await expect(prepareHarness.registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'select-ccswitch', externalId: 'cc-1' } },
+    })).resolves.toBeUndefined();
+    expect(prepareHarness.registry.get('model-authorization-status')!.textContent)
+      .toBe('settings.model_authorization.ccswitch_load_failed');
+    expect(prepareHarness.registry.get('model-authorization-body')!.innerHTML).toContain('cc-1');
+  });
+
+  it('restores credentials when discovery rejects without rendering the API key', async () => {
+    const { context, registry, invoke } = loadInteractiveHarness();
+    await context.window.initModelAuthorizationSettings();
+    await registry.get('settings-model-authorization-add-btn')!.click();
+    await registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'source-manual' } },
+    });
+    await registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'choose-provider-preset', providerId: 'anthropic' } },
+    });
+    registry.get('model-authorization-api-key')!.value = 'sk-never-render-this';
+    invoke.mockRejectedValueOnce(new Error('discover failure'));
+
+    await expect(registry.get('model-authorization-actions')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'continue-credentials' } },
+    })).resolves.toBeUndefined();
+
+    expect(registry.get('model-authorization-body')!.innerHTML).toContain('model-authorization-api-key');
+    expect(registry.get('model-authorization-body')!.innerHTML).not.toContain('sk-never-render-this');
+    expect(registry.get('model-authorization-status')!.textContent)
+      .toBe('settings.model_authorization.error_discovery_failed');
+  });
+
+  it('recovers busy state when draft testing or completion rejects', async () => {
+    const testHarness = loadInteractiveHarness();
+    const testBody = await enterManualBuiltinModels(testHarness);
+    await testBody.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'toggle-model', modelId: 'claude-test', checked: 'true' } },
+    });
+    testHarness.invoke.mockRejectedValueOnce(new Error('test failure'));
+    await expect(testHarness.registry.get('model-authorization-actions')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'complete' } },
+    })).resolves.toBeUndefined();
+    expect(testHarness.registry.get('model-authorization-modal')!.classList.contains('open')).toBe(true);
+    expect(testHarness.registry.get('model-authorization-actions')!.innerHTML).not.toContain('complete" disabled');
+    expect(testHarness.registry.get('model-authorization-status')!.textContent)
+      .toBe('settings.model_authorization.error_test_failed');
+
+    const completeHarness = loadInteractiveHarness();
+    const completeBody = await enterManualBuiltinModels(completeHarness);
+    await completeBody.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'toggle-model', modelId: 'claude-test', checked: 'true' } },
+    });
+    completeHarness.invoke.mockResolvedValueOnce({ ok: true }).mockRejectedValueOnce(new Error('save failure'));
+    await expect(completeHarness.registry.get('model-authorization-actions')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'complete' } },
+    })).resolves.toBeUndefined();
+    expect(completeHarness.registry.get('model-authorization-modal')!.classList.contains('open')).toBe(true);
+    expect(completeHarness.registry.get('model-authorization-actions')!.innerHTML).not.toContain('complete" disabled');
+    expect(completeHarness.registry.get('model-authorization-status')!.textContent)
+      .toBe('settings.model_authorization.complete_failed');
+  });
+
+  it('preserves authorization cards when list refresh or removal rejects', async () => {
+    const { context, registry, invoke, refreshModelGuard } = loadInteractiveHarness();
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'auth.listProviders') return Promise.resolve({ ok: true, providers: [] });
+      if (channel === 'modelAuthorizations.list') return Promise.resolve({ ok: true, authorizations: [{
+        authorizationId: 'profile:deepseek:kept', label: 'kept', authType: 'api_key', source: 'manual', models: [],
+      }] });
+      return Promise.resolve({ ok: true });
+    });
+    await context.window.initModelAuthorizationSettings();
+
+    invoke.mockRejectedValueOnce(new Error('list failure'));
+    await expect(context.window.refreshModelAuthorizationSettings()).resolves.toBeUndefined();
+    expect(registry.get('settings-model-authorization-list')!.innerHTML).toContain('kept');
+    expect(registry.get('settings-model-authorization-status')!.textContent)
+      .toBe('settings.model_authorization.authorization_list_failed');
+
+    invoke.mockRejectedValueOnce(new Error('remove failure'));
+    await expect(registry.get('settings-model-authorization-list')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'remove-authorization', authorizationId: 'profile:deepseek:kept' } },
+    })).resolves.toBeUndefined();
+    expect(registry.get('settings-model-authorization-list')!.innerHTML).toContain('kept');
+    expect(refreshModelGuard).not.toHaveBeenCalled();
   });
 
   it('validates manual API key fields and discards late discovery after source changes', async () => {
