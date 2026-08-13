@@ -116,6 +116,16 @@ export interface KstarLearningSignal {
   source: 'review';
 }
 
+export interface KstarLearningProvenance {
+  projectionId: string;
+  forecastId: string;
+  episodeId: string;
+  ruleRefs: string[];
+  attribution: KstarAttribution;
+  actionDelta?: ActionDeltaDetail;
+  resultDelta?: ResultDeltaDetail;
+}
+
 export interface KstarCandidateProposal {
   judgment: string;
   summary?: string;
@@ -124,6 +134,7 @@ export interface KstarCandidateProposal {
   suggestedScope: string;
   sourceRefs: CognitionSourceRef[];
   learningSignal?: KstarLearningSignal;
+  learningProvenance?: KstarLearningProvenance;
 }
 
 export interface KstarExtractionRunRecord extends KstarJsonRecord {

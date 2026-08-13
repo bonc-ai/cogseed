@@ -20,7 +20,7 @@ export interface AbilityAssetVersionRecord extends RecallJsonRecord {
   at: string;
   reason?: string;
   actor?: AbilityAssetActor;
-  snapshot: Pick<RecallAbilityAssetRecord, 'title' | 'statement' | 'type' | 'scope' | 'scopePolicy' | 'evidenceRefs' | 'status' | 'maturity' | 'version' | 'learningSignal' | 'ontologyRefs'>;
+  snapshot: Pick<RecallAbilityAssetRecord, 'title' | 'statement' | 'type' | 'scope' | 'scopePolicy' | 'evidenceRefs' | 'status' | 'maturity' | 'version' | 'learningSignal' | 'learningProvenance' | 'ontologyRefs'>;
 }
 
 export interface AbilityAssetAuditRecord extends RecallJsonRecord {
@@ -108,6 +108,7 @@ function snapshot(asset: RecallAbilityAssetRecord): AbilityAssetVersionRecord['s
     ...(asset.scopePolicy ? { scopePolicy: asset.scopePolicy } : {}),
     evidenceRefs: asset.evidenceRefs,
     ...(asset.learningSignal ? { learningSignal: asset.learningSignal } : {}),
+    ...(asset.learningProvenance ? { learningProvenance: asset.learningProvenance } : {}),
     ...(asset.ontologyRefs ? { ontologyRefs: asset.ontologyRefs } : {}),
     status: asset.status,
     maturity: asset.maturity,

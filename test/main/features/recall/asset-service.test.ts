@@ -41,6 +41,28 @@ describe('Recall ability assets', () => {
     expect(audit.map((entry) => entry.action)).toEqual(['created', 'updated', 'paused', 'revoked']);
   });
 
+  it('keeps learning provenance in immutable version snapshots', async () => {
+    const { candidates, assets } = await modules();
+    const learningProvenance = {
+      projectionId: 'proj-a', forecastId: 'wf-a', episodeId: 'kse-a',
+      ruleRefs: ['rule:asset-a:1'], attribution: 'knowledge_gap' as const,
+    };
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Load the exact committed knowledge before execution.',
+      suggestedType: 'personal', suggestedScope: 'project',
+      sourceRefs: [{ kind: 'execution', id: 'kse-a' }], learningProvenance,
+    });
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    await assets.updateAbilityAsset('user-a', asset.id, {
+      statement: 'Load the exact committed knowledge version before execution.',
+      actor: 'user', reason: 'clarify version boundary',
+    });
+
+    const versions = await assets.listAbilityAssetVersions('user-a', asset.id);
+    expect(versions[0].snapshot.learningProvenance).toEqual(learningProvenance);
+    expect(versions[1].snapshot.learningProvenance).toEqual(learningProvenance);
+  });
+
   it('never changes asset ownership or accepts mutable identity fields', async () => {
     const { candidates, assets } = await modules();
     const candidate = await candidates.saveRecallCandidate('user-a', { judgment: 'Prefer local evidence.', suggestedType: 'personal', suggestedScope: 'personal', sourceRefs: [{ kind: 'memory', id: 'mem-a' }] });

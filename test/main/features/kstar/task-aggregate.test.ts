@@ -20,6 +20,52 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+async function attachCompleteLearningProvenance(
+  store: Awaited<ReturnType<typeof import('../../../../src/main/features/kstar/requirement-store')>>,
+  requirement: Awaited<ReturnType<typeof store.readKstarRequirement>> extends infer _ ? any : never,
+) {
+  const recallStore = await import('../../../../src/main/features/recall/store');
+  const forecasts = await import('../../../../src/main/features/recall/world-model');
+  const episodes = await import('../../../../src/main/features/kstar/episode-store');
+  const projectionId = `proj-${requirement.id}`;
+  const forecastId = `wf-${requirement.id}`;
+  const episodeId = `kse-${requirement.id}`;
+  const confirmedAt = '2026-08-09T00:00:00.000Z';
+  await recallStore.writeRecallJsonRecord('user-a', 'projections', projectionId, {
+    schemaVersion: 1, ownerId: 'user-a', id: projectionId, taskRunId: requirement.taskId,
+    purpose: requirement.goalText, authorization: 'user_confirmed', assetIds: [], assetVersions: {},
+    sourceRefs: [], omittedRefs: [], status: 'confirmed', createdAt: confirmedAt, confirmedAt,
+  });
+  await forecasts.saveWorldModelForecast('user-a', {
+    schemaVersion: 1, ownerId: 'user-a', id: forecastId, taskRunId: requirement.taskId,
+    requirementId: requirement.id, projectionId, projectionConfirmedAt: confirmedAt,
+    assetVersions: {}, ruleRefs: ['rule:asset-a:1'], snapshotId: 'snap-a', provenanceComplete: true,
+    input: {
+      k: { projectionId, abilityAssetRefs: [], abilityAssets: [], assetVersions: {}, rules: [] },
+      s: { snapshotId: 'snap-a', conversationSummary: requirement.goalText },
+      t: { userGoal: requirement.goalText, constraints: [] },
+    },
+    forecast: {
+      aHat: { plan: ['verify'], expectedTools: ['verify'], expectedActors: ['commander'] },
+      rHat: { summary: requirement.goalText, acceptanceSignals: [], predictedFiles: [] },
+      predictedRisks: [],
+    },
+    createdAt: confirmedAt,
+  });
+  await episodes.writeKstarEpisode('user-a', {
+    schemaVersion: 1, ownerId: 'user-a', id: episodeId, sessionId: `gconv-${requirement.conversationId}`,
+    taskRunId: requirement.taskId, projectionId, forecastId,
+    k: { memoryRefs: [], contextRefs: [], abilityAssetRefs: [] }, s: {},
+    t: { userGoal: requirement.goalText, constraints: [] },
+    a: { toolCalls: [{ name: 'verify', status: 'ok' }], agentActions: [] },
+    r: { status: 'completed', finalText: 'Completed with evidence.', producedFiles: [] },
+    evidenceRefs: [{ kind: 'execution', id: episodeId }], createdAt: confirmedAt, updatedAt: confirmedAt,
+  });
+  const updated = { ...requirement, projectionId, projectionIds: [projectionId], forecastId, episodeIds: [episodeId] };
+  await store.replaceKstarRequirement('user-a', updated);
+  return updated;
+}
+
 async function seedClosedTask() {
   const store = await import('../../../../src/main/features/kstar/requirement-store');
   const closure = await import('../../../../src/main/features/kstar/requirement-closure');
@@ -34,6 +80,7 @@ async function seedClosedTask() {
     requirementId: requirement.id,
     userFeedback: { verdict: 'partial', text: '下次必须覆盖 refresh token 的跨账号复用检查' },
   });
+  const provenanced = await attachCompleteLearningProvenance(store, closed);
   const state = store.createInitialConversationTaskState('user-a', 'cid-a');
   const readyState = {
     ...state,
@@ -43,7 +90,7 @@ async function seedClosedTask() {
     taskComplete: true,
   };
   await store.writeConversationTaskState('user-a', readyState);
-  return { store, task, requirement: closed, state: readyState };
+  return { store, task, requirement: provenanced, state: readyState };
 }
 
 async function writeCompletedEpisode(store: Awaited<ReturnType<typeof import('../../../../src/main/features/kstar/requirement-store')>>, episodeId: string) {
@@ -108,6 +155,13 @@ describe('KSTAR task aggregation', () => {
       candidateBridge: async (_userId, proposals) => {
         bridgeCalls += 1;
         expect(proposals).toHaveLength(1);
+        expect(proposals[0].learningProvenance).toMatchObject({
+          projectionId: `proj-${requirement.id}`,
+          forecastId: `wf-${requirement.id}`,
+          episodeId: `kse-${requirement.id}`,
+          attribution: 'execution_gap',
+          ruleRefs: ['rule:asset-a:1'],
+        });
         return [fakeCandidate('cand-a')];
       },
     });
@@ -138,7 +192,7 @@ describe('KSTAR task aggregation', () => {
 
 
 
-  it('bridges a candidate when completion evidence and a world-model forecast exist without user feedback', async () => {
+  it('does not bridge a candidate when world-model provenance is incomplete', async () => {
     const store = await import('../../../../src/main/features/kstar/requirement-store');
     const aggregate = await import('../../../../src/main/features/kstar/task-aggregate');
     const task = store.createKstarTaskRecord('user-a', { conversationId: 'cid-auto-signal', title: 'Auto signal task' });
@@ -154,15 +208,13 @@ describe('KSTAR task aggregation', () => {
     await store.writeConversationTaskState('user-a', { ...state, currentTaskId: task.id, currentRequirementId: requirement.id, requirementJustClosed: requirement.id, taskComplete: true });
 
     const result = await aggregate.drainKstarTaskState('user-a', 'cid-auto-signal', {
-      candidateBridge: async (_userId, proposals) => {
-        expect(proposals).toHaveLength(1);
-        expect(proposals[0].learningSignal?.deltaR).toBe(0);
-        return [fakeCandidate('cand-auto-signal')];
+      candidateBridge: async () => {
+        throw new Error('incomplete provenance must not reach the candidate bridge');
       },
     });
 
-    expect(result?.proposals).toHaveLength(1);
-    expect(result?.candidates).toEqual([fakeCandidate('cand-auto-signal')]);
+    expect(result?.proposals).toEqual([]);
+    expect(result?.candidates).toEqual([]);
   });
 
   it('does not bridge requirement candidates when closed review has no learning signal', async () => {

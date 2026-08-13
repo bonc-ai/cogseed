@@ -150,6 +150,51 @@ describe('Recall candidate governance', () => {
     expect(listed).toEqual([expect.objectContaining({ id: candidate.id, promotedAssetId: first.asset.id })]);
   });
 
+  it('preserves validated learning provenance on the candidate and promoted asset without auto-creating a causal rule', async () => {
+    const candidates = await service();
+    const learningProvenance = {
+      projectionId: 'proj-a',
+      forecastId: 'wf-a',
+      episodeId: 'kse-a',
+      ruleRefs: ['rule:asset-a:1'],
+      attribution: 'rule_gap' as const,
+      actionDelta: {
+        missingTools: ['verify'], unexpectedTools: [], missingActors: [], unexpectedActors: [],
+        missingPlanSteps: [], extraActions: [], failedActions: [], orderMismatch: false,
+      },
+      resultDelta: {
+        acceptanceSignals: [{ signal: 'Tests pass', status: 'not_met' as const, evidence: 'Test failed.' }],
+        missingPredictedFiles: [], unexpectedProducedFiles: [], terminalStatus: 'failed' as const,
+      },
+    };
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Verify the acceptance criteria before finalizing.',
+      suggestedType: 'rule',
+      suggestedScope: 'project',
+      sourceRefs: [{ kind: 'execution', id: 'kse-a' }],
+      learningProvenance,
+    });
+
+    expect(candidate.learningProvenance).toEqual(learningProvenance);
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    expect(promoted.asset.learningProvenance).toEqual(learningProvenance);
+    expect(promoted.asset.causalRule).toBeUndefined();
+  });
+
+  it('rejects malformed learning provenance before persisting a candidate', async () => {
+    const candidates = await service();
+    await expect(candidates.saveRecallCandidate('user-a', {
+      judgment: 'Do not trust incomplete lineage.',
+      suggestedType: 'rule',
+      suggestedScope: 'project',
+      sourceRefs: [{ kind: 'execution', id: 'kse-a' }],
+      learningProvenance: {
+        projectionId: '../proj-a', forecastId: 'wf-a', episodeId: 'kse-a',
+        ruleRefs: [], attribution: 'rule_gap',
+      },
+    } as any)).rejects.toThrow(/learning provenance/i);
+  });
+
   it('preserves legacy evidence identity when returning an already-promoted asset', async () => {
     const candidates = await service();
     const candidate = await candidates.saveRecallCandidate('user-a', {

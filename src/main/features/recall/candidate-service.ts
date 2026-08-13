@@ -11,7 +11,7 @@ import {
   writeRecallJsonRecord,
 } from './store';
 import type { RecallJsonRecord } from './types';
-import type { KstarLearningSignal } from '../kstar/types';
+import type { KstarAttribution, KstarLearningProvenance, KstarLearningSignal } from '../kstar/types';
 import { normalizeAbilityAssetOntologyRefs, type AbilityAssetOntologyRef } from './ontology-refs';
 import { normalizeAbilityAssetScopePolicy, type RecallAbilityAssetScopePolicy } from './scope-policy';
 import type { CausalRule } from './world-model-types';
@@ -39,6 +39,7 @@ export interface RecallCandidateRecord extends RecallJsonRecord {
   suggestedScope: string;
   sourceRefs: CognitionSourceRef[];
   learningSignal?: KstarLearningSignal;
+  learningProvenance?: KstarLearningProvenance;
   captureKey?: string;
   promotedAssetId?: string;
   decisionNote?: string;
@@ -54,6 +55,7 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   statement: string;
   evidenceRefs: CognitionSourceRef[];
   learningSignal?: KstarLearningSignal;
+  learningProvenance?: KstarLearningProvenance;
   ontologyRefs?: AbilityAssetOntologyRef[];
   scope: string;
   scopePolicy?: RecallAbilityAssetScopePolicy;
@@ -77,6 +79,7 @@ export interface SaveRecallCandidateInput {
   suggestedScope: string;
   sourceRefs: unknown[];
   learningSignal?: KstarLearningSignal;
+  learningProvenance?: KstarLearningProvenance;
   captureKey?: string;
 }
 
@@ -116,6 +119,89 @@ function normalizeLearningSignal(value: unknown): KstarLearningSignal | undefine
   return signal as unknown as KstarLearningSignal;
 }
 
+
+const KSTAR_ATTRIBUTIONS = new Set<KstarAttribution>([
+  'knowledge_gap', 'rule_gap', 'template_gap', 'skill_gap', 'execution_gap', 'unclear',
+]);
+
+function normalizedStringArray(value: unknown, field: string, maxItems = 100): string[] {
+  if (!Array.isArray(value) || value.length > maxItems) throw new Error(`malformed candidate learning provenance ${field}`);
+  return value.map((item) => {
+    if (typeof item !== 'string') throw new Error(`malformed candidate learning provenance ${field}`);
+    const text = item.replace(/\s+/g, ' ').trim();
+    if (!text || text.length > 500) throw new Error(`malformed candidate learning provenance ${field}`);
+    return text;
+  });
+}
+
+function normalizeActionDelta(value: unknown): KstarLearningProvenance['actionDelta'] {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed candidate learning provenance action delta');
+  const record = value as Record<string, unknown>;
+  if (typeof record.orderMismatch !== 'boolean') throw new Error('malformed candidate learning provenance action delta');
+  return {
+    missingTools: normalizedStringArray(record.missingTools, 'missing tools'),
+    unexpectedTools: normalizedStringArray(record.unexpectedTools, 'unexpected tools'),
+    missingActors: normalizedStringArray(record.missingActors, 'missing actors'),
+    unexpectedActors: normalizedStringArray(record.unexpectedActors, 'unexpected actors'),
+    missingPlanSteps: normalizedStringArray(record.missingPlanSteps, 'missing plan steps'),
+    extraActions: normalizedStringArray(record.extraActions, 'extra actions'),
+    failedActions: normalizedStringArray(record.failedActions, 'failed actions'),
+    orderMismatch: record.orderMismatch,
+  };
+}
+
+function normalizeResultDelta(value: unknown): KstarLearningProvenance['resultDelta'] {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed candidate learning provenance result delta');
+  const record = value as Record<string, unknown>;
+  if (!['completed', 'failed', 'cancelled', 'waiting_input'].includes(String(record.terminalStatus))) {
+    throw new Error('malformed candidate learning provenance result delta');
+  }
+  if (!Array.isArray(record.acceptanceSignals) || record.acceptanceSignals.length > 100) {
+    throw new Error('malformed candidate learning provenance acceptance signals');
+  }
+  const acceptanceSignals = record.acceptanceSignals.map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('malformed candidate learning provenance acceptance signal');
+    const signal = item as Record<string, unknown>;
+    if (!['met', 'not_met', 'unknown'].includes(String(signal.status))) throw new Error('malformed candidate learning provenance acceptance signal');
+    const normalizedSignal = boundedText(signal.signal, 'learning provenance acceptance signal', 500, true)!;
+    const evidence = boundedText(signal.evidence, 'learning provenance acceptance evidence', 2_000, true)!;
+    return { signal: normalizedSignal, status: signal.status as 'met' | 'not_met' | 'unknown', evidence };
+  });
+  return {
+    acceptanceSignals,
+    missingPredictedFiles: normalizedStringArray(record.missingPredictedFiles, 'missing predicted files'),
+    unexpectedProducedFiles: normalizedStringArray(record.unexpectedProducedFiles, 'unexpected produced files'),
+    terminalStatus: record.terminalStatus as 'completed' | 'failed' | 'cancelled' | 'waiting_input',
+  };
+}
+
+export function normalizeLearningProvenance(value: unknown): KstarLearningProvenance | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed candidate learning provenance');
+  const record = value as Record<string, unknown>;
+  if (!safeId(record.projectionId) || !safeId(record.forecastId) || !safeId(record.episodeId)) {
+    throw new Error('malformed candidate learning provenance ids');
+  }
+  if (!KSTAR_ATTRIBUTIONS.has(record.attribution as KstarAttribution)) {
+    throw new Error('malformed candidate learning provenance attribution');
+  }
+  const ruleRefs = normalizedStringArray(record.ruleRefs, 'rule refs');
+  if (ruleRefs.some((ref) => !/^[A-Za-z0-9:_-]+$/.test(ref))) throw new Error('malformed candidate learning provenance rule refs');
+  const actionDelta = normalizeActionDelta(record.actionDelta);
+  const resultDelta = normalizeResultDelta(record.resultDelta);
+  return {
+    projectionId: record.projectionId as string,
+    forecastId: record.forecastId as string,
+    episodeId: record.episodeId as string,
+    ruleRefs,
+    attribution: record.attribution as KstarAttribution,
+    ...(actionDelta ? { actionDelta } : {}),
+    ...(resultDelta ? { resultDelta } : {}),
+  };
+}
+
 function asCandidate(value: RecallJsonRecord): RecallCandidateRecord {
   if (
     (value.status !== 'pending' && value.status !== 'deferred' && value.status !== 'rejected' && value.status !== 'promoted') ||
@@ -129,7 +215,8 @@ function asCandidate(value: RecallJsonRecord): RecallCandidateRecord {
   const sourceRefs = normalizeCognitionSourceRefs(value.sourceRefs);
   if (!sourceRefs.length) throw new Error('malformed recall candidate evidence');
   const learningSignal = normalizeLearningSignal(value.learningSignal);
-  return { ...value, taxonomyVersion: 2, sourceRefs, ...(learningSignal ? { learningSignal } : {}) } as RecallCandidateRecord;
+  const learningProvenance = normalizeLearningProvenance(value.learningProvenance);
+  return { ...value, taxonomyVersion: 2, sourceRefs, ...(learningSignal ? { learningSignal } : {}), ...(learningProvenance ? { learningProvenance } : {}) } as RecallCandidateRecord;
 }
 
 function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
@@ -141,9 +228,10 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   const evidenceRefs = normalizeCognitionSourceRefs(value.evidenceRefs);
   if (!evidenceRefs.length) throw new Error('malformed recall ability asset evidence');
   const learningSignal = normalizeLearningSignal(value.learningSignal);
+  const learningProvenance = normalizeLearningProvenance(value.learningProvenance);
   const ontologyRefs = value.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(value.ontologyRefs);
   const scopePolicy = normalizeAbilityAssetScopePolicy(value.scopePolicy);
-  return { ...value, evidenceRefs, ...(learningSignal ? { learningSignal } : {}), ...(ontologyRefs ? { ontologyRefs } : {}), ...(scopePolicy ? { scopePolicy } : {}) } as RecallAbilityAssetRecord;
+  return { ...value, evidenceRefs, ...(learningSignal ? { learningSignal } : {}), ...(learningProvenance ? { learningProvenance } : {}), ...(ontologyRefs ? { ontologyRefs } : {}), ...(scopePolicy ? { scopePolicy } : {}) } as RecallAbilityAssetRecord;
 }
 
 function candidateDirectory(userId: string): string {
@@ -205,6 +293,7 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
   const sourceRefs = normalizeCognitionSourceRefsForWrite(input.sourceRefs);
   if (!sourceRefs.length) throw new Error('candidate evidence is required');
   const learningSignal = normalizeLearningSignal(input.learningSignal);
+  const learningProvenance = normalizeLearningProvenance(input.learningProvenance);
   const captureKey = input.captureKey === undefined
     ? undefined
     : boundedText(input.captureKey, 'capture key', 160, true);
@@ -231,6 +320,7 @@ export async function saveRecallCandidate(userId: string, input: SaveRecallCandi
     suggestedScope,
     sourceRefs,
     ...(learningSignal ? { learningSignal } : {}),
+    ...(learningProvenance ? { learningProvenance } : {}),
     ...(captureKey ? { captureKey } : {}),
     createdAt: now,
     updatedAt: now,
@@ -278,6 +368,7 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
   const sourceRefs = normalizeCognitionSourceRefsForWrite(input.sourceRefs);
   if (!sourceRefs.length) throw new Error('candidate evidence is required');
   const learningSignal = normalizeLearningSignal(input.learningSignal);
+  const learningProvenance = normalizeLearningProvenance(input.learningProvenance);
   const duplicates = await listRecallCandidates(userId);
   const nextFingerprint = fingerprint({ judgment, sourceRefs });
   if (duplicates.some((candidate) => candidate.id !== candidateId && fingerprint(candidate) === nextFingerprint)) throw new Error('duplicate recall candidate');
@@ -285,7 +376,7 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
     if (!raw) throw new Error('recall candidate not found');
     const current = asCandidate(raw);
     if (current.status === 'rejected' || current.status === 'promoted') throw new Error('recall candidate is terminal');
-    return { ...current, judgment, ...(summary ? { summary } : {}), ...(uncertainty ? { uncertainty } : {}), suggestedType, suggestedScope, sourceRefs, ...(learningSignal ? { learningSignal } : current.learningSignal ? { learningSignal: current.learningSignal } : {}), promotionErrorCode: undefined, promotionErrorMessage: undefined, promotionFailedAt: undefined, updatedAt: new Date().toISOString() };
+    return { ...current, judgment, ...(summary ? { summary } : {}), ...(uncertainty ? { uncertainty } : {}), suggestedType, suggestedScope, sourceRefs, ...(learningSignal ? { learningSignal } : current.learningSignal ? { learningSignal: current.learningSignal } : {}), ...(learningProvenance ? { learningProvenance } : current.learningProvenance ? { learningProvenance: current.learningProvenance } : {}), promotionErrorCode: undefined, promotionErrorMessage: undefined, promotionFailedAt: undefined, updatedAt: new Date().toISOString() };
   });
   return asCandidate(updated);
 }
@@ -345,6 +436,7 @@ export async function promoteRecallCandidate(
       statement: candidate.judgment,
       evidenceRefs: candidate.sourceRefs,
       ...(candidate.learningSignal ? { learningSignal: candidate.learningSignal } : {}),
+      ...(candidate.learningProvenance ? { learningProvenance: candidate.learningProvenance } : {}),
       ...(ontologyRefs?.length ? { ontologyRefs } : {}),
       scope: candidate.suggestedScope,
       ...(scopePolicy ? { scopePolicy } : {}),
