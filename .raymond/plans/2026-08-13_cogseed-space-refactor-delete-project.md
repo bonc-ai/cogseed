@@ -81,9 +81,10 @@ Conversation.space_id (string | null)
   - 文件：`src/main/features/spaces_artifacts.ts`
   - 验收：返回统一产物列表，附件和 artifact 都在。
   - ✅ 完成（2026-08-13）：`spaces_artifacts.ts` 的 `listSpaceArtifacts(uid, spaceId)` 遍历 `listSpaceConversations` 结果，直接扫空间附件目录 `spaceChatAttachmentDir`（`ALLOWED_EXTENSIONS` 白名单过滤）+ 空间产物目录 `spaceChatArtifactCidDir`（读 `__cogseed-meta.json` 取标题/createdAt），统一 `{name,type:'attachment'|'artifact',ext,sourceSessionId,time,artifactId?}`，按时间倒序。**关键偏差**：未复用 `chat_attachments.listAttachments`/`artifactDirForConversation`——两者经 project-layout 按 project_id 解析（尚不支持空间根），v5 已把已绑空间会话的附件/产物搬到 `spaces/<sid>/`，故直接读空间路径与迁移落点对齐（阶段 4 统一后可收敛）。验证证据：`npm run typecheck` 通过；fixture（空间 1 会话 + 2 附件 + 1 artifact 带 meta 标题）断言附件/产物齐全、标题/时间/类型正确、空空间返回 []。
-- [ ] **T1.3 空间资产引用（路线 A 激活死字段）**：`spaces.ts` 新增 `bindSpaceAsset` / `unbindSpaceAsset` / `listSpaceAssetBindings`，读写 `asset_reference_bindings`；绑定默认 policy=`follow_latest_compatible`；回填资产 title/type 用 `recall/asset-service.ts` 的 `listAbilityAssets`。
+- [x] **T1.3 空间资产引用（路线 A 激活死字段）**：`spaces.ts` 新增 `bindSpaceAsset` / `unbindSpaceAsset` / `listSpaceAssetBindings`，读写 `asset_reference_bindings`；绑定默认 policy=`follow_latest_compatible`；回填资产 title/type 用 `recall/asset-service.ts` 的 `listAbilityAssets`。
   - 文件：`src/main/features/spaces.ts`（字段已存在，加读写函数）
   - 验收：绑定/解绑/列出走通，policy 默认 follow_latest。
+  - ✅ 完成（2026-08-13）：`bindSpaceAsset(uid, spaceId, ref)`（policy 缺省 `follow_latest_compatible`，同 asset_id 幂等覆盖 version/policy/updated_at，非法 ref → `invalid_ref`）；`unbindSpaceAsset`（按 asset_id 移除，空则清字段）；`listSpaceAssetBindings`（回填 title/asset_type，用动态 import `recall/asset-service.listAbilityAssets`，失败静默降级为空回填）；新增 `SpaceAssetBindingView` 展示类型。验证证据：`npm run typecheck` 通过；fixture（构造 recall 资产 schemaVersion/ownerId/id 完整）断言默认 policy、幂等覆盖、显式 policy、非法 ref、回填 title/type、解绑、not_found 全过。风险：回填依赖 recall 资产读取器，其校验较严（schemaVersion/ownerId/id 必填），资产缺失时 title/type 缺省为 undefined（UI 侧需容忍）。
 - [ ] **T1.4 IPC 三个 handler**：`ipc/index.ts` 加 `spaces.conversations.list`、`spaces.artifacts.list`、`spaces.assets.list`（+ assets.bind/unbind）。
   - 文件：`src/main/ipc/index.ts`
   - 验收：`npm run typecheck` 通过；前端可 invoke 拿到数据。
