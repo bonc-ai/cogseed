@@ -38,10 +38,12 @@ import { getActiveUserId } from '../features/users.js';
 import { userToolResultsDir } from '../paths.js';
 import { createLogger } from '../logger.js';
 import { listClaudeSessions } from '../features/local_agents/claude_sessions.js';
+import { listWorkbuddySessions } from '../features/local_agents/workbuddy_sessions.js';
 import { importClaudeSessions } from '../features/local_agents/import_sessions.js';
 import { listClaudeDesktopSessions } from '../features/local_agents/claude_desktop_sessions.js';
 import { listAgentTypes, listSessions as listAcpSessions } from '../features/local_agents/acp_sessions.js';
-import { importClaudeSession, importClaudeDesktopSession } from '../features/session_import/asset-router.js';
+import { importClaudeSession, importClaudeDesktopSession, importWorkbuddySession, prefetchImportSession } from '../features/session_import/asset-router.js';
+import { recommendStartingPoint } from '../features/session_import/recommend-start.js';
 import { listClaudeSkills, importClaudeSkills, listCodexSkills, importCodexSkills } from '../features/session_import/skill-import.js';
 import {
   readClaudeMemory,
@@ -87,7 +89,7 @@ function isLocalCliType(v: unknown): v is LocalCliType {
 // CLI has a backend — left as a guard for future additions where the
 // dispatch path lags detection.
 const DISPATCHABLE: ReadonlySet<LocalCliType> = new Set<LocalCliType>(
-  ['claude', 'codex', 'openclaw', 'opencode', 'hermes'],
+  ['claude', 'codex', 'openclaw', 'opencode', 'hermes', 'workbuddy'],
 );
 
 function maskUnsupported(entries: LocalCliEntry[]): LocalCliEntry[] {
@@ -111,6 +113,23 @@ export const invokeHandlers = {
   'localAgents.list': async ({ force = false }: { force?: boolean } = {}) => {
     const entries = await detectAll({ force: !!force });
     return { entries: maskUnsupported(entries) };
+  },
+
+  /**
+   * Detect installed DESKTOP apps (not CLIs) that the commander fallback
+   * cannot drive: Claude Desktop, Codex desktop, Cursor. Purely a file
+   * existence check under /Applications — honest "installed but no local
+   * execution interface" signal for the fallback guidance UI.
+   */
+  'localAgents.detectDesktopApps': async () => {
+    const apps = new Set<string>();
+    for (const name of ['Claude.app', 'Codex.app', 'Cursor.app']) {
+      try {
+        const p = path.join('/Applications', name);
+        if (fs.existsSync(p) && fs.statSync(p).isDirectory()) apps.add(name.replace('.app', ''));
+      } catch { /* skip */ }
+    }
+    return { apps: Array.from(apps) };
   },
 
   /**
@@ -214,6 +233,28 @@ export const invokeHandlers = {
       filePath,
       titleHint: typeof titleHint === 'string' ? titleHint : undefined,
     });
+  },
+
+  /**
+   * Warm the read+extract cache for the recommended session so a later
+   * "继续项目" click skips the slow distillation model call. Fire-and-forget
+   * from the renderer the moment the recommendation card resolves — read-only,
+   * best-effort, and creates nothing user-visible. Only `claude`/`workbuddy`
+   * have a slow extract worth prefetching; other sources are a no-op here.
+   *
+   * A failed/degraded prefetch never blocks the eventual import — it just
+   * won't be sped up, so this returns `{ ok:false, reason }` rather than throwing.
+   */
+  'sessionImport.prefetchRecommended': async (
+    { source, filePath }: { source?: unknown; filePath?: unknown } = {},
+  ) => {
+    if (source !== 'claude' && source !== 'workbuddy') {
+      return { ok: false, reason: 'source_not_prefetchable' };
+    }
+    if (typeof filePath !== 'string' || !filePath) throw new Error('filePath required');
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return prefetchImportSession({ userId, source, filePath });
   },
 
   /**
@@ -400,6 +441,52 @@ export const invokeHandlers = {
       filePath,
       typeof titleHint === 'string' ? titleHint : undefined,
     );
+  },
+
+  /**
+   * List WorkBuddy (Tencent) sessions from `~/.workbuddy/projects/`. Returns
+   * metadata only (first user query, timestamp, project path). READ-ONLY,
+   * best-effort: missing dir returns []. The real prompt is extracted from
+   * the `<user_query>` wrapper so the picker shows the question, not the
+   * system-reminder blob.
+   */
+  'sessionImport.listWorkbuddySessions': async () => {
+    const sessions = await listWorkbuddySessions();
+    return { sessions };
+  },
+
+  /**
+   * Onboarding "从哪里开始" recommendation. Ranks the user's REAL prior
+   * sessions across every detected agent and, for the best one, suggests a
+   * matching role template via local keyword match. Read-only; never
+   * fabricates — returns `{ top: null }` when nothing readable exists so the
+   * UI can honestly fall back to "选择其他 session" / "从空白开始".
+   */
+  'sessionImport.recommendStartingPoint': async () => {
+    return recommendStartingPoint();
+  },
+
+  /**
+   * Import one WorkBuddy session into a CogSeed conversation: read the
+   * transcript, normalize WorkBuddy's top-level role/content jsonl, extract
+   * cognitions, materialize a continuable conversation, and route the
+   * extracted assets into the Recall candidate pool. Same pipeline as the
+   * Claude import — this is how a WorkBuddy session becomes owned cognitive
+   * assets. `filePath` must be one returned by `listWorkbuddySessions`; the
+   * reader re-validates containment under `~/.workbuddy/projects`.
+   */
+  'sessionImport.importWorkbuddySession': async (
+    { filePath, titleHint, projectPath }: { filePath?: unknown; titleHint?: unknown; projectPath?: unknown } = {},
+  ) => {
+    if (typeof filePath !== 'string' || !filePath) throw new Error('filePath required');
+    const userId = getActiveUserId();
+    if (!userId) throw new Error('no active user');
+    return importWorkbuddySession({
+      userId,
+      filePath,
+      titleHint: typeof titleHint === 'string' ? titleHint : undefined,
+      projectPath: typeof projectPath === 'string' ? projectPath : undefined,
+    });
   },
 
   /**

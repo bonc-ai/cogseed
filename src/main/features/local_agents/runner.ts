@@ -26,6 +26,7 @@ import { codexBackend } from './backends/codex.js';
 import { openclawBackend } from './backends/openclaw.js';
 import { opencodeBackend } from './backends/opencode.js';
 import { hermesBackend } from './backends/hermes.js';
+import { workbuddyBackend } from './backends/workbuddy.js';
 import { type LocalBackend, type LocalEvent } from './backends/base.js';
 import { resolveCliProviderEnv } from './provider_env.js';
 import * as persist from './persist.js';
@@ -148,6 +149,7 @@ const BACKENDS: Partial<Record<LocalCliType, LocalBackend>> = {
   openclaw: openclawBackend,
   opencode: opencodeBackend,
   hermes: hermesBackend,
+  workbuddy: workbuddyBackend,
 };
 
 function executionKindForCli(cli: LocalCliType): ExecutionKind {

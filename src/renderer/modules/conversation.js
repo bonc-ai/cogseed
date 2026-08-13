@@ -9736,14 +9736,26 @@ async function _maybeApplyCliFallback(cid) {
   if (!cli) {
     try {
       const listRes = await window.orkas.invoke('localAgents.list', { force: false });
-      const entry = (listRes && listRes.entries || []).find(
+      const entries = (listRes && listRes.entries) || [];
+      // Prefer a SIGNED-IN CLI (official account); fall back to the first
+      // available one — the credential check is file-based and can miss
+      // keychain-stored sessions, so an available CLI is still a valid
+      // fallback backend (it will surface its own login error if not logged in).
+      const signedIn = entries.find(
         (e) => e && e.available && e.auth && e.auth.loggedIn
           && ['claude', 'codex', 'opencode'].includes(e.type),
       );
+      const anyAvailable = entries.find(
+        (e) => e && e.available && ['claude', 'codex', 'opencode'].includes(e.type),
+      );
+      const entry = signedIn || anyAvailable;
       cli = entry ? entry.type : '';
     } catch (_) { /* no auth state available */ }
   }
-  if (!cli) return false;
+  if (!cli) {
+    _cliFallbackGuideUser();
+    return false;
+  }
 
   let agent = null;
   try {
@@ -9752,6 +9764,25 @@ async function _maybeApplyCliFallback(cid) {
       (a) => a && a.runtime && a.runtime.kind === 'cli' && a.runtime.cli === cli,
     );
   } catch (_) { /* agents list unavailable */ }
+
+  // No CLI agent exists yet (user never ran the connect step): create one
+  // on the fly so the fallback actually has a backend to route to.
+  if (!agent) {
+    try {
+      const name = cli === 'claude' ? 'Claude' : (cli === 'codex' ? 'Codex' : 'OpenCode');
+      const res = await window.orkas.invoke('agents.create', {
+        name,
+        description: `本机 ${name} 命令行，作为 AI 团队成员执行任务`,
+        icon: 'code',
+        color: 'sage',
+        runtime: { kind: 'cli', cli },
+        category: 'general',
+      });
+      if (res && res.agent) agent = res.agent;
+    } catch (err) {
+      _convLog.warn('cli fallback: auto-create agent failed', err);
+    }
+  }
   if (!agent) return false;
 
   _recipientByCid[cid] = { kind: 'agent', id: String(agent.agent_id || ''), name: String(agent.name || cli) };
@@ -9763,6 +9794,30 @@ async function _maybeApplyCliFallback(cid) {
     uiToast(`指挥官当前没有可用的 API Key，消息已自动交给 ${label} 执行（可在设置中更改）`, { variant: 'warning', timeoutMs: 6000 });
   }
   return true;
+}
+
+// No usable local CLI backend: guide the user instead of failing with a bare
+// "no model" error. Desktop apps are detected honestly — they exist but have
+// no local execution interface (Anthropic's product boundary).
+async function _cliFallbackGuideUser() {
+  if (typeof uiToast !== 'function') return;
+  let desktopApps = [];
+  try {
+    const res = await window.orkas.invoke('localAgents.detectDesktopApps');
+    desktopApps = (res && Array.isArray(res.apps)) ? res.apps : [];
+  } catch (_) { /* detection is best-effort */ }
+
+  if (desktopApps.includes('Claude')) {
+    uiToast(
+      '检测到 Claude 桌面版，但它无法作为执行后端（Anthropic 限制）。要让对话跑起来：安装 Claude Code CLI 并登录（npm install -g @anthropic-ai/claude-code，然后运行 claude 授权，同一官方账号）。或在设置里配置 API Key。',
+      { variant: 'warning', timeoutMs: 10000 },
+    );
+    return;
+  }
+  uiToast(
+    '指挥官没有可用的 API Key，也没有检测到本机 CLI Agent（Claude Code / Codex / OpenCode）。请安装其中一个并登录，或在设置里配置 API Key。',
+    { variant: 'warning', timeoutMs: 10000 },
+  );
 }
 
 async function sendInConversation(cid, content, extra, options = {}) {
