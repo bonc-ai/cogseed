@@ -89,17 +89,29 @@ def _square_padded(image: Image.Image, target: int, fill: tuple[int, int, int, i
 
 
 
-def _rounded_tile(logo: Image.Image, size: int, corner: int, background: tuple[int, int, int]) -> Image.Image:
-    """Build a macOS-style app-icon tile: transparent corners, rounded light
-    background, and the brand mark centered at ~62% of the canvas so the Dock
-    renders it at the same visual size as other apps."""
+def _rounded_tile(logo: Image.Image, size: int, background: tuple[int, int, int]) -> Image.Image:
+    """Build a macOS-style app-icon tile matching system-app proportions.
+
+    Measured on this machine (Finder/Music/Photos/Chrome/VSCode): the opaque
+    tile occupies ~84-87.5% of the canvas with a ~21-26% corner radius. We
+    target the Apple system-app values: tile 87.5% of the canvas (6.25% margin
+    per side), corner radius 21% of the canvas, and the mark centered at ~66%
+    of the tile so the Dock renders it at the same visual size as other apps.
+    """
+    margin = round(size * 0.0625)
+    tile_side = size - margin * 2
+    corner = round(size * 0.21)
     tile = Image.new('RGBA', (size, size), (0, 0, 0, 0))
     mask = Image.new('L', (size, size), 0)
     draw = ImageDraw.Draw(mask)
-    draw.rounded_rectangle((0, 0, size - 1, size - 1), radius=corner, fill=255)
+    draw.rounded_rectangle(
+        (margin, margin, size - 1 - margin, size - 1 - margin),
+        radius=corner,
+        fill=255,
+    )
     tile.paste(Image.new('RGBA', (size, size), (*background, 255)), (0, 0), mask)
 
-    content = round(size * 0.62)
+    content = round(tile_side * 0.66)
     scaled = logo.resize((content, content), Image.Resampling.LANCZOS)
     tile.paste(scaled, ((size - content) // 2, (size - content) // 2), scaled)
     return tile
@@ -161,7 +173,7 @@ def main() -> None:
         transparent.save(tmpdir / 'logo.png', 'PNG', optimize=True)
 
         logo_square = _square_padded(mark, 512, (0, 0, 0, 0))
-        icon = _rounded_tile(logo_square, 512, corner=114, background=ICON_BACKGROUND)
+        icon = _rounded_tile(logo_square, 512, background=ICON_BACKGROUND)
         icon.save(tmpdir / 'icon.png', 'PNG', optimize=True)
         icon.save(tmpdir / 'icon.icns', 'ICNS')
         icon.save(tmpdir / 'icon.ico', 'ICO', sizes=ICO_SIZES)

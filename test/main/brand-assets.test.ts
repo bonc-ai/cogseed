@@ -87,6 +87,24 @@ describe('CogSeed brand assets', () => {
     const centerOffset = ((icon.bitmap.width * 256) + 256) * 4;
     expect(icon.bitmap.data[centerOffset + 3]).toBe(255); // center is opaque
     expect(hasOpaqueLightPixel(icon)).toBe(true);
+    // The opaque tile must be inset like system apps (measured Finder/Photos:
+    // ~87.5% of the canvas) so the Dock size matches other apps.
+    const alpha = icon.bitmap.data;
+    const opaqueXs = new Set<number>();
+    const opaqueYs = new Set<number>();
+    for (let index = 0; index < alpha.length; index += 4) {
+      if (alpha[index + 3] === 0) continue;
+      const x = (index / 4) % icon.bitmap.width;
+      const y = Math.floor(index / 4 / icon.bitmap.width);
+      opaqueXs.add(x);
+      opaqueYs.add(y);
+    }
+    const tileW = (Math.max(...opaqueXs) - Math.min(...opaqueXs) + 1) / icon.bitmap.width;
+    const tileH = (Math.max(...opaqueYs) - Math.min(...opaqueYs) + 1) / icon.bitmap.height;
+    expect(tileW).toBeGreaterThanOrEqual(0.85);
+    expect(tileW).toBeLessThanOrEqual(0.90);
+    expect(tileH).toBeGreaterThanOrEqual(0.85);
+    expect(tileH).toBeLessThanOrEqual(0.90);
     expect(hasPixelNear(logo, darkGreen)).toBe(true);
     expect(hasPixelNear(logo, orange)).toBe(true);
     expect(hasPixelNear(icon, darkGreen)).toBe(true);
