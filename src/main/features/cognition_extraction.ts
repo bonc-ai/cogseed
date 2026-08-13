@@ -127,9 +127,42 @@ IMPORTANT output rules:
 
 Conversation transcript to analyze:`;
 
-/** Extract cognitions from a Claude Code session file. Returns candidates
- *  plus honest diagnostics so the onboarding UI can explain a zero-result
- *  outcome instead of masking it as a vague "nothing found". */
+/** Pull meaningful text out of a WorkBuddy `type:"message"` record's
+ *  content array. For user turns, prefer the `<user_query>` payload (the
+ *  first turn wraps the real prompt in a system-reminder blob); otherwise
+ *  join non-reminder text items. For assistant turns, join `text` /
+ *  `output_text` items (skip `thinking`). Returns undefined when nothing
+ *  usable remains. */
+function extractWorkbuddyMessageText(
+  role: string,
+  content: unknown,
+): string | undefined {
+  if (!Array.isArray(content)) return undefined;
+  const texts: string[] = [];
+  for (const item of content) {
+    const t = item && typeof item === 'object' ? (item as any).type : undefined;
+    const raw = item && typeof item === 'object' && typeof (item as any).text === 'string'
+      ? (item as any).text as string
+      : '';
+    if (!raw) continue;
+    if (role === 'user') {
+      const m = /<user_query>([\s\S]*?)<\/user_query>/.exec(raw);
+      if (m && m[1].trim()) { texts.push(m[1].trim()); continue; }
+      // Skip WorkBuddy's own context injection so we analyse the real turn.
+      if (raw.trimStart().startsWith('<system-reminder')) continue;
+      if (t === 'input_text' || t === 'text') texts.push(raw.trim());
+    } else {
+      // assistant: keep visible output, drop chain-of-thought.
+      if (t === 'text' || t === 'output_text') texts.push(raw.trim());
+    }
+  }
+  const joined = texts.filter(Boolean).join('\n').trim();
+  return joined || undefined;
+}
+
+/** Extract cognitions from a Claude Code / WorkBuddy session file. Returns
+ *  candidates plus honest diagnostics so the onboarding UI can explain a
+ *  zero-result outcome instead of masking it as a vague "nothing found". */
 export async function extractCognitionsFromSession(input: ExtractionInput): Promise<ExtractionResult> {
   // Read and parse the session file
   let content: string;
@@ -175,6 +208,17 @@ export async function extractCognitionsFromSession(input: ExtractionInput): Prom
       }
 
       if (text) messages.push({ role: 'assistant', content: text });
+    } else if (obj.type === 'message' && (obj.role === 'user' || obj.role === 'assistant')) {
+      // WorkBuddy (Tencent) format: `type:"message"` with a TOP-LEVEL
+      // `role` and TOP-LEVEL `content:[{type,text}]` (not nested under
+      // `message`). User turns wrap the real prompt in
+      // `<user_query>…</user_query>` inside a big system-reminder blob;
+      // assistant turns use `text` / `output_text` content items. We pull
+      // out the meaningful text and drop reminder scaffolding so the model
+      // analyses the actual conversation, not WorkBuddy's own context
+      // injection. Never fabricated — purely a shape adapter.
+      const text = extractWorkbuddyMessageText(obj.role, obj.content);
+      if (text) messages.push({ role: obj.role, content: text });
     }
   }
 
