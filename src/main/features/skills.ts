@@ -1004,10 +1004,15 @@ async function _overlaySkillSecurity(list: SkillListing[]): Promise<SkillListing
   });
 }
 
-/** User-facing skill list — custom + marketplace + external (Claude Code, Codex),
- *  EXCLUDING agent-private (`ownerAgent`) skills (those belong to one agent's
- *  internal pipeline and must not appear in the panel; see PC CLAUDE.md §Skills). */
-export async function listSkills(): Promise<SkillListing[]> {
+/** Lightweight skill catalog for reference pickers and relationship indexes.
+ *
+ * This deliberately omits the deep security-receipt overlay. Callers may use
+ * the returned ids and labels for display/reference bookkeeping, but skill
+ * execution must still pass through the runtime trust gate. Keeping the
+ * catalog separate prevents an inventory page from waiting while a stale
+ * library is rescanned sequentially.
+ */
+export async function listSkillCatalog(): Promise<SkillListing[]> {
   const internal = _overlaySkillEnabled((await _allSkillListingsCached()).filter((s) => !s.ownerAgent));
 
   // Auto-detect external skills from Claude Code and Codex
@@ -1083,10 +1088,17 @@ export async function listSkills(): Promise<SkillListing[]> {
     log.warn('failed to scan Codex skills:', err);
   }
 
+  return [...internal, ...external];
+}
+
+/** User-facing skill list — custom + marketplace + external (Claude Code, Codex),
+ *  EXCLUDING agent-private (`ownerAgent`) skills (those belong to one agent's
+ *  internal pipeline and must not appear in the panel; see PC CLAUDE.md §Skills). */
+export async function listSkills(): Promise<SkillListing[]> {
   // External skills carry no receipt, and neither do custom ones — the overlay
   // leaves unannotated what it cannot vouch for rather than labelling it
   // `unchecked`, which would read as "scanned, nothing found".
-  return _overlaySkillSecurity([...internal, ...external]);
+  return _overlaySkillSecurity(await listSkillCatalog());
 }
 
 /** Dev-only: the agent-private (`ownerAgent`) skills hidden from `listSkills`.

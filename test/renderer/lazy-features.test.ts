@@ -43,6 +43,7 @@ describe('renderer lazy feature loader', () => {
     expect(appended.map((script) => script.src)).toEqual([
       './modules/model-authorization.js',
       './modules/settings.js',
+      './modules/hub-account.js',
       './vendor/qrcode-generator/qrcode.js',
       './modules/messaging-settings.js',
       './modules/touchpoint-settings-model.js',
@@ -84,6 +85,18 @@ describe('renderer lazy feature loader', () => {
 
     const skills = loadFeatureLoader();
     await expect(skills.context.loadRendererFeature('skills')).resolves.toBeUndefined();
+  });
+
+  it('loads the workspace surface on demand and uses its lightweight resource catalog', async () => {
+    const { context, appended } = loadFeatureLoader();
+    await context.loadRendererFeature('spaces');
+    expect(appended.map((script) => script.src)).toEqual(['./modules/spaces.js']);
+
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/spaces.js'), 'utf8');
+    expect(source).toContain("_invoke('spaces.resources.catalog')");
+    expect(source).not.toContain("_invoke('skills.list')");
+    expect(source).toContain("_t('common.loading'");
+    expect(source).toContain('data-spaces-retry');
   });
 
   it('retries a required script while reusing scripts that already loaded', async () => {

@@ -1138,6 +1138,16 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { spaces: await spaces.listSpaces(ctx.userId) };
   },
 
+  // Reference-only catalog for the workspace picker. Runtime skill loading has
+  // its own trust gate; this route must not block first paint on deep rescans.
+  'spaces.resources.catalog': async () => {
+    const [skillRows, agentRows] = await Promise.all([
+      skills.listSkillCatalog(),
+      agents.listAgents(),
+    ]);
+    return { skills: skillRows, agents: agentRows };
+  },
+
   'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
     const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, main_skill_ref, asset_reference_bindings });
     if (!result.ok) throw new Error((result as { error: string }).error);
@@ -1197,7 +1207,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     const [sAgents, sSkills] = await Promise.all([
       agents.listAgents().catch(() => []),
-      skills.listSkills().catch(() => []),
+      skills.listSkillCatalog().catch(() => []),
     ]);
     const result = await spaces.pruneInvalidSpaceResources(ctx.userId, spaceId, {
       skills: new Set(sSkills.map((s) => s.id)),
