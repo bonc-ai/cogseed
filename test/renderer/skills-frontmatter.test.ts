@@ -237,7 +237,7 @@ describe('skills renderer frontmatter parsing', () => {
     };
     vm.runInContext(`_skillsCognitionState.recallCandidates = [${JSON.stringify({
       id: 'cand-pending',
-      status: 'pending_review',
+      status: 'pending',
       judgment: 'Keep local-first memory boundaries.',
       summary: 'Prefer local-first memory',
       suggestedType: 'personal',
@@ -250,11 +250,11 @@ describe('skills renderer frontmatter parsing', () => {
     expect(body.innerHTML).toContain('data-recall-candidate-action="edit"');
     expect(body.innerHTML).toContain('data-recall-candidate-action="reject"');
     expect(body.innerHTML).toContain('data-recall-candidate-action="promote"');
-    expect(body.innerHTML).toContain('data-recall-candidate-action="defer"');
+    expect(body.innerHTML).not.toContain('data-recall-candidate-action="defer"');
     expect(body.innerHTML).not.toContain('data-recall-candidate-action="resume"');
   });
 
-  it('keeps deferred Recall candidates hidden during cooldown', () => {
+  it('keeps deferred Recall candidates on the same simplified decision actions', () => {
     const context = loadSkillRendererHelpers();
     const body = { innerHTML: '' };
     context.document = {
@@ -272,10 +272,9 @@ describe('skills renderer frontmatter parsing', () => {
 
     context.renderSkillsCognitionCandidates();
 
-    expect(body.innerHTML).not.toContain('cand-deferred');
-    expect(body.innerHTML).not.toContain('data-recall-candidate-action="edit"');
-    expect(body.innerHTML).not.toContain('data-recall-candidate-action="reject"');
-    expect(body.innerHTML).not.toContain('data-recall-candidate-action="promote"');
+    expect(body.innerHTML).toContain('data-recall-candidate-action="edit"');
+    expect(body.innerHTML).toContain('data-recall-candidate-action="reject"');
+    expect(body.innerHTML).toContain('data-recall-candidate-action="promote"');
     expect(body.innerHTML).not.toContain('data-recall-candidate-action="defer"');
     expect(body.innerHTML).not.toContain('data-recall-candidate-action="resume"');
   });
@@ -289,7 +288,7 @@ describe('skills renderer frontmatter parsing', () => {
     };
     vm.runInContext(`_skillsCognitionState.recallCandidates = [${JSON.stringify({
       id: 'cand-review',
-      status: 'pending_review',
+      status: 'pending',
       judgment: 'Keep every approval tied to source evidence.',
       summary: 'Traceable review rule',
       suggestedType: 'rule',
@@ -387,7 +386,7 @@ describe('skills renderer frontmatter parsing', () => {
     };
     vm.runInContext(`_skillsCognitionState.recallCandidates = [${JSON.stringify({
       id: 'cand-compact',
-      status: 'pending_review',
+      status: 'pending',
       judgment: 'Add invariant checks.',
       summary: 'Tighten validation',
       suggestedType: 'rule',

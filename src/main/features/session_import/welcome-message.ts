@@ -47,7 +47,7 @@ const TYPE_LABELS: ReadonlyArray<{ type: string; label: string }> = [
  */
 export async function generateWelcomeMessage(input: GenerateWelcomeMessageInput): Promise<WelcomeMessageData> {
   const candidates = await listRecallCandidates(input.userId);
-  const pending = (candidates || []).filter((c) => c.status === 'pending_review');
+  const pending = (candidates || []).filter((c) => c.status === 'pending');
 
   // Group by suggestedType; judgment is the primary text, summary the fallback.
   const byType: Record<string, string[]> = {};

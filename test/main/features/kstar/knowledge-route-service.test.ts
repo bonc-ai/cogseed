@@ -55,7 +55,7 @@ describe('KSTAR unified ability-asset routing', () => {
       ontologyRefs: [{ groupId }],
       learningSignal: { deltaR: 0.5, outcome: 'better_than_expected' },
     });
-    expect(routed.candidate).toMatchObject({ status: 'confirmed', promotedAssetId: routed.asset.id });
+    expect(routed.candidate).toMatchObject({ status: 'promoted', promotedAssetId: routed.asset.id });
     expect(routed.ontology).toMatchObject({ ok: true });
     expect((await listGroups('route-user')).some((item) => item.group_id === groupId)).toBe(true);
     const content = await readContentById('route-user', groupId);
