@@ -1,0 +1,12 @@
+[
+  {
+    "id": "digest-stable-empty-actions",
+    "description": "Same tree yields identical subject_digest",
+    "fixture": "fixtures/sample-skill",
+    "expect_stable": true
+  },
+  {
+    "id": "digest-profile-ref",
+    "expect_ref": "ecs.skill.fileset@1.0.0"
+  }
+]

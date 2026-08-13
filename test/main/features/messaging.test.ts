@@ -309,6 +309,39 @@ describe('messaging registry and ledgers', () => {
     expect(read).toMatchObject({ recipientId: 'ou_self_1', recipientIdType: 'open_id' });
   });
 
+  it('persists a file delivery payload across write and reload', async () => {
+    const ledger = await import('../../../src/main/features/messaging/ledger');
+    const begun = await ledger.beginDelivery('user-1', {
+      key: ledger.deliveryKey('bot-1', 'file-1'),
+      instanceId: 'bot-1',
+      recipientId: 'ou_self_1',
+      recipientIdType: 'open_id',
+      sourceMessageId: 'file-1',
+      textHash: ledger.textHash('[文件] report.pdf'),
+      text: '[文件] report.pdf',
+      file: { path: '/workspace/report.pdf', name: 'report.pdf' },
+    });
+    expect(begun.duplicate).toBe(false);
+    expect(begun.entry.file).toEqual({ path: '/workspace/report.pdf', name: 'report.pdf' });
+
+    const read = await ledger.getDelivery('user-1', begun.entry.key);
+    expect(read?.file).toEqual({ path: '/workspace/report.pdf', name: 'report.pdf' });
+  });
+
+  it('rejects malformed file delivery payloads', async () => {
+    const ledger = await import('../../../src/main/features/messaging/ledger');
+    await expect(ledger.beginDelivery('user-1', {
+      key: ledger.deliveryKey('bot-1', 'file-bad'),
+      instanceId: 'bot-1',
+      recipientId: 'ou_self_1',
+      recipientIdType: 'open_id',
+      sourceMessageId: 'file-bad',
+      textHash: ledger.textHash('x'),
+      text: 'x',
+      file: { path: '', name: 'x' },
+    })).rejects.toThrow('delivery file payload invalid');
+  });
+
   it('deduplicates inbound and delivery records without re-sending sent output', async () => {
     const ledger = await import('../../../src/main/features/messaging/ledger');
     const first = await ledger.reserveInbound('user-1', ledger.inboundKey('bot-1', 'message-1'));
@@ -1344,6 +1377,202 @@ describe('messaging manager adapter flow', () => {
     }
   });
 
+  it('consumes a touchpoint intent action through a signed card click', async () => {
+    const adapter: MessagingCardAdapter = {
+      platform: 'feishu_lark',
+      async start(signal, callbacks) {
+        await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      async stop() {},
+      async checkHealth() {
+        return { kind: 'connected', checkedAt: new Date().toISOString() };
+      },
+      sendMessage: vi.fn(async () => ({})),
+      sendCard: vi.fn(async () => ({})),
+      updateCard: vi.fn(async () => ({})),
+      sendApprovalCard: vi.fn(async () => ({})),
+    };
+    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
+      createAdapter: vi.fn(() => adapter),
+    }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: vi.fn(async () => ({ ok: true })) }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe: vi.fn(() => () => undefined) }));
+
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const touchpointLedger = await import('../../../src/main/features/touchpoints/ledger');
+      const { createTouchpointDomainEvent } = await import('../../../src/main/features/touchpoints/events');
+      const { createTouchpointIntent } = await import('../../../src/main/features/touchpoints/intents');
+      const { signTouchpointAction } = await import('../../../src/main/features/touchpoints/sign');
+
+      const created = await registry.createInstance('user-1', {
+        platform: 'feishu_lark',
+        displayName: 'Touchpoint bot',
+        policy: { allowUserIds: ['user-1'] },
+        secret: { appId: 'cli_1234567890abcdef', appSecret: 'secret' },
+      });
+      await manager.setEnabled('user-1', created.id, true);
+      await vi.waitFor(async () => {
+        const instances = await manager.listInstances('user-1');
+        expect(instances[0]?.status.kind).toBe('connected');
+      });
+
+      // 构造一条已送达的审批意图（planned → ready → sending → sent）。
+      const event = createTouchpointDomainEvent('user-1', {
+        eventId: 'event-1',
+        kind: 'task.approval_required',
+        subject: { type: 'task', id: 'task-1' },
+        occurredAt: '2026-08-10T13:00:00.000Z',
+        summary: { title: '审批：张明请假', body: '下周三请一天假。' },
+      });
+      const intent = createTouchpointIntent('user-1', event, {
+        intentId: 'intent-1',
+        channel: 'feishu',
+        template: 'task_approval',
+        priority: 'high',
+        availableFrom: '2026-08-10T13:00:00.000Z',
+        expiresAt: '2026-09-01T13:00:00.000Z',
+        dedupeKey: 'task:task-1:approval:event-1',
+        actionContract: { version: 1, allowedActions: ['approve', 'reject'] },
+      });
+      await touchpointLedger.reserveTouchpointIntent('user-1', intent);
+      await touchpointLedger.transitionTouchpointIntent('user-1', 'intent-1', ['planned'], { status: 'ready' });
+      await touchpointLedger.transitionTouchpointIntent('user-1', 'intent-1', ['ready'], { status: 'sending' });
+      await touchpointLedger.transitionTouchpointIntent('user-1', 'intent-1', ['sending'], { status: 'sent' });
+
+      const occurredAt = new Date().toISOString();
+      const envelope = {
+        intent_id: 'intent-1',
+        action_id: 'action-1',
+        user_id: 'user-1',
+        kind: 'approve',
+        occurred_at: occurredAt,
+        signature: signTouchpointAction('intent-1', 'user-1', 'approve', occurredAt),
+      };
+
+      // 批准路径：动作消费进 ledger，卡片更新为终态。
+      const accepted = await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'touchpoint-card-1',
+        externalChatId: 'oc_touchpoint',
+        externalUserId: 'user-1',
+        action: 'touchpoint',
+        payload: envelope,
+        receivedAt: new Date().toISOString(),
+      });
+      expect(accepted).toMatchObject({ accepted: true, duplicate: false });
+      await vi.waitFor(() => expect(adapter.updateCard).toHaveBeenCalledTimes(1));
+      const ledgerState = await touchpointLedger.readTouchpointLedgerForTest('user-1');
+      expect(ledgerState.actions['action-1']).toMatchObject({ intentId: 'intent-1', action: 'approve', userId: 'user-1' });
+
+      // 重复点击同一信封：幂等 accepted，不再二次更新卡片。
+      const duplicate = await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'touchpoint-card-1',
+        externalChatId: 'oc_touchpoint',
+        externalUserId: 'user-1',
+        action: 'touchpoint',
+        payload: envelope,
+        receivedAt: new Date().toISOString(),
+      });
+      expect(duplicate).toMatchObject({ accepted: true, duplicate: true });
+      expect(adapter.updateCard).toHaveBeenCalledTimes(1);
+
+      // 带填写内容的动作：content 落 ledger，终态卡片回显提交内容。
+      const withContent = await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'touchpoint-card-1',
+        externalChatId: 'oc_touchpoint',
+        externalUserId: 'user-1',
+        action: 'touchpoint',
+        payload: {
+          ...envelope,
+          action_id: 'action-2',
+          kind: 'reject',
+          occurred_at: occurredAt,
+          signature: signTouchpointAction('intent-1', 'user-1', 'reject', occurredAt),
+          tp_content: '不同意，请重新提交预算',
+        },
+        receivedAt: new Date().toISOString(),
+      });
+      expect(withContent).toMatchObject({ accepted: true, duplicate: false });
+      await vi.waitFor(() => expect(adapter.updateCard).toHaveBeenCalledTimes(2));
+      const ledgerAfter = await touchpointLedger.readTouchpointLedgerForTest('user-1');
+      expect(ledgerAfter.actions['action-2']).toMatchObject({
+        intentId: 'intent-1',
+        action: 'reject',
+        content: '不同意，请重新提交预算',
+      });
+      const resolvedCard = (adapter.updateCard as ReturnType<typeof vi.fn>).mock.calls[1][1] as Record<string, unknown>;
+      expect(JSON.stringify(resolvedCard)).toContain('不同意，请重新提交预算');
+
+      // 缺信封字段的卡片动作被拒绝。
+      const rejected = await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'touchpoint-card-2',
+        externalChatId: 'oc_touchpoint',
+        externalUserId: 'user-1',
+        action: 'touchpoint',
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
+      expect(rejected).toMatchObject({ accepted: false, reason: 'invalid_card_action' });
+
+      // 未送达（非 sent）的意图不可消费。
+      const pendingEvent = createTouchpointDomainEvent('user-1', {
+        eventId: 'event-2',
+        kind: 'task.approval_required',
+        subject: { type: 'task', id: 'task-2' },
+        occurredAt: '2026-08-10T13:00:00.000Z',
+        summary: { title: '审批：李四加班' },
+      });
+      const pendingIntent = createTouchpointIntent('user-1', pendingEvent, {
+        intentId: 'intent-2',
+        channel: 'feishu',
+        template: 'task_approval',
+        priority: 'normal',
+        availableFrom: '2026-08-10T13:00:00.000Z',
+        expiresAt: '2026-09-01T13:00:00.000Z',
+        dedupeKey: 'task:task-2:approval:event-2',
+        actionContract: { version: 1, allowedActions: ['approve'] },
+      });
+      await touchpointLedger.reserveTouchpointIntent('user-1', pendingIntent);
+      const notActionable = await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'touchpoint-card-3',
+        externalChatId: 'oc_touchpoint',
+        externalUserId: 'user-1',
+        action: 'touchpoint',
+        payload: {
+          ...envelope,
+          intent_id: 'intent-2',
+          action_id: 'action-2',
+          occurred_at: occurredAt,
+          signature: signTouchpointAction('intent-2', 'user-1', 'approve', occurredAt),
+        },
+        receivedAt: new Date().toISOString(),
+      });
+      expect(notActionable).toMatchObject({ accepted: false, reason: 'touchpoint_action_rejected' });
+    } finally {
+      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      vi.doUnmock('../../../src/main/features/group_chat');
+      vi.doUnmock('../../../src/main/features/group_chat/bus');
+    }
+  });
+
   it('drops an outbound reply without a message id before any delivery attempt', async () => {
     let busListener: ((event: unknown) => void) | undefined;
     const groupSend = vi.fn(async () => ({ ok: true }));
@@ -1655,6 +1884,38 @@ describe('feishu card action normalization', () => {
     expect(action?.action).toBe('button');
     expect(action?.payload).toEqual({ wake_id: 'wake-2' });
   });
+
+  it('merges input form values into the payload keyed by field id', async () => {
+    const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');
+    const action = _adapterTestHooks.normalizeFeishuCardAction(instance, {
+      context: { open_message_id: 'om_1', open_chat_id: 'oc_1' },
+      operator: { open_id: 'ou_admin' },
+      action: {
+        tag: 'button',
+        value: { action: 'touchpoint', intent_id: 'intent-1', kind: 'approve' },
+        form_value: { tp_content: '同意，但需补材料', tp_other: 3, tp_bad: { nested: true } },
+      },
+    });
+    expect(action?.payload).toMatchObject({
+      intent_id: 'intent-1',
+      kind: 'approve',
+      tp_content: '同意，但需补材料',
+      tp_other: 3,
+    });
+    // Non-primitive form entries are dropped like button values.
+    expect(action?.payload).not.toHaveProperty('tp_bad');
+
+    const legacyAction = _adapterTestHooks.normalizeFeishuCardAction(instance, {
+      context: { open_message_id: 'om_2', open_chat_id: 'oc_1' },
+      operator: { open_id: 'ou_admin' },
+      action: {
+        tag: 'button',
+        value: { action: 'touchpoint' },
+        form: { tp_content: '旧版回调仍可兼容' },
+      },
+    });
+    expect(legacyAction?.payload.tp_content).toBe('旧版回调仍可兼容');
+  });
 });
 
 describe('messaging card action dispatch', () => {
@@ -1782,6 +2043,22 @@ describe('feishu approval cards', () => {
     } finally {
       setCurrentLang('en');
     }
+  });
+});
+
+describe('feishu file_type mapping', () => {
+  it('maps known document extensions and falls back to stream', async () => {
+    const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');
+    expect(_adapterTestHooks.feishuFileTypeForName('report.pdf')).toBe('pdf');
+    expect(_adapterTestHooks.feishuFileTypeForName('report.PDF')).toBe('pdf');
+    expect(_adapterTestHooks.feishuFileTypeForName('doc.docx')).toBe('doc');
+    expect(_adapterTestHooks.feishuFileTypeForName('doc.doc')).toBe('doc');
+    expect(_adapterTestHooks.feishuFileTypeForName('sheet.xlsx')).toBe('xls');
+    expect(_adapterTestHooks.feishuFileTypeForName('deck.pptx')).toBe('ppt');
+    expect(_adapterTestHooks.feishuFileTypeForName('video.mp4')).toBe('mp4');
+    expect(_adapterTestHooks.feishuFileTypeForName('notes.md')).toBe('stream');
+    expect(_adapterTestHooks.feishuFileTypeForName('archive.zip')).toBe('stream');
+    expect(_adapterTestHooks.feishuFileTypeForName('noext')).toBe('stream');
   });
 });
 

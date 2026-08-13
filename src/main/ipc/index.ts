@@ -63,6 +63,7 @@ import * as agents from '../features/agents';
 import * as autoTasks from '../features/auto_tasks';
 import { isAgentEnabled } from '../features/component_enabled';
 import * as skills from '../features/skills';
+import * as skillReverify from '../features/skill_reverify';
 import * as marketplace from '../features/marketplace';
 import * as notificationPermissions from '../features/notification_permissions';
 import * as marketplaceBiz from '../features/marketplace_biz';
@@ -110,6 +111,10 @@ import {
 import { invokeHandlers as qualityHandlers } from './quality';
 import { invokeHandlers as connectorsHandlers } from './connectors';
 import { invokeHandlers as messagingHandlers } from './messaging';
+import { invokeHandlers as personalContextHandlers } from './personal-context';
+import { invokeHandlers as touchpointHandlers } from './touchpoints';
+import { invokeHandlers as desktopWorkbenchHandlers } from './desktop-workbench';
+import { invokeHandlers as hubAccountHandlers } from './hub-account';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as cognitionHandlers } from './cognition';
 import { safeId } from '../storage';
@@ -1014,7 +1019,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
-  'conversations.create': async ({ title = '', projectId = '' } = {}, ctx) => {
+  'conversations.create': async ({ title = '', projectId = '', kind = '' } = {}, ctx) => {
     // Validate the projectId belongs to this user before persisting it on
     // the conv record. Unknown / invalid projectIds are dropped silently
     // (the conv lands without project membership) — the renderer should
@@ -1025,8 +1030,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (projectId && typeof projectId === 'string' && safeId(projectId)) {
       if (await projects.projectExists(ctx.userId, projectId)) validProjectId = projectId;
     }
+    // 会话 kind 白名单：目前只有 space_builder（空间模式）被允许透传；
+    // 其余一律回落 normal，防止渲染层任意指定会话类型。
+    const convKind = kind === 'space_builder' ? 'space_builder' : 'normal';
     const conv = await chats.createConversation(ctx.userId, {
-      kind: 'normal',
+      kind: convKind,
       title,
       ...(validProjectId ? { projectId: validProjectId } : {}),
     });
@@ -1057,6 +1065,18 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ctx.userId, cid, title, conversationProjectHint(args));
     if (!conv) throw new Error('conversation not found');
     return { conversation: conv };
+  },
+
+  'conversations.completeSpaceBuilder': async (args, ctx) => {
+    const { cid } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    // 只允许标记 kind=space_builder 的会话；其余拒绝，防止任意会话被误标。
+    const conv = await chats.getConversation(ctx.userId, cid, conversationProjectHint(args));
+    if (!conv || conv.kind !== 'space_builder') throw new Error('not a space_builder conversation');
+    const updated = await chats.updateConversation(
+      ctx.userId, cid, { space_builder_completed: new Date().toISOString() }, conversationProjectHint(args));
+    if (!updated) throw new Error('conversation not found');
+    return { conversation: updated };
   },
 
   'conversations.deleteAll': async (_args, ctx) => {
@@ -1118,9 +1138,19 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { spaces: await spaces.listSpaces(ctx.userId) };
   },
 
-  'spaces.create': async ({ name, template_id, icon } = {}, ctx) => {
-    const result = await spaces.createSpace(ctx.userId, { name, template_id, icon });
+  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
+    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, main_skill_ref, asset_reference_bindings });
     if (!result.ok) throw new Error((result as { error: string }).error);
+    return { space: result.space };
+  },
+
+  'spaces.createFromDraft': async ({ draft } = {}, ctx) => {
+    if (!draft || typeof draft !== 'object') throw new Error('invalid draft');
+    const result = await spaces.createSpaceFromDraft(ctx.userId, draft);
+    if (!result.ok) {
+      const err = result as { error: string; details?: string[] };
+      throw new Error(err.details && err.details.length ? `invalid_draft: ${err.details.join('；')}` : err.error);
+    }
     return { space: result.space };
   },
 
@@ -1181,6 +1211,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'spaces.templates.list': async (_payload, _ctx) => {
     const templates = await import('../features/role_templates').then((m) => m.listRoleTemplates());
     return { templates };
+  },
+
+  // 情境入口场景列表（教育/写作/职场+自定义，M2）
+  'spaces.scenarios.list': async (_payload, _ctx) => {
+    const scenarios = await import('../features/role_templates').then((m) => m.listScenarios());
+    return { scenarios };
   },
 
   // ── 项目 ↔ 空间绑定（工作空间一期）──────────────────────────────────────
@@ -2815,6 +2851,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return skills.readSkillFile(source, id, file);
   },
 
+  'skills.checkNseapDeclaration': async ({ id }, ctx) => {
+    if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
+    const found = await skills.getSkillForEdit(id);
+    if (!found || found.source !== 'custom') throw new Error('only custom skills can be pre-checked');
+    const nseapDeclaration = await skillReverify.checkNseapDeclaration(found.dir, id);
+    return { nseapDeclaration };
+  },
+
   'skills.writeFile': async ({ id, file, content }) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
     if (!file) throw new Error('missing file');
@@ -4124,6 +4168,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // handler table; the dedicated IPC module returns metadata-only DTOs.
   ...messagingHandlers,
 
+  // Personal context connector (Feishu user OAuth + resource sync). Credential
+  // material never crosses this table; status DTOs only.
+  ...personalContextHandlers,
+  ...touchpointHandlers,
+  ...desktopWorkbenchHandlers,
+
+  // CogSeed Hub account — desktop-side account management against the Hub
+  // account service. Tokens never cross this table; renderer-safe status DTOs only.
+  ...hubAccountHandlers,
   // Cross-session memory UI — view/edit/import/export over features/memory.ts.
   ...memoryHandlers,
 

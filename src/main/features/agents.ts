@@ -1032,7 +1032,7 @@ function _normalizeRuntime(raw: unknown): AgentRuntime | null {
  *  cwd instead of the user workspace; the chip in the conversation
  *  surface lets the user set it. Single source of truth for both UI
  *  visibility and dispatch routing. */
-export const CODING_CLIS = new Set<string>(['claude', 'codex']);
+export const CODING_CLIS = new Set<string>(['claude', 'codex', 'workbuddy']);
 export function cliIsCodingAgent(cli: string | undefined): boolean {
   return !!cli && CODING_CLIS.has(cli);
 }

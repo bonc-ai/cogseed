@@ -1,6 +1,8 @@
 import { t } from '../../../i18n';
 import * as manager from '../../messaging/manager';
 import * as registry from '../../messaging/registry';
+import { buildTouchpointCard } from './card';
+import { applyTouchpointTemplate } from '../config';
 import type {
   TouchpointChannelAdapter,
   TouchpointDeliveryResult,
@@ -48,24 +50,31 @@ export function createFeishuTouchpointAdapter(options: { instanceId: string }): 
   return {
     channel: 'feishu',
     async send(userId: string, intent: TouchpointIntent): Promise<TouchpointDeliveryResult> {
+      const renderedIntent = await applyTouchpointTemplate(userId, intent);
       const instance = await registry.getInstance(userId, instanceId);
       if (!instance) throw new FeishuTouchpointAdapterError('instance_not_found', 'Feishu messaging instance was not found.');
       if (instance.platform !== 'feishu_lark') {
         throw new FeishuTouchpointAdapterError('wrong_platform', 'Configured messaging instance is not Feishu or Lark.');
       }
       if (!instance.enabled) throw new FeishuTouchpointAdapterError('instance_disabled', 'Feishu messaging instance is disabled.');
-      if (instance.status.kind !== 'connected') {
+      // 磁盘状态被故意降级（registry.normalizeStatus 从不落盘 connected），
+      // 已连接的实例读磁盘也是 disconnected——连接判断必须走 runtime 实时状态。
+      const live = await manager.getLiveInstanceStatus(userId, instanceId);
+      if (!live || live.kind !== 'connected') {
         throw new FeishuTouchpointAdapterError('instance_not_connected', 'Feishu messaging instance is not connected.', true);
       }
       if (!instance.ownerExternalUserId) {
         throw new FeishuTouchpointAdapterError('owner_not_bound', 'Feishu owner identity is not bound.');
       }
       try {
+        // Actionable intents go out as interactive cards whose buttons carry
+        // signed receipt envelopes; read-only intents stay plain text.
         const { entry } = await manager.sendProactive(userId, {
           instanceId,
           recipientId: instance.ownerExternalUserId,
-          text: renderFeishuTouchpointText(intent),
-          sourceKey: `touchpoint:${intent.intentId}`,
+          text: renderFeishuTouchpointText(renderedIntent),
+          ...(renderedIntent.actionContract ? { card: buildTouchpointCard(renderedIntent) } : {}),
+          sourceKey: `touchpoint:${renderedIntent.intentId}`,
           signal: null,
         });
         if (!entry.externalDeliveryId) {
