@@ -29,8 +29,8 @@ export interface TranscriptTurn {
 
 export interface NormalizedTranscript {
   /** Source agent this transcript came from. */
-  source: 'claude';
-  /** Original session/transcript id (jsonl filename stem for Claude). */
+  source: 'claude' | 'workbuddy';
+  /** Original session/transcript id (jsonl filename stem for Claude/WorkBuddy). */
   sourceId: string;
   /** Original working directory / project path, when the source recorded it. */
   projectPath: string;
@@ -103,6 +103,90 @@ export function parseClaudeTranscript(
   }
 
   return { source: 'claude', sourceId, projectPath, turns };
+}
+
+/** One parsed jsonl object from WorkBuddy's transcript format. Unlike
+ *  Claude Code, `role` and `content` sit at the TOP LEVEL (not under
+ *  `message`), the record type is `"message"`, and `timestamp` is an
+ *  epoch-ms number. */
+interface WorkbuddyJsonlLine {
+  type?: string;
+  role?: string;
+  content?: unknown;
+  timestamp?: number | string;
+}
+
+/** Extract plain text from a WorkBuddy content array. For user turns the
+ *  real prompt is wrapped in `<user_query>…</user_query>` inside a big
+ *  system-reminder blob — we pull that out and drop reminder scaffolding.
+ *  Assistant turns keep `text` / `output_text` items and drop `thinking`. */
+function workbuddyTextFromContent(role: TranscriptRole, content: unknown): string {
+  if (!Array.isArray(content)) return '';
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue;
+    const t = (block as { type?: string }).type;
+    const rawText = (block as { text?: unknown }).text;
+    const raw = typeof rawText === 'string' ? rawText : '';
+    if (!raw) continue;
+    if (role === 'user') {
+      const m = /<user_query>([\s\S]*?)<\/user_query>/.exec(raw);
+      if (m && m[1].trim()) { parts.push(m[1].trim()); continue; }
+      if (raw.trimStart().startsWith('<system-reminder')) continue;
+      if (t === 'input_text' || t === 'text') parts.push(raw.trim());
+    } else {
+      if (t === 'text' || t === 'output_text') parts.push(raw.trim());
+    }
+  }
+  return parts.join('\n\n').trim();
+}
+
+/**
+ * Parse a full WorkBuddy jsonl transcript body into a NormalizedTranscript.
+ * Mirrors `parseClaudeTranscript` but for WorkBuddy's top-level
+ * `role`/`content` shape and epoch-ms timestamps. `body` is the raw file
+ * contents; `sourceId` is the session uuid.
+ */
+export function parseWorkbuddyTranscript(
+  body: string,
+  sourceId: string,
+): NormalizedTranscript {
+  const turns: TranscriptTurn[] = [];
+
+  const lines = body.split('\n');
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    let obj: WorkbuddyJsonlLine;
+    try {
+      obj = JSON.parse(line) as WorkbuddyJsonlLine;
+    } catch {
+      continue; // malformed line — skip, best-effort
+    }
+
+    if (obj.type !== 'message') continue; // status/snapshot/ai-title — skip
+    const role: TranscriptRole | null =
+      obj.role === 'user' ? 'user' : obj.role === 'assistant' ? 'assistant' : null;
+    if (!role) continue;
+
+    const text = workbuddyTextFromContent(role, obj.content);
+    if (!text) continue; // reminder-only / tool-only / empty turn — skip
+
+    let ts = '';
+    if (typeof obj.timestamp === 'number' && Number.isFinite(obj.timestamp)) {
+      try { ts = new Date(obj.timestamp).toISOString(); } catch { ts = ''; }
+    } else if (typeof obj.timestamp === 'string') {
+      const d = new Date(obj.timestamp);
+      ts = Number.isNaN(d.getTime()) ? '' : d.toISOString();
+    }
+
+    turns.push({ role, text, ts });
+  }
+
+  // WorkBuddy encodes the workdir in the parent dir name, not per-line; the
+  // caller supplies projectPath via the summary, so we leave it '' here.
+  return { source: 'workbuddy', sourceId, projectPath: '', turns };
 }
 
 /** Rough token estimate (chars/4) for the extractor's chunking budget. Kept
