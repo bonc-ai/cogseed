@@ -14,11 +14,13 @@ import { readRecallJsonRecord, writeRecallJsonRecord } from './store';
 import { genId12 } from '../../storage';
 import { hasConfiguredModel } from '../auth';
 import { normalizeCausalRule } from './world-model-types';
+import { selectWorldModelCandidate, validateWorldModelCandidate } from './world-model-scoring';
 
 const MAX_SUMMARY = 4_000;
 import type {
   CausalRule,
   PredictedRisk,
+  WorldModelCandidateForecast,
   WorldModelForecast,
   WorldModelForecastRecord,
   WorldModelPredicateKey,
@@ -69,42 +71,52 @@ export function applyCausalRules(
 
 function forecastSystemPrompt(): string {
   return [
-    'You are a world model. Given knowledge K, situation S, and task T, predict both',
-    'the future self (intervention) and the future world (result state) in ONE simulation.',
+    'You are a world model. Given knowledge K, situation S, and task T, simulate 2 to 4 candidate futures.',
+    'Each candidate must pair one predicted intervention sequence with the world state caused by that sequence.',
     'Return exactly one JSON object and no markdown.',
-    'Schema: {"plan":["step"],"expectedTools":["tool"],"expectedActors":["actor"],"predictedResult":{"summary":"...","acceptanceSignals":["..."],"predictedFiles":["..."]}}',
-    'Do not execute tools or invent facts. `plan` is the predicted intervention sequence;',
-    '`predictedResult` is the world state you predict after that intervention.',
-    'Use the provided risk constraints as hard grounding when relevant.',
+    'Schema: {"candidates":[{"id":"path-a","plan":["step"],"expectedTools":["tool"],"expectedActors":["actor"],"predictedResult":{"summary":"...","acceptanceSignals":["..."],"predictedFiles":["..."]},"causalLinks":[{"interventionIndex":0,"mechanism":"...","ruleRefs":["rule-id"],"assumptions":["..."]}],"assumptions":["..."],"riskRuleRefs":["rule-id"],"score":{"goalFit":0,"feasibility":0,"observability":0,"causalSupport":0,"riskPenalty":0,"total":0}}]}',
+    'All score dimensions are numbers from 0 to 1. The host recomputes total and does not trust your total.',
+    'Use only rule refs and tools provided in the input. Do not execute tools or invent facts.',
+    'Causal links are concise auditable mechanisms, not hidden reasoning or chain-of-thought.',
   ].join('\n');
 }
 
-function parseForecast(text: string): WorldModelForecast {
+function parseForecastCandidates(
+  text: string,
+  context: {
+    allowedTools?: Set<string>;
+    allowedRuleRefs: Set<string>;
+    predictedRisks: PredictedRisk[];
+  },
+): WorldModelCandidateForecast[] {
   const trimmed = text.trim();
   if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) throw new Error('model output is not strict JSON');
   const value = JSON.parse(trimmed) as unknown;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('model output must be an object');
-  const record = value as Record<string, unknown>;
-  if (!Array.isArray(record.plan) || record.plan.some((x) => typeof x !== 'string')) throw new Error('invalid plan');
-  if (!Array.isArray(record.expectedTools) || record.expectedTools.some((x) => typeof x !== 'string')) throw new Error('invalid expectedTools');
-  if (!Array.isArray(record.expectedActors) || record.expectedActors.some((x) => typeof x !== 'string')) throw new Error('invalid expectedActors');
-  const predictedResult = record.predictedResult as Record<string, unknown>;
-  if (typeof predictedResult?.summary !== 'string' || predictedResult.summary.length > MAX_SUMMARY) throw new Error('invalid predictedResult.summary');
-  if (!Array.isArray(predictedResult.acceptanceSignals) || predictedResult.acceptanceSignals.some((x) => typeof x !== 'string')) throw new Error('invalid acceptanceSignals');
-  if (!Array.isArray(predictedResult.predictedFiles) || predictedResult.predictedFiles.some((x) => typeof x !== 'string')) throw new Error('invalid predictedFiles');
-  return {
-    aHat: {
-      plan: record.plan as string[],
-      expectedTools: record.expectedTools as string[],
-      expectedActors: record.expectedActors as string[],
-    },
-    rHat: {
-      summary: predictedResult.summary,
-      acceptanceSignals: predictedResult.acceptanceSignals as string[],
-      predictedFiles: predictedResult.predictedFiles as string[],
-    },
-    predictedRisks: [],
-  };
+  const candidates = (value as Record<string, unknown>).candidates;
+  if (!Array.isArray(candidates) || candidates.length < 2 || candidates.length > 4) {
+    throw new Error('world model must return two to four candidates');
+  }
+  return candidates.map((candidate, index) => validateWorldModelCandidate(candidate, context, index));
+}
+
+export interface SimulateWorldOptions {
+  runModel?: (input: { systemPrompt: string; message: string }) => Promise<string>;
+}
+
+function predictedRisksForKnowledge(
+  snapshot: WorldModelSnapshot,
+  rules: WorldModelSimulationInput['k']['rules'],
+): PredictedRisk[] {
+  const out: PredictedRisk[] = [];
+  for (const entry of rules) {
+    const rule = 'rule' in entry ? entry.rule : entry;
+    const hits = applyCausalRules(snapshot, [rule]);
+    for (const hit of hits) {
+      out.push({ ...hit, ruleId: 'rule' in entry ? entry.id : hit.ruleId });
+    }
+  }
+  return out;
 }
 
 /**
@@ -118,36 +130,72 @@ export async function simulateWorld(
   userId: string,
   input: WorldModelSimulationInput,
   snapshot: WorldModelSnapshot,
+  options: SimulateWorldOptions = {},
 ): Promise<WorldModelForecast> {
-  if (!hasConfiguredModel().configured) {
-    throw new Error('world model simulation requires a configured model');
+  if (!options.runModel && !hasConfiguredModel().configured) {
+    throw Object.assign(new Error('world model simulation requires a configured model'), {
+      code: 'model_not_configured',
+    });
   }
 
-  const predictedRisks = applyCausalRules(snapshot, bareCausalRules(input.k.rules));
+  const predictedRisks = predictedRisksForKnowledge(snapshot, input.k.rules);
+  const ruleRefs = new Set(input.k.rules
+    .filter((entry): entry is Extract<typeof entry, { rule: CausalRule }> => 'rule' in entry)
+    .map((entry) => entry.id));
+  const allowedTools = input.s.execution?.availableTools?.length
+    ? new Set(input.s.execution.availableTools)
+    : undefined;
+  const message = JSON.stringify({
+    k: input.k,
+    s: input.s,
+    t: input.t,
+    knownRiskConstraints: predictedRisks.map((risk) => ({
+      ruleId: risk.ruleId,
+      cause: risk.cause,
+      effect: risk.effect,
+      mitigation: risk.mitigation,
+      severity: risk.severity,
+    })),
+  });
 
-  const { runner } = await buildRunner({
-    sessionId: `kstar-forecast-${snapshot.taskRunId}`,
-    userId,
-    systemPrompt: forecastSystemPrompt(),
-    disableTools: true,
-    ephemeralSession: true,
-    skillList: [],
+  let output: string;
+  if (options.runModel) {
+    output = await options.runModel({ systemPrompt: forecastSystemPrompt(), message });
+  } else {
+    const { runner } = await buildRunner({
+      sessionId: `kstar-forecast-${snapshot.taskRunId}`,
+      userId,
+      systemPrompt: forecastSystemPrompt(),
+      disableTools: true,
+      ephemeralSession: true,
+      skillList: [],
+    });
+    const result = await runner.run({
+      message,
+      thinkingLevel: 'off',
+      cacheRetention: 'none',
+    });
+    if (result.meta.aborted || result.meta.error) {
+      throw Object.assign(new Error('world model unavailable'), { code: 'world_model_unavailable' });
+    }
+    output = result.text;
+  }
+
+  const candidates = parseForecastCandidates(output, {
+    ...(allowedTools ? { allowedTools } : {}),
+    allowedRuleRefs: ruleRefs,
+    predictedRisks,
   });
-  const riskBlock = predictedRisks.length
-    ? `\n\nKnown risk constraints (do not contradict these):\n${JSON.stringify(predictedRisks.map((r) => ({ cause: r.cause, effect: r.effect, mitigation: r.mitigation, severity: r.severity })))}`
-    : '';
-  const result = await runner.run({
-    message: JSON.stringify({
-      k: input.k,
-      s: input.s,
-      t: input.t,
-    }) + riskBlock,
-    thinkingLevel: 'off',
-    cacheRetention: 'none',
-  });
-  if (result.meta.aborted || result.meta.error) throw new Error('world model unavailable');
-  const forecast = parseForecast(result.text);
-  return { ...forecast, predictedRisks };
+  const selected = selectWorldModelCandidate(candidates);
+  return {
+    candidates,
+    selectedCandidateId: selected.id,
+    aHat: selected.aHat,
+    rHat: selected.rHat,
+    causalLinks: selected.causalLinks,
+    assumptions: selected.assumptions,
+    predictedRisks: selected.predictedRisks.length ? selected.predictedRisks : predictedRisks,
+  };
 }
 
 /** Assemble an A-Box snapshot from the current world state. Kept explicit so

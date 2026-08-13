@@ -121,3 +121,61 @@ describe('recall world-model reconciliation', () => {
     expect(result.attribution).toBe('knowledge_gap');
   });
 });
+
+describe('recall world-model multi-candidate simulation', () => {
+  it('parses multiple candidates and freezes the locally selected pair', async () => {
+    const worldModel = await import('../../../../src/main/features/recall/world-model');
+    const input = {
+      k: {
+        projectionId: 'proj-a',
+        projectionConfirmedAt: '2026-08-13T00:00:00.000Z',
+        abilityAssetRefs: ['asset-a'],
+        abilityAssets: [],
+        assetVersions: { 'asset-a': '1' },
+        rules: [{
+          id: 'rule:asset-a:1', assetId: 'asset-a', assetVersion: '1',
+          rule: { cause: 'Missing check', effect: 'Failure', mitigation: 'Add check', severity: 'high', deltaR: -0.8 },
+        }],
+      },
+      s: {
+        snapshotId: 'snap-a', conversationSummary: 'Fix OAuth callback',
+        environment: { workspaceAvailable: true, modelConfigured: true, fileSystemAvailable: true, shellAvailable: true },
+        execution: {
+          groupChatStatus: 'running', availableActors: ['commander'],
+          availableTools: ['read_file', 'write_file', 'exec_command'], accessConstraints: [], energyConstraints: [],
+        },
+        lifecycle: { projectionStatus: 'confirmed' },
+        recall: { selectedAssetCount: 1, selectedRuleCount: 1 },
+      },
+      t: { userGoal: 'Fix OAuth callback', constraints: [], acceptanceCriteria: ['Tests pass'] },
+    } as any;
+    const response = JSON.stringify({
+      candidates: [
+        {
+          id: 'path-a', plan: ['Inspect'], expectedTools: ['read_file'], expectedActors: ['commander'],
+          predictedResult: { summary: 'Inspected only', acceptanceSignals: ['Inspection recorded'], predictedFiles: [] },
+          causalLinks: [{ interventionIndex: 0, mechanism: 'Inspection reveals the issue', ruleRefs: ['rule:asset-a:1'], assumptions: [] }],
+          assumptions: [], riskRuleRefs: ['rule:asset-a:1'],
+          score: { goalFit: 0.4, feasibility: 1, observability: 0.8, causalSupport: 0.8, riskPenalty: 0.2, total: 1 },
+        },
+        {
+          id: 'path-b', plan: ['Inspect', 'Fix', 'Test'], expectedTools: ['read_file', 'write_file', 'exec_command'], expectedActors: ['commander'],
+          predictedResult: { summary: 'OAuth callback fixed', acceptanceSignals: ['Tests pass'], predictedFiles: ['src/auth/callback.ts'] },
+          causalLinks: [{ interventionIndex: 1, mechanism: 'The state check prevents invalid callbacks', ruleRefs: ['rule:asset-a:1'], assumptions: [] }],
+          assumptions: ['Tests reproduce the issue'], riskRuleRefs: ['rule:asset-a:1'],
+          score: { goalFit: 0.95, feasibility: 0.9, observability: 0.9, causalSupport: 0.9, riskPenalty: 0.1, total: 0 },
+        },
+      ],
+    });
+
+    const forecast = await worldModel.simulateWorld('user-a', input, snapshot(), {
+      runModel: async () => response,
+    });
+
+    expect(forecast.candidates).toHaveLength(2);
+    expect(forecast.selectedCandidateId).toBe('path-b');
+    expect(forecast.aHat).toEqual(forecast.candidates?.[1].aHat);
+    expect(forecast.rHat).toEqual(forecast.candidates?.[1].rHat);
+    expect(forecast.candidates?.[0].score.total).not.toBe(1);
+  });
+});

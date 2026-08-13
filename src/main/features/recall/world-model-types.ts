@@ -117,22 +117,56 @@ export interface PredictedRisk {
   deltaR: number | 'unknown';
 }
 
+export interface WorldModelIntervention {
+  plan: string[];
+  expectedTools: string[];
+  expectedActors: string[];
+}
+
+export interface WorldModelPredictedResult {
+  summary: string;
+  acceptanceSignals: string[];
+  predictedFiles: string[];
+}
+
+export interface WorldModelCausalLink {
+  interventionIndex: number;
+  mechanism: string;
+  ruleRefs: string[];
+  assumptions: string[];
+}
+
+export interface WorldModelCandidateScore {
+  goalFit: number;
+  feasibility: number;
+  observability: number;
+  causalSupport: number;
+  riskPenalty: number;
+  total: number;
+}
+
+export interface WorldModelCandidateForecast {
+  id: string;
+  aHat: WorldModelIntervention;
+  rHat: WorldModelPredictedResult;
+  causalLinks: WorldModelCausalLink[];
+  assumptions: string[];
+  predictedRisks: PredictedRisk[];
+  score: WorldModelCandidateScore;
+  /** Original model order for deterministic final tie-breaking. */
+  modelOrder: number;
+}
+
 /** The world-model simulation output: (A_hat, R_hat) generated together. */
 export interface WorldModelForecast {
-  /** A_hat = predicted self / intervention sequence. */
-  aHat: {
-    plan: string[];
-    expectedTools: string[];
-    expectedActors: string[];
-  };
-  /** R_hat = predicted world / result state. */
-  rHat: {
-    summary: string;
-    acceptanceSignals: string[];
-    predictedFiles: string[];
-  };
-  /** Deterministic risks matched from the R-Box before LLM simulation. */
+  aHat: WorldModelIntervention;
+  rHat: WorldModelPredictedResult;
   predictedRisks: PredictedRisk[];
+  /** New Forecasts preserve all alternatives; legacy records may omit them. */
+  candidates?: WorldModelCandidateForecast[];
+  selectedCandidateId?: string;
+  causalLinks?: WorldModelCausalLink[];
+  assumptions?: string[];
 }
 
 export interface WorldModelKnowledge {
@@ -159,6 +193,7 @@ export interface WorldModelSituation {
   execution?: {
     groupChatStatus: 'idle' | 'running' | 'aborted';
     availableActors: string[];
+    availableTools?: string[];
     accessConstraints: string[];
     energyConstraints: string[];
   };
