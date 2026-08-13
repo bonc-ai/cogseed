@@ -8,6 +8,10 @@
  */
 
 import type { RecallJsonRecord } from './types';
+import type { AbilityAssetType, RecallAbilityAssetRecord } from './candidate-service';
+import type { AbilityAssetOntologyRef } from './ontology-refs';
+import type { CognitionSourceRef } from './source-service';
+import type { KstarLearningSignal } from '../kstar/types';
 
 /** Severity of a causal rule. */
 export type CausalRuleSeverity = 'high' | 'medium' | 'low';
@@ -18,6 +22,27 @@ export type CausalRuleSeverity = 'high' | 'medium' | 'low';
  * This is a delta_r lesson that has been frozen into a reusable rule. It has
  * the Hermes cause -> effect -> mitigation shape rather than free-form prose.
  */
+export interface WorldModelAbilityAsset {
+  id: string;
+  version: string;
+  title: string;
+  type: AbilityAssetType;
+  statement: string;
+  scope: string;
+  maturity: RecallAbilityAssetRecord['maturity'];
+  learningSignal?: KstarLearningSignal;
+  causalRule?: CausalRule;
+  ontologyRefs: AbilityAssetOntologyRef[];
+  evidenceRefs: CognitionSourceRef[];
+}
+
+export interface WorldModelCausalRuleRef {
+  id: string;
+  assetId: string;
+  assetVersion: string;
+  rule: CausalRule;
+}
+
 export interface CausalRule {
   /** The triggering condition or situation (human-readable). */
   cause: string;
