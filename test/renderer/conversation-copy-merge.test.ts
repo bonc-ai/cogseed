@@ -53,7 +53,6 @@ function loadHelpers(): any {
     '_ensureConversationMergeActionBar',
     '_copyNoticeBodyHtml',
     '_mergeSummarySectionLabel',
-    '_renderMergeScopeReceipt',
     '_renderMergeSummaryDetails',
     '_renderConversationResultCardHtml',
   ];
@@ -120,40 +119,13 @@ describe('conversation copy and merge renderer', () => {
       kind: 'merge',
       sourceCount: 2,
       agentCount: 1,
-      summary: '## Source Conversations\n- A\n\n## Confirmed Decisions\n- Keep the API',
-      scopeReceipt: {
-        kind: 'selected_conversations',
-        sources: [{
-          sourceCid: 'c1', sourceTitle: 'Source task', selectedMessageCount: 4,
-          actualMessageCount: 3, privateSessionMessageCount: 1,
-          deduplicatedCount: 1, truncatedCount: 0, reasons: ['duplicate_message_id'],
-        }],
-      },
+      summary: '## Source Conversations\n- Source task\n\n## Confirmed Decisions\n- Keep the API',
     });
     expect(html).toContain('已合并 2 个会话');
     expect(html).toContain('Source Conversations');
     expect(html).toContain('Confirmed Decisions');
     expect(html).toContain('Source task');
   });
-
-  it('shows full dates for a merge scope that crosses days', () => {
-    const { _renderMergeScopeReceipt } = loadHelpers();
-    const html = _renderMergeScopeReceipt({
-      kind: 'selected_conversations',
-      sources: [{
-        sourceCid: 'c1', sourceTitle: 'Cross-day task',
-        selectedMessageCount: 2, actualMessageCount: 2,
-        selectedStartAt: '2026-08-10T04:00:00.000Z',
-        selectedEndAt: '2026-08-11T05:30:00.000Z',
-        actualStartAt: '2026-08-10T04:00:00.000Z',
-        actualEndAt: '2026-08-11T05:30:00.000Z',
-      }],
-    });
-
-    expect(html).toContain('2026-08-10 12:00');
-    expect(html).toContain('2026-08-11 13:30');
-  });
-
 
   it('exits merge selection mode after a successful merge render', async () => {
     const sandbox: any = {
