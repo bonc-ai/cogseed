@@ -113,6 +113,8 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
    * `asset-service.ts::isWithinDeletionRetention` 现算。
    */
   deletedAt?: string;
+  /** 彻底清除的时刻。墓碑上唯一新增的字段——内容已删，时间线仍要可审计。 */
+  purgedAt?: string;
   version: string;
   /** Carried over from the promoted candidate; absent when it had none. */
   confidence?: number;

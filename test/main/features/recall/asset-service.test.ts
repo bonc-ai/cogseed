@@ -186,3 +186,127 @@ describe('治理状态模型', () => {
     }
   });
 });
+
+describe('治理动作', () => {
+  async function seed(uid: string) {
+    const { candidates, assets } = await modules();
+    const candidate = await candidates.saveRecallCandidate(uid, {
+      judgment: 'Prefer append-only audit trails.',
+      suggestedType: 'rule', suggestedScope: 'architecture',
+      sourceRefs: [{ kind: 'execution', id: 'exec-act' }],
+    });
+    const asset = (await candidates.promoteRecallCandidate(uid, candidate.id)).asset;
+    return { assets, asset };
+  }
+
+  it('归档与删除各自留下自己的审计动作，而不是都记成撤销', async () => {
+    const { assets, asset } = await seed('user-act');
+    await assets.archiveAbilityAsset('user-act', asset.id, '暂时不用');
+    expect((await assets.readAbilityAsset('user-act', asset.id)).status).toBe('archived');
+
+    const deleted = await assets.deleteAbilityAsset('user-act', asset.id);
+    expect(deleted.status).toBe('deleted');
+    expect(deleted.deletedAt).toBeTruthy();
+
+    const actions = (await assets.listAbilityAssetAudit('user-act', asset.id)).map((row) => row.action);
+    expect(actions).toContain('archived');
+    expect(actions).toContain('deleted');
+    expect(actions).not.toContain('revoked');
+  });
+
+  it('重复删除不刷新保留期计时', async () => {
+    // 否则用户点两次删除就把保留期悄悄延长了。
+    const { assets, asset } = await seed('user-redelete');
+    const first = await assets.deleteAbilityAsset('user-redelete', asset.id);
+    const again = await assets.deleteAbilityAsset('user-redelete', asset.id);
+    expect(again.deletedAt).toBe(first.deletedAt);
+  });
+
+  it('恢复能把归档和保留期内的删除放回 active', async () => {
+    const { assets, asset } = await seed('user-restore');
+    await assets.archiveAbilityAsset('user-restore', asset.id);
+    expect((await assets.restoreAbilityAsset('user-restore', asset.id)).status).toBe('active');
+
+    await assets.deleteAbilityAsset('user-restore', asset.id);
+    const restored = await assets.restoreAbilityAsset('user-restore', asset.id);
+    expect(restored.status).toBe('active');
+    expect(restored.deletedAt).toBeUndefined();
+  });
+
+  it('保留期已过就不再给恢复', async () => {
+    // 过期后系统对外声称的就是「已经没了」，再让它复活等于那个承诺不作数。
+    const { assets, asset } = await seed('user-expired');
+    const { updateRecallJsonRecord } = await import('../../../../src/main/features/recall/store');
+    const stale = new Date(Date.now() - (assets.ABILITY_ASSET_DELETION_RETENTION_DAYS + 1) * 86_400_000);
+    await assets.deleteAbilityAsset('user-expired', asset.id);
+    await updateRecallJsonRecord('user-expired', 'ability-assets', asset.id, (raw) => ({
+      ...raw!, deletedAt: stale.toISOString(),
+    }));
+    await expect(assets.restoreAbilityAsset('user-expired', asset.id))
+      .rejects.toThrow('retention window has expired');
+  });
+
+  it('彻底清除留下墓碑：内容与版本清空，id 与时间线保留', async () => {
+    // Receipt 里写着 asset:<id>@v<version>，记录整个消失会让历史回执指向虚空。
+    const { assets, asset } = await seed('user-purge');
+    await assets.updateAbilityAsset('user-purge', asset.id, { title: 'Second version' });
+    expect((await assets.listAbilityAssetVersions('user-purge', asset.id)).length).toBeGreaterThan(1);
+
+    const tombstone = await assets.purgeAbilityAsset('user-purge', asset.id, '用户要求彻底清除');
+    expect(tombstone.status).toBe('purged');
+    expect(tombstone.id).toBe(asset.id);
+    expect(tombstone.candidateId).toBe(asset.candidateId);
+    expect(tombstone.purgedAt).toBeTruthy();
+    expect(tombstone.title).toBe('');
+    expect(tombstone.statement).toBe('');
+    expect(tombstone.evidenceRefs).toEqual([]);
+
+    // 版本快照同样含正文，留着就不算「删除内容和版本」。
+    expect(await assets.listAbilityAssetVersions('user-purge', asset.id)).toEqual([]);
+    // 审计流保留：只有动作名和时间戳，属于允许保留的不可识别最小项。
+    expect((await assets.listAbilityAssetAudit('user-purge', asset.id)).map((r) => r.action)).toContain('purged');
+    // 墓碑仍然读得出来，不会被当成损坏记录。
+    expect((await assets.readAbilityAsset('user-purge', asset.id)).status).toBe('purged');
+  });
+
+  it('彻底清除是终态，任何后续治理动作都被拒绝', async () => {
+    const { assets, asset } = await seed('user-terminal');
+    await assets.purgeAbilityAsset('user-terminal', asset.id);
+    for (const call of [
+      () => assets.restoreAbilityAsset('user-terminal', asset.id),
+      () => assets.archiveAbilityAsset('user-terminal', asset.id),
+      () => assets.pauseAbilityAsset('user-terminal', asset.id),
+      () => assets.deleteAbilityAsset('user-terminal', asset.id),
+      () => assets.rollbackAbilityAsset('user-terminal', asset.id, '1'),
+    ]) {
+      await expect(call()).rejects.toThrow('ability asset has been purged');
+    }
+  });
+
+  it('回滚生成新版本而不改写历史，且不动治理状态与成熟度', async () => {
+    // 规范 10.4：回滚只影响后续默认引用；已引用旧版本的 TaskRun 仍指向当时的版本。
+    const { assets, asset } = await seed('user-rollback');
+    await assets.updateAbilityAsset('user-rollback', asset.id, { title: 'Renamed in v2' });
+    await assets.setAbilityAssetMaturity('user-rollback', asset.id, 'transfer_validated');
+    await assets.pauseAbilityAsset('user-rollback', asset.id);
+
+    const rolled = await assets.rollbackAbilityAsset('user-rollback', asset.id, '1');
+    expect(rolled.title).toBe(asset.title);
+    expect(rolled.version).toBe('3');            // 新版本，不是退回 v1
+    expect(rolled.status).toBe('paused');         // 治理状态不因回滚复活
+    expect(rolled.maturity).toBe('transfer_validated');
+
+    const versions = await assets.listAbilityAssetVersions('user-rollback', asset.id);
+    expect(versions.map((v) => v.version)).toEqual(['1', '2', '3']);
+    expect(versions.find((v) => v.version === '2')?.snapshot.title).toBe('Renamed in v2');
+    expect((await assets.listAbilityAssetAudit('user-rollback', asset.id)).map((r) => r.action)).toContain('rolled_back');
+  });
+
+  it('回滚到不存在的版本或原地版本都被拒绝', async () => {
+    const { assets, asset } = await seed('user-rollback-bad');
+    await expect(assets.rollbackAbilityAsset('user-rollback-bad', asset.id, '99'))
+      .rejects.toThrow('version not found');
+    await expect(assets.rollbackAbilityAsset('user-rollback-bad', asset.id, asset.version))
+      .rejects.toThrow('already at that version');
+  });
+});
