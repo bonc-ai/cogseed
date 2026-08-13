@@ -7,6 +7,7 @@ const root = resolve(__dirname, '../..');
 const indexHtml = readFileSync(resolve(root, 'src/renderer/index.html'), 'utf8');
 const flushAsync = () => new Promise((resolve) => setTimeout(resolve, 0));
 const style = readFileSync(resolve(root, 'src/renderer/style.css'), 'utf8');
+const moduleSource = readFileSync(resolve(root, 'src/renderer/modules/model-authorization.js'), 'utf8');
 const locales = ['en', 'zh', 'ja', 'pt'].map((lang) => [lang, JSON.parse(readFileSync(resolve(root, `src/renderer/locales/${lang}.json`), 'utf8'))] as const);
 
 function modelAuthorizationKeys(locale: Record<string, unknown>): string[] {
@@ -82,6 +83,33 @@ describe('unified model authorization settings surface', () => {
     for (const [lang, locale] of locales.slice(1)) {
       expect(modelAuthorizationKeys(locale), `${lang} differs from ${baseLang}`).toEqual(baseKeys);
     }
+  });
+
+  it('localizes every hardened authorization state and removes visible production literals', () => {
+    const requiredKeys = [
+      'settings.model_authorization.make_default',
+      'settings.model_authorization.providers_empty',
+      'settings.model_authorization.providers_load_failed',
+      'settings.model_authorization.retry_providers',
+      'settings.model_authorization.ccswitch_load_failed',
+      'settings.model_authorization.ccswitch_draft_expired',
+      'settings.model_authorization.remove_model_failed',
+      'settings.model_authorization.authorization_list_failed',
+      'settings.model_authorization.model_list_empty',
+      'settings.model_authorization.custom_endpoint_default_name',
+      'settings.model_authorization.error_auth_failed',
+      'settings.model_authorization.error_unsupported_discovery',
+      'settings.model_authorization.error_network',
+      'settings.model_authorization.error_provider',
+      'settings.model_authorization.error_invalid_request',
+      'settings.model_authorization.error_missing_key',
+    ];
+    for (const [lang, locale] of locales) {
+      for (const key of requiredKeys) expect(locale[key], `${lang} missing ${key}`).toBeTruthy();
+    }
+    expect(moduleSource).not.toContain("'Make default'");
+    expect(moduleSource).not.toContain("'Custom endpoint'");
+    expect(moduleSource).not.toContain("'👁'");
   });
 });
 
@@ -481,6 +509,28 @@ describe('model authorization interactive wizard', () => {
     expect(registry.get('model-authorization-body')!.innerHTML).not.toContain('sk-never-render-this');
     expect(registry.get('model-authorization-status')!.textContent)
       .toBe('settings.model_authorization.error_discovery_failed');
+  });
+
+  it('renders a localized empty model result and keeps save disabled', async () => {
+    const { context, registry, invoke } = loadInteractiveHarness();
+    await context.window.initModelAuthorizationSettings();
+    await registry.get('settings-model-authorization-add-btn')!.click();
+    await registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'source-manual' } },
+    });
+    await registry.get('model-authorization-body')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'choose-provider-preset', providerId: 'anthropic' } },
+    });
+    registry.get('model-authorization-api-key')!.value = 'sk-empty-model-result';
+    invoke.mockResolvedValueOnce({ ok: true, models: [] });
+    await registry.get('model-authorization-actions')!.dispatch('click', {
+      target: { dataset: { modelAuthAction: 'continue-credentials' } },
+    });
+
+    expect(registry.get('model-authorization-body')!.innerHTML)
+      .toContain('settings.model_authorization.model_list_empty');
+    expect(registry.get('model-authorization-actions')!.innerHTML).toContain('complete" disabled');
+    expect(registry.get('model-authorization-body')!.innerHTML).not.toContain('sk-empty-model-result');
   });
 
   it('recovers busy state when draft testing or completion rejects', async () => {

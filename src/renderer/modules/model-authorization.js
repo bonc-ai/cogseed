@@ -355,6 +355,24 @@
     return key;
   }
 
+  const ERROR_CODE_KEYS = Object.freeze({
+    auth_failed: 'settings.model_authorization.error_auth_failed',
+    unsupported_discovery: 'settings.model_authorization.error_unsupported_discovery',
+    network_error: 'settings.model_authorization.error_network',
+    provider_error: 'settings.model_authorization.error_provider',
+    invalid_request: 'settings.model_authorization.error_invalid_request',
+    missing_key: 'settings.model_authorization.error_missing_key',
+    draft_not_found: 'settings.model_authorization.ccswitch_draft_expired',
+    draft_expired: 'settings.model_authorization.ccswitch_draft_expired',
+  });
+
+  function resultErrorMessage(result, fallbackKey) {
+    const code = String(result && (result.errorCode || result.code || result.error) || '').trim();
+    if (ERROR_CODE_KEYS[code]) return tr(ERROR_CODE_KEYS[code]);
+    const message = result && typeof result.error === 'string' ? result.error.trim() : '';
+    return message ? message.slice(0, 300) : tr(fallbackKey);
+  }
+
   function esc(value) {
     if (typeof escapeHtml === 'function') return escapeHtml(value);
     return String(value == null ? '' : value).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -387,11 +405,10 @@
     try {
       const result = await invoke(channel, payload);
       if (!result || result.ok === false) {
-        const resultMessage = result && typeof result.error === 'string' ? result.error.trim() : '';
         return {
           ok: false,
           result: result || null,
-          message: resultMessage ? resultMessage.slice(0, 300) : tr(fallbackKey),
+          message: resultErrorMessage(result, fallbackKey),
         };
       }
       return { ok: true, result };
@@ -567,17 +584,17 @@
   }
 
   function endpointLabel(baseUrl) {
-    try { return new URL(baseUrl).hostname || 'Custom endpoint'; }
-    catch { return 'Custom endpoint'; }
+    try { return new URL(baseUrl).hostname || tr('settings.model_authorization.custom_endpoint_default_name'); }
+    catch { return tr('settings.model_authorization.custom_endpoint_default_name'); }
   }
 
   function keyInputHtml() {
     const eye = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
       ? window.uiIconHtml('eye', 'model-authorization-key-toggle-icon')
-      : '👁';
+      : '';
     return `<div class="model-authorization-key-wrap">
       <input id="model-authorization-api-key" class="form-input" type="password" autocomplete="off" spellcheck="false" />
-      <button type="button" class="model-authorization-key-toggle" data-model-auth-action="toggle-key-visible" data-target="model-authorization-api-key" title="${esc(tr('settings.model_authorization.key_show'))}">${eye}</button>
+      <button type="button" class="model-authorization-key-toggle" data-model-auth-action="toggle-key-visible" data-target="model-authorization-api-key" title="${esc(tr('settings.model_authorization.key_show'))}" aria-label="${esc(tr('settings.model_authorization.key_show'))}">${eye}</button>
     </div>`;
   }
 
@@ -624,12 +641,15 @@
       <div class="model-authorization-model-row" data-model-id="${esc(model.id)}">
         <button data-model-auth-action="toggle-model" data-model-id="${esc(model.id)}" data-checked="${selected.has(model.id) ? 'false' : 'true'}">${selected.has(model.id) ? '✓' : '+'}</button>
         <span>${esc(model.name || model.id)}</span>
-        <button data-model-auth-action="default-model" data-model-id="${esc(model.id)}" ${selected.has(model.id) ? '' : 'disabled'}>${controller.draft.defaultModel === model.id ? esc(tr('settings.model_authorization.default_label')) : 'Make default'}</button>
+        <button data-model-auth-action="default-model" data-model-id="${esc(model.id)}" ${selected.has(model.id) ? '' : 'disabled'}>${controller.draft.defaultModel === model.id ? esc(tr('settings.model_authorization.default_label')) : esc(tr('settings.model_authorization.make_default'))}</button>
       </div>`).join('');
     const manual = controller.draft.discoveryErrorCode === 'unsupported_discovery'
       ? `<div class="form-row"><input id="model-authorization-manual-model" class="form-input" type="text" /><button class="btn" data-model-auth-action="add-manual-model">${esc(tr('settings.model_authorization.manual_model_title'))}</button></div>`
       : '';
-    return `${manual}<div class="model-authorization-model-list">${rows}</div>`;
+    const empty = controller.draft.discoveryStatus === 'ready' && !controller.draft.models.length
+      ? `<div class="settings-empty">${esc(tr('settings.model_authorization.model_list_empty'))}</div>`
+      : '';
+    return `${manual}${empty}<div class="model-authorization-model-list">${rows}</div>`;
   }
 
   function renderProgress() {
@@ -973,7 +993,9 @@
         const show = input.type !== 'text';
         input.type = show ? 'text' : 'password';
         if (targetNode && typeof targetNode.setAttribute === 'function') {
-          targetNode.setAttribute('title', tr(show ? 'settings.model_authorization.key_hide' : 'settings.model_authorization.key_show'));
+          const label = tr(show ? 'settings.model_authorization.key_hide' : 'settings.model_authorization.key_show');
+          targetNode.setAttribute('title', label);
+          targetNode.setAttribute('aria-label', label);
         }
       }
       return;
