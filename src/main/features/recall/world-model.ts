@@ -11,11 +11,14 @@
 
 import { createLogger } from '../../logger';
 import { buildRunner } from '../../model/core-agent/runner';
+import { readRecallJsonRecord, writeRecallJsonRecord } from './store';
+import { genId12 } from '../../storage';
 import { hasConfiguredModel } from '../auth';
 import type {
   CausalRule,
   PredictedRisk,
   WorldModelForecast,
+  WorldModelForecastRecord,
   WorldModelPredicateKey,
   WorldModelSimulationInput,
   WorldModelSnapshot,
@@ -241,5 +244,40 @@ export function collectWorldSnapshot(
     skills: input.skills,
     ontology: input.ontology,
     createdAt: input.now ?? new Date().toISOString(),
+  };
+}
+
+/** Persist a world-model forecast record keyed by forecast id. */
+export async function saveWorldModelForecast(
+  userId: string,
+  record: WorldModelForecastRecord,
+): Promise<WorldModelForecastRecord> {
+  await writeRecallJsonRecord(userId, 'world-model-forecasts', record.id, record);
+  return record;
+}
+
+/** Read a world-model forecast record by id. */
+export async function readWorldModelForecast(
+  userId: string,
+  forecastId: string,
+): Promise<WorldModelForecastRecord | null> {
+  const raw = await readRecallJsonRecord(userId, 'world-model-forecasts', forecastId);
+  return raw ? raw as WorldModelForecastRecord : null;
+}
+
+/** Build a forecast record from simulation inputs + output. */
+export function buildWorldModelForecastRecord(
+  userId: string,
+  input: { taskRunId: string; requirementId: string; forecast: WorldModelForecast; simulationInput: WorldModelSimulationInput },
+): WorldModelForecastRecord {
+  return {
+    schemaVersion: 1,
+    ownerId: userId,
+    id: `wf-${genId12()}`,
+    taskRunId: input.taskRunId,
+    requirementId: input.requirementId,
+    input: input.simulationInput,
+    forecast: input.forecast,
+    createdAt: new Date().toISOString(),
   };
 }
