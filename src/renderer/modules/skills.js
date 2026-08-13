@@ -1060,7 +1060,7 @@ function _renderCognitionOverviewMetrics() {
     ['sources', 'cognition.pipeline_sources', '数据来源', _cognitionVisibleSourceCount(sources)],
     ['captures', 'cognition.overview_active_tasks', '进行中任务', Number(captures.waiting || 0) + Number(captures.processing || 0)],
     ['captures', 'cognition.pipeline_candidates', '待审核', Math.max(candidates.length, Number(captures.review || 0))],
-    ['assets', 'cognition.memory_content', '记忆内容', assets.length],
+    ['assets', 'cognition.ability_assets', '能力资产', assets.length],
     ['assets', 'cognition.overview_skill_candidates', '可生成 Skill', skillCandidates.length],
   ];
   return `<section class="recall-overview-metrics" aria-label="${escapeHtml(_cognitionText('cognition.overview_metrics', 'Recall 核心指标'))}">${metrics.map(([page, key, fallback, value]) => `
@@ -1122,7 +1122,7 @@ function _renderCognitionRecentActivity() {
       ? `data-cognition-open-asset="${escapeHtml(item.id)}"`
       : 'data-cognition-page-link="captures"';
     const kind = item.kind === 'asset'
-      ? _cognitionText('cognition.overview_activity_memory', '记忆内容')
+      ? _cognitionText('cognition.overview_activity_memory', '能力资产')
       : _cognitionText('cognition.overview_activity_capture', '会话沉淀');
     return `<button type="button" class="recall-overview-activity-row" ${action}><span class="recall-overview-activity-main"><strong>${escapeHtml(item.title || item.id)}</strong><small>${escapeHtml(kind)} · ${escapeHtml(item.detail)}</small></span><span class="recall-overview-activity-meta"><b>${escapeHtml(item.status)}</b>${item.at ? `<small>${escapeHtml(_cognitionDate(item.at))}</small>` : ''}</span></button>`;
   }).join('') : _renderCognitionEmpty(_cognitionText('cognition.overview_activity_empty', '完成会话沉淀后，最近变化会显示在这里'));
@@ -1154,7 +1154,7 @@ function _renderCognitionPipelineStatus() {
     [_cognitionText('cognition.pipeline_sources', '数据来源'), _cognitionVisibleSourceCount(sources)],
     [_cognitionText('cognition.pipeline_views', '已整理会话'), captures.filter((capture) => capture.recallViewId).length],
     [_cognitionText('cognition.pipeline_candidates', '待审核'), pendingCandidates.length],
-    [_cognitionText('cognition.memory_content', '记忆内容'), assets.length],
+    [_cognitionText('cognition.ability_assets', '能力资产'), assets.length],
   ].map(([label, count], index) => `<span class="skills-cognition-source-state"><b>${escapeHtml(label)}</b><em>${escapeHtml(String(count))}</em></span>${index < 3 ? '<i class="cognition-pipeline-arrow" aria-hidden="true">→</i>' : ''}`).join('');
   return `<section class="skills-cognition-flow-band recall-overview-pipeline"><div class="skills-cognition-band-head"><h2>${escapeHtml(_cognitionText('cognition.pipeline_title', '沉淀进度'))}</h2><span>${escapeHtml(next)}</span>${action}</div><div class="skills-cognition-source-row cognition-pipeline-row">${stages}</div></section>`;
 }
@@ -1243,7 +1243,7 @@ function renderSkillsCognitionCandidates() {
       ? (_skillsCognitionState.assets || []).find((item) => item.id === candidate.promotedAssetId)
       : null;
     const resultReceipt = candidate.status === 'promoted'
-      ? `<div class="recall-candidate-receipt"><strong>${escapeHtml(_cognitionText('cognition.candidate_receipt_title', '已写入 Recall'))}</strong><div><span>${escapeHtml(_cognitionText('cognition.candidate_receipt_asset', '资产'))}</span><b>${escapeHtml(candidate.promotedAssetId || '')}</b></div><div><span>${escapeHtml(_cognitionText('cognition.type', '类型'))}</span><b>${escapeHtml(_abilityAssetCategoryLabel(asset?.category || asset?.type || candidate.suggestedType))}</b></div><div><span>${escapeHtml(_cognitionText('cognition.version', '版本'))}</span><b>v${escapeHtml(asset?.version || '1')}</b></div><div><span>${escapeHtml(_cognitionText('cognition.candidate_receipt_destination', '落点'))}</span><b>${escapeHtml(`Recall · ${asset?.scope || candidate.suggestedScope || ''}`)}</b></div><div><span>${escapeHtml(_cognitionText('cognition.candidate_receipt_stage', '当前阶段'))}</span><b>${escapeHtml(_cognitionText('cognition.candidate_state_stored', '已入库'))}</b></div>${candidate.promotedAssetId ? `<button type="button" class="btn btn-sm" data-cognition-open-asset="${escapeHtml(candidate.promotedAssetId)}">${escapeHtml(_cognitionText('cognition.candidate_receipt_next', '查看记忆内容'))}</button>` : ''}</div>`
+      ? `<div class="recall-candidate-receipt"><strong>${escapeHtml(_cognitionText('cognition.candidate_receipt_title', '已写入 Recall'))}</strong><div><span>${escapeHtml(_cognitionText('cognition.candidate_receipt_asset', '资产'))}</span><b>${escapeHtml(candidate.promotedAssetId || '')}</b></div><div><span>${escapeHtml(_cognitionText('cognition.type', '类型'))}</span><b>${escapeHtml(_abilityAssetCategoryLabel(asset?.category || asset?.type || candidate.suggestedType))}</b></div><div><span>${escapeHtml(_cognitionText('cognition.version', '版本'))}</span><b>v${escapeHtml(asset?.version || '1')}</b></div><div><span>${escapeHtml(_cognitionText('cognition.candidate_receipt_destination', '落点'))}</span><b>${escapeHtml(`Recall · ${asset?.scope || candidate.suggestedScope || ''}`)}</b></div><div><span>${escapeHtml(_cognitionText('cognition.candidate_receipt_stage', '当前阶段'))}</span><b>${escapeHtml(_cognitionText('cognition.candidate_state_stored', '已入库'))}</b></div>${candidate.promotedAssetId ? `<button type="button" class="btn btn-sm" data-cognition-open-asset="${escapeHtml(candidate.promotedAssetId)}">${escapeHtml(_cognitionText('cognition.candidate_receipt_next', '查看能力资产'))}</button>` : ''}</div>`
       : candidate.status === 'rejected'
         ? `<div class="recall-candidate-receipt is-ignored"><strong>${escapeHtml(_cognitionText('cognition.candidate_state_ignored', '已忽略'))}</strong><span>${escapeHtml(_cognitionText('cognition.candidate_ignored_hint', '未写入 Recall，不会用于后续会话'))}</span></div>`
         : failed
@@ -1304,7 +1304,7 @@ function renderSkillsCognitionAssets() {
     ? categoryItems.filter((item) => [item.title, item.summary, item.statement, item.id, item.scope, item.category, item.type]
       .some((value) => String(value || '').toLocaleLowerCase().includes(searchQuery)))
     : categoryItems;
-  const searchInput = `<input class="asset-search" value="${escapeHtml(_skillsCognitionState.assetSearchQuery || '')}" placeholder="${escapeHtml(_cognitionText('cognition.search_ability_assets', '搜索记忆内容'))}" aria-label="${escapeHtml(_cognitionText('cognition.search_ability_assets', '搜索记忆内容'))}">`;
+  const searchInput = `<input class="asset-search" value="${escapeHtml(_skillsCognitionState.assetSearchQuery || '')}" placeholder="${escapeHtml(_cognitionText('cognition.search_ability_assets', '搜索能力资产'))}" aria-label="${escapeHtml(_cognitionText('cognition.search_ability_assets', '搜索能力资产'))}">`;
   if (!items.length) {
     host.innerHTML = `<div class="ability-assets-workbench">
       <div class="ability-asset-summary-grid">${summary}</div>
@@ -1317,7 +1317,7 @@ function renderSkillsCognitionAssets() {
     host.innerHTML = `<div class="ability-assets-workbench">
       <div class="ability-asset-summary-grid">${summary}</div>
       <div class="ability-assets-management">
-        <section class="ability-asset-list"><div class="ability-asset-list-head">${searchInput}</div><div class="ability-assets-empty">${escapeHtml(searchQuery ? _cognitionText('cognition.asset_search_empty', '未找到匹配的记忆内容') : _cognitionText('cognition.empty_asset_category', '该分类暂无能力资产'))}</div></section>
+        <section class="ability-asset-list"><div class="ability-asset-list-head">${searchInput}</div><div class="ability-assets-empty">${escapeHtml(searchQuery ? _cognitionText('cognition.asset_search_empty', '未找到匹配的能力资产') : _cognitionText('cognition.empty_asset_category', '该分类暂无能力资产'))}</div></section>
         <section class="ability-asset-detail"><div class="ability-assets-empty"><strong>${escapeHtml(selectedCategory)}</strong><br>${escapeHtml(_cognitionText('cognition.empty_asset_category_hint', '当候选被确认并保存为正式资产后，会出现在这里。'))}</div></section>
       </div>
     </div>`;

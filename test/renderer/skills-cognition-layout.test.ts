@@ -155,7 +155,7 @@ describe('Recall cognition workspace layout', () => {
 
   it('keeps review inside capture tasks and exposes memory content as one page', () => {
     expect(html).not.toContain('data-i18n="cognition.candidate_review"');
-    expect(html).toContain('data-i18n="cognition.memory_content"');
+    expect(html).toContain('data-i18n="cognition.ability_assets"');
     expect(html).not.toContain('data-ability-assets-view');
     expect(html).not.toContain('data-ability-assets-view-panel');
     expect(html).not.toContain('cognition.cognition_tree');
@@ -269,7 +269,7 @@ describe('Recall cognition workspace layout', () => {
         'cognition.capture_review_title',
         'cognition.capture_review_hint',
         'cognition.capture_review_empty',
-        'cognition.memory_content',
+        'cognition.ability_assets',
         'cognition.generate_skill',
         'cognition.add_to_skill_library',
         'cognition.skill_draft_title',

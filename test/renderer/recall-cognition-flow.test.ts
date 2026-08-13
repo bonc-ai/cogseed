@@ -318,7 +318,7 @@ describe('Recall cognition renderer flow', () => {
 
     vm.runInContext(`_skillsCognitionState.assetSearchQuery = 'missing';`, context);
     context.renderSkillsCognitionAssets();
-    expect(host.innerHTML).toContain('未找到匹配的记忆内容');
+    expect(host.innerHTML).toContain('未找到匹配的能力资产');
   });
 
   it('shows model configuration failures and exposes the existing credentials settings', async () => {
@@ -816,7 +816,7 @@ describe('Recall cognition renderer flow', () => {
     expect(overview.innerHTML).toContain('<b>数据来源</b><em>4</em>');
     expect(overview.innerHTML).not.toContain('<b>数据来源</b><em>7</em>');
     expect(overview.innerHTML).toContain('待审核');
-    expect(overview.innerHTML).toContain('<b>记忆内容</b><em>1</em>');
+    expect(overview.innerHTML).toContain('<b>能力资产</b><em>1</em>');
     expect(overview.innerHTML).toContain('以后保持决策可追溯');
     expect(overview.innerHTML).toContain('已恢复处理');
     expect(overview.innerHTML).toContain('data-recall-teaching-revoke="teach-a"');
@@ -862,7 +862,7 @@ describe('Recall cognition renderer flow', () => {
     expect(overview.innerHTML).toContain('数据来源</span><strong>2</strong>');
     expect(overview.innerHTML).toContain('进行中任务</span><strong>3</strong>');
     expect(overview.innerHTML).toContain('待审核</span><strong>2</strong>');
-    expect(overview.innerHTML).toContain('记忆内容</span><strong>2</strong>');
+    expect(overview.innerHTML).toContain('能力资产</span><strong>2</strong>');
     expect(overview.innerHTML).toContain('可生成 Skill</span><strong>1</strong>');
     expect(overview.innerHTML).toContain('沉淀模型尚未配置');
     expect(overview.innerHTML).toContain('2 个沉淀任务需要重试');
