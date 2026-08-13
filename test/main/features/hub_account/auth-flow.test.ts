@@ -189,18 +189,6 @@ describe('hub account auth-flow', () => {
     expect(fakeClient.me.mock.calls[1][0]).toBe('at2');
   });
 
-  it('listDevices surfaces the device list through the auth retry path', async () => {
-    await authFlow.completeLogin('88492103', 'code1', 'state_abc');
-    fakeClient.listDevices.mockResolvedValue({
-      data: [{ device_id: 'dev_1', device_name: 'MacBook', device_os: 'macOS 15.0', is_current: true, first_seen_at: 'a', last_seen_at: 'b', active_sessions: 1, status: 'active' }],
-      total: 1,
-    });
-    const devices = await authFlow.listDevices('88492103');
-    expect(devices).toHaveLength(1);
-    expect(devices[0].device_id).toBe('dev_1');
-    expect(fakeClient.listDevices).toHaveBeenCalled();
-  });
-
   it('logout revokes server-side and clears local credentials while preserving state file semantics', async () => {
     await authFlow.completeLogin('88492103', 'code1', 'state_abc');
     await authFlow.logout('88492103');

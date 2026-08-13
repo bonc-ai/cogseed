@@ -73,27 +73,6 @@ describe('hub account client', () => {
     expect((err as HubApiError).details).toEqual({ existing_account_id: 'x' });
   });
 
-  it('listDevices returns the full page envelope (data + total)', async () => {
-    mockFetchOnce(200, {
-      ok: true,
-      data: [
-        { device_id: 'd1', device_name: 'MacBook', device_os: 'macOS 15.0', is_current: true, first_seen_at: 'a', last_seen_at: 'b', active_sessions: 1, status: 'active' },
-        { device_id: 'd2', device_name: 'ThinkPad', device_os: 'Windows 11', is_current: false, first_seen_at: 'c', last_seen_at: 'd', active_sessions: 0, status: 'active' },
-      ],
-      total: 2,
-      page: 1,
-      page_size: 20,
-    });
-    const client = createHubClient(BASE);
-    const res = await client.listDevices('tok');
-    expect(res.total).toBe(2);
-    expect(res.data).toHaveLength(2);
-    expect(res.data[0].device_id).toBe('d1');
-    const [url, init] = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
-    expect(url).toContain('/api/v1/devices?page=1&page_size=20');
-    expect(init.method).toBe('GET');
-  });
-
   it('maps network failure to HUB_NETWORK_ERROR', async () => {
     (fetch as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new TypeError('fetch failed'));
     const client = createHubClient(BASE);

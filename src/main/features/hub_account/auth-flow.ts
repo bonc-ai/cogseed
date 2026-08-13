@@ -239,16 +239,7 @@ export async function logout(userId: string, client: HubClient = hubClient()): P
     }
   }
   clearHubSession(userId);
-  writeHubAccountState(userId, {
-    bound: false,
-    account_id: undefined,
-    auth_provider: undefined,
-    device_id: undefined,
-    device_name: undefined,
-    account_status: undefined,
-    bound_at: undefined,
-    pending_login: undefined,
-  });
+  writeHubAccountState(userId, { bound: false, account_id: undefined, device_id: undefined, pending_login: undefined });
   log.info('hub account signed out locally');
 }
 
