@@ -43,7 +43,6 @@ describe('renderer lazy feature loader', () => {
     expect(appended.map((script) => script.src)).toEqual([
       './modules/model-authorization.js',
       './modules/settings.js',
-      './modules/hub-account.js',
       './vendor/qrcode-generator/qrcode.js',
       './modules/messaging-settings.js',
       './modules/touchpoint-settings-model.js',
