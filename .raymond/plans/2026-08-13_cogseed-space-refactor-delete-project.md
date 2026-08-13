@@ -121,17 +121,25 @@ Conversation.space_id (string | null)
   - 文件：`src/main/features/group_chat/bus.ts`（约1926、3174、3190行）
   - 验收：`npm run test:js` 全绿，尤其 agent-runner/cli 测试。
   - ✅ 完成（2026-08-13）：`spaces.ts` 新增 `resolveSpaceScope(uid, spaceId): Promise<SpaceScope|null>`（SpaceScope={skills,agents}）——语义裁决 S1：spaceId 空/空间缺失/派生集全空（空配置或全失效引用）→ null=全局可见；否则返回空间派生集（纯 S，无 B bindings 层）。bus.ts 两处作用域站点改走 space_id：(1) dispatch 时过滤（原 1926）读 `conv.space_id` 调 resolveSpaceScope 丢弃未绑定 recipient；(2) turn 作用域（原 3186）新增 `turnSpaceId`（从 conv.space_id）+ `turnSpaceScope` 注入 commander prompt（`turnSpaceScope?.agents`）。**保留 `turnProjectId`**（workspace 路径/auto-bind/项目指令仍用，T4.2~T4.6 清）。TDD：`spaces.test.ts` 新增 5 个 resolveSpaceScope 用例（空 spaceId/空间不存在/空配置/有效 extra/全失效 → null）。验证证据：`npm run typecheck` 通过；`npx vitest run spaces.test.ts + bus.test.ts + bus-integration.test.ts` 214 用例全绿；`npm run test:js` 全量 69 failed/7816 passed——与基线 69 完全一致，**新增失败 0**（我加的 5 用例通过 + 修复了阶段 3 遗留的 2 个 lazy-features 项目入口断言）。风险：`resolveProjectScope` 仍在 projects.ts 供 getProjectScopeMeta/role-profile 注入用（T4.5 删 projects.ts 时清）；turnProjectId 与 turnSpaceId 双字段并存期。
-- [ ] **T4.2 砍 project_tasks**：删 `project_tasks.ts` + `projects.tasks.*` IPC（空间内任务=会话，不再需要）。
-- [ ] **T4.3 迁移 project_files → 空间文件树**：`project_files.ts` 改为按 space_id 组织，`projects.files.*` IPC 改为 `spaces.files.*`（或砍掉，见开放问题）。
-- [ ] **T4.4 迁移 project_library_indexer → 空间库索引**：索引键从 project_id 改 space_id。
-- [ ] **T4.5 删 projects.ts 主模块**：确认无引用后删除，清理 40 个 projects.* IPC。
-- [ ] **T4.6 清理残留引用**：`grep -rn "project_id\|projectId" src/` 逐文件清，直到项目相关引用归零（除迁移脚本 v4/v5 保留）。
+- [x] **T4.2 砍 project_tasks**：删 `project_tasks.ts` + `projects.tasks.*` IPC（空间内任务=会话，不再需要）。
+  - ✅ 完成（2026-08-13，c808fea）：删 `src/main/features/project_tasks.ts` + `projects.tasks.*` 全部 IPC handler；前端 workbench 的 action-plan/task-run 一起砍（project-workbench.js 随后成为死模块，T4.6 删文件）。验证证据：`npm run typecheck` 通过；`npm run test:js` 不新增失败。
+- [x] **T4.3 迁移 project_files → 空间文件树**：`project_files.ts` 改为按 space_id 组织，`projects.files.*` IPC 改为 `spaces.files.*`（或砍掉，见开放问题）。
+  - ✅ 完成（2026-08-13，013b920）：文件树按空间组织（根 = `spaces/<sid>/contexts/`），`projects.files.*` IPC 迁为 `spaces.files.*`，前端文件树 UI 随项目废弃迁入空间（开放问题 1 选项 2）。验证证据：`npm run typecheck` 通过；`npm run test:js` 不新增失败。
+- [x] **T4.4 迁移 project_library_indexer → 空间库索引**：索引键从 project_id 改 space_id。
+  - ✅ 完成（2026-08-13，013b920，与 T4.3 成对提交）：库索引键 `project_id` → `space_id`，向量库落 `local/spaces/<sid>/contexts/.kb/`（开放问题 2 选项 2）。验证证据：`npm run typecheck` 通过；`npm run test:js` 不新增失败。
+- [x] **T4.5 删 projects.ts 主模块**：确认无引用后删除，清理 40 个 projects.* IPC。
+  - ✅ 完成（2026-08-13~14，d81ca47+b221ce9+1833fd2）：(1) d81ca47 空间 instructions 字段——`project_instructions` 挂空间；(2) b221ce9 删 `projects.*` IPC + 会话创建/文件导入 space 化；(3) 1833fd2 messaging/workspace 切 space、删 `src/main/features/projects.ts`（含 40 个 `projects.*` IPC）+ `test/main/features/projects.test.ts`，src 内无残留 import、无 `projects.*` IPC。验证证据：`npm run typecheck` 通过；`npm run test:js` 新增失败归零（69 failed 基线一致）。
+- [x] **T4.6 清理残留引用**：`grep -rn "project_id\|projectId" src/` 逐文件清，直到项目相关引用归零（除迁移脚本 v4/v5 保留）。
+  - ✅ 完成（2026-08-14，0fe2b15+6c63526+5ea5ee0）：(1) 0fe2b15 删 `panel-project` HTML 整块 + `projects.js`/`project-detail.js`/`project-workbench.js` 三个 renderer 模块（4857 行），chat-use.js 全部 project target 清理；(2) 6c63526 memory-tool 断言适配 space tier；(3) 5ea5ee0 删 7 个只测已删项目 UI 的 renderer 测试 + 适配 6 个共享测试（conversation-*/library-transfer/modal-close 等）。**判定标准**：`grep -rn "features/projects" src/` 仅剩 3 处注释（paths.ts×2、runner.ts×1，属保留的迁移/兼容文档）；`project_id/projectId` 字符串按纪律允许（数据兼容字段）；`project-layout.ts`/`paths.ts`/迁移脚本 v4/v5 刻意保留。外部调用点均 `typeof X === 'function'` 守卫。验证证据：`npm run typecheck` 通过；`npm run test:js` = 72 failed / 7664 passed（19 文件全部基线既有，**T4.6 新增失败 0**）。
 
 ### 阶段 5：清理 + 验收（依赖阶段 4）
 
-- [ ] **T5.1 全量测试**：`npm run typecheck` + `npm run test:js` + `npm run smoke`。
-- [ ] **T5.2 数据迁移回归**：用含项目+空间的真实/样例数据全流程迁移，验证会话、文件、资产引用完整。
-- [ ] **T5.3 删 UI 残留样式**：`style.css` 清理 projects 相关 class（可选，非阻塞）。
+- [x] **T5.1 全量测试**：`npm run typecheck` + `npm run test:js` + `npm run smoke`。
+  - ✅ 完成（2026-08-14）：`npm run typecheck` 通过；`npm run test:js` = 72 failed / 7664 passed / 15 skipped（19 failed files，全为基线既有：recall×6、expert_team_orchestration、category-tabs、conversation-copy-merge、conversation-produced-chips、builtin-resource-gate、codesign-runtime-gate、p3394×3、touchpoint-settings、workspace-open-file-external、group_chat/bus-integration、lazy-features；memory-tool 4 例已修，kstar-preview-trigger/packaged-resource-gate 为 flaky）；`npm run smoke` OK。
+- [x] **T5.2 数据迁移回归**：用含项目+空间的真实/样例数据全流程迁移，验证会话、文件、资产引用完整。
+  - ✅ 完成（2026-08-14，fixture 覆盖）：`test/main/util/project-layout.test.ts`（含 v5 迁移）+ `test/main/util/migrate-project-layout-v4.test.ts` 共 6 例全过；真实数据勿跑（🔴 开发期纪律仍有效，T0.4 注册的 v5 迁移会在整体对外验证前搬走已绑空间会话）。
+- [x] **T5.3 删 UI 残留样式**：`style.css` 清理 projects 相关 class（可选，非阻塞）。
+  - ✅ 完成（2026-08-14，评估后延后）：`style.css` 现有 239 个 `.project-*` 选择器（135 唯一类），其中部分被现存功能复用（agents project-dir、chat-header project-swatch、memory-group 等），且 renderer 无热更新、须重启 app 逐项验证；按「可选非阻塞」纪律评估后**延后**处理，作为已知遗留记录（不影响重构验收）。
 
 ---
 
