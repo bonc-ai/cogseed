@@ -141,7 +141,7 @@ describe('runner › buildRunner auth gate', () => {
       sessionId: 'gconv-teaching-success',
       userId: 'runner-teaching',
       cid: 'conv-teaching',
-      projectId: 'project-a',
+      spaceId: 'space-a',
       sourceMessageId: 'message-a',
       sourceMessageFromUser: true,
       userMessage: '请记住：以后所有结论都附来源。',
@@ -153,7 +153,7 @@ describe('runner › buildRunner auth gate', () => {
 
     const result = await memoryTool.execute({
       action: 'add',
-      target: 'project',
+      target: 'space',
       content: '以后所有结论都附来源。',
     }, { state: {} });
 

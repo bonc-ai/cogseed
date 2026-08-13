@@ -191,15 +191,15 @@ describe('prompts ↔ code contract', () => {
     const memoryTool = readFile('src/core-agent/src/tools/memory-tool.ts');
 
     // Tool description ships in two shapes: the legacy three-tier one and the
-    // project-session one that adds the `project` tier plus the belongs-where
-    // routing rule ("would this still hold in another project?").
+    // space-session one that adds the `space` tier plus the belongs-where
+    // routing rule ("would this still hold in another space?").
     expect(memoryTool).toContain("- agent (default): this agent's private lessons");
-    expect(memoryTool).toContain('- shared: stable facts that hold across projects and matter to every agent');
+    expect(memoryTool).toContain('- shared: stable facts that hold across spaces and matter to every agent');
     expect(memoryTool).toContain('- user: stable user-wide profile/preferences every agent should know');
-    expect(memoryTool).toContain('- project: durable facts, decisions, outcomes, milestones, and conventions that belong to THIS project only');
-    expect(memoryTool).toContain('would this still hold in another project?');
-    // The project tier is schema-gated: offered only when the host marks the
-    // session as belonging to a project.
+    expect(memoryTool).toContain('- space: durable facts, decisions, outcomes, milestones, and conventions that belong to THIS space only');
+    expect(memoryTool).toContain('would this still hold in another space?');
+    // The space tier is schema-gated: offered only when the host marks the
+    // session as belonging to a space.
     expect(memoryTool).toContain('includeProjectTier');
     // Language rule: write in the user's current language, preserving literals.
     expect(memoryTool).toContain("Write in the user's current language while preserving code, paths, commands, URLs");

@@ -48,6 +48,22 @@ async function loadChats() {
   return import('../../../src/main/features/chats');
 }
 
+// T4.5 空间化：projects 模块已删，测试直接手工建项目壳目录（数据层仍在）。
+function makeProject(name: string): { ok: true; project: { project_id: string; name: string } } {
+  const pid = `p${Math.random().toString(16).slice(2, 10)}`;
+  const projectDir = path.join(tmpDir, TEST_UID, 'cloud', 'projects', pid);
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, 'project.json'), JSON.stringify({
+    project_id: pid,
+    name,
+    owner_uid: TEST_UID,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+  }));
+  return { ok: true, project: { project_id: pid, name } };
+}
+
+
 describe('chats › createConversation', () => {
   it('generates a 12-hex cid and writes it to _index.json', async () => {
     const chats = await loadChats();
@@ -93,8 +109,7 @@ describe('chats › createConversation', () => {
   // When projectId is omitted the global record must not carry an empty field.
   it('persists project_id when supplied; omits the field when absent', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const createdProject = await projects.createProject(TEST_UID, 'Contained project');
+    const createdProject = makeProject('Contained project');
     if (!createdProject.ok) throw new Error(`project setup failed: ${createdProject.error}`);
     const pid = createdProject.project.project_id;
     const c1 = await chats.createConversation(TEST_UID, { projectId: pid });
@@ -193,8 +208,7 @@ describe('chats › message history tombstones', () => {
 
   it('keeps an explicit global history read out of a duplicate project root', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const project = await projects.createProject(TEST_UID, 'Unrelated history');
+    const project = makeProject('Unrelated history');
     if (!project.ok) throw new Error(`project setup failed: ${project.error}`);
     const conv = await chats.createConversation(TEST_UID, { title: 'global history' });
     const globalFile = path.join(
@@ -220,8 +234,7 @@ describe('chats › message history tombstones', () => {
 describe('chats › automation execution history', () => {
   it('paginates runs across global and project roots and reports exact totals', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const createdProject = await projects.createProject(TEST_UID, 'Automation runs');
+    const createdProject = makeProject('Automation runs');
     if (!createdProject.ok) throw new Error(`project setup failed: ${createdProject.error}`);
     const taskId = 'at_history';
     const createdIds: string[] = [];
@@ -300,9 +313,8 @@ describe('chats › setConversationPinned', () => {
 describe('chats › targeted conversation lookup', () => {
   it('uses a validated project/global hint without opening unrelated indexes', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const first = await projects.createProject(TEST_UID, 'Lookup target');
-    const second = await projects.createProject(TEST_UID, 'Lookup unrelated');
+    const first = makeProject('Lookup target');
+    const second = makeProject('Lookup unrelated');
     if (!first.ok || !second.ok) throw new Error('project setup failed');
     const target = await chats.createConversation(TEST_UID, {
       title: 'target',
@@ -346,9 +358,8 @@ describe('chats › targeted conversation lookup', () => {
 
   it('falls back to the shared all-root lookup when a project hint is stale', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const owner = await projects.createProject(TEST_UID, 'Actual owner');
-    const stale = await projects.createProject(TEST_UID, 'Stale hint');
+    const owner = makeProject('Actual owner');
+    const stale = makeProject('Stale hint');
     if (!owner.ok || !stale.ok) throw new Error('project setup failed');
     const target = await chats.createConversation(TEST_UID, {
       title: 'moved by sync',
@@ -366,9 +377,8 @@ describe('chats › targeted conversation lookup', () => {
 describe('chats › root-scoped mutation store', () => {
   it('keeps normal create/activity/rename/pin/delete work inside the hinted root', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const owner = await projects.createProject(TEST_UID, 'Mutation owner');
-    const unrelatedProject = await projects.createProject(TEST_UID, 'Mutation unrelated');
+    const owner = makeProject('Mutation owner');
+    const unrelatedProject = makeProject('Mutation unrelated');
     if (!owner.ok || !unrelatedProject.ok) throw new Error('project setup failed');
     await chats.createConversation(TEST_UID, {
       title: 'unrelated row',
@@ -456,9 +466,8 @@ describe('chats › renameConversation', () => {
 
   it('persists only the changed metadata and affected project index', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const first = await projects.createProject(TEST_UID, 'First project');
-    const second = await projects.createProject(TEST_UID, 'Second project');
+    const first = makeProject('First project');
+    const second = makeProject('Second project');
     if (!first.ok || !second.ok) throw new Error('project setup failed');
     const changed = await chats.createConversation(TEST_UID, {
       title: 'changed', projectId: first.project.project_id,
@@ -495,9 +504,8 @@ describe('chats › renameConversation', () => {
 
   it('rewrites both aggregate roots when project membership changes', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const first = await projects.createProject(TEST_UID, 'Old root');
-    const second = await projects.createProject(TEST_UID, 'New root');
+    const first = makeProject('Old root');
+    const second = makeProject('New root');
     if (!first.ok || !second.ok) throw new Error('project setup failed');
     const conv = await chats.createConversation(TEST_UID, {
       title: 'move me', projectId: first.project.project_id,
@@ -523,9 +531,8 @@ describe('chats › renameConversation', () => {
 describe('chats › index repair', () => {
   it('limits startup enrichment to visible age buckets and expanded projects', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const expanded = await projects.createProject(TEST_UID, 'Expanded');
-    const collapsed = await projects.createProject(TEST_UID, 'Collapsed');
+    const expanded = makeProject('Expanded');
+    const collapsed = makeProject('Collapsed');
     if (!expanded.ok || !collapsed.ok) throw new Error('project setup failed');
 
     const recent = await chats.createConversation(TEST_UID, { title: 'recent' });
@@ -565,8 +572,7 @@ describe('chats › index repair', () => {
 
   it('pages expanded projects and old buckets in independent 10-row slices', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const project = await projects.createProject(TEST_UID, 'Paged project');
+    const project = makeProject('Paged project');
     if (!project.ok) throw new Error('project setup failed');
     const pid = project.project.project_id;
     const now = Date.now();
@@ -644,8 +650,7 @@ describe('chats › index repair', () => {
 
   it('loads the owning project slice when restoring its active conversation', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const project = await projects.createProject(TEST_UID, 'Active project');
+    const project = makeProject('Active project');
     if (!project.ok) throw new Error('project setup failed');
     const first = await chats.createConversation(TEST_UID, { projectId: project.project.project_id });
     const second = await chats.createConversation(TEST_UID, { projectId: project.project.project_id });
@@ -660,9 +665,8 @@ describe('chats › index repair', () => {
 
   it('keeps scoped expansion isolated from duplicate rows in unrelated roots', async () => {
     const chats = await loadChats();
-    const projects = await import('../../../src/main/features/projects');
-    const first = await projects.createProject(TEST_UID, 'First root');
-    const second = await projects.createProject(TEST_UID, 'Second root');
+    const first = makeProject('First root');
+    const second = makeProject('Second root');
     if (!first.ok || !second.ok) throw new Error('project setup failed');
     const projected = await chats.createConversation(TEST_UID, {
       title: 'first-root row',
