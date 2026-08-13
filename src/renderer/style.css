@@ -9245,8 +9245,8 @@ body.model-not-configured .main-content { flex-direction: column; }
 
 .skill-picker {
   position: fixed;
-  width: 340px;
-  max-height: 380px;
+  width: 250px;
+  max-height: 250px;
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -9292,13 +9292,13 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 
 .skill-picker-header {
-  padding: 8px;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--border);
 }
 
 .skill-picker-header input {
   width: 100%;
-  padding: 7px 10px;
+  padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 13px;
@@ -9316,11 +9316,11 @@ body.model-not-configured .main-content { flex-direction: column; }
 .skill-picker-list {
   flex: 1;
   overflow-y: auto;
-  padding: 4px;
+  padding: 2px 4px;
 }
 
 .skill-picker-group-label {
-  padding: 8px 8px 4px;
+  padding: 6px 8px 2px;
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
@@ -9329,7 +9329,7 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 
 .skill-picker-item {
-  padding: 7px 10px;
+  padding: 4px 10px;
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.12s;
@@ -9341,21 +9341,22 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 
 .skill-picker-item-name {
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 500;
   color: var(--text);
+  line-height: 1.3;
 }
 
 .skill-picker-item-desc {
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--muted);
-  margin-top: 2px;
-  line-height: 1.4;
+  margin-top: 0px;
+  line-height: 1.3;
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
 }
 
 /* Banner shown above the picker list when the active context is a project
