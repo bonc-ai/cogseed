@@ -5114,6 +5114,9 @@ async function runActorTurnBody(
         ...(turnProjectId ? { workspaceId: turnProjectId } : {}),
         boundary: 'real',
         outcome: 'injected',
+        ...(typeof citation.match_score === 'number' && Number.isFinite(citation.match_score)
+          ? { matchScore: citation.match_score }
+          : {}),
       })));
       const failedUsageWrites = usageWrites.filter((result) => result.status === 'rejected');
       if (failedUsageWrites.length) {

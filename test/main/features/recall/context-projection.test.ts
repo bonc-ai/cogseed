@@ -434,6 +434,55 @@ describe('Recall projection auto-confirm and semantic Top-N', () => {
   });
 });
 
+describe('Recall retrieval quality regression', () => {
+  async function promoteAsset(judgment: string, sourceId: string, scope: string) {
+    const { candidates } = await modules();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment,
+      summary: judgment.slice(0, 60),
+      suggestedType: 'rule',
+      suggestedScope: scope,
+      sourceRefs: [{ kind: 'execution', id: sourceId }],
+    });
+    return candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  }
+
+  it('recalls assets whose scope term appears inside a sentence-shaped purpose', async () => {
+    const { projection } = await modules();
+    const asset = (await promoteAsset('OAuth callback security review.', 'exec-sentence', 'review')).asset;
+
+    // Purpose is a full sentence, not the bare scope term: the old exact-match
+    // gate excluded every non-* asset and silently emptied the pool.
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-sentence',
+      purpose: 'Use frozen OAuth review knowledge',
+      taskText: 'Audit OAuth login callback handling',
+    }, {
+      embedTexts: async (texts: string[]) => texts.map((text) => (
+        text.toLowerCase().includes('oauth') ? [1, 0] : [0, 1]
+      )),
+    });
+
+    expect(preview.assetIds).toEqual([asset.id]);
+  });
+
+  it('marks the projection as degraded when semantic embedding fails', async () => {
+    const { projection } = await modules();
+    await promoteAsset('OAuth callback security review.', 'exec-degraded', 'review');
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-degraded',
+      purpose: 'review',
+      taskText: 'Audit OAuth login callback handling',
+    }, {
+      embedTexts: async () => { throw new Error('embedding unavailable'); },
+    });
+
+    expect(preview.selectionDegraded).toBe(true);
+    expect(preview.assetMatches?.[0]).toMatchObject({ matchMethod: 'recency_fallback', matchScore: 0 });
+  });
+});
+
 describe('committed projection knowledge boundary', () => {
   it('freezes asset ids and exact versions when a preview is confirmed', async () => {
     const { asset } = await createAsset();
