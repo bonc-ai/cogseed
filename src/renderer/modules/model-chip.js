@@ -119,8 +119,12 @@ function _modelChipRenderChip(chip) {
   const provider = current.providerLabel || current.provider || '';
   const model = current.modelName || current.model || '';
   const labelEl = chip.querySelector('.model-chip-label');
-  // Single line, same height as the recipient/workspace chips.
-  if (labelEl) labelEl.textContent = provider + ' · ' + model;
+  // Single line, same height as the recipient/workspace chips. Only the
+  // model name is shown: provider names can be long (custom providers are
+  // often named after their API host), which would push the composer
+  // toolbar onto a second line. The full "provider · model" pair stays in
+  // the hover tooltip below.
+  if (labelEl) labelEl.textContent = model;
   chip.title = t('model_chip.title', { provider, model });
 }
 
