@@ -1,0 +1,263 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+import type { RecallAbilityAssetRecord } from '../../../../src/main/features/recall/candidate-service';
+import type { CapabilityPackAssetRef } from '../../../../src/main/features/p3394/capability-pack';
+
+let tmpDir: string;
+let previousRoot: string | undefined;
+beforeEach(() => { vi.resetModules(); tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkas-selection-')); previousRoot = process.env.ORKAS_WORKSPACE_ROOT; process.env.ORKAS_WORKSPACE_ROOT = tmpDir; });
+afterEach(() => { if (previousRoot === undefined) delete process.env.ORKAS_WORKSPACE_ROOT; else process.env.ORKAS_WORKSPACE_ROOT = previousRoot; fs.rmSync(tmpDir, { recursive: true, force: true }); });
+
+const AT = '2026-08-13T02:00:00.000Z';
+const UID = 'user-sel';
+
+function asset(overrides: Partial<RecallAbilityAssetRecord> & { id: string }): RecallAbilityAssetRecord {
+  return {
+    schemaVersion: 2,
+    ownerId: UID,
+    candidateId: `cand-${overrides.id}`,
+    reviewDecisionId: 'rd_abcdefgh1234',
+    type: 'rule',
+    title: `Title ${overrides.id}`,
+    statement: `Statement for ${overrides.id}`,
+    evidenceRefs: [{ kind: 'execution', id: `exec-${overrides.id}` }],
+    scope: 'delivery',
+    status: 'active',
+    lifecycleStatus: 'user_confirmed_unverified',
+    maturity: 'transfer_validated',
+    version: '1',
+    createdAt: AT,
+    updatedAt: AT,
+    ...overrides,
+  } as RecallAbilityAssetRecord;
+}
+
+async function mod() {
+  return import('../../../../src/main/features/recall/cognition-selection');
+}
+
+async function refFor(a: RecallAbilityAssetRecord): Promise<CapabilityPackAssetRef> {
+  const { inheritedAssetContentHash } = await import('../../../../src/main/features/agent_inheritance');
+  return { asset_id: a.id, version: a.version, content_hash: inheritedAssetContentHash(a) };
+}
+
+describe('主原因优先级是领域规则，不是判断顺序', () => {
+  it('权限 > 状态 > 完整性，且与传入次序无关', async () => {
+    const { primaryWithheldReason } = await mod();
+    expect(primaryWithheldReason(['content_changed', 'asset_paused', 'scope_agent_not_allowed']))
+      .toBe('scope_agent_not_allowed');
+    // 打乱顺序结果必须一样——回执里那一条不能随实现漂。
+    expect(primaryWithheldReason(['scope_agent_not_allowed', 'asset_paused', 'content_changed']))
+      .toBe('scope_agent_not_allowed');
+    expect(primaryWithheldReason(['content_changed', 'asset_paused'])).toBe('asset_paused');
+    expect(primaryWithheldReason(['version_changed', 'content_changed'])).toBe('content_changed');
+  });
+
+  it('撤销比暂停重——同档内也有固定次序', async () => {
+    const { primaryWithheldReason } = await mod();
+    expect(primaryWithheldReason(['asset_paused', 'asset_revoked'])).toBe('asset_revoked');
+    expect(primaryWithheldReason(['asset_revoked', 'asset_paused'])).toBe('asset_revoked');
+  });
+
+  it('空原因数组是调用方的错，不静默返回一个假原因', async () => {
+    const { primaryWithheldReason } = await mod();
+    expect(() => primaryWithheldReason([])).toThrow('at least one reason');
+  });
+});
+
+describe('单条资产的判定（纯函数）', () => {
+  it('一切正常时不产出任何原因', async () => {
+    const { classifyInheritedAsset } = await mod();
+    const a = asset({ id: 'aa-ok' });
+    expect(classifyInheritedAsset(await refFor(a), a, { scope: 'delivery' })).toEqual([]);
+  });
+
+  it('多个原因同时成立时全部记下，不止第一个', async () => {
+    const { classifyInheritedAsset } = await mod();
+    const a = asset({ id: 'aa-multi', status: 'paused', scopePolicy: { agentIds: ['ag-other'] } });
+    const reasons = classifyInheritedAsset(await refFor(a), a, { agentId: 'ag-me', scope: 'delivery' });
+    expect(reasons).toContain('asset_paused');
+    expect(reasons).toContain('scope_agent_not_allowed');
+  });
+
+  it('内容漂了记 content_changed，不静默用新正文冒充', async () => {
+    const { classifyInheritedAsset } = await mod();
+    const born = asset({ id: 'aa-drift' });
+    const ref = await refFor(born);
+    // 版本没动，正文被就地改过——只比版本号发现不了。
+    const drifted = asset({ id: 'aa-drift', statement: 'Quietly edited in place.' });
+    expect(classifyInheritedAsset(ref, drifted, { scope: 'delivery' })).toEqual(['content_changed']);
+  });
+
+  it('版本变了记 version_changed', async () => {
+    const { classifyInheritedAsset } = await mod();
+    const born = asset({ id: 'aa-ver' });
+    const ref = await refFor(born);
+    const bumped = asset({ id: 'aa-ver', version: '2' });
+    const reasons = classifyInheritedAsset(ref, bumped, { scope: 'delivery' });
+    expect(reasons).toContain('version_changed');
+  });
+
+  it('资产读不到记 asset_missing，且不再叠加其他原因', async () => {
+    const { classifyInheritedAsset } = await mod();
+    const ref: CapabilityPackAssetRef = { asset_id: 'aa-gone', version: '1' };
+    expect(classifyInheritedAsset(ref, null, {})).toEqual(['asset_missing']);
+  });
+});
+
+describe('作用域白名单的三态在选择层生效', () => {
+  it('缺失 = 不设限，放行', async () => {
+    const { classifyInheritedAsset } = await mod();
+    const a = asset({ id: 'aa-nolimit', scopePolicy: { purposeTags: ['review'] } });
+    expect(classifyInheritedAsset(await refFor(a), a, { agentId: 'ag-any', scope: 'delivery' })).toEqual([]);
+  });
+
+  it('空数组 = 谁都不给，任何 Agent 都拦', async () => {
+    const { classifyInheritedAsset } = await mod();
+    const a = asset({ id: 'aa-none', scopePolicy: { agentIds: [] } });
+    expect(classifyInheritedAsset(await refFor(a), a, { agentId: 'ag-me', scope: 'delivery' }))
+      .toEqual(['scope_agent_not_allowed']);
+  });
+
+  it('白名单命中放行，未命中拦下', async () => {
+    const { classifyInheritedAsset } = await mod();
+    const a = asset({ id: 'aa-wl', scopePolicy: { agentIds: ['ag-me'] } });
+    expect(classifyInheritedAsset(await refFor(a), a, { agentId: 'ag-me', scope: 'delivery' })).toEqual([]);
+    expect(classifyInheritedAsset(await refFor(a), a, { agentId: 'ag-you', scope: 'delivery' }))
+      .toEqual(['scope_agent_not_allowed']);
+  });
+});
+
+describe('敏感级：缺失不等于 L0', () => {
+  it('目的地声明上限后，没分过级的资产不放行', async () => {
+    const { classifyInheritedAsset } = await mod();
+    const a = asset({ id: 'aa-unclass' });
+    expect(classifyInheritedAsset(await refFor(a), a, { scope: 'delivery', maxSensitivity: 'L1' }))
+      .toEqual(['sensitivity_unclassified']);
+  });
+
+  it('超过上限拦下，不超过放行', async () => {
+    const { classifyInheritedAsset } = await mod();
+    const high = asset({ id: 'aa-l2', sensitivity: 'L2' });
+    const low = asset({ id: 'aa-l0', sensitivity: 'L0' });
+    expect(classifyInheritedAsset(await refFor(high), high, { scope: 'delivery', maxSensitivity: 'L1' }))
+      .toEqual(['sensitivity_above_destination']);
+    expect(classifyInheritedAsset(await refFor(low), low, { scope: 'delivery', maxSensitivity: 'L1' }))
+      .toEqual([]);
+  });
+
+  it('目的地没声明上限时不拿敏感级说事', async () => {
+    const { classifyInheritedAsset } = await mod();
+    const a = asset({ id: 'aa-l2b', sensitivity: 'L2' });
+    expect(classifyInheritedAsset(await refFor(a), a, { scope: 'delivery' })).toEqual([]);
+  });
+});
+
+describe('规范 10.2 矩阵在这里被真正消费', () => {
+  it('seed 档默认不带入', async () => {
+    const { classifyInheritedAsset } = await mod();
+    const a = asset({ id: 'aa-seed', maturity: 'seed' });
+    expect(classifyInheritedAsset(await refFor(a), a, { scope: 'delivery' })).toEqual(['use_policy_never']);
+  });
+
+  it('跨作用域比同作用域严：同域 auto，跨域降到 confirm', async () => {
+    const { selectInheritedCognition } = await mod();
+    const { recordAgentInheritance } = await import('../../../../src/main/features/agent_inheritance');
+    const a = asset({ id: 'aa-scope', maturity: 'transfer_validated' });
+    await recordAgentInheritance(UID, {
+      agentId: 'ag-scope', rolePrompt: '角色', assets: [a], createdAt: AT,
+    });
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    vi.spyOn(assets, 'readAbilityAsset').mockResolvedValue(a);
+
+    const same = await selectInheritedCognition(UID, 'ag-scope', { scope: 'delivery' });
+    expect(same!.selected[0].usePolicy).toBe('auto');
+    expect(same!.selected[0].sameScope).toBe(true);
+
+    const cross = await selectInheritedCognition(UID, 'ag-scope', { scope: 'architecture' });
+    expect(cross!.selected[0].usePolicy).toBe('confirm');
+    expect(cross!.selected[0].sameScope).toBe(false);
+  });
+});
+
+describe('适用/禁用条件是携带，不是判定', () => {
+  it('原样带进 Selection，不因为「场景看起来不匹配」就拦下', async () => {
+    const { classifyInheritedAsset } = await mod();
+    const a = asset({
+      id: 'aa-cond',
+      applicableWhen: ['做技术架构决策时'],
+      forbiddenWhen: ['对外公开分享时'],
+    });
+    // 条件是自然语言，选择层不做匹配——机械判定只会以看不见的方式漏掉该带的。
+    expect(classifyInheritedAsset(await refFor(a), a, { scope: 'delivery' })).toEqual([]);
+  });
+});
+
+describe('端到端：从出生快照算出这次的选择', () => {
+  it('没有继承记录返回 null，和「继承了空」分开', async () => {
+    const { selectInheritedCognition } = await mod();
+    expect(await selectInheritedCognition(UID, 'ag-legacy')).toBeNull();
+  });
+
+  it('选中与未选中分成两边，未选中带完整原因与主原因', async () => {
+    const { selectInheritedCognition } = await mod();
+    const { recordAgentInheritance } = await import('../../../../src/main/features/agent_inheritance');
+    const good = asset({ id: 'aa-good' });
+    const blocked = asset({ id: 'aa-blocked', scopePolicy: { agentIds: [] } });
+    await recordAgentInheritance(UID, {
+      agentId: 'ag-e2e', rolePrompt: '角色', assets: [good, blocked], createdAt: AT,
+    });
+
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    vi.spyOn(assets, 'readAbilityAsset').mockImplementation(async (_u: string, id: string) => (
+      id === 'aa-good' ? good : blocked
+    ) as never);
+
+    const result = await selectInheritedCognition(UID, 'ag-e2e', { scope: 'delivery' });
+    expect(result!.selected.map((s) => s.assetRef.asset_id)).toEqual(['aa-good']);
+    expect(result!.withheld).toHaveLength(1);
+    expect(result!.withheld[0].reasons).toEqual(['scope_agent_not_allowed']);
+    expect(result!.withheld[0].primaryReason).toBe('scope_agent_not_allowed');
+  });
+
+  it('一条资产读不到不影响其余的——降级，不是整体失败', async () => {
+    const { selectInheritedCognition } = await mod();
+    const { recordAgentInheritance } = await import('../../../../src/main/features/agent_inheritance');
+    const good = asset({ id: 'aa-alive' });
+    const gone = asset({ id: 'aa-vanish' });
+    await recordAgentInheritance(UID, {
+      agentId: 'ag-partial', rolePrompt: '角色', assets: [good, gone], createdAt: AT,
+    });
+
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    vi.spyOn(assets, 'readAbilityAsset').mockImplementation(async (_u: string, id: string) => {
+      if (id === 'aa-vanish') throw new Error('recall ability asset not found');
+      return good as never;
+    });
+
+    const result = await selectInheritedCognition(UID, 'ag-partial', { scope: 'delivery' });
+    expect(result!.selected.map((s) => s.assetRef.asset_id)).toEqual(['aa-alive']);
+    expect(result!.withheld[0].primaryReason).toBe('asset_missing');
+  });
+
+  it('Selection 只带只读快照，不把资产本体整个搬过来', async () => {
+    const { selectInheritedCognition } = await mod();
+    const { recordAgentInheritance } = await import('../../../../src/main/features/agent_inheritance');
+    const a = asset({ id: 'aa-shape' });
+    await recordAgentInheritance(UID, {
+      agentId: 'ag-shape', rolePrompt: '角色', assets: [a], createdAt: AT,
+    });
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    vi.spyOn(assets, 'readAbilityAsset').mockResolvedValue(a);
+
+    const result = await selectInheritedCognition(UID, 'ag-shape', { scope: 'delivery' });
+    // 决策结果，不是新的资产类型：只有渲染要用的那几个字段。
+    expect(Object.keys(result!.selected[0].content).sort())
+      .toEqual(['scope', 'statement', 'title', 'type']);
+    expect(result!.selected[0].content).not.toHaveProperty('evidenceRefs');
+    expect(result!.selected[0].content).not.toHaveProperty('candidateId');
+  });
+});
