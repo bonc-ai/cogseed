@@ -16,7 +16,11 @@
   --ws-accent-soft: #eaf7f0;
   color: var(--ws-ink);
   background: #f5f7f6;
-  min-height: 100%;
+  /* 空间中心/详情内容超高时由本容器滚动（.panel 是 flex 列 + .main-content
+     overflow:hidden，仅 min-height:100% 会被裁掉无法滚动） */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   font-size: 13px;
   line-height: 1.55;
 }
