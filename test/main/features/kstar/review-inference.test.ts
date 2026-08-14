@@ -108,6 +108,65 @@ describe('KSTAR review inference', () => {
     }
   });
 
+  it('reasons attribution and lesson via the model when a forecast exists (gap → cause → reusable asset)', async () => {
+    const inference = await import('../../../../src/main/features/kstar/review-inference');
+    const runModel = vi.fn(async () => JSON.stringify({
+      outcome: 'worse_than_expected',
+      attribution: 'rule_gap',
+      deltaR: -0.5,
+      deltaA: -0.3,
+      reason: 'The forecast expected a state check that the execution skipped.',
+      confidence: 0.85,
+      needsConfirmation: false,
+      lesson: 'OAuth 回调必须在校验 state 之后再交换 code，否则会接受无效会话。',
+    }));
+
+    const result = await inference.inferKstarReview('user-a', episode(), {
+      forecast: {
+        aHat: { plan: ['Check state', 'Exchange code'], expectedTools: ['read_file'], expectedActors: ['commander'] },
+        rHat: { summary: 'Login fixed and tests pass', acceptanceSignals: ['tests pass'], predictedFiles: ['auth.ts'] },
+        predictedRisks: [],
+        selectedCandidateId: 'cand-a',
+      },
+      selectedAssetTypes: ['rule'],
+      runModel,
+    });
+
+    expect(runModel).toHaveBeenCalledTimes(1);
+    const message = JSON.parse(runModel.mock.calls[0][0].message);
+    expect(message.delta).toMatchObject({ deltaA: expect.any(Number) });
+    expect(message.forecast.predictedResult.acceptanceSignals).toEqual(['tests pass']);
+    expect(result).toMatchObject({
+      reviewState: 'inferred',
+      inferenceMethod: 'model',
+      needsConfirmation: false,
+      review: {
+        attribution: 'rule_gap',
+        reason: 'The forecast expected a state check that the execution skipped.',
+        lesson: 'OAuth 回调必须在校验 state 之后再交换 code，否则会接受无效会话。',
+      },
+    });
+  });
+
+  it('falls back to deterministic reconciliation when the model is unavailable', async () => {
+    const inference = await import('../../../../src/main/features/kstar/review-inference');
+    const runModel = vi.fn(async () => { throw new Error('model down'); });
+
+    const result = await inference.inferKstarReview('user-a', episode(), {
+      forecast: {
+        aHat: { plan: ['Check state', 'Exchange code'], expectedTools: ['read_file'], expectedActors: ['commander'] },
+        rHat: { summary: 'Login fixed and tests pass', acceptanceSignals: ['tests pass'], predictedFiles: ['auth.ts'] },
+        predictedRisks: [],
+        selectedCandidateId: 'cand-a',
+      },
+      selectedAssetTypes: ['rule'],
+      runModel,
+    });
+
+    expect(result.inferenceMethod).toBe('deterministic');
+    expect(result.review).toMatchObject({ deltaR: 0, deltaA: 0, outcome: 'met_expected' });
+  });
+
   it('classifies failed terminal status deterministically and never needs model self-judgment', async () => {
     const inference = await import('../../../../src/main/features/kstar/review-inference');
     const runModel = vi.fn(async () => { throw new Error('must not run'); });

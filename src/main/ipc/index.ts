@@ -40,7 +40,6 @@ import * as recallProjection from '../features/recall/context-projection';
 import * as recallProjectionCard from '../features/recall/projection-card';
 import * as recallProjectionMessage from '../features/recall/projection-message';
 import * as recallTimeline from '../features/recall/timeline-service';
-import * as kstarKnowledgeRoute from '../features/kstar/knowledge-route-service';
 import * as kstarProjectionDecision from '../features/kstar/projection-decision-service';
 import { readKstarTaskLifecycle } from '../features/kstar/lifecycle-adapter';
 import * as kstarTaskClosure from '../features/kstar/task-closure';

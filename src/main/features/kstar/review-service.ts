@@ -137,6 +137,7 @@ function validateStoredReview(userId: string, episodeId: string, raw: Record<str
     (raw.inferenceMethod !== undefined && !['deterministic', 'model', 'user', 'unknown'].includes(String(raw.inferenceMethod))) ||
     (raw.needsConfirmation !== undefined && typeof raw.needsConfirmation !== 'boolean') ||
     (raw.confirmedAt !== undefined && typeof raw.confirmedAt !== 'string') ||
+    (raw.lesson !== undefined && typeof raw.lesson !== 'string') ||
     !Number.isFinite(raw.confidence) || raw.confidence < 0 || raw.confidence > 1 ||
     !Array.isArray(raw.evidenceRefs) || typeof raw.createdAt !== 'string' || typeof raw.updatedAt !== 'string'
   ) throw new Error('malformed kstar review');

@@ -8,7 +8,6 @@ export * from './review-inference';
 export * from './extraction-service';
 export * from './recall-bridge';
 export * from './task-closure';
-export * from './knowledge-route-service';
 export * from './review-card';
 export * from './requirement-types';
 export * from './requirement-store';

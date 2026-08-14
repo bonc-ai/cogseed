@@ -86,8 +86,12 @@ export function proposeKstarCandidates(
   const signalAvailable = clearsPrecipitationGate(review);
   if (verifiedWorkflow && signalAvailable) {
     proposals.push({
-      judgment: `For tasks like "${episode.t.userGoal}", use the verified workflow: ${distinctTools.join(' → ')}.`,
-      summary: 'Verified multi-tool workflow',
+      // A model-reasoned lesson (cause + reusable guidance) wins over the
+      // fixed workflow template — the difference IS the lesson.
+      judgment: review.lesson?.trim()
+        ? review.lesson
+        : `For tasks like "${episode.t.userGoal}", use the verified workflow: ${distinctTools.join(' → ')}.`,
+      summary: review.lesson?.trim() ? 'Reusable workflow lesson' : 'Verified multi-tool workflow',
       uncertainty: 'Generated from a verified workflow with an explicit learning signal; confirm before treating it as durable.',
       suggestedType: 'skill_method',
       suggestedScope: scopeForTask(episode.t.userGoal),
@@ -99,8 +103,11 @@ export function proposeKstarCandidates(
   const type = review.confidence >= 0.7 ? gapType(review) : null;
   if (type && review.reason) {
     proposals.push({
-      judgment: `For similar tasks, address this ${review.attribution.replace('_', ' ')}: ${review.reason}`,
-      summary: `KSTAR ${review.attribution.replace('_', ' ')} candidate`,
+      // Same for gap lessons: the reasoned judgment replaces the template.
+      judgment: review.lesson?.trim()
+        ? review.lesson
+        : `For similar tasks, address this ${review.attribution.replace('_', ' ')}: ${review.reason}`,
+      summary: review.lesson?.trim() ? `Reusable ${review.attribution.replace('_', ' ')} lesson` : `KSTAR ${review.attribution.replace('_', ' ')} candidate`,
       uncertainty: 'This proposal is based on an explicit review and still requires user confirmation.',
       suggestedType: type,
       suggestedScope: scopeForTask(episode.t.userGoal),

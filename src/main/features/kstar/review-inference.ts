@@ -38,6 +38,10 @@ interface ParsedModelReview {
   reason: string;
   confidence: number;
   needsConfirmation: boolean;
+  /** Optional reusable lesson derived from the attributed cause + context:
+   *  "why the gap happened" + "what is worth reusing". When present it
+   *  becomes the precipitation judgment instead of a fixed template. */
+  lesson?: string;
 }
 
 function compactText(value: unknown, max: number): string | undefined {
@@ -120,7 +124,7 @@ export function parseKstarReviewInference(text: string): ParsedModelReview {
   const value = JSON.parse(trimmed) as unknown;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('model output must be an object');
   const record = value as Record<string, unknown>;
-  const allowed = new Set(['outcome', 'attribution', 'deltaR', 'deltaA', 'reason', 'confidence', 'needsConfirmation']);
+  const allowed = new Set(['outcome', 'attribution', 'deltaR', 'deltaA', 'reason', 'confidence', 'needsConfirmation', 'lesson']);
   if (Object.keys(record).some((key) => !allowed.has(key))) throw new Error('model output contains unknown fields');
   const outcomes: KstarOutcome[] = ['better_than_expected', 'met_expected', 'worse_than_expected', 'unclear'];
   const attributions: KstarAttribution[] = ['knowledge_gap', 'rule_gap', 'template_gap', 'skill_gap', 'execution_gap', 'unclear'];
@@ -140,6 +144,9 @@ export function parseKstarReviewInference(text: string): ParsedModelReview {
     reason,
     confidence: record.confidence,
     needsConfirmation: record.needsConfirmation,
+    ...(typeof record.lesson === 'string' && record.lesson.trim()
+      ? { lesson: compactText(record.lesson, MAX_REASON_TEXT)! }
+      : {}),
   };
 }
 
@@ -153,23 +160,22 @@ function inferenceSystemPrompt(): string {
   ].join('\n');
 }
 
-async function defaultRunModel(userId: string, episode: KstarEpisodeRecord): Promise<string> {
+async function defaultRunModel(
+  userId: string,
+  episode: KstarEpisodeRecord,
+  input: { systemPrompt: string; message: string },
+): Promise<string> {
   if (!hasConfiguredModel().configured) throw new Error('review model is not configured');
   const { runner } = await buildRunner({
     sessionId: `kstar-review-${episode.id}`,
     userId,
-    systemPrompt: inferenceSystemPrompt(),
+    systemPrompt: input.systemPrompt || inferenceSystemPrompt(),
     disableTools: true,
     ephemeralSession: true,
     skillList: [],
   });
   const result = await runner.run({
-    message: JSON.stringify({ evidence: buildDeterministicReviewEvidence(episode), episode: {
-      status: episode.r.status,
-      toolCalls: episode.a.toolCalls.map((call) => ({ name: call.name, status: call.status })),
-      producedFiles: episode.r.producedFiles.slice(0, 20),
-      verification: episode.r.verification,
-    } }),
+    message: input.message,
     thinkingLevel: 'off',
     cacheRetention: 'none',
   });
@@ -186,9 +192,68 @@ export async function inferKstarReview(
   const forecast = options.forecast;
   const base = reviewBase(episode, forecast);
   if (forecast && episode.r.status === 'completed') {
-    // World-model reconciliation: deltaA gates deltaR. Use the forecast's
-    // predicted result as the true R_hat instead of the user-goal text.
+    // World-model reconciliation MEASURES the deltas deterministically
+    // (deltaA gates deltaR; forecast R_hat replaces the goal text). The
+    // measurement feeds a model REASONING pass that attributes the gap
+    // ("why did this difference happen") and derives a reusable lesson —
+    // the precipitation judgment — instead of the old mechanical
+    // attribution (selected asset type) and fixed template sentences.
     const reconciled = reconcileWorldModel(forecast, episode, { selectedAssetTypes: options.selectedAssetTypes });
+    const runModel = options.runModel !== undefined
+      ? options.runModel
+      : (hasConfiguredModel().configured
+          ? ({ systemPrompt, message }: { systemPrompt: string; message: string }) => defaultRunModel(userId, episode, { systemPrompt, message })
+          : null);
+    if (runModel) {
+      try {
+        const message = JSON.stringify({
+          forecast: {
+            predictedResult: forecast.rHat,
+            predictedPlan: forecast.aHat.plan,
+            expectedTools: forecast.aHat.expectedTools,
+            expectedActors: forecast.aHat.expectedActors,
+          },
+          delta: {
+            deltaA: reconciled.deltaA,
+            deltaR: reconciled.deltaR,
+            actionDelta: reconciled.actionDelta,
+            resultDelta: reconciled.resultDelta,
+          },
+          evidence: buildDeterministicReviewEvidence(episode),
+          selectedAssetTypes: options.selectedAssetTypes || [],
+        });
+        const text = await runModel({ systemPrompt: inferenceSystemPrompt(), message });
+        const parsed = parseKstarReviewInference(text);
+        const needsConfirmation = parsed.needsConfirmation || parsed.confidence < 0.7;
+        return {
+          review: {
+            ...base,
+            deltaR: reconciled.deltaR, // measurements stay authoritative
+            deltaA: reconciled.deltaA,
+            outcome: parsed.outcome,
+            attribution: parsed.attribution,
+            actionDelta: reconciled.actionDelta,
+            resultDelta: reconciled.resultDelta,
+            reason: parsed.reason,
+            ...(parsed.lesson ? { lesson: parsed.lesson } : {}),
+            confidence: parsed.confidence,
+            evidenceRefs: episode.evidenceRefs,
+          },
+          reviewState: needsConfirmation ? 'needs_confirmation' : 'inferred',
+          inferenceMethod: 'model',
+          needsConfirmation,
+        };
+      } catch (error) {
+        log.warn('kstar model review attribution degraded; falling back to deterministic', {
+          userId,
+          episodeId: episode.id,
+          error: (error as Error).message,
+        });
+      }
+    }
+    // Deterministic fallback: measurement + mechanical attribution. Kept as
+    // the degradation path — the numbers are honest, the cause label is not
+    // reasoned.
     return {
       review: {
         ...base,
@@ -253,9 +318,15 @@ export async function inferKstarReview(
   }
 
   try {
+    const message = JSON.stringify({ evidence: buildDeterministicReviewEvidence(episode), episode: {
+      status: episode.r.status,
+      toolCalls: episode.a.toolCalls.map((call) => ({ name: call.name, status: call.status })),
+      producedFiles: episode.r.producedFiles.slice(0, 20),
+      verification: episode.r.verification,
+    } });
     const text = options.runModel
-      ? await options.runModel({ systemPrompt: inferenceSystemPrompt(), message: JSON.stringify(buildDeterministicReviewEvidence(episode)) })
-      : await defaultRunModel(userId, episode);
+      ? await options.runModel({ systemPrompt: inferenceSystemPrompt(), message })
+      : await defaultRunModel(userId, episode, { systemPrompt: inferenceSystemPrompt(), message });
     const parsed = parseKstarReviewInference(text);
     const needsConfirmation = parsed.needsConfirmation || parsed.confidence < 0.7;
     return {

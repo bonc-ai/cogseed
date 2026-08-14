@@ -80,5 +80,7 @@ commit_forecast ──► 组装世界模型（每任务一次）：
 1. ✅ **本体 R-Box 已实现**（`ontology-rules.ts`）：值形状驱动——字段值 `A → B` 即业务规则（`ontr-*`），进入世界模型 K 的 `ontologyRules`；`isRelation` 显式声明为可选信号。
 2. ✅ **最小规则引擎**（`recall/rule-engine.ts`，对齐参考 `_ONTOLOGY_ENGINE`）：forecast 时按任务文本 token 匹配评估本体规则（ontr-*）与资产 ΔR 教训（CausalRule cause/effect/mitigation），命中子集进 `simulationInput.k.matchedRules`——Commander 只对着"本次任务真正适用的规则"推理（上限 12 条，确定性、无副作用）。
 3. ✅ **学习回流阈值门**（对齐参考 `|ΔR|≥0.15`）：`clearsPrecipitationGate`——数值 ΔR/ΔA ≥0.15、或明确 better/worse-than-expected、或高置信具体 gap（knowledge/rule/template/skill + reason）才沉淀；"met_expected + ~0 delta" = 无偏离 = 不沉淀（噪声门）。单集与任务级沉淀同时生效。
+4. ✅ **复盘从"猜"到"推理"（差异→原因→资产）**：有 forecast 时 `reconcileWorldModel` 仍确定性**测量**差异（deltaA/deltaR + 动作/结果细节），但归因与沉淀内容改由模型**推理**——差异详情 + 预测 + 选中资产类型喂给模型，产出 attribution/reason/**lesson**（"为什么差 + 什么可复用"）；lesson 成为沉淀 judgment（替代固定模板句）；模型不可用时降级到确定性归因（诚实数字 + 机械标签）。
+5. ✅ **沉淀方向明确：KStar 线只写能力资产**——`routeConfirmedKstarCandidate`（KStar 写本体入口，从未接入的死代码）已删除；本体更新归属本体线（`personal_ontology_candidates.confirmCandidate` + LLM 路由，独立模型/独立流程）。KStar 闭环**用本体**（读入 K）但**不更新本体**。
 4. **收敛重组入口**（P2）：`assembleWorldModel(userId, input)` 封装 投影知识 + 快照 + 规则，forecast-commit 调用它，命名即文档。
 5. **A-Box 刷新 Hook**（P2）：工具调用后增量刷新快照（保留每任务 T/R 冻结语义）。
