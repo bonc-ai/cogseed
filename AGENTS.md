@@ -2,6 +2,14 @@
 
 Prompt context only: keep hard constraints, short rationale, and traps already hit. Implementation details belong in source headers and tests.
 
+## Repo
+
+CogSeed desktop companion agent (Electron). Main is TypeScript under `src/main`, renderer is vanilla HTML/CSS/JS under `src/renderer`.
+
+- Quick gates: `npm run typecheck` (tsc --noEmit), `npm test` (js + resources), `./run.sh` to start.
+- This repo has sibling worktrees (`mate-agent-parallel-1/2` next to the main checkout, each on its own `dev/niubaokang*` branch). Align all of them after mainline merges; parallel sessions may edit the same files.
+- Repo docs: `README.md` / `README.zh-CN.md`; feature planning and handoff docs live under `docs/` (runtime-variants, touchpoint-v2, skill 安全体系, etc.).
+
 ## Boundary
 
 Single-process Electron app. Main is a Node backend, renderer is vanilla HTML/CSS/JS, and IPC is the only app communication path.
@@ -196,11 +204,12 @@ Dev-mode marketplace editing/upload/delete is hosted/private tooling. Runtime ga
 - Start PC with `./run.sh`.
 - Run tests with `npm test`, not `npx vitest`; the test script manages sqlite ABI swapping and rollback.
 - If sqlite ABI is broken, run `npm run rebuild:sqlite:electron`.
+- After merging develop into a feature branch, re-verify renderer↔main IPC contracts and run `npm run typecheck` — merges have silently dropped IPC channels before.
 - Tests should cover business invariants, recovery paths, concurrency, cross-layer contracts, and text-processing traps.
 - Do not test typing-only wrappers, trivial getters, happy-path-only cases, or implementation internals.
 - LLM-output parsers/sanitizers need fixture sets for both accepted real shapes and rejected look-alikes.
 - Pure renderer functions may expose a guarded CommonJS bridge for tests; DOM/i18n/IPC code should not.
-- After completing changes to this messaging worktree, restart the running app for verification instead of asking the user to do it manually: run `scripts/restart-cogseed.sh` (stops only this worktree's `messaging` runtime and relaunches via `./run.sh` in the background; other variants are untouched). Confirm startup via `~/.cogseed/runtime-variants/cogseed/data/logs/<date>.log` and the launcher log `/tmp/cogseed-agent-cogseed-run.log`, then run the real-environment verification.
+- After completing changes to this worktree, restart the running app for verification instead of asking the user to do it manually: run `scripts/restart-cogseed.sh` (stops only this worktree's `cogseed` runtime and relaunches via `./run.sh` in the background; other variants are untouched). Confirm startup via `~/.cogseed/runtime-variants/cogseed/data/logs/<date>.log` and the launcher log `/tmp/cogseed-agent-cogseed-run.log`, then run the real-environment verification.
 
 ## Git Collaboration Flow
 
