@@ -1188,6 +1188,7 @@
             <button class="settings-tab is-active" data-settings-tab="data" data-i18n="settings.tab.data">数据</button>
             <button class="settings-tab" data-settings-tab="credentials" data-i18n="settings.tab.credentials">Model Providers</button>
             <button class="settings-tab" data-settings-tab="messaging" data-i18n="settings.tab.messaging">消息平台</button>
+            <button class="settings-tab" data-settings-tab="account" data-i18n="settings.tab.account">账号</button>
             <button class="settings-tab" data-settings-tab="general" data-i18n="settings.tab.general">通用</button>
           </div>
 
@@ -1337,33 +1338,36 @@
               <div class="settings-group settings-model-auth-group" id="settings-model-authorizations">
                 <div class="settings-group-head">
                   <div>
-                    <div class="settings-group-title" data-i18n="settings.model_authorization.title">Model authorizations</div>
-                    <div class="settings-group-sub" data-i18n="settings.model_authorization.subtitle">Manage API keys and OAuth sign-ins for model providers.</div>
-                  </div>
-                  <div class="settings-group-head-actions">
-                    <button class="btn btn-primary" id="settings-model-authorization-add-btn"><span data-ui-icon="plus"></span><span data-i18n="settings.model_authorization.add">Add authorization</span></button>
-                    <button class="btn" id="settings-model-authorization-advanced-btn"><span data-ui-icon="settings"></span><span data-i18n="settings.model_authorization.advanced">Custom endpoint management</span></button>
+                    <div class="settings-group-title" data-i18n="settings.add_auth_title">Add model authorization</div>
+                    <div class="settings-group-sub" data-i18n="settings.add_auth_sub">Pick a provider and model, then add an account.</div>
                   </div>
                 </div>
-                <div class="settings-entries model-authorization-list" id="settings-model-authorization-list">
-                  <div class="settings-empty" data-i18n="settings.loading">Loading…</div>
+                <div class="settings-row settings-model-picker-row">
+                  <label data-i18n="settings.provider">Provider</label>
+                  <div class="ai-select" id="settings-picker-provider"></div>
                 </div>
-                <div class="settings-status" id="settings-model-authorization-status"></div>
-              </div>
-
-              <div class="settings-group settings-custom-providers-group" id="settings-model-authorization-advanced" hidden>
-                <div class="settings-group-head">
-                  <div class="settings-group-title" data-i18n="settings.model_authorization.advanced_title">Custom endpoint management</div>
-                  <div class="settings-group-sub" id="settings-model-authorization-advanced-hint" data-i18n="settings.model_authorization.advanced_hint">Only edit existing custom API endpoints here. To connect a new model service, use Add authorization above.</div>
-                  <div class="settings-group-sub" data-i18n="settings.model_authorization.advanced_subtitle">Manage endpoint metadata, protocol, and saved custom-provider details.</div>
+                <div class="settings-row settings-model-picker-row">
+                  <label data-i18n="settings.model">Model</label>
+                  <div class="ai-select" id="settings-picker-model"></div>
                 </div>
-                <div class="settings-row settings-custom-provider-toolbar">
-                  <button class="btn" id="settings-custom-provider-add-btn" data-i18n="settings.custom_providers.add">Add provider</button>
-                  <span class="settings-status" id="settings-ccswitch-status"></span>
-                  <span class="settings-status" id="settings-custom-providers-status"></span>
+                <div class="settings-row settings-model-auth-actions">
+                  <span class="settings-model-auth-label-spacer" aria-hidden="true"></span>
+                  <button class="btn btn-primary" id="settings-add-entry-btn"><span data-i18n="settings.add_account">Add account</span></button>
+                  <span class="settings-status" id="settings-picker-status"></span>
                 </div>
-                <div class="settings-entries settings-custom-provider-list" id="settings-custom-provider-list">
-                  <div class="settings-empty" data-i18n="settings.loading">Loading…</div>
+                <div class="settings-group-subsection settings-configured-models" id="settings-configured-models">
+                  <button type="button" class="settings-configured-toggle" id="settings-configured-toggle"
+                          aria-expanded="true" aria-controls="settings-entries"
+                          data-i18n-title="settings.configured_toggle_title" title="Toggle configured list">
+                    <span class="settings-configured-toggle-head">
+                      <span class="settings-group-title" data-i18n="settings.configured_title">Configured (by priority)</span>
+                      <span class="settings-group-sub" data-i18n="settings.configured_sub">The first entry is the default model; later entries are the fallback chain. Drag to reorder.</span>
+                    </span>
+                    <span data-ui-icon="chevron-down" data-ui-icon-class="settings-configured-chevron"></span>
+                  </button>
+                  <div class="settings-entries" id="settings-entries">
+                    <div class="settings-empty" data-i18n="settings.loading">Loading…</div>
+                  </div>
                 </div>
               </div>
 
@@ -1402,10 +1406,6 @@
                 <div class="settings-row">
                   <span class="muted" id="settings-commander-backend-detail"></span>
                 </div>
-              </div>
-
-              <div class="settings-group-subsection" id="settings-legacy-entries" hidden>
-                <div class="settings-entries" id="settings-entries"></div>
               </div>
 
               <div class="settings-group">
@@ -1521,8 +1521,9 @@
                 </div>
                 <div class="touchpoint-view touchpoint-connections-view" id="touchpoint-connections-view" hidden>
                   <header class="touchpoint-connections-header">
-                    <button class="btn touchpoint-icon-button" type="button" data-touchpoint-action="connections.back" data-i18n-title="touchpoint_settings.connections.back" data-i18n-aria-label="touchpoint_settings.connections.back" title="返回触点概览" aria-label="返回触点概览">
-                      <span data-ui-icon="arrow-left" data-ui-icon-class="touchpoint-refresh-icon"></span>
+                    <button class="btn touchpoint-back-button" type="button" data-touchpoint-action="connections.back" data-i18n-title="touchpoint_settings.connections.back" data-i18n-aria-label="touchpoint_settings.connections.back" title="返回触点概览" aria-label="返回触点概览">
+                      <span data-ui-icon="chevron-left" data-ui-icon-class="touchpoint-connections-back-icon"></span>
+                      <span data-i18n="common.back">返回</span>
                     </button>
                     <div>
                       <h2 data-i18n="touchpoint_settings.connections.title">连接管理</h2>
@@ -1534,6 +1535,11 @@
                   </div>
                 </div>
               </div>
+            </div>
+
+            <!-- ───────────────────────── 账号 ───────────────────────── -->
+            <div class="settings-tab-pane" data-settings-pane="account" hidden>
+              <div class="settings-group" id="hub-account-card"></div>
             </div>
 
           </div>
@@ -1713,9 +1719,10 @@
   <div class="modal-overlay" id="settings-ccswitch-preview-modal">
     <div class="modal modal-standard settings-ccswitch-preview-modal" role="dialog" aria-modal="true" aria-labelledby="settings-ccswitch-preview-modal-title">
       <div class="modal-header">
-        <h3 class="modal-title" id="settings-ccswitch-preview-modal-title">CC Switch</h3>
+        <h3 class="modal-title" id="settings-ccswitch-preview-modal-title" data-i18n="settings.ccswitch.preview_title">Import from CC Switch</h3>
+        <button type="button" class="modal-close-btn" id="settings-ccswitch-preview-close-btn" data-i18n-title="common.close" title="Close" aria-label="Close">×</button>
       </div>
-      <div class="modal-body" id="settings-ccswitch-preview-modal-body"></div>
+      <div class="modal-body settings-ccswitch-body" id="settings-ccswitch-preview-modal-body"></div>
       <div class="form-msg" id="settings-ccswitch-preview-modal-status"></div>
       <div class="modal-actions" id="settings-ccswitch-preview-modal-actions"></div>
     </div>
@@ -1982,6 +1989,7 @@
   <script src="./modules/terminal-panel.js"></script>
   <script src="./modules/search.js"></script>
   <script src="./modules/user-workspace.js"></script>
+  <script src="./modules/model-chip.js"></script>
   <script src="./modules/local-agents.js"></script>
   <script src="./vendor/pinyin-firstletter/data.js"></script>
   <!-- DOMPurify must load before utils.js so inline connector SVGs are sanitized, not disabled. -->

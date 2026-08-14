@@ -63,15 +63,16 @@ function createSendTool(opts: MessagingToolsOpts): AgentTool {
       'Send a text message to the configured owner ("self") through one Feishu/Lark bot. ' +
       'The user must approve a confirmation dialog before anything is sent; a denied, ' +
       'timed-out, or aborted request reports not_sent and must not be retried automatically. ' +
-      'Omit instance_id only when exactly one bot is available; with several, pick the ' +
-      'instance_id returned by messaging_list_targets. Never guess ids, and never ask the ' +
+      'When instance_id is omitted, the configured default delivery bot is used; if no default ' +
+      'exists and several bots are available, pick an instance_id returned by messaging_list_targets. ' +
+      'Never guess ids, and never ask the ' +
       'user for chat ids or open ids — this tool cannot send to arbitrary recipients.',
     inputSchema: {
       type: 'object',
       properties: {
         instance_id: {
           type: 'string',
-          description: 'Optional bot instance id from messaging_list_targets; required when several bots are available.',
+          description: 'Optional bot instance id from messaging_list_targets. Omit it to use the configured default delivery bot.',
         },
         target: {
           type: 'string',
