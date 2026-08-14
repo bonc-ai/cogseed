@@ -9280,6 +9280,12 @@ body.model-not-configured .main-content { flex-direction: column; }
   /* Pin to the right edge of the composer, flush with the send button. */
   margin-left: auto;
 }
+/* display: inline-flex above would otherwise override the hidden
+   attribute; keep empty-state chips (no configured model entries)
+   invisible instead of rendering blank buttons. */
+.model-chip[hidden] {
+  display: none;
+}
 .model-chip:hover,
 .model-chip--open {
   background: var(--primary-soft);
