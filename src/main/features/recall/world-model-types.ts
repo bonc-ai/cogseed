@@ -185,6 +185,24 @@ export interface WorldModelKnowledge {
    * unconditionally so the world model reasons over the user's identity.
    */
   ontologyAssets?: WorldModelAbilityAsset[];
+  /**
+   * T-Box — the ontology concept definitions (group ledger + field
+   * vocabulary) assets point at via ontologyRefs. Loaded fresh at forecast
+   * time; carries vocabulary, not field values.
+   */
+  ontologyTaxonomy?: {
+    groups: Array<{
+      groupId: string;
+      title: string;
+      templateId?: string;
+      templateVersion?: string;
+      fields: Array<{
+        name: string;
+        isRelation?: boolean;
+        description?: string;
+      }>;
+    }>;
+  };
 }
 
 export interface WorldModelSituation {

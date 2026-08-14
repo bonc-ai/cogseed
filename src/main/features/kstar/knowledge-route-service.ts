@@ -1,5 +1,6 @@
 import { promoteRecallCandidate, type RecallAbilityAssetRecord, type RecallCandidateRecord } from '../recall/candidate-service';
 import type { AbilityAssetOntologyRef } from '../recall/ontology-refs';
+import { ontologyGroupExists } from '../recall/ontology-taxonomy';
 import { appendFieldValueToRef, appendFlowEntryToRef, buildContentRef } from '../personal_ontology_template_files';
 
 export interface KstarOntologyRouteInput {
@@ -31,6 +32,9 @@ export async function routeConfirmedKstarCandidate(
   candidateId: string,
   input: RouteConfirmedKstarCandidateInput = {},
 ): Promise<RouteConfirmedKstarCandidateResult> {
+  if (input.ontology && !ontologyGroupExists(userId, input.ontology.groupId)) {
+    throw new Error(`unknown ontology group: ${input.ontology.groupId}`);
+  }
   const ontologyRefs = input.ontology ? [placement(input.ontology)] : [];
   const promoted = await promoteRecallCandidate(userId, candidateId, { actor: 'user', ontologyRefs });
   if (!input.ontology) return promoted;

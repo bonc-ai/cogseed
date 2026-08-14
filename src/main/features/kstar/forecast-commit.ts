@@ -232,6 +232,7 @@ export async function commitCommanderForecast(
       assetVersions: knowledge.assetVersions,
       rules: knowledge.rules,
       ontologyAssets: knowledge.ontologyAssets,
+      ontologyTaxonomy: knowledge.ontologyTaxonomy,
     },
     s: {
       snapshotId: snapshot.id,

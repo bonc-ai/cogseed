@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { loadEntries } from '../memory';
 import { userMemoryFile, userProfileFile } from '../../paths';
+import { loadOntologyTaxonomy } from './ontology-taxonomy';
 import { normalizeCognitionSourceRefs } from './source-service';
 import { readAbilityAsset } from './asset-service';
 import {
@@ -29,6 +30,8 @@ export interface CommittedProjectionKnowledge {
   rules: WorldModelCausalRuleRef[];
   /** Durable personal ontology (USER.md + MEMORY.md) as `personal` ability assets. */
   ontologyAssets: WorldModelAbilityAsset[];
+  /** T-Box concept definitions (ontology group ledger + field vocabulary). */
+  ontologyTaxonomy: Awaited<ReturnType<typeof loadOntologyTaxonomy>>;
 }
 
 function ontologyAssetFromEntry(
@@ -121,5 +124,6 @@ export async function loadCommittedProjectionKnowledge(
     assetVersions: Object.fromEntries(abilityAssets.map((asset) => [asset.id, assetVersions[asset.id]])),
     rules,
     ontologyAssets: loadOntologyAssets(userId),
+    ontologyTaxonomy: await loadOntologyTaxonomy(userId),
   };
 }

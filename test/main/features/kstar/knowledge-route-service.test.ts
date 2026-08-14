@@ -61,4 +61,26 @@ describe('KSTAR unified ability-asset routing', () => {
     const content = await readContentById('route-user', groupId);
     expect(content.content).toContain('Technical decisions must include evidence and risks.');
   });
+
+  it('rejects routing to an unknown ontology group before promoting (T-Box validation)', async () => {
+    const [{ saveRecallCandidate }, { routeConfirmedKstarCandidate }] = await Promise.all([
+      import('../../../../src/main/features/recall/candidate-service'),
+      import('../../../../src/main/features/kstar/knowledge-route-service'),
+    ]);
+    const candidate = await saveRecallCandidate('route-user', {
+      judgment: 'A lesson without a real ontology home must not be promoted.',
+      summary: 'Ontology gate',
+      suggestedType: 'personal',
+      suggestedScope: 'global',
+      sourceRefs: [{ kind: 'execution', id: 'kse-gate-a' }],
+    });
+
+    await expect(routeConfirmedKstarCandidate('route-user', candidate.id, {
+      ontology: { groupId: 'does-not-exist' },
+    })).rejects.toThrow(/unknown ontology group/);
+
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const after = await candidates.listRecallCandidates('route-user');
+    expect(after.find((row) => row.id === candidate.id)?.status).toBe('pending_review');
+  });
 });

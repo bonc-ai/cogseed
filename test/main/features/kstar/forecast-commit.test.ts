@@ -300,6 +300,28 @@ describe('Commander Forecast host commit', () => {
     expect(record.snapshotId).toBeTruthy();
   });
 
+  it('loads the T-Box ontology taxonomy into K from the group ledger (T-Box)', async () => {
+    const seeded = await seedForecastBoundary({ confirmed: true });
+    const groups = await import('../../../../src/main/features/personal_ontology_groups');
+    const group = await groups.createGroup('user-a', '工作方式');
+    await groups.appendFieldValue('user-a', group.group!.group_id, '工作节奏', '上午专注', '手动');
+
+    const forecast = await import('../../../../src/main/features/kstar/forecast-commit');
+    const record = await forecast.commitCommanderForecast('user-a', seeded.input);
+
+    expect(record.input.k.ontologyTaxonomy).toMatchObject({
+      groups: [
+        expect.objectContaining({
+          groupId: group.group!.group_id,
+          title: '工作方式',
+          fields: expect.arrayContaining([expect.objectContaining({ name: '工作节奏' })]),
+        }),
+      ],
+    });
+    // Taxonomy never pollutes projection-selected refs.
+    expect(record.input.k.abilityAssetRefs).toEqual([seeded.selectedAsset.id]);
+  });
+
   it('degrades gracefully when memory files are absent (Q4)', async () => {
     const seeded = await seedForecastBoundary({ confirmed: true });
     const forecast = await import('../../../../src/main/features/kstar/forecast-commit');
