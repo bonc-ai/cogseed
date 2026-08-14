@@ -21899,6 +21899,7 @@ body.model-not-configured .main-content { flex-direction: column; }
 .cw-import-row.is-running{background:#FFF8E6;border-color:#F1C75B;animation:cw-import-pulse 1.2s ease-in-out infinite}
 @keyframes cw-import-pulse{0%,100%{background:#FFF8E6}50%{background:#FFEFC7}}
 .cw-import-row.is-ok{background:var(--primary-soft,#E2F5EC);border-color:#7DD4B8}
+.cw-import-row.is-degraded{background:#FBF3E0;border-color:#E3C56B}
 .cw-import-row.is-fail{background:#FBE9E5;border-color:#E9A89B}
 .cw-import-source{
   flex-shrink:0;font-size:10.5px;font-weight:700;letter-spacing:0.05em;
@@ -21913,6 +21914,7 @@ body.model-not-configured .main-content { flex-direction: column; }
 .cw-import-row.is-waiting .cw-import-status{color:var(--muted,#6E8578)}
 .cw-import-row.is-running .cw-import-status{color:#9A6B00}
 .cw-import-row.is-ok .cw-import-status{color:var(--primary-text,#0A7A55)}
+.cw-import-row.is-degraded .cw-import-status{color:#9A6B00}
 .cw-import-row.is-fail .cw-import-status{color:#B23B2A}
 .cw-done-summary{
   display:flex;flex-direction:column;align-items:center;gap:6px;
@@ -21927,11 +21929,24 @@ body.model-not-configured .main-content { flex-direction: column; }
 .cw-done-icon svg{width:24px;height:24px}
 .cw-done-title{font-size:16px;font-weight:650;color:var(--text,#14281E)}
 .cw-done-meta{font-size:12.5px;color:var(--muted,#6E8578)}
+.cw-done-hint{
+  display:flex;align-items:flex-start;gap:10px;margin:2px 0 12px;
+  padding:12px 14px;border-radius:var(--radius-sm,10px);
+  background:#FBF3E0;border:1px solid #E3C56B;
+  font-size:12px;line-height:1.6;color:#7A5600;
+}
+.cw-done-hint svg{width:16px;height:16px;flex-shrink:0;margin-top:1px;color:#9A6B00}
 .cw-done-list{display:flex;flex-direction:column;gap:8px;margin-top:6px}
 .cw-done-row{
   display:flex;align-items:center;gap:12px;padding:12px 14px;
   border:1px solid var(--border,rgba(24,84,60,.09));
   border-radius:var(--radius-sm,10px);background:var(--surface,#fff);
+}
+.cw-done-row.is-degraded{background:#FBF3E0;border-color:#E3C56B}
+.cw-done-row .cw-done-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cw-done-tag{
+  flex-shrink:0;font-size:10.5px;font-weight:700;letter-spacing:0.04em;
+  color:#9A6B00;background:#F3E2B0;border-radius:999px;padding:3px 9px;
 }
 .cw-btn{
   display:inline-flex;align-items:center;justify-content:center;gap:6px;
