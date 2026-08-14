@@ -432,6 +432,50 @@ describe('Recall projection auto-confirm and semantic Top-N', () => {
     expect(preview.assetIds).not.toContain(third.id);
     expect(preview.omittedRefs.some((ref) => ref.assetId === third.id)).toBe(true);
   });
+
+  it('does not force-fill Top-N from a weak pool (relative-significance gate)', async () => {
+    const { projection } = await modules();
+    const { asset: strong } = await createAssetWith({ judgment: 'OAuth callback state check.', summary: 'OAuth', sourceId: 'exec-rel-1' });
+    const { asset: weak } = await createAssetWith({ judgment: 'Database index tuning notes.', summary: 'Database', sourceId: 'exec-rel-2' });
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-rel',
+      purpose: 'review',
+      taskText: 'OAuth callback state check',
+    }, {
+      embedTexts: async (texts: string[]) => texts.map((text) => {
+        const lower = text.toLowerCase();
+        if (lower.includes('oauth')) return [1, 0];
+        return [0.3, 1]; // above the 0.25 floor, far below the best 1.0
+      }),
+      limit: 2,
+    });
+
+    // The weak asset clears the absolute floor but fails the relative gate
+    // (0.3 < 1.0 * 0.5) — a weak pool yields one asset, not two.
+    expect(preview.assetIds).toEqual([strong.id]);
+    expect(preview.assetIds).not.toContain(weak.id);
+    expect(preview.omittedRefs.some((ref) => ref.assetId === weak.id && ref.reason === 'low_relevance')).toBe(true);
+  });
+
+  it('keeps a coherent batch when the pool is uniformly strong (relative gate stays quiet)', async () => {
+    const { projection } = await modules();
+    const { asset: a } = await createAssetWith({ judgment: 'OAuth callback state check.', summary: 'OAuth', sourceId: 'exec-rel-a' });
+    const { asset: b } = await createAssetWith({ judgment: 'OAuth token refresh flow.', summary: 'OAuth', sourceId: 'exec-rel-b' });
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-rel-ok',
+      purpose: 'review',
+      taskText: 'OAuth callback state check',
+    }, {
+      embedTexts: async (texts: string[]) => texts.map((text) => (
+        text.toLowerCase().includes('oauth') ? [1, 0] : [0, 1]
+      )),
+      limit: 2,
+    });
+
+    expect(preview.assetIds).toEqual(expect.arrayContaining([a.id, b.id]));
+  });
 });
 
 describe('Recall retrieval quality regression', () => {

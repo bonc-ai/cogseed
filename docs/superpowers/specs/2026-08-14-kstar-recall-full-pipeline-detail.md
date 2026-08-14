@@ -159,6 +159,7 @@
 
 ### 详细陈述
 
+- **双信号选择（替代单一绝对阈值）**：`DEFAULT_MIN_MATCH_SCORE` 从拍脑袋的 0.35 降为 **0.25 硬下限**（只挡 embedding 噪声）；准入主要由 **Top-N 名额 + 相对显著性门**（score ≥ 批次最高分 × 0.5）决定——弱池不再硬凑满 Top-N，强池不受影响。阈值/相对门均可用 `ProjectionSemanticOptions` 覆盖。
 - **scope 软匹配升级（真实数据确诊）**：教学/沉淀写出的长句 scope（如 `代码审查（尤其不可修改代码的架构审查）`）在旧整词/整句匹配下与句子 purpose（`审查 Group Chat 消息路由…`）互不包含，`request_projection` 在实机上 21/28 次全 0 资产（`scope_mismatch`）。现升级为**双向 token 匹配**：两侧按标点/空白切词，CJK 双向包含、ASCII 保持整词 + 跨语言别名表（`review↔审查/审计` 等）；`scopeForTask` 增加 review 分支与 CJK 关键词（中文任务不再落回 `general`）。真实数据 6 资产中 5 个恢复命中且语义正确（bus.ts/abort 与"消息路由审查"确实无关，正确排除）。
 - **T-Box（术语框）做实**：本体分组台账（groups.md）+ 每组字段词汇表作为概念定义层，经 `recall/ontology-taxonomy.ts::loadOntologyTaxonomy` 在 forecast 时加载进 `simulationInput.k.ontologyTaxonomy`（只带词汇不带字段值）；`routeConfirmedKstarCandidate` 在 promote 前校验 `groupId` 存在于台账（fail-closed，未知分组拒绝路由）；资产 `ontologyRefs` 从此指向真实可解释的概念（A-Box 快照 + R-Box 规则此前已完整）。
 - **Commander 是唯一资产派发者（产品定夺）**：宿主只在 Commander 的 system prompt 注入 Recall 资产（`<confirmed-ability-assets>`）；**Agent/Worker 不再获得任何宿主侧注入**。Commander 通过派发工具（`dispatch_to` / `hand_off_to` / `run_worker`）的可选 `ability_assets` 字段显式授权资产，宿主校验每个 id 是真实 active 资产后，将其渲染为 `<commander-dispatched-assets>` 块注入目标 turn——Agent 看到的资产上下文**只能**来自 Commander 的显式派发。

@@ -100,7 +100,11 @@ export interface ProjectionInput {
 
 export interface ProjectionSemanticOptions {
   embedTexts?: (texts: string[]) => Promise<number[][]>;
+  /** Absolute hard floor (noise gate); default DEFAULT_MIN_MATCH_SCORE. */
   minScore?: number;
+  /** Relative gate: fraction of the batch's best score; default
+   *  DEFAULT_RELATIVE_SIGNIFICANCE. */
+  relativeSignificance?: number;
   limit?: number;
 }
 
@@ -395,9 +399,16 @@ function asProjection(value: RecallJsonRecord): ContextProjectionRecord {
   return { ...value, status: validateProjectionStatus(value.status), sourceRefs: normalizeCognitionSourceRefs(value.sourceRefs), ...(assetMatches ? { assetMatches } : {}), ...(assetVersions ? { assetVersions } : {}) } as ContextProjectionRecord;
 }
 
-/** Default semantic relevance threshold (M3): calibration target — match
- *  scores are recorded in usage-records for distribution analysis. */
-export const DEFAULT_MIN_MATCH_SCORE = 0.35;
+/** Default semantic HARD FLOOR (dual-signal selection): scores below this
+ *  are treated as embedding noise and never injected, even when Top-N slots
+ *  remain. It is deliberately low — admission is primarily governed by the
+ *  Top-N slots plus a relative-significance gate (see applySemanticSelection),
+ *  not by this absolute cutoff. */
+export const DEFAULT_MIN_MATCH_SCORE = 0.25;
+/** Relative gate: an asset scoring below this fraction of the batch's best
+ *  semantic score is dropped even inside Top-N, so a weak pool cannot force
+ *  irrelevant assets into the injection just because slots remain. */
+export const DEFAULT_RELATIVE_SIGNIFICANCE = 0.5;
 /** Default Top-N selection size. */
 export const DEFAULT_SELECTION_LIMIT = 8;
 
@@ -422,6 +433,9 @@ async function applySemanticSelection(
   const minScore = Number.isFinite(options.minScore)
     ? Math.max(0, Math.min(1, Number(options.minScore)))
     : DEFAULT_MIN_MATCH_SCORE;
+  const relativeSignificance = Number.isFinite(options.relativeSignificance)
+    ? Math.max(0, Math.min(1, Number(options.relativeSignificance)))
+    : DEFAULT_RELATIVE_SIGNIFICANCE;
   const limit = Number.isFinite(options.limit)
     ? Math.max(1, Math.min(12, Math.floor(Number(options.limit))))
     : DEFAULT_SELECTION_LIMIT;
@@ -446,12 +460,25 @@ async function applySemanticSelection(
   if (assetMatches) {
     const matchByAssetId = new Map(assetMatches.map((match) => [match.assetId, match]));
     const droppedByRelevance: string[] = [];
+    // Dual-signal admission: an asset must clear BOTH the absolute hard floor
+    // (noise gate) and the relative-significance gate (score >= best * ratio)
+    // when the batch's best score is itself meaningful. A weak pool therefore
+    // yields fewer assets instead of force-filling Top-N with irrelevant ones.
+    const semanticMatches = assetMatches.filter((match) => match.matchMethod === 'semantic');
+    const bestScore = semanticMatches.reduce((best, match) => Math.max(best, match.matchScore), 0);
+    const relativeFloor = bestScore * relativeSignificance;
     orderedAssets = orderedAssets.filter((asset) => {
       const match = matchByAssetId.get(asset.id);
       if (!match || match.matchMethod !== 'semantic') return true;
-      if (match.matchScore >= minScore) return true;
-      droppedByRelevance.push(asset.id);
-      return false;
+      if (match.matchScore < minScore) {
+        droppedByRelevance.push(asset.id);
+        return false;
+      }
+      if (bestScore > minScore && match.matchScore < relativeFloor) {
+        droppedByRelevance.push(asset.id);
+        return false;
+      }
+      return true;
     });
     for (const assetId of droppedByRelevance) {
       omittedRefs.push({ assetId, reason: 'low_relevance' });
