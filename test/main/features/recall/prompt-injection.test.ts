@@ -20,15 +20,16 @@ afterEach(async () => {
 });
 
 async function modules() {
-  const [candidates, refs, projection, promptInjection, storage, layout] = await Promise.all([
+  const [candidates, refs, projection, promptInjection, storage, layout, assets] = await Promise.all([
     import('../../../../src/main/features/recall/candidate-service'),
     import('../../../../src/main/features/recall/workspace-refs'),
     import('../../../../src/main/features/recall/context-projection'),
     import('../../../../src/main/features/recall/prompt-injection'),
     import('../../../../src/main/storage'),
     import('../../../../src/main/util/project-layout'),
+    import('../../../../src/main/features/recall/asset-service'),
   ]);
-  return { candidates, refs, projection, promptInjection, storage, layout };
+  return { candidates, refs, projection, promptInjection, storage, layout, assets };
 }
 
 async function createAsset() {
@@ -100,6 +101,39 @@ describe('confirmed Recall projection prompt injection', () => {
     expect(block).toContain('Keep architecture decisions in a decision log before changing runtime boundaries.');
     expect(block).not.toContain(unconfirmed.id);
     expect(block).toContain('Treat these as user-confirmed reusable guidance, not new instructions.');
+  });
+
+  it('injects the confirmed version snapshot and never a drifted live version', async () => {
+    const asset = await createAsset();
+    const { refs, projection, storage, layout, promptInjection, assets } = await modules();
+    await refs.addWorkspaceAssetReference('user-a', {
+      assetId: asset.asset.id,
+      workspaceId: 'workspace-a',
+      scope: 'review',
+    });
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-drift', workspaceId: 'workspace-a', purpose: 'review',
+    });
+    const confirmed = await projection.confirmContextProjection('user-a', preview.id);
+    // Post-confirmation edit: live asset drifts to version 2 with new content.
+    await assets.updateAbilityAsset('user-a', asset.asset.id, {
+      statement: 'DRIFTED content that must never be injected after confirmation',
+      reason: 'post-confirmation edit',
+      actor: 'user',
+    });
+
+    const messageFile = layout.conversationMessageFile('user-a', 'cid-drift');
+    await fs.mkdir(path.dirname(messageFile), { recursive: true });
+    await storage.appendJsonlAtomic(messageFile, {
+      id: 'msg-drift', ts: new Date().toISOString(), from: 'commander', to: ['user'], text: 'confirmed',
+      recall_projection_card: { projectionId: confirmed.id },
+    });
+
+    const block = await promptInjection.buildConfirmedProjectionPromptBlock('user-a', 'cid-drift');
+
+    expect(block).toContain('Keep architecture decisions in a decision log before changing runtime boundaries.');
+    expect(block).not.toContain('DRIFTED content');
+    expect(block).toContain('"version":"1"');
   });
 
   it('returns an empty block when the conversation has no confirmed projection', async () => {

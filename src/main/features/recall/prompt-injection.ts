@@ -1,7 +1,7 @@
 import { readJsonl } from '../../storage';
 import { conversationMessageReadFile } from '../../util/project-layout';
 import { createLogger } from '../../logger';
-import { readAbilityAsset } from './asset-service';
+import { readAbilityAsset, readAbilityAssetVersionSnapshot } from './asset-service';
 import {
   createAutomaticContextProjection,
   readContextProjection,
@@ -110,29 +110,54 @@ async function buildPromptContextForProjections(
     for (const assetId of projection.assetIds) {
       if (seenAssets.has(assetId) || records.length >= MAX_ASSETS) continue;
       try {
-        const asset = await readAbilityAsset(userId, assetId);
-        if (asset.status !== 'active' || !(await hasEnabledSources(userId, asset.evidenceRefs))) continue;
-        seenAssets.add(asset.id);
-        const match = matches.get(asset.id);
+        const confirmedVersion = projection.assetVersions?.[assetId];
+        let asset: Awaited<ReturnType<typeof readAbilityAsset>> | null = null;
+        let snapshot: Awaited<ReturnType<typeof readAbilityAssetVersionSnapshot>> | null = null;
+        if (confirmedVersion) {
+          // The user confirmed this exact version. Prefer its immutable
+          // snapshot; never inject a drifted live version under a confirmed
+          // Projection. When the snapshot record is missing we fall back to
+          // the live asset ONLY if it still sits on the confirmed version.
+          snapshot = await readAbilityAssetVersionSnapshot(userId, assetId, confirmedVersion);
+          if (!snapshot) {
+            const live = await readAbilityAsset(userId, assetId);
+            if (live.version !== confirmedVersion) continue;
+            asset = live;
+          }
+        } else {
+          // Legacy projection without a version map: live read.
+          asset = await readAbilityAsset(userId, assetId);
+        }
+        const status = snapshot?.status ?? asset?.status;
+        const evidenceRefs = snapshot?.evidenceRefs ?? asset?.evidenceRefs ?? [];
+        if (status !== 'active' || !(await hasEnabledSources(userId, evidenceRefs))) continue;
+        const title = snapshot?.title ?? asset?.title ?? '';
+        const type = snapshot?.type ?? asset?.type ?? 'rule';
+        const maturity = snapshot?.maturity ?? asset?.maturity ?? 'draft';
+        const scope = snapshot?.scope ?? asset?.scope ?? '';
+        const version = confirmedVersion || asset?.version || '';
+        const statement = snapshot?.statement ?? asset?.statement ?? '';
+        seenAssets.add(assetId);
+        const match = matches.get(assetId);
         records.push({
           projection_id: projection.id,
           task_run_id: safePromptText(projection.taskRunId, 160),
           purpose: safePromptText(projection.purpose, 120),
-          asset_id: asset.id,
-          title: safePromptText(asset.title, 160),
-          type: asset.type,
-          maturity: asset.maturity,
-          scope: safePromptText(asset.scope, 500),
-          version: safePromptText(asset.version, 40),
-          statement: safePromptText(asset.statement, MAX_STATEMENT_LENGTH),
-          source_refs: asset.evidenceRefs.slice(0, 20).map((ref) => ({ kind: ref.kind, id: ref.id })),
+          asset_id: assetId,
+          title: safePromptText(title, 160),
+          type,
+          maturity,
+          scope: safePromptText(scope, 500),
+          version: safePromptText(version, 40),
+          statement: safePromptText(statement, MAX_STATEMENT_LENGTH),
+          source_refs: evidenceRefs.slice(0, 20).map((ref) => ({ kind: ref.kind, id: ref.id })),
         });
         citations.push({
-          assetId: asset.id,
-          title: safePromptText(asset.title, 160),
-          type: asset.type,
-          version: safePromptText(asset.version, 40),
-          scope: safePromptText(asset.scope, 500),
+          assetId,
+          title: safePromptText(title, 160),
+          type,
+          version: safePromptText(version, 40),
+          scope: safePromptText(scope, 500),
           projectionId: projection.id,
           ...(matchMethod === 'semantic' && match ? { matchScore: match.matchScore } : {}),
           matchMethod,

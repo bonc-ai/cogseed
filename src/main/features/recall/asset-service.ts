@@ -584,6 +584,22 @@ export async function listAbilityAssetVersions(userId: string, assetId: string):
   return (await listRecallJsonlRecords(userId, 'ability-asset-versions', assetId, 0)).map(asVersion);
 }
 
+/** Read the immutable content snapshot of a specific asset version, or null
+ *  when no such version record exists. Used by prompt injection so confirmed
+ *  Projections keep injecting exactly the knowledge the user approved. */
+export async function readAbilityAssetVersionSnapshot(
+  userId: string,
+  assetId: string,
+  version: string,
+): Promise<AbilityAssetVersionRecord['snapshot'] | null> {
+  if (!safeId(userId) || !safeId(assetId) || typeof version !== 'string' || !version.trim()) {
+    throw new Error('invalid ability asset version reference');
+  }
+  const records = await listAbilityAssetVersions(userId, assetId);
+  const match = records.find((record) => record.version === version);
+  return match?.snapshot ?? null;
+}
+
 export async function listAbilityAssetAudit(userId: string, assetId: string): Promise<AbilityAssetAuditRecord[]> {
   return (await listRecallJsonlRecords(userId, 'ability-asset-audit', assetId, 0)) as AbilityAssetAuditRecord[];
 }
