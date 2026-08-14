@@ -10219,36 +10219,38 @@ function _hasPriorVisibleCliHistory(
   );
 }
 
-/** Resume a user-message dispatch that was gated behind a Recall projection
- *  preview. Clears the pending marker and re-enqueues the original text as an
- *  internal dispatch record targeting the Commander (hidden from user history,
- *  same pattern as the P3394 wake dispatcher). Returns true if a pending
- *  dispatch was found and resumed. */
-export async function resumePendingProjectionDispatch(
-  userId: string,
-  cid: string,
-): Promise<boolean> {
-  if (!safeId(userId) || !safeId(cid)) throw new Error('invalid projection dispatch resume');
-  const { readState, clearPendingProjectionDispatch } = await import('./state');
-  const stateFile = await readState(userId, cid);
-  const pending = stateFile.pending_projection_dispatch;
-  if (!pending || pending.status !== 'ready_to_dispatch' || !pending.forecastId) return false;
-  await clearPendingProjectionDispatch(userId, cid);
+export interface EnqueueCommanderControlInput {
+  userId: string;
+  cid: string;
+  displayText: string;
+  control: {
+    type: 'kstar_projection_decision';
+    projectionId: string;
+    decision: 'approved' | 'rejected';
+    confirmedSnapshot?: { assetIds: string[]; ruleRefs: string[] };
+    legacy?: { requirementId?: string; taskRunId?: string; forecastId?: string; originalText?: string };
+  };
+}
+
+/** Resume the SAME Commander session with a bounded internal control message
+ *  after a Projection decision (approved/rejected) or a legacy pending-state
+ *  recovery. The control JSON contains no paths, prompts, credentials, or raw
+ *  errors; the Commander decides the next lifecycle step, and the host still
+ *  gates privileged execution. */
+export async function enqueueCommanderControlMessage(input: EnqueueCommanderControlInput): Promise<void> {
   await enqueue({
-    uid: userId,
-    cid,
+    uid: input.userId,
+    cid: input.cid,
     fromActorId: USER_ID,
-    text: pending.userMessageText,
+    text: input.displayText,
+    model_text: [
+      '<kstar-control>',
+      JSON.stringify(input.control),
+      'Continue in this same Commander session. Do not reclassify the original message. Do not perform privileged execution unless decision is approved.',
+      '</kstar-control>',
+    ].join('\n'),
     forceTo: [COMMANDER_ID],
     dispatch: true,
-    skipKstarRouting: true,
-    committedProjectionId: pending.projectionId,
-    forecastId: pending.forecastId,
-    kstarTerminalProvenance: {
-      logicalRunId: pending.taskRunId,
-      projectionId: pending.projectionId,
-      forecastId: pending.forecastId,
-    },
+    skipKstarRouting: true, // retained temporarily only for legacy callers; becomes dead after Task 7
   });
-  return true;
 }

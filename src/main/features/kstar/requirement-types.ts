@@ -107,6 +107,15 @@ export interface KstarRequirementRecord extends KstarJsonRecord {
   updatedAt: string;
 }
 
+export interface KstarProjectionDecisionMarker {
+  /** `${projectionId}:${decision}` — the idempotency key of a resumed decision. */
+  key: string;
+  projectionId: string;
+  decision: 'approved' | 'rejected';
+  resumed: boolean;
+  createdAt: string;
+}
+
 export interface KstarConversationTaskStateRecord extends KstarJsonRecord {
   schemaVersion: 1;
   conversationId: string;
@@ -117,6 +126,7 @@ export interface KstarConversationTaskStateRecord extends KstarJsonRecord {
   pendingTaskStart?: KstarPendingTaskStart;
   lastRoutedUserMessageId?: string;
   controlReceipts?: KstarControlReceipt[];
+  projectionDecisions?: KstarProjectionDecisionMarker[];
   createdAt: string;
   updatedAt: string;
 }

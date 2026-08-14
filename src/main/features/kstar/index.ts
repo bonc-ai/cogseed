@@ -21,3 +21,4 @@ export * from './control-service';
 export * from './forecast-commit';
 export * from './control-tool';
 export * from './commander-context';
+export * from './projection-decision-service';

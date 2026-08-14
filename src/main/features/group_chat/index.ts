@@ -140,6 +140,15 @@ export async function runtimeStatus(
   if (!safeId(cid)) return { processing: false, processing_since: null, in_flight: [], active_turns: [] };
   try {
     const state = await readState(userId, cid, projectIdHint);
+    // Commander-centric KStar: recover legacy pending projection dispatch
+    // states (forecasting / world_model_failed / ready_to_dispatch) exactly
+    // once into the same Commander session. waiting_confirmation is left for
+    // the user card; the service is idempotent and never launches a runner.
+    if (state.pending_projection_dispatch) {
+      void import('../kstar/projection-decision-service')
+        .then((module) => module.recoverLegacyPendingProjectionDispatch(userId, cid))
+        .catch((err) => log.warn(`kstar legacy pending recovery failed user=${userId} cid=${cid}: ${(err as Error).message}`));
+    }
     const runtime = runtimeSnapshot(userId, cid);
     const diskInFlight = Array.isArray(state.in_flight)
       ? state.in_flight.filter(Boolean)

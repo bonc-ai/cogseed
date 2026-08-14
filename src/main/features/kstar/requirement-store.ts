@@ -14,6 +14,7 @@ import type {
   KstarTaskRecord,
 } from './requirement-types';
 import type { KstarControlErrorCode, KstarControlOperation, KstarControlReceipt, KstarControlResult } from './control-types';
+import type { KstarProjectionDecisionMarker } from './requirement-types';
 
 const MAX_TITLE = 200;
 const MAX_GOAL = 4_000;
@@ -27,6 +28,7 @@ const CONTROL_OPERATIONS = new Set<KstarControlOperation>([
 ]);
 const CONTROL_IDEMPOTENCY_KEY = /^[A-Za-z0-9_.:-]{1,160}$/;
 const CONTROL_INPUT_HASH = /^[a-f0-9]{64}$/;
+const MAX_PROJECTION_DECISIONS = 100;
 const CONTROL_ERROR_CODES = new Set<KstarControlErrorCode>([
   'kstar_control_invalid_input',
   'kstar_projection_not_confirmed',
@@ -82,6 +84,35 @@ function normalizeControlReceipt(value: unknown, conversationId: string): KstarC
     if (id !== undefined && (typeof id !== 'string' || !safeId(id))) return null;
   }
   return value as unknown as KstarControlReceipt;
+}
+
+function normalizeProjectionDecision(value: unknown, conversationId: string): KstarProjectionDecisionMarker | null {
+  if (!isPlainRecord(value)) return null;
+  const { projectionId, decision, key, resumed, createdAt } = value as Record<string, unknown>;
+  if (
+    typeof projectionId !== 'string'
+    || !safeId(projectionId)
+    || (decision !== 'approved' && decision !== 'rejected')
+    || typeof key !== 'string'
+    || key !== `${projectionId}:${decision}`
+    || typeof resumed !== 'boolean'
+    || typeof createdAt !== 'string'
+    || !createdAt
+  ) return null;
+  return { key, projectionId, decision, resumed, createdAt };
+}
+
+function normalizeProjectionDecisions(value: unknown, conversationId: string): KstarProjectionDecisionMarker[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const out: KstarProjectionDecisionMarker[] = [];
+  for (const raw of value) {
+    const marker = normalizeProjectionDecision(raw, conversationId);
+    if (!marker || seen.has(marker.key)) continue;
+    seen.add(marker.key);
+    out.push(marker);
+  }
+  return out.slice(-MAX_PROJECTION_DECISIONS);
 }
 
 function normalizeControlReceipts(value: unknown, conversationId: string): KstarControlReceipt[] {
@@ -198,10 +229,16 @@ function validateState(userId: string, raw: Record<string, unknown>, conversatio
       pending.reason !== 'topic_switch'
     ) throw new Error('malformed kstar pending task start');
   }
-  if (raw.controlReceipts === undefined) return raw as KstarConversationTaskStateRecord;
+  const projectionDecisions = raw.projectionDecisions === undefined
+    ? undefined
+    : normalizeProjectionDecisions(raw.projectionDecisions, conversationId);
+  if (raw.controlReceipts === undefined && projectionDecisions === undefined) {
+    return raw as KstarConversationTaskStateRecord;
+  }
   return {
     ...raw,
-    controlReceipts: normalizeControlReceipts(raw.controlReceipts, conversationId),
+    ...(raw.controlReceipts === undefined ? {} : { controlReceipts: normalizeControlReceipts(raw.controlReceipts, conversationId) }),
+    ...(projectionDecisions === undefined ? {} : { projectionDecisions }),
   } as KstarConversationTaskStateRecord;
 }
 
