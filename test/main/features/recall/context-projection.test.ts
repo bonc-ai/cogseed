@@ -317,3 +317,49 @@ describe('RecallView and ContextProjection', () => {
     await expect(projection.listContextProjections('user-a', { workspaceId: 'workspace-a' })).resolves.toHaveLength(1);
   });
 });
+
+describe('committed projection knowledge boundary', () => {
+  it('freezes asset ids and exact versions when a preview is confirmed', async () => {
+    const { asset } = await createAsset();
+    const { refs, projection } = await modules();
+    await refs.addWorkspaceAssetReference('user-a', {
+      assetId: asset.id,
+      workspaceId: 'workspace-a',
+      scope: 'review',
+    });
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-freeze',
+      workspaceId: 'workspace-a',
+      purpose: 'review',
+    });
+    const confirmed = await projection.confirmContextProjection('user-a', preview.id);
+
+    expect(confirmed.status).toBe('confirmed');
+    expect(confirmed.assetIds).toEqual(preview.assetIds);
+    expect(confirmed.assetVersions).toEqual(preview.assetVersions);
+  });
+
+  it('rejects confirmation when a selected asset version changed', async () => {
+    const { asset } = await createAsset();
+    const { refs, assets, projection } = await modules();
+    await refs.addWorkspaceAssetReference('user-a', {
+      assetId: asset.id,
+      workspaceId: 'workspace-a',
+      scope: 'review',
+    });
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-version-drift',
+      workspaceId: 'workspace-a',
+      purpose: 'review',
+    });
+    await assets.updateAbilityAsset('user-a', asset.id, {
+      statement: 'Changed after preview.',
+      actor: 'user',
+      reason: 'test version drift',
+    });
+
+    await expect(projection.confirmContextProjection('user-a', preview.id))
+      .rejects.toMatchObject({ code: 'projection_asset_version_changed' });
+  });
+});

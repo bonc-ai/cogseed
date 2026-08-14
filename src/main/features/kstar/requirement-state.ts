@@ -40,7 +40,7 @@ export interface KstarRouteUserMessageResult {
   task: KstarTaskRecord;
   currentRequirement: KstarRequirementRecord;
   route: KstarRequirementRouteResult;
-  projectionPreviewCreated?: { projectionId: string };
+  projectionPreviewCreated?: { projectionId: string; requirementId: string; taskRunId: string };
 }
 
 export interface KstarRequirementStateOptions {
@@ -100,7 +100,7 @@ async function createTaskWithRequirement(
   userId: string,
   input: KstarUserMessageContext,
   route: KstarRequirementRouteResult,
-): Promise<{ task: KstarTaskRecord; requirement: KstarRequirementRecord; projectionPreviewCreated?: { projectionId: string } }> {
+): Promise<{ task: KstarTaskRecord; requirement: KstarRequirementRecord; projectionPreviewCreated?: { projectionId: string; requirementId: string; taskRunId: string } }> {
   const title = routeTitle(route, input.text);
   const task = createKstarTaskRecord(userId, {
     conversationId: input.conversationId,
@@ -118,13 +118,16 @@ async function createTaskWithRequirement(
   task.requirementIds = [requirement.id];
   task.currentRequirementId = requirement.id;
   const projectionPreview = await previewTaskBoundary(userId, input, task.id, projectionPurpose(title), route.expectedResult);
-  if (projectionPreview) requirement.projectionId = projectionPreview.projectionId;
+  if (projectionPreview) {
+    requirement.projectionId = projectionPreview.projectionId;
+    requirement.projectionIds = [...requirement.projectionIds, projectionPreview.projectionId];
+  }
   await replaceKstarRequirement(userId, requirement);
   await replaceKstarTask(userId, task);
   return {
     task,
     requirement,
-    ...(projectionPreview?.shouldPostCard ? { projectionPreviewCreated: { projectionId: projectionPreview.projectionId } } : {}),
+    ...(projectionPreview?.shouldPostCard ? { projectionPreviewCreated: { projectionId: projectionPreview.projectionId, requirementId: requirement.id, taskRunId: task.id } } : {}),
   };
 }
 
@@ -170,7 +173,7 @@ export async function routeKstarUserMessage(
     hasOpenTask,
     hasOpenRequirement,
   }, options.routerOptions);
-  let projectionPreviewCreated: { projectionId: string } | undefined;
+  let projectionPreviewCreated: { projectionId: string; requirementId: string; taskRunId: string } | undefined;
 
   if (!task || !currentRequirement || !hasOpenTask) {
     const created = await createTaskWithRequirement(userId, input, route);
@@ -231,9 +234,12 @@ export async function routeKstarUserMessage(
     state.pendingTaskStart = undefined;
     currentRequirement = next;
     const projectionPreview = await previewTaskBoundary(userId, input, task.id, projectionPurpose(next.title), route.expectedResult);
-    if (projectionPreview) next.projectionId = projectionPreview.projectionId;
+    if (projectionPreview) {
+      next.projectionId = projectionPreview.projectionId;
+      next.projectionIds = [...next.projectionIds, projectionPreview.projectionId];
+    }
     await replaceKstarRequirement(userId, next);
-    if (projectionPreview?.shouldPostCard) projectionPreviewCreated = { projectionId: projectionPreview.projectionId };
+    if (projectionPreview?.shouldPostCard) projectionPreviewCreated = { projectionId: projectionPreview.projectionId, requirementId: next.id, taskRunId: task.id };
   } else {
     currentRequirement.userMessageIds = uniqueIds(currentRequirement.userMessageIds, input.messageId);
     currentRequirement.updatedAt = nowIso();
@@ -248,7 +254,8 @@ export async function routeKstarUserMessage(
       );
       if (projectionPreview) {
         currentRequirement.projectionId = projectionPreview.projectionId;
-        if (projectionPreview.shouldPostCard) projectionPreviewCreated = { projectionId: projectionPreview.projectionId };
+        currentRequirement.projectionIds = [...currentRequirement.projectionIds, projectionPreview.projectionId];
+        if (projectionPreview.shouldPostCard) projectionPreviewCreated = { projectionId: projectionPreview.projectionId, requirementId: currentRequirement.id, taskRunId: task.id };
       }
     }
   }

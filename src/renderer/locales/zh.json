@@ -4005,6 +4005,8 @@
   "settings.cli_fallback.state_chosen": "将使用 {cli} 作为降级执行 Agent",
   "settings.cli_fallback.saved_no_api": "已保存。指挥官当前没有 API Key，对话将交给所选 CLI Agent 执行。",
   "settings.cli_fallback.notice_no_api": "指挥官当前没有可用的 API Key，对话将自动交给本机已登录的 CLI Agent 执行（可在「AI 团队」设置中更改）。",
+  "recall.projection.forecast_failed": "世界模型预测失败，任务尚未开始。",
+  "recall.projection.retry_forecast": "重试预测",
   "touchpoint_settings.template.title": "审批卡片模板",
   "touchpoint_settings.template.detail": "按场景自定义标题、正文、按钮文案和投递机器人。",
   "touchpoint_settings.template.save": "保存模板",

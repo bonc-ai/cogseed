@@ -29,6 +29,15 @@ const streamProbe = vi.hoisted(() => ({
 // no reply" and emits a "(no reply)" message. Good enough for the
 // integration assertions here — we're testing routing / persistence /
 // state, not actual model output.
+// The blocking projection gate calls the real KSTAR routing, which would
+// create an empty Recall projection for every fresh conversation and gate the
+// Commander dispatch. Most routing tests below exercise the pre-gate behavior,
+// so mock context-projection to return no projection; the gating behavior has
+// dedicated tests in kstar-preview-trigger.test.ts.
+vi.mock('../../../../src/main/features/recall/context-projection', () => ({
+  previewContextProjection: vi.fn(async () => { throw new Error('no projection in routing tests'); }),
+}));
+
 vi.mock('../../../../src/main/model/client', () => ({
   async *streamChatWithModel(_opts: any) {
     streamProbe.messages.push(String(_opts?.message || ''));

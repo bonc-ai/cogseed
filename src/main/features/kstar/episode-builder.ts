@@ -32,6 +32,16 @@ export interface GroupKstarMessageInput {
   plan_announcement?: boolean;
   dispatch?: boolean;
   kstar_dispatch_narration?: { target_agent_id: string; workflow_step_id?: string };
+  process?: Array<
+    | { type: 'progress'; text: string; event?: { stream: string; data?: unknown } }
+    | { type: 'event'; event: { stream: string; data?: unknown } }
+  >;
+  recall_citations?: Array<{
+    asset_id: string;
+    version: string;
+    projection_id: string;
+    forecast_id?: string;
+  }>;
 }
 
 export interface GroupKstarEpisodeInput {
@@ -43,6 +53,7 @@ export interface GroupKstarEpisodeInput {
   finishedAtMs: number;
   messages: GroupKstarMessageInput[];
   projectionId?: string;
+  forecastId?: string;
   wakeRequestId?: string;
   logicalRunId?: string;
   executionId?: string;
@@ -96,6 +107,8 @@ function toolCallsFromRuntimeEvents(events: RuntimeEventEnvelope[]): KstarToolCa
         : undefined;
       calls.push({
         ...(typeof metadata.id === 'string' ? { id: metadata.id } : {}),
+        sequence: calls.length,
+        actor: 'runtime',
         name,
         ...(argumentsSummary ? { argumentsSummary } : {}),
         status: 'unknown',
@@ -177,6 +190,84 @@ export function buildRuntimeKstarEpisode(input: RuntimeKstarEpisodeInput): Kstar
   };
 }
 
+function processEvent(item: NonNullable<GroupKstarMessageInput['process']>[number]): { stream: string; data?: unknown } | undefined {
+  return item.type === 'event' ? item.event : item.event;
+}
+
+function argumentKeySummary(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const keys = Object.keys(value as Record<string, unknown>).sort();
+  return keys.length ? keys.join(',').slice(0, MAX_SUMMARY) : undefined;
+}
+
+function toolCallsFromGroupMessages(messages: GroupKstarMessageInput[]): KstarToolCall[] {
+  const calls: KstarToolCall[] = [];
+  const byId = new Map<string, KstarToolCall>();
+  for (const message of messages) {
+    for (const item of message.process || []) {
+      const event = processEvent(item);
+      if (!event || !event.data || typeof event.data !== 'object' || Array.isArray(event.data)) continue;
+      const data = event.data as Record<string, unknown>;
+      let phase = '';
+      let id: string | undefined;
+      let name = '';
+      let args: unknown;
+      let isError = false;
+      if (event.stream === 'tool') {
+        phase = String(data.phase || '').toLowerCase();
+        id = typeof data.id === 'string' ? data.id : undefined;
+        name = compactText(data.name, 120) || '';
+        args = data.arguments;
+        isError = data.isError === true;
+      } else if (event.stream === 'cli' && String(data.type || '').toLowerCase() === 'tool-event') {
+        phase = String(data.phase || data.status || '').toLowerCase();
+        id = typeof data.id === 'string' ? data.id : typeof data.call_id === 'string' ? data.call_id : undefined;
+        name = compactText(data.tool, 120) || compactText(data.name, 120) || '';
+        args = data.arguments || data.input;
+        isError = data.isError === true || phase === 'error' || phase === 'failed';
+      } else {
+        continue;
+      }
+      if (!name) continue;
+      if (phase === 'start' || phase === 'begin' || phase === 'running') {
+        if (id && byId.has(id)) continue;
+        const call: KstarToolCall = {
+          ...(id ? { id } : {}),
+          sequence: calls.length,
+          actor: message.from,
+          name,
+          ...(argumentKeySummary(args) ? { argumentsSummary: argumentKeySummary(args) } : {}),
+          status: 'unknown',
+        };
+        calls.push(call);
+        if (id) byId.set(id, call);
+        continue;
+      }
+      if (phase !== 'end' && phase !== 'complete' && phase !== 'completed' && phase !== 'error' && phase !== 'failed') continue;
+      const call = (id ? byId.get(id) : undefined)
+        || [...calls].reverse().find((candidate) => candidate.name === name && candidate.status === 'unknown');
+      if (!call) continue;
+      call.status = isError ? 'error' : 'ok';
+    }
+  }
+  return calls;
+}
+
+function abilityAssetRefsFromCitations(input: GroupKstarEpisodeInput, messages: GroupKstarMessageInput[]): string[] {
+  const refs: string[] = [];
+  const seen = new Set<string>();
+  for (const message of messages) {
+    for (const citation of message.recall_citations || []) {
+      if (input.projectionId && citation.projection_id !== input.projectionId) continue;
+      if (input.forecastId && citation.forecast_id !== input.forecastId) continue;
+      if (!citation.asset_id || seen.has(citation.asset_id)) continue;
+      seen.add(citation.asset_id);
+      refs.push(citation.asset_id);
+    }
+  }
+  return refs;
+}
+
 function messagesInRun(input: GroupKstarEpisodeInput): GroupKstarMessageInput[] {
   return input.messages.filter((message) => {
     const timestamp = Date.parse(message.ts);
@@ -201,6 +292,8 @@ export function buildGroupKstarEpisode(input: GroupKstarEpisodeInput): KstarEpis
     ...producedFiles.slice(0, 50).map((file, index) => ({ kind: 'artifact' as const, id: `artifact-${index}`, title: path.basename(file) })),
     ...messages.flatMap((message) => (message.artifacts || []).slice(0, 10).map((artifact) => ({ kind: 'artifact' as const, id: artifact.id, title: artifact.title }))),
   ]);
+  const toolCalls = toolCallsFromGroupMessages(actionMessages);
+  const abilityAssetRefs = abilityAssetRefsFromCitations(input, actionMessages);
   const summary = resultMessages
     .map((message) => `${message.from}: ${compactText(message.text, 180) || ''}`)
     .filter(Boolean)
@@ -217,16 +310,19 @@ export function buildGroupKstarEpisode(input: GroupKstarEpisodeInput): KstarEpis
     ...(input.logicalRunId ? { logicalRunId: input.logicalRunId } : {}),
     ...(input.executionId ? { executionId: input.executionId } : {}),
     ...(input.projectionId ? { projectionId: input.projectionId } : {}),
+    ...(input.forecastId ? { forecastId: input.forecastId } : {}),
     ...(input.wakeRequestId ? { wakeRequestId: input.wakeRequestId } : {}),
-    k: { memoryRefs: [], contextRefs: [], abilityAssetRefs: [] },
+    k: { memoryRefs: [], contextRefs: [], abilityAssetRefs },
     s: { conversationSummary: compactText(summary, MAX_SUMMARY) },
     t: { userGoal, normalizedTask: compactText(userGoal, MAX_SUMMARY), constraints: [] },
     a: {
-      toolCalls: [],
-      agentActions: resultMessages.slice(0, 100).flatMap((message) => {
+      toolCalls,
+      agentActions: resultMessages.slice(0, 100).flatMap((message, messageIndex) => {
         const actions: KstarAgentAction[] = [{
+          sequence: messageIndex,
           actor: message.from,
           action: compactText(message.text, MAX_SUMMARY) || 'completed action',
+          status: message.failure_code ? 'error' : 'ok',
           ...(message.failure_code ? { summary: message.failure_code } : {}),
         }];
         for (const agent of message.created_agents || []) actions.push({ actor: message.from, action: `created agent ${agent.name || agent.agent_id}` });

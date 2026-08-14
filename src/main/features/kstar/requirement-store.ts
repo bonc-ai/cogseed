@@ -74,6 +74,8 @@ function validateRequirement(userId: string, raw: Record<string, unknown>): Ksta
     typeof raw.goalText !== 'string' || raw.goalText.length > MAX_GOAL ||
     (raw.rHat !== undefined && (() => { validateExpectedResult(raw.rHat); return false; })()) ||
     (raw.projectionId !== undefined && (typeof raw.projectionId !== 'string' || !safeId(raw.projectionId))) ||
+    (raw.forecastId !== undefined && (typeof raw.forecastId !== 'string' || !safeId(raw.forecastId))) ||
+    !Array.isArray(raw.projectionIds) || raw.projectionIds.some((item: unknown) => typeof item !== 'string' || !safeId(item)) ||
     (raw.wakeRequestId !== undefined && (typeof raw.wakeRequestId !== 'string' || !safeId(raw.wakeRequestId))) ||
     (raw.prmReview !== undefined && (typeof raw.prmReview !== 'object' || raw.prmReview === null)) ||
     (raw.aar !== undefined && (typeof raw.aar !== 'object' || raw.aar === null)) ||
@@ -156,6 +158,7 @@ export function createKstarRequirementRecord(
     conversationId: input.conversationId,
     userMessageIds: [...new Set(input.userMessageIds)],
     episodeIds: [],
+    projectionIds: [],
     status: 'open',
     title: normalizedText(input.title, 'requirement title', MAX_TITLE),
     goalText: normalizedText(input.goalText, 'requirement goal', MAX_GOAL),
@@ -203,6 +206,22 @@ export async function listKstarRequirementsForTask(userId: string, taskId: strin
     .map((record) => validateRequirement(userId, record as Record<string, unknown>))
     .filter((record) => record.taskId === taskId)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+
+export async function findKstarRequirementByProjection(
+  userId: string,
+  conversationId: string,
+  projectionId: string,
+): Promise<KstarRequirementRecord> {
+  if (!safeId(conversationId) || !safeId(projectionId)) throw new Error('invalid kstar projection lookup');
+  const records = await listKstarJsonRecords(userId, 'requirements');
+  const matches = records
+    .map((record) => validateRequirement(userId, record as Record<string, unknown>))
+    .filter((record) => record.conversationId === conversationId && record.projectionId === projectionId);
+  if (matches.length === 0) throw new Error('no kstar requirement matches conversation and projection');
+  if (matches.length > 1) throw new Error('multiple kstar requirements match conversation and projection');
+  return matches[0];
 }
 
 export async function bindKstarRequirementWakeRequestByProjection(
