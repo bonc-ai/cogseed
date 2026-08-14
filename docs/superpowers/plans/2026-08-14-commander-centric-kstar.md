@@ -61,7 +61,7 @@
 - Modify: `test/main/features/recall/world-model.test.ts`
 - Modify: `test/main/features/kstar/world-model-bridge.test.ts`
 
-- [ ] **Step 1: Write the failing collection-semantics tests**
+- [x] **Step 1: Write the failing collection-semantics tests**
 
 Add tests proving `expectedTools: []` is valid while the field remains mandatory and typed:
 
@@ -92,7 +92,7 @@ it('rejects a non-empty unavailable tool', () => {
 });
 ```
 
-- [ ] **Step 2: Run the focused validator test and verify RED**
+- [x] **Step 2: Run the focused validator test and verify RED**
 
 Run:
 
@@ -102,7 +102,7 @@ node scripts/run-tests.mjs run test/main/features/recall/world-model-scoring.tes
 
 Expected: the empty-array case fails with `invalid_candidate_expected_tools`; the missing/non-array cases continue to fail.
 
-- [ ] **Step 3: Make only `expectedTools` allow an empty array**
+- [x] **Step 3: Make only `expectedTools` allow an empty array**
 
 Change the intervention validator to use the existing `allowEmpty` parameter only for tools:
 
@@ -133,7 +133,7 @@ function intervention(
 
 Do not change non-empty requirements for `plan`, `expectedActors`, or `acceptanceSignals`.
 
-- [ ] **Step 4: Write failing host-commit tests**
+- [x] **Step 4: Write failing host-commit tests**
 
 Create tests around this contract:
 
@@ -211,7 +211,7 @@ it('uses stable modelOrder tie-breaking', async () => {
 });
 ```
 
-- [ ] **Step 5: Run the new host-commit tests and verify RED**
+- [x] **Step 5: Run the new host-commit tests and verify RED**
 
 Run:
 
@@ -221,7 +221,7 @@ node scripts/run-tests.mjs run test/main/features/kstar/forecast-commit.test.ts
 
 Expected: module-not-found or missing-export failure for `commitCommanderForecast`.
 
-- [ ] **Step 6: Implement the host Forecast commit service without building a runner**
+- [x] **Step 6: Implement the host Forecast commit service without building a runner**
 
 The implementation must:
 
@@ -254,7 +254,7 @@ Then:
 
 The module must not import `buildRunner`, `chatWithModel`, `streamChatWithModel`, credentials, or provider selection.
 
-- [ ] **Step 7: Run Forecast tests and verify GREEN**
+- [x] **Step 7: Run Forecast tests and verify GREEN**
 
 Run:
 
@@ -268,7 +268,7 @@ node scripts/run-tests.mjs run \
 
 Expected: all listed files pass.
 
-- [ ] **Step 8: Commit Task 1**
+- [x] **Step 8: Commit Task 1**
 
 ```bash
 git add \
@@ -294,7 +294,7 @@ git commit -m "feat: add host-validated commander forecasts"
 - Test: `test/main/features/kstar/control-service.test.ts`
 - Modify: `test/main/features/kstar/requirement-store.test.ts`
 
-- [ ] **Step 1: Define and test the untrusted input envelope**
+- [x] **Step 1: Define and test the untrusted input envelope**
 
 Use this exact public shape:
 
@@ -355,7 +355,7 @@ export type KstarControlResult =
   | { ok: false; code: 'kstar_control_invalid_input' | 'kstar_projection_not_confirmed' | 'kstar_invalid_candidate' | 'kstar_unavailable_tool' | 'kstar_invalid_rule_ref' | 'kstar_persistence_failed'; message: string };
 ```
 
-- [ ] **Step 2: Write failing state-transition and idempotency tests**
+- [x] **Step 2: Write failing state-transition and idempotency tests**
 
 Cover:
 
@@ -400,7 +400,7 @@ it('abandons without creating a replacement task', async () => {
 });
 ```
 
-- [ ] **Step 3: Run control-service tests and verify RED**
+- [x] **Step 3: Run control-service tests and verify RED**
 
 ```bash
 node scripts/run-tests.mjs run test/main/features/kstar/control-service.test.ts
@@ -408,7 +408,7 @@ node scripts/run-tests.mjs run test/main/features/kstar/control-service.test.ts
 
 Expected: missing module/exports.
 
-- [ ] **Step 4: Extend schema-version-1 state with bounded receipts**
+- [x] **Step 4: Extend schema-version-1 state with bounded receipts**
 
 Add optional receipts without changing `schemaVersion: 1`:
 
@@ -443,7 +443,7 @@ Parser rules in `requirement-store.ts`:
 - unknown/malformed receipt rows are dropped, not allowed to make legacy state unreadable;
 - new writes keep only the most recent 100 receipts.
 
-- [ ] **Step 5: Implement `executeKstarControl` with host-bound scope**
+- [x] **Step 5: Implement `executeKstarControl` with host-bound scope**
 
 Use a context that cannot be model-supplied:
 
@@ -483,7 +483,7 @@ Implementation rules:
 - save a bounded receipt only after the corresponding mutation/result is stable;
 - log only operation/result plus masked IDs.
 
-- [ ] **Step 6: Run state and service tests and verify GREEN**
+- [x] **Step 6: Run state and service tests and verify GREEN**
 
 ```bash
 node scripts/run-tests.mjs run \
@@ -495,7 +495,7 @@ node scripts/run-tests.mjs run \
 
 Expected: all listed files pass and legacy schema-1 fixtures still load.
 
-- [ ] **Step 7: Commit Task 2**
+- [x] **Step 7: Commit Task 2**
 
 ```bash
 git add \
@@ -527,7 +527,7 @@ git commit -m "feat: add explicit kstar control transitions"
 - Modify: `test/main/model/core-agent/client.test.ts`
 - Modify: `test/main/model/core-agent/rotating-provider.test.ts`
 
-- [ ] **Step 1: Write failing bounded-context tests**
+- [x] **Step 1: Write failing bounded-context tests**
 
 Test this exact shape:
 
@@ -554,7 +554,7 @@ Assertions:
 - no workspace path, provider error, credential, unrelated Task, or full historical receipt is rendered;
 - no-state rendering returns a short `status: none` block, not an instruction to create a Task.
 
-- [ ] **Step 2: Run context test and verify RED**
+- [x] **Step 2: Run context test and verify RED**
 
 ```bash
 node scripts/run-tests.mjs run test/main/features/kstar/commander-context.test.ts
@@ -562,7 +562,7 @@ node scripts/run-tests.mjs run test/main/features/kstar/commander-context.test.t
 
 Expected: missing module/exports.
 
-- [ ] **Step 3: Implement the context reader and renderer**
+- [x] **Step 3: Implement the context reader and renderer**
 
 Use:
 
@@ -587,7 +587,7 @@ export function renderCommanderKstarContextBlock(
 
 Read the current state/task/requirement, latest bound Projection, and Forecast only. A pending confirmation decision may be supplied by the internal continuation payload for that turn; do not persist it into unrelated records.
 
-- [ ] **Step 4: Write failing tool-scope and model-identity tests**
+- [x] **Step 4: Write failing tool-scope and model-identity tests**
 
 Test that:
 
@@ -631,7 +631,7 @@ it('returns only the structured public error', async () => {
 });
 ```
 
-- [ ] **Step 5: Add a runner-resolved host callback to the model contract**
+- [x] **Step 5: Add a runner-resolved host callback to the model contract**
 
 Extend `ChatOptions`:
 
@@ -682,7 +682,7 @@ onCandidateChosen?: (info: {
 
 When the rotating provider chooses the candidate that actually owns the request, call `publishResolvedRuntime(info)` before model events/tool calls are delivered. The `kstar_control` resolver therefore observes the real provider/model/profile/entry, not merely the primary candidate. The callback is observational only; it never constructs another runner or re-resolves credentials.
 
-- [ ] **Step 6: Implement the Commander-only `kstar_control` tool**
+- [x] **Step 6: Implement the Commander-only `kstar_control` tool**
 
 Add an internal rollout gate in `control-tool.ts`:
 
@@ -718,7 +718,7 @@ model: options.resolvedRuntime() || undefined,
 
 Return JSON content with `isError: true` only when `result.ok === false`.
 
-- [ ] **Step 7: Wire context and tool into Commander construction**
+- [x] **Step 7: Wire context and tool into Commander construction**
 
 In `buildCommanderSystemPrompt`, append the rendered KStar fact block before the volatile datetime tail. In `buildCommanderExtraTools`, push `kstar_control` only for the formal Commander path; `space_builder`, named Agents, CLI Agents, and anonymous workers receive none.
 
@@ -732,7 +732,7 @@ Add prompt rules:
 - expectedTools may be [] when no tool is required. Never invent a placeholder tool.
 ```
 
-- [ ] **Step 8: Run context/tool/model wiring tests and verify GREEN**
+- [x] **Step 8: Run context/tool/model wiring tests and verify GREEN**
 
 ```bash
 node scripts/run-tests.mjs run \
@@ -744,7 +744,7 @@ node scripts/run-tests.mjs run \
 
 Expected: all listed files pass; recorded Commander tool definitions include `kstar_control` once and agent definitions do not.
 
-- [ ] **Step 9: Commit Task 3**
+- [x] **Step 9: Commit Task 3**
 
 ```bash
 git add \
@@ -776,7 +776,7 @@ git commit -m "feat: expose kstar control to commander"
 - Modify: `test/main/features/kstar/requirement-state.test.ts`
 - Modify: `test/static/kstar-single-core.test.ts`
 
-- [ ] **Step 1: Write failing end-to-end routing tests**
+- [x] **Step 1: Write failing end-to-end routing tests**
 
 Use the programmable Commander stream and a temp workspace. For each ordinary input, script a normal final reply with no tool calls:
 
@@ -802,7 +802,7 @@ it('tracks a mixed greeting and task only when Commander calls kstar_control', a
 });
 ```
 
-- [ ] **Step 2: Run the new group-chat test and verify RED**
+- [x] **Step 2: Run the new group-chat test and verify RED**
 
 ```bash
 node scripts/run-tests.mjs run test/main/features/group_chat/kstar-commander-centric.test.ts
@@ -810,7 +810,7 @@ node scripts/run-tests.mjs run test/main/features/group_chat/kstar-commander-cen
 
 Expected: current bus withholds/routes ordinary text and creates KStar state.
 
-- [ ] **Step 3: Delete the synchronous route/gate block from `enqueue`**
+- [x] **Step 3: Delete the synchronous route/gate block from `enqueue`**
 
 Remove all of the following behavior:
 
@@ -824,7 +824,7 @@ User routing remains the ordinary group-chat rule (`user -> Commander` unless th
 
 Enable the new path by changing `isCommanderCentricKstarEnabled` to return true unless `ORKAS_COMMANDER_CENTRIC_KSTAR` is exactly `0`. The disabled state omits `kstar_control`; it never reinstates the deleted router or message gate.
 
-- [ ] **Step 4: Remove automatic routing APIs while retaining attachment helpers**
+- [x] **Step 4: Remove automatic routing APIs while retaining attachment helpers**
 
 In `requirement-state.ts`, keep:
 
@@ -844,7 +844,7 @@ routeKstarUserMessage
 
 Delete `requirement-router.ts` and its tests. Keep `KstarRequirementIntent` in `requirement-types.ts` with a `@deprecated legacy audit vocabulary` comment for schema/source compatibility; no new runtime code may import or write it.
 
-- [ ] **Step 5: Add static architecture assertions**
+- [x] **Step 5: Add static architecture assertions**
 
 Update `test/static/kstar-single-core.test.ts` to assert:
 
@@ -857,7 +857,7 @@ expect(fs.existsSync(requirementRouterPath)).toBe(false);
 
 Exclude `review-inference.ts` from this static assertion. The approved scope removes independent turn routing and Forecast generation; the existing post-execution Review inference service remains unchanged and stays covered by `review-inference.test.ts`.
 
-- [ ] **Step 6: Run routing/state/static tests and verify GREEN**
+- [x] **Step 6: Run routing/state/static tests and verify GREEN**
 
 ```bash
 node scripts/run-tests.mjs run \
@@ -870,7 +870,7 @@ node scripts/run-tests.mjs run \
 
 Expected: all listed files pass and ordinary messages produce zero KStar writes.
 
-- [ ] **Step 7: Commit Task 4**
+- [x] **Step 7: Commit Task 4**
 
 ```bash
 git add -A \
@@ -900,7 +900,7 @@ git commit -m "refactor: remove pre-commander kstar routing"
 - Delete: `test/main/features/kstar/pre-execution-service.test.ts`
 - Modify: `test/main/features/recall/context-projection-confirm-wake.test.ts`
 
-- [ ] **Step 1: Write failing approval/rejection/session tests**
+- [x] **Step 1: Write failing approval/rejection/session tests**
 
 Cover:
 
@@ -938,7 +938,7 @@ it('leaves legacy waiting_confirmation pending', async () => {
 });
 ```
 
-- [ ] **Step 2: Run the decision-service tests and verify RED**
+- [x] **Step 2: Run the decision-service tests and verify RED**
 
 ```bash
 node scripts/run-tests.mjs run test/main/features/kstar/projection-decision-service.test.ts
@@ -946,7 +946,7 @@ node scripts/run-tests.mjs run test/main/features/kstar/projection-decision-serv
 
 Expected: missing module/exports.
 
-- [ ] **Step 3: Add a bounded internal Commander continuation adapter**
+- [x] **Step 3: Add a bounded internal Commander continuation adapter**
 
 Expose in `bus.ts`:
 
@@ -983,7 +983,7 @@ export async function enqueueCommanderControlMessage(input: {
 
 The control JSON is bounded and contains no paths, prompt text, credentials, or raw errors.
 
-- [ ] **Step 4: Implement decision and legacy recovery service**
+- [x] **Step 4: Implement decision and legacy recovery service**
 
 Public API:
 
@@ -1019,7 +1019,7 @@ Rules:
 - `ready_to_dispatch` includes legacy `forecastId`, clears the marker, and lets Commander continue/synthesize instead of replaying a hidden original turn through a separate path;
 - malformed legacy markers remain readable but are not executed; return `none` and log a bounded code.
 
-- [ ] **Step 5: Rewire IPC handlers**
+- [x] **Step 5: Rewire IPC handlers**
 
 Use:
 
@@ -1040,7 +1040,7 @@ Use:
 
 Preserve the renderer-visible response envelope `{ ok: true, projection, resumed }`. Remove expectations for a Forecast in the confirm response.
 
-- [ ] **Step 6: Invoke idempotent legacy recovery on conversation status/read**
+- [x] **Step 6: Invoke idempotent legacy recovery on conversation status/read**
 
 At the group-chat runtime status/read boundary, call `recoverLegacyPendingProjectionDispatch(userId, cid)` best-effort. It must:
 
@@ -1049,7 +1049,7 @@ At the group-chat runtime status/read boundary, call `recoverLegacyPendingProjec
 - never mutate unrelated user history or current non-KStar tasks;
 - never start a new LLM runner itself; it only queues the existing Commander worker.
 
-- [ ] **Step 7: Run decision/IPC/Recall tests and verify GREEN**
+- [x] **Step 7: Run decision/IPC/Recall tests and verify GREEN**
 
 ```bash
 node scripts/run-tests.mjs run \
@@ -1061,7 +1061,7 @@ node scripts/run-tests.mjs run \
 
 Expected: all listed files pass; tests observe the same Commander session ID and no World Model runner invocation.
 
-- [ ] **Step 8: Commit Task 5**
+- [x] **Step 8: Commit Task 5**
 
 ```bash
 git add \
@@ -1089,7 +1089,7 @@ git commit -m "feat: resume kstar approval in commander session"
 - Modify: `test/main/features/kstar/task-closure.test.ts`
 - Modify: `test/main/features/kstar/episode-builder.test.ts`
 
-- [ ] **Step 1: Write failing privileged-effect tests**
+- [x] **Step 1: Write failing privileged-effect tests**
 
 Test:
 
@@ -1122,7 +1122,7 @@ it('keeps finish evidence idempotent for closure capture', async () => {
 });
 ```
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 ```bash
 node scripts/run-tests.mjs run \
@@ -1133,7 +1133,7 @@ node scripts/run-tests.mjs run \
 
 Expected: at least the new approval guard/provenance assertions fail.
 
-- [ ] **Step 3: Add a host-side approval guard immediately before privileged dispatch**
+- [x] **Step 3: Add a host-side approval guard immediately before privileged dispatch**
 
 The guard receives persisted IDs, not model claims:
 
@@ -1163,7 +1163,7 @@ async function assertKstarPrivilegedExecutionAllowed(
 
 Call it in the actual dispatch execution path only when the active KStar control operation marked the proposed action as approval-required. Do not globally block unrelated tools or ordinary chat merely because an old Projection exists.
 
-- [ ] **Step 4: Thread verified provenance through the existing terminal path**
+- [x] **Step 4: Thread verified provenance through the existing terminal path**
 
 Reuse `kstarTerminalProvenance` and task-run terminal events. The host guard’s verified IDs populate:
 
@@ -1177,7 +1177,7 @@ Reuse `kstarTerminalProvenance` and task-run terminal events. The host guard’s
 
 Do not accept these IDs from model tool arguments. Closure capture continues to attach Episodes with `attachKstarEpisodeToCurrentRequirement` and reconciles Forecast/Review with existing services.
 
-- [ ] **Step 5: Run approval/provenance tests and verify GREEN**
+- [x] **Step 5: Run approval/provenance tests and verify GREEN**
 
 ```bash
 node scripts/run-tests.mjs run \
@@ -1189,7 +1189,7 @@ node scripts/run-tests.mjs run \
 
 Expected: all listed files pass.
 
-- [ ] **Step 6: Commit Task 6**
+- [x] **Step 6: Commit Task 6**
 
 ```bash
 git add \
@@ -1216,7 +1216,7 @@ git commit -m "fix: enforce kstar approval before dispatch"
 - Modify: `test/main/features/kstar/world-model-bridge.test.ts`
 - Modify: `test/static/kstar-single-core.test.ts`
 
-- [ ] **Step 1: Write failing no-independent-runner assertions**
+- [x] **Step 1: Write failing no-independent-runner assertions**
 
 Add a static scan over active routing/Forecast production files:
 
@@ -1238,7 +1238,7 @@ for (const relative of forbidden) {
 
 Add a model call-count integration test proving one Commander runner build for a task-control turn and one additional build only when the same Commander session is resumed after approval; no `kstar-forecast-*` or router session IDs appear.
 
-- [ ] **Step 2: Run static/integration tests and verify RED**
+- [x] **Step 2: Run static/integration tests and verify RED**
 
 ```bash
 node scripts/run-tests.mjs run \
@@ -1248,7 +1248,7 @@ node scripts/run-tests.mjs run \
 
 Expected: `world-model.ts` still imports/calls `buildRunner`.
 
-- [ ] **Step 3: Remove the cognitive simulation path from `world-model.ts`**
+- [x] **Step 3: Remove the cognitive simulation path from `world-model.ts`**
 
 Keep only host-owned pieces used by the new commit service:
 
@@ -1274,7 +1274,7 @@ hasConfiguredModel import
 
 Update unit tests to exercise `commitCommanderForecast` rather than injecting a fake independent model.
 
-- [ ] **Step 4: Remove dead pre-execution Forecast APIs and flags**
+- [x] **Step 4: Remove dead pre-execution Forecast APIs and flags**
 
 Delete these symbols and their obsolete compatibility modules:
 
@@ -1289,7 +1289,7 @@ committedProjectionId/forecastId fields used only by the withheld-message replay
 
 Retain `committedProjectionId`/`forecastId` only where still required for Recall prompt citations and verified terminal provenance. Remove `pending_projection_dispatch` writes from new runtime code, but keep the state reader and recovery adapter until one release has passed.
 
-- [ ] **Step 5: Run all KStar/Recall/group-chat tests and verify GREEN**
+- [x] **Step 5: Run all KStar/Recall/group-chat tests and verify GREEN**
 
 ```bash
 node scripts/run-tests.mjs run \
@@ -1302,7 +1302,7 @@ node scripts/run-tests.mjs run \
 
 Expected: zero failed tests; no test observes router or Forecast runner session IDs.
 
-- [ ] **Step 6: Commit Task 7**
+- [x] **Step 6: Commit Task 7**
 
 ```bash
 git add -A \
@@ -1327,7 +1327,7 @@ git commit -m "refactor: remove independent kstar model runners"
 - Test: `test/main/features/marketplace-update-policy.test.ts`
 - Modify: `test/main/features/marketplace_reconcile.test.ts`
 
-- [ ] **Step 1: Write failing pure policy tests**
+- [x] **Step 1: Write failing pure policy tests**
 
 Define:
 
@@ -1365,7 +1365,7 @@ it.each([
 
 Also cover `v1.2.3`, prerelease ordering, and `updated_at ?? published_at` freshness fallback.
 
-- [ ] **Step 2: Run policy tests and verify RED**
+- [x] **Step 2: Run policy tests and verify RED**
 
 ```bash
 node scripts/run-tests.mjs run test/main/features/marketplace-update-policy.test.ts
@@ -1373,7 +1373,7 @@ node scripts/run-tests.mjs run test/main/features/marketplace-update-policy.test
 
 Expected: missing module/exports.
 
-- [ ] **Step 3: Implement strict semantic comparison**
+- [x] **Step 3: Implement strict semantic comparison**
 
 Use a small local parser rather than an undeclared transitive dependency:
 
@@ -1390,7 +1390,7 @@ const SEMVER = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))
 
 Comparison rules follow SemVer precedence: numeric major/minor/patch, release > prerelease, numeric prerelease identifiers < non-numeric identifiers, then identifier count. Unequal strings that do not both parse return `unparsable_version`; exact equal strings may still compare freshness.
 
-- [ ] **Step 4: Write failing reconcile tests for downgrade and metadata-only updates**
+- [x] **Step 4: Write failing reconcile tests for downgrade and metadata-only updates**
 
 Add Agent and Skill cases:
 
@@ -1433,7 +1433,7 @@ it('skips unparsable unequal versions with a bounded log', async () => {
 });
 ```
 
-- [ ] **Step 5: Apply the same decision helper to catalog update and needs-pull paths**
+- [x] **Step 5: Apply the same decision helper to catalog update and needs-pull paths**
 
 In the server catalog update loop:
 
@@ -1459,7 +1459,7 @@ log.info('marketplace content update skipped', {
 
 Do not log local paths or full metadata documents.
 
-- [ ] **Step 6: Run policy and reconcile tests and verify GREEN**
+- [x] **Step 6: Run policy and reconcile tests and verify GREEN**
 
 ```bash
 node scripts/run-tests.mjs run \
@@ -1471,7 +1471,7 @@ node scripts/run-tests.mjs run \
 
 Expected: all listed files pass; downgrade fixtures preserve local `version` and freshness for both kinds.
 
-- [ ] **Step 7: Commit Task 8**
+- [x] **Step 7: Commit Task 8**
 
 ```bash
 git add \
@@ -1492,7 +1492,7 @@ git commit -m "fix: prevent marketplace content downgrades"
 - Test: `test/main/model/core-agent/client.test.ts`
 - Create or modify: `test/main/util/boot-init.test.ts`
 
-- [ ] **Step 1: Write failing stream-return logging tests**
+- [x] **Step 1: Write failing stream-return logging tests**
 
 Test `stopStreamOnAbort`:
 
@@ -1519,7 +1519,7 @@ it('warns for an unexpected active-stream return failure', async () => {
 
 Track whether the iterator returned `done: true` or the consumer observed a terminal event before abort cleanup.
 
-- [ ] **Step 2: Write failing boot task timing tests**
+- [x] **Step 2: Write failing boot task timing tests**
 
 Test:
 
@@ -1546,7 +1546,7 @@ it('uses slice exceeded as the single warning for a slice abort', async () => {
 });
 ```
 
-- [ ] **Step 3: Run log tests and verify RED**
+- [x] **Step 3: Run log tests and verify RED**
 
 ```bash
 node scripts/run-tests.mjs run \
@@ -1556,11 +1556,11 @@ node scripts/run-tests.mjs run \
 
 Expected: current code warns on `iterator.return` rejection and reports aborted work as slow.
 
-- [ ] **Step 4: Suppress only expected cleanup failures**
+- [x] **Step 4: Suppress only expected cleanup failures**
 
 In `stopStreamOnAbort`, treat `AbortError`, an already-aborted signal, or cleanup after a completed iterator as expected. Keep warnings for unexpected errors while the stream is otherwise active. The warning payload remains redacted with `logErrorSummary`.
 
-- [ ] **Step 5: Report slow only for completed background tasks**
+- [x] **Step 5: Report slow only for completed background tasks**
 
 Track:
 
@@ -1589,7 +1589,7 @@ if (completed && ms > SLOW_WARN_MS) {
 
 The `task slice exceeded` warning remains the single warning for slice-driven aborts.
 
-- [ ] **Step 6: Run log tests and verify GREEN**
+- [x] **Step 6: Run log tests and verify GREEN**
 
 ```bash
 node scripts/run-tests.mjs run \
@@ -1599,7 +1599,7 @@ node scripts/run-tests.mjs run \
 
 Expected: all listed tests pass.
 
-- [ ] **Step 7: Commit Task 9**
+- [x] **Step 7: Commit Task 9**
 
 ```bash
 git add \
@@ -1620,7 +1620,7 @@ git commit -m "fix: silence expected runtime cancellation logs"
 - Verify: `docs/superpowers/specs/2026-08-14-commander-centric-kstar-design.md` already says `Approved`
 - Add no feature code in this task. Any failure returns to the owning task, begins with a new failing test, and receives a separate fix commit.
 
-- [ ] **Step 1: Verify the approved design status**
+- [x] **Step 1: Verify the approved design status**
 
 Run:
 
@@ -1630,7 +1630,7 @@ rg -n '^\*\*Status:\*\* Approved$' docs/superpowers/specs/2026-08-14-commander-c
 
 Expected: exactly one matching line. Do not alter design decisions during verification without returning to brainstorming/design review.
 
-- [ ] **Step 2: Run focused suites**
+- [x] **Step 2: Run focused suites**
 
 ```bash
 node scripts/run-tests.mjs run \
@@ -1646,7 +1646,7 @@ node scripts/run-tests.mjs run \
 
 Expected: exit 0, zero failed tests.
 
-- [ ] **Step 3: Run complete JavaScript and resource suites**
+- [x] **Step 3: Run complete JavaScript and resource suites**
 
 ```bash
 npm run test:js
@@ -1655,7 +1655,7 @@ npm run test:resources
 
 Expected: both commands exit 0.
 
-- [ ] **Step 4: Run type, manifest, branch, and diff checks**
+- [x] **Step 4: Run type, manifest, branch, and diff checks**
 
 ```bash
 npm run typecheck
@@ -1666,7 +1666,7 @@ git diff --check
 
 Expected: all commands exit 0 and `git diff --check` prints nothing.
 
-- [ ] **Step 5: Build and verify the macOS development package**
+- [x] **Step 5: Build and verify the macOS development package**
 
 ```bash
 npm run package:dev:mac
@@ -1675,7 +1675,7 @@ npm run verify:package:dev:mac
 
 Expected: package creation and packaged launch smoke exit 0. Capture the generated `.app` path and verification log path for the final report.
 
-- [ ] **Step 6: Perform live log acceptance**
+- [x] **Step 6: Perform live log acceptance**
 
 Run the packaged app with a clean test user/workspace and capture bounded logs for these four flows:
 
@@ -1694,7 +1694,7 @@ kstar.control operation=<op> result=<ok|rejected|failed> cid=<redacted> task=<re
 
 No full user text, prompt, absolute path, credentials, or raw provider error is present. No benign `abortable stream return failed` warning appears after normal stream completion, and no aborted boot task is reported as `task slow`.
 
-- [ ] **Step 7: Review branch diff against `develop`**
+- [x] **Step 7: Review branch diff against `develop`**
 
 ```bash
 git status --short --branch
