@@ -3,14 +3,11 @@
 // (new-chat + conversation). Clicking it opens a dropdown with Default
 // workspace, recently used workspaces, and a folder picker.
 //
-// **Scoped resolution** (per CLAUDE.md projects feature):
+// **Scoped resolution**:
 //   - On the conversation panel, the chip resolves scope from the active
-//     `currentCid` — main looks up `conv.project_id` and operates on the
-//     project's per-scope workspace entry. Changes apply to every conv in
-//     that project.
+//     `currentCid` — main looks up the conversation's workspace entry.
 //   - On the commander (new-chat) panel, scope is always default — new
-//     conversations created from the empty-state composer are orphan;
-//     project binding happens only inside per-project pages.
+//     conversations created from the empty-state composer are orphan.
 //
 // Depends on: ipc-shim.js (apiFetch / window.cogseed.invoke)
 
@@ -25,7 +22,6 @@ const _wsLog = (typeof createLogger === 'function')
 const _wsInfoByTarget = {
   'new-chat': { currentPath: '', defaultPath: '', isDefault: true, recentPaths: [], scope: 'default' },
   'conversation': { currentPath: '', defaultPath: '', isDefault: true, recentPaths: [], scope: 'default' },
-  project: { currentPath: '', defaultPath: '', isDefault: true, recentPaths: [], scope: 'default' },
 };
 
 // ── Workspace display helpers ───────────────────────────────────────
@@ -44,10 +40,6 @@ function _wsScopeHintFor(target) {
   if (target === 'conversation') {
     return currentCid ? { cid: currentCid } : {};
   }
-  if (target === 'project') {
-    const pid = (typeof _projectDetailPid !== 'undefined') ? (_projectDetailPid || '') : '';
-    return pid ? { projectId: pid } : {};
-  }
   // new-chat / commander panel — always orphan, falls back to default workspace.
   return {};
 }
@@ -57,7 +49,7 @@ function _updateChipForTarget(target) {
   const info = _wsInfoByTarget[target] || _wsInfoByTarget['conversation'];
   const sel = target === 'new-chat'
     ? '#panel-new-chat .workspace-chip'
-    : (target === 'project' ? '#panel-project .workspace-chip' : '#panel-conversation .workspace-chip');
+    : '#panel-conversation .workspace-chip';
   const chip = document.querySelector(sel);
   if (!chip) return;
   const label = chip.querySelector('.workspace-chip-label');
@@ -77,7 +69,6 @@ function _updateChipForTarget(target) {
 function _updateAllChips() {
   _updateChipForTarget('new-chat');
   _updateChipForTarget('conversation');
-  _updateChipForTarget('project');
 }
 
 // ── Core actions ────────────────────────────────────────────────────
@@ -317,18 +308,15 @@ function _createMenuItem(text, isActive, onClick) {
 async function initUserWorkspace() {
   // Insert one chip per panel into the bottom-bar immediately after the
   // recipient chip per PC/docs/design/PATTERNS.md P11
-  // ([To] | [workspace] | [skill] | ...). Project-detail panel has no
-  // recipient chip — fall back to insert-before-send there.
+  // ([To] | [workspace] | [skill] | ...).
   _mountWorkspaceChipInBar(document.querySelector('#panel-new-chat .chat-bottom-bar'), 'new-chat');
   _mountWorkspaceChipInBar(document.querySelector('#panel-conversation .chat-bottom-bar'), 'conversation');
-  _mountWorkspaceChipInBar(document.querySelector('#panel-project .chat-bottom-bar'), 'project');
 
-  // Before `_restoreLastView` runs there is no active conversation/project,
-  // so all three targets resolve to the same default scope. Read that config
-  // once instead of issuing three identical startup IPC/disk reads.
+  // Before `_restoreLastView` runs there is no active conversation, so both
+  // targets resolve to the same default scope. Read that config once instead
+  // of issuing two identical startup IPC/disk reads.
   await _fetchWorkspaceInfo('new-chat');
   _wsInfoByTarget.conversation = { ..._wsInfoByTarget['new-chat'] };
-  _wsInfoByTarget.project = { ..._wsInfoByTarget['new-chat'] };
   _updateAllChips();
 }
 
@@ -353,12 +341,9 @@ function _mountWorkspaceChipInBar(bar, target) {
 }
 
 /** Public: called by conversation.js when the active cid changes (entering a
- *  conversation, or switching tabs while one is mounted). Also called by
- *  projects.js when the commander chip's project pick changes. */
+ *  conversation, or switching tabs while one is mounted). */
 async function refreshWorkspaceChip() {
-  const target = (typeof currentView !== 'undefined' && currentView === 'project')
-    ? 'project'
-    : ((typeof currentView !== 'undefined' && currentView === 'conversation') ? 'conversation' : 'new-chat');
+  const target = (typeof currentView !== 'undefined' && currentView === 'conversation') ? 'conversation' : 'new-chat';
   await _fetchWorkspaceInfo(target);
   _updateChipForTarget(target);
 }

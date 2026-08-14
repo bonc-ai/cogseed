@@ -38,7 +38,7 @@ async function pickKbLocation(opts = {}) {
     _kbPickerResolve = null;
   }
   _kbPickerScope = _kbPickerNormalizeScope(opts.scope || opts.targetScope);
-  await _kbPickerLoadTree(_kbPickerScope);
+  await _kbPickerLoadTree();
 
   const lastDirKey = _kbPickerLastDirKey(_kbPickerScope);
   const defaultDir = opts.defaultDir != null
@@ -102,13 +102,9 @@ function _kbPickerNormalizeTree(nodes) {
   });
 }
 
-async function _kbPickerLoadTree(scope = { type: 'global' }) {
+async function _kbPickerLoadTree() {
+  // 空间化后仅全局上下文库（contexts）可选；项目文件树已删。
   try {
-    if (scope && scope.type === 'project' && scope.projectId && window.cogseed?.invoke) {
-      const data = await window.cogseed.invoke('projects.files.tree', { projectId: scope.projectId });
-      _kbPickerTree = data?.ok ? _kbPickerNormalizeTree(data.tree || []) : [];
-      return;
-    }
     const res = await apiFetch('/api/contexts/tree');
     const data = await res.json();
     _kbPickerTree = data.ok ? _kbPickerNormalizeTree(data.tree || []) : [];

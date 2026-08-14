@@ -1353,13 +1353,15 @@ export async function listStartupConversations(
     }
     if (active?.project_id) selectedProjectCids.add(active.conversation_id);
     for (const c of all) {
-      if (c.project_id || c.pinned_at) continue;
+      // 空间化后仅 space_id 视为"项目分组"归属；纯 project_id（无 space_id）
+      // 的旧项目会话按 unprojected 放行，保证存量孤儿会话可见。
+      if ((c.project_id && c.space_id) || c.pinned_at) continue;
       const bucket = _startupOldBucket(c);
       if (bucket) deferred[bucket] += 1;
     }
     return all.filter((c) => {
       if (c.conversation_id === activeCid) return true;
-      if (c.project_id) return selectedProjectCids.has(c.conversation_id);
+      if (c.project_id && c.space_id) return selectedProjectCids.has(c.conversation_id);
       if (c.pinned_at) return true;
       return _startupOldBucket(c) === null;
     });
@@ -1439,7 +1441,7 @@ export async function listOldUnprojectedConversationPage(
     return { conversations: [], total: 0, next_offset: null };
   }
   const rows = (await _readScopedRawConversations(userId))
-    .filter((c) => !c.project_id && _startupOldBucket(c) === bucket);
+    .filter((c) => !(c.project_id && c.space_id) && _startupOldBucket(c) === bucket);
   return _enrichConversationPage(userId, rows, offset);
 }
 

@@ -6,16 +6,15 @@ const transfer = require('../../src/renderer/modules/library-transfer.js') as {
   _libraryValue: (ref: { scope: string; projectId?: string }) => string;
   _parseLibraryValue: (value: string) => { scope: string; projectId?: string } | null;
   _folderRows: (nodes: unknown[]) => Array<{ path: string; name: string; depth: number }>;
-  _projectsFromResponse: (response: unknown) => unknown[];
 };
 
 describe('shared Library transfer dialog', () => {
-  it('round-trips global and project Library picker values', () => {
+  it('round-trips global Library value and normalizes legacy project values', () => {
+    // 空间化后仅全局资料库可迁移：项目作用域一律归一为 global。
     expect(transfer._libraryValue({ scope: 'global' })).toBe('global');
-    expect(transfer._libraryValue({ scope: 'project', projectId: 'p-1' })).toBe('project:p-1');
+    expect(transfer._libraryValue({ scope: 'project', projectId: 'p-1' })).toBe('global');
     expect(transfer._parseLibraryValue('global')).toEqual({ scope: 'global' });
-    expect(transfer._parseLibraryValue('project:p-1')).toEqual({ scope: 'project', projectId: 'p-1' });
-    expect(transfer._parseLibraryValue('project:')).toBeNull();
+    expect(transfer._parseLibraryValue('project:p-1')).toEqual({ scope: 'global' });
   });
 
   it('flattens only folders and preserves their visible depth', () => {
@@ -39,10 +38,10 @@ describe('shared Library transfer dialog', () => {
     ])).toEqual([{ path: 'nested/Assets', name: 'Assets', depth: 0 }]);
   });
 
-  it('accepts the existing projects.list IPC response without requiring an ok wrapper', () => {
-    const projects = [{ project_id: 'p-1', name: 'Alpha' }];
-    expect(transfer._projectsFromResponse({ projects })).toEqual(projects);
-    expect(transfer._projectsFromResponse({ ok: true })).toEqual([]);
+  it('no longer references projects.* IPC (space refactor removed project libraries)', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/library-transfer.js'), 'utf8');
+    expect(src).not.toContain('projects.list');
+    expect(src).not.toContain('projects.files');
   });
 
   it('keeps row menus compact with one consolidated transfer action', () => {
@@ -67,7 +66,7 @@ describe('shared Library transfer dialog', () => {
     expect(dialog).toContain("data-transfer-mode=\"move\"");
     expect(dialog).toContain("data-transfer-mode=\"copy\"");
     expect(dialog).toContain("root.orkas.invoke('library.transfer'");
-    expect(dialog).toContain("Array.isArray(data?.tree)");
+    expect(dialog).toContain("apiFetch('/api/contexts/tree')");
     expect(dialog).toContain('32 + row.depth * 18');
     expect(archivePicker).toContain('32 + depth * 18');
     expect(zh['chat.archive_picker_title']).toBe('存档到资料库');

@@ -585,21 +585,18 @@ function _chatRichRenderValue(editor, value) {
 
 function _chatRichInputTarget(inputId) {
   if (inputId === 'new-chat-input') return 'new-chat';
-  if (inputId === 'project-chat-input') return 'project';
   if (inputId === 'auto-task-input') return 'auto';
   return 'conversation';
 }
 
 function _chatRichAutoGrowMax(inputId) {
   if (inputId === 'new-chat-input') return 260;
-  if (inputId === 'project-chat-input') return 180;
   if (inputId === 'auto-task-input') return 220;
   return 200;
 }
 
 function _chatRichRecipientChipId(inputId) {
   if (inputId === 'new-chat-input') return 'new-chat-recipient-chip';
-  if (inputId === 'project-chat-input') return 'project-chat-recipient-chip';
   if (inputId === 'auto-task-input') return 'auto-recipient-chip';
   if (inputId === 'chat-input') return 'chat-recipient-chip';
   return '';
@@ -852,7 +849,6 @@ function _chatRichCreateApi(textarea, editor) {
     if (e.altKey) return;
     e.preventDefault();
     if (textarea.id === 'new-chat-input' && typeof handleNewChatSubmit === 'function') handleNewChatSubmit();
-    else if (textarea.id === 'project-chat-input' && typeof _submitProjectChat === 'function') _submitProjectChat();
     else if (typeof handleChatSubmit === 'function') handleChatSubmit();
   });
 
@@ -944,8 +940,6 @@ function _initAllMentionMirrors() {
   if (chatInput) _initMentionMirror(chatInput);
   const newChatInput = document.getElementById('new-chat-input');
   if (newChatInput) _initMentionMirror(newChatInput);
-  const projectChatInput = document.getElementById('project-chat-input');
-  if (projectChatInput) _initMentionMirror(projectChatInput);
   const autoTaskInput = document.getElementById('auto-task-input');
   if (autoTaskInput) _initMentionMirror(autoTaskInput);
 }
@@ -1080,23 +1074,7 @@ function _onRecipientChanged(_target) { /* reserved for future hooks */ }
  *  project, or project rename/binding edit while a chat is open), the
  *  current recipient may no longer be a valid agent for the new scope.
  *  Reset to commander silently — the user will see the chip flip on next
- *  render. Called from `projects.js` post project-pick. No-op for `commander`
- *  recipients and for orphan contexts (pid empty). */
-async function validateRecipientAgainstProject(target, pid) {
-  const cur = _activeRecipient(target);
-  if (!cur || cur.kind !== 'agent') return;
-  if (!pid) return;
-  try {
-    const res = await window.cogseed.invoke('projects.bindings.list', { projectId: pid });
-    if (!res || !res.ok) return;
-    const bound = new Set((res.bindings && res.bindings.agents) || []);
-    if (!bound.has(cur.id)) {
-      setChatRecipient(target, { kind: 'commander' });
-      _renderRecipientChip(target);
-    }
-  } catch (_) { /* leave as-is on failure */ }
-}
-
+ *  render. No-op for `commander` recipients and for orphan contexts (pid empty). */
 function setChatRecipient(target, next, _opts = {}) {
   const r = _normRecipient(next);
   if (!r) return;
@@ -1142,11 +1120,9 @@ function _transferNewChatRecipientTo(cid) {
 }
 
 function _renderRecipientChip(target) {
-  const targets = target ? [target] : ['conversation', 'new-chat', 'project'];
+  const targets = target ? [target] : ['conversation', 'new-chat'];
   for (const tg of targets) {
-    const id = tg === 'new-chat'
-      ? 'new-chat-recipient-name'
-      : (tg === 'project' ? 'project-chat-recipient-name' : 'chat-recipient-name');
+    const id = tg === 'new-chat' ? 'new-chat-recipient-name' : 'chat-recipient-name';
     const nameEl = document.getElementById(id);
     if (!nameEl) continue;
     const r = _activeRecipient(tg);
@@ -1730,28 +1706,6 @@ function onEnterConversationView() {
   // Workspace chip scope follows the active conv's project (resolved on
   // main side via cid → conv.project_id). Refresh whenever a conv mounts.
   if (typeof refreshWorkspaceChip === 'function') refreshWorkspaceChip();
-  // Recipient validation: bindings may have changed since this conv was
-  // last open (user removed the agent from the project). If the sticky
-  // recipient is no longer in the project's agents, drop back to commander
-  // so the chip matches what the dispatch path will actually route to.
-  if (currentCid && Array.isArray(conversations)) {
-    const conv = conversations.find((c) => c && c.conversation_id === currentCid);
-    const pid = (conv && conv.project_id) || '';
-    if (pid && typeof validateRecipientAgainstProject === 'function') {
-      validateRecipientAgainstProject('conversation', pid);
-    }
-  }
-  // Empty-bindings banner: when this conv belongs to a project and the
-  // project has zero agents bound, surface a one-line notice + "Open
-  // project page" affordance. Cheap IPC; only fires for in-project
-  // conversations.
-  if (typeof refreshConvProjectEmptyBanner === 'function') refreshConvProjectEmptyBanner(currentCid);
-  // One-shot auto-expand: if the conv we just entered belongs to a
-  // project, surface the project's row in the sidebar. Skipped when the
-  // project is already expanded; manual user collapse on subsequent
-  // renders is preserved (the auto-expand does not run inside
-  // renderProjectsSection — see comments in projects.js).
-  if (typeof autoExpandActiveConvProject === 'function') autoExpandActiveConvProject();
   // Kick a one-shot evaluation so that a cid with a live interactive agent
   // picks it up as the composer target even if no state_changed event fires
   // before the user types. View-enter never reverts to commander (see
@@ -4515,7 +4469,7 @@ async function loadConversations(options = {}) {
           for (const bucket of ['last30', 'older']) {
             _oldConversationPages[bucket] = {
               initialized: true,
-              total: (conversations || []).filter((c) => !c.project_id
+              total: (conversations || []).filter((c) => !(c.project_id && c.space_id)
                 && timeBucket(_conversationActivityIso(c), new Date()) === bucket).length,
               nextOffset: null,
               loading: false,
@@ -4581,7 +4535,7 @@ async function _loadOldUnprojectedConversations(bucket) {
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'old conversation list failed');
     if (page.initialized) _appendConversationSlice(data.conversations);
-    else _replaceConversationSlice(data.conversations, (c) => c && !c.project_id && !c.pinned_at
+    else _replaceConversationSlice(data.conversations, (c) => c && !(c.project_id && c.space_id) && !c.pinned_at
       && timeBucket(_conversationActivityIso(c), new Date()) === bucket);
     const next = data.next_offset === null ? null : Number(data.next_offset);
     page.initialized = true;
@@ -5554,12 +5508,9 @@ function renderConversationList() {
   _conversationBucketDateKey = _conversationLocalDateKey();
   const container = document.getElementById('conversation-list');
   _sortConversationCacheForSidebar();
-  // Conversations with a project_id are rendered nested under their project
-  // by `projects.js::renderProjectsSection`. The "Conversations" section
-  // here only shows the unprojected ones — same data model as the user's
-  // mental picture (projected convs live "inside" their project, the rest
-  // sit in the catch-all section).
-  const unprojected = (conversations || []).filter((c) => !c || !c.project_id);
+  // 空间化后：绑定空间的会话（project_id + space_id）归空间任务列表；
+  // 纯 project_id（无 space_id）的旧孤儿会话在普通列表可见（F2-A）。
+  const unprojected = (conversations || []).filter((c) => !c || !(c.project_id && c.space_id));
   const hasDeferredUnprojected = _conversationDeferredBuckets.last30 > 0
     || _conversationDeferredBuckets.older > 0;
   _ensureConversationMergeActionBar();
@@ -8555,21 +8506,15 @@ function _referenceTargetActivity(conversation) {
 }
 
 function _referenceNewTaskDraftCid(projectId = '') {
-  return projectId ? `projchat-${projectId}` : DRAFT_CID;
+  return DRAFT_CID;
 }
 
-function _stageReferencesForNewTask(payloads, projectId = '') {
+function _stageReferencesForNewTask(payloads) {
   if (!Array.isArray(payloads) || !payloads.length) return;
-  const draftCid = _referenceNewTaskDraftCid(projectId);
+  const draftCid = _referenceNewTaskDraftCid();
   for (const payload of payloads) _addQuote(draftCid, payload);
   _closeReferenceTargetPicker();
   _exitMessageSelection();
-  if (projectId) {
-    setView('project', projectId);
-    _renderQuotePreview(draftCid);
-    document.getElementById('project-chat-input')?.focus();
-    return;
-  }
   setView('new-chat');
   _renderQuotePreview(DRAFT_CID);
   document.getElementById('new-chat-input')?.focus();
@@ -8592,10 +8537,8 @@ async function _loadReferenceTargetConversations() {
 async function _openReferenceTargetPicker(payloads) {
   if (!Array.isArray(payloads) || !payloads.length) return;
   const loads = [_loadReferenceTargetConversations()];
-  if (typeof loadProjects === 'function') loads.push(loadProjects());
   const [targetConversations] = await Promise.all(loads);
   _closeReferenceTargetPicker();
-  const sourceProjectId = _projectIdForConversation(currentCid);
   const overlay = document.createElement('div');
   overlay.id = 'chat-reference-target-overlay';
   overlay.className = 'modal-overlay open chat-reference-target-overlay';
@@ -8652,7 +8595,7 @@ async function _openReferenceTargetPicker(payloads) {
     });
   };
   overlay.querySelector('[data-new-task]')?.addEventListener('click', () => {
-    _stageReferencesForNewTask(payloads, sourceProjectId);
+    _stageReferencesForNewTask(payloads);
   });
   overlay.querySelector('.chat-reference-target-close')?.addEventListener('click', _closeReferenceTargetPicker);
   overlay.addEventListener('keydown', (event) => { if (event.key === 'Escape') _closeReferenceTargetPicker(); });

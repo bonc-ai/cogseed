@@ -538,14 +538,8 @@
   }
 
   async function _pocEnsureProjectNames() {
-    if (_pocProjectNames) return _pocProjectNames;
-    try {
-      const res = await (window.cogseed || window.orkas).invoke('projects.list');
-      const projects = (res && Array.isArray(res.projects)) ? res.projects : [];
-      _pocProjectNames = new Map(projects.map((p) => [p.project_id, p.name || p.project_id]));
-    } catch (_) {
-      _pocProjectNames = new Map();
-    }
+    // 空间化后项目层已删：项目名映射不可再解析，保留空 map（@project 显示原始值）。
+    if (!_pocProjectNames) _pocProjectNames = new Map();
     return _pocProjectNames;
   }
 
@@ -1189,9 +1183,6 @@
     if (!toGroupIds.length && state.roleGroupId) toGroupIds = [state.roleGroupId];
     const payload = { toGlobalMemory: true, toGroupIds };
     if (state.field && state.field !== 'flow') payload.targetField = state.field;
-    // 二期 D5：候选自带来源项目标记 → 透传（主进程 dest.projectId 优先于候选）
-    const cand = _pocCandidates.find((x) => x.candidate_id === candidateId);
-    if (cand && cand.project_id) payload.projectId = cand.project_id;
     return payload;
   }
 
@@ -1275,8 +1266,6 @@
         const state = _pocDestState.get(c.candidate_id);
         const field = state && state.field ? state.field : (c.target_field || 'flow');
         if (field && field !== 'flow') dest.targetField = field;
-        // 二期 D5：候选自带来源项目标记 → 透传
-        if (c.project_id) dest.projectId = c.project_id;
         const res = await window.cogseed.invoke('personalOntology.candidates.confirm', { candidateId: c.candidate_id, ...dest, routeWithLlm: true });
         if (res && res.ok) {
           okCount++;

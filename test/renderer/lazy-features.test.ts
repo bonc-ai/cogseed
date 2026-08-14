@@ -152,8 +152,8 @@ describe('renderer lazy feature loader', () => {
     expect(tabLoader).toContain('await loadSkills(false)');
     expect(tabLoader).toContain("normalized === 'connectors'");
     expect(tabLoader).toContain('const joined = existing.then');
-    expect(source).toContain('let _pickerProjectContextSeq = 0');
-    expect(source).toContain('refreshSeq === _pickerProjectContextSeq');
+    // 空间化后项目作用域已删：picker 恒为全局作用域，不应再引用 projects.scope。
+    expect(source).not.toContain('projects.scope.resolve');
   });
 
   it('shows a retryable error instead of leaving a failed lazy view blank', () => {

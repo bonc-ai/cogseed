@@ -537,12 +537,20 @@ describe('chats › index repair', () => {
 
     const recent = await chats.createConversation(TEST_UID, { title: 'recent' });
     const old = await chats.createConversation(TEST_UID, { title: 'old' });
+    // 空间化后：绑定空间的会话（project_id + space_id）仍按项目展开机制归属；
+    // 纯 project_id（无 space_id）的旧孤儿会话按 unprojected 放行（F2-A）。
     const expandedConv = await chats.createConversation(TEST_UID, {
       title: 'expanded project',
       projectId: expanded.project.project_id,
+      spaceId: 'sp_expanded',
     });
     const collapsedConv = await chats.createConversation(TEST_UID, {
       title: 'collapsed project',
+      projectId: collapsed.project.project_id,
+      spaceId: 'sp_collapsed',
+    });
+    const orphanProjConv = await chats.createConversation(TEST_UID, {
+      title: 'orphan project',
       projectId: collapsed.project.project_id,
     });
     const globalIndex = path.join(tmpDir, TEST_UID, 'cloud', 'chats', '_index.json');
@@ -559,6 +567,8 @@ describe('chats › index repair', () => {
     const startupIds = startup.conversations.map((c) => c.conversation_id);
     expect(startupIds).toContain(recent.conversation_id);
     expect(startupIds).toContain(expandedConv.conversation_id);
+    // 空间化后旧孤儿项目会话（纯 project_id）在普通列表可见（F2-A）。
+    expect(startupIds).toContain(orphanProjConv.conversation_id);
     expect(startupIds).not.toContain(old.conversation_id);
     expect(startupIds).not.toContain(collapsedConv.conversation_id);
     expect(startup.deferred_unprojected.older).toBe(1);
@@ -566,8 +576,11 @@ describe('chats › index repair', () => {
 
     expect((await chats.listOldUnprojectedConversations(TEST_UID)).map((c) => c.conversation_id))
       .toEqual([old.conversation_id]);
+    // 孤儿项目会话与空间绑定会话同属该项目根，物理读取都应返回。
     expect((await chats.listProjectConversations(TEST_UID, collapsed.project.project_id))
-      .map((c) => c.conversation_id)).toEqual([collapsedConv.conversation_id]);
+      .map((c) => c.conversation_id).sort()).toEqual(
+        [collapsedConv.conversation_id, orphanProjConv.conversation_id].sort(),
+      );
   });
 
   it('pages expanded projects and old buckets in independent 10-row slices', async () => {
@@ -576,11 +589,13 @@ describe('chats › index repair', () => {
     if (!project.ok) throw new Error('project setup failed');
     const pid = project.project.project_id;
     const now = Date.now();
-    const row = (cid: string, title: string, at: Date, projectId?: string) => ({
+    const row = (cid: string, title: string, at: Date, projectId?: string, spaceId?: string) => ({
       conversation_id: cid,
       title,
       kind: 'normal',
       ...(projectId ? { project_id: projectId } : {}),
+      // 空间化后：绑定空间的会话才按项目展开机制处理（F2-A 语义）。
+      ...(spaceId ? { space_id: spaceId } : {}),
       created_at: at.toISOString(),
       updated_at: at.toISOString(),
       participant_summary_updated_at: at.toISOString(),
@@ -594,6 +609,7 @@ describe('chats › index repair', () => {
       `project-${i}`,
       new Date(now - i * 60_000),
       pid,
+      `sp_${pid}`,
     ));
     const projectIndex = path.join(
       tmpDir, TEST_UID, 'cloud', 'projects', pid, 'chats', '_index.json');

@@ -3197,7 +3197,6 @@ function _normalizeAgentPickerTab(tab) {
 function _agentPickerAllowsLibrary(anchorId) {
   return anchorId === 'chat-recipient-chip'
     || anchorId === 'new-chat-recipient-chip'
-    || anchorId === 'project-chat-recipient-chip'
     || anchorId === 'auto-recipient-chip';
 }
 
@@ -3326,73 +3325,12 @@ function _moveAgentPickerTab(delta) {
   _setAgentPickerTab(tabs[next]);
 }
 
-function _agentPickerProjectExists(projectId) {
-  const pid = String(projectId || '');
-  if (!pid) return false;
-  // 情境空间一期修复：项目缓存（_projectsCache）在新建项目后不会即时刷新
-  // （实测：新建项目不在缓存里 → pid 被当无效 → 作用域静默丢失 → @ 显示全局）。
-  // 缓存不含 ≠ 项目不存在——放行交给主进程 scope.resolve 裁决：
-  // 项目不存在 → getProjectScopeMeta 降级 null → 全局可见（与删除项目回全局的
-  // 语义一致，安全）；项目存在 → 正常返回 S∪B 作用域。
-  return true;
-}
-
-function _agentPickerValidProjectId(projectId) {
-  const pid = String(projectId || '');
-  return pid && _agentPickerProjectExists(pid) ? pid : '';
-}
-
-function _resolveActiveProjectId(anchorId) {
-  if (anchorId === 'new-chat-recipient-chip') {
-    // Empty-state composer creates orphan conversations; no project scope.
-    return '';
-  }
-  if (anchorId === 'project-chat-recipient-chip') {
-    return _agentPickerValidProjectId(
-      (typeof _projectDetailPid !== 'undefined') ? (_projectDetailPid || '') : '',
-    );
-  }
-  if (anchorId === 'chat-recipient-chip') {
-    if (typeof currentCid !== 'undefined' && currentCid
-        && typeof conversations !== 'undefined' && Array.isArray(conversations)) {
-      const conv = conversations.find((c) => c && c.conversation_id === currentCid);
-      const fromList = _agentPickerValidProjectId((conv && conv.project_id) || '');
-      if (fromList) return fromList;
-      // 情境空间一期修复：会话列表条目缺失 project_id / currentCid 不在列表
-      // （新会话未入列表等）时，回退项目详情页上下文，避免作用域静默退化为全局全量。
-      if (typeof _projectDetailPid !== 'undefined' && _projectDetailPid) {
-        return _agentPickerValidProjectId(_projectDetailPid);
-      }
-    }
-  }
-  if (anchorId === 'auto-recipient-chip') {
-    // The auto modal sets this when it opens so picker results scope
-    // to the task's project (if any). See modules/auto.js.
-    const pid = (typeof window !== 'undefined' && typeof window._autoGetProjectId === 'function')
-      ? (window._autoGetProjectId() || '')
-      : '';
-    return _agentPickerValidProjectId(pid);
-  }
-  return '';
-}
-
 async function _refreshAgentPickerProjectContext(anchorId) {
-  const refreshSeq = ++_pickerProjectContextSeq;
+  // 空间化后项目作用域已删：picker 恒为全局作用域（不再按 project 过滤）。
   _pickerBoundAgentIds = null;
   _pickerBoundSkillIds = null;
-  _pickerProjectId = _resolveActiveProjectId(anchorId) || '';
-  // 情境空间一期修复（第二层）：会话列表（conversations）条目不含 project_id，
-  // currentCid 也经常不在列表里（项目会话独立索引）——兜底直接按当前会话
-  // 查主进程 conv 记录（权威来源），否则作用域静默退化为全局全量。
-  if (!_pickerProjectId && anchorId === 'chat-recipient-chip'
-      && typeof currentCid !== 'undefined' && currentCid) {
-    try {
-      const convRes = await window.orkas.invoke('conversations.get', { cid: currentCid });
-      const pid = (convRes && convRes.conversation && convRes.conversation.project_id) || '';
-      if (refreshSeq === _pickerProjectContextSeq) _pickerProjectId = _agentPickerValidProjectId(pid);
-    } catch (_) { /* keep no-scope */ }
-  }
-  _pickerProjectContextLoading = !!_pickerProjectId;
+  _pickerProjectId = '';
+  _pickerProjectContextLoading = false;
   _pickerLibraryRows = null;
   _pickerLibraryLoading = null;
   _pickerLibraryRenderSeq += 1;
@@ -3403,21 +3341,6 @@ async function _refreshAgentPickerProjectContext(anchorId) {
   _pickerOntologyTemplates = null;
   _pickerOntologyLoading = null;
   _pickerOntologyRenderSeq += 1;
-  if (_pickerProjectId) {
-    try {
-      // 情境空间一期修复：作用域 = resolveProjectScope（S∪B 决策树，含空间派生集），
-      // 不是只读项目 bindings（B）。null = 全局可见（不过滤）；空数组 = 严格空作用域。
-      const res = await window.cogseed.invoke('projects.scope.resolve', { projectId: _pickerProjectId });
-      if (refreshSeq === _pickerProjectContextSeq && res?.ok) {
-        _pickerBoundAgentIds = res.scope ? new Set((res.scope.agents || []).map((a) => a.id)) : null;
-        _pickerBoundSkillIds = res.scope ? new Set((res.scope.skills || []).map((s) => s.id)) : null;
-        _pickerScopeSpace = res.space || null;
-      }
-    } catch (_) { /* keep Library project scope; backend/file-tree handles stale ids */ }
-    finally {
-      if (refreshSeq === _pickerProjectContextSeq) _pickerProjectContextLoading = false;
-    }
-  }
 }
 
 async function refreshAgentPickerContext(anchorId) {
@@ -3534,7 +3457,6 @@ function _renderAgentPickerList(filterText) {
   // switch back without an empty-state. Other anchors keep agent-only listing.
   const isRecipientPicker = anchorId === 'chat-recipient-chip'
     || anchorId === 'new-chat-recipient-chip'
-    || anchorId === 'project-chat-recipient-chip'
     || anchorId === 'auto-recipient-chip';
   const commanderName = t('chat.recipient_commander');
   const commanderMatchesFilter = !q || commanderName.toLowerCase().includes(q);
@@ -3731,25 +3653,16 @@ function _flattenLibraryPickerTree(nodes, scope, projectId) {
   return rows;
 }
 
-async function _loadLibraryPickerRows(projectId) {
-  const validProjectId = _agentPickerValidProjectId(projectId);
-  const projectPromise = validProjectId
-    ? window.cogseed.invoke('projects.files.tree', { projectId: validProjectId }).catch((err) => {
-        _agentsLog.warn('project library picker load failed', err);
-        return null;
-      })
-    : Promise.resolve(null);
+async function _loadLibraryPickerRows() {
+  // 空间化后仅全局上下文库（contexts）可选；项目文件树已删。
   const globalPromise = apiFetch('/api/contexts/tree')
     .then((res) => res.json())
     .catch((err) => {
       _agentsLog.warn('global library picker load failed', err);
       return null;
     });
-  const [projectData, globalData] = await Promise.all([projectPromise, globalPromise]);
+  const globalData = await globalPromise;
   const rows = [];
-  if (validProjectId && projectData && projectData.ok !== false) {
-    rows.push(..._flattenLibraryPickerTree(projectData.tree || [], 'project', validProjectId));
-  }
   if (globalData && globalData.ok !== false) {
     rows.push(..._flattenLibraryPickerTree(globalData.tree || [], 'global', ''));
   }
@@ -3780,7 +3693,7 @@ function _renderLibraryPickerList(listEl, filterText, anchorId) {
   if (!_pickerLibraryRows) {
     listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
     if (!_pickerLibraryLoading) {
-      _pickerLibraryLoading = _loadLibraryPickerRows(_pickerProjectId)
+      _pickerLibraryLoading = _loadLibraryPickerRows()
         .then((rows) => {
           _pickerLibraryRows = rows || [];
           _pickerLibraryLoading = null;
@@ -4003,7 +3916,6 @@ function _moveAgentPickerActive(delta) {
 
 function _targetFromPickerAnchor(anchorId) {
   if (anchorId === 'new-chat-recipient-chip') return 'new-chat';
-  if (anchorId === 'project-chat-recipient-chip') return 'project';
   if (anchorId === 'auto-recipient-chip') return 'auto';
   return 'conversation';
 }
@@ -4020,7 +3932,7 @@ async function _triggerPickerItem(kind, itemId, itemName, anchorId, dataset) {
     setChatSkill(target, itemId, itemName || itemId);
     const inputId = target === 'new-chat'
       ? 'new-chat-input'
-      : (target === 'project' ? 'project-chat-input' : (target === 'auto' ? 'auto-task-input' : 'chat-input'));
+      : (target === 'auto' ? 'auto-task-input' : 'chat-input');
     _focusInput(document.getElementById(inputId));
     return;
   }
@@ -4029,7 +3941,7 @@ async function _triggerPickerItem(kind, itemId, itemName, anchorId, dataset) {
     setChatConnector(target, itemId, itemName || itemId);
     const inputId = target === 'new-chat'
       ? 'new-chat-input'
-      : (target === 'project' ? 'project-chat-input' : (target === 'auto' ? 'auto-task-input' : 'chat-input'));
+      : (target === 'auto' ? 'auto-task-input' : 'chat-input');
     _focusInput(document.getElementById(inputId));
     return;
   }
@@ -4071,17 +3983,12 @@ function _triggerOntologyGroup(groupId, groupTitle, anchorId) {
 
 function _libraryPickerInputIdForTarget(target) {
   if (target === 'new-chat') return 'new-chat-input';
-  if (target === 'project') return 'project-chat-input';
   if (target === 'auto') return 'auto-task-input';
   return 'chat-input';
 }
 
-function _libraryPickerDraftCidFor(anchorId, target, projectId) {
+function _libraryPickerDraftCidFor(anchorId, target) {
   if (target === 'new-chat') return window.COMMANDER_DRAFT_CID;
-  if (target === 'project') {
-    if (typeof _projectChatDraftCid === 'function') return _projectChatDraftCid(projectId);
-    return projectId ? `projchat-${projectId}` : '';
-  }
   if (target === 'conversation') {
     return (typeof currentCid !== 'undefined') ? (currentCid || '') : '';
   }
@@ -4090,14 +3997,14 @@ function _libraryPickerDraftCidFor(anchorId, target, projectId) {
 
 async function _triggerLibraryFile(dataset, anchorId) {
   const target = _targetFromPickerAnchor(anchorId);
-  const scope = dataset.libraryScope || 'global';
+  // 空间化后仅全局上下文库（contexts）可挂草稿；project scope 已删。
+  const scope = 'global';
   const rel = dataset.libraryRel || '';
-  const projectId = dataset.projectId || _resolveActiveProjectId(anchorId);
   if (!rel) return;
   if (target === 'auto') {
     try {
       if (typeof window._autoAttachLibraryFile !== 'function') throw new Error('auto_attach_unavailable');
-      await window._autoAttachLibraryFile({ scope, rel, projectId });
+      await window._autoAttachLibraryFile({ scope, rel });
       _consumeAtKeyChar();
       _focusInput(document.getElementById('auto-task-input'));
     } catch (err) {
@@ -4106,18 +4013,16 @@ async function _triggerLibraryFile(dataset, anchorId) {
     }
     return;
   }
-  const cid = _libraryPickerDraftCidFor(anchorId, target, projectId);
+  const cid = _libraryPickerDraftCidFor(anchorId, target);
   if (!cid) return;
 
-  const channel = scope === 'project' ? 'projects.files.attachToDraft' : 'contexts.attachToDraft';
-  const payload = scope === 'project'
-    ? { projectId, name: rel }
-    : { relPath: rel };
+  const channel = 'contexts.attachToDraft';
+  const payload = { relPath: rel };
   const inputId = _libraryPickerInputIdForTarget(target);
   const telemetry = {
     target,
     scope,
-    has_project: scope === 'project' && !!projectId,
+    has_project: false,
   };
   try {
     await window.attachKbFileToDraft(
@@ -4126,7 +4031,6 @@ async function _triggerLibraryFile(dataset, anchorId) {
       cid,
       () => {
         if (target === 'new-chat' && typeof setView === 'function') setView('new-chat');
-        else if (target === 'project' && projectId && typeof setView === 'function') setView('project', projectId);
       },
     );
     _agentsTrackEvent('chat_library_attach_result', { ...telemetry, result: 'success' });
@@ -4170,8 +4074,7 @@ async function _triggerAgent(agentId, agentName, anchorId) {
     return;
   }
   const isRecipientAnchor = anchorId === 'chat-recipient-chip'
-    || anchorId === 'new-chat-recipient-chip'
-    || anchorId === 'project-chat-recipient-chip';
+    || anchorId === 'new-chat-recipient-chip';
   if (isRecipientAnchor) {
     const target = _targetFromPickerAnchor(anchorId);
     const resourceAgentId = agentId === '__commander__' ? _COMMANDER_AGENT_ID : String(agentId || '');
@@ -4189,7 +4092,7 @@ async function _triggerAgent(agentId, agentName, anchorId) {
     // `@` is now redundant (the chip carries the recipient) and would also
     // leak into the sent text — strip it.
     _consumeAtKeyChar();
-    const inputId = target === 'new-chat' ? 'new-chat-input' : (target === 'project' ? 'project-chat-input' : 'chat-input');
+    const inputId = target === 'new-chat' ? 'new-chat-input' : 'chat-input';
     _focusInput(document.getElementById(inputId));
     return;
   }
@@ -4234,7 +4137,6 @@ function _focusInput(input) {
 const _RECIPIENT_ANCHOR_PAIRS = [
   { chip: 'chat-recipient-chip',         input: 'chat-input' },
   { chip: 'new-chat-recipient-chip',     input: 'new-chat-input' },
-  { chip: 'project-chat-recipient-chip', input: 'project-chat-input' },
 ];
 
 // Backspace right after a `@<name>` token (with or without the trailing

@@ -2309,88 +2309,12 @@ async function _csFinish() {
       }
 
       if (spaceId) {
-
-        // Reuse an existing project already bound to this space, so re-running
-        // onboarding doesn't stack duplicate "导入的会话" folders under the same
-        // role. Only create a new one when the space has no project yet. The
-        // project is named after the role template so the sidebar shows it as
-        // the role's workspace, not a generic "导入的会话" bucket.
-        let projectId = '';
-        try {
-          const projList = await window.cogseed.invoke('projects.list', {});
-          const bound = (projList && projList.projects || []).find((p) => p && p.space_id === spaceId);
-          if (bound && bound.project_id) {
-            projectId = bound.project_id;
-            _obLog.info('reusing existing project under role workspace', { spaceId, projectId });
-          }
-        } catch (projListErr) {
-          _obLog.warn('projects.list failed before create', { error: (projListErr && projListErr.message) || String(projListErr) });
-        }
-
-        if (!projectId) {
-          // Project name is the neutral purpose "导入的会话", NOT the role name:
-          // the role/space name is already shown by the sidebar space-group
-          // header above it. Naming the project after the role too would read as
-          // a redundant "产品经理 > 产品经理". So: space = 产品经理, project = 导入的会话.
-          const projectRes = await window.cogseed.invoke('projects.create', { name: '导入的会话' });
-          if (projectRes && projectRes.project && projectRes.project.project_id) {
-            projectId = projectRes.project.project_id;
-            // 把项目挂到工作空间下（项目创建接口本身不接收 spaceId）。
-            try {
-              await window.cogseed.invoke('projects.bindSpace', { projectId, spaceId });
-            } catch (bindErr) {
-              _obLog.warn('failed to bind role project to workspace', {
-                projectId,
-                spaceId,
-                error: (bindErr && bindErr.message) || String(bindErr),
-              });
-            }
-          }
-        }
-
-        if (projectId) {
-
-          // 批量更新所有导入的会话，绑定到这个项目
-          const updateRes = await window.cogseed.invoke('conversations.batchUpdateProject', {
-            conversationIds: _csImportedConversationIds,
-            projectId: projectId,
-          });
-
-          if (updateRes && updateRes.ok) {
-            _obLog.info('bound imported sessions to role workspace project', {
-              templateId: _csRolePicked,
-              spaceId,
-              projectId,
-              updated: updateRes.updated,
-              total: _csImportedConversationIds.length,
-            });
-            _csToast(`已将 ${updateRes.updated} 个导入的会话归入「${spaceName}」角色分组`);
-          }
-
-          // 新项目不在 boot 时的项目缓存里，且默认未展开；先刷新项目缓存并
-          // 展开/加载该项目，否则导入的会话既不在普通会话列表、也不显示在
-          // 项目区（看起来就像导入后丢失了）。
-          try {
-            if (typeof _projectsExpanded === 'object' && _projectsExpanded) {
-              _projectsExpanded[projectId] = true;
-            }
-            if (typeof _saveProjectsExpanded === 'function') _saveProjectsExpanded();
-            if (typeof loadProjects === 'function') await loadProjects(true);
-            if (typeof loadConversationProject === 'function') await loadConversationProject(projectId);
-          } catch (revealErr) {
-            _obLog.warn('failed to reveal imported-session project in sidebar', {
-              projectId,
-              error: (revealErr && revealErr.message) || String(revealErr),
-            });
-          }
-        } else {
-          // 工作空间创建成功，但项目创建失败 - 导入的会话保留在未分组状态
-          _obLog.info('workspace created but project creation failed, imported sessions remain ungrouped', {
-            spaceId,
-            conversationCount: _csImportedConversationIds.length,
-          });
-          _csToast(`已创建「${spaceName}」工作空间，导入的会话已添加到普通对话列表`);
-        }
+        // 空间化后项目层已删：导入的会话保留在普通对话列表（不再绑定项目/空间）。
+        _obLog.info('role workspace ready, imported sessions remain ungrouped', {
+          spaceId,
+          conversationCount: _csImportedConversationIds.length,
+        });
+        _csToast(`已创建「${spaceName}」工作空间，导入的会话已添加到普通对话列表`);
       }
     } catch (err) {
       const msg = (err && err.message) || String(err);

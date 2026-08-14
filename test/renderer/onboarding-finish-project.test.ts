@@ -75,7 +75,7 @@ function loadOnboardingRenderer() {
 }
 
 describe('onboarding finish with a role workspace', () => {
-  it('reveals the freshly created imported-session project in the sidebar', async () => {
+  it('creates the role workspace and keeps imported sessions ungrouped (space refactor)', async () => {
     const { context, calls, loadProjectsCalls, loadConversationProjectCalls } = loadOnboardingRenderer();
 
     await vm.runInContext('_csFinish()', context);
@@ -83,11 +83,11 @@ describe('onboarding finish with a role workspace', () => {
     const spacesCreate = calls.find(([channel]) => channel === 'spaces.create');
     expect(spacesCreate[1]).toEqual({ name: 'product_manager', template_id: 'product_manager' });
 
-    const bindCall = calls.find(([channel]) => channel === 'projects.bindSpace');
-    expect(bindCall[1]).toEqual({ projectId: 'project1', spaceId: 'space1' });
-
-    expect(context._projectsExpanded.project1).toBe(true);
-    expect(loadProjectsCalls).toEqual([true]);
-    expect(loadConversationProjectCalls).toEqual(['project1']);
+    // 空间化后项目层已删：不再创建/绑定项目，导入会话保持未分组。
+    expect(calls.some(([channel]) => channel.startsWith('projects.'))).toBe(false);
+    expect(calls.some(([channel]) => channel === 'conversations.batchUpdateProject')).toBe(false);
+    expect(context._projectsExpanded.project1).toBeUndefined();
+    expect(loadProjectsCalls).toEqual([]);
+    expect(loadConversationProjectCalls).toEqual([]);
   });
 });
