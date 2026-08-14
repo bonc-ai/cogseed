@@ -1,4 +1,5 @@
 import { createLogger } from '../../logger';
+import { normalizeCognitionSourceRefs, type CognitionSourceRef } from '../recall/source-service';
 import { subscribeTaskTerminals, type TaskTerminalEvent, type TaskTerminalListener } from '../group_chat/bus';
 import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../cogseed_runtime/protocol';
 import type { RecallCandidateRecord } from '../recall/candidate-service';
@@ -275,7 +276,45 @@ export async function captureRuntimeKstarClosure(input: RuntimeKstarClosureInput
 }
 
 export async function captureGroupKstarClosure(input: GroupKstarClosureInput): Promise<KstarClosureResult> {
-  const built = buildGroupKstarEpisode(input);
+  // Five-source evidence context: delta-r/delta-a reasoning evolves from ALL
+  // cognition sources. Teaching signals + execution evaluations bound to this
+  // conversation are resolved host-side and attached to the episode before
+  // review inference; connectors may add authorized_external_system refs.
+  let teachingRefs: CognitionSourceRef[] = [];
+  let executionRefs: CognitionSourceRef[] = [];
+  try {
+    const [signals, executionGroups] = await Promise.all([
+      import('../recall/teaching-service').then((m) => m.listUserTeachingSignals(input.userId, {
+        conversationId: input.conversationId,
+        status: 'active',
+        limit: 50,
+      })),
+      import('../recall/source-catalog').then((m) => m.listCognitionSources(input.userId, {
+        kinds: ['execution_evaluation'],
+        conversationId: input.conversationId,
+        limit: 10,
+      })),
+    ]);
+    teachingRefs = normalizeCognitionSourceRefs(signals.map((signal) => ({
+      kind: 'user_teaching_signal',
+      subtype: 'teaching',
+      scope: signal.scope,
+      id: signal.id,
+      ...(signal.title ? { title: signal.title } : {}),
+    })));
+    executionRefs = executionGroups.flatMap((group) => group.items);
+  } catch (error) {
+    log.warn('kstar five-source evidence resolution degraded', {
+      userId: input.userId,
+      conversationId: input.conversationId,
+      error: (error as Error).message,
+    });
+  }
+  const built = buildGroupKstarEpisode({
+    ...input,
+    ...(teachingRefs.length ? { userTeachingSignalRefs: teachingRefs } : {}),
+    ...(executionRefs.length ? { executionEvaluationRefs: executionRefs } : {}),
+  });
   const episode = await enrichEpisodeFromRequirementEvidence(input.userId, input.conversationId, built);
   const result = await serializeClosure(closureLocks, `${input.userId}:${episode.id}`, () => finishClosure(input.userId, episode, input.bridge, input.inferReview));
   try {

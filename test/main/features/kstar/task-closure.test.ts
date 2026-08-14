@@ -275,6 +275,60 @@ describe('KSTAR task closure', () => {
     expect(result.candidates[0]).toMatchObject({ status: 'pending_review', learningSignal: { outcome: 'better_than_expected', deltaR: 0.3 } });
   });
 
+  it('evolves delta reasoning from all five cognition sources in the episode evidence', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const teaching = await import('../../../../src/main/features/recall/teaching-service');
+    // Seed an active teaching signal bound to this conversation (a "记住"
+    // intent message produces a user_teaching_signal source).
+    await teaching.recordTeachingSignalAfterMemoryWrite('closure-user', {
+      conversationId: 'cid-evidence',
+      messageId: 'msg-teach-five',
+      userMessage: '记住：Always validate OAuth state before exchanging the code.',
+      memoryContent: 'Always validate OAuth state before exchanging the code.',
+      memoryScope: 'personal',
+    });
+
+    const inferred = async (_userId: string, builtEpisode: any) => ({
+      review: {
+        expectedResult: builtEpisode.t.userGoal,
+        actualResult: 'Report created.',
+        deltaR: 0.3 as const,
+        deltaA: 0.1 as const,
+        outcome: 'better_than_expected' as const,
+        attribution: 'execution_gap' as const,
+        reason: 'Reusable workflow.',
+        confidence: 0.9,
+        evidenceRefs: builtEpisode.evidenceRefs,
+      },
+      reviewState: 'inferred' as const,
+      inferenceMethod: 'deterministic' as const,
+      needsConfirmation: false,
+    });
+
+    const result = await closure.captureGroupKstarClosure({
+      userId: 'closure-user',
+      runId: 'run-five',
+      conversationId: 'cid-evidence',
+      status: 'completed',
+      startedAtMs: Date.now() - 60_000,
+      finishedAtMs: Date.now(),
+      messages: [{
+        id: 'msg-five', ts: new Date().toISOString(), from: 'user', text: 'Produce the report',
+      }, {
+        id: 'msg-five-result', ts: new Date().toISOString(), from: 'writer', text: 'Done.',
+        produced: ['report.md'],
+        artifacts: [{ id: 'art-five', title: 'report.md' }],
+      }],
+      inferReview: inferred,
+    });
+
+    const kinds = result.episode.evidenceRefs.map((ref) => ref.kind);
+    expect(kinds).toContain('conversation');
+    expect(kinds).toContain('user_teaching_signal');
+    // artifact_file replaces the legacy artifact kind in the v2 taxonomy.
+    expect(kinds).toContain('artifact_file');
+  });
+
   it('confirms a lightweight user verdict and reconciles candidate extraction idempotently', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     const recallBridge = await import('../../../../src/main/features/kstar/recall-bridge');
