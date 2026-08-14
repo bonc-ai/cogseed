@@ -12402,6 +12402,282 @@ body.model-not-configured .main-content { flex-direction: column; }
 }
 .settings-section-head:first-child { margin-top: 0; }
 
+/* ── Hub account page (settings › 账号) ─────────────────────────────── */
+.hub-hero {
+  background: linear-gradient(160deg, #F0FAF5 0%, var(--surface) 58%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 24px 24px 22px;
+  margin-bottom: 6px;
+}
+.hub-hero-compact { padding: 20px 24px; }
+.hub-hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--primary-text);
+  background: var(--primary-soft);
+  border-radius: 999px;
+  padding: 4px 12px;
+  margin-bottom: 10px;
+}
+.hub-hero-badge-on {
+  color: var(--success);
+  background: var(--success-soft);
+}
+.hub-hero-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 6px;
+  letter-spacing: -0.01em;
+}
+.hub-hero-desc {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0 0 18px;
+  max-width: 480px;
+}
+.hub-hero-cta { margin-top: 4px; }
+
+.hub-alert {
+  background: var(--warn, #fef3c7);
+  color: #92400e;
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+/* Account identity line (signed in) */
+.hub-account-line {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 6px 0 12px;
+}
+.hub-account-avatar {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--primary-soft);
+  font-size: 20px;
+  flex: none;
+}
+.hub-account-id { display: flex; flex-direction: column; gap: 2px; }
+.hub-account-id-value {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+.hub-account-id-sub { font-size: 12px; color: var(--muted); }
+
+/* Generic card */
+.hub-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 6px 18px;
+}
+.hub-card-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  margin-bottom: 6px;
+}
+.hub-card-list { padding: 4px 18px; margin-bottom: 6px; }
+.hub-card-icon {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 15px;
+  flex: none;
+}
+.hub-card-body { display: flex; flex-direction: column; gap: 2px; }
+.hub-card-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.hub-card-desc { font-size: 12px; color: var(--muted); line-height: 1.5; }
+.hub-card-empty {
+  padding: 16px 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* Feature grid (signed out) */
+.hub-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.hub-feature-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color .15s, box-shadow .15s, transform .15s;
+}
+.hub-feature-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: 0 2px 10px rgba(24, 84, 60, 0.05);
+  transform: translateY(-1px);
+}
+.hub-feature-icon {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: var(--primary-soft);
+  font-size: 15px;
+}
+.hub-feature-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.hub-feature-desc { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+
+/* Device rows */
+.hub-device-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.hub-device-row:last-child { border-bottom: none; }
+.hub-device-icon {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 14px;
+  flex: none;
+}
+.hub-device-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.hub-device-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.hub-device-meta { font-size: 11.5px; color: var(--muted); }
+
+/* Consent rows */
+.hub-consent-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.hub-consent-row:last-child { border-bottom: none; }
+.hub-consent-scope {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+
+/* Chips */
+.hub-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+.hub-chip-current { color: var(--primary-text); background: var(--primary-soft); }
+.hub-chip-on { color: var(--success); background: var(--success-soft); }
+.hub-chip-off { color: var(--muted); background: var(--bg); }
+
+/* Mini buttons */
+.hub-btn-mini {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--danger);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s, border-color .15s;
+}
+.hub-btn-mini:hover { background: #fef2f2; border-color: var(--danger); }
+.hub-btn-mini-ghost { color: var(--primary-text); }
+.hub-btn-mini-ghost:hover { background: var(--primary-soft); border-color: var(--primary); }
+
+/* Bottom actions */
+.hub-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+  padding-top: 14px;
+}
+
+/* ── Hub account icon polish (SVG via modules/icons.js) ──────────────── */
+.hub-alert-icon { width: 15px; height: 15px; flex: none; margin-right: 6px; vertical-align: -2px; }
+.hub-hero-badge-icon { width: 13px; height: 13px; flex: none; }
+.hub-btn-icon { width: 14px; height: 14px; flex: none; margin-right: 5px; vertical-align: -2px; }
+.hub-chip-icon { width: 12px; height: 12px; flex: none; margin-right: 4px; vertical-align: -1px; }
+.hub-id-sub-icon { width: 12px; height: 12px; flex: none; margin-right: 4px; vertical-align: -1px; color: var(--success); }
+.hub-empty-icon { width: 26px; height: 26px; display: block; margin: 0 auto 8px; color: var(--border-strong); }
+
+/* Feature icons sit in a tinted tile like the rest of the app. */
+.hub-feature-icon .ui-icon { width: 17px; height: 17px; }
+.hub-card-icon .ui-icon { width: 17px; height: 17px; }
+.hub-device-icon .ui-icon { width: 16px; height: 16px; }
+.hub-account-avatar .ui-icon { width: 22px; height: 22px; }
+
+/* Empty states: centered, friendlier than a bare line of text. */
+.hub-card-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 20px 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* Device name: ellipsis on long hostnames, keep actions visible. */
+.hub-device-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hub-device-body { overflow: hidden; }
+.hub-device-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Action buttons: keep icons + label aligned on one line. */
+.hub-actions .btn { display: inline-flex; align-items: center; }
+.hub-btn-mini { display: inline-flex; align-items: center; }
+
+/* Signed-in hero: softer padding so the badge + identity line read first. */
+.hub-hero-compact { padding: 22px 24px 20px; }
+
 /* 4-tab structure (TOKENS/PATTERNS P7). Container carries the bottom border;
    active tab overlaps it with a 2px primary underline. */
 .settings-tabs {
