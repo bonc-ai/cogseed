@@ -3807,6 +3807,9 @@ async function runActorTurnBody(
   // explicitly grants assets per dispatch via the tools' `ability_assets`
   // field, and only those render here. CLI agents never consume this path.
   let recallCitations: RecallPromptCitation[] = [];
+  // Commander-granted assets actually injected into a delegated turn, kept for
+  // the same usage ledger the Commander injection uses (outcome 'dispatched').
+  let dispatchedUsage: Array<{ assetId: string; assetVersion: string }> = [];
   if (!cliAgent) {
     if (isCommander) {
       try {
@@ -3831,6 +3834,12 @@ async function runActorTurnBody(
         const dispatched = await buildDispatchedAssetsPromptBlock(uid, item.dispatchedAssetIds);
         if (dispatched.promptBlock) {
           systemPrompt = `${systemPrompt}\n\n${dispatched.promptBlock}`;
+        }
+        if (dispatched.assets.length) {
+          dispatchedUsage = dispatched.assets.map((asset) => ({
+            assetId: asset.id,
+            assetVersion: asset.version,
+          }));
         }
       } catch (error) {
         log.warn(`Commander-dispatched asset injection failed cid=${cid}: ${(error as Error).message}`);
@@ -5142,6 +5151,23 @@ async function runActorTurnBody(
       const failedUsageWrites = usageWrites.filter((result) => result.status === 'rejected');
       if (failedUsageWrites.length) {
         log.warn(`Recall usage persistence partially failed cid=${cid} failed=${failedUsageWrites.length}`);
+      }
+    }
+    if (dispatchedUsage.length) {
+      // Commander-dispatched grants ride the same usage ledger so the asset
+      // line stays complete: injected (Commander) vs dispatched (Agent).
+      const dispatchedWrites = await Promise.allSettled(dispatchedUsage.map((grant) => recordRecallUsage(uid, {
+        assetId: grant.assetId,
+        assetVersion: grant.assetVersion,
+        taskRunId: item.turnId,
+        messageId: persistedMsg.id,
+        ...(turnProjectId ? { workspaceId: turnProjectId } : {}),
+        boundary: 'real',
+        outcome: 'dispatched',
+      })));
+      const failedDispatchedWrites = dispatchedWrites.filter((result) => result.status === 'rejected');
+      if (failedDispatchedWrites.length) {
+        log.warn(`Recall dispatched usage persistence partially failed cid=${cid} failed=${failedDispatchedWrites.length}`);
       }
     }
     await registerFinalOutputResources(outcome.produced || []);

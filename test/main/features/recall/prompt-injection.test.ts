@@ -367,7 +367,7 @@ describe('confirmed Recall projection prompt injection', () => {
     it('returns an empty block when nothing is granted', async () => {
       const { promptInjection } = await modules();
       const result = await promptInjection.buildDispatchedAssetsPromptBlock('user-a', ['aa-unknown']);
-      expect(result).toEqual({ promptBlock: '', assetIds: [] });
+      expect(result).toEqual({ promptBlock: '', assetIds: [], assets: [] });
     });
   });
 });

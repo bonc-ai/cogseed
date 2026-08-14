@@ -381,6 +381,8 @@ export async function _buildConfirmedProjectionPromptBlockForTest(userId: string
 export interface DispatchedAssetsPromptResult {
   promptBlock: string;
   assetIds: string[];
+  /** Granted assets with their live versions, for usage recording. */
+  assets: Array<{ id: string; version: string }>;
 }
 
 export async function buildDispatchedAssetsPromptBlock(
@@ -389,6 +391,7 @@ export async function buildDispatchedAssetsPromptBlock(
 ): Promise<DispatchedAssetsPromptResult> {
   const records: Array<Record<string, unknown>> = [];
   const granted: string[] = [];
+  const grantedAssets: Array<{ id: string; version: string }> = [];
   for (const assetId of assetIds) {
     if (!assetId) continue;
     let asset: Awaited<ReturnType<typeof readAbilityAsset>> | null = null;
@@ -409,8 +412,9 @@ export async function buildDispatchedAssetsPromptBlock(
       source_refs: asset.evidenceRefs.map((ref) => ({ kind: ref.kind, id: ref.id })),
     });
     granted.push(asset.id);
+    grantedAssets.push({ id: asset.id, version: asset.version });
   }
-  if (!records.length) return { promptBlock: '', assetIds: [] };
+  if (!records.length) return { promptBlock: '', assetIds: [], assets: [] };
   const rendered = renderPromptBlock(records, [
     '### Commander-dispatched ability assets',
     '<commander-dispatched-assets>',
@@ -419,5 +423,6 @@ export async function buildDispatchedAssetsPromptBlock(
   return {
     promptBlock: rendered.block,
     assetIds: granted,
+    assets: grantedAssets,
   };
 }

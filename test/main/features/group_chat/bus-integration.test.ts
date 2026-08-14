@@ -1422,6 +1422,17 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     const commanderCall = _recordedCalls.find((c) => c.sid === state.buildGconvSessionId(cid));
     expect(commanderCall).toBeTruthy();
     expect(commanderCall!.systemPrompt).toContain("<confirmed-ability-assets>");
+
+    // The dispatched grant landed in the usage ledger with outcome 'dispatched'.
+    const usage = await import("../../../../src/main/features/recall/usage-service");
+    const dispatchedRecords = (await usage.listRecallUsage(TEST_UID, asset.id))
+      .filter((record) => record.outcome === "dispatched");
+    expect(dispatchedRecords.length).toBeGreaterThanOrEqual(1);
+    expect(dispatchedRecords[0]).toMatchObject({
+      assetId: asset.id,
+      assetVersion: asset.version,
+      boundary: "real",
+    });
   }, 10_000);
 
   it("rejects dispatch with an unknown or inactive ability asset id", async () => {
