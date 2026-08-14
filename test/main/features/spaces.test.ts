@@ -486,3 +486,35 @@ describe('spaces › listSpaces 失效数（真实有效集合，P3394 假阳性
     expect(me?.invalid_count).toBe(2); // 仅 2 个真失效
   });
 });
+
+describe('spaces › listSpaces 最近活跃会话（last_conversation_*）', () => {
+  beforeEach(() => {
+    visibleSkillIds.clear();
+    visibleAgentIds.clear();
+  });
+
+  it('有会话 → 取最近活跃会话标题/时间；无会话 → 字段缺省', async () => {
+    const spaces = await loadSpaces();
+    const empty = await spaces.createSpace(TEST_UID, { name: '空会话空间' });
+    if (!empty.ok) throw new Error('create failed');
+    const busy = await spaces.createSpace(TEST_UID, { name: '有会话空间' });
+    if (!busy.ok) throw new Error('create failed');
+
+    const chats = await import('../../../src/main/features/chats');
+    await chats.createConversation(TEST_UID, { spaceId: busy.space.space_id, title: '第一条旧任务' });
+    const c2 = await chats.createConversation(TEST_UID, { spaceId: busy.space.space_id, title: '最近任务' });
+    // nowIso 秒级精度：用 bump 把 c2 活动时间往后拨 1 秒，保证最近活跃序稳定
+    const later = new Date(Date.now() + 1000);
+    const pad2 = (n: number) => String(n).padStart(2, '0');
+    const laterTs = `${later.getFullYear()}-${pad2(later.getMonth() + 1)}-${pad2(later.getDate())}T${pad2(later.getHours())}:${pad2(later.getMinutes())}:${pad2(later.getSeconds())}`;
+    await chats.bumpConversationActivity(TEST_UID, c2.conversation_id, laterTs);
+
+    const list = await spaces.listSpaces(TEST_UID);
+    const meEmpty = list.find((s) => s.space_id === empty.space.space_id);
+    const meBusy = list.find((s) => s.space_id === busy.space.space_id);
+    expect(meEmpty?.last_conversation_title).toBeUndefined();
+    expect(meEmpty?.last_conversation_at).toBeUndefined();
+    expect(meBusy?.last_conversation_title).toBe('最近任务');
+    expect(meBusy?.last_conversation_at).toBeTruthy();
+  });
+});

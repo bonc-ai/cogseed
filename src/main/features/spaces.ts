@@ -73,6 +73,10 @@ export interface SpaceWithMeta extends Space {
   skill_count: number;
   agent_count: number;
   invalid_count: number;
+  /** 最近一次活跃会话标题（列表「最近」展示用；无会话则不填）。 */
+  last_conversation_title?: string;
+  /** 最近一次活跃会话时间（最近使用排序用；无会话则不填）。 */
+  last_conversation_at?: string;
 }
 
 /** 派生结果（纯函数输出）。 */
@@ -377,6 +381,12 @@ export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
     const s = await _readSpace(uid, sid);
     if (!s) continue;
     const res = resolveSpaceResources(s, valid);
+    // 最近活跃会话（列表「最近」展示 + 最近使用排序；chats 动态引入避免模块加载链）
+    let lastConv: { title?: string; updated_at?: string; created_at?: string } | undefined;
+    try {
+      const convs = await import('./chats').then((m) => m.listSpaceConversations(uid, sid));
+      lastConv = convs[0];
+    } catch (_) { /* 会话索引异常不阻断列表 */ }
     out.push({
       ...s,
       template_name: res.template?.name,
@@ -385,6 +395,8 @@ export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
       skill_count: res.effective_skills.length + res.invalid_refs.skills.length,
       agent_count: res.effective_agents.length + res.invalid_refs.agents.length,
       invalid_count: res.invalid_refs.skills.length + res.invalid_refs.agents.length,
+      last_conversation_title: lastConv?.title || undefined,
+      last_conversation_at: lastConv?.updated_at || lastConv?.created_at || undefined,
     });
   }
   const collator = new Intl.Collator('zh', { sensitivity: 'base', numeric: true });
