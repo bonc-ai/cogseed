@@ -5381,6 +5381,32 @@ describe("group_chat bus integration › KStar privileged dispatch approval", ()
     });
     unsubscribe();
   }, 10_000);
+
+  it("still blocks a hand_off_to without a committed forecast when the task was NOT auto-created (once-only semantics)", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    // Pre-existing task with confirmed projection but NO forecast: this was
+    // not host-auto-created by THIS dispatch, so the forecast gate must hold.
+    await seedKstarControlledConversation(cid, { projectionStatus: "confirmed" });
+
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "__call_tool__", name: "hand_off_to", input: { to: AGENT_NAME, message: "deliver the report" } },
+      { type: "final", text: "handed off" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "MUST NOT RUN" },
+    ]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "deliver the report" });
+    await waitForQuiescent(TEST_UID, cid, 6000);
+
+    const toolResult = _recordedToolResults.find((r) => r.name === "hand_off_to");
+    expect(toolResult?.isError).toBe(true);
+    expect(JSON.parse(toolResult!.content).error).toMatch(/Forecast is not committed/);
+    // The agent never started.
+    expect(_recordedCalls.filter((c) => c.sid === state.buildGmemberSessionId(cid, AGENT_ID))).toHaveLength(0);
+  }, 10_000);
 });
 
 describe("group_chat bus integration › task terminal boundary", () => {

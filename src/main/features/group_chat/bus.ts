@@ -9006,8 +9006,10 @@ async function buildCommanderExtraTools(
         name: handoffAgent?.name || resolvedId,
         joined_at: nowIso(),
       };
-      // Layer 2 routing uplift: named hand-off is a formal task.
-      await ensureKstarTaskForDispatch(uid, cid, message, currentSourceMessageId, currentProjectId);
+      // Layer 2 routing uplift: named hand-off is a formal task. The
+      // auto-track flag is captured so the forecast gate is waived ONLY for
+      // the dispatch that actually created the task (ONCE semantics).
+      const autoTask = await ensureKstarTaskForDispatch(uid, cid, message, currentSourceMessageId, currentProjectId);
       const prepared = await prepareNestedDispatchForTool(
         state,
         handoffActor,
@@ -9023,7 +9025,7 @@ async function buildCommanderExtraTools(
       const dependencyBlocked =
         await checkPreparedNestedDispatchDependenciesForTool(state, prepared);
       if (dependencyBlocked) return dependencyBlocked;
-      const kstarGuard = await guardKstarPrivilegedDispatch(state, { allowHostAutoTracked: true });
+      const kstarGuard = await guardKstarPrivilegedDispatch(state, { allowHostAutoTracked: autoTask.created });
       if ('content' in kstarGuard) return kstarGuard;
       const pendingWake = await gateNestedAgentWake(
         state,
