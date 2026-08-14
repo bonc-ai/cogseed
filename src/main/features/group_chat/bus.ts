@@ -1837,7 +1837,6 @@ export interface EnqueueParams {
   /** Skip KSTAR requirement routing + Recall projection gating for this
    *  enqueue. Used by the resume path so confirming a projection does not
    *  create a second projection and re-gate the same user message. */
-  skipKstarRouting?: boolean;
   /** Exact committed Recall projection used by the pre-execution Forecast. */
   committedProjectionId?: string;
   /** Forecast frozen before this Commander turn was admitted. */
@@ -10306,6 +10305,5 @@ export async function enqueueCommanderControlMessage(input: EnqueueCommanderCont
     ].join('\n'),
     forceTo: [COMMANDER_ID],
     dispatch: true,
-    skipKstarRouting: true, // retained temporarily only for legacy callers; becomes dead after Task 7
   });
 }

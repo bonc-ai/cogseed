@@ -999,7 +999,6 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
         cid,
         fromActorId: 'user',
         text: 'inspect KStar tools',
-        skipKstarRouting: true,
       });
       await waitForQuiescent(TEST_UID, cid, 4000);
       expect(_recordedToolDefinitions.filter((tool) => tool.name === 'kstar_control')).toHaveLength(1);
