@@ -3797,6 +3797,10 @@ async function runActorTurnBody(
   // Recall is host-owned model context. CLI agents do not consume this system
   // prompt path, so they must not receive or later claim Recall citations.
   let recallCitations: RecallPromptCitation[] = [];
+  // 本轮实际注入了哪些继承认知、哪些没带上——回执（reusedRefs / omittedRefs）
+  // 按这两个记，所以要活到 turn 结束。
+  let inheritedCognition: import("../recall/inherited-cognition-prompt").InheritedCognitionPrompt | null = null;
+  let inheritedWithheld: import("../recall/cognition-selection").WithheldCognition[] = [];
   if (!cliAgent) {
     try {
       const recallContext = await buildRecallTurnPromptContext(uid, {
@@ -3811,6 +3815,35 @@ async function runActorTurnBody(
       }
     } catch (error) {
       log.warn(`Recall prompt injection failed cid=${cid}: ${(error as Error).message}`);
+    }
+
+    // 出生继承的认知。和上面的 Recall 投影是两条来源：投影是这次会话里确认过的
+    // 上下文，继承是这个 Agent 出生时就带着的。两者都只走宿主拼的 system prompt，
+    // CLI Agent 不消费这条路径，所以也不能拿到（否则它事后会声称用过）。
+    // actor.id 就是 agent id（上面 getAgent(actor.id) 用的同一个）。G8b 临时 worker
+    // 没有 agent.json，读出来是 null，走同一条降级路径。
+    if (agentsFeat.isValidAgentId(actor.id)) {
+      try {
+        const [{ selectInheritedCognition }, { buildInheritedCognitionPrompt }] = await Promise.all([
+          import("../recall/cognition-selection"),
+          import("../recall/inherited-cognition-prompt"),
+        ]);
+        const selection = await selectInheritedCognition(uid, actor.id, {
+          ...(turnProjectId ? { projectId: turnProjectId } : {}),
+        });
+        // null = 这个 Agent 生成时还没有继承机制，和「继承了空」不是一回事，
+        // 但对提示词而言都是没有可注入的内容。
+        if (selection?.selected.length) {
+          inheritedCognition = buildInheritedCognitionPrompt(selection.selected);
+          inheritedWithheld = selection.withheld;
+          if (inheritedCognition.promptBlock) {
+            systemPrompt = `${systemPrompt}\n\n${inheritedCognition.promptBlock}`;
+          }
+        }
+      } catch (error) {
+        // 继承注入失败不该让这一轮对话起不来——降级成这次不带继承认知。
+        log.warn(`Inherited cognition injection failed cid=${cid}: ${(error as Error).message}`);
+      }
     }
   }
 
