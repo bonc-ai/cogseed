@@ -178,6 +178,13 @@ export interface WorldModelKnowledge {
   assetVersions?: Record<string, string>;
   /** Legacy records store bare rules; new records store versioned rule refs. */
   rules: Array<CausalRule | WorldModelCausalRuleRef>;
+  /**
+   * Ontology assets — the user's durable personal facts/preferences held in
+   * memory (USER.md / MEMORY.md), modeled as `personal` ability assets.
+   * Unlike abilityAssets they are NOT projection-selected: they are loaded
+   * unconditionally so the world model reasons over the user's identity.
+   */
+  ontologyAssets?: WorldModelAbilityAsset[];
 }
 
 export interface WorldModelSituation {

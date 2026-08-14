@@ -264,4 +264,66 @@ describe('Commander Forecast host commit', () => {
     })).rejects.toMatchObject({ code: 'kstar_invalid_candidate' });
     expect(forecastFiles()).toEqual([]);
   });
+
+  it('loads durable personal ontology into K from USER.md and MEMORY.md (Q4)', async () => {
+    const seeded = await seedForecastBoundary({ confirmed: true });
+    const memoryDir = path.join(tmpDir, 'user-a', 'cloud', 'memory');
+    fs.mkdirSync(memoryDir, { recursive: true });
+    fs.writeFileSync(path.join(memoryDir, 'USER.md'), 'The user prefers concise technical answers.\n\u00a7\nThe user works primarily in TypeScript.\n');
+    fs.writeFileSync(path.join(memoryDir, 'MEMORY.md'), 'Shared fact: the team uses conventional commits.\n');
+
+    const forecast = await import('../../../../src/main/features/kstar/forecast-commit');
+    const record = await forecast.commitCommanderForecast('user-a', seeded.input);
+
+    expect(record.input.k.ontologyAssets).toHaveLength(3);
+    expect(record.input.k.ontologyAssets).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'personal',
+        scope: 'general',
+        maturity: 'bud',
+        title: 'The user prefers concise technical answers.',
+      }),
+      expect.objectContaining({
+        type: 'personal',
+        title: 'The user works primarily in TypeScript.',
+      }),
+      expect.objectContaining({
+        type: 'personal',
+        title: 'Shared fact: the team uses conventional commits.',
+      }),
+    ]));
+    // Ontology assets never pollute the projection-selected refs/versions.
+    expect(record.input.k.abilityAssetRefs).toEqual([seeded.selectedAsset.id]);
+    expect(Object.keys(record.input.k.assetVersions || {})).toEqual([seeded.selectedAsset.id]);
+    // Snapshot ontology totals include the memory-derived assets (1 selected
+    // + 3 ontology entries).
+    expect(record.snapshotId).toBeTruthy();
+  });
+
+  it('degrades gracefully when memory files are absent (Q4)', async () => {
+    const seeded = await seedForecastBoundary({ confirmed: true });
+    const forecast = await import('../../../../src/main/features/kstar/forecast-commit');
+    const record = await forecast.commitCommanderForecast('user-a', seeded.input);
+    expect(record.input.k.ontologyAssets).toEqual([]);
+  });
+
+  it('injects ontology assets into the committed-projection prompt block without citations (Q4)', async () => {
+    const seeded = await seedForecastBoundary({ confirmed: true });
+    const memoryDir = path.join(tmpDir, 'user-a', 'cloud', 'memory');
+    fs.mkdirSync(memoryDir, { recursive: true });
+    fs.writeFileSync(path.join(memoryDir, 'USER.md'), 'The user prefers concise technical answers.\n');
+
+    const injection = await import('../../../../src/main/features/recall/prompt-injection');
+    const context = await injection.buildRecallTurnPromptContext('user-a', {
+      cid: 'cid-a',
+      committedProjectionId: seeded.projection.id,
+    });
+
+    expect(context.promptBlock).toContain('The user prefers concise technical answers.');
+    expect(context.promptBlock).toContain('"type":"personal"');
+    // Ontology is visible to the model but never surfaces as a citation.
+    const ontologyCitation = context.citations.find((citation) => citation.assetId.startsWith('onto-'));
+    expect(ontologyCitation).toBeUndefined();
+    expect(context.citations.map((citation) => citation.assetId)).toContain(seeded.selectedAsset.id);
+  });
 });

@@ -210,17 +210,33 @@ async function buildPromptContextForCommittedProjection(
   forecastId?: string,
 ): Promise<RecallTurnPromptContext> {
   const knowledge = await loadCommittedProjectionKnowledge(userId, projectionId);
-  const records = knowledge.abilityAssets.map((asset) => ({
-    projection_id: knowledge.projectionId,
-    asset_id: asset.id,
-    title: safePromptText(asset.title, 160),
-    type: asset.type,
-    maturity: asset.maturity,
-    scope: safePromptText(asset.scope, 500),
-    version: asset.version,
-    statement: safePromptText(asset.statement, MAX_STATEMENT_LENGTH),
-    source_refs: asset.evidenceRefs.map((ref) => ({ kind: ref.kind, id: ref.id })),
-  }));
+  const records = [
+    ...knowledge.abilityAssets.map((asset) => ({
+      projection_id: knowledge.projectionId,
+      asset_id: asset.id,
+      title: safePromptText(asset.title, 160),
+      type: asset.type,
+      maturity: asset.maturity,
+      scope: safePromptText(asset.scope, 500),
+      version: asset.version,
+      statement: safePromptText(asset.statement, MAX_STATEMENT_LENGTH),
+      source_refs: asset.evidenceRefs.map((ref) => ({ kind: ref.kind, id: ref.id })),
+    })),
+    // Ontology (durable personal facts) rides along as personal ability
+    // assets; it is not projection-selected, so it never contributes to
+    // citations.
+    ...knowledge.ontologyAssets.map((asset) => ({
+      projection_id: knowledge.projectionId,
+      asset_id: asset.id,
+      title: safePromptText(asset.title, 160),
+      type: asset.type,
+      maturity: asset.maturity,
+      scope: safePromptText(asset.scope, 500),
+      version: asset.version,
+      statement: safePromptText(asset.statement, MAX_STATEMENT_LENGTH),
+      source_refs: asset.evidenceRefs.map((ref) => ({ kind: ref.kind, id: ref.id })),
+    })),
+  ];
   const rendered = renderPromptBlock(records);
   return {
     promptBlock: rendered.block,

@@ -216,8 +216,8 @@ export async function commitCommanderForecast(
       status: knowledge.abilityAssets.length ? 'ok' : 'empty',
     },
     ontology: {
-      totalAssets: knowledge.abilityAssets.length,
-      activeAssets: knowledge.abilityAssets.length,
+      totalAssets: knowledge.abilityAssets.length + knowledge.ontologyAssets.length,
+      activeAssets: knowledge.abilityAssets.length + knowledge.ontologyAssets.length,
       totalRules: rules.length,
     },
   });
@@ -231,6 +231,7 @@ export async function commitCommanderForecast(
       abilityAssets: knowledge.abilityAssets,
       assetVersions: knowledge.assetVersions,
       rules: knowledge.rules,
+      ontologyAssets: knowledge.ontologyAssets,
     },
     s: {
       snapshotId: snapshot.id,
