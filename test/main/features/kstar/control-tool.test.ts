@@ -10,15 +10,15 @@ afterEach(() => {
 });
 
 describe('Commander KStar control tool', () => {
-  it('is disabled by default during rollout and enabled only by exact 1', async () => {
+  it('is enabled by default and disabled only by exact 0', async () => {
     delete process.env.ORKAS_COMMANDER_CENTRIC_KSTAR;
     let module = await import('../../../../src/main/features/kstar/control-tool');
-    expect(module.isCommanderCentricKstarEnabled()).toBe(false);
+    expect(module.isCommanderCentricKstarEnabled()).toBe(true);
 
-    process.env.ORKAS_COMMANDER_CENTRIC_KSTAR = '0';
-    expect(module.isCommanderCentricKstarEnabled()).toBe(false);
     process.env.ORKAS_COMMANDER_CENTRIC_KSTAR = '1';
     expect(module.isCommanderCentricKstarEnabled()).toBe(true);
+    process.env.ORKAS_COMMANDER_CENTRIC_KSTAR = '0';
+    expect(module.isCommanderCentricKstarEnabled()).toBe(false);
   });
 
   it('binds host scope and resolved runtime outside model input', async () => {

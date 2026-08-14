@@ -2391,31 +2391,6 @@ async function _enqueueBody(
     }
   }
 
-  // Route KSTAR synchronously for user messages so a Recall projection
-  // preview can gate the Commander dispatch BEFORE the turn starts. When a
-  // preview is created, the user message is routed to the human-only sink
-  // and the Commander turn is resumed only after the user confirms the card.
-  let projectionPreviewCreated: { projectionId: string; requirementId: string; taskRunId: string } | undefined;
-  if (fromActorId === USER_ID && !params.skipKstarRouting) {
-    try {
-      const { routeKstarUserMessage } = await import('../kstar/requirement-state');
-      const routed = await routeKstarUserMessage(uid, {
-        conversationId: cid,
-        messageId: msgId,
-        text: String(text || ''),
-        ...(conversationProjectId ? { workspaceId: conversationProjectId } : {}),
-      });
-      if (routed.projectionPreviewCreated?.projectionId) {
-        projectionPreviewCreated = routed.projectionPreviewCreated;
-        to = [USER_ID];
-      }
-      const { drainKstarTaskState } = await import('../kstar/task-aggregate');
-      await drainKstarTaskState(uid, cid);
-    } catch (err) {
-      log.warn(`KSTAR requirement routing failed cid=${cid}: ${(err as Error).message}`);
-    }
-  }
-
   const msg: GroupMessage = {
     id: msgId,
     ts,
@@ -2534,51 +2509,10 @@ async function _enqueueBody(
     `enqueue user=${uid} cid=${cid} msg=${msgId} from=${fromActorId} to=${to.join(",")} len=${rewrittenText.length}${params.turn_end ? " turn_end=1" : ""}${unknown.length ? ` unknown=${unknown.join(",")}` : ""}`,
   );
 
-  // When a Recall projection preview gates this user message, persist the
-  // pending dispatch so the user's confirm action can resume the Commander
-  // turn, then post the visible preload-candidate card.
-  if (projectionPreviewCreated) {
-    try {
-      const { setPendingProjectionDispatch } = await import('./state');
-      await setPendingProjectionDispatch(uid, cid, {
-        projectionId: projectionPreviewCreated.projectionId,
-        requirementId: projectionPreviewCreated.requirementId,
-        taskRunId: projectionPreviewCreated.taskRunId,
-        userMessageId: msgId,
-        userMessageText: String(text || ''),
-        status: 'waiting_confirmation',
-        createdAt: ts,
-        updatedAt: ts,
-      });
-    } catch (err) {
-      log.warn(`pending projection dispatch persist failed cid=${cid}: ${(err as Error).message}`);
-    }
-    try {
-      const { postProjectionCardMessage } = await import('../recall/projection-message');
-      await postProjectionCardMessage(uid, {
-        cid,
-        projectionId: projectionPreviewCreated.projectionId,
-      }, {
-        send: async (payload) => {
-          const posted = await enqueue({
-            uid,
-            cid: payload.cid,
-            fromActorId: COMMANDER_ID,
-            forceTo: [USER_ID],
-            text: String(payload.text || ''),
-            recall_projection_card: { projectionId: payload.card.projectionId },
-          });
-          return { id: posted.id };
-        },
-      });
-    } catch (err) {
-      log.warn(`projection card post failed cid=${cid}: ${(err as Error).message}`);
-    }
-  }
-
-  // Dispatch to non-user recipients. When the projection gate above routed
-  // `to` to the human-only sink, this loop is naturally a no-op for the user
-  // message; the Commander turn starts only after `resumePendingProjectionDispatch`.
+  // Dispatch to non-user recipients. User routing remains the ordinary
+  // group-chat rule (user -> Commander unless an explicit floor/mention
+  // chooses another actor). KStar bookkeeping happens only through
+  // Commander-owned kstar_control calls and cannot gate this turn.
 
   let backendFollowupHandled = false;
   if (backendFollowupAgentId) {

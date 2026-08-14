@@ -17,7 +17,9 @@ export interface CreateKstarControlToolOptions {
 }
 
 export function isCommanderCentricKstarEnabled(): boolean {
-  return process.env.ORKAS_COMMANDER_CENTRIC_KSTAR === '1';
+  // Commander-centric KStar is the default. Only an exact '0' disables the
+  // tool; the disabled state never reinstates the deleted pre-router.
+  return process.env.ORKAS_COMMANDER_CENTRIC_KSTAR !== '0';
 }
 
 const INPUT_SCHEMA: Record<string, unknown> = {

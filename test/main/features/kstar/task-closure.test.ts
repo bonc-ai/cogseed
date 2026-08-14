@@ -56,11 +56,23 @@ describe('KSTAR task closure', () => {
 
 
   it('attaches group terminal episodes to the open requirement without completing the task', async () => {
-    const state = await import('../../../../src/main/features/kstar/requirement-state');
     const store = await import('../../../../src/main/features/kstar/requirement-store');
-    await state.routeKstarUserMessage('closure-user', {
-      conversationId: 'cid-phase2', messageId: 'msg-user-a', text: 'Review OAuth callback handling',
-    }, { routerOptions: { classify: async () => ({ intent: 'new', confidence: 0.95, reason: 'new task', requirementText: 'Review OAuth callback handling' }) } });
+    const task = store.createKstarTaskRecord('closure-user', { conversationId: 'cid-phase2', title: 'Review OAuth callback handling' });
+    const requirement = store.createKstarRequirementRecord('closure-user', {
+      taskId: task.id,
+      conversationId: 'cid-phase2',
+      userMessageIds: ['msg-user-a'],
+      title: 'Review OAuth callback handling',
+      goalText: 'Review OAuth callback handling',
+    });
+    await store.replaceKstarTask('closure-user', { ...task, requirementIds: [requirement.id], currentRequirementId: requirement.id });
+    await store.replaceKstarRequirement('closure-user', requirement);
+    await store.writeConversationTaskState('closure-user', {
+      ...store.createInitialConversationTaskState('closure-user', 'cid-phase2'),
+      currentTaskId: task.id,
+      currentRequirementId: requirement.id,
+      taskComplete: false,
+    });
     const before = await store.readConversationTaskState('closure-user', 'cid-phase2');
     expect(before?.currentRequirementId).toBeTruthy();
 

@@ -12,7 +12,6 @@ export * from './knowledge-route-service';
 export * from './review-card';
 export * from './requirement-types';
 export * from './requirement-store';
-export * from './requirement-router';
 export * from './requirement-state';
 export * from './requirement-closure';
 export * from './task-aggregate';

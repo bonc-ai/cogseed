@@ -10,6 +10,12 @@ export const KSTAR_PRM_WEIGHTS = Object.freeze({
   clarity: 0.2,
 });
 
+/**
+ * @deprecated Legacy audit vocabulary from the removed pre-Commander router.
+ * Kept only for schema/source compatibility of persisted records. No new
+ * runtime code may import or write this intent; the Commander decides the
+ * lifecycle through kstar_control operations.
+ */
 export type KstarRequirementIntent = 'new' | 'continue' | 'complete' | 'topic_switch';
 export type KstarTaskPhase = 'open' | 'closing' | 'closed' | 'abandoned';
 export type KstarRequirementStatus = 'open' | 'waiting_review' | 'closed' | 'abandoned';
