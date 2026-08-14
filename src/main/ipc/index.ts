@@ -2309,6 +2309,33 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'recall.proofs.effectiveness.feedback': async ({ transferProofId, feedback, note, evidenceRefs } = {}, ctx) => { if (!safeId(transferProofId) || !['positive', 'neutral', 'negative', 'invalid', 'rework'].includes(feedback) || (note !== undefined && typeof note !== 'string') || (evidenceRefs !== undefined && !Array.isArray(evidenceRefs))) throw new Error('invalid effectiveness feedback'); return { ok: true, proof: await effectivenessFeedback.recordEffectivenessFeedback(ctx.userId, { transferProofId, feedback, ...(note !== undefined ? { note } : {}), ...(evidenceRefs !== undefined ? { evidenceRefs } : {}) }) }; },
   'recall.proofs.effectiveness.feedbackForTask': async ({ taskRunId, feedback, note, evidenceRefs } = {}, ctx) => { if (!safeId(taskRunId) || !['positive', 'neutral', 'negative', 'invalid', 'rework'].includes(feedback) || (note !== undefined && typeof note !== 'string') || (evidenceRefs !== undefined && !Array.isArray(evidenceRefs))) throw new Error('invalid effectiveness feedback'); return { ok: true, ...(await effectivenessFeedback.recordTaskEffectivenessFeedback(ctx.userId, { taskRunId, feedback, ...(note !== undefined ? { note } : {}), ...(evidenceRefs !== undefined ? { evidenceRefs } : {}) })) }; },
+  // 跨作用域使用的确认与撤回。规范 10.2 要求「确认」，这里是确认真正发生的地方
+  // ——没有它，confirm 档只会永远停在等待里。撤回后立刻回到需要确认的状态。
+  'recall.assets.crossScope': async ({ assetId, confirmed, reason } = {}, ctx) => {
+    if (!safeId(assetId) || typeof confirmed !== 'boolean') throw new Error('invalid cross-scope confirmation');
+    return {
+      ok: true,
+      asset: await recallAssets.setAbilityAssetCrossScopeConfirmation(ctx.userId, assetId, confirmed, {
+        actor: 'user',
+        reason: typeof reason === 'string' && reason.trim() ? reason : 'cross-scope use decision',
+      }),
+    };
+  },
+
+  // 按资产反查证明。迁移证明说「被带过去用了」，效果证明说「用了有没有帮上忙」
+  // ——两者不合并成一个「已验证」布尔值，outcome=worse 也是一条证明。
+  'recall.proofs.list': async ({ assetId } = {}, ctx) => {
+    if (!safeId(assetId)) throw new Error('invalid recall asset id');
+    return { ok: true, proofs: await recallProofs.listAssetProofs(ctx.userId, assetId) };
+  },
+
+  // 一条认知的履历：从哪来、进过哪些智能体、真用过几次、哪几次没带上。
+  // 这是履历不是进度条——渲染层不得把 `not_yet` 画成红色或警告。
+  'recall.cognitionChain.read': async ({ assetId } = {}, ctx) => {
+    if (!safeId(assetId)) throw new Error('invalid recall asset id');
+    const { traceCognitionChainByAsset } = await import('../features/recall/cognition-chain');
+    return { ok: true, chain: await traceCognitionChainByAsset(ctx.userId, assetId) };
+  },
   'recall.tree.read': async (_args, ctx) => ({ ok: true, tree: await recallTree.readCognitionTree(ctx.userId) }),
   'recall.tree.rebuild': async (_args, ctx) => ({ ok: true, tree: await recallTree.rebuildCognitionTree(ctx.userId) }),
   'recall.usage.list': async ({ assetId } = {}, ctx) => { if (assetId !== undefined && !safeId(assetId)) throw new Error('invalid recall asset id'); return { ok: true, usage: await recallUsage.listRecallUsage(ctx.userId, assetId) }; },
@@ -2666,6 +2693,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const agent = await agents.getAgent(agent_id);
     if (!agent) throw new Error('agent not found');
     return { agent };
+  },
+
+  // 「查看继承内容」入口。inheritance 为 null 表示这个 Agent 生成时还没有继承
+  // 机制，渲染层必须把它和「继承为空」分开说，不能都显示成没继承任何东西。
+  'agents.inheritance': async ({ agent_id } = {}, ctx) => {
+    if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
+    const { readAgentInheritance } = await import('../features/agent_inheritance');
+    return { ok: true, inheritance: await readAgentInheritance(ctx.userId, agent_id) };
   },
 
   'agents.create': async ({ name = '', description = '', description_zh, description_en, workflow = '', icon, color, runtime, category, output_format } = {}) => {

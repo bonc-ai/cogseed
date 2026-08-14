@@ -23,7 +23,7 @@ export type { CapturePromptMessage, ListRecallCapturesQuery, RecallCaptureCounts
 export { isWithinNightlyWindow, nextNightlyRunAt, readRecallCaptureSettings, updateRecallCaptureSettings } from './capture-settings';
 export type { RecallCaptureExecutionPolicy, RecallCaptureSettingsRecord, UpdateRecallCaptureSettingsInput } from './capture-settings';
 
-export { archiveAbilityAsset, deleteAbilityAsset, downgradeAbilityAssetMaturityForRevokedEvidence, initializeAbilityAsset, listAbilityAssetAudit, listAbilityAssetVersions, listAbilityAssets, pauseAbilityAsset, purgeAbilityAsset, readAbilityAsset, recommendAbilityAssetAction, restoreAbilityAsset, resumeAbilityAsset, revokeAbilityAsset, rollbackAbilityAsset, setAbilityAssetMaturity, updateAbilityAsset } from './asset-service';
+export { archiveAbilityAsset, deleteAbilityAsset, downgradeAbilityAssetMaturityForRevokedEvidence, initializeAbilityAsset, listAbilityAssetAudit, listAbilityAssetVersions, listAbilityAssets, pauseAbilityAsset, purgeAbilityAsset, readAbilityAsset, recommendAbilityAssetAction, restoreAbilityAsset, resumeAbilityAsset, revokeAbilityAsset, rollbackAbilityAsset, setAbilityAssetCrossScopeConfirmation, setAbilityAssetMaturity, updateAbilityAsset } from './asset-service';
 export type { AbilityAssetActor, AbilityAssetAuditRecord, AbilityAssetRecommendedAction, AbilityAssetUserActionInput, AbilityAssetVersionRecord, RecommendAbilityAssetActionInput, UpdateAbilityAssetInput } from './asset-service';
 
 export { confirmRecallSkillDraft, prepareRecallSkillDraft, readInstalledSkillForAsset, readRecallSkillDraft } from './skill-draft-service';

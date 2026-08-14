@@ -12,9 +12,13 @@ import type { RecallJsonRecord } from './types';
 import { normalizeAbilityAssetOntologyRefs } from './ontology-refs';
 import type { RecallAbilityAssetRecord } from './candidate-service';
 import { readAbilityAssetRelationContract } from './asset-relations';
+import { readAbilityAssetSemantics } from './asset-semantics';
 import { normalizeAbilityAssetScopePolicy, type RecallAbilityAssetScopePolicy } from './scope-policy';
 import { assertNotForbiddenToPersist } from '../../util/cognition-sensitivity';
 import { normalizeCausalRule } from './world-model-types';
+import { createLogger } from '../../logger';
+
+const log = createLogger('recall.assets');
 
 export type AbilityAssetActor = 'user' | 'system';
 export type AbilityAssetRecommendedAction = 'pause' | 'rework';
@@ -30,6 +34,7 @@ export interface AbilityAssetVersionRecord extends RecallJsonRecord {
     | 'title' | 'statement' | 'type' | 'scope' | 'scopePolicy' | 'evidenceRefs'
     | 'status' | 'maturity' | 'version' | 'learningSignal' | 'learningProvenance'
     | 'ontologyRefs' | 'relations' | 'derivedFrom'
+    | 'applicableWhen' | 'forbiddenWhen' | 'sensitivity'
   >;
 }
 
@@ -38,7 +43,11 @@ export interface AbilityAssetAuditRecord extends RecallJsonRecord {
   action: 'created' | 'updated' | 'paused' | 'resumed' | 'revoked'
     | 'archived' | 'deleted' | 'purged' | 'restored' | 'rolled_back'
     | 'maturity_downgraded' | 'pause_recommended' | 'rework_recommended'
-    | 'recommendation_cleared';
+    | 'recommendation_cleared'
+    | 'cross_scope_confirmed' | 'cross_scope_withdrawn'
+    // 修正归档错误，**不是**靠证据挣来的升档。审计里要分得开，否则日后
+    // 回看会以为这条资产做过 transfer proof。
+    | 'maturity_corrected';
   at: string;
   actor?: AbilityAssetActor;
   note?: string;
@@ -54,6 +63,9 @@ export interface UpdateAbilityAssetInput {
   ontologyRefs?: RecallAbilityAssetRecord['ontologyRefs'];
   relations?: RecallAbilityAssetRecord['relations'];
   derivedFrom?: RecallAbilityAssetRecord['derivedFrom'];
+  applicableWhen?: RecallAbilityAssetRecord['applicableWhen'];
+  forbiddenWhen?: RecallAbilityAssetRecord['forbiddenWhen'];
+  sensitivity?: RecallAbilityAssetRecord['sensitivity'];
   reason: string;
   actor: 'user';
   acknowledgeRecommendation?: boolean;
@@ -197,6 +209,9 @@ function snapshot(asset: RecallAbilityAssetRecord): AbilityAssetVersionRecord['s
     ...(asset.ontologyRefs ? { ontologyRefs: asset.ontologyRefs } : {}),
     ...(asset.relations ? { relations: asset.relations } : {}),
     ...(asset.derivedFrom ? { derivedFrom: asset.derivedFrom } : {}),
+    ...(asset.applicableWhen ? { applicableWhen: asset.applicableWhen } : {}),
+    ...(asset.forbiddenWhen ? { forbiddenWhen: asset.forbiddenWhen } : {}),
+    ...(asset.sensitivity ? { sensitivity: asset.sensitivity } : {}),
     status: asset.status,
     maturity: asset.maturity,
     version: asset.version,
@@ -277,7 +292,11 @@ export async function createAbilityAsset(
   if (!safeId(validated.candidateId) || !/^rd_[A-Za-z0-9_-]{8,64}$/.test(validated.reviewDecisionId)) {
     throw new Error('invalid ability asset handoff identity');
   }
-  if (validated.lifecycleStatus !== 'user_confirmed_unverified' || validated.maturity !== 'seed' || validated.version !== '1') {
+  // 新资产的起点是 bud：走到这里说明用户在评审里确认过内容了，而 seed 在
+  // 规范 10.2 里是候选档——候选是 RecallCandidateRecord，不是资产。归成 seed
+  // 会和它自己的 lifecycleStatus「user_confirmed_unverified」自相矛盾，也会让
+  // 它在使用矩阵里一律 never，从此进不了任何 Agent 也升不了档。
+  if (validated.lifecycleStatus !== 'user_confirmed_unverified' || validated.maturity !== 'bud' || validated.version !== '1') {
     throw new Error('invalid initial ability asset lifecycle');
   }
   const stored = asAsset(await updateRecallJsonRecord(
@@ -317,6 +336,7 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
   if (evidenceRefs && !evidenceRefs.length) throw new Error('ability asset evidence is required');
   const ontologyRefs = input.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(input.ontologyRefs);
   const relationContract = readAbilityAssetRelationContract(input as unknown as Record<string, unknown>, assetId);
+  const semantics = readAbilityAssetSemantics(input as unknown as Record<string, unknown>);
   const scopePolicy = input.scopePolicy === undefined ? undefined : normalizeAbilityAssetScopePolicy(input.scopePolicy);
   const reviewDecisionId = input.reviewDecisionId;
   const sourceCandidateId = input.sourceCandidateId;
@@ -327,6 +347,10 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
     input.title,
     input.statement,
     input.scope,
+    // 条件同样是用户手写、会被冻进能力包并注入提示的自由文本，
+    // 不过闸就等于给凭证留了一条只换字段名的旁路。
+    ...(semantics.applicableWhen || []),
+    ...(semantics.forbiddenWhen || []),
   ]);
   let clearedRecommendation = false;
   let changed = false;
@@ -348,6 +372,7 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
       ...(evidenceRefs !== undefined ? { evidenceRefs } : {}),
       ...(ontologyRefs !== undefined ? { ontologyRefs } : {}),
       ...relationContract,
+      ...semantics,
       version: nextVersion(current.version),
       ...(reviewDecisionId ? {
         appliedReviewDecisionIds: [...new Set([...(current.appliedReviewDecisionIds || []), reviewDecisionId])],
@@ -451,6 +476,99 @@ export function resumeAbilityAsset(userId: string, assetId: string, input: Abili
   return setStatus(userId, assetId, 'active', input);
 }
 
+/**
+ * 记下用户确认「这条可以跨作用域使用」，或撤回这个确认。
+ *
+ * 规范 10.2 把跨作用域定为 confirm 档。既然规范要求「确认」，系统就得有地方
+ * 记下确认发生过——否则那一档只会永远停在等待里：选择层算出 confirm、渲染侧
+ * 不注入、回执记 needs_confirmation，然后没有任何人能让它继续走下去。
+ *
+ * 做成资产上的持久授权而不是每轮弹窗：它和 pause/revoke 是同一类东西——用户
+ * 的一次决定，可审计、可撤回、在详情页看得见。每轮打断反而会让用户养成闭眼
+ * 点确认的习惯，那时候这道闸就名存实亡了。
+ *
+ * 撤销后立刻回到 confirm 档：授权是可收回的，不是一次性放行。
+ */
+/**
+ * 把 33a16ad 之前 promote 出来的资产从 seed 修正到 bud。
+ *
+ * 那次改动之前，promote 写下的两个字段是自相矛盾的：lifecycleStatus 说
+ * 「user_confirmed_unverified」，maturity 却归在 seed（规范 10.2 里 seed 是
+ * Candidate 档）。接上选择层之后这个矛盾变成实的——seed 一律 never，于是这些
+ * 资产永远进不了任何 Agent，也永远升不了档（seed→bud 没有任何路径）。
+ *
+ * **只改归档错误，不放宽策略。** 判据是那对矛盾本身：lifecycleStatus 已确认
+ * 且 maturity 仍是 seed。满足这两条的资产，它的 seed 是系统写错的，不是用户
+ * 的决定——让用户逐条去修系统的错不合理。
+ *
+ * 其余一概不碰：没有 lifecycleStatus 的、已经是 bud 以上的、已撤销或已清除的。
+ *
+ * 审计动作用 maturity_corrected 而不是复用升档语义：这是修正，不是靠证据挣来
+ * 的晋级，日后回看不能把两者混为一谈。
+ *
+ * 幂等：跑完一次之后就没有符合判据的记录了，重启再跑是空转。
+ */
+export async function correctMisfiledSeedMaturity(userId: string): Promise<number> {
+  let corrected = 0;
+  for (const asset of await listAbilityAssets(userId)) {
+    if (asset.maturity !== 'seed') continue;
+    if (asset.lifecycleStatus !== 'user_confirmed_unverified') continue;
+    if (asset.status === 'revoked' || asset.status === 'purged') continue;
+    try {
+      await updateRecallJsonRecord(userId, 'ability-assets', asset.id, (raw) => {
+        if (!raw) throw new Error('recall ability asset not found');
+        const current = asAsset(raw);
+        // 并发下可能已经被别处改过，再确认一次判据仍然成立。
+        if (current.maturity !== 'seed' || current.lifecycleStatus !== 'user_confirmed_unverified') return current;
+        return { ...current, maturity: 'bud', updatedAt: new Date().toISOString() };
+      });
+      await appendAudit(userId, asset.id, 'maturity_corrected', {
+        actor: 'system',
+        note: 'seed→bud: promote 时的归档错误，lifecycleStatus 已是 user_confirmed_unverified',
+      });
+      corrected += 1;
+    } catch (err) {
+      // 单条修不了不该拦住其余的——它下次启动还会被扫到。
+      log.warn(`ability asset maturity correction skipped id=${asset.id}: ${(err as Error).message}`);
+    }
+  }
+  if (corrected) log.info(`ability asset maturity corrected seed->bud count=${corrected}`);
+  return corrected;
+}
+
+export async function setAbilityAssetCrossScopeConfirmation(
+  userId: string,
+  assetId: string,
+  confirmed: boolean,
+  input: AbilityAssetUserActionInput,
+): Promise<RecallAbilityAssetRecord> {
+  const action = requireUserAction(input);
+  let changed = false;
+  const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
+    if (!raw) throw new Error('recall ability asset not found');
+    const current = asAsset(raw);
+    assertNotPurged(current);
+    if (current.status === 'revoked') throw new Error('revoked ability asset cannot be changed');
+    if (Boolean(current.crossScopeConfirmedAt) === confirmed) return current;
+    changed = true;
+    const next: RecallAbilityAssetRecord = {
+      ...current,
+      ...(confirmed ? { crossScopeConfirmedAt: new Date().toISOString() } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    if (!confirmed) delete next.crossScopeConfirmedAt;
+    return next;
+  });
+  const asset = asAsset(updated);
+  if (changed) {
+    await appendAudit(userId, asset.id, confirmed ? 'cross_scope_confirmed' : 'cross_scope_withdrawn', {
+      note: action.reason,
+      actor: action.actor,
+    });
+  }
+  return asset;
+}
+
 export async function recommendAbilityAssetAction(userId: string, assetId: string, input: RecommendAbilityAssetActionInput): Promise<RecallAbilityAssetRecord> {
   if (input.action !== 'pause' && input.action !== 'rework') throw new Error('invalid ability asset recommendation');
   const reason = bounded(input.reason, 'recommendation reason', 1_000);
@@ -510,6 +628,14 @@ export async function purgeAbilityAsset(userId: string, assetId: string, input: 
     ontologyRefs: undefined,
     relations: undefined,
     derivedFrom: undefined,
+    // 适用/禁用条件是用户手写的自然语言，与正文同属可识别内容；
+    // sensitivity 是对已清除内容的定级，留着也只会指向一条空记录。
+    applicableWhen: undefined,
+    forbiddenWhen: undefined,
+    sensitivity: undefined,
+    // 跨域授权是对一条已经不存在的内容的授权，留着没有意义，也不该让墓碑
+    // 继续携带一个「可以跨作用域使用」的许可。
+    crossScopeConfirmedAt: undefined,
     scopePolicy: undefined,
     recommendedAction: undefined,
     recommendationReason: undefined,

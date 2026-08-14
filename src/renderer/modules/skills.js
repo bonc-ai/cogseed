@@ -42,6 +42,8 @@ const _skillsCognitionState = {
   assetSearchQuery: '',
   assetHistoryById: {},
   visibleAssetHistoryId: '',
+  assetChainById: {},
+  visibleAssetChainId: '',
   dashboard: null,
   loadedAt: 0,
   loading: false,
@@ -1184,7 +1186,9 @@ function renderSkillsCognitionCandidates() {
  * 服务端也会被 assertNotPurged 挡掉，摆出来只会让人以为还能操作。
  */
 function _recallAssetActions(status) {
-  if (status === 'purged') return ['versions'];
+  // 彻底清除后仍留「使用与证明」：墓碑没有内容可治理，但它过去被谁带走过、
+  // 用过几次是既成事实，回执还在，不该跟着内容一起消失。
+  if (status === 'purged') return ['versions', 'chain'];
   const actions = [];
   if (status === 'active') actions.push('pause');
   if (status === 'paused') actions.push('resume');
@@ -1192,7 +1196,7 @@ function _recallAssetActions(status) {
   if (status === 'archived' || status === 'deleted') actions.push('restore');
   if (status !== 'deleted' && status !== 'revoked') actions.push('delete');
   if (status !== 'revoked') actions.push('revoke');
-  actions.push('purge', 'versions');
+  actions.push('purge', 'versions', 'chain');
   return actions;
 }
 
@@ -1206,8 +1210,161 @@ function _recallAssetActionLabel(action) {
     purge: _cognitionText('cognition.asset_action_purge', '彻底清除'),
     revoke: _cognitionText('cognition.asset_action_revoke', '移除记忆'),
     versions: _cognitionText('cognition.asset_action_versions', '查看版本'),
+    chain: _cognitionText('cognition.asset_action_chain', '使用与证明'),
   };
   return labels[action] || action;
+}
+
+/** 履历五段的用户层命名。刻意不叫 pack / receipt——那是实现名。 */
+function _cognitionChainStageLabel(stage) {
+  const labels = {
+    formation: _cognitionText('cognition.chain_stage_formation', '从哪来'),
+    settling: _cognitionText('cognition.chain_stage_settling', '成了什么'),
+    inheritance: _cognitionText('cognition.chain_stage_inheritance', '谁带着它'),
+    use: _cognitionText('cognition.chain_stage_use', '真用过几次'),
+    evidence: _cognitionText('cognition.chain_stage_evidence', '哪几次没用上'),
+  };
+  return labels[stage] || stage;
+}
+
+/** 某次没带上的原因。后端给的是机器码，这里翻成人话。
+ *
+ *  取值来自 WithheldReason（选择层）加上渲染侧的两个：needs_confirmation、
+ *  truncated。注意与 Agent 详情页那套 InheritanceExclusionReason 不是一回事——
+ *  那个说的是「出生时没带走」，这个说的是「某一次运行没带上」。 */
+function _cognitionWithheldReasonLabel(reason) {
+  const labels = {
+    scope_agent_not_allowed: _cognitionText('cognition.withheld_scope_agent', '这个智能体不在允许范围内'),
+    scope_role_not_allowed: _cognitionText('cognition.withheld_scope_role', '这个角色不在允许范围内'),
+    scope_project_not_allowed: _cognitionText('cognition.withheld_scope_project', '这个项目不在允许范围内'),
+    scope_workspace_not_allowed: _cognitionText('cognition.withheld_scope_workspace', '这个空间不在允许范围内'),
+    sensitivity_above_destination: _cognitionText('cognition.withheld_sensitivity_high', '敏感级高于这次允许的上限'),
+    sensitivity_unclassified: _cognitionText('cognition.withheld_sensitivity_unknown', '还没分过敏感级，这次不敢默认放行'),
+    asset_paused: _cognitionText('cognition.withheld_paused', '当时已暂停'),
+    asset_archived: _cognitionText('cognition.withheld_archived', '当时已归档'),
+    asset_revoked: _cognitionText('cognition.withheld_revoked', '当时已撤销'),
+    asset_deleted: _cognitionText('cognition.withheld_deleted', '当时已删除'),
+    asset_purged: _cognitionText('cognition.withheld_purged', '当时已彻底清除'),
+    use_policy_never: _cognitionText('cognition.withheld_maturity', '成熟度还不够默认带入'),
+    asset_missing: _cognitionText('cognition.withheld_missing', '当时读不到这条资产'),
+    content_changed: _cognitionText('cognition.withheld_content_changed', '内容和继承时那份对不上了'),
+    version_changed: _cognitionText('cognition.withheld_version_changed', '版本和继承时那版对不上了'),
+    needs_confirmation: _cognitionText('cognition.withheld_needs_confirmation', '跨作用域，等你确认'),
+    truncated: _cognitionText('cognition.withheld_truncated', '这次篇幅放不下'),
+    unknown: _cognitionText('cognition.withheld_unknown', '没有记录原因'),
+  };
+  return labels[reason] || reason;
+}
+
+/** 迁移证明的状态：它只说明「有没有真的被带过去用上」，不说明用了好不好。 */
+function _transferProofLabel(status) {
+  const labels = {
+    prepared: _cognitionText('cognition.proof_transfer_prepared', '已准备，还没回执'),
+    succeeded: _cognitionText('cognition.proof_transfer_succeeded', '确实被带过去用了'),
+    degraded: _cognitionText('cognition.proof_transfer_degraded', '带过去了，但过程降级'),
+    rejected: _cognitionText('cognition.proof_transfer_rejected', '这次迁移被拒'),
+  };
+  return labels[status] || status;
+}
+
+/** 效果结论。**worse 与 no_improvement 也是证明**——证明它没帮上忙。
+ *  只显示 better 会把「证明」变成宣传：一条被证明有害的资产会和一条从没被
+ *  评价过的资产在界面上长得一样。 */
+function _effectivenessProofLabel(outcome) {
+  const labels = {
+    better: _cognitionText('cognition.proof_outcome_better', '用了之后确实更好'),
+    no_improvement: _cognitionText('cognition.proof_outcome_no_improvement', '用了没什么差别'),
+    worse: _cognitionText('cognition.proof_outcome_worse', '用了反而更差'),
+    insufficient_evidence: _cognitionText('cognition.proof_outcome_insufficient', '证据不足，下不了结论'),
+    invalid: _cognitionText('cognition.proof_outcome_invalid', '这次评价本身作废'),
+    rework: _cognitionText('cognition.proof_outcome_rework', '需要返工'),
+  };
+  return labels[outcome] || outcome;
+}
+
+/**
+ * 「使用与证明」：这条认知从哪来、进过哪些智能体、真用过几次、哪几次没用上为什么。
+ *
+ * **这是履历，不是进度条。** 五段里 `not_yet` 表示「还没发生」，不是「欠着一步」
+ * ——所以它渲染成中性的 is-not-yet，不能是红色或警告色。一条只在两个智能体里
+ * 躺着、还没被任务带入的认知，不是「五步只走了三步」，它就是一条还没被用过的
+ * 认知。这两种说法给用户的暗示完全不同。
+ */
+function _renderRecallAssetChain(assetId) {
+  if (_skillsCognitionState.visibleAssetChainId !== assetId) return '';
+  const state = _skillsCognitionState.assetChainById?.[assetId];
+  const closeLabel = _cognitionText('common.close', '关闭');
+  const closeIcon = typeof uiIconHtml === 'function' ? uiIconHtml('x') : '<span aria-hidden="true">×</span>';
+  let body = `<div class="skills-cognition-loading">${escapeHtml(_cognitionText('cognition.loading', '加载中…'))}</div>`;
+
+  if (state?.error) {
+    body = `<div class="skills-cognition-error">${escapeHtml(state.error)}</div>`;
+  } else if (state && !state.loading) {
+    const chain = state.chain || {};
+    const segments = Array.isArray(chain.segments) ? chain.segments : [];
+    const withheld = Array.isArray(chain.withheld) ? chain.withheld : [];
+    const usage = Array.isArray(state.usage) ? state.usage : [];
+
+    const segmentsHtml = segments.map((segment) => {
+      const happened = segment.status === 'happened';
+      return `<div class="cognition-chain-segment is-${happened ? 'happened' : 'not-yet'}">
+        <span class="cognition-chain-stage">${escapeHtml(_cognitionChainStageLabel(segment.stage))}</span>
+        <p class="cognition-chain-detail">${escapeHtml(segment.detail || '')}</p>
+        ${segment.at ? `<small>${escapeHtml(_cognitionDate(segment.at))}</small>` : ''}
+      </div>`;
+    }).join('');
+
+    const agents = Array.isArray(chain.carriedByAgentIds) ? chain.carriedByAgentIds : [];
+    const carriedHtml = agents.length
+      ? `<div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.chain_carried_by', '带着它的智能体'))}</strong><p>${escapeHtml(agents.join('、'))}</p></div>`
+      : '';
+
+    // 未带入原因单独成块：用户问「为什么这次没用我这条」时，答案必须是具体原因。
+    const withheldHtml = withheld.length
+      ? `<div class="cognition-chain-withheld"><strong>${escapeHtml(_cognitionText('cognition.chain_withheld', '没带上的那几次'))}</strong>${
+        withheld.map((entry) => `<div class="cognition-chain-withheld-row"><span>${escapeHtml(_cognitionWithheldReasonLabel(entry.reason))}</span><small>${escapeHtml(_cognitionDate(entry.at))}</small></div>`).join('')
+      }</div>`
+      : '';
+
+    // 跨作用域授权：用户在履历上看到「等你确认」，确认的按钮就该在这里。
+    // 没有这个入口，confirm 档等于承诺了一个不存在的动作。
+    const asset = _skillsCognitionState.assets?.find((item) => item.id === assetId);
+    const crossScopeConfirmed = !!asset?.crossScopeConfirmedAt;
+    const waitingConfirmation = withheld.some((entry) => entry.reason === 'needs_confirmation');
+    const crossScopeHtml = (crossScopeConfirmed || waitingConfirmation)
+      ? `<div class="reference-strip cognition-chain-cross-scope"><div><strong>${escapeHtml(_cognitionText('cognition.cross_scope', '跨作用域使用'))}</strong><p>${escapeHtml(crossScopeConfirmed
+        ? _cognitionText('cognition.cross_scope_confirmed', '你已允许这条认知在其他作用域使用。')
+        : _cognitionText('cognition.cross_scope_waiting', '这条认知被带到了它作用域之外，需要你确认才会带入。'))}</p></div><button type="button" class="btn btn-sm${crossScopeConfirmed ? '' : ' btn-primary'}" data-recall-cross-scope="${escapeHtml(assetId)}" data-recall-cross-scope-next="${crossScopeConfirmed ? '0' : '1'}">${escapeHtml(crossScopeConfirmed
+        ? _cognitionText('cognition.cross_scope_withdraw', '撤回许可')
+        : _cognitionText('cognition.cross_scope_confirm', '允许跨作用域使用'))}</button></div>`
+      : '';
+
+    const usageHtml = usage.length
+      ? `<div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.chain_usage', '使用记录'))}</strong><p>${escapeHtml(
+        _cognitionText('cognition.chain_usage_count', '共 {n} 条').replace('{n}', String(usage.length)),
+      )}</p></div>`
+      : '';
+
+    // 证明：迁移与效果分两层显示，不合并成一个「已验证」。没有证明就说没有，
+    // 不留空白——「还没被证明过」本身是个结论，比什么都不说清楚。
+    const proofs = Array.isArray(state.proofs) ? state.proofs : [];
+    const proofRows = proofs.map((entry) => {
+      const effects = (entry.effectiveness || []).map((e) => (
+        `<div class="cognition-proof-outcome is-${escapeHtml(e.outcome)}"><span>${escapeHtml(_effectivenessProofLabel(e.outcome))}</span><small>${escapeHtml(_cognitionDate(e.createdAt))}</small></div>`
+      )).join('') || `<div class="cognition-proof-outcome is-none"><span>${escapeHtml(_cognitionText('cognition.proof_not_evaluated', '这次迁移还没有人评价效果'))}</span></div>`;
+      return `<div class="cognition-proof-row"><div class="cognition-proof-transfer"><span>${escapeHtml(_transferProofLabel(entry.transfer?.status))}</span><small>v${escapeHtml(String(entry.version || ''))} · ${escapeHtml(_cognitionDate(entry.transfer?.createdAt))}</small></div>${effects}</div>`;
+    }).join('');
+    const proofHtml = `<div class="cognition-chain-proofs"><strong>${escapeHtml(_cognitionText('cognition.proofs', '证明'))}</strong>${
+      proofs.length ? proofRows : `<div class="skills-cognition-muted">${escapeHtml(_cognitionText('cognition.proofs_empty', '还没有人证明过这条认知有没有用。'))}</div>`
+    }</div>`;
+
+    body = `<div class="cognition-chain-body">
+      <div class="cognition-chain-segments">${segmentsHtml}</div>
+      ${crossScopeHtml}${carriedHtml}${usageHtml}${proofHtml}${withheldHtml}
+    </div>`;
+  }
+
+  return `<section class="recall-asset-chain-panel"><div class="recall-asset-version-head"><strong>${escapeHtml(_cognitionText('cognition.chain_title', '使用与证明'))}</strong><button type="button" class="btn btn-sm recall-asset-version-close" data-recall-asset-chain-close title="${escapeHtml(closeLabel)}" aria-label="${escapeHtml(closeLabel)}">${closeIcon}</button></div>${body}</section>`;
 }
 
 function _renderRecallAssetHistory(assetId) {
@@ -1355,6 +1512,7 @@ function renderSkillsCognitionAssets() {
           ${workspaceRefs.length ? `<div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.workspace_refs', 'Workspace引用'))}</strong><p>${escapeHtml(workspaceRefs.join('、'))}</p></div>` : ''}
           ${_renderAbilityAssetGovernance(selected)}
           ${_renderRecallAssetHistory(selected.id)}
+          ${_renderRecallAssetChain(selected.id)}
         </div>
       </section>
     </div>

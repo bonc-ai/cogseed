@@ -85,7 +85,7 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).not.toContain('data-cognition-page-link="sources"');
     expect(host.innerHTML).toContain('可复用方法');
     expect(host.innerHTML).toContain('data-recall-asset-more="aa-method"');
-    expect(host.innerHTML).toContain('data-recall-asset-actions="pause,archive,delete,revoke,purge,versions"');
+    expect(host.innerHTML).toContain('data-recall-asset-actions="pause,archive,delete,revoke,purge,versions,chain"');
 
     vm.runInContext(`_skillsCognitionState.assets[0].generatedSkillId = 'apply-prd-review';`, context);
     context.renderSkillsCognitionAssets();
@@ -96,12 +96,14 @@ describe('Recall cognition renderer flow', () => {
 
   it('shows governance actions appropriate to each Recall asset status', () => {
     const context = loadSkillsRenderer();
-    expect(Array.from(context._recallAssetActions('active'))).toEqual(['pause', 'archive', 'delete', 'revoke', 'purge', 'versions']);
-    expect(Array.from(context._recallAssetActions('paused'))).toEqual(['resume', 'archive', 'delete', 'revoke', 'purge', 'versions']);
-    expect(Array.from(context._recallAssetActions('archived'))).toEqual(['restore', 'delete', 'revoke', 'purge', 'versions']);
-    expect(Array.from(context._recallAssetActions('deleted'))).toEqual(['restore', 'revoke', 'purge', 'versions']);
-    expect(Array.from(context._recallAssetActions('revoked'))).toEqual(['purge', 'versions']);
-    expect(Array.from(context._recallAssetActions('purged'))).toEqual(['versions']);
+    expect(Array.from(context._recallAssetActions('active'))).toEqual(['pause', 'archive', 'delete', 'revoke', 'purge', 'versions', 'chain']);
+    expect(Array.from(context._recallAssetActions('paused'))).toEqual(['resume', 'archive', 'delete', 'revoke', 'purge', 'versions', 'chain']);
+    expect(Array.from(context._recallAssetActions('archived'))).toEqual(['restore', 'delete', 'revoke', 'purge', 'versions', 'chain']);
+    expect(Array.from(context._recallAssetActions('deleted'))).toEqual(['restore', 'revoke', 'purge', 'versions', 'chain']);
+    expect(Array.from(context._recallAssetActions('revoked'))).toEqual(['purge', 'versions', 'chain']);
+    // 彻底清除后只剩版本与履历：墓碑没有内容可治理，但它被谁带走过、用过几次
+    // 是既成事实，回执还在，不该跟着内容一起消失。
+    expect(Array.from(context._recallAssetActions('purged'))).toEqual(['versions', 'chain']);
   });
 
   it('uses a concise method name while keeping the deposited content visible', () => {

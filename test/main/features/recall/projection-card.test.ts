@@ -84,7 +84,7 @@ describe('Recall projection chat card', () => {
         title: 'Use decision logs for architecture changes',
         type: 'rule',
         status: 'active',
-        maturity: 'seed',
+        maturity: 'bud',
         scope: 'review,project',
       }),
     ]);

@@ -170,6 +170,28 @@ function _initSkillsCognitionBindings() {
         renderSkillsCognitionAssets();
         return;
       }
+      if (actionName === 'chain') {
+        _skillsCognitionState.assetChainById ||= {};
+        _skillsCognitionState.visibleAssetChainId = assetId;
+        _skillsCognitionState.assetChainById[assetId] = { loading: true };
+        renderSkillsCognitionAssets();
+        const [chainResult, usageResult, proofResult] = await Promise.all([
+          window.cogseed.invoke('recall.cognitionChain.read', { assetId }),
+          // 使用记录与证明取不到都不该让整个履历打不开——它们是补充，
+          // 履历本身来自回执。
+          window.cogseed.invoke('recall.usage.list', { assetId }).catch(() => null),
+          window.cogseed.invoke('recall.proofs.list', { assetId }).catch(() => null),
+        ]);
+        if (!chainResult?.ok) throw new Error(chainResult?.error || 'recall cognition chain failed');
+        _skillsCognitionState.assetChainById[assetId] = {
+          loading: false,
+          chain: chainResult.chain || null,
+          usage: usageResult?.usage || [],
+          proofs: proofResult?.proofs || [],
+        };
+        renderSkillsCognitionAssets();
+        return;
+      }
       // 不可逆或有时限的动作必须先确认。归档与恢复不确认：它们随时可撤销，
       // 每一步都拦一下只会让用户养成闭眼点确认的习惯，真正危险的那次也就拦不住。
       const confirmations = {
@@ -208,6 +230,11 @@ function _initSkillsCognitionBindings() {
       _skillsCognitionState.assetHistoryById ||= {};
       if (actionName === 'versions') {
         _skillsCognitionState.assetHistoryById[assetId] = { loading: false, error: (error && error.message) || String(error) };
+        renderSkillsCognitionAssets();
+      }
+      if (actionName === 'chain') {
+        _skillsCognitionState.assetChainById ||= {};
+        _skillsCognitionState.assetChainById[assetId] = { loading: false, error: (error && error.message) || String(error) };
         renderSkillsCognitionAssets();
       }
       if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
@@ -309,6 +336,38 @@ function _initSkillsCognitionBindings() {
 
     if (event.target.closest('[data-recall-asset-history-close]')) {
       _skillsCognitionState.visibleAssetHistoryId = '';
+      renderSkillsCognitionAssets();
+      return;
+    }
+
+    const crossScope = event.target.closest('[data-recall-cross-scope]');
+    if (crossScope) {
+      const assetId = crossScope.dataset.recallCrossScope;
+      const confirmed = crossScope.dataset.recallCrossScopeNext === '1';
+      if (!assetId || crossScope.dataset.busy === '1') return;
+      crossScope.dataset.busy = '1'; crossScope.disabled = true;
+      try {
+        const result = await window.cogseed.invoke('recall.assets.crossScope', { assetId, confirmed });
+        if (!result?.ok) throw new Error(result?.error || 'cross-scope confirmation failed');
+        // 资产列表里那份要跟着更新，否则面板重画时按钮又弹回旧状态。
+        const list = _skillsCognitionState.assets || [];
+        const index = list.findIndex((item) => item.id === assetId);
+        if (index >= 0) list[index] = result.asset;
+        renderSkillsCognitionAssets();
+        uiToast(_cognitionText(
+          confirmed ? 'cognition.cross_scope_confirmed_done' : 'cognition.cross_scope_withdrawn_done',
+          confirmed ? '已允许跨作用域使用' : '已撤回跨作用域许可',
+        ), { variant: 'success' });
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        crossScope.dataset.busy = '0'; crossScope.disabled = false;
+      }
+      return;
+    }
+
+    if (event.target.closest('[data-recall-asset-chain-close]')) {
+      _skillsCognitionState.visibleAssetChainId = '';
       renderSkillsCognitionAssets();
       return;
     }

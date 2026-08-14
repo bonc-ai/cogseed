@@ -143,7 +143,7 @@ describe('Recall ability assets', () => {
       scope: 'project',
       status: 'active',
       lifecycleStatus: 'user_confirmed_unverified',
-      maturity: 'seed',
+      maturity: 'bud',
       version: '1',
       createdAt: now,
       updatedAt: now,
