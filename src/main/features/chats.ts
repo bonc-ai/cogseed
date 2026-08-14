@@ -169,6 +169,26 @@ export interface Conversation {
    *  summarizes extracted cognitions and offers to continue the work. Reset to
    *  false after the welcome message is inserted. */
   needs_welcome?: boolean;
+  /** 任务级引用（空间任务 = 空间会话）：开新任务/已有任务时引用的空间产物与资产。
+   *  产物 → 发送时并入消息 references（LLM 可读文件）；资产 → 发送时并入模型上下文块。 */
+  task_references?: TaskReference[];
+}
+
+/** 空间任务引用项（持久化在会话记录上，任务级作用域）。 */
+export interface TaskReference {
+  kind: 'artifact' | 'asset';
+  /** 展示名（产物 = 文件名；资产 = 标题）。 */
+  name: string;
+  /** 产物：源会话 + 附件名（走现成跨任务引用链路，LLM 可读文件内容）。 */
+  source_cid?: string;
+  source_title?: string;
+  source_msg_id?: string;
+  source_ts?: string;
+  file_name?: string;
+  /** 资产：资产 id + 类型 + 摘要（上下文块注入）。 */
+  asset_id?: string;
+  asset_type?: string;
+  summary?: string;
 }
 
 /** Persisted record on `<cid>.jsonl`. Aliased for legacy callers; the new
@@ -286,6 +306,24 @@ function _normaliseConversation(raw: any, fallbackCid = ''): Conversation | null
   }
   if (raw.imported === true) out.imported = true;
   if (raw.needs_welcome === true) out.needs_welcome = true;
+  if (Array.isArray(raw.task_references)) {
+    const refs = raw.task_references
+      .filter((r: any) => r && typeof r === 'object' && (r.kind === 'artifact' || r.kind === 'asset') && typeof r.name === 'string' && r.name)
+      .map((r: any) => ({
+        kind: r.kind,
+        name: String(r.name).slice(0, 200),
+        ...(typeof r.source_cid === 'string' && r.source_cid ? { source_cid: r.source_cid } : {}),
+        ...(typeof r.source_title === 'string' && r.source_title ? { source_title: r.source_title.slice(0, 200) } : {}),
+        ...(typeof r.source_msg_id === 'string' && r.source_msg_id ? { source_msg_id: r.source_msg_id } : {}),
+        ...(typeof r.source_ts === 'string' && r.source_ts ? { source_ts: r.source_ts } : {}),
+        ...(typeof r.file_name === 'string' && r.file_name ? { file_name: r.file_name.slice(0, 200) } : {}),
+        ...(typeof r.asset_id === 'string' && r.asset_id ? { asset_id: r.asset_id } : {}),
+        ...(typeof r.asset_type === 'string' && r.asset_type ? { asset_type: r.asset_type.slice(0, 60) } : {}),
+        ...(typeof r.summary === 'string' && r.summary ? { summary: r.summary.slice(0, 400) } : {}),
+      }))
+      .slice(0, 20);
+    if (refs.length) out.task_references = refs;
+  }
   const syncRev = Number(raw[RECORD_SYNC_REV_FIELD]) || 0;
   if (Number.isFinite(syncRev) && syncRev > 0) out._sync_rev = Math.floor(syncRev);
   if (typeof raw[RECORD_SYNC_DEVICE_FIELD] === 'string' && raw[RECORD_SYNC_DEVICE_FIELD]) {

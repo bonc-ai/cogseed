@@ -115,7 +115,7 @@ import { invokeHandlers as desktopWorkbenchHandlers } from './desktop-workbench'
 import { invokeHandlers as hubAccountHandlers } from './hub-account';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as cognitionHandlers } from './cognition';
-import { safeId } from '../storage';
+import { readJsonl, safeId } from '../storage';
 import { createLogger, logFromRenderer } from '../logger';
 import {
   markConfirmationVisible as markDeleteConfirmationVisible,
@@ -128,6 +128,7 @@ import { DEFAULT_USER_WORKSPACE, WS_ROOT, projectFilesDir, userMarketplaceSkillD
 import {
   chatAttachmentDirForConversation,
   chatAttachmentRelPath,
+  conversationMessageReadFile,
   findAutoTaskLocation,
   globalAutoTaskLocation,
 } from '../util/project-layout';
@@ -843,6 +844,43 @@ async function ensureKstarWakeProjectionConfirmed(
   return null;
 }
 
+/** 定位持有某附件文件的源消息（跨任务引用需要 source_msg_id + 非空源文本）。
+ *  在源会话 JSONL 里从新到旧找 attachments/produced 含该文件名的消息。 */
+async function _resolveArtifactSourceMessage(
+  userId: string,
+  sourceCid: string,
+  fileName: string,
+): Promise<{ source_msg_id: string; source_ts: string; source_text: string } | null> {
+  if (!safeId(sourceCid) || !fileName) return null;
+  try {
+    const rows = await readJsonl<{ id?: string; ts?: string; text?: string; attachments?: unknown; produced?: unknown }>(
+      conversationMessageReadFile(userId, sourceCid),
+      100_000,
+    );
+    const base = fileName.toLowerCase();
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const m = rows[i];
+      if (!m || typeof m.id !== 'string' || !m.id) continue;
+      const attNames: string[] = Array.isArray(m.attachments)
+        ? m.attachments.map((a: any) => (typeof a === 'string' ? a : (a && a.name) || ''))
+        : [];
+      const producedNames: string[] = Array.isArray(m.produced)
+        ? m.produced.map((p: any) => (p && typeof p.path === 'string' ? path.basename(p.path) : ''))
+        : [];
+      if ([...attNames, ...producedNames].some((n) => n && n.toLowerCase() === base)) {
+        return {
+          source_msg_id: m.id,
+          source_ts: typeof m.ts === 'string' ? m.ts : '',
+          source_text: typeof m.text === 'string' ? m.text : '',
+        };
+      }
+    }
+  } catch (err) {
+    log.warn('resolve artifact source message failed', { sourceCid, error: (err as Error).message });
+  }
+  return null;
+}
+
 const invokeHandlers: Record<string, InvokeHandler> = {
   'mate_agent.task.start': async (payload, ctx) => mateAgentBackend.mateIpcService.start(ctx.userId, payload),
   'mate_agent.task.read': async (payload, ctx) => mateAgentBackend.mateIpcService.read(ctx.userId, payload),
@@ -1044,6 +1082,55 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ...(validSpaceId ? { spaceId: validSpaceId } : {}),
     });
     return { conversation: conv };
+  },
+
+  // ── 空间任务引用（任务级：产物 → references / 资产 → 上下文块）──────────
+  'conversations.taskRefs.list': async ({ cid } = {}, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const conv = await chats.getConversation(ctx.userId, cid);
+    return { references: conv?.task_references || [] };
+  },
+
+  'conversations.taskRefs.add': async ({ cid, reference } = {}, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (!reference || typeof reference !== 'object') throw new Error('invalid reference');
+    if (reference.kind !== 'artifact' && reference.kind !== 'asset') throw new Error('invalid reference kind');
+    if (typeof reference.name !== 'string' || !reference.name) throw new Error('invalid reference name');
+    const conv = await chats.getConversation(ctx.userId, cid);
+    if (!conv) throw new Error('conversation not found');
+    const refs = [...(conv.task_references || [])];
+    if (refs.length >= 20) throw new Error('too many references');
+    const item = {
+      kind: reference.kind,
+      name: String(reference.name).slice(0, 200),
+      ...(typeof reference.source_cid === 'string' && reference.source_cid ? { source_cid: reference.source_cid } : {}),
+      ...(typeof reference.source_title === 'string' && reference.source_title ? { source_title: String(reference.source_title).slice(0, 200) } : {}),
+      ...(typeof reference.source_msg_id === 'string' && reference.source_msg_id ? { source_msg_id: reference.source_msg_id } : {}),
+      ...(typeof reference.source_ts === 'string' && reference.source_ts ? { source_ts: reference.source_ts } : {}),
+      ...(typeof reference.file_name === 'string' && reference.file_name ? { file_name: String(reference.file_name).slice(0, 200) } : {}),
+      ...(typeof reference.asset_id === 'string' && reference.asset_id ? { asset_id: reference.asset_id } : {}),
+      ...(typeof reference.asset_type === 'string' && reference.asset_type ? { asset_type: String(reference.asset_type).slice(0, 60) } : {}),
+      ...(typeof reference.summary === 'string' && reference.summary ? { summary: String(reference.summary).slice(0, 400) } : {}),
+    };
+    const key = item.kind === 'asset'
+      ? `asset:${item.asset_id || ''}`
+      : `artifact:${item.source_cid || ''}:${item.file_name || ''}`;
+    const dup = refs.some((r) => (r.kind === 'asset' ? `asset:${r.asset_id || ''}` : `artifact:${r.source_cid || ''}:${r.file_name || ''}`) === key);
+    if (!dup) refs.push(item);
+    await chats.updateConversation(ctx.userId, cid, { task_references: refs });
+    return { references: refs };
+  },
+
+  'conversations.taskRefs.remove': async ({ cid, index } = {}, ctx) => {
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const conv = await chats.getConversation(ctx.userId, cid);
+    if (!conv) throw new Error('conversation not found');
+    const refs = [...(conv.task_references || [])];
+    const i = Number(index);
+    if (!Number.isInteger(i) || i < 0 || i >= refs.length) throw new Error('invalid index');
+    refs.splice(i, 1);
+    await chats.updateConversation(ctx.userId, cid, { task_references: refs.length ? refs : undefined });
+    return { references: refs };
   },
 
   'conversations.delete': async (args, ctx) => {
@@ -1552,11 +1639,61 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const atts = Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string') : [];
     const useSelections = Array.isArray(use_selections) ? use_selections : [];
     const refs = Array.isArray(references) ? references : [];
+    // 任务级引用合并：产物 → references（LLM 可读文件），资产 → 模型上下文块（不污染可见文本）
+    let modelText: string | undefined;
+    let mergedRefs = refs;
+    try {
+      const conv = await chats.getConversation(ctx.userId, cid);
+      const taskRefs = conv?.task_references || [];
+      const artifactRefs = taskRefs.filter((r) => r.kind === 'artifact');
+      const assetRefs = taskRefs.filter((r) => r.kind === 'asset');
+      if (artifactRefs.length) {
+        // 产物引用需指向「持有该附件的源消息」才能过跨任务引用解析（_resolveMessageReferences
+        // 要求合法 source_msg_id + 非空源文本）。逐条在源会话里定位持有该文件的最新消息。
+        const artifactRefsResolved: Array<{ source_cid: string; source_title: string; source_msg_id: string; source_ts: string; text: string; file_name: string }> = [];
+        for (const r of artifactRefs.slice(0, 20)) {
+          const src = await _resolveArtifactSourceMessage(ctx.userId, r.source_cid, r.file_name);
+          if (!src) continue;
+          artifactRefsResolved.push({
+            source_cid: r.source_cid || '',
+            source_title: r.source_title || r.name || '空间任务引用',
+            source_msg_id: src.source_msg_id,
+            source_ts: r.source_ts || src.source_ts || (conv && (conv.updated_at || conv.created_at)) || new Date().toISOString(),
+            text: src.source_text,
+            file_name: r.file_name || '',
+          });
+        }
+        if (artifactRefsResolved.length) {
+          mergedRefs = [
+            ...refs,
+            ...artifactRefsResolved.map((r) => ({
+              source_cid: r.source_cid,
+              source_title: r.source_title,
+              source_msg_id: r.source_msg_id,
+              from_actor: 'space_task',
+              from_name: '空间任务引用',
+              source_ts: r.source_ts,
+              text: r.text,
+              ...(r.file_name ? { attachments: [{ name: r.file_name }] } : {}),
+            })),
+          ];
+        }
+      }
+      if (assetRefs.length) {
+        const block = assetRefs
+          .map((r) => `- ${r.name}（${r.asset_type || '空间资产'}）${r.summary ? `：${r.summary}` : ''}`)
+          .join('\n');
+        if (block) modelText = `${text}\n\n【本任务引用的空间资产】\n${block}`;
+      }
+    } catch (err) {
+      log.warn('task references merge failed', { cid, error: (err as Error).message });
+    }
     return groupChat.send({
       userId: ctx.userId, cid, text,
+      ...(modelText ? { model_text: modelText } : {}),
       ...(atts.length ? { attachments: atts } : {}),
       ...(useSelections.length ? { use_selections: useSelections } : {}),
-      ...(refs.length ? { references: refs } : {}),
+      ...(mergedRefs.length ? { references: mergedRefs } : {}),
     });
   },
 

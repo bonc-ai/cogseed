@@ -16,7 +16,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { spaceChatAttachmentDir, spaceChatArtifactCidDir } from '../paths';
+import { chatAttachmentDir, spaceChatAttachmentDir, spaceChatArtifactCidDir } from '../paths';
 import { ALLOWED_EXTENSIONS } from './chat_attachments';
 import { listSpaceConversations } from './chats';
 
@@ -39,17 +39,24 @@ export interface SpaceArtifactEntry {
 }
 
 function scanAttachments(uid: string, spaceId: string, cid: string, out: SpaceArtifactEntry[]): void {
-  const dir = spaceChatAttachmentDir(uid, spaceId, cid);
-  let entries: fs.Dirent[] = [];
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
-  catch { return; }
-  for (const e of entries) {
-    if (!e.isFile() || e.name.startsWith('.')) continue;
-    const ext = path.extname(e.name).toLowerCase();
-    if (!ALLOWED_EXTENSIONS.has(ext)) continue;
-    let mtime = 0;
-    try { mtime = Math.floor(fs.statSync(path.join(dir, e.name)).mtimeMs / 1000); } catch { /* keep 0 */ }
-    out.push({ name: e.name, type: 'attachment', ext, sourceSessionId: cid, time: mtime });
+  // 附件可能落在两处：空间目录（v5 迁移的历史项目数据）+ 全局会话附件目录（新上传）。
+  // 都扫一遍按文件名去重，保证产物列表完整（引用时以 source_cid+文件名走跨任务引用链路）。
+  const dirs = [spaceChatAttachmentDir(uid, spaceId, cid), chatAttachmentDir(uid, cid)];
+  const seen = new Set<string>();
+  for (const dir of dirs) {
+    let entries: fs.Dirent[] = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+    catch { continue; }
+    for (const e of entries) {
+      if (!e.isFile() || e.name.startsWith('.')) continue;
+      if (seen.has(e.name)) continue;
+      seen.add(e.name);
+      const ext = path.extname(e.name).toLowerCase();
+      if (!ALLOWED_EXTENSIONS.has(ext)) continue;
+      let mtime = 0;
+      try { mtime = Math.floor(fs.statSync(path.join(dir, e.name)).mtimeMs / 1000); } catch { /* keep 0 */ }
+      out.push({ name: e.name, type: 'attachment', ext, sourceSessionId: cid, time: mtime });
+    }
   }
 }
 

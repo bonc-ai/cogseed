@@ -88,6 +88,26 @@ describe('chats › createConversation', () => {
     expect(normal.kind).toBe('normal');
   });
 
+  it('persists task_references (空间任务引用) and round-trips them', async () => {
+    const chats = await loadChats();
+    const conv = await chats.createConversation(TEST_UID, { title: '任务引用', spaceId: 'sp_test' });
+    const refs = [
+      { kind: 'artifact', name: '需求分析基线.md', source_cid: 'abc123', source_title: '源任务', file_name: '需求分析基线.md' },
+      { kind: 'asset', name: '产品经理方法论', asset_id: 'ast-1', asset_type: '决策规则与方法', summary: '围绕需求' },
+    ];
+    const updated = await chats.updateConversation(TEST_UID, conv.conversation_id, { task_references: refs });
+    expect(updated?.task_references?.length).toBe(2);
+    const back = await chats.getConversation(TEST_UID, conv.conversation_id);
+    expect(back?.task_references).toHaveLength(2);
+    expect(back?.task_references?.[0].kind).toBe('artifact');
+    expect(back?.task_references?.[0].file_name).toBe('需求分析基线.md');
+    expect(back?.task_references?.[1].asset_id).toBe('ast-1');
+    // 非法引用写入后，读取时被归一化过滤（IPC add 层另有形状校验）
+    await chats.updateConversation(TEST_UID, conv.conversation_id, { task_references: [{ kind: 'nope', name: 'x' } as any] });
+    const backBad = await chats.getConversation(TEST_UID, conv.conversation_id);
+    expect(backBad?.task_references ?? []).toHaveLength(0);
+  });
+
   it('touches the per-cid jsonl on create', async () => {
     const chats = await loadChats();
     const conv = await chats.createConversation(TEST_UID);
