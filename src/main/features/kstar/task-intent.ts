@@ -56,15 +56,18 @@ export function detectTaskIntent(text: string | undefined): TaskIntentResult {
   return { isTask: true, reason: 'task signal detected' };
 }
 
-/** Render the advisory hint line appended to the Commander system prompt. */
+/** Render the routing note appended to the Commander system prompt. The host
+ *  has ALREADY opened the governed task + auto-confirmed the projection for
+ *  task-shaped user messages (deterministic host routing), so the Commander's
+ *  only KStar duty is the prediction itself. */
 export function taskIntentHint(text: string | undefined): string {
   try {
     const detected = detectTaskIntent(text);
     if (!detected.isTask) return '';
     return [
       '',
-      '## Host routing hint',
-      'The host detected a task-shaped request. If this is a formal task worth tracking, call `kstar_control` (upsert_state → request_projection → commit_forecast) so it receives projection/forecast governance; if it is lightweight transient work, ignore this hint.',
+      '## Host routing note',
+      'The host has already tracked this task (KStar task + confirmed projection). Your remaining KStar duty: call `kstar_control` with operation `commit_forecast` (2–4 candidates with plan/expectedTools/expectedActors/predictedResult) BEFORE executing any work. Do not call upsert_state or request_projection again — they are already done.',
       '',
     ].join('\n');
   } catch (error) {

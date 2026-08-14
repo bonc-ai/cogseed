@@ -100,7 +100,7 @@ describe('KSTAR review inference', () => {
     ]) {
       const result = await inference.inferKstarReview('user-a', episode(), { runModel: async () => text });
       expect(result).toMatchObject({
-        reviewState: 'needs_confirmation',
+        reviewState: 'inferred',
         inferenceMethod: 'unknown',
         needsConfirmation: false,
         review: { outcome: 'unclear', deltaR: 'unknown', deltaA: 'unknown', confidence: 0 },
@@ -121,7 +121,7 @@ describe('KSTAR review inference', () => {
       lesson: 'OAuth 回调必须在校验 state 之后再交换 code，否则会接受无效会话。',
     }));
 
-    const result = await inference.inferKstarReview('user-a', episode), {
+    const result = await inference.inferKstarReview('user-a', episode(), {
       forecast: {
         aHat: { plan: ['Check state', 'Exchange code'], expectedTools: ['read_file'], expectedActors: ['commander'] },
         rHat: { summary: 'Login fixed and tests pass', acceptanceSignals: ['tests pass'], predictedFiles: ['auth.ts'] },

@@ -3672,6 +3672,18 @@ async function runActorTurnBody(
     // 空间模式会话（kind=space_builder）：用户↔构建师的一对一引导对话。
     // 构建师不派活不写文件——零额外工具，数据全部走 Runtime injection 快照。
     const convKind = await getConversationKindSafe(uid, cid);
+    // Deterministic host routing: a task-shaped USER message opens the
+    // governed KStar task + auto-confirmed projection HERE, before the model
+    // turn — the Commander no longer has to emit kstar_control correctly
+    // (live runs failed that twice). Space-builder and non-task turns are
+    // untouched (zero KStar writes).
+    if (
+      convKind !== "space_builder"
+      && item.fromActorId === USER_ID
+      && process.env.ORKAS_KSTAR_HOST_ROUTING !== '0'
+    ) {
+      await hostRouteTaskTurn(uid, cid, item.sourceMessageText, item.msgId, turnProjectId);
+    }
     if (convKind === "space_builder") {
       systemPrompt = await buildSpaceBuilderSystemPrompt(uid);
       extraTools = [];
@@ -7841,6 +7853,73 @@ const WORKER_WORKFLOW = [
 
 function _toolError(error: string): { content: string; isError: true } {
   return { content: JSON.stringify({ ok: false, error }), isError: true };
+}
+
+/**
+ * Deterministic host routing (the fix for model-dependent routing): when a
+ * USER message is detected as a task, the HOST opens the governed KStar task
+ * and auto-confirms the projection BEFORE the Commander even starts — no
+ * reliance on the model emitting kstar_control with correct args (which
+ * failed live twice with empty payloads). The Commander's only remaining
+ * KStar responsibility is commit_forecast (the prediction itself), enforced
+ * by the guard + next_step contract.
+ *
+ * Zero-write guarantee preserved: greetings/status/trivia are not tasks, and
+ * an already-open task is never duplicated.
+ */
+async function hostRouteTaskTurn(
+  uid: string,
+  cid: string,
+  messageText: string | undefined,
+  sourceMessageId: string | undefined,
+  workspaceId?: string,
+): Promise<void> {
+  const { detectTaskIntent } = await import('../kstar/task-intent');
+  if (!detectTaskIntent(messageText).isTask) return;
+  try {
+    const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
+    const lifecycle = await readKstarTaskLifecycle(uid, cid);
+    if (lifecycle.task || lifecycle.requirement) return;
+    const { executeKstarControl } = await import('../kstar/control-service');
+    const goal = String(messageText || '').replace(/\s+/g, ' ').trim().slice(0, 4_000);
+    if (!goal) return;
+    const created = await executeKstarControl(
+      {
+        userId: uid,
+        conversationId: cid,
+        ...(sourceMessageId ? { sourceMessageId } : {}),
+        ...(workspaceId ? { workspaceId } : {}),
+        allowedToolNames: new Set(['kstar_control']),
+      },
+      {
+        operation: 'upsert_state',
+        idempotencyKey: `host-route-${cid}-${sourceMessageId || Date.now()}`,
+        task: { operation: 'create', title: goal.slice(0, 200) },
+        requirement: { operation: 'create', goalText: goal },
+      },
+    );
+    if (!created.ok || created.status !== 'state_committed') return;
+    await executeKstarControl(
+      {
+        userId: uid,
+        conversationId: cid,
+        ...(sourceMessageId ? { sourceMessageId } : {}),
+        ...(workspaceId ? { workspaceId } : {}),
+        allowedToolNames: new Set(['kstar_control']),
+      },
+      {
+        operation: 'request_projection',
+        idempotencyKey: `host-route-proj-${cid}-${sourceMessageId || Date.now()}`,
+        projection: {
+          requirementId: created.requirementId,
+          purpose: 'review',
+          taskText: goal,
+        },
+      },
+    );
+  } catch (error) {
+    log.warn(`kstar host routing degraded cid=${cid}: ${(error as Error).message}`);
+  }
 }
 
 /**

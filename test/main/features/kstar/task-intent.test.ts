@@ -23,7 +23,7 @@ describe('KStar host task-intent detection (layer 1)', () => {
 
   it('renders an advisory hint only for task-shaped messages', () => {
     expect(taskIntentHint('你好')).toBe('');
-    expect(taskIntentHint('审查一下 bus.ts 的守卫实现')).toContain('Host routing hint');
+    expect(taskIntentHint('审查一下 bus.ts 的守卫实现')).toContain('Host routing note');
     expect(taskIntentHint('审查一下 bus.ts 的守卫实现')).toContain('kstar_control');
   });
 });

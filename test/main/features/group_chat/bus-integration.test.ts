@@ -278,6 +278,7 @@ vi.mock("../../../../src/main/features/local_agents/runner", () => ({
 let tmpDir: string;
 let prevWs: string | undefined;
 let prevWakeGate: string | undefined;
+let prevHostRouting: string | undefined;
 const TEST_UID = "u1";
 const AGENT_ID = "b8c7d6a5e4f3";
 const AGENT_NAME = "Writer";
@@ -293,8 +294,12 @@ beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "orkas-int-"));
   prevWs = process.env.ORKAS_WORKSPACE_ROOT;
   prevWakeGate = process.env.ORKAS_P3394_WAKE_GATE;
+  prevHostRouting = process.env.ORKAS_KSTAR_HOST_ROUTING;
   process.env.ORKAS_WORKSPACE_ROOT = tmpDir;
   process.env.ORKAS_P3394_WAKE_GATE = "0";
+  // Host routing off by default in bus tests: dispatch-mechanism tests are
+  // not governance tests. The dedicated host-routing describe enables it.
+  process.env.ORKAS_KSTAR_HOST_ROUTING = "0";
   process.env.ORKAS_LEGACY_RUN_WORKER_TEST = "0";
   _resetScripts();
   _recordedCalls.length = 0;
@@ -336,6 +341,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  if (prevHostRouting === undefined) delete process.env.ORKAS_KSTAR_HOST_ROUTING;
+  else process.env.ORKAS_KSTAR_HOST_ROUTING = prevHostRouting;
+
   // Drop conv state so workers terminate before the tmpDir is rm'd —
   // otherwise a half-finished worker writes after dir removal and we get
   // ENOENT log noise.
@@ -5278,6 +5286,46 @@ describe("group_chat bus integration › Recall asset usage receipt", () => {
     const usage = await import("../../../../src/main/features/recall/usage-service");
     const records = await usage.listRecallUsage(TEST_UID, asset.id);
     expect(records.length).toBeGreaterThanOrEqual(1);
+  }, 10_000);
+});
+
+describe("group_chat bus integration › deterministic host routing (task turn)", () => {
+  it("opens a governed KStar task + confirmed projection for a task-shaped user message before the model turn", async () => {
+    process.env.ORKAS_KSTAR_HOST_ROUTING = "1";
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "final", text: "I will review it." },
+    ]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "审查一下 bus.ts 的守卫实现" });
+    await waitForQuiescent(TEST_UID, cid, 6000);
+
+    const store = await import("../../../../src/main/features/kstar/requirement-store");
+    const taskState = await store.readConversationTaskState(TEST_UID, cid);
+    expect(taskState?.currentTaskId).toBeTruthy();
+    const requirement = await store.readKstarRequirement(TEST_UID, taskState!.currentRequirementId!);
+    expect(requirement?.projectionId).toBeTruthy();
+    const projections = await import("../../../../src/main/features/recall/context-projection");
+    const projection = await projections.readContextProjection(TEST_UID, requirement!.projectionId!);
+    expect(projection.status).toBe("confirmed");
+  }, 10_000);
+
+  it("leaves greetings untouched — zero KStar writes", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "final", text: "hi" },
+    ]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "你好" });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const store = await import("../../../../src/main/features/kstar/requirement-store");
+    const taskState = await store.readConversationTaskState(TEST_UID, cid);
+    expect(taskState?.currentTaskId).toBeFalsy();
   }, 10_000);
 });
 
