@@ -44,7 +44,12 @@ async function createAsset(input: { userId?: string; judgment: string; summary: 
 }
 
 const fakeSemanticOptions = {
-  embedTexts: async (texts: string[]) => texts.map((text) => text.toLowerCase().includes('oauth') ? [1, 0] : [0, 1]),
+  embedTexts: async (texts: string[]) => texts.map((text) => {
+    const lower = text.toLowerCase();
+    if (lower.includes('oauth')) return [1, 0];
+    if (lower.includes('database')) return [0.9, 0.1];
+    return [0, 1];
+  }),
 };
 
 describe('Recall projection chat card', () => {
