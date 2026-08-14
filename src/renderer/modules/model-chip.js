@@ -417,7 +417,17 @@ function initModelChip() {
   _mountModelChipInBar(document.querySelector('#panel-project .chat-bottom-bar'), 'project');
   if (!_modelChipBound) {
     _modelChipBound = true;
-    window.addEventListener('orkas:model-entries-changed', () => _modelChipRenderAll());
+    // model-guard broadcasts the fresh entries in the event detail; without
+    // consuming them the chip would keep re-rendering the stale boot-time
+    // list, so a model configured in settings never shows up until restart.
+    window.addEventListener('orkas:model-entries-changed', (e) => {
+      if (e && e.detail && Array.isArray(e.detail.entries)) {
+        _modelChipEntries = e.detail.entries;
+        _modelChipRenderAll();
+      } else {
+        refreshModelChipEntries();
+      }
+    });
     window.addEventListener('i18n-change', () => _modelChipRenderAll());
   }
   refreshModelChipEntries();
