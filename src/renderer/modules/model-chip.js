@@ -119,8 +119,12 @@ function _modelChipRenderChip(chip) {
   const provider = current.providerLabel || current.provider || '';
   const model = current.modelName || current.model || '';
   const labelEl = chip.querySelector('.model-chip-label');
-  // Single line, same height as the recipient/workspace chips.
-  if (labelEl) labelEl.textContent = provider + ' · ' + model;
+  // Single line, same height as the recipient/workspace chips. Only the
+  // model name is shown: provider names can be long (custom providers are
+  // often named after their API host), which would push the composer
+  // toolbar onto a second line. The full "provider · model" pair stays in
+  // the hover tooltip below.
+  if (labelEl) labelEl.textContent = model;
   chip.title = t('model_chip.title', { provider, model });
 }
 
@@ -413,7 +417,17 @@ function initModelChip() {
   _mountModelChipInBar(document.querySelector('#panel-project .chat-bottom-bar'), 'project');
   if (!_modelChipBound) {
     _modelChipBound = true;
-    window.addEventListener('orkas:model-entries-changed', () => _modelChipRenderAll());
+    // model-guard broadcasts the fresh entries in the event detail; without
+    // consuming them the chip would keep re-rendering the stale boot-time
+    // list, so a model configured in settings never shows up until restart.
+    window.addEventListener('orkas:model-entries-changed', (e) => {
+      if (e && e.detail && Array.isArray(e.detail.entries)) {
+        _modelChipEntries = e.detail.entries;
+        _modelChipRenderAll();
+      } else {
+        refreshModelChipEntries();
+      }
+    });
     window.addEventListener('i18n-change', () => _modelChipRenderAll());
   }
   refreshModelChipEntries();

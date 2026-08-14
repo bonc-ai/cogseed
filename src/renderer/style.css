@@ -6398,11 +6398,19 @@ body.model-not-configured .main-content { flex-direction: column; }
 .chat-bottom-bar {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  /* The composer toolbar must stay on a single row: long chip labels
+     (e.g. a custom provider named after its API host) truncate inside
+     the chip instead of wrapping the controls onto a second line. */
+  flex-wrap: nowrap;
   row-gap: 6px;
   gap: 6px;
   width: 100%;
   padding: 4px 4px 4px;
+}
+/* Allow every composer chip to shrink below its content width so long
+   labels truncate (all chip labels already carry max-width + ellipsis). */
+.chat-bottom-bar > * {
+  min-width: 0;
 }
 /* Keep the send button on the right edge of the composer row. */
 .chat-bottom-bar .chat-send-btn {
@@ -9272,6 +9280,12 @@ body.model-not-configured .main-content { flex-direction: column; }
   /* Pin to the right edge of the composer, flush with the send button. */
   margin-left: auto;
 }
+/* display: inline-flex above would otherwise override the hidden
+   attribute; keep empty-state chips (no configured model entries)
+   invisible instead of rendering blank buttons. */
+.model-chip[hidden] {
+  display: none;
+}
 .model-chip:hover,
 .model-chip--open {
   background: var(--primary-soft);
@@ -9295,10 +9309,20 @@ body.model-not-configured .main-content { flex-direction: column; }
   flex-shrink: 0;
   transition: transform .2s;
 }
-/* The chip owns the flex auto-space; keep the send button flush on its right. */
-.model-chip + .chat-send-btn { margin-left: 0; }
+/* The visible chip owns the flex auto-space; keep the send button flush on
+   its right. When the chips are hidden (no model entries configured) the
+   send button must fall back to its own margin-left: auto and stay pinned
+   to the right edge. Note the effort chip also carries the .model-chip
+   class, so the :not([hidden]) guard matters for both. */
+.model-chip:not([hidden]) + .chat-send-btn { margin-left: 0; }
 .model-chip--open .model-chip-chevron { transform: rotate(180deg); }
-.effort-chip { margin-left: 0; }
+.effort-chip { margin-left: 0; flex-shrink: 0; }
+/* The thinking-strength label is fixed short text; never let flex
+   shrink it (the model chip / workspace chip absorb the squeeze). */
+.effort-chip-label {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 .effort-chip.is-unsupported {
   opacity: 0.75;
 }
