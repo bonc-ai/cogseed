@@ -82,7 +82,7 @@
 
 - Q1 ✅ 已执行：`workspace_policy` 自动确认（投影创建即 confirmed，`request_projection` 返回 `projection_confirmed`）+ 语义 Top-N（默认阈值 0.35、上限 8，低分资产记 `low_relevance`）+ 只读回执（`recall_citations` 随回复展示、usage 落盘，G7/G10 关闭）。
 - Q2 ✅ 已定夺：wake 审批保留（Agent 执行授权层，与知识选择不同层）。
-- Q3 世界模型维持"Commander 即世界模型"（推荐）还是另建独立预测器？
+- Q3 ✅ 已定（用户授权按推荐执行）：**Commander 即世界模型**——Forecast 候选由 Commander 生成（aHat=plan/expectedTools/expectedActors，rHat=predictedResult），宿主 `forecast-commit` 校验+重算+确定性选优；不另建独立预测器（与 Task 7 删除独立 runner 一致，静态测试固化）。
 - Q4 本体资产是否纳入 S/K 冻结知识（推荐纳入）？
 - Q5 旧任务收尾时"未确认复盘也允许沉淀"（推荐允许，按证据门槛）？
 - Q6 新任务切换是否自动触发旧任务差异 r 整理沉淀（推荐自动，幂等）？
