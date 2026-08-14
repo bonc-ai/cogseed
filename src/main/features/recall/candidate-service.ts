@@ -835,7 +835,20 @@ export async function promoteRecallCandidate(
         ...(scopePolicy ? { scopePolicy } : {}),
         status: 'active',
         lifecycleStatus: 'user_confirmed_unverified',
-        maturity: 'seed',
+        // 用户已经在评审里确认过这条内容，所以起点是 bud 而不是 seed。
+        //
+        // 规范 10.2 的 seed 档写的是「Candidate」——而候选在这个系统里是
+        // RecallCandidateRecord，不是已 promote 的资产。资产一旦走到这里，
+        // 用户确认那一关已经过了，再归进候选档就和它自己的 lifecycleStatus
+        // 「user_confirmed_unverified」自相矛盾，而 bud 的定义恰恰就是
+        // 「User Confirmed / Unverified：用户确认了内容，不代表效果已验证」。
+        //
+        // 这个矛盾以前不显形，因为 resolveDefaultUsePolicy 没有调用方。接上
+        // 选择层之后后果变成实的：seed 一律 never，于是新资产永远不会被带入
+        // 任何 Agent，也就永远产生不了使用证据、做不了 transfer proof、升不了
+        // 档——卡死在最底下一级。seed→bud 至今没有任何升档路径
+        // （setAbilityAssetMaturity 只有 proof-service 一个调用方）。
+        maturity: 'bud',
         version: '1',
         ...(sourceSessionIds.length ? { sourceSessionIds } : {}),
         createdAt: now,

@@ -281,7 +281,11 @@ export async function createAbilityAsset(
   if (!safeId(validated.candidateId) || !/^rd_[A-Za-z0-9_-]{8,64}$/.test(validated.reviewDecisionId)) {
     throw new Error('invalid ability asset handoff identity');
   }
-  if (validated.lifecycleStatus !== 'user_confirmed_unverified' || validated.maturity !== 'seed' || validated.version !== '1') {
+  // 新资产的起点是 bud：走到这里说明用户在评审里确认过内容了，而 seed 在
+  // 规范 10.2 里是候选档——候选是 RecallCandidateRecord，不是资产。归成 seed
+  // 会和它自己的 lifecycleStatus「user_confirmed_unverified」自相矛盾，也会让
+  // 它在使用矩阵里一律 never，从此进不了任何 Agent 也升不了档。
+  if (validated.lifecycleStatus !== 'user_confirmed_unverified' || validated.maturity !== 'bud' || validated.version !== '1') {
     throw new Error('invalid initial ability asset lifecycle');
   }
   const stored = asAsset(await updateRecallJsonRecord(
