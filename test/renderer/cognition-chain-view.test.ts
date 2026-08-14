@@ -172,3 +172,55 @@ describe('跨作用域确认入口', () => {
     expect(bindings).toMatch(/list\[index\] = result\.asset/);
   });
 });
+
+describe('证明那半边', () => {
+  const OUTCOMES = ['better', 'no_improvement', 'worse', 'insufficient', 'invalid', 'rework'];
+  const TRANSFERS = ['prepared', 'succeeded', 'degraded', 'rejected'];
+
+  it('四种语言都有迁移状态与效果结论的文案', () => {
+    for (const locale of LOCALES) {
+      const data = loadLocale(locale);
+      for (const s of TRANSFERS) expect(data[`cognition.proof_transfer_${s}`], `${locale} 缺 ${s}`).toBeTruthy();
+      for (const o of OUTCOMES) expect(data[`cognition.proof_outcome_${o}`], `${locale} 缺 ${o}`).toBeTruthy();
+    }
+  });
+
+  it('「没帮上忙」的结论有独立文案，不被折叠掉', () => {
+    // 只显示 better 会把「证明」变成宣传。
+    for (const locale of LOCALES) {
+      const data = loadLocale(locale);
+      const texts = OUTCOMES.map((o) => data[`cognition.proof_outcome_${o}`]);
+      expect(new Set(texts).size, `${locale} 有结论文案重复`).toBe(OUTCOMES.length);
+      expect(data['cognition.proof_outcome_worse']).not.toBe(data['cognition.proof_outcome_better']);
+    }
+  });
+
+  it('迁移与效果是两层，不合并成一个「已验证」', () => {
+    const src = readSrc('modules/skills.js');
+    expect(src).toContain('_transferProofLabel');
+    expect(src).toContain('_effectivenessProofLabel');
+    // 「被带过去用了」与「用了有没有帮上忙」必须分开渲染。
+    expect(src).toContain('cognition-proof-transfer');
+    expect(src).toContain('cognition-proof-outcome');
+  });
+
+  it('没有证明时如实说没有，不留空白', () => {
+    const src = readSrc('modules/skills.js');
+    expect(src).toContain('cognition.proofs_empty');
+    expect(src).toContain('cognition.proof_not_evaluated');
+  });
+
+  it('「没帮上忙」用中性色，不渲染成告警', () => {
+    // 一次没帮上忙不等于这条资产错了，标红等于替用户下了判断。
+    const css = readSrc('recall-local.css');
+    const start = css.indexOf('.cognition-proof-outcome');
+    expect(start).toBeGreaterThan(-1);
+    const block = css.slice(start, start + 1200);
+    expect(block).not.toMatch(/is-worse[^\n]*(danger|--red|#ef4444|#b42318)/i);
+  });
+
+  it('证明取不到不影响履历打开', () => {
+    const bindings = readSrc('modules/skills-bindings.js');
+    expect(bindings).toMatch(/recall\.proofs\.list[^\n]*\.catch\(\(\) => null\)/);
+  });
+});

@@ -175,16 +175,19 @@ function _initSkillsCognitionBindings() {
         _skillsCognitionState.visibleAssetChainId = assetId;
         _skillsCognitionState.assetChainById[assetId] = { loading: true };
         renderSkillsCognitionAssets();
-        const [chainResult, usageResult] = await Promise.all([
+        const [chainResult, usageResult, proofResult] = await Promise.all([
           window.cogseed.invoke('recall.cognitionChain.read', { assetId }),
-          // 使用记录取不到不该让整个履历打不开——它是补充，履历本身来自回执。
+          // 使用记录与证明取不到都不该让整个履历打不开——它们是补充，
+          // 履历本身来自回执。
           window.cogseed.invoke('recall.usage.list', { assetId }).catch(() => null),
+          window.cogseed.invoke('recall.proofs.list', { assetId }).catch(() => null),
         ]);
         if (!chainResult?.ok) throw new Error(chainResult?.error || 'recall cognition chain failed');
         _skillsCognitionState.assetChainById[assetId] = {
           loading: false,
           chain: chainResult.chain || null,
           usage: usageResult?.usage || [],
+          proofs: proofResult?.proofs || [],
         };
         renderSkillsCognitionAssets();
         return;

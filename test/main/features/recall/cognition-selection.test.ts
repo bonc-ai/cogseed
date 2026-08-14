@@ -426,3 +426,77 @@ describe('存量 seed 资产的归档修正', () => {
     expect(classifyInheritedAsset(await refFor(after), after, { scope: 'delivery' })).toEqual([]);
   });
 });
+
+describe('按资产反查证明', () => {
+  async function seedProof(id: string, assetId: string, version: string, status: string) {
+    const { writeRecallJsonRecord } = await import('../../../../src/main/features/recall/store');
+    await writeRecallJsonRecord(UID, 'transfer-proofs', id, {
+      schemaVersion: 1, ownerId: UID, id,
+      projectionId: `proj-${id}`, executionId: `exec-${id}`,
+      expectedResultSnapshot: '期望结果', assetVersions: [{ assetId, version }],
+      status, createdAt: `2026-08-1${version}T00:00:00.000Z`,
+    });
+  }
+
+  async function seedEffect(id: string, transferProofId: string, outcome: string) {
+    const { writeRecallJsonRecord } = await import('../../../../src/main/features/recall/store');
+    await writeRecallJsonRecord(UID, 'effectiveness-proofs', id, {
+      schemaVersion: 1, ownerId: UID, id, transferProofId, outcome,
+      status: outcome === 'invalid' ? 'invalid' : 'valid',
+      observedResult: '观察到的结果', evidenceRefs: [],
+      createdAt: '2026-08-13T01:00:00.000Z',
+    });
+  }
+
+  it('只返回带过这条资产的迁移，并带上当时用的版本', async () => {
+    const proofs = await import('../../../../src/main/features/recall/proof-service');
+    await seedProof('tp-mine', 'aa-mine', '2', 'succeeded');
+    await seedProof('tp-other', 'aa-other', '1', 'succeeded');
+
+    const views = await proofs.listAssetProofs(UID, 'aa-mine');
+    expect(views).toHaveLength(1);
+    expect(views[0].transfer.id).toBe('tp-mine');
+    expect(views[0].version).toBe('2');
+  });
+
+  it('「没帮上忙」也是证明，照样列出来', async () => {
+    // 只显示 better 会把「证明」变成宣传：一条被证明有害的资产会和一条
+    // 从没被评价过的资产在界面上长得一样。
+    const proofs = await import('../../../../src/main/features/recall/proof-service');
+    await seedProof('tp-worse', 'aa-worse', '1', 'succeeded');
+    await seedEffect('ep-worse', 'tp-worse', 'worse');
+
+    const views = await proofs.listAssetProofs(UID, 'aa-worse');
+    expect(views[0].effectiveness.map((e) => e.outcome)).toEqual(['worse']);
+  });
+
+  it('同一次迁移被评价多次时全部保留，不只留最后一条', async () => {
+    const proofs = await import('../../../../src/main/features/recall/proof-service');
+    await seedProof('tp-multi', 'aa-multi', '1', 'succeeded');
+    await seedEffect('ep-a', 'tp-multi', 'no_improvement');
+    await seedEffect('ep-b', 'tp-multi', 'better');
+
+    const views = await proofs.listAssetProofs(UID, 'aa-multi');
+    expect(views[0].effectiveness.map((e) => e.outcome).sort()).toEqual(['better', 'no_improvement']);
+  });
+
+  it('迁移成功但没人评价效果时，effectiveness 是空数组而不是缺失', async () => {
+    // 「被用了但没人说好不好」是一个明确状态，不能和「没被用过」混成一样。
+    const proofs = await import('../../../../src/main/features/recall/proof-service');
+    await seedProof('tp-noeval', 'aa-noeval', '1', 'succeeded');
+
+    const views = await proofs.listAssetProofs(UID, 'aa-noeval');
+    expect(views[0].effectiveness).toEqual([]);
+    expect(views[0].transfer.status).toBe('succeeded');
+  });
+
+  it('从没被迁移过的资产返回空列表，不报错', async () => {
+    const proofs = await import('../../../../src/main/features/recall/proof-service');
+    expect(await proofs.listAssetProofs(UID, 'aa-never')).toEqual([]);
+  });
+
+  it('非法 assetId 直接拒绝，不去扫目录', async () => {
+    const proofs = await import('../../../../src/main/features/recall/proof-service');
+    await expect(proofs.listAssetProofs(UID, '../escape')).rejects.toThrow('invalid recall asset id');
+  });
+});

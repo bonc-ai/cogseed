@@ -787,3 +787,18 @@
     gap: 1px;
   }
 }
+
+/* 证明。迁移与效果分两层：一层说「有没有真的被用上」，一层说「用了好不好」。 */
+.cognition-chain-proofs { padding: 12px 0; border-top: 1px solid var(--border, #e5e7eb); }
+.cognition-chain-proofs > strong { display: block; margin-bottom: 5px; font-size: 12px; }
+.cognition-proof-row { padding: 6px 0; border-top: 1px solid var(--border, #eef0f3); }
+.cognition-proof-row:first-of-type { border-top: none; }
+.cognition-proof-transfer { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.cognition-proof-transfer > span { color: var(--fg, #111827); font-size: 12px; }
+.cognition-proof-transfer > small { color: var(--muted-fg, #9ca3af); font-size: 10px; white-space: nowrap; }
+.cognition-proof-outcome { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 3px 0 0 12px; }
+.cognition-proof-outcome > span { color: var(--muted-fg, #6b7280); font-size: 11px; }
+.cognition-proof-outcome > small { color: var(--muted-fg, #9ca3af); font-size: 10px; white-space: nowrap; }
+/* 「没帮上忙」也是结论，用中性色如实说，不藏也不渲染成告警——把它标红等于
+   替用户做了「这条资产有问题」的判断，而一次没帮上忙不等于资产错了。 */
+.cognition-proof-outcome.is-none > span { color: var(--muted-fg, #9ca3af); }

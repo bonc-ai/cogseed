@@ -1256,6 +1256,32 @@ function _cognitionWithheldReasonLabel(reason) {
   return labels[reason] || reason;
 }
 
+/** 迁移证明的状态：它只说明「有没有真的被带过去用上」，不说明用了好不好。 */
+function _transferProofLabel(status) {
+  const labels = {
+    prepared: _cognitionText('cognition.proof_transfer_prepared', '已准备，还没回执'),
+    succeeded: _cognitionText('cognition.proof_transfer_succeeded', '确实被带过去用了'),
+    degraded: _cognitionText('cognition.proof_transfer_degraded', '带过去了，但过程降级'),
+    rejected: _cognitionText('cognition.proof_transfer_rejected', '这次迁移被拒'),
+  };
+  return labels[status] || status;
+}
+
+/** 效果结论。**worse 与 no_improvement 也是证明**——证明它没帮上忙。
+ *  只显示 better 会把「证明」变成宣传：一条被证明有害的资产会和一条从没被
+ *  评价过的资产在界面上长得一样。 */
+function _effectivenessProofLabel(outcome) {
+  const labels = {
+    better: _cognitionText('cognition.proof_outcome_better', '用了之后确实更好'),
+    no_improvement: _cognitionText('cognition.proof_outcome_no_improvement', '用了没什么差别'),
+    worse: _cognitionText('cognition.proof_outcome_worse', '用了反而更差'),
+    insufficient_evidence: _cognitionText('cognition.proof_outcome_insufficient', '证据不足，下不了结论'),
+    invalid: _cognitionText('cognition.proof_outcome_invalid', '这次评价本身作废'),
+    rework: _cognitionText('cognition.proof_outcome_rework', '需要返工'),
+  };
+  return labels[outcome] || outcome;
+}
+
 /**
  * 「使用与证明」：这条认知从哪来、进过哪些智能体、真用过几次、哪几次没用上为什么。
  *
@@ -1319,9 +1345,22 @@ function _renderRecallAssetChain(assetId) {
       )}</p></div>`
       : '';
 
+    // 证明：迁移与效果分两层显示，不合并成一个「已验证」。没有证明就说没有，
+    // 不留空白——「还没被证明过」本身是个结论，比什么都不说清楚。
+    const proofs = Array.isArray(state.proofs) ? state.proofs : [];
+    const proofRows = proofs.map((entry) => {
+      const effects = (entry.effectiveness || []).map((e) => (
+        `<div class="cognition-proof-outcome is-${escapeHtml(e.outcome)}"><span>${escapeHtml(_effectivenessProofLabel(e.outcome))}</span><small>${escapeHtml(_cognitionDate(e.createdAt))}</small></div>`
+      )).join('') || `<div class="cognition-proof-outcome is-none"><span>${escapeHtml(_cognitionText('cognition.proof_not_evaluated', '这次迁移还没有人评价效果'))}</span></div>`;
+      return `<div class="cognition-proof-row"><div class="cognition-proof-transfer"><span>${escapeHtml(_transferProofLabel(entry.transfer?.status))}</span><small>v${escapeHtml(String(entry.version || ''))} · ${escapeHtml(_cognitionDate(entry.transfer?.createdAt))}</small></div>${effects}</div>`;
+    }).join('');
+    const proofHtml = `<div class="cognition-chain-proofs"><strong>${escapeHtml(_cognitionText('cognition.proofs', '证明'))}</strong>${
+      proofs.length ? proofRows : `<div class="skills-cognition-muted">${escapeHtml(_cognitionText('cognition.proofs_empty', '还没有人证明过这条认知有没有用。'))}</div>`
+    }</div>`;
+
     body = `<div class="cognition-chain-body">
       <div class="cognition-chain-segments">${segmentsHtml}</div>
-      ${crossScopeHtml}${carriedHtml}${usageHtml}${withheldHtml}
+      ${crossScopeHtml}${carriedHtml}${usageHtml}${proofHtml}${withheldHtml}
     </div>`;
   }
 

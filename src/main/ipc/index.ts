@@ -2320,6 +2320,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
+  // 按资产反查证明。迁移证明说「被带过去用了」，效果证明说「用了有没有帮上忙」
+  // ——两者不合并成一个「已验证」布尔值，outcome=worse 也是一条证明。
+  'recall.proofs.list': async ({ assetId } = {}, ctx) => {
+    if (!safeId(assetId)) throw new Error('invalid recall asset id');
+    return { ok: true, proofs: await recallProofs.listAssetProofs(ctx.userId, assetId) };
+  },
+
   // 一条认知的履历：从哪来、进过哪些智能体、真用过几次、哪几次没带上。
   // 这是履历不是进度条——渲染层不得把 `not_yet` 画成红色或警告。
   'recall.cognitionChain.read': async ({ assetId } = {}, ctx) => {
