@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { safeId } from '../../storage';
 import {
   downgradeAbilityAssetMaturityForRevokedEvidence,
+  pauseAbilityAssetForRevokedEvidence,
   listAbilityAssets,
   revokeAbilityAsset,
 } from './asset-service';
@@ -41,6 +42,7 @@ export interface RemoveCognitionSourceResult {
   control: CognitionSourceControlRecord;
   affectedAssetIds: string[];
   downgradedAssetIds: string[];
+  pausedAssetIds?: string[];
   revokedAssetIds: string[];
   failedAssetIds: string[];
 }
@@ -211,13 +213,19 @@ export async function removeCognitionSource(
   )));
   const affectedAssetIds = affected.map((asset) => asset.id);
   if (!revokeAssets) {
-    const downgrades = await Promise.all(affected.map((asset) => (
-      downgradeAbilityAssetMaturityForRevokedEvidence(userId, asset.id, source)
-    )));
+    const [downgrades, pauses] = await Promise.all([
+      Promise.all(affected.map((asset) => (
+        downgradeAbilityAssetMaturityForRevokedEvidence(userId, asset.id, source)
+      ))),
+      Promise.all(affected.map((asset) => (
+        pauseAbilityAssetForRevokedEvidence(userId, asset.id, source)
+      ))),
+    ]);
     return {
       control,
       affectedAssetIds,
       downgradedAssetIds: affected.filter((_, index) => downgrades[index].downgraded).map((asset) => asset.id),
+      pausedAssetIds: affected.filter((_, index) => pauses[index].paused).map((asset) => asset.id),
       revokedAssetIds: [],
       failedAssetIds: [],
     };

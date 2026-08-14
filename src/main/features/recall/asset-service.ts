@@ -621,6 +621,41 @@ export async function setAbilityAssetMaturity(userId: string, assetId: string, m
  * User Confirmed / Unverified 档，正好表达「资产仍在、效果待重新验证」。来源随后
  * 恢复也不会自动升回去，新的 proof 才能升阶。
  */
+/**
+ * 证据撤销后暂停由它支撑的正式资产（系统发起，幂等）。
+ *
+ * 资产仍是用户确认过的正式资产，不删除、不撤销；但来源链已失效，暂停后不再进入
+ * 新 Projection、不再注入 Prompt，直到用户显式恢复（resume 仍要求 user actor）。
+ */
+export async function pauseAbilityAssetForRevokedEvidence(
+  userId: string,
+  assetId: string,
+  source: Pick<CognitionSourceRef, 'kind' | 'id'>,
+): Promise<{ asset: RecallAbilityAssetRecord; paused: boolean }> {
+  if (typeof source.kind !== 'string' || !safeId(source.id)) throw new Error('invalid revoked evidence source');
+  let paused = false;
+  const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
+    if (!raw) throw new Error('recall ability asset not found');
+    const current = asAsset(raw);
+    if (
+      current.status === 'purged'
+      || current.status === 'revoked'
+      || current.status === 'paused'
+      || !current.evidenceRefs.some((ref) => ref.kind === source.kind && ref.id === source.id)
+    ) return current;
+    paused = true;
+    return { ...current, status: 'paused', updatedAt: new Date().toISOString() };
+  });
+  const asset = asAsset(updated);
+  if (paused) {
+    await appendAudit(userId, asset.id, 'paused', {
+      note: `evidence_revoked:${source.kind}:${source.id}`,
+      actor: 'system',
+    });
+  }
+  return { asset, paused };
+}
+
 export async function downgradeAbilityAssetMaturityForRevokedEvidence(
   userId: string,
   assetId: string,
