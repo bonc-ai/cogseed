@@ -352,6 +352,12 @@ body.cs-onboarding-active .app-container{display:none !important}
    template: icon / flexible-name / auto actions. */
 #cs-onboarding .cs-team-row{grid-template-columns:42px minmax(0,1fr) auto}
 #cs-onboarding .cs-team-row .cs-team-right{display:flex;align-items:center;gap:10px}
+#cs-onboarding .cs-team-actions{display:flex;align-items:center;gap:8px}
+#cs-onboarding .cs-team-action-select{padding:7px 12px;font-size:12px;border:1px solid var(--cs-line);
+  border-radius:6px;background:var(--cs-paper);color:var(--cs-ink);cursor:pointer;
+  transition:all .15s;outline:none}
+#cs-onboarding .cs-team-action-select:hover{border-color:var(--cs-forest);background:var(--cs-paper-lift)}
+#cs-onboarding .cs-team-action-select:focus{border-color:var(--cs-forest);box-shadow:0 0 0 3px var(--cs-forest-ghost)}
 #cs-onboarding .cs-team-connect{padding:7px 16px;font-size:12px}
 #cs-onboarding .cs-team-connect.done{background:var(--cs-forest-weak);color:var(--cs-forest-deep);cursor:default}
 #cs-onboarding .cs-team-connect.done:hover{background:var(--cs-forest-weak)}

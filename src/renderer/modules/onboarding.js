@@ -210,7 +210,9 @@ function _csObShellHtml() {
         <div class="cs-list" id="cs-team-list">
           <div class="cs-state loading">正在检测可连接的 Agent…</div>
         </div>
-        <div class="cs-mode"><span>无需粘贴密钥。订阅登录的 Agent 本机就能干活，接入不受影响。</span></div>
+        <div class="cs-mode">
+          <span>无需粘贴密钥。订阅登录的 Agent 本机就能干活，接入不受影响。</span>
+        </div>
 
         <div class="cs-actions">
           <button class="cs-btn ghost" data-csnext="0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
@@ -1091,7 +1093,13 @@ function _csRenderTeam(items, unsupported, localClis) {
     const hintHtml = hints.length ? `<small>${_csEsc(hints.join(' · '))}</small>` : '';
 
     const action = connectable
-      ? `<button type="button" class="cs-team-connect cs-btn" data-app-type="${_csEsc(appType)}">连接</button>`
+      ? `<div class="cs-team-actions">
+          <select class="cs-team-action-select" data-app-type="${_csEsc(appType)}">
+            <option value="connect-only">只连接</option>
+            <option value="connect-store">连接并存储 API</option>
+          </select>
+          <button type="button" class="cs-team-connect cs-btn" data-app-type="${_csEsc(appType)}">执行</button>
+        </div>`
       : '';
 
     return `
@@ -1108,14 +1116,19 @@ function _csRenderTeam(items, unsupported, localClis) {
   box.innerHTML = rows;
 
   box.querySelectorAll('.cs-team-connect').forEach((btn) => {
-    btn.addEventListener('click', () => void _csConnectTeam(box, btn.dataset.appType));
+    btn.addEventListener('click', () => {
+      const appType = btn.dataset.appType;
+      const select = box.querySelector(`.cs-team-action-select[data-app-type="${appType}"]`);
+      const shouldStore = select && select.value === 'connect-store';
+      void _csConnectTeam(box, appType, shouldStore);
+    });
   });
 }
 
 // Connect ONE agent's models into custom providers ("AI 团队"): sync all of
 // that agent's importable externalIds at once. Honest result — added/updated
 // counts, and a note when some still need a key.
-async function _csConnectTeam(box, appType) {
+async function _csConnectTeam(box, appType, shouldStoreApi = false) {
   const row = box.querySelector(`.cs-team-row[data-app-type="${appType}"]`);
   const btn = row ? row.querySelector('.cs-team-connect') : null;
   const externalIds = (_csTeamByAgent[appType] || []).slice();
@@ -1138,7 +1151,7 @@ async function _csConnectTeam(box, appType) {
       if (!res || res.ok !== true) {
         const reason = (res && res.reason) || '未知原因';
         _csToast(`连接「${label}」失败：${reason}`);
-        if (btn) { btn.disabled = false; btn.textContent = '连接'; }
+        if (btn) { btn.disabled = false; btn.textContent = '执行'; }
         return;
       }
       added = res.added || 0;
@@ -1160,6 +1173,22 @@ async function _csConnectTeam(box, appType) {
       cliResult = await _csEnsureCliAgent(cli, existing);
     }
 
+    // 3) If user selected "connect and store", store the currently-in-use API.
+    let storedApi = false;
+    if (shouldStoreApi && cli) {
+      try {
+        const storeRes = await window.cogseed.invoke('customProviders.storeActiveCliConfig', { cli });
+        if (storeRes && storeRes.ok) {
+          storedApi = true;
+          _obLog.info('active CLI config stored', { cli, providerId: storeRes.providerId });
+        } else {
+          _obLog.warn('active CLI config store failed', { cli, error: storeRes?.error || 'unknown' });
+        }
+      } catch (err) {
+        _obLog.warn('active CLI config store error', { cli, error: (err && err.message) || String(err) });
+      }
+    }
+
     // Reflect the connected state on the row itself; keep it non-technical.
     if (row) {
       const statusEl = row.querySelector('.g-status');
@@ -1173,17 +1202,18 @@ async function _csConnectTeam(box, appType) {
     if (models) parts.push(`${models} 个模型`);
     if (cliResult === 'created') parts.push('新增 1 位 CLI 成员');
     else if (cliResult === 'exists') parts.push('CLI 成员已在团队');
+    if (storedApi) parts.push('已存储当前正在使用的 API');
     if (cliResult === 'error') {
       _csToast(`「${label}」模型已连接，但加入 CLI 成员失败，可稍后在「AI 团队」里手动新建`);
     } else {
       _csToast(parts.length ? `已把「${label}」连接到 AI 团队（${parts.join('，')}）` : `已连接「${label}」`);
     }
-    _obLog.info('team connect finished', { appType, added, updated, cli, cliResult });
+    _obLog.info('team connect finished', { appType, added, updated, cli, cliResult, storedApi });
   } catch (err) {
     const msg = (err && err.message) || String(err);
     _obLog.warn('team connect failed', { appType, error: msg });
     _csToast(`连接「${label}」失败：${msg}`);
-    if (btn) { btn.disabled = false; btn.textContent = '连接'; }
+    if (btn) { btn.disabled = false; btn.textContent = '执行'; }
   }
 }
 
