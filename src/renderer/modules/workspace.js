@@ -428,22 +428,49 @@
     return _renderTasksPane();
   }
 
-  function _renderTasksPane() {
-    if (!_sessions.length) {
-      return `<div class="ws-empty">${_t('ws.tasks_empty', '该空间暂无任务。')}</div>`;
-    }
+  /** 任务 tab 底部内联「开新任务」输入条（对齐高保真原型：在当前空间中开启一项新任务）。 */
+  function _newTaskComposerHtml() {
     return `
+    <div class="ws-new-task-bar">
+      <button class="ws-new-task-add" data-ws="stub-add" title="${_t('ws.add_content', '添加内容')}" aria-label="${_t('ws.add_content', '添加内容')}">${_icon('plus', 'ui-icon')}</button>
+      <input data-ws="new-task-input" placeholder="${_t('ws.new_task_inline_ph', '在当前空间中开启一项新任务…')}" autocomplete="off" spellcheck="false" maxlength="500" />
+      <button class="ws-new-task-mention" data-ws="stub-mention" title="${_t('ws.mention_assets', '引用空间产物与资产')}">@ ${_t('ws.mention_assets', '引用空间产物与资产')}</button>
+      <button class="ws-new-task-send" data-ws="new-task-send" title="${_t('ws.start_task', '开始新任务')}" aria-label="${_t('ws.start_task', '开始新任务')}">${_icon('send', 'ui-icon')}</button>
+    </div>`;
+  }
+
+  function _renderTasksPane() {
+    const list = _sessions.length
+      ? `
     <div class="ws-toolbar"><span>${_sessions.length} 个任务 · 按最近更新时间排序</span></div>
     <div class="ws-session-list">
       ${_sessions.map((s) => `
-        <button class="ws-session-row" data-ws="open-task" data-session="${s.id}">
+        <button class="ws-session-row" data-ws="open-task" data-session="${escapeHtml(s.id)}">
           <span class="ws-session-icon">${_icon('message-square', 'ui-icon')}</span>
           <div><strong>${escapeHtml(s.title)}</strong><small>${escapeHtml(s.desc)}</small></div>
           <em>${escapeHtml(s.results)}</em>
           <time>${escapeHtml(s.time)}</time>
           <b>${_icon('more-horizontal', 'ui-icon')}</b>
         </button>`).join('')}
-    </div>`;
+    </div>`
+      : `<div class="ws-empty">${_t('ws.tasks_empty', '该空间暂无任务。')}</div>`;
+    return `${list}${_newTaskComposerHtml()}`;
+  }
+
+  /** 开新任务 = 在空间创建新会话并打开（复用 conversations.create + setView）。 */
+  async function _startNewTask(spaceId) {
+    const root = document.getElementById('ws-view');
+    if (!root) return;
+    const input = root.querySelector('[data-ws="new-task-input"]');
+    const title = input ? input.value.trim() : '';
+    if (!title) { if (input) input.focus(); return; }
+    if (!spaceId) return;
+    const res = await _invoke('conversations.create', { spaceId, title });
+    if (res.error || !res.conversation) { _stub('开新任务失败：' + (res.error || '未知错误')); return; }
+    const cid = res.conversation.conversation_id;
+    // 刷新空间任务列表（回来时任务数/最近任务更新）
+    _detailLoadedFor = null;
+    _loadSpaceDetail(spaceId).then(() => { if (typeof setView === 'function') setView('conversation', cid, { skipLoad: true }); });
   }
 
   function _renderArtifactsPane() {
@@ -725,8 +752,21 @@
     root.querySelectorAll('[data-ws="space-tab"]').forEach((el) => el.addEventListener('click', () => { _spaceTab = el.dataset.tab; _reRender(); }));
     root.querySelectorAll('[data-ws="space-settings"]').forEach((el) => el.addEventListener('click', () => { _configOpen = !_configOpen; _reRender(); }));
     root.querySelectorAll('[data-ws="config-close"]').forEach((el) => el.addEventListener('click', () => { _configOpen = false; _reRender(); }));
-    root.querySelectorAll('[data-ws="new-task"]').forEach((el) => el.addEventListener('click', () => _go('task')));
-    root.querySelectorAll('[data-ws="open-task"]').forEach((el) => el.addEventListener('click', () => _go('task')));
+    // 「新建任务」→ 聚焦任务 tab 内联开新任务输入条
+    root.querySelectorAll('[data-ws="new-task"]').forEach((el) => el.addEventListener('click', () => {
+      const input = root.querySelector('[data-ws="new-task-input"]');
+      if (input) { input.scrollIntoView({ behavior: 'smooth', block: 'center' }); setTimeout(() => input.focus(), 150); }
+    }));
+    // 任务行 → 打开真实会话
+    root.querySelectorAll('[data-ws="open-task"]').forEach((el) => el.addEventListener('click', () => {
+      const cid = el.dataset.session;
+      if (cid && typeof setView === 'function') setView('conversation', cid);
+    }));
+    root.querySelectorAll('[data-ws="new-task-send"]').forEach((el) => el.addEventListener('click', () => _startNewTask(_detailSpaceId)));
+    const nti = root.querySelector('[data-ws="new-task-input"]');
+    if (nti) nti.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _startNewTask(_detailSpaceId); }
+    });
     root.querySelectorAll('[data-ws="artifact-filter"]').forEach((el) => el.addEventListener('click', () => { _artifactFilter = el.dataset.type; _reRender(); }));
     root.querySelectorAll('[data-ws="asset-filter"]').forEach((el) => el.addEventListener('click', () => { _assetFilter = el.dataset.type; _reRender(); }));
     root.querySelectorAll('[data-ws="unbind-asset"]').forEach((el) => el.addEventListener('click', async () => {

@@ -325,6 +325,24 @@
 .ws-send .ui-icon { width: 16px; height: 16px; }
 .ws-composer-wrap > p { margin: 6px auto 0; width: fit-content; color: #a4aca7; font-size: 9px; text-align: center; }
 
+/* 任务 tab 内联「开新任务」输入条（对齐高保真原型：＋ 在当前空间中开启一项新任务… ＋ @ 引用空间产物与资产） */
+.ws-new-task-bar {
+  display: flex; align-items: center; gap: 8px; margin-top: 18px; padding: 8px 10px;
+  border: 1px solid #cfd9d3; border-radius: 14px; background: #fff;
+  box-shadow: 0 6px 18px rgba(25,43,33,.06);
+}
+.ws-new-task-bar:focus-within { border-color: #8fceb0; box-shadow: 0 8px 24px rgba(25,43,33,.09), 0 0 0 3px rgba(31,173,105,.08); }
+.ws-new-task-bar input { flex: 1; min-width: 0; height: 34px; border: 0; outline: none; background: transparent; color: #29362e; font-size: 12px; }
+.ws-new-task-bar input::placeholder { color: #a2aaa5; }
+.ws-new-task-add, .ws-new-task-mention, .ws-new-task-send {
+  display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 9px;
+  border-radius: 8px; color: #617068; font-size: 11px; white-space: nowrap;
+}
+.ws-new-task-add .ui-icon, .ws-new-task-mention .ui-icon, .ws-new-task-send .ui-icon { width: 15px; height: 15px; }
+.ws-new-task-add:hover, .ws-new-task-mention:hover { color: #168551; background: #eaf7f0; }
+.ws-new-task-send { color: #fff; background: #1f9d62; box-shadow: 0 5px 12px rgba(31,166,100,.22); }
+.ws-new-task-send:hover { background: #178b54; }
+
 .ws-context-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--ws-line); background: #f7f9f8; }
 .ws-context-panel > header { display: flex; align-items: center; justify-content: space-between; height: 58px; padding: 0 17px; border-bottom: 1px solid var(--ws-line); background: #fff; }
 .ws-context-panel > header strong { display: block; color: #2a332e; font-size: 12px; }
