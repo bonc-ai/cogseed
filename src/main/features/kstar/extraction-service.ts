@@ -20,12 +20,41 @@ export function gapType(review: KstarReviewRecord): KstarCandidateProposal['sugg
   return null;
 }
 
+/** Minimum |ΔR| for precipitation (learning-reflex gate). Tiny deltas are
+ *  measurement noise, not lessons: only evidence that actually moved the
+ *  result by at least this much becomes a reusable rule. */
+export const MIN_PRECIPITATION_DELTA_R = 0.15;
+
 export function hasLearningSignal(review: KstarReviewRecord): boolean {
   return review.deltaR !== 'unknown'
     || review.deltaA !== 'unknown'
     || review.outcome === 'better_than_expected'
     || review.outcome === 'worse_than_expected'
     || (review.confidence >= 0.7 && review.attribution !== 'unclear' && !!review.reason.trim());
+}
+
+/** Evidence gate for precipitation (learning-reflex): a review precipitates
+ *  only when it carries a NON-TRIVIAL lesson —
+ *   1. a numeric ΔR/ΔA at or above MIN_PRECIPITATION_DELTA_R (measured
+ *      deviation), or
+ *   2. an explicit better/worse-than-expected outcome (deviated by
+ *      definition, numeric delta may be unknown), or
+ *   3. a high-confidence review that names a concrete gap (knowledge/rule/
+ *      template/skill gap with a reason) — a gap lesson is a signal even
+ *      when the numeric delta is tiny.
+ *  "Met expected" with a ~0 delta is NO lesson (the world behaved as
+ *  predicted) and does not precipitate — that is the noise gate. */
+export function clearsPrecipitationGate(review: KstarReviewRecord): boolean {
+  if (!hasLearningSignal(review)) return false;
+  const numericDeltaR = typeof review.deltaR === 'number' && Number.isFinite(review.deltaR) ? review.deltaR : 0;
+  const numericDeltaA = typeof review.deltaA === 'number' && Number.isFinite(review.deltaA) ? review.deltaA : 0;
+  if (Math.abs(numericDeltaR) >= MIN_PRECIPITATION_DELTA_R || Math.abs(numericDeltaA) >= MIN_PRECIPITATION_DELTA_R) {
+    return true;
+  }
+  if (review.outcome === 'better_than_expected' || review.outcome === 'worse_than_expected') return true;
+  // Numeric deltas are in the noise band — a lesson survives only if it
+  // names a concrete gap with a reason.
+  return gapType(review) !== null && review.reason.trim().length > 0;
 }
 
 export function learningSignal(review: KstarReviewRecord): KstarCandidateProposal['learningSignal'] {
@@ -54,7 +83,7 @@ export function proposeKstarCandidates(
     distinctTools.length >= 2 &&
     episode.a.toolCalls.every((call) => call.status === 'ok');
 
-  const signalAvailable = hasLearningSignal(review);
+  const signalAvailable = clearsPrecipitationGate(review);
   if (verifiedWorkflow && signalAvailable) {
     proposals.push({
       judgment: `For tasks like "${episode.t.userGoal}", use the verified workflow: ${distinctTools.join(' → ')}.`,

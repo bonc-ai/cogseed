@@ -3,7 +3,7 @@ import { safeId } from '../../storage';
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
 import { precipitateDirectExperienceFromSource } from './direct-experience-assets';
 import { readKstarEpisode } from './episode-store';
-import { gapType, hasLearningSignal, learningSignal, scopeForTask } from './extraction-service';
+import { clearsPrecipitationGate, gapType, learningSignal, scopeForTask } from './extraction-service';
 import { readKstarReview } from './review-service';
 import { saveKstarCandidateProposals } from './recall-bridge';
 import type { KstarRequirementRecord } from './requirement-types';
@@ -64,9 +64,11 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
     ]),
   ]);
 
-  // Strongest review drives the aggregated learning signal.
+  // Strongest review drives the aggregated learning signal — it must clear
+  // the |ΔR| precipitation gate so noise never becomes a requirement-level
+  // rule.
   const strongest = [...reviews]
-    .filter((review) => hasLearningSignal(review))
+    .filter((review) => clearsPrecipitationGate(review))
     .sort((a, b) => b.confidence - a.confidence)[0];
 
   const proposals: KstarCandidateProposal[] = [];

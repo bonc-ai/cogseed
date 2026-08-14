@@ -7,7 +7,7 @@ import { createLogger } from '../../logger';
 import { listAbilityAssets, readAbilityAsset } from './asset-service';
 import { recallJsonRecordPath } from './paths';
 import { listWorkspaceAssetReferences } from './workspace-refs';
-import { isAssetScopeAllowed, matchesScopeToken } from './scope-policy';
+import { isAssetScopeAllowed, matchesScopeToken, scopeIncludes } from './scope-policy';
 import { loadOntologyGroupTitleMap } from './ontology-taxonomy';
 import { readRecallJsonRecord, updateRecallJsonRecord, writeRecallJsonRecord } from './store';
 import type { RecallJsonRecord } from './types';
@@ -271,58 +271,6 @@ async function rankAssetsBySemanticMatch(
   }));
   scored.sort((left, right) => right.match.matchScore - left.match.matchScore || left.index - right.index);
   return { assets: scored.map((item) => item.asset), assetMatches: scored.map((item) => item.match) };
-}
-
-function splitScopeTerms(value: string): string[] {
-  return String(value || '')
-    .split(/[\s,，;；、()（）\[\]【】/\\\-—]+/)
-    .map((term) => term.trim())
-    .filter((term) => term.length >= 2);
-}
-
-/** Cross-language scope aliases: an ASCII tag (e.g. 'review' written by
- *  scopeForTask) also matches CJK purpose tokens (审查/审计/检查), so a
- *  Chinese task goal does not silently fall out of a short ASCII scope. */
-const SCOPE_LANGUAGE_ALIASES: Record<string, string[]> = {
-  review: ['审查', '审计', '检查', '评审'],
-  code: ['代码', '函数', '缺陷', '测试'],
-  report: ['报告', '总结', '文档', '文件'],
-  product: ['产品', '架构', '决策'],
-  general: [],
-};
-
-function scopeTokenMatches(haystackTokens: string[], needle: string): boolean {
-  const lowerNeedle = needle.toLocaleLowerCase();
-  for (const token of haystackTokens) {
-    if (token.length < 2) continue;
-    const lowerToken = token.toLocaleLowerCase();
-    // ASCII side stays whole-word (no cat→category substring bleed), plus a
-    // fixed alias table bridges ASCII tags to CJK purpose words.
-    if (/^[a-z0-9]+$/i.test(needle) || /^[a-z0-9]+$/i.test(token)) {
-      if (lowerToken === lowerNeedle) return true;
-      const aliases = SCOPE_LANGUAGE_ALIASES[lowerNeedle] || SCOPE_LANGUAGE_ALIASES[lowerToken] || [];
-      if (aliases.some((alias) => lowerToken.includes(alias) || lowerNeedle.includes(alias))) return true;
-      continue;
-    }
-    // CJK sides match by bidirectional containment so a long sentence scope
-    // ("代码审查（尤其不可修改代码的架构审查）") aligns with a sentence
-    // purpose ("审查 Group Chat 消息路由…") via shared tokens.
-    if (lowerToken.includes(lowerNeedle) || lowerNeedle.includes(lowerToken)) return true;
-  }
-  return false;
-}
-
-/** Soft scope match: the scope may be a short tag list (legacy intent) or a
- *  free-form sentence (as written by teaching/capture). Exact whole-token
- *  matching runs first; when that misses, both sides are tokenized and any
- *  bidirectional token containment (CJK) / equal token (ASCII) passes, so a
- *  sentence scope no longer silently empties the candidate pool. */
-function scopeIncludes(scope: string, text: string): boolean {
-  const terms = scope.split(',').map((term) => term.trim()).filter(Boolean);
-  if (terms.includes('*')) return true;
-  if (terms.some((term) => matchesScopeToken(text, term))) return true;
-  const textTokens = splitScopeTerms(text);
-  return splitScopeTerms(scope).some((token) => scopeTokenMatches(textTokens, token));
 }
 
 function automaticProjectionId(taskRunId: string, workspaceId?: string): string {

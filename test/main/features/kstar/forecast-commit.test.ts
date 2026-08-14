@@ -344,6 +344,29 @@ describe('Commander Forecast host commit', () => {
     expect(record.input.k.abilityAssetRefs).toEqual([seeded.selectedAsset.id]);
   });
 
+  it('evaluates rules at forecast time and carries matched rules into K (rule engine)', async () => {
+    const seeded = await seedForecastBoundary({ confirmed: true });
+    const groups = await import('../../../../src/main/features/personal_ontology_groups');
+    const group = await groups.createGroup('user-a', '认证');
+    await groups.appendFieldValue('user-a', group.group!.group_id, '协议', 'OAuth → 回调安全', '手动');
+
+    const forecast = await import('../../../../src/main/features/kstar/forecast-commit');
+    const record = await forecast.commitCommanderForecast('user-a', {
+      ...seeded.input,
+      taskText: 'OAuth callback state validation missing',
+    });
+
+    expect(record.input.k.matchedRules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: 'ontology',
+          subject: 'OAuth',
+          object: '回调安全',
+        }),
+      ]),
+    );
+  });
+
   it('degrades gracefully when memory files are absent (Q4)', async () => {
     const seeded = await seedForecastBoundary({ confirmed: true });
     const forecast = await import('../../../../src/main/features/kstar/forecast-commit');

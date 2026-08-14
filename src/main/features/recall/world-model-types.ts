@@ -201,6 +201,23 @@ export interface WorldModelKnowledge {
     object: string;
   }>;
   /**
+   * Rules whose trigger fired for THIS task (rule-engine output): the
+   * ontology/asset rules that actually apply, so the Commander reasons over
+   * the relevant subset instead of the whole library.
+   */
+  matchedRules?: Array<{
+    source: 'ontology' | 'asset';
+    ruleId: string;
+    trigger: string;
+    subject?: string;
+    object?: string;
+    cause?: string;
+    effect?: string;
+    mitigation?: string;
+    severity?: 'high' | 'medium' | 'low';
+    deltaR?: number | 'unknown';
+  }>;
+  /**
    * T-Box — the ontology concept definitions (group ledger + field
    * vocabulary) assets point at via ontologyRefs. Loaded fresh at forecast
    * time; carries vocabulary, not field values.

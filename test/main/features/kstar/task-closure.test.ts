@@ -247,11 +247,13 @@ describe('KSTAR task closure', () => {
       review: {
         expectedResult: builtEpisode.t.userGoal,
         actualResult: 'Report created and verification passed.',
-        deltaR: 0 as const,
-        deltaA: 0 as const,
-        outcome: 'met_expected' as const,
-        attribution: 'unclear' as const,
-        reason: 'Recorded verification passed.',
+        // A real deviation: met_expected with ~0 delta is NOT a lesson
+        // (noise gate), so the fixture carries a measurable delta.
+        deltaR: 0.3 as const,
+        deltaA: 0.1 as const,
+        outcome: 'better_than_expected' as const,
+        attribution: 'execution_gap' as const,
+        reason: 'The verified workflow is worth reusing for report tasks.',
         confidence: 0.95,
         evidenceRefs: builtEpisode.evidenceRefs,
       },
@@ -267,10 +269,10 @@ describe('KSTAR task closure', () => {
 
     expect(result.review).toMatchObject({
       reviewState: 'inferred', inferenceMethod: 'deterministic', needsConfirmation: false,
-      outcome: 'met_expected', deltaR: 0,
+      outcome: 'better_than_expected', deltaR: 0.3,
     });
     expect(result.candidates).toHaveLength(1);
-    expect(result.candidates[0]).toMatchObject({ status: 'pending_review', learningSignal: { outcome: 'met_expected', deltaR: 0 } });
+    expect(result.candidates[0]).toMatchObject({ status: 'pending_review', learningSignal: { outcome: 'better_than_expected', deltaR: 0.3 } });
   });
 
   it('confirms a lightweight user verdict and reconciles candidate extraction idempotently', async () => {

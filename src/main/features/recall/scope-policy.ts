@@ -71,6 +71,58 @@ export function matchesScopeToken(value: string | undefined, token: string): boo
   return haystack.includes(needle);
 }
 
+/** Split a sentence/scope into length>=2 tokens by punctuation/whitespace. */
+export function splitScopeTerms(value: string): string[] {
+  return String(value || '')
+    .split(/[\s,，;；、()（）\[\]【】/\\\-—]+/)
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 2);
+}
+
+/** Cross-language scope aliases: an ASCII tag (e.g. 'review') also matches
+ *  CJK purpose tokens (审查/审计/检查), so a Chinese task goal does not
+ *  silently fall out of a short ASCII scope. Shared with the rule engine. */
+const SCOPE_LANGUAGE_ALIASES: Record<string, string[]> = {
+  review: ['审查', '审计', '检查', '评审'],
+  code: ['代码', '函数', '缺陷', '测试'],
+  report: ['报告', '总结', '文档', '文件'],
+  product: ['产品', '架构', '决策'],
+  general: [],
+};
+
+/** Bidirectional token containment (CJK) / exact token equality (ASCII) with
+ *  a cross-language alias bridge. Shared by soft scope matching and the
+ *  rule engine's text trigger evaluation. */
+export function scopeTokenMatches(haystackTokens: string[], needle: string): boolean {
+  const lowerNeedle = needle.toLocaleLowerCase();
+  for (const token of haystackTokens) {
+    if (token.length < 2) continue;
+    const lowerToken = token.toLocaleLowerCase();
+    // ASCII side stays whole-word (no cat→category substring bleed), plus a
+    // fixed alias table bridges ASCII tags to CJK purpose words.
+    if (/^[a-z0-9]+$/i.test(needle) || /^[a-z0-9]+$/i.test(token)) {
+      if (lowerToken === lowerNeedle) return true;
+      const aliases = SCOPE_LANGUAGE_ALIASES[lowerNeedle] || SCOPE_LANGUAGE_ALIASES[lowerToken] || [];
+      if (aliases.some((alias) => lowerToken.includes(alias) || lowerNeedle.includes(alias))) return true;
+      continue;
+    }
+    // CJK sides match by bidirectional containment.
+    if (lowerToken.includes(lowerNeedle) || lowerNeedle.includes(lowerToken)) return true;
+  }
+  return false;
+}
+
+/** Soft scope match: short tag list or free-form sentence. Exact whole-token
+ *  matching runs first; when that misses, both sides are tokenized and any
+ *  bidirectional token containment (CJK) / equal token (ASCII) passes. */
+export function scopeIncludes(scope: string, text: string): boolean {
+  const terms = scope.split(',').map((term) => term.trim()).filter(Boolean);
+  if (terms.includes('*')) return true;
+  if (terms.some((term) => matchesScopeToken(text, term))) return true;
+  const textTokens = splitScopeTerms(text);
+  return splitScopeTerms(scope).some((token) => scopeTokenMatches(textTokens, token));
+}
+
 /** Structured scope-policy gate. Unknown workspace dimensions are treated as
  *  "not allowed" when the policy restricts them (fail-closed); an unknown
  *  conversation kind passes the conversationKinds restriction (fail-open,

@@ -198,6 +198,50 @@ describe('KStar task-level precipitation (B5)', () => {
     expect(result.proposals[0].learningSignal?.confidence).toBe(0.85);
   });
 
+  it('does not precipitate when the ΔR signal is below the noise gate (|ΔR| < 0.15)', async () => {
+    const epA = episode('kse-b5-tiny', 'Build the report', [{ name: 'read_file' }, { name: 'write_file' }]);
+    await seedEpisode(epA);
+    await seedReview(epA, {
+      expectedResult: 'A report is built.',
+      actualResult: 'The report was built.',
+      deltaR: 0.05, // tiny delta = measurement noise, not a lesson
+      deltaA: 0.02,
+      outcome: 'unclear',
+      attribution: 'execution_gap',
+      reason: 'Minor difference only.',
+      confidence: 0.8,
+    });
+    const requirement = await seedRequirement(['kse-b5-tiny']);
+
+    const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
+    const result = await precipitation.precipitateRequirementLevel('user-b5', requirement);
+
+    expect(result.proposals).toHaveLength(0);
+    expect(result.createdAssetIds).toHaveLength(0);
+  });
+
+  it('precipitates when the ΔR signal clears the noise gate (|ΔR| >= 0.15)', async () => {
+    const epA = episode('kse-b5-clear', 'Build the report', [{ name: 'read_file' }, { name: 'write_file' }]);
+    await seedEpisode(epA);
+    await seedReview(epA, {
+      expectedResult: 'A report is built.',
+      actualResult: 'The report was built much faster.',
+      deltaR: 0.2,
+      deltaA: 0.1,
+      outcome: 'better_than_expected',
+      attribution: 'execution_gap',
+      reason: 'The workflow is worth reusing.',
+      confidence: 0.9,
+    });
+    const requirement = await seedRequirement(['kse-b5-clear']);
+
+    const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
+    const result = await precipitation.precipitateRequirementLevel('user-b5', requirement);
+
+    expect(result.proposals).toHaveLength(1);
+    expect(result.createdAssetIds).toHaveLength(1);
+  });
+
   it('tolerates missing episodes/reviews without throwing', async () => {
     const requirement = await seedRequirement(['kse-b5-missing']);
     const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');

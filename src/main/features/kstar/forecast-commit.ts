@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import { nowIso, safeId } from '../../storage';
 import { getWorkspacePath } from '../user_workspace';
 import { loadCommittedProjectionKnowledge } from '../recall/projection-knowledge';
+import { evaluateRules } from '../recall/rule-engine';
 import {
   applyCausalRules,
   buildWorldModelForecastRecord,
@@ -223,6 +224,33 @@ export async function commitCommanderForecast(
   });
 
   const taskText = normalizedText(input.taskText, 4_000);
+  // Rule engine: which rules actually apply to THIS task? Text-triggered
+  // evaluation over ontology R-Box rules + asset ΔR lessons; the matched
+  // subset rides into K so the Commander reasons over relevant rules only.
+  const matchedRules = evaluateRules({
+    taskText,
+    ontologyRules: knowledge.ontologyRules,
+    assetRules: knowledge.abilityAssets.flatMap((asset) => (
+      asset.causalRule ? [{ assetId: asset.id, rule: asset.causalRule }] : []
+    )),
+  }).matchedRules.map((rule) => rule.source === 'ontology'
+    ? {
+        source: 'ontology' as const,
+        ruleId: rule.ruleId,
+        trigger: rule.trigger,
+        subject: rule.subject,
+        object: rule.object,
+      }
+    : {
+        source: 'asset' as const,
+        ruleId: rule.ruleId,
+        trigger: rule.trigger,
+        cause: rule.cause,
+        effect: rule.effect,
+        mitigation: rule.mitigation,
+        severity: rule.severity,
+        deltaR: rule.deltaR,
+      });
   const simulationInput: WorldModelSimulationInput = {
     k: {
       projectionId: knowledge.projectionId,
@@ -234,6 +262,7 @@ export async function commitCommanderForecast(
       ontologyAssets: knowledge.ontologyAssets,
       ontologyTaxonomy: knowledge.ontologyTaxonomy,
       ontologyRules: knowledge.ontologyRules,
+      ...(matchedRules.length ? { matchedRules } : {}),
     },
     s: {
       snapshotId: snapshot.id,
