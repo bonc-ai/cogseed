@@ -3936,6 +3936,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { path: norm };
   },
 
+  // Open one validated output with the OS default application. This is the
+  // fallback for files that exist but cannot be previewed safely in-app.
+  'workspace.openFileExternal': async (payload, ctx) => {
+    const target = payload?.path;
+    if (typeof target !== 'string' || !target) {
+      throw new Error('missing path');
+    }
+    const norm = path.resolve(target);
+    if (!await _isAllowedFileActionPath(ctx.userId, payload, norm)) {
+      throw new Error('path is outside the user workspace');
+    }
+    let st: fs.Stats;
+    try { st = fs.statSync(norm); }
+    catch { throw new Error('file not found'); }
+    if (!st.isFile()) throw new Error('path is not a file');
+    const openErr = await shell.openPath(norm);
+    if (openErr) throw new Error(openErr);
+    return { ok: true, path: norm };
+  },
+
   // Lightweight existence check for renderer previews. Same scope as
   // reveal/delete/read: workspace, current cid attachments, project library,
   // or an exact produced path already recorded on the conversation.

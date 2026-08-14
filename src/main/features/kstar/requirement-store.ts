@@ -61,6 +61,23 @@ function validateTask(userId: string, raw: Record<string, unknown>): KstarTaskRe
   return raw as KstarTaskRecord;
 }
 
+/**
+ * Read-time compatibility for schemaVersion 1 requirements written before
+ * projection history was introduced. The persisted record is never mutated or
+ * rewritten here; the normalized copy only gives the current validator and
+ * callers the field shape they expect.
+ */
+function normalizeRequirementForRead(raw: Record<string, unknown>): Record<string, unknown> {
+  if (Array.isArray(raw.projectionIds)) return raw;
+  // A present-but-malformed array must still fail validation; only a genuinely
+  // missing field is eligible for legacy compatibility.
+  if (Object.prototype.hasOwnProperty.call(raw, 'projectionIds')) return raw;
+  if (Object.prototype.hasOwnProperty.call(raw, 'projectionId')) {
+    return { ...raw, projectionIds: [raw.projectionId] };
+  }
+  return { ...raw, projectionIds: [] };
+}
+
 function validateRequirement(userId: string, raw: Record<string, unknown>): KstarRequirementRecord {
   const id = String(raw.id || '');
   validRecordBase(userId, raw, id, 'requirement');
@@ -192,7 +209,7 @@ export async function replaceKstarTask(userId: string, record: KstarTaskRecord):
 
 export async function readKstarRequirement(userId: string, requirementId: string): Promise<KstarRequirementRecord | null> {
   const raw = await readKstarJsonRecord(userId, 'requirements', requirementId);
-  return raw ? validateRequirement(userId, raw as Record<string, unknown>) : null;
+  return raw ? validateRequirement(userId, normalizeRequirementForRead(raw as Record<string, unknown>)) : null;
 }
 
 export async function replaceKstarRequirement(userId: string, record: KstarRequirementRecord): Promise<KstarRequirementRecord> {
@@ -203,7 +220,7 @@ export async function listKstarRequirementsForTask(userId: string, taskId: strin
   if (!safeId(taskId)) throw new Error('invalid kstar task id');
   const records = await listKstarJsonRecords(userId, 'requirements');
   return records
-    .map((record) => validateRequirement(userId, record as Record<string, unknown>))
+    .map((record) => validateRequirement(userId, normalizeRequirementForRead(record as Record<string, unknown>)))
     .filter((record) => record.taskId === taskId)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
@@ -217,7 +234,7 @@ export async function findKstarRequirementByProjection(
   if (!safeId(conversationId) || !safeId(projectionId)) throw new Error('invalid kstar projection lookup');
   const records = await listKstarJsonRecords(userId, 'requirements');
   const matches = records
-    .map((record) => validateRequirement(userId, record as Record<string, unknown>))
+    .map((record) => validateRequirement(userId, normalizeRequirementForRead(record as Record<string, unknown>)))
     .filter((record) => record.conversationId === conversationId && record.projectionId === projectionId);
   if (matches.length === 0) throw new Error('no kstar requirement matches conversation and projection');
   if (matches.length > 1) throw new Error('multiple kstar requirements match conversation and projection');
@@ -237,7 +254,7 @@ export async function bindKstarRequirementWakeRequestByProjection(
   ) throw new Error('invalid kstar projection wake binding id');
   const records = await listKstarJsonRecords(userId, 'requirements');
   const matches = records
-    .map((record) => validateRequirement(userId, record as Record<string, unknown>))
+    .map((record) => validateRequirement(userId, normalizeRequirementForRead(record as Record<string, unknown>)))
     .filter((record) => record.conversationId === conversationId && record.projectionId === projectionId);
   if (matches.length === 0) throw new Error('no kstar requirement matches conversation and projection');
   if (matches.length > 1) throw new Error('multiple kstar requirements match conversation and projection');
