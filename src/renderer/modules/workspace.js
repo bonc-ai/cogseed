@@ -222,6 +222,7 @@
   let _spaceTab = 'tasks';         // 详情页签：tasks | artifacts | assets
   let _configOpen = false;         // 详情页配置抽屉
   let _centerSearch = '';
+  let _centerSort = 'recent';      // 空间中心排序：'recent' 最近使用 | 'name' 按名称
   let _artifactFilter = '全部';
   let _assetFilter = '全部';
   let _createOpen = false;         // 新建空间弹窗
@@ -290,14 +291,18 @@
 
   function _renderCenter() {
     const spaces = _spaces.filter((s) => !_centerSearch
-      || `${s.name} ${s.sustained_outcome || ''} ${s.template_names || ''}`.toLowerCase().includes(_centerSearch.toLowerCase()));
+      || `${s.name} ${s.sustained_outcome || ''} ${s.template_names || ''} ${s.last_conversation_title || ''}`.toLowerCase().includes(_centerSearch.toLowerCase()));
+    // 排序：最近使用（last_conversation_at/updated_at 降序）| 按名称（zh 词典序）
+    const sorted = [...spaces].sort(_centerSort === 'name'
+      ? (a, b) => String(a.name).localeCompare(String(b.name), 'zh') || String(a.space_id).localeCompare(String(b.space_id))
+      : (a, b) => String(b.last_conversation_at || b.updated_at || '').localeCompare(String(a.last_conversation_at || a.updated_at || '')));
 
     return `
     <div class="ws-view ws-center">
       <header class="ws-page-top">
         <div>
           <h1>${_t('ws.center_title', '空间中心')}</h1>
-          <p>${_t('ws.center_subtitle', '管理长期工作环境，或从模板快速创建一个新空间。')}</p>
+          <p class="ws-tagline">${_t('ws.center_tagline', '工作空间越用越懂你的专属空间，让工作自然接续，让成果持续积累，让认知持续沉淀。')}</p>
         </div>
         <button class="ws-primary" data-ws="create-space">${_icon('plus', 'ui-icon ws-btn-ico')}${_t('ws.new_space', '新建空间')}</button>
       </header>
@@ -305,13 +310,19 @@
       <section class="ws-section">
         <div class="ws-section-head">
           <div class="ws-section-title"><h2>${_t('ws.my_spaces', '我的空间')}</h2><span class="ws-count">${_spaces.length}</span></div>
-          <label class="ws-search">
-            <span>${_icon('search', 'ui-icon')}</span>
-            <input data-ws="center-search" value="${escapeHtml(_centerSearch)}" placeholder="${_t('ws.search_spaces', '搜索已创建的空间')}" autocomplete="off" spellcheck="false" />
-          </label>
+          <div class="ws-center-tools">
+            <label class="ws-search">
+              <span>${_icon('search', 'ui-icon')}</span>
+              <input data-ws="center-search" value="${escapeHtml(_centerSearch)}" placeholder="${_t('ws.search_spaces', '搜索已创建的空间')}" autocomplete="off" spellcheck="false" />
+            </label>
+            <select class="ws-sort" data-ws="center-sort" title="${_t('ws.sort_title', '空间排序')}">
+              <option value="recent" ${_centerSort === 'recent' ? 'selected' : ''}>${_t('ws.sort_recent', '最近使用')}</option>
+              <option value="name" ${_centerSort === 'name' ? 'selected' : ''}>${_t('ws.sort_name', '按名称')}</option>
+            </select>
+          </div>
         </div>
         ${_spaces.length
-          ? `<div class="ws-space-grid">${spaces.map(_spaceCardHtml).join('')}</div>`
+          ? `<div class="ws-space-grid">${sorted.map(_spaceCardHtml).join('')}</div>`
           : `<div class="ws-empty">${_t('ws.no_spaces', '还没有工作空间，点右上角「新建空间」或从下方模板开始。')}</div>`}
       </section>
 
@@ -331,6 +342,13 @@
     const typeLabel = _spaceTypeLabel(s.space_type);
     const desc = s.sustained_outcome || s.template_name || '';
     const invalid = s.invalid_count || 0;
+    const metaRows = [
+      typeLabel ? { k: _t('ws.meta_type', '类型'), v: typeLabel } : null,
+      s.template_names ? { k: _t('ws.meta_template', '角色模板'), v: s.template_names } : null,
+      { k: _t('ws.meta_skills', '技能'), v: `${s.skill_count || 0} 项` },
+      { k: _t('ws.meta_agents', '智能体'), v: `${s.agent_count || 0} 个` },
+      invalid ? { k: _t('ws.meta_invalid', '不可用引用'), v: `${invalid} 项` } : null,
+    ].filter(Boolean);
     return `
     <article class="ws-space-card" data-ws="open-space" data-space="${escapeHtml(s.space_id)}">
       <div class="ws-card-top">
@@ -339,18 +357,14 @@
           <div><h3>${escapeHtml(s.name)}</h3><small>${escapeHtml(_relTime(s.updated_at))}</small></div>
         </div>
         <button class="ws-more" data-ws="space-more" data-space="${escapeHtml(s.space_id)}" aria-label="${escapeHtml(s.name)} 更多操作">${_icon('more-horizontal', 'ui-icon')}</button>
+        <div class="ws-more-menu" hidden>
+          ${metaRows.map((r) => `<div class="ws-more-row"><span>${escapeHtml(r.k)}</span><strong>${escapeHtml(r.v)}</strong></div>`).join('')}
+        </div>
       </div>
       ${desc ? `<p class="ws-desc">${escapeHtml(desc)}</p>` : ''}
-      <div class="ws-meta">
-        ${typeLabel ? `<span>${escapeHtml(typeLabel)}</span>` : ''}
-        ${s.template_names ? `<span>${escapeHtml(s.template_names)}</span>` : ''}
-        <span>${s.skill_count || 0} 技能</span>
-        <span>${s.agent_count || 0} 智能体</span>
-        ${invalid ? `<span>${invalid} 不可用</span>` : ''}
-      </div>
       <div class="ws-recent">
-        <div><small>${_t('ws.recent_task', '最近更新')}</small><strong>${escapeHtml(_relTime(s.updated_at) || '—')}</strong></div>
-        <button data-ws="continue" data-space="${escapeHtml(s.space_id)}">${_t('ws.enter_space', '进入空间')} →</button>
+        <div><small>${_t('ws.recent_task', '最近')}</small><strong title="${escapeHtml(s.last_conversation_title || '')}">${escapeHtml(s.last_conversation_title || _t('ws.no_recent_task', '暂无最近任务'))}</strong></div>
+        <button data-ws="continue" data-space="${escapeHtml(s.space_id)}">${_t('ws.enter_space', '继续工作')} →</button>
       </div>
     </article>`;
   }
@@ -365,7 +379,7 @@
       <p>${escapeHtml(t.description || '')}</p>
       <div class="ws-template-bottom">
         <span>${skillN} 技能 · ${agentN} 智能体</span>
-        <button data-ws="use-tpl" data-tpl="${escapeHtml(t.template_id)}">${_t('ws.use_template', '使用模板')} →</button>
+        <button data-ws="use-tpl" data-tpl="${escapeHtml(t.template_id)}">${_t('ws.use_template', '用此模板创建')}</button>
       </div>
     </article>`;
   }
@@ -669,7 +683,20 @@
 
   // ── 事件绑定 ──────────────────────────────────────────────────────────────
 
+  let _moreMenuDismissBound = false;
+  /** 点击卡片外关闭「更多」菜单（只注册一次，避免 _bind 重复叠加监听）。 */
+  function _bindMoreMenuDismiss() {
+    if (_moreMenuDismissBound) return;
+    _moreMenuDismissBound = true;
+    document.addEventListener('click', (e) => {
+      if (!(e.target instanceof Element) || !e.target.closest('.ws-more')) {
+        document.querySelectorAll('.ws-more-menu').forEach((m) => { m.hidden = true; });
+      }
+    });
+  }
+
   function _bind(root) {
+    _bindMoreMenuDismiss();
     // 弹窗内层：阻止冒泡到 scrim（否则点 dialog 内部会触发关闭）
     root.querySelectorAll('[data-ws="noop"]').forEach((el) => el.addEventListener('click', (e) => e.stopPropagation()));
 
@@ -681,9 +708,18 @@
     root.querySelectorAll('[data-ws="open-space"]').forEach((el) => el.addEventListener('click', () => _go('space', { spaceId: el.dataset.space })));
     root.querySelectorAll('[data-ws="continue"]').forEach((el) => el.addEventListener('click', () => _go('space', { spaceId: el.dataset.space })));
     root.querySelectorAll('[data-ws="create-from-tpl"], [data-ws="use-tpl"]').forEach((el) => el.addEventListener('click', () => _openCreate(el.dataset.tpl)));
-    root.querySelectorAll('[data-ws="space-more"]').forEach((el) => el.addEventListener('click', () => _stub('空间更多操作')));
+    root.querySelectorAll('[data-ws="space-more"]').forEach((el) => el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const menu = el.parentElement && el.parentElement.querySelector('.ws-more-menu');
+      const wasOpen = menu && !menu.hidden;
+      // 关掉其它已开菜单
+      root.querySelectorAll('.ws-more-menu').forEach((m) => { m.hidden = true; });
+      if (menu && !wasOpen) menu.hidden = false;
+    }));
     const cs = root.querySelector('[data-ws="center-search"]');
     if (cs) cs.addEventListener('input', () => { _centerSearch = cs.value; _reRender(); });
+    const sortSel = root.querySelector('[data-ws="center-sort"]');
+    if (sortSel) sortSel.addEventListener('change', () => { _centerSort = sortSel.value; _reRender(); });
 
     // 空间详情
     root.querySelectorAll('[data-ws="space-tab"]').forEach((el) => el.addEventListener('click', () => { _spaceTab = el.dataset.tab; _reRender(); }));

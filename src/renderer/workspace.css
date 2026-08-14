@@ -95,8 +95,29 @@
 .ws-space-icon.blue { color: #477394; background: #eaf2f7; }
 .ws-space-name h3 { font-size: 14px; font-weight: 650; color: #253129; }
 .ws-space-name small { display: block; margin-top: 3px; color: #8a938e; font-size: 11px; }
-.ws-more { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; color: #777b84; }
+.ws-more { position: relative; z-index: 3; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; color: #777b84; }
 .ws-more:hover { background: var(--ws-soft); }
+
+/* 更多菜单（meta 信息收进菜单，卡片主体保持原型极简） */
+.ws-card-top { position: relative; }
+.ws-more-menu {
+  position: absolute; top: 32px; right: 0; z-index: 6; min-width: 172px; padding: 6px;
+  border: 1px solid var(--ws-line); border-radius: 10px; background: #fff;
+  box-shadow: 0 10px 28px rgba(25,43,33,.12);
+}
+.ws-more-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 8px; border-radius: 6px; }
+.ws-more-row:hover { background: var(--ws-soft); }
+.ws-more-row span { color: #8a938e; font-size: 10px; white-space: nowrap; }
+.ws-more-row strong { color: #46534b; font-size: 11px; font-weight: 600; max-width: 150px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+/* 标语 + 中心工具行（搜索 + 排序） */
+.ws-tagline { margin: 6px 0 0; color: var(--ws-muted); font-size: 13px; line-height: 1.7; max-width: 620px; }
+.ws-center-tools { display: flex; align-items: center; gap: 8px; }
+.ws-sort {
+  height: 36px; padding: 0 8px; border: 1px solid var(--ws-line-strong); border-radius: 8px;
+  background: #fff; color: #46534b; font-size: 12px; outline: none; cursor: pointer;
+}
+.ws-sort:focus { border-color: #6fb18c; box-shadow: 0 0 0 3px rgba(31,157,98,.12); }
 .ws-desc { margin: 13px 0 0; color: #68756d; font-size: 12px; line-height: 1.65; }
 .ws-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .ws-meta span { padding: 4px 7px; border: 1px solid #e5ece8; border-radius: 6px; color: #647169; background: #f6f9f7; font-size: 10px; }
