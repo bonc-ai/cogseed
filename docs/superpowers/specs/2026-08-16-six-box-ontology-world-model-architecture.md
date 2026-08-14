@@ -85,6 +85,7 @@ commit_forecast ──► 组装世界模型（每任务一次）：
 6. ✅ **路由提升（实机确诊：普通措辞被默认 skip）**：实机验证发现 Commander 默认 `kstar:skip`，常规用户消息（"审查一下 X"）不进 KStar 线 → 无投影/预测/比较。两层修复：
    - **层 1 任务意图检测**（`kstar/task-intent.ts`）：宿主确定性检测任务形消息（非寒暄/状态查询 + 目标动词 + 长度门槛），检测到则向 Commander 注入 advisory 路由提示（`## Host routing hint`），引导其调 `kstar_control`——不强制、零写入。
    - **层 2 派发即任务**：`dispatch_to`/`hand_off_to`/具名 `run_worker` 时若无可跟踪任务，宿主自动 `upsert_state` 建任务 + 自动确认投影（workspace_policy 线），并让该次派发通过门禁（`allowHostAutoTracked`），Commander 随后补 `commit_forecast`。派发即任务信号，不依赖用户措辞。
-7. ✅ **沉淀方向明确：KStar 线只写能力资产**——`routeConfirmedKstarCandidate`（KStar 写本体入口，从未接入的死代码）已删除；本体更新归属本体线（`personal_ontology_candidates.confirmCandidate` + LLM 路由，独立模型/独立流程）。KStar 闭环**用本体**（读入 K）但**不更新本体**。
+7. ✅ **复盘确认取消——自进化由 Agent 实现**（产品定夺：用户不参与预测也不观察执行内部，无法核对预期/实际差异）：`startGroupKstarClosure` 不再发布 review 确认卡片；模型低置信不再暂停等用户（review 恒为 `inferred`，confidence 仅喂沉淀门——低置信自动不沉淀）；证据不足的 review 仍记录（审计轨迹）但永不暂停、永不沉淀。`kstar.review.confirm` IPC 保留（兼容），但主链路不再向用户发起确认。
+8. ✅ **沉淀方向明确：KStar 线只写能力资产**——`routeConfirmedKstarCandidate`（KStar 写本体入口，从未接入的死代码）已删除；本体更新归属本体线（`personal_ontology_candidates.confirmCandidate` + LLM 路由，独立模型/独立流程）。KStar 闭环**用本体**（读入 K）但**不更新本体**。
 4. **收敛重组入口**（P2）：`assembleWorldModel(userId, input)` 封装 投影知识 + 快照 + 规则，forecast-commit 调用它，命名即文档。
 5. **A-Box 刷新 Hook**（P2）：工具调用后增量刷新快照（保留每任务 T/R 冻结语义）。

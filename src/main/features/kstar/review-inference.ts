@@ -104,9 +104,12 @@ function unknownInference(episode: KstarEpisodeRecord): KstarReviewInferenceResu
       reason: 'The recorded evidence is insufficient to compare the expected and actual result.',
       confidence: 0,
     },
-    reviewState: 'needs_confirmation',
+    // Self-evolution: evidence-insufficient reviews are still recorded (the
+    // audit trail matters), but they never pause for user confirmation and
+    // never precipitate (confidence 0 fails every precipitation gate).
+    reviewState: 'inferred',
     inferenceMethod: 'unknown',
-    needsConfirmation: true,
+    needsConfirmation: false,
   };
 }
 
@@ -224,7 +227,11 @@ export async function inferKstarReview(
         });
         const text = await runModel({ systemPrompt: inferenceSystemPrompt(), message });
         const parsed = parseKstarReviewInference(text);
-        const needsConfirmation = parsed.needsConfirmation || parsed.confidence < 0.7;
+        // Self-evolution: the review is Agent-implemented and auto-precipitated.
+        // Low confidence does NOT pause for user confirmation — it stays
+        // 'inferred' and the confidence value feeds the precipitation gates
+        // (clearsPrecipitationGate requires confidence >= 0.7 for gap lessons),
+        // so a low-confidence review simply produces no durable asset.
         return {
           review: {
             ...base,
@@ -239,9 +246,9 @@ export async function inferKstarReview(
             confidence: parsed.confidence,
             evidenceRefs: episode.evidenceRefs,
           },
-          reviewState: needsConfirmation ? 'needs_confirmation' : 'inferred',
+          reviewState: 'inferred',
           inferenceMethod: 'model',
-          needsConfirmation,
+          needsConfirmation: false,
         };
       } catch (error) {
         log.warn('kstar model review attribution degraded; falling back to deterministic', {
@@ -328,12 +335,12 @@ export async function inferKstarReview(
       ? await options.runModel({ systemPrompt: inferenceSystemPrompt(), message })
       : await defaultRunModel(userId, episode, { systemPrompt: inferenceSystemPrompt(), message });
     const parsed = parseKstarReviewInference(text);
-    const needsConfirmation = parsed.needsConfirmation || parsed.confidence < 0.7;
+    // Same self-evolution semantics as the forecast path: no user pause.
     return {
       review: { ...base, ...parsed, evidenceRefs: episode.evidenceRefs },
-      reviewState: needsConfirmation ? 'needs_confirmation' : 'inferred',
+      reviewState: 'inferred',
       inferenceMethod: 'model',
-      needsConfirmation,
+      needsConfirmation: false,
     };
   } catch (error) {
     log.warn('kstar review inference degraded', { userId, episodeId: episode.id, errorCode: 'review_inference_unavailable' });

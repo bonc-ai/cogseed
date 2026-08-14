@@ -467,7 +467,7 @@ describe('KSTAR group terminal subscriber', () => {
 
 
 
-  it('publishes one lightweight confirmation card when inferred review needs user confirmation', async () => {
+  it('never posts a review confirmation card — self-evolution is agent-implemented', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');
     let listener: ((event: any) => void) | undefined;
     const published: any[] = [];
@@ -485,10 +485,9 @@ describe('KSTAR group terminal subscriber', () => {
     listener?.({ run_id: 'run-review-card', user_id: 'group-user', conversation_id: 'cid-review', status: 'completed', started_at_ms: 0, finished_at_ms: 1 });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(published).toEqual([expect.objectContaining({
-      userId: 'group-user', conversationId: 'cid-review',
-      review: expect.objectContaining({ id: 'ksr-kse-run-review-card', needsConfirmation: true }),
-    })]);
+    // The user cannot verify the expected-vs-actual comparison (they made no
+    // prediction and do not observe execution internals) — no card is posted.
+    expect(published).toEqual([]);
     stop();
   });
 

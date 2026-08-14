@@ -418,7 +418,6 @@ export function startGroupKstarClosure(runtime: GroupKstarClosureRuntime = {}): 
   const subscribe = runtime.subscribe || subscribeTaskTerminals;
   const loadMessages = runtime.readMessages || defaultGroupMessageLoader;
   const capture = runtime.capture || captureGroupKstarClosure;
-  const publishReviewCard = runtime.publishReviewCard || defaultReviewCardPublisher;
   const seen = new Set<string>();
   const inFlight = new Set<string>();
   const listener: TaskTerminalListener = (event: TaskTerminalEvent) => {
@@ -441,9 +440,11 @@ export function startGroupKstarClosure(runtime: GroupKstarClosureRuntime = {}): 
           ...(event.projection_id ? { projectionId: event.projection_id } : {}),
           ...(event.forecast_id ? { forecastId: event.forecast_id } : {}),
         });
-        if (event.status === 'completed' && result?.review?.needsConfirmation) {
-          await publishReviewCard(event.user_id, event.conversation_id, result.review);
-        }
+        // Self-evolution is Agent-implemented: the review is automatically
+        // precipitated (direct ability-asset line) without asking the user to
+        // confirm the expected-vs-actual comparison — the user neither made
+        // the prediction nor observes the execution internals, so they cannot
+        // verify it. No review card is posted.
         inFlight.delete(key);
         seen.add(key);
       } catch {

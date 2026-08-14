@@ -90,7 +90,7 @@ describe('KSTAR review inference', () => {
     });
   });
 
-  it('degrades malformed or unavailable model analysis to a conservative confirmation request', async () => {
+  it('degrades malformed or unavailable model analysis to a conservative inferred review without pausing the user', async () => {
     const inference = await import('../../../../src/main/features/kstar/review-inference');
 
     for (const text of [
@@ -102,7 +102,7 @@ describe('KSTAR review inference', () => {
       expect(result).toMatchObject({
         reviewState: 'needs_confirmation',
         inferenceMethod: 'unknown',
-        needsConfirmation: true,
+        needsConfirmation: false,
         review: { outcome: 'unclear', deltaR: 'unknown', deltaA: 'unknown', confidence: 0 },
       });
     }
@@ -121,7 +121,7 @@ describe('KSTAR review inference', () => {
       lesson: 'OAuth 回调必须在校验 state 之后再交换 code，否则会接受无效会话。',
     }));
 
-    const result = await inference.inferKstarReview('user-a', episode(), {
+    const result = await inference.inferKstarReview('user-a', episode), {
       forecast: {
         aHat: { plan: ['Check state', 'Exchange code'], expectedTools: ['read_file'], expectedActors: ['commander'] },
         rHat: { summary: 'Login fixed and tests pass', acceptanceSignals: ['tests pass'], predictedFiles: ['auth.ts'] },
