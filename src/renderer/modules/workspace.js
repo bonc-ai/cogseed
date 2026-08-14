@@ -448,14 +448,20 @@
       : '';
     return `
     <div class="ws-new-task-composer">
+      <div class="ws-attach-host" id="ws-attach-host"></div>
       ${chips}
       <div class="ws-new-task-bar">
-        <button class="ws-new-task-add" data-ws="stub-add" title="${_t('ws.add_content', '添加内容')}" aria-label="${_t('ws.add_content', '添加内容')}">${_icon('plus', 'ui-icon')}</button>
+        <button class="ws-new-task-add" data-ws="space-attach" title="${_t('ws.add_content', '添加内容')}" aria-label="${_t('ws.add_content', '添加内容')}">${_icon('plus', 'ui-icon')}</button>
         <input data-ws="new-task-input" placeholder="${_t('ws.new_task_inline_ph', '在当前空间中开启一项新任务…')}" autocomplete="off" spellcheck="false" maxlength="500" />
         <button class="ws-new-task-mention" data-ws="ref-picker-open" title="${_t('ws.mention_assets', '引用空间产物与资产')}">@ ${_t('ws.mention_assets', '引用空间产物与资产')}</button>
         <button class="ws-new-task-send" data-ws="new-task-send" title="${_t('ws.start_task', '开始新任务')}" aria-label="${_t('ws.start_task', '开始新任务')}">${_icon('send', 'ui-icon')}</button>
       </div>
     </div>`;
+  }
+
+  /** 空间任务 composer 的附件草稿 cid（复用主对话附件管线；开任务时 adopt 进真实会话）。 */
+  function _spaceDraftCid() {
+    return _detailSpaceId ? `spacetask-${_detailSpaceId}` : '';
   }
 
   function _renderTasksPane() {
@@ -494,6 +500,13 @@
       await _invoke('conversations.taskRefs.add', { cid, reference: r });
     }
     _pendingRefs = [];
+    // 附件草稿 → adopt 进新会话（复用主对话管线）
+    const draftCid = _spaceDraftCid();
+    if (draftCid && window.chatAttach && window.chatAttach.list(draftCid).length) {
+      await _invoke('conversations.attachments.adopt', { from_cid: draftCid, to_cid: cid });
+      window.chatAttach.clear(draftCid); // adopt 已搬文件，只清本地列表
+      window.chatAttach.releaseHost(draftCid);
+    }
     // 刷新空间任务列表（回来时任务数/最近任务更新）
     _detailLoadedFor = null;
     _loadSpaceDetail(spaceId).then(() => { if (typeof setView === 'function') setView('conversation', cid, { skipLoad: true }); });
@@ -919,6 +932,17 @@
     if (nti) nti.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _startNewTask(_detailSpaceId); }
     });
+
+    // ── 空间任务 composer 附件（复用主对话「＋」管线）──
+    root.querySelectorAll('[data-ws="space-attach"]').forEach((el) => el.addEventListener('click', () => {
+      const draftCid = _spaceDraftCid();
+      if (!draftCid || !window.chatAttach) return;
+      window.chatAttach.pickAndUpload(draftCid, 'ws-attach-host');
+    }));
+    // 重渲染后把草稿 chips 重新画进宿主
+    if (_detailSpaceId && window.chatAttach && document.getElementById('ws-attach-host')) {
+      window.chatAttach.render(_spaceDraftCid(), 'ws-attach-host');
+    }
 
     // ── 任务引用选择器（@ 引用空间产物与资产）──
     root.querySelectorAll('[data-ws="ref-picker-open"]').forEach((el) => el.addEventListener('click', () => _openRefPicker(_detailSpaceId, null)));

@@ -345,6 +345,8 @@
 
 /* 新建任务引用 chips（输入条上方） */
 .ws-new-task-composer { }
+/* 附件 chips 宿主（复用主对话 chat-attach-chip 样式，主对话管线渲染） */
+.ws-attach-host { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .ws-ref-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
 .ws-ref-chip {
   display: inline-flex; align-items: center; gap: 6px; max-width: 260px; padding: 4px 8px;

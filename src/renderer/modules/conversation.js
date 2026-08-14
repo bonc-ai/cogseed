@@ -3020,6 +3020,9 @@ function _findRenderedMessageForHistoryRecord(container, gm) {
 // real attachment-pool filename; `displayName` is the stable composer label.
 
 const _chatAttachments = new Map();   // cid → Array<{name, displayName?, kind, bytes, dataUrl?, sha256?, reused?}>
+// cid → 自定义 chips 宿主（外部模块如 workspace 复用附件管线时指定自己的容器；
+// 未设置则回落 _chatAttachHostIdFor 的默认宿主）。
+const _chatAttachHostOverride = new Map();
 
 // Draft cid used by the commander (new-chat) tab — files land in a local-only
 // draft pool until the user hits send, at which point the backend adopts that
@@ -3211,7 +3214,7 @@ function _chatAttachHostIdFor(cid) {
 
 function _chatAttachRenderChips(cid) {
   const targetCid = cid || currentCid;
-  const hostId = _chatAttachHostIdFor(targetCid);
+  const hostId = _chatAttachHostOverride.get(targetCid) || _chatAttachHostIdFor(targetCid);
   if (!hostId) return;
   const host = document.getElementById(hostId);
   if (!host) return;
@@ -3580,6 +3583,34 @@ window.attachKbFileToDraft = async function attachKbFileToDraft(channel, payload
   if (typeof afterNavigate === 'function') afterNavigate();
   _addReadyDraftAttachment(draftCid, data.info);
 };
+
+// ── 外部模块复用附件管线的小门（workspace 空间任务 composer 的「＋」等）。
+//   用自定义宿主渲染 chips：先 render(cid, hostId) 注册宿主，之后上传/移除/清空
+//   都渲染进该宿主；releaseHost 解除注册。草稿 cid 由调用方决定（如 spacetask-<sid>），
+//   开新任务时后端 conversations.attachments.adopt 会把草稿附件搬进真实会话。 ──
+window.chatAttach = {
+  /** 打开系统文件选择框上传到 cid 并渲染 chips 到 hostId。 */
+  pickAndUpload: (cid, hostId) => {
+    _chatAttachSetHost(cid, hostId);
+    return _chatAttachPickAndUpload(cid, 'picker');
+  },
+  /** 注册宿主并渲染该 cid 的 chips（重渲染后需重新调用）。 */
+  render: (cid, hostId) => {
+    _chatAttachSetHost(cid, hostId);
+    _chatAttachRenderChips(cid);
+  },
+  list: (cid) => _chatAttachList(cid),
+  remove: (cid, idx) => _chatAttachRemove(cid, idx),
+  /** 清空本地列表；opts.deleteFiles=true 时同时删文件（adopt 后只需清列表）。 */
+  clear: (cid, opts) => _chatAttachClear(cid, opts || {}),
+  releaseHost: (cid) => _chatAttachSetHost(cid, null),
+};
+
+function _chatAttachSetHost(cid, hostId) {
+  if (!cid) return;
+  if (hostId) _chatAttachHostOverride.set(cid, hostId);
+  else _chatAttachHostOverride.delete(cid);
+}
 
 async function _chatAttachRefreshFromServer(cid) {
   const startedAt = performance.now();
