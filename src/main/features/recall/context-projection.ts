@@ -7,6 +7,7 @@ import { createLogger } from '../../logger';
 import { listAbilityAssets, readAbilityAsset } from './asset-service';
 import { recallJsonRecordPath } from './paths';
 import { listWorkspaceAssetReferences } from './workspace-refs';
+import { isAssetScopeAllowed } from './scope-policy';
 import { readRecallJsonRecord, updateRecallJsonRecord, writeRecallJsonRecord } from './store';
 import type { RecallJsonRecord } from './types';
 import type { RecallAbilityAssetRecord } from './candidate-service';
@@ -288,6 +289,10 @@ function normalizeProjectionAssetIds(value: unknown, field: string): string[] {
 
 async function isAssetEligibleForProjection(userId: string, asset: RecallAbilityAssetRecord, projection: Pick<ContextProjectionRecord, 'workspaceId' | 'purpose'>): Promise<boolean> {
   if (asset.status !== 'active') throw new Error('context projection asset is not active');
+  if (!isAssetScopeAllowed(asset.scopePolicy, {
+    purpose: projection.purpose,
+    workspaceId: projection.workspaceId,
+  })) return false;
   if (projection.workspaceId) {
     const refs = await listWorkspaceAssetReferences(userId);
     const ref = refs.find((item) => item.assetId === asset.id && item.workspaceId === projection.workspaceId);
@@ -335,6 +340,10 @@ export async function buildRecallView(userId: string, input: ProjectionInput, op
   for (const asset of assets) {
     if (asset.status === 'paused') { omittedRefs.push({ assetId: asset.id, reason: 'asset_paused' }); continue; }
     if (asset.status === 'revoked') { omittedRefs.push({ assetId: asset.id, reason: 'asset_revoked' }); continue; }
+    if (!isAssetScopeAllowed(asset.scopePolicy, { purpose, workspaceId: input.workspaceId })) {
+      omittedRefs.push({ assetId: asset.id, reason: 'scope_mismatch' });
+      continue;
+    }
     const ref = input.workspaceId ? refsByAsset.get(asset.id) : undefined;
     if (input.workspaceId && !ref) { omittedRefs.push({ assetId: asset.id, reason: 'workspace_not_referenced' }); continue; }
     if (ref && !ref.enabled) { omittedRefs.push({ assetId: asset.id, reason: 'workspace_disabled' }); continue; }

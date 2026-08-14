@@ -10,6 +10,7 @@ import {
 } from './context-projection';
 import type { RecallProjectionCard } from './projection-card';
 import { isCognitionSourceEnabled } from './source-control';
+import { isAssetScopeAllowed } from './scope-policy';
 import { loadCommittedProjectionKnowledge } from './projection-knowledge';
 
 type ConversationMessage = {
@@ -98,8 +99,21 @@ async function hasEnabledSources(userId: string, evidenceRefs: Awaited<ReturnTyp
 
 async function buildPromptContextForProjections(
   userId: string,
+  cid: string,
   projections: ProjectionForPrompt[],
 ): Promise<RecallTurnPromptContext> {
+  let resolvedConversationKind: string | undefined;
+  async function conversationKind(): Promise<string | undefined> {
+    if (resolvedConversationKind !== undefined) return resolvedConversationKind || undefined;
+    try {
+      const { getConversation } = await import('../chats');
+      const conversation = await getConversation(userId, cid, null);
+      resolvedConversationKind = conversation?.kind || null;
+    } catch {
+      resolvedConversationKind = null;
+    }
+    return resolvedConversationKind || undefined;
+  }
   const records: Array<Record<string, unknown>> = [];
   const citations: RecallPromptCitation[] = [];
   const seenAssets = new Set<string>();
@@ -131,6 +145,12 @@ async function buildPromptContextForProjections(
         const status = snapshot?.status ?? asset?.status;
         const evidenceRefs = snapshot?.evidenceRefs ?? asset?.evidenceRefs ?? [];
         if (status !== 'active' || !(await hasEnabledSources(userId, evidenceRefs))) continue;
+        const scopePolicy = snapshot?.scopePolicy ?? asset?.scopePolicy;
+        if (scopePolicy && !(await isAssetScopeAllowed(scopePolicy, {
+          purpose: projection.purpose,
+          workspaceId: projection.workspaceId,
+          conversationKind: await conversationKind(),
+        }))) continue;
         const title = snapshot?.title ?? asset?.title ?? '';
         const type = snapshot?.type ?? asset?.type ?? 'rule';
         const maturity = snapshot?.maturity ?? asset?.maturity ?? 'draft';
@@ -278,7 +298,7 @@ export async function buildConfirmedProjectionPromptBlock(userId: string, cid: s
       log.warn('read confirmed projection for prompt failed', { projectionId, error: (error as Error).message });
     }
   }
-  return (await buildPromptContextForProjections(userId, projections)).promptBlock;
+  return (await buildPromptContextForProjections(userId, cid, projections)).promptBlock;
 }
 
 export async function buildRecallTurnPromptContext(
@@ -320,7 +340,7 @@ export async function buildRecallTurnPromptContext(
       error: (error as Error).message,
     });
   }
-  return buildPromptContextForProjections(userId, projections);
+  return buildPromptContextForProjections(userId, input.cid, projections);
 }
 
 export async function _buildConfirmedProjectionPromptBlockForTest(userId: string, cid: string): Promise<string> {

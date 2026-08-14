@@ -44,6 +44,41 @@ function normalizeList(value: unknown, field: keyof RecallAbilityAssetScopePolic
   return out.length ? out : undefined;
 }
 
+export interface AssetScopeContext {
+  /** Projection purpose (matched against purposeTags). */
+  purpose?: string;
+  /** Projection/workspace id (matched against workspaceIds/projectIds). */
+  workspaceId?: string;
+  /** Conversation kind (matched against conversationKinds). */
+  conversationKind?: string;
+}
+
+function matchesToken(value: string | undefined, token: string): boolean {
+  if (!value) return false;
+  const haystack = value.toLocaleLowerCase();
+  const needle = token.toLocaleLowerCase();
+  return haystack.includes(needle);
+}
+
+/** Structured scope-policy gate. Unknown context dimensions are treated as
+ *  "not allowed" when the policy restricts them (fail-closed): an asset that
+ *  restricts workspaces is excluded from a projection without a workspace. */
+export function isAssetScopeAllowed(
+  policy: RecallAbilityAssetScopePolicy | undefined,
+  context: AssetScopeContext,
+): boolean {
+  if (!policy) return true;
+  if (policy.purposeTags?.length && !policy.purposeTags.some((tag) => matchesToken(context.purpose, tag))) {
+    return false;
+  }
+  const hasWorkspaceRestriction = Boolean(policy.workspaceIds?.length || policy.projectIds?.length);
+  if (hasWorkspaceRestriction && !context.workspaceId) return false;
+  if (policy.workspaceIds?.length && !policy.workspaceIds.includes(context.workspaceId!)) return false;
+  if (policy.projectIds?.length && !policy.projectIds.includes(context.workspaceId!)) return false;
+  if (policy.conversationKinds?.length && !policy.conversationKinds.includes(context.conversationKind || '')) return false;
+  return true;
+}
+
 export function normalizeAbilityAssetScopePolicy(value: unknown): RecallAbilityAssetScopePolicy | undefined {
   if (value === undefined) return undefined;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid ability asset scope policy');

@@ -52,6 +52,57 @@ const fakeSemanticOptions = {
   }),
 };
 
+describe('Recall context projection scope policy', () => {
+  async function promoteScopedAsset(judgment: string, sourceId: string) {
+    const { candidates } = await modules();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment,
+      summary: 'Scoped knowledge',
+      suggestedType: 'rule',
+      suggestedScope: 'review',
+      sourceRefs: [{ kind: 'execution', id: sourceId }],
+    });
+    return candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  }
+
+  it('excludes assets whose scope policy restricts the projection workspace or purpose', async () => {
+    const { refs, projection, assets } = await modules();
+    const asset = (await promoteScopedAsset('Scoped OAuth review knowledge.', 'exec-scope')).asset;
+    await refs.addWorkspaceAssetReference('user-a', { assetId: asset.id, workspaceId: 'workspace-a', scope: 'review' });
+    await assets.updateAbilityAsset('user-a', asset.id, {
+      scopePolicy: { workspaceIds: ['workspace-other'], purposeTags: ['database'] },
+      reason: 'narrow scope',
+      actor: 'user',
+    });
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-scope', workspaceId: 'workspace-a', purpose: 'review',
+    });
+
+    expect(preview.assetIds).toEqual([]);
+    expect(preview.omittedRefs).toEqual(
+      expect.arrayContaining([expect.objectContaining({ assetId: asset.id, reason: 'scope_mismatch' })]),
+    );
+  });
+
+  it('includes an asset when its scope policy matches the projection context', async () => {
+    const { refs, projection, assets } = await modules();
+    const asset = (await promoteScopedAsset('OAuth review knowledge in workspace.', 'exec-scope-ok')).asset;
+    await refs.addWorkspaceAssetReference('user-a', { assetId: asset.id, workspaceId: 'workspace-a', scope: 'review' });
+    await assets.updateAbilityAsset('user-a', asset.id, {
+      scopePolicy: { workspaceIds: ['workspace-a'], purposeTags: ['review'] },
+      reason: 'match scope',
+      actor: 'user',
+    });
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-scope-ok', workspaceId: 'workspace-a', purpose: 'review',
+    });
+
+    expect(preview.assetIds).toEqual([asset.id]);
+  });
+});
+
 describe('RecallView and ContextProjection', () => {
   it('previews workspace-scoped active assets and explains omitted assets', async () => {
     const { asset } = await createAsset();
