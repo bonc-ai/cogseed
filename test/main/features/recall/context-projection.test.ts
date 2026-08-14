@@ -585,6 +585,46 @@ describe('Recall retrieval refinement', () => {
     expect(preview.assetIds).toHaveLength(2);
   });
 
+  it('renders the referenced ontology group title (T-Box) in the semantic match text', async () => {
+    const { candidates, projection } = await modules();
+    const groups = await import('../../../../src/main/features/personal_ontology_groups');
+    const group = await groups.createGroup('user-a', '代码审查规范');
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'OAuth callback review must check state.',
+      summary: 'OAuth callback review',
+      suggestedType: 'rule',
+      suggestedScope: 'review',
+      sourceRefs: [{ kind: 'execution', id: 'exec-tbox' }],
+    });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, {
+      actor: 'user',
+      ontologyRefs: [{ groupId: group.group!.group_id }],
+    });
+    const asset = promoted.asset;
+
+    let embedTexts: string[] = [];
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-tbox',
+      purpose: 'review',
+      taskText: 'OAuth callback review',
+    }, {
+      embedTexts: async (texts: string[]) => {
+        embedTexts = texts;
+        return texts.map((text) => (text.includes('OAuth') ? [1, 0] : [0, 1]));
+      },
+    });
+
+    // The concept name (group title) replaced the opaque group id in the
+    // match text, so a query using the concept's natural-language name can
+    // rank the asset.
+    // The asset's match text (not the query) carries the concept name.
+    const assetText = embedTexts.find((text) => text.includes('代码审查规范'));
+    expect(assetText).toBeTruthy();
+    expect(assetText).toContain('OAuth callback review');
+    expect(assetText).not.toContain(group.group!.group_id);
+    expect(preview.assetIds).toContain(asset.id);
+  });
+
   it('guarantees one asset per type before filling Top-N by score', async () => {
     const { projection } = await modules();
     const ruleA = (await promoteAsset('OAuth callback rule one.', 'exec-div-1', 'review', 'rule')).asset;

@@ -100,3 +100,21 @@ export function ontologyGroupExists(userId: string, groupId: string): boolean {
     return false;
   }
 }
+
+/** Lightweight groupId → title map for retrieval: lets the semantic match
+ *  text carry the CONCEPT name (T-Box vocabulary) instead of a bare opaque
+ *  group id, so assets pointed at an ontology group rank against queries
+ *  that use the concept's natural-language name. */
+export function loadOntologyGroupTitleMap(userId: string): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!safeId(userId)) return map;
+  try {
+    for (const group of readGroups(userId)) {
+      map.set(group.group_id, String(group.title || group.group_id).trim());
+    }
+  } catch {
+    // ledger unreadable → fall back to raw group ids (no match signal, but
+    // retrieval must not fail because the ontology is temporarily broken)
+  }
+  return map;
+}

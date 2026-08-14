@@ -8,6 +8,7 @@ import { listAbilityAssets, readAbilityAsset } from './asset-service';
 import { recallJsonRecordPath } from './paths';
 import { listWorkspaceAssetReferences } from './workspace-refs';
 import { isAssetScopeAllowed, matchesScopeToken } from './scope-policy';
+import { loadOntologyGroupTitleMap } from './ontology-taxonomy';
 import { readRecallJsonRecord, updateRecallJsonRecord, writeRecallJsonRecord } from './store';
 import type { RecallJsonRecord } from './types';
 import type { RecallAbilityAssetRecord } from './candidate-service';
@@ -205,8 +206,16 @@ function validateProjectionStatus(value: unknown): ContextProjectionStatus {
   throw new Error('malformed context projection: invalid status');
 }
 
-function assetMatchText(asset: RecallAbilityAssetRecord): string {
-  const ontology = (asset.ontologyRefs || []).map((ref) => [ref.groupId, ref.section, ref.field].filter(Boolean).join(' / ')).filter(Boolean).join('\n');
+function assetMatchText(asset: RecallAbilityAssetRecord, groupTitles: Map<string, string>): string {
+  // T-Box vocabulary: resolve each referenced ontology group to its CONCEPT
+  // title so the match text carries the concept name, not an opaque id.
+  // Only the asset's own refs are rendered — a shared full-group vocabulary
+  // would inflate baseline similarity for every asset of the same group (M2).
+  const ontology = (asset.ontologyRefs || []).map((ref) => [
+    groupTitles.get(ref.groupId) || ref.groupId,
+    ref.section,
+    ref.field,
+  ].filter(Boolean).join(' / ')).filter(Boolean).join('\n');
   // type/scope are shared dimension labels, not content: including them
   // inflated baseline similarity for every asset of the same type (M2).
   return [
@@ -237,12 +246,14 @@ async function defaultEmbedTexts(texts: string[]): Promise<number[][]> {
 }
 
 async function rankAssetsBySemanticMatch(
+  userId: string,
   taskText: string,
   assets: RecallAbilityAssetRecord[],
   options: ProjectionSemanticOptions,
 ): Promise<{ assets: RecallAbilityAssetRecord[]; assetMatches: RecallAssetMatch[] }> {
   const embedTexts = options.embedTexts || defaultEmbedTexts;
-  const vectors = await embedTexts([taskText, ...assets.map(assetMatchText)]);
+  const groupTitles = loadOntologyGroupTitleMap(userId);
+  const vectors = await embedTexts([taskText, ...assets.map((asset) => assetMatchText(asset, groupTitles))]);
   if (vectors.length !== assets.length + 1) throw new Error('semantic embedding count mismatch');
   const query = vectors[0];
   const scored = assets.map((asset, index) => ({
@@ -419,7 +430,7 @@ async function applySemanticSelection(
   let ranked: Awaited<ReturnType<typeof rankAssetsBySemanticMatch>>;
   let degraded = false;
   try {
-    ranked = await rankAssetsBySemanticMatch(queryText, assets, options);
+    ranked = await rankAssetsBySemanticMatch(userId, queryText, assets, options);
   } catch (error) {
     log.warn('semantic recall ranking unavailable; using recency fallback', { userId, error: (error as Error).message });
     degraded = true;
