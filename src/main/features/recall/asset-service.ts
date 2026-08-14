@@ -12,6 +12,7 @@ import type { RecallJsonRecord } from './types';
 import { normalizeAbilityAssetOntologyRefs } from './ontology-refs';
 import type { RecallAbilityAssetRecord } from './candidate-service';
 import { readAbilityAssetRelationContract } from './asset-relations';
+import { readAbilityAssetSemantics } from './asset-semantics';
 import { normalizeAbilityAssetScopePolicy, type RecallAbilityAssetScopePolicy } from './scope-policy';
 import { assertNotForbiddenToPersist } from '../../util/cognition-sensitivity';
 
@@ -29,6 +30,7 @@ export interface AbilityAssetVersionRecord extends RecallJsonRecord {
     | 'title' | 'statement' | 'type' | 'scope' | 'scopePolicy' | 'evidenceRefs'
     | 'status' | 'maturity' | 'version' | 'learningSignal' | 'ontologyRefs'
     | 'relations' | 'derivedFrom'
+    | 'applicableWhen' | 'forbiddenWhen' | 'sensitivity'
   >;
 }
 
@@ -53,6 +55,9 @@ export interface UpdateAbilityAssetInput {
   ontologyRefs?: RecallAbilityAssetRecord['ontologyRefs'];
   relations?: RecallAbilityAssetRecord['relations'];
   derivedFrom?: RecallAbilityAssetRecord['derivedFrom'];
+  applicableWhen?: RecallAbilityAssetRecord['applicableWhen'];
+  forbiddenWhen?: RecallAbilityAssetRecord['forbiddenWhen'];
+  sensitivity?: RecallAbilityAssetRecord['sensitivity'];
   reason: string;
   actor: 'user';
   acknowledgeRecommendation?: boolean;
@@ -193,6 +198,9 @@ function snapshot(asset: RecallAbilityAssetRecord): AbilityAssetVersionRecord['s
     ...(asset.ontologyRefs ? { ontologyRefs: asset.ontologyRefs } : {}),
     ...(asset.relations ? { relations: asset.relations } : {}),
     ...(asset.derivedFrom ? { derivedFrom: asset.derivedFrom } : {}),
+    ...(asset.applicableWhen ? { applicableWhen: asset.applicableWhen } : {}),
+    ...(asset.forbiddenWhen ? { forbiddenWhen: asset.forbiddenWhen } : {}),
+    ...(asset.sensitivity ? { sensitivity: asset.sensitivity } : {}),
     status: asset.status,
     maturity: asset.maturity,
     version: asset.version,
@@ -313,6 +321,7 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
   if (evidenceRefs && !evidenceRefs.length) throw new Error('ability asset evidence is required');
   const ontologyRefs = input.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(input.ontologyRefs);
   const relationContract = readAbilityAssetRelationContract(input as unknown as Record<string, unknown>, assetId);
+  const semantics = readAbilityAssetSemantics(input as unknown as Record<string, unknown>);
   const scopePolicy = input.scopePolicy === undefined ? undefined : normalizeAbilityAssetScopePolicy(input.scopePolicy);
   const reviewDecisionId = input.reviewDecisionId;
   const sourceCandidateId = input.sourceCandidateId;
@@ -323,6 +332,10 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
     input.title,
     input.statement,
     input.scope,
+    // 条件同样是用户手写、会被冻进能力包并注入提示的自由文本，
+    // 不过闸就等于给凭证留了一条只换字段名的旁路。
+    ...(semantics.applicableWhen || []),
+    ...(semantics.forbiddenWhen || []),
   ]);
   let clearedRecommendation = false;
   let changed = false;
@@ -344,6 +357,7 @@ export async function updateAbilityAsset(userId: string, assetId: string, input:
       ...(evidenceRefs !== undefined ? { evidenceRefs } : {}),
       ...(ontologyRefs !== undefined ? { ontologyRefs } : {}),
       ...relationContract,
+      ...semantics,
       version: nextVersion(current.version),
       ...(reviewDecisionId ? {
         appliedReviewDecisionIds: [...new Set([...(current.appliedReviewDecisionIds || []), reviewDecisionId])],
@@ -506,6 +520,11 @@ export async function purgeAbilityAsset(userId: string, assetId: string, input: 
     ontologyRefs: undefined,
     relations: undefined,
     derivedFrom: undefined,
+    // 适用/禁用条件是用户手写的自然语言，与正文同属可识别内容；
+    // sensitivity 是对已清除内容的定级，留着也只会指向一条空记录。
+    applicableWhen: undefined,
+    forbiddenWhen: undefined,
+    sensitivity: undefined,
     scopePolicy: undefined,
     recommendedAction: undefined,
     recommendationReason: undefined,

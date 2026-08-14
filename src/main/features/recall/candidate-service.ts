@@ -21,6 +21,11 @@ import {
 } from './asset-relations';
 import { normalizeAbilityAssetScopePolicy, type RecallAbilityAssetScopePolicy } from './scope-policy';
 import {
+  readAbilityAssetSemantics,
+  type AbilityAssetSemantics,
+  type AbilityAssetSensitivity,
+} from './asset-semantics';
+import {
   createAbilityAsset,
   pauseAbilityAsset,
   readAbilityAsset,
@@ -104,6 +109,11 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   ontologyRefs?: AbilityAssetOntologyRef[];
   relations?: AbilityAssetRelation[];
   derivedFrom?: string[];
+  /** 适用/禁用条件。缺失=没记录过，**不是**「无限制」。 */
+  applicableWhen?: string[];
+  forbiddenWhen?: string[];
+  /** 缺失=没分过级，不等于 L0。 */
+  sensitivity?: AbilityAssetSensitivity;
   scope: string;
   scopePolicy?: RecallAbilityAssetScopePolicy;
   recommendedAction?: 'pause' | 'rework';
@@ -155,7 +165,7 @@ interface StoredRecallAssetHandoffReceipt extends RecallJsonRecord, RecallAssetH
   createdAt: string;
 }
 
-export interface PromoteRecallCandidateOptions {
+export interface PromoteRecallCandidateOptions extends AbilityAssetSemantics {
   actor?: 'user';
   ontologyRefs?: AbilityAssetOntologyRef[];
   scopePolicy?: RecallAbilityAssetScopePolicy;
@@ -741,6 +751,12 @@ export async function promoteRecallCandidate(
   if (options.actor !== 'user') throw new Error('recall candidate promotion requires a user actor');
   const ontologyRefs = options.ontologyRefs === undefined ? undefined : normalizeAbilityAssetOntologyRefs(options.ontologyRefs);
   const relationContract = readAbilityAssetRelationContract(options as Record<string, unknown>);
+  const semantics = readAbilityAssetSemantics(options as unknown as Record<string, unknown>);
+  // 条件是评审时新写下的自由文本，不走 saveRecallCandidate 那道闸，这里补上。
+  assertNotForbiddenToPersist([
+    ...(semantics.applicableWhen || []),
+    ...(semantics.forbiddenWhen || []),
+  ]);
   const scopePolicy = normalizeAbilityAssetScopePolicy(options.scopePolicy);
   let decision: ReviewDecision | undefined;
   let updated: RecallJsonRecord;
@@ -814,6 +830,7 @@ export async function promoteRecallCandidate(
         ...(candidate.learningSignal ? { learningSignal: candidate.learningSignal } : {}),
         ...(ontologyRefs?.length ? { ontologyRefs } : {}),
         ...relationContract,
+        ...semantics,
         scope: candidate.suggestedScope,
         ...(scopePolicy ? { scopePolicy } : {}),
         status: 'active',
@@ -843,6 +860,7 @@ export async function promoteRecallCandidate(
           evidenceRefs: candidate.evidenceRefs,
           ...(ontologyRefs?.length ? { ontologyRefs } : {}),
           ...relationContract,
+          ...semantics,
           ...(scopePolicy ? { scopePolicy } : {}),
           actor: 'user',
           reason: handoffReason,
