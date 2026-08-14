@@ -84,6 +84,17 @@ const projectionMock = vi.hoisted(() => ({
   confirmContextProjection: vi.fn(async (_uid: string, id: string) => ({ id, status: 'confirmed' })),
   readContextProjection: vi.fn(async (_uid: string, id: string) => ({ id })),
 }));
+const kstarClosureMock = vi.hoisted(() => ({
+  confirmKstarReview: vi.fn(async () => ({ episode: {}, review: {} })),
+}));
+const kstarReviewServiceMock = vi.hoisted(() => ({
+  readKstarReview: vi.fn(async () => ({
+    reviewState: 'needs_confirmation',
+    expectedResult: 'Expected',
+    actualResult: 'Actual',
+  })),
+}));
+
 const projectionDecisionMock = vi.hoisted(() => ({
   confirmProjectionAndResumeCommander: vi.fn(async (_uid: string, input: unknown) => ({
     projection: { id: 'proj-a', status: 'confirmed' },
@@ -139,6 +150,14 @@ vi.mock('../../../src/main/features/recall/recall-view-service', () => viewMock)
 vi.mock('../../../src/main/features/recall/teaching-service', () => teachingMock);
 vi.mock('../../../src/main/features/recall/context-projection', () => projectionMock);
 vi.mock('../../../src/main/features/kstar/projection-decision-service', () => projectionDecisionMock);
+vi.mock('../../../src/main/features/kstar/task-closure', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/main/features/kstar/task-closure')>()),
+  confirmKstarReview: kstarClosureMock.confirmKstarReview,
+}));
+vi.mock('../../../src/main/features/kstar/review-service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/main/features/kstar/review-service')>()),
+  readKstarReview: kstarReviewServiceMock.readKstarReview,
+}));
 vi.mock('../../../src/main/features/recall/usage-feedback-service', () => usageFeedbackMock);
 vi.mock('../../../src/main/features/recall/skill-draft-service', () => skillDraftMock);
 
@@ -361,6 +380,20 @@ describe('ipc › recall candidate governance', () => {
     expect(projectionDecisionMock.rejectProjectionAndResumeCommander).toHaveBeenCalledWith(UID, {
       projectionId: 'proj-a', cid: 'cid-a', note: 'not now',
     });
+  });
+
+  it('routes KStar review confirmation and read through the closure services', async () => {
+    await expect(call('kstar.review.confirm', { episodeId: 'kse-episode-a', verdict: 'met' }))
+      .resolves.toMatchObject({ ok: true });
+    expect(kstarClosureMock.confirmKstarReview).toHaveBeenCalledWith(UID, 'kse-episode-a', { verdict: 'met' });
+
+    await expect(call('kstar.review.confirm', { episodeId: 'kse-episode-a', verdict: 'bogus' }))
+      .resolves.toMatchObject({ ok: false });
+    expect(kstarClosureMock.confirmKstarReview).toHaveBeenCalledTimes(1);
+
+    await expect(call('kstar.review.read', { episodeId: 'kse-episode-a' }))
+      .resolves.toMatchObject({ ok: true, review: { reviewState: 'needs_confirmation' } });
+    expect(kstarReviewServiceMock.readKstarReview).toHaveBeenCalledWith(UID, 'kse-episode-a');
   });
 
   it('rejects malformed source and capture inputs before feature calls', async () => {

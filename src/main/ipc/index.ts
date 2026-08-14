@@ -2296,6 +2296,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.projections.confirmAndApproveWake': async ({ cid, projectionId, wakeRequestId } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId) || !safeId(wakeRequestId)) throw new Error('invalid projection wake confirmation'); return recallProjection.confirmAndApproveWake(ctx.userId, { cid, projectionId, wakeRequestId }); },
   'recall.projections.defer': async ({ projectionId, note } = {}, ctx) => { if (!safeId(projectionId) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid projection id'); return { ok: true, projection: await recallProjection.deferContextProjection(ctx.userId, projectionId, note) }; },
   'recall.projections.reject': async ({ projectionId, cid, note } = {}, ctx) => { if (!safeId(projectionId) || !safeId(cid) || (note !== undefined && (typeof note !== 'string' || note.length > 1_000))) throw new Error('invalid projection id'); return { ok: true, ...(await kstarProjectionDecision.rejectProjectionAndResumeCommander(ctx.userId, { projectionId, cid, note })) }; },
+  'kstar.review.confirm': async ({ episodeId, verdict } = {}, ctx) => {
+    if (!safeId(episodeId) || !['met', 'partial', 'not_met', 'skip'].includes(String(verdict))) {
+      return { ok: false, error: 'invalid kstar review input' };
+    }
+    try {
+      await kstarTaskClosure.confirmKstarReview(ctx.userId, episodeId, { verdict });
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  },
+  'kstar.review.read': async ({ episodeId } = {}, ctx) => {
+    if (!safeId(episodeId)) return { ok: false, error: 'invalid kstar review episode id' };
+    try {
+      const review = await kstarReviewService.readKstarReview(ctx.userId, episodeId);
+      return { ok: true, review: review ? { reviewState: review.reviewState } : null };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  },
   'recall.projections.card': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, card: await recallProjectionCard.buildProjectionCard(ctx.userId, projectionId) }; },
   'recall.projections.postCard': async ({ cid, projectionId } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId)) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.postProjectionCardMessage(ctx.userId, { cid, projectionId }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), ...(payload.card ? { recall_projection_card: { projectionId: payload.card.projectionId } } : {}) })).msg?.id || '' }) })) }; },
   'recall.projections.previewAndPostCard': async ({ cid, taskRunId, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(cid) || !safeId(taskRunId) || (workspaceId !== undefined && !safeId(workspaceId)) || typeof purpose !== 'string' || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.previewAndPostProjectionCard(ctx.userId, { cid, taskRunId, ...(workspaceId !== undefined ? { workspaceId } : {}), purpose, ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), recall_projection_card: { projectionId: payload.card.projectionId } })).msg?.id || '' }) })) }; },
