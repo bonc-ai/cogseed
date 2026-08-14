@@ -25,7 +25,7 @@
 |---|---|---|---|---|---|
 | **本体 T-Box** | 概念/分类学定义 | 分组台账、字段词汇表、字段类型（值/关系） | `groups.md` 台账 + `listGroupFields` 词汇 | 手动 / 模板安装 / 迁移脚本 | 慢（新增概念才变） |
 | **本体 A-Box** | 事实断言 | 字段值（`上午专注`）、流水条目（`2026-08-14 完成迁移`） | 分组文件字段区/流水区（FieldValue + 来源标记） | 手动 / 对话沉淀 / KStar 路由 | 中（事实追加） |
-| **本体 R-Box** | 业务规则 + ID 映射 | 若字段 X 为关系型 → 映射到对象 Y；用户长期偏好 → 规则 | **缺失（待建）**：需定义"本体规则"形态 | 手动 / 沉淀 | 慢 |
+| **本体 R-Box** | 业务规则 + ID 映射 | 字段值写成 `A → B` 即关系规则（值形状驱动；`isRelation` 声明为可选显式信号，内置模板暂无） | ✅ `recall/ontology-rules.ts`：`loadOntologyRules` 遍历分组解析 `A → B` 值 → `{id: ontr-*, groupId, field, subject, object}`，进入世界模型 K | 手动（写关系值）/ 沉淀 | 慢 |
 
 要点：
 - 本体的 T/A 两盒已有实现；**R-Box 缺失**——本体目前只存"是什么"，不存"因此该怎么办"。
@@ -69,7 +69,7 @@ commit_forecast ──► 组装世界模型（每任务一次）：
 
 | # | 差距 | 影响 | 优先级 |
 |---|---|---|---|
-| 1 | **本体 R-Box 缺失** | 本体只有"是什么"，没有"因此该怎么办"；业务规则无处存 | P1（定义+实现） |
+| ~~1~~ ✅ | ~~本体 R-Box 缺失~~ 已实现（`ontology-rules.ts`）：值形状驱动（`A → B`），`isRelation` 声明为可选信号；进入 `simulationInput.k.ontologyRules`，与资产 CausalRule（ΔR 教训）并列 | 本体现在有了"因此该怎么办" | — |
 | 2 | 世界模型 T-Box 中的本体资产（`onto-*`）与本体三盒的对应关系未显式化 | 本体的 A-Box 事实 vs 世界模型的 onto-* 资产重复承载 | P2（映射文档） |
 | 3 | A-Box 只在 forecast 时探测一次 | 长任务中状态可能过时 | P2（工具调用后刷新，Hook） |
 | 4 | 重组函数分散在 forecast-commit / projection-knowledge / world-model 三处 | 无单一 `assembleWorldModel` 入口 | P2（收敛命名） |
@@ -77,6 +77,6 @@ commit_forecast ──► 组装世界模型（每任务一次）：
 
 ## 5. 建议落地顺序
 
-1. **定义本体 R-Box 形态**（P1）：本体规则 = `{ruleId, groupId, field?, condition, action, source}`；来源：手动声明（模板字段 `isRelation` 升级为规则）+ KStar 沉淀（如"该用户的验收证据规则"）。
+1. ✅ **本体 R-Box 已实现**（`ontology-rules.ts`）：值形状驱动——字段值 `A → B` 即业务规则（`ontr-*`），进入世界模型 K 的 `ontologyRules`；`isRelation` 显式声明为可选信号。
 2. **收敛重组入口**（P2）：`assembleWorldModel(userId, input)` 封装 投影知识 + 快照 + 规则，forecast-commit 调用它，命名即文档。
 3. **A-Box 刷新 Hook**（P2）：工具调用后增量刷新快照（保留每任务 T/R 冻结语义）。

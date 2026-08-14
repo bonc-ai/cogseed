@@ -186,6 +186,21 @@ export interface WorldModelKnowledge {
    */
   ontologyAssets?: WorldModelAbilityAsset[];
   /**
+   * R-Box (ontology) — the user's durable business rules / mappings derived
+   * from relation fields (isRelation: true, `A → B` values) across the
+   * Personal Ontology. Persistent and slow-changing; joins the world-model
+   * R-Box alongside asset CausalRules (which are the ΔR lessons).
+   */
+  ontologyRules?: Array<{
+    id: string;
+    groupId: string;
+    groupTitle: string;
+    field: string;
+    subject: string;
+    relation: string;
+    object: string;
+  }>;
+  /**
    * T-Box — the ontology concept definitions (group ledger + field
    * vocabulary) assets point at via ontologyRefs. Loaded fresh at forecast
    * time; carries vocabulary, not field values.

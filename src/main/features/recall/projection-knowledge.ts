@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { loadEntries } from '../memory';
 import { userMemoryFile, userProfileFile } from '../../paths';
+import { loadOntologyRules } from './ontology-rules';
 import { loadOntologyTaxonomy } from './ontology-taxonomy';
 import { normalizeCognitionSourceRefs } from './source-service';
 import { readAbilityAsset } from './asset-service';
@@ -32,6 +33,8 @@ export interface CommittedProjectionKnowledge {
   ontologyAssets: WorldModelAbilityAsset[];
   /** T-Box concept definitions (ontology group ledger + field vocabulary). */
   ontologyTaxonomy: Awaited<ReturnType<typeof loadOntologyTaxonomy>>;
+  /** R-Box (ontology): durable business rules from relation fields. */
+  ontologyRules: Awaited<ReturnType<typeof loadOntologyRules>>['rules'];
 }
 
 function ontologyAssetFromEntry(
@@ -125,5 +128,6 @@ export async function loadCommittedProjectionKnowledge(
     rules,
     ontologyAssets: loadOntologyAssets(userId),
     ontologyTaxonomy: await loadOntologyTaxonomy(userId),
+    ontologyRules: (await loadOntologyRules(userId)).rules,
   };
 }

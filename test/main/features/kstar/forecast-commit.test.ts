@@ -322,6 +322,28 @@ describe('Commander Forecast host commit', () => {
     expect(record.input.k.abilityAssetRefs).toEqual([seeded.selectedAsset.id]);
   });
 
+  it('loads the ontology R-Box (relation rules) into K alongside asset rules (R-Box)', async () => {
+    const seeded = await seedForecastBoundary({ confirmed: true });
+    const groups = await import('../../../../src/main/features/personal_ontology_groups');
+    const group = await groups.createGroup('user-a', '技术栈');
+    await groups.appendFieldValue('user-a', group.group!.group_id, '工具', 'React → 前端框架', '手动');
+
+    const forecast = await import('../../../../src/main/features/kstar/forecast-commit');
+    const record = await forecast.commitCommanderForecast('user-a', seeded.input);
+
+    expect(record.input.k.ontologyRules).toEqual([
+      expect.objectContaining({
+        id: expect.stringMatching(/^ontr-/),
+        groupId: group.group!.group_id,
+        subject: 'React',
+        object: '前端框架',
+      }),
+    ]);
+    // Asset CausalRules (ΔR lessons) still present as the other R-Box source.
+    expect(record.input.k.rules.length).toBeGreaterThanOrEqual(0);
+    expect(record.input.k.abilityAssetRefs).toEqual([seeded.selectedAsset.id]);
+  });
+
   it('degrades gracefully when memory files are absent (Q4)', async () => {
     const seeded = await seedForecastBoundary({ confirmed: true });
     const forecast = await import('../../../../src/main/features/kstar/forecast-commit');
