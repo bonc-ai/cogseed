@@ -13338,7 +13338,11 @@ body.model-not-configured .main-content { flex-direction: column; }
    sizing (compact, matching the sibling provider/key rows on this tab).
    Only custom bit: the action button lines up with the select column
    (80px label + 12px row gap). */
-.settings-model-auth-actions { margin-bottom: 0; padding-left: 92px; }
+.settings-model-auth-actions { margin-bottom: 0; }
+/* Align the add-account button with the select column via a label-width
+   spacer (same 80px basis as .settings-row > label) instead of a fixed
+   pixel offset. */
+.settings-model-auth-label-spacer { flex: 0 0 80px; }
 .settings-model-picker-row > .ai-select { min-width: 0; }
 .settings-custom-provider-add-model,
 .settings-custom-provider-detail-models-head .btn {
@@ -13538,7 +13542,7 @@ body.model-not-configured .main-content { flex-direction: column; }
 @media (max-width: 720px) {
   .settings-model-picker-row { align-items: stretch; flex-direction: column; gap: 7px; }
   .settings-model-picker-row > label { flex-basis: auto; }
-  .settings-model-auth-actions { padding-left: 0; }
+  .settings-model-auth-label-spacer { display: none; }
   .settings-custom-provider-detail-toolbar,
   .settings-custom-provider-detail-models-head { align-items: stretch; flex-direction: column; }
   .settings-custom-provider-detail-actions { justify-content: flex-start; }
