@@ -97,6 +97,7 @@ function open() {
   backdrop.innerHTML = `
     <div class="cw-modal" role="dialog" aria-modal="true">
       <div class="cw-head">
+        <span class="cw-head-icon">${_cwIcon('clock')}</span>
         <div class="cw-head-copy">
           <div class="cw-kicker">继续之前的工作</div>
           <div class="cw-title">导入历史会话并续接</div>
@@ -134,7 +135,7 @@ function _cwRenderSteps() {
   if (!host) return;
   host.innerHTML = _CW_STEPS.map((s) => {
     const isActive = s.n === _cw.step;
-    const isDone = _cw.done && s.n === 4;
+    const isDone = s.n < _cw.step || (_cw.done && s.n === 4);
     const clickable = s.n === 1 || s.n === 2 || (s.n === 4 && _cw.done);
     return `
       <button type="button" class="cw-step${isActive ? ' is-active' : ''}${isDone ? ' is-done' : ''}"
@@ -314,14 +315,18 @@ async function _cwLoadSources() {
 
     const allCard = available.length > 1
       ? `
-        <button type="button" class="cw-source-card${_cw.source === 'all' ? ' is-active' : ''}" data-cw-source="all">
-          <span class="cw-source-icon">${_cwIcon('folder')}</span>
+        <button type="button" class="cw-source-card is-all${_cw.source === 'all' ? ' is-active' : ''}" data-cw-source="all">
+          <span class="cw-source-icon">${_cwIcon('check')}</span>
           <span class="cw-source-name">全部来源</span>
-          <span class="cw-source-meta">${available.length} 个 Agent</span>
+          <span class="cw-source-meta">包含 ${available.length} 个 Agent</span>
         </button>`
       : '';
 
-    grid.innerHTML = allCard + available.map(sourceCard).join('');
+    const divider = available.length > 1
+      ? `<div class="cw-source-divider"><span>或按来源单独选择</span></div>`
+      : '';
+
+    grid.innerHTML = allCard + divider + available.map(sourceCard).join('');
     grid.querySelectorAll('[data-cw-source]').forEach((el) => {
       el.addEventListener('click', () => {
         _cw.source = el.dataset.cwSource;
@@ -459,6 +464,15 @@ function _cwRenderSessionList() {
   _cwRenderFoot();
 }
 
+function _cwRowHtml(item, cls, status) {
+  return `
+    <div class="cw-import-row ${cls}" data-cw-import-row>
+      <span class="cw-import-source">${_cwEsc(_cwSourceLabel(item.source))}</span>
+      <span class="cw-import-title">${_cwEsc(item.title)}</span>
+      <span class="cw-import-status">${status}</span>
+    </div>`;
+}
+
 async function _cwRunImport() {
   if (!_cw) return;
   const items = _cw.sessions.filter((s) => _cw.selected.has(s.id));
@@ -473,12 +487,7 @@ async function _cwRunImport() {
   _cwRenderFoot();
 
   items.forEach((item) => { item.status = 'waiting'; });
-  list.innerHTML = items.map((item) => `
-    <div class="cw-import-row is-waiting" data-cw-import-row>
-      <span class="cw-import-source">${_cwEsc(_cwSourceLabel(item.source))}</span>
-      <span class="cw-import-title">${_cwEsc(item.title)}</span>
-      <span class="cw-import-status">等待中</span>
-    </div>`).join('');
+  list.innerHTML = items.map((item) => _cwRowHtml(item, 'is-waiting', '等待中')).join('');
 
   let doneCount = 0;
   const updateProgress = () => {
@@ -490,14 +499,12 @@ async function _cwRunImport() {
   for (let i = 0; i < items.length; i += 1) {
     if (!_cw || _cw.cancel) break;
     const item = items[i];
-    const row = list.querySelectorAll('[data-cw-import-row]')[i];
+    let row = list.querySelectorAll('[data-cw-import-row]')[i];
     item.status = 'running';
-    if (row) row.outerHTML = `
-      <div class="cw-import-row is-running" data-cw-import-row>
-        <span class="cw-import-source">${_cwEsc(_cwSourceLabel(item.source))}</span>
-        <span class="cw-import-title">${_cwEsc(item.title)}</span>
-        <span class="cw-import-status">导入中</span>
-      </div>`;
+    if (row) {
+      row.outerHTML = _cwRowHtml(item, 'is-running', '导入中');
+      row = list.querySelectorAll('[data-cw-import-row]')[i];
+    }
 
     try {
       let res;
@@ -520,31 +527,25 @@ async function _cwRunImport() {
         if (item.source === 'claude' && res.cognitions) {
           _cw.cognitions += (res.cognitions.personal || 0) + (res.cognitions.rule || 0) + (res.cognitions.template || 0);
         }
-        if (row) row.outerHTML = `
-          <div class="cw-import-row is-ok" data-cw-import-row>
-            <span class="cw-import-source">${_cwEsc(_cwSourceLabel(item.source))}</span>
-            <span class="cw-import-title">${_cwEsc(item.title)}</span>
-            <span class="cw-import-status">${res.truncated ? '已完成 · 对话过长，已截断' : '已完成'}</span>
-          </div>`;
+        if (row) {
+          row.outerHTML = _cwRowHtml(item, 'is-ok', res.truncated ? '已完成 · 对话过长，已截断' : '已完成');
+          row = list.querySelectorAll('[data-cw-import-row]')[i];
+        }
       } else {
         item.status = 'fail';
         _cw.failed.push(item);
-        if (row) row.outerHTML = `
-          <div class="cw-import-row is-fail" data-cw-import-row>
-            <span class="cw-import-source">${_cwEsc(_cwSourceLabel(item.source))}</span>
-            <span class="cw-import-title">${_cwEsc(item.title)}</span>
-            <span class="cw-import-status">失败</span>
-          </div>`;
+        if (row) {
+          row.outerHTML = _cwRowHtml(item, 'is-fail', '失败');
+          row = list.querySelectorAll('[data-cw-import-row]')[i];
+        }
       }
     } catch (err) {
       item.status = 'fail';
       _cw.failed.push(item);
-      if (row) row.outerHTML = `
-        <div class="cw-import-row is-fail" data-cw-import-row>
-          <span class="cw-import-source">${_cwEsc(_cwSourceLabel(item.source))}</span>
-          <span class="cw-import-title">${_cwEsc(item.title)}</span>
-          <span class="cw-import-status">失败</span>
-        </div>`;
+      if (row) {
+        row.outerHTML = _cwRowHtml(item, 'is-fail', '失败');
+        row = list.querySelectorAll('[data-cw-import-row]')[i];
+      }
     }
     doneCount += 1;
     updateProgress();

@@ -10,7 +10,7 @@ import {
   toolResultsDirForSession,
 } from '../../../../src/main/model/core-agent/session-store';
 
-describe('Mate Agent Runtime session routing', () => {
+describe('CogSeed Runtime session routing', () => {
   it('routes mruntime sessions into the local mate_runtime root', () => {
     const uid = 'runtime-routing-user';
     const sid = 'mruntime-alpha_123';

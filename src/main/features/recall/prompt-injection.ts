@@ -10,6 +10,7 @@ import {
 } from './context-projection';
 import type { RecallProjectionCard } from './projection-card';
 import { isCognitionSourceEnabled } from './source-control';
+import { loadCommittedProjectionKnowledge } from './projection-knowledge';
 
 type ConversationMessage = {
   recall_projection_card?: Pick<RecallProjectionCard, 'projectionId'>;
@@ -28,6 +29,7 @@ export interface RecallPromptCitation {
   version: string;
   scope: string;
   projectionId: string;
+  forecastId?: string;
   matchScore?: number;
   matchMethod: 'semantic' | 'manual';
 }
@@ -42,6 +44,8 @@ export interface RecallTurnPromptInput {
   taskRunId: string;
   taskText: string;
   workspaceId?: string;
+  committedProjectionId?: string;
+  forecastId?: string;
 }
 
 interface ProjectionForPrompt {
@@ -149,6 +153,39 @@ async function buildPromptContextForProjections(
   };
 }
 
+async function buildPromptContextForCommittedProjection(
+  userId: string,
+  projectionId: string,
+  forecastId?: string,
+): Promise<RecallTurnPromptContext> {
+  const knowledge = await loadCommittedProjectionKnowledge(userId, projectionId);
+  const records = knowledge.abilityAssets.map((asset) => ({
+    projection_id: knowledge.projectionId,
+    asset_id: asset.id,
+    title: safePromptText(asset.title, 160),
+    type: asset.type,
+    maturity: asset.maturity,
+    scope: safePromptText(asset.scope, 500),
+    version: asset.version,
+    statement: safePromptText(asset.statement, MAX_STATEMENT_LENGTH),
+    source_refs: asset.evidenceRefs.map((ref) => ({ kind: ref.kind, id: ref.id })),
+  }));
+  const rendered = renderPromptBlock(records);
+  return {
+    promptBlock: rendered.block,
+    citations: knowledge.abilityAssets.slice(0, rendered.recordCount).map((asset) => ({
+      assetId: asset.id,
+      title: safePromptText(asset.title, 160),
+      type: asset.type,
+      version: asset.version,
+      scope: safePromptText(asset.scope, 500),
+      projectionId: knowledge.projectionId,
+      ...(forecastId ? { forecastId } : {}),
+      matchMethod: 'manual' as const,
+    })),
+  };
+}
+
 export async function projectionIdsForConversation(userId: string, cid: string): Promise<string[]> {
   const messages = await readJsonl<ConversationMessage>(conversationMessageReadFile(userId, cid), 500);
   const ids: string[] = [];
@@ -224,6 +261,9 @@ export async function buildRecallTurnPromptContext(
   input: RecallTurnPromptInput,
   options: ProjectionSemanticOptions = {},
 ): Promise<RecallTurnPromptContext> {
+  if (input.committedProjectionId) {
+    return buildPromptContextForCommittedProjection(userId, input.committedProjectionId, input.forecastId);
+  }
   const projections: ProjectionForPrompt[] = [];
   let manualProjectionIds: string[] = [];
   try {

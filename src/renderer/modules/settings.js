@@ -100,7 +100,6 @@ async function loadSettings() {
     _settingsSafeCall('settings custom providers refresh', _settingsRefreshCustomProviders),
     _settingsSafeCall('settings ccswitch status refresh', _settingsRefreshCcswitchStatus),
     _settingsSafeCall('settings touchpoint refresh', () => window.initTouchpointSettings && window.initTouchpointSettings()),
-    _settingsSafeCall('settings hub account refresh', () => window.initHubAccountSettings && window.initHubAccountSettings()),
   ]);
   await _settingsSafeCall('settings model picker render', _settingsRenderPicker);
   await _settingsSafeCall('settings model entries render', _settingsRenderEntries);

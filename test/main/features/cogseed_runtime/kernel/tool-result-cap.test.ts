@@ -16,7 +16,7 @@ afterEach(() => {
   fs.rmSync(paths.userRoot(UID), { recursive: true, force: true });
 });
 
-describe('Mate Runtime result cap boundary', () => {
+describe('CogSeed Runtime result cap boundary', () => {
   it('caps connector umbrella results before returning them to the model', async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'mate-runtime-cap-'));
     const runner = createRuntimeToolRunner({
@@ -44,7 +44,7 @@ describe('Mate Runtime result cap boundary', () => {
     expect(fs.existsSync(result.persistedOutput!.path)).toBe(true);
   });
 
-  it('caps Mate KB results before returning them to the model', async () => {
+  it('caps CogSeed KB results before returning them to the model', async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'mate-runtime-cap-'));
     const runner = createRuntimeToolRunner({
       userId: UID,

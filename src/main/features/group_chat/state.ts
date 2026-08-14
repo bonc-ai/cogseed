@@ -171,6 +171,23 @@ export interface StateFile {
    *  the next no-@ user message"; this answers "what commander task should be
    *  resumed when that interaction completes." */
   orchestration_ledger?: OrchestrationLedger;
+  /** Pending user-message dispatch blocked on a Recall projection preview.
+   *  The user message is persisted and the card is shown, but the Commander
+   *  turn is not enqueued until the projection is confirmed. Cleared on
+   *  confirm / reject / defer / a fresh user message. */
+  pending_projection_dispatch?: {
+    projectionId: string;
+    requirementId: string;
+    taskRunId: string;
+    userMessageId: string;
+    userMessageText: string;
+    status: 'waiting_confirmation' | 'forecasting' | 'world_model_failed' | 'ready_to_dispatch';
+    forecastId?: string;
+    errorCode?: string;
+    errorMessage?: string;
+    createdAt: string;
+    updatedAt: string;
+  };
   /** System-created sync-conflict resolution metadata. A commander turn may
    *  close only these records, and only by emitting a matching XML result. */
   sync_conflict_resolution?: {
@@ -561,6 +578,34 @@ export async function readState(
           ? { active_recipient: data.active_recipient }
           : {}),
         ...(orchestrationLedger ? { orchestration_ledger: orchestrationLedger } : {}),
+        ...(data.pending_projection_dispatch
+          && typeof data.pending_projection_dispatch?.projectionId === 'string'
+          && safeId(data.pending_projection_dispatch.projectionId)
+          && typeof data.pending_projection_dispatch?.requirementId === 'string'
+          && safeId(data.pending_projection_dispatch.requirementId)
+          && typeof data.pending_projection_dispatch?.taskRunId === 'string'
+          && safeId(data.pending_projection_dispatch.taskRunId)
+          && typeof data.pending_projection_dispatch?.userMessageId === 'string'
+          && safeId(data.pending_projection_dispatch.userMessageId)
+          && typeof data.pending_projection_dispatch?.userMessageText === 'string'
+          && data.pending_projection_dispatch.userMessageText
+          && ['waiting_confirmation', 'forecasting', 'world_model_failed', 'ready_to_dispatch'].includes(data.pending_projection_dispatch.status)
+          ? {
+              pending_projection_dispatch: {
+                projectionId: data.pending_projection_dispatch.projectionId,
+                requirementId: data.pending_projection_dispatch.requirementId,
+                taskRunId: data.pending_projection_dispatch.taskRunId,
+                userMessageId: data.pending_projection_dispatch.userMessageId,
+                userMessageText: data.pending_projection_dispatch.userMessageText,
+                status: data.pending_projection_dispatch.status,
+                ...(typeof data.pending_projection_dispatch.forecastId === 'string' && safeId(data.pending_projection_dispatch.forecastId) ? { forecastId: data.pending_projection_dispatch.forecastId } : {}),
+                ...(typeof data.pending_projection_dispatch.errorCode === 'string' ? { errorCode: data.pending_projection_dispatch.errorCode } : {}),
+                ...(typeof data.pending_projection_dispatch.errorMessage === 'string' ? { errorMessage: data.pending_projection_dispatch.errorMessage } : {}),
+                createdAt: typeof data.pending_projection_dispatch.createdAt === 'string' ? data.pending_projection_dispatch.createdAt : nowIso(),
+                updatedAt: typeof data.pending_projection_dispatch.updatedAt === 'string' ? data.pending_projection_dispatch.updatedAt : nowIso(),
+              },
+            }
+          : {}),
         ...(Array.isArray(data.sync_conflict_resolution?.conflicts)
           ? {
               sync_conflict_resolution: {
@@ -920,6 +965,22 @@ export async function resetConversationRoutingState(uid: string, cid: string): P
   });
 }
 
+/** Terminal user abort: stop the conversation and clear all interactive
+ * routing state in one persisted transition. */
+export async function abortConversationRoutingState(uid: string, cid: string): Promise<StateFile> {
+  return _stateLock(uid, cid).runExclusive(async () => {
+    const s = await readState(uid, cid);
+    const previousStatus = s.status;
+    s.status = 'aborted';
+    s.in_flight = [];
+    delete s.active_recipient;
+    delete s.orchestration_ledger;
+    s.last_active_at = nowIso();
+    await _writeStatusTransition(uid, cid, previousStatus, 'aborted', s);
+    return s;
+  });
+}
+
 export async function markOrchestrationInterrupted(
   uid: string,
   cid: string,
@@ -1084,6 +1145,44 @@ export async function setCodingProjectDir(
     }
     s.last_active_at = nowIso();
     await writeStateRaw(uid, cid, s);
+    return s;
+  });
+}
+
+export async function setPendingProjectionDispatch(
+  uid: string,
+  cid: string,
+  pending: NonNullable<StateFile['pending_projection_dispatch']>,
+): Promise<StateFile> {
+  return _stateLock(uid, cid).runExclusive(async () => {
+    const s = await readState(uid, cid);
+    s.pending_projection_dispatch = pending;
+    await writeStateRaw(uid, cid, s);
+    return s;
+  });
+}
+
+export async function updatePendingProjectionDispatch(
+  uid: string,
+  cid: string,
+  update: (current: NonNullable<StateFile['pending_projection_dispatch']>) => NonNullable<StateFile['pending_projection_dispatch']>,
+): Promise<StateFile> {
+  return _stateLock(uid, cid).runExclusive(async () => {
+    const s = await readState(uid, cid);
+    if (!s.pending_projection_dispatch) throw new Error('pending projection dispatch not found');
+    s.pending_projection_dispatch = update(s.pending_projection_dispatch);
+    await writeStateRaw(uid, cid, s);
+    return s;
+  });
+}
+
+export async function clearPendingProjectionDispatch(uid: string, cid: string): Promise<StateFile> {
+  return _stateLock(uid, cid).runExclusive(async () => {
+    const s = await readState(uid, cid);
+    if (s.pending_projection_dispatch) {
+      delete s.pending_projection_dispatch;
+      await writeStateRaw(uid, cid, s);
+    }
     return s;
   });
 }

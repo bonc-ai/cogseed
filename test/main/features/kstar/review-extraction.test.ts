@@ -173,13 +173,23 @@ describe('KSTAR review and Recall bridge', () => {
       confidence: 0.9,
       evidenceRefs: current.evidenceRefs,
     });
-    const proposals = proposeKstarCandidates(current, review);
+    const proposals = proposeKstarCandidates(current, review).map((proposal) => ({
+      ...proposal,
+      learningProvenance: {
+        projectionId: 'proj-review', forecastId: 'wf-review', episodeId: current.id,
+        ruleRefs: ['rule:asset-review:1'], attribution: review.attribution,
+      },
+    }));
     const candidates = await saveKstarCandidateProposals('review-user', proposals);
 
     expect(candidates).toHaveLength(1);
     expect(candidates[0]).toMatchObject({
-      status: 'pending',
+      status: 'pending_review',
       suggestedType: 'rule',
+      learningProvenance: {
+        projectionId: 'proj-review', forecastId: 'wf-review', episodeId: current.id,
+        ruleRefs: ['rule:asset-review:1'], attribution: 'rule_gap',
+      },
       learningSignal: {
         deltaR: -0.8,
         deltaA: 0.2,
@@ -190,6 +200,11 @@ describe('KSTAR review and Recall bridge', () => {
     });
     const promoted = await (await import('../../../../src/main/features/recall/candidate-service'))
       .promoteRecallCandidate('review-user', candidates[0].id, { actor: 'user' });
+    expect(promoted.asset.learningProvenance).toMatchObject({
+      projectionId: 'proj-review', forecastId: 'wf-review', episodeId: current.id,
+      ruleRefs: ['rule:asset-review:1'], attribution: 'rule_gap',
+    });
+    expect(promoted.asset.causalRule).toBeUndefined();
     expect(promoted.asset.learningSignal).toMatchObject({
       deltaR: -0.8,
       deltaA: 0.2,

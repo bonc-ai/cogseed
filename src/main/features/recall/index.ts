@@ -14,6 +14,8 @@ export { deferRecallCandidate, importPersonalOntologyCandidate, listRecallCandid
 export type { AbilityAssetType, RecallAbilityAssetRecord, RecallCandidateRecord, RecallCandidateStatus, SaveRecallCandidateInput } from './candidate-service';
 export { normalizeAbilityAssetOntologyRefs } from './ontology-refs';
 export type { AbilityAssetOntologyRef } from './ontology-refs';
+export { normalizeAbilityAssetDerivedFrom, normalizeAbilityAssetRelations, readAbilityAssetRelationContract } from './asset-relations';
+export type { AbilityAssetRelation, AbilityAssetRelationContract, AbilityAssetRelationKind } from './asset-relations';
 
 export { cancelRecallCapture, listRecallCaptures, pauseRecallCapture, queryRecallCaptures, queueManualRecallCaptureFromConversation, queueRecallCaptureFromTerminal, readRecallCapture, readRecallCaptureWorkflow, recoverRecallCaptures, resumeRecallCapture, retryRecallCapture, runRecallCapture, runRecallCaptureNow, scheduleRecallCapture, startRecallCaptureOrchestrator } from './capture-service';
 export type { CapturePromptMessage, ListRecallCapturesQuery, RecallCaptureCounts, RecallCaptureModelUsage, RecallCaptureNextAction, RecallCapturePage, RecallCaptureQueryStatus, RecallCaptureRecord, RecallCaptureReviewSummary, RecallCaptureStage, RecallCaptureStatus, RecallCaptureWorkflowRecord, RecallCaptureWorkflowStatus } from './capture-service';
@@ -21,8 +23,8 @@ export type { CapturePromptMessage, ListRecallCapturesQuery, RecallCaptureCounts
 export { isWithinNightlyWindow, nextNightlyRunAt, readRecallCaptureSettings, updateRecallCaptureSettings } from './capture-settings';
 export type { RecallCaptureExecutionPolicy, RecallCaptureSettingsRecord, UpdateRecallCaptureSettingsInput } from './capture-settings';
 
-export { initializeAbilityAsset, listAbilityAssetAudit, listAbilityAssetVersions, listAbilityAssets, pauseAbilityAsset, readAbilityAsset, resumeAbilityAsset, revokeAbilityAsset, setAbilityAssetMaturity, updateAbilityAsset } from './asset-service';
-export type { AbilityAssetAuditRecord, AbilityAssetVersionRecord, UpdateAbilityAssetInput } from './asset-service';
+export { archiveAbilityAsset, deleteAbilityAsset, downgradeAbilityAssetMaturityForRevokedEvidence, initializeAbilityAsset, listAbilityAssetAudit, listAbilityAssetVersions, listAbilityAssets, pauseAbilityAsset, purgeAbilityAsset, readAbilityAsset, recommendAbilityAssetAction, restoreAbilityAsset, resumeAbilityAsset, revokeAbilityAsset, rollbackAbilityAsset, setAbilityAssetCrossScopeConfirmation, setAbilityAssetMaturity, updateAbilityAsset } from './asset-service';
+export type { AbilityAssetActor, AbilityAssetAuditRecord, AbilityAssetRecommendedAction, AbilityAssetUserActionInput, AbilityAssetVersionRecord, RecommendAbilityAssetActionInput, UpdateAbilityAssetInput } from './asset-service';
 
 export { confirmRecallSkillDraft, prepareRecallSkillDraft, readInstalledSkillForAsset, readRecallSkillDraft } from './skill-draft-service';
 export type { RecallSkillDraftFile, RecallSkillDraftPreview, RecallSkillDraftRecord, RecallSkillDraftValidation } from './skill-draft-service';
@@ -30,8 +32,10 @@ export type { RecallSkillDraftFile, RecallSkillDraftPreview, RecallSkillDraftRec
 export { addWorkspaceAssetReference, listWorkspaceAssetReferenceHistory, listWorkspaceAssetReferences, removeWorkspaceAssetReference, updateWorkspaceAssetReference } from './workspace-refs';
 export type { WorkspaceAssetReference, WorkspaceAssetReferenceHistory } from './workspace-refs';
 
-export { buildRecallView, confirmContextProjection, createAutomaticContextProjection, previewContextProjection, readContextProjection } from './context-projection';
-export type { AutomaticProjectionInput, BuildRecallViewResult, ContextProjectionRecord, ContextProjectionStatus, OmittedAssetRef, ProjectionAuthorization, ProjectionInput, ProjectionSemanticOptions, RecallAssetMatch, RecallAssetMatchMethod } from './context-projection';
+export { buildRecallView, confirmContextProjection, createAutomaticContextProjection, isCommittedProjection, previewContextProjection, readContextProjection, validateCommittedProjectionAssetVersions } from './context-projection';
+export type { AutomaticProjectionInput, BuildRecallViewResult, ContextProjectionRecord, ContextProjectionStatus, OmittedAssetRef, ProjectionAuthorization, ProjectionInput, ProjectionKnowledgeErrorCode, ProjectionSemanticOptions, RecallAssetMatch, RecallAssetMatchMethod } from './context-projection';
+export { loadCommittedProjectionKnowledge } from './projection-knowledge';
+export type { CommittedProjectionKnowledge } from './projection-knowledge';
 export { createRecallView, isRecallViewExpired, listRecallViews, readRecallView } from './recall-view-service';
 export type { CreateRecallViewInput, ListRecallViewsQuery, RecallViewPurpose, RecallViewRecord } from './recall-view-service';
 export { classifyTeachingIntent, listUserTeachingSignals, readUserTeachingSignal, recordTeachingSignalAfterMemoryWrite, revokeUserTeachingSignal, teachingMemoryRef, teachingSignalId } from './teaching-service';
@@ -44,8 +48,8 @@ export { listRecallUsage, recordRecallUsage } from './usage-service';
 export { recordRecallMessageFeedback } from './usage-feedback-service';
 export type { RecallMessageFeedback, RecordRecallMessageFeedbackInput, RecordRecallMessageFeedbackResult } from './usage-feedback-service';
 export type { RecallUsageRecord, RecordRecallUsageInput } from './usage-service';
-export { readCognitionTree, rebuildCognitionTree } from './tree-service';
-export type { CognitionTreeEdge, CognitionTreeNode, CognitionTreeRecord } from './tree-service';
+export { COGNITION_TREE_CONTRACT, COGNITION_TREE_CONTRACT_VERSION, readCognitionTree, rebuildCognitionTree } from './tree-service';
+export type { CognitionTreeEdge, CognitionTreeNode, CognitionTreeNodeId, CognitionTreeRecord } from './tree-service';
 
 export { listAbilityAssetTimeline, listRecallTimeline } from './timeline-service';
 export type { RecallAssetTimelineItem, RecallAssetTimelineKind } from './timeline-service';
@@ -58,3 +62,8 @@ export { handleRecallTaskTerminal } from './terminal-proof';
 export type { RecallTaskTerminalEvent, RecallTaskTerminalStatus } from './terminal-proof';
 export { recordEffectivenessFeedback, recordTaskEffectivenessFeedback } from './effectiveness-feedback';
 export type { RecallEffectivenessFeedback, RecordEffectivenessFeedbackInput, RecordTaskEffectivenessFeedbackInput } from './effectiveness-feedback';
+
+export { applyCausalRules, buildWorldModelForecastRecord, collectWorldSnapshot, readWorldModelForecast, reconcileWorldModel, saveWorldModelForecast, simulateWorld } from './world-model';
+export { normalizeCausalRule } from './world-model-types';
+export type { WorldModelReconciliationOptions } from './world-model-reconciliation';
+export type { CausalRule, CausalRuleSeverity, PredictedRisk, AcceptanceSignalResult, ActionDeltaDetail, ResultDeltaDetail, WorldModelAbilityAsset, WorldModelCausalRuleRef, WorldModelCoreState, WorldModelEnvironmentState, WorldModelForecast, WorldModelForecastRecord, WorldModelOntologyState, WorldModelPredicateKey, WorldModelSimulationInput, WorldModelSkillsState, WorldModelReconciliation, WorldModelSnapshot } from './world-model-types';

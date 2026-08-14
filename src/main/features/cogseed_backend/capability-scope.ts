@@ -9,7 +9,7 @@ export interface MateCapabilityScope {
 }
 
 export function assertCapabilityScope(userId: string, scope?: MateCapabilityScope): void {
-  if (scope && scope.userId !== userId) throw new Error('Mate capability scope belongs to a different user');
+  if (scope && scope.userId !== userId) throw new Error('CogSeed capability scope belongs to a different user');
 }
 
 export function canAccessConnector(scope: MateCapabilityScope | undefined, connectorId: string): boolean {

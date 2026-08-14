@@ -540,7 +540,7 @@
   async function _pocEnsureProjectNames() {
     if (_pocProjectNames) return _pocProjectNames;
     try {
-      const res = await window.orkas.invoke('projects.list');
+      const res = await (window.cogseed || window.orkas).invoke('projects.list');
       const projects = (res && Array.isArray(res.projects)) ? res.projects : [];
       _pocProjectNames = new Map(projects.map((p) => [p.project_id, p.name || p.project_id]));
     } catch (_) {

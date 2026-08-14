@@ -1,5 +1,5 @@
 /**
- * Mate Runtime host-tool adapter for proactive messaging.
+ * CogSeed Runtime host-tool adapter for proactive messaging.
  *
  * Thin bridge between a validated `RuntimeHostToolCall` and the shared
  * messaging feature: it performs shape validation only and forwards the

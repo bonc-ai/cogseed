@@ -61,7 +61,7 @@ afterEach(() => {
   fs.rmSync(paths.userRoot(UID), { recursive: true, force: true });
 });
 
-describe('Mate Agent Runtime memory and context', () => {
+describe('CogSeed Runtime memory and context', () => {
   it('stores runtime memory only under the local mate_runtime root and defaults to empty', async () => {
     expect(await readRuntimeMemory(UID)).toBe('');
 
@@ -72,16 +72,16 @@ describe('Mate Agent Runtime memory and context', () => {
     expect(fs.existsSync(path.join(paths.userCloudRoot(UID), 'memory', 'MEMORY.md'))).toBe(false);
   });
 
-  it('injects only Runtime local memory and ignores Mate Agent cloud memory', async () => {
+  it('injects only Runtime local memory and ignores CogSeed cloud memory', async () => {
     const cloudMemory = path.join(paths.userCloudRoot(UID), 'memory', 'MEMORY.md');
     fs.mkdirSync(path.dirname(cloudMemory), { recursive: true });
-    fs.writeFileSync(cloudMemory, 'Cloud-only Mate Agent memory must stay out.');
+    fs.writeFileSync(cloudMemory, 'Cloud-only CogSeed memory must stay out.');
     await appendRuntimeMemoryEntry(UID, 'Runtime-local memory should appear.');
 
     const summary = await loadRuntimeMemorySummary(UID);
 
     expect(summary).toContain('Runtime-local memory should appear.');
-    expect(summary).not.toContain('Cloud-only Mate Agent memory must stay out.');
+    expect(summary).not.toContain('Cloud-only CogSeed memory must stay out.');
   });
 
   it('preloads only explicitly supplied context files into the prompt budget', async () => {

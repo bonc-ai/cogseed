@@ -1,5 +1,8 @@
 import { nowIso, safeId } from '../../storage';
 import type { RecallCandidateRecord } from '../recall/candidate-service';
+import { readContextProjection } from '../recall/context-projection';
+import { readWorldModelForecast } from '../recall/world-model';
+import { readKstarEpisode } from './episode-store';
 import type { KstarCandidateProposal } from './types';
 import { saveKstarCandidateProposals } from './recall-bridge';
 import { closeKstarRequirement } from './requirement-closure';
@@ -32,10 +35,46 @@ function normalizedSeed(value: string): string {
   return value.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
-function proposalFromRequirement(requirement: KstarRequirementRecord): KstarCandidateProposal | null {
+function sameAssetVersions(left: Record<string, string>, right: Record<string, string>): boolean {
+  const leftEntries = Object.entries(left).sort(([leftId], [rightId]) => leftId.localeCompare(rightId));
+  const rightEntries = Object.entries(right).sort(([leftId], [rightId]) => leftId.localeCompare(rightId));
+  return leftEntries.length === rightEntries.length
+    && leftEntries.every(([assetId, version], index) => (
+      rightEntries[index]?.[0] === assetId && rightEntries[index]?.[1] === version
+    ));
+}
+
+async function proposalFromRequirement(
+  userId: string,
+  requirement: KstarRequirementRecord,
+): Promise<KstarCandidateProposal | null> {
   const seed = requirement.aar?.candidateSeed?.replace(/\s+/g, ' ').trim();
   const review = requirement.prmReview;
-  if (!seed || !review) return null;
+  const projectionId = requirement.projectionId;
+  const forecastId = requirement.forecastId;
+  const episodeId = requirement.episodeIds.at(-1);
+  if (!seed || !review || !projectionId || !forecastId || !episodeId || review.evidenceRefs.length === 0) return null;
+
+  const [forecast, projection, episode] = await Promise.all([
+    readWorldModelForecast(userId, forecastId),
+    readContextProjection(userId, projectionId).catch(() => null),
+    readKstarEpisode(userId, episodeId),
+  ]);
+  if (
+    !forecast
+    || forecast.provenanceComplete !== true
+    || forecast.projectionId !== projectionId
+    || forecast.requirementId !== requirement.id
+    || !projection
+    || projection.status !== 'confirmed'
+    || !projection.assetVersions
+    || !forecast.assetVersions
+    || !sameAssetVersions(forecast.assetVersions, projection.assetVersions)
+    || !episode
+    || episode.projectionId !== projectionId
+    || episode.forecastId !== forecastId
+  ) return null;
+
   return {
     judgment: seed,
     summary: `KSTAR requirement lesson: ${requirement.title}`.slice(0, 200),
@@ -58,14 +97,26 @@ function proposalFromRequirement(requirement: KstarRequirementRecord): KstarCand
       confidence: review.confidence,
       source: 'review',
     },
+    learningProvenance: {
+      projectionId,
+      forecastId,
+      episodeId,
+      ruleRefs: forecast.ruleRefs || [],
+      attribution: review.attribution,
+      ...(review.actionDelta ? { actionDelta: review.actionDelta } : {}),
+      ...(review.resultDelta ? { resultDelta: review.resultDelta } : {}),
+    },
   };
 }
 
-function dedupeProposals(requirements: KstarRequirementRecord[]): KstarCandidateProposal[] {
+async function dedupeProposals(
+  userId: string,
+  requirements: KstarRequirementRecord[],
+): Promise<KstarCandidateProposal[]> {
   const seen = new Set<string>();
   const proposals: KstarCandidateProposal[] = [];
   for (const requirement of requirements) {
-    const proposal = proposalFromRequirement(requirement);
+    const proposal = await proposalFromRequirement(userId, requirement);
     if (!proposal) continue;
     const key = normalizedSeed(proposal.judgment);
     if (seen.has(key)) continue;
@@ -136,7 +187,7 @@ export async function drainKstarTaskState(
 
   const requirements = await listKstarRequirementsForTask(userId, task.id);
   const closedRequirements = requirements.filter((requirement) => requirement.status === 'closed');
-  const proposals = dedupeProposals(closedRequirements);
+  const proposals = await dedupeProposals(userId, closedRequirements);
   const bridge = options.candidateBridge || saveKstarCandidateProposals;
   const candidates = proposals.length ? await bridge(userId, proposals) : [];
   const closedTask: KstarTaskRecord = {

@@ -13,7 +13,7 @@
  */
 
 import * as path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { createLogger } from '../../logger';
 import { appendJsonlAtomic, readJsonl, nowIso } from '../../storage';
@@ -23,7 +23,7 @@ import { maskId } from '../../util/log-redact';
 const log = createLogger('review-decision');
 
 /** 候选审查四决定（PRD §5.6 候选卡：保存/修改后保存/暂缓/拒绝）。 */
-export type ReviewDecisionType = 'accept' | 'modify' | 'defer' | 'reject';
+export type ReviewDecisionType = 'accept' | 'modify' | 'defer' | 'reject' | 'ignore' | 'keep_current' | 'trial';
 
 export interface ReviewDecision {
   decision_id: string;
@@ -43,6 +43,11 @@ export interface ReviewDecision {
   reason?: string;
   /** modify 时的用户修改内容。 */
   modified_content?: string;
+  /** Stable retry boundary supplied by the confirmation workflow. */
+  idempotency_key?: string;
+  asset_id?: string;
+  outcome?: 'recorded' | 'asset_created' | 'asset_failed';
+  failure_code?: string;
   timestamp: string;
 }
 
@@ -56,10 +61,12 @@ export interface WriteReviewDecisionInput {
   supersedesRef?: string;
   reason?: string;
   modifiedContent?: string;
+  idempotencyKey?: string;
+  decisionId?: string;
 }
 
 function assertDecisionType(v: unknown): asserts v is ReviewDecisionType {
-  const allowed: readonly string[] = ['accept', 'modify', 'defer', 'reject'];
+  const allowed: readonly string[] = ['accept', 'modify', 'defer', 'reject', 'ignore', 'keep_current', 'trial'];
   if (typeof v !== 'string' || !allowed.includes(v)) throw new Error('invalid review decision type');
 }
 
@@ -91,8 +98,18 @@ export async function writeReviewDecision(
     throw new Error('short confirmation requires antecedent_ref');
   }
 
+  const normalizedKey = typeof input.idempotencyKey === 'string' ? input.idempotencyKey.trim() : '';
+  if (normalizedKey) {
+    const existing = (await listReviewDecisions(uid, input.targetRef))
+      .find((decision) => decision.idempotency_key === normalizedKey);
+    if (existing) return existing;
+  }
+  const decisionId = input.decisionId || (normalizedKey
+    ? `rd_${createHash('sha256').update(`${input.targetRef}\n${normalizedKey}`).digest('hex').slice(0, 24)}`
+    : `rd_${randomUUID().replace(/-/g, '').slice(0, 24)}`);
+  if (!/^rd_[A-Za-z0-9_-]{8,64}$/.test(decisionId)) throw new Error('invalid review decision id');
   const record: ReviewDecision = {
-    decision_id: `rd_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
+    decision_id: decisionId,
     target_ref: input.targetRef,
     ...(input.antecedentRef ? { antecedent_ref: input.antecedentRef } : {}),
     decision_type: input.decisionType,
@@ -102,6 +119,8 @@ export async function writeReviewDecision(
     ...(input.supersedesRef ? { supersedes_ref: input.supersedesRef } : {}),
     ...(input.reason ? { reason: input.reason } : {}),
     ...(input.modifiedContent ? { modified_content: input.modifiedContent } : {}),
+    ...(normalizedKey ? { idempotency_key: normalizedKey } : {}),
+    outcome: 'recorded',
     timestamp: nowIso(),
   };
   await appendJsonlAtomic<ReviewDecision>(reviewDecisionLogPath(uid, input.targetRef), record);
@@ -109,9 +128,46 @@ export async function writeReviewDecision(
   return record;
 }
 
+export async function readReviewDecision(
+  uid: string,
+  targetRef: string,
+  decisionId: string,
+): Promise<ReviewDecision | undefined> {
+  return (await listReviewDecisions(uid, targetRef)).find((decision) => decision.decision_id === decisionId);
+}
+
+/** Append the immutable outcome of a decision. Latest record for the id is authoritative. */
+export async function recordReviewDecisionOutcome(
+  uid: string,
+  targetRef: string,
+  decisionId: string,
+  outcome: { assetId?: string; failureCode?: string },
+): Promise<ReviewDecision> {
+  const current = await readReviewDecision(uid, targetRef, decisionId);
+  if (!current) throw new Error('review decision not found');
+  if (current.asset_id) return current;
+  const updated: ReviewDecision = {
+    ...current,
+    ...(outcome.assetId ? { asset_id: outcome.assetId } : {}),
+    failure_code: outcome.failureCode,
+    outcome: outcome.assetId ? 'asset_created' : 'asset_failed',
+    timestamp: nowIso(),
+  };
+  await appendJsonlAtomic<ReviewDecision>(reviewDecisionLogPath(uid, targetRef), updated);
+  return updated;
+}
+
 /** 某候选的全部审查决定（按追加顺序）。 */
 export async function listReviewDecisions(uid: string, targetRef: string): Promise<ReviewDecision[]> {
-  return readJsonl<ReviewDecision>(reviewDecisionLogPath(uid, targetRef), 10000);
+  const records = await readJsonl<ReviewDecision>(reviewDecisionLogPath(uid, targetRef), 10000);
+  const latest = new Map<string, ReviewDecision>();
+  for (const record of records) {
+    // Reinsert outcome records so decision order follows the append-only ledger,
+    // rather than the first occurrence of a decision id.
+    latest.delete(record.decision_id);
+    latest.set(record.decision_id, record);
+  }
+  return [...latest.values()];
 }
 
 /**
@@ -122,5 +178,8 @@ export async function isCandidateSuppressed(uid: string, targetRef: string): Pro
   const decisions = await listReviewDecisions(uid, targetRef);
   if (!decisions.length) return false;
   const last = decisions[decisions.length - 1];
-  return last.decision_type === 'defer' || last.decision_type === 'reject';
+  return last.decision_type === 'defer'
+    || last.decision_type === 'reject'
+    || last.decision_type === 'ignore'
+    || last.decision_type === 'keep_current';
 }

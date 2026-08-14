@@ -1,5 +1,6 @@
 import { nowIso } from '../../storage';
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
+import type { ActionDeltaDetail, ResultDeltaDetail } from '../recall/world-model-types';
 import { readKstarJsonRecord, replaceKstarJsonRecord, writeKstarJsonRecord } from './episode-store';
 import type {
   KstarAttribution,
@@ -17,6 +18,8 @@ export interface SaveKstarReviewInput {
   attribution: KstarAttribution;
   reason: string;
   confidence: number;
+  actionDelta?: ActionDeltaDetail;
+  resultDelta?: ResultDeltaDetail;
   reviewState?: KstarReviewRecord['reviewState'];
   inferenceMethod?: KstarReviewRecord['inferenceMethod'];
   needsConfirmation?: boolean;
@@ -104,6 +107,8 @@ export async function saveKstarReview(
     attribution: input.attribution,
     reason: boundedReason(input.reason),
     confidence: validateConfidence(input.confidence),
+    ...(input.actionDelta ? { actionDelta: input.actionDelta } : {}),
+    ...(input.resultDelta ? { resultDelta: input.resultDelta } : {}),
     ...(input.reviewState ? { reviewState: input.reviewState } : {}),
     ...(input.inferenceMethod ? { inferenceMethod: input.inferenceMethod } : {}),
     ...(input.needsConfirmation !== undefined ? { needsConfirmation: input.needsConfirmation } : {}),
@@ -126,6 +131,8 @@ function validateStoredReview(userId: string, episodeId: string, raw: Record<str
     !['better_than_expected', 'met_expected', 'worse_than_expected', 'unclear'].includes(String(raw.outcome)) ||
     !['knowledge_gap', 'rule_gap', 'template_gap', 'skill_gap', 'execution_gap', 'unclear'].includes(String(raw.attribution)) ||
     typeof raw.reason !== 'string' || typeof raw.confidence !== 'number' ||
+    (raw.actionDelta !== undefined && (typeof raw.actionDelta !== 'object' || raw.actionDelta === null || Array.isArray(raw.actionDelta))) ||
+    (raw.resultDelta !== undefined && (typeof raw.resultDelta !== 'object' || raw.resultDelta === null || Array.isArray(raw.resultDelta))) ||
     (raw.reviewState !== undefined && !['inferred', 'needs_confirmation', 'confirmed', 'unknown'].includes(String(raw.reviewState))) ||
     (raw.inferenceMethod !== undefined && !['deterministic', 'model', 'user', 'unknown'].includes(String(raw.inferenceMethod))) ||
     (raw.needsConfirmation !== undefined && typeof raw.needsConfirmation !== 'boolean') ||

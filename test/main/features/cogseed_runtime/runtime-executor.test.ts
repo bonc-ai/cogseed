@@ -44,13 +44,15 @@ afterEach(() => {
   fs.rmSync(paths.userRoot(UID), { recursive: true, force: true });
 });
 
-describe('Mate Agent Runtime native executor', () => {
+describe('CogSeed Runtime native executor', () => {
   it('keeps native executor request mapping independent from any Core selection config', async () => {
     const kernelRequest = runtimeKernelRequestFromProtocol(request({
       agent_id: 'agent-a',
       model_profile: 'profile-a',
       working_dir: paths.userLocalRoot(UID),
       read_only_roots: [paths.userLocalRoot(UID)],
+      execution_kind: 'cogseed-native',
+      allowed_skill_ids: ['skill-alpha'],
     }));
 
     expect(kernelRequest).toEqual(expect.objectContaining({
@@ -63,7 +65,9 @@ describe('Mate Agent Runtime native executor', () => {
       workingDir: paths.userLocalRoot(UID),
       readOnlyRoots: [paths.userLocalRoot(UID)],
       writableRoots: [],
-      toolPolicy: MATE_RUNTIME_TOOL_POLICY,
+      executionKind: 'cogseed-native',
+      allowedSkillIds: ['skill-alpha'],
+      toolPolicy: { ...MATE_RUNTIME_TOOL_POLICY, skillRun: 'allowlisted_skills' },
     }));
     expect(JSON.stringify(kernelRequest)).not.toContain('cid');
   });

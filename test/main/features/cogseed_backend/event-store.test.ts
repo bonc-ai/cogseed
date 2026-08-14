@@ -25,7 +25,7 @@ async function setupTask() {
   return tasks.createMateTask(USER, { requestId: 'req-event-store', task: 'Track events.' });
 }
 
-describe('Mate task event store', () => {
+describe('CogSeed task event store', () => {
   it('appends monotonic events and replays only records after a sequence', async () => {
     const task = (await setupTask()).task;
     const events = await import('../../../../src/main/features/cogseed_backend/event-store');
@@ -51,6 +51,6 @@ describe('Mate task event store', () => {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, '{not-json}\n', 'utf8');
 
-    await expect(events.readMateTaskEvents(USER, task.taskId, 0, 10)).rejects.toThrow(/malformed Mate event/i);
+    await expect(events.readMateTaskEvents(USER, task.taskId, 0, 10)).rejects.toThrow(/malformed CogSeed event/i);
   });
 });

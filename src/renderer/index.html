@@ -133,7 +133,7 @@
               <span data-ui-icon="layout-grid" data-ui-icon-class="new-chat-scenario-icon"></span>
               <span class="new-chat-scenario-label" data-i18n="new_chat.quick.space_builder">Space Mode</span>
             </button>
-            <button type="button" class="new-chat-scenario-chip" id="continue-work-chip">
+            <button type="button" class="new-chat-scenario-chip is-continue-work" id="continue-work-chip">
               <span data-ui-icon="play-triangle" data-ui-icon-class="new-chat-scenario-icon"></span>
               <span class="new-chat-scenario-label" data-i18n="new_chat.quick.continue_work">Continue previous work</span>
             </button>
@@ -444,7 +444,7 @@
             <div class="skills-cognition-tab-group">
               <button type="button" id="skills-cognition-tab-overview" class="skills-cognition-tab is-active" role="tab" aria-selected="true" aria-controls="skills-cognition-overview" data-cognition-page="overview"><span data-ui-icon="layout-grid"></span><span data-i18n="cognition.overview">总览</span></button>
               <button type="button" id="skills-cognition-tab-captures" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-captures" tabindex="-1" data-cognition-page="captures"><span data-ui-icon="clock"></span><span data-i18n="cognition.capture_tasks">沉淀任务</span></button>
-              <button type="button" id="skills-cognition-tab-assets" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-assets" tabindex="-1" data-cognition-page="assets"><span data-ui-icon="archive"></span><span data-i18n="cognition.memory_content">记忆内容</span></button>
+              <button type="button" id="skills-cognition-tab-assets" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-assets" tabindex="-1" data-cognition-page="assets"><span data-ui-icon="archive"></span><span data-i18n="cognition.ability_assets">能力资产</span></button>
               <button type="button" id="skills-cognition-tab-sources" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-sources" tabindex="-1" data-cognition-page="sources"><span data-ui-icon="folder-open"></span><span data-i18n="cognition.sources">数据来源</span></button>
             </div>
           </nav>
@@ -645,6 +645,11 @@
                   <div class="agents-detail-label" data-i18n="agents.label_knowhow">Know-how</div>
                   <p class="agents-detail-section-desc" data-i18n="agents.knowhow_desc">Task areas this agent is better at.</p>
                   <div class="agents-detail-list" id="agents-detail-knowhow"></div>
+                </div>
+                <div class="agents-detail-section" id="agents-detail-inheritance-section" style="display:none">
+                  <div class="agents-detail-label" data-i18n="agents.label_inheritance">Inherited at creation</div>
+                  <p class="agents-detail-section-desc" data-i18n="agents.inheritance_desc">Cognition this agent was given when it was created, frozen at the version it had then.</p>
+                  <div class="agents-detail-list" id="agents-detail-inheritance"></div>
                 </div>
                 <div class="agents-detail-section" id="agents-detail-project-dir-section" style="display:none">
                   <div class="agents-detail-label" data-i18n="agents.label_project_dir">Project directory</div>
@@ -1183,7 +1188,6 @@
             <button class="settings-tab is-active" data-settings-tab="data" data-i18n="settings.tab.data">数据</button>
             <button class="settings-tab" data-settings-tab="credentials" data-i18n="settings.tab.credentials">Model Providers</button>
             <button class="settings-tab" data-settings-tab="messaging" data-i18n="settings.tab.messaging">消息平台</button>
-            <button class="settings-tab" data-settings-tab="account" data-i18n="settings.tab.account">账号</button>
             <button class="settings-tab" data-settings-tab="general" data-i18n="settings.tab.general">通用</button>
           </div>
 
@@ -1528,11 +1532,6 @@
                   </div>
                 </div>
               </div>
-            </div>
-
-            <!-- ───────────────────────── 账号 ───────────────────────── -->
-            <div class="settings-tab-pane" data-settings-pane="account" hidden>
-              <div class="settings-group" id="hub-account-card"></div>
             </div>
 
           </div>
