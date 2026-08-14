@@ -43,7 +43,7 @@
 - 需要：`upsert_state` 增加**显式"开新任务"语义**——Commander 声明 `task:create` 且存在开放任务时，宿主自动执行"旧任务收尾"：① 标记旧 requirement/task 关闭（topic_switch 语义）；② **触发旧任务差异 r 整理与沉淀**（B5/B7）；③ 创建新 task 容器（新 requirement、新投影、新 S）。
 - 定夺点：旧任务"未确认复盘"就直接关（用户没点确认）是否允许沉淀？推荐：允许——差异 r 与复盘已落盘（unclear 也保留），沉淀按证据门槛执行（与直连线一致）。
 
-### B3（定夺 + 开发，最大变更）取消资产确认后的自动注入
+### B3（✅ Q1 已定夺并实现 `245cf20a`）取消资产确认后的自动注入
 - 现状全链依赖用户确认：preview 卡片 → `confirmContextProjection` → 注入只读 confirmed → 派发守卫要求 confirmed + forecastId → 审批恢复续接同一会话。
 - 需要定夺：
   1. **自动确认形态**：投影创建即 `confirmed`（`authorization:'workspace_policy'` 字段**从未被消费**，正好可启用）；或保留 preview 但自动 confirm（幂等）。
@@ -80,8 +80,8 @@
 
 ## 5. 待你定夺的问题（汇总）
 
-- Q1 取消资产确认后：自动确认形态（推荐 `workspace_policy` 自动 confirmed）+ Top-N 阈值注入（推荐 8 条 + 阈值）+ 保留只读可见回执？
-- Q2 wake 审批保留与否（推荐保留，它与知识选择不同层）？
+- Q1 ✅ 已执行：`workspace_policy` 自动确认（投影创建即 confirmed，`request_projection` 返回 `projection_confirmed`）+ 语义 Top-N（默认阈值 0.35、上限 8，低分资产记 `low_relevance`）+ 只读回执（`recall_citations` 随回复展示、usage 落盘，G7/G10 关闭）。
+- Q2 ✅ 已定夺：wake 审批保留（Agent 执行授权层，与知识选择不同层）。
 - Q3 世界模型维持"Commander 即世界模型"（推荐）还是另建独立预测器？
 - Q4 本体资产是否纳入 S/K 冻结知识（推荐纳入）？
 - Q5 旧任务收尾时"未确认复盘也允许沉淀"（推荐允许，按证据门槛）？
