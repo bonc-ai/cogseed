@@ -17,6 +17,7 @@ import {
   replaceKstarTask,
 } from './requirement-store';
 import type {
+  KstarCompletionEvidence,
   KstarConversationTaskStateRecord,
   KstarExpectedResult,
   KstarRequirementRecord,
@@ -479,11 +480,24 @@ async function commitForecast(
 async function finish(
   context: KstarControlHostContext,
   state: KstarConversationTaskStateRecord,
+  result?: KstarResultProposal,
 ): Promise<{ result: KstarControlResult; state: KstarConversationTaskStateRecord }> {
   const { task, requirement } = await currentRecords(context, state);
   if (!task || !requirement) throw new ControlInputError('an active Task and Requirement are required');
   const now = nowIso();
-  await replaceKstarRequirement(context.userId, { ...requirement, status: 'waiting_review', updatedAt: now });
+  const completionEvidence: KstarCompletionEvidence = {
+    producedFiles: result?.producedFiles || [],
+    acceptanceEvidence: result?.acceptanceEvidence || [],
+    ...(result?.finalStatus ? { finalStatus: result.finalStatus } : {}),
+    ...(result?.finalText ? { finalText: result.finalText } : {}),
+    ...(result?.closeReason ? { closeReason: result.closeReason } : {}),
+  };
+  await replaceKstarRequirement(context.userId, {
+    ...requirement,
+    status: 'waiting_review',
+    completionEvidence,
+    updatedAt: now,
+  });
   await replaceKstarTask(context.userId, {
     ...task,
     status: 'closing',
@@ -506,12 +520,23 @@ async function finish(
 async function abandon(
   context: KstarControlHostContext,
   state: KstarConversationTaskStateRecord,
+  result?: KstarResultProposal,
 ): Promise<{ result: KstarControlResult; state: KstarConversationTaskStateRecord }> {
   const { task, requirement } = await currentRecords(context, state);
   if (!task) throw new ControlInputError('an active Task is required');
   const now = nowIso();
   if (requirement) {
-    await replaceKstarRequirement(context.userId, { ...requirement, status: 'abandoned', updatedAt: now });
+    const completionEvidence: KstarCompletionEvidence = {
+      producedFiles: [],
+      acceptanceEvidence: [],
+      ...(result?.closeReason ? { closeReason: result.closeReason } : { closeReason: 'aborted' }),
+    };
+    await replaceKstarRequirement(context.userId, {
+      ...requirement,
+      status: 'abandoned',
+      completionEvidence,
+      updatedAt: now,
+    });
   }
   await replaceKstarTask(context.userId, {
     ...task,
@@ -627,9 +652,9 @@ export async function executeKstarControl(
     } else if (input.operation === 'commit_forecast') {
       committed = await commitForecast(context, state, input.forecast!);
     } else if (input.operation === 'finish') {
-      committed = await finish(context, state);
+      committed = await finish(context, state, input.result);
     } else {
-      committed = await abandon(context, state);
+      committed = await abandon(context, state, input.result);
     }
     if (!committed.result.ok) return committed.result;
     await persistReceipt(context, committed.state, input, hash, committed.result);

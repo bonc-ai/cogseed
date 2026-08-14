@@ -100,11 +100,21 @@ export interface KstarRequirementRecord extends KstarJsonRecord {
   forecastId?: string;
   /** Wake request bound when the preloaded asset list is confirmed and the Agent is woken. */
   wakeRequestId?: string;
+  /** Commander-submitted terminal evidence via kstar_control.finish/abandon. */
+  completionEvidence?: KstarCompletionEvidence;
   prmReview?: KstarRequirementPrmReview;
   aar?: KstarAfterActionReview;
   closedAt?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface KstarCompletionEvidence {
+  finalStatus?: 'completed' | 'failed' | 'cancelled';
+  finalText?: string;
+  producedFiles: string[];
+  acceptanceEvidence: string[];
+  closeReason?: string;
 }
 
 export interface KstarProjectionDecisionMarker {

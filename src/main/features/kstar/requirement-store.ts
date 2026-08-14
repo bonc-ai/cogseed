@@ -184,6 +184,21 @@ function normalizeRequirementForRead(raw: Record<string, unknown>): Record<strin
   return { ...raw, projectionIds: [] };
 }
 
+function validCompletionEvidence(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (
+    (record.finalStatus !== undefined && !['completed', 'failed', 'cancelled'].includes(String(record.finalStatus)))
+    || (record.finalText !== undefined && (typeof record.finalText !== 'string' || record.finalText.length > MAX_GOAL))
+    || (record.closeReason !== undefined && (typeof record.closeReason !== 'string' || record.closeReason.length > 1_000))
+  ) return false;
+  for (const field of ['producedFiles', 'acceptanceEvidence'] as const) {
+    const list = record[field];
+    if (!Array.isArray(list) || list.length > 50 || list.some((item) => typeof item !== 'string' || !item.trim() || item.length > 1_000)) return false;
+  }
+  return true;
+}
+
 function validateRequirement(userId: string, raw: Record<string, unknown>): KstarRequirementRecord {
   const id = String(raw.id || '');
   validRecordBase(userId, raw, id, 'requirement');
@@ -200,6 +215,7 @@ function validateRequirement(userId: string, raw: Record<string, unknown>): Ksta
     (raw.forecastId !== undefined && (typeof raw.forecastId !== 'string' || !safeId(raw.forecastId))) ||
     !Array.isArray(raw.projectionIds) || raw.projectionIds.some((item: unknown) => typeof item !== 'string' || !safeId(item)) ||
     (raw.wakeRequestId !== undefined && (typeof raw.wakeRequestId !== 'string' || !safeId(raw.wakeRequestId))) ||
+    (raw.completionEvidence !== undefined && !validCompletionEvidence(raw.completionEvidence)) ||
     (raw.prmReview !== undefined && (typeof raw.prmReview !== 'object' || raw.prmReview === null)) ||
     (raw.aar !== undefined && (typeof raw.aar !== 'object' || raw.aar === null)) ||
     (raw.closedAt !== undefined && typeof raw.closedAt !== 'string') ||

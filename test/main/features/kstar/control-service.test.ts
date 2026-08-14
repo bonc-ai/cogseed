@@ -163,7 +163,7 @@ describe('KStar Commander control service', () => {
       .resolves.toMatchObject({ goalText: 'Updated requirement goal' });
   });
 
-  it('moves finish into the existing closure pipeline and replays idempotently', async () => {
+  it('moves finish into the existing closure pipeline, persists evidence, and replays idempotently', async () => {
     const seeded = await seedOpenControlState();
     const service = await import('../../../../src/main/features/kstar/control-service');
     const input = {
@@ -172,6 +172,7 @@ describe('KStar Commander control service', () => {
       result: {
         finalStatus: 'completed',
         finalText: 'The task is complete.',
+        producedFiles: ['report.md'],
         acceptanceEvidence: ['OAuth callback test passes'],
       },
     };
@@ -184,11 +185,37 @@ describe('KStar Commander control service', () => {
     await expect(seeded.store.readKstarTask('user-a', seeded.task.id))
       .resolves.toMatchObject({ status: 'closing', closeReason: 'user_complete' });
     await expect(seeded.store.readKstarRequirement('user-a', seeded.requirement.id))
-      .resolves.toMatchObject({ status: 'waiting_review' });
+      .resolves.toMatchObject({
+        status: 'waiting_review',
+        completionEvidence: {
+          finalStatus: 'completed',
+          finalText: 'The task is complete.',
+          producedFiles: ['report.md'],
+          acceptanceEvidence: ['OAuth callback test passes'],
+        },
+      });
     await expect(seeded.store.readConversationTaskState('user-a', 'cid-a'))
       .resolves.toMatchObject({
         requirementJustClosed: seeded.requirement.id,
         taskComplete: true,
+      });
+  });
+
+  it('records the close reason when a task is abandoned', async () => {
+    const seeded = await seedOpenControlState();
+    const service = await import('../../../../src/main/features/kstar/control-service');
+
+    const result = await service.executeKstarControl(hostContext(), {
+      operation: 'abandon',
+      idempotencyKey: 'turn-a:abandon-evidence',
+      result: { closeReason: 'User cancelled the task' },
+    });
+
+    expect(result).toMatchObject({ ok: true, status: 'abandoned', taskId: seeded.task.id });
+    await expect(seeded.store.readKstarRequirement('user-a', seeded.requirement.id))
+      .resolves.toMatchObject({
+        status: 'abandoned',
+        completionEvidence: { closeReason: 'User cancelled the task' },
       });
   });
 

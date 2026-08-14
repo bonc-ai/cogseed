@@ -52,6 +52,57 @@ async function seedLearningReview(
   });
 }
 
+describe('KSTAR completion evidence merge', () => {
+  it('merges Commander-submitted completion evidence into a text-less group episode', async () => {
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    const task = store.createKstarTaskRecord('closure-user', { conversationId: 'cid-evidence', title: 'Evidence task' });
+    const requirement = store.createKstarRequirementRecord('closure-user', {
+      taskId: task.id,
+      conversationId: 'cid-evidence',
+      userMessageIds: ['msg-evidence'],
+      title: 'Evidence task',
+      goalText: 'Produce the report',
+      rHat: { summary: 'A report is produced', acceptanceSignals: ['report exists'], source: 'user_message', confidence: 1 },
+    });
+    requirement.completionEvidence = {
+      finalStatus: 'completed',
+      finalText: 'Report written to disk.',
+      producedFiles: ['report.md'],
+      acceptanceEvidence: ['report exists'],
+    };
+    await store.replaceKstarTask('closure-user', { ...task, requirementIds: [requirement.id], currentRequirementId: requirement.id });
+    await store.replaceKstarRequirement('closure-user', requirement);
+    await store.writeConversationTaskState('closure-user', {
+      ...store.createInitialConversationTaskState('closure-user', 'cid-evidence'),
+      currentTaskId: task.id,
+      currentRequirementId: requirement.id,
+      taskComplete: false,
+    });
+
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    await closure.captureGroupKstarClosure({
+      userId: 'closure-user', runId: 'run-evidence', conversationId: 'cid-evidence', status: 'completed',
+      startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'), finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
+      messages: [
+        { id: 'msg-evidence', from: 'user', text: 'Produce the report', ts: '2026-08-05T00:00:01.000Z' },
+        { id: 'msg-agent-a', from: 'commander', text: 'finished', ts: '2026-08-05T00:00:30.000Z' },
+      ],
+      createdAt: '2026-08-05T00:02:00.000Z',
+    });
+
+    const episodes = await import('../../../../src/main/features/kstar/episode-store');
+    const records = await episodes.listKstarJsonRecords('closure-user', 'episodes');
+    expect(records).toHaveLength(1);
+    expect(records[0].r).toMatchObject({
+      finalText: 'Report written to disk.',
+      producedFiles: ['report.md'],
+    });
+    const reviews = await import('../../../../src/main/features/kstar/review-service');
+    const review = await reviews.readKstarReview('closure-user', records[0].id as string);
+    expect(review?.actualResult).toContain('Report written to disk.');
+  });
+});
+
 describe('KSTAR task closure', () => {
 
 

@@ -15,6 +15,7 @@ import { createInitialKstarReview, readKstarReview, saveKstarReview, saveKstarRe
 import { inferKstarReview, type KstarReviewInferenceResult } from './review-inference';
 import { postKstarReviewCard } from './review-card';
 import type { KstarEpisodeRecord, KstarExtractionRunRecord, KstarReviewRecord } from './types';
+import { readConversationTaskState, readKstarRequirement } from './requirement-store';
 
 const log = createLogger('kstar.task-closure');
 const closureLocks = new Map<string, Promise<KstarClosureResult>>();
@@ -222,13 +223,48 @@ export async function confirmKstarReview(
   });
 }
 
+/** Merge Commander-submitted completion evidence (kstar_control.finish) into
+ *  an episode, so the review pipeline consumes the terminal evidence the
+ *  Commander explicitly declared. Explicit evidence wins over message-derived
+ *  text; missing evidence leaves the episode untouched. */
+async function enrichEpisodeFromRequirementEvidence(
+  userId: string,
+  conversationId: string,
+  episode: KstarEpisodeRecord,
+): Promise<KstarEpisodeRecord> {
+  try {
+    const state = await readConversationTaskState(userId, conversationId);
+    const requirement = state?.currentRequirementId
+      ? await readKstarRequirement(userId, state.currentRequirementId)
+      : null;
+    const evidence = requirement?.completionEvidence;
+    if (!evidence) return episode;
+    const r = { ...episode.r };
+    // Explicit Commander-submitted terminal evidence wins over message-derived text.
+    if (evidence.finalText?.trim()) r.finalText = evidence.finalText;
+    if (evidence.producedFiles.length) {
+      r.producedFiles = Array.from(new Set([...(r.producedFiles || []), ...evidence.producedFiles])).slice(0, 50);
+    }
+    if (!r.finalText?.trim() && !r.producedFiles.length) return episode;
+    return { ...episode, r };
+  } catch (error) {
+    log.warn('kstar completion evidence merge degraded', {
+      userId,
+      conversationId,
+      error: (error as Error).message,
+    });
+    return episode;
+  }
+}
+
 export async function captureRuntimeKstarClosure(input: RuntimeKstarClosureInput): Promise<KstarClosureResult> {
   const episode = buildRuntimeKstarEpisode(input);
   return serializeClosure(closureLocks, `${input.userId}:${episode.id}`, () => finishClosure(input.userId, episode, input.bridge, input.inferReview));
 }
 
 export async function captureGroupKstarClosure(input: GroupKstarClosureInput): Promise<KstarClosureResult> {
-  const episode = buildGroupKstarEpisode(input);
+  const built = buildGroupKstarEpisode(input);
+  const episode = await enrichEpisodeFromRequirementEvidence(input.userId, input.conversationId, built);
   const result = await serializeClosure(closureLocks, `${input.userId}:${episode.id}`, () => finishClosure(input.userId, episode, input.bridge, input.inferReview));
   try {
     const { attachKstarEpisodeToCurrentRequirement } = await import('./requirement-state');
