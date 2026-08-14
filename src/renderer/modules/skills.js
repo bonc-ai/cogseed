@@ -1476,6 +1476,14 @@ function _skillCardChipsHtml(s) {
   }
   const catLabel = _resolveCategoryLabel(s && s.category, lang);
   if (catLabel) parts.push(`<span class="skill-card-chip">${escapeHtml(catLabel)}</span>`);
+  // Withheld state leads the chip row: it explains why the card is inert, so it
+  // has to be readable before the version/category chips.
+  if (_isSkillWithheld(s)) {
+    parts.unshift(
+      `<span class="skill-card-chip is-withheld" title="${escapeHtml(t('skills.security_withheld_hint'))}">`
+      + `${escapeHtml(t('skills.security_withheld'))}</span>`,
+    );
+  }
   return parts.join('');
 }
 
@@ -2008,16 +2016,20 @@ function renderSkillsGrid(skills) {
     const moreBtn = `<button type="button" class="skill-card-more" data-skill-more title="${moreTitle}" aria-label="${moreTitle}">⋯</button>`;
     const enabled = s.enabled !== false;
     const cardChips = _skillCardChipsHtml(s);
+    const withheld = _isSkillWithheld(s);
+    const usable = enabled && !withheld;
+    const thisUseTitle = withheld ? escapeHtml(t('skills.security_withheld_hint')) : useTitle;
     return `
-      <div class="skill-card${enabled ? '' : ' is-disabled'}" data-id="${escapeHtml(s.id)}" data-source="${escapeHtml(s.source || '')}">
+      <div class="skill-card${enabled ? '' : ' is-disabled'}${withheld ? ' is-withheld' : ''}" data-id="${escapeHtml(s.id)}" data-source="${escapeHtml(s.source || '')}">
         <div class="skill-card-header">
           <span class="skill-card-name">${escapeHtml(s.name)}</span>
+          ${_skillSecurityBadgeHtml(s)}
           ${moreBtn}
         </div>
         <div class="${descClass}">${escapeHtml(descText)}</div>
         <div class="skill-card-actions">
           ${cardChips}
-          <button type="button" class="skill-card-use" data-skill-use title="${useTitle}" aria-label="${useTitle}" ${enabled ? '' : 'disabled aria-disabled="true" tabindex="-1"'}>
+          <button type="button" class="skill-card-use" data-skill-use title="${thisUseTitle}" aria-label="${thisUseTitle}" ${usable ? '' : 'disabled aria-disabled="true" tabindex="-1"'}>
             ${escapeHtml(t('skills.use'))}
           </button>
         </div>
@@ -2063,11 +2075,14 @@ function renderSkillsGrid(skills) {
     for (const [owner, list] of byOwner) privateHtml += sectionHtml(`${baseLabel} · ${owner}`, list);
   }
   gridEl.classList.add('is-sectioned');
-  gridEl.innerHTML = sectionHtml(customChipLabel, groups.custom)
+  gridEl.innerHTML = _skillsSecuritySummaryHtml(filtered)
+    + sectionHtml(customChipLabel, groups.custom)
     + sectionHtml(marketplaceGroupLabel, groups.marketplace)
     + privateHtml
     + _openSkillsSectionHtml();
   _wireOpenSkillCards(gridEl);
+  _wireSkillsSecurityRecheck(gridEl);
+  _wireSkillSecurityPanels(gridEl);
 
   // Wire card / ▶ / ⋯ click handlers. (Enable/disable lives in the ⋯ menu now.)
   // Scope to editable-tier cards (`data-id`): open-tier cards (`data-open-id`,
@@ -2081,7 +2096,7 @@ function renderSkillsGrid(skills) {
     card.addEventListener('click', (e) => {
       if (e.target.closest('[data-skill-use]')) {
         e.stopPropagation();
-        if (!card.classList.contains('is-disabled')) {
+        if (!card.classList.contains('is-disabled') && !card.classList.contains('is-withheld')) {
           const skill = _skillsCache?.find(s => s.id === id && s.source === source);
           useSkill(id, skill?.name || id);
         }
@@ -2326,6 +2341,48 @@ function _openSkillsSectionHtml() {
     : '';
   return externalHtml
     + globalSection(globalSkillRows);
+}
+
+/** Re-run trust verification without spawning one scanner per skill at once. */
+function _wireSkillsSecurityRecheck(gridEl) {
+  const btn = gridEl.querySelector('[data-skills-recheck]');
+  if (!btn) return;
+  btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (btn.dataset.busy === '1') return;
+    btn.dataset.busy = '1';
+    const original = btn.textContent;
+    btn.textContent = t('skills.security_rechecking');
+    try {
+      const ids = (_skillsCache || [])
+        .filter((s) => s && s.security && s.security.status)
+        .map((s) => s.id);
+      for (const id of ids) {
+        try {
+          await window.orkas.invoke('skills.trust.reverify', { skillId: id });
+        } catch { /* one unreadable skill must not abort the sweep */ }
+      }
+      await loadSkills(true);
+    } catch {
+      btn.textContent = original;
+    } finally {
+      btn.dataset.busy = '';
+    }
+  });
+}
+
+function _wireSkillSecurityPanels(gridEl) {
+  for (const btn of gridEl.querySelectorAll('[data-skill-security]')) {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const id = btn.dataset.skillSecurity || '';
+      const skill = (_skillsCache || []).find((s) => s && String(s.id) === id);
+      if (!skill) return;
+      const heading = `${skill.name || id} · ${t('skills.secpanel_title')}`;
+      await uiAlert(`${heading}\n\n${_skillSecurityPanelText(skill)}`);
+    });
+  }
 }
 
 function _wireOpenSkillCards(gridEl) {
@@ -4394,7 +4451,7 @@ async function _saveSkillFromUrl({ msgEl }) {
       ..._skillCreateResourceFromResponse(data),
       skill_count: _skillCreateCountFromResponse(data),
     });
-    await _afterImportedSkill(data);
+    await _afterSkillCreated(createdId, true, autoSeed);
   } catch (e) {
     msgEl.textContent = t('skills.network_error_plain');
     msgEl.className = 'form-msg err';
@@ -4491,7 +4548,7 @@ async function _saveSkillFromDirWithQuality({ msgEl, srcDir, force, tracking }) 
       skill_count: _skillCreateCountFromResponse(data),
       forced: !!force,
     });
-    await _afterImportedSkill(data);
+    await _afterSkillCreated(createdId, true, _skillImportAutoSeedFromResponse(data));
   } catch (e) {
     msgEl.textContent = t('skills.network_error_plain');
     msgEl.className = 'form-msg err';

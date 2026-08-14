@@ -431,6 +431,31 @@ export function resolveSkillAllowlistRefs(
   return { ids, unknown };
 }
 
+/**
+ * Narrow the trust-verification input before running the deep scanner.
+ *
+ * Exact ids keep the same precedence as `resolveSkillAllowlistRefs`. A display
+ * name keeps every matching spec as a candidate: trust filtering may withhold
+ * the highest-ranked match, after which resolution must still be able to fall
+ * back to another safe skill with the same display name.
+ */
+function _skillTrustCandidatesForRefs<T extends SkillAllowlistRef>(specs: T[], refs: string[]): T[] {
+  if (!specs.length || !refs.length) return [];
+  const byId = new Map(specs.map((s) => [s.id, s]));
+  const candidateIds = new Set<string>();
+  for (const ref of refs) {
+    const exact = byId.get(ref);
+    if (exact) {
+      candidateIds.add(exact.id);
+      continue;
+    }
+    for (const s of specs) {
+      if (s.name === ref) candidateIds.add(s.id);
+    }
+  }
+  return specs.filter((s) => candidateIds.has(s.id));
+}
+
 function _buildDisplayNameByInternalId(specs: SkillAllowlistRef[]): Map<string, string> {
   const out = new Map<string, string>();
   for (const s of specs || []) {
@@ -884,9 +909,10 @@ export async function blockedSkillIds(skillIds: readonly string[]): Promise<Set<
  */
 export async function getSystemPromptBlock(opts: SystemPromptBlockOptions = {}): Promise<string> {
   const loader = await getLoader();
-  const specs = await _withholdUntrustedSpecs(loader.list());
+  const discoveredSpecs = loader.list();
+  let specs: typeof discoveredSpecs;
   const disabled = opts.disabledIds ? new Set(opts.disabledIds) : null;
-  const filterDisabled = (list: typeof specs) =>
+  const filterDisabled = (list: typeof discoveredSpecs) =>
     disabled && disabled.size ? list.filter((s) => !disabled.has(s.id)) : list;
   // Resolve roots once per call — `getActiveUserId` may have rotated since
   // `getLoader` (cached) was first instantiated; users.ts switches uid via
@@ -904,13 +930,17 @@ export async function getSystemPromptBlock(opts: SystemPromptBlockOptions = {}):
   let allowlisted = false;
   let rawAllow: string[] = [];
   if (opts.allowlist === undefined) {
+    specs = await _withholdUntrustedSpecs(discoveredSpecs);
     rendered = filterDisabled(specs);
   } else {
     allowlisted = true;
     rawAllow = opts.allowlist.filter((id) => typeof id === 'string' && id.length > 0);
     if (rawAllow.length === 0) {
+      specs = [];
       rendered = [];
     } else {
+      const trustCandidates = _skillTrustCandidatesForRefs(discoveredSpecs, rawAllow);
+      specs = await _withholdUntrustedSpecs(trustCandidates);
       const { ids } = resolveSkillAllowlistRefs(specs, rawAllow);
       const allow = new Set([...ids, ...rawAllow]);
       rendered = filterDisabled(specs.filter((s) => allow.has(s.id)));

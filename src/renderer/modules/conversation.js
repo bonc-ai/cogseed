@@ -3731,30 +3731,75 @@ function _producedPathSpecificity(p) {
 // with the same basename, keep the more specific path so the chip opens the
 // real deliverable instead of a root-level scratch name.
 // Stable: original order is preserved within each rank.
-function _orderProducedPaths(absPaths) {
+function _orderProducedPaths(absPaths, results = []) {
+  const resultsByPath = new Map((Array.isArray(results) ? results : [])
+    .filter((item) => item && item.path)
+    .map((item) => [String(item.path), item]));
   const byBase = new Map();
   for (const [i, p] of absPaths.entries()) {
     const base = (p.split(/[\\/]/).pop() || p);
     const next = { path: p, base, i };
-    const prev = byBase.get(base);
+    const validationStatus = String(resultsByPath.get(p)?.status || '');
+    // Failed results must remain visible even when a later usable file has the
+    // same basename; otherwise the user loses the failure reason and fallback.
+    const key = validationStatus && validationStatus !== 'ready'
+      ? `${base}\u0000${p}`
+      : base;
+    const prev = byBase.get(key);
     if (!prev) {
-      byBase.set(base, next);
+      byBase.set(key, next);
       continue;
     }
     const nextScore = _producedPathSpecificity(next.path);
     const prevScore = _producedPathSpecificity(prev.path);
     if (nextScore > prevScore || (nextScore === prevScore && next.i > prev.i)) {
-      byBase.set(base, { ...next, i: prev.i });
+      byBase.set(key, { ...next, i: prev.i });
     }
   }
   return Array.from(byBase.values())
     .sort((a, b) => _producedDeliverableRank(a.base) - _producedDeliverableRank(b.base) || a.i - b.i);
 }
 
+function _producedStatusFromReviewStatus(reviewStatus) {
+  const status = String(reviewStatus || '').trim();
+  if (status === 'needs_review') return 'draft';
+  if (status === 'failed') return 'failed';
+  return 'final';
+}
+
 function _producedStatusLabel(status) {
   if (status === 'draft') return t('chat.produced_status.draft');
   if (status === 'failed') return t('chat.produced_status.failed');
   return t('chat.produced_status.final');
+}
+
+function _formatProducedBytes(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value < 0) return '';
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(value < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+function _producedValidationLine(result) {
+  if (!result || typeof result !== 'object') return '';
+  if (result.status === 'invalid') {
+    const code = String(result.failure_code || 'stat_failed');
+    const key = `chat.produced_validation.reason.${code}`;
+    const reason = t(key);
+    return t('chat.produced_validation.failed', { reason: reason === key ? code : reason });
+  }
+  if (result.status === 'preview_failed') {
+    return t('chat.produced_validation.preview_failed');
+  }
+  const size = _formatProducedBytes(result.bytes);
+  const capability = result.preview === 'available'
+    ? t('chat.produced_validation.preview_available')
+    : t('chat.produced_validation.local_only');
+  const tool = String(result.evidence?.producer_tool || '').trim();
+  return tool
+    ? t('chat.produced_validation.ready_with_tool', { size, capability, tool })
+    : t('chat.produced_validation.ready', { size, capability });
 }
 
 function _renderMessageProducedHtml(absPaths, opts = {}) {
@@ -3766,14 +3811,22 @@ function _renderMessageProducedHtml(absPaths, opts = {}) {
   const moreHint = t('contexts.menu.more_actions');
   const outputStatus = opts.status || 'final';
   const statusLabel = _producedStatusLabel(outputStatus);
-  const ordered = _orderProducedPaths(absPaths);
+  const resultsByPath = new Map((Array.isArray(opts.results) ? opts.results : [])
+    .filter((item) => item && item.path)
+    .map((item) => [String(item.path), item]));
+  const ordered = _orderProducedPaths(absPaths, opts.results);
   const items = ordered.map((e) => {
+    const validation = resultsByPath.get(e.path);
+    const validationStatus = String(validation?.status || '');
+    const fallbacks = Array.isArray(validation?.fallbacks) ? validation.fallbacks : [];
+    const validationLine = _producedValidationLine(validation);
     const icon = _iconForProduced(e.base);
     // Mark files the side pane can actually render, so the user knows which
     // ones show a result rather than just opening a text/binary view. The
     // judgement is delegated to the viewer's own classifier — a second
     // extension table here would drift from what the pane really supports.
-    const previewable = typeof isSidePreviewableKind === 'function'
+    const previewable = validationStatus !== 'invalid'
+      && typeof isSidePreviewableKind === 'function'
       && typeof previewKindOf === 'function'
       && isSidePreviewableKind(previewKindOf(e.base));
     const previewBadge = previewable
@@ -3781,16 +3834,21 @@ function _renderMessageProducedHtml(absPaths, opts = {}) {
       : '';
     const openLabel = previewable ? t('sideBrowser.open_side') : t('chat.produced_open');
     const openTitle = previewable ? t('sideBrowser.open_side_title') : hint;
-    return `<div class="chat-msg-produced-item" data-produced-path="${escapeHtml(e.path)}"${previewable ? ' data-previewable="1"' : ''}>
-      <button type="button" class="chat-msg-produced-main" title="${escapeHtml(hint)}">
+    const invalid = validationStatus === 'invalid';
+    const canOpen = !invalid || fallbacks.includes('open');
+    const canReveal = !invalid || fallbacks.includes('reveal');
+    const openExternal = fallbacks.includes('open') && validation?.preview && validation.preview !== 'available';
+    const resolvedOpenLabel = openExternal ? t('chat.produced_open_local') : openLabel;
+    return `<div class="chat-msg-produced-item${invalid ? ' is-invalid' : ''}" data-produced-path="${escapeHtml(e.path)}"${validationStatus ? ` data-result-status="${escapeHtml(validationStatus)}"` : ''}${fallbacks.length ? ` data-result-fallbacks="${escapeHtml(fallbacks.join(','))}"` : ''}${openExternal ? ' data-open-external="1"' : ''}${previewable ? ' data-previewable="1"' : ''}>
+      <button type="button" class="chat-msg-produced-main" title="${escapeHtml(hint)}"${invalid ? ' disabled' : ''}>
         <span class="chat-msg-produced-icon">${icon}</span>
         <span class="chat-msg-produced-main-text">
           <span class="chat-msg-produced-label-row"><span class="chat-msg-produced-label">${escapeHtml(e.base)}</span>${previewBadge}<span class="chat-msg-produced-badge is-${escapeHtml(outputStatus)}">${escapeHtml(statusLabel)}</span></span>
-          <span class="chat-msg-produced-path" title="${escapeHtml(e.path)}">${escapeHtml(e.path)}</span>
+          ${validationLine ? `<span class="chat-msg-produced-validation is-${escapeHtml(validationStatus)}">${escapeHtml(validationLine)}</span>` : `<span class="chat-msg-produced-path" title="${escapeHtml(e.path)}">${escapeHtml(e.path)}</span>`}
         </span>
       </button>
-      <button type="button" class="chat-msg-produced-open-btn btn btn-sm" title="${escapeHtml(openTitle)}">${escapeHtml(openLabel)}</button>
-      <button type="button" class="chat-msg-produced-menu-btn" title="${escapeHtml(moreHint)}" aria-label="${escapeHtml(moreHint)}">⋯</button>
+      <button type="button" class="chat-msg-produced-open-btn btn btn-sm" title="${escapeHtml(openTitle)}"${canOpen ? '' : ' disabled'}>${escapeHtml(resolvedOpenLabel)}</button>
+      ${canReveal ? `<button type="button" class="chat-msg-produced-menu-btn" title="${escapeHtml(moreHint)}" aria-label="${escapeHtml(moreHint)}">⋯</button>` : ''}
     </div>`;
   });
   return `<div class="chat-msg-produced is-${escapeHtml(outputStatus)}" data-produced-status="${escapeHtml(outputStatus)}">${items.join('')}</div>`;
@@ -3815,7 +3873,10 @@ function _mountMessageProducedFooter(msgDiv, absPaths, opts = {}) {
   const bubble = msgDiv.querySelector('.chat-bubble');
   if (!bubble || bubble.querySelector('.chat-msg-produced')) return;
   const wrap = document.createElement('div');
-  wrap.innerHTML = _renderMessageProducedHtml(absPaths, { status: opts.status || 'final' });
+  wrap.innerHTML = _renderMessageProducedHtml(absPaths, {
+    status: opts.status || 'final',
+    results: opts.results,
+  });
   const node = wrap.firstElementChild;
   if (!node) return;
   bubble.appendChild(node);
@@ -4084,17 +4145,36 @@ function _openProducedFile(absPath) {
   if (typeof openChatFileViewer === 'function') openChatFileViewer(absPath, base, opts);
 }
 
+async function _openProducedFileLocally(absPath) {
+  if (!absPath || !window.cogseed || typeof window.cogseed.invoke !== 'function') return;
+  try {
+    const result = await window.cogseed.invoke('workspace.openFileExternal', {
+      path: absPath,
+      ...(currentCid ? { cid: currentCid } : {}),
+    });
+    if (!result?.ok) throw new Error(result?.error || 'failed');
+  } catch (error) {
+    const reason = (error && error.message) || String(error);
+    const message = t('chat.produced_open_local_failed', { reason });
+    if (typeof uiAlert === 'function') await uiAlert(message);
+  }
+}
+
 function _hydrateMessageProducedChips(msgDiv) {
   const rows = msgDiv.querySelectorAll('.chat-msg-produced-item[data-produced-path]');
   rows.forEach((row) => {
     const main = row.querySelector('.chat-msg-produced-main');
     const openBtn = row.querySelector('.chat-msg-produced-open-btn');
     const menuBtn = row.querySelector('.chat-msg-produced-menu-btn');
+    const invalid = row.dataset.resultStatus === 'invalid';
+    const fallbacks = String(row.dataset.resultFallbacks || '').split(',').filter(Boolean);
+    const openExternal = row.dataset.openExternal === '1';
     if (main && main.dataset.bound !== '1') {
       main.dataset.bound = '1';
       main.addEventListener('click', (e) => {
         e.stopPropagation();
-        _openProducedFile(row.dataset.producedPath);
+        if (openExternal) void _openProducedFileLocally(row.dataset.producedPath);
+        else _openProducedFile(row.dataset.producedPath);
       });
     }
     if (openBtn && openBtn.dataset.bound !== '1') {
@@ -4102,7 +4182,11 @@ function _hydrateMessageProducedChips(msgDiv) {
       openBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        _openProducedFile(row.dataset.producedPath);
+        if (openExternal) {
+          void _openProducedFileLocally(row.dataset.producedPath);
+        } else {
+          _openProducedFile(row.dataset.producedPath);
+        }
       });
     }
     if (menuBtn && menuBtn.dataset.bound !== '1') {
@@ -4115,6 +4199,7 @@ function _hydrateMessageProducedChips(msgDiv) {
         const base = p.split(/[\\/]/).pop() || p;
         window.ConversationInfo.openFileMenu(menuBtn, p, base, {
           cid: currentCid || '',
+          ...(invalid ? { allowedActions: fallbacks.includes('reveal') ? ['reveal'] : [] } : {}),
           onDeleted: () => {
             row.remove();
             const footer = msgDiv.querySelector('.chat-msg-produced');
@@ -7326,7 +7411,10 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     const bubble = msgDiv.querySelector('.chat-bubble');
     if (bubble) window.mountMessageArtifacts(bubble, message.artifacts, opts.cid || currentCid);
   }
-  if (producedPaths) _mountMessageProducedFooter(msgDiv, producedPaths);
+  if (producedPaths) _mountMessageProducedFooter(msgDiv, producedPaths, {
+    status: _producedStatusFromReviewStatus(message.kstar_review?.status),
+    results: message.produced_results,
+  });
   // Every assistant reply gets actions. Archive remains limited to final
   // raw-markdown replies; sanitized HTML status stubs are not archivable.
   if (role === 'assistant' && failedAssistant) {
@@ -12297,7 +12385,10 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
     if (bubble) window.mountMessageArtifacts(bubble, gm.artifacts, cid);
   }
   if (Array.isArray(gm.produced) && gm.produced.length) {
-    _mountMessageProducedFooter(ph, gm.produced);
+    _mountMessageProducedFooter(ph, gm.produced, {
+      status: _producedStatusFromReviewStatus(gm.kstar_review?.status),
+      results: gm.produced_results,
+    });
   }
   _scheduleConversationInfoFileRefresh(cid);
 }

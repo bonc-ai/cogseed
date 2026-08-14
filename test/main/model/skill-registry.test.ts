@@ -57,6 +57,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.doUnmock('#core-agent');
+  vi.doUnmock('../../../src/main/features/skill_reverify');
   process.env.ORKAS_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -101,6 +102,44 @@ describe('skill-registry › getSystemPromptBlock(allowlist)', () => {
     const { getSystemPromptBlock } = await loadRegistry();
     const text = await getSystemPromptBlock({ allowlist: [] });
     expect(text).toBe('');
+  });
+
+  it('does not deep-verify the installed skill catalog for an explicit empty allowlist', async () => {
+    writeSkill(builtinDir(), 'translate', 'Translate', 'T');
+    const partitionSkillsByTrustDeep = vi.fn(async (_uid: string, skillIds: readonly string[]) => ({
+      loadable: [...skillIds],
+      withheld: [],
+    }));
+    vi.doMock('../../../src/main/features/skill_reverify', async (importOriginal) => ({
+      ...await importOriginal<typeof import('../../../src/main/features/skill_reverify')>(),
+      partitionSkillsByTrustDeep,
+    }));
+
+    const { getSystemPromptBlock } = await loadRegistry();
+    expect(await getSystemPromptBlock({ allowlist: [] })).toBe('');
+    expect(partitionSkillsByTrustDeep).not.toHaveBeenCalled();
+  });
+
+  it('deep-verifies only skills that can satisfy a restricted allowlist', async () => {
+    writeSkill(builtinDir(), 'translate', 'Translate', 'T');
+    writeSkill(builtinDir(), 'summarize', 'Summarize', 'S');
+    writeSkill(builtinDir(), 'search', 'Search', 'X');
+    const partitionSkillsByTrustDeep = vi.fn(async (_uid: string, skillIds: readonly string[]) => ({
+      loadable: [...skillIds],
+      withheld: [],
+    }));
+    vi.doMock('../../../src/main/features/skill_reverify', async (importOriginal) => ({
+      ...await importOriginal<typeof import('../../../src/main/features/skill_reverify')>(),
+      partitionSkillsByTrustDeep,
+    }));
+
+    const { getSystemPromptBlock } = await loadRegistry();
+    const text = await getSystemPromptBlock({ allowlist: ['Translate'] });
+    expect(text).toContain('translate');
+    expect(text).not.toContain('summarize');
+    expect(text).not.toContain('search');
+    expect(partitionSkillsByTrustDeep).toHaveBeenCalledTimes(1);
+    expect(partitionSkillsByTrustDeep.mock.calls[0]?.[1]).toEqual(['translate']);
   });
 
   it('still renders the acting agent private skills under an empty allowlist', async () => {
