@@ -9309,8 +9309,12 @@ body.model-not-configured .main-content { flex-direction: column; }
   flex-shrink: 0;
   transition: transform .2s;
 }
-/* The chip owns the flex auto-space; keep the send button flush on its right. */
-.model-chip + .chat-send-btn { margin-left: 0; }
+/* The visible chip owns the flex auto-space; keep the send button flush on
+   its right. When the chips are hidden (no model entries configured) the
+   send button must fall back to its own margin-left: auto and stay pinned
+   to the right edge. Note the effort chip also carries the .model-chip
+   class, so the :not([hidden]) guard matters for both. */
+.model-chip:not([hidden]) + .chat-send-btn { margin-left: 0; }
 .model-chip--open .model-chip-chevron { transform: rotate(180deg); }
 .effort-chip { margin-left: 0; flex-shrink: 0; }
 /* The thinking-strength label is fixed short text; never let flex
