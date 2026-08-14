@@ -64,7 +64,7 @@ export type KstarControlErrorCode =
 
 export type KstarControlResult =
   | { ok: true; status: 'state_committed'; taskId: string; requirementId: string; replayed?: boolean }
-  | { ok: true; status: 'projection_confirmed'; taskId: string; requirementId: string; projectionId: string; replayed?: boolean }
+  | { ok: true; status: 'projection_confirmed'; taskId: string; requirementId: string; projectionId: string; replayed?: boolean; next_step?: string }
   | { ok: true; status: 'confirmation_required'; taskId: string; requirementId: string; projectionId: string; replayed?: boolean }
   | { ok: true; status: 'forecast_committed'; taskId: string; requirementId: string; projectionId: string; forecastId: string; selectedCandidateId: string; replayed?: boolean }
   | { ok: true; status: 'finished' | 'abandoned'; taskId: string; requirementId?: string; replayed?: boolean }

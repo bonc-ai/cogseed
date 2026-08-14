@@ -261,6 +261,7 @@ describe('KStar Commander control service', () => {
       taskId: seeded.task.id,
       requirementId: seeded.requirement.id,
       projectionId: expect.stringMatching(/^proj-/),
+      next_step: expect.stringContaining('commit_forecast'),
     });
     await expect(seeded.store.readKstarRequirement('user-a', seeded.requirement.id))
       .resolves.toMatchObject({

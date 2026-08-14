@@ -498,6 +498,10 @@ async function requestProjection(
       taskId: task.id,
       requirementId: requirement.id,
       projectionId: projection.id,
+      // Hard next-step instruction: the projection being confirmed means the
+      // Commander MUST commit a forecast before executing — this is the
+      // predict-then-execute contract, not a suggestion.
+      next_step: `Projection ${projection.id} is confirmed. You MUST now call kstar_control with operation 'commit_forecast' (2-4 candidates with plan/expectedTools/expectedActors/predictedResult) BEFORE executing any work. Execution before commit_forecast is a contract violation.`,
     },
     state,
   };
