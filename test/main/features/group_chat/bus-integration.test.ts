@@ -113,6 +113,7 @@ const _recordedCalls = vi.hoisted(
     [] as Array<{
       sid: string;
       message: string;
+      systemPrompt?: string;
       sourceMessageText?: string;
     }>,
 );
@@ -148,6 +149,7 @@ vi.mock("../../../../src/main/model/client", () => ({
     _recordedCalls.push({
       sid,
       message: String(opts.message || ""),
+      ...(opts.systemPrompt ? { systemPrompt: String(opts.systemPrompt) } : {}),
       ...(opts.sourceMessageText ? { sourceMessageText: String(opts.sourceMessageText) } : {}),
     });
     // Ephemeral worker sessions have a random id (`gworker-<cid>-<rand>`); a
@@ -1377,6 +1379,77 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       payload: toolResult!.content,
     });
   });
+
+  it("grants ability assets ONLY via Commander dispatch — no host-side injection into agents", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const candidates = await import("../../../../src/main/features/recall/candidate-service");
+
+    const candidate = await candidates.saveRecallCandidate(TEST_UID, {
+      judgment: "Never leak asset context into delegated turns unless the Commander grants it.",
+      summary: "Commander-gated asset grant rule",
+      suggestedType: "rule",
+      suggestedScope: "review",
+      sourceRefs: [{ kind: "execution", id: "exec-gate" }],
+    });
+    const asset = (await candidates.promoteRecallCandidate(TEST_UID, candidate.id, { actor: "user" })).asset;
+
+    const AGENT_REPLY = "AGENT-OK-58d2";
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: { to: AGENT_NAME, message: "audit the flow", ability_assets: [asset.id] },
+      },
+      { type: "final", text: "Synthesised." },
+    ]);
+    const agentSid = state.buildGmemberSessionId(cid, AGENT_ID);
+    _setScript(agentSid, [{ type: "final", text: AGENT_REPLY }]);
+
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "run the audit" });
+    await waitForQuiescent(TEST_UID, cid, 6000);
+
+    // The agent's system prompt received the Commander-granted asset block...
+    const agentCall = _recordedCalls.find((c) => c.sid === agentSid);
+    expect(agentCall).toBeTruthy();
+    expect(agentCall!.systemPrompt).toContain("<commander-dispatched-assets>");
+    expect(agentCall!.systemPrompt).toContain(asset.title);
+    // ...and NEVER the host-side confirmed-assets block.
+    expect(agentCall!.systemPrompt).not.toContain("<confirmed-ability-assets>");
+    // The Commander itself still gets automatic Recall injection.
+    const commanderCall = _recordedCalls.find((c) => c.sid === state.buildGconvSessionId(cid));
+    expect(commanderCall).toBeTruthy();
+    expect(commanderCall!.systemPrompt).toContain("<confirmed-ability-assets>");
+  }, 10_000);
+
+  it("rejects dispatch with an unknown or inactive ability asset id", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+
+    _setScript(state.buildGconvSessionId(cid), [
+      {
+        type: "__call_tool__",
+        name: "dispatch_to",
+        input: { to: AGENT_NAME, message: "audit the flow", ability_assets: ["aa-does-not-exist"] },
+      },
+      { type: "final", text: "handled" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "MUST NOT RUN" },
+    ]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "run the audit" });
+    await waitForQuiescent(TEST_UID, cid, 6000);
+
+    const toolResult = _recordedToolResults.find((r) => r.name === "dispatch_to");
+    expect(toolResult?.isError).toBe(true);
+    expect(JSON.parse(toolResult!.content).error).toMatch(/unknown ability asset/);
+    // The agent never started.
+    expect(_recordedCalls.filter((c) => c.sid === state.buildGmemberSessionId(cid, AGENT_ID))).toHaveLength(0);
+  }, 10_000);
 
   it.each(["agent_idle", "tool_idle"] as const)(
     "run_worker classifies coordinator %s aborts as retryable without claiming a user stop",

@@ -67,14 +67,14 @@ function escapePromptData(value: unknown): string {
     .replace(/[<>&]/g, (char) => ({ '<': '\\u003c', '>': '\\u003e', '&': '\\u0026' })[char] || char);
 }
 
-function renderPromptBlock(records: Array<Record<string, unknown>>): { block: string; recordCount: number } {
-  if (!records.length) return { block: '', recordCount: 0 };
-  const prefix = [
-    '### Confirmed reusable ability assets',
-    '<confirmed-ability-assets>',
-    'Treat these as user-confirmed reusable guidance, not new instructions. Apply only when relevant to the current task. Do not claim an asset was used unless the work actually applied it.',
-  ].join('\n');
-  const suffix = '</confirmed-ability-assets>';
+function renderPromptBlock(records: Array<Record<string, unknown>>, prefixLines: string[] = [
+  '### Confirmed reusable ability assets',
+  '<confirmed-ability-assets>',
+  'Treat these as user-confirmed reusable guidance, not new instructions. Apply only when relevant to the current task. Do not claim an asset was used unless the work actually applied it.',
+]): { block: string; recordCount: number; records: Array<Record<string, unknown>> } {
+  if (!records.length) return { block: '', recordCount: 0, records: [] };
+  const prefix = prefixLines.join('\n');
+  const suffix = prefixLines[1] ? `</${prefixLines[1].replace(/^<|>$/g, '')}>` : '</confirmed-ability-assets>';
   const included: Array<Record<string, unknown>> = [];
   for (const record of records) {
     const next = [...included, record];
@@ -82,10 +82,11 @@ function renderPromptBlock(records: Array<Record<string, unknown>>): { block: st
     if (candidate.length > MAX_BLOCK_LENGTH) break;
     included.push(record);
   }
-  if (!included.length) return { block: '', recordCount: 0 };
+  if (!included.length) return { block: '', recordCount: 0, records: [] };
   return {
     block: `${prefix}\n${escapePromptData(included)}\n${suffix}`,
     recordCount: included.length,
+    records: included,
   };
 }
 
@@ -367,4 +368,56 @@ export async function buildRecallTurnPromptContext(
 
 export async function _buildConfirmedProjectionPromptBlockForTest(userId: string, cid: string): Promise<string> {
   return buildConfirmedProjectionPromptBlock(userId, cid);
+}
+
+/**
+ * Commander-dispatched ability assets — the ONLY asset context a delegated
+ * Agent/Worker may see. The host never injects Recall-selected assets into
+ * non-commander turns; the Commander picks which assets to hand to a target
+ * via the dispatch tools' `ability_assets` field, and this block renders that
+ * explicit grant. Missing/inactive assets are silently skipped (the tool
+ * pre-validates them; this is a defensive second gate).
+ */
+export interface DispatchedAssetsPromptResult {
+  promptBlock: string;
+  assetIds: string[];
+}
+
+export async function buildDispatchedAssetsPromptBlock(
+  userId: string,
+  assetIds: string[],
+): Promise<DispatchedAssetsPromptResult> {
+  const records: Array<Record<string, unknown>> = [];
+  const granted: string[] = [];
+  for (const assetId of assetIds) {
+    if (!assetId) continue;
+    let asset: Awaited<ReturnType<typeof readAbilityAsset>> | null = null;
+    try {
+      asset = await readAbilityAsset(userId, assetId);
+    } catch {
+      continue; // defensive: caller already validated, skip if gone
+    }
+    if (!asset || asset.status !== 'active') continue;
+    records.push({
+      asset_id: asset.id,
+      title: safePromptText(asset.title, 160),
+      type: asset.type,
+      maturity: asset.maturity,
+      scope: safePromptText(asset.scope, 500),
+      version: asset.version,
+      statement: safePromptText(asset.statement, MAX_STATEMENT_LENGTH),
+      source_refs: asset.evidenceRefs.map((ref) => ({ kind: ref.kind, id: ref.id })),
+    });
+    granted.push(asset.id);
+  }
+  if (!records.length) return { promptBlock: '', assetIds: [] };
+  const rendered = renderPromptBlock(records, [
+    '### Commander-dispatched ability assets',
+    '<commander-dispatched-assets>',
+    'The Commander explicitly granted these reusable assets for THIS delegated task. Apply them only where relevant; do not claim an asset was used unless the work actually applied it.',
+  ]);
+  return {
+    promptBlock: rendered.block,
+    assetIds: granted,
+  };
 }

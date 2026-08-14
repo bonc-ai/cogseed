@@ -196,9 +196,11 @@ import { authoritativeSessionSource } from "../p3394/session-source";
 import { EpochStore } from "../p3394/epoch-store";
 import { SenderEpochStore } from "../p3394/sender-epoch-store";
 import {
+  buildDispatchedAssetsPromptBlock,
   buildRecallTurnPromptContext,
   type RecallPromptCitation,
 } from "../recall/prompt-injection";
+import { readAbilityAsset } from "../recall/asset-service";
 import { recordRecallUsage } from "../recall/usage-service";
 
 const log = createLogger("group_chat.bus");
@@ -1142,6 +1144,10 @@ interface QueueItem {
   outputDelivery?: "final" | "process";
   /** Commander-selected first-stage KSTAR gate for this delegated turn. */
   kstarDecision?: KStarDecisionRecord;
+  /** Ability assets the Commander explicitly granted to this delegated
+   *  Agent/Worker turn via the dispatch tools' `ability_assets` field. The
+   *  host renders them as the ONLY asset context for non-commander turns. */
+  dispatchedAssetIds?: string[];
   workflow_step_id?: string;
   /** Sender-assigned epoch persisted on the source GroupMessage. */
   incomingEpoch?: number;
@@ -3795,25 +3801,40 @@ async function runActorTurnBody(
     }
   }
 
-  // Recall is host-owned model context. CLI agents do not consume this system
-  // prompt path, so they must not receive or later claim Recall citations.
+  // Recall is host-owned model context. The Commander is the cognitive-asset
+  // center: ONLY the Commander receives automatic Recall injection. Delegated
+  // Agent/Worker turns receive NO automatic asset context — the Commander
+  // explicitly grants assets per dispatch via the tools' `ability_assets`
+  // field, and only those render here. CLI agents never consume this path.
   let recallCitations: RecallPromptCitation[] = [];
   if (!cliAgent) {
-    try {
-      const recallContext = await buildRecallTurnPromptContext(uid, {
-        cid,
-        taskRunId: item.turnId,
-        taskText: String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000),
-        ...(turnProjectId ? { workspaceId: turnProjectId } : {}),
-        ...(item.committedProjectionId ? { committedProjectionId: item.committedProjectionId } : {}),
-        ...(item.forecastId ? { forecastId: item.forecastId } : {}),
-      });
-      if (recallContext.promptBlock) {
-        systemPrompt = `${systemPrompt}\n\n${recallContext.promptBlock}`;
-        recallCitations = recallContext.citations;
+    if (isCommander) {
+      try {
+        const recallContext = await buildRecallTurnPromptContext(uid, {
+          cid,
+          taskRunId: item.turnId,
+          taskText: String(item.sourceMessageText || item.llmPayload || '').slice(0, 2_000),
+          ...(turnProjectId ? { workspaceId: turnProjectId } : {}),
+          ...(item.committedProjectionId ? { committedProjectionId: item.committedProjectionId } : {}),
+          ...(item.forecastId ? { forecastId: item.forecastId } : {}),
+        });
+        if (recallContext.promptBlock) {
+          systemPrompt = `${systemPrompt}\n\n${recallContext.promptBlock}`;
+          recallCitations = recallContext.citations;
+        }
+      } catch (error) {
+        log.warn(`Recall prompt injection failed cid=${cid}: ${(error as Error).message}`);
       }
-    } catch (error) {
-      log.warn(`Recall prompt injection failed cid=${cid}: ${(error as Error).message}`);
+    } else if (item.dispatchedAssetIds?.length) {
+      // Commander-granted assets only — no host-side Recall selection.
+      try {
+        const dispatched = await buildDispatchedAssetsPromptBlock(uid, item.dispatchedAssetIds);
+        if (dispatched.promptBlock) {
+          systemPrompt = `${systemPrompt}\n\n${dispatched.promptBlock}`;
+        }
+      } catch (error) {
+        log.warn(`Commander-dispatched asset injection failed cid=${cid}: ${(error as Error).message}`);
+      }
     }
   }
 
@@ -6729,6 +6750,7 @@ async function runNestedDispatch(
   outputDelivery: "final" | "process" = "process",
   kstarDecision?: KStarDecisionRecord,
   workflowStepId?: string,
+  dispatchedAssetIds?: string[],
 ): Promise<NestedDispatchOutcome> {
   // A named agent must be a roster member so its handed-back bubble renders with
   // proper attribution. The old async dispatch path seeded this via enqueue's
@@ -6829,6 +6851,7 @@ async function runNestedDispatch(
     ...(kstarDecision?.required ? { kstarDecision } : {}),
     ...(workflowStepId ? { workflow_step_id: workflowStepId } : {}),
     ...(attachments && attachments.length ? { attachments } : {}),
+    ...(dispatchedAssetIds && dispatchedAssetIds.length ? { dispatchedAssetIds } : {}),
   };
   // Bound concurrent nested dispatches: when the commander fans out several
   // run_worker/dispatch_to calls in one turn (G4 runs them concurrently),
@@ -7481,6 +7504,7 @@ interface CoordinatedNestedDispatchInput {
   kstarDecision?: KStarDecisionRecord;
   prepared: PreparedNestedDispatchStep;
   requiredCapabilities: string[];
+  dispatchedAssetIds?: string[];
 }
 
 async function runCoordinatedNestedDispatch(
@@ -7634,6 +7658,7 @@ async function runCoordinatedNestedDispatchAdmitted(
           input.outputDelivery,
           input.kstarDecision,
           input.prepared.step.id,
+          input.dispatchedAssetIds,
         ),
     });
     const { outcome, finishedStep } = lifecycle;
@@ -7775,6 +7800,43 @@ const WORKER_WORKFLOW = [
 
 function _toolError(error: string): { content: string; isError: true } {
   return { content: JSON.stringify({ ok: false, error }), isError: true };
+}
+
+/**
+ * Host-side validation of Commander-granted ability assets. The Commander
+ * picks assets by id; the host verifies each is a real, active asset so a
+ * hallucinated or stale id can never leak into a delegated turn. Returns
+ * the granted ids (deduped, order-preserving) or a tool-error result.
+ */
+async function resolveDispatchedAbilityAssets(
+  uid: string,
+  value: unknown,
+): Promise<{ ok: true; assetIds: string[] } | { ok: false; error: string }> {
+  if (value === undefined) return { ok: true, assetIds: [] };
+  if (!Array.isArray(value)) {
+    return { ok: false, error: "`ability_assets` must be an array of asset ids" };
+  }
+  const rawIds = value.map((entry) => String(entry || "").trim()).filter(Boolean);
+  if (rawIds.length > 24) {
+    return { ok: false, error: "`ability_assets` supports at most 24 assets per dispatch" };
+  }
+  const granted: string[] = [];
+  const seen = new Set<string>();
+  for (const rawId of rawIds) {
+    if (seen.has(rawId)) continue;
+    seen.add(rawId);
+    let asset: Awaited<ReturnType<typeof readAbilityAsset>> | null = null;
+    try {
+      asset = await readAbilityAsset(uid, rawId);
+    } catch {
+      return { ok: false, error: `unknown ability asset: ${rawId}` };
+    }
+    if (!asset || asset.status !== "active") {
+      return { ok: false, error: `ability asset is not active: ${rawId}` };
+    }
+    granted.push(asset.id);
+  }
+  return { ok: true, assetIds: granted };
 }
 
 const HANDOFF_FINAL_ACTOR_ERROR =
@@ -8531,6 +8593,12 @@ async function buildCommanderExtraTools(
         write_scopes: { type: "array", items: { type: "string" } },
         resume_step_id: { type: "string" },
         resume_token: { type: "string" },
+        ability_assets: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional. Ability asset ids (from the confirmed projection / your injected asset list) you explicitly grant to the target for THIS task. The target sees ONLY these assets — never a host-side selection. Omit to send no asset context.",
+        },
         kstar: {
           type: "string",
           enum: ["required", "skip"],
@@ -8581,6 +8649,8 @@ async function buildCommanderExtraTools(
       } catch (error) {
         return _toolError((error as Error).message);
       }
+      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets);
+      if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
       if (!toRaw) {
         return {
           content: JSON.stringify({ ok: false, error: "`to` is required" }),
@@ -8671,6 +8741,7 @@ async function buildCommanderExtraTools(
             kstarDecision: kstarDecisionRecord(kstar),
             prepared,
             requiredCapabilities: dispatchContract.requiredCapabilities,
+            dispatchedAssetIds: grantedAssets.assetIds,
           });
         },
       });
@@ -8745,6 +8816,12 @@ async function buildCommanderExtraTools(
         write_scopes: { type: "array", items: { type: "string" } },
         resume_step_id: { type: "string" },
         resume_token: { type: "string" },
+        ability_assets: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional. Ability asset ids (from the confirmed projection / your injected asset list) you explicitly grant to the target for THIS task. The target sees ONLY these assets — never a host-side selection. Omit to send no asset context.",
+        },
         kstar: {
           type: "string",
           enum: ["required", "skip"],
@@ -8795,6 +8872,8 @@ async function buildCommanderExtraTools(
       } catch (error) {
         return _toolError((error as Error).message);
       }
+      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets);
+      if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
       if (!toRaw) return _toolError("`to` is required");
       if (!message) return _toolError("`message` is required");
       const blocked = await blockedByCollaborationGateToolResult(uid, cid);
@@ -8860,6 +8939,7 @@ async function buildCommanderExtraTools(
             kstarDecision: kstarDecisionRecord(kstar),
             prepared,
             requiredCapabilities: dispatchContract.requiredCapabilities,
+            dispatchedAssetIds: grantedAssets.assetIds,
           });
           if (!outcome.ok) return { content: outcome.payload };
 
@@ -9078,6 +9158,12 @@ async function buildCommanderExtraTools(
         write_scopes: { type: "array", items: { type: "string" } },
         resume_step_id: { type: "string" },
         resume_token: { type: "string" },
+        ability_assets: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional. Ability asset ids (from the confirmed projection / your injected asset list) you explicitly grant to the worker for THIS sub-task. The worker sees ONLY these assets — never a host-side selection. Omit to send no asset context.",
+        },
         kstar: {
           type: "string",
           enum: ["required", "skip"],
@@ -9128,6 +9214,8 @@ async function buildCommanderExtraTools(
       } catch (error) {
         return _toolError((error as Error).message);
       }
+      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets);
+      if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
       if (!task) return _toolError("`task` is required");
       const blocked = await blockedByCollaborationGateToolResult(uid, cid);
       if (blocked) return blocked;
@@ -9183,6 +9271,7 @@ async function buildCommanderExtraTools(
                   "process",
                   kstarDecisionRecord(kstar),
                   prepared.step.id,
+                  grantedAssets.assetIds,
                 ),
             }),
         });
@@ -9259,6 +9348,7 @@ async function buildCommanderExtraTools(
             kstarDecision: kstarDecisionRecord(kstar),
             prepared,
             requiredCapabilities: dispatchContract.requiredCapabilities,
+            dispatchedAssetIds: grantedAssets.assetIds,
           });
         },
       });

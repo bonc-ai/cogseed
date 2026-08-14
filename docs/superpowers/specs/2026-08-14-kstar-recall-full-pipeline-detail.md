@@ -155,9 +155,13 @@
 
 ---
 
-## 阶段 6：特权派发门禁 + 终态 provenance 盖章
+## 阶段 6：特权派发门禁 + Commander 中心化资产派发 + 终态 provenance 盖章
 
 ### 详细陈述
+
+- **Commander 是唯一资产派发者（产品定夺）**：宿主只在 Commander 的 system prompt 注入 Recall 资产（`<confirmed-ability-assets>`）；**Agent/Worker 不再获得任何宿主侧注入**。Commander 通过派发工具（`dispatch_to` / `hand_off_to` / `run_worker`）的可选 `ability_assets` 字段显式授权资产，宿主校验每个 id 是真实 active 资产后，将其渲染为 `<commander-dispatched-assets>` 块注入目标 turn——Agent 看到的资产上下文**只能**来自 Commander 的显式派发。
+- **宿主校验**：`resolveDispatchedAbilityAssets`（`bus.ts`）对每个 id 读取资产并校验 `status === 'active'`，未知/非激活 id 直接返回工具错误（拒绝整个派发），防止幻觉 id 泄漏进被派发 turn；单次派发上限 24 个。
+
 
 - **守卫**（`bus.ts::guardKstarPrivilegedDispatch`，插入 `dispatch_to` / `hand_off_to` / `run_worker`(具名) / `run_worker`(匿名) 四处，位于依赖检查之后、wake gate 之前）：
   - `readKstarTaskLifecycle`：无 `requirement.projectionId` → 放行（非 KStar 流程零影响）；

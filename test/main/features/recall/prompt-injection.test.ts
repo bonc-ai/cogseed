@@ -326,4 +326,48 @@ describe('confirmed Recall projection prompt injection', () => {
     expect(result.citations.map((citation) => citation.assetId))
       .toEqual(records.map((record) => record.asset_id));
   });
+
+  describe('Commander-dispatched assets (agent grant)', () => {
+    it('renders only the granted active assets with the dispatched block', async () => {
+      const { assets, promptInjection } = await modules();
+      const promoted = await createAsset();
+      const { asset } = promoted;
+      const blocked = await assets.createSystemAbilityAsset('user-a', {
+        schemaVersion: 2,
+        ownerId: 'user-a',
+        id: 'aa-000000000000000000000000',
+        candidateId: 'cand-blocked',
+        title: 'Blocked asset',
+        statement: 'Should never be dispatched while paused.',
+        type: 'rule',
+        scope: 'global',
+        evidenceRefs: [{ kind: 'execution', id: 'exec-blocked' }],
+        reviewDecisionId: 'legacy-untracked',
+        lifecycleStatus: 'user_confirmed_unverified',
+        status: 'paused',
+        maturity: 'seed',
+        version: '1',
+        createdAt: '2026-08-16T00:00:00.000Z',
+        updatedAt: '2026-08-16T00:00:00.000Z',
+      }, 'test paused asset');
+
+      const result = await promptInjection.buildDispatchedAssetsPromptBlock('user-a', [
+        asset.id,
+        blocked.id,
+        'aa-nonexistent',
+      ]);
+
+      expect(result.promptBlock).toContain('<commander-dispatched-assets>');
+      expect(result.promptBlock).toContain('The Commander explicitly granted');
+      expect(result.promptBlock).toContain(asset.title);
+      expect(result.promptBlock).not.toContain('Blocked asset');
+      expect(result.assetIds).toEqual([asset.id]);
+    });
+
+    it('returns an empty block when nothing is granted', async () => {
+      const { promptInjection } = await modules();
+      const result = await promptInjection.buildDispatchedAssetsPromptBlock('user-a', ['aa-unknown']);
+      expect(result).toEqual({ promptBlock: '', assetIds: [] });
+    });
+  });
 });
