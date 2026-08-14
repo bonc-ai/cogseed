@@ -9,7 +9,11 @@ import { safeId } from '../storage';
 import * as testDelivery from '../features/touchpoints/test-delivery';
 import * as config from '../features/touchpoints/config';
 import * as messaging from '../features/messaging/manager';
-import { TOUCHPOINT_TEMPLATES, type TouchpointTemplate } from '../features/touchpoints/types';
+import {
+  TOUCHPOINT_ROUTE_SCENES,
+  type TouchpointRouteScene,
+} from '../features/touchpoints/types';
+import type { MessagingInstanceClient } from '../features/messaging/types';
 
 interface TouchpointContext {
   userId: string;
@@ -28,9 +32,9 @@ function configuredInstanceId(value: unknown): string | undefined {
   return value.trim();
 }
 
-function template(value: unknown): TouchpointTemplate {
-  if (typeof value !== 'string' || !(TOUCHPOINT_TEMPLATES as readonly string[]).includes(value)) throw new Error('invalid touchpoint template');
-  return value as TouchpointTemplate;
+function routeScene(value: unknown): TouchpointRouteScene {
+  if (typeof value !== 'string' || !(TOUCHPOINT_ROUTE_SCENES as readonly string[]).includes(value)) throw new Error('invalid touchpoint route scene');
+  return value as TouchpointRouteScene;
 }
 
 function configPayload(value: unknown): Record<string, unknown> {
@@ -38,11 +42,10 @@ function configPayload(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-async function validateInstance(userId: string, instanceId: string | undefined): Promise<string | null> {
-  if (!instanceId) return null;
-  const instance = (await messaging.listInstances(userId)).find((item) => item.id === instanceId);
-  if (!instance || instance.platform !== 'feishu_lark') throw new Error('消息实例不存在或不是飞书/Lark 实例');
-  return instance.id;
+function isTouchpointRoutingInstance(
+  instance: MessagingInstanceClient,
+): instance is MessagingInstanceClient & { platform: 'feishu_lark' | 'wechat_personal' } {
+  return instance.platform === 'feishu_lark' || instance.platform === 'wechat_personal';
 }
 
 export const invokeHandlers: Record<string, Handler> = {
@@ -56,19 +59,22 @@ export const invokeHandlers: Record<string, Handler> = {
   }),
   'touchpoints.config.save': async (payload, ctx) => {
     const input = configPayload(payload.config);
-    const defaultInstanceId = await validateInstance(ctx.userId, configuredInstanceId(input.defaultInstanceId));
+    const defaultInstanceId = configuredInstanceId(input.defaultInstanceId) || null;
     const routes = input.routes && typeof input.routes === 'object' && !Array.isArray(input.routes) ? input.routes as Record<string, unknown> : {};
     const normalizedRoutes: Record<string, string | null> = {};
     for (const [key, value] of Object.entries(routes)) {
-      const scene = template(key);
-      normalizedRoutes[scene] = await validateInstance(ctx.userId, configuredInstanceId(value));
+      const scene = routeScene(key);
+      normalizedRoutes[scene] = configuredInstanceId(value) || null;
     }
+    const routingInstances = (await messaging.listInstances(ctx.userId))
+      .filter(isTouchpointRoutingInstance)
+      .map((instance) => ({ id: instance.id, platform: instance.platform }));
     const saved = await config.saveTouchpointConfig(ctx.userId, {
       version: 1,
       defaultInstanceId,
       templates: input.templates || {},
       routes: normalizedRoutes,
-    });
+    }, routingInstances);
     return { config: saved };
   },
 };

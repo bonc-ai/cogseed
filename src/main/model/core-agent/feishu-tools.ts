@@ -247,14 +247,14 @@ function createSendFileTool(opts: FeishuToolsOpts): AgentTool {
       'is uploaded or sent; a denied, timed-out, or aborted request reports not_sent and must not ' +
       'be retried automatically. file_path must be an absolute path the user can read via ' +
       'read_file (workspace or conversation attachment scope) — never guess paths outside that ' +
-      'scope. Omit instance_id only when exactly one bot is available; with several, use the ' +
-      'instance_id from messaging_list_targets.',
+      'scope. When instance_id is omitted, the configured default delivery bot is used; if no ' +
+      'default exists and several bots are available, use an instance_id from messaging_list_targets.',
     inputSchema: {
       type: 'object',
       properties: {
         instance_id: {
           type: 'string',
-          description: 'Optional bot instance id from messaging_list_targets; required when several bots are available.',
+          description: 'Optional bot instance id from messaging_list_targets. Omit it to use the configured default delivery bot.',
         },
         file_path: {
           type: 'string',

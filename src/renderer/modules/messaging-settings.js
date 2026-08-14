@@ -14,6 +14,8 @@
     noticeKind: '',
     loading: false,
     updating: false,
+    touchpointConfig: null,
+    routingLoadError: '',
     bound: false,
     initialized: false,
     operation: 0,
@@ -75,6 +77,7 @@
     { key: 'dingtalk', platform: 'dingtalk', icon: 'dingtalk', group: 'soon' },
     { key: 'discord', platform: 'discord', icon: 'discord', group: 'soon' },
   ]);
+  const ROUTING_SCENES = Object.freeze(['external_send', 'task_approval', 'daily_briefing']);
 
   // 轮询连续网络错误上限：超过后停止轮询并提示，避免弹窗已关闭还无限重试。
   const MAX_POLL_ERRORS = 5;
@@ -209,7 +212,9 @@
   }
 
   function currentInstance() {
-    return state.instances.find((instance) => instance.id === state.selectedInstanceId) || null;
+    const selected = state.instances.find((instance) => instance.id === state.selectedInstanceId);
+    if (selected) return selected;
+    return primaryInstance(channelForKey(state.selectedChannel));
   }
 
   function instancesForChannel(channel) {
@@ -217,6 +222,33 @@
     return state.instances
       .filter((instance) => channelForInstance(instance) === channel.key)
       .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
+  }
+
+  function primaryInstance(channel) {
+    const instances = instancesForChannel(channel);
+    return instances.find((instance) => instance.id === state.selectedInstanceId)
+      || instances.find((instance) => instance.id === state.touchpointConfig?.defaultInstanceId)
+      || instances.find((instance) => instance.enabled)
+      || instances[0]
+      || null;
+  }
+
+  function routeableInstances() {
+    return state.instances
+      .filter((instance) => instance.platform === 'feishu_lark')
+      .sort((left, right) => String(left.displayName || left.id).localeCompare(String(right.displayName || right.id)));
+  }
+
+  function defaultDeliveryInstances() {
+    return state.instances
+      .filter((instance) => instance.platform === 'feishu_lark' || instance.platform === 'wechat_personal')
+      .sort((left, right) => String(left.displayName || left.id).localeCompare(String(right.displayName || right.id)));
+  }
+
+  function proactiveTargetCount() {
+    return state.instances.filter((instance) => (
+      instance.platform === 'feishu_lark' || instance.platform === 'wechat_personal'
+    ) && instance.enabled && instance.ownerConfigured && instance.status?.kind === 'connected').length;
   }
 
   function setNotice(message, kind) {
@@ -562,6 +594,15 @@
     return section;
   }
 
+  function settingsSection(titleKey, subtitleKey, className) {
+    const section = el('section', `messaging-settings-section ${className || ''}`.trim());
+    const heading = el('div', 'messaging-section-heading');
+    heading.appendChild(el('h3', '', labelFor(titleKey, '')));
+    if (subtitleKey) heading.appendChild(el('p', '', labelFor(subtitleKey, '')));
+    section.appendChild(heading);
+    return section;
+  }
+
   function selectControl(options, value, disabled) {
     const select = document.createElement('select');
     select.className = 'messaging-detail-select';
@@ -706,17 +747,44 @@
   }
 
   function renderInstanceList(channel) {
-    const section = el('section', 'messaging-config-card messaging-instance-card');
-    const heading = el('div', 'messaging-config-card-heading');
-    heading.appendChild(el('h3', '', labelFor('messaging.instance.title', '')));
-    section.appendChild(heading);
     const instances = instancesForChannel(channel);
+    const section = el('section', 'messaging-settings-section messaging-instance-card');
+    const toolbar = el('div', 'messaging-instance-toolbar');
+    const heading = el('div', 'messaging-section-heading');
+    heading.appendChild(el('h3', '', labelFor('messaging.instance.account_title', '')));
+    heading.appendChild(el('p', '', labelFor(
+      instances.length > 1 ? 'messaging.instance.multiple_summary' : 'messaging.instance.single_summary', '',
+    ).replace('{count}', String(instances.length))));
+    toolbar.appendChild(heading);
+    section.appendChild(toolbar);
+
     if (!instances.length) {
       section.appendChild(el('p', 'messaging-instance-empty', labelFor('messaging.instance.empty', '')));
       return section;
     }
+
+    const activeInstance = primaryInstance(channel);
+    const primary = el('div', `messaging-primary-account is-${statusForInstance(activeInstance)}`);
+    const primaryCopy = el('div', 'messaging-instance-copy');
+    primaryCopy.appendChild(el('strong', '', activeInstance.displayName || activeInstance.id));
+    primaryCopy.appendChild(el('span', 'messaging-instance-state', statusLabel(statusForInstance(activeInstance))));
+    primary.append(icon('bot', 'messaging-primary-account-icon'), primaryCopy);
+    section.appendChild(primary);
+
+    const supportsMultipleBots = channel.platform !== 'wechat_personal';
+    if (!supportsMultipleBots) {
+      section.appendChild(el('p', 'messaging-single-active-note', labelFor('messaging.instance.wechat_single_active', '')));
+      return section;
+    }
+
+    const advanced = el('details', 'messaging-instance-advanced');
+    const summary = el('summary', '', labelFor('messaging.instance.advanced_summary', ''));
+    summary.prepend(icon('settings', 'messaging-action-icon'));
+    advanced.appendChild(summary);
+    const advancedBody = el('div', 'messaging-instance-advanced-body');
+    if (instances.length > 1) advancedBody.appendChild(el('p', 'messaging-instance-routing-hint', labelFor('messaging.instance.routing_required', '')));
     const list = el('div', 'messaging-instance-list');
-    for (const instance of instances) {
+    for (const instance of instances.filter((candidate) => candidate.id !== activeInstance.id)) {
       const row = el('div', `messaging-instance-row is-${statusForInstance(instance)}`);
       const active = state.selectedInstanceId === instance.id;
       if (active) row.classList.add('is-selected');
@@ -724,11 +792,13 @@
       copy.appendChild(el('strong', '', instance.displayName || instance.id));
       copy.appendChild(el('span', 'messaging-instance-state', statusLabel(statusForInstance(instance))));
       row.appendChild(copy);
-      row.appendChild(switchControl(instance));
       const unbind = el('button', 'btn messaging-secondary-button', labelFor('messaging.unbind', ''));
       unbind.type = 'button';
       unbind.disabled = state.updating;
-      unbind.addEventListener('click', () => void unbindInstance(instance, unbind));
+      unbind.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void unbindInstance(instance, unbind);
+      });
       row.appendChild(unbind);
       row.addEventListener('click', () => {
         state.selectedInstanceId = instance.id;
@@ -737,39 +807,145 @@
       });
       list.appendChild(row);
     }
-    if (channel.group === 'open' && channel.platform !== 'wecom') {
-      const add = el('button', 'btn messaging-secondary-button messaging-instance-add', labelFor('messaging.instance.add', ''));
-      add.type = 'button';
-      add.disabled = state.updating || qrIsPending();
-      add.appendChild(icon('plus', 'messaging-action-icon'));
-      add.addEventListener('click', () => {
-        if (channel.platform === 'telegram') {
-          state.telegramCreatingNew = true;
-          state.selectedInstanceId = '';
-          renderCurrent();
-        } else if (channel.platform === 'wechat_personal') {
-          void startWechatFlow();
-        } else {
-          void startQrForChannel(channel);
-        }
-      });
-      list.appendChild(add);
-    }
-    section.appendChild(list);
+    if (list.childElementCount) advancedBody.appendChild(list);
+
+    const add = el('button', 'btn messaging-secondary-button messaging-instance-add', labelFor('messaging.instance.add_another', ''));
+    add.type = 'button';
+    add.disabled = state.updating || qrIsPending();
+    add.prepend(icon('plus', 'messaging-action-icon'));
+    add.addEventListener('click', () => {
+      if (channel.platform === 'telegram') {
+        state.telegramCreatingNew = true;
+        state.selectedInstanceId = '';
+        renderCurrent();
+      } else if (channel.platform === 'wecom') {
+        void startWecomFlow();
+      } else {
+        void startQrForChannel(channel);
+      }
+    });
+    advancedBody.appendChild(add);
+    advanced.appendChild(advancedBody);
+    section.appendChild(advanced);
     return section;
+  }
+
+  function routingSelect(instances, value, emptyLabel) {
+    const options = [{ value: '', label: emptyLabel }];
+    for (const instance of instances) {
+      options.push({ value: instance.id, label: `${instance.displayName || instance.id} · ${statusLabel(statusForInstance(instance))}` });
+    }
+    if (value && !instances.some((instance) => instance.id === value)) {
+      options.push({ value, label: `${labelFor('messaging.routing.invalid_instance', '')} · ${value}` });
+    }
+    return selectControl(options, value || '', state.updating);
+  }
+
+  function renderRoutingSettings() {
+    const routeInstances = routeableInstances();
+    const defaultInstances = defaultDeliveryInstances();
+    if (!routeInstances.length || (routeInstances.length < 2 && proactiveTargetCount() < 2)) return null;
+    const config = state.touchpointConfig || { version: 1, defaultInstanceId: null, templates: {}, routes: {} };
+    const section = settingsSection('messaging.routing.title', 'messaging.routing.subtitle', 'messaging-routing-settings');
+    if (state.routingLoadError) {
+      const loadError = el('div', 'messaging-routing-warning is-error', state.routingLoadError);
+      loadError.setAttribute('role', 'alert');
+      section.appendChild(loadError);
+    }
+    const defaultIsInvalid = Boolean(config.defaultInstanceId
+      && !defaultInstances.some((instance) => instance.id === config.defaultInstanceId));
+    const defaultInstance = defaultInstances.find((instance) => instance.id === config.defaultInstanceId);
+    const missingFeishuSceneRoute = Boolean(defaultInstance?.platform === 'wechat_personal'
+      && ROUTING_SCENES.some((scene) => scene !== 'external_send' && !config.routes?.[scene]));
+    const hasInvalidRoute = defaultIsInvalid || Object.entries(config.routes || {}).some(([scene, instanceId]) => {
+      if (!instanceId) return false;
+      const candidates = scene === 'external_send' ? defaultInstances : routeInstances;
+      return !candidates.some((instance) => instance.id === instanceId);
+    });
+    if (!config.defaultInstanceId || hasInvalidRoute || missingFeishuSceneRoute) {
+      const warningIsError = hasInvalidRoute || missingFeishuSceneRoute;
+      const warning = el('div', `messaging-routing-warning${warningIsError ? ' is-error' : ''}`, labelFor(
+        hasInvalidRoute
+          ? 'messaging.routing.invalid_warning'
+          : missingFeishuSceneRoute
+            ? 'messaging.routing.feishu_scene_required'
+            : 'messaging.routing.unresolved', '',
+      ));
+      warning.setAttribute('role', warningIsError ? 'alert' : 'status');
+      section.appendChild(warning);
+    }
+
+    const fields = el('div', 'messaging-routing-fields');
+    const defaultRow = el('label', 'messaging-routing-row');
+    defaultRow.appendChild(el('span', '', labelFor('messaging.routing.default', '')));
+    const defaultSelect = routingSelect(defaultInstances, config.defaultInstanceId, labelFor('messaging.routing.not_selected', ''));
+    defaultSelect.dataset.messagingRoute = 'default';
+    defaultRow.appendChild(defaultSelect);
+    fields.appendChild(defaultRow);
+
+    for (const scene of ROUTING_SCENES) {
+      const row = el('label', 'messaging-routing-row');
+      row.appendChild(el('span', '', labelFor(`messaging.routing.scene.${scene}`, scene)));
+      const candidates = scene === 'external_send' ? defaultInstances : routeInstances;
+      const select = routingSelect(candidates, config.routes?.[scene], labelFor('messaging.routing.follow_default', ''));
+      select.dataset.messagingRoute = scene;
+      row.appendChild(select);
+      fields.appendChild(row);
+    }
+    section.appendChild(fields);
+
+    const save = el('button', 'btn messaging-secondary-button messaging-routing-save', labelFor('messaging.routing.save', ''));
+    save.type = 'button';
+    save.disabled = state.updating;
+    save.appendChild(icon('save', 'messaging-action-icon'));
+    save.addEventListener('click', () => void saveRoutingSettings(section, save));
+    section.appendChild(save);
+    return section;
+  }
+
+  async function saveRoutingSettings(section, button) {
+    if (!section || button.disabled || state.updating) return;
+    const current = state.touchpointConfig || { version: 1, defaultInstanceId: null, templates: {}, routes: {} };
+    const defaultSelect = section.querySelector('[data-messaging-route="default"]');
+    const routes = { ...(current.routes || {}) };
+    for (const scene of ROUTING_SCENES) {
+      const select = section.querySelector(`[data-messaging-route="${scene}"]`);
+      routes[scene] = select && select.value ? select.value : null;
+    }
+    state.updating = true;
+    renderCurrent();
+    try {
+      const result = await invoke('touchpoints.config.save', {
+        config: {
+          version: 1,
+          defaultInstanceId: defaultSelect && defaultSelect.value ? defaultSelect.value : null,
+          templates: current.templates || {},
+          routes,
+        },
+      });
+      state.touchpointConfig = result.config || current;
+      setNotice(labelFor('messaging.routing.saved', ''), 'success');
+    } catch (error) {
+      setNotice(errorMessage(error, labelFor('messaging.routing.save_failed', '')), 'error');
+    } finally {
+      state.updating = false;
+      renderCurrent();
+    }
   }
 
   function renderFeishuPanel(channel) {
     const wrapper = el('div', 'messaging-panel-body');
     wrapper.appendChild(renderInstanceList(channel));
+    const routing = renderRoutingSettings();
+    if (routing) wrapper.appendChild(routing);
     // 扫码绑定成功后弹出的回调地址引导卡（一次性）：位于实例列表下方，
     // 绑定新的飞书机器人时自动出现，配置完成后可关闭。
     const guideCard = renderSetupGuideCard();
     if (guideCard) wrapper.appendChild(guideCard);
     const instances = instancesForChannel(channel);
-    const instance = instances.find((item) => item.id === state.selectedInstanceId) || instances[0] || null;
+    const instance = primaryInstance(channel);
     if (instance) {
-      wrapper.appendChild(associationCard(instance));
+      if (!instance.hasCredentials) wrapper.appendChild(associationCard(instance));
       wrapper.appendChild(ownerIdentityCard(instance));
       const responseSelect = selectControl([
         { value: 'text', label: labelFor('messaging.response_text', '') },
@@ -789,7 +965,7 @@
         void updateInstance({ workspace: { type: 'all' } }, workspaceSelect);
       });
       wrapper.appendChild(preferencesCard(responseSelect, workspaceSelect));
-      const deletion = card('messaging.delete_title', 'messaging.delete_subtitle', 'messaging-delete-card');
+      const deletion = settingsSection('messaging.section.danger', 'messaging.delete_subtitle', 'messaging-delete-card');
       const deleteButton = el('button', 'btn btn-danger messaging-delete-button', labelFor('messaging.delete', ''));
       deleteButton.type = 'button';
       deleteButton.disabled = state.updating;
@@ -938,7 +1114,7 @@
     const instances = instancesForChannel(channel);
     const instance = state.telegramCreatingNew
       ? null
-      : instances.find((item) => item.id === state.selectedInstanceId) || instances[0] || null;
+      : primaryInstance(channel);
     const config = card('messaging.telegram.token_label', '', 'messaging-telegram-card');
     const tokenInput = document.createElement('input');
     tokenInput.type = 'password';
@@ -1366,6 +1542,7 @@
     });
     row.appendChild(scan);
     section.appendChild(row);
+    section.appendChild(el('p', 'messaging-single-active-note', labelFor('messaging.instance.wechat_single_active', '')));
     renderWechatQrPanel(section);
     return section;
   }
@@ -1377,7 +1554,7 @@
     const instances = instancesForChannel(channel);
     if (instances.length) {
       const deletion = card('messaging.delete_title', 'messaging.delete_subtitle', 'messaging-delete-card');
-      const instance = instances.find((item) => item.id === state.selectedInstanceId) || instances[0];
+      const instance = primaryInstance(channel);
       const deleteButton = el('button', 'btn btn-danger messaging-delete-button', labelFor('messaging.delete', ''));
       deleteButton.type = 'button';
       deleteButton.disabled = state.updating;
@@ -1392,24 +1569,26 @@
   function renderWecomPanel(channel) {
     const wrapper = el('div', 'messaging-panel-body');
     wrapper.appendChild(renderInstanceList(channel));
-    const config = card('messaging.association_title', 'messaging.association_sub', 'messaging-wecom-card');
-    const flowActive = Boolean(state.wecom.flowId && !['completed', 'cancelled', 'expired', 'failed'].includes(state.wecom.state));
-    const scan = el('button', 'btn messaging-scan-button', labelFor(
-      flowActive ? 'messaging.wecom_qr.cancel' : 'messaging.wecom_qr.start', '',
-    ));
-    scan.type = 'button';
-    scan.disabled = state.updating || state.wecom.starting || state.wecom.cancelling;
-    scan.appendChild(icon(flowActive ? 'x' : 'qr-code', 'messaging-action-icon'));
-    scan.addEventListener('click', () => {
-      if (flowActive) void cancelWecomFlow();
-      else void startWecomFlow();
-    });
-    config.appendChild(scan);
-    wrapper.appendChild(config);
     const instances = instancesForChannel(channel);
+    if (!instances.length) {
+      const config = card('messaging.association_title', 'messaging.association_sub', 'messaging-wecom-card');
+      const flowActive = Boolean(state.wecom.flowId && !['completed', 'cancelled', 'expired', 'failed'].includes(state.wecom.state));
+      const scan = el('button', 'btn messaging-scan-button', labelFor(
+        flowActive ? 'messaging.wecom_qr.cancel' : 'messaging.wecom_qr.start', '',
+      ));
+      scan.type = 'button';
+      scan.disabled = state.updating || state.wecom.starting || state.wecom.cancelling;
+      scan.appendChild(icon(flowActive ? 'x' : 'qr-code', 'messaging-action-icon'));
+      scan.addEventListener('click', () => {
+        if (flowActive) void cancelWecomFlow();
+        else void startWecomFlow();
+      });
+      config.appendChild(scan);
+      wrapper.appendChild(config);
+    }
     if (instances.length) {
       const deletion = card('messaging.delete_title', 'messaging.delete_subtitle', 'messaging-delete-card');
-      const instance = instances.find((item) => item.id === state.selectedInstanceId) || instances[0];
+      const instance = primaryInstance(channel);
       const deleteButton = el('button', 'btn btn-danger messaging-delete-button', labelFor('messaging.delete', ''));
       deleteButton.type = 'button';
       deleteButton.disabled = state.updating;
@@ -1451,7 +1630,7 @@
   }
 
   function ownerIdentityCard(instance) {
-    const section = card('messaging.owner_title', 'messaging.owner_subtitle', 'messaging-owner-card');
+    const section = settingsSection('messaging.section.identity', 'messaging.owner_subtitle', 'messaging-owner-card');
     if (instance.ownerConfigured === true) {
       // Owner already bound: show who it is and offer clearing only. The
       // manual id entry reappears in the unbound state for rebinding.
@@ -1528,10 +1707,14 @@
   }
 
   function preferencesCard(responseControl, workspaceControl) {
-    const section = el('section', 'messaging-config-card messaging-preferences-card');
-    section.append(
+    const section = settingsSection('messaging.section.behavior', 'messaging.section.behavior_subtitle', 'messaging-preferences-card');
+    const rows = el('div', 'messaging-preference-list');
+    rows.append(
       preferenceRow('messaging.response_title', 'messaging.response_subtitle', responseControl),
       preferenceRow('messaging.workspace_title', 'messaging.workspace_subtitle', workspaceControl),
+    );
+    section.append(
+      rows,
     );
     return section;
   }
@@ -1604,10 +1787,10 @@
   }
 
   function renderPanelHeader(channel) {
-    const header = el('header', 'messaging-detail-header');
+    const header = el('header', 'messaging-channel-overview');
     const brand = el('div', `messaging-brand-icon is-${channel.key}`);
     brand.appendChild(icon(channel.icon, 'messaging-brand-glyph'));
-    const titleWrap = el('div', 'messaging-detail-title-wrap');
+    const titleWrap = el('div', 'messaging-channel-summary');
     const titleRow = el('div', 'messaging-detail-title-row');
     titleRow.appendChild(el('h2', '', labelFor(`messaging.channel.${channel.key}.title`, channel.key)));
     if (channel.feishuTenantBrand) {
@@ -1615,13 +1798,19 @@
     }
     titleWrap.appendChild(titleRow);
     const instances = instancesForChannel(channel);
-    const instance = instances.find((item) => item.id === state.selectedInstanceId) || instances[0] || null;
+    const instance = primaryInstance(channel);
     const status = instance ? statusForInstance(instance) : 'unbound';
     const stateRow = el('div', `messaging-detail-state is-${status}`);
     stateRow.append(icon(status === 'connected' ? 'check-circle' : 'clock', 'messaging-status-icon'));
     stateRow.appendChild(el('span', '', statusLabel(status)));
     titleWrap.appendChild(stateRow);
-    header.append(brand, titleWrap, instance ? switchControl(instance) : el('span', 'messaging-detail-switch-placeholder', ''));
+    titleWrap.appendChild(el('p', 'messaging-channel-description', labelFor(`messaging.channel.${channel.key}.description`, '')));
+    const toggle = el('div', 'messaging-channel-toggle');
+    if (instance) {
+      toggle.appendChild(el('span', '', labelFor('messaging.channel.enabled_label', '')));
+      toggle.appendChild(switchControl(instance));
+    }
+    header.append(brand, titleWrap, toggle);
     return header;
   }
 
@@ -1634,11 +1823,24 @@
     }
   }
 
+  async function loadRoutingConfig() {
+    try {
+      const result = await invoke('touchpoints.config.get');
+      if (!result || !result.config || typeof result.config !== 'object') {
+        throw new Error(result?.error || labelFor('messaging.routing.load_failed', ''));
+      }
+      state.touchpointConfig = result.config;
+      state.routingLoadError = '';
+    } catch (error) {
+      state.routingLoadError = errorMessage(error, labelFor('messaging.routing.load_failed', ''));
+    }
+  }
+
   async function refresh() {
     if (state.loading) return;
     state.loading = true;
     try {
-      await loadInstances();
+      await Promise.all([loadInstances(), loadRoutingConfig()]);
       if (state.selectedInstanceId && !state.instances.some((instance) => instance.id === state.selectedInstanceId)) {
         state.selectedInstanceId = '';
       }
@@ -1660,7 +1862,10 @@
 
   function renderMenuPage() {
     const aside = el('aside', 'messaging-menu');
-    aside.appendChild(el('h1', 'messaging-menu-title', labelFor('messaging.catalog.page_title', '')));
+    const intro = el('div', 'messaging-menu-intro');
+    intro.appendChild(el('h1', 'messaging-menu-title', labelFor('messaging.catalog.page_title', '')));
+    intro.appendChild(el('p', 'messaging-menu-subtitle', labelFor('messaging.catalog.page_subtitle', '')));
+    aside.appendChild(intro);
     for (const group of ['open', 'soon']) {
       const section = el('div', `messaging-menu-group is-${group}`);
       section.appendChild(el('div', 'messaging-menu-group-label', labelFor(

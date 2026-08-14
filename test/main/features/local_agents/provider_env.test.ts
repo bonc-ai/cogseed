@@ -54,4 +54,16 @@ describe('local agent custom provider env', () => {
     expect(env.resolveCliProviderEnv(UID, 'hermes', `cp:${anthropic.id}`)).toBeUndefined();
     expect(env.resolveCliProviderEnv(UID, 'claude', 'cp:missing')).toBeUndefined();
   });
+
+  it('does not inject credentials for a disabled custom provider', async () => {
+    const providers = await import('../../../../src/main/features/custom_providers');
+    const created = providers.addCustomProvider(UID, {
+      name: 'Disabled Relay', protocol: 'openai', baseUrl: 'https://disabled.example/v1', apiKey: 'disabled-secret',
+    });
+    if (!created.ok) throw new Error(created.error);
+    expect(providers.setCustomProviderEnabled(UID, created.id, false)).toEqual({ ok: true, enabled: false });
+
+    const env = await import('../../../../src/main/features/local_agents/provider_env');
+    expect(env.resolveCliProviderEnv(UID, 'codex', `cp:${created.id}`)).toBeUndefined();
+  });
 });
