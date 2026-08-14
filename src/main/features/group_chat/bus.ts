@@ -3828,6 +3828,14 @@ async function runActorTurnBody(
       } catch (error) {
         log.warn(`Recall prompt injection failed cid=${cid}: ${(error as Error).message}`);
       }
+      // Layer 1 routing uplift: deterministic task-intent detection adds an
+      // advisory hint so an ordinary user request is not silently skipped by
+      // the Commander's default kstar:skip. Advisory only — no state writes.
+      if (item.fromActorId === USER_ID) {
+        const { taskIntentHint } = await import('../kstar/task-intent');
+        const hint = taskIntentHint(item.sourceMessageText);
+        if (hint) systemPrompt = `${systemPrompt}\n\n${hint}`;
+      }
     } else if (item.dispatchedAssetIds?.length) {
       // Commander-granted assets only — no host-side Recall selection.
       try {
@@ -6100,6 +6108,7 @@ function kstarApprovalBlockedToolResult(code: string, message: string): { conten
  *  unaffected. */
 async function guardKstarPrivilegedDispatch(
   state: CidState,
+  options: { allowHostAutoTracked?: boolean } = {},
 ): Promise<{ content: string; isError: true } | { provenance: { logicalRunId?: string; projectionId?: string; forecastId?: string } }> {
   const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
   const lifecycle = await readKstarTaskLifecycle(state.uid, state.cid);
@@ -6111,6 +6120,11 @@ async function guardKstarPrivilegedDispatch(
     );
   }
   if (!lifecycle.requirement.forecastId) {
+    // Host auto-tracked tasks (layer 2) skip the forecast requirement ONCE so
+    // the dispatch proceeds; the Commander is expected to commit_forecast
+    // afterwards. Commander-initiated tasks still require a committed forecast
+    // before execution.
+    if (options.allowHostAutoTracked) return { provenance: {} };
     return kstarApprovalBlockedToolResult(
       'kstar_projection_not_confirmed',
       'KStar Forecast is not committed.',
@@ -7829,6 +7843,76 @@ function _toolError(error: string): { content: string; isError: true } {
 }
 
 /**
+ * Layer 2 routing uplift: dispatch IS a task. When the Commander dispatches a
+ * NAMED agent (dispatch_to / hand_off_to / named run_worker) and no KStar
+ * task is open, the host auto-creates the task + auto-confirmed projection
+ * (workspace_policy line, no user confirmation) so the dispatch is governed
+ * like the formal task it is. The Commander is then expected to commit a
+ * forecast; the guard still enforces it before execution continues.
+ *
+ * Advisory shaping, never a rejection: if auto-creation fails the dispatch
+ * still proceeds ungoverned (same as today) and the failure is logged.
+ */
+async function ensureKstarTaskForDispatch(
+  uid: string,
+  cid: string,
+  taskText: string,
+  sourceMessageId?: string,
+  workspaceId?: string,
+): Promise<{ created: boolean; hint?: string }> {
+  try {
+    const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
+    const lifecycle = await readKstarTaskLifecycle(uid, cid);
+    if (lifecycle.task || lifecycle.requirement) return { created: false };
+    const { executeKstarControl } = await import('../kstar/control-service');
+    const result = await executeKstarControl(
+      {
+        userId: uid,
+        conversationId: cid,
+        ...(sourceMessageId ? { sourceMessageId } : {}),
+        ...(workspaceId ? { workspaceId } : {}),
+        allowedToolNames: new Set(['dispatch_to', 'hand_off_to', 'run_worker']),
+      },
+      {
+        operation: 'upsert_state',
+        idempotencyKey: `host-dispatch-${cid}-${Date.now()}`,
+        task: { operation: 'create', title: taskText.slice(0, 200) },
+        requirement: { operation: 'create', goalText: taskText },
+      },
+    );
+    if (!result.ok || result.status !== 'state_committed') return { created: false };
+    // Auto-confirm a projection for the newly created task (workspace_policy
+    // line — no user confirmation card).
+    const state2 = await executeKstarControl(
+      {
+        userId: uid,
+        conversationId: cid,
+        ...(sourceMessageId ? { sourceMessageId } : {}),
+        ...(workspaceId ? { workspaceId } : {}),
+        allowedToolNames: new Set(['dispatch_to', 'hand_off_to', 'run_worker']),
+      },
+      {
+        operation: 'request_projection',
+        idempotencyKey: `host-dispatch-proj-${cid}-${Date.now()}`,
+        projection: {
+          requirementId: result.requirementId,
+          purpose: 'review',
+          taskText,
+        },
+      },
+    );
+    if (!state2.ok || state2.status !== 'projection_confirmed') return { created: true };
+    return {
+      created: true,
+      hint: `The host auto-tracked this dispatch as a KStar task (projection confirmed). Submit kstar_control commit_forecast with 2-4 candidates before execution continues.`,
+    };
+  } catch (error) {
+    log.warn(`kstar auto-task for dispatch degraded cid=${cid}: ${(error as Error).message}`);
+    return { created: false };
+  }
+}
+
+/**
  * Host-side validation of Commander-granted ability assets. The Commander
  * picks assets by id; the host verifies each is a real, active asset so a
  * hallucinated or stale id can never leak into a delegated turn. Returns
@@ -8720,6 +8804,9 @@ async function buildCommanderExtraTools(
         name: dispatchAgent?.name || resolvedId,
         joined_at: nowIso(),
       };
+      // Layer 2 routing uplift: dispatch IS a task — auto-track + auto-project
+      // when no KStar task is open (advisory; never blocks the dispatch).
+      const autoTask = await ensureKstarTaskForDispatch(uid, cid, message, currentSourceMessageId, currentProjectId);
       const prepared = await prepareNestedDispatchForTool(
         state,
         dispatchActor,
@@ -8735,7 +8822,7 @@ async function buildCommanderExtraTools(
       const dependencyBlocked =
         await checkPreparedNestedDispatchDependenciesForTool(state, prepared);
       if (dependencyBlocked) return dependencyBlocked;
-      const kstarGuard = await guardKstarPrivilegedDispatch(state);
+      const kstarGuard = await guardKstarPrivilegedDispatch(state, { allowHostAutoTracked: autoTask.created });
       if ('content' in kstarGuard) return kstarGuard;
       const pendingWake = await gateNestedAgentWake(
         state,
@@ -8919,6 +9006,8 @@ async function buildCommanderExtraTools(
         name: handoffAgent?.name || resolvedId,
         joined_at: nowIso(),
       };
+      // Layer 2 routing uplift: named hand-off is a formal task.
+      await ensureKstarTaskForDispatch(uid, cid, message, currentSourceMessageId, currentProjectId);
       const prepared = await prepareNestedDispatchForTool(
         state,
         handoffActor,
@@ -8934,7 +9023,7 @@ async function buildCommanderExtraTools(
       const dependencyBlocked =
         await checkPreparedNestedDispatchDependenciesForTool(state, prepared);
       if (dependencyBlocked) return dependencyBlocked;
-      const kstarGuard = await guardKstarPrivilegedDispatch(state);
+      const kstarGuard = await guardKstarPrivilegedDispatch(state, { allowHostAutoTracked: true });
       if ('content' in kstarGuard) return kstarGuard;
       const pendingWake = await gateNestedAgentWake(
         state,
@@ -9328,6 +9417,8 @@ async function buildCommanderExtraTools(
         name: namedAgent?.name || resolvedId,
         joined_at: nowIso(),
       };
+      // Layer 2 routing uplift: named worker is a formal task.
+      const autoTask = await ensureKstarTaskForDispatch(uid, cid, task, currentSourceMessageId, currentProjectId);
       const prepared = await prepareNestedDispatchForTool(
         state,
         namedActor,
@@ -9343,7 +9434,7 @@ async function buildCommanderExtraTools(
       const dependencyBlocked =
         await checkPreparedNestedDispatchDependenciesForTool(state, prepared);
       if (dependencyBlocked) return dependencyBlocked;
-      const kstarGuard = await guardKstarPrivilegedDispatch(state);
+      const kstarGuard = await guardKstarPrivilegedDispatch(state, { allowHostAutoTracked: autoTask.created });
       if ('content' in kstarGuard) return kstarGuard;
       const pendingWake = await gateNestedAgentWake(
         state,

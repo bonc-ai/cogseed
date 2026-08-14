@@ -82,6 +82,9 @@ commit_forecast ──► 组装世界模型（每任务一次）：
 3. ✅ **学习回流阈值门**（对齐参考 `|ΔR|≥0.15`）：`clearsPrecipitationGate`——数值 ΔR/ΔA ≥0.15、或明确 better/worse-than-expected、或高置信具体 gap（knowledge/rule/template/skill + reason）才沉淀；"met_expected + ~0 delta" = 无偏离 = 不沉淀（噪声门）。单集与任务级沉淀同时生效。
 4. ✅ **复盘从"猜"到"推理"（差异→原因→资产）**：有 forecast 时 `reconcileWorldModel` 仍确定性**测量**差异（deltaA/deltaR + 动作/结果细节），但归因与沉淀内容改由模型**推理**——差异详情 + 预测 + 选中资产类型喂给模型，产出 attribution/reason/**lesson**（"为什么差 + 什么可复用"）；lesson 成为沉淀 judgment（替代固定模板句）；模型不可用时降级到确定性归因（诚实数字 + 机械标签）。
 5. ✅ **五类认知来源全量进入复盘上下文**：差异 a/r 的演化依据 PRD v2 全部来源——`conversation`（会话+消息）、`artifact_file`（产物/附件，替换 legacy artifact）、`execution_evaluation`（执行评估）、`user_teaching_signal`（active 教学信号，closure 时宿主解析）、`authorized_external_system`（connector 引用，按需附加）——episode 证据携带全量来源，模型推理归因时看到的不只是对话文本。
-6. ✅ **沉淀方向明确：KStar 线只写能力资产**——`routeConfirmedKstarCandidate`（KStar 写本体入口，从未接入的死代码）已删除；本体更新归属本体线（`personal_ontology_candidates.confirmCandidate` + LLM 路由，独立模型/独立流程）。KStar 闭环**用本体**（读入 K）但**不更新本体**。
+6. ✅ **路由提升（实机确诊：普通措辞被默认 skip）**：实机验证发现 Commander 默认 `kstar:skip`，常规用户消息（"审查一下 X"）不进 KStar 线 → 无投影/预测/比较。两层修复：
+   - **层 1 任务意图检测**（`kstar/task-intent.ts`）：宿主确定性检测任务形消息（非寒暄/状态查询 + 目标动词 + 长度门槛），检测到则向 Commander 注入 advisory 路由提示（`## Host routing hint`），引导其调 `kstar_control`——不强制、零写入。
+   - **层 2 派发即任务**：`dispatch_to`/`hand_off_to`/具名 `run_worker` 时若无可跟踪任务，宿主自动 `upsert_state` 建任务 + 自动确认投影（workspace_policy 线），并让该次派发通过门禁（`allowHostAutoTracked`），Commander 随后补 `commit_forecast`。派发即任务信号，不依赖用户措辞。
+7. ✅ **沉淀方向明确：KStar 线只写能力资产**——`routeConfirmedKstarCandidate`（KStar 写本体入口，从未接入的死代码）已删除；本体更新归属本体线（`personal_ontology_candidates.confirmCandidate` + LLM 路由，独立模型/独立流程）。KStar 闭环**用本体**（读入 K）但**不更新本体**。
 4. **收敛重组入口**（P2）：`assembleWorldModel(userId, input)` 封装 投影知识 + 快照 + 规则，forecast-commit 调用它，命名即文档。
 5. **A-Box 刷新 Hook**（P2）：工具调用后增量刷新快照（保留每任务 T/R 冻结语义）。
