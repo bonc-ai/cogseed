@@ -343,6 +343,67 @@
 .ws-new-task-send { color: #fff; background: #1f9d62; box-shadow: 0 5px 12px rgba(31,166,100,.22); }
 .ws-new-task-send:hover { background: #178b54; }
 
+/* 新建任务引用 chips（输入条上方） */
+.ws-new-task-composer { }
+.ws-ref-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
+.ws-ref-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 260px; padding: 4px 8px;
+  border: 1px solid var(--ws-line); border-radius: 99px; background: #f3f9f6; color: #33413a; font-size: 11px;
+}
+.ws-ref-chip em { font-style: normal; font-size: 9px; color: #1f9d62; background: #e5f4ec; border-radius: 4px; padding: 1px 5px; }
+.ws-ref-chip.asset em { color: #477394; background: #eaf2f7; }
+.ws-ref-chip button { color: #9aa39e; font-size: 12px; line-height: 1; }
+.ws-ref-chip button:hover { color: #c0392b; }
+.ws-ref-chip-clear { color: #8a938e; font-size: 10px; padding: 2px 6px; border-radius: 6px; }
+.ws-ref-chip-clear:hover { background: var(--ws-soft); color: #c0392b; }
+
+/* 任务行：引用按钮 + 徽标 */
+.ws-row-ref-btn {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 46px; height: 24px;
+  border: 1px solid var(--ws-line-strong); border-radius: 7px; color: #178451; background: #fff; font-size: 10px; cursor: pointer;
+}
+.ws-row-ref-btn:hover { border-color: #9fc8b1; background: #f8fcfa; }
+.ws-row-ref-badge { color: #1f9d62; font-size: 10px; white-space: nowrap; }
+
+/* 引用选择器浮层 */
+.ws-ref-scrim {
+  position: fixed; inset: 0; z-index: 900; display: flex; align-items: center; justify-content: center;
+  background: rgba(18,32,25,.34); backdrop-filter: blur(2px);
+}
+.ws-ref-picker {
+  display: flex; flex-direction: column; width: min(560px, calc(100vw - 48px)); height: min(520px, calc(100vh - 64px));
+  border: 1px solid #d7e1db; border-radius: 16px; background: #fff; box-shadow: 0 24px 60px rgba(25,36,30,.18); overflow: hidden;
+}
+.ws-ref-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--ws-line); }
+.ws-ref-tabs { display: flex; gap: 4px; padding: 3px; border: 1px solid #e2e9e5; border-radius: 9px; background: #f0f4f2; }
+.ws-ref-tabs button { min-height: 28px; padding: 0 10px; border-radius: 6px; color: #6e7a73; font-size: 11px; }
+.ws-ref-tabs button.active { color: #176f45; background: #fff; box-shadow: 0 1px 3px rgba(25,43,33,.07); font-weight: 600; }
+.ws-ref-tabs button span { margin-left: 4px; font-size: 9px; opacity: .7; }
+.ws-ref-head input {
+  flex: 1; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--ws-line-strong); border-radius: 8px; outline: none; font-size: 12px;
+}
+.ws-ref-head input:focus { border-color: #6fb18c; box-shadow: 0 0 0 3px rgba(31,157,98,.12); }
+.ws-ref-close { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; color: #78847d; }
+.ws-ref-close:hover { background: var(--ws-soft); }
+.ws-ref-close .ui-icon { width: 15px; height: 15px; }
+.ws-ref-list { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 12px; }
+.ws-ref-item {
+  display: grid; grid-template-columns: 18px minmax(0,1fr); gap: 9px; align-items: center;
+  padding: 9px 10px; border: 1px solid var(--ws-line); border-radius: 10px; margin-bottom: 8px; background: #fff; cursor: pointer;
+}
+.ws-ref-item:hover { border-color: #afd2bf; background: #fbfdfc; }
+.ws-ref-item.picked { border-color: #79c49e; background: #f3fbf7; }
+.ws-ref-check {
+  display: grid; place-items: center; width: 17px; height: 17px; border: 1px solid #cbd5cf; border-radius: 5px;
+  color: #fff; background: #fff; font-size: 10px;
+}
+.ws-ref-item.picked .ws-ref-check { border-color: #20a965; background: #20a965; }
+.ws-ref-item strong { display: block; color: #3d4942; font-size: 12px; }
+.ws-ref-item small { display: block; margin-top: 2px; color: #8a938e; font-size: 10px; }
+.ws-ref-empty { padding: 32px 0; text-align: center; color: #9aa39e; font-size: 12px; }
+.ws-ref-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; border-top: 1px solid var(--ws-line); }
+.ws-ref-foot > span { color: #8a938e; font-size: 11px; }
+
 .ws-context-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--ws-line); background: #f7f9f8; }
 .ws-context-panel > header { display: flex; align-items: center; justify-content: space-between; height: 58px; padding: 0 17px; border-bottom: 1px solid var(--ws-line); background: #fff; }
 .ws-context-panel > header strong { display: block; color: #2a332e; font-size: 12px; }

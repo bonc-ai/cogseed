@@ -97,6 +97,7 @@
       desc: (c.agent_ids && c.agent_ids.length) ? `${c.agent_ids.length} 个智能体` : '',
       results: c.processing ? '进行中' : '',
       time: _relTime(c.updated_at || c.last_active_at || c.created_at),
+      refCount: Array.isArray(c.task_references) ? c.task_references.length : 0,
     };
   }
 
@@ -231,6 +232,16 @@
   let _createTemplate = null;      // 弹窗套用的模板 template_id
   let _abilityKind = 'role';       // 能力弹窗当前 tab：role | task | skill
   let _abilityOpen = false;
+  // ── 任务引用选择器（@ 引用空间产物与资产）──────────────────────────────────
+  let _refPickerOpen = false;      // 选择器浮层开关
+  let _refPickerKind = 'artifact'; // 产物 | 资产
+  let _refPickerSpaceId = null;    // 数据源空间
+  let _refPickerTargetCid = null;  // null=新建任务待提交；cid=给已有任务补引用
+  let _refSearch = '';
+  let _artifactCatalog = [];       // 空间产物（spaces.artifacts.list）
+  let _assetCatalog = [];          // 空间资产（spaces.assets.list）
+  let _pendingRefs = [];           // 待提交/编辑的引用（TaskReference 形状）
+  let _refBeforeRefs = [];         // 打开选择器时的已存引用（用于对比增删）
 
   function _space() {
     return _spaces.find((s) => s.space_id === _detailSpaceId) || _spaces[0] || null;
@@ -430,12 +441,20 @@
 
   /** 任务 tab 底部内联「开新任务」输入条（对齐高保真原型：在当前空间中开启一项新任务）。 */
   function _newTaskComposerHtml() {
+    const chips = _pendingRefs.length
+      ? `<div class="ws-ref-chips">${_pendingRefs.map((r, i) => `
+          <span class="ws-ref-chip ${r.kind}"><em>${r.kind === 'asset' ? '资产' : '产物'}</em>${escapeHtml(r.name)}<button data-ws="pending-ref-remove" data-index="${i}" aria-label="移除引用">×</button></span>`).join('')}
+          <button class="ws-ref-chip-clear" data-ws="pending-ref-clear">清空</button></div>`
+      : '';
     return `
-    <div class="ws-new-task-bar">
-      <button class="ws-new-task-add" data-ws="stub-add" title="${_t('ws.add_content', '添加内容')}" aria-label="${_t('ws.add_content', '添加内容')}">${_icon('plus', 'ui-icon')}</button>
-      <input data-ws="new-task-input" placeholder="${_t('ws.new_task_inline_ph', '在当前空间中开启一项新任务…')}" autocomplete="off" spellcheck="false" maxlength="500" />
-      <button class="ws-new-task-mention" data-ws="stub-mention" title="${_t('ws.mention_assets', '引用空间产物与资产')}">@ ${_t('ws.mention_assets', '引用空间产物与资产')}</button>
-      <button class="ws-new-task-send" data-ws="new-task-send" title="${_t('ws.start_task', '开始新任务')}" aria-label="${_t('ws.start_task', '开始新任务')}">${_icon('send', 'ui-icon')}</button>
+    <div class="ws-new-task-composer">
+      ${chips}
+      <div class="ws-new-task-bar">
+        <button class="ws-new-task-add" data-ws="stub-add" title="${_t('ws.add_content', '添加内容')}" aria-label="${_t('ws.add_content', '添加内容')}">${_icon('plus', 'ui-icon')}</button>
+        <input data-ws="new-task-input" placeholder="${_t('ws.new_task_inline_ph', '在当前空间中开启一项新任务…')}" autocomplete="off" spellcheck="false" maxlength="500" />
+        <button class="ws-new-task-mention" data-ws="ref-picker-open" title="${_t('ws.mention_assets', '引用空间产物与资产')}">@ ${_t('ws.mention_assets', '引用空间产物与资产')}</button>
+        <button class="ws-new-task-send" data-ws="new-task-send" title="${_t('ws.start_task', '开始新任务')}" aria-label="${_t('ws.start_task', '开始新任务')}">${_icon('send', 'ui-icon')}</button>
+      </div>
     </div>`;
   }
 
@@ -448,8 +467,9 @@
         <button class="ws-session-row" data-ws="open-task" data-session="${escapeHtml(s.id)}">
           <span class="ws-session-icon">${_icon('message-square', 'ui-icon')}</span>
           <div><strong>${escapeHtml(s.title)}</strong><small>${escapeHtml(s.desc)}</small></div>
-          <em>${escapeHtml(s.results)}</em>
+          ${s.refCount ? `<em class="ws-row-ref-badge">引用 ${s.refCount}</em>` : '<em></em>'}
           <time>${escapeHtml(s.time)}</time>
+          <span class="ws-row-ref-btn" data-ws="task-ref" data-cid="${escapeHtml(s.id)}" role="button" title="${_t('ws.add_ref', '引用空间产物与资产')}">＋引用</span>
           <b>${_icon('more-horizontal', 'ui-icon')}</b>
         </button>`).join('')}
     </div>`
@@ -468,9 +488,141 @@
     const res = await _invoke('conversations.create', { spaceId, title });
     if (res.error || !res.conversation) { _stub('开新任务失败：' + (res.error || '未知错误')); return; }
     const cid = res.conversation.conversation_id;
+    // 提交任务引用（产物/资产）
+    const refs = _pendingRefs || [];
+    for (const r of refs.slice(0, 20)) {
+      await _invoke('conversations.taskRefs.add', { cid, reference: r });
+    }
+    _pendingRefs = [];
     // 刷新空间任务列表（回来时任务数/最近任务更新）
     _detailLoadedFor = null;
     _loadSpaceDetail(spaceId).then(() => { if (typeof setView === 'function') setView('conversation', cid, { skipLoad: true }); });
+  }
+
+  // ── 任务引用选择器（@ 引用空间产物与资产）──────────────────────────────────
+
+  function _sessionTitleById(cid) {
+    const s = _sessions.find((x) => x.id === cid);
+    return s ? s.title : '';
+  }
+
+  function _sameRefKey(r) {
+    return r && r.kind === 'asset'
+      ? `asset:${r.asset_id || ''}`
+      : `artifact:${r.source_cid || ''}:${r.file_name || ''}`;
+  }
+
+  function _sameRef(a, b) { return !!a && !!b && _sameRefKey(a) === _sameRefKey(b); }
+
+  async function _openRefPicker(spaceId, targetCid) {
+    _refPickerSpaceId = spaceId;
+    _refPickerTargetCid = targetCid || null;
+    _refSearch = '';
+    if (!targetCid) _pendingRefs = _pendingRefs || []; // 新建任务：保留已选
+    const [artRes, assetRes] = await Promise.all([
+      _invoke('spaces.artifacts.list', { spaceId }),
+      _invoke('spaces.assets.list', { spaceId }),
+    ]);
+    _artifactCatalog = Array.isArray(artRes.artifacts) ? artRes.artifacts : [];
+    _assetCatalog = Array.isArray(assetRes.bindings) ? assetRes.bindings : [];
+    if (targetCid) {
+      const tRes = await _invoke('conversations.taskRefs.list', { cid: targetCid });
+      _pendingRefs = Array.isArray(tRes.references) ? tRes.references : [];
+      _refBeforeRefs = _pendingRefs.slice();
+    }
+    _refPickerOpen = true;
+    _reRender();
+  }
+
+  function _toggleRef(kind, id) {
+    if (kind === 'asset') {
+      const idx = _pendingRefs.findIndex((r) => r.kind === 'asset' && r.asset_id === id);
+      if (idx >= 0) { _pendingRefs.splice(idx, 1); }
+      else {
+        const it = _assetCatalog.find((a) => a.asset_id === id);
+        if (it) _pendingRefs.push({ kind: 'asset', name: it.title || id, asset_id: it.asset_id, asset_type: it.asset_type || '' });
+      }
+    } else {
+      const idx = _pendingRefs.findIndex((r) => r.kind === 'artifact' && r.file_name === id);
+      if (idx >= 0) { _pendingRefs.splice(idx, 1); }
+      else {
+        const it = _artifactCatalog.find((a) => a.name === id);
+        if (it) _pendingRefs.push({
+          kind: 'artifact', name: it.name, source_cid: it.sourceSessionId,
+          source_title: _sessionTitleById(it.sourceSessionId) || it.sourceSessionId,
+          file_name: it.name,
+          source_ts: it.time ? new Date(it.time * 1000).toISOString() : '',
+        });
+      }
+    }
+    _reRender();
+  }
+
+  async function _saveRefPicker() {
+    const cid = _refPickerTargetCid;
+    if (cid) {
+      const before = _refBeforeRefs || [];
+      const now = _pendingRefs || [];
+      for (let i = before.length - 1; i >= 0; i--) {
+        if (!now.some((r) => _sameRef(r, before[i]))) {
+          await _invoke('conversations.taskRefs.remove', { cid, index: i });
+        }
+      }
+      for (const r of now) {
+        if (!before.some((b) => _sameRef(b, r))) {
+          await _invoke('conversations.taskRefs.add', { cid, reference: r });
+        }
+      }
+    }
+    _refPickerOpen = false;
+    _reRender();
+    if (cid && _detailSpaceId) {
+      _detailLoadedFor = null;
+      _loadSpaceDetail(_detailSpaceId).then(() => _reRender());
+    }
+  }
+
+  function _renderRefPicker() {
+    if (!_refPickerOpen) return '';
+    const kind = _refPickerKind;
+    const arts = _artifactCatalog || [];
+    const assets = _assetCatalog || [];
+    const q = _refSearch.toLowerCase();
+    const items = kind === 'asset' ? assets : arts;
+    const filtered = q ? items.filter((it) => String(kind === 'asset' ? it.title : it.name).toLowerCase().includes(q)) : items;
+    const isPicked = (it) => kind === 'asset'
+      ? _pendingRefs.some((r) => r.kind === 'asset' && r.asset_id === it.asset_id)
+      : _pendingRefs.some((r) => r.kind === 'artifact' && r.file_name === it.name);
+    return `
+    <div class="ws-ref-scrim" data-ws="close-ref">
+      <section class="ws-ref-picker" data-ws="noop">
+        <header class="ws-ref-head">
+          <div class="ws-ref-tabs">
+            <button class="${kind === 'artifact' ? 'active' : ''}" data-ws="ref-tab" data-kind="artifact">${_t('ws.ref_artifacts', '产物')}<span>${arts.length}</span></button>
+            <button class="${kind === 'asset' ? 'active' : ''}" data-ws="ref-tab" data-kind="asset">${_t('ws.ref_assets', '资产')}<span>${assets.length}</span></button>
+          </div>
+          <input data-ws="ref-search" value="${escapeHtml(_refSearch)}" placeholder="${_t('ws.ref_search', '搜索…')}" autocomplete="off" spellcheck="false" />
+          <button class="ws-ref-close" data-ws="close-ref" aria-label="关闭">${_icon('x', 'ui-icon')}</button>
+        </header>
+        <div class="ws-ref-list">
+          ${filtered.length ? filtered.map((it) => {
+            const name = kind === 'asset' ? it.title : it.name;
+            const sub = kind === 'asset' ? (it.asset_type || '空间资产') : `${it.type === 'artifact' ? '确认产物' : '附件'} · ${it.ext}`;
+            const picked = isPicked(it);
+            const id = kind === 'asset' ? it.asset_id : it.name;
+            return `
+            <div class="ws-ref-item ${picked ? 'picked' : ''}" data-ws="toggle-ref" data-kind="${kind}" data-id="${escapeHtml(id)}">
+              <span class="ws-ref-check">${picked ? '✓' : ''}</span>
+              <div><strong>${escapeHtml(name)}</strong><small>${escapeHtml(sub)}</small></div>
+            </div>`;
+          }).join('') : `<div class="ws-ref-empty">${_t('ws.ref_empty', '没有可引用的内容。')}</div>`}
+        </div>
+        <footer class="ws-ref-foot">
+          <span>${_t('ws.ref_selected', '已选')} ${_pendingRefs.length} ${_t('ws.ref_items', '项')}</span>
+          <button class="ws-primary" data-ws="save-ref">${_t('ws.save_ref', '保存引用')}</button>
+        </footer>
+      </section>
+    </div>`;
   }
 
   function _renderArtifactsPane() {
@@ -767,6 +919,26 @@
     if (nti) nti.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _startNewTask(_detailSpaceId); }
     });
+
+    // ── 任务引用选择器（@ 引用空间产物与资产）──
+    root.querySelectorAll('[data-ws="ref-picker-open"]').forEach((el) => el.addEventListener('click', () => _openRefPicker(_detailSpaceId, null)));
+    root.querySelectorAll('[data-ws="task-ref"]').forEach((el) => el.addEventListener('click', (e) => {
+      e.stopPropagation(); // 行本身是 open-task 按钮，避免触发打开会话
+      _openRefPicker(_detailSpaceId, el.dataset.cid);
+    }));
+    root.querySelectorAll('[data-ws="ref-tab"]').forEach((el) => el.addEventListener('click', () => { _refPickerKind = el.dataset.kind; _reRender(); }));
+    root.querySelectorAll('[data-ws="close-ref"]').forEach((el) => el.addEventListener('click', () => { _refPickerOpen = false; _reRender(); }));
+    root.querySelectorAll('[data-ws="toggle-ref"]').forEach((el) => el.addEventListener('click', () => _toggleRef(el.dataset.kind, el.dataset.id)));
+    root.querySelectorAll('[data-ws="save-ref"]').forEach((el) => el.addEventListener('click', () => _saveRefPicker()));
+    const refSearch = root.querySelector('[data-ws="ref-search"]');
+    if (refSearch) refSearch.addEventListener('input', () => { _refSearch = refSearch.value; _reRender(); });
+    root.querySelectorAll('[data-ws="pending-ref-remove"]').forEach((el) => el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const i = Number(el.dataset.index);
+      if (Number.isInteger(i) && i >= 0 && i < _pendingRefs.length) _pendingRefs.splice(i, 1);
+      _reRender();
+    }));
+    root.querySelectorAll('[data-ws="pending-ref-clear"]').forEach((el) => el.addEventListener('click', (e) => { e.stopPropagation(); _pendingRefs = []; _reRender(); }));
     root.querySelectorAll('[data-ws="artifact-filter"]').forEach((el) => el.addEventListener('click', () => { _artifactFilter = el.dataset.type; _reRender(); }));
     root.querySelectorAll('[data-ws="asset-filter"]').forEach((el) => el.addEventListener('click', () => { _assetFilter = el.dataset.type; _reRender(); }));
     root.querySelectorAll('[data-ws="unbind-asset"]').forEach((el) => el.addEventListener('click', async () => {
@@ -887,6 +1059,7 @@
     let html = _render();
     if (_createOpen) html += _renderCreateModal();
     if (_abilityOpen) html += _renderAbilityModal();
+    if (_refPickerOpen) html += _renderRefPicker();
     root.innerHTML = html;
     _bind(root);
   }
