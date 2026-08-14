@@ -102,17 +102,19 @@ async function buildPromptContextForProjections(
   cid: string,
   projections: ProjectionForPrompt[],
 ): Promise<RecallTurnPromptContext> {
-  let resolvedConversationKind: string | undefined;
-  async function conversationKind(): Promise<string | undefined> {
-    if (resolvedConversationKind !== undefined) return resolvedConversationKind || undefined;
+  let resolvedConversationKind: { kind?: string } | null | undefined;
+  async function conversationKind(): Promise<{ kind?: string; known: boolean }> {
+    if (resolvedConversationKind !== undefined) {
+      return { ...(resolvedConversationKind || {}), known: true };
+    }
     try {
       const { getConversation } = await import('../chats');
       const conversation = await getConversation(userId, cid, null);
-      resolvedConversationKind = conversation?.kind || null;
+      resolvedConversationKind = conversation?.kind ? { kind: conversation.kind } : null;
     } catch {
       resolvedConversationKind = null;
     }
-    return resolvedConversationKind || undefined;
+    return { ...(resolvedConversationKind || {}), known: true };
   }
   const records: Array<Record<string, unknown>> = [];
   const citations: RecallPromptCitation[] = [];
@@ -146,11 +148,15 @@ async function buildPromptContextForProjections(
         const evidenceRefs = snapshot?.evidenceRefs ?? asset?.evidenceRefs ?? [];
         if (status !== 'active' || !(await hasEnabledSources(userId, evidenceRefs))) continue;
         const scopePolicy = snapshot?.scopePolicy ?? asset?.scopePolicy;
-        if (scopePolicy && !(await isAssetScopeAllowed(scopePolicy, {
-          purpose: projection.purpose,
-          workspaceId: projection.workspaceId,
-          conversationKind: await conversationKind(),
-        }))) continue;
+        if (scopePolicy) {
+          const kind = await conversationKind();
+          if (!(await isAssetScopeAllowed(scopePolicy, {
+            purpose: projection.purpose,
+            workspaceId: projection.workspaceId,
+            conversationKind: kind.kind,
+            conversationKindKnown: kind.known && Boolean(kind.kind),
+          }))) continue;
+        }
         const title = snapshot?.title ?? asset?.title ?? '';
         const type = snapshot?.type ?? asset?.type ?? 'rule';
         const maturity = snapshot?.maturity ?? asset?.maturity ?? 'draft';

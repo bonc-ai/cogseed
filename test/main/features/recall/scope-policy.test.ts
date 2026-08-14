@@ -27,6 +27,24 @@ describe('recall scope policy gate', () => {
     expect(isAssetScopeAllowed(policy, {})).toBe(false);
   });
 
+  it('matches scope tokens as whole words only (shared with asset.scope)', () => {
+    const policy = { purposeTags: ['review'] };
+    expect(isAssetScopeAllowed(policy, { purpose: 'Use frozen OAuth review knowledge' })).toBe(true);
+    expect(isAssetScopeAllowed(policy, { purpose: 'reviewing the callback flow' })).toBe(false);
+    expect(isAssetScopeAllowed(policy, { purpose: 'Research plan' })).toBe(false);
+    expect(isAssetScopeAllowed(policy, { purpose: '做 review 检查' })).toBe(true);
+  });
+
+  it('passes conversationKinds restrictions when the conversation kind is unknown', () => {
+    const policy = { conversationKinds: ['normal'] };
+    expect(isAssetScopeAllowed(policy, { conversationKind: 'normal', conversationKindKnown: true })).toBe(true);
+    expect(isAssetScopeAllowed(policy, { conversationKind: 'gconv', conversationKindKnown: true })).toBe(false);
+    // M7: an explicitly unresolved kind is fail-open instead of silently
+    // excluding; an unspecified flag keeps the previous fail-closed default.
+    expect(isAssetScopeAllowed(policy, {})).toBe(false);
+    expect(isAssetScopeAllowed(policy, { conversationKindKnown: false })).toBe(true);
+  });
+
   it('combines dimensions with AND semantics', () => {
     const policy = { purposeTags: ['review'], workspaceIds: ['workspace-a'], conversationKinds: ['normal'] };
     expect(isAssetScopeAllowed(policy, {

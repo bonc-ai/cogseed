@@ -7,7 +7,7 @@ import { createLogger } from '../../logger';
 import { listAbilityAssets, readAbilityAsset } from './asset-service';
 import { recallJsonRecordPath } from './paths';
 import { listWorkspaceAssetReferences } from './workspace-refs';
-import { isAssetScopeAllowed } from './scope-policy';
+import { isAssetScopeAllowed, matchesScopeToken } from './scope-policy';
 import { readRecallJsonRecord, updateRecallJsonRecord, writeRecallJsonRecord } from './store';
 import type { RecallJsonRecord } from './types';
 import type { RecallAbilityAssetRecord } from './candidate-service';
@@ -207,10 +207,10 @@ function validateProjectionStatus(value: unknown): ContextProjectionStatus {
 
 function assetMatchText(asset: RecallAbilityAssetRecord): string {
   const ontology = (asset.ontologyRefs || []).map((ref) => [ref.groupId, ref.section, ref.field].filter(Boolean).join(' / ')).filter(Boolean).join('\n');
+  // type/scope are shared dimension labels, not content: including them
+  // inflated baseline similarity for every asset of the same type (M2).
   return [
     asset.title,
-    asset.type,
-    asset.scope,
     asset.statement.slice(0, 1_200),
     ontology,
   ].filter(Boolean).join('\n');
@@ -261,17 +261,7 @@ async function rankAssetsBySemanticMatch(
 function scopeIncludes(scope: string, text: string): boolean {
   const terms = scope.split(',').map((term) => term.trim()).filter(Boolean);
   if (terms.includes('*')) return true;
-  const haystack = text.toLocaleLowerCase();
-  return terms.some((term) => {
-    const needle = term.toLocaleLowerCase();
-    if (needle.length < 2) return false;
-    // ASCII terms must appear as a whole word so 'search' never matches
-    // inside 'research'; CJK/other terms use plain containment.
-    if (/^[a-z0-9]+$/.test(needle)) {
-      return new RegExp(`(^|[^a-z0-9])${needle}([^a-z0-9]|$)`).test(haystack);
-    }
-    return haystack.includes(needle);
-  });
+  return terms.some((term) => matchesScopeToken(text, term));
 }
 
 function automaticProjectionId(taskRunId: string, workspaceId?: string): string {
@@ -348,6 +338,12 @@ function asProjection(value: RecallJsonRecord): ContextProjectionRecord {
   return { ...value, status: validateProjectionStatus(value.status), sourceRefs: normalizeCognitionSourceRefs(value.sourceRefs), ...(assetMatches ? { assetMatches } : {}), ...(assetVersions ? { assetVersions } : {}) } as ContextProjectionRecord;
 }
 
+/** Default semantic relevance threshold (M3): calibration target — match
+ *  scores are recorded in usage-records for distribution analysis. */
+export const DEFAULT_MIN_MATCH_SCORE = 0.35;
+/** Default Top-N selection size. */
+export const DEFAULT_SELECTION_LIMIT = 8;
+
 interface SemanticSelection {
   assets: RecallAbilityAssetRecord[];
   assetMatches?: RecallAssetMatch[];
@@ -368,10 +364,10 @@ async function applySemanticSelection(
 ): Promise<SemanticSelection> {
   const minScore = Number.isFinite(options.minScore)
     ? Math.max(0, Math.min(1, Number(options.minScore)))
-    : 0.35;
+    : DEFAULT_MIN_MATCH_SCORE;
   const limit = Number.isFinite(options.limit)
     ? Math.max(1, Math.min(12, Math.floor(Number(options.limit))))
-    : 8;
+    : DEFAULT_SELECTION_LIMIT;
   if (!queryText || !queryText.trim() || !assets.length) return { assets: assets.slice(0, limit), degraded: false };
 
   let ranked: Awaited<ReturnType<typeof rankAssetsBySemanticMatch>>;
@@ -407,11 +403,35 @@ async function applySemanticSelection(
       match.matchMethod !== 'semantic' || orderedAssets.some((asset) => asset.id === match.assetId)
     ));
   }
-  if (orderedAssets.length > limit) {
-    for (const asset of orderedAssets.slice(limit)) {
-      omittedRefs.push({ assetId: asset.id, reason: 'low_relevance' });
+  // M5 type diversity: guarantee one highest-scoring asset per type before
+  // filling the remaining slots by score, so Top-N is not dominated by a
+  // single asset type. Order stays score-descending within the same type.
+  const diverse: RecallAbilityAssetRecord[] = [];
+  const seenTypes = new Set<string>();
+  for (const asset of orderedAssets) {
+    if (seenTypes.has(asset.type)) continue;
+    seenTypes.add(asset.type);
+    diverse.push(asset);
+    if (diverse.length >= limit) break;
+  }
+  if (diverse.length < limit) {
+    const picked = new Set(diverse.map((asset) => asset.id));
+    for (const asset of orderedAssets) {
+      if (picked.has(asset.id)) continue;
+      diverse.push(asset);
+      if (diverse.length >= limit) break;
     }
-    orderedAssets = orderedAssets.slice(0, limit);
+  }
+  if (diverse.length < orderedAssets.length) {
+    const picked = new Set(diverse.map((asset) => asset.id));
+    for (const asset of orderedAssets) {
+      if (!picked.has(asset.id)) omittedRefs.push({ assetId: asset.id, reason: 'low_relevance' });
+    }
+  }
+  orderedAssets = diverse;
+  if (assetMatches) {
+    const pickedIds = new Set(orderedAssets.map((asset) => asset.id));
+    assetMatches = assetMatches.filter((match) => pickedIds.has(match.assetId));
   }
   return { assets: orderedAssets, ...(assetMatches ? { assetMatches } : {}), degraded };
 }

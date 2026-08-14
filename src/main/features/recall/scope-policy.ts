@@ -51,31 +51,47 @@ export interface AssetScopeContext {
   workspaceId?: string;
   /** Conversation kind (matched against conversationKinds). */
   conversationKind?: string;
+  /** True when the conversation kind was actually resolved; unknown kinds
+   *  pass a conversationKinds restriction instead of failing closed. */
+  conversationKindKnown?: boolean;
 }
 
-function matchesToken(value: string | undefined, token: string): boolean {
+/** Single whole-word token matcher used by BOTH asset.scope terms and
+ *  scopePolicy.purposeTags (M1): an ASCII token must appear as a whole word
+ *  ('review' matches "review knowledge" but not "reviewing" or "research");
+ *  CJK/other tokens use plain containment. */
+export function matchesScopeToken(value: string | undefined, token: string): boolean {
   if (!value) return false;
   const haystack = value.toLocaleLowerCase();
   const needle = token.toLocaleLowerCase();
+  if (needle.length < 2) return false;
+  if (/^[a-z0-9]+$/.test(needle)) {
+    return new RegExp(`(^|[^a-z0-9])${needle}([^a-z0-9]|$)`).test(haystack);
+  }
   return haystack.includes(needle);
 }
 
-/** Structured scope-policy gate. Unknown context dimensions are treated as
- *  "not allowed" when the policy restricts them (fail-closed): an asset that
- *  restricts workspaces is excluded from a projection without a workspace. */
+/** Structured scope-policy gate. Unknown workspace dimensions are treated as
+ *  "not allowed" when the policy restricts them (fail-closed); an unknown
+ *  conversation kind passes the conversationKinds restriction (fail-open,
+ *  M7) so non-standard conversations are not silently excluded. */
 export function isAssetScopeAllowed(
   policy: RecallAbilityAssetScopePolicy | undefined,
   context: AssetScopeContext,
 ): boolean {
   if (!policy) return true;
-  if (policy.purposeTags?.length && !policy.purposeTags.some((tag) => matchesToken(context.purpose, tag))) {
+  if (policy.purposeTags?.length && !policy.purposeTags.some((tag) => matchesScopeToken(context.purpose, tag))) {
     return false;
   }
   const hasWorkspaceRestriction = Boolean(policy.workspaceIds?.length || policy.projectIds?.length);
   if (hasWorkspaceRestriction && !context.workspaceId) return false;
   if (policy.workspaceIds?.length && !policy.workspaceIds.includes(context.workspaceId!)) return false;
   if (policy.projectIds?.length && !policy.projectIds.includes(context.workspaceId!)) return false;
-  if (policy.conversationKinds?.length && !policy.conversationKinds.includes(context.conversationKind || '')) return false;
+  if (
+    policy.conversationKinds?.length
+    && (context.conversationKindKnown ?? true)
+    && !policy.conversationKinds.includes(context.conversationKind || '')
+  ) return false;
   return true;
 }
 

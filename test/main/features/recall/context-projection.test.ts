@@ -483,6 +483,70 @@ describe('Recall retrieval quality regression', () => {
   });
 });
 
+describe('Recall retrieval refinement', () => {
+  async function promoteAsset(judgment: string, sourceId: string, scope: string, type: 'rule' | 'template' | 'skill_method' | 'personal' = 'rule') {
+    const { candidates } = await modules();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment,
+      summary: judgment.slice(0, 60),
+      suggestedType: type,
+      suggestedScope: scope,
+      sourceRefs: [{ kind: 'execution', id: sourceId }],
+    });
+    return candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  }
+
+  it('does not let shared type/scope labels inflate semantic similarity', async () => {
+    const { projection } = await modules();
+    const ruleAsset = (await promoteAsset('OAuth callback state validation.', 'exec-match-1', 'review', 'rule')).asset;
+    const methodAsset = (await promoteAsset('OAuth token refresh flow.', 'exec-match-2', 'review', 'skill_method')).asset;
+    let embedTexts: string[] = [];
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-match',
+      purpose: 'review',
+      taskText: 'OAuth callback state validation',
+    }, {
+      embedTexts: async (texts: string[]) => {
+        embedTexts = texts;
+        return texts.map((text) => (text.toLowerCase().includes('oauth') ? [1, 0] : [0, 1]));
+      },
+    });
+
+    // Match text must not contain the type/scope dimension labels.
+    for (const text of embedTexts.slice(1)) {
+      expect(text.toLowerCase()).not.toMatch(/\brule\b/);
+      expect(text.toLowerCase()).not.toMatch(/\breview\b/);
+    }
+    expect(preview.assetIds).toEqual(expect.arrayContaining([ruleAsset.id, methodAsset.id]));
+    expect(preview.assetIds).toHaveLength(2);
+  });
+
+  it('guarantees one asset per type before filling Top-N by score', async () => {
+    const { projection } = await modules();
+    const ruleA = (await promoteAsset('OAuth callback rule one.', 'exec-div-1', 'review', 'rule')).asset;
+    const ruleB = (await promoteAsset('OAuth callback rule two.', 'exec-div-2', 'review', 'rule')).asset;
+    const method = (await promoteAsset('OAuth callback method.', 'exec-div-3', 'review', 'skill_method')).asset;
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-div',
+      purpose: 'review',
+      taskText: 'OAuth callback rule one',
+    }, {
+      embedTexts: async (texts: string[]) => texts.map((text) => {
+        const lower = text.toLowerCase();
+        if (lower.includes('rule one')) return [1, 0];
+        if (lower.includes('rule two')) return [0.9, 1];
+        if (lower.includes('method')) return [0.8, 1];
+        return [0, 1];
+      }),
+      limit: 2,
+    });
+
+    // Diversity: the top-2 rule assets do not crowd out the single method asset.
+    expect(preview.assetIds).toEqual([ruleA.id, method.id]);
+  });
+});
+
 describe('committed projection knowledge boundary', () => {
   it('freezes asset ids and exact versions when a preview is confirmed', async () => {
     const { asset } = await createAsset();
