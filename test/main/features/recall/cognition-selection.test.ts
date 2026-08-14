@@ -261,3 +261,97 @@ describe('端到端：从出生快照算出这次的选择', () => {
     expect(result!.selected[0].content).not.toHaveProperty('candidateId');
   });
 });
+
+describe('跨作用域确认', () => {
+  it('确认前跨域是 confirm，确认后抬到 prompt——不抬到 auto', async () => {
+    const { applyCrossScopeConfirmation } = await import('../../../../src/main/features/recall/asset-semantics');
+    expect(applyCrossScopeConfirmation('confirm', false)).toBe('confirm');
+    expect(applyCrossScopeConfirmation('confirm', true)).toBe('prompt');
+    // 只动 confirm 这一档，其余原样——确认解决的是「允不允许跨出去」，
+    // 不代表跨出去以后可以不提示。
+    expect(applyCrossScopeConfirmation('prompt', true)).toBe('prompt');
+    expect(applyCrossScopeConfirmation('auto', true)).toBe('auto');
+    expect(applyCrossScopeConfirmation('never', true)).toBe('never');
+  });
+
+  it('跨作用域一律不比同作用域松，确认之后依然成立', async () => {
+    const { applyCrossScopeConfirmation, resolveDefaultUsePolicy } = await import('../../../../src/main/features/recall/asset-semantics');
+    const rank = { never: 0, confirm: 1, prompt: 2, auto: 3 } as const;
+    for (const maturity of ['bud', 'transfer_validated', 'effectiveness_validated', 'stable'] as const) {
+      const same = resolveDefaultUsePolicy({ status: 'active', maturity }, true);
+      const crossConfirmed = applyCrossScopeConfirmation(
+        resolveDefaultUsePolicy({ status: 'active', maturity }, false),
+        true,
+      );
+      expect(rank[crossConfirmed], `${maturity} 确认后跨域比同域松了`).toBeLessThanOrEqual(rank[same]);
+    }
+  });
+
+  it('确认过的资产跨作用域时真的会被选中并标出来由', async () => {
+    const { selectInheritedCognition } = await mod();
+    const { recordAgentInheritance } = await import('../../../../src/main/features/agent_inheritance');
+    const a = asset({ id: 'aa-cross', maturity: 'bud', crossScopeConfirmedAt: '2026-08-13T00:00:00.000Z' });
+    await recordAgentInheritance(UID, { agentId: 'ag-cross', rolePrompt: '角色', assets: [a], createdAt: AT });
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    vi.spyOn(assets, 'readAbilityAsset').mockResolvedValue(a);
+
+    const cross = await selectInheritedCognition(UID, 'ag-cross', { scope: '别的作用域' });
+    expect(cross!.selected[0].usePolicy).toBe('prompt');
+    expect(cross!.selected[0].sameScope).toBe(false);
+    expect(cross!.selected[0].crossScopeConfirmed).toBe(true);
+
+    // 同作用域时不标 crossScopeConfirmed——那面旗只解释「为什么能跨出去」。
+    const same = await selectInheritedCognition(UID, 'ag-cross', { scope: 'delivery' });
+    expect(same!.selected[0].crossScopeConfirmed).toBeUndefined();
+  });
+
+  it('没确认过的跨域资产仍然是 confirm，不偷偷放行', async () => {
+    const { selectInheritedCognition } = await mod();
+    const { recordAgentInheritance } = await import('../../../../src/main/features/agent_inheritance');
+    const a = asset({ id: 'aa-nocross', maturity: 'bud' });
+    await recordAgentInheritance(UID, { agentId: 'ag-nocross', rolePrompt: '角色', assets: [a], createdAt: AT });
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    vi.spyOn(assets, 'readAbilityAsset').mockResolvedValue(a);
+
+    const cross = await selectInheritedCognition(UID, 'ag-nocross', { scope: '别的作用域' });
+    expect(cross!.selected[0].usePolicy).toBe('confirm');
+    expect(cross!.selected[0].crossScopeConfirmed).toBeUndefined();
+  });
+});
+
+describe('跨作用域授权的落盘与撤回', () => {
+  it('确认、撤回都留审计，且撤回后立刻回到需要确认', async () => {
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const c = await candidates.saveRecallCandidate(UID, {
+      judgment: '一条会被授权跨域的判断。', suggestedType: 'rule', suggestedScope: 'delivery',
+      sourceRefs: [{ kind: 'execution', id: 'exec-cross' }],
+    });
+    const { asset: created } = await candidates.promoteRecallCandidate(UID, c.id, { actor: 'user' });
+    expect(created.crossScopeConfirmedAt).toBeUndefined();
+
+    const confirmed = await assets.setAbilityAssetCrossScopeConfirmation(UID, created.id, true, { actor: 'user', reason: '我确认' });
+    expect(confirmed.crossScopeConfirmedAt).toBeTruthy();
+
+    const withdrawn = await assets.setAbilityAssetCrossScopeConfirmation(UID, created.id, false, { actor: 'user', reason: '收回' });
+    expect(withdrawn.crossScopeConfirmedAt).toBeUndefined();
+
+    const audit = await assets.listAbilityAssetAudit(UID, created.id);
+    const actions = audit.map((row) => row.action);
+    expect(actions).toContain('cross_scope_confirmed');
+    expect(actions).toContain('cross_scope_withdrawn');
+  });
+
+  it('彻底清除时一并清掉授权——不给墓碑留一张跨域许可', async () => {
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const c = await candidates.saveRecallCandidate(UID, {
+      judgment: '会被彻底清除的判断。', suggestedType: 'rule', suggestedScope: 'delivery',
+      sourceRefs: [{ kind: 'execution', id: 'exec-purge-cross' }],
+    });
+    const { asset: created } = await candidates.promoteRecallCandidate(UID, c.id, { actor: 'user' });
+    await assets.setAbilityAssetCrossScopeConfirmation(UID, created.id, true, { actor: 'user', reason: '先授权' });
+    const purged = await assets.purgeAbilityAsset(UID, created.id, { actor: 'user', reason: '彻底清除' });
+    expect(purged.crossScopeConfirmedAt).toBeUndefined();
+  });
+});

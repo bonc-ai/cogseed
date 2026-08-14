@@ -91,6 +91,26 @@ export function readAbilityAssetSemantics(value: Record<string, unknown>): Abili
  *  跨作用域一律比同作用域更严——规范里每一行都是如此，没有例外。 */
 export type AbilityAssetUsePolicy = 'never' | 'confirm' | 'prompt' | 'auto';
 
+/** 用户确认过跨作用域使用之后，这一档变成什么。
+ *
+ *  **只把 confirm 抬到 prompt，不抬到 auto。** 确认解决的是「允不允许跨出去」，
+ *  不代表「跨出去以后可以不提示」。抬到 auto 会破坏矩阵里唯一没有例外的那条
+ *  规律——跨作用域一律不比同作用域松：
+ *
+ *    同域 bud                = prompt  ┐ 确认后的跨域 bud 与它齐平，不更松
+ *    跨域 bud（已确认）       = prompt  ┘
+ *    同域 transfer_validated = auto    ┐ 确认后的跨域仍然更严
+ *    跨域（已确认）           = prompt  ┘
+ *
+ *  没确认过就原样返回：confirm 档继续等着，不偷偷放行。 */
+export function applyCrossScopeConfirmation(
+  policy: AbilityAssetUsePolicy,
+  confirmed: boolean,
+): AbilityAssetUsePolicy {
+  if (!confirmed || policy !== 'confirm') return policy;
+  return 'prompt';
+}
+
 /** 供 `resolveDefaultUsePolicy` 取用的最小资产形状，避免这个纯函数
  *  反向依赖 candidate-service 的完整记录类型。 */
 export interface AbilityAssetSemanticsHost {

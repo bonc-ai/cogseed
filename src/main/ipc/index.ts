@@ -2307,6 +2307,19 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'recall.proofs.effectiveness.feedback': async ({ transferProofId, feedback, note, evidenceRefs } = {}, ctx) => { if (!safeId(transferProofId) || !['positive', 'neutral', 'negative', 'invalid', 'rework'].includes(feedback) || (note !== undefined && typeof note !== 'string') || (evidenceRefs !== undefined && !Array.isArray(evidenceRefs))) throw new Error('invalid effectiveness feedback'); return { ok: true, proof: await effectivenessFeedback.recordEffectivenessFeedback(ctx.userId, { transferProofId, feedback, ...(note !== undefined ? { note } : {}), ...(evidenceRefs !== undefined ? { evidenceRefs } : {}) }) }; },
   'recall.proofs.effectiveness.feedbackForTask': async ({ taskRunId, feedback, note, evidenceRefs } = {}, ctx) => { if (!safeId(taskRunId) || !['positive', 'neutral', 'negative', 'invalid', 'rework'].includes(feedback) || (note !== undefined && typeof note !== 'string') || (evidenceRefs !== undefined && !Array.isArray(evidenceRefs))) throw new Error('invalid effectiveness feedback'); return { ok: true, ...(await effectivenessFeedback.recordTaskEffectivenessFeedback(ctx.userId, { taskRunId, feedback, ...(note !== undefined ? { note } : {}), ...(evidenceRefs !== undefined ? { evidenceRefs } : {}) })) }; },
+  // 跨作用域使用的确认与撤回。规范 10.2 要求「确认」，这里是确认真正发生的地方
+  // ——没有它，confirm 档只会永远停在等待里。撤回后立刻回到需要确认的状态。
+  'recall.assets.crossScope': async ({ assetId, confirmed, reason } = {}, ctx) => {
+    if (!safeId(assetId) || typeof confirmed !== 'boolean') throw new Error('invalid cross-scope confirmation');
+    return {
+      ok: true,
+      asset: await recallAssets.setAbilityAssetCrossScopeConfirmation(ctx.userId, assetId, confirmed, {
+        actor: 'user',
+        reason: typeof reason === 'string' && reason.trim() ? reason : 'cross-scope use decision',
+      }),
+    };
+  },
+
   // 一条认知的履历：从哪来、进过哪些智能体、真用过几次、哪几次没带上。
   // 这是履历不是进度条——渲染层不得把 `not_yet` 画成红色或警告。
   'recall.cognitionChain.read': async ({ assetId } = {}, ctx) => {

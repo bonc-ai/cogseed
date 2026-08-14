@@ -24,6 +24,7 @@ import type { CapabilityPackAssetRef } from '../p3394/capability-pack';
 import type { RecallAbilityAssetRecord } from './candidate-service';
 import type { RecallAbilityAssetScopePolicy } from './scope-policy';
 import {
+  applyCrossScopeConfirmation,
   resolveDefaultUsePolicy,
   type AbilityAssetSensitivity,
   type AbilityAssetUsePolicy,
@@ -138,10 +139,13 @@ export interface SelectedCognition {
   applicableWhen?: string[];
   forbiddenWhen?: string[];
   sensitivity?: AbilityAssetSensitivity;
-  /** 规范 10.2 算出来的默认使用档，渲染侧据此决定是直接带入还是需要确认。 */
+  /** 规范 10.2 算出来的默认使用档，渲染侧据此决定是直接带入还是需要确认。
+   *  已确认跨作用域的资产在这里已经从 confirm 抬到 prompt。 */
   usePolicy: Exclude<AbilityAssetUsePolicy, 'never'>;
   /** 是否与资产同作用域。跨域一律比同域更严，渲染侧要能说明白。 */
   sameScope: boolean;
+  /** 这次之所以能跨作用域带入，是因为用户确认过。渲染侧要能说清来由。 */
+  crossScopeConfirmed?: boolean;
 }
 
 export interface WithheldCognition {
@@ -236,9 +240,14 @@ function toSelected(
   context: CognitionSelectionContext,
 ): SelectedCognition {
   const sameScope = context.scope === undefined || context.scope === asset.scope;
-  const usePolicy = resolveDefaultUsePolicy(asset, sameScope);
+  const crossScopeConfirmed = !sameScope && Boolean(asset.crossScopeConfirmedAt);
+  const usePolicy = applyCrossScopeConfirmation(
+    resolveDefaultUsePolicy(asset, sameScope),
+    crossScopeConfirmed,
+  );
   if (usePolicy === 'never') throw new Error('cannot select a cognition whose use policy is never');
   return {
+    ...(crossScopeConfirmed ? { crossScopeConfirmed: true } : {}),
     assetRef: ref,
     resolvedVersion: asset.version,
     content: {

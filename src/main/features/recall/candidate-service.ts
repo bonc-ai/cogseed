@@ -114,6 +114,11 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   forbiddenWhen?: string[];
   /** 缺失=没分过级，不等于 L0。 */
   sensitivity?: AbilityAssetSensitivity;
+  /** 用户显式确认过「这条可以跨作用域使用」的时间。
+   *
+   *  规范 10.2 里跨作用域是 confirm 档——既然规范要求「确认」，系统就得有地方
+   *  记下确认发生过，否则那一档永远停在等待里。缺失=没确认过，不是拒绝过。 */
+  crossScopeConfirmedAt?: string;
   scope: string;
   scopePolicy?: RecallAbilityAssetScopePolicy;
   recommendedAction?: 'pause' | 'rework';

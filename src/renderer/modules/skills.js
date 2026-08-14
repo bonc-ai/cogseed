@@ -1300,6 +1300,19 @@ function _renderRecallAssetChain(assetId) {
       }</div>`
       : '';
 
+    // 跨作用域授权：用户在履历上看到「等你确认」，确认的按钮就该在这里。
+    // 没有这个入口，confirm 档等于承诺了一个不存在的动作。
+    const asset = _skillsCognitionState.assets?.find((item) => item.id === assetId);
+    const crossScopeConfirmed = !!asset?.crossScopeConfirmedAt;
+    const waitingConfirmation = withheld.some((entry) => entry.reason === 'needs_confirmation');
+    const crossScopeHtml = (crossScopeConfirmed || waitingConfirmation)
+      ? `<div class="reference-strip cognition-chain-cross-scope"><div><strong>${escapeHtml(_cognitionText('cognition.cross_scope', '跨作用域使用'))}</strong><p>${escapeHtml(crossScopeConfirmed
+        ? _cognitionText('cognition.cross_scope_confirmed', '你已允许这条认知在其他作用域使用。')
+        : _cognitionText('cognition.cross_scope_waiting', '这条认知被带到了它作用域之外，需要你确认才会带入。'))}</p></div><button type="button" class="btn btn-sm${crossScopeConfirmed ? '' : ' btn-primary'}" data-recall-cross-scope="${escapeHtml(assetId)}" data-recall-cross-scope-next="${crossScopeConfirmed ? '0' : '1'}">${escapeHtml(crossScopeConfirmed
+        ? _cognitionText('cognition.cross_scope_withdraw', '撤回许可')
+        : _cognitionText('cognition.cross_scope_confirm', '允许跨作用域使用'))}</button></div>`
+      : '';
+
     const usageHtml = usage.length
       ? `<div class="reference-strip"><strong>${escapeHtml(_cognitionText('cognition.chain_usage', '使用记录'))}</strong><p>${escapeHtml(
         _cognitionText('cognition.chain_usage_count', '共 {n} 条').replace('{n}', String(usage.length)),
@@ -1308,7 +1321,7 @@ function _renderRecallAssetChain(assetId) {
 
     body = `<div class="cognition-chain-body">
       <div class="cognition-chain-segments">${segmentsHtml}</div>
-      ${carriedHtml}${usageHtml}${withheldHtml}
+      ${crossScopeHtml}${carriedHtml}${usageHtml}${withheldHtml}
     </div>`;
   }
 

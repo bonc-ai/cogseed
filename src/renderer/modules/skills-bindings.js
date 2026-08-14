@@ -337,6 +337,32 @@ function _initSkillsCognitionBindings() {
       return;
     }
 
+    const crossScope = event.target.closest('[data-recall-cross-scope]');
+    if (crossScope) {
+      const assetId = crossScope.dataset.recallCrossScope;
+      const confirmed = crossScope.dataset.recallCrossScopeNext === '1';
+      if (!assetId || crossScope.dataset.busy === '1') return;
+      crossScope.dataset.busy = '1'; crossScope.disabled = true;
+      try {
+        const result = await window.cogseed.invoke('recall.assets.crossScope', { assetId, confirmed });
+        if (!result?.ok) throw new Error(result?.error || 'cross-scope confirmation failed');
+        // 资产列表里那份要跟着更新，否则面板重画时按钮又弹回旧状态。
+        const list = _skillsCognitionState.assets || [];
+        const index = list.findIndex((item) => item.id === assetId);
+        if (index >= 0) list[index] = result.asset;
+        renderSkillsCognitionAssets();
+        uiToast(_cognitionText(
+          confirmed ? 'cognition.cross_scope_confirmed_done' : 'cognition.cross_scope_withdrawn_done',
+          confirmed ? '已允许跨作用域使用' : '已撤回跨作用域许可',
+        ), { variant: 'success' });
+      } catch (error) {
+        if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
+      } finally {
+        crossScope.dataset.busy = '0'; crossScope.disabled = false;
+      }
+      return;
+    }
+
     if (event.target.closest('[data-recall-asset-chain-close]')) {
       _skillsCognitionState.visibleAssetChainId = '';
       renderSkillsCognitionAssets();

@@ -39,7 +39,8 @@ export interface AbilityAssetAuditRecord extends RecallJsonRecord {
   action: 'created' | 'updated' | 'paused' | 'resumed' | 'revoked'
     | 'archived' | 'deleted' | 'purged' | 'restored' | 'rolled_back'
     | 'maturity_downgraded' | 'pause_recommended' | 'rework_recommended'
-    | 'recommendation_cleared';
+    | 'recommendation_cleared'
+    | 'cross_scope_confirmed' | 'cross_scope_withdrawn';
   at: string;
   actor?: AbilityAssetActor;
   note?: string;
@@ -465,6 +466,52 @@ export function resumeAbilityAsset(userId: string, assetId: string, input: Abili
   return setStatus(userId, assetId, 'active', input);
 }
 
+/**
+ * 记下用户确认「这条可以跨作用域使用」，或撤回这个确认。
+ *
+ * 规范 10.2 把跨作用域定为 confirm 档。既然规范要求「确认」，系统就得有地方
+ * 记下确认发生过——否则那一档只会永远停在等待里：选择层算出 confirm、渲染侧
+ * 不注入、回执记 needs_confirmation，然后没有任何人能让它继续走下去。
+ *
+ * 做成资产上的持久授权而不是每轮弹窗：它和 pause/revoke 是同一类东西——用户
+ * 的一次决定，可审计、可撤回、在详情页看得见。每轮打断反而会让用户养成闭眼
+ * 点确认的习惯，那时候这道闸就名存实亡了。
+ *
+ * 撤销后立刻回到 confirm 档：授权是可收回的，不是一次性放行。
+ */
+export async function setAbilityAssetCrossScopeConfirmation(
+  userId: string,
+  assetId: string,
+  confirmed: boolean,
+  input: AbilityAssetUserActionInput,
+): Promise<RecallAbilityAssetRecord> {
+  const action = requireUserAction(input);
+  let changed = false;
+  const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
+    if (!raw) throw new Error('recall ability asset not found');
+    const current = asAsset(raw);
+    assertNotPurged(current);
+    if (current.status === 'revoked') throw new Error('revoked ability asset cannot be changed');
+    if (Boolean(current.crossScopeConfirmedAt) === confirmed) return current;
+    changed = true;
+    const next: RecallAbilityAssetRecord = {
+      ...current,
+      ...(confirmed ? { crossScopeConfirmedAt: new Date().toISOString() } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    if (!confirmed) delete next.crossScopeConfirmedAt;
+    return next;
+  });
+  const asset = asAsset(updated);
+  if (changed) {
+    await appendAudit(userId, asset.id, confirmed ? 'cross_scope_confirmed' : 'cross_scope_withdrawn', {
+      note: action.reason,
+      actor: action.actor,
+    });
+  }
+  return asset;
+}
+
 export async function recommendAbilityAssetAction(userId: string, assetId: string, input: RecommendAbilityAssetActionInput): Promise<RecallAbilityAssetRecord> {
   if (input.action !== 'pause' && input.action !== 'rework') throw new Error('invalid ability asset recommendation');
   const reason = bounded(input.reason, 'recommendation reason', 1_000);
@@ -529,6 +576,9 @@ export async function purgeAbilityAsset(userId: string, assetId: string, input: 
     applicableWhen: undefined,
     forbiddenWhen: undefined,
     sensitivity: undefined,
+    // 跨域授权是对一条已经不存在的内容的授权，留着没有意义，也不该让墓碑
+    // 继续携带一个「可以跨作用域使用」的许可。
+    crossScopeConfirmedAt: undefined,
     scopePolicy: undefined,
     recommendedAction: undefined,
     recommendationReason: undefined,

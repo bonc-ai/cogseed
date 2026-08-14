@@ -127,3 +127,48 @@ describe('使用与证明的接线', () => {
     expect(rule).not.toMatch(/danger|warning|--red|#ef4444|#dc2626/i);
   });
 });
+
+describe('跨作用域确认入口', () => {
+  const KEYS = [
+    'cognition.cross_scope',
+    'cognition.cross_scope_waiting',
+    'cognition.cross_scope_confirmed',
+    'cognition.cross_scope_confirm',
+    'cognition.cross_scope_withdraw',
+    'cognition.cross_scope_confirmed_done',
+    'cognition.cross_scope_withdrawn_done',
+  ];
+
+  it('四种语言都有文案', () => {
+    for (const locale of LOCALES) {
+      const data = loadLocale(locale);
+      for (const key of KEYS) expect(data[key], `${locale} 缺 ${key}`).toBeTruthy();
+    }
+  });
+
+  it('「等你确认」与「已允许」是两句不同的话', () => {
+    for (const locale of LOCALES) {
+      const data = loadLocale(locale);
+      expect(data['cognition.cross_scope_waiting']).not.toBe(data['cognition.cross_scope_confirmed']);
+    }
+  });
+
+  it('确认按钮就在履历里——用户在哪看到「等你确认」就在哪能点', () => {
+    const src = readSrc('modules/skills.js');
+    expect(src).toContain('data-recall-cross-scope=');
+    expect(src).toContain("entry.reason === 'needs_confirmation'");
+  });
+
+  it('授权可撤回，不是一次性放行', () => {
+    const src = readSrc('modules/skills.js');
+    expect(src).toContain('cognition.cross_scope_withdraw');
+    const bindings = readSrc('modules/skills-bindings.js');
+    expect(bindings).toContain("recall.assets.crossScope");
+    expect(bindings).toContain('recallCrossScopeNext');
+  });
+
+  it('确认后就地更新资产列表，按钮不会弹回旧状态', () => {
+    const bindings = readSrc('modules/skills-bindings.js');
+    expect(bindings).toMatch(/list\[index\] = result\.asset/);
+  });
+});
