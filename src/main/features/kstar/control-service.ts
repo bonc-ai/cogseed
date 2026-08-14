@@ -331,7 +331,72 @@ async function upsertState(
     };
   }
 
-  if (taskMutation.operation === 'create') throw new ControlInputError('an open KStar Task already exists');
+  if (taskMutation.operation === 'create') {
+    // B2: new-task switch while a task is open. Automatically close the old
+    // task/requirement into the closure pipeline, precipitate requirement-level
+    // ability assets (best-effort), then open the fresh task/requirement.
+    const title = taskMutation.title || requirementMutation.goalText;
+    const goalText = requirementMutation.goalText || taskMutation.title;
+    if (!title || !goalText) throw new ControlInputError('Task title and Requirement goal are required');
+
+    if (requirement && requirement.status === 'open') {
+      try {
+        const { precipitateRequirementLevel } = await import('./task-level-precipitation');
+        await precipitateRequirementLevel(context.userId, requirement);
+      } catch (error) {
+        log.warn('requirement-level precipitation on task switch degraded', {
+          userId: context.userId,
+          requirementId: requirement.id,
+          error: (error as Error).message,
+        });
+      }
+      await replaceKstarRequirement(context.userId, {
+        ...requirement,
+        status: 'waiting_review',
+        updatedAt: now,
+      });
+    }
+    if (task.status === 'open' || task.status === 'closing') {
+      await replaceKstarTask(context.userId, {
+        ...task,
+        status: 'closing',
+        closeReason: 'topic_switch',
+        updatedAt: now,
+      });
+    }
+
+    const nextTask = createKstarTaskRecord(context.userId, {
+      conversationId: context.conversationId,
+      title,
+      ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
+    });
+    const nextRequirement = createKstarRequirementRecord(context.userId, {
+      taskId: nextTask.id,
+      conversationId: context.conversationId,
+      userMessageIds: context.sourceMessageId ? [context.sourceMessageId] : [],
+      title: goalText.slice(0, 200),
+      goalText,
+      ...(requirementMutation.expectedResult ? { rHat: requirementMutation.expectedResult } : {}),
+    });
+    nextTask.requirementIds = [nextRequirement.id];
+    nextTask.currentRequirementId = nextRequirement.id;
+    await replaceKstarRequirement(context.userId, nextRequirement);
+    await replaceKstarTask(context.userId, nextTask);
+    state = {
+      ...state,
+      currentTaskId: nextTask.id,
+      currentRequirementId: nextRequirement.id,
+      requirementJustClosed: requirement ? requirement.id : undefined,
+      taskComplete: false,
+      pendingTaskStart: undefined,
+      updatedAt: now,
+    };
+    await replaceConversationTaskState(context.userId, state);
+    return {
+      result: { ok: true, status: 'state_committed', taskId: nextTask.id, requirementId: nextRequirement.id },
+      state,
+    };
+  }
   assertOwnedId(taskMutation.taskId, task.id, 'task.taskId');
   if (!requirement) {
     if (requirementMutation.operation !== 'create') throw new ControlInputError('current Requirement is missing');
@@ -513,6 +578,18 @@ async function finish(
     updatedAt: now,
   };
   await replaceConversationTaskState(context.userId, state);
+  // B7: task closure precipitates requirement-level ability assets
+  // (evidence-gated, best-effort, never blocks the closure result).
+  try {
+    const { precipitateRequirementLevel } = await import('./task-level-precipitation');
+    await precipitateRequirementLevel(context.userId, requirement);
+  } catch (error) {
+    log.warn('requirement-level precipitation on finish degraded', {
+      userId: context.userId,
+      requirementId: requirement.id,
+      error: (error as Error).message,
+    });
+  }
   return {
     result: { ok: true, status: 'finished', taskId: task.id, requirementId: requirement.id },
     state,
@@ -557,6 +634,20 @@ async function abandon(
     updatedAt: now,
   };
   await replaceConversationTaskState(context.userId, state);
+  // B7: abandoned requirements still precipitate evidence-gated lessons
+  // (best-effort; failures must never surface from abandon).
+  if (requirement) {
+    try {
+      const { precipitateRequirementLevel } = await import('./task-level-precipitation');
+      await precipitateRequirementLevel(context.userId, requirement);
+    } catch (error) {
+      log.warn('requirement-level precipitation on abandon degraded', {
+        userId: context.userId,
+        requirementId: requirement.id,
+        error: (error as Error).message,
+      });
+    }
+  }
   return {
     result: {
       ok: true,

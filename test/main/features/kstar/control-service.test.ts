@@ -320,4 +320,138 @@ describe('KStar Commander control service', () => {
       allowedToolNames: new Set(['read_file', 'kstar_control']),
     }));
   });
+
+  it('switches to a new Task on task:create, closes the old one, and precipitates requirement-level assets (B2)', async () => {
+    const seeded = await seedOpenControlState();
+    // Seed one episode + learning review so precipitation has evidence.
+    const types = await import('../../../../src/main/features/kstar/types');
+    const episode: types.KstarEpisodeRecord = {
+      schemaVersion: 1,
+      ownerId: 'user-a',
+      id: 'kse-b2-a',
+      sessionId: 'sess-b2-a',
+      sessionKind: 'cogseed_runtime',
+      taskRunId: 'run-b2-a',
+      k: { memoryRefs: [], contextRefs: [], abilityAssetRefs: [] },
+      s: { workspaceId: 'workspace-a' },
+      t: { userGoal: 'Complete the existing requirement', constraints: [] },
+      a: {
+        toolCalls: [
+          { name: 'read_file', status: 'ok', argumentsSummary: '{}' },
+          { name: 'write_file', status: 'ok', argumentsSummary: '{}' },
+        ],
+        agentActions: [],
+      },
+      r: { status: 'completed', producedFiles: [], finalText: 'done' },
+      evidenceRefs: [{ kind: 'context', id: 'ctx-b2-a' }],
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:00:00.000Z',
+    };
+    const episodeStore = await import('../../../../src/main/features/kstar/episode-store');
+    await episodeStore.writeKstarEpisode('user-a', episode);
+    const reviews = await import('../../../../src/main/features/kstar/review-service');
+    const initial = reviews.createInitialKstarReview(episode);
+    await reviews.saveKstarReviewRecord('user-a', {
+      ...initial,
+      expectedResult: 'The task is done.',
+      actualResult: 'The task is done.',
+      deltaR: 0.2,
+      deltaA: 0.1,
+      outcome: 'better_than_expected',
+      attribution: 'execution_gap',
+      reason: 'The workflow is reusable.',
+      confidence: 0.9,
+    });
+    // Bind the episode to the open requirement.
+    await seeded.store.replaceKstarRequirement('user-a', {
+      ...seeded.requirement,
+      episodeIds: ['kse-b2-a'],
+    });
+
+    const service = await import('../../../../src/main/features/kstar/control-service');
+    const result = await service.executeKstarControl(hostContext(), {
+      operation: 'upsert_state',
+      idempotencyKey: 'turn-b2:switch',
+      task: { operation: 'create', title: 'New task after switch' },
+      requirement: { operation: 'create', goalText: 'Fresh goal after the switch' },
+    });
+
+    expect(result).toMatchObject({ ok: true, status: 'state_committed' });
+    // Old task closed with topic_switch, old requirement parked for review.
+    await expect(seeded.store.readKstarTask('user-a', seeded.task.id))
+      .resolves.toMatchObject({ status: 'closing', closeReason: 'topic_switch' });
+    await expect(seeded.store.readKstarRequirement('user-a', seeded.requirement.id))
+      .resolves.toMatchObject({ status: 'waiting_review' });
+    // New task/requirement became current.
+    const state = await seeded.store.readConversationTaskState('user-a', 'cid-a');
+    expect(state?.currentTaskId).not.toBe(seeded.task.id);
+    const newTask = await seeded.store.readKstarTask('user-a', state!.currentTaskId!);
+    expect(newTask).toMatchObject({ title: 'New task after switch', status: 'open' });
+    const newRequirement = await seeded.store.readKstarRequirement('user-a', state!.currentRequirementId!);
+    expect(newRequirement).toMatchObject({ goalText: 'Fresh goal after the switch' });
+    // Requirement-level precipitation ran: one skill_method asset + candidate.
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const abilityAssets = await assets.listAbilityAssets('user-a');
+    const precipitated = abilityAssets.filter((asset) => asset.candidateId?.startsWith('direct-'));
+    expect(precipitated).toHaveLength(1);
+    expect(precipitated[0]).toMatchObject({ type: 'skill_method', status: 'active' });
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    expect(await candidates.listRecallCandidates('user-a')).toHaveLength(1);
+    expect(await recordCounts()).toEqual({ tasks: 2, requirements: 2 });
+  });
+
+  it('finish precipitates requirement-level assets from episode evidence (B7)', async () => {
+    const seeded = await seedOpenControlState();
+    const types = await import('../../../../src/main/features/kstar/types');
+    const episode: types.KstarEpisodeRecord = {
+      schemaVersion: 1,
+      ownerId: 'user-a',
+      id: 'kse-b7-a',
+      sessionId: 'sess-b7-a',
+      sessionKind: 'cogseed_runtime',
+      taskRunId: 'run-b7-a',
+      k: { memoryRefs: [], contextRefs: [], abilityAssetRefs: [] },
+      s: { workspaceId: 'workspace-a' },
+      t: { userGoal: 'Complete the existing requirement', constraints: [] },
+      a: {
+        toolCalls: [
+          { name: 'read_file', status: 'ok', argumentsSummary: '{}' },
+          { name: 'write_file', status: 'ok', argumentsSummary: '{}' },
+        ],
+        agentActions: [],
+      },
+      r: { status: 'completed', producedFiles: [], finalText: 'done' },
+      evidenceRefs: [{ kind: 'context', id: 'ctx-b7-a' }],
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:00:00.000Z',
+    };
+    const episodeStore = await import('../../../../src/main/features/kstar/episode-store');
+    await episodeStore.writeKstarEpisode('user-a', episode);
+    const reviews = await import('../../../../src/main/features/kstar/review-service');
+    const initial = reviews.createInitialKstarReview(episode);
+    await reviews.saveKstarReviewRecord('user-a', {
+      ...initial,
+      deltaR: 0.2,
+      deltaA: 0.1,
+      outcome: 'better_than_expected',
+      attribution: 'execution_gap',
+      reason: 'The workflow is reusable.',
+      confidence: 0.9,
+    });
+    await seeded.store.replaceKstarRequirement('user-a', {
+      ...seeded.requirement,
+      episodeIds: ['kse-b7-a'],
+    });
+
+    const service = await import('../../../../src/main/features/kstar/control-service');
+    await service.executeKstarControl(hostContext(), {
+      operation: 'finish',
+      idempotencyKey: 'turn-b7:finish',
+      result: { finalStatus: 'completed', finalText: 'done.', producedFiles: [], acceptanceEvidence: [] },
+    });
+
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const abilityAssets = await assets.listAbilityAssets('user-a');
+    expect(abilityAssets.filter((asset) => asset.candidateId?.startsWith('direct-'))).toHaveLength(1);
+  });
 });

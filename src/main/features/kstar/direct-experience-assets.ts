@@ -35,12 +35,30 @@ export interface PrecipitateDirectExperienceResult {
   createdAssetIds: string[];
 }
 
+/** Lightweight source reference for requirement-level precipitation: the
+ *  requirement id stands in for an episode id, so evidence keys stay stable. */
+export interface DirectExperienceSource {
+  id: string;
+  workspaceId?: string;
+}
+
 export async function precipitateDirectExperienceAssets(
   userId: string,
   episode: KstarEpisodeRecord,
   proposals: KstarCandidateProposal[],
 ): Promise<PrecipitateDirectExperienceResult> {
-  if (!safeId(userId) || !safeId(episode.id)) throw new Error('invalid direct experience reference');
+  return precipitateDirectExperienceFromSource(userId, {
+    id: episode.id,
+    workspaceId: episode.s?.workspaceId,
+  }, proposals);
+}
+
+export async function precipitateDirectExperienceFromSource(
+  userId: string,
+  source: DirectExperienceSource,
+  proposals: KstarCandidateProposal[],
+): Promise<PrecipitateDirectExperienceResult> {
+  if (!safeId(userId) || !safeId(source.id)) throw new Error('invalid direct experience reference');
   const createdAssetIds: string[] = [];
   for (const proposal of proposals.slice(0, 3)) {
     try {
@@ -72,10 +90,10 @@ export async function precipitateDirectExperienceAssets(
         version: '1',
         createdAt: now,
         updatedAt: now,
-      }, `kstar_direct_experience:${episode.id}`);
+      }, `kstar_direct_experience:${source.id}`);
       createdAssetIds.push(asset.id);
 
-      const workspaceId = episode.s?.workspaceId;
+      const workspaceId = source.workspaceId;
       if (workspaceId && safeId(workspaceId)) {
         try {
           await addWorkspaceAssetReference(userId, {
@@ -96,7 +114,7 @@ export async function precipitateDirectExperienceAssets(
       // review line or the closure itself.
       log.warn('direct experience precipitation degraded', {
         userId,
-        episodeId: episode.id,
+        sourceId: source.id,
         error: (error as Error).message,
       });
     }

@@ -1,14 +1,14 @@
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
 import type { KstarCandidateProposal, KstarEpisodeRecord, KstarReviewRecord } from './types';
 
-function scopeForTask(task: string): string {
+export function scopeForTask(task: string): string {
   if (/report|summary|document|file/i.test(task)) return 'report';
   if (/code|function|bug|test/i.test(task)) return 'code';
   if (/product|decision|architecture/i.test(task)) return 'product';
   return 'general';
 }
 
-function gapType(review: KstarReviewRecord): KstarCandidateProposal['suggestedType'] | null {
+export function gapType(review: KstarReviewRecord): KstarCandidateProposal['suggestedType'] | null {
   if (review.attribution === 'knowledge_gap') return 'personal';
   if (review.attribution === 'rule_gap') return 'rule';
   if (review.attribution === 'template_gap') return 'template';
@@ -16,7 +16,7 @@ function gapType(review: KstarReviewRecord): KstarCandidateProposal['suggestedTy
   return null;
 }
 
-function hasLearningSignal(review: KstarReviewRecord): boolean {
+export function hasLearningSignal(review: KstarReviewRecord): boolean {
   return review.deltaR !== 'unknown'
     || review.deltaA !== 'unknown'
     || review.outcome === 'better_than_expected'
@@ -24,7 +24,7 @@ function hasLearningSignal(review: KstarReviewRecord): boolean {
     || (review.confidence >= 0.7 && review.attribution !== 'unclear' && !!review.reason.trim());
 }
 
-function learningSignal(review: KstarReviewRecord): KstarCandidateProposal['learningSignal'] {
+export function learningSignal(review: KstarReviewRecord): KstarCandidateProposal['learningSignal'] {
   return {
     ...(review.expectedResult ? { expectedResult: review.expectedResult } : {}),
     ...(review.actualResult ? { actualResult: review.actualResult } : {}),
