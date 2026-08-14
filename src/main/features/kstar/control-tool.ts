@@ -27,7 +27,14 @@ const INPUT_SCHEMA: Record<string, unknown> = {
     operation: {
       type: 'string',
       enum: ['upsert_state', 'request_projection', 'commit_forecast', 'finish', 'abandon'],
-      description: 'Explicit KStar lifecycle operation.',
+      description: [
+        'Explicit KStar lifecycle operation.',
+        'upsert_state: create/open a tracked task — requires task.operation ("create" for a new task) and requirement.operation + goalText.',
+        'request_projection: preload assets for the current requirement — requires projection { requirementId, purpose, taskText }.',
+        'commit_forecast: after the projection is confirmed, submit 2-4 candidates — requires forecast { taskRunId, requirementId, projectionId, candidates, taskText }.',
+        'finish: close the loop with terminal evidence — requires result { finalStatus, finalText, producedFiles, acceptanceEvidence }.',
+        'abandon: drop the task — requires result { closeReason }.',
+      ].join(' '),
     },
     idempotencyKey: {
       type: 'string',

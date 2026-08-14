@@ -218,6 +218,20 @@ When `kstar` is `required`, include `kstar_reason` and `kstar_expectation` with 
 - After approval, submit two to four candidates with `commit_forecast`; the host validates, rescoring and persists them.
 - `expectedTools` may be `[]` when no tool is required. Never invent a placeholder tool.
 
+### kstar_control call shapes (exact fields)
+
+Each call must include the operation plus its exact payload fields; omitting a required payload (e.g. `task`/`requirement` for upsert_state, `projection` for request_projection) is rejected.
+
+- Create/open a tracked task (start of a formal task):
+  `{"operation":"upsert_state","idempotencyKey":"<stable unique key>","task":{"operation":"create","title":"<short title>"},"requirement":{"operation":"create","goalText":"<the task text>"}}`
+- Request the preloaded asset projection (after the task exists):
+  `{"operation":"request_projection","idempotencyKey":"<key>","projection":{"requirementId":"<current requirement id>","purpose":"<review|code|report|general>","taskText":"<task text>"}}`
+- Commit the forecast (after the projection is confirmed): `commit_forecast` with `taskRunId`, `requirementId`, `projectionId`, `candidates` (2–4 objects each with `id`, `plan`, `expectedTools`, `expectedActors`, `predictedResult`), plus `taskText`.
+- Close the loop: `{"operation":"finish","idempotencyKey":"<key>","result":{"finalStatus":"completed","finalText":"<summary>","producedFiles":[...],"acceptanceEvidence":[...]}}`
+- Abandon: `{"operation":"abandon","idempotencyKey":"<key>","result":{"closeReason":"<reason>"}}`
+
+Every call needs a fresh unique `idempotencyKey` (a stable key per intended transition; the host replays the same key + same input without duplicating state).
+
 ## Runtime injection
 
 ### OS
