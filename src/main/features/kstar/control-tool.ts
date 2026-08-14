@@ -1,0 +1,142 @@
+import type { AgentTool } from '#core-agent';
+import type { ChatResolvedRuntime } from '../../model/client';
+import { executeKstarControl } from './control-service';
+import type { KstarControlHostContext, KstarControlResult } from './control-types';
+
+export interface CreateKstarControlToolOptions {
+  userId: string;
+  conversationId: string;
+  sourceMessageId?: string;
+  workspaceId?: string;
+  resolvedRuntime: () => ChatResolvedRuntime | null;
+  postProjectionCard: (projectionId: string) => Promise<void>;
+  executeControl?: (
+    context: KstarControlHostContext,
+    rawInput: unknown,
+  ) => Promise<KstarControlResult>;
+}
+
+export function isCommanderCentricKstarEnabled(): boolean {
+  return process.env.ORKAS_COMMANDER_CENTRIC_KSTAR === '1';
+}
+
+const INPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    operation: {
+      type: 'string',
+      enum: ['upsert_state', 'request_projection', 'commit_forecast', 'finish', 'abandon'],
+      description: 'Explicit KStar lifecycle operation.',
+    },
+    idempotencyKey: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 160,
+      description: 'Stable unique key for this intended state transition.',
+    },
+    task: {
+      type: 'object',
+      properties: {
+        operation: { type: 'string', enum: ['keep', 'create', 'update', 'close'] },
+        taskId: { type: 'string' },
+        title: { type: 'string', maxLength: 200 },
+        closeReason: { type: 'string', maxLength: 1000 },
+      },
+      required: ['operation'],
+      additionalProperties: false,
+    },
+    requirement: {
+      type: 'object',
+      properties: {
+        operation: { type: 'string', enum: ['keep', 'create', 'update', 'close'] },
+        requirementId: { type: 'string' },
+        goalText: { type: 'string', maxLength: 4000 },
+        expectedResult: {
+          type: 'object',
+          properties: {
+            summary: { type: 'string', maxLength: 4000 },
+            acceptanceSignals: { type: 'array', maxItems: 24, items: { type: 'string', maxLength: 1000 } },
+            source: { type: 'string', enum: ['user_message', 'model', 'unknown'] },
+            confidence: { type: 'number', minimum: 0, maximum: 1 },
+          },
+          required: ['summary', 'acceptanceSignals', 'source', 'confidence'],
+          additionalProperties: false,
+        },
+      },
+      required: ['operation'],
+      additionalProperties: false,
+    },
+    projection: {
+      type: 'object',
+      properties: {
+        requirementId: { type: 'string' },
+        purpose: { type: 'string', maxLength: 120 },
+        taskText: { type: 'string', maxLength: 4000 },
+      },
+      required: ['requirementId', 'purpose'],
+      additionalProperties: false,
+    },
+    forecast: {
+      type: 'object',
+      properties: {
+        taskRunId: { type: 'string' },
+        requirementId: { type: 'string' },
+        projectionId: { type: 'string' },
+        candidates: { type: 'array', minItems: 2, maxItems: 4, items: { type: 'object' } },
+        constraints: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 1000 } },
+        acceptanceCriteria: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 1000 } },
+      },
+      required: ['taskRunId', 'requirementId', 'projectionId', 'candidates'],
+      additionalProperties: false,
+    },
+    result: {
+      type: 'object',
+      properties: {
+        finalStatus: { type: 'string', enum: ['completed', 'failed', 'cancelled'] },
+        finalText: { type: 'string', maxLength: 4000 },
+        producedFiles: { type: 'array', maxItems: 50, items: { type: 'string', maxLength: 1000 } },
+        acceptanceEvidence: { type: 'array', maxItems: 24, items: { type: 'string', maxLength: 1000 } },
+        closeReason: { type: 'string', maxLength: 1000 },
+      },
+      additionalProperties: false,
+    },
+  },
+  required: ['operation', 'idempotencyKey'],
+  additionalProperties: false,
+};
+
+export function createKstarControlTool(options: CreateKstarControlToolOptions): AgentTool {
+  return {
+    name: 'kstar_control',
+    description: [
+      'Manage explicit KStar Task, Requirement, Projection, Forecast, finish, or abandon transitions.',
+      'Do not call this tool for greetings, acknowledgements, thanks, or ordinary conversation.',
+      'The host validates ownership, approval, allowed tools, idempotency, scoring, and persistence.',
+    ].join(' '),
+    inputSchema: INPUT_SCHEMA,
+    async execute(input) {
+      const runtime = options.resolvedRuntime();
+      const context: KstarControlHostContext = {
+        userId: options.userId,
+        conversationId: options.conversationId,
+        ...(options.sourceMessageId ? { sourceMessageId: options.sourceMessageId } : {}),
+        ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
+        allowedToolNames: new Set(runtime?.toolNames || []),
+        ...(runtime ? {
+          model: {
+            providerId: runtime.providerId,
+            modelId: runtime.modelId,
+            ...(runtime.profileId ? { profileId: runtime.profileId } : {}),
+            ...(runtime.entryId ? { entryId: runtime.entryId } : {}),
+          },
+        } : {}),
+        postProjectionCard: options.postProjectionCard,
+      };
+      const result = await (options.executeControl || executeKstarControl)(context, input);
+      return {
+        content: JSON.stringify(result),
+        ...(result.ok ? {} : { isError: true as const }),
+      };
+    },
+  };
+}

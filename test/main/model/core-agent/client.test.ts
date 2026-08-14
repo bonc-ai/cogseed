@@ -285,4 +285,50 @@ describe('core-agent client skill sandbox env', () => {
     });
     expect(JSON.stringify(summary)).not.toContain('private provider body');
   });
+
+  it('publishes the initial and winning runtime with the final tool catalog', async () => {
+    const client = await import('../../../../src/main/model/core-agent/client');
+    const onResolvedRuntime = vi.fn();
+    const publisher = client.createResolvedRuntimePublisher(onResolvedRuntime);
+
+    publisher.setToolNames(['read_file', 'kstar_control']);
+    publisher.publish({
+      providerId: 'openai',
+      modelId: 'gpt-primary',
+      profileId: 'profile-primary',
+      entryId: 'entry-primary',
+    });
+    publisher.publish({
+      providerId: 'anthropic',
+      modelId: 'claude-winner',
+      profileId: 'profile-winner',
+      entryId: 'entry-winner',
+    });
+
+    expect(onResolvedRuntime).toHaveBeenNthCalledWith(1, {
+      providerId: 'openai',
+      modelId: 'gpt-primary',
+      profileId: 'profile-primary',
+      entryId: 'entry-primary',
+      toolNames: ['read_file', 'kstar_control'],
+    });
+    expect(onResolvedRuntime).toHaveBeenNthCalledWith(2, {
+      providerId: 'anthropic',
+      modelId: 'claude-winner',
+      profileId: 'profile-winner',
+      entryId: 'entry-winner',
+      toolNames: ['read_file', 'kstar_control'],
+    });
+  });
+
+  it('contains resolved-runtime callback failures', async () => {
+    const client = await import('../../../../src/main/model/core-agent/client');
+    const publisher = client.createResolvedRuntimePublisher(() => {
+      throw new Error('host observer failed');
+    });
+    publisher.setToolNames(['read_file']);
+
+    expect(() => publisher.publish({ providerId: 'openai', modelId: 'gpt-test' })).not.toThrow();
+  });
+
 });

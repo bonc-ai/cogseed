@@ -55,6 +55,14 @@ export interface ChatAttachmentMetadata {
   attachmentTypes: string[];
 }
 
+export interface ChatResolvedRuntime {
+  providerId: string;
+  modelId: string;
+  profileId?: string;
+  entryId?: string;
+  toolNames: string[];
+}
+
 /** Optional host-owned lifecycle sink for shared execution records. The model
  * layer emits only bounded callback data and never imports execution storage. */
 export interface ChatExecutionLifecycle {
@@ -184,6 +192,8 @@ export interface ChatOptions {
     status: 'active' | 'revoked';
     candidateIds: string[];
   }) => void | Promise<void>;
+  /** Host observation of the actual runtime candidate and final tool catalog. */
+  onResolvedRuntime?: (runtime: ChatResolvedRuntime) => void;
   /** Project id of the conversation, when it belongs to one. Threaded
    *  through to local-tools / file-tools / image-gen-tool so workspace
    *  resolution picks up the project-scoped selection. Caller (group_chat

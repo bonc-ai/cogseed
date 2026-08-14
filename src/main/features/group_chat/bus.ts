@@ -21,6 +21,7 @@
  */
 
 import type { AgentTool, HistoryResource } from "#core-agent";
+import type { ChatResolvedRuntime } from "../../model/client";
 
 import { createLogger } from "../../logger";
 import { logErrorRef, logPathRef, maskId } from "../../util/log-redact";
@@ -3699,6 +3700,7 @@ async function runActorTurnBody(
   let systemPrompt: string;
   let extraTools: AgentTool[] = [];
   let skillList: string[] | undefined;
+  let commanderResolvedRuntime: ChatResolvedRuntime | null = null;
   const selectedSkillRefs = _selectedSkillRefs(item.useSelections);
   const forceOpenSkillRefs: string[] = selectedSkillRefs;
   // CLI-backed agents fetch the spec but skip systemPrompt / skillList /
@@ -3746,6 +3748,8 @@ async function runActorTurnBody(
         item.fromActorId,
         item.attachments,
         turnProjectId,
+        item.msgId,
+        () => commanderResolvedRuntime,
         () => segState.flush(),
         () => {
           terminalHandoffCompleted = true;
@@ -4263,6 +4267,11 @@ async function runActorTurnBody(
             candidate_ids: receipt.candidateIds,
           });
         },
+        ...(isCommander ? {
+          onResolvedRuntime: (runtime: ChatResolvedRuntime) => {
+            commanderResolvedRuntime = runtime;
+          },
+        } : {}),
         ...(item.resumeActiveTurn ? { resumeActiveTurn: true } : {}),
         ...(turnProjectId ? { projectId: turnProjectId } : {}),
         onFileWritten,
@@ -5557,7 +5566,13 @@ async function buildCommanderSystemPrompt(
     },
     true,
   );
-  return appendLanguageDirective(main);
+  const { readCommanderKstarContext, renderCommanderKstarContextBlock } = await import('../kstar/commander-context');
+  const kstarContext = await readCommanderKstarContext(uid, cid);
+  return appendLanguageDirective(`${main}
+
+---
+
+${renderCommanderKstarContextBlock(kstarContext)}`);
 }
 
 type SharedPromptTemplate =
@@ -8048,6 +8063,8 @@ async function buildCommanderExtraTools(
   // but persisted because plan steps live across worker turn boundaries.
   currentTurnAttachments?: string[],
   currentProjectId?: string,
+  currentSourceMessageId?: string,
+  resolvedRuntime: () => ChatResolvedRuntime | null = () => null,
   // Called right before a VISIBLE agent dispatch runs (dispatch_to / named
   // run_worker), so the commander's accumulated reasoning so far is flushed as
   // its own bubble and the post-handback synthesis starts a fresh one. Not
@@ -8062,6 +8079,34 @@ async function buildCommanderExtraTools(
   const { getConversationWorkspacePath } = await import("./conv_workspace");
   const coordinatorWorkingDir = await getConversationWorkspacePath(uid, cid);
   const tools: AgentTool[] = [];
+  const kstarTool = await import('../kstar/control-tool');
+  if (kstarTool.isCommanderCentricKstarEnabled()) {
+    tools.push(kstarTool.createKstarControlTool({
+      userId: uid,
+      conversationId: cid,
+      ...(currentSourceActorId === USER_ID && currentSourceMessageId
+        ? { sourceMessageId: currentSourceMessageId }
+        : {}),
+      ...(currentProjectId ? { workspaceId: currentProjectId } : {}),
+      resolvedRuntime,
+      postProjectionCard: async (projectionId) => {
+        const { postProjectionCardMessage } = await import('../recall/projection-message');
+        await postProjectionCardMessage(uid, { cid, projectionId }, {
+          send: async (payload) => {
+            const posted = await enqueue({
+              uid,
+              cid: payload.cid,
+              fromActorId: COMMANDER_ID,
+              forceTo: [USER_ID],
+              text: String(payload.text || ''),
+              recall_projection_card: { projectionId: payload.card.projectionId },
+            });
+            return { id: posted.id };
+          },
+        });
+      },
+    }));
+  }
   tools.push({
     name: "auto_tasks_list",
     description: [

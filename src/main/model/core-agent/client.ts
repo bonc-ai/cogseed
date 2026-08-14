@@ -30,7 +30,7 @@ import { logErrorRef, logErrorSummary, logPathRef, maskId } from '../../util/log
 
 const log = createLogger('model');
 import { genConversationId } from '../../storage';
-import type { ChatOptions, ChatResult, StreamEvent } from '../client';
+import type { ChatOptions, ChatResolvedRuntime, ChatResult, StreamEvent } from '../client';
 
 import { buildRunner, type ToolDefSnapshot } from './runner';
 import { mapCoreAgentEvents } from './event-mapper';
@@ -52,6 +52,28 @@ function startRecording(_input: unknown): NoopRecorder {
     record() {},
     setActiveCandidate() {},
     finish() {},
+  };
+}
+
+export function createResolvedRuntimePublisher(
+  callback?: (runtime: ChatResolvedRuntime) => void,
+): {
+  setToolNames(names: readonly string[]): void;
+  publish(runtime: Omit<ChatResolvedRuntime, 'toolNames'>): void;
+} {
+  let toolNames: string[] = [];
+  return {
+    setToolNames(names) {
+      toolNames = [...new Set(names.filter(Boolean))];
+    },
+    publish(runtime) {
+      if (!callback) return;
+      try {
+        callback({ ...runtime, toolNames: [...toolNames] });
+      } catch (error) {
+        log.warn('resolved runtime callback failed', { error: logErrorSummary(error) });
+      }
+    },
   };
 }
 
@@ -1022,6 +1044,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     sourceMessageFromUser,
     sourceMessageText,
     onTeachingReceipt,
+    onResolvedRuntime,
     projectId,
     onFileWritten,
     onOutputsPublished,
@@ -1223,6 +1246,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
   }
 
   const recorder: ReturnType<typeof startRecording> = startRecording(null);
+  const resolvedRuntimePublisher = createResolvedRuntimePublisher(onResolvedRuntime);
   let agentRunResult: import('#core-agent').AgentRunResult | null = null;
   let finalText = '';
   let errText: string | null = null;
@@ -1303,9 +1327,17 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       // is always live by then.
       onCandidateChosen: (info) => {
         recorder.setActiveCandidate(info);
+        resolvedRuntimePublisher.publish(info);
       },
     });
     const { runner, providerId, modelId, resolvedSystemPrompt, turnEphemeral, profileId, entryId, toolDefs, skillDisplayNameById, agentDisplayNameById } = built;
+    resolvedRuntimePublisher.setToolNames(toolDefs.map((tool) => tool.name));
+    resolvedRuntimePublisher.publish({
+      providerId,
+      modelId,
+      ...(profileId ? { profileId } : {}),
+      ...(entryId ? { entryId } : {}),
+    });
     activeProviderId = providerId || '';
     activeModelId = modelId || '';
     activeToolCount = toolDefs.length;

@@ -989,6 +989,32 @@ describe("group_chat state logging privacy", () => {
 });
 
 describe("group_chat bus integration › G8d in-process dispatch (run_worker / dispatch_to)", () => {
+  it('exposes kstar_control to the formal Commander when the rollout flag is enabled', async () => {
+    const cid = newCid();
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const previous = process.env.ORKAS_COMMANDER_CENTRIC_KSTAR;
+    process.env.ORKAS_COMMANDER_CENTRIC_KSTAR = '1';
+    try {
+      _setScript(state.buildGconvSessionId(cid), [
+        { type: '__capture_tool_definitions__' },
+        { type: 'final', text: 'captured' },
+      ]);
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: 'user',
+        text: 'inspect KStar tools',
+        skipKstarRouting: true,
+      });
+      await waitForQuiescent(TEST_UID, cid, 4000);
+      expect(_recordedToolDefinitions.filter((tool) => tool.name === 'kstar_control')).toHaveLength(1);
+    } finally {
+      if (previous === undefined) delete process.env.ORKAS_COMMANDER_CENTRIC_KSTAR;
+      else process.env.ORKAS_COMMANDER_CENTRIC_KSTAR = previous;
+    }
+  });
+
   // G8d step 3: dispatch tools run their target's turn in-process and hand the
   // result back as the tool result — no staging, no turn-end flush, no re-wake.
   // The commander reads the result and synthesises within the SAME turn. The
