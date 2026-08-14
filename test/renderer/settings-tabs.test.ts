@@ -143,15 +143,15 @@ describe('settings tabs module', () => {
     expect(lazyFeatures).toContain("{ src: './modules/settings.js' }");
   });
 
-  it('keeps the messaging layout card-based with a narrower menu and theme background', () => {
+  it('keeps the messaging layout as a compact two-column workbench', () => {
     const style = fs.readFileSync(path.join(root, 'src/renderer/style.css'), 'utf8');
 
-    expect(style).toMatch(/\.messaging-layout\s*\{[^{}]*grid-template-columns:\s*232px\s+minmax\(0,\s*1fr\);/);
-    expect(style).toMatch(/\.messaging-panel-body\s*\{[^{}]*display:\s*flex;[^{}]*flex-direction:\s*column;[^{}]*gap:\s*8px;/);
-    expect(style).toMatch(/\.messaging-settings-shell\s*\{[^{}]*background:\s*var\(--bg\);/);
-    expect(style).toMatch(/\.messaging-page\s*\{[^{}]*background:\s*var\(--bg\);/);
+    expect(style).toMatch(/\.messaging-layout\s*\{[^{}]*grid-template-columns:\s*210px\s+minmax\(0,\s*1fr\);/);
+    expect(style).toMatch(/\.messaging-panel-body\s*\{[^{}]*display:\s*flex;[^{}]*flex-direction:\s*column;/);
+    expect(style).toMatch(/\.messaging-settings-shell\s*\{[^{}]*background:\s*var\(--surface\);/);
+    expect(style).toMatch(/\.messaging-page\s*\{[^{}]*background:\s*var\(--surface\);/);
     expect(style).toMatch(/\.messaging-page\s*\{[^{}]*overflow:\s*auto;/);
-    expect(style).toMatch(/\.messaging-config-card\s*\{[^{}]*background:\s*var\(--surface\);/);
+    expect(style).toContain('.messaging-settings-section,');
   });
 
   it('cancels an in-flight feishu QR flow when switching channels', () => {
