@@ -130,13 +130,22 @@ export async function traceCognitionChainByAsset(
 
   // 实际使用与「本可用却没带上」：同一批回执，两个方向都要看。
   const allReceipts = await receipts.listReceipts(userId);
-  const uses = allReceipts.filter((r) => r.reusedRefs.some((ref) => refMentionsAsset(ref, assetId)));
+  // rejected 的那次是「本来要带、最后被拒了」，算进「实际带入」会虚报。
+  // prepared 算——它表示这一轮确实把认知带进去了；用得好不好是 proof 的事，不是这里。
+  const uses = allReceipts.filter((r) => (
+    r.status !== 'rejected' && r.reusedRefs.some((ref) => refMentionsAsset(ref, assetId))
+  ));
   const withheld: ChainWithheldEntry[] = [];
   for (const receipt of allReceipts) {
     for (const ref of receipt.omittedRefs) {
       if (!refMentionsAsset(ref, assetId)) continue;
-      // 引用形如 `asset:<id>@v<n>:<reason>`，尾段才是原因。
-      const reason = ref.split(':').slice(3).join(':') || ref.split(':').pop() || 'unknown';
+      // 引用形如 `asset:<id>@v<n>:<reason>`——前两段是固定的 `asset` 与 `<id>@v<n>`，
+      // 之后的全部才是原因（原因本身允许含冒号）。
+      //
+      // 早先这里写的是 `slice(3) || pop()`：这个格式 split 出来只有三段，slice(3)
+      // 恒为空，一直靠 pop() 兜底才碰巧对。而 pop() 在「没带原因」的引用上会把
+      // `<id>@v<n>` 当成原因返回——用户会看到一句 aa-xxxx@v1 冒充的解释。
+      const reason = ref.split(':').slice(2).join(':') || 'unknown';
       withheld.push({ reason, at: receipt.createdAt });
     }
   }

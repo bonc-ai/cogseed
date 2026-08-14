@@ -3797,10 +3797,6 @@ async function runActorTurnBody(
   // Recall is host-owned model context. CLI agents do not consume this system
   // prompt path, so they must not receive or later claim Recall citations.
   let recallCitations: RecallPromptCitation[] = [];
-  // 本轮实际注入了哪些继承认知、哪些没带上——回执（reusedRefs / omittedRefs）
-  // 按这两个记，所以要活到 turn 结束。
-  let inheritedCognition: import("../recall/inherited-cognition-prompt").InheritedCognitionPrompt | null = null;
-  let inheritedWithheld: import("../recall/cognition-selection").WithheldCognition[] = [];
   if (!cliAgent) {
     try {
       const recallContext = await buildRecallTurnPromptContext(uid, {
@@ -3833,12 +3829,26 @@ async function runActorTurnBody(
         });
         // null = 这个 Agent 生成时还没有继承机制，和「继承了空」不是一回事，
         // 但对提示词而言都是没有可注入的内容。
-        if (selection?.selected.length) {
-          inheritedCognition = buildInheritedCognitionPrompt(selection.selected);
-          inheritedWithheld = selection.withheld;
-          if (inheritedCognition.promptBlock) {
-            systemPrompt = `${systemPrompt}\n\n${inheritedCognition.promptBlock}`;
+        if (selection) {
+          const rendered = buildInheritedCognitionPrompt(selection.selected);
+          if (rendered.promptBlock) {
+            systemPrompt = `${systemPrompt}\n\n${rendered.promptBlock}`;
           }
+          // 回执要在注入的同一处落，用同一份事实——分开算两次早晚会对不上。
+          const { reuseRefsForTurn, truncatedByBudget } = await import(
+            "../recall/inherited-cognition-prompt"
+          );
+          await recordInheritedCognitionReuse(
+            uid,
+            cid,
+            actor.id,
+            item.turnId,
+            reuseRefsForTurn(
+              rendered,
+              selection.withheld,
+              truncatedByBudget(selection.selected, rendered),
+            ),
+          );
         }
       } catch (error) {
         // 继承注入失败不该让这一轮对话起不来——降级成这次不带继承认知。
@@ -5386,6 +5396,61 @@ export async function _buildActiveSharedTaskContextBlockForTest(
   cid: string,
 ): Promise<string> {
   return buildActiveSharedTaskContextBlock(uid, cid);
+}
+
+/**
+ * 记一张 ContextReuseReceipt：这个 Agent 出生时继承的认知，本轮被真实注入了哪几条、
+ * 哪几条没带上、各是什么原因。这是 `资产 → 出生继承 → 复用` 的最后一跳，也是
+ * 履历页 use 段与 evidence 段唯一的数据来源。
+ *
+ * **execution id 用本轮真实的 `turn-<turnId>`**，与 `execution-records` 写的执行
+ * 记录同名、落在同一个目录里。早先版本自造过 `exec-inherit-<hash>` 合成 id 来做
+ * 幂等，真机重启后暴露出问题：回执落在一个没有 `record.json` 的目录里，执行记录
+ * 扫描器每次启动都反复 warn，而且语义上回执挂在了一次并不存在的执行上——回执
+ * 本该是某次真实执行的凭证。噪音该在展示层处理，不该靠编造 id。
+ *
+ * 同一轮重试会撞上「已存在」，那是预期结果，不是错误。
+ *
+ * 状态停在 `prepared`：它如实表示「这一轮把这些认知带进去了」，不表示模型真的
+ * 用上了、更不表示用了有帮助。DELIVERED / LOADED / USED / PROVED_USEFUL 是四件
+ * 不同的事，这里只落得起第二件。
+ */
+async function recordInheritedCognitionReuse(
+  uid: string,
+  cid: string,
+  agentId: string,
+  turnId: string,
+  facts: { reusedRefs: string[]; omittedRefs: string[] },
+): Promise<void> {
+  if (!facts.reusedRefs.length && !facts.omittedRefs.length) return;
+  try {
+    const [{ prepareReceipt }, { buildGmemberSessionId }] = await Promise.all([
+      import("../p3394/context-reuse-receipt"),
+      import("./state"),
+    ]);
+    const targetSessionId = buildGmemberSessionId(cid, agentId);
+    await prepareReceipt(
+      uid,
+      {
+        executionId: `turn-${turnId}`,
+        targetSessionId,
+        reusedRefs: facts.reusedRefs,
+        omittedRefs: facts.omittedRefs,
+        // 继承注入是只读的：Agent 拿到判断，但不能改写认知资产。
+        permissionMode: "read-only",
+        allowedScopes: ["cognition:inherited"],
+        boundary: "real",
+      },
+      { sessionId: targetSessionId },
+    );
+  } catch (err) {
+    const message = (err as Error).message;
+    // 同一轮重试必然走到这里，属正常路径，不该刷 warn。
+    if (message.includes("already exists")) return;
+    log.warn(
+      `inherited cognition receipt not recorded agent=${agentId} cid=${cid}: ${message}`,
+    );
+  }
 }
 
 async function buildSpaceBuilderSystemPrompt(uid: string): Promise<string> {

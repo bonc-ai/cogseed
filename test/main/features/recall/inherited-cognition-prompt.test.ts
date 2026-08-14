@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildInheritedCognitionPrompt,
+  reuseRefsForTurn,
   truncatedByBudget,
 } from '../../../../src/main/features/recall/inherited-cognition-prompt';
-import type { SelectedCognition } from '../../../../src/main/features/recall/cognition-selection';
+import type {
+  SelectedCognition,
+  WithheldCognition,
+} from '../../../../src/main/features/recall/cognition-selection';
 
 function selected(overrides: Partial<SelectedCognition> & { id: string }): SelectedCognition {
   const { id, ...rest } = overrides;
@@ -160,5 +164,75 @@ describe('长度预算', () => {
     ];
     const rendered = buildInheritedCognitionPrompt(items);
     expect(truncatedByBudget(items, rendered)).toEqual([]);
+  });
+});
+
+function withheld(id: string, reason: WithheldCognition['primaryReason']): WithheldCognition {
+  return {
+    assetRef: { asset_id: id, version: '1' },
+    reasons: [reason],
+    primaryReason: reason,
+  };
+}
+
+describe('回执引用的构造', () => {
+  it('带入的写成 asset:<id>@v<n>，不带原因后缀', () => {
+    const rendered = buildInheritedCognitionPrompt([selected({ id: 'aa-1', resolvedVersion: '2' })]);
+    const { reusedRefs } = reuseRefsForTurn(rendered, [], []);
+    expect(reusedRefs).toEqual(['asset:aa-1@v2']);
+  });
+
+  it('未带入的把原因接在第三段——履历按尾段解析原因', () => {
+    const rendered = buildInheritedCognitionPrompt([]);
+    const { omittedRefs } = reuseRefsForTurn(rendered, [withheld('aa-x', 'asset_paused')], []);
+    expect(omittedRefs).toEqual(['asset:aa-x@v1:asset_paused']);
+    // 与 cognition-chain 的解析约定对齐：前两段固定，之后全是原因。
+    expect(omittedRefs[0].split(':').slice(2).join(':')).toBe('asset_paused');
+  });
+
+  it('三类未带入各记各的原因，不合并成一个笼统说法', () => {
+    const auto = selected({ id: 'aa-in' });
+    const confirm = selected({ id: 'aa-confirm', usePolicy: 'confirm' });
+    const rendered = buildInheritedCognitionPrompt([auto, confirm]);
+    const truncated = [selected({ id: 'aa-cut' })];
+
+    const { reusedRefs, omittedRefs } = reuseRefsForTurn(
+      rendered,
+      [withheld('aa-blocked', 'scope_agent_not_allowed')],
+      truncated,
+    );
+
+    expect(reusedRefs).toEqual(['asset:aa-in@v1']);
+    expect(omittedRefs).toEqual([
+      'asset:aa-blocked@v1:scope_agent_not_allowed', // 选择层判定
+      'asset:aa-confirm@v1:needs_confirmation',      // 渲染侧的权限决定
+      'asset:aa-cut@v1:truncated',                   // 资源限制
+    ]);
+  });
+
+  it('未带入的用出生时冻结的版本，不用现在读到的版本', () => {
+    // 资产漂了才没带上，这时候写「现在的版本」会让回执指向一份它根本没继承过的东西。
+    const { omittedRefs } = reuseRefsForTurn(
+      buildInheritedCognitionPrompt([]),
+      [{
+        assetRef: { asset_id: 'aa-drift', version: '1' },
+        reasons: ['content_changed'],
+        primaryReason: 'content_changed',
+      }],
+      [],
+    );
+    expect(omittedRefs).toEqual(['asset:aa-drift@v1:content_changed']);
+  });
+
+  it('什么都没有时两边都是空，调用方据此跳过写回执', () => {
+    const { reusedRefs, omittedRefs } = reuseRefsForTurn(buildInheritedCognitionPrompt([]), [], []);
+    expect(reusedRefs).toEqual([]);
+    expect(omittedRefs).toEqual([]);
+  });
+
+  it('引用数封顶，不让一次注入撑爆回执', () => {
+    const many = Array.from({ length: 150 }, (_, i) => withheld(`aa-${i}`, 'asset_paused'));
+    const { omittedRefs } = reuseRefsForTurn(buildInheritedCognitionPrompt([]), many, []);
+    expect(omittedRefs).toHaveLength(100);
   });
 });

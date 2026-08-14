@@ -165,6 +165,35 @@ describe('认知履历：未使用原因', () => {
     expect(stage(view, 'evidence').detail).toBe('1 次未带入，均有记录原因');
   });
 
+  it('引用里没写原因时说 unknown，不拿资产 id 冒充一句解释', async () => {
+    const { asset } = await seedAsset('未带入但没写原因。', 'o');
+    const { prepareReceipt } = await import('../../../../src/main/features/p3394/context-reuse-receipt');
+    await prepareReceipt(UID, {
+      executionId: 'exec-o-1',
+      targetSessionId: 'gmember-o-one',
+      reusedRefs: [],
+      omittedRefs: [`asset:${asset.id}@v1`],
+      permissionMode: 'read-only',
+      allowedScopes: ['cognition:inherited'],
+      boundary: 'real',
+    }, { sessionId: 'gmember-o-one' });
+
+    const view = await trace(asset.id);
+    expect(view.withheld[0].reason).toBe('unknown');
+    expect(view.withheld[0].reason).not.toContain('@v1');
+  });
+
+  it('被拒的那次不算进「实际带入」', async () => {
+    const { asset } = await seedAsset('这次复用被拒了。', 'p');
+    const receipts = await import('../../../../src/main/features/p3394/context-reuse-receipt');
+    await receiptFor(asset.id, { execution: 'exec-p-1', session: 'gmember-p-one' });
+    await receipts.completeReceipt(UID, 'exec-p-1', { status: 'rejected' });
+
+    const view = await trace(asset.id);
+    expect(view.usedInSessions).toBe(0);
+    expect(stage(view, 'use').status).toBe('not_yet');
+  });
+
   it('没有未带入记录时如实说没有，不留悬念', async () => {
     const { asset } = await seedAsset('一直正常的判断。', 'j');
     const view = await trace(asset.id);

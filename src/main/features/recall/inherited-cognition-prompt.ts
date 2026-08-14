@@ -13,7 +13,7 @@
  *  confirm 档照样可以进包。裁剪是本地渲染侧的决定。
  */
 
-import type { SelectedCognition } from './cognition-selection';
+import type { SelectedCognition, WithheldCognition } from './cognition-selection';
 
 const MAX_ITEMS = 12;
 const MAX_STATEMENT_LENGTH = 2_000;
@@ -117,4 +117,55 @@ export function truncatedByBudget(
   return selected.filter((item) => (
     !kept.has(item.assetRef.asset_id) && !deferredIds.has(item.assetRef.asset_id)
   ));
+}
+
+/** 回执里引用一条资产的写法。`cognition-chain` 按 `asset:<id>@` 前缀匹配，
+ *  未带入的把原因接在第三段——尾段才是原因，这个位置是解析约定的一部分。 */
+function assetRef(assetId: string, version: string, reason?: string): string {
+  const base = `asset:${assetId}@v${version}`;
+  return reason ? `${base}:${reason}` : base;
+}
+
+/** 回执单边最多容纳的引用数（与 context-reuse-receipt 的 MAX_REFS 对齐）。 */
+const MAX_RECEIPT_REFS = 100;
+
+/**
+ * 把本轮的渲染结果折成回执的两组引用。
+ *
+ * 纯函数，好让「哪条算带入了、哪条没带上、原因写的是什么」可以单测——这三件事
+ * 一旦写错，事后从回执是看不出来的，而回执就是日后追溯唯一的凭据。
+ *
+ * 三类未带入分开记，不合并成一个笼统原因：
+ *   - withheld          选择层判定不该带（权限/状态/完整性），用它自己的主原因
+ *   - needs_confirmation 跨作用域，等用户确认（渲染侧的决定）
+ *   - truncated          这次没地方放（资源限制）
+ */
+export function reuseRefsForTurn(
+  rendered: InheritedCognitionPrompt,
+  withheld: WithheldCognition[],
+  truncated: SelectedCognition[],
+): { reusedRefs: string[]; omittedRefs: string[] } {
+  const reusedRefs = rendered.injected
+    .map((item) => assetRef(item.assetRef.asset_id, item.resolvedVersion))
+    .slice(0, MAX_RECEIPT_REFS);
+
+  const omittedRefs = [
+    ...withheld.map((item) => assetRef(
+      item.assetRef.asset_id,
+      item.assetRef.version,
+      item.primaryReason,
+    )),
+    ...rendered.deferred.map((item) => assetRef(
+      item.assetRef.asset_id,
+      item.resolvedVersion,
+      'needs_confirmation',
+    )),
+    ...truncated.map((item) => assetRef(
+      item.assetRef.asset_id,
+      item.resolvedVersion,
+      'truncated',
+    )),
+  ].slice(0, MAX_RECEIPT_REFS);
+
+  return { reusedRefs, omittedRefs };
 }
