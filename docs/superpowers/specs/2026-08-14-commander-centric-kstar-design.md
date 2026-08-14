@@ -1,7 +1,7 @@
 # Commander-Centric KStar Design
 
 **Date:** 2026-08-14  
-**Status:** Approved direction; written design pending user review  
+**Status:** Approved
 **Branch:** `codex/commander-centric-kstar`
 
 ## 1. Goal
