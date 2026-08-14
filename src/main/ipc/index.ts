@@ -175,6 +175,26 @@ function boundedModelIds(value: unknown): string[] {
   if (!Array.isArray(value)) throw new Error('selectedModels must be array');
   return value.slice(0, 100).map((model) => boundedText(model, 'model', 200)).filter(Boolean);
 }
+
+function boundedCustomProviderModel(value: unknown, field: string): {
+  id: string;
+  contextWindow: number;
+  maxTokens: number;
+} {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${field} required`);
+  const raw = value as { id?: unknown; contextWindow?: unknown; maxTokens?: unknown };
+  const id = boundedText(raw.id, `${field}.id`, 200);
+  const boundedInteger = (candidate: unknown, name: string, max: number): number => {
+    if (!Number.isSafeInteger(candidate) || (candidate as number) <= 0 || (candidate as number) > max) {
+      throw new Error(`${name} must be a positive safe integer at most ${max}`);
+    }
+    return candidate as number;
+  };
+  const contextWindow = boundedInteger(raw.contextWindow, `${field}.contextWindow`, 16_777_216);
+  const maxTokens = boundedInteger(raw.maxTokens, `${field}.maxTokens`, 1_048_576);
+  if (maxTokens > contextWindow) throw new Error(`${field}.maxTokens must not exceed contextWindow`);
+  return { id, contextWindow, maxTokens };
+}
 type StreamHandler = (
   payload: any,
   ctx: IpcContext,
@@ -3318,6 +3338,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { enabled: appConfig.setMetacognitionEnabled(!!enabled) };
   },
 
+  // Thinking strength (reasoning effort) for chat model calls.
+  'prefs.getThinkingLevel': async () => ({ level: appConfig.getThinkingLevel() }),
+  'prefs.setThinkingLevel': async ({ level }) => ({ level: appConfig.setThinkingLevel(level) }),
+
   // First-run onboarding marker (machine-local, NOT cloud-synced — stored
   // under WS_ROOT/onboarding-state.json, shared across uids). The renderer's
   // boot.js checks `completed` after restoring the last view and lifts the
@@ -3393,7 +3417,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // consent page renders where the user is already logged in).
   'auth.openExternal':     async ({ url }) => auth.openExternalUrl(url),
   // Priority list (entries) — ordered (provider, model, profile) tuples.
-  'auth.listEntries':     async () => auth.listEntries(),
+  'auth.listEntries':     async ({ includeUnavailable } = {}) => {
+    if (includeUnavailable !== undefined && typeof includeUnavailable !== 'boolean') {
+      throw new Error('includeUnavailable must be boolean');
+    }
+    return auth.listEntries({ includeUnavailable: includeUnavailable === true });
+  },
   'auth.addEntry':        async ({ provider, model, profileId }) => auth.addEntry({ provider, model, profileId }),
   'auth.removeEntry':     async ({ entryId }) => auth.removeEntry(entryId),
   'auth.reorderEntries':  async ({ orderedIds }) => auth.reorderEntries(orderedIds || []),
@@ -3534,6 +3563,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       name: provider.name,
       protocol: provider.protocol,
       baseUrl: provider.baseUrl,
+      enabled: provider.enabled,
       notes: provider.notes,
       websiteUrl: provider.websiteUrl,
       needsKey: !!provider.needsKey,
@@ -3555,12 +3585,38 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (typeof id !== 'string' || !id) throw new Error('invalid id');
     return customProviders.removeCustomProvider(ctx.userId, id);
   },
+  'customProviders.setEnabled': async (args, ctx) => {
+    const id = boundedText(args?.id, 'id', 120);
+    if (typeof args?.enabled !== 'boolean') throw new Error('enabled must be boolean');
+    return customProviders.setCustomProviderEnabled(ctx.userId, id, args.enabled);
+  },
+  'customProviders.model.add': async (args, ctx) => customProviders.addCustomProviderModel(
+    ctx.userId,
+    boundedText(args?.providerId, 'providerId', 120),
+    boundedCustomProviderModel(args.model, 'model'),
+  ),
+  'customProviders.model.update': async (args, ctx) => customProviders.updateCustomProviderModel(
+    ctx.userId,
+    boundedText(args?.providerId, 'providerId', 120),
+    boundedText(args?.modelId, 'modelId', 200),
+    boundedCustomProviderModel(args.model, 'model'),
+  ),
+  'customProviders.model.remove': async (args, ctx) => customProviders.removeCustomProviderModel(
+    ctx.userId,
+    boundedText(args?.providerId, 'providerId', 120),
+    boundedText(args?.modelId, 'modelId', 200),
+  ),
+  'customProviders.model.test': async (args, ctx) => customProviders.testCustomProviderModel(
+    ctx.userId,
+    boundedText(args?.providerId, 'providerId', 120),
+    boundedText(args?.modelId, 'modelId', 200),
+  ),
   'customProviders.ccswitch.probe': async () => {
     const probe = probeCcSwitch();
     return { available: probe.available, reason: probe.reason };
   },
   'customProviders.ccswitch.preview': async (_args, ctx) => {
-    const preview = customProviders.previewCcSwitchImport(ctx.userId);
+    const preview = await customProviders.previewCcSwitchImport(ctx.userId);
     if (!preview.ok) return preview;
     return {
       ok: true,
@@ -3576,6 +3632,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         notes: item.notes,
         websiteUrl: item.websiteUrl,
         models: item.models || [],
+        modelsProbe: item.modelsProbe !== false,
         needsKey: !!item.needsKey,
         apiKeyMasked: auth.maskKey(item.apiKey),
       })),
@@ -3587,11 +3644,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       })),
     };
   },
-  'customProviders.ccswitch.sync': async ({ externalIds } = {}, ctx) => {
+  'customProviders.ccswitch.sync': async ({ externalIds, modelsByExternalId, baseUrlsByExternalId } = {}, ctx) => {
     const selected = Array.isArray(externalIds)
       ? externalIds.filter((id): id is string => typeof id === 'string' && !!id)
       : undefined;
-    return customProviders.syncFromCcSwitch(ctx.userId, selected);
+    const models = modelsByExternalId && typeof modelsByExternalId === 'object' && !Array.isArray(modelsByExternalId)
+      ? modelsByExternalId
+      : undefined;
+    const bases = baseUrlsByExternalId && typeof baseUrlsByExternalId === 'object' && !Array.isArray(baseUrlsByExternalId)
+      ? baseUrlsByExternalId
+      : undefined;
+    return customProviders.syncFromCcSwitch(ctx.userId, selected, undefined, models, bases);
   },
 
   // ── Commander backend binding (settings page) ──

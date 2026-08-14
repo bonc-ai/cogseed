@@ -213,9 +213,10 @@ Dev-mode marketplace editing/upload/delete is hosted/private tooling. Runtime ga
 
 ## Git Collaboration Flow
 
-- All work lands in `develop` via GitLab MR from a `dev/*` branch; `develop` is protected — never push it directly (overwrite accidents happened before).
-- Keep your branch fresh with the mainline before merging: `git pull origin develop` (or fetch + merge).
-- Push explicitly to your own branch: `git push origin dev/<branch>` — avoid bare `git push` when your branch tracks `origin/develop`.
+- GitLab branch discipline (since 2026-08-14): **never create a new remote branch**. Our own dev-side work lives on `dev/niubaokang` only (already existing); colleagues' branches (`dev/fengjw`, `dev/shiyuxuan`, ...) are outside our scope — do not touch, delete, or push to them. Mainlines `develop`/`master`/`main` stay as-is.
+- Parallel worktree branches (`dev/niubaokang-<topic>`) are **local-only — never pushed**; after verification they merge into `dev/niubaokang`, and only that branch gets pushed.
+- `develop` is protected; merge via MR (`dev/niubaokang` → `develop`) — never push it directly (overwrite accidents happened before). Sync baseline is `origin/develop` (fetch + merge, no rebase).
+- Avoid bare `git push`; run `git fetch --prune origin` first to confirm the target branch is still on the whitelist.
 
 ## Do Not
 

@@ -133,6 +133,12 @@ import {
 } from "../../util/project-layout";
 import * as agentsFeat from "../agents";
 import * as commanderRuntimeStats from "../commander_runtime_stats";
+import { getThinkingLevel } from "../config";
+
+// Narrowed once so TS can see the excluded 'auto' branch.
+function thinkingLevelForRun(): "off" | "low" | "high" | "auto" {
+  return getThinkingLevel();
+}
 import type { AgentRunStatus } from "../agent_runtime_stats";
 import {
   activityFromLocalEvent,
@@ -3909,6 +3915,9 @@ async function runActorTurnBody(
         boundary: "real",
         permissionMode: getLocalExecMode(),
       });
+      // User-selected thinking strength ('auto' = no override; let the
+      // provider default / model decide).
+      const turnThinkingLevel = thinkingLevelForRun();
       for await (const ev of streamChatWithModel({
         userId: uid,
         message: messageText,
@@ -3916,6 +3925,9 @@ async function runActorTurnBody(
         systemPrompt,
         workingDir,
         agentName: actor.name || actor.id,
+        // User-selected thinking strength ('auto' = no override; let the
+        // provider default / model decide).
+        ...(turnThinkingLevel !== "auto" ? { thinkingLevel: turnThinkingLevel } : {}),
         ...(actor.kind === "agent" ? { agentId: actor.id } : {}),
         cid,
         turnId: item.turnId,

@@ -37,7 +37,7 @@ export function resolveCliProviderEnv(
   if (!providerId || !providerId.startsWith('cp:')) return undefined;
   const rawId = providerId.slice(3);
   const cp = listCustomProviders(userId).find((p) => p.id === rawId);
-  if (!cp || !cp.baseUrl || !cp.apiKey) return undefined;
+  if (!cp || !cp.enabled || !cp.baseUrl || !cp.apiKey) return undefined;
 
   if (cli === 'claude') {
     // Claude Code speaks the Anthropic dialect; only anthropic-protocol

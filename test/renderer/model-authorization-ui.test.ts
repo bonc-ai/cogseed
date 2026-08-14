@@ -8,6 +8,7 @@ const indexHtml = readFileSync(resolve(root, 'src/renderer/index.html'), 'utf8')
 const flushAsync = () => new Promise((resolve) => setTimeout(resolve, 0));
 const style = readFileSync(resolve(root, 'src/renderer/style.css'), 'utf8');
 const moduleSource = readFileSync(resolve(root, 'src/renderer/modules/model-authorization.js'), 'utf8');
+const settingsSource = readFileSync(resolve(root, 'src/renderer/modules/settings.js'), 'utf8');
 const locales = ['en', 'zh', 'ja', 'pt'].map((lang) => [lang, JSON.parse(readFileSync(resolve(root, `src/renderer/locales/${lang}.json`), 'utf8'))] as const);
 
 function modelAuthorizationKeys(locale: Record<string, unknown>): string[] {
@@ -15,53 +16,49 @@ function modelAuthorizationKeys(locale: Record<string, unknown>): string[] {
 }
 
 describe('unified model authorization settings surface', () => {
-  it('declares one primary authorization surface and one wizard modal', () => {
+  it('declares the direct model authorization picker and configured priority list', () => {
     for (const id of [
       'settings-model-authorizations',
-      'settings-model-authorization-add-btn',
-      'settings-model-authorization-advanced-btn',
-      'settings-model-authorization-list',
-      'model-authorization-modal',
-      'model-authorization-steps',
-      'model-authorization-body',
-      'model-authorization-status',
-      'model-authorization-actions',
+      'settings-picker-provider',
+      'settings-picker-model',
+      'settings-add-entry-btn',
+      'settings-picker-status',
+      'settings-entries',
     ]) {
       expect(indexHtml).toContain(`id="${id}"`);
     }
   });
 
-  it('removes old primary provider picker and standalone CC Switch entry controls', () => {
-    expect(indexHtml).not.toContain('id="settings-picker-provider"');
-    expect(indexHtml).not.toContain('id="settings-picker-model"');
-    expect(indexHtml).not.toContain('id="settings-ccswitch-preview-btn"');
-    expect(indexHtml).not.toContain('id="settings-add-entry-btn"');
+  it('does not make the multi-step wizard the primary entrypoint', () => {
+    expect(indexHtml).not.toContain('id="settings-model-authorization-add-btn"');
+    expect(indexHtml).not.toContain('id="settings-model-authorization-list"');
   });
 
   it('replaces the legacy interface-type hint with a concise flow subtitle', () => {
     // The old two-line hint described the protocol-first flow (choose an
     // interface type, enter key and URL). The preset-first flow keeps a
     // single concise subtitle; the hint line must not resurface.
-    expect(indexHtml).toContain('data-i18n="settings.model_authorization.subtitle"');
+    expect(indexHtml).toContain('data-i18n="settings.add_auth_sub"');
     expect(indexHtml).not.toContain('data-i18n="settings.model_authorization.api_key_flow_hint"');
   });
 
-  it('labels advanced management as custom endpoint management and explains its scope', () => {
-    expect(indexHtml).toContain('data-i18n="settings.model_authorization.advanced"');
-    expect(indexHtml).toContain('id="settings-model-authorization-advanced-hint"');
-    expect(indexHtml).toContain('data-i18n="settings.model_authorization.advanced_hint"');
+  it('folds custom endpoint management into the provider picker instead of a separate section', () => {
+    // The standalone custom-endpoints card was removed; the entry points now
+    // live inside the provider picker as the two action rows.
+    expect(indexHtml).not.toContain('id="settings-custom-providers-group"');
+    expect(indexHtml).not.toContain('id="settings-model-authorization-advanced-btn"');
+    expect(settingsSource).toContain('_PICKER_ACTION_CUSTOM_PROVIDERS');
+    expect(settingsSource).toContain('_PICKER_ACTION_CCSWITCH_IMPORT');
+    expect(settingsSource).toContain("_settingsOpenCustomProviderModal()");
+    expect(settingsSource).toContain("_settingsOpenCcswitchPreviewDialog()");
   });
 
-  it('keeps advanced custom provider management collapsed away from the primary flow', () => {
-    expect(indexHtml).toContain('id="settings-model-authorization-advanced"');
-    expect(indexHtml).toMatch(/id="settings-model-authorization-advanced"[^>]*hidden/);
-    expect(indexHtml).toContain('id="settings-custom-provider-add-btn"');
-    const primaryStart = indexHtml.indexOf('id="settings-model-authorizations"');
-    const advancedStart = indexHtml.indexOf('id="settings-model-authorization-advanced"');
-    const addProviderStart = indexHtml.indexOf('id="settings-custom-provider-add-btn"');
-    expect(primaryStart).toBeGreaterThan(-1);
-    expect(advancedStart).toBeGreaterThan(primaryStart);
-    expect(addProviderStart).toBeGreaterThan(advancedStart);
+  it('keeps custom provider management reachable from the direct picker', () => {
+    expect(indexHtml).toContain('id="settings-picker-provider"');
+    expect(indexHtml).toContain('id="settings-custom-provider-modal"');
+    expect(indexHtml).toContain('id="settings-ccswitch-preview-modal"');
+    expect(settingsSource).toContain("_PICKER_ACTION_CUSTOM_PROVIDERS");
+    expect(settingsSource).toContain("_PICKER_ACTION_CCSWITCH_IMPORT");
   });
 
   it('adds scoped styles for authorization cards and wizard controls', () => {

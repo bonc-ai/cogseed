@@ -94,6 +94,7 @@ function apiForProtocol(protocol: CustomProvider['protocol']): Api {
  */
 export function buildCustomProviderModel(cp: CustomProvider, modelId: string): Model<Api> {
   const api = apiForProtocol(cp.protocol);
+  const metadata = buildCustomProviderModelMeta(cp, modelId);
   const model: Model<Api> = {
     id: modelId,
     name: modelId,
@@ -105,8 +106,8 @@ export function buildCustomProviderModel(cp: CustomProvider, modelId: string): M
     reasoning: false,
     input: ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+    contextWindow: metadata.contextWindow,
+    maxTokens: metadata.maxTokens,
   };
   return model;
 }
@@ -114,8 +115,13 @@ export function buildCustomProviderModel(cp: CustomProvider, modelId: string): M
 /** Metadata slice (window sizes) for the runner's model catalog. */
 export function buildCustomProviderModelMeta(
   cp: CustomProvider,
+  modelId: string,
 ): { contextWindow: number; maxTokens: number } {
-  return { contextWindow: DEFAULT_CONTEXT_WINDOW, maxTokens: DEFAULT_MAX_OUTPUT_TOKENS };
+  const id = String(modelId || '').trim();
+  const model = cp.models.find((candidate) => candidate.id === id);
+  return model
+    ? { contextWindow: model.contextWindow, maxTokens: model.maxTokens }
+    : { contextWindow: DEFAULT_CONTEXT_WINDOW, maxTokens: DEFAULT_MAX_OUTPUT_TOKENS };
 }
 
 /**
@@ -145,6 +151,6 @@ export async function createCustomProvider(
 /** Default model id to offer when a custom provider has no explicit model
  *  list. Falls back to a protocol-appropriate placeholder the user can edit. */
 export function defaultCustomProviderModel(cp: CustomProvider): string {
-  if (cp.models && cp.models.length) return cp.models[0];
+  if (cp.models.length) return cp.models[0].id;
   return '';
 }

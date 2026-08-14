@@ -119,7 +119,7 @@ function isNativeSearchEnabled(): boolean {
 function buildExternalProviderModel(userId: string | null, providerId: string, modelId: string, maxOutputTokens?: number): { contextWindow?: number; maxTokens?: number } | null {
   if (isCustomProviderId(providerId)) {
     const provider = userId ? findCustomProvider(userId, providerId) : undefined;
-    return provider ? buildCustomProviderModelMeta(provider) : null;
+    return provider ? buildCustomProviderModelMeta(provider, modelId) : null;
   }
   switch (providerId) {
     case 'moonshot':

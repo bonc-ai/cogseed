@@ -201,7 +201,7 @@ interface OAuthProfile {
 }
 type StoredProfile = ApiKeyProfile | OAuthProfile;
 
-interface Entry {
+export interface CustomProviderEntry {
   entryId: string;
   provider: string;
   model: string;
@@ -209,6 +209,8 @@ interface Entry {
   lastUsed: number;
   createdAt: number;
 }
+
+type Entry = CustomProviderEntry;
 
 /**
  * Search-tool API key (one row per stored credential, in priority order).
@@ -269,17 +271,31 @@ export interface TtsProfile {
   createdAt: number;
 }
 
+export const DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW = 131072;
+export const DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS = 8192;
+export const MAX_CUSTOM_PROVIDER_CONTEXT_WINDOW = 16_777_216;
+export const MAX_CUSTOM_PROVIDER_MAX_TOKENS = 1_048_576;
+export const MAX_CUSTOM_PROVIDER_MODELS = 100;
+export const MAX_CUSTOM_PROVIDER_MODEL_ID_LENGTH = 200;
+
+export interface CustomProviderModel {
+  id: string;
+  contextWindow: number;
+  maxTokens: number;
+}
+
 export interface CustomProvider {
   id: string;
   name: string;
   protocol: 'anthropic' | 'openai' | 'gemini';
   baseUrl: string;
   apiKey: string;
+  enabled: boolean;
   notes?: string;
   websiteUrl?: string;
   needsKey?: boolean;
   needsModelMapping?: boolean;
-  models?: string[];
+  models: CustomProviderModel[];
   source: 'manual' | 'ccswitch';
   externalId?: string;
   createdAt: number;
@@ -433,7 +449,7 @@ export function loadProfilesForUser(userId: string): ProfilesFile {
       const imageProfiles = parseImageProfilesArray((data as any).imageProfiles);
       const videoProfiles = parseVideoProfilesArray((data as any).videoProfiles);
       const ttsProfiles = parseTtsProfilesArray((data as any).ttsProfiles);
-      const customProviders = parseCustomProvidersArray((data as any).customProviders);
+      const customProviders = parseCustomProvidersArray((data as any).customProviders, entries);
       const authorizationRequests = parseAuthorizationRequestReceipts((data as any).authorizationRequests);
       const store = { version: PROFILES_FILE_VERSION, profiles, entries, searchProfiles, imageProfiles, videoProfiles, ttsProfiles, customProviders, authorizationRequests };
       if (needsRewrite) saveProfilesForUser(uid, store);
@@ -596,25 +612,93 @@ function parseTtsProfilesArray(arr: unknown): TtsProfile[] {
   return out;
 }
 
-function parseCustomProvidersArray(arr: unknown): CustomProvider[] {
+function normalizedLegacyCustomProviderNumber(
+  value: unknown,
+  fallback: number,
+  max: number,
+): number {
+  return Number.isSafeInteger(value) && (value as number) > 0 && (value as number) <= max
+    ? value as number
+    : fallback;
+}
+
+function parseCustomProviderModels(value: unknown): CustomProviderModel[] {
+  if (!Array.isArray(value)) return [];
+  const models: CustomProviderModel[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    const rawId = typeof raw === 'string'
+      ? raw
+      : (raw && typeof raw === 'object' ? (raw as { id?: unknown }).id : '');
+    const id = String(rawId || '').trim();
+    if (!id || id.length > MAX_CUSTOM_PROVIDER_MODEL_ID_LENGTH || seen.has(id)) continue;
+    seen.add(id);
+    const metadata = raw && typeof raw === 'object'
+      ? raw as { contextWindow?: unknown; maxTokens?: unknown }
+      : {};
+    const contextWindow = normalizedLegacyCustomProviderNumber(
+      metadata.contextWindow,
+      DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+      MAX_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+    );
+    const maxTokens = Math.min(
+      normalizedLegacyCustomProviderNumber(
+        metadata.maxTokens,
+        DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+        MAX_CUSTOM_PROVIDER_MAX_TOKENS,
+      ),
+      contextWindow,
+    );
+    models.push({ id, contextWindow, maxTokens });
+    if (models.length >= MAX_CUSTOM_PROVIDER_MODELS) break;
+  }
+  return models;
+}
+
+function migrateCustomProviderModelsFromEntries(
+  providerId: string,
+  entries: readonly Entry[],
+): CustomProviderModel[] {
+  const syntheticId = `cp:${providerId}`;
+  const models: CustomProviderModel[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (entry.provider !== syntheticId || entry.profileId !== syntheticId) continue;
+    const id = String(entry.model || '').trim();
+    if (!id || id.length > MAX_CUSTOM_PROVIDER_MODEL_ID_LENGTH || seen.has(id)) continue;
+    seen.add(id);
+    models.push({
+      id,
+      contextWindow: DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+      maxTokens: DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+    });
+    if (models.length >= MAX_CUSTOM_PROVIDER_MODELS) break;
+  }
+  return models;
+}
+
+function parseCustomProvidersArray(arr: unknown, entries: readonly Entry[] = []): CustomProvider[] {
   if (!Array.isArray(arr)) return [];
   const protocols = new Set<CustomProvider['protocol']>(['anthropic', 'openai', 'gemini']);
   const out: CustomProvider[] = [];
   for (const raw of arr) {
     const p = raw as any;
     if (!p || typeof p !== 'object' || !p.id || !p.name || !p.baseUrl) continue;
+    const id = String(p.id);
     const protocol = protocols.has(p.protocol) ? p.protocol as CustomProvider['protocol'] : 'anthropic';
+    const parsedModels = parseCustomProviderModels(p.models);
     out.push({
-      id: String(p.id),
+      id,
       name: String(p.name),
       protocol,
       baseUrl: String(p.baseUrl),
       apiKey: typeof p.apiKey === 'string' ? p.apiKey : '',
+      enabled: p.enabled !== false,
       ...(p.notes ? { notes: String(p.notes) } : {}),
       ...(p.websiteUrl ? { websiteUrl: String(p.websiteUrl) } : {}),
       ...(p.needsKey ? { needsKey: true } : {}),
       ...(p.needsModelMapping ? { needsModelMapping: true } : {}),
-      ...(Array.isArray(p.models) ? { models: p.models.map(String).filter(Boolean).slice(0, 100) } : {}),
+      models: parsedModels.length ? parsedModels : migrateCustomProviderModelsFromEntries(id, entries),
       source: p.source === 'ccswitch' ? 'ccswitch' : 'manual',
       ...(p.externalId ? { externalId: String(p.externalId) } : {}),
       createdAt: typeof p.createdAt === 'number' ? p.createdAt : Date.now(),
@@ -702,6 +786,21 @@ export function saveCustomProviders(userId: string, list: CustomProvider[]): voi
   invalidateCoreAgentRunner();
 }
 
+export function mutateCustomProviders<T>(
+  userId: string,
+  mutate: (state: { customProviders: CustomProvider[]; entries: CustomProviderEntry[] }) => T,
+): T {
+  assertActiveUser(userId);
+  const store = loadProfiles();
+  const result = mutate({
+    customProviders: store.customProviders || (store.customProviders = []),
+    entries: store.entries,
+  });
+  saveProfiles(store);
+  invalidateCoreAgentRunner();
+  return result;
+}
+
 export function removeEntriesForProvider(userId: string, providerId: string): number {
   assertActiveUser(userId);
   const store = loadProfiles();
@@ -768,15 +867,22 @@ function customProviderForId(store: ProfilesFile, providerId: string): CustomPro
 function isCustomProviderModelAllowed(provider: CustomProvider, model: string): boolean {
   const normalized = String(model || '').trim();
   if (!normalized) return false;
-  return !provider.models?.length || provider.models.includes(normalized);
+  return provider.models.some((candidate) => candidate.id === normalized);
 }
 
 function isEntryAllowed(store: ProfilesFile, entry: Entry): boolean {
-  const custom = customProviderForId(store, entry.provider);
-  if (custom) return !!custom.apiKey && isCustomProviderModelAllowed(custom, entry.model);
+  if (isCustomProviderId(entry.provider) || isCustomProviderId(entry.profileId)) {
+    const custom = customProviderForId(store, entry.provider);
+    return !!custom
+      && entry.profileId === entry.provider
+      && custom.enabled
+      && !!custom.apiKey
+      && isCustomProviderModelAllowed(custom, entry.model);
+  }
   const prof = store.profiles[entry.profileId];
   return isModelProviderAllowed(entry.provider, entry.model)
-    && !isStoredProfileBlocked(prof);
+    && isStoredProfileAllowed(prof)
+    && prof.provider === entry.provider;
 }
 
 function makeProfileId(provider: string, label: string): string {
@@ -804,6 +910,21 @@ let _entryCounter = 0;
 function nextEntryId(): string {
   _entryCounter = (_entryCounter + 1) % 100000;
   return `e-${Date.now().toString(36)}-${_entryCounter}`;
+}
+
+export function createCustomProviderEntry(customProviderId: string, modelId: string): CustomProviderEntry {
+  const id = String(customProviderId || '').trim();
+  const model = String(modelId || '').trim();
+  if (!id || !model) throw new Error('custom provider id and model required');
+  const now = Date.now();
+  return {
+    entryId: nextEntryId(),
+    provider: `cp:${id}`,
+    model,
+    profileId: `cp:${id}`,
+    lastUsed: 0,
+    createdAt: now,
+  };
 }
 
 // ── Configured-model probe ───────────────────────────────────────────────
@@ -1070,7 +1191,7 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
   if (!id) return { models: [] };
   if (isCustomProviderId(id)) {
     const custom = customProviderForId(loadProfiles(), id);
-    return { models: (custom?.models || []).map((model) => ({ id: model, name: model })) };
+    return { models: (custom?.models || []).map((model) => ({ id: model.id, name: model.id })) };
   }
   if (!isModelProviderAllowed(id)) return { models: [] };
   const allowed = (models: { id: string; name: string }[]) =>
@@ -1211,6 +1332,7 @@ export interface EntryView {
   profileType: 'api_key' | 'oauth';
   profileMasked?: string;
   oauthExpired?: boolean;
+  modelAvailable?: false;
   createdAt: number;
   lastUsed: number;
 }
@@ -1273,13 +1395,24 @@ async function buildModelNameLookup(): Promise<(p: string, m: string) => string>
   };
 }
 
-export async function listEntries(): Promise<{ entries: EntryView[] }> {
+export interface ListEntriesOptions {
+  includeUnavailable?: boolean;
+}
+
+export async function listEntries(
+  options: ListEntriesOptions = {},
+): Promise<{ entries: EntryView[] }> {
   const store = loadProfiles();
   const lookup = await buildModelNameLookup();
+  const includeUnavailable = options.includeUnavailable === true;
   return {
     entries: store.entries
-      .filter((e) => isEntryAllowed(store, e))
-      .map((e) => entryToView(e, store, lookup)),
+      .flatMap((entry) => {
+        const available = isEntryAllowed(store, entry);
+        if (!available && !includeUnavailable) return [];
+        const view = entryToView(entry, store, lookup);
+        return [available ? view : { ...view, modelAvailable: false as const }];
+      }),
   };
 }
 
@@ -1297,6 +1430,7 @@ export async function addEntry({
   if (custom) {
     if (pid !== p) throw new Error('custom provider profile mismatch');
     if (!isCustomProviderModelAllowed(custom, m)) throw new Error('custom provider model not found');
+    if (!custom.enabled) throw new Error(`custom provider ${p} is disabled; cannot add model ${m}`);
   } else {
     assertModelProviderAllowed(p, m);
     if (!store.profiles[pid]) throw new Error('profile not found');
@@ -1726,8 +1860,15 @@ export async function completeAuthorization(
         provider = list.find((row) => row.source === 'ccswitch' && row.externalId === draft.externalId);
       }
       if (provider) {
+        const existingModelMetadata = new Map(provider.models.map((model) => [model.id, model]));
         Object.assign(provider, {
-          name, protocol, baseUrl, apiKey, models: orderedModels, source: input.source,
+          name, protocol, baseUrl, apiKey,
+          models: orderedModels.map((id) => existingModelMetadata.get(id) || ({
+            id,
+            contextWindow: DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+            maxTokens: DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+          })),
+          source: input.source,
           ...(draft.externalId ? { externalId: String(draft.externalId).slice(0, 160) } : {}),
           ...(draft.notes ? { notes: String(draft.notes).trim().slice(0, 200) } : {}),
           ...(draft.websiteUrl ? { websiteUrl: String(draft.websiteUrl).trim().slice(0, 500) } : {}),
@@ -1737,7 +1878,13 @@ export async function completeAuthorization(
       } else {
         provider = {
           id: nextAuthorizationCustomProviderId(store), name, protocol, baseUrl, apiKey,
-          models: orderedModels, source: input.source,
+          models: orderedModels.map((id) => ({
+            id,
+            contextWindow: DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+            maxTokens: DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+          })),
+          enabled: true,
+          source: input.source,
           ...(draft.externalId ? { externalId: String(draft.externalId).slice(0, 160) } : {}),
           ...(draft.notes ? { notes: String(draft.notes).trim().slice(0, 200) } : {}),
           ...(draft.websiteUrl ? { websiteUrl: String(draft.websiteUrl).trim().slice(0, 500) } : {}),
@@ -2417,7 +2564,12 @@ export async function testAuthorizationDraft(
         protocol: input.protocol,
         baseUrl,
         apiKey,
-        models: [model],
+        enabled: true,
+        models: [{
+          id: model,
+          contextWindow: DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+          maxTokens: DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+        }],
         source: 'manual',
         createdAt: Date.now(),
       };

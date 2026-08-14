@@ -518,9 +518,12 @@ describe('auth › entries (priority list)', () => {
     expect(pick).not.toBeNull();
     expect(pick!.entryId).toBe(e2.entryId);
     expect(pick!.provider).toBe('openai');
-    // Sanity: e1 is still in the list (we didn't remove the entry, only the credential)
-    const { entries } = await a.listEntries();
-    expect(entries.map((e) => e.entryId)).toContain(e1.entryId);
+    // The dangling entry remains available for settings diagnostics, but is
+    // excluded from the default runnable list.
+    expect((await a.listEntries()).entries.map((entry) => entry.entryId)).not.toContain(e1.entryId);
+    expect((await a.listEntries({ includeUnavailable: true })).entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ entryId: e1.entryId, modelAvailable: false }),
+    ]));
   });
 
 });

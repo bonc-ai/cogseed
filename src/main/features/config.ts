@@ -61,6 +61,9 @@ export interface UserPreferences {
    * `ORKAS_METACOGNITION='0'` remains a higher-priority kill switch.
    * Reads go through `features/metacognition.isFeatureEnabled`. */
   metacognition_enabled?: boolean;
+  /** Thinking strength for chat model calls: 'auto' (model default),
+   *  'off' | 'low' | 'high' forwarded to the runner's thinkingLevel. */
+  thinking_level?: 'auto' | 'off' | 'low' | 'high';
   /** Whether machine-global skill roots such as ~/.codex/skills are visible
    * to commander open-tier skill search. Missing means enabled, preserving
    * the historical open-source behavior. */
@@ -218,6 +221,24 @@ export function setCommanderAvatar(avatar: CommanderAvatar): CommanderAvatar {
   }
   const next: CommanderAvatar = { icon: avatar.icon, color: avatar.color };
   writePreferences({ commander_avatar: next });
+  return next;
+}
+
+// ── Thinking strength (model reasoning effort) ───────────────────────────
+// 'auto' = no override (let the model/provider decide). Missing preference is
+// treated as 'auto', so never-written configs behave exactly as before.
+
+export type ThinkingLevelPreference = 'auto' | 'off' | 'low' | 'high';
+
+export function getThinkingLevel(): ThinkingLevelPreference {
+  const v = readPreferences().thinking_level;
+  return v === 'off' || v === 'low' || v === 'high' ? v : 'auto';
+}
+
+export function setThinkingLevel(level: unknown): ThinkingLevelPreference {
+  const next: ThinkingLevelPreference =
+    level === 'off' || level === 'low' || level === 'high' ? level : 'auto';
+  writePreferences({ thinking_level: next });
   return next;
 }
 
