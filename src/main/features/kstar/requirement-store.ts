@@ -13,9 +13,84 @@ import type {
   KstarTaskPhase,
   KstarTaskRecord,
 } from './requirement-types';
+import type { KstarControlErrorCode, KstarControlOperation, KstarControlReceipt, KstarControlResult } from './control-types';
 
 const MAX_TITLE = 200;
 const MAX_GOAL = 4_000;
+const MAX_CONTROL_RECEIPTS = 100;
+const CONTROL_OPERATIONS = new Set<KstarControlOperation>([
+  'upsert_state',
+  'request_projection',
+  'commit_forecast',
+  'finish',
+  'abandon',
+]);
+const CONTROL_IDEMPOTENCY_KEY = /^[A-Za-z0-9_.:-]{1,160}$/;
+const CONTROL_INPUT_HASH = /^[a-f0-9]{64}$/;
+const CONTROL_ERROR_CODES = new Set<KstarControlErrorCode>([
+  'kstar_control_invalid_input',
+  'kstar_projection_not_confirmed',
+  'kstar_invalid_candidate',
+  'kstar_unavailable_tool',
+  'kstar_invalid_rule_ref',
+  'kstar_persistence_failed',
+]);
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function validControlResult(value: unknown): value is KstarControlResult {
+  if (!isPlainRecord(value) || typeof value.ok !== 'boolean') return false;
+  if (value.ok === false) {
+    return typeof value.code === 'string'
+      && CONTROL_ERROR_CODES.has(value.code as KstarControlErrorCode)
+      && typeof value.message === 'string';
+  }
+  if (typeof value.status !== 'string' || typeof value.taskId !== 'string' || !safeId(value.taskId)) return false;
+  if (value.requirementId !== undefined && (typeof value.requirementId !== 'string' || !safeId(value.requirementId))) return false;
+  if (value.projectionId !== undefined && (typeof value.projectionId !== 'string' || !safeId(value.projectionId))) return false;
+  if (value.forecastId !== undefined && (typeof value.forecastId !== 'string' || !safeId(value.forecastId))) return false;
+  if (value.selectedCandidateId !== undefined && typeof value.selectedCandidateId !== 'string') return false;
+  return [
+    'state_committed',
+    'confirmation_required',
+    'forecast_committed',
+    'finished',
+    'abandoned',
+  ].includes(value.status);
+}
+
+function normalizeControlReceipt(value: unknown, conversationId: string): KstarControlReceipt | null {
+  if (!isPlainRecord(value)) return null;
+  if (
+    typeof value.idempotencyKey !== 'string'
+    || !CONTROL_IDEMPOTENCY_KEY.test(value.idempotencyKey)
+    || typeof value.inputHash !== 'string'
+    || !CONTROL_INPUT_HASH.test(value.inputHash)
+    || typeof value.operation !== 'string'
+    || !CONTROL_OPERATIONS.has(value.operation as KstarControlOperation)
+    || value.actor !== 'commander'
+    || value.conversationId !== conversationId
+    || !safeId(conversationId)
+    || !['ok', 'rejected', 'failed'].includes(String(value.status))
+    || typeof value.createdAt !== 'string'
+    || !validControlResult(value.result)
+  ) return null;
+  for (const field of ['taskId', 'requirementId', 'projectionId', 'forecastId'] as const) {
+    const id = value[field];
+    if (id !== undefined && (typeof id !== 'string' || !safeId(id))) return null;
+  }
+  return value as unknown as KstarControlReceipt;
+}
+
+function normalizeControlReceipts(value: unknown, conversationId: string): KstarControlReceipt[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((receipt) => normalizeControlReceipt(receipt, conversationId))
+    .filter((receipt): receipt is KstarControlReceipt => Boolean(receipt))
+    .slice(-MAX_CONTROL_RECEIPTS);
+}
 
 function normalizedText(value: unknown, field: string, max: number): string {
   if (typeof value !== 'string') throw new Error(`invalid ${field}`);
@@ -123,7 +198,11 @@ function validateState(userId: string, raw: Record<string, unknown>, conversatio
       pending.reason !== 'topic_switch'
     ) throw new Error('malformed kstar pending task start');
   }
-  return raw as KstarConversationTaskStateRecord;
+  if (raw.controlReceipts === undefined) return raw as KstarConversationTaskStateRecord;
+  return {
+    ...raw,
+    controlReceipts: normalizeControlReceipts(raw.controlReceipts, conversationId),
+  } as KstarConversationTaskStateRecord;
 }
 
 export function createInitialConversationTaskState(userId: string, conversationId: string): KstarConversationTaskStateRecord {

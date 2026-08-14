@@ -17,3 +17,6 @@ export * from './requirement-state';
 export * from './requirement-closure';
 export * from './task-aggregate';
 export * from './lifecycle-adapter';
+export * from './control-types';
+export * from './control-service';
+export * from './forecast-commit';

@@ -1,6 +1,7 @@
 import type { CognitionSourceRef } from '../recall/source-service';
 import type { ActionDeltaDetail, ResultDeltaDetail } from '../recall/world-model-types';
 import type { KstarAttribution, KstarJsonRecord, KstarOutcome } from './types';
+import type { KstarControlReceipt } from './control-types';
 
 export const KSTAR_PRM_WEIGHTS = Object.freeze({
   accuracy: 0.3,
@@ -109,6 +110,7 @@ export interface KstarConversationTaskStateRecord extends KstarJsonRecord {
   taskComplete: boolean;
   pendingTaskStart?: KstarPendingTaskStart;
   lastRoutedUserMessageId?: string;
+  controlReceipts?: KstarControlReceipt[];
   createdAt: string;
   updatedAt: string;
 }

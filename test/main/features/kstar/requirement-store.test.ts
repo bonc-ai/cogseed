@@ -231,4 +231,77 @@ describe('KSTAR Phase 2 requirement/task store', () => {
 
     await expect(store.readKstarRequirement('user-a', requirementId)).rejects.toThrow('malformed kstar requirement');
   });
+
+  it('drops malformed control receipts on read without rewriting legacy state', async () => {
+    const { store, paths } = await storeModules();
+    const state = store.createInitialConversationTaskState('user-a', 'cid-receipts');
+    const file = paths.kstarConversationTaskStatePath('user-a', 'cid-receipts');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const validReceipt = {
+      idempotencyKey: 'turn-a:create',
+      inputHash: 'a'.repeat(64),
+      operation: 'upsert_state',
+      actor: 'commander',
+      conversationId: 'cid-receipts',
+      taskId: 'kst-a',
+      requirementId: 'ksreq-a',
+      status: 'ok',
+      result: {
+        ok: true,
+        status: 'state_committed',
+        taskId: 'kst-a',
+        requirementId: 'ksreq-a',
+      },
+      createdAt: '2026-08-14T00:00:00.000Z',
+    };
+    fs.writeFileSync(file, `${JSON.stringify({
+      ...state,
+      controlReceipts: [
+        validReceipt,
+        { ...validReceipt, idempotencyKey: '../unsafe' },
+        { ...validReceipt, inputHash: 'not-a-hash' },
+        {
+          ...validReceipt,
+          status: 'rejected',
+          result: { ok: false, code: 'raw_provider_error', message: 'must not persist' },
+        },
+        { nonsense: true },
+      ],
+    })}\n`, 'utf8');
+
+    await expect(store.readConversationTaskState('user-a', 'cid-receipts'))
+      .resolves.toMatchObject({ controlReceipts: [validReceipt] });
+    const persisted = JSON.parse(fs.readFileSync(file, 'utf8')) as { controlReceipts: unknown[] };
+    expect(persisted.controlReceipts).toHaveLength(5);
+  });
+
+  it('keeps only the latest one hundred valid control receipts on write', async () => {
+    const { store } = await storeModules();
+    const state = store.createInitialConversationTaskState('user-a', 'cid-receipt-limit');
+    const controlReceipts = Array.from({ length: 105 }, (_, index) => ({
+      idempotencyKey: `turn-${index}:create`,
+      inputHash: index.toString(16).padStart(64, '0'),
+      operation: 'upsert_state' as const,
+      actor: 'commander' as const,
+      conversationId: 'cid-receipt-limit',
+      taskId: `kst-${index}`,
+      requirementId: `ksreq-${index}`,
+      status: 'ok' as const,
+      result: {
+        ok: true as const,
+        status: 'state_committed' as const,
+        taskId: `kst-${index}`,
+        requirementId: `ksreq-${index}`,
+      },
+      createdAt: `2026-08-14T00:00:${String(index % 60).padStart(2, '0')}.000Z`,
+    }));
+
+    await store.writeConversationTaskState('user-a', { ...state, controlReceipts });
+
+    const read = await store.readConversationTaskState('user-a', 'cid-receipt-limit');
+    expect(read?.controlReceipts).toHaveLength(100);
+    expect(read?.controlReceipts?.[0].idempotencyKey).toBe('turn-5:create');
+    expect(read?.controlReceipts?.[99].idempotencyKey).toBe('turn-104:create');
+  });
+
 });
