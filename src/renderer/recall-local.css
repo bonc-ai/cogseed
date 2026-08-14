@@ -513,6 +513,24 @@
 .recall-asset-version-row strong { color: var(--fg, #111827); font-size: 11px; }
 .recall-asset-version-row small, .recall-asset-version-row p { color: var(--muted-fg, #6b7280); font-size: 10px; }
 .recall-asset-version-row p { margin: 0; overflow-wrap: anywhere; }
+/* 使用与证明。复用版本面板的框架样式，只加履历自己的排版。 */
+.recall-asset-chain-panel { margin-top: 12px; border-top: 1px solid var(--border, #e5e7eb); }
+.cognition-chain-body { display: grid; gap: 2px; }
+.cognition-chain-segments { display: grid; gap: 2px; padding: 4px 0 8px; }
+.cognition-chain-segment { display: grid; grid-template-columns: minmax(84px, auto) minmax(0, 1fr) auto; align-items: baseline; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border, #eef0f3); }
+.cognition-chain-stage { color: var(--fg, #111827); font-size: 11px; font-weight: 600; }
+.cognition-chain-detail { margin: 0; color: var(--muted-fg, #6b7280); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.cognition-chain-segment > small { color: var(--muted-fg, #6b7280); font-size: 10px; white-space: nowrap; }
+/* `not_yet` 是「还没发生」，不是「欠着一步」。所以它只是更淡，**不用**警告色，
+   也不加任何图标——履历不是进度条，缺一段不代表出了问题。 */
+.cognition-chain-segment.is-not-yet .cognition-chain-stage,
+.cognition-chain-segment.is-not-yet .cognition-chain-detail { color: var(--muted-fg, #9ca3af); }
+.cognition-chain-withheld { padding: 12px 0; border-top: 1px solid var(--border, #e5e7eb); }
+.cognition-chain-withheld > strong { display: block; margin-bottom: 5px; font-size: 12px; }
+.cognition-chain-withheld-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 5px 0; }
+.cognition-chain-withheld-row > span { color: var(--muted-fg, #6b7280); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.cognition-chain-withheld-row > small { color: var(--muted-fg, #9ca3af); font-size: 10px; white-space: nowrap; }
+
 .asset-detail-body { display: grid; padding: 0 16px 16px; }
 .asset-content-summary { padding: 12px 0; border-bottom: 1px solid var(--border, #e5e7eb); }
 .asset-content-summary strong { display: block; margin-bottom: 5px; font-size: 12px; }

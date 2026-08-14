@@ -170,6 +170,25 @@ function _initSkillsCognitionBindings() {
         renderSkillsCognitionAssets();
         return;
       }
+      if (actionName === 'chain') {
+        _skillsCognitionState.assetChainById ||= {};
+        _skillsCognitionState.visibleAssetChainId = assetId;
+        _skillsCognitionState.assetChainById[assetId] = { loading: true };
+        renderSkillsCognitionAssets();
+        const [chainResult, usageResult] = await Promise.all([
+          window.cogseed.invoke('recall.cognitionChain.read', { assetId }),
+          // 使用记录取不到不该让整个履历打不开——它是补充，履历本身来自回执。
+          window.cogseed.invoke('recall.usage.list', { assetId }).catch(() => null),
+        ]);
+        if (!chainResult?.ok) throw new Error(chainResult?.error || 'recall cognition chain failed');
+        _skillsCognitionState.assetChainById[assetId] = {
+          loading: false,
+          chain: chainResult.chain || null,
+          usage: usageResult?.usage || [],
+        };
+        renderSkillsCognitionAssets();
+        return;
+      }
       // 不可逆或有时限的动作必须先确认。归档与恢复不确认：它们随时可撤销，
       // 每一步都拦一下只会让用户养成闭眼点确认的习惯，真正危险的那次也就拦不住。
       const confirmations = {
@@ -208,6 +227,11 @@ function _initSkillsCognitionBindings() {
       _skillsCognitionState.assetHistoryById ||= {};
       if (actionName === 'versions') {
         _skillsCognitionState.assetHistoryById[assetId] = { loading: false, error: (error && error.message) || String(error) };
+        renderSkillsCognitionAssets();
+      }
+      if (actionName === 'chain') {
+        _skillsCognitionState.assetChainById ||= {};
+        _skillsCognitionState.assetChainById[assetId] = { loading: false, error: (error && error.message) || String(error) };
         renderSkillsCognitionAssets();
       }
       if (typeof uiAlert === 'function') await uiAlert((error && error.message) || String(error));
@@ -309,6 +333,12 @@ function _initSkillsCognitionBindings() {
 
     if (event.target.closest('[data-recall-asset-history-close]')) {
       _skillsCognitionState.visibleAssetHistoryId = '';
+      renderSkillsCognitionAssets();
+      return;
+    }
+
+    if (event.target.closest('[data-recall-asset-chain-close]')) {
+      _skillsCognitionState.visibleAssetChainId = '';
       renderSkillsCognitionAssets();
       return;
     }
