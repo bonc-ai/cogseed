@@ -293,6 +293,28 @@ export async function createAbilityAsset(
   return stored;
 }
 
+/** System-authored formal asset boundary (KStar direct experience line).
+ *  Content-addressed and idempotent: the same asset id is never duplicated.
+ *  Validation happens through asAsset before the record is persisted. */
+export async function createSystemAbilityAsset(
+  userId: string,
+  input: RecallAbilityAssetRecord,
+  reason: string,
+): Promise<RecallAbilityAssetRecord> {
+  if (!safeId(userId) || !safeId(input.id) || !safeId(input.candidateId || '')) throw new Error('invalid system ability asset identity');
+  if (typeof reason !== 'string' || !reason.trim() || reason.length > 1_000) throw new Error('invalid system ability asset reason');
+  const validated = asAsset(input);
+  if (validated.ownerId !== userId) throw new Error('ability asset owner mismatch');
+  const stored = asAsset(await updateRecallJsonRecord(
+    userId,
+    'ability-assets',
+    validated.id,
+    (current) => current || validated,
+  ));
+  await initializeAbilityAsset(userId, stored, { reason: reason.trim(), actor: 'system' });
+  return stored;
+}
+
 export async function readAbilityAsset(userId: string, assetId: string): Promise<RecallAbilityAssetRecord> {
   const raw = await readRecallJsonRecord(userId, 'ability-assets', assetId);
   if (!raw) throw new Error('recall ability asset not found');

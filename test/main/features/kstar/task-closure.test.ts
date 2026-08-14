@@ -337,6 +337,55 @@ describe('KSTAR task closure', () => {
   });
 });
 
+describe('KSTAR direct experience asset line', () => {
+  it('precipitates verified workflow experience directly as an ability asset without review', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const builder = await import('../../../../src/main/features/kstar/episode-builder');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const seededEpisode = builder.buildRuntimeKstarEpisode({ userId: 'closure-user', runId: 'run-direct', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
+    await seedLearningReview('closure-user', seededEpisode);
+
+    const result = await closure.captureRuntimeKstarClosure({ userId: 'closure-user', runId: 'run-direct', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
+
+    expect(result.episode.id).toBe('kse-run-direct');
+    const all = await assets.listAbilityAssets('closure-user');
+    expect(all).toHaveLength(1);
+    expect(all[0]).toMatchObject({
+      status: 'active',
+      maturity: 'seed',
+      type: 'skill_method',
+      version: '1',
+    });
+    expect(all[0].statement).toContain('verified workflow');
+    expect(all[0].evidenceRefs.some((ref) => ref.kind === 'execution' && ref.id === 'kse-run-direct')).toBe(true);
+    // The existing review line stays intact: the same experience is still a pending candidate.
+    const pending = await candidates.listRecallCandidates('closure-user');
+    expect(pending.some((candidate) => candidate.status === 'pending_review' && candidate.suggestedType === 'skill_method')).toBe(true);
+  });
+
+  it('does not duplicate the direct asset across repeated closure delivery', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const builder = await import('../../../../src/main/features/kstar/episode-builder');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const seededEpisode = builder.buildRuntimeKstarEpisode({ userId: 'closure-user', runId: 'run-direct-dup', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
+    await seedLearningReview('closure-user', seededEpisode);
+
+    await closure.captureRuntimeKstarClosure({ userId: 'closure-user', runId: 'run-direct-dup', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
+    await closure.captureRuntimeKstarClosure({ userId: 'closure-user', runId: 'run-direct-dup', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
+
+    expect(await assets.listAbilityAssets('closure-user')).toHaveLength(1);
+  });
+
+  it('precipitates nothing when no learning signal exists', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    await closure.captureRuntimeKstarClosure({ userId: 'closure-user', runId: 'run-no-signal-direct', request, events, createdAt: '2026-08-05T00:00:00.000Z' });
+
+    expect(await assets.listAbilityAssets('closure-user')).toHaveLength(0);
+  });
+});
+
 describe('KSTAR group terminal subscriber', () => {
   it('captures one bounded group terminal event and ignores duplicate delivery', async () => {
     const closure = await import('../../../../src/main/features/kstar/task-closure');

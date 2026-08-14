@@ -106,6 +106,18 @@ async function reconcileKstarExtraction(
   let errorCode: string | undefined;
   try {
     candidates = proposals.length ? await bridge(userId, proposals) : [];
+    if (proposals.length) {
+      try {
+        const { precipitateDirectExperienceAssets } = await import('./direct-experience-assets');
+        await precipitateDirectExperienceAssets(userId, episode, proposals);
+      } catch (error) {
+        log.warn('kstar direct experience precipitation failed', {
+          userId,
+          episodeId: episode.id,
+          error: (error as Error).message,
+        });
+      }
+    }
   } catch {
     status = 'failed';
     errorCode = 'candidate_bridge_failed';
