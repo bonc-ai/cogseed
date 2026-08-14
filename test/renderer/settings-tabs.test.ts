@@ -310,7 +310,7 @@ describe('settings tabs module', () => {
 
   it('keeps an add-binding entry for open channels after the first instance', () => {
     const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
-    expect(source).toContain("labelFor('messaging.instance.add', '')");
+    expect(source).toContain("labelFor('messaging.instance.add_another', '')");
     expect(source).toContain('state.telegramCreatingNew = true;');
     expect(source).toContain('void startQrForChannel(channel)');
   });
