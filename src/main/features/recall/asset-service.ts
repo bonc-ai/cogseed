@@ -15,6 +15,9 @@ import { readAbilityAssetRelationContract } from './asset-relations';
 import { readAbilityAssetSemantics } from './asset-semantics';
 import { normalizeAbilityAssetScopePolicy, type RecallAbilityAssetScopePolicy } from './scope-policy';
 import { assertNotForbiddenToPersist } from '../../util/cognition-sensitivity';
+import { createLogger } from '../../logger';
+
+const log = createLogger('recall.assets');
 
 export type AbilityAssetActor = 'user' | 'system';
 export type AbilityAssetRecommendedAction = 'pause' | 'rework';
@@ -40,7 +43,10 @@ export interface AbilityAssetAuditRecord extends RecallJsonRecord {
     | 'archived' | 'deleted' | 'purged' | 'restored' | 'rolled_back'
     | 'maturity_downgraded' | 'pause_recommended' | 'rework_recommended'
     | 'recommendation_cleared'
-    | 'cross_scope_confirmed' | 'cross_scope_withdrawn';
+    | 'cross_scope_confirmed' | 'cross_scope_withdrawn'
+    // 修正归档错误，**不是**靠证据挣来的升档。审计里要分得开，否则日后
+    // 回看会以为这条资产做过 transfer proof。
+    | 'maturity_corrected';
   at: string;
   actor?: AbilityAssetActor;
   note?: string;
@@ -479,6 +485,53 @@ export function resumeAbilityAsset(userId: string, assetId: string, input: Abili
  *
  * 撤销后立刻回到 confirm 档：授权是可收回的，不是一次性放行。
  */
+/**
+ * 把 33a16ad 之前 promote 出来的资产从 seed 修正到 bud。
+ *
+ * 那次改动之前，promote 写下的两个字段是自相矛盾的：lifecycleStatus 说
+ * 「user_confirmed_unverified」，maturity 却归在 seed（规范 10.2 里 seed 是
+ * Candidate 档）。接上选择层之后这个矛盾变成实的——seed 一律 never，于是这些
+ * 资产永远进不了任何 Agent，也永远升不了档（seed→bud 没有任何路径）。
+ *
+ * **只改归档错误，不放宽策略。** 判据是那对矛盾本身：lifecycleStatus 已确认
+ * 且 maturity 仍是 seed。满足这两条的资产，它的 seed 是系统写错的，不是用户
+ * 的决定——让用户逐条去修系统的错不合理。
+ *
+ * 其余一概不碰：没有 lifecycleStatus 的、已经是 bud 以上的、已撤销或已清除的。
+ *
+ * 审计动作用 maturity_corrected 而不是复用升档语义：这是修正，不是靠证据挣来
+ * 的晋级，日后回看不能把两者混为一谈。
+ *
+ * 幂等：跑完一次之后就没有符合判据的记录了，重启再跑是空转。
+ */
+export async function correctMisfiledSeedMaturity(userId: string): Promise<number> {
+  let corrected = 0;
+  for (const asset of await listAbilityAssets(userId)) {
+    if (asset.maturity !== 'seed') continue;
+    if (asset.lifecycleStatus !== 'user_confirmed_unverified') continue;
+    if (asset.status === 'revoked' || asset.status === 'purged') continue;
+    try {
+      await updateRecallJsonRecord(userId, 'ability-assets', asset.id, (raw) => {
+        if (!raw) throw new Error('recall ability asset not found');
+        const current = asAsset(raw);
+        // 并发下可能已经被别处改过，再确认一次判据仍然成立。
+        if (current.maturity !== 'seed' || current.lifecycleStatus !== 'user_confirmed_unverified') return current;
+        return { ...current, maturity: 'bud', updatedAt: new Date().toISOString() };
+      });
+      await appendAudit(userId, asset.id, 'maturity_corrected', {
+        actor: 'system',
+        note: 'seed→bud: promote 时的归档错误，lifecycleStatus 已是 user_confirmed_unverified',
+      });
+      corrected += 1;
+    } catch (err) {
+      // 单条修不了不该拦住其余的——它下次启动还会被扫到。
+      log.warn(`ability asset maturity correction skipped id=${asset.id}: ${(err as Error).message}`);
+    }
+  }
+  if (corrected) log.info(`ability asset maturity corrected seed->bud count=${corrected}`);
+  return corrected;
+}
+
 export async function setAbilityAssetCrossScopeConfirmation(
   userId: string,
   assetId: string,

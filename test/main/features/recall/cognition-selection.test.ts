@@ -355,3 +355,74 @@ describe('跨作用域授权的落盘与撤回', () => {
     expect(purged.crossScopeConfirmedAt).toBeUndefined();
   });
 });
+
+describe('存量 seed 资产的归档修正', () => {
+  async function seedLike(id: string, overrides: Partial<RecallAbilityAssetRecord> = {}) {
+    const { writeRecallJsonRecord } = await import('../../../../src/main/features/recall/store');
+    await writeRecallJsonRecord(UID, 'ability-assets', id, asset({ id, maturity: 'seed', ...overrides }));
+  }
+
+  it('把 lifecycleStatus 已确认却还是 seed 的资产修正到 bud', async () => {
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    await seedLike('aa-misfiled');
+
+    expect(await assets.correctMisfiledSeedMaturity(UID)).toBe(1);
+    expect((await assets.readAbilityAsset(UID, 'aa-misfiled')).maturity).toBe('bud');
+  });
+
+  it('审计写的是 maturity_corrected，不冒充靠证据挣来的升档', async () => {
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    await seedLike('aa-audit');
+    await assets.correctMisfiledSeedMaturity(UID);
+
+    const audit = await assets.listAbilityAssetAudit(UID, 'aa-audit');
+    const row = audit.find((r) => r.action === 'maturity_corrected');
+    expect(row).toBeTruthy();
+    expect(row!.actor).toBe('system');
+    // 日后回看不能以为这条做过 transfer proof。
+    expect(audit.map((r) => r.action)).not.toContain('maturity_downgraded');
+  });
+
+  it('已撤销与已清除的不碰', async () => {
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    await seedLike('aa-revoked', { status: 'revoked' });
+    await seedLike('aa-purged', { status: 'purged' });
+
+    expect(await assets.correctMisfiledSeedMaturity(UID)).toBe(0);
+    expect((await assets.readAbilityAsset(UID, 'aa-revoked')).maturity).toBe('seed');
+  });
+
+  it('已经是 bud 以上的不动', async () => {
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const { writeRecallJsonRecord } = await import('../../../../src/main/features/recall/store');
+    await writeRecallJsonRecord(UID, 'ability-assets', 'aa-tv', asset({ id: 'aa-tv', maturity: 'transfer_validated' }));
+
+    expect(await assets.correctMisfiledSeedMaturity(UID)).toBe(0);
+    expect((await assets.readAbilityAsset(UID, 'aa-tv')).maturity).toBe('transfer_validated');
+  });
+
+  it('幂等：第二次跑是空转，不会重复写审计', async () => {
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    await seedLike('aa-idem');
+    expect(await assets.correctMisfiledSeedMaturity(UID)).toBe(1);
+    expect(await assets.correctMisfiledSeedMaturity(UID)).toBe(0);
+
+    const audit = await assets.listAbilityAssetAudit(UID, 'aa-idem');
+    expect(audit.filter((r) => r.action === 'maturity_corrected')).toHaveLength(1);
+  });
+
+  it('修正之后这条资产真的能被带入了', async () => {
+    // 这才是修正的目的：它原本卡在 use_policy_never，永远进不了任何 Agent。
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const { classifyInheritedAsset } = await mod();
+    await seedLike('aa-usable');
+
+    const before = await assets.readAbilityAsset(UID, 'aa-usable');
+    expect(classifyInheritedAsset(await refFor(before), before, { scope: 'delivery' }))
+      .toEqual(['use_policy_never']);
+
+    await assets.correctMisfiledSeedMaturity(UID);
+    const after = await assets.readAbilityAsset(UID, 'aa-usable');
+    expect(classifyInheritedAsset(await refFor(after), after, { scope: 'delivery' })).toEqual([]);
+  });
+});
