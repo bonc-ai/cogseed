@@ -27,6 +27,13 @@ export const TOUCHPOINT_TEMPLATES = [
 
 export type TouchpointTemplate = (typeof TOUCHPOINT_TEMPLATES)[number];
 
+export const TOUCHPOINT_ROUTE_SCENES = [
+  ...TOUCHPOINT_TEMPLATES,
+  'external_send',
+] as const;
+
+export type TouchpointRouteScene = (typeof TOUCHPOINT_ROUTE_SCENES)[number];
+
 export const TOUCHPOINT_PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const;
 export type TouchpointPriority = (typeof TOUCHPOINT_PRIORITIES)[number];
 

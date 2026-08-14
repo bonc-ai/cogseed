@@ -10,6 +10,9 @@ const registry = {
 const confirm = {
   requestSendConfirm: vi.fn(),
 };
+const touchpointConfig = {
+  resolveTouchpointInstanceId: vi.fn(),
+};
 
 const INSTANCE_BASE = {
   platform: 'feishu_lark' as const,
@@ -35,16 +38,20 @@ describe('messaging proactive target service', () => {
     vi.doMock('../../../src/main/features/messaging/manager', () => manager);
     vi.doMock('../../../src/main/features/messaging/registry', () => registry);
     vi.doMock('../../../src/main/features/messaging/proactive-confirm', () => confirm);
+    vi.doMock('../../../src/main/features/touchpoints/config', () => touchpointConfig);
     manager.listInstances.mockReset();
     manager.sendProactive.mockReset();
     registry.getInstance.mockReset();
     confirm.requestSendConfirm.mockReset();
+    touchpointConfig.resolveTouchpointInstanceId.mockReset();
+    touchpointConfig.resolveTouchpointInstanceId.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
     vi.doUnmock('../../../src/main/features/messaging/manager');
     vi.doUnmock('../../../src/main/features/messaging/registry');
     vi.doUnmock('../../../src/main/features/messaging/proactive-confirm');
+    vi.doUnmock('../../../src/main/features/touchpoints/config');
   });
 
   async function proactive() {
@@ -97,6 +104,64 @@ describe('messaging proactive target service', () => {
       candidates: ['bot-1', 'bot-2'],
     });
     expect(confirm.requestSendConfirm).not.toHaveBeenCalled();
+  });
+
+  it('uses the configured default instance when multiple bots are available', async () => {
+    manager.listInstances.mockResolvedValue([
+      client({ id: 'bot-1', displayName: '研发机器人', ownerConfigured: true, ownerLabel: '研发' }),
+      client({ id: 'bot-2', displayName: '正式机器人', ownerConfigured: true, ownerLabel: '正式' }),
+    ]);
+    touchpointConfig.resolveTouchpointInstanceId.mockResolvedValue('bot-2');
+    registry.getInstance.mockResolvedValue({ id: 'bot-2', ownerExternalUserId: 'ou_prod_owner' });
+    confirm.requestSendConfirm.mockResolvedValue('denied');
+
+    const result = await (await proactive()).sendToSelf(
+      'user-1',
+      { target: 'self', text: 'hello' },
+      { cid: 'cid-1', sourceKey: 'default-route' },
+    );
+
+    expect(result).toEqual({ status: 'not_sent', reason: 'denied' });
+    expect(touchpointConfig.resolveTouchpointInstanceId).toHaveBeenCalledWith('user-1', 'external_send', undefined);
+    expect(confirm.requestSendConfirm).toHaveBeenCalledWith(expect.objectContaining({ instanceName: '正式机器人' }));
+  });
+
+  it('uses a scene route before the global default', async () => {
+    manager.listInstances.mockResolvedValue([
+      client({ id: 'bot-1', displayName: '研发机器人', ownerConfigured: true, ownerLabel: '研发' }),
+      client({ id: 'bot-2', displayName: '正式机器人', ownerConfigured: true, ownerLabel: '正式' }),
+    ]);
+    touchpointConfig.resolveTouchpointInstanceId.mockResolvedValue('bot-1');
+    registry.getInstance.mockResolvedValue({ id: 'bot-1', ownerExternalUserId: 'ou_dev_owner' });
+    confirm.requestSendConfirm.mockResolvedValue('denied');
+
+    const result = await (await proactive()).sendToSelf(
+      'user-1',
+      { target: 'self', text: 'approval', scene: 'task_approval' },
+      { cid: 'cid-1', sourceKey: 'scene-route' },
+    );
+
+    expect(result).toEqual({ status: 'not_sent', reason: 'denied' });
+    expect(touchpointConfig.resolveTouchpointInstanceId).toHaveBeenCalledWith('user-1', 'task_approval', undefined);
+    expect(confirm.requestSendConfirm).toHaveBeenCalledWith(expect.objectContaining({ instanceName: '研发机器人' }));
+  });
+
+  it('does not fall back when the configured default instance is unavailable', async () => {
+    manager.listInstances.mockResolvedValue([
+      client({ id: 'bot-1', displayName: '可用机器人', ownerConfigured: true }),
+      client({ id: 'bot-2', displayName: '已停用机器人', enabled: false, ownerConfigured: true }),
+    ]);
+    touchpointConfig.resolveTouchpointInstanceId.mockResolvedValue('bot-2');
+
+    const result = await (await proactive()).sendToSelf(
+      'user-1',
+      { target: 'self', text: 'must not reroute' },
+      { cid: 'cid-1', sourceKey: 'invalid-default' },
+    );
+
+    expect(result).toMatchObject({ status: 'error', code: 'E_MESSAGING_INSTANCE_UNAVAILABLE' });
+    expect(confirm.requestSendConfirm).not.toHaveBeenCalled();
+    expect(manager.sendProactive).not.toHaveBeenCalled();
   });
 
   it('does not confirm or send when the chosen instance lacks an owner identity', async () => {
