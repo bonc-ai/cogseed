@@ -75,8 +75,10 @@ commit_forecast ──► 组装世界模型（每任务一次）：
 | 4 | 重组函数分散在 forecast-commit / projection-knowledge / world-model 三处 | 无单一 `assembleWorldModel` 入口 | P2（收敛命名） |
 | 5 | 世界模型无独立 T-Box Schema 文件（TS 接口即 Schema） | 可接受，接口即契约 | 不改 |
 
-## 5. 建议落地顺序
+## 5. 落地状态
 
 1. ✅ **本体 R-Box 已实现**（`ontology-rules.ts`）：值形状驱动——字段值 `A → B` 即业务规则（`ontr-*`），进入世界模型 K 的 `ontologyRules`；`isRelation` 显式声明为可选信号。
-2. **收敛重组入口**（P2）：`assembleWorldModel(userId, input)` 封装 投影知识 + 快照 + 规则，forecast-commit 调用它，命名即文档。
-3. **A-Box 刷新 Hook**（P2）：工具调用后增量刷新快照（保留每任务 T/R 冻结语义）。
+2. ✅ **最小规则引擎**（`recall/rule-engine.ts`，对齐参考 `_ONTOLOGY_ENGINE`）：forecast 时按任务文本 token 匹配评估本体规则（ontr-*）与资产 ΔR 教训（CausalRule cause/effect/mitigation），命中子集进 `simulationInput.k.matchedRules`——Commander 只对着"本次任务真正适用的规则"推理（上限 12 条，确定性、无副作用）。
+3. ✅ **学习回流阈值门**（对齐参考 `|ΔR|≥0.15`）：`clearsPrecipitationGate`——数值 ΔR/ΔA ≥0.15、或明确 better/worse-than-expected、或高置信具体 gap（knowledge/rule/template/skill + reason）才沉淀；"met_expected + ~0 delta" = 无偏离 = 不沉淀（噪声门）。单集与任务级沉淀同时生效。
+4. **收敛重组入口**（P2）：`assembleWorldModel(userId, input)` 封装 投影知识 + 快照 + 规则，forecast-commit 调用它，命名即文档。
+5. **A-Box 刷新 Hook**（P2）：工具调用后增量刷新快照（保留每任务 T/R 冻结语义）。
