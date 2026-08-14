@@ -1098,8 +1098,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { spaces: await spaces.listSpaces(ctx.userId) };
   },
 
-  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
-    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, main_skill_ref, asset_reference_bindings });
+  'spaces.create': async ({ name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, main_skill_ref, asset_reference_bindings } = {}, ctx) => {
+    const result = await spaces.createSpace(ctx.userId, { name, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, main_skill_ref, asset_reference_bindings });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
   },
