@@ -316,6 +316,13 @@ async function defaultGroupMessageLoader(userId: string, conversationId: string,
     ...(message.plan_announcement ? { plan_announcement: true } : {}),
     ...(message.dispatch ? { dispatch: true } : {}),
     ...(message.kstar_dispatch_narration ? { kstar_dispatch_narration: { ...message.kstar_dispatch_narration } } : {}),
+    ...(message.process ? { process: message.process.slice(0, 300) } : {}),
+    ...(message.recall_citations ? { recall_citations: message.recall_citations.slice(0, 12).map((citation) => ({
+      asset_id: citation.asset_id,
+      version: citation.version,
+      projection_id: citation.projection_id,
+      ...(citation.forecast_id ? { forecast_id: citation.forecast_id } : {}),
+    })) } : {}),
   }));
 }
 
@@ -345,6 +352,7 @@ export function startGroupKstarClosure(runtime: GroupKstarClosureRuntime = {}): 
           ...(event.logical_run_id ? { logicalRunId: event.logical_run_id } : {}),
           ...(event.execution_id ? { executionId: event.execution_id } : {}),
           ...(event.projection_id ? { projectionId: event.projection_id } : {}),
+          ...(event.forecast_id ? { forecastId: event.forecast_id } : {}),
         });
         if (event.status === 'completed' && result?.review?.needsConfirmation) {
           await publishReviewCard(event.user_id, event.conversation_id, result.review);

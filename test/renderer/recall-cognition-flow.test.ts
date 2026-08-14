@@ -85,13 +85,25 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).not.toContain('data-cognition-page-link="sources"');
     expect(host.innerHTML).toContain('可复用方法');
     expect(host.innerHTML).toContain('data-recall-asset-more="aa-method"');
-    expect(host.innerHTML).toContain('data-recall-asset-actions="pause,revoke,versions"');
+    expect(host.innerHTML).toContain('data-recall-asset-actions="pause,archive,delete,revoke,purge,versions,chain"');
 
     vm.runInContext(`_skillsCognitionState.assets[0].generatedSkillId = 'apply-prd-review';`, context);
     context.renderSkillsCognitionAssets();
     expect(host.innerHTML).toContain('已加入技能库');
     expect(host.innerHTML).toContain('data-cognition-open-skill="apply-prd-review"');
     expect(host.innerHTML).not.toContain('data-recall-skill-generate=');
+  });
+
+  it('shows governance actions appropriate to each Recall asset status', () => {
+    const context = loadSkillsRenderer();
+    expect(Array.from(context._recallAssetActions('active'))).toEqual(['pause', 'archive', 'delete', 'revoke', 'purge', 'versions', 'chain']);
+    expect(Array.from(context._recallAssetActions('paused'))).toEqual(['resume', 'archive', 'delete', 'revoke', 'purge', 'versions', 'chain']);
+    expect(Array.from(context._recallAssetActions('archived'))).toEqual(['restore', 'delete', 'revoke', 'purge', 'versions', 'chain']);
+    expect(Array.from(context._recallAssetActions('deleted'))).toEqual(['restore', 'revoke', 'purge', 'versions', 'chain']);
+    expect(Array.from(context._recallAssetActions('revoked'))).toEqual(['purge', 'versions', 'chain']);
+    // 彻底清除后只剩版本与履历：墓碑没有内容可治理，但它被谁带走过、用过几次
+    // 是既成事实，回执还在，不该跟着内容一起消失。
+    expect(Array.from(context._recallAssetActions('purged'))).toEqual(['versions', 'chain']);
   });
 
   it('uses a concise method name while keeping the deposited content visible', () => {
@@ -318,7 +330,7 @@ describe('Recall cognition renderer flow', () => {
 
     vm.runInContext(`_skillsCognitionState.assetSearchQuery = 'missing';`, context);
     context.renderSkillsCognitionAssets();
-    expect(host.innerHTML).toContain('未找到匹配的记忆内容');
+    expect(host.innerHTML).toContain('未找到匹配的能力资产');
   });
 
   it('shows model configuration failures and exposes the existing credentials settings', async () => {
@@ -397,7 +409,7 @@ describe('Recall cognition renderer flow', () => {
 
     context.renderSkillsCognitionCaptures();
 
-    expect(host.innerHTML).toContain('已开启 · 夜间 · 自动入库');
+    expect(host.innerHTML).toContain('已开启 · 夜间 · 自动整理');
     expect(host.innerHTML).toContain('data-recall-capture-settings-toggle aria-expanded="false"');
     expect(host.innerHTML).toContain('class="recall-capture-control-expanded" hidden');
     expect(host.innerHTML).toContain('data-recall-capture-enabled');
@@ -573,8 +585,8 @@ describe('Recall cognition renderer flow', () => {
     };
     vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
       recallCandidates: [
-        { id: 'cand-a', status: 'pending', summary: '第一条', judgment: '第一条判断', suggestedType: 'rule', suggestedScope: 'project', sourceRefs: [] },
-        { id: 'cand-b', status: 'deferred', summary: '第二条', judgment: '第二条判断', suggestedType: 'template', suggestedScope: 'project', sourceRefs: [] },
+        { id: 'cand-a', status: 'pending_review', summary: '第一条', judgment: '第一条判断', suggestedType: 'rule', suggestedScope: 'project', sourceRefs: [] },
+        { id: 'cand-b', status: 'pending_review', summary: '第二条', judgment: '第二条判断', suggestedType: 'template', suggestedScope: 'project', sourceRefs: [] },
       ],
     })})`, context);
 
@@ -583,6 +595,49 @@ describe('Recall cognition renderer flow', () => {
     expect(host.innerHTML).toContain('data-recall-candidate-promote-all');
     expect(host.innerHTML).toContain('全部保存');
     expect(host.innerHTML).not.toContain('暂缓');
+  });
+
+  it('connects candidate editing to the modify-and-save confirmation path', () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => id === 'skills-cognition-candidates-body' ? host : null,
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      recallCandidates: [{
+        id: 'cand-edit', status: 'pending_review', summary: '修改候选', judgment: '修改前内容',
+        suggestedType: 'rule', suggestedScope: 'project', sourceRefs: [{ kind: 'conversation', id: 'conv-a' }],
+      }],
+      editingRecallCandidateId: 'cand-edit',
+    })})`, context);
+
+    context.renderSkillsCognitionCandidates();
+
+    expect(host.innerHTML).toContain('data-recall-candidate-action="save-and-promote"');
+    expect(host.innerHTML).toContain('修改后保存');
+    expect(host.innerHTML).not.toContain('data-recall-candidate-action="save-edit"');
+  });
+
+  it('shows explicit reject and keep-current decisions without offering an asset write', () => {
+    const context = loadSkillsRenderer();
+    const host = { innerHTML: '' };
+    context.document = {
+      getElementById: (id: string) => id === 'skills-cognition-candidates-body' ? host : null,
+    };
+    vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
+      recallCandidates: [{
+        id: 'cand-keep', status: 'pending_review', summary: '保留当前规则', judgment: '当前版本仍然适用',
+        value: '避免不必要的版本变化', suggestedType: 'rule', suggestedScope: 'project',
+        suggestedAction: 'keep_current', sourceRefs: [{ kind: 'conversation', id: 'conv-a' }],
+      }],
+    })})`, context);
+
+    context.renderSkillsCognitionCandidates();
+
+    expect(host.innerHTML).toContain('data-recall-candidate-action="keep-current"');
+    expect(host.innerHTML).toContain('data-recall-candidate-action="reject"');
+    expect(host.innerHTML).toContain('data-recall-candidate-action="ignore"');
+    expect(host.innerHTML).not.toContain('data-recall-candidate-action="promote"');
   });
 
   it('collapses empty source groups and hides an empty review section', () => {
@@ -816,7 +871,7 @@ describe('Recall cognition renderer flow', () => {
     expect(overview.innerHTML).toContain('<b>数据来源</b><em>4</em>');
     expect(overview.innerHTML).not.toContain('<b>数据来源</b><em>7</em>');
     expect(overview.innerHTML).toContain('待审核');
-    expect(overview.innerHTML).toContain('<b>记忆内容</b><em>1</em>');
+    expect(overview.innerHTML).toContain('<b>能力资产</b><em>1</em>');
     expect(overview.innerHTML).toContain('以后保持决策可追溯');
     expect(overview.innerHTML).toContain('已恢复处理');
     expect(overview.innerHTML).toContain('data-recall-teaching-revoke="teach-a"');
@@ -844,8 +899,8 @@ describe('Recall cognition renderer flow', () => {
         updatedAt: '2026-08-08T12:00:00.000Z',
       }],
       recallCandidates: [
-        { id: 'candidate-a', status: 'pending' },
-        { id: 'candidate-b', status: 'deferred' },
+        { id: 'candidate-a', status: 'pending_review' },
+        { id: 'candidate-b', status: 'failed' },
       ],
       assets: [{
         id: 'asset-method', title: '需求评审方法', category: 'skill_method', type: 'skill_method',
@@ -862,7 +917,7 @@ describe('Recall cognition renderer flow', () => {
     expect(overview.innerHTML).toContain('数据来源</span><strong>2</strong>');
     expect(overview.innerHTML).toContain('进行中任务</span><strong>3</strong>');
     expect(overview.innerHTML).toContain('待审核</span><strong>2</strong>');
-    expect(overview.innerHTML).toContain('记忆内容</span><strong>2</strong>');
+    expect(overview.innerHTML).toContain('能力资产</span><strong>2</strong>');
     expect(overview.innerHTML).toContain('可生成 Skill</span><strong>1</strong>');
     expect(overview.innerHTML).toContain('沉淀模型尚未配置');
     expect(overview.innerHTML).toContain('2 个沉淀任务需要重试');
@@ -1329,7 +1384,7 @@ describe('Recall cognition renderer flow', () => {
     const button: any = {
       dataset: {
         recallAssetMore: 'aa-method',
-        recallAssetActions: 'pause,resume,revoke,versions',
+        recallAssetActions: 'pause,resume,archive,restore,delete,purge,revoke,versions',
       },
       disabled: false,
       getBoundingClientRect: () => ({ right: 10, bottom: 20 }),
@@ -1371,20 +1426,36 @@ describe('Recall cognition renderer flow', () => {
 
     expect(clickHandler).toBeTypeOf('function');
     await clickHandler!({ target, clientX: 1, clientY: 2 });
-    expect(menuItems).toHaveLength(4);
+    expect(menuItems).toHaveLength(8);
     for (const item of menuItems) await item.onClick();
+
+    const rollbackButton: any = {
+      dataset: { recallAssetRollback: 'aa-method', recallAssetVersion: '1' },
+      disabled: false,
+    };
+    await clickHandler!({
+      target: {
+        closest: (selector: string) => selector === '[data-recall-asset-rollback]' ? rollbackButton : null,
+      },
+    });
 
     expect(calls).toEqual([
       ['recall.assets.pause', { assetId: 'aa-method' }],
       ['recall.assets.resume', { assetId: 'aa-method' }],
+      ['recall.assets.archive', { assetId: 'aa-method' }],
+      ['recall.assets.restore', { assetId: 'aa-method' }],
+      ['recall.assets.delete', { assetId: 'aa-method' }],
+      ['recall.assets.purge', { assetId: 'aa-method' }],
       ['recall.assets.revoke', { assetId: 'aa-method' }],
       ['recall.assets.versions', { assetId: 'aa-method' }],
+      ['recall.assets.rollback', { assetId: 'aa-method', version: '1' }],
     ]);
-    expect(refreshes).toBe(3);
+    expect(refreshes).toBe(8);
     expect(renders).toBeGreaterThanOrEqual(2);
     expect(state.visibleAssetHistoryId).toBe('aa-method');
     expect(state.assetHistoryById['aa-method'].versions[0].version).toBe('1');
     expect(button.disabled).toBe(false);
+    expect(rollbackButton.disabled).toBe(false);
   });
 
   it('queues one historical conversation with a single click and refreshes all tasks', async () => {
@@ -1504,9 +1575,10 @@ describe('Recall cognition renderer flow', () => {
       captures: [],
       selectedCaptureId: '',
       recallCandidates: [
-        { id: 'cand-a', status: 'pending' },
-        { id: 'cand-b', status: 'deferred' },
-        { id: 'cand-c', status: 'promoted' },
+        { id: 'cand-a', status: 'pending_review' },
+        { id: 'cand-b', status: 'pending_review' },
+        { id: 'cand-risk', status: 'pending_review', risk: 'high' },
+        { id: 'cand-c', status: 'confirmed' },
       ],
       writingRecallCandidateId: '',
     };
@@ -1537,11 +1609,65 @@ describe('Recall cognition renderer flow', () => {
     await clickHandler!({ target });
 
     expect(calls).toEqual([
-      ['recall.candidates.promote', { candidateId: 'cand-a' }],
-      ['recall.candidates.promote', { candidateId: 'cand-b' }],
+      ['recall.candidates.promoteBatch', { candidateIds: ['cand-a', 'cand-b'] }],
     ]);
     expect(refreshes).toBe(1);
     expect(state.writingRecallCandidateId).toBe('');
+    expect(button.disabled).toBe(false);
+    expect(button.dataset.busy).toBe('0');
+  });
+
+  it('requires an independent confirmation and acknowledges high-risk candidate promotion', async () => {
+    let clickHandler: ((event: any) => Promise<void>) | undefined;
+    const calls: Array<[string, unknown]> = [];
+    const confirmations: unknown[] = [];
+    const panel: any = {
+      dataset: {},
+      addEventListener: (type: string, handler: (event: any) => Promise<void>) => {
+        if (type === 'click') clickHandler = handler;
+      },
+    };
+    const button: any = {
+      dataset: { recallCandidateAction: 'promote', recallCandidateId: 'cand-risk' },
+      disabled: false,
+    };
+    button.closest = (selector: string) => selector === '[data-recall-candidate-action]' ? button : null;
+    const context: any = {
+      document: {
+        getElementById: (id: string) => id === 'panel-recall' ? panel : null,
+        querySelectorAll: () => [],
+      },
+      window: {
+        addEventListener() {},
+        cogseed: {
+          invoke: async (channel: string, input: unknown) => {
+            calls.push([channel, input]);
+            return { ok: true };
+          },
+        },
+      },
+      _skillsCognitionState: {
+        recallCandidates: [{ id: 'cand-risk', status: 'pending_review', risk: 'high' }],
+        writingRecallCandidateId: '',
+      },
+      _cognitionText: (_key: string, fallback: string) => fallback,
+      uiConfirm: async (input: unknown) => { confirmations.push(input); return true; },
+      renderSkillsCognitionCaptures() {},
+      renderSkillsCognitionCandidates() {},
+      loadSkillsCognitionSnapshot: async () => {},
+      initSkillsCognitionConsole() {},
+      switchSkillsCognitionPage() {},
+      setTimeout,
+    };
+    vm.createContext(context);
+    vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
+
+    await clickHandler!({ target: button });
+
+    expect(confirmations).toHaveLength(1);
+    expect(calls).toEqual([
+      ['recall.candidates.promote', { candidateId: 'cand-risk', riskAcknowledged: true }],
+    ]);
     expect(button.disabled).toBe(false);
     expect(button.dataset.busy).toBe('0');
   });

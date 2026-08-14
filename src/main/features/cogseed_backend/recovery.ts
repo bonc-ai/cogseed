@@ -2,6 +2,7 @@ import { nowIso, writeJson } from '../../storage';
 import { markMateTaskRecoverable } from './lifecycle';
 import { assertMateUserId, mateRecoveryStateFile } from './paths';
 import { listMateTasks } from './task-store';
+import type { MateGroupChatProjectionInput } from './group-chat-projection';
 
 export interface MateRecoveryReport {
   recoveredCount: number;
@@ -10,12 +11,37 @@ export interface MateRecoveryReport {
   taskIds: string[];
 }
 
-export async function recoverMateTasks(userId: string): Promise<MateRecoveryReport> {
+export async function recoverMateTasks(
+  userId: string,
+  options: { projectTaskEvent?: (input: MateGroupChatProjectionInput) => Promise<unknown> } = {},
+): Promise<MateRecoveryReport> {
   assertMateUserId(userId);
   const tasks = await listMateTasks(userId);
   const recoverable = tasks.filter((task) => task.status === 'created' || task.status === 'queued' || task.status === 'running');
+  const projectTaskEvent = options.projectTaskEvent ?? (async (input: MateGroupChatProjectionInput) => {
+    const { mateGroupChatProjection } = await import('./group-chat-projection');
+    return mateGroupChatProjection.project(input);
+  });
   for (const task of recoverable) {
-    await markMateTaskRecoverable(userId, task.taskId, 'worker_restart');
+    const updated = await markMateTaskRecoverable(userId, task.taskId, 'worker_restart');
+    if (updated.conversationId && updated.agentId) {
+      try {
+        await projectTaskEvent({
+          userId,
+          conversationId: updated.conversationId,
+          agentId: updated.agentId,
+          taskId: updated.taskId,
+          sessionId: updated.sessionId,
+          event: {
+            eventId: `mate-event-recovery-${updated.taskId}`,
+            type: 'task.recoverable',
+            payload: { errorCode: 'worker_restart' },
+          },
+        });
+      } catch {
+        // Recovery state is authoritative; display projection remains best-effort.
+      }
+    }
   }
   const taskIds = recoverable.map((task) => task.taskId);
   const collaborationRecovery = await recoverMateCollaborationSteps(userId);
@@ -44,9 +70,9 @@ export async function recoverMateCollaborationSteps(userId: string): Promise<{ r
     let touched = false;
     for (const step of run.steps.filter((item) => item.status === 'running' && item.result_ref?.startsWith('mate-task-'))) {
       const task = await (await import('./task-store')).readMateTask(userId, step.result_ref!); if (!task) continue;
-      if (task.status === 'completed') { await engine.completeStep(scope, run.id, step.id, { status: 'completed', resultRef: task.taskId, resultSummary: 'Recovered completed Mate task.' }); touched = true; }
-      else if (task.status === 'failed') { await engine.completeStep(scope, run.id, step.id, { status: 'failed', resultRef: task.taskId, resultSummary: task.errorCode || 'Recovered failed Mate task.' }); touched = true; }
-      else if (task.status === 'cancelled') { await engine.completeStep(scope, run.id, step.id, { status: 'skipped', resultRef: task.taskId, resultSummary: 'Recovered cancelled Mate task.' }); touched = true; }
+      if (task.status === 'completed') { await engine.completeStep(scope, run.id, step.id, { status: 'completed', resultRef: task.taskId, resultSummary: 'Recovered completed CogSeed task.' }); touched = true; }
+      else if (task.status === 'failed') { await engine.completeStep(scope, run.id, step.id, { status: 'failed', resultRef: task.taskId, resultSummary: task.errorCode || 'Recovered failed CogSeed task.' }); touched = true; }
+      else if (task.status === 'cancelled') { await engine.completeStep(scope, run.id, step.id, { status: 'skipped', resultRef: task.taskId, resultSummary: 'Recovered cancelled CogSeed task.' }); touched = true; }
     }
     if (touched) { reconciledCount += 1; coordinationIds.push(coordinationId); }
   }

@@ -707,6 +707,17 @@ describe('skills › applySkillContainerFromCommander › edit', () => {
 // `<uid>/local/marketplace/skills/<id>/` per machine — see features/marketplace_*.ts.
 
 describe('skills › listSkills', () => {
+  it('provides a lightweight reference catalog without security overlay fields', async () => {
+    writeCustomSkill('catalog-skill', 'name: "Catalog Skill"\ndescription: "reference only"');
+    const s = await loadSkills();
+
+    const catalog = await s.listSkillCatalog();
+
+    expect(catalog).toHaveLength(1);
+    expect(catalog[0]).toMatchObject({ id: 'catalog-skill', name: 'Catalog Skill', enabled: true });
+    expect(catalog[0].security).toBeUndefined();
+  });
+
   it('reuses the persisted catalog after a module restart and honors force invalidation', async () => {
     writeCustomSkill('persisted-skill', 'name: "Old Skill"\ndescription: "cached"');
     const first = await loadSkills();

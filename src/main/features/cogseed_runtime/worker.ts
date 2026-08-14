@@ -45,7 +45,7 @@ function createHostSmokeExecutor(hostToolClient: ReturnType<typeof createRuntime
   };
 }
 
-/** Production always selects the Mate Native executor. The echo path is test-only. */
+/** Production always selects the CogSeed Native executor. The echo path is test-only. */
 export function selectRuntimeExecutor(deps: {
   env?: Record<string, string | undefined>;
   nativeExecutor?: RuntimeExecutor;
@@ -103,5 +103,5 @@ export async function runRuntimeWorker(executor?: RuntimeExecutor): Promise<void
       }
     })();
   }
-  hostToolClient.rejectAll(new Error('Mate Runtime worker stopped'));
+  hostToolClient.rejectAll(new Error('CogSeed Runtime worker stopped'));
 }

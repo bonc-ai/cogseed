@@ -1,0 +1,88 @@
+manifest_version: "1.1.1"
+security_ontology:
+  id: ecs.security.skill
+  version: "1.1.1"
+skill:
+  id: REQUIRED_INPUT
+  name: REQUIRED_INPUT
+  version: REQUIRED_INPUT
+  description: REQUIRED_INPUT
+  environment: development
+  artifact_manifest_ref: artifact.yaml
+  skill_spec_ref: references/skill-spec.yaml
+  business_ontology_ref: references/business-ontology.yaml
+ownership:
+  human_owner: REQUIRED_INPUT
+  organization: REQUIRED_INPUT
+  role: REQUIRED_INPUT
+  technical_owner: null
+provenance:
+  source_type: internal
+  source_uri: REQUIRED_INPUT
+  author: REQUIRED_INPUT
+  checksum: DEFERRED_UNTIL_FREEZE
+  signature: null
+permissions:
+  required: []
+  prohibited: []
+resources:
+  allowed: []
+  denied: []
+actions:
+  allowed: []
+  prohibited: []
+data_security:
+  input_classification: [INTERNAL]
+  output_classification: [INTERNAL]
+  external_transmission: false
+  pii_allowed: false
+  secrets_allowed: false
+  retention_days: 0
+network:
+  enabled: false
+  allowlist: []
+  deny_private_network: true
+  allow_dynamic_download: false
+runtime_boundary:
+  runtime_contracts_ref: schemas.json#/runtime_contracts
+  direct_resource_access: false
+  access_via_gateway_only: true
+  binding_resolved_by: agent_layer
+  audit_emitted_by: runtime
+risk:
+  # 声明字段：流程调整暂不填写（占位 null，勿填业务值）
+  risk_level: null
+  trust_level: null
+  risk_reasons: []
+  maximum_impact: null
+  # §6.2 派生字段：风险五维计算已停用，保持 null/[]，勿赋值
+  calculated_risk_level: null
+  effective_risk_level: null
+  calculation_rule_version: null
+  calculation_factors: null
+  triggered_rule_ids: []
+approval:
+  required: false
+  mode: none
+  required_for_actions: []
+  approver_roles: []
+audit:
+  enabled: true
+  events: [tool_call, policy_decision, result]
+  include_input: false
+  include_output: false
+  include_tool_calls: true
+  include_policy_decision: true
+  retention_days: 90
+rollback:
+  supported: true
+  type: disable_skill
+  procedure: REQUIRED_INPUT
+  maximum_recovery_time_minutes: 30
+dependencies:
+  packages: []
+  external_tools: []
+tests:
+  evals_ref: evals/evals.json
+  validation_contract_ref: references/validation-contract.yaml
+  minimum_test_cases: 1

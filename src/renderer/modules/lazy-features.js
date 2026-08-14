@@ -9,7 +9,6 @@ const _rendererFeatureManifest = Object.freeze({
   settings: [
     { src: './modules/model-authorization.js' },
     { src: './modules/settings.js' },
-    { src: './modules/hub-account.js' },
     { src: './vendor/qrcode-generator/qrcode.js' },
     { src: './modules/messaging-settings.js' },
     { src: './modules/touchpoint-settings-model.js' },

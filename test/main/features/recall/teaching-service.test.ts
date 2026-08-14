@@ -48,7 +48,7 @@ describe('User teaching signals', () => {
     expect(signals[0]).toMatchObject({ taxonomyVersion: 2, status: 'active', scope: 'project', candidateIds: [expect.stringMatching(/^cand-/)] });
     const listedCandidates = await candidates.listRecallCandidates('user-a');
     expect(listedCandidates).toHaveLength(1);
-    expect(listedCandidates[0]).toMatchObject({ status: 'pending', captureKey: `teaching-${signals[0]!.id}` });
+    expect(listedCandidates[0]).toMatchObject({ status: 'pending_review', captureKey: `teaching-${signals[0]!.id}` });
     expect(listedCandidates[0].sourceRefs.map((ref) => `${ref.kind}:${ref.subtype}`)).toEqual([
       'conversation:session',
       'conversation:message',
@@ -71,5 +71,32 @@ describe('User teaching signals', () => {
       memoryScope: 'project',
     })).resolves.toBeUndefined();
     await expect(candidates.listRecallCandidates('user-a')).resolves.toEqual([]);
+  });
+
+  it('downgrades a promoted asset when its teaching Evidence is revoked', async () => {
+    const teaching = await import('../../../../src/main/features/recall/teaching-service');
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const signal = await teaching.recordTeachingSignalAfterMemoryWrite('user-a', {
+      conversationId: 'conv-a',
+      messageId: 'message-a',
+      userMessage: '请记住：所有结论都附来源。',
+      memoryContent: '所有结论都附来源。',
+      memoryScope: 'project',
+    });
+    const candidate = await candidates.readRecallCandidate('user-a', signal!.candidateIds[0]);
+    const asset = (await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' })).asset;
+    await assets.setAbilityAssetMaturity('user-a', asset.id, 'transfer_validated');
+
+    await teaching.revokeUserTeachingSignal('user-a', signal!.id);
+
+    await expect(assets.readAbilityAsset('user-a', asset.id)).resolves.toMatchObject({
+      status: 'active',
+      maturity: 'bud',
+    });
+    expect(await assets.listAbilityAssetAudit('user-a', asset.id)).toContainEqual(expect.objectContaining({
+      action: 'maturity_downgraded',
+      note: `evidence_revoked:user_teaching_signal:${signal!.id}`,
+    }));
   });
 });

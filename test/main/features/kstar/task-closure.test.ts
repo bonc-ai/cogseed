@@ -207,7 +207,7 @@ describe('KSTAR task closure', () => {
       outcome: 'met_expected', deltaR: 0,
     });
     expect(result.candidates).toHaveLength(1);
-    expect(result.candidates[0]).toMatchObject({ status: 'pending', learningSignal: { outcome: 'met_expected', deltaR: 0 } });
+    expect(result.candidates[0]).toMatchObject({ status: 'pending_review', learningSignal: { outcome: 'met_expected', deltaR: 0 } });
   });
 
   it('confirms a lightweight user verdict and reconciles candidate extraction idempotently', async () => {

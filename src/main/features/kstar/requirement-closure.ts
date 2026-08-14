@@ -2,6 +2,7 @@ import { nowIso, safeId } from '../../storage';
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
 import { readKstarEpisode } from './episode-store';
 import { inferKstarReview, type KstarReviewInferenceResult } from './review-inference';
+import { readWorldModelForecast } from '../recall/world-model';
 import { readKstarRequirement, replaceKstarRequirement } from './requirement-store';
 import type { KstarOutcome } from './types';
 import {
@@ -76,6 +77,8 @@ function prmFromInferredReview(requirement: KstarRequirementRecord, result: Ksta
     attribution: review.attribution,
     reason: review.reason,
     confidence: review.confidence,
+    ...(review.actionDelta ? { actionDelta: review.actionDelta } : {}),
+    ...(review.resultDelta ? { resultDelta: review.resultDelta } : {}),
     evidenceRefs: normalizeCognitionSourceRefs(review.evidenceRefs),
   };
 }
@@ -91,7 +94,16 @@ async function latestRequirementEpisode(userId: string, requirement: KstarRequir
 async function prmFromCompletionEvidence(userId: string, requirement: KstarRequirementRecord): Promise<KstarRequirementPrmReview | null> {
   const episode = await latestRequirementEpisode(userId, requirement);
   if (!episode) return null;
-  const inferred = await inferKstarReview(userId, episode, { allowProvisionalEvidenceFallback: true });
+  const forecast = requirement.forecastId
+    ? await readWorldModelForecast(userId, requirement.forecastId)
+    : undefined;
+  const inferred = await inferKstarReview(userId, episode, {
+    allowProvisionalEvidenceFallback: true,
+    ...(forecast ? {
+      forecast: forecast.forecast,
+      selectedAssetTypes: (forecast.input.k.abilityAssets || []).map((asset) => asset.type),
+    } : {}),
+  });
   if (inferred.review.deltaR === 'unknown' && inferred.review.deltaA === 'unknown') return null;
   return prmFromInferredReview(requirement, inferred);
 }

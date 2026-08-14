@@ -1,5 +1,5 @@
 /**
- * Claude session → CogSeed conversation import.
+ * Claude session → Mate Agent conversation import.
  *
  * Takes a Claude Code session file from ~/.claude/projects/ and materializes
  * it as a normal conversation in the user's chat list: createConversation
@@ -78,7 +78,7 @@ export async function parseClaudeSessionFile(filePath: string): Promise<Array<{ 
 }
 
 /**
- * Materialize one Claude session as a CogSeed conversation.
+ * Materialize one Claude session as a Mate Agent conversation.
  * Idempotent: re-import with the same sessionId returns the existing
  * conversation untouched.
  */

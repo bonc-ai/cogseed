@@ -21,8 +21,8 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-describe('Mate commander/member session facade', () => {
-  it('maps gconv and gmember aliases to stable Mate-owned canonical sessions', async () => {
+describe('CogSeed commander/member session facade', () => {
+  it('maps gconv and gmember aliases to stable CogSeed-owned canonical sessions', async () => {
     const facade = await import('../../../../src/main/features/cogseed_backend/actor-session-facade');
     const store = await import('../../../../src/main/features/cogseed_backend/session-store');
 

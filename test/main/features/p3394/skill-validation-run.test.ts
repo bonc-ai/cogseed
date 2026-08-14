@@ -21,7 +21,7 @@ describe('P3394 skill validation run', () => {
     ]), 2, 'real');
     expect(risk.status).toBe('risk');
     expect(JSON.stringify(risk)).not.toContain('private snippet');
-    const blocked = mod.normalizeValidationReport('sk1', 'skill-patch', report([
+    const blocked = mod.normalizeValidationReport('sk1', 'patch-candidate', report([
       { level: 'EXTREME', rule: 'bad', field: 'scripts/x.sh:1', snippet: 'secret', suggested_fix: 'remove it' },
     ]), 3, 'real');
     expect(blocked.status).toBe('blocked');

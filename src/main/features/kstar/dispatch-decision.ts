@@ -17,6 +17,6 @@ export interface KStarDecisionRecord {
   required: boolean;
   reason: string;
   expectation: KStarExpectation;
-  source?: 'commander';
+  source?: 'commander' | 'bus_guard';
   commander_mode?: 'required' | 'skip';
 }

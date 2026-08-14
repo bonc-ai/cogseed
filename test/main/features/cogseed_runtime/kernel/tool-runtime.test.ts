@@ -18,13 +18,19 @@ function makeRoot(): string {
   return tmpRoot;
 }
 
-function runner(root: string, maxInlineToolResultTokens?: number, policy: RuntimeToolPolicy = DEFAULT_RUNTIME_TOOL_POLICY) {
+function runner(
+  root: string,
+  maxInlineToolResultTokens?: number,
+  policy: RuntimeToolPolicy = DEFAULT_RUNTIME_TOOL_POLICY,
+  allowedSkillIds: string[] = [],
+) {
   return createRuntimeToolRunner({
     userId: UID,
     runtimeSessionId: SESSION,
     allowedRoots: [root],
     writableRoots: [root],
     toolPolicy: policy,
+    allowedSkillIds,
     ...(maxInlineToolResultTokens ? { maxInlineToolResultTokens } : {}),
   });
 }
@@ -49,7 +55,7 @@ afterEach(() => {
   fs.rmSync(paths.userRoot(UID), { recursive: true, force: true });
 });
 
-describe('Mate Agent Runtime tool runtime MVP', () => {
+describe('CogSeed Runtime tool runtime MVP', () => {
   it('has a fixed file catalog without group/chat tools', () => {
     expect(getRuntimeToolCatalog().map((tool) => tool.name)).toEqual([
       'stat_file',
@@ -255,7 +261,7 @@ describe('Mate Agent Runtime tool runtime MVP', () => {
     expect(denied.isError).toBe(true);
     expect(denied.content).toContain('E_RUNTIME_PERMISSION_DENIED');
 
-    const result = await runner(root, undefined, SKILL_POLICY).run('run_skill', {
+    const result = await runner(root, undefined, SKILL_POLICY, ['runtime-echo']).run('run_skill', {
       skill_id: 'runtime-echo',
       script: 'echo',
       args: ['a', 'b'],

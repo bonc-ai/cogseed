@@ -40,8 +40,8 @@ function fakeConnection() {
   };
 }
 
-describe('Mate-owned Connector adapter', () => {
-  it('stores connector metadata in Mate cloud and encrypted transport outside metadata', async () => {
+describe('CogSeed-owned Connector adapter', () => {
+  it('stores connector metadata in CogSeed cloud and encrypted transport outside metadata', async () => {
     const store = await import('../../../../src/main/features/cogseed_backend/connector-store');
     const paths = await import('../../../../src/main/features/cogseed_backend/paths');
 
@@ -74,7 +74,7 @@ describe('Mate-owned Connector adapter', () => {
     expect(connection.callTool).toHaveBeenCalledWith('search', { query: 'hello' }, expect.anything());
   });
 
-  it('keeps connections user-scoped and closes only the Mate connector connection', async () => {
+  it('keeps connections user-scoped and closes only the CogSeed connector connection', async () => {
     const store = await import('../../../../src/main/features/cogseed_backend/connector-store');
     const manager = await import('../../../../src/main/features/cogseed_backend/connector-manager');
     const connections = [fakeConnection(), fakeConnection()];
@@ -88,7 +88,7 @@ describe('Mate-owned Connector adapter', () => {
     await adapter.close(USER_A, 'mate-connector-search');
     expect((connections as unknown[])).toHaveLength(0);
   });
-  it('routes the umbrella connector tools through the Mate Runtime Tool Runner', async () => {
+  it('routes the umbrella connector tools through the CogSeed Runtime Tool Runner', async () => {
     const { createRuntimeToolRunner } = await import('../../../../src/main/features/cogseed_runtime/kernel/tools/runner');
     const runner = createRuntimeToolRunner({
       userId: USER_A, runtimeSessionId: 'mruntime-connector', allowedRoots: [],

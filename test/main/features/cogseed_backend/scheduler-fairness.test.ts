@@ -9,7 +9,7 @@ import {
   reserveSchedulerScopeBudget,
 } from '../../../../src/main/features/cogseed_backend/scheduler-fairness';
 
-describe('Mate scheduler fairness primitives', () => {
+describe('CogSeed scheduler fairness primitives', () => {
   it('chooses eligible scopes with deterministic round-robin order', () => {
     let state = createSchedulerFairnessState();
     const candidates = [
