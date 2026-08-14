@@ -4632,7 +4632,13 @@ async function runActorTurnBody(
               }
             }
           } else {
-            const ag = await agentsFeat.createAgentFromBlocks(fields);
+            // 带上出生上下文，新 Agent 才能承接前序项目的认知资产与会话来源；
+            // 没有这一步生成出来的只有角色提示，被问到前序项目的术语只能瞎猜。
+            const ag = await agentsFeat.createAgentFromBlocks(fields, {
+              userId: uid,
+              ...(cid ? { conversationId: cid } : {}),
+              ...(turnProjectId ? { projectId: turnProjectId } : {}),
+            });
             if (ag) {
               createdAgents.push({
                 agent_id: ag.agent_id,
