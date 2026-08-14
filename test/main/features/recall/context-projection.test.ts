@@ -466,6 +466,70 @@ describe('Recall retrieval quality regression', () => {
     expect(preview.assetIds).toEqual([asset.id]);
   });
 
+  it('matches a sentence-shaped asset scope against a sentence-shaped purpose via shared tokens', async () => {
+    const { projection } = await modules();
+    // Real-world line: teaching/capture wrote a free-form scope sentence, the
+    // Commander passes a sentence purpose. Neither contains the other verbatim.
+    const asset = (await promoteAsset('代码审查必须包含证据与风险。', 'exec-sentence-cn', '代码审查（尤其不可修改代码的架构审查）')).asset;
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-sentence-cn',
+      purpose: '审查 Group Chat 消息路由，分析模块职责',
+      taskText: '审查 Group Chat 消息路由模块',
+    }, {
+      embedTexts: async (texts: string[]) => texts.map((text) => (
+        text.includes('审查') ? [1, 0] : [0, 1]
+      )),
+    });
+
+    // 审查 token appears on both sides → the soft scope gate passes and the
+    // asset survives into semantic ranking.
+    expect(preview.assetIds).toEqual([asset.id]);
+  });
+
+  it('bridges an ASCII scope tag to a CJK purpose via language aliases', async () => {
+    const { projection } = await modules();
+    // KStar precipitation writes short ASCII tags (scopeForTask → 'review');
+    // a Chinese purpose must still match through the alias table.
+    const asset = (await promoteAsset('OAuth callback review knowledge.', 'exec-alias', 'review')).asset;
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-alias',
+      purpose: '审查 Group Chat 消息路由',
+      taskText: '审查消息路由模块',
+    }, {
+      embedTexts: async (texts: string[]) => texts.map((text) => (
+        // Fake embedder: the asset matches the query direction; the purpose
+        // label (first vector) is the query so it shares the [1,0] direction.
+        text.includes('OAuth') || text.includes('审查消息路由') ? [1, 0] : [0, 1]
+      )),
+    });
+
+    expect(preview.omittedRefs).toEqual([]);
+    expect(preview.assetIds).toEqual([asset.id]);
+  });
+
+  it('keeps ASCII scope matching whole-word (no substring bleed)', async () => {
+    const { projection } = await modules();
+    // ASCII tokens must stay exact: 'cat' must not match 'category'.
+    const asset = (await promoteAsset('OAuth callback rule.', 'exec-ascii', 'cat')).asset;
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-ascii',
+      purpose: 'category review',
+      taskText: 'OAuth callback rule',
+    }, {
+      embedTexts: async (texts: string[]) => texts.map((text) => (
+        text.toLowerCase().includes('oauth') ? [1, 0] : [0, 1]
+      )),
+    });
+
+    expect(preview.omittedRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ assetId: asset.id, reason: 'scope_mismatch' }),
+    ]));
+    expect(preview.assetIds).not.toContain(asset.id);
+  });
+
   it('marks the projection as degraded when semantic embedding fails', async () => {
     const { projection } = await modules();
     await promoteAsset('OAuth callback security review.', 'exec-degraded', 'review');

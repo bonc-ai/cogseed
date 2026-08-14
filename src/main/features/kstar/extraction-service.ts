@@ -2,9 +2,13 @@ import { normalizeCognitionSourceRefs } from '../recall/source-service';
 import type { KstarCandidateProposal, KstarEpisodeRecord, KstarReviewRecord } from './types';
 
 export function scopeForTask(task: string): string {
-  if (/report|summary|document|file/i.test(task)) return 'report';
-  if (/code|function|bug|test/i.test(task)) return 'code';
-  if (/product|decision|architecture/i.test(task)) return 'product';
+  // Short ASCII tags by design (retrieval matches scope tokens whole-word /
+  // bidirectional + cross-language aliases); CJK keywords keep Chinese tasks
+  // out of the weak 'general' fallback.
+  if (/report|summary|document|file|报告|总结|文档|文件/i.test(task)) return 'report';
+  if (/code|function|bug|test|代码|函数|缺陷|测试/i.test(task)) return 'code';
+  if (/review|audit|审查|审计|检查|评审/i.test(task)) return 'review';
+  if (/product|decision|architecture|产品|决策|架构/i.test(task)) return 'product';
   return 'general';
 }
 
