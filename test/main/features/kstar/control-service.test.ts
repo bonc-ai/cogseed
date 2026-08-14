@@ -117,6 +117,25 @@ describe('KStar Commander control service', () => {
     });
   });
 
+  it('self-heals an empty upsert_state from the triggering user message (host routing fallback)', async () => {
+    const service = await import('../../../../src/main/features/kstar/control-service');
+    const result = await service.executeKstarControl({
+      ...hostContext(),
+      sourceMessageText: '审查一下 bus.ts 的守卫实现',
+    }, {
+      operation: 'upsert_state',
+      idempotencyKey: 'turn-heal:create',
+      // No task/requirement payloads — the Commander emitted an empty call.
+    });
+
+    expect(result).toMatchObject({ ok: true, status: 'state_committed' });
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    const task = await store.readKstarTask('user-a', (result as { taskId: string }).taskId);
+    expect(task?.title).toBe('审查一下 bus.ts 的守卫实现');
+    const requirement = await store.readKstarRequirement('user-a', (result as { requirementId: string }).requirementId);
+    expect(requirement?.goalText).toBe('审查一下 bus.ts 的守卫实现');
+  });
+
   it('rejects arbitrary ids and reuse of one key for different normalized input', async () => {
     const service = await import('../../../../src/main/features/kstar/control-service');
 

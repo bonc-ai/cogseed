@@ -7,6 +7,8 @@ export interface CreateKstarControlToolOptions {
   userId: string;
   conversationId: string;
   sourceMessageId?: string;
+  /** Exact user message text for host self-healing of empty upsert_state. */
+  sourceMessageText?: string;
   workspaceId?: string;
   resolvedRuntime: () => ChatResolvedRuntime | null;
   executeControl?: (
@@ -128,6 +130,7 @@ export function createKstarControlTool(options: CreateKstarControlToolOptions): 
         userId: options.userId,
         conversationId: options.conversationId,
         ...(options.sourceMessageId ? { sourceMessageId: options.sourceMessageId } : {}),
+        ...(options.sourceMessageText?.trim() ? { sourceMessageText: options.sourceMessageText } : {}),
         ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
         allowedToolNames: new Set(runtime?.toolNames || []),
         ...(runtime ? {

@@ -208,12 +208,14 @@ function normalizeInput(value: unknown): KstarControlInput {
   if (!IDEMPOTENCY_KEY.test(idempotencyKey)) throw new ControlInputError('idempotencyKey is invalid');
   const operation = value.operation as KstarControlOperation;
   if (operation === 'upsert_state') {
-    return {
-      operation,
-      idempotencyKey,
-      task: taskMutation(value.task),
-      requirement: requirementMutation(value.requirement),
-    };
+    // Tolerant parse: task/requirement payloads may be missing or empty when
+    // the Commander's tool call carries no args. The host fills them from the
+    // triggering user message in upsertState (self-healing routing), so an
+    // empty kstar_control call still opens a governed task instead of being
+    // rejected into ungoverned execution.
+    const task = value.task === undefined || value.task === null ? undefined : taskMutation(value.task);
+    const requirement = value.requirement === undefined || value.requirement === null ? undefined : requirementMutation(value.requirement);
+    return { operation, idempotencyKey, ...(task ? { task } : {}), ...(requirement ? { requirement } : {}) };
   }
   if (operation === 'request_projection') {
     return { operation, idempotencyKey, projection: projectionProposal(value.projection) };
@@ -284,11 +286,20 @@ function unique(values: string[], next?: string): string[] {
 async function upsertState(
   context: KstarControlHostContext,
   state: KstarConversationTaskStateRecord,
-  input: KstarControlInput & { task: KstarTaskMutation; requirement: KstarRequirementMutation },
+  input: KstarControlInput,
 ): Promise<{ result: KstarControlResult; state: KstarConversationTaskStateRecord }> {
   let { task, requirement } = await currentRecords(context, state);
-  const taskMutation = input.task;
-  const requirementMutation = input.requirement;
+  // Self-healing routing: an empty kstar_control upsert_state call (the
+  // Commander emitted the tool with no payload) is filled from the triggering
+  // user message so the turn still opens a governed task. This is the host's
+  // deterministic fallback for model arg-emission failures.
+  let taskMutation = input.task;
+  let requirementMutation = input.requirement;
+  if (!task && !taskMutation && !requirementMutation && context.sourceMessageText?.trim()) {
+    const goal = context.sourceMessageText.replace(/\s+/g, ' ').trim().slice(0, 4_000);
+    taskMutation = { operation: 'create', title: goal.slice(0, 200) };
+    requirementMutation = { operation: 'create', goalText: goal };
+  }
   const now = nowIso();
 
   if (!task) {

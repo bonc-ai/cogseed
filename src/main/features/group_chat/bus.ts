@@ -3690,6 +3690,7 @@ async function runActorTurnBody(
         turnProjectId,
         item.msgId,
         () => commanderResolvedRuntime,
+        item.sourceMessageText,
         () => segState.flush(),
         () => {
           terminalHandoffCompleted = true;
@@ -8220,6 +8221,7 @@ async function buildCommanderExtraTools(
   currentProjectId?: string,
   currentSourceMessageId?: string,
   resolvedRuntime: () => ChatResolvedRuntime | null = () => null,
+  currentSourceMessageText?: string,
   // Called right before a VISIBLE agent dispatch runs (dispatch_to / named
   // run_worker), so the commander's accumulated reasoning so far is flushed as
   // its own bubble and the post-handback synthesis starts a fresh one. Not
@@ -8241,6 +8243,9 @@ async function buildCommanderExtraTools(
       conversationId: cid,
       ...(currentSourceActorId === USER_ID && currentSourceMessageId
         ? { sourceMessageId: currentSourceMessageId }
+        : {}),
+      ...(currentSourceActorId === USER_ID && currentSourceMessageText?.trim()
+        ? { sourceMessageText: currentSourceMessageText }
         : {}),
       ...(currentProjectId ? { workspaceId: currentProjectId } : {}),
       resolvedRuntime,

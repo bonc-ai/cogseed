@@ -75,6 +75,11 @@ export interface KstarControlHostContext {
   userId: string;
   conversationId: string;
   sourceMessageId?: string;
+  /** Exact user message text that triggered this turn — the host falls back
+   *  to it when the Commander calls upsert_state without task/requirement
+   *  payloads (empty tool args), so an empty kstar_control call still opens
+   *  a governed task instead of being rejected into ungoverned execution. */
+  sourceMessageText?: string;
   workspaceId?: string;
   allowedToolNames: ReadonlySet<string>;
   model?: {
