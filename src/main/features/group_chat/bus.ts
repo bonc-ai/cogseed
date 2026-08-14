@@ -8069,22 +8069,6 @@ async function buildCommanderExtraTools(
         : {}),
       ...(currentProjectId ? { workspaceId: currentProjectId } : {}),
       resolvedRuntime,
-      postProjectionCard: async (projectionId) => {
-        const { postProjectionCardMessage } = await import('../recall/projection-message');
-        await postProjectionCardMessage(uid, { cid, projectionId }, {
-          send: async (payload) => {
-            const posted = await enqueue({
-              uid,
-              cid: payload.cid,
-              fromActorId: COMMANDER_ID,
-              forceTo: [USER_ID],
-              text: String(payload.text || ''),
-              recall_projection_card: { projectionId: payload.card.projectionId },
-            });
-            return { id: posted.id };
-          },
-        });
-      },
     }));
   }
   tools.push({

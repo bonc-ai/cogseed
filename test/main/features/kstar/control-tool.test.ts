@@ -30,7 +30,6 @@ describe('Commander KStar control tool', () => {
       taskId: 'kst-a',
       requirementId: 'ksreq-a',
     }));
-    const postProjectionCard = vi.fn(async () => undefined);
     const tool = module.createKstarControlTool({
       userId: 'user-a',
       conversationId: 'cid-a',
@@ -43,7 +42,6 @@ describe('Commander KStar control tool', () => {
         entryId: 'entry-a',
         toolNames: ['read_file', 'kstar_control'],
       }),
-      postProjectionCard,
       executeControl,
     });
 
@@ -70,7 +68,6 @@ describe('Commander KStar control tool', () => {
         profileId: 'profile-a',
         entryId: 'entry-a',
       },
-      postProjectionCard,
     }, input);
     expect(result).toEqual({
       content: JSON.stringify({
@@ -93,7 +90,6 @@ describe('Commander KStar control tool', () => {
       userId: 'user-a',
       conversationId: 'cid-a',
       resolvedRuntime: () => null,
-      postProjectionCard: vi.fn(async () => undefined),
       executeControl: vi.fn(async () => ({
         ok: false as const,
         code: 'kstar_control_invalid_input' as const,

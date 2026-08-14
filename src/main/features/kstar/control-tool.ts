@@ -9,7 +9,6 @@ export interface CreateKstarControlToolOptions {
   sourceMessageId?: string;
   workspaceId?: string;
   resolvedRuntime: () => ChatResolvedRuntime | null;
-  postProjectionCard: (projectionId: string) => Promise<void>;
   executeControl?: (
     context: KstarControlHostContext,
     rawInput: unknown,
@@ -132,7 +131,6 @@ export function createKstarControlTool(options: CreateKstarControlToolOptions): 
             ...(runtime.entryId ? { entryId: runtime.entryId } : {}),
           },
         } : {}),
-        postProjectionCard: options.postProjectionCard,
       };
       const result = await (options.executeControl || executeKstarControl)(context, input);
       return {

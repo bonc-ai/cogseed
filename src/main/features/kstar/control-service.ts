@@ -426,7 +426,6 @@ async function requestProjection(
     projectionIds: unique(requirement.projectionIds, projection.id),
     updatedAt: nowIso(),
   });
-  await context.postProjectionCard?.(projection.id);
   return {
     result: {
       ok: true,

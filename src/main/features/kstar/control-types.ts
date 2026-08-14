@@ -83,7 +83,6 @@ export interface KstarControlHostContext {
     profileId?: string;
     entryId?: string;
   };
-  postProjectionCard?: (projectionId: string) => Promise<void>;
 }
 
 export interface KstarControlReceipt {

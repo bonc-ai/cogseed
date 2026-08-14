@@ -241,12 +241,11 @@ describe('KStar Commander control service', () => {
     expect(await recordCounts()).toEqual({ tasks: 1, requirements: 1 });
   });
 
-  it('creates and binds a Projection, then posts its card once', async () => {
+  it('creates and binds an auto-confirmed Projection without posting a card', async () => {
     const seeded = await seedOpenControlState();
     const service = await import('../../../../src/main/features/kstar/control-service');
-    const postProjectionCard = vi.fn(async () => undefined);
 
-    const result = await service.executeKstarControl(hostContext({ postProjectionCard }), {
+    const result = await service.executeKstarControl(hostContext(), {
       operation: 'request_projection',
       idempotencyKey: 'turn-a:projection',
       projection: {
@@ -263,7 +262,6 @@ describe('KStar Commander control service', () => {
       requirementId: seeded.requirement.id,
       projectionId: expect.stringMatching(/^proj-/),
     });
-    expect(postProjectionCard).toHaveBeenCalledTimes(1);
     await expect(seeded.store.readKstarRequirement('user-a', seeded.requirement.id))
       .resolves.toMatchObject({
         projectionId: (result as { projectionId: string }).projectionId,
