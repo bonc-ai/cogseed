@@ -91,6 +91,7 @@ export async function* stopStreamOnAbort<T>(
     else signal.addEventListener('abort', abortListener, { once: true });
   });
 
+  let completed = false;
   try {
     while (true) {
       const next = iterator.next();
@@ -99,12 +100,22 @@ export async function* stopStreamOnAbort<T>(
         const ret = iterator.return?.();
         if (ret) {
           void Promise.resolve(ret).catch((err) => {
-            log.warn('abortable stream return failed', { label, error: logErrorSummary(err) });
+            // Expected cleanup failures: the stream already ended, the abort
+            // signal was already active, or the underlying iterator rejects
+            // with AbortError when closed. Only unexpected failures while the
+            // stream is still active are worth a warning.
+            const expected = completed || (err as Error)?.name === 'AbortError';
+            if (!expected) {
+              log.warn('abortable stream return failed', { label, error: logErrorSummary(err) });
+            }
           });
         }
         return;
       }
-      if (result.done) return;
+      if (result.done) {
+        completed = true;
+        return;
+      }
       yield result.value;
     }
   } finally {
