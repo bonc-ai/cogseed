@@ -49,7 +49,7 @@
 
 | # | 问题 | 级别 | 说明 |
 |---|---|---|---|
-| 1-1 | **`finish`/`abandon` 的证据字段未被消费** | P1 | `KstarResultProposal{finalStatus, finalText, producedFiles, acceptanceEvidence, closeReason}` 被规范化接收，但 `finish()`/`abandon()` 实现只做状态迁移（→waiting_review/abandoned），**不把 finalText/producedFiles/acceptanceEvidence 写入 Episode**。设计 §8.6 要求 Commander 经 finish 提交终态证据，实际终态证据仍由 terminal 事件驱动 `task-closure.captureGroupKstarClosure` 兜底——两条路径并存，finish 的 result 字段闲置。 |
+| 1-1 | ~~`finish`/`abandon` 的证据字段未被消费~~ **已修复** | `finish`/`abandon` 把 result 落为 requirement.completionEvidence（有界校验，`29295291`）；`captureGroupKstarClosure` 在复盘前将显式证据并入 Episode（finalText/producedFiles），review 的 actualResult 消费该证据。 |
 | 1-2 | receipt 滑动窗口 100 条 | P2 | 超长会话最早 receipt 会被挤出，幂等保护窗口变窄（可接受，需记录）。 |
 | 1-3 | 模型反复失败无专门告警 | P2 | `kstar_control_invalid_input` 只消耗 tool-loop 次数；无"连续 N 次控制失败"的宿主告警/降级。 |
 
@@ -96,10 +96,10 @@
 |---|---|---|---|
 | 3-1 | 无相关度阈值（G7） | P2 | 语义匹配只排序不过滤；低相关资产仍进预览并经确认注入。 |
 | 3-2 | 主流程 workspaceId 可能为空 → workspace 过滤空转 | P1→P2 | `request_projection` 的 workspaceId 来自对话项目或 task.workspaceId；无项目会话中为空 → `isAssetEligibleForProjection` 退回 scope 词元匹配，workspace 引用约束不生效。 |
-| 3-3 | `scopePolicy` 结构化作用域未被检索消费（G2） | P1 | `asset.scopePolicy{agentIds/roleIds/projectIds/workspaceIds/conversationKinds/...}` 只存储/校验，eligibility 只查 `asset.scope` 词元 + workspace 引用。Agent 级约束形同虚设。 |
+| 3-3 | ~~`scopePolicy` 结构化作用域未被检索消费（G2）~~ **已修复（部分）** | `isAssetScopeAllowed`（`b3c6b8f0`）在投影资格（`buildRecallView`/`isAssetEligibleForProjection`）与注入侧执行：purposeTags/workspaceIds/projectIds/conversationKinds 生效；agentIds/roleIds/fileKinds 仍无消费上下文（需执行期 Agent 维度）。 |
 | 3-4 | 主流程不设 expiresAt | P2 | preview 永不自动过期，遗留投影永久滞留（仅显式 IPC 预览可带 expiresAt）。 |
 | 3-5 | `revoked` 投影状态无生产者（G8） | P2 | 类型/卡片存在 revoke 分支，但无 revoke 操作与 IPC → 死状态。 |
-| 3-6 | 注入读实时资产而非确认快照（G3） | P1 | `prompt-injection` 按 assetId 实时 `readAbilityAsset`，不比对 `projection.assetVersions`；确认后被修改的资产以新内容注入（见阶段 10）。 |
+| 3-6 | ~~注入读实时资产而非确认快照（G3）~~ **已修复** | `prompt-injection` 优先读取 `projection.assetVersions` 对应的不可变版本快照（`readAbilityAssetVersionSnapshot`，`5cde55cc`）；快照缺失时仅当实时版本仍等于确认版本才回退，漂移则跳过不注入。 |
 
 ---
 
@@ -171,7 +171,7 @@
 
 | # | 问题 | 级别 | 说明 |
 |---|---|---|---|
-| 6-1 | **门禁只覆盖 Agent 派发工具，不覆盖 Commander 自执行** | P1 | 守卫只挂在 `dispatch_to/hand_off_to/run_worker`；Commander 直接调用 `exec_command` 等写操作**不经投影门禁**（工作区写由 path sandbox + permission mode 兜底）。若产品语义是"投影确认=批准高影响执行"，需要明确门禁范围并另行设计 Commander 自执行门控。 |
+| 6-1 | **门禁只覆盖 Agent 派发工具，不覆盖 Commander 自执行** | P1（待产品定界） | 守卫只挂在 `dispatch_to/hand_off_to/run_worker`；Commander 直接调用 `exec_command` 等写操作**不经投影门禁**（工作区写由 path sandbox + permission mode 兜底）。需产品确认门禁范围后再设计 Commander 自执行门控。 |
 | 6-2 | 终态 `execution_id` 缺省=runId | P2 | 无真实 execution 记录时用 runId 填充，可接受但语义需注明。 |
 
 ---
@@ -194,7 +194,7 @@
 
 | # | 问题 | 级别 | 说明 |
 |---|---|---|---|
-| 7-1 | **复盘确认卡死路径（P1-1）** | **P1（最高优先）** | 渲染层 `conversation.js` 的 KStar 结果确认卡调用 `kstar.review.confirm` / `kstar.review.read`，**主进程无这两个 IPC 通道**（仅 p3394 compat 卡片可用）→ 用户点击"达到预期/未达到"必然报错；`confirmKstarReview` 与 `closeKstarRequirement(userFeedback)` 无生产调用者 → **"用户反馈 > 模型判断"在生产不可达**。 |
+| 7-1 | ~~复盘确认卡死路径（P1-1）~~ **已修复** | 已补 `kstar.review.confirm` / `kstar.review.read` IPC（`cc694504`），接线 `confirmKstarReview` 与 `readKstarReview`；渲染层确认/纠正按钮恢复可用。 |
 | 7-2 | verification 生产不写入（G9） | P2 | `episode.r.verification` 仅类型与测试存在；确定性 met 路径空转，完成态默认 provisional+needsConfirmation。 |
 | 7-3 | Action/Result Delta 概念缺失 | P2 | 有 expected（forecast.aHat：plan/expectedTools/expectedActors）与 actual（episode.a.toolCalls/agentActions），但**无对比计算**（missingTools/unexpectedTools/…）；归因 6 值无法表达工具选错/环境异常/需求变化/资产过期（对应审查 6.2/6.4）。 |
 | 7-4 | 差异文本可能含绝对路径 | P2 | finalText/context 原文摘要/模型 reason 未做路径清洗（审查 6.3.6，本地单机风险受控）。 |
@@ -237,7 +237,7 @@
 
 | # | 问题 | 级别 | 说明 |
 |---|---|---|---|
-| 9-1 | **Teaching Signal 撤销不降级已晋升资产（G4）** | P1 | 撤销只 reject pending/deferred 候选；promoted 资产保持 active 持续注入（审查 8.4.7）。 |
+| 9-1 | ~~Teaching Signal 撤销不降级已晋升资产（G4）~~ **已修复** | `pauseAbilityAssetForRevokedEvidence`（`249f4dcb`）：证据撤销时系统暂停关联资产（幂等、审计 `evidence_revoked`），暂停后不再注入；成熟度同时降为 bud；用户可显式恢复。 |
 | 9-2 | scopePolicy 未执行（G2，同 3-3） | P1 | Agent/Global 级作用域约束形同虚设。 |
 | 9-3 | 注入读实时资产（G3，同 3-6/5-2） | P1 | 已确认投影的知识快照漂移。 |
 | 9-4 | workspace 删除无引用清理钩子 | P2 | `purgeProjectWorkspace` 只清理 workspace.json，不触碰 recall workspace-refs/投影（悬空引用不影响正确性，但不清理）。 |
@@ -269,11 +269,11 @@
 
 | 优先级 | 问题 | 归属阶段 |
 |---|---|---|
-| **P1-①** | 复盘确认卡死路径（IPC 缺失，用户反馈不可达） | 7 |
-| **P1-②** | 注入读实时资产（确认快照漂移） | 3/5/10 |
-| **P1-③** | scopePolicy 未消费 + 主流程 workspaceId 可能为空 | 3/9 |
-| **P1-④** | Teaching 撤销不降级已晋升资产 | 9 |
-| **P1-⑤** | finish/abandon 证据字段未被消费 | 1/7 |
+| ~~P1-①~~ ✅ | 复盘确认卡死路径（已修复 `cc694504`） | 7 |
+| ~~P1-②~~ ✅ | 注入读实时资产（已修复 `5cde55cc`） | 3/5/10 |
+| ~~P1-③~~ ✅ | scopePolicy 未消费（已修复 `b3c6b8f0`，agentIds 维度待执行期上下文） | 3/9 |
+| ~~P1-④~~ ✅ | Teaching 撤销不降级已晋升资产（已修复 `249f4dcb`） | 9 |
+| ~~P1-⑤~~ ✅ | finish/abandon 证据字段未被消费（已修复 `29295291`） | 1/7 |
 | **P1-⑥** | 门禁不覆盖 Commander 自执行（需产品定界） | 6 |
 | P2 | 寒暄零写入的宿主级确定性兜底 | 0 |
 | P2 | 整体拒绝非逐条、无相关度阈值、system 段注入、硬切片、反馈无 UI、字段缺口、映射偏差、遗留死字段等（详见各阶段表） | 各 |
