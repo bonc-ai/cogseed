@@ -142,12 +142,6 @@ const _recordedToolDefinitions = vi.hoisted(
 );
 const _recordedNestedOutcomes: any[] = [];
 
-// Blocking projection gate: keep ordinary routing tests on the pre-gate path
-// by making the Recall preview fail; gating has dedicated coverage elsewhere.
-vi.mock("../../../../src/main/features/recall/context-projection", () => ({
-  previewContextProjection: vi.fn(async () => { throw new Error("no projection in integration routing tests"); }),
-}));
-
 vi.mock("../../../../src/main/model/client", () => ({
   async *streamChatWithModel(opts: any) {
     const sid = opts.sessionId || "";
@@ -5147,6 +5141,109 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       ),
     ).toBe(true);
   }, 15_000);
+});
+
+
+describe("group_chat bus integration › KStar privileged dispatch approval", () => {
+  async function seedKstarControlledConversation(cid: string, options: { projectionStatus: "preview" | "confirmed"; forecastId?: string }) {
+    const store = await import("../../../../src/main/features/kstar/requirement-store");
+    const projections = await import("../../../../src/main/features/recall/context-projection");
+    const task = store.createKstarTaskRecord(TEST_UID, {
+      conversationId: cid,
+      title: "Approved task",
+    });
+    const requirement = store.createKstarRequirementRecord(TEST_UID, {
+      taskId: task.id,
+      conversationId: cid,
+      userMessageIds: ["msg-a"],
+      title: "Approved task",
+      goalText: "Change files",
+    });
+    const preview = await projections.previewContextProjection(TEST_UID, {
+      taskRunId: task.id,
+      purpose: "Use frozen OAuth review knowledge",
+      taskText: "Change files",
+    });
+    const projection = options.projectionStatus === "confirmed"
+      ? await projections.confirmContextProjection(TEST_UID, preview.id)
+      : preview;
+    requirement.projectionId = projection.id;
+    requirement.projectionIds = [projection.id];
+    if (options.forecastId) requirement.forecastId = options.forecastId;
+    await store.replaceKstarTask(TEST_UID, {
+      ...task,
+      requirementIds: [requirement.id],
+      currentRequirementId: requirement.id,
+    });
+    await store.replaceKstarRequirement(TEST_UID, requirement);
+    await store.writeConversationTaskState(TEST_UID, {
+      ...store.createInitialConversationTaskState(TEST_UID, cid),
+      currentTaskId: task.id,
+      currentRequirementId: requirement.id,
+      taskComplete: false,
+    });
+    return { task, requirement, projection };
+  }
+
+  it("blocks privileged dispatch but preserves an ordinary reply while approval is pending", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const seeded = await seedKstarControlledConversation(cid, { projectionStatus: "preview" });
+
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "__call_tool__", name: "dispatch_to", input: { to: AGENT_NAME, message: "change files" } },
+      { type: "final", text: "I need your approval before execution." },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "MUST NOT RUN" },
+    ]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "run the approved task" });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const result = _recordedToolResults.find((entry) => entry.name === "dispatch_to");
+    expect(JSON.parse(result!.content)).toMatchObject({
+      ok: false,
+      error_code: "kstar_projection_not_confirmed",
+    });
+    expect(_recordedCalls.filter((call) => call.sid === state.buildGmemberSessionId(cid, AGENT_ID))).toHaveLength(0);
+    const messages = await readConversationMessages(cid);
+    expect(messages).toContainEqual(expect.objectContaining({
+      from: "commander",
+      text: "I need your approval before execution.",
+    }));
+    expect(seeded.requirement.id).toBeTruthy();
+  });
+
+  it("stamps verified Projection and Forecast provenance after approval", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const seeded = await seedKstarControlledConversation(cid, { projectionStatus: "confirmed", forecastId: "wmf-a" });
+    const terminals: any[] = [];
+    const unsubscribe = bus.subscribeTaskTerminals((event) => terminals.push(event));
+
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "__call_tool__", name: "dispatch_to", input: { to: AGENT_NAME, message: "perform approved work" } },
+      { type: "final", text: "approved work done" },
+    ]);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "agent work complete" },
+    ]);
+
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "execute approved task" });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+    expect(await waitUntil(() => terminals.length >= 1)).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(terminals[0]).toMatchObject({
+      logical_run_id: seeded.task.id,
+      projection_id: seeded.projection.id,
+      forecast_id: "wmf-a",
+    });
+    unsubscribe();
+  }, 10_000);
 });
 
 describe("group_chat bus integration › task terminal boundary", () => {

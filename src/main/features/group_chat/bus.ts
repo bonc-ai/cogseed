@@ -1482,6 +1482,7 @@ function _emitTaskRunTerminalIfQuiescent(
         const lifecycle = await readKstarTaskLifecycle(state.uid, state.cid);
         if (!event.logical_run_id && lifecycle.task?.id) event.logical_run_id = lifecycle.task.id;
         if (!event.projection_id && lifecycle.projection?.id) event.projection_id = lifecycle.projection.id;
+        if (!event.forecast_id && lifecycle.requirement?.forecastId) event.forecast_id = lifecycle.requirement.forecastId;
         if (!event.wake_request_id && lifecycle.wakeRequest?.id) event.wake_request_id = lifecycle.wakeRequest.id;
       } catch (err) {
         log.warn(`task terminal provenance lookup failed cid=${state.cid}: ${(err as Error).message}`);
@@ -6033,6 +6034,52 @@ function coordinatorDispatchContract(
   };
 }
 
+
+function kstarApprovalBlockedToolResult(code: string, message: string): { content: string; isError: true } {
+  return {
+    content: JSON.stringify({ ok: false, error_code: code, error: message }),
+    isError: true as const,
+  };
+}
+
+/** Host-side approval guard for privileged agent dispatch. When the active
+ *  KStar requirement carries a Projection (the Commander requested one through
+ *  kstar_control), execution is paused until the Projection is confirmed AND a
+ *  Forecast is committed. Returns verified provenance IDs — never model
+ *  claims — and stamps them onto the current taskRun so the terminal event
+ *  carries them. Ordinary chat and tools without an active Projection are
+ *  unaffected. */
+async function guardKstarPrivilegedDispatch(
+  state: CidState,
+): Promise<{ content: string; isError: true } | { provenance: { logicalRunId?: string; projectionId?: string; forecastId?: string } }> {
+  const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
+  const lifecycle = await readKstarTaskLifecycle(state.uid, state.cid);
+  if (!lifecycle.requirement?.projectionId) return { provenance: {} };
+  if (lifecycle.projection?.status !== 'confirmed') {
+    return kstarApprovalBlockedToolResult(
+      'kstar_projection_not_confirmed',
+      'KStar Projection is not confirmed.',
+    );
+  }
+  if (!lifecycle.requirement.forecastId) {
+    return kstarApprovalBlockedToolResult(
+      'kstar_projection_not_confirmed',
+      'KStar Forecast is not committed.',
+    );
+  }
+  const provenance = {
+    ...(lifecycle.task?.id ? { logicalRunId: lifecycle.task.id } : {}),
+    projectionId: lifecycle.projection.id,
+    forecastId: lifecycle.requirement.forecastId,
+  };
+  if (state.taskRun) {
+    if (provenance.logicalRunId) state.taskRun.logicalRunId = provenance.logicalRunId;
+    state.taskRun.projectionId = provenance.projectionId;
+    state.taskRun.forecastId = provenance.forecastId;
+  }
+  return { provenance };
+}
+
 async function prepareNestedDispatchForTool(
   state: CidState,
   actor: Actor,
@@ -8606,6 +8653,8 @@ async function buildCommanderExtraTools(
       const dependencyBlocked =
         await checkPreparedNestedDispatchDependenciesForTool(state, prepared);
       if (dependencyBlocked) return dependencyBlocked;
+      const kstarGuard = await guardKstarPrivilegedDispatch(state);
+      if ('content' in kstarGuard) return kstarGuard;
       const pendingWake = await gateNestedAgentWake(
         state,
         dispatchActor,
@@ -8794,6 +8843,8 @@ async function buildCommanderExtraTools(
       const dependencyBlocked =
         await checkPreparedNestedDispatchDependenciesForTool(state, prepared);
       if (dependencyBlocked) return dependencyBlocked;
+      const kstarGuard = await guardKstarPrivilegedDispatch(state);
+      if ('content' in kstarGuard) return kstarGuard;
       const pendingWake = await gateNestedAgentWake(
         state,
         handoffActor,
@@ -9123,6 +9174,8 @@ async function buildCommanderExtraTools(
           resumeToken,
         );
         if (prepared.blocked) return blockedNestedDispatchToolResult(prepared);
+        const kstarGuard = await guardKstarPrivilegedDispatch(state);
+        if ('content' in kstarGuard) return kstarGuard;
         const workerExecution = await withPreparedNestedDispatchAccess({
           state,
           prepared,
@@ -9189,6 +9242,8 @@ async function buildCommanderExtraTools(
       const dependencyBlocked =
         await checkPreparedNestedDispatchDependenciesForTool(state, prepared);
       if (dependencyBlocked) return dependencyBlocked;
+      const kstarGuard = await guardKstarPrivilegedDispatch(state);
+      if ('content' in kstarGuard) return kstarGuard;
       const pendingWake = await gateNestedAgentWake(
         state,
         namedActor,
