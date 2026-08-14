@@ -83,6 +83,6 @@
 - Q1 ✅ 已执行：`workspace_policy` 自动确认（投影创建即 confirmed，`request_projection` 返回 `projection_confirmed`）+ 语义 Top-N（默认阈值 0.35、上限 8，低分资产记 `low_relevance`）+ 只读回执（`recall_citations` 随回复展示、usage 落盘，G7/G10 关闭）。
 - Q2 ✅ 已定夺：wake 审批保留（Agent 执行授权层，与知识选择不同层）。
 - Q3 ✅ 已定（用户授权按推荐执行）：**Commander 即世界模型**——Forecast 候选由 Commander 生成（aHat=plan/expectedTools/expectedActors，rHat=predictedResult），宿主 `forecast-commit` 校验+重算+确定性选优；不另建独立预测器（与 Task 7 删除独立 runner 一致，静态测试固化）。
-- Q4 本体资产是否纳入 S/K 冻结知识（推荐纳入）？
-- Q5 旧任务收尾时"未确认复盘也允许沉淀"（推荐允许，按证据门槛）？
-- Q6 新任务切换是否自动触发旧任务差异 r 整理沉淀（推荐自动，幂等）？
+- Q4 ✅ 已定（用户授权按推荐执行）：**本体纳入世界模型 K**——USER.md/MEMORY.md 条目作为 `personal` 能力资产（`onto-*`，内容寻址）无条件进入 `simulationInput.k.ontologyAssets`，并随注入块可见但不出现在引用（`b88c6f13`）。
+- Q5 ✅ 已定（用户授权按推荐执行）：**旧任务收尾时未确认复盘也允许沉淀**——按证据门槛（verified workflow + 学习信号 / 高置信 gap），`finish`/`abandon` 触发任务级直接沉淀，无需用户确认（`08a45e81`）。
+- Q6 ✅ 已定（用户授权按推荐执行）：**新任务切换自动触发旧任务差异 r 整理沉淀**——`upsert_state task:create`（已有打开任务）自动收尾旧任务（`topic_switch`）并沉淀可复用能力资产，幂等（内容寻址）（`08a45e81`）。
