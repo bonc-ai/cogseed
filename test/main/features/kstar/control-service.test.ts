@@ -258,7 +258,7 @@ describe('KStar Commander control service', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      status: 'confirmation_required',
+      status: 'projection_confirmed',
       taskId: seeded.task.id,
       requirementId: seeded.requirement.id,
       projectionId: expect.stringMatching(/^proj-/),
@@ -268,6 +268,14 @@ describe('KStar Commander control service', () => {
       .resolves.toMatchObject({
         projectionId: (result as { projectionId: string }).projectionId,
         projectionIds: [(result as { projectionId: string }).projectionId],
+      });
+    // workspace_policy line: the projection is confirmed on creation.
+    const projections = await import('../../../../src/main/features/recall/context-projection');
+    await expect(projections.readContextProjection('user-a', (result as { projectionId: string }).projectionId))
+      .resolves.toMatchObject({
+        status: 'confirmed',
+        authorization: 'workspace_policy',
+        confirmedAt: expect.any(String),
       });
   });
 

@@ -131,7 +131,16 @@ describe('RecallView and ContextProjection', () => {
 
     const preview = await projection.previewContextProjection('user-a', {
       taskRunId: 'task-semantic', workspaceId: 'workspace-a', purpose: 'review', taskText: 'Audit OAuth login callback handling', authorization: 'user_confirmed',
-    }, fakeSemanticOptions);
+    }, {
+      ...fakeSemanticOptions,
+      embedTexts: async (texts: string[]) => texts.map((text) => {
+        const lower = text.toLowerCase();
+        if (lower.includes('oauth') && lower.includes('secret')) return [0, 1];
+        if (lower.includes('oauth')) return [1, 0];
+        if (lower.includes('database')) return [0.9, 0.1];
+        return [0, 1];
+      }),
+    });
 
     expect(preview.assetIds).toEqual([oauth.asset.id, database.asset.id]);
     expect(preview.assetMatches).toEqual([
@@ -366,6 +375,62 @@ describe('RecallView and ContextProjection', () => {
       expect.objectContaining({ taskRunId: 'task-old', status: 'expired' }),
     ]);
     await expect(projection.listContextProjections('user-a', { workspaceId: 'workspace-a' })).resolves.toHaveLength(1);
+  });
+});
+
+describe('Recall projection auto-confirm and semantic Top-N', () => {
+  async function promoteAsset(judgment: string, sourceId: string, scope: string) {
+    const { candidates } = await modules();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment,
+      summary: judgment.slice(0, 60),
+      suggestedType: 'rule',
+      suggestedScope: scope,
+      sourceRefs: [{ kind: 'execution', id: sourceId }],
+    });
+    return candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+  }
+
+  it('writes a confirmed projection when confirm is requested', async () => {
+    const { projection } = await modules();
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-auto-confirm', purpose: 'review', confirm: true,
+    });
+
+    expect(preview.status).toBe('confirmed');
+    expect(preview.confirmedAt).toEqual(expect.any(String));
+    await expect(projection.readContextProjection('user-a', preview.id))
+      .resolves.toMatchObject({ status: 'confirmed' });
+  });
+
+  it('drops low-relevance assets below the semantic threshold and caps to Top-N', async () => {
+    const { projection } = await modules();
+    const first = (await promoteAsset('OAuth callback security review.', 'exec-top-1', 'review')).asset;
+    const second = (await promoteAsset('Database migration planning.', 'exec-top-2', 'review')).asset;
+    const third = (await promoteAsset('Unrelated travel planning.', 'exec-top-3', 'review')).asset;
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-topn',
+      purpose: 'review',
+      taskText: 'Audit OAuth login callback handling',
+    }, {
+      embedTexts: async (texts: string[]) => texts.map((text) => {
+        const lower = text.toLowerCase();
+        if (lower.includes('oauth')) return [1, 0];
+        if (lower.includes('database')) return [0.1, 1];
+        return [0.05, 1];
+      }),
+      minScore: 0.3,
+      limit: 2,
+    });
+
+    expect(preview.assetIds).toEqual([first.id]);
+    expect(preview.assetMatches).toEqual([
+      expect.objectContaining({ assetId: first.id, matchMethod: 'semantic', matchScore: 1 }),
+    ]);
+    expect(preview.assetIds).not.toContain(second.id);
+    expect(preview.assetIds).not.toContain(third.id);
+    expect(preview.omittedRefs.some((ref) => ref.assetId === third.id)).toBe(true);
   });
 });
 

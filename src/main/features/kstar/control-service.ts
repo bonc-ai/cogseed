@@ -408,6 +408,8 @@ async function requestProjection(
     throw new ControlInputError('an open Task and Requirement are required');
   }
   assertOwnedId(proposal.requirementId, requirement.id, 'projection.requirementId');
+  // workspace_policy line: the projection is confirmed on creation (no user
+  // candidate confirmation); the card is still posted as a read-only record.
   const projection = await previewContextProjection(context.userId, {
     taskRunId: task.id,
     ...(context.workspaceId || task.workspaceId
@@ -415,7 +417,8 @@ async function requestProjection(
       : {}),
     purpose: proposal.purpose,
     taskText: proposal.taskText || requirement.goalText,
-    authorization: 'user_confirmed',
+    authorization: 'workspace_policy',
+    confirm: true,
   });
   await replaceKstarRequirement(context.userId, {
     ...requirement,
@@ -427,7 +430,7 @@ async function requestProjection(
   return {
     result: {
       ok: true,
-      status: 'confirmation_required',
+      status: 'projection_confirmed',
       taskId: task.id,
       requirementId: requirement.id,
       projectionId: projection.id,

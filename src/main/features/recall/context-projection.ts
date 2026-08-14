@@ -49,7 +49,7 @@ export function projectionKnowledgeError(code: ProjectionKnowledgeErrorCode): Er
 
 export interface OmittedAssetRef {
   assetId: string;
-  reason: 'asset_paused' | 'asset_revoked' | 'workspace_not_referenced' | 'workspace_disabled' | 'scope_mismatch' | 'source_unavailable';
+  reason: 'asset_paused' | 'asset_revoked' | 'workspace_not_referenced' | 'workspace_disabled' | 'scope_mismatch' | 'source_unavailable' | 'low_relevance';
 }
 
 export type RecallAssetMatchMethod = 'semantic' | 'recency_fallback' | 'manual';
@@ -89,6 +89,9 @@ export interface ProjectionInput {
   taskText?: string;
   authorization?: ProjectionAuthorization;
   expiresAt?: string;
+  /** Auto-confirm on creation (workspace_policy line): the projection is
+   *  written as confirmed immediately, skipping the user confirmation card. */
+  confirm?: boolean;
 }
 
 
@@ -364,6 +367,38 @@ export async function buildRecallView(userId: string, input: ProjectionInput, op
       assetMatches = includedAssets.map((asset) => ({ assetId: asset.id, matchScore: 0, matchMethod: 'recency_fallback' as const }));
     }
   }
+  // Relevance threshold + Top-N: semantic scores below the threshold are
+  // dropped; the recency fallback (no scores) keeps eligibility but is still
+  // capped. Manual additions remain explicit and bypass this selection.
+  const minScore = Number.isFinite(options.minScore)
+    ? Math.max(0, Math.min(1, Number(options.minScore)))
+    : 0.35;
+  const limit = Number.isFinite(options.limit)
+    ? Math.max(1, Math.min(12, Math.floor(Number(options.limit))))
+    : 8;
+  if (assetMatches) {
+    const matchByAssetId = new Map(assetMatches.map((match) => [match.assetId, match]));
+    const droppedByRelevance: string[] = [];
+    orderedAssets = orderedAssets.filter((asset) => {
+      const match = matchByAssetId.get(asset.id);
+      if (!match || match.matchMethod !== 'semantic') return true;
+      if (match.matchScore >= minScore) return true;
+      droppedByRelevance.push(asset.id);
+      return false;
+    });
+    for (const assetId of droppedByRelevance) {
+      omittedRefs.push({ assetId, reason: 'low_relevance' });
+    }
+    assetMatches = assetMatches.filter((match) => (
+      match.matchMethod !== 'semantic' || orderedAssets.some((asset) => asset.id === match.assetId)
+    ));
+  }
+  if (orderedAssets.length > limit) {
+    for (const asset of orderedAssets.slice(limit)) {
+      omittedRefs.push({ assetId: asset.id, reason: 'low_relevance' });
+    }
+    orderedAssets = orderedAssets.slice(0, limit);
+  }
 
   const sourceRefs: CognitionSourceRef[] = [];
   const seen = new Set<string>();
@@ -392,11 +427,15 @@ export async function previewContextProjection(userId: string, input: Projection
   if (input.expiresAt !== undefined && Number.isNaN(Date.parse(input.expiresAt))) throw new Error('invalid projection expiry');
   const view = await buildRecallView(userId, { taskRunId, purpose, ...(workspaceId ? { workspaceId } : {}), ...(taskText ? { taskText } : {}) }, options);
   const now = projectionNowIso();
+  const confirmedAt = input.confirm ? now : undefined;
   const record: ContextProjectionRecord = {
     schemaVersion: 2, ownerId: userId, id: `proj-${genId12()}`,
     taskRunId, ...(workspaceId ? { workspaceId } : {}), purpose, authorization,
     assetIds: view.assetIds, ...(view.assetVersions ? { assetVersions: view.assetVersions } : {}), ...(view.assetMatches ? { assetMatches: view.assetMatches } : {}), sourceRefs: view.sourceRefs, omittedRefs: view.omittedRefs,
-    ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}), status: 'preview', createdAt: now,
+    ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+    status: confirmedAt ? 'confirmed' : 'preview',
+    ...(confirmedAt ? { confirmedAt, decidedAt: confirmedAt } : {}),
+    createdAt: now,
   };
   await writeRecallJsonRecord(userId, 'projections', record.id, record);
   return record;
@@ -424,7 +463,7 @@ export async function createAutomaticContextProjection(
     : 0.35;
   const limit = Number.isFinite(options.limit)
     ? Math.max(1, Math.min(12, Math.floor(Number(options.limit))))
-    : 4;
+    : 8;
   const allAssets = await listAbilityAssets(userId);
   const workspaceRefs = workspaceId ? await listWorkspaceAssetReferences(userId) : [];
   const workspaceRefsByAsset = new Map(

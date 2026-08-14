@@ -56,6 +56,7 @@ function validControlResult(value: unknown): value is KstarControlResult {
   if (value.selectedCandidateId !== undefined && typeof value.selectedCandidateId !== 'string') return false;
   return [
     'state_committed',
+    'projection_confirmed',
     'confirmation_required',
     'forecast_committed',
     'finished',

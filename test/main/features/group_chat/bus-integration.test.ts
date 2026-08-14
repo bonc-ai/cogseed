@@ -5143,6 +5143,60 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
 });
 
 
+describe("group_chat bus integration › Recall asset usage receipt", () => {
+  it("attaches the injected assets as a read-only citation receipt on the commander reply and records usage", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const layout = await import("../../../../src/main/util/project-layout");
+    const storage = await import("../../../../src/main/storage");
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const candidates = await import("../../../../src/main/features/recall/candidate-service");
+    const projections = await import("../../../../src/main/features/recall/context-projection");
+
+    const candidate = await candidates.saveRecallCandidate(TEST_UID, {
+      judgment: "Keep OAuth state checks before token exchange.",
+      summary: "OAuth state check rule",
+      suggestedType: "rule",
+      suggestedScope: "review",
+      sourceRefs: [{ kind: "execution", id: "exec-receipt" }],
+    });
+    const asset = (await candidates.promoteRecallCandidate(TEST_UID, candidate.id, { actor: "user" })).asset;
+    const preview = await projections.previewContextProjection(TEST_UID, {
+      taskRunId: "task-receipt",
+      purpose: "review",
+      taskText: "Audit OAuth login",
+      authorization: "workspace_policy",
+      confirm: true,
+    });
+    const messageFile = layout.conversationMessageFile(TEST_UID, cid);
+    fs.mkdirSync(path.dirname(messageFile), { recursive: true });
+    await storage.appendJsonlAtomic(messageFile, {
+      id: "msg-card", ts: new Date().toISOString(), from: "commander", to: ["user"], text: "confirmed",
+      recall_projection_card: { projectionId: preview.id },
+    });
+
+    _setScript(state.buildGconvSessionId(cid), [
+      { type: "final", text: "done with receipt" },
+    ]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "run the approved task" });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+
+    const messages = await readConversationMessages(cid);
+    const reply = messages.find((message) => message.from === "commander" && message.text === "done with receipt");
+    expect(reply).toBeTruthy();
+    expect(reply!.recall_citations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ asset_id: asset.id, projection_id: preview.id }),
+      ]),
+    );
+    const usage = await import("../../../../src/main/features/recall/usage-service");
+    const records = await usage.listRecallUsage(TEST_UID, asset.id);
+    expect(records.length).toBeGreaterThanOrEqual(1);
+  }, 10_000);
+});
+
 describe("group_chat bus integration › KStar privileged dispatch approval", () => {
   async function seedKstarControlledConversation(cid: string, options: { projectionStatus: "preview" | "confirmed"; forecastId?: string }) {
     const store = await import("../../../../src/main/features/kstar/requirement-store");
