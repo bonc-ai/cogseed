@@ -67,6 +67,7 @@ import * as localSecrets from '../util/local-secret-store';
 import { safeExternalUserActionUrl } from '../util/window-security';
 import { getActiveUserId } from './users';
 import {
+  CATALOG,
   FEATURED_API_PROVIDERS,
   OAUTH_PROVIDERS,
   OAUTH_ALIAS_FOR,
@@ -962,7 +963,23 @@ export function getConfiguredModelCooldown(): {
   return best;
 }
 
+/**
+ * Return a user-facing message when the configured chat model is backed by an
+ * OAuth profile whose access token has expired. Synchronous on purpose:
+ * token refresh (with its side effects) already happened inside
+ * pickChatEntryGroup / resolveEntryApiKey; by the time this is consulted the
+ * refresh either succeeded (profile no longer counts as expired) or failed
+ * (the expired profile is skipped and the user needs to reauthorize).
+ */
 export function getConfiguredModelOAuthExpiredMessage(): string | null {
+  const store = loadProfilesForActiveUserOrEmpty();
+  for (const entry of store.entries) {
+    if (!isEntryAllowed(store, entry)) continue;
+    const profile = store.profiles[entry.profileId];
+    if (profile?.type === 'oauth' && Date.now() >= profile.expires) {
+      return t('errors.model_oauth_expired', { provider: providerLabel(profile.provider) });
+    }
+  }
   return null;
 }
 
@@ -1125,10 +1142,15 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
     ? new Set<string>([...mod.listPiProviders(), ...EXTERNAL_API_PROVIDERS])
     : new Set<string>([...visible, ...EXTERNAL_API_PROVIDERS]);
 
-  // OAuth-only providers (ChatGPT Codex, Gemini Code Assist, GitHub Copilot,
-  // Google Antigravity) can't be authenticated with a raw API key — their
+  // OAuth-only providers can't be authenticated with a raw API key — their
   // endpoints only accept OAuth access tokens. Force the API-key tile off.
-  const oauthOnlyIds = new Set(['openai-codex', 'google-gemini-cli', 'google-antigravity', 'github-copilot']);
+  // Single source of truth: oauthOnly marks on CATALOG entries, plus the
+  // OAuth back-ends that only exist outside the catalog (Gemini CLI,
+  // Antigravity, GitHub Copilot) and surface once a saved profile exists.
+  const oauthOnlyIds = new Set([
+    ...CATALOG.filter((entry) => entry.oauthOnly).map((entry) => entry.id),
+    ...OAUTH_PROVIDERS.filter((entry) => !isVisibleProvider(entry.id)).map((entry) => entry.id),
+  ]);
 
   const providers: ProviderEntry[] = sorted.map((id) => {
     const directOAuth = oauthIds.has(id);
@@ -2226,9 +2248,19 @@ export interface ChatEntryChoice {
   maxOutputTokens?: number;
 }
 
-/** Resolve one API-key chat entry for an explicit user. This is intentionally
- * independent from active-user state, OAuth refresh, and Core Agent rotation. */
-export function pickApiKeyChatEntryForUser(
+/** Resolve one usable OpenAI-compatible chat entry for an explicit user.
+ *
+ * Accepts entries backed by an `openai-compatible` API-key profile or an
+ * OpenAI-protocol custom provider (`cp:*` with `protocol: 'openai'`). Entries
+ * backed by OAuth profiles or by non-OpenAI dialects (anthropic / gemini
+ * custom providers, native API-key providers) are skipped — the CogSeed
+ * backend's OpenAI-compatible provider cannot talk to those surfaces, so
+ * surfacing them as candidates would just fail downstream.
+ *
+ * This is intentionally independent from active-user state, OAuth refresh,
+ * and Core Agent rotation (same contract as the former api-key-only picker,
+ * generalized to OpenAI-protocol custom providers). */
+export function pickOpenAICompatibleChatEntryForUser(
   userId: string,
   profileId?: string,
 ): ChatEntryChoice | null {
@@ -2240,8 +2272,24 @@ export function pickApiKeyChatEntryForUser(
   for (const entry of store.entries) {
     if (wantedProfileId && entry.profileId !== wantedProfileId) continue;
     if (!isEntryAllowed(store, entry)) continue;
+
+    // Custom provider entries carry their own OpenAI-compatible endpoint.
+    const custom = customProviderForId(store, entry.provider);
+    if (custom) {
+      if (custom.protocol !== 'openai') continue;
+      return {
+        entryId: entry.entryId,
+        profileId: entry.profileId,
+        provider: entry.provider,
+        model: entry.model,
+        apiKey: custom.apiKey,
+        ...(custom.baseUrl ? { baseUrl: custom.baseUrl } : {}),
+      };
+    }
+
     const profile = store.profiles[entry.profileId];
     if (!profile || profile.type !== 'api_key') continue;
+    if (!isOpenAICompatibleProvider(entry.provider)) continue;
     return {
       entryId: entry.entryId,
       profileId: entry.profileId,
@@ -2249,9 +2297,10 @@ export function pickApiKeyChatEntryForUser(
       model: entry.model,
       apiKey: profile.key,
       ...(profile.baseUrl ? { baseUrl: profile.baseUrl } : {}),
-      ...(isOpenAICompatibleProvider(entry.provider)
-        ? { maxOutputTokens: normalizeOpenAICompatibleMaxOutputTokens(entry.provider, profile.maxOutputTokens) }
-        : {}),
+      // openai-compatible is guaranteed here; the normalizer falls back to
+      // the default cap (32768) when the profile has no explicit cap, matching
+      // pickChatEntryGroup's behavior.
+      ...{ maxOutputTokens: normalizeOpenAICompatibleMaxOutputTokens(entry.provider, profile.maxOutputTokens) },
     };
   }
   return null;

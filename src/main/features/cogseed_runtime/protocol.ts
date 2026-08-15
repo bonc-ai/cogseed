@@ -172,6 +172,15 @@ function validateId(value: string, expectedPrefix: 'req' | 'mruntime', field: st
   return null;
 }
 
+/** Profile ids are `<provider>:<label>` (e.g. `openai-compatible:default`) or
+ *  `cp:<id>` for custom providers — the `:` separator is NOT covered by
+ *  `safeId`. Accept the character set `makeProfileId` / `sanitizeLabel` /
+ *  custom-provider ids actually produce (alphanumerics plus `: _ -`), bounded
+ *  to the same 300-char cap the CogSeed IPC layer applies. */
+function isModelProfileId(value: string): boolean {
+  return value.length > 0 && value.length <= 300 && /^[A-Za-z0-9:_-]+$/.test(value);
+}
+
 function realOrResolve(p: string): string {
   try {
     return fs.realpathSync(p);
@@ -305,7 +314,7 @@ export function normalizeRuntimeRunRequest(uid: string, raw: unknown, opts: Runt
   const agentId = (raw as any).agent_id;
   if (agentId !== undefined && (typeof agentId !== 'string' || !safeId(agentId))) return fail('E_RUNTIME_INVALID_ID', 'invalid agent_id');
   const modelProfile = (raw as any).model_profile;
-  if (modelProfile !== undefined && (typeof modelProfile !== 'string' || !safeId(modelProfile))) return fail('E_RUNTIME_INVALID_ID', 'invalid model_profile');
+  if (modelProfile !== undefined && (typeof modelProfile !== 'string' || !isModelProfileId(modelProfile))) return fail('E_RUNTIME_INVALID_ID', 'invalid model_profile');
   const executionKind = (raw as any).execution_kind ?? 'cogseed-native';
   if (executionKind !== 'cogseed-native' && executionKind !== 'local-cli') {
     return fail('E_RUNTIME_INVALID_REQUEST', 'invalid runtime execution_kind');

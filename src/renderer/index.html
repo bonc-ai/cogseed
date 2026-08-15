@@ -326,6 +326,12 @@
                 <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_protocol">Protocol</span>
                 <span class="conversation-info-tab-count" id="conversation-info-tab-count-protocol"></span>
               </button>
+              <!-- 9.1 会话区域统一框架 · 右侧「本次携带」：本次 Context、来源与
+                   边界、运行证明（复用现有 snapshot / protocolEvents，不新增 IPC）。 -->
+              <button type="button" class="conversation-info-tab" data-info-tab="carried">
+                <span data-ui-icon="list-ordered" data-ui-icon-class="conversation-info-tab-icon"></span>
+                <span class="conversation-info-tab-label" data-i18n="conversation_info.tab_carried">Carried</span>
+              </button>
             </div>
             <div class="conversation-info-body" id="conversation-info-body"></div>
           </aside>
